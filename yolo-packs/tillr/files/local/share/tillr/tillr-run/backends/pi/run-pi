@@ -147,6 +147,7 @@ if [ -n "${TILLR_CHILD_SESSIONS_ROOT:-}" ] && [ -n "${TILLR_CHILD_SESSIONS_MARKE
     printf '%s\n' pi-subagents-v1 > "$TILLR_CHILD_SESSIONS_MARKER"
 fi
 
+landing_promptless=
 set -- pi --print --mode json --model "$model" --thinking "$effort"
 if [ -n "$session" ]; then
     if [ "${TILLR_SESSION_MODE:-new}" = resume ]; then
@@ -181,7 +182,39 @@ if [ -n "$goal_base" ]; then
         set -- "$@" -e "$(cd -- "$SELF_DIR" && pwd -P)/land.ts"
         if [ -n "${YOLO_DURABLE_DIR:-}" ] && [ -e "$YOLO_DURABLE_DIR/landing-answer.json" ]; then
             [ -n "$session" ] && [ "${TILLR_SESSION_MODE:-new}" = resume ] || refuse "landing answer requires an existing Pi session"
-            prompt=/dev/null
+            landing_dir=$YOLO_DURABLE_DIR
+            landing_prompt=$landing_dir/landing-prompt
+            landing_id=$landing_dir/landing-call-id
+            if ! python3 - "$landing_dir/landing-answer.json" "$landing_id" "$landing_prompt" <<'PY'
+import json, sys
+try:
+    with open(sys.argv[1], encoding='utf-8') as source:
+        answer = json.load(source)
+    call, text = answer['call_id'], answer['text']
+    if not isinstance(call, str) or not call or not isinstance(text, str) or not text:
+        raise ValueError('missing call id or text')
+    with open(sys.argv[2], 'w', encoding='utf-8') as output:
+        output.write(call)
+    with open(sys.argv[3], 'w', encoding='utf-8') as output:
+        output.write(text)
+except (OSError, ValueError, TypeError, KeyError):
+    sys.exit(1)
+PY
+            then
+                refuse "landing answer requires a call id and text"
+            fi
+            transcript=
+            if [ -r "$landing_dir/landing-transcript" ]; then
+                transcript=$(cat "$landing_dir/landing-transcript")
+            fi
+            if [ -n "$transcript" ] && "$SELF_DIR/landing-call-held" "$transcript" "$(cat "$landing_id")"; then
+                printf '%s\n' tool-result > "$landing_dir/landing-delivery"
+                prompt=/dev/null
+                landing_promptless=1
+            else
+                printf '%s\n' message > "$landing_dir/landing-delivery"
+                prompt=$landing_prompt
+            fi
         fi
     fi
     # The writer's session carries what its work uses and nothing an interactive session
@@ -227,4 +260,34 @@ if [ -n "$wall" ] && [ "$wall" -gt 0 ]; then
     set -- timeout "$wall" "$@"
 fi
 
+if [ -n "$landing_promptless" ]; then
+    copy=$landing_dir/landing-output
+    status=$landing_dir/landing-status
+    {
+        if "$@" </dev/null 2>"$err"; then
+            printf '%s\n' 0 > "$status"
+        else
+            printf '%s\n' "$?" > "$status"
+        fi
+    } | tee "$copy"
+    code=$(cat "$status")
+    if [ "$code" -ne 0 ] && python3 - "$copy" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding='utf-8', errors='replace') as source:
+    for line in source:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get('type') == 'error' and event.get('message') == 'No unanswered tool call or trailing tool result to continue':
+            sys.exit(0)
+sys.exit(1)
+PY
+    then
+        printf '%s\n' message > "$landing_dir/landing-delivery"
+        prompt=$landing_prompt
+    else
+        exit "$code"
+    fi
+fi
 exec "$@" <"$prompt" 2>"$err"

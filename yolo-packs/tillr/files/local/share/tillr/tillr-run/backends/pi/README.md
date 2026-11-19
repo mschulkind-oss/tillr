@@ -14,7 +14,9 @@ sections 7 and 9.
 | [`compact`](./compact) | Compact an existing session by id, without a user prompt. |
 | [`keep-going.ts`](./keep-going.ts) | The pi extension that answers an ending that misses the goal, in the same session. |
 | [`land.ts`](./land.ts) | Records a landing offer and parks the call. |
+| [`landing-call-held`](./landing-call-held) | Checks the active transcript branch before a promptless landing continuation. |
 | [`testdata/land.test.mjs`](./testdata/land.test.mjs) | Exercises offer validation, parking and adapter arguments. |
+| [`testdata/landing-call-held.test.py`](./testdata/landing-call-held.test.py) | Checks transcript replay eligibility and fail-closed parsing. |
 | [`testdata/keep-going.test.mjs`](./testdata/keep-going.test.mjs) | Checks that a parked call is not nudged. |
 | [`testdata/extract-report-park.test.py`](./testdata/extract-report-park.test.py) | Checks report extraction for parked calls. |
 | [`testdata/parked-exit.test.py`](./testdata/parked-exit.test.py) | Checks the watcher leaves parked sessions alone. |

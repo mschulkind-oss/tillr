@@ -325,7 +325,7 @@ sequenceDiagram
 | The process dies after the result is saved and before the model's turn | The next opening finds no unanswered call and continues from the saved result. The answer is not delivered twice, because pi does not repeat a call that has a result |
 | The process dies before the result is saved | The next opening replays, and `execute()` returns the same answer |
 | The transcript is gone or the harness refuses to open it | `fresh-session`, with the reason |
-| The transcript no longer holds the unanswered call (compacted, or opened by hand without the tool) | The harness reports nothing to replay and exits without a model request; the adapter opens the session again with the answer as a message, and records `message` |
+| The transcript no longer holds the unanswered call (compacted, or opened by hand without the tool) | Before opening pi, the adapter checks the active transcript branch: the last assistant message must be a tool-use message containing the call id, no compaction may follow it, and the call must either have no saved result or have one with the last message its tool result. An unreadable or unparseable file fails the check. On failure the adapter opens with the answer as a message and records `message`; pi's refusal to continue without a prompt remains a second line of defense. |
 | The model asks for `land` and other tools in one message | The other calls run and their results are saved; only `land` is left unanswered. The offer is the head `execute()` read |
 | The parked process does not exit | The adapter's existing exit bound applies (120 seconds, then a signal), recorded as it is today; the offer file still decides the ending |
 

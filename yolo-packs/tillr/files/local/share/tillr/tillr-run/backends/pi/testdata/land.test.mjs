@@ -118,8 +118,52 @@ test('run-pi keeps footer argv and opens an answer session without stdin', (t) =
   put('brief.md', brief.replace('## Report shape', '## Finishing'));
   const chosen = footer.replace('## Report shape', '## Finishing').replace('--no-extensions', `-e\n${adapter}land.ts\n--no-extensions`);
   assert.equal(run(), chosen);
-  put('landing-answer.json', '{}');
+  put('landing-answer.json', JSON.stringify({ call_id: 'call', text: 'answer' }));
+  put('session.jsonl', [JSON.stringify({ type: 'session', id: 's' }), JSON.stringify({ type: 'message', id: 'a', parentId: null, message: { role: 'assistant', content: [{ type: 'toolCall', id: 'call' }] } })].join('\n') + '\n');
+  put('landing-transcript', join(dir, 'session.jsonl'));
   assert.equal(run(), chosen.replace(/STDIN:.*/s, 'STDIN:'));
+  assert.equal(readFileSync(join(dir, 'landing-delivery'), 'utf8').trim(), 'tool-result');
+});
+
+test('run-pi chooses delivery before launch and retries only a refusal to continue', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'run-pi-answer-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const put = (name, value, options) => writeFileSync(join(dir, name), value, options);
+  put('brief.md', '- **Target:** test (lane worktree)\n' + ['Header', 'Task', 'Fence', 'Seats', 'Settled decisions', 'Facts carried', 'Method', 'Verification commands', 'Finishing', 'Stop conditions'].map(heading => `## ${heading}\n`).join(''));
+  put('base_sha', 'base\n'); put('ending-capability', 'call-suspends\n');
+  put('landing-answer.json', JSON.stringify({ call_id: 'call', text: 'answer text\nnext line' }));
+  put('landing-transcript', join(dir, 'session.jsonl'));
+  put('pi', `#!/bin/sh\nprintf '%s\\n' "$(cat landing-delivery)" >> launches\nprintf '%s\\n' "$(cat)" >> launches\nif [ "$(cat landing-delivery)" = tool-result ]; then\n  case "\${FAIL_MODE:-}" in\n    refusal) printf '%s\\n' '{"type":"error","message":"No unanswered tool call or trailing tool result to continue"}'; exit 1 ;;\n    other) echo unrelated; exit 7 ;;\n  esac\nfi\n`, { mode: 0o700 });
+  const call = { type: 'message', id: 'a', parentId: null, message: { role: 'assistant', content: [{ type: 'toolCall', id: 'call' }] } };
+  const result = { type: 'message', id: 'b', parentId: 'a', message: { role: 'toolResult', toolCallId: 'call' } };
+  const other = { type: 'message', id: 'c', parentId: 'b', message: { role: 'toolResult', toolCallId: 'other' } };
+  const compact = { type: 'compaction', id: 'c', parentId: 'a' };
+  const run = (entries, mode = '') => {
+    rmSync(join(dir, 'launches'), { force: true });
+    put('session.jsonl', [JSON.stringify({ type: 'session', id: 's' }), ...entries.map(JSON.stringify)].join('\n') + '\n');
+    return spawnSync(join(adapter, 'run-pi'), ['--backend', 'pi', '--effort', 'low', '--model', 'model', '--brief', 'brief.md', '--session-id', 'id'], {
+      cwd: dir, encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PI_CODING_AGENT_DIR: dir, YOLO_DURABLE_DIR: dir,
+        TILLR_SESSION_MODE: 'resume', TILLR_PAUSE_REQUEST: '', TILLR_READ_ONLY_GROUP: '', TILLR_RESUME_PROMPT_FILE: '', FAIL_MODE: mode },
+    });
+  };
+  for (const entries of [[call, result, other], [call, compact]]) {
+    const r = run(entries); assert.equal(r.status, 0, r.stderr);
+    assert.equal(readFileSync(join(dir, 'launches'), 'utf8'), 'message\nanswer text\nnext line\n');
+  }
+  let r = run([call, result]); assert.equal(r.status, 0, r.stderr);
+  assert.equal(readFileSync(join(dir, 'launches'), 'utf8'), 'tool-result\n\n');
+  rmSync(join(dir, 'landing-transcript'));
+  r = run([call]); assert.equal(r.status, 0, r.stderr);
+  assert.equal(readFileSync(join(dir, 'launches'), 'utf8'), 'message\nanswer text\nnext line\n');
+  put('landing-transcript', join(dir, 'session.jsonl'));
+  r = run([call], 'refusal'); assert.equal(r.status, 0, r.stderr);
+  assert.equal(readFileSync(join(dir, 'launches'), 'utf8'), 'tool-result\n\nmessage\nanswer text\nnext line\n');
+  assert.equal(readFileSync(join(dir, 'landing-delivery'), 'utf8').trim(), 'message');
+  r = run([call], 'other'); assert.equal(r.status, 7, r.stderr);
+  assert.equal(readFileSync(join(dir, 'launches'), 'utf8'), 'tool-result\n\n');
+  assert.equal(readFileSync(join(dir, 'landing-delivery'), 'utf8').trim(), 'tool-result');
+  put('landing-answer.json', '{}');
+  r = run([call]); assert.equal(r.status, 2); assert.equal(existsSync(join(dir, 'launches')), false);
 });
 
 test('stop-at-gap streams park without treating it as a settle or a pause gap', (t) => {

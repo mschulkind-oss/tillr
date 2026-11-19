@@ -8768,12 +8768,7 @@ refusal as a second line. The form stays off.
   - Deliver the answer as a message in every other case, with no model request made without it.
   - Say which form was used, in a file the drain reads.
 
-<!-- tillr: item id="item-landing-call-transcript-check" paths="tools/tillr-run/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** The program `landing-call-held` takes a session file path and a call id and exits 0 when the transcript holds the call, as defined under "The transcript check" below, and 1 otherwise. A test asserts six files: the call unanswered (0); the call's result saved and last (0); a different call's result last (1); a compaction entry after the call (1); an unparseable file (1); no file (1).
-- **c2:** With an answer file staged, `run-pi` starts pi with no prompt when the check passes and with the answer's text as the prompt when it fails, and writes `tool-result` or `message` to the file `landing-delivery` before pi starts. For the two failing transcripts of c1 a stand-in `pi` is started exactly once, with a prompt. A test asserts each.
-- **c3:** When the promptless pi exits non-zero and its output says there is nothing to continue, `run-pi` rewrites `landing-delivery` to `message` and starts pi again with the answer as the prompt. Any other non-zero exit is returned unchanged. A test asserts each.
-- **c4:** The row "The transcript no longer holds the unanswered call" of the design's Section 6.3 says that the adapter decides, in the words of "The transcript check" below.
 
 **Agent Details:**
 
@@ -8797,7 +8792,7 @@ shows a fault.
   - Assert that a gate, a judge and a fence refusal are each delivered as the call's result.
   - Assert the stated outcome of every failure case in the design.
 
-<!-- tillr: item id="item-landing-call-delivery-tests" paths="tools/tillr-drain/,tools/tillr-run/,docs/" blocked_by="item-landing-call-transcript-check" prose="2" -->
+<!-- tillr: item id="item-landing-call-delivery-tests" paths="tools/tillr-drain/,tools/tillr-run/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** A gate refusal, a judge refusal and a fence refusal each reach the session as the result of the open call, with the evidence of [Section 3.3](../design/tillr-landing-call.md#33-what-can-come-back), and the session receives no user message. A test with a stand-in harness asserts for each that the delivery form recorded is `tool-result` and that the reopened run's prompt was empty.
 - **c2:** Each failure case of [Section 6.3](../design/tillr-landing-call.md#63-failure-cases) has a test that asserts its stated outcome, and each test's name says which row it is.
