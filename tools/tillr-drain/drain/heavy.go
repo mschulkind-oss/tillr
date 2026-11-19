@@ -129,8 +129,12 @@ func (r HeavyRunner) Run(ctx context.Context) (out HeavyOutcome, err error) {
 			return out, e
 		}
 		run := HeavyRun{BaseSHA: base, TipSHA: tip, Result: "unknown", Checks: []HeavyCheck{}}
-		if guard := heavyPendingGuard(dir); guard != "" {
-			run.Detail = "prior cleanup is unconfirmed; checkout retained; independent process recovery must inspect and clear " + guard
+		unconfirmed, e := recoverHeavyCleanupGuards(ctx, r.Root, dir)
+		if e != nil {
+			return out, e
+		}
+		if unconfirmed != "" {
+			run.Detail = "prior cleanup is unconfirmed; checkout retained; " + unconfirmed
 			if pe := publishHeavy(dir, run); pe != nil {
 				return out, pe
 			}

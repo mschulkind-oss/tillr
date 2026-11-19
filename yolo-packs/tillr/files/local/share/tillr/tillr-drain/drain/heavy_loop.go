@@ -125,8 +125,9 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			if len(out.Runs) > 0 {
 				attempted = out.Runs[len(out.Runs)-1].TipSHA
 			}
-			// Losing the lock is not a judgment and must not consume this tip's trigger.
-			if !out.Busy && !errors.Is(err, errRestartPending) {
+			// Losing the lock or waiting on an unconfirmed supervisor is not a judgment and
+			// must not consume this tip's trigger.
+			if !out.Busy && !errors.Is(err, errRestartPending) && !cleanupLost(err) {
 				l.heavyAttempted = attempted
 			}
 			// A trigger arriving after the runner's final tip read still owes work. Do not

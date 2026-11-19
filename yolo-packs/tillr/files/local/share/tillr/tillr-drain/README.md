@@ -927,10 +927,13 @@ time and files any fixers at the end of the run. The green pointer still moves o
 whole green run.
 
 `heavy.cleanup-pending` and `heavy.replay-cleanup-pending` guard the proof and recovery
-respectively and remain beside the result store until confirmation. Either remaining
-guard holds the next run, reports unconfirmed cleanup and
-blocks checkout removal and recovery until an operator independently recovers those
-processes and clears it; a released lock alone is not treated as cleanup evidence.
+respectively and remain beside the result store until confirmation, recording the
+supervisor's PID, start ticks, and checkout path. When a remaining guard names a
+supervisor incarnation (`supervisor_pid` and `start_ticks`) that is no longer running,
+the next run removes that checkout and clears the guard before continuing; while the
+recorded supervisor is still running, or when a guard cannot be confirmed, it holds the
+run, reports unconfirmed cleanup, and retains the checkout. A released lock alone is not
+treated as cleanup evidence.
 
 Because the supervisor adopts every orphan its command leaves, it also reaps them as
 they exit, on each `SIGCHLD`, rather than only after the command ends. It looks before
