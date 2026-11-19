@@ -368,7 +368,7 @@ There is no spend target ([OQ-GP3](./tillr-graph-is-the-path.md#decision-ledger)
 
 ## 10. What this does not cover
 
-- **Documents-only landings,** by the owner's ruling. A separate, cheaper check of a designer's documents against the writing skills is proposed in [the compliance officer](./tillr-design-document-check.md); it is not this review and reads for no logic.
+- **Documents-only landings,** by the owner's ruling. A separate, cheaper check of what an item commits against written policies, documents-only landings included, is proposed in [the compliance officer](./tillr-design-document-check.md); it runs in addition to this review and reads for no logic.
 - **Landings tillr does not make.** A commit a person or an operating session puts on the trunk by hand is outside the loop.
 - **What the gate runs,** and what may land while the trunk is red.
 - **Which model a seat maps to on each machine.** That is the backend policy; this design asks which model the review seat gets here.

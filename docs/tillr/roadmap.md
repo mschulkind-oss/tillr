@@ -42,13 +42,14 @@ the owner's words of that evening, asks which model reviews an item's commits be
 and who settles a repeated disagreement. No agent has ever read a change before tillr landed it,
 and none of the design is built until he answers the first.
 
-[A compliance officer checks an agent's work against a written policy](../design/tillr-design-document-check.md),
-written on 2026-11-18 to the owner's words of that evening, is the documents' counterpart of that
-review: a cheap agent that holds work to a written policy, never to logic, with design-document
-style as its first policy. The owner ruled its three questions that evening: a design change
-lands only after it passes, the whole document is checked each time a designer touches it, and
-the name is his. It asks one more: whether a worker's edit to a design document is checked. It sits here
-because it shares the review's return route, and none of it is built.
+[One compliance officer checks what an item is about to commit](../design/tillr-design-document-check.md),
+written on 2026-11-18 to the owner's words of that evening, is a cheap agent that holds an item's
+commit to written policies, never to logic, in addition to that review; design-document style is
+its first policy. The owner ruled four of its questions that evening: it runs at a designer's
+early commit and at the item's final merge, a change lands only after it passes, the whole
+document is checked, and the name is his. It asks one more: who repairs an old design document
+that a build worker's item touched. It sits here because it shares the review's return route,
+and none of it is built.
 
 Five more left this list on 2026-11-18, none by the owner's ruling, and each is his to overturn.
 Two are a designer's decisions: [`OQ-CR4`](../design/criterion-repair.md#OQ-CR4), that the judge
