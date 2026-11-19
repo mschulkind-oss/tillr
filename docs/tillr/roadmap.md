@@ -26,16 +26,19 @@ The first rule that separates two entries decides.
 ## 1. Rulings that are waiting on the owner
 
 The questions below are left for the owner on this page: 27 by `vantage-check index` on
-2026-11-18, 21 of them the provenance review's. Each has options and a recorded leaning.
+2026-11-18, 22 of them the provenance review's. Each has options and a recorded leaning.
 Twenty-three others that stood here were settled on 2026-11-15 and 2026-11-16 by the session's
 designer, at the owner's request, and each is the owner's to overturn. Not every one of them says
 so in its design: [the provenance review](./decision-provenance-review.md#3-corrections-that-need-no-ruling)
 lists the rows that claimed a ruling nobody recorded.
 
 [The queue mirrors the roadmap's outstanding designs](../design/tillr-queue-mirrors-designs.md),
-written on 2026-11-18 to the owner's words of that evening, comes ahead of the list below: it
-reopens how work written in a document reaches the queue, which the owner never ruled, and none
-of it is built until he has.
+written on 2026-11-18 to the owner's words of that evening, was updated the same day to his ruling
+on [`OQ-QM1`](../design/tillr-queue-mirrors-designs.md#OQ-QM1): build steps, fences and pass
+conditions live in the companion implementation plan (`<topic>-plan.md`) that humans never read,
+keeping the design document clean and retiring hidden item comments. No open question remains in
+it; its designer's decisions await his review in
+[its ledger](../design/tillr-queue-mirrors-designs.md#decision-ledger), and none of it is built.
 
 [A review before every code landing](../design/tillr-diff-review.md), written on 2026-11-18 to
 the owner's words of that evening, asks which model reviews an item's commits before they land

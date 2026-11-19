@@ -21,7 +21,7 @@ depends-on:
 - **Cost:** reading time. An answer that leaves things as they run today costs nothing more. An answer that changes them becomes work, sized for each question in [Section 1.5](#15-evidence-behind-each-question).
 - **Start at:** [OQ-PR1](#OQ-PR1).
 - **Needs your ruling:** [OQ-PR1](#OQ-PR1), [OQ-PR2](#OQ-PR2), [OQ-PR3](#OQ-PR3), [OQ-PR4](#OQ-PR4), [OQ-PR5](#OQ-PR5), [OQ-PR6](#OQ-PR6), [OQ-PR7](#OQ-PR7), [OQ-PR8](#OQ-PR8), [OQ-PR9](#OQ-PR9), [OQ-PR10](#OQ-PR10), [OQ-PR11](#OQ-PR11), [OQ-PR12](#OQ-PR12), [OQ-PR13](#OQ-PR13), [OQ-PR14](#OQ-PR14), [OQ-PR15](#OQ-PR15), [OQ-PR16](#OQ-PR16), [OQ-PR17](#OQ-PR17), [OQ-PR18](#OQ-PR18), [OQ-PR19](#OQ-PR19), [OQ-PR20](#OQ-PR20), [OQ-PR21](#OQ-PR21), [OQ-PR22](#OQ-PR22).
-- **Reads with:** [the queue mirrors the roadmap's designs](../design/tillr-queue-mirrors-designs.md) (reopens how work in a document becomes an item, as [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1); this page does not ask that again).
+- **Reads with:** [the queue mirrors the roadmap's designs](../design/tillr-queue-mirrors-designs.md) (whose [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1) the owner ruled on 2026-11-18 around the companion implementation plan; this page does not ask that again).
 
 ---
 
@@ -123,13 +123,11 @@ Each question tells one situation: what you do, what tillr does today, and the c
 
 **Best read first:** [OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22), at the end of the list. They set the rule for all the rest: whether work may be built on decisions you have not seen, and when an agent may answer a question addressed to you. [Section 6](#6-how-this-stops-happening) explains them. The others are ordered by how much is built on each and how hard it is to undo, hardest first.
 
-**Already ruled, and asking only that you confirm:** [OQ-PR2](#OQ-PR2), [OQ-PR18](#OQ-PR18), [OQ-PR19](#OQ-PR19) and [OQ-PR20](#OQ-PR20). Each quotes the ruling of yours that appears to settle it, and stays open until you say it does.
-
-**Waiting on another question:** [OQ-PR14](#OQ-PR14), which cannot be answered until [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1) is.
+**Already ruled, and asking only that you confirm:** [OQ-PR2](#OQ-PR2), [OQ-PR14](#OQ-PR14), [OQ-PR18](#OQ-PR18), [OQ-PR19](#OQ-PR19) and [OQ-PR20](#OQ-PR20). Each quotes the ruling of yours that appears to settle it, and stays open until you say it does.
 
 **Already asked elsewhere, so not asked again here:**
 
-- **The hidden comment itself**, with its grammar, its attributes and the rule that sync reads every tracked document, is asked as [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1). Whatever he answers there governs these rows, which are all an agent's: [OQ-QP2](../design/tillr-queue-persistence.md#91-decision-ledger), `D-QP2` and the read-scope half of `D-QP9` in [queue persistence](../design/tillr-queue-persistence.md); the grammar half of `D-RS1` and its later `seat`, `from`, `prose`, `workflow`, `claims`, `judge` and `express` attributes in [the "ruling"](../design/queue-persistence-ruling.md); `D-TC1` and `D-TC2` in [convergence](../design/tillr-convergence.md); the attribute halves of `D-JL8` and `D-IG13`; the item id shape; and the test that fails the gate when a comment names a missing one. What the loop does to his document after a landing is [OQ-PR1](#OQ-PR1).
+- **The hidden comment itself**, with its grammar, its attributes and the rule that sync reads every tracked document, was asked as [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1) and ruled by the owner on 2026-11-18 around the companion implementation plan (`<topic>-plan.md`). That ruling governs these rows, which are all an agent's: [OQ-QP2](../design/tillr-queue-persistence.md#91-decision-ledger), `D-QP2` and the read-scope half of `D-QP9` in [queue persistence](../design/tillr-queue-persistence.md); the grammar half of `D-RS1` and its later `seat`, `from`, `prose`, `workflow`, `claims`, `judge` and `express` attributes in [the "ruling"](../design/queue-persistence-ruling.md); `D-TC1` and `D-TC2` in [convergence](../design/tillr-convergence.md); the attribute halves of `D-JL8` and `D-IG13`; the item id shape; and the test that fails the gate when a comment names a missing one. What the loop does to his document after a landing is [OQ-PR1](#OQ-PR1).
 - **The file format that defines a kind of queue**, built at `f04088fb0` on a choice "recommended here and chosen by Product QA" (another project's agent), is now listed for his review in [the core and landing design](../design/tillr-core-and-git-landing.md) as the designer's decisions `D-CG1` to `D-CG5`, labeled as such. Who owns an item's states is recorded there in his own words, and the two names are asked in [the vocabulary](../design/tillr-vocabulary.md).
 - **The second copy of every tillr program, kept inside the pack,** is open as [OQ-SH2](../design/tillr-selfhosted-build.md#OQ-SH2).
 
@@ -328,16 +326,16 @@ Each question tells one situation: what you do, what tillr does today, and the c
 
     > _(empty — fill in when decided)_
 
-14. 🔒 **OQ-PR14: May a cheap model rewrite the wording of a piece of work inside your document?**
+14. 💬 **OQ-PR14: May a cheap model rewrite the wording of a piece of work inside your document?**
 
-    You write a build step in a design in your own words. You ruled on 2026-11-18 that text written without the prose guide is rewritten, as a step on a fast cheap model. Agents chose the rest. The rewrite edits the text where it sits, in your document, and records that it ran in the hidden comment beside it. It also enforces limits: a title starts with a verb and runs at most 12 words, with at most 8 pass conditions.
+    You write a build step in a design in your own words. You ruled on 2026-11-18 that text written without the prose guide is rewritten, as a step on a fast cheap model. Agents chose the rest. The rewrite edits the text where it sits, in your document, and records that it ran in the hidden comment beside it. It also enforces limits: a title starts with a verb and runs at most 12 words, with at most 8 pass conditions. Under your 2026-11-18 ruling on [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1), build steps live in the companion `<topic>-plan.md` file that humans never look at (and design-less requests live in tillr's store), never in your human-read design documents.
 
     - **A — Rewritten in your document.** The document and the queue say the same thing. Your wording is replaced, and you see the change in the commit's diff.
-    - **B — Rewritten on tillr's side only.** Your document stays as you wrote it. The rewritten text shows on the work's page, and the two differ.
+    - **B — Never inside your human-read documents; rewritten on tillr's side (or inside the agent-only companion plan).** Your design documents stay as you wrote them, and any shaping happens only on tillr's side or in `<topic>-plan.md`.
 
-    <!-- vantage: question id=OQ-PR14 blocked-on="../design/tillr-queue-mirrors-designs.md#OQ-QM1" -->
+    <!-- vantage: question id=OQ-PR14 leaning="B, already settled by OQ-QM1; confirm: human-read design documents hold no build steps, so no cheap model rewrites wording inside them." -->
 
-    Waits on [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1), which asks how work written in a document becomes work tillr can start: if work stops being written in your documents, there is no text there to rewrite and only B is left. The limits are engineering detail either way.
+    _Leaning:_ B, already settled by [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1); confirm: human-read design documents hold no build steps, so no cheap model rewrites wording inside them.
 
     **Answer:**
 
