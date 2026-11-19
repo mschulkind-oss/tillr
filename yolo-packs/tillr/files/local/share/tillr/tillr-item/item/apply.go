@@ -72,10 +72,10 @@ type itemPayload struct {
 	// documents). Only the store carries them: a document block has no attribute for them,
 	// so an item that has them is declared by its record (StoreDeclared).
 	WorkflowArgs map[string]any `json:"workflow_args,omitempty"`
-	JudgeMode        string `json:"judge_mode"`
-	Express          bool   `json:"express"`
-	UpdatedAt        string `json:"updated_at,omitempty"`
-	EventSeq         int64  `json:"event_seq,omitempty"`
+	JudgeMode    string         `json:"judge_mode"`
+	Express      bool           `json:"express"`
+	UpdatedAt    string         `json:"updated_at,omitempty"`
+	EventSeq     int64          `json:"event_seq,omitempty"`
 	// Questions and QuestionsSource are show's read-through of the design document
 	// the item points at. They are never stored: the document is the only copy.
 	Questions       []Question `json:"questions,omitempty"`
