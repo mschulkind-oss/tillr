@@ -47,7 +47,7 @@ Day 2 reuses five existing chunk IDs from `docs/design/tillr-chunking-plan.md` (
 flowchart TD
   DUT19["1. RUN-ITEM-ID (New, D-UT19)<br/>runs.item_id + SchemaVersion 3"]
   LEASE["2. LEASE (Existing, D-UT17)<br/>ReapExpiredLeases + run release"]
-  TRIAGE["3. QUEUE-TRIAGE (New, [`OQ-BR2`](tillr-board-reshape.md#decision-ledger) A)<br/>56-item live premise probe + manifest"]
+  TRIAGE["3. QUEUE-TRIAGE (New, the board-reshape triage ruling, A)<br/>56-item live premise probe + manifest"]
   CANARY["4. PIPE-REAL (Existing)<br/>Live 1-item run-pi canary -> gate -> land"]
   SEED["5. QUEUE-SEED (New)<br/>tillr item seed (>=15 ready, >=30 total)"]
   DRAIN2["6. DRAIN-2A + DRAIN-2B (Existing)<br/>4-route pi selector + agy failover"]
@@ -71,9 +71,9 @@ flowchart TD
 |---|---|---|---|---|---|---|
 | 1 | `RUN-ITEM-ID` | **New** (`D-UT19`) | `tools/tillr-store`, `tools/tillr-run`, `tools/tillr-drain`, `tools/tillr-view` | Day-1 `SchemaVersion` 2 additive migration | **45m** (ESTIMATE) | Reuses Day-1 additive column repair in `tillr-store`; `run.request` already has `item_id`, so work is copying to `run.record`, binding `runs.item_id` on insert/read, and updating `run-link-missing` query. |
 | 2 | `LEASE` | **Existing** (`D-UT17`) | `tools/tillr-store`, `tools/tillr-run`, `tools/tillr-drain`, `tools/tillr-cli`, `tools/tillr` | `RUN-ITEM-ID` | **60m** (ESTIMATE) | Claim write (`timeout_ms + 300s` grace) already exists. Remaining work is `ReapExpiredLeases(now)` before `drain once` planning, synthetic `lease-expired` terminal record emission, and `tillr run release <lane-id>`. |
-| 3 | `QUEUE-TRIAGE` | **New** ([`OQ-BR1`](tillr-board-reshape.md#decision-ledger) A, [`OQ-BR2`](tillr-board-reshape.md#decision-ledger) A) | `docs/design/tillr-seed-triage.md`, `config/tillr/seed-items.json` | `docs/archive/board-2026-11-12/board-content.json` | **60m** (ESTIMATE) | 56 open items total; Day-1 check already proved 4 have missing paths and 3 cite the deleted CLI. Automated shell probes + structured criterion authoring for the remaining 49 items fits in one dedicated lane turn. |
+| 3 | `QUEUE-TRIAGE` | **New** (the two board-reshape rulings, A) | `docs/design/tillr-seed-triage.md`, `config/tillr/seed-items.json` | `docs/archive/board-2026-11-12/board-content.json` | **60m** (ESTIMATE) | 56 open items total; Day-1 check already proved 4 have missing paths and 3 cite the deleted CLI. Automated shell probes + structured criterion authoring for the remaining 49 items fits in one dedicated lane turn. |
 | 4 | `PIPE-REAL` | **Existing** | `tools/tillr-run/backends/pi/run-pi`, `tools/tillr-run/backends/muse/extract-report` | `RUN-ITEM-ID`, `LEASE` | **75m** (ESTIMATE) | Echo rehearsal proved staging, 9-section `brief-template.md` check, `extract-report` exit codes, and `run status`. Estimate includes 1 live turn on DeepSeek `:particle` plus budget for 1–2 stream/report parser fixes on real subagent output. |
-| 5 | `QUEUE-SEED` | **New** | `tools/tillr-item`, `tools/tillr-cli`, `config/tillr/seed-items.json` | `QUEUE-TRIAGE` + owner sign-off ([`OQ-BR2`](tillr-board-reshape.md#decision-ledger) A), `RUN-ITEM-ID` | **40m** (ESTIMATE) | `tillr-item` already implements items, frozen criteria (`criterion-frozen`), and edges. `tillr item seed --from <file>` is an idempotent batch loader over existing store methods. |
+| 5 | `QUEUE-SEED` | **New** | `tools/tillr-item`, `tools/tillr-cli`, `config/tillr/seed-items.json` | `QUEUE-TRIAGE` + owner sign-off (the board-reshape triage ruling, A), `RUN-ITEM-ID` | **40m** (ESTIMATE) | `tillr-item` already implements items, frozen criteria (`criterion-frozen`), and edges. `tillr item seed --from <file>` is an idempotent batch loader over existing store methods. |
 | 6 | `DRAIN-2A` + `DRAIN-2B` | **Existing** | `tools/tillr-drain`, `tools/tillr-run`, `tools/tillr-run/backends/pi/run-pi`, `tools/tillr-run/backends/agy/run-agy` | `RUN-ITEM-ID`, `LEASE`, `PIPE-REAL` | **90m** (ESTIMATE) | `config/tillr/backend-policy.json` is already in place. Work is round-robin selection across the 4 pinned `pi` routes (`DRAIN-2A`) and the 1-hop failover classifier to `agy` on infrastructure errors (`DRAIN-2B`). |
 | 7 | `BOUNDARY-1` | **New** | `tools/tillr-drain`, `tools/tillr-land` | `RUN-ITEM-ID`, `LEASE` | **45m** (ESTIMATE) | ~120 LoC Go helper capturing pre/post `git status --porcelain -z` and `HEAD` sha on `/workspace` plus `allowed_paths` diff check on the lane worktree. |
 | 8 | `LOOP-1` | **New** (`E2`) | `tools/tillr-drain`, `tools/tillr-cli`, `tools/tillr` | `PIPE-REAL`, `QUEUE-SEED`, `DRAIN-2A`, `DRAIN-2B`, `BOUNDARY-1` | **105m** (ESTIMATE) | All single-phase primitives (`drain once`, `run exec`, `gate`, `land pass`, `item verdict`) exist. `LOOP-1` wires the tick state machine, serial landing lock, worktree reset, and stopping conditions, followed by a 2-tick rehearsal and 20-tick burn. |
@@ -130,11 +130,11 @@ an untakeable snapshot is a stop, never a pass.
   2. CLI test for `tillr run release`;
   3. Coordinator gate run (`just done`).
 
-#### 2.3. Chunk 3: `QUEUE-TRIAGE` (New — implements [`OQ-BR1`](tillr-board-reshape.md#decision-ledger) A and [`OQ-BR2`](tillr-board-reshape.md#decision-ledger) A)
+#### 2.3. Chunk 3: `QUEUE-TRIAGE` (New — implements the two board-reshape rulings, A)
 - **What it is**: Audits all `56` open items (`35` `not-started`, `14` `in-progress`, `7` `blocked`) in `docs/archive/board-2026-11-12/board-content.json` against `/workspace` `HEAD` and writes the owner-approval triage document `docs/design/tillr-seed-triage.md` plus the machine-readable seed file `config/tillr/seed-items.json`.
-- **What it produces**: `docs/design/tillr-seed-triage.md` (carrying probe commands + outputs for every kept item and drop reasons + evidence for every dropped item per [`OQ-BR2`](tillr-board-reshape.md#decision-ledger) A) and `config/tillr/seed-items.json` (carrying frozen criterion texts, `allowed_paths`, and dependency edges).
+- **What it produces**: `docs/design/tillr-seed-triage.md` (carrying probe commands + outputs for every kept item and drop reasons + evidence for every dropped item per the board-reshape triage ruling, A) and `config/tillr/seed-items.json` (carrying frozen criterion texts, `allowed_paths`, and dependency edges).
 - **Depends on**: `docs/archive/board-2026-11-12/board-content.json` (already committed). Dispatched in parallel with `RUN-ITEM-ID` + `LEASE`.
-- **How it is verified**: Reconciliation check (`keep_ready + keep_blocked + drop == 56`, with all 4 gone-path items and all 3 deleted-board-CLI items in `drop`), JSON schema validation of `config/tillr/seed-items.json`, and owner approval of `docs/design/tillr-seed-triage.md` ([`OQ-BR2`](tillr-board-reshape.md#decision-ledger) A).
+- **How it is verified**: Reconciliation check (`keep_ready + keep_blocked + drop == 56`, with all 4 gone-path items and all 3 deleted-board-CLI items in `drop`), JSON schema validation of `config/tillr/seed-items.json`, and owner approval of `docs/design/tillr-seed-triage.md` (the board-reshape triage ruling, A).
 
 #### 2.4. Chunk 4: `PIPE-REAL` (Existing — live canary through `run-pi`)
 - **What it is**: Executes the first real model turn through `tools/tillr-run/backends/pi/run-pi` on a single low-risk Tier-1 item in an isolated locked worktree under the durable scratch directory, using `brief-template.md` (all nine `##` sections populated) and `preflight.sh`, pinned to DeepSeek route `deepseek/deepseek-v4.1-flash-1017:floor` (`:particle`). Fixes any formatting mismatch between `run-pi`'s live subagent output and `extract-report`.
@@ -145,7 +145,7 @@ an untakeable snapshot is a stop, never a pass.
 #### 2.5. Chunk 5: `QUEUE-SEED` (New — idempotent seed importer)
 - **What it is**: Adds `tillr item seed --root <dir> --from config/tillr/seed-items.json` in `tools/tillr-item` and `tools/tillr-cli` to batch-insert the owner-approved items, freeze their criterion texts (`criterion-frozen`), and wire their blocking edges.
 - **What it produces**: `tillr item seed` command and populated live store with `>= 15` `ready` Tier-1 items and `>= 30` total migrated items.
-- **Depends on**: `QUEUE-TRIAGE`, owner sign-off ([`OQ-BR2`](tillr-board-reshape.md#decision-ledger) A), `RUN-ITEM-ID`.
+- **Depends on**: `QUEUE-TRIAGE`, owner sign-off (the board-reshape triage ruling, A), `RUN-ITEM-ID`.
 - **How it is verified**:
   1. `tillr item seed --root /workspace --from config/tillr/seed-items.json` exits `0`;
   2. Re-running `tillr item seed` against the same store exits `0` without attempting to overwrite frozen criterion text (respects `criterion-frozen`);
@@ -184,7 +184,7 @@ an untakeable snapshot is a stop, never a pass.
 ### 3.1. What the Triage Found
 
 The deleted board's archive at `docs/archive/board-2026-11-12/board-content.json`
-([`OQ-BR1`](tillr-board-reshape.md#decision-ledger) A) holds `623` items, **`56`** of them open
+([committed verbatim](../archive/board-2026-11-12/README.md)) holds `623` items, **`56`** of them open
 (`35` `not-started`, `14` `in-progress`, `7` `blocked`). Day 1 measured how many named paths
 that were all gone and concluded `49` open items targeted live areas. That measurement counted
 a **path that still exists** as a working premise, and the triage's premise-by-premise audit
@@ -236,8 +236,8 @@ their evidence, and re-opening one is a decision about the work, not a schedulin
 ### 3.4. What the Seed Carries Today
 
 `config/tillr/seed-items.json` holds the five survivors at `in-queue`, which is the state that
-asks the drain to dispatch an item — the approval bit [`OQ-BR2`](tillr-board-reshape.md#decision-ledger)
-A puts in the owner's hands. Seeding is idempotent and atomic (`tillr item seed`, see
+asks the drain to dispatch an item — the approval bit the board-reshape triage ruling (A)
+puts in the owner's hands. Seeding is idempotent and atomic (`tillr item seed`, see
 `tools/tillr-item/item/seed.go`), so re-running it is a report rather than a rewrite, and a
 changed definition is refused naming the id and the field that differs.
 
@@ -322,14 +322,14 @@ Model inference is not the bottleneck: seven independent DeepSeek provider route
 
 ## 6. Deferred and Dropped Scope
 
-To build and run `LOOP-1` over the migrated queue in a single day, five items from `docs/design/tillr-chunking-plan.md` and `docs/design/tillr-board-reshape.md` are explicitly deferred or dropped:
+To build and run `LOOP-1` over the migrated queue in a single day, five items from `docs/design/tillr-chunking-plan.md` and the retired board-reshape design are explicitly deferred or dropped:
 
 | Dropped / Deferred Item | Decision | Why It Is Cut Today | Concrete Cost Paid |
 |---|---|---|---|
 | **`SUB-2`** (Structured `env_refs` secret/env channel in `tillr-run`) | **Defer** | `run-pi` and `run-agy` take route, worktree, and brief paths on argv and read ambient jail credentials. Building an env-broker today adds `75m` to `tools/tillr-run` + all adapter scripts without changing a single Day-2 run. | `run.request.env_refs` stays empty (`[]`); adapters cannot receive per-item secret overrides until `SUB-2` is built. |
 | **`MM-2`** (`muse` live canary & `run-muse` recovery) | **Drop / Freeze** | Meta subscription lapsed on `2026-11-12`; every `muse` model fails with `does not exist or you lack access`. | `tools/tillr-run/backends/muse/run-muse` stays dormant in the tree (`extract-report` remains shared/tested). Failover depth is strictly `1` (`pi` → `agy`). |
 | **Standalone E1 Supervised Drain CLI/UI** (`tillr-today` sequencing) | **Drop intermediate ceremony** | Superseded by the owner's instruction to go straight to the unattended loop burning through the migrated queue. | No interactive step-by-step confirmation prompt between phases; safety relies entirely on `PIPE-REAL` (1-item canary), a short canary run of `tillr drain loop`, `BOUNDARY-1`, and the infrastructure backoff (the tick budget and the 3-failure circuit breaker are gone — [the momentum principle](momentum-principle.md)). |
-| **Bulk Import of `567` Closed/Completed/Abandoned Board Items** ([`tillr-board-reshape.md`](./tillr-board-reshape.md)) | **Drop** | `docs/archive/board-2026-11-12/board-content.json` is committed verbatim ([`OQ-BR1`](tillr-board-reshape.md#decision-ledger) A). Importing `567` historical items into `tillr-store` provides zero runnable work and would require inventing retroactive criteria. | `tillr view` displays only the `30–42` migrated active items; historical lookups query `docs/archive/board-2026-11-12/board-content.json` via `jq`. |
+| **Bulk Import of `567` Closed/Completed/Abandoned Board Items** (`tillr-board-reshape`) | **Drop** | `docs/archive/board-2026-11-12/board-content.json` is [committed verbatim](../archive/board-2026-11-12/README.md). Importing `567` historical items into `tillr-store` provides zero runnable work and would require inventing retroactive criteria. | `tillr view` displays only the `30–42` migrated active items; historical lookups query `docs/archive/board-2026-11-12/board-content.json` via `jq`. |
 | **Automated Self-Healing / Re-Run of `candidate-gate-fail` or `reapply-conflict`** | **Defer** | Automatically spawning a repair turn inside the unattended loop violates the `no-retry-budget` rule and risks burning ticks on a flawed item specification. | Failed candidates are saved to `refs/tillr/failed/<run_id>` or `refs/tillr/conflict/<run_id>`, the item is marked `blocked`, and the loop moves on to the next `ready` item. |
 
 ---
@@ -359,7 +359,7 @@ git worktree add --lock "$YOLO_DURABLE_DIR/worktrees/d2-store-lease" -b lane/d2-
   3. `ReapExpiredLeases(now)` invoked at the start of `tillr drain once` before planning (`timeout_ms + 300s` grace on store host clock) plus `tillr run release <lane-id> --reason <str>`;
   4. All module `go test ./...` suites green in the lane worktree, ready for coordinator `just done` and `tillr land pass`.
 
-### Action 2: Provision and Dispatch Lane 2 (`d2-queue-triage`, in Parallel with Action 1) for `QUEUE-TRIAGE` ([`OQ-BR2`](tillr-board-reshape.md#decision-ledger) A)
+### Action 2: Provision and Dispatch Lane 2 (`d2-queue-triage`, in Parallel with Action 1) for `QUEUE-TRIAGE` (the board-reshape triage ruling, A)
 Extract the `56` open items from `docs/archive/board-2026-11-12/board-content.json` and dispatch Lane 2 to run the live premise probes against `/workspace` `HEAD`:
 
 ```bash
@@ -370,7 +370,7 @@ jq '[.items[] | select(.status == "not-started" or .status == "in-progress" or .
 ```
 
 - **Deliverables**:
-  1. `docs/design/tillr-seed-triage.md` accounting for all `56` open items (`KEEP-READY` with command + output proving the premise bites today, `KEEP-BLOCKED` with command + output + edges, and `DROP` with closed reason code + evidence, including the `4` gone-path and `3` deleted-CLI items) ready for owner approval under [`OQ-BR2`](tillr-board-reshape.md#decision-ledger) A;
+  1. `docs/design/tillr-seed-triage.md` accounting for all `56` open items (`KEEP-READY` with command + output proving the premise bites today, `KEEP-BLOCKED` with command + output + edges, and `DROP` with closed reason code + evidence, including the `4` gone-path and `3` deleted-CLI items) ready for owner approval under the board-reshape triage ruling (A);
   2. `config/tillr/seed-items.json` containing `>= 15` `KEEP-READY` leaf items (with disjoint `allowed_paths` and frozen criterion texts) and `>= 30` total items.
 
 ### Action 3: Stage the `PIPE-REAL` Live Canary Worktree (`lane-1`) and Preflight Verification
@@ -390,7 +390,7 @@ Stated before execution begins, Day 2 has **failed** if any one of the following
 
 1. **Human-Driven Glue Instead of an Unattended Loop**: `tillr drain loop` did not execute **at least `5` consecutive ticks and land at least `3` items unattended** in a single invocation without a human or coordinator chat turn manually running commands between ticks.
 2. **Unproven Live Adapter (`PIPE-REAL` Failure)**: `run-pi` fails to produce real `run.record` (`exit 0`) + extracted reports + clean candidate commits from live DeepSeek turns, resulting in fewer than `3` items reaching `land.record` on `main`.
-3. **Queue Starvation or Unapproved Seed Set**: Fewer than `15` `ready` items (or fewer than `30` total items) with owner-approved premise probes ([`OQ-BR2`](tillr-board-reshape.md#decision-ledger) A) and frozen criteria (`criterion-frozen`) are loaded into the store, or the loop starves after `< 5` ticks because all remaining items are `blocked`.
+3. **Queue Starvation or Unapproved Seed Set**: Fewer than `15` `ready` items (or fewer than `30` total items) with owner-approved premise probes (the board-reshape triage ruling, A) and frozen criteria (`criterion-frozen`) are loaded into the store, or the loop starves after `< 5` ticks because all remaining items are `blocked`.
 4. **Failure Class Conflation**: A candidate that failed `tillr-gate` (`candidate-gate-fail`, exit `1` from `just done`) is failed over to `agy` as if it were an infrastructure error, OR an adapter/network error (`exit 3`/`4`/`124`) records `item.verdict = fail` on frozen criteria instead of routing through `DRAIN-2B` failover and infrastructure holding.
 5. **Missing `item_id` or Leaked Lease (`D-UT19` / `D-UT17` Regression)**: Any terminal `run.record` in the v3 store has an empty/null `item_id`, or `tillr run lanes` shows an expired or orphaned lease after `tillr drain loop` exits.
 6. **Host Boundary Violation**: `/workspace` (`main` checkout) has dirty tracked or untracked files outside the store and the durable scratch directory during or after the loop, or `main` was moved by anything other than `tillr land pass` (the `tillr-today` landing ruling, A).
@@ -419,6 +419,6 @@ Stated before execution begins, Day 2 has **failed** if any one of the following
 enough that it needs the owner rather than a lane. No other ruling in this document's
 open-question family is required to start execution ([Section 7](#7-first-three-actions)). The
 single human checkpoint during the day is already governed by
-**[`OQ-BR2`](tillr-board-reshape.md#decision-ledger) A**: owner review and approval of
+**the board-reshape triage ruling (A)**: owner review and approval of
 `docs/design/tillr-seed-triage.md` when Lane 2 finishes `QUEUE-TRIAGE`, before `QUEUE-SEED` loads
 the live store for `LOOP-1`.

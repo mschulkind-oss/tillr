@@ -295,9 +295,6 @@ a time as each is cut into build items.
 Each predates the round above. They are behind it because a ruling that is already open does not
 get cheaper by being opened again.
 
-- [Reshaping the board backlog](../design/tillr-board-reshape.md): both its questions were ruled
-  on 2026-11-12. It owes the first triage list its sixth section describes. The earlier version
-  of this page said a question was still open; that was stale.
 - [The observatory design](../design/observatory-design.md) is fully ruled and is superseded
   screen by screen as [entry 6](#6-the-observatory-answers-the-owners-questions) lands.
 - [The evidence tool](../../tools/pipeline-evidence/) still carries a reader for the deleted
