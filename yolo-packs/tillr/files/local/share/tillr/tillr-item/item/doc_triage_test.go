@@ -206,11 +206,11 @@ func TestDocTriageRefusesBeforeWriting(t *testing.T) {
 		req  item.DocTriageRequest
 		rule string
 	}{
-		"none":        {item.DocTriageRequest{Title: "Empty"}, "no-documents"},
-		"over-bound":  {item.DocTriageRequest{Title: "Too many", Docs: many}, "too-many-documents"},
-		"no-title":    {item.DocTriageRequest{Docs: many[:1]}, "title-required"},
-		"report-out":  {item.DocTriageRequest{Title: "Out", Docs: many[:1], Report: "tools/report.md"}, "report-path"},
-		"report-self": {item.DocTriageRequest{Title: "Self", Docs: many[:1], Report: many[0]}, "report-path"},
+		"none":         {item.DocTriageRequest{Title: "Empty"}, "no-documents"},
+		"over-bound":   {item.DocTriageRequest{Title: "Too many", Docs: many}, "too-many-documents"},
+		"no-title":     {item.DocTriageRequest{Docs: many[:1]}, "title-required"},
+		"report-out":   {item.DocTriageRequest{Title: "Out", Docs: many[:1], Report: "tools/report.md"}, "report-path"},
+		"report-self":  {item.DocTriageRequest{Title: "Self", Docs: many[:1], Report: many[0]}, "report-path"},
 		"not-markdown": {item.DocTriageRequest{Title: "Text", Docs: []string{"config/tillr/workflows/doc-triage@v1.json"}}, "document-not-markdown"},
 	} {
 		t.Run(name, func(t *testing.T) {

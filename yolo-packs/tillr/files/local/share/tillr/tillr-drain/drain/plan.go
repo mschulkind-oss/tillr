@@ -177,9 +177,9 @@ type itemRow struct {
 	// nil for an item that supplies none, which is every document-declared item.
 	WorkflowArgs map[string]any
 	Command      *WorkflowStage
-	ItemID     string
-	State      string
-	Rank       string
+	ItemID       string
+	State        string
+	Rank         string
 	// Allowed is the item's allowed_paths, the source of the fence its run is held to.
 	Allowed []string
 	// DesignDoc is the design document the item names, relative to the repository or
