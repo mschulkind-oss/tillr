@@ -25,8 +25,8 @@ The first rule that separates two entries decides.
 
 ## 1. Rulings that are waiting on the owner
 
-The questions below are left for the owner on this page: 30 by `vantage-check index` on
-2026-11-18, 22 of them the provenance review's. Each has options and a recorded leaning.
+The questions below are left for the owner on this page: 29 by `vantage-check index` on
+2026-11-18, 21 of them the provenance review's. Each has options and a recorded leaning.
 Twenty-three others that stood here were settled on 2026-11-15 and 2026-11-16 by the session's
 designer, at the owner's request, and each is the owner's to overturn. Not every one of them says
 so in its design: [the provenance review](./decision-provenance-review.md#3-corrections-that-need-no-ruling)
