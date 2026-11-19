@@ -2,7 +2,7 @@
 title: "A landing is a suspended tool call: the worker offers a commit and hears back only when it has something to fix"
 status: in-review
 stage: DESIGN
-updated: 2026-11-18
+updated: 2026-11-19
 tags:
   - tillr
   - landing
@@ -414,7 +414,7 @@ Smallest first. The running drain keeps working at every step, because the foote
 | 1 | Reverts and conflicts return to the worker's own session, in message form | No | Landed |
 | 2 | The call record, the offer and answer files, the answer chooser, and the ending capability, proven against a stand-in harness | No | Landed. Every adapter declares `footer` |
 | 3 | The three fork patches | It is the delivery | Its item landed: the patch is on this repository's `patch/pi`, which the remote branch and the host do not have yet |
-| 4 | The `land` tool, the new brief ending, and answers as tool results on pi | Yes: steps 2 and 3, and the host steps of [Section 6.6](#66-delivery-and-how-the-drain-knows) | In the queue, not landed |
+| 4 | The `land` tool, the new brief ending, and answers as tool results on pi | Yes: steps 2 and 3, and the host steps of [Section 6.6](#66-delivery-and-how-the-drain-knows) | Partly landed (`land.ts`, brief ending, session path, and transcript check are in the tree); delivery tests and the switch-on item remain in the queue |
 | 5 | The call stays open until proven; `reverted` is its answer | Yes: step 4 | Drafted below, not filed |
 | 6 | `obstacle` as a tool | Yes: step 4 | In the queue, behind step 4 |
 | 7 | Claude Code's `call-then-message` form | No, but it waits on its own verification | Not drafted |
@@ -475,18 +475,18 @@ A landing that the full suite later reverts should come back as the answer to th
 
 ## Decision Ledger
 
-The `D-LC` rows are the designer's decisions of 2026-11-18. None of them is the owner's ruling; the owner may overturn any of them, and all await his review. The Built column was read from the tree on 2026-11-18.
+The `D-LC` rows are the designer's decisions of 2026-11-18. None of them is the owner's ruling; the owner may overturn any of them, and all await his review. The Built column was updated from the tree on 2026-11-19.
 
 | ID | Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
-| `D-LC1` | A worker's run ends with the tool call `land`, which takes a summary and nothing else. The commit at the branch head at that moment is the offer. **Rejected:** a claimed-criteria argument (narration nobody checks) and a commit argument (the worker has one branch). | 2026-11-18 | [Section 3.1](#31-the-call) | — |
-| `D-LC2` | Checks the worker can fix at once (no commit, uncommitted paths, an unchanged offer, a second open call, a wake still owed) return inside the call and end nothing. | 2026-11-18 | [Section 3.2](#32-what-is-answered-at-once) | — |
+| `D-LC1` | A worker's run ends with the tool call `land`, which takes a summary and nothing else. The commit at the branch head at that moment is the offer. **Rejected:** a claimed-criteria argument (narration nobody checks) and a commit argument (the worker has one branch). | 2026-11-18 | [Section 3.1](#31-the-call) | Partly: `land.ts` is built (`tools/tillr-run/backends/pi/land.ts`), not yet switched on |
+| `D-LC2` | Checks the worker can fix at once (no commit, uncommitted paths, an unchanged offer, a second open call, a wake still owed) return inside the call and end nothing. | 2026-11-18 | [Section 3.2](#32-what-is-answered-at-once) | Partly: implemented in `executeLand` (`tools/tillr-run/backends/pi/land.ts`), not yet switched on |
 | `D-LC3` | The answers are a closed set: `refused` (fence, judge, gate), `conflict`, `reverted`, `design-answer`. Machinery outcomes and a clean take-in are never answers. | 2026-11-18 | [Section 3.3](#33-what-can-come-back) | Partly: the chooser is built and table-tested (`chooseLandingCallAnswer`). No answer reaches a session as a call's result yet |
 | `D-LC4` | A named obstacle is a second tool, `obstacle`, with typed fields. **Rejected:** an argument of `land`, which would admit an offer that is also a refusal; and keeping the footer on a harness that can suspend. | 2026-11-18 | [Section 3.5](#35-a-named-obstacle-is-a-second-tool) | — |
-| `D-LC5` | Landed and proven are both recorded and neither opens the session. The call closes at proven, and a revert is the open call's answer. **Rejected:** closing at landed, which needs a paid turn or an outside edit to say so and a second delivery form for a revert. | 2026-11-18 | [Section 4](#4-landed-and-proven-one-call-two-events) | — |
+| `D-LC5` | Landed and proven are both recorded and neither opens the session. The call closes at proven, and a revert is the open call's answer. **Rejected:** closing at landed, which needs a paid turn or an outside edit to say so and a second delivery form for a revert. | 2026-11-18 | [Section 4](#4-landed-and-proven-one-call-two-events) | Partly: silent closure on `proven`, `superseded`, or `withdrawn` (`landing_call_lifecycle.go`, `TestLandingCallClosesOnProvenSupersededOrWithdrawn`) and `reverted` answer recording (`answerLandingRefusal` in `landing_call.go`, `TestLandingCallAnswersJudgeAndRevertFromTheirDurableRecords`) are built; adapter delivery and the rest of step 5 remain unbuilt |
 | `D-LC6` | One call record per call in the store, written only by the drain; one answer per call, immutable; the delivery form is recorded. | 2026-11-18 | [Section 5](#5-the-record) | Yes: the record and the refusal of a second answer are in the drain (`landing_call.go`) |
 | `D-LC7` | On pi the answer is produced by the tool when the harness replays the unanswered call. **Rejected:** appending a result to the session file from outside (no supported interface, and its failure history), and a tool that waits (a process per call). | 2026-11-18 | [Section 6.1](#61-the-form-chosen-and-the-two-rejected) | — |
-| `D-LC8` | Three fork patches: park, open without a prompt, and a features flag. The pi adapter declares `call-suspends` only when the installed binary prints `parked-tool-calls`. **Rejected:** an interim form that parks by killing the process. | 2026-11-18 | [Section 6.5](#65-the-fork-patches) | Partly: the fork patch is on this repository's `patch/pi`, undelivered. The adapter's check of the installed binary is not built |
+| `D-LC8` | Three fork patches: park, open without a prompt, and a features flag. The pi adapter declares `call-suspends` only when the installed binary prints `parked-tool-calls`. **Rejected:** an interim form that parks by killing the process. | 2026-11-18 | [Section 6.5](#65-the-fork-patches) | Partly: the fork patch is on this repository's `patch/pi`, undelivered; `probePiEndingCapability` is built (`landing_call.go`, `landing_capability_test.go`) but not yet wired into `recordEndingCapabilities` |
 | `D-LC9` | A node's ending form is fixed when it starts. The footer remains the form for an adapter that cannot suspend, and for a pi without the feature. | 2026-11-18 | [Section 6.6](#66-delivery-and-how-the-drain-knows) | Partly: every adapter declares `footer` |
 | `D-LC10` | tillr never compacts a session with an open or answered call. | 2026-11-18 | [Section 6.3](#63-failure-cases) | — |
 | `D-LC11` | While worktrees are a fixed set of lanes, an item's worktree is released at its landing, not held until the landing is proven. A later `reverted` answer reaches the worker's own session when its worktree and session remain, and a fresh session otherwise, with the reason recorded. **Rejected for now:** holding the worktree until proven, which takes a lane out of use through a long red. That choice returns as [OQ-LC1](#OQ-LC1) once worktrees belong to items. | 2026-11-18 | [Section 5.2](#52-states) | Yes, in message form: step 1 |
@@ -497,7 +497,7 @@ The `D-LC` rows are the designer's decisions of 2026-11-18. None of them is the 
 
    <!-- vantage: question id=OQ-LC1 blocked-on="worktrees that belong to items: the vocabulary design proposes them as a designer's decision that awaits review, and none is built" -->
 
-   Waits on worktrees that belong to their items. Your direction of 2026-11-18 is that a worktree is a resource an item acquires and keeps. [The vocabulary](./tillr-vocabulary.md#33-the-life-of-a-worktree) proposes how, as a designer's decision that awaits your review, and asks separately whether an item is finished when it lands or when the full suite has passed. Nothing of it is built. Until then worktrees are a fixed set, a worktree is released when its item lands, and a reverted change goes back to the worker that wrote it only if its worktree is still free. Four landings of 803 have been reverted, all on 2026-11-18. Once an item owns its worktree, keeping it until the full suite passes costs disk and not a slot, and the question is asked then.
+   Waits on worktrees that belong to their items. Your direction of 2026-11-18 is that a worktree is a resource an item acquires and keeps. [The vocabulary](./tillr-vocabulary.md#33-the-life-of-a-worktree) proposes how, as a designer's decision that awaits your review, and records the owner's 2026-11-18 ruling ([`OQ-VO6`](./tillr-vocabulary.md#OQ-VO6)) that an item is finished when the full suite has passed on it. Nothing of the worktree lifecycle is built. Until then worktrees are a fixed set, a worktree is released when its item lands, and a reverted change goes back to the worker that wrote it only if its worktree is still free. Four landings of 803 have been reverted, all on 2026-11-18. Once an item owns its worktree, keeping it until the full suite passes costs disk and not a slot, and the question is asked then.
 
    **Answer:**
    > _(empty — fill in when decided)_
