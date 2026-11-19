@@ -78,7 +78,7 @@ func newWalledFixture(t *testing.T, harness string) walledFixture {
 	if err != nil {
 		t.Fatalf("resolving the pi adapter failed: %v", err)
 	}
-	stubHarness := stub(t, "pi", harness)
+	stubHarness := stub(t, "pi", "[ \"${1:-}\" != --features ] || exit 2\n"+harness)
 	t.Setenv("PATH", filepath.Dir(stubHarness)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	argv := filepath.Join(scratch(t, "wall-argv"), "argv")
 	t.Setenv("STUB_ARGV", argv)
