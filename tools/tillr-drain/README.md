@@ -2567,6 +2567,19 @@ including the planner decision. `--json` gives rows and summary as one object,
 or the selected item's record alone. The JSON answer also carries the event
 sequence at which the planner read the store.
 
+`--lanes` takes either a comma-separated list of lane ids or a count. A count is
+the loop's own `--lanes` spelling and offers the loop's lanes: `lane-1` to
+`lane-N` and the express lanes the repository's settings configure. Before
+2026-11-19 a count was read as one lane with that name, so `--lanes 16` reported
+every schedulable item after the first as `no-lane` behind a lane called `16`.
+
+The planner gives a free ordinary lane to every item that can start. A lane a
+returned worker's session or a design continuation sits on is reserved for that
+item only while it starts in the same plan; when it cannot (it is held, blocked,
+retried without its session, or already running elsewhere) and another item
+found no free lane, the plan is made again without that reservation. Items the
+loop itself holds after a staging refusal are held before any lane is offered.
+
 The unfiltered text face also lists each landed item's recorded run cost and the
 sum per seat. It joins node seats and models to the run's backend and usage;
 legacy node seats use recorded seat dispatches where available, otherwise

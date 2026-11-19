@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -23,7 +24,7 @@ func whyFace(args []string) int {
 	fs := newFlagSet("why")
 	path := fs.String("store", "", "the store to read (required)")
 	policyRef := fs.String("policy", "", "the loop's policy file; absent means no-policy, not a guessed backend")
-	lanesArg := fs.String("lanes", "", "comma-separated lanes offered by the loop (default: all store lanes)")
+	lanesArg := fs.String("lanes", "", "lanes offered by the loop: a comma-separated list, or a count N as the loop's --lanes takes it (lane-1..lane-N plus the configured express lanes); default: all store lanes")
 	root := fs.String("root", ".", questionsRootHelp)
 	questionsCmd := fs.String("questions-cmd", "", questionsCmdHelp)
 	questionsIndex := fs.String("questions-index", "", "an index document `vantage-check index --format json` already produced, read instead of running the index command; `-` reads it from stdin (the observatory hands one cached walk to every planner it asks)")
@@ -62,8 +63,7 @@ func whyFace(args []string) int {
 		tick.Now = time.Now().UTC().Format(time.RFC3339)
 	}
 	if *lanesArg != "" {
-		lanes := strings.Split(*lanesArg, ",")
-		tick.AvailableLanes = &lanes
+		tick.AvailableLanes = whyLanes(*lanesArg, repositorySettings.Lanes.Express)
 	}
 	ctx := context.Background()
 	s, err := store.OpenRead(ctx, *path)
@@ -142,4 +142,17 @@ func whyFace(args []string) int {
 		return fail(drain.Externalf("writing why: %v", err))
 	}
 	return record.ExitOK
+}
+
+// whyLanes answers the lanes `why --lanes` offers. A bare count is the loop's own --lanes
+// spelling and means the loop's lanes: lane-1..lane-N and the configured express lanes. It
+// was once read as one lane named "16", and every schedulable item past the first was then
+// reported no-lane behind that lane, which no loop offers.
+func whyLanes(arg string, express int64) *[]string {
+	if n, err := strconv.Atoi(strings.TrimSpace(arg)); err == nil && n > 0 {
+		lanes := append(laneIDs(n), expressLaneIDs(express)...)
+		return &lanes
+	}
+	lanes := strings.Split(arg, ",")
+	return &lanes
 }

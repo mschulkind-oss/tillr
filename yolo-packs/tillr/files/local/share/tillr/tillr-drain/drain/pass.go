@@ -946,7 +946,15 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 		// A lane a lane-owned staging refusal took out of rotation is offered to no item
 		// until a re-check puts it back (lane_rotation.go).
 		available := l.rotationLanes()
-		tick := Pass{examineItem: l.ownerMigrationItem, ownerMigration: l.ownerMigrationItem != "", Comments: l.cfg.Comments, WorkflowDefaults: l.cfg.WorkflowDefaults, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available}
+		// The loop's own holds go to the planner, so it holds those items before it offers
+		// lanes rather than having a lane it gave one overridden below and left unused.
+		loopHolds := map[string]string{}
+		for id := range l.held {
+			if reason, held := l.heldFor(r, id); held {
+				loopHolds[id] = reason
+			}
+		}
+		tick := Pass{examineItem: l.ownerMigrationItem, ownerMigration: l.ownerMigrationItem != "", loopHolds: loopHolds, Comments: l.cfg.Comments, WorkflowDefaults: l.cfg.WorkflowDefaults, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available}
 		if stager, ok := l.cfg.Stage.(*LaneStager); ok {
 			tick.BriefTemplate = &stager.Template
 		}
