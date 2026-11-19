@@ -37,7 +37,58 @@ type Question struct {
 	Line       int      `json:"line"`
 	Preference bool     `json:"preference"`
 	Leaning    string   `json:"leaning"`
-	BlockedOn  []string `json:"blockedOn"`
+	BlockedOn  Blockers `json:"blockedOn"`
+}
+
+// Blockers is a question's blockedOn list as readable strings. vantage-check 0.12 reports
+// each blocker as an object (`{"kind":"external","name":...}` or `{"kind":"target","raw":...,
+// "target":...,"fragment":...}`); an older index used bare strings. Both decode here, so a
+// consumer that prints or compares strings never sees the index's shape.
+type Blockers []string
+
+// UnmarshalJSON accepts strings and objects in one list. An object reads as its name, else
+// its raw reference, else target#fragment, else its own compact JSON, so an unknown kind is
+// kept visible instead of refusing the whole index.
+func (b *Blockers) UnmarshalJSON(data []byte) error {
+	var entries []json.RawMessage
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return err
+	}
+	out := make(Blockers, 0, len(entries))
+	for _, entry := range entries {
+		var text string
+		if json.Unmarshal(entry, &text) == nil {
+			out = append(out, text)
+			continue
+		}
+		var object struct {
+			Name     string `json:"name"`
+			Raw      string `json:"raw"`
+			Target   string `json:"target"`
+			Fragment string `json:"fragment"`
+		}
+		if err := json.Unmarshal(entry, &object); err != nil {
+			return err
+		}
+		switch {
+		case object.Name != "":
+			out = append(out, object.Name)
+		case object.Raw != "":
+			out = append(out, object.Raw)
+		case object.Target != "" && object.Fragment != "":
+			out = append(out, object.Target+"#"+object.Fragment)
+		case object.Target != "":
+			out = append(out, object.Target)
+		default:
+			var compact bytes.Buffer
+			if err := json.Compact(&compact, entry); err != nil {
+				return err
+			}
+			out = append(out, compact.String())
+		}
+	}
+	*b = out
+	return nil
 }
 
 // QuestionAnswered is the one state that settles a question. Every other state is

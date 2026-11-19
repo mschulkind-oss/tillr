@@ -209,3 +209,25 @@ func TestDocumentLedgerIDs(t *testing.T) {
 		t.Fatalf("plain: %+v %v", plain, err)
 	}
 }
+
+// A blocked question's blockedOn is a list of objects in vantage-check 0.12, not strings.
+// The reader keeps each blocker as one readable string, whichever shape the index used.
+func TestParseVantageIndexReadsBlockedOnInEveryShape(t *testing.T) {
+	document := `{"index":{"documents":[{"path":"docs/a.md","questions":[
+		{"id":"Q1","state":"blocked","blockedOn":[
+			"legacy-string",
+			{"kind":"external","name":"owner-ready-to-run-a-round"},
+			{"kind":"target","raw":"./tillr-storage.md#OQ-TS1","target":"docs/design/tillr-storage.md","fragment":"OQ-TS1"},
+			{"kind":"target","target":"docs/b.md","fragment":"Q2"},
+			{"kind":"future","extra":1}]},
+		{"id":"Q2","state":"open"}]}]}}`
+	index, err := parseVantageIndex([]byte(document))
+	if err != nil {
+		t.Fatalf("a blocked question's index was refused: %v", err)
+	}
+	questions := index.documents["docs/a.md"]
+	want := []string{"legacy-string", "owner-ready-to-run-a-round", "./tillr-storage.md#OQ-TS1", "docs/b.md#Q2", `{"kind":"future","extra":1}`}
+	if len(questions) != 2 || strings.Join(questions[0].BlockedOn, "|") != strings.Join(want, "|") {
+		t.Fatalf("blockedOn = %q, want %q", questions[0].BlockedOn, want)
+	}
+}
