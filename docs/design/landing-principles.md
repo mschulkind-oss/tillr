@@ -2,14 +2,15 @@
 title: "Landing principles — the durable rulings, and what enforces each"
 status: accepted
 stage: CURRENT
-verified: 2026-11-15
+verified: 2026-11-19
 covers:
   - docs/design/escalation-ladder.md
+  - docs/design/tillr-judge-and-lifecycle.md
   - docs/pi/candidate-triage-2026-10-28.md
   - docs/pi/landing-replay-ruling-2026-11-02.md
   - docs/pi/stranded-candidates-2026-11-02.md
 tags: [board, landing, principles, rulings, library]
-summary: "Fourteen principles distilled from the landing rulings of 2026-10-28 to 2026-11-17, each with the measurement that produced it, the thing that enforces it today, and the one lander it binds. A principle whose enforcement column says 'nothing' is a claim, not a rule, and is listed as such rather than assumed; a principle that is not lander-scoped says so and names the dispatch program it binds instead."
+summary: "Fourteen principles distilled from the landing rulings of 2026-10-28 to 2026-11-17, each with the measurement that produced it, the thing that enforces it today, and the one lander it binds. Principles 5 and 6's per-attempt budgets are superseded by the 2026-11-17 owner ruling D-JL10 (worker endings are never counted; identical repeats diagnose at design). A principle whose enforcement column says 'nothing' is a claim, not a rule, and is listed as such rather than assumed; a principle that is not lander-scoped says so and names the dispatch program it binds instead."
 ---
 
 # Landing principles
@@ -41,7 +42,7 @@ A scope line therefore takes one of three shapes:
   `tillr-loop`, and says nothing about the lander.
 - **a named program** — the entry binds that program and no other, and the line says which.
 
-"Meets it" and "does not" are measurements of the tree, read in the source on 2026-11-15, not
+"Meets it" and "does not" are measurements of the tree, read in the source on 2026-11-19, not
 intentions; where the lander does not meet an entry, the line names the gap that remains.
 
 ---
@@ -148,8 +149,9 @@ about the candidate rather than the machinery. Both outcomes are pinned in
 [`main_test.go`](../../tools/tillr-land/main_test.go)
 (`TestAMovedTrunkSquashesTheChangeOntoTheNewTip` and `TestASquashConflictIsRecordedAndPinsTheHead`)
 and [`trunk_test.go`](../../tools/tillr-land/land/trunk_test.go)
-(`TestSquashWritesOneCommitWithTheItemTrailerAndTheDeployedIdentity` and
-`TestSquashOnAConflictNamesTheConflictAndNoCommit`).
+(`TestSquashWritesOneCommitWithNoItemTrailerAndTheDeployedIdentity` and
+`TestSquashOnAConflictNamesTheConflictAndNoCommit`), consistent with
+[`tools/tillr-land/README.md`](../../tools/tillr-land/README.md#state-invariants) (landed commits carry no `Tillr-Item:` trailer).
 
 [`board-utilities.md`](board-utilities.md) [§5.4](board-utilities.md#54-land-alone) states that
 contract for `land`.
@@ -186,33 +188,64 @@ to — `tillr-drain` and `tillr-loop` — and says nothing about the lander.
 
 ## 5. Only verdicts charge
 
-A repair attempt is charged only when a tree the gate actually judged was refused, and only per
-distinct cause. Parks, provider failures, no-candidate lanes and machinery faults charge nothing.
+> **Superseded on 2026-11-17 as a counted budget (`D-JL10`).** The owner ruled in
+> [`tillr-judge-and-lifecycle.md`](./tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10)
+> (`D-JL10` in its [decision ledger](./tillr-judge-and-lifecycle.md#decision-ledger)) that a worker's
+> ending is never counted and rejected numeric repair thresholds. The durable negative rule —
+> parks, provider failures, no-candidate lanes and machinery faults never consume an item's standing
+> — holds automatically because no count exists.
+
+*Original 2026-10-28 / 2026-11-02 statement:* a repair attempt was to be charged only when a tree
+the gate actually judged was refused, and only per distinct cause. Parks, provider failures,
+no-candidate lanes and machinery faults charged nothing.
 
 *Measured 2026-11-02:* ten candidates sat with "spent" budgets and **not one had a judged repair
 tree**. Four of them had three no-candidate lanes each — their budget was spent entirely on provider
 failures. The counter read 2/2 and the work had never once been seen by the gate.
 
-*Enforced by:* nothing yet. Item 418 is where the charge event is redefined; until it lands, the
-recomputation is a recorded hand operation.
+*Enforced by:* [`tillr-drain`](../../tools/tillr-drain/), under `D-JL10` rather than a charge
+counter (board-era item 418 is absent from [`docs/tillr/roadmap.md`](../tillr/roadmap.md)). A
+refused run, a run with no commit, a fence escape, a refused landing, and a squash conflict return
+to the worker with their evidence every time and uncounted
+([`tools/tillr-drain/README.md`](../../tools/tillr-drain/README.md#a-refused-run-goes-back-to-its-worker);
+`TestAFailedCandidateGoesBackToItsWorkerUntilItRepeats` in
+[`tools/tillr-drain/loop_test.go`](../../tools/tillr-drain/loop_test.go)), while an infrastructure
+failure closes that backend and walks to the next open backend (`backend-closed` when none is open;
+[`tools/tillr-drain/README.md`](../../tools/tillr-drain/README.md#recorded-backend-availability)).
 
-*Scope:* **not lander-scoped.** The attempt ledger and the repair budget it charges live on the
-dispatch side's runs, not the lander's; the lander writes `landings` and charges no repair
-budget.
+*Scope:* **not lander-scoped.** Worker-run settlement lives on the dispatch side (`tillr-drain`),
+not the lander's; the lander writes `landings` and keeps no attempt counter.
 
 ## 6. A budget escalates, it does not loop
 
-K attempts is a budget per **distinct cause**, not per lifetime. A candidate that exhausts it flows
-up the escalation ladder — the repair lane, then a contingency, then a recorded exception with an
-expiry — and the last rung is an explicit "on hold", never a silent stall. Policy is the owner's;
-the mechanism below the policy is not.
+> **Superseded on 2026-11-17 as a counted budget (`D-JL9`, `D-JL10`).** The owner ruled in
+> [`tillr-judge-and-lifecycle.md`](./tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10)
+> (`D-JL9` and `D-JL10` in its [decision ledger](./tillr-judge-and-lifecycle.md#decision-ledger))
+> that neither worker runs nor design runs have numeric attempt thresholds. Escalation without
+> silent stalls stays, triggered by an **identical repeat** or an explicit **named obstacle**, not
+> by `K` attempts.
 
-*Enforced by:* [the escalation ladder](escalation-ladder.md)'s four rungs and its `exceptions`
-ledger. No standing authority below the owner may grant an exception.
+*Original 2026-10-28 statement:* `K` attempts was a budget per **distinct cause**, not per lifetime.
+A candidate that exhausted it was to flow up [the escalation ladder](escalation-ladder.md) — the
+repair lane, then a contingency, then a recorded exception with an expiry — with the last rung an
+explicit "on hold", never a silent stall. Policy is the owner's; the mechanism below the policy is
+not.
 
-*Scope:* **not lander-scoped.** The ladder and its ledger are dispatch-side. The lander ends a lost
-compare-and-swap as an external failure with no rung; whether that becomes one is the dispatch side's
-to decide.
+*Enforced by:* [`tillr-drain`](../../tools/tillr-drain/) in the uncounted shape of `D-JL9`,
+`D-JL10`, and `D-JL11` ([`tillr-judge-and-lifecycle.md`](./tillr-judge-and-lifecycle.md#4-a-failed-attempt-is-never-a-verdict-and-never-a-count)),
+not by [the escalation ladder](escalation-ladder.md)'s four-rung `plan-owner` dispatch or
+`exceptions` ledger, which are unbuilt. A refused worker run returns to its worker until an ending
+repeats an earlier ending of the same producer, cause and normalized evidence (`repeatedEnding` in
+[`tools/tillr-drain/drain/returned.go`](../../tools/tillr-drain/drain/returned.go)), or until the
+worker reports a named obstacle; either routes to the `design` seat, and reaches the owner only on a
+design run's `NEXT-ACTOR: owner` objection or a repeated non-gate design ending (`designRepeatOf` in
+[`tools/tillr-drain/drain/design_repeat.go`](../../tools/tillr-drain/drain/design_repeat.go);
+`TestBlockedReportRoutesOnceToDesignThenOwner` in
+[`tools/tillr-drain/blocked_route_test.go`](../../tools/tillr-drain/blocked_route_test.go)). No
+standing authority below the owner may grant an exception or answer an owner question.
+
+*Scope:* **not lander-scoped.** Conflict and repeat routing are dispatch-side (`tillr-drain`). The
+lander records `squash-conflict` or a refusal with no rung; how that routes is the dispatch side's.
 
 ## 7. A surface that hides parked work is a false report
 
@@ -223,7 +256,21 @@ pass must be visible as held, with the reason — on the same surface used to ju
 Twelve of fifteen queue entries were parked there, reading as work that had been refused, when in
 fact nothing had judged most of them. One had been there four days.
 
-*Enforced by:* nothing. The heading is the defect.
+*Enforced by:* [`tools/tillr-view`](../../tools/tillr-view/) and
+[`tools/tillr-drain/holdrules`](../../tools/tillr-drain/holdrules/holdrules.go). The board surface
+that carried `splitRejectedLandings` is retired. Today `tillr-view waiting` (and `GET /api/v1/why`
+plus `waiting --history` / `GET /api/v1/waiting`; see
+[`tools/tillr-view/README.md`](../../tools/tillr-view/README.md#why-each-unlanded-item-is-not-moving))
+reports why each unlanded item is not moving, classifying every held row and naming its next actor
+and required action. Every exported drain hold reason is required to have a display rule in
+[`holdrules.go`](../../tools/tillr-drain/holdrules/holdrules.go) (`TestEveryReasonConstantHasAHoldRule`
+in [`tools/tillr-drain/drain/hold_rules_test.go`](../../tools/tillr-drain/drain/hold_rules_test.go)),
+`TestWaitingEveryDrainReasonHasARule` in
+[`tools/tillr-view/waiting_internal_test.go`](../../tools/tillr-view/waiting_internal_test.go) verifies
+every rule renders with a class, reason and mover, and
+`TestWaitingSummarySeparatesDocumentAnswersFromOtherNextActors` in
+[`tools/tillr-view/owner_waiting_test.go`](../../tools/tillr-view/owner_waiting_test.go) pins the
+separation of owner document questions from drain, design-seat and operator actions.
 
 *Scope:* **not lander-scoped.** It binds the dispatch side's queue surface — `tillr view` and the
 drain's dispatch table — not the lander, which keeps no candidate queue of its own.
@@ -303,11 +350,11 @@ it does after a landing. The item is never held as `land-refused`. The case is p
 
 *Scope:* **the landing transaction and the drain.** [`tools/tillr-land`](../../tools/tillr-land/)
 does not stall a superseded candidate: there is no candidate queue to wait in, and the finding is a
-recorded refusal rather than a commit. `tillr-drain` exits the item on that refusal. What is not
-enforced yet: the `resolved-elsewhere` move records no pointer to the commit that carries the
-change, because `tillr-item state` takes none today. The lander's `patch-at-head` and `patch-rewind`
-refusals are about `refs/heads/patch/*` delivery branches, not about an ordinary change the trunk
-already holds.
+recorded refusal rather than a commit. `tillr-drain` exits the item on that refusal, recording
+`ResolvesVia: "commit:" + c.HeadSHA` (`resolveElsewhere` in
+[`terminal_item.go`](../../tools/tillr-drain/drain/terminal_item.go)). The lander's `patch-at-head`
+and `patch-rewind` refusals are about `refs/heads/patch/*` delivery branches, not about an ordinary
+change the trunk already holds.
 
 ## 11. A failure is diagnosed, not waited out
 
@@ -346,10 +393,10 @@ design seat's own endings are compared the same way: a design ending that repeat
 from both records (`designRepeatOf` in `tools/tillr-drain/drain/design_repeat.go`). The same ruling removed re-admission on a changed input hash, so a "named
 change" in the sense above is now an event that names the item: an operator's retry, a design answer,
 or the recovery of a killed run. What is not enforced: the fleet trip, the tier-0 probes and the
-fingerprint store of the design below; the one infrastructure failover with its
-`run-infra-exhausted` hold, which is still a budget
-([`item-backend-open-is-a-fact`](../tillr/roadmap.md#route-an-infrastructure-failure-to-the-next-open-backend));
-and the infrastructure backoff on elapsed time. The surviving specification is
+fingerprint store of the design below; and the infrastructure backoff on elapsed time (the one-hop
+infrastructure failover and its `run-infra-exhausted` hold were replaced by recorded backend
+availability and `backend-closed` in
+[`tools/tillr-drain/README.md`](../../tools/tillr-drain/README.md#recorded-backend-availability)). The surviving specification is
 [the cooldown-removal design](./failure-diagnosed-not-waited-out.md), which carries the whole
 mechanism: a fingerprint over the failing stage and the normalized error, an inputs hash recorded
 with every failure, an admission rule keyed on a named change rather than a clock, a fleet trip at
