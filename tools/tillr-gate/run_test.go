@@ -25,6 +25,7 @@ type planCheck struct {
 	Drop      []string          `json:"drop"`
 	Env       map[string]string `json:"env"`
 	Tier      string            `json:"tier"`
+	Exclusive bool              `json:"exclusive"`
 }
 
 // planIn is design §5.7's gate.plan payload as a case writes it.
@@ -286,5 +287,56 @@ func TestRunRefusesAPlanThePlanFaceProduced(t *testing.T) {
 	}
 	if got := decodeVerdict(t, raw); got.Payload.Result != "error" {
 		t.Fatalf("the verdict result is %q, want error", got.Payload.Result)
+	}
+}
+
+func TestRunRunsIndependentChecksConcurrentlyWithSameOrderedResults(t *testing.T) {
+	dir := scratch(t, "parallel-checks")
+	root := tree(t)
+	remember := false
+	// Two independent checks signal each other via files: check-a creates a.started and
+	// waits for b.started; check-b creates b.started and waits for a.started. Serial
+	// execution would deadlock; concurrent execution completes both immediately.
+	// check-c depends on check-a and fails; check-d shares a write path with check-c
+	// and must not overlap it.
+	aStarted := filepath.Join(dir, "a.started")
+	bStarted := filepath.Join(dir, "b.started")
+	waitScript := func(self, other string, exit int) string {
+		return "touch '" + self + "'; i=0; while [ ! -f '" + other + "' ]; do i=$((i+1)); if [ $i -gt 200 ]; then exit 2; fi; sleep 0.01; done; exit " + string(rune('0'+exit))
+	}
+	plan := planRecord(t, planIn{
+		PlanID: "p-parallel", BaseSHA: "c0b4c69197", TreeSHA: "c0b4c69197", RegistryDigest: "d-1",
+		Checks: []planCheck{
+			{CheckID: "check-a", Scope: "change", Tier: "fast", BudgetMS: 5000, Remember: &remember, Command: []string{"sh", "-c", waitScript(aStarted, bStarted, 0)}},
+			{CheckID: "check-b", Scope: "change", Tier: "fast", BudgetMS: 5000, Remember: &remember, Command: []string{"sh", "-c", waitScript(bStarted, aStarted, 0)}},
+			{CheckID: "check-c", Scope: "change", Tier: "fast", BudgetMS: 5000, Remember: &remember, DependsOn: []string{"check-a"}, Writes: []string{"shared/out"}, Command: []string{"sh", "-c", "exit 1"}},
+			{CheckID: "check-d", Scope: "change", Tier: "fast", BudgetMS: 5000, Remember: &remember, Writes: []string{"shared/"}, Command: []string{"sh", "-c", "exit 0"}},
+		},
+	})
+	code, raw := runPlan(t, plan, root)
+	if code != 1 {
+		t.Fatalf("parallel plan with one failure exited %d, want 1: %s", code, raw)
+	}
+	got := decodeVerdict(t, raw)
+	if got.Payload.Result != "fail" {
+		t.Fatalf("verdict result = %q, want fail", got.Payload.Result)
+	}
+	want := []struct {
+		id     string
+		result string
+	}{
+		{"check-a", "pass"},
+		{"check-b", "pass"},
+		{"check-c", "fail"},
+		{"check-d", "pass"},
+	}
+	if len(got.Payload.Checks) != len(want) {
+		t.Fatalf("got %d checks, want %d: %+v", len(got.Payload.Checks), len(want), got.Payload.Checks)
+	}
+	for i, w := range want {
+		c := got.Payload.Checks[i]
+		if c.CheckID != w.id || c.Result != w.result {
+			t.Fatalf("check[%d] = %+v, want %s/%s", i, c, w.id, w.result)
+		}
 	}
 }
