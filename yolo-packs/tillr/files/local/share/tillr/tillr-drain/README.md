@@ -125,7 +125,8 @@ release, and an unchanged trunk. The
 ## Express lanes
 
 The [saved-idea rule](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-actions.md#53-the-item-that-is-created)
-names **express work**: a saved idea, extended here to an item whose block sets `express="true"`.
+names **express work**: a saved idea, extended here to a filed request (unless filed
+with `--ordinary`) and an item whose block sets `express="true"`.
 Express lanes are reserved for that work and do not consume the ordinary `--lanes` cap.
 Configure their count in the repository settings file (default: zero):
 
@@ -398,7 +399,10 @@ The triage item is a store-declared item, so the
 ### Filed requests
 
 `tillr-item request` files a piece of work straight into the queue
-([how](https://github.com/mschulkind-oss/tillr/blob/main/tillr-item/README.md#filing-a-request)). The item names an existing workflow
+([how](https://github.com/mschulkind-oss/tillr/blob/main/tillr-item/README.md#filing-a-request)). Unless filed with `--ordinary`, the
+stored item carries `express`, so it is eligible for the [express lanes](#express-lanes),
+preferring a free `express-*` lane and falling back to an ordinary lane. The item names
+an existing workflow
 and a fence, and its words, held in the store's `request_words` table, are its whole
 statement. It is a store-declared item, so the
 [document-fed prerequisite](#document-fed-workflow-prerequisite) does not apply, and it

@@ -62,6 +62,7 @@ type shownTriage struct {
 	WorkflowArgs map[string]any    `json:"workflow_args"`
 	AllowedPaths []string          `json:"allowed_paths"`
 	DesignDoc    string            `json:"design_doc"`
+	Express      bool              `json:"express"`
 	Criteria     []json.RawMessage `json:"criteria"`
 }
 

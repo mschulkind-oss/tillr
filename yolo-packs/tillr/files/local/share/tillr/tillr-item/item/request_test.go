@@ -120,8 +120,14 @@ func TestFileRequestFilesEachShape(t *testing.T) {
 				t.Fatalf("answer %s %s", env.Kind, env.Payload)
 			}
 			shown, raw := showTriage(t, s, id, root)
-			if shown.Title != tc.filing.Title || shown.State != "in-queue" || shown.Seat != tc.seat || shown.Workflow != tc.workflow || shown.DesignDoc != "" || shown.WorkflowArgs != nil {
+			if shown.Title != tc.filing.Title || shown.State != "in-queue" || shown.Seat != tc.seat || shown.Workflow != tc.workflow || shown.DesignDoc != "" || shown.WorkflowArgs != nil || !shown.Express {
 				t.Fatalf("item %s", raw)
+			}
+			var express int
+			if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+				return r.QueryRow(`SELECT express FROM items WHERE item_id=?`, id).Scan(&express)
+			}); err != nil || express != 1 {
+				t.Fatalf("express=%d err=%v", express, err)
 			}
 			if !reflect.DeepEqual(shown.AllowedPaths, tc.filing.Paths) {
 				t.Fatalf("fence %v, want %v", shown.AllowedPaths, tc.filing.Paths)
@@ -182,6 +188,48 @@ func TestFileRequestIsIdempotent(t *testing.T) {
 	_, err = fileRequest(t, s, root, f)
 	if rej, ok := item.RejectionOf(err); !ok || rej.Rule != "request-differs" || rej.ItemID != a["item_id"] {
 		t.Fatalf("same words, other title: %v", err)
+	}
+}
+
+func TestFileRequestOrdinaryAndIdempotence(t *testing.T) {
+	root := requestRoot(t)
+	s := syncStore(t)
+	f := fourRequests[2].filing
+	f.Ordinary = true
+	first, err := fileRequest(t, s, root, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a map[string]any
+	_ = json.Unmarshal(first.Payload, &a)
+	id := a["item_id"].(string)
+	shown, raw := showTriage(t, s, id, root)
+	if shown.Express {
+		t.Fatalf("ordinary request marked express: %s", raw)
+	}
+	var express int
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		return r.QueryRow(`SELECT express FROM items WHERE item_id=?`, id).Scan(&express)
+	}); err != nil || express != 0 {
+		t.Fatalf("express=%d err=%v", express, err)
+	}
+	head := count(t, s, `SELECT MAX(seq) FROM events`)
+	again, err := fileRequest(t, s, root, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b map[string]any
+	_ = json.Unmarshal(again.Payload, &b)
+	if again.Kind != "item.request" || b["item_id"] != id || b["place"] != float64(1) {
+		t.Fatalf("ordinary refile answered %s %s", again.Kind, again.Payload)
+	}
+	if n := count(t, s, `SELECT MAX(seq) FROM events`); n != head {
+		t.Fatalf("ordinary refile wrote events: %d -> %d", head, n)
+	}
+	f.Ordinary = false
+	_, err = fileRequest(t, s, root, f)
+	if rej, ok := item.RejectionOf(err); !ok || rej.Rule != "request-differs" || rej.ItemID != id {
+		t.Fatalf("same words, toggled ordinary: %v", err)
 	}
 }
 

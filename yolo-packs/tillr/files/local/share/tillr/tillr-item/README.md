@@ -212,17 +212,18 @@ printf '%s\n' 'Add two rows to yolo-packs/copilot-models/pack.toml: ...' |
   tillr-item request --store .tillr/state.db --root . --title "List two more Copilot models" --workflow single-worker@v1 --path yolo-packs/copilot-models/pack.toml
 ```
 
-The flags are `--title`, `--path`, `--seat`, `--workflow`, `--criterion`, `--to`, `--before` and `--after`; run `tillr-item request --help` for their details. `--title` and `--path` (repeatable, one repo-relative prefix of the fence; a directory ends in `/`, and wildcards, absolute paths and paths that leave the repository are refused) are required. `--seat` is `build` by default. `--workflow` names a file under `config/tillr/workflows/` or the built-in `single-worker@v1` (one run on the item's seat); by default `design` runs `scouted-design@v1` and `build` runs `planned-build@v1`, other seats must name one, and a workflow that declares top-level `args` is refused as `workflow-needs-args` (`doc-triage@v1` has its own face). `--criterion` (repeatable, at most four) adds criteria after the fixed four. `--to`, `--before` and `--after` place the item (last by default).
+The flags are `--title`, `--path`, `--seat`, `--workflow`, `--criterion`, `--ordinary`, `--to`, `--before` and `--after`; run `tillr-item request --help` for their details. `--title` and `--path` (repeatable, one repo-relative prefix of the fence; a directory ends in `/`, and wildcards, absolute paths and paths that leave the repository are refused) are required. `--seat` is `build` by default. `--workflow` names a file under `config/tillr/workflows/` or the built-in `single-worker@v1` (one run on the item's seat); by default `design` runs `scouted-design@v1` and `build` runs `planned-build@v1`, other seats must name one, and a workflow that declares top-level `args` is refused as `workflow-needs-args` (`doc-triage@v1` has its own face). `--criterion` (repeatable, at most four) adds criteria after the fixed four. `--ordinary` files the request for the ordinary lanes only; by default a filed request is marked `express` when the item is written so it is eligible for the express lanes. `--to`, `--before` and `--after` place the item (last by default).
 
 The face reads the workflow file before the store's write transaction opens, so the
-transaction does no I/O but the store's own. It writes the item and a `request_words`
-row in that one transaction: the words byte for byte, their SHA-256, and a hash of the
-title, seat, workflow, fence and criteria. Nothing tracked is written.
+transaction does no I/O but the store's own. It writes the item (with `express` set unless
+`--ordinary` is given) and a `request_words` row in that one transaction: the words byte
+for byte, their SHA-256, and a hash of the title, seat, workflow, fence, criteria and
+express choice. Nothing tracked is written.
 
 The id is `item-request-` plus ten digits of the words' hash, lengthened on a collision.
 Filing the same words with the same choices again answers the first item's place
-without writing anything. The same words with any other choice are refused as
-`request-differs`, naming the existing item. The four fixed criteria are:
+without writing anything. The same words with any other choice (including the express
+choice) are refused as `request-differs`, naming the existing item. The four fixed criteria are:
 
 1. The change does what the words ask, within the fence, and nothing else.
 2. The change is verified the way this repository's rules require: a test for new or

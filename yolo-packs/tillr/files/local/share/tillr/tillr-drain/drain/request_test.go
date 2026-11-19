@@ -23,12 +23,16 @@ var requestFence = []string{"tools/item-a/", "docs/notes.md"}
 
 // fileFixtureRequest files a request in the fixture store through the filing writer itself.
 func fileFixtureRequest(t *testing.T, f refusalLoopFixture, seat, workflow string, paths []string) string {
+	return fileFixtureRequestWith(t, f, requestWords, seat, workflow, paths, false)
+}
+
+func fileFixtureRequestWith(t *testing.T, f refusalLoopFixture, words, seat, workflow string, paths []string, ordinary bool) string {
 	t.Helper()
 	var id string
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		env, err := item.FileRequest(context.Background(), tx, item.RequestFiling{
-			Words: []byte(requestWords), Title: "Remove the index cache", Seat: seat, Workflow: workflow, Paths: paths,
-			Destination: item.Destination{To: "first"}, At: time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC), By: "owner", Via: "cli",
+			Words: []byte(words), Title: "Remove the index cache", Seat: seat, Workflow: workflow, Paths: paths,
+			Ordinary: ordinary, Destination: item.Destination{To: "first"}, At: time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC), By: "owner", Via: "cli",
 		})
 		id = env.ID
 		return err
@@ -291,5 +295,62 @@ func TestTheJudgeOfARequestReadsItsWords(t *testing.T) {
 	}
 	if err := probePreflight(t, brief); err != nil {
 		t.Fatalf("the adapter refused the judge's brief: %v", err)
+	}
+}
+
+func TestRequestExpressAndOrdinaryLaneAllocation(t *testing.T) {
+	// Case 1: default filed request takes express-1 when ordinary lanes are busy.
+	f, l := passFixture(t, "item-one", "item-two")
+	l.cfg.Lanes = []string{"lane-1", "lane-2", "express-1"}
+	l.cfg.Policy.Seats = map[string]string{"build": "fixture"}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		for i, id := range []string{"item-one", "item-two"} {
+			lane := l.cfg.Lanes[i]
+			req := run.Request{RunID: "run-" + id, ItemID: id, Backend: "fixture"}
+			if _, err := run.ClaimLease(context.Background(), tx, req, lane, l.cfg.Now()); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`INSERT INTO runs(run_id,item_id,lane_id,backend,state,started_at,finished_at,artifact_refs,event_seq) VALUES(?,?,?,'fixture','running',1,0,'[]',0)`, req.RunID, id, lane); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	expressID := fileFixtureRequestWith(t, f, "Express request.\n", "build", item.SingleWorkerWorkflow, []string{"docs/notes.md"}, false)
+	ordinaryID := fileFixtureRequestWith(t, f, "Ordinary request.\n", "build", item.SingleWorkerWorkflow, []string{"docs/other.md"}, true)
+	for _, p := range mustPlan(t, l) {
+		d := p.decision
+		if d.ItemID == expressID && (d.Action != ActionDispatch || d.LaneID != "express-1") {
+			t.Fatalf("default request did not take express-1: %+v", d)
+		}
+		if d.ItemID == ordinaryID && d.Action != ActionHold {
+			t.Fatalf("ordinary request used express lane or dispatched while ordinary lanes busy: %+v", d)
+		}
+	}
+
+	// Case 2: default filed request falls back to an ordinary lane when express-1 is busy.
+	f2, l2 := passFixture(t, "item-busy")
+	l2.cfg.Lanes = []string{"lane-1", "express-1"}
+	l2.cfg.Policy.Seats = map[string]string{"build": "fixture"}
+	fixtureWrite(t, f2, func(tx *store.Tx) error {
+		req := run.Request{RunID: "run-busy", ItemID: "item-busy", Backend: "fixture"}
+		if _, err := run.ClaimLease(context.Background(), tx, req, "express-1", l2.cfg.Now()); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`INSERT INTO runs(run_id,item_id,lane_id,backend,state,started_at,finished_at,artifact_refs,event_seq) VALUES(?,?,?,'fixture','running',1,0,'[]',0)`, req.RunID, "item-busy", "express-1")
+		return err
+	})
+	fallbackID := fileFixtureRequestWith(t, f2, "Fallback request.\n", "build", item.SingleWorkerWorkflow, []string{"docs/notes.md"}, false)
+	found := false
+	for _, p := range mustPlan(t, l2) {
+		if p.decision.ItemID == fallbackID {
+			found = true
+			if p.decision.Action != ActionDispatch || p.decision.LaneID != "lane-1" {
+				t.Fatalf("default request did not fall back to lane-1: %+v", p.decision)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("fallback request not planned")
 	}
 }

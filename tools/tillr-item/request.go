@@ -33,6 +33,7 @@ func requestFace(args []string) (record.Envelope, int) {
 	to := fs.String("to", "", "first or last (default last when no other destination is given)")
 	before := fs.String("before", "", "place before this item")
 	after := fs.String("after", "", "place after this item")
+	ordinary := fs.Bool("ordinary", false, "file for the ordinary lanes only, not the express lanes")
 	by := fs.String("by", "owner", "actor filing the request")
 	via := fs.String("via", "cli", "face filing the request")
 	now := fs.String("now", "", "injected RFC 3339 clock")
@@ -57,7 +58,7 @@ func requestFace(args []string) (record.Envelope, int) {
 	if err != nil {
 		return record.Envelope{}, fail(err)
 	}
-	filing := item.RequestFiling{Words: words, Title: *title, Seat: *seat, Workflow: *workflow, Paths: paths, Criteria: criteria, Destination: dest, At: at, By: *by, Via: *via}
+	filing := item.RequestFiling{Words: words, Title: *title, Seat: *seat, Workflow: *workflow, Paths: paths, Criteria: criteria, Ordinary: *ordinary, Destination: dest, At: at, By: *by, Via: *via}
 	if filing.Workflow == "" {
 		filing.Workflow = item.RequestDefaultWorkflow[filing.Seat]
 	}
