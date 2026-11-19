@@ -141,6 +141,18 @@ func (l *Loop) cancelStaging(ctx context.Context, d Decision) error {
 			if _, err := tx.Exec(`DELETE FROM seat_dispatches WHERE run_id=? AND NOT EXISTS(SELECT 1 FROM runs WHERE run_id=?)`, node.RunRequest.RunID, node.RunRequest.RunID); err != nil {
 				return err
 			}
+			// The claim wrote each reader's group membership. A never-started reader's
+			// membership goes with the claim; a retained finished reader's, reopened by
+			// the resume claim, is settled again. Either way no unsettled member is left
+			// on a lane this transaction releases, the rule run.freeLane keeps for a
+			// released group: an unsettled member reads back as a live run beside
+			// whatever claims the lane next.
+			if _, err := tx.Exec(`DELETE FROM read_only_runs WHERE run_id=? AND NOT EXISTS(SELECT 1 FROM runs WHERE run_id=?)`, node.RunRequest.RunID, node.RunRequest.RunID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(`UPDATE read_only_runs SET settled=1 WHERE run_id=?`, node.RunRequest.RunID); err != nil {
+				return err
+			}
 		}
 		if _, err := tx.Exec(`DELETE FROM dispatches WHERE decision_id=? AND item_id=? AND run_id=?`, d.DecisionID, d.ItemID, d.RunRequest.RunID); err != nil {
 			return err
