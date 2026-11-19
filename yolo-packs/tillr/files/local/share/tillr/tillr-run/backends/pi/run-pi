@@ -20,6 +20,8 @@ set -eu
 PROG=run-pi
 SELF_DIR=$(dirname -- "$0")
 . "$SELF_DIR/../preflight.sh"
+PI_HARNESS_SOURCED=1
+. "$SELF_DIR/pi-harness.sh"
 
 backend=
 model=
@@ -66,7 +68,8 @@ check_wall "$wall"
 require_opt --model "$model" "the model comes from the backend policy at staging; an adapter default would be a model id in a tree that names no vendor"
 require_opt --effort "$effort" "the thinking level comes from the backend policy at staging, with no default of its own"
 preflight_brief "$brief"
-require_harness pi
+pi_apply_yolo_session_home
+pi_resolve_harness
 target=$(resolve_target "$target")
 
 err=$(lane_path "$brief" stream.err)
@@ -147,8 +150,9 @@ if [ -n "${TILLR_CHILD_SESSIONS_ROOT:-}" ] && [ -n "${TILLR_CHILD_SESSIONS_MARKE
     printf '%s\n' pi-subagents-v1 > "$TILLR_CHILD_SESSIONS_MARKER"
 fi
 
+pi_prepare_harness_env
 landing_promptless=
-set -- pi --print --mode json --model "$model" --thinking "$effort"
+set -- "$PI_HARNESS_BIN" --print --mode json --model "$model" --thinking "$effort"
 if [ -n "$session" ]; then
     if [ "${TILLR_SESSION_MODE:-new}" = resume ]; then
         # --session-id creates a cold session when the id is gone. --session

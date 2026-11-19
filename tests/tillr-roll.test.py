@@ -306,5 +306,21 @@ class RollTest(unittest.TestCase):
                 )
 
 
+    def test_roll_pi_flag_invokes_pi_forks_build_pi(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            live = root / 'bin'
+            live.mkdir()
+            calls = []
+
+            def command(*args, **kwargs):
+                calls.append((args, kwargs.get('cwd')))
+
+            with patch.object(roll, 'git', return_value=''), \
+                    patch.object(roll, 'run', side_effect=command):
+                self.assertEqual(roll.roll(root, live, True, build_pi=True), 0)
+            self.assertEqual(calls, [((str(root / 'bin/pi-forks'), 'build-pi'), root)])
+
+
 if __name__ == '__main__':
     unittest.main()

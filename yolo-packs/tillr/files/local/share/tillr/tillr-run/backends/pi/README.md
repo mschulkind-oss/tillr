@@ -10,6 +10,7 @@ sections 7 and 9.
 | File | What it is |
 | :--- | :--- |
 | `run-pi` | The adapter. A `run.request`'s `Command[0]` names it. |
+| [`pi-harness.sh`](./pi-harness.sh) | Resolves a verified rebuilt `pi` privately, wires session env, and records the chosen binary. |
 | `extract-report` | The dialect: Pi's event stream in, `report.md` out. |
 | [`compact`](./compact) | Compact an existing session by id, without a user prompt. |
 | [`keep-going.ts`](./keep-going.ts) | The pi extension that answers an ending that misses the goal, in the same session. |
@@ -50,10 +51,33 @@ spelling lives and dies inside `run-pi`, and no policy, brief or `run.request` l
 Refusals (exit 2, nothing started): the `backend` field names neither this adapter nor a
 seat alias of it (`pi` or `pi-<role>`, as `pi-designer` runs this adapter on the design
 seat's model); no model; no effort; the brief is missing, empty, unfilled or missing one of
-the template's ten sections; the target is not the directory the adapter runs in; `pi` is
-not on `PATH`.
+the template's ten sections; the target is not the directory the adapter runs in; neither a
+verified `pi-builds` binary nor `pi` on `PATH` is available.
 
 Exit: the harness's own code, 124 from the wall, 2 from a refusal.
+
+### Resolving rebuilt pi privately
+
+[`pi-harness.sh`](./pi-harness.sh) selects the `pi` binary for `run-pi` and
+[`compact`](./compact) without placing anything on shared `PATH` (drain-only: foreground
+sessions stay on the installed `pi` until a host apply and relaunch):
+
+1. The verified build for the current `earendil-works/pi` series key (`<builds>/<key>/home/.local/bin/pi` when `<builds>/<key>/.verified` matches `<key>`).
+2. The previous verified build named in `<builds>/current.json`, when its `.verified` marker matches its key and its binary is executable.
+3. The installed `pi` on `PATH`.
+
+`tillr-run exec` snapshots `TILLR_PI_BUILDS_DIR` from the caller's durable `pi-builds`
+root before isolating the child's durable directory, and passes `TILLR_HARNESS_RECORD_FILE`
+for the run. When [`pi-harness.sh`](./pi-harness.sh) runs a rebuilt `pi` directly rather
+than the container's launcher wrapper, it resolves `PI_CODING_AGENT_DIR` from
+`YOLO_SESSION_HOMES`, sources `~/.config/yolo-agent-env` (`pi.sh` and
+`provider-keys/pi.sh`), sets `NODE_COMPILE_CACHE`, and exports `PI_SUBAGENT_PI_BINARY` to
+the chosen binary so yolo-rendered extensions and `yolo-patched` packages (`pi-subagents`, `pi-background-tasks`) load cleanly and child
+subagents spawn the same binary. The adapter records `<path> (series <key>)` or
+`<real-path> (installed <version>)`, which `tillr-run` persists on `runs.harness`
+(`run.Record.Harness`). See
+[drain-only rebuilt pi](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/forks.md#drain-only-rebuilt-pi) for
+series-keyed builds (`bin/pi-forks build-pi`) and post-landing roll behavior.
 
 ### The level asked for is not always the level run
 

@@ -478,11 +478,11 @@ type LoopResult struct {
 // independent worker. Terminal outcomes are read from the store; completion channels
 // are only this process's wake triggers. Each run retains its own boundary bracket.
 type Loop struct {
-	endingCapabilities     map[string]string
-	rollAction, pushAction landingAction
-	greenPushAtStart       sync.Once
-	ownerMigrationItem     string
-	laneBootstrapReported  bool
+	endingCapabilities                   map[string]string
+	rollAction, piRollAction, pushAction landingAction
+	greenPushAtStart                     sync.Once
+	ownerMigrationItem                   string
+	laneBootstrapReported                bool
 	// staleBaseChecked holds the owner conflicts already read for a stale base in this
 	// process: a conflict's run base and dispatch record never change, so one read answers.
 	staleBaseChecked            map[string]bool

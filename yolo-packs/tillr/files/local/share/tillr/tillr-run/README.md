@@ -125,6 +125,8 @@ TILLR_PAUSE_REQUEST       Always: the request-file path in this run's scratch di
 TILLR_PROGRESS_FILE       Always: the progress file in this run's scratch directory; workers append one criterion claim per line.
 TILLR_CHILD_SESSIONS_ROOT Always: the pi-subagents directory in this run's scratch directory, where the pi adapter's child sessions are discovered.
 TILLR_CHILD_SESSIONS_MARKER Always: the child-sessions-recorded marker path in this run's scratch directory; its presence reports child-session recording, and its absence means not recorded.
+TILLR_HARNESS_RECORD_FILE Always: the harness-record file in this run's scratch directory; an adapter writes one line naming the chosen binary, recorded on runs.harness.
+TILLR_PI_BUILDS_DIR       When set on the caller or when the caller's scratch directory is set: the shared pi-builds directory snapshotted before per-run scratch isolation; otherwise unset.
 TILLR_READ_ONLY_GROUP     Only when read_only_group is nonempty: the group sharing a lane lease; otherwise unset.
 YOLO_DURABLE_DIR          When scratch_env is omitted or true: <lane dir>/durable/<run_id>; false preserves the caller's value or absence.
 ```
@@ -134,6 +136,29 @@ existing scratch isolation. False opts out of setting the scratch-directory vari
 not out of creating the run's directory. The terminal record's `artifact_refs` always
 includes a `scratch` entry naming that directory, also stored on the run row and returned
 by `status`. Logs, continuation prompts, and pause requests retain their normal locations.
+
+## Harness attribution and drain-only rebuilt pi
+
+`tillr-run exec` reads the line written by the adapter to `TILLR_HARNESS_RECORD_FILE`
+and persists it on `runs.harness` and `run.Record.Harness` (as well as the `run.finish`
+event returned by `tillr-run status`), so every run record names the exact binary and
+build identity that served it.
+
+For the Pi backend, `exec` snapshots `TILLR_PI_BUILDS_DIR` from the caller's durable
+`pi-builds` directory (or an inherited `TILLR_PI_BUILDS_DIR`) before per-run scratch
+isolation. The [Pi adapter](./backends/pi/README.md#resolving-rebuilt-pi-privately)
+resolves a verified series-keyed build from that directory privately for drain runs —
+falling back to the previous verified build in `current.json` and then to `pi` on
+`PATH` — and records `<path> (series <key>)` or `<real-path> (installed <version>)`.
+Nothing is placed on shared `PATH`, so foreground `pi` sessions stay on the installed
+binary until a host apply and relaunch.
+
+When a landing on trunk touches `yolo-packs/pi-fork/` or `bin/pi-forks.list` (or lands on
+`refs/heads/patch/pi`), the drain invokes its `[roll]` command with `--pi` (`tillr-roll --pi`,
+which runs `bin/pi-forks build-pi`). Runs already in flight finish on the `pi` they
+started with, later runs pick up the new verified build, and a failed build discards its
+staging directory without removing any working build or `current.json`, recording a
+post-landing `roll` (`pi`) failure without stopping the loop.
 
 ## Ending a settled harness that lingers
 
