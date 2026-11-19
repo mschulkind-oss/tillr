@@ -1,5 +1,5 @@
 ---
-title: "The queue mirrors the roadmap's outstanding designs: one item for every design that is not finished"
+title: "The queue mirrors the roadmap's outstanding designs: one item per design, and its companion plan holds the work"
 status: in-review
 stage: DESIGN
 updated: 2026-11-18
@@ -9,34 +9,42 @@ tags:
   - sync
   - roadmap
   - icebox
+  - implementation-plan
   - design
-summary: "After a sync, every design document the roadmap routes that is not finished has exactly one item in the queue, so an empty queue means no design is outstanding. Defines outstanding and finished from the stage roles the planning index already reports, the life of that item (held on its questions, read live; parked in the Icebox; planned; waiting on its pieces; stamped built by its own run), a question hold that reaches only what names the question, and what the owner sees. Asks the owner how work written in a document becomes work tillr can start, which reopens the hidden item comment he never ruled on."
-next: "The owner rules OQ-QM1. Nothing in this document is built before he has."
+summary: "After a sync, every design document a mirrored roadmap routes that is not finished has exactly one item in the queue, so an empty queue means no design is outstanding. On the owner's 2026-11-18 ruling on OQ-QM1, build steps, fences and pass conditions live in the companion implementation plan (<topic>-plan.md) that grows alongside the design and that humans never read, never in the design document itself and never in hidden <!-- tillr: item --> comments. Defines the companion plan's machine-readable form, how sync reads pieces from it, how one design item relates to its pieces, what happens to the existing hidden comments, and what is deleted."
+next: "The owner reviews the designer's decisions D-QM4 to D-QM22 in the ledger. Nothing in this document is built until he has."
 ---
 
-# The queue mirrors the roadmap's outstanding designs: one item for every design that is not finished
+# The queue mirrors the roadmap's outstanding designs: one item per design, and its companion plan holds the work
 
-**Status:** 2026-11-18. A proposal; none of it is built, and nothing in it may be built before the owner has answered [OQ-QM1](#OQ-QM1). Written to the owner's three statements of 2026-11-18, quoted in [Section 1](#1-the-direction-and-what-exists-today). Facts about the tree, the store and the planning index were gathered by a scout on 2026-11-18 at `068774045`, and the stages and counts were recounted at `8c6194abf` later that evening, after fifteen designs were restaged and three had questions closed; they are stated with the document, symbol or command they came from; I read no code myself, and what the scout inferred without running it is marked as unverified where it is used.
+**Status:** 2026-11-18. In review (`stage: DESIGN`); nothing in this document is built. Written to the owner's four statements of 2026-11-18, quoted in [Section 1](#1-the-direction-and-what-exists-today), including his ruling on [OQ-QM1](#OQ-QM1) that settles how a design's work reaches the queue through its companion implementation plan. Facts about the tree, the store and the planning index were measured on 2026-11-18 at `068774045`, `8c6194abf` and `e9a56e925`; each is stated with the document, symbol or command it came from. Every designer's decision in [the ledger](#decision-ledger) says so plainly and awaits the owner's review before anything is built on it.
 
-> **In short.** The queue's unit becomes the design document. Sync gives every unfinished design the roadmap routes one item, the item's state says what the document owes, and nothing about a question is ever copied into the store.
+> **In short.** Every unfinished design a mirrored roadmap routes gets one item in the queue, its state says what the design owes, and nothing about a question is copied into the store. The design's build steps, fences and pass conditions live in its companion implementation plan (`<topic>-plan.md`) — a file that grows alongside the design and that humans never read — while the design document stays free of build plumbing and hidden `<!-- tillr: item … -->` comments are retired everywhere.
 
-**Why it matters.** Today an item exists only where an agent wrote a hidden comment into a document. Of the 27 unfinished designs the tillr roadmap routes, this one included, 25 have no unfinished item, so the queue can be empty while 25 designs are outstanding. Nine more were fully built and said they were not until a hand sweep on 2026-11-18 (`0cfe5ad1c`), because nothing moves the stage word.
+**Why it matters.** Today an item exists only where an agent wrote a hidden `<!-- tillr: item … -->` comment into a document, and `tillr item sync` scans every tracked Markdown file silently. Of the 28 unfinished designs the tillr roadmap routes at `e9a56e925`, 26 have no unfinished item, so the queue can be empty while 26 designs are outstanding. Nine more were built and still said `DECIDED` until a hand sweep on 2026-11-18 (`0cfe5ad1c`), because nothing moves the stage word. Meanwhile, putting step fences and pass conditions inside design documents mixes human-facing decisions with agent execution plumbing.
 
-**The shape.** Four parts: a **mirror** rule in sync that creates, finishes and reopens one **design item** per routed design; a pure function that reads the document's stage role, its questions and its place on the roadmap and says what the item owes; two runs the item can start, a design run and a plan run, the second of which stamps the document built; and a question hold that reaches only the items that name the question.
+**The shape.** Five parts:
+- a **mirror** rule in sync that creates, finishes and reopens one **design item** per routed design, and skips companion `-plan.md` files as designs of their own;
+- a pure function that reads the design's stage role, its questions, its place on the roadmap and its pieces, and says what the design item owes;
+- a **companion implementation plan** (`<topic>-plan.md` beside `<topic>.md`) that the designer seeds as `stage: SKETCH` with research and notes, and that the plan run completes as `stage: DECIDED` with structured `## Tasks` entries carrying fences, dependencies, question holds and pass conditions in plain Markdown that sync reads directly;
+- two runs the design item starts — a **design run** over the design and its plan seed, and a **plan run** that either writes the companion plan's tasks (which sync loads as pieces) or stamps both files `BUILT` when nothing remains unbuilt;
+- a question hold that reaches only the design item and the pieces that name the question.
 
-**Cost.** The queue starts work nobody filed: on the first mirror of the tillr roadmap, nine design runs and four plan runs become dispatchable. The Icebox becomes the only way to say "not now". `blocked` regains a meaning [queue persistence](./tillr-queue-persistence.md) took from it. Depending on [OQ-QM1](#OQ-QM1), the hidden item comment and everything that reads it is removed.
+**Cost.** The queue starts work nobody filed by hand: on the first mirror of the tillr roadmap, unfinished designs outside the Icebox become dispatchable in roadmap order. The Icebox becomes the only way to say "not now", and `blocked` regains a meaning [queue persistence](./tillr-queue-persistence.md) took from it. The hidden `<!-- tillr: item … -->` comment, its scanner across `docs/`, its post-landing retirement commit and its supporting checks are deleted; work without a design enters through `tillr item request`.
 
-**Start at [Section 4](#4-the-life-of-a-design-item)**, the life of the item. [Section 7](#7-how-work-in-a-document-becomes-work-tillr-can-start) is the background to the question.
+**Start at [Section 4](#4-the-life-of-a-design-item-and-its-pieces)** for how one design item relates to the work read from its companion plan, then [Section 7](#7-the-companion-implementation-plan) for the companion plan's form and [Section 8](#8-retiring-the-hidden-comments-and-what-is-deleted) for what happens to existing comments and what is deleted.
 
-**Needs your ruling:** [OQ-QM1](#OQ-QM1).
+**Needs your ruling:** none. The owner ruled [OQ-QM1](#OQ-QM1) on 2026-11-18.
 
-**Reads with:** [queue persistence](./tillr-queue-persistence.md) and [its ruling](./queue-persistence-ruling.md) (what this amends; [Section 11](#11-what-this-supersedes-or-amends) lists the amendments owed), [the graph design](./tillr-graph-is-the-path.md) (every act is a node; a pure function adds the nodes that are needed), [planning and model tiering](./tillr-planning-node-model-tiering.md) (the plan seat this design's plan run uses), [early design landing](./tillr-early-design-landing.md) (how a changed design reaches the trunk ahead of its build), [the item module's guide](../../tools/tillr-item/README.md) and [the drain's guide](../../tools/tillr-drain/README.md) (what is built today).
+**Awaits your review:** the designer's decisions `D-QM4` to `D-QM22` in [the ledger](#decision-ledger). You may overturn any of them.
+
+**Reads with:** [queue persistence](./tillr-queue-persistence.md) and [its ruling](./queue-persistence-ruling.md) (what this amends; [Section 12](#12-what-this-supersedes-or-amends) lists the amendments owed), [the decision-provenance review](../tillr/decision-provenance-review.md) (whose [OQ-PR14](../tillr/decision-provenance-review.md#OQ-PR14) waited on [OQ-QM1](#OQ-QM1)), [the graph design](./tillr-graph-is-the-path.md) (every act is a node; a pure function adds the nodes that are needed), [planning and model tiering](./tillr-planning-node-model-tiering.md) (the plan seat this design's plan run uses), [early design landing](./tillr-early-design-landing.md) (how a changed design reaches the trunk ahead of its build), [the item module's guide](../../tools/tillr-item/README.md) and [the drain's guide](../../tools/tillr-drain/README.md) (what is built today).
 
 ---
 
 ## 1. The direction and what exists today
 
-The owner said three things on 2026-11-18, and they are the brief.
+The owner gave four statements on 2026-11-18, and together they are the brief.
 
 On what the queue holds:
 
@@ -50,380 +58,464 @@ On learning that tillr reads a hidden Markdown comment of its own from his docum
 
 > tillr decided on its own markdown tags and is silently loading them everywhere? I don't want that.
 
-That comment was settled as [`OQ-QP2`](./tillr-queue-persistence.md#91-decision-ledger) by a design agent "on recorded principle" on 2026-11-15 and built the same day. The owner did not rule on it. This design treats it as not accepted and asks him ([OQ-QM1](#OQ-QM1)).
+And on [OQ-QM1](#OQ-QM1), answering how work written for a design becomes work tillr can start without putting tillr markup in the design document:
 
-Earlier rulings of his bind this design throughout: nothing re-runs on a guess about what a change means; no attempt counts and no clocks that fail work; a held state names who moves it; the owner is reached only by a question written in a document; he sees "draining" or "needs you"; an item's fate and engineering detail are the agents' to decide.
+> So I already kind of have provisions for this. This is the idea of the design doc versus the implementation plan split. I think the implementation plan is intended to be a document that grows alongside the design doc that saves a research and stuff, but a human would never look at it. And it's the perfect place for something like this, we can change the form of that implementation plan. But I think that is essentially what you're talking about. It is planning that the designer does for how to implement something, but it's not something that is immediately relevant to a human. So that's why we keep it out of the design doc. See what you can do with that.
 
-**What sync does today**, read 2026-11-18:
+The repository already has that split in its authoring conventions (`design-doc` and `implementation-plan` skills) and in a dozen `docs/design/*-plan.md` files ([`observatory-design-plan.md`](./observatory-design-plan.md), [`status-bar-plan.md`](./status-bar-plan.md), [`board-utilities-plan.md`](./board-utilities-plan.md), [`tillr-definitions-plan.md`](./tillr-definitions-plan.md) among them). The design document is short, argues choices and trade-offs for a human reader, and stops at what and why; the companion implementation plan (`<topic>-plan.md` beside `<topic>.md`) holds the research, symbol maps, traps and ordered build tasks that agents write for agents. Adapting the companion plan's form gives tillr a tracked, versioned file in git from which to read pieces, fences and pass conditions while keeping every design document clean and reading nothing from arbitrary Markdown files.
+
+Earlier rulings of the owner's bind this design throughout: nothing re-runs on a guess about what a change means; no attempt counts and no clocks that fail work; a held state names who moves it; the owner is reached only by a question written in a document; he sees "draining" or "needs you"; an item's fate and engineering detail are the agents' to decide.
+
+**What sync does today**, read at `e9a56e925`:
 
 | Fact | Where it comes from |
 | :--- | :--- |
-| Only a hidden comment creates an item. Sync scans tracked Markdown under `docs/` for a comment that opens `<!-- tillr: item`, and a document without one yields nothing | `parseItemBlocks` in the item module's sync |
-| A design the roadmap links that holds no such comment gets a warning row, not an item. The row holds a document path and the roadmap line that links it | The `design_without_item` table; shown by `tillr view waiting` |
-| A design counts as covered when it holds any comment at all, landed or not, so one landed step hides a design whose other work was never filed | `designWithoutItems`, same module |
-| An open question holds every unfinished item whose comment sits in the same file, related or not, and no item in any other file | Sync sets an item's design document to the file holding its comment; the drain's planner holds on that document's first unanswered question |
-| A design linked under a roadmap's Icebox heading and holding no comment creates nothing in the store | The parking rule; `D-QP5` in [queue persistence](./tillr-queue-persistence.md#5-the-icebox-and-the-narrowed-meaning-of-blocked-decision-5) |
-| Nobody moves a stage word. The loop reads a stage for one purpose, to retire a designer's session when its document is done | The shared Vantage reader and its one caller |
-| A report-only command, `tillr item reconcile`, already classifies every indexed document, and it does the opposite of the owner's words: a document with an open question is never an item. The loop never calls it | The item module's guide: "a read-only report, not intake" |
+| Only a hidden comment creates a document-backed item. Sync scans every tracked `.md` file under `docs/` for a comment opening with `<!-- tillr: item`, and a document without one yields nothing | `docshare.ReadTracked` in `tools/tillr-item/docshare/docshare.go` and `parseItemBlocks` in `tools/tillr-item/item/sync.go` |
+| After each piece lands, the loop commits a second change, `chore: retire landed document block`, deleting the comment and its `- **cN:**` lines from the document | `RetireItemBlock` in `tools/tillr-item/item/retire.go`, called from `tools/tillr-drain/drain/steps.go` |
+| A design the roadmap links that holds no such comment gets a warning row, not an item. The row holds a document path and the roadmap line that links it | `designWithoutItems` in `tools/tillr-item/item/design_without_item.go`; shown by `tillr view waiting` |
+| A design counts as covered when it holds any comment at all, landed or not, so one landed step hides a design whose other work was never filed | `designWithoutItems`, same file |
+| An open question holds every unfinished item whose comment sits in the same file, related or not, and no item in any other file | Sync sets an item's `design_doc` to the file holding its comment; `tools/tillr-drain/drain/plan.go` holds on that document's first unanswered question |
+| A design linked under a roadmap's Icebox heading and holding no comment creates nothing in the store | `sync_roadmap.go` and `D-QP5` in [queue persistence](./tillr-queue-persistence.md#5-the-icebox-and-the-narrowed-meaning-of-blocked-decision-5) |
+| Nobody moves a stage word. The loop reads a stage for one purpose, to retire a designer's session when its document is done | `VantageQuestions` in `tools/tillr/vantage/vantage.go` and `retireDesigners` in `tools/tillr-drain/drain/designer.go` |
+| `tillr item reconcile` classifies every indexed document as a read-only report, treats any document with an open question as owing no item, and is never called by the loop | `tools/tillr-item/item/reconcile.go` and `tools/tillr-item/README.md` |
 
-**The size of it**, for the tillr roadmap alone, from the planning index joined to the store's 280 items:
+**The size of it**, for [the tillr roadmap](../tillr/roadmap.md) at `e9a56e925` (`uvx vantage-check index --format json` joined to `.tillr/state.db` and `git ls-files 'docs/**/*.md'`):
 
 | What | Count |
 | :--- | ---: |
-| Distinct documents the roadmap links | 51 |
-| Of those, under `docs/design/` | 41 |
-| Unfinished: stage `SKETCH` or `DESIGN` | 23 |
-| Unfinished: stage `DECIDED` | 4 |
-| Finished: `BUILT` | 9 |
-| Finished: `SUPERSEDED` or `CURRENT` | 4 |
-| No stage at all ([the momentum principle](./momentum-principle.md)) | 1 |
-| Unfinished designs with an unfinished item today | 2 |
-| Unfinished designs with none | 25 |
-| Unfinished designs with at least one unanswered question | 14 |
-| `DECIDED` designs with unbuilt work and no item for it | 4 |
-| Unfinished designs linked from the Icebox | 3 |
+| Distinct targets the roadmap links (excluding its scope-exclusion section) | 55 |
+| Non-design links (two other roadmaps, one research note, three `tools/*/README.md` guides) | 6 |
+| Companion `-plan.md` files linked directly ([`tillr-definitions-plan.md`](./tillr-definitions-plan.md)) | 1 |
+| Routed designs after excluding companion `-plan.md` files | 48 |
+| Finished designs: `BUILT` (9), `SUPERSEDED` or `CURRENT` (11) | 20 |
+| Outstanding designs: `SKETCH` or `DESIGN` (24), `DECIDED` (3), unstaged ([`momentum-principle.md`](./momentum-principle.md)) (1) | 28 |
+| Outstanding designs linked only under `## Icebox` ([`tillr-autoqa.md`](./tillr-autoqa.md), [`tillr-goal-monitor.md`](./tillr-goal-monitor.md)) | 2 |
+| Outstanding designs with at least one unanswered question | 14 |
+| Live `<!-- tillr: item` comments across all of `docs/` (9 unfinished, 6 left behind by landed items) | 15 |
 
-The four decided designs with unbuilt work are gate rework, convergence, the definitions plan and the idea pipeline. The nine built ones were stamped by hand on 2026-11-18 (`0cfe5ad1c`) after an audit found them built and still saying `DECIDED`: the observatory's actions, design and redesign, designer sessions, the drain's successor, item graphs, the Muse backend, queue persistence and restart. Queue persistence is among them, and this design reopens one of its questions; [Section 9](#9-edge-and-failure-behavior) says what that does.
+*(Note: [`tillr-muse-backend.md`](./tillr-muse-backend.md) is also linked in the roadmap's Icebox, and its stage is `BUILT`, so it is finished rather than outstanding. The third Icebox bullet, "Prices on the observatory", links no document.)*
+
+---
 
 ## 2. The words
 
 | Word | Meaning | What it is not |
 | :--- | :--- | :--- |
-| **Sync** | `tillr item sync`: the one command that reads tracked documents and brings the store's items into line with them. From [queue persistence](./tillr-queue-persistence.md). | Not the loop's planning pass, which reads the store and decides what to start. |
-| **Routes** | Vantage's word: a roadmap routes a document when it links it. | Not "mentions": a document named in prose with no link is not routed. |
-| **Stage role** | One of `open`, `ready`, `built`, `done`: what the repository's [Vantage configuration](../../.vantage.toml) says a document's `stage` word means. `SKETCH` and `DESIGN` are open, `DECIDED` is ready, `BUILT` is built, the rest are done. From Vantage. | Not the stage word itself. tillr reads roles, so a repository may rename its words. |
-| **Mirrored roadmap** *(coined here)* | A roadmap the repository's tillr settings name for this rule. | Not every roadmap sync reads. |
-| **Design** | A document a mirrored roadmap routes that either carries a stage or lives under `docs/design/`. | Not a module guide, a research note or another roadmap, which a roadmap also links. |
-| **Outstanding** *(coined here, from the owner's "still out")* | A design whose stage role is open or ready, or that has no stage. | Not "has open questions": a decided, unbuilt design is outstanding too. |
-| **Finished** *(coined here)* | A design whose stage role is built or done, or that no mirrored roadmap routes any longer. | Not "all its items landed", which is an inference from the store and is never used. |
-| **Design item** *(coined here)* | The one queue item that stands for an outstanding design. | Not a step of the design's build; that is a piece. |
-| **Piece** | One buildable step of a design: an ordinary item with a fence and criteria, landing one commit. The word is the `build-pieces` workflow's. | Not a design item: it stands for work, not for a document. |
-| **Fence**, **criteria** | The paths an item's run may change, and the testable conditions its verdict is judged against. From [the status index](../tillr/design-status.md#read-this-first). | |
-| **Hold**, **mover** | A hold is a named reason an unfinished item cannot start. Its mover is who ends it and by what act. From the drain's hold rules. | A hold is not a failure and is never counted. |
-| **Parked** | Linked under a roadmap heading that starts with `Icebox`. The rule is `D-QP5`'s and is unchanged. | Not blocked by other work. |
+| **Sync** | `tillr item sync`: the one command that reads tracked roadmaps, routed designs and their companion plans, and brings the store's items into line with them. | Not the loop's planning pass, which reads the store and the live question index and decides what to start. |
+| **Routes** | Vantage's word: a roadmap routes a document when it links it outside a `"What this page/file does not cover"` section. | Not "mentions": a document named in prose with no link is not routed. |
+| **Stage role** | One of `open`, `ready`, `built`, `done`: what [`.vantage.toml`](../../.vantage.toml) says a document's `stage` word means (`SKETCH` and `DESIGN` are `open`; `DECIDED` is `ready`; `BUILT` is `built`; `CURRENT`, `GRADUATED` and `SUPERSEDED` are `done`). | Not the literal stage word. tillr reads roles so a repository can rename its words. |
+| **Mirrored roadmap** *(coined here)* | A roadmap the repository's `.tillr.toml` names under `[sync] mirror_roadmaps`. | Not every roadmap in the repository unless configured. |
+| **Design** | A document a mirrored roadmap routes that is not a companion plan (`*-plan.md`) and that either carries a `stage` or lives under `docs/design/`. | Not a companion `-plan.md` file, a module README, a research note or another roadmap. |
+| **Companion plan** | The file `<dir>/<stem>-plan.md` beside a design `<dir>/<stem>.md`. Humans do not read it; agents write research into it during design (`stage: SKETCH`) and structured build tasks once the design is decided (`stage: DECIDED`). | Not a design of its own, even if prose links to it: its work belongs to `<dir>/<stem>.md` (`D-QM16`). |
+| **Outstanding** *(from the owner's "still out")* | A design whose stage role is `open` or `ready`, or that has no `stage`. | Not "has open questions": a decided, unbuilt design is outstanding too. |
+| **Finished** | A design whose stage role is `built` or `done`, or that no mirrored roadmap routes any longer. | Not "all its pieces landed", which is an inference from the store and is never used alone. |
+| **Design item** *(coined here)* | The one queue item (`item-design-<slug>`) that stands for an outstanding design across its whole life. | Not a build slice; it never edits code outside its design and companion plan. |
+| **Piece** | One buildable task read from a decided companion plan's `## Tasks` section (`item-<plan-slug>-<task-id>`): an ordinary item in the store with its own fence, dependencies and criteria, landing one commit. | Not a hidden comment in a design doc, and not an ephemeral in-memory sub-step. |
+| **Request** | A standalone item filed straight into the store via `tillr item request` when work has no design document. | Not read from Markdown comments on a roadmap. |
+| **Parked** | Linked under a roadmap heading that starts with `Icebox` (and nowhere on the roadmap's spine). | Not dropped, and not `not-started`. |
+
+---
 
 ## 3. The invariant
 
 After every whole sync that succeeds, for every mirrored roadmap:
 
 1. **Every outstanding design has exactly one unfinished design item**, and that item names the design as its document.
-2. **Every unfinished design item has an outstanding design.** A design that became finished has no unfinished item.
-3. **So a queue with no unfinished item means no design is outstanding**, whatever questions exist anywhere.
+2. **Every unfinished design item has an outstanding design.** A design whose stage role becomes `built` or `done`, or that leaves the mirrored roadmaps, has no unfinished design item.
+3. **Every task in a `DECIDED` companion plan of an outstanding, unparked design has its piece in the store**, linked to that design item; a companion plan stamped `SKETCH` or `BUILT` contributes zero new pieces.
+4. **So a queue with no unfinished item means no design is outstanding** on any mirrored roadmap, regardless of open questions.
 
-The three are testable from two lists: the designs a roadmap routes with their roles, and the store's unfinished items. A test builds a roadmap with one design in each role, one unstaged, one iceboxed and one with questions, syncs, and compares.
+The invariant is checkable from two inputs: Vantage's planning index over the tracked tree and the store's `items` table.
 
 **What makes it hold:**
 
-- **The item's id is derived from the document's path**, by the derivation `tillr item reconcile` already uses: drop `docs/` and `.md`, lowercase, turn every other run of characters into a hyphen, and prefix `item-design-`. Two documents cannot share an item and one document cannot have two. Two paths that derive the same id are refused: sync writes nothing and names both.
-- **Sync is the only writer of a design item's existence.** It creates one when a design is outstanding and has none, finishes one when its design is finished, and reopens one when a finished design is outstanding again ([Section 4.4](#44-finishing-and-reopening)).
-- **A document with no stage is outstanding, not skipped.** Unknown is never read as finished. Its item is dispatchable, and its first run's job is to give the document a stage.
-- **An unreadable planning index is not an empty roadmap.** Sync then creates nothing and finishes nothing, says so, and the faces report the queue's state as unknown ([Section 9](#9-edge-and-failure-behavior)).
+- **Deterministic IDs, no collisions.** A design item's ID is derived from its design path by stripping `docs/` and `.md`, lowercasing, turning every non-alphanumeric run into `-`, and prefixing `item-design-` (for example, `docs/design/tillr-storage.md` becomes `item-design-design-tillr-storage`, matching `tillr item reconcile`'s path-injective slug). Two paths that derive the same ID fail sync before any write.
+- **Companion plans never double-count as designs (`D-QM16`).** A file ending in `-plan.md` whose sibling `<stem>.md` exists (or whose frontmatter `depends-on` names `<stem>.md` as its parent design) is paired with that design and never receives its own `item-design-*` row, even when a roadmap paragraph links to the plan in passing (as [the tillr roadmap](../tillr/roadmap.md) links to [`tillr-definitions-plan.md`](./tillr-definitions-plan.md) beside [`tillr-core-and-git-landing.md`](./tillr-core-and-git-landing.md)). A standalone `*-plan.md` with no parent design (such as [`status-bar-plan.md`](./status-bar-plan.md) only if its [`status-bar.md`](./status-bar.md) were absent) is treated on its own merits; when `<stem>.md` exists, `<stem>.md` is always the design.
+- **Sync is the sole writer of design items and plan-derived pieces.** Sync creates, finishes and reopens design items, and imports or updates pieces from `DECIDED` companion plans, in one SQLite transaction. Sync never edits any Markdown file.
+- **Unstaged means outstanding.** A routed design without a `stage:` key (such as [`momentum-principle.md`](./momentum-principle.md)) is outstanding, never skipped as finished; its first design run gives it a stage.
+- **Fail-closed on index errors.** When `uvx vantage-check index --format json` fails or refuses, sync creates nothing and finishes nothing, records the error, and `tillr view` reports the queue state as unknown rather than empty ([Section 10](#10-edge-and-failure-behavior)).
 
-**Which roadmaps mirror.** A setting names them; the default is none, so another repository that runs tillr sees no change until it opts in. This repository names the tillr roadmap only, because the owner has said that is the one he cares about for now. A roadmap sync reads but does not mirror keeps today's warning rows.
+**Which roadmaps mirror.** `.tillr.toml` declares `mirror_roadmaps = ["docs/tillr/roadmap.md"]` under `[sync]`; the default when unset is `[]`, so external repositories using tillr change nothing until they opt in (`D-QM5`). Vantage excludes `*/*-plan.md` from its human-facing Ready/needs-you action cards or marks companion plans `planning-actions: none` in frontmatter (`D-QM17`), so companion plans never clutter the owner's Vantage planning page.
 
-## 4. The life of a design item
+---
 
-### 4.1. What the item is, at each point
+## 4. The life of a design item, and its pieces
 
-One pure function decides. It reads four recorded facts and nothing else: the document's stage role, the document's unanswered questions, whether the roadmap parks the document, and the item's own pieces in the store. The first row that matches wins.
+### 4.1. How one design item relates to the work in its companion plan
 
-| # | Recorded facts | The item | Shown as | Who moves it |
+A design has **one design item** (`item-design-<slug>`) for its entire life, and **zero or more piece items** (`item-<plan-slug>-<task-id>`) read from its companion `<topic>-plan.md` once the design is decided and planned.
+
+They do different jobs and never compete for the same edit:
+
+1. **While the design is still being decided (`SKETCH`, `DESIGN`, or unstaged),** only the design item exists. No pieces exist in the store even if `<topic>-plan.md` already sits beside `<topic>.md` at `stage: SKETCH` holding research notes from design rounds.
+2. **When the design reaches `stage: DECIDED` (`status: accepted`, zero unanswered questions),** the design item runs its **plan run** on the `plan` seat. That run inspects the codebase at `HEAD`, completes `<topic>-plan.md` at `stage: DECIDED` with ordered tasks under `## Tasks` (or finds nothing unbuilt and stamps `<topic>.md` `stage: BUILT`), and commits.
+3. **When that commit lands, `tillr item sync` reads `<topic>-plan.md`** and materializes one piece item per task in `.tillr/state.db`, setting each piece's `design_doc` to `<topic>.md`, its `body_ref` to `<topic>-plan.md#<task-heading-slug>`, and its `from` / parent link to `item-design-<slug>`.
+4. **While any piece of `<topic>.md` is unfinished,** the design item stays in the store and is **held waiting on its pieces** (`waits-on-pieces`), while the pieces themselves dispatch, gate, review and land as ordinary build items on their own worktrees and fences.
+5. **When every piece has reached a finished state (`landed` or `resolved-elsewhere`),** the hold on the design item clears and the design item becomes dispatchable for a **plan run** again. That verification plan run checks the tree against `<topic>.md`'s ledger and `<topic>-plan.md`'s tasks:
+   - If every promised piece is built on `main`, it updates `<topic>.md`'s `Built` column and moves `<topic>.md` (and `<topic>-plan.md`, if present) to `stage: BUILT` with the date, commit SHA and `MEASURED:` / `UNMEASURED:` note. When that commit lands, sync sees role `built` and finishes the design item.
+   - If the tree still owes work (for example, a task was split or a follow-up piece surfaced), it appends the new task(s) to `<topic>-plan.md`, sync loads the new piece(s), and the design item waits on them again.
+   - If a piece was `closed` unbuilt, the plan run never re-files the closed task ID automatically; if only closed work remains unbuilt, it raises an objection to the `design` seat because `<topic>.md` now promises something that was declined.
+
+```mermaid
+flowchart TD
+    R["Mirrored roadmap links <topic>.md"] --> S["tillr item sync"]
+    S --> DI["Design item: item-design-<slug>"]
+    DI -->|"Icebox"| P["blocked: icebox (Parked)"]
+    DI -->|"Open OQ-*"| Q["held: question-open (Needs you)"]
+    DI -->|"Role open / unstaged, 0 OQ"| DR["Design run (design seat)<br/>fenced to <topic>.md + <topic>-plan.md"]
+    DR -->|"Adds OQ-* or moves to DECIDED"| S
+    DI -->|"Role ready, 0 unfinished pieces"| PR["Plan run (plan seat)<br/>fenced to <topic>.md + <topic>-plan.md"]
+    PR -->|"Writes DECIDED <topic>-plan.md tasks"| S
+    S -->|"Reads ## Tasks from DECIDED plan"| PC["Piece items: item-<plan-slug>-t1..tN<br/>fenced to code + tests + docs"]
+    PC -->|"Piecesunfinished"| W["Design item held: waits-on-pieces"]
+    PC -->|"All pieces landed"| PR
+    PR -->|"Nothing unbuilt -> stamps stage: BUILT"| S
+    S -->|"Role built"| F["Design item finished"]
+```
+
+### 4.2. The state table for a design item
+
+One pure function computes what a design item is on each pass from four recorded inputs: the design's stage role, the design's unanswered questions (from Vantage's index), whether the mirrored roadmap parks the design, and the design's pieces in the store. First matching row wins:
+
+| # | Recorded facts | The design item | Shown as | Who moves it |
 | :--- | :--- | :--- | :--- | :--- |
-| 1 | Role built or done, or no mirrored roadmap routes it | Finished by sync | Not in the queue | Nobody; nothing is owed |
-| 2 | The roadmap parks it | `blocked`, reason `icebox` | Parked | The owner, by moving its entry out of the Icebox |
-| 3 | The planning index cannot be read | Held, reason `questions-unknown`, as today | Needs a cause | Whoever repairs the index read |
-| 4 | At least one unanswered question | Held, reason `question-open`, naming every one | Needs you | The owner, by answering in the document |
-| 5 | Role open or no stage, no unanswered question | Dispatchable: a design run | Draining | The drain |
-| 6 | Role ready, and it has unfinished pieces | Held, waiting on those pieces | Draining (waits on work) | The drain, as the pieces land |
-| 7 | Role ready, no unfinished piece | Dispatchable: a plan run | Draining | The drain |
+| 1 | Role `built` or `done`, or no mirrored roadmap routes it | Finished by sync | Not in the queue | Nobody; nothing is owed |
+| 2 | The roadmap parks it under `Icebox` | `blocked`, reason `icebox` | Parked | `owner`; move the entry out of the Icebox |
+| 3 | The planning index cannot be read | Held, reason `questions-unknown` | Needs a cause | Whoever repairs the index read |
+| 4 | At least one unanswered question on `<topic>.md` or in `<topic>.md`'s `depends-on` `#OQ-*` fragments | Held, reason `question-open`, naming every one | Needs you (or Blocked if all are 🔒) | `owner` (or upstream blocker); answer in the document |
+| 5 | Role `open` or unstaged, zero unanswered questions | Dispatchable: **design run** | Draining | `drain` |
+| 6 | Role `ready`, and ≥1 piece of `<topic>.md` is unfinished | Held, reason `waits-on-pieces` | Draining (waits on work) | `drain`, as the pieces finish |
+| 7 | Role `ready`, zero unfinished pieces | Dispatchable: **plan run** | Draining | `drain` |
 
-Three properties follow.
+Three consequences follow directly from the owner's rulings:
 
-- **Nothing about a question is stored.** Row 4 is computed on every planning pass from the planning index, through the one question reader the planner already uses. The store holds no question id, text or state for it. Answer the question and land the answer, and the next pass sees row 5 or 7.
-- **The Icebox outranks questions.** An iceboxed design with open questions is parked, not "needs you". The owner parked it so that it would stop asking.
-- **A design outside the Icebox is worked without being asked.** The roadmap's own definition of the Icebox is "wanted, not now", so everything else on it is wanted now. Rows 5 and 7 start runs nobody filed.
+- **Zero question state in `.tillr/state.db`.** Row 4 is evaluated live from `uvx vantage-check index --format json` on every pass. No `questions` table, no mirrored question rows, and no `<!-- tillr-owner-question -->` HTML tags exist.
+- **Icebox outranks open questions.** Parking a design in `## Icebox` moves both the design item and any unfinished pieces of its plan to `blocked` with reason `icebox`, so a parked design stops asking the owner for rulings until he unparks it.
+- **Designs on the spine advance automatically.** Anything on a mirrored roadmap outside `## Icebox` is wanted now: row 5 runs the designer and row 7 runs the planner without a human hand-authoring an item block first.
 
-### 4.2. The two runs
+### 4.3. The two runs of a design item
 
-**The design run** (row 5) is a design-seat run whose fence is the document alone. It ends in exactly one of three ways:
+Both runs execute under the design item's ID, and both have a fixed two-file write fence computed mechanically from the design's path: **`<dir>/<stem>.md` and `<dir>/<stem>-plan.md`** (`D-QM13`). Neither run may edit code, roadmaps or other designs (unless an early-landing cut or explicit escalation widens it).
 
-- the document's stage moves to the ready role, with its header verified against its own questions;
-- a question for the owner is written into the document's Open Questions, which is row 4 on the next pass;
-- an objection that names who acts next, by the route a design run's objection takes today.
+- **The design run** (row 5, `design` seat): reads `<topic>.md` (and `<topic>-plan.md` if one already exists). As the `design-doc` and `implementation-plan` skills specify, any codebase findings, symbol names, file maps or task sketches that surface while arguing the design are saved into `<topic>-plan.md` at `stage: SKETCH` (`planning-actions: none`), keeping `<topic>.md` concise and human-readable. The run ends in one of three ways:
+  1. `<topic>.md` has every owner choice settled, its frontmatter moves to `status: accepted` and `stage: DECIDED`, and `uvx vantage-check` passes on both files;
+  2. `<topic>.md` gains one or more `OQ-*` questions with `question` directives for choices only the owner can make, putting the item in row 4 on the next pass; or
+  3. an explicit obstacle naming the next actor.
+- **The plan run** (row 7, `plan` seat): reads the accepted `<topic>.md`, any `SKETCH` or prior `DECIDED` `<topic>-plan.md`, the store's completed piece history for `<topic>.md`, and the current repository tree at `HEAD`. It ends in one of two ways:
+  1. **Work remains unbuilt:** it writes or updates `<topic>-plan.md` at `status: accepted`, `stage: DECIDED`, `planning-actions: none`, stamped with the `HEAD` commit SHA it surveyed, containing the prose map/traps and the structured `## Tasks` entries specified in [Section 7](#7-the-companion-implementation-plan). On landing, sync imports the new tasks as pieces and the design item enters row 6 (`waits-on-pieces`).
+  2. **Nothing remains unbuilt:** it updates `<topic>.md`'s Decision Ledger `Built` column from tree evidence, sets `stage: BUILT` on `<topic>.md` (and on `<topic>-plan.md` if one exists) with date, commit SHA and a `MEASURED:` or `UNMEASURED:` clause, and commits. On landing, sync finishes the design item (row 1).
 
-A run that changes nothing and names nobody is not an ending; the existing rule that "committed nothing" is an objection with a named next actor applies.
+### 4.4. Finishing and reopening a design item
 
-**The plan run** (row 7) compares the design with the tree and does one of two things:
-
-- **Something is unbuilt:** it cuts the unbuilt remainder into pieces, each with a fence inside the repository, criteria, and the questions it waits on if any. The item then waits on them (row 6). How the pieces are recorded is [OQ-QM1](#OQ-QM1).
-- **Nothing is unbuilt:** it fills the design's ledger from the tree, moves the stage to the built role with the date, the commit and a `MEASURED:` or `UNMEASURED:` clause, and lands that. Sync then sees row 1.
-
-The plan run fires again when the last piece finishes, because that event means the remainder may now be empty. It never files again a piece that was closed without being built; if closed work is all that remains, it ends in an objection naming the design seat, because the design now describes something nobody will build.
-
-This is what moves the stage word. The nine designs that were built and said `DECIDED` until the hand sweep of 2026-11-18 would each have taken one plan run to say so.
-
-**Fence and criteria are fixed per run kind**, not written per document: the fence is the document, and the criteria are the endings above. They live in tillr's configuration beside the workflows, where the owner can edit them.
-
-### 4.3. Pieces, and the items that exist today
-
-A piece is an ordinary item: one fence, its criteria, one landed commit. It belongs to a design item when its design document is that design.
-
-- **The ten unfinished items filed by comment today** keep their ids, fences and criteria. The four whose document is a routed design (three in the judge design, one in AutoQA) become pieces of that design's item. The other six, filed in the tillr roadmap, the cost-levers notes and the status-bar plan, belong to no design and stay standalone items.
-- **`item-design-autoqa-slices`** asks for exactly what a plan run does. It is closed when the AutoQA design gets its design item.
-- **Work with no design** still has a queue item of its own. The invariant says an empty queue means no outstanding design; it does not say every item is a design.
-- **A design item may land more than once**: a design run's answer, then a plan run's stamp. Each landing finishes the item as any landing does, and the next sync reopens it because its document is still outstanding. Pieces land once each.
-
-### 4.4. Finishing and reopening
-
-| What sync observes | What it does to the design item |
+| What sync observes | What sync does to `item-design-<slug>` |
 | :--- | :--- |
-| The document's role is built or done, and the item is unfinished | Finishes it as resolved elsewhere: someone moved the stage outside the item's own run |
-| The item's own run landed the stage change | Nothing; the landing already finished it |
-| No mirrored roadmap routes the document any longer, or the document is gone | Closes it. Removing the link is the disposition, as deleting a comment is today |
-| The document is outstanding and its item is finished | Reopens it under the same id, after every item the store already ranks. Its earlier runs stay as its record |
-| The document was renamed | Closes the old item and creates a new one; the id follows the path |
+| `<topic>.md` has role `built` or `done`, and the design item is unfinished | Moves the design item to `resolved-elsewhere` (`--resolves-via doc:<topic>.md`, actor `tillr-item/sync`): a stage change landed outside the item's own final run (or before the mirror existed) |
+| The design item's own plan run landed the `stage: BUILT` commit | Nothing; normal landing settlement already moved the item to `landed` (with its landing receipt) |
+| No mirrored roadmap routes `<topic>.md` any longer, or `<topic>.md` was deleted | Closes the design item (`closed`) and closes any unstarted pieces of `<topic>-plan.md` |
+| `<topic>.md` is outstanding again (for example, someone moved `stage: BUILT` back to `DESIGN` or `DECIDED`) and `item-design-<slug>` is in a finished state | Reopens `item-design-<slug>` to `in-queue` (or `blocked: icebox` if parked) with a sync receipt (`--by tillr-item/sync --reason "design outstanding again"`), ranked after existing ranked items (`D-QM6`) |
 
-Each trigger is a recorded fact with one meaning: a role changed, a link was removed, a link was added. None is "the document changed".
+*Store note (`D-QM6`):* `tillr item reopen` and `SetStateWithReceipt` in `tools/tillr-item/item/lifecycle.go` and `state.go` already support reopening `closed` items and returning `landed` items with a receipt; Step 2 extends `SetStateWithReceipt` so sync's receipt reopens any finished `item-design-*` row when its design returns to an outstanding role, avoiding `-v2` clone IDs.
+
+---
 
 ## 5. A question holds only what names it
 
-Today's rule is "an item is held by any unanswered question in the file its comment sits in". It holds too much (two unrelated steps in the judge design wait on a question about a third) and too little (a step filed in the roadmap is held by nothing, which is why designs file steps there).
+Today an open question in a file holds every item in that file and nothing outside it. With pieces living in `<topic>-plan.md` and questions living in `<topic>.md` (or in an upstream design), file identity is the wrong join.
 
-The rule becomes:
+The rule (`D-QM10`):
 
-- **A design item is held by every unanswered question in its own document**, and by every question its document's `depends-on` header names with a question fragment. That header is Vantage's, is visible in the document's card, and is already in the planning index. This is the hold that reaches across files.
-- **A piece is held only by the questions it names**, as pairs of a document and a question id, in any document. A piece that names none is held by none.
-- **A plan run waits for every question.** A design with a question open stays in the open role, so row 7 cannot match. Work the owner wants ahead of a ruling is filed as a piece by whoever he tells, naming the questions it truly waits on.
+- **A design item (`item-design-<slug>`) is held by every unanswered question in `<topic>.md`**, and by every unanswered question named as a `#OQ-*` fragment in `<topic>.md`'s frontmatter `depends-on` list.
+- **A companion plan never carries owner questions.** `vantage-check` / sync refuses a `-plan.md` file that declares a `question` or `oq` directive (`plan-has-question`): if the planner hits a choice only the owner can make, it files an obstacle to the `design` seat, which writes the `OQ-*` question into `<topic>.md` and moves `<topic>.md` back to `stage: DESIGN`.
+- **A piece is held only by the questions it explicitly names** in its task metadata (`Waits on questions:` in `<topic>-plan.md`, stored as `(doc_path, question_id)` references on the piece). A piece that names no question runs even if `<topic>.md` later gains an open question about a different slice, unless the owner parks the design in the Icebox or comments on `<topic>.md` (if [OQ-PR12](../tillr/decision-provenance-review.md#OQ-PR12) keeps the comment hold).
+- **A plan run waits for every question on `<topic>.md`.** While `<topic>.md` has any unanswered question, row 4 precedes row 7 (and `vantage-check`'s `planning/stage-disagrees` forbids `DECIDED` with open questions anyway).
 
-Naming a question is a reference, not a copy: the pair is stored, and the question's state is read live each pass. A named question that has been answered and compacted is found by its id in the document's ledger and holds nothing. A named question that is in neither place holds the piece with today's `question-removed` reason.
+Question references are resolved live against Vantage's index on each pass: an answered question in `## Open Questions` (`✅`) or compacted into `## Decision Ledger` holds nothing; a referenced ID absent from both holds the piece with `question-removed`.
 
-Where a piece writes that reference depends on [OQ-QM1](#OQ-QM1). Whatever the answer, the four held pieces that exist today each state their questions, or none, in the change that builds this rule.
-
-A question marked as blocked on something else holds like an open one. The item is "needs you" only when at least one of its unanswered questions is open for the owner; when all of them wait on something else, the row says what each waits on.
+---
 
 ## 6. The Icebox
 
-**What changes.** A design linked from a mirrored roadmap's Icebox gets its design item like any other, and the item sits in the queue in state `blocked` with the reason `icebox`. That is the owner's wording, and it reverses two points of `D-QP5`: that parking a design with no item creates nothing, and that parked work leaves the `blocked` state.
+**What changes (`D-QM2`, `D-QM11`, `D-QM12`).** A design linked only under a mirrored roadmap's `## Icebox` heading gets its design item like any other outstanding design, and sync puts that design item — together with any unfinished pieces from its companion plan — into state `blocked` with reason `icebox`.
 
-- **One representation for everything parked.** An existing item whose document is parked moves to the same state and reason, so the two parked items that sit in `not-started` today move with it.
-- **The reason is a new hold reason** with its own row in the drain's hold rules: where `queue`, mover the owner. Its class is **parked** *(coined here)*: wanted, not now; counted neither as draining nor as needing the owner.
-- **The mover is the owner and the act is a roadmap edit.** He moves the entry out of the Icebox section; the next whole sync sees the document unparked and the item takes a place after every item the store already ranks. No agent may icebox or un-icebox anything; that part of `D-QP5` stands.
-- **A finished design is finished even in the Icebox.** Row 1 comes first. The Muse backend is the case today: built, dormant, linked from the Icebox, and so not in the queue.
-- **An Icebox entry that links no document gets no item.** The roadmap's entry for prices on the observatory is one. Sync names such entries in its report line, so they are visible as not loaded. The invariant is about designs, and an entry with no document is not one yet.
+- **Reverses two points of `D-QP5`:** parked designs with no pieces still materialize their `item-design-<slug>` row, and parked items use `blocked` (with waiter `owner` and reason `icebox`) rather than `not-started`.
+- **Hold-rule row:** reason `icebox`, location `queue`, class `parked`, mover `owner; move "<title>" out of the Icebox in <roadmap>`. `parked` counts neither in `draining` nor in `needs you`; `tillr view waiting` shows its count separately (`parked N`).
+- **Unparking:** when the owner moves the link out of `## Icebox` onto the roadmap's spine, the next whole sync moves `item-design-<slug>` (and any `blocked: icebox` pieces of its plan) back to `in-queue` and assigns a rank if unranked. Only the owner edits `## Icebox`; no agent may park or unpark work.
+- **Finished designs in the Icebox stay finished.** Row 1 precedes row 2, so [`tillr-muse-backend.md`](./tillr-muse-backend.md) (`stage: BUILT`) gets no open row.
+- **Documentless Icebox bullets** (such as "Prices on the observatory") create no item and are reported in sync's summary line (`icebox_without_doc: 1`) so nothing disappears silently.
 
-`Exploration` sections park as they do today and are not touched; the tillr roadmap has none.
+---
 
-## 7. How work in a document becomes work tillr can start
+## 7. The companion implementation plan
 
-This is the background to [OQ-QM1](#OQ-QM1).
+This section specifies the concrete form of `<topic>-plan.md` settled from the owner's [OQ-QM1](#OQ-QM1) ruling (`D-QM16` to `D-QM20`).
 
-**What exists.** The hidden comment carries nine things no other part of a document carries. Where each could live instead:
+### 7.1. Pairing, visibility and lifecycle
 
-| What the comment carries | Another home |
+1. **Path convention.** For any design `<dir>/<stem>.md`, its companion implementation plan is `<dir>/<stem>-plan.md` (for example, `docs/design/tillr-queue-mirrors-designs.md` pairs with `docs/design/tillr-queue-mirrors-designs-plan.md`). Frontmatter of `<stem>-plan.md` carries `depends-on: [<stem>.md]`, `status: draft | in-review | accepted`, `stage: SKETCH | DECIDED | BUILT | GRADUATED | SUPERSEDED`, and `planning-actions: none`.
+2. **Humans never need to read it.** `planning-actions: none` (supported in Vantage 0.12; see `uvx vantage-check style-guide`) keeps `<stem>-plan.md` out of Vantage's Ready, graduation and compaction lists. Roadmaps link to `<stem>.md`, never to `<stem>-plan.md`. Design documents never contain `<!-- tillr: item … -->` comments, file-fence lists, or `- **c1:**` criterion blocks; a design's own migration/rollout section, when it has one, stays high-level architectural sequencing when order is load-bearing for risk or compatibility, and omits it otherwise.
+3. **Two authoring phases, matching the `implementation-plan` skill:**
+   - **During design (`stage: SKETCH`):** while `<stem>.md` is in `SKETCH` or `DESIGN`, the design agent creates or appends to `<stem>-plan.md` (`stage: SKETCH`) whenever research, measurements, symbol locations, edge-case notes or candidate task boundaries come up. Sync ignores `SKETCH` plans completely — free-form notes cannot trigger findings or premature items.
+   - **After design acceptance (`stage: DECIDED`):** once `<stem>.md` is `DECIDED` with zero unanswered questions, the design item's **plan run** (`plan` seat) surveys the tree at `HEAD`, writes the prose orientation sections (`Ground truth`, `Map`, `Reuse`, `Traps`, `Don't`) for build workers, and writes the `## Tasks` section in the canonical grammar below, stamping `stage: DECIDED`.
+   - **Completion (`stage: BUILT`):** when all tasks have landed and the verification plan run stamps `<stem>.md` `stage: BUILT`, it stamps `<stem>-plan.md` `stage: BUILT` in the same commit. Sync reads `## Tasks` only from companion plans of routed designs (or standalone `-plan.md` files explicitly listed) whose `stage` role is `ready` (`DECIDED`).
+
+### 7.2. Canonical `## Tasks` grammar in `<topic>-plan.md`
+
+Instead of hidden HTML comments anywhere in `docs/`, `<topic>-plan.md` expresses work as ordinary Markdown headings and a structured metadata list under `## Tasks` (`D-QM18`). Because humans never read `<topic>-plan.md`, its `## Tasks` section can be strict, unambiguous and validated by `tillr item sync` without hiding anything inside comments:
+
+```markdown
+---
+title: "Queue mirrors designs — implementation plan"
+status: accepted
+stage: DECIDED
+updated: 2026-11-18
+planning-actions: none
+depends-on:
+  - tillr-queue-mirrors-designs.md
+summary: "Completed against the tree at e9a56e925: six tasks across tillr, tillr-item, tillr-drain and tillr-view."
+---
+
+# Queue mirrors designs — implementation plan
+
+**Design:** [`tillr-queue-mirrors-designs.md`](./tillr-queue-mirrors-designs.md)
+**Tree stamped at:** `e9a56e925`
+
+## Map and traps
+
+- `tools/tillr/vantage/vantage.go` (`parseVantageIndex`) currently drops stage roles down to a boolean `Done`; expose the four-role enum (`open`, `ready`, `built`, `done`).
+- Every edit under `tools/tillr*` must run `just pack-sync` in the same commit (`tests/pack-sync.test.py`).
+
+## Tasks
+
+### Task t1: Expose four-valued stage roles in the shared Vantage reader
+
+The shared Vantage reader collapses stages to `Done bool`, forcing `design_without_item.go` and `reconcile.go` to parse `.vantage.toml` or literal stage words on their own. Exposing the four roles in one place lets sync and the planner agree on every repository's vocabulary.
+
+- **Paths:** `tools/tillr/`, `tools/tillr-item/`, `yolo-packs/tillr/`
+- **Seat:** `build`
+- **After:** none
+- **Verify:** `python3 tools/go-test-shards.py tools/tillr -k 6 && python3 tools/go-test-shards.py tools/tillr-item -k 6 && just pack-sync`
+- **Criteria:**
+  - **c1:** `vantage.Document` exposes `StageRole` in `{"", "open", "ready", "built", "done"}` from the index payload, and a repository that renames `DECIDED` in `.vantage.toml` yields role `ready`.
+  - **c2:** No Go file under `tools/tillr*` compares literal stage strings (`"SKETCH"`, `"DESIGN"`, `"DECIDED"`, `"BUILT"`, `"CURRENT"`, `"GRADUATED"`, `"SUPERSEDED"`).
+
+### Task t2: Mirror routed designs into design items during sync
+
+Sync needs to materialize, finish and reopen `item-design-<slug>` rows for every outstanding design on a mirrored roadmap so an empty queue means no design is outstanding.
+
+- **Paths:** `tools/tillr-item/`, `tools/tillr-drain/`, `.tillr.toml`, `yolo-packs/tillr/`
+- **After:** `t1`
+- **Workflow:** `planned-build@v1`
+- **Criteria:**
+  - **c1:** After `tillr item sync` on a fixture with one design per role plus one unstaged, one iceboxed and one with open questions, every outstanding design has one unfinished `item-design-<slug>` row and finished designs have none.
+  - **c2:** Companion `*-plan.md` files paired with a `<stem>.md` design never receive their own `item-design-*` row even when linked from the roadmap.
+  - **c3:** When the planning index is unreadable, sync creates and finishes zero design items and exits non-zero with the reader's error.
+```
+
+### 7.3. Exact field mapping and validation rules (`D-QM18`, `D-QM19`)
+
+Under `## Tasks` in a `DECIDED` companion plan `<dir>/<stem>-plan.md`:
+
+| Plan element | How `tillr item sync` reads and validates it |
 | :--- | :--- |
-| The item's id | For a design item, the document's path. For a piece, an id tillr assigns when the piece is recorded |
-| The fence | For a design item, the document. For a piece, chosen by the plan run and checked to lie inside the repository |
-| What it waits on | Between designs, the `depends-on` header. Between pieces, recorded with the piece |
-| The seat | A default per kind: design for a design item, chosen by the plan run for a piece |
-| Whether it was written to the prose guide | The store, with the rewrite node |
-| Workflow, judge and express overrides | Defaults per kind in tillr's configuration |
-| Criteria | Written by the plan run |
-| Title | The document's title, or the piece's |
-| Where it came from | The store's record of which run made it |
+| **Heading `### Task <local_id>: <Imperative title>`** | `<local_id>` matches `^[a-z0-9][a-z0-9-]*$` (unique within the plan, e.g. `t1`, `sync-mirror`). Derived store `item_id` is `item-<plan-slug>-<local_id>` where `<plan-slug>` is `<dir>/<stem>` stripped of `docs/` and `design/` noise and slugified (or an optional `- **ID:** item-...` key when migrating a legacy item ID verbatim). `<Imperative title>` is the item's `title` (imperative verb, ≤12 words, checked directly without a `prose="2"` shibboleth). |
+| **Why paragraph(s) + worker notes** | Prose between the `### Task` heading and the metadata bullets (plus any `**Notes:**` / `**Preconditions:**` blocks after `- **Criteria:**`) becomes the piece's body context at `<dir>/<stem>-plan.md#<heading-slug>`, read by the build worker alongside `<dir>/<stem>.md`. |
+| **`- **Paths:** <prefix>, ...`** | Required. Backticked or plain comma-separated repo-relative prefixes that exist on `HEAD` (or parent directories for new files, plus `.forks/lanes/lane-1/<fork>/` for fork tasks), no globs. Mapped to `allowed_paths`. |
+| **`- **After:** <ref>, ...` or `none`** | Optional (defaults to `none`). Each `<ref>` is either a sibling `<local_id>` in the same plan (expanded to that sibling's `item_id`) or a full `item-...` ID in the store. Mapped to `blocked_by`. |
+| **`- **Seat:** <seat>`** | Optional (defaults to `build`). Validated against `tools/tillr-item/item/seat.go` (`build`, `design`, `review`, `scout`, `plan`, `edit`, `test-writing`, `test-running`, `docs`, `verify`). |
+| **`- **Workflow:** <name>@v<N>`** | Optional (defaults to the charter's default build workflow, e.g. `planned-build@v1` or `single-worker@v1`). Note how the two planning layers compose (`D-QM20`): `<topic>-plan.md` cuts a **design** into **pieces** (each one commit, one queue item); within a complex piece, `planned-build@v1`'s runtime `plan` node may further split that single commit's work across cheap `edit` / `test-writing` / `docs` sub-nodes (`build-pieces@v1`) on the same worktree. |
+| **`- **Waits on questions:** <doc>#OQ-..., ...`** | Optional (defaults to none). Stored as question references for [Section 5](#5-a-question-holds-only-what-names-it). |
+| **`- **Claims:** c2=direction, ...`** | Optional (defaults to `verification-only` for every criterion). Validated against `D-JL2`'s claim classes. |
+| **`- **Judge:** agent \| mechanical`** / **`- **Express:** true`** | Optional overrides matching today's item schema. |
+| **`- **Verify:** <command>`** | Optional targeted verification command surfaced in the worker's brief. |
+| **`- **Criteria:**` with nested `- **c<N>:** <text>`** | Required (`c1..cK`, 1 to 8 non-empty judgeable conditions). Mapped to `item_criteria`. |
 
-On 2026-11-18 the unbuilt work of gate rework, convergence and the idea pipeline was written into those designs as prose units with no comment (`5aadd1004`), so that it can become items whichever way this is answered.
+**No post-landing file deletion commit (`D-QM19`).** When a piece lands:
+- `.tillr/state.db` records the `landings` receipt, the `done` criterion verdicts, and `state = landed`.
+- **The loop does NOT run `RetireItemBlock` or make a second `chore: retire landed document block` commit.** `<topic>-plan.md` stays untouched as each piece lands — eliminating 33+ extra trunk commits and the race where a retirement commit clashed with sibling lanes (`d81e54c50`, `f87ad8923`).
+- On the same machine, sync sees `item-<plan-slug>-<local_id>` already `landed` in `.tillr/state.db` and leaves it finished. Once the final piece lands, the design item's verification plan run stamps `<topic>.md` and `<topic>-plan.md` `stage: BUILT` in one clean commit, after which a cold machine rebuilding `.tillr/state.db` from git skips both files because their stage role is `built`.
+- What if a machine loses `.tillr/state.db` *mid-wave*, after 2 of 5 pieces landed and before `<topic>-plan.md` is stamped `BUILT`? If [OQ-PR1](../tillr/decision-provenance-review.md#OQ-PR1) restores commit-level item attribution, sync marks those 2 pieces `landed` from `git log` on cold rebuild; if [OQ-PR1](../tillr/decision-provenance-review.md#OQ-PR1) keeps commits unnamed, the planner/worker checks the tree against `c1..cN` and resolves an already-present piece via `resolved-elsewhere` (`commit:<sha>`). Either way, no post-landing deletion commit is ever needed.
 
-There is a second hidden comment of tillr's, written beside a question that a design run raises for the owner, which ties the question to the item it holds. A search of `docs/` on 2026-11-18 (`rg '<!-- tillr-owner-question' docs`) finds none live. It follows whatever is ruled for the first.
+**What about prose rewriting ([OQ-PR14](../tillr/decision-provenance-review.md#OQ-PR14))?** Under this split:
+- Your human-read documents (`<topic>.md` and `roadmap.md`) carry **no** item blocks or build steps, so no cheap model ever edits wording inside your design documents, and no `prose="2"` shibboleth comment exists anywhere.
+- Companion plans (`<topic>-plan.md`) are written by the `plan` seat and checked directly by `tillr item sync` for imperative task titles and non-empty criteria; a malformed task in `<topic>-plan.md` refuses the plan run at the gate before it lands.
+- Standalone requests (`tillr item request`) live only in `.tillr/state.db`, so any triage/prose shaping of a raw request happens on tillr's side (or by spawning a new `<topic>.md` design when the request needs design).
 
-**What Vantage offers.** Its own comments are a closed set of four names (a section, a block, a question, a fallback) that decorate and never carry meaning; anything else is ignored without a word. It has headers for a document's state and what it depends on, and plain task lists. It has nothing that means a task or a work item. Measured 2026-11-18 on `vantage-check` 0.12.0 with no configuration: a document with unknown top-level header keys passes with no finding, so a header list would be tolerated and never understood.
+---
 
-**The alternatives.** A search on 2026-11-18 at `8c6194abf` finds 17 live comments in 8 files: ten belong to unfinished items and seven are left behind by items that landed.
+## 8. Retiring the hidden comments, and what is deleted
 
-| | What the owner sees in a document | Built | Removed | The 17 live comments |
-| :--- | :--- | :--- | :--- | :--- |
-| **A. Nothing in the document** | No tillr markup anywhere | The mirror; the plan run recording pieces in the store; a page that lists a design's pieces | The comment's scanner, its retirement commit after each landing, the block the reconcile report prints, the copy step that neutralizes comments in the pack's documents, the gate's allowance for them, and about forty test files that use the literal | All 17 deleted in one change. The ten unfinished items carry on from the store, which already holds their definitions |
-| **B. A list in the document's header** | A visible list of steps in the YAML at the top of each document | The mirror; a header reader and writer; the same retirement, now editing the header | The comment's scanner and what depends on its shape | Ten rewritten as header entries, seven deleted |
-| **C. A Vantage construct** | Whatever Vantage would define | Nothing here until Vantage ships one | Nothing until then | Stay as they are meanwhile |
-| **D. Keep the comment** | Nothing in a rendered page; the comment in raw Markdown | The mirror; a line from sync naming each document it read items from | Nothing | Seven left by landed work deleted; ten stay |
+### 8.1. Fate of the 15 existing `<!-- tillr: item … -->` comments in `docs/`
 
-**What each costs beyond the build.**
+Measured at `e9a56e925`, `docs/` contains **15** live unfenced `<!-- tillr: item … -->` declarations across **5** files (plus fenced documentation specimens in [`tillr-queue-persistence.md`](./tillr-queue-persistence.md) and [`queue-persistence-ruling.md`](./queue-persistence-ruling.md)):
 
-- **A** gives up reading and editing a step in git before it runs. Steps exist on the machine that planned them; a second machine plans its own from the same design and tree. The plan run chooses each fence, so the fence is only as careful as that run. Work with no design enters through tillr's command for filing an item, not a document.
-- **B** puts a step's paths and conditions far from the prose that explains it, and makes long headers: the judge design was cut into thirteen steps.
-- **C** is a wait of unknown length on another tool.
-- **D** costs nothing to build and keeps the thing objected to. The seven stale comments are what a second home for one fact costs when its cleanup is missed.
+| File | Live comments | Current state in `.tillr/state.db` | What happens in the cutover (`D-QM21`) |
+| :--- | ---: | :--- | :--- |
+| [`docs/pi/usage-recording-request.md`](../pi/usage-recording-request.md) (`stage: CURRENT`) | 6 | All 6 `landed` (missed by block retirement) | Strip all 6 HTML comments; keep surrounding historical prose |
+| [`docs/tillr/roadmap.md`](../tillr/roadmap.md) (`item-landing-call-pi-fork-park`) | 1 | `landed` (missed by block retirement) | Strip the HTML comment |
+| [`docs/design/tillr-autoqa.md`](./tillr-autoqa.md) (`item-design-autoqa-slices`) | 1 | `not-started` | Close `item-design-autoqa-slices` and strip the HTML comment: AutoQA's mirrored design item `item-design-design-tillr-autoqa` (`blocked: icebox`, then design run -> plan run) replaces it |
+| [`docs/design/status-bar-plan.md`](./status-bar-plan.md) (`item-bar-ironbar-config-v2`) | 1 | `not-started` (parked on `docs/roadmap.md` Icebox) | Rewrite Task 4 of [`status-bar-plan.md`](./status-bar-plan.md) into the `## Tasks` companion-plan format (keeping `ID: item-bar-ironbar-config-v2` alongside [`status-bar.md`](./status-bar.md)) and delete the HTML comment |
+| [`docs/tillr/roadmap.md`](../tillr/roadmap.md) (`item-landing-call-delivery-tests`, `item-landing-call-pi-switch-on`, `item-landing-call-obstacle-tool`) | 3 | 1 `blocked`, 2 `in-queue` | Move those unlanded tasks (and their Agent Details) out of [`roadmap.md`](../tillr/roadmap.md) into [`tillr-landing-call.md`](./tillr-landing-call.md)'s companion `docs/design/tillr-landing-call-plan.md` (preserving their exact `item-*` IDs so store history and `blocked_by` edges stay intact), and delete the HTML comments and item prose from [`roadmap.md`](../tillr/roadmap.md) (fulfilling roadmap entry 9 at the same time) |
+| [`docs/tillr/roadmap.md`](../tillr/roadmap.md) (`item-gate-pinned-fork-inputs`, `item-agent-default-bmad-superpowers-skills`) and [`docs/cost-levers/qa.md`](../cost-levers/qa.md) (`item-bedrock-claude-latest-only`) | 3 | 1 `in-queue`, 2 `blocked` | Any still unfinished at cutover keep their live definitions in `.tillr/state.db` as standalone requests (or move into a companion `-plan.md` where a design owns them, such as [`gate-rework.md`](./gate-rework.md)'s `gate-rework-plan.md` for `item-gate-pinned-fork-inputs`), and their HTML comments are stripped from [`roadmap.md`](../tillr/roadmap.md) and [`qa.md`](../cost-levers/qa.md) |
 
-Under every alternative, sync stops being silent: its report line names the documents it created or changed items from.
+*(None of those 15 comments is touched by this design commit; they are migrated and stripped in the cutover build task once the companion-plan reader is in place.)*
 
-**My read.** A. The owner's rulings on the item graph already say that a planning stage adds the implementation as nodes at run time and that anything not started may be reshaped freely. A step marked in a document is a second home for that fact, and a step that can be reshaped until it starts is a poor fit for text that must be edited and landed to change. The weakness is real: `D-RS1` chose documents so that work is shared and reviewable in git, and A keeps that for the design and gives it up for the steps.
+How work with **no design document** enters from then on (`D-QM21`):
+- Small chores, bug fixes and ad-hoc requests with no design enter through `tillr item request` (or the observatory's idea box, which creates a design when the work needs one and a request when it does not).
+- Roadmaps go back to being pure ordered links and short priority rationale (~200 lines), never a 9,000-line warehouse of build specs and HTML comments.
 
-## 8. What the owner sees
+### 8.2. What is deleted (`D-QM22`)
 
-**`tillr view waiting`.** One row per design item; pieces are rows of their own as today. The warning rows with an empty item id go away for a mirrored roadmap, because each is now an item. The summary line gains the parked count:
+Once sync reads mirrored roadmaps and `## Tasks` in companion `-plan.md` files and the 15 comments above are migrated, all of the following are deleted:
+
+1. **The hidden HTML item-comment scanner across `docs/`:** `tools/tillr-item/docshare/` (`Start`, `AttributePattern`, `Declared`, `Sharing`, `ReadTracked` scanning every `docs/**/*.md` file) and `parseItemBlocks` in `tools/tillr-item/item/sync.go`. Replaced by a parser that reads **only** configured roadmaps and `## Tasks` inside `DECIDED` `*-plan.md` companion files, plus a gate check (`tests/tillr-docs.test.py` / `tools/fork-check.py`) that **refuses** any unfenced `<!-- tillr:` comment in tracked Markdown so silent tags can never creep back in.
+2. **Post-landing block-retirement commits:** `tools/tillr-item/item/retire.go` (`RetireItemBlock`, `retire` CLI face), the retirement step in `tools/tillr-drain/drain/steps.go`, and the retirement-commit exemptions in `tools/tillr-drain/drain/` (`d81e54c50`, `f87ad8923`).
+3. **The hidden owner-question HTML comment:** `tools/tillr-item/item/owner_question.go` (`<!-- tillr-owner-question … -->`), which already has zero live instances in `docs/`.
+4. **The `prose="2"` shibboleth and document-rewriting item spawner:** `prose.go` / `prose_rewrite` item generation (`rewrite-<id>` items that rewrite an author's Markdown block in place) and `document_prerequisite.go`'s `prose="2"` requirement. Task headings and criteria in `<topic>-plan.md` are checked structurally when the plan run commits `<topic>-plan.md`.
+5. **Comment-block guards in request validation and design answers:** `validateRequest`'s `DefinitionBlockIDs` diff in `tools/tillr-drain/drain/request.go` (replaced by the repo-wide refusal of `<!-- tillr:` comments) and `blockSection` comment-marker lookup in `tools/tillr-drain/drain/design_answer.go` (replaced by companion-plan task section lookup by heading `### Task <id>:`).
+6. **Comment-neutralizing shims in pack delivery and gate checks:** `neutralize_tillr_directives` in `tools/pack-docs.py` (pack snapshots also exclude `*-plan.md` files, since external workspaces read designs and READMEs, never internal build plans) and the `<!-- tillr:.* -->` allowance in `tools/gate/checks/roadmap_sections.py`.
+7. **Warning and residue plumbing made obsolete by the mirror and companion plans:** `tools/tillr-item/item/design_without_item.go` and the `design_without_item` table for mirrored roadmaps; `tools/tillr-item/item/reconcile.go` (`tillr item reconcile`, whose partition contradicted the owner's open-question rule); and `stale_doc_blocks` / `unshared_open` counts in `tillr view status`.
+
+---
+
+## 9. What the owner sees
+
+**In Vantage (the human surface).**
+- Design documents (`docs/design/<topic>.md`) contain problem statements, choices, trade-offs, Decision Ledgers and `OQ-*` Open Questions — zero HTML item tags, zero path fences, zero `- **c1:**` checklists.
+- Roadmaps (`docs/tillr/roadmap.md`) contain ordered links to designs and one-clause reasons for their order.
+- Companion plans (`docs/design/<topic>-plan.md`) carry `planning-actions: none`, so they never appear in Vantage's Ready or graduation queues; a human never has to open one.
+
+**In `tillr view waiting` and the observatory (the operational surface).**
+One row per outstanding design item, with its pieces nested under it (or shown with `from: item-design-<slug>`). Warning rows with empty item IDs disappear for mirrored roadmaps:
 
 ```text
-summary: owner-waiting 12; parked 3; next [drain=13]
+summary: owner-waiting 12; parked 2; next [drain=14]
 
  #  item_id                                 class          where  why
- 1  item-design-design-tillr-storage        needs you      queue  question-open: 3 unanswered in docs/design/tillr-storage.md: OQ-TS1, OQ-TS2, OQ-TS3
- 2  item-design-design-tillr-convergence    ready          queue  plan run: decided, nothing planned yet
- 3  item-design-design-tillr-idea-pipeline  waits on work  queue  2 of 2 pieces unfinished: item-ip-a, item-ip-b
+ 1  item-design-design-tillr-diff-review    needs you      queue  question-open: 2 unanswered in docs/design/tillr-diff-review.md: OQ-DR1, OQ-DR2
+ 2  item-design-design-gate-rework          ready          queue  plan run: decided, companion plan not written yet
+ 3  item-design-design-tillr-landing-call   waits on work  queue  waits-on-pieces: 3 unfinished in docs/design/tillr-landing-call-plan.md
  4  item-design-design-tillr-autoqa         parked         queue  icebox: "AutoQA" in docs/tillr/roadmap.md
 ```
 
-**`tillr drain why <item>`.** For a design item the document's own facts come first: icebox, then questions, then anything loop-wide such as a red trunk. A design that waits on the owner still waits on him while the trunk is red, and today the red trunk is printed in its place.
-
-**Movers.** Every mover reads `who; act`, with `who` one of the actor names the summary line already uses, and the owner always spelled `owner`. The tree and the installed build disagree today on one row ("owner: file the document's item block" against "operator; file the document's item block"); that row is the warning this design retires.
+**`tillr drain why <item>`.** For a design item, document facts precede loop-wide holds: `icebox`, then `question-open` / `questions-unknown`, then `waits-on-pieces`, then loop-wide holds such as `trunk-broken`. Movers always read `<who>; <act>` with `owner` spelled `owner`:
 
 ```text
-question-open   owner; answer OQ-TS1, OQ-TS2, OQ-TS3 in docs/design/tillr-storage.md
-icebox          owner; move "AutoQA" out of the Icebox in docs/tillr/roadmap.md
-waits on work   drain; lands item-ip-a, item-ip-b
+question-open    owner; answer OQ-DR1, OQ-DR2 in docs/design/tillr-diff-review.md
+icebox           owner; move "AutoQA" out of the Icebox in docs/tillr/roadmap.md
+waits-on-pieces  drain; finish item-landing-call-delivery-tests, item-landing-call-pi-switch-on, item-landing-call-obstacle-tool
 ```
 
-**Status.** The JSON status gains a count of outstanding designs, of those held on a question (the `question_holds` field exists and is null today), and of those parked.
+**Sync output (never silent).** Every `tillr item sync` prints what it read and changed: mirrored roadmaps, design items created/reopened/finished/parked, companion plans read (`DECIDED` count vs `SKETCH` skipped), pieces imported/updated, and any documentless Icebox entries.
 
-**The three quiet states**, each with its next step:
+**The three quiet states:**
 
 ```text
 queue empty: every design docs/tillr/roadmap.md routes is finished (synced 5:54 PM ET). Nothing needs you.
-next: link a new design from the roadmap.
+next: link a new design from docs/tillr/roadmap.md.
 
-nothing draining, nothing needs you; 3 designs parked in the Icebox of docs/tillr/roadmap.md.
+nothing draining, nothing needs you; 2 designs parked in the Icebox of docs/tillr/roadmap.md.
 next: move an entry out of the Icebox to start it.
 
-queue state unknown: the last sync could not read the planning index (<the reader's error>).
+queue state unknown: the last sync could not read the planning index (<reader error>).
 next: tillr item sync
 ```
 
-The first is printed only after a whole sync that succeeded; a sync that failed or never ran prints the third. "Empty" over a broken sync is the one false statement this design must never make.
+---
 
-## 9. Edge and failure behavior
+## 10. Edge and failure behavior
 
 | Case | What happens |
 | :--- | :--- |
-| A mirrored roadmap routes no design | No design items; the empty statement names the roadmap |
-| A design is linked several times | One item; its place is its first link outside a parked section |
-| A design is linked from two mirrored roadmaps | One item, belonging to the first roadmap that reaches it, as blocks do today |
-| A design is linked both inside and outside the Icebox | Today's parking rule decides, unchanged |
-| The planning index cannot be read at sync | Sync creates, finishes and reopens nothing, reports the reader's error, and existing items are untouched |
-| Two syncs at once | Each writes in one transaction and the ids are derived, so the second finds nothing to do |
-| A sync limited to named roadmaps | Creates and parks; only a whole sync finishes, reopens or unparks, as only a whole sync unparks today |
-| A person edits a stage by hand | Honored at the next sync, in either direction |
-| A built design gains an open question, as queue persistence does through this document | Nothing by itself: the question lives in this document and holds this document's item. The built design's item reopens only when someone moves its stage back to an open or ready role, which the answer to the question may require |
-| A plan run and a hand edit both stamp the stage | The second is an empty change; nothing lands twice |
-| The store refuses to reopen a finished item | Not known whether it can; see [Section 12](#12-risks) |
+| A design has a `<topic>-plan.md` at `stage: SKETCH` while `<topic>.md` is `DESIGN` | Sync creates/updates `item-design-<slug>` from `<topic>.md` and ignores the `SKETCH` plan completely; zero pieces are loaded |
+| `<topic>-plan.md` is `DECIDED` while `<topic>.md` is moved back to `DESIGN` with a new `OQ-*` | The design item is held `question-open`; sync imports no *new* pieces while `<topic>.md` has role `open`, and any unstarted pieces wait if they name the question (or if `<topic>.md` is parked) |
+| A roadmap links both `<topic>.md` and `<topic>-plan.md` | `<topic>-plan.md` is recognized as `<topic>.md`'s companion (`D-QM16`) and gets no `item-design-*` row of its own |
+| `<topic>-plan.md` contains an `OQ-*` `question` directive | Refused by sync and `tests/tillr-docs.test.py` (`plan-has-question`): owner questions belong only in `<topic>.md`, where humans read them |
+| A task in a `DECIDED` `<topic>-plan.md` has a missing path prefix, unknown seat, cycle in `After:`, or zero criteria | Sync reports a structured finding (`plan-task-invalid`) naming the file and `### Task` heading and writes no pieces from that plan; the plan run's gate check runs `tillr item sync --dry-run` so malformed plans cannot land |
+| The planning index cannot be read at sync | Sync creates, finishes and reopens nothing, reports the error, and leaves existing store rows untouched |
+| Two syncs run concurrently | One SQLite write transaction + deterministic IDs; the second is a no-op |
+| A person edits `<topic>.md`'s `stage` by hand in either direction | Honored at the next sync (finishing as `resolved-elsewhere` or reopening `item-design-<slug>`) |
+| Someone adds a `<!-- tillr: item … -->` comment to any Markdown file after cutover | Refused at the gate and ignored by sync |
 
-**Never:** tillr the program does not edit a document outside a run's own commit; sync does not write to any document; nothing is retried on a count or failed on a clock; a design item is never created from a guess that a design "looks built".
+**Never:** sync never edits a Markdown file; the loop never makes a post-landing commit to delete tasks from `<topic>-plan.md`; humans are never asked to read or rule on `<topic>-plan.md`; questions are never copied into `.tillr/state.db`.
 
-## 10. Migration and build order
+---
 
-Nothing below starts before [OQ-QM1](#OQ-QM1) is answered. Steps 1 to 5 are the same under every answer; step 6 depends on it. The stage words themselves need no migration: the hand sweep of 2026-11-18 made them true. Each step changes the module, its tests, its guide and the pack's mirror of the module together; the mirror is the copy under [the tillr pack](../../yolo-packs/tillr/), refreshed by `just pack-sync` and held to its source by [the pack sync suite](../../tests/pack-sync.test.py).
+## 11. Rollout sequence (high-level)
 
-**Step 1. One reader for a document's stage role.**
-- *What changes:* the shared Vantage reader keeps each document's role, not only whether it is done. The second stage reader in the warning code and the literal stage words in the reconcile report are replaced by it.
-- *Files:* [the shared reader](../../tools/tillr/vantage/vantage.go), [the item module's question reader](../../tools/tillr-item/item/questions.go), [the warning code](../../tools/tillr-item/item/design_without_item.go), [the reconcile report](../../tools/tillr-item/item/reconcile.go), and their tests.
-- *Waits on:* the answer.
-- *Done when:* a test repository that renames `DECIDED` in its Vantage configuration gets the same roles; no tillr source compares a stage word.
+Detailed file maps, function signatures, test names and per-task fences belong in the companion `docs/design/tillr-queue-mirrors-designs-plan.md` once the owner has reviewed the ledger below. The architectural order is load-bearing for one reason: the companion-plan reader and design mirror must land *before* existing HTML comments are stripped and their scanner is deleted, so active work in `.tillr/state.db` never drops during the transition.
 
-**Step 2. Sync mirrors the named roadmaps.**
-- *What changes:* the mirror setting; creation, finishing and reopening of design items; the id derivation and its collision refusal; the sync report line, which names what it loaded and any Icebox entry with no document.
-- *Files:* [sync](../../tools/tillr-item/item/sync.go), [its roadmap reading](../../tools/tillr-item/item/sync_roadmap.go), [the store schema](../../tools/tillr-item/item/schema.go), [the loop's sync line](../../tools/tillr-drain/drain/sync.go), [the repository's tillr settings](../../.tillr.toml), and the sync tests.
-- *Waits on:* step 1.
-- *Done when:* the test of [Section 3](#3-the-invariant) passes; a second sync changes nothing; an unreadable index creates and finishes nothing.
+1. **Stage roles and companion-plan pairing in the shared Vantage reader** — expose the four roles (`open`, `ready`, `built`, `done`) and `<stem>-plan.md` pairing in one place.
+2. **Roadmap mirror, Icebox `blocked: icebox`, and scoped question holds** — materialize/finish/reopen `item-design-<slug>` rows for mirrored roadmaps, park Icebox designs and pieces as `blocked` (`reason: icebox`), and scope question holds to `<topic>.md` + `depends-on` fragments for design items and explicit `Waits on questions` for pieces.
+3. **Companion-plan `## Tasks` reader in `tillr item sync` + dry-run gate check** — read pieces from `DECIDED` `<topic>-plan.md` files alongside the still-working legacy comment reader, and turn off `RetireItemBlock` for plan-backed pieces.
+4. **Design run and plan run workflows + faces** — wire the two-file fence (`<topic>.md`, `<topic>-plan.md`), `waits-on-pieces`, and the `tillr view waiting` / `why` / `status` surfaces.
+5. **Migrate the remaining live comments and delete the HTML comment machinery** — move active roadmap/design blocks into companion `-plan.md` files (preserving item IDs), strip landed leftover comments, delete `docshare`, `retire.go`, `owner_question.go`, `reconcile.go`, `design_without_item.go` and `prose="2"` rewriting, and add the gate check refusing `<!-- tillr:` comments in `docs/`.
 
-**Step 3. The Icebox is `blocked`, reason `icebox`.**
-- *What changes:* the new hold reason and its rule row; the parked class; parking and unparking move items between `in-queue` and `blocked`; the stored parked items move.
-- *Files:* [sync](../../tools/tillr-item/item/sync.go), [the parking tests](../../tools/tillr-item/item/sync_parking_test.go), [the hold reasons](../../tools/tillr-drain/drain/schema.go), [the hold rules](../../tools/tillr-drain/holdrules/holdrules.go), [the view's ordering](../../tools/tillr-view/order.go).
-- *Waits on:* step 2.
-- *Done when:* the three unfinished Icebox designs of the tillr roadmap each show one parked row and the built one shows none; moving an entry out and syncing queues its item; the rule that every reason has a row still passes.
+---
 
-**Step 4. A question holds only what names it.**
-- *What changes:* the planner's question hold as [Section 5](#5-a-question-holds-only-what-names-it) states it; the four existing held pieces state their questions.
-- *Files:* [the planner](../../tools/tillr-drain/drain/plan.go), [its blocked handling](../../tools/tillr-drain/drain/blocked.go), the drain's guide, and their tests.
-- *Waits on:* step 2, and the answer for where a piece names a question.
-- *Done when:* in the judge design, only the pieces that name its open question are held by it; a piece in one file is held by a question it names in another.
+## 12. What this supersedes or amends
 
-**Step 5. The faces.**
-- *What changes:* everything in [Section 8](#8-what-the-owner-sees); the warning rows and their table stop being written for a mirrored roadmap.
-- *Files:* [the waiting view's design rows](../../tools/tillr-view/waiting_design.go), [the why view](../../tools/tillr-view/why.go), the status view, and their tests.
-- *Waits on:* steps 2 to 4.
-- *Done when:* each specimen in [Section 8](#8-what-the-owner-sees) is asserted by a test, including that "queue empty" is never printed over a failed sync, and that every command a next step names exists.
+Once the owner has reviewed the designer's decisions below, the build tasks update these documents to match:
 
-**Step 6. The two runs, and the answer's own work.**
-- *What changes:* the design run and the plan run with their fixed fences and criteria; then, by the answer: recording pieces in the store and removing the comment and its readers (A), a header reader and writer (B), or deleting the seven stale comments (D). `item-design-autoqa-slices` is closed.
-- *Files:* [the workflows](../../config/tillr/workflows/); under A also [the comment grammar](../../tools/tillr-item/docshare/docshare.go), [block retirement](../../tools/tillr-item/item/retire.go), [the owner-question marker](../../tools/tillr-item/item/owner_question.go), [the designer's answer placement](../../tools/tillr-drain/drain/design_answer.go), [the pack's document copier](../../tools/pack-docs.py) and [the gate's roadmap section check](../../tools/gate/checks/roadmap_sections.py).
-- *Waits on:* steps 1 to 5.
-- *Done when:* a decided test design with one unbuilt step ends with that step landed and the document stamped built by its own item; under A, `rg '<!-- tillr: item' docs` finds only fenced specimens.
+- **[Queue persistence](./tillr-queue-persistence.md), [`OQ-QP2`](./tillr-queue-persistence.md#91-decision-ledger), `D-QP2`, `D-QP3`, `D-QP5`, `D-QP8`, `D-QP10` and `D-QP11`.** [`OQ-QP2`](./tillr-queue-persistence.md#91-decision-ledger) is overturned by the owner's 2026-11-18 ruling on [OQ-QM1](#OQ-QM1): `<!-- tillr: item … -->` blocks in documents are retired in favor of one mirrored design item per routed design plus `## Tasks` in companion `<topic>-plan.md` files. `D-QP5` and `D-QP10` are amended so Icebox designs and pieces sit in `blocked` (`reason: icebox`). `D-QP8` and `D-QP11` (`tillr item reconcile`) are retired and replaced by the roadmap mirror.
+- **[Shared documents carry the work](./queue-persistence-ruling.md), `D-RS1` to `D-RS5`.** `D-RS1`, `D-RS2`, `D-RS4` and `D-RS5` (the HTML item-block grammar, where blocks are placed, and post-landing block deletion as the shared receipt) are superseded: companion `-plan.md` files carry the tasks, tasks stay in `<topic>-plan.md` without deletion commits, and `<topic>.md` + `<topic>-plan.md` moving to `stage: BUILT` is the shared completion mark. `D-RS3` (whether commits carry a `Tillr-Item:` line) remains with the owner in [OQ-PR1](../tillr/decision-provenance-review.md#OQ-PR1).
+- **[Decision-provenance review](../tillr/decision-provenance-review.md), [OQ-PR14](../tillr/decision-provenance-review.md#OQ-PR14).** Unblocked by [OQ-QM1](#OQ-QM1): because human-read documents no longer carry build steps or item blocks, no cheap model rewrites wording inside the owner's design documents, and `prose="2"` is retired.
+- **[Convergence](./tillr-convergence.md), `D-TC1` and `D-TC2`.** The cold-rebuild invariant ("delete `.tillr/`, run sync, the queue is the same queue") stands, now backed by mirrored roadmaps and companion `-plan.md` files rather than HTML comments.
+- **[Intake paths](./tillr-intake-paths.md).** The `prose="2"` shibboleth door is retired; design-backed work enters through `<topic>.md` -> `<topic>-plan.md`, and standalone work without a design enters through `tillr item request`.
+- **[The tillr roadmap](../tillr/roadmap.md), entry 9 ("Move the queue's items off this page") and the AutoQA Icebox note.** Fulfilled when the remaining live roadmap blocks move to companion plans and HTML comments are removed.
 
-## 11. What this supersedes or amends
+---
 
-These are owed once the owner has ruled; none is made now, except one sentence in each of the two queue persistence documents saying that the comment is reopened here.
-
-- **Queue persistence, the [`OQ-QP2`](./tillr-queue-persistence.md#91-decision-ledger) row.** Reopened as [OQ-QM1](#OQ-QM1). The row and the text it settled are rewritten to the answer.
-- **[Queue persistence](./tillr-queue-persistence.md#5-the-icebox-and-the-narrowed-meaning-of-blocked-decision-5), `D-QP5`.** Point 3's "never-materialized items create zero rows" and its move to `not-started`, and point 4's "what `blocked` means once parked work leaves it", are replaced by [Section 6](#6-the-icebox). The rule that only the owner iceboxes stands.
-- **[Queue persistence](./tillr-queue-persistence.md#102-the-function-total-partition-three-outcomes-and-the-fourth-case), the reconcile function.** Its case that a document with an open question is never an item contradicts the owner's words, and its "inferred from landed items" case is a guess. The mirror replaces the report, and the command is removed with step 2.
-- **[The ruling](./queue-persistence-ruling.md#1-shared-item-block-shape), `D-RS1`.** The comment's grammar stands as built until [OQ-QM1](#OQ-QM1) is answered; under A it is retired with the comment.
-- **The warning that a routed design has no item**, built from [this roadmap entry](../tillr/roadmap.md#filed-2026-11-15-a-design-on-the-roadmap-always-has-an-item-in-the-queue). Replaced by real items for a mirrored roadmap.
-- **The count of unfinished items that no document declares.** Under A every piece is one, so the count loses its meaning and is removed.
-- **The tillr roadmap's Icebox entry for AutoQA**, which says an open question is what keeps its item from running. The Icebox does that now.
-
-## 12. Risks
+## 13. Risks
 
 | Risk | What limits it |
 | :--- | :--- |
-| The first mirror makes thirteen design and plan runs dispatchable at once, on the most expensive seats | They take their places in roadmap order, and the Icebox is the owner's lever |
-| A plan run stamps a design built that is not | The stamp is a landed commit judged against the plan run's criteria, and it must carry a measurement clause. A wrong stamp is reversed by a stage edit, which reopens the item |
-| Whether the store can move a finished item back to the queue was not checked | The plan confirms it before step 2. If it cannot, a reopened design takes a new id with a version suffix, which the existing clone rule allows once the original is finished |
-| Under A, a fence chosen by a run is wider than a person would have written | The fence is recorded and shown on the item's page before the piece starts, and a piece not yet started may be reshaped |
-| A design that depends on another by its header waits forever on a question nobody will answer | The row names the question and its document, so the wait is visible and has a mover |
-| The scope of today's sync is inferred, not measured: the settings name no roadmaps, so all three are presumably read | Step 2's first test states the scope it found |
+| Turning on the mirror makes every unparked, zero-question outstanding design on `docs/tillr/roadmap.md` dispatchable in roadmap order | They queue in roadmap order behind existing ranked work, and `## Icebox` is the owner's one-line lever to park any design he does not want worked yet |
+| A plan run writes overly broad `Paths:` fences or weak criteria in `<topic>-plan.md`, since humans do not read `<topic>-plan.md` | `tillr item sync` validates paths and criteria before admitting pieces, the compliance officer and landing diff reviewer ([`tillr-diff-review.md`](./tillr-diff-review.md)) see every code diff against `<topic>.md` as well as `<topic>-plan.md`, and `<topic>-plan.md` is still in git for forensic inspection whenever something goes wrong |
+| An agent puts an owner decision inside `<topic>-plan.md` where the owner never looks | Sync and the gate refuse any `question` / `oq` directive in `*-plan.md` (`plan-has-question`), and `planning-actions: none` hides `*-plan.md` from Ready; owner questions can only live in `<topic>.md` |
+| Cold rebuild of `.tillr/state.db` mid-wave (when 2 of 5 tasks in a `DECIDED` plan have landed, before `stage: BUILT`) re-imports all 5 tasks | If [OQ-PR1](../tillr/decision-provenance-review.md#OQ-PR1) restores commit trailers, sync marks the 2 landed from `git log`; otherwise the verification/build check sees their criteria already satisfied on `HEAD` and resolves them via `resolved-elsewhere` (`commit:<sha>`) without re-editing code |
 
-## 13. What this does not cover
+---
 
-- **Turning a built design into a reference page.** A built design owes nothing by the design standard, so it is finished for the queue; Vantage lists it as ready to graduate.
-- **Ordering between designs beyond the roadmap's order.** A `depends-on` entry with no question fragment holds nothing here.
-- **The other two roadmaps.** They mirror when the setting names them.
-- **How a changed design reaches the trunk ahead of its build**, which is [early design landing](./tillr-early-design-landing.md)'s.
-- **The doors by which work with no design enters**, which is [the intake design](./tillr-intake-paths.md)'s.
-- **A kind column on items.** The idea pipeline designs one; a design item is recognized here by its derived id.
+## 14. What this does not cover
+
+- **Graduating a `BUILT` design into evergreen reference docs.** A `BUILT` design owes nothing to the build queue; graduation remains a separate doc-hygiene pass.
+- **Cross-design build ordering beyond `depends-on: [<other>.md#OQ-*]` and roadmap rank.** Piece-level `After:` can name an item ID in another plan when needed; design-to-design build barriers without open questions are not added here.
+- **Whether landed commits carry an item-ID trailer**, which is asked separately in [OQ-PR1](../tillr/decision-provenance-review.md#OQ-PR1).
+
+---
 
 ## Decision Ledger
 
-Rows marked as the owner's quote his words. Every other row is a designer's decision, made from the evidence above, and the owner may overturn it.
+Rows `D-QM1` to `D-QM3` and [OQ-QM1](#OQ-QM1) record the owner's own words of 2026-11-18. Every other row (`D-QM4` to `D-QM22`) is the designer's decision, and the owner may overturn it; nothing is built until he has had the chance to review them.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
-| D-QM1 | **The owner's ruling:** "when we sync a roadmap into tillr, we create an item for every design doc that is still out for any reason … if the queue is empty, that means there are no design docs, regardless of open questions." Questions are not mirrored into a store. | 2026-11-18 | [Section 3](#3-the-invariant) | — |
+| D-QM1 | **The owner's ruling:** "when we sync a roadmap into tillr, we create an item for every design doc that is still out for any reason … if the queue is empty, that means there are no design docs [outstanding], regardless of open questions." Open questions are read live and never mirrored into `.tillr/state.db`. | 2026-11-18 | [Section 3](#3-the-invariant) | — |
 | D-QM2 | **The owner's ruling:** "Icebox items should be loaded too, marked blocked for icebox." | 2026-11-18 | [Section 6](#6-the-icebox) | — |
-| D-QM3 | **The owner's objection:** "tillr decided on its own markdown tags and is silently loading them everywhere? I don't want that." The hidden item comment is treated as not accepted and is asked again. | 2026-11-18 | [Section 7](#7-how-work-in-a-document-becomes-work-tillr-can-start) | — |
-| D-QM4 | **Designer's decision; the owner may overturn this.** Outstanding is stage role open or ready, or no stage; finished is role built or done, or no longer routed. A built design is finished without being graduated. | 2026-11-18 | [Section 2](#2-the-words) | — |
-| D-QM5 | **Designer's decision; the owner may overturn this.** A setting names the roadmaps that mirror; the default is none; this repository names the tillr roadmap only. | 2026-11-18 | [Section 3](#3-the-invariant) | — |
-| D-QM6 | **Designer's decision; the owner may overturn this.** A design item's id is derived from its document's path, and a document keeps one item for life: it is reopened, never cloned. | 2026-11-18 | [Section 4.4](#44-finishing-and-reopening) | — |
-| D-QM7 | **Designer's decision; the owner may overturn this.** Sync alone creates, finishes and reopens design items, each on a recorded fact; tillr never edits a document outside a run. | 2026-11-18 | [Section 4.4](#44-finishing-and-reopening) | — |
-| D-QM8 | **Designer's decision; the owner may overturn this.** The stage word is moved by the item's own runs: a design run moves it to decided, and a plan run that finds nothing unbuilt stamps it built. | 2026-11-18 | [Section 4.2](#42-the-two-runs) | — |
-| D-QM9 | **Designer's decision; the owner may overturn this.** A design outside the Icebox is worked without being asked; the Icebox is the only "not now". | 2026-11-18 | [Section 4.1](#41-what-the-item-is-at-each-point) | — |
-| D-QM10 | **Designer's decision; the owner may overturn this.** A question holds its own document's design item and only the pieces that name it; a plan run waits for every question. | 2026-11-18 | [Section 5](#5-a-question-holds-only-what-names-it) | — |
-| D-QM11 | **Designer's decision; the owner may overturn this.** Everything parked is state `blocked` with reason `icebox` and class parked, counted neither as draining nor as needing the owner. | 2026-11-18 | [Section 6](#6-the-icebox) | — |
-| D-QM12 | **Designer's decision; the owner may overturn this.** An Icebox entry that links no document gets no item and is named in sync's report. | 2026-11-18 | [Section 6](#6-the-icebox) | — |
-| D-QM13 | **Designer's decision; the owner may overturn this.** A design item's fence is its document and its criteria are fixed per run kind, kept in tillr's configuration. | 2026-11-18 | [Section 4.2](#42-the-two-runs) | — |
-| D-QM14 | **Designer's decision; the owner may overturn this.** On the faces: one row per design, the document's own holds ahead of loop-wide ones, movers as `who; act`, and a sync line that names what it loaded. | 2026-11-18 | [Section 8](#8-what-the-owner-sees) | — |
-| D-QM15 | **Designer's decision; the owner may overturn this.** The warning rows and the reconcile report are retired where a roadmap mirrors. | 2026-11-18 | [Section 11](#11-what-this-supersedes-or-amends) | — |
+| D-QM3 | **The owner's ruling:** "tillr decided on its own markdown tags and is silently loading them everywhere? I don't want that." Silent repo-wide scanning of custom `<!-- tillr: item … -->` tags is rejected. | 2026-11-18 | [Section 8](#8-retiring-the-hidden-comments-and-what-is-deleted) | — |
+| <a id="OQ-QM1"></a>[`OQ-QM1`](#OQ-QM1) | **The owner's ruling:** Build planning, research and machine-readable work definitions belong in the companion implementation plan (`<topic>-plan.md`) that grows alongside `<topic>.md` and that humans never look at, keeping the design document free of implementation plumbing; the form of `<topic>-plan.md` may be adapted so tillr reads work from it. Quoted in full in [Section 1](#1-the-direction-and-what-exists-today): *"This is the idea of the design doc versus the implementation plan split. I think the implementation plan is intended to be a document that grows alongside the design doc that saves a research and stuff, but a human would never look at it. And it's the perfect place for something like this, we can change the form of that implementation plan … See what you can do with that."* | 2026-11-18 | [Section 7](#7-the-companion-implementation-plan), [Section 8](#8-retiring-the-hidden-comments-and-what-is-deleted) | — |
+| D-QM4 | **Designer's decision; the owner may overturn this.** Outstanding is stage role `open` or `ready`, or no `stage`; finished is role `built` or `done`, or no longer routed by a mirrored roadmap. | 2026-11-18 | [Section 2](#2-the-words) | — |
+| D-QM5 | **Designer's decision; the owner may overturn this.** `[sync] mirror_roadmaps` in `.tillr.toml` names the roadmaps that mirror; the default is `[]`; this repository names `["docs/tillr/roadmap.md"]`. | 2026-11-18 | [Section 3](#3-the-invariant) | — |
+| D-QM6 | **Designer's decision; the owner may overturn this.** A design item's ID (`item-design-<slug>`) is derived from `<topic>.md`'s path, and a design keeps that single design item for life: sync reopens it with a receipt if the design becomes outstanding again, rather than cloning `-v2`. | 2026-11-18 | [Section 4.4](#44-finishing-and-reopening-a-design-item) | — |
+| D-QM7 | **Designer's decision; the owner may overturn this.** Sync alone creates, finishes and reopens design items and imports companion-plan pieces; sync never edits a Markdown file. | 2026-11-18 | [Section 3](#3-the-invariant), [Section 4.4](#44-finishing-and-reopening-a-design-item) | — |
+| D-QM8 | **Designer's decision; the owner may overturn this.** Stage words are moved by the design item's own runs: a design run moves `<topic>.md` to `DECIDED` (while seeding `<topic>-plan.md` at `SKETCH`), and a plan run stamps `<topic>.md` and `<topic>-plan.md` `BUILT` once all work is verified on `main`. | 2026-11-18 | [Section 4.3](#43-the-two-runs-of-a-design-item) | — |
+| D-QM9 | **Designer's decision; the owner may overturn this.** Any outstanding design on a mirrored roadmap outside `## Icebox` advances automatically when unheld; `## Icebox` is the single "not now" switch. | 2026-11-18 | [Section 4.2](#42-the-state-table-for-a-design-item) | — |
+| D-QM10 | **Designer's decision; the owner may overturn this.** Unanswered questions in `<topic>.md` (and `#OQ-*` entries in `<topic>.md`'s `depends-on`) hold `item-design-<slug>`; pieces in `<topic>-plan.md` are held only by questions listed in their `Waits on questions` field; companion plans themselves may never contain `OQ-*` directives. | 2026-11-18 | [Section 5](#5-a-question-holds-only-what-names-it) | — |
+| D-QM11 | **Designer's decision; the owner may overturn this.** Parked designs and their unfinished pieces sit in state `blocked` with reason `icebox` and class `parked`, counted neither as draining nor as needing the owner. | 2026-11-18 | [Section 6](#6-the-icebox) | — |
+| D-QM12 | **Designer's decision; the owner may overturn this.** An Icebox bullet that links no document creates no item and is surfaced in sync's summary line. | 2026-11-18 | [Section 6](#6-the-icebox) | — |
+| D-QM13 | **Designer's decision; the owner may overturn this.** Both the design run and the plan run of `item-design-<slug>` are fenced mechanically to `<dir>/<stem>.md` and `<dir>/<stem>-plan.md`, with fixed per-run-kind criteria in tillr's configuration. | 2026-11-18 | [Section 4.3](#43-the-two-runs-of-a-design-item) | — |
+| D-QM14 | **Designer's decision; the owner may overturn this.** `tillr view waiting` shows one row per outstanding design, `tillr drain why` orders document holds (`icebox`, `question-open`, `waits-on-pieces`) ahead of loop-wide holds, movers read `<who>; <act>`, and `tillr item sync` prints every roadmap and companion plan it read. | 2026-11-18 | [Section 9](#9-what-the-owner-sees) | — |
+| D-QM15 | **Designer's decision; the owner may overturn this.** `design_without_item` warnings (for mirrored roadmaps) and `tillr item reconcile` are retired and deleted. | 2026-11-18 | [Section 8.2](#82-what-is-deleted-d-qm22), [Section 12](#12-what-this-supersedes-or-amends) | — |
+| D-QM16 | **Designer's decision; the owner may overturn this.** `<dir>/<stem>-plan.md` pairs with `<dir>/<stem>.md` by filename convention + `depends-on: [<stem>.md]`; sync never creates a separate `item-design-*` row for a paired `-plan.md`, even if a roadmap links to it. | 2026-11-18 | [Section 3](#3-the-invariant), [Section 7.1](#71-pairing-visibility-and-lifecycle) | — |
+| D-QM17 | **Designer's decision; the owner may overturn this.** Companion `-plan.md` files carry `planning-actions: none` in YAML frontmatter so Vantage keeps them out of Ready, graduation and compaction lists, and `pack-docs.py` omits `*-plan.md` from external workspace snapshots. | 2026-11-18 | [Section 7.1](#71-pairing-visibility-and-lifecycle), [Section 8.2](#82-what-is-deleted-d-qm22) | — |
+| D-QM18 | **Designer's decision; the owner may overturn this.** Sync reads pieces only from `## Tasks` in companion plans whose `stage` role is `ready` (`DECIDED`), using plain Markdown `### Task <local_id>: <Title>` sections with structured metadata bullets (`Paths`, `After`, `Seat`, `Workflow`, `Waits on questions`, `Claims`, `Judge`, `Express`, `Verify`, `Criteria` -> `c1..cN`) and zero HTML comments; `SKETCH` and `BUILT` plans yield zero new pieces. | 2026-11-18 | [Section 7.2](#72-canonical--tasks-grammar-in-topic-planmd), [Section 7.3](#73-exact-field-mapping-and-validation-rules-d-qm18-d-qm19) | — |
+| D-QM19 | **Designer's decision; the owner may overturn this.** Landing a piece makes no second `chore: retire landed document block` commit; tasks stay in `<topic>-plan.md`, `.tillr/state.db` tracks landed pieces during the build wave, and the final plan run stamps `<topic>.md` and `<topic>-plan.md` `stage: BUILT`. | 2026-11-18 | [Section 7.3](#73-exact-field-mapping-and-validation-rules-d-qm18-d-qm19) | — |
+| D-QM20 | **Designer's decision; the owner may overturn this.** While any piece from `<topic>-plan.md` is unfinished, `item-design-<slug>` sits held as `waits-on-pieces`; when all pieces finish, `item-design-<slug>` runs its verification plan run on the `plan` seat; within a single piece, `planned-build@v1` remains available to split one commit's edits across cheaper sub-seats. | 2026-11-18 | [Section 4.1](#41-how-one-design-item-relates-to-the-work-in-its-companion-plan), [Section 7.3](#73-exact-field-mapping-and-validation-rules-d-qm18-d-qm19) | — |
+| D-QM21 | **Designer's decision; the owner may overturn this.** At cutover, unlanded items in `docs/` move their task specs into their design's `<topic>-plan.md` (preserving existing `item-*` IDs via `- **ID:**`) or remain in `.tillr/state.db` as standalone requests; leftover landed comments and `item-design-autoqa-slices` are removed; future design-less work enters via `tillr item request`, never Markdown comments. | 2026-11-18 | [Section 8.1](#81-fate-of-the-15-existing----tillr-item-----comments-in-docs) | — |
+| D-QM22 | **Designer's decision; the owner may overturn this.** Delete `tools/tillr-item/docshare/`, `parseItemBlocks`, `retire.go` (and the drain's post-land retirement step), `owner_question.go`, `prose="2"` shibboleth checking and in-document rewrite item spawning, `pack-docs.py` directive neutralization, and `roadmap_sections.py`'s `<!-- tillr:` allowance, and enforce a gate check refusing unfenced `<!-- tillr:` comments in `docs/`. | 2026-11-18 | [Section 8.2](#82-what-is-deleted-d-qm22) | — |
+
+---
 
 ## Open Questions
 
-1. 💬 **OQ-QM1: How should work written in a design document become work tillr can start?**
-
-   You approve a design that lists six build steps. Today an agent then adds a hidden comment under each step's heading, giving the step an id and the folders it may change, with its pass conditions as bullets beneath. `tillr item sync` reads those comments from every document under `docs/` and says nothing about the ones it loads. You never ruled on this; an agent settled it on 2026-11-15. There are 17 live comments in 8 files, 7 of them left behind by work that already landed.
-
-   - **A — Nothing in the document.** The design is the queue item. Once it is decided, a planning run cuts it into steps and records each step's folders and pass conditions in tillr's store; you read them on the item's page. Your documents carry no tillr markup, and all 17 comments are deleted. The largest build. Steps can no longer be read or edited in git before they run.
-   - **B — A visible list in the document's header.** Each step is an entry in the block at the top of its document. You see it in the raw file. Ten comments become header entries and seven are deleted. Step details sit far from the prose, and headers grow long.
-   - **C — Wait for Vantage to offer a marker for work.** It has one for questions and none for work. Nothing changes until it does, and the comments stay meanwhile.
-   - **D — Keep the hidden comment, now with your consent.** Nothing is rebuilt. Sync starts naming every document it loads from, and the seven leftovers are deleted.
-
-   <!-- vantage: question id=OQ-QM1 leaning="A: you have already ruled that a planning stage adds the build steps at run time, so a marker in the document is a second home for the same fact. It gives up reviewing steps in git, which is why I hold it less firmly than its reason suggests." -->
-
-   _Leaning:_ A: you have already ruled that a planning stage adds the build steps at run time, so a marker in the document is a second home for the same fact. It gives up reviewing steps in git, which is why I hold it less firmly than its reason suggests.
-
-   **Answer:**
-   > _(empty — fill in when decided)_
+None. [OQ-QM1](#OQ-QM1) was ruled by the owner on 2026-11-18 and is compacted into the [Decision Ledger](#decision-ledger) above.

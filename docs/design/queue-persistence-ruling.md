@@ -23,11 +23,11 @@ vantage:
 
 > **Carried out.** `tillr item sync` reads item blocks from documents (commit `3c215883d`), and the lander writes no trailer. This document stays as the record of the ruling.
 >
-> **Reopened.** The owner did not rule on the item block of `D-RS1`; he objected to it on 2026-11-18, and the question is reopened as [`OQ-QM1`](tillr-queue-mirrors-designs.md#OQ-QM1) in [the queue mirrors the roadmap's outstanding designs](tillr-queue-mirrors-designs.md).
+> **Overturned in part, 2026-11-18.** The owner did not rule on the item block of `D-RS1`; he objected to it on 2026-11-18 and ruled [`OQ-QM1`](tillr-queue-mirrors-designs.md#OQ-QM1) in [the queue mirrors the roadmap's outstanding designs](tillr-queue-mirrors-designs.md): build tasks live in companion `<topic>-plan.md` files that humans never read, and hidden item comments are retired (unbuilt).
 
 **Status:** 2026-11-15. Written as a ruling by a design agent and carried out; no words of the owner's are recorded for any of its decisions. `D-RS1` to `D-RS5` are the designer's decisions, and the owner may overturn any of them (reviewed on 2026-11-18 in [the decision-provenance review](../tillr/decision-provenance-review.md)). As written, nothing below waited on [`OQ-QP1`](tillr-queue-persistence.md#91-decision-ledger), [`OQ-QP2`](tillr-queue-persistence.md#91-decision-ledger), or [a closed question](tillr-queue-persistence.md).
 
-**Needs your ruling:** nothing in this document. The owner's review of its decisions is asked elsewhere: the item block of `D-RS1` as [`OQ-QM1`](tillr-queue-mirrors-designs.md#OQ-QM1), and the loop's deletion of a landed item's block together with the rule that commits name no item (`D-RS1`, `D-RS3`, `D-RS5`) as [`OQ-PR1`](../tillr/decision-provenance-review.md#OQ-PR1).
+**Needs your ruling:** nothing in this document. The item block of `D-RS1` was overturned by the owner on 2026-11-18 in [`OQ-QM1`](tillr-queue-mirrors-designs.md#OQ-QM1) (unbuilt), and whether commits name an item (`D-RS3`) is asked as [`OQ-PR1`](../tillr/decision-provenance-review.md#OQ-PR1).
 
 **Survey of what already exists in the tree:**
 - **Markdown item intake (`tools/tillr-item/`):** Nothing exists. `faceList` in `tools/tillr-item/main.go` exposes only `apply, seed, show, state, decision, mail, grant or verdict`. `tools/tillr-item/item/seed.go` (`Seed`, `planSeed`, `sameDefinition`) reads JSON only and refuses changed definitions; `tools/tillr-item/item/questions.go` (`ReadQuestions`) and `tools/tillr-drain/vantage/vantage.go` (`VantageQuestions`) read open questions only. Zero `<!-- tillr: item` blocks exist outside the example in [`tillr-queue-persistence.md`](tillr-queue-persistence.md).
