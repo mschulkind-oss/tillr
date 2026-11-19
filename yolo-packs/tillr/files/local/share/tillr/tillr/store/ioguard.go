@@ -120,6 +120,35 @@ func reportWholeLogUnderWrite(events int) {
 		time.Now().UTC().Format(time.RFC3339Nano), os.Getpid(), "log-read-under-write", fmt.Sprintf("events=%d caller=%s", events, outsideCaller()))
 }
 
+// wholeLogReadsOutsideWrite counts the whole-log reads (Reader.Events(0)) made inside a
+// read-only transaction in this process; eventLogReads counts every event-log read
+// (Reader.Events, Reader.EventsOfKind, Reader.EventsSelected) in any transaction.
+var wholeLogReadsOutsideWrite, eventLogReads atomic.Int64
+
+// WholeLogReads answers how many times this process has read the whole event log inside a
+// read-only transaction: the reads WholeLogReadsUnderWrite does not count. No lock is held
+// for them, but each one costs the log's whole history, which was 1.3 million events on
+// 2026-11-19, so a planner or a view that makes them per pass is slow however short its
+// writes are. It is observation: a test asserts a plan makes none.
+func WholeLogReads() int64 { return wholeLogReadsOutsideWrite.Load() }
+
+// EventLogReads answers how many event-log reads this process has made, whole or selected,
+// in any transaction. It is observation, for a test that holds a caller to a number of reads
+// that does not grow with the items it reads about.
+func EventLogReads() int64 { return eventLogReads.Load() }
+
+// reportWholeLogRead records one whole-log read inside a read-only transaction and, with
+// TILLR_SQLITE_TRACE=1, writes one `tillr-sqlite ... operation="log-read"` line naming how many
+// events it answered and the caller, the read-side twin of reportWholeLogUnderWrite.
+func reportWholeLogRead(events int) {
+	wholeLogReadsOutsideWrite.Add(1)
+	if os.Getenv("TILLR_SQLITE_TRACE") != "1" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "tillr-sqlite at=%s pid=%d operation=%q phase=read detail=%q\n",
+		time.Now().UTC().Format(time.RFC3339Nano), os.Getpid(), "log-read", fmt.Sprintf("events=%d caller=%s", events, outsideCaller()))
+}
+
 // outsideCaller names the first function on the calling stack outside this package: the
 // fold that asked for the whole log.
 func outsideCaller() string {

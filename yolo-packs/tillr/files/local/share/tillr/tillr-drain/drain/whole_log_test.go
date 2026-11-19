@@ -210,3 +210,54 @@ func isEventKind(x ast.Expr) bool {
 	id, ok := sel.X.(*ast.Ident)
 	return ok && id.Name == "e"
 }
+
+// On 2026-11-19 a pass planned 342 items and computed each one's input version (inputVersion)
+// by folding the pending runs and the item faults afresh: 217 ms an item against the live
+// store's 1.3 million events, 74 seconds a plan, which was nearly all of the loop's
+// 95-second pass. A plan reads the event log a number of times that depends on neither the
+// items it plans nor the worker records the log holds, and never reads the whole log.
+func TestAPlanReadsTheLogABoundedNumberOfTimes(t *testing.T) {
+	plan := func(items, flood int) (reads, whole int64) {
+		ids := []string{}
+		for i := 0; i < items; i++ {
+			ids = append(ids, fmt.Sprintf("item-%d", i))
+		}
+		f, l := passFixture(t, ids...)
+		workerRecordFlood(t, f, flood)
+		reads, whole = store.EventLogReads(), store.WholeLogReads()
+		if got := len(mustPlan(t, l)); got != items {
+			t.Fatalf("the plan answered %d decisions for %d items", got, items)
+		}
+		return store.EventLogReads() - reads, store.WholeLogReads() - whole
+	}
+	fewReads, fewWhole := plan(2, 10)
+	manyReads, manyWhole := plan(8, 400)
+	if fewWhole != 0 || manyWhole != 0 {
+		t.Fatalf("a plan read the whole event log %d and %d times; it reads the kinds it folds", fewWhole, manyWhole)
+	}
+	if manyReads != fewReads {
+		t.Fatalf("a plan of 8 items over 400 worker records read the event log %d times, one of 2 items over 10 read it %d times; the reads must not grow with the items or the records", manyReads, fewReads)
+	}
+}
+
+// A dispatch's application checks the decision's input version, claims the lane and reads
+// the live forks, and all three read the pending runs. Inside one write transaction that is
+// one fold, not three: on 2026-11-19 each fold cost 160 ms against the live store, held
+// under the write lock. The application is a gathered write (gathered.go), which runs one
+// transaction per git or file fact it fetches and one more that commits, so the folds are
+// counted per transaction.
+func TestAnApplicationFoldsThePendingRunsOncePerTransaction(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	p := mustPlan(t, l)[0]
+	fetches := 0
+	writeGatheredHooks.Fetch = func(string) { fetches++ }
+	t.Cleanup(func() { writeGatheredHooks.Fetch = nil })
+	before := pendingFolds.Load()
+	if ok, _, err := l.applyPlan(context.Background(), p, base, l.cfg.Now()); err != nil || !ok {
+		t.Fatalf("dispatch claim: %v %v", ok, err)
+	}
+	if n, transactions := pendingFolds.Load()-before, int64(fetches+1); n != transactions {
+		t.Fatalf("applying a dispatch folded the pending runs %d times in %d write transactions, want one each", n, transactions)
+	}
+}

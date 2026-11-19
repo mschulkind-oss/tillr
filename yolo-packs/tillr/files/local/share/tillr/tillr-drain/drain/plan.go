@@ -406,7 +406,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 	if err != nil {
 		return nil, readFailure(err)
 	}
-	forks, err := liveForks(r, at)
+	forks, err := liveForks(r, at, works)
 	if err != nil {
 		return nil, readFailure(err)
 	}

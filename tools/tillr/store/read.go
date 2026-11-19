@@ -114,10 +114,12 @@ func (r *Reader) QueryRow(query string, args ...any) *sql.Row {
 // With the committed-event cache on (CacheCommittedEvents), only the events committed
 // since this process last read the log are read from the store.
 //
-// Events(0) is the whole log. Inside a write transaction that is a read whose cost grows with
-// the log's whole history while every other writer waits, so it is counted and, with
-// TILLR_SQLITE_TRACE=1, reported (reportWholeLogUnderWrite); a fold that reads some kinds asks
-// for those (EventsOfKind, EventsSelected).
+// Events(0) is the whole log, a read whose cost grows with the log's whole history. Inside a
+// write transaction every other writer waits on it, so it is counted and, with
+// TILLR_SQLITE_TRACE=1, reported (reportWholeLogUnderWrite); outside one it is counted and
+// reported apart (reportWholeLogRead), because a pass that folds the whole log repeatedly is
+// slow even with no lock held. A fold that reads some kinds asks for those (EventsOfKind,
+// EventsSelected).
 func (r *Reader) Events(since int64) ([]event.Event, error) {
 	var out []event.Event
 	var err error
@@ -126,8 +128,13 @@ func (r *Reader) Events(since int64) ([]event.Event, error) {
 	} else {
 		out, err = events(r.ctx, r.q, since)
 	}
-	if err == nil && since == 0 && r.readValues == nil {
-		reportWholeLogUnderWrite(len(out))
+	eventLogReads.Add(1)
+	if err == nil && since == 0 {
+		if r.readValues == nil {
+			reportWholeLogUnderWrite(len(out))
+		} else {
+			reportWholeLogRead(len(out))
+		}
 	}
 	return out, err
 }
@@ -172,6 +179,7 @@ func (sel EventSelection) selects(e event.Event) bool {
 // cache on, its cost is the events it answers rather than the log's length, which is what a
 // fold inside a write transaction needs: the log is mostly worker records few folds read.
 func (r *Reader) EventsSelected(since int64, sel EventSelection) ([]event.Event, error) {
+	eventLogReads.Add(1)
 	if len(sel.Kinds) == 0 && len(sel.ObjectTypes) == 0 {
 		return nil, nil
 	}
