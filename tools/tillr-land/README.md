@@ -63,9 +63,12 @@ since green with both bounds disabled.
   the caller's word for it.
 - **The owner's disposition is checked immediately before landing.** An item stored as
   `closed` or `resolved-elsewhere` is refused as `item-not-landable`, even if its gate
-  already passed. The store write lock covers this check, the trunk move, and the
-  receipt, so a concurrent close either prevents the move or sees the successful
-  landing receipt and refuses. Standalone stores with no item table remain usable.
+  already passed. The check is made in the short write that claims the landing (below),
+  and the claim row it writes in `landing_claims` refuses `tillr-item close` and a move to
+  `resolved-elsewhere` with `landing-in-progress` until the receipt write removes it, so a
+  concurrent close either wins before the claim and the landing is refused, or is refused
+  itself and then sees the receipt (`already-landed`). Standalone stores with no item table
+  remain usable.
 - **One trunk landing, one squash.** `Trunk.Squash` writes exactly one commit —
   `git merge-tree --write-tree` to compute the tree, `git commit-tree` to write the commit —
   with the repository's scope-checked identity and the head's own message. The commit
@@ -73,12 +76,25 @@ since green with both bounds disabled.
   [`queue-persistence-ruling.md`](../../docs/design/queue-persistence-ruling.md#3-landing-receipts-without-commit-trailers)), and
   `Trunk.Move` fast-forwards the trunk onto it. The landed tree is the tree the verdict
   judged unless the trunk moved, and the row records both so a reader can tell.
-- **Preparation does not hold SQLite's writer.** Under `land.lock`, ancestry, squash,
-  clash checks and range preservation happen outside SQLite transactions. The final
-  write transaction rechecks disposition, history inputs and trunk expectations before
-  Move and receipt. A changed preparation input is an explicit error, not automatic
-  replay. The final Move, fork-cache refresh and history-retention refs can still be slow; see the
-  [contention recovery boundary](../../docs/recovery/sqlite-contention/README.md#exact-residual-limitation).
+- **No store write is open while git runs or a file is touched.** Under `land.lock`,
+  ancestry, squash, clash checks and range preservation happen outside SQLite
+  transactions. The publication is then three steps: a short write that rechecks
+  disposition, an unrecorded receipt and the history row, and claims the landing in
+  `landing_claims`; the trunk reread, the Move, the fork-cache refresh and the
+  history-retention refs, with nothing held; and a short write that records the receipt and
+  the history row and deletes the claim. A changed preparation input is an explicit error,
+  not automatic replay. Every git command the lander starts passes the store's I/O guard
+  (`store.CheckIO`, [`ioguard.go`](../tillr/store/ioguard.go)), which refuses it when the
+  calling goroutine holds an open store write, so a git command inside a write fails where it
+  is written rather than stalling every other writer.
+- **A kill between the steps is finished by the next attempt.** After the claim and before
+  the Move, the marker names a commit the trunk does not carry: the same run's retry squashes
+  again and its claim replaces the old one. After the Move and before the receipt, the trunk
+  carries the marker's commit: the retry recovers it, moves nothing, records the landing once
+  and deletes the claim in that receipt. A claim whose commit no trunk carries is cleared by
+  the next landing of any run, because `land.lock` proves no landing is in flight; one whose
+  commit is on the trunk stays, and keeps the item unclosable, until its run's retry records
+  it. [`contention_test.go`](contention_test.go) kills a lander at both points.
 - **A retry of a run does not squash or publish its change a second time.** Git's Move and
   the SQLite receipt are two writes, and a crash can keep the first and lose the second.
   Before Move, the lander points `refs/tillr/landed/<run_id>` at the squash commit. That ref
@@ -103,7 +119,7 @@ since green with both bounds disabled.
   [`contention_test.go`](contention_test.go). The [known cases](#known-cases-the-marker-does-not-settle)
   below are where this answer is not what an operator might expect.
 - **The lease on the trunk excludes other landers, never the gate.** `land.lock` spans
-  preparation and the final Move/receipt window. The gate runs in another process before
+  preparation and the whole publication, claim to receipt. The gate runs in another process before
   `pass` is called.
 - **A non-landing pins its head.** A squash conflict or a refusal, `already-on-trunk` included, answers
   `refs/tillr/runs/<run_id>` at the head before the lock is released, so a head the gate saw
@@ -181,8 +197,9 @@ by hand produces the same row as an unattended one.
 - **A trunk that no longer contains the loop's observed tip** — `pass --observed-trunk`
   checks ancestry under the landing lock and records `trunk-rewritten`. For a drain
   store it also reconciles the durable observation and lost tip, then revalidates that
-  snapshot in the final write transaction, so a stale request cannot bypass a newly
-  recorded hold. Successful
+  snapshot in the claim's write, so a stale request cannot bypass a newly
+  recorded hold. A history row another observer rewrites between the claim and the receipt
+  is that observer's and is left as it is. Successful
   landings advance the stored observation and its Git object-retention ref. This is not a
   comparison with the candidate's base: a reset to that base can still remove history
   the loop observed later. The drain retains the candidate and its verdict until history
@@ -210,18 +227,18 @@ for the owner. The rule, in the order the lander applies it:
 1. **Paths the landing does not change are not touched.** No rewrite, no index change, no stash:
    the same bytes, inode and modification time, whether the file is modified, staged, untracked,
    ignored or merely open. The checkout changes only the paths the landing changed.
-2. **Everything is prepared before the store's write transaction opens**, under the landing lock,
+2. **Everything is prepared before the landing is claimed**, under the landing lock,
    after the verdict, the squash and the observed-trunk check, and none of it changes the working
    tree or the index: the prediction, the final disk content and index entry of each touched path,
    and the recovery copy of the owner's content on them. The recovery copy is a ref under
    `refs/tillr/owner-recovery/<run>` (never `refs/stash`, which is the owner's list). It copies;
    nothing leaves the disk. A landing that records no fault removes it.
-3. **The write transaction does the comparison and the final move only**: the checkout still
+3. **The publication, with no store write open, does the comparison and the final move only**: the checkout still
    has the trunk branch, the trunk is at the tip the prediction read, and every touched path (disk
    and index) still holds what the prediction read. Then it replaces each file once, writes the
    touched index entries, and moves the trunk ref with a guarded `update-ref` (carrying
-   `-c tillr.move=final`, the marker the tests' Git wrappers stop on). `tillr item close` is still
-   excluded until the receipt, as before.
+   `-c tillr.move=final`, the marker the tests' Git wrappers stop on). `tillr item close` is
+   refused by the landing's claim until the receipt.
 4. **A path whose final content equals what is on disk is not rewritten.** A touched file is written
    to a temporary file beside it and renamed over the path: one replacement, a new inode. The
    intermediate states that exist are a temporary file and the half-installed set of paths, inside
@@ -275,7 +292,7 @@ any rollback), the lander holds `<git dir>/index.lock`, the lock Git's own check
 take. A branch switch or an `add` cannot happen in the middle: it fails with Git's usual lock message
 and can be run again a moment later, and a rollback never overwrites something the owner did. The
 lander checks the branch after taking the lock, so a switch that won leaves the other branch's files
-unwritten. It never waits inside the write transaction: a lock someone else holds is ordinary Git
+unwritten. It never waits inside the publication: a lock someone else holds is ordinary Git
 work in progress, which is contention and not a fact about the owner's content. The attempt is
 rolled back, nothing is held, refused or recorded, and the landing tries again after a short pause
 (25 ms doubling to 1 s; the request's context ends it). The lock is created by linking a file that

@@ -559,7 +559,8 @@ func (l *Loop) holdJudge(ctx context.Context, c Candidate, judgeID, reason, deta
 	at := l.cfg.Now()
 	return appendJudgmentThen(ctx, l.cfg.Store, RefusalKind, "run", judgeID, map[string]any{"item_id": c.ItemID, "lane_id": c.LaneID, "tick_id": c.TickID, "writer_run_id": writer, "step": reason, "detail": detail}, at, func(tx *store.Tx) error {
 		c.RunID = writer
-		return l.answerLandingRefusal(tx, c, refusalPayload{Step: reason, Detail: detail}, at)
+		// A judge's refusal carries no checks, so it quotes no file.
+		return l.answerLandingRefusal(tx, c, refusalPayload{Step: reason, Detail: detail}, refusalEvidence{}, at)
 	})
 }
 func judgeFailureDetail(r *store.Reader, id, reason string) (string, error) {

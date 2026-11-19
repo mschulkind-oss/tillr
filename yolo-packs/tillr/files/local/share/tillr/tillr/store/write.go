@@ -59,6 +59,9 @@ func (s *Store) writeTx(ctx context.Context, operation string, fn func(*Tx) erro
 		return fmt.Errorf("store: beginning the write transaction: %w", err)
 	}
 	trace.record("acquired", nil)
+	// The I/O guard (ioguard.go) sees this goroutine as a writer until the commit or the
+	// rollback has released the lock.
+	defer enterWrite()()
 	// Rollback after a successful commit answers ErrTxDone, which is the state the
 	// transaction is already in; the commit's own error is the one reported.
 	defer tx.Rollback()

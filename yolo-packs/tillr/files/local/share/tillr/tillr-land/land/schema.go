@@ -64,6 +64,21 @@ CREATE TABLE IF NOT EXISTS landings (
 );
 
 CREATE INDEX IF NOT EXISTS landings_item_run ON landings (item_id, run_id);
+
+-- A landing that began publishing and has not recorded its receipt: written by the
+-- publication's first short write, deleted by the write that records the receipt. While a
+-- row names an item, the item cannot be closed or resolved elsewhere (tillr-item reads it).
+CREATE TABLE IF NOT EXISTS landing_claims (
+  run_id       TEXT PRIMARY KEY,
+  item_id      TEXT NOT NULL,
+  base_ref     TEXT NOT NULL,
+  head_sha     TEXT NOT NULL,
+  commit_sha   TEXT NOT NULL,
+  trunk_before TEXT NOT NULL,
+  claimed_at   INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS landing_claims_item ON landing_claims (item_id);
 CREATE INDEX IF NOT EXISTS landings_trunk ON landings (trunk_before, trunk_after);
 
 -- Legacy: the retired candidate queue. Read-only; nothing writes it.

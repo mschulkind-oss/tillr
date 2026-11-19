@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -169,36 +170,179 @@ func TestGitPreparationAllowsHeartbeatAndClose(t *testing.T) {
 	}
 }
 
-func TestFinalMoveExcludesCloseUntilReceipt(t *testing.T) {
+// The trunk moves with no store write open (criteria c1, c2 and c4 of "Move the trunk in a
+// landing with no write open", docs/design/tillr-storage.md): while the move's git command
+// is blocked, this process holds no write transaction, another connection's heartbeat write
+// commits, and a close of the item is refused by the landing's claim rather than waiting on
+// a lock. Releasing git lets the landing record its receipt, and the close then sees it.
+func TestFinalMoveHoldsNoStoreWriteAndTheClaimRefusesClose(t *testing.T) {
 	f := newContentionFixture(t)
 	entered, release := stallGit(t, "tillr.move=final")
 	done := startLanding(t, context.Background(), f)
 	awaitGit(t, entered)
-	closed := make(chan string, 1)
-	go func() { out, err := f.close(); closed <- strings.TrimSpace(string(out)) + " | " + errorString(err) }()
-	select {
-	case out := <-closed:
+	fail := func(format string, args ...any) {
+		t.Helper()
 		os.WriteFile(release, nil, 0600)
 		finishLanding(t, done)
-		t.Fatalf("Close passed final Move exclusion: %s", out)
-	// A floor again: this only gives a wrongly admitted Close time to appear, so load can make
-	// the check weaker but cannot make it fail.
-	case <-time.After(250 * time.Millisecond):
+		t.Fatalf(format, args...)
+	}
+	if n := store.OpenWriteTransactions(); n != 0 {
+		fail("a store write is open while the trunk move's git runs: %d", n)
+	}
+	if err := f.writer.WriteTx(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`INSERT INTO drain_sessions VALUES('session-move', ?) ON CONFLICT(session_id) DO UPDATE SET refreshed_at=excluded.refreshed_at`, time.Now().UnixMilli())
+		return err
+	}); err != nil {
+		fail("a heartbeat did not commit while the move's git was blocked: %v", err)
+	}
+	if out, err := f.close(); err == nil || !strings.Contains(string(out), "landing-in-progress") {
+		fail("close between the claim and the receipt was not refused by the claim: %v %s", err, out)
 	}
 	os.WriteFile(release, nil, 0600)
 	a := finishLanding(t, done)
 	if a.err != nil || !a.landing.Landed() {
 		t.Fatalf("Land: %+v %v", a.landing, a.err)
 	}
-	select {
-	case out := <-closed:
-		if !strings.Contains(out, "already-landed") {
-			t.Fatalf("Close did not see committed receipt: %s", out)
-		}
-	case <-time.After(hangGuard):
-		t.Fatal("Close did not finish")
+	assertLandingCount(t, f, 1)
+	assertNoClaims(t, f)
+	if out, err := f.close(); err == nil || !strings.Contains(string(out), "already-landed") {
+		t.Fatalf("Close did not see the committed receipt: %v %s", err, out)
 	}
 }
+
+// A landing killed after the trunk moved and before its receipt (criterion c3) leaves the
+// moved trunk and its claim. The same run's next attempt moves nothing, records the landing
+// once and removes the claim in that receipt; until then the claim refuses a close.
+func TestALandingKilledAfterTheMoveIsFinishedByTheRetry(t *testing.T) {
+	f := newContentionFixture(t)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperLandThenKillAfterMove$")
+	cmd.Env = append(os.Environ(), "TILLR_HELPER_KILL=1", "HELPER_DB="+f.db, "HELPER_REPO="+f.f.dir,
+		"HELPER_REF="+f.f.ref, "HELPER_BASE="+f.f.baseSHA, "HELPER_HEAD="+f.f.headSHA, "HELPER_TREE="+f.f.treeSHA,
+		"GIT_CONFIG_GLOBAL="+deployedConfig(t, fixtureName, fixtureEmail))
+	err := cmd.Run()
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
+		t.Fatalf("the helper was not killed: %v", err)
+	}
+	moved := f.f.trunk(t)
+	if moved == f.f.baseSHA {
+		t.Fatal("the helper was killed before the trunk moved")
+	}
+	assertLandingCount(t, f, 0)
+	if out, err := f.close(); err == nil || !strings.Contains(string(out), "landing-in-progress") {
+		t.Fatalf("close after a killed publication was not refused by its claim: %v %s", err, out)
+	}
+	a := finishLanding(t, startLanding(t, context.Background(), f))
+	if a.err != nil || !a.landing.Landed() || a.landing.TrunkAfter != moved || a.landing.TrunkBefore != f.f.baseSHA {
+		t.Fatalf("the retry did not record the moved trunk %s: %+v %v", moved, a.landing, a.err)
+	}
+	if tip := f.f.trunk(t); tip != moved {
+		t.Fatalf("the retry moved the trunk again, to %s", tip)
+	}
+	assertLandingCount(t, f, 1)
+	assertNoClaims(t, f)
+	// A second retry is answered by the receipt: nothing is moved or recorded again.
+	if a := finishLanding(t, startLanding(t, context.Background(), f)); a.err != nil || a.landing.TrunkAfter != moved {
+		t.Fatalf("a retry of the recorded landing: %+v %v", a.landing, a.err)
+	}
+	assertLandingCount(t, f, 1)
+}
+
+func TestHelperLandThenKillAfterMove(t *testing.T) {
+	if os.Getenv("TILLR_HELPER_KILL") == "" {
+		t.Skip("run by a test that kills it")
+	}
+	ctx := context.Background()
+	s, err := store.Open(ctx, os.Getenv("HELPER_DB"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trunk, err := land.OpenTrunk(os.Getenv("HELPER_REPO"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, head, tree := os.Getenv("HELPER_BASE"), os.Getenv("HELPER_HEAD"), os.Getenv("HELPER_TREE")
+	req := land.LandingRequest{ItemID: "item_042", RunID: "run-contention", BaseRef: os.Getenv("HELPER_REF"), BaseSHA: base, HeadSHA: head, At: time.Date(2026, 11, 16, 13, 0, 0, 0, time.UTC), Verdict: land.Verdict{VerdictID: "verdict-contention", BaseSHA: base, TreeSHA: tree, Result: land.VerdictPass}}
+	land.OwnerHooks.AfterTrunkMove = func() { syscall.Kill(os.Getpid(), syscall.SIGKILL) }
+	land.Land(ctx, s, trunk, req)
+	t.Fatal("the helper was not killed")
+}
+
+// A landing killed after its claim and before the move leaves a claim whose commit no trunk
+// carries. The same run's retry lands normally, and its receipt replaces the claim.
+func TestALandingKilledBeforeTheMoveIsLandedByTheRetry(t *testing.T) {
+	f := newContentionFixture(t)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestHelperLandThenKillBeforeMove$")
+	cmd.Env = append(os.Environ(), "TILLR_HELPER_KILL=1", "HELPER_DB="+f.db, "HELPER_REPO="+f.f.dir,
+		"HELPER_REF="+f.f.ref, "HELPER_BASE="+f.f.baseSHA, "HELPER_HEAD="+f.f.headSHA, "HELPER_TREE="+f.f.treeSHA,
+		"GIT_CONFIG_GLOBAL="+deployedConfig(t, fixtureName, fixtureEmail))
+	err := cmd.Run()
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
+		t.Fatalf("the helper was not killed: %v", err)
+	}
+	if tip := f.f.trunk(t); tip != f.f.baseSHA {
+		t.Fatalf("the helper moved the trunk before it was killed: %s", tip)
+	}
+	a := finishLanding(t, startLanding(t, context.Background(), f))
+	if a.err != nil || !a.landing.Landed() || a.landing.TrunkAfter != f.f.trunk(t) {
+		t.Fatalf("the retry did not land: %+v %v", a.landing, a.err)
+	}
+	assertLandingCount(t, f, 1)
+	assertNoClaims(t, f)
+}
+
+func TestHelperLandThenKillBeforeMove(t *testing.T) {
+	if os.Getenv("TILLR_HELPER_KILL") == "" {
+		t.Skip("run by a test that kills it")
+	}
+	ctx := context.Background()
+	s, err := store.Open(ctx, os.Getenv("HELPER_DB"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trunk, err := land.OpenTrunk(os.Getenv("HELPER_REPO"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	base, head, tree := os.Getenv("HELPER_BASE"), os.Getenv("HELPER_HEAD"), os.Getenv("HELPER_TREE")
+	req := land.LandingRequest{ItemID: "item_042", RunID: "run-contention", BaseRef: os.Getenv("HELPER_REF"), BaseSHA: base, HeadSHA: head, At: time.Date(2026, 11, 16, 13, 0, 0, 0, time.UTC), Verdict: land.Verdict{VerdictID: "verdict-contention", BaseSHA: base, TreeSHA: tree, Result: land.VerdictPass}}
+	land.OwnerHooks.Publishing = func() { syscall.Kill(os.Getpid(), syscall.SIGKILL) }
+	land.Land(ctx, s, trunk, req)
+	t.Fatal("the helper was not killed")
+}
+
+// A claim another run left, whose move never happened, is cleared by the next landing,
+// so an abandoned claim cannot keep an item unclosable.
+func TestAStaleClaimIsClearedByTheNextLanding(t *testing.T) {
+	f := newContentionFixture(t)
+	if err := f.writer.WriteTx(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Exec(`INSERT INTO landing_claims (run_id, item_id, base_ref, head_sha, commit_sha, trunk_before, claimed_at) VALUES ('run-abandoned', 'item_other', ?, ?, ?, ?, 1)`,
+			f.f.ref, f.f.headSHA, f.f.headSHA, f.f.baseSHA)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if a := finishLanding(t, startLanding(t, context.Background(), f)); a.err != nil || !a.landing.Landed() {
+		t.Fatalf("Land: %+v %v", a.landing, a.err)
+	}
+	assertNoClaims(t, f)
+}
+
+func assertNoClaims(t *testing.T, f contentionFixture) {
+	t.Helper()
+	if err := f.writer.ReadTx(context.Background(), func(r *store.Reader) error {
+		var n int
+		err := r.QueryRow(`SELECT count(*) FROM landing_claims`).Scan(&n)
+		if err == nil && n != 0 {
+			t.Errorf("landing claims left: %d", n)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func errorString(err error) string {
 	if err == nil {
 		return "success"

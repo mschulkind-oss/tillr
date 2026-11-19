@@ -137,22 +137,30 @@ func (t *Trunk) historyAncestor(old, tip string) (bool, error) {
 	return false, Externalf("checking trunk ancestry: %s", failureText(stderr, err))
 }
 
-func (t *Trunk) saveHistory(tx *store.Tx, h *trunkHistory) error {
-	// The observed and lost refs retain objects independently of reflogs. Pin the
-	// lost object first; overwriting observed must never make stored history dangling.
+// pinHistory points the trunk-history retention refs at the tips h names, before the row
+// that names them is written and with no store write open. The observed and lost refs retain
+// objects independently of reflogs. Pin the lost object first; overwriting observed must
+// never make stored history dangling. The lost ref is removed only after the row stops
+// naming a lost tip (dropLostHistoryRef).
+func (t *Trunk) pinHistory(h *trunkHistory) error {
 	if h.lost != "" {
 		if _, err := t.git("update-ref", "refs/tillr/trunk-history/lost", h.lost); err != nil {
 			return err
 		}
 	}
-	if _, err := t.git("update-ref", "refs/tillr/trunk-history/observed", h.observed); err != nil {
-		return err
-	}
-	if h.lost == "" {
-		if _, err := t.git("update-ref", "-d", "refs/tillr/trunk-history/lost"); err != nil {
-			return err
-		}
-	}
+	_, err := t.git("update-ref", "refs/tillr/trunk-history/observed", h.observed)
+	return err
+}
+
+// dropLostHistoryRef removes the lost-tip retention ref once the stored row names none.
+func (t *Trunk) dropLostHistoryRef() error {
+	_, err := t.git("update-ref", "-d", "refs/tillr/trunk-history/lost")
+	return err
+}
+
+// writeHistoryRow writes the trunk history row inside the caller's write. It runs no git:
+// pinHistory has already pinned what the row names.
+func writeHistoryRow(tx *store.Tx, h *trunkHistory) error {
 	_, err := tx.Exec(`INSERT INTO trunk_history(id,observed_tip,lost_tip) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET observed_tip=excluded.observed_tip,lost_tip=excluded.lost_tip`, h.observed, h.lost)
 	if err != nil {
 		return Internalf("writing trunk history: %v", err)

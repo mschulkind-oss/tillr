@@ -1048,7 +1048,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			}
 			for _, row := range rows {
 				if row.ItemID == p.decision.ItemID {
-					plainInputs, err = currentRunInputs(r, row, l.cfg.Policy, l.cfg.Root, l.build)
+					plainInputs, err = currentRunInputs(ctx, r, row, l.cfg.Policy, l.cfg.Root, l.build)
 					return err
 				}
 			}
@@ -1066,7 +1066,12 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 	defer s.Close()
 	applied := false
 	var work *pendingWork
-	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+	// The decision asks git (the trunk tip, the green pointer, ancestry, a block's body
+	// at a commit) and files (the item's definition body, its workflow) about rows it
+	// reads here, so the write is gathered: each of those is fetched with no write open,
+	// and the write runs again from its first statement with the answer (gathered.go).
+	err = writeGathered(ctx, s, func(ctx context.Context, tx *store.Tx) error {
+		applied, work, nextGeneration = false, nil, *generation
 		current, err := currentDefinition(tx.Reader(), p)
 		if err != nil || !current {
 			return err
@@ -1118,7 +1123,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				if row.ItemID != d.ItemID {
 					continue
 				}
-				now, err := currentRunInputs(tx.Reader(), row, l.cfg.Policy, l.cfg.Root, l.build)
+				now, err := currentRunInputs(ctx, tx.Reader(), row, l.cfg.Policy, l.cfg.Root, l.build)
 				if err != nil {
 					return err
 				}

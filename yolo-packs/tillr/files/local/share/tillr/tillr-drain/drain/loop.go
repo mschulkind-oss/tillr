@@ -3173,15 +3173,21 @@ func (l *Loop) revParse(ctx context.Context, dir, rev string) (string, error) {
 // git runs one git command in a directory and answers its stdout. A failure is reported
 // with git's own stderr, because "a git command failed" is not a diagnostic an operator can
 // act on at 3am.
+//
+// Inside a gathered write (writeGathered) the answer is the one gathered before the write;
+// a command that changes the repository must never be issued there, because a gathered
+// answer is a read.
 func (l *Loop) git(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	if err != nil {
-		return "", Externalf("git %s in %s: %v: %s", strings.Join(args, " "), dir, err, strings.TrimSpace(stderr.String()))
-	}
-	return string(out), nil
+	return gather(ctx, gitKey("stdout", dir, args), func(ctx context.Context) (string, error) {
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		if err != nil {
+			return "", Externalf("git %s in %s: %v: %s", strings.Join(args, " "), dir, err, strings.TrimSpace(stderr.String()))
+		}
+		return string(out), nil
+	})
 }
 
 // countPtr answers a pointer to a copy of n, for Pass's pointer fields.

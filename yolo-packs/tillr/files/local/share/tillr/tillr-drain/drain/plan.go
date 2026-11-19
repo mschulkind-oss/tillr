@@ -343,7 +343,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 		if row.State != def.Ready || unshared[row.ItemID] {
 			continue
 		}
-		inputs[row.ItemID], err = currentRunInputs(r, row, policy, root, build)
+		inputs[row.ItemID], err = currentRunInputs(context.Background(), r, row, policy, root, build)
 		if err != nil {
 			return nil, readFailure(err)
 		}

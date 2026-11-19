@@ -108,6 +108,15 @@ walk is an error, not silently omitted. Nothing changes the existing retention p
   [the supported ways](#backing-up-or-copying-the-store). Read-only opens preserve the
   journal mode, never migrating or repairing it. A schema version this binary does not
   support is refused rather than migrated in place.
+- **A write transaction does no I/O but the store's own.** `WriteTx` begins
+  `IMMEDIATE`, so it holds SQLite's one write lock from its first statement to its commit,
+  and every other writer waits behind it. A git command, a subprocess or a file read
+  inside it would make them all wait on that too. The store records which goroutines hold
+  an open write ([`ioguard.go`](https://github.com/mschulkind-oss/tillr/blob/main/tillr/store/ioguard.go)): `store.CheckIO` refuses I/O
+  from inside one (the lander's git wrapper calls it, so a git command under a write
+  fails), and `store.ReportIO` is the observing form for wrappers whose callers are not
+  all converted yet, writing a `tillr-sqlite ... operation="io-under-write"` line when
+  `TILLR_SQLITE_TRACE=1`. I/O a write's callback hands to another goroutine is not seen.
 - **A fixture store is seedable and a live store is not.** `init` decides which one it
   made; a live store refuses `seed` outright, because a store that has been drained is not
   a store to replace.

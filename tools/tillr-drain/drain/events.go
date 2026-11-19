@@ -282,11 +282,12 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 		return err
 	}
 	at := l.cfg.Now().UTC()
+	evidence := l.readRefusalEvidence(candidate.RunID, payload)
 	return appendJudgmentThen(ctx, l.cfg.Store, RefusalKind, "run", candidate.RunID, payload, at, func(tx *store.Tx) error {
 		if repeated {
 			return nil
 		}
-		return l.answerLandingRefusal(tx, candidate, payload, at)
+		return l.answerLandingRefusal(tx, candidate, payload, evidence, at)
 	})
 }
 

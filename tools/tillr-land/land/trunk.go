@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 // Trunk is the git ref a candidate lands on. It is the one external write this utility
@@ -659,6 +661,11 @@ func (t *Trunk) runGitIn(dir string, extraEnv []string, args ...string) (string,
 
 // runGitStdin is runGitIn with the command's standard input.
 func (t *Trunk) runGitStdin(dir string, stdin []byte, extraEnv []string, args ...string) (string, string, error) {
+	// No git command starts while this goroutine holds the store's write lock: the guard
+	// refuses it here, before the process exists (tools/tillr/store/ioguard.go).
+	if err := store.CheckIO("git " + gitSubcommand(args)); err != nil {
+		return "", "", err
+	}
 	if OwnerHooks.GitCall != nil {
 		OwnerHooks.GitCall(dir, args)
 	}
@@ -691,6 +698,16 @@ func (t *Trunk) runGitStdin(dir string, stdin []byte, extraEnv []string, args ..
 func (t *Trunk) traceGit(dir string, args []string, phase string, started time.Time, err error) {
 	// Keep commit messages and environment out of diagnostics; the subcommand is
 	// enough to correlate the remaining Move/history spans with SQLite's writer.
+	command := gitSubcommand(args)
+	errorText := ""
+	if err != nil {
+		errorText = err.Error()
+	}
+	fmt.Fprintf(os.Stderr, "tillr-git at=%s pid=%d repo=%q command=%q phase=%s elapsed=%s error=%q\n", time.Now().UTC().Format(time.RFC3339Nano), os.Getpid(), dir, command, phase, time.Since(started), errorText)
+}
+
+// gitSubcommand names a git invocation by its subcommand, past one leading `-c key=value`.
+func gitSubcommand(args []string) string {
 	command := ""
 	if len(args) > 0 {
 		command = args[0]
@@ -698,11 +715,7 @@ func (t *Trunk) traceGit(dir string, args []string, phase string, started time.T
 	if command == "-c" && len(args) > 2 {
 		command = args[2]
 	}
-	errorText := ""
-	if err != nil {
-		errorText = err.Error()
-	}
-	fmt.Fprintf(os.Stderr, "tillr-git at=%s pid=%d repo=%q command=%q phase=%s elapsed=%s error=%q\n", time.Now().UTC().Format(time.RFC3339Nano), os.Getpid(), dir, command, phase, time.Since(started), errorText)
+	return command
 }
 
 // IsAncestor answers whether ancestor is reachable from descendant in this repository. It

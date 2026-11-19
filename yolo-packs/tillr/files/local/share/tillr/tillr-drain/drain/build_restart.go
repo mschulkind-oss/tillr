@@ -34,7 +34,10 @@ func (l *Loop) migrateBuildRuns(ctx context.Context, result *LoopResult) error {
 	}
 	defer s.Close()
 	var readers []*pendingWork
-	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+	// Each pending run's adapter declares its pause kind in a file; the write is gathered so
+	// those files are read with no write open (gathered.go).
+	err = writeGathered(ctx, s, func(ctx context.Context, tx *store.Tx) error {
+		readers = nil
 		works, err := readPending(tx.Reader())
 		if err != nil {
 			return err
@@ -62,7 +65,11 @@ func (l *Loop) migrateBuildRuns(ctx context.Context, result *LoopResult) error {
 			if f, ok := facts[id]; !ok || f.Inputs == nil || f.Inputs.TillrBuild == hash {
 				continue
 			}
-			if adapterPauseKind(l.cfg.Root, d.RunRequest) != run.PauseAtGap {
+			kind, err := adapterPauseKind(ctx, l.cfg.Root, d.RunRequest)
+			if err != nil {
+				return err
+			}
+			if kind != run.PauseAtGap {
 				continue
 			}
 			rec, err := terminalRecord(tx.Reader(), id)
@@ -136,19 +143,27 @@ func (l *Loop) migrateBuildRuns(ctx context.Context, result *LoopResult) error {
 // adapterPauseKind answers the pause kind req's adapter declares in the pause-kind file
 // beside it, or "" when it declares none. A relative adapter path names the repository's
 // file, as the backend policy spells it.
-func adapterPauseKind(root string, req *run.Request) string {
+// The only error is a gathered write's miss (gathered.go); an unreadable file declares none.
+func adapterPauseKind(ctx context.Context, root string, req *run.Request) (string, error) {
 	if req == nil || len(req.Command) == 0 {
-		return ""
+		return "", nil
 	}
 	adapter := req.Command[0]
 	if !filepath.IsAbs(adapter) {
 		adapter = filepath.Join(root, adapter)
 	}
-	raw, err := os.ReadFile(filepath.Join(filepath.Dir(adapter), "pause-kind"))
-	if err != nil {
-		return ""
+	path := filepath.Join(filepath.Dir(adapter), "pause-kind")
+	raw, err := gather(ctx, "read "+path, func(context.Context) (string, error) {
+		raw, err := os.ReadFile(path)
+		return string(raw), err
+	})
+	if isGatherMiss(err) {
+		return "", err
 	}
-	return strings.TrimSpace(string(raw))
+	if err != nil {
+		return "", nil
+	}
+	return strings.TrimSpace(raw), nil
 }
 
 // recordResumedBuild copies the last dispatch fact, changing only its build hash.

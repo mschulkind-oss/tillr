@@ -152,8 +152,13 @@ func (l *Loop) intakeLandingOffer(ctx context.Context, d Decision, rec run.Recor
 		return landingOfferAbsent, err
 	}
 	defer db.Close()
+	// The validation reads the lane's HEAD and its session file: I/O, so it runs here,
+	// with no write open. Its inputs are all in hand, and the write below uses its answer
+	// only where it used to call it.
+	validated, validateErr := l.validateLandingOffer(ctx, d, rec, mainSHA, offer)
 	var intake landingOfferIntake
 	err = db.WriteTx(ctx, func(tx *store.Tx) error {
+		intake = landingOfferAbsent
 		var raw []byte
 		err := tx.QueryRow(`SELECT payload FROM events WHERE kind=? AND object_type='call' AND object_id=?`, callOffered, offer.CallID).Scan(&raw)
 		if err == nil {
@@ -179,18 +184,16 @@ func (l *Loop) intakeLandingOffer(ctx context.Context, d Decision, rec run.Recor
 			}
 			// An unfinished replay still submits the recorded commit. Never judge a
 			// new lane head or base under an earlier call's immutable offer.
-			_, err = l.validateLandingOffer(ctx, d, rec, mainSHA, offer)
-			return err
+			return validateErr
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		call, err := l.validateLandingOffer(ctx, d, rec, mainSHA, offer)
-		if err != nil {
-			return err
+		if validateErr != nil {
+			return validateErr
 		}
 		intake = landingOfferSubmitted
-		return appendLandingCallEvent(tx, callOffered, offer.CallID, call, l.cfg.Now().UTC())
+		return appendLandingCallEvent(tx, callOffered, offer.CallID, validated, l.cfg.Now().UTC())
 	})
 	return intake, err
 }
@@ -275,7 +278,56 @@ func (l *Loop) recordEndingCapabilities(ctx context.Context) error {
 	return nil
 }
 
-func (l *Loop) answerLandingRefusal(tx *store.Tx, candidate Candidate, refusal refusalPayload, at time.Time) error {
+// refusalEvidence is what an answer to a refused landing call quotes from files: the gate
+// plan's command for each failing check, and each check's log. It depends only on the run
+// and the refusal's checks, so it is read before the write that records the answer, with
+// no store write open (tools/tillr/store/ioguard.go).
+type refusalEvidence struct {
+	commands map[string][]string
+	logs     map[string]refusalLog
+}
+
+type refusalLog struct {
+	body []byte
+	err  error
+}
+
+// readRefusalEvidence reads the files answerLandingRefusal quotes. A refusal with no checks
+// reads nothing.
+func (l *Loop) readRefusalEvidence(runID string, refusal refusalPayload) refusalEvidence {
+	ev := refusalEvidence{commands: map[string][]string{}, logs: map[string]refusalLog{}}
+	if len(refusal.Checks) == 0 {
+		return ev
+	}
+	planPath := filepath.Join(RunDir(l.cfg.Root, runID), GatePlanRecord)
+	if raw, ok := readRecordPayload(planPath); ok {
+		var plan struct {
+			Checks []struct {
+				CheckID string   `json:"check_id"`
+				Command []string `json:"command"`
+			} `json:"checks"`
+		}
+		if json.Unmarshal(raw, &plan) == nil {
+			for _, check := range plan.Checks {
+				ev.commands[check.CheckID] = check.Command
+			}
+		}
+	}
+	for _, check := range refusal.Checks {
+		if check.LogRef == "" {
+			continue
+		}
+		if _, seen := ev.logs[check.LogRef]; !seen {
+			body, err := os.ReadFile(check.LogRef)
+			ev.logs[check.LogRef] = refusalLog{body: body, err: err}
+		}
+	}
+	return ev
+}
+
+// answerLandingRefusal answers the run's open landing call with the refusal, quoting ev,
+// which the caller read before its write (readRefusalEvidence). It reads no file.
+func (l *Loop) answerLandingRefusal(tx *store.Tx, candidate Candidate, refusal refusalPayload, ev refusalEvidence, at time.Time) error {
 	outcome := ""
 	switch refusal.Step {
 	case RefusalFence:
@@ -324,23 +376,7 @@ func (l *Loop) answerLandingRefusal(tx *store.Tx, candidate Candidate, refusal r
 		base = call.Base
 	}
 	fmt.Fprintf(&text, "Offer commit: %s\nBranch head: %s\nLast base: %s\nOffer run: %s\nOffer scratch: %s\n", call.Commit, head, base, call.RunID, call.Scratch)
-	commands := map[string][]string{}
-	planPath := filepath.Join(RunDir(l.cfg.Root, candidate.RunID), GatePlanRecord)
-	if len(refusal.Checks) > 0 {
-		if raw, ok := readRecordPayload(planPath); ok {
-			var plan struct {
-				Checks []struct {
-					CheckID string   `json:"check_id"`
-					Command []string `json:"command"`
-				} `json:"checks"`
-			}
-			if json.Unmarshal(raw, &plan) == nil {
-				for _, check := range plan.Checks {
-					commands[check.CheckID] = check.Command
-				}
-			}
-		}
-	}
+	commands := ev.commands
 	answer := landingAnswer{CallID: call.CallID, Kind: choice.Kind, Stage: choice.Stage}
 	if c := candidate.Judge; c != nil && choice.Stage == "judge" {
 		var output item.JudgeOutput
@@ -362,7 +398,11 @@ func (l *Loop) answerLandingRefusal(tx *store.Tx, candidate Candidate, refusal r
 			continue
 		}
 		answer.Evidence = append(answer.Evidence, check.LogRef)
-		log, err := os.ReadFile(check.LogRef)
+		read := ev.logs[check.LogRef]
+		log, err := read.body, read.err
+		if read.body == nil && read.err == nil {
+			err = os.ErrNotExist // not read before the write: quoted by path only
+		}
 		switch {
 		case err != nil:
 			fmt.Fprintf(&text, "Full log: %s\n", check.LogRef)
