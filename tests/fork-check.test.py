@@ -3569,11 +3569,12 @@ with tempfile.TemporaryDirectory() as tmp:
     assert record(repo)["baseline"]["commit"] == verified, record(repo)["baseline"]
     assert record(repo)["runs"][-1]["outcome"] == "failed", record(repo)["runs"][-1]
 
-# 31d. tests/tillr-docs.test.py runs four regression suites as child processes, and they
-#      read `.tillr.toml` and `.justfile`. Each is an input of the tillr-docs check, so a
-#      change to any of them plans it and its watches name them: on 2026-11-18 a
-#      `.tillr.toml` edit broke tests/tillr-roll.test.py, nothing planned the check for it,
-#      and the fixer filed for the red was fenced away from both files.
+# 31d. tests/tillr-docs.test.py runs two regression suites as child processes (`tillr-build`
+#      and `tillr-scratch`), and `tests/tillr-build.test.py` reads `.justfile`.
+#      tests/tillr-roll.test.py and tests/tillr-keep.test.py have their own lightweight
+#      `tillr-roll` step watching `.tillr.toml`, `.justfile`, `tools/tillr-roll/` and both
+#      suites, so a `.tillr.toml` edit runs only `tillr-roll` and not `tillr-docs` (which
+#      rebuilds eight Go binaries).
 with tempfile.TemporaryDirectory() as tmp:
     base = Path(tmp)
     repo, _, _ = build_repo(base)
@@ -3582,7 +3583,9 @@ with tempfile.TemporaryDirectory() as tmp:
     spec.loader.exec_module(module)
     (repo / "tests").mkdir(exist_ok=True)
     (repo / module.TILLR_DOCS_TEST).write_text("")
-    commit(repo, "the tillr documentation suite")
+    for roll_test in module.TILLR_ROLL_TESTS:
+        (repo / roll_test).write_text("")
+    commit(repo, "the tillr documentation and roll suites")
 
     def docs_checks(changed):
         planned = module.build_plan(
@@ -3590,16 +3593,32 @@ with tempfile.TemporaryDirectory() as tmp:
         )
         return [check for check in planned.checks if check.kind == "tillr-docs"], planned
 
+    def roll_checks(changed):
+        planned = module.build_plan(
+            repo, [], module.Record(base / "plan-state.json"), changed, None, True,
+        )
+        return [check for check in planned.checks if check.kind == "tillr-roll"], planned
+
     if shutil.which("go"):
-        for path in (".tillr.toml", ".justfile", "tests/tillr-roll.test.py",
-                     "tests/tillr-keep.test.py", "tests/tillr-build.test.py",
-                     "tests/tillr-scratch.test.py", "tools/tillr-roll/tillr-roll.py"):
+        for path in (".justfile", "tests/tillr-build.test.py", "tests/tillr-scratch.test.py"):
             checks, planned = docs_checks([path])
             assert len(checks) == 1, (path, [check.kind for check in planned.checks])
             assert any(module.watch_matches(path, watch) for watch in checks[0].watches), \
                 (path, checks[0].watches)
-        checks, planned = docs_checks(["bashrc"])
-        assert checks == [], [check.kind for check in planned.checks]
+        # `.tillr.toml`, `tests/tillr-roll.test.py`, `tests/tillr-keep.test.py`, and
+        # `tools/tillr-roll/` select `tillr-roll` and NOT `tillr-docs`.
+        for path in (".tillr.toml", "tests/tillr-roll.test.py", "tests/tillr-keep.test.py",
+                     ".justfile", "tools/tillr-roll/tillr-roll.py"):
+            r_checks, r_planned = roll_checks([path])
+            assert len(r_checks) == 1, (path, [check.kind for check in r_planned.checks])
+            assert any(module.watch_matches(path, watch) for watch in r_checks[0].watches), \
+                (path, r_checks[0].watches)
+        for path in (".tillr.toml", "tests/tillr-roll.test.py", "tests/tillr-keep.test.py",
+                     "tools/tillr-roll/tillr-roll.py", "bashrc"):
+            d_checks, d_planned = docs_checks([path])
+            assert d_checks == [], (path, [check.kind for check in d_planned.checks])
+        r_checks, r_planned = roll_checks(["bashrc"])
+        assert r_checks == [], [check.kind for check in r_planned.checks]
     # The guard that keeps the list honest: every suite the real documentation test starts
     # as a child process is one of its watches.
     started = set(re.findall(r'ROOT / "(tests/[^"]+\.py)"',

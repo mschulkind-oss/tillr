@@ -777,20 +777,6 @@ def main():
     case_recovery()
     case_rolling_guard_fixtures()
     case_rolling_enabled()
-    # The operating skill documents the repository keeper too. Keep its behavior
-    # in this permanent gate suite without invoking a real loop or store.
-    keeper_tests = subprocess.run(
-        [sys.executable, str(ROOT / "tests/tillr-keep.test.py")],
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-    )
-    if keeper_tests.returncode:
-        fail("the repository keeper's regression tests failed")
-    roll_tests = subprocess.run(
-        [sys.executable, str(ROOT / "tests/tillr-roll.test.py")],
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-    )
-    if roll_tests.returncode:
-        fail("the repository roll regression tests failed")
     case_callout()
     case_no_flag_table()
     scratch = Path(tempfile.mkdtemp(dir=os.environ.get("YOLO_DURABLE_DIR")))
