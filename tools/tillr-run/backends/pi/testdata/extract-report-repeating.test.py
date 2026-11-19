@@ -59,6 +59,31 @@ class RepeatingCallReportTest(unittest.TestCase):
         self.assertEqual(result.returncode, 6, result.stderr)
         self.assertIn("\nresult: ended by the harness: repeating-call\n", result.stdout)
 
+    def test_recovered_action_is_not_an_ending(self):
+        events = [
+            {"type": "loop_detected", "action": "recovered", "shape": "identical", "toolName": "read", "args": {"path": "a.go"}, "streak": 6, "tokensBefore": 120000, "tokensAfter": 45000},
+            {"type": "agent_end", "messages": [{"role": "assistant", "content": [{"type": "text", "text": "RESULT: done"}]}]},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            stream = Path(directory) / "stream"
+            stream.write_text("".join(json.dumps(event) + "\n" for event in events))
+            result = extract(stream)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("\nresult: done\n", result.stdout)
+        self.assertNotIn("repeating-call", result.stdout)
+
+    def test_recovered_then_ended_action_ends_as_repeating_call(self):
+        events = [
+            {"type": "loop_detected", "action": "recovered", "shape": "identical", "toolName": "read", "args": {"path": "a.go"}, "streak": 6, "tokensBefore": 120000, "tokensAfter": 45000},
+            {"type": "loop_detected", "action": "ended", "shape": "no-tool", "toolName": "", "args": None, "streak": 5},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            stream = Path(directory) / "stream"
+            stream.write_text("".join(json.dumps(event) + "\n" for event in events))
+            result = extract(stream)
+        self.assertEqual(result.returncode, 6, result.stderr)
+        self.assertIn("\nresult: ended by the harness: repeating-call\n", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

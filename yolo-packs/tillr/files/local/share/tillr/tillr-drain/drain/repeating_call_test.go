@@ -20,6 +20,11 @@ const repeatedArgs = `{"limit":80,"offset":300,"path":"tools/tillr-drain/drain/p
 // session for a repeating call. It answers the settled decision.
 func endRepeating(t *testing.T, f refusalLoopFixture, l *Loop) Decision {
 	t.Helper()
+	return endRepeatingRecord(t, f, l, nil, "")
+}
+
+func endRepeatingRecord(t *testing.T, f refusalLoopFixture, l *Loop, recovery *run.LoopRecovery, action string) Decision {
+	t.Helper()
 	p := decisionFor(t, l, "item-a")
 	if p.decision.Action != ActionDispatch {
 		t.Fatalf("item-a is not dispatched: %+v", p.decision)
@@ -30,7 +35,8 @@ func endRepeating(t *testing.T, f refusalLoopFixture, l *Loop) Decision {
 	}
 	d := work.Decision
 	rec := run.Record{RunID: d.RunRequest.RunID, ItemID: d.ItemID, LaneID: d.LaneID, Backend: d.RunRequest.Backend, State: run.StateExited, ExitCode: countPtr(0), StartedAt: l.cfg.Now().Format(time.RFC3339), FinishedAt: l.cfg.Now().Format(time.RFC3339), EndCause: run.EndRepeatingCall, ArtifactRefs: []run.ArtifactRef{},
-		RepeatingCall: &run.RepeatingCall{Tool: "read", Args: repeatedArgs, ArgsDigest: "digest", Streak: 40}}
+		RepeatingCall: &run.RepeatingCall{Tool: "read", Args: repeatedArgs, ArgsDigest: "digest", Streak: 40, Action: action},
+		LoopRecovery:  recovery}
 	fixtureWrite(t, f, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
 	outcome := l.settle(context.Background(), d, rec, "", work.BaseSHA, "tick", l.cfg.Now(), &LoopResult{}, &PassTiming{}, nil, false)
 	if outcome.err != nil || outcome.stop != "" {
@@ -103,23 +109,97 @@ func TestARepeatingCallRouteReadsOnlyTheChain(t *testing.T) {
 	policy := &Policy{Preference: []string{"a", "b", "c"}}
 	for name, tc := range map[string]struct {
 		prior                *RepeatedCall
+		recovered            bool
 		backend, route, next string
 		chain                string
 	}{
-		"first ending":        {nil, "a", repeatRouteFresh, "a", "a"},
-		"fresh session again": {&RepeatedCall{Backends: []string{"a"}}, "a", repeatRouteFailover, "b", "a"},
-		"failover repeated":   {&RepeatedCall{Backends: []string{"a"}}, "b", repeatRouteFailover, "c", "a,b"},
-		"walk would wrap":     {&RepeatedCall{Backends: []string{"a", "b"}}, "c", repeatRouteHold, "", "a,b,c"},
+		"first ending":                     {nil, false, "a", repeatRouteFresh, "a", "a"},
+		"first ending after recovery":      {nil, true, "a", repeatRouteFailover, "b", "a"},
+		"fresh session again":              {&RepeatedCall{Backends: []string{"a"}}, false, "a", repeatRouteFailover, "b", "a"},
+		"failover repeated":                {&RepeatedCall{Backends: []string{"a"}}, false, "b", repeatRouteFailover, "c", "a,b"},
+		"failover repeated after recovery": {&RepeatedCall{Backends: []string{"a"}}, true, "b", repeatRouteFailover, "c", "a,b"},
+		"walk would wrap":                  {&RepeatedCall{Backends: []string{"a", "b"}}, false, "c", repeatRouteHold, "", "a,b,c"},
+		"walk would wrap after recovery":   {&RepeatedCall{Backends: []string{"a", "b"}}, true, "c", repeatRouteHold, "", "a,b,c"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			route, next, chain := repeatingRoute(policy, "", tc.prior, tc.backend)
+			route, next, chain := repeatingRoute(policy, "", tc.prior, tc.backend, tc.recovered)
 			if route != tc.route || next != tc.next || strings.Join(chain, ",") != tc.chain {
 				t.Fatalf("route %s next %q chain %v, want %s %q %s", route, next, chain, tc.route, tc.next, tc.chain)
 			}
 		})
 	}
-	if route, _, _ := repeatingRoute(&Policy{}, "", &RepeatedCall{Backends: []string{"a"}}, "a"); route != repeatRouteHold {
+	if route, _, _ := repeatingRoute(&Policy{}, "", &RepeatedCall{Backends: []string{"a"}}, "a", false); route != repeatRouteHold {
 		t.Fatalf("a backend list with no other backend fails over: %s", route)
+	}
+	if route, _, _ := repeatingRoute(&Policy{Preference: []string{"a"}}, "", nil, "a", true); route != repeatRouteHold {
+		t.Fatalf("in-run recovery with no other backend fails over: %s", route)
+	}
+}
+
+func TestARepeatingCallAfterInRunRecoverySkipsFreshToFailover(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	l.cfg.Policy.Backends["second"] = Backend{Adapter: "fixture"}
+	l.cfg.Policy.Preference = []string{"fixture", "second"}
+
+	recovery := &run.LoopRecovery{Count: 1, Shape: "identical", TokensBefore: 120000, TokensAfter: 45000}
+	first := endRepeatingRecord(t, f, l, recovery, "ended")
+	if got := repeatedEndings(t, f)[first.RunRequest.RunID]; got.Route != repeatRouteFailover || got.NextBackend != "second" || got.Action != "ended" || strings.Join(got.Backends, ",") != "fixture" {
+		t.Fatalf("first ending with in-run recovery recorded %+v", got)
+	}
+	failover := decisionFor(t, l, "item-a").decision
+	if failover.Action != ActionDispatch || failover.Reason != ReasonRepeatingCallFailover || failover.RunRequest.Backend != "second" {
+		t.Fatalf("did not skip fresh to next backend: %+v", failover)
+	}
+	if failover.RepeatedCall == nil || failover.RepeatedCall.RunID != first.RunRequest.RunID || failover.RunRequest.SessionTurn {
+		t.Fatalf("failover dispatch missing RepeatedCall or continuing session: %+v", failover)
+	}
+	brief := repeatedCallBrief(*failover.RepeatedCall)
+	if !strings.Contains(brief, "read "+repeatedArgs) || !strings.Contains(brief, "new session on second") {
+		t.Fatalf("failover brief does not name the repeated call:\n%s", brief)
+	}
+
+	second := endRepeatingRecord(t, f, l, nil, "ended")
+	if got := repeatedEndings(t, f)[second.RunRequest.RunID]; got.Route != repeatRouteHold || strings.Join(got.Backends, ",") != "fixture,second" {
+		t.Fatalf("second ending recorded %+v", got)
+	}
+	held := decisionFor(t, l, "item-a").decision
+	if held.Action != ActionHold || held.Reason != ReasonRepeatingCall || held.SupersedesRunID != second.RunRequest.RunID {
+		t.Fatalf("not held for the operator: %+v", held)
+	}
+	if rule := holdrules.For(ReasonRepeatingCall); rule == holdrules.Unknown || !strings.Contains(rule.Mover, "operator") {
+		t.Fatalf("the hold does not name the operator as its mover: %+v", rule)
+	}
+}
+
+func TestARepeatingCallEndedActionWithoutPriorRecoverySkipsFresh(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	l.cfg.Policy.Backends["second"] = Backend{Adapter: "fixture"}
+	l.cfg.Policy.Preference = []string{"fixture", "second"}
+
+	first := endRepeatingRecord(t, f, l, nil, "ended")
+	if got := repeatedEndings(t, f)[first.RunRequest.RunID]; got.Route != repeatRouteFailover || got.NextBackend != "second" {
+		t.Fatalf("action=ended ending did not skip fresh: %+v", got)
+	}
+	failover := decisionFor(t, l, "item-a").decision
+	if failover.Action != ActionDispatch || failover.Reason != ReasonRepeatingCallFailover || failover.RunRequest.Backend != "second" {
+		t.Fatalf("did not dispatch next backend: %+v", failover)
+	}
+}
+
+func TestARepeatingCallAfterInRunRecoveryWithNoOtherBackendHolds(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+
+	recovery := &run.LoopRecovery{Count: 1, Shape: "identical", TokensBefore: 120000, TokensAfter: 45000}
+	first := endRepeatingRecord(t, f, l, recovery, "ended")
+	if got := repeatedEndings(t, f)[first.RunRequest.RunID]; got.Route != repeatRouteHold || got.NextBackend != "" || strings.Join(got.Backends, ",") != "fixture" {
+		t.Fatalf("single-backend ending with in-run recovery recorded %+v", got)
+	}
+	held := decisionFor(t, l, "item-a").decision
+	if held.Action != ActionHold || held.Reason != ReasonRepeatingCall || held.SupersedesRunID != first.RunRequest.RunID {
+		t.Fatalf("not held for the operator: %+v", held)
+	}
+	if rule := holdrules.For(ReasonRepeatingCall); rule == holdrules.Unknown || !strings.Contains(rule.Mover, "operator") {
+		t.Fatalf("the hold does not name the operator as its mover: %+v", rule)
 	}
 }
 
@@ -130,15 +210,21 @@ func TestARepeatedCallBriefNamesTheCallAndThePreservedWork(t *testing.T) {
 			t.Errorf("brief lacks %q:\n%s", want, brief)
 		}
 	}
+	noTool := repeatedCallBrief(RepeatedCall{RunID: "run-item-a-a1", Shape: "no-tool", Args: "{}", Streak: 5, NextBackend: "second"})
+	if !strings.Contains(noTool, "(no-tool) {}") {
+		t.Errorf("no-tool brief lacks shape label:\n%s", noTool)
+	}
 }
 
 // repeatingNodeSteps ends its first `repeat` runs as pi ending the session for a repeating
 // call, each after committing a file the restart must preserve, and records every brief.
 type repeatingNodeSteps struct {
 	*restartWorkflowSteps
-	repeat  int
-	briefs  []string
-	backend []string
+	repeat   int
+	recovery *run.LoopRecovery
+	action   string
+	briefs   []string
+	backend  []string
 }
 
 func (s *repeatingNodeSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
@@ -159,7 +245,8 @@ func (s *repeatingNodeSteps) Run(ctx context.Context, req run.Request) (run.Reco
 	runGit(s.t, target, "add", ".")
 	runGit(s.t, target, "commit", "-qm", "work before the loop")
 	rec := run.Record{RunID: req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Backend: req.Backend, State: run.StateExited, ExitCode: countPtr(0), StartedAt: "2026-11-19T00:00:00Z", FinishedAt: "2026-11-19T00:00:00Z", EndCause: run.EndRepeatingCall, ArtifactRefs: []run.ArtifactRef{},
-		RepeatingCall: &run.RepeatingCall{Tool: "read", Args: repeatedArgs, ArgsDigest: "digest", Streak: 40}}
+		RepeatingCall: &run.RepeatingCall{Tool: "read", Args: repeatedArgs, ArgsDigest: "digest", Streak: 40, Action: s.action},
+		LoopRecovery:  s.recovery}
 	st, err := store.Open(ctx, s.f.storePath, true)
 	if err != nil {
 		return rec, "", err
@@ -220,6 +307,86 @@ func TestARepeatingWorkflowNodeStartsFreshThenFailsOverThenHolds(t *testing.T) {
 			}
 			if len(steps.runs) != 3 {
 				t.Fatalf("a held item ran again: %+v", steps.runs)
+			}
+			held := decisionFor(t, l, "item-a").decision
+			if held.Action != ActionHold || held.Reason != ReasonRepeatingCall {
+				t.Fatalf("not held for the operator: %+v", held)
+			}
+		})
+	}
+}
+
+func TestARepeatingWorkflowNodeAfterInRunRecoverySkipsFresh(t *testing.T) {
+	recovery := &run.LoopRecovery{Count: 1, Shape: "identical", TokensBefore: 120000, TokensAfter: 45000}
+	for _, tc := range []struct {
+		name    string
+		repeat  int
+		single  bool
+		runIDs  []string
+		backend []string
+		hold    bool
+	}{
+		{
+			name:    "failover",
+			repeat:  1,
+			runIDs:  []string{"run-item-a-a1-n1", "run-item-a-a1-n1-failover"},
+			backend: []string{"fixture", "alternate"},
+		},
+		{
+			name:    "failover_then_hold",
+			repeat:  2,
+			runIDs:  []string{"run-item-a-a1-n1", "run-item-a-a1-n1-failover"},
+			backend: []string{"fixture", "alternate"},
+			hold:    true,
+		},
+		{
+			name:    "single_backend_holds",
+			repeat:  1,
+			single:  true,
+			runIDs:  []string{"run-item-a-a1-n1"},
+			backend: []string{"fixture"},
+			hold:    true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, l, steps := repeatingNodeFixture(t, tc.repeat)
+			steps.recovery = recovery
+			steps.action = "ended"
+			if tc.single {
+				l.cfg.Policy.Preference = []string{"fixture"}
+				l.cfg.Policy.SeatLists = map[string][]string{"build": {"fixture"}}
+			}
+			result := &LoopResult{}
+			for i := 0; i < 6; i++ {
+				graphPass(t, l, result)
+			}
+			if len(steps.runs) < len(tc.runIDs) {
+				t.Fatalf("runs %+v, want at least %v", steps.runs, tc.runIDs)
+			}
+			for i, want := range tc.runIDs {
+				if steps.runs[i].RunID != want || steps.backend[i] != tc.backend[i] || steps.runs[i].LaneID != "lane-1" {
+					t.Fatalf("run %d is %s on %s, want %s on %s", i, steps.runs[i].RunID, steps.backend[i], want, tc.backend[i])
+				}
+				if i > 0 && (!strings.Contains(steps.briefs[i], "## Your previous session") || !strings.Contains(steps.briefs[i], tc.runIDs[i-1]) || !strings.Contains(steps.briefs[i], repeatedArgs)) {
+					t.Fatalf("brief of %s does not name the repeated call:\n%s", want, steps.briefs[i])
+				}
+			}
+			for _, ended := range tc.runIDs[:min(tc.repeat, len(tc.runIDs))] {
+				if got := runGit(t, f.root, "for-each-ref", "--format=%(refname)", preservedPrefix+ended, "refs/tillr/runs/"+ended); got == "" {
+					t.Fatalf("the work of %s was not kept", ended)
+				}
+			}
+			if !tc.hold {
+				return
+			}
+			itemARuns := 0
+			for _, r := range steps.runs {
+				if r.ItemID == "item-a" {
+					itemARuns++
+				}
+			}
+			if itemARuns != len(tc.runIDs) {
+				t.Fatalf("a held item ran again (%d runs for item-a): %+v", itemARuns, steps.runs)
 			}
 			held := decisionFor(t, l, "item-a").decision
 			if held.Action != ActionHold || held.Reason != ReasonRepeatingCall {

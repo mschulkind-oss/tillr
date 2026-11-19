@@ -40,7 +40,9 @@ type settledMonitor struct {
 	harnessEnded string
 	// repeating is the call pi named when it ended the session for repeating it.
 	repeating *RepeatingCall
-	after     func(time.Duration) <-chan time.Time
+	// loopRecovery summarizes any in-run loop recoveries pi performed.
+	loopRecovery *LoopRecovery
+	after        func(time.Duration) <-chan time.Time
 }
 
 // observe reads only this execution's new stream, never the preceding resumed segment.
@@ -69,15 +71,19 @@ func (m *settledMonitor) observe() error {
 		line := m.partial[:idx]
 		m.partial = m.partial[idx+1:]
 		var e struct {
-			Type    string          `json:"type"`
-			Aborted bool            `json:"aborted"`
-			After   string          `json:"after"`
-			Reason  string          `json:"reason"`
-			Actions []string        `json:"actions"`
-			Exit    *int            `json:"harness_exit"`
-			Tool    string          `json:"toolName"`
-			Args    json.RawMessage `json:"args"`
-			Streak  int             `json:"streak"`
+			Type         string          `json:"type"`
+			Aborted      bool            `json:"aborted"`
+			After        string          `json:"after"`
+			Reason       string          `json:"reason"`
+			Actions      []string        `json:"actions"`
+			Exit         *int            `json:"harness_exit"`
+			Tool         string          `json:"toolName"`
+			Args         json.RawMessage `json:"args"`
+			Streak       int             `json:"streak"`
+			Action       string          `json:"action"`
+			Shape        string          `json:"shape"`
+			TokensBefore int64           `json:"tokensBefore"`
+			TokensAfter  int64           `json:"tokensAfter"`
 		}
 		if json.Unmarshal(line, &e) != nil {
 			continue
@@ -90,7 +96,19 @@ func (m *settledMonitor) observe() error {
 		case HarnessEndedEvent:
 			m.harnessEnded = describeHarnessEnded(e.After, e.Reason, e.Actions, e.Exit)
 		case LoopDetectedEvent:
-			m.repeating = repeatingCall(e.Tool, e.Args, e.Streak)
+			if e.Action == "recovered" {
+				if m.loopRecovery == nil {
+					m.loopRecovery = &LoopRecovery{}
+				}
+				m.loopRecovery.Count++
+				if e.Shape != "" {
+					m.loopRecovery.Shape = e.Shape
+				}
+				m.loopRecovery.TokensBefore = e.TokensBefore
+				m.loopRecovery.TokensAfter = e.TokensAfter
+			} else {
+				m.repeating = repeatingCall(e.Tool, e.Action, e.Shape, e.Args, e.Streak)
+			}
 		case "agent_start":
 			m.settledAt = ""
 			m.ready = false
@@ -107,8 +125,8 @@ const HarnessEndedEvent = "tillr_harness_ended"
 // repeatingCall is the record's statement of one `loop_detected` event. The arguments
 // are re-encoded with sorted keys and no whitespace, so the digest does not depend on how
 // the harness spaced them.
-func repeatingCall(tool string, raw json.RawMessage, streak int) *RepeatingCall {
-	if tool == "" {
+func repeatingCall(tool, action, shape string, raw json.RawMessage, streak int) *RepeatingCall {
+	if tool == "" && shape != "no-tool" {
 		tool = "unnamed tool"
 	}
 	text := "null"
@@ -125,7 +143,14 @@ func repeatingCall(tool string, raw json.RawMessage, streak int) *RepeatingCall 
 	if len(quoted) > RepeatingCallArgsLimit {
 		quoted = strings.ToValidUTF8(quoted[:RepeatingCallArgsLimit], "") + "…"
 	}
-	return &RepeatingCall{Tool: tool, Args: quoted, ArgsDigest: fmt.Sprintf("%x", sha256.Sum256([]byte(text))), Streak: streak}
+	return &RepeatingCall{
+		Tool:       tool,
+		Args:       quoted,
+		ArgsDigest: fmt.Sprintf("%x", sha256.Sum256([]byte(text))),
+		Streak:     streak,
+		Action:     action,
+		Shape:      shape,
+	}
 }
 
 func describeHarnessEnded(after, reason string, actions []string, exit *int) string {

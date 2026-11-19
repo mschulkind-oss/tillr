@@ -566,24 +566,31 @@ event with the call and the route it chose. It keeps the run's work the way an
 interrupted run's is kept: its commit is pinned at `refs/tillr/runs/<run>` and any
 uncommitted work is preserved. Then it takes one of three routes:
 
-1. **A new session on the same backend.** This is the route for a first such ending.
-   The brief gains a "Your previous session" section that names the repeated call, says
-   this is a new session that is not counted against the item, and points at the kept
-   work.
-2. **The seat's next backend.** This is the route when a run dispatched for that reason
-   ends the same way again. It uses the ordinary backend walk.
+1. **A new session on the same backend** (only for a pi without the `action` field on
+   `loop_detected`, before in-run loop recovery). For a first such ending with neither
+   recorded `loop_recovery` nor `action: "ended"`, the brief gains a "Your previous
+   session" section that names the repeated call, says this is a new session that is not
+   counted against the item, and points at the kept work.
+2. **The seat's next backend.** When pi recovers in-run (`action: "recovered"`) and still
+   ends the run for a loop (`action: "ended"`), the drain does not start the same seat
+   fresh — measured on 2026-11-19, four of five fresh restarts on the same model looped
+   again — and instead goes straight to the seat's next backend with the brief note that
+   names the repeated call. A fresh restart on an older pi that repeats a second time
+   takes the same backend walk.
 3. **A hold for the operator** (`repeating-call`). This is the route when the walk would
    return to a backend this chain already ended on, or the list has no other backend.
-   The operator reads the call in the run record and runs `tillr drain retry`.
+   The operator is the mover: read the call in the run record and run `tillr drain retry`.
 
 The dispatch decision carries the ending it answers as `repeated_call`, so there is no
 counter. A run dispatched for any other reason starts the chain again. A workflow node
-takes the same three routes: it is dispatched again at once on its lane and base, like
-an infrastructure restart. On a hold, its node row is marked `repeating-call` and the
-item is held. Design and desk-document runs keep their own routes for an unanswered
-run. `TestARepeatingCallStartsFreshThenFailsOverThenHolds` and
+takes the same routes: it is dispatched again at once on its lane and base, like an
+infrastructure restart. On a hold, its node row is marked `repeating-call` and the item
+is held. Design and desk-document runs keep their own routes for an unanswered run.
+`TestARepeatingCallAfterInRunRecoverySkipsFreshToFailover`,
+`TestARepeatingWorkflowNodeAfterInRunRecoverySkipsFresh`,
+`TestARepeatingCallStartsFreshThenFailsOverThenHolds`, and
 `TestARepeatingWorkflowNodeStartsFreshThenFailsOverThenHolds` cover the item and node
-paths.
+paths with and without the `action` field.
 
 ## Landing calls
 

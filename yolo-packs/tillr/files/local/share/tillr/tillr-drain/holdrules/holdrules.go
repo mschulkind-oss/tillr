@@ -57,7 +57,7 @@ var Rules = map[string]Rule{
 	"decision-collision":          {"needs a cause", "loop", "fix the drain defect the fault names, then tillr drain clear-fault"},
 	"settle-failed":               {"needs a cause", "loop", "fix the drain defect the fault names, then tillr drain clear-fault"},
 	// Every backend on the seat's list ended a session repeating one identical call (pi's
-	// loop_detected), after a fresh session on the first: nothing automatic is left to try.
+	// loop_detected): nothing automatic is left to try.
 	"repeating-call":       {"needs you", "lane", "the operator: read the repeated call in the run record, then `tillr drain retry --item <item> --run <the held run>`"},
 	"tooling-defect":       {"waits on work", "queue", "the tooling defect item to land or close"},
 	"triage-no-block":      {"waits on work", "queue", "triage on the design seat"},

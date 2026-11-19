@@ -287,10 +287,15 @@ blocker fields and suspends, and a gate, land, or revert refusal reopens that se
 without a new prompt to deliver the refusal as the suspended call's result. Where
 `parked-tool-calls` is absent, workers end with `RESULT:` text footers.
 
-If `pi` aborts a runaway worker for repeating the same tool call (`repeating-call`), the
-drain pins uncommitted work, never resumes the looping session, starts a fresh session on
-the same backend naming the repeated call, fails over to the seat's next backend on a
-second repeat, and holds the item as `repeating-call` once the fallback chain wraps. A
+When `pi` recovers from a loop in-run (`loop_detected` with `action: "recovered"`), the
+runner records `loop_recovery` (count, shape, tokens before and after) on the run and
+`tillr view running` displays it without ending the run. If `pi` still ends a worker for
+a loop (`repeating-call` after in-run recovery, `action: "ended"`), the drain pins
+uncommitted work, never resumes the looping session, skips a fresh restart on the same
+backend and goes straight to the seat's next backend with a brief note naming the
+repeated call, and holds the item as `repeating-call` (with the operator as mover) only
+when no other backend remains; an older `pi` without `action` still retries fresh once
+before failing over. A
 settled harness that lingers past its idle grace is ended as `settled-idle`. Seat policies
 route across Copilot, Bedrock, and headless Claude backends, reloading on change without a
 loop restart (`tillr drain probe-backend` checks availability).

@@ -502,6 +502,9 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		payload.State = StateExited
 		payload.ExitCode = &code
 	}
+	if monitor.loopRecovery != nil {
+		payload.LoopRecovery = monitor.loopRecovery
+	}
 	payload.StartedAt = startedAt.Format(time.RFC3339)
 	payload.FinishedAt = finishedAt.Format(time.RFC3339)
 	if rawHarness, err := os.ReadFile(harnessPath); err == nil {

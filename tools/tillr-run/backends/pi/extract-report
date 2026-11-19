@@ -92,12 +92,15 @@ def dialect(stream_text, live_probe=False):
                     saw_cost = True
 
         if record.get("type") == "loop_detected":
+            if record.get("action") == "recovered":
+                continue
             # pi ended the session itself: the model kept repeating one identical call.
             # No footer is owed; the report says so rather than reading as truncated.
             args = json.dumps(record.get("args"), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            tool = record.get("toolName") or "(no tool)"
             ended = {"cause": "repeating-call",
                      "detail": f"pi ended the session because the model repeated one identical call "
-                               f"{record.get('streak')} times in a row: {record.get('toolName')} {args}"}
+                               f"{record.get('streak')} times in a row: {tool} {args}"}
 
         update = record.get("assistantMessageEvent")
         if isinstance(update, dict) and update.get("type") == "text_delta":

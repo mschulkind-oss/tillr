@@ -23,6 +23,15 @@ type liveSpend struct {
 	Note    string   `json:"note,omitempty"`
 }
 
+// loopRecoveryView summarizes in-run loop recoveries pi performed during a session
+// (`loop_detected` events with `action: "recovered"`).
+type loopRecoveryView struct {
+	Count        int    `json:"count"`
+	Shape        string `json:"shape,omitempty"`
+	TokensBefore int64  `json:"tokens_before"`
+	TokensAfter  int64  `json:"tokens_after"`
+}
+
 // liveSpendMaxLine bounds one stream line. A pi line carries a whole message, and a tool
 // result can be large; a longer line is skipped rather than ending the read.
 const liveSpendMaxLine = 64 << 20
@@ -30,53 +39,89 @@ const liveSpendMaxLine = 64 << 20
 // readLiveSpend reads a pi stream log for its finished turns' usage. A missing log is a
 // named absence, not zero turns.
 func readLiveSpend(path string) liveSpend {
+	spend, _ := readLiveRunStream(path)
+	return spend
+}
+
+// readLiveRunStream reads a pi stream log for its finished turns' usage and any in-run
+// loop recoveries. A missing log is a named absence for spend, and nil for recovery.
+func readLiveRunStream(path string) (liveSpend, *loopRecoveryView) {
 	if path == "" {
-		return liveSpend{Note: "no log path for this run"}
+		return liveSpend{Note: "no log path for this run"}, nil
 	}
 	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return liveSpend{Note: "the run's log is not there yet"}
+		return liveSpend{Note: "the run's log is not there yet"}, nil
 	}
 	if err != nil {
-		return liveSpend{Note: "the run's log is unreadable: " + err.Error()}
+		return liveSpend{Note: "the run's log is unreadable: " + err.Error()}, nil
 	}
 	defer f.Close()
-	return sumLiveSpend(f)
+	return sumLiveRunStream(f)
 }
 
 func sumLiveSpend(r io.Reader) liveSpend {
+	spend, _ := sumLiveRunStream(r)
+	return spend
+}
+
+func sumLiveRunStream(r io.Reader) (liveSpend, *loopRecoveryView) {
 	var (
-		turns  int
-		tokens int64
-		cost   float64
-		sawTok bool
-		sawUSD bool
+		turns    int
+		tokens   int64
+		cost     float64
+		sawTok   bool
+		sawUSD   bool
+		recovery *loopRecoveryView
 	)
 	reader := bufio.NewReaderSize(r, 1<<20)
-	marker := []byte(`"type":"turn_end"`)
+	turnMarker := []byte(`"type":"turn_end"`)
+	loopMarker := []byte(`"loop_detected"`)
 	for {
 		line, err := readBoundedLine(reader, liveSpendMaxLine)
-		if len(line) > 0 && bytes.Contains(line, marker) {
-			var e struct {
-				Type    string `json:"type"`
-				Message struct {
-					Usage *struct {
-						TotalTokens *int64 `json:"totalTokens"`
-						Cost        *struct {
-							Total *float64 `json:"total"`
-						} `json:"cost"`
-					} `json:"usage"`
-				} `json:"message"`
+		if len(line) > 0 {
+			if bytes.Contains(line, turnMarker) {
+				var e struct {
+					Type    string `json:"type"`
+					Message struct {
+						Usage *struct {
+							TotalTokens *int64 `json:"totalTokens"`
+							Cost        *struct {
+								Total *float64 `json:"total"`
+							} `json:"cost"`
+						} `json:"usage"`
+					} `json:"message"`
+				}
+				if json.Unmarshal(line, &e) == nil && e.Type == "turn_end" {
+					turns++
+					if u := e.Message.Usage; u != nil {
+						if u.TotalTokens != nil {
+							tokens, sawTok = tokens+*u.TotalTokens, true
+						}
+						if u.Cost != nil && u.Cost.Total != nil {
+							cost, sawUSD = cost+*u.Cost.Total, true
+						}
+					}
+				}
 			}
-			if json.Unmarshal(line, &e) == nil && e.Type == "turn_end" {
-				turns++
-				if u := e.Message.Usage; u != nil {
-					if u.TotalTokens != nil {
-						tokens, sawTok = tokens+*u.TotalTokens, true
+			if bytes.Contains(line, loopMarker) {
+				var e struct {
+					Type         string `json:"type"`
+					Action       string `json:"action"`
+					Shape        string `json:"shape"`
+					TokensBefore int64  `json:"tokensBefore"`
+					TokensAfter  int64  `json:"tokensAfter"`
+				}
+				if json.Unmarshal(line, &e) == nil && e.Type == "loop_detected" && e.Action == "recovered" {
+					if recovery == nil {
+						recovery = &loopRecoveryView{}
 					}
-					if u.Cost != nil && u.Cost.Total != nil {
-						cost, sawUSD = cost+*u.Cost.Total, true
+					recovery.Count++
+					if e.Shape != "" {
+						recovery.Shape = e.Shape
 					}
+					recovery.TokensBefore = e.TokensBefore
+					recovery.TokensAfter = e.TokensAfter
 				}
 			}
 		}
@@ -94,7 +139,7 @@ func sumLiveSpend(r io.Reader) liveSpend {
 	if !sawUSD {
 		out.Note = "no finished turn has reported a cost yet"
 	}
-	return out
+	return out, recovery
 }
 
 // readBoundedLine answers the next line without its newline, or nil for a line longer

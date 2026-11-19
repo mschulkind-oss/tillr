@@ -93,7 +93,8 @@ type runningRun struct {
 	LogPath       string `json:"log_path"`
 	// Spend is what the run's own stream reports so far: its finished turns, tokens and
 	// cost (liveSpend). The store holds a run's spend only once it has ended.
-	Spend liveSpend `json:"spend"`
+	Spend        liveSpend         `json:"spend"`
+	LoopRecovery *loopRecoveryView `json:"loop_recovery,omitempty"`
 }
 
 // finishedRun is one terminal run with the outcome a person acts on: landed at a sha, a
@@ -115,8 +116,10 @@ type finishedRun struct {
 	UsageTokens  *int64   `json:"usage_tokens"`
 	// EndCause is the runner's recorded end cause, empty when the store has none.
 	// RepeatingCall is the call pi ended a `repeating-call` session for.
+	// LoopRecovery summarizes any in-run loop recoveries pi performed during the session.
 	EndCause      string             `json:"end_cause,omitempty"`
 	RepeatingCall *repeatingCallView `json:"repeating_call,omitempty"`
+	LoopRecovery  *loopRecoveryView  `json:"loop_recovery,omitempty"`
 }
 
 // repeatingCallView is the identical call a `repeating-call` run kept making, as the
@@ -125,6 +128,7 @@ type repeatingCallView struct {
 	Tool   string `json:"tool"`
 	Args   string `json:"args"`
 	Streak int    `json:"streak"`
+	Shape  string `json:"shape,omitempty"`
 }
 
 // gateVerdict is the gate's own answer for one run, joined to the landing attempt by the
@@ -285,17 +289,18 @@ func readRunning(ctx context.Context, storePath, loopDir, laneRoot string, now t
 	if err != nil {
 		return runningPayload{}, err
 	}
-	// The live runs' spend is in their logs, read after the store's transaction.
+	// The live runs' spend and in-run loop recoveries are in their logs, read after the store's transaction.
 	for i := range out.Active {
-		out.Active[i].Spend = readLiveSpend(out.Active[i].LogPath)
+		out.Active[i].Spend, out.Active[i].LoopRecovery = readLiveRunStream(out.Active[i].LogPath)
 	}
 	return out, nil
 }
 
-// readFinishedEndings fills each finished row's end cause, and for a `repeating-call`
-// run the call it repeated, which replaces a bare "exited 0" outcome: such a run exits
-// like any ended run, and its cause is what an operator needs to see. An older store
-// without the column answers no cause.
+// readFinishedEndings fills each finished row's end cause, any recorded in-run loop
+// recovery from its `run.finish` event, and for a `repeating-call` run the call it
+// repeated, which replaces a bare "exited 0" outcome: such a run exits like any ended
+// run, and its cause is what an operator needs to see. An older store without the column
+// answers no cause.
 func readFinishedEndings(r *store.Reader, domain *storeDomain, finished []finishedRun) error {
 	seqs := map[string]int64{}
 	if domain != nil {
@@ -306,29 +311,34 @@ func readFinishedEndings(r *store.Reader, domain *storeDomain, finished []finish
 	for i := range finished {
 		var cause sql.NullString
 		err := r.QueryRow(`SELECT end_cause FROM runs WHERE run_id = ?`, finished[i].RunID).Scan(&cause)
-		if isMissingColumn(err) || errors.Is(err, sql.ErrNoRows) {
-			continue
-		}
-		if err != nil {
+		if err != nil && !isMissingColumn(err) && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		finished[i].EndCause = cause.String
-		if cause.String != repeatingCallCause {
-			continue
+		if err == nil {
+			finished[i].EndCause = cause.String
 		}
-		var payload string
-		err = r.QueryRow(`SELECT payload FROM events WHERE seq = ? AND kind = 'run.finish'`, seqs[finished[i].RunID]).Scan(&payload)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) && !isMissingTable(err) {
-			return err
+		seq := seqs[finished[i].RunID]
+		if seq > 0 {
+			var payload string
+			err = r.QueryRow(`SELECT payload FROM events WHERE seq = ? AND kind = 'run.finish'`, seq).Scan(&payload)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) && !isMissingTable(err) {
+				return err
+			}
+			var body struct {
+				RepeatingCall *repeatingCallView `json:"repeating_call"`
+				LoopRecovery  *loopRecoveryView  `json:"loop_recovery"`
+			}
+			if payload != "" && json.Unmarshal([]byte(payload), &body) == nil {
+				finished[i].LoopRecovery = body.LoopRecovery
+				if cause.String == repeatingCallCause {
+					finished[i].RepeatingCall = body.RepeatingCall
+				}
+			}
 		}
-		var body struct {
-			RepeatingCall *repeatingCallView `json:"repeating_call"`
-		}
-		if payload != "" && json.Unmarshal([]byte(payload), &body) == nil {
-			finished[i].RepeatingCall = body.RepeatingCall
-		}
-		if strings.HasPrefix(finished[i].Outcome, "exited") || finished[i].Outcome == finished[i].State {
-			finished[i].Outcome = repeatingOutcome(finished[i].RepeatingCall)
+		if cause.String == repeatingCallCause {
+			if strings.HasPrefix(finished[i].Outcome, "exited") || finished[i].Outcome == finished[i].State {
+				finished[i].Outcome = repeatingOutcome(finished[i].RepeatingCall)
+			}
 		}
 	}
 	return nil
@@ -342,7 +352,14 @@ func repeatingOutcome(call *repeatingCallView) string {
 	if call == nil {
 		return repeatingCallCause
 	}
-	return fmt.Sprintf("%s: %s ×%d", repeatingCallCause, call.Tool, call.Streak)
+	name := call.Tool
+	if name == "" {
+		name = call.Shape
+	}
+	if name == "" {
+		return repeatingCallCause
+	}
+	return fmt.Sprintf("%s: %s ×%d", repeatingCallCause, name, call.Streak)
 }
 
 // buildRunningPayload projects the store's rows and the loop's record into the view's
@@ -573,15 +590,15 @@ func renderRunning(w io.Writer, p runningPayload) {
 	} else {
 		fmt.Fprintf(w, "LIVE RUNS (%d)\n", len(p.Active))
 		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "LANE\tITEM\t#\tTITLE\tELAPSED\tTURNS\tSPENT\tLEASE LEFT\tLOG")
+		fmt.Fprintln(tw, "LANE\tITEM\t#\tTITLE\tELAPSED\tTURNS\tSPENT\tRECOVERIES\tLEASE LEFT\tLOG")
 		for _, run := range p.Active {
 			lease := leaseLeftText(run.LeaseLeftMS)
 			if run.LeaseNoExpiry {
 				lease = "lease has no expiry"
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				orDash(run.LaneID), orDash(run.ItemID), placeText(run.Place), orDash(run.Title),
-				elapsedText(run.ElapsedMS), turnsText(run.Spend.Turns), costText(run.Spend.CostUSD), lease, orDash(run.LogPath))
+				elapsedText(run.ElapsedMS), turnsText(run.Spend.Turns), costText(run.Spend.CostUSD), loopRecoveryText(run.LoopRecovery), lease, orDash(run.LogPath))
 		}
 		tw.Flush()
 	}
@@ -593,13 +610,23 @@ func renderRunning(w io.Writer, p runningPayload) {
 		return
 	}
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "RUN\tITEM\tOUTCOME\tDURATION\tCOST")
+	fmt.Fprintln(tw, "RUN\tITEM\tOUTCOME\tRECOVERIES\tDURATION\tCOST")
 	for _, run := range p.Finished {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-			orDash(run.RunID), orDash(run.ItemID), run.Outcome,
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			orDash(run.RunID), orDash(run.ItemID), run.Outcome, loopRecoveryText(run.LoopRecovery),
 			spanText(run.DurationMS), costText(run.CostUSD))
 	}
 	tw.Flush()
+}
+
+func loopRecoveryText(r *loopRecoveryView) string {
+	if r == nil || r.Count <= 0 {
+		return "—"
+	}
+	if r.Shape != "" {
+		return fmt.Sprintf("%d× (%s, %d→%d tok)", r.Count, r.Shape, r.TokensBefore, r.TokensAfter)
+	}
+	return fmt.Sprintf("%d× (%d→%d tok)", r.Count, r.TokensBefore, r.TokensAfter)
 }
 
 // loopLine names the live session's clocks, or the historical stop evidence.

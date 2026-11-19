@@ -231,6 +231,7 @@ func StatusRecord(r *store.Reader, runID string) (record.Envelope, bool, error) 
 			}
 			payload.EndingException = finish.EndingException
 			payload.RepeatingCall = finish.RepeatingCall
+			payload.LoopRecovery = finish.LoopRecovery
 			payload.SettledAt = finish.SettledAt
 			payload.HarnessEndedAt = finish.HarnessEndedAt
 		}
