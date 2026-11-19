@@ -92,9 +92,10 @@ answered.
 
 **Two stand-in words** are used here as in the direction document: a **definition** is the layer
 that turns tillr's core into one use, and the **landing definition** is the one for Git landing.
-The owner has not named either yet; both names are asked in
-[the vocabulary](./tillr-vocabulary.md#OQ-VO4). Whatever he picks, the flag `--definition` keeps
-working.
+The owner named both on 2026-11-18 in the vocabulary: the layer is a **charter**
+([OQ-VO4](./tillr-vocabulary.md#OQ-VO4)) and the first use is **`git-landing`**
+([OQ-VO5](./tillr-vocabulary.md#OQ-VO5)), so "definition" here is the older spelling of
+"charter". Shipped code is not renamed, and the flag `--definition` keeps working.
 
 ---
 

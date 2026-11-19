@@ -9,7 +9,7 @@ tags:
   - boundaries
   - product-qa
 summary: "The owner's direction for tillr: general machinery of queues and graphs whose nodes are agents and commands, with its tracking, and one small, separate definition that turns it into machinery for landing changes in a Git repository. It records the workflow that definition wraps, the baseline measurement of where the Git-landing assumption was wired in, the shapes the one file could take and the one that was built (a data file plus one hook program), the extension points a second use fills, and what is built and unbuilt on 2026-11-18."
-next: "The owner reviews the designer's decisions D-CG1 to D-CG5 in the ledger. The two names are asked in tillr-vocabulary.md. The ten units of the build plan's next tranche are unfiled, and Product QA's third round has not arrived."
+next: "The owner reviews the designer's decisions D-CG1 to D-CG5 in the ledger. He named the two words on 2026-11-18 in tillr-vocabulary.md: a charter, and git-landing. The ten units of the build plan's next tranche are unfiled, and Product QA's third round has not arrived."
 depends-on:
   - tillr-item-graphs.md
   - tillr-product-qa-requests.md
@@ -44,8 +44,11 @@ decided and built; [Section 3](#3-where-the-git-landing-assumption-is-wired-in-t
 measurement it started from.
 
 **Needs your ruling:** None in this document. The two names it left open, for the kind of layer and
-for the Git-landing instance, are asked once, in the vocabulary:
-[OQ-VO4](./tillr-vocabulary.md#OQ-VO4) and [OQ-VO5](./tillr-vocabulary.md#OQ-VO5).
+for the Git-landing instance, were asked in the vocabulary and ruled by the owner on 2026-11-18:
+the layer is a **charter** ([OQ-VO4](./tillr-vocabulary.md#OQ-VO4)) and the first use is
+**`git-landing`** ([OQ-VO5](./tillr-vocabulary.md#OQ-VO5)). This document was written before those
+rulings, so its body still says "definition" where he now says charter; shipped code says
+"definition" too and is not renamed.
 
 **Awaits your review:** the designer's decisions `D-CG1` to `D-CG5` in
 [the ledger](#decision-ledger).
@@ -64,22 +67,26 @@ through processes and records).
 
 ## The words this document uses
 
-Three terms are coined here. The last two are **stand-ins** that shipped in code; the owner has not
-named either, and both names are asked in the vocabulary
-([OQ-VO4](./tillr-vocabulary.md#OQ-VO4), [OQ-VO5](./tillr-vocabulary.md#OQ-VO5)).
+Three terms. The last two were coined here as **stand-ins** and shipped in code; the owner named
+both on 2026-11-18 in the vocabulary ([OQ-VO4](./tillr-vocabulary.md#OQ-VO4),
+[OQ-VO5](./tillr-vocabulary.md#OQ-VO5)). In this document's body "a definition" and "the landing
+definition" are the older spellings of his words.
 
 - **The core:** the general machinery. Queues of items, graphs of nodes inside an item where each
   node is an agent or a command, and the tracking behind them: the store, items, criteria, runs,
   leases, events and views. Not anything that knows what Git is.
-- **A definition** *(stand-in for the kind)*: the layer that turns the core into one use case:
+- **A charter** *(the owner's word, [OQ-VO4](./tillr-vocabulary.md#OQ-VO4); "a definition" in this
+  document's body and in shipped code)*: the layer that turns the core into one use case, stating
+  that use's purpose, from which its rules follow:
   its lifecycle, prerequisites, retention, completion rule and vocabulary, as a data file, with one
   hook program for its judgments. Not an item's definition, which is its fence and criteria.
-- **The landing definition** *(stand-in for this instance; `git-landing` in code)*: the definition
+- **The `git-landing` charter** *(the owner's name, [OQ-VO5](./tillr-vocabulary.md#OQ-VO5); "the landing
+  definition" in this document's body, `git-landing` in code)*: the charter
   that lands changes in a Git repository, from item blocks in documents through a gate. Its data
   file is [landing.json](../../tools/tillr/definition/landing.json) and its hook program is
   [tillr-loop](../../tools/tillr-loop/tillr-loop); most of its behavior is still Go in the programs
   [Section 3](#3-where-the-git-landing-assumption-is-wired-in-today) names. Product QA's findings
-  store is a second definition.
+  store is a second charter.
 
 Two names of other projects. **Product QA** is a product bug-finding pipeline, with the
 fuzzer Mangle as its prober; its agent wrote the second round
@@ -566,7 +573,7 @@ what they were called while the build ran.
 | :--- | :--- | :--- | :--- |
 | 1 | **The one file is shape D:** the vocabulary and rules as data, in a definition file, plus one hook program the core calls for each judgment | The designer's; Product QA chose the same | `D-CG1` |
 | 2 | **The lifecycle is the definition's:** the core runs a generic lifecycle, and each definition names its states, its ready state, its finished states and its valid moves, including whether an item may leave a finished state. Leaving one is always an event with a reason and an actor | The owner's: "item lifecycle ... should be part of this ... layer that describes your workflow use case, not the actual core" | [OQ-CG2](#OQ-CG2) |
-| 3 | **The words are stand-ins:** "definition" for the kind and `git-landing` for this instance, each in one package and one constant so a rename is mechanical | Nobody's yet: asked in the vocabulary | [OQ-CG5](#OQ-CG5) |
+| 3 | **The words are stand-ins:** "definition" for the kind and `git-landing` for this instance, each in one package and one constant so a rename is mechanical | The owner's since 2026-11-18: "charter" for the kind and `git-landing` for this instance, ruled in the vocabulary; the code keeps "definition" | [OQ-CG5](#OQ-CG5) |
 | 4 | **The store records the definition it runs,** at `tillr store init --definition`, and a store with none recorded runs `git-landing`. Every utility opens the store, so they cannot disagree | The designer's | `D-CG2` |
 | 5 | **Separation ran beside the drain,** under a safety rule every item carried as a criterion: today's Git-landing queue behaves identically, the existing suites pass unchanged, and a store made before the change opens and drains | The owner's go-ahead; the safety rule is the designer's | [OQ-CG3](#OQ-CG3), `D-CG3` |
 | 6 | **Reopening is a definition's policy,** as is graph change; no fixed graph caps; no clock whose only consequence is a kill | The owner's, directly, except reopening, which is reported only ([Section 1.1](#11-the-owners-words-as-reported-by-product-qa)) | `D-CG4` |
@@ -709,4 +716,4 @@ owner's ruling, the owner may overturn any of them, and all but the last are alr
 | ID | What happened | Date | Now lives in | Built |
 | :--- | :--- | :--- | :--- | :--- |
 | OQ-CG4 | "What should Product QA's agent be asked to react to?" Stale: its second-round reply answered the four things the leaning named, and the question was about briefing another project's agent, not about this design. Nobody ruled on it. | 2026-11-17 | [tillr-product-qa-requests.md](./tillr-product-qa-requests.md) | — |
-| OQ-CG5 | "What are the names for the kind of layer, and for the Git-landing instance?" Two decisions in one question, and the first was also being asked in the vocabulary. Not answered: both are asked there now, one each, with "rig" and "charter" carried over as options. "Practice" was dropped; this document's own note on it was "too soft to search for". | 2026-11-18 | [OQ-VO4](./tillr-vocabulary.md#OQ-VO4), [OQ-VO5](./tillr-vocabulary.md#OQ-VO5) | — |
+| OQ-CG5 | "What are the names for the kind of layer, and for the Git-landing instance?" Two decisions in one question, and the first was also being asked in the vocabulary. Not answered here: both were asked there, one each, with "rig" and "charter" carried over as options, and the owner ruled both there on 2026-11-18 (a charter; `git-landing`). "Practice" was dropped; this document's own note on it was "too soft to search for". | 2026-11-18 | [OQ-VO4](./tillr-vocabulary.md#OQ-VO4), [OQ-VO5](./tillr-vocabulary.md#OQ-VO5) | — |

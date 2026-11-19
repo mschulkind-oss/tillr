@@ -252,6 +252,8 @@ Filed as board **item 489**. Its scope is deliberately *stop the harm and route 
 
    _Settled:_ A. A first failure that names no machinery cause is run once more, at once, as a recorded measurement of whether it repeats, and never again on unchanged inputs. The first failure stays on the record; a second run that passes does not erase it. This is how the loop already behaves: a held item is dispatched again once, and only when a recorded input changed. Settled on 2026-11-16 by the session's designer on recorded principle, at the owner's request; the owner may overturn it.
 
+   **Superseded** by the owner's ruling of 2026-11-17 (`D-JL10` in [the judge and lifecycle design](tillr-judge-and-lifecycle.md#decision-ledger)): a worker run's failure is never counted, it goes back to its own session with its evidence every time, nothing re-runs because an input changed, and only an identical repeat goes to the design seat. The one automatic retry above, and the one re-dispatch on a changed input it cited, no longer stand.
+
    _Leaning:_ A — one retry, as a named measurement, immediate and uncharged. It is the human's own first diagnostic act, and its result is recorded either way; B spends a lane to learn the same fact more slowly.
 
    **Answer:**

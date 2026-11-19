@@ -74,7 +74,7 @@ and where it stops:
    over to `agy` on the next tick. On the fourth attempt, `deepseek-v3.2` ran through
    [`tools/tillr-run/backends/muse`](../../tools/tillr-run/backends/muse), read `brief.md`,
    wrote `CANARY.md`, committed `chore: add canary marker` on `tillr/lane-1` ([`tillr-muse-backend.md`](tillr-muse-backend.md)
-   [`D-MM11`](tillr-muse-backend.md#decision-ledger)), and emitted `status: answered`.
+   [`D-MM12`](tillr-muse-backend.md#decision-ledger)), and emitted `status: answered`.
 3. **Candidate classification works (`a27243bf3c`).**
    [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go) (`classifyAttempt`)
    read `status: answered` from `run.log`, confirmed `HEAD != base_sha` in `<lane-dir>/worktree`,

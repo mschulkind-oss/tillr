@@ -9,7 +9,7 @@ next: "Build ITEM-V (the `item.verdict` writer rules) on the E2 critical path; t
 
 # The item judge in tillr: migrate the verdict, delete the turn-end judge and the shadow
 
-**Status:** 2026-11-12. Ruled; nothing built. Evidence is the current tree:
+**Status:** 2026-11-12. Ruled by a design seat, not by the owner; nothing built. The owner has not accepted the assessment this build rests on: the first version's next step was the owner accepting or rejecting the MIGRATE ruling, and on 2026-11-11 a design seat ruled it in his place (`dcc4eef9f`), with no words of his recorded. Evidence is the current tree:
 the four tillr design documents, the approver design, both work-control
 reference documents, the extension source, and the tests named below.
 

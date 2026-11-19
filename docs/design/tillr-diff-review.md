@@ -410,7 +410,7 @@ Nothing is built before [OQ-DR1](#OQ-DR1) is answered. Steps 1 to 4 then build o
 
 ## 12. Amendments owed
 
-None of these documents is edited by this one.
+None of these documents is edited by this one. **Made on 2026-11-18**, by a reconciliation pass, are only the parts that hold whatever the owner answers to [OQ-DR1](#OQ-DR1) and [OQ-DR2](#OQ-DR2), because they rest on his own rulings `D-DR1` and `D-DR2` or are pointers: the [OQ-JL1](./tillr-judge-and-lifecycle.md#decision-ledger) row now says it is overturned for code landings and that no agent has ever judged a landing; `D-JL8` says asking for a judge will no longer decide whether a code landing is reviewed; the graph design's row 23 and [early design landing](./tillr-early-design-landing.md) record that a cut is not reviewed; and the planning design's verify node points here. Everything else below rests on this design's own decisions and waits for the owner's review of them.
 
 - **[Judge and lifecycle](./tillr-judge-and-lifecycle.md):**
   - The [OQ-JL1](./tillr-judge-and-lifecycle.md#decision-ledger) row: overturned for code landings by the owner's requirement; mechanical retirement stays for documents-only landings.

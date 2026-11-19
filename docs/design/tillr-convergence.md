@@ -26,8 +26,10 @@ vantage:
 directory. Reconciled against the tree at `dcb76fe41` on 2026-11-18. These are built: the block
 reader and the trailer deletion (`D-TC1`), sync as the only intake (`D-TC2`, apart from one
 rule), the seed's retirement ([`OQ-TC1`](#decision-ledger), `item-seed-retire`), the "why is it not moving" face
-(`D-TC4`), hold classes and movers (`D-TC3`, in part), and re-admission on a changed input
-([`OQ-TC3`](#decision-ledger)). Four remainders are not built. Two are ready to build. Two wait on something else:
+(`D-TC4`), and hold classes and movers (`D-TC3`, in part). Re-admission on a changed input
+([`OQ-TC3`](#decision-ledger)) was built and then removed: the owner's ruling of 2026-11-17
+(`D-JL10` in [the judge and lifecycle design](tillr-judge-and-lifecycle.md#decision-ledger))
+supersedes it, and `f8774bd63` took the code out. Four remainders are not built. Two are ready to build. Two wait on something else:
 removed-block retirement waits on a design decision this document still owes, and both the
 pipeline's regeneration of derived copies and moving model ids out of the policy files wait on
 other documents' open questions. The [Decision Ledger](#decision-ledger) names what each one
@@ -198,7 +200,10 @@ build, the backend policy, and the base commit.
   owner runs `tillr drain retry`: a budget escalates to a person, it does not loop
   ([landing principle 6](landing-principles.md#6-a-budget-escalates-it-does-not-loop)), and a re-queue happens only against a recorded
   basis (`D-JL6` in [`tillr-judge-and-lifecycle.md`](tillr-judge-and-lifecycle.md)).
-  ([OQ-TC3](#decision-ledger).)
+  ([OQ-TC3](#decision-ledger).) **Superseded** by the owner's ruling of 2026-11-17 (`D-JL10` in
+  [the judge and lifecycle design](tillr-judge-and-lifecycle.md#decision-ledger)): nothing re-runs
+  because an input changed, and a worker run's ending is never counted. The re-admission was
+  removed at `f8774bd63`.
 
 ### 3.3 Every decision is shown where the owner looks
 
@@ -318,9 +323,9 @@ stopped without committing because the full drain suite failed once: `TestCommen
 `tools/tillr-drain/drain/comments_test.go` reported `designer <nil>`. Criterion c10 rules on it.
 The failure is not the retirement's. Under `tools/tillr-drain` that attempt's change deletes
 `seed_test.go`, which is a test of the module's root package, and nothing in the `drain` package;
-`git diff --name-only b44fa0fd 6efed6151 -- tools/tillr-drain/drain/comments.go
+`git diff --name-only 02147626 e62b16ce8 -- tools/tillr-drain/drain/comments.go
 tools/tillr-drain/drain/comments_test.go tools/tillr-drain/drain/designer.go` prints nothing, so
-the code that attempt ran is the code the trunk has now. Measured on 2026-11-17 at `6efed6151`
+the code that attempt ran is the code the trunk has now. Measured on 2026-11-17 at `e62b16ce8`
 in a lane's worktree with no change applied:
 `python3 tools/go-test-shards.py tools/tillr-drain -k 6` passed all 1393 tests in each of two
 runs, and the compiled `drain` test binary run as
@@ -337,7 +342,7 @@ to produce the message and not a finding that it is what happened. Making the te
 finding the cause are repairs to the comment path's tests. They are not this item's work, and
 no item tracks them yet: that is the owner's to file, and this section does not stand in for it.
 
-The fourth attempt's tree is also older than the trunk. It was cut at `b44fa0fd`, and ten of
+The fourth attempt's tree is also older than the trunk. It was cut at `02147626`, and ten of
 its 59 paths have changed on the trunk since, among them `tools/tillr-item/main.go`,
 `tools/tillr-item/item/apply.go`, `tools/fork-check.py` and `tests/fork-check.test.py`. A
 worker that recovers it replays its change onto the lane's base path by path and does not copy
@@ -347,7 +352,8 @@ those files from the preserved tree, which would undo the trunk's edits to them.
 
 ### Re-admit a held item when an input it failed on changes
 
-Built: this landed in commit `72dc84e4a4`.
+Built: this landed in commit `72dc84e4a4`, and was removed at `f8774bd63` under the owner's ruling
+of 2026-11-17 (`D-JL10` in [the judge and lifecycle design](tillr-judge-and-lifecycle.md#decision-ledger)).
 
 ### Record a cause statement with each post-run hold
 
@@ -489,4 +495,4 @@ normalized error it compares.
 | `D-TC5` | The pipeline regenerates derived copies between commit and gate; tests assert structure and never a count. **Rejected:** asking the worker to regenerate, and a pre-commit hook, which fixes the human path only. | 2026-11-15 | [Section 3.4](#34-a-derived-copy-is-produced-by-the-pipeline) | — Not filed. It waits on [OQ-SH2](tillr-selfhosted-build.md#OQ-SH2) in [the self-hosted build design](tillr-selfhosted-build.md), which [Section 3.4](#34-a-derived-copy-is-produced-by-the-pipeline) leaves there. That question decides what becomes of the pack mirror and its check. Until it is ruled, the module list keeps its two homes: `MODULES` in `tests/pack-sync.test.py` and the module list in `tools/fork-check.py` |
 | OQ-TC1 | Delete `config/tillr/seed-items.json` and the `seed` face of `tillr-item`; sync is the only intake. The seven rows that are neither landed nor a restated open question become prose entries on [`docs/pi/roadmap.md`](../pi/roadmap.md), and the row-count pin goes. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principle is the owner's standing goal that state lives in documents, and [`queue-persistence-ruling.md`](queue-persistence-ruling.md)'s ruling that documents are the only intake. The owner may overturn it. **Rejected:** pruning the file and keeping it; teaching sync to ignore the seed's state. | 2026-11-15 | [Section 3.1](#31-the-queue-is-read-from-documents-and-from-nothing-else) | ✅ (`item-seed-retire`) |
 | OQ-TC2 | Tillr's tracked policy names seats and, for each seat, the harness that fills it; the model id comes from that harness's own profile on the machine, so tillr's tree names no model. The per-machine-group policy files stay as the stopgap until a harness profile can answer for the design seat. Unlike a pure "seat only" policy, which harness fills a seat stays a tillr choice, because the owner asked on 2026-11-15 to choose which seats run on the Claude subscription. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "Pi's model and provider are DERIVED from the selected profile" and the backend policy's rule that no model id is copied into `tools/tillr*`. The owner may overturn it. **Rejected:** per-group policy files as the target; an untracked per-machine file. | 2026-11-15 | [Section 3.5](#35-a-seat-names-its-harness-and-the-harness-names-the-model) | Partial (the stopgap: `config/tillr/backend-policy.json` and `config/tillr/backend-policy.bedrock.json`, each still naming model ids). Not filed: the model ids stay until a harness profile can answer for the design seat, and [the planning-node model tiering design](tillr-planning-node-model-tiering.md), whose questions [`OQ-PT1`](tillr-planning-node-model-tiering.md#OQ-PT1) to [`OQ-PT8`](tillr-planning-node-model-tiering.md#OQ-PT8) are open, proposes keeping model ids in the policy rows |
-| OQ-TC3 | A held item is dispatched again by itself when an input it failed on has changed (its item block, its allowed paths, the backend policy, or the tillr build); unchanged inputs never re-run; an item that fails again after one such re-admission stays held until the owner runs `tillr drain retry`. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are [landing principle 6](landing-principles.md#6-a-budget-escalates-it-does-not-loop) (a budget escalates, it does not loop) and `D-JL6` in [`tillr-judge-and-lifecycle.md`](tillr-judge-and-lifecycle.md) (re-queue only against a recorded basis). The owner may overturn it. **Rejected:** always waiting for the owner; re-admitting only on an edit to the item's own block. | 2026-11-15 | [Section 3.2](#32-every-hold-names-a-mover-that-can-act) | ✅ (`item-drain-readmit-on-changed-input`, commit `72dc84e4a4`; the drain's re-admission in `tools/tillr-drain/drain/readmit.go`) |
+| OQ-TC3 | A held item is dispatched again by itself when an input it failed on has changed (its item block, its allowed paths, the backend policy, or the tillr build); unchanged inputs never re-run; an item that fails again after one such re-admission stays held until the owner runs `tillr drain retry`. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are [landing principle 6](landing-principles.md#6-a-budget-escalates-it-does-not-loop) (a budget escalates, it does not loop) and `D-JL6` in [`tillr-judge-and-lifecycle.md`](tillr-judge-and-lifecycle.md) (re-queue only against a recorded basis). The owner may overturn it. **Rejected:** always waiting for the owner; re-admitting only on an edit to the item's own block. **Superseded by the owner's ruling of 2026-11-17** (`D-JL10` in [the judge and lifecycle design](tillr-judge-and-lifecycle.md#decision-ledger)): nothing re-runs because an input's hash changed, and no ending is counted. | 2026-11-15 | [Section 3.2](#32-every-hold-names-a-mover-that-can-act) | Built at `72dc84e4a4`, removed at `f8774bd63`; `tools/tillr-drain/drain/readmit.go` now only records a run's inputs |

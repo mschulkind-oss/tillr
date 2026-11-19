@@ -522,7 +522,7 @@ not-due item, because that row is the claim
      silently stops being recurring.
    - **C — Measure first.** The re-dispatch interval is unmeasured today.
 
-   _Settled:_ A. A failing recurring item is held like any other item. The drain-wide rule now exists: a refused or failed item is dispatched again once, and only when a recorded input changed, so a recurring item cannot spin. Settled on 2026-11-16 by the session's designer on recorded principle, at the owner's request; the owner may overturn it.
+   _Settled:_ A. A failing recurring item is held like any other item. The drain-wide rule is now the owner's ruling of 2026-11-17 (`D-JL10` in [the judge and lifecycle design](tillr-judge-and-lifecycle.md#decision-ledger)): a failed worker run goes back to its own session with its evidence, uncounted, and only an identical repeat goes to the design seat. The one re-dispatch on a changed input that this answer first leaned on was removed under that ruling. Settled on 2026-11-16 by the session's designer on recorded principle, at the owner's request; the owner may overturn it.
 
    _Leaning:_ Measure first (C). The interval is unmeasured, and both remedies are cheap to add
    later while a wrong cap is a silent stop.

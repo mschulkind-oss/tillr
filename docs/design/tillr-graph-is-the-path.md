@@ -30,7 +30,7 @@ depends-on:
 
 **The shape.** Four parts: a per-item graph of nodes with stated endings; the fog-of-war invariant (a node that has started can never change), which the store enforces; a pure policy function that transforms only what has not started; and a scheduler that chooses who runs each ready node. A queue-level pass and the trunk's proof sit above the items under the same invariant.
 
-**Cost.** It overturns six rows of the item-graph ledger, including the owner's own rule of 2026-11-15 that a sub-agent is never a node. It retires the word "attempt" and the hold vocabulary. It needs each adapter to state how its run ended instead of leaving that to a reading of the log. Whether it also retires the red cap (the stop on all landing once 20 landings sit past the last proven commit) is [OQ-GP7](#OQ-GP7).
+**Cost.** It overturns six rows of the item-graph ledger, including the owner's own rule of 2026-11-15 that a sub-agent is never a node. It retires the word "attempt" and the hold vocabulary. It needs each adapter to state how its run ended instead of leaving that to a reading of the log. It also retires the red cap (the stop on all landing once 20 landings sit past the last proven commit): the owner ruled on 2026-11-18 that there is no landing cap ([OQ-GP7](#OQ-GP7)), and the cap stays live in the drain until the rule that replaces it is built ([Section 8.2](#82-proof-and-a-red-trunk)).
 
 **Start at [Section 5.3](#53-the-starting-rule-table)**, the rule table. The model before it exists to make that table safe, and everything after it is a consequence.
 
@@ -74,8 +74,8 @@ The rules this design is held to, numbered so later sections can cite them:
 | **R8** | Work is built against the latest trunk, never a past commit. A design that no longer fits the trunk is a redesign, stated as one. Items that churn the same ground get dependencies. |
 | **R9** | A pass over the whole queue may fix dependencies and order that no single item can see, without becoming a guess trigger. |
 | **R10** | The red cap is not accepted. Reds must not pile up, and there must be a way to pull things out and land them. An unproven trunk is never treated as red. |
-| **R11** | A design answer, a rewrite and a triage commit on the item's own branch. The item's deliverable reaches the trunk in one landing. A document that carries a question for the owner reaches it earlier, by an early landing ([early design landing](./tillr-early-design-landing.md)). |
-| **R12** | Nothing depends on the git trace record, which the owner ruled out on 2026-11-17. The shell-command record stays. |
+| **R11** | A design answer, a rewrite and a triage commit on the item's own branch. The item's deliverable reaches the trunk in one landing. A document that a design answer changed, or that carries a question for the owner, reaches it earlier, by an early landing ([early design landing](./tillr-early-design-landing.md)). |
+| **R12** | Nothing depends on the git trace record, which the owner ruled out on 2026-11-17 and `d09016bba` stopped recording (it reverses [`OQ-QP4`](./tillr-queue-persistence.md#91-decision-ledger), which had kept the trace on). The shell-command record stays. |
 
 ---
 
@@ -222,7 +222,7 @@ A running node is never interrupted because the trunk moved. The take-in happens
 | **A real conflict in a design document** | Two items changed the same ruling. It goes to the design session that wrote it, which reconciles the two, or objects naming the other item. That objection is evidence that the queue-level pass should have ordered them, and it triggers that pass ([Section 8.1](#81-the-queue-planner)) |
 | **A provisional design** | If the item is abandoned its branch never lands. Documents that went ahead in an early landing are on the trunk; what becomes of them waits on a design of how an item is given up ([early design landing](./tillr-early-design-landing.md#7-an-item-that-is-given-up)) |
 | **A lasting ruling** | Goes in the design document's ledger, outside the item's block, on the same branch. Retiring the block at landing would otherwise delete it |
-| **Another item that depends on the decision** | Gets an inter-item edge until this item lands. The design answer's ending may name the items it affects; the queue level adds the edges. No item reads another item's unlanded branch, because that would predicate work on something that may never land |
+| **Another item that depends on the decision** | Reads it on the trunk once the design answer's documents land. An item that depends on the work, and not only on the decision, gets an inter-item edge until this item lands; the design answer's ending may name those items, and the queue level adds the edges. No item reads another item's unlanded branch |
 | **A question for the owner** | Must be visible while the branch is unlanded. The owner ruled on 2026-11-17 that the question lands on the trunk, together with the design text that changed and that the question is about, so he reads both in Vantage ([OQ-GP6](#OQ-GP6)). A cut of those documents is gated and landed ahead of the item, and the branch takes it in ([early design landing](./tillr-early-design-landing.md#3-the-operation)) |
 
 ---
@@ -339,7 +339,7 @@ This is the rule table for this repository's landing definition. "Producer" mean
 | 9 | A gate run ended `refused` | A resume of the producer with the gate's output (R4), delivered as the answer to the producer's open landing call | A hold until an input hash changes or a person retries |
 | 10 | A land attempt for the item's deliverable ended `landed` | Nothing. The graph is complete. The producer's landing call stays open until the proof covers the landing, then closes; when the item's worktree is released is [the landing call's question](./tillr-landing-call.md#OQ-LC1) | The landing record |
 | 11 | A land attempt or a take-in ended `conflict` | A resume, on the latest trunk, of the session that last wrote the conflicting paths, with the paths, delivered as the answer to the producer's open landing call | One conflict-fix run per candidate, then `conflict-exhausted`; stale-base re-staging |
-| 12 | A node ended with an objection naming the design seat | A design answer that starts at the objector's head and forks the document's designer session; when it ends `answered`, a resume of the objector from the design's commit | A conflict row, a separate design run and landing, then a new worker from the trunk |
+| 12 | A node ended with an objection naming the design seat | A design answer that starts at the objector's head and forks the document's designer session; when it ends `answered`, a resume of the objector from the design's commit, which does not wait for row 27 | A conflict row, a separate design run and landing, then a new worker from the trunk |
 | 13 | A node ended with an objection naming the owner, with its question | A cut of the question's documents, its gate run and its land attempt, then an owner question node after the landing, or directly when the cut ends `empty`. When the owner question ends `answered`, a resume of the objector with the answer | The owner as default mover of unrecognized holds |
 | 14 | A node ended with an objection naming another item | A queue edge request; the objector resumes after that item lands and a take-in | Hash-based re-admission |
 | 15 | A node ended with an objection naming the tooling | A defect item filed through intake, a queue edge to it, and a resume after it lands | Second-failure routing to the owner |
@@ -350,10 +350,11 @@ This is the rule table for this repository's landing definition. "Producer" mean
 | 20 | An ending carries a request to replace a later node in fog | The replacement, when the requesting node's template allows it; otherwise the refusal is recorded and the graph is unchanged | The proposal transaction, kept as built |
 | 21 | A running node asks for a child the harness routes to tillr | A dispatched child within it | Nothing; new |
 | 22 | A landing of the item, its deliverable or an early landing, was then reverted for a named check | A resume of the producer, with the answer `reverted` to its open landing call carrying that check's output; its next gate run includes that check. For an early landing the producer is the session that wrote the documents, and it is told to restore them from the head it recorded | The fixer filed against the landing |
-| 23 | A cut ended `cut` | A gate run on its candidate, with no take-in and no judge. Rows 8, 9 and 11 apply to it; the producer is the session that last wrote the documents | Nothing; new |
+| 23 | A cut ended `cut` | A gate run on its candidate, with no take-in and no judge, as the owner ruled for documents-only landings on 2026-11-18 ([the diff-review design](./tillr-diff-review.md#decision-ledger), `D-DR2`). Rows 8, 9 and 11 apply to it; the producer is the session that last wrote the documents | Nothing; new |
 | 24 | A cut ended `conflict` | As row 11, then a new cut | Nothing; new |
 | 25 | A cut ended `empty`, or its land attempt ended `landed` | Nothing for the cut. A node that waited on it is ready | Nothing; new |
 | 26 | A node ended `submitted` while a cut of the item is in fog | The cut and its followers are removed; the item's landing carries the documents | Nothing; new |
+| 27 | A design answer ended `answered` having changed documents | A cut of those documents. A resume that repairs a refused or conflicting cut is claimed after the item's running writer ends | Nothing; new |
 
 **Degenerate cases.** An item with no template gets the tracked one-node template. An item whose fence admits nothing gets a wait naming the author. A template that expands to nothing is refused when it is loaded, as today. Two rules never match one ending: the table is checked for overlap when it is loaded, and row 19 is the one stated precedence.
 
@@ -519,7 +520,7 @@ The trunk's health is a set of facts written by proof nodes. Nothing else may ca
 4. **How the two combine.** The mechanic is filed only when the revert path has ended in "not possible", so no model run is spent on a red that a revert clears. If a mechanic is already running when another candidate clears the red, its node finishes; its next take-in finds nothing left to do, and it says so.
 5. **A mechanic that cannot proceed objects like any other actor.** It names the design seat, L's item, the tooling, or the owner with a question. It never goes to the owner by default (R3). The drain already works this way for one case: a fixer whose obstacle is its fence has the fence widened and returns to its worker.
 
-**What may land while the trunk is red or unproven.** The table is the rule this design proposes (`D-GP14`). The owner ruled on 2026-11-18 that this is the rule to build ([OQ-GP7](#OQ-GP7)), over the drain's rule today and the operator's proposal of 2026-11-18.
+**What may land while the trunk is red or unproven.** The table is the rule this design proposed as `D-GP14`. The owner ruled on 2026-11-18 that this is the rule to build ([OQ-GP7](#OQ-GP7)), over the drain's rule today and the operator's proposal of 2026-11-18, and that there is no landing cap.
 
 | The candidate | Unproven trunk | Red on K |
 | :--- | :--- | :--- |
@@ -537,14 +538,20 @@ One rule covers every row: **a candidate waits only when it changes the inputs o
 - **Work is not held from starting; only landing waits.** A worker started while the trunk is red is told so in its brief, with the check and the remedy, so that it does not spend its run on a failure it did not cause.
 - **Each check declares its inputs.** On 2026-11-18 all 25 check files in `tools/gate/checks/` declare `reads`. Eight declare the whole tree: `citations`, `commit-identity`, `design-citations`, `documents`, `file-size`, `pack-sync`, `scratch` and `structural`.
 
-**What the drain does today, and what was proposed on 2026-11-18.** This is the evidence behind [OQ-GP7](#OQ-GP7).
+**What the drain does today, and what was proposed on 2026-11-18.** This was the evidence behind [OQ-GP7](#OQ-GP7), kept as the record of what the ruling chose between.
 
 - **Today.** A candidate refused only by checks that also fail on its base (the trunk commit it was built on) is acquitted: the loop records `trunk-already-red` and blocks the item on the fixer's item, with the reason `trunk-broken`, until the fixer lands ([the drain's guide](../../tools/tillr-drain/README.md)). So one red check holds every item that trips it. Beside that, the red cap stops all landing once 20 landings sit past the green pointer (`red_cap` in `config/tillr/gate-policy.json`; its time bound is off).
 - **The operator's proposal.** An acquitted candidate lands, with the inherited red checks recorded as inherited. The fixer, the search for the landing at fault and the revert run beside it. Only the red cap holds the queue.
 - **An engineer's reading of that proposal.** It is not a contained change. The lander accepts only a pass verdict, so the gate, the loop and the lander must agree on a verdict of "pass, with inherited checks". And while a check is inherited red, a candidate's own regression on that same check is hidden, which blurs the attribution of later reds.
 - **How the rule above compares.** It avoids the hidden regression, because a candidate that changes a red check's inputs still waits. I read it as needing the same new verdict, since such a candidate's gate still fails on the inherited check; that reading was not checked in the lander.
-- **The cap.** R10 records the red cap as not accepted, and the operator's proposal keeps it.
+- **The cap.** R10 records the red cap as not accepted, and the operator's proposal kept it. The ruling removes it.
 - **Not measured:** how many items an acquittal has held, and for how long.
+
+**What must be built for the ruling.** None of it is built; until it is, the drain keeps the acquittal hold and the red cap described above.
+
+1. **A verdict of "passed, with inherited failures".** The lander accepts only a pass verdict today, so the gate, the loop and the lander must all agree on this second passing verdict: a candidate whose only failing checks also fail on the trunk tip, each recorded as inherited with its output.
+2. **The comparison of paths.** For each check failing on the tip, the candidate's changed paths are compared with the paths that check declares it reads (`reads` in its file under `tools/gate/checks/`). A candidate whose changes fall outside every failing check's declared paths lands with the inherited verdict; one that changes them waits unless that check passes with it, and the waiting item is shown with the paths that put it there. A red on one of the eight checks that declare the whole tree still holds every item but the remedies.
+3. **The red cap removed.** The `red_cap` setting in `config/tillr/gate-policy.json` (20 landings, its time bound already off) and the code behind it in the drain and the lander, with their tests, go, with [the gate rework's `OQ-GR1` row](./gate-rework.md#decision-ledger), once the waiting rule replaces them; the commit that turned off the cap's clock (`d53580bfd`) records that the landing bound stays until then.
 
 **Publishing.** Only a proven commit is pushed: the push sends the green pointer, never the tip (`[push] what = "green"` in `.tillr.toml`).
 
@@ -670,7 +677,7 @@ The tables below describe the drain as it was audited on 2026-11-17. By 2026-11-
 - **The proof after a merge judges every check**, and a fixer that is closed releases the items behind it once a proof passes its checks.
 - **A worker's run ends with a commit or a named obstacle** ([`D-JL11`](./tillr-judge-and-lifecycle.md#45-what-a-worker-may-end-with-d-jl11)).
 
-Still as audited: the red cap, now 20 landings with its time bound off ([OQ-GP7](#OQ-GP7)); a second stall of the full suite counted as red (F-06); a separate rewrite item for each item with prose findings (F-08); and the single-run path itself. Findings F-10, F-13 to F-19 and F-21 to F-32 were not read again.
+Still as audited: the red cap, now 20 landings with its time bound off, which the owner has ruled out and which stays until its replacement is built ([OQ-GP7](#OQ-GP7)); a second stall of the full suite counted as red (F-06); a separate rewrite item for each item with prose findings (F-08); and the single-run path itself. Findings F-10, F-13 to F-19 and F-21 to F-32 were not read again.
 
 ### 12.1 The item graph ledger
 
@@ -710,7 +717,7 @@ Each of these is an amendment owed in the document that holds the row, to be mad
 | | `D-PT7` | Kept as a scheduling choice: whether a resumed session is compacted |
 | [Designer sessions](./tillr-designer-sessions.md) | `D-CD10` | "One automatic fallback" becomes row 18: each reason a session cannot resume is a stated fact |
 | [The judge and the lifecycle](./tillr-judge-and-lifecycle.md#return-a-design-runs-gate-refusal-to-its-own-session) | The gate refusal's return to its own session | Kept, and made the rule for every producer |
-| [The gate rework](./gate-rework.md#decision-ledger) | [OQ-GR1](./gate-rework.md#decision-ledger), the red cap | Withdrawn and replaced by the one waiting rule of [Section 8.2](#82-proof-and-a-red-trunk), if [OQ-GP7](#OQ-GP7) is ruled for that rule |
+| [The gate rework](./gate-rework.md#decision-ledger) | [OQ-GR1](./gate-rework.md#decision-ledger), the red cap | Ruled out by the owner on 2026-11-18 ([OQ-GP7](#OQ-GP7)) and replaced by the one waiting rule of [Section 8.2](#82-proof-and-a-red-trunk); the cap is live until that rule is built |
 | | [OQ-GR2](./gate-rework.md#decision-ledger), lanes cut from the green pointer | Conflicts with R8. Withdrawn: every node starts on the latest trunk, and a worker is told when that trunk is red |
 | | `D-GR6`, automatic revert off | Overturned by the owner on 2026-11-17 ([OQ-GP1](#OQ-GP1)); amended in [gate rework Section 6.8](gate-rework.md#68-a-red-heavy-check) and built 2026-11-18 |
 | [The retired board state machine](./board-state-machine.md#7-suspend-and-resume) | Suspend and resume by a tool result | The only earlier design of "done is a suspended tool call". It is retired with the board; [the landing call](./tillr-landing-call.md) designs the mechanism for tillr |
@@ -727,7 +734,7 @@ Each of these is an amendment owed in the document that holds the row, to be mad
 | The one-continuation rule | A resume after `refused-by-check`, uncounted | Row 5 |
 | The judge bracket that swaps the lane's brief and session | A judge node with its own run and session | Row 7 |
 | Item-level holds and the hold vocabulary | Waits, each with a mover | [Section 5.4](#54-waits) |
-| The red cap, and the whole-queue hold while a fixer is open | The one waiting rule; proof as scheduled nodes ([OQ-GP7](#OQ-GP7)) | [Section 8.2](#82-proof-and-a-red-trunk) |
+| The red cap, and the whole-queue hold while a fixer is open | The one waiting rule, as the owner ruled; proof as scheduled nodes ([OQ-GP7](#OQ-GP7)) | [Section 8.2](#82-proof-and-a-red-trunk) |
 | Stale-base detection and re-staging | The take-in before every node that needs the worktree | [Section 3.7](#37-the-item-branch-and-the-latest-trunk) |
 | The failover budget | A backend move, or a wait naming the backend | Rows 16 to 18 |
 | One triage run per version of a request | A triage node; an unusable result returns to it | Rows 3 and 6 |
@@ -813,11 +820,12 @@ The running drain keeps working at every step. Two principles order the work.
 | 9 | Backend move; identical repeat and diagnosis; the old count and hash paths deleted | steps 5, 7, 8 |
 | 10 | The judge and triage are nodes | step 4 |
 | 11 | The item page draws the graph | step 4 |
-| 12 | Proof nodes, attribution, the waiting rule, revert and mechanic. The revert is built ahead of this step, as a drain rule | step 4; [OQ-GP7](#OQ-GP7) for the waiting rule |
+| 12 | Proof nodes, attribution, the waiting rule with its "passed, with inherited failures" verdict and its comparison of paths, the removal of the red cap, revert and mechanic. The revert is built ahead of this step, as a drain rule | step 4. The waiting rule is ruled ([OQ-GP7](#OQ-GP7)) |
 | 13 | Observed children for pi, then dispatched children | step 3, [OQ-GP5](#OQ-GP5) |
 | 14 | The cut; a question and its documents land ahead of the item; the owner question node, its surface and the answer's return | step 8, [early design landing](./tillr-early-design-landing.md) |
 | 15 | The queue planner | step 9, [OQ-GP4](#OQ-GP4) |
 | 16 | The storage structure behind the interface: one writer, then a log per item, as [the storage design](./tillr-storage.md#92-the-order-against-the-graph-designs-sixteen-steps) stages them | step 3; [the storage design's first question](./tillr-storage.md#OQ-TS1) |
+| 17 | Every design answer's documents land when it ends | step 14, [early design landing](./tillr-early-design-landing.md) ruled "always" |
 
 **State that already exists.** Runs recorded before step 3 are imported as done nodes, one per run in order, with endings mapped from their records and marked as imported. An imported ending with no successor is answered by the rule table like any other, so items parked under today's holds resume; the running-agent limit bounds how fast. A session that no longer exists becomes a backend move by row 18.
 
@@ -941,7 +949,7 @@ When a worker reports that the design is unclear, the design seat answers today 
 
 ## Decision Ledger
 
-The `OQ-GP` rows record what the owner said, or, for [OQ-GP2](#OQ-GP2), why a question was closed without a ruling. The `D-GP` rows are the designer's decisions of 2026-11-17, made so that the proposal is complete. None of them is the owner's ruling; the owner may overturn any of them, and all await his review. `D-GP1`, `D-GP2`, `D-GP3`, `D-GP5`, `D-GP7`, `D-GP8`, `D-GP9`, `D-GP10` and `D-GP12` carry out a direction quoted in [Section 1](#1-the-direction-and-the-rules); `D-GP4`, `D-GP6`, `D-GP11`, `D-GP13`, `D-GP14` and `D-GP15` are the designer's own. The Built column was read from the tree on 2026-11-18.
+The `OQ-GP` rows record what the owner said, or, for [OQ-GP2](#OQ-GP2), why a question was closed without a ruling. The `D-GP` rows are the designer's decisions of 2026-11-17, made so that the proposal is complete. None of them is the owner's ruling; the owner may overturn any of them, and all await his review. `D-GP1`, `D-GP2`, `D-GP3`, `D-GP5`, `D-GP7`, `D-GP8`, `D-GP9`, `D-GP10` and `D-GP12` carry out a direction quoted in [Section 1](#1-the-direction-and-the-rules); `D-GP4`, `D-GP6`, `D-GP11`, `D-GP13`, `D-GP14` and `D-GP15` are the designer's own. The waiting rule of `D-GP14` has since been ruled by the owner, as [OQ-GP7](#OQ-GP7). The Built column was read from the tree on 2026-11-18.
 
 | ID | Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
@@ -958,14 +966,14 @@ The `OQ-GP` rows record what the owner said, or, for [OQ-GP2](#OQ-GP2), why a qu
 | `D-GP11` | An identical repeat, by cause and evidence key against the whole chain, is answered by a diagnosis that must change something. **Rejected:** comparing only to the previous ending, which a two-step alternation defeats. | 2026-11-17 | [Section 7](#7-what-stops-repetition) | Partly: the drain compares an ending with every earlier ending of the item (`repeatedEnding`). No diagnosis node |
 | `D-GP12` | A sub-agent tillr can see is a node within its parent: observed when tillr only recorded it, dispatched when tillr started it. A child's scope is inside its parent's. **Rejected:** ending the parent's node at every spawn and resuming it after, which is purer and pays a suspend and a resume for every child. | 2026-11-17 | [Section 9](#9-subagent-hoisting) | — |
 | `D-GP13` | The queue planner owns one class of inter-item edge and the rank. Its edges constrain only future claims. It runs on events that cross items. **Rejected:** a planner that may pause or re-plan running work. | 2026-11-17 | [Section 8.1](#81-the-queue-planner) | — |
-| `D-GP14` | Only an ended proof makes the trunk red. A candidate waits only when it changes the inputs of a failing check and does not make it pass. Proof outranks new work. **Rejected:** the red cap, which holds on elapsed time and on "unproven"; and no rule at all, which lets changes land into a failing check's inputs. The waiting rule is put to the owner as [OQ-GP7](#OQ-GP7). | 2026-11-17 | [Section 8.2](#82-proof-and-a-red-trunk) | — |
+| `D-GP14` | Only an ended proof makes the trunk red. A candidate waits only when it changes the inputs of a failing check and does not make it pass. Proof outranks new work. **Rejected:** the red cap, which holds on elapsed time and on "unproven"; and no rule at all, which lets changes land into a failing check's inputs. The waiting rule was put to the owner as [OQ-GP7](#OQ-GP7), and he ruled it on 2026-11-18. | 2026-11-17 | [Section 8.2](#82-proof-and-a-red-trunk) | — |
 | `D-GP15` | Migration records each act as a node before the rule table routes it, and moves mechanisms in by the runs they waste. **Rejected:** building the whole model beside the drain and switching over. | 2026-11-17 | [Section 13](#13-migration-order) | — |
 | `OQ-GP1` | **Owner ruling.** tillr reverts a landing by itself when the full suite proves it broke the trunk: the revert lands once it applies cleanly and the failing check passes with it, and the session that wrote the change gets the failure back. A mechanic is filed only when a revert is unsafe, does not repair, or the red is unattributed. This overturns `D-GR6` of the gate rework. | 2026-11-17 | [Section 8.2](#82-proof-and-a-red-trunk) | Yes, as a drain rule: `auto_revert` is on, and five reverts ran on 2026-11-18. Not yet as nodes |
 | `OQ-GP2` | **Closed as superseded; not a ruling on the structure.** The question asked whether one process should own every write to the store, and argued from a write lock held while git moves a ref. That argument was wrong: the lock held across git is a usage fault that one owner would not remove, and it is being fixed at its cause. The owner directed on 2026-11-17: "do the right thing here, not the easy thing." [The storage design](./tillr-storage.md) was written to that direction and holds what is left of the choice, as [its first question](./tillr-storage.md#OQ-TS1), which is blocked until its trials are run again. This design depends only on that document's interface. | 2026-11-18 | [Section 10](#10-storage) | — |
 | `OQ-GP3` | **Owner ruling.** There is no spend target. Spend is recorded for each node and orders the "draining" list; nothing acts on it. | 2026-11-17 | [Section 7](#7-what-stops-repetition) | Partly: spend is measured without stopping dispatch. The ordering of the list was not checked |
 | `OQ-GP4` | **Owner ruling.** The queue planner's agent runs on evidence that crosses items (a conflict between items, a worker naming another item) and on the owner's request, not at intake. | 2026-11-17 | [Section 8.1](#81-the-queue-planner) | — |
 | `OQ-GP5` | **Owner ruling.** tillr watches every sub-agent it can see and starts scouts and writers itself; the rest are watched only. | 2026-11-17 | [Section 9](#9-subagent-hoisting) | — |
-| `OQ-GP6` | **Owner ruling.** A question for the owner lands on the trunk with the design text that changed: "we definitely need to land the questions and the designs that changed when they have questions for me." The operation is designed in [early design landing](./tillr-early-design-landing.md). Whether every design answer lands this way was left open ("We may even want to do this all the time") and is [that document's first question](./tillr-early-design-landing.md#OQ-EL1). | 2026-11-17 | [Section 3.7](#37-the-item-branch-and-the-latest-trunk) | — |
+| `OQ-GP6` | **Owner ruling.** A question for the owner lands on the trunk with the design text that changed: "we definitely need to land the questions and the designs that changed when they have questions for me." The operation is designed in [early design landing](./tillr-early-design-landing.md). Whether every design answer lands this way was left open ("We may even want to do this all the time") and is [that document's first question](./tillr-early-design-landing.md#OQ-EL1), which the owner ruled "always" on 2026-11-18; the amendments that ruling owed to this design are made (R11, rule rows 12 and 27, the dependent-item row of [Section 3.7](#37-the-item-branch-and-the-latest-trunk) and migration step 17). | 2026-11-17 | [Section 3.7](#37-the-item-branch-and-the-latest-trunk) | — |
 | `OQ-GP7` | **Owner ruling.** When a check is already red on the trunk, finished work that did not cause it lands only if it does not touch what the red check reads. Each check declares the paths it reads; an item whose changes fall outside them lands, and one that changes them waits unless it makes the check pass. There is no 20-landing stop. A waiting item is shown with the paths that put it there. The owner took the stated leaning in review: "C, weakly: it lets through exactly the items that cannot have made the red worse, so nothing is hidden and no 20-landing stop is needed; it is weak because a red on one of the eight whole-tree checks still holds the queue, and only B moves it then." To build: a verdict "passed, with inherited failures" that the gate, the loop and the lander agree on, and the comparison of an item's changed paths with the red check's declared paths. A red on a whole-tree check still holds every item. This is the rule of `D-GP14`, now his. | 2026-11-18 | [Section 8.2](#82-proof-and-a-red-trunk) | — |
 
 ---
