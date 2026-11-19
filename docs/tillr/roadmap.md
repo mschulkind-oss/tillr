@@ -8810,10 +8810,7 @@ shows a fault.
   - Assert that a gate, a judge and a fence refusal are each delivered as the call's result.
   - Assert the stated outcome of every failure case in the design.
 
-<!-- tillr: item id="item-landing-call-delivery-tests" paths="tools/tillr-drain/,tools/tillr-run/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A gate refusal, a judge refusal and a fence refusal each reach the session as the result of the open call, with the evidence of [Section 3.3](../design/tillr-landing-call.md#33-what-can-come-back), and the session receives no user message. A test with a stand-in harness asserts for each that the delivery form recorded is `tool-result` and that the reopened run's prompt was empty.
-- **c2:** Each failure case of [Section 6.3](../design/tillr-landing-call.md#63-failure-cases) has a test that asserts its stated outcome, and each test's name says which row it is. For the row "The session is opened with no answer yet", the stated outcome is the one **The reopening row** below defines, and the tests assert that.
 
 **Agent Details:**
 
@@ -8841,7 +8838,7 @@ installed pi does not print it, and every worker keeps the footer.
   - Choose the form by what the installed pi says it supports.
   - Record the answer and the binary's path at each start of the loop.
 
-<!-- tillr: item id="item-landing-call-pi-switch-on" paths="tools/tillr-drain/,docs/" blocked_by="item-landing-call-delivery-tests" prose="2" -->
+<!-- tillr: item id="item-landing-call-pi-switch-on" paths="tools/tillr-drain/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** The pi adapter's effective ending capability is `call-suspends` only when the installed binary prints `parked-tool-calls` from the features flag, and `footer` otherwise. A test of the loop asserts both with stand-in binaries, including one that rejects the flag.
 - **c2:** The loop starts `pi` with the features flag only when its policy names a backend whose adapter is the pi adapter, and records the answer with the binary's path as a `drain.pi-features` event. A loop whose policy names no such backend starts no `pi`. A test asserts each.

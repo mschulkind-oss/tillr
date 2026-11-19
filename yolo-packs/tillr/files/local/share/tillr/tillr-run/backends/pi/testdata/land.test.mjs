@@ -10,7 +10,7 @@ import keepGoing from '../keep-going.ts';
 
 const adapter = fileURLToPath(new URL('../', import.meta.url));
 
-test('land checks, parks, replays, and accepts a new offer after delivery', (t) => {
+function landFixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'land-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const cwd = join(dir, 'repo');
@@ -30,9 +30,14 @@ test('land checks, parks, replays, and accepts a new offer after delivery', (t) 
     assert.throws(attempt, reason);
     assert.equal(existsSync(offer), false, 'a rejected call must not write an offer');
   };
+  const change = () => { put('repo/in', 'change'); git('add', 'in'); commit(); return git('rev-parse', 'HEAD'); };
+  return { put, state, cwd, git, base, forbidden, land, offer, refuses, change };
+}
+
+test('land rejects invalid offers', (t) => {
+  const { put, state, cwd, git, forbidden, land, refuses, change } = landFixture(t);
   refuses(() => land('call', forbidden), /no commit/);
-  put('repo/in', 'change'); git('add', 'in'); commit();
-  const head = git('rev-parse', 'HEAD');
+  const head = change();
   put('repo/in', 'staged'); git('add', 'in'); put('repo/new', 'untracked');
   refuses(() => land(), /in\nnew/);
   git('reset', '--hard', 'HEAD'); rmSync(join(cwd, 'new'));
@@ -44,16 +49,33 @@ test('land checks, parks, replays, and accepts a new offer after delivery', (t) 
   state({});
   refuses(() => land('call', () => ['task-1']), /task-1/);
   refuses(() => land('call', () => { throw new Error('journal unknown'); }), /journal unknown/);
+});
+
+test('killed before the offer exists: replay writes the offer and parks', (t) => {
+  const { put, land, offer, base, change } = landFixture(t);
+  const head = change();
   put('repo/outside', 'not in fence');
   assert.equal(land().park, true);
   assert.deepEqual(JSON.parse(readFileSync(offer)), { call_id: 'call', commit: head, base, summary: 'summary', transcript: '' });
+});
+
+test('session opened with no answer yet: land parks again', (t) => {
+  const { land, forbidden, change } = landFixture(t);
+  change();
+  assert.equal(land().park, true);
   assert.equal(land('call', forbidden).park, true);
   assert.throws(() => land('other'), /open: call/);
-  rmSync(offer);
+});
+
+test('process dies before saving the result: replay returns the same answer', (t) => {
+  const { land, forbidden, offer, state, put, change } = landFixture(t);
+  change();
   const answer = { call_id: 'call', kind: 'refused', stage: 'gate', text: 'run tests' };
   put('landing-answer.json', JSON.stringify(answer));
   state({ open: [{ call_id: 'call' }] });
-  assert.deepEqual(land('call', forbidden), { content: [{ type: 'text', text: answer.text }], details: answer, isError: true });
+  const expected = { content: [{ type: 'text', text: answer.text }], details: answer, isError: true };
+  assert.deepEqual(land('call', forbidden), expected);
+  assert.deepEqual(land('call', forbidden), expected);
   assert.equal(existsSync(offer), false);
   assert.equal(land('next', () => [], id => id === 'call', '/session/file.jsonl').park, true);
   assert.equal(JSON.parse(readFileSync(offer)).transcript, '/session/file.jsonl');
@@ -125,7 +147,7 @@ test('run-pi keeps footer argv and opens an answer session without stdin', (t) =
   assert.equal(readFileSync(join(dir, 'landing-delivery'), 'utf8').trim(), 'tool-result');
 });
 
-test('run-pi chooses delivery before launch and retries only a refusal to continue', (t) => {
+function answerLaunchFixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'run-pi-answer-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const put = (name, value, options) => writeFileSync(join(dir, name), value, options);
@@ -140,23 +162,48 @@ test('run-pi chooses delivery before launch and retries only a refusal to contin
   const compact = { type: 'compaction', id: 'c', parentId: 'a' };
   const run = (entries, mode = '') => {
     rmSync(join(dir, 'launches'), { force: true });
-    put('session.jsonl', [JSON.stringify({ type: 'session', id: 's' }), ...entries.map(JSON.stringify)].join('\n') + '\n');
+    if (entries !== null) put('session.jsonl', [JSON.stringify({ type: 'session', id: 's' }), ...entries.map(JSON.stringify)].join('\n') + '\n');
     return spawnSync(join(adapter, 'run-pi'), ['--backend', 'pi', '--effort', 'low', '--model', 'model', '--brief', 'brief.md', '--session-id', 'id'], {
       cwd: dir, encoding: 'utf8', env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, PI_CODING_AGENT_DIR: dir, YOLO_DURABLE_DIR: dir,
         TILLR_SESSION_MODE: 'resume', TILLR_PAUSE_REQUEST: '', TILLR_READ_ONLY_GROUP: '', TILLR_RESUME_PROMPT_FILE: '', FAIL_MODE: mode },
     });
   };
+  return { dir, put, call, result, other, compact, run };
+}
+
+test('transcript no longer holds the unanswered call: deliver as a message', (t) => {
+  const { dir, call, result, other, compact, run } = answerLaunchFixture(t);
   for (const entries of [[call, result, other], [call, compact]]) {
     const r = run(entries); assert.equal(r.status, 0, r.stderr);
     assert.equal(readFileSync(join(dir, 'launches'), 'utf8'), 'message\nanswer text\nnext line\n');
   }
+});
+
+test('process dies after saving the result: continue from the trailing result', (t) => {
+  const { dir, call, result, run } = answerLaunchFixture(t);
   let r = run([call, result]); assert.equal(r.status, 0, r.stderr);
   assert.equal(readFileSync(join(dir, 'launches'), 'utf8'), 'tool-result\n\n');
+});
+
+test('missing transcript path: run-pi opens the existing session with a message', (t) => {
+  const { dir, call, run } = answerLaunchFixture(t);
   rmSync(join(dir, 'landing-transcript'));
-  r = run([call]); assert.equal(r.status, 0, r.stderr);
+  const r = run([call]); assert.equal(r.status, 0, r.stderr);
   assert.equal(readFileSync(join(dir, 'launches'), 'utf8'), 'message\nanswer text\nnext line\n');
-  put('landing-transcript', join(dir, 'session.jsonl'));
-  r = run([call], 'refusal'); assert.equal(r.status, 0, r.stderr);
+});
+
+test('recorded transcript is gone: refuse the resume before launching Pi', (t) => {
+  const { dir, run } = answerLaunchFixture(t);
+  const r = run(null);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /Pi landing transcript not found/);
+  assert.equal(existsSync(join(dir, 'launches')), false);
+  assert.equal(existsSync(join(dir, 'landing-delivery')), false);
+});
+
+test('harness refuses promptless continuation: run-pi retries with a message', (t) => {
+  const { dir, put, call, run } = answerLaunchFixture(t);
+  let r = run([call], 'refusal'); assert.equal(r.status, 0, r.stderr);
   assert.equal(readFileSync(join(dir, 'launches'), 'utf8'), 'tool-result\n\nmessage\nanswer text\nnext line\n');
   assert.equal(readFileSync(join(dir, 'landing-delivery'), 'utf8').trim(), 'message');
   r = run([call], 'other'); assert.equal(r.status, 7, r.stderr);

@@ -18,7 +18,8 @@ class ParkedExitTest(unittest.TestCase):
             return subprocess.run([sys.executable, str(WATCHER), str(Path(directory) / "pause"), sys.executable, "-u", "-c", program],
                                   capture_output=True, text=True, env=env, timeout=4)
 
-    def test_sibling_finishes_before_normal_exit(self):
+    # Failure case: the model asks for land and other tools in one message.
+    def test_land_and_other_tools_in_one_message_finish_the_batch(self):
         result = self.run_child('''import json, time
 print('{"type":"parked","toolCallId":"land"}', flush=True)
 time.sleep(.2)
@@ -38,7 +39,8 @@ time.sleep(5)
         event = json.loads(result.stdout.splitlines()[-1])
         self.assertEqual(event['after'], 'parked-batch-incomplete')
 
-    def test_disposal_hang_exits_at_the_same_bound(self):
+    # Failure case: the parked process does not exit.
+    def test_parked_process_that_does_not_exit_is_signaled_at_bound(self):
         result = self.run_child('''import time
 print('{"type":"parked"}', flush=True)
 print('{"type":"agent_end"}', flush=True)

@@ -1,12 +1,14 @@
 package drain
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -37,10 +39,10 @@ exit 29
 
 func TestLandingCallOfferAndFooterSettlement(t *testing.T) {
 	for _, offers := range []bool{false, true} {
-		t.Run(map[bool]string{false: "footer", true: "offer"}[offers], func(t *testing.T) {
+		t.Run(map[bool]string{false: "footer", true: "killed-after-offer-is-written-run-ends-submitted"}[offers], func(t *testing.T) {
 			script := `set -eu; echo first > candidate.txt; git add candidate.txt; git commit -qm first; echo 'RESULT: done'`
 			if offers {
-				script = "set -- first\n" + standInLandingOffer
+				script = "set -- first\n" + strings.Replace(standInLandingOffer, "exit 29", "kill -KILL $$", 1)
 			}
 			f, l, steps, d := continuationDispatchFixture(t, script, false)
 			l.cfg.Steps = landingCallGateSteps{steps}
@@ -91,14 +93,24 @@ func TestLandingCallOfferAndFooterSettlement(t *testing.T) {
 				}
 				return nil
 			})
-			fixtureWrite(t, f, func(tx *store.Tx) error {
-				if err := appendLandingCallEvent(tx, callAnswered, "first", landingAnswer{Text: "replacement"}, l.cfg.Now()); err == nil {
-					t.Fatal("second answer accepted")
-				}
-				return nil
-			})
 		})
 	}
+}
+
+func TestLandingCallRefusesSecondAnswer(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if err := appendLandingCallEvent(tx, callOffered, "first", landingCall{landingOffer: landingOffer{CallID: "first"}, ItemID: "item-a", RunID: "writer"}, l.cfg.Now()); err != nil {
+			return err
+		}
+		if err := appendLandingCallEvent(tx, callAnswered, "first", landingAnswer{Kind: "refused", Text: "first"}, l.cfg.Now()); err != nil {
+			return err
+		}
+		if err := appendLandingCallEvent(tx, callAnswered, "first", landingAnswer{Kind: "refused", Text: "replacement"}, l.cfg.Now()); err == nil {
+			t.Fatal("second answer accepted")
+		}
+		return nil
+	})
 }
 
 func TestLandingStateIncludesPriorRefusalsAndOpenCalls(t *testing.T) {
@@ -215,6 +227,209 @@ func TestReturnedLandingAnswerStaging(t *testing.T) {
 	}
 }
 
+func TestLandingCallDeliversRefusalsAsToolResults(t *testing.T) {
+	ctx := context.Background()
+	adapter, err := filepath.Abs(filepath.Join("..", "..", "tillr-run", "backends", "pi", "run-pi"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []string{"gate", "judge", "fence", "missing-transcript", "open-refusal"} {
+		t.Run(scenario, func(t *testing.T) {
+			stage := scenario
+			if scenario == "missing-transcript" || scenario == "open-refusal" {
+				stage = "gate"
+			}
+			bin := t.TempDir()
+			transcript := filepath.Join(bin, "session.jsonl")
+			// Pi is the only stand-in at the reopening seam: run-pi must choose
+			// promptless delivery from the held call before invoking it.
+			if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(`#!/usr/bin/env python3
+import json, os, pathlib, sys
+scr = pathlib.Path(os.environ['YOLO_DURABLE_DIR'])
+prompt = sys.stdin.buffer.read()
+if os.environ['TILLR_SESSION_MODE'] == 'new':
+    assert b'document lint: invalid heading' in prompt, prompt
+    (scr / 'fresh-prompt').write_bytes(prompt)
+    sys.exit(0)
+if os.environ.get('LANDING_OPEN_REFUSAL') == '1':
+    print('Pi refused to open the recorded session', file=sys.stderr)
+    sys.exit(1)
+(scr / 'received-prompt').write_bytes(prompt)
+assert os.environ['TILLR_SESSION_MODE'] == 'resume'
+session = sys.argv[sys.argv.index('--session') + 1]
+path = pathlib.Path((scr / 'landing-transcript').read_text().rstrip('\n'))
+header, call = [json.loads(line) for line in path.read_text().splitlines()]
+assert header['id'] == session
+answer = json.loads((scr / 'landing-answer.json').read_text())
+assert call['message']['content'][0]['id'] == answer['call_id']
+with path.open('a') as out:
+    out.write(json.dumps(dict(type='message', id='result', parentId=call['id'], message=dict(
+        role='toolResult', toolName='land', toolCallId=answer['call_id'], isError=True,
+        content=[dict(type='text', text=answer['text'])], details=answer))) + '\n')
+`), 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			script := "set -- first\n" + strings.Replace(standInLandingOffer, `"summary":"candidate"`, `"summary":"candidate","transcript":`+strconv.Quote(transcript), 1)
+			if stage == "fence" {
+				script = strings.ReplaceAll(script, "candidate.txt", "outside.txt")
+			}
+			f, l, steps, first := continuationDispatchFixture(t, script, false)
+			lane := l.laneDirPath(first.LaneID)
+			firstDir := RunDir(f.root, first.RunRequest.RunID)
+			for _, dir := range []string{lane, firstDir} {
+				if err := os.MkdirAll(dir, 0700); err != nil {
+					t.Fatal(err)
+				}
+				writeForkFile(t, filepath.Join(dir, endingCapabilityFile), run.EndingCallSuspends+"\n")
+			}
+			session, err := ReadSessionID(lane)
+			if err != nil || session == "" {
+				t.Fatalf("original session: %q %v", session, err)
+			}
+			parked := `{"type":"session","id":` + strconv.Quote(session) + "}\n" +
+				`{"type":"message","id":"offered","parentId":null,"message":{"role":"assistant","content":[{"type":"toolCall","name":"land","id":"first"}]}}` + "\n"
+			writeForkFile(t, transcript, parked)
+			base := l.laneBase(first.LaneID)
+			head := runGit(t, l.laneTarget(first.LaneID), "rev-parse", "HEAD")
+			var evidence []string
+			var detail []string
+			switch stage {
+			case "gate":
+				l.cfg.Steps = &designRepairSteps{returnedLandingSteps: &returnedLandingSteps{continuationSteps: steps, root: f.root}, failures: 1}
+				writeForkFile(t, filepath.Join(firstDir, GatePlanRecord), `{"record_version":1,"kind":"gate.plan","id":"plan","producer":{"system":"tillr","utility":"gate","version":"0.1.0"},"created_at":"2026-11-13T06:21:56Z","payload":{"checks":[{"check_id":"documents","command":["lint-docs","--strict"]}]}}`)
+				evidence = []string{filepath.Join(firstDir, "documents.log")}
+				detail = []string{"Check: documents", `Command: ["lint-docs" "--strict"]`, "document lint: invalid heading"}
+			case "judge":
+				l.cfg.Policy.Seats = map[string]string{"review": "reviewer"}
+				l.cfg.Policy.Backends["reviewer"] = Backend{Adapter: "fixture", Model: "review-model"}
+				fixtureWrite(t, f, func(tx *store.Tx) error {
+					if _, err := tx.Exec(`UPDATE items SET judge_mode='agent' WHERE item_id='item-a'`); err != nil {
+						return err
+					}
+					_, err := tx.Exec(`INSERT INTO item_grants(grant_id,claim_classes,grantor,issued_at,expires_at) VALUES('grant-review','verification-only','owner',?,?)`, l.cfg.Now().Add(-time.Hour).UnixMilli(), l.cfg.Now().Add(time.Hour).UnixMilli())
+					return err
+				})
+				l.cfg.Steps = &judgeRouteSteps{workflowSteps: &workflowSteps{t: t, f: f}, mode: "not-done", workerHead: head}
+				evidence = []string{"commit:" + head}
+				detail = []string{"Criterion c1: the first judge reason"}
+			case "fence":
+				detail = []string{"outside.txt is outside allowed_paths"}
+			}
+			declareWorkerResumeFixture(t, l)
+			var result LoopResult
+			settleContinuation(t, l, &result)
+			settleContinuation(t, l, &result)
+			plans := mustPlan(t, l)
+			if len(plans) != 1 || plans[0].decision.RunRequest == nil || !plans[0].decision.RunRequest.SessionTurn || plans[0].decision.LaneID != first.LaneID {
+				t.Fatalf("%s refusal did not plan a turn in the original session: %+v (settlement: %+v)", stage, plans, result)
+			}
+			p := plans[0]
+			p.decision.RunRequest.Command = []string{adapter, "--backend", "pi", "--model", "fixture", "--effort", "low"}
+			l.cfg.Stage = &LaneStager{Root: f.root, LaneRoot: f.laneRoot, Store: f.storePath, Template: filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"), Now: l.cfg.Now}
+			d := applyReturnedTurn(t, l, p, base)
+			dir := run.DurableDir(lane, d.RunRequest.RunID)
+			if scenario == "missing-transcript" {
+				if err := os.Remove(transcript); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario == "open-refusal" {
+				t.Setenv("LANDING_OPEN_REFUSAL", "1")
+				writeForkFile(t, transcript, parked+`{"type":"compaction","id":"compacted","parentId":"offered"}`+"\n")
+			}
+			rec, log, err := steps.Run(ctx, *d.RunRequest)
+			if stage != scenario {
+				if err != nil || rec.ExitCode == nil || *rec.ExitCode != 1 {
+					t.Fatalf("expected failed session open: %+v / %v", rec, err)
+				}
+				outcome := l.settle(ctx, d, rec, log, base, "tick", l.cfg.Now(), &result, nil, nil, false)
+				if outcome.err != nil || outcome.stop != "" {
+					t.Fatalf("fresh fallback: %+v", outcome)
+				}
+				fixtureRead(t, f, func(r *store.Reader) error {
+					var count int
+					if err := r.QueryRow(`SELECT count(*) FROM events WHERE kind=?`, callDelivered).Scan(&count); err != nil {
+						return err
+					}
+					if count != 0 {
+						t.Fatal("failed open recorded a delivery to the original session")
+					}
+					var freshRun string
+					if err := r.QueryRow(`SELECT object_id FROM events WHERE kind=? AND json_extract(payload,'$.decision.worker_session_reason')='resume-failed'`, dispatchStartedKind).Scan(&freshRun); err != nil {
+						return err
+					}
+					prompt, err := os.ReadFile(filepath.Join(run.DurableDir(lane, freshRun), "fresh-prompt"))
+					if err != nil || !strings.Contains(string(prompt), "document lint: invalid heading") {
+						t.Fatalf("fresh session did not receive the answer: %v", err)
+					}
+					return nil
+				})
+				return
+			}
+			if err != nil || rec.ExitCode == nil || *rec.ExitCode != 0 {
+				stderr, _ := os.ReadFile(filepath.Join(lane, "stream.err"))
+				t.Fatalf("reopen: %+v / %v; %s", rec, err, stderr)
+			}
+			prompt, err := os.ReadFile(filepath.Join(dir, "received-prompt"))
+			if err != nil || len(prompt) != 0 {
+				t.Fatalf("reopened prompt = %q / %v", prompt, err)
+			}
+			body, err := os.ReadFile(transcript)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(strings.TrimSuffix(string(body), "\n"), "\n")
+			if len(lines) != 3 || !strings.HasPrefix(string(body), parked) {
+				t.Fatalf("expected session, parked call, and result only: %s", body)
+			}
+			var resultEntry struct {
+				Message struct {
+					Role    string
+					Details landingAnswer
+				}
+			}
+			if err := json.Unmarshal([]byte(lines[2]), &resultEntry); err != nil {
+				t.Fatal(err)
+			}
+			answer := resultEntry.Message.Details
+			if resultEntry.Message.Role != "toolResult" || answer.CallID != "first" || answer.Kind != "refused" || answer.Stage != stage || !reflect.DeepEqual(answer.Evidence, evidence) || !landingResultPersisted(body, session, answer) {
+				t.Fatalf("not the expected persisted error result: %+v", resultEntry)
+			}
+			if !strings.HasPrefix(answer.Text, "ANSWER: refused\n") {
+				t.Fatalf("wrong answer heading: %q", answer.Text)
+			}
+			for _, want := range append(detail, "Offer commit: "+head, "Branch head: "+head, "Last base: "+base, "Turn: "+d.RunRequest.RunID, "Scratch: "+dir) {
+				if !strings.Contains(answer.Text, want) {
+					t.Errorf("answer lacks %q: %s", want, answer.Text)
+				}
+			}
+			outcome := l.settle(ctx, d, rec, log, base, "tick", l.cfg.Now(), &LoopResult{}, nil, nil, false)
+			if outcome.err != nil || outcome.stop != "" {
+				t.Fatalf("settle reopened run: %+v", outcome)
+			}
+			assertDelivered := func() {
+				fixtureRead(t, f, func(r *store.Reader) error {
+					var count int
+					var id, form, runID string
+					if err := r.QueryRow(`SELECT count(*), COALESCE(MAX(object_id),''), COALESCE(MAX(json_extract(payload,'$.form')),''), COALESCE(MAX(json_extract(payload,'$.run_id')),'') FROM events WHERE kind=?`, callDelivered).Scan(&count, &id, &form, &runID); err != nil {
+						return err
+					}
+					if count != 1 || id != "first" || form != "tool-result" || runID != d.RunRequest.RunID {
+						t.Fatalf("delivery: count=%d call=%q form=%q run=%q", count, id, form, runID)
+					}
+					return nil
+				})
+			}
+			assertDelivered()
+			if err := l.reconcileLandingDelivery(ctx, d); err != nil {
+				t.Fatal(err)
+			}
+			assertDelivered()
+		})
+	}
+}
+
 func TestLandingTranscriptIsWrittenBeforeAnswer(t *testing.T) {
 	_, l, d, dir := returnedLandingFixture(t, "/session/file.jsonl")
 	if err := os.Remove(filepath.Join(dir, landingAnswerFile)); err != nil {
@@ -233,6 +448,31 @@ func TestLandingTranscriptIsWrittenBeforeAnswer(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, landingAnswerFile)); !os.IsNotExist(err) {
 		t.Fatalf("answer published before transcript: %v", err)
 	}
+}
+
+func TestLandingCallAnswerCannotExistBeforeOfferProcessExits(t *testing.T) {
+	ctx := context.Background()
+	f, l, _, d := continuationDispatchFixture(t, "set -- first\n"+standInLandingOffer, false)
+	rec := run.Record{RunID: d.RunRequest.RunID}
+	child := exec.Command("sleep", "60")
+	child.Env = append(os.Environ(), "TILLR_RUN_ID="+rec.RunID, "TILLR_LOOP_STORE="+f.storePath)
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = child.Process.Kill(); _ = child.Wait() })
+	if got, err := l.intakeLandingOffer(ctx, d, rec, l.laneBase(d.LaneID)); got != landingOfferAbsent || err == nil || !strings.Contains(err.Error(), "processes survive") {
+		t.Fatalf("offer with surviving child: %v / %v", got, err)
+	}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		var count int
+		if err := r.QueryRow(`SELECT count(*) FROM events WHERE kind IN (?,?)`, callOffered, callAnswered).Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			t.Fatalf("recorded %d call events while the child survived", count)
+		}
+		return nil
+	})
 }
 
 func TestLandingMessageWaitsForRunEnd(t *testing.T) {
@@ -450,18 +690,26 @@ func TestLandingCallReplayDistinguishesOpenSettledAndDuplicate(t *testing.T) {
 	if err != nil || got != landingOfferDuplicate {
 		t.Fatalf("later replay: %v, %v", got, err)
 	}
+	var report bytes.Buffer
+	l.cfg.Report = &report
 	outcome := l.settle(ctx, d, run.Record{RunID: req.RunID}, "", base, "tick", l.cfg.Now(), &LoopResult{}, nil, nil, false)
 	if outcome.err != nil || outcome.stop != "" || steps.gates != 0 {
 		t.Fatalf("duplicate was judged: %+v, gates=%d", outcome, steps.gates)
 	}
+	if got := report.String(); !strings.Contains(got, req.RunID) || !strings.Contains(got, "repeated a landing call already recorded") {
+		t.Fatalf("duplicate report = %q, want run ID %q and repeat notice", got, req.RunID)
+	}
 	fixtureRead(t, f, func(r *store.Reader) error {
 		var count int
-		err := r.QueryRow(`SELECT count(*) FROM events WHERE kind=?`, callOffered).Scan(&count)
+		err := r.QueryRow(`SELECT count(*) FROM events WHERE object_type='call'`).Scan(&count)
 		if err == nil && count != 1 {
-			t.Fatalf("recorded %d offers", count)
+			t.Fatalf("recorded %d call events, want 1", count)
 		}
 		return err
 	})
+	if c := itemConflict(t, f); c.ConflictID != "" {
+		t.Fatalf("duplicate raised conflict: %+v", c)
+	}
 }
 
 func TestLandingCallReplayRejectsChangedHeadOrBase(t *testing.T) {

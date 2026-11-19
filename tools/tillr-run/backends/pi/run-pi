@@ -207,6 +207,10 @@ PY
             if [ -r "$landing_dir/landing-transcript" ]; then
                 transcript=$(cat "$landing_dir/landing-transcript")
             fi
+            if [ -n "$transcript" ] && [ ! -e "$transcript" ]; then
+                printf 'Pi landing transcript not found: %s\n' "$transcript" >&2
+                exit 1
+            fi
             if [ -n "$transcript" ] && "$SELF_DIR/landing-call-held" "$transcript" "$(cat "$landing_id")"; then
                 printf '%s\n' tool-result > "$landing_dir/landing-delivery"
                 prompt=/dev/null

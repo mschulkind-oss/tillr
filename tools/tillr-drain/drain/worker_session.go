@@ -177,7 +177,15 @@ func (l *Loop) retainedWorkerSession(ctx context.Context, runID string) (*Worker
 	var session *WorkerSession
 	err = db.ReadTx(ctx, func(r *store.Reader) error {
 		var raw []byte
-		if err := r.QueryRow(`SELECT payload FROM events WHERE kind=? AND object_type='run' AND object_id=? ORDER BY seq DESC LIMIT 1`, RefusalKind, runID).Scan(&raw); err != nil {
+		// A judge refusal belongs to the judge run. Read its writer link only
+		// after this writer was dispatched, not across the board's history.
+		if err := r.QueryRow(`SELECT payload FROM (
+ SELECT seq,payload FROM events WHERE kind=? AND object_type='run' AND object_id=?
+ UNION ALL
+ SELECT seq,payload FROM events WHERE kind=? AND object_type='run' AND object_id<>?
+   AND seq > (SELECT MAX(seq) FROM events WHERE kind=? AND object_type='run' AND object_id=?)
+   AND json_extract(payload,'$.writer_run_id')=? AND json_type(payload,'$.worker_session')='object'
+) ORDER BY seq DESC LIMIT 1`, RefusalKind, runID, RefusalKind, runID, dispatchStartedKind, runID, runID).Scan(&raw); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil
 			}
