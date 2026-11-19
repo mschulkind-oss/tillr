@@ -11,6 +11,7 @@ func TestPiLandingCallAdapterTests(t *testing.T) {
 		{"python3", "landing-call-held.test.py"},
 		{"python3", "extract-report-park.test.py"},
 		{"python3", "parked-exit.test.py"},
+		{"python3", "extract-report-repeating.test.py"},
 	} {
 		t.Run(argv[len(argv)-1], func(t *testing.T) {
 			path, err := exec.LookPath(argv[0])

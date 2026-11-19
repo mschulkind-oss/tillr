@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"syscall"
 	"text/tabwriter"
 	"time"
@@ -89,6 +91,9 @@ type runningRun struct {
 	LeaseLeftMS   *int64 `json:"lease_left_ms"`
 	LeaseNoExpiry bool   `json:"lease_no_expiry"`
 	LogPath       string `json:"log_path"`
+	// Spend is what the run's own stream reports so far: its finished turns, tokens and
+	// cost (liveSpend). The store holds a run's spend only once it has ended.
+	Spend liveSpend `json:"spend"`
 }
 
 // finishedRun is one terminal run with the outcome a person acts on: landed at a sha, a
@@ -108,6 +113,18 @@ type finishedRun struct {
 	DurationMS   int64    `json:"duration_ms"`
 	CostUSD      *float64 `json:"cost_usd"`
 	UsageTokens  *int64   `json:"usage_tokens"`
+	// EndCause is the runner's recorded end cause, empty when the store has none.
+	// RepeatingCall is the call pi ended a `repeating-call` session for.
+	EndCause      string             `json:"end_cause,omitempty"`
+	RepeatingCall *repeatingCallView `json:"repeating_call,omitempty"`
+}
+
+// repeatingCallView is the identical call a `repeating-call` run kept making, as the
+// runner recorded it from pi's `loop_detected` event.
+type repeatingCallView struct {
+	Tool   string `json:"tool"`
+	Args   string `json:"args"`
+	Streak int    `json:"streak"`
 }
 
 // gateVerdict is the gate's own answer for one run, joined to the landing attempt by the
@@ -263,12 +280,69 @@ func readRunning(ctx context.Context, storePath, loopDir, laneRoot string, now t
 		out.Loop.Session = session
 		out.Loop.Active = active
 		out.Loop.SessionNote = note
-		return nil
+		return readFinishedEndings(r, domain, out.Finished)
 	})
 	if err != nil {
 		return runningPayload{}, err
 	}
+	// The live runs' spend is in their logs, read after the store's transaction.
+	for i := range out.Active {
+		out.Active[i].Spend = readLiveSpend(out.Active[i].LogPath)
+	}
 	return out, nil
+}
+
+// readFinishedEndings fills each finished row's end cause, and for a `repeating-call`
+// run the call it repeated, which replaces a bare "exited 0" outcome: such a run exits
+// like any ended run, and its cause is what an operator needs to see. An older store
+// without the column answers no cause.
+func readFinishedEndings(r *store.Reader, domain *storeDomain, finished []finishedRun) error {
+	seqs := map[string]int64{}
+	if domain != nil {
+		for _, run := range domain.runs {
+			seqs[run.RunID] = run.EventSeq
+		}
+	}
+	for i := range finished {
+		var cause sql.NullString
+		err := r.QueryRow(`SELECT end_cause FROM runs WHERE run_id = ?`, finished[i].RunID).Scan(&cause)
+		if isMissingColumn(err) || errors.Is(err, sql.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		finished[i].EndCause = cause.String
+		if cause.String != repeatingCallCause {
+			continue
+		}
+		var payload string
+		err = r.QueryRow(`SELECT payload FROM events WHERE seq = ? AND kind = 'run.finish'`, seqs[finished[i].RunID]).Scan(&payload)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) && !isMissingTable(err) {
+			return err
+		}
+		var body struct {
+			RepeatingCall *repeatingCallView `json:"repeating_call"`
+		}
+		if payload != "" && json.Unmarshal([]byte(payload), &body) == nil {
+			finished[i].RepeatingCall = body.RepeatingCall
+		}
+		if strings.HasPrefix(finished[i].Outcome, "exited") || finished[i].Outcome == finished[i].State {
+			finished[i].Outcome = repeatingOutcome(finished[i].RepeatingCall)
+		}
+	}
+	return nil
+}
+
+// repeatingCallCause is tillr-run's end cause for a session pi ended because the model
+// kept repeating one identical tool call.
+const repeatingCallCause = "repeating-call"
+
+func repeatingOutcome(call *repeatingCallView) string {
+	if call == nil {
+		return repeatingCallCause
+	}
+	return fmt.Sprintf("%s: %s ×%d", repeatingCallCause, call.Tool, call.Streak)
 }
 
 // buildRunningPayload projects the store's rows and the loop's record into the view's
@@ -316,7 +390,7 @@ func buildRunningPayload(now time.Time, snap snapshot, domain *storeDomain, verd
 			Place:       places[item.ItemID],
 			Title:       item.Title,
 			StartedAtMS: live.StartedAtMS,
-			LogPath:     filepath.Join(laneRoot, live.LaneID, live.RunID+".log"),
+			LogPath:     runLogPath(laneRoot, live.LaneID, live.RunID),
 		}
 		if live.StartedAtMS > 0 {
 			elapsed := now.UnixMilli() - live.StartedAtMS
@@ -499,15 +573,15 @@ func renderRunning(w io.Writer, p runningPayload) {
 	} else {
 		fmt.Fprintf(w, "LIVE RUNS (%d)\n", len(p.Active))
 		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "LANE\tITEM\t#\tTITLE\tELAPSED\tLEASE LEFT\tLOG")
+		fmt.Fprintln(tw, "LANE\tITEM\t#\tTITLE\tELAPSED\tTURNS\tSPENT\tLEASE LEFT\tLOG")
 		for _, run := range p.Active {
 			lease := leaseLeftText(run.LeaseLeftMS)
 			if run.LeaseNoExpiry {
 				lease = "lease has no expiry"
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				orDash(run.LaneID), orDash(run.ItemID), placeText(run.Place), orDash(run.Title),
-				elapsedText(run.ElapsedMS), lease, orDash(run.LogPath))
+				elapsedText(run.ElapsedMS), turnsText(run.Spend.Turns), costText(run.Spend.CostUSD), lease, orDash(run.LogPath))
 		}
 		tw.Flush()
 	}
@@ -582,6 +656,14 @@ func elapsedText(ms *int64) string {
 		return "no start recorded"
 	}
 	return spanText(*ms)
+}
+
+// turnsText is a live run's finished turns, or the absence when its log was not read.
+func turnsText(turns *int) string {
+	if turns == nil {
+		return "—"
+	}
+	return strconv.Itoa(*turns)
 }
 
 // leaseLeftText is the lease's own clock: left, expired, or not recorded.

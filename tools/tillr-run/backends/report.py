@@ -19,6 +19,9 @@ carries; this module writes the header, decides completeness, and owns the exit 
     3  the report is complete and its footer says `RESULT: blocked`
     4  the report is INCOMPLETE: the stream carries no `RESULT:` footer
     5  the report is complete and its footer says `RESULT: trunk-broken`
+    6  the harness ended the session itself, and says why (pi's `loop_detected`: the
+       model kept repeating one identical call); no footer is owed, and the run is
+       neither an answer nor a truncation
     2  usage or I/O error: nothing was extracted
 
 4 and 1 are deliberately different answers. A run that exited 0 with no footer wrote
@@ -65,6 +68,7 @@ EXIT_USAGE = 2
 EXIT_BLOCKED = 3
 EXIT_INCOMPLETE = 4
 EXIT_TRUNK_BROKEN = 5
+EXIT_HARNESS_ENDED = 6
 
 # The footer is the brief's, not any harness's: the template asks for it in plain text so
 # a harness with no schema flag carries it just as well as one with a schema.
@@ -156,6 +160,7 @@ def render(
     cost,
     text,
     window=None,
+    ended=None,
 ):
     """The report text and its result. Pure: the same inputs always give the same file."""
     result = footer_result(text)
@@ -179,7 +184,7 @@ def render(
         "status": (window or {}).get("status") or UNKNOWN,
         "reset": (window or {}).get("resetsAt") or UNKNOWN,
         "complete": "yes" if result else "no",
-        "result": result or "missing",
+        "result": result or (f"ended by the harness: {ended}" if ended else "missing"),
     }
     lines = ["# run report", ""]
     lines.extend(f"{key}: {header[key]}" for key in HEADER_KEYS)
@@ -254,6 +259,7 @@ def run(dialect, argv=None):
         cost=found.get("cost"),
         text=text,
         window=found.get("window"),
+        ended=None if found.get("ended") is None else found["ended"]["cause"],
     )
 
     try:
@@ -270,6 +276,9 @@ def run(dialect, argv=None):
         print(f"{prog}: writing the report: {error}", file=sys.stderr)
         return EXIT_USAGE
 
+    if result is None and found.get("ended"):
+        print(f"{prog}: ENDED BY THE HARNESS: {found['ended']['detail']}", file=sys.stderr)
+        return EXIT_HARNESS_ENDED
     if result is None:
         where = args.out or "stdout"
         print(

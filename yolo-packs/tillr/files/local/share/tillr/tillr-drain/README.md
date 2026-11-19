@@ -555,6 +555,36 @@ ordinary exit 0 (`end_cause: normal-exit`) that carries an `ending_exception`
 The drain judges it on its answer like any exit 0. It must not treat the run as
 killed, re-dispatch it or resume its session.
 
+## A session pi ended for a repeating call
+
+Pi ends a session when the model keeps making one identical tool call. The runner
+records such a run with
+[`end_cause: repeating-call`](https://github.com/mschulkind-oss/tillr/blob/main/tillr-run/README.md#a-session-pi-ended-for-a-repeating-call),
+along with the call. The drain does not judge it, does not charge it to the backend,
+and never continues the conversation that looped. It records a `drain.repeating-call`
+event with the call and the route it chose. It keeps the run's work the way an
+interrupted run's is kept: its commit is pinned at `refs/tillr/runs/<run>` and any
+uncommitted work is preserved. Then it takes one of three routes:
+
+1. **A new session on the same backend.** This is the route for a first such ending.
+   The brief gains a "Your previous session" section that names the repeated call, says
+   this is a new session that is not counted against the item, and points at the kept
+   work.
+2. **The seat's next backend.** This is the route when a run dispatched for that reason
+   ends the same way again. It uses the ordinary backend walk.
+3. **A hold for the operator** (`repeating-call`). This is the route when the walk would
+   return to a backend this chain already ended on, or the list has no other backend.
+   The operator reads the call in the run record and runs `tillr drain retry`.
+
+The dispatch decision carries the ending it answers as `repeated_call`, so there is no
+counter. A run dispatched for any other reason starts the chain again. A workflow node
+takes the same three routes: it is dispatched again at once on its lane and base, like
+an infrastructure restart. On a hold, its node row is marked `repeating-call` and the
+item is held. Design and desk-document runs keep their own routes for an unanswered
+run. `TestARepeatingCallStartsFreshThenFailsOverThenHolds` and
+`TestARepeatingWorkflowNodeStartsFreshThenFailsOverThenHolds` cover the item and node
+paths.
+
 ## Landing calls
 
 The drain owns one store record per landing call ID. `call.offered` binds the offer to its

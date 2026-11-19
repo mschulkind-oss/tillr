@@ -449,6 +449,14 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		// A timed-out run is a completed run: the utility ran and observed the bound.
 		payload.State = StateTimedOut
 		payload.EndCause = EndTimeLimit
+	case monitor.repeating != nil:
+		// The harness ended the session itself because the model kept repeating one
+		// identical call. The exit is the harness's own; the cause names why.
+		code := cmd.ProcessState.ExitCode()
+		payload.State = StateExited
+		payload.ExitCode = &code
+		payload.EndCause = EndRepeatingCall
+		payload.RepeatingCall = monitor.repeating
 	case monitor.end != nil:
 		code := cmd.ProcessState.ExitCode()
 		payload.State = StateExited

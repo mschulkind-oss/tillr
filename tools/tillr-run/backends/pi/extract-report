@@ -25,6 +25,7 @@ Pi has no `--output-schema`, so the `RESULT:` footer arrives as the last line of
 assistant's text, exactly as the brief asks for.
 """
 
+import json
 import os
 import sys
 
@@ -52,6 +53,7 @@ def _blocks_text(message):
 def dialect(stream_text, live_probe=False):
     records, unparseable = report.records(stream_text)
     deltas, snapshots, settled = [], {}, []
+    ended = None
     tokens, cost, saw_tokens, saw_cost = 0, 0.0, False, False
     session, first_at, last_at = None, None, None
     for record in records:
@@ -89,6 +91,14 @@ def dialect(stream_text, live_probe=False):
                     cost += float(billed)
                     saw_cost = True
 
+        if record.get("type") == "loop_detected":
+            # pi ended the session itself: the model kept repeating one identical call.
+            # No footer is owed; the report says so rather than reading as truncated.
+            args = json.dumps(record.get("args"), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+            ended = {"cause": "repeating-call",
+                     "detail": f"pi ended the session because the model repeated one identical call "
+                               f"{record.get('streak')} times in a row: {record.get('toolName')} {args}"}
+
         update = record.get("assistantMessageEvent")
         if isinstance(update, dict) and update.get("type") == "text_delta":
             if isinstance(update.get("delta"), str):
@@ -112,7 +122,10 @@ def dialect(stream_text, live_probe=False):
     # to end a parked call, even when the parked batch has emitted agent_end.
     if live_probe and any(record.get("type") == "parked" for record in records):
         text += "\n[land call parked; waiting for the harness to exit]"
+    if ended is not None:
+        text = (text + "\n" if text and not text.endswith("\n") else text) + f"[{ended['detail']}]\n"
     return {
+        "ended": ended,
         "usage_details": measurements.details(records, "pi"),
         "text": text,
         "session": session,

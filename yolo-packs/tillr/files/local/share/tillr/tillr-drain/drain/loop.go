@@ -1224,7 +1224,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			LaneID:           decision.LaneID, ItemID: request.ItemID, RunID: request.RunID,
 			Backend: request.Backend, BaseSHA: mainSHA, WorkingDir: request.WorkingDir,
 			TimeoutMS: request.TimeoutMS, BlockConflict: decision.BlockConflict,
-			Returned: decision.Returned,
+			Returned: decision.Returned, RepeatedCall: decision.RepeatedCall,
 		}
 		if decision.DesignContinuationFrom != "" {
 			spec.SessionID = decision.DesignerSessionID
@@ -1660,6 +1660,12 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	}
 	if orphaned && !offered {
 		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "orphaned by a loop stop")}
+	}
+	// pi ended the session because the model kept repeating one identical call. That
+	// conversation is not continued and the ending is not judged: the item starts again
+	// fresh, fails over, or is held for the operator (repeating_call.go).
+	if record.EndCause == run.EndRepeatingCall && !offered && decision.BlockConflict == nil && decision.DeskDocument == "" {
+		return l.settleRepeatingCall(ctx, decision, record, lane)
 	}
 	// A usage refusal says nothing about the conflict. Release it for the next
 	// planner pass instead of leaving the claimed design run awaiting forever.

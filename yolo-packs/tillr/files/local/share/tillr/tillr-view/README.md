@@ -586,10 +586,15 @@ the newest `.tillr/loop/drain-*.json`. When an event was appended after that fil
 header says `stale stop record — newer run exists at seq <N>`: the shape that hid a loop
 whose newest stop record was an older take.
 2. **The active runs** — the lane, run, item, place, title, elapsed (the viewer's clock from
-the run's start), lease left, and the run's `.log` path. With no live run it says
-`0 live runs; lanes idle: lane-1` rather than drawing an empty table.
+the run's start), turns and spend so far, lease left, and the run's `.log` path. The store
+has no spend for a run until its terminal write, so turns and spend come from the run's own
+stream: its `turn_end` events and the usage they carry, the same rule the pi extractor
+applies. A log that is not there yet, or a turn with no cost reported, shows `—`. With no
+live run it says `0 live runs; lanes idle: lane-1` rather than drawing an empty table.
 3. **The last five finished runs** — the outcome (`landed <sha>`, `gate-failed`,
-`exited <code>`, `timed-out`), duration and cost.
+`exited <code>`, `timed-out`, or `repeating-call: <tool> ×<streak>` for a session pi ended
+because the model kept repeating one identical call), duration and cost. The JSON row
+carries `end_cause` and, for that cause, the `repeating_call` the runner recorded.
 
 The face joins three sources because no two of them suffice: the lane rows and their
 `run.allocate` events (a run that is going has no `runs` row until its terminal write), the

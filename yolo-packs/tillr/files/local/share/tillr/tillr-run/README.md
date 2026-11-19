@@ -177,6 +177,30 @@ or treat it as signal-killed. `ending_exception` is accepted only on an `exited`
 record, and `run status` returns it from the finish event. The settled-idle rule
 stays as the ending for other harnesses.
 
+## A session pi ended for a repeating call
+
+Pi ends a session itself when the model keeps making one identical tool call. That is
+pi's own loop detection, which runs in foreground sessions too. In `--mode json` it
+first emits `{"type":"loop_detected","toolName":"read","args":{…},"streak":40}`, and
+then the run ends and the process exits 0 like any ended run. On 2026-11-19 two pi
+runs repeated one identical `read` 613 and 470 times in a row before anything stopped
+them.
+
+When the executor sees that event, it records the run as `exited`, with its real exit
+code and `end_cause: repeating-call` rather than `normal-exit`. The record's
+`repeating_call` names the tool, the arguments, an `args_digest` and the `streak`.
+The arguments are re-encoded with sorted keys. `args_digest` is the SHA-256 of that
+whole text, and `args` quotes at most its first 400 bytes. `run status` returns
+`repeating_call` from the finish event. The record is refused if it has the cause but
+no named call, or a named call under any other cause. The
+[drain routes the ending](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md#a-session-pi-ended-for-a-repeating-call):
+it starts the work again in a new session, and never resumes the conversation that
+looped.
+
+`TestALoopDetectedStreamEndsAsRepeatingCall` runs two fixtures through `run.Exec`. They
+are nine-call excerpts of those two runs, with the event appended, since those runs
+predate it.
+
 ## Pausing a live run
 
 ```sh

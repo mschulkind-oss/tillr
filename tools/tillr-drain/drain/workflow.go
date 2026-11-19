@@ -406,6 +406,7 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	// The refusal has been answered by this node. Successors keep the repaired
 	// checkout and accepted-input references, not the return dispatch mode.
 	next.Returned = nil
+	next.RepeatedCall = nil
 	next.WorkerSessionReason = ""
 	index, err := l.nextWorkflowNode(ctx, d)
 	if err != nil {
@@ -553,6 +554,9 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 	if stage.Kind == "agent" {
 		if ClassifyAttempt(rec, log) == AttemptUnjudged {
 			return true, Externalf("unjudged workflow node requires continuation or inspection")
+		}
+		if rec.EndCause == run.EndRepeatingCall && !offered {
+			return true, l.restartRepeatingNode(ctx, d, base, rec)
 		}
 		if ClassifyAttempt(rec, log) == AttemptInfrastructure || (rec.State == run.StateExited && !readableFooter(footer)) {
 			return true, l.retryWorkflowNode(ctx, d, base, rec, result)
