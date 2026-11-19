@@ -4,6 +4,10 @@ rewrite = true
 [order]
 record = "docs/tillr/queue-order.txt"
 
+[lanes]
+# Lanes reserved for interactively sourced items (the owner asked on 2026-11-18 for capacity reserved for them).
+express = 2
+
 [roll]
 paths = ["tools/tillr*/", "config/tillr/"]
 command = "just tillr-roll --no-request"
