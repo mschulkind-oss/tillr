@@ -1016,6 +1016,10 @@ func (l *Loop) applyPlan(ctx context.Context, p plannedApplication, mainSHA stri
 // rolled back, the item is held with ReasonDecisionCollision naming both decisions, and the
 // pass goes on (the owner's ruling: the loop never stops on one item's condition).
 func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, mainSHA string, at time.Time, generation *string) (bool, *pendingWork, error) {
+	return l.applyPlanTrunk(ctx, p, &mainSHA, at, generation)
+}
+
+func (l *Loop) applyPlanTrunk(ctx context.Context, p plannedApplication, mainSHA *string, at time.Time, generation *string) (bool, *pendingWork, error) {
 	applied, work, err := l.applyPlanRecorded(ctx, p, mainSHA, at, generation)
 	var collision *decisionCollisionError
 	if err == nil || !errors.As(err, &collision) {
@@ -1028,7 +1032,76 @@ func (l *Loop) applyPlanGeneration(ctx context.Context, p plannedApplication, ma
 	return false, nil, nil
 }
 
-func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, mainSHA string, at time.Time, generation *string) (bool, *pendingWork, error) {
+// trunkAdvancedUntouched reports whether trunk advanced fast-forward from base to head
+// without changing paths that feed row's planning or fall inside its derived fence.
+func (l *Loop) trunkAdvancedUntouched(ctx context.Context, r *store.Reader, d Decision, row itemRow, base, head string) (bool, error) {
+	if base == "" || d.Inputs == nil {
+		return false, nil
+	}
+	advanced, err := containsCommit(ctx, l.cfg.Root, base, head)
+	if err != nil || !advanced {
+		return false, err
+	}
+	diff, err := l.git(ctx, l.cfg.Root, "diff", "--no-renames", "--name-only", "-z", base+".."+head)
+	if err != nil {
+		return false, err
+	}
+	changed := false
+	for _, entry := range strings.Split(diff, "\x00") {
+		if entry != "" {
+			changed = true
+			break
+		}
+	}
+	if !changed {
+		return false, nil
+	}
+	var bodyRef string
+	if err := r.QueryRow(`SELECT COALESCE(body_ref, '') FROM items WHERE item_id = ?`, row.ItemID).Scan(&bodyRef); err != nil {
+		return false, err
+	}
+	bodyFile, _, _ := strings.Cut(bodyRef, "#")
+	if bodyFile != "" {
+		bodyFile = filepath.ToSlash(filepath.Clean(bodyFile))
+	}
+	designDoc := ""
+	if row.DesignDoc != "" {
+		designDoc = filepath.ToSlash(filepath.Clean(row.DesignDoc))
+	}
+	workflowDir := ""
+	if row.Workflow != "" || d.Workflow != nil {
+		workflowDir = "config/tillr/workflows"
+	}
+	commandsFile := ""
+	if d.Workflow != nil {
+		commandsFile = "config/tillr/commands.json"
+	}
+	fence := itemFence(row.Allowed)
+	for _, entry := range strings.Split(diff, "\x00") {
+		if entry == "" {
+			continue
+		}
+		clean := filepath.ToSlash(filepath.Clean(entry))
+		if insideFence(clean, fence) {
+			return false, nil
+		}
+		if bodyFile != "" && clean == bodyFile {
+			return false, nil
+		}
+		if designDoc != "" && clean == designDoc {
+			return false, nil
+		}
+		if workflowDir != "" && insideFence(clean, []string{workflowDir}) {
+			return false, nil
+		}
+		if commandsFile != "" && clean == commandsFile {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, mainSHA *string, at time.Time, generation *string) (bool, *pendingWork, error) {
 	if p.decision.Action == ActionHold {
 		if c := p.decision.BlockConflict; c != nil && c.TriageVersion != "" && c.WaitingOn == "owner" {
 			s, err := store.Open(ctx, l.cfg.Store, true)
@@ -1126,12 +1199,13 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 	defer s.Close()
 	applied := false
 	var work *pendingWork
+	trunkSHA := *mainSHA
 	// The decision asks git (the trunk tip, the green pointer, ancestry, a block's body
 	// at a commit) and files (the item's definition body, its workflow) about rows it
 	// reads here, so the write is gathered: each of those is fetched with no write open,
 	// and the write runs again from its first statement with the answer (gathered.go).
 	err = writeGathered(ctx, s, func(ctx context.Context, tx *store.Tx) error {
-		applied, work, nextGeneration = false, nil, *generation
+		applied, work, nextGeneration, trunkSHA = false, nil, *generation, *mainSHA
 		current, err := currentDefinition(tx.Reader(), p)
 		if err != nil || !current {
 			return err
@@ -1168,16 +1242,38 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				return nil
 			}
 		}
+		var items []itemRow
+		if d.Action == ActionDispatch || d.Action == ActionRetry {
+			items, err = readItems(tx.Reader())
+			if err != nil {
+				return err
+			}
+		}
+		var targetRow itemRow
+		hasTargetRow := false
+		for _, row := range items {
+			if row.ItemID == d.ItemID {
+				targetRow, hasTargetRow = row, true
+				break
+			}
+		}
 		if !l.nonLanding && (d.Action == ActionDispatch || d.Action == ActionRetry) {
-			// A concurrent landing can publish an answered conflict after the pass
-			// refreshed documents. Item versions alone do not bind that new decision
-			// to the refreshed trunk; defer before claiming a run at the old base.
+			// A concurrent landing can publish an answered conflict or change inputs
+			// after the pass refreshed documents. Refresh the trunk commit only when it
+			// advanced cleanly and left this item's own inputs and fence untouched.
 			head, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
 			if err != nil {
 				return err
 			}
-			if head != mainSHA {
-				return nil
+			if head != trunkSHA {
+				if !hasTargetRow {
+					return nil
+				}
+				untouched, err := l.trunkAdvancedUntouched(ctx, tx.Reader(), d, targetRow, trunkSHA, head)
+				if err != nil || !untouched {
+					return err
+				}
+				trunkSHA = head
 			}
 		}
 		if d.Inputs != nil && (d.Action == ActionDispatch || d.Action == ActionRetry) && l.nonLanding {
@@ -1186,15 +1282,8 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			}
 		}
 		if d.Inputs != nil && (d.Action == ActionDispatch || d.Action == ActionRetry) && !l.nonLanding {
-			rows, err := readItems(tx.Reader())
-			if err != nil {
-				return err
-			}
-			for _, row := range rows {
-				if row.ItemID != d.ItemID {
-					continue
-				}
-				now, err := currentRunInputs(ctx, tx.Reader(), row, l.cfg.Policy, l.cfg.Root, l.build)
+			if hasTargetRow {
+				now, err := currentRunInputs(ctx, tx.Reader(), targetRow, l.cfg.Policy, l.cfg.Root, l.build)
 				if err != nil {
 					return err
 				}
@@ -1243,10 +1332,6 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			if err != nil {
 				return err
 			}
-			items, err := readItems(tx.Reader())
-			if err != nil {
-				return err
-			}
 			if !l.nonLanding {
 				conflicts, err := item.ReadConflicts(tx.Reader())
 				if err != nil {
@@ -1262,11 +1347,8 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 					}
 				}
 			}
-			for _, item := range items {
-				if item.ItemID != d.ItemID {
-					continue
-				}
-				fork := forkOf(item.Allowed)
+			if hasTargetRow {
+				fork := forkOf(targetRow.Allowed)
 				for _, held := range heldForks {
 					if fork != "" && held.fork == fork && !(work != nil && (work.Ready || d.WorkflowRestart) && held.itemID == d.ItemID) {
 						return nil
@@ -1276,7 +1358,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			if work != nil && !work.Done && !work.Ready && !d.WorkflowRestart {
 				return nil
 			}
-			base := mainSHA
+			base := trunkSHA
 			if !l.nonLanding && !IsTrunkFixer(d.ItemID) {
 				green, err := provedLaneBase(ctx, l.cfg.Root, l.gatePolicy.LaneBase)
 				if err != nil {
@@ -1465,6 +1547,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 	}
 	if err == nil && applied {
 		*generation = nextGeneration
+		*mainSHA = trunkSHA
 	}
 	return applied, work, err
 }
@@ -1965,7 +2048,7 @@ plans:
 				continue
 			}
 		}
-		ok, work, err := l.applyPlanGeneration(ctx, p, mainSHA, at, &timing.TickID)
+		ok, work, err := l.applyPlanTrunk(ctx, p, &mainSHA, at, &timing.TickID)
 		if err != nil {
 			result.StopItemID, result.StopStep = d.ItemID, "apply plan"
 			return "", err
