@@ -6,7 +6,9 @@ import os
 from pathlib import Path
 import sqlite3
 import subprocess
+import sys
 import tempfile
+import time
 import tomllib
 import unittest
 from unittest.mock import patch
@@ -36,7 +38,7 @@ class RollTest(unittest.TestCase):
             with self.subTest(path=path):
                 body = (ROOT / path).read_text().split(f'## {heading}\n', 1)[1].split('\n## ', 1)[0].strip()
                 self.assertLessEqual(len(body.splitlines()), 5)
-                for command in ('just tillr-build', 'just tillr-roll', 'yolo host apply --assert'):
+                for command in ('just tillr-build', 'just tillr-roll', 'just tillr-restart', 'yolo host apply --assert'):
                     self.assertIn(command, body)
 
     def test_late_build_failure_preserves_every_live_binary(self):
@@ -131,6 +133,177 @@ class RollTest(unittest.TestCase):
             new['view']['digest'] = roll.digest(path)
             self.assertEqual(roll.report(old, new, {'view': 'restarted'}, live), 0)
             self.assertEqual(roll.report(old, new, {'view': 'refused'}, live), 1)
+
+
+    def test_restart_from_running_loop_reads_policy_and_lanes_and_restarts(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work) / 'repo'
+            root.mkdir()
+            live = Path(work) / 'bin'
+            live.mkdir()
+
+            def git(*args):
+                return subprocess.check_output(
+                    ['git', '-C', root, '-c', 'user.name=Fixture',
+                     '-c', 'user.email=fixture@example.invalid', *args], text=True).strip()
+
+            git('init', '-q')
+            (root / '.gitignore').write_text('/.tillr/\n')
+            (root / '.justfile').write_bytes((ROOT / '.justfile').read_bytes())
+            if (ROOT / 'mise.toml').is_file():
+                (root / 'mise.toml').write_bytes((ROOT / 'mise.toml').read_bytes())
+            for name in ('tillr-keep', 'tillr-roll.py'):
+                dst = root / 'tools/tillr-roll' / name
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes((ROOT / 'tools/tillr-roll' / name).read_bytes())
+            adapter = root / 'tools/tillr-loop/tillr-loop'
+            adapter.parent.mkdir(parents=True, exist_ok=True)
+            adapter.write_text('#!/usr/bin/env python3\n')
+
+            # Stub tillr-drain records every invocation, acts as loop when given `loop`,
+            # and stops the running loop when given `stop`.
+            calls_log = Path(work) / 'calls.log'
+            drain_stub = live / 'tillr-drain'
+            drain_stub.write_text(
+                '#!/usr/bin/env python3\n'
+                'import ctypes, json, os, signal, sys, time\n'
+                'from pathlib import Path\n'
+                f'log = Path({str(calls_log)!r})\n'
+                'with log.open("a") as f:\n'
+                '    f.write(json.dumps({"pid": os.getpid(), "argv": sys.argv[1:]}) + "\\n")\n'
+                'if sys.argv[1:2] == ["loop"]:\n'
+                '    ctypes.CDLL(None).prctl(15, b"tillr-drain", 0, 0, 0)\n'
+                '    pid_file = Path(sys.argv[sys.argv.index("--root") + 1]) / ".tillr/stub.pid"\n'
+                '    pid_file.parent.mkdir(parents=True, exist_ok=True)\n'
+                '    pid_file.write_text(str(os.getpid()))\n'
+                '    stop = [False]\n'
+                '    signal.signal(signal.SIGTERM, lambda *_: stop.__setitem__(0, True))\n'
+                '    deadline = time.monotonic() + 30\n'
+                '    while not stop[0] and time.monotonic() < deadline:\n'
+                '        time.sleep(0.02)\n'
+                'elif sys.argv[1:2] == ["stop"]:\n'
+                '    pid_file = Path(sys.argv[sys.argv.index("--root") + 1]) / ".tillr/stub.pid"\n'
+                '    if pid_file.exists():\n'
+                '        os.kill(int(pid_file.read_text()), signal.SIGTERM)\n'
+                '        sys.exit(0)\n'
+                '    sys.exit(2)\n'
+            )
+            drain_stub.chmod(0o755)
+
+            # Minimal Go modules so `just tillr-build` builds from HEAD.
+            for module in roll.MODULES:
+                source = root / 'tools' / f'tillr-{module}'
+                source.mkdir(parents=True, exist_ok=True)
+                (source / 'go.mod').write_text(f'module example.invalid/{module}\n\ngo 1.23\n')
+                (source / 'main.go').write_text('package main\nfunc main() {}\n')
+
+            git('add', '.')
+            git('commit', '-qm', 'fixture')
+            head = git('rev-parse', 'HEAD')
+
+            env = {**os.environ, 'YOLO_DURABLE_DIR': work,
+                   'PATH': f'{live}:{os.environ["PATH"]}'}
+            keeper = subprocess.Popen(
+                [sys.executable, str(root / 'tools/tillr-roll/tillr-keep'),
+                 '--root', str(root), '--', '--policy', 'config/custom-policy.json', '--lanes', '4'],
+                cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            )
+            try:
+                deadline = time.monotonic() + 10
+                while not (root / '.tillr/stub.pid').exists():
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.02)
+                old_loop_pid = int((root / '.tillr/stub.pid').read_text())
+
+                # Replace tillr-drain with a stub that won't overwrite the built binary,
+                # wait — tillr-build overwrites live/tillr-drain with the Go no-op binary!
+                # That's fine: after tillr-build replaces live/tillr-drain, the new keeper
+                # starts the new binary (which exits immediately, so we just verify the
+                # keeper was started with the exact --policy and --lanes args).
+                result = subprocess.run(
+                    ['just', '--justfile', str(root / '.justfile'), 'tillr-restart', '--root', str(root)],
+                    cwd=root, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertIn('keeper: stop requested', result.stdout)
+                self.assertIn(f'restart: stopping loop {old_loop_pid}', result.stdout)
+                self.assertIn(f'restart: loop {old_loop_pid} exited', result.stdout)
+                self.assertIn(f'restart: building from HEAD {head[:12]}', result.stdout)
+                self.assertIn('policy=config/custom-policy.json', result.stdout)
+                self.assertIn('lanes=4', result.stdout)
+                self.assertEqual(keeper.wait(timeout=5), 0)
+
+                # New keeper lock should be held and recorded launch saved.
+                recorded = json.loads((root / '.tillr/keeper.launch.json').read_text())
+                self.assertEqual(recorded, {'lanes': '4', 'policy': 'config/custom-policy.json'})
+                deadline = time.monotonic() + 5
+                while not (Path(work) / 'keeper.log').exists():
+                    self.assertLess(time.monotonic(), deadline)
+                    time.sleep(0.02)
+            finally:
+                if keeper.poll() is None:
+                    keeper.terminate()
+                    keeper.wait(timeout=5)
+                keeper.stdout.close()
+                subprocess.run(
+                    [sys.executable, str(root / 'tools/tillr-roll/tillr-keep'),
+                     '--root', str(root), '--stop'],
+                    cwd=root, env=env, capture_output=True, text=True,
+                )
+
+    def test_restart_when_no_loop_is_running_uses_recorded_launch_and_succeeds(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work) / 'repo'
+            root.mkdir()
+
+            def git(*args):
+                return subprocess.check_output(
+                    ['git', '-C', root, '-c', 'user.name=Fixture',
+                     '-c', 'user.email=fixture@example.invalid', *args], text=True).strip()
+
+            git('init', '-q')
+            (root / '.gitignore').write_text('/.tillr/\n')
+            (root / '.justfile').write_bytes((ROOT / '.justfile').read_bytes())
+            if (ROOT / 'mise.toml').is_file():
+                (root / 'mise.toml').write_bytes((ROOT / 'mise.toml').read_bytes())
+            for name in ('tillr-keep', 'tillr-roll.py'):
+                dst = root / 'tools/tillr-roll' / name
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                dst.write_bytes((ROOT / 'tools/tillr-roll' / name).read_bytes())
+            for module in roll.MODULES:
+                source = root / 'tools' / f'tillr-{module}'
+                source.mkdir(parents=True, exist_ok=True)
+                (source / 'go.mod').write_text(f'module example.invalid/{module}\n\ngo 1.23\n')
+                (source / 'main.go').write_text('package main\nfunc main() {}\n')
+            git('add', '.')
+            git('commit', '-qm', 'fixture')
+            head = git('rev-parse', 'HEAD')
+
+            (root / '.tillr').mkdir()
+            (root / '.tillr/keeper.launch.json').write_text(
+                json.dumps({'policy': 'config/recorded.json', 'lanes': '6'}) + '\n'
+            )
+
+            env = {**os.environ, 'YOLO_DURABLE_DIR': work,
+                   'PATH': f'{Path(work) / "bin"}:{os.environ["PATH"]}'}
+            result = subprocess.run(
+                ['just', '--justfile', str(root / '.justfile'), 'tillr-restart', '--root', str(root)],
+                cwd=root, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            )
+            try:
+                self.assertEqual(result.returncode, 0, result.stdout)
+                self.assertIn('keeper: not running', result.stdout)
+                self.assertIn('restart: no loop running', result.stdout)
+                self.assertIn(f'restart: building from HEAD {head[:12]}', result.stdout)
+                self.assertIn('policy=config/recorded.json', result.stdout)
+                self.assertIn('lanes=6', result.stdout)
+                self.assertTrue((Path(work) / 'bin/tillr-drain').is_file())
+            finally:
+                subprocess.run(
+                    [sys.executable, str(root / 'tools/tillr-roll/tillr-keep'),
+                     '--root', str(root), '--stop'],
+                    cwd=root, env=env, capture_output=True, text=True,
+                )
 
 
 if __name__ == '__main__':

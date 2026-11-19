@@ -35,6 +35,16 @@ def process(pid):
 DRAIN_NAME = re.compile(r"tillr-drain(?:-[0-9a-f]+)?")
 
 
+def loop_argv(pid):
+    """Return the arguments after `tillr-drain` for pid, or None."""
+    raw = (Path("/proc") / str(pid) / "cmdline").read_bytes()
+    argv = [arg.decode("utf-8", "replace") for arg in raw.split(b"\0")[:-1]]
+    for index, arg in enumerate(argv[:2]):
+        if DRAIN_NAME.fullmatch(os.path.basename(arg)):
+            return argv[index + 1:]
+    return None
+
+
 def is_loop_face(pid, root):
     """Whether pid's arguments are `tillr-drain loop` for root, read from /proc cmdline.
 
@@ -43,15 +53,8 @@ def is_loop_face(pid, root):
     argument. A --root, when given, must name this checkout; without one the loop's root
     is its working directory, which find_loop has already matched.
     """
-    raw = (Path("/proc") / str(pid) / "cmdline").read_bytes()
-    argv = [arg.decode("utf-8", "replace") for arg in raw.split(b"\0")[:-1]]
-    for index, arg in enumerate(argv[:2]):
-        if DRAIN_NAME.fullmatch(os.path.basename(arg)):
-            rest = argv[index + 1:]
-            break
-    else:
-        return False
-    if rest[:1] != ["loop"]:
+    rest = loop_argv(pid)
+    if rest is None or rest[:1] != ["loop"]:
         return False
     named = None
     for position, arg in enumerate(rest[1:], start=1):
@@ -60,6 +63,30 @@ def is_loop_face(pid, root):
         elif arg.startswith(("--root=", "-root=")):
             named = arg.split("=", 1)[1]
     return named is None or (root / named).resolve() == root.resolve()
+
+
+def extract_policy_and_lanes(args):
+    """Extract --policy and --lanes values from loop arguments."""
+    policy = None
+    lanes = None
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        if arg in ("--policy", "-policy") and index + 1 < len(args):
+            policy = args[index + 1]
+            index += 2
+        elif arg.startswith(("--policy=", "-policy=")):
+            policy = arg.split("=", 1)[1]
+            index += 1
+        elif arg in ("--lanes", "-lanes") and index + 1 < len(args):
+            lanes = args[index + 1]
+            index += 2
+        elif arg.startswith(("--lanes=", "-lanes=")):
+            lanes = arg.split("=", 1)[1]
+            index += 1
+        else:
+            index += 1
+    return policy, lanes
 
 
 def find_loop(root):
@@ -138,6 +165,80 @@ def loop_command(root, extra):
     return command + extra
 
 
+def read_recorded_launch(root):
+    """Read the last recorded policy and lane count from .tillr/keeper.launch.json."""
+    path = root / ".tillr/keeper.launch.json"
+    try:
+        data = json.loads(path.read_text())
+    except FileNotFoundError:
+        return None, None
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"unreadable recorded launch {path}: {error}") from error
+    return data.get("policy"), data.get("lanes")
+
+
+def write_recorded_launch(root, policy, lanes):
+    """Record policy and lane count so a later restart can reuse them."""
+    path = root / ".tillr/keeper.launch.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {}
+    if policy is not None:
+        payload["policy"] = policy
+    if lanes is not None:
+        payload["lanes"] = str(lanes)
+    path.write_text(json.dumps(payload, sort_keys=True) + "\n")
+
+
+def resolve_restart_args(root, extra, loop_pid):
+    """Determine policy and lanes from the running loop or recorded launch, plus extra."""
+    extra_policy, extra_lanes = extract_policy_and_lanes(extra)
+    running_policy, running_lanes = (None, None)
+    if loop_pid is not None:
+        rest = loop_argv(loop_pid)
+        if rest is not None and rest[:1] == ["loop"]:
+            running_policy, running_lanes = extract_policy_and_lanes(rest[1:])
+    rec_policy, rec_lanes = read_recorded_launch(root)
+    policy = extra_policy if extra_policy is not None else (running_policy if running_policy is not None else rec_policy)
+    lanes = extra_lanes if extra_lanes is not None else (running_lanes if running_lanes is not None else rec_lanes)
+    args = list(extra)
+    if policy is not None and extra_policy is None:
+        args.extend(["--policy", policy])
+    if lanes is not None and extra_lanes is None:
+        args.extend(["--lanes", str(lanes)])
+    return args, policy, lanes
+
+
+def wait_for_exit(pid, timeout=60):
+    """Wait for pid to exit or become a zombie."""
+    original = process(pid)
+    if original is None or original[2] == "Z":
+        return
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        current = process(pid)
+        if current is None or current[2] == "Z" or current[:2] != original[:2]:
+            return
+        time.sleep(0.05)
+    raise RuntimeError(f"loop {pid} did not exit within {timeout}s")
+
+
+def wait_for_keeper_exit(path, timeout=30):
+    """Wait until the keeper lock is released."""
+    if not path.exists():
+        return
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with path.open("r") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+        except FileNotFoundError:
+            return
+        except BlockingIOError:
+            time.sleep(0.05)
+    raise RuntimeError(f"keeper lock {path} stayed held after {timeout}s")
+
+
 def stop_keeper(path):
     try:
         lock = path.open("r")
@@ -168,10 +269,68 @@ def stop_keeper(path):
             print("keeper: not running")
 
 
+def restart_drain(root, extra, lock_path, build_cmd=None, drain_bin="tillr-drain"):
+    """Stand the keeper down, stop the loop, wait for exit, build from HEAD, and start the keeper."""
+    # 1. Read policy and lane count from the running loop (if any) or recorded launch BEFORE stopping.
+    loop_pid = find_loop(root)
+    restart_args, policy, lanes = resolve_restart_args(root, extra, loop_pid)
+
+    # 2. Stand the keeper down.
+    stop_keeper(lock_path)
+    wait_for_keeper_exit(lock_path)
+
+    # 3. Stop the loop if running, and wait for it to exit.
+    if loop_pid is not None:
+        print(f"restart: stopping loop {loop_pid}", flush=True)
+        stop_result = subprocess.run([drain_bin, "stop", "--root", str(root)],
+                                     capture_output=True, text=True)
+        if stop_result.returncode not in (0, 2):
+            detail = (stop_result.stderr or stop_result.stdout).strip()
+            raise RuntimeError(f"tillr-drain stop failed ({stop_result.returncode}): {detail}")
+        wait_for_exit(loop_pid)
+        print(f"restart: loop {loop_pid} exited", flush=True)
+    else:
+        print("restart: no loop running", flush=True)
+
+    # 4. Build from the current HEAD.
+    head = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+    env = {**os.environ, "TILLR_BUILD_UNPROVED": head}
+    cmd = build_cmd if build_cmd is not None else ["just", "--justfile", str(root / ".justfile"), "tillr-build"]
+    print(f"restart: building from HEAD {head[:12]}", flush=True)
+    subprocess.run(cmd, cwd=root, env=env, check=True)
+
+    # 5. Start the keeper again in the background with the resolved policy and lane count.
+    keeper_cmd = [sys.executable, str(Path(__file__).resolve()), "--root", str(root)]
+    if restart_args:
+        keeper_cmd.append("--")
+        keeper_cmd.extend(restart_args)
+    durable = os.environ.get("YOLO_DURABLE_DIR")
+    log_dir = Path(durable).resolve() if durable else root / ".tillr"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "keeper.log"
+    with log_path.open("a") as log_file:
+        keeper_proc = subprocess.Popen(
+            keeper_cmd,
+            cwd=root,
+            stdin=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    summary = []
+    if policy is not None:
+        summary.append(f"policy={policy}")
+    if lanes is not None:
+        summary.append(f"lanes={lanes}")
+    detail = f" ({', '.join(summary)})" if summary else ""
+    print(f"restart: started keeper {keeper_proc.pid}{detail}; log: {log_path}", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path.cwd(), help="repository checkout (default: current directory)")
     parser.add_argument("--stop", action="store_true", help="stop only the keeper for this checkout")
+    parser.add_argument("--restart", action="store_true", help="stand keeper down, stop loop, wait for exit, build HEAD, and restart keeper")
     parser.add_argument("loop_args", nargs=argparse.REMAINDER, help="additional loop arguments after --")
     args = parser.parse_args()
     root = args.root.resolve()
@@ -184,12 +343,17 @@ def main():
         parser.error("name the checkout with the keeper's --root, not a loop override")
     if args.stop and extra:
         parser.error("--stop does not take loop arguments")
+    if args.stop and args.restart:
+        parser.error("--stop and --restart cannot be combined")
     if not Path("/proc/self/comm").is_file() or not hasattr(os, "pidfd_open"):
         parser.error("the keeper needs Linux /proc and process handles")
     path = root / ".tillr/keeper.lock"
     try:
         if args.stop:
             stop_keeper(path)
+            return 0
+        if args.restart:
+            restart_drain(root, extra, path)
             return 0
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a+") as lock:
@@ -205,6 +369,10 @@ def main():
             json.dump({"pid": os.getpid(), "start": process(os.getpid())[1]}, lock)
             lock.flush()
 
+            extra_policy, extra_lanes = extract_policy_and_lanes(extra)
+            if extra_policy is not None or extra_lanes is not None:
+                write_recorded_launch(root, extra_policy, extra_lanes)
+
             def launch():
                 # A separate session keeps terminal Ctrl-C and --stop away from the
                 # loop. Never terminate, authorize a retry, or write to its store here.
@@ -213,11 +381,21 @@ def main():
                 print(f"keeper: started loop {child.pid}", flush=True)
                 return child
 
-            keep(stop, lambda: find_loop(root), launch,
+            def find_and_record():
+                pid = find_loop(root)
+                if pid is not None:
+                    rest = loop_argv(pid)
+                    if rest is not None and rest[:1] == ["loop"]:
+                        p, l = extract_policy_and_lanes(rest[1:])
+                        if p is not None or l is not None:
+                            write_recorded_launch(root, p, l)
+                return pid
+
+            keep(stop, find_and_record, launch,
                  lambda child: observe_loop(stop, child), stop.wait)
             print("keeper: stopped; loop left running", flush=True)
         return 0
-    except (OSError, RuntimeError, ValueError, KeyError) as error:
+    except (OSError, RuntimeError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         print(f"keeper: {error}", file=sys.stderr)
         return 2
 

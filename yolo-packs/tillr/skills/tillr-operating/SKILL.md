@@ -130,7 +130,7 @@ continue to route items to their own seats.
 
 Start the drain and observatory from the `just tillr-build` bin directory.
 After a tillr landing the loop runs `just tillr-roll --no-request`, then requests restarts.
-After a manual commit, run `just tillr-roll` to test, build, swap and request both restarts.
+After a manual commit, run `just tillr-roll` (in-place) or `just tillr-restart` (rebuild HEAD, restart keeper and loop).
 A refused restart leaves the current process running; inspect the command's per-part report.
 Pack launchers use a separate install: run `yolo host apply --assert` before requesting a restart.
 
