@@ -85,12 +85,14 @@ func (s Squash) Conflicted() bool { return len(s.Conflicts) > 0 }
 // commit is written with the repository's scope-checked identity rather than the lane's.
 // `git merge-tree --write-tree --merge-base=<base>` is the three-way merge git's own
 // cherry-pick uses, on trees rather than on a checkout; `git commit-tree` writes the commit
-// with explicit GIT_AUTHOR_* and GIT_COMMITTER_* from LandingIdentity() and the head's own
-// message, unchanged: a commit never names a queue item (ruling D-RS3 in
-// docs/design/queue-persistence-ruling.md), because the item is private store state and the
-// shared receipt is the item block's absence from its document. The author date is the
-// head's, so the change keeps the date it was authored; the committer date is the landing's
-// clock. Squash takes no item id, so it has none to write.
+// with explicit GIT_AUTHOR_* and GIT_COMMITTER_* from LandingIdentity() and the candidate's
+// message: a one-commit range keeps its message unchanged, while a multi-commit range takes
+// the first commit's message and lists the remaining commits' subjects in the body. A commit
+// never names a queue item (ruling D-RS3 in docs/design/queue-persistence-ruling.md),
+// because the item is private store state and the shared receipt is the item block's absence
+// from its document. The author date is the first commit's, so the change keeps the date it
+// was authored; the committer date is the landing's clock. Squash takes no item id, so it
+// has none to write.
 //
 // Nothing here writes a ref, an index or a working tree, so check and pass compute the same
 // commit. `--merge-base` needs git 2.38 or newer.
@@ -118,7 +120,10 @@ func (t *Trunk) MessageSource(base, head, source string) (string, error) {
 	return "", Usagef("--message-from %s is not a commit in %s..%s", source, base, head)
 }
 
-// SquashWithMessage merges head's tree but takes the message and author date from source.
+// SquashWithMessage merges head's tree and builds the commit message and author date from
+// the commits in base..source: a single commit keeps its message and author date verbatim;
+// more than one commit uses the first commit's subject (and body, if any) and lists the
+// other commits' subjects in the body, with the first commit's author date.
 // A merge that answers trunk's own tree is an Empty squash and writes no commit.
 func (t *Trunk) SquashWithMessage(base, trunk, head, source string, at time.Time) (Squash, error) {
 	identity, err := t.LandingIdentity()
@@ -145,22 +150,14 @@ func (t *Trunk) SquashWithMessage(base, trunk, head, source string, at time.Time
 	if tree == trunkTree {
 		return Squash{Tree: tree, Empty: true}, nil
 	}
-	raw, err := t.git("cat-file", "commit", source)
+	message, authorDate, err := t.squashMessageAndDate(base, source)
 	if err != nil {
-		return Squash{}, Externalf("reading the message of %s in %s: %v", source, t.repo, err)
-	}
-	_, message, ok := strings.Cut(raw, "\n\n")
-	if !ok {
-		return Squash{}, Externalf("commit %s has no message boundary", source)
-	}
-	authorDate, err := t.git("log", "-1", "--format=%aI", source)
-	if err != nil {
-		return Squash{}, Externalf("reading the author date of %s in %s: %v", source, t.repo, err)
+		return Squash{}, err
 	}
 	commit, stderr, err := t.runGit([]string{
 		"GIT_AUTHOR_NAME=" + identity.Name,
 		"GIT_AUTHOR_EMAIL=" + identity.Email,
-		"GIT_AUTHOR_DATE=" + strings.TrimSpace(authorDate),
+		"GIT_AUTHOR_DATE=" + authorDate,
 		"GIT_COMMITTER_NAME=" + identity.Name,
 		"GIT_COMMITTER_EMAIL=" + identity.Email,
 		"GIT_COMMITTER_DATE=" + at.Local().Format(time.RFC3339),
@@ -170,6 +167,46 @@ func (t *Trunk) SquashWithMessage(base, trunk, head, source string, at time.Time
 			head, trunk, t.repo, failureText(stderr, err))
 	}
 	return Squash{Commit: strings.TrimSpace(commit), Tree: tree}, nil
+}
+
+// squashMessageAndDate reads the commits in base..source in chronological order. A single
+// commit keeps its message verbatim; multiple commits keep the first commit's subject (and
+// body, if any) and list the remaining commits' subjects in the body.
+func (t *Trunk) squashMessageAndDate(base, source string) (string, string, error) {
+	revs, err := t.git("rev-list", "--reverse", base+".."+source)
+	if err != nil {
+		return "", "", Externalf("reading candidate commits %s..%s in %s: %v", base, source, t.repo, err)
+	}
+	commits := strings.Fields(revs)
+	first := source
+	if len(commits) > 0 {
+		first = commits[0]
+	}
+	raw, err := t.git("cat-file", "commit", first)
+	if err != nil {
+		return "", "", Externalf("reading the message of %s in %s: %v", first, t.repo, err)
+	}
+	_, message, ok := strings.Cut(raw, "\n\n")
+	if !ok {
+		return "", "", Externalf("commit %s has no message boundary", first)
+	}
+	authorDate, err := t.git("log", "-1", "--format=%aI", first)
+	if err != nil {
+		return "", "", Externalf("reading the author date of %s in %s: %v", first, t.repo, err)
+	}
+	if len(commits) <= 1 {
+		return message, strings.TrimSpace(authorDate), nil
+	}
+	var bullets []string
+	for _, sha := range commits[1:] {
+		subj, err := t.git("log", "-1", "--format=%s", sha)
+		if err != nil {
+			return "", "", Externalf("reading the subject of %s in %s: %v", sha, t.repo, err)
+		}
+		bullets = append(bullets, "- "+strings.TrimSpace(subj))
+	}
+	message = strings.TrimRight(message, "\r\n") + "\n\n" + strings.Join(bullets, "\n") + "\n"
+	return message, strings.TrimSpace(authorDate), nil
 }
 
 // PreserveRange pins the squashed head and lists its commits in the run's directory.

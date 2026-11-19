@@ -61,7 +61,7 @@ func passFace(args []string) int {
 	run := fs.String("run", "", "the run whose head is being landed")
 	base := fs.String("base", "", "the base sha the candidate's change is measured from")
 	head := fs.String("head", "", "the head sha to land")
-	messageFrom := fs.String("message-from", "", "the commit in base..head whose message and author date to use (default: head)")
+	messageFrom := fs.String("message-from", "", "the end of the worker commit range in base..head (default: head)")
 	runDir := fs.String("run-dir", "", "the run's commit-list directory (default: <git-common-dir>/tillr/runs/<run>)")
 	observed := fs.String("observed-trunk", "", "the loop's last observed trunk tip; a rewrite refuses the landing under the lock")
 	baseRef := fs.String("base-ref", "", "the branch to land onto (default: the checkout's branch)")
