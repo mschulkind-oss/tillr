@@ -82,7 +82,7 @@ func TestAcquittedTreeItemReturnsOnlyAfterItsFixerLands(t *testing.T) {
 				base := git(t, f.root, "rev-parse", "main")
 				body := failingTreeGateBody
 				if check == "unit" {
-					body = failingGateBody
+					body = strings.ReplaceAll(failingGateBody, `"reads":["src/"]`, `"reads":["candidate.txt"]`)
 				}
 				steps := &trunkSteps{ProcessSteps: f.steps(t, stub(t, "gate", body), always(t, "land", 0), always(t, "verdict", 0)),
 					replays: map[string]drain.ReplayOutcome{base: {Red: []string{check}, Known: true}}}

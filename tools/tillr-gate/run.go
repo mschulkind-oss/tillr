@@ -36,15 +36,26 @@ func init() {
 // absent. It is neither a pass nor a failure, and does not block the run.
 // `error` means the judge itself could not run, so the candidate was not judged.
 const (
-	ResultUnavailable = "unavailable"
-	ResultPass        = "pass"
-	ResultFail        = "fail"
-	ResultError       = "error"
-	ResultStalled     = "stalled"
+	ResultUnavailable   = "unavailable"
+	ResultPass          = "pass"
+	ResultPassInherited = "pass-inherited"
+	ResultInherited     = "inherited"
+	ResultFail          = "fail"
+	ResultError         = "error"
+	ResultStalled       = "stalled"
 	// ResultOverBudget means a fast tree check must be judged by the heavy run.
 	// It is neither a pass that can be remembered nor a candidate failure.
 	ResultOverBudget = "over-budget"
 )
+
+// InheritedFailure records one check that failed on both the candidate and the trunk tip,
+// with the tip commit and output that acquitted the candidate.
+type InheritedFailure struct {
+	CheckID string `json:"check_id"`
+	TipSHA  string `json:"tip_sha,omitempty"`
+	LogRef  string `json:"log_ref,omitempty"`
+	Output  string `json:"output,omitempty"`
+}
 
 // VerdictCheck is one check's outcome as the verdict carries it: what ran, how it came
 // out, how long it took, and where its output is. `LogRef` is the path of a file that
@@ -104,13 +115,59 @@ func treeOverrunFlag(value string) (RunOptions, error) {
 // what `land pass` refuses a mismatch on, so a verdict that dropped one would be
 // unusable by the face that consumes it.
 type VerdictPayload struct {
-	VerdictID      string         `json:"verdict_id"`
-	PlanID         string         `json:"plan_id"`
-	RegistryDigest string         `json:"registry_digest"`
-	BaseSHA        string         `json:"base_sha"`
-	TreeSHA        string         `json:"tree_sha"`
-	Result         string         `json:"result"`
-	Checks         []VerdictCheck `json:"checks"`
+	VerdictID         string             `json:"verdict_id"`
+	PlanID            string             `json:"plan_id"`
+	RegistryDigest    string             `json:"registry_digest"`
+	BaseSHA           string             `json:"base_sha"`
+	TreeSHA           string             `json:"tree_sha"`
+	Result            string             `json:"result"`
+	Checks            []VerdictCheck     `json:"checks"`
+	InheritedFailures []InheritedFailure `json:"inherited_failures,omitempty"`
+}
+
+// ApplyInheritedFailures promotes a failing verdict to ResultPassInherited when every
+// failing check in the verdict is accounted for by inherited, marking each matching check
+// as ResultInherited and recording the inherited failures with their outputs.
+func ApplyInheritedFailures(verdict VerdictPayload, inherited []InheritedFailure) (VerdictPayload, bool) {
+	if verdict.Result != ResultFail || len(inherited) == 0 {
+		return verdict, false
+	}
+	byID := make(map[string]InheritedFailure, len(inherited))
+	for _, f := range inherited {
+		if f.CheckID != "" {
+			byID[f.CheckID] = f
+		}
+	}
+	if len(byID) == 0 {
+		return verdict, false
+	}
+	failedCount := 0
+	checks := make([]VerdictCheck, len(verdict.Checks))
+	copy(checks, verdict.Checks)
+	var recorded []InheritedFailure
+	seen := make(map[string]bool, len(byID))
+	for i, c := range checks {
+		if c.Result != ResultFail {
+			continue
+		}
+		failedCount++
+		inf, ok := byID[c.CheckID]
+		if !ok {
+			return verdict, false
+		}
+		checks[i].Result = ResultInherited
+		if !seen[c.CheckID] {
+			seen[c.CheckID] = true
+			recorded = append(recorded, inf)
+		}
+	}
+	if failedCount == 0 {
+		return verdict, false
+	}
+	verdict.Result = ResultPassInherited
+	verdict.Checks = checks
+	verdict.InheritedFailures = recorded
+	return verdict, true
 }
 
 // Run executes a plan in a worktree and returns the verdict record.

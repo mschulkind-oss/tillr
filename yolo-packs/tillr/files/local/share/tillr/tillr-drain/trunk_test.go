@@ -189,14 +189,16 @@ func rollingStateOf(t *testing.T, storePath string) (watermark string, landings 
 	return watermark, landings
 }
 
-// A gate failure whose failing checks are red on the candidate's base is the trunk's
-// failure: the item is acquitted with no failing verdict, held blocked, and one fixer is
-// filed for the red sha. This is criterion 2 and the filing half of criterion 3.
+// A gate failure whose failing checks are red on the candidate's base and whose reads
+// intersect the candidate's changed paths is the trunk's failure: the item is acquitted
+// with no failing verdict, held blocked, and one fixer is filed for the red sha.
 func TestAGateFailureRedOnTheBaseAcquitsTheItem(t *testing.T) {
 	f := newLoopFixture(t, stub(t, "adapter", committingAdapter)).withSeats()
 	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
 	base := git(t, f.root, "rev-parse", "main")
-	gate := stub(t, "gate", failingGateBody)
+	// Check `unit` reads `candidate.txt` (intersecting committingAdapter's change).
+	intersectingGate := strings.ReplaceAll(failingGateBody, `"reads":["src/"]`, `"reads":["candidate.txt"]`)
+	gate := stub(t, "gate", intersectingGate)
 	verdict := always(t, "verdict", 0)
 	steps := &trunkSteps{
 		ProcessSteps: f.steps(t, gate, always(t, "land", 0), verdict),
@@ -351,9 +353,9 @@ func TestAFixerIsNeverAcquittedByItsOwnBase(t *testing.T) {
 	}
 }
 
-// An open fixer holds every ordinary item with ReasonTrunkBroken, and the fixer itself is
-// exempt. A blocked fixer is still open: the trunk is red and a person has to move it, so
-// dispatching ordinary work would stage it from a base that never passed.
+// Under OQ-GP7, an open fixer does not hold the ordinary queue from starting and
+// running: every item may start and run while trunk is red (only landing waits on path
+// intersection). The fixer itself is also dispatchable.
 func TestAnOpenFixerHoldsTheOrdinaryQueue(t *testing.T) {
 	f := newLoopFixture(t, stub(t, "adapter", committingAdapter)).withSeats()
 	base := git(t, f.root, "rev-parse", "main")
@@ -370,14 +372,11 @@ func TestAnOpenFixerHoldsTheOrdinaryQueue(t *testing.T) {
 	if result.Stop != drain.StopQueueDrained {
 		t.Fatalf("the loop stopped %q, want %q", result.Stop, drain.StopQueueDrained)
 	}
-	if !strings.Contains(result.Detail, drain.ReasonTrunkBroken) {
-		t.Fatalf("the stop detail does not name the trunk hold: %s", result.Detail)
+	if result.Landed != 1 {
+		t.Fatalf("item_041 did not run and land while fixer open: landed=%d", result.Landed)
 	}
-	if !strings.Contains(result.Detail, fixer) {
-		t.Fatalf("the stop detail does not name the fixer: %s", result.Detail)
-	}
-	if len(lines(t, f.count)) != 0 {
-		t.Fatalf("the adapter ran behind an open fixer: %v", lines(t, f.count))
+	if len(lines(t, f.count)) == 0 {
+		t.Fatalf("the adapter did not run while fixer was open")
 	}
 }
 

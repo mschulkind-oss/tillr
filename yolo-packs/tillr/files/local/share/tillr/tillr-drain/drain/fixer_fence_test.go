@@ -251,7 +251,12 @@ func TestFixerAttachesThreeTipsAndEscalatesFenceReport(t *testing.T) {
 	if err != nil || attached != first {
 		t.Fatalf("attachment after owner hold: %s %v", attached, err)
 	}
+	// Under OQ-GP7, an item is held behind a fixer only when blocked as a trunk waiter
+	// (path-intersecting candidate), not merely because a fixer is open.
 	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := item.SetState(context.Background(), tx, "ordinary", StateBlocked, l.cfg.Now(), item.WaitingOn{Waiter: "item:" + first, Reason: RefusalTrunkAlreadyRed + ": unit"}); err != nil {
+			return err
+		}
 		cs, err := item.ReadConflicts(tx.Reader())
 		if err != nil {
 			return err

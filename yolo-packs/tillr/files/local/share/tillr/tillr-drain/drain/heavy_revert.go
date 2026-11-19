@@ -130,7 +130,7 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 		}
 		return refuse("the fast gate could not judge the revert: " + err.Error())
 	}
-	if gate.Outcome != GatePassed {
+	if gate.Outcome != GatePassed && gate.Outcome != GatePassedInherited {
 		detail := gate.Outcome
 		if len(gate.FailingChecks) > 0 {
 			detail += " (" + strings.Join(gate.FailingChecks, ", ") + ")"

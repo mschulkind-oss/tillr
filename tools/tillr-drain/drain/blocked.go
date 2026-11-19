@@ -67,9 +67,6 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 		d.Reason = ReasonNoPolicy
 	case c.BodyRef == "":
 		d.Reason = ReasonConflictOwner
-	case p.fixerOpen != "":
-		d.Reason = ReasonTrunkBroken
-		d.DeferredBy = p.fixerOpen
 	default:
 		// Unlike ordinary failover, a single design backend must not spill
 		// onto the build preference. Only this seat's declared backends qualify.

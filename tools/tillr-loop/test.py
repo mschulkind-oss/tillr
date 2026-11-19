@@ -611,6 +611,8 @@ def test_verdict_exit_mapping(tmp):
     # The record the stub was handed is the file the adapter wrote, named by --input.
     recorded = [call for call in fixture.calls() if call.startswith("verdict record ")]
     assert recorded and "--input " + str(records[0]) in recorded[0], recorded
+    result = fixture.run_adapter("verdict", ["--verdict", "pass-inherited"], stubs={"STUB_VERDICT": 0})
+    assert result.returncode == VERDICT_RECORDED, (result.returncode, result.stderr)
     result = fixture.run_adapter("verdict", ["--verdict", "pass"], stubs={"STUB_VERDICT": 2})
     assert result.returncode == 2, (result.returncode, result.stderr)
 

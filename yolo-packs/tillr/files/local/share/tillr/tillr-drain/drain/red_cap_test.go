@@ -102,12 +102,13 @@ func TestRedCapSupersededCandidateSettlesWithoutGreenMovement(t *testing.T) {
 			var result LoopResult
 			if held {
 				if stop, err := l.pass(context.Background(), &result); err != nil || stop != "" {
-					t.Fatalf("hold: %s / %v", stop, err)
+					t.Fatalf("pass: %s / %v", stop, err)
 				}
 				drainOwned(t, l, &result)
-				if steps.lands != 1 || steps.verdicts != 0 {
-					t.Fatalf("not cap held: %+v", steps)
+				if steps.lands != 1 || steps.verdicts != 1 {
+					t.Fatalf("did not land without cap: %+v", steps)
 				}
+				return
 			}
 			// The owner applies the exact change while the proof pointer stays behind.
 			runGit(t, f.root, "cherry-pick", c.HeadSHA)
@@ -190,80 +191,13 @@ func TestRedCapRetainsCandidateAndLandsAfterFixerWithEveryOfferedLaneOccupied(t 
 		return err
 	})
 	var result LoopResult
+	// Without red_cap, the ordinary candidate lands immediately despite elapsed time and red trunk.
 	if stop, err := l.pass(context.Background(), &result); err != nil || stop != "" {
-		t.Fatalf("hold %s / %v", stop, err)
+		t.Fatalf("pass %s / %v", stop, err)
 	}
 	drainOwned(t, l, &result)
-	if result.Rejected != 0 || result.Landed != 0 || steps.gates != 1 || steps.lands != 1 || steps.verdicts != 0 {
-		t.Fatalf("hold convicted or landed: %+v / %+v", result, steps)
-	}
-	fixtureWrite(t, f, func(tx *store.Tx) error {
-		_, err := tx.Exec(`UPDATE items SET state='in-queue' WHERE item_id=?`, fixer)
-		return err
-	})
-	// Reconstruct the loop from events. Keep the heavy runner outside this deterministic
-	// pass test; publishing its proved pointer is simulated below, after a real fixer move.
-	replacement := f.loop(t, steps, &itemContentStager{})
-	replacement.gatePolicy.LandingStrategy = "before-merge"
-	replacement.cfg.Lanes = l.cfg.Lanes
-	replacement.cfg.Now = l.cfg.Now
-	plans := mustPlan(t, replacement)
-	var fixerPlan plannedApplication
-	seen := false
-	for _, p := range plans {
-		if p.decision.ItemID == c.ItemID {
-			seen = true
-			if p.decision.Action != ActionHold || !strings.HasPrefix(p.decision.Reason, ReasonRedCap+": ") || p.decision.DeferredBy != fixer {
-				t.Fatalf("lost cap wait: %+v", p.decision)
-			}
-		}
-		if p.decision.ItemID == fixer {
-			fixerPlan = p
-		}
-	}
-	if !seen || fixerPlan.decision.Action != ActionDispatch {
-		t.Fatalf("held candidate lost or fixer held: %+v", plans)
-	}
-	read := openFixture(t, f.storePath)
-	err = read.ReadTx(context.Background(), func(r *store.Reader) error {
-		why, err := Why(r, Pass{Now: l.cfg.Now().Format(time.RFC3339)}, l.cfg.Policy, &VantageQuestions{Root: f.root})
-		if err != nil {
-			return err
-		}
-		for _, row := range why.Rows {
-			if row.ItemID == c.ItemID && (row.Mover != "drain; "+fixer || row.Class != "waits on work" || row.Where != "land") {
-				t.Fatalf("waiting hides fixer: %+v", row)
-			}
-		}
-		works, err := readPending(r)
-		if err != nil {
-			return err
-		}
-		if works[c.ItemID].Candidate.HeadSHA != c.HeadSHA || !works[c.ItemID].Gated || works[c.ItemID].Done {
-			t.Fatal("candidate or verdict lost")
-		}
-		return nil
-	})
-	read.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	prepareCapCandidate(t, f, replacement, fixerPlan, "fixer.txt")
-	if stop, err := replacement.pass(context.Background(), &result); err != nil || stop != "" {
-		t.Fatalf("fixer %s / %v", stop, err)
-	}
-	drainOwned(t, replacement, &result)
-	if result.Landed != 1 || steps.gates != 2 || steps.lands != 2 {
-		t.Fatalf("fixer did not bypass cap: %+v / %+v", result, steps)
-	}
-	proved := runGit(t, f.root, "rev-parse", TrunkRef)
-	runGit(t, f.root, "update-ref", GreenRef, proved)
-	if stop, err := replacement.pass(context.Background(), &result); err != nil || stop != "" {
-		t.Fatalf("retry %s / %v", stop, err)
-	}
-	drainOwned(t, replacement, &result)
-	if result.Landed != 2 || result.Rejected != 0 || steps.gates != 2 || steps.lands != 3 || steps.verdicts != 2 || itemStateOf(t, f.storePath, c.ItemID) != StateLanded {
+	if result.Rejected != 0 || result.Landed != 1 || steps.gates != 1 || steps.lands != 1 || steps.verdicts != 1 || itemStateOf(t, f.storePath, c.ItemID) != StateLanded {
 		raw, _ := json.Marshal(result)
-		t.Fatalf("candidate did not land without a run/gate: %s / %+v", raw, steps)
+		t.Fatalf("candidate did not land when red cap removed: %s / %+v", raw, steps)
 	}
 }
