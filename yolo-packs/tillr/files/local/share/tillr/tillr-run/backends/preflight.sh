@@ -82,11 +82,12 @@ preflight_brief() {
     if [ ! -s "$1" ]; then
         refuse "the brief '$1' is missing or empty: staging writes it from backends/brief-template.md before launch"
     fi
-    # Saved words are appended after the rendered template. The heading states
-    # exactly how many bytes remain through EOF; even a fake heading inside the
+    # Saved words, an idea's or a filed request's, are appended after the rendered
+    # template. The heading states exactly how many bytes remain through EOF; even
+    # a fake heading inside the
     # words cannot end this suffix early. Check sections only in the template.
     if ! template_text=$(LC_ALL=C awk -v total="$(wc -c < "$1")" '
-        /^## Saved idea words \(verbatim; [0-9]+ bytes\)$/ {
+        /^## Saved (idea|request) words \(verbatim; [0-9]+ bytes\)$/ {
             count=$0; sub(/^.*; /,"",count); sub(/ bytes\)$/,"",count)
             if (total - prefix - length($0) - 1 != count) exit 2
             exit

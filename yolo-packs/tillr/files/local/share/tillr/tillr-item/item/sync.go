@@ -871,8 +871,9 @@ type storedState struct {
 	state     string
 	designDoc string
 	updatedAt int64
-	// storeDeclared is an item whose record carries its workflow's arguments, which no
-	// document block can carry: its record is its declaration, so it is never unshared.
+	// storeDeclared is an item whose record is its declaration, so it is never unshared:
+	// one carrying its workflow's arguments, which no document block can carry, or a filed
+	// request, whose words the store holds (request.go).
 	storeDeclared bool
 }
 
@@ -884,6 +885,13 @@ func readStoredStates(r *store.Reader) (map[string]storedState, error) {
 	argsColumn := "0"
 	if hasArgs {
 		argsColumn = "COALESCE(workflow_args, '') != ''"
+	}
+	var hasRequests bool
+	if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'request_words')`).Scan(&hasRequests); err != nil {
+		return nil, Internalf("checking request words: %v", err)
+	}
+	if hasRequests {
+		argsColumn = "(" + argsColumn + " OR item_id IN (SELECT item_id FROM request_words))"
 	}
 	rows, err := r.Query(`SELECT item_id, state, COALESCE(updated_at, 0), COALESCE(design_doc, ''), ` + argsColumn + ` FROM items`)
 	if err != nil {

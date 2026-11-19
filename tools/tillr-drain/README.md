@@ -395,6 +395,37 @@ documents for relevance and accuracy, and is not tied to any design document.
 The triage item is a store-declared item, so the
 [document-fed prerequisite](#document-fed-workflow-prerequisite) does not apply to it.
 
+### Filed requests
+
+`tillr-item request` files a piece of work straight into the queue
+([how](../tillr-item/README.md#filing-a-request)). The item names an existing workflow
+and a fence, and its words, held in the store's `request_words` table, are its whole
+statement. It is a store-declared item, so the
+[document-fed prerequisite](#document-fed-workflow-prerequisite) does not apply, and it
+never has a document block. The drain runs it like any other item, with four additions:
+
+- **Brief.** Every node's brief, a read-only reader's included, states the task as the
+  request's, says the item has no block and must not get one, and ends with the words in
+  a byte-counted suffix, `## Saved request words (verbatim; N bytes)`. That is the form a
+  saved idea's words take. The adapter's preflight excludes the suffix from its template
+  checks, so the words may hold braces or headings. A conflict-fix or design-answer run
+  keeps its own task and still carries the words.
+- **Fence.** The fence is the filed paths. A writing node inherits it unless the workflow
+  narrows it.
+- **Candidate check.** Before the gate, the loop compares every Markdown file the
+  candidate changes at its base and its head. A candidate that adds, removes or edits an
+  item block is refused as a fence refusal whose detail starts `request-item-block:`.
+  Like every fence refusal, it goes back to the item's worker with that detail.
+- **Judge.** An agent judge or a workflow's `evaluator_slot` node reads the same words
+  suffix at the end of its brief, because a request's criteria judge the work against
+  them.
+
+Completion is the normal gate and landing, plus whatever the workflow's own verify or
+judge stage decides. `planned-build@v1`, the build seat's default, has a `verify`
+evaluator, so the item waits as `judge-grant-absent` until an unexpired grant covers
+its criteria, which are all `verification-only`. `scouted-design@v1` and
+`single-worker@v1` need no grant.
+
 `write_scope` is either `"inherit"` (also the default) or a nonempty list of
 path prefixes. Every writing node inside a containing stage inherits its scope
 unless it declares a narrower one. A scope outside its container or the item's
@@ -766,9 +797,10 @@ item for it.
 
 A **store-declared item** is also exempt. The term is coined in
 [tillr-item](../tillr-item/README.md#workflow-arguments-and-store-declared-items) for
-an item whose record carries `workflow_args`, such as a
-[document triage](#document-triage). No block can carry workflow arguments, so its
-record is its declaration, and sync does not count it as unshared. Sending it to
+an item whose record is its declaration: one whose record carries `workflow_args`, such
+as a [document triage](#document-triage), or a [filed request](#filed-requests), whose
+words only the store holds. No block can carry either, and sync does not count such an
+item as unshared. Sending it to
 triage would add a block for it to a document, a marker the owner did not ask for.
 
 An open item without a block goes to **triage**, the design-seat run that shapes a

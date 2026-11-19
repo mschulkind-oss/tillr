@@ -2223,6 +2223,16 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		}
 		return "", false, nil
 	}
+	if detail, err := l.validateRequest(ctx, worker); err != nil {
+		return "", false, err
+	} else if detail != "" {
+		candidate.RefusalDetail = detail
+		l.reportf("loop: refusing %s before the gate: %s\n", candidate.ItemID, detail)
+		if err := l.refuse(ctx, candidate, result, RefusalFence); err != nil {
+			return "", false, err
+		}
+		return "", false, nil
+	}
 	ref, err := l.blockReference(ctx, candidate.ItemID)
 	if err != nil {
 		return "", false, err

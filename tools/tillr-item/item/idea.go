@@ -127,7 +127,7 @@ func Idea(ctx context.Context, tx *store.Tx, words []byte, hash, intakeDir strin
 			}
 			return record.Envelope{}, Rejectionf("intake-not-configured", id, "set intake.dir and intake.paths; words saved at %s", file)
 		}
-		return ideaPosition(tx.Reader(), id, at)
+		return queuePosition(tx.Reader(), "item.idea", id, at)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return record.Envelope{}, err
@@ -206,7 +206,10 @@ func ideaTitle(words string) string {
 	}
 	return string(runes[:end])
 }
-func ideaPosition(r *store.Reader, id string, at time.Time) (record.Envelope, error) {
+
+// queuePosition answers an existing item's place in the queue, writing nothing: a refiled
+// idea or request answers where its first filing put it.
+func queuePosition(r *store.Reader, kind, id string, at time.Time) (record.Envelope, error) {
 	rows, err := r.Query(`SELECT item_id,event_seq FROM items WHERE state NOT IN ('not-started','landed','closed','resolved-elsewhere') ORDER BY CASE WHEN rank='' THEN 1 ELSE 0 END,rank,item_id`)
 	if err != nil {
 		return record.Envelope{}, err
@@ -240,7 +243,7 @@ func ideaPosition(r *store.Reader, id string, at time.Time) (record.Envelope, er
 	if err != nil {
 		return record.Envelope{}, err
 	}
-	return envelopeOf("item.idea", id, at, map[string]any{"item_id": id, "place": place, "count": count, "event_seq": seq, "event_head_seq": head})
+	return envelopeOf(kind, id, at, map[string]any{"item_id": id, "place": place, "count": count, "event_seq": seq, "event_head_seq": head})
 }
 
 // Keep intake metadata separate from the ordinary item definition, which sync and
