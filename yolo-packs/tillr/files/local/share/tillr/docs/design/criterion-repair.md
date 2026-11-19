@@ -2,332 +2,166 @@
 title: "Repairing a frozen criterion — the freeze protects the bar and traps a wrong one"
 status: in-review
 stage: DESIGN
-next: "Rule [OQ-CR4](#OQ-CR4) (whether the judge step looks for an expired premise); then design the supersession record for tillr's item store, which holds none today, under the five rulings in Section 5"
-board: none
-board-none-reason: not-yet-ruled
+next: "Rule OQ-CR7: who may supersede a criterion, now that the role the ruling of 2026-11-17 named no longer exists."
 depends-on:
-  - whale-recovery.md#decision-ledger
-tags: [pi, work-control, pile, criterion, judge, design, whale]
-summary: "A frozen criterion can be appended to but never retracted, so a criterion that is wrong when written, or true and later stale, is permanent — and the only exit, a defective verdict, retires the item. Measured in three filings: one decided against its own criterion's text, one whose premise expired, and one blocked on a missing verdict kind. The repair is a supersession record in the append-only shape reopened already uses. Five of its six questions are ruled: the whale supersedes with a required reason, the judge sees both texts, an unsatisfiable criterion is repaired by reopen then supersede, and a supersession refuses a verdict in flight. Whether to re-check a premise at judge time is open, and nothing is built."
+  - tillr-judge-and-lifecycle.md
+tags: [tillr, criterion, judge, design]
+summary: "Once a verdict is recorded against a criterion its text is frozen, so a criterion that was wrong when written, or true and later stale, cannot be corrected, and the only exit, a defective verdict, closes the item. The repair is a criterion supersession: an append-only record that replaces the whole text, keeps the replaced text and the reason in front of the judge, and refuses a verdict written against the old text. The owner ruled its shape on 2026-11-17. One question is open, who may write it, and nothing is built."
 vantage:
   status-chip: true
 ---
 
 # Repairing a frozen criterion
 
-> **Delivered copy.** This is `docs/design/criterion-repair.md` from this repository at commit `b8eac4989e` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/criterion-repair.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/criterion-repair.md` from this repository at commit `973b12eb2d` (2026-11-18), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/criterion-repair.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
-**Status:** 2026-11-17. The owner ruled four of the five open questions on this date and
-[tillr today](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-today.md) settled the first on 2026-11-16; the rulings are in
-[§5](#5-the-shape-any-repair-has-to-have) and the [Decision Ledger](#decision-ledger). Nothing is
-built: tillr refuses an edit to frozen criterion text, but holds no supersession record. The
-symbols were read in `work-control.ts` at `e7bdc147` on 2026-10-21, and that extension has since
-been deleted; the pile evidence is its journal's newest snapshot and the items' own filed text, both
-read that day.
+**Status:** 2026-11-18. Nothing is built: tillr refuses an edit to frozen criterion text and holds no record that replaces it (`rg -n -i 'supersession|superseded' tools/tillr-item` that day finds only the unrelated record for owner decisions and a comment about claim classes). The owner ruled four questions on 2026-11-17. One designer's decision of 2026-11-18, [OQ-CR4](#OQ-CR4), awaits his review, and one question is open.
 
-**Needs your ruling:** [OQ-CR4](#OQ-CR4).
+> **In short.** The freeze is right and the repair path is missing. A criterion's text cannot change once a verdict has been recorded against it, so one that is wrong when written, or true and then stale, is permanent, and the only exit tillr has, a `defective` verdict, closes the item to fix its bar. The repair is one more append-only record beside the item's verdicts: a supersession that keeps the replaced text and the reason in front of the judge.
 
-**Reads with:** [whale-recovery.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/whale-recovery.md) (`WR-D3`, the ruling that made criteria
-additive and the reason they are additive only), [approver-agent.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/approver-agent.md) (the
-approver's non-goals: it may not unfreeze a criterion), [pile-roadmap-division.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/pile-roadmap-division.md)
-(the retirement-first sequence this repair must not pre-empt), [roadmap.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/roadmap.md) (routing).
+**Why it matters.** A correct decision cannot reach a wrong criterion. In the system tillr replaced, an item was decided against its own criterion's text and then waited on a ruling that, when it came, could change nothing in the words the judge applied ([§3](#3-the-defect-measured)).
 
-> **In short.** The freeze is right and the repair path is missing. A criterion can grow but never
-> shrink, so one that is wrong when written, or true and then stale, is permanent — and the only
-> exit the pile has, a `defective` verdict, destroys the item to fix its bar. The repair belongs in
-> the append-only item record beside `reopened`: a supersession that keeps the replaced text and
-> the reason in front of the judge.
+**The shape.** One append-only record on the item, one clause in the store's refusal of edits to frozen text, and one section in what the judge is shown. No new store and no new verdict value.
 
-**Why it matters.** A correct decision cannot currently reach a wrong criterion. The first case
-below was decided against its own criterion's text — the landed change deliberately keeps the profile the
-criterion orders deleted — and the row sits `blocked-on-owner` waiting for a ruling that, when it
-arrives, will change nothing in the words the judge applies.
+**Cost.** A supersession discards any judge's verdict in flight against the old text. And it lets an agent that wants an item finished move that item's bar; the freeze exists to prevent exactly that, so the record answers it with visibility: a required reason, and the replaced text in front of the judge.
 
-**The shape.** One more item-record event beside `criterion-frozen`, `criterion-appended`,
-`reopened`, `verdict` and `no-verdict`; one more clause in the write-time refusal; one more section
-in the judge prompt. No new store, no second pile.
+**Start at** [§5](#5-the-shape-any-repair-has-to-have), which holds the rulings, then the open question.
 
-**Cost.** A supersession changes the criteria hash, so it throws away any judge pass in flight
-against the old text; and the whale, the actor that most wants an item retired, is the actor that
-may move its bar. The freeze exists to prevent that collusion, so the record answers it with
-visibility rather than permission: a required reason, and the replaced text in front of the judge
-([§5](#5-the-shape-any-repair-has-to-have)).
+**Needs your ruling:** [OQ-CR7](#OQ-CR7).
 
-**Start at** [§5](#5-the-shape-any-repair-has-to-have), which holds the rulings, then the one open
-question.
+**Reads with:** [the judge and lifecycle design](tillr-judge-and-lifecycle.md) (the verdicts, the judge step and the close and reopen commands this builds on), and [planning and model tiering](tillr-planning-node-model-tiering.md), whose rule that a planner never edits what it is held to depends on the answer to [OQ-CR7](#OQ-CR7).
+
+**Words.** [The vocabulary](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#5-the-words) defines item, criterion, criterion verdict and judge. Four more are used here:
+
+- **Freeze**: the store's refusal to change a criterion's text once a criterion verdict has been recorded against it.
+- **Criterion supersession** *(coined in this document, 2026-10-21)*: a record that replaces a frozen criterion's whole text and names the text it replaced and why. It is not an edit, and it is not the vocabulary's *supersession*, which is the lander's finding that a change is already on the trunk.
+- **Design seat**: the role that answers a question about an item's definition by editing the item's block or its design document. It is neither the worker that builds the item nor the judge.
+- **The whale**: the coordinating session of the board that tillr replaced. It was deleted with the board on 2026-11-11 and nothing in tillr holds that role.
 
 ## 1. The invariant the freeze protects
 
 > **P1. A criterion may become harder to satisfy, never easier — and no part of it may move once a
 > result can be seen.**
 
-The reasoning is `DEC-AW1`'s and it is sound: the judge applies the criterion, so a writer free to
-rewrite the criterion after seeing the result could pass anything. Four mechanisms enforce it
-today, and a repair has to sit inside all four rather than beside them:
+The judge applies the criterion, so a writer free to rewrite the criterion after seeing the result could pass anything. Three mechanisms enforce it in tillr, and a repair has to sit inside all three:
 
-| Mechanism | Symbol | What it stops |
-| :--- | :--- | :--- |
-| First freeze wins | `reduceItemEvent`'s `criterion-frozen` branch | A later freeze re-declaring the text |
-| Write-time refusal | `criterionRewriteRefusal` | A pile write that edits, deletes or reorders settled text |
-| Additions only | `settledCriterionText`, `recordCriterionAppends`, `CriterionAppend` | Growth that never subtracts |
-| Snapshot identity | `approverCriteriaRefFor`, `approverSnapshotIdFor`, `verifyApproverEvidencePacket` | A criterion that moved under a verdict already computed |
+| Mechanism | What it stops |
+| :--- | :--- |
+| **The freeze.** `tillr item apply` refuses a change to a criterion's text once a verdict is recorded against it | A writer changing the bar after it was graded |
+| **Hardening only.** A criterion's claim class may move toward `owner-only` and never back | A criterion being reclassified so that a weaker actor may retire it |
+| **A verdict names the text it judged.** Every entry a judge writes carries a hash of the criterion's text, and the intake refuses one that does not match the stored text | A verdict computed against one text being recorded against another |
 
-The approver's own non-goals state the same rule from the other side: it may not unfreeze a
-criterion, so an approver that dislikes one "says so in a verdict reason, and the owner rules"
-([approver-agent.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/approver-agent.md)). What the design never added is the step after the owner
-rules.
+An attempt that did not land writes no verdict ([the judge design, section 4.1](tillr-judge-and-lifecycle.md#41-attempt-outcomes-are-not-criterion-verdicts-d-jl5)), so the freeze begins only at a real grading: `done` after a landing, or `defective`.
 
-## 2. What the pile can do about a criterion today
+## 2. What tillr can do about a criterion today
 
-Four mechanisms exist. Each is a real escape, and none of them repairs the text.
+| When | Mechanism | Effect on the criterion | What it costs |
+| :--- | :--- | :--- | :--- |
+| Before any verdict | The design seat edits the item's block. A worker that finds the item's words wrong ends with a `definition` obstacle, which sends the item there | The text is corrected in place | Nothing. This path works, and it is why most wrong criteria never freeze |
+| At judging | A `blocked` finding, waiting on the design seat | None; the item waits | The text is still editable, so the design seat can correct it |
+| At judging | A `defective` finding | The verdict is recorded and the text freezes | The item is closed to fix its bar |
+| After a verdict | `tillr item reopen`, with a reason | None: the item returns to the state it was closed from, with the same frozen text | The item is judged again against the clause that was wrong |
+| After a verdict | A new item that states what it replaces | A new criterion | The old id's runs and verdicts stay on a closed row with no link, and `tillr item sync` refuses a copy of a held item under a new id |
 
-| Mechanism | Effect on the criterion | What it costs |
-| :--- | :--- | :--- |
-| Append (`criterion-appended`) | Adds words after the settled text | Cannot retract a false clause, so every re-judge re-applies the same premise |
-| `defective` verdict | Retires the item, terminally | Destroys the item to fix its bar, and a wrong `defective` is as stuck as the wrong criterion was |
-| `/whale-reopen` | Clears a `done` or `defective` verdict, with a required reason | Re-arms the item against the same text |
-| A new item, the old one dropped | A genuinely new criterion | The old id's verdicts, dispatches and receipts stay attached to a dead row, and nothing links the two |
-
-The fourth is not a fallback in theory — it is the recommended path in the refusal text itself,
-which tells the writer to "append a new item whose text states what it replaces". That sentence is
-the design's own admission that supersession is the operation needed, and it is currently done by
-hand, outside the record, with no link back.
+So a criterion that carries a `done` or `defective` verdict has no repair path. That is the gap.
 
 ## 3. The defect, measured
 
-**The first case — a correct decision cannot reach the text.** The criterion's operative clause requires
-that "the `openrouter-200k` provider entry and its `or-200k` profile are deleted". The landed change
-is `f57809b7`, *"feat(personal): land the 200k collapse with or-200k kept, children on the 1M row"*,
-and `or-200k` is still a declared profile in
-`personal.jsonc`. The row records
-`state: blocked-on-owner`, and it is right to be: the missing input is a ruling. But the ruling is the
-cheap half. Even a ruling that says "keep it" leaves the criterion ordering a deletion, so the judge
-keeps returning NOT-DONE against a decision the owner has already made. That is the sharpest case in
-the pile, because nothing is wrong with the item, the work, or the judge.
+**In tillr, not yet after a verdict.** No tillr record shows a frozen criterion that needed repair. The nearest observation is before the freeze: in the pass of 2026-11-17 a build run blocked on a criterion that named a path upstream no longer had, and the design seat rewrote it on its own authority ([planning and model tiering](tillr-planning-node-model-tiering.md#OQ-PT3) records it). The case below is therefore measured in the predecessor and anticipated in tillr.
 
-**The second case — a criterion whose premise expires.** Filed at 00:20 on 2026-10-21 from tip `706f74fa`,
-where `work-board-storybook` really was red; fixed at 00:51 by `8260c429`, thirty-one minutes later.
-The criterion asks for the check to pass *and* for evidence about the red — the rendered board quoted
-before and after, the gate's verbatim output committed beside the change, the cause named rather than
-inferred. Those are evidence of a state of the world that no longer exists, so the item became
-unworkable without becoming wrong. Its own closing note names the pattern six times: a row filed from
-a gate run or a reading stops being true when the tree moves, and nothing re-checks a premise.
+**In the system tillr replaced, three filings of 2026-10-21.** They are quoted from the filings' own text; that system's journal held no verdict event for any of the three when it was read.
 
-**The third case — the same defect from the blocking side.** An item whose criterion needs a durable read
-re-parks forever: `BLOCKED_RESUME_ON` names `head-move`, `run-completion` and `timeout`, and no
-read-grant or config-change kind exists, while `BLOCKED_HORIZON_MS` re-surfaces the item every 24
-hours. The instance: a criterion that names an artifact the cleanup deleted, a `waitReason` that
-needs a read the session is disabled for, and `head-move` resuming it into the same park. The bill is
-`attempts: 35`, each attempt with a packet of about 60 KB. That is a resume-vocabulary defect and this
-doc does not solve it; it is cross-referenced because a
-supersession whose only trigger is a human is the same shape one step over — a state nothing in the
-pile can leave on its own.
-
-**What is quoted rather than measured here.** The counts above, and the `defective` retirement
-recorded for a criterion asserting a trunk sha the landed evidence contradicts, come from the three
-filings' own text. This workspace's journal carries no verdict event for any of the three —
-`rg '"kind":"verdict"' events.jsonl` over
-`~/.pi/agent/work-control/--workspace--/events.jsonl` returns 1,034 verdict events over 130 item ids,
-none of them these three — so the doc repeats those figures as reported, not as re-derived.
+- **A correct decision could not reach the text.** A criterion required that a provider entry and its `or-200k` profile be deleted. The landed change, `f57809b7`, deliberately kept the profile. The item waited on the owner, and rightly, but a ruling of "keep it" would still have left the criterion ordering a deletion, so the judge would have kept returning not-done against a decision already made. Nothing was wrong with the item, the work or the judge.
+- **A premise expired.** An item was filed at 00:20 from a trunk where one check really was red, and the check was fixed at 00:51 by `8260c429`. The criterion asked for evidence about the red: output quoted before and after, the cause named. That evidence described a state of the world that no longer existed, so the item became unworkable without becoming wrong. Its closing note names the pattern six times: an item filed from a measurement stops being true when the tree moves.
+- **A criterion that could never be judged.** A criterion named an artifact a cleanup had deleted. The item was parked, resumed and parked again 35 times.
 
 ## 4. Why `defective` is not the repair
 
-It is the closest thing the pile has, and it fails on four counts:
+It is the closest thing tillr has, and it fails on four counts:
 
-- **It retires.** The finding is about the criterion, but the consequence is the item — its work,
-  its receipts and its id all end. Fixing a bar should not cost the thing behind it.
-- **It is terminal.** A `defective` is as frozen as a criterion: `/whale-reopen` clears the verdict
-  and leaves the text, so re-opening an item with a false criterion re-judges it against the same
-  false clause.
-- **It asks the judge to move the bar.** The approver is explicitly forbidden to unfreeze anything,
-  and `defective` is the one verdict that is a judgement about the criterion rather than the work.
-  Leaving repair to it makes the judge the criterion's author by another route.
-- **It cannot be reviewed as a repair.** A `defective` reason says what is false; it does not say
-  what the bar should be instead, so the next item starts from nothing.
+- **It closes the item.** The finding is about the criterion, but the consequence falls on the item: the queue stops working on it. Fixing a bar should not cost the thing behind it.
+- **It freezes what it found wrong.** A `defective` verdict is a verdict, so the text it condemns can no longer be edited, and reopening the item re-judges it against the same clause.
+- **It asks the judge to move the bar.** `defective` is the one verdict that is a judgement about the criterion and not the work. Leaving repair to it makes the judge the criterion's author by another route.
+- **It cannot be reviewed as a repair.** A `defective` reason says what is false. It does not say what the bar should be instead, so the next writer starts from nothing.
 
 ## 5. The shape any repair has to have
 
-A repair supersedes the whole criterion: it writes a new frozen record that names the text it
-replaced and why. It never strikes a clause out of the additive log, and it never edits the frozen
-text, because the text being repaired is precisely the text a reader has to be able to quote. The
-record has to be six things, and the fourth is the one that is easy to lose:
+A repair supersedes the whole criterion: it writes a new record that names the text it replaced and why. It never strikes a clause out, and it never edits the frozen text, because the text being repaired is the text a reader has to be able to quote. The record is six things:
 
-1. **Append-only.** Nothing rewrites a `FrozenCriterion` in place; the record grows, as `reopened`
-   and the additive log already do.
-2. **Written by the whale, and attributable.** The whale performs a supersession itself; it does
-   not wait on the owner. The record says who did it, when, and against which prior text. A repair
-   only the owner could perform would reproduce the owner-only-resume shape the pile already
-   refuses ([§6](#6-what-must-not-change)), so the guard against a whale lowering a bar it wants
-   retired is items 3 and 4, not a narrower permission.
-3. **Reasoned, with the reason required.** `/whale-reopen` refuses an empty reason for exactly this
-   reason; a supersession that can be written without one is a silent rewrite.
-4. **Visible to the judge, with both texts.** The packet carries the replaced text, the current
-   text, the reason, and which replaced which, and the board shows the same. The defect being
-   repaired is a criterion nobody could check, and the prior text is the only thing that makes a
-   weakening visible to the judge. The prompt must say *replaced*, not *added*: the append sentence
-   already tells the judge to apply the original together with its additions, and the wrong word
-   turns a supersession into a second requirement.
-5. **One standing text per item.** However many supersessions an item accumulates, exactly one text
-   is current, and every reader — judge, board, prod — derives the same one.
-6. **A verdict names the text it judged.** A supersession changes the criteria hash, so a judge pass
-   in flight against the old text is refused by the snapshot-identity mismatch
-   `verifyApproverEvidencePacket` already computes from content, and the item is judged again
-   against the current text. That discards the running pass — a packet of about 60 KB per attempt —
-   and needs no new code, no per-item lease and no mark for a verdict recorded against a stale text.
+1. **Append-only.** Nothing rewrites a frozen criterion in place. The record grows, as the item's verdicts and its close and reopen records do.
+2. **Attributable.** The record says who wrote it, when, and against which prior text. Who is allowed to write it is [OQ-CR7](#OQ-CR7). The ruling of 2026-11-17 settled the guard whoever writes it: visibility, in items 3 and 4, and not a narrower permission.
+3. **Reasoned, with the reason required.** `tillr item reopen` and `tillr item close` refuse an empty reason for the same purpose. A supersession that can be written without one is a silent rewrite.
+4. **Visible to the judge, with both texts.** The judge is shown the replaced text, the current text, the reason, and which replaced which, and the item's page shows the same. The prior text is the only thing that makes a weakening visible to the judge. The judge's brief says *replaced*, never *added*: the wrong word turns a supersession into a second requirement.
+5. **One standing text per item and criterion.** However many supersessions a criterion accumulates, exactly one text is current, and every reader (the judge, the item page, the worker's brief) derives the same one.
+6. **A verdict names the text it judged.** A supersession changes the criterion's hash. A judge's file written against the old text is refused by the intake's existing hash check, and the item is judged again against the current text. That discards the judging in flight and needs no new mechanism.
 
-`reopened` is the precedent worth copying rather than inventing beside: an append-only record that
-clears state, carries a required reason, is written by one command, and is read by the reducer
-without a new store.
+`tillr item reopen` is the precedent to copy: an append-only record with a required reason and a named author, written by one command.
 
-**An unsatisfiable criterion is a judge finding, and its repair is reopen, then supersede.** A judge
-that finds a criterion cannot be satisfied says so with the finding it already has, `defective`;
-there is no new verdict value. The repair is two steps: reopen the item, with a reason, and
-supersede the criterion, after which the item is judged against the new text. The ruling holds on
-the condition that this sequence is legal and cheap, and that is established for only half of it:
+### 5.1 An unsatisfiable criterion is reopened, then superseded
 
-- **Reopen exists.** In the pile, `/whale-reopen` cleared a `defective` verdict with a required
-  reason. In tillr, `tillr-item reopen` restores a closed item's prior state and refuses an empty
-  reason (`Reopen` in `tools/tillr-item/item/lifecycle.go`). The judge outcome that closes an item
-  as `defective` is not built yet: it is `item-jl-judge-blocked-and-defective` in
-  [the judge and lifecycle design](tillr-judge-and-lifecycle.md), so whether reopen accepts the
-  close it writes is not yet checked.
-- **Supersede does not exist.** tillr holds no supersession record. A reopened item's criterion
-  still carries the state its verdict recorded, and `carryCriteria` in
-  `tools/tillr-item/item/apply.go` keeps such a criterion's text frozen, so the supersession has to
-  be the one write allowed to replace it.
-- **Cheap is unmeasured.** The intent is two commands and no re-filing: no new item id, and the
-  old id's runs and verdicts stay attached to it.
+A judge that finds a criterion cannot be satisfied says so with the finding it already has, `defective`; there is no new verdict value. The repair is two steps: reopen the item, with a reason, and supersede the criterion, after which the item is judged against the new text. The owner's condition on this ruling is that the sequence is legal and cheap:
 
-Until the supersession record exists and is accepted on a reopened item whose criterion carries a
-verdict, the only legal repair is still a new item that states what it replaces
-([§2](#2-what-the-pile-can-do-about-a-criterion-today)).
+- **Reopen is built.** The judge's `defective` finding closes the item through the same path as `tillr item close`, which records the state the item was in, and `tillr item reopen` restores that state.
+- **Supersede is not built.** A reopened item's criterion still carries its verdict, so its text stays frozen. The supersession has to be the one write allowed to replace it.
+- **Cheap is unmeasured.** The intent is two commands and no new item: the id, its runs and its verdicts stay together.
+
+### 5.2 An expired premise is reported with the verdicts the judge already has
+
+The judge step gets no separate check of a criterion's premise ([OQ-CR4](#OQ-CR4), a designer's decision). A judge that finds the premise gone already has two ways to say so: `blocked`, waiting on the design seat, with its reason, when the criterion can be corrected; and `defective`, when no work could satisfy it. Before any verdict the worker says it first, with a `definition` obstacle. What a structural check would add is small: it can tell that a file or a check a criterion names was deleted, and it cannot tell that a measurement the criterion quotes no longer holds, which is the case that was measured.
 
 ## 6. What must not change
 
-P1 stands, and it is the test the rulings in [§5](#5-the-shape-any-repair-has-to-have) and the
-open question below are run against. Four plausible
-designs break it, and they are named here so they are not re-derived:
+P1 stands. Four plausible designs break it, and they are named here so they are not re-derived:
 
-- **A bare retraction append** that does not record the text it removed. The item subtracts its own
-  bar and the record cannot show what was subtracted, so a weakened criterion and a repaired one are
-  indistinguishable after the fact.
-- **A supersession the judge never sees.** If the packet carries only the current text, the one actor
-  applying the bar cannot tell a repair from a lowering; only a human reading the item record can.
-- **A supersession that rewrites `FrozenCriterion.text` in place.** It is the cheapest to implement
-  and it deletes the audit trail the freeze exists to be.
-- **A repair only the owner can perform.** It reproduces the shape the pile already refuses: a resume
-  only a human can supply is why `BLOCKED_RESUME_ON` excludes `user-message`, and an item parked on
-  an owner-only repair is the same dead end one level up. That is why the whale performs the
-  repair itself ([§5](#5-the-shape-any-repair-has-to-have)).
+- **A bare retraction** that does not record the text it removed. The item subtracts from its own bar and the record cannot show what was subtracted, so a weakened criterion and a repaired one look the same afterwards.
+- **A supersession the judge never sees.** If the judge is shown only the current text, the one actor applying the bar cannot tell a repair from a lowering.
+- **A supersession that rewrites the frozen text in place.** It is the cheapest to build and it deletes the audit trail the freeze exists to be.
+- **A repair only the owner can perform.** The owner rejected it on 2026-11-17 ([OQ-CR2](#OQ-CR2)): an item parked until one person acts is a dead end.
 
 ## 7. Open Questions
 
-4. 💬 **OQ-CR4: Should the pile re-check a criterion's premise at judge time?**
+1. 💬 **OQ-CR7: Who may replace a criterion's text after a verdict has frozen it?**
 
-   The second case is exactly this: true when written, its premise expired unread.
-   [§7.1](#71-how-a-premise-expires-before-the-judge-reads-it) walks through how that happens and
-   what each option would do.
+   A judge closes an item as defective: its criterion asks for the cause of a check's overrun, and the overrun stopped after another landing. You run `tillr drain why` and read that the item waits on you to reopen it. You run `tillr item reopen`, and the criterion still says what it said, because nothing in tillr may replace frozen text. On 2026-11-17 you ruled that the whale replaces such a criterion itself, with a required reason and the old text shown to the judge. The whale was the coordinating session of the board deleted on 2026-11-11, so that act has no one to perform it.
 
-   - **A — No re-check; supersession is the only repair.** Nothing changes for that class until
-     someone notices, and the six-times pattern says nobody notices at judge time.
-   - **B — A structural premise check at judge time**, reusing the criterion locators the packet
-     already extracts. A locator that resolves is not a premise that holds, so only the
-     deleted-artifact class is caught.
-   - **C — Surface, never decide:** a premise that no longer resolves becomes a note beside the
-     verdict and a board mark, and the item parks on a resume the pile can honor. One more state to
-     explain.
+   No tillr item has reached this state yet. Three did in the system tillr replaced.
 
-   <!-- vantage: question id=OQ-CR4 leaning="Surface it, never decide it (C) — the judge must not move the bar, but the packet can say the premise moved, which is what nothing does today." -->
+   - **A — The design seat.** When a judge finds a criterion defective, the loop sends the item to the design seat, which writes the replacement and its reason. You see the item back in the queue with both texts on its page, and you are not asked. An agent can lower a bar; the guard is that the judge sees the old text and the reason.
+   - **B — A person at the command line.** You, or whoever is operating tillr, notice the closed item and run a command with the new text, a reason and your name. Nothing happens until someone does, so the item stays closed for as long as nobody looks.
 
-   _Leaning:_ Surface it, never decide it (C). The judge must not move the bar, but the packet can say
-   the premise moved, which is exactly what nothing does today.
+   <!-- vantage: question id=OQ-CR7 leaning="A — the design seat: it already rewrites a criterion before a verdict, it is neither the worker nor the judge, and your ruling of 2026-11-17 chose visibility over a narrower permission." -->
+
+   _Leaning:_ A — the design seat: it already rewrites a criterion before a verdict, it is neither the worker nor the judge, and your ruling of 2026-11-17 chose visibility over a narrower permission.
 
    **Answer:**
    > _(empty — fill in when decided)_
 
-### 7.1 How a premise expires before the judge reads it
-
-This has happened once, in the pile: the second case in [§3](#3-the-defect-measured), on
-2026-10-21. No tillr record shows it happening in tillr yet, so the walk-through below is
-anticipated. It uses an item that is queued today.
-
-1. **An item is filed from a measurement.** On 2026-11-17 [the gate design](gate-rework.md)
-   filed `item-gate-fast-checks-fit-budgets`. Its criterion `c1` asks the run to report *why* the
-   gate's documents check overruns its 2,000 ms budget on a change to the tillr roadmap, which was
-   measured that day. When the drain syncs the block, that text freezes in the store.
-2. **The tree moves first.** Before a lane takes the item, another landing removes the cause. For
-   example, [entry 9 of the tillr roadmap](../tillr/roadmap.md#9-move-the-queues-items-off-this-page)
-   moves about forty item blocks off that page, and the check comes in under budget. Nothing reads
-   `c1` again, and no record links a criterion to the measurement it quotes.
-3. **The run cannot do what `c1` says.** The lane is briefed with `c1` as frozen. It finds no
-   overrun to explain. It either stops with a conflict report, which holds the item, or it reports
-   that the overrun no longer reproduces, which `c1` does not accept.
-4. **The judge applies the text.** Once the judge step exists (`item-jl-judge-before-gate`, in
-   [the judge and lifecycle design](tillr-judge-and-lifecycle.md), is unbuilt), it reads `c1` as
-   written. It returns not-done, or `defective`, which closes the item. Today there is no judge, so
-   the item sits on the worker's conflict until someone reads it.
-
-What each option changes at steps 3 and 4:
-
-- **A** changes nothing. The item stays held or closed until the whale or the owner notices. Then
-  the whale supersedes `c1` ([§5](#5-the-shape-any-repair-has-to-have)).
-- **B** checks at judge time that what `c1` names still exists: the documents check and the
-  roadmap file. Both do, so B catches nothing here. It catches only a criterion that names a
-  deleted file or check.
-- **C** has the judge note, beside its verdict, that the premise `c1` quotes no longer holds. It
-  does not decide the item. The item parks with a board mark on a resume the pile can honor, and the
-  whale then supersedes `c1`. The judge never moves the bar.
-
-**What you are asked:** whether the judge step should look for an expired premise and report it
-(B or C), or whether noticing one is left to the whale and to you (A).
-
 ## Decision Ledger
+
+**Who decided each row.** A row dated "owner" is the owner's ruling. A row marked "designer's decision" was settled without him, and he may overturn it.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
-| OQ-CR1 | A repair supersedes the whole criterion with a new frozen record that names the text it replaced and why. It never retracts a clause from the additive log and never edits the frozen text. Settled in [tillr today](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-today.md), whose first task built tillr's refusal of an edit | 2026-11-16 | [§5](#5-the-shape-any-repair-has-to-have) | — |
-| OQ-CR2 | The whale supersedes a criterion itself, with a required reason, and the replaced text goes in the judge's packet and on the board. Visibility, not a narrower permission, is the guard against the whale lowering a bar it wants retired, because an owner-only repair is the owner-only-resume shape the pile already forbids | 2026-11-17, owner | [§5](#5-the-shape-any-repair-has-to-have), item 2 | — |
+| OQ-CR1 | A repair supersedes the whole criterion with a new frozen record that names the text it replaced and why. It never retracts a clause and never edits the frozen text. Settled in [tillr today](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-today.md), since superseded, which is not recorded as an owner ruling; tillr's refusal of an edit to frozen text was built with it | 2026-11-16 (no owner ruling recorded) | [§5](#5-the-shape-any-repair-has-to-have) | — |
+| OQ-CR2 | The whale supersedes a criterion itself, with a required reason, and the replaced text goes in the judge's packet and on the board. Visibility, not a narrower permission, is the guard against the whale lowering a bar it wants retired, because an owner-only repair is the owner-only-resume shape the pile already forbids. **The actor this ruling names no longer exists; [OQ-CR7](#OQ-CR7) asks who inherits the act. The rest stands** | 2026-11-17, owner | [§5](#5-the-shape-any-repair-has-to-have), items 2 to 4 | — |
 | OQ-CR3 | The judge sees both texts, the reason, and which replaced which, and its prompt says *replaced*, not *added*. The prior text is the only thing that makes a weakening visible to the judge | 2026-11-17, owner | [§5](#5-the-shape-any-repair-has-to-have), item 4 | — |
-| OQ-CR5 | An unsatisfiable criterion stays a judge finding (`defective`), with no new verdict value, and the repair is to reopen the item and then supersede the criterion. The owner's condition is that this sequence is legal and cheap. It is not yet: tillr's reopen exists, but the supersession record and the judge's `defective` close do not | 2026-11-17, owner | [§5](#5-the-shape-any-repair-has-to-have), the unsatisfiable-criterion paragraph | — |
-| OQ-CR6 | A supersession refuses a verdict in flight: the snapshot-identity mismatch rejects it and the item is judged again against the current text, because a verdict names the world it judged | 2026-11-17, owner | [§5](#5-the-shape-any-repair-has-to-have), item 6 | — |
+| OQ-CR4 | **Designer's decision, 2026-11-18; not ruled by the owner; the owner may overturn it.** The judge step gets no separate check of a criterion's premise. A judge reports an expired premise with the `blocked` or `defective` verdict it already has, and a worker with a `definition` obstacle. **Rejected:** a structural check that the things a criterion names still exist, which catches only a deleted file or check and has nothing in the tillr judge to reuse; and a new "premise moved" note and state, which is what `blocked` with a waiter already is. Evidence: both judge outcomes are built and routed, and the one case measured was a quoted measurement that stopped holding, which a structural check cannot see | 2026-11-18, designer | [§5.2](#52-an-expired-premise-is-reported-with-the-verdicts-the-judge-already-has) | ✅ |
+| OQ-CR5 | An unsatisfiable criterion stays a judge finding (`defective`), with no new verdict value, and the repair is to reopen the item and then supersede the criterion. The owner's condition is that this sequence is legal and cheap. Reopen and the judge's `defective` close are built; the supersession record is not | 2026-11-17, owner | [§5.1](#51-an-unsatisfiable-criterion-is-reopened-then-superseded) | Partly: no supersession record |
+| OQ-CR6 | A supersession refuses a verdict in flight: the mismatch between the judged text and the current text rejects it and the item is judged again against the current text, because a verdict names the world it judged | 2026-11-17, owner | [§5](#5-the-shape-any-repair-has-to-have), item 6 | — |
 
 ## 8. What this does not decide
 
-- **The surface.** Who performs a supersession is settled: the whale
-  ([§5](#5-the-shape-any-repair-has-to-have)). Whether it does so through a command, a store write,
-  or both is not decided here.
-- **The blocking defect.** A resume vocabulary with no read-grant kind is its own item; this
-  doc only notes that an owner-gated repair would reproduce its shape.
-- **Retirement and the pile's size.** [pile-roadmap-division.md](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/pile-roadmap-division.md) owns the
-  retirement-first sequence, and a repair path must not become a reason to keep residue.
-- **Whether any criterion should be re-verified at filing.** The expired-premise class would be caught
-  earlier by measuring a quoted red before the item is filed; that is a filing rule, not a repair.
-- **Any implementation.** No event name, field name, command name or migration is proposed here.
+- **The surface.** Whether a supersession is a command, a store write, or both is the planner's choice once [OQ-CR7](#OQ-CR7) is ruled. No event, field or command name is proposed here.
+- **Whether a criterion should be re-verified at filing.** The expired-premise class would be caught earlier by measuring a quoted red before the item is filed. That is a filing rule, not a repair.
+- **What the planner shows for a judge-closed item.** Today it names the owner as the mover of an item closed as defective. Whichever way [OQ-CR7](#OQ-CR7) is ruled changes that line.
 
-## 9. Where the code lives, by symbol
-
-| Symbol | What a repair touches |
-| :--- | :--- |
-| `FrozenCriterion` | The record a supersession extends; `text`, `source`, `at` and `appended` |
-| `CriterionAppend`, `CRITERION_APPEND_AUTHOR` | The additive log and its single recorded author (`whale`) |
-| `settledCriterionText` | The one derivation every comparison and the deliverable read use |
-| `criterionRewriteRefusal`, `settledCriterionRefusal` | The write-time guard, and the refusal text that today recommends a new item |
-| `recordCriterionAppends`, `freezeLandedCriteria` | Where an allowed change is observed on the landed result |
-| `ItemEvent`, `reduceItemEvent`, `readItemLedger` | The event union and the reducer that makes a record state |
-| `defectiveItemIds`, `ItemVerdict` | The terminal `defective` finding and its retirement |
-| `WORK_CONTROL_REOPEN_COMMAND` | The append-only, reason-required precedent a supersession should follow |
-| `itemCriterionForJudge`, `renderItemEvaluationPrompt` | What the judge is shown, and the sentence that tells it how to combine texts |
-| `canonicalApproverCriteriaSection`, `approverCriteriaRefFor`, `approverSnapshotIdFor`, `verifyApproverEvidencePacket` | Snapshot identity, and the refusal a moved criterion already triggers |
-| `descriptionLocatorCandidates` | The locators a criterion already yields, which a premise check would read |
-| `BLOCKED_RESUME_ON`, `resumeOnKind`, `BLOCKED_HORIZON_MS`, `blockedVerdictExpired` | The resume vocabulary the third case is about |
-
-## 10. Alternatives considered
+## 9. Alternatives considered
 
 | Alternative | Verdict |
 | :--- | :--- |
-| Leave it; `defective` is the repair | Rejected. The first case is a correct decision that cannot reach the text, and `defective` answers a wrong bar by deleting the item |
-| Append a retraction sentence under the current rules | Rejected as the mechanism. It is legal today and it produces a self-contradicting packet the judge is told to apply in full |
-| File a replacement item and drop the old one | Today's only true supersession, and it stays legal — but as a standing mechanism it orphans the old id's verdicts, receipts and dispatches with no link |
-| Hand-edit the frozen record | Rejected. It rewrites the freeze, and the snapshot identity would then disagree with the branch |
-| Expire a criterion after N verdicts | Rejected. It makes the bar a function of effort rather than of the world, and a criterion with eight verdicts behind it would have retired a live item |
-| Let the approver propose the replacement text | Rejected for now. The approver may not author criteria, and a proposal is authorship even when the whale applies it |
+| Leave it; `defective` is the repair | Rejected. A correct decision could not reach the text, and `defective` answers a wrong bar by closing the item |
+| Append a retraction sentence to the criterion | Rejected. It produces a self-contradicting text the judge is told to apply in full |
+| File a replacement item and drop the old one | Rejected as the standing mechanism. It orphans the old id's runs and verdicts with no link |
+| Hand-edit the frozen record | Rejected. It rewrites the freeze, and recorded verdicts would then name a text that no longer exists |
+| Expire a criterion after some number of verdicts | Rejected. It makes the bar a function of effort and not of the world |
+| Let the judge propose the replacement text | Rejected. A proposal is authorship, and the judge may not author the bar it applies |

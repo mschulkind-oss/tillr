@@ -2,13 +2,13 @@
 title: "A claude backend for tillr: a seat can run on the Claude subscription and falls back when its window is spent"
 status: accepted
 stage: DESIGN
-updated: 2026-11-16
+updated: 2026-11-17
 tags:
   - tillr
   - backend
   - design
 summary: "Adds a fourth adapter, run-claude, so the backend policy can put any seat on the Claude Code command line run headless (claude -p), which is the only way to spend the Claude subscription from a drain. Measures what a headless run loads by default, fixes what the adapter always passes, gives a backend row a list of harness arguments for tools, servers and prompt text, and lets a seat name an ordered list of backends so a spent subscription window falls back to the next one."
-next: "The owner starts the real loop with backend-policy.claude.json and records its first run here. The quota-window slice is filed as item-claude-backend-quota-window in docs/tillr/roadmap.md."
+next: "The owner opts the subscription rows into quota admission, applies the tillr pack, and records a real-store loop run. Existing policy rows without quota keep refusal-based holds."
 depends-on:
   - tillr-muse-backend.md
   - tillr-convergence.md
@@ -18,7 +18,7 @@ vantage:
 
 # A claude backend for tillr: a seat can run on the Claude subscription and falls back when its window is spent
 
-> **Delivered copy.** This is `docs/design/tillr-claude-backend.md` from this repository at commit `b8eac4989e` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-claude-backend.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-claude-backend.md` from this repository at commit `973b12eb2d` (2026-11-18), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-claude-backend.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-16. The adapter and Claude-first policy dispatched and landed
 `item-scratch-claude-build` in a lane-owned scratch clone, not on the real trunk or store:
@@ -188,9 +188,9 @@ at 97% used. That run did not exercise dispatch or landing. The measurements in
 
 ## 2. The adapter
 
-`tools/tillr-run/backends/claude/` holds `run-claude`, `extract-report`, `README.md` and
-`testdata/`, the same four things every adapter has. The directory is named for the harness, as
-`pi`, `muse` and `agy` are; no model id appears in it.
+The [Claude adapter directory](../../tillr-run/backends/claude/) holds the run adapter,
+extractor, fixtures, and a separate subscription quota command. Its directory is named
+for the harness, as the other adapters are; policy rows still own model choices.
 
 **What it runs,** from the lane's worktree:
 
@@ -263,16 +263,74 @@ design item whose backend fails walks to the *build* backend. With a list, the d
 own counterpart. A seat that names one backend behaves as it does today, and an item with no seat
 walks `preference` as it does today.
 
-A run the subscription refuses exits non-zero and writes no `RESULT:` footer. The drain already
-classes that as a failure of the machinery, the one class a failover fires on, so the same item
-runs again on the next backend in its seat's list in the same pass. Each later item tries the
-subscription first, which is also how work returns to it when the window reopens.
+A run the subscription refuses exits nonzero and writes no `RESULT:` footer. The drain
+classes that as a failure of the machinery and walks the seat's fallback list. A run
+cut off mid-work is re-run from the start on the next backend in the same worktree;
+quota admission does not stop or migrate already-running sessions.
 
-**What this costs, and the slice that removes the cost.** While the window is shut, every item
-spends one refused start before it falls back. That is seconds and no tokens. A run cut off
-mid-work is different: it is re-run from the start on the next backend, in the same worktree. The
-follow-up slice reads the reset time the stream reports, skips the backend until then, and shows
-the wait in `tillr-view waiting`; it is filed as a queue item once this slice has landed.
+### Direct readings and the owner's reserve
+
+A backend can opt into quota admission with `quota`, a command argument list, and
+`reserve`, the fraction of each window left unused for the owner's sessions. Reserve
+defaults to 0 and accepts 0 through 1. A row without a quota command is never probed
+and is never held by a reading or reserve. A run's refusal still holds its backend
+until reset, whether or not it has a quota command.
+
+```json
+{
+  "adapter": "tools/tillr-run/backends/claude/run-claude",
+  "model": "opus",
+  "effort": "medium",
+  "quota": ["tools/tillr-run/backends/claude/quota"],
+  "reserve": 0.2
+}
+```
+
+The quota command runs from the drained repository root, not a lane worktree. It
+answers one JSON document with nonempty `windows`: each has a unique `kind`, a
+nonnegative fraction used, and an absolute `reset_at`. Fractions above 1 are accepted
+as overuse, not clipped. Only an idle window with fraction 0 may have a null reset.
+
+Before planning new work, and before selecting a failover backend, the loop refreshes
+readings older than **60 seconds**. Changing a command or reaching any reported reset
+also forces a refresh. The planner only reads stored observations; it never runs
+commands. A configured backend without a fresh successful reading is held. When
+any fraction reaches `1 - reserve`, new dispatches walk to the next open backend,
+or wait if none is open. With reserve 0.2, 0.8 is closed and 0.79 is open. Changing
+reserve takes effect on the next pass without spending another HTTP request.
+Admission is checked while choosing and claiming a backend, never after staging.
+A claimed dispatch always starts. The reserve is a threshold on the last reading,
+not a guarantee: work started within one reading interval may overshoot it.
+A failed designer resume waits unsettled when all replacement backends are closed;
+only an open backend allows staging and recording its replacement session.
+
+Each probe, successful or failed, appends a dated reading to the store. A separate
+latest-reading row supplies planning and the waiting view. Restarting the loop reuses
+a fresh reading. Errors hold only the affected backend until a successful retry;
+they never silently mean unlimited quota. Commands have a 15-second deadline and a
+64-KiB output cap, run without a store transaction held, and do not retain stderr.
+The waiting face shows both window fractions, reserve, and the latest reopening time
+among closed windows, or an explicit unknown time for a failed/stale reading. Open
+backends are shown too. Removing a command removes its live observation on the next
+pass but retains its history.
+
+**How the Claude reading works and costs.** The command makes one authenticated
+`GET https://api.anthropic.com/api/oauth/usage`, using the already-issued subscription
+access token and the `anthropic-beta: oauth-2025-04-20` header. It reads the token from
+`CLAUDE_CODE_OAUTH_TOKEN`, or Claude Code's existing secure-storage directory (then
+its configuration directory, then its default home directory). It does not refresh
+credentials or invoke a model as a fallback. HTTP failures and redirects are refused.
+The response's utilization percentages become fractions; its five-hour and seven-day
+reset times are normalized to UTC.
+
+On 2026-11-17, running the command against the installed subscription returned a
+five-hour fraction of 0 with a null reset and a seven-day fraction of 1 with reset
+`2026-11-19T13:00:00.203543Z`. No Claude process or model request was started: one
+reading costs one HTTP GET, **0 model tokens and no model inference charge**. The first
+live attempt exposed the idle window's null reset; the command now preserves it
+instead of fabricating a timestamp. This measures the subscription API, not dispatch
+on the real store. A missing/expired token is an explicit error; the credential owner
+must sign in or refresh through Claude Code before a later probe succeeds.
 
 ## 5. What done looks like
 
@@ -289,8 +347,9 @@ the wait in `tillr-view waiting`; it is filed as a queue item once this slice ha
    [section 1](#1-what-was-measured) with no account data in them, the README, `harness_args`,
    seat lists, and the Bedrock machine's policy rows. Tests: the adapter's refusals, the extractor
    on a complete and a cut-off stream, the staged argument list, and the seat walk.
-2. **Queue item, after 1:** the quota window, as described in
-   [section 4](#4-falling-back-when-the-window-is-spent).
+2. **Quota admission:** the direct reading command and reserve described in
+   [section 4](#4-falling-back-when-the-window-is-spent), tested with fixture dispatches
+   and measured against the subscription API. Real-store activation remains the owner's step.
 3. **Queue item, later:** `harness_args` for the pi adapter, when a pi seat needs it.
 
 ## 7. Finding from scratch setup

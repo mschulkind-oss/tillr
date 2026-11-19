@@ -9,9 +9,9 @@ next: "Build ITEM-V (the `item.verdict` writer rules) on the E2 critical path; t
 
 # The item judge in tillr: migrate the verdict, delete the turn-end judge and the shadow
 
-> **Delivered copy.** This is `docs/design/work-control-judge-in-tillr.md` from this repository at commit `b8eac4989e` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/work-control-judge-in-tillr.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/work-control-judge-in-tillr.md` from this repository at commit `973b12eb2d` (2026-11-18), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/work-control-judge-in-tillr.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
-**Status:** 2026-11-12. Ruled; nothing built. Evidence is the current tree:
+**Status:** 2026-11-12. Ruled by a design seat, not by the owner; nothing built. The owner has not accepted the assessment this build rests on: the first version's next step was the owner accepting or rejecting the MIGRATE ruling, and on 2026-11-11 a design seat ruled it in his place (`dcc4eef9f`), with no words of his recorded. Evidence is the current tree:
 the four tillr design documents, the approver design, both work-control
 reference documents, the extension source, and the tests named below.
 
@@ -298,6 +298,18 @@ caller and then to nothing.
 | Coordinator mode | Already ruled deleted (ledger row D1); this assessment adds only that the judge must not be re-gated on its replacement flags — judging is not self-continuation. |
 
 ## Retirement in the end state
+
+The judge's placement is settled by
+[D-JL1](tillr-judge-and-lifecycle.md#21-topology-relative-to-gate-and-land-d-jl1):
+a pre-approved graph's evaluator runs before the gate and landing, so blocked or
+defective findings stop publication. The written verdict file covers every stored
+criterion and binds its text hash, claim class, reason, and evidence to the
+candidate's head and tree. Blocked findings also identify the waiter.
+[D-JL2](tillr-judge-and-lifecycle.md#22-when-generic-judging-survives--and-closing-the-mechanical-stamp-hole-d-jl2)
+keeps standalone generic judging on that same checked file intake, rather than
+running a second generic judge after a graph's evaluator. Agent rulings require
+a covering grant; mechanical rulings are limited to verification-only criteria,
+not owner decisions.
 
 The end state retires pipeline completions with no human in the loop, by
 two verdict paths that are never merged into one:

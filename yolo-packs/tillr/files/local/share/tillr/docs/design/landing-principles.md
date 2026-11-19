@@ -14,7 +14,7 @@ summary: "Fourteen principles distilled from the landing rulings of 2026-10-28 t
 
 # Landing principles
 
-> **Delivered copy.** This is `docs/design/landing-principles.md` from this repository at commit `b8eac4989e` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/landing-principles.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/landing-principles.md` from this repository at commit `973b12eb2d` (2026-11-18), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/landing-principles.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 This is the library, not another ruling. Each entry is one durable principle, the measurement that
 produced it, the ruling that owns the detail, the column that matters — **what enforces it today** —
@@ -60,21 +60,29 @@ verdict — every one was a patch-id mismatch, a git error, or a regeneration fa
 
 *Enforced by:* [`tools/tillr-land`](../../tillr-land/) for the landing transaction. The board
 pass and merge queue that emitted `cause=unverified` (`reasonUnverified`) are retired; in
-[`landing.go`](../../tillr-land/land/landing.go), `Reasons()` is a closed nine-value set
+[`landing.go`](../../tillr-land/land/landing.go), `Reasons()` is a closed ten-value set
 (`verdict-mismatch`, `verdict-failed`, `verdict-error`, `trunk-worktree-uncommitted`, `trunk-rewritten`, `patch-rewind`,
-`patch-at-head`, `item-not-landable`, `already-on-trunk`), pinned by `TestTheRefusalReasonsAreTheRegisteredSet` in
+`patch-at-head`, `item-not-landable`, `already-on-trunk`, `red-cap`), pinned by `TestTheRefusalReasonsAreTheRegisteredSet` in
 [`conformance_test.go`](../../tillr-land/land/conformance_test.go), and `squash-conflict`
 (`ResultSquashConflict`) is its own outcome rather than a refusal. `trunk-rewritten` is
 an infrastructure hold: the drain retains the already-gated candidate, records both tips,
 and waits for restored history without a failing candidate verdict or another gate.
+`red-cap` is likewise a repository hold: the configured limit on landings or minutes
+past the green pointer has been reached. Its record names the red checks and open
+fixer, keeps the already-gated candidate, and reopens landing after proof advances.
+The fixer itself is exempt; a pending proof with no known red check says so explicitly.
+A candidate already present on the trunk settles before the cap is applied. Held
+candidates are revisited when the trunk tip changes, so superseded work can exit
+without waiting for the green pointer. If retained candidates occupy every offered
+lane, one separate fixer worktree provides repair capacity without discarding them.
 
 *Scope:* **the landing transaction.** [`tools/tillr-land`](../../tillr-land/) meets it: a trunk
 move between the gate and `pass` is squashed onto the moved tip by `Trunk.Squash`
 ([`trunk.go`](../../tillr-land/land/trunk.go)) and recorded on `landings` with both
 `gated_tree` and `landed_tree`, never refused on patch-id or base drift. Every refusal in `Reasons()`
 names a specific fact about the verdict, the patch ref, uncommitted worktree paths, the
-owner's closed/resolved item disposition, or a trunk that already carries the change, and
-non-candidate refusals (`verdict-error`, `trunk-worktree-uncommitted`, `already-on-trunk`) leave the
+owner's closed/resolved item disposition, a trunk that already carries the change, or the configured unproved-range cap, and
+non-candidate refusals (`verdict-error`, `trunk-worktree-uncommitted`, `already-on-trunk`, `red-cap`) leave the
 verdict standing and pin `refs/tillr/runs/<run_id>` at the head.
 
 ## 2. Re-application preserves the change, not the patch
@@ -95,7 +103,7 @@ change onto the moved tip (`git merge-tree --write-tree --merge-base=<base> <tru
 landing and not a defect. The replay ruling's step 1 — the board pass's squash-merge — was the
 earlier route to the same mechanism; it retired with the board.
 
-*Scope:* **the landing transaction.** [`tools/tillr-land`](../../tillr-land/) meets it: every
+*Scope:* **the landing transaction.** [`tools/tillr-land`](../../tillr-land/) meets it: every trunk
 landing runs `Trunk.Squash` to three-way merge the candidate change onto the current tip and records
 both trees on `landings` without inspecting `git patch-id`.
 [Section 3](#3-gate-what-will-be-the-tip-once) is the same mechanism from the throughput side.
@@ -111,7 +119,7 @@ incoming change.
 inverted polarity as principle 2, in a different place. This is the owner's stated model, modeled on
 a merge queue with "require branches up to date" off.
 
-*Enforced by:* [`tools/tillr-land`](../../tillr-land/). Every candidate lands through one
+*Enforced by:* [`tools/tillr-land`](../../tillr-land/). Every trunk candidate lands through one
 stateless squash (`Land` in [`landing.go`](../../tillr-land/land/landing.go) calling
 `Trunk.Squash` in [`trunk.go`](../../tillr-land/land/trunk.go)): the gate runs beforehand
 outside `land.lock`, and under `land.lock` `Trunk.Squash` three-way merges `base..head` onto
@@ -147,6 +155,14 @@ and [`trunk_test.go`](../../tillr-land/land/trunk_test.go)
 
 [`board-utilities.md`](board-utilities.md) [§5.4](board-utilities.md#54-land-alone) states that
 contract for `land`.
+
+Fork delivery branches are not the trunk: the lander publishes the exact built fork
+head rather than rewriting fork history. A passing `fork-build` check is required,
+and the locked tip must be an ancestor of that head. Cache preparation and receipt
+recovery retain the current delivered tip. This is the
+[lander's fork-delivery contract](../../tillr-land/README.md#fork-delivery),
+verified on 2026-11-17 by `go test ./... -run 'TestFork|TestAPatchBranch' -count=1`
+in the lander's module.
 
 *Scope:* **the landing transaction.** [`tools/tillr-land`](../../tillr-land/) meets it, and its
 behavior is test-pinned rather than intended: `Trunk.Squash` is the single path every candidate moves
@@ -233,10 +249,17 @@ verified" rather than as a verdict, so a whole batch refused and re-armed on a f
 instead of the offender being isolated.
 
 *Enforced by:* `d78e05685` landed the split, with tests pinning both arms and the rule that a red
-self-suite still never passes the batch. The 2026-11-17 half is **not enforced yet**: on that date
-`tillr-gate` still stops a fast check at its ceiling and answers exit 4 (`fastCeilingMS` in
-[`run.go`](../../tillr-gate/run.go)), and the gate program and `tools/fork-check.py` still
-stop checks on fixed timeouts.
+self-suite still never passes the batch. The check runner now uses the progress observer in
+[`watchdog.go`](../../tillr-gate/watchdog.go): sixty one-second samples without output
+or group CPU progress produce `stalled`, exit 6, with observations. The drain retains the
+first stall as `gate-stall-rerun` and holds a second on the same head tree as `gate-stalled`.
+The gate program wrapper and [`tools/fork-check.py`](https://github.com/mschulkind-oss/tillr/blob/main/tools/fork-check.py)
+now apply the same progress rule; their old time limits are reporting targets.
+A rolling stall advances no watermark, and a second consecutive stall of the
+same check on the same range files one deduplicated trunk fixer. The
+[wrapper watchdog slice](gate-rework.md#route-the-gate-programs-own-time-limits-through-the-stall-watchdog)
+is covered by injected-observation tests, including cadence parity between Python
+and Go.
 
 *Scope:* **the landing transaction.** [`tools/tillr-land`](../../tillr-land/) meets it: a gate
 verdict whose result is `error` is refused with `ReasonVerdictError`, never read as a failure of the
@@ -309,9 +332,26 @@ dead at 17:53:45 — `No API key found for openrouter` — and was benched for a
 1,083 child logs carry that one error. The cooldown worked exactly as designed; converting a
 permanent configuration error into a recurring wait was the design.
 
-*Enforced by:* **nothing in the tree today.** The mechanism was built in the board CLI and deleted
-with it on 2026-11-11 (`afdc9a9571`); `tillr-drain`'s answer to a failed run is a hold, not a
-diagnosis. The surviving specification is
+*Enforced by:* **partly, since 2026-11-17, and no test asserts the principle as a whole.** The
+mechanism was built in the board CLI and deleted with it on 2026-11-11 (`afdc9a9571`). Under the
+owner's ruling of 2026-11-17 (`D-JL10` in
+[the judge and lifecycle design](tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10)),
+`tillr-drain` no longer holds a refused worker run. It sends the refusal back to the worker with its
+evidence, so the next run has the failure named in its brief, and nothing in that path waits on a
+clock. A repeat is established by observation: an ending whose producer, cause and normalized
+evidence equal an earlier ending of the item goes to the design seat to be diagnosed, with both
+records (`repeatedEnding` in `tools/tillr-drain/drain/returned.go`, table-tested in
+`returned_test.go`). A squash conflict is one of those endings: the one conflict-fix run and the
+`conflict-exhausted` hold it led to are gone, and a conflict repeats only when its conflicting paths
+and normalized hunks equal an earlier one's (`conflictEndingKey`). Except for gate refusals, which always return to the same designer session when available, the
+design seat's own endings are compared the same way: a design ending that repeats an earlier one goes to the owner as an objection the loop raises, with a question written
+from both records (`designRepeatOf` in `tools/tillr-drain/drain/design_repeat.go`). The same ruling removed re-admission on a changed input hash, so a "named
+change" in the sense above is now an event that names the item: an operator's retry, a design answer,
+or the recovery of a killed run. What is not enforced: the fleet trip, the tier-0 probes and the
+fingerprint store of the design below; the one infrastructure failover with its
+`run-infra-exhausted` hold, which is still a budget
+([`item-backend-open-is-a-fact`](../tillr/roadmap.md#route-an-infrastructure-failure-to-the-next-open-backend));
+and the infrastructure backoff on elapsed time. The surviving specification is
 [the cooldown-removal design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/failure-diagnosed-not-waited-out.md), which carries the whole
 mechanism: a fingerprint over the failing stage and the normalized error, an inputs hash recorded
 with every failure, an admission rule keyed on a named change rather than a clock, a fleet trip at
@@ -357,6 +397,59 @@ dispatch as rework when no live or resumable session remains, bounded per
 held-candidate mover; and `board land why`'s `moverLive` and `standing` fields, which report whether
 the named mover can act rather than only its name. The board CLI that carried those mechanisms was
 deleted; the surviving surface is `tillr view`, which reports a hold and its reason.
+
+*Measured 2026-11-17:* five of seven design conflicts sat `awaiting` a design run that had already
+ended, and every view said "waits on work: design" with nobody working. Seven items held a claim
+whose run never launched. Eight items then held `conflict-owner` with no command that could raise
+the conflict again, three of them only because a hand commit had fixed the trunk-side cause of the
+gate refusal, and two of them over a committed design answer the settlement had misread.
+
+*Enforced by (2026-11-17):* in `tillr-drain`, each of these holds now names a mover that can act:
+
+- **A claim whose run never launched** is released, and its item is dispatched again
+  (`releaseUnlaunchedClaims` in
+  [`unlaunched_claim.go`](../../tillr-drain/drain/unlaunched_claim.go), commit `b1fb121d5`;
+  pinned by `TestACancelledClaimsRecordsAreRecognizedAndTheItemIsDispatchedAgain` in
+  [`unlaunched_claim_test.go`](../../tillr-drain/drain/unlaunched_claim_test.go)).
+- **A design conflict awaiting an ended design run** is raised again for the design seat, by how
+  the run ended and never by a count or by what changed since its dispatch: the owner's ruling of
+  2026-11-17, recorded in
+  [the judge and lifecycle design, Section 4.3](tillr-judge-and-lifecycle.md#43-how-a-design-runs-ending-moves-its-conflict-d-jl9).
+  A gate refusal, a killed run and a run that committed nothing go back to the design seat; a
+  gated design commit is the answer; a run that commits nothing objects by naming the next actor,
+  and only an objection naming the owner reaches the owner (`settleUnansweredDesignRuns` in
+  [`design_unanswered.go`](../../tillr-drain/drain/design_unanswered.go); pinned in
+  [`design_unanswered_test.go`](../../tillr-drain/drain/design_unanswered_test.go) and
+  [`design_objection_test.go`](../../tillr-drain/drain/design_objection_test.go)). The
+  first form, commit `09b171416`, re-raised once on an input change and otherwise handed the
+  conflict to the owner; the ruling removed that count.
+- **An interrupted triage run** is triaged again rather than sent to the owner (commit `15b3502b7`;
+  `TestAnInterruptedTriageRunIsTriagedAgainNotSentToTheOwner` in
+  [`triage_interrupted_test.go`](../../tillr-drain/drain/triage_interrupted_test.go)).
+- **A lane with uncommitted files** under a pinned candidate is refused for that lane alone as
+  `lane-holds-uncommitted-work` instead of stopping the loop (`ReasonLaneUncommittedWork` in
+  [`lane_rotation.go`](../../tillr-drain/drain/lane_rotation.go), commit `5ad8aaaa8`;
+  `TestPinnedCandidateOnALaneWithUncommittedFilesLeavesTheLoopRunning` in
+  [`lane_dirty_test.go`](../../tillr-drain/drain/lane_dirty_test.go)).
+- **A committed design answer** is read by its block's id and section. A hold written by the old
+  reading is raised again for the design seat, naming the commit (`designBlockAnswer` and
+  `settleMisreadDesignAnswers` in
+  [`design_answer.go`](../../tillr-drain/drain/design_answer.go), commit `9d106bb9d`;
+  pinned in [`design_answer_test.go`](../../tillr-drain/drain/design_answer_test.go)).
+- **An owner hold over a design run's objection** has an owner's command:
+  `tillr drain retry --item <id> --run <design run>` raises the conflict for one more design run.
+  Every retry refusal names the command the face would accept, or says that none exists and who
+  moves (`authorizeDesignRetry` in
+  [`design_retry.go`](../../tillr-drain/drain/design_retry.go), commit `c95791410`; pinned
+  in [`design_retry_test.go`](../../tillr-drain/drain/design_retry_test.go) and by
+  `TestEveryRetryRefusalNamesTheAcceptedCommandOrTheMover` in
+  [`main_test.go`](../../tillr-drain/main_test.go)).
+
+What is not enforced yet: the gate's trunk-already-red replay cannot judge a fast-gate check id
+such as `documents`, so it never acquits a refusal the trunk caused. A design run refused for the
+trunk's sake goes back to the design seat each time until the trunk is fixed; the trunk-suspect
+re-raise (commit `41790b724`) that worked around this from the drain side was removed by the
+owner's ruling of 2026-11-17, and the gap is the gate's to close.
 
 *Scope:* **not lander-scoped.** The dispatch side holds candidates in repair states and items out of
 dispatch — `tillr-drain` and `tillr-loop` — and the lander keeps no held state of its own, so it

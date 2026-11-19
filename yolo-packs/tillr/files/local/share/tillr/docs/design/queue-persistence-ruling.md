@@ -21,13 +21,15 @@ vantage:
 
 # Shared Documents Carry the Work; Private Queue State Stays Private
 
-> **Delivered copy.** This is `docs/design/queue-persistence-ruling.md` from this repository at commit `b8eac4989e` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/queue-persistence-ruling.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/queue-persistence-ruling.md` from this repository at commit `973b12eb2d` (2026-11-18), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/queue-persistence-ruling.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 > **Carried out.** `tillr item sync` reads item blocks from documents (commit `3c215883d`), and the lander writes no trailer. This document stays as the record of the ruling.
+>
+> **Reopened.** The owner did not rule on the item block of `D-RS1`; he objected to it on 2026-11-18, and the question is reopened as [`OQ-QM1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md#OQ-QM1) in [the queue mirrors the roadmap's outstanding designs](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md).
 
-**Status:** 2026-11-15. Ruled and executable today; nothing below waits on [`OQ-QP1`](tillr-queue-persistence.md#91-decision-ledger), [`OQ-QP2`](tillr-queue-persistence.md#91-decision-ledger), or [a closed question](tillr-queue-persistence.md).
+**Status:** 2026-11-15. Written as a ruling by a design agent and carried out; no words of the owner's are recorded for any of its decisions. `D-RS1` to `D-RS5` are the designer's decisions, and the owner may overturn any of them (reviewed on 2026-11-18 in [the decision-provenance review](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/decision-provenance-review.md)). As written, nothing below waited on [`OQ-QP1`](tillr-queue-persistence.md#91-decision-ledger), [`OQ-QP2`](tillr-queue-persistence.md#91-decision-ledger), or [a closed question](tillr-queue-persistence.md).
 
-**Needs your ruling:** None.
+**Needs your ruling:** nothing in this document. The owner's review of its decisions is asked elsewhere: the item block of `D-RS1` as [`OQ-QM1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-queue-mirrors-designs.md#OQ-QM1), and the loop's deletion of a landed item's block together with the rule that commits name no item (`D-RS1`, `D-RS3`, `D-RS5`) as [`OQ-PR1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/decision-provenance-review.md#OQ-PR1).
 
 **Survey of what already exists in the tree:**
 - **Markdown item intake (`tools/tillr-item/`):** Nothing exists. `faceList` in `tools/tillr-item/main.go` exposes only `apply, seed, show, state, decision, mail, grant or verdict`. `tools/tillr-item/item/seed.go` (`Seed`, `planSeed`, `sameDefinition`) reads JSON only and refuses changed definitions; `tools/tillr-item/item/questions.go` (`ReadQuestions`) and `tools/tillr-drain/vantage/vantage.go` (`VantageQuestions`) read open questions only. Zero `<!-- inert copy of a tillr directive: item` blocks exist outside the example in [`tillr-queue-persistence.md`](tillr-queue-persistence.md).
@@ -59,7 +61,19 @@ vantage:
 
 *(Single-line `<!-- inert copy of a tillr directive: item id="..." paths="..." -->` is equivalent. Omit `blocked_by` when empty. For a standalone chore or defect with no design document, place the comment and `- **c1:**` bullets indented beneath `- **<Title>**` on the domain roadmap.)*
 
-**Amendment (2026-11-15): an optional `seat` attribute.** A directive may also carry `seat="<seat>"`, naming one of the item model's seats (`design`, `build`, `review` or `scout`, the closed set in `tools/tillr-item/item/seat.go`). Omitted, the item asks for no seat, which is the default a seeded row without one gets; an unknown value is a finding like any other invalid attribute. The allowed attribute set is therefore `id`, `paths`, `blocked_by` and `seat`. Reason: a design item has no other way to ask for the design seat from a document.
+**Amendment (2026-11-15): an optional `seat` attribute.** A directive may also carry `seat="<seat>"`, naming one of the item model's seats (`design`, `build`, `review` or `scout`, the closed set in `tools/tillr-item/item/seat.go`). Omitted, the item asks for no seat, which is the default a seeded row without one gets; an unknown value is a finding like any other invalid attribute. Reason: a design item has no other way to ask for the design seat from a document.
+
+**Amendment (2026-11-17): an optional `from` attribute.** A directive may carry
+`from="<item id>"`, identifying the source of newly imported work. It must match
+`^item-[a-z0-9-]+$`; a malformed value is a finding, but a source absent from the
+store is not. On first import, a keyed source places the new item immediately after
+it and any items the same mark already placed there, in block order. A landed source
+still supplies its retained key. Existing items never move because of this mark.
+Key choice and crowded-order respacing are shared with `tillr-item place`;
+respacing preserves the other items' relative order. See
+[the new-item placement rules](observatory-actions.md#44-where-a-new-item-is-placed).
+The closed attribute set is `id`, `paths`, `blocked_by`, `seat`, `prose`, `workflow`,
+`claims`, `judge` and `from`; none permits state, rank or tombstones.
 
 **Exact field mapping (and nothing more):**
 - `item_id`: `id` attribute (required; `^item-[a-z0-9-]+$`).
@@ -67,6 +81,10 @@ vantage:
 - `allowed_paths`: comma-split, trimmed `paths` attribute (required, non-empty, repo-relative prefixes present on `main`, no globs).
 - `blocked_by`: comma-split, trimmed `blocked_by` attribute (optional; defaults to `[]`).
 - `seat`: the `seat` attribute (optional, per the amendment above; defaults to no seat).
+- `from`: first-import placement only, not an editable item-record field. Sync records
+  the source as `placed_from` on the placement event so subsequent syncs can find
+  earlier siblings even after their blocks are deleted. The idea pipeline's
+  `derived_from` edge is separate future work, not a table this amendment introduces.
 - `criteria`: ordered `- **c<N>:** <text>` bullets in the same section up to the next heading or `<!-- inert copy of a tillr directive: item` directive (`criterion_id = "c<N>"`, `state = ""`; at least `c1` required).
 - `body_ref` and `design_doc` are derived from the containing file path and heading slug, never written in the directive.
 
@@ -152,7 +170,7 @@ The four-clause rule accepts **5** rows (`item-bar-ironbar-config-v2`, `item-vie
 
 | Private Surface | Why Leaving It Out of Git Is Right |
 | :--- | :--- |
-| **Personal priority (`items.rank` overrides)** | Two developers rank work differently; roadmaps separate active work from `## Icebox` / `## Exploration`, and each developer orders their own `.tillr/state.db` without merge conflicts or [`OQ-QP1`](tillr-queue-persistence.md#91-decision-ledger). |
+| **Personal order (stored `items.rank` keys)** | The order is private unless the repository sets `order.record`. With that opt-in, a plain text [order record](observatory-actions.md#45-surviving-a-rebuild-the-order-record) carries the hand order across a rebuild; sync uses it only to place newly imported items, never to move items already held. Roadmaps still separate active work from `## Icebox` / `## Exploration`. |
 | **In-flight execution (`lanes`, leases, `runs`, retries, `usage_cost_usd`)** | Ephemeral workbench state of one machine's processes; meaningless on a second developer's machine. |
 | **Local `decisions` holds & frozen `not-done` flags** | Records why one developer paused a broken item locally; if the finding is architectural, it belongs in a design doc's prose or `Decision Ledger`, not as a serialized `.decisions.jsonl`. |
 | **Historical `landed` rows & item-to-commit joins** | Once code and updated docs are on `main`, the ephemeral `item-*` handle has done its job; git history documents the change in repository terms. |
@@ -162,10 +180,12 @@ The four-clause rule accepts **5** rows (`item-bar-ironbar-config-v2`, `item-vie
 
 ## 6. Decision Ledger
 
+Every row is a **designer's decision of 2026-11-15; the owner may overturn it**. The word "Ruling" in the sections above is the design agent's.
+
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
 | `D-RS1` | Adopt [`OQ-QP2`](tillr-queue-persistence.md#91-decision-ledger) Option A amended: `<!-- inert copy of a tillr directive: item id="..." paths="..." [blocked_by="..."] -->` under `### <Title>` plus `- **c1:**` bullets, multi-line attribute whitespace allowed, fenced code blocks ignored, and zero state/rank/tombstone attributes; finished or dropped blocks are deleted from the doc. **Rejected:** `after=` edge alias (unnecessary mismatch with `apply.go`), and `closed=` / `resolved-by=` Markdown tombstones (leaks permanent tillr state into prose). | 2026-11-15 | [Section 1](#1-shared-item-block-shape) | — |
 | `D-RS2` | Commit item blocks for 7 of the 29 open rows (5 passing the 4-clause accepted/executable/trunk-stageable/unfrozen rule plus overrides `item-store-crash-recovery` and `item-gate-observatory-dev-check`), record `item-output-cap-gate-wireid` as prose in [`connection-error-turn-death-2026-10-18.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/connection-error-turn-death-2026-10-18.md), and omit blocks for the remaining 21. **Rejected:** committing blocks for all 29 via `body_ref` (duplicates 10 open questions, freezes 5 `in-review` draft slices, enshrines 3 conflicted/campaign rows, and adds 4 unstageable fork fences). | 2026-11-15 | [Section 2](#2-disposition-of-the-29-open-rows) | — |
-| `D-RS3` | Delete `Tillr-Item:` commit-trailer stamping in `tools/tillr-land/land/trunk.go` and forbid item IDs in commits; `landed` is private epoch state (cold stores hold zero `landed` rows), and the shared landing receipt is deleting the `<!-- inert copy of a tillr directive: item -->` block (or advancing `stage: BUILT`). **Rejected:** keeping `Tillr-Item:` trailers for cold rebuild (violates the owner's no-tillr-in-commits rule and covered only 14 of 72 landed rows). | 2026-11-15 | [Section 3](#3-landing-receipts-without-commit-trailers) | ✅ (`Trunk.Squash` in `tools/tillr-land/land/trunk.go` takes no item id and writes the head's message unchanged; the worker brief in `tools/tillr-run/backends/brief-template.md` forbids an item id or trailer in the commit message) |
-| `D-RS4` | Spend the 7-block Markdown commit immediately (Commit 1), delete `Tillr-Item:` stamping before the next drain run (Commit 2), and build a minimal `tillr-item sync` block reader plus `unshared_open` and `stale_doc_blocks` residue counters at `SchemaVersion = 5` (Commit 3). **Rejected:** waiting for full `D-QP2` / [`OQ-QP1`](tillr-queue-persistence.md#91-decision-ledger) before rescuing the 7 rows, or doing a one-time hand edit with no sync reader and letting `tillr-item apply` reopen the gap. | 2026-11-15 | [Section 4](#4-the-momentum-mechanism-and-the-first-commit) | Partial (`tillr-item sync` in `tools/tillr-item/item/sync.go` with `unshared_open` and `stale_doc_blocks`, run by `tillr-drain loop` before its first plan; the counters are not yet in `tillr-view status`, and `unshared_open` counts against document blocks only, since sync does not read `seed-items.json`) |
-| `D-RS5` | Leave `rank` priority order, active runs/leases/spend, local `decisions`, historical `landed` rows, and unpromoted draft slices strictly private to `.tillr/`, bypassing [`OQ-QP1`](tillr-queue-persistence.md#91-decision-ledger) for cold sync. **Rejected:** committing `.tillr/` JSON/JSONL snapshots or enforcing one repository-wide developer rank order (violates `D-QP1` and the human-shop contract). | 2026-11-15 | [Section 5](#5-what-is-deliberately-left-private) | — |
+| `D-RS3` | Delete `Tillr-Item:` commit-trailer stamping in `tools/tillr-land/land/trunk.go` and forbid item IDs in commits; `landed` is private epoch state (cold stores hold zero `landed` rows), and the shared landing receipt is deleting the `<!-- inert copy of a tillr directive: item -->` block (or advancing `stage: BUILT`). **Rejected:** keeping `Tillr-Item:` trailers for cold rebuild (violates the owner's no-tillr-in-commits rule and covered only 14 of 72 landed rows). That rule is cited here unquoted; no words of the owner's stating it were found, and it is unconfirmed until he answers [`OQ-PR1`](https://github.com/mschulkind-oss/tillr/blob/main/docs/tillr/decision-provenance-review.md#OQ-PR1). | 2026-11-15 | [Section 3](#3-landing-receipts-without-commit-trailers) | ✅ (`Trunk.Squash` in `tools/tillr-land/land/trunk.go` takes no item id and writes the head's message unchanged; the worker brief in `tools/tillr-run/backends/brief-template.md` forbids an item id or trailer in the commit message) |
+| `D-RS4` | Spend the 7-block Markdown commit immediately (Commit 1), delete `Tillr-Item:` stamping before the next drain run (Commit 2), and build a minimal `tillr-item sync` block reader plus `unshared_open` and `stale_doc_blocks` residue counters at `SchemaVersion = 5` (Commit 3). **Rejected:** waiting for full `D-QP2` / [`OQ-QP1`](tillr-queue-persistence.md#91-decision-ledger) before rescuing the 7 rows, or doing a one-time hand edit with no sync reader and letting `tillr-item apply` reopen the gap. | 2026-11-15 | [Section 4](#4-the-momentum-mechanism-and-the-first-commit) | Partial (`tillr-item sync` in `tools/tillr-item/item/sync.go` with `unshared_open` and `stale_doc_blocks`, run by `tillr-drain loop` before its first plan; a whole writing sync saves the counters, their ids and time in one item-owned row, and `tillr-view status` reads that row directly (`--text` for the summary, default JSON or `--json` for the record; no saved sync is unknown, not zero); `unshared_open` counts against document blocks only, since sync does not read `seed-items.json`) |
+| `D-RS5` | Leave the order private unless the repository sets `order.record`, as amended by the [observatory actions ruling](observatory-actions.md#45-surviving-a-rebuild-the-order-record); keep active runs/leases/spend, local `decisions`, historical `landed` rows, and unpromoted draft slices strictly private to `.tillr/`, bypassing [`OQ-QP1`](tillr-queue-persistence.md#91-decision-ledger) for cold sync. **Rejected:** committing `.tillr/` JSON/JSONL snapshots or enforcing one repository-wide developer rank order (violates `D-QP1` and the human-shop contract). | 2026-11-15 | [Section 5](#5-what-is-deliberately-left-private) | — |
