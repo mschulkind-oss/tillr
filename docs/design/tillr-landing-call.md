@@ -31,7 +31,7 @@ depends-on:
 
 **Needs your ruling:** None open. **Blocked:** [OQ-LC1](#OQ-LC1), until worktrees belong to items.
 
-**Reads with:** [the graph design](./tillr-graph-is-the-path.md) (the direction this follows: every act is a node; rule 1 of its Section 3.3 names this document's two tools), [the vocabulary](./tillr-vocabulary.md) (proposes that a worktree belongs to its item), [the landing principles](./landing-principles.md) (the rulings a landing change is checked against), [the retired board state machine](./board-state-machine.md#7-suspend-and-resume) (the only earlier design of this idea; a record, not current machinery), [the pi adapter's guide](../../tools/tillr-run/backends/pi/README.md) and [the drain's guide](../../tools/tillr-drain/README.md) (what is built today).
+**Reads with:** [the graph design](./tillr-graph-is-the-path.md) (the direction this follows: every act is a node; rule 1 of its Section 3.3 names this document's two tools), [the vocabulary](./tillr-vocabulary.md) (proposes that a worktree belongs to its item), [the landing principles](./landing-principles.md) (the rulings a landing change is checked against), [the pi adapter's guide](../../tools/tillr-run/backends/pi/README.md) and [the drain's guide](../../tools/tillr-drain/README.md) (what is built today).
 
 ---
 
@@ -53,7 +53,7 @@ The rulings of [the graph design, Section 1](./tillr-graph-is-the-path.md#1-the-
 
 | Fact | Source, read 2026-11-18 |
 | :--- | :--- |
-| The board design ruled landing "one asynchronous tool call": call, suspend, the queue works, only a refusal resumes | [The board state machine](./board-state-machine.md#1-from-the-agents-seat-landing-is-a-tool-call), decisions D8, D12 and D16; retired 2026-11-14 |
+| The board design ruled landing "one asynchronous tool call": call, suspend, the queue works, only a refusal resumes | Retired board landing design, decisions D8, D12 and D16 ([landing principles](./landing-principles.md)); retired 2026-11-14 |
 | It was built in commit `3f72899c9` and deleted with the board in `afdc9a957` | `git show 3f02e3b916^:tools/board-cli/internal/board/landing_call.go` |
 | The built form was not a harness suspension. The agent ran a command-line verb through its shell tool, its turn ended, and the drain later appended a tool result to the session file from outside | The same file: `deliverLandingAnswer`, `landingAnswerEntry` |
 | Whether it ever ran with a real model is not known. Its tests drove a stand-in process | The board plan's build status |

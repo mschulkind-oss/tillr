@@ -3116,9 +3116,10 @@ to ad hoc land stuff. and if the drain needs to land, didn't we decide autostash
 like you pulled some remote change when work was going on, which I will also do without warning
 sometimes." They did decide it. The old board design ruled on 2026-10-31 that the landing
 stashes the owner's uncommitted work, moves the trunk and re-applies the work, as `git pull
---autostash` does (decision D33 in `docs/design/board-state-machine.md`, section 9, built as
-task P10 in `docs/design/board-state-machine-plan.md`). The move to tillr dropped it with the
-old board tool (`docs/design/tillr-seed-triage.md`, row 592), and nothing replaced it.
+--autostash` does (decision D33, built as task P10 in
+[`docs/design/board-state-machine-plan.md`](../design/board-state-machine-plan.md#p10--the-compare-and-swap-autostashes-the-checkout-independent-needs-no-other-task)).
+The move to tillr dropped it with the old board tool (`docs/design/tillr-seed-triage.md`, row 592),
+and nothing replaced it.
 
 **Build this item with the steps below. Read this section first; it is the ruling of
 2026-11-18, amended the same day to answer the latest build's conflict.** Everything in this block after this
@@ -3533,7 +3534,7 @@ the three were already ruled above and the third was not a failure.
 
 **Agent details:**
 
-- **Ref:** `docs/design/board-state-machine.md` section 9 (D33, "the comparison-and-swap autostashes"); `docs/design/board-state-machine-plan.md` P10 (fences: never drop the stash on a failed apply, never stash during the gate); `docs/design/landing-principles.md`; the boundary table in `tools/tillr-drain/README.md`.
+- **Ref:** [`docs/design/board-state-machine-plan.md`](../design/board-state-machine-plan.md#p10--the-compare-and-swap-autostashes-the-checkout-independent-needs-no-other-task) P10 (D33, "the comparison-and-swap autostashes"; fences: never drop the stash on a failed apply, never stash during the gate); `docs/design/landing-principles.md`; the boundary table in `tools/tillr-drain/README.md`.
 - **Where:** `Trunk.Move` and `Trunk.UncommittedPaths` in `tools/tillr-land/land/trunk.go`; `finishLanding` in `tools/tillr-land/land/landing.go`, which calls `Trunk.Move` inside the write transaction; the ignored ref prefixes in `tools/tillr-drain/drain/boundary.go`; the dirty refusal in `tools/tillr-land/`; `tools/tillr-drain/drain/dirty_hold.go`; `trunk-path-dirty` in `tools/tillr-drain/holdrules/holdrules.go` and in `tools/tillr-view/waiting.go`; the drain README section "Owner edits and waiting landings"; `yolo-packs/tillr/skills/tillr-operating/`.
 - **Plan for the builder (2026-11-18, second version; superseded the same day by the build order at the head of this block, and kept as the description of what the patch at the end of this block holds; a builder does not carry it out):** every step below was made by the design seat in a scratch copy on `d4eecbea3` and the result is in the evidence line for this amendment, so a step that fails for the builder is a mistake in carrying it out, not an open design question. Do the steps in order and run the named tests after each. Run every `go test` with `-timeout 120s` or longer, never shorter; a landing test in this module takes about one second and the slowest takes nine. Run a whole module only as `python3 tools/go-test-shards.py tools/<module> -k 6` with no `--shard-timeout` and no `--timeout`, in the background if the harness limits a command's time: the three modules take several minutes together. `python3 tests/tillr-docs.test.py` takes 60 seconds, so give it at least 300.
   1. **Start from the last build.** In the lane worktree run `git diff bf86efa42 refs/tillr/preserved/run-item-land-across-owner-edits-a23 -- tools docs yolo-packs/tillr/skills | git apply`. The ref is in the main repository and is readable from the lane. The patch applies without offsets that matter on `d4eecbea3`; if the base has moved and it does not apply, use `git apply --3way` and resolve. Do not take `yolo-packs/tillr/files/` from the ref. This build already holds the hold rules change, the view test with the `operator;` prefix, the lock record and the reclaim of a dead lander's lock, so none of those is written again.
@@ -5846,7 +5847,7 @@ When the gate refuses a worker's candidate, or the worker ends without committin
 
 **Agent details:**
 
-- **Ref:** [Section 4.4 of the judge and lifecycle design](../design/tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10); the section "A refused run goes back to its worker" in `tools/tillr-drain/README.md`; [the board state machine, section 7](../design/board-state-machine.md#7-suspend-and-resume).
+- **Ref:** [Section 4.4 of the judge and lifecycle design](../design/tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10); the section "A refused run goes back to its worker" in `tools/tillr-drain/README.md`; [the landing call design](../design/tillr-landing-call.md).
 - **Where:** `returnedEnding` and the `returned-with-evidence` dispatch in `decide` in `tools/tillr-drain/drain/plan.go`; `returnedBrief` and `repeatedEnding` in `tools/tillr-drain/drain/returned.go`; the refusal paths of `settle` and `verify` and the continuation `resumeAfterWall` in `tools/tillr-drain/drain/loop.go`, where `abandon` resets the lane today; `yolo-packs/tillr/` copies, regenerated with `just pack-sync`.
 - **Evidence:** on 2026-11-17, `tillr drain why` held `rewrite-item-design-refusal-resumes-session` as `gate-failed` because the fast check `documents` refused a dead anchor in its commit. Under the ruling that run's own session is the one that knows which anchor it wrote.
 

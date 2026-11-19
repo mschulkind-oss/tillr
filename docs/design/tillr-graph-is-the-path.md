@@ -720,7 +720,7 @@ Each of these is an amendment owed in the document that holds the row, to be mad
 | [The gate rework](./gate-rework.md#decision-ledger) | [OQ-GR1](./gate-rework.md#decision-ledger), the red cap | Ruled out by the owner on 2026-11-18 ([OQ-GP7](#OQ-GP7)) and replaced by the one waiting rule of [Section 8.2](#82-proof-and-a-red-trunk); the cap is live until that rule is built |
 | | [OQ-GR2](./gate-rework.md#decision-ledger), lanes cut from the green pointer | Conflicts with R8. Withdrawn: every node starts on the latest trunk, and a worker is told when that trunk is red |
 | | `D-GR6`, automatic revert off | Overturned by the owner on 2026-11-17 ([OQ-GP1](#OQ-GP1)); amended in [gate rework Section 6.8](gate-rework.md#68-a-red-heavy-check) and built 2026-11-18 |
-| [The retired board state machine](./board-state-machine.md#7-suspend-and-resume) | Suspend and resume by a tool result | The only earlier design of "done is a suspended tool call". It is retired with the board; [the landing call](./tillr-landing-call.md) designs the mechanism for tillr |
+| The retired board landing design | Suspend and resume by a tool result | The only earlier design of "done is a suspended tool call". It is retired with the board; [the landing call](./tillr-landing-call.md) designs the mechanism for tillr |
 
 ### 12.3 Mechanisms of the drain
 
