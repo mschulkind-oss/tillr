@@ -324,7 +324,8 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		runCtx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutMS)*time.Millisecond)
 	}
 	defer cancel()
-	cmd := exec.CommandContext(runCtx, req.Command[0], req.Command[1:]...)
+	adapterPath := resolveExecAdapter(opts.BackendsDir, req.Backend, req.Command[0])
+	cmd := exec.CommandContext(runCtx, adapterPath, req.Command[1:]...)
 	cmd.Dir = workDir
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -656,6 +657,24 @@ func extractorFor(backendsDir, adapter string) string {
 		dir = filepath.Join(backendsDir, filepath.Base(dir))
 	}
 	return filepath.Join(dir, "extract-report")
+}
+
+func resolveExecAdapter(backendsDir, backend, adapter string) string {
+	if backendsDir == "" || backend == "command" || adapter == "" || filepath.IsAbs(adapter) || !strings.ContainsRune(adapter, filepath.Separator) {
+		return adapter
+	}
+	extractor := extractorFor(backendsDir, adapter)
+	if extractor == "" {
+		return adapter
+	}
+	candidate := filepath.Join(filepath.Dir(extractor), filepath.Base(adapter))
+	if abs, err := filepath.Abs(candidate); err == nil {
+		candidate = abs
+	}
+	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		return candidate
+	}
+	return adapter
 }
 
 // parseSpend reads the two spend keys of the report header, and nothing else: the header

@@ -317,6 +317,9 @@ func planFace(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
+	if policy != nil {
+		policy.Root = *root
+	}
 
 	ctx := context.Background()
 	// The index is read lazily, on the first item that names a design document. An absent
@@ -388,6 +391,9 @@ func onceFace(args []string) int {
 	policy, err := readPolicy(tick.PolicyRef)
 	if err != nil {
 		return fail(err)
+	}
+	if policy != nil {
+		policy.Root = *root
 	}
 
 	ctx := context.Background()

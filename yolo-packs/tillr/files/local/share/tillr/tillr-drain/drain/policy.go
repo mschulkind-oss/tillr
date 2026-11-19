@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
@@ -38,6 +40,7 @@ type Policy struct {
 	ReadOnlySeats []string          `json:"read_only_seats,omitempty"`
 	SeatPurposes  map[string]string `json:"seat_purposes,omitempty"`
 	Ref           string            `json:"-"` // Source path, when loaded from a file.
+	Root          string            `json:"-"` // Root repository for relative adapter paths.
 
 	DefaultBackend string   `json:"default_backend"`
 	Preference     []string `json:"preference"`
@@ -438,8 +441,25 @@ func (p Policy) NextRequest(itemID, laneID, runID, failedBackend, seat string) (
 // drain.decision embeds the full run.request, a model id in argv is recorded run evidence),
 // and nothing else in the request names it. This face decides which backend; run decides
 // what a request on it says.
+// resolveAdapterPath resolves a repository-relative adapter path against root
+// (the trunk checkout the loop runs from) so workers running in a lane worktree
+// execute the trunk's adapter rather than their own lane's copy. Bare command
+// names (no path separator) are left for PATH lookup, and absolute paths are
+// returned unchanged.
+func resolveAdapterPath(root, adapter string) string {
+	if root == "" || adapter == "" || filepath.IsAbs(adapter) || !strings.ContainsRune(adapter, filepath.Separator) {
+		return adapter
+	}
+	if absRoot, err := filepath.Abs(root); err == nil {
+		return filepath.Join(absRoot, adapter)
+	}
+	return filepath.Join(root, adapter)
+}
+
 func (p Policy) request(itemID, laneID, runID, backendName string) *run.Request {
-	request := p.Backends[backendName].Request(itemID, laneID, runID, backendName)
+	backend := p.Backends[backendName]
+	backend.Adapter = resolveAdapterPath(p.Root, backend.Adapter)
+	request := backend.Request(itemID, laneID, runID, backendName)
 	return &request
 }
 

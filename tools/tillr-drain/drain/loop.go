@@ -697,6 +697,11 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 		l.cfg.Policy = p
 		l.policyState = PolicyState{Ref: cfg.PolicyRef, Hash: hash, DiskHash: hash, Content: string(raw)}
 	}
+	if l.cfg.Policy != nil && l.cfg.Policy.Root == "" && cfg.Root != "" {
+		policyCopy := *l.cfg.Policy
+		policyCopy.Root = cfg.Root
+		l.cfg.Policy = &policyCopy
+	}
 	for _, diagnostic := range WorkflowDefaultDiagnostics(cfg.Root, cfg.WorkflowDefaults, l.cfg.Policy) {
 		l.reportf("workflow-invalid: %s\n", diagnostic)
 	}
