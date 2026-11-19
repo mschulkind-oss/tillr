@@ -208,18 +208,24 @@ def resolve_restart_args(root, extra, loop_pid):
     return args, policy, lanes
 
 
-def wait_for_exit(pid, timeout=60):
-    """Wait for pid to exit or become a zombie."""
+def wait_for_exit(pid, report_interval=30, poll_interval=0.05, clock=None, sleep=None):
+    """Wait until pid exits or becomes a zombie, printing what is being waited on."""
+    clock = time.monotonic if clock is None else clock
+    sleep = time.sleep if sleep is None else sleep
     original = process(pid)
     if original is None or original[2] == "Z":
         return
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    print(f"restart: waiting for loop {pid} to exit", flush=True)
+    last_report = clock()
+    while True:
         current = process(pid)
         if current is None or current[2] == "Z" or current[:2] != original[:2]:
             return
-        time.sleep(0.05)
-    raise RuntimeError(f"loop {pid} did not exit within {timeout}s")
+        now = clock()
+        if report_interval is not None and now - last_report >= report_interval:
+            print(f"restart: still waiting for loop {pid} to exit", flush=True)
+            last_report = now
+        sleep(poll_interval)
 
 
 def wait_for_keeper_exit(path, timeout=30):
