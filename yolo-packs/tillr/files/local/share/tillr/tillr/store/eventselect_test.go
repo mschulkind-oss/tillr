@@ -183,3 +183,38 @@ func TestASelectedReadUnderTheWriteLockReadsOnlyWhatItAnswers(t *testing.T) {
 		t.Fatalf("a read-only whole-log read was counted as under the write lock")
 	}
 }
+
+// A whole-log read outside a write holds no lock, but its cost is still the log's length,
+// so it is counted apart from one under the write lock; a selected read is neither. Every
+// read, whole or selected, is counted as one event-log read.
+func TestAWholeLogReadOutsideAWriteIsCountedApart(t *testing.T) {
+	s, _ := cachedStore(t)
+	appendMixed(t, s, 5, 20, "history")
+	whole, under, reads := store.WholeLogReads(), store.WholeLogReadsUnderWrite(), store.EventLogReads()
+	readAll(t, s, 0)
+	readAll(t, s, 1)
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		_, err := r.EventsOfKind(0, foldKind)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n := store.WholeLogReads() - whole; n != 1 {
+		t.Fatalf("one read-only whole-log read counted %d times, want 1 (a read after a cursor and a selected read are not whole)", n)
+	}
+	if n := store.WholeLogReadsUnderWrite() - under; n != 0 {
+		t.Fatalf("a read-only whole-log read counted %d times as under the write lock", n)
+	}
+	if n := store.EventLogReads() - reads; n != 3 {
+		t.Fatalf("three event-log reads counted %d times", n)
+	}
+	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Reader().Events(0)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n := store.WholeLogReads() - whole; n != 1 {
+		t.Fatalf("a whole-log read under the write lock was counted as outside one")
+	}
+}

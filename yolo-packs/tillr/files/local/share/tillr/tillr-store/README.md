@@ -128,7 +128,11 @@ walk is an error, not silently omitted. Nothing changes the existing retention p
   its index by kind and object type. `Reader.Events(0)` inside
   a write transaction is counted (`store.WholeLogReadsUnderWrite`) and, with
   `TILLR_SQLITE_TRACE=1`, reported as a `tillr-sqlite ... operation="log-read-under-write"`
-  line that names the caller.
+  line that names the caller. One in a read-only transaction holds no lock but still costs
+  the whole history, so it is counted apart (`store.WholeLogReads`) and reported as an
+  `operation="log-read"` line; `store.EventLogReads` counts every event-log read, whole or
+  selected, so a test can hold a planner to a number of reads that does not grow with the
+  items it plans.
 - **A fixture store is seedable and a live store is not.** `init` decides which one it
   made; a live store refuses `seed` outright, because a store that has been drained is not
   a store to replace.
