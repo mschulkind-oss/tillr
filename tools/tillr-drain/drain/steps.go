@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -484,6 +485,12 @@ func (s *ProcessSteps) programWithEnv(ctx context.Context, step, dir, program st
 	cmd.Dir = dir
 	var stderr stderrTail
 	cmd.Stderr = &stderr
+	if os.Getenv("TILLR_SQLITE_TRACE") == "1" {
+		// The tail keeps what the step said; its trace goes where every other trace is.
+		traces := &sqliteTraceForwarder{output: os.Stderr}
+		cmd.Stderr = io.MultiWriter(&stderr, traces)
+		defer traces.Flush()
+	}
 	var observation pipelineObservation
 	if step == "gate" || step == "land" {
 		var err error

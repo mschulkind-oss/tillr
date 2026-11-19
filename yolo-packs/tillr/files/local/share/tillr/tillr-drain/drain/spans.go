@@ -1,6 +1,7 @@
 package drain
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"os/exec"
@@ -99,26 +100,93 @@ func exitCodeOf(cmd *exec.Cmd) *int {
 // drops what came before, so a chatty step cannot grow the loop's memory. The error a step
 // fails with quotes the same tail the span records, so the two cannot disagree about what the
 // step said.
+//
+// The tail is what the step said, not the store's and git's trace (traceLinePrefixes): with
+// TILLR_SQLITE_TRACE=1 a step writes hundreds of trace lines for each line of its own, and on
+// 2026-11-19 a landing's hold read "…x39e6df37c190})" — the cut end of a stack frame — with
+// the lander's reason buried under the trace that followed it. Trace lines are left out of
+// the tail; a step that runs with tracing on forwards them to the loop's stderr instead
+// (sqliteTraceForwarder), where every other process's trace already is.
 type stderrTail struct {
 	buf []byte
 	// dropped is whether anything was cut from the front, and it is what the ellipsis in
 	// the tail says: a tail that silently lost its beginning reads as the whole message.
 	dropped bool
+	// line is the start of the current line while it is too short to say whether it is a
+	// trace line; kept and trace record what it turned out to be, until its newline.
+	line  []byte
+	kept  bool
+	trace bool
 }
 
 func (t *stderrTail) Write(p []byte) (int, error) {
+	size := len(p)
+	for len(p) > 0 {
+		end := bytes.IndexByte(p, '\n')
+		complete := end >= 0
+		if !complete {
+			end = len(p)
+		}
+		t.lineBytes(p[:end])
+		if !complete {
+			break
+		}
+		if !t.kept && !t.trace {
+			t.decide(true)
+		}
+		if t.kept {
+			t.keep([]byte{'\n'})
+		}
+		t.line, t.kept, t.trace = nil, false, false
+		p = p[end+1:]
+	}
+	return size, nil
+}
+
+// lineBytes takes the next bytes of the current line.
+func (t *stderrTail) lineBytes(part []byte) {
+	switch {
+	case t.trace:
+	case t.kept:
+		t.keep(part)
+	default:
+		t.line = append(t.line, part...)
+		t.decide(false)
+	}
+}
+
+// decide settles whether the current line is a trace line once enough of it is known: at its
+// end, or once it is longer than every trace prefix.
+func (t *stderrTail) decide(ended bool) {
+	if !ended && len(t.line) < traceLinePrefixLen {
+		return
+	}
+	if isTraceLine(t.line) {
+		t.trace = true
+	} else {
+		t.kept = true
+		t.keep(t.line)
+	}
+	t.line = nil
+}
+
+func (t *stderrTail) keep(p []byte) {
 	t.buf = append(t.buf, p...)
 	if len(t.buf) > StderrTailBytes {
 		t.buf = append(t.buf[:0], t.buf[len(t.buf)-StderrTailBytes:]...)
 		t.dropped = true
 	}
-	return len(p), nil
 }
 
 // String is the tail as a record holds it: trimmed at both ends, because a step's trailing
-// newline is formatting and its leading blank line is not the start of what it said.
+// newline is formatting and its leading blank line is not the start of what it said. A last
+// line with no newline yet is part of what the step said unless it is trace.
 func (t *stderrTail) String() string {
-	body := strings.TrimSpace(string(t.buf))
+	text := string(t.buf)
+	if !t.kept && !t.trace && len(t.line) > 0 && !isTraceLine(t.line) {
+		text += string(t.line)
+	}
+	body := strings.TrimSpace(text)
 	if t.dropped {
 		return "…" + body
 	}
