@@ -1408,13 +1408,12 @@ TILLR_LOOP_TIMEOUT = 300
 # copies as their sources by the rule in tools/pack-docs.py, so a change to that delivered
 # tree or to the rule plans it too.
 #
-# It also runs four regression suites of its own as child processes (TILLR_DOCS_SUITES), and
-# those read the repository's `.tillr.toml` and `.justfile` and the roll tools. Every one of
-# them is an input of this check, so each is a watch: on 2026-11-18 a `.tillr.toml` change
-# left `tests/tillr-roll.test.py` asserting the old key, and because neither file was a watch
-# nothing planned this check for it, the fixer filed for the red was fenced away from both,
-# and the trunk stayed red. tests/fork-check.test.py (31d) refuses a suite this file runs
-# that is not listed here.
+# It also runs two regression suites of its own as child processes (TILLR_DOCS_SUITES), and
+# `tests/tillr-build.test.py` reads `.justfile`. Every one of them is an input of this check,
+# so each is a watch. The roll and keeper suites (`tests/tillr-roll.test.py`,
+# `tests/tillr-keep.test.py`) have their own lightweight `tillr-roll` step below so a
+# `.tillr.toml` edit does not rebuild every Go binary here. tests/fork-check.test.py (31d)
+# refuses a suite this file runs that is not listed here.
 TILLR_DOCS_TEST = "tests/tillr-docs.test.py"
 TILLR_DOCS_SKILL = "yolo-packs/tillr/skills/tillr-operating/"
 TILLR_DOCS_DELIVERED = "yolo-packs/tillr/files/local/share/tillr/"
@@ -1422,10 +1421,8 @@ TILLR_DOCS_RULE = "tools/pack-docs.py"
 TILLR_DOCS_SUITES = (
     "tests/tillr-build.test.py",
     "tests/tillr-scratch.test.py",
-    "tests/tillr-keep.test.py",
-    "tests/tillr-roll.test.py",
 )
-TILLR_DOCS_READS = (".tillr.toml", ".justfile")
+TILLR_DOCS_READS = (".justfile",)
 TILLR_DOCS_WATCHES = (
     TILLR_DOCS_TEST,
     *TILLR_DOCS_SUITES,
@@ -1441,18 +1438,36 @@ TILLR_DOCS_WATCHES = (
     "tools/tillr-run/",
     "tools/tillr-store/",
     "tools/tillr-view/",
-    "tools/tillr-roll/",
     TILLR_DOCS_SKILL,
 )
 TILLR_DOCS_INPUT = (
     re.compile(r"^" + re.escape(TILLR_DOCS_TEST) + r"$"),
     *(re.compile(r"^" + re.escape(path) + r"$") for path in TILLR_DOCS_SUITES + TILLR_DOCS_READS),
-    re.compile(r"^tools/tillr(-[a-z]+)?/"),
+    re.compile(r"^tools/tillr(-(?!roll/)[a-z]+)?/"),
     re.compile(r"^" + re.escape(TILLR_DOCS_SKILL)),
     re.compile(r"^" + re.escape(TILLR_DOCS_RULE) + r"$"),
     re.compile(r"^" + re.escape(TILLR_DOCS_DELIVERED)),
 )
 TILLR_DOCS_TIMEOUT = 600
+
+# tests/tillr-roll.test.py and tests/tillr-keep.test.py pin the repository's rolling-deploy
+# tool and keeper without building the Go binaries. They read `.tillr.toml`, `.justfile` and
+# `tools/tillr-roll/`, so a `.tillr.toml` edit runs only this ~10s step instead of `tillr-docs`.
+TILLR_ROLL_TESTS = (
+    "tests/tillr-roll.test.py",
+    "tests/tillr-keep.test.py",
+)
+TILLR_ROLL_WATCHES = (
+    *TILLR_ROLL_TESTS,
+    ".tillr.toml",
+    ".justfile",
+    "tools/tillr-roll/",
+)
+TILLR_ROLL_INPUT = (
+    *(re.compile(r"^" + re.escape(path) + r"$") for path in (*TILLR_ROLL_TESTS, ".tillr.toml", ".justfile")),
+    re.compile(r"^tools/tillr-roll/"),
+)
+TILLR_ROLL_TIMEOUT = 120
 
 # tools/session-liveness is the headless liveness harness: from a state a session can reach,
 # does it return to idle within a bound, and does a later send-now start work? It judges the
@@ -4962,6 +4977,7 @@ CHECK_KIND_GROUP = {
     # table, is this change's own red: the document is the claim and the binary is the
     # authority, so a disagreement is exactly what the step exists to refuse.
     "tillr-docs": KIND_VERDICT,
+    "tillr-roll": KIND_VERDICT,
     # The loop adapter's own suite: a case that no longer describes the front end is this
     # change's own red, exactly like every other assertion above.
     "tillr-loop": KIND_VERDICT,
@@ -5093,6 +5109,7 @@ CHECK_TIER = {
     "session-budget": TIER_LANDING,
     "tillr-backends": TIER_LANDING,
     "tillr-docs": TIER_LANDING,
+    "tillr-roll": TIER_LANDING,
     # Twelve shell-stub cases that finish in a couple of seconds, so deferral buys nothing.
     "tillr-loop": TIER_LANDING,
     # The pack's copy of the modules is a property of the tree, and the front end's build is
@@ -5188,6 +5205,8 @@ CHECK_COST_ESTIMATE = {
     # 5s warm, and the gate's `go-build` steps keep that cache warm), plus one `--help` per
     # documented face.
     "tillr-docs": 60.0,
+    # Measured 2026-11-19: tests/tillr-roll.test.py (~3.9s) + tests/tillr-keep.test.py (~6.9s).
+    "tillr-roll": 11.0,
     # Twelve shell-stub cases: measured under 4s cold on 2026-11-15, and each is a shim on
     # PATH answering a chosen exit code, so the price is Python startup plus a few dozen
     # subprocesses rather than any real work.
@@ -6809,6 +6828,25 @@ def build_plan(
     else:
         plan.not_planned("tillr-docs (python3 tests/tillr-docs.test.py)",
                          "the documentation suite, the modules it reads and the skill are unchanged")
+
+    # tests/tillr-roll.test.py and tests/tillr-keep.test.py pin the rolling-deploy tool and
+    # the repository keeper without building the Go binaries. A change to `.tillr.toml`,
+    # `.justfile`, `tools/tillr-roll/`, or either suite runs them here; nothing else does.
+    tillr_roll = [path for path in changed
+                  if any(pattern.match(path) for pattern in TILLR_ROLL_INPUT)]
+    if tillr_roll and not all((root / path).exists() for path in TILLR_ROLL_TESTS):
+        plan.not_planned("tillr-roll (python3 tests/tillr-roll.test.py && tests/tillr-keep.test.py)",
+                         "this repository has no tillr roll and keeper suites")
+    elif tillr_roll:
+        plan.checks.append(
+            Check("tillr-roll", "the repository roll and keeper suites pass",
+                  ["sh", "-c", "python3 tests/tillr-roll.test.py && python3 tests/tillr-keep.test.py"],
+                  "the roll or keeper suite, .tillr.toml, .justfile, or tools/tillr-roll changed",
+                  TILLR_ROLL_TIMEOUT, watches=TILLR_ROLL_WATCHES)
+        )
+    else:
+        plan.not_planned("tillr-roll (python3 tests/tillr-roll.test.py && tests/tillr-keep.test.py)",
+                         "the roll and keeper suites, .tillr.toml, .justfile and tools/tillr-roll are unchanged")
 
     # The liveness harness landed with the fork fix it measures, and nothing else executes it.
     # A change to the harness, or to the pi-fork series whose fix it measures, plans TWO steps:
