@@ -33,6 +33,7 @@ func TestStateMovesTheItemAndLeavesTheCriteriaAlone(t *testing.T) {
 	if code, out := apply(t, db, envelope(t, "item.record", "rec-1", seeded)); code != 0 {
 		t.Fatalf("apply exited %d: %s", code, out)
 	}
+	addTerminalEvidence(t, db, "item_042", "landing.recorded")
 	updates := eventsOfKind(t, db, "item.update")
 
 	code, out := state(t, db, "item_042", "landed", "2026-11-10T00:10:00Z")
@@ -155,6 +156,7 @@ func TestAStateMoveDoesNotUnfreezeACriterion(t *testing.T) {
 	if code, out := apply(t, db, envelope(t, "item.record", "rec-1", seeded)); code != 0 {
 		t.Fatalf("apply exited %d: %s", code, out)
 	}
+	addTerminalEvidence(t, db, "item_042", "landing.recorded")
 	if code, out := state(t, db, "item_042", "landed", "2026-11-10T00:10:00Z"); code != 0 {
 		t.Fatalf("state exited %d: %s", code, out)
 	}

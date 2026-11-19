@@ -33,7 +33,7 @@ func syncLoop(t *testing.T, f loopFixture, steps *drain.ProcessSteps, report *by
 	}
 	loop, err := drain.NewLoop(drain.LoopConfig{ExitWhenDrained: true,
 		Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{laneName(1)},
-		Policy: f.policy, Steps: steps,
+		Policy: f.policy, Steps: &evidenceProcessSteps{steps},
 		Stage:        passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}},
 		QuestionsCmd: strings.Fields(indexStub(t, entries...)),
 		Now:          steps.Now, Report: report,

@@ -278,7 +278,7 @@ func TestDefinitionGitLandingPreservesFinishedWaitingMetadata(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("block: %d %s", code, out)
 	}
-	if code, out = state(t, db, "item_042", "resolved-elsewhere", "2026-11-17T12:00:00Z"); code != 0 {
+	if code, out = findingState(t, db, "item_042", "resolved-elsewhere", "--resolves-via", "doc:docs/decision.md"); code != 0 {
 		t.Fatalf("finish: %d %s", code, out)
 	}
 	p := lifecyclePayload(t, out)
@@ -299,6 +299,7 @@ func TestDefinitionLegacyStoreDrains(t *testing.T) {
 	if err != nil || !d.Default {
 		t.Fatalf("legacy definition: %+v %v", d, err)
 	}
+	addTerminalEvidence(t, db, "item_042", "landing.recorded")
 	for _, target := range []string{"in-queue", "landed"} {
 		if code, out := state(t, db, "item_042", target, "2026-11-17T12:00:00Z"); code != 0 {
 			t.Fatalf("legacy drain %s: %d %s", target, code, out)

@@ -42,6 +42,9 @@ func checkStateReceipt(r *store.Reader, d definition.Definition, id, from, to st
 	}
 	switch kind {
 	case "item":
+		if value == id {
+			return Rejectionf("pointer-unknown", id, "--resolves-via must name another item")
+		}
 		var exists bool
 		if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM items WHERE item_id = ?)`, value).Scan(&exists); err != nil {
 			return Internalf("checking resolution pointer: %v", err)

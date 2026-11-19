@@ -37,7 +37,7 @@ func blockedRouteFixture(t *testing.T, worker, designer string) loopFixture {
 
 func routeLoop(t *testing.T, f loopFixture, steps *drain.ProcessSteps, stage drain.Stager, report io.Writer) *drain.Loop {
 	t.Helper()
-	loop, err := drain.NewLoop(drain.LoopConfig{ExitWhenDrained: true, Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{"lane-1"}, Policy: f.policy, Steps: steps, Stage: stage, Now: steps.Now, Report: report, QuestionsCmd: strings.Fields(indexStub(t, map[string]any{"path": "docs/work.md", "questions": []any{}}))})
+	loop, err := drain.NewLoop(drain.LoopConfig{ExitWhenDrained: true, Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{"lane-1"}, Policy: f.policy, Steps: &evidenceProcessSteps{steps}, Stage: stage, Now: steps.Now, Report: report, QuestionsCmd: strings.Fields(indexStub(t, map[string]any{"path": "docs/work.md", "questions": []any{}}))})
 	if err != nil {
 		t.Fatal(err)
 	}

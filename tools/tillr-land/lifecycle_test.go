@@ -30,7 +30,7 @@ func TestPassRefusesAnItemClosedAfterItsGate(t *testing.T) {
 			if disposition == "closed" {
 				itemRun("close", "--store", db, "--item", "item_042", "--reason", "not wanted", "--by", "owner")
 			} else {
-				itemRun("state", "--store", db, "--item", "item_042", "--state", disposition, "--now", "2026-11-16T12:00:00Z")
+				itemRun("state", "--store", db, "--item", "item_042", "--state", disposition, "--resolves-via", "doc:docs/elsewhere.md", "--now", "2026-11-16T12:00:00Z")
 			}
 			code, out := run(t, "pass", "--store", db, "--repo", f.dir, "--item", "item_042", "--run", "run-closed", "--base", f.baseSHA, "--head", f.headSHA, "--verdict", verdict, "--now", "2026-11-16T13:00:00Z")
 			got := decodeLanding(t, out)

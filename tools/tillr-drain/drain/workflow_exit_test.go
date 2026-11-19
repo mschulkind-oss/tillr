@@ -19,6 +19,7 @@ type exitSteps struct {
 	verdicts       int
 	landedHead     string
 	stateFault     bool
+	realState      bool
 	infraNode      int
 	infraUsed      bool
 	blockedFailure bool

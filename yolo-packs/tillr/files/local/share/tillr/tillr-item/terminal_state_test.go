@@ -136,11 +136,14 @@ func TestTerminalProductQAReopening(t *testing.T) {
 	if code, out := apply(t, db, envelope(t, "item.record", "seed", p)); code != 0 {
 		t.Fatalf("seed: %d %s", code, out)
 	}
+	finishCriteriaForEvidence(t, db, p.ItemID)
+	addTerminalEvidence(t, db, p.ItemID, "landing.recorded")
 	if code, out := state(t, db, p.ItemID, "landed", "2026-11-10T00:10:00Z"); code != 0 {
 		t.Fatalf("land: %d %s", code, out)
 	}
 	before := terminalSnapshot(t, db, p.ItemID)
 	p.State, p.Title = "in-queue", "new title"
+	p.Criteria[0].State = "done"
 	code, out := apply(t, db, envelope(t, "item.record", "reopen", p))
 	assertRefused(t, code, out, "state-terminal")
 	if after := terminalSnapshot(t, db, p.ItemID); !bytes.Equal(before, after) {
@@ -161,7 +164,18 @@ func terminalSyncSibling(t *testing.T, st string) {
 	if code, out := run(t, "sync", "--store", db, "--root", repo, "--json"); code != 0 {
 		t.Fatalf("sync: %d %s", code, out)
 	}
-	if code, out := state(t, db, "item-good", st, "2026-11-10T00:10:00Z"); code != 0 {
+	if st == "landed" {
+		finishCriteriaForEvidence(t, db, "item-good")
+		addTerminalEvidence(t, db, "item-good", "landing.recorded")
+	}
+	var code int
+	var out []byte
+	if st == "resolved-elsewhere" {
+		code, out = findingState(t, db, "item-good", st, "--resolves-via", "doc:docs/items.md")
+	} else {
+		code, out = state(t, db, "item-good", st, "2026-11-10T00:10:00Z")
+	}
+	if code != 0 {
 		t.Fatalf("land: %d %s", code, out)
 	}
 	snapshot := func() []byte {
@@ -174,7 +188,7 @@ func terminalSyncSibling(t *testing.T, st string) {
 	before := snapshot()
 	repo = syncRepo(t, map[string]string{"docs/items.md": strings.Replace(syncGood, "### Good", "### Changed", 1) + strings.ReplaceAll(syncGood, "item-good", "item-sibling")})
 	updates := eventsOfKind(t, db, "item.update")
-	code, out := run(t, "sync", "--store", db, "--root", repo, "--json")
+	code, out = run(t, "sync", "--store", db, "--root", repo, "--json")
 	if code != 0 {
 		t.Fatalf("sync: %d %s", code, out)
 	}
@@ -202,6 +216,7 @@ func TestTerminalLoopVerdictsThenLand(t *testing.T) {
 	if code, out := state(t, db, "item_042", "in-queue", "2026-11-10T00:09:00Z"); code != 0 {
 		t.Fatalf("queue: %d %s", code, out)
 	}
+	addTerminalEvidence(t, db, "item_042", "landing.recorded")
 	if code, out := recordVerdict(t, db, mechanicalVerdict()); code != 0 {
 		t.Fatalf("verdict: %d %s", code, out)
 	}

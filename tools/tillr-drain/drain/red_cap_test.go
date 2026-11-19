@@ -127,6 +127,13 @@ func TestRedCapSupersededCandidateSettlesWithoutGreenMovement(t *testing.T) {
 			}
 			reader := openFixture(t, f.storePath)
 			err = reader.ReadTx(context.Background(), func(r *store.Reader) error {
+				var pointer, reason, by string
+				if err := r.QueryRow(`SELECT resolves_via, lifecycle_reason, lifecycle_by FROM items WHERE item_id=?`, c.ItemID).Scan(&pointer, &reason, &by); err != nil {
+					return err
+				}
+				if pointer != "commit:"+c.HeadSHA || reason == "" || by != Utility {
+					t.Fatalf("resolution receipt: %q %q %q", pointer, reason, by)
+				}
 				works, err := readPending(r)
 				if err == nil && !works[c.ItemID].Done {
 					t.Fatal("settled work still occupies its lane")

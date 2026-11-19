@@ -61,6 +61,10 @@ func TestFinishedStateReceipt(t *testing.T) {
 					findingsItem(t, db, "finding")
 					findingsItem(t, db, "other")
 				}
+				if target == "landed" {
+					finishCriteriaForEvidence(t, db, "finding")
+					addTerminalEvidence(t, db, "finding", "landing.recorded")
+				}
 				code, out := findingState(t, db, "finding", target, "--reason", "evidence checked", "--by", "reviewer", "--resolves-via", pointer)
 				if code != 0 {
 					t.Fatalf("finish: %d %s", code, out)

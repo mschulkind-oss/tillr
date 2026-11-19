@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/store"
@@ -17,8 +18,21 @@ func (s *exitSteps) ItemState(ctx context.Context, id, runID, state string, wait
 		s.stateFault = false
 		return fmt.Errorf("stop before state move")
 	}
+	if s.realState {
+		st, err := store.Open(ctx, s.f.storePath, true)
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		return st.WriteTx(ctx, func(tx *store.Tx) error {
+			_, err := item.SetState(ctx, tx, id, state, s.tillrNow(), waiting...)
+			return err
+		})
+	}
 	return s.workflowSteps.ItemState(ctx, id, runID, state, waiting...)
 }
+
+func (s *exitSteps) tillrNow() time.Time { return time.Now().UTC() }
 
 func assertNoCommitExit(t *testing.T, f refusalLoopFixture, steps *exitSteps, base, wantJudge string) {
 	t.Helper()

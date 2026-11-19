@@ -89,6 +89,9 @@ func (s *scaleSteps) Gate(ctx context.Context, c drain.Candidate) (drain.GateOut
 	s.note(c.RunID, "gate-verdict")
 	return result, nil
 }
+func (s *scaleSteps) Verdict(ctx context.Context, c drain.Candidate, verdict string) error {
+	return (&evidenceProcessSteps{s.ProcessSteps}).Verdict(ctx, c, verdict)
+}
 func (s *scaleSteps) JudgeHeavy(context.Context, string, string) ([]drain.HeavyCheck, error) {
 	return []drain.HeavyCheck{{CheckID: "fixture-heavy", Result: "pass"}}, nil
 }

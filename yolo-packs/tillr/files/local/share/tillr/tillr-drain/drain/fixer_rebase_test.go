@@ -155,7 +155,7 @@ func TestATerminalItemsUnpreservableLaneIsDiscardedNotAFault(t *testing.T) {
 	saved := runGit(t, f.root, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit-tree", tree, "-m", `{"run_id":"`+rec.RunID+`","ref":"`+ref+`"}`)
 	runGit(t, f.root, "update-ref", ref, saved)
 	fixtureWrite(t, f, func(tx *store.Tx) error {
-		_, err := item.SetState(ctx, tx, d.ItemID, StateResolvedElsewhere, l.cfg.Now(), item.WaitingOn{})
+		_, err := item.SetStateWithReceipt(ctx, tx, d.ItemID, StateResolvedElsewhere, l.cfg.Now(), item.MoveReceipt{ResolvesVia: "doc:docs/elsewhere.md"}, item.WaitingOn{})
 		return err
 	})
 	report := &strings.Builder{}
