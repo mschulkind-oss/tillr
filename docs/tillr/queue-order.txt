@@ -1,15 +1,16 @@
-# last_hand_move_event_seq: 1302638
-# hand_move_event_sha256: 591698c84960ea3b18ca87583775936635e3c7dc9045857fe540df295221188a
-item-request-ec02a81949
+# last_hand_move_event_seq: 1305169
+# hand_move_event_sha256: 3391db67362e870b5ec2b2ba37197e586374db0a017b68d0072265a0ad0da602
+item-request-b205fbd881
+item-request-77f6fd3402
+item-request-bcca8877d5
+item-request-06f2e494aa
+item-request-157d491321
 item-request-ab90e5da8f
 item-request-2656e7289b
-item-request-b205fbd881
 item-request-ae67aa405d
 item-request-add5da8454
 item-request-e074800ade
 item-request-e052790788
-item-request-2c5d86ea43
-item-request-8f36b06574
 item-request-3ee8dd349e
 item-request-ed0e11d000
 item-request-5be951c300
@@ -20,14 +21,11 @@ item-request-4ca25155ff
 item-gate-pinned-fork-inputs
 item-agent-default-bmad-superpowers-skills
 item-bedrock-claude-latest-only
-item-request-1affce4824
 item-request-b2ce2df89b
 item-request-926c73851f
 item-request-8176b4a9b6
 item-request-c767df8280
 item-request-8304b61f6a
-item-request-5a09a22d90
-item-request-6cfb00cda5
 item-request-52982a1ce4
 item-request-501d15a96a
 item-request-bc841265a1
@@ -37,9 +35,10 @@ item-request-d2b26d0474
 item-request-f74814d1a5
 item-request-553e2d14f7
 item-request-1b032747a0
-item-request-8008c05e5c
 item-request-4795bf8522
 item-request-d064179a33
 item-request-7bbcb8dc81
 item-request-7aa97e258a
 item-request-3ccff5abbd
+item-request-6574a9643e
+item-request-f9634d9844
