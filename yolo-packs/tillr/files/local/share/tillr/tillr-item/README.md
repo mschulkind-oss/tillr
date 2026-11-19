@@ -209,24 +209,10 @@ for an item that has no block.
 
 ```sh
 printf '%s\n' 'Add two rows to yolo-packs/copilot-models/pack.toml: ...' |
-  tillr-item request --store .tillr/state.db --root . \
-    --title "List two more Copilot models" --workflow single-worker@v1 \
-    --path yolo-packs/copilot-models/pack.toml
+  tillr-item request --store .tillr/state.db --root . --title "List two more Copilot models" --workflow single-worker@v1 --path yolo-packs/copilot-models/pack.toml
 ```
 
-The flags:
-
-- `--title` (required) is the item's one-line title.
-- `--path` (required, repeatable) is one repo-relative prefix of the fence. A directory
-  ends in `/`. Wildcards, absolute paths and paths that leave the repository are refused.
-- `--seat` is the item's seat, `build` by default.
-- `--workflow` names the workflow, a file under `config/tillr/workflows/` or the built-in
-  `single-worker@v1`, which is one run on the item's seat. By default the `design` seat
-  runs `scouted-design@v1` and the `build` seat runs `planned-build@v1`; other seats must
-  name one. A workflow that declares top-level `args` is refused as `workflow-needs-args`,
-  because a request supplies none (`doc-triage@v1` has its own face).
-- `--criterion` (repeatable, at most four) adds a criterion of your own after the fixed four.
-- `--to`, `--before` or `--after` places the item; it goes last by default.
+The flags are `--title`, `--path`, `--seat`, `--workflow`, `--criterion`, `--to`, `--before` and `--after`; run `tillr-item request --help` for their details. `--title` and `--path` (repeatable, one repo-relative prefix of the fence; a directory ends in `/`, and wildcards, absolute paths and paths that leave the repository are refused) are required. `--seat` is `build` by default. `--workflow` names a file under `config/tillr/workflows/` or the built-in `single-worker@v1` (one run on the item's seat); by default `design` runs `scouted-design@v1` and `build` runs `planned-build@v1`, other seats must name one, and a workflow that declares top-level `args` is refused as `workflow-needs-args` (`doc-triage@v1` has its own face). `--criterion` (repeatable, at most four) adds criteria after the fixed four. `--to`, `--before` and `--after` place the item (last by default).
 
 The face reads the workflow file before the store's write transaction opens, so the
 transaction does no I/O but the store's own. It writes the item and a `request_words`
