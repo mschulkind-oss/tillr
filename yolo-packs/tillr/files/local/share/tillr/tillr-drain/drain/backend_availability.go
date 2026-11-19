@@ -24,6 +24,9 @@ func readInfrastructureClosed(r *store.Reader) (map[string]bool, error) {
 	closed := map[string]bool{}
 	sequences := map[string]int64{}
 	for _, o := range outcomes {
+		if o.class == AttemptInterrupted {
+			continue
+		}
 		name := o.rec.Backend
 		if _, seen := sequences[name]; seen {
 			continue

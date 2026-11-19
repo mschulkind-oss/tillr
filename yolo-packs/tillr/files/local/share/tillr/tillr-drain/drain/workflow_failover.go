@@ -60,3 +60,41 @@ func (l *Loop) retryWorkflowNode(ctx context.Context, d Decision, base string, r
 		return appendEffect(tx, nodeAdvancedKind, request.RunID, pendingWork{Decision: d, BaseSHA: base, Ready: true, ParentRunID: rec.RunID}, l.cfg.Now().UTC())
 	})
 }
+
+func (l *Loop) restartInterruptedNode(ctx context.Context, d Decision, base string, rec run.Record) error {
+	policy := l.currentPolicy()
+	if policy == nil {
+		return Usagef("workflow seat %s has no backend route", d.Seat)
+	}
+	request := policy.request(d.ItemID, d.LaneID, d.RunRequest.RunID+"-interrupted", rec.Backend)
+	if request == nil {
+		return Usagef("workflow seat %s has no backend %s", d.Seat, rec.Backend)
+	}
+	request.NodeID = d.Workflow.Stages[d.NodeIndex].ID
+	request.WorkingDir = d.RunRequest.WorkingDir
+	d.RunRequest = request
+	d.WorkflowRestart = true
+	d.Action, d.Reason = ActionDispatch, "workflow-node-interrupted"
+	if d.Workflow.Stages[d.NodeIndex].TimeoutMS > 0 {
+		request.TimeoutMS = d.Workflow.Stages[d.NodeIndex].TimeoutMS
+	}
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		changed, err := tx.Exec(`UPDATE node_runs SET outcome='running' WHERE item_id=? AND attempt=? AND node_id=?`, d.ItemID, d.Attempt, d.Workflow.Stages[d.NodeIndex].ID)
+		if err != nil {
+			return err
+		}
+		n, err := changed.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if n != 1 {
+			return fmt.Errorf("lost workflow node during interrupted restart")
+		}
+		return appendEffect(tx, nodeAdvancedKind, request.RunID, pendingWork{Decision: d, BaseSHA: base, Ready: true, ParentRunID: rec.RunID}, l.cfg.Now().UTC())
+	})
+}

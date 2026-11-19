@@ -3,7 +3,9 @@ package run_test
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 
@@ -162,3 +164,172 @@ func TestLegacyEndCauseIsNotInferred(t *testing.T) {
 	defer s.Close()
 	check()
 }
+
+func TestSignalVsCrashEndCauses(t *testing.T) {
+	endedJSON := `{"type":"tillr_harness_ended","after":"agent_settled","actions":["sent SIGTERM to pi 1234"],"harness_exit":143}`
+	for _, tc := range []struct {
+		name      string
+		command   []string
+		timeout   int
+		wantState string
+		wantCause string
+		wantCode  *int
+		wantEx    bool
+	}{
+		{
+			name:      "direct-sigterm",
+			command:   []string{"/bin/sh", "-c", "kill -TERM $$"},
+			wantState: run.StateExited,
+			wantCause: run.EndSignal,
+			wantCode:  intPtr(-1),
+		},
+		{
+			name:      "direct-sigint",
+			command:   []string{"/bin/sh", "-c", "kill -INT $$"},
+			wantState: run.StateExited,
+			wantCause: run.EndSignal,
+			wantCode:  intPtr(-1),
+		},
+		{
+			name:      "adapter-exit-143",
+			command:   []string{"/bin/sh", "-c", "exit 143"},
+			wantState: run.StateExited,
+			wantCause: run.EndSignal,
+			wantCode:  intPtr(143),
+		},
+		{
+			name:      "adapter-exit-130",
+			command:   []string{"/bin/sh", "-c", "exit 130"},
+			wantState: run.StateExited,
+			wantCause: run.EndSignal,
+			wantCode:  intPtr(130),
+		},
+		{
+			name:      "crash-sigabrt",
+			command:   []string{"/bin/sh", "-c", "kill -ABRT $$"},
+			wantState: run.StateExited,
+			wantCause: run.EndNormalExit,
+			wantCode:  intPtr(-1),
+		},
+		{
+			name:      "unrequested-sigkill",
+			command:   []string{"/bin/sh", "-c", "kill -KILL $$"},
+			wantState: run.StateExited,
+			wantCause: run.EndNormalExit,
+			wantCode:  intPtr(-1),
+		},
+		{
+			name:      "ending-exception-exit-0",
+			command:   []string{"/bin/sh", "-c", "printf '%s\\n' '" + endedJSON + "'"},
+			wantState: run.StateExited,
+			wantCause: run.EndNormalExit,
+			wantCode:  intPtr(0),
+			wantEx:    true,
+		},
+		{
+			name:      "ending-exception-exit-143",
+			command:   []string{"/bin/sh", "-c", "printf '%s\\n' '" + endedJSON + "'; exit 143"},
+			wantState: run.StateExited,
+			wantCause: run.EndNormalExit,
+			wantCode:  intPtr(143),
+			wantEx:    true,
+		},
+		{
+			name:      "wall-timeout",
+			command:   []string{"/bin/sleep", "10"},
+			timeout:   10,
+			wantState: run.StateTimedOut,
+			wantCause: run.EndTimeLimit,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, root := leaseFixture(t)
+			env, err := run.Exec(context.Background(), s, run.Request{
+				RunID:      "run-" + tc.name,
+				LaneID:     "lane-cause",
+				Backend:    "fixture",
+				Command:    tc.command,
+				WorkingDir: ".",
+				TimeoutMS:  tc.timeout,
+			}, run.ExecOptions{LaneRoot: filepath.Join(root, "lanes"), Now: time.Now().UTC()})
+			if err != nil {
+				t.Fatalf("Exec: %v", err)
+			}
+			var rec run.Record
+			if err := json.Unmarshal(env.Payload, &rec); err != nil {
+				t.Fatal(err)
+			}
+			if rec.State != tc.wantState {
+				t.Errorf("state = %q, want %q", rec.State, tc.wantState)
+			}
+			if rec.EndCause != tc.wantCause {
+				t.Errorf("end_cause = %q, want %q", rec.EndCause, tc.wantCause)
+			}
+			if tc.wantCode == nil {
+				if rec.ExitCode != nil {
+					t.Errorf("exit_code = %d, want nil", *rec.ExitCode)
+				}
+			} else if rec.ExitCode == nil || *rec.ExitCode != *tc.wantCode {
+				t.Errorf("exit_code = %v, want %d", rec.ExitCode, *tc.wantCode)
+			}
+			if tc.wantEx && rec.EndingException == "" {
+				t.Errorf("ending_exception = empty, want non-empty")
+			}
+			if !tc.wantEx && rec.EndingException != "" {
+				t.Errorf("ending_exception = %q, want empty", rec.EndingException)
+			}
+		})
+	}
+}
+
+func TestCanceledContextEndCauseIsSignal(t *testing.T) {
+	s, root := leaseFixture(t)
+	fifo := filepath.Join(t.TempDir(), "ready.fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	type result struct {
+		env record.Envelope
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		env, err := run.Exec(ctx, s, run.Request{
+			RunID:      "run-canceled",
+			LaneID:     "lane-cause",
+			Backend:    "fixture",
+			Command:    []string{"/bin/sh", "-c", `printf ready > "$1"; exec sleep 60`, "_", fifo},
+			WorkingDir: ".",
+		}, run.ExecOptions{LaneRoot: filepath.Join(root, "lanes"), Now: time.Now().UTC()})
+		done <- result{env: env, err: err}
+	}()
+
+	f, err := os.OpenFile(fifo, os.O_RDONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 5)
+	if _, err := f.Read(buf); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+	cancel()
+
+	res := <-done
+	if res.err != nil {
+		t.Fatalf("Exec: %v", res.err)
+	}
+	var rec run.Record
+	if err := json.Unmarshal(res.env.Payload, &rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.State != run.StateExited || rec.EndCause != run.EndSignal {
+		t.Fatalf("record = %s/%s, want exited/signal", rec.State, rec.EndCause)
+	}
+}
+
+func intPtr(v int) *int { return &v }

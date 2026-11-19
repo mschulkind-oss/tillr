@@ -125,7 +125,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		return c, false, err
 	}
 	var replacementRequest *run.Request
-	if receipt != nil && len(receipt.Raw) == 0 && l.cfg.Restart != nil {
+	if receipt != nil && len(receipt.Raw) == 0 {
 		var rec *run.Record
 		db, err := store.OpenRead(ctx, l.cfg.Store)
 		if err != nil {
@@ -140,184 +140,251 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		if err != nil {
 			return c, false, err
 		}
-		// A finished judge's output is retained. Only an interrupted session is
-		// repeated, never translated into a failure or a spent attempt.
-		missing := false
-		if rec == nil && receipt.Build == buildHash {
-			here, err := currentLoopOwner()
-			if err != nil {
-				return c, false, err
-			}
-			faces, err := liveRunFaces(l.cfg.Store, receipt.Request.RunID, here)
-			if err != nil {
-				return c, false, err
-			}
-			missing = len(faces) == 0
+		evalPath := l.judgeEvalOutputPath(c.LaneID, receipt.Request.RunID)
+		_, evalStatErr := os.Stat(evalPath)
+		evalMissing := os.IsNotExist(evalStatErr)
+		if evalStatErr != nil && !evalMissing {
+			return c, false, evalStatErr
 		}
-		interrupted := receipt.Build != buildHash && (rec == nil || rec.EndCause == run.EndSignal || rec.EndCause == run.EndLeaseReclaimed || rec.EndCause == run.EndRestart)
-		if interrupted || missing {
-			if err := l.interruptBuildRun(receipt.Request.RunID); err != nil {
-				return c, false, err
-			}
-			_, err := restartWork(ctx, l, func(child context.Context) (struct{}, error) {
-				return struct{}{}, l.awaitBuildReader(child, receipt.Request.RunID)
-			})
-			if err != nil {
-				return c, false, err
+		if evalMissing && rec != nil && ClassifyAttempt(*rec, logTail(rec.ArtifactRefs)) == AttemptInterrupted {
+			if c.Evaluator == nil {
+				shut, err := l.judgeQuotaShutBackends(ctx)
+				if err != nil {
+					return c, false, err
+				}
+				if shut[receipt.Request.Backend] {
+					return c, false, errJudgeBackendHeld
+				}
 			}
 			if err := l.restoreJudgeInputs(c, receipt); err != nil {
 				return c, false, err
 			}
 			req := receipt.Request
-			if !missing {
-				req.RunID += "-restart"
-			}
+			req.RunID += "-interrupted"
 			replacementRequest = &req
 			receipt = nil
+		} else if l.cfg.Restart != nil {
+			// A finished judge's output is retained. Only an interrupted session is
+			// repeated, never translated into a failure or a spent attempt.
+			missing := false
+			if rec == nil && receipt.Build == buildHash {
+				here, err := currentLoopOwner()
+				if err != nil {
+					return c, false, err
+				}
+				faces, err := liveRunFaces(l.cfg.Store, receipt.Request.RunID, here)
+				if err != nil {
+					return c, false, err
+				}
+				missing = len(faces) == 0
+			}
+			interrupted := receipt.Build != buildHash && (rec == nil || rec.EndCause == run.EndSignal || rec.EndCause == run.EndLeaseReclaimed || rec.EndCause == run.EndRestart)
+			if interrupted || missing {
+				if err := l.interruptBuildRun(receipt.Request.RunID); err != nil {
+					return c, false, err
+				}
+				_, err := restartWork(ctx, l, func(child context.Context) (struct{}, error) {
+					return struct{}{}, l.awaitBuildReader(child, receipt.Request.RunID)
+				})
+				if err != nil {
+					return c, false, err
+				}
+				if err := l.restoreJudgeInputs(c, receipt); err != nil {
+					return c, false, err
+				}
+				req := receipt.Request
+				if !missing {
+					req.RunID += "-restart"
+				}
+				replacementRequest = &req
+				receipt = nil
+			}
 		}
 	}
-	if receipt == nil {
-		if grant == "" {
-			if c.Evaluator != nil {
-				// The pending node retains its run id across regrant. A transient
-				// grant hold must not consume that run's terminal refusal record.
-				return c, false, errJudgeGrantHeld
+	for {
+		var judgeRec run.Record
+		var judgeLog string
+		if receipt == nil {
+			if grant == "" {
+				if c.Evaluator != nil {
+					// The pending node retains its run id across regrant. A transient
+					// grant hold must not consume that run's terminal refusal record.
+					return c, false, errJudgeGrantHeld
+				}
+				return c, false, l.holdJudge(ctx, c, c.RunID+"-judge", ReasonJudgeGrantAbsent, "no unexpired grant covers the item's criteria", result)
 			}
-			return c, false, l.holdJudge(ctx, c, c.RunID+"-judge", ReasonJudgeGrantAbsent, "no unexpired grant covers the item's criteria", result)
-		}
-		req := c.Evaluator
-		if replacementRequest != nil {
-			req = replacementRequest
-		}
-		if req == nil {
-			seat := l.cfg.Policy.seatList("review")
-			if len(seat) == 0 {
-				return c, false, Usagef("agent judge requires the review seat")
+			req := c.Evaluator
+			fromReplacement := replacementRequest != nil
+			if fromReplacement {
+				req = replacementRequest
+				replacementRequest = nil
 			}
-			req = l.cfg.Policy.request(c.ItemID, c.LaneID, c.RunID+"-judge", seat[0])
-		}
-		if req == nil {
-			return c, false, Usagef("cannot build review request")
-		}
-		lane := l.laneDirPath(c.LaneID)
-		brief, err := os.ReadFile(filepath.Join(lane, BriefFile))
-		if err != nil {
-			return c, false, err
-		}
-		session, err := os.ReadFile(filepath.Join(lane, SessionIDFile))
-		if err != nil {
-			return c, false, err
-		}
-		judgeSession, err := NewSessionID()
-		if err != nil {
-			return c, false, err
-		}
-		head := c.HeadSHA
-		if c.WorkerHeadSHA != "" {
-			head = c.WorkerHeadSHA
-		}
-		tree, err := l.revParse(ctx, c.Worktree, head+"^{tree}")
-		if err != nil {
-			return c, false, err
-		}
-		if c.Evaluator == nil {
-			selected, open, err := l.selectReviewDispatch(ctx, *req)
+			if req == nil {
+				seat := l.cfg.Policy.seatList("review")
+				if len(seat) == 0 {
+					return c, false, Usagef("agent judge requires the review seat")
+				}
+				req = l.cfg.Policy.request(c.ItemID, c.LaneID, c.RunID+"-judge", seat[0])
+			}
+			if req == nil {
+				return c, false, Usagef("cannot build review request")
+			}
+			lane := l.laneDirPath(c.LaneID)
+			brief, err := os.ReadFile(filepath.Join(lane, BriefFile))
 			if err != nil {
 				return c, false, err
 			}
-			if !open {
-				return c, false, errJudgeBackendHeld
+			session, err := os.ReadFile(filepath.Join(lane, SessionIDFile))
+			if err != nil {
+				return c, false, err
 			}
-			req = &selected
-		}
-		receipt = &JudgeReceipt{Build: buildHash, Request: *req, WorkerBrief: brief, WorkerSession: session, Options: item.JudgeOptions{ItemID: c.ItemID, Head: head, Tree: tree, Actor: "run=" + req.RunID + ";session=" + judgeSession + ";route=" + req.Route(), JudgedActor: "run=" + c.RunID + ";session=" + strings.TrimSpace(string(session)), GrantID: grant, At: l.cfg.Now()}}
-		receipt.Writers, receipt.Inputs, receipt.Producers = c.Writers, c.EvaluatorInputs, c.Producers
-		receipt.EvaluatorTask = c.EvaluatorTask
-		judged := c.Writers
-		if len(judged) == 0 {
-			judged = c.Producers
-		}
-		if len(judged) > 0 {
-			var runs, sessions []string
-			for _, writer := range judged {
-				runs = append(runs, writer.RunID)
-				sessions = append(sessions, writer.SessionID)
+			judgeSession, err := NewSessionID()
+			if err != nil {
+				return c, false, err
 			}
-			receipt.Options.JudgedActor = "run=" + strings.Join(runs, ",") + ";session=" + strings.Join(sessions, ",")
-		}
-		if err := writeJudgeReceipt(receiptPath, receipt); err != nil {
-			return c, false, err
-		}
-		if err := l.stageJudge(ctx, c, receipt, judgeSession); err != nil {
-			return c, false, err
-		}
-		if err := appendJudgment(ctx, l.cfg.Store, judgeRequestKind, "run", req.RunID, map[string]any{"item_id": c.ItemID, "writer_run_id": judgeWriterRun(c), "seat": "review", "request": req}, l.cfg.Now()); err != nil {
-			return c, false, err
-		}
-		rec, _, runErr := l.runRestartable(ctx, *req)
-		if errors.Is(runErr, errRestartPending) {
-			return c, false, runErr
-		}
-		if runErr != nil {
-			if ctx.Err() != nil {
-				return c, false, ctx.Err()
+			head := c.HeadSHA
+			if c.WorkerHeadSHA != "" {
+				head = c.WorkerHeadSHA
 			}
-			executionError = runErr
-		}
-		l.countSpend(result, rec)
-	} else if len(receipt.Raw) == 0 {
-		rec, waitErr := restartWork(ctx, l, func(child context.Context) (run.Record, error) {
-			return l.awaitJudgeRecord(child, receipt.Request.RunID)
-		})
-		if errors.Is(waitErr, errRestartPending) || ctx.Err() != nil {
-			return c, false, waitErr
-		}
-		if waitErr != nil {
-			executionError = waitErr
-		} else {
+			tree, err := l.revParse(ctx, c.Worktree, head+"^{tree}")
+			if err != nil {
+				return c, false, err
+			}
+			if c.Evaluator == nil && !fromReplacement {
+				selected, open, err := l.selectReviewDispatch(ctx, *req)
+				if err != nil {
+					return c, false, err
+				}
+				if !open {
+					return c, false, errJudgeBackendHeld
+				}
+				req = &selected
+			}
+			receipt = &JudgeReceipt{Build: buildHash, Request: *req, WorkerBrief: brief, WorkerSession: session, Options: item.JudgeOptions{ItemID: c.ItemID, Head: head, Tree: tree, Actor: "run=" + req.RunID + ";session=" + judgeSession + ";route=" + req.Route(), JudgedActor: "run=" + c.RunID + ";session=" + strings.TrimSpace(string(session)), GrantID: grant, At: l.cfg.Now()}}
+			receipt.Writers, receipt.Inputs, receipt.Producers = c.Writers, c.EvaluatorInputs, c.Producers
+			receipt.EvaluatorTask = c.EvaluatorTask
+			judged := c.Writers
+			if len(judged) == 0 {
+				judged = c.Producers
+			}
+			if len(judged) > 0 {
+				var runs, sessions []string
+				for _, writer := range judged {
+					runs = append(runs, writer.RunID)
+					sessions = append(sessions, writer.SessionID)
+				}
+				receipt.Options.JudgedActor = "run=" + strings.Join(runs, ",") + ";session=" + strings.Join(sessions, ",")
+			}
+			if err := writeJudgeReceipt(receiptPath, receipt); err != nil {
+				return c, false, err
+			}
+			if err := l.stageJudge(ctx, c, receipt, judgeSession); err != nil {
+				return c, false, err
+			}
+			if err := appendJudgment(ctx, l.cfg.Store, judgeRequestKind, "run", req.RunID, map[string]any{"item_id": c.ItemID, "writer_run_id": judgeWriterRun(c), "seat": "review", "request": req}, l.cfg.Now()); err != nil {
+				return c, false, err
+			}
+			rec, log, runErr := l.runRestartable(ctx, *req)
+			if errors.Is(runErr, errRestartPending) {
+				return c, false, runErr
+			}
+			if runErr != nil {
+				if ctx.Err() != nil {
+					return c, false, ctx.Err()
+				}
+				executionError = runErr
+			}
+			judgeRec, judgeLog = rec, log
 			l.countSpend(result, rec)
+		} else if len(receipt.Raw) == 0 {
+			rec, waitErr := restartWork(ctx, l, func(child context.Context) (run.Record, error) {
+				return l.awaitJudgeRecord(child, receipt.Request.RunID)
+			})
+			if errors.Is(waitErr, errRestartPending) || ctx.Err() != nil {
+				return c, false, waitErr
+			}
+			if waitErr != nil {
+				executionError = waitErr
+			} else {
+				judgeRec, judgeLog = rec, logTail(rec.ArtifactRefs)
+				l.countSpend(result, rec)
+			}
 		}
-	}
-	if err := l.restoreJudgeInputs(c, receipt); err != nil {
-		return c, false, err
-	}
-	head, err := l.revParse(ctx, c.Worktree, "HEAD")
-	if err != nil {
-		return c, false, err
-	}
-	dirty, err := l.git(ctx, c.Worktree, "status", "--porcelain", "--untracked-files=all")
-	if err != nil {
-		return c, false, err
-	}
-	if head != c.HeadSHA || strings.TrimSpace(dirty) != "" {
-		evidence, _ := l.git(ctx, c.Worktree, "diff", c.HeadSHA)
-		dir := run.DurableDir(l.laneDirPath(c.LaneID), receipt.Request.RunID)
-		if err := os.WriteFile(filepath.Join(dir, "worktree-change.patch"), []byte(evidence), 0644); err != nil {
+		if err := RecordBackendOutcomes(ctx, l.cfg.Store); err != nil {
 			return c, false, err
 		}
-		if _, err := l.git(ctx, c.Worktree, "reset", "--hard", c.HeadSHA); err != nil {
+		if err := l.restoreJudgeInputs(c, receipt); err != nil {
 			return c, false, err
 		}
-		if _, err := l.git(ctx, c.Worktree, "clean", "-fd"); err != nil {
-			return c, false, err
-		}
-		return c, false, l.holdJudge(ctx, c, receipt.Request.RunID, ReasonJudgeUnreadable, "read-only judge changed the worker's candidate", result)
-	}
-	if executionError != nil {
-		return c, false, l.holdJudge(ctx, c, receipt.Request.RunID, ReasonJudgeUnreadable, executionError.Error(), result)
-	}
-	workerHead := c.HeadSHA
-	if c.WorkerHeadSHA != "" {
-		workerHead = c.WorkerHeadSHA
-	}
-	if receipt.Options.Head != workerHead || receipt.Options.ItemID != c.ItemID {
-		return c, false, l.holdJudge(ctx, c, receipt.Request.RunID, ReasonJudgeUnreadable, "saved judgment belongs to a different candidate", result)
-	}
-	if len(receipt.Raw) == 0 {
-		receipt.Raw, err = os.ReadFile(filepath.Join(run.DurableDir(l.laneDirPath(c.LaneID), receipt.Request.RunID), "eval.output"))
+		head, err := l.revParse(ctx, c.Worktree, "HEAD")
 		if err != nil {
-			return c, false, l.holdJudge(ctx, c, receipt.Request.RunID, ReasonJudgeUnreadable, err.Error(), result)
+			return c, false, err
 		}
+		dirty, err := l.git(ctx, c.Worktree, "status", "--porcelain", "--untracked-files=all")
+		if err != nil {
+			return c, false, err
+		}
+		if head != c.HeadSHA || strings.TrimSpace(dirty) != "" {
+			evidence, _ := l.git(ctx, c.Worktree, "diff", c.HeadSHA)
+			dir := run.DurableDir(l.laneDirPath(c.LaneID), receipt.Request.RunID)
+			if err := os.WriteFile(filepath.Join(dir, "worktree-change.patch"), []byte(evidence), 0644); err != nil {
+				return c, false, err
+			}
+			if _, err := l.git(ctx, c.Worktree, "reset", "--hard", c.HeadSHA); err != nil {
+				return c, false, err
+			}
+			if _, err := l.git(ctx, c.Worktree, "clean", "-fd"); err != nil {
+				return c, false, err
+			}
+			return c, false, l.holdJudge(ctx, c, receipt.Request.RunID, ReasonJudgeUnreadable, "read-only judge changed the worker's candidate", result)
+		}
+		if len(receipt.Raw) == 0 && judgeRec.RunID != "" && ClassifyAttempt(judgeRec, judgeLog) == AttemptInterrupted && ctx.Err() == nil {
+			evalPath := l.judgeEvalOutputPath(c.LaneID, receipt.Request.RunID)
+			_, evalStatErr := os.Stat(evalPath)
+			evalMissing := os.IsNotExist(evalStatErr)
+			if evalStatErr != nil && !evalMissing {
+				return c, false, evalStatErr
+			}
+			if evalMissing {
+				if pending, err := l.buildRestartPending(ctx); err != nil {
+					return c, false, err
+				} else if pending {
+					return c, false, errRestartPending
+				}
+				if c.Evaluator == nil {
+					shut, err := l.judgeQuotaShutBackends(ctx)
+					if err != nil {
+						return c, false, err
+					}
+					if shut[receipt.Request.Backend] {
+						return c, false, errJudgeBackendHeld
+					}
+				}
+				req := receipt.Request
+				req.RunID += "-interrupted"
+				replacementRequest = &req
+				receipt = nil
+				executionError = nil
+				continue
+			}
+		}
+		if executionError != nil {
+			return c, false, l.holdJudge(ctx, c, receipt.Request.RunID, ReasonJudgeUnreadable, executionError.Error(), result)
+		}
+		workerHead := c.HeadSHA
+		if c.WorkerHeadSHA != "" {
+			workerHead = c.WorkerHeadSHA
+		}
+		if receipt.Options.Head != workerHead || receipt.Options.ItemID != c.ItemID {
+			return c, false, l.holdJudge(ctx, c, receipt.Request.RunID, ReasonJudgeUnreadable, "saved judgment belongs to a different candidate", result)
+		}
+		if len(receipt.Raw) == 0 {
+			receipt.Raw, err = os.ReadFile(l.judgeEvalOutputPath(c.LaneID, receipt.Request.RunID))
+			if err != nil {
+				return c, false, l.holdJudge(ctx, c, receipt.Request.RunID, ReasonJudgeUnreadable, err.Error(), result)
+			}
+		}
+		break
 	}
 	db, err = store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
@@ -565,6 +632,25 @@ func (l *Loop) restoreJudgeInputs(c Candidate, r *JudgeReceipt) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(lane, SessionIDFile), r.WorkerSession, 0644)
+}
+
+func (l *Loop) judgeEvalOutputPath(laneID, runID string) string {
+	return filepath.Join(run.DurableDir(l.laneDirPath(laneID), runID), "eval.output")
+}
+
+func (l *Loop) judgeQuotaShutBackends(ctx context.Context) (map[string]bool, error) {
+	db, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	var shut map[string]bool
+	err = db.ReadTx(ctx, func(r *store.Reader) error {
+		var e error
+		shut, e = readQuotaShutBackends(r, l.cfg.Now(), l.currentPolicy())
+		return e
+	})
+	return shut, err
 }
 func (l *Loop) holdJudge(ctx context.Context, c Candidate, judgeID, reason, detail string, result *LoopResult) error {
 	l.mu.Lock()

@@ -1734,6 +1734,15 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		}
 	}
 	class := ClassifyAttempt(record, log)
+	if evaluatorNode(decision) {
+		class = AttemptAnswered
+	}
+	if class == AttemptInterrupted {
+		if err := l.preserveWork(ctx, lane, request.RunID, "run interrupted by signal"); err != nil {
+			return laneOutcome{err: err}
+		}
+		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "run interrupted by signal")}
+	}
 	for class == AttemptInfrastructure {
 		if err := l.recordBackendWindow(ctx, record); err != nil {
 			return laneOutcome{err: err}

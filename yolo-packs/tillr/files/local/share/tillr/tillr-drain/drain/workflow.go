@@ -328,7 +328,7 @@ func (l *Loop) stagedNodeRun(d Decision) (string, error) {
 	if d.NodeStartRunID != "" {
 		return d.NodeStartRunID, nil
 	}
-	for id := d.RunRequest.RunID; ; id = strings.TrimSuffix(id, "-restart") {
+	for id := d.RunRequest.RunID; ; {
 		_, err := os.Stat(filepath.Join(RunDir(l.cfg.Root, id), BaseSHAFile))
 		if err == nil {
 			return id, nil
@@ -336,7 +336,12 @@ func (l *Loop) stagedNodeRun(d Decision) (string, error) {
 		if !os.IsNotExist(err) {
 			return "", err
 		}
-		if !strings.HasSuffix(id, "-restart") {
+		switch {
+		case strings.HasSuffix(id, "-restart"):
+			id = strings.TrimSuffix(id, "-restart")
+		case strings.HasSuffix(id, "-interrupted"):
+			id = strings.TrimSuffix(id, "-interrupted")
+		default:
 			return "", nil
 		}
 	}
@@ -565,6 +570,9 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		}
 		if rec.EndCause == run.EndRepeatingCall && !offered {
 			return true, l.restartRepeatingNode(ctx, d, base, rec)
+		}
+		if ClassifyAttempt(rec, log) == AttemptInterrupted && !offered {
+			return true, l.restartInterruptedNode(ctx, d, base, rec)
 		}
 		if ClassifyAttempt(rec, log) == AttemptInfrastructure || (rec.State == run.StateExited && !readableFooter(footer)) {
 			return true, l.retryWorkflowNode(ctx, d, base, rec, result)
