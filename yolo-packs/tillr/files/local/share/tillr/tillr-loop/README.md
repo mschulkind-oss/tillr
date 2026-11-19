@@ -1,16 +1,26 @@
 # tillr-loop
 
-> **Delivered copy.** This is `tools/tillr-loop/README.md` from this repository at commit `b8eac4989e` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/tools/tillr-loop/README.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `tools/tillr-loop/README.md` from this repository at commit `973b12eb2d` (2026-11-18), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/tools/tillr-loop/README.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
-The three programs `tillr drain loop` requires, so a person can start the loop with one
-command and nothing on its command line is a judgment.
+`tillr-loop` is the Git-landing definition's **hook program**: one executable that
+answers judgments the core cannot make, following the
+[hook program contract](../tillr/definition/README.md#hook-program-contract).
+It answers `describe`, `gate`, `land`, `verdict`, `fixer-gate`, `replay`, and `rolling`.
+It judges nothing itself: candidate steps derive the records the real utilities need
+and translate their exit codes; revision checks run the repository's existing checks.
 
-`tillr drain loop` refuses to run until `--gate`, `--land` and `--verdict` each name a
-program, because the loop owns the order and the stopping conditions and never a step's
-judgment. This directory supplies them: `tillr-loop` is one adapter with three faces, each
-a thin translation onto a real utility's own CLI. It judges nothing itself — it derives
-the records the real programs need from the candidate the loop names, refuses when it
-cannot, and translates the exit code onto the contract the loop reads.
+The embedded Git-landing definition keeps `hooks` unset. A store can opt in by setting
+its definition's `hooks` to the following object (the path is relative to the repository
+where the loop starts):
+
+```json
+{"argv":["python3","tools/tillr-loop/tillr-loop"],"names":["gate","land","verdict","fixer-gate","replay","rolling"]}
+```
+
+With that declaration, the drain selects all six steps without step flags and checks
+`describe` before the first pass. An explicit step flag still wins. Without hooks,
+`--gate`, `--land`, and `--verdict` must name programs as before; the keeper's existing
+command is unchanged.
 
 ```sh
 tillr drain loop --root /workspace --lanes 1 \
@@ -21,6 +31,55 @@ tillr drain loop --root /workspace --lanes 1 \
 tools/tillr-loop/tillr-loop self-check \
   --item <id> --lane <id> --run <id> --worktree <lane-worktree> --base <sha> --head <sha>
 ```
+
+## Revision checks and the fixer gate
+
+`fixer-gate` uses the gate adapter with a required full-check range: either `--all`
+or `--since` the last proved commit. The legacy `gate` face still accepts these flags,
+so the drain's existing fixer-gate default keeps working.
+
+`replay` runs `python3 tools/fork-check.py --replay --only <check>`; `rolling` runs
+`python3 tools/fork-check.py --tier rolling` with either `--all` or `--since <sha>`.
+These are the programs the drain defaults to in flag mode. Both hooks retain the
+caller's working directory and environment, including `PI_FORKS_ROOT` and
+`TILLR_GATE_SPANS_OUT`, and return the check program's exit status without translating
+an unknown result into a judgment. The hook name selects the operation, so callers
+do not pass `--replay` or `--tier` to these faces.
+
+## Step programs belong to the running build
+
+When a configured command names this repository's standard adapter under the loop's
+`--root`, the drain runs its own compiled-in copy, not the live working-tree file. This
+applies to gate, fixer gate, land and verdict, including the keeper's `python3` commands
+and direct script commands. Startup prints one line per step identifying the build's
+embedded adapter or an unchanged caller-configured program. Other scripts run exactly
+as configured; naming a different adapter path does not select the embedded copy.
+Definition hooks also run the exact declared executable, not the build's embedded
+adapter, even when the declaration names the standard adapter path.
+
+The copy is committed as [tillr-loop.py](../tillr-drain/drain/tillr-loop.py) and embedded
+in the drain binary. A landing that edits the source therefore does not change a running
+loop's next step. Rebuild the tillr programs together and restart the loop to change its
+standard step programs. Direct invocations from a shell still read the file named on
+that command line. The underlying repository checks are not embedded by this mechanism.
+
+After editing the adapter, regenerate its copy, then mirror the pack and commit both:
+
+```sh
+python3 tools/tillr-loop/sync-adapter.py
+just pack-sync
+```
+
+Both the drain suite and this adapter's suite refuse drift between source and copy.
+The green-commit build recipe compiles the committed copy from the same revision as its
+Go programs; it does not regenerate from the current checkout.
+
+The drain supplies its build stamp through `TILLR_LOOP_ADAPTER_BUILD`. If `tillr-item
+show` omits a criterion's `claim_class` field, verdict refuses with exit 4, says the
+`tillr-item` build is older than the adapter, and names both builds. Revisions identify
+builds when available; otherwise paths and SHA-256 digests identify them. A pack launcher
+is named as that launcher, without executing it to discover its cached binary. A present
+but unknown class still receives the existing invalid-stored-class refusal.
 
 ## No budget: the pile is the only throttle
 
@@ -118,7 +177,7 @@ not a verdict about the candidate.
 
 | Adapter | Underlying | Adapter answers | The loop does |
 |---|---|---|---|
-| `gate` | `tillr-gate run`: 0 pass, 1 fail, 2/3/4/5 no verdict | 0, 1, or 4 | 0 → `pass`; 1 → `fail` (candidate rejected, no retry); 4 → `gate-harness-error`, halt |
+| `gate` | `tillr-gate run`: 0 pass, 1 fail, 6 stalled, 2/3/4/5 no verdict | 0, 1, 4, or 6 | 0 → `pass`; 1 → `fail`; 6 → `stalled` (retained as `gate-stall-rerun`, or second stall `gate-stalled`); 4 → `error`, retained as `gate-no-verdict` and gated again on the next pass |
 | `land` | `tillr-land pass`: 0 landed, 1 not landed, 2/3/4/5 no attempt | 0, 1, or 4 | 0 → `landed`; 1 → `refused` (isolated/declined candidate, a completed negative answer); 4 → step failure, halt |
 | `verdict` | `tillr-item verdict record`: 0 recorded, non-zero refused | 0, or the refused code | 0 → recorded; non-zero → step failure, halt (a landed candidate whose item was not retired is landed work the board cannot see) |
 | item state | `tillr-item state`: 0 moved or already there, 1 refused, 2/3/5 no answer | the code itself | 0 → the board moved; non-zero → step failure, halt (a landed candidate whose item is still queued is the board disagreeing with the trunk) |
@@ -138,7 +197,7 @@ becomes `true`.
 - **A registry that cannot be exported** (gate) — a gate with no registry would pass
   everything, so with none named (`--registry`, else `$TILLR_LOOP_REGISTRY`) the adapter
   exports one from the tree's own `tools/fork-check.py`. A tree where that cannot run is exit
-  4 and the loop stops with `gate-harness-error`, never a pass.
+  4: no verdict, never a pass, and the drain gates the same candidate again.
 - **No gate verdict** (land) — a landing against no verdict record.
 - **Detached root** (land) — no branch to land onto, and `--base-ref` was not named.
 - **No criteria** (verdict) — an item whose store holds no criterion retires nothing.

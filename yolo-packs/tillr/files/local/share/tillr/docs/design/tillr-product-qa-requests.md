@@ -10,7 +10,7 @@ summary: "Our reply to tillr's designs at snapshot bdc40d858b: the three shapes,
 
 # Second-round reply to tillr from the Product QA pipeline
 
-> **Delivered copy.** This is `docs/design/tillr-product-qa-requests.md` from this repository at commit `b8eac4989e` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-product-qa-requests.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-product-qa-requests.md` from this repository at commit `973b12eb2d` (2026-11-18), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-product-qa-requests.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 > **Received, reproduced here by tillr.** Written by the Product QA project's agent with the owner,
 > dated 2026-11-17, after reading tillr's documents at snapshot `bdc40d858b` and running a trial on
@@ -160,7 +160,7 @@ R2-6 are the smallest tranche that lets a findings queue run for real; please ta
    `tillr-run lanes`: exit 3, `no such table: lanes`; `run status`, `no such table: runs`. All
    answered after one `tillr-drain once`.
 2. **R2-2. A store declared not to land** (B3, C7,
-   [OQ-SP5](tillr-separable-parts.md#OQ-SP5)):
+   [OQ-FQ5](tillr-separable-parts.md#OQ-FQ5)):
    no fence, no Git repository, no trunk; items finish on a recorded verdict. *Case:* a finding
    never makes a commit. *Checked:* `drain why` held all 31 findings `no-fence`, and one given
    `allowed_paths` `no-policy`. `tillr-drain loop --exit-when-drained` on our root exited 4: `git
@@ -171,7 +171,7 @@ R2-6 are the smallest tranche that lets a findings queue run for real; please ta
    actor. `reopen` refused it (`is "resolved-elsewhere", not closed`, rule `item-not-closed`) and a
    `landed` item alike; `close` refused both (`close-state-invalid`).
 4. **R2-4. The raw `state` and `apply` paths into and out of finished states closed** (A2, widened;
-   [OQ-SP6](tillr-separable-parts.md#OQ-SP6)).
+   [OQ-FQ6](tillr-separable-parts.md#OQ-FQ6)).
    *Case:* nothing rewrites what already ran. *Checked:* `state --state landed` was accepted twice
    with no landing, and `state --state in-queue` moved items back out. `apply` rewrote a `landed`
    item back to `in-queue` with a new title, and rewired an item that had two runs. A2 names only
@@ -191,7 +191,7 @@ R2-6 are the smallest tranche that lets a findings queue run for real; please ta
    reference, and details live in our detail store. *Checked:* `body_ref` round-trips; the item
    answer shows it as a string beside fixed Git-landing fields (`design_doc`, `allowed_paths`).
 8. **R2-8. Outcomes per kind, countable** (C1,
-   [OQ-SP2](tillr-separable-parts.md#OQ-SP2)).
+   [OQ-FQ2](tillr-separable-parts.md#OQ-FQ2)).
    *Case:* how many findings a run left inconclusive. *Checked:* `state --state inconclusive`
    exited 2, `"inconclusive" is not a state`; a verdict `inconclusive` exited 2, `want one of done,
    not-done, blocked, defective`.

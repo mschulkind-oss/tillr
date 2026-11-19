@@ -2,14 +2,14 @@
 title: "The gate lands a change in ten seconds and remembers nothing it cannot recompute"
 status: accepted
 stage: DECIDED
-updated: 2026-11-17
+updated: 2026-11-18
 tags:
   - tillr
   - gate
   - landing
   - design
 summary: "Measures all 42 check kinds in tools/fork-check.py, then replaces the gate's remembered baseline with a base the caller supplies and results remembered by a fingerprint of the files each check reads. A ten-second landing budget becomes a failing test, heavy checks run after the merge in this repository, tillr deploys only from the last green trunk commit, and a new check is one new file."
-next: "Build the nine slices of Section 11, starting with item-gate-check-files and item-gate-policy; then file slices for the red cap, the lane base and the runner's own changes."
+next: "The drift probe of D-GR12 is written as the last unit of Section 11, with no item directive; it becomes an item once the owner rules on how documents declare work, after item-gate-pinned-fork-inputs."
 depends-on:
   - landing-principles.md
   - landing-velocity.md
@@ -20,9 +20,15 @@ vantage:
 
 # The gate lands a change in ten seconds and remembers nothing it cannot recompute
 
-> **Delivered copy.** This is `docs/design/gate-rework.md` from this repository at commit `b8eac4989e` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/gate-rework.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/gate-rework.md` from this repository at commit `973b12eb2d` (2026-11-18), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/gate-rework.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
-**Status:** 2026-11-15; by 2026-11-16 six of the nine slices of [Section 11](#11-build-order) had landed and the other three are queued. Every timing is from one run made for this design at
+**Status:** 2026-11-15; reconciled against the tree at `dcb76fe41` on 2026-11-18. Every slice of
+[Section 11](#11-build-order) has landed, and so have the three behaviors that had no slice there
+(the red cap, the lane base and the runner's own changes paying first, built from
+[the tillr roadmap](../tillr/roadmap.md#filed-2026-11-15-the-three-gate-rulings-no-slice-builds)); the
+[Decision Ledger](#decision-ledger)'s `Built` column names the code for each. One decision is not
+built: the drift probe of `D-GR12`, because `series` and `patch-branch-inv2` are still
+landing-tier checks (`TIER_LANDING` in `tools/fork-check.py`). That remainder is written as [the last unit of the build order](#move-the-upstream-drift-checks-out-of-the-gate-into-a-probe). Every timing is from one run made for this design at
 `ebaab2794`, stated in [Section 3](#3-what-exists-today-measured); the six owner rulings of
 2026-11-15 are rows `D-GR1` to `D-GR6` of the [Decision Ledger](#decision-ledger). Its three open
 questions were settled the same day by the session's designer on recorded principle, at the
@@ -104,7 +110,7 @@ The owner ruled six things on 2026-11-15. They are inputs, not proposals.
 | The landing strategy is a **per-repository setting with two values**: heavy checks before the merge, so the trunk is always green, or after it, so the trunk is briefly red | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) |
 | **This repository takes the second** | The trunk here may be red between a landing and its heavy checks |
 | tillr **deploys only from the last trunk commit whose after-merge checks passed** | The green pointer, [Section 6.7](#67-deploys-read-the-green-pointer) |
-| **Automatic revert** of an offending landing is a setting, **off here to start** | A red files a fixer; nothing is reverted without a person, [Section 6.8](#68-a-red-heavy-check) |
+| **Automatic revert** of an offending landing is a setting, **off here to start** (overturned 2026-11-17: on here) | A red the bisection pins on one landing is reverted by tillr; a fixer is filed only when the revert is not possible, [Section 6.8](#68-a-red-heavy-check) |
 
 ## 3. What exists today, measured
 
@@ -395,191 +401,94 @@ The rules:
 
 ### 6.5 Ten seconds is a failing test
 
-The budget is 10,000 milliseconds from the start of the landing gate to the trunk ref moving.
-1,000 of it is reserved for planning, fingerprints and the squash, which leaves 9,000 for checks.
-It is enforced in two places, and neither is a remembered measurement.
+The landing target is 10,000 milliseconds: 1,000 for planning, fingerprints and the
+squash, leaving 9,000 for checks. A target measures cost; it never kills a working
+check or rejects a candidate for machine load. The governing rulings are
+[`D-GR15` and `D-GR16`](#decision-ledger).
 
-**At admission, by arithmetic.** One fast change check, `gate-budget`, reads every declaration
-and fails when the `budget_ms` values of the fast tier sum above 9,000. It reads no clock. The
-sum is over every fast check, as if all were selected and run one after another, because that is
-the case that still holds on one core with twenty lanes. A change that adds a fast check which
-does not fit fails on that change, and its author has three moves: make room, make it faster, or
-declare it heavy.
+**Admission is arithmetic.** The `gate-budget` change check sums every fast
+`budget_ms` against the unchanged 9,000 millisecond cap, as if all checks ran
+serially. A declaration that does not fit must make room, become cheaper or move to
+the heavy tier. Fast declarations may not name `timeout_ms`. A heavy declaration
+and a generated declaration use their timeout as a measured target, never a kill
+deadline.
 
-**The owner's ruling of 2026-11-17 on time limits ([`D-GR15`](#decision-ledger)).** Asked what
-"could not judge" meant for a check that was still running, the owner answered:
+**Only a stall ends a check early.** The watchdog (coined here: the observer of a
+running check’s progress, not an elapsed-time limit) samples every 1,000 milliseconds.
+Progress is at least one new log byte, including a heartbeat, or CPU progress
+from the selected source. Sixty consecutive samples with neither is a stall.
+The runner kills the process group and records `stalled`, exit 6, distinct
+from pass, fail, error and over-budget. Its verdict entry, log and summary name
+the check, last output line, group CPU time, silent samples and run time.
 
-> "what does 'could not judge' mean. isn't this directly opposed to our principles? target
-> budgets, watch for stalls, but don't let 'load is high' cause failures that would otherwise
-> finish just fine."
+Linux prefers an
+[inherited kernel task clock](https://man7.org/linux/man-pages/man2/perf_event_open.2.html)
+that retains descendant CPU independently of reaping or discarded child status.
+Attachment precedes exec and any children: Go's disabled launching-thread counter
+is inherited and enabled only at the child's exec, and its launching thread is
+reserved until the counter closes so no other check inherits it. Python's child
+waits for an exec-release byte while the counter attaches. Observer CPU is
+excluded.
 
-The same position reached this design the same day through another project's notes of a
-conversation with the owner, quoted as relayed: "The agent works until it is done, it has an
-event, we have a stall detector watchdog if we need something like that, but we don't just say,
-'Okay, 30 minutes,' and then have some gate given 20 seconds and on a loaded machine it fails."
-Those notes summarize it as "no clock whose only consequence is a kill". The ruling, as this
-design applies it:
+A refused counter selects **process accounting**: read-only samples of the
+check's existing process group, never a supervisor that can delay, stop or signal
+the check. Members are identified by PID and start time from
+[process stat](https://man7.org/linux/man-pages/man5/proc_pid_stat.5.html).
+Each member's runtime is the sum of its threads' scheduled CPU in nanoseconds from
+[Linux scheduler accounting](https://www.kernel.org/doc/html/latest/scheduler/sched-stats.html).
+CPU progress is a change in any member's runtime, a change in the member set, or
+a member disappearing while read. This rule remains effective when a total does
+not increase: a child that runs and exits between samples requires a starter that
+runs or exits; following starters back reaches a member of the previous sample
+whose runtime or presence changes. Nested watchers read their own groups without
+a shared service; the watcher's CPU is not progress by its idle child.
 
-- **A budget is a target.** It is measured and reported. Exceeding one is never, by itself, a
-  failure, a fault or "could not judge".
-- **Only a stall ends a check early.** A stall is a check making no progress, seen by a watchdog;
-  elapsed time is not a liveness signal. A stall leads to a named next step, never to a silent
-  kill.
-- **Load must not fail work.** A check on a loaded machine that would have finished is let
-  finish.
+The fallback's reported `cpu_time_ms` is the highest observed sum of members'
+runtime plus their reaped children's CPU, which process stat carries in `cutime`
+and `cstime`. The sampler captures all members' reaped-child CPU before reading
+any thread runtime, preventing a child reaped during a sample from being counted
+both directly and through its parent. It is a lower bound, not a claim to retain
+every child's total: children whose exit status is discarded may be absent from the total, but still
+count as progress by the rule above. A process leaving the group is not observed.
+The kernel source compares unrounded nanoseconds; the fallback compares runtime
+and membership independently of its reported total.
 
-It **supersedes** two things built on 2026-11-16 under [`D-GR13`](#decision-ledger): the ceiling
-as a kill, and "could not judge" (exit 4) for a check that is still making progress. Neither the
-ceiling nor a heavy declaration's `timeout_ms` may stop a check that is making progress. Two
-parts of this design that are not built also act on a clock alone, and the ruling governs both
-where this section differs from it: carrying a fast tree check, which stops it at its budget
-(suspended by [`D-GR14`](#decision-ledger) and not to be turned on as designed), and a heavy run
-that is red on `gate-budget` only because a check overran there.
+The log names `watchdog CPU source: kernel task-clock counter` or
+`watchdog CPU source: process accounting`, and `cpu_source` in the verdict
+names which supplied the last successful measurement. The Python checker uses
+the same source names and rule and exports the source in stall observations.
+If neither source is readable, including unreadable process or thread runtime
+files, no stall is declared: `watchdog unavailable` is printed immediately
+and recorded, the source field is absent, and the check runs without detection.
+Unreadable observations from a selected source likewise disable detection rather
+than inferring a stall; a kernel counter decrease also disables it. A check that
+could not start or crashed remains `error`, exit 4.
 
-It **keeps** the budgets and the admission test over their sum, the 9,000 millisecond cap as the
-sum the budgets must fit, the `over_budget_ms` record on every overrun, and the ten-second
-landing as a target whose measured distribution per check is visible, so a check that overruns
-chronically is fixed rather than tolerated. How a stall is detected and what follows it is this
-design's decision [`D-GR16`](#decision-ledger): a check shows progress when its output grows or its
-process group uses CPU time; one that shows neither for 60 consecutive one-second samples is
-stalled and ended; the first stall re-gates the same candidate once fewer gates are in flight or
-no other gate is, and a second stall on that candidate holds the item, naming the check.
-`item-gate-stall-watchdog` in [Section 11](#11-build-order) builds it. Until it lands, the runner
-behaves as the rest of this section describes.
+**Overruns are observations, not verdicts.** Checks run as long as they make
+progress, retaining their own pass or fail. Their declared target, measured
+duration and `over_budget_ms` reach the store and observatory, whose per-check
+performance payload reports median, p95, maximum, budget, overrun count and stall
+count. Nothing is carried at its budget; `--tree-overrun carry` is refused.
+There is no finite worst-case duration derived from the budgets: the admission
+cap bounds declared cost, not running work.
 
-**At run time, by each check's own declaration.** As designed, the runner gives a fast tree
-check its `budget_ms` as a deadline. A fast tree check still running at its deadline is stopped
-and **carried**: recorded on the landing as `over-budget`, and owed to the heavy tier, which runs
-it with no deadline but its timeout. The landing proceeds. A fast change check cannot be carried
-(the first boundary below), so its budget is not where it is stopped: it runs on and its own
-answer is the verdict, with the overrun recorded against the check.
+**A stall has a named next step.** The first stall retains the candidate without
+a worker run, attempt charge, failing verdict or design conflict. Its waiting
+reason is `gate-stall-rerun`, naming the check and the number of gates in flight
+at the stall. The first planning pass with fewer gates, or no other gate, judges
+that same head again. A second stall on the same head tree holds it as the item
+fault `gate-stalled`, retaining both observations. The operator diagnoses and
+clears it with `tillr drain clear-fault`. `gate-harness-error` stays for a check
+or gate program that could not start or crashed. The retained candidate, first
+stall and second-stall recovery survive a drain restart. The first-stall wait
+and observations commit in the same transaction as its judgment and spans.
 
-**Carrying is suspended until the heavy tier exists** ([`D-GR14`](#decision-ledger)). No heavy
-runner exists yet (`item-gate-heavy-runner` is in the queue), so a carried check is not owed to
-anything: the verdict stays pass and nothing runs the check again. Carrying today means dropping
-the judgment, which is the "nothing is carried" situation of the second boundary below. The
-review of 2026-11-16 measured `go-build` at 5.6 to 5.7 seconds against its 2,700 millisecond
-budget at ten concurrent gates, so it was carried on almost every landing, and a candidate that
-did not compile could land in any Go module but `tools/tillr`. So until the heavy runner lands, a
-fast tree check is run like a change check: past its budget it runs on to its ceiling and keeps
-its verdict, and a failing one fails the gate. The switch is the runner's `--tree-overrun` option,
-`keep` by default, and the loop's gate program
-[`tools/gate/change-gate.py`](https://github.com/mschulkind-oss/tillr/blob/main/tools/gate/change-gate.py) states it in one constant,
-`TREE_OVERRUN`. The heavy runner's item was to turn that constant to `carry`. This was an
-implementer's decision; the owner ruled on 2026-11-17 ([`D-GR15`](#decision-ledger)) that only a
-stall ends a check early, so `keep` is the rule rather than a suspension.
-
-So machine load makes the gate slower rather than failing the item, and the gate's wall time is
-no longer bounded by the sum the admission test bounded. **The worst case**, stated plainly:
-checks run serially, and every one of them may run to its ceiling. There are 11 fast checks
-(six change checks and five tree checks), none declares `timeout_ms`, so each ceiling is the
-9,000 millisecond cap, and 11 x 9,000 = 99,000 milliseconds, about 99 seconds of checks, against
-the 8,950 milliseconds the budgets declare. The runner's own work and the landing tier of
-`tools/fork-check.py`, which runs after the fast tier, come on top, and so does one warm-up
-described below, once per Go version on each machine. Before 2026-11-16 the bound was the 8,950
-milliseconds of budgets; with change checks alone running to the ceiling it was 6 x 9,000 + 5,050
-(the tree budgets) = 59,050.
-
-**`go-build` builds with `-trimpath`.** Without it, Go caches compiled packages by their absolute
-source path, so the first gate in every new checkout compiled from cold: 2.85 seconds alone, and
-past the 9 second ceiling, with every item held, when ten new checkouts gated at once. Trimmed,
-a new checkout reuses what any other checkout compiled (0.84 seconds). The flag is the gate's
-compile check's alone, passed in `GOFLAGS` so the builds its test binaries start are trimmed too:
-that check throws its output away, so trimmed paths change nothing that is kept, and recipes that
-build binaries people run keep full paths. The first trimmed build on a machine still compiles
-the standard library and every module from cold, 19.9 seconds measured, which would fault the
-first gate after this change on each machine. So the loop's gate program
-[`tools/gate/change-gate.py`](https://github.com/mschulkind-oss/tillr/blob/main/tools/gate/change-gate.py) runs the check once, unbounded and
-before the fast tier, for each Go version, recording that it did in the git common directory's
-`tillr-gate` store, so the cost lands on that first gate as time rather than as a fault. A Go
-upgrade pays it once more.
-
-**Measured on 2026-11-16**, on a candidate that changes Go and Markdown, with nothing
-remembered, each gate in its own checkout, at a machine load of 32 to 83 on 32 cores (the same
-run is the source of every number in this table). "Stable" checkouts are ten fixed paths that
-have each built once, as the drain's lanes live at fixed paths; "new" checkouts are paths never
-built before:
-
-| Concurrent gates | Checkouts | Fast tier wall time (s) | Checks over budget |
-| ---: | :--- | ---: | :--- |
-| 1 | stable | 4.0 to 4.4 | none |
-| 1 | new | 4.1 to 4.2 | none |
-| 2 | stable | 4.2 to 4.3 | none |
-| 2 | new | 3.9 to 4.4 | none |
-| 10 | stable | 7.9 to 8.7 | `go-build` in every gate, up to 5.1 s against 2.7 |
-| 10 | new | 8.0 to 9.0 | `go-build` in every gate, up to 5.3 s against 2.7 |
-
-Before `-trimpath`, ten new checkouts took 12.4 seconds and every one stopped `go-build` at its
-ceiling: exit 4. Now no gate in any row reaches a ceiling. `go-build` still dominates at ten
-gates, now from contention for the processors rather than from a cold cache. The next costs are
-about 1.1 seconds spent outside any check (the wall time less the checks' own durations: the
-runner's planning and fingerprinting) and `documents` at 0.8 to 1.2 seconds. The budgets and the
-cap are unchanged.
-
-**Rejected by the owner's ruling of 2026-11-17** ([`D-GR15`](#decision-ledger)): **one ceiling
-for the whole fast run** instead of one per check, where a fast run still going when it has used
-9,000 milliseconds stops the check it is running and answers "could not judge". That would have
-restored a bound of about 9 seconds of checks, at the cost of load faults returning. In the
-measurement above the slowest gate's checks took about 7.9 seconds (its 9.0 seconds of wall time
-less about 1.1 outside the checks), so no item would have been held; before `-trimpath`, every
-gate of ten new checkouts would have been. The margin is under a second, so heavier load than
-measured brings `gate-harness-error` back.
-
-**Measured again on 2026-11-17**, on a five-lane drain at a load average of 18 to 24 on 32 cores,
-by the drain's operator: `go-build` took 7,317 milliseconds against its 2,700 budget and
-`documents` 5,006 against 2,000 when two gates overlapped, within about 1.7 seconds of the
-per-check ceiling. Of the fast-check logs the loop's run directories held that day, `go-build`
-had run 26 times and overrun 9 (2,916 to 7,317 milliseconds) and `documents` had run 59 times
-and overrun 12 (2,228 to 5,006 milliseconds); no log said a check was stopped at its ceiling.
-`documents` alone, over a change to the [tillr roadmap](../tillr/roadmap.md), takes over 2 seconds because that one
-document renders in a median of 2.16 seconds. At ten lanes, checks that would have finished
-would start to be stopped at the ceiling and their items held for an operator, which is the
-failure [`D-GR15`](#decision-ledger) rules out.
-
-**What happens to a check that outgrows its budget.** It stops holding landings the first time
-it overruns, and it is still judged, after the merge. The heavy runner then runs that check
-alone, with nothing else of its run beside it. When it exceeds its declared budget there too, the
-heavy run is red on `gate-budget`, naming the check, with the measured and declared times. The
-repair is an edit to that check's own file: a larger budget if the sum still fits, or `tier:
-heavy`. A red here is handled like any other heavy red
-([Section 6.8](#68-a-red-heavy-check)). That red is a failure made of an overrun alone, which
-[`D-GR15`](#decision-ledger) rules out: it is not built, and where the heavy runner's slice
-differs, the ruling governs. A change check that overruns, and while carrying is
-suspended a tree check too, is not re-measured by anything: its `over_budget_ms` on the landing's
-verdict is the record, and the repair is the same edit to its own file, or making it cheaper.
-
-Two boundaries:
-
-- **Change checks are never carried**, because nothing after the merge has their base. A change
-  check that runs past its `budget_ms` is not stopped there. It runs to its **ceiling** *(coined
-  here: the point a fast check that ran past its budget is finally stopped)*, which is its own
-  `timeout_ms`, or the 9,000 millisecond fast-tier cap when it declares none, clamped to lie
-  between its `budget_ms` and the cap; the admission check refuses a fast `timeout_ms` outside
-  that range. A check that answers by then keeps its verdict, pass or fail. The verdict entry
-  records `over_budget_ms`, how far past its budget it ran; its log says so, and `tillr-gate`
-  prints a line naming the check beside the run's summary. The overrun is a defect against the
-  check's declared cost. It is not "could not judge" for the candidate, because the check did
-  judge it ([landing principle 8](landing-principles.md#8-a-gate-that-cannot-answer-must-say-which)).
-  Only a check still running at its ceiling makes the run "could not judge" (exit 4), naming the
-  check. *Decided 2026-11-16 by the implementer* ([`D-GR13`](#decision-ledger)); *the owner's
-  ruling of 2026-11-17 ([`D-GR15`](#decision-ledger)) supersedes the ceiling as a kill.* It was
-  decided after `documents` ran 2,001
-  milliseconds against its 2,000 budget in a drain pass at load 16, and the candidate was held as
-  `gate-harness-error` until an operator cleared it. The same four-document change measured 1.8
-  seconds alone and up to 2.4 seconds beside nine other gates, so a fixed deadline was failing
-  items for the machine's load, which [`D-GR11`](#decision-ledger) rejects. Carrying the check
-  instead was weighed and refused: no heavy runner exists yet to judge a carried check, and a
-  deferred change check would land a change whose diff nobody judged. What it gives up is the
-  bound: the worst case above.
-- **Under the before-merge strategy nothing is carried.** An overrun there runs to its ceiling
-  and keeps its verdict, as every fast check does while carrying is suspended; only a check still
-  running at its ceiling is "could not judge".
-
-As built on 2026-11-16 this is the one place the gate acts on elapsed time, and it is a statement
-about the gate, which is the thing the ten-second ruling bounds. Under
-[`D-GR15`](#decision-ledger) the gate measures and reports elapsed time and acts only on a stall.
-The existing rule that no check may assert elapsed time about the
-product stands unchanged.
+The runner and drain implement this rule. The gate program’s `--gate-timeout` and
+the remaining Python gate clocks still have their old bounds; the
+[wrapper watchdog slice](#route-the-gate-programs-own-time-limits-through-the-stall-watchdog)
+replaces those separately. `go-build` uses `-trimpath` and the standard shared Go
+cache to avoid rebuilding identical packages at every lane path. No product test
+may assert elapsed time; the timing audit’s existing rule remains unchanged.
 
 **The proposed fast tier**, with budgets set from [Section 3.2](#32-every-check):
 
@@ -607,10 +516,10 @@ One tracked file, `config/tillr/gate-policy.json`, holds the repository's settin
 | Key | Values | Default when the file or key is absent | This repository |
 | :--- | :--- | :--- | :--- |
 | `landing_strategy` | `before-merge`, `after-merge` | `before-merge` | `after-merge` |
-| `auto_revert` | `true`, `false` | `false` | `false` |
+| `auto_revert` | `true`, `false` | `false` | `true` (since 2026-11-18) |
 | `budget_ms` | milliseconds | 10,000 | 10,000 |
-| `red_cap` | `landings` and `minutes`, each a non-negative integer | 20 landings, 60 minutes | 20 landings, 60 minutes |
-| `lane_base` | `green`, `tip` | `green` | `green` |
+| `red_cap` | `landings` and `minutes`, each a non-negative integer | 20 landings, 60 minutes | 20 landings; minutes 0, so no time bound (since 2026-11-17) |
+| `lane_base` | `green`, `tip` | `green` | `tip` (since 2026-11-17) |
 
 The absent default is the side that cannot leave a trunk red. An unknown value is refused by
 name and the loop does not start.
@@ -621,14 +530,18 @@ landing names the failing heavy check and waits for its fixer; lanes go idle and
 must read stays small. A zero turns that bound off, and both zero means no cap. The cap exists
 because an uncapped red range is a cost that grows with trunk activity, and a mechanism whose cost
 rises with trunk activity is pointed the wrong way. Under `before-merge` the trunk is never red and
-the cap never fires. ([OQ-GR1](#decision-ledger).)
+the cap never fires. ([OQ-GR1](#decision-ledger).) The owner ruled the cap out on 2026-11-18
+([OQ-GP7](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md#OQ-GP7) of the graph design): under a red check, work lands
+only if it does not touch what that check reads, with no landing cap. The cap stays live in the
+tree until that rule is built.
 
 **The lane base.** With `lane_base` set to `green`, a new lane's worktree is cut from the green
 pointer, so its worker starts on a passing tree and does not spend its run on a failure it did not
 cause; its change is squashed onto the tip when it lands. An item blocked by another waits until
 the green pointer contains the blocker, usually a few minutes. A repository may set `tip`, which
 cuts lanes from the newest trunk commit. With no green pointer yet, lanes are cut from the tip.
-([OQ-GR2](#decision-ledger).)
+([OQ-GR2](#decision-ledger).) The owner overturned the `green` default on 2026-11-17: work is
+always built against the latest trunk, and this repository sets `tip` (`1fa2c069c`).
 
 **The runner's own changes.** A change under the gate runner's directories — `tools/tillr-gate/`
 and `tools/gate/`, and `tools/fork-check.py` with `tests/fork-check.test.py` while that program
@@ -679,6 +592,11 @@ built by `just tillr-build`.
 - **A red trunk does not stop a deploy of the last green commit**, and never produces a deploy of
   a newer one.
 
+**Pushing reads the pointer too.** Under `push.what = "green"` the drain loop pushes the pointer's
+commit to the remote branch when the pointer advances, so the remote never receives a commit the
+proof has not passed. [Pushing what the proof has passed](tillr-restart.md#pushing-what-the-proof-has-passed)
+is the reference.
+
 One path is outside this rule and is named so nobody assumes otherwise: the pack's rendered copy
 is written on the host from the main checkout as it stands, by a command the owner runs. The
 status line shows whether the main checkout is at the green pointer, so a render from a red tree
@@ -693,17 +611,58 @@ pointer and the tip, by bisection, and remembered results make repeated steps fr
 | What the bisection finds | What happens |
 | :--- | :--- |
 | Green at the pointer, red from landing L on | L is named on the status line with the check. With `auto_revert` off, one fixer item is filed against L, deduplicated by commit as today. |
-| Red at the pointer too | The inputs did not change, so no landing is at fault. It is reported as a gate fault with the check's `needs` and `tools`, and no fixer is filed against a landing. |
+| Red at the pointer too | The inputs did not change, so no landing is at fault. It is reported as a gate fault with the check's `needs` and `tools`, and no fixer is filed against a landing. One fixer is filed against the tip instead, so the red has a mover (built 2026-11-18). |
+| Attribution answers no verdict | No landing is named. As built on 2026-11-18, one fixer is filed against the tip, and its brief says why attribution failed. A loop stop is not this row: nothing is filed. |
 | Red, then green with no input change | `flaky`, per [Section 6.2](#62-a-tree-checks-result-is-remembered-by-fingerprint). |
 
-**With `auto_revert` on**, the lander builds a revert of L and lands it through the same fast
-gate; L's item returns to the queue as rework, as
-[landing velocity](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/landing-velocity.md#7-a-rolling-red-attribution-and-remedy) ruled. A revert
-that does not apply cleanly, because a later landing touched the same lines, is not forced: the
-fixer is filed instead.
+**With `auto_revert` on** (built 2026-11-18, on in this repository), the heavy runner builds
+the inverse of L on the tip, as one commit in its own checkout, and lands it only when three
+things hold: it applies cleanly, the fast gate passes with it, and the failing check, replayed
+on the tip with the revert, passes. It lands through the same lander as any change, as the item
+`revert-main-<L's first twelve hex digits>`, which the red cap never holds. L's item then moves
+from `landed` back to `in-queue` (the one move out of `landed`, which needs a reason and an
+actor), and its run carries a returned ending, `reverted`, with the check's output and log. The
+item's next gate runs that check as a required one until the item lands again: a fail refuses
+the candidate with the output, and a check that answers no verdict does not refuse, because
+unproven is never red. The moved trunk is then proved again, so a green proof releases every
+hold. Nothing is counted: every red that names one landing is offered for revert.
+
+The revert is not attempted when L is itself a revert or a trunk fixer's landing, or when a
+landed item declares a dependency on L's item. It ends "not possible" when it does not apply
+cleanly, when nothing is left to revert, when the fast gate does not pass, when the check still
+fails with L reverted, or when the lander does not land it. In each of those cases the fixer is
+filed as with `auto_revert` off, and its brief names the reason; when the check still fails
+with L reverted, the fixer is filed against the tip, because L alone is not the cause. Each
+attempt is recorded as a `drain.revert` event, which the landings history in `tillr-view` shows
+as a `revert` row. An unattributed red is never reverted.
 
 A check that reaches its timeout is "no verdict": the pointer does not move, nothing is
 attributed, and the line says which check and how long it ran.
+
+**Time to a revert (measured 2026-11-18).** The heavy runner starts searching for the
+culprit and can offer a revert when a failed check ends, while the proof continues. Over the
+recorded heavy runs read on 2026-11-18, `go-test-shards-test` alone took a median of 14.4
+minutes and at most 52.7. The legacy check `go-tool/tools-tillr-drain` runs the `tillr-drain`
+suite sharded. The parity case used to run it twice more; now it only lists and plans the suite,
+so each proof runs it once. Three changes shorten the time from a landing to its revert:
+
+1. **A verdict per check.** When a declaration check fails or the legacy program reports a
+   failure on exit, the runner queues it for culprit search and a revert offer. Recovery handles
+   one failure at a time in a separate checkout while the proof continues. Fixers are filed at
+   the end of the run, and the pointer still moves only on a whole green run.
+2. **Checks the change reaches go first.** The runner starts affected declaration checks in
+   name order, then the legacy program if any of its watches match a changed path, then the
+   remaining declarations in name order. If no legacy watch matches, the legacy program runs
+   last. A declaration is affected when a path changed between the green pointer and the
+   proved commit matches a file read or is under a directory read ending in `/`. Without a
+   pointer or a matching check, declarations run in name order and the legacy program runs
+   last. The set of checks is unchanged.
+3. **The proof has the CPU first.** At startup, `tillr-run` sets each worker process group's
+   niceness to 10, whether or not a proof is running. Later children inherit the lower
+   priority, while the proof keeps the drain's priority. This uses no control group weight
+   and adds no time limit.
+
+The four roadmap items start at [faster recovery from red landings](../tillr/roadmap.md#add-faster-recovery-from-red-landings).
 
 ### 6.9 Upstream drift is a probe, not a check
 
@@ -791,25 +750,25 @@ as each row says.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
-| `D-GR1` | The landing gate targets ten seconds per change. | 2026-11-15 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | — |
-| `D-GR2` | Lanes run independently, and landings must outpace them at ten lanes and again at twenty. | 2026-11-15 | [Section 5](#5-the-arithmetic-at-ten-and-twenty-lanes) | — |
-| `D-GR3` | The landing strategy is a per-repository setting with two values: heavy checks before the merge (the trunk is always green) or after it (the trunk is briefly red). | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | — |
-| `D-GR4` | This repository takes the second value: heavy checks after the merge. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | — |
-| `D-GR5` | tillr deploys only from the last trunk commit whose after-merge checks passed. | 2026-11-15 | [Section 6.7](#67-deploys-read-the-green-pointer) | — |
-| `D-GR6` | Automatic revert of an offending landing is a setting, and it is off in this repository to start. | 2026-11-15 | [Section 6.8](#68-a-red-heavy-check) | — |
-| `D-GR7` | A change check gets its base from the caller, runs once at landing, and never against a remembered commit. **Rejected:** repairing the remembered baseline's cold start. Structural fix. | 2026-11-15 | [Section 6.1](#61-the-caller-names-the-base) | — (the `--since` argument exists; the default path still reads the record) |
-| `D-GR8` | A tree check's pass is remembered by a fingerprint of its declaration, the files it reads and the tools it names; a fail is recorded and never reused; the store is local to a machine. **Rejected:** remembering by commit, and publishing the store. Structural fix. | 2026-11-15 | [Section 6.2](#62-a-tree-checks-result-is-remembered-by-fingerprint) | — |
-| `D-GR9` | A check with an unmet machine need is `unavailable`, named with its command, and neither fails nor passes. Structural fix. | 2026-11-15 | [Section 6.3](#63-a-missing-machine-resource-is-named-not-failed) | — |
-| `D-GR10` | A check is one declaration file with no verdict-changing default, read by `tillr-gate`; the gate program retires by attrition. **Rejected:** sharding the shared suite. Structural fix. | 2026-11-15 | [Section 6.4](#64-a-check-is-one-file) | — |
+| `D-GR1` | The landing gate targets ten seconds per change. | 2026-11-15 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (the budget tests `tools/tillr-gate/fastbudget_test.go` and `fastceiling_test.go`) |
+| `D-GR2` | Lanes run independently, and landings must outpace them at ten lanes and again at twenty. | 2026-11-15 | [Section 5](#5-the-arithmetic-at-ten-and-twenty-lanes) | ✅ (`tools/tillr-drain/scale_test.go`, `scale_race_test.go`) |
+| `D-GR3` | The landing strategy is a per-repository setting with two values: heavy checks before the merge (the trunk is always green) or after it (the trunk is briefly red). | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/drain/gate_policy.go`) |
+| `D-GR4` | This repository takes the second value: heavy checks after the merge. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`landing_strategy` is `after-merge` in `config/tillr/gate-policy.json`) |
+| `D-GR5` | tillr deploys only from the last trunk commit whose after-merge checks passed. | 2026-11-15 | [Section 6.7](#67-deploys-read-the-green-pointer) | ✅ (`tools/tillr-drain/drain/trunk_release.go`) |
+| `D-GR6` | Automatic revert of an offending landing is a setting, and it is off in this repository to start. **Overturned by the owner on 2026-11-17** ([OQ-GP1](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md#OQ-GP1)): tillr reverts by itself when the full suite proves a landing broke the trunk, and a fixer is filed only when the revert is unsafe, does not repair, or the red is unattributed. | 2026-11-15, amended 2026-11-17 | [Section 6.8](#68-a-red-heavy-check) | 2026-11-18 (`auto_revert` true in `config/tillr/gate-policy.json`) |
+| `D-GR7` | A change check gets its base from the caller, runs once at landing, and never against a remembered commit. **Rejected:** repairing the remembered baseline's cold start. Structural fix. | 2026-11-15 | [Section 6.1](#61-the-caller-names-the-base) | ✅ (`DeriveChange` in `tools/tillr-gate/change.go` takes the base from the caller) |
+| `D-GR8` | A tree check's pass is remembered by a fingerprint of its declaration, the files it reads and the tools it names; a fail is recorded and never reused; the store is local to a machine. **Rejected:** remembering by commit, and publishing the store. Structural fix. | 2026-11-15 | [Section 6.2](#62-a-tree-checks-result-is-remembered-by-fingerprint) | ✅ (`tools/tillr-gate/memory.go`) |
+| `D-GR9` | A check with an unmet machine need is `unavailable`, named with its command, and neither fails nor passes. Structural fix. | 2026-11-15 | [Section 6.3](#63-a-missing-machine-resource-is-named-not-failed) | ✅ (`tools/tillr-gate/needs.go`) |
+| `D-GR10` | A check is one declaration file with no verdict-changing default, read by `tillr-gate`; the gate program retires by attrition. **Rejected:** sharding the shared suite. Structural fix. | 2026-11-15 | [Section 6.4](#64-a-check-is-one-file) | ✅ (`tools/tillr-gate/checkfiles.go`; one declaration per check in `tools/gate/checks/`) |
 | `D-GR11` | The budget is enforced by an arithmetic test over declared costs and by a per-check deadline that carries an overrun to the heavy tier; a check that overruns alone turns the heavy run red on `gate-budget`. **Rejected:** failing landings on measured wall time. Structural fix. **Amended 2026-11-16** by `D-GR13` (a fast check is not stopped at its budget but at its ceiling) and `D-GR14` (carrying is suspended until the heavy runner exists); the arithmetic test is unchanged. **Superseded in part 2026-11-17** by the owner's ruling `D-GR15`: no deadline stops a check that is making progress, so the per-check deadline and carrying at it go, and an overrun alone never turns a run red; the arithmetic test stays. | 2026-11-15 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Arithmetic test built; the deadline as amended |
-| `D-GR13` | A fast check still running at its `budget_ms` runs on to its ceiling — its `timeout_ms`, or the 9,000 millisecond cap, clamped to lie between its budget and the cap — and keeps its verdict, with `over_budget_ms` recorded; only a check still running at its ceiling is "could not judge". The worst case is 11 x 9,000 = 99,000 milliseconds of checks. Decided by the implementer after `documents` overran by 1 millisecond under load and held an item; the owner has not ruled on it and may overturn it. **Rejected:** stopping a change check at its budget (load faults the item), and carrying it (nothing after the merge has its base). **Superseded 2026-11-17** by the owner's ruling `D-GR15`: the ceiling is no longer a kill, and a check still making progress is never "could not judge"; the `over_budget_ms` record stays. The alternative of one ceiling for the whole fast run is rejected by the same ruling. | 2026-11-16 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Built; the superseded part is replaced by `item-gate-stall-watchdog` |
+| `D-GR13` | A fast check still running at its `budget_ms` runs on to its ceiling — its `timeout_ms`, or the 9,000 millisecond cap, clamped to lie between its budget and the cap — and keeps its verdict, with `over_budget_ms` recorded; only a check still running at its ceiling is "could not judge". The worst case is 11 x 9,000 = 99,000 milliseconds of checks. Decided by the implementer after `documents` overran by 1 millisecond under load and held an item; the owner has not ruled on it and may overturn it. **Rejected:** stopping a change check at its budget (load faults the item), and carrying it (nothing after the merge has its base). **Superseded 2026-11-17** by the owner's ruling `D-GR15`: the ceiling is no longer a kill, and a check still making progress is never "could not judge"; the `over_budget_ms` record stays. The alternative of one ceiling for the whole fast run is rejected by the same ruling. | 2026-11-16 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Built; the superseded part is replaced by the stall watchdog |
 | `D-GR14` | Carrying a fast tree check to the heavy tier is suspended until the heavy runner exists: until then an over-budget fast tree check is run to its ceiling and keeps its verdict, as in `D-GR13`. The switch is `tillr-gate`'s `--tree-overrun` (`keep` by default), stated once in `tools/gate/change-gate.py` as `TREE_OVERRUN`; `item-gate-heavy-runner` turns it to `carry`. Decided by the implementer because with no heavy runner a carried check's judgment is dropped, and `go-build` was carried on almost every ten-lane landing; the owner has not ruled on it and may overturn it. **Rejected:** carrying with nothing to take what is carried, and answering "could not judge" at the budget. **Ruled on 2026-11-17** by the owner's ruling `D-GR15`: only a stall ends a check early, so `keep` is the rule rather than a suspension, and carrying, which stops a check at its budget, is not turned on as designed. | 2026-11-16 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Built |
-| `D-GR15` | **The owner's ruling, 2026-11-17:** "target budgets, watch for stalls, but don't let 'load is high' cause failures that would otherwise finish just fine." A budget is a target that is measured and reported; exceeding one is never by itself a failure, a fault or "could not judge". What ends a check early is a stall, a check making no progress, seen by a watchdog, and a stall leads to a named next step, never a silent kill. Machine load must not turn work that would have finished into a failure. **Supersedes** the ceiling as a kill and "could not judge" for a check still making progress (`D-GR13`), and the per-check deadline of `D-GR11`. **Keeps** the budgets, the admission test against the 9,000 millisecond cap, the `over_budget_ms` record, and the ten-second landing as a target with its measured distribution visible. | 2026-11-17 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | — (`item-gate-stall-watchdog`, `item-gate-wrapper-clocks-stall`) |
-| `D-GR16` | A check shows progress in a one-second sample when its output grew or its process group's CPU time rose; 60 consecutive samples with neither is a stall. The runner ends a stalled check's process group and records `stalled`, which is neither pass, fail nor over-budget, with what it observed. The drain keeps the candidate and re-gates it once, when fewer gates are in flight than at the stall or no other gate is; a second stall on the same candidate holds the item, naming the check. `gate-harness-error` stays for a check that could not start or crashed. Settled by the session's designer on 2026-11-17, on `D-GR15` and [landing principle 11](landing-principles.md#11-a-failure-is-diagnosed-not-waited-out) (a re-run waits on a named change, never on time passing); the owner may overturn it. **Rejected:** a longer fixed timeout, which fails the same way at a higher load; re-gating on the next pass, which names no change. | 2026-11-17 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | — (`item-gate-stall-watchdog`) |
-| `D-GR12` | A question about a moving upstream is a drift probe that files an item and never moves or holds the green pointer. **Rejected:** keeping it as a check on a commit. Made visible where it happens. | 2026-11-15 | [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) | — |
-| OQ-GR1 | The default of a per-repository setting, `red_cap`: landing stops at 20 landings or 60 minutes past the last green commit; a repository may set a different bound, and zero means no cap. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "a mechanism whose cost rises with trunk activity is pointed the wrong way" and the owner's 2026-11-15 ruling that the landing strategy is configurable per repository and red is brief. The owner may overturn it. **Rejected:** no cap, which lets the fixer's range and the deploy lag grow without limit. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | — (no slice yet enforces it) |
-| OQ-GR2 | The default of a per-repository setting, `lane_base`: a new lane starts from the last green commit; a repository may choose the trunk tip. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are that a worker does not pay for a failure it did not cause, and the same cost-direction rule. The owner may overturn it. **Rejected:** always cutting from the tip. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | — (no slice yet enforces it) |
-| OQ-GR3 | A change to the gate's own runner lands only after the runner's suite passes, before the merge, under either strategy. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principle is the fence of [escalation ladder Section 5.2](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/escalation-ladder.md#52-the-fence-what-a-lane-may-not-edit) (gate definitions change only as their own item), for the reason the 2026-11-05 ruling gave: a wrong judge is the one red a revert does not repair. The owner may overturn it. **Rejected:** landing it in ten seconds and re-running every landing's fast checks after a red suite. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | — (no slice yet enforces it) |
+| `D-GR15` | **The owner's ruling, 2026-11-17:** "target budgets, watch for stalls, but don't let 'load is high' cause failures that would otherwise finish just fine." A budget is a target that is measured and reported; exceeding one is never by itself a failure, a fault or "could not judge". What ends a check early is a stall, a check making no progress, seen by a watchdog, and a stall leads to a named next step, never a silent kill. Machine load must not turn work that would have finished into a failure. **Supersedes** the ceiling as a kill and "could not judge" for a check still making progress (`D-GR13`), and the per-check deadline of `D-GR11`. **Keeps** the budgets, the admission test against the 9,000 millisecond cap, the `over_budget_ms` record, and the ten-second landing as a target with its measured distribution visible. | 2026-11-17 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (`tools/tillr-gate/watchdog.go`; `item-gate-stall-watchdog` and `item-gate-wrapper-clocks-stall` landed) |
+| `D-GR16` | A check shows progress in a one-second sample when its output grew or its process group's CPU time rose; 60 consecutive samples with neither is a stall. The runner ends a stalled check's process group and records `stalled`, which is neither pass, fail nor over-budget, with what it observed. The drain keeps the candidate and re-gates it once, when fewer gates are in flight than at the stall or no other gate is; a second stall on the same candidate holds the item, naming the check. `gate-harness-error` stays for a check that could not start or crashed. Settled by the session's designer on 2026-11-17, on `D-GR15` and [landing principle 11](landing-principles.md#11-a-failure-is-diagnosed-not-waited-out) (a re-run waits on a named change, never on time passing); the owner may overturn it. **Rejected:** a longer fixed timeout, which fails the same way at a higher load; re-gating on the next pass, which names no change. | 2026-11-17 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (`tools/tillr-gate/watchdog.go`) |
+| `D-GR12` | A question about a moving upstream is a drift probe that files an item and never moves or holds the green pointer. **Rejected:** keeping it as a check on a commit. Made visible where it happens. | 2026-11-15 | [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) | — (`series` and `patch-branch-inv2` are `TIER_LANDING` in `tools/fork-check.py`; no probe exists) |
+| OQ-GR1 | The default of a per-repository setting, `red_cap`: landing stops at 20 landings or 60 minutes past the last green commit; a repository may set a different bound, and zero means no cap. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "a mechanism whose cost rises with trunk activity is pointed the wrong way" and the owner's 2026-11-15 ruling that the landing strategy is configurable per repository and red is brief. The owner may overturn it. **Rejected:** no cap, which lets the fixer's range and the deploy lag grow without limit. **Ruled out by the owner on 2026-11-18** ([OQ-GP7](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-graph-is-the-path.md#OQ-GP7)): under a red check, work lands only if it does not touch what that check reads, and there is no landing cap. The cap is still live in the tree (20 landings; its time bound was turned off on 2026-11-17, `d53580bfd`) until the graph design's waiting rule is built. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/redcap/cap.go`, `drain/red_cap.go`) |
+| OQ-GR2 | The default of a per-repository setting, `lane_base`: a new lane starts from the last green commit; a repository may choose the trunk tip. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are that a worker does not pay for a failure it did not cause, and the same cost-direction rule. The owner may overturn it. **Rejected:** always cutting from the tip. **Overturned by the owner on 2026-11-17** (`1fa2c069c`): work is always built against the latest trunk, never a past commit; a lane cut from the green pointer was handed a tree older than its own item's definition and produced false conflicts. This repository sets `tip`; the code's default when the key is absent is still `green`. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/drain/lane_base.go`; this repository sets `lane_base` to `tip` in `config/tillr/gate-policy.json`) |
+| OQ-GR3 | A change to the gate's own runner lands only after the runner's suite passes, before the merge, under either strategy. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principle is the fence of [escalation ladder Section 5.2](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/escalation-ladder.md#52-the-fence-what-a-lane-may-not-edit) (gate definitions change only as their own item), for the reason the 2026-11-05 ruling gave: a wrong judge is the one red a revert does not repair. The owner may overturn it. **Rejected:** landing it in ten seconds and re-running every landing's fast checks after a red suite. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/gate/runner-first.test.py`) |
 
 ## 11. Build order
 
@@ -817,9 +776,12 @@ Nine slices. Each lands alone and leaves the gate working; each names the slice 
 where it needs that slice's code. A slice whose fence holds `tools/tillr*` also holds the pack
 mirror, because the two are compared at landing. A slice deletes its own block from this document
 in the commit that lands it. Three behaviors of
-[Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) have no slice yet: the
+[Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) had no slice here: the
 lander's refusal at the red cap, staging a lane from `lane_base`, and the runner's own changes
-paying their suite before the merge. The policy slice reads and validates their settings.
+paying their suite before the merge. The policy slice reads and validates their settings, and
+all three were built from [the tillr roadmap](../tillr/roadmap.md#filed-2026-11-15-the-three-gate-rulings-no-slice-builds)
+as `item-gate-red-cap`, `item-gate-lane-base` and `item-gate-runner-pays-first`. As of 2026-11-18
+every slice below has landed.
 Three more slices were filed on 2026-11-17 from the owner's ruling
 [`D-GR15`](#decision-ledger) and the measurements beside it in
 [Section 6.5](#65-ten-seconds-is-a-failing-test); they are the last three below.
@@ -927,42 +889,81 @@ Built: this landed in commit `431d78efe`.
 
 After a landing the trunk holds changes that only the heavy checks have judged, so one runner proves the tip and moves the green pointer only when nothing failed. Criterion c4 was aligned on 2026-11-17 with the owner's ruling on time limits ([`D-GR15`](#decision-ledger), [Section 6.5](#65-ten-seconds-is-a-failing-test)): a budget overrun in the heavy run is measured and reported and fails nothing, and nothing here carries a fast check from the fast tier.
 
-<!-- inert copy of a tillr directive: item
-     id="item-gate-heavy-runner"
-     paths="tools/tillr-drain/,tools/tillr-gate/,tools/tillr-view/,yolo-packs/tillr/,docs/design/gate-rework.md"
-     blocked_by=""
--->
 
-- **c1:** Under `after-merge`, each landing triggers a heavy run in a detached worktree at the trunk tip. A test lands three fixture changes while one run is held open and asserts exactly one further run starts, on the newest tip.
-- **c2:** A run with no failing check moves `refs/tillr/green` to the tip it judged by compare-and-swap. A test asserts the ref, asserts a second runner started beside the first exits without running, and asserts a pointer that is not an ancestor of the tip is refused and reported.
-- **c3:** A run with a failing check leaves the pointer unmoved and names the first red landing, found by running that one check on the landings in the range. With `auto_revert` false one fixer item is filed against that landing. A check that is red at the pointer too is reported as a gate fault and files no fixer. A test covers the three cases.
-- **c4:** A heavy check that runs past its `budget_ms` is recorded with its measured and declared times and reported on the run's summary and in `tillr-view status`. The overrun alone never turns the run red and files no fixer. A run is red only for a check's own failing verdict, or for a second stall of the same check on the same tip, handled as `item-gate-stall-watchdog` defines it. The test supplies the measured time through the runner's injected clock and asserts the run still moves the pointer.
-- **c5:** `tillr-view status` prints the green commit, the number of landings since it, each failing check with its first red landing, and the unavailable checks. The rolling watermark row is no longer read.
 
 ### tillr builds from the green pointer
 
-<!-- inert copy of a tillr directive: item
-     id="item-gate-deploy-from-green"
-     paths=".justfile,tools/tillr-drain/,tests/,yolo-packs/tillr/,docs/design/gate-rework.md"
-     blocked_by="item-gate-heavy-runner"
--->
 
-- **c1:** `just tillr-build` builds the eight programs from the tree of `refs/tillr/green`. A test sets the pointer one commit behind a trunk tip that changes a program's version string and asserts the built program reports the older string.
-- **c2:** With no green pointer the recipe exits non-zero, names the heavy run that creates one, and builds nothing.
-- **c3:** The loop's first line names the green commit its programs were built from, and `tillr-view status` says whether the main checkout is at the green pointer.
 
 ### Twenty lanes land without waiting on each other
 
-<!-- inert copy of a tillr directive: item
-     id="item-gate-scale-test"
-     paths="tools/tillr-drain/,tools/tillr-land/,yolo-packs/tillr/,docs/design/gate-rework.md"
-     blocked_by="item-gate-heavy-runner"
--->
 
-- **c1:** A test drives the loop on a scratch repository with ten lanes and then with twenty, each lane's run a stub that commits one file in its own directory, until every lane has landed five changes. Every change lands.
-- **c2:** The test asserts from the recorded events that the number of gates in flight at once reached the lane count, and that the land lock was held only between a squash's start and its trunk move. It asserts no duration.
-- **c3:** The loop's summary prints the longest and the median land-lock hold and the number of landings per heavy run. The test asserts the fields are present.
-- **c4:** No lane's gate reads or writes a file another lane's gate writes, other than the result store. The test asserts it from the declared `writes` of every check and from the files the run created.
+
+**The land lock's hold is the whole landing transaction, and this item leaves that boundary where
+it is.** Criterion c2 first said the lock was held "only between a squash's start and its trunk
+move". That is narrower than the lander, and a run stopped on it on 2026-11-17. Read that day in
+`Land` in `tools/tillr-land/land/landing.go`: the lock is acquired before `prepareLanding`, which
+reads the trunk tip and squashes onto it, and it is released by a deferred call after the store
+transaction that moves the trunk and writes the receipt has committed. A landing that is refused
+takes the same lock to pin the head and write its row. [Section 9](#9-what-this-costs-and-what-it-does-not-do)
+says this work does not change the land lock, and that stands, so c2 now states the boundary the
+lander has. What the criterion protects is unchanged: no gate runs under the lock, and the lock
+serializes one landing at a time. The hold c3 reports is acquisition to release, which is the
+quantity [Section 5](#5-the-arithmetic-at-ten-and-twenty-lanes) calls "the whole hold" and leaves
+unmeasured. If the events recorded today do not carry the lock's acquisition and release, this
+item adds them. Recording the hold observes the lock and does not move its boundary.
+**Rejected:** narrowing the hold to the squash and the move, which would let a second landing
+read the trunk before the first one's receipt is committed, and which changes the lander in a
+slice that is a measurement; and keeping the first wording with a test that treats the receipt
+as outside the hold, which asserts something the tree does not do. Whether the hold should be
+shorter is a question for the numbers c3 prints, not for this slice. Settled by this design's
+seat on 2026-11-17; the owner may overturn it.
+
+**The store's lock wait under the race detector is a finding this item reports, and the repair
+is not this item's.** A second run stopped on 2026-11-17 with its work complete and uncommitted.
+The ordinary build passed, and the twenty-lane case under `go test -race` ended with
+`store: beginning the migration: database is locked (5) (SQLITE_BUSY)`. The store is
+`tools/tillr/store/`, outside this item's paths. Measured that day on that run's tree, with the
+store's trace (`TILLR_SQLITE_TRACE=1`) read from the test's output:
+
+| Twenty-lane case | Runs | Result | Longest wait for the store's write lock at an open | Median hold of that lock by an open |
+| :--- | :--- | :--- | :--- | :--- |
+| Ordinary build | 4 | 4 passed, 100 landings each | 2.03 s (one run traced) | 1.2 ms |
+| `-race` | 4 | 4 failed, none reaching 100 landings | 5.29 s, the failed open (one run traced) | 34 ms |
+
+The cause is in `Open` in `tools/tillr/store/open.go`: an open that may create the store runs the
+migration, and the migration begins with `BEGIN IMMEDIATE`, so every such open takes the store's
+write lock, whether or not the schema is already current. In the traced ordinary run the loop's
+own process did that 1,956 times for 100 landings. The race detector makes the test process
+slower, each hold became about 28 times longer, and one open waited out SQLite's 5,000 ms busy
+timeout. The ordinary build's longest wait was already two fifths of that timeout. This is the
+kind of fact the scale test was written to find, and it is a fact about the store rather than
+about the gate: c4 already names the store as the one thing the lanes share.
+
+So the item is finished as follows.
+
+- The criteria are judged on the ordinary build, as c1 now says. No gate step runs the race
+  detector: `rg -n -e '-race' .justfile tools/gate` returned nothing on 2026-11-17.
+- The scale test skips under the race detector, and the skip's message names this finding and the
+  store's open as the cause, so `go test -race ./...` in the module is not red for a reason
+  outside the module and nobody reads the skip as a pass. The skip is removed by the store
+  repair, which then runs the twenty-lane case under `-race` as its own evidence.
+- The item's report states the table above, or its own re-measurement of it.
+- If the ordinary build fails the same way, that is this same finding: the run stops and reports
+  it, and does not change the test to get past it.
+
+The repair belongs to an item whose paths include `tools/tillr/store/`, and none is filed yet;
+this amendment may edit only this block. Its shape is for that item to design. The direction this
+design already states is "keeping work out from under the store's locks", so the open of a store
+whose schema is current should not take the write lock at all.
+**Rejected:** raising the busy timeout, which
+[the contention repair plan](https://github.com/mschulkind-oss/tillr/blob/main/docs/recovery/sqlite-contention/plan.md#constraints) refused and which
+lengthens the wait without shortening the queue; retrying a busy open in the loop or in the test,
+which hides the number the test exists to show; widening this item's paths to the store, which
+turns a measurement into a change to the one file every program shares; lowering the lane count
+under the race detector, which keeps a test that proves less than its name; and leaving the test
+red under `-race` with no skip, which makes the next reader rediscover this. Settled by this
+design's seat on 2026-11-17; the owner may overturn it.
 
 ### Prevent a gate check from being stopped while it makes progress
 
@@ -981,16 +982,7 @@ is less busy, with no operator, and only a second stall on the same candidate ho
 naming the check. Budgets stay, and every overrun stays visible, so a check that is chronically
 slow is made faster rather than tolerated.
 
-<!-- inert copy of a tillr directive: item id="item-gate-stall-watchdog" paths="tools/tillr-gate/,tools/gate/,tools/tillr-drain/,tools/tillr-view/,tools/tillr-loop/,tests/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** No check `tillr-gate` runs is stopped because a clock passed while it is making progress. The fast tier's ceiling, a heavy declaration's `timeout_ms` and a generated declaration's timeout stop being kill deadlines; a heavy `timeout_ms` becomes that check's target, recorded like a fast budget when exceeded, and the admission check refuses a fast declaration that names `timeout_ms`. A test runs a stub check that prints one line per sample of an injected clock for longer than its budget, its `timeout_ms` and the 9,000 ms cap, and asserts it finishes with its own verdict and its overrun recorded.
-- **c2:** The runner samples each running check every 1,000 ms of an injected clock. A sample shows progress when the check's log grew by at least one byte since the last sample, so a check may print a heartbeat line, or when the CPU time of its process group rose (user plus system over every live member, plus what reaped children added). 60 consecutive samples without progress is a stall. The interval and the count are one constant each, pinned by a test. Where the group's CPU time cannot be read, the runner declares no stall and records `watchdog unavailable` in the verdict entry and on the summary line. Readings come through an injected sampler, so no test sleeps or burns CPU. Tests: silent with rising CPU, and silent with a child whose CPU rises, are not ended; no output and no CPU for 60 samples is ended; 59 samples is not.
-- **c3:** On a stall the runner kills the check's process group and records the result `stalled`, distinct from pass, fail, error and over-budget, with the last output line, the group's CPU time, the number of silent samples and the run time, in the verdict entry, the check's log and a summary line. A stalled check passes and fails nothing about the candidate. The drain tells a stall from a harness error by what the gate records, through `tools/gate/change-gate.py` and `tillr-gate run --gate`. Whether that is an exit code of its own or a field of the verdict the drain already reads is the implementer's choice, and exit 4 keeps meaning a check that could not start or crashed. A test runs the drain's real gate adapter with a stalling stub check and asserts the drain reads a stall.
-- **c4:** The drain does not fault an item on a first stall. It keeps the candidate (no new worker run, no attempt charged, no failing verdict, no design conflict), records the waiting reason `gate-stall-rerun` naming the check and the number of gates in flight when it stalled, and gates the same head again on the first pass at which fewer gates are in flight than that number, or no other gate is. A test with a stub gate that stalls once and then passes asserts the item lands with one worker run, and that the second gate started only after the in-flight count dropped.
-- **c5:** A second stall on the same candidate, the same head tree, holds the item as an item fault with reason `gate-stalled`, naming the check and both stalls' observations, cleared by `tillr drain clear-fault` like any item fault. `gate-harness-error` remains only for a check or gate program that could not be started or crashed. A test asserts two stalls give `gate-stalled` and a check that cannot start gives `gate-harness-error`.
-- **c6:** Every `budget_ms` and the 9,000 ms cap are unchanged. The cap is only the sum the admission check holds the budgets to, and `rg -n FastTierCapMS tools/tillr-gate --glob '!*_test.go'` finds no use of it as a deadline. Every fast check's duration, budget, overrun and stall reaches the store the observatory reads, so its per-check performance payload (median, p95, max) covers the fast tier and adds each check's budget and how many of its recent runs overran. A test asserts the payload for a fast check carries both.
-- **c7:** Section 6.5 of this design replaces the ceiling and its worst-case arithmetic with the stall rule as built. The gate README, the drain README, the `tillr-operating` skill, the waiting view's rules for the two new reasons (`TestWaitingEveryDrainReasonHasARule` passes) and the observatory's stop-reason words name `stalled`, `gate-stall-rerun` and `gate-stalled`. `rg -n -i 'ceiling' tools/tillr-gate/README.md` finds no sentence saying a check is stopped there.
-- **c8:** No test asserts elapsed time: the timing audit, case 53 of `tests/fork-check.test.py`, passes unchanged. The report records, as command, result and date, one real fast-tier run beside nine concurrent gates, with each check's duration and whether any was stopped.
 
 **Agent details:**
 
@@ -1022,14 +1014,7 @@ can pass its limit while still working. This item puts the same watchdog, with t
 what counts as progress, around both programs, so a working suite always finishes and a silent one
 is named as stalled.
 
-<!-- inert copy of a tillr directive: item id="item-gate-wrapper-clocks-stall" paths="tools/fork-check.py,tests/fork-check.test.py,tools/gate/,tools/tillr-gate/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-gate-stall-watchdog" prose="2" -->
 
-- **c1:** In `tools/fork-check.py`'s landing and rolling tiers, a check's timeout (the per-kind constants such as `DOCUMENTS_TIMEOUT` of 300 s, `TILLR_DOCS_TIMEOUT` of 600 s and `BUILD_TIMEOUT` of 3,600 s) no longer kills a check that is making progress. Progress is the rule of `item-gate-stall-watchdog`: output grew, or the process group's CPU time rose, in a sample, with the same interval and count. A test fails when the Python and Go constants differ.
-- **c2:** A stalled check there ends its process group and is reported as a stall naming the check, its last output line and how long it was silent, apart from the existing could-not-answer exits. `tools/gate/change-gate.py` carries it out as a stall, so the drain applies the stall handling of `item-gate-stall-watchdog` and not `gate-harness-error`. A test drives it with an injected sampler.
-- **c3:** `tillr-gate run --gate`'s `--gate-timeout` (30 minutes by default) no longer kills a gate program that is making progress. The same watchdog watches the program's process group. The flag is removed, or kept as a target reported on the summary line when exceeded; the choice is the implementer's, stated in the gate README. A test runs a stub program that makes progress past the flag's value on the injected clock and asserts it finishes with its verdict.
-- **c4:** A stalled rolling run advances no watermark and names the stalled check. A second consecutive stall of the same check over the same range files one deduplicated trunk fixer naming it, as a red rolling run does. A test asserts both.
-- **c5:** The callers stop passing `--lock-timeout 30`, which `tools/fork-check.py` accepts and ignores: `tools/gate/change-gate.py` and the drain's default rolling program. The drain comment that calls the flag "not decoration" is corrected, and the rolling test that requires the flag is inverted.
-- **c6:** The timing audit, case 53 of `tests/fork-check.test.py`, passes, and no new test asserts elapsed time. The fork-check docstring's statement that a timeout is an inability to answer, and the gate README, say what a stall is. The report lists every remaining wall-clock bound in `tools/fork-check.py`, `tools/gate/change-gate.py` and `tillr-gate`, with what its expiry now does.
 
 **Agent details:**
 
@@ -1051,14 +1036,7 @@ the whole tree, so a change to one Markdown file rebuilds all ten tools. Neither
 raised to make room, because the fast tier's budgets already sum to 8,950 of its 9,000
 milliseconds. This item finds what each check spends its time on and removes the waste.
 
-<!-- inert copy of a tillr directive: item id="item-gate-fast-checks-fit-budgets" paths="tools/gate/,tools/tillr-gate/,tests/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** The report states the measured cause for the documents check, as command, result and date: which documents dominate its time on recent landings, which part of the renderer's work costs that time for the tillr roadmap (start-up, a rule, link resolution or size), and why the remembered passes miss on an ordinary landing.
-- **c2:** The report states the same for `go-build`: which modules compile on an ordinary landing, and why its remembered tree pass is not reused.
-- **c3:** The documents check's median over a change that edits the tillr roadmap is under its 2,000 ms budget with no other gate running. The report records the median of five runs before and after. The fix is the implementer's choice among measured options, for example rendering only what the change can affect, or moving the roadmap's filed-item sections into documents that change less. If item blocks move, `tillr-item sync --dry-run` reports no item created, updated or dropped.
-- **c4:** `go-build`'s median over a change to one Go module is under its 2,700 ms budget with no other gate running; the report records the median of five runs before and after. A change that touches no Go module reuses `go-build`'s remembered pass: a test with a Markdown-only change asserts the check is reported remembered and starts no compile.
-- **c5:** Each check still catches what it caught before. A test plants a broken link in the roadmap and asserts the documents check fails, and plants a compile error in one module and asserts `go-build` fails.
-- **c6:** No `budget_ms` changes and the 9,000 ms cap is unchanged; `gate-budget` passes on the result. No test asserts elapsed time: the timing audit, case 53 of `tests/fork-check.test.py`, passes.
 
 **Agent details:**
 
@@ -1068,3 +1046,64 @@ milliseconds. This item finds what each check spends its time on and removes the
 - **Evidence:** 2026-11-17, `git log --since=2026-11-14 --format=%h -- docs/tillr/roadmap.md | wc -l` is 112, against 365 for `git log --since=2026-11-14 --format=%h`.
 - **Evidence:** 2026-11-17, a document's remembered-pass key includes its own blob (`document_keys`), and the check judges only the documents the change touches, so a remembered pass is reused only when the same content is gated again.
 - **Evidence:** 2026-11-17, `python3 tools/gate/checks/go-build.py` in the main checkout: 2.72 s on the first run after the working tree's Go files changed, then 0.88 and 0.89 s with nothing changed. The drain's operator measured 2.7 to 3.3 s on warm lanes the same day. The check builds and compiles the tests of every module under ten tool directories on every run that is not remembered.
+
+### Move the upstream drift checks out of the gate into a probe
+
+Two gate checks ask about an upstream, not about the change under review. One asks whether
+each patch series still applies. The other asks whether each fork's patch branch still merges
+the release a launch would build. Both fetch from the network, so a new upstream release can
+turn them red with no change in this repository. When that happens, every landing waits on a
+repair that none of them caused. [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) rules
+that a verdict on a commit must depend only on that commit. So these two questions leave both
+tiers of the gate and become a **drift probe**: a run, outside the gate, of the same two
+questions against the release a launch would build. The loop runs the probe when it starts and
+after any landing that changes a series or a pack declaration. A red probe files one repair
+item that names the fork and the release. It never holds the green pointer or moves it. A
+series that a landing changes is still checked against its own recorded base by a heavy tree
+check that needs no network.
+
+**Outcomes:**
+
+- Let an upstream release no longer stop landings; report it as a repair item instead.
+- Keep checking a changed series against its own base, as part of the landing that changed it.
+- Show each probe run's result and the item it filed.
+
+**Not yet filed.** On the owner's ruling of 2026-11-18, no document gains a new item
+directive while the owner reviews how documents declare work. This unit is written to become
+an item however that ruling lands. It waits on `item-gate-pinned-fork-inputs` on
+[the tillr roadmap](../tillr/roadmap.md), which is queued and changes the same checks in the
+same files.
+
+- **c1:** With no tree change and a fork whose upstream has a new release the series does not
+  merge, the landing gate and the heavy tier both pass. Neither tier plans the series check or
+  the patch-branch merge check.
+- **c2:** The drift probe asks both questions for every fork and series a pack delivers. The
+  loop runs it once at start and once after each landing that changes a series or a pack
+  declaration, and at no other time.
+- **c3:** A red probe files one repair item through the loop's defect path. The item names the
+  fork, the release and the failing question. A second red probe for the same fork and release
+  files nothing new.
+- **c4:** A red probe does not move or hold the green pointer, and a landing in progress
+  finishes as it would have without it.
+- **c5:** A landing that changes a series still runs a heavy tree check of that series against
+  its own recorded base, and that check makes no network call.
+- **c6:** The probe's last result for each fork, and the item it filed, can be read from the
+  loop's status, and the drain README states when the probe runs.
+
+**Agent Details:**
+
+- **Proposed id:** `item-gate-drift-probe`.
+- **Paths:** `tools/fork-check.py`, `tests/fork-check.test.py`, `tools/gate/`,
+  `tools/tillr-drain/`, `yolo-packs/tillr/files/local/share/tillr/tillr-drain/`, and this
+  document.
+- **Ref:** [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) and `D-GR12` in the
+  [Decision Ledger](#decision-ledger).
+- **Where:** `series` and `patch-branch-inv2` are `TIER_LANDING` in the tier table of
+  `tools/fork-check.py`; the probe can be a fork-check mode that plans only those two kinds. The
+  defect path is `fileDefectItem` in `tools/tillr-drain/drain/defect.go`. The loop's start and
+  post-landing hooks are in `tools/tillr-drain/drain/loop.go`. Run `just pack-sync` after the
+  last source edit and commit the regenerated mirror.
+- **Verify:** Run `python3 tests/fork-check.test.py` with a fixture fork whose upstream gains a
+  release the series does not merge, and check that both tiers stay green and the probe goes
+  red. Add drain tests that use a stub probe and check the filing, the deduplication, the
+  untouched green pointer and the two run times. Run `go test ./...` in `tools/tillr-drain`.

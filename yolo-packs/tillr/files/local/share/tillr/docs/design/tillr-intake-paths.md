@@ -19,7 +19,7 @@ depends-on:
 
 # Work reaches tillr through several doors, and every door ends in the same shape
 
-> **Delivered copy.** This is `docs/design/tillr-intake-paths.md` from this repository at commit `b8eac4989e` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-intake-paths.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-intake-paths.md` from this repository at commit `973b12eb2d` (2026-11-18), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-intake-paths.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-17. A proposal written from the owner's statements; nothing here is built as its own item. Code facts read on this checkout on 2026-11-17 (`tools/tillr-item/item/prose.go`, `sync.go`, `tools/tillr-drain/drain/plan.go`).
 
@@ -107,7 +107,7 @@ The last column is the finding that matters. **The planner does not read the gui
 These are for the design conversation, not for an agent to decide. They are not question directives because the documents that hold queued items would be held by them.
 
 - **One triage agent or two.** One that rewrites a badly written item and shapes a half-baked idea, or a rewrite step that only fixes form and keeps meaning, and a shaping step that may change what is asked.
-- **Which seat.** The cheap seat for rewrites and the design seat for shaping, as the queued items assume, or one seat for both, or the proposed planning seat of [planning and model tiering](tillr-planning-node-model-tiering.md).
+- **Which seat.** The cheap seat for rewrites and the design seat for shaping, as the queued items assume, or one seat for both, or the `plan` seat of [planning and model tiering](tillr-planning-node-model-tiering.md#5-the-planning-stage-as-built), which is no longer a proposal: it landed in every backend policy on 2026-11-18, though no item selects the planned-build workflow yet.
 - **What the guide mark means once a rewrite step exists.** Whether the mark routes an item past the rewrite (a marked item skips it, an unmarked one does not), and so whether an agent can pass the check by writing the mark without reading the guide.
 - **What the owner types.** A browser button, a command, a document the owner drops somewhere, or chat to the coordinator, and whether the owner's words are kept verbatim beside the shaped item in every case.
 - **Whether a deterministic checker enforces the shape.** One program the planner runs on every item, so a door that ends short of the shape holds the item with a named reason, or the checks stay split between sync and the planner as in section 2.

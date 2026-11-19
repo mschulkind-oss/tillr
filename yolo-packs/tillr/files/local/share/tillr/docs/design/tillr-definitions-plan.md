@@ -2,7 +2,7 @@
 title: "Build plan: a tillr core with Git landing as its first definition"
 status: accepted
 stage: DECIDED
-updated: 2026-11-17
+updated: 2026-11-18
 tags:
   - tillr
   - plan
@@ -10,7 +10,7 @@ tags:
   - boundaries
   - product-qa
 summary: "The build hand-off for the owner's 2026-11-17 go-ahead: eighteen queued items that turn tillr into a core that does not assume Git landing, with Git landing supplied by one definition and a second, runnable definition that lands nothing. Each item says what the Product QA pipeline can try once it lands. The next tranche is written in prose, to be filed when this one has landed."
-next: "The drain builds the eighteen items in dependency order. When the worked example lands, Product QA's agent runs it and writes round three against the real thing; then the next tranche is filed."
+next: "The first tranche has landed. Product QA's agent runs the worked example and writes round three, and the owner reviews the designer's decisions the build rests on (D-CG1 to D-CG5 in the direction document's ledger); only then is the next tranche filed."
 depends-on:
   - tillr-core-and-git-landing.md
   - tillr-separable-parts.md
@@ -21,14 +21,14 @@ depends-on:
 
 # Build plan: a tillr core with Git landing as its first definition
 
-> **Delivered copy.** This is `docs/design/tillr-definitions-plan.md` from this repository at commit `b8eac4989e` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-definitions-plan.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-definitions-plan.md` from this repository at commit `973b12eb2d` (2026-11-18), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-definitions-plan.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
 **Status:** 2026-11-17. Written against `4df6e426f`. The owner said to build on 2026-11-17: "file
 item(s) to build as much of the new tillr as possible so autoqa can play with the real thing and
 comment for real the next round". By "autoqa" he means the Product QA pipeline (see
-[the words](#the-words-this-plan-uses)). The eighteen items below are queued. They rest on
-**working choices**, each to be confirmed or changed by the owner after the next round, which are
-recorded in
+[the words](#the-words-this-plan-uses)). The eighteen items below were queued that day, and all eighteen had landed by 2026-11-18 (read from the store's status face against the tree at `dcb76fe41`). They rest on
+six choices, two of them the owner's own words and the rest the designer's decisions, which await
+the owner's review. All are recorded in
 [the direction document, Section 8](tillr-core-and-git-landing.md#8-building-it-the-owners-go-ahead-and-the-working-choices).
 
 > **In short.** Five items have no dependency and can start at once. One of them fixes a defect in
@@ -58,11 +58,14 @@ asks something, so the questions stay in the direction document and this plan li
 - **Product QA:** a product bug-finding pipeline, with the fuzzer Mangle as its prober. Its
   agent wrote [the second-round reply](tillr-product-qa-requests.md). It is not
   [tillr-autoqa.md](tillr-autoqa.md), which is tillr's own exploratory-testing design.
-- **Definition** *(a placeholder, coined in the direction document)*: the layer that turns tillr's
-  core into one use. It is a data file plus one hook program. **`git-landing`** is the placeholder
-  name of the definition for landing changes in Git, which is everything tillr does today. The owner
-  has not chosen either word ([OQ-CG5](tillr-core-and-git-landing.md#OQ-CG5)). Every item keeps
-  the words in as few places as possible, so a rename is mechanical.
+- **Definition** *(a placeholder, coined in the direction document; the owner's word is **charter**)*:
+  the layer that turns tillr's core into one use. It is a data file plus one hook program.
+  **`git-landing`** is the name of the definition for landing changes in Git, which is everything
+  tillr does today. Both were placeholders when this plan was written; the owner ruled on 2026-11-18
+  that the layer is a charter ([OQ-VO4](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#OQ-VO4)) and that the first use is
+  `git-landing` ([OQ-VO5](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#OQ-VO5)). This plan and the shipped code still say
+  "definition"; the code is not renamed. Every item keeps the words in as few places as possible, so
+  a rename is mechanical.
 - **Definition file:** the JSON file that states a definition's vocabulary and rules. Coined here.
 - **Hook program:** the one program a definition names, which the core calls for each step it
   cannot decide itself. The six step programs the drain runs today (gate, land, verdict, replay,
@@ -159,17 +162,13 @@ is a defect in tillr's own Git-landing use, so it depends on nothing and goes fi
 **Agent details:** the queued
 [terminal-state block](tillr-judge-and-lifecycle.md#prevent-landed-and-resolved-states-without-their-evidence)
 asks for the same refusal in its c3; once this lands, that criterion is already true, and its
-worker finds it so.
+worker finds it so. The two criterion rules `tillr item apply` already has stay as they are and
+are checked first, which answers the conflict a worker raised on 2026-11-17:
+`TestAStateMoveDoesNotUnfreezeACriterion` in [state_test.go](../../tillr-item/state_test.go)
+changes a landed item's criterion state and requires `criterion-state`, and it passes unchanged.
+`state-terminal` is the name for a change those two rules let through.
 
-<!-- inert copy of a tillr directive: item id="item-def-finished-states-final" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" prose="2" -->
 
-- **c1:** `tillr item state` refuses a move out of `landed` or `resolved-elsewhere` to any other state as `state-terminal`, naming the item and its state. Writing the state the item already has still succeeds and appends no event. A test covers both states and every other state as a target.
-- **c2:** `tillr item apply` refuses, as `state-terminal`, a record for an item in `landed` or `resolved-elsewhere` that changes its state, title, criteria, blockers or fence. A record identical to the stored item still succeeds and appends no event. A test applies each kind of change to a landed item.
-- **c3:** A test reproduces Product QA's sequence: an item is moved to `landed`, then a record saying `in-queue` with a new title is applied. It asserts the refusal and that the stored item is unchanged.
-- **c4:** `tillr item sync` over a document that still holds a landed item's block reports it as stale, as it does today, writes nothing for it, and still syncs the file's other blocks. A test asserts both.
-- **c5:** The loop's own sequence, verdicts first and then the move to `landed`, still ends an item `landed`, and moves into and out of `closed` are unchanged. A test runs the loop's sequence.
-- **c6:** Every existing test of the item utility passes unchanged, and a store written before this change opens with its landed and resolved items readable as they were. A test opens such a store.
-- **c7:** The item utility's README states the rule and the refusal's name.
 
 ### Add every utility's tables when a store is created
 
@@ -186,15 +185,13 @@ planner should work on a store the drain never opened.
 `tillr-store` (a blank import of the package that calls `RegisterDDL`, through the modules' local
 `replace` lines) makes `init` create the same schema the loop does, with no read face changed. No
 module imports `tillr-store`, so this adds no import cycle. Another way that meets the criteria is
-fine.
+fine. `tillr run status` reports one run and has no empty answer: it needs `--run <id>`, and for a
+run the store does not hold it prints its record and exits 1 (`statusFace` in
+[main.go](../../tillr-run/main.go)). That contract stays, which answers the conflict a worker
+raised on 2026-11-17 against a c1 that asked that face for exit 0; no file of the run utility
+changes.
 
-<!-- inert copy of a tillr directive: item id="item-def-tables-at-init" paths="tools/tillr-store/,tools/tillr/store/,yolo-packs/tillr/,docs/" prose="2" -->
 
-- **c1:** After `tillr store init` alone, `tillr drain why`, `tillr view waiting`, `tillr view status`, `tillr run lanes` and `tillr run status` each exit 0 with an empty answer. A test builds those binaries, runs each against a store only `init` created, and asserts the exit code and the empty answer.
-- **c2:** `tillr store init` creates every table and column any utility registers. A test compares an init-only store's schema with the schema of a store the loop has opened, table by table and column by column.
-- **c3:** No read face creates or migrates a table.
-- **c4:** Every existing test of the store utility and the core library passes unchanged, and a store created before this change opens and drains as before. A test opens such a store.
-- **c5:** The store utility's README says that `init` creates the whole schema.
 
 ### Add the definition file and the Git-landing definition
 
@@ -203,8 +200,9 @@ constants across the item utility, the planner and the drain. Before any of it c
 need one place to live. This item adds the definition file, a JSON file that states a use's
 vocabulary and rules, and a package in the core library that reads and checks it. It also states
 today's behavior as the first definition, `git-landing`, embedded in that package. Nothing reads the
-package yet, so nothing changes. The names `definition` and `git-landing` are placeholders the owner
-has not chosen, and this item keeps them in one constant so that a rename is one line.
+package yet, so nothing changes. The names `definition` and `git-landing` were placeholders the owner
+had not chosen when this item was written (he has since named the layer a charter and kept
+`git-landing`, in [OQ-VO4](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#OQ-VO4) and [OQ-VO5](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#OQ-VO5)), and this item keeps them in one constant so that a rename is one line.
 
 **Product QA can try:** reading the definition package's README, which is the contract a second use
 writes its definition against.
@@ -215,14 +213,7 @@ The Git-landing values come from `writableStates` and `frozenStates` in
 [apply.go](../../tillr-item/item/apply.go), [lifecycle.go](../../tillr-item/item/lifecycle.go),
 and the hold reasons in [schema.go](../../tillr-drain/drain/schema.go).
 
-<!-- inert copy of a tillr directive: item id="item-def-definition-file" paths="tools/tillr/,yolo-packs/tillr/,docs/" prose="2" -->
 
-- **c1:** A new package `tools/tillr/definition` reads and validates a definition file with these keys: `definition` (its name), `version`, `states`, `ready` (the state the planner dispatches from), `blocked` and `closed` (the states the block, close and reopen commands write), `finished` (the states that end an item and satisfy a dependent's `blocked_by`), `transitions` (each allowed move as `from` and `to`, including any move out of a finished state), `prerequisites` (names from a closed list the package defines), `completes` (`landing` or `hook`), `retention` (`keep` is the only rule built), `brief_template`, and `hooks` (one program's argv and the hook names it answers).
-- **c2:** The validator refuses an unknown key, a state named twice, a transition or role that names an undeclared state, and an unknown prerequisite, each with a message that names the key. A test covers each refusal.
-- **c3:** The Git-landing definition is a file embedded in the package. It states the six writable states, `in-queue` as ready, `landed`, `resolved-elsewhere` and `closed` as finished, the moves today's item utility allows, the prerequisites the planner checks today (the fence, the design document and its questions, a clean owner checkout), `completes: landing`, `retention: keep`, and no hook program. A test asserts the embedded file's values equal a table written literally in the test.
-- **c4:** The word `git-landing` appears in Go source in one constant of this package and nowhere else. A test walks the Go sources under `tools/tillr*` and asserts it.
-- **c5:** `tools/tillr/definition/README.md` states every key, its type, its default and what reads it, and says that the names are placeholders.
-- **c6:** No utility reads the package yet, and every existing test passes unchanged.
 
 ### Add the definition a store runs to the store itself
 
@@ -238,15 +229,7 @@ where the declaration lives; the direction document records it for him to confir
 **Agent details:** the reader every utility uses lives in the definition package; no utility parses
 the stored content itself.
 
-<!-- inert copy of a tillr directive: item id="item-def-store-definition" paths="tools/tillr-store/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="item-def-definition-file,item-def-tables-at-init" prose="2" -->
 
-- **c1:** `tillr store init --definition <file>` validates the file with the definition package and records its name, version, content and SHA-256 in the store, with an event. An invalid file is refused with exit 2, and no store is created.
-- **c2:** `tillr store definition --store <path>` prints the recorded definition as a record. A store with none recorded answers the embedded Git-landing definition, marked as the default. A test reads a store created before this change.
-- **c3:** `tillr store definition --store <path> --set <file>` replaces the definition, with an event naming the old and the new SHA-256. It refuses a definition that drops a state some item in the store holds, and names those items.
-- **c4:** The definition package offers one function that answers a store's definition, and a test asserts it returns the same definition the face prints.
-- **c5:** No Git, file or process work runs inside a SQLite write transaction.
-- **c6:** Every existing test of the store utility passes unchanged, and a store created before this change opens and drains as before.
-- **c7:** The store utility's README documents the flag and the face.
 
 ### Add a face that lists a store's items
 
@@ -260,12 +243,7 @@ worked example at the end of this plan reads its outcomes through this face.
 **Agent details:** the face sits beside `show` in [main.go](../../tillr-item/main.go) and
 reads with the same query shape `show` uses in [show.go](../../tillr-item/item/show.go).
 
-<!-- inert copy of a tillr directive: item id="item-def-list-items" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="item-def-finished-states-final" prose="2" -->
 
-- **c1:** `tillr item list --store <path>` prints one record listing every item: its id, title, state, blockers and last update, ordered by id. An empty store prints an empty list with exit 0.
-- **c2:** `--state <state>`, which may be given more than once, keeps only items in those states. A test builds a store with items in three states and asserts the list with and without the filter.
-- **c3:** The item utility's README documents the face.
-- **c4:** Every existing test of the item utility passes unchanged.
 
 ### Prevent item apply from dropping a field it does not store
 
@@ -282,12 +260,7 @@ named in the refusal.
 [apply.go](../../tillr-item/item/apply.go). Every record tillr's own programs write must still
 pass: sync's, the comment intake's, seed's and the loop's.
 
-<!-- inert copy of a tillr directive: item id="item-def-apply-unknown-fields" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="item-def-list-items" prose="2" -->
 
-- **c1:** `tillr item apply` refuses a record whose payload carries a field the item utility does not store, as `unknown-field`, naming the field, and writes nothing. A test applies a record carrying `"kind": "finding"`.
-- **c2:** Every kind of record tillr's own programs pass to `apply` is still accepted. A test builds one record from sync, one from the comment intake, one from seed and one in the shape the loop writes, and applies each.
-- **c3:** The item utility's README states the producer rule the code enforces: `producer.system` must be `tillr`, and any other value is refused as a record from another system.
-- **c4:** Every existing test of the item utility passes unchanged, and a store created before this change opens as before.
 
 ### Move item states and their moves into the store's definition
 
@@ -308,15 +281,7 @@ and [lifecycle.go](../../tillr-item/item/lifecycle.go), and `terminalStates` in
 [sync.go](../../tillr-item/item/sync.go). The legacy frozen states (`abandoned`, `deleted`,
 `in-progress`) stay readable and unwritable under every definition.
 
-<!-- inert copy of a tillr directive: item id="item-def-item-lifecycle" paths="tools/tillr-item/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="item-def-store-definition,item-def-apply-unknown-fields" prose="2" -->
 
-- **c1:** `tillr item state`, `apply`, `close` and `reopen` take the states, the finished states, the ready, blocked and closed roles, and the allowed moves from the store's definition through the definition package, and no longer from constants in the item utility.
-- **c2:** A move the definition does not list is refused as `transition-not-allowed`, naming the two states and the definition. A move out of a finished state is allowed only where the definition lists it, requires `--reason` and `--by`, and is recorded as an event that carries both.
-- **c3:** A test with a fixture definition whose finished states are `confirmed` and `rejected`, and which lists a move from `rejected` back to its ready state, asserts that an item can finish `confirmed`, that leaving `confirmed` is refused, and that leaving `rejected` with a reason and an actor succeeds with both in the event.
-- **c4:** Sync's set of finished states is the definition's finished states plus the legacy frozen states.
-- **c5:** Under the Git-landing definition every face behaves exactly as before: the existing state, lifecycle, apply and sync tests pass unchanged.
-- **c6:** A store created before this change opens and drains as before. A test opens such a store.
-- **c7:** The item utility's README says the states come from the store's definition and names the face that prints it.
 
 ### Add a reason, pointer and actor to every finished-state move
 
@@ -330,19 +295,52 @@ it.
 **Product QA can try:** finishing a finding as a repeat of another, with the pointer to it, and reading
 both back from `tillr item show`.
 
+**What this item builds on:** the lifecycle item above, which is on the trunk. A first run of this
+item on 2026-11-17 was staged from a base older than that landing, found the state face still on
+hard-coded states, and stopped. It was right to stop, and the plan stands: this item is not built
+on hard-coded states and does not absorb the lifecycle work. The check is one command,
+`rg -n 'SetStateWithReceipt|MoveReceipt' tools/tillr-item/`. A tree where it prints nothing is
+staged too early; the run reports that as a staging fault, and the answer is a restage on the
+current trunk, not another change to this block.
+
+What the lifecycle landing left for this item to extend, as read on the trunk on 2026-11-17:
+
+- `tillr item state` already declares `--reason` and `--by`, and hands them to
+  `SetStateWithReceipt` in [state.go](../../tillr-item/item/state.go) as a `MoveReceipt`.
+  That receipt is checked and recorded only when an item *leaves* a finished state. This item adds
+  the pointer to the same receipt and uses it for a move *into* one. It adds no second receipt type
+  and no second event shape.
+- Which states are finished comes from the store's definition (`IsFinished`), never from a list in
+  the item utility, so the three flags work under a definition whose finished states are
+  `confirmed` and `rejected` exactly as under `git-landing`.
+- The flags are accepted on a move into a finished state, not required by this item: the loop moves
+  an item to `landed` with none of them, and c5 keeps that working. Requiring the pointer for
+  `resolved-elsewhere` is the queued terminal-state block's c2, not this item's.
+- `--reason` is stored on three moves once this item lands: into a finished state, out of one, and
+  into the blocked state, where it is the reason the item waits. `--by` is stored on the first two.
+  `--resolves-via` is stored only on the first. Every other use is the `flag-not-stored` refusal of
+  c3, whose test therefore starts from a state that is neither finished nor blocked.
+- A write of the state an item already has still answers the item and appends no event, so a
+  repeated move does not overwrite a stored receipt.
+- The legacy frozen states (`abandoned`, `deleted`, `in-progress`) stay readable and are never
+  written, so no move into one exists and none takes a receipt.
+
+**A second answer that this block replaces:** while the first run's stop was being answered, a
+second amendment was drafted against the older base. It said this item could be built before the
+lifecycle item, by reading the definition's finished list beside the hard-coded state tables, and
+it kept the lifecycle item as a blocker. The lifecycle item landed before that draft did, and the
+two did not merge. The draft is dropped, not merged: the tables it told a run to leave alone
+(`writableStates`, `terminalState`, `terminalStates`) are no longer in the item utility
+(`rg -n 'writableStates|terminalStates?\b' tools/tillr-item/` prints nothing on 2026-11-17), and
+the blocker it kept is met. What it said that still holds is already above: finished states come
+from the store's definition, and frozen states take no receipt. The marker below therefore names
+no blocker.
+
 **Agent details:** the pointer flag is `--resolves-via`, the name the queued
 [terminal-state block](tillr-judge-and-lifecycle.md#prevent-landed-and-resolved-states-without-their-evidence)
 uses in its c2, so that block's criterion is met by this one rather than contradicted.
 
-<!-- inert copy of a tillr directive: item id="item-def-finished-state-receipts" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="item-def-item-lifecycle" prose="2" -->
 
-- **c1:** A move into any finished state through `tillr item state` takes `--reason`, `--by` and `--resolves-via`. The pointer is `item:<id>` for an item the store holds, `commit:<sha>` or `doc:<path>`. All three are stored on the item, carried by the update event, and printed by `tillr item show`.
-- **c2:** A test moves an item to a finished state with all three and asserts what `show` prints and what the event carries.
-- **c3:** A flag the face would not store on a given move is refused as `flag-not-stored`, naming the flag, instead of being accepted and dropped. A test passes `--reason` on a move to the ready state.
-- **c4:** An `item:` pointer naming an item the store does not hold is refused as `pointer-unknown`.
-- **c5:** The loop's own move to `landed` still succeeds unchanged, and every existing test of the item utility passes.
-- **c6:** A store created before this change opens with its finished items readable as they were.
-- **c7:** The item utility's README documents the three flags.
 
 ### Route the planner's ready, finished and prerequisite tests through the definition
 
@@ -364,14 +362,111 @@ and `candidate-record-mismatch` (counted in
 The tests are `isBlocked`, `terminalStates` and the `StateInQueue` checks in
 [plan.go](../../tillr-drain/drain/plan.go).
 
-<!-- inert copy of a tillr directive: item id="item-def-planner-lifecycle" paths="tools/tillr-drain/,tools/tillr/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="item-def-item-lifecycle" prose="2" -->
+**What two stopped runs settled:** a run of this item on 2026-11-17 built most of it, then stopped
+on two readings of the criteria that the tree contradicts, and on three review findings. It was
+right to stop. The rulings below answer each one, and c1, c3 and c4 are reworded to match. That
+run's uncommitted work is kept at the ref `refs/tillr/preserved/run-item-def-planner-lifecycle-a2`
+as recovery evidence; a new run reads it and does not land it as it stands.
 
-- **c1:** The planner reads the store's definition once per pass. It dispatches only items in the definition's ready state, and a dependency is met when the blocker is in one of the definition's finished states.
-- **c2:** The planner raises a prerequisite hold, such as `no-fence`, the open-question holds, `design-doc-missing` or `trunk-path-dirty`, only when the definition names that prerequisite. A test with a fixture definition that names none asserts that an item with no fence and no design document is dispatched.
-- **c3:** The holds only landing can raise are listed in one table in the drain and raised only when the definition completes on `landing`. A test asserts that every hold reason the drain defines is either in that table or in the drain's list of general holds, so a new hold cannot ship unclassed.
-- **c4:** Under the Git-landing definition every pass decides exactly as before. The existing planner and loop suites pass unchanged, and a test runs `tillr drain why` on one fixture store before and after the change and asserts identical rows.
-- **c5:** `tillr drain why` and the waiting face print the definition's name in their header.
-- **c6:** A store created before this change opens and drains as before.
+- **"Ready" governs an item's own work, not the answer to a conflict.** Today a conflict's answer
+  run (the design seat's amendment, or a conflict fix) is dispatched while the item sits in
+  `blocked` (`decide` and `conflictDecision` in plan.go). That stays. c1 now says so: the item's own
+  work is dispatched only from the definition's ready state, and a conflict's answer run is
+  dispatched from the definition's blocked state. Both names come from the definition (`ready`,
+  `blocked`), so no `StateInQueue` or `StateBlocked` comparison is left in the planner's decisions.
+  Under a definition that does not complete on `landing`, the conflict holds are not raised (they
+  are in the landing-only table), and an item in the blocked state is held `blocked`. Routing a
+  conflict in such a store is not this item's work.
+- **One finished-state rule, and one test changes its setup.** The package map `terminalStates`
+  is deleted from the drain. Every reader of it, in the planner and outside it (`preserved.go`,
+  `retries.go`, `trunk.go`, `terminal_item.go`, `why.go`), asks the store's definition instead, so
+  the drain has one answer. `rg -n 'terminalStates\b' tools/tillr-drain/ -g '!*_test.go'` prints
+  nothing when this is done. `TestWhyChangesWithPlannerHoldRule` in
+  [why_test.go](../../tillr-drain/drain/why_test.go) proves that `why` and the planner share
+  one rule by adding `custom-done` to that map. It keeps its name and its two assertions (`blocked`
+  first, `ready` after). Only its middle step changes: it records in the fixture store a definition
+  whose finished list includes `custom-done`, in place of writing to the map. This is the one
+  existing drain test whose body may change, and c4 names it.
+- **The import guard gains two consumers.** `TestNameOnlyInOneConstantAndOnlyLifecycleConsumers` in
+  [definition_test.go](../../tillr/definition/definition_test.go) allows only the store and
+  item utilities to import the definition package. This item adds the drain and the view to that
+  allowed list, and nothing else in that test changes. Its count of the Git-landing name stays at
+  one: the drain, the view and their tests print and compare the name the store's record carries
+  (or the `GitLandingName` constant), and never spell it.
+- **Every hold reason is a named constant.** c3's test can only cover reasons it can find. Two are
+  not `Reason…` constants today: the literal `"Vantage not answering"` in
+  [pass.go](../../tillr-drain/drain/pass.go), and `node-output-missing`, which is a refusal
+  kind that `plan.go` also returns as a hold reason. Both get a `Reason…` constant with the same
+  text, and both are general holds. A reason built from a constant and a detail, such as
+  `workflow-invalid: …` or `trunk-path-dirty: <paths>`, is classed by its constant prefix, and
+  `workflow-invalid` gains the constant it lacks. A reason on a dispatch, such as `resume-failed`,
+  is not a hold and is not in either list. The test parses the drain's non-test source, collects
+  every `Reason…` constant, and fails on a bare string literal assigned as a hold's reason. No
+  printed text changes.
+- **A prerequisite the definition names is checked exactly as today.** That includes what today's
+  check does when it has nothing to read: with no document root, `documentPrerequisites` holds
+  nothing, and under Git landing that must stay so for c4. This item does not tighten it. A
+  prerequisite the definition does not name is not read at all, so it can neither hold nor fail.
+- **The definition is not recorded on a dispatch.** The pass reads the definition once and judges
+  every item, including an attempt already in flight, against that one reading. An in-flight
+  attempt is re-judged each pass, so a definition replaced mid-flight takes effect at the next
+  pass. Adding the definition's hash to a dispatch's recorded inputs would change stored payloads
+  under Git landing, against c4 and c6, so it is left out.
+
+**What the next stopped run settled:** a later run on 2026-11-17 started before the rulings above
+were on the trunk. It built most of the item and stopped, reporting that c1 could not be met inside
+its paths: the planner reads the definition, then asks the item utility's sync which items'
+documents are unshared, and sync reads the definition again for itself. The run concluded that it
+needed to change sync, in `tools/tillr-item/`. It does not, and this item's paths stay as they are.
+The rulings below say how the criteria read, and c4 is reworded to match. That run's uncommitted
+work is kept at the ref `refs/tillr/preserved/run-item-def-planner-lifecycle-a4`. It was built on
+an older base and against none of the rulings above, so a new run reads it for its approach and
+does not replay it.
+
+- **What "once per pass" in c1 means.** The planner's own decisions in a pass (ready, finished,
+  which prerequisites apply, whether the definition completes on landing) all come from one
+  definition value, read at the top of `Plan` and passed down. No drain code reads it a second time
+  in the same pass. A read made by another package for its own use, through the reader the planner
+  hands it, is not a second planner read. It cannot disagree with the first either: `Plan` takes a
+  `store.Reader`, which is one read transaction, and `definition.ForReader` reads inside it, so
+  both reads return the same declaration. Sync keeps reading its own definition, `SyncInput` gains
+  no field, and the drain does not copy sync's logic or cache anything.
+- **The document check is itself a prerequisite.** The sync dry run in `documentPrerequisites`, and
+  the `triage-no-block` dispatch and the `design-doc-missing` hold it feeds, run only when the
+  definition names `design-document`. Under a definition that does not name it, sync is not called in a pass at all.
+- **Each prerequisite name gates its own holds, including the checks that come before them.**
+  `fence` gates `no-fence`. `design-document` gates the document holds above. `design-questions`
+  gates every open-question hold, and also the `Vantage not answering` hold that
+  [pass.go](../../tillr-drain/drain/pass.go) raises when the comment source cannot be
+  reached: a definition that does not name `design-questions` never asks that source anything, so
+  it never raises that hold. `owner-clean` gates `trunk-path-dirty`. Being gated by a prerequisite
+  does not make a hold landing-only: `Vantage not answering` stays in the general list.
+- **The new constants are plain strings, and each has a waiting rule.** The ruling above that every
+  hold reason is a named constant stands, and it adds exactly three: one each for
+  `Vantage not answering`, `node-output-missing` and `workflow-invalid`. The stopped run wrote one
+  of its constants as an alias of the refusal kind, and gave neither a waiting rule, so
+  `TestWaitingEveryDrainReasonHasARule` in
+  [waiting_internal_test.go](../../tillr-view/waiting_internal_test.go) failed twice. That
+  test requires every exported `Reason…` constant in the drain to be a string literal and to have
+  an entry in `waitingRules` in [waiting.go](../../tillr-view/waiting.go). So each new
+  constant is declared with its text as a literal, the `node-output-missing` one repeats the text
+  of `RefusalNodeOutput` and does not refer to it, and `waitingRules` gains the entries that are
+  missing (`workflow-invalid` has one already). That test is not edited. No constant is added
+  beyond those three.
+- **No check that the definition changed between planning and writing.** The stopped run added one
+  when a dispatch is applied. No criterion asks for it, replacing a live store's definition is not
+  something this plan has built yet, and the ruling above already says a replaced definition takes
+  effect at the next pass. Leave it out.
+- **What "as before" in c4 covers.** It covers what a pass decides: the rows, actions and reasons.
+  c5 adds a header line to `tillr drain why` and to the waiting face, so a test that asserts the
+  exact text or the line count of those two outputs is updated for that one line and nothing else.
+  The stopped run met two: `TestWhyEmptyStoreAndMissingStore` in
+  [why_test.go](../../tillr-drain/why_test.go) and `TestWaitingCLIAndAPI` in
+  [waiting_internal_test.go](../../tillr-view/waiting_internal_test.go). Do not hide the
+  header to keep an old assertion. The before-and-after test in c4 compares the rows, not the
+  header.
+
+
 
 ### Add the hook program contract and check it at loop start
 
@@ -391,15 +486,7 @@ refuse it at start, by name, when it is missing a hook.
 The six steps and their flags are `ProcessSteps` in [steps.go](../../tillr-drain/drain/steps.go)
 and the flags in [main.go](../../tillr-drain/main.go).
 
-<!-- inert copy of a tillr directive: item id="item-def-hook-contract" paths="tools/tillr-drain/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="item-def-planner-lifecycle" prose="2" -->
 
-- **c1:** The definition package's README states the hook contract: `describe`; the six steps `gate`, `land`, `verdict`, `replay`, `rolling` and `fixer-gate` with the flags the drain passes them today; `complete-item` with `--item`, `--run`, `--store` and `--root`; `after-completion` with `--item`, `--store` and `--root`; and `detail` with `--body-ref` and `--root`. For each it states the record printed and what each exit code means.
-- **c2:** When the store's definition names a hook program and a step's flag is not given on the drain's command line, the drain runs that step as `<program> <hook> <flags>`. A step flag on the command line still wins.
-- **c3:** At start the drain runs `<program> describe`, which prints the hooks it answers and the flags each accepts. The drain refuses to start with exit 2, naming the hook, when the definition lists a hook the program does not answer or when a hook does not accept a flag the drain will pass.
-- **c4:** A hook the definition does not list is never called. A step whose hook is not listed and whose flag is not given behaves as an empty step flag does today.
-- **c5:** A test runs a pass with a stub hook program that records its argv, and asserts each hook's flags and the refusal at start.
-- **c6:** No Git, file or process work runs inside a SQLite write transaction.
-- **c7:** Under the Git-landing definition, which names no hook program yet, the drain runs exactly as before, and the existing loop suites pass unchanged.
 
 ### Move tillr-loop into being the Git-landing definition's hook program
 
@@ -411,19 +498,77 @@ a second use copies.
 
 **Product QA can try:** reading one real hook program, tillr-loop, as the model for their own.
 
+**What the stopped run settled:** a run on 2026-11-17 stopped before editing and reported that the
+hook contract was not in its tree. It was right to stop. That run was staged one commit before the
+contract landed. The contract is on the trunk now, in the commit titled
+`feat(tillr): negotiate definition hooks at loop startup`, and nothing in this item changes
+because of that report. Reading the landed contract against this item did find one criterion that
+cannot be met inside this item's paths. c2 is reworded for it, and the rulings below say how the
+rest read.
+
+- **Check the base first.** From the worktree's root, run:
+
+  ```sh
+  rg -n '^## Hook program contract' tools/tillr/definition/README.md
+  ```
+
+  One match means the contract is present. No match means the base is older than the contract:
+  report blocked and name the base. Do not write the contract here, and do not change the drain.
+- **The contract is settled, and the drain's side of it is built.** It is the "Hook program
+  contract" section of the definition package's [README](../../tillr/definition/README.md).
+  The flags the drain requires of each hook are `hookFlags` in `tools/tillr-drain/drain/hooks.go`. This item writes the program that answers the contract. It
+  changes no drain file, and it does not change the contract's text.
+- **The embedded definition keeps `hooks` unset in this item (c2, reworded).** The drain runs
+  `describe` at start whenever the store's definition names a hook program, including when every
+  step flag is given, and it runs it at the loop's root. Many of the drain's loop tests start a
+  loop at a fixture root that has no `tools/tillr-loop/tillr-loop`. Measured on 2026-11-17: with
+  the trunk's `tools/` tree copied out at the contract's commit and `hooks` in
+  [landing.json](../../tillr/definition/landing.json) set to
+  `{"argv": ["python3", "tools/tillr-loop/tillr-loop"], "names": [the six steps]}`, `go test .` in
+  `tools/tillr-drain` failed 19 tests, and its log printed
+  `configuration fault: hook describe [python3 tools/tillr-loop/tillr-loop] failed` twelve times.
+  With the file as the trunk has it, the same command in the same copy failed 4 of those 19, which
+  are therefore the copy's and not the change's. So naming the program in the embedded definition breaks 15
+  drain tests, c5 asks for those suites to pass, and the drain is outside this item's paths. This
+  item therefore ships the program and proves it against the contract, and the embedded definition
+  is not edited. Naming `tillr-loop` there is left to an item whose paths include the drain,
+  because the drain's fixture roots need a hook program first, or its start check needs to change.
+  That item is not written yet, and filing it is the owner's call.
+- **The program's argument vector.** Wherever this item writes the definition's `hooks` value (the
+  c2 test and the README), `argv` is `["python3", "tools/tillr-loop/tillr-loop"]` and `names` is
+  `gate`, `land`, `verdict`, `replay`, `rolling`, `fixer-gate`, in that order. The path is relative
+  for the reason `DefaultFixerGateProgram` gives: a gate runs in the candidate's worktree.
+- **`fixer-gate` becomes a face of its own (c1).** In the flag form the fixer gate is the `gate`
+  face given `--all` or `--since`. A hook is called as `<argv> <name> <flags>`, so `tillr-loop`
+  gains a `fixer-gate` face that does what `gate` does with one of those two flags. `gate` keeps
+  accepting them, which is what keeps the keeper's command working for c4.
+- **`replay` and `rolling` take the contract's flags, not the default programs' (c1).** The drain
+  calls `replay --only <ids>` and `rolling --all` or `rolling --since <sha>`. The `replay` face
+  runs `python3 tools/fork-check.py --replay --only <ids>` and the `rolling` face runs
+  `python3 tools/fork-check.py --tier rolling` with the range flag it was given. Each adds
+  `--replay` or `--tier rolling` itself, passes its environment through unchanged, and exits with
+  the program's exit code.
+- **What `describe` prints.** One JSON object whose only key is `hooks`; the drain refuses any
+  other key. For each of the six names it lists every flag the contract lists, including the three
+  optional `land` flags and both range flags. `describe` reads no store and needs no other flag.
+- **Where c3's test lives and what it compares.** It is in
+  [test.py](https://github.com/mschulkind-oss/tillr/blob/main/tools/tillr-loop/test.py), beside the test that already replays
+  `drain-argv.json`. For each case the hook name is the case's face, except that the two cases
+  named `fixer-gate-…` use `fixer-gate`. The test gives the case's arguments to that hook face and
+  asserts it parses them to the same values as the flag form. The file has no `replay` or
+  `rolling` case, and none is added: the drain's own test writes that file, so this item does not
+  edit it. A second test covers those two faces with a stand-in for `fork-check.py` that records
+  its arguments.
+- **If a drain suite fails for c5, stop.** Run the drain's suites as c5 says. With the embedded
+  definition unchanged they should pass as they do on the base. A failure there is outside this
+  item's paths: report it with the test's name, and do not edit the drain.
+
 **Agent details:** the replay and rolling programs the drain defaults to today are
 `DefaultReplayProgram` and `DefaultRollingProgram` in the drain; the fixer gate is
 `DefaultFixerGateProgram` in [trunk.go](../../tillr-drain/drain/trunk.go). The flag-form cases
 are [drain-argv.json](https://github.com/mschulkind-oss/tillr/blob/main/tools/tillr-loop/drain-argv.json).
 
-<!-- inert copy of a tillr directive: item id="item-def-tillr-loop-hooks" paths="tools/tillr-loop/,tools/tillr/,yolo-packs/tillr/,docs/" blocked_by="item-def-hook-contract" prose="2" -->
 
-- **c1:** `tillr-loop describe` prints the hooks it answers and their flags, in the contract's shape: `gate`, `land`, `verdict` and `fixer-gate` as today, and `replay` and `rolling` as faces that run the programs the drain defaults to today.
-- **c2:** The embedded Git-landing definition names `tillr-loop` as its hook program and lists those six hooks.
-- **c3:** A test asserts that, for every case in `drain-argv.json`, the step a drain started with no step flags would run through the hook program receives the same flags as the flag form does today.
-- **c4:** The keeper's loop command, with its step flags, keeps working unchanged.
-- **c5:** `tools/tillr-loop/test.py` and the drain's loop suites pass.
-- **c6:** tillr-loop's README says it is the Git-landing definition's hook program and links the contract.
 
 ### Add the item and node to every run's environment
 
@@ -437,17 +582,34 @@ core should not impose one host's convention on every consumer.
 **Product QA can try:** reading the item id from the environment in their adapter, and keeping their
 own scratch variable.
 
-**Agent details:** the environment list is in [exec.go](../../tillr-run/run/exec.go), and
-`DurableDir` names the directory. The request type is in
-[request.go](../../tillr-run/run/request.go); it already carries `item_id`.
+**Agent details:** the environment list and the `Request` type are both in
+[exec.go](../../tillr-run/run/exec.go), and `DurableDir` there names the directory. The
+request already carries `item_id`; [request.go](../../tillr-run/run/request.go) builds one
+from the face's flags.
 
-<!-- inert copy of a tillr directive: item id="item-def-run-item-env" paths="tools/tillr-run/,yolo-packs/tillr/,docs/" prose="2" -->
+Two candidates met the criteria as first written and were refused at the gate on 2026-11-17. This
+answers the conflict raised then; the design is unchanged, and only the form of the README's list
+in c4 is now stated.
 
-- **c1:** `tillr run exec` exports `TILLR_ITEM_ID` from the request beside `TILLR_RUN_ID`, and `TILLR_NODE_ID` when the request carries a new optional `node_id`. A test runs a stub adapter that prints its environment and asserts both.
-- **c2:** A request may set a new field, `scratch_env`, to `false`; then `run exec` leaves the scratch-directory variable it sets today as the caller passed it. A request that omits the field gets exactly today's environment, so the drain's runs are unchanged. A test covers both.
-- **c3:** The run record names the run's scratch directory whether or not the variable was set.
-- **c4:** The run utility's README lists every environment variable `run exec` sets and when.
-- **c5:** Every existing test of the run utility passes unchanged.
+- The second candidate failed the gate's `scratch` check, which printed the README line that named
+  the scratch-directory variable in a table row, and the same line in the pack's copy. That check
+  (`scratch_citations` in [tree_common.py](https://github.com/mschulkind-oss/tillr/blob/main/tools/gate/checks/tree_common.py)) refuses any
+  tracked Markdown line that names the variable, wherever it appears outside a fenced block, and
+  its list of exceptions is a gate file outside this item's paths. A fenced block is skipped
+  whole, as a specimen. So c4's list is one fenced block, and the README's prose around it says
+  "the scratch-directory variable", as this block does. No gate file changes and no exception is
+  added. The same holds for every other Markdown file the change touches.
+- The first candidate failed `pack-sync` on an interpreter cache file in the pack's copy of the run
+  utility. Commit `864c56815` made that check ignore such files on both sides, so nothing in this
+  item answers it.
+
+Before committing, run the check that refused the second candidate, from the worktree's root:
+
+```sh
+python3 tools/gate/checks/scratch.py
+```
+
+
 
 ### Add every run, verdict, decision and state move to the item page
 
@@ -465,14 +627,7 @@ own items need the same history.
 nodes on top of this; its c3 draws an item with no workflow as one node from its run, which this
 item's list of runs feeds. That block needs no edit.
 
-<!-- inert copy of a tillr directive: item id="item-def-item-page-history" paths="tools/tillr-view/,yolo-packs/tillr/,docs/" prose="2" -->
 
-- **c1:** The served item answer lists every run of the item, with its end cause, start, finish, backend and spend, whether or not the run made a landing candidate.
-- **c2:** It lists each verdict with its criterion, outcome, reason, evidence and actor, and each entry of the owner's decision ledger that names the item.
-- **c3:** It lists each move of the item's state from the event log, with the reason and the actor where the event carries them, including close and reopen.
-- **c4:** The keys the served answer has today keep their names and meaning; the new lists are added beside them.
-- **c5:** The observatory's item page shows the runs, verdicts, decisions and moves in time order.
-- **c6:** A test reads the served answer for an item with two runs that made no candidate, a verdict, a decision, a close and a reopen, and asserts every entry.
 
 ### Route the loop's start around Git when the definition does not land
 
@@ -490,21 +645,14 @@ trunk history in [trunk_history.go](../../tillr-drain/drain/trunk_history.go), t
 tier, the startup sync, and the roll and push settings read by
 [settings.go](../../tillr/settings/settings.go).
 
-<!-- inert copy of a tillr directive: item id="item-def-loop-start-without-git" paths="tools/tillr-drain/,tools/tillr/settings/,yolo-packs/tillr/,docs/" blocked_by="item-def-hook-contract" prose="2" -->
 
-- **c1:** When the store's definition does not complete on `landing`, the loop's start runs no Git command, no `tillr item sync`, no trunk history, no rolling tier and no roll or push.
-- **c2:** A test starts `tillr drain loop --exit-when-drained` on a root outside any Git repository, with `GIT_CEILING_DIRECTORIES` set so no parent repository is found, and asserts exit 0. A second test starts it on a subdirectory of a repository and asserts exit 0.
-- **c3:** The start line prints the definition's name and the steps it skipped.
-- **c4:** Roll or push settings in that root's `.tillr.toml` are refused at start, naming the keys, rather than ignored.
-- **c5:** No Git, file or process work runs inside a SQLite write transaction.
-- **c6:** Under the Git-landing definition the loop starts exactly as before; the existing loop suites pass unchanged, and a store created before this change drains as before.
 
 ### Add plain-directory staging for a definition that does not land
 
 A finding needs a directory to work in, not a Git worktree with a base commit and a fence. Today
-staging always builds a worktree, `tillr run exec` accepts only that worktree as a run's working
-directory (`WorktreeDir` in [request.go](../../tillr-run/run/request.go)), and the brief an
-agent receives has nine sections shaped for Git, filled with a base sha, a fence and a target
+staging always builds a worktree and refuses a request whose working directory is anything else
+(the `working_dir` check in `Stage`, [stage.go](../../tillr-drain/drain/stage.go)), and the
+brief an agent receives has nine sections shaped for Git, filled with a base sha, a fence and a target
 (`briefValuesFor` in [stage.go](../../tillr-drain/drain/stage.go)). This item stages a plain
 lane directory for a store that does not land, and renders the brief from the definition's own
 template.
@@ -514,16 +662,10 @@ directory.
 
 **Agent details:** staging is [stage.go](../../tillr-drain/drain/stage.go); the brief
 template is the drain's `--brief-template` flag today, whose default is
-[brief-template.md](../../tillr-run/backends/brief-template.md).
+[brief-template.md](../../tillr-run/backends/brief-template.md). The plain directory is
+named relative to the lane directory, like every working directory a request carries.
 
-<!-- inert copy of a tillr directive: item id="item-def-stage-plain-directory" paths="tools/tillr-drain/,tools/tillr-run/,yolo-packs/tillr/,docs/" blocked_by="item-def-loop-start-without-git,item-def-run-item-env" prose="2" -->
 
-- **c1:** When the definition does not complete on `landing`, staging creates the lane's working directory as a plain directory, with no worktree, no base sha and no fence file, and the run request names it.
-- **c2:** `tillr run exec` accepts that working directory for such a run, and still refuses any other directory for a run under Git landing.
-- **c3:** The brief is rendered from the definition's `brief_template`, and no value staging fills in for it names a sha, a fence or a trunk. A test renders a brief from a fixture template and asserts its values.
-- **c4:** A test stages one item of a fixture definition and asserts the directory, the request and the brief.
-- **c5:** Under the Git-landing definition staging is unchanged; the existing stage and loop suites pass unchanged.
-- **c6:** No Git, file or process work runs inside a SQLite write transaction.
 
 ### Add completion through the definition's hook for items that never land
 
@@ -534,6 +676,37 @@ verdicts and names the finished state, and the drain moves the item there with t
 and actor. The drain refuses that move unless every criterion has a recorded verdict, so an item
 never finishes unjudged.
 
+**Start here:** a run of this item runs the two commands below first, in the worktree, before it
+reads anything else. They carry the earlier draft onto the tree as it stands. Do not test the draft
+with `git apply --check`: that command refuses the draft at `pass.go`, and its refusal is the
+expected result of the wrong command, not a blocker and not a reason to report `blocked`.
+
+```bash
+git diff a376bfdac refs/tillr/preserved/run-item-def-finish-on-hook-a3 -- \
+  tools/tillr-drain tools/tillr-item | git apply --3way -
+python3 - <<'RESOLVE'
+import re
+p = "tools/tillr-drain/drain/pass.go"
+s = open(p).read()
+s, n = re.subn(r"<<<<<<< ours\n(.*?)[^\n]*\n=======\n(.*?)>>>>>>> theirs\n", r"\1\2", s, flags=re.S)
+assert n == 1, n
+open(p, "w").write(s)
+RESOLVE
+```
+
+The first command prints `Applied patch to 'tools/tillr-drain/drain/pass.go' with conflicts.`,
+takes the other 16 files cleanly and exits 1. That exit is expected, so the two commands are not
+joined with `&&`. The second resolves that one conflict: it keeps the trunk's lines
+and replaces only the last of them with the draft's line, the one that begins `if !l.nonLanding &&`.
+Measured on 2026-11-18 on the trunk at `c15a5440e`, then discarded: after these two commands
+`gofmt -l` names no file, `go build ./...` and `go vet ./...` exit 0 in `tools/tillr-drain` and
+`tools/tillr-item`, `go test . ./drain -run 'HookCompl|Hook|NonLanding'` passes in
+`tools/tillr-drain`, and `go test ./... -run TestStateRequiresVerdictsForEveryStoredCriterion`
+passes in `tools/tillr-item`. The run then does what is left: it removes the 10-second deadline
+from `TestFailedDesignerResumeStartsNewSessionOnce`, runs the full item and drain suites, runs the
+high-effort review, runs `just pack-sync`, and commits once. The rest of this block is the reasoning
+behind those steps and the rulings a run needs when one of them fails.
+
 **Product QA can try:** a finding that runs, is judged, and ends `confirmed` or `rejected` on its own,
 with the reason on the record.
 
@@ -541,15 +714,237 @@ with the reason on the record.
 move goes through the existing `ItemState` step in [steps.go](../../tillr-drain/drain/steps.go)
 with the flags the receipts item added.
 
-<!-- inert copy of a tillr directive: item id="item-def-finish-on-hook" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-def-stage-plain-directory,item-def-finished-state-receipts" prose="2" -->
+A first run of this item on 2026-11-17 built the hook path, passed its twelve targeted cases, and
+stopped before committing. Its review found two defects, and the fix for the first was in a file
+outside the item's paths. The run was right to stop. This answers the conflict it raised. c1 to c7
+stand as written and one criterion, c8, is appended: a presented criterion's text does not move,
+and a block holds at most eight criteria, so c8 carries both fixes and a test for each.
 
-- **c1:** When the definition completes on `hook` and a run ends, no candidate rule, boundary bracket, gate or lander runs. The drain calls the `complete-item` hook with the item, the run, the store and the root.
-- **c2:** When the hook exits 0 and prints a finished state, a reason and an optional pointer, the drain moves the item there with `--reason`, `--resolves-via` and `--by definition:<name>`.
-- **c3:** When the hook exits 1 the item is not finished and stays where it is, under the rules a run that made no candidate gets today. Any other exit holds the item with a named fault that the waiting face shows.
-- **c4:** The drain refuses the move, and holds the item with a named reason, unless every criterion of the item has a recorded verdict. A test with a stub hook that answers without recording verdicts asserts the hold.
-- **c5:** A test applies an item, runs one stub run in a plain directory, has the hook record a verdict and answer `confirmed`, and asserts the end state, the reason, the event, and that no Git command ran: the test puts a `git` on `PATH` that fails it.
-- **c6:** No Git, file or process work runs inside a SQLite write transaction.
-- **c7:** Under the Git-landing definition the end of a run is unchanged; the existing loop suites pass unchanged.
+- **The verdict check belongs to the move, not to the drain.** The first run had the drain read the
+  item's verdicts and then call the state step. `tillr item apply` can append a criterion between
+  those two steps, and the item would then finish with a criterion nobody judged, which is what c4
+  forbids. A check in the drain cannot close that gap, because the drain's read and the item
+  utility's write are separate transactions. So the check moves into the state move's own write
+  transaction: `tillr item state` gains a flag, `--require-verdicts`, and with it
+  `SetStateWithReceipt` in [state.go](../../tillr-item/item/state.go) refuses the move,
+  with the named refusal `criteria-unjudged`, unless every criterion the item holds at that moment
+  has a recorded verdict. A criterion has a recorded verdict when an `item.verdict` event names
+  it with the hash of its stored text; `RecordVerdict` in
+  [verdict.go](../../tillr-item/item/verdict.go) is the one writer of those. The drain
+  passes the flag on every move a `complete-item` answer causes and turns the refusal into c4's
+  hold. It keeps no second check of its own, so there is one rule in one place. That is why the
+  marker below now names `tools/tillr-item/`; the item's id and blocker are unchanged.
+- **The flag is opt-in.** Without `--require-verdicts` a move behaves exactly as today, so the
+  loop's move to `landed` and the owner's hand moves are untouched and the existing item suites
+  pass unchanged. The drain's start check asks the item program for the flag, as it does for
+  every step flag it will pass. Making the rule part of a definition, so that no move into a
+  finished state can skip it, is a later decision and not this item's.
+- **Restart after the move never enters Git.** The first run's recovery sent a hook-completed run
+  into the Git cleanup that preserves and resets a worktree, and a plain directory has neither.
+  Under a definition that completes on `hook`, recovery of an ended run takes no Git step at all.
+  It reads the item: if the item is already in a finished state, the move happened, so the drain
+  writes the end-of-run records that are missing and does not call the hook again. Otherwise it
+  runs the completion step again from the hook call. Calling the hook twice is safe on the item
+  utility's side: a verdict recorded twice is two events for the same answer, and a move to the
+  state an item already has appends nothing.
+
+A second run on 2026-11-17 built c1 to c8 against this text and also stopped before committing.
+Its work is kept at the ref `refs/tillr/preserved/run-item-def-finish-on-hook-a3` [unlanded]: 34
+files, 17 of them source and 17 their pack copies. It stopped because one test that hook
+completion does not reach, `TestFailedDesignerResumeStartsNewSessionOnce` in
+[designer_choice_test.go](../../tillr-drain/drain/designer_choice_test.go), failed once in
+the full sharded suite with `context deadline exceeded`. A failed suite cannot be waived by a
+passing rerun, so that run was right not to commit. This answers the conflict it raised. No
+criterion changes; the rulings below say what a run of this item does about that test and about
+the fixtures it had to edit.
+
+- **The failure is the test's own 10-second deadline, not the change.** The test puts one
+  `context.WithTimeout` of 10 seconds around two whole loop runs and every store read after them.
+  The failure was at the last store read, after every earlier assertion had passed, so the clock ran
+  out and nothing was wrong with the result. Measured on 2026-11-17 on the second run's tree:
+  `go test ./drain -run '^TestFailedDesignerResumeStartsNewSessionOnce$' -count=20` passed all 20
+  in 75.5 seconds, about 3.8 seconds each, on a 32-core machine at a load average of 37. The
+  recorded duration for that test is 2.03 seconds. It fails when six shards and a review share the
+  machine and one run takes more than 10 seconds.
+- **This item repairs that test, because its file is under this item's paths.** The repair removes
+  the deadline: the test's context is cancelled when the test ends and carries no timeout, so a hang
+  is ended by the test binary's own limit and not by a clock that depends on load. That is the
+  repair the [sharded-runner report](https://github.com/mschulkind-oss/tillr/blob/main/docs/pi/tillr-go-shards-2026-11-17.md) records for the other
+  nested test deadlines. The test's assertions do not change. Raising 10 to a larger number is not
+  the repair, since any fixed number fails at some load.
+- **The same rule covers any other test the full suite fails.** If the failing test's file is under
+  this item's paths and the run can name the cause, the run repairs it in the same commit and
+  reports the failure, the cause and the passing result. A rerun that passes with nothing changed
+  repairs nothing and does not count. If the cause is outside this item's paths, or the run cannot
+  name it, the run stops and reports as before.
+- **Three test edits are expected, and c7 allows them.** c7 is about what the Git-landing
+  definition does when a run ends: its assertions stay as they are. It does not freeze fixtures
+  that the new start check reaches. The second run found that `TestNonLandingLoopStartsWithoutGit`
+  and `TestNonLandingLoopRefusesLandingSettings` used an item stub that failed on any call, or an
+  installed item program without `--require-verdicts`. Their fixtures may answer the start check's
+  help call, and must still fail if document sync or Git runs. The third edit is the deadline
+  above.
+- **The Git-only checks when a run is claimed are skipped under `hook`.** The second run's failing
+  `git` on `PATH` showed two Git checks in dispatch claiming, before any run starts. Under a
+  definition that completes on `hook` they do not run. Under the Git-landing definition they run
+  as today. This is what c5 already requires, stated so the next run does not rediscover it.
+
+Neither run's work is on the trunk. A run of this item starts from the tree as it stands and reads
+the preserved ref as a draft: it was built on an older base, its high-effort review was not
+finished, and its item suite was never run in full. The run finishes all three before it commits.
+
+A third run on 2026-11-17 changed no file and reported `failed`: it read the preserved ref's file
+list and stopped without building anything. The loop then took the lane's head, `e597f5bc8`, as this
+item's change, and on 2026-11-18 asked a conflict-fix run to re-apply that commit on the moved
+trunk. That run stopped, and it was right to. This answers the conflict it raised. No criterion
+changes.
+
+- **`e597f5bc8` is not this item's change, and nothing is re-applied.** It is a roadmap commit from
+  other work: it changes only [roadmap.md](../tillr/roadmap.md), and the trunk already holds it
+  (`git merge-base --is-ancestor e597f5bc8 HEAD` exits 0, run on 2026-11-18). No run of this item
+  has made a commit, so this item has no candidate to carry forward. The loop's commit that retired
+  this block on top of it, `1fcb00b0e` [unlanded], is not on the trunk either, and this block and
+  its eight criteria stand.
+- **The next run is a build run from the tree as it stands.** It is not a conflict-fix run and it
+  is given no commit to re-apply. It builds c1 to c8 and commits once.
+- **The draft is carried as a patch of its 17 source files, by a three-way apply.** The preserved
+  ref sits on `a376bfdac`, and the trunk has changed 45 files under `tools/tillr-drain/` and
+  `tools/tillr-item/` since. So the draft is this diff and nothing wider:
+  `git diff a376bfdac refs/tillr/preserved/run-item-def-finish-on-hook-a3 -- tools/tillr-drain
+  tools/tillr-item`, which is 17 files, 604 lines added and 23 removed. Measured on 2026-11-18 on
+  the trunk at `3da00ddcf`: `git apply --3way` takes 16 of the 17 files cleanly and leaves
+  conflicts in one, [pass.go](../../tillr-drain/drain/pass.go), which the run resolves by
+  hand, keeping what the trunk added there. The run does not check out or cherry-pick the ref, and
+  does not compare the ref with the trunk's head: that comparison shows 225 files, most of them the
+  trunk's later work undone. It does not copy the 17 pack files. `just pack-sync` writes them.
+- **Reading the draft is not the work.** A run of this item ends in one of two ways: a commit that
+  meets c1 to c8, with the full item and drain suites run, or a report that names the one thing
+  that stopped it. A report with no change and no named blocker, like the third run's, gives the
+  next run nothing to act on.
+- **Why the loop took another work's commit as this item's change is not this item's to repair.**
+  The third run reported no paths changed, and the conflict-fix brief still named a head for its
+  change. That is a fault in how the loop picks a candidate after a run that changed nothing. It is
+  recorded here so the owner can file it; a run of this item does not look for it or fix it.
+
+A build run on 2026-11-18 changed no file and reported `blocked`. It tested the draft with a
+different command from the one above, `git show --format= <ref> -- tools | git apply --check -`,
+which is a plain apply with no three-way merge. That command refused the patch at
+[pass.go](../../tillr-drain/drain/pass.go), and the run stopped there and asked for the patch
+to be reconciled. This answers the conflict it raised. No criterion changes, and the rulings above
+stand: the conflict in that one file was already measured and already assigned to the run.
+
+- **A refused patch in `pass.go` is the expected result, and it is not a stop.** Reconciling the
+  draft with the trunk is this item's work, and no other run does it first. A run stops on the
+  draft only when it cannot say which side of a conflict is right, and then it reports the lines in
+  question.
+- **The command is the three-way one, run as written.** Measured again on 2026-11-18 on the trunk
+  at `9eac60321`:
+  `git diff a376bfdac refs/tillr/preserved/run-item-def-finish-on-hook-a3 -- tools/tillr-drain
+  tools/tillr-item | git apply --3way -` takes 16 of the 17 files and leaves one conflict, in one
+  place, in `pass.go`. `git apply --check` without `--3way` refuses the whole patch on that same
+  place and says nothing about the other 16 files, so it is not a test of whether the draft can be
+  used.
+- **The one conflict has a known resolution.** It is in `applyPlanGeneration`, at the check that
+  runs when the decision is a dispatch or a retry. Since the draft was written the trunk added a
+  block before that check, which reads the backends that quota has shut and returns without
+  claiming a run when the decision's backend is one of them. The draft's only change at that place
+  is to put `!l.nonLanding &&` in front of the check that follows, the one that defers a dispatch
+  when a landing has moved the trunk, so that it does not run under a definition that completes on
+  `hook`. The resolution keeps the trunk's quota block exactly as it is, with no `nonLanding`
+  condition on it, and adds `!l.nonLanding &&` to the condition of the check after it. Nothing else
+  in the file needs a decision.
+- **With that resolution the draft builds and its own tests pass.** Measured on 2026-11-18 on
+  `9eac60321`, then discarded: `go build ./...` and `go vet ./...` exit 0 in both modules;
+  `go test . ./drain -run 'HookCompl|Hook|NonLanding'` passes in `tools/tillr-drain`; and
+  `go test ./... -run TestStateRequiresVerdictsForEveryStoredCriterion` passes in
+  `tools/tillr-item`. That is the starting point and not the finish. What is left is what the
+  second run's answer lists: the test deadline repair, the full item and drain suites, the
+  high-effort review, `just pack-sync`, and one commit.
+
+A second build run on 2026-11-18 also changed no file and reported `blocked`, for the same reason
+in nearly the same words: it piped the draft to `git apply --check`, was refused at
+[pass.go](../../tillr-drain/drain/pass.go), and asked for the patch to be reconciled. The
+answer above already ruled on that, so the ruling is not what was missing. What was missing is a
+form a run can follow without reading this history first. This answers the conflict it raised. No
+criterion changes and no ruling above changes. The steps below replace the prose above as the
+place a run starts, and they were run again, in this order, on 2026-11-18 on the trunk at
+`d9cb0ca2e`.
+
+1. Apply the draft with the three-way command. A plain `git apply`, with or without `--check`, is
+   the wrong command, and its refusal is not a result to report.
+
+   ```bash
+   git diff a376bfdac refs/tillr/preserved/run-item-def-finish-on-hook-a3 -- \
+     tools/tillr-drain tools/tillr-item | git apply --3way -
+   ```
+
+   It prints `Applied patch to 'tools/tillr-drain/drain/pass.go' with conflicts.` and applies the
+   other 16 files cleanly. That one line is the expected output. The run goes on to step 2.
+2. Resolve the one conflict in `pass.go`, in `applyPlanGeneration`. Keep every line of the side
+   Git marks `ours`, which is the trunk's quota block, and change only the condition on that
+   side's last line, so that the section reads as follows with no conflict markers left:
+
+   ```go
+   		if (d.Action == ActionDispatch || d.Action == ActionRetry) && d.RunRequest != nil {
+   			shut, err := readQuotaShutBackends(tx.Reader(), l.cfg.Now(), l.currentPolicy())
+   			if err != nil {
+   				return err
+   			}
+   			open, err := dispatchQuotaOpen(tx.Reader(), d, shut, l.currentPolicy())
+   			if err != nil {
+   				return err
+   			}
+   			if !open {
+   				return nil
+   			}
+   		}
+   		if !l.nonLanding && (d.Action == ActionDispatch || d.Action == ActionRetry) {
+   ```
+
+   If the trunk has changed the `ours` side again by the time a run reads this, the rule is the
+   same: the trunk's lines stay, and the only line the draft contributes is the last one.
+3. Check the starting point. With step 2 done, measured on `d9cb0ca2e` and then discarded:
+   `go build ./...` and `go vet ./...` exit 0 in `tools/tillr-drain` and in `tools/tillr-item`;
+   `go test . ./drain -run 'HookCompl|Hook|NonLanding'` passes in `tools/tillr-drain`; and
+   `go test ./... -run TestStateRequiresVerdictsForEveryStoredCriterion` passes in
+   `tools/tillr-item`.
+4. Finish the work the second run's answer lists: remove the 10-second deadline from
+   `TestFailedDesignerResumeStartsNewSessionOnce`, run the full item and drain suites, run the
+   high-effort review, run `just pack-sync`, and commit once.
+
+- **A conflict in a draft is work, never a blocker.** A run of this item may report `blocked` only
+  for something outside its paths, or for a conflict whose right side it cannot name, and then it
+  quotes the lines. "The patch does not apply" names neither, and a third report of it would give
+  the next answer nothing new to rule on.
+- **If the steps above fail as written, the run builds without the draft.** Should the ref be
+  gone, or the three-way apply leave conflicts in more than `pass.go`, the run does not stop. It
+  builds c1 to c8 from the tree as it stands, using this block's rulings as the design. The draft
+  saves work; it is not a requirement of the item.
+
+A third build run on 2026-11-18 changed no file and reported `blocked` in eight seconds, again on
+`git apply --check` at [pass.go](../../tillr-drain/drain/pass.go). Its log shows why the two
+answers above did not reach it. It read the first 22 lines under this block's heading, searched the
+document for the words "Start here" and found nothing, and every command it ran carried a
+10-second limit. The numbered steps were more than 150 lines below the heading, so it never saw
+them. This answers the conflict it raised. No criterion and no ruling changes.
+
+- **The steps now sit at the top of the block, under "Start here".** They are the same steps as
+  the numbered list above, and the conflict in `pass.go` is now resolved by a command and not by
+  hand, so a run has nothing to decide there. Where the two differ, the text under "Start here"
+  is the one a run follows. It was run again on 2026-11-18 on the trunk at `c15a5440e`, with the
+  results it states.
+- **A run reads the whole block before it reports anything but `done`.** The block runs from its
+  heading to the criteria. A report of `blocked` or `failed` names the ruling in this block that
+  does not cover its case. A report that does not is answered by this paragraph and nothing more.
+- **The suites and the build do not fit in ten seconds.** The drain's targeted tests alone took 58
+  seconds in the measurement above. A run gives its build and test commands no time limit, or one
+  of at least ten minutes.
+- **A fourth report of the same refusal goes to the owner, not to another answer.** The design has
+  nothing more to say about this patch. If a run given this text still stops at `git apply
+  --check`, the fault is in how the run is staged or which seat it is given, and the owner rules
+  on that.
+
+
 
 ### Route a command node into the lane directory and name its node
 
@@ -566,12 +961,7 @@ to that block, because that block is ready and may be dispatched at any time.
 **Agent details:** the run request's `node_id` field comes from the run-environment item; the drain
 sets it here for every workflow node.
 
-<!-- inert copy of a tillr directive: item id="item-def-command-node-plain-directory" paths="tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-ig-command-node,item-def-finish-on-hook" prose="2" -->
 
-- **c1:** A command node of an item whose definition does not land runs through `tillr run exec` in the item's plain lane directory. Under Git landing it still runs in the item's worktree, as the command-node block's c2 says.
-- **c2:** Every workflow node's run request carries `node_id`, so its program sees `TILLR_NODE_ID` beside `TILLR_ITEM_ID`.
-- **c3:** A test runs a two-stage workflow, a command stub and then an agent stub, on an item of a fixture definition that does not land, and asserts each program's working directory and environment.
-- **c4:** Under the Git-landing definition the existing workflow and loop suites pass unchanged.
 
 ### Add a worked definition that lands nothing, runnable end to end
 
@@ -589,14 +979,26 @@ to `~/.local/share/tillr/tillr/examples/recorded-verdict/README.md` in any works
 pack. The test lives in the drain's suite because the drain module already links the item and run
 utilities.
 
-<!-- inert copy of a tillr directive: item id="item-def-recorded-verdict-example" paths="tools/tillr/,tools/tillr-drain/,yolo-packs/tillr/,docs/" blocked_by="item-def-command-node-plain-directory,item-def-tillr-loop-hooks,item-def-item-page-history" prose="2" -->
+The first run built the example, its test and the pack copies, and then stopped without a commit on
+two checks that are red on the trunk. Both are answered here.
 
-- **c1:** `tools/tillr/examples/recorded-verdict/` holds a definition named `recorded-verdict` with the states `in-queue`, `blocked` and `closed` and the finished states `confirmed`, `rejected`, `inconclusive`, `repeat-of` and `tooling-fault`; no prerequisite; `completes: hook`; a workflow of one command stage and one agent stage; a hook program; a stub adapter; and a README.
-- **c2:** The README gives one fenced command sequence that a Product QA agent runs from an empty directory with no Git repository: `tillr store init --definition`, `tillr item apply` of three findings, `tillr drain loop --exit-when-drained`, then `tillr item list` and `tillr item show` to read the outcomes.
-- **c3:** A test copies the example into a fresh directory outside any repository, runs the README's fenced sequence as written, and asserts that the three findings end in three different finished states, each with a reason, a verdict on every criterion and an event, and that no Git command ran.
-- **c4:** The test asserts the count of findings in each finished state from `tillr item list --state`.
-- **c5:** The README links the definition package's README for every key, says which commands it uses are stable for a consumer, and lists what the example does not show yet.
-- **c6:** `tests/pack-sync.test.py` passes with the example in the pack's mirror.
+The first is `python3 tests/tillr-docs.test.py`, which prints `FAIL run README environment list`
+because `tools/tillr-run/README.md` does not list `TILLR_READ_ONLY_GROUP`, which
+`tools/tillr-run/run/exec.go` gives to every run. The second is
+`TestHookCompletionHoldsAndNegativeAnswer/negative` in `tools/tillr-drain`, which expects two
+dispatches and two refusals and gets one of each. On 2026-11-18 both failed the same way at
+`f213b9481`, with none of this work applied. This work changes none of their inputs. So both belong
+to the trunk and neither is a reason to stop. The builder leaves them alone, finishes and commits,
+and names both in its report with the commands that show them on the base. No criterion changes:
+c1 to c6 were met by the first run's work and stand as written.
+
+
+
+- [unlanded] **Start from** the commit at `refs/tillr/preserved/run-item-def-recorded-verdict-example-a1` in the main repository, `c48173c4b`: 32 files, holding the example under `tools/tillr/examples/recorded-verdict/`, `tools/tillr-drain/recorded_verdict_example_test.go`, two added lines in `tools/tillr-drain/internal/testinputs/siblings.txt`, and the pack copies of all three. Do not rebuild it from nothing. Its first parent is `73ed72839` and the trunk has moved, so re-apply its change instead of reusing its tree. On 2026-11-18 `git merge-tree --write-tree f213b9481 c48173c4b` reported no conflict. Its second parent holds what that run had staged, which is empty; ignore it. Do not resolve a pack copy by hand: run `just pack-sync` after re-applying, so the copies come from the sources.
+- **What passed with that work on `f213b9481`, 2026-11-18:** `go test . -run '^(TestRecordedVerdictExampleREADME|TestMissingSiblingBuildInputIsRejected)$'` in `tools/tillr-drain`, and `python3 tests/pack-sync.test.py`. The first run's report also says `go test ./...` in `tools/tillr`, `yolo pack lint yolo-packs/tillr` and `uvx vantage-check` on the example's two Markdown files passed. Run them again after re-applying.
+- **The red docs check:** its inputs are `tools/tillr-run/README.md` and `tools/tillr-run/run/exec.go`, and both are outside this item's paths. Do not edit either, do not edit the check, and do not stop for it. That script stops at its first failure, so the cases after this one do not run in it. If the trunk has repaired it by the time this is built, the check simply passes.
+- **The red hook test:** `go test . -run '^TestHookCompletionHoldsAndNegativeAnswer$'` in `tools/tillr-drain` fails only in its `negative` case, at the assertion `result.Dispatched != 2 || result.Rejected != 2`, with `Dispatched:1 Rejected:1` and the item held `candidate-no-op`. It fails the same way with every `TILLR_*` variable removed from the environment, so it is not caused by running inside a lane. The test file is inside this item's paths, but which count is right is a question about how the loop returns a refused run, and that is not this item's to decide. Do not edit `tools/tillr-drain/hook_completion_test.go` and do not change the loop to make it pass. The example does not depend on it: a finding that ends `rejected` gets there by the hook answering with that state, not by the hook exiting 1.
+- **Before committing,** confirm that `git diff --name-only HEAD -- tools/tillr-run tests/tillr-docs.test.py tools/tillr-drain/hook_completion_test.go tools/tillr-drain/drain` prints nothing. Then run `python3 tools/go-test-shards.py tools/tillr-drain -k 6 --timeout 20m`. A failure there other than the hook test's `negative` case is this work's to repair if this work causes it. A failure that lies outside the item's paths and also fails on the base with this work removed is the trunk's: report it and carry on. Stop and report only when the failure is caused by this work and its repair lies outside the item's paths.
 
 ---
 
@@ -605,6 +1007,20 @@ utilities.
 These are filed when the first tranche has landed, because each builds on the definition file, the
 hook contract or the worked example, and because the queue already holds about eighty items. Each
 names the request it answers.
+
+**What the tranche waits on, as of 2026-11-18.** The first tranche has landed, but the tranche is
+still not filed, on purpose. Two things must happen first, and neither has:
+
+- **Product QA's third round.** Their agent runs the worked example and writes round three against
+  the real thing. [Their reply](tillr-product-qa-requests.md) is still the second round.
+- **The owner's review of the designer's decisions.** Every unit below rests on choices recorded
+  in [the direction document's ledger](tillr-core-and-git-landing.md#decision-ledger). Where the
+  line between core and definition falls, which unit 1 depends on, is the owner's own ruling
+  ([`OQ-CG2`](tillr-core-and-git-landing.md#OQ-CG2)). The shape of the one file and four other
+  choices (`D-CG1` to `D-CG5` there) are the designer's, and the owner has not reviewed them. Unit 4
+  also needs `D-IG4` amended first.
+
+Filing these units now would put work in the queue that rests on decisions the owner has not seen.
 
 1. **Count outcomes and draw the views from the definition** (R2-8). The status face and the
    observatory count items by the definition's finished states, and the landings and trunk pages

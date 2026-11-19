@@ -3,7 +3,7 @@ title: "A goal monitor: a scheduled check-in that inspects the board and files w
 date: 2026-11-14
 status: in-review
 stage: DESIGN
-next: "Nothing until it is picked up: the owner iceboxed this design on 2026-11-17 (\"let's icebox this goal stuff until we have a use for it again\"), on the tillr roadmap's Icebox. Picking it up means ruling OQ-GM1 and OQ-GM2, then filing the three slices of Section 10, none of which is in the queue."
+next: "Nothing until it is picked up: the owner iceboxed this design on 2026-11-17 (\"let's icebox this goal stuff until we have a use for it again\"), on the tillr roadmap's Icebox. Picking it up means a use for a scheduled check-in, which answers OQ-GM1, then the owner's review of the designer's decisions in the ledger, then filing the three slices of Section 10, starting with scheduled tasks."
 depends-on:
   - scheduled-tasks.md
   - tillr-item-graphs.md
@@ -15,19 +15,23 @@ summary: "A goal is a recurring item whose criteria are a property of the system
 
 # A goal monitor: a scheduled check-in that inspects the board and files what it finds
 
-> **Delivered copy.** This is `docs/design/tillr-goal-monitor.md` from this repository at commit `b8eac4989e` (2026-11-17), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-goal-monitor.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
+> **Delivered copy.** This is `docs/design/tillr-goal-monitor.md` from this repository at commit `973b12eb2d` (2026-11-18), copied into the tillr pack by `just pack-docs`. The [source](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-goal-monitor.md) is authoritative and may be newer. Links to documents that were not delivered point at the repository, and the queue item directives in this copy are inert.
 
-**Status:** 2026-11-17: **iceboxed by the owner**, who said "let's icebox this goal stuff until we have a use for it again." It is parked on [the tillr roadmap's Icebox](../tillr/roadmap.md#icebox), not abandoned and not accepted; nothing is built, and none of the three slices in [§10](#10-the-three-downstream-slices) is in the queue. 2026-11-14: design in review. Read against the tree at `cb3488a8`: the four documents named in `depends-on` were read in full, and the symbols this design changes were read where they live. Line numbers are anchors at that commit. Two questions remain for the owner ([OQ-GM1](#OQ-GM1), [OQ-GM2](#OQ-GM2)); everything else here is ruled.
+**Status:** 2026-11-17: **iceboxed by the owner**, who said "let's icebox this goal stuff until we have a use for it again." It is parked on [the tillr roadmap's Icebox](../tillr/roadmap.md#icebox), not abandoned and not accepted. Nothing is built, none of the three slices in [§10](#10-the-three-downstream-slices) is in the queue, and both questions are blocked so that they stop asking. The [ledger](#11-decision-ledger)'s rows are the designer's decisions of 2026-11-14; the owner has ruled on none of them. Written against the tree at `cb3488a8` and corrected on 2026-11-18 where the tree had moved: the loop now waits by default, the graph engine is built, and workflows live under `config/tillr/workflows/`.
 
-> **In short.** The owner asked for a monitor that inspects the board on a schedule and decides whether to act, built out of pieces this repository already has. It is **a composition, not a new mechanism**: a *goal* is a recurring board item whose frozen criteria are a property of the system rather than a change to it, the clock is [`due_at`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#21-the-two-columns), the execution is a [pre-approved item graph](tillr-item-graphs.md#31-named-versioned-graph-templates) whose leaves are read-only collectors, one deciding agent, and one filing command, and the decision shape is [§20](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime.md#20-one-breakage-one-investigation)'s stateless planner. The one new tracked file is `config/tillr/graphs/goal-checkin@v1.json`, and it is guarded by two keys and a fence because it is the file that says what the monitor may decide.
+> **In short.** The owner asked for a monitor that inspects the board on a schedule and decides whether to act, built out of pieces this repository already has. It is **a composition, not a new mechanism**: a *goal* is a recurring board item whose frozen criteria are a property of the system rather than a change to it, the clock is [`due_at`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#21-the-two-columns), the execution is a [pre-approved item graph](tillr-item-graphs.md#31-named-versioned-graph-templates) whose leaves are read-only collectors, one deciding agent, and one filing command, and the decision shape is [§20](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime.md#20-one-breakage-one-investigation)'s stateless planner. The one new tracked file is `config/tillr/workflows/goal-checkin@v1.json`, and it is guarded by two keys and a fence because it is the file that says what the monitor may decide.
 
-**Why it matters.** Every day the loop runs, someone reads the board to notice that a check has been red for a week, that the queue has not landed anything since Tuesday, or that a patch series has drifted three releases. That reading is *steering*, and it is the owner's attention spent as a polling loop. A goal monitor turns the repeating part of that reading into a due item: the schedule never forgets, the inspection is mechanical where it can be, and the only thing the agent does is decide what the mechanical collection means.
+**Why it matters.** Every day the loop runs, someone reads the board to notice that the queue has not landed anything since Tuesday, that an item has been held past its promise, or that a patch series has drifted three releases. That reading is *steering*, and it is the owner's attention spent as a polling loop. A goal monitor turns the repeating part of that reading into a due item: the schedule never forgets, the inspection is mechanical where it can be, and the only thing the agent does is decide what the mechanical collection means.
 
 **The shape.** A recurring item carries a goal as its frozen criteria; on each due tick the item's pre-approved graph collects the evidence the goal names, an agent decides whether the evidence violates the goal, and a command files the resulting items under signature-derived ids so a repeated check-in cannot file the same work twice. The check-in writes no tracked file and can never produce a candidate commit.
 
-**Cost.** One nullable-column migration and one admission gate that [scheduled-tasks already specifies](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#21-the-two-columns); one bounded wait in the drain loop, which is also the fix for a stop that currently reports the opposite of the truth ([§8](#8-the-plannothing-stop-a-not-due-item-is-a-wait-not-a-stop)); one tracked graph template and the approval record that guards it; and four registered `command` leaves. No new binary, no daemon, no cron parser, and no second dispatcher.
+**Cost.** One nullable-column migration and one admission gate that [scheduled-tasks already specifies](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#21-the-two-columns); one rule for the loop's exit-once-drained mode ([§8](#8-a-not-due-item-when-the-loop-is-told-to-exit-once-drained)); one tracked graph template and an approval record to guard it, which is new and exists nowhere in the tree today; and four registered `command` leaves. No new binary, no daemon, no cron parser, and no second dispatcher.
 
-**Parked, not asked:** [OQ-GM1](#OQ-GM1) (the first goal and its cadence) and [OQ-GM2](#OQ-GM2) (whether the outside authority gets a host-level timer) stay open and unanswered while the design is iceboxed.
+**Start at** [§7](#7-the-bootstrap-problem-who-watches-the-monitor), what the monitor cannot do for itself; the rest is composition.
+
+**Needs your ruling:** None. Blocked while the design is iceboxed: [OQ-GM1](#OQ-GM1) (what the first check-in watches) and [OQ-GM2](#OQ-GM2) (whether anything outside the loop pages the owner).
+
+**Reads with:** [`scheduled-tasks.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md) (the clock, unbuilt), [`tillr-item-graphs.md`](tillr-item-graphs.md) (the graph engine, built), [`agent-runtime.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime.md) (the on-call role), [`handoff-items-and-steering-timer.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/handoff-items-and-steering-timer.md) (the protocol the monitor takes over).
 
 **Terms.** *Goal* (coined here) — a recurring item whose frozen criteria state a property the system should hold, not a change to make, and whose correct outcome on a check-in is a no-op that the judge can still call done. *Check-in* (coined here) — one run of a goal's graph: the mechanical collection, the decision, and the actions it files. *Goal monitor* (coined here) — the composition of a goal, the clock that makes it due, and its check-in graph. *Outside authority* (coined here) — the actor that can see the monitor is not running, because it is not the monitor. *Not due*, *due time*, *recurrence*, *drain*, *admission* and *rank* are [scheduled-tasks §2](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#2-the-item-fields)'s and are used here in exactly that sense. The role the repository already names is the **on-call** ([§20](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime.md#20-one-breakage-one-investigation)); the monitor is its scheduled half, and the breakage planner is its event-driven half. **Steering** is the manual act both replace, and the `active-steering` skill remains its protocol. **The board**, here and throughout, is the observatory's queue screen, never the retired work board; see [observatory-design.md §1.3](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-design.md#13-non-purposes).
 
@@ -46,7 +50,7 @@ Every clause of it, and where this document answers it:
 | "it just on some schedule" | `due_at` plus `recur_interval_ms`, decided by [scheduled-tasks](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#21-the-two-columns). The schedule is the item's, not the monitor's. [§4](#4-the-clock-is-a-due-time-not-a-cron-job) |
 | "inspects everything and decides if some action needs to be taken" | The check-in graph: mechanical collectors, one deciding agent, one filing command. [§5](#5-the-check-in-graph-and-its-two-keys) |
 | "this would be I guess a cron job in tiller" | Refused as a cron job, adopted as a due item. There is no cron parser, no timer and no daemon. [§4](#4-the-clock-is-a-due-time-not-a-cron-job), [§9](#9-what-is-refused) |
-| "spawning some graph that's predefined and pre-approved that is like the check-in" | `config/tillr/graphs/goal-checkin@v1.json`, versioned, digest-pinned, and approved by two independent keys. [§5](#5-the-check-in-graph-and-its-two-keys) |
+| "spawning some graph that's predefined and pre-approved that is like the check-in" | `config/tillr/workflows/goal-checkin@v1.json`, versioned, digest-pinned, and approved by two independent keys. [§5](#5-the-check-in-graph-and-its-two-keys) |
 | "it can have a spot for metadata that is like the goal" | The goal is the item's criteria; the graph's bounded `params` carry the *inspection plan*, not the goal. [§3](#3-the-goal-is-the-items-frozen-criteria) |
 | "accomplish this exact same act of steering … manually fixing drain bugs as they occur" | It replaces the scheduled *look*, not the drain-bug repair. The boundary is stated, and it is the owner's own line: "features that don't rise to that level". [§2](#2-what-this-composes-and-what-it-refuses-to-re-implement) |
 | "if the drains broken how does it fix itself? or if the cron job's broken, has it fixed itself?" | It cannot, and the design does not pretend otherwise. The four ways the monitor can be dead, who sees each, and what that actor may do. [§7](#7-the-bootstrap-problem-who-watches-the-monitor) |
@@ -62,14 +66,15 @@ check-in, and the goal is carried in a field the item already has.
 | Piece | What it already provides | What this design does not re-implement |
 | :--- | :--- | :--- |
 | The clock: `items.due_at`, `items.recur_interval_ms` ([scheduled-tasks §2.1](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#21-the-two-columns)) | A nullable due instant, a nullable interval, due-ness as a derived admission gate, the single-slot no-queue property, and re-arm at the completion transition | Any parser, timer, scheduler or daemon. The monitor's cadence *is* the interval |
-| The execution: pre-approved item graphs ([item graphs §3.1](tillr-item-graphs.md#31-named-versioned-graph-templates)) | Versioned JSON templates under `config/tillr/graphs/`, three node kinds over one argv boundary, static flattening, typed producer-bound artifacts, declarative `exit` | A per-goal workflow script, model-authored argv, a second sequencing runtime |
+| The execution: pre-approved item graphs ([item graphs §3.1](tillr-item-graphs.md#31-named-versioned-graph-templates)) | Versioned JSON templates under `config/tillr/workflows/`, three node kinds over one argv boundary, static flattening, typed producer-bound artifacts, declarative `exit` | A per-goal workflow script, model-authored argv, a second sequencing runtime |
 | The decision: one breakage, one investigation ([agent-runtime §20](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime.md#20-one-breakage-one-investigation)) | The durable record as memory, a stateless planner invoked per event, mechanical dedup by signature, and the rule that the planner writes records while the drain is the sole actor | A resident on-call, a second dispatcher, per-event bespoke scripts |
 | The protocol: the steering timer ([handoff items §4](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/handoff-items-and-steering-timer.md#4-the-steering-timer-keep-the-skill-build-the-mechanism-under-it)) | The measure→steer loop, the check-in shape, the drift signals, and the acknowledgement discipline, as the `active-steering` skill | Session-local turn injection, a timer that survives by being re-armed in a conversation |
-| `config/tillr/graphs/goal-checkin@v1.json` | — | This is the one thing that is new, and it is a data file, not code |
+| `config/tillr/workflows/goal-checkin@v1.json` | — | This is the one thing that is new, and it is a data file, not code |
 
 **The boundary the owner drew, kept.** The monitor is for goals whose failure is a *state*: board
-parity, a check that has been red for a week, a series that has drifted, a queue that has stopped
-landing, an item that has been held past its promise. It is **not** for a goal whose failure is the
+parity, a series that has drifted, a queue that has stopped landing, an item that has been held past
+its promise. A check that turns the trunk red is not among them: automatic revert answers it within
+minutes, with no schedule. It is **not** for a goal whose failure is the
 loop itself. If the drain is not running, or the schedule never fires, or the store will not open,
 the monitor is not slow — it is absent, and an absent monitor cannot report its own absence.
 [§7](#7-the-bootstrap-problem-who-watches-the-monitor) names what replaces it there, and that answer
@@ -146,36 +151,22 @@ Three consequences the monitor depends on, all inherited rather than re-derived:
   ordinary failure machinery retries it. A monitor that fails is a monitor whose next check-in is
   immediate, which is the property a monitor most needs.
 
-### 4.2 The invariant the tree does not satisfy
+### 4.2 The invariant, and what satisfies it
 
-[scheduled-tasks §6.1](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#61-the-invariant) records the invariant this whole design rests on, and then asserts it holds:
+[scheduled-tasks §6.1](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#61-the-invariant) records the invariant this whole design rests on:
 
 > **The drain must retain a periodic re-evaluation tick, or the poll wait must take the earliest
 > `due_at` as a wake deadline the way it already takes the run deadline.**
-> … The existing tick satisfies the invariant today, so V1 does nothing here.
 
-**It does not hold, and there is no tick.** Read at `cb3488a8`, the loop in `tools/tillr-drain/drain/loop.go`
-has exactly one timer — `waitFor`, a plain `time.NewTimer` — reached only from the finite-lease
-branch of `planNothing` and from the infrastructure backoff. Two commands say it, and both were run
-against `tools/tillr-drain/` at that commit: `rg 'fsnotify|inotify|Notify|wake|Wake'` returns only
-the `signal.NotifyContext` in `main.go`, and `rg 'time\.(NewTimer|After|Tick|Sleep)'` over the non-test
-files returns only `loop.go`'s `waitFor`. So the only thing that wakes the process is `SIGINT` or
-`SIGTERM`. The loop's actual shape is: tick, dispatch, tick — and on the first tick that dispatches
-nothing *and holds no live lease* it **stops**. The sentence "the drain also wakes early on store
-commits, and … [lateness is] bounded at roughly the two-second fallback tick" therefore describes a
-mechanism that is not in the tree, and the invariant is recorded as satisfied while being
-unsatisfied.
+It holds. The loop is a daemon by default: when nothing is dispatchable it waits and re-plans, and it reads the store again at least every 100 milliseconds, because the store has no change notification. The owner ruled that default on 2026-11-15 and it landed in `82e1ba7196` ([the roadmap block](../tillr/roadmap.md#the-loop-waits-when-nothing-is-dispatchable-and-exiting-is-the-option)). A due time that passes while the loop is idle is therefore noticed on the next poll, with nothing written to wake it.
 
-This is a fact about the code, not a redesign of the schedule. The design's own rule is the
-requirement, and [§8](#8-the-plannothing-stop-a-not-due-item-is-a-wait-not-a-stop) is the fix: the
-not-due case is where the missing wait belongs, because a due item is the first thing on the board
-whose readiness changes without anything being written.
+One mode does not satisfy it, and [§8](#8-a-not-due-item-when-the-loop-is-told-to-exit-once-drained) is the rule for it.
 
 ## 5. The check-in graph and its two keys
 
 ### 5.1 The template
 
-`config/tillr/graphs/goal-checkin@v1.json`, tracked and gated like every template, is the check-in.
+`config/tillr/workflows/goal-checkin@v1.json`, tracked and gated like every template, is the check-in.
 Its shape, in [item graphs §3.2](tillr-item-graphs.md#32-three-node-kinds-over-one-argv-boundary)'s node kinds:
 
 | Node | Kind | Access | Reads | Emits |
@@ -256,8 +247,8 @@ keys**, and a change takes effect only when both have signed.
 
 | Key | Who holds it | What it is | What it does alone |
 | :--- | :--- | :--- | :--- |
-| **Key 1 — the owner's approval** | The `owner` (or `whale`) seat, never a lane seat | A `graph.approved` record naming the template's `sha256`, written by `tillr graph approve goal-checkin@v1 --digest <sha>` | Loads nothing: with no gate-greened file behind the digest, the loader refuses an approved digest that matches no committed template |
-| **Key 2 — the gate's validation** | `just done` | The tracked-template check the gate runs: every template under `config/tillr/graphs/` parses, is acyclic, binds every port to a named producer, resolves every `command_ref`, and keeps every `write_scope` inside its item's fence — [item graphs](tillr-item-graphs.md#31-named-versioned-graph-templates)' `D-IG5` | Loads nothing: a committed template whose digest no `graph.approved` record names is refused at instantiation |
+| **Key 1 — the owner's approval** (new: nothing in the tree records an approval today) | The `owner` (or `whale`) seat, never a lane seat | A `graph.approved` record naming the template's `sha256`, written by `tillr graph approve goal-checkin@v1 --digest <sha>` | Loads nothing: with no gate-greened file behind the digest, the loader refuses an approved digest that matches no committed template |
+| **Key 2 — the gate's validation** | `just done` | The tracked-template check the gate runs: every template under `config/tillr/workflows/` parses, is acyclic, binds every port to a named producer, resolves every `command_ref`, and keeps every `write_scope` inside its item's fence — [item graphs](tillr-item-graphs.md#31-named-versioned-graph-templates)' `D-IG5` | Loads nothing: a committed template whose digest no `graph.approved` record names is refused at instantiation |
 
 The loader's rule, in one sentence: *instantiate a template only when its committed bytes hash to a
 digest the owner has approved, and refuse with the two digests named when they differ.* The owner's
@@ -295,8 +286,8 @@ the one agent best placed to widen its own authority by accident.
 1. **The check-in writes no file.** No node has `access: "write"` and the graph's exit is
    `no_commit` ([§5.1](#51-the-template)). A monitor that cannot write a file cannot edit its own template, its goal's
    criteria, or the code it is inspecting.
-2. **The item's fence excludes the graph directory.** A goal item's `allowed_paths` may not include
-   `config/tillr/graphs/`, and the drain refuses one that does — in the planner's `decide`, beside
+2. **The item's fence excludes the workflow directory.** A goal item's `allowed_paths` may not include
+   `config/tillr/workflows/`, and the drain refuses one that does — in the planner's `decide`, beside
    the `fenceAdmitsNothing` refusal that already answers `no-fence` for an item whose fence names
    nothing, as a named hold rather than a review note. This is the layer that survives a future
    change that gives the check-in a write node for some unrelated reason.
@@ -406,82 +397,23 @@ mechanical: same `--store`, same `--root`, or same drain process, and the condit
 because there is only one machine, or because the split was abandoned — the predicate is false again
 and the outside authority is owed, whatever the design says.
 
-## 8. The `planNothing` stop: a not-due item is a wait, not a stop
+## 8. A not-due item when the loop is told to exit once drained
 
-### 8.1 The defect
+By default the loop never stops for want of work ([§4.2](#42-the-invariant-and-what-satisfies-it)), so a goal that is not yet due simply waits in it. One mode is different. Started with `--exit-when-drained`, the loop stops and reports the queue drained when nothing is dispatchable and no run is in flight.
 
-`planNothing` (`tools/tillr-drain/drain/loop.go`, line 584 read at `cb3488a8`) is the tick's stop
-check. Its own comment states the rule it is implementing: *"`queue-drained` is reserved for the row
-with no live lease on any lane the loop offers"* — and it answers `StopQueueDrained` on
-`len(leases) == 0`, which `Run` reads as a terminal stop and returns.
+Once a due time exists, that report can be false. A scheduled item with nothing else in the queue is exactly that state — nothing dispatchable, no run — and it is also work that becomes ready with nothing written. A loop that exits there tells the operator the queue has nothing to run when it holds a check-in due tomorrow.
 
-Before a due time exists, a hold with no lease really could only mean the pile is empty or every
-item is held by a person, so the word was true. **Add a `not-due` gate and it becomes false**: a
-scheduled item with nothing else on the board is a hold with no lease, and the loop would answer
-"the pile has nothing the loop may run right now" and exit — at the first tick after it started.
-The monitor would be a cron job that never fires, and the stop line would tell the operator the
-opposite of the truth. That is the same defect the function's comment already records for the
-`no-lane` case: a lane a killed run still held reported `queue-drained`, and the word "then told the
-operator the opposite of the truth".
+**The rule: a not-due item is a wait, not a stop.** In that mode "drained" means no dispatch, no run in flight, **and no item due later**. With a not-due item present the loop waits as it does by default and re-plans; it needs no timer of its own, because the store poll already re-plans it.
 
-### 8.2 The fix
+Four consequences an implementer would otherwise have to guess:
 
-A not-due hold is **a wait, not a stop**, on exactly the ground a finite lease is a wait: the loop's
-own work is waiting on the clock, so the honest answer is to wait and re-plan. The change is four
-steps, all inside `planNothing` and its caller's contract:
+- **The decision carries the due instant.** The planner's decision for a not-due item states when it is due, as a field. A stop check that read it out of a formatted reason would be parsing prose.
+- **A not-due item is waiting, not blocked.** It writes no blocked event and adds nothing to a blocked count. It holds no worktree and does not delay a lower-ranked item ([scheduled-tasks §3.4](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#34-what-a-not-due-item-does-to-ordering-and-to-counts)).
+- **The operator's line names the wait**, with the due instant: `the pile holds 1 item(s) not due until 2026-11-21T09:00:00Z; waiting`.
+- **No test asserts elapsed time.** Every case drives the clock the loop is given, or writes a due time relative to the real one.
 
-1. **Carry the due instant on the decision.** `Decision` gains `DueAt` (unix-ms, `omitempty`), set
-   only by the `not-due` gate. A new reason (`not-due`) joins the closed vocabulary in
-   `tools/tillr-drain/drain/schema.go`. `DueAt` is the field `planNothing` needs; deriving it from a
-   formatted `Reason` string would make the stop check parse prose.
-2. **Partition the holds.** `notDue` holds carry `DueAt` in the future; every other hold is a hold
-   in the existing sense. `heldDetail` keeps naming both, so the operator's line is unchanged in
-   shape.
-3. **Wait instead of stopping.** With no leases and at least one `notDue` hold, wait until the
-   earliest `DueAt` — capped, per step 4 — and return `""`, which re-plans. `StopQueueDrained` is
-   then reserved for what it says: a tick with no dispatch, no lease, **and no item due later**.
-4. **Cap the wait, because there is no wake on a store commit.** The wait is
-   `min(earliest DueAt, now + MaxIdleWait)` with `MaxIdleWait` defaulting to **5 minutes**, set by
-   `--max-idle-wait <duration>`; `0` means no cap, which is the always-on service mode and is not
-   the default. The cap is not a throttle on the pile; it is the replacement for the store-commit
-   wake the tree does not have ([§4.2](#42-the-invariant-the-tree-does-not-satisfy)). Without it, a
-   goal due in seven days would delay a freshly filed item by seven days.
-
-Wait composition: when a tick is waiting on both a finite lease and a not-due item, the loop waits
-once, until `min(earliest lease expiry, earliest DueAt, now + MaxIdleWait)`, then re-plans. One wait,
-one detail line, one re-plan — no nested waits and no second timer.
-
-The detail line names the wait rather than a stop:
-`the pile holds 1 item(s) not due until 2026-11-21T09:00:00Z; waiting 5m0s and re-planning`.
-
-**Where the gate goes, in the tree that exists.** [scheduled-tasks §14](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#14-where-the-code-lives-by-symbol) locates the not-due gate in
-`admitItem` and `readyItems` inside `tools/board-cli/internal/board/`. That package is gone — the
-retired `tools/board-cli` is not in this tree — and the admission gates now live in the drain's own
-planner: `tools/tillr-drain/drain/plan.go`'s `planner.decide`, a first-match `switch` whose cases are
-the gates in order, with `Decision` and the reason vocabulary in `plan.go` and `schema.go`. The
-design's *intent* is unchanged and its gate order still applies; the symbol names do not, and the
-slice must place the gate in `decide` rather than in a package that no longer exists. The same
-reading is why [§8.2](#82-the-fix) names `planNothing` and `waitFor` rather than a poll loop: those
-are the symbols this tree has.
-
-### 8.3 What the tests pin
-
-No test asserts elapsed time; every case drives the injected clock the loop already takes
-(`LoopConfig.Now`) or writes a due time relative to the real one.
-
-| Case | Assertion |
-| :--- | :--- |
-| A not-due item is the only hold | The loop does **not** stop with `StopQueueDrained`; the detail names the due instant and a wait |
-| A not-due item plus a finite lease | One wait, until the earlier of the two; then a re-plan |
-| A not-due item plus a dispatchable item | The dispatch happens first; the not-due item consumes no lane and does not block a lower-ranked item ([scheduled-tasks §3.4](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#34-what-a-not-due-item-does-to-ordering-and-to-counts)) |
-| A `not-due` hold writes no event | No `drain.blocked` row, no blocked count — a not-due item is waiting, not blocked |
-| A true empty pile | Still `StopQueueDrained`, unchanged |
-| An operator stop during the wait | `StopOperatorStop`, and the wait ends at once — `waitFor` already answers this |
-| `MaxIdleWait` reached with the item still not due | One re-plan, then another wait; never a stop and never a spin |
-
-**Why this is not "premature" in the other direction.** The loop still stops on a fault, on an
-operator stop, on a lane held with no expiry, and on a genuinely empty pile. What it no longer does
-is call a scheduled item "nothing to do".
+> [!WARNING]
+> [scheduled-tasks §14](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#14-where-the-code-lives-by-symbol) places the not-due gate in `tools/board-cli/internal/board/`. That package is not in this tree. The admission gates live in the drain's own planner, and the gate belongs there, in the order that design gives.
 
 ## 9. What is refused
 
@@ -521,81 +453,67 @@ monitor is exactly the feature that tempts each one:
 
 ## 10. The three downstream slices
 
-Declared here and built later; this document touches no code and no seed file.
+Declared here and built later; none is in the queue, and this document touches no code.
 
 | Slice | Builds | Depends on | What it must not do |
 | :--- | :--- | :--- | :--- |
-| `item-tillr-scheduled-items` | [scheduled-tasks](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#9-staging-v1-v2-and-the-criterion)' V1 and V2: the two nullable columns and their migration, the `not-due` gate and its reason, `Decision.DueAt`, the `schedule-rearm` machine edge and the `schedule.rearm` event, the CLI flags, the view detail — **and the `planNothing` wait of [§8](#8-the-plannothing-stop-a-not-due-item-is-a-wait-not-a-stop)** | Nothing. This is the substrate and it lands first | Add a scheduler, a daemon or a cron parser; assert elapsed time in a test |
-| `item-tillr-goal-checkin-graph` | `config/tillr/graphs/goal-checkin@v1.json`; the `graph.approved` record and its seat-restricted `tillr graph approve`; the digest pin and its refusal; the read-only node staging the check-in needs; the four `command_ref` registrations; and the first goal item's definition | The clock slice above, and the graph engine from [item graphs](tillr-item-graphs.md#7-decisions-open-questions-and-amendments-owed) (which is in review). **Stage M1 ships without the engine**: the same check-in as one `single-worker@v1` agent run, which delivers the owner's request before the graph exists; stage M2 replaces it with the graph and is what this slice is done at | Widen the item's fence to the graph directory; give the check-in a write node; let the check-in approve a template |
-| `item-retire-steering-timer` | Deletes the steering-timer extension, its durable record and its reference document, and amends the `active-steering` skill to name the monitor as the scheduled half of the protocol and the owner as the outside authority. Four companion paths failed the retirement run when the fence omitted them and must be named in it: `tools/fork-check.py`, `tests/fork-check.test.py`, `docs/reference/reload-residue.md`, `tests/active-steering-skill.test.py` | M1 having run unattended long enough that the owner has stopped using the timer — the item states the observation, not a date | Remove the steering *protocol*, or the designer-seat steer, which the monitor does not replace ([§2](#2-what-this-composes-and-what-it-refuses-to-re-implement)) |
+| `item-tillr-scheduled-items` | [scheduled-tasks](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/scheduled-tasks.md#9-staging-v1-v2-and-the-criterion)' V1 and V2: the two nullable columns and their migration, the `not-due` gate and its reason, the re-arm at completion and its event, the CLI flags, the view detail, and the rule of [§8](#8-a-not-due-item-when-the-loop-is-told-to-exit-once-drained) | Nothing. This is the substrate and it lands first | Add a scheduler, a daemon or a cron parser; assert elapsed time in a test |
+| `item-tillr-goal-checkin-graph` | `config/tillr/workflows/goal-checkin@v1.json`; the `graph.approved` record and its seat-restricted `tillr graph approve`; the digest pin and its refusal; the four `command_ref` registrations; and the first goal item's definition | The clock slice above. The graph engine it runs on is built: every block of [item graphs](tillr-item-graphs.md#9-build-order) has landed | Widen the item's fence to the workflow directory; give the check-in a write node; let the check-in approve a template |
+| `item-retire-steering-timer` | Deletes the steering-timer extension, its durable record and its reference document, and amends the `active-steering` skill to name the monitor as the scheduled half of the protocol and the owner as the outside authority. Four companion paths failed the retirement run when the fence omitted them and must be named in it: `tools/fork-check.py`, `tests/fork-check.test.py`, `docs/reference/reload-residue.md`, `tests/active-steering-skill.test.py` | The check-in having run unattended long enough that the owner has stopped using the timer — the item states the observation, not a date | Remove the steering *protocol*, or the designer-seat steer, which the monitor does not replace ([§2](#2-what-this-composes-and-what-it-refuses-to-re-implement)) |
 
-**Order and why.** The clock is first because it is the only piece with no alternative and because
-`planNothing`'s fix is a latent defect the moment a due time exists. The check-in is second because
-its M1 stage is the smallest thing that answers the request. The retirement is last and is
-deliberately a separate, single-row decision: deleting a working mechanism is a cleanup that must be
-able to be declined on evidence, not a step in a build.
+**Order and why.** The clock is first because it is the only piece with no alternative. The check-in is second. The retirement is last and is deliberately a separate, single-row decision: deleting a working mechanism is a cleanup that must be able to be declined on evidence, not a step in a build.
 
-The M1/M2 split is the smallest-finished-unit rule applied honestly: M1 needs no
-graph engine, M2 is what makes the inspection mechanical and auditable, and a design that made M2
-the first shippable stage would be a design blocked behind three of another document's open
-questions for no gain the owner can use.
+## 11. Decision Ledger
 
-## 11. Decision ledger
+Every row is a **designer's decision** of 2026-11-14, made so that the design is complete. None is recorded as the owner's ruling, the owner may overturn any of them, and none is built. Three were amended on 2026-11-18 to match the tree, and say so.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
 | `D-GM1` | The monitor is a **composition**: a recurring item (the clock), a pre-approved graph (the execution), and [§20](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime.md#20-one-breakage-one-investigation)'s stateless planner (the decision). No new record kind, no scheduler, no second dispatcher | 2026-11-14 | [§2](#2-what-this-composes-and-what-it-refuses-to-re-implement) | — |
 | `D-GM2` | A **goal is the item's frozen criteria**. The "metadata spot" is `criteria[]`, the graph's `params`, `recur_interval_ms` and `due_at` — all existing fields | 2026-11-14 | [§3](#3-the-goal-is-the-items-frozen-criteria) | — |
 | `D-GM3` | The schedule is `due_at` + `recur_interval_ms`; a missed check-in is an overdue item; failure never advances the schedule | 2026-11-14 | [§4](#4-the-clock-is-a-due-time-not-a-cron-job) | — |
-| `D-GM4` | The check-in is `config/tillr/graphs/goal-checkin@v1.json`: mechanical read-only collectors, one read-only agent that decides, one read-only-as-to-the-worktree command that files. No write node; `requires_candidate: no_commit` | 2026-11-14 | [§5.1](#51-the-template) | — |
+| `D-GM4` | The check-in is `config/tillr/workflows/goal-checkin@v1.json` (amended 2026-11-18: workflows live in that directory): mechanical read-only collectors, one read-only agent that decides, one read-only-as-to-the-worktree command that files. No write node; `requires_candidate: no_commit` | 2026-11-14 | [§5.1](#51-the-template) | — |
 | `D-GM5` | Actions dedup on a **signature-derived item id**; the signature excludes anything that moves on its own; a repeat files nothing and records `already-open` | 2026-11-14 | [§5.3](#53-what-an-action-is-and-why-a-second-check-in-cannot-duplicate-it) | — |
 | `D-GM6` | The template is guarded by **two keys** — the owner's `graph.approved` digest and the gate's template validation of the committed file — and an in-flight item pins its digest | 2026-11-14 | [§5.4](#54-the-two-keys) | — |
 | `D-GM7` | The **anti-self-modification fence** has four layers: no write node, the graph directory excluded from the item fence by a named refusal, the approval record seat-restricted, the goal's own definition seat-restricted | 2026-11-14 | [§6](#6-the-anti-self-modification-fence) | — |
 | `D-GM8` | The monitor **cannot repair the drain, the schedule or itself**, and the design says so. The outside authority is the owner reading the board, with three bounded standing acts | 2026-11-14 | [§7](#7-the-bootstrap-problem-who-watches-the-monitor) | — |
 | `D-GM9` | A missed check-in is visible through four mechanisms, the first of which is that `due_at` cannot advance without a completion; a `no-op` with no cited evidence fails its criterion | 2026-11-14 | [§7.4](#74-how-a-missed-check-in-becomes-visible-rather-than-silent) | — |
 | `D-GM10` | The outside authority is **no longer needed** exactly when the monitor's store, root and drain are disjoint from the watched system's. Moved one level out, not removed | 2026-11-14 | [§7.5](#75-when-the-outside-authority-is-no-longer-needed) | — |
-| `D-GM11` | A `not-due` hold is a **wait, not a stop**: `Decision.DueAt`, a `not-due` reason, a `planNothing` wait capped at `MaxIdleWait` (5m default), and `StopQueueDrained` reserved for a truly empty pile | 2026-11-14 | [§8](#8-the-plannothing-stop-a-not-due-item-is-a-wait-not-a-stop) | — |
+| `D-GM11` | A not-due item is a **wait, not a stop**. Amended 2026-11-18: the loop became a daemon on 2026-11-15, so the rule binds only the mode that exits when the queue is drained, and the five-minute idle cap first proposed is not needed | 2026-11-14, amended 2026-11-18 | [§8](#8-a-not-due-item-when-the-loop-is-told-to-exit-once-drained) | — |
 | `D-GM12` | `max_actions` bounds one check-in to 3 filings plus one bound-hit item; a silently truncating bound is refused | 2026-11-14 | [§5.2](#52-parameters) | — |
-| `D-GM13` | The three slices land in the order clock, check-in, retirement; the retirement is separately declinable on evidence | 2026-11-14 | [§10](#10-the-three-downstream-slices) | — |
+| `D-GM13` | The three slices land in the order clock, check-in, retirement; the retirement is separately declinable on evidence. Amended 2026-11-18: the check-in has no interim one-agent stage, because the graph engine is built | 2026-11-14, amended 2026-11-18 | [§10](#10-the-three-downstream-slices) | — |
 
 ## 12. Open questions
 
-1. 💬 **OQ-GM1: Which goal does the first check-in carry, and how often does it run?**
+Both questions are blocked: the owner iceboxed this design on 2026-11-17, and neither is asked until it is picked up.
 
-   The mechanism is settled and the first goal is not, and only the owner can say which property he
-   actually wants inspected. Three candidates, each already described by an existing document: board
-   parity (the board's own states agree with the store and the view), a trunk check that has been red
-   for more than a week ([§20](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime.md#20-one-breakage-one-investigation) opens the breakage this would catch), or a patch series
-   that has drifted releases ([§21](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/agent-runtime.md#21-one-base-the-series-follows-the-newest-release-and-a-fix-is-a-roll-forward)). Cadence is the same question one step down: a daily
-   check is the natural first value, and a weekly one is the natural first value for the series.
+1. 🔒 **OQ-GM1: What should the first scheduled check-in watch, and how often?**
 
-   <!-- vantage: question id=OQ-GM1 leaning="Board parity, daily — it is the goal whose violation is otherwise discovered by a person reading the queue, and a daily cadence makes its own false negatives visible within a week." -->
+   You iceboxed the goal monitor until there is a use for it. A use is a property you check today by looking: you open the queue screen, or a fork's patch series, and see whether it has drifted. The monitor would take that look on a schedule and file an item when the property fails. Which property comes first is the part that is undecided.
 
-   _Leaning:_ Board parity, daily — it is the goal whose violation is otherwise discovered by a
-   person reading the queue, and a daily cadence makes its own false negatives visible within a
-   week.
+   - **A — A patch series that has fallen behind its upstream's releases**, checked weekly. Today you find out when a launch refuses a patch.
+   - **B — The queue screen agreeing with the store**, checked daily. Today you find out by reading the queue. Whether the two still disagree is not established.
+   - **C — Something else**, named when the need appears.
 
-   _Parked 2026-11-17:_ not asked while the design is iceboxed; it is ruled when the design is picked up.
+   <!-- vantage: question id=OQ-GM1 blocked-on="a-use-for-a-scheduled-check-in" -->
+
+   Blocked until you have a use for a scheduled check-in. That use is the answer, so no leaning is offered.
 
    **Answer:**
    > _(empty — fill in when decided)_
 
-2. 💬 **OQ-GM2: Does the outside authority get a host-level timer, or is the owner's own look the whole of it?**
+2. 🔒 **OQ-GM2: Should something outside the loop page you when a check-in is overdue?**
 
-   [§7.2](#72-the-outside-authority-named) makes a person the outside authority, which is honest and
-   costs one thing: somebody has to look. The alternative is a timer on the host — outside the jail,
-   outside the drain — whose only job is to notice that a due goal item has been ready for longer
-   than its interval and page the owner. That is a host change, so it is not this design's to make,
-   and it is the kind of mechanism that becomes a second scheduler if it is allowed to do more than
-   page.
+   The monitor cannot notice that it is not running. If the loop is down, a due check-in sits in the queue marked overdue, and you learn of it when you next open the queue screen. A timer on the host, outside the jail and the loop, could notice a check-in overdue by more than its interval and page you. It would be a change to the host, which only you can make.
 
-   <!-- vantage: question id=OQ-GM2 leaning="Not yet — a paging timer is worth building once a check-in has actually been missed, and building it now would make the monitor's liveness look solved before it has been observed once." -->
+   - **A — No timer.** You look at the queue, where an overdue check-in is visible.
+   - **B — A host timer that only pages.** One more thing to install and keep alive on each machine. If it ever does more than page, it is a second scheduler.
 
-   _Leaning:_ Not yet — a paging timer is worth building once a check-in has actually been missed,
-   and building it now would make the monitor's liveness look solved before it has been observed
-   once.
+   <!-- vantage: question id=OQ-GM2 blocked-on="a-check-in-has-run" leaning="No timer yet (A): a pager is worth building once a check-in has actually been missed, and building it first would make the monitor's liveness look solved before it has been observed once." -->
 
-   _Parked 2026-11-17:_ not asked while the design is iceboxed; it is ruled when the design is picked up.
+   _Leaning:_ No timer yet (A): a pager is worth building once a check-in has actually been missed, and building it first would make the monitor's liveness look solved before it has been observed once.
+
+   Blocked until the design is picked up and a check-in has run.
 
    **Answer:**
    > _(empty — fill in when decided)_
