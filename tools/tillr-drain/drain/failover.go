@@ -100,6 +100,10 @@ func ClassifyAttempt(rec run.Record, log string) AttemptClass {
 		case code == adapterWallExit:
 			// The adapter's own wall: the harness was killed, the tree is unjudged.
 			return AttemptUnjudged
+		case rec.EndCause != run.EndSettledIdle && rec.EndCause != run.EndRepeatingCall && (rec.EndCause == run.EndSignal || ((code == 143 || code == 130) && rec.EndingException == "" && !readableFooter(reportFooter(log)))):
+			// An external SIGTERM/SIGINT is a supervisor or operator interruption,
+			// not evidence about the backend or the item.
+			return AttemptInterrupted
 		case code == adapterRefusedExit:
 			// The adapter's preflight refusal: nothing ran, nothing was spent.
 			return AttemptInfrastructure
@@ -204,7 +208,7 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 	// Both facts are read by kind and joined here: a subquery per run row on events by
 	// object_id visits every worker record of that run, which cost about 2 seconds a plan
 	// on 2026-11-19 (TestNoPassQueryCorrelatesTheEventsWithEachRun).
-	judged, endings, err := readRunJudgmentsAndEndings(r)
+	judged, endings, finishPayloads, err := readRunJudgmentsAndEndings(r)
 	if err != nil {
 		return nil, readFailure(err)
 	}
@@ -217,8 +221,13 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 		isNode = `EXISTS (SELECT 1 FROM node_runs n WHERE n.run_id=runs.run_id)`
 	}
 	rows, err := r.Query(
-		`SELECT item_id, run_id, backend, state, exit_code, artifact_refs, event_seq, started_at, rowid, ` + isNode + `
+		`SELECT item_id, run_id, backend, state, exit_code, COALESCE(end_cause, ''), artifact_refs, event_seq, started_at, rowid, ` + isNode + `
 		   FROM runs WHERE item_id IS NOT NULL`)
+	if err != nil && strings.Contains(err.Error(), "no such column: end_cause") {
+		rows, err = r.Query(
+			`SELECT item_id, run_id, backend, state, exit_code, '', artifact_refs, event_seq, started_at, rowid, ` + isNode + `
+			   FROM runs WHERE item_id IS NOT NULL`)
+	}
 	if err != nil {
 		return nil, readFailure(err)
 	}
@@ -236,7 +245,7 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 	for rows.Next() {
 		var row priorRow
 		var node bool
-		if err := rows.Scan(&row.itemID, &row.rec.RunID, &row.rec.Backend, &row.rec.State, &row.exitCode, &row.artifactRefs, &row.order, &row.startedAt, &row.rowid, &node); err != nil {
+		if err := rows.Scan(&row.itemID, &row.rec.RunID, &row.rec.Backend, &row.rec.State, &row.exitCode, &row.rec.EndCause, &row.artifactRefs, &row.order, &row.startedAt, &row.rowid, &node); err != nil {
 			return nil, readFailure(err)
 		}
 		// Old stores have no workflow tables. Ordinary judges stay excluded there;
@@ -278,6 +287,18 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 		}
 		class := classes[rec.RunID]
 		if class == "" {
+			if payload := finishPayloads[rec.RunID]; len(payload) > 0 {
+				var terminal run.Record
+				if err := json.Unmarshal(payload, &terminal); err != nil {
+					return nil, readFailure(err)
+				}
+				if rec.EndCause == "" {
+					rec.EndCause = terminal.EndCause
+				}
+				if rec.EndingException == "" {
+					rec.EndingException = terminal.EndingException
+				}
+			}
 			class = ClassifyAttempt(rec, logTail(refs))
 		}
 		if interrupted[rec.RunID] {
@@ -299,13 +320,13 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 }
 
 // readRunJudgmentsAndEndings answers the runs a judge request names and, for each run that
-// ended, the seq of its newest ending, read by kind.
-func readRunJudgmentsAndEndings(r *store.Reader) (map[string]bool, map[string]int64, error) {
+// ended, the seq and payload of its newest ending, read by kind.
+func readRunJudgmentsAndEndings(r *store.Reader) (map[string]bool, map[string]int64, map[string][]byte, error) {
 	events, err := r.EventsOfKind(0, judgeRequestKind, run.FinishKind)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	judged, endings := map[string]bool{}, map[string]int64{}
+	judged, endings, payloads := map[string]bool{}, map[string]int64{}, map[string][]byte{}
 	for _, e := range events {
 		if e.ObjectID == nil {
 			continue
@@ -316,10 +337,11 @@ func readRunJudgmentsAndEndings(r *store.Reader) (map[string]bool, map[string]in
 		case run.FinishKind:
 			if e.Seq > endings[*e.ObjectID] {
 				endings[*e.ObjectID] = e.Seq
+				payloads[*e.ObjectID] = e.Payload
 			}
 		}
 	}
-	return judged, endings, nil
+	return judged, endings, payloads, nil
 }
 
 // logTail answers the tail of the pinned extracted report when one exists, otherwise

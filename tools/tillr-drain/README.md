@@ -1307,7 +1307,10 @@ is a Linux read lease, granted only on a file nobody has open for writing, so it
 no timeout. A proven-gone loop's run with no writer is reclaimed like a local one on the
 next pass. A claim without that evidence, including any whose files cannot be judged,
 remains protected. A normal offline finish is still judged;
-a worker signal without evidence of supervisor interruption is not exempted.
+an external `SIGTERM`/`SIGINT` (`end_cause == "signal"`, or exit 130/143 without an
+ending exception or readable `RESULT:` footer) classifies as `interrupted` on its own,
+while a dead owner does not mark an already-terminal run orphaned or exempt a non-signal
+crash from `infrastructure`.
 
 ### A worker ends with its commit or a named obstacle
 
@@ -1434,7 +1437,13 @@ not a dispatch count.
 An infrastructure failure means the harness could not produce a judgable answer:
 it failed to start, refused before running, or died without a report. The latest
 terminal run on a backend closes that backend only in this class. A later run
-ending in any other class reopens it. Three infrastructure endings are answered
+ending in any other non-interrupted class reopens it. An external `SIGTERM` or
+`SIGINT` (`end_cause == "signal"`, or exit 130/143 without an ending exception or
+readable `RESULT:` footer) is recorded as `interrupted` and leaves backend
+availability unchanged (neither closing an open backend nor reopening a closed
+backend); single-run, sequential workflow, parallel read-only workflow, agent judge,
+and workflow evaluator runs restart on the same backend without counting against
+infrastructure failures or failing over. Three infrastructure endings are answered
 by another rule and do not close a backend: a run the loop interrupted itself
 (a stop, an orphaned run or a stale base), a refusal with a stated reset time
 (the quota window closes and reopens that backend), and a resumed session that

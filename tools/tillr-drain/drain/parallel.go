@@ -299,6 +299,9 @@ func (l *Loop) settleParallel(ctx context.Context, work *pendingWork, result *Lo
 	if l.nonLanding {
 		return l.settleHookGroup(ctx, work, result, timing)
 	}
+	if err := RecordBackendOutcomes(ctx, l.cfg.Store); err != nil {
+		return laneOutcome{err: err}
+	}
 	d := work.Decision
 	if stagedBase := l.laneBase(d.LaneID); stagedBase != "" {
 		copy := *work
@@ -376,7 +379,7 @@ func (l *Loop) settleParallel(ctx context.Context, work *pendingWork, result *Lo
 	if head != d.NodeBaseSHA || strings.TrimSpace(dirty) != "" {
 		return laneOutcome{err: l.refuseParallelBoundary(ctx, d, work.BaseSHA, head, result, false)}
 	}
-	failed, retry := false, false
+	failed, retry, infraRetry := false, false, false
 	for i, node := range nodes {
 		stage := node.Workflow.Stages[node.NodeIndex]
 		rec := recs[i]
@@ -415,6 +418,17 @@ func (l *Loop) settleParallel(ctx context.Context, work *pendingWork, result *Lo
 		} else {
 			class := ClassifyAttempt(rec, log)
 			switch {
+			case class == AttemptInterrupted:
+				updated, ok, e := l.parallelInterrupted(node, rec)
+				if e != nil {
+					return laneOutcome{err: e}
+				}
+				if ok {
+					nodes[i] = updated
+					retry = true
+					continue
+				}
+				outcome = "fault"
 			case class == AttemptInfrastructure || !readableFooter(reportFooter(log)):
 				// No footer, or one naming no ending, is no answer: this reader alone runs
 				// again and its finished siblings are kept.
@@ -425,6 +439,7 @@ func (l *Loop) settleParallel(ctx context.Context, work *pendingWork, result *Lo
 				if ok {
 					nodes[i] = updated
 					retry = true
+					infraRetry = true
 					continue
 				}
 				outcome = "fault"
@@ -485,7 +500,11 @@ func (l *Loop) settleParallel(ctx context.Context, work *pendingWork, result *Lo
 		return laneOutcome{err: l.markExamined(ctx, d)}
 	}
 	if retry {
-		return laneOutcome{err: l.advanceParallelRetry(ctx, work, nodes)}
+		reason := "workflow-node-interrupted"
+		if infraRetry {
+			reason = "workflow-node-failover"
+		}
+		return laneOutcome{err: l.advanceParallelRetry(ctx, work, nodes, reason)}
 	}
 	next, err := l.nextWorkflowNode(ctx, d)
 	if err != nil {

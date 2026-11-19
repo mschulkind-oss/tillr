@@ -403,6 +403,7 @@ func terminalRecord(r *store.Reader, id string) (*run.Record, error) {
 			return nil, err
 		}
 		status.Run.Resumed = terminal.Resumed
+		status.Run.EndingException = terminal.EndingException
 	} else if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}

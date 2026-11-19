@@ -186,12 +186,48 @@ func TestDeadOwnerDoesNotExemptAnIndependentlySignaledTerminalRun(t *testing.T) 
 	s := openFixture(t, f.storePath)
 	defer s.Close()
 	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		interrupted, _, err := readInterruptedRuns(r)
+		if err != nil {
+			return err
+		}
+		if interrupted[p.decision.RunRequest.RunID] {
+			t.Fatal("dead supervisor was treated as proof it orphaned the terminal EndSignal run")
+		}
 		priors, err := readPriorRuns(r)
 		if err != nil {
 			return err
 		}
-		if priors["item-a"][0].Class == AttemptInterrupted {
-			t.Fatal("dead supervisor was treated as proof it signaled the run")
+		if priors["item-a"][0].Class != AttemptInterrupted {
+			t.Fatalf("EndSignal class = %q, want %q", priors["item-a"][0].Class, AttemptInterrupted)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	f2, l2 := passFixture(t, "item-a")
+	p2 := mustPlan(t, l2)[0]
+	deadOwnerClaim(t, f2, l2, p2)
+	fixtureWrite(t, f2, func(tx *store.Tx) error {
+		return applyTerminal(tx, run.Record{RunID: p2.decision.RunRequest.RunID, ItemID: "item-a", LaneID: p2.decision.LaneID, Backend: "fixture", State: run.StateExited, ExitCode: countPtr(-1), StartedAt: l2.cfg.Now().Format("2006-01-02T15:04:05Z07:00"), FinishedAt: l2.cfg.Now().Format("2006-01-02T15:04:05Z07:00"), ArtifactRefs: []run.ArtifactRef{}})
+	})
+	_ = mustPlan(t, f2.loop(t, &recordingSteps{}, &itemContentStager{}))
+	s2 := openFixture(t, f2.storePath)
+	defer s2.Close()
+	if err := s2.ReadTx(context.Background(), func(r *store.Reader) error {
+		interrupted, _, err := readInterruptedRuns(r)
+		if err != nil {
+			return err
+		}
+		if interrupted[p2.decision.RunRequest.RunID] {
+			t.Fatal("dead supervisor was treated as proof it orphaned the terminal crashed run")
+		}
+		priors, err := readPriorRuns(r)
+		if err != nil {
+			return err
+		}
+		if priors["item-a"][0].Class != AttemptInfrastructure {
+			t.Fatalf("crashed run class = %q, want %q", priors["item-a"][0].Class, AttemptInfrastructure)
 		}
 		return nil
 	}); err != nil {

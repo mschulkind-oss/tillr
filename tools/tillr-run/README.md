@@ -50,6 +50,14 @@ skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribut
   with `--` and then those arguments, in order, and a row with none gets no `--`. Only the
   claude adapter takes them; the others refuse the `--` before anything runs
   ([the claude backend design](../../docs/design/tillr-claude-backend.md#3-controlling-what-a-seat-may-use)).
+- **Only external `SIGTERM` and `SIGINT` record `end_cause: signal`.** When a run has not
+  already settled, hit a repeating-call limit, timed out, or recorded an
+  `ending_exception`, `exec` records `end_cause: signal` for a direct `SIGTERM` or `SIGINT`,
+  a canceled run context (`tillr-run`'s own signal handler killing the process group), or
+  an adapter-forwarded exit code `130` (`SIGINT`) or `143` (`SIGTERM`). Crash signals
+  (`SIGSEGV`, `SIGABRT`, `SIGBUS`, `SIGILL`, or unrequested `SIGKILL` with an uncanceled
+  context) and all other non-zero exits keep `end_cause: normal-exit` so broken backends
+  still close.
 
 ## Standalone invocation
 

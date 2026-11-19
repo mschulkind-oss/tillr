@@ -37,11 +37,30 @@ func (l *Loop) parallelFailover(ctx context.Context, node Decision, rec run.Reco
 	return node, true, nil
 }
 
-func (l *Loop) advanceParallelRetry(ctx context.Context, work *pendingWork, nodes []Decision) error {
+func (l *Loop) parallelInterrupted(node Decision, rec run.Record) (Decision, bool, error) {
+	policy := l.currentPolicy()
+	if policy == nil {
+		return node, false, Usagef("workflow seat %s has no backend route", node.Seat)
+	}
+	request := policy.request(node.ItemID, node.LaneID, node.RunRequest.RunID+"-interrupted", rec.Backend)
+	if request == nil {
+		return node, false, Usagef("workflow seat %s has no backend %s", node.Seat, rec.Backend)
+	}
+	request.ReadOnlyGroup = node.RunRequest.ReadOnlyGroup
+	request.NodeID = node.Workflow.Stages[node.NodeIndex].ID
+	request.WorkingDir = node.RunRequest.WorkingDir
+	request.TimeoutMS = node.Workflow.Stages[node.NodeIndex].TimeoutMS
+	request.CorrelationID = node.RunRequest.CorrelationID
+	node.RunRequest = request
+	node.WorkflowRestart = true
+	return node, true, nil
+}
+
+func (l *Loop) advanceParallelRetry(ctx context.Context, work *pendingWork, nodes []Decision, reason string) error {
 	d := nodes[0]
 	d.Parallel = nodes[1:]
 	d.WorkflowRestart = true
-	d.Action, d.Reason = ActionDispatch, "workflow-node-failover"
+	d.Action, d.Reason = ActionDispatch, reason
 	next := pendingWork{Decision: d, BaseSHA: work.BaseSHA, Ready: true, ParentRunID: work.Decision.RunRequest.RunID, LoopID: work.LoopID}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {

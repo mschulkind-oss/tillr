@@ -461,7 +461,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		if err := os.WriteFile(filepath.Join(durableDir, "pause-notice"), []byte(notice), 0600); err != nil {
 			return record.Envelope{}, Internalf("writing restart notice: %v", err)
 		}
-	case runCtx.Err() == context.DeadlineExceeded:
+	case errors.Is(runCtx.Err(), context.DeadlineExceeded):
 		// A timed-out run is a completed run: the utility ran and observed the bound.
 		payload.State = StateTimedOut
 		payload.EndCause = EndTimeLimit
@@ -485,13 +485,17 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		if !errors.As(waitErr, &exitErr) {
 			return record.Envelope{}, Internalf("waiting for %q: %v", req.Command[0], waitErr)
 		}
-		payload.EndCause = EndNormalExit
-		if status, ok := exitErr.Sys().(syscall.WaitStatus); ok && status.Signaled() {
-			payload.EndCause = EndSignal
-		}
 		code := exitErr.ExitCode()
 		payload.State = StateExited
 		payload.ExitCode = &code
+		payload.EndCause = EndNormalExit
+		status, hasStatus := exitErr.Sys().(syscall.WaitStatus)
+		signaled := hasStatus && status.Signaled()
+		if payload.EndingException == "" && (signaled && (status.Signal() == syscall.SIGTERM || status.Signal() == syscall.SIGINT) ||
+			errors.Is(runCtx.Err(), context.Canceled) ||
+			(!signaled && (code == 128+int(syscall.SIGTERM) || code == 128+int(syscall.SIGINT)))) {
+			payload.EndCause = EndSignal
+		}
 	default:
 		code := 0
 		payload.EndCause = EndNormalExit
