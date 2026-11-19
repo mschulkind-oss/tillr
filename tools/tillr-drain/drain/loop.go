@@ -1244,6 +1244,10 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			TimeoutMS: request.TimeoutMS, BlockConflict: decision.BlockConflict,
 			Returned: decision.Returned,
 		}
+		if decision.DesignContinuationFrom != "" {
+			spec.SessionID = decision.DesignerSessionID
+			spec.DesignContinuationHead = decision.DesignContinuationHead
+		}
 		if err := l.stageWorkerSession(&decision, &spec); err != nil {
 			return nil, err
 		}
@@ -1797,7 +1801,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			}
 		}
 	}
-	if (request.Backend != "command" && (footer == "blocked" || (contract && footer == "trunk-broken")) && (!contract || endingNote == "")) || (decision.BlockConflict != nil && decision.BlockConflict.TriageVersion != "" && l.headOf(ctx, lane) == l.laneBase(lane)) || (decision.BlockConflict != nil && decision.BlockConflict.TriageVersion == "" && designNextActor(log) != "" && l.headOf(ctx, lane) == l.settleBase(lane, mainSHA)) {
+	if (request.Backend != "command" && (footer == "blocked" || (contract && footer == "trunk-broken")) && (!contract || endingNote == "")) || (decision.BlockConflict != nil && decision.BlockConflict.TriageVersion != "" && l.headOf(ctx, lane) == l.laneBase(lane)) || (decision.BlockConflict != nil && decision.BlockConflict.TriageVersion == "" && designNextActor(log) != "" && (l.headOf(ctx, lane) == l.settleBase(lane, mainSHA) || l.headOf(ctx, lane) == decision.DesignContinuationHead)) {
 		// A report from a run staged on a base that lacked what made the item ready is
 		// about the staging, which neither the design seat nor the owner can change.
 		if stale, err := l.staleBlockedReport(ctx, decision); err != nil {
@@ -1838,7 +1842,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	if err != nil {
 		return laneOutcome{err: err}
 	}
-	noNewCommit := headSHA == baseSHA
+	noNewCommit := headSHA == baseSHA || headSHA == decision.DesignContinuationHead
 	if decision.Returned != nil && decision.Returned.WorkerSession != nil {
 		previous := decision.Returned.WorkerSession.HeadSHA
 		noNewCommit = noNewCommit || headSHA == previous
@@ -2117,6 +2121,17 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		// lane, and only the examination's done record is missing. Replay that ending: no
 		// second gate, and no comparison of the recut lane with the candidate it no longer
 		// holds. The caller records the examination done.
+		if concluded && candidate.BlockConflict != nil {
+			if err := l.readStore(ctx, func(r *store.Reader) error {
+				_, refusal, err := designOutcome(r, candidate.RunID, "", "")
+				if refusal.DesignHeadSHA != "" {
+					candidate.BaseSHA, candidate.HeadSHA = refusal.DesignBaseSHA, refusal.DesignHeadSHA
+				}
+				return err
+			}); err != nil {
+				return "", false, err
+			}
+		}
 		if concluded {
 			l.reportf("loop: %s run %s already ended in a refusal; its examination concludes without a second gate\n", candidate.ItemID, candidate.RunID)
 		}

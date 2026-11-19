@@ -341,8 +341,8 @@ evidence equal an earlier ending of the item goes to the design seat to be diagn
 records (`repeatedEnding` in `tools/tillr-drain/drain/returned.go`, table-tested in
 `returned_test.go`). A squash conflict is one of those endings: the one conflict-fix run and the
 `conflict-exhausted` hold it led to are gone, and a conflict repeats only when its conflicting paths
-and normalized hunks equal an earlier one's (`conflictEndingKey`). The design seat's own endings are compared the same way: a design ending that
-repeats an earlier one goes to the owner as an objection the loop raises, with a question written
+and normalized hunks equal an earlier one's (`conflictEndingKey`). Except for gate refusals, which always return to the same designer session when available, the
+design seat's own endings are compared the same way: a design ending that repeats an earlier one goes to the owner as an objection the loop raises, with a question written
 from both records (`designRepeatOf` in `tools/tillr-drain/drain/design_repeat.go`). The same ruling removed re-admission on a changed input hash, so a "named
 change" in the sense above is now an event that names the item: an operator's retry, a design answer,
 or the recovery of a killed run. What is not enforced: the fleet trip, the tier-0 probes and the

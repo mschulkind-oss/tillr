@@ -264,6 +264,8 @@ type StageSpec struct {
 	// there and reading it back would hand one item's transcript to the next (sessionIDFor).
 	// Only a continuation of a run names an id, and a resume is the caller that does.
 	SessionID string
+	// The restored checkout head is distinct from BaseSHA, which still bounds the fence.
+	DesignContinuationHead string
 	// Conflict names the squash conflict a conflict-fix run answers. It is nil for an
 	// ordinary dispatch; a non-nil value is what makes the brief state the conflicting
 	// paths and the three-way markers rather than the item's ordinary task alone.
@@ -500,6 +502,11 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	}
 	if !spec.Continue {
 		if err := s.ensureWorktree(ctx, spec, laneDir, worktree); err != nil {
+			return err
+		}
+	}
+	if spec.DesignContinuationHead != "" {
+		if _, err := s.git(ctx, worktree, "reset", "--hard", spec.DesignContinuationHead); err != nil {
 			return err
 		}
 	}

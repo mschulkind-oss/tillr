@@ -2,6 +2,7 @@ package drain
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -135,7 +136,7 @@ func settleDesign(t *testing.T, l *Loop) {
 func raisedForDesign(t *testing.T, f refusalLoopFixture, l *Loop, design, want string) {
 	t.Helper()
 	c, _ := conflictOf(t, f, "item-a")
-	if c.Status != "raised" || c.WaitingOn != "design" || c.DesignRunID != "" || !strings.Contains(c.Text, design) || !strings.Contains(c.Text, want) {
+	if c.Status != "raised" || c.WaitingOn != "design" || !strings.Contains(c.Text, design) || !strings.Contains(c.Text, want) {
 		t.Fatalf("the conflict was not raised for the design seat naming %s and %q: %+v", design, want, c)
 	}
 	if d := decisionFor(t, l, "item-a").decision; d.Action != ActionDispatch || d.BlockConflict == nil {
@@ -169,15 +170,57 @@ func TestAnInterruptedDesignRunRaisesItsConflictAgain(t *testing.T) {
 	raisedForDesign(t, f, l, design, "interrupted")
 }
 
-// A run whose lease was reclaimed after its loop died, as a jail relaunch leaves it, is
-// recorded timed-out although no time limit ended it. It is a killed run: it is run
-// again, and nothing is counted.
-func TestAKilledDesignRunIsRunAgain(t *testing.T) {
-	f, l := designConflictFixture(t)
-	for i := 0; i < 2; i++ {
-		design := endDesignRun(t, f, l, "reclaimed")
-		settleDesign(t, l)
-		raisedForDesign(t, f, l, design, "no attempt")
+func TestKilledDesignRunUsesRecordedSessionOrExplainsFreshSession(t *testing.T) {
+	for _, available := range []bool{true, false} {
+		name := "missing transcript"
+		if available {
+			name = "retained transcript"
+		}
+		t.Run(name, func(t *testing.T) {
+			f, l := designConflictFixture(t)
+			origin := endDesignRun(t, f, l, "reclaimed")
+			session, err := NewSessionID()
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := RunDir(f.root, origin)
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				t.Fatal(err)
+			}
+			writeForkFile(t, filepath.Join(dir, SessionIDFile), session+"\n")
+			transcript := filepath.Join(dir, "transcript.jsonl")
+			if available {
+				writeForkFile(t, transcript, "{}\n")
+			}
+			fixtureWrite(t, f, func(tx *store.Tx) error {
+				refs, err := json.Marshal([]run.ArtifactRef{{Kind: "transcript", Ref: transcript}})
+				if err != nil {
+					return err
+				}
+				_, err = tx.Exec("UPDATE runs SET artifact_refs=? WHERE run_id=?", string(refs), origin)
+				return err
+			})
+			settleDesign(t, l)
+			p := decisionFor(t, l, "item-a")
+			ok, w, err := l.applyPlan(context.Background(), p, runGit(t, f.root, "rev-parse", TrunkRef), l.cfg.Now())
+			if err != nil || !ok {
+				t.Fatalf("claim: %v %v", ok, err)
+			}
+			got := w.Decision
+			if got.RunRequest.SessionTurn != available {
+				t.Fatalf("session turn=%v want %v", got.RunRequest.SessionTurn, available)
+			}
+			want := "starting a fresh design session"
+			if available {
+				want = "Continuing the recorded designer session"
+				if got.DesignerSessionID != session {
+					t.Fatal("wrong session")
+				}
+			}
+			if !strings.Contains(got.BlockConflict.Text, want) {
+				t.Fatalf("missing %q: %s", want, got.BlockConflict.Text)
+			}
+		})
 	}
 }
 

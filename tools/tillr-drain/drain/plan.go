@@ -109,6 +109,10 @@ type Decision struct {
 	ConflictID        string         `json:"conflict_id,omitempty"`
 	BlockConflict     *item.Conflict `json:"block_conflict,omitempty"`
 	Inputs            *RunInputs     `json:"inputs,omitempty"`
+
+	DesignContinuationFrom string `json:"design_continuation_from,omitempty"`
+	DesignContinuationHead string `json:"design_continuation_head,omitempty"`
+
 	// DispatchBuild is the loop build that planned a dispatch whose decision carries no
 	// Inputs (a design-seat or owner-question dispatch). The dispatch fact records it as
 	// its TillrBuild, so build migration knows the run's build (migrateBuildRuns).
@@ -385,7 +389,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 	if err := checkSeats(policy, seatItems); err != nil {
 		return nil, err
 	}
-	works, err := readPending(r)
+	works, designHistory, err := readPendingHistory(r)
 	if err != nil {
 		return nil, readFailure(err)
 	}
@@ -447,7 +451,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 		priors: attemptPriors, retries: retries, classes: classes, latest: latest, questions: questions,
 		trunkWaiters: trunkWaiters, defectWaiters: defectWaiters, escalated: escalated,
 		at: at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items, def), unproved: unproved,
-		inputs: inputs, inputDecisions: inputDecisions, works: works, attempts: map[string]int{},
+		designHistory: designHistory, inputs: inputs, inputDecisions: inputDecisions, works: works, attempts: map[string]int{},
 	}
 	p.workerLanes = map[string]string{}
 	for _, row := range items {
@@ -464,6 +468,14 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			if err == nil && id != "" && id == e.WorkerSession.SessionID {
 				p.workerLanes[e.WorkerSession.LaneID] = row.ItemID
 			}
+		}
+	}
+	for _, row := range items {
+		if row.State != p.rules().Blocked {
+			continue
+		}
+		if origin := designContinuationWork(conflicts[row.ItemID], designHistory[conflicts[row.ItemID].DesignRunID]); origin != nil {
+			p.workerLanes[origin.Decision.LaneID] = row.ItemID
 		}
 	}
 	var hasNodes bool
@@ -701,6 +713,7 @@ type planner struct {
 	inputs         map[string]*RunInputs
 	inputDecisions map[string]Decision
 	works          map[string]*pendingWork
+	designHistory  map[string]*pendingWork
 	tick           Pass
 	policy         *Policy
 	held           map[string]bool

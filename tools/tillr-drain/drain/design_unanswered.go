@@ -5,11 +5,14 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -28,12 +31,10 @@ import (
 // they stand. Nothing here is counted and nothing is compared with what changed since the
 // dispatch: an item reaches the owner only by an objection naming the owner.
 //
-//   - A gate refusal of the design run's commit is no attempt. The refusal goes back to
-//     the design seat to fix, as many times as it takes. (The ruling sends it to the same
-//     designer session; until that is built the design seat is dispatched again with the
-//     refusal and the pinned commit in the conflict's text.)
-//   - An interrupted or killed design run (a loop stop, a lease reclaimed after its loop
-//     died, a signal) is no attempt: the design seat is dispatched again.
+//   - A gate refusal returns its output and pinned commit to the recorded designer
+//     session, with no limit and no escalation for identical gate output.
+//   - An interrupted or killed design run continues its recorded session when available;
+//     otherwise the next claim explains why it starts a fresh session.
 //   - A design run that committed nothing and named no next actor neither answered nor
 //     objected: the design seat is dispatched again, told the contract.
 //   - Any other refusal (the fence, the lander) goes back to the design seat the same way.
@@ -107,6 +108,7 @@ type designFinding struct {
 	// cause and key are the ending's (designEndingKey); repeatOf names the earlier design
 	// run whose ending this one repeats, when it does.
 	cause, key, repeatOf string
+	feedback             string
 }
 
 // settleUnansweredDesignRuns applies the rule above to every blocked item whose conflict
@@ -169,7 +171,7 @@ func (l *Loop) settleUnansweredDesignRuns(ctx context.Context) error {
 					continue
 				}
 				f := designFinding{conflict: c, runID: c.DesignRunID, base: w.BaseSHA}
-				if w.Orphaned {
+				if w.Orphaned || rec.EndCause == run.EndSignal || rec.EndCause == run.EndLeaseReclaimed || rec.EndCause == run.EndRestart {
 					f.interrupted = true
 					found = append(found, f)
 					continue
@@ -190,7 +192,11 @@ func (l *Loop) settleUnansweredDesignRuns(ctx context.Context) error {
 					facts.Block = l.designBlockRevision(ctx, c)
 				}
 				f.cause, f.key = designEndingKey(facts)
-				f.repeatOf, _ = designRepeatOf(itemDesignMarks(marks, id), designUnanswered{RunID: c.DesignRunID, Cause: f.cause, Key: f.key})
+				if refusal.Step == RefusalGate {
+					f.feedback = designGateFeedback(RunDir(l.cfg.Root, f.runID), f.runID, refusal)
+				} else {
+					f.repeatOf, _ = designRepeatOf(itemDesignMarks(marks, id), designUnanswered{RunID: f.runID, Cause: f.cause, Key: f.key})
+				}
 				if pin, err := l.git(ctx, l.cfg.Root, "rev-parse", "--verify", "--quiet", "refs/tillr/runs/"+c.DesignRunID+"^{commit}"); err == nil {
 					if pin = strings.TrimSpace(pin); pin != "" && pin != f.base {
 						f.head = pin
@@ -238,7 +244,12 @@ func (l *Loop) settleUnansweredDesignRuns(ctx context.Context) error {
 			} else {
 				c.Text += "\n\n" + designReraiseText(f)
 				c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
-				l.reportf("loop: %s conflict %s is raised again for the design seat: design run %s %s\n", c.ItemID, c.ConflictID, f.runID, designEnding(f))
+				if c.TriageVersion == "" && !f.uncounted && (f.interrupted || f.outcome == "refused at "+RefusalGate) {
+					// Keep the originating run until the next claim. Its immutable
+					// staging files identify the session even after lane reuse.
+					c.DesignRunID = f.runID
+				}
+				l.reportf("loop: %s conflict %s returns to the design seat: design run %s %s\n", c.ItemID, c.ConflictID, f.runID, designEnding(f))
 			}
 			if err := item.RecordConflict(tx, c, at); err != nil {
 				return err
@@ -273,7 +284,7 @@ func designReraiseText(f designFinding) string {
 	}
 	switch {
 	case f.interrupted:
-		return "Design run " + f.runID + " was interrupted by a loop stop before it answered. An interrupted run is no attempt, so the design seat is dispatched again."
+		return "Design run " + f.runID + " was interrupted before it answered. Continue its recorded session if available."
 	case f.uncounted:
 		return "Design run " + f.runID + " ended without answering (" + f.outcome + "), and a count of such runs sent this conflict to the owner. The owner ruled on 2026-11-17 that a design run's outcome is never counted toward the owner, so the conflict is raised again for the design seat."
 	case f.outcome == "refused at "+RefusalGate:
@@ -281,7 +292,7 @@ func designReraiseText(f designFinding) string {
 		if len(f.checks) > 0 {
 			checks = " (failing checks: " + strings.Join(f.checks, ", ") + ")"
 		}
-		return "Design run " + f.runID + " was refused at the gate" + checks + "." + pinned + " A gate refusal is no attempt: fix what the gate refused and commit the answer again."
+		return "Design run " + f.runID + " was refused at the gate" + checks + "." + pinned + " Fix what the gate refused and commit the answer again." + f.feedback
 	case f.outcome == "refused at "+RefusalNoOp:
 		return "Design run " + f.runID + " committed nothing and named no next actor. A design run either commits its answer, or objects: its report then carries a line `" + DesignNextActorField + ": owner` (a ruling only the owner can make) or `" + DesignNextActorField + ": build` (the block stands as written and the worker builds it)."
 	case strings.HasPrefix(f.outcome, "refused at "):
@@ -355,4 +366,28 @@ func (l *Loop) designFailingChecks(runID, outcome string) []string {
 	}
 	sort.Strings(checks)
 	return checks
+}
+
+func designGateFeedback(dir, runID string, refusal refusalPayload) string {
+	var b strings.Builder
+	if refusal.Detail != "" {
+		fmt.Fprintf(&b, "\n\n%s", refusal.Detail)
+	}
+	checks := refusal.Checks
+	if len(checks) == 0 {
+		checks = gateFailingChecks(dir, runID)
+	}
+	for _, check := range checks {
+		fmt.Fprintf(&b, "\n\nFailing check %s:\n", check.CheckID)
+		log := check.LogRef
+		if log != "" && !filepath.IsAbs(log) {
+			log = filepath.Join(dir, log)
+		}
+		if output, err := os.ReadFile(log); err == nil {
+			b.Write(output)
+		} else {
+			fmt.Fprintf(&b, "Output unavailable (%s).", check.LogRef)
+		}
+	}
+	return b.String()
 }
