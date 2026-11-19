@@ -1325,11 +1325,15 @@ func (p *planner) returnedEnding(itemID string) *ReturnedEnding {
 	if latest == "" || !p.mayBeARetry(itemID) {
 		return nil
 	}
-	cause, ok := returnedReasons[p.retryHoldReason(itemID)]
+	reason := p.retryHoldReason(itemID)
+	cause, ok := returnedReasons[reason]
+	e := p.history.endings[latest]
+	if reason == ReasonEvalFailed && e.Step == reason && e.WorkerSession != nil {
+		cause, ok = reason, true
+	}
 	if !ok {
 		return nil
 	}
-	e := p.history.endings[latest]
 	detail := e.Detail
 	if cause == RefusalConflict && detail == "" {
 		detail = strings.Join(e.ConflictPaths, "\n")
@@ -1885,6 +1889,9 @@ func readRunHistory(r *store.Reader) (runHistory, error) {
 				history.endings[*e.ObjectID] = payload.refusalPayload
 				if payload.WriterRunID != "" {
 					history.judgeHolds[payload.WriterRunID] = payload.Step
+					if payload.WorkerSession != nil {
+						history.endings[payload.WriterRunID] = payload.refusalPayload
+					}
 				}
 			}
 			continue

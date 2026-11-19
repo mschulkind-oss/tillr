@@ -1518,8 +1518,14 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	lane := decision.LaneID
 	worktree := l.lanePath(lane)
 	request := *decision.RunRequest
-	if err := l.reconcileLandingDelivery(ctx, decision); err != nil {
+	failedResume, err := failedDesignerResume(decision, record)
+	if err != nil {
 		return laneOutcome{err: err}
+	}
+	if !failedResume {
+		if err := l.reconcileLandingDelivery(ctx, decision); err != nil {
+			return laneOutcome{err: err}
+		}
 	}
 	intake, err := l.intakeLandingOffer(ctx, decision, record, mainSHA)
 	if err != nil {
@@ -1598,9 +1604,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	if err := pipelineCloseGraph(l.cfg.Root, record.RunID); err != nil {
 		return laneOutcome{err: err}
 	}
-	if failed, err := failedDesignerResume(decision, record); err != nil {
-		return laneOutcome{err: err}
-	} else if failed && !offered {
+	if failedResume && !offered {
 		prepared = true
 		return l.replaceFailedDesigner(ctx, decision, record, mainSHA, tick, at, result, timing, watched, deferJudge)
 	}

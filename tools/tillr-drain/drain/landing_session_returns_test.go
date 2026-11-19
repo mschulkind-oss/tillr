@@ -379,6 +379,7 @@ func TestRevertedWorkflowStagesProducingNodeOnCurrentTrunk(t *testing.T) {
 	}
 }
 
+// Failure case: a missing saved worker-session handle selects a fresh session with a reason.
 func TestRevertedLandingFreshFallbacks(t *testing.T) {
 	for _, why := range []string{"lane-unavailable", "session-missing", "seat-changed"} {
 		t.Run(why, func(t *testing.T) {

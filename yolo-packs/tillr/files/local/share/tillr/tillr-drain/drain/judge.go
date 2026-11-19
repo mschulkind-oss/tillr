@@ -575,11 +575,22 @@ func (l *Loop) holdJudge(ctx context.Context, c Candidate, judgeID, reason, deta
 	result.RefusedSteps[reason]++
 	l.mu.Unlock()
 	writer := judgeWriterRun(c)
+	c.RunID = writer
+	payload := struct {
+		refusalPayload
+		WriterRunID string `json:"writer_run_id"`
+	}{refusalPayload: refusalPayload{ItemID: c.ItemID, LaneID: c.LaneID, TickID: c.TickID, Step: reason, Detail: detail}, WriterRunID: writer}
+	if reason == ReasonEvalFailed {
+		var err error
+		payload.WorkerSession, err = l.captureJudgeLandingSession(ctx, c)
+		if err != nil {
+			return err
+		}
+	}
 	at := l.cfg.Now()
-	return appendJudgmentThen(ctx, l.cfg.Store, RefusalKind, "run", judgeID, map[string]any{"item_id": c.ItemID, "lane_id": c.LaneID, "tick_id": c.TickID, "writer_run_id": writer, "step": reason, "detail": detail}, at, func(tx *store.Tx) error {
-		c.RunID = writer
+	return appendJudgmentThen(ctx, l.cfg.Store, RefusalKind, "run", judgeID, payload, at, func(tx *store.Tx) error {
 		// A judge's refusal carries no checks, so it quotes no file.
-		return l.answerLandingRefusal(tx, c, refusalPayload{Step: reason, Detail: detail}, refusalEvidence{}, at)
+		return l.answerLandingRefusal(tx, c, payload.refusalPayload, refusalEvidence{}, at)
 	})
 }
 func judgeFailureDetail(r *store.Reader, id, reason string) (string, error) {

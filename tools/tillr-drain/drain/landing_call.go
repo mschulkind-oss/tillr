@@ -349,6 +349,24 @@ func (l *Loop) readRefusalEvidence(runID string, refusal refusalPayload) refusal
 	return ev
 }
 
+// A judge's negative verdict returns to a parked landing call. Footer workers
+// keep the ordinary judge hold; they have no call to reopen.
+func (l *Loop) captureJudgeLandingSession(ctx context.Context, c Candidate) (*WorkerSession, error) {
+	db, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	var suspends bool
+	err = db.ReadTx(ctx, func(r *store.Reader) error {
+		return r.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=? AND json_extract(payload,'$.ending_capability')=?)`, callOffered, c.RunID, run.EndingCallSuspends).Scan(&suspends)
+	})
+	if err != nil || !suspends {
+		return nil, err
+	}
+	return l.captureWorkerSession(ctx, c)
+}
+
 // answerLandingRefusal answers the run's open landing call with the refusal, quoting ev,
 // which the caller read before its write (readRefusalEvidence). It reads no file.
 func (l *Loop) answerLandingRefusal(tx *store.Tx, candidate Candidate, refusal refusalPayload, ev refusalEvidence, at time.Time) error {
