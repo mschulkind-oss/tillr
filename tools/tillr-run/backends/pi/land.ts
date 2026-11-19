@@ -28,7 +28,10 @@ export function executeLand(
 	const path = join(durable, "landing-offer.json");
 	const offer = readRecord(path);
 	if (offer?.call_id === callId) return park;
-	if (offer !== undefined) throw new Error(`Another land call is open: ${offer?.call_id}.`);
+	// A parked call never gets a tool result, so an offer whose call already has one never
+	// parked: pi failed it after the write. Leaving it would refuse every later ending call.
+	if (offer !== undefined && typeof offer?.call_id === "string" && answered(offer.call_id)) unlinkSync(path);
+	else if (offer !== undefined) throw new Error(`Another land call is open: ${offer?.call_id}.`);
 	const state = readRecord(join(durable, "landing-state.json"));
 	const open = state?.open?.find((entry: { call_id: string }) => entry.call_id !== callId && !answered(entry.call_id));
 	if (open) throw new Error(`Another land call is open: ${open.call_id}.`);
@@ -71,7 +74,9 @@ export default function land(pi: any) {
 		label: "Land",
 		description: "Offer the commit at HEAD for landing, ending this run. Include what changed and which verification ran.",
 		parameters: { type: "object", required: ["summary"], properties: { summary: { type: "string", maxLength: 2000 } }, additionalProperties: false },
-		execute(callId: string, args: { summary: string }, _signal: unknown, _update: unknown, ctx: { cwd: string; sessionManager: { getSessionFile(): string | undefined; getBranch(): { type: string; message?: { role: string; toolCallId?: string } }[] } }) {
+		// Pi settles execute's value with `.then`, so it must be a promise; async also turns a
+		// throw into a rejection.
+		async execute(callId: string, args: { summary: string }, _signal: unknown, _update: unknown, ctx: { cwd: string; sessionManager: { getSessionFile(): string | undefined; getBranch(): { type: string; message?: { role: string; toolCallId?: string } }[] } }) {
 			const { YOLO_DURABLE_DIR, TILLR_GOAL_BASE, BOARD_DRAIN_BRIEF } = process.env;
 			if (!YOLO_DURABLE_DIR || !TILLR_GOAL_BASE || !BOARD_DRAIN_BRIEF) throw new Error("The run's scratch, base or brief is not staged.");
 			return executeLand(callId, args.summary, ctx.cwd, YOLO_DURABLE_DIR, TILLR_GOAL_BASE,
