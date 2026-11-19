@@ -69,7 +69,7 @@ func newResumableFixture(t *testing.T) resumableFixture {
 	if err != nil {
 		t.Fatalf("resolving the pi adapter failed: %v", err)
 	}
-	harness := stub(t, "pi", resumingHarness)
+	harness := stub(t, "pi", "[ \"${1:-}\" != --features ] || exit 2\n"+resumingHarness)
 	t.Setenv("PATH", filepath.Dir(harness)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	argv := filepath.Join(scratch(t, "resume-argv"), "argv")
 	t.Setenv("STUB_ARGV", argv)
