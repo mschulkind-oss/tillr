@@ -83,7 +83,7 @@ func TestLoopSkipsSpentWindowAcrossRestartAndReopens(t *testing.T) {
 func TestLoopDoesNotSkipBackendWithoutWindowFacts(t *testing.T) {
 	for _, header := range []string{"", "rate limit kind: unknown\nfraction: unknown\nstatus: unknown\nreset: unknown\n", "rate limit kind: five_hour\nfraction: 0.5\nstatus: allowed\nreset: 9999999999\n"} {
 		t.Run(header, func(t *testing.T) {
-			refused := stub(t, "pi", "[ \"${1:-}\" != --features ] || exit 2\n"+counting+"exit 1\n")
+			refused := stub(t, "pi", counting+"exit 1\n")
 			fallback := stub(t, "fallback", committingAdapter)
 			f := newLoopFixture(t, refused)
 			f.policy.DefaultBackend = "pi"

@@ -238,48 +238,31 @@ func (l *Loop) validateLandingOffer(ctx context.Context, d Decision, rec run.Rec
 	return call, nil
 }
 
-const (
-	endingCapabilitiesKind = "drain.ending-capabilities"
-	piFeaturesKind         = "drain.pi-features"
-)
-
-var (
-	piFeaturesProbeTimeout = 10 * time.Second
-	piFeaturesWaitDelay    = time.Second
-)
+const endingCapabilitiesKind = "drain.ending-capabilities"
 
 // Probe the executable, not its version or an adapter declaration: a rejected or
 // malformed feature response means the original footer protocol remains in force.
-func probePiEndingCapability(ctx context.Context) (string, string, []string) {
+func probePiEndingCapability(ctx context.Context) (string, string) {
 	path, err := exec.LookPath("pi")
 	if err != nil {
-		return run.EndingFooter, "", nil
+		return run.EndingFooter, ""
 	}
-	probe, cancel := context.WithTimeout(ctx, piFeaturesProbeTimeout)
+	probe, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(probe, path, "--features")
-	cmd.WaitDelay = piFeaturesWaitDelay
-	out, err := cmd.Output()
+	out, err := exec.CommandContext(probe, path, "--features").Output()
 	var features []string
 	if err == nil && json.Unmarshal(out, &features) == nil {
 		for _, feature := range features {
 			if feature == "parked-tool-calls" {
-				return run.EndingCallSuspends, path, features
+				return run.EndingCallSuspends, path
 			}
 		}
-		return run.EndingFooter, path, features
 	}
-	return run.EndingFooter, path, nil
+	return run.EndingFooter, path
 }
 
 func (l *Loop) recordEndingCapabilities(ctx context.Context) error {
 	capabilities := make(map[string]string)
-	var (
-		probed       bool
-		piCapability string
-		piPath       string
-		piFeatures   []string
-	)
 	for _, backend := range l.cfg.Policy.Backends {
 		adapter := backend.Adapter
 		if _, ok := capabilities[adapter]; ok {
@@ -298,33 +281,11 @@ func (l *Loop) recordEndingCapabilities(ctx context.Context) error {
 		} else if !os.IsNotExist(err) {
 			return err
 		}
-		if filepath.Base(filepath.Dir(path)) == "pi" {
-			if !probed {
-				piCapability, piPath, piFeatures = probePiEndingCapability(ctx)
-				probed = true
-			}
-			capability = piCapability
-		}
 		capabilities[adapter] = capability
 	}
 	body, err := json.Marshal(capabilities)
 	if err != nil {
 		return err
-	}
-	var featuresBody []byte
-	if probed {
-		featuresBody, err = json.Marshal(struct {
-			Path       string   `json:"path"`
-			Capability string   `json:"capability"`
-			Features   []string `json:"features,omitempty"`
-		}{
-			Path:       piPath,
-			Capability: piCapability,
-			Features:   piFeatures,
-		})
-		if err != nil {
-			return err
-		}
 	}
 	db, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
@@ -332,16 +293,8 @@ func (l *Loop) recordEndingCapabilities(ctx context.Context) error {
 	}
 	defer db.Close()
 	if err := db.WriteTx(ctx, func(tx *store.Tx) error {
-		at := l.cfg.Now().UTC()
-		if _, err := tx.Append(event.Event{Kind: endingCapabilitiesKind, ObjectType: "drain", Payload: body, At: at}); err != nil {
-			return err
-		}
-		if probed {
-			if _, err := tx.Append(event.Event{Kind: piFeaturesKind, ObjectType: "drain", Payload: featuresBody, At: at}); err != nil {
-				return err
-			}
-		}
-		return nil
+		_, err := tx.Append(event.Event{Kind: endingCapabilitiesKind, ObjectType: "drain", Payload: body, At: l.cfg.Now().UTC()})
+		return err
 	}); err != nil {
 		return err
 	}
