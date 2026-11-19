@@ -108,3 +108,85 @@ func TestHeavyCancellationEndsDeclarationChildrenBeforeRemovingTree(t *testing.T
 		t.Fatalf("worktree remains: %v", err)
 	}
 }
+
+// A loop started with TILLR_SQLITE_TRACE=1 traces its own store writes, not the checks
+// it runs. Both a lane's gate and the trunk proof (declaration and legacy) must hand the
+// same TILLR_SQLITE_TRACE value—unset—to the checks they execute.
+func TestGateAndHeavyProofStripSQLiteTraceFromCheckEnv(t *testing.T) {
+	t.Setenv("TILLR_SQLITE_TRACE", "1")
+	root, base := heavyRepo(t)
+	work := scratchUnderDurable(t)
+	bin := filepath.Join(work, "tillr-gate")
+	cmd := exec.Command("go", "build", "-o", bin, ".")
+	cmd.Dir = filepath.Join("..", "..", "tillr-gate")
+	if raw, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v %s", err, raw)
+	}
+
+	envDir := filepath.Join(work, "seen-env")
+	if err := os.MkdirAll(envDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	checksDir := filepath.Join(root, "tools", "gate", "checks")
+	if err := os.MkdirAll(checksDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(checksDir, "unit.json"), `{"id":"unit","label":"unit","scope":"tree","tier":"heavy","budget_ms":1,"timeout_ms":1000,"command":["sh","-c","printf '%s' \"${TILLR_SQLITE_TRACE-<unset>}\" > `+filepath.Join(envDir, "heavy-decl")+`"],"reads":["value"],"remember":false}`)
+	heavyCommit(t, root, "ready")
+
+	gateOut := filepath.Join(envDir, "gate")
+	gateProg := executable(t, `printf '%s' "${TILLR_SQLITE_TRACE-<unset>}" > `+gateOut)
+	legacyOut := filepath.Join(envDir, "heavy-legacy")
+	legacyProg := executable(t, `printf '%s' "${TILLR_SQLITE_TRACE-<unset>}" > `+legacyOut+`
+cat > "$TILLR_GATE_SPANS_OUT" <<'JSON'
+{"check_spans":[{"check_id":"legacy","kind":"shell","label":"legacy","status":"PASS","attributes_json":"{\"writes\":[\"value\"]}"}]}
+JSON`)
+	replayOut := filepath.Join(envDir, "heavy-replay")
+	replayProg := executable(t, `printf '%s' "${TILLR_SQLITE_TRACE-<unset>}" > `+replayOut)
+
+	f, _ := passFixture(t, "item-a")
+	steps := &ProcessSteps{
+		Root:           root,
+		Store:          f.storePath,
+		Now:            time.Now,
+		LaneRoot:       work,
+		GateProgram:    gateProg,
+		HeavyGateBin:   bin,
+		RollingProgram: legacyProg,
+		ReplayProgram:  replayProg,
+	}
+	outcome, err := steps.Gate(context.Background(), Candidate{
+		ItemID: "item-a", LaneID: "lane-1", RunID: "run-1",
+		Worktree: root, BaseSHA: base, HeadSHA: heavyGit(t, root, "rev-parse", "HEAD"),
+	})
+	if err != nil || outcome.Outcome != GatePassed {
+		t.Fatalf("gate: %+v / %v", outcome, err)
+	}
+	runner := HeavyRunner{
+		Root:  root,
+		Work:  filepath.Join(work, ".rolling", "worktree"),
+		Trunk: TrunkRef,
+		Judge: func(ctx context.Context, dir, only string) ([]HeavyCheck, error) {
+			checks, err := steps.JudgeHeavy(ctx, dir, only)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := steps.JudgeHeavy(ctx, dir, "legacy"); err != nil {
+				return nil, err
+			}
+			return checks, nil
+		},
+	}
+	if _, err := runner.Run(context.Background()); err != nil {
+		t.Fatalf("heavy run: %v", err)
+	}
+	for _, name := range []string{"gate", "heavy-decl", "heavy-legacy", "heavy-replay"} {
+		got, err := os.ReadFile(filepath.Join(envDir, name))
+		if err != nil {
+			t.Fatalf("reading %s: %v", name, err)
+		}
+		if string(got) != "<unset>" {
+			t.Fatalf("%s saw TILLR_SQLITE_TRACE=%q, want <unset>", name, string(got))
+		}
+	}
+}

@@ -147,7 +147,7 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 		}
 		cmd := exec.CommandContext(ctx, bin, args...)
 		cmd.Dir = dir
-		cmd.Env = append(os.Environ(), s.forkRootEnv()...)
+		cmd.Env = append(withoutProcessEnv(os.Environ(), "TILLR_SQLITE_TRACE"), s.forkRootEnv()...)
 		var stderr stderrTail
 		cmd.Stderr = &stderr
 		var stdout strings.Builder
@@ -250,7 +250,7 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
-	cmd.Env = append(append(os.Environ(), s.forkRootEnv()...), "TILLR_GATE_SPANS_OUT="+spans)
+	cmd.Env = append(append(withoutProcessEnv(os.Environ(), "TILLR_SQLITE_TRACE"), s.forkRootEnv()...), "TILLR_GATE_SPANS_OUT="+spans)
 	var stderr stderrTail
 	cmd.Stderr = &stderr
 	runErr := runOwnedHeavy(ctx, cmd, "legacy")

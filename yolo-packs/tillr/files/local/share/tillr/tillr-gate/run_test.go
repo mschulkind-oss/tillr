@@ -133,13 +133,14 @@ func TestRunPassesAPlanWhoseChecksPass(t *testing.T) {
 		PlanID: "p-2", BaseSHA: "c0b4c69197", TreeSHA: "c0b4c69197", RegistryDigest: "d-1",
 		Checks: []planCheck{{
 			CheckID:   "always-passes",
-			Command:   []string{"sh", "-c", `echo "[${DROPPED-unset}][${SET-unset}]"`},
+			Command:   []string{"sh", "-c", `echo "[${DROPPED-unset}][${TILLR_SQLITE_TRACE-unset}][${SET-unset}]"`},
 			TimeoutMS: 5000,
 			Drop:      []string{"DROPPED"},
 			Env:       map[string]string{"SET": "yes"},
 		}},
 	})
 	t.Setenv("DROPPED", "leaked")
+	t.Setenv("TILLR_SQLITE_TRACE", "1")
 	code, raw := runPlan(t, plan, tree(t))
 	if code != 0 {
 		t.Fatalf("a passing plan exited %d, want 0: %s", code, raw)
@@ -155,7 +156,7 @@ func TestRunPassesAPlanWhoseChecksPass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the check's log failed: %v", err)
 	}
-	if !strings.Contains(string(logged), "[unset][yes]") {
+	if !strings.Contains(string(logged), "[unset][unset][yes]") {
 		t.Fatalf("the check ran with the wrong environment: %q", logged)
 	}
 }

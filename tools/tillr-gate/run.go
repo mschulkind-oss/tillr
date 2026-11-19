@@ -573,11 +573,13 @@ func budgetNotes(verdict VerdictPayload) []string {
 }
 
 // checkEnv is the environment a check runs with: this process's, minus the names the plan
-// drops, plus the names it sets. A check that inherited a variable the plan drops would
-// run under a different environment than the gate it replaces, and its verdict would
-// attest to a run that did not happen.
+// drops (and TILLR_SQLITE_TRACE, which belongs to the caller's own store tracing, not
+// the test process), plus the names it sets. A check that inherited a variable the plan
+// drops would run under a different environment than the gate it replaces, and its verdict
+// would attest to a run that did not happen.
 func checkEnv(check PlanCheck) []string {
-	dropped := make(map[string]bool, len(check.Drop))
+	dropped := make(map[string]bool, len(check.Drop)+1)
+	dropped["TILLR_SQLITE_TRACE"] = true
 	for _, name := range check.Drop {
 		dropped[name] = true
 	}
