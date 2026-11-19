@@ -100,7 +100,7 @@ They are ordered by how much is built on each and how hard it is to undo, hardes
 - **The file format that defines a kind of queue**, built at `f04088fb0` on a choice "recommended here and chosen by Product QA" (another project's agent), is now listed for his review in [the core and landing design](../design/tillr-core-and-git-landing.md) as the designer's decisions `D-CG1` to `D-CG5`, labeled as such. Who owns an item's states is recorded there in his own words, and the two names are asked in [the vocabulary](../design/tillr-vocabulary.md).
 - **The second copy of every tillr program, kept inside the pack,** is open as [OQ-SH2](../design/tillr-selfhosted-build.md#OQ-SH2).
 
-1. 💬 **OQ-PR1: After work lands, should the loop delete its marker from your design document, and should that deletion be the only shared record that the work landed?**
+1. 💬 **OQ-PR1: Should a commit name the work it built, or should the record of what landed stay only in tillr's private store?**
 
    You approve a design with six build steps, and each step gets tillr's hidden comment. When a step lands, the loop makes a second commit, `chore: retire landed document block`, that deletes the comment and the step's pass conditions from your document. It has done so 33 times. No commit names the step it built. The list of what landed lives only in the private store on one machine, so a fresh checkout cannot say which commit built which step.
 
@@ -108,13 +108,14 @@ They are ordered by how much is built on each and how hard it is to undo, hardes
 
    **Live:** yes, since `cd68c87e3` and `1cdb67809`. **Undo: moderate.** The lander writes the line again and the loop's delete step goes. The 72 past landings cannot be re-attributed.
 
-   - **Keep.** The loop goes on editing your documents after each landing.
+   **What goes away without this question:** the deleting. If your answer to [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1) removes the hidden comment from your documents (every option there except keeping it), the loop has nothing to delete and stops editing your documents after a landing. What is left for you here is only where the record of a landing lives, and whether "no tillr in commits" is your rule.
+
+   - **Keep.** The record stays only in the store. While the hidden comment exists, the loop goes on deleting it from your documents after each landing.
    - **Overturn.** A commit names the work it built in one trailing line, and the loop never edits a document after a landing.
-   - **Ask properly.** Decided inside the intake design, after [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1), with the alternatives for where the record lives.
 
-   <!-- vantage: question id=OQ-PR1 leaning="Ask properly, after OQ-QM1: if the markers leave your documents there is nothing left to delete and the only choice is a commit line or the store. Say now whether the no-tillr-in-commits rule is yours, because the whole decision rests on it." -->
+   <!-- vantage: question id=OQ-PR1 leaning="Overturn: a commit names the work it built in one trailing line, so any checkout can say which commit built which step. The deleting goes away with the hidden comment under OQ-QM1. Say whether the no-tillr-in-commits rule is yours, because it is the only reason the line was dropped." -->
 
-   _Leaning:_ Ask properly, after [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1): if the markers leave your documents there is nothing left to delete and the only choice is a commit line or the store. Say now whether the no-tillr-in-commits rule is yours, because the whole decision rests on it.
+   _Leaning:_ Overturn: a commit names the work it built in one trailing line, so any checkout can say which commit built which step. The deleting goes away with the hidden comment under [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1). Say whether the no-tillr-in-commits rule is yours, because it is the only reason the line was dropped.
 
    **Answer:**
 
