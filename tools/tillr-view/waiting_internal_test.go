@@ -69,7 +69,7 @@ func TestWaitingCLIAndAPI(t *testing.T) {
 		t.Fatalf("build: %v: %s", err, out)
 	}
 	cmd := exec.Command(bin, "waiting", "--history", "--store", h.store, "--json")
-	cli, err := cmd.CombinedOutput()
+	cli, err := cmd.Output()
 	if err != nil {
 		t.Fatalf("waiting CLI: %v: %s", err, cli)
 	}
@@ -119,7 +119,7 @@ func TestWaitingCLIAndAPI(t *testing.T) {
 			}
 		}
 	}
-	table, err := exec.Command(bin, "waiting", "--history", "--store", h.store).CombinedOutput()
+	table, err := exec.Command(bin, "waiting", "--history", "--store", h.store).Output()
 	if err != nil {
 		t.Fatalf("table: %v: %s", err, table)
 	}

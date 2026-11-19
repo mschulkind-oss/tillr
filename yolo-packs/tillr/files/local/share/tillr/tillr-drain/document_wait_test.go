@@ -66,10 +66,10 @@ func TestWaitingDefaultStopsCleanlyOnOperatorSignals(t *testing.T) {
 	for _, signal := range []os.Signal{os.Interrupt, syscall.SIGTERM} {
 		t.Run(signal.String(), func(t *testing.T) {
 			cmd := exec.Command(bin, emptyLoopArgs(t)...)
-			var output bytes.Buffer
+			var stdout, stderr bytes.Buffer
 			trigger := &triggerReport{wait: make(chan struct{}), dispatch: make(chan struct{})}
-			writer := io.MultiWriter(&output, trigger)
-			cmd.Stdout, cmd.Stderr = writer, writer
+			cmd.Stdout = io.MultiWriter(&stdout, trigger)
+			cmd.Stderr = io.MultiWriter(&stderr, trigger)
 			if err := cmd.Start(); err != nil {
 				t.Fatal(err)
 			}
@@ -86,14 +86,14 @@ func TestWaitingDefaultStopsCleanlyOnOperatorSignals(t *testing.T) {
 			case <-trigger.wait:
 			case err := <-done:
 				finished = true
-				t.Fatalf("default loop exited instead of waiting: %v: %s", err, output.String())
+				t.Fatalf("default loop exited instead of waiting: %v: %s%s", err, stdout.String(), stderr.String())
 			case <-time.After(hangGuard):
 				t.Fatal("default loop did not start waiting")
 			}
 			select {
 			case err := <-done:
 				finished = true
-				t.Fatalf("default loop exited during idle polling: %v: %s", err, output.String())
+				t.Fatalf("default loop exited during idle polling: %v: %s%s", err, stdout.String(), stderr.String())
 			case <-time.After(3 * drain.DefaultStorePollInterval):
 			}
 			if err := cmd.Process.Signal(signal); err != nil {
@@ -102,8 +102,8 @@ func TestWaitingDefaultStopsCleanlyOnOperatorSignals(t *testing.T) {
 			select {
 			case err := <-done:
 				finished = true
-				if err != nil || !strings.HasSuffix(output.String(), "loop: stopped by the operator\n") {
-					t.Fatalf("operator stop must exit 0 with a final explanation: %v: %s", err, output.String())
+				if err != nil || !strings.HasSuffix(stdout.String(), "loop: stopped by the operator\n") {
+					t.Fatalf("operator stop must exit 0 with a final explanation: %v: %s%s", err, stdout.String(), stderr.String())
 				}
 			case <-time.After(hangGuard):
 				t.Fatal("waiting loop ignored the operator signal")
