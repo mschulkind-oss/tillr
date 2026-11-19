@@ -1,43 +1,46 @@
 ---
-title: "tillr is a core of queues and graphs, and landing changes in Git is one definition on top of it"
+title: "tillr is a core of queues and graphs, and landing changes in Git is one charter on top of it"
 status: in-review
 stage: DESIGN
-updated: 2026-11-18
+updated: 2026-11-19
 tags:
   - tillr
   - design
   - boundaries
   - product-qa
-summary: "The owner's direction for tillr: general machinery of queues and graphs whose nodes are agents and commands, with its tracking, and one small, separate definition that turns it into machinery for landing changes in a Git repository. It records the workflow that definition wraps, the baseline measurement of where the Git-landing assumption was wired in, the shapes the one file could take and the one that was built (a data file plus one hook program), the extension points a second use fills, and what is built and unbuilt on 2026-11-18."
+summary: "The owner's direction for tillr: general machinery of queues and graphs whose nodes are agents and commands, with its tracking, and one small, separate charter ('definition' in shipped code) that turns it into machinery for landing changes in a Git repository. It records the workflow that charter wraps, the baseline measurement of where the Git-landing assumption was wired in, the shapes the one file could take and the one that was built (a data file plus one hook program), the extension points a second use fills, and what is built and unbuilt on 2026-11-19."
 next: "The owner reviews the designer's decisions D-CG1 to D-CG5 in the ledger. He named the two words on 2026-11-18 in tillr-vocabulary.md: a charter, and git-landing. The ten units of the build plan's next tranche are unfiled, and Product QA's third round has not arrived."
 depends-on:
   - tillr-item-graphs.md
   - tillr-product-qa-requests.md
 ---
 
-# tillr is a core of queues and graphs, and landing in Git is one definition on top of it
+# tillr is a core of queues and graphs, and landing in Git is one charter on top of it
 
-**Status:** 2026-11-18. The direction is the owner's, in his words ([Section 1](#1-the-direction-in-the-owners-words)).
+**Status:** 2026-11-19. The direction is the owner's, in his words ([Section 1](#1-the-direction-in-the-owners-words)).
 He said to build on 2026-11-17, and the first tranche of [the build plan](./tillr-definitions-plan.md)
-is built: all eighteen of its items have landed, and a second definition that lands nothing runs end
-to end ([Section 8.2](#82-what-is-built-and-what-is-not)). The plan's next tranche of ten units is
-unfiled. The inventory of [Section 3](#3-where-the-git-landing-assumption-is-wired-in-today) is the
-baseline measured on 2026-11-16 at `6c2af0b32`, before that build. Five decisions the build rests on
-were the designer's, not the owner's; they are in [the ledger](#decision-ledger), they await his
-review, and he may overturn any of them. Claims are marked **[ran]**, **[read]** (file named) or
-**[inferred]**.
+is built: all eighteen of its items have landed, and a second charter (`definition` in shipped code)
+that lands nothing runs end to end ([Section 8.2](#82-what-is-built-and-what-is-not)). The owner
+named the layer a **charter** and the Git instance **`git-landing`** on 2026-11-18
+([OQ-VO4](./tillr-vocabulary.md#OQ-VO4), [OQ-VO5](./tillr-vocabulary.md#OQ-VO5)). The plan's next
+tranche of ten units is unfiled. The inventory of
+[Section 3](#3-where-the-git-landing-assumption-is-wired-in-today) is the baseline measured on
+2026-11-16 at `6c2af0b32`, before that build. Five decisions the build rests on were the designer's,
+not the owner's; they are in [the ledger](#decision-ledger), they await his review, and he may
+overturn any of them. Claims are marked **[ran]**, **[read]** (file named) or **[inferred]**.
 
-> **In short.** tillr is a core of queues and graphs plus one definition per use, and a definition
-> is a data file and one hook program. Landing changes in Git is the first definition; a second one
-> that lands nothing already runs. Most of the landing workflow's behavior is still Go inside the
-> drain, and moving it behind the definition is the work that remains.
+> **In short.** tillr is a core of queues and graphs plus one charter per use (`definition` in
+> shipped code), and a charter is a data file and one hook program. Landing changes in Git is the
+> first charter (`git-landing`); a second one that lands nothing already runs. Most of the landing
+> workflow's behavior is still Go inside the drain, and moving it behind the charter is the work
+> that remains.
 
 **Why it matters.** Product QA wants tillr's queues, runs and tracking without its landing. With the
-landing part a plainly separate definition, Product QA writes a second definition instead of asking
-tillr for exceptions.
+landing part a plainly separate charter, Product QA writes a second charter instead of asking tillr
+for exceptions.
 
 **Cost.** Every rule about items that suits Git landing and chafes against another use leaves the
-core: lifecycle, prerequisites, retention and the completion rule become each definition's to state.
+core: lifecycle, prerequisites, retention and the completion rule become each charter's to state.
 
 **Start at [Section 8](#8-building-it-the-owners-go-ahead-and-the-working-choices)** for what was
 decided and built; [Section 3](#3-where-the-git-landing-assumption-is-wired-in-today) is the
@@ -59,7 +62,7 @@ tranche), [tillr-product-qa-requests.md](./tillr-product-qa-requests.md) (Produc
 reply, as received), [tillr-separable-parts.md](./tillr-separable-parts.md) (tillr's answer to
 Product QA and the contract), [tillr-item-graphs.md](./tillr-item-graphs.md) (graphs inside one
 item), [the graph design](./tillr-graph-is-the-path.md) (landing as nodes of an item's graph),
-[the vocabulary](./tillr-vocabulary.md) (one meaning per word, and the naming questions),
+[the vocabulary](./tillr-vocabulary.md) (one meaning per word, and the naming rulings),
 [board-utilities.md §5.9](./board-utilities.md#59-the-composed-pipeline) (utilities meet only
 through processes and records).
 
@@ -321,7 +324,7 @@ where it is: **nothing**, **small**, or **a design round**.
 | `tillr-land` | the land lock | all of it: squash, marker and pin refs, `landings`, `candidates`, `landing_attempts`, author identity, the owner-checkout clash | the land step program | nothing: already a separate program |
 | `tillr-loop` | the adapter pattern | gate, land and verdict, translated onto the loop's exit contract | named on the drain's argv by the keeper | nothing |
 | `tillr-view` | status, events, passes, lanes, running, waiting, trace, serve | the landings and trunk pages, gate spans, waiting-face rules for landing holds | Go and the web front end | small to a design round |
-| `tillr-trace` | indexing run records | indexing gate and land records | hard-coded | small |
+| `tillr-trace` | reading run records | reading gate records (until commit `a9c095846` on 2026-11-18, indexing them into a persistent SQLite index) | hard-coded | small |
 | Keeper (`tillr-roll`) | restart a loop, one lock per root | the roll after a landing; `loop_command` names `tillr-loop`'s three faces | hard-coded | small |
 | Item block and sync | `id`, `blocked_by`, `seat`, `workflow`, `prose` | `paths` as the fence; documents are git-tracked files under `docs/`; a landed item's block is retired | hard-coded grammar | small |
 | Policy files | [backend-policy.json](../../config/tillr/backend-policy.json): seats to backends | [gate-policy.json](../../config/tillr/gate-policy.json): landing strategy, red cap, lane base | policy entries | nothing |
@@ -342,8 +345,8 @@ where it is: **nothing**, **small**, or **a design round**.
 - **Prerequisites of Git landing**, today holds in the planner: `no-fence` (no allowed paths),
   `question-open`, `questions-unknown` and `design-doc-missing` (the design document must exist
   and have no open question), `not-ready` (the item is not in the queue), `trunk-path-dirty`,
-  `conflict-design` and `conflict-owner`, the fork and trunk holds, and the queued
-  `no-document-block`. **General queue mechanics:** `no-lane`, `run-live`, `no-policy`,
+  `conflict-design` and `conflict-owner`, the fork and trunk holds, and routing an undeclared item
+  with no document block to triage (`item-sync-hold-unshared-items`, landed). **General queue mechanics:** `no-lane`, `run-live`, `no-policy`,
   `backend-window`, `seat-degraded`, `failover`, the retry and readmission holds, and `blocked` by
   an unfinished dependency. The dependency edge is the core's; what counts as finished (landed) is
   the definition's.
@@ -603,7 +606,8 @@ the four lists above in turn, and its last item runs a definition that lands not
 
 ### 8.2 What is built, and what is not
 
-Read from the store and the tree on 2026-11-18 **[ran]**, commands in [Evidence](#evidence).
+Read from the store and the tree on 2026-11-18, with finished-state evidence updated against the
+tree on 2026-11-19 **[ran]**, **[read]**, commands in [Evidence](#evidence).
 
 **Built:**
 
@@ -618,22 +622,24 @@ Read from the store and the tree on 2026-11-18 **[ran]**, commands in [Evidence]
   `rejected`, `inconclusive`, `repeat-of` or `tooling-fault` on a hook's recorded verdict.
 - **A fresh store answers every read face.** After `tillr store init` alone, `tillr view waiting`,
   `tillr drain why` and `tillr run lanes` exit 0.
-- **A finished item stays finished against raw writes.** A raw write that would move a landed item
-  is rejected.
+- **Finished-state evidence and raw-write refusals.** A raw write that would move a landed or
+  resolved item is rejected, and moving an item into `landed` or `resolved-elsewhere` requires
+  completed criteria and a current landing or graph-completion receipt, or a `--resolves-via`
+  pointer (`item-jl-terminal-state-receipts`, landed in `56750a9e0`;
+  [terminal_evidence.go](../../tools/tillr-item/item/terminal_evidence.go)).
 
 **Not built:**
 
 - **The ten units of the plan's next tranche:** outcome counts in the views, the detail panel,
-  graph change as a definition's policy, the graph caps replaced, a state for an uncertain outside
-  effect, time and tokens per step, an owner acknowledgment point, one waiting classifier, the
-  `run-link-missing` test, and the `after-completion` hook with a retention rule beyond `keep`. No
-  item exists for any of them: a search of `docs` for an item block whose id starts `item-def`
-  finds none, and every such item in the store has landed.
+  graph change as a definition's policy, the graph caps replaced (the caps themselves are already
+  dropped in [workflow_check.go](../../tools/tillr-drain/drain/workflow_check.go), which reports
+  graph size and refuses none), a state for an uncertain outside effect, time and tokens per step,
+  an owner acknowledgment point, one waiting classifier, the `run-link-missing` test, and the
+  `after-completion` hook with a retention rule beyond `keep`. No item exists for any of them: a
+  search of `docs` for an item block whose id starts `item-def` finds none, and every such item in
+  the store has landed.
 - **Most of the landing behavior behind the hook.** Intake, staging, the candidate rule, the
   boundary check, trunk observation and conflicts are still Go in the drain.
-- **The other half of the raw-write hole.** `tillr item state --state landed` still succeeds on an
-  item with an open criterion and no landing; the queued `item-jl-terminal-state-receipts` closes
-  it.
 - **Product QA's third round** has not arrived.
 
 ---
@@ -671,7 +677,7 @@ outside this repository:
 tillr view status (this repository's store)                     280 items; every item-def-* item landed
 tillr store init --store $S; tillr view waiting --store $S      "definition: git-landing ... held []", exit 0
 tillr drain why / tillr run lanes --store $S                    exit 0
-tillr item state --state landed (criterion open, no landing)    exit 0
+tillr item state --state landed (criterion open, no landing)    exit 0 (since closed by 56750a9e0)
 tillr item state --state in-queue (on that landed item)         rejected: raw writes cannot change a finished item
 rg for an item block whose id starts item-def, over docs      nothing: the next tranche is unfiled
 wc -l tools/tillr-loop/tillr-loop                               885
