@@ -108,6 +108,9 @@ func (l *Loop) releaseTrunkAcquittals(ctx context.Context) error {
 	}
 	defer s.Close()
 	var ready []string
+	// The read phase gathers the git answers (the green pointer, ancestry) the write's
+	// recheck asks again, so the write runs none (gathered.go).
+	gctx, facts := gatheringFor(ctx)
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
 		rows, err := readItems(r)
 		if err != nil {
@@ -117,7 +120,7 @@ func (l *Loop) releaseTrunkAcquittals(ctx context.Context) error {
 			if row.State != StateBlocked {
 				continue
 			}
-			state, err := l.repairedTrunkWaiter(ctx, r, row.ItemID)
+			state, err := l.repairedTrunkWaiter(gctx, r, row.ItemID)
 			if err != nil {
 				return err
 			}
@@ -130,7 +133,7 @@ func (l *Loop) releaseTrunkAcquittals(ctx context.Context) error {
 	if err != nil || len(ready) == 0 {
 		return err
 	}
-	return s.WriteTx(ctx, func(tx *store.Tx) error {
+	return writeGatheredFrom(ctx, s, facts, func(ctx context.Context, tx *store.Tx) error {
 		for _, id := range ready {
 			state, err := l.repairedTrunkWaiter(ctx, tx.Reader(), id)
 			if err != nil {

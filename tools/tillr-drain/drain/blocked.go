@@ -473,7 +473,7 @@ func (l *Loop) recordBlockAnswerThen(ctx context.Context, candidate Candidate, t
 			design := candidate
 			design.RunID = c.RunID
 			detail := fmt.Sprintf("Design answer commit: %s\n%s", candidate.HeadSHA, item.DefinitionBodyContent(c.BodyRef, blockID, []byte(raw)))
-			if err := l.answerLandingRefusal(tx, design, refusalPayload{Step: IdenticalRepeatPrefix, Detail: detail}, l.cfg.Now().UTC()); err != nil {
+			if err := l.answerLandingRefusal(tx, design, refusalPayload{Step: IdenticalRepeatPrefix, Detail: detail}, refusalEvidence{}, l.cfg.Now().UTC()); err != nil {
 				return err
 			}
 		}

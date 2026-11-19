@@ -31,8 +31,9 @@ var ErrOwnerChanged = errors.New("the owner changed a touched path after the pre
 var OwnerHooks struct {
 	// GitCall sees every git command the trunk runs, in order.
 	GitCall func(dir string, args []string)
-	// TxOpened runs when the store's write transaction opens.
-	TxOpened func()
+	// Publishing runs when the landing's publication begins: after the claim's short write
+	// committed and before the trunk is reread and moved, with no store write open.
+	Publishing func()
 	// AfterPredict runs when the prediction and the recovery copy are complete.
 	AfterPredict func()
 	// AfterReplace runs after one path was replaced or removed.
@@ -76,7 +77,7 @@ var OwnerHooks struct {
 
 // ResetOwnerHooks clears every hook.
 func ResetOwnerHooks() {
-	OwnerHooks.GitCall, OwnerHooks.TxOpened, OwnerHooks.AfterPredict = nil, nil, nil
+	OwnerHooks.GitCall, OwnerHooks.Publishing, OwnerHooks.AfterPredict = nil, nil, nil
 	OwnerHooks.AfterReplace, OwnerHooks.AfterInstall, OwnerHooks.AfterTrunkMove = nil, nil, nil
 	OwnerHooks.BeforeTrunkMove = nil
 	OwnerHooks.BeforeSwap, OwnerHooks.BeforeRollbackSwap, OwnerHooks.FailDisplacedRead = nil, nil, nil

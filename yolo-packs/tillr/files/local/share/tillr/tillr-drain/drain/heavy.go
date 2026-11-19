@@ -60,12 +60,14 @@ type RevertOutcome struct {
 }
 
 func heavyGitOutput(ctx context.Context, root string, args ...string) (string, error) {
-	return heavy.GitOutput(ctx, root, args...)
+	return gather(ctx, gitKey("trimmed output", root, args), func(ctx context.Context) (string, error) { return heavy.GitOutput(ctx, root, args...) })
 }
 func heavyDirectory(ctx context.Context, root string) (string, error) {
 	return heavy.Directory(ctx, root)
 }
-func heavyGreen(ctx context.Context, root string) (string, error) { return heavy.Green(ctx, root) }
+func heavyGreen(ctx context.Context, root string) (string, error) {
+	return gather(ctx, "green pointer in "+root, func(ctx context.Context) (string, error) { return heavy.Green(ctx, root) })
+}
 func publishHeavy(dir string, run HeavyRun) error {
 	return publishHeavyJSON(dir, "heavy.json", run)
 }

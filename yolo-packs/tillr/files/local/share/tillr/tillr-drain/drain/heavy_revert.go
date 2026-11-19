@@ -360,6 +360,10 @@ func (l *Loop) appendRevert(ctx context.Context, p revertPayload, ending *refusa
 	defer s.Close()
 	at := l.cfg.Now().UTC()
 	landing := p.Landing
+	var evidence refusalEvidence
+	if ending != nil && p.RunID != "" {
+		evidence = l.readRefusalEvidence(p.RunID, *ending)
+	}
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
 		var done int
 		if err := tx.QueryRow(`SELECT count(*) FROM events WHERE kind=? AND object_type='landing' AND object_id=? AND json_extract(payload,'$.result')='reverted'`, RevertKind, landing).Scan(&done); err != nil {
@@ -385,7 +389,7 @@ func (l *Loop) appendRevert(ctx context.Context, p revertPayload, ending *refusa
 		if err := recordLandingCallLanding(tx, p.RunID, p.Landing, at); err != nil {
 			return err
 		}
-		return l.answerLandingRefusal(tx, Candidate{RunID: p.RunID, HeadSHA: p.Revert, BaseSHA: p.Tip}, *ending, at)
+		return l.answerLandingRefusal(tx, Candidate{RunID: p.RunID, HeadSHA: p.Revert, BaseSHA: p.Tip}, *ending, evidence, at)
 	})
 }
 

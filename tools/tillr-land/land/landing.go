@@ -211,7 +211,9 @@ type LandingRequest struct {
 // squashes the change onto the trunk, and moves the trunk. It is the whole landing
 // transaction, and both faces call it.
 //
-// The land lock is held for the whole landing transaction, including its receipt.
+// The land lock is held for the whole landing transaction, including its receipt. The
+// store's write lock is not held across any of it: each store write is a few statements
+// with no git, subprocess or file inside (publishLanding).
 // The gate ran before this function was called — in another process, in the drain's case — so no lock spans it, and a tick
 // that takes minutes to judge does not hold the trunk. Under the lock this function reads
 // the trunk tip, squashes onto it, refuses a clash in the trunk's worktree, records the
@@ -348,17 +350,10 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (an
 			failure := &InstallFailure{Err: errors.New("the install answered that the owner changed a touched path, and the next prediction read every touched path, its index entry and the branch as before")}
 			return t.settleOwner(ctx, s, prepared, req, &publication{}, decided, failure)
 		}
-		// Only the final check, Move and receipt need SQLite's single writer. Close
-		// either wins during preparation or waits here and sees the committed receipt.
+		// No store write is open across the move: a short write claims the landing, the
+		// trunk moves with nothing held, and a short write records it (publishLanding).
 		pub := &publication{}
-		err = s.WriteTx(ctx, func(tx *store.Tx) error {
-			if OwnerHooks.TxOpened != nil {
-				OwnerHooks.TxOpened()
-			}
-			var err error
-			landing, err = finishLanding(ctx, tx, t, prepared, req, pub)
-			return err
-		})
+		landing, err = publishLanding(ctx, s, t, prepared, req, pub)
 		if errors.Is(err, ErrIndexBusy) {
 			// Ordinary Git work holds the checkout's index lock. That is contention, not a
 			// finding about the owner's content: nothing is held or refused, and the landing
@@ -482,6 +477,9 @@ type preparedLanding struct {
 	// stored is the receipt this run already recorded for this head at its marker: the
 	// request is a retry of a recorded landing, answered with that row and nothing written.
 	stored *Landing
+	// staleClaims are claims of landings whose move never happened, which the publication's
+	// first write clears (staleClaims).
+	staleClaims []landingClaim
 }
 
 // landingRecorded answers whether a landed row already names commit as its trunk_after.
@@ -751,89 +749,329 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 	if err := t.Pin(req.RunID, req.HeadSHA); err != nil {
 		return p, err
 	}
+	if p.staleClaims, err = t.staleClaims(ctx, s); err != nil {
+		return p, err
+	}
 	return p, ctx.Err()
 }
 
-func finishLanding(ctx context.Context, tx *store.Tx, t *Trunk, p preparedLanding, req LandingRequest, pub *publication) (Landing, error) {
+// publishLanding is the landing's publication, in three steps, and no store write is open
+// across any git command or file in it.
+//
+//  1. A short write claims the landing (claimLanding): it rechecks what preparation read from
+//     the store — the item is still landable, no receipt was recorded meanwhile, the trunk
+//     history row is unchanged — and inserts a landing_claims row. While that row stands,
+//     `tillr-item close` and a move to resolved-elsewhere refuse the item, which is what the
+//     write lock used to exclude for the length of the move.
+//  2. With nothing held, the trunk is reread and moved (Trunk.MoveOwner), the fork cache is
+//     refreshed and the trunk-history refs are pinned. land.lock keeps every other lander out
+//     for all of it, and the move itself is guarded by the tip it was decided against.
+//  3. A short write records the receipt and deletes the claim (recordPublished), so a
+//     reader sees the claim or the receipt and never neither.
+//
+// A kill between the steps is finished by the next attempt of the same run: after step 1
+// the marker ref (refs/tillr/landed/<run>) names a commit the trunk does not carry, so the
+// retry squashes again and its own claim replaces the old one; after the move in step 2 the
+// trunk carries the marker's commit, so the retry recovers it — moves nothing, records the
+// landing once, and deletes the claim in that same receipt write. A claim whose commit no
+// trunk carries is cleared by the next landing of any run (staleClaims), because land.lock
+// proves no landing is in flight.
+//
+// A non-landing (a refusal, a squash conflict) moves nothing, so it claims nothing: its
+// history pins run with nothing held and its one write records the row.
+func publishLanding(ctx context.Context, s *store.Store, t *Trunk, p preparedLanding, req LandingRequest, pub *publication) (Landing, error) {
 	landing := p.landing
-	notLandable, err := itemNotLandable(tx, req.ItemID)
-	if err != nil {
+	if err := checkTips(t, p, req); err != nil {
 		return Landing{}, err
 	}
-	if notLandable && p.recovered {
-		return Landing{}, Externalf("%s already carries %s, the landing of run %s, but item %s was closed while the receipt was being prepared: nothing was recorded or moved; decide by hand whether the item stays closed with its change on the trunk, or revert %s",
-			req.BaseRef, landing.TrunkAfter, req.RunID, req.ItemID, landing.TrunkAfter)
-	}
-	if notLandable {
-		landing.Result, landing.Reason = ResultRefused, ReasonItemNotLandable
-		landing.LandedTree, landing.ConflictPaths = "", nil
-	}
-	if p.recovered {
-		recorded, err := landingRecorded(tx, landing.TrunkAfter)
-		if err != nil {
+	claimed := false
+	if landing.Landed() {
+		var err error
+		if landing, claimed, err = claimLanding(ctx, s, p, req, landing); err != nil {
 			return Landing{}, err
 		}
-		if recorded {
-			return Landing{}, Externalf("the landing of run %s at %s was recorded during preparation; nothing was recorded twice", req.RunID, landing.TrunkAfter)
-		}
 	}
-	tip, err := t.Head(req.BaseRef)
-	if err != nil {
-		return Landing{}, err
+	if OwnerHooks.Publishing != nil {
+		OwnerHooks.Publishing()
 	}
-	if tip != p.tip {
-		return Landing{}, Externalf("trunk %s changed during landing preparation: expected %s, got %s", req.BaseRef, p.tip, tip)
-	}
-	if !notLandable && p.observationRef != "" {
-		current, err := readHistory(tx)
-		if err != nil {
-			return Landing{}, err
+	if claimed {
+		if err := ctx.Err(); err != nil {
+			return Landing{}, errors.Join(err, t.abandonClaim(ctx, s, p, req, landing))
 		}
-		if current != p.historyBefore {
-			return Landing{}, Externalf("trunk history changed during landing preparation; no move made")
-		}
-		if p.observationRef != req.BaseRef {
-			tip, err = t.Head(p.observationRef)
+		// A recovered landing's move already happened: its row is written and nothing moves,
+		// so the history keeps the tip read under land.lock.
+		if !p.recovered {
+			req.observation.note("trunk-move")
+			install, err := t.MoveOwner(p.plan, req.BaseRef, p.squash.Commit, p.tip)
 			if err != nil {
+				return Landing{}, errors.Join(err, t.abandonClaim(ctx, s, p, req, landing))
+			}
+			pub.install = install
+			landing.TrunkAfter = p.squash.Commit
+			if p.history != nil && PatchRef(req.BaseRef) == "" {
+				p.history.observed = p.squash.Commit
+			}
+		}
+		if PatchRef(req.BaseRef) != "" {
+			cacheTip := landing.TrunkAfter
+			if p.recovered {
+				cacheTip = p.tip
+			}
+			// The delivery moved; a cache that could not follow it leaves the claim for the
+			// retry, which recovers the move and refreshes the cache before its receipt.
+			if err := t.RefreshForkCache(req.BaseRef, cacheTip); err != nil {
 				return Landing{}, err
 			}
-			if tip != p.observationTip {
-				return Landing{}, Externalf("observed trunk changed during landing preparation; no move made")
-			}
 		}
 	}
-	if err := ctx.Err(); err != nil {
+	if p.history != nil {
+		if err := t.pinHistory(p.history); err != nil {
+			return Landing{}, err
+		}
+	}
+	landing, saved, err := recordPublished(ctx, s, p, req, landing, claimed)
+	if err != nil {
 		return Landing{}, err
 	}
-	// A recovered landing's move already happened: its row is written and nothing moves,
-	// so the history keeps the tip read under the lock.
-	if landing.Landed() && !p.recovered {
-		req.observation.note("trunk-move")
-		install, err := t.MoveOwner(p.plan, req.BaseRef, p.squash.Commit, p.tip)
+	if saved && p.history.lost == "" {
+		// The row no longer names a lost tip, so its retention ref goes, after the row and
+		// with nothing held. A kill before this leaves one extra ref the next save removes.
+		if err := t.dropLostHistoryRef(); err != nil {
+			return landing, err
+		}
+	}
+	return landing, nil
+}
+
+// checkTips rereads, with nothing held, the trunk tips preparation decided against.
+func checkTips(t *Trunk, p preparedLanding, req LandingRequest) error {
+	tip, err := t.Head(req.BaseRef)
+	if err != nil {
+		return err
+	}
+	if tip != p.tip {
+		return Externalf("trunk %s changed during landing preparation: expected %s, got %s", req.BaseRef, p.tip, tip)
+	}
+	if p.observationRef != "" && p.observationRef != req.BaseRef {
+		tip, err = t.Head(p.observationRef)
 		if err != nil {
-			return Landing{}, err
+			return err
 		}
-		pub.install = install
-		landing.TrunkAfter = p.squash.Commit
-		if p.history != nil && PatchRef(req.BaseRef) == "" {
-			p.history.observed = p.squash.Commit
+		if tip != p.observationTip {
+			return Externalf("observed trunk changed during landing preparation; no move made")
 		}
 	}
-	if !notLandable && p.history != nil {
-		if err := t.saveHistory(tx, p.history); err != nil {
-			return Landing{}, err
+	return nil
+}
+
+// claimLanding is the publication's first write: it rechecks the store against what
+// preparation read and claims the landing. It runs no git and touches no file. A landing
+// whose item was closed meanwhile answers as the refusal it now is, with no claim.
+func claimLanding(ctx context.Context, s *store.Store, p preparedLanding, req LandingRequest, landing Landing) (Landing, bool, error) {
+	claimed := false
+	err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		claimed = false
+		notLandable, err := itemNotLandable(tx, req.ItemID)
+		if err != nil {
+			return err
 		}
-	}
-	if landing.Landed() && PatchRef(req.BaseRef) != "" {
-		cacheTip := landing.TrunkAfter
+		if notLandable && p.recovered {
+			return Externalf("%s already carries %s, the landing of run %s, but item %s was closed while the receipt was being prepared: nothing was recorded or moved; decide by hand whether the item stays closed with its change on the trunk, or revert %s",
+				req.BaseRef, landing.TrunkAfter, req.RunID, req.ItemID, landing.TrunkAfter)
+		}
+		if err := dropStaleClaims(tx, p.staleClaims); err != nil {
+			return err
+		}
+		if notLandable {
+			landing.Result, landing.Reason = ResultRefused, ReasonItemNotLandable
+			landing.LandedTree, landing.ConflictPaths = "", nil
+			return nil
+		}
 		if p.recovered {
-			cacheTip = p.tip
+			recorded, err := landingRecorded(tx, landing.TrunkAfter)
+			if err != nil {
+				return err
+			}
+			if recorded {
+				return Externalf("the landing of run %s at %s was recorded during preparation; nothing was recorded twice", req.RunID, landing.TrunkAfter)
+			}
 		}
-		if err := t.RefreshForkCache(req.BaseRef, cacheTip); err != nil {
-			return Landing{}, err
+		if p.observationRef != "" {
+			current, err := readHistory(tx)
+			if err != nil {
+				return err
+			}
+			if current != p.historyBefore {
+				return Externalf("trunk history changed during landing preparation; no move made")
+			}
+		}
+		commit := p.squash.Commit
+		if p.recovered {
+			commit = landing.TrunkAfter
+		}
+		if _, err := tx.Exec(`INSERT INTO landing_claims (run_id, item_id, base_ref, head_sha, commit_sha, trunk_before, claimed_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(run_id) DO UPDATE SET item_id = excluded.item_id, base_ref = excluded.base_ref,
+			  head_sha = excluded.head_sha, commit_sha = excluded.commit_sha,
+			  trunk_before = excluded.trunk_before, claimed_at = excluded.claimed_at`,
+			req.RunID, req.ItemID, req.BaseRef, req.HeadSHA, commit, p.tip, req.At.UnixMilli()); err != nil {
+			return Internalf("claiming the landing of run %s: %v", req.RunID, err)
+		}
+		claimed = true
+		return nil
+	})
+	if err != nil {
+		return Landing{}, false, err
+	}
+	return landing, claimed, nil
+}
+
+// recordPublished is the publication's last write: the receipt, the history row and the
+// claim's removal, in one transaction. It runs no git and touches no file. It answers
+// whether it saved the history row.
+//
+// A claimed landing has published: its receipt is written whatever changed meanwhile,
+// because the trunk carries the change. A trunk history row another observer rewrote since
+// preparation is that observer's and is left as it is; the next landing or observation
+// reads it again. An unclaimed landing moved nothing, so a changed history still refuses it.
+func recordPublished(ctx context.Context, s *store.Store, p preparedLanding, req LandingRequest, landing Landing, claimed bool) (Landing, bool, error) {
+	var answer Landing
+	saved := false
+	err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		recorded, saveHistory := landing, p.history != nil
+		saved = false
+		if !claimed {
+			if err := dropStaleClaims(tx, p.staleClaims); err != nil {
+				return err
+			}
+			notLandable, err := itemNotLandable(tx, req.ItemID)
+			if err != nil {
+				return err
+			}
+			if notLandable {
+				recorded.Result, recorded.Reason = ResultRefused, ReasonItemNotLandable
+				recorded.LandedTree, recorded.ConflictPaths = "", nil
+				saveHistory = false
+			}
+		}
+		if saveHistory && p.observationRef != "" {
+			current, err := readHistory(tx)
+			if err != nil {
+				return err
+			}
+			if current != p.historyBefore {
+				if !claimed {
+					return Externalf("trunk history changed during landing preparation; no move made")
+				}
+				saveHistory = false
+			}
+		}
+		if saveHistory {
+			if err := writeHistoryRow(tx, p.history); err != nil {
+				return err
+			}
+			saved = true
+		}
+		var err error
+		if answer, err = recordLanding(ctx, tx, recorded, req.At); err != nil {
+			return err
+		}
+		if claimed {
+			if _, err := tx.Exec(`DELETE FROM landing_claims WHERE run_id = ?`, req.RunID); err != nil {
+				return Internalf("releasing the claim of run %s: %v", req.RunID, err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return Landing{}, false, err
+	}
+	return answer, saved, nil
+}
+
+// abandonClaim releases this run's claim after a publication that failed before or during
+// the move, when the trunk does not carry the claimed commit. The check is git, so it runs
+// with nothing held; the release is its own short write. A trunk that carries the commit
+// keeps the claim, because the change is published and the retry records it.
+func (t *Trunk) abandonClaim(ctx context.Context, s *store.Store, p preparedLanding, req LandingRequest, landing Landing) error {
+	cleanup := *t
+	cleanup.ctx = context.WithoutCancel(ctx)
+	commit := p.squash.Commit
+	if p.recovered {
+		commit = landing.TrunkAfter
+	}
+	if commit == "" {
+		return nil
+	}
+	tip, err := cleanup.Head(req.BaseRef)
+	if err != nil {
+		return err
+	}
+	published, err := cleanup.historyAncestor(commit, tip)
+	if err != nil || published {
+		return err
+	}
+	return s.WriteTx(context.WithoutCancel(ctx), func(tx *store.Tx) error {
+		_, err := tx.Exec(`DELETE FROM landing_claims WHERE run_id = ? AND commit_sha = ?`, req.RunID, commit)
+		return err
+	})
+}
+
+// landingClaim is one landing_claims row: a landing that began publishing and has not yet
+// recorded its receipt.
+type landingClaim struct{ runID, baseRef, commit string }
+
+// staleClaims answers the claims no landing will finish: under land.lock no other landing is
+// in flight, so a claim whose commit its trunk does not carry is one whose move never
+// happened. A claim whose commit is on the trunk is not stale — the change is published and
+// its run's retry records it — so it stays, and the item stays unclosable, which is true.
+// The reads are a read transaction and git, with no write open.
+func (t *Trunk) staleClaims(ctx context.Context, s *store.Store) ([]landingClaim, error) {
+	var claims []landingClaim
+	err := s.ReadTx(ctx, func(r *store.Reader) error {
+		rows, err := r.Query(`SELECT run_id, base_ref, commit_sha FROM landing_claims ORDER BY run_id`)
+		if err != nil {
+			return Internalf("reading the landing claims: %v", err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var c landingClaim
+			if err := rows.Scan(&c.runID, &c.baseRef, &c.commit); err != nil {
+				return Internalf("reading a landing claim: %v", err)
+			}
+			claims = append(claims, c)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	var stale []landingClaim
+	for _, c := range claims {
+		tip, err := t.Head(c.baseRef)
+		if err != nil {
+			return nil, err
+		}
+		published, err := t.historyAncestor(c.commit, tip)
+		if err != nil {
+			return nil, err
+		}
+		if !published {
+			stale = append(stale, c)
 		}
 	}
-	return recordLanding(ctx, tx, landing, req.At)
+	return stale, nil
+}
+
+// dropStaleClaims deletes the claims staleClaims found, each only if it still names the
+// commit it was judged by.
+func dropStaleClaims(tx *store.Tx, stale []landingClaim) error {
+	for _, c := range stale {
+		if _, err := tx.Exec(`DELETE FROM landing_claims WHERE run_id = ? AND commit_sha = ?`, c.runID, c.commit); err != nil {
+			return Internalf("clearing the stale claim of run %s: %v", c.runID, err)
+		}
+	}
+	return nil
 }
 
 // recordLanding writes one landing row and appends its event in the same transaction, and

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr/store"
 	"golang.org/x/sys/unix"
 )
 
@@ -31,6 +32,11 @@ func (n node) equal(o node) bool {
 type rootDir struct{ fd int }
 
 func openRoot(dir string) (*rootDir, error) {
+	// Every install into the owner's checkout starts here, so the guard sees the file I/O
+	// of an install begun under the store's write lock (tools/tillr/store/ioguard.go).
+	if err := store.CheckIO("opening the checkout " + dir); err != nil {
+		return nil, err
+	}
 	fd, err := unix.Open(dir, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, Externalf("opening %s: %v", dir, err)

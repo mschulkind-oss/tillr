@@ -101,6 +101,9 @@ func One(ctx context.Context, s *store.Store, t *Trunk, req OneRequest) (Landing
 func judge(t *Trunk, req OneRequest, base, head string) (Verdict, error) {
 	argv := append(append([]string{}, req.Gate...),
 		"--base", base, "--head", head, "--worktree", t.repo)
+	if err := store.CheckIO("the gate program " + argv[0]); err != nil {
+		return Verdict{}, err
+	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = t.repo
 	cmd.Env = gitEnv()

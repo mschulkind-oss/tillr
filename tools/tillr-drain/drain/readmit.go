@@ -51,7 +51,7 @@ func itemBlockHash(f blockFields, body string) (string, error) {
 	return inputHash([]any{f.Title, f.BodyRef, f.DesignDoc, f.Seat, f.Workflow, f.Criteria, body})
 }
 
-func currentRunInputs(r *store.Reader, row itemRow, policy *Policy, root string, build BuildStamp) (*RunInputs, error) {
+func currentRunInputs(ctx context.Context, r *store.Reader, row itemRow, policy *Policy, root string, build BuildStamp) (*RunInputs, error) {
 	var title, bodyRef string
 	if err := r.QueryRow(`SELECT title, COALESCE(body_ref,'') FROM items WHERE item_id = ?`, row.ItemID).Scan(&title, &bodyRef); err != nil {
 		return nil, err
@@ -74,14 +74,25 @@ func currentRunInputs(r *store.Reader, row itemRow, policy *Policy, root string,
 	if err != nil {
 		return nil, err
 	}
-	body, err := item.DefinitionBody(root, bodyRef, row.ItemID)
+	// Both reads are files, so inside a gathered write they are answered from what was
+	// read before it (writeGathered).
+	body, err := gather(ctx, "definition body "+bodyRef+" of "+row.ItemID+" in "+root, func(context.Context) (string, error) {
+		return item.DefinitionBody(root, bodyRef, row.ItemID)
+	})
 	if err != nil {
 		return nil, err
 	}
 	var workflowBody, workflowError string
 	if row.Workflow != "" && item.WorkflowRefValid(row.Workflow) {
-		raw, err := os.ReadFile(filepath.Join(root, "config", "tillr", "workflows", row.Workflow+".json"))
-		workflowBody = string(raw)
+		path := filepath.Join(root, "config", "tillr", "workflows", row.Workflow+".json")
+		raw, err := gather(ctx, "read "+path, func(context.Context) (string, error) {
+			raw, err := os.ReadFile(path)
+			return string(raw), err
+		})
+		if isGatherMiss(err) {
+			return nil, err
+		}
+		workflowBody = raw
 		if err != nil {
 			workflowError = err.Error()
 		}

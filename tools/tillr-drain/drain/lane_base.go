@@ -16,15 +16,27 @@ import (
 const ReasonTrunkUnproved = "trunk-unproved"
 
 func containsCommit(ctx context.Context, root, ancestor, tip string) (bool, error) {
-	cmd := exec.CommandContext(ctx, "git", "-C", root, "merge-base", "--is-ancestor", ancestor, tip)
-	raw, err := cmd.CombinedOutput()
-	if err == nil {
-		return true, nil
-	}
-	if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
-		return false, nil
-	}
-	return false, Externalf("checking lane base ancestry: %v: %s", err, raw)
+	out, err := gather(ctx, gitKey("ancestry", root, []string{"merge-base", "--is-ancestor", ancestor, tip}), func(ctx context.Context) (string, error) {
+		cmd := exec.CommandContext(ctx, "git", "-C", root, "merge-base", "--is-ancestor", ancestor, tip)
+		raw, err := cmd.CombinedOutput()
+		if err == nil {
+			return "yes", nil
+		}
+		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
+			return "no", nil
+		}
+		return "", Externalf("checking lane base ancestry: %v: %s", err, raw)
+	})
+	return out == "yes", err
+}
+
+// gitKey names one git command in one checkout, the key gathered I/O is answered by. The
+// form names what the wrapper answers (stdout as written, output trimmed, an ancestry
+// verdict, a blob), because two wrappers can run the same command and answer it
+// differently: a key without its form let a trimmed rev-parse be answered with the
+// newline-terminated stdout another wrapper had gathered.
+func gitKey(form, root string, args []string) string {
+	return form + ": git -C " + root + " " + strings.Join(args, " ")
 }
 
 // provedLaneBase returns empty only for the documented bootstrap case or tip
@@ -143,13 +155,24 @@ func blockBodyAt(ctx context.Context, root, sha, ref, itemID string, cache block
 	raw, seen := cache[key]
 	if !seen {
 		if _, err := heavyGitOutput(ctx, root, "rev-parse", "--verify", "--quiet", key); err == nil {
-			out, err := exec.CommandContext(ctx, "git", "-C", root, "cat-file", "blob", key).Output()
+			text, err := gather(ctx, gitKey("blob", root, []string{"cat-file", "blob", key}), func(ctx context.Context) (string, error) {
+				out, err := exec.CommandContext(ctx, "git", "-C", root, "cat-file", "blob", key).Output()
+				if err != nil {
+					return "", Externalf("reading %s: %v", key, err)
+				}
+				return string(out), nil
+			})
 			if err != nil {
-				return "", false, Externalf("reading %s: %v", key, err)
+				return "", false, err
 			}
-			text := string(out)
 			raw = &text
+		} else if isGatherMiss(err) {
+			// Not an absent path: the answer has not been fetched yet.
+			return "", false, err
 		} else if _, err := heavyGitOutput(ctx, root, "rev-parse", "--verify", "--quiet", sha+"^{commit}"); err != nil {
+			if isGatherMiss(err) {
+				return "", false, err
+			}
 			return "", false, Externalf("reading %s: %s is not a commit: %v", key, sha, err)
 		}
 		cache[key] = raw

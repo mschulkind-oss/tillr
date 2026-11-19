@@ -212,7 +212,7 @@ func TestABranchSwitchDuringTheFinalComparisonIsRefusedByGitsLock(t *testing.T) 
 	write(t, filepath.Join(d, "a.txt"), ownerLines)
 	inTx := false
 	var checkoutErr error
-	land.OwnerHooks.TxOpened = func() { inTx = true }
+	land.OwnerHooks.Publishing = func() { inTx = true }
 	land.OwnerHooks.GitCall = func(_ string, args []string) {
 		if inTx && checkoutErr == nil && args[0] == "ls-files" {
 			checkoutErr = exec.Command("git", "-C", d, "checkout", "-q", "-b", "elsewhere").Run()

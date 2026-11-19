@@ -2,6 +2,7 @@ package item
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"strings"
 	"time"
@@ -39,6 +40,9 @@ func Close(ctx context.Context, tx *store.Tx, id, reason, by string, at time.Tim
 			return record.Envelope{}, Rejectionf("already-landed", id, "item %q has already landed; it cannot be closed", id)
 		}
 	}
+	if err := refuseClaimedLanding(tx.Reader(), id, "closed"); err != nil {
+		return record.Envelope{}, err
+	}
 	d, err := itemDefinition(tx.Reader())
 	if err != nil {
 		return record.Envelope{}, err
@@ -58,6 +62,32 @@ func Close(ctx context.Context, tx *store.Tx, id, reason, by string, at time.Tim
 		return record.Envelope{}, Internalf("closing item: %v", err)
 	}
 	return recordLifecycle(tx, p, at, "close", reason, by)
+}
+
+// refuseClaimedLanding refuses to finish an item a landing is publishing. The lander's
+// first short write claims the landing (landing_claims, tools/tillr-land/land/schema.go)
+// and its receipt write removes the claim; between them the trunk moves with no store write
+// open, so this row, not the write lock, is what keeps an item from being closed under a
+// landing that is about to put it on the trunk. The refusal names the run: once that
+// landing records its receipt the item is landed, and a landing killed mid-way is finished
+// by its run's retry or, when its move never happened, cleared by the next landing.
+func refuseClaimedLanding(r *store.Reader, id, to string) error {
+	var hasClaims bool
+	if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'landing_claims')`).Scan(&hasClaims); err != nil {
+		return Internalf("checking landing claim schema: %v", err)
+	}
+	if !hasClaims {
+		return nil
+	}
+	var run string
+	err := r.QueryRow(`SELECT run_id FROM landing_claims WHERE item_id = ? ORDER BY run_id LIMIT 1`, id).Scan(&run)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return Internalf("reading landing claims: %v", err)
+	}
+	return Rejectionf("landing-in-progress", id, "item %q is being landed by run %s; it cannot be %s until that landing records its receipt", id, run, to)
 }
 
 // Reopen restores the saved disposition, including blocked metadata left intact by Close.

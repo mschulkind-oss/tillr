@@ -109,7 +109,7 @@ func TestALandingLeavesUntouchedPathsAloneAndKeepsTheStagedSplitOnTouchedOnes(t 
 			afterTx = append(afterTx, args[0])
 		}
 	}
-	land.OwnerHooks.TxOpened = func() { txOpen = true }
+	land.OwnerHooks.Publishing = func() { txOpen = true }
 	every := []string{"a.txt", "untouched.txt", "keep.txt", "scratch.txt"}
 	snapshot := func() string {
 		out := git(t, d, "ls-files", "-s") + git(t, d, "status", "--porcelain") + git(t, d, "rev-parse", "HEAD")
@@ -167,7 +167,7 @@ func TestALandingLeavesUntouchedPathsAloneAndKeepsTheStagedSplitOnTouchedOnes(t 
 	allowed := map[string]bool{"worktree": true, "rev-parse": true, "ls-files": true, "update-index": true, "-c": true, "update-ref": true}
 	for _, c := range afterTx {
 		if !allowed[c] {
-			t.Errorf("git %s ran inside the write transaction; all calls: %v", c, calls)
+			t.Errorf("git %s ran in the publication; all calls: %v", c, calls)
 		}
 	}
 	prep := strings.Join(calls, " ")

@@ -82,7 +82,7 @@ func (l *Loop) repairBasis(ctx context.Context, c Candidate, landed LandOutcome,
 		}
 		for _, row := range rows {
 			if row.ItemID == c.ItemID {
-				inputs, err := currentRunInputs(r, row, policy, l.cfg.Root, l.build)
+				inputs, err := currentRunInputs(ctx, r, row, policy, l.cfg.Root, l.build)
 				if err != nil {
 					return err
 				}

@@ -62,6 +62,13 @@ func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string
 	if err := checkClosedTransition(d, itemID, payload.State, state, false); err != nil {
 		return record.Envelope{}, err
 	}
+	// The two states a landing refuses (item-not-landable) are refused here while a
+	// landing of the item is publishing, as Close refuses closed.
+	if state != payload.State && (state == d.Closed || state == "resolved-elsewhere") {
+		if err := refuseClaimedLanding(tx.Reader(), itemID, state); err != nil {
+			return record.Envelope{}, err
+		}
+	}
 	if err := checkMove(d, itemID, payload.State, state, receipt); err != nil {
 		return record.Envelope{}, err
 	}
