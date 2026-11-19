@@ -438,6 +438,24 @@ or charging them again, and advances to the following node once. Shutdown
 accounting includes every reader's latest recorded spend, not just the reader
 that owns the set's dispatch record.
 
+A node's answer is the word after its report's last `RESULT:`, read through
+Markdown emphasis, code markers and a closing full stop, so `**RESULT: done**`
+answers `done`. An agent node whose footer is missing, or names no ending
+(`done`, `failed`, `blocked`), gave no answer the loop can read: that node
+alone runs again on the failover route, and its finished siblings are kept.
+
+Before 2026-11-18 the loop read `**RESULT: done**` as `done**`, recorded that
+reader `blocked` with no cause, and abandoned its set, so the planner could
+only say `run-link-missing`. That record now holds as
+`node-answer-unread: <node>`, read from the run's own report. Its mover is a
+retry of the item's latest finished run; a build retry naming any other run
+is refused with the accepted command, since the plan would ignore it. A retry
+of a workflow item whose
+attempt ran no writing node keeps every read-only node that passed (recorded
+in `node_reused`) and starts the new attempt at the first node not kept. A
+retry after a writing node ran keeps nothing, because the readers read the tree
+for the candidate the retry replaces.
+
 ## Registered command nodes
 
 A workflow stage with `kind: command` runs a registered program, not a model.

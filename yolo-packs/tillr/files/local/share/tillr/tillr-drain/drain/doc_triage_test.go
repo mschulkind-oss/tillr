@@ -20,13 +20,15 @@ var triageDocs = []string{"docs/design/a.md", "docs/design/b.md", "docs/design/c
 // declared finding output before the shared parallel fixture settles it.
 type docTriageSteps struct {
 	*parallelSteps
+	docs     []string
 	mu       sync.Mutex
 	briefs   map[int]string
 	requests map[int]run.Request
 }
 
 func (s *docTriageSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
-	index, err := strconv.Atoi(req.RunID[strings.LastIndex(req.RunID, "-n")+2:])
+	id := strings.TrimSuffix(req.RunID, "-failover")
+	index, err := strconv.Atoi(id[strings.LastIndex(id, "-n")+2:])
 	if err != nil {
 		return run.Record{}, "", err
 	}
@@ -43,8 +45,8 @@ func (s *docTriageSteps) Run(ctx context.Context, req run.Request) (run.Record, 
 	s.mu.Lock()
 	s.briefs[index], s.requests[index] = string(brief), req
 	s.mu.Unlock()
-	if index <= len(triageDocs) {
-		finding := fmt.Sprintf("Finding for %s\n", triageDocs[index-1])
+	if index <= len(s.docs) {
+		finding := fmt.Sprintf("Finding for %s\n", s.docs[index-1])
 		if err := os.WriteFile(filepath.Join(nodeOutputsDir(s.f.root, req.RunID), "finding"), []byte(finding), 0644); err != nil {
 			return run.Record{}, "", err
 		}
@@ -57,37 +59,7 @@ func (s *docTriageSteps) Run(ctx context.Context, req run.Request) (run.Record, 
 // the design seat that receives every finding and writes within the item's fence; the
 // item lands once.
 func TestDocTriageWorkflowRunsReadersThenOneReport(t *testing.T) {
-	f, l, base := workflowLoopFixture(t, "")
-	l.cfg.Policy.Seats["design"] = "fixture"
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "config", "tillr", "workflows", "doc-triage@v1.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/doc-triage@v1.json"), string(raw))
-	runGit(t, f.root, "add", ".")
-	runGit(t, f.root, "commit", "-qm", "tracked triage workflow")
-	fixtureWrite(t, f, func(tx *store.Tx) error {
-		if _, err := tx.Exec(`UPDATE items SET state='closed' WHERE item_id!='item-a'`); err != nil {
-			return err
-		}
-		_, err := tx.Exec(`UPDATE items SET seat='design', workflow='doc-triage@v1', workflow_args=? WHERE item_id='item-a'`,
-			`{"docs":["`+strings.Join(triageDocs, `","`)+`"]}`)
-		return err
-	})
-	var checked strings.Builder
-	if !CheckWorkflows(f.root, filepath.Join(f.root, "config/tillr/workflows"), &checked) {
-		t.Fatal(checked.String())
-	}
-	base.firstHead = runGit(t, f.root, "rev-parse", "HEAD")
-	steps := &docTriageSteps{parallelSteps: &parallelSteps{workflowSteps: base, overlap: make(chan struct{})}, briefs: map[int]string{}, requests: map[int]run.Request{}}
-	l.cfg.Steps = steps
-	result := &LoopResult{}
-	for i := 0; i < 12 && result.Landed == 0; i++ {
-		if _, err := l.pass(context.Background(), result); err != nil {
-			t.Fatal(err)
-		}
-		drainOwned(t, l, result)
-	}
+	f, steps, result := runDocTriage(t, triageDocs, nil)
 	if len(steps.requests) != 5 || result.Landed != 1 || steps.builders != 1 || steps.ended != 4 {
 		t.Fatalf("runs=%d builders=%d readers ended=%d result=%+v", len(steps.requests), steps.builders, steps.ended, result)
 	}
@@ -200,4 +172,90 @@ func mustReadTriageWorkflow(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return string(raw)
+}
+
+// runDocTriage files item-a as a doc-triage@v1 item over docs and runs the loop until it
+// lands or twelve passes go by. Every reader run, a failover's included, writes its
+// finding; tweak adjusts the loop and the shared parallel fixture before the loop starts.
+func runDocTriage(t *testing.T, docs []string, tweak func(*Loop, *parallelSteps)) (refusalLoopFixture, *docTriageSteps, *LoopResult) {
+	t.Helper()
+	f, l, base := workflowLoopFixture(t, "")
+	l.cfg.Policy.Seats["design"] = "fixture"
+	writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/doc-triage@v1.json"), mustReadTriageWorkflow(t))
+	runGit(t, f.root, "add", ".")
+	runGit(t, f.root, "commit", "-qm", "tracked triage workflow")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`UPDATE items SET state='closed' WHERE item_id!='item-a'`); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`UPDATE items SET seat='design', workflow='doc-triage@v1', workflow_args=? WHERE item_id='item-a'`,
+			`{"docs":["`+strings.Join(docs, `","`)+`"]}`)
+		return err
+	})
+	var checked strings.Builder
+	if !CheckWorkflows(f.root, filepath.Join(f.root, "config/tillr/workflows"), &checked) {
+		t.Fatal(checked.String())
+	}
+	base.firstHead = runGit(t, f.root, "rev-parse", "HEAD")
+	shared := &parallelSteps{workflowSteps: base, overlap: make(chan struct{}), builderSuffix: fmt.Sprintf("-n%d", len(docs)+1), writerAfter: len(docs)}
+	if tweak != nil {
+		tweak(l, shared)
+	}
+	steps := &docTriageSteps{parallelSteps: shared, docs: docs, briefs: map[int]string{}, requests: map[int]run.Request{}}
+	l.cfg.Steps = steps
+	result := &LoopResult{}
+	for i := 0; i < 12 && result.Landed == 0; i++ {
+		if _, err := l.pass(context.Background(), result); err != nil {
+			t.Fatal(err)
+		}
+		drainOwned(t, l, result)
+	}
+	return f, steps, result
+}
+
+// docTriageOutcomes answers every node's outcome in item-a's latest attempt.
+func docTriageOutcomes(t *testing.T, f refusalLoopFixture) map[string]string {
+	t.Helper()
+	outcomes := map[string]string{}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		var err error
+		var attempt int
+		if err = r.QueryRow(`SELECT MAX(attempt) FROM node_runs WHERE item_id='item-a'`).Scan(&attempt); err != nil {
+			return err
+		}
+		outcomes, err = workflowOutcomes(r, "item-a", attempt)
+		return err
+	})
+	return outcomes
+}
+
+func numberedDocs(n int) []string {
+	docs := make([]string, n)
+	for i := range docs {
+		docs[i] = fmt.Sprintf("docs/design/doc-%d.md", i+1)
+	}
+	return docs
+}
+
+// More readers than the parallel width (four) run as more than one set and still reach the
+// report node. Two readers end with the footer in Markdown bold — the form that stopped
+// the 2026-11-18 triage item at read-9 — one in a set of four (the parallel settlement)
+// and one alone in the last set (the single-node settlement); both read as done.
+func TestDocTriageWithMoreReadersThanTheWidthReachesTheReport(t *testing.T) {
+	docs := numberedDocs(5)
+	f, steps, result := runDocTriage(t, docs, func(_ *Loop, s *parallelSteps) {
+		s.badReports = map[string]string{"-n2": "Finding written.\n**RESULT: done**\n", "-n5": "Finding written.\n**RESULT: done**\n"}
+	})
+	if result.Landed != 1 || steps.builders != 1 || len(steps.requests) != len(docs)+1 {
+		t.Fatalf("landed=%d builders=%d runs=%d result=%+v", result.Landed, steps.builders, len(steps.requests), result)
+	}
+	outcomes := docTriageOutcomes(t, f)
+	for i := range docs {
+		if node := fmt.Sprintf("read-%d", i+1); outcomes[node] != "passed" {
+			t.Errorf("%s: %q", node, outcomes[node])
+		}
+	}
+	if outcomes["report"] != "passed" {
+		t.Errorf("report: %q", outcomes["report"])
+	}
 }

@@ -551,7 +551,7 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		if ClassifyAttempt(rec, log) == AttemptUnjudged {
 			return true, Externalf("unjudged workflow node requires continuation or inspection")
 		}
-		if ClassifyAttempt(rec, log) == AttemptInfrastructure || (rec.State == run.StateExited && footer == "") {
+		if ClassifyAttempt(rec, log) == AttemptInfrastructure || (rec.State == run.StateExited && !readableFooter(footer)) {
 			return true, l.retryWorkflowNode(ctx, d, base, rec, result)
 		}
 		if footer != "done" && footer != "failed" {

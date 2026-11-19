@@ -111,6 +111,12 @@ type Decision struct {
 	BlockConflict     *item.Conflict `json:"block_conflict,omitempty"`
 	Inputs            *RunInputs     `json:"inputs,omitempty"`
 
+	// ReusedNodes are the read-only nodes a retry keeps from attempt ReusedAttempt: they
+	// passed there, no write node had run, so the new attempt starts at the first node not
+	// kept and records each kept one in node_reused at claim (retainedReaders).
+	ReusedNodes   []string `json:"reused_nodes,omitempty"`
+	ReusedAttempt int      `json:"reused_attempt,omitempty"`
+
 	DesignContinuationFrom string `json:"design_continuation_from,omitempty"`
 	DesignContinuationHead string `json:"design_continuation_head,omitempty"`
 
@@ -616,6 +622,15 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 					}
 				}
 			}
+			var reused []string
+			reusedFrom := 0
+			if _, retrying := retries[item.ItemID]; retrying && !retainedGraph && w != nil && loadErr == nil && hasNodes {
+				reusedFrom = p.nextAttempt(item.ItemID) - 1
+				resumeNode, reused, err = retainedReaders(r, item.ItemID, reusedFrom, w)
+				if err != nil {
+					return nil, readFailure(err)
+				}
+			}
 			if w != nil {
 				if loadErr == nil {
 					if evaluatorSlot(w) != "" {
@@ -666,6 +681,11 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 					}
 				}
 				decision.SelectedWorkflow, decision.WorkflowSource = selected, source
+				if len(reused) > 0 && decision.Action == ActionRetry {
+					decision.ReusedNodes, decision.ReusedAttempt = reused, reusedFrom
+				} else if len(reused) > 0 {
+					resumeNode = 0
+				}
 				if w != nil && decision.RunRequest != nil {
 					decision.Workflow = w
 					decision.NodeIndex = resumeNode

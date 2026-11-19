@@ -123,6 +123,11 @@ func ClassifyAttempt(rec run.Record, log string) AttemptClass {
 // place the loop reads the model's answer rather than the attempt's class: a run that says
 // `blocked` produced a judgable report and no candidate to judge, which is a fact about the
 // item rather than about the code.
+//
+// The word is read through Markdown emphasis and code markers and a closing full stop, so
+// `**RESULT: done**` and "RESULT: done." both answer "done": a model that bolds its
+// footer still answered, and reading the markers as part of the word is what held the
+// 2026-11-18 triage item at read-9.
 func reportFooter(log string) string {
 	idx := strings.LastIndex(log, ReportFooter)
 	if idx < 0 {
@@ -132,7 +137,17 @@ func reportFooter(log string) string {
 	if end := strings.IndexAny(rest, "\r\n"); end >= 0 {
 		rest = rest[:end]
 	}
-	return strings.ToLower(strings.TrimSpace(rest))
+	return strings.ToLower(strings.Trim(rest, "*_`. \t"))
+}
+
+// readableFooter reports whether a footer names an ending a workflow node's contract
+// knows. Anything else is no answer the loop can read, the same fact as no footer.
+func readableFooter(footer string) bool {
+	switch footer {
+	case "done", "failed", "blocked", "trunk-broken":
+		return true
+	}
+	return false
 }
 
 // priorRun is one terminal run the store holds for an item, as the planner reads it.

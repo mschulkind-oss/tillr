@@ -1291,6 +1291,11 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			if d.Workflow != nil && d.NodeBaseSHA == "" {
 				d.NodeBaseSHA = base
 			}
+			// A retry's kept readers are recorded first, so the set claimed below is
+			// chosen from the nodes this attempt still has to run.
+			if err := carryRetainedReaders(tx, d); err != nil {
+				return err
+			}
 			if err := l.claimParallel(tx, &d); err != nil {
 				return err
 			}
