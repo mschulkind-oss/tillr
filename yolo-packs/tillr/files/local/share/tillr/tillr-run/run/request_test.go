@@ -93,6 +93,30 @@ func TestABackendDerivesACompleteRequest(t *testing.T) {
 	}
 }
 
+// Account is passed as --account <value> when non-empty and omitted when empty so adapters
+// that do not take --account never receive it.
+func TestAccountIsPassedOnlyWhenNonEmpty(t *testing.T) {
+	var withAccount run.Backend
+	if err := json.Unmarshal([]byte(`{"adapter":"/adapter/claude","model":"model-x","effort":"medium","account":"subscription"}`), &withAccount); err != nil {
+		t.Fatalf("decoding backend with account failed: %v", err)
+	}
+	got := withAccount.Request("item_042", "lane-1", "run-1", "claude").Command
+	want := []string{"/adapter/claude", "--backend", "claude", "--model", "model-x", "--effort", "medium", "--account", "subscription"}
+	if fmt.Sprintf("%q", got) != fmt.Sprintf("%q", want) {
+		t.Fatalf("command with account is %q, want %q", got, want)
+	}
+
+	var plain run.Backend
+	if err := json.Unmarshal([]byte(`{"adapter":"/adapter/claude","model":"model-x","effort":"medium"}`), &plain); err != nil {
+		t.Fatalf("decoding backend without account failed: %v", err)
+	}
+	for _, arg := range plain.Request("item_042", "lane-1", "run-1", "claude").Command {
+		if arg == "--account" {
+			t.Fatalf("backend without account passed --account: %v", plain.Request("item_042", "lane-1", "run-1", "claude").Command)
+		}
+	}
+}
+
 // A backend naming a working directory of its own keeps it: the default is a default, and a
 // policy that names a value has named one.
 func TestABackendKeepsTheWorkingDirItNames(t *testing.T) {

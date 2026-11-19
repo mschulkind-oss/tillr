@@ -50,6 +50,7 @@ BACKENDS = ROOT / "tools" / "tillr-run" / "backends"
 POLICY = ROOT / "config" / "tillr" / "backend-policy.json"
 BEDROCK_POLICY = ROOT / "config" / "tillr" / "backend-policy.bedrock.json"
 CLAUDE_POLICY = ROOT / "config" / "tillr" / "backend-policy.claude.json"
+CLAUDE_COPILOT_POLICY = ROOT / "config" / "tillr" / "backend-policy.claude-copilot.json"
 TEMPLATE = BACKENDS / "brief-template.md"
 
 # backend name -> (harness command the adapter spawns, its complete fixture)
@@ -441,8 +442,9 @@ def test_policy():
     known = {f"tools/tillr-run/backends/{name}/run-{name}" for name in DIALECTS}
     bedrock = json.loads(BEDROCK_POLICY.read_text())
     claude = json.loads(CLAUDE_POLICY.read_text())
+    claude_copilot = json.loads(CLAUDE_COPILOT_POLICY.read_text())
     named_anywhere = set()
-    for label, document in (("personal", policy), ("bedrock", bedrock), ("claude", claude)):
+    for label, document in (("personal", policy), ("bedrock", bedrock), ("claude", claude), ("claude-copilot", claude_copilot)):
         named = {entry["adapter"] for entry in document["backends"].values()}
         check(
             named <= known,
@@ -495,11 +497,12 @@ def test_policy():
                 f"{name}: the model list does not start at its `model`",
             )
     test_claude_policy(claude)
+    test_claude_copilot_policy(claude_copilot)
 
     # D-MM5: the tillr tree ships publicly and names no model vendor, so no id from any
     # policy may appear in it — not as a default, a specimen or a fallback. The Claude
     # policy's short aliases are scanned for too: they live in config/ and nowhere else.
-    every = [entry for document in (policy, bedrock, claude) for entry in document["backends"].values()]
+    every = [entry for document in (policy, bedrock, claude, claude_copilot) for entry in document["backends"].values()]
     ids = [entry["model"] for entry in every]
     ids += [m for entry in every for m in entry.get("models", [])]
     # Tracked files only: the rule is about what the tree says, and an installed dependency
@@ -557,6 +560,48 @@ def test_claude_policy(policy):
             entry["adapter"] == "tools/tillr-run/backends/claude/run-claude",
             f"{name}: adapter is {entry['adapter']}",
         )
+        check(entry.get("model") and entry.get("effort"), f"{name}: no model or no effort")
+    for name, entry in backends.items():
+        adapter = ROOT / entry["adapter"]
+        check(adapter.exists() and os.access(adapter, os.X_OK), f"{name}: {entry['adapter']} is not an executable")
+
+
+def test_claude_copilot_policy(policy):
+    """The Claude-subscription + Copilot-fallback policy: Claude on subscription for
+    design, plan, review, verify and first choice for build, with Copilot fallback.
+    """
+    check("about" in policy, "the Claude-Copilot policy does not say what it is")
+    check(
+        "operator's, not the owner's" in policy["about"],
+        "the Claude-Copilot policy's about text must state that the seat choices are the operator's, not the owner's",
+    )
+    backends = policy["backends"]
+    check(policy["default_backend"] == "claude", f"the Claude-Copilot default is {policy['default_backend']!r}")
+    check(
+        policy.get("seats") == {
+            "design": ["claude-designer", "pi-designer", "pi"],
+            "build": ["claude", "pi-build"],
+            "review": ["claude", "pi"],
+            "scout": "pi-scout",
+            "plan": ["claude", "pi"],
+            "edit": "pi-build",
+            "test-write": "pi-build",
+            "test-run": "pi-scout",
+            "docs": "pi-build",
+            "verify": ["claude", "pi"],
+        },
+        f"the Claude-Copilot seats are {policy.get('seats')}",
+    )
+    for seat, names in policy["seats"].items():
+        for name in names if isinstance(names, list) else [names]:
+            check(name in backends, f"the Claude-Copilot {seat} seat names {name!r}, which is not a backend")
+    for name in ("claude", "claude-designer"):
+        entry = backends[name]
+        check(
+            entry["adapter"] == "tools/tillr-run/backends/claude/run-claude",
+            f"{name}: adapter is {entry['adapter']}",
+        )
+        check(entry.get("account") == "subscription", f"{name}: account is {entry.get('account')!r}, want 'subscription'")
         check(entry.get("model") and entry.get("effort"), f"{name}: no model or no effort")
     for name, entry in backends.items():
         adapter = ROOT / entry["adapter"]
@@ -1085,6 +1130,47 @@ def test_claude_argv(workspace):
         result.returncode == 2 and "'claude' is not on PATH" in result.stderr,
         f"claude: a missing harness exited {result.returncode}: {result.stderr!r}",
     )
+
+    # `--account subscription` passes --settings overriding ~/.claude/settings.json's env
+    # block and strips Bedrock environment variables; unknown --account values are refused.
+    lane = workspace.lane()
+    workspace.log.write_text("")
+    result = workspace.invoke(
+        "claude",
+        lane,
+        "--backend",
+        "claude",
+        "--model",
+        "fixture-model-claude",
+        "--effort",
+        "medium",
+        "--account",
+        "subscription",
+        stream=stream,
+    )
+    check(result.returncode == 0, f"claude --account subscription: exit {result.returncode}: {result.stderr}")
+    argv = args_of(workspace.calls()[-1])
+    check(
+        "--settings" in argv and any('"CLAUDE_CODE_USE_BEDROCK":""' in a for a in argv),
+        f"claude --account subscription: missing --settings override in argv {argv}",
+    )
+
+    lane = workspace.lane()
+    workspace.log.write_text("")
+    bad = workspace.invoke(
+        "claude",
+        lane,
+        "--backend",
+        "claude",
+        "--model",
+        "fixture-model-claude",
+        "--effort",
+        "medium",
+        "--account",
+        "bogus",
+    )
+    check(bad.returncode == 2, f"claude --account bogus: exited {bad.returncode}, want 2")
+    check(workspace.calls() == [], "claude --account bogus: the harness ran despite unknown account")
 
 
 def main():

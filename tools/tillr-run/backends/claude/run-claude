@@ -37,6 +37,7 @@ SELF_DIR=$(dirname -- "$0")
 backend=
 model=
 effort=
+account=
 brief=../brief.md
 target=
 # No wall unless staging passes one: a total-run bound is a budget, not a fault detector,
@@ -49,12 +50,14 @@ session_override=
 usage() {
     cat <<'USAGE'
 usage: run-claude --backend claude --model ALIAS --effort LEVEL
-                  [--brief PATH] [--target PATH] [--timeout SECONDS] [--session-id UUID]
+                  [--account MODE] [--brief PATH] [--target PATH]
+                  [--timeout SECONDS] [--session-id UUID]
                   [-- HARNESS-ARGUMENTS...]
 
   --backend   `claude` or a seat alias `claude-<role>`
   --model     the model the harness's own `--model` accepts
   --effort    the harness's effort level: low|medium|high|xhigh|max
+  --account   account mode: empty (ambient) or 'subscription' (saved OAuth login without Bedrock)
   --brief     the staged brief; default ../brief.md, fed to the harness on stdin
   --target    the named target; default the cwd, and it must BE the cwd
   --session-id  the stager-minted UUID; default the lane's session-id file
@@ -68,6 +71,7 @@ while [ $# -gt 0 ]; do
         --backend) [ $# -ge 2 ] || refuse "--backend needs a value"; backend=$2; shift 2 ;;
         --model) [ $# -ge 2 ] || refuse "--model needs a value"; model=$2; shift 2 ;;
         --effort) [ $# -ge 2 ] || refuse "--effort needs a value"; effort=$2; shift 2 ;;
+        --account) [ $# -ge 2 ] || refuse "--account needs a value"; account=$2; shift 2 ;;
         --brief) [ $# -ge 2 ] || refuse "--brief needs a value"; brief=$2; shift 2 ;;
         --target) [ $# -ge 2 ] || refuse "--target needs a value"; target=$2; shift 2 ;;
         --timeout) [ $# -ge 2 ] || refuse "--timeout needs a value"; wall=$2; shift 2 ;;
@@ -82,6 +86,22 @@ done
 
 require_backend "$backend" claude
 check_wall "$wall"
+subscription_settings=
+case $account in
+    "") ;;
+    subscription)
+        unset CLAUDE_CODE_USE_BEDROCK ANTHROPIC_BEDROCK_REGION_PREFIX ANTHROPIC_SMALL_FAST_MODEL \
+            ANTHROPIC_DEFAULT_FABLE_MODEL ANTHROPIC_DEFAULT_FABLE_MODEL_NAME \
+            ANTHROPIC_DEFAULT_HAIKU_MODEL ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME \
+            ANTHROPIC_DEFAULT_OPUS_MODEL ANTHROPIC_DEFAULT_OPUS_MODEL_NAME \
+            ANTHROPIC_DEFAULT_SONNET_MODEL ANTHROPIC_DEFAULT_SONNET_MODEL_NAME
+        for var in $(env | sed -n 's/^\(ANTHROPIC_DEFAULT_[^=]*\)=.*/\1/p'); do
+            unset "$var"
+        done
+        subscription_settings='{"env":{"CLAUDE_CODE_USE_BEDROCK":"","ANTHROPIC_BEDROCK_REGION_PREFIX":"","ANTHROPIC_SMALL_FAST_MODEL":"","ANTHROPIC_DEFAULT_FABLE_MODEL":"","ANTHROPIC_DEFAULT_FABLE_MODEL_NAME":"","ANTHROPIC_DEFAULT_HAIKU_MODEL":"","ANTHROPIC_DEFAULT_HAIKU_MODEL_NAME":"","ANTHROPIC_DEFAULT_OPUS_MODEL":"","ANTHROPIC_DEFAULT_OPUS_MODEL_NAME":"","ANTHROPIC_DEFAULT_SONNET_MODEL":"","ANTHROPIC_DEFAULT_SONNET_MODEL_NAME":""}}'
+        ;;
+    *) refuse "unknown account '$account' (expected 'subscription')" ;;
+esac
 require_opt --model "$model" "the model comes from the backend policy at staging; an adapter default would be a model in a tree that names no vendor"
 require_opt --effort "$effort" "the effort level comes from the backend policy at staging, with no default of its own"
 preflight_brief "$brief"
@@ -150,6 +170,7 @@ fi
 set -- claude -p --output-format stream-json --verbose \
     --model "$model" --effort "$effort" \
     ${session:+"$session_flag"} ${session:+"$session"} \
+    ${subscription_settings:+--settings} ${subscription_settings:+"$subscription_settings"} \
     --strict-mcp-config --dangerously-skip-permissions \
     "$@"
 

@@ -64,7 +64,14 @@ func TestKeepGoingAnswersAnEndingThatMissesTheGoal(t *testing.T) {
 	}
 	cmd := exec.Command(node, driver, extension, cases)
 	cmd.Dir = repo
-	cmd.Env = append(os.Environ(),
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "BOARD_DRAIN_BRIEF=") &&
+			!strings.HasPrefix(entry, "TILLR_CALL_SUSPENDS=") &&
+			!strings.HasPrefix(entry, "TILLR_ENDING_CAPABILITY=") {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	cmd.Env = append(cmd.Env,
 		"TILLR_GOAL_BASE="+base,
 		"TILLR_PAUSE_REQUEST="+filepath.Join(dir, "pause"),
 		"GIT_AUTHOR_NAME=fixture", "GIT_AUTHOR_EMAIL=fixture@example.invalid",

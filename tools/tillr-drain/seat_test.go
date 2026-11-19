@@ -488,6 +488,28 @@ func TestTheClaudePolicyLoadsWithItsSeatLists(t *testing.T) {
 	if adapter := filepath.Join("..", "..", policy.Backends["claude"].Adapter); !isExecutable(t, adapter) {
 		t.Fatalf("the claude adapter %s is not an executable file", adapter)
 	}
+
+	claudeCopilot, err := drain.LoadPolicy("../../config/tillr/backend-policy.claude-copilot.json")
+	if err != nil {
+		t.Fatalf("loading the Claude-Copilot policy failed: %v", err)
+	}
+	for _, name := range []string{"claude", "claude-designer"} {
+		b := claudeCopilot.Backends[name]
+		if b.Account != "subscription" {
+			t.Fatalf("the Claude-Copilot policy's %s row has account %q, want subscription", name, b.Account)
+		}
+		req := b.Request("item_042", "lane-1", "run-1", name)
+		joined := strings.Join(req.Command, "\x00")
+		if !strings.Contains(joined, "--account\x00subscription") {
+			t.Fatalf("the Claude-Copilot policy's %s request %q omits --account subscription", name, req.Command)
+		}
+	}
+	for _, name := range []string{"pi", "pi-designer", "pi-build", "pi-scout"} {
+		b := claudeCopilot.Backends[name]
+		if b.Account != "" {
+			t.Fatalf("the Claude-Copilot policy's %s fallback row has account %q, want empty", name, b.Account)
+		}
+	}
 }
 
 // isExecutable answers whether path is a regular file with an execute bit.

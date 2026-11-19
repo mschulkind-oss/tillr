@@ -1,0 +1,94 @@
+{
+  "about": "The tillr backend policy for a jail with a Claude subscription login and GitHub Copilot pi credentials (no Bedrock fallback). Claude runs with account=subscription so run-claude strips the jail's Bedrock environment and uses the saved OAuth login. The design, plan, review and verify seats run Claude on the subscription first, and build runs Claude on the subscription as first choice, each falling back to the Copilot backends from backend-policy.copilot.json when quota closes; scout, edit, test-write, test-run and docs use the Copilot backends directly. These seat choices are the operator's, not the owner's. A drain names this file with --policy; like the other per-machine policy files, this is the stopgap docs/design/tillr-convergence.md OQ-TC2 records.",
+  "default_backend": "claude",
+  "preference": [
+    "claude",
+    "pi-build",
+    "pi"
+  ],
+  "seats": {
+    "design": [
+      "claude-designer",
+      "pi-designer",
+      "pi"
+    ],
+    "build": [
+      "claude",
+      "pi-build"
+    ],
+    "review": [
+      "claude",
+      "pi"
+    ],
+    "scout": "pi-scout",
+    "plan": [
+      "claude",
+      "pi"
+    ],
+    "edit": "pi-build",
+    "test-write": "pi-build",
+    "test-run": "pi-scout",
+    "docs": "pi-build",
+    "verify": [
+      "claude",
+      "pi"
+    ]
+  },
+  "read_only_seats": [
+    "scout",
+    "test-run"
+  ],
+  "seat_purposes": {
+    "design": "Settle design decisions and specify the intended change.",
+    "build": "Implement the change described by the item or plan.",
+    "review": "Review the candidate against the criteria.",
+    "scout": "Search the tree and report findings without writing.",
+    "plan": "Read the item and tree and write the piece list.",
+    "edit": "Apply a settled edit named in the plan.",
+    "test-write": "Write tests from the criteria.",
+    "test-run": "Run a named check and report its result without fixing it.",
+    "docs": "Write documentation and README changes.",
+    "verify": "Join the pieces and verify the combined result."
+  },
+  "escalate": {
+    "build": [
+      "claude",
+      "pi-build",
+      "pi"
+    ]
+  },
+  "backends": {
+    "claude": {
+      "adapter": "tools/tillr-run/backends/claude/run-claude",
+      "model": "opus",
+      "effort": "medium",
+      "account": "subscription"
+    },
+    "claude-designer": {
+      "adapter": "tools/tillr-run/backends/claude/run-claude",
+      "model": "fable",
+      "effort": "medium",
+      "account": "subscription"
+    },
+    "pi": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "github-copilot/gemini-4-carbon",
+      "effort": "medium"
+    },
+    "pi-designer": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "github-copilot/gemini-4-carbon",
+      "effort": "medium"
+    },
+    "pi-build": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "github-copilot/gemini-4-hydrogen",
+      "effort": "medium"
+    },
+    "pi-scout": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "github-copilot/gemini-3.8-flash",
+      "effort": "medium"
+    }
+  }
+}
