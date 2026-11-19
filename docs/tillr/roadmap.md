@@ -298,10 +298,8 @@ get cheaper by being opened again.
 - [Reshaping the board backlog](../design/tillr-board-reshape.md): both its questions were ruled
   on 2026-11-12. It owes the first triage list its sixth section describes. The earlier version
   of this page said a question was still open; that was stale.
-- [Tillr today](../design/tillr-today.md) and [the observatory design](../design/observatory-design.md)
-  are fully ruled. The first owes a reconciliation against the runs the loop has since made; the
-  second is superseded screen by screen as [entry 6](#6-the-observatory-answers-the-owners-questions)
-  lands.
+- [The observatory design](../design/observatory-design.md) is fully ruled and is superseded
+  screen by screen as [entry 6](#6-the-observatory-answers-the-owners-questions) lands.
 - [The evidence tool](../../tools/pipeline-evidence/) still carries a reader for the deleted
   merge queue. Replacing it with a reader of the tillr store's landings is owed
   ([the retirement design](../design/mq-retirement.md#9-open-questions)), and so is deleting

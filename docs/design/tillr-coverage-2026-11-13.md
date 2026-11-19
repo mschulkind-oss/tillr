@@ -56,7 +56,7 @@ frontmatter, and it disagrees with that pass in one place (section 7).
 | 5 | [`tillr-chunking-plan.md`](./tillr-chunking-plan.md) | fully, 266 lines | 21 |
 | 6 | [`tillr-muse-backend.md`](./tillr-muse-backend.md) | fully, 356 lines | 9 |
 | 7 | [`tillr-next-steps.md`](./tillr-next-steps.md) | fully, 181 lines | 10 |
-| 8 | [`tillr-today.md`](./tillr-today.md) | fully, 545 lines | 12 |
+| 8 | `tillr-today.md` (retired) | fully, 545 lines | 12 |
 | 9 | [`tillr-board-reshape.md`](./tillr-board-reshape.md) | fully, 426 lines | 7 |
 | 10 | [`tillr-seed-triage.md`](./tillr-seed-triage.md) | fully, 240 lines | 6 |
 | 11 | [`tillr-drain-acceptance-2026-11-13.md`](./tillr-drain-acceptance-2026-11-13.md) | fully, 167 lines | 12 |
@@ -198,7 +198,7 @@ that ends it.
 | section 5: the `LAND-3` inventory brief | deleted | `docs/design/land-3i-inventory.md` exists — the brief this section waited for |
 | section 5: the `DRAIN-2` supervision brief | deleted | superseded by the build: `tillr drain loop` is the brief's answer, and its shape is now code |
 
-### 2.8 [`tillr-today.md`](./tillr-today.md) — 12
+### 2.8 `tillr-today.md` (retired) — 12
 
 | Claim | Disposition | Where it lands |
 | :--- | :--- | :--- |
@@ -219,7 +219,7 @@ that ends it.
 
 | Claim | Disposition | Where it lands |
 | :--- | :--- | :--- |
-| section 1: criterion text is not frozen against edits | deleted | built (see [`tillr-today.md`](./tillr-today.md) Task 1) |
+| section 1: criterion text is not frozen against edits | deleted | built (see `tillr-today.md` Task 1) |
 | section 5.3: a concordance, one line per triaged archived item | deleted | [`tillr-seed-triage.md`](./tillr-seed-triage.md) carries it — 56 rows, one disposition each |
 | section 4/section 6: the four blocked questions route to their own documents | deleted | dropped as `not-an-item` in the triage, under `D-UT4`: questions are document state, and each names its document |
 | section 6: preserve the content dump in the repository | deleted | `docs/archive/board-2026-11-12/board-content.json`, committed whole under the verbatim-preservation ruling |
@@ -347,7 +347,7 @@ rather than arithmetic slack:
 
 - **13 claim rows become 10 distinct items**, because two claims are the same work named by two
 documents: `item-drain-question-hold` is [`tillr-chunking-plan.md`](./tillr-chunking-plan.md)'s `DRAIN-Q` and
-[`tillr-today.md`](./tillr-today.md)'s Task 4, `item-pipe-real-registry` is that plan's `PIPE-REAL` and that day's
+`tillr-today.md`'s Task 4, `item-pipe-real-registry` is that plan's `PIPE-REAL` and that day's
 Task 5, and `item-fork-lane-fence` is [`tillr-loop-readiness.md`](./tillr-loop-readiness.md) section 3 and
 [`queue-inventory-2026-11-13.md`](./queue-inventory-2026-11-13.md)'s fence finding. An item is authored once and cited twice.
 - **21 covered claims map onto 17 distinct seed items**, because three items absorb more than one
