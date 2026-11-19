@@ -96,6 +96,11 @@ exit "$status"`)
 }
 
 func TestFailedRunReportsFileOutput(t *testing.T) {
+	// The expectation below is the raw end of run.stderr, which holds only when no store
+	// trace is in it: an inherited TILLR_SQLITE_TRACE=1 (the heavy runner sets it) fills the
+	// file with tillr-sqlite lines that the report's tail leaves out by design, so the two
+	// differ. Pin tracing off; the trace-free tail is pinned in drain/land_reason_trace_test.go.
+	t.Setenv("TILLR_SQLITE_TRACE", "")
 	dir := scratch(t, "missing-adapter")
 	writeFile(t, filepath.Join(dir, "pause-kind"), "stops-where-it-stands\n")
 	f := newLoopFixture(t, filepath.Join(dir, "absent"))
