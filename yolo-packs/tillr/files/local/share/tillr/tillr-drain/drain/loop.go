@@ -1779,7 +1779,15 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	// nothing, and a commit is a candidate like any other.
 	footer := "done"
 	recoveredOwnerQuestion := false
-	if !offered {
+	if offered {
+		if obs, isObstacle, obsErr := l.offeredObstacle(ctx, request.RunID); obsErr != nil {
+			return laneOutcome{err: obsErr}
+		} else if isObstacle {
+			offered = false
+			footer = "blocked"
+			log = formatObstacleReport(obs)
+		}
+	} else {
 		footer = reportFooter(log)
 		recoveredOwnerQuestion, err = l.recoverOwnerQuestion(ctx, &decision, log)
 		if err != nil {

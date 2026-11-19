@@ -180,7 +180,7 @@ if [ -n "$goal_base" ]; then
         require_harness python3
         TILLR_CALL_SUSPENDS=1
         export TILLR_CALL_SUSPENDS
-        set -- "$@" -e "$(cd -- "$SELF_DIR" && pwd -P)/land.ts"
+        set -- "$@" -e "$(cd -- "$SELF_DIR" && pwd -P)/land.ts" -e "$(cd -- "$SELF_DIR" && pwd -P)/obstacle.ts"
         if [ -n "${YOLO_DURABLE_DIR:-}" ] && [ -e "$YOLO_DURABLE_DIR/landing-answer.json" ]; then
             [ -n "$session" ] && [ "${TILLR_SESSION_MODE:-new}" = resume ] || refuse "landing answer requires an existing Pi session"
             landing_dir=$YOLO_DURABLE_DIR

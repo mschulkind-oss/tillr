@@ -219,7 +219,13 @@ func (l *Loop) saveBlockConflict(ctx context.Context, c item.Conflict) error {
 		if err := refuseTerminalItem(tx.Reader(), c.ItemID, "blocked-report"); err != nil {
 			return err
 		}
-		return item.RecordConflict(tx, c, l.cfg.Now().UTC())
+		if err := item.RecordConflict(tx, c, l.cfg.Now().UTC()); err != nil {
+			return err
+		}
+		if c.Status == "answered" && isObstacleCallRun(tx.Reader(), c.RunID) {
+			return l.answerLandingRefusal(tx, Candidate{RunID: c.RunID}, refusalPayload{Step: IdenticalRepeatPrefix, Detail: c.Text}, refusalEvidence{}, l.cfg.Now().UTC())
+		}
+		return nil
 	})
 }
 
@@ -469,12 +475,18 @@ func (l *Loop) recordBlockAnswerThen(ctx context.Context, candidate Candidate, t
 		if err := item.RecordConflict(tx, c, l.cfg.Now().UTC()); err != nil {
 			return err
 		}
-		if c.Status == "answered" && strings.HasPrefix(c.Text, IdenticalRepeatPrefix) {
-			design := candidate
-			design.RunID = c.RunID
-			detail := fmt.Sprintf("Design answer commit: %s\n%s", candidate.HeadSHA, item.DefinitionBodyContent(c.BodyRef, blockID, []byte(raw)))
-			if err := l.answerLandingRefusal(tx, design, refusalPayload{Step: IdenticalRepeatPrefix, Detail: detail}, refusalEvidence{}, l.cfg.Now().UTC()); err != nil {
+		if c.Status == "answered" {
+			var offeredCall bool
+			if err := tx.Reader().QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=?)`, callOffered, c.RunID).Scan(&offeredCall); err != nil {
 				return err
+			}
+			if offeredCall && (strings.HasPrefix(c.Text, IdenticalRepeatPrefix) || isObstacleCallRun(tx.Reader(), c.RunID)) {
+				design := candidate
+				design.RunID = c.RunID
+				detail := fmt.Sprintf("Design answer commit: %s\n%s", candidate.HeadSHA, item.DefinitionBodyContent(c.BodyRef, blockID, []byte(raw)))
+				if err := l.answerLandingRefusal(tx, design, refusalPayload{Step: IdenticalRepeatPrefix, Detail: detail}, refusalEvidence{}, l.cfg.Now().UTC()); err != nil {
+					return err
+				}
 			}
 		}
 		if then != nil {
@@ -482,6 +494,12 @@ func (l *Loop) recordBlockAnswerThen(ctx context.Context, candidate Candidate, t
 		}
 		return nil
 	})
+}
+
+func isObstacleCallRun(r *store.Reader, runID string) bool {
+	var ok bool
+	_ = r.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=? AND json_extract(payload,'$.tool')='obstacle')`, callOffered, runID).Scan(&ok)
+	return ok
 }
 
 func mustJSON(value any) string { raw, _ := json.Marshal(value); return string(raw) }

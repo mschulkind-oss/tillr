@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import landTool, { executeLand } from '../land.ts';
+import obstacleTool, { executeObstacle } from '../obstacle.ts';
 import keepGoing from '../keep-going.ts';
 
 const adapter = fileURLToPath(new URL('../', import.meta.url));
@@ -138,7 +139,7 @@ test('run-pi keeps footer argv and opens an answer session without stdin', (t) =
   assert.equal(run(), footer);
   put('ending-capability', 'call-suspends\n');
   put('brief.md', brief.replace('## Report shape', '## Finishing'));
-  const chosen = footer.replace('## Report shape', '## Finishing').replace('--no-extensions', `-e\n${adapter}land.ts\n--no-extensions`);
+  const chosen = footer.replace('## Report shape', '## Finishing').replace('--no-extensions', `-e\n${adapter}land.ts\n-e\n${adapter}obstacle.ts\n--no-extensions`);
   assert.equal(run(), chosen);
   put('landing-answer.json', JSON.stringify({ call_id: 'call', text: 'answer' }));
   put('session.jsonl', [JSON.stringify({ type: 'session', id: 's' }), JSON.stringify({ type: 'message', id: 'a', parentId: null, message: { role: 'assistant', content: [{ type: 'toolCall', id: 'call' }] } })].join('\n') + '\n');
@@ -246,4 +247,70 @@ with sqlite3.connect(sys.argv[1]) as db:
   }));
   assert.deepEqual(wakes('123'), ['owed', 'prior-owed']);
   assert.equal(wakes('124'), null);
+});
+
+test('obstacle accepts all six kinds, rejects missing required fields, and replays answers', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'obstacle-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const cwd = join(dir, 'repo');
+  mkdirSync(cwd);
+  const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  git('init', '-q');
+  writeFileSync(join(cwd, 'in'), 'base');
+  git('add', 'in');
+  git('-c', 'user.name=Test', '-c', 'user.email=test@example.org', 'commit', '-qm', 'test');
+  const base = git('rev-parse', 'HEAD');
+  const put = (name, data) => writeFileSync(join(dir, name), data);
+  const offer = join(dir, 'landing-offer.json');
+  const run = (args, { id = 'call', wakes = () => [], answered, transcript = '', attempted } = {}) =>
+    executeObstacle(id, args, cwd, dir, base, wakes, answered, transcript, attempted);
+
+  for (const args of [
+    { kind: 'definition', criteria: 'c1', evidence: 'contradicts tree' },
+    { kind: 'fence', paths: 'tools/other/a.go', evidence: 'file is outside fence' },
+    { kind: 'trunk', checks: 'go-build', base: '0123456789ab' },
+    { kind: 'tooling', command: 'go test ./...', evidence: 'timed out', paths: 'tools/a_test.go' },
+    { kind: 'seat', tried: 'two designs', missing: 'cannot keep both locks' },
+    { kind: 'owner', question: 'which option should we ship?' },
+  ]) {
+    rmSync(offer, { force: true });
+    const res = run(args, { attempted: () => true });
+    assert.equal(res.park, true, args.kind);
+    const recorded = JSON.parse(readFileSync(offer, 'utf8'));
+    assert.equal(recorded.tool, 'obstacle');
+    assert.equal(recorded.base, base);
+    assert.equal(recorded.obstacle.kind, args.kind);
+  }
+  rmSync(offer, { force: true });
+
+  for (const [args, pattern] of [
+    [{ kind: 'unknown' }, /Invalid obstacle kind/],
+    [{ kind: 'definition', criteria: 'c1' }, /missing required field.*evidence/],
+    [{ kind: 'fence', paths: 'tools/a.go' }, /missing required field.*evidence/],
+    [{ kind: 'fence', paths: '/etc/passwd', evidence: 'abs' }, /repository-relative/],
+    [{ kind: 'fence', paths: '../other.go', evidence: 'parent' }, /repository-relative/],
+    [{ kind: 'trunk', checks: 'go-build' }, /missing required field.*base/],
+    [{ kind: 'tooling', command: 'go test', evidence: 'hung' }, /missing required field.*paths/],
+    [{ kind: 'seat', missing: 'something' }, /missing required field.*tried/],
+    [{ kind: 'owner' }, /missing required field.*question/],
+  ]) {
+    assert.throws(() => run(args, { attempted: () => true }), pattern);
+    assert.equal(existsSync(offer), false);
+  }
+  assert.throws(() => run({ kind: 'seat', tried: 'read files', missing: 'impl' }), /names no attempt/);
+  assert.equal(existsSync(offer), false);
+
+  const answer = { call_id: 'call', kind: 'obstacle-answer', text: 'Design answer commit: abc' };
+  put('landing-answer.json', JSON.stringify(answer));
+  assert.deepEqual(run({ kind: 'definition', criteria: 'c1', evidence: 'e' }), {
+    content: [{ type: 'text', text: answer.text }],
+    details: answer,
+    isError: true,
+  });
+
+  let registered;
+  obstacleTool({ registerTool: (value) => { registered = value; } });
+  assert.equal(registered.name, 'obstacle');
+  assert.deepEqual(registered.parameters.required, ['kind']);
+  assert.deepEqual(registered.parameters.properties.kind.enum, ['definition', 'fence', 'owner', 'seat', 'tooling', 'trunk']);
 });

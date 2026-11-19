@@ -52,7 +52,7 @@ arrives, it is one of these, and none is counted against the item:
 Every result states the branch head. Check it before you change anything, fix what the
 result names, commit, and call ` + "`" + `land` + "`" + ` again.
 
-If a fact you cannot change stops you, name the obstacle as below instead.
+If a fact you cannot change stops you, call ` + "`" + `obstacle` + "`" + ` instead, with ` + "`" + `kind` + "`" + ` and its required fields.
 `
 
 func callEndingBrief(body string) (string, error) {
@@ -68,5 +68,5 @@ working with tools until the goal in **Report shape** is met or one of the obsta
 names holds.`, "See **Finishing** for how to end this run.", 1)
 	prefix = strings.ReplaceAll(prefix, "**Report shape**", "**Finishing**")
 	prefix = strings.Replace(prefix, "paste its output in your report", "record its result for your landing summary", 1)
-	return prefix + "\n" + finishing + "\nThe only other ending is an **obstacle**:" + obstacle + "\nFor an obstacle only, write its `OBSTACLE:` line and required lines, then end with `RESULT: blocked`.\n", nil
+	return prefix + "\n" + finishing + "\nThe only other ending is an **obstacle**:" + obstacle + "\nCall `obstacle` with `kind` and that kind's fields in lowercase (`criteria`, `evidence`, `paths`, `checks`, `base`, `command`, `tried`, `missing`, `question`) instead of writing a `RESULT: blocked` footer.\n", nil
 }

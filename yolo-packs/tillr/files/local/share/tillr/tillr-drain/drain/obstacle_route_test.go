@@ -3,6 +3,8 @@ package drain
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -246,4 +248,199 @@ func TestASeatObstacleWithNoAttemptGoesBackToItsWorker(t *testing.T) {
 	if next := decisionFor(t, l, "item-a"); next.decision.RunRequest != nil && next.decision.RunRequest.Backend == "stronger" {
 		t.Fatalf("a seat obstacle with no attempt escalated: %+v", next.decision)
 	}
+}
+
+// An obstacle submitted as a tool call routes identically to the same obstacle in a footer,
+// and replies (design answers and refuted trunk claims) reach the session as the call result.
+func TestObstacleCallRoutesEqualToFooterAndDeliversReplies(t *testing.T) {
+	rawCases, err := os.ReadFile(filepath.Join("..", "..", "tillr-run", "backends", "pi", "testdata", "obstacle-cases.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cases []struct {
+		Name   string `json:"name"`
+		Report string `json:"report"`
+		Ending bool   `json:"ending"`
+		Kind   string `json:"kind"`
+	}
+	if err := json.Unmarshal(rawCases, &cases); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range cases {
+		if !c.Ending || c.Kind == "" {
+			continue
+		}
+		t.Run("route/"+c.Name, func(t *testing.T) {
+			obs := parseObstacle(c.Report)
+			runForm := func(useTool bool) (string, string, string) {
+				steps := &obstacleSteps{known: true}
+				if obs.Kind == ObstacleTrunk {
+					steps.red = []string{"go-build"}
+				}
+				f, l, work := obstacleFixture(t, steps, "item-a")
+				d := work.Decision
+				report := c.Report
+				if useTool {
+					dir := run.DurableDir(l.laneDirPath(d.LaneID), d.RunRequest.RunID)
+					if err := os.MkdirAll(dir, 0700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.MkdirAll(RunDir(f.root, d.RunRequest.RunID), 0700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(RunDir(f.root, d.RunRequest.RunID), endingCapabilityFile), []byte(run.EndingCallSuspends+"\n"), 0600); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(l.laneDirPath(d.LaneID), SessionIDFile), []byte("11111111-1111-4111-8111-111111111111\n"), 0600); err != nil {
+						t.Fatal(err)
+					}
+					fields := make(map[string]string, len(obs.Fields))
+					for k, v := range obs.Fields {
+						fields[strings.ToLower(k)] = v
+					}
+					if err := writeLandingArtifact(dir, landingOfferFile, landingOffer{
+						CallID:   "call-obs",
+						Tool:     "obstacle",
+						Base:     work.BaseSHA,
+						Obstacle: &landingOfferObstacle{Kind: obs.Kind, Fields: fields},
+					}); err != nil {
+						t.Fatal(err)
+					}
+					report = ""
+				}
+				settleReport(t, f, l, work, report)
+				var conflictWaiting, refusalStep string
+				if conf, ok := conflictOf(t, f, "item-a"); ok {
+					conflictWaiting = conf.WaitingOn
+				}
+				fixtureWrite(t, f, func(tx *store.Tx) error {
+					var s string
+					_ = tx.QueryRow(`SELECT COALESCE(json_extract(payload,'$.step'),'') FROM events WHERE kind=? AND object_id=? ORDER BY seq DESC LIMIT 1`, RefusalKind, d.RunRequest.RunID).Scan(&s)
+					refusalStep = s
+					return nil
+				})
+				var state string
+				if len(steps.states) > 0 {
+					state = steps.states[0]
+				}
+				return conflictWaiting, refusalStep, state
+			}
+			w1, r1, s1 := runForm(false)
+			w2, r2, s2 := runForm(true)
+			if w1 != w2 || r1 != r2 || (s1 != "") != (s2 != "") {
+				t.Fatalf("footer=(%q,%q,%q) != tool=(%q,%q,%q)", w1, r1, s1, w2, r2, s2)
+			}
+		})
+	}
+
+	t.Run("reply/refuted-trunk", func(t *testing.T) {
+		steps := &obstacleSteps{known: true}
+		f, l, work := obstacleFixture(t, steps, "item-a")
+		declareWorkerResumeFixture(t, l)
+		d := work.Decision
+		lane := l.laneDirPath(d.LaneID)
+		if err := os.MkdirAll(RunDir(f.root, d.RunRequest.RunID), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(RunDir(f.root, d.RunRequest.RunID), endingCapabilityFile), []byte(run.EndingCallSuspends+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(lane, SessionIDFile), []byte("22222222-2222-4222-8222-222222222222\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(lane, BaseSHAFile), []byte(work.BaseSHA+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		dir := run.DurableDir(lane, d.RunRequest.RunID)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeLandingArtifact(dir, landingOfferFile, landingOffer{
+			CallID:     "call-trunk",
+			Tool:       "obstacle",
+			Base:       work.BaseSHA,
+			Transcript: "/tmp/trunk.jsonl",
+			Obstacle:   &landingOfferObstacle{Kind: ObstacleTrunk, Fields: map[string]string{"checks": "go-build", "base": work.BaseSHA}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		settleReport(t, f, l, work, "")
+		p := mustPlan(t, l)[0]
+		if !p.decision.RunRequest.SessionTurn {
+			t.Fatalf("refuted trunk did not plan session turn: %+v", p.decision)
+		}
+		l.cfg.Stage = &LaneStager{Root: f.root, LaneRoot: f.laneRoot, Store: f.storePath, Template: filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"), Now: l.cfg.Now}
+		next := applyReturnedTurn(t, l, p, work.BaseSHA)
+		raw, err := os.ReadFile(filepath.Join(run.DurableDir(lane, next.RunRequest.RunID), landingAnswerFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ans landingAnswer
+		if err := json.Unmarshal(raw, &ans); err != nil {
+			t.Fatal(err)
+		}
+		if ans.CallID != "call-trunk" || ans.Kind != "obstacle-answer" || !strings.Contains(ans.Text, "none of them red") {
+			t.Fatalf("unexpected trunk reply: %+v", ans)
+		}
+	})
+
+	t.Run("reply/design-answer", func(t *testing.T) {
+		f, l, _, base := designAnswerFixture(t)
+		declareWorkerResumeFixture(t, l)
+		// designAnswerFixture already raised conflict-a on item-a; record an obstacle call for its raising run.
+		c, ok := conflictOf(t, f, "item-a")
+		if !ok {
+			t.Fatal("missing conflict")
+		}
+		lane := l.laneDirPath("lane-1")
+		if err := os.MkdirAll(lane, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(lane, SessionIDFile), []byte("33333333-3333-4333-8333-333333333333\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(lane, BaseSHAFile), []byte(base+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		backend := "fixture"
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			if err := appendEffect(tx, dispatchStartedKind, c.RunID, pendingWork{Done: true, Decision: Decision{ItemID: "item-a", RunRequest: &run.Request{RunID: c.RunID, Backend: backend}}}, l.cfg.Now()); err != nil {
+				return err
+			}
+			if err := appendEffect(tx, examinationDoneKind, c.RunID, struct{}{}, l.cfg.Now()); err != nil {
+				return err
+			}
+			return appendLandingCallEvent(tx, callOffered, "call-def", landingCall{
+				landingOffer: landingOffer{CallID: "call-def", Tool: "obstacle", Base: base, Transcript: "/tmp/def.jsonl"},
+				ItemID:       "item-a",
+				RunID:        c.RunID,
+				SessionID:    "33333333-3333-4333-8333-333333333333",
+				RunLog:       filepath.Join(lane, c.RunID+".log"),
+				Worktree:     l.laneTarget("lane-1"),
+				Capability:   run.EndingCallSuspends,
+				Tool:         "obstacle",
+			}, l.cfg.Now())
+		})
+		cand := Candidate{ItemID: "item-a", RunID: "run-design-1", BaseSHA: base, HeadSHA: base, BlockConflict: &c}
+		if err := l.recordBlockAnswer(context.Background(), cand); err != nil {
+			t.Fatal(err)
+		}
+		nextPlan := mustPlan(t, l)[0]
+		if !nextPlan.decision.RunRequest.SessionTurn || nextPlan.decision.Reason != ReasonConflictAnswered {
+			t.Fatalf("expected resumed build turn for answered obstacle, got %+v", nextPlan.decision)
+		}
+		l.cfg.Stage = &LaneStager{Root: f.root, LaneRoot: f.laneRoot, Store: f.storePath, Template: filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"), Now: l.cfg.Now}
+		next := applyReturnedTurn(t, l, nextPlan, base)
+		raw, err := os.ReadFile(filepath.Join(run.DurableDir(lane, next.RunRequest.RunID), landingAnswerFile))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ans landingAnswer
+		if err := json.Unmarshal(raw, &ans); err != nil {
+			t.Fatal(err)
+		}
+		if ans.CallID != "call-def" || ans.Kind != "design-answer" || !strings.Contains(ans.Text, "Design answer commit:") {
+			t.Fatalf("unexpected design answer reply: %+v", ans)
+		}
+	})
 }

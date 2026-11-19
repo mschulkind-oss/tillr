@@ -30,12 +30,33 @@ const (
 	callClosed        = "call.closed"
 )
 
+type landingOfferObstacle struct {
+	Kind   string            `json:"kind"`
+	Fields map[string]string `json:"fields"`
+}
+
 type landingOffer struct {
-	CallID     string `json:"call_id"`
-	Commit     string `json:"commit"`
-	Base       string `json:"base"`
-	Summary    string `json:"summary"`
-	Transcript string `json:"transcript,omitempty"`
+	CallID     string                `json:"call_id"`
+	Tool       string                `json:"tool,omitempty"`
+	Commit     string                `json:"commit,omitempty"`
+	Base       string                `json:"base"`
+	Summary    string                `json:"summary,omitempty"`
+	Obstacle   *landingOfferObstacle `json:"obstacle,omitempty"`
+	Transcript string                `json:"transcript,omitempty"`
+}
+
+func (o landingOffer) toolName() string {
+	if o.Tool == "obstacle" {
+		return "obstacle"
+	}
+	return "land"
+}
+
+func (o landingOffer) equalOffer(other landingOffer) bool {
+	if o.CallID != other.CallID || o.Tool != other.Tool || o.Commit != other.Commit || o.Base != other.Base || o.Summary != other.Summary || o.Transcript != other.Transcript {
+		return false
+	}
+	return reflect.DeepEqual(o.Obstacle, other.Obstacle)
 }
 
 type landingCall struct {
@@ -147,7 +168,14 @@ func (l *Loop) intakeLandingOffer(ctx context.Context, d Decision, rec run.Recor
 	if err := json.Unmarshal(raw, &offer); err != nil {
 		return landingOfferAbsent, fmt.Errorf("reading landing offer: %w", err)
 	}
-	if strings.TrimSpace(offer.CallID) == "" || strings.TrimSpace(offer.Summary) == "" || offer.Commit == "" || offer.Base == "" {
+	if strings.TrimSpace(offer.CallID) == "" || offer.Base == "" {
+		return landingOfferAbsent, Externalf("landing offer for %s is missing its call id or base", rec.RunID)
+	}
+	if offer.toolName() == "obstacle" {
+		if offer.Obstacle == nil || strings.TrimSpace(offer.Obstacle.Kind) == "" {
+			return landingOfferAbsent, Externalf("obstacle call for %s is missing its obstacle kind", rec.RunID)
+		}
+	} else if strings.TrimSpace(offer.Summary) == "" || offer.Commit == "" {
 		return landingOfferAbsent, Externalf("landing offer for %s is missing its call id, summary, commit, or base", rec.RunID)
 	}
 	db, err := store.Open(ctx, l.cfg.Store, true)
@@ -173,7 +201,7 @@ func (l *Loop) intakeLandingOffer(ctx context.Context, d Decision, rec run.Recor
 				intake = landingOfferDuplicate
 				return nil
 			}
-			if existing.landingOffer != offer {
+			if !existing.landingOffer.equalOffer(offer) {
 				return Externalf("run %s changed its recorded landing offer %s", rec.RunID, offer.CallID)
 			}
 			intake = landingOfferSubmitted
@@ -212,7 +240,15 @@ func (l *Loop) validateLandingOffer(ctx context.Context, d Decision, rec run.Rec
 	if d.Workflow != nil && d.NodeBaseSHA != "" {
 		base = d.NodeBaseSHA
 	}
-	if offer.Commit != head || offer.Base != base || head == base {
+	if offer.toolName() == "obstacle" {
+		if offer.Base != base {
+			return landingCall{}, Externalf("obstacle call for %s does not match its staged base", rec.RunID)
+		}
+		obs := obstacleFromOffer(offer.Obstacle)
+		if obs.Problem != "" {
+			return landingCall{}, Externalf("obstacle call for %s is incomplete: %s", rec.RunID, obs.Problem)
+		}
+	} else if offer.Commit != head || offer.Base != base || head == base {
 		return landingCall{}, Externalf("landing offer for %s does not name a call, summary and its staged base and new HEAD", rec.RunID)
 	}
 	artifactDir := laneDir
@@ -231,11 +267,65 @@ func (l *Loop) validateLandingOffer(ctx context.Context, d Decision, rec run.Rec
 	if err != nil {
 		return landingCall{}, err
 	}
-	call := landingCall{landingOffer: offer, ItemID: d.RunRequest.ItemID, RunID: rec.RunID, TerminalSeq: rec.EventSeq, SessionID: session, RunLog: filepath.Join(artifactDir, rec.RunID+".log"), Worktree: target, Scratch: run.DurableDir(laneDir, rec.RunID), Adapter: adapter, Capability: capability, Tool: "land"}
+	call := landingCall{landingOffer: offer, ItemID: d.RunRequest.ItemID, RunID: rec.RunID, TerminalSeq: rec.EventSeq, SessionID: session, RunLog: filepath.Join(artifactDir, rec.RunID+".log"), Worktree: target, Scratch: run.DurableDir(laneDir, rec.RunID), Adapter: adapter, Capability: capability, Tool: offer.toolName()}
 	if d.Workflow != nil {
 		call.NodeID = d.Workflow.Stages[d.NodeIndex].ID
 	}
 	return call, nil
+}
+
+func obstacleFromOffer(raw *landingOfferObstacle) Obstacle {
+	if raw == nil {
+		return Obstacle{Problem: "missing obstacle"}
+	}
+	fields := make(map[string]string, len(raw.Fields))
+	for k, v := range raw.Fields {
+		fields[strings.ToUpper(strings.TrimSpace(k))] = strings.TrimSpace(v)
+	}
+	o := Obstacle{Kind: strings.ToLower(strings.TrimSpace(raw.Kind)), Fields: fields}
+	o.Problem = o.problem()
+	return o
+}
+
+func formatObstacleReport(o Obstacle) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s: %s\n", ObstacleField, o.Kind)
+	for _, name := range obstacleRequired[o.Kind] {
+		val := o.Field(name)
+		if strings.Contains(val, "\n") {
+			fmt.Fprintf(&b, "%s:\n%s\n", name, val)
+		} else {
+			fmt.Fprintf(&b, "%s: %s\n", name, val)
+		}
+	}
+	b.WriteString(ReportFooter + " blocked\n")
+	return b.String()
+}
+
+func (l *Loop) offeredObstacle(ctx context.Context, runID string) (Obstacle, bool, error) {
+	db, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return Obstacle{}, false, err
+	}
+	defer db.Close()
+	var raw []byte
+	err = db.ReadTx(ctx, func(r *store.Reader) error {
+		return r.QueryRow(`SELECT payload FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=?`, callOffered, runID).Scan(&raw)
+	})
+	if errors.Is(err, sql.ErrNoRows) {
+		return Obstacle{}, false, nil
+	}
+	if err != nil {
+		return Obstacle{}, false, err
+	}
+	var call landingCall
+	if err := json.Unmarshal(raw, &call); err != nil {
+		return Obstacle{}, false, err
+	}
+	if call.Tool != "obstacle" || call.Obstacle == nil {
+		return Obstacle{}, false, nil
+	}
+	return obstacleFromOffer(call.Obstacle), true, nil
 }
 
 const (
@@ -434,7 +524,15 @@ func (l *Loop) answerLandingRefusal(tx *store.Tx, candidate Candidate, refusal r
 	}
 	choice := chooseLandingCallAnswer(outcome)
 	if choice.Kind == "" {
-		return nil
+		if refusal.Step == RefusalNoOp {
+			var tool string
+			if err := tx.QueryRow(`SELECT COALESCE(json_extract(payload,'$.tool'),'') FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=?`, callOffered, candidate.RunID).Scan(&tool); err == nil && tool == "obstacle" {
+				choice = landingCallChoice{Kind: "obstacle-answer"}
+			}
+		}
+		if choice.Kind == "" {
+			return nil
+		}
 	}
 	var raw []byte
 	err := tx.QueryRow(`SELECT payload FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=?`, callOffered, candidate.RunID).Scan(&raw)
@@ -638,13 +736,13 @@ func (l *Loop) stageLandingAnswer(ctx context.Context, d Decision, spec *StageSp
 		return err
 	}
 	answer = landingAnswerForTurn(answer, d.RunRequest.RunID, dir)
+	if call.Capability != run.EndingCallSuspends {
+		return nil
+	}
 	if !d.RunRequest.SessionTurn {
 		returned := *spec.Returned
 		returned.Detail = answer.Text
 		spec.Returned = &returned
-		return nil
-	}
-	if call.Capability != run.EndingCallSuspends {
 		return nil
 	}
 	if call.ItemID != d.ItemID || spec.SessionID != call.SessionID || call.Worktree != l.laneTarget(d.LaneID) {
@@ -767,7 +865,7 @@ func landingResultPersisted(transcript []byte, session string, answer landingAns
 	for remaining := len(entries); leaf != "" && remaining > 0; remaining-- {
 		e := entries[leaf]
 		m := e.Message
-		if e.Type == "message" && m.Role == "toolResult" && m.ToolName == "land" && m.ToolCallID == answer.CallID {
+		if e.Type == "message" && m.Role == "toolResult" && (m.ToolName == "land" || m.ToolName == "obstacle") && m.ToolCallID == answer.CallID {
 			return m.IsError && len(m.Content) == 1 && m.Content[0].Type == "text" && m.Content[0].Text == answer.Text && reflect.DeepEqual(m.Details, answer)
 		}
 		leaf = e.ParentID
