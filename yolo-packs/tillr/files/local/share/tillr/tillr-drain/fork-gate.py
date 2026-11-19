@@ -50,6 +50,25 @@ FORK_QUALITY = {
     'pi-subagents': ('typecheck', 'test:unit'),
 }
 
+# Container/session variables that leak ambient cache retention or provider credentials into unit tests.
+QUALITY_UNSET_ENV = (
+    'PI_CACHE_RETENTION',
+    'AWS_ACCESS_KEY_ID',
+    'AWS_SECRET_ACCESS_KEY',
+    'AWS_SESSION_TOKEN',
+    'AWS_PROFILE',
+    'AWS_BEARER_TOKEN_BEDROCK',
+    'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+    'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+    'AWS_WEB_IDENTITY_TOKEN_FILE',
+    'OPENAI_API_KEY',
+    'ANTHROPIC_API_KEY',
+    'ANTHROPIC_OAUTH_TOKEN',
+    'ANTHROPIC_AUTH_TOKEN',
+    'AZURE_OPENAI_API_KEY',
+    'GEMINI_API_KEY',
+)
+
 
 def touched_packages(candidate, base, head):
     result = subprocess.run(
@@ -126,9 +145,11 @@ def main():
     }]
     if quality:
         print(f'fork-quality: {args.head}: {quality}', flush=True)
+        unset_cmd = 'unset ' + ' '.join(QUALITY_UNSET_ENV)
         guarded_quality = (
             f'if [ ! -f {shlex.quote(str(build_passed))} ]; then '
             f'echo "fork-quality: skipped because fork-build did not pass" >&2; exit 1; fi && '
+            f'{unset_cmd} && '
             f'{quality}'
         )
         declaration_list.append({
