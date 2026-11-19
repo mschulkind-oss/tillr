@@ -127,6 +127,7 @@ var Rules = map[string]Rule{
 	"conflict-repair-staging-failed": {"needs you", "land", "correct the reported staging cause; the next pass retries the retained candidate"},
 	"conflict-fix":                   {"ready", "land", "the next pass"},
 	"item-unstagleable":              {"needs a cause", "queue", "cause not recorded"},
+	"staging-failed":                 {"needs you", "lane", "correct the reported staging cause on the named lane; then tillr drain retry or clear the lane condition"},
 	// A terminal item leaves this view, so the rule names the settlement for history reads.
 	"item-already-terminal": {"moving", "lane", "the next pass settles the run without judging it"},
 	// Historical decisions remain readable after a planner removes a reason.
@@ -154,10 +155,15 @@ func For(reason string) Rule {
 			return Rules[named]
 		}
 	}
+	if lane, ok := strings.CutPrefix(reason, "staging-failed: "); ok && lane != "" {
+		r := Rules["staging-failed"]
+		r.Mover = "correct the reported staging cause on " + lane + "; then tillr drain retry or clear the lane condition"
+		return r
+	}
 	if rule, ok := Rules[reason]; ok {
 		return rule
 	}
-	for _, prefix := range []string{"trunk-foreign-identity: ", "trunk-rewritten: ", "red-cap: ", "trunk-path-dirty: ", "inputs-changed: ", "seat-degraded: seat "} {
+	for _, prefix := range []string{"trunk-foreign-identity: ", "trunk-rewritten: ", "red-cap: ", "trunk-path-dirty: ", "inputs-changed: ", "seat-degraded: seat ", "staging-failed: "} {
 		if strings.HasPrefix(reason, prefix) {
 			return Rules[baseOf(prefix)]
 		}

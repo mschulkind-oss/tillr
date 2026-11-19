@@ -25,7 +25,7 @@ func TestMessageRewriteKeepsLostHistoryHold(t *testing.T) {
 }
 
 type identityRacingSteps struct {
-	dirtyPathSteps
+	*dirtyPathSteps
 	advanced bool
 }
 
@@ -43,7 +43,7 @@ func TestLockedIdentityRefusalRetainsCandidateWithoutConvictingIt(t *testing.T) 
 		_, err := tx.Exec(`UPDATE items SET state='blocked' WHERE item_id='item-b'`)
 		return err
 	})
-	steps := &identityRacingSteps{dirtyPathSteps: *baseSteps}
+	steps := &identityRacingSteps{dirtyPathSteps: baseSteps}
 	l.cfg.Steps = steps
 	base := runGit(t, f.root, "rev-parse", "HEAD")
 	historyCandidate(t, f, l, base)

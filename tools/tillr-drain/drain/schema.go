@@ -212,6 +212,10 @@ const (
 	// lets the rest of the queue run instead of backing the whole drain off for it. The
 	// named step is `drain.refusal`'s `staging`, and the event carries what must be edited.
 	ReasonItemUnstagleable = "item-unstagleable"
+	// ReasonStagingFailed is a hold's reason: an infrastructure-class staging failure
+	// repeated unchanged on the same item and lane, so the loop holds it once naming the
+	// lane and the mover instead of retrying it on every pass.
+	ReasonStagingFailed = "staging-failed"
 )
 
 // seatDegradedReason spells a seat degradation as the one line a reader of the decision or
