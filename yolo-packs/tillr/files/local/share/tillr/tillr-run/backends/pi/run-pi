@@ -166,7 +166,8 @@ fi
 # and their briefs do not name a lane worktree target.
 goal_base=
 target_kind=$(sed -n 's/^- \*\*Target:\*\* .* (\(.*\))$/\1/p' "$brief" | head -n 1)
-if [ -z "${TILLR_READ_ONLY_GROUP:-}" ] && [ "$target_kind" = "lane worktree" ] && [ -r "$(lane_path "$brief" base_sha)" ]; then
+if [ -z "${TILLR_READ_ONLY_GROUP:-}" ] && [ "$target_kind" = "lane worktree" ] && [ -r "$(lane_path "$brief" base_sha)" ] &&
+    ! grep -Eq '^Run only node .+ on the .+ seat; access: read_only\.$' "$brief"; then
     goal_base=$(tr -d ' \n' <"$(lane_path "$brief" base_sha)")
 fi
 unset TILLR_CALL_SUSPENDS

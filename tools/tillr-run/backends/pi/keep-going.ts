@@ -25,7 +25,7 @@
 // an interactive session a human says "continue"; an unattended run had nobody to say it.
 
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 export type Footer = "done" | "blocked" | "failed" | "trunk-broken";
 
@@ -43,6 +43,7 @@ export interface GoalInput {
 	tree: Tree;
 	previous: string | undefined;
 	paused: boolean;
+	readOnly?: boolean;
 }
 
 export type GoalDecision =
@@ -153,6 +154,7 @@ export function decide(input: GoalInput): GoalDecision {
 	const obstacle = goalObstacleProblem(input.text, footer, committed, clean);
 	if (obstacle === "") return { action: "settle", reason: `the worker named a complete obstacle (RESULT: ${footer})` };
 	if (committed && clean && footer) return { action: "settle", reason: "the goal is met: a commit, a clean worktree and a report" };
+	if (input.readOnly && clean && footer === "done") return { action: "settle", reason: "the goal is met: a read-only step with a clean worktree and a report" };
 	const fingerprint = createHash("sha256")
 		.update([input.tree.head, input.tree.status, input.tree.content, input.text.trim().replace(/\s+/g, " ")].join("\0"))
 		.digest("hex");
@@ -160,17 +162,23 @@ export function decide(input: GoalInput): GoalDecision {
 		return { action: "settle", reason: "identical repeat: the tree and the report are unchanged since the last nudge" };
 	}
 	const missing: string[] = [];
-	if (!committed) missing.push(`there is no commit: HEAD is still the base ${input.base.slice(0, 12)}`);
+	if (!committed && !input.readOnly) missing.push(`there is no commit: HEAD is still the base ${input.base.slice(0, 12)}`);
 	if (!clean) {
 		const paths = input.tree.status.trim().split("\n");
 		const shown = paths.slice(0, 20).join("\n");
 		missing.push(`these paths are uncommitted:\n${shown}${paths.length > 20 ? `\n(and ${paths.length - 20} more)` : ""}`);
 	}
 	if (!footer) missing.push("your last message has no RESULT footer");
-	else if (footer === "done" && !committed) missing.push("it says RESULT: done, but nothing is committed");
+	else if (footer === "done" && !committed && !input.readOnly) missing.push("it says RESULT: done, but nothing is committed");
 	else if (footer === "failed") missing.push("RESULT: failed is not an ending");
 	if (obstacle) missing.push(`it says RESULT: blocked, but ${obstacle}`);
-	const message = [
+	const message = input.readOnly ? [
+		`The run is not finished: ${missing.join("; ")}.`,
+		"",
+		"Do not write another report: a report that says the work is unfinished is answered with this message again. Finish the read-only task and end with RESULT: done, or name a complete obstacle.",
+		"",
+		OBSTACLE_CONTRACT,
+	].join("\n") : [
 		`The run is not finished: ${missing.join("; ")}.`,
 		"",
 		// Measured 2026-11-18 at two post-nudge quit points of one Sol 6.2 run: an earlier
@@ -181,6 +189,25 @@ export function decide(input: GoalInput): GoalDecision {
 		`End your turn only when that commit exists and its verification has run, or when an obstacle holds and you name it completely. ${OBSTACLE_CONTRACT}`,
 	].join("\n");
 	return { action: "continue", fingerprint, message };
+}
+
+export function isReadOnlyBrief(briefPath: string | undefined): boolean {
+	if (!briefPath) return false;
+	let text = "";
+	try {
+		text = readFileSync(briefPath, "utf8");
+	} catch {
+		return false;
+	}
+	const saved = text.search(/\n## Saved (?:idea|request) words \(verbatim; \d+ bytes\)\n/);
+	if (saved >= 0) text = text.slice(0, saved);
+	const match = /(?:^|\n)## Workflow node\n([\s\S]*?)(?=\n## |$)/.exec(text);
+	if (!match) return false;
+	return /^Run only node .+ on the .+ seat; access: read_only\.$/m.test(match[1]);
+}
+
+function isReadOnlyStep(): boolean {
+	return Boolean(process.env.TILLR_READ_ONLY_GROUP) || isReadOnlyBrief(process.env.BOARD_DRAIN_BRIEF);
 }
 
 function textOf(message: any): string {
@@ -239,6 +266,7 @@ export default function keepGoing(pi: any) {
 			tree: await readTree(pi),
 			previous,
 			paused: !!pause && existsSync(pause),
+			readOnly: isReadOnlyStep(),
 		});
 		const entries = [...(event?.entries ?? [])];
 		if (decision.action === "settle") {
