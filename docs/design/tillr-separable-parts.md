@@ -35,7 +35,9 @@ owner's; they are in [the ledger](#decision-ledger) and await his review.
 
 > **In short.** tillr's store, items, verdicts and leased runs work outside Git, and a store that
 > never lands now runs end to end. Nothing Product QA asked for was declined: each request is either
-> built or mapped to unfiled work in [Section 7](#7-the-second-round-tillrs-answer).
+> built or mapped to unfiled work in [Section 7](#7-the-second-round-tillrs-answer) (except R2-11,
+> where `D-RW1` and `D-GR15` removed the run and gate kill clocks, while `LeaseGraceMS` on
+> explicit-timeout runs stays in `tillr-run` without a plan).
 
 **Why it matters.** Product QA's agent builds against what this document promises. A promise that is
 stale costs it a wrong build; [Section 2](#2-the-contract-between-tillr-and-product-qa-for-now) is
@@ -776,7 +778,7 @@ is the extension point.
 | R2-8 Outcomes per kind, countable | Accept | `inconclusive` was refused as a state and as a verdict, exit 2 | **Half built:** finished states per definition (`item-def-item-lifecycle`), used by the worked example. Counts in the views are the next tranche's item 1, unfiled |
 | R2-9 A core that does not preclude a definition's graph changes | Accept as the owner's direction | Not built: one replacement operation was queued | Unbuilt; the next tranche's item 3, unfiled |
 | R2-10 No fixed graph size limits | Accept as the owner's direction | As design: `D-IG4` and four criteria carried caps | Unbuilt; the next tranche's item 4, unfiled (see the note below the table) |
-| R2-11 No clock whose only consequence is a kill | Accept as the owner's direction | `D-GR13`'s ceiling and the lease's 300-second grace | Unbuilt, and in no plan: both are still in the tree |
+| R2-11 No clock whose only consequence is a kill | Accept as the owner's direction | `D-GR13`'s ceiling and the lease's 300-second grace | **Partly built:** default run walls are removed (`D-RW1`; `timeout_ms: 0` holds a `NULL`-expiry lease in `tools/tillr-run/run/lease.go`) and `D-GR13`'s kill ceiling is replaced by the stall watchdog (`D-GR15` in `tools/tillr-gate/watchdog.go`, `tools/fork-check.py`). `LeaseGraceMS` (300 s) remains for explicit `timeout_ms > 0` runs, with no plan to remove it |
 | R2-12 An uncertain outward effect as a state that blocks a retry | Accept | Outside a graph, `blocked` with waiter `owner` worked; inside a graph nothing existed | Unbuilt; the next tranche's item 5, unfiled |
 | R2-13 Time and tokens per step attempt, with their source | Accept | An agent run's record carried its times and `usage`; a command step's record had no source | Unbuilt; the next tranche's item 6, unfiled |
 | R2-14 An owner acknowledgment point | Accept | Nothing built; `tillr view events --since` with a cursor is the meanwhile | Unbuilt; the next tranche's item 7, unfiled |
