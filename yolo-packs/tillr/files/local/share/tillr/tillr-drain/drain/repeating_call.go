@@ -19,9 +19,13 @@ import (
 // to a hold on him:
 //
 //   - The first such ending starts the same item or node again in a fresh session on the
-//     same backend, with a note in its brief that names the call (repeatedCallBrief).
-//   - When that fresh run, dispatched for that reason, ends the same way, the existing
-//     failover walks the seat's backend list to the next backend.
+//     same backend, with a note in its brief that names the call (repeatedCallBrief),
+//     unless the run already recovered from a loop in-run (LoopRecovery count > 0), in
+//     which case it skips the fresh session on the same backend and goes straight to the
+//     seat's next backend.
+//   - When that fresh run, dispatched for that reason, ends the same way (or when a run
+//     with in-run recovery ends that way), the existing failover walks the seat's backend
+//     list to the next backend.
 //   - When the next backend is one this unbroken chain already ended on (the walk wraps)
 //     or the list has none, the item is held with ReasonRepeatingCall, whose mover is the
 //     operator.
@@ -65,6 +69,8 @@ type RepeatedCall struct {
 	Args       string `json:"args"`
 	ArgsDigest string `json:"args_digest"`
 	Streak     int    `json:"streak"`
+	Action     string `json:"action,omitempty"`
+	Shape      string `json:"shape,omitempty"`
 	// Backends are the backends whose sessions in this unbroken chain repeated, oldest
 	// first, ending with Backend.
 	Backends []string `json:"backends"`
@@ -81,16 +87,17 @@ func init() {
 }
 
 // repeatingRoute answers the route for a run that ended for a repeating call on backend,
-// given the RepeatedCall its own dispatch answered (nil when it answered none). It is pure:
-// the same chain and policy always give the same route.
-func repeatingRoute(policy *Policy, seat string, prior *RepeatedCall, backend string) (route, next string, chain []string) {
+// given the RepeatedCall its own dispatch answered (nil when it answered none) and whether
+// the run already recovered from a loop in-run. It is pure: the same chain, recovery
+// state, and policy always give the same route.
+func repeatingRoute(policy *Policy, seat string, prior *RepeatedCall, backend string, recovered bool) (route, next string, chain []string) {
 	if prior != nil {
 		chain = append(chain, prior.Backends...)
 	}
 	if len(chain) == 0 || chain[len(chain)-1] != backend {
 		chain = append(chain, backend)
 	}
-	if prior == nil {
+	if prior == nil && !recovered {
 		return repeatRouteFresh, backend, chain
 	}
 	if policy == nil {
@@ -113,17 +120,30 @@ func newRepeatedCall(policy *Policy, d Decision, rec run.Record) RepeatedCall {
 	rc := RepeatedCall{RunID: rec.RunID, ItemID: d.ItemID, Backend: rec.Backend}
 	if rec.RepeatingCall != nil {
 		rc.Tool, rc.Args, rc.ArgsDigest, rc.Streak = rec.RepeatingCall.Tool, rec.RepeatingCall.Args, rec.RepeatingCall.ArgsDigest, rec.RepeatingCall.Streak
+		rc.Action, rc.Shape = rec.RepeatingCall.Action, rec.RepeatingCall.Shape
 	}
 	if d.Workflow != nil && d.NodeIndex < len(d.Workflow.Stages) {
 		rc.NodeID = d.Workflow.Stages[d.NodeIndex].ID
 	}
-	rc.Route, rc.NextBackend, rc.Backends = repeatingRoute(policy, d.Seat, d.RepeatedCall, rec.Backend)
+	recovered := (rec.LoopRecovery != nil && rec.LoopRecovery.Count > 0) ||
+		(rec.RepeatingCall != nil && rec.RepeatingCall.Action == "ended")
+	rc.Route, rc.NextBackend, rc.Backends = repeatingRoute(policy, d.Seat, d.RepeatedCall, rec.Backend, recovered)
 	return rc
+}
+
+func (rc RepeatedCall) callLabel() string {
+	if rc.Tool != "" {
+		return rc.Tool
+	}
+	if rc.Shape != "" {
+		return "(" + rc.Shape + ")"
+	}
+	return "(no tool)"
 }
 
 // describe is the call in one line, for the loop's report and a preservation reason.
 func (rc RepeatedCall) describe() string {
-	return fmt.Sprintf("pi ended the session: the model repeated one identical call %d times in a row (%s %s)", rc.Streak, rc.Tool, rc.Args)
+	return fmt.Sprintf("pi ended the session: the model repeated one identical call %d times in a row (%s %s)", rc.Streak, rc.callLabel(), rc.Args)
 }
 
 // recordRepeatedCall appends the ending's event. It does no I/O beyond the store.
@@ -258,7 +278,7 @@ func readRepeatedCalls(r *store.Reader) (map[string]RepeatedCall, error) {
 func repeatedCallBrief(rc RepeatedCall) string {
 	var b strings.Builder
 	b.WriteString("\n## Your previous session\n\n")
-	fmt.Fprintf(&b, "This work's previous run, %s, was ended by pi because its session repeated one identical tool call %d times in a row, each time with the same result:\n\n```\n%s %s\n```\n\n", rc.RunID, rc.Streak, rc.Tool, rc.Args)
+	fmt.Fprintf(&b, "This work's previous run, %s, was ended by pi because its session repeated one identical tool call %d times in a row, each time with the same result:\n\n```\n%s %s\n```\n\n", rc.RunID, rc.Streak, rc.callLabel(), rc.Args)
 	fmt.Fprintf(&b, "This run is a new session on %s; nothing from that conversation carries over. This is not a count against the item. That call's result has not changed, so do not make it again expecting a different one.\n", rc.NextBackend)
 	fmt.Fprintf(&b, "\nThe previous run's committed head, when it committed, is pinned at `refs/tillr/runs/%s`, and uncommitted work it left is kept at `%s%s`. Read them with `git show` or `git diff`, and reuse what is sound; do not move either ref.\n", rc.RunID, preservedPrefix, rc.RunID)
 	return b.String()

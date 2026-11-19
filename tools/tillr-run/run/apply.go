@@ -53,6 +53,17 @@ type RepeatingCall struct {
 	Args       string `json:"args"`
 	ArgsDigest string `json:"args_digest"`
 	Streak     int    `json:"streak"`
+	Action     string `json:"action,omitempty"`
+	Shape      string `json:"shape,omitempty"`
+}
+
+// LoopRecovery summarizes in-run loop recoveries pi performed during a session
+// (`loop_detected` events with `action: "recovered"`).
+type LoopRecovery struct {
+	Count        int    `json:"count"`
+	Shape        string `json:"shape,omitempty"`
+	TokensBefore int64  `json:"tokens_before"`
+	TokensAfter  int64  `json:"tokens_after"`
 }
 
 // RepeatingCallArgsLimit bounds the arguments a record quotes; the digest covers them all.
@@ -134,6 +145,8 @@ type Record struct {
 	// RepeatingCall names the call of a run that ended for EndRepeatingCall, and is
 	// carried only by such a run.
 	RepeatingCall *RepeatingCall `json:"repeating_call,omitempty"`
+	// LoopRecovery summarizes in-run loop recoveries pi performed during the session.
+	LoopRecovery *LoopRecovery `json:"loop_recovery,omitempty"`
 }
 
 // Usage is one run's spend, as its backend reported it. Each field is a pointer because
@@ -311,11 +324,14 @@ func checkRecord(payload Record) error {
 	} else if payload.SettledAt != "" || payload.HarnessEndedAt != "" {
 		return Usagef("settlement observations require settled-idle")
 	}
-	if payload.EndCause == EndRepeatingCall && (payload.State != StateExited || payload.RepeatingCall == nil || payload.RepeatingCall.Tool == "") {
+	if payload.EndCause == EndRepeatingCall && (payload.State != StateExited || payload.RepeatingCall == nil || (payload.RepeatingCall.Tool == "" && payload.RepeatingCall.Shape != "no-tool")) {
 		return Usagef("repeating-call requires an exited run that names the repeated call")
 	}
 	if payload.EndCause != EndRepeatingCall && payload.RepeatingCall != nil {
 		return Usagef("a repeating_call requires the repeating-call end cause")
+	}
+	if payload.LoopRecovery != nil && payload.LoopRecovery.Count <= 0 {
+		return Usagef("a loop_recovery requires a positive count")
 	}
 	if payload.EndingException != "" && payload.State != StateExited {
 		return Usagef("an ending_exception requires an exited run")

@@ -230,6 +230,13 @@ no named call, or a named call under any other cause. The
 it starts the work again in a new session, and never resumes the conversation that
 looped.
 
+When pi detects a loop and recovers in-run (`action: "recovered"`), it emits
+`loop_detected` with `shape`, `tokensBefore`, and `tokensAfter` and resumes the
+session without ending it. The executor records `loop_recovery` (`count`, `shape`,
+`tokens_before`, `tokens_after`) on the run record without setting `repeating-call`;
+if pi later emits `action: "ended"` (or omits `action`), both `loop_recovery` and
+`repeating_call` are recorded.
+
 `TestALoopDetectedStreamEndsAsRepeatingCall` runs two fixtures through `run.Exec`. They
 are nine-call excerpts of those two runs, with the event appended, since those runs
 predate it.

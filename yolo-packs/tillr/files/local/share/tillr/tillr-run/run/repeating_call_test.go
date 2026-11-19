@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -139,6 +140,14 @@ func TestARepeatingCallRecordMustNameItsCall(t *testing.T) {
 			r.EndCause = run.EndNormalExit
 			r.RepeatingCall = &run.RepeatingCall{Tool: "read"}
 		}, false},
+		"no-tool-shape": {func(r *run.Record) {
+			r.EndCause = run.EndRepeatingCall
+			r.RepeatingCall = &run.RepeatingCall{Shape: "no-tool", Action: "ended", Streak: 4}
+		}, true},
+		"recovery-zero-count": {func(r *run.Record) {
+			r.EndCause = run.EndNormalExit
+			r.LoopRecovery = &run.LoopRecovery{Count: 0, Shape: "identical"}
+		}, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s, _ := leaseFixture(t)
@@ -154,5 +163,69 @@ func TestARepeatingCallRecordMustNameItsCall(t *testing.T) {
 				t.Errorf("apply error %v, want ok=%v", err, tc.ok)
 			}
 		})
+	}
+}
+
+func TestLoopDetectedRecoveredRecordsRecoveryWithoutEnding(t *testing.T) {
+	s, root := leaseFixture(t)
+	dir := t.TempDir()
+	stream := filepath.Join(dir, "recovered.jsonl")
+	lines := []string{
+		`{"type":"loop_detected","action":"recovered","shape":"identical","toolName":"read","args":{"path":"a.go"},"streak":6,"tokensBefore":120000,"tokensAfter":45000}`,
+		`{"type":"agent_end","messages":[{"role":"assistant","content":[{"type":"text","text":"RESULT: done"}]}]}`,
+	}
+	if err := os.WriteFile(stream, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env, err := run.Exec(context.Background(), s, run.Request{RunID: "run-rec", LaneID: "lane-rec", Backend: "fixture", Command: []string{"/bin/cat", stream}, WorkingDir: "."}, run.ExecOptions{LaneRoot: filepath.Join(root, "lanes"), Now: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	var rec run.Record
+	if err := json.Unmarshal(env.Payload, &rec); err != nil {
+		t.Fatal(err)
+	}
+	wantRecovery := run.LoopRecovery{Count: 1, Shape: "identical", TokensBefore: 120000, TokensAfter: 45000}
+	for name, got := range map[string]run.Record{"record": rec, "status": statusRun(t, s, "run-rec")} {
+		if got.EndCause != run.EndNormalExit || got.RepeatingCall != nil {
+			t.Errorf("%s: cause %q repeating %+v, want normal-exit and none", name, got.EndCause, got.RepeatingCall)
+		}
+		if got.LoopRecovery == nil || *got.LoopRecovery != wantRecovery {
+			t.Errorf("%s: loop recovery %+v, want %+v", name, got.LoopRecovery, wantRecovery)
+		}
+	}
+}
+
+func TestLoopDetectedRecoveredThenEndedRecordsBoth(t *testing.T) {
+	s, root := leaseFixture(t)
+	dir := t.TempDir()
+	stream := filepath.Join(dir, "recovered-then-ended.jsonl")
+	lines := []string{
+		`{"type":"loop_detected","action":"recovered","shape":"identical","toolName":"read","args":{"path":"a.go"},"streak":6,"tokensBefore":120000,"tokensAfter":45000}`,
+		`{"type":"loop_detected","action":"ended","shape":"no-tool","toolName":"","args":null,"streak":5}`,
+	}
+	if err := os.WriteFile(stream, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env, err := run.Exec(context.Background(), s, run.Request{RunID: "run-both", LaneID: "lane-both", Backend: "fixture", Command: []string{"/bin/cat", stream}, WorkingDir: "."}, run.ExecOptions{LaneRoot: filepath.Join(root, "lanes"), Now: time.Now().UTC()})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	var rec run.Record
+	if err := json.Unmarshal(env.Payload, &rec); err != nil {
+		t.Fatal(err)
+	}
+	wantRecovery := run.LoopRecovery{Count: 1, Shape: "identical", TokensBefore: 120000, TokensAfter: 45000}
+	wantCall := run.RepeatingCall{Tool: "", Args: "null", ArgsDigest: fmt.Sprintf("%x", sha256.Sum256([]byte("null"))), Streak: 5, Action: "ended", Shape: "no-tool"}
+	for name, got := range map[string]run.Record{"record": rec, "status": statusRun(t, s, "run-both")} {
+		if got.EndCause != run.EndRepeatingCall || got.State != run.StateExited {
+			t.Errorf("%s: cause %q state %q, want repeating-call exited", name, got.EndCause, got.State)
+		}
+		if got.LoopRecovery == nil || *got.LoopRecovery != wantRecovery {
+			t.Errorf("%s: loop recovery %+v, want %+v", name, got.LoopRecovery, wantRecovery)
+		}
+		if got.RepeatingCall == nil || *got.RepeatingCall != wantCall {
+			t.Errorf("%s: repeating call %+v, want %+v", name, got.RepeatingCall, wantCall)
+		}
 	}
 }
