@@ -1,6 +1,8 @@
-from contextlib import closing
+from contextlib import closing, redirect_stdout
 import hashlib
+from importlib.machinery import SourceFileLoader
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -19,6 +21,11 @@ spec = importlib.util.spec_from_file_location(
     'tillr_roll', ROOT / 'tools/tillr-roll/tillr-roll.py')
 roll = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(roll)
+
+keep_spec = importlib.util.spec_from_loader(
+    'tillr_keep', SourceFileLoader('tillr_keep', str(ROOT / 'tools/tillr-roll/tillr-keep')))
+keep = importlib.util.module_from_spec(keep_spec)
+keep_spec.loader.exec_module(keep)
 
 
 class RollTest(unittest.TestCase):
@@ -320,6 +327,93 @@ class RollTest(unittest.TestCase):
                     patch.object(roll, 'run', side_effect=command):
                 self.assertEqual(roll.roll(root, live, True, build_pi=True), 0)
             self.assertEqual(calls, [((str(root / 'bin/pi-forks'), 'build-pi'), root)])
+
+    def test_wait_for_exit_waits_past_60s_and_prints_what_it_waits_on(self):
+        states = [
+            ('tillr-drain', '12345', 'S'),
+            ('tillr-drain', '12345', 'S'),
+            ('tillr-drain', '12345', 'S'),
+            ('tillr-drain', '12345', 'S'),
+            ('tillr-drain', '12345', 'S'),
+            None,
+        ]
+        now = [0.0]
+
+        def fake_sleep(seconds):
+            now[0] += 35.0
+
+        output = io.StringIO()
+        with patch.object(keep, 'process', side_effect=states), redirect_stdout(output):
+            keep.wait_for_exit(4242, report_interval=30, poll_interval=0.05,
+                               clock=lambda: now[0], sleep=fake_sleep)
+
+        lines = output.getvalue().splitlines()
+        self.assertGreater(now[0], 60.0)
+        self.assertEqual(lines[0], 'restart: waiting for loop 4242 to exit')
+        self.assertIn('restart: still waiting for loop 4242 to exit', lines[1:])
+        self.assertEqual(lines.count('restart: still waiting for loop 4242 to exit'), 3)
+
+    def test_wait_for_exit_returns_immediately_when_already_exited(self):
+        sleeps = []
+        output = io.StringIO()
+        with patch.object(keep, 'process', return_value=None), redirect_stdout(output):
+            keep.wait_for_exit(4242, sleep=sleeps.append)
+        self.assertEqual(sleeps, [])
+        self.assertEqual(output.getvalue(), '')
+
+    def test_restart_drain_waits_for_slow_loop_exit_then_builds_and_relaunches(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work)
+            lock_path = root / '.tillr/keeper.lock'
+            states = [
+                ('tillr-drain', '999', 'S'),
+                ('tillr-drain', '999', 'S'),
+                ('tillr-drain', '999', 'S'),
+                ('tillr-drain', '999', 'S'),
+                None,
+            ]
+            now = [0.0]
+            events = []
+
+            def fake_run(cmd, **kwargs):
+                if cmd[:2] == ['tillr-drain', 'stop']:
+                    events.append('stop')
+                    return subprocess.CompletedProcess(cmd, 0, '', '')
+                events.append('build')
+                return subprocess.CompletedProcess(cmd, 0, '', '')
+
+            def fake_popen(cmd, **kwargs):
+                events.append(('relaunch', cmd))
+                return type('Proc', (), {'pid': 8888})()
+
+            output = io.StringIO()
+            with patch.object(keep, 'find_loop', return_value=4242), \
+                    patch.object(keep, 'loop_argv', return_value=['loop', '--policy', 'p.json', '--lanes', '2']), \
+                    patch.object(keep, 'stop_keeper'), \
+                    patch.object(keep, 'wait_for_keeper_exit'), \
+                    patch.object(keep, 'process', side_effect=states), \
+                    patch.object(keep.time, 'monotonic', side_effect=lambda: now[0]), \
+                    patch.object(keep.time, 'sleep', side_effect=lambda _: now.__setitem__(0, now[0] + 35.0)), \
+                    patch.object(keep.subprocess, 'run', side_effect=fake_run), \
+                    patch.object(keep.subprocess, 'check_output', return_value='deadbeef12345678\n'), \
+                    patch.object(keep.subprocess, 'Popen', side_effect=fake_popen), \
+                    patch.dict(os.environ, {'YOLO_DURABLE_DIR': work}), \
+                    redirect_stdout(output):
+                keep.restart_drain(root, [], lock_path)
+
+        text = output.getvalue()
+        self.assertGreater(now[0], 60.0)
+        self.assertEqual(events[0], 'stop')
+        self.assertEqual(events[1], 'build')
+        self.assertEqual(events[2][0], 'relaunch')
+        self.assertIn('--policy', events[2][1])
+        self.assertIn('--lanes', events[2][1])
+        self.assertIn('restart: stopping loop 4242\n', text)
+        self.assertIn('restart: waiting for loop 4242 to exit\n', text)
+        self.assertIn('restart: still waiting for loop 4242 to exit\n', text)
+        self.assertIn('restart: loop 4242 exited\n', text)
+        self.assertIn('restart: building from HEAD deadbeef1234\n', text)
+        self.assertIn('restart: started keeper 8888 (policy=p.json, lanes=2)', text)
 
 
 if __name__ == '__main__':
