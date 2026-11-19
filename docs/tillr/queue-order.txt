@@ -1,17 +1,15 @@
-# last_hand_move_event_seq: 1299042
-# hand_move_event_sha256: 89c76b6bb8ceb929f600a8e210fd0d2d9f95bf7e1e00dbfa91b75ea65f4c7f1b
+# last_hand_move_event_seq: 1299477
+# hand_move_event_sha256: 7cdbed2a6dd173a54a54e768e3c27bac0221339a9608020c6f6aac713d831528
+item-request-e074800ade
 item-request-8126862ae5
 item-request-e052790788
-item-request-e074800ade
 item-request-2c5d86ea43
-item-request-930ab30864
 item-request-8f36b06574
 item-request-3ee8dd349e
 item-request-ed0e11d000
 item-request-5be951c300
 item-request-c04ea25d47
 item-request-bb7e39762f
-item-request-3f62eaffa1
 item-request-02a950b713
 item-request-e406ec3b31
 item-request-3ff3e4c2b8
