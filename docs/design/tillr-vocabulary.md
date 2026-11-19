@@ -9,7 +9,7 @@ tags:
   - glossary
   - worktrees
   - design
-summary: "Settles one meaning for each word the tillr work queue uses, so that the owner, the documents and the code say the same thing. An item is a tracked piece of work with its own deliverable, whether or not a document declares it yet. The unit of progress is the node, the whole of what happened to an item is its path, and a run is only the bookkeeping of one node. The lane is retired: a worktree is a resource an item acquires, with a lifecycle and collection in place of a fixed pool. Three questions remain for the owner: two names, and whether an item is finished at landing or at proof."
+summary: "Settles one meaning for each word the tillr work queue uses, so that the owner, the documents and the code say the same thing. An item is a tracked piece of work with its own deliverable, whether or not a document declares it yet. The unit of progress is the node, the whole of what happened to an item is its path, and a run is only the bookkeeping of one node. The lane is retired: a worktree is a resource an item acquires, with a lifecycle and collection in place of a fixed pool. The owner ruled on charter, git-landing and finished-at-proof on 2026-11-18; the designer's decisions D-VO1 to D-VO12 await his review."
 next: "The owner ruled OQ-VO4, OQ-VO5 and OQ-VO6 on 2026-11-18. He reviews the designer's decisions D-VO1 to D-VO12 in the ledger, which nothing is built on until he has. The drafted work in Section 9 is filed once he has ruled how work in a document becomes an item."
 depends-on:
   - tillr-graph-is-the-path.md
@@ -18,7 +18,7 @@ depends-on:
 
 # One word per thing: the vocabulary of tillr's items, nodes, runs, sessions and worktrees
 
-**Status:** 2026-11-18. Written from a read of the tracked documents and the code's tables, ids and event kinds on that date. Nothing here is built; where the code uses a word differently, the entry says so. Two questions were closed on the owner's own words and one by a designer's decision; every designer's decision in [the ledger](#decision-ledger) awaits the owner's review, and nothing is to be built on one before he has seen it.
+**Status:** 2026-11-18. Written from a read of the tracked documents and the code's tables, ids and event kinds on that date. The workflow/node-run machinery ([item graphs](./tillr-item-graphs.md)) and landing-call closure on `proven` (`tools/tillr-drain/drain/landing_call_lifecycle.go`) are built; the vocabulary's own item-owned worktree lifecycle, scratch collection, and proposed renames are not built; where the code uses a word differently, the entry says so. Three questions were ruled by the owner ([`OQ-VO4`](#OQ-VO4), [`OQ-VO5`](#OQ-VO5), [`OQ-VO6`](#OQ-VO6)) and three closed by designer's decisions ([`OQ-VO1`](#OQ-VO1), [`OQ-VO2`](#OQ-VO2), [`OQ-VO3`](#OQ-VO3)); every designer's decision in [the ledger](#decision-ledger) awaits the owner's review, and nothing is to be built on one before he has seen it.
 
 > **In short:** Three words carried several meanings each (item, run, lane), and that is why the stages of a change could not be told in one breath. This document gives each word one meaning, retires the words that had none left, and names the stages of a change once.
 
@@ -224,7 +224,7 @@ flowchart TD
 | The item | Not ended. Its worktree is idle | Ended **done**. Its worktree and scratch are collected |
 | Where it shows | "Draining" | Finished |
 
-Today `landed` is the last state the store has. Raw writes and `reopen` refuse to move a landed item, the `git-landing` charter (in shipped code, the landing definition) lists one explicit move out of it (`landed` to `in-queue`, which a revert uses), and there is no state for proven: the difference lives only in the green pointer. That is the largest gap between these words and the store ([Section 6](#6-renames)).
+Today `landed` is the last state the store has. Raw writes and `reopen` refuse to move a landed item, the `git-landing` charter (in shipped code, the landing definition) lists one explicit move out of it (`landed` to `in-queue`, which a revert uses), and there is no `proven` item state: the difference lives in the green pointer, and `tools/tillr-drain/drain/landing_call_lifecycle.go` persists a landing-call closure with outcome `proven` (a derived call event, not an item state). That is the largest gap between these words and the store ([Section 6](#6-renames)).
 
 **What must be built for the ruling, in this order.** Neither step is built.
 
@@ -302,7 +302,7 @@ Each term has one meaning. A term owned by another document is linked, not redef
 | **Landing** | One act of the lander that put a commit on the trunk | Not the item's ending | A landing id. Belongs to one land attempt node | One row for every landed commit, design answers and triage included |
 | **Landed** | An item whose deliverable is on the trunk and not yet proven: a **provisional landing** | Not finished | — | The final stored state |
 | **Proof** | One run of the full suite on one trunk commit | Not the gate | The trunk commit | "Heavy tier", "rolling", "after-merge heavy run", "rolling audit" |
-| **Proven** | A landing contained in a trunk commit whose proof passed, and not reverted: a **proven landing** | Not merely unreverted so far | The green pointer at or past the landing | No stored state |
+| **Proven** | A landing contained in a trunk commit whose proof passed, and not reverted: a **proven landing** | Not merely unreverted so far | The green pointer at or past the landing | No `proven` item state (`landing_call_lifecycle.go` closes a landing call with outcome `proven`) |
 | **Full suite** | Every check, as the proof runs them | Not the gate | — | "Heavy tier" |
 | **Trunk; tip** | The repository's shared branch; its newest commit | — | — | — |
 | **Green pointer** | The ref naming the newest proven trunk commit ([gate rework](./gate-rework.md)) | Not a branch | `refs/tillr/green` | — |
@@ -473,7 +473,7 @@ One flag sets both how many agents run and how many worktrees exist. This item s
 
 ## Decision Ledger
 
-Two kinds of row, kept apart on purpose. Nothing here is built.
+Two kinds of row, kept apart on purpose. The vocabulary's own item-owned worktree lifecycle, scratch collection, and proposed renames are not built ([`OQ-VO5`](#OQ-VO5) notes the `git-landing` name already shipped).
 
 ### The owner's rulings
 
