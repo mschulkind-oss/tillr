@@ -1,15 +1,15 @@
-# last_hand_move_event_seq: 1292660
-# hand_move_event_sha256: 64085faab415b6bf6fc8f62a9fde2e8426895ca11bfb7b5d4a2084aec44f0b91
+# last_hand_move_event_seq: 1294191
+# hand_move_event_sha256: 01d37e5f112a252bfeef1dcb9d563470adf4638f787bddead107abec61fa05d6
+item-request-cfae4676fc
 item-gate-pinned-fork-inputs
-item-jl-owner-criterion-hold
-item-jl-terminal-state-receipts
 item-agent-default-bmad-superpowers-skills
 item-bedrock-claude-latest-only
-item-design-refusal-resumes-session
-item-landing-call-land-tool
 item-landing-call-obstacle-tool
 item-doc-triage-2026-11-18-tillr-roadmap-designs
-item-landing-call-transcript-path
-item-landing-call-transcript-check
 item-landing-call-delivery-tests
 item-landing-call-pi-switch-on
+item-request-e1016f3a23
+item-request-b13084fe3e
+item-request-349f56e5fe
+item-request-25676973b4
+item-request-6c27d14b15
