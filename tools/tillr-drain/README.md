@@ -2453,11 +2453,16 @@ the shared cache's `main`; two items for the same fork remain serialized.
 
 The fork gate is [fork-gate.py](fork-gate.py), whose `fork-build` check runs through
 `tillr-gate` on a clean copy of the exact candidate head with the pack's declared
-build command. The ordinary repository gate's candidate-build step reconstructs the
+build command. When `fork-build` passes in that same clean clone, `fork-quality`
+runs after it from `FORK_QUALITY` (`pi` runs `npx tsc --noEmit` at the root and
+`npx vitest --run` in each `packages/` directory touched by the diff from base,
+skipping vitest when no package is touched; `pi-subagents` and `pi-session-search`
+install devDependencies and run their `FORK_QUALITY` scripts; forks absent from
+`FORK_QUALITY` keep a build-only verdict and report it). The ordinary repository gate's candidate-build step reconstructs the
 currently delivered branch, not this unlanded head, so it cannot certify a fork item.
 A pack with no build command explicitly receives a source-only check instead. Build
 output stays beside the run's gate records, never in the worker's checkout. A failed
-build leaves the patch branch unmoved, and a passing verdict lacking `fork-build` is
+build or failed quality check leaves the patch branch unmoved, and a passing verdict lacking `fork-build` is
 not a fork-delivery verdict. The lander publishes the built commit itself rather than
 squashing fork history. Dirty or divergent cache and writer checkouts are refused,
 not reset. A missing shared cache is prepared from the gated fork's upstream metadata

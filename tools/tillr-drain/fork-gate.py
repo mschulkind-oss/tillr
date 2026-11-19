@@ -10,6 +10,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -42,6 +43,49 @@ def build_command(root, fork):
     return path, command
 
 
+# Mirrors tools/fork-check.py's FORK_QUALITY, extended with pi (tsc at root, vitest per touched package).
+FORK_QUALITY = {
+    'pi': {'root': 'npx tsc --noEmit', 'package': 'npx vitest --run'},
+    'pi-session-search': ('check', 'test'),
+    'pi-subagents': ('typecheck', 'test:unit'),
+}
+
+
+def touched_packages(candidate, base, head):
+    result = subprocess.run(
+        ['git', 'diff', '--name-only', '-z', base, head],
+        cwd=candidate, capture_output=True, text=True, check=False,
+    )
+    if result.returncode:
+        raise RuntimeError(f'git diff exited {result.returncode}')
+    packages = set()
+    for rel in result.stdout.split('\0'):
+        if not rel:
+            continue
+        parts = Path(rel).parts
+        if len(parts) >= 2 and parts[0] == 'packages' and (candidate / 'packages' / parts[1]).is_dir():
+            packages.add(f'packages/{parts[1]}')
+    return sorted(packages)
+
+
+def quality_command(fork, candidate, base, head):
+    entry = FORK_QUALITY.get(fork)
+    if entry is None:
+        return None
+    if isinstance(entry, dict):
+        commands = [entry['root']]
+        packages = touched_packages(candidate, base, head)
+        if not packages:
+            print(f'fork-quality: {fork} touches no packages/ workspace; skipping vitest', flush=True)
+        else:
+            for pkg in packages:
+                commands.append(f'(cd {shlex.quote(pkg)} && {entry["package"]})')
+        return ' && '.join(commands)
+    # Tuple entries (pi-subagents, pi-session-search) have devDependencies omitted or pruned by pack builds.
+    scripts = ' && '.join(f'npm run {shlex.quote(script)}' for script in entry)
+    return 'npm ci --include=dev --legacy-peer-deps --ignore-scripts --no-audit --no-fund && ' + scripts
+
+
 def call(argv, cwd):
     result = subprocess.run(argv, cwd=cwd, check=False)
     if result.returncode:
@@ -57,7 +101,7 @@ def main():
     root = Path(args.root).resolve()
     directory = root / '.tillr' / 'loop' / args.run
     directory.mkdir(parents=True, exist_ok=True)
-    for stale in ('gate.verdict.json', 'fork-cache-source'):
+    for stale in ('gate.verdict.json', 'fork-cache-source', 'fork-build-passed'):
         (directory / stale).unlink(missing_ok=True)
     pack, command = build_command(root, args.fork)
     # Builds can delete tracked tests or generate files. Never run them in the writer's tree.
@@ -71,12 +115,31 @@ def main():
                               capture_output=True, text=True)
     if upstream.returncode == 0:
         call(['git', 'remote', 'add', 'upstream', upstream.stdout.strip()], candidate)
+    build_passed = directory / 'fork-build-passed'
+    build_cmd = f'({command}) && : > {shlex.quote(str(build_passed))}'
+    quality = quality_command(args.fork, candidate, args.base, args.head)
     print(f'fork-build: {args.head} with {pack.relative_to(root)}: {command}', flush=True)
-    declarations = json.dumps([{
+    declaration_list = [{
         'id': 'fork-build', 'kind': 'fork-build', 'label': f'{args.fork}: pack build',
         'selects': [{'regex': '.'}], 'watches': [{'paths': True}],
-        'command': ['sh', '-c', command], 'timeout_ms': 0,
-    }], separators=(',', ':'))
+        'command': ['sh', '-c', build_cmd], 'timeout_ms': 0,
+    }]
+    if quality:
+        print(f'fork-quality: {args.head}: {quality}', flush=True)
+        guarded_quality = (
+            f'if [ ! -f {shlex.quote(str(build_passed))} ]; then '
+            f'echo "fork-quality: skipped because fork-build did not pass" >&2; exit 1; fi && '
+            f'{quality}'
+        )
+        declaration_list.append({
+            'id': 'fork-quality', 'kind': 'fork-quality', 'label': f'{args.fork}: quality',
+            'selects': [{'regex': '.'}], 'watches': [{'paths': True}],
+            'after': ['fork-build'],
+            'command': ['sh', '-c', guarded_quality], 'timeout_ms': 0,
+        })
+    else:
+        print(f'fork-quality: no quality entry for {args.fork}; keeping build-only verdict', flush=True)
+    declarations = json.dumps(declaration_list, separators=(',', ':'))
     in_process = '[]'
     digest = hashlib.sha256((declarations + in_process).encode()).hexdigest()
     registry = directory / 'fork.registry.json'
