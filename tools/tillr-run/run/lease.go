@@ -559,7 +559,7 @@ func closeRun(ctx context.Context, tx *store.Tx, lane lease, now time.Time) (boo
 // event is the run's own claim — the run.allocate event whose payload names the run and
 // the lane — so a lane claimed twice answers its latest claim.
 func readClaim(r *store.Reader, laneID, runID string) (claim, bool, error) {
-	events, err := r.Events(0)
+	events, err := r.EventsOfKind(0, AllocateKind)
 	if err != nil {
 		return claim{}, false, readFailure(err)
 	}

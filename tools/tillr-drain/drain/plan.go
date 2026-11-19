@@ -1855,7 +1855,7 @@ type runHistory struct {
 // an item state write is an event about an item that says what state the item is in,
 // whatever kind item chose to append.
 func readRunHistory(r *store.Reader) (runHistory, error) {
-	events, err := r.Events(0)
+	events, err := r.EventsSelected(0, store.EventSelection{Kinds: []string{GateVerdictKind, RefusalKind}, ObjectTypes: []string{"item"}})
 	if err != nil {
 		return runHistory{}, readFailure(err)
 	}

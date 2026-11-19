@@ -79,10 +79,38 @@ func readPending(r *store.Reader) (map[string]*pendingWork, error) {
 	return works, err
 }
 
+// pendingHistoryKinds are the kinds readPendingHistory folds, and the only ones it reads: it
+// runs inside write transactions, where a read of the whole log (mostly worker records) held
+// the write lock past a landing's busy timeout on 2026-11-19 (whole_log_test.go).
+// TestEveryFoldReadsTheKindsItSelects holds this list to the fold's cases.
+var pendingHistoryKinds = []string{
+	dispatchStartedKind, nodeAdvancedKind, graphChangedKind,
+	GateVerdictKind,
+	"land.landing",
+	run.ResumeKind,
+	examinationClaimedKind,
+	examinationReleasedKind,
+	candidateReadyKind, candidateRetirementKind, candidatePreparedKind,
+	judgeLandedKind,
+	candidateGatedKind,
+	BoundaryCheckKind,
+	loopOrphanedKind,
+	redCapHeldKind,
+	dirtyHeldKind,
+	gateStallHeldKind,
+	repairHeldKind,
+	itemFaultClearedKind,
+	examinationOwnerKind,
+	candidateReleaseStartedKind, candidateLaneKind,
+	candidateAssignedKind,
+	candidateStagedKind,
+	examinationDoneKind,
+}
+
 // Keep every attempt's effective examination state, including superseded dispatches.
 // Second-failure routing needs the same continuation semantics as current planning.
 func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*pendingWork, error) {
-	events, err := r.Events(0)
+	events, err := r.EventsOfKind(0, pendingHistoryKinds...)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -2286,7 +2314,7 @@ func liveForks(r *store.Reader, at time.Time) ([]plannedFork, error) {
 	for _, item := range items {
 		forks[item.ItemID] = forkOf(item.Allowed)
 	}
-	events, err := r.Events(0)
+	events, err := r.EventsOfKind(0, run.AllocateKind)
 	if err != nil {
 		return nil, err
 	}

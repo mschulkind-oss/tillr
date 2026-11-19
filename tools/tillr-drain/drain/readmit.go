@@ -126,7 +126,7 @@ func currentRunInputs(ctx context.Context, r *store.Reader, row itemRow, policy 
 }
 
 func readInputDecisions(r *store.Reader) (map[string]Decision, error) {
-	events, err := r.Events(0)
+	events, err := r.EventsOfKind(0, inputRecordedKind)
 	if err != nil {
 		return nil, err
 	}

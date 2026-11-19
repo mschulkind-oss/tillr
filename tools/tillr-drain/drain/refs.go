@@ -226,7 +226,7 @@ func planRefSweep(r *store.Reader, refs []RefDisposition, operators map[string][
 	examined := map[string]bool{}
 	superseded := map[string]bool{}
 	baseRefs := map[string]string{}
-	events, err := r.Events(0)
+	events, err := r.EventsOfKind(0, "run.allocate", examinationDoneKind, candidateSupersededKind, "land.landing")
 	if err != nil {
 		return nil, err
 	}
