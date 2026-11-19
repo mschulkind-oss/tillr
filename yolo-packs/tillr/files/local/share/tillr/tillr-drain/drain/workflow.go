@@ -427,6 +427,9 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	next.WorkflowRestart = false
 	next.NodeInfraFailures = 0
 	next.WorkflowRelease = false
+	// The kept readers were recorded at the attempt's claim; a later node continues the
+	// lane, so it is no fresh retry start.
+	next.ReusedNodes, next.ReusedAttempt = nil, 0
 	stage := next.Workflow.Stages[next.NodeIndex]
 	next.Seat = stage.Seat
 	next.Action, next.Reason = ActionDispatch, "workflow-next-node"
