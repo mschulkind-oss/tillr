@@ -11,6 +11,13 @@ import (
 const DefaultStorePollInterval = 100 * time.Millisecond
 
 func (l *Loop) waitForTrigger(ctx context.Context, leases []LaneLease, at time.Time, result *LoopResult) (string, error) {
+	if err := l.checkStopRequested(ctx); err != nil {
+		if stoppedByOperator(ctx, err) {
+			result.Detail = "the loop was asked to stop while waiting for a trigger"
+			return StopOperatorStop, nil
+		}
+		return "", err
+	}
 	wait := l.cfg.StorePollInterval
 	for _, lease := range leases {
 		if !l.pollOnly && lease.LeasedUntil != nil {
@@ -35,6 +42,13 @@ func (l *Loop) waitForTrigger(ctx context.Context, leases []LaneLease, at time.T
 	case c := <-completions:
 		return l.takeCompletion(c, result)
 	case <-timer.C:
+		if err := l.checkStopRequested(ctx); err != nil {
+			if stoppedByOperator(ctx, err) {
+				result.Detail = "the loop was asked to stop while waiting for a trigger"
+				return StopOperatorStop, nil
+			}
+			return "", err
+		}
 		return "", nil
 	case <-ctx.Done():
 		result.Detail = "the loop was asked to stop while waiting for a trigger"

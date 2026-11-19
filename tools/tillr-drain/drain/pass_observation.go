@@ -2,7 +2,9 @@ package drain
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -83,17 +85,69 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 	if err != nil {
 		return err
 	}
+	stopFlag := 0
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
-		_, err := tx.Exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at, loop_owner)
+		if _, err := tx.Exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at, loop_owner)
    VALUES (?, ?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET
    refreshed_at = excluded.refreshed_at, next_pass_at = excluded.next_pass_at`,
-			l.sessionID, l.sessionStarted, at.UnixMilli(), next.UnixMilli(), string(raw))
-		return err
+			l.sessionID, l.sessionStarted, at.UnixMilli(), next.UnixMilli(), string(raw)); err != nil {
+			return err
+		}
+		return tx.QueryRow(`SELECT COALESCE(stop_requested, 0) FROM drain_sessions WHERE session_id = ?`, l.sessionID).Scan(&stopFlag)
 	})
 	if err == nil {
 		l.sessionInitialized = true
+		if stopFlag > 0 && l.sessionStop != nil {
+			l.sessionStop()
+		}
 	}
 	return err
+}
+
+func (l *Loop) stopRequested(ctx context.Context) (bool, error) {
+	if l.sessionID == "" || !l.sessionInitialized {
+		return false, nil
+	}
+	if operatorStopped(ctx) {
+		return true, nil
+	}
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return false, err
+	}
+	defer s.Close()
+	flag := 0
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		err := r.QueryRow(`SELECT COALESCE(stop_requested, 0) FROM drain_sessions WHERE session_id = ?`, l.sessionID).Scan(&flag)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	return flag > 0, nil
+}
+
+func (l *Loop) checkStopRequested(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	stopped, err := l.stopRequested(ctx)
+	if err != nil {
+		return err
+	}
+	if stopped {
+		if l.sessionStop != nil {
+			l.sessionStop()
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return errStopRequested
+	}
+	return nil
 }
 
 // heartbeatTicker is the clock the heartbeat waits on: C delivers one tick per

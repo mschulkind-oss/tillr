@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -41,6 +42,9 @@ func init() {
 	}
 }
 func superviseHeavy(args []string) int {
+	if len(args) > 0 && args[0] == "step" {
+		return superviseStep(args[1:])
+	}
 	if len(args) < 3 || (args[0] != "declaration" && args[0] != "legacy") {
 		fmt.Fprintln(os.Stderr, "heavy supervisor needs a mode and command")
 		return 2
@@ -139,11 +143,92 @@ func superviseHeavy(args []string) int {
 	fmt.Fprintln(os.Stderr, "heavy supervisor:", err)
 	return 4
 }
+
+func superviseStep(args []string) int {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "step supervisor needs a start-error path and command")
+		return 2
+	}
+	owner := os.NewFile(3, "step owner pipe")
+	defer owner.Close()
+	if _, err := owner.Stat(); err != nil {
+		fmt.Fprintln(os.Stderr, "step supervisor missing owner pipe:", err)
+		return 4
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() { var b [1]byte; _, _ = owner.Read(b[:]); cancel() }()
+	if err := prepareHeavyTree(); err != nil {
+		fmt.Fprintln(os.Stderr, "step lifetime supervision unavailable:", err)
+		return 4
+	}
+	cmd := exec.CommandContext(ctx, args[1], args[2:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	started := make(chan int, 1)
+	stopReaping := reapWhileSupervising(started)
+	err := runCheckGroupStarted(cmd, func(pid int) { started <- pid })
+	stopReaping()
+	if cmd.Process == nil && err != nil {
+		if reportErr := os.WriteFile(args[0], []byte(err.Error()), 0600); reportErr != nil {
+			fmt.Fprintln(os.Stderr, "step startup diagnostic:", reportErr)
+			return 4
+		}
+	}
+	if cleanupErr := finishHeavyTree(); cleanupErr != nil {
+		fmt.Fprintln(os.Stderr, "step cleanup unconfirmed:", cleanupErr)
+		return 4
+	}
+	if err == nil {
+		return 0
+	}
+	if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() >= 0 {
+		return cmd.ProcessState.ExitCode()
+	}
+	fmt.Fprintln(os.Stderr, "step supervisor:", err)
+	return 4
+}
+
+func runSupervisedTree(cmd *exec.Cmd) error {
+	self, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp("", "tillr-step-supervisor-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	startError := filepath.Join(tmp, "start-error")
+	owner, life, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer life.Close()
+	argv := append([]string{"--tillr-heavy-supervisor", "step", startError}, cmd.Args...)
+	cmd.Path = self
+	cmd.Args = append([]string{self}, argv...)
+	cmd.ExtraFiles = append(cmd.ExtraFiles, owner)
+	err = func() error {
+		defer owner.Close()
+		return runHeavySupervisorGroup(cmd)
+	}()
+	if raw, readErr := os.ReadFile(startError); readErr == nil {
+		return &heavyCommandNotStarted{detail: string(raw)}
+	} else if !os.IsNotExist(readErr) {
+		return readErr
+	}
+	return err
+}
+
 func runOwnedHeavy(ctx context.Context, cmd *exec.Cmd, mode string) error {
-	// A required check at a candidate's gate is not the runner's: its process group is
-	// its own, ended before the call returns (runCheckGroup).
+	// A required check at a candidate's gate is not the runner's: its subreaper
+	// supervisor ends the whole tree before the call returns.
 	if unowned, _ := ctx.Value(heavyUnownedKey{}).(bool); unowned {
-		return runCheckGroup(cmd)
+		return runSupervisedTree(cmd)
 	}
 	ownership, ok := ctx.Value(heavyOwnershipKey{}).(heavyOwnership)
 	if !ok {

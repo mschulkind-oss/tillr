@@ -1622,6 +1622,11 @@ func (l *Loop) releaseExamination(ctx context.Context, d Decision) error {
 		if d.Workflow != nil {
 			return appendEffect(tx, examinationReleasedKind, d.RunRequest.RunID, struct{}{}, l.cfg.Now().UTC())
 		}
+		if w := byRun[d.RunRequest.RunID]; w != nil && !w.Done && w.Examiner != nil {
+			if err := appendEffect(tx, examinationOwnerKind, d.RunRequest.RunID, (*LoopOwner)(nil), l.cfg.Now().UTC()); err != nil {
+				return err
+			}
+		}
 		if n, err := res.RowsAffected(); err != nil || n == 0 {
 			return err
 		}
@@ -1853,6 +1858,9 @@ func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err e
 	if handled, stop, err := l.gateRestart(ctx, result); handled || err != nil {
 		return stop, err
 	}
+	if err := l.checkStopRequested(ctx); err != nil {
+		return "", err
+	}
 	if err := l.migrateBuildRuns(ctx, result); err != nil {
 		return "", err
 	}
@@ -1902,7 +1910,13 @@ planned:
 	if err := l.retireDesigners(ctx); err != nil {
 		return "", err
 	}
+	if err := l.checkStopRequested(ctx); err != nil {
+		return "", err
+	}
 	if err := l.maybeRolling(ctx, mainSHA, false, result); err != nil {
+		return "", err
+	}
+	if err := l.checkStopRequested(ctx); err != nil {
 		return "", err
 	}
 	if err := l.releaseUnlaunchedClaims(ctx); err != nil {
@@ -2030,6 +2044,9 @@ planned:
 	replans := 0
 plans:
 	for i := 0; i < len(plans); i++ {
+		if err := l.checkStopRequested(ctx); err != nil {
+			return "", err
+		}
 		p := plans[i]
 		d := p.decision
 		d.PassID = timing.TickID
@@ -2116,6 +2133,9 @@ plans:
 				staged, err = l.stageDispatches(ctx, []Decision{d}, base, result)
 			}
 			if err != nil {
+				if stoppedByOperator(ctx, err) {
+					_ = l.cancelStaging(context.WithoutCancel(ctx), d)
+				}
 				result.StopItemID, result.StopStep = d.ItemID, "stage"
 				return "", err
 			}
@@ -2146,10 +2166,23 @@ plans:
 			}
 			parallel, err := l.stageParallel(ctx, staged[0], base)
 			if err != nil {
+				_ = l.cancelStaging(context.WithoutCancel(ctx), d)
+				return "", err
+			}
+			if err := l.checkStopRequested(ctx); err != nil {
+				if cancelErr := l.cancelStaging(context.WithoutCancel(ctx), d); cancelErr != nil {
+					return "", cancelErr
+				}
 				return "", err
 			}
 			l.launchRun(ctx, parallel, at, watched, result)
 		case ActionSettle, ActionJudge:
+			if err := l.checkStopRequested(ctx); err != nil {
+				if releaseErr := l.releaseExamination(context.WithoutCancel(ctx), d); releaseErr != nil {
+					return "", releaseErr
+				}
+				return "", err
+			}
 			l.launchExamination(ctx, d, work, at, timing, watched)
 		}
 	}
@@ -2179,6 +2212,9 @@ plans:
 	}
 	if stale {
 		return "", nil
+	}
+	if err := l.checkStopRequested(ctx); err != nil {
+		return "", err
 	}
 	before := l.rollingRuns(result)
 	if err := l.maybeRolling(ctx, mainSHA, true, result); err != nil {

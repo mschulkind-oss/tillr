@@ -64,6 +64,9 @@ func restartWork[T any](ctx context.Context, l *Loop, work func(context.Context)
 		defer held.acquire()
 	}
 	settle := func() error {
+		if err := l.checkStopRequested(ctx); err != nil {
+			return err
+		}
 		_, stop, err := l.gateRestart(ctx, &LoopResult{})
 		if err != nil {
 			return err

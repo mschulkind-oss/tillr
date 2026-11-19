@@ -1246,15 +1246,29 @@ signal: the stop exits non-zero naming it, after stopping the local loops and, w
 run face is gone but whose worker survives is ended like any other: the interruption is
 recorded, then every process of this user carrying that run and store identity gets SIGTERM.
 
-A stop that arrives during the loop's own checks ends them before their worktrees go. The
-rolling tier's program and the trunk-already-red replay's run in a process group of their
-own. Cancellation first sends SIGTERM to the program so it can end checks it started in
-separate sessions; `fork-check` handles SIGTERM by canceling its registered checks and
-exiting 143 without recording a verdict. The loop allows five seconds for that cleanup
-before escalating to SIGKILL. On any exit, the step kills what remains in the program's
-own group and waits briefly for it to be gone before removing the scratch worktree.
-A check program that starts separate sessions must own their SIGTERM cleanup: killing
-only the program's group cannot reach those sessions.
+A stop that arrives during a pass or during the loop's own checks takes effect without
+waiting for an in-flight gate or trunk proof to finish, and ends the check tree before its
+worktree goes. The loop observes both SIGTERM and `drain_sessions.stop_requested` (on its
+session heartbeat, between pass steps, in trigger waits and during startup recovery),
+cancels its run context, and exits `operator-stop` without recording a gate verdict,
+rolling run or harness fault on the interrupted work. Unlaunched claims and unfinished
+candidate examinations release their leases and examiner ownership on exit so the next loop
+resumes the candidate or trunk proof (reusing heavy checks already completed). Candidate
+gate steps and unowned heavy checks run under a subreaper supervisor so descendants placed
+in separate process groups or sessions are terminated and reaped on cancellation rather
+than holding inherited pipes open. The rolling tier's program and the trunk-already-red
+replay's run in a process group of their own: cancellation first sends SIGTERM to the
+program so it can end checks it started in separate sessions (`fork-check` handles SIGTERM
+by canceling its registered checks and exiting 143 without recording a verdict), allows
+five seconds for that cleanup before escalating to SIGKILL, and kills what remains in the
+program's own group before removing the scratch worktree. A rolling or replay program that
+starts separate sessions must own their SIGTERM cleanup, because killing only the program's
+group cannot reach those sessions (`TestStopDuringGateRunEndsPromptlyAndNextLoopResumesCandidate`,
+`TestProcessStepsGateStopEndsSeparateSessionDescendantsAndRecordsNoVerdict`,
+`TestStopDuringRollingProofEndsPromptlyAndNextLoopResumesProof`,
+`TestStopDuringHeavyProofEndsPromptlyAndNextLoopReusesCompletedChecks`, and
+`TestStopMidPassBetweenStepsEndsBeforeLaunchingNextStep` in
+[`drain/stop_prompt_test.go`](./drain/stop_prompt_test.go)).
 
 A pin (`refs/tillr/runs/<run>`) that a stop interrupts is finished rather than cut off,
 bounded at thirty seconds, because the pin is what keeps a
