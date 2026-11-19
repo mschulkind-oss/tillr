@@ -38,6 +38,10 @@ type Pass struct {
 	examineItem string
 	// ownerMigration permits only the deterministic conversion of a legacy owner report.
 	ownerMigration bool
+	// loopHolds is the running loop's own in-memory holds (Loop.held), keyed by item, with
+	// the reason. The planner holds these items before it offers any lane, so a lane is
+	// never given to an item the loop will not stage and kept from the next item in order.
+	loopHolds map[string]string
 	// GatesInFlight is the planning pass's observation, not a concurrency cap.
 	GatesInFlight int `json:"gates_in_flight,omitempty"`
 	// Build is supplied by a loop so the snapshot identifies that running binary.
@@ -453,48 +457,11 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			commentHolds[plannerDocumentKey(root, row.DesignDoc)] = row.ItemID
 		}
 	}
-	p := &planner{
-		definition:   &def,
-		commentHolds: commentHolds, documentRoot: root,
-		conflicts: conflicts,
-		shut:      shut,
-		quotaShut: quotaShut,
-		forks:     forks,
-		tick:      tick, policy: policy, held: lanes, deskOwners: deskOwners, itemStates: states, history: history,
-		priors: attemptPriors, retries: retries, classes: classes, latest: latest, questions: questions,
-		trunkWaiters: trunkWaiters, defectWaiters: defectWaiters, escalated: escalated,
-		at: at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items, def), unproved: unproved,
-		designHistory: designHistory, inputs: inputs, inputDecisions: inputDecisions, works: works, attempts: map[string]int{},
-	}
-	p.workerLanes = map[string]string{}
-	for _, row := range items {
-		if row.State != p.rules().Ready {
-			continue
-		}
-		if c, ok := conflicts[row.ItemID]; ok && c.Status != "answered" {
-			continue
-		}
-		if e := p.returnedEnding(row.ItemID); e != nil && e.WorkerSession != nil && p.retainedLaneFree(e.WorkerSession.LaneID) {
-			// Several reverted landings can name the same recycled lane. Only
-			// the item whose handle remains there can reserve that checkout.
-			id, err := ReadSessionID(e.WorkerSession.LaneDir)
-			if err == nil && id != "" && id == e.WorkerSession.SessionID {
-				p.workerLanes[e.WorkerSession.LaneID] = row.ItemID
-			}
-		}
-	}
-	for _, row := range items {
-		if row.State != p.rules().Blocked {
-			continue
-		}
-		if origin := designContinuationWork(conflicts[row.ItemID], designHistory[conflicts[row.ItemID].DesignRunID]); origin != nil {
-			p.workerLanes[origin.Decision.LaneID] = row.ItemID
-		}
-	}
 	var hasNodes bool
 	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_runs')`).Scan(&hasNodes); err != nil {
 		return nil, readFailure(err)
 	}
+	attempts := map[string]int{}
 	for _, row := range items {
 		var count int
 		if hasNodes {
@@ -503,15 +470,89 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			}
 		}
 		if count > 0 {
-			p.attempts[row.ItemID] = count + 1
+			attempts[row.ItemID] = count + 1
 		} else {
-			p.attempts[row.ItemID] = len(priors[row.ItemID]) + 1
+			attempts[row.ItemID] = len(priors[row.ItemID]) + 1
 		}
 	}
 	faults, err := ReadItemFaults(r)
 	if err != nil {
 		return nil, readFailure(err)
 	}
+	// released names the lanes a returned worker or a design continuation reserved but did
+	// not take in an earlier round of this plan. A reservation keeps a checkout for the one
+	// item that can continue in it; when that item cannot start this pass (it is held, blocked,
+	// retried without its session, or running elsewhere) and another item found no free lane,
+	// the reservation is released and the plan is made again, so the lane goes to an item that
+	// can start. Each round releases at least one reservation, so the rounds are bounded by
+	// their number. Staging the lane for someone else preserves what it holds the way any
+	// restaging does (preserved work, and a lane refusal for an unpinned commit).
+	released := map[string]bool{}
+	for {
+		owners := make(map[string]string, len(deskOwners))
+		for lane, owner := range deskOwners {
+			owners[lane] = owner
+		}
+		p := &planner{
+			definition:   &def,
+			commentHolds: commentHolds, documentRoot: root,
+			conflicts: conflicts,
+			shut:      shut,
+			quotaShut: quotaShut,
+			forks:     append([]plannedFork(nil), forks...),
+			tick:      tick, policy: policy, held: lanes, deskOwners: owners, itemStates: states, history: history,
+			priors: attemptPriors, retries: retries, classes: classes, latest: latest, questions: questions,
+			trunkWaiters: trunkWaiters, defectWaiters: defectWaiters, escalated: escalated,
+			at: at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items, def), unproved: unproved,
+			designHistory: designHistory, inputs: inputs, inputDecisions: inputDecisions, works: works, attempts: attempts,
+		}
+		p.workerLanes = map[string]string{}
+		for _, row := range items {
+			if row.State != p.rules().Ready {
+				continue
+			}
+			if c, ok := conflicts[row.ItemID]; ok && c.Status != "answered" {
+				continue
+			}
+			if e := p.returnedEnding(row.ItemID); e != nil && e.WorkerSession != nil && !released[e.WorkerSession.LaneID] && p.retainedLaneFree(e.WorkerSession.LaneID) {
+				// Several reverted landings can name the same recycled lane. Only
+				// the item whose handle remains there can reserve that checkout.
+				id, err := ReadSessionID(e.WorkerSession.LaneDir)
+				if err == nil && id != "" && id == e.WorkerSession.SessionID {
+					p.workerLanes[e.WorkerSession.LaneID] = row.ItemID
+				}
+			}
+		}
+		for _, row := range items {
+			if row.State != p.rules().Blocked {
+				continue
+			}
+			if origin := designContinuationWork(conflicts[row.ItemID], designHistory[conflicts[row.ItemID].DesignRunID]); origin != nil && !released[origin.Decision.LaneID] {
+				p.workerLanes[origin.Decision.LaneID] = row.ItemID
+			}
+		}
+		decisions, claimed, err := p.planItems(r, items, edges, faults, works, inputs, retries, rewriteOwnerHolds, rewriteHolds, unshared, hasNodes, buildHash, policy, shut, tick, root, def, at)
+		if err != nil {
+			return nil, err
+		}
+		unused := false
+		for lane, owner := range p.workerLanes {
+			if claimed[lane] != owner {
+				released[lane] = true
+				unused = true
+			}
+		}
+		if !unused || !p.laneShort {
+			return decisions, nil
+		}
+	}
+}
+
+// planItems decides every item in order with the planner's lane state, and answers the
+// decisions and, for each lane a dispatch or retry took, the item that took it.
+func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][]string, faults map[string]ItemFault, works map[string]*pendingWork, inputs map[string]*RunInputs, retries map[string]retryRow, rewriteOwnerHolds, rewriteHolds map[string]string, unshared map[string]bool, hasNodes bool, buildHash string, policy *Policy, shut map[string]bool, tick Pass, root string, def definition.Definition, at time.Time) ([]record.Envelope, map[string]string, error) {
+	claimed := map[string]string{}
+	var err error
 	decisions := make([]record.Envelope, 0, len(items))
 	for _, item := range items {
 		if tick.examineItem != "" && item.ItemID != tick.examineItem {
@@ -522,6 +563,12 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 		if fault, held := faults[item.ItemID]; held && !p.finished(item.State) && holdEnabled(def, fault.Reason) {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: fault.Reason, LaneID: fault.LaneID, From: "held"}
 			identifyDecision(&decision)
+		} else if reason := tick.loopHolds[item.ItemID]; reason != "" && (works[item.ItemID] == nil || works[item.ItemID].Done) && holdEnabled(def, reason) {
+			// The loop will not stage this item (Loop.heldFor), so it is held before any
+			// lane is offered: a lane given to it would sit unused for the pass while the
+			// next item in order is held as no-lane.
+			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: reason, From: "held", Attempt: p.nextAttempt(item.ItemID)}
+			identifyDecision(&decision)
 		} else if work := works[item.ItemID]; work != nil && !work.Done {
 			// An already dispatched attempt advances before readiness and retry
 			// rules: a terminal record is work to settle, not a retry to authorize.
@@ -531,7 +578,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			if p.finished(item.State) && work.Decision.Workflow == nil {
 				decision, settled, err = terminalSettlement(r, work, at)
 				if err != nil {
-					return nil, readFailure(err)
+					return nil, nil, readFailure(err)
 				}
 			}
 			if !settled {
@@ -573,7 +620,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 						var leaseErr error
 						leases, leaseErr = activeLeases(r, at, []string{laneID})
 						if leaseErr != nil {
-							return nil, readFailure(leaseErr)
+							return nil, nil, readFailure(leaseErr)
 						}
 					}
 					if len(leases) == 0 {
@@ -591,7 +638,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 				}
 			}
 			if err != nil {
-				return nil, readFailure(err)
+				return nil, nil, readFailure(err)
 			}
 		} else if ownerOwed {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: ReasonOwnerOnlyOwed, From: "held", Attempt: p.nextAttempt(item.ItemID)}
@@ -605,7 +652,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 		} else if unshared[item.ItemID] {
 			decision, err = p.triageDecision(r, item)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		} else {
 			w, selected, source, loadErr := selectWorkflow(r, root, item, tick.WorkflowDefaults, policy)
@@ -633,7 +680,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 				reusedFrom = p.nextAttempt(item.ItemID) - 1
 				resumeNode, reused, err = retainedReaders(r, item.ItemID, reusedFrom, w)
 				if err != nil {
-					return nil, readFailure(err)
+					return nil, nil, readFailure(err)
 				}
 			}
 			if w != nil {
@@ -642,7 +689,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 						routed.JudgeMode = "agent"
 						routed.JudgeGrant, err = judgeGrant(r, item.ItemID, at)
 						if err != nil {
-							return nil, readFailure(err)
+							return nil, nil, readFailure(err)
 						}
 					}
 					routed.Seat = w.Stages[resumeNode].Seat
@@ -656,7 +703,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			if w != nil && hasNodes && !p.finished(item.State) && !hasRetry {
 				hold, err = commandNodeHold(r, item.ItemID)
 				if err != nil {
-					return nil, readFailure(err)
+					return nil, nil, readFailure(err)
 				}
 			}
 			if loadErr == nil && w != nil {
@@ -715,7 +762,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			decision.RunRequest = &request
 		}
 		if err := describeBackendHold(r, &decision, policy); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if def.Completes != "landing" && decision.RunRequest != nil && decision.RunRequest.WorkingDir == WorktreeDir {
 			request := *decision.RunRequest
@@ -727,11 +774,14 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 		}
 		env, err := decisionEnvelope(decision, at)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		decisions = append(decisions, env)
+		if decision.Action == ActionDispatch || decision.Action == ActionRetry {
+			claimed[decision.LaneID] = decision.ItemID
+		}
 	}
-	return decisions, nil
+	return decisions, claimed, nil
 }
 
 // planner is one tick's decision state: the tick, the policy, the store's item states and
@@ -781,6 +831,8 @@ type planner struct {
 	at         time.Time
 	dispatched int
 	assigned   map[string]bool
+	// laneShort records that some item asked this plan for a free lane and got none.
+	laneShort bool
 	// forks includes live leases and unfinished examinations, then adds this plan's
 	// own dispatches. Disjoint item fences can still deliver one patch branch.
 	forks []plannedFork
@@ -1501,6 +1553,7 @@ func (p *planner) freeLane(express ...bool) (string, bool) {
 		}
 		return lane, true
 	}
+	p.laneShort = true
 	return "", false
 }
 
