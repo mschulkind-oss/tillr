@@ -172,7 +172,6 @@ Kept for their evidence. None is delivered with the pack; each link goes to the 
 
 | Document | What it was | Status | Pack |
 | :--- | :--- | :--- | :--- |
-| [tillr today](../design/tillr-today.md) | The plan of 2026-11-12 for getting the loop running. | Superseded | not shipped |
 | [AutoQA seams](../design/autoqa-tillr-seams.md) | AutoQA's four seam questions against the binaries of 2026-11-13. | Superseded by AutoQA and separable parts | not shipped |
 | [Next steps](../design/tillr-next-steps.md) | The dispatch wave of 2026-11-10. | Historical | not shipped |
 | [Day 2](../design/tillr-day2.md) | The plan of 2026-11-12 for the first unattended loop. | Historical: the loop runs unattended | not shipped |
