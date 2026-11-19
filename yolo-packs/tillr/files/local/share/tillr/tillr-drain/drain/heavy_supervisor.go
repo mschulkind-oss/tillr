@@ -8,9 +8,11 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 
+	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -72,7 +74,7 @@ func superviseHeavy(args []string) int {
 		fmt.Fprintln(os.Stderr, "heavy lifetime supervision unavailable:", err)
 		return 4
 	}
-	identity, err := heavySupervisorIdentity()
+	pid, startTicks, err := heavySupervisorIdentity()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 4
@@ -87,7 +89,8 @@ func superviseHeavy(args []string) int {
 		fmt.Fprintln(os.Stderr, "heavy cleanup guard:", err)
 		return 4
 	}
-	if _, err = fmt.Fprintf(guard, "%scheckout=%q\ncleanup=pending\n", identity, cwd); err != nil {
+	marker := heavyCleanupMarker{PID: pid, StartTicks: startTicks, Checkout: cwd}
+	if _, err = guard.WriteString(marker.format()); err != nil {
 		guard.Close()
 		fmt.Fprintln(os.Stderr, err)
 		return 4
@@ -276,4 +279,139 @@ func runHeavySupervisorGroup(cmd *exec.Cmd) error {
 	}
 	cmd.WaitDelay = 0
 	return cmd.Run()
+}
+
+type heavyCleanupMarker struct {
+	PID        int
+	StartTicks string
+	Checkout   string
+}
+
+func (m heavyCleanupMarker) format() string {
+	return fmt.Sprintf("supervisor_pid=%d\nstart_ticks=%s\ncheckout=%q\ncleanup=pending\n", m.PID, m.StartTicks, m.Checkout)
+}
+
+func parseHeavyCleanupMarker(raw []byte) (heavyCleanupMarker, error) {
+	var m heavyCleanupMarker
+	var hasPID, hasStart, hasCheckout, hasPending bool
+	text := strings.TrimSuffix(string(raw), "\n")
+	if text == "" {
+		return m, fmt.Errorf("empty cleanup marker")
+	}
+	for _, line := range strings.Split(text, "\n") {
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
+			return m, fmt.Errorf("malformed line %q", line)
+		}
+		switch key {
+		case "supervisor_pid":
+			if hasPID {
+				return m, fmt.Errorf("duplicate supervisor_pid")
+			}
+			pid, err := strconv.Atoi(val)
+			if err != nil || pid <= 0 {
+				return m, fmt.Errorf("invalid supervisor_pid %q", val)
+			}
+			m.PID, hasPID = pid, true
+		case "start_ticks":
+			if hasStart {
+				return m, fmt.Errorf("duplicate start_ticks")
+			}
+			if _, err := strconv.ParseUint(val, 10, 64); err != nil {
+				return m, fmt.Errorf("invalid start_ticks %q", val)
+			}
+			m.StartTicks, hasStart = val, true
+		case "checkout":
+			if hasCheckout {
+				return m, fmt.Errorf("duplicate checkout")
+			}
+			checkout, err := strconv.Unquote(val)
+			if err != nil || checkout == "" || !filepath.IsAbs(checkout) {
+				return m, fmt.Errorf("invalid checkout %q", val)
+			}
+			m.Checkout, hasCheckout = filepath.Clean(checkout), true
+		case "cleanup":
+			if hasPending || val != "pending" {
+				return m, fmt.Errorf("unexpected cleanup=%q", val)
+			}
+			hasPending = true
+		default:
+			return m, fmt.Errorf("unknown field %q", key)
+		}
+	}
+	if !hasPID || !hasStart || !hasCheckout || !hasPending {
+		return m, fmt.Errorf("incomplete cleanup marker")
+	}
+	return m, nil
+}
+
+// recoverHeavyCleanupGuards inspects any cleanup guard a killed runner left in dir.
+// When a guard names a supervisor incarnation (supervisor_pid and start_ticks) that
+// is no longer running, it finishes the checkout and marker cleanup the guard
+// describes and continues. When the supervisor is still running or its state cannot
+// be confirmed, it leaves the checkout and guard in place and returns why.
+func recoverHeavyCleanupGuards(ctx context.Context, root, dir string) (string, error) {
+	for _, name := range []string{heavyCleanupGuard, heavyReplayGuard} {
+		guard := filepath.Join(dir, name)
+		raw, err := os.ReadFile(guard)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Sprintf("cannot read %s: %v", guard, err), nil
+		}
+		marker, err := parseHeavyCleanupMarker(raw)
+		if err != nil {
+			return fmt.Sprintf("independent process recovery must inspect and clear %s (%v)", guard, err), nil
+		}
+		running, err := heavySupervisorRunning(marker.PID, marker.StartTicks)
+		if err != nil {
+			return fmt.Sprintf("cannot confirm supervisor %d (start_ticks=%s) for %s: %v", marker.PID, marker.StartTicks, guard, err), nil
+		}
+		if running {
+			return fmt.Sprintf("supervisor %d (start_ticks=%s) is still running for %s", marker.PID, marker.StartTicks, guard), nil
+		}
+		if err := finishHeavyCleanupGuard(ctx, root, dir, guard, marker); err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			return fmt.Sprintf("finishing %s failed: %v", guard, err), nil
+		}
+		heavyProgressReport(ctx, "loop: heavy recovered %s after supervisor %d (%s) exited\n", name, marker.PID, marker.StartTicks)
+	}
+	return "", nil
+}
+
+func finishHeavyCleanupGuard(ctx context.Context, root, dir, guard string, marker heavyCleanupMarker) error {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	gitCommon := filepath.Clean(filepath.Dir(dir))
+	if within(absRoot, []string{marker.Checkout}) || within(gitCommon, []string{marker.Checkout}) || within(marker.Checkout, []string{gitCommon}) {
+		return fmt.Errorf("checkout %s overlaps repository %s", marker.Checkout, absRoot)
+	}
+	if realCheckout, err := filepath.EvalSymlinks(marker.Checkout); err == nil {
+		if realRoot, err := filepath.EvalSymlinks(absRoot); err == nil && within(realRoot, []string{realCheckout}) {
+			return fmt.Errorf("checkout %s overlaps repository %s", marker.Checkout, absRoot)
+		}
+		if realGitCommon, err := filepath.EvalSymlinks(gitCommon); err == nil {
+			if within(realGitCommon, []string{realCheckout}) || within(realCheckout, []string{realGitCommon}) {
+				return fmt.Errorf("checkout %s overlaps git directory %s", marker.Checkout, gitCommon)
+			}
+		}
+	}
+	if err := withWorktreeRegistryLock(ctx, root, func() error {
+		_, _ = heavy.GitOutput(context.Background(), root, "worktree", "remove", "--force", marker.Checkout)
+		return os.RemoveAll(marker.Checkout)
+	}); err != nil {
+		return err
+	}
+	if err := os.Remove(guard + ".start-error"); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.Remove(guard); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }

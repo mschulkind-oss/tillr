@@ -38,9 +38,14 @@ func rollingOwnership(ctx context.Context, root string) (context.Context, func()
 		}
 	}
 	guard := filepath.Join(dir, heavyCleanupGuard)
-	if pending := heavyPendingGuard(dir); pending != "" {
+	unconfirmed, err := recoverHeavyCleanupGuards(ctx, root, dir)
+	if err != nil {
 		lock.Close()
-		return ctx, func() {}, Externalf("rolling cleanup not acknowledged; checkout retained: %s", pending)
+		return ctx, func() {}, err
+	}
+	if unconfirmed != "" {
+		lock.Close()
+		return ctx, func() {}, Externalf("rolling cleanup not acknowledged; checkout retained: %s", unconfirmed)
 	}
 	owner, life, err := os.Pipe()
 	if err != nil {

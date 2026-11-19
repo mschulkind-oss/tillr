@@ -102,9 +102,26 @@ func reapWhileSupervising(started <-chan int) (stop func()) {
 	}()
 	return func() { close(done); <-finished }
 }
-func heavySupervisorIdentity() (string, error) {
+func heavySupervisorIdentity() (int, string, error) {
 	p, err := readHeavyProcess(os.Getpid())
-	return fmt.Sprintf("supervisor_pid=%d\nstart_ticks=%s\n", p.pid, p.start), err
+	return p.pid, p.start, err
+}
+
+// heavySupervisorRunning reports whether the supervisor incarnation (pid, startTicks)
+// is still running. A reused PID has a different start_ticks, and a zombie has
+// already closed its descriptors and ended execution.
+func heavySupervisorRunning(pid int, startTicks string) (bool, error) {
+	p, err := readHeavyProcess(pid)
+	if heavyProcessDisappeared(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if p.start != startTicks || p.state == "Z" {
+		return false, nil
+	}
+	return true, nil
 }
 
 type heavyProcess struct {

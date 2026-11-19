@@ -2,24 +2,11 @@ package drain
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"sync"
 )
 
 const heavyReplayGuard = "heavy.replay-cleanup-pending"
-
-// heavyPendingGuard answers the cleanup guard a killed runner left in dir, the proof's
-// or the recovery's, or "" when there is none.
-func heavyPendingGuard(dir string) string {
-	for _, name := range []string{heavyCleanupGuard, heavyReplayGuard} {
-		guard := filepath.Join(dir, name)
-		if _, err := os.Stat(guard); err == nil || !os.IsNotExist(err) {
-			return guard
-		}
-	}
-	return ""
-}
 
 type heavyCheckEndedKey struct{}
 
