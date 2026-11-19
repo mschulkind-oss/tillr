@@ -2,7 +2,7 @@
 title: "The gate lands a change in ten seconds and remembers nothing it cannot recompute"
 status: accepted
 stage: DECIDED
-updated: 2026-11-18
+updated: 2026-11-19
 tags:
   - tillr
   - gate
@@ -20,7 +20,7 @@ vantage:
 
 # The gate lands a change in ten seconds and remembers nothing it cannot recompute
 
-**Status:** 2026-11-15; reconciled against the tree at `dcb76fe41` on 2026-11-18. Every slice of
+**Status:** 2026-11-15; reconciled against the tree at `5196f5f12` on 2026-11-19. Every slice of
 [Section 11](#11-build-order) has landed, and so have the three behaviors that had no slice there
 (the red cap, the lane base and the runner's own changes paying first, built from
 [the tillr roadmap](../tillr/roadmap.md#filed-2026-11-15-the-three-gate-rulings-no-slice-builds)); the
@@ -28,10 +28,15 @@ vantage:
 built: the drift probe of `D-GR12`, because `series` and `patch-branch-inv2` are still
 landing-tier checks (`TIER_LANDING` in `tools/fork-check.py`). That remainder is written as [the last unit of the build order](#move-the-upstream-drift-checks-out-of-the-gate-into-a-probe). Every timing is from one run made for this design at
 `ebaab2794`, stated in [Section 3](#3-what-exists-today-measured); the six owner rulings of
-2026-11-15 are rows `D-GR1` to `D-GR6` of the [Decision Ledger](#decision-ledger). Its three open
-questions were settled the same day by the session's designer on recorded principle, at the
-owner's request; the owner may overturn any of them. On 2026-11-17 the owner ruled on time limits
-in the gate ([`D-GR15`](#decision-ledger)): a budget is a target, and only a stall ends a check.
+2026-11-15 are rows `D-GR1` to `D-GR6` of the [Decision Ledger](#decision-ledger) (`D-GR6` was
+overturned by the owner on 2026-11-17: automatic revert is on here). Its three former open
+questions ([`OQ-GR1`](#OQ-GR1) to [`OQ-GR3`](#OQ-GR3)) were initially settled the same day by the
+session's designer on recorded principle: [`OQ-GR3`](#OQ-GR3) stands, while the owner overturned
+[`OQ-GR2`](#OQ-GR2) on 2026-11-17 (lanes start on `tip`) and ruled [`OQ-GR1`](#OQ-GR1) out on
+2026-11-18 ([`OQ-GP7`](tillr-graph-is-the-path.md#OQ-GP7); the 20-landing cap stays live until
+that waiting rule is built). On 2026-11-17 the owner ruled on time limits in the gate
+([`D-GR15`](#decision-ledger)): a budget is a target, nothing is carried at a budget, and only a
+stall ends a check.
 
 > **In short.** The gate is slow and brittle for one reason: it decides what to run from a commit
 > it remembers, on a machine that may not be the one that remembered it. Give every run its base
@@ -563,9 +568,10 @@ with the trunk.
   coalesced: one at a time, and when one ends with the tip moved, the next starts on the new tip.
   There is no clock and no landing count.
 - **Where.** A detached worktree of its own at the tip it judges, never the main checkout.
-- **What.** Every heavy tree check, plus any fast check carried by a landing in the range. A
-  check with a remembered pass for that tip's fingerprint does not run, so the cost of a run is
-  the checks whose inputs a landing changed.
+- **What.** Every heavy tree check (nothing is carried from the fast tier; `tillr-gate` refuses
+  `--tree-overrun carry` under [`D-GR15`](#decision-ledger)). A check with a remembered pass for
+  that tip's fingerprint does not run, so the cost of a run is the checks whose inputs a landing
+  changed.
 - **Green.** When nothing failed, the runner moves the pointer to the tip it judged, by a
   compare-and-swap against the value it read. The pointer only moves to a descendant of itself;
   anything else is refused and reported, because the trunk was rewritten.
@@ -681,7 +687,7 @@ base by a heavy tree check, which needs no network.
 | :--- | :--- |
 | [1, a refusal must be a verdict](landing-principles.md#1-a-refusal-must-be-a-verdict) | A change is refused only by a check that ran on it. Unavailable, over-budget and timeout are named and are not refusals; under [`D-GR15`](#decision-ledger) a check that is making progress is never timed out, and a stall is named. |
 | [3, gate what will be the tip, once](landing-principles.md#3-gate-what-will-be-the-tip-once) | The fast gate runs once, on the candidate. A moved trunk is squashed onto, not re-gated. |
-| [6, a budget escalates, it does not loop](landing-principles.md#6-a-budget-escalates-it-does-not-loop) | An overrun carries the check forward once; nothing is retried. |
+| [6, a budget escalates, it does not loop](landing-principles.md#6-a-budget-escalates-it-does-not-loop) | An overrun is recorded as `over_budget_ms` while the check keeps its verdict (nothing is carried at a budget under [`D-GR15`](#decision-ledger)). A stall re-gates the candidate once when fewer gates are in flight, and a second stall on the same head tree holds the item as `gate-stalled` ([`D-GR16`](#decision-ledger)); nothing loops. |
 | [8, a gate that cannot answer must say which](landing-principles.md#8-a-gate-that-cannot-answer-must-say-which) | Unavailable names the need and its command; "could not judge" names the check, and is never the answer for a check still making progress ([`D-GR15`](#decision-ledger)). |
 | [13, a held state names a mover](landing-principles.md#13-a-held-state-names-a-mover-that-can-still-act) | A pointer that is not moving shows the failing check and either a landing with a fixer, or a gate fault with the missing resource. |
 
@@ -703,9 +709,11 @@ base by a heavy tree check, which needs no network.
 
 ## 9. What this costs, and what it does not do
 
-- **The trunk may be red** from a landing until its heavy run ends, and with automatic revert
-  off, until a fixer lands — never past the red cap of
-  [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer).
+- **The trunk may be red** from a landing until its heavy run ends and either automatic revert
+  (`auto_revert` is `true` here since 2026-11-18; [`D-GR6`](#decision-ledger)) or a fixer repairs
+  it — never past the red cap of
+  [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) while that cap
+  remains live.
 - **Fewer checks stand before the merge** than today. A Go suite, the fork suites and the
   storybooks are all after it.
 - **The membership rule of [landing velocity](landing-velocity.md#43-the-membership-rule) is
@@ -725,14 +733,14 @@ base by a heavy tree check, which needs no network.
 | :--- | :--- |
 | Keep the remembered baseline and repair its cold start | Rejected. The fault is that the base is remembered at all; `--since` already exists and is the only form that never failed cold. |
 | Remember results by commit, not by inputs | Rejected. A squash makes a new commit for the same content, so nothing would ever be reused across a landing. |
-| Enforce the budget by timing every landing and failing slow ones | Rejected as the only enforcement. A slow box would refuse correct changes; the arithmetic test cannot flake, and the deadline carries instead of refusing. |
+| Enforce the budget by timing every landing and failing slow ones | Rejected. A slow box would refuse correct changes; the arithmetic test cannot flake, and under [`D-GR15`](#decision-ledger) an overrun is recorded without stopping or carrying the check while only a stall ends it early. |
 | Publish the result store on a Git ref | Rejected for now, per the warning in [Section 6.2](#62-a-tree-checks-result-is-remembered-by-fingerprint). |
 | Keep adding checks to the one program and shard its suite | Rejected. The suite reruns because every check shares the file; a faster 141 seconds is still a shared file. |
 
 | Risk | Mitigation |
 | :--- | :--- |
 | A check reads a file it did not declare, and a stale pass is reused | The default is the whole tree; narrowing is per file and reviewed there. A whole-tree run with an empty store is the audit, and costs six minutes. |
-| Under load, fast checks overrun and more proof moves after the merge | Every carry is recorded on its landing and counted on the status line; the exclusive re-measure tells a slow box from a slow check. |
+| Under load, fast checks overrun their declared budgets | Under [`D-GR15`](#decision-ledger) a working check runs to completion and keeps its verdict (carrying is refused in `tools/tillr-gate/run.go`); `over_budget_ms` is recorded on the verdict and surfaced in the per-check performance stats, while the watchdog stops only a stalled check. |
 | The heavy runner falls behind twenty lanes | Runs are coalesced, so it judges the newest tip, not every landing; a long gap stops landing at the red cap of [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer). |
 | Moving checks out of the gate program drops one | Each moving slice asserts the union of the two planners' check ids equals the set before the move. |
 
@@ -743,8 +751,13 @@ own decisions, made to carry them out; each is the owner's to overturn by commen
 `D-GR14` are an implementer's decisions of 2026-11-16, made while building the fast tier; the
 owner ruled on both on 2026-11-17, and that ruling is `D-GR15`. `D-GR16` is this design's own
 decision carrying `D-GR15` out, and is the owner's to overturn. The three rows of this
-document's former open questions were settled by the session's designer on recorded principle,
-as each row says.
+document's former open questions ([`OQ-GR1`](#OQ-GR1) to [`OQ-GR3`](#OQ-GR3)) were initially
+settled by the session's designer on recorded principle: [`OQ-GR3`](#OQ-GR3) remains in force,
+while [`OQ-GR1`](#OQ-GR1) and [`OQ-GR2`](#OQ-GR2) were later withdrawn/overturned by the owner
+([`OQ-GR1`](#OQ-GR1) ruled out by [`OQ-GP7`](tillr-graph-is-the-path.md#OQ-GP7), with the
+20-landing cap kept live until its replacement waiting rule is built; [`OQ-GR2`](#OQ-GR2)
+overturned in `1fa2c069c` and withdrawn in
+[the graph design Section 12.2](tillr-graph-is-the-path.md#122-decisions-in-other-documents)).
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
