@@ -8,8 +8,8 @@ tags:
   - graphs
   - landing
   - design
-summary: "How a question for the owner, and the design documents it is about, land on the trunk before the item that raised them: a cut of those documents onto the trunk tip, the ordinary gate and lander, and the item's next take-in. The item branch is never rewritten. Whether every design answer lands the same way is the owner's open question."
-next: "The owner ruled OQ-EL1 on 2026-11-18: every design change lands on the trunk right away, by this operation. The Section 8 amendments are made in the graph design; file the build. The detail in D-EL3 to D-EL7 still awaits the owner's review, and nothing is built."
+summary: "How a question for the owner, and the design documents it is about, land on the trunk before the item that raised them: a cut of those documents onto the trunk tip, the ordinary gate and lander, and the item's next take-in. The item branch is never rewritten. On 2026-11-18 the owner ruled that every design change lands early."
+next: "The owner ruled OQ-EL1 on 2026-11-18: every design change lands on the trunk right away, by this operation. The Section 8 amendments are made in the graph design; file the build. All D-EL1 to D-EL7 designer decisions await the owner's review, and nothing is built."
 depends-on:
   - tillr-graph-is-the-path.md
 ---
