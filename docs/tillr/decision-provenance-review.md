@@ -2,26 +2,31 @@
 title: "Who made the decisions recorded in the tillr designs, and which of them the owner should now rule on"
 status: in-review
 stage: DESIGN
-updated: 2026-11-18
+updated: 2026-11-19
 tags: [tillr, review, provenance, decisions, design]
-summary: "A one-time review for the owner of every decision of consequence in the tillr designs that carries no words of his. Twenty questions each put one built, running decision to him as a situation and the choices it leaves, with what he would see and what it costs under each; two more ask how to stop it happening again. The rest is lists: rows that are simply false now, high-significance decisions in designs that are not built, and the medium and low ones."
-next: "The owner answers OQ-PR1 to OQ-PR22. Each answer relabels or rewrites the ledger rows its question names; the corrections in Section 3 were applied on 2026-11-18."
+summary: "A one-time review for the owner of every decision of consequence in the tillr designs that carries no words of his. Two rulings recorded on 2026-11-19 (OQ-PR21 and OQ-PR22) settle how this stops happening: a decision that touches his documents, his repository, his money, his models or what he sees is put to him as a question before anything is built on that design, while engineering detail is marked as the agent's and may be built on; and an agent closes a question addressed to him only by quoting a dated ruling of his that answers it in so many words. Twenty questions each put one built, running decision to him as a situation and the choices it leaves, with what he would see and what it costs under each. The rest is lists: rows that are simply false now, high-significance decisions in designs that are not built, and the medium and low ones."
+next: "The owner answers OQ-PR1 to OQ-PR20. Each answer relabels or rewrites the ledger rows its question names; OQ-PR21 and OQ-PR22 were ruled on 2026-11-19 (nothing built yet), and the corrections in Section 3 were applied on 2026-11-18."
 depends-on:
   - ../design/tillr-queue-mirrors-designs.md#OQ-QM1
 ---
 
 # Who made the decisions recorded in the tillr designs, and which of them the owner should now rule on
 
-**Status:** 2026-11-18. Awaiting the owner's review. Nothing here changes any behavior until he answers; no other document is edited by this one. The evidence is four read-only audits made that day of 39 design documents and of the commits named below, each commit checked to be on the trunk.
+**Status:** 2026-11-19. Awaiting the owner's review of [OQ-PR1](#OQ-PR1) to [OQ-PR20](#OQ-PR20); he ruled [OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22) on 2026-11-19, and nothing from those rulings is built yet. Nothing here changes any behavior until it is built; no other document is edited by this one. The evidence is four read-only audits made on 2026-11-18 of 39 design documents and of the commits named below, each commit checked to be on the trunk.
 
 > **In short.** Of 380 recorded decisions in the tillr designs, 303 carry no words of the owner's, 64 of those are of high significance, and more than half of the high ones are built and running. He delegated a method for answering questions and received answers; this page puts the answers that matter in front of him once.
 
-- **Why it matters:** on 2026-11-18 the owner found that tillr reads a hidden comment of its own from his documents, a product decision he never made, and asked whether other decisions had come in the same way. They had.
-- **The shape:** [twenty-two questions](#2-questions-for-the-owner), hardest to undo first; then lists that need no ruling.
-- **Cost:** reading time. An answer that leaves things as they run today costs nothing more. An answer that changes them becomes work, sized for each question in [Section 1.5](#15-evidence-behind-each-question).
-- **Start at:** [OQ-PR1](#OQ-PR1).
-- **Needs your ruling:** [OQ-PR1](#OQ-PR1), [OQ-PR2](#OQ-PR2), [OQ-PR3](#OQ-PR3), [OQ-PR4](#OQ-PR4), [OQ-PR5](#OQ-PR5), [OQ-PR6](#OQ-PR6), [OQ-PR7](#OQ-PR7), [OQ-PR8](#OQ-PR8), [OQ-PR9](#OQ-PR9), [OQ-PR10](#OQ-PR10), [OQ-PR11](#OQ-PR11), [OQ-PR12](#OQ-PR12), [OQ-PR13](#OQ-PR13), [OQ-PR14](#OQ-PR14), [OQ-PR15](#OQ-PR15), [OQ-PR16](#OQ-PR16), [OQ-PR17](#OQ-PR17), [OQ-PR18](#OQ-PR18), [OQ-PR19](#OQ-PR19), [OQ-PR20](#OQ-PR20), [OQ-PR21](#OQ-PR21), [OQ-PR22](#OQ-PR22).
-- **Reads with:** [the queue mirrors the roadmap's designs](../design/tillr-queue-mirrors-designs.md) (whose [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1) the owner ruled on 2026-11-18 around the companion implementation plan; this page does not ask that again).
+**Why it matters.** On 2026-11-18 the owner found that tillr reads a hidden comment of its own from his documents, a product decision he never made, and asked whether other decisions had come in the same way. They had.
+
+**The shape.** [Twenty open questions](#2-questions-for-the-owner) on built decisions, hardest to undo first; [the rule from here on](#6-how-this-stops-happening), settled by the owner in [OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22); then lists that need no ruling.
+
+**Cost.** Reading time. An answer that leaves things as they run today costs nothing more. An answer that changes them becomes work, sized for each question in [Section 1.5](#15-evidence-behind-each-question).
+
+**Start at:** [OQ-PR1](#OQ-PR1).
+
+**Needs your ruling:** [OQ-PR1](#OQ-PR1), [OQ-PR2](#OQ-PR2), [OQ-PR3](#OQ-PR3), [OQ-PR4](#OQ-PR4), [OQ-PR5](#OQ-PR5), [OQ-PR6](#OQ-PR6), [OQ-PR7](#OQ-PR7), [OQ-PR8](#OQ-PR8), [OQ-PR9](#OQ-PR9), [OQ-PR10](#OQ-PR10), [OQ-PR11](#OQ-PR11), [OQ-PR12](#OQ-PR12), [OQ-PR13](#OQ-PR13), [OQ-PR14](#OQ-PR14), [OQ-PR15](#OQ-PR15), [OQ-PR16](#OQ-PR16), [OQ-PR17](#OQ-PR17), [OQ-PR18](#OQ-PR18), [OQ-PR19](#OQ-PR19), [OQ-PR20](#OQ-PR20) (plus the designer's decisions `D-PR1` to `D-PR4` in [the ledger](#decision-ledger), which the owner may overturn).
+
+**Reads with:** [the queue mirrors the roadmap's designs](../design/tillr-queue-mirrors-designs.md) (whose [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1) the owner ruled on 2026-11-18 around the companion implementation plan; this page does not ask that again).
 
 ---
 
@@ -114,14 +119,14 @@ Each question in [Section 2](#2-questions-for-the-owner) states its situation an
 | [OQ-PR18](#OQ-PR18) | An agent: [`run-wall-ruling.md`](../design/run-wall-ruling.md), `D-RW1` to `D-RW3`, titled a "Design ruling" (`6ec85e450`, 2026-11-15, built `adc9b1269` nineteen minutes later). It cites six complaints of the owner's gathered in an evidence file and carries no note that he may overturn it. The limit is called a wall. | Yes. | Small: one default. |
 | [OQ-PR19](#OQ-PR19) | `D-GR16` in [the gate rework](../design/gate-rework.md): "Settled by the session's designer ... the owner may overturn it" (`5e367ffde`, 2026-11-17). The stall is 60 one-second samples in a row with no new output and no processor time used; the numbers and the count are not in the owner's words. | Yes (`724cb5853`, `6a75bf6dc`). | Small: the loop's stall handling. |
 | [OQ-PR20](#OQ-PR20) | [OQ-GR1](../design/gate-rework.md#decision-ledger), settled "at the owner's request of 2026-11-15 ('fill them in through principles')" (`26bccb5e6`). The cap was set at 20 landings or 60 minutes. The graph design recorded, as a rule it is held to, that the owner does not accept this cap, without quoting him; a proposal of 2026-11-18 that keeps the cap as the one thing that holds the queue was not ruled. | Yes (`c3a3a35a9`); the settings file today has 20 landings and the minutes off, and repairs still land past the cap. | Small: one settings key. |
-| [OQ-PR21](#OQ-PR21) | Not an earlier decision: it asks for the rule from here on. The practice it describes is in [Section 1.2](#12-what-was-delegated-and-what-principle-turned-out-to-mean) and the proposal in [Section 6](#6-how-this-stops-happening). | The practice continues today. | Nothing to undo. |
-| [OQ-PR22](#OQ-PR22) | The owner's sentence of 2026-11-15, as three bulk commits applied it to 31 questions ([Section 1.2](#12-what-was-delegated-and-what-principle-turned-out-to-mean)). | Yes: the 31 answers stand except the five since reversed or rejected. | Nothing to undo in the sentence itself; each answer it produced is reviewed on this page or in the lists below. |
+| [OQ-PR21](#OQ-PR21) | Not an earlier decision: settled by the owner on 2026-11-19 as the rule from here on ([Decision Ledger](#decision-ledger)). The earlier practice is in [Section 1.2](#12-what-was-delegated-and-what-principle-turned-out-to-mean) and the rule in [Section 6](#6-how-this-stops-happening). | The earlier practice continues today until the loop check in [Section 6](#6-how-this-stops-happening) is built. | Nothing to undo; the loop rule in [Section 6](#6-how-this-stops-happening) is unbuilt. |
+| [OQ-PR22](#OQ-PR22) | The owner's sentence of 2026-11-15, as three bulk commits applied it to 31 questions ([Section 1.2](#12-what-was-delegated-and-what-principle-turned-out-to-mean)); narrowed by the owner on 2026-11-19 to dated, quoted rulings of his ([Decision Ledger](#decision-ledger), [Section 6](#6-how-this-stops-happening)). | Yes: the 31 answers stand except the five since reversed or rejected, until each is reviewed here or in the lists below. | Nothing to undo in the sentence itself; the gate check in [Section 6](#6-how-this-stops-happening) is unbuilt, and each answer the sentence produced is reviewed on this page or in the lists below. |
 
 ## 2. Questions for the owner
 
-Each question tells one situation: what you do, what tillr does today, and the choice that leaves. Its options say what you would see and what each costs you. Who made the earlier decision, whether it runs today and what undoing it costs are in [Section 1.5](#15-evidence-behind-each-question).
+Each question tells one situation: what you do, what tillr does today, and the choice that leaves. Its options say what you would see and what each costs you. Who made the earlier decision, whether it runs today and what undoing it costs are in [Section 1.5](#15-evidence-behind-each-question). They are ordered by how much is built on each and how hard it is to undo, hardest first.
 
-**Best read first:** [OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22), at the end of the list. They set the rule for all the rest: whether work may be built on decisions you have not seen, and when an agent may answer a question addressed to you. [Section 6](#6-how-this-stops-happening) explains them. The others are ordered by how much is built on each and how hard it is to undo, hardest first.
+**The rule for all the rest ([OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22), ruled 2026-11-19):** a decision that touches your documents, your repository, your money, your models or what you see is put to you as a question before anything is built on that design, while engineering detail is marked as the agent's and may be built on; and an agent closes a question addressed to you only when a dated ruling of yours answers it in so many words and the record carries the quote ([Section 6](#6-how-this-stops-happening)). Under those two rulings, none of [OQ-PR1](#OQ-PR1) to [OQ-PR20](#OQ-PR20) may be closed by an agent on its own leaning or on unquoted paraphrase: even the five below that appear settled by an earlier ruling of yours stay open here until you answer them yourself, and any question whose choice touches only engineering detail remains yours to leave to the agents rather than being closed on your behalf.
 
 **Already ruled, and asking only that you confirm:** [OQ-PR2](#OQ-PR2), [OQ-PR14](#OQ-PR14), [OQ-PR18](#OQ-PR18), [OQ-PR19](#OQ-PR19) and [OQ-PR20](#OQ-PR20). Each quotes the ruling of yours that appears to settle it, and stays open until you say it does.
 
@@ -432,38 +437,6 @@ Each question tells one situation: what you do, what tillr does today, and the c
 
     > _(empty — fill in when decided)_
 
-21. 💬 **OQ-PR21: May work be built on a design while it holds decisions you have not seen?**
-
-    A design agent finishes a design in the afternoon. It has written ten decisions into the design's record, each marked as its own with a note that you may overturn it, and the first is built and running within the hour. You meet them days later as behavior, which is how you found on 2026-11-18 that tillr reads a hidden comment from your documents. Every decision asked about on this page reached you that way. The choice is what has to happen before building may start.
-
-    - **A — Not for anything you would care about.** A decision that touches your documents, your repository, your money, your models or what you see is put to you as a question, and nothing is built on that design until you answer. Engineering detail is marked as the agent's and may be built on.
-    - **B — Not for anything at all.** Nothing is built on a design until you have approved every agent decision in it. Nothing reaches you already built, and the queue stops on details you have said you do not want to read.
-    - **C — Yes, as today.** Decisions are marked as the agent's and built at once. You overturn the ones you dislike after you meet them, and pay for the rework.
-
-    <!-- vantage: question id=OQ-PR21 leaning="A: it matches what you said on 2026-11-18, that you decide product direction and trade-offs and the agent decides engineering detail." -->
-
-    _Leaning:_ A: it matches what you said on 2026-11-18, that you decide product direction and trade-offs and the agent decides engineering detail.
-
-    **Answer:**
-
-    > _(empty — fill in when decided)_
-
-22. 💬 **OQ-PR22: When may an agent answer a question that was addressed to you?**
-
-    A design has a dozen questions waiting for you. On 2026-11-15 you said "fill them in through principles". Agents read that as leave to close any question of yours for which they could name something they called a principle, and that night they closed 31. In two of the 31 the principle was a dated ruling of yours. In most of the rest it was the agent's own earlier leaning, a design another agent wrote, or the fact that the code already did it. You have since reversed or rejected five of those answers.
-
-    - **A — Only by quoting you.** An agent closes a question of yours only when a dated ruling of yours answers it in so many words, and the record carries the quote. You are not asked the same thing twice, and everything else stays open for you.
-    - **B — Never.** An agent may attach the ruling it thinks applies, and you still answer every question yourself. That costs you a click on questions you have already ruled.
-    - **C — As it was read.** Anything an agent can call a principle closes a question. The fewest questions reach you, and answers like the five you reversed arrive already built.
-
-    <!-- vantage: question id=OQ-PR22 leaning="A: it keeps what you wanted, not being asked the same thing twice, and stops an agent's own leaning from counting as a principle." -->
-
-    _Leaning:_ A: it keeps what you wanted, not being asked the same thing twice, and stops an agent's own leaning from counting as a principle.
-
-    **Answer:**
-
-    > _(empty — fill in when decided)_
-
 ## 3. Corrections that need no ruling
 
 These rows were false or mislabeled when this review was written. They were applied on 2026-11-18 in one pass, and each row says what changed or that it was already true.
@@ -534,7 +507,7 @@ Nothing in this table is built. Each of these designs is still waiting on questi
 | `D-GM6` | Two keys guard the monitor's workflow, one of them the owner's approval | [Goal monitor](../design/tillr-goal-monitor.md) (iceboxed by the owner, 2026-11-17) |
 | `D-GM8` | The monitor cannot repair itself; the owner reading the board is its outside authority | same |
 
-The escalation ladder's last row is the pattern this review is about, written down as policy. [OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22) decide it before that design is built.
+The escalation ladder's last row is the pattern this review is about, written down as policy. The owner's rulings of 2026-11-19 on [OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22) reject building on unseen non-engineering decisions and closing owner questions without a dated quote before that design is built; its own open questions stay open in [escalation ladder](../design/escalation-ladder.md#open-questions) until he rules them there.
 
 ## 5. Medium and low significance
 
@@ -603,31 +576,39 @@ About 100 further rows are rated low: engineering detail with nothing the owner 
 
 ## 6. How this stops happening
 
-Three of these are the designer's decisions for this document, labeled as such; the owner may overturn any of them. Two are real choices and are questions.
+Two rules are the owner's rulings of 2026-11-19 ([OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22)). Three more (`D-PR1` to `D-PR3`) are the designer's decisions for this document, labeled as such; the owner may overturn any of them.
+
+**Owner's ruling ([OQ-PR21](#OQ-PR21)): nothing is built on unseen product or user-facing decisions.** Any decision that touches the owner's documents, his repository, his money, his models or what he sees is put to him as an open question, and nothing is built on that design until he answers. Engineering detail is marked as the agent's decision and may be built on without stopping the queue.
+
+**Owner's ruling ([OQ-PR22](#OQ-PR22)): an agent closes a question addressed to the owner only by quoting him.** An agent may close an owner question only when a dated ruling of his answers it in so many words, and the ledger row carries the exact quote and date. An agent's own leaning, another agent's design, unquoted paraphrase, or the fact that code already behaves a certain way never counts as a principle and never closes a question; everything else stays open for him.
 
 **D-PR1, designer's decision: only the owner's quoted, dated words are a ruling.** A ledger row may say "ruled" or name the owner only when it carries his words in quotation marks and the date. A paraphrase is recorded as a paraphrase, with who wrote it.
 
 **D-PR2, designer's decision: a designer's decision always says so, in the row.** The row begins "Designer's decision; the owner may overturn this", as [the queue-mirror design](../design/tillr-queue-mirrors-designs.md)'s ledger already does. A document that holds one never says "Needs your ruling: None" without also naming how many designer's decisions it holds, and its title never calls itself a ruling.
 
-**D-PR3, designer's decision: a check enforces the first two.** It joins the gate's document checks and refuses, on lines a change adds:
+**D-PR3, designer's decision: a check enforces these in the gate.** It joins the gate's document checks and refuses, on lines a change adds:
 
 - a ledger row that says "ruled" or "owner" with no quotation and no date;
-- a header that says "Needs your ruling: None" in a document whose ledger holds a designer's decision;
-- a question closed in a change whose row cites no words of the owner's.
+- a header that says "Needs your ruling: None" in a document whose ledger holds a designer's decision without naming how many designer's decisions it holds;
+- a question closed in a change whose ledger row carries no dated quotation of the owner's words ([OQ-PR22](#OQ-PR22)).
 
-What would have to be built: that check and its test; a pass over the 39 audited documents to relabel rows by the answers above; and, if [OQ-PR21](#OQ-PR21) is answered A or B, a rule in the loop that a design holding an unseen designer's decision of the named kinds is not yet ready to build from. The existing rows are a backlog, so the check judges added lines only, as the gate's other document checks do.
+**What has to be built (none of it is built yet):**
 
-**The two questions.** [OQ-PR21](#OQ-PR21) asks whether a design may be built from while it holds designer's decisions the owner has not seen. [OQ-PR22](#OQ-PR22) asks whether "fill them in through principles" still stands.
+- **For [OQ-PR21](#OQ-PR21):** a rule in sync and the loop that a design holding an unruled decision touching the owner's documents, repository, money, models or visible surface is put to him as an open question and holds building on that design until he answers, while decisions marked as engineering detail do not hold the build; plus the authoring and compliance-check rule that requires such decisions to be filed as open questions rather than recorded as designer's decisions.
+- **For [OQ-PR22](#OQ-PR22) and `D-PR1` to `D-PR3`:** the gate document check and its tests refusing added ledger rows that claim an owner ruling or close an owner question without a dated quotation of his words, and refusing a bare "Needs your ruling: None" over designer's decisions; plus updating agent instructions so "fill them in through principles" is never read as leave to close a question without a dated quote. The existing rows are a backlog, so the gate check judges added lines only, as the gate's other document checks do.
+- **Across the audited corpus:** a pass over the 39 audited documents to relabel or reopen rows as the owner answers [OQ-PR1](#OQ-PR1) to [OQ-PR20](#OQ-PR20).
 
-**What the audits did not settle.** They disagree on three ratings: `D-QP9` and `D-RS5` are high in one and low or medium in another, and `D-QP10` is high in one and medium in another; this page treats each at the higher rating. They did not verify that rows recorded as the owner's are his: most are paraphrase. They did not open the sources of landing principles 1 to 10, the earlier ruling behind `D-QP5`, or the roughly 95 roadmap answers one by one.
+**What the audits did not settle.** They disagree on three ratings: `D-QP9` and `D-RS5` are high in one and low or medium in another, and `D-QP10` is high in one and medium in another; this page treats each at the higher rating (`D-PR4`). They did not verify that rows recorded as the owner's are his: most are paraphrase. They did not open the sources of landing principles 1 to 10, the earlier ruling behind `D-QP5`, or the roughly 95 roadmap answers one by one.
 
 ## Decision Ledger
 
-Every row is a designer's decision made in writing this review, and the owner may overturn it. None is built.
+[OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22) are the owner's rulings of 2026-11-19. `D-PR1` to `D-PR4` are designer's decisions made in writing this review, and the owner may overturn any of them. None is built.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
+| OQ-PR21 | **Owner ruling:** A decision that touches the owner's documents, his repository, his money, his models or what he sees is put to him as a question, and nothing is built on that design until he answers; engineering detail is marked as the agent's and may be built on. He took option A, the stated leaning: *"A: it matches what you said on 2026-11-18, that you decide product direction and trade-offs and the agent decides engineering detail."* | 2026-11-19 | [Section 6](#6-how-this-stops-happening) | — |
+| OQ-PR22 | **Owner ruling:** An agent closes a question addressed to the owner only when a dated ruling of his answers it in so many words, and the record carries the quote; everything else stays open for him, and an agent's own leaning never counts as a principle. He took option A, the stated leaning: *"A: it keeps what you wanted, not being asked the same thing twice, and stops an agent's own leaning from counting as a principle."* | 2026-11-19 | [Section 6](#6-how-this-stops-happening) | — |
 | D-PR1 | **Designer's decision; the owner may overturn this.** Only the owner's quoted, dated words are recorded as a ruling. | 2026-11-18 | [Section 6](#6-how-this-stops-happening) | — |
 | D-PR2 | **Designer's decision; the owner may overturn this.** A designer's decision says so in its row, and its document never claims that nothing needs a ruling. | 2026-11-18 | [Section 6](#6-how-this-stops-happening) | — |
-| D-PR3 | **Designer's decision; the owner may overturn this.** A gate check refuses an unquoted "ruled" row and a false "Needs your ruling: None", on added lines only. | 2026-11-18 | [Section 6](#6-how-this-stops-happening) | — |
+| D-PR3 | **Designer's decision; the owner may overturn this.** A gate check refuses an unquoted "ruled" row, a question closed without a dated quotation of the owner's words, and a false "Needs your ruling: None", on added lines only. | 2026-11-18 | [Section 6](#6-how-this-stops-happening) | — |
 | D-PR4 | **Designer's decision; the owner may overturn this.** Where two audits rate a decision differently, this review uses the higher rating. | 2026-11-18 | [Section 6](#6-how-this-stops-happening) | — |
