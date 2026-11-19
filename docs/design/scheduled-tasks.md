@@ -1,38 +1,60 @@
 ---
 title: "Scheduled board tasks: an item not due yet is simply not ready"
 date: 2026-11-02
+updated: 2026-11-19
 status: in-review
 stage: DESIGN
-next: "Rule [OQ-ST1](#12-open-questions) — whether the roll-forward keeps two triggers or one — then build V1 from [§9](#9-staging-v1-v2-and-the-criterion); V2 waits on nothing but V1."
+next: "Re-ground the deleted board-cli symbols, schema migration, CLI flags, item-state edges and completion hook in tools/tillr, tools/tillr-item, tools/tillr-drain and tools/tillr-view before building V1 and V2 ([§9](#9-staging-v1-v2-and-the-criterion), [§14](#14-where-the-code-lives-by-symbol)); run the scratch dropped-patch check in [OQ-ST3](#12-open-questions). The owner may review and overturn the designer decisions in [§11](#11-decision-ledger) and [§12](#12-open-questions)."
 board: "243"
 depends-on:
   - agent-runtime.md#22-scheduled-and-recurring-items-a-best-effort-cron
-tags: [board, drain, scheduling, cron, design]
-summary: "A due time and a recurrence are two nullable integer columns on the item, and due-ness is a derived admission gate — the first gate in admitItem — so a not-yet-due item is simply not ready, keeps its rank, and needs no daemon: the drain's existing poll is the only clock. Recurrence re-arms the same item in place at the completion write, which needs one new item-machine edge the design did not have, and the single due_at slot is what makes three missed weeks one run. V1 is one-shot due and satisfies four of the criterion's six clauses; V2 adds recurrence and satisfies the rest."
+tags: [tillr, board, drain, scheduling, cron, design]
+summary: "A due time and a recurrence are two nullable integer columns on the item, and due-ness is a derived admission gate so a not-yet-due item is simply not ready, keeps its rank, and needs no daemon: the drain's existing poll is the only clock. Recurrence re-arms the same item in place at completion, and the single due_at slot is what makes three missed weeks one run. Nothing is built, and the 2026-11-02 symbol grounding below targets the deleted tools/board-cli rather than Tillr (tools/tillr, tools/tillr-item, tools/tillr-drain, tools/tillr-view), so the seams need re-grounding before V1 and V2 are built."
 ---
 
 # Scheduled board tasks: an item not due yet is simply not ready
 
-**Status:** 2026-11-02. Nothing built. This document takes [§22 of the agent-runtime
-design](agent-runtime.md#22-scheduled-and-recurring-items-a-best-effort-cron) — a sketch inside a
-large runtime document — and turns it into a buildable design for board item 243: it states what
-[§22](agent-runtime.md#22-scheduled-and-recurring-items-a-best-effort-cron) already settles, decides
-what [§22](agent-runtime.md#22-scheduled-and-recurring-items-a-best-effort-cron) left open, and
-reconciles [§22](agent-runtime.md#22-scheduled-and-recurring-items-a-best-effort-cron)'s model with
-the board as the code actually is. Symbols were read in `tools/board-cli/internal/board/` at
-`8ccf3b6f0`.
+**Status:** 2026-11-19 (written 2026-11-02). Nothing built: Tillr has no `due_at` or
+`recur_interval_ms` column, no `not-due` admission gate, and no `schedule.rearm` transition
+(`rg -n --glob '!docs/**' --glob '!yolo-packs/**' 'due_at|recur_interval_ms|not-due|schedule\.rearm' tools config tests`
+returns only unrelated `next_due_at` steering-timer and `log-checkpoint.not-due` store matches).
+Deferred until picked up: [`docs/tillr/roadmap.md`](../tillr/roadmap.md) lists this design as the
+unbuilt substrate of [the goal monitor](tillr-goal-monitor.md) (iceboxed on 2026-11-17), and
+[`docs/pi/roadmap.md`](../pi/roadmap.md) lists the weekly fork roll-forward ([§7](#7-the-first-user-the-weekly-evergreen-roll-forward))
+as designed and unbuilt. This document originated on 2026-11-02 as a design for board item 243 from
+[§22 of the agent-runtime design](agent-runtime.md#22-scheduled-and-recurring-items-a-best-effort-cron),
+grounded against `tools/board-cli/internal/board/` at `8ccf3b6f0` [unlanded]. `tools/board-cli` was
+deleted on 2026-11-11 (`afdc9a9571`) and replaced by Tillr (`tools/tillr`, `tools/tillr-item`,
+`tools/tillr-drain`, `tools/tillr-view`); the symbol and schema grounding below keeps its 2026-11-02
+board-CLI names as historical context and must be re-grounded on Tillr before build (see
+[§8](#8-migration-and-compatibility), [§10](#10-verification) and [§14](#14-where-the-code-lives-by-symbol)).
+Rows `D-1`–`D-12` in [§11](#11-decision-ledger) and settlements [`OQ-ST1`](#12-open-questions)–[`OQ-ST4`](#12-open-questions) in
+[§12](#12-open-questions) are designer decisions without a quoted owner ruling and remain open to
+the owner's overturn; the dropped-patch demonstration requested in [`OQ-ST3`](#12-open-questions) has
+no recorded result in the tree.
+
+**Needs your ruling:** None (no live `💬` question; see [§11](#11-decision-ledger) and
+[§12](#12-open-questions) for the designer decisions and settlements open to the owner's overturn,
+and [`OQ-ST3`](#12-open-questions) for the unrun scratch experiment).
 
 **Terms.** *Due time* is the instant before which an item must not be dispatched. *Recurrence* is a
-fixed period after which a completed item becomes due again. *Drain* is the foreground process
-started by `board drain` that dispatches lanes; it is the only thing that ever reads a due time.
-*Admission* is the per-item decision `admitItem` makes each poll: dispatch, or a named reason not
-to. *Rank* is the item's nullable lexicographic priority key, the board's only ordering term.
+fixed period after which a completed item becomes due again. *Drain* is the foreground loop process
+(`tillr-drain` today; `board drain` in the 2026-11-02 board CLI) that dispatches lanes; it is the
+only execution loop that ever reads a due time.
+*Admission* is the per-item decision the drain's planner makes each pass (`decide` in
+[`tools/tillr-drain/drain/plan.go`](../../tools/tillr-drain/drain/plan.go) today; `admitItem` in the
+deleted board CLI): dispatch, or a named reason not to. *Rank* is the item's lexicographic priority
+key, the queue's ordering term.
 
 ## 1. What this settles, and what it inherits
 
 [§22](agent-runtime.md#22-scheduled-and-recurring-items-a-best-effort-cron) is complete and
-self-consistent, and none of it is built: `rg 'due_at|recur_interval|not-due'` over the tree outside
-`docs/` returns nothing. So the work here is not invention. Three things are new.
+self-consistent, and none of it is built:
+`rg -n --glob '!docs/**' --glob '!yolo-packs/**' 'due_at|recur_interval_ms|not-due|schedule\.rearm' tools config tests`
+returns only unrelated `next_due_at` steering-timer and `log-checkpoint.not-due` store matches. So
+the work here is not invention. Three things were added on 2026-11-02 when reconciling
+[§22](agent-runtime.md#22-scheduled-and-recurring-items-a-best-effort-cron) against the then-live
+board CLI (each seam has since moved to Tillr; see [§14](#14-where-the-code-lives-by-symbol)).
 
 1. **[§22](agent-runtime.md#22-scheduled-and-recurring-items-a-best-effort-cron)'s open questions
    are answered where the code answers them.** Q-ST1 (can an item judged done be judged again?) and
@@ -100,10 +122,16 @@ The CLI parses human durations into milliseconds at write time; the store only e
 That is [§22.3](agent-runtime.md#223-recurrence-and-the-no-queue-property)'s rule and it is what
 keeps the store free of a duration parser.
 
-**Who may write them.** Only the `owner` and `whale` seats. A due time is a promise about when work
+**Who may write them.** Only the `owner` and `whale` seats (in Tillr's `decided_by` vocabulary,
+`owner` and `whale`; `whale` was the board era's lead coordinator seat). A due time is a promise about when work
 happens, and the seat doing the work is the one party that must not be able to move it — the same
-ground on which `assertNotAuthorityEscape` already refuses a lane seat recording its own landing or
-retiring its own item. The refusal is added to that function, not to a new one.
+ground on which `assertNotAuthorityEscape` in the 2026-11-02 board CLI refused a lane seat recording
+its own landing or retiring its own item.
+
+> **Current tree state (2026-11-19):** `board item add`, `board item update` and `board plan apply`
+> were deleted with `tools/board-cli` (`afdc9a9571`). In Tillr, item writes and reads live in
+> [`tools/tillr-item/`](../../tools/tillr-item/) (`sync` over tracked-document item blocks, `apply`,
+> `request`, `show`, `list`), with no `--due` or `--every` flag or item-block attribute yet.
 
 ## 3. Readiness: the not-due gate
 
@@ -294,17 +322,40 @@ judged completion closes that, *provided the item's criterion is written so a no
 done*. That is a briefing obligation on the first user, not a mechanism
 ([§7](#7-the-first-user-the-weekly-evergreen-roll-forward)).
 
-**Stopping recurrence** is already expressible: `abandoned` is terminal and excluded from candidate
-selection; pausing composes with the existing hold gate or by pushing the due time out; clearing the
-interval makes the current cycle the last one.
+**Stopping recurrence** is already expressible: `abandoned` (`closed` in Tillr's item states) is
+terminal and excluded from candidate selection; pausing composes with the existing hold gate or by
+pushing the due time out; clearing the interval makes the current cycle the last one.
+
+> **Current tree state (2026-11-19):** The `ItemMachine` / `item_machine.mmd` table and the single
+> `RecordVerdict` status write above describe the deleted `tools/board-cli`. In Tillr:
+> - Stored item states in [`tools/tillr/definition/landing.json`](../../tools/tillr/definition/landing.json)
+>   and [`tools/tillr-item/item/schema.go`](../../tools/tillr-item/item/schema.go) are `not-started`,
+>   `blocked`, `in-queue`, `landed`, `resolved-elsewhere` and `closed` (there is no `completed` or
+>   `abandoned` state; `landed → in-queue` is already a declared transition, while `landed → not-started`
+>   is not).
+> - `item.RecordVerdict` ([`tools/tillr-item/item/verdict.go`](../../tools/tillr-item/item/verdict.go))
+>   updates `item_criteria.state` per criterion rather than `items.state`, while the drain loop
+>   completes landed and no-commit graph runs in `completeItem` and `completeGraphWithoutCommit`
+>   ([`tools/tillr-drain/drain/workflow_exit.go`](../../tools/tillr-drain/drain/workflow_exit.go),
+>   [`tools/tillr-drain/drain/workflow_exit_record.go`](../../tools/tillr-drain/drain/workflow_exit_record.go))
+>   and retires document-declared item blocks before gating in `retireDocumentBlock`
+>   ([`tools/tillr-drain/drain/retire.go`](../../tools/tillr-drain/drain/retire.go) — a step a
+>   recurring document-backed item must not take if it is to survive across cycles).
 
 ### 5.4 Failure does not advance the schedule
 
-A failed or interrupted lane leaves the item uncompleted, so the item stays due and is retried under
-the ordinary failure machinery. There is no stored attempt counter and no retry cap, and this design
-adds no backoff. That is the right default — "not forgotten" includes not silently skipping a period
-because the attempt broke — but it inherits the board's existing no-cap behavior, which is a
-drain-wide concern rather than a scheduling one ([OQ-ST2](#12-open-questions)).
+A failed or interrupted lane leaves the item uncompleted, so the item's `due_at` does not advance
+and the item remains due under the drain's ordinary failure machinery; this design adds no
+schedule-specific attempt cap or backoff ([OQ-ST2](#12-open-questions)). That is the right default —
+"not forgotten" includes not silently skipping a period because the attempt broke.
+
+*(Written on 2026-11-02 against the board CLI's un-capped re-admission. In Tillr today, failure
+handling is governed by the owner's ruling of 2026-11-17 — `D-JL10` in
+[the judge and lifecycle design](tillr-judge-and-lifecycle.md#decision-ledger), built in
+[`tools/tillr-drain/drain/plan.go`](../../tools/tillr-drain/drain/plan.go): worker endings are never
+counted, nothing re-runs because an input hash changed, a failed or refused worker run returns to
+its own session with its evidence, and only an identical repeat escalates to the design seat, while
+explicit operator return is `tillr drain retry` under `D-JL6`/`D-JL8`.)*
 
 ## 6. No daemon
 
@@ -323,12 +374,15 @@ The invariant that makes it work, recorded so a future optimization cannot quiet
 > **The drain must retain a periodic re-evaluation tick, or the poll wait must take the earliest
 > `due_at` as a wake deadline the way it already takes the run deadline.**
 
-The drain re-runs `readyItems` and `admitItem` on every poll rather than snapshotting candidates at
+The drain re-runs candidate selection and admission on every poll rather than snapshotting candidates at
 startup, so a due gate flips on its own as time passes. The subtlety: the drain also wakes early on
-store commits, and the passage of time is not a store commit, so a due transition is never
-*signaled* — only observed at the next poll. That bounds lateness at roughly the two-second fallback
-tick while a drain runs, far inside any tolerance this feature promises. The existing tick satisfies
-the invariant today, so V1 does nothing here.
+completions, and the passage of time is not a completion or store commit, so a due transition is never
+*signaled* — only observed at the next poll (in the 2026-11-02 board CLI, roughly the two-second
+fallback tick; in Tillr today, `DefaultStorePollInterval = 100ms` in `waitForTrigger`,
+[`tools/tillr-drain/drain/trigger.go`](../../tools/tillr-drain/drain/trigger.go), far inside any
+tolerance this feature promises; for `--exit-when-drained`, see
+[goal monitor §8](tillr-goal-monitor.md#8-a-not-due-item-when-the-loop-is-told-to-exit-once-drained)).
+The existing tick satisfies the invariant today, so V1 does nothing here.
 
 **Clock behavior.** The comparison uses wall-clock unix milliseconds, consistent with the rest of
 the store. Machine sleep is harmless: the first poll after wake sees the item due. A backwards clock
@@ -370,9 +424,13 @@ future cycle.
 agent-runtime design](agent-runtime.md#215-periodic-roll-forward-and-measurable-drift) files a
 roll-forward item when a fork's base drifts past 50 commits or any new release appears, evaluated
 wherever the resolver runs. This design's item comes due every seven days regardless. Both are
-unbuilt, and if both land a fork that drifts on day two waits for day seven while a fork that has
-not moved gets a no-op cycle every week. Which of the two survives is [OQ-ST1](#12-open-questions); this
-document specifies the calendar item because it is the one that needs a due time.
+unbuilt (for hex-pinned forks, [`tools/fork-check.py`](../../tools/fork-check.py) `--pin-drift`
+exists separately as a manual detector whose `--file` path still shells out to the retired `board`
+CLI; [`docs/pi/fork-pin-drift.md`](../pi/fork-pin-drift.md)). [OQ-ST1](#12-open-questions) settled on
+keeping both triggers with the calendar item as the floor — drift files early, the weekly item
+guarantees one is never forgotten, and the weekly item does not duplicate an open drift item (a
+2026-11-16 designer decision, open to the owner's overturn); this document specifies the calendar
+item because it is the one that needs a due time.
 
 **The criterion, and the dropped-patch failure mode.** Evergreen trades conflict-debt for one silent
 failure: a patch quietly disappearing during the rebase. The standing checks are real but pointed at
@@ -421,6 +479,13 @@ in place, table rebuilds reserved for constraint widenings. Adding a nullable in
 cheap kind, which is why [§22.8](agent-runtime.md#228-staging) could say "nothing needs to land now"
 without the schema work growing in the meantime.
 
+> **Current tree state (2026-11-19):** The `SchemaVersion` 11 → 12 numbers above were the deleted
+> `tools/board-cli` store's. In Tillr, `store.SchemaVersion` is `5` in
+> [`tools/tillr/store/schema.go`](../../tools/tillr/store/schema.go), `items` is declared in `ItemDDL`
+> ([`tools/tillr-item/item/schema.go`](../../tools/tillr-item/item/schema.go)), additive columns are
+> registered via `store.RegisterColumn("item", "items", ...)`, `store.OpenReadOnly` refuses a newer or
+> unmigrated schema version, and `events.kind` remains free text with no `CHECK`.
+
 ## 9. Staging: V1, V2, and the criterion
 
 | Stage | Contents | What it proves |
@@ -449,9 +514,12 @@ additive on top of the safe part (the gate).
 
 ## 10. Verification
 
-Each clause of the frozen criterion, and the check that would fail if it were broken. All of these
-are Go tests in `tools/board-cli/internal/board/`, in the existing external `board_test` package
-with its drain fixtures.
+Each clause of the frozen criterion, and the check that would fail if it were broken. On 2026-11-02
+these were specified as Go tests in `tools/board-cli/internal/board/` (`board_test`); `tools/board-cli`
+is deleted, so in Tillr the item-column and migration tests belong in
+[`tools/tillr-item/`](../../tools/tillr-item/) and [`tools/tillr/store/`](../../tools/tillr/store/)
+and the admission, priority and recurrence tests belong in
+[`tools/tillr-drain/drain/`](../../tools/tillr-drain/drain/) (`plan` / `why` / `loop`).
 
 | Clause | Test file | Assertion shape |
 | :--- | :--- | :--- |
@@ -473,6 +541,13 @@ not-due item, because that row is the claim
 
 ## 11. Decision ledger
 
+Every row below (`D-1`–`D-12`) is a designer decision from 2026-11-02; none carries a quoted ruling
+from the owner, and the owner may overturn any of them ([decision provenance review](../tillr/decision-provenance-review.md)
+[§5.2](../tillr/decision-provenance-review.md#52-medium-not-built)). None of `D-1`–`D-12` is built
+in Tillr today; where a row names a 2026-11-02 `board-cli` symbol (`admitItem`, `readyItems`,
+`drain.blocked`, `completed → not-started`, `whale`), see [§14](#14-where-the-code-lives-by-symbol)
+for the current Tillr seam.
+
 | ID | Decision | Reversal condition |
 | :--- | :--- | :--- |
 | D-1 | Due-ness is a derived admission gate plus a new reason (`not-due`), on a stored nullable `due_at`. No new status, no new edge kind | The item machine's "stored facts stay stored, readiness stays derived" ruling is itself reversed |
@@ -490,11 +565,19 @@ not-due item, because that row is the claim
 
 ## 12. Open Questions
 
+None of [`OQ-ST1`](#12-open-questions)–[`OQ-ST4`](#12-open-questions) carries a quoted ruling from the owner: all four were marked settled on
+2026-11-16 (`b5e5073cb`) by the session's designer on recorded principle at the owner's request
+([decision provenance review `OQ-PR22`](../tillr/decision-provenance-review.md#OQ-PR22)), so they
+stay here rather than compacting into [§11](#11-decision-ledger) and remain open to the owner's
+overturn. For [`OQ-ST3`](#12-open-questions), the designer settlement chose Option A ("Demonstrate it"), and that scratch
+experiment has not yet been performed or recorded in the repository.
+
 1. ✅ **OQ-ST1: Does the roll-forward keep two triggers, or does the calendar item replace the drift
    trigger?**
 
-   [§7](#7-the-first-user-the-weekly-evergreen-roll-forward) names both. If both land, a fork that
-   drifts on day two waits for day seven, and a quiet fork gets a no-op cycle every week.
+   [§7](#7-the-first-user-the-weekly-evergreen-roll-forward) names both. If only the calendar item
+   lands, a fork that drifts on day two waits for day seven; if it runs regardless, a quiet fork gets
+   a no-op cycle every week.
 
    - **A — Calendar only.** One mechanism, one rank; a release landing the day after a cycle waits
      six days.
@@ -503,32 +586,26 @@ not-due item, because that row is the claim
    - **C — Both, calendar as the floor.** Drift files early, the weekly item guarantees a bound; the
      weekly item must not duplicate an open drift item.
 
-   _Settled:_ C. Both triggers, with the calendar item as the floor: drift files a roll-forward early and the weekly item guarantees one is never forgotten, and the weekly item does not duplicate an open drift item. Settled on 2026-11-16 by the session's designer on recorded principle, at the owner's request; the owner may overturn it.
-
-   _Leaning:_ Both, with the calendar item as the floor (C). The drift trigger is the fast path; the
+   _Original leaning (2026-11-02):_ Both, with the calendar item as the floor (C). The drift trigger is the fast path; the
    weekly item is the promise that nothing is forgotten, which is the whole point of the feature.
 
-   **Answer:**
-   > _(empty — fill in when decided)_
+   _Settled (2026-11-16, designer's decision on recorded principle at the owner's request; not ruled by the owner, who may overturn it):_ C. Both triggers, with the calendar item as the floor: drift files a roll-forward early and the weekly item guarantees one is never forgotten, and the weekly item does not duplicate an open drift item.
 
 2. ✅ **OQ-ST2: How fast does a failing recurring item come back, and is that acceptable?**
 
-   [§5.4](#54-failure-does-not-advance-the-schedule) leaves a failing recurring item due, with no
-   attempt cap and no backoff. For an ordinary item a human notices; for a recurring one nothing
-   bounds it.
+   On 2026-11-02, [§5.4](#54-failure-does-not-advance-the-schedule) left a failing recurring item due, with no
+   attempt cap and no backoff; for an ordinary item a human noticed, while for a recurring one nothing
+   in the board CLI bounded it.
 
    - **A — Leave it.** Fix a hot loop drain-wide, not per-schedule.
    - **B — A per-item attempt cap on recurring items only.** Bounded, but a capped recurring item
      silently stops being recurring.
    - **C — Measure first.** The re-dispatch interval is unmeasured today.
 
-   _Settled:_ A. A failing recurring item is held like any other item. The drain-wide rule is now the owner's ruling of 2026-11-17 (`D-JL10` in [the judge and lifecycle design](tillr-judge-and-lifecycle.md#decision-ledger)): a failed worker run goes back to its own session with its evidence, uncounted, and only an identical repeat goes to the design seat. The one re-dispatch on a changed input that this answer first leaned on was removed under that ruling. Settled on 2026-11-16 by the session's designer on recorded principle, at the owner's request; the owner may overturn it.
+   _Original leaning (2026-11-02):_ Measure first (C). The interval was unmeasured, and both remedies were cheap to add
+   later while a wrong cap was a silent stop.
 
-   _Leaning:_ Measure first (C). The interval is unmeasured, and both remedies are cheap to add
-   later while a wrong cap is a silent stop.
-
-   **Answer:**
-   > _(empty — fill in when decided)_
+   _Settled (2026-11-16, designer's decision on recorded principle at the owner's request, updated 2026-11-18 for `D-JL10`; not ruled by the owner on [`OQ-ST2`](#12-open-questions) itself, who may overturn it):_ A. A failing recurring item is governed by the drain-wide rule like any other item, with no schedule-specific cap. Under the owner's ruling of 2026-11-17 (`D-JL10` in [the judge and lifecycle design](tillr-judge-and-lifecycle.md#decision-ledger)), a failed worker run goes back to its own session with its evidence, uncounted, and only an identical repeat goes to the design seat; the one re-dispatch on a changed input that the 2026-11-16 settlement first cited ([`OQ-TC3`](tillr-convergence.md#decision-ledger)) was removed under that ruling.
 
 3. ✅ **OQ-ST3: Is the dropped-in-rebase gap real, or is the criterion guarding a hole that does not
    exist?**
@@ -542,33 +619,27 @@ not-due item, because that row is the claim
    - **B — Leave it as an inference.** The accounting record is wanted either way.
    - **C — Withdraw the claim** and keep the record on its own merits.
 
-   _Settled:_ A. Demonstrate it: drop a commit in a scratch lane checkout, run the standing checks, and record whether they pass. A claim inside a criterion that nobody has checked is not evidence, and the experiment is one checkout. Settled on 2026-11-16 by the session's designer on recorded principle, at the owner's request; the owner may overturn it.
-
-   _Leaning:_ Demonstrate it (A). A claim inside a criterion that nobody has checked is the shape
+   _Original leaning (2026-11-02):_ Demonstrate it (A). A claim inside a criterion that nobody has checked is the shape
    this repository keeps paying for, and the experiment is one scratch checkout.
 
-   **Answer:**
-   > _(empty — fill in when decided)_
+   _Settled (2026-11-16, designer's decision on recorded principle at the owner's request; not ruled by the owner, who may overturn it — **experiment still unrun as of 2026-11-19**):_ A. Demonstrate it: drop a commit in a scratch lane checkout, run the standing checks, and record whether they pass. A claim inside a criterion that nobody has checked is not evidence, and the experiment is one checkout. *(Tree state on 2026-11-19: no record of this scratch experiment exists in `docs/`, `tools/` or `tests/`, so whether the gap is real remains undemonstrated.)*
 
 4. ✅ **OQ-ST4: Is seven days the right staleness bound for the roll-forward?**
 
-   The interval is the only thing bounding how stale a fork's base can get, and it was chosen
-   because "weekly" is how the owner phrased the work. A seven-day interval means a release can sit
-   unrolled for six days, and a quiet week produces a no-op cycle. Nothing measures whether either
-   matters.
+   The interval is the only thing bounding how stale a fork's base can get when the drift trigger has
+   not fired, and it was chosen because "weekly" is how the owner phrased the work. A seven-day
+   interval means a release can sit unrolled for six days without the drift trigger, and a quiet week
+   produces a no-op cycle. Nothing measures whether either matters.
 
    - **A — Seven days.** Matches the phrasing, and a no-op cycle is cheap.
    - **B — A shorter interval**, so a release is picked up sooner, at the cost of more no-op cycles.
    - **C — Let the drift trigger set the pace** and make the calendar item a long-stop at, say,
      thirty days. Depends on [OQ-ST1](#12-open-questions).
 
-   _Settled:_ A. Seven days. The interval is one stored value on one item, so changing it later is an edit. Settled on 2026-11-16 by the session's designer on recorded principle, at the owner's request; the owner may overturn it.
-
-   _Leaning:_ Seven days for now (A). The interval is a stored value on one item, so changing it
+   _Original leaning (2026-11-02):_ Seven days for now (A). The interval is a stored value on one item, so changing it
    later is an edit and not a design change.
 
-   **Answer:**
-   > _(empty — fill in when decided)_
+   _Settled (2026-11-16, designer's decision on recorded principle at the owner's request; not ruled by the owner, who may overturn it):_ A. Seven days. The interval is one stored value on one item, so changing it later is an edit.
 
 ## 13. What this does not decide
 
@@ -586,22 +657,29 @@ not-due item, because that row is the claim
 
 ## 14. Where the code lives, by symbol
 
-| Symbol | What this design touches |
-| :--- | :--- |
-| `itemsTableBody` | The one column list, used by both the fresh schema and the rebuild; the two new columns go here |
-| `SchemaVersion`, `OpenStore` | The version bump and the additive migration |
-| `readyItem`, `readyItems` | The struct gains `DueAt`; the `SELECT` gains `due_at`; the `WHERE` and `ORDER BY` are untouched |
-| `admitItem` | The new first gate, and the `not-due` reason |
-| `stateNotDue` | The new refusal constant, beside `stateHeld` and `stateExternalBlocked` |
-| `notReadyBucket` | Maps `not-due` to no bucket, so it stays out of the graph counts |
-| `RunDrain`'s poll loop | The refusal branch that must not write a `drain.blocked` event for a not-due item, and the new `notDue` count |
-| `ItemMachine` | The new `completed --schedule-rearm--> not-started` edge, and the regenerated `item_machine.mmd` |
-| `RecordVerdict` | The one completion write both paths reach; the re-arm attaches here |
-| `AddItem`, `updatableColumns` | The two new flags on `item add` and `item update` |
-| `opKeys` | `due` and `every` on the `add` and `update` plan ops |
-| `assertNotAuthorityEscape` | The owner/whale-only rule for the two new writes |
-| `drain_verify.go`'s `admitItem` call | Constructs a `readyItem` literal; the new field's zero value is "due", which is the right default there |
-| `now()` | The store's one clock, and the only thing a due time is compared against |
+> **Historical symbol map (2026-11-02) and current Tillr seams (2026-11-19):** Every symbol in the
+> left column below was read in `tools/board-cli/internal/board/` at `8ccf3b6f0` [unlanded], which was
+> deleted on 2026-11-11 (`afdc9a9571`). As [goal monitor §8](tillr-goal-monitor.md#8-a-not-due-item-when-the-loop-is-told-to-exit-once-drained)
+> notes, none of these symbols exists in the tree under its `board-cli` package; the third column
+> names the current Tillr package or file where each seam lives today and must be re-grounded before
+> V1 and V2 are built.
+
+| 2026-11-02 `board-cli` symbol | What this design touches | Current Tillr seam (2026-11-19, unbuilt) |
+| :--- | :--- | :--- |
+| `itemsTableBody` | The one column list, used by both the fresh schema and the rebuild; the two new columns go here | `ItemDDL` and `store.RegisterColumn("item", "items", ...)` in [`tools/tillr-item/item/schema.go`](../../tools/tillr-item/item/schema.go) |
+| `SchemaVersion`, `OpenStore` | The version bump and the additive migration | `store.SchemaVersion` (`5` today) and `store.Open` / `store.OpenReadOnly` in [`tools/tillr/store/schema.go`](../../tools/tillr/store/schema.go) |
+| `readyItem`, `readyItems` | The struct gains `DueAt`; the `SELECT` gains `due_at`; the `WHERE` and `ORDER BY` are untouched | `itemRow` and planner item loading in [`tools/tillr-drain/drain/plan.go`](../../tools/tillr-drain/drain/plan.go) |
+| `admitItem` | The new first gate, and the `not-due` reason | `(*planner).decide` in [`tools/tillr-drain/drain/plan.go`](../../tools/tillr-drain/drain/plan.go) |
+| `stateNotDue` | The new refusal constant, beside `stateHeld` and `stateExternalBlocked` | `Reason*` hold/wait constants and `identifyDecision` in [`tools/tillr-drain/drain/plan.go`](../../tools/tillr-drain/drain/plan.go) |
+| `notReadyBucket` | Maps `not-due` to no bucket, so it stays out of the graph counts | `WhySummary` / `WhyRow` classification in [`tools/tillr-drain/drain/why.go`](../../tools/tillr-drain/drain/why.go) and [`tools/tillr-view/`](../../tools/tillr-view/) |
+| `RunDrain`'s poll loop | The refusal branch that must not write a `drain.blocked` event for a not-due item, and the new `notDue` count | `Loop` pass/wait reporting and `--exit-when-drained` check in [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go) and [`tools/tillr-drain/drain/trigger.go`](../../tools/tillr-drain/drain/trigger.go) ([goal monitor §8](tillr-goal-monitor.md#8-a-not-due-item-when-the-loop-is-told-to-exit-once-drained)) |
+| `ItemMachine` | The new `completed --schedule-rearm--> not-started` edge, and the regenerated `item_machine.mmd` | State and transition definitions in [`tools/tillr/definition/landing.json`](../../tools/tillr/definition/landing.json) and [`tools/tillr-item/item/`](../../tools/tillr-item/item/) (`landed` rather than `completed`; no `.mmd` generator) |
+| `RecordVerdict` | The one completion write both paths reach; the re-arm attaches here | Split in Tillr: `item.RecordVerdict` ([`tools/tillr-item/item/verdict.go`](../../tools/tillr-item/item/verdict.go)) writes criterion verdicts, while `completeItem` / `completeGraphWithoutCommit` ([`tools/tillr-drain/drain/workflow_exit.go`](../../tools/tillr-drain/drain/workflow_exit.go), [`tools/tillr-drain/drain/workflow_exit_record.go`](../../tools/tillr-drain/drain/workflow_exit_record.go)) move `items.state` to `landed` (and `retireDocumentBlock` in [`tools/tillr-drain/drain/retire.go`](../../tools/tillr-drain/drain/retire.go) retires one-shot document blocks) |
+| `AddItem`, `updatableColumns` | The two new flags on `item add` and `item update` | Item intake and updates in [`tools/tillr-item/`](../../tools/tillr-item/) (`sync`, `apply`, `request`) |
+| `opKeys` | `due` and `every` on the `add` and `update` plan ops | Document item-block grammar (`sync` in [`tools/tillr-item/item/`](../../tools/tillr-item/item/)) and `item.record` payload fields |
+| `assertNotAuthorityEscape` | The owner/whale-only rule for the two new writes | Write-face and fence checks across [`tools/tillr-item/`](../../tools/tillr-item/) and [`tools/tillr-drain/`](../../tools/tillr-drain/) |
+| `drain_verify.go`'s `admitItem` call | Constructs a `readyItem` literal; the new field's zero value is "due", which is the right default there | Pure planner tests over `Pass` (`Pass.At()`) in [`tools/tillr-drain/drain/`](../../tools/tillr-drain/drain/) |
+| `now()` | The store's one clock, and the only thing a due time is compared against | Injected `Pass.At()` (`Pass.Now`) and `LoopConfig.Now` in [`tools/tillr-drain/drain/`](../../tools/tillr-drain/drain/), plus `time.Time` timestamps in [`tools/tillr-item/`](../../tools/tillr-item/) |
 
 ## 15. Alternatives considered
 
