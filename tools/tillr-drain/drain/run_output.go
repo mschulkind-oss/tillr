@@ -1,6 +1,7 @@
 package drain
 
 import (
+	"bufio"
 	"errors"
 	"io"
 	"os"
@@ -47,13 +48,21 @@ func runOutputTail(dir string) (string, error) {
 		return "", Externalf("reading run output %s: %v", path, err)
 	}
 	var tail stderrTail
+	var reader io.Reader = file
 	if offset := info.Size() - StderrTailBytes; offset > 0 {
-		if _, err := file.Seek(offset, io.SeekStart); err != nil {
+		// Seek one byte earlier so a cut that already lands on a line boundary
+		// consumes that newline and keeps the complete line starting at offset.
+		if _, err := file.Seek(offset-1, io.SeekStart); err != nil {
 			return "", Externalf("reading run output %s: %v", path, err)
 		}
 		tail.dropped = true
+		buffered := bufio.NewReader(file)
+		if _, err := buffered.ReadBytes('\n'); err != nil && !errors.Is(err, io.EOF) {
+			return "", Externalf("reading run output %s: %v", path, err)
+		}
+		reader = buffered
 	}
-	if _, err := io.Copy(&tail, file); err != nil {
+	if _, err := io.Copy(&tail, reader); err != nil {
 		return "", Externalf("reading run output %s: %v", path, err)
 	}
 	return tail.String(), nil
