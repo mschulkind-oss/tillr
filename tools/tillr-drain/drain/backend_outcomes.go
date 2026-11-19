@@ -142,7 +142,7 @@ func answeredByAnotherRule(rec run.Record, interrupted map[string]bool, byRun ma
 // of the same run (run.resume) is that run's new segment, and its outcome is judged.
 func readInterruptedRuns(r *store.Reader) (interrupted, restaged map[string]bool, err error) {
 	interrupted, restaged = map[string]bool{}, map[string]bool{}
-	events, err := r.Events(0)
+	events, err := r.EventsOfKind(0, loopOrphanedKind, staleBaseKind, run.ResumeKind)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -93,4 +95,43 @@ func CheckIO(what string) error {
 		return nil
 	}
 	return fmt.Errorf("%w: %s; read and decide before the write, or mark the work begun in one short write and record it in another", ErrIOUnderWrite, what)
+}
+
+// wholeLogReads counts the whole-log reads (Reader.Events(0)) made inside a write
+// transaction in this process.
+var wholeLogReads atomic.Int64
+
+// WholeLogReadsUnderWrite answers how many times this process has read the whole event log
+// inside a write transaction. It is observation, like OpenWriteTransactions: a test asserts a
+// write that must stay short reads none.
+func WholeLogReadsUnderWrite() int64 { return wholeLogReads.Load() }
+
+// reportWholeLogUnderWrite records one whole-log read inside a write transaction and, with
+// TILLR_SQLITE_TRACE=1, writes one `tillr-sqlite ... operation="log-read-under-write"` line
+// naming how many events it answered, so the remaining sites are measured in the loop's log
+// the way ReportIO measures I/O. It never refuses: the read is the store's own, and its cost
+// is the log's length, which is the defect to find.
+func reportWholeLogUnderWrite(events int) {
+	wholeLogReads.Add(1)
+	if os.Getenv("TILLR_SQLITE_TRACE") != "1" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "tillr-sqlite at=%s pid=%d operation=%q phase=read detail=%q\n",
+		time.Now().UTC().Format(time.RFC3339Nano), os.Getpid(), "log-read-under-write", fmt.Sprintf("events=%d caller=%s", events, outsideCaller()))
+}
+
+// outsideCaller names the first function on the calling stack outside this package: the
+// fold that asked for the whole log.
+func outsideCaller() string {
+	pcs := make([]uintptr, 16)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
+	for {
+		frame, more := frames.Next()
+		if !strings.HasPrefix(frame.Function, "github.com/mschulkind-oss/tillr/store.") {
+			return frame.Function
+		}
+		if !more {
+			return "unknown"
+		}
+	}
 }

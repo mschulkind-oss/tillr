@@ -117,6 +117,18 @@ walk is an error, not silently omitted. Nothing changes the existing retention p
   fails), and `store.ReportIO` is the observing form for wrappers whose callers are not
   all converted yet, writing a `tillr-sqlite ... operation="io-under-write"` line when
   `TILLR_SQLITE_TRACE=1`. I/O a write's callback hands to another goroutine is not seen.
+- **A write transaction reads the kinds it folds, not the whole log.** A whole-log read
+  costs the log's length, and the log is mostly worker records (`run.child-session`):
+  on 2026-11-19 those were 1,267,132 of its 1,294,976 events, and a landing's write waited
+  out its 5-second busy timeout behind plan applications that each copied the log several
+  times. `Reader.EventsOfKind` and `Reader.EventsSelected` answer only the selected events.
+  In the drain loop they are answered from the committed-event cache — the copy of the
+  committed log the long-lived loop process keeps in memory, so a read reads from SQLite
+  only what was committed since ([`eventcache.go`](../tillr/store/eventcache.go)) — through
+  its index by kind and object type. `Reader.Events(0)` inside
+  a write transaction is counted (`store.WholeLogReadsUnderWrite`) and, with
+  `TILLR_SQLITE_TRACE=1`, reported as a `tillr-sqlite ... operation="log-read-under-write"`
+  line that names the caller.
 - **A fixture store is seedable and a live store is not.** `init` decides which one it
   made; a live store refuses `seed` outright, because a store that has been drained is not
   a store to replace.

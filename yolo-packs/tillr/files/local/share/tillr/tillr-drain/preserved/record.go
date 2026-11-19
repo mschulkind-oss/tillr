@@ -52,7 +52,7 @@ type PreservedWork struct {
 // ReadPreservedWork projects settlement and retention events in append order.
 // Pruned records remain visible to history readers, but not to a later brief.
 func ReadPreservedWork(r *store.Reader) ([]PreservedWork, error) {
-	events, err := r.Events(0)
+	events, err := r.EventsOfKind(0, Kind, PrunedKind)
 	if err != nil {
 		return nil, err
 	}

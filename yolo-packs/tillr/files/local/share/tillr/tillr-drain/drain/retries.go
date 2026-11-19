@@ -385,7 +385,7 @@ func readRetries(r *store.Reader) (map[string]retryRow, error) {
 // error. An event that names no retry, or whose payload names no outcome, is not evidence
 // of an acknowledgment and is skipped rather than guessed at.
 func readRetryAcks(r *store.Reader) (map[string]string, error) {
-	events, err := r.Events(0)
+	events, err := r.EventsOfKind(0, RetryAckKind)
 	if err != nil {
 		return nil, readFailure(err)
 	}

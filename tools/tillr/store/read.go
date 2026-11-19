@@ -113,11 +113,77 @@ func (r *Reader) QueryRow(query string, args ...any) *sql.Row {
 // Events answers the events with seq greater than since, in seq order.
 // With the committed-event cache on (CacheCommittedEvents), only the events committed
 // since this process last read the log are read from the store.
+//
+// Events(0) is the whole log. Inside a write transaction that is a read whose cost grows with
+// the log's whole history while every other writer waits, so it is counted and, with
+// TILLR_SQLITE_TRACE=1, reported (reportWholeLogUnderWrite); a fold that reads some kinds asks
+// for those (EventsOfKind, EventsSelected).
 func (r *Reader) Events(since int64) ([]event.Event, error) {
+	var out []event.Event
+	var err error
 	if r.events != nil {
-		return r.events.read(r.ctx, r.q, since, r.readValues != nil)
+		out, err = r.events.read(r.ctx, r.q, since, r.readValues != nil)
+	} else {
+		out, err = events(r.ctx, r.q, since)
 	}
-	return events(r.ctx, r.q, since)
+	if err == nil && since == 0 && r.readValues == nil {
+		reportWholeLogUnderWrite(len(out))
+	}
+	return out, err
+}
+
+// EventSelection names the events a selected read answers: those whose kind is one of Kinds,
+// and those whose object type is one of ObjectTypes.
+type EventSelection struct {
+	Kinds       []string
+	ObjectTypes []string
+}
+
+func kindKey(kind string) string       { return "kind\x00" + kind }
+func objectTypeKey(kind string) string { return "type\x00" + kind }
+
+func (sel EventSelection) keys() []string {
+	keys := make([]string, 0, len(sel.Kinds)+len(sel.ObjectTypes))
+	for _, kind := range sel.Kinds {
+		keys = append(keys, kindKey(kind))
+	}
+	for _, objectType := range sel.ObjectTypes {
+		keys = append(keys, objectTypeKey(objectType))
+	}
+	return keys
+}
+
+func (sel EventSelection) selects(e event.Event) bool {
+	for _, kind := range sel.Kinds {
+		if e.Kind == kind {
+			return true
+		}
+	}
+	for _, objectType := range sel.ObjectTypes {
+		if e.ObjectType == objectType {
+			return true
+		}
+	}
+	return false
+}
+
+// EventsSelected answers the events with seq greater than since that sel selects, in seq
+// order: exactly the events Events(since) answers that sel selects. With the committed-event
+// cache on, its cost is the events it answers rather than the log's length, which is what a
+// fold inside a write transaction needs: the log is mostly worker records few folds read.
+func (r *Reader) EventsSelected(since int64, sel EventSelection) ([]event.Event, error) {
+	if len(sel.Kinds) == 0 && len(sel.ObjectTypes) == 0 {
+		return nil, nil
+	}
+	if r.events != nil {
+		return r.events.readSelected(r.ctx, r.q, since, r.readValues != nil, &sel)
+	}
+	return selectedEvents(r.ctx, r.q, since, sel)
+}
+
+// EventsOfKind is EventsSelected for the events of the named kinds.
+func (r *Reader) EventsOfKind(since int64, kinds ...string) ([]event.Event, error) {
+	return r.EventsSelected(since, EventSelection{Kinds: kinds})
 }
 
 // SchemaVersion answers the highest migration the store has applied.
@@ -274,11 +340,33 @@ func (s *Store) Events(ctx context.Context, since int64) ([]event.Event, error) 
 // events answers the events with seq greater than since, in seq order. since is
 // exclusive, so a caller that passes the head it last saw reads only what is new.
 func events(ctx context.Context, q queryer, since int64) ([]event.Event, error) {
-	rows, err := q.QueryContext(ctx,
-		`SELECT seq, ts, kind, object_type, object_id, revision, payload
-		   FROM events WHERE seq > ? ORDER BY seq`,
-		since,
-	)
+	return queryEvents(ctx, q, `SELECT seq, ts, kind, object_type, object_id, revision, payload
+		   FROM events WHERE seq > ? ORDER BY seq`, since)
+}
+
+// selectedEvents is events narrowed to what sel selects, in SQL: the kind index answers a
+// kind, so the read does not visit the events it does not answer.
+func selectedEvents(ctx context.Context, q queryer, since int64, sel EventSelection) ([]event.Event, error) {
+	var terms []string
+	args := []any{since}
+	if len(sel.Kinds) > 0 {
+		terms = append(terms, "kind IN ("+strings.TrimSuffix(strings.Repeat("?,", len(sel.Kinds)), ",")+")")
+		for _, kind := range sel.Kinds {
+			args = append(args, kind)
+		}
+	}
+	if len(sel.ObjectTypes) > 0 {
+		terms = append(terms, "object_type IN ("+strings.TrimSuffix(strings.Repeat("?,", len(sel.ObjectTypes)), ",")+")")
+		for _, objectType := range sel.ObjectTypes {
+			args = append(args, objectType)
+		}
+	}
+	return queryEvents(ctx, q, `SELECT seq, ts, kind, object_type, object_id, revision, payload
+		   FROM events WHERE seq > ? AND (`+strings.Join(terms, " OR ")+`) ORDER BY seq`, args...)
+}
+
+func queryEvents(ctx context.Context, q queryer, query string, args ...any) ([]event.Event, error) {
+	rows, err := q.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading the events: %w", err)
 	}

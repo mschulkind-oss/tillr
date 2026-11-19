@@ -30,7 +30,9 @@ type Hold struct {
 // Read also reads historical boundary convictions. An old store needs no new
 // write before a restart can hold the convicted item or show its evidence.
 func Read(r *store.Reader) (map[string]Hold, error) {
-	events, err := r.Events(0)
+	// Only the kinds the fold reads: it runs inside write transactions, where a read of the
+	// whole log holds the store's write lock for the log's length.
+	events, err := r.EventsOfKind(0, HeldKind, "boundary.check", ClearedKind)
 	if err != nil {
 		return nil, err
 	}

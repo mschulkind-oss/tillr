@@ -89,7 +89,7 @@ func readRepeatedEnding(r *store.Reader, d Decision) (*secondFailure, error) {
 	if !repeated {
 		return nil, nil
 	}
-	events, err := r.Events(0)
+	events, err := r.EventsOfKind(0, GateVerdictKind, RefusalKind)
 	if err != nil {
 		return nil, err
 	}
