@@ -9,25 +9,25 @@ tags:
   - compliance
   - documents
   - design
-summary: "A compliance officer is a cheap, read-only agent node that checks work against a written policy: linting for agents. A policy says which changed files it applies to and which text holds its rules; the officer reads that text and the file, and either passes it or returns findings to the author's own session, uncounted. The first policy is design-document style: every design document a designer changes is held, whole, to the design-doc and vantage-docs skills before it lands. The owner ruled its three questions on 2026-11-18."
-next: "The owner reviews the designer's decisions D-DP3 to D-DP12 in the ledger. Nothing is built; the build steps of Section 13 are then filed."
+summary: "A compliance officer is a cheap, read-only agent node that checks work against a written policy: linting for agents. A policy says which changed files it applies to and which text holds its rules; the officer reads that text and the file, and either passes it or returns findings to the author's own session, uncounted. The first policy is design-document style: every design document a designer changes is held, whole, to the design-doc and vantage-docs skills before it lands. The officer is given the final file and the change that produced it. The owner ruled three of its questions on 2026-11-18; one is open, on whether a worker's edit to a design document is checked."
+next: "The owner answers OQ-DP4, whether a worker's edit to a design document is checked. It holds only that one row of the first policy; the build steps of Section 13 wait on nothing else and are not filed. Nothing is built."
 ---
 
 # A compliance officer checks an agent's work against a written policy, and design-document style is the first policy
 
-**Status:** 2026-11-18. A proposal; none of it is built. Written to the owner's request of 2026-11-18 and his rulings of the same evening, quoted in [Section 1](#1-the-request-and-what-happens-today) and the [Decision Ledger](#decision-ledger). Facts about the tree, the skills, the checker and the prices were gathered by a scout on 2026-11-18 with the trunk between `bd145e311` and `59f5bee8b`, and I checked the ones this design rests on; what is an estimate or was not verified is marked where it appears. The `D-DP` rows of the ledger from `D-DP3` on are a designer's decisions and await the owner's review.
+**Status:** 2026-11-18. A proposal; none of it is built. Written to the owner's request of 2026-11-18 and his rulings of the same evening, quoted in [Section 1](#1-the-request-and-what-happens-today) and the [Decision Ledger](#decision-ledger). Facts about the tree, the skills, the checker and the prices were gathered by a scout on 2026-11-18 with the trunk between `bd145e311` and `59f5bee8b`, and I checked the ones this design rests on; what is an estimate or was not verified is marked where it appears. The ledger says which rows are the owner's rulings and which are a designer's decisions.
 
 > **In short.** Programs lint what a pattern can match; nothing lints what has to be read. A compliance officer is a cheap agent that reads one piece of work against one written policy and can only object by quoting both, so it lints for agents the way a linter does for code.
 
 **Why it matters.** On 2026-11-18 the owner opened a document an agent had written and found its first question unreadable. `uvx vantage-check` had passed that document, and passes it still ([Section 1.1](#11-what-the-mechanical-checker-passes)).
 
-**The shape.** A registered compliance policy names the files it applies to and the text that holds its rules. For each such file in a candidate that has passed the gate, one read-only compliance officer reads the file and the text, before the landing. Its outcomes are pass, an objection, and cannot judge.
+**The shape.** A registered compliance policy names the files it applies to and the text that holds its rules. For each such file in a candidate that has passed the gate, one read-only compliance officer reads the final file, the change that produced it, and the text, before the landing. Its outcomes are pass, an objection, and cannot judge.
 
 **Cost.** An estimated half a cent to one cent per document on the cheapest model. The real cost is the author's turn when the officer objects. Under the first policy that turn can be large: a designer who adds a paragraph to an old document must bring the whole document to the skills before the paragraph lands.
 
 **Start at [Section 4](#4-one-rulebook-and-what-keeps-the-officer-from-nitpicking)**, how authors and officer read the same rules and what stops a loop of small complaints. [Section 3](#3-a-compliance-policy-and-when-an-officer-runs) is the general mechanism, and [Section 6](#6-where-it-sits) places it beside early design landing and the landing review.
 
-**Needs your ruling:** None. The three questions were ruled on 2026-11-18 and are rows of the [Decision Ledger](#decision-ledger).
+**Needs your ruling:** [OQ-DP4](#OQ-DP4).
 
 **Reads with:** [the landing review](./tillr-diff-review.md) (the review of an item's code, which this is not; [Section 6.2](#62-beside-the-landing-review) says how the two fit), [early design landing](./tillr-early-design-landing.md) (how a designer's documents reach the trunk), [the graph design](./tillr-graph-is-the-path.md) (node kinds, rules, the identical repeat), [the vocabulary](./tillr-vocabulary.md) (judge, check, refusal, return), [designer sessions](./tillr-designer-sessions.md) (how a Vantage comment reaches a document's designer). No implementation plan is seeded.
 
@@ -46,6 +46,10 @@ He was then told who else changes design documents today, and ruled at about 10 
 And at about 10:20 PM, on what the thing is:
 
 > So I hesitate calling it the style judge and why I want to call it the compliance officer because, yes, right now this is design doc style, but I don't think this will be the last one. This is basically linting, but this is linting for agent against policies, hence compliance officer.
+
+And at about 10:35 PM, on what the officer reads:
+
+> I want the compliance officer to be able to see the final state of the document as well as the diff of the document.
 
 The requirement, then:
 
@@ -83,7 +87,7 @@ Read against the ruling:
 - **The loop's marker removal** ends when the markers do, by his ruling.
 - **Sessions outside the drain** wrote an unknown share of the 442, this document among them. They stop, by his ruling.
 - **Rulings he gives in Vantage** go to the item's designer, by his ruling. What that needs is in [Section 7](#7-a-ruling-given-in-vantage).
-- **The 154 commits that change code and a design document together** were not on the list he ruled on. Some are workers correcting a design's status or ledger as they build it. A worker is not a designer, so the first policy does not apply to those edits ([Section 10](#10-what-this-does-not-cover)).
+- **The 154 commits that change code and a design document together** were not on the list he ruled on. Some are workers correcting a design's status or ledger as they build it. A worker is not a designer, so the first policy as written does not apply to those edits. Whether it should is the owner's, in [OQ-DP4](#OQ-DP4).
 
 ## 2. The words
 
@@ -140,7 +144,7 @@ Under design-document style:
 | A comment item at a document's desk | The item's candidate | Yes |
 | A design answer whose documents ride in the item's own landing, because the worker finished first | The item's candidate | Yes, beside the landing review |
 | A triage or a rewrite, which write an item's block | Either | No. A block is not design prose, and the prose guide has its own check and its own rewrite |
-| A worker's edit to a design document | The item's candidate | No ([Section 10](#10-what-this-does-not-cover)) |
+| A worker's edit to a design document | The item's candidate | No, unless the owner rules otherwise in [OQ-DP4](#OQ-DP4) |
 
 A candidate that changes no covered file gets no officer. A file the author deleted gets none.
 
@@ -151,13 +155,20 @@ Everything is in the brief or beside it as a file, so the officer needs no searc
 | Given | How |
 | :--- | :--- |
 | **The policy text, whole** | Every file the policy names, read at dispatch |
-| **The file, whole** | As it stands at the candidate's head |
+| **The file, whole** | Its final state, as it stands at the candidate's head |
+| **The diff of the file** | The difference in that file between the candidate's base and its head: what the author just changed. For a new file it is the whole file |
 | **What the gate already checked** | The list of checks that passed on the file, so the officer does not repeat them |
 | **Earlier checks of this file in this item** | Each earlier objection and what the author answered, when this is not the first |
 
-It is not given the item, its criteria, the rest of the tree, or the author's transcript. Those are for a reader of logic.
+It is not given the item, its criteria, the rest of the tree, or the author's transcript. The diff is of the one file and nothing else. Those are for a reader of logic.
 
-**The whole file is held to the policy, every time.** The owner ruled this for design documents on 2026-11-18 ([OQ-DP2](#decision-ledger)), and it is the rule for every policy. The officer is not told what the author changed, and an old fault is a finding like a new one. [Section 4.4](#44-what-the-whole-document-rule-costs) says what that costs.
+**The whole file is held to the policy, every time.** The owner ruled this for design documents on 2026-11-18 ([OQ-DP2](#decision-ledger)), and it is the rule for every policy. An old fault is a finding like a new one, and either keeps the file from landing. [Section 4.4](#44-what-the-whole-document-rule-costs) says what that costs.
+
+**The diff is for knowing what just happened, not for narrowing the check.** The owner ruled on 2026-11-18 that the officer sees "the final state of the document as well as the diff". It serves three ends:
+
+- **The officer reads the change with care.** It knows which lines the author just wrote, and can see what a diff alone shows: a ruling recorded without its question being compacted, or history added where a leaning was replaced.
+- **Each finding is marked new or standing.** The loop marks it, by whether the quoted line is one the diff added. The officer's word is not needed for that.
+- **A returned objection says where to start.** Findings in the change come first, then the standing ones, so the author sees what it just broke apart from what it inherited.
 
 **A fresh session each time.** The officer is never the author's session or a fork of it. A second check of the same file starts new and reads the first one's objection and the author's answer as files.
 
@@ -233,7 +244,7 @@ The land attempt follows once every compliance officer of the candidate has pass
 
 ### 5.2 An objection
 
-An objection is one or more findings. It goes back to the session that last wrote the file, with the findings as text, as a gate refusal does: a turn in the same session, under a new run id, uncounted and unlimited ([the return rules](../../tools/tillr-drain/drain/returned.go)). Where the author ended with a landing call, the objection is that call's answer: `refused`, at a stage named for the compliance officer, with the policy's name.
+An objection is one or more findings, those in the change listed first and the standing ones after ([Section 3.3](#33-what-the-officer-is-given)). It goes back to the session that last wrote the file, with the findings as text, as a gate refusal does: a turn in the same session, under a new run id, uncounted and unlimited ([the return rules](../../tools/tillr-drain/drain/returned.go)). Where the author ended with a landing call, the objection is that call's answer: `refused`, at a stage named for the compliance officer, with the policy's name.
 
 - The author changes the file, or keeps it and says why. Either way it commits, and the candidate is built and gated again.
 - The next compliance officer is a fresh session, given the earlier objection and the answer.
@@ -340,7 +351,10 @@ whether the work is right, whether its facts are true, or whether you would
 have decided differently.
 
 1. Read the policy text in full.
-2. Read the file in full. All of it is held to the policy.
+2. Read the file in full, in its final state. All of it is held to the
+   policy, whoever wrote each part and whenever.
+3. Read the diff: what the author just changed. Read those lines with
+   particular care. A fault outside the diff is still a finding.
 
 Object only when you can quote both of these, word for word:
 - a rule from the policy text, with the heading it is under;
@@ -361,13 +375,13 @@ why; and which parts of the file you read. Pass means you have no finding.
 
 ## 9. The record, and how to tell it works
 
-**What is recorded.** Each compliance officer is a node of the item's graph and a run with its own id. Its record holds the policy's name, the file and the candidate it checked, the seat, backend and model, the spend, the content hash of the policy text, the outcome, each finding in full, and for an objection the run it was returned to.
+**What is recorded.** Each compliance officer is a node of the item's graph and a run with its own id. Its record holds the policy's name, the file and the candidate it checked, the seat, backend and model, the spend, the content hash of the policy text, the outcome, each finding in full and marked new or standing, and for an objection the run it was returned to.
 
 **Where it is read.**
 
 - **The item's page** lists each check with the rest of the item's path: when, which policy, which file, the outcome, and the text of each finding.
 - **`tillr drain why`** on a waiting item says which holds: a compliance officer is running; one objected and the author has it; a diagnosis has a repeated objection; or the officer waits on a closed backend.
-- **A daily count,** by policy, of checks by outcome, of objections after which the file changed and after which it did not, and of invalid verdicts.
+- **A daily count,** by policy, of checks by outcome, of findings new and standing, of objections after which the file changed and after which it did not, and of invalid verdicts. The standing count is the backlog the whole-document rule is working through.
 
 **How to tell it works.**
 
@@ -379,7 +393,7 @@ why; and which parts of the file you read. Pass means you have no finding.
 
 - **A second compliance policy.** The mechanism takes one; none is proposed.
 - **Changes not made by an item's designer:** the loop's marker removal, sessions outside the drain, and the owner's own edits. By his ruling of 2026-11-18 the first two end and the third does not happen.
-- **A worker's edit to a design document.** 154 commits since 2026-11-10 changed code and a design document together. The first policy names the design seat only, because his ruling scopes it to designers. If workers keep editing design documents, the extension is one more seat in that policy's entry; it is not proposed here.
+- **A worker's edit to a design document.** 154 commits since 2026-11-10 changed code and a design document together. The first policy names the design seat only until the owner answers [OQ-DP4](#OQ-DP4).
 - **Documents no designer touches.** They are never checked ([Section 4.4](#44-what-the-whole-document-rule-costs)).
 - **Roadmaps.** A roadmap is not a design document. The tillr roadmap is also about 190,000 tokens, which no cheap model reads with the skills beside it.
 - **Item blocks,** which the prose guide governs, with its own check and rewrite.
@@ -422,12 +436,12 @@ There is no spend target ([OQ-GP3](./tillr-graph-is-the-path.md#decision-ledger)
 
 ## 13. Build order
 
-Every step that changes a tillr source file changes its copy under the tillr pack in the same commit. The files named are where the scout found the behavior; the planner confirms each against the tree. These are build steps in prose; none is filed.
+Steps 1 to 4 wait on no ruling. [OQ-DP4](#OQ-DP4) holds only which seats the first policy's entry names. Every step that changes a tillr source file changes its copy under the tillr pack in the same commit. The files named are where the scout found the behavior; the planner confirms each against the tree. These are build steps in prose; none is filed.
 
 1. **Check a designer's documents after their gate run passes.**
-   - *Changes:* the registration of compliance policies and the entry for design-document style, with its two specimens; a `compliance` seat in each backend policy, read-only, on the scout seat's backend; the trigger of [Section 3.2](#32-the-trigger) for candidates written by a design-seat run; the brief of [Section 8](#8-the-brief) with the policy text, the whole file and the gate's passed checks; the verdict file and the loop's check of its quotations.
+   - *Changes:* the registration of compliance policies and the entry for design-document style, with its two specimens; a `compliance` seat in each backend policy, read-only, on the scout seat's backend; the trigger of [Section 3.2](#32-the-trigger) for candidates written by a design-seat run; the brief of [Section 8](#8-the-brief) with the policy text, the whole file, its diff and the gate's passed checks; the verdict file and the loop's check of its quotations.
    - *Files:* [the judge step](../../tools/tillr-drain/drain/judge.go) and its tests; [the loop](../../tools/tillr-drain/drain/loop.go); the policies under `config/tillr/`; [the drain's guide](../../tools/tillr-drain/README.md).
-   - *Done when:* a test candidate holding a question with bare-label options is kept from landing, with a finding that quotes the rule and the line; a document whose only fault is in text the designer did not change is kept from landing too; a clean one lands; a candidate that changes no covered file starts no officer; a finding whose quoted rule is not in the policy text is refused as invalid; a second policy registered in a test, with its own text and specimens, runs with no code change; a second land attempt starts no second check; and one real check has run on the work machine, with its spend recorded in [Section 11](#11-cost).
+   - *Done when:* a test candidate holding a question with bare-label options is kept from landing, with a finding that quotes the rule and the line; a document whose only fault is in text the designer did not change is kept from landing too, with that finding marked standing; a clean one lands; a candidate that changes no covered file starts no officer; a finding whose quoted rule is not in the policy text is refused as invalid; a second policy registered in a test, with its own text and specimens, runs with no code change; a second land attempt starts no second check; and one real check has run on the work machine, with its spend recorded in [Section 11](#11-cost).
 2. **Return an objection to the author's own session.**
    - *Changes:* the retained-session return for the officer's objection; the evidence key; the earlier objection and the author's answer given to the next officer; the diagnosis on an identical repeat.
    - *Files:* [the return rules](../../tools/tillr-drain/drain/returned.go), [the retained session](../../tools/tillr-drain/drain/worker_session.go) and their tests.
@@ -476,7 +490,7 @@ None of these documents is edited by this one, except a one-line pointer in the 
 
 ## Decision Ledger
 
-`D-DP1`, `D-DP2` and the three `OQ-DP` rows are the owner's rulings. Every other row is a designer's decision of 2026-11-18, made from the scout's evidence and the owner's rulings. None of those is the owner's ruling; he may overturn any of them, and all await his review. None is built.
+`D-DP1`, `D-DP2`, `D-DP13` and the three `OQ-DP` rows are the owner's rulings. Every other row is a designer's decision of 2026-11-18: engineering detail settled from the scout's evidence and the owner's rulings. None of those is the owner's ruling, none waits on him, and he may overturn any row at any time. The one decision that is his to make is [OQ-DP4](#OQ-DP4). None is built.
 
 | ID | Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
@@ -485,17 +499,32 @@ None of these documents is edited by this one, except a one-line pointer in the 
 | OQ-DP1 | **Owner ruling: a design document lands only after it passes the check.** Asked whether a failing document lands for him to read before it is fixed, he took the stated leaning as his answer: "A: what you objected to on 2026-11-18 was meeting an unreadable document on the trunk, and only checking before the landing prevents that." The other option, landing first with the check after, is not taken. | 2026-11-18, owner | [Section 6.1](#61-before-the-documents-land) | — |
 | OQ-DP2 | **Owner ruling: the whole document, every time.** Asked whether a designer who touches an old document must fix its old faults too, his whole answer was "B", the option that read: the first designer to touch an old document must bring all of it to the rules before its paragraph lands. The designer's leaning, only what the designer changed, is not taken, and neither is filing old faults as a separate queue item. | 2026-11-18, owner | [Section 4.4](#44-what-the-whole-document-rule-costs) | — |
 | OQ-DP3 | **Owner ruling: it is the compliance officer, and it is general.** "So I hesitate calling it the style judge and why I want to call it the compliance officer because, yes, right now this is design doc style, but I don't think this will be the last one. This is basically linting, but this is linting for agent against policies, hence compliance officer." The designer's leaning, "style judge", is not taken. | 2026-11-18, owner | [Section 3](#3-a-compliance-policy-and-when-an-officer-runs) | — |
-| `D-DP3` | **Designer's decision; the owner may overturn this.** One read-only node for each policy and file, in a fresh session, on one `compliance` seat that each backend policy maps to its cheapest backend. It is a node of the judge kind, not a new kind. **Evidence:** the vocabulary's judge is a read-only agent that evaluates a candidate it did not write; the scout seat here is Luna 6. **Rejected:** a sub-agent of the author; one officer for a whole candidate, which fails on a candidate of many files; a seat for each policy. | 2026-11-18, designer | [Section 3](#3-a-compliance-policy-and-when-an-officer-runs) | — |
-| `D-DP4` | **Designer's decision; the owner may overturn this.** The trigger is a passed gate run on a candidate that carries a file a registered policy applies to, last written by a node on one of that policy's seats. Under the first policy, triage, rewrites and workers' edits are outside it. **Evidence:** the owner's rule against guess triggers; each node records the head it started from and the head it left. **Rejected:** checking when a file's hash or a policy text changes; checking every seat's edits to design documents, which `D-DP2` does not ask for. | 2026-11-18, designer | [Section 3.2](#32-the-trigger) | — |
-| `D-DP5` | **Designer's decision; the owner may overturn this.** A policy's rules are the authors' own files, whole, read at dispatch; for the first policy, the two skill files from where the designer's harness loads them. No checklist is derived. **Evidence:** the skills are delivered by a pack and are not in this repository; `vantage-docs` records that its own restatement drifted. **Rejected:** a checklist in this repository; rules written into the brief. | 2026-11-18, designer | [Section 4.1](#41-the-policy-text-is-the-authors-own-rulebook) | — |
-| `D-DP6` | **Designer's decision; the owner may overturn this.** A finding quotes its rule and its line word for word, and the loop checks both; a finding that fails makes the verdict invalid. The officer proposes no text. **Evidence:** the landing review's findings must point at a place; a cheap model asked for faults finds them. **Rejected:** free-text findings; a score. | 2026-11-18, designer | [Section 4.3](#43-what-keeps-it-from-nitpicking) | — |
-| `D-DP7` | **Designer's decision; the owner may overturn this.** The officer checks only what can be seen in the file. Facts about the tree and how the author worked are not its rules, and a policy that needs them cannot be registered. **Evidence:** it is given the file and the policy text and nothing else. **Rejected:** giving it the tree, which makes it a second landing review. | 2026-11-18, designer | [Section 3.4](#34-which-rules-under-design-document-style) | — |
-| `D-DP8` | **Designer's decision; the owner may overturn this.** An objection returns to the session that last wrote the file, as a gate refusal does. An identical repeat, keyed by policy, heading and place in the file, goes to a diagnosis on the design seat. Whether the diagnosis may let the file land follows the landing review's ruling. **Evidence:** the owner's rulings that a refusal returns to the same session, uncounted, and that only an identical repeat stops a chain. **Rejected:** a count; the finding's wording as the key. | 2026-11-18, designer | [Section 5](#5-the-outcomes) | — |
-| `D-DP9` | **Designer's decision; the owner may overturn this.** The compliance officer and the landing review are separate nodes. A documents-only landing still gets no landing review; a code landing that carries a designer's documents gets both. **Evidence:** the owner's ruling of 2026-11-18 on documents-only landings was about the review of code. **Rejected:** one reader for both questions. | 2026-11-18, designer | [Section 6.2](#62-beside-the-landing-review) | — |
-| `D-DP10` | **Designer's decision; the owner may overturn this.** The first policy applies to a Markdown file under the document paths whose stage is a live proposal. Roadmaps, finished or replaced documents and item blocks are outside it. **Evidence:** the tillr roadmap is about 190,000 tokens; item blocks have the prose guide's own check. **Rejected:** every Markdown file under `docs/`. | 2026-11-18, designer | [Section 2](#2-the-words) | — |
-| `D-DP11` | **Designer's decision; the owner may overturn this.** A compliance policy is a tracked entry of five facts: a name, the files it applies to, the seats whose changes it covers, its policy text, and two specimens. It carries no code, and the brief, the finding, the route and the record are shared. **Evidence:** the owner's "linting for agent against policies", and that the first policy needs nothing else. **Rejected:** a policy as a program or hook; a policy that sets its own model, brief or route. | 2026-11-18, designer | [Section 3.1](#31-what-a-compliance-policy-supplies) | — |
-| `D-DP12` | **Designer's decision; the owner may overturn this.** Every policy's officer reads the whole file and runs after the gate and before the landing. The owner ruled both for design documents; no policy may choose otherwise. **Evidence:** his rulings on [OQ-DP1](#decision-ledger) and [OQ-DP2](#decision-ledger); one rule for all policies needs no setting. **Rejected:** a setting for each policy, before any second policy exists to need it. | 2026-11-18, designer | [Section 3.3](#33-what-the-officer-is-given) | — |
+| `D-DP3` | **Designer's decision.** One read-only node for each policy and file, in a fresh session, on one `compliance` seat that each backend policy maps to its cheapest backend. It is a node of the judge kind, not a new kind. **Evidence:** the vocabulary's judge is a read-only agent that evaluates a candidate it did not write; the scout seat here is Luna 6. **Rejected:** a sub-agent of the author; one officer for a whole candidate, which fails on a candidate of many files; a seat for each policy. | 2026-11-18, designer | [Section 3](#3-a-compliance-policy-and-when-an-officer-runs) | — |
+| `D-DP4` | **Designer's decision.** The trigger is a passed gate run on a candidate that carries a file a registered policy applies to, last written by a node on one of that policy's seats. Under the first policy, triage and rewrites are outside it; whether a worker's edit is outside it is [OQ-DP4](#OQ-DP4). **Evidence:** the owner's rule against guess triggers; each node records the head it started from and the head it left. **Rejected:** checking when a file's hash or a policy text changes. | 2026-11-18, designer | [Section 3.2](#32-the-trigger) | — |
+| `D-DP5` | **Designer's decision.** A policy's rules are the authors' own files, whole, read at dispatch; for the first policy, the two skill files from where the designer's harness loads them. No checklist is derived. **Evidence:** the skills are delivered by a pack and are not in this repository; `vantage-docs` records that its own restatement drifted. **Rejected:** a checklist in this repository; rules written into the brief. | 2026-11-18, designer | [Section 4.1](#41-the-policy-text-is-the-authors-own-rulebook) | — |
+| `D-DP6` | **Designer's decision.** A finding quotes its rule and its line word for word, and the loop checks both; a finding that fails makes the verdict invalid. The officer proposes no text. **Evidence:** the landing review's findings must point at a place; a cheap model asked for faults finds them. **Rejected:** free-text findings; a score. | 2026-11-18, designer | [Section 4.3](#43-what-keeps-it-from-nitpicking) | — |
+| `D-DP7` | **Designer's decision.** The officer checks only what can be seen in the file. Facts about the tree and how the author worked are not its rules, and a policy that needs them cannot be registered. **Evidence:** it is given the file, its diff and the policy text, and nothing else. **Rejected:** giving it the tree, which makes it a second landing review. | 2026-11-18, designer | [Section 3.4](#34-which-rules-under-design-document-style) | — |
+| `D-DP8` | **Designer's decision.** An objection returns to the session that last wrote the file, as a gate refusal does. An identical repeat, keyed by policy, heading and place in the file, goes to a diagnosis on the design seat. Whether the diagnosis may let the file land follows the landing review's ruling. **Evidence:** the owner's rulings that a refusal returns to the same session, uncounted, and that only an identical repeat stops a chain. **Rejected:** a count; the finding's wording as the key. | 2026-11-18, designer | [Section 5](#5-the-outcomes) | — |
+| `D-DP9` | **Designer's decision.** The compliance officer and the landing review are separate nodes. A documents-only landing still gets no landing review; a code landing that carries a designer's documents gets both. **Evidence:** the owner's ruling of 2026-11-18 on documents-only landings was about the review of code. **Rejected:** one reader for both questions. | 2026-11-18, designer | [Section 6.2](#62-beside-the-landing-review) | — |
+| `D-DP10` | **Designer's decision.** The first policy applies to a Markdown file under the document paths whose stage is a live proposal. Roadmaps, finished or replaced documents and item blocks are outside it. **Evidence:** the tillr roadmap is about 190,000 tokens; item blocks have the prose guide's own check. **Rejected:** every Markdown file under `docs/`. | 2026-11-18, designer | [Section 2](#2-the-words) | — |
+| `D-DP11` | **Designer's decision.** A compliance policy is a tracked entry of five facts: a name, the files it applies to, the seats whose changes it covers, its policy text, and two specimens. It carries no code, and the brief, the finding, the route and the record are shared. **Evidence:** the owner's "linting for agent against policies", and that the first policy needs nothing else. **Rejected:** a policy as a program or hook; a policy that sets its own model, brief or route. | 2026-11-18, designer | [Section 3.1](#31-what-a-compliance-policy-supplies) | — |
+| `D-DP12` | **Designer's decision.** Every policy's officer is given the final file and its diff, holds the whole file to the policy, and runs after the gate and before the landing. The owner ruled all three for design documents; no policy may choose otherwise. The loop, not the officer, marks a finding new or standing from the diff, and both kinds keep the file from landing. **Evidence:** his rulings on [OQ-DP1](#decision-ledger) and [OQ-DP2](#decision-ledger) and `D-DP13`; one rule for all policies needs no setting. **Rejected:** a setting for each policy, before any second policy exists to need it. | 2026-11-18, designer | [Section 3.3](#33-what-the-officer-is-given) | — |
+| `D-DP13` | **Owner ruling.** "I want the compliance officer to be able to see the final state of the document as well as the diff of the document." The whole file is still held to the policy ([OQ-DP2](#decision-ledger)); the diff tells the officer and the author what just changed. | 2026-11-18, owner | [Section 3.3](#33-what-the-officer-is-given) | — |
 
 ## Open Questions
 
-None. Generalizing the mechanism to more than one compliance policy raised no choice that is the owner's: what it needed is decided in `D-DP11` and `D-DP12`, which await his review.
+1. 💬 **OQ-DP4: When a worker building an item edits a design document, is that edit checked?**
+
+   A worker finishes a build step and, in the same commit as its code, changes the design document: it marks a decision built, or corrects a sentence the code proved wrong. You said on 2026-11-18 that you believe only designers change design documents. Since 2026-11-10, 154 commits changed code and a design document together; how many were workers inside items was not measured. The compliance officer as designed runs only after a designer's change, so such an edit lands unread.
+
+   - **A — Not checked.** Workers go on editing design documents, and those edits land with no officer. A document you open may have been changed since it last passed.
+   - **B — Checked like a designer's.** The worker's landing waits for the officer. The whole document is held to the skills, so a build worker on the cheaper build model may have to rewrite an old design before its code lands.
+   - **C — Workers may not edit design documents.** A worker's change to one is refused, and it asks a designer instead. Every change is then a designer's and is checked. How "built" gets recorded needs its own small design.
+
+   <!-- vantage: question id=OQ-DP4 leaning="C: it makes what you said you believed true, and keeps one kind of author for every design document. The cost is a designer's turn where a worker edits freely today, and a piece of design this document does not contain. Until that exists, A is what happens." -->
+
+   _Leaning:_ C: it makes what you said you believed true, and keeps one kind of author for every design document. The cost is a designer's turn where a worker edits freely today, and a piece of design this document does not contain. Until that exists, A is what happens.
+
+   **Answer:**
+
+   > _(empty — fill in when decided)_
