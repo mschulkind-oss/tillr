@@ -568,7 +568,7 @@ About 95 further answers by a design agent to blocked build runs sit in roadmap 
 | [OQ-2](../design/failure-diagnosed-not-waited-out.md#open-questions) | [Failure diagnosed, not waited out](../design/failure-diagnosed-not-waited-out.md) | The loop starts a diagnosis on the design seat, the expensive one, and reports its cost |
 | `D-AC3`, `D-AC4` | [Agent context delivery](../design/agent-context-delivery.md) | The briefing has no per-mode scope; the fleet stays on the patched pi |
 | [OQ-SB1](../design/seat-profiles.md#8-open-questions), [OQ-SB2](../design/seat-profiles.md#8-open-questions), [OQ-SB6](../design/seat-profiles.md#8-open-questions) | [Seat profiles](../design/seat-profiles.md) | Limits fixed for each seat; shell access removed from two seats; output without its evidence is refused. Reclassified on 2026-10-20 as decided by the agent (`d432428b8`); the first was never ruled |
-| `D-AL1`, `D-AL9` | [Autonomous landing](../design/autonomous-landing.md) (superseded) | The unattended guarantee; a failing trunk stops the whole loop |
+| `D-AL1`, `D-AL9` | Retired autonomous-landing design (superseded by [landing principles](../design/landing-principles.md)) | The unattended guarantee; a failing trunk stops the whole loop |
 
 ### 5.3. Low
 

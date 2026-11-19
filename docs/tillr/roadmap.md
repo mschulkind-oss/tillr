@@ -1868,9 +1868,9 @@ finding therefore goes into the store, and the face reads it there:
 
 Principle (owner's ruling of 2026-10-23, in [agent work control](../pi/agent-work-control.md#the-owners-direct-lane-owner-ruled-2026-10-23)): a
 direct edit is the owner's hand, it takes no lock, collisions heal at the landing and not at the
-edit, and a dirty tree is a wait and not a failure. The owner also asked, in
-[the autonomous landing design](../design/autonomous-landing.md#5-outside-movement-is-routine), that other agents merging,
-pulling or moving the remote have no large effect on the queue.
+edit, and a dirty tree is a wait and not a failure. The owner also asked, in the retired
+autonomous-landing design (now carried by [the landing principles](../design/landing-principles.md#3-gate-what-will-be-the-tip-once)),
+that other agents merging, pulling or moving the remote have no large effect on the queue.
 
 tillr does not honor that yet. On 2026-11-15 an operator's uncommitted edit in the main checkout
 was read as a worker escaping its lane. The loop stopped, seven runs in flight were killed, and
