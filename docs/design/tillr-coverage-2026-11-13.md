@@ -178,7 +178,7 @@ that ends it.
 | `D-MM7`: the four-run cold-prefix measurement | deleted | Stage 3's move-on condition, and Stage 3 is dropped with the backend; no warm host is wanted at two items a day |
 | `D-MM8`: per-item selection in the policy, refused mechanically | deleted | built at `drain/policy.go:34,88` |
 | `D-MM9`: the boundary snapshot checked in the loop | deleted | `checkBoundary`/`fenceViolation` in `drain/loop.go`; a non-empty diff stops the tick |
-| `D-MM11`: a lane-worktree run commits, a main-checkout run never does | deleted | the candidate is the lane's HEAD: `tools/tillr-drain/drain/steps.go`, `attempt.go` |
+| `D-MM11` (renumbered `D-MM12` on 2026-11-18): a lane-worktree run commits, a main-checkout run never does | deleted | the candidate is the lane's HEAD: `tools/tillr-drain/drain/steps.go`, `attempt.go` |
 | section 1: the boundary canary is owed by the first live run | deleted | the canary rides the first live run of whichever backend answers; with `muse` dormant and `pi` live, the snapshot half is exercised by `pi` and the muse half returns with the switch (`backend-policy.json`'s `about`) |
 | section 8: [`agent-runtime.md`](./agent-runtime.md) owes the process-and-records amendment | item | `item-agent-runtime-backend` |
 | section 8: `SUB-2`'s newly named trigger | deleted | same deferral as its chunking-plan row |

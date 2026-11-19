@@ -20,6 +20,8 @@ depends-on:
 # Design ruling: remove the run wall and judge committed candidates before wall status
 
 > **Carried out** in commit `adc9b1269`: no adapter sets a run wall by default. This document stays as the record of the ruling.
+>
+> **Whose ruling.** "Ruling" here is a design agent's word: `D-RW1` to `D-RW4` are the designer's decisions of 2026-11-15 (the commit that added this document calls it "the designer's ruling"), and the owner may overturn any of them. No words of the owner's are recorded for them.
 
 **Ruling.** Remove the default per-run wall across `tillr`: delete `timeout_seconds` from [`config/tillr/backend-policy.json`](../../config/tillr/backend-policy.json), drop the hardcoded `wall=1800` `timeout(1)` wrapper in `run-pi`, `run-muse`, and `run-agy` unless `--timeout` is explicitly passed, and allow `timeout_seconds: 0` / `timeout_ms: 0` in `tillr-run` and `tillr-drain` as an unbounded run whose lane lease carries `leased_until = NULL` (superseding [`board-utilities.md`](./board-utilities.md) section 5.6 / `D-UT17` and [`tillr-loop-readiness.md`](./tillr-loop-readiness.md) `D-LR4`). When an explicit wall does fire (`StateTimedOut` or exit `124`), fix `settle` in both [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go) and [`docs/design/tillr-drain-successor.md`](../design/tillr-drain-successor.md) (section 2.3) to check `HEAD != base` **before** `AttemptUnjudged` so any committed candidate goes to `Verify` / `judge`, and when `HEAD == base`, auto-resume **once per attempt** (`!record.Resumed`) in `settle` while the lane still holds its worktree, `brief.md`, and `session-id` before resetting the lane. Keep `AttemptUnjudged` outside `AttemptInfrastructure`, add no item state, and bump no schema version.
 
@@ -123,11 +125,13 @@ depends-on:
 
 ## Decision ledger
 
+Every row is a **designer's decision; the owner may overturn it**.
+
 | ID | Ruling | Rejects |
 | :--- | :--- | :--- |
 | `D-RW1` | Remove default `timeout_seconds` from `config/tillr/backend-policy.json` and default `wall=1800` from `run-pi`, `run-muse`, and `run-agy`; allow `timeout_ms == 0` (`leased_until = NULL`), superseding `D-UT17` and `D-LR4` on mandatory positive run walls while keeping `AttemptUnjudged` outside `AttemptInfrastructure`. | Keeping or tuning the 1800s wall (violates [`momentum-principle.md`](./momentum-principle.md); pure false-positive loss in [`run-wall-evidence.md`](./run-wall-evidence.md) section 4–section 5); reclassifying walls as `AttemptInfrastructure` (wastes failover budget on long work). |
 | `D-RW2` | Check `HEAD != base` before `AttemptUnjudged` in `settle` (`loop.go` and [`tillr-drain-successor.md`](./tillr-drain-successor.md) section 2.3), and treat `gate.verdict` (`judged`) as superseding `AttemptUnjudged` in `plan.go`, `retries.go`, and `tillr-view/dispatchable.go`. | Holding committed runs as `run-unjudged` (`04b`, `04c`); leaving `judged && AttemptUnjudged` unsatisfiable in `AuthorizeRetry`. |
-| `D-RW3` | Auto-resume an uncommitted walled run (`HEAD == base`, `AttemptUnjudged`) once per attempt (`!record.Resumed`) in `settle` before `abandon` resets the lane; never auto-resume in `expire`. | Immediate `abandon` + `held` (destroys uncommitted edits like `04d` and leaves non-reconstructible state); unbounded resumes. |
+| `D-RW3` | Auto-resume an uncommitted walled run (`HEAD == base`, `AttemptUnjudged`) once per attempt (`!record.Resumed`) in `settle` before `abandon` resets the lane; never auto-resume in `expire`. **Its "once" is superseded** by the owner's later rulings that a killed run resumes uncounted and that nothing carries an attempt count: an uncommitted walled run is resumed, uncounted. Built in part: a continuation of uncommitted fenced work is now bounded only by the identical-repeat rule, while a wall-cut run with no uncommitted work keeps its one continuation (`resumeAfterWall` in `tools/tillr-drain/drain/loop.go`). | Immediate `abandon` + `held` (destroys uncommitted edits like `04d` and leaves non-reconstructible state); unbounded resumes. |
 | `D-RW4` | Land `D-RW1`–`D-RW3` as a single fenced queue item with `just pack-sync` and doc updates to [`board-utilities.md`](./board-utilities.md) and [`tillr-drain-successor.md`](./tillr-drain-successor.md). | Splitting wall removal from the `settle`/`AuthorizeRetry` ordering fix, or introducing a schema migration / sixth item state. |
 
 ---

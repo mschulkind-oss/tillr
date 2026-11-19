@@ -56,11 +56,14 @@ asks something, so the questions stay in the direction document and this plan li
 - **Product QA:** a product bug-finding pipeline, with the fuzzer Mangle as its prober. Its
   agent wrote [the second-round reply](./tillr-product-qa-requests.md). It is not
   [tillr-autoqa.md](./tillr-autoqa.md), which is tillr's own exploratory-testing design.
-- **Definition** *(a placeholder, coined in the direction document)*: the layer that turns tillr's
-  core into one use. It is a data file plus one hook program. **`git-landing`** is the placeholder
-  name of the definition for landing changes in Git, which is everything tillr does today. The owner
-  has not chosen either word; both names are asked in [the vocabulary](./tillr-vocabulary.md#OQ-VO4). Every item keeps
-  the words in as few places as possible, so a rename is mechanical.
+- **Definition** *(a placeholder, coined in the direction document; the owner's word is **charter**)*:
+  the layer that turns tillr's core into one use. It is a data file plus one hook program.
+  **`git-landing`** is the name of the definition for landing changes in Git, which is everything
+  tillr does today. Both were placeholders when this plan was written; the owner ruled on 2026-11-18
+  that the layer is a charter ([OQ-VO4](./tillr-vocabulary.md#OQ-VO4)) and that the first use is
+  `git-landing` ([OQ-VO5](./tillr-vocabulary.md#OQ-VO5)). This plan and the shipped code still say
+  "definition"; the code is not renamed. Every item keeps the words in as few places as possible, so
+  a rename is mechanical.
 - **Definition file:** the JSON file that states a definition's vocabulary and rules. Coined here.
 - **Hook program:** the one program a definition names, which the core calls for each step it
   cannot decide itself. The six step programs the drain runs today (gate, land, verdict, replay,
@@ -195,8 +198,9 @@ constants across the item utility, the planner and the drain. Before any of it c
 need one place to live. This item adds the definition file, a JSON file that states a use's
 vocabulary and rules, and a package in the core library that reads and checks it. It also states
 today's behavior as the first definition, `git-landing`, embedded in that package. Nothing reads the
-package yet, so nothing changes. The names `definition` and `git-landing` are placeholders the owner
-has not chosen, and this item keeps them in one constant so that a rename is one line.
+package yet, so nothing changes. The names `definition` and `git-landing` were placeholders the owner
+had not chosen when this item was written (he has since named the layer a charter and kept
+`git-landing`, in [OQ-VO4](./tillr-vocabulary.md#OQ-VO4) and [OQ-VO5](./tillr-vocabulary.md#OQ-VO5)), and this item keeps them in one constant so that a rename is one line.
 
 **Product QA can try:** reading the definition package's README, which is the contract a second use
 writes its definition against.

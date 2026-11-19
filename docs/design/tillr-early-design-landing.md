@@ -9,7 +9,7 @@ tags:
   - landing
   - design
 summary: "How a question for the owner, and the design documents it is about, land on the trunk before the item that raised them: a cut of those documents onto the trunk tip, the ordinary gate and lander, and the item's next take-in. The item branch is never rewritten. Whether every design answer lands the same way is the owner's open question."
-next: "The owner ruled OQ-EL1 on 2026-11-18: every design change lands on the trunk right away, by this operation. Apply the Section 8 amendments to the graph design, then file the build. The detail in D-EL3 to D-EL7 still awaits the owner's review, and nothing is built."
+next: "The owner ruled OQ-EL1 on 2026-11-18: every design change lands on the trunk right away, by this operation. The Section 8 amendments are made in the graph design; file the build. The detail in D-EL3 to D-EL7 still awaits the owner's review, and nothing is built."
 depends-on:
   - tillr-graph-is-the-path.md
 ---
@@ -30,7 +30,7 @@ depends-on:
 
 **Ruled by the owner on 2026-11-18:** [OQ-EL1](#OQ-EL1), always. **Needs your ruling:** nothing now. **Blocked:** [OQ-EL3](#OQ-EL3), until giving an item up is designed. **Closed without a ruling:** [OQ-EL2](#OQ-EL2), which the drain as built already settles.
 
-**Reads with:** [the graph design](./tillr-graph-is-the-path.md) (the parent: every node kind, rule and row number used here is its own; the changes this design makes to it are applied there, and [Section 8](#8-amendments-to-the-parent) lists what a ruling of "always" would add), [the landing principles](./landing-principles.md) (a landing change is checked against them).
+**Reads with:** [the graph design](./tillr-graph-is-the-path.md) (the parent: every node kind, rule and row number used here is its own; the changes this design makes to it are applied there, and [Section 8](#8-amendments-to-the-parent) lists what the ruling of "always" added there), [the landing principles](./landing-principles.md) (a landing change is checked against them).
 
 ---
 
@@ -123,7 +123,7 @@ I choose the first. The second buys a tidier commit list on a branch nobody read
 ### 3.4 What the gate checks
 
 - **The same gate, with no documents tier.** The candidate is an ordinary commit on the tip. The gate's document checks are what can fail: links and anchors, and the rules in [the repository guide](../../AGENTS.md#documents-state-the-evidence-never-cite-scratch). One of them matters here: a document that cites a commit found only on the item branch is refused, and returns to its writer.
-- **No judge.** A cut has no criteria. The item's criteria are judged when its deliverable lands.
+- **No judge.** A cut has no criteria. The item's criteria are judged when its deliverable lands. The owner ruled on 2026-11-18 that a documents-only landing gets no review: "doc only landings have no review, no. this is for items that land as commits from a design doc" (`D-DR2` in [the diff-review design](./tillr-diff-review.md#decision-ledger)).
 - **No take-in before it.** The cut is already on the tip. If the trunk moves before the landing, the lander's three-way merge places it, as it does for every candidate.
 - **tillr's own check.** Every changed path of the candidate is a path the cut named, and every such path matches the document paths. A failure is a tooling defect, since the cut builds nothing else.
 
@@ -210,7 +210,7 @@ tillr has no act of giving an item up. An item can be closed, and closing change
 
 [The graph design](./tillr-graph-is-the-path.md) carries the amendments this design makes whichever way [OQ-EL1](#OQ-EL1) is ruled: its rule R11, the cut among its node kinds, the merging take-in, the fact for an answered question, rule rows 10, 13 and 22 to 26, migration step 14, and decision `D-GP9`.
 
-The amendments below are owed now that [OQ-EL1](#OQ-EL1) is ruled "always" (2026-11-18), and are not yet made. Each shows the parent's current text, then its replacement. The replacements are written to be pasted into the parent, so their links are the parent's own.
+The amendments below were owed once [OQ-EL1](#OQ-EL1) was ruled "always" (2026-11-18), and they are made: the parent carries each replacement as written below. Each shows the parent's earlier text, then its replacement, kept as the record of what changed.
 
 
 **Rule R11.** Replace its last sentence.
@@ -252,7 +252,7 @@ A document that a design answer changed, or that carries a question for the owne
 
 ## 9. Migration and drafted items
 
-This is the parent's step 14, and, if the owner rules "always", a new step 17 after it. Steps 1 to 8 neither wait on it nor change for it: step 8 is built as written, with design answers on the branch only. Until step 14 an item that names the owner is handled as it is today.
+This is the parent's step 14, and, since the owner ruled "always", its step 17 after it. Steps 1 to 8 neither wait on it nor change for it: step 8 is built as written, with design answers on the branch only. Until step 14 an item that names the owner is handled as it is today.
 
 **State that already exists.** Design answers landed by today's separate design landing are on the trunk and need nothing. An item waiting on the owner under today's holds is imported by the parent's rule; its question is already on the trunk, so its cut ends `empty`.
 
@@ -278,7 +278,7 @@ When a designer on an item's branch writes a question only the owner can answer,
 Once design answers are committed on the item's branch, a design answer reaches the trunk only when its item lands, so other items and the owner read an older design until then. This item lands a design answer's documents as soon as the designer ends, beside the worker's resume, which does not wait.
 
 - **Paths:** `tools/tillr-drain/`, `config/tillr/`, `yolo-packs/tillr/`, `docs/`
-- **Waits on:** Land a question for the owner, and its documents, ahead of the item. The owner's ruling that every design answer lands early.
+- **Waits on:** Land a question for the owner, and its documents, ahead of the item. The owner's ruling that every design answer lands early, made on 2026-11-18 ([OQ-EL1](#OQ-EL1)).
 - **c1:** A design answer that ends `answered` having changed a document is followed by a cut of those documents. One that changed none is followed by none. A test asserts both.
 - **c2:** The objector's resume is claimed without waiting for the cut, its gate run or its landing. A test holds the cut at the gate and asserts the resume runs.
 - **c3:** A second cut of one item waits for the first one's landing. A cut in fog is removed when a node of the item ends `submitted`. A test asserts both.
@@ -305,7 +305,7 @@ Once design answers are committed on the item's branch, a design answer reaches 
 
 | ID | Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
-| OQ-EL1 | **Owner ruling: always.** Every design change made while an item is being built is landed on the trunk right away, by the operation this document designs. The owner, having had the operation described to him (a cut of the changed documents onto the trunk tip, the ordinary gate, a refusal returned to the designer's own session, the ordinary landing, and the branch taking the trunk in afterwards): "let's go with always and this design." On merging instead of rebasing: "I don't really care rebase versus merge. It makes no difference to me." His reason for always: "I think not landing them immediately creates too many issues." The other option, landing early only a change that carries a question, is not taken. The amendments [Section 8](#8-amendments-to-the-parent) lists for "always" are now owed to the graph design. | 2026-11-18 | [Section 6](#6-always-or-only-with-a-question) | — |
+| OQ-EL1 | **Owner ruling: always.** Every design change made while an item is being built is landed on the trunk right away, by the operation this document designs. The owner, having had the operation described to him (a cut of the changed documents onto the trunk tip, the ordinary gate, a refusal returned to the designer's own session, the ordinary landing, and the branch taking the trunk in afterwards): "let's go with always and this design." On merging instead of rebasing: "I don't really care rebase versus merge. It makes no difference to me." His reason for always: "I think not landing them immediately creates too many issues." The other option, landing early only a change that carries a question, is not taken. The amendments [Section 8](#8-amendments-to-the-parent) lists for "always" are made in the graph design. | 2026-11-18 | [Section 6](#6-always-or-only-with-a-question) | — |
 | `D-EL1` | An early landing is a cut on the trunk tip, the ordinary gate run and land attempt, and the item's next take-in. The item branch is never rewritten. **Rejected:** a literal rebase, which may run only when the item is idle and leaves done nodes naming commits the branch no longer holds. | 2026-11-17 | [Section 3](#3-the-operation) | — |
 | `D-EL2` | The take-in merges. **Rejected:** leaving merge or rebase to the implementer, which early landings make visible in the record. | 2026-11-17 | [Section 3.3](#33-why-nothing-is-rebased) | — |
 | `D-EL3` | A cut holds whole documents by path: those the triggering node changed, and those its ending names. Only document paths qualify. **Rejected:** replaying commits, and landing only the designer's lines. | 2026-11-17 | [Section 4](#4-what-lands-early) | — |

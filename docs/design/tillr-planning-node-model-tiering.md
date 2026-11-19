@@ -293,6 +293,8 @@ The verify node runs after the pieces and before the gate. It reads the criteria
 - **The same finding twice** raises a conflict for the design seat. The finding is identified by the set of criteria not done, so a planner that keeps missing the same thing cannot loop.
 - **The verifier is a model, not a command.** Whether a named piece really satisfies a criterion is its judgment; the gate still runs after it.
 
+[The diff-review design](./tillr-diff-review.md) proposes that this node become the one review every code landing gets, run after the gate (its designer's decision `D-DR12`, which awaits the owner's review; not built).
+
 ### 5.4 When the planner cannot plan
 
 A planner that cannot cut a piece without a design decision proposes nothing and ends its report with an obstacle naming the owner and its one question. The design seat receives it as a conflict, answers from the documents, or passes the question to the owner in a document.

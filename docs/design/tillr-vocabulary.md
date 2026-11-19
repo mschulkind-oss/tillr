@@ -214,7 +214,7 @@ flowchart TD
     P -. reverted .-> W
 ```
 
-**Landed and proven are different, because the landing strategy is after-merge.** The owner ruled on 2026-11-18 that the item is *finished* at the second, [OQ-VO6](#OQ-VO6); the table and the stages above are written to that question's leaning, finished when proven.
+**Landed and proven are different, because the landing strategy is after-merge.** The owner ruled on 2026-11-18 that the item is *finished* at the second, [OQ-VO6](#OQ-VO6); the table and the stages above are written to that ruling, finished when proven.
 
 | | Landed | Proven |
 | :--- | :--- | :--- |
@@ -224,7 +224,12 @@ flowchart TD
 | The item | Not ended. Its worktree is idle | Ended **done**. Its worktree and scratch are collected |
 | Where it shows | "Draining" | Finished |
 
-Today `landed` is the last state the store has. Raw writes and `reopen` refuse to move a landed item, the landing definition lists one explicit move out of it (`landed` to `in-queue`, which a revert uses), and there is no state for proven: the difference lives only in the green pointer. That is the largest gap between these words and the store ([Section 6](#6-renames)).
+Today `landed` is the last state the store has. Raw writes and `reopen` refuse to move a landed item, the `git-landing` charter (in shipped code, the landing definition) lists one explicit move out of it (`landed` to `in-queue`, which a revert uses), and there is no state for proven: the difference lives only in the green pointer. That is the largest gap between these words and the store ([Section 6](#6-renames)).
+
+**What must be built for the ruling, in this order.** Neither step is built.
+
+1. **A derived "proven" mark in the view.** The view shows an item as finished once the green pointer contains its landing and no revert has removed it, and until then shows it under "draining" as landed and awaiting its proof. Nothing is stored; the mark is read from the green pointer and the item's landing, so it cannot disagree with them. Work that depends on the item still starts when it lands.
+2. **A stored state later.** A "proven" item state, which is the `git-landing` charter's to add, with the move out of `landed` that a revert uses kept. A revert never takes a finished item back.
 
 ---
 
@@ -385,7 +390,7 @@ Which of the two landings ends the suspension is that design's question, not thi
 | `lane-<n>`, `express-<n>`, `desk-<doc>`, `lanes` table, `.tillr/lanes/`, `--lanes`, `lanes leased: M/K`, `drain.lane-*` | Worktree, scratch, running-agent limit | Flags, store, paths, events, view | **Rename the flag and the view label** when the worktree lifecycle is built; alias stored rows and old events |
 | `--lane-root`, `TILLR_LANE_ID`, `tillr run lanes` | Worktree, scratch | The surface [promised to Product QA](./tillr-separable-parts.md#21-the-stable-surface) | **Alias, and say so in that contract.** A consumer was told to rely on them |
 | `<lane>/durable/<run_id>` | **Scratch** | Paths, the worker's brief | **Rename with the lifecycle.** It is the directory that fills the disk |
-| Item state `landed` as final | **Landed** (provisional), then **proven** | The landing definition, view | **To change, as [OQ-VO6](#OQ-VO6) was ruled on 2026-11-18:** a derived "proven" shown in the view first; a stored state is the landing definition's to add |
+| Item state `landed` as final | **Landed** (provisional), then **proven** | The `git-landing` charter (in code, the landing definition), view | **To change, as [OQ-VO6](#OQ-VO6) was ruled on 2026-11-18:** a derived "proven" shown in the view first; a stored state is the charter's to add later ([Section 4](#4-the-stages-of-a-change)) |
 | `fixer-main-…`, "trunk fixer" | **Mechanic** | Ids, code, events `drain.fixer-*` | Alias the id; say mechanic in the view and in documents |
 | `item.Conflict`, `conflict-<run id>`, reasons `conflict-design`, `conflict-owner` | **Objection** | Store, ids, hold reasons | Alias. They disappear when waits replace holds |
 | `squash-conflict`, `conflict-fix`, `-cfix` | **Conflict** | Lander result, run-id suffix | Keep. This is the surviving meaning |
