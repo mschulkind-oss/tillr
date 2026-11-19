@@ -531,6 +531,15 @@ Never change the worker's candidate.
 		brief += "\n## Evaluator task\n\n" + receipt.EvaluatorTask + "\n"
 	}
 	brief += fmt.Sprintf("\nEvaluator: run=%s; backend=%s; route=%s\n", receipt.Request.RunID, receipt.Request.Backend, receipt.Request.Route())
+	// A filed request's criteria judge the work against its words, so the judge reads them
+	// too, in the same byte-counted suffix the worker's brief ends with.
+	words, err := requestWordsFor(ctx, l.cfg.Store, c.ItemID)
+	if err != nil {
+		return err
+	}
+	if words != nil {
+		brief += requestWordsSuffix(words)
+	}
 	if err := os.WriteFile(filepath.Join(dir, BriefFile), []byte(brief), 0644); err != nil {
 		return err
 	}

@@ -454,6 +454,17 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 			}
 		}
 	}
+	requestWords, err := requestWordsFor(ctx, s.Store, spec.ItemID)
+	if err != nil {
+		return err
+	}
+	if requestWords != nil && spec.Conflict == nil && spec.BlockConflict == nil {
+		for i := range values {
+			if values[i].placeholder == "TASK" {
+				values[i].text = requestTask(recorded)
+			}
+		}
+	}
 	if item.ProseRewriteOriginal(spec.ItemID) != "" {
 		task, err := s.proseRewriteTask(ctx, spec.ItemID)
 		if err != nil {
@@ -553,6 +564,10 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		// excludes exactly these bytes through EOF from template checks, never
 		// any of the nine required sections or the node's instructions.
 		brief += fmt.Sprintf("\n## Saved idea words (verbatim; %d bytes)\n%s", len(ideaWords), ideaWords)
+	}
+	if requestWords != nil {
+		// The same byte-counted suffix as an idea's words, last, for the same reason.
+		brief += requestWordsSuffix(requestWords)
 	}
 	// The session id is resolved before the lane is written: it is the handle a killed run
 	// is resumed from, and a lane with no session id is a run whose transcript nothing can

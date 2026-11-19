@@ -190,11 +190,72 @@ as `workflow-args-without-workflow`. Show answers the arguments. The drain binds
 when it loads the item's workflow, and refuses a missing, unknown, mistyped or oversized
 argument there, as it does for a containing stage's `args`.
 
-A **store-declared item** is an item whose record carries `workflow_args`. The term is
-coined here. No document block has an attribute for workflow arguments, so the record
-is the item's only declaration. Sync therefore never counts a store-declared item in
-`unshared_open`, and the drain never sends it to document triage. The `doc-triage` face
-files items of this kind.
+A **store-declared item** is an item whose record is its only declaration. The term is
+coined here. It is either an item whose record carries `workflow_args`, for which no
+document block has an attribute, or a [filed request](#filing-a-request), whose words
+only the store holds. Sync therefore never counts a store-declared item in
+`unshared_open`, and the drain never sends it to document triage. The `doc-triage` and
+`request` faces file items of this kind.
+
+## Filing a request
+
+`request` files one piece of work straight into the queue. The request's words, read
+from standard input, are its whole statement. The item runs an existing workflow inside
+a fence you name, lands through the normal gate, and never has a document block. The
+face's name, the `item-request-` id prefix and the four fixed criteria below were chosen
+by the implementer on 2026-11-18, and the owner may rename them. "Request" is the
+[vocabulary's word](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#51-the-work-and-its-statement)
+for an item that has no block.
+
+```sh
+printf '%s\n' 'Add two rows to yolo-packs/copilot-models/pack.toml: ...' |
+  tillr-item request --store .tillr/state.db --root . \
+    --title "List two more Copilot models" --workflow single-worker@v1 \
+    --path yolo-packs/copilot-models/pack.toml
+```
+
+The flags:
+
+- `--title` (required) is the item's one-line title.
+- `--path` (required, repeatable) is one repo-relative prefix of the fence. A directory
+  ends in `/`. Wildcards, absolute paths and paths that leave the repository are refused.
+- `--seat` is the item's seat, `build` by default.
+- `--workflow` names the workflow, a file under `config/tillr/workflows/` or the built-in
+  `single-worker@v1`, which is one run on the item's seat. By default the `design` seat
+  runs `scouted-design@v1` and the `build` seat runs `planned-build@v1`; other seats must
+  name one. A workflow that declares top-level `args` is refused as `workflow-needs-args`,
+  because a request supplies none (`doc-triage@v1` has its own face).
+- `--criterion` (repeatable, at most four) adds a criterion of your own after the fixed four.
+- `--to`, `--before` or `--after` places the item; it goes last by default.
+
+The face reads the workflow file before the store's write transaction opens, so the
+transaction does no I/O but the store's own. It writes the item and a `request_words`
+row in that one transaction: the words byte for byte, their SHA-256, and a hash of the
+title, seat, workflow, fence and criteria. Nothing tracked is written.
+
+The id is `item-request-` plus ten digits of the words' hash, lengthened on a collision.
+Filing the same words with the same choices again answers the first item's place
+without writing anything. The same words with any other choice are refused as
+`request-differs`, naming the existing item. The four fixed criteria are:
+
+1. The change does what the words ask, within the fence, and nothing else.
+2. The change is verified the way this repository's rules require: a test for new or
+   changed behavior, `uvx vantage-check` for each changed Markdown document, and every
+   command and its result in the report.
+3. No `<!-- tillr: item … -->` comment is added, edited or relied on.
+4. Nothing only the owner can decide is guessed. Such a decision is reported as a
+   question for the owner.
+
+The refusals are `words-empty`, `words-not-text`, `words-too-large`, `title-required`,
+`title-braces`, `fence-required`, `fence-wildcard`, `workflow-reference`,
+`workflow-missing`, `workflow-needs-args`, `workflow-required`, `criterion-empty`,
+`criterion-braces`, `too-many-criteria`, `request-differs`, `unknown-item` and
+`not-in-order`. A `{{` in the title or a criterion is refused because the brief template
+reads it as a placeholder; the words may hold anything. Every refusal comes before the
+first write. The answer is an `item.request` record carrying `item_id`, `place`,
+`count`, `seat`, `workflow`, `allowed_paths` and `words_size`. An identical refile
+answers `item_id`, `place`, `count`, `event_seq` and `event_head_seq`. The
+[drain README](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md#filed-requests) says how the drain runs one.
 
 ## State invariants
 
