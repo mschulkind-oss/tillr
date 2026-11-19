@@ -1793,8 +1793,8 @@ lands in one of three outcomes:
 | :--- | :--- | :--- |
 | Remote-tracking refs, tags, `refs/stash`, notes, and branches outside `refs/heads/tillr/`, `refs/heads/patch/`, and `refs/tillr/` | Ignored | Ordinary Git users move them all day. |
 | Trunk commits or rewritten trunk history | Ignored | Trunk ancestry is a durable landing hold, not run guilt. |
-| Target's own checked-out branch, assigned patch refs, registered sibling branches, `refs/tillr/runs/` pins, saved edits under `refs/tillr/preserved/`, the lander's `refs/tillr/landed/` markers, the lander's recovery copy of the owner's content under `refs/tillr/owner-recovery/`, the heavy runner's proof ref `refs/tillr/green`, and the two trunk-history refs (`refs/tillr/trunk-history/observed` and `refs/tillr/trunk-history/lost`) | Ignored | These are deliveries or concurrent loop work. |
-| `refs/heads/patch/<fork>` moved to a commit that a `refs/tillr/landed/` marker written during the bracket names | Ignored | That is a sibling's fork-series landing: the lander marks the built fork head before it moves the patch branch. |
+| Target's own checked-out branch, registered sibling branches, `refs/tillr/runs/` pins, saved edits under `refs/tillr/preserved/`, the lander's `refs/tillr/landed/` markers, the lander's recovery copy of the owner's content under `refs/tillr/owner-recovery/`, the heavy runner's proof ref `refs/tillr/green`, and the two trunk-history refs (`refs/tillr/trunk-history/observed` and `refs/tillr/trunk-history/lost`) | Ignored | These are deliveries or concurrent loop work. |
+| `refs/heads/patch/<fork>` moved to a commit that a `refs/tillr/landed/` marker written during the bracket names | Ignored | That is a fork-series landing: the lander marks the built fork head before it moves the patch branch. |
 | The loop's own scratch worktrees under the lane root: `<lane root>/.rolling/worktree` and `<lane root>/.replay/<sha>` while detached, and `<lane root>/desk-<doc>/worktree` on that desk's own lane branch `tillr/<scope>/desk-<doc>` (which is excused too) | Ignored | The loop creates and removes them itself, for the rolling tier, the trunk-already-red replay and the review-comment desk lanes. |
 | A registration that was already `prunable` (its directory gone) when the bracket opened, pruned during it | Ignored | `git worktree prune` removes it; the directory was gone before the run began. |
 | Main-checkout uncommitted content, and hand commits on the trunk | Ignored | Content belongs to the owner, regardless of when it appeared. |
@@ -1809,8 +1809,8 @@ lands in one of three outcomes:
 Unexpected patch branch observations also hold publication, not the observing run.
 The boundary event stores every such change in `patch_moves`, with `ref`, `old`, and
 `new` commits; an empty endpoint means the ref appeared or was deleted. This list is
-not capped with the diagnostic observations. Assigned deliveries and moves to a
-landing marked during the bracket remain ignored.
+not capped with the diagnostic observations. Moves to a landing marked during the
+bracket remain ignored.
 
 `tillr view waiting` shows a `needs you` publication row naming the fork, observing
 run, commits, and observation event sequence. After reviewing the change, the owner

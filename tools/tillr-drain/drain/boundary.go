@@ -38,11 +38,10 @@ type BoundarySpec struct {
 	Targets []string
 	Lanes   []string
 	Store   string
-	// PatchRefs are refs this bracket's runs may move besides the branch their own
-	// worktree has checked out: a fork-series lane's `refs/heads/patch/<fork>`. They are
-	// named by the caller because a patch ref belongs to the item's fence, not to the
-	// worktree: the run edits a checkout under `.forks/lanes/<lane>/<fork>` and exports
-	// its commit to the patch branch, which is a delivery and not an escape.
+	// PatchRefs are the patch refs named by a fork-series lane's fence
+	// (`refs/heads/patch/<fork>`). Staging still names them on the bracket so both
+	// snapshots record the same span, but a move of an assigned patch ref is not excused
+	// unless a `refs/tillr/landed/` marker written during the bracket names the new commit.
 	PatchRefs []string
 	// SiblingDirs are the lane directories of the lanes this bracket's runs do not own.
 	// A worktree a sibling's run registers or removes inside its own lane directory is
@@ -273,8 +272,9 @@ func TakeBoundary(ctx context.Context, spec BoundarySpec) (*Boundary, error) {
 // targets that the bracket's runs changed. An empty answer is a clean boundary.
 //
 // A target worktree contributes no path deltas and no HEAD or branch delta.
-// Its checked-out branch and explicitly assigned patch refs are deliveries, not
-// escapes. Ordinary refs outside tillr's namespaces are ignored: a snapshot pair
+// Its checked-out branch is a delivery, not an escape; a patch branch move is excused
+// only when a `refs/tillr/landed/` marker written during the bracket names the new commit.
+// Ordinary refs outside tillr's namespaces are ignored: a snapshot pair
 // cannot attribute another Git user's fetch, tag, branch or trunk commit to a run.
 // Unassigned refs inside tillr's namespaces remain convictions. The loop observes
 // trunk ancestry separately and holds landings, never runs, on a rewrite.
@@ -409,11 +409,6 @@ func runRefExcused(ref string, before *Boundary) bool {
 			return true
 		}
 	}
-	for _, patch := range before.PatchRefs {
-		if ref == patch {
-			return true
-		}
-	}
 	return false
 }
 
@@ -460,10 +455,10 @@ func landedDuring(before, after *Boundary) map[string]bool {
 	return landed
 }
 
-// landedPatchMove answers whether a patch branch's move is a sibling's fork-series landing:
-// refs/heads/patch/<fork> now points at a commit the lander marked during this bracket. A
-// patch branch moved to anything else is not excused here — a run's own patch branch is
-// excused by PatchRefs, and any other move is an escape.
+// landedPatchMove answers whether a patch branch's move is a fork-series landing:
+// refs/heads/patch/<fork> now points at a commit the lander marked during this bracket.
+// Any other move of a patch branch—including an assigned patch ref moved by a worker
+// export—is not excused here.
 func landedPatchMove(ref string, after *Boundary, landed map[string]bool) bool {
 	if !strings.HasPrefix(ref, "refs/heads/patch/") {
 		return false
@@ -649,13 +644,15 @@ func mainWorktreePath(b *Boundary) string {
 }
 
 // compareRefs answers every ref that moved, appeared or went away, except the refs the
-// targets' own checkouts name on both sides (excusedRefs).
+// targets' own checkouts name on both sides (excusedRefs), lander landed markers
+// (`refs/tillr/landed/`), and patch branches moved to a commit a `refs/tillr/landed/`
+// marker written during the bracket names.
 func compareRefs(before, after *Boundary) []Violation {
 	excused := excusedRefs(before, after)
-	for _, ref := range before.PatchRefs {
-		excused[ref] = true
-	}
-	return refViolations(before, after, func(name string) bool { return !tillrRef(name) || trunkHistoryRef(name) || excused[name] })
+	landed := landedDuring(before, after)
+	return refViolations(before, after, func(name string) bool {
+		return !tillrRef(name) || trunkHistoryRef(name) || excused[name] || strings.HasPrefix(name, "refs/tillr/landed/") || landedPatchMove(name, after, landed)
+	})
 }
 
 // refViolations answers every ref that moved, appeared or went away, except the ones the
