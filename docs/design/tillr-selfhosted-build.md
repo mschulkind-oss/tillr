@@ -2,20 +2,20 @@
 title: "Self-Hosted Tillr Building, Watchable in the Observatory"
 status: in-review
 stage: DESIGN
-updated: 2026-11-18
+updated: 2026-11-19
 tags:
   - tillr
   - self-hosting
   - observatory
   - distribution
   - design
-summary: "How tillr runs the source its own trunk holds, with no relaunch between a landing and its use. The restart, the front-end rebuild and the question hold are built; the source launcher is not; one question is open, about the copy of tillr's source that the pack ships."
+summary: "How tillr runs the source its own trunk holds, with no relaunch between a landing and its use. The restart, the front-end rebuild, the question hold and planner sibling resolution are built; the main-tree source launcher and full sibling resolution are not; one question is open, about the copy of tillr's source that the pack ships."
 next: "Rule OQ-SH2: whether the tillr pack's copy of the source follows every landing or is refreshed when published. The source launcher of Section 4 waits on nothing."
 ---
 
 # Self-Hosted Tillr Building, Watchable in the Observatory
 
-**Status:** 2026-11-18. Partly built ([§2](#2-what-is-built-and-what-is-left)). The loop in this repository runs binaries built from `tools/`, restarts on request and rebuilds the front end, all through [the restart design](./tillr-restart.md). The source launcher of [§4](#4-what-is-left-to-build-the-source-launcher) is not built: a plain `tillr` on this jail's PATH still builds from the pack's copy. Two ledger rows ([OQ-SH1](#OQ-SH1), [OQ-SH3](#OQ-SH3)) are designer's decisions the owner has not ruled on.
+**Status:** 2026-11-19. Partly built ([§2](#2-what-is-built-and-what-is-left)). The loop in this repository runs binaries built from `tools/`, restarts on request and rebuilds the front end, all through [the restart design](./tillr-restart.md). `tools/tillr-view` resolves its `tillr-drain` sibling beside itself or by same-digest pack sibling before `PATH` (`tools/tillr-view/siblings.go`). The main-tree source launcher of [§4](#4-what-is-left-to-build-the-source-launcher) and full `D-SH1` sibling resolution are not built: the pack launchers in `yolo-packs/tillr/programs/` build from the pack's copy (`~/.local/share/tillr`) rather than the main checkout's `tools/`, and `tools/tillr-cli/main.go` still dispatches via `exec.LookPath`. Two ledger rows ([OQ-SH1](#OQ-SH1), [OQ-SH3](#OQ-SH3)) are designer's decisions the owner has not ruled on.
 
 > **In short.** The loop should run the code its own trunk holds, with nothing to relaunch between a landing and its use. What is left of that is one rule for the launchers: every tillr program is built from the main checkout's source and finds its sibling programs beside itself, never through `PATH`.
 
@@ -42,11 +42,11 @@ Self-hosted building holds when two behaviors can be checked:
 
 ## 2. What Is Built and What Is Left
 
-Read from the tree on 2026-11-18.
+Read from the tree on 2026-11-19.
 
 | Part | State |
 | :--- | :--- |
-| **The source launcher and sibling resolution** ([§4](#4-what-is-left-to-build-the-source-launcher)) | Not built. The launchers in `yolo-packs/tillr/programs/` build from the pack's copy only. |
+| **The main-tree source launcher and sibling resolution** ([§4](#4-what-is-left-to-build-the-source-launcher)) | Partly built. Sibling resolution is built for the observatory server's planner (`tools/tillr-view/siblings.go`, covered by `TestPlannerResolutionPrefersTheSiblingOverPATH` in `tools/tillr-view/planner_internal_test.go`), which resolves `tillr-drain` beside itself or by same-digest pack sibling before falling back to `PATH`. Full `D-SH1` sibling resolution is not built: `tools/tillr-cli/main.go` still dispatches with `exec.LookPath` and does not refuse a partial sibling set. The main-tree source launcher is not built: the launchers in `yolo-packs/tillr/programs/` build from the installed pack copy (`~/.local/share/tillr`) rather than selecting the main checkout's `tools/`, and `.justfile` `tillr-build` builds explicitly from `refs/tillr/green` into a durable scratch `bin` directory that must be prepended to `PATH`. |
 | **Restart on request** | Built, by [the restart design](./tillr-restart.md): neither the loop nor the observatory server watches for new code; each restarts when asked, and this repository asks after a landing that touched tillr. |
 | **Front-end rebuild** | Built: the roll command of the restart design rebuilds the front end before the Go build. |
 | **Holding an item on an open question** | Built: the planner reads questions from Vantage's own index and holds an item whose design has one open, with the reason `question-open`. |
@@ -82,7 +82,7 @@ One step. It makes these true: the launcher slot is classified, including the re
 
 Read against the tree on 2026-11-18. This is the background to [OQ-SH2](#OQ-SH2).
 
-**What it is.** `just pack-sync`, a recipe in [`.justfile`](../../.justfile), copies the Go source of the twelve tillr modules under `tools/` into `yolo-packs/tillr/files/local/share/tillr/<module>/`. [`tests/pack-sync.test.py`](../../tests/pack-sync.test.py) fails when a copy differs from its source, and the gate runs that test as its fast `pack-sync` check ([`tools/gate/checks/pack-sync.json`](../../tools/gate/checks/pack-sync.json)).
+**What it is.** `just pack-sync`, a recipe in [`.justfile`](../../.justfile), copies the eleven tillr modules under `tools/` (nine Go modules plus source-only `tillr-trace` and `tillr-roll`) into `yolo-packs/tillr/files/local/share/tillr/<module>/`. [`tests/pack-sync.test.py`](../../tests/pack-sync.test.py) fails when a copy differs from its source, and the gate runs that test as its fast `pack-sync` check ([`tools/gate/checks/pack-sync.json`](../../tools/gate/checks/pack-sync.json)).
 
 **Why it exists.** A pack ships source and never a compiled program ([its README](../../yolo-packs/tillr/README.md)), and each launcher builds from the copy once per source hash. A pack reads real files from the repository, so the copy is committed. It is what puts `tillr` on `PATH` in a workspace that has no `tools/`, and, until the source launcher is built, in this jail too.
 
@@ -120,7 +120,7 @@ Read against the tree on 2026-11-18. This is the background to [OQ-SH2](#OQ-SH2)
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
-| `D-SH1` | `tillr` and `tillr-drain` resolve sibling `tillr-*` programs in their own directory first and refuse a partial set. Reason: on 2026-11-13 a source-built `tillr` silently ran the launched `tillr-item` through `PATH`. | 2026-11-13, designer | [§3](#3-mechanism-and-one-writer-rules) | — |
+| `D-SH1` | `tillr` and `tillr-drain` resolve sibling `tillr-*` programs in their own directory first and refuse a partial set. Reason: on 2026-11-13 a source-built `tillr` silently ran the launched `tillr-item` through `PATH`. | 2026-11-13, designer | [§3](#3-mechanism-and-one-writer-rules) | Partly: `tools/tillr-view/siblings.go` resolves `tillr-drain` beside itself or by same-digest pack sibling before `PATH`; `tools/tillr-cli/main.go` still uses `exec.LookPath` |
 | `D-SH2` | The launcher takes its source from `TILLR_SOURCE_ROOT`, else the main worktree's `tools/`, else the installed copy. Reason: it runs the trunk's code with no relaunch and keeps a linked worktree from running its own ungated edits. | 2026-11-13, designer | [§3](#3-mechanism-and-one-writer-rules) | — |
 | `D-SH3` | A failed build never falls back to an older one. The other half of this row, pinning one set of binaries for each pass of the loop, is replaced by the restart design's owner rulings of 2026-11-15: the loop runs one build until it is asked to restart, and checks the new binary before giving up its place. | 2026-11-13, designer | [§3](#3-mechanism-and-one-writer-rules) | Partly: the launcher half is not built |
 | `D-SH4` | Sharing a store between versions is deferred, and the read faces check the store on every read. Reason: one tree feeds every binary in `/workspace`, so a strict refusal catches a stale server. | 2026-11-13, designer | [§3](#3-mechanism-and-one-writer-rules) | ✅ |
