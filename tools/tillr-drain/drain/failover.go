@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-run/run"
@@ -199,37 +200,76 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 	// no ending event retain their recorded sequence, timestamp, and row order.
 	// Old stores have no workflow tables. Ordinary judges stay excluded there;
 	// with node runs, an evaluator is itself a workflow run and may be returned.
+	// A run the judge reviewed is excluded, and the rest are ordered by their newest ending.
+	// Both facts are read by kind and joined here: a subquery per run row on events by
+	// object_id visits every worker record of that run, which cost about 2 seconds a plan
+	// on 2026-11-19 (TestNoPassQueryCorrelatesTheEventsWithEachRun).
+	judged, endings, err := readRunJudgmentsAndEndings(r)
+	if err != nil {
+		return nil, readFailure(err)
+	}
 	var hasNodes bool
 	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_runs')`).Scan(&hasNodes); err != nil {
 		return nil, readFailure(err)
 	}
-	evaluatorException := ""
+	isNode := `0`
 	if hasNodes {
-		evaluatorException = ` AND NOT EXISTS (SELECT 1 FROM node_runs n WHERE n.run_id=runs.run_id)`
+		isNode = `EXISTS (SELECT 1 FROM node_runs n WHERE n.run_id=runs.run_id)`
 	}
 	rows, err := r.Query(
-		`SELECT item_id, run_id, backend, state, exit_code, artifact_refs
-		   FROM runs WHERE item_id IS NOT NULL AND NOT EXISTS
-              (SELECT 1 FROM events e WHERE e.kind='drain.judge.request' AND e.object_id=runs.run_id` + evaluatorException + `)
-           ORDER BY item_id, COALESCE((SELECT MAX(e.seq) FROM events e
-             WHERE e.kind='run.finish' AND e.object_id=runs.run_id), event_seq), started_at, rowid`)
+		`SELECT item_id, run_id, backend, state, exit_code, artifact_refs, event_seq, started_at, rowid, ` + isNode + `
+		   FROM runs WHERE item_id IS NOT NULL`)
 	if err != nil {
 		return nil, readFailure(err)
 	}
 	defer rows.Close()
-	priors := map[string][]priorRun{}
+	type priorRow struct {
+		itemID       string
+		rec          run.Record
+		exitCode     sql.NullInt64
+		artifactRefs string
+		order        int64
+		startedAt    int64
+		rowid        int64
+	}
+	var ordered []priorRow
 	for rows.Next() {
-		var (
-			itemID       string
-			rec          run.Record
-			exitCode     sql.NullInt64
-			artifactRefs string
-		)
-		if err := rows.Scan(&itemID, &rec.RunID, &rec.Backend, &rec.State, &exitCode, &artifactRefs); err != nil {
+		var row priorRow
+		var node bool
+		if err := rows.Scan(&row.itemID, &row.rec.RunID, &row.rec.Backend, &row.rec.State, &row.exitCode, &row.artifactRefs, &row.order, &row.startedAt, &row.rowid, &node); err != nil {
 			return nil, readFailure(err)
 		}
-		if exitCode.Valid {
-			code := int(exitCode.Int64)
+		// Old stores have no workflow tables. Ordinary judges stay excluded there;
+		// with node runs, an evaluator is itself a workflow run and may be returned.
+		if judged[row.rec.RunID] && !node {
+			continue
+		}
+		if seq, ended := endings[row.rec.RunID]; ended {
+			row.order = seq
+		}
+		ordered = append(ordered, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, readFailure(err)
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		a, b := ordered[i], ordered[j]
+		if a.itemID != b.itemID {
+			return a.itemID < b.itemID
+		}
+		if a.order != b.order {
+			return a.order < b.order
+		}
+		if a.startedAt != b.startedAt {
+			return a.startedAt < b.startedAt
+		}
+		return a.rowid < b.rowid
+	})
+	priors := map[string][]priorRun{}
+	for _, row := range ordered {
+		itemID, rec, artifactRefs := row.itemID, row.rec, row.artifactRefs
+		if row.exitCode.Valid {
+			code := int(row.exitCode.Int64)
 			rec.ExitCode = &code
 		}
 		var refs []run.ArtifactRef
@@ -255,10 +295,31 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 			Repeated: repeat,
 		})
 	}
-	if err := rows.Err(); err != nil {
-		return nil, readFailure(err)
-	}
 	return priors, nil
+}
+
+// readRunJudgmentsAndEndings answers the runs a judge request names and, for each run that
+// ended, the seq of its newest ending, read by kind.
+func readRunJudgmentsAndEndings(r *store.Reader) (map[string]bool, map[string]int64, error) {
+	events, err := r.EventsOfKind(0, judgeRequestKind, run.FinishKind)
+	if err != nil {
+		return nil, nil, err
+	}
+	judged, endings := map[string]bool{}, map[string]int64{}
+	for _, e := range events {
+		if e.ObjectID == nil {
+			continue
+		}
+		switch e.Kind {
+		case judgeRequestKind:
+			judged[*e.ObjectID] = true
+		case run.FinishKind:
+			if e.Seq > endings[*e.ObjectID] {
+				endings[*e.ObjectID] = e.Seq
+			}
+		}
+	}
+	return judged, endings, nil
 }
 
 // logTail answers the tail of the pinned extracted report when one exists, otherwise

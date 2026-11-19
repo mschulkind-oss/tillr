@@ -8,6 +8,8 @@ import (
 	"go/printer"
 	"go/token"
 	"io/fs"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -259,5 +261,35 @@ func TestAnApplicationFoldsThePendingRunsOncePerTransaction(t *testing.T) {
 	}
 	if n, transactions := pendingFolds.Load()-before, int64(fetches+1); n != transactions {
 		t.Fatalf("applying a dispatch folded the pending runs %d times in %d write transactions, want one each", n, transactions)
+	}
+}
+
+// A query that correlates the events table with each run row (`e.object_id=runs.run_id`)
+// visits every event whose object is that run, and a run's events are mostly its worker
+// records: on 2026-11-19 readPriorRuns's two such subqueries cost about 2 seconds a plan
+// against the live store, a plan the loop makes at least once a pass. The planner reads the
+// kinds it correlates by kind (EventsOfKind) and joins them to the runs in memory. The loop's
+// end-of-run spend snapshot keeps its correlation: it runs once per loop, not per pass.
+func TestNoPassQueryCorrelatesTheEventsWithEachRun(t *testing.T) {
+	correlated := regexp.MustCompile(`object_id\s*=\s*runs\.run_id`)
+	allowed := map[string]string{"spend.go": "snapshotSpend runs once, when the loop ends"}
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || allowed[name] != "" {
+			continue
+		}
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, line := range strings.Split(string(raw), "\n") {
+			if correlated.MatchString(line) {
+				t.Errorf("%s line %d correlates the events with each run: %s", name, i+1, strings.TrimSpace(line))
+			}
+		}
 	}
 }
