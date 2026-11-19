@@ -13,7 +13,11 @@ import (
 
 func TestForkBuildCommandContracts(t *testing.T) {
 	cmd := exec.Command("python3", "fork-gate.test.py")
-	cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1", "FORK_GATE_TEST_SCRATCH="+scratch(t, "fork-parser"))
+	cmd.Env = append(os.Environ(),
+		"PYTHONDONTWRITEBYTECODE=1",
+		"FORK_GATE_TEST_SCRATCH="+scratch(t, "fork-parser"),
+		"TILLR_GATE_BIN="+sibling(t, "gate"),
+	)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("fork gate parser contracts: %v\n%s", err, out)
 	}

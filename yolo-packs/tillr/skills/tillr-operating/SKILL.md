@@ -245,10 +245,10 @@ To file fork work, name a checkout in the fence, for example
 `.forks/lanes/lane-1/pi/` (or a subdirectory of it). The filed lane is a placeholder;
 staging materializes the dispatched lane's checkout and names it in the brief and
 fence, starting from the delivered patch tip. The worker commits there only, never
-runs `bin/pi-forks export`, and never edits the shared cache. The fork gate's
-`fork-build` check builds a clean copy of that exact head with the pack command; only
-then does the lander move `refs/heads/patch/pi` to the built head, write its landed
-marker, and refresh the shared cache's `main`. Items for the same fork are serialized.
+runs `bin/pi-forks export`, and never edits the shared cache. The fork gate's `fork-build` check builds a clean copy of that exact head with the pack
+command, and `fork-quality` runs after a passing `fork-build` in the same clean clone
+for forks in `FORK_QUALITY`; only then does the lander move `refs/heads/patch/pi` to the
+built head, write its landed marker, and refresh the shared cache's `main`. Items for the same fork are serialized.
 
 ## 3. Run — execute a candidate in an isolated lane
 `tillr run exec`

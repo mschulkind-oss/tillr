@@ -65,7 +65,14 @@ func testForkDelivery(t *testing.T, fresh bool) {
 	writeFile(t, identity, "[user]\n name = Fixture Landing\n email = landing@example.invalid\n")
 	t.Setenv("GIT_CONFIG_GLOBAL", identity)
 	gateBin := sibling(t, "gate")
-	t.Setenv("PATH", filepath.Dir(gateBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	npxDir := scratch(t, "fork-npx")
+	npxLog := filepath.Join(npxDir, "npx.log")
+	npxBin := filepath.Join(npxDir, "npx")
+	writeFile(t, npxBin, fmt.Sprintf("#!/bin/sh\necho \"$PWD:$*\" >> %q\nexit 0\n", npxLog))
+	if err := os.Chmod(npxBin, 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", npxDir+string(os.PathListSeparator)+filepath.Dir(gateBin)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	steps := &drain.ProcessSteps{Root: f.root, Store: f.store, Now: time.Now, GateProgram: "this ordinary gate must not run"}
 
 	beforeFork := f.snapshot(t, "fork-before")
@@ -108,6 +115,9 @@ func testForkDelivery(t *testing.T, fresh bool) {
 	if err != nil || outcome.Outcome != drain.GateFailed {
 		t.Fatalf("bad build: %+v, %v", outcome, err)
 	}
+	if _, err := os.Stat(npxLog); !os.IsNotExist(err) {
+		t.Fatalf("broken build ran npx: stat err=%v", err)
+	}
 	land := func(c drain.Candidate) (int, []byte) {
 		return driveRecord(t, sibling(t, "land"), "pass", "--store", f.store, "--repo", f.root, "--item", c.ItemID, "--run", c.RunID, "--base", c.BaseSHA, "--head", c.HeadSHA, "--base-ref", c.BaseRef, "--verdict", filepath.Join(drain.RunDir(f.root, c.RunID), drain.GateVerdictRecord))
 	}
@@ -128,6 +138,14 @@ func testForkDelivery(t *testing.T, fresh bool) {
 	outcome, err = steps.Gate(context.Background(), first)
 	if err != nil || outcome.Outcome != drain.GatePassed {
 		t.Fatalf("first build: %+v, %v", outcome, err)
+	}
+	npxAfterFirst, err := os.ReadFile(npxLog)
+	if err != nil {
+		t.Fatalf("first build missing npx invocation: %v", err)
+	}
+	firstLines := strings.Split(strings.TrimSpace(string(npxAfterFirst)), "\n")
+	if len(firstLines) != 1 || !strings.HasSuffix(firstLines[0], ":tsc --noEmit") {
+		t.Fatalf("first build npx invocations = %q, want 1 tsc --noEmit", string(npxAfterFirst))
 	}
 	if _, err := os.Stat(filepath.Join(f.fork, "fork.txt")); err != nil {
 		t.Fatal("build damaged the writer checkout:", err)
@@ -216,6 +234,14 @@ func testForkDelivery(t *testing.T, fresh bool) {
 	outcome, err = steps.Gate(context.Background(), second)
 	if err != nil || outcome.Outcome != drain.GatePassed {
 		t.Fatalf("second build: %+v, %v", outcome, err)
+	}
+	npxAfterSecond, err := os.ReadFile(npxLog)
+	if err != nil {
+		t.Fatalf("second build missing npx invocation: %v", err)
+	}
+	secondLines := strings.Split(strings.TrimSpace(string(npxAfterSecond)), "\n")
+	if len(secondLines) != 2 || !strings.HasSuffix(secondLines[1], ":tsc --noEmit") {
+		t.Fatalf("second build npx invocations = %q, want 2 tsc --noEmit lines", string(npxAfterSecond))
 	}
 	code, output = land(second)
 	if code != 0 {
