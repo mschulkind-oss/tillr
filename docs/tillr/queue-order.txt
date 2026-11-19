@@ -1,5 +1,6 @@
-# last_hand_move_event_seq: 1295395
-# hand_move_event_sha256: 6d894855039eafd78ca829656283395da13f1978c3e7c2ab7fb768a674dfd021
+# last_hand_move_event_seq: 1295479
+# hand_move_event_sha256: c45f6d2828e4bb9865124e6a5ffe58b545c58db282ffd51e1f19e5ba9d8e626f
+item-request-b39d680fce
 item-request-458ffc9523
 item-request-cfae4676fc
 item-gate-pinned-fork-inputs
@@ -9,7 +10,6 @@ item-landing-call-obstacle-tool
 item-landing-call-delivery-tests
 item-landing-call-pi-switch-on
 item-request-b13084fe3e
-item-request-a410a35903
 item-request-dc7de4bf2c
 item-request-ea6c7262ba
 item-request-72f2f70171
