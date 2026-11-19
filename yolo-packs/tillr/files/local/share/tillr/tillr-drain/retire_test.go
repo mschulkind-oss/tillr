@@ -118,6 +118,9 @@ func retirementLoop(t *testing.T, f loopFixture, steps *drain.ProcessSteps, fenc
 func retirementLoopWithSteps(t *testing.T, f loopFixture, steps drain.Steps, now func() time.Time, fence []string, report *strings.Builder) *drain.Loop {
 	t.Helper()
 	index := indexStub(t, map[string]any{"path": "docs/fixture.md", "questions": []any{}})
+	if process, ok := steps.(*drain.ProcessSteps); ok {
+		steps = &evidenceProcessSteps{process}
+	}
 	loop, err := drain.NewLoop(drain.LoopConfig{ExitWhenDrained: true,
 		Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{"lane-1"},
 		Policy: f.policy, Steps: steps, Stage: passStager{laneRoot: f.laneRoot, fence: fence},
@@ -137,6 +140,12 @@ type retirementGateSteps struct {
 	heads []string
 }
 
+func (s *retirementGateSteps) Land(ctx context.Context, c drain.Candidate) (drain.LandOutcome, error) {
+	return (&evidenceProcessSteps{s.ProcessSteps}).Land(ctx, c)
+}
+func (s *retirementGateSteps) Verdict(ctx context.Context, c drain.Candidate, verdict string) error {
+	return (&evidenceProcessSteps{s.ProcessSteps}).Verdict(ctx, c, verdict)
+}
 func (s *retirementGateSteps) Gate(ctx context.Context, c drain.Candidate) (drain.GateOutcome, error) {
 	s.heads = append(s.heads, c.HeadSHA)
 	if s.fail {

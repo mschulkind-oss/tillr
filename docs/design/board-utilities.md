@@ -490,6 +490,19 @@ stored, including the event sequence it produced; an `apply` that violates
 an edge or state rule exits 1 with an `item.rejection` record naming the
 rule, and writes nothing.
 
+For the Git-landing definition, entering `landed` requires at least one criterion,
+all `done` (`landed-criteria-unmet`), and a current receipt: a `landings` row
+with result `landed` or a `drain.graph-completed` event naming the item
+(`landed-receipt-missing`). A receipt is current if it follows the latest
+return from `landed` to `in-queue`, or no return has occurred. Entering
+`resolved-elsewhere` requires `--resolves-via` with `item:<id>` naming another
+stored item, `commit:<sha>`, or `doc:<path>` (`resolved-pointer-missing`); a
+current receipt refuses the move as `already-landed`. `show` prints the pointer.
+These rules cover changes through `state` and `apply`, not imports of new
+finished items or reads of existing ones. Finished states are terminal except
+that `state` may return a reverted `landed` item to `in-queue` with `--reason`
+and `--by`; `apply` cannot make that return. Same-state writes are idempotent.
+
 Criterion text and criterion state are not ordinary editable fields, and
 `apply` is not their writer. A criterion's `text` is frozen when the
 criterion is first stored: an `apply` that presents different text for an

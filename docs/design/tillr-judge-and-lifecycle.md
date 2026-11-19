@@ -147,13 +147,13 @@ Every move between stored states has a precondition the store checks, and a refu
 | :--- | :--- | :--- | :--- |
 | to `in-progress` | none | Always refused (`state-frozen`). | ✅ |
 | to `blocked` | `not-started`, `in-queue`, `blocked` | A waiter and a reason (`blocked-waiter-missing`). The waiter is `owner`, `design`, `plan` or `item:<id>` for a stored item (`blocked-waiter-invalid`). The prior state is remembered so that unblocking restores it. | ✅ |
-| to `landed` | `not-started`, `in-queue`, `blocked` | At least one criterion and every criterion `done` (`landed-criteria-unmet`), and a landing record for the item (`landed-receipt-missing`). | — |
-| to `resolved-elsewhere` | `not-started`, `in-queue`, `blocked` | A pointer to what resolved it: `item:<id>` for another stored item, `commit:<sha>` or `doc:<path>` (`resolved-pointer-missing`). Refused when the item already has a landing record (`already-landed`). | Partly: the pointer is accepted and stored, and is not yet required. |
-| out of `landed` or `resolved-elsewhere` | none | Refused (`state-terminal`). | ✅ |
+| to `landed` | `not-started`, `in-queue`, `blocked` | At least one criterion and every criterion `done` (`landed-criteria-unmet`), and a current `landed` landing record or `drain.graph-completed` event naming the item (`landed-receipt-missing`). | ✅ |
+| to `resolved-elsewhere` | `not-started`, `in-queue`, `blocked` | A pointer to what resolved it: `item:<id>` for another stored item, `commit:<sha>` or `doc:<path>` (`resolved-pointer-missing`). Refused when the item already has a current receipt (`already-landed`). | ✅ |
+| out of `landed` or `resolved-elsewhere` | `landed` | Refused (`state-terminal`) except the return of a reverted landing to `in-queue` via `state` with reason and actor. | ✅ |
 | to `closed` | `not-started`, `in-queue`, `blocked` | A reason (`close-reason-missing`). Refused once the item has landed (`already-landed`): the landing wins. The lander refuses a candidate for a `closed` or `resolved-elsewhere` item (`item-not-landable`). | ✅ |
 | out of `closed` | `closed` | Only by the reopen command, with a reason, which restores the state the item was closed from. A plain state write is refused (`closed-use-reopen`). | ✅ |
 
-The two unbuilt rows are [the finished-state block](#prevent-landed-and-resolved-states-without-their-evidence) of the build order.
+A receipt is current only if it follows the latest return from `landed` to `in-queue`, or the item has never returned.
 
 **A failed run never changes the stored state.** `in-queue` says the item is wanted. It does not say what the last run did, and the planner derives that on every pass from the store's records, with a reason and a mover for each. The reasons are one table, `tools/tillr-drain/holdrules/holdrules.go`, which a test keeps complete: `returned-with-evidence`, `gate-failed`, `candidate-no-op`, `eval-failed`, `run-unjudged`, `retry-unjudged`, `run-infra-exhausted`, `backend-closed`, `question-open` and `judge-defective` are the ones this design touches. None of them is a count, and none expires. `owner-only-owed` is the one reason this design adds that is not built ([Section 7](#7-what-is-built-and-what-is-owed)).
 
@@ -289,7 +289,7 @@ AutoQA is a client of tillr, not a part of it. The item store has no vocabulary 
 | `D-JL1` | A judge runs after the writers and before the gate. Its file is checked by one intake, the judge's identity is stamped by the drain and never read from the file, and `done` verdicts are recorded only after the landing succeeds. | 2026-11-14, designer | [Section 2.1](#21-topology-relative-to-gate-and-land-d-jl1) | ✅ |
 | `D-JL2` | No second judge runs after the gate when a workflow has an evaluator. The claim class is stored on the criterion; a mechanical actor retires only `verification-only` criteria, and an `owner-only` criterion is retired by a person and cannot be granted. | 2026-11-14, designer | [Section 2.2](#22-when-generic-judging-survives--and-closing-the-mechanical-stamp-hole-d-jl2) | Partly: the planner's `owner-only-owed` hold is queued |
 | `D-JL3` | `in-progress` is not a stored state. Six stored states say what the owner wants; `working` is derived from running runs. | 2026-11-14, designer | [Section 3.1](#31-stored-owner-disposition-vs-derived-execution-projection-d-jl3) | ✅ |
-| `D-JL4` | Each move between stored states has a precondition the store checks, a landing wins over a close, and a failed attempt waits under a derived reason beside the stored state. | 2026-11-14, designer | [Section 3.2](#32-transition-preconditions-and-attempt-holds-d-jl4) | Partly: the evidence for `landed` and `resolved-elsewhere` is queued |
+| `D-JL4` | Each move between stored states has a precondition the store checks, a landing wins over a close, and a failed attempt waits under a derived reason beside the stored state. | 2026-11-14, designer | [Section 3.2](#32-transition-preconditions-and-attempt-holds-d-jl4) | Built |
 | `D-JL5` | An attempt that did not land writes no criterion verdict, so unjudged criteria stay editable. | 2026-11-14, designer | [Section 4.1](#41-attempt-outcomes-are-not-criterion-verdicts-d-jl5) | ✅ |
 | `D-JL6` | A failed item is worked again under its own id and is never cloned. The `tillr drain rework` command this row first added is withdrawn by `D-JL8`, and its one bounded re-admission by `D-JL10`. | 2026-11-14, designer | [Section 4.2](#42-sending-a-failed-item-again-under-its-own-id-d-jl6-d-jl8) | ✅ |
 | `D-JL7` | The store's AutoQA vocabulary is retired; an external client uses the ordinary verdict kinds and is named in the `actor` field, which the item page shows. This supersedes `D-AQA1`. | 2026-11-14, designer | [Section 5](#5-core-boundary-for-external-autoqa-d-jl7) | ✅ |
@@ -308,7 +308,7 @@ None.
 
 ### 6.3 Amendments Owed
 
-One amendment is owed, and the block that builds the rule makes it in the same change: [board-utilities.md](./board-utilities.md) [§5.3](./board-utilities.md#53-item-alone) states the preconditions for `landed` and `resolved-elsewhere` when [the finished-state block](#prevent-landed-and-resolved-states-without-their-evidence) lands. The amendments this design owed to [autoqa-tillr-seams.md](./autoqa-tillr-seams.md), to `D-UT16` of [board-utilities.md](./board-utilities.md#14-decision-ledger) and to [work-control-judge-in-tillr.md](./work-control-judge-in-tillr.md) are made.
+[board-utilities.md](./board-utilities.md) [§5.3](./board-utilities.md#53-item-alone) states the preconditions for `landed` and `resolved-elsewhere`. The amendments this design owed to [autoqa-tillr-seams.md](./autoqa-tillr-seams.md), to `D-UT16` of [board-utilities.md](./board-utilities.md#14-decision-ledger) and to [work-control-judge-in-tillr.md](./work-control-judge-in-tillr.md) are made.
 
 ---
 
@@ -322,7 +322,7 @@ Read from the store on 2026-11-18. Each block is one queue item, and a block's n
 | 2 | An item that owes an owner's ruling is held | `item-jl-owner-criterion-hold` | 1 | **queued** |
 | 3 | A failed landing freezes no criterion | `item-jl-land-refusal-no-verdict` | nothing | landed |
 | 4 | A blocked item names its waiter and reason | `item-jl-blocked-names-its-waiter` | nothing | landed |
-| 5 | `landed` and `resolved-elsewhere` need their evidence | `item-jl-terminal-state-receipts` | 2 | **queued** |
+| 5 | `landed` and `resolved-elsewhere` need their evidence | `item-jl-terminal-state-receipts` | 2 | landed |
 | 6 | Close and reopen commands | `item-jl-close-and-reopen` | 4 | landed |
 | 7 | AutoQA uses the ordinary verdict kinds | `item-jl-retire-autoqa-vocabulary` | nothing | landed |
 | 8 | The item page shows who recorded a verdict | `item-jl-view-verdict-actor` | nothing | landed |
@@ -333,7 +333,7 @@ Read from the store on 2026-11-18. Each block is one queue item, and a block's n
 | 13 | A held item is not cloned under a new id | `item-jl-refuse-clone-ids` | 12 | landed |
 | 14 | A design run's gate refusal returns to its own session | `item-design-refusal-resumes-session` | nothing | **queued** |
 
-**What the finished-state block still has to build.** Part of block 5 landed under another item: a move out of a finished state is already refused (`state-terminal`), and the pointer and reason for a finished state are accepted and stored. What is left is requiring them: `rg -n 'landed-receipt-missing|landed-criteria-unmet|resolved-pointer-missing' tools` on 2026-11-18 returns nothing.
+**Finished-state evidence is built.** Block 5 requires completed criteria and a current receipt for `landed`, and a pointer for `resolved-elsewhere`; the reverted-landing return remains the only way out of either finished state.
 
 **Two pieces outside the blocks.** A workflow's evaluator node belongs to [tillr-item-graphs.md](./tillr-item-graphs.md) and is built there; it hands its file to the same intake. What a worker's obstacle does not yet do is listed in [Section 4.5](#45-what-a-worker-may-end-with-d-jl11).
 
@@ -341,7 +341,7 @@ Read from the store on 2026-11-18. Each block is one queue item, and a block's n
 
 ## 8. Build Order
 
-Fourteen blocks, in the order of [the table above](#7-what-is-built-and-what-is-owed). Each is one run inside one fence. A block's fence includes the copy of the tillr source under `yolo-packs/tillr/`, because every change under `tools/tillr*` is delivered there too. The three queued blocks keep their full text and criteria; a landed block keeps its heading and one line saying what it built.
+Fourteen blocks, in the order of [the table above](#7-what-is-built-and-what-is-owed). Each is one run inside one fence. A block's fence includes the copy of the tillr source under `yolo-packs/tillr/`, because every change under `tools/tillr*` is delivered there too. The queued blocks keep their full text and criteria; landed blocks generally keep their heading and a summary of what they built. The finished-state block also retains its decisions and criteria.
 
 ### Prevent a gate pass from retiring an owner's criterion
 
@@ -395,16 +395,7 @@ Reading the tree for that answer found four more things the block left open. The
 
 The fence also includes `tools/tillr-land/`, `tools/tillr-loop/` and `tools/tillr-view/`, for test fixtures only: `tools/tillr-land/lifecycle_test.go` moves an item to `resolved-elsewhere` with no pointer, and any other test in those modules that the new refusals break gets the same fixture change.
 
-<!-- tillr: item id="item-jl-terminal-state-receipts" paths="tools/tillr-item/,tools/tillr-drain/,tools/tillr-land/,tools/tillr-loop/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** A move to `landed` is refused as `landed-criteria-unmet`, naming the criteria, unless the item has at least one criterion and every one is `done`. It is refused as `landed-receipt-missing` unless the store holds a current receipt for the item. A receipt is a row in `landings` with the result `landed`, or a `drain.graph-completed` event that names the item. It is current when its event sequence number is greater than that of the item's latest return from `landed` to `in-queue`, or when the item has never returned. A store with no `landings` table holds no landing record. A test covers each refusal and the accepted move for each kind of receipt, and one test shows a returned item refused as `landed-receipt-missing` until a new landing is recorded.
-- **c2:** A move to `resolved-elsewhere` requires `--resolves-via`, which is `item:<id>` for another item the store holds, `commit:<sha>` or `doc:<path>`. Without it the move is refused as `resolved-pointer-missing`, and when the item has a current landing record, as the first criterion defines it, the move is refused as `already-landed`. The pointer is stored and `tillr item show` prints it.
-- **c3:** A move out of `resolved-elsewhere` to any other state is refused as `state-terminal`, and so is a move out of `landed` to any state except `in-queue`. The move from `landed` to `in-queue` is accepted only through `tillr item state` with `--reason` and `--by`, as it is today; `tillr item apply` cannot make it. Writing the state the item already has still answers the item and appends no event. Every test in `tools/tillr-item/terminal_state_test.go` is kept with every assertion it makes today; only its setup changes, to supply the evidence the first two criteria require.
-- **c4:** A test runs the loop's own sequence for a landed candidate, verdicts first and the state move second, against a store that holds the landing record, and asserts the item ends `landed`.
-- **c5:** Items that were `landed` or `resolved-elsewhere` before this change stay readable as they are, with or without evidence, and a record that creates an item already in a finished state is still accepted. A test opens such a store.
-- **c6:** [board-utilities.md](./board-utilities.md) states these preconditions in its section 5.3, and `tools/tillr-item/README.md` states them where it now says the flags may be omitted. In [Section 3.2](#32-transition-preconditions-and-attempt-holds-d-jl4) of this document the row for the move to `landed` names both kinds of receipt, the row for leaving a finished state names the return of a reverted landing as the one allowed move, and the rows this block builds are marked built.
-- **c7:** The loop's move of an item whose change the trunk already carries passes `commit:<sha>` with the candidate's head, a reason and the loop as the actor, and a test asserts the stored pointer. When that move is refused as `already-landed` the loop moves the item to `landed`, and a test covers it. A test drives a graph that ends without a commit through the item store's own rules and asserts the item ends `landed`.
-- **c8:** No test is deleted and no assertion is removed or weakened to make the new refusals pass: a test that reached a finished state without evidence now supplies it in its setup. The suites of `tools/tillr-item`, `tools/tillr-drain`, `tools/tillr-land` and `tools/tillr-view`, and `tools/tillr-loop/test.py`, pass.
 
 ### Add commands to close an item and reopen it
 

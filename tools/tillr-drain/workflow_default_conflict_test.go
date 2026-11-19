@@ -45,7 +45,7 @@ func TestSeatDefaultConflictFixRunsOneNode(t *testing.T) {
 	land := conflictLandScript(t, f.root, conflict, landingEnvelope(t, "landed", nil), 0)
 	stage := &recordingStager{passStager: passStager{laneRoot: f.laneRoot, fence: []string{"base.txt"}}}
 	steps := f.steps(t, always(t, "gate", 0), land, always(t, "verdict", 0))
-	loop, err := drain.NewLoop(drain.LoopConfig{ExitWhenDrained: true, Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{"lane-1"}, Policy: f.policy, Steps: steps, Stage: stage, Now: steps.Now, Report: os.Stderr, WorkflowDefaults: map[string]string{"build": "two@v1"}})
+	loop, err := drain.NewLoop(drain.LoopConfig{ExitWhenDrained: true, Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{"lane-1"}, Policy: f.policy, Steps: &evidenceProcessSteps{steps}, Stage: stage, Now: steps.Now, Report: os.Stderr, WorkflowDefaults: map[string]string{"build": "two@v1"}})
 	if err != nil {
 		t.Fatal(err)
 	}

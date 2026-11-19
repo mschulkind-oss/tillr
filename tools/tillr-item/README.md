@@ -224,7 +224,9 @@ A subsequent finished-state entry replaces all three; omitted flags record empty
 Leaving a finished state records its reason and actor in the event without replacing
 that entry's stored evidence. Retrying the same state neither appends an event nor
 replaces the stored evidence. Old finished rows remain readable with no invented receipt.
-All three flags may be omitted, including on the loop's move to `landed`.
+On Git-landing, `resolved-elsewhere` requires `--resolves-via` on `state` or
+`apply`; the reason and actor remain optional for entry. `landed` requires completed criteria and a current receipt,
+not these flags. Leaving `landed` for `in-queue` requires reason and actor.
 
 `state --require-verdicts` refuses a move as `criteria-unjudged` unless every
 criterion has an `item.verdict` event bound to the hash of its stored text. This
@@ -252,8 +254,19 @@ The following rules describe Git-landing, including its established refusal name
 - **An item's state and its criteria's states are different writes.** An item's state says
   where the work stands; a criterion's state says what a judge found. One face moving both
   would make a criterion's freeze depend on a caller's care.
+- **Finished claims need evidence.** Entering `landed` requires at least one
+  criterion, all `done` (`landed-criteria-unmet`), and a current `landed` landing
+  row or `drain.graph-completed` event naming the item (`landed-receipt-missing`).
+  A receipt is current only after the latest return from `landed` to `in-queue`,
+  or when no return occurred. Entering `resolved-elsewhere` requires a pointer to
+  another stored item (`item:<id>`), a commit (`commit:<sha>`) or a document
+  (`doc:<path>`), otherwise `resolved-pointer-missing`; a current receipt instead
+  refuses it as `already-landed`. `show` prints the pointer. Existing finished
+  rows remain readable and new finished-item imports remain accepted.
 - **Landed and resolved items stay finished.** Once an item is `landed` or
-  `resolved-elsewhere`, raw `state` writes cannot move it elsewhere, and `apply`
+  `resolved-elsewhere`, raw `state` writes cannot move it elsewhere except that
+  a reverted `landed` item may return to `in-queue` through `state` with `--reason`
+  and `--by`; `apply` cannot make that return. `apply` also
   cannot change its stored definition, including its title, criteria, blockers or
   fence. These changes are refused as `state-terminal`, naming the item and its
   current state. The existing `criterion-state` and `criterion-frozen` rules are

@@ -42,6 +42,13 @@ type trunkSteps struct {
 	beforeReplay func()
 }
 
+func (s *trunkSteps) Land(ctx context.Context, c drain.Candidate) (drain.LandOutcome, error) {
+	return (&evidenceProcessSteps{s.ProcessSteps}).Land(ctx, c)
+}
+func (s *trunkSteps) Verdict(ctx context.Context, c drain.Candidate, verdict string) error {
+	return (&evidenceProcessSteps{s.ProcessSteps}).Verdict(ctx, c, verdict)
+}
+
 func (s *trunkSteps) Replay(_ context.Context, _ drain.Candidate, rev string, checks []string) (drain.ReplayOutcome, error) {
 	s.mu.Lock()
 	if hook := s.beforeReplay; hook != nil {

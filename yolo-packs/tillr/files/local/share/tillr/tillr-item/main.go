@@ -116,6 +116,7 @@ func applyFace(args []string) (record.Envelope, int) {
 	input := fs.String("input", "", "the item.record to apply")
 	reason := fs.String("reason", "", "why a finished item leaves its state")
 	by := fs.String("by", "", "the actor authorizing a finished-state move")
+	resolvesVia := fs.String("resolves-via", "", "the item, commit or document resolving the item")
 	now := fs.String("now", "", "the injected clock, RFC 3339")
 	if err := parseFlags(fs, args); err != nil {
 		return record.Envelope{}, fail(err)
@@ -135,7 +136,7 @@ func applyFace(args []string) (record.Envelope, int) {
 	// both come from it, so two runs of one input produce the same bytes.
 	env.CreatedAt = at.UTC()
 	return writeStore(*path, at, func(ctx context.Context, tx *store.Tx) (record.Envelope, error) {
-		return item.ApplyWithReceipt(ctx, tx, env, item.MoveReceipt{Reason: *reason, By: *by})
+		return item.ApplyWithReceipt(ctx, tx, env, item.MoveReceipt{Reason: *reason, By: *by, ResolvesVia: *resolvesVia})
 	})
 }
 

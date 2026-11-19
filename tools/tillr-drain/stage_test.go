@@ -489,7 +489,7 @@ func TestATickStagesBeforeItDispatches(t *testing.T) {
 	steps := f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0))
 	loop, err := drain.NewLoop(drain.LoopConfig{ExitWhenDrained: true,
 		Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{"lane-1"},
-		Policy: f.policy, Steps: steps, Stage: commitStager{},
+		Policy: f.policy, Steps: &evidenceProcessSteps{steps}, Stage: commitStager{},
 		Now: steps.Now, Report: os.Stderr,
 	})
 	if err != nil {
@@ -557,7 +557,7 @@ func TestAStagingFailureBacksOffAndTheLoopKeepsTrying(t *testing.T) {
 	var report strings.Builder
 	loop, err := drain.NewLoop(drain.LoopConfig{ExitWhenDrained: true,
 		Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{"lane-1"},
-		Policy: f.policy, Steps: steps,
+		Policy: f.policy, Steps: &evidenceProcessSteps{steps},
 		Stage:       &recoveringStager{failures: 2, count: os.Getenv("STUB_COUNT"), laneRoot: f.laneRoot},
 		BackoffBase: time.Millisecond,
 		Now:         steps.Now, Report: &report,

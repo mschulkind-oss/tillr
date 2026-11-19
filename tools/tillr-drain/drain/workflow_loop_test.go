@@ -108,6 +108,7 @@ func (s *workflowSteps) Gate(_ context.Context, c Candidate) (GateOutcome, error
 func (s *workflowSteps) Land(_ context.Context, c Candidate) (LandOutcome, error) {
 	runGit(s.t, s.f.root, "merge", "--squash", c.HeadSHA)
 	runGit(s.t, s.f.root, "commit", "-qm", "land workflow")
+	fixtureLanding(s.t, s.f.storePath, c)
 	return LandOutcome{Result: LandLanded}, nil
 }
 func (s *workflowSteps) ItemState(ctx context.Context, id, runID, state string, waiting ...item.WaitingOn) error {

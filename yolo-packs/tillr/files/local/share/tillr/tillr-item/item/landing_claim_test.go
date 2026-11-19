@@ -33,7 +33,7 @@ func TestALandingClaimRefusesCloseAndResolvedElsewhere(t *testing.T) {
 		t.Fatalf("close under a landing claim: %v", closeErr)
 	}
 	resolveErr := s.WriteTx(ctx, func(tx *store.Tx) error {
-		_, err := item.SetState(ctx, tx, "item-build-thing", "resolved-elsewhere", syncAt)
+		_, err := item.SetStateWithReceipt(ctx, tx, "item-build-thing", "resolved-elsewhere", syncAt, item.MoveReceipt{ResolvesVia: "doc:docs/elsewhere.md"})
 		return err
 	})
 	if resolveErr == nil || !strings.Contains(resolveErr.Error(), "run-publishing") {

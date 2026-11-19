@@ -180,7 +180,7 @@ func (f loopFixture) newLoopAt(t *testing.T, lanes int, steps *drain.ProcessStep
 	}
 	loop, err := drain.NewLoop(drain.LoopConfig{ExitWhenDrained: true,
 		Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: ids,
-		Policy: f.policy, Steps: steps, Stage: stage,
+		Policy: f.policy, Steps: &evidenceProcessSteps{steps}, Stage: stage,
 		Now: now, Report: report,
 	})
 	if err != nil {
@@ -335,7 +335,7 @@ func TestTheLoopMeasuresWhatEveryRunSpentAndRunsOn(t *testing.T) {
 
 	loop, err := drain.NewLoop(drain.LoopConfig{ExitWhenDrained: true,
 		Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{laneName(1)},
-		Policy: f.policy, Steps: steps, Stage: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}},
+		Policy: f.policy, Steps: &evidenceProcessSteps{steps}, Stage: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}},
 		Now: steps.Now, Report: io.Discard,
 	})
 	if err != nil {
@@ -380,7 +380,7 @@ func TestTheLoopPrintsOneSpendLinePerRunAndComparesNoCeiling(t *testing.T) {
 
 	loop, err := drain.NewLoop(drain.LoopConfig{ExitWhenDrained: true,
 		Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{laneName(1)},
-		Policy: f.policy, Steps: steps, Stage: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}},
+		Policy: f.policy, Steps: &evidenceProcessSteps{steps}, Stage: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}},
 		Now: steps.Now, Report: &report,
 	})
 	if err != nil {
@@ -436,7 +436,7 @@ func TestACostTheBackendNeverReportedIsMeasuredAsUnknownNotZero(t *testing.T) {
 
 	loop, err := drain.NewLoop(drain.LoopConfig{ExitWhenDrained: true,
 		Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{laneName(1)},
-		Policy: f.policy, Steps: steps, Stage: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}},
+		Policy: f.policy, Steps: &evidenceProcessSteps{steps}, Stage: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}},
 		Now: steps.Now, Report: io.Discard,
 	})
 	if err != nil {
@@ -658,6 +658,7 @@ printf 'RESULT: done\n'
 		},
 	}
 	fixtureAt(t, f.store, fencedItemRecord("item_041", "in-queue", "candidate.txt"))
+	fixtureTerminalEvidence(t, f.store, "item_041")
 	trunk := git(t, f.root, "rev-parse", "main")
 
 	raw, err := json.Marshal(f.policy)
@@ -1720,7 +1721,7 @@ func TestALaneHeldByAFiniteLeaseIsWaitedOnNotStopped(t *testing.T) {
 	steps := f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0))
 	loop, err := drain.NewLoop(drain.LoopConfig{
 		ExitWhenDrained: true, Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{"lane-1"},
-		Policy: f.policy, Steps: steps, Stage: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}},
+		Policy: f.policy, Steps: &evidenceProcessSteps{steps}, Stage: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}},
 		Now: now, Report: report, StorePollInterval: time.Millisecond,
 	})
 	if err != nil {

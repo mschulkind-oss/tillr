@@ -46,6 +46,11 @@ func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string
 	if err != nil {
 		return record.Envelope{}, err
 	}
+	// A retry of either terminal claim answers the stored item even when the
+	// caller supplies verdict checks or replacement evidence. It writes nothing.
+	if d.Name == definition.GitLandingName && state == payload.State && (state == "landed" || state == "resolved-elsewhere") {
+		return envelopeOf(RecordKind, "item-"+itemID, storedAt, payload)
+	}
 	if d.Name == definition.GitLandingName && d.IsFinished(payload.State) && payload.State != d.Closed && state != payload.State {
 		if err := checkMove(d, itemID, payload.State, state, receipt); err != nil {
 			return record.Envelope{}, err
@@ -62,15 +67,18 @@ func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string
 	if err := checkClosedTransition(d, itemID, payload.State, state, false); err != nil {
 		return record.Envelope{}, err
 	}
+	if err := checkMove(d, itemID, payload.State, state, receipt); err != nil {
+		return record.Envelope{}, err
+	}
+	if err := checkTerminalEvidence(tx.Reader(), d, itemID, payload.State, state, receipt); err != nil {
+		return record.Envelope{}, err
+	}
 	// The two states a landing refuses (item-not-landable) are refused here while a
 	// landing of the item is publishing, as Close refuses closed.
 	if state != payload.State && (state == d.Closed || state == "resolved-elsewhere") {
 		if err := refuseClaimedLanding(tx.Reader(), itemID, state); err != nil {
 			return record.Envelope{}, err
 		}
-	}
-	if err := checkMove(d, itemID, payload.State, state, receipt); err != nil {
-		return record.Envelope{}, err
 	}
 	if err := checkStateReceipt(tx.Reader(), d, itemID, payload.State, state, receipt); err != nil {
 		return record.Envelope{}, err

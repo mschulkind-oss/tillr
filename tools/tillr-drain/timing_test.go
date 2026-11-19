@@ -123,7 +123,7 @@ func budgetLoop(t *testing.T, f loopFixture, steps *drain.ProcessSteps, report *
 	t.Helper()
 	loop, err := drain.NewLoop(drain.LoopConfig{ExitWhenDrained: true,
 		Root: f.root, Store: f.store, LaneRoot: f.laneRoot, Lanes: []string{laneName(1)},
-		Policy: f.policy, Steps: steps, Stage: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}},
+		Policy: f.policy, Steps: &evidenceProcessSteps{steps}, Stage: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}},
 		Now: steps.Now, Report: report, GateBudget: budget,
 	})
 	if err != nil {

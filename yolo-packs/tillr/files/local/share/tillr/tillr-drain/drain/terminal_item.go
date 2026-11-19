@@ -229,7 +229,12 @@ func (l *Loop) resolveElsewhere(ctx context.Context, c Candidate) error {
 		if err := refuseTerminalItem(tx.Reader(), c.ItemID, "already-on-trunk"); err != nil {
 			return err
 		}
-		_, err := item.SetState(ctx, tx, c.ItemID, StateResolvedElsewhere, l.cfg.Now().UTC())
+		_, err := item.SetStateWithReceipt(ctx, tx, c.ItemID, StateResolvedElsewhere, l.cfg.Now().UTC(), item.MoveReceipt{
+			ResolvesVia: "commit:" + c.HeadSHA, Reason: "candidate change is already on the trunk", By: Utility,
+		})
+		if rejection, ok := item.RejectionOf(err); ok && rejection.Rule == "already-landed" {
+			_, err = item.SetState(ctx, tx, c.ItemID, "landed", l.cfg.Now().UTC())
+		}
 		return err
 	})
 }

@@ -195,12 +195,7 @@ func ApplyWithReceipt(ctx context.Context, tx *store.Tx, env record.Envelope, re
 	if d.Name == definition.GitLandingName && d.IsFinished(from) && from != d.Closed && from != payload.State {
 		// A record carries no receipt, so it never moves a finished item: the one listed
 		// move out of landed (a reverted landing's return) goes through the state face.
-		if strings.TrimSpace(receipt.Reason) == "" {
-			return record.Envelope{}, terminalRejection(payload.ItemID, from)
-		}
-		if err := checkMove(d, payload.ItemID, from, payload.State, receipt); err != nil {
-			return record.Envelope{}, err
-		}
+		return record.Envelope{}, terminalRejection(payload.ItemID, from)
 	}
 	if err := checkState(d, payload.ItemID, payload.State); err != nil {
 		return record.Envelope{}, err
@@ -216,6 +211,27 @@ func ApplyWithReceipt(ctx context.Context, tx *store.Tx, env record.Envelope, re
 	if err := checkMove(d, payload.ItemID, from, payload.State, receipt); err != nil {
 		return record.Envelope{}, err
 	}
+	if d.Name == definition.GitLandingName && existing && from != payload.State && payload.State == "landed" {
+		if err := checkLandedCriteria(payload.ItemID, payload.Criteria); err != nil {
+			return record.Envelope{}, err
+		}
+	}
+	if err := checkTerminalEvidence(tx.Reader(), d, payload.ItemID, from, payload.State, receipt); err != nil {
+		return record.Envelope{}, err
+	}
+	if existing && from != payload.State && payload.State == "resolved-elsewhere" {
+		if err := refuseClaimedLanding(tx.Reader(), payload.ItemID, payload.State); err != nil {
+			return record.Envelope{}, err
+		}
+	}
+	if existing && from != payload.State {
+		if err := checkStateReceipt(tx.Reader(), d, payload.ItemID, from, payload.State, receipt); err != nil {
+			return record.Envelope{}, err
+		}
+		if d.IsFinished(payload.State) {
+			payload.LifecycleReason, payload.LifecycleBy, payload.ResolvesVia = receipt.Reason, receipt.By, receipt.ResolvesVia
+		}
+	}
 	allowedPaths, err := encodeAllowedPaths(payload.AllowedPaths)
 	if err != nil {
 		return record.Envelope{}, err
@@ -228,10 +244,11 @@ func ApplyWithReceipt(ctx context.Context, tx *store.Tx, env record.Envelope, re
 		   design_doc = excluded.design_doc, updated_at = excluded.updated_at,
 		   allowed_paths = excluded.allowed_paths, rank = excluded.rank, seat = excluded.seat, prose = excluded.prose, workflow = excluded.workflow, workflow_args = excluded.workflow_args, judge_mode = excluded.judge_mode, express = excluded.express,
 		   waiting_on = CASE WHEN excluded.state IN (?, ?) THEN items.waiting_on ELSE '' END,
-		   underlying_state = CASE WHEN excluded.state IN (?, ?) THEN items.underlying_state ELSE '' END`,
+		   underlying_state = CASE WHEN excluded.state IN (?, ?) THEN items.underlying_state ELSE '' END,
+		   lifecycle_reason = ?, lifecycle_by = ?, resolves_via = ?`,
 		payload.ItemID, payload.Title, payload.BodyRef, payload.State, payload.DesignDoc, env.CreatedAt.UnixMilli(),
 		allowedPaths, payload.Rank, payload.Seat, payload.Prose, payload.Workflow, workflowArgs, payload.JudgeMode, payload.Express,
-		d.Blocked, d.Closed, d.Blocked, d.Closed,
+		d.Blocked, d.Closed, d.Blocked, d.Closed, payload.LifecycleReason, payload.LifecycleBy, payload.ResolvesVia,
 	); err != nil {
 		return record.Envelope{}, Internalf("writing the item: %v", err)
 	}
