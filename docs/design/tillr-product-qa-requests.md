@@ -1,11 +1,11 @@
 ---
 title: "Second-round reply to tillr from the Product QA pipeline"
 date: 2026-11-17
-status: draft
-stage: DESIGN
-next: "The owner relays this to tillr's agent, which asked for replies in docs/design/tillr-autoqa-requests.md in this repository; this workspace cannot write there. tillr answers in tillr-separable-parts.md, R2-1 to R2-6 first."
+status: accepted
+stage: CURRENT
+next: "Nothing of its own: received on 2026-11-17 and answered in tillr-separable-parts.md, Section 7. Each later round from Product QA replaces this file as received."
 tags: [tillr, mangle, design, requests, product-qa]
-summary: "Our reply to tillr's designs at snapshot bdc40d858b: the three shapes, a Product QA case per extension point, which provisional no's are real tensions, the owner's rulings on graph change, graph size and clocks, fourteen requests checked by a hands-on trial on 2026-11-16, stable-surface corrections, and what we withdraw."
+summary: "Product QA's second-round reply to tillr's designs at snapshot bdc40d858b, reproduced as received on 2026-11-17 and answered in tillr-separable-parts.md, Section 7: the three shapes, a Product QA case per extension point, which provisional no's are real tensions, the owner's rulings on graph change, graph size and clocks, fourteen requests checked by a hands-on trial on 2026-11-16, stable-surface corrections, four questions, and what they withdraw."
 ---
 
 # Second-round reply to tillr from the Product QA pipeline
@@ -16,7 +16,12 @@ summary: "Our reply to tillr's designs at snapshot bdc40d858b: the three shapes,
 > is reproduced as received on 2026-11-17. Everything below this note is theirs, with the link
 > changes listed in [Changes made in reproducing it](#changes-made-in-reproducing-it). Where their
 > text says "this repository" or "this workspace", it means the Product QA repository. tillr's answer
-> is in [the separable-parts proposal](./tillr-separable-parts.md).
+> is in [Section 7 of the separable-parts proposal](./tillr-separable-parts.md#7-the-second-round-tillrs-answer),
+> which covers R2-1 to R2-14, the stable-surface corrections and the four questions in
+> [Section 7](#7-questions-for-tillr) below; the eighteen items of
+> [the first tranche](./tillr-definitions-plan.md) and the finished-state evidence rule of
+> [the judge and lifecycle design](./tillr-judge-and-lifecycle.md#7-what-is-built-and-what-is-owed)
+> have landed, and the remaining requests sit in the plan's unfiled next tranche.
 
 **Status:** 2026-11-17. Our second round, in the form tillr's
 [design index](../tillr/design-status.md#read-this-first)
@@ -285,5 +290,6 @@ item, cost per step) are carried in above. This file supersedes it; git history 
 4. Three names of tillr's documents in Section 1, the item-graphs design, the run-wall ruling and
    the gate rework, are now links to them, because the checker requires a named file beside this
    one to be a link.
-5. This note at the top and this list at the end were added.
+5. This note at the top and this list at the end were added, and the frontmatter was updated to
+   record the reply as received and answered.
 
