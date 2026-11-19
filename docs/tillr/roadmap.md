@@ -25,7 +25,7 @@ The first rule that separates two entries decides.
 
 ## 1. Rulings that are waiting on the owner
 
-The questions below are left for the owner on this page: 25 by `vantage-check index` on
+The questions below are left for the owner on this page: 29 by `vantage-check index` on
 2026-11-19, 20 of them the provenance review's (after the owner ruled [`OQ-PR21`](./decision-provenance-review.md#OQ-PR21)
 and [`OQ-PR22`](./decision-provenance-review.md#OQ-PR22) that day). Each has options and a recorded leaning.
 Twenty-three others that stood here were settled on 2026-11-15 and 2026-11-16 by the session's
@@ -54,6 +54,19 @@ early commit and at the item's final merge, a change lands only after it passes,
 document is checked, and the name is his. It asks one more: who repairs an old design document
 that a build worker's item touched. It sits here because it shares the review's return route,
 and none of it is built.
+
+[Live drain capacity and allocation changes](../design/tillr-live-drain-config.md) (with
+[its companion plan seed](../design/tillr-live-drain-config-plan.md)), written on 2026-11-19 to the
+owner's request of that day, designs live ordinary and express lane scaling with graceful slot
+retirement, live backend/seat/work concurrency allocations, store-backed persistence across restarts,
+and a survey of every startup setting. Four questions wait on the owner:
+[`OQ-LD1`](../design/tillr-live-drain-config.md#OQ-LD1) (whether lowering lanes also offers an
+opt-in `--pause` mode), [`OQ-LD2`](../design/tillr-live-drain-config.md#OQ-LD2) (wait vs fallback
+spillover when a backend hits its cap), [`OQ-LD3`](../design/tillr-live-drain-config.md#OQ-LD3)
+(where concurrency caps live), and [`OQ-LD4`](../design/tillr-live-drain-config.md#OQ-LD4)
+(whether the observatory displays only or also mutates lane counts); its designer's decisions await
+review in [its ledger](../design/tillr-live-drain-config.md#7-decision-ledger), and none of it is
+built.
 
 Five more left this list on 2026-11-18, none by the owner's ruling, and each is his to overturn.
 Two are a designer's decisions: [`OQ-CR4`](../design/criterion-repair.md#OQ-CR4), that the judge
