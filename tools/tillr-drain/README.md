@@ -452,7 +452,8 @@ retry of the item's latest finished run; a build retry naming any other run
 is refused with the accepted command, since the plan would ignore it. A retry
 of a workflow item whose
 attempt ran no writing node keeps every read-only node that passed (recorded
-in `node_reused`) and starts the new attempt at the first node not kept. A
+in `node_reused`) and starts the new attempt at the first node not kept,
+staged fresh on the current trunk like a first node. A
 retry after a writing node ran keeps nothing, because the readers read the tree
 for the candidate the retry replaces.
 

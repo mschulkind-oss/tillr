@@ -2,6 +2,7 @@ package drain
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -136,6 +137,13 @@ func TestAnUnreadReaderHoldsNamedAndItsRetryKeepsThePassedReaders(t *testing.T) 
 			t.Fatalf("retry plan: %s %s node=%d attempt=%d reused=%v", d.Action, d.Reason, d.NodeIndex, d.Attempt, d.ReusedNodes)
 		}
 	}
+	// The trunk moves on before the retry, as it did on 2026-11-19: the retry is a fresh
+	// attempt on the new trunk, so its first node is staged fresh even though it is not
+	// node 0, not refused because the lane still sits at the earlier trunk.
+	writeForkFile(t, filepath.Join(f.root, "unrelated.md"), "trunk moved\n")
+	runGit(t, f.root, "add", ".")
+	runGit(t, f.root, "commit", "-qm", "trunk moves before the retry")
+	steps.firstHead = runGit(t, f.root, "rev-parse", "HEAD")
 	steps.writerAfter = 5
 	result := &LoopResult{}
 	for i := 0; i < 6 && result.Landed == 0; i++ {

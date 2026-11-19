@@ -1268,6 +1268,11 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			return nil, err
 		}
 		revertedSession := decision.Returned != nil && decision.Returned.Cause == RefusalReverted && request.SessionTurn
+		// A retry that keeps the readers its earlier attempt passed starts a new attempt at
+		// a later node (retainedReaders), on the current trunk and on whatever lane the plan
+		// offered. Its first node is staged fresh, like node 0: it continues no lane state,
+		// so the lane is not required to sit at this attempt's node start.
+		freshRetry := len(decision.ReusedNodes) > 0 && !decision.WorkflowRestart
 		if decision.Workflow != nil {
 			spec.Node = &decision.Workflow.Stages[decision.NodeIndex]
 			paths, err := l.nodeInputPaths(ctx, decision)
@@ -1276,7 +1281,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 			spec.InputPaths = paths
 			if !revertedSession {
-				spec.Continue = spec.Continue || decision.NodeIndex > 0 || decision.WorkflowRestart
+				spec.Continue = spec.Continue || (decision.NodeIndex > 0 && !freshRetry) || decision.WorkflowRestart
 			}
 			if decision.WorkflowRestart && len(decision.Parallel) > 0 && decision.NodeIndex == 0 {
 				previous, err := l.stagedNodeRun(decision)
@@ -1328,7 +1333,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 		}
 		var err error
-		if !l.nonLanding && decision.Workflow != nil && decision.NodeIndex > 0 && !decision.WorkflowRestart && !revertedSession {
+		if !l.nonLanding && decision.Workflow != nil && decision.NodeIndex > 0 && !decision.WorkflowRestart && !revertedSession && !freshRetry {
 			head, headErr := l.revParse(ctx, l.laneTarget(decision.LaneID), "HEAD")
 			err = headErr
 			expectedHead := decision.NodeBaseSHA
