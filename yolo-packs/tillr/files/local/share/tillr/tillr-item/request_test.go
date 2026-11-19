@@ -54,14 +54,39 @@ func TestRequestFaceFilesTheWords(t *testing.T) {
 		}
 	}
 	var stored string
+	var express int
 	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
-		return r.QueryRow(`SELECT words FROM request_words`).Scan(&stored)
-	}); err != nil || stored != words {
-		t.Fatalf("stored words %q %v", stored, err)
+		return r.QueryRow(`SELECT words, express FROM request_words JOIN items USING(item_id)`).Scan(&stored, &express)
+	}); err != nil || stored != words || express != 1 {
+		t.Fatalf("stored words=%q express=%d err=%v", stored, express, err)
 	}
 	code, again := requestRun(t, words, args...)
 	if code != 0 || !strings.Contains(again, `"place":2`) || !strings.Contains(again, `"kind":"item.request"`) {
 		t.Fatalf("refile %d: %s", code, again)
+	}
+	code, out = requestRun(t, words, append(append([]string{}, args...), "--ordinary")...)
+	if code == 0 || !strings.Contains(out, "request-differs") {
+		t.Fatalf("toggling --ordinary on existing request: %d %s", code, out)
+	}
+	const ordinaryWords = "Keep this one on the ordinary queue.\n"
+	ordArgs := []string{"--store", path, "--root", root, "--title", "Ordinary request", "--path", "docs/", "--ordinary", "--now", "2026-11-18T22:16:00-05:00"}
+	code, out = requestRun(t, ordinaryWords, ordArgs...)
+	if code != 0 {
+		t.Fatalf("ordinary request %d: %s", code, out)
+	}
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		return r.QueryRow(`SELECT express FROM items WHERE title='Ordinary request'`).Scan(&express)
+	}); err != nil || express != 0 {
+		t.Fatalf("ordinary express=%d err=%v", express, err)
+	}
+	code, again = requestRun(t, ordinaryWords, ordArgs...)
+	if code != 0 || !strings.Contains(again, `"place":3`) || !strings.Contains(again, `"kind":"item.request"`) {
+		t.Fatalf("ordinary refile %d: %s", code, again)
+	}
+	noOrdArgs := []string{"--store", path, "--root", root, "--title", "Ordinary request", "--path", "docs/", "--now", "2026-11-18T22:16:00-05:00"}
+	code, out = requestRun(t, ordinaryWords, noOrdArgs...)
+	if code == 0 || !strings.Contains(out, "request-differs") {
+		t.Fatalf("dropping --ordinary on existing ordinary request: %d %s", code, out)
 	}
 	code, out = requestRun(t, "Something else.\n", "--store", path, "--root", root, "--title", "No fence")
 	if code == 0 || !strings.Contains(out, "fence-required") {

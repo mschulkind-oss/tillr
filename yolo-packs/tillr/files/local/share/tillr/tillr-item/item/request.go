@@ -52,6 +52,7 @@ type RequestFiling struct {
 	Workflow    string
 	Paths       []string
 	Criteria    []string
+	Ordinary    bool
 	Destination Destination
 	At          time.Time
 	By, Via     string
@@ -88,7 +89,7 @@ func RequestWorkflowCheck(root, ref string) error {
 // requestInputHash is the identity of everything the filer chose except the place: a
 // refile with the same words and the same choices is the same request.
 func requestInputHash(f RequestFiling) string {
-	raw, _ := json.Marshal([]any{string(f.Words), f.Title, f.Seat, f.Workflow, f.Paths, f.Criteria})
+	raw, _ := json.Marshal([]any{string(f.Words), f.Title, f.Seat, f.Workflow, f.Paths, f.Criteria, f.Ordinary})
 	return fmt.Sprintf("%x", sha256.Sum256(raw))
 }
 
@@ -178,7 +179,7 @@ func FileRequest(ctx context.Context, tx *store.Tx, f RequestFiling) (record.Env
 	err := tx.Reader().QueryRow(`SELECT item_id, input_hash FROM request_words WHERE words_hash=?`, hash).Scan(&id, &held)
 	if err == nil {
 		if held != input {
-			return record.Envelope{}, Rejectionf("request-differs", id, "these words already filed %s with a different title, seat, workflow, fence or criteria; change that item, or file different words", id)
+			return record.Envelope{}, Rejectionf("request-differs", id, "these words already filed %s with a different title, seat, workflow, fence, criteria or express choice; change that item, or file different words", id)
 		}
 		return queuePosition(tx.Reader(), "item.request", id, f.At)
 	}
@@ -206,7 +207,7 @@ func FileRequest(ctx context.Context, tx *store.Tx, f RequestFiling) (record.Env
 	}
 	payload := itemPayload{
 		ItemID: id, Title: f.Title, State: "in-queue", Seat: f.Seat, Workflow: f.Workflow,
-		AllowedPaths: f.Paths, BlockedBy: []string{}, Criteria: criteria,
+		AllowedPaths: f.Paths, BlockedBy: []string{}, Express: !f.Ordinary, Criteria: criteria,
 	}
 	env, err := envelopeOf(RecordKind, id, f.At, payload)
 	if err != nil {
