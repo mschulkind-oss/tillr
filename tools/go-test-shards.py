@@ -2,6 +2,8 @@
 """Build each Go package once; balance independent test processes on recorded durations."""
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import contextlib
+import fcntl
 import json
 import math
 import os
@@ -11,6 +13,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 DEFAULT_DURATIONS = Path(__file__).with_name('go-test-durations.json')
@@ -81,12 +84,63 @@ def private_environment(label, scratch, git_values=None):
                 GIT_CONFIG_GLOBAL=str(config))
 
 
+def shared_cache_dir():
+    """Return Go's shared build cache directory so separate invocations cooperate."""
+    gocache = os.environ.get('GOCACHE', '').strip()
+    if gocache and gocache != 'off':
+        return Path(gocache).resolve()
+    if sys.platform == 'darwin':
+        return (Path.home() / 'Library' / 'Caches' / 'go-build').resolve()
+    xdg = os.environ.get('XDG_CACHE_HOME', '').strip()
+    base = Path(xdg) if xdg else Path.home() / '.cache'
+    return (base / 'go-build').resolve()
+
+
+def default_shard_limit():
+    """Machine-wide limit on concurrently running shards, sized from the core count."""
+    return max(1, (os.cpu_count() or 1) // 2)
+
+
+@contextlib.contextmanager
+def acquire_shard_slot(lock_dir, limit):
+    """Acquire one slot from a counted flock pool under lock_dir; wait without timeout."""
+    limit = max(1, limit)
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    fd = None
+    offset = os.getpid() + threading.get_ident()
+    while fd is None:
+        for step in range(limit):
+            slot = (offset + step) % limit
+            path = lock_dir / f'slot-{slot}.lock'
+            candidate = os.open(path, os.O_CREAT | os.O_RDWR, 0o666)
+            try:
+                fcntl.flock(candidate, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fd = candidate
+                break
+            except BlockingIOError:
+                os.close(candidate)
+            except BaseException:
+                os.close(candidate)
+                raise
+        if fd is None:
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
 def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=None,
-              wall_timeout=DEFAULT_SHARD_TIMEOUT):
+              wall_timeout=DEFAULT_SHARD_TIMEOUT, lock_dir=None, shard_limit=None):
     label = f'{package} shard {index}'
     env = private_environment(label, scratch, git_values)
     if not binary.is_file() or not os.access(binary, os.X_OK):
         raise ShardError(f'{label} cannot start: test binary is missing or not executable: {binary}')
+    effective_lock_dir = lock_dir if lock_dir is not None else shared_cache_dir() / 'go-test-shards-locks'
+    effective_limit = shard_limit if shard_limit is not None else default_shard_limit()
     pattern = '^(' + '|'.join(re.escape(n) for n in names) + ')$'
     command = ['go', 'tool', 'test2json', '-t', '-p', package, str(binary),
                '-test.v=test2json', '-test.count=1', '-test.parallel=48',
@@ -94,7 +148,8 @@ def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=N
     try:
         # Files rather than pipes let us recover even if an escaped descendant keeps
         # its inherited output descriptors open after the shard itself is killed.
-        with tempfile.NamedTemporaryFile(dir=scratch) as out, tempfile.NamedTemporaryFile(dir=scratch) as err, \
+        with acquire_shard_slot(effective_lock_dir, effective_limit), \
+                tempfile.NamedTemporaryFile(dir=scratch) as out, tempfile.NamedTemporaryFile(dir=scratch) as err, \
                 open(out.name, 'rb') as reader, open(err.name, 'rb') as error_reader:
             process = subprocess.Popen(command, cwd=cwd, env=env, stdout=out, stderr=err,
                                        start_new_session=True)
@@ -187,7 +242,7 @@ def load_durations(path):
     return record
 
 
-def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHARD_TIMEOUT):
+def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHARD_TIMEOUT, lock_dir=None):
     stream = subprocess.check_output(['go', 'list', '-json', './...'], cwd=module, text=True)
     packages = []
     decoder = json.JSONDecoder()
@@ -197,6 +252,8 @@ def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHA
         stream = stream.lstrip()[end:]
     jobs = []
     git_values = global_git_config()
+    lock_dir = lock_dir if lock_dir is not None else shared_cache_dir() / 'go-test-shards-locks'
+    shard_limit = default_shard_limit()
     for number, package in enumerate(packages):
         if not package.get('TestGoFiles') and not package.get('XTestGoFiles'):
             continue
@@ -215,7 +272,7 @@ def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHA
             if group or (not names and index == 0):
                 jobs.append((package['ImportPath'], Path(package['Dir']), binary, group,
                              index, scratch / f'package-{number}-shard-{index}', timeout, git_values,
-                             shard_timeout))
+                             shard_timeout, lock_dir, shard_limit))
     events = []
     errors = []
     # Each package has at most K jobs. Run packages side by side, just as go test
@@ -241,6 +298,7 @@ def main():
     parser.add_argument('--record', type=Path, help='write measured top-level durations after success')
     parser.add_argument('--events', type=Path, help='write Go test JSON events, including failed shards')
     parser.add_argument('--scratch', type=Path, help='parent of private scratch; defaults to TMPDIR or YOLO_DURABLE_DIR')
+    parser.add_argument('--lock-dir', type=Path, help='shared lock directory; defaults to <GOCACHE>/go-test-shards-locks')
     parser.add_argument('--timeout', default='0', help='explicit Go test timeout; default disables Go\'s own deadline')
     parser.add_argument('--shard-timeout', type=float, default=None, metavar='SECONDS',
                         help=f'maximum seconds without top-level test progress per shard (default {DEFAULT_SHARD_TIMEOUT:g})')
@@ -258,6 +316,8 @@ def main():
         parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix='go-shards-', dir=parent) as temporary:
             options = {} if args.shard_timeout is None else {'shard_timeout': args.shard_timeout}
+            if args.lock_dir is not None:
+                options['lock_dir'] = args.lock_dir.resolve()
             events = run(args.module.resolve(), args.shards, durations, Path(temporary), args.timeout, **options)
         if args.events:
             args.events.write_text(''.join(json.dumps(e) + '\n' for e in events))

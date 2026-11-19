@@ -10,6 +10,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import patch
 
@@ -261,6 +262,158 @@ func TestMain(m *testing.M) {
         self.assertTrue(native, 'Go listed no drain tests')
         self.assertEqual(len(planned), len(set(planned)))
         self.assertEqual(set(planned), native)
+
+    def test_default_shard_limit_scales_with_cores(self):
+        for cores, expected in [(32, 16), (4, 2), (2, 1), (1, 1), (None, 1)]:
+            with patch.object(os, 'cpu_count', return_value=cores):
+                self.assertEqual(shards.default_shard_limit(), expected)
+
+    def test_shared_cache_dir_prefers_gocache_then_xdg_then_home(self):
+        custom = self.root / 'custom-gocache'
+        xdg = self.root / 'xdg-cache'
+        home = self.root / 'home'
+        with patch.dict(os.environ, {'GOCACHE': str(custom), 'XDG_CACHE_HOME': str(xdg), 'HOME': str(home)}):
+            self.assertEqual(shards.shared_cache_dir(), custom.resolve())
+        with patch.dict(os.environ, {'GOCACHE': 'off', 'XDG_CACHE_HOME': str(xdg), 'HOME': str(home)}):
+            self.assertEqual(shards.shared_cache_dir(), (xdg / 'go-build').resolve())
+        clean_env = {k: v for k, v in os.environ.items() if k not in ('GOCACHE', 'XDG_CACHE_HOME')}
+        clean_env['HOME'] = str(home)
+        with patch.dict(os.environ, clean_env, clear=True):
+            self.assertEqual(shards.shared_cache_dir(), (home / '.cache' / 'go-build').resolve())
+
+    def test_two_invocations_never_exceed_limit(self):
+        limit = shards.default_shard_limit()
+        first_count = max(1, limit - 1)
+        second_count = 2
+        lock_dir = self.root / 'locks'
+        markers = self.root / 'markers'
+        markers.mkdir()
+        active_file = markers / 'active.txt'
+        max_file = markers / 'max.txt'
+        active_file.write_text('0')
+        max_file.write_text('0')
+        lock_file = markers / 'state.lock'
+        release_file = markers / 'release'
+
+        def write_module(name, prefix, count):
+            mod = self.root / name
+            mod.mkdir()
+            (mod / 'go.mod').write_text(f'module {name}\n\ngo 1.23\n')
+            tests_src = '\n'.join(f'func Test{prefix}{i}(t *testing.T) {{ hold(t) }}' for i in range(count))
+            (mod / 'fixture_test.go').write_text(f'''package {name}
+import (
+    "os"
+    "path/filepath"
+    "strconv"
+    "strings"
+    "syscall"
+    "testing"
+    "time"
+)
+
+func withLock(t *testing.T, fn func()) {{
+    t.Helper()
+    fd, err := syscall.Open({json.dumps(str(lock_file))}, syscall.O_CREAT|syscall.O_RDWR, 0666)
+    if err != nil {{ t.Fatal(err) }}
+    defer syscall.Close(fd)
+    if err := syscall.Flock(fd, syscall.LOCK_EX); err != nil {{ t.Fatal(err) }}
+    defer syscall.Flock(fd, syscall.LOCK_UN)
+    fn()
+}}
+
+func hold(t *testing.T) {{
+    withLock(t, func() {{
+        raw, err := os.ReadFile({json.dumps(str(active_file))})
+        if err != nil {{ t.Fatal(err) }}
+        cur, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+        if err != nil {{ t.Fatal(err) }}
+        cur++
+        if err := os.WriteFile({json.dumps(str(active_file))}, []byte(strconv.Itoa(cur)), 0600); err != nil {{ t.Fatal(err) }}
+        mraw, err := os.ReadFile({json.dumps(str(max_file))})
+        if err != nil {{ t.Fatal(err) }}
+        m, err := strconv.Atoi(strings.TrimSpace(string(mraw)))
+        if err != nil {{ t.Fatal(err) }}
+        if cur > m {{
+            if err := os.WriteFile({json.dumps(str(max_file))}, []byte(strconv.Itoa(cur)), 0600); err != nil {{ t.Fatal(err) }}
+        }}
+    }})
+    marker := filepath.Join({json.dumps(str(markers))}, "started_{prefix}_"+t.Name())
+    if err := os.WriteFile(marker, []byte("1"), 0600); err != nil {{ t.Fatal(err) }}
+    for {{
+        if _, err := os.Stat({json.dumps(str(release_file))}); err == nil {{
+            break
+        }}
+        time.Sleep(10 * time.Millisecond)
+    }}
+    withLock(t, func() {{
+        raw, err := os.ReadFile({json.dumps(str(active_file))})
+        if err != nil {{ t.Fatal(err) }}
+        cur, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+        if err != nil {{ t.Fatal(err) }}
+        cur--
+        if err := os.WriteFile({json.dumps(str(active_file))}, []byte(strconv.Itoa(cur)), 0600); err != nil {{ t.Fatal(err) }}
+    }})
+}}
+
+{tests_src}
+''')
+            return mod
+
+        mod_a = write_module('moda', 'A', first_count)
+        mod_b = write_module('modb', 'B', second_count)
+        durations = self.root / 'durations.json'
+        durations.write_text('{}')
+
+        def wait_until(predicate, detail):
+            deadline = time.monotonic() + 60
+            while not predicate():
+                if time.monotonic() > deadline:
+                    self.fail(f'liveness guard expired waiting for {detail}')
+                time.sleep(0.02)
+
+        proc_a = subprocess.Popen(
+            ['python3', str(RUNNER), str(mod_a), '-k', str(first_count), '--durations', str(durations),
+             '--lock-dir', str(lock_dir)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            wait_until(lambda: len(list(markers.glob('started_A_*'))) == first_count or proc_a.poll() is not None,
+                       'first invocation to occupy its slots')
+            if proc_a.poll() is not None:
+                self.fail(f'first invocation exited early: {proc_a.stderr.read()}')
+
+            proc_b = subprocess.Popen(
+                ['python3', str(RUNNER), str(mod_b), '-k', str(second_count), '--durations', str(durations),
+                 '--lock-dir', str(lock_dir)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            try:
+                if limit >= 2:
+                    wait_until(lambda: len(list(markers.glob('started_B_*'))) >= 1 or proc_b.poll() is not None,
+                               'second invocation to take the remaining slot')
+                    if proc_b.poll() is not None:
+                        self.fail(f'second invocation exited early: {proc_b.stderr.read()}')
+                    self.assertEqual(len(list(markers.glob('started_B_*'))), 1,
+                                     'second invocation oversubscribed past the machine-wide limit')
+                    self.assertEqual(int(active_file.read_text().strip()), limit)
+                release_file.write_text('go')
+                out_a, err_a = proc_a.communicate(timeout=60)
+                out_b, err_b = proc_b.communicate(timeout=60)
+                self.assertEqual(proc_a.returncode, 0, out_a + err_a)
+                self.assertEqual(proc_b.returncode, 0, out_b + err_b)
+            finally:
+                if proc_b.poll() is None:
+                    proc_b.kill()
+                    proc_b.wait()
+        finally:
+            if not release_file.exists():
+                release_file.write_text('go')
+            if proc_a.poll() is None:
+                proc_a.kill()
+                proc_a.wait()
+
+        peak = int(max_file.read_text().strip())
+        self.assertLessEqual(peak, limit)
+        self.assertEqual(peak, limit)
+        self.assertEqual(len(list(markers.glob('started_B_*'))), second_count)
 
 
 if __name__ == '__main__':
