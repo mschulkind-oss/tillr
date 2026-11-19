@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
-import { executeLand } from '../land.ts';
+import landTool, { executeLand } from '../land.ts';
 import keepGoing from '../keep-going.ts';
 
 const adapter = fileURLToPath(new URL('../', import.meta.url));
@@ -24,7 +24,7 @@ test('land checks, parks, replays, and accepts a new offer after delivery', (t) 
   const base = git('rev-parse', 'HEAD');
   put('fence.txt', 'in\nnew\n');
   const forbidden = () => { throw new Error('unexpected wake query'); };
-  const land = (id = 'call', wakes = () => [], answered) => executeLand(id, 'summary', cwd, dir, base, join(dir, 'fence.txt'), wakes, answered);
+  const land = (id = 'call', wakes = () => [], answered, transcript) => executeLand(id, 'summary', cwd, dir, base, join(dir, 'fence.txt'), wakes, answered, transcript);
   const offer = join(dir, 'landing-offer.json');
   const refuses = (attempt, reason) => {
     assert.throws(attempt, reason);
@@ -46,7 +46,7 @@ test('land checks, parks, replays, and accepts a new offer after delivery', (t) 
   refuses(() => land('call', () => { throw new Error('journal unknown'); }), /journal unknown/);
   put('repo/outside', 'not in fence');
   assert.equal(land().park, true);
-  assert.deepEqual(JSON.parse(readFileSync(offer)), { call_id: 'call', commit: head, base, summary: 'summary' });
+  assert.deepEqual(JSON.parse(readFileSync(offer)), { call_id: 'call', commit: head, base, summary: 'summary', transcript: '' });
   assert.equal(land('call', forbidden).park, true);
   assert.throws(() => land('other'), /open: call/);
   rmSync(offer);
@@ -55,7 +55,31 @@ test('land checks, parks, replays, and accepts a new offer after delivery', (t) 
   state({ open: [{ call_id: 'call' }] });
   assert.deepEqual(land('call', forbidden), { content: [{ type: 'text', text: answer.text }], details: answer, isError: true });
   assert.equal(existsSync(offer), false);
-  assert.equal(land('next', () => [], id => id === 'call').park, true);
+  assert.equal(land('next', () => [], id => id === 'call', '/session/file.jsonl').park, true);
+  assert.equal(JSON.parse(readFileSync(offer)).transcript, '/session/file.jsonl');
+});
+
+test('registered land passes the session file and never writes landing-transcript', (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'land-execute-'));
+  const old = { ...process.env };
+  t.after(() => { process.env = old; rmSync(dir, { recursive: true, force: true }); });
+  const cwd = join(dir, 'repo'); mkdirSync(cwd);
+  const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
+  const commit = () => git('-c', 'user.name=Test', '-c', 'user.email=test@example.org', 'commit', '-qm', 'test');
+  git('init', '-q'); writeFileSync(join(cwd, 'in'), 'base'); git('add', 'in'); commit();
+  const base = git('rev-parse', 'HEAD');
+  writeFileSync(join(cwd, 'in'), 'changed'); git('add', 'in'); commit();
+  writeFileSync(join(dir, 'fence.txt'), 'in\n');
+  writeFileSync(join(dir, 'python3'), '#!/bin/sh\nprintf "[]\\n"\n', { mode: 0o700 });
+  Object.assign(process.env, { YOLO_DURABLE_DIR: dir, TILLR_GOAL_BASE: base, BOARD_DRAIN_BRIEF: join(dir, 'brief.md'), PATH: `${dir}:${old.PATH}` });
+  const handlers = {}; let tool;
+  landTool({ on: (name, fn) => { handlers[name] = fn; }, registerTool: value => { tool = value; } });
+  const ctx = { cwd, sessionManager: { getSessionFile: () => '/actual/session.jsonl', getBranch: () => [] } };
+  tool.execute('call', { summary: 'summary' }, undefined, undefined, ctx);
+  assert.equal(JSON.parse(readFileSync(join(dir, 'landing-offer.json'))).transcript, '/actual/session.jsonl');
+  writeFileSync(join(dir, 'landing-answer.json'), '{}');
+  if (handlers.session_start) handlers.session_start({}, ctx);
+  assert.equal(existsSync(join(dir, 'landing-transcript')), false);
 });
 
 test('keep-going nudges a plain ending for land without inspecting git', (t) => {
