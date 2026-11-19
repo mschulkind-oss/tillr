@@ -478,7 +478,10 @@ func TestTheComposedPipelineRunsEndToEndOnAFixture(t *testing.T) {
 	// Step 8: view status, from a read-only snapshot of the same store. Exit 0 is the
 	// assertion that matters: the face answers 1 for a subject the snapshot does not
 	// hold, so a completed status record says the item the drain dispatched is there.
-	statusOut := driveOK(t, sibling(t, "view"), "status", "--store", storePath, "--item", "item_042")
+	statusCode, statusOut := driveRecord(t, sibling(t, "view"), "status", "--store", storePath, "--item", "item_042")
+	if statusCode != 0 {
+		t.Fatalf("view status exited %d: %s", statusCode, statusOut)
+	}
 	var status struct {
 		Kind string `json:"kind"`
 	}

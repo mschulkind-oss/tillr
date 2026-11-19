@@ -47,7 +47,7 @@ func TestBranchHeldLaneWaitingRowNamesTheHolder(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v: %s", err, out)
 	}
-	cli, err := exec.Command(bin, "waiting", "--history", "--store", h.store, "--json").CombinedOutput()
+	cli, err := exec.Command(bin, "waiting", "--history", "--store", h.store, "--json").Output()
 	if err != nil {
 		t.Fatalf("waiting CLI: %v: %s", err, cli)
 	}

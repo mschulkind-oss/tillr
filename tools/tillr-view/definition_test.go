@@ -40,7 +40,7 @@ func TestWaitingDefinitionHeader(t *testing.T) {
 			}
 			s.Close()
 		}
-		out, err := exec.Command(bin, "waiting", "--history", "--store", h.store).CombinedOutput()
+		out, err := exec.Command(bin, "waiting", "--history", "--store", h.store).Output()
 		if err != nil || !strings.HasPrefix(string(out), "definition: "+name+"\n") {
 			t.Fatalf("header: %v %s", err, out)
 		}
