@@ -355,11 +355,7 @@ The answer to the conflict the last worker raised: nothing in this block's desig
 
 What "build afresh" means, measured on 2026-11-17 with `git merge-tree --write-tree` replaying the earlier attempt (kept at `refs/tillr/preserved/run-item-jl-owner-criterion-hold-a1-cfix`) onto the trunk tip: the replay conflicts in `tools/tillr-drain/drain/plan.go` and `tools/tillr-view/waiting.go` (and in the pack copy of each), and it modifies `tools/tillr-drain/seed_test.go`, which the trunk has since deleted. So do not cherry-pick or merge that ref. Read it as a reference for the shape of the change (a planner hold in `tools/tillr-drain/drain/plan.go`, its reason in `why.go`, the waiting-face class in `tools/tillr-view/waiting.go`, the count in `tools/tillr-view/dispatchable.go`), write the change by hand against the files as they are now, and put the tests it carried in `seed_test.go` in a test file that exists. Where the waiting face's `trunk-broken` wording differs, the trunk's wording stays. Never hand-edit the pack copy; `just pack-sync` regenerates it.
 
-<!-- tillr: item id="item-jl-owner-criterion-hold" paths="tools/tillr-drain/,tools/tillr-view/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** The planner holds an `in-queue` item that has an `owner-only` criterion not yet `done`, with the reason `owner-only-owed`. It leases no lane and starts no run for it. A test with two free lanes asserts zero dispatches and the reason.
-- **c2:** The hold lifts on the first pass after a human verdict marks that criterion `done`. A test records the verdict and asserts the item is dispatched.
-- **c3:** The waiting face shows the item as waiting on the owner, with the criterion's id and the first line of its text, and the header's dispatchable count leaves it out. A test asserts the hold's class on the waiting face is not `unclassified`.
 
 ### Prevent a failed landing from freezing the item's criteria
 
@@ -373,7 +369,7 @@ Landed. A move to blocked stores who the item waits on and why, and remembers th
 
 The board's two "finished" states are claims about the world. `landed` claims this item's work is on the trunk, and `resolved-elsewhere` claims something else satisfied it. Today either can be written by one command with nothing to back it, and either can be undone the same way. This block makes the store ask for the evidence: a landing record and finished criteria for the first, a pointer to the other path for the second. It also makes both final, so a finished item is never quietly put back in the queue.
 
-<!-- tillr: item id="item-jl-terminal-state-receipts" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="item-jl-owner-criterion-hold" prose="2" -->
+<!-- tillr: item id="item-jl-terminal-state-receipts" paths="tools/tillr-item/,yolo-packs/tillr/,docs/" blocked_by="" prose="2" -->
 
 - **c1:** A move to `landed` is refused as `landed-criteria-unmet`, naming the criteria, unless the item has at least one criterion and every one is `done`. It is refused as `landed-receipt-missing` unless the store holds a landing record for the item. A test covers each refusal and the accepted move.
 - **c2:** A move to `resolved-elsewhere` requires `--resolves-via`, which is `item:<id>` for another item the store holds, `commit:<sha>` or `doc:<path>`. Without it the move is refused as `resolved-pointer-missing`, and when the item already has a landing record it is refused as `already-landed`. The pointer is stored and `tillr item show` prints it.

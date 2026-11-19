@@ -316,6 +316,10 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 		if err != nil {
 			return nil, err
 		}
+		if last.Reason == "owner-only-owed" && item.OwnerOwed == nil {
+			// A verdict lifts the hold even before the next planner pass.
+			found = false
+		}
 		if found {
 			rule := waitingRuleFor(last.Reason)
 			row.Class, row.Why, row.Mover = rule.class, last.Reason, rule.mover
@@ -486,18 +490,30 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 			}
 			row.Waited = elapsed.String()
 		}
+		activeNodes := false
 		for _, lane := range lanes {
 			if len(lane.ActiveNodes) == 0 {
 				continue
 			}
 			if allocated, ok := allocations[lane.ActiveNodes[0]]; ok && allocated.ItemID == item.ItemID {
 				row.Class, row.Where = "waits on work", "lane"
+				activeNodes = true
 				row.Why = fmt.Sprintf("%d nodes running", len(lane.ActiveNodes))
 				row.Mover = "the item's nodes to finish"
 			}
 		}
 		if c := conflicts[item.ItemID]; c.Status == "question" {
 			decorateOwnerQuestionWaiting(&row, c, questions)
+		}
+		_, hasFault := itemFaults[item.ItemID]
+		if item.State == "in-queue" && item.OwnerOwed != nil && active == nil && !activeNodes && !hasFault {
+			rule := waitingRuleFor("owner-only-owed")
+			row.Class, row.Where, row.ClassSource = rule.class, rule.where, "store"
+			row.Why, row.Mover = item.OwnerOwed.Explanation(), item.OwnerOwed.Mover()
+			row.Since = "no pass yet"
+			if found && last.Reason == "owner-only-owed" {
+				row.Since = time.UnixMilli(since).UTC().Format(time.RFC3339Nano)
+			}
 		}
 		out = append(out, row)
 	}
@@ -764,6 +780,9 @@ func decorateOwnerQuestionWaiting(row *waitingRow, c waitingConflict, source van
 // including rows read from older stores that named only an owner.
 func normalizeWaitingMover(row *waitingRow) {
 	if row.Class == "ready" || row.Class == "moving" || row.Class == "done" {
+		return
+	}
+	if strings.HasPrefix(row.Why, "owner-only-owed: ") {
 		return
 	}
 	if strings.HasPrefix(row.Mover, "owner; answer ") && strings.Contains(row.Mover, "#OQ-") {

@@ -29,6 +29,7 @@ var Rules = map[string]Rule{
 	"idea-no-outcome":       {"needs a cause", "fence", "add item blocks carrying from the idea and authorize a retry"},
 	"Vantage not answering": {"needs a cause", "queue", "check Vantage availability"},
 	"node-output-missing":   {"needs a cause", "lane", "inspect the named node's output declarations and saved artifacts"},
+	"owner-only-owed":       {"needs you", "queue", "the owner"},
 	"workflow-invalid":      {"needs you", "queue", "correct the named workflow file and run `tillr drain workflow check`"},
 	"node-failed":           {"needs you", "lane", "inspect the named node and authorize a retry"},
 	"gate-stall-rerun":      {"waits on work", "gate", "same candidate reruns when fewer gates are in flight or none other are"},

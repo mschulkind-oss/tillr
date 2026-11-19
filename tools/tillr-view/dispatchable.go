@@ -261,7 +261,7 @@ func readRetryAcks(r *store.Reader) (map[string]string, error) {
 // given a free lane. It is the planner's own predicate, in the planner's order, for the
 // rules a read face can answer from the store:
 //
-//   - the item is queued, unblocked, and not held by a question;
+//   - the item is queued, unblocked, and held by neither a question nor an owner-only criterion;
 //   - an operator's retry authorization that the store does not refuse makes the item a
 //     retry the planner would dispatch; and otherwise
 //   - the item's latest run ended in a refusal the planner returns to the item's worker
@@ -292,7 +292,7 @@ func readRetryAcks(r *store.Reader) (map[string]string, error) {
 // and the ruling is the index's. The agreement case pins the rules that are here, so a drift
 // shows up as a failing test rather than as a number.
 func (h *dispatchHistory) dispatchable(item storeItem, stateOf map[string]string, waiting map[string][]string, hold string) bool {
-	if item.State != "in-queue" || hold != "" {
+	if item.State != "in-queue" || hold != "" || item.OwnerOwed != nil {
 		return false
 	}
 	if unmetBlocker(stateOf, waiting, item.ItemID) {

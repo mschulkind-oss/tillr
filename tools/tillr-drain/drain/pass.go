@@ -731,6 +731,17 @@ func inputVersion(r *store.Reader, d Decision) (string, error) {
 		return "", err
 	}
 	work := works[d.ItemID]
+	// Bind the claim to the same owner-only readiness fact as the planner. A
+	// criterion may be added or ruled on between planning and the write lock.
+	var hasClaimClass, ownerOwed bool
+	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('item_criteria') WHERE name='claim_class')`).Scan(&hasClaimClass); err != nil {
+		return "", err
+	}
+	if hasClaimClass {
+		if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM item_criteria WHERE item_id=? AND claim_class='owner-only' AND state <> 'done')`, d.ItemID).Scan(&ownerOwed); err != nil {
+			return "", err
+		}
+	}
 	triageVersion := ""
 	if d.BlockConflict != nil && d.BlockConflict.TriageVersion != "" {
 		triageVersion, _, err = requestVersion(r, d.ItemID)
@@ -738,7 +749,7 @@ func inputVersion(r *store.Reader, d Decision) (string, error) {
 			return "", err
 		}
 	}
-	raw, err := json.Marshal([]any{itemState, rank, allowed, design, seat, express, updated, latest, seq, laneState, laneRun, until, work, work != nil && work.Done, faults[d.ItemID], faults[d.ItemID].Seq, triageVersion})
+	raw, err := json.Marshal([]any{itemState, rank, allowed, design, seat, express, updated, latest, seq, laneState, laneRun, until, work, work != nil && work.Done, faults[d.ItemID], faults[d.ItemID].Seq, triageVersion, ownerOwed})
 	return string(raw), err
 }
 

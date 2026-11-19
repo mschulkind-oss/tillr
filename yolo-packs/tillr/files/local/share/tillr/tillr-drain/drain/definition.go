@@ -54,7 +54,7 @@ var landingHolds = map[string]string{
 var generalHolds = map[string]string{
 	ReasonCompleteItemFault: "", ReasonCriteriaUnjudged: "", ReasonCandidateNoOp: "",
 	ReasonBackendWindow: "", ReasonBackendClosed: "", ReasonBlocked: "", ReasonNotReady: "",
-	ReasonRunLinkMissing: "", ReasonRunUnjudged: "", ReasonNoPolicy: "",
+	ReasonRunLinkMissing: "", ReasonRunUnjudged: "", ReasonNoPolicy: "", ReasonOwnerOnlyOwed: "",
 	ReasonNoLane: "", ReasonRunLive: "", ReasonInfraExhausted: "", ReasonCommandFault: "",
 	ReasonDeskCapacity: "", ReasonDocumentDeskBusy: "",
 	ReasonRetryJudged: "", ReasonRetryUnjudged: "", ReasonToolingDefect: "",

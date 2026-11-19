@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/ownercriteria"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
@@ -171,6 +172,7 @@ type Decision struct {
 // itemRow is the item state this face reads: the columns a decision turns on, and the
 // rank that decides the order the decisions come in.
 type itemRow struct {
+	OwnerOwed *ownercriteria.OwnerCriterion
 	// Express is read from the stored definition before workflow seat routing.
 	Express    bool
 	JudgeMode  string
@@ -505,6 +507,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			continue
 		}
 		var decision Decision
+		ownerOwed := item.State == StateInQueue && item.OwnerOwed != nil
 		if fault, held := faults[item.ItemID]; held && !p.finished(item.State) && holdEnabled(def, fault.Reason) {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: fault.Reason, LaneID: fault.LaneID, From: "held"}
 			identifyDecision(&decision)
@@ -527,7 +530,8 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 				decision.Action, decision.Reason, decision.To = ActionHold, ReasonJudgeGrantAbsent, ""
 				identifyDecision(&decision)
 			}
-			if err == nil && work.LaneReleased && decision.Action != ActionHold {
+			ownerNextNode := ownerOwed && (work.Ready || decision.Action == ActionDispatch || decision.Action == ActionRetry)
+			if err == nil && work.LaneReleased && !ownerNextNode && decision.Action != ActionHold {
 				lane, ok := p.freeLane(item.Express)
 				if !ok {
 					decision.Action, decision.Reason, decision.To = ActionHold, ReasonNoLane, ""
@@ -541,15 +545,25 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 				identifyDecision(&decision)
 			}
 			if err == nil && work.Decision.Workflow != nil && !work.BoundaryFailed {
-				invalid := item.State != def.Ready || p.isBlocked(item, edges[item.ItemID]) || p.questionState(item).reason != ""
+				// Settle a completed node before holding the next one: its result is
+				// already work done, not a new dispatch.
+				invalid := ownerNextNode || item.State != def.Ready || p.isBlocked(item, edges[item.ItemID]) || p.questionState(item).reason != ""
 				// The persisted graph, including source digests, owns this attempt.
 				// Editing its source does not invalidate or replace an in-flight node, and
 				// neither does an edit to the item's block or fence: the owner ruled on
 				// 2026-11-17 that such an edit is no fact for the work (audit finding F-07).
 				if invalid {
-					leases, leaseErr := activeLeases(r, at, []string{decision.LaneID})
-					if leaseErr != nil {
-						return nil, readFailure(leaseErr)
+					laneID := decision.LaneID
+					if ownerOwed {
+						laneID = work.Decision.LaneID
+					}
+					var leases []LaneLease
+					if !ownerNextNode || !work.LaneReleased {
+						var leaseErr error
+						leases, leaseErr = activeLeases(r, at, []string{laneID})
+						if leaseErr != nil {
+							return nil, readFailure(leaseErr)
+						}
 					}
 					if len(leases) == 0 {
 						decision = work.Decision
@@ -557,12 +571,20 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 						decision.Action, decision.Reason, decision.To = ActionSettle, "workflow-invalidated", "held"
 						decision.WorkflowRelease = true
 						identifyDecision(&decision)
+					} else if ownerNextNode && (decision.Action == ActionDispatch || decision.Action == ActionRetry) {
+						decision = work.Decision
+						decision.From, decision.To = "running", ""
+						decision.Action, decision.Reason = ActionHold, ReasonRunLive
+						identifyDecision(&decision)
 					}
 				}
 			}
 			if err != nil {
 				return nil, readFailure(err)
 			}
+		} else if ownerOwed {
+			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: ReasonOwnerOnlyOwed, From: "held", Attempt: p.nextAttempt(item.ItemID)}
+			identifyDecision(&decision)
 		} else if rewriteOwnerHolds[item.ItemID] != "" && !p.finished(item.State) {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: rewriteOwnerHolds[item.ItemID], From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			identifyDecision(&decision)
@@ -1529,6 +1551,10 @@ func decisionEnvelope(decision Decision, at time.Time) (record.Envelope, error) 
 // after every ranked one whatever its token, and item_id keeps the order total among the
 // unranked. Both halves are the query's because both are comparisons on the rows it reads.
 func readItems(r *store.Reader) ([]itemRow, error) {
+	owed, err := ownercriteria.ReadOwnerCriteria(r)
+	if err != nil {
+		return nil, readFailure(err)
+	}
 	var hasWorkflow bool
 	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name='workflow')`).Scan(&hasWorkflow); err != nil {
 		return nil, readFailure(err)
@@ -1590,6 +1616,7 @@ func readItems(r *store.Reader) ([]itemRow, error) {
 			return nil, err
 		}
 		item.Express = !itemIsComment(item.ItemID) && (item.Express || strings.HasPrefix(item.ItemID, "item-idea-"))
+		item.OwnerOwed = owed[item.ItemID]
 		items = append(items, item)
 	}
 	if err := rows.Err(); err != nil {

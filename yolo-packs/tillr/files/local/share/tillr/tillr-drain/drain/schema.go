@@ -88,6 +88,9 @@ const (
 	// ReasonBlocked is a hold's reason: the item is blocked, or something it is blocked
 	// by has not reached a terminal state.
 	ReasonBlocked = "blocked"
+
+	// ReasonOwnerOnlyOwed prevents dispatch until the owner rules on unfinished criteria.
+	ReasonOwnerOnlyOwed = "owner-only-owed"
 	// ReasonNotReady is a hold's reason: the item's state is not `in-queue`.
 	ReasonNotReady = "not-ready"
 	// ReasonRunLinkMissing is a hold's reason: the item may be a retry — its history is
