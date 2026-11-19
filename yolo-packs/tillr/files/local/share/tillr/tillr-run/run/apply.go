@@ -31,7 +31,32 @@ const (
 	EndSignal         = "signal"
 	EndFailedToStart  = "failed-to-start"
 	EndNotRecorded    = "end cause not recorded"
+	// EndRepeatingCall is a session the harness itself ended because the model kept
+	// repeating one identical tool call (pi's `loop_detected` event). The process exits
+	// like any ended run; the cause is what says the run is neither an answer nor a
+	// harness failure. The record's RepeatingCall names the call.
+	EndRepeatingCall = "repeating-call"
 )
+
+// LoopDetectedEvent is the stream event pi emits, in `--mode json`, when it ends a
+// session whose model kept repeating one identical tool call:
+// `{"type":"loop_detected","toolName":…,"args":{…},"streak":n}`.
+const LoopDetectedEvent = "loop_detected"
+
+// RepeatingCall is the call a session repeated, as the run record carries it. Args is
+// the arguments' JSON with sorted keys and no insignificant whitespace, cut to
+// RepeatingCallArgsLimit bytes; ArgsDigest is the SHA-256 of that whole uncut text, so two
+// records name the same arguments exactly when their digests match. Streak is the number
+// of identical calls in a row that pi reported.
+type RepeatingCall struct {
+	Tool       string `json:"tool"`
+	Args       string `json:"args"`
+	ArgsDigest string `json:"args_digest"`
+	Streak     int    `json:"streak"`
+}
+
+// RepeatingCallArgsLimit bounds the arguments a record quotes; the digest covers them all.
+const RepeatingCallArgsLimit = 400
 
 // LaneStateLeased is the state of a lane a run holds: the claim writes it with the
 // lease, and the release clears it (design §5.6).
@@ -102,6 +127,9 @@ type Record struct {
 	// signalled. The run is still the ordinary exit it reports, judged on its answer;
 	// it is neither a failure nor an interruption to replay.
 	EndingException string `json:"ending_exception,omitempty"`
+	// RepeatingCall names the call of a run that ended for EndRepeatingCall, and is
+	// carried only by such a run.
+	RepeatingCall *RepeatingCall `json:"repeating_call,omitempty"`
 }
 
 // Usage is one run's spend, as its backend reported it. Each field is a pointer because
@@ -263,7 +291,7 @@ func checkRecord(payload Record) error {
 		return Usagef("a run.record needs a backend: the adapter program that produced the run")
 	}
 	switch payload.EndCause {
-	case "", EndNotRecorded, EndNormalExit, EndTimeLimit, EndLeaseReclaimed, EndSignal, EndFailedToStart, EndRestart, EndSettledIdle:
+	case "", EndNotRecorded, EndNormalExit, EndTimeLimit, EndLeaseReclaimed, EndSignal, EndFailedToStart, EndRestart, EndSettledIdle, EndRepeatingCall:
 	default:
 		return Usagef("%q is not a run end cause", payload.EndCause)
 	}
@@ -278,6 +306,12 @@ func checkRecord(payload Record) error {
 		}
 	} else if payload.SettledAt != "" || payload.HarnessEndedAt != "" {
 		return Usagef("settlement observations require settled-idle")
+	}
+	if payload.EndCause == EndRepeatingCall && (payload.State != StateExited || payload.RepeatingCall == nil || payload.RepeatingCall.Tool == "") {
+		return Usagef("repeating-call requires an exited run that names the repeated call")
+	}
+	if payload.EndCause != EndRepeatingCall && payload.RepeatingCall != nil {
+		return Usagef("a repeating_call requires the repeating-call end cause")
 	}
 	if payload.EndingException != "" && payload.State != StateExited {
 		return Usagef("an ending_exception requires an exited run")

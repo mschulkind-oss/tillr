@@ -131,6 +131,11 @@ type Decision struct {
 	// a gate refusal, a run that committed nothing, a fence escape or a refused landing.
 	// Staging writes it into the brief (returnedBrief). It is nil on every other decision.
 	Returned *ReturnedEnding `json:"returned,omitempty"`
+	// RepeatedCall is the repeating-call ending this dispatch answers: the earlier run
+	// whose session pi ended because the model kept repeating one identical call. Staging
+	// writes it into the brief (repeatedCallBrief), and a run dispatched with it that ends
+	// the same way takes the failover rather than another fresh session (repeatingRoute).
+	RepeatedCall *RepeatedCall `json:"repeated_call,omitempty"`
 	// TransitionID identifies (item, attempt, from, to), independently of the tick's
 	// clock. Attempt is one more than the item's count of terminal runs, including
 	// failover runs. Positions use the design's closed set: queued, running, candidate,
@@ -861,7 +866,18 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		attempt = attemptForInterruption(p.priors[item.ItemID])
 		retry = nil
 	}
-	if retry != nil || interrupted {
+	// A run pi ended for a repeating call routes as its settlement recorded: a fresh
+	// session, a failover, or a hold for the operator (repeating_call.go). An operator's
+	// retry outranks it.
+	var repeated *RepeatedCall
+	if priors := p.priors[item.ItemID]; retry == nil && !interrupted && len(priors) > 0 && priors[len(priors)-1].Class == AttemptRepeating {
+		repeated = priors[len(priors)-1].Repeated
+	}
+	if repeated != nil && repeated.Route != repeatRouteHold {
+		attempt.backend, attempt.degraded = repeated.NextBackend, ""
+		attempt.failover = repeated.Route == repeatRouteFailover
+	}
+	if retry != nil || interrupted || repeated != nil {
 		returned = nil
 	}
 	if returned != nil && p.policy != nil {
@@ -943,7 +959,12 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.Action, decision.Reason = ActionHold, retry.refusal
 		decision.RetryID = retry.retryID
 		decision.SupersedesRunID = retry.supersedesRunID
-	case retry == nil && !interrupted && !attempt.failover && returned == nil && p.mayBeARetry(item.ItemID) && decision.ConflictID == "" && holdEnabled(p.rules(), p.retryHoldReason(item.ItemID)):
+	case repeated != nil && repeated.Route == repeatRouteHold:
+		// Every backend this chain could reach repeated one identical call: the
+		// operator is the mover (holdrules "repeating-call").
+		decision.Action, decision.Reason = ActionHold, ReasonRepeatingCall
+		decision.SupersedesRunID = repeated.RunID
+	case retry == nil && !interrupted && repeated == nil && !attempt.failover && returned == nil && p.mayBeARetry(item.ItemID) && decision.ConflictID == "" && holdEnabled(p.rules(), p.retryHoldReason(item.ItemID)):
 		decision.Action, decision.Reason = ActionHold, p.retryHoldReason(item.ItemID)
 	case holdEnabled(p.rules(), ReasonNoFence) && fenceAdmitsNothing(fence):
 		decision.Action, decision.Reason = ActionHold, ReasonNoFence
@@ -1020,6 +1041,15 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		if interrupted {
 			decision.Reason = "earlier run orphaned by a loop stop"
 		}
+		if repeated != nil {
+			answered := *repeated
+			answered.NextBackend = decision.RunRequest.Backend
+			decision.RepeatedCall = &answered
+			decision.Reason = ReasonRepeatingCallFresh
+			if repeated.Route == repeatRouteFailover {
+				decision.Reason = ReasonRepeatingCallFailover
+			}
+		}
 		if restaged {
 			decision.Reason = ReasonRestagedStaleBase
 		}
@@ -1046,7 +1076,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	}
 	if decision.Action == ActionDispatch || decision.Action == ActionRetry {
 		decision.From, decision.To = "queued", "running"
-		decision.SelectSeat = !decision.RunRequest.SessionTurn && !interrupted && (!attempt.failover || retry != nil || decision.ConflictID != "")
+		decision.SelectSeat = !decision.RunRequest.SessionTurn && !interrupted && repeated == nil && (!attempt.failover || retry != nil || decision.ConflictID != "")
 	}
 	if decision.DeskDocument != "" && decision.RunRequest != nil {
 		previousAdapter := ""

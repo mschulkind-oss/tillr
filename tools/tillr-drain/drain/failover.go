@@ -158,6 +158,9 @@ type priorRun struct {
 	// Restaged marks an interruption the loop made itself: the run was staged on a
 	// base that lacked what made its item ready (drain.stale-base).
 	Restaged bool
+	// Repeated is the recorded repeating-call ending of a run whose class is
+	// AttemptRepeating, with the route the settlement chose for it.
+	Repeated *RepeatedCall
 }
 
 // readPriorRuns answers every item's terminal runs, oldest first, keyed by item id.
@@ -174,6 +177,10 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 	interrupted, restaged, err := readInterruptedRuns(r)
 	if err != nil {
 		return nil, err
+	}
+	repeated, err := readRepeatedCalls(r)
+	if err != nil {
+		return nil, readFailure(err)
 	}
 	// Once the loop observes an ending, routing and availability share that
 	// saved class; a report edit cannot move the item to a different retry rule.
@@ -236,11 +243,16 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 		if interrupted[rec.RunID] {
 			class = AttemptInterrupted
 		}
+		var repeat *RepeatedCall
+		if rc, ok := repeated[rec.RunID]; ok {
+			class, repeat = AttemptRepeating, &rc
+		}
 		priors[itemID] = append(priors[itemID], priorRun{
 			RunID:    rec.RunID,
 			Backend:  rec.Backend,
 			Class:    class,
 			Restaged: restaged[rec.RunID],
+			Repeated: repeat,
 		})
 	}
 	if err := rows.Err(); err != nil {

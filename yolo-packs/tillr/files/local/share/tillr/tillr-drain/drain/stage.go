@@ -275,6 +275,9 @@ type StageSpec struct {
 	// Returned is the earlier run's ending this dispatch carries back to the worker
 	// (Decision.Returned). A non-nil value appends its evidence to the brief.
 	Returned *ReturnedEnding
+	// RepeatedCall is the repeating-call ending this dispatch answers
+	// (Decision.RepeatedCall). A non-nil value appends its note to the brief.
+	RepeatedCall *RepeatedCall
 }
 
 // ConflictBrief is the conflict a conflict-fix run is asked to resolve: the paths git
@@ -543,6 +546,9 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 			previous = strings.TrimSuffix(previous, "\n"+ObstacleContract+"\n")
 		}
 		brief += previous
+	}
+	if spec.RepeatedCall != nil {
+		brief += repeatedCallBrief(*spec.RepeatedCall)
 	}
 	if !spec.Continue {
 		if err := s.ensureWorktree(ctx, spec, laneDir, worktree); err != nil {

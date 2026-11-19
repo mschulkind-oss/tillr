@@ -320,6 +320,16 @@ with that header yields `session: unknown` rather than a guess.
   is produced from the tree afterwards.
 - **A report with no `RESULT:` footer**, whatever the exit code. The extractor refuses it
   with exit 4 and the report says `complete: no`.
+- **A session pi ended for a repeating call.** Pi emits a `loop_detected` event when it
+  ends a session because the model kept making one identical tool call. Such a run is
+  not a normal completion that happens to lack a footer. The extractor exits 6, "ended
+  by the harness", and the report header reads `result: ended by the harness:
+  repeating-call` with `complete: no`. The report's last line names the call and its
+  streak. This holds even after an earlier `RESULT:` footer, because the session did not
+  end on that footer. `testdata/extract-report-repeating.test.py` covers this, using the
+  two `repeating-call-*.jsonl` fixtures cut from the 2026-11-19 runs. The runner records
+  such a run's
+  [end cause](../../README.md#a-session-pi-ended-for-a-repeating-call).
 - **No model-resolution preflight is possible.** Pi has no cheap equivalent of
   `muse model-profile show`, so a wrong model pattern fails at the harness instead of
   before it. The unset-model refusal is the guard this adapter can offer; the policy is
