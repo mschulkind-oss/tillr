@@ -1,0 +1,64 @@
+{
+  "about": "The tillr backend policy for a jail whose pi has only GitHub Copilot. Same shape and rules as backend-policy.bedrock.json beside it; a drain names this file with --policy. The owner's instruction of 2026-11-18: the design seat runs Carbon 4, the build seat runs Hydrogen 4 and the scout seat runs Flash 3.8, all on Copilot through the pi adapter. He named only those three. The plan, review and verify seats run Carbon 4 here because they are judgement seats; that choice is the operator's, not his. Like the other per-machine policy files this is the stopgap docs/design/tillr-convergence.md OQ-TC2 records.",
+  "default_backend": "pi-build",
+  "preference": [
+    "pi-build",
+    "pi"
+  ],
+  "seats": {
+    "design": "pi-designer",
+    "build": "pi-build",
+    "review": "pi",
+    "scout": "pi-scout",
+    "plan": "pi",
+    "edit": "pi-build",
+    "test-write": "pi-build",
+    "test-run": "pi-scout",
+    "docs": "pi-build",
+    "verify": "pi"
+  },
+  "read_only_seats": [
+    "scout",
+    "test-run"
+  ],
+  "seat_purposes": {
+    "design": "Settle design decisions and specify the intended change.",
+    "build": "Implement the change described by the item or plan.",
+    "review": "Review the candidate against the criteria.",
+    "scout": "Search the tree and report findings without writing.",
+    "plan": "Read the item and tree and write the piece list.",
+    "edit": "Apply a settled edit named in the plan.",
+    "test-write": "Write tests from the criteria.",
+    "test-run": "Run a named check and report its result without fixing it.",
+    "docs": "Write documentation and README changes.",
+    "verify": "Join the pieces and verify the combined result."
+  },
+  "escalate": {
+    "build": [
+      "pi-build",
+      "pi"
+    ]
+  },
+  "backends": {
+    "pi": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "github-copilot/gemini-4-carbon",
+      "effort": "medium"
+    },
+    "pi-designer": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "github-copilot/gemini-4-carbon",
+      "effort": "medium"
+    },
+    "pi-build": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "github-copilot/gemini-4-hydrogen",
+      "effort": "medium"
+    },
+    "pi-scout": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "github-copilot/gemini-3.8-flash",
+      "effort": "medium"
+    }
+  }
+}
