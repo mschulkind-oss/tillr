@@ -35,6 +35,11 @@ written on 2026-11-18 to the owner's words of that evening, comes ahead of the l
 reopens how work written in a document reaches the queue, which the owner never ruled, and none
 of it is built until he has.
 
+[A review before every code landing](../design/tillr-diff-review.md), written on 2026-11-18 to
+the owner's words of that evening, asks which model reviews an item's commits before they land
+and who settles a repeated disagreement. No agent has ever read a change before tillr landed it,
+and none of the design is built until he answers the first.
+
 Five more left this list on 2026-11-18, none by the owner's ruling, and each is his to overturn.
 Two are a designer's decisions: [`OQ-CR4`](../design/criterion-repair.md#OQ-CR4), that the judge
 step gets no separate check of a criterion's premise, and
