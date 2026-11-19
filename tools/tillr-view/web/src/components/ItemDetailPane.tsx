@@ -291,7 +291,7 @@ export function ItemDetailPane({
               <WhyBlocked projection={detail.projected_state} blockedBy={item.blocked_by} />
               {item.closed_blockers.length > 0 ? (
                 <p role="alert" className="notice notice--blocked">
-                  Blocked by closed item{item.closed_blockers.length === 1 ? "" : "s"}: {item.closed_blockers.join(", ")}.
+                  Blocked by closed item{item.closed_blockers.length === 1 ? "" : "s"} without landing: {item.closed_blockers.join(", ")}. Moved by owner/operator: remove the dependency or reopen the closed item{item.closed_blockers.length === 1 ? "" : "s"}.
                 </p>
               ) : null}
             </>

@@ -1325,16 +1325,16 @@ func (p *planner) forkHeldBy(allowed []string) (string, bool) {
 }
 
 // isBlocked answers whether the item is held by a blocker: its own state says so, or
-// something it is blocked by has not reached a terminal state. A blocker the store does
-// not hold blocks, which is the safe direction: an edge whose target cannot be read is
-// not evidence that the target is done.
+// something it is blocked by has not landed or been resolved elsewhere. A blocker the
+// store does not hold or one closed without landing blocks, which is the safe direction:
+// neither is evidence that the dependency's change landed.
 func (p *planner) isBlocked(item itemRow, blockedBy []string) bool {
 	if item.State == p.rules().Blocked {
 		return true
 	}
 	for _, blocker := range blockedBy {
 		state, found := p.itemStates[blocker]
-		if !found || !p.finished(state) {
+		if !found || !blockerSatisfied(p.rules(), state) {
 			return true
 		}
 	}

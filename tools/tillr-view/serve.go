@@ -986,6 +986,7 @@ func (s *server) snapshotPayload(r *store.Reader, _ *http.Request) (any, *apiFai
 	// `tillr view status --store`, so the two faces cannot disagree (§5.6).
 	counts := boardCountsOf(items, runs, candidates, attempts, waiting, holds, history)
 	places := itemPlaces(items)
+	states := itemStates(items)
 	out.Items = make([]itemView, 0, len(items))
 	for _, it := range items {
 		itemRuns := runsByItem[it.ItemID]
@@ -1009,13 +1010,15 @@ func (s *server) snapshotPayload(r *store.Reader, _ *http.Request) (any, *apiFai
 			enqueuedCandidate = &c
 		}
 		blockers := append([]string{}, waiting[it.ItemID]...)
+		projected := ProjectItemState(it, enqueuedCandidate, active, waiting[it.ItemID], holds[it.ItemID])
+		projectClosedBlockers(&projected, closedBlockersFor(it, waiting[it.ItemID], states))
 		view := itemView{
 			BlockedBy:   blockers,
 			ItemID:      it.ItemID,
 			Title:       it.Title,
 			Place:       places[it.ItemID],
 			UpdatedAtMS: it.UpdatedAtMS,
-			Projected:   ProjectItemState(it, enqueuedCandidate, active, waiting[it.ItemID], holds[it.ItemID]),
+			Projected:   projected,
 		}
 		if costSeenItem {
 			view.CostUSD = &cost
@@ -1516,6 +1519,7 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 		}
 	}
 	out.Item.Projected = ProjectItemState(it, enqueuedCandidate, active, out.BlockedBy, hold)
+	projectClosedBlockers(&out.Item.Projected, out.ClosedBlockers)
 	return out, nil
 }
 

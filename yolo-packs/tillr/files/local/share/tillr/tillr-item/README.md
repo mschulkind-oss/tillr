@@ -106,6 +106,22 @@ Unknown items or neighbors are refused as `unknown-item`; terminal or parked
 ones as `not-in-order`. Update events record `placed_by` and `placed_via`,
 defaulting to `owner` and `cli`. Run `tillr-item place --help` for all flags.
 
+## Adding and removing dependencies
+
+`dep` adds or removes `blocked_by` edges on an existing item without rewriting
+the rest of its record and without changing its place in the queue.
+
+```sh
+tillr-item dep --store /path/to/state.db --item item-example --add item-other
+tillr-item dep --store /path/to/state.db --item item-example --remove item-other
+```
+
+Unchanged dependencies append no event. It refuses an unknown item
+(`not-found`), a blank or unknown dependency target (`edge-target-missing`),
+a self-dependency (`edge-self`), and any addition that would form a cycle
+(`edge-cycle`), and prints the resulting `item.record` envelope. Run
+`tillr-item dep --help` for all flags.
+
 ## Saving an idea
 
 `idea` reads the owner's words from standard input and accepts the same destinations
@@ -212,13 +228,13 @@ printf '%s\n' 'Add two rows to yolo-packs/copilot-models/pack.toml: ...' |
   tillr-item request --store .tillr/state.db --root . --title "List two more Copilot models" --workflow single-worker@v1 --path yolo-packs/copilot-models/pack.toml
 ```
 
-The flags are `--title`, `--path`, `--seat`, `--workflow`, `--criterion`, `--ordinary`, `--to`, `--before` and `--after`; run `tillr-item request --help` for their details. `--title` and `--path` (repeatable, one repo-relative prefix of the fence; a directory ends in `/`, and wildcards, absolute paths and paths that leave the repository are refused) are required. `--seat` is `build` by default. `--workflow` names a file under `config/tillr/workflows/` or the built-in `single-worker@v1` (one run on the item's seat); by default `design` runs `scouted-design@v1` and `build` runs `planned-build@v1`, other seats must name one, and a workflow that declares top-level `args` is refused as `workflow-needs-args` (`doc-triage@v1` has its own face). `--criterion` (repeatable, at most four) adds criteria after the fixed four. `--ordinary` files the request for the ordinary lanes only; by default a filed request is marked `express` when the item is written so it is eligible for the express lanes. `--to`, `--before` and `--after` place the item (last by default).
+The flags are `--title`, `--path`, `--seat`, `--workflow`, `--criterion`, `--blocked-by`, `--ordinary`, `--to`, `--before` and `--after`; run `tillr-item request --help` for their details. `--title` and `--path` (repeatable, one repo-relative prefix of the fence; a directory ends in `/`, and wildcards, absolute paths and paths that leave the repository are refused) are required. `--seat` is `build` by default. `--workflow` names a file under `config/tillr/workflows/` or the built-in `single-worker@v1` (one run on the item's seat); by default `design` runs `scouted-design@v1` and `build` runs `planned-build@v1`, other seats must name one, and a workflow that declares top-level `args` is refused as `workflow-needs-args` (`doc-triage@v1` has its own face). `--criterion` (repeatable, at most four) adds criteria after the fixed four. `--blocked-by` (repeatable) names an existing item this request waits on and stores the dependency when the item is filed so it never looks ready. `--ordinary` files the request for the ordinary lanes only; by default a filed request is marked `express` when the item is written so it is eligible for the express lanes. `--to`, `--before` and `--after` place the item (last by default).
 
 The face reads the workflow file before the store's write transaction opens, so the
 transaction does no I/O but the store's own. It writes the item (with `express` set unless
 `--ordinary` is given) and a `request_words` row in that one transaction: the words byte
-for byte, their SHA-256, and a hash of the title, seat, workflow, fence, criteria and
-express choice. Nothing tracked is written.
+for byte, their SHA-256, and a hash of the title, seat, workflow, fence, criteria,
+express choice and dependencies. Nothing tracked is written.
 
 The id is `item-request-` plus ten digits of the words' hash, lengthened on a collision.
 Filing the same words with the same choices again answers the first item's place
@@ -236,11 +252,11 @@ choice) are refused as `request-differs`, naming the existing item. The four fix
 The refusals are `words-empty`, `words-not-text`, `words-too-large`, `title-required`,
 `title-braces`, `fence-required`, `fence-wildcard`, `workflow-reference`,
 `workflow-missing`, `workflow-needs-args`, `workflow-required`, `criterion-empty`,
-`criterion-braces`, `too-many-criteria`, `request-differs`, `unknown-item` and
+`criterion-braces`, `too-many-criteria`, `edge-target-missing`, `request-differs`, `unknown-item` and
 `not-in-order`. A `{{` in the title or a criterion is refused because the brief template
 reads it as a placeholder; the words may hold anything. Every refusal comes before the
 first write. The answer is an `item.request` record carrying `item_id`, `place`,
-`count`, `seat`, `workflow`, `allowed_paths` and `words_size`. An identical refile
+`count`, `seat`, `workflow`, `allowed_paths`, `blocked_by` and `words_size`. An identical refile
 answers `item_id`, `place`, `count`, `event_seq` and `event_head_seq`. The
 [drain README](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md#filed-requests) says how the drain runs one.
 
@@ -424,7 +440,10 @@ The following rules describe Git-landing, including its established refusal name
   empty keys in that same order, one item update each in its own transaction;
   opening or migrating a store never does. New and newly unparked items with no
   key are added after every key the store held when sync began. Existing records
-  still accept the legacy `rank` field through apply and fixture seeding.
+  still accept the legacy `rank` field through apply and fixture seeding; `apply`
+  also accepts `place` (ignoring it on write) and keeps an existing item's stored
+  rank when `rank` is omitted, so a record read with `show` can be passed back to
+  `apply` unchanged without moving in the queue.
 - **First-import order follows the roadmaps.** Every tracked `docs/**/roadmap.md`
   is a roadmap, taken in path order. Its entries, read top to bottom outside
   `Icebox` and `Exploration`, are its own item blocks and the first links to

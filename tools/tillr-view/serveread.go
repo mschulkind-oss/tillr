@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -908,7 +909,7 @@ func ProjectItemState(item storeItem, enqueued *storeCandidate, active *storeRun
 	if len(waitingOn) > 0 && p.State != "landed" && p.State != "resolved_elsewhere" && p.State != "closed" {
 		p.State = "blocked"
 		if p.Underlying == "" {
-			p.Underlying = "an unresolved blocked_by edge"
+			p.Underlying = "waiting on " + strings.Join(waitingOn, ", ")
 		}
 		if item.State != "blocked" || item.Waiter == "" {
 			p.WaitingOn = waitingOn
@@ -924,6 +925,41 @@ func ProjectItemState(item storeItem, enqueued *storeCandidate, active *storeRun
 		p.Underlying = hold
 	}
 	return p
+}
+
+func closedBlockersFor(it storeItem, waitingOn []string, states map[string]string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, id := range waitingOn {
+		if states[id] == "closed" && !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	if depID, ok := strings.CutPrefix(it.Waiter, "item:"); ok && states[depID] == "closed" && !seen[depID] {
+		seen[depID] = true
+		out = append(out, depID)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func projectClosedBlockers(p *itemProjection, closedBlockers []string) {
+	if len(closedBlockers) == 0 || p.State == "landed" || p.State == "resolved_elsewhere" || p.State == "closed" {
+		return
+	}
+	p.State = "blocked"
+	noun := "item"
+	if len(closedBlockers) > 1 {
+		noun = "items"
+	}
+	if p.Underlying == "" || p.Underlying == "waiter not recorded" || strings.HasPrefix(p.Underlying, "waiting on ") {
+		p.Underlying = fmt.Sprintf("blocked by closed %s (%s) without landing; owner/operator: remove the dependency or reopen the closed %s",
+			noun, strings.Join(closedBlockers, ", "), noun)
+	}
+	if len(p.WaitingOn) == 0 {
+		p.WaitingOn = closedBlockers
+	}
 }
 
 // traceReader answers a run's recorded observations by asking `tillr-trace run <id>`,

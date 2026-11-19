@@ -94,12 +94,14 @@ func itemStates(items []storeItem) map[string]string {
 	return stateOf
 }
 
-// unmetBlocker answers whether an item waits on a blocker that has not reached a terminal
-// state. An edge naming an item this store does not carry is unmet: the answer is unknown,
-// and a queue that dispatched an item it could not prove was free would be guessing.
+// unmetBlocker answers whether an item waits on a blocker that has not landed or been
+// resolved elsewhere. Closing an item without landing does not satisfy a blocked_by edge,
+// and an edge naming an item this store does not carry is unmet: a queue that dispatched
+// an item whose dependency never landed would be guessing.
 func unmetBlocker(stateOf map[string]string, waiting map[string][]string, itemID string) bool {
 	for _, blockedBy := range waiting[itemID] {
-		if !terminalItemStates[stateOf[blockedBy]] {
+		state := stateOf[blockedBy]
+		if state == "closed" || !terminalItemStates[state] {
 			return true
 		}
 	}

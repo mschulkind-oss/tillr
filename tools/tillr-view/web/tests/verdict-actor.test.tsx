@@ -45,6 +45,9 @@ test("one alarm line names closed blockers", () => {
   expect(alerts).toHaveLength(1);
   expect(alerts[0].textContent).toContain("item-closed");
   expect(alerts[0].textContent).toContain("another-closed");
+  expect(alerts[0].textContent).toContain("without landing");
+  expect(alerts[0].textContent).toContain("owner/operator");
+  expect(alerts[0].textContent).toContain("remove the dependency or reopen");
 });
 
 test("a landed blocker does not produce a closed-item alarm", () => {

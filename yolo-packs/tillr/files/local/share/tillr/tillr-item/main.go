@@ -60,6 +60,8 @@ func run(args []string) int {
 		return fail(item.Usagef("seed has been retired; use tillr item sync to read items from tracked documents"))
 	case "rank":
 		env, code = rankFace(rest)
+	case "dep":
+		env, code = depFace(rest)
 	case "sync":
 		return syncFace(rest)
 	case "reconcile":
@@ -171,6 +173,41 @@ func rankFace(args []string) (record.Envelope, int) {
 	}
 	return writeStore(*path, at, func(ctx context.Context, tx *store.Tx) (record.Envelope, error) {
 		return item.SetRank(ctx, tx, *id, *rank, at)
+	})
+}
+
+// depFace adds or removes blocked_by edges on an existing item without rewriting other
+// fields or changing its rank/place.
+func depFace(args []string) (record.Envelope, int) {
+	fs := newFlagSet("dep")
+	path := fs.String("store", "", "the store to write")
+	id := fs.String("item", "", "the item whose dependencies change")
+	var add, remove []string
+	fs.Func("add", "an item id to add to blocked_by; repeat for each", func(v string) error {
+		add = append(add, v)
+		return nil
+	})
+	fs.Func("remove", "an item id to remove from blocked_by; repeat for each", func(v string) error {
+		remove = append(remove, v)
+		return nil
+	})
+	now := fs.String("now", "", "the injected clock, RFC 3339 (default: wall clock)")
+	if err := parseFlags(fs, args); err != nil {
+		return record.Envelope{}, fail(err)
+	}
+	if *path == "" || *id == "" || (len(add) == 0 && len(remove) == 0) {
+		return record.Envelope{}, fail(item.Usagef("dep needs --store <path>, --item <id>, and at least one --add <id> or --remove <id>"))
+	}
+	at := time.Now().UTC()
+	if *now != "" {
+		parsed, err := time.Parse(time.RFC3339, *now)
+		if err != nil {
+			return record.Envelope{}, fail(item.Usagef("--now %q is not an RFC 3339 timestamp: %v", *now, err))
+		}
+		at = parsed.UTC()
+	}
+	return writeStore(*path, at, func(ctx context.Context, tx *store.Tx) (record.Envelope, error) {
+		return item.SetDeps(ctx, tx, *id, add, remove, at)
 	})
 }
 
@@ -754,7 +791,7 @@ func rejectionOrFailure(err error, at time.Time) (record.Envelope, int) {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "apply, rank, sync, reconcile, comments, list, show, state, place, order, idea, doc-triage, request, close, reopen, decision, mail, grant, verdict or judge"
+const faceList = "apply, rank, dep, sync, reconcile, comments, list, show, state, place, order, idea, doc-triage, request, close, reopen, decision, mail, grant, verdict or judge"
 
 // errHelp is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer

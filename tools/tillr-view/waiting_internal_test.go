@@ -312,3 +312,51 @@ func TestWaitingRunLiveNamesTheSurvivingRun(t *testing.T) {
 		}
 	}
 }
+
+func TestWaitingClosedBlockerNamesItemAndMover(t *testing.T) {
+	h := newServeHarness(t)
+	h.exec(`DELETE FROM dispatches`)
+	h.exec(`INSERT INTO items (item_id,title,state,updated_at) VALUES
+  ('dep-closed','closed dep','closed',1000),
+  ('item-unplanned','unplanned blocked','in-queue',1000)`)
+	h.exec(`INSERT INTO item_edges (item_id,blocked_by) VALUES
+  ('item-seed-06','dep-closed'),
+  ('item-unplanned','dep-closed')`)
+	h.exec(`INSERT INTO dispatches (decision_id,item_id,action,reason,dispatched_at) VALUES
+  ('b1','item-seed-06','hold','blocked',1000)`)
+
+	rows, err := readWaiting(context.Background(), h.store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]waitingRow{}
+	for _, row := range rows {
+		byID[row.ItemID] = row
+	}
+	for _, id := range []string{"item-seed-06", "item-unplanned"} {
+		row, ok := byID[id]
+		if !ok {
+			t.Fatalf("%s missing from waiting rows: %+v", id, rows)
+		}
+		if row.Class != "needs you" {
+			t.Errorf("%s class = %q, want needs you", id, row.Class)
+		}
+		if !strings.Contains(row.Why, "dep-closed") || !strings.Contains(row.Why, "closed without landing") {
+			t.Errorf("%s why = %q, want dep-closed and closed without landing", id, row.Why)
+		}
+		if !strings.HasPrefix(row.Mover, "operator;") || !strings.Contains(row.Mover, "remove the dependency or reopen") || !strings.Contains(row.Mover, "dep-closed") {
+			t.Errorf("%s mover = %q, want operator; remove the dependency or reopen dep-closed", id, row.Mover)
+		}
+	}
+	if !strings.Contains(byID["item-seed-06"].Why, "item-seed-02") {
+		t.Errorf("item-seed-06 why = %q, want open blocker item-seed-02 named too", byID["item-seed-06"].Why)
+	}
+	states := map[string]string{"dep-closed": "closed", "dep-landed": "landed", "dep-resolved": "resolved-elsewhere"}
+	waiting := map[string][]string{"wait-closed": {"dep-closed"}, "wait-done": {"dep-landed", "dep-resolved"}}
+	if !unmetBlocker(states, waiting, "wait-closed") {
+		t.Errorf("unmetBlocker treated closed dependency as met")
+	}
+	if unmetBlocker(states, waiting, "wait-done") {
+		t.Errorf("unmetBlocker treated landed/resolved-elsewhere dependencies as unmet")
+	}
+}

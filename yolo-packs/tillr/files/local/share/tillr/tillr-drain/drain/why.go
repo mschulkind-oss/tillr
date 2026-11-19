@@ -241,6 +241,7 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 				row.Why += ": " + detail
 			}
 		}
+		var closedBlockers []string
 		switch {
 		case d.Reason == ReasonQuestionRemoved:
 			ref := conflicts[it.ItemID].QuestionRef
@@ -257,8 +258,17 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			row.Why, row.Mover = it.OwnerOwed.Explanation(), it.OwnerOwed.Mover()
 		case d.Reason == ReasonBlocked:
 			for _, id := range edges[it.ItemID] {
-				if !finishedState(def, states[id]) {
+				if !blockerSatisfied(def, states[id]) {
 					row.WaitingOn = append(row.WaitingOn, id)
+					if states[id] == def.Closed || states[id] == "closed" {
+						closedBlockers = append(closedBlockers, id)
+					}
+				}
+			}
+			if len(row.WaitingOn) > 0 {
+				row.Why += ": waiting on " + strings.Join(row.WaitingOn, ", ")
+				if len(closedBlockers) > 0 {
+					row.Why += "; " + strings.Join(closedBlockers, ", ") + " closed without landing"
 				}
 			}
 		case d.Action == ActionHold && (d.Reason == ReasonConflictDesign || d.Reason == ReasonConflictOwner) && d.ConflictID != "":
@@ -296,6 +306,10 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		if len(row.WaitingOn) > 0 && d.Reason != ReasonQuestionRemoved {
 			row.Mover = strings.Join(row.WaitingOn, ", ")
 		}
+		if len(closedBlockers) > 0 {
+			row.Class = "needs you"
+			row.Mover = "remove the dependency or reopen the closed item (" + strings.Join(row.WaitingOn, ", ") + ")"
+		}
 		if it.State == StateBlocked && d.Reason == ReasonBlocked {
 			waiting, _, err := item.ReadWaitingOn(r, it.ItemID)
 			if err != nil {
@@ -306,6 +320,17 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 				row.ClassSource = "store"
 				if waiting.Waiter == "owner" {
 					row.Class = "needs you"
+				} else if depID, ok := strings.CutPrefix(waiting.Waiter, "item:"); ok && (states[depID] == def.Closed || states[depID] == "closed") {
+					row.Class = "needs you"
+					row.Why = depID + " closed without landing"
+					if strings.TrimSpace(waiting.Reason) != "" {
+						row.Why += ": " + waiting.Reason
+					}
+					row.Mover = "remove the dependency or reopen the closed item (" + depID + ")"
+				} else if len(closedBlockers) > 0 {
+					row.Class = "needs you"
+					row.Why += "; " + strings.Join(closedBlockers, ", ") + " closed without landing"
+					row.Mover = "remove the dependency or reopen the closed item (" + strings.Join(closedBlockers, ", ") + ")"
 				}
 			}
 		}

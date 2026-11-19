@@ -355,13 +355,28 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 				if err != nil && !isMissingTable(err) {
 					return nil, err
 				}
-				var blockers []string
+				var blockers, closedBlockers []string
 				for _, edge := range edges {
-					if !waitingTerminal(states[edge.BlockedBy]) {
-						blockers = append(blockers, edge.BlockedBy)
+					state := states[edge.BlockedBy]
+					if state == "landed" || state == "resolved-elsewhere" {
+						continue
 					}
+					if state == "closed" {
+						closedBlockers = append(closedBlockers, edge.BlockedBy)
+						continue
+					}
+					blockers = append(blockers, edge.BlockedBy)
 				}
-				if len(blockers) > 0 {
+				if len(closedBlockers) > 0 {
+					row.Class = "needs you"
+					if len(blockers) > 0 {
+						row.Why = fmt.Sprintf("blocked: waiting on %s; %s closed without landing", strings.Join(blockers, ", "), strings.Join(closedBlockers, ", "))
+					} else {
+						row.Why = fmt.Sprintf("blocked: %s closed without landing", strings.Join(closedBlockers, ", "))
+					}
+					row.Mover = fmt.Sprintf("operator; remove the dependency or reopen %s", strings.Join(closedBlockers, ", "))
+				} else if len(blockers) > 0 {
+					row.Why = "blocked: waiting on " + strings.Join(blockers, ", ")
 					row.Mover = strings.Join(blockers, ", ")
 				}
 			}
@@ -412,9 +427,46 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 						row.Why += "; no document exists; name or triage one for " + item.ItemID
 					}
 				}
+			} else if depID, ok := strings.CutPrefix(item.Waiter, "item:"); ok && states[depID] == "closed" {
+				row.Class = "needs you"
+				row.Why = depID + " closed without landing"
+				if strings.TrimSpace(item.WaitingReason) != "" {
+					row.Why += ": " + item.WaitingReason
+				}
+				row.Mover = "operator; remove the dependency or reopen " + depID
 			}
 		} else if item.State == "blocked" && !found && row.Why == "not yet planned" {
 			row.Class, row.Mover, row.Why = "waits on work", "waiter not recorded", "waiter not recorded"
+		} else if !found && item.State == "in-queue" {
+			edges, err := readEdges(r, item.ItemID)
+			if err != nil && !isMissingTable(err) {
+				return nil, err
+			}
+			var blockers, closedBlockers []string
+			for _, edge := range edges {
+				state := states[edge.BlockedBy]
+				if state == "landed" || state == "resolved-elsewhere" {
+					continue
+				}
+				if state == "closed" {
+					closedBlockers = append(closedBlockers, edge.BlockedBy)
+					continue
+				}
+				blockers = append(blockers, edge.BlockedBy)
+			}
+			if len(closedBlockers) > 0 {
+				row.Class = "needs you"
+				if len(blockers) > 0 {
+					row.Why = fmt.Sprintf("blocked: waiting on %s; %s closed without landing", strings.Join(blockers, ", "), strings.Join(closedBlockers, ", "))
+				} else {
+					row.Why = fmt.Sprintf("blocked: %s closed without landing", strings.Join(closedBlockers, ", "))
+				}
+				row.Mover = fmt.Sprintf("operator; remove the dependency or reopen %s", strings.Join(closedBlockers, ", "))
+			} else if len(blockers) > 0 {
+				row.Class = "waits on work"
+				row.Why = "blocked: waiting on " + strings.Join(blockers, ", ")
+				row.Mover = strings.Join(blockers, ", ")
+			}
 		}
 		fixer := ""
 		if found && last.Reason == "trunk-broken" {

@@ -232,9 +232,11 @@ writes nothing. `1` names a block with a finding, and every other document was s
 written (`tillr item reconcile` reports tracked documents that still owe queue work).
 
 For work that needs no Markdown block, `tillr item request` files an item straight from
-standard input with a title and path fence: it enters the express pool by default unless
-marked ordinary, carries four fixed criteria plus optional additions, and refuses any
-candidate diff that touches item blocks. `tillr item idea` saves an owner idea,
+standard input with a title, path fence, and optional dependencies: it enters the express
+pool by default unless marked ordinary, carries four fixed criteria plus optional additions,
+and refuses any candidate diff that touches item blocks. `tillr item dep` adds or removes
+dependencies on an existing item without rewriting the rest of its record or changing its
+place in the queue. `tillr item idea` saves an owner idea,
 `tillr item doc-triage` files a one-document reconciliation run, and `tillr item` also
 provides `apply`, `list`, `show`, `order`, `state`, `close`, `reopen`, `decision`, `mail`,
 `grant`, `verdict`, and `judge`.

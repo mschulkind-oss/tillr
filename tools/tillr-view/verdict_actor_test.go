@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 )
 
@@ -132,6 +133,11 @@ func TestItemClosedBlockers(t *testing.T) {
 			if state == "closed" {
 				if len(got) != 1 || got[0] != "item-seed-02" {
 					t.Fatalf("closed blockers = %v", got)
+				}
+				projection := data["item"].(map[string]any)["projected_state"].(map[string]any)
+				underlying, _ := projection["underlying"].(string)
+				if !strings.Contains(underlying, "item-seed-02") || !strings.Contains(underlying, "without landing") || !strings.Contains(underlying, "owner/operator") {
+					t.Fatalf("closed blocker projection underlying = %q, want item-seed-02, without landing, and owner/operator", underlying)
 				}
 			} else if len(got) != 0 {
 				t.Fatalf("landed blockers alarmed: %v", got)

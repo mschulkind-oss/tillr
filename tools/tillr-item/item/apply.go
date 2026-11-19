@@ -56,6 +56,9 @@ type itemPayload struct {
 	// queue sorts after every ranked one — and an edit replaces the value like every other
 	// field, so a record that states no rank stores the item unranked.
 	Rank string `json:"rank"`
+	// Place is show's 1-based queue position, accepted on apply for round-trip
+	// compatibility and ignored on write.
+	Place int `json:"place,omitempty"`
 	// Seat is the role of the work the item asks for — one of the seats in seat.go — and
 	// never a model id. The backend policy maps the seat to a backend, and that backend
 	// names its model, so changing which model fills a seat is a policy edit and touches no
@@ -130,6 +133,7 @@ func ApplyWithReceipt(ctx context.Context, tx *store.Tx, env record.Envelope, re
 	if payloadErr != nil {
 		return record.Envelope{}, Usagef("reading the item payload: %v", payloadErr)
 	}
+	payload.Place = 0
 	if payload.ItemID == "" {
 		return record.Envelope{}, Usagef("an item.record needs an item_id")
 	}
@@ -160,6 +164,9 @@ func ApplyWithReceipt(ctx context.Context, tx *store.Tx, env record.Envelope, re
 		stored, storedAt, err := readStoredItem(tx.Reader(), payload.ItemID)
 		if err != nil {
 			return record.Envelope{}, err
+		}
+		if !hasPayloadField(env.Payload, "rank") {
+			payload.Rank = stored.Rank
 		}
 		from = stored.State
 		payload.CloseReason, payload.ClosedAt, payload.ClosedBy, payload.ClosedFrom = stored.CloseReason, stored.ClosedAt, stored.ClosedBy, stored.ClosedFrom
@@ -374,6 +381,33 @@ func unknownPayloadField(raw json.RawMessage, shape reflect.Type) (string, bool)
 		}
 	}
 	return "", false
+}
+
+// hasPayloadField reports whether the top-level JSON object in raw declares key
+// (matching encoding/json's case-insensitive key lookup).
+func hasPayloadField(raw json.RawMessage, target string) bool {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if token, err := dec.Token(); err != nil || token != json.Delim('{') {
+		return false
+	}
+	for dec.More() {
+		token, err := dec.Token()
+		if err != nil {
+			return false
+		}
+		key, ok := token.(string)
+		if !ok {
+			return false
+		}
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return false
+		}
+		if strings.EqualFold(key, target) {
+			return true
+		}
+	}
+	return false
 }
 
 // sameTerminalDefinition compares the fields Apply writes, not read-through questions or

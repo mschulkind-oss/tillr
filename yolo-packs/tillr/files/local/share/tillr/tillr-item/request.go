@@ -21,13 +21,17 @@ func requestFace(args []string) (record.Envelope, int) {
 	title := fs.String("title", "", "the item's one-line title")
 	seat := fs.String("seat", "build", "the item's seat: build or design (any declared seat with --workflow)")
 	workflow := fs.String("workflow", "", "the workflow to run (default planned-build@v1 for build, scouted-design@v1 for design; single-worker@v1 is one run)")
-	var paths, criteria []string
+	var paths, criteria, blockedBy []string
 	fs.Func("path", "a repo-relative prefix the change may touch; repeat for each (required)", func(p string) error {
 		paths = append(paths, p)
 		return nil
 	})
 	fs.Func("criterion", "an extra criterion, judged with the fixed four; repeat for each (at most four)", func(c string) error {
 		criteria = append(criteria, c)
+		return nil
+	})
+	fs.Func("blocked-by", "an item id this request waits on; repeat for each", func(id string) error {
+		blockedBy = append(blockedBy, id)
 		return nil
 	})
 	to := fs.String("to", "", "first or last (default last when no other destination is given)")
@@ -58,7 +62,7 @@ func requestFace(args []string) (record.Envelope, int) {
 	if err != nil {
 		return record.Envelope{}, fail(err)
 	}
-	filing := item.RequestFiling{Words: words, Title: *title, Seat: *seat, Workflow: *workflow, Paths: paths, Criteria: criteria, Ordinary: *ordinary, Destination: dest, At: at, By: *by, Via: *via}
+	filing := item.RequestFiling{Words: words, Title: *title, Seat: *seat, Workflow: *workflow, Paths: paths, Criteria: criteria, BlockedBy: blockedBy, Ordinary: *ordinary, Destination: dest, At: at, By: *by, Via: *via}
 	if filing.Workflow == "" {
 		filing.Workflow = item.RequestDefaultWorkflow[filing.Seat]
 	}
