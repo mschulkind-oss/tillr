@@ -1,15 +1,44 @@
-# last_hand_move_event_seq: 1294191
-# hand_move_event_sha256: 01d37e5f112a252bfeef1dcb9d563470adf4638f787bddead107abec61fa05d6
+# last_hand_move_event_seq: 1294636
+# hand_move_event_sha256: cc4620f673a495a2965b2c79d11637f9d8b4d900dd3bce1ba0b17d50540f6dc2
+item-request-458ffc9523
 item-request-cfae4676fc
 item-gate-pinned-fork-inputs
 item-agent-default-bmad-superpowers-skills
 item-bedrock-claude-latest-only
 item-landing-call-obstacle-tool
-item-doc-triage-2026-11-18-tillr-roadmap-designs
 item-landing-call-delivery-tests
 item-landing-call-pi-switch-on
 item-request-e1016f3a23
 item-request-b13084fe3e
-item-request-349f56e5fe
 item-request-25676973b4
-item-request-6c27d14b15
+item-request-a410a35903
+item-request-b3adc2fe9f
+item-request-5ea04d3fe4
+item-request-93ea9ef38a
+item-request-c7dda1191a
+item-request-302d6cb688
+item-request-2b669fc29c
+item-request-dc7de4bf2c
+item-request-a7cc82c70a
+item-request-862a8fcbcf
+item-request-7c75aab698
+item-request-e4fdecddef
+item-request-894041fed6
+item-request-a01bdcc48e
+item-request-6ea5491776
+item-request-f558e54d4b
+item-request-ea6c7262ba
+item-request-72f2f70171
+item-request-e9472ce7eb
+item-request-747ce6487b
+item-request-91d80a9f0a
+item-request-648953b794
+item-request-02cbe46dc3
+item-request-56a0e30be2
+item-request-1188d1dd63
+item-request-f5d9b0978b
+item-request-fd559fa39a
+item-request-becb9f5f64
+item-request-925da0a25c
+item-request-d86962cb4c
+item-request-b4cfb0a376
