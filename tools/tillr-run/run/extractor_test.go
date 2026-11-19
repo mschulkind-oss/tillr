@@ -1,6 +1,10 @@
 package run
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // TestExtractorResolvesFromTheAdaptersDirectory pins the layout rule criterion 1 states: a
 // run's extractor is the file beside the adapter its request names, so a backend's own name
@@ -34,5 +38,26 @@ func TestExtractorResolvesFromTheAdaptersDirectory(t *testing.T) {
 				t.Fatalf("extractorFor(%q, %q) = %q, want %q", c.backendsDir, c.adapter, got, c.want)
 			}
 		})
+	}
+}
+
+func TestResolveExecAdapterUsesBackendsDir(t *testing.T) {
+	backendsDir := filepath.Join(t.TempDir(), "tools", "tillr-run", "backends")
+	piDir := filepath.Join(backendsDir, "pi")
+	if err := os.MkdirAll(piDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(piDir, "run-pi")
+	if err := os.WriteFile(want, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if got := resolveExecAdapter(backendsDir, "pi", "tools/tillr-run/backends/pi/run-pi"); got != want {
+		t.Fatalf("resolveExecAdapter = %q, want %q", got, want)
+	}
+	if got := resolveExecAdapter(backendsDir, "command", "tools/tillr-run/backends/pi/run-pi"); got != "tools/tillr-run/backends/pi/run-pi" {
+		t.Fatalf("command backend adapter was rewritten to %q", got)
+	}
+	if got := resolveExecAdapter(backendsDir, "pi", "run-pi"); got != "run-pi" {
+		t.Fatalf("bare adapter name was rewritten to %q", got)
 	}
 }

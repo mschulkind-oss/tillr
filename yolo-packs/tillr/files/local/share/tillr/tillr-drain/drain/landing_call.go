@@ -371,7 +371,7 @@ func (l *Loop) recordEndingCapabilities(ctx context.Context) error {
 		piFeatures   []string
 	)
 	for _, backend := range l.cfg.Policy.Backends {
-		adapter := backend.Adapter
+		adapter := resolveAdapterPath(l.cfg.Root, backend.Adapter)
 		if _, ok := capabilities[adapter]; ok {
 			continue
 		}

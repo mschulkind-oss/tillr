@@ -64,10 +64,16 @@ func readPolicyContent(ref string) (*Policy, []byte, string, error) {
 // EffectivePolicy uses the loop's accepted snapshot when it names this file.
 // Without a loop snapshot, a standalone read still checks its explicit input.
 func EffectivePolicy(root, ref string) (*Policy, error) {
+	withRoot := func(p *Policy, err error) (*Policy, error) {
+		if err == nil && p != nil && root != "" {
+			p.Root = root
+		}
+		return p, err
+	}
 	state, err := ReadPolicyState(root)
 	if err != nil {
 		if _, statErr := os.Stat(PolicyStateFile(root)); os.IsNotExist(statErr) {
-			return LoadPolicy(ref)
+			return withRoot(LoadPolicy(ref))
 		}
 		return nil, err
 	}
@@ -81,10 +87,10 @@ func EffectivePolicy(root, ref string) (*Policy, error) {
 			return nil, e
 		}
 		if a != b {
-			return LoadPolicy(ref)
+			return withRoot(LoadPolicy(ref))
 		}
 	}
-	return decodePolicy(state.Ref, []byte(state.Content))
+	return withRoot(decodePolicy(state.Ref, []byte(state.Content)))
 }
 
 func (l *Loop) currentPolicy() *Policy {
@@ -112,6 +118,7 @@ func (l *Loop) refreshPolicy() error {
 	next.Ref = l.cfg.PolicyRef
 	next.DiskHash, next.Refusal, next.At = hash, refusal, l.cfg.Now().UTC()
 	if err == nil {
+		p.Root = l.cfg.Root
 		next.Hash, next.Content = hash, string(raw)
 	}
 	change := policyChange{At: next.At, OldHash: old.DiskHash, NewHash: hash, InForceHash: next.Hash, Refusal: refusal}

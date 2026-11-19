@@ -33,8 +33,12 @@ type completionSteps interface {
 // ConfigureNonLanding supplies the root-relative extractor directory explicitly:
 // the run utility otherwise derives its default by invoking Git.
 func (s *ProcessSteps) ConfigureNonLanding() {
-	if s.BackendsDir == "" {
-		s.BackendsDir = filepath.Join(s.Root, "tools", "tillr-run", "backends")
+	if s.BackendsDir == "" && s.Root != "" {
+		root := s.Root
+		if absRoot, err := filepath.Abs(root); err == nil {
+			root = absRoot
+		}
+		s.BackendsDir = filepath.Join(root, "tools", "tillr-run", "backends")
 	}
 }
 

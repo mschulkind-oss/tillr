@@ -116,6 +116,12 @@ func candidateArgs(c Candidate, root string) []string {
 // the attempt is classified from lives, and a log that is gone classifies as "no report"
 // rather than failing the run.
 func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	if len(req.Command) > 0 && req.Backend != "command" && s.Root != "" {
+		resolved := resolveAdapterPath(s.Root, req.Command[0])
+		if resolved != req.Command[0] {
+			req.Command = append([]string{resolved}, req.Command[1:]...)
+		}
+	}
 	env, err := requestEnvelope(Decision{ItemID: req.ItemID, RunRequest: &req}, s.Now().UTC())
 	if err != nil {
 		return run.Record{}, "", err
@@ -143,8 +149,20 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 	if req.Resume {
 		args = append(args, "--resume")
 	}
-	if s.BackendsDir != "" {
-		args = append(args, "--backends-dir", s.BackendsDir)
+	backendsDir := s.BackendsDir
+	if s.Root != "" {
+		root := s.Root
+		if absRoot, err := filepath.Abs(root); err == nil {
+			root = absRoot
+		}
+		if backendsDir == "" {
+			backendsDir = filepath.Join(root, "tools", "tillr-run", "backends")
+		} else if !filepath.IsAbs(backendsDir) {
+			backendsDir = filepath.Join(root, backendsDir)
+		}
+	}
+	if backendsDir != "" {
+		args = append(args, "--backends-dir", backendsDir)
 	}
 	// A run face owns its lifetime. Only an explicit stop or build migration
 	// may signal it; canceling this wait never signals an already handed-off run.
