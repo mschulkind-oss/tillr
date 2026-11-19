@@ -35,7 +35,8 @@ record the endpoint and live verification.
 
 ```
 run-claude --backend claude --model MODEL --effort LEVEL
-           [--brief PATH] [--target PATH] [--timeout SECONDS] [--session-id UUID]
+           [--account MODE] [--brief PATH] [--target PATH]
+           [--timeout SECONDS] [--session-id UUID]
            [-- HARNESS-ARGUMENTS...]
 ```
 
@@ -61,6 +62,12 @@ timeout <wall> claude -p --output-format stream-json --verbose \
 - **The lane markers** `BOARD_DRAIN_BRIEF`, `BOARD_DRAIN_RUN` and `BOARD_DRAIN_SESSION`
   are exported exactly as [`run-pi`](../pi/README.md) exports them, so a hook can tell a
   lane's worker from a person's session.
+- **`--account subscription` overrides ambient Bedrock routing.** When a backend row sets
+  `"account": "subscription"`, `run-claude` unsets `CLAUDE_CODE_USE_BEDROCK`,
+  `ANTHROPIC_BEDROCK_REGION_PREFIX`, `ANTHROPIC_SMALL_FAST_MODEL` and `ANTHROPIC_DEFAULT_*`
+  and passes `--settings` clearing those keys from `~/.claude/settings.json` so Claude Code
+  authenticates with the saved subscription login instead of Amazon Bedrock; leaving
+  `account` unset preserves the ambient environment.
 - **The recording seam** is the same as `run-pi`'s: with a run id in the environment,
   `BASH_ENV`, `TILLR_TRACE_DIR` and `TILLR_REPO_ROOT` are exported, all fail-open. No
   `GIT_TRACE2_*` variable is exported, and any the loop carries are unset (git trace2
@@ -68,9 +75,10 @@ timeout <wall> claude -p --output-format stream-json --verbose \
   [the pi README](../pi/README.md#the-recording-seam).
 
 Refusals (exit 2, nothing started): the `backend` field names neither `claude` nor a seat
-alias `claude-<role>`; no model; no effort; the brief is missing, empty, unfilled or
-missing one of the template's ten sections; the target is not the directory the adapter
-runs in; `claude` is not on `PATH`; an argument before `--` that the adapter does not know.
+alias `claude-<role>`; no model; no effort; an `--account` value other than `subscription`;
+the brief is missing, empty, unfilled or missing one of the template's ten sections; the
+target is not the directory the adapter runs in; `claude` is not on `PATH`; an argument
+before `--` that the adapter does not know.
 
 Exit: the harness's own code, 124 from the wall, 2 from a refusal.
 

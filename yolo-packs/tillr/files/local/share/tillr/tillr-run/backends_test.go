@@ -267,3 +267,97 @@ func TestTheClaudeAdapterAcceptsASeatAliasAndPassesItsHarnessArgs(t *testing.T) 
 		}
 	}
 }
+
+func TestTheClaudeAdapterAccountSubscriptionStripsBedrockEnvAndPassesSettings(t *testing.T) {
+	adapter, err := filepath.Abs(filepath.Join("backends", "claude", "run-claude"))
+	if err != nil {
+		t.Fatalf("resolving the adapter failed: %v", err)
+	}
+	extractor, err := filepath.Abs(filepath.Join("backends", "claude", "extract-report"))
+	if err != nil {
+		t.Fatalf("resolving the extractor failed: %v", err)
+	}
+	stream, err := filepath.Abs(filepath.Join("backends", "claude", "testdata", "complete.jsonl"))
+	if err != nil {
+		t.Fatalf("resolving the fixture stream failed: %v", err)
+	}
+	rateLimited, err := filepath.Abs(filepath.Join("backends", "claude", "testdata", "rate-limited.jsonl"))
+	if err != nil {
+		t.Fatalf("resolving the rate-limited fixture failed: %v", err)
+	}
+
+	bin := filepath.Join(scratch(t, "stub"), "bin")
+	argvLog := filepath.Join(filepath.Dir(bin), "argv.log")
+	envLog := filepath.Join(filepath.Dir(bin), "env.log")
+	writeExecutable(t, filepath.Join(bin, "claude"),
+		"#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > \"$STUB_ARGV\"\nenv > \"$STUB_ENV\"\ncat \"$STUB_STREAM\"\n")
+
+	lane := filepath.Join(scratch(t, "lane"), "lane")
+	worktree := filepath.Join(lane, "worktree")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatalf("creating the worktree failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lane, "brief.md"), []byte(filledBrief(t, worktree)), 0o644); err != nil {
+		t.Fatalf("writing the brief failed: %v", err)
+	}
+
+	run := exec.Command(adapter, "--backend", "claude", "--model", "model-x", "--effort", "medium", "--account", "subscription")
+	run.Dir = worktree
+	run.Env = append(os.Environ(),
+		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"STUB_STREAM="+stream,
+		"STUB_ARGV="+argvLog,
+		"STUB_ENV="+envLog,
+		"CLAUDE_CODE_USE_BEDROCK=1",
+		"ANTHROPIC_BEDROCK_REGION_PREFIX=global",
+		"ANTHROPIC_SMALL_FAST_MODEL=fixture-small",
+		"ANTHROPIC_DEFAULT_MODEL=fixture-default",
+		"ANTHROPIC_DEFAULT_CUSTOM_MODEL=fixture-custom",
+	)
+	if out, err := run.Output(); err != nil {
+		t.Fatalf("running adapter with --account subscription failed: %v: %s", err, out)
+	}
+	recordedArgv, err := os.ReadFile(argvLog)
+	if err != nil {
+		t.Fatalf("reading argv log failed: %v", err)
+	}
+	if !strings.Contains(string(recordedArgv), "--settings\n") || !strings.Contains(string(recordedArgv), `"CLAUDE_CODE_USE_BEDROCK":""`) {
+		t.Fatalf("subscription run did not pass --settings overriding CLAUDE_CODE_USE_BEDROCK:\n%s", recordedArgv)
+	}
+	recordedEnv, err := os.ReadFile(envLog)
+	if err != nil {
+		t.Fatalf("reading env log failed: %v", err)
+	}
+	for _, forbidden := range []string{
+		"CLAUDE_CODE_USE_BEDROCK=",
+		"ANTHROPIC_BEDROCK_REGION_PREFIX=",
+		"ANTHROPIC_SMALL_FAST_MODEL=",
+		"ANTHROPIC_DEFAULT_MODEL=",
+		"ANTHROPIC_DEFAULT_CUSTOM_MODEL=",
+	} {
+		if strings.Contains(string(recordedEnv), forbidden) {
+			t.Fatalf("subscription run leaked %q into claude env", forbidden)
+		}
+	}
+
+	// Unknown --account values are refused at preflight (exit 2).
+	bad := exec.Command(adapter, "--backend", "claude", "--model", "model-x", "--effort", "medium", "--account", "bogus")
+	bad.Dir = worktree
+	bad.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if out, err := bad.CombinedOutput(); err == nil {
+		t.Fatalf("expected exit 2 for unknown --account, got 0: %s", out)
+	} else if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 2 {
+		t.Fatalf("expected exit 2 for unknown --account, got %v: %s", err, out)
+	}
+
+	// The rate-limited fixture extracts the rejected five_hour window.
+	report, err := exec.Command(extractor, "--backend", "claude", "--model", "model-x", "--effort", "medium", "--exit-code", "1", rateLimited).CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected non-zero exit from extractor on rate-limited fixture, got 0:\n%s", report)
+	}
+	for _, want := range []string{"rate limit kind: five_hour", "fraction: 1.02", "status: rejected", "reset: 1795128600"} {
+		if !strings.Contains(string(report), want) {
+			t.Fatalf("rate-limited report does not carry %q:\n%s", want, report)
+		}
+	}
+}

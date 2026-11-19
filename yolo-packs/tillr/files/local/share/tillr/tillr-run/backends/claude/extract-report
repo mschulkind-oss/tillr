@@ -73,6 +73,21 @@ def _rfc3339(stamp):
     return moment.astimezone(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _normalize_window(info):
+    """Fill top-level utilization from unifiedWindows[rateLimitType] when absent (Claude Code >=2.1.328)."""
+    if not isinstance(info, dict):
+        return None
+    normalized = dict(info)
+    if normalized.get("utilization") is None:
+        unified = normalized.get("unifiedWindows")
+        kind = normalized.get("rateLimitType")
+        if isinstance(unified, dict) and isinstance(kind, str):
+            sub = unified.get(kind)
+            if isinstance(sub, dict) and isinstance(sub.get("utilization"), (int, float)):
+                normalized["utilization"] = sub["utilization"]
+    return normalized
+
+
 def dialect(stream_text):
     records, unparseable = report.records(stream_text)
     pieces = []
@@ -103,8 +118,7 @@ def dialect(stream_text):
                 key = message.get("id") or f"line-{index}"
                 message_usage.setdefault(key, total)
         elif kind == "rate_limit_event":
-            info = record.get("rate_limit_info")
-            window = info if isinstance(info, dict) else None
+            window = _normalize_window(record.get("rate_limit_info"))
         elif kind == "result":
             final = record
 

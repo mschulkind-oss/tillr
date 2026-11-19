@@ -54,7 +54,7 @@ func TestContinuationUsesOnlyThisRunsReportAndConsumesRestartNotice(t *testing.T
 	}
 	t.Run("a wall or signal is not a restart and the lane report is not evidence", func(t *testing.T) {
 		prompt := promptFor()
-		if strings.Contains(prompt, "restart") {
+		if strings.Contains(strings.ReplaceAll(prompt, dir, ""), "restart") {
 			t.Fatalf("invented restart: %s", prompt)
 		}
 		if strings.Contains(prompt, "Report:") {
@@ -96,7 +96,7 @@ func TestContinuationUsesOnlyThisRunsReportAndConsumesRestartNotice(t *testing.T
 		if _, err := os.Stat(notice); !os.IsNotExist(err) {
 			t.Fatalf("restart notice not consumed: %v", err)
 		}
-		if prompt := promptFor(); strings.Contains(prompt, "restart") {
+		if prompt := promptFor(); strings.Contains(strings.ReplaceAll(prompt, dir, ""), "restart") {
 			t.Fatalf("replayed old restart: %s", prompt)
 		}
 	})

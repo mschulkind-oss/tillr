@@ -51,6 +51,7 @@ type Backend struct {
 	Model          string   `json:"model,omitempty"`
 	Models         []string `json:"models,omitempty"`
 	Effort         string   `json:"effort,omitempty"`
+	Account        string   `json:"account,omitempty"`
 	WorkingDir     string   `json:"working_dir,omitempty"`
 	TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
 	HarnessArgs    []string `json:"harness_args,omitempty"`
@@ -132,6 +133,9 @@ func (b Backend) command(name, model string) []string {
 	argv := []string{b.Adapter, "--backend", name, "--model", model}
 	if b.Effort != "" {
 		argv = append(argv, "--effort", b.Effort)
+	}
+	if b.Account != "" {
+		argv = append(argv, "--account", b.Account)
 	}
 	if b.TimeoutSeconds > 0 {
 		argv = append(argv, "--timeout", strconv.Itoa(b.TimeoutSeconds))

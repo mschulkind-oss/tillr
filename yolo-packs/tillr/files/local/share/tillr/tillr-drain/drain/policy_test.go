@@ -536,7 +536,8 @@ func TestPolicyStartingSeats(t *testing.T) {
 			if !readOnly["scout"] || !readOnly["test-run"] {
 				t.Error("scout and test-run must be read-only")
 			}
-			if filepath.Base(path) == "backend-policy.bedrock.json" {
+			switch filepath.Base(path) {
+			case "backend-policy.bedrock.json":
 				for seat, backend := range map[string]string{"plan": "pi", "verify": "pi", "edit": "pi-build", "test-write": "pi-build", "docs": "pi-build", "test-run": "pi-scout"} {
 					if got := p.seatList(seat); !slices.Equal(got, []string{backend}) {
 						t.Errorf("%s mapped to %v, want %s", seat, got, backend)
@@ -549,7 +550,32 @@ func TestPolicyStartingSeats(t *testing.T) {
 						}
 					}
 				}
-			} else {
+			case "backend-policy.claude-copilot.json":
+				want := map[string][]string{
+					"design":     {"claude-designer", "pi-designer", "pi"},
+					"build":      {"claude", "pi-build"},
+					"review":     {"claude", "pi"},
+					"plan":       {"claude", "pi"},
+					"verify":     {"claude", "pi"},
+					"edit":       {"pi-build"},
+					"test-write": {"pi-build"},
+					"docs":       {"pi-build"},
+					"scout":      {"pi-scout"},
+					"test-run":   {"pi-scout"},
+				}
+				for seat, list := range want {
+					if got := p.seatList(seat); !slices.Equal(got, list) {
+						t.Errorf("%s mapped to %v, want %v", seat, got, list)
+					}
+				}
+				for _, seat := range p.seatNames() {
+					for _, backend := range p.seatList(seat) {
+						if backend == "pi-scout" && !readOnly[seat] {
+							t.Errorf("pi-scout assigned to writing seat %s", seat)
+						}
+					}
+				}
+			default:
 				for seat, source := range map[string]string{"plan": "review", "verify": "review", "edit": "build", "test-write": "build", "docs": "build", "test-run": "scout"} {
 					_, seatIsList := p.SeatLists[seat]
 					_, sourceIsList := p.SeatLists[source]
