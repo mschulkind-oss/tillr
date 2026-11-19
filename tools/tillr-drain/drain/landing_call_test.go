@@ -574,110 +574,15 @@ func TestLandingDeliveryForms(t *testing.T) {
 }
 
 func TestLandingCallLoopRecordsShippedCapabilities(t *testing.T) {
-	for _, tc := range []struct {
-		name           string
-		script         string
-		wantPi         string
-		wantFeatures   []string
-		wantCapability string
-	}{
-		{
-			name:           "supported",
-			script:         "printf '[\"parked-tool-calls\"]\\n'",
-			wantPi:         run.EndingCallSuspends,
-			wantFeatures:   []string{"parked-tool-calls"},
-			wantCapability: run.EndingCallSuspends,
-		},
-		{
-			name:           "rejects",
-			script:         "exit 2",
-			wantPi:         run.EndingFooter,
-			wantCapability: run.EndingFooter,
-		},
-		{
-			name:           "unsupported",
-			script:         "printf '[\"other\"]\\n'",
-			wantPi:         run.EndingFooter,
-			wantFeatures:   []string{"other"},
-			wantCapability: run.EndingFooter,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			bin := t.TempDir()
-			piPath := filepath.Join(bin, "pi")
-			if err := os.WriteFile(piPath, []byte("#!/bin/sh\n"+tc.script+"\n"), 0755); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-			f, l := passFixture(t)
-			l.cfg.Policy.Backends = map[string]Backend{}
-			want := map[string]string{}
-			for _, name := range []string{"agy", "claude", "muse", "pi"} {
-				adapter, err := filepath.Abs(filepath.Join("..", "..", "tillr-run", "backends", name, "run"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				l.cfg.Policy.Backends[name] = Backend{Adapter: adapter}
-				want[adapter] = run.EndingFooter
-				if name == "pi" {
-					want[adapter] = tc.wantPi
-				}
-			}
-			if _, err := l.Run(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-			fixtureRead(t, f, func(r *store.Reader) error {
-				var raw []byte
-				if err := r.QueryRow(`SELECT payload FROM events WHERE kind=?`, endingCapabilitiesKind).Scan(&raw); err != nil {
-					return err
-				}
-				got := map[string]string{}
-				if err := json.Unmarshal(raw, &got); err != nil {
-					return err
-				}
-				if !reflect.DeepEqual(got, want) {
-					t.Fatalf("effective capabilities %v; want %v", got, want)
-				}
-				var count int
-				if err := r.QueryRow(`SELECT count(*) FROM events WHERE kind=?`, piFeaturesKind).Scan(&count); err != nil {
-					return err
-				}
-				if count != 1 {
-					t.Fatalf("pi features events=%d, want 1", count)
-				}
-				var featRaw []byte
-				if err := r.QueryRow(`SELECT payload FROM events WHERE kind=?`, piFeaturesKind).Scan(&featRaw); err != nil {
-					return err
-				}
-				var feat struct {
-					Path       string   `json:"path"`
-					Capability string   `json:"capability"`
-					Features   []string `json:"features"`
-				}
-				if err := json.Unmarshal(featRaw, &feat); err != nil {
-					return err
-				}
-				if feat.Path != piPath || feat.Capability != tc.wantCapability || !reflect.DeepEqual(feat.Features, tc.wantFeatures) {
-					t.Fatalf("pi features payload=%+v, want path=%q capability=%q features=%v", feat, piPath, tc.wantCapability, tc.wantFeatures)
-				}
-				return nil
-			})
-		})
-	}
-}
-
-func TestLandingCallLoopWithoutPiBackendSkipsProbe(t *testing.T) {
 	bin := t.TempDir()
-	marker := filepath.Join(bin, "pi-started")
-	piPath := filepath.Join(bin, "pi")
-	if err := os.WriteFile(piPath, []byte("#!/bin/sh\n: > "+marker+"\nexit 0\n"), 0755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte("#!/bin/sh\nprintf '[\"parked-tool-calls\"]\n'\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	f, l := passFixture(t)
 	l.cfg.Policy.Backends = map[string]Backend{}
 	want := map[string]string{}
-	for _, name := range []string{"agy", "claude", "muse"} {
+	for _, name := range []string{"agy", "claude", "muse", "pi"} {
 		adapter, err := filepath.Abs(filepath.Join("..", "..", "tillr-run", "backends", name, "run"))
 		if err != nil {
 			t.Fatal(err)
@@ -687,9 +592,6 @@ func TestLandingCallLoopWithoutPiBackendSkipsProbe(t *testing.T) {
 	}
 	if _, err := l.Run(context.Background()); err != nil {
 		t.Fatal(err)
-	}
-	if _, err := os.Stat(marker); !os.IsNotExist(err) {
-		t.Fatalf("loop without pi backend started pi (stat err=%v)", err)
 	}
 	fixtureRead(t, f, func(r *store.Reader) error {
 		var raw []byte
@@ -702,13 +604,6 @@ func TestLandingCallLoopWithoutPiBackendSkipsProbe(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("effective capabilities %v; want %v", got, want)
-		}
-		var count int
-		if err := r.QueryRow(`SELECT count(*) FROM events WHERE kind=?`, piFeaturesKind).Scan(&count); err != nil {
-			return err
-		}
-		if count != 0 {
-			t.Fatalf("pi features events=%d, want 0", count)
 		}
 		return nil
 	})

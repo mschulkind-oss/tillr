@@ -8839,7 +8839,11 @@ installed pi does not print it, and every worker keeps the footer.
   - Choose the form by what the installed pi says it supports.
   - Record the answer and the binary's path at each start of the loop.
 
+<!-- tillr: item id="item-landing-call-pi-switch-on" paths="tools/tillr-drain/,docs/" blocked_by="" prose="2" -->
 
+- **c1:** The pi adapter's effective ending capability is `call-suspends` only when the installed binary prints `parked-tool-calls` from the features flag, and `footer` otherwise. A test of the loop asserts both with stand-in binaries, including one that rejects the flag.
+- **c2:** The loop starts `pi` with the features flag only when its policy names a backend whose adapter is the pi adapter, and records the answer with the binary's path as a `drain.pi-features` event. A loop whose policy names no such backend starts no `pi`. A test asserts each.
+- **c3:** A probe whose process outlives its bound, or leaves a child holding its output, does not hold the loop's start. A test asserts it with a stand-in that sleeps.
 
 **Agent Details:**
 
@@ -8865,7 +8869,7 @@ that call's result.
   - Route a tool-call obstacle exactly as the same obstacle in a footer.
   - Return the reply to the worker as the call's result.
 
-<!-- tillr: item id="item-landing-call-obstacle-tool" paths="tools/tillr-run/backends/,tools/tillr-drain/,docs/" blocked_by="" prose="2" -->
+<!-- tillr: item id="item-landing-call-obstacle-tool" paths="tools/tillr-run/backends/,tools/tillr-drain/,docs/" blocked_by="item-landing-call-pi-switch-on" prose="2" -->
 
 - **c1:** `obstacle` accepts each of the six kinds (`definition`, `fence`, `trunk`, `tooling`, `seat`, `owner`) with that kind's required fields and rejects a call missing one, without ending the run. A test asserts each kind and one rejection.
 - **c2:** An obstacle call is recorded and routed exactly as the same obstacle in a footer is today. A test runs one shared case file of obstacles through both forms and asserts equal routing.
