@@ -35,7 +35,7 @@ func conflictBeforeClaim(current item.Conflict, d Decision) (item.Conflict, bool
 		if current.ConflictID != d.BlockConflict.ConflictID || current.Status != "awaiting" || current.DesignRunID != d.RunRequest.RunID {
 			return current, false
 		}
-		current.Status, current.WaitingOn, current.DesignRunID = "raised", "design", ""
+		current.Status, current.WaitingOn, current.DesignRunID = "raised", "design", d.DesignContinuationFrom
 		return current, true
 	case d.ConflictID != "":
 		if current.ConflictID != d.ConflictID || current.Status != "closed" {

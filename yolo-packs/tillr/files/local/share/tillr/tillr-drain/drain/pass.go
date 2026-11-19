@@ -1116,7 +1116,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				}
 			}
 		}
-		works, err := readPending(tx.Reader())
+		works, designHistory, err := readPendingHistory(tx.Reader())
 		if err != nil {
 			return err
 		}
@@ -1163,6 +1163,21 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			items, err := readItems(tx.Reader())
 			if err != nil {
 				return err
+			}
+			if !l.nonLanding {
+				conflicts, err := item.ReadConflicts(tx.Reader())
+				if err != nil {
+					return err
+				}
+				for _, row := range items {
+					if row.ItemID == d.ItemID || row.State != StateBlocked {
+						continue
+					}
+					c := conflicts[row.ItemID]
+					if origin := designContinuationWork(c, designHistory[c.DesignRunID]); origin != nil && origin.Decision.LaneID == d.LaneID {
+						return nil
+					}
+				}
 			}
 			for _, item := range items {
 				if item.ItemID != d.ItemID {
@@ -1223,6 +1238,12 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			if work != nil && (work.Ready || d.WorkflowRestart) {
 				base = work.BaseSHA
 			}
+			if d.BlockConflict != nil {
+				origin := designHistory[d.BlockConflict.DesignRunID]
+				if err := l.prepareDesignContinuation(ctx, tx.Reader(), &d, origin, &base); err != nil {
+					return err
+				}
+			}
 			if err := correlate(tx, &d); err != nil {
 				return err
 			}
@@ -1260,6 +1281,9 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			shut, err := readDispatchShut(tx.Reader(), at, l.currentPolicy(), d)
 			if err != nil {
 				return err
+			}
+			if d.DesignContinuationFrom != "" && d.RunRequest.SessionTurn && shut[d.RunRequest.Backend] {
+				return errSeatWindowClosed
 			}
 			nodes := parallelNodes(d)
 			for i := range nodes {

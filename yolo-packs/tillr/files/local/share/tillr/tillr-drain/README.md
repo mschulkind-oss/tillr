@@ -1456,13 +1456,16 @@ objection that names the owner. The ruling is recorded in
    called "did not amend" and handed to the owner without a gate. A commit that removes or
    renames the block leaves no item for a worker, so it goes back to the design seat,
    naming the commit.
-2. **A commit the gate refuses** is no attempt. The conflict is raised again for the design
-   seat with the failing checks and the pinned commit (`refs/tillr/runs/<run>`) in its text,
-   as many times as it takes. The ruling sends the refusal to the same designer session;
-   until `item-design-refusal-resumes-session` is built, a fresh design run is dispatched
-   instead. Any other refusal (the fence, the lander) goes back the same way.
+2. **A commit the gate refuses** returns to the same designer session with the failing
+   checks and their output. Each repair is a new run record, with the refused commit
+   restored from `refs/tillr/runs/<run>` on the original lane. Keeping that worktree
+   path lets Pi open its existing session rather than fork it. A revised commit goes
+   through the same fence, gate, and landing checks. Even identical gate refusals
+   return to design without a limit. If the recorded session is gone or its adapter
+   cannot resume it, the conflict explains why the repair starts a fresh session.
 3. **An interrupted or killed run** — a loop stop (`drain.orphaned`), a lease reclaimed
-   after its loop died, a signal — is no attempt: the design seat is dispatched again.
+   after its loop died, a signal — continues its recorded session on the same lane
+   when available. Otherwise the conflict explains why a fresh session starts.
 4. **An objection.** A design run that commits nothing names who acts next with a report
    line `NEXT-ACTOR: <actor>`. `NEXT-ACTOR: build` says the block stands as written: the
    conflict is `answered` and the item goes back to its worker. `NEXT-ACTOR: owner` says
@@ -1480,14 +1483,13 @@ objection that names the owner. The ruling is recorded in
    blocked`, is a missing output, not an objection: the design seat is dispatched again,
    and the conflict's text states the contract. It never defaults to the owner.
 
-6. **An identical repeat goes to the owner, with a question.** An ending that repeats an
-   earlier design ending of the same item exactly is not sent to the design seat again,
+6. **An identical repeat goes to the owner, with a question.** Except for gate refusals,
+   an ending that exactly repeats an earlier design ending does not return to design,
    because it would be sent the same thing. The comparison is the worker path's: the same
    cause and the same evidence key as any earlier ending, and no count. The key is the
    conflict plus a digest of the item's block on the trunk for a run that named no actor
-   or removed the block; the failing checks and their output digests for a gate refusal;
-   and the refusal's words for a fence escape or a refused landing. An interrupted or
-   killed run never repeats. The loop raises an objection naming the owner. It is recorded
+   or removed the block, and the refusal's words for a fence escape or a refused landing.
+   An interrupted or killed run never repeats. The loop raises an objection naming the owner. It is recorded
    as an owner conflict, and the waiting view names the action needed to put the
    decision in its document rather than presenting an owner with nowhere to answer.
    The conflict's text names both runs and the command that moves it:

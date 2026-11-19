@@ -138,20 +138,17 @@ func TestAMissingActorOnAChangedBlockGoesBackToTheDesignSeat(t *testing.T) {
 	raisedForDesign(t, f, l, second, DesignNextActorField)
 }
 
-// Gate refusals with different evidence go back to the design seat every time; one that
-// repeats an earlier one's evidence goes to the owner.
-func TestADesignGateRefusalGoesToTheOwnerOnlyWhenItRepeats(t *testing.T) {
+// Gate refusals go back even when the same evidence repeats.
+func TestADesignGateRefusalReturnsEvenWhenEvidenceRepeats(t *testing.T) {
 	f, l := designConflictFixture(t)
-	var runs []string
 	for _, evidence := range []string{"gate:go-test=a", "gate:go-test=b", "gate:lint=c"} {
 		design := endDesignRunWith(t, f, l, RefusalGate, "", evidence)
 		settleDesign(t, l)
 		raisedForDesign(t, f, l, design, "was refused at the gate")
-		runs = append(runs, design)
 	}
 	again := endDesignRunWith(t, f, l, RefusalGate, "", "gate:go-test=b")
 	settleDesign(t, l)
-	heldForOwnerOnRepeat(t, f, l, runs[1], again)
+	raisedForDesign(t, f, l, again, "was refused at the gate")
 }
 
 // A blocked report that names no actor, settled by reportedBlock, is the same missing

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -96,13 +97,14 @@ func (l *Loop) compactDesigner(ctx context.Context, d Decision) error {
 // replay it as though no work happened. Error-only assistant messages are not answers.
 func failedDesignerResume(d Decision, rec run.Record) (bool, error) {
 	workerTurn := d.RunRequest != nil && d.RunRequest.SessionTurn && d.WorkerSessionReason == "resumed-worker"
-	if (!strings.HasPrefix(d.DesignerReason, "resumed-") && !workerTurn) || rec.ExitCode == nil || *rec.ExitCode == 0 || rec.State != run.StateExited {
+	designTurn := d.DesignContinuationFrom != "" && d.RunRequest != nil && d.RunRequest.SessionTurn
+	if (!strings.HasPrefix(d.DesignerReason, "resumed-") && !workerTurn && !designTurn) || rec.ExitCode == nil || *rec.ExitCode == 0 || rec.State != run.StateExited {
 		return false, nil
 	}
-	if workerTurn && rec.EndCause != run.EndNormalExit {
+	if (workerTurn || designTurn) && rec.EndCause != run.EndNormalExit {
 		return false, nil
 	}
-	sawLog := false
+	sawLog, missingSession := false, false
 	for _, ref := range rec.ArtifactRefs {
 		if ref.Kind != "log" {
 			continue
@@ -116,6 +118,9 @@ func failedDesignerResume(d Decision, rec run.Record) (bool, error) {
 		scan.Buffer(make([]byte, 64<<10), 16<<20)
 		response := false
 		for scan.Scan() {
+			if designTurn && missingDesignSessionDiagnostic(scan.Text(), d.DesignerSessionID) {
+				missingSession = true
+			}
 			var e struct {
 				Type    string `json:"type"`
 				Message struct {
@@ -162,7 +167,15 @@ func failedDesignerResume(d Decision, rec run.Record) (bool, error) {
 			return false, nil
 		}
 	}
+	if designTurn {
+		return missingSession, nil
+	}
 	return sawLog, nil
+}
+
+// Match explicit harness diagnostics, not the absence of a model response.
+func missingDesignSessionDiagnostic(line, id string) bool {
+	return id != "" && (strings.Contains(line, "No session found matching '"+id+"'") || strings.Contains(line, "No conversation found with session ID: "+id))
 }
 
 // retireDesigners deletes only the loop's rows. Harness retention owns transcripts.
@@ -273,7 +286,7 @@ func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.
 	next.Reason = "resume-failed"
 	next.DesignerReason = "resume-failed"
 	next.DesignerSessionID = ""
-	if old.RunRequest.SessionTurn {
+	if old.RunRequest.SessionTurn && old.DesignContinuationFrom == "" {
 		next.WorkerSessionReason = "resume-failed"
 	}
 	req := *old.RunRequest
@@ -295,6 +308,12 @@ func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.
 	next.RunRequest = &req
 	identifyDecision(&next)
 	spec := StageSpec{Policy: l.currentPolicy(), Continue: true, LaneID: next.LaneID, ItemID: next.ItemID, RunID: req.RunID, Backend: req.Backend, BaseSHA: l.laneBase(next.LaneID), WorkingDir: req.WorkingDir, TimeoutMS: req.TimeoutMS, Returned: old.Returned}
+	if old.DesignContinuationFrom != "" {
+		c := *old.BlockConflict
+		c.DesignRunID = req.RunID
+		c.Text += "\n\nThe recorded designer session rejected continuation; starting a fresh design session."
+		next.BlockConflict, spec.BlockConflict = &c, &c
+	}
 	if old.RunRequest.SessionTurn && next.Workflow != nil {
 		spec.Node = &next.Workflow.Stages[next.NodeIndex]
 		var err error
@@ -343,6 +362,11 @@ func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.
 		}
 		if err = recordPassDecision(tx, next, l.cfg.Now().UTC()); err != nil {
 			return err
+		}
+		if next.DesignContinuationFrom != "" {
+			if err := item.RecordConflict(tx, *next.BlockConflict, l.cfg.Now().UTC()); err != nil {
+				return err
+			}
 		}
 		return appendEffect(tx, dispatchStartedKind, req.RunID, &pendingWork{Decision: next, BaseSHA: spec.BaseSHA, Owner: owner, ParentRunID: rec.RunID, LoopID: l.sessionID}, l.cfg.Now().UTC())
 	})

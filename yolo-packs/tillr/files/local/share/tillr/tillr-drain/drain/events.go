@@ -236,6 +236,9 @@ type refusalPayload struct {
 	// event is keyed by the item rather than by a run.
 	Reason string `json:"reason,omitempty"`
 	Detail string `json:"detail,omitempty"`
+	// A returned design gate refusal binds the exact pinned checkout and its fence base.
+	DesignBaseSHA string `json:"design_base_sha,omitempty"`
+	DesignHeadSHA string `json:"design_head_sha,omitempty"`
 	// Checks and Evidence are a returned ending's own fields (returned.go): the gate checks
 	// that failed, with their logs and normalized digests, and the ending's evidence key,
 	// which the identical-repeat rule compares. A refusal recorded before 2026-11-17 carries
@@ -256,6 +259,13 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 		ItemID: candidate.ItemID,
 		LaneID: candidate.LaneID,
 		TickID: candidate.TickID,
+	}
+	if step == RefusalGate && candidate.BlockConflict != nil && candidate.BlockConflict.TriageVersion == "" {
+		// Do not publish continuation feedback before its candidate is reachable.
+		if err := l.pin(ctx, candidate.RunID, candidate.HeadSHA); err != nil {
+			return err
+		}
+		payload.DesignBaseSHA, payload.DesignHeadSHA = candidate.BaseSHA, candidate.HeadSHA
 	}
 	if returnedCauses[step] {
 		payload.Checks, payload.Evidence = l.endingEvidence(ctx, candidate, step)
