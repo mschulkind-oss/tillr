@@ -312,13 +312,13 @@ The interface is in the graph design's words and names no engine. Every write ca
 | **Read the queue** | Items, rank, inter-item edges, lanes in use | — |
 | **Events since** a store sequence; **the head**; **wait past** a sequence | The cursor reads | — |
 
-**What replaces direct SQL.** A caller that today opens a write transaction and runs statements inside it makes one of the calls above. There is no call that takes a function, a statement or a transaction. A caller that today reads tables to decide something asks for the graph and decides in its own memory. A caller that reads to display or to analyze (the view, the evidence tools, the trace indexer) reads a derived index with SQL, or the cursor.
+**What replaces direct SQL.** A caller that today opens a write transaction and runs statements inside it makes one of the calls above. There is no call that takes a function, a statement or a transaction. A caller that today reads tables to decide something asks for the graph and decides in its own memory. A caller that reads to display or to analyze (the view, the evidence tools, `tillr-trace`) reads a derived index with SQL, or the cursor.
 
 **What this leaves out on purpose.** The interface has no write across two items ([Section 4.2](#42-does-the-model-need-a-write-across-two-items)), no way to change a fixed field, and no way to record liveness.
 
 ## 7. Derived data
 
-Three rules, for the view's index, the trace index and any later one.
+Three rules, for the view's index and any later one. The trace index this section also covered was removed on 2026-11-18 (below).
 
 1. **Rebuildable.** A derived index is built from the logs through the cursor and holds the store sequence it has reached. Deleting it loses nothing. Its layout carries a version, and a mismatch means delete and rebuild, never repair in place.
 2. **Never on the write path.** The writer does not read, write or wait for any index. An index has one writing process of its own, under its own kernel lock.
@@ -328,7 +328,7 @@ Three rules, for the view's index, the trace index and any later one.
 
 **The view's index** is SQLite, written by one indexer and opened read-only by everything else. During the migration it is today's file with today's tables, which is why the view's queries move last.
 
-**The trace index** keeps its own file and reads the store through the cursor instead of opening the store's file.
+**The trace index is gone.** On 2026-11-18 the owner ruled that it was cached derived data, to be removed until a measured performance problem asks for a cache: "remove it if it is cached derived data. once we show a performance issue, we can cache it." The loop no longer runs an indexer, and `tillr-trace` and the view read a run's artifacts on demand ([tillr-trace README](../../tools/tillr-trace/README.md#no-index-every-answer-is-read-from-the-artifacts)). A cache that returns is held to the three rules above, and reads the store through the cursor instead of opening the store's file.
 
 ## 8. Alternatives inside the recommendation
 
@@ -462,7 +462,7 @@ The record of an item is rows in several tables plus events that repeat them. Th
 | 1 | **Today's shape with its faults fixed, and the recommended structure, whole.** First, structure A after the usage faults are fixed: does any lock failure or stall remain? Then one writer over a log per item with text lines, behind the same interface, through the same four trials: the workload, the race, 50 kill rounds, and the cost of a test store. All variants interleaved and repeated, on a file system checked healthy first, which also replaces the void timings of [Section 3](#3-what-was-measured). Plus the writer's start time at 1, 10 and 100 times today's volume | Whether any change of structure is still warranted, and whether the combination behaves like its parts. Today's support is C for the files and B for the lifecycle |
 | 2 | **A writer that is stuck and not dead.** Stop the writer with SIGSTOP; block it inside a `write`; make it spin in a check. For each: what clients see, whether a second writer can ever run beside it, and what a restart costs | The writer lock, and the facts [OQ-TS3](#OQ-TS3) is ruled on |
 | 3 | **Cross-item acts.** Walk every act in the graph design that touches two items or an item and the queue, and write each as single-log writes. Kill between every pair of writes and evaluate again | Whether the model needs a write across items ([Section 4.2](#42-does-the-model-need-a-write-across-two-items)), and so whether the logs are per item or one |
-| 4 | **A Python reader.** The trace indexer and the evidence tool read through the JSON command and the cursor, during the workload | That no second implementation of the format is needed |
+| 4 | **A Python reader.** `tillr-trace` and the evidence tool read through the JSON command and the cursor, during the workload | That no second implementation of the format is needed |
 | 5 | **A simulated machine crash.** Cut random amounts off the tails of random logs, start the writer, and check that what remains is a state the store once held | The cut rule of [Section 5.5](#55-kills-and-a-machine-crash). A real power loss cannot be tested in the jail and is outside the durability requirement |
 | 6 | **Host and jail together.** A writer in the jail and a client on the host, and the reverse | The lock and the socket across the bind mount |
 

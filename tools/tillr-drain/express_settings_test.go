@@ -18,7 +18,7 @@ func TestLoopExpressSettingsReachReservedPool(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeFile(t, policy, string(raw))
-	code, out := invoke(t, "loop", "--root", f.root, "--store", f.store, "--policy", policy, "--item-bin", sibling(t, "item"), "--lanes", "2", "--lane-root", f.laneRoot, "--gate", "/bin/true", "--land", "/bin/true", "--verdict", "/bin/true", "--trace-bin=", "--rolling=", "--exit-when-drained")
+	code, out := invoke(t, "loop", "--root", f.root, "--store", f.store, "--policy", policy, "--item-bin", sibling(t, "item"), "--lanes", "2", "--lane-root", f.laneRoot, "--gate", "/bin/true", "--land", "/bin/true", "--verdict", "/bin/true", "--rolling=", "--exit-when-drained")
 	if code != 0 {
 		t.Fatalf("loop exit=%d: %s", code, out)
 	}

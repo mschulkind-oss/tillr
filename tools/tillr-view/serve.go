@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"sort"
@@ -32,13 +33,12 @@ import (
 // at (design §4.1), so a client can tell two responses apart and never renders one
 // request's items beside another request's runs.
 type serverSnapshot struct {
-	OrderRecording   *orderrecord.Status `json:"order_recording,omitempty"`
-	WritesEnabled    bool                `json:"writes_enabled"`
-	StorePath        string              `json:"store_path"`
-	SchemaVersion    int                 `json:"schema_version"`
-	EventHeadSeq     int64               `json:"event_head_seq"`
-	TraceWatermarkNS *int64              `json:"trace_watermark_ns"`
-	GeneratedAt      time.Time           `json:"generated_at"`
+	OrderRecording *orderrecord.Status `json:"order_recording,omitempty"`
+	WritesEnabled  bool                `json:"writes_enabled"`
+	StorePath      string              `json:"store_path"`
+	SchemaVersion  int                 `json:"schema_version"`
+	EventHeadSeq   int64               `json:"event_head_seq"`
+	GeneratedAt    time.Time           `json:"generated_at"`
 	// Build is the program that answered. It is on every response, refusal included,
 	// because "is this the tree I am reading" is a question a stale server is the least
 	// likely one to answer any other way (build.go).
@@ -72,9 +72,10 @@ type apiErrorBody struct {
 	Message string `json:"message"`
 }
 
-// server is the read-only face of the store. It holds one read-only handle and one
-// trace index handle for its lifetime: opening per request would open a second reader of
-// a live store on every refresh, and neither handle can write.
+// server is the read-only face of the store. It holds one read-only handle for its
+// lifetime: opening per request would open a second reader of a live store on every
+// refresh, and the handle cannot write. A run's recorded streams are read on demand, per
+// request, by tillr-trace (traceReader), which writes nothing either.
 type server struct {
 	writeEnabled bool
 	itemFlag     string
@@ -177,7 +178,7 @@ func serveFace(args []string) (record.Envelope, int) {
 	storePath := fs.String("store", "", "the store to serve (required)")
 	loopDir := fs.String("loop-dir", "", "the loop's record directory (default: <store dir>/../loop)")
 	laneRoot := fs.String("lane-root", "", "where the lane directories live: each run's stream log and lane-copied inputs (default: <store dir>/lanes)")
-	index := fs.String("trace-index", defaultTraceIndex(), "the tillr-trace index to read (default: $TILLR_TRACE_ROOT or the state home)")
+	traceBin := fs.String("trace-bin", "", traceBinHelp)
 	addr := fs.String("addr", "127.0.0.1:4318", "the address to listen on")
 	root := fs.String("root", ".", "the directory a relative design_doc resolves against")
 	vantageURL := fs.String("vantage-url", "", "the Vantage base URL the board's document link is built from (default: $TILLR_VANTAGE_BASE_URL)")
@@ -199,7 +200,7 @@ func serveFace(args []string) (record.Envelope, int) {
 		return record.Envelope{}, usagef("serve needs --store <path>")
 	}
 	ctx := context.Background()
-	srv := newServer(ctx, *storePath, *loopDir, *laneRoot, *index, *root, vantageBaseURL(*vantageURL), commandFields(*questionsCmd))
+	srv := newServer(ctx, *storePath, *loopDir, *laneRoot, resolveTraceBin(*root, *traceBin), *root, vantageBaseURL(*vantageURL), commandFields(*questionsCmd))
 	defer srv.close()
 	srv.policyRef = *policyRef
 	srv.offeredLanes = *lanesArg
@@ -261,21 +262,34 @@ func serveFace(args []string) (record.Envelope, int) {
 	return record.Envelope{}, sv.run(ctx, listener)
 }
 
-// defaultTraceIndex is where tillr-trace keeps its index: its own default, not a path
-// this face invents.
-func defaultTraceIndex() string {
-	if root := os.Getenv("TILLR_TRACE_ROOT"); root != "" {
-		return filepath.Join(root, "index.db")
+// traceBinHelp is the flag text every face that reads a run's recorded streams shares.
+var traceBinHelp = "the tillr-trace program that reads a run's recorded artifacts on demand (default: <root>/tools/tillr-trace/tillr-trace, the pack's ~/.local/share/tillr/tillr-trace/tillr-trace, then tillr-trace on PATH)"
+
+// resolveTraceBin answers the tillr-trace program a run's streams are read with. It is a
+// Python script beside the Go tree rather than a built binary, so it is not necessarily on
+// PATH: a checkout's own copy matches the code being served, and the pack's copy is what a
+// delivered install has. A named program always wins, and one that does not exist is
+// reported as absent rather than replaced by a fallback.
+func resolveTraceBin(root, named string) string {
+	if named != "" {
+		return named
 	}
-	stateHome := os.Getenv("XDG_STATE_HOME")
-	if stateHome == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ""
+	candidates := []string{filepath.Join(root, "tools", "tillr-trace", "tillr-trace")}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates, filepath.Join(home, ".local", "share", "tillr", "tillr-trace", "tillr-trace"))
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			if abs, err := filepath.Abs(candidate); err == nil {
+				return abs
+			}
+			return candidate
 		}
-		stateHome = filepath.Join(home, ".local", "state")
 	}
-	return filepath.Join(stateHome, "tillr-trace", "v1", "index.db")
+	if path, err := exec.LookPath("tillr-trace"); err == nil {
+		return path
+	}
+	return ""
 }
 
 // newServer opens the store once successfully, retrying failed opens on API requests.
@@ -287,7 +301,7 @@ func defaultTraceIndex() string {
 // client's whole complaint about these states is that they look alike, and the only place
 // they can be told apart is in an answer. The diagnosis is printed to stderr as well, so an
 // operator who started the face by hand still reads which condition they named.
-func newServer(ctx context.Context, storePath, loopDir, laneRoot, index, root, vantageBase string, questionsCmd []string) *server {
+func newServer(ctx context.Context, storePath, loopDir, laneRoot, traceBin, root, vantageBase string, questionsCmd []string) *server {
 	srv := &server{storePath: storePath, root: root, vantageBase: vantageBase, questionsCmd: questionsCmd,
 		checkout: &checkoutWatch{root: root, git: runGit, now: time.Now}, vantage: newVantageCache(root, questionsCmd)}
 	srv.openStore(ctx)
@@ -307,7 +321,7 @@ func newServer(ctx context.Context, storePath, loopDir, laneRoot, index, root, v
 	if laneRoot == "" {
 		laneRoot = filepath.Join(filepath.Dir(storePath), "lanes")
 	}
-	srv.obs = &observations{loopDir: loopDir, laneRoot: laneRoot, trace: openTraceIndex(ctx, index)}
+	srv.obs = &observations{loopDir: loopDir, laneRoot: laneRoot, trace: newTraceReader(traceBin, storePath, loopDir)}
 	return srv
 }
 
@@ -341,9 +355,6 @@ func (s *server) openStore(ctx context.Context) {
 }
 
 func (s *server) close() {
-	if s.obs != nil && s.obs.trace != nil {
-		s.obs.trace.Close()
-	}
 	if s.store != nil {
 		s.store.Close()
 	}
@@ -533,14 +544,13 @@ func (s *server) serveRead(fn payloadFunc, outside bool) http.HandlerFunc {
 				return err
 			}
 			cursor = serverSnapshot{
-				WritesEnabled:    s.writeEnabled,
-				StorePath:        s.storePath,
-				SchemaVersion:    s.schema,
-				EventHeadSeq:     head,
-				TraceWatermarkNS: s.obs.trace.watermarkNS(),
-				GeneratedAt:      time.Now().UTC(),
-				Build:            s.currentBuild(),
-				VantageBaseURL:   s.vantageBase,
+				WritesEnabled:  s.writeEnabled,
+				StorePath:      s.storePath,
+				SchemaVersion:  s.schema,
+				EventHeadSeq:   head,
+				GeneratedAt:    time.Now().UTC(),
+				Build:          s.currentBuild(),
+				VantageBaseURL: s.vantageBase,
 			}
 			if req.URL.Path == "/api/v1/waiting" || req.URL.Path == "/api/v1/why" {
 				cursor.OrderRecording, _, err = orderrecord.Read(ctx, r, s.root)
@@ -615,11 +625,11 @@ type sourceState struct {
 }
 
 // sourceStates says which sources a response was assembled from, because "no runs" and
-// "no index to read runs from" are different answers.
+// "no reader for a run's recorded streams" are different answers.
 type sourceStates struct {
-	Store      sourceState `json:"store"`
-	LoopDir    sourceState `json:"loop_dir"`
-	TraceIndex sourceState `json:"trace_index"`
+	Store   sourceState `json:"store"`
+	LoopDir sourceState `json:"loop_dir"`
+	Trace   sourceState `json:"trace"`
 }
 
 func (s *server) sources() sourceStates {
@@ -628,7 +638,7 @@ func (s *server) sources() sourceStates {
 		loop.State = "absent"
 		loop.Note = "no tick has written record files here"
 	}
-	trace := sourceState{Path: s.obs.trace.path, State: s.obs.trace.state, Note: s.obs.trace.note}
+	trace := sourceState{Path: s.obs.trace.bin, State: s.obs.trace.state, Note: s.obs.trace.note}
 	store := sourceState{Path: s.storePath, State: "present"}
 	if s.problem != nil {
 		// The store is the one source a response cannot be assembled without, so its
@@ -638,9 +648,9 @@ func (s *server) sources() sourceStates {
 		store.Note = s.problem.note
 	}
 	return sourceStates{
-		Store:      store,
-		LoopDir:    loop,
-		TraceIndex: trace,
+		Store:   store,
+		LoopDir: loop,
+		Trace:   trace,
 	}
 }
 
@@ -1600,8 +1610,10 @@ func (s *server) runPayload(r *store.Reader, req *http.Request) (any, *apiFailur
 		return nil, unreadable(err)
 	}
 	out.Stages = s.stages(r, run)
-	claims, _ := s.obs.trace.runClaims(id)
-	for _, c := range claims {
+	// One read of the run's artifacts answers the claims, the turn count and the stream
+	// states: each read parses them again.
+	read, readErr := s.obs.trace.run(id)
+	for _, c := range read.Claims {
 		state := stateObserved
 		if c.ObservedStatus == "unverified" {
 			state = stateUnobservedSeam
@@ -1610,26 +1622,28 @@ func (s *server) runPayload(r *store.Reader, req *http.Request) (any, *apiFailur
 			c.DiscrepancyReason, state, c.ObservedAt})
 	}
 	out.Cost = costView{Tokens: run.UsageTokens, CostTotalUSD: run.CostUSD,
-		Note: "the store holds the run's total tokens and cost; a turn count comes from the trace index"}
-	if obs := s.obs.trace; obs.db != nil {
-		if events, err := obs.runEvents(id); err == nil {
-			turns := 0
-			for _, e := range events {
-				if e.Kind == "llm.turn" {
-					turns++
-				}
+		Note: "the store holds the run's total tokens and cost; a turn count comes from the run's own log"}
+	if readErr == nil && read.Found {
+		turns := 0
+		for _, e := range read.Events {
+			if e.Kind == "llm.turn" {
+				turns++
 			}
-			out.Cost.Turns = &turns
 		}
+		out.Cost.Turns = &turns
 	}
-	row, indexed, _ := s.obs.trace.runRow(id)
-	out.Completeness = completenessView{LogState: "unindexed", ProcState: "unindexed",
-		GitState: "unindexed", BriefState: "absent",
-		Note: "no trace index: the run's log, subprocess and git streams are unobserved, not empty"}
-	if s.obs.trace.db != nil && indexed {
-		out.Completeness = completenessView{LogState: row.LogState, ProcState: row.ProcState,
-			GitState: row.GitState, BriefState: "absent",
-			Note: "stream states are tillr-trace's index of this run's artifacts"}
+	out.Completeness = completenessView{LogState: "unread", ProcState: "unread",
+		GitState: "unread", BriefState: "absent",
+		Note: "the run's recorded streams were not read: its log, subprocess and git streams are unobserved, not empty"}
+	switch {
+	case !s.obs.trace.available():
+		out.Completeness.Note += "; " + s.obs.trace.note
+	case readErr != nil:
+		out.Completeness.Note += "; " + readErr.Error()
+	case read.Found:
+		out.Completeness = completenessView{LogState: read.Row.LogState, ProcState: read.Row.ProcState,
+			GitState: read.Row.GitState, BriefState: "absent",
+			Note: "stream states are what tillr-trace read from this run's artifacts just now"}
 	}
 	brief := s.obs.readRunArtifact(id, "brief", run, false)
 	if brief.Present {
@@ -1746,7 +1760,7 @@ func (s *server) exchangesPayload(r *store.Reader, req *http.Request) (any, *api
 		return nil, runNotFound(id)
 	}
 	out := exchangesData{Run: id, Exchanges: s.obs.exchanges(id), Sources: s.sources()}
-	if s.obs.trace.db == nil {
+	if !s.obs.trace.available() {
 		out.Note = "only the supervisor's layer is observable: " + s.obs.trace.note
 	}
 	return out, nil
@@ -1760,8 +1774,8 @@ type timelineData struct {
 	Note    string       `json:"note,omitempty"`
 }
 
-// timelinePayload is `GET /api/v1/runs/:id/timeline`. With no trace index it answers what
-// the store and the tick's records alone can, and says the index is missing.
+// timelinePayload is `GET /api/v1/runs/:id/timeline`. With no tillr-trace program it
+// answers what the store and the tick's records alone can, and says the reader is missing.
 func (s *server) timelinePayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
 	id := req.PathValue("id")
 	run, found, err := readRun(r, id)
@@ -1797,7 +1811,7 @@ func (s *server) timelinePayload(r *store.Reader, req *http.Request) (any, *apiF
 		}
 	}
 	out := timelineData{Run: id, Spans: spans, Sources: s.sources()}
-	if s.obs.trace.db == nil {
+	if !s.obs.trace.available() {
 		out.Note = "the timeline is the store's run row plus the tick's record files; " + s.obs.trace.note
 	}
 	return out, nil

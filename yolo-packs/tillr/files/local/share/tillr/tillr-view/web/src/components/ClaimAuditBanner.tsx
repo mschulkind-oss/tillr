@@ -30,7 +30,7 @@ export function ClaimAuditBanner({ run }: ClaimAuditBannerProps) {
       <section className="claim-banner claim-banner--empty">
         No claim was checked for this run. <EpistemicBadge state="absent" />
         <span className="claim-banner__note">
-          the claim rows come from the trace index; with no index there is nothing to verify
+          the claim rows are tillr-trace's reading of the run's artifacts; with none read there is nothing to verify
         </span>
       </section>
     );

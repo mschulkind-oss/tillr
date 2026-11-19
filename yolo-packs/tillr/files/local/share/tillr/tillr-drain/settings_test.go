@@ -136,7 +136,7 @@ ref = "refs/heads/main"
 				}
 				args := []string{"loop", "--root", f.root, "--store", f.store, "--policy", policy,
 					"--lane-root", f.laneRoot, "--item-bin", sibling(t, "item"),
-					"--gate", "/bin/true", "--land", "/bin/true", "--verdict", "/bin/true", "--trace-bin=", "--rolling=", "--exit-when-drained"}
+					"--gate", "/bin/true", "--land", "/bin/true", "--verdict", "/bin/true", "--rolling=", "--exit-when-drained"}
 				if check {
 					args = append(args, "--check")
 				}

@@ -79,14 +79,6 @@ func runTests(m *testing.M) int {
 		os.Stderr.Write(out)
 		return 1
 	}
-	// The suite's trace root is a scratch directory, not the live one: the loop runs the
-	// real indexer after every tick, and one case runs the loop without naming a root.
-	restoreTraceRoot, err := isolateTraceRoot()
-	if err != nil {
-		os.Stderr.WriteString("cannot isolate the suite trace root: " + err.Error() + "\n")
-		return 1
-	}
-	defer restoreTraceRoot()
 	return m.Run()
 }
 

@@ -74,20 +74,6 @@ func loopFiles(t *testing.T, root string) map[string]string {
 	return files
 }
 
-type emptyPassSteps struct {
-	recordingSteps
-	root    string
-	indexed int
-}
-
-func (s *emptyPassSteps) Index(context.Context) error {
-	s.indexed++
-	if err := os.MkdirAll(LoopDir(s.root), 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(LoopDir(s.root), "index-writes"), []byte(fmt.Sprint(s.indexed)), 0o644)
-}
-
 // emptyPassRepeats is how many empty passes follow the fixed point. Each pass starts about
 // thirteen git processes (trunk, identity, heavy-pointer and ref reads), so the count is the
 // test's cost. It was 1,000: about 13,000 processes, 28 s idle and 62 s to 324 s on the
@@ -100,8 +86,7 @@ const emptyPassRepeats = 100
 
 func TestRepeatedEmptyPassesWriteNothing(t *testing.T) {
 	f, l := passFixture(t, "item-a")
-	steps := &emptyPassSteps{root: f.root}
-	l.cfg.Steps = steps
+	l.cfg.Steps = &recordingSteps{}
 	fixtureWrite(t, f, func(tx *store.Tx) error { _, err := tx.Exec(`UPDATE items SET state = ?`, StateBlocked); return err })
 	var result LoopResult
 	if stop, err := l.pass(context.Background(), &result); err != nil || stop != StopQueueDrained {
@@ -118,12 +103,6 @@ func TestRepeatedEmptyPassesWriteNothing(t *testing.T) {
 	}
 	if got := storeRows(t, f.storePath); !reflect.DeepEqual(rows, got) {
 		t.Fatalf("rows changed: %v -> %v", rows, got)
-	}
-	if steps.indexed != 0 {
-		t.Fatalf("empty passes invoked the file-writing index %d times", steps.indexed)
-	}
-	if requested := l.indexer.requests.Load(); requested != 0 {
-		t.Fatalf("empty passes asked for an index %d times", requested)
 	}
 	if got := loopFiles(t, f.root); !reflect.DeepEqual(files, got) {
 		t.Fatalf("files changed: %v -> %v", files, got)
@@ -427,96 +406,6 @@ func TestDispatchTimingBelongsOnlyToItsDispatchGeneration(t *testing.T) {
 		return nil
 	}); err != nil {
 		t.Fatal(err)
-	}
-}
-
-type finalIndexSteps struct {
-	persistentSteps
-	storePath     string
-	launchIndexed chan struct{}
-	launchOnce    sync.Once
-	finalIndexed  chan struct{}
-	finalOnce     sync.Once
-}
-
-func (s *finalIndexSteps) Index(ctx context.Context) error {
-	st, err := store.OpenRead(ctx, s.storePath)
-	if err != nil {
-		return err
-	}
-	defer st.Close()
-	var judged, done int
-	if err := st.ReadTx(ctx, func(r *store.Reader) error {
-		if err := r.QueryRow(`SELECT COUNT(*) FROM dispatches WHERE action = ?`, ActionJudge).Scan(&judged); err != nil {
-			return err
-		}
-		return r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind = ?`, examinationDoneKind).Scan(&done)
-	}); err != nil {
-		return err
-	}
-	if done > 0 {
-		s.finalOnce.Do(func() { close(s.finalIndexed) })
-	}
-	if judged > 0 && done == 0 {
-		s.launchOnce.Do(func() { close(s.launchIndexed) })
-	}
-	return nil
-}
-
-func TestFinalExaminationIsIndexedAfterItsLaunchPass(t *testing.T) {
-	f, l := passFixture(t, "item-a")
-	l.cfg.Lanes = []string{"lane-1"}
-	fixtureWrite(t, f, func(tx *store.Tx) error {
-		_, err := tx.Exec(`UPDATE items SET allowed_paths = '["candidate.txt"]'`)
-		return err
-	})
-	plan := mustPlan(t, l)[0]
-	base := runGit(t, f.root, "rev-parse", TrunkRef)
-	ok, _, err := l.applyPlan(context.Background(), plan, base, l.cfg.Now())
-	if err != nil || !ok {
-		t.Fatalf("dispatch: %v / %v", ok, err)
-	}
-	lane := l.lanePath("lane-1")
-	writeForkFile(t, filepath.Join(l.laneDirPath("lane-1"), FenceFile), "candidate.txt\n")
-	writeForkFile(t, filepath.Join(l.laneDirPath("lane-1"), BaseSHAFile), base+"\n")
-	writeForkFile(t, filepath.Join(lane, "candidate.txt"), "candidate\n")
-	runGit(t, lane, "add", "candidate.txt")
-	runGit(t, lane, "commit", "-qm", "candidate")
-	fixtureWrite(t, f, func(tx *store.Tx) error {
-		return applyTerminal(tx, run.Record{RunID: plan.decision.RunRequest.RunID, ItemID: "item-a", LaneID: "lane-1", Backend: "fixture", State: run.StateExited, ExitCode: countPtr(0), StartedAt: l.cfg.Now().Format(time.RFC3339), FinishedAt: l.cfg.Now().Format(time.RFC3339), ArtifactRefs: []run.ArtifactRef{}})
-	})
-	steps := &finalIndexSteps{persistentSteps: persistentSteps{store: f.storePath, gated: make(chan struct{}), gateRelease: make(chan struct{})}, storePath: f.storePath, launchIndexed: make(chan struct{}), finalIndexed: make(chan struct{})}
-	l.cfg.Steps = steps
-	// The indexer runs in the background and a stop cancels it, so a loop that stopped at
-	// the drained queue could stop before the final request was served. The loop idles
-	// instead, and the operator stops it once the final outcome has been indexed.
-	l.cfg.ExitWhenDrained = false
-	ctx, cancel := context.WithCancel(context.Background())
-	ended := make(chan struct{})
-	var result LoopResult
-	var loopErr error
-	var releaseOnce sync.Once
-	release := func() { releaseOnce.Do(func() { close(steps.gateRelease) }) }
-	go func() { result, loopErr = l.Run(ctx); close(ended) }()
-	defer func() { cancel(); release(); <-ended }()
-	select {
-	case <-steps.launchIndexed:
-	case <-time.After(hangGuard):
-		t.Fatal("judge launch pass was not indexed")
-	}
-	select {
-	case <-steps.gated:
-	case <-time.After(hangGuard):
-		t.Fatal("gate never started")
-	}
-	release()
-	// A loop that never indexes the final outcome leaves this receive waiting, which the
-	// suite's own -timeout reports with every goroutine's stack.
-	<-steps.finalIndexed
-	cancel()
-	<-ended
-	if loopErr != nil || result.Stop != StopOperatorStop {
-		t.Fatalf("loop: %+v / %v", result, loopErr)
 	}
 }
 

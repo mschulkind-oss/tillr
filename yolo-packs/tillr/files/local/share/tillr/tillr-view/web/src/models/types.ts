@@ -23,7 +23,8 @@ export interface SourceState {
 export interface SourceStates {
   store: SourceState;
   loop_dir: SourceState;
-  trace_index: SourceState;
+  /** The tillr-trace program that reads a run's recorded artifacts on demand. */
+  trace: SourceState;
 }
 
 /** The cursor one response was read at, so two responses are never mixed. */
@@ -56,7 +57,6 @@ export interface ServerSnapshot {
   store_path: string;
   schema_version: number;
   event_head_seq: number;
-  trace_watermark_ns: number | null;
   generated_at: string;
   /** Absent from a server built before this field existed. */
   build?: BuildStamp;

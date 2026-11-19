@@ -45,7 +45,7 @@ func TestOrderRecordingReceiptOnWaitingAndWhy(t *testing.T) {
 	}
 	git("add", ".tillr.toml")
 	git("commit", "-qm", "settings")
-	srv := newServer(context.Background(), path, "", "", filepath.Join(dir, "absent-index"), dir, "", nil)
+	srv := newServer(context.Background(), path, "", "", filepath.Join(dir, "no-tillr-trace"), dir, "", nil)
 	srv.plannerFlag = drainBin
 	defer srv.close()
 	httpServer := httptest.NewServer(srv.routes())

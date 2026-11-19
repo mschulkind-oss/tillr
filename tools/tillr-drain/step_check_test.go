@@ -26,7 +26,7 @@ func stepCheckArgs(t *testing.T, f loopFixture) []string {
 	}
 	s.Close()
 	return []string{"loop", "--root", f.root, "--store", f.store, "--policy", policy,
-		"--lane-root", f.laneRoot, "--item-bin", sibling(t, "item"), "--trace-bin=", "--rolling=", "--fixer-gate=", "--exit-when-drained"}
+		"--lane-root", f.laneRoot, "--item-bin", sibling(t, "item"), "--rolling=", "--fixer-gate=", "--exit-when-drained"}
 }
 
 func TestStepFlagRefusalStopsBeforeDispatch(t *testing.T) {

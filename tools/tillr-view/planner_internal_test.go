@@ -300,7 +300,7 @@ func TestLanesReadFromAnotherMount(t *testing.T) {
 		t.Fatal(err)
 	}
 	read := func() laneRow {
-		srv := newServer(context.Background(), filepath.Join(served, ".tillr", "state.db"), "", "", filepath.Join(base, "no-index"), served, "", nil)
+		srv := newServer(context.Background(), filepath.Join(served, ".tillr", "state.db"), "", "", filepath.Join(base, "no-tillr-trace"), served, "", nil)
 		defer srv.close()
 		ts := httptest.NewServer(srv.routes())
 		defer ts.Close()

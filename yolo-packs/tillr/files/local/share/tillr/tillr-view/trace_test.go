@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -204,7 +205,7 @@ func TestTraceFormats(t *testing.T) {
 				t.Fatalf("missing=%v check=%v", missing, check)
 			}
 			var cli bytes.Buffer
-			if code := traceFace([]string{"--store", h.store, "--trace-index", h.index, "--run", "run-1", "--format", format}, &cli); code != 0 {
+			if code := traceFace([]string{"--store", h.store, "--trace-bin", h.traceBin, "--run", "run-1", "--format", format}, &cli); code != 0 {
 				t.Fatalf("CLI exit %d", code)
 			}
 			var httpBody, cliBody any
@@ -231,7 +232,7 @@ func TestTraceSelectionsAndRefusals(t *testing.T) {
 	for _, format := range []string{"otlp-json", "chrome-trace"} {
 		for _, selector := range [][]string{{"--item", "item-seed-02"}, {"--pass", "19700101T000001Z"}} {
 			var out bytes.Buffer
-			args := append([]string{"--store", h.store, "--trace-index", h.index, "--format", format}, selector...)
+			args := append([]string{"--store", h.store, "--trace-bin", h.traceBin, "--format", format}, selector...)
 			if code := traceFace(args, &out); code != 0 {
 				t.Fatalf("%v exit %d", args, code)
 			}
@@ -282,7 +283,7 @@ func TestTraceCommandDispatch(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v %s", err, out)
 	}
-	cmd := exec.Command(bin, "trace", "--store", h.store, "--trace-index", h.index, "--run", "run-1")
+	cmd := exec.Command(bin, "trace", "--store", h.store, "--trace-bin", h.traceBin, "--run", "run-1")
 	raw, err := cmd.Output()
 	if err != nil {
 		t.Fatal(err)
@@ -291,21 +292,11 @@ func TestTraceCommandDispatch(t *testing.T) {
 }
 
 func TestTraceObservationNanoseconds(t *testing.T) {
-	db, err := sql.Open("sqlite", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	db.SetMaxOpenConns(1)
-	_, err = db.Exec(`
-CREATE TABLE runs_index (run_id, log_path, log_state, proc_path, proc_state, git_path, git_state, brief_path, fence_path, base_sha, detail);
-INSERT INTO runs_index VALUES ('run',NULL,'ok',NULL,'ok',NULL,'ok',NULL,NULL,NULL,'');
-CREATE TABLE obs_events (obs_id,kind,ts_start,ts_end,duration_ms,seam,span_id,summary,payload,run_id,seq);
-INSERT INTO obs_events VALUES ('turn','llm.turn','1970-01-01T00:00:01.123456789Z','1970-01-01T00:00:01.987654321Z',864,NULL,NULL,'turn','{}','run',1);`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	obs := observations{loopDir: t.TempDir(), trace: &traceIndex{db: db}}
+	doc := `{"run": {"run_id": "run", "log_state": "ok", "proc_state": "ok", "git_state": "retired", "detail": ""},
+ "claims": [], "events": [{"obs_id": "turn", "kind": "llm.turn", "ts_start": "1970-01-01T00:00:01.123456789Z",
+ "ts_end": "1970-01-01T00:00:01.987654321Z", "duration_ms": 864, "seam": "", "span_id": "", "summary": "turn", "payload": {}}]}`
+	reader := &traceReader{bin: "tillr-trace", state: "present", load: func(string) ([]byte, error) { return []byte(doc), nil }}
+	obs := observations{loopDir: t.TempDir(), trace: reader}
 	run := storeRun{RunID: "run", StartedAtMS: 1000, FinishedAtMS: 2000}
 	spans, err := exportSpans(run, "", obs.timeline(run))
 	if err != nil {
@@ -322,7 +313,74 @@ INSERT INTO obs_events VALUES ('turn','llm.turn','1970-01-01T00:00:01.123456789Z
 		}
 	}
 	if !found {
-		t.Fatal("indexed observation was not exported")
+		t.Fatal("recorded observation was not exported")
+	}
+}
+
+// TestTraceReadsTheRunArtifactsWithNoIndex pins the owner's 2026-11-18 ruling that the
+// persistent trace index was derived data: `tillr-view trace` answers a run's turns and
+// subprocesses from the run's own artifacts, through the real `tillr-trace` beside this
+// module, with no index file present, and creates none. The trace root and the state home
+// are scratch directories, so an index written to either default would be seen here.
+func TestTraceReadsTheRunArtifactsWithNoIndex(t *testing.T) {
+	h := newServeHarness(t)
+	bin, err := filepath.Abs(filepath.Join("..", "tillr-trace", "tillr-trace"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	traceRoot := filepath.Join(t.TempDir(), "trace-root")
+	stateHome := filepath.Join(t.TempDir(), "state")
+	t.Setenv("TILLR_TRACE_ROOT", traceRoot)
+	t.Setenv("XDG_STATE_HOME", stateHome)
+	runDir := filepath.Join(h.loopDir, "run-1")
+	log, err := os.ReadFile(filepath.Join("..", "tillr-trace", "testdata", "canary-run.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "run-1.log"), log, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	proc := `{"kind": "proc.exec", "ts": "2026-11-12T19:10:02.000Z", "argv": ["go", "test", "./..."], "cwd": "/w/tools/x", "repo_rel_cwd": "tools/x", "exit_code": 0, "span_id": "sh-00001"}` + "\n"
+	if err := os.WriteFile(filepath.Join(runDir, "proc-exec.jsonl"), []byte(proc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if code := traceFace([]string{"--store", h.store, "--loop-dir", h.loopDir, "--trace-bin", bin, "--run", "run-1", "--format", "chrome-trace"}, &out); code != 0 {
+		t.Fatalf("trace exit %d", code)
+	}
+	var doc struct {
+		TraceEvents []struct {
+			Cat string `json:"cat"`
+			Ph  string `json:"ph"`
+		} `json:"traceEvents"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	categories := map[string]int{}
+	for _, e := range doc.TraceEvents {
+		if e.Ph == "X" {
+			categories[e.Cat]++
+		}
+	}
+	// The canary log holds 7 model turns and 6 tool calls; the proc file one command.
+	if categories["llm_turn"] != 7 || categories["tool_call"] != 6 || categories["proc_exec"] != 1 {
+		t.Fatalf("the run's artifacts were not read: %v", categories)
+	}
+	for _, dir := range []string{traceRoot, stateHome, filepath.Dir(h.store), h.loopDir} {
+		_ = filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+			if err == nil && filepath.Ext(path) == ".db" && path != h.store {
+				t.Errorf("a read wrote %s", path)
+			}
+			return nil
+		})
+	}
+	// The state home itself may be written by the interpreter's own tooling (a version
+	// manager's shim records which configs it read); tillr-trace's default root may not.
+	for _, dir := range []string{traceRoot, filepath.Join(stateHome, "tillr-trace")} {
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Errorf("a read created %s: %v", dir, err)
+		}
 	}
 }
 

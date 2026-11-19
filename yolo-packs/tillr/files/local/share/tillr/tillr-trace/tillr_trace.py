@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""tillr-trace: a derived read model over recorded run artifacts.
+"""tillr-trace: answers over recorded run artifacts, read on demand.
 
-Nothing here is a source of truth. `.tillr/state.db` owns workflow state, the
-`<run-id>.log` owns what the model saw and spent, and `proc-exec.jsonl` owns
-what ran. This module parses those into a rebuildable
-`index.db` and answers four questions over it. If the index and a source disagree,
-the source is right; see README.md.
+Nothing here is a source of truth, and nothing here is kept. `.tillr/state.db` owns
+workflow state, the `<run-id>.log` owns what the model saw and spent, and
+`proc-exec.jsonl` owns what ran. Every command parses the artifacts of the runs it is
+asked about into an in-memory SQLite database, answers from it, and drops it on exit.
+There is no index file: a persistent copy of these rows was removed on 2026-11-18 by
+the owner's ruling, to come back only once a measured performance problem asks for it.
+See README.md.
 
 Design: docs/design/session-recording.md §3.2 (layout), §4.2 (trace_key),
 §4.3 (obs.event), §6.3 (store authority), §8.3 (claim verification).
@@ -14,41 +16,35 @@ Design: docs/design/session-recording.md §3.2 (layout), §4.2 (trace_key),
 from __future__ import annotations
 
 import argparse
-import contextlib
 import datetime as dt
-import fcntl
 import hashlib
+import itertools
 import json
 import os
 import re
-import itertools
 import sqlite3
 import sys
 from pathlib import Path
 
-# Artifact the indexer could not read. The design's twelve obs.event kinds describe
-# what a run did; this one describes what the indexer could not see, so a missing log
-# is a row that says so rather than a zero that reads as "nothing happened".
+# Artifact a reader could not read. The design's twelve obs.event kinds describe what a
+# run did; this one describes what could not be seen, so a missing log is a row that says
+# so rather than a zero that reads as "nothing happened".
 UNREADABLE = "unreadable"
 
 EXCERPT_MAX = 200
 
-# The index's own layout. The index is derived, so a version that does not match is
-# dropped and rebuilt rather than migrated: a migration would be a second spelling of
-# the build, and the one thing this tool must never do is answer from a half-built one.
-SCHEMA_VERSION = 4
-
-# `runs_index` still carries `git_path` / `git_state` because `tillr-view` selects them by
+# `runs_index` still carries `git_path` / `git_state` because `tillr-view` reads them by
 # name. Git trace2 recording was removed on 2026-11-17 (docs/design/session-recording.md,
 # the owner ruling in §2.2), so the path is always NULL and the state says why.
 GIT_RETIRED = "retired"
 
-# The page cache one ingest may hold, in KiB (SQLite reads a negative `cache_size` as
-# KiB). The default is 2 MiB, and an index of tens of millions of rows then re-reads its
-# B-tree pages from the OS for nearly every insert.
-CACHE_KIB = 65536
+# How many runs a whole-queue aggregate (`cost`, `discrepancies`) reads when the caller
+# names no `--runs`: the most recent ones, by the store's start time. `--runs 0` reads
+# every run. The bound exists because an aggregate parses every artifact it covers on
+# every call; see README.md for the measured cost of the whole corpus.
+DEFAULT_RUNS = 100
 
-# §5.1 rule 1: a credential never reaches an index row, even inside an excerpt.
+# §5.1 rule 1: a credential never reaches a row, even inside an excerpt.
 CREDENTIAL_RE = re.compile(
     r"(Bearer\s+\S+"
     r"|sk-[A-Za-z0-9_-]{16,}"
@@ -65,8 +61,10 @@ TEST_COMMAND_RE = re.compile(
 
 EDIT_TOOLS = frozenset({"edit", "write"})
 
+# The in-memory layout one command's answers are read from. It lives only as long as the
+# process that built it.
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS obs_events (
+CREATE TABLE obs_events (
   obs_id      TEXT PRIMARY KEY,
   seq         INTEGER NOT NULL,
   kind        TEXT NOT NULL,
@@ -85,11 +83,9 @@ CREATE TABLE IF NOT EXISTS obs_events (
   payload     TEXT NOT NULL DEFAULT '{}',
   source      TEXT NOT NULL DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS obs_events_run  ON obs_events(run_id, kind, ts_start);
-CREATE INDEX IF NOT EXISTS obs_events_tick ON obs_events(tick_id, ts_start);
-CREATE INDEX IF NOT EXISTS obs_events_kind ON obs_events(kind, ts_start);
+CREATE INDEX obs_events_run  ON obs_events(run_id, kind, ts_start);
 
-CREATE TABLE IF NOT EXISTS runs_index (
+CREATE TABLE runs_index (
   run_id      TEXT PRIMARY KEY,
   lane_id     TEXT,
   item_id     TEXT,
@@ -112,7 +108,7 @@ CREATE TABLE IF NOT EXISTS runs_index (
   detail      TEXT NOT NULL DEFAULT ''
 );
 
-CREATE TABLE IF NOT EXISTS claim_checks (
+CREATE TABLE claim_checks (
   claim_id            TEXT PRIMARY KEY,
   run_id              TEXT NOT NULL,
   lane_id             TEXT,
@@ -125,23 +121,6 @@ CREATE TABLE IF NOT EXISTS claim_checks (
   evidence_span_ids   TEXT NOT NULL DEFAULT '[]',
   last_dir_edit_at    TEXT,
   observed_at         TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS ingested_files (
-  path         TEXT PRIMARY KEY,
-  run_id       TEXT,
-  mtime_ns     INTEGER NOT NULL,
-  size_bytes   INTEGER NOT NULL,
-  parsed_bytes INTEGER NOT NULL DEFAULT 0,
-  rows_parsed  INTEGER NOT NULL DEFAULT 0,
-  state        TEXT NOT NULL DEFAULT 'ok',
-  detail       TEXT NOT NULL DEFAULT '',
-  carry        TEXT NOT NULL DEFAULT '{}'
-);
-
-CREATE TABLE IF NOT EXISTS index_meta (
-  key   TEXT PRIMARY KEY,
-  value INTEGER NOT NULL
 );
 """
 
@@ -162,7 +141,7 @@ def _iso_from_ms(ms):
 
 
 def _iso_from_text(text):
-    """Normalize a trace2 RFC3339 timestamp to millisecond UTC, keeping the order."""
+    """Normalize an RFC3339 timestamp to millisecond UTC, keeping the order."""
     if not text:
         return None
     text = str(text)
@@ -196,14 +175,6 @@ def scrub(text, limit=EXCERPT_MAX):
     return text[:limit]
 
 
-def sha256_file(path):
-    digest = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def trace_root_default():
     override = os.environ.get("TILLR_TRACE_ROOT")
     if override:
@@ -219,30 +190,6 @@ def trace_root_default():
 _SEQ = itertools.count(1)
 
 
-def reset_seq(conn):
-    """Continue the build-wide row counter where the index left it.
-
-    `seq` orders two rows a run wrote in the same millisecond, so an appended row must
-    sort after everything already stored. It restarts from the value the last commit
-    recorded in `index_meta` rather than from `MAX(seq)`: `seq` has no index, so that
-    maximum was a walk of the whole table on every sync.
-    """
-    global _SEQ
-    row = conn.execute("SELECT value FROM index_meta WHERE key = 'next_seq'").fetchone()
-    _SEQ = itertools.count(row[0] if row else 1)
-    return _SEQ
-
-
-def save_seq(conn):
-    """Record where the row counter stands, in the transaction that used it."""
-    global _SEQ
-    upcoming = next(_SEQ)
-    _SEQ = itertools.count(upcoming)
-    conn.execute(
-        "INSERT INTO index_meta (key, value) VALUES ('next_seq', ?)"
-        " ON CONFLICT(key) DO UPDATE SET value = excluded.value", (upcoming,))
-
-
 def _source_slug(path):
     """A short, stable stamp for one source file, used in its rows' obs ids."""
     return hashlib.sha256(str(path or "").encode("utf-8")).hexdigest()[:12]
@@ -251,32 +198,28 @@ def _source_slug(path):
 class Rows:
     """Accumulates obs.event rows for one artifact, in file order.
 
-    `seq` is one build-wide counter so a query can break a tie between two rows the
-    trace wrote in the same millisecond; the artifact's own order is the only ordering
-    the files carry. The obs id is the source file's stamp plus the row's ordinal in
-    that file, which is what lets a later build append a row without renumbering, or
-    renumbering, the rows already stored for it. `ordinal` is therefore the count of
-    ordinal-consuming rows this artifact has produced across every build, and a resumed
-    parse passes the previous count in.
+    `seq` is one process-wide counter so a query can break a tie between two rows a run
+    wrote in the same millisecond; the artifact's own order is the only ordering the files
+    carry. The obs id is the source file's stamp plus the row's ordinal in that file, so
+    the same artifact yields the same ids on every read.
     """
 
-    def __init__(self, origin="run", source="", ordinal=0):
+    def __init__(self, origin="run", source=""):
         self.rows = []
         self.origin = origin
         self.source = str(source or "")
-        self.ordinal = ordinal
+        self.ordinal = 0
         self._slug = _source_slug(self.source)
 
     def add(self, kind, trace, *, ts_start, ts_end=None, duration_ms=None,
             seam=None, span_id=None, summary=None, payload=None):
-        seq = next(_SEQ)
         ordinal = self.ordinal
         self.ordinal += 1
         run_id = (trace or {}).get("run_id") or "unattributed"
         self.rows.append(
             {
                 "obs_id": f"obs-{run_id}-{self._slug}-{ordinal:06d}",
-                "seq": seq,
+                "seq": next(_SEQ),
                 "kind": kind,
                 "ts_start": ts_start or "",
                 "ts_end": ts_end,
@@ -296,12 +239,7 @@ class Rows:
         )
 
     def add_unreadable(self, trace, artifact, path, reason):
-        """One row saying an artifact could not be read.
-
-        Its id is derived from the run and the artifact, not from the row counter: the
-        row is a statement about the artifact's state, so deriving it again on the next
-        build must replace it rather than add a second one.
-        """
+        """One row saying an artifact could not be read, with an id the artifact names."""
         run_id = (trace or {}).get("run_id") or "unattributed"
         self.rows.append(
             {
@@ -311,7 +249,7 @@ class Rows:
                 "ts_start": now_iso(),
                 "ts_end": None,
                 "duration_ms": None,
-                "seam": "indexer",
+                "seam": "reader",
                 "run_id": run_id,
                 "lane_id": (trace or {}).get("lane_id"),
                 "item_id": (trace or {}).get("item_id"),
@@ -329,88 +267,69 @@ class Rows:
 
 
 class Parsed:
-    """What one artifact parse produced, and where the next one resumes.
-
-    `consumed` is the byte offset the next build starts from, `carry` is the parser
-    state that has to cross that boundary — an unpaired tool call's args, the last clock
-    the stream wrote, a git command still open — and `summary` is the running log total a
-    resumed parse adds to instead of starting over.
+    """What one artifact parse produced: its rows, its state, and the log's totals.
 
     A plain class rather than a dataclass on purpose: the suite imports this module from
     a file path, so it is not in `sys.modules` under its own name, and a dataclass
     resolves its annotations through that entry.
     """
 
-    __slots__ = ("rows", "state", "detail", "consumed", "carry", "summary")
+    __slots__ = ("rows", "state", "detail", "summary")
 
-    def __init__(self, rows, state="ok", detail="", consumed=0, carry=None, summary=None):
+    def __init__(self, rows, state="ok", detail="", summary=None):
         self.rows = rows
         self.state = state
         self.detail = detail
-        self.consumed = consumed
-        self.carry = carry if carry is not None else {}
         self.summary = summary if summary is not None else {}
 
 
-def _jsonl_lines(path, start=0, wanted=None):
-    """Yield `(line_start, line_end, obj, parsed, complete)` for each line from `start`.
+def _jsonl_lines(path, wanted=None):
+    """Yield `(obj, parsed, complete)` for each line of a JSONL file.
 
     One line is read, decoded and handed on before the next is read, so a caller holds
     one line and its row — never the whole file. `complete` is False for a final line
-    the writer has not finished appending; the caller leaves that line unread so the
-    next build parses it whole instead of dropping or half-parsing it.
+    the writer has not finished appending.
 
     `wanted` is the byte strings a line the caller reads must contain. A complete line
-    holding none of them is passed on as `None` without being decoded: most of a git
-    trace is region and data events no row is made from, and decoding them was most of
+    holding none of them is passed on as `None` without being decoded: most of a pi log
+    is `message_update` streaming that no row is made from, and decoding it was most of
     the parse.
     """
     with open(path, "rb") as handle:
-        handle.seek(start)
-        offset = start
-        while True:
-            raw = handle.readline()
-            if not raw:
-                return
-            line_start = offset
-            offset += len(raw)
+        for raw in handle:
             complete = raw.endswith(b"\n")
             if wanted and complete and not any(marker in raw for marker in wanted):
-                yield line_start, offset, None, True, complete
+                yield None, True, complete
                 continue
             text = raw.decode("utf-8", "replace").strip()
             if not text:
-                yield line_start, offset, None, True, complete
+                yield None, True, complete
                 continue
             try:
-                yield line_start, offset, json.loads(text), True, complete
+                yield json.loads(text), True, complete
             except json.JSONDecodeError:
-                yield line_start, offset, None, False, complete
+                yield None, False, complete
 
 
 class Stream:
-    """How far one JSONL parse got, and what it could not read on the way.
+    """What one JSONL parse could not read on the way.
 
     `state` is `ok`, `truncated` (the final line is incomplete — a writer caught
     mid-append) or `corrupt` (a complete line failed to parse, which no live writer
-    does). `consumed` stops before the incomplete tail, so the next build re-reads it
-    once it is whole.
+    does).
     """
 
-    def __init__(self, start=0):
-        self.consumed = start
+    def __init__(self):
         self.bad = 0
         self.truncated = False
 
-    def feed(self, line_start, line_end, parsed, complete):
+    def feed(self, parsed, complete):
         """Record one line; answer False when the parse must stop here."""
         if not parsed:
             if not complete:
                 self.truncated = True
-                self.consumed = line_start
                 return False
             self.bad += 1
-        self.consumed = line_end
         return True
 
     def state(self, rows):
@@ -451,7 +370,14 @@ def _obj(value):
     return value if isinstance(value, dict) else {}
 
 
-def parse_run_log(path, trace, start=0, ordinal=0, carry=None):
+# The lines of a pi log a row is made from. Every other line is skipped undecoded.
+LOG_MARKERS = (b'"session"', b'"request_start"', b'"tool_execution_start"',
+               b'"tool_execution_end"', b'"turn_end"')
+# The lines a turns-only read needs: `cost` reads nothing else.
+TURN_MARKERS = (b'"turn_end"',)
+
+
+def parse_run_log(path, trace, turns_only=False):
     """Recover llm.turn and tool.call rows from `pi --mode json` output.
 
     Measured shape (2026-11-12 canary, tools/tillr-trace/testdata/canary-run.log):
@@ -461,31 +387,26 @@ def parse_run_log(path, trace, start=0, ordinal=0, carry=None):
     `credential.fingerprint`, `stopReason` and `durationMs`, and one
     `tool_execution_start`/`tool_execution_end` pair per tool call.
 
-    A resumed parse starts at `start` with the args, clock, turn number, session id and
-    running totals the previous build carried, so a pair or a total split across two
-    builds is neither lost nor counted twice.
+    `turns_only` reads the `turn_end` lines alone, which is all a cost answer needs.
     """
-    carry = dict(carry or {})
-    summary = dict(carry.get("summary") or _empty_summary())
-    rows = Rows("log", source=str(path or ""), ordinal=ordinal)
+    summary = _empty_summary()
+    rows = Rows("log", source=str(path or ""))
     if not path:
-        return Parsed(rows, "missing", "no log path recorded", start, carry, summary)
+        return Parsed(rows, "missing", "no log path recorded", summary)
 
-    args_by_call = dict(carry.get("args") or {})
-    turn_no = int(carry.get("turn_no") or 0)
-    final_text = summary.get("final_text") or ""
-    if carry.get("session_id") and not (trace or {}).get("session_id"):
-        trace = dict(trace or {})
-        trace["session_id"] = carry["session_id"]
+    args_by_call = {}
+    turn_no = 0
+    final_text = ""
     # `tool_execution_*` events carry no clock of their own — only the session header,
     # `request_start` and `turn_end.message` do. A tool call is therefore stamped with
     # the last clock the stream wrote before it, and its payload says the time is
     # derived, so a reader never takes an anchored time for an observed one.
-    anchor = {"ms": carry.get("anchor_ms"), "derived": bool(carry.get("anchor_derived"))}
-    stream = Stream(start)
+    anchor = {"ms": None}
+    stream = Stream()
+    markers = TURN_MARKERS if turns_only else LOG_MARKERS
     try:
-        for line_start, line_end, event, parsed, complete in _jsonl_lines(path, start):
-            if not stream.feed(line_start, line_end, parsed, complete):
+        for event, parsed, complete in _jsonl_lines(path, markers):
+            if not stream.feed(parsed, complete):
                 break
             if not parsed or not isinstance(event, dict):
                 continue
@@ -494,10 +415,8 @@ def parse_run_log(path, trace, start=0, ordinal=0, carry=None):
                 trace = dict(trace or {})
                 trace.setdefault("session_id", event.get("id"))
                 trace["worktree"] = event.get("cwd")
-                carry["session_id"] = trace.get("session_id")
                 if _ms_from_iso(event.get("timestamp")) is not None:
                     anchor["ms"] = _ms_from_iso(event.get("timestamp"))
-                    anchor["derived"] = False
                 rows.add(
                     "run.lifecycle", trace,
                     ts_start=_iso_from_text(event.get("timestamp")) or now_iso(),
@@ -509,7 +428,7 @@ def parse_run_log(path, trace, start=0, ordinal=0, carry=None):
                 )
             elif kind == "request_start":
                 if event.get("timestamp") is not None:
-                    anchor["ms"], anchor["derived"] = event["timestamp"], False
+                    anchor["ms"] = event["timestamp"]
             elif kind == "tool_execution_start":
                 args_by_call[event.get("toolCallId")] = _obj(event.get("args"))
             elif kind == "tool_execution_end":
@@ -548,7 +467,7 @@ def parse_run_log(path, trace, start=0, ordinal=0, carry=None):
                     continue
                 turn_no += 1
                 if message.get("timestamp") is not None:
-                    anchor["ms"], anchor["derived"] = message["timestamp"], False
+                    anchor["ms"] = message["timestamp"]
                 usage = _obj(message.get("usage"))
                 cost = _obj(usage.get("cost"))
                 provider = message.get("provider")
@@ -596,56 +515,42 @@ def parse_run_log(path, trace, start=0, ordinal=0, carry=None):
                 if any(texts):
                     final_text = "\n".join(texts)
     except FileNotFoundError:
-        return Parsed(rows, "missing", f"no file at {path}", start, carry, summary)
+        return Parsed(rows, "missing", f"no file at {path}", summary)
     except OSError as error:
-        # The rows read before the failure are kept, and so is where they stopped, so the
-        # next build resumes after them instead of re-reading and renumbering them.
-        return Parsed(rows, "unreadable", f"{error.__class__.__name__}: {error}",
-                      stream.consumed, carry, summary)
-    carry["anchor_ms"] = anchor["ms"]
-    carry["anchor_derived"] = anchor["derived"]
-    carry["args"] = args_by_call
-    carry["turn_no"] = turn_no
+        return Parsed(rows, "unreadable", f"{error.__class__.__name__}: {error}", summary)
     summary["final_text"] = scrub(final_text, limit=20000)
-    carry["summary"] = summary
     state, detail = stream.state(rows.ordinal)
-    return Parsed(rows, state, detail, stream.consumed, carry, summary)
+    return Parsed(rows, state, detail, summary)
 
 
-# ---------------------------------------------------------------- proc / git
+# ---------------------------------------------------------------- proc / gate
 
 
-def parse_proc_exec(path, trace, start=0, ordinal=0, carry=None):
-    """Raw shim rows (§4.3 `proc.exec`, specimen in §7.1) to normalized rows.
-
-    The file only ever grows, so a resumed parse starts at the last byte it read and
-    hands back one row per new line. Nothing about a `proc.exec` row spans two lines,
-    which is why this parser carries no state across that boundary.
-    """
-    rows = Rows("proc", source=str(path or ""), ordinal=ordinal)
+def parse_proc_exec(path, trace):
+    """Raw shim rows (§4.3 `proc.exec`, specimen in §7.1) to normalized rows."""
+    rows = Rows("proc", source=str(path or ""))
     if not path:
-        return Parsed(rows, "missing", "no proc-exec.jsonl recorded", start)
-    stream = Stream(start)
+        return Parsed(rows, "missing", "no proc-exec.jsonl recorded")
+    stream = Stream()
     try:
-        for line_start, line_end, event, parsed, complete in _jsonl_lines(path, start):
-            if not stream.feed(line_start, line_end, parsed, complete):
+        for event, parsed, complete in _jsonl_lines(path):
+            if not stream.feed(parsed, complete):
                 break
             if not parsed or not isinstance(event, dict):
                 continue
             _proc_row(rows, trace, event)
     except FileNotFoundError:
-        return Parsed(rows, "missing", f"no file at {path}", start)
+        return Parsed(rows, "missing", f"no file at {path}")
     except OSError as error:
-        return Parsed(rows, "unreadable", f"{error.__class__.__name__}: {error}",
-                      stream.consumed)
+        return Parsed(rows, "unreadable", f"{error.__class__.__name__}: {error}")
     # A present-but-empty file is the same evidence as no file at all: the shim creates
     # nothing and only appends, so 0 bytes says a writer touched the path and nothing
     # more. Read as `ok` it makes `have_proc` true and turns every owed suite into a
     # `disproved` "no suite ran at all" — absence of evidence promoted to proof (§8.3).
-    if not rows.rows and rows.ordinal == 0:
-        return Parsed(rows, "missing", f"{path}: no proc.exec rows", stream.consumed)
+    if not rows.rows:
+        return Parsed(rows, "missing", f"{path}: no proc.exec rows")
     state, detail = stream.state(rows.ordinal)
-    return Parsed(rows, state, detail, stream.consumed)
+    return Parsed(rows, state, detail)
 
 
 def _proc_row(rows, trace, event):
@@ -676,14 +581,13 @@ def _proc_row(rows, trace, event):
     )
 
 
-def parse_gate_record(path, trace, start=0, ordinal=0, carry=None):
+def parse_gate_record(path, trace):
     """One `.tillr/loop/<run-id>/gate.{plan,verdict}.json` to a §4.3 row.
 
     Both are `record.Envelope` files the gate writes through `tillr-loop`, one record
     each, so each is read as a single JSON object rather than as JSONL. A file that does
     not parse becomes an `unreadable` row naming it: a gate that ran and left a record
-    nobody can read must never look like a gate that never ran. These files are small
-    and rewritten whole, so they are always parsed whole and their rows replaced.
+    nobody can read must never look like a gate that never ran.
     """
     path = Path(path)
     kind = "gate.verdict" if path.name.startswith("gate.verdict") else "gate.plan"
@@ -691,17 +595,17 @@ def parse_gate_record(path, trace, start=0, ordinal=0, carry=None):
     try:
         envelope = json.loads(path.read_text(encoding="utf-8", errors="replace"))
     except FileNotFoundError:
-        return Parsed(rows, "missing", f"no file at {path}", 0)
+        return Parsed(rows, "missing", f"no file at {path}")
     except (OSError, ValueError) as error:
         rows.add_unreadable(trace, path.name, path, f"unparseable: {error}")
-        return Parsed(rows, "corrupt", f"unparseable: {error}", 0)
+        return Parsed(rows, "corrupt", f"unparseable: {error}")
     if not isinstance(envelope, dict) or envelope.get("kind") != kind:
         rows.add_unreadable(trace, path.name, path, f"not a {kind} record")
-        return Parsed(rows, "corrupt", f"not a {kind} record", 0)
+        return Parsed(rows, "corrupt", f"not a {kind} record")
     payload = envelope.get("payload")
     if not isinstance(payload, dict):
         rows.add_unreadable(trace, path.name, path, f"{kind} payload is not an object")
-        return Parsed(rows, "corrupt", f"{kind} payload is not an object", 0)
+        return Parsed(rows, "corrupt", f"{kind} payload is not an object")
     rows.add(
         kind, trace,
         ts_start=_iso_from_text(envelope.get("created_at")) or now_iso(),
@@ -710,7 +614,7 @@ def parse_gate_record(path, trace, start=0, ordinal=0, carry=None):
         summary=f"{kind} {payload.get('plan_id') or payload.get('verdict_id') or ''}".strip(),
         payload=_gate_payload(kind, payload),
     )
-    return Parsed(rows, "ok", f"{kind} read", 0)
+    return Parsed(rows, "ok", f"{kind} read")
 
 
 def _gate_payload(kind, payload):
@@ -832,7 +736,7 @@ def _artifact_refs(raw):
             for ref in refs if isinstance(ref, dict)}
 
 
-# ---------------------------------------------------------------- build
+# ---------------------------------------------------------------- reading runs
 
 
 # The runs_index columns, in the order every INSERT and the claim join read them.
@@ -843,62 +747,96 @@ RUN_COLUMNS = (
     "tree_sha", "detail",
 )
 
-RUN_INSERT = (
-    "INSERT INTO runs_index (" + ", ".join(RUN_COLUMNS) + ")"
-    " VALUES (" + ",".join("?" for _ in RUN_COLUMNS) + ")"
-    " ON CONFLICT(run_id) DO UPDATE SET "
-    + ", ".join(f"{name}=excluded.{name}" for name in RUN_COLUMNS if name != "run_id")
-)
+RUN_INSERT = ("INSERT OR REPLACE INTO runs_index (" + ", ".join(RUN_COLUMNS) + ")"
+              " VALUES (" + ",".join("?" for _ in RUN_COLUMNS) + ")")
+
+OBS_INSERT = (
+    "INSERT OR REPLACE INTO obs_events (obs_id, seq, kind, ts_start, ts_end,"
+    " duration_ms, seam, run_id, lane_id, item_id, tick_id, session_id,"
+    " route_id, span_id, summary, payload, source)"
+    " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
 
 
-class Index:
-    """The build: a derived index kept current by parsing only what changed.
+class Corpus:
+    """The recorded runs, read on demand into one in-memory database.
 
-    Two kinds of source feed it, and they are read differently on purpose. The store
-    is small and authoritative and is read on every sync — its modification time moves
-    on every tick by design, so using it as a rebuild trigger would rebuild the whole
-    corpus every tick. The JSONL and per-run artifacts are large and only ever grow, so
-    each is watermarked by its own size and modification time and parsed from the last
-    byte it was read to. A run with nothing new parses nothing.
+    Nothing is written to disk. `load` parses the artifacts of the runs it is given, and
+    every query reads what was loaded; the database is dropped with the process. Each
+    command loads only the runs and the row kinds its answer needs.
     """
 
-    def __init__(self, trace_root, store_path, index_path=None, rebuild=False):
+    def __init__(self, trace_root, store_path, loop_root=None):
         self.trace_root = Path(trace_root)
         self.store_path = Path(store_path)
         # A run's records live in two places: `<trace-root>/runs/<run-id>/` (the
         # recorder's own directory, §3.2) and `<root>/.tillr/loop/<run-id>/` (the drain's
         # per-run record directory, where staging keeps the brief, fence and base sha,
-        # where `run-pi`'s emitters append `proc-exec.jsonl`, and
-        # where the gate leaves `gate.plan.json` / `gate.verdict.json`). `.tillr/loop` is
-        # derived from the store path, which is the one path the caller already names.
-        self.loop_root = self.store_path.parent / "loop"
-        self.index_path = Path(index_path or self.trace_root / "index.db")
-        self.rebuild = rebuild
+        # where `run-pi`'s emitters append `proc-exec.jsonl`, and where the gate leaves
+        # `gate.plan.json` / `gate.verdict.json`). `.tillr/loop` is the store's sibling
+        # unless the caller names another.
+        self.loop_root = Path(loop_root) if loop_root else self.store_path.parent / "loop"
+        self.conn = sqlite3.connect(":memory:")
+        self.conn.row_factory = sqlite3.Row
+        self.conn.executescript(SCHEMA)
+        self._store_runs = None
+        self._run_dirs = None
+        self._store_state = None
+
+    def close(self):
+        self.conn.close()
 
     # -- source enumeration
 
-    def _run_dirs(self):
-        """run_id -> its artifact directories, most specific first.
+    def run_dirs(self):
+        """run_id -> its artifact directories, most specific first."""
+        if self._run_dirs is None:
+            found = {}
+            for root in (self.loop_root, self.trace_root / "runs"):
+                if not root.is_dir():
+                    continue
+                for child in root.iterdir():
+                    if child.is_dir():
+                        found.setdefault(child.name, []).append(child)
+            self._run_dirs = found
+        return self._run_dirs
 
-        The loop directory is read first for every artifact, because it is where this
-        workspace's emitters write; the trace-root directory stays readable so a run
-        recorded by the design's own recorder layout is still indexed.
+    def store_runs(self):
+        if self._store_runs is None:
+            store = Store(self.store_path)
+            try:
+                self._store_state = (store.state, store.detail)
+                self._store_runs = {row["run_id"]: row for row in store.runs()}
+            finally:
+                store.close()
+        return self._store_runs
+
+    def run_ids(self, limit=0):
+        """Every known run, most recent first; the first `limit` of them when it is set.
+
+        Recency is the store's start time, and a run the store does not hold sorts by its
+        directory's modification time. Neither clock is a judgment, only an order.
         """
-        found = {}
-        for root in (self.loop_root, self.trace_root / "runs"):
-            if not root.is_dir():
-                continue
-            for child in root.iterdir():
-                if child.is_dir():
-                    found.setdefault(child.name, []).append(child)
-        return found
+        store_runs = self.store_runs()
+        dirs = self.run_dirs()
 
-    def _store_runs(self):
-        store = Store(self.store_path)
-        try:
-            return {row["run_id"]: row for row in store.runs()}
-        finally:
-            store.close()
+        def started(run_id):
+            row = store_runs.get(run_id)
+            if row and row.get("started_at"):
+                return int(row["started_at"])
+            mtimes = []
+            for directory in dirs.get(run_id, []):
+                try:
+                    mtimes.append(int(directory.stat().st_mtime * 1000))
+                except OSError:
+                    pass
+            return max(mtimes) if mtimes else 0
+
+        ordered = sorted(set(store_runs) | set(dirs), key=lambda r: (started(r), r),
+                         reverse=True)
+        return ordered[:limit] if limit else ordered
+
+    def known(self, run_id):
+        return run_id in self.store_runs() or run_id in self.run_dirs()
 
     def _log_path(self, run_id, dirs, store_row):
         """The log this run is actually parsed from, by the §3.2 precedence."""
@@ -911,17 +849,12 @@ class Index:
             return fallback
         return named
 
-    def _run_sources(self, run_id, dirs, store_row):
-        """The exact files one run's derivation reads, by role.
-
-        `_source_map` and `_derive` both answer from here, so the watermark can never
-        cover a file the build does not read (which would mark the run changed on every
-        sync) or miss one it does read (which would silently skip a change).
-        """
-        dirs = [Path(directory) for directory in (dirs or [])]
+    def run_sources(self, run_id):
+        """The exact files one run's derivation reads, by role."""
+        dirs = [Path(directory) for directory in self.run_dirs().get(run_id, [])]
         loop_dir = self.loop_root / run_id
         return {
-            "log": self._log_path(run_id, dirs, store_row),
+            "log": self._log_path(run_id, dirs, self.store_runs().get(run_id)),
             "proc": run_artifact(dirs, "proc-exec.jsonl") if dirs else None,
             "manifest": run_artifact(dirs, "manifest.json") if dirs else None,
             "base_sha": run_artifact(dirs, "base_sha") if dirs else None,
@@ -931,282 +864,53 @@ class Index:
             "gate_verdict": loop_dir / "gate.verdict.json",
         }
 
-    def _source_map(self, store_runs=None, run_dirs=None):
-        """path -> run_id for every file a build reads, the store excluded.
+    def tick_of(self, run_id):
+        """The tick a run's manifest names, or None."""
+        return _read_json(self.run_sources(run_id).get("manifest")).get("tick_id")
 
-        The store is absent on purpose: its modification time changes on every tick by
-        design, so a watermark that covered it would differ after every tick and force a
-        whole-corpus rebuild — which is the defect this exists to remove. It is read on
-        every sync instead, because it is small and authoritative for the rows it owns.
+    # -- loading
+
+    def load(self, run_ids, *, kinds=None, claims=True):
+        """Parse the given runs into the in-memory database.
+
+        `kinds` keeps only those obs.event kinds once a run's claims are computed (None
+        keeps every kind); a run's rows of other kinds are dropped as soon as its claims
+        are written, so a whole-queue answer holds one run's events at a time. `claims`
+        is whether the §8.3 join is run for each.
         """
-        store_runs = self._store_runs() if store_runs is None else store_runs
-        run_dirs = self._run_dirs() if run_dirs is None else run_dirs
-        files = {}
-        for run_id in set(store_runs) | set(run_dirs):
-            for path in self._run_sources(run_id, run_dirs.get(run_id),
-                                          store_runs.get(run_id)).values():
-                if path is not None:
-                    files.setdefault(str(path), run_id)
-        return files
+        self.store_runs()
+        self._sync_unreadable_store()
+        for run_id in run_ids:
+            self._derive(run_id, kinds, claims)
+        self._tick_decisions(set(run_ids))
+        self.conn.commit()
 
-    def _watermark(self, sources=None):
-        stamp = {}
-        for path in (self._source_map() if sources is None else sources):
-            try:
-                stat = Path(path).stat()
-            except OSError:
-                continue
-            stamp[path] = (stat.st_mtime_ns, stat.st_size)
-        return stamp
-
-    def _lock_path(self):
-        return self.index_path.with_name(self.index_path.name + ".lock")
-
-    @contextlib.contextmanager
-    def _writer(self):
-        """Hold the index's one-writer lock, answering False when another sync holds it.
-
-        The lock is taken without waiting. A second writer would either wait on the first
-        one's transactions or parse the same new bytes again, and neither is work the
-        caller needs: the sync already running, or the next one, reads what is new.
-        """
-        self.index_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(self._lock_path(), "a") as handle:
-            try:
-                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError:
-                yield False
-                return
-            try:
-                yield True
-            finally:
-                fcntl.flock(handle, fcntl.LOCK_UN)
-
-    def _discard(self):
-        """Remove the index and its side files, so the next open starts an empty one.
-
-        The index is derived, so a layout it cannot trust is deleted rather than emptied.
-        Emptying it in place is a `DELETE` of every row inside one transaction, which
-        journals every page of the old file: measured on 2026-11-17, a 32 GB index grew a
-        32 GB rollback journal that way before the rebuild had parsed anything.
-        """
-        for suffix in ("", "-wal", "-shm", "-journal"):
-            with contextlib.suppress(FileNotFoundError):
-                Path(str(self.index_path) + suffix).unlink()
-
-    def _foreign_layout(self):
-        """Whether the file at the index path is not this layout's index.
-
-        A rollback journal beside the index can only be a writer of an older layout's —
-        this one writes a WAL — and opening the file read-write would first roll that
-        journal back, which costs as much as the transaction it undoes. Its version is
-        therefore read from the file as it stands, without recovering anything.
-        """
-        if not self.index_path.exists():
-            return False
-        journal = Path(str(self.index_path) + "-journal")
-        if not journal.exists():
-            return False
-        try:
-            conn = sqlite3.connect(f"file:{self.index_path}?immutable=1", uri=True)
-        except sqlite3.Error:
-            return True
-        try:
-            return conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION
-        except sqlite3.DatabaseError:
-            return True
-        finally:
-            conn.close()
-
-    def _open(self):
-        """The index's one read-write connection, on this layout, in WAL mode.
-
-        WAL is what makes a killed writer cheap: its uncommitted frames are ignored by the
-        next open instead of being rolled back into the file, and a read-only reader never
-        meets a hot journal it cannot recover. An index of another layout, or a file that
-        is not a database, is discarded and an empty index opened in its place.
-        """
-        if self._foreign_layout():
-            self._discard()
-        for attempt in (1, 2):
-            conn = sqlite3.connect(str(self.index_path))
-            try:
-                conn.execute("PRAGMA journal_mode = WAL")
-                conn.execute(f"PRAGMA cache_size = -{CACHE_KIB}")
-                version = conn.execute("PRAGMA user_version").fetchone()[0]
-            except sqlite3.DatabaseError:
-                conn.close()
-                if attempt == 2:
-                    raise
-                self._discard()
-                continue
-            if version == SCHEMA_VERSION:
-                return conn
-            fresh = not conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1").fetchone()
-            if fresh:
-                conn.executescript(SCHEMA)
-                conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-                conn.commit()
-                return conn
-            conn.close()
-            if attempt == 2:
-                raise sqlite3.DatabaseError(f"{self.index_path}: layout {version} remains")
-            self._discard()
-        raise AssertionError("unreachable")
-
-    def _stored_sources(self, conn):
-        """What the index last recorded for each source; empty for a new index."""
-        return {
-            row[0]: {"path": row[0], "run_id": row[1], "mtime_ns": row[2],
-                     "size_bytes": row[3], "parsed_bytes": row[4],
-                     "rows_parsed": row[5], "state": row[6], "detail": row[7],
-                     "carry": row[8]}
-            for row in conn.execute(
-                "SELECT path, run_id, mtime_ns, size_bytes, parsed_bytes,"
-                " rows_parsed, state, detail, carry FROM ingested_files")}
-
-    # -- the sync
-
-    def sync(self, rebuild=False):
-        """Bring the index up to date with its sources, parsing only what changed.
-
-        Answers `reused` when no artifact changed, `rebuilt` when at least one was read,
-        and `busy` when another sync holds the index's writer lock — that sync, or the
-        next, reads what is new. None is a judgment: the sources are right and the index
-        is only ever their shadow.
-        """
-        with self._writer() as held:
-            if not held:
-                return "busy"
-            if rebuild or self.rebuild:
-                self._discard()
-            return self._sync()
-
-    def build(self, watermark=None):
-        """A full rebuild of the index from its artifacts: discard it and sync."""
-        return self.sync(rebuild=True)
-
-    def _sync(self):
-        store_runs = self._store_runs()
-        run_dirs = self._run_dirs()
-        sources = self._source_map(store_runs, run_dirs)
-        wanted = self._watermark(sources)
-        conn = self._open()
-        try:
-            stored = self._stored_sources(conn)
-            changed = {
-                path for path, (mtime, size) in wanted.items()
-                if path not in stored or (stored[path]["mtime_ns"],
-                                          stored[path]["size_bytes"]) != (mtime, size)}
-            gone = set(stored) - set(wanted)
-            derived = self._build(conn, wanted, stored, store_runs, run_dirs, sources,
-                                  changed, gone)
-        finally:
-            conn.close()
-        return "rebuilt" if derived or changed or gone else "reused"
-
-    # -- the build
-
-    def _build(self, conn, wanted, stored, store_runs, run_dirs, sources, changed, gone):
-        """Bring the index up to date, answering how many runs were derived.
-
-        A run with nothing new is not derived at all: its rows and its claims are already
-        what a derivation would produce, so the store columns it owns are refreshed and
-        nothing is parsed. Each derived run is its own transaction, so a sync stopped part
-        way keeps every run it finished and the next one starts after them.
-        """
-        derived = 0
-        reset_seq(conn)
-        existing = {row[0] for row in conn.execute("SELECT run_id FROM runs_index")}
-        run_ids = set(store_runs) | set(run_dirs)
-        # A changed file marks its run; a removed one marks the run it belonged to; a run
-        # the index has never seen is derived whatever its files say.
-        dirty = {sources[path] for path in changed if path in sources}
-        dirty |= {stored[path].get("run_id") for path in gone
-                  if path in stored and stored[path].get("run_id")}
-        dirty |= {run_id for run_id in run_ids if run_id not in existing}
-        if self._store_readable():
-            # A run the store no longer holds and no directory remains for is gone from
-            # the sources, so it goes from the index too: a lingering row is a claim
-            # about a run that nothing on disk supports.
-            for run_id in existing - run_ids:
-                for table in ("obs_events", "runs_index", "claim_checks"):
-                    conn.execute(f"DELETE FROM {table} WHERE run_id = ?", (run_id,))
-        self._prune_sources(conn, gone, stored)
-        self._tick_decisions(conn)
-        self._sync_unreadable_store(conn)
-        save_seq(conn)
-        conn.commit()
-        for run_id in sorted(run_ids):
-            store_row = store_runs.get(run_id)
-            if run_id in dirty:
-                meta, summary, updates = self._derive(
-                    conn, run_id, run_dirs.get(run_id), store_row, wanted, stored)
-                self._upsert_run(conn, meta)
-                self._replace_claims(conn, meta, summary)
-                self._record_sources(conn, run_id, updates)
-                save_seq(conn)
-                conn.commit()
-                derived += 1
-            else:
-                self._update_store_columns(conn, run_id, store_row)
-        conn.commit()
-        return derived
-
-    def _store_readable(self):
-        """Whether the store can be read at all, so its rows may be pruned.
-
-        A store that is absent or unreadable is not evidence that its runs are gone.
-        Pruning on that would delete a whole index over a transient lock.
-        """
-        store = Store(self.store_path)
-        try:
-            return store.state == "ok" and "runs" in store.tables
-        finally:
-            store.close()
-
-    def _derive(self, conn, run_id, run_dirs, store_row, wanted, stored):
-        """Derive one run: its runs_index row, its new obs rows, its claims.
-
-        Answers `(meta, summary, source_updates)`. Only the files that changed are
-        parsed; the rest keep the rows and the recorded state they already have.
-        """
+    def _derive(self, run_id, kinds, claims):
+        store_row = self.store_runs().get(run_id)
         dict_row = store_row or {}
         trace = {"run_id": run_id, "lane_id": dict_row.get("lane_id"),
                  "item_id": dict_row.get("item_id")}
-        dirs = [Path(directory) for directory in (run_dirs or [])]
-        sources = self._run_sources(run_id, dirs, store_row)
+        dirs = [Path(directory) for directory in self.run_dirs().get(run_id, [])]
+        sources = self.run_sources(run_id)
         manifest = _read_json(sources.get("manifest"))
         if manifest.get("tick_id"):
             trace["tick_id"] = manifest["tick_id"]
 
-        # These rows are derived from the state of the artifacts rather than from their
-        # contents, so they are dropped and re-derived whenever the run is.
-        conn.execute("DELETE FROM obs_events WHERE run_id = ? AND kind = ?",
-                     (run_id, UNREADABLE))
-
-        updates = {}
-        log = self._parse_file(conn, trace, sources.get("log"), wanted, stored,
-                               parse_run_log, updates)
-        proc = self._parse_file(conn, trace, sources.get("proc"), wanted, stored,
-                                parse_proc_exec, updates)
-        for name in ("gate_plan", "gate_verdict"):
-            self._parse_file(conn, trace, sources.get(name), wanted, stored,
-                             parse_gate_record, updates, force_full=True)
-        # The small artifacts this run reads whole are watermarked like the rest: a
-        # manifest that gained its head sha, or a brief that appeared, has to mark the
-        # run changed. Leaving them out of `ingested_files` would mark it changed on
-        # EVERY sync, which is the rebuild this exists to remove.
-        for name in ("manifest", "base_sha", "brief", "fence"):
-            self._record_metadata(sources.get(name), wanted, updates)
+        turns_only = kinds is not None and not claims and set(kinds) <= {"llm.turn"}
+        log = self._parse(parse_run_log, sources.get("log"), trace, turns_only=turns_only)
+        if turns_only:
+            proc = Parsed(Rows("skip"), "unread", "not read for this answer")
+        else:
+            proc = self._parse(parse_proc_exec, sources.get("proc"), trace)
+            for name in ("gate_plan", "gate_verdict"):
+                if Path(sources[name]).exists():
+                    self._parse(parse_gate_record, sources[name], trace)
 
         if log.state in ("missing", "unreadable", "corrupt"):
-            self._unreadable(conn, run_id, trace, "run-log", sources.get("log"),
+            self._unreadable(trace, "run-log", sources.get("log"),
                              f"{log.state}: {log.detail}")
         if proc.state in ("unreadable", "corrupt"):
-            self._unreadable(conn, run_id, trace, "proc-exec.jsonl",
-                             sources.get("proc"), proc.state)
+            self._unreadable(trace, "proc-exec.jsonl", sources.get("proc"), proc.state)
 
         base_sha = None
         base_path = sources.get("base_sha")
@@ -1233,222 +937,92 @@ class Index:
             base_sha, manifest.get("head_sha"), manifest.get("tree_sha"),
             "; ".join(detail_bits),
         )
-        return meta, log.summary, updates
+        self.conn.execute(RUN_INSERT, meta)
+        if claims:
+            run = dict(zip(RUN_COLUMNS, meta))
+            for claim in verify_run(self.conn, run, log.summary or {}):
+                self.conn.execute(
+                    "INSERT OR REPLACE INTO claim_checks (claim_id, run_id, lane_id,"
+                    " item_id, claim_kind, claim_text, observed_status,"
+                    " discrepancy_reason, evidence_span_ids, last_dir_edit_at,"
+                    " observed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)", claim)
+        if kinds is not None:
+            wanted = sorted(set(kinds) | {UNREADABLE})
+            marks = ",".join("?" for _ in wanted)
+            self.conn.execute(
+                f"DELETE FROM obs_events WHERE run_id = ? AND kind NOT IN ({marks})",
+                [run_id, *wanted])
 
-    def _source_plan(self, path, wanted, stored, force_full=False):
-        """How to read one source: `skip`, `resume` from an offset, or `full`."""
+    def _parse(self, parser, path, trace, **options):
+        """Run one parser, keeping the rest of the run when it raises."""
         if path is None:
-            return "skip", 0, None
-        row = stored.get(str(path))
-        stat = wanted.get(str(path))
-        if stat is None:
-            # Nothing to read now. A source that was read before and is gone is parsed
-            # again so it reads `missing` instead of keeping a state it no longer has.
-            return ("skip", 0, None) if row is None else ("full", 0, row)
-        if row is None:
-            return "full", 0, row
-        if (row["mtime_ns"], row["size_bytes"]) == stat:
-            return "skip", row["parsed_bytes"], row
-        if force_full:
-            # A record rewritten whole is re-read whole, but only when it changed: an
-            # unchanged one is skipped like any other source.
-            return "full", 0, row
-        if stat[1] > row["parsed_bytes"]:
-            return "resume", row["parsed_bytes"], row
-        return "full", 0, row
-
-    def _parse_file(self, conn, trace, path, wanted, stored, parser, updates,
-                    force_full=False):
-        mode, offset, row = self._source_plan(path, wanted, stored, force_full)
-        if mode == "skip":
-            if row is None:
-                return Parsed(Rows("skip"), "missing", "", 0)
-            return Parsed(Rows("skip"), row["state"], row["detail"],
-                          row["parsed_bytes"], _loads(row.get("carry")),
-                          _loads(row.get("carry")).get("summary") or {})
-        if mode == "full":
-            _delete_source_rows(conn, trace["run_id"], path)
-            ordinal, carry = 0, {}
+            parsed = parser(None, trace, **options)
         else:
-            ordinal, carry = row["rows_parsed"], _loads(row.get("carry"))
-        try:
-            parsed = parser(path, trace, start=offset, ordinal=ordinal, carry=carry)
-        except Exception as error:  # noqa: BLE001 - one source must not abort the ingest
-            # A parser that raises is a defect in the parser or a shape nobody has seen.
-            # Either way the other runs are still derivable, so this source is recorded
-            # as corrupt with the reason, its partial rows are dropped, and the run's
-            # `unreadable` row names it (§7.1: recording never costs the caller).
-            parsed = Parsed(Rows(Path(path).name), "corrupt",
-                            f"parser raised {error.__class__.__name__}: {error}",
-                            offset, carry)
-        self._insert_rows(conn, parsed.rows)
-        # The stat is read AFTER the parse: a run still writing appends while the build
-        # reads, so the size recorded has to be the one the build actually consumed from,
-        # not the one it saw before it started.
-        try:
-            after = Path(path).stat()
-        except OSError:
-            after = None
-        stat = (after.st_mtime_ns, after.st_size) if after else wanted.get(str(path))
-        updates[str(path)] = {
-            "mtime_ns": stat[0] if stat else (row or {}).get("mtime_ns", 0),
-            "size_bytes": stat[1] if stat else (row or {}).get("size_bytes", 0),
-            # A resumed parse that read nothing new keeps the offset it started at, so
-            # the next build starts from the same place instead of from zero.
-            "parsed_bytes": parsed.consumed,
-            "rows_parsed": parsed.rows.ordinal,
-            "state": parsed.state,
-            "detail": parsed.detail,
-            "carry": json.dumps(parsed.carry, sort_keys=True),
-        }
+            try:
+                parsed = parser(path, trace, **options)
+            except Exception as error:  # noqa: BLE001 - one source must not cost the run
+                # A parser that raises is a defect in the parser or a shape nobody has
+                # seen. Either way the run's other sources still answer, so this source
+                # reads corrupt with the reason and its `unreadable` row names it (§7.1).
+                parsed = Parsed(Rows(Path(path).name), "corrupt",
+                                f"parser raised {error.__class__.__name__}: {error}")
+        self._insert(parsed.rows)
         return parsed
 
-    def _record_metadata(self, path, wanted, updates):
-        """Record a small artifact this run reads whole, so it is watermarked too."""
-        stat = wanted.get(str(path)) if path is not None else None
-        if stat is None:
-            return
-        updates[str(path)] = {
-            "mtime_ns": stat[0], "size_bytes": stat[1], "parsed_bytes": stat[1],
-            "rows_parsed": 0, "state": "ok", "detail": "", "carry": "{}",
-        }
-
-    def _insert_rows(self, conn, rows):
+    def _insert(self, rows):
         if not rows.rows:
             return
-        conn.executemany(
-            "INSERT OR REPLACE INTO obs_events (obs_id, seq, kind, ts_start, ts_end,"
-            " duration_ms, seam, run_id, lane_id, item_id, tick_id, session_id,"
-            " route_id, span_id, summary, payload, source)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        self.conn.executemany(
+            OBS_INSERT,
             [(row["obs_id"], row["seq"], row["kind"], row["ts_start"], row["ts_end"],
               row["duration_ms"], row["seam"], row["run_id"], row["lane_id"],
               row["item_id"], row["tick_id"], row["session_id"], row["route_id"],
               row["span_id"], row["summary"], row["payload"], row["source"])
              for row in rows.rows])
 
-    def _unreadable(self, conn, run_id, trace, artifact, path, reason):
+    def _unreadable(self, trace, artifact, path, reason):
         rows = Rows("unreadable", source=str(path or ""))
         rows.add_unreadable(trace, artifact, path or "", reason)
-        self._insert_rows(conn, rows)
+        self._insert(rows)
 
-    def _upsert_run(self, conn, meta):
-        conn.execute(RUN_INSERT, meta)
-
-    def _update_store_columns(self, conn, run_id, store_row):
-        """Refresh what the store owns for a run whose artifacts did not change."""
-        row = store_row or {}
-        conn.execute(
-            "UPDATE runs_index SET lane_id=?, item_id=?, backend=?, store_state=?,"
-            " exit_code=?, started_at=?, finished_at=? WHERE run_id=?",
-            (row.get("lane_id"), row.get("item_id"), row.get("backend"),
-             row.get("state") or "unrecorded", row.get("exit_code"),
-             row.get("started_at"), row.get("finished_at"), run_id))
-
-    def _replace_claims(self, conn, meta, summary):
-        run = dict(zip(RUN_COLUMNS, meta))
-        conn.execute("DELETE FROM claim_checks WHERE run_id = ?", (run["run_id"],))
-        for claim in verify_run(conn, run, summary or {}):
-            conn.execute(
-                "INSERT OR REPLACE INTO claim_checks (claim_id, run_id, lane_id,"
-                " item_id, claim_kind, claim_text, observed_status,"
-                " discrepancy_reason, evidence_span_ids, last_dir_edit_at,"
-                " observed_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)", claim)
-
-    def _record_sources(self, conn, run_id, updates):
-        for path, rec in updates.items():
-            conn.execute(
-                "INSERT INTO ingested_files (path, run_id, mtime_ns, size_bytes,"
-                " parsed_bytes, rows_parsed, state, detail, carry)"
-                " VALUES (?,?,?,?,?,?,?,?,?)"
-                " ON CONFLICT(path) DO UPDATE SET run_id=excluded.run_id,"
-                " mtime_ns=excluded.mtime_ns, size_bytes=excluded.size_bytes,"
-                " parsed_bytes=excluded.parsed_bytes, rows_parsed=excluded.rows_parsed,"
-                " state=excluded.state, detail=excluded.detail, carry=excluded.carry",
-                (path, run_id, rec["mtime_ns"], rec["size_bytes"], rec["parsed_bytes"],
-                 rec["rows_parsed"], rec["state"], rec["detail"], rec["carry"]))
-
-    def _prune_sources(self, conn, gone, stored):
-        for path in gone:
-            run_id = (stored.get(path) or {}).get("run_id")
-            if run_id:
-                _delete_source_rows(conn, run_id, path)
-            conn.execute("DELETE FROM ingested_files WHERE path = ?", (path,))
-
-    def _tick_decisions(self, conn):
-        """`tick.decision` rows from the store's `dispatches` (§4.3).
+    def _tick_decisions(self, run_ids):
+        """`tick.decision` rows from the store's `dispatches` (§4.3), for the loaded runs.
 
         The store is authoritative for the decision, so the row is stamped with the
-        decision's own time and the run it names, not with an index timestamp. The
-        table is small and read on every sync, so a decision the store no longer holds
-        is dropped rather than left to read as a decision that still stands.
+        decision's own time and the run it names.
         """
         store = Store(self.store_path)
-        held = set()
-        indexed = {obs_id for (obs_id,) in conn.execute(
-            "SELECT obs_id FROM obs_events WHERE kind = 'tick.decision'")}
         try:
             if store.state != "ok" or "dispatches" not in store.tables:
-                # The store is the authority for these rows. With none to read there is
-                # nothing to say, and dropping the rows already indexed would be deleting
-                # evidence over what may be a transient lock.
                 return
             for row in store.rows(
                     "SELECT decision_id, item_id, lane_id, run_id, action, reason,"
                     " dispatched_at FROM dispatches"):
-                obs_id = f"obs-dispatch-{row['decision_id']}"
-                held.add(obs_id)
-                if obs_id in indexed:
-                    # A dispatch row is written once and never changed, so one already
-                    # indexed is not written again: rewriting every decision on every
-                    # sync made a sync's cost follow the store's whole history.
+                if row["run_id"] not in run_ids:
                     continue
                 payload = {"outcome": row["action"], "reason": row["reason"]}
-                conn.execute(
+                self.conn.execute(
                     "INSERT OR REPLACE INTO obs_events (obs_id, seq, kind, ts_start,"
                     " run_id, lane_id, item_id, span_id, summary, payload, source)"
                     " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                    (obs_id, -1, "tick.decision", _iso_from_ms(row["dispatched_at"]),
-                     row["run_id"], row["lane_id"], row["item_id"], row["decision_id"],
+                    (f"obs-dispatch-{row['decision_id']}", -1, "tick.decision",
+                     _iso_from_ms(row["dispatched_at"]), row["run_id"], row["lane_id"],
+                     row["item_id"], row["decision_id"],
                      f"{row['action']} {row['reason']}".strip()[:EXCERPT_MAX],
                      json.dumps(payload), str(self.store_path)))
         finally:
             store.close()
-        for obs_id in indexed - held:
-            conn.execute("DELETE FROM obs_events WHERE obs_id = ?", (obs_id,))
 
-    def _sync_unreadable_store(self, conn):
-        obs_id = f"obs-store-{UNREADABLE}"
+    def _sync_unreadable_store(self):
         if self.store_path.exists():
-            conn.execute("DELETE FROM obs_events WHERE obs_id = ?", (obs_id,))
             return
-        conn.execute(
+        self.conn.execute(
             "INSERT OR REPLACE INTO obs_events (obs_id, seq, kind, ts_start, run_id,"
             " span_id, summary, payload, source) VALUES (?,?,?,?,?,?,?,?,?)",
-            (obs_id, 0, UNREADABLE, now_iso(), "unattributed", "unreadable-store",
-             f"store: unreadable (no store at {self.store_path})",
+            (f"obs-store-{UNREADABLE}", 0, UNREADABLE, now_iso(), "unattributed",
+             "unreadable-store", f"store: unreadable (no store at {self.store_path})",
              json.dumps({"artifact": "state.db", "path": str(self.store_path),
                          "reason": "absent"}), str(self.store_path)))
-
-
-def _delete_source_rows(conn, run_id, path):
-    """Delete the rows one run derived from one source, by their id range.
-
-    A row's id is `obs-<run>-<source stamp>-<ordinal>`, so one source's rows are one
-    contiguous range of the primary key. `source` has no index, and a `DELETE ... WHERE
-    source = ?` walked the whole table once per source re-read.
-    """
-    prefix = f"obs-{run_id}-{_source_slug(path)}-"
-    conn.execute("DELETE FROM obs_events WHERE obs_id >= ? AND obs_id < ?",
-                 (prefix, prefix[:-1] + "."))
-
-
-def _loads(raw):
-    try:
-        value = json.loads(raw or "{}")
-    except (TypeError, ValueError):
-        return {}
-    return value if isinstance(value, dict) else {}
 
 
 # ---------------------------------------------------------------- claims
@@ -1523,11 +1097,21 @@ QUANTIFIER_RE = re.compile(
 BACKTICK_RE = re.compile(r"`([^`\n]{3,120})`")
 
 
+def _run_clock(run):
+    """When a run's record says it finished (else started), as the claim's time.
+
+    A claim is derived from the run's artifacts, so its time is the run's own: the clock
+    a reader happened to read it at would differ on every read and say nothing.
+    """
+    return _iso_from_ms(run.get("finished_at") or run.get("started_at")) or ""
+
+
 def _claim_row(run, kind, text, status, reason, evidence, last_edit):
     return (
         f"claim-{run['run_id']}-{kind}-{hashlib.sha256(text.encode()).hexdigest()[:8]}",
         run["run_id"], run.get("lane_id"), run.get("item_id"), kind, text[:EXCERPT_MAX],
-        status, reason[:EXCERPT_MAX], json.dumps(list(evidence)), last_edit, now_iso(),
+        status, reason[:EXCERPT_MAX], json.dumps(list(evidence)), last_edit,
+        _run_clock(run),
     )
 
 
@@ -1648,19 +1232,7 @@ def verify_run(conn, run, summary):
 # ---------------------------------------------------------------- queries
 
 
-def _conn(index_path):
-    """The index itself is opened read-only for every query."""
-    conn = sqlite3.connect(f"file:{index_path}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def q_tick(conn, tick_id=None, last=False):
-    if last and not tick_id:
-        row = conn.execute(
-            "SELECT tick_id FROM obs_events WHERE tick_id IS NOT NULL AND tick_id != ''"
-            " ORDER BY ts_start DESC, seq DESC LIMIT 1").fetchone()
-        tick_id = row["tick_id"] if row else None
+def q_tick(conn, tick_id):
     if not tick_id:
         return {"tick_id": None, "reason": "no tick_id recorded in any artifact", "rows": []}
     rows = conn.execute(
@@ -1714,6 +1286,40 @@ def q_audit(conn, run_id):
     return {"run": dict(run), "turns": turns, "commands": commands,
             "unreadable": unreadable,
             "claims": [dict(claim) for claim in claims]}
+
+
+def q_run(conn, run_id):
+    """One run as `tillr-view` reads it: its row, its events in order, its claims.
+
+    The events are every kind recorded for the run, ordered as they were recorded. An
+    absent run answers `{"run": null}`. `payload` is each row's stored JSON text, so it is
+    written into the document as it is rather than decoded and encoded again.
+    """
+    run = conn.execute("SELECT * FROM runs_index WHERE run_id = ?", (run_id,)).fetchone()
+    if run is None:
+        return {"run": None, "events": [], "claims": []}
+    events = [
+        ({"obs_id": row["obs_id"], "kind": row["kind"], "ts_start": row["ts_start"],
+          "ts_end": row["ts_end"], "duration_ms": row["duration_ms"],
+          "seam": row["seam"] or "", "span_id": row["span_id"] or "",
+          "summary": row["summary"] or ""}, row["payload"])
+        for row in conn.execute(
+            "SELECT obs_id, kind, ts_start, ts_end, duration_ms, seam, span_id, summary,"
+            " payload FROM obs_events WHERE run_id = ? ORDER BY ts_start, seq", (run_id,))]
+    claims = [dict(row) for row in conn.execute(
+        "SELECT claim_id, claim_kind, claim_text, observed_status, discrepancy_reason,"
+        " observed_at FROM claim_checks WHERE run_id = ? ORDER BY claim_id", (run_id,))]
+    return {"run": dict(run), "events": events, "claims": claims}
+
+
+def write_run(result, out):
+    """Write a `q_run` answer as one JSON document, splicing each stored payload in."""
+    out.write('{"run": ' + json.dumps(result["run"]) + ', "claims": '
+              + json.dumps(result["claims"]) + ', "events": [')
+    for number, (event, payload) in enumerate(result["events"]):
+        head = json.dumps(event)
+        out.write(("," if number else "") + head[:-1] + ', "payload": ' + payload + "}")
+    out.write("]}\n")
 
 
 def q_cost(conn):
@@ -1808,7 +1414,7 @@ def render_audit(result):
 
 def render_cost(rows):
     if not rows:
-        return "cost: no llm.turn row — no run log was parsed (see `audit <run-id>`)"
+        return "cost: no llm.turn row — no run log held a model turn (see `audit <run-id>`)"
     head = (f"{'lane':<22} {'route':<58} {'runs':>4} {'retry':>5} {'wall_s':>8}"
             f" {'tok_in':>8} {'cache_r':>9} {'tok_out':>7} {'think':>6} {'cost_usd':>10}")
     lines = [head]
@@ -1827,7 +1433,7 @@ def render_cost(rows):
 def render_discrepancies(rows, include_unverified=False):
     if not rows:
         what = "claim" if include_unverified else "disproved claim"
-        return f"discrepancies: none (no {what} in the index)"
+        return f"discrepancies: none (no {what} in the runs read)"
     lines = [f"discrepancies: {len(rows)} row(s)"]
     for row in rows:
         lines.append(f"  {row['observed_at'][:19]} {row['observed_status']:<10}"
@@ -1841,63 +1447,75 @@ def render_discrepancies(rows, include_unverified=False):
 # ---------------------------------------------------------------- main
 
 
+RUNS_HELP = (f"read the N most recent runs, by the store's start time (default"
+             f" {DEFAULT_RUNS}; 0 reads every run, which parses every recorded artifact"
+             f" and takes minutes on a large corpus)")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="tillr-trace",
-        description="Derived read model over recorded runs. Never a source of truth.")
-    parser.add_argument("--trace-root", type=Path, default=trace_root_default())
+        description="Answers over recorded run artifacts, read on demand. Never a source"
+                    " of truth, and keeps nothing: every command reads the artifacts it"
+                    " needs and writes no file.")
+    parser.add_argument("--trace-root", type=Path, default=trace_root_default(),
+                        help="where the recorder's `runs/<run-id>/` directories are"
+                             " (default: $TILLR_TRACE_ROOT or the state home)")
     parser.add_argument("--store", type=Path, default=Path(".tillr/state.db"))
-    parser.add_argument("--index", type=Path, default=None)
-    parser.add_argument("--rebuild", action="store_true",
-                       help="drop and rebuild index.db from the Tier 1 artifacts")
+    parser.add_argument("--loop-dir", type=Path, default=None,
+                        help="the drain's per-run record directory (default: the store's"
+                             " sibling `loop`)")
     sub = parser.add_subparsers(dest="command", required=True)
-
-    # `ingest` is the write the loop asks for after a tick: it brings index.db up to
-    # date with the artifacts the tick's runs left and prints nothing else. Every other face syncs
-    # too, because a query that read a stale index would answer the wrong question, but
-    # a supervisor has no query to make -- it only needs the derived rows to exist.
-    sub.add_parser("ingest", help="index the recorded artifacts, and print where")
 
     tick = sub.add_parser("tick", help="one tick, in order")
     tick.add_argument("tick_id", nargs="?")
-    tick.add_argument("--last", action="store_true")
+    tick.add_argument("--last", action="store_true",
+                      help="the tick named by the most recent run that names one")
 
     audit = sub.add_parser("audit", help="one run: asked, ran, changed, cost")
     audit.add_argument("run_id")
 
-    sub.add_parser("cost", help="per lane, per model, per route")
+    run = sub.add_parser("run", help="one run's row, events and claims, as JSON"
+                                     " (what tillr-view reads)")
+    run.add_argument("run_id")
+
+    cost = sub.add_parser("cost", help="per lane, per model, per route")
+    cost.add_argument("--runs", type=int, default=DEFAULT_RUNS, metavar="N", help=RUNS_HELP)
 
     disc = sub.add_parser("discrepancies", help="claims the record does not support")
-    disc.add_argument("--since")
+    disc.add_argument("--since", help="only claims of runs that finished at or after this"
+                                      " UTC time (ISO 8601, e.g. 2026-11-18T00:00:00Z)")
     disc.add_argument("--all", action="store_true", help="include unverified rows")
+    disc.add_argument("--runs", type=int, default=DEFAULT_RUNS, metavar="N", help=RUNS_HELP)
 
     args = parser.parse_args(argv)
-    index = Index(args.trace_root, args.store, args.index, args.rebuild)
-    state = index.sync(rebuild=args.rebuild)
-    if args.command == "ingest":
-        if state == "busy":
-            print(f"index: busy {index.index_path} (another ingest holds"
-                  f" {index._lock_path()}; it, or the next one, reads what is new)")
-        else:
-            print(f"index: {state} {index.index_path}")
-        return 0
-    if state == "busy" and not index.index_path.exists():
-        print(f"tillr-trace: no index at {index.index_path} yet, and another ingest is"
-              " building it", file=sys.stderr)
-        return 1
-    conn = _conn(index.index_path)
+    corpus = Corpus(args.trace_root, args.store, args.loop_dir)
     try:
+        conn = corpus.conn
         if args.command == "tick":
-            print(render_tick(q_tick(conn, args.tick_id, args.last)))
-        elif args.command == "audit":
-            print(render_audit(q_audit(conn, args.run_id)))
+            tick_id = args.tick_id
+            ticks = {run_id: corpus.tick_of(run_id) for run_id in corpus.run_ids()}
+            if args.last and not tick_id:
+                tick_id = next((t for t in ticks.values() if t), None)
+            corpus.load([run_id for run_id, t in ticks.items() if t and t == tick_id],
+                        claims=False)
+            print(render_tick(q_tick(conn, tick_id)))
+        elif args.command in ("audit", "run"):
+            if corpus.known(args.run_id):
+                corpus.load([args.run_id])
+            if args.command == "audit":
+                print(render_audit(q_audit(conn, args.run_id)))
+            else:
+                write_run(q_run(conn, args.run_id), sys.stdout)
         elif args.command == "cost":
+            corpus.load(corpus.run_ids(args.runs), kinds={"llm.turn"}, claims=False)
             print(render_cost(q_cost(conn)))
         elif args.command == "discrepancies":
+            corpus.load(corpus.run_ids(args.runs), kinds=set(), claims=True)
             print(render_discrepancies(q_discrepancies(conn, args.since, args.all),
                                        args.all))
     finally:
-        conn.close()
+        corpus.close()
     return 0
 
 

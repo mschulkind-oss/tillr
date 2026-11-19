@@ -836,8 +836,6 @@ func loopFace(args []string) int {
 	heavyGate := fs.String("heavy-gate", "tillr-gate", "the declaration judge for after-merge heavy runs")
 	rolling := fs.String("rolling", drain.DefaultRollingProgram, "the program that runs the rolling tier over the trunk range; {since} is `--since <watermark>` or `--all`. Empty disables the rolling tier")
 	fixerGate := fs.String("fixer-gate", drain.DefaultFixerGateProgram, "the FULL untiered gate a fixer item runs instead of --gate; it is handed the candidate's flags like --gate, and its verdict record is what the land program reads; {green} is `--since <last_green_sha>` or `--all`. Empty leaves a fixer on --gate, which cannot prove the sibling breakage its range reaches")
-	traceBin := fs.String("trace-bin", "", "the tillr-trace program the loop runs after each tick to index what the tick's runs recorded (default: the repository's tools/tillr-trace, the pack's copy, or PATH). An explicit empty value disables the index step")
-	traceRoot := fs.String("trace-root", "", "the trace root the indexer writes (default: tillr-trace's own $TILLR_TRACE_ROOT or state home)")
 	now := fs.String("now", "", "the injected clock, RFC 3339 (default: the wall clock, once per tick)")
 	questionsCmd := fs.String("questions-cmd", "", questionsCmdHelp)
 	if err := parseFlags(fs, args); err != nil {
@@ -911,17 +909,10 @@ func loopFace(args []string) int {
 		}
 		at = func() time.Time { return parsed }
 	}
-	traceBinNamed := false
-	fs.Visit(func(set *flag.Flag) {
-		if set.Name == "trace-bin" {
-			traceBinNamed = true
-		}
-	})
 	steps := &drain.ProcessSteps{
 		RunBin: *runBin, HeavyGateBin: *heavyGate, ItemBin: *itemBin, Store: *path, LaneRoot: *laneRoot, Root: *root, Now: at,
 		GateProgram: *gate, LandProgram: *land, VerdictProgram: *verdict,
 		ReplayProgram: *replay, RollingProgram: *rolling, FixerGateProgram: *fixerGate,
-		TraceBin: resolveTraceBin(*root, *traceBin, traceBinNamed), TraceRoot: *traceRoot,
 		SyncRoadmaps: repositorySettings.Sync.Roadmaps,
 	}
 	explicitSteps := map[string]bool{}
@@ -1048,37 +1039,6 @@ func spendLine(result drain.LoopResult) string {
 	return line + "\nloop: spend started in this loop: " + result.StartedSpend.String() +
 		"\nloop: spend carried over from earlier loops: " + result.CarriedSpend.String() +
 		"\nloop: spend all recorded runs: " + result.RecordedSpend.String()
-}
-
-// resolveTraceBin answers the tillr-trace program the loop indexes with. The indexer is a
-// Python script beside the Go tree rather than a built binary, so it is not necessarily on
-// PATH: the repository's own `tools/tillr-trace` is the canonical copy when the loop runs
-// from a checkout, and the pack's `~/.local/share/tillr/tillr-trace` is the copy a delivered
-// install has. An explicit --trace-bin always wins, and a caller that names a program that
-// does not exist gets that program's own failure rather than a silent fallback.
-//
-// `named` and `given` are separate parameters because an absent program and a disabled one
-// are different requests, and one string cannot carry both. `--trace-bin ""` is how an
-// operator bounds the loop to the steps that judge work: it answers the empty string, which
-// `ProcessSteps.Index` reads as "skip", instead of falling through to the search below and
-// silently re-enabling the step the operator just turned off.
-func resolveTraceBin(root, named string, given bool) string {
-	if given {
-		return named
-	}
-	candidates := []string{
-		filepath.Join(root, "tools", "tillr-trace", "tillr-trace"),
-		filepath.Join(os.Getenv("HOME"), ".local", "share", "tillr", "tillr-trace", "tillr-trace"),
-	}
-	for _, candidate := range candidates {
-		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
-			return candidate
-		}
-	}
-	if path, err := exec.LookPath("tillr-trace"); err == nil {
-		return path
-	}
-	return "tillr-trace"
 }
 
 // expressLaneIDs names the reserved pool separately from the ordinary cap.

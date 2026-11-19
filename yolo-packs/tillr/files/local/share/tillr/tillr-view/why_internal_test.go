@@ -54,7 +54,7 @@ func TestWhyAPIAndWaitingBeforeAnyPass(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := storeFingerprint(t, path)
-	srv := newServer(context.Background(), path, "", "", filepath.Join(dir, "absent-index"), dir, "", nil)
+	srv := newServer(context.Background(), path, "", "", filepath.Join(dir, "no-tillr-trace"), dir, "", nil)
 	defer srv.close()
 	httpServer := httptest.NewServer(srv.routes())
 	defer httpServer.Close()

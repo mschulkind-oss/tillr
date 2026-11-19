@@ -75,7 +75,7 @@ func TestLiveWaitingKeepsConflictTransitions(t *testing.T) {
 			t.Errorf("live waiting lost %q: %s", want, out)
 		}
 	}
-	srv := newServer(context.Background(), path, "", "", filepath.Join(dir, "no-index"), dir, "", nil)
+	srv := newServer(context.Background(), path, "", "", filepath.Join(dir, "no-tillr-trace"), dir, "", nil)
 	srv.plannerFlag = drain
 	defer srv.close()
 	h.http = httptest.NewServer(srv.routes())
