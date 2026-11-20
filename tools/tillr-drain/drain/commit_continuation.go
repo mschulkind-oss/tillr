@@ -1,3 +1,4 @@
+// Architecture and invariants: docs/reference/tillr-build-commit.md
 package drain
 
 import (

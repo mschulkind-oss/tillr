@@ -2803,7 +2803,7 @@ a continuation a stop killed again
 `TestDirtyExitContinuesAKilledContinuationAgain` in
 [`drain/commit_continuation_test.go`](./drain/commit_continuation_test.go)). Clean exits, design/comment work and outside-fence-only edits do not trigger it.
 Missing brief/session state is named rather than replaced by a cold build. See the
-[design choice and limits](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-build-commit.md).
+[build-commit continuation reference](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-build-commit.md).
 
 Interrupting `resume` or `once` (Ctrl-C, SIGTERM) stops that command, not its worker:
 the run face is started in its own process group, outside the command's context, so
