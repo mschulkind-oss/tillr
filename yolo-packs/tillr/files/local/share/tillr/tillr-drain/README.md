@@ -362,8 +362,12 @@ If a piece needs a design decision, the planner proposes nothing and reports an
 `owner` obstacle with its specific question; the design seat receives the conflict.
 The verifier asks for `node:<id>` evidence for each covered criterion and a
 `not-done` reason beginning `uncovered:` for each uncovered one. The judge intake
-does not enforce the node locator; the verifier makes that judgment. No item selects
-this workflow by default.
+does not enforce the node locator; the verifier makes that judgment. Document-declared
+items do not select this workflow unless named on the block or in `[workflows.default]`,
+whereas `tillr item request` files `build` requests (its default seat) with
+`planned-build@v1` by default and `design` requests with
+[`scouted-design@v1`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/workflows/scouted-design@v1.json) by default
+(other seats have no request default and must name a workflow).
 
 A containing stage is not the only source of `args`. An item that names a workflow
 in its own `workflow` field may also carry `workflow_args`
@@ -435,10 +439,10 @@ never has a document block. The drain runs it like any other item, with four add
   who recorded it and when).
 
 Completion is the normal gate and landing, plus whatever the workflow's own verify or
-judge stage decides. `planned-build@v1`, the build seat's default, has a `verify`
-evaluator, so the item waits as `judge-grant-absent` until an unexpired grant covers
-its criteria, which are all `verification-only`. `scouted-design@v1` and
-`single-worker@v1` need no grant.
+judge stage decides. `planned-build@v1`, the default workflow for `build` requests, has a
+`verify` evaluator, so the item waits as `judge-grant-absent` until an unexpired grant
+covers its criteria, which are all `verification-only`. `scouted-design@v1`, the default
+workflow for `design` requests, and `single-worker@v1` need no grant.
 
 `write_scope` is either `"inherit"` (also the default) or a nonempty list of
 path prefixes. Every writing node inside a containing stage inherits its scope
