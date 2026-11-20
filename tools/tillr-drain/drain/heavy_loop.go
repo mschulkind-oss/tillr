@@ -120,7 +120,18 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			if l.gatePolicy.AutoRevert {
 				runner.Revert = l.revertLanding
 			}
-			out, err := restartWork(ctx, l, runner.Run)
+			var out HeavyOutcome
+			var err error
+			hold, busy, holdErr := acquireLoopLock(ctx, l.cfg.Root)
+			if holdErr != nil {
+				err = holdErr
+			} else if busy {
+				out.Busy = true
+			} else {
+				runner.Lock = hold
+				out, err = restartWork(ctx, l, runner.Run)
+				hold.Close()
+			}
 			// A loop's first heavy pass also offers the pointer to the remote, so a push that
 			// failed or never ran before a restart is not left until the next proof.
 			l.greenPushAtStart.Do(func() { l.afterGreen(context.WithoutCancel(ctx), "start") })

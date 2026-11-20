@@ -28,8 +28,11 @@ type HeavyStatus = heavy.HeavyStatus
 // Landings is read from the store when named, never inferred from the rolling watermark.
 type HeavyRunner struct {
 	Root, Work, Trunk, Store string
-	Judge                    func(context.Context, string, string) ([]HeavyCheck, error)
-	Fix                      func(context.Context, string, []HeavyCheck) error
+	// Lock is the loop lock of Root's repository. A proof moves the shared green pointer,
+	// so Run refuses without it, and refuses from a linked worktree whatever it holds.
+	Lock  *LoopLock
+	Judge func(context.Context, string, string) ([]HeavyCheck, error)
+	Fix   func(context.Context, string, []HeavyCheck) error
 	// Revert is the automatic remedy for a red the bisection attributed to one landing
 	// (graph design Section 8.2, OQ-GP1). It is called before Fix for each such landing,
 	// with a replay that judges one check on any commit, and answers whether the landing
@@ -67,7 +70,11 @@ func heavyGitOutput(ctx context.Context, root string, args ...string) (string, e
 	return gather(ctx, gitKey("trimmed output", root, args), func(ctx context.Context) (string, error) { return heavy.GitOutput(ctx, root, args...) })
 }
 func heavyDirectory(ctx context.Context, root string) (string, error) {
-	return heavy.Directory(ctx, root)
+	dir, err := heavy.Directory(ctx, root)
+	if err == nil && heavyCommonGuard != nil {
+		err = heavyCommonGuard(filepath.Dir(dir))
+	}
+	return dir, err
 }
 func heavyGreen(ctx context.Context, root string) (string, error) {
 	return gather(ctx, "green pointer in "+root, func(ctx context.Context) (string, error) { return heavy.Green(ctx, root) })
@@ -78,6 +85,9 @@ func publishHeavy(dir string, run HeavyRun) error {
 func (r HeavyRunner) Run(ctx context.Context) (out HeavyOutcome, err error) {
 	if r.Judge == nil || r.Work == "" {
 		return out, Usagef("heavy runner needs a judge and a worktree path")
+	}
+	if err = r.authorize(ctx); err != nil {
+		return out, err
 	}
 	if r.Trunk == "" {
 		r.Trunk = TrunkRef
@@ -256,6 +266,11 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 		checks, err := r.Judge(context.WithValue(ctx, heavyCheckEndedKey{}, early.offer), dir, "")
 		if err != nil {
 			return err
+		}
+		if len(checks) == 0 {
+			// An empty declaration proves nothing: calling it green would move the pointer over
+			// every landing it never judged.
+			return Externalf("heavy proof judged no checks: the gate program is empty, so there is nothing to prove; %s stays", GreenRef)
 		}
 		run.Checks = checks
 		run.Result = "green"

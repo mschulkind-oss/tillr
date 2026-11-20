@@ -16,7 +16,7 @@ func TestHeavyExecOwnerHelper(t *testing.T) {
 	}
 	root, work, child := os.Getenv("TILLR_TEST_HEAVY_ROOT"), os.Getenv("TILLR_TEST_HEAVY_WORK"), os.Getenv("TILLR_TEST_HEAVY_CHILD")
 	steps := &ProcessSteps{Root: root, LaneRoot: work, HeavyGateBin: filepath.Join(work, "tillr-gate")}
-	runner := HeavyRunner{Root: root, Work: filepath.Join(work, ".rolling", "worktree"), Judge: steps.JudgeHeavy}
+	runner := HeavyRunner{Root: root, Lock: loopHeld(t, root), Work: filepath.Join(work, ".rolling", "worktree"), Judge: steps.JudgeHeavy}
 	ended := make(chan error, 1)
 	go func() {
 		if program := os.Getenv("TILLR_TEST_ROLLING_PROGRAM"); program != "" {
@@ -65,7 +65,7 @@ func TestHeavyExecReplacementHelper(t *testing.T) {
 		return
 	}
 	verdicts, fixers := 0, 0
-	runner := HeavyRunner{Root: root, Work: filepath.Join(work, ".rolling", "worktree"), Judge: func(context.Context, string, string) ([]HeavyCheck, error) {
+	runner := HeavyRunner{Root: root, Lock: loopHeld(t, root), Work: filepath.Join(work, ".rolling", "worktree"), Judge: func(context.Context, string, string) ([]HeavyCheck, error) {
 		heavyChildDead(t, child)
 		return []HeavyCheck{{CheckID: "unit", Result: "pass"}}, nil
 	}, Report: func(r HeavyRun) {
