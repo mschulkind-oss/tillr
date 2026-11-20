@@ -1487,12 +1487,12 @@ missing rather than report that the change failed verification.
   On 2026-11-20 the nineteenth run repeated the fifteenth and seventeenth runs' check:
   `git fetch --no-tags <locator> <object-id>` in a separate empty bare repository for each
   of the three rows above. All three fetches returned `upload-pack: not our ref` (Git exit
-  128). On the same date the twenty-first run repeated that check: `patch/pi` and
-  `patch/pi-subagents` fetched successfully (Git exit 0); only `patch/pi-manage-todo-list`
-  returned `upload-pack: not our ref` (Git exit 128) for its pinned object above. No build
-  ran. The missing todo-list input still means `could not judge` (gate exit 4), not a failed
-  build. The next action belongs to the host operator: check ancestry and publish if needed
-  as described below. No new pin decision or worker retry is needed to establish the hold.
+  128). On the same date the twenty-first and twenty-third runs each found that `patch/pi`
+  and `patch/pi-subagents` fetched successfully (Git exit 0), but `patch/pi-manage-todo-list`
+  returned `upload-pack: not our ref` (Git exit 128) for its pinned object above. The
+  twenty-third run stopped before the build or gate: the missing input means `could not judge`
+  (gate exit 4), not a failed build. This is a host publication task, not a request to choose
+  another pin. Keep the build on hold until the host operator supplies the fetch results below.
 
   In the host repository checkout, run `git merge-base --is-ancestor <object-id> refs/heads/<branch>`
   for each row above (`<branch>` includes `patch/`). If any check exits nonzero, stop and report
