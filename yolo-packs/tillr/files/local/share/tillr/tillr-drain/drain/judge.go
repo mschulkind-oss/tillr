@@ -518,6 +518,31 @@ func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.J
 		return l.refuse(ctx, c, result, RefusalVerifyNotDone)
 	}
 	reason := ReasonEvalFailed
+	if entry.Verdict == item.VerdictNotDone {
+		words, err := requestWordsFor(ctx, l.cfg.Store, c.ItemID)
+		if err != nil {
+			return err
+		}
+		if words != nil {
+			writer := judgeWriterRun(c)
+			var findings []item.JudgeEntry
+			for _, v := range verdicts {
+				if v.Verdict == item.VerdictNotDone {
+					findings = append(findings, v)
+				}
+			}
+			sort.Slice(findings, func(i, j int) bool { return findings[i].CriterionID < findings[j].CriterionID })
+			var lines []string
+			var checks []EndingCheck
+			for _, v := range findings {
+				lines = append(lines, v.CriterionID+": "+v.Reason)
+				checks = append(checks, EndingCheck{CheckID: v.CriterionID, Digest: evidenceDigest(c.HeadSHA+"\n"+v.Reason, writer)})
+			}
+			c.RefusalDetail = strings.Join(lines, "\n")
+			c.EvidenceKey = endingKey(ReasonEvalFailed, checks, "", writer)
+			return l.holdJudge(ctx, c, c.Judge.Request.RunID, ReasonEvalFailed, c.RefusalDetail, result)
+		}
+	}
 	if entry.Verdict == item.VerdictBlocked || entry.Verdict == item.VerdictDefective {
 		var waiting item.WaitingOn
 		if entry.Verdict == item.VerdictBlocked {
@@ -741,16 +766,27 @@ func (l *Loop) holdJudge(ctx context.Context, c Candidate, judgeID, reason, deta
 	payload := struct {
 		refusalPayload
 		WriterRunID string `json:"writer_run_id"`
-	}{refusalPayload: refusalPayload{ItemID: c.ItemID, LaneID: c.LaneID, TickID: c.TickID, Step: reason, Detail: detail}, WriterRunID: writer}
+	}{refusalPayload: refusalPayload{ItemID: c.ItemID, LaneID: c.LaneID, TickID: c.TickID, Step: reason, Detail: detail, Evidence: c.EvidenceKey}, WriterRunID: writer}
 	if reason == ReasonEvalFailed {
 		var err error
-		payload.WorkerSession, err = l.captureJudgeLandingSession(ctx, c)
+		if c.EvidenceKey != "" {
+			payload.WorkerSession, err = l.captureWorkerSession(ctx, c)
+		} else {
+			payload.WorkerSession, err = l.captureJudgeLandingSession(ctx, c)
+		}
 		if err != nil {
 			return err
 		}
 	}
+	repeated, err := l.landingRefusalRepeats(ctx, c, payload.refusalPayload)
+	if err != nil {
+		return err
+	}
 	at := l.cfg.Now()
 	return appendJudgmentThen(ctx, l.cfg.Store, RefusalKind, "run", judgeID, payload, at, func(tx *store.Tx) error {
+		if repeated {
+			return nil
+		}
 		// A judge's refusal carries no checks, so it quotes no file.
 		return l.answerLandingRefusal(tx, c, payload.refusalPayload, refusalEvidence{}, at)
 	})

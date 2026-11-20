@@ -16,6 +16,7 @@ import (
 // WorkerSession records the lane and harness handle a refused worker left. Each
 // returned turn has a new run id, so its ending remains a separate chain record.
 type WorkerSession struct {
+	RunID       string    `json:"run_id,omitempty"`
 	SessionID   string    `json:"session_id"`
 	LaneDir     string    `json:"lane_dir"`
 	LaneID      string    `json:"lane_id"`
@@ -55,6 +56,10 @@ func workerSessionReason(s *WorkerSession, req *run.Request) string {
 
 // captureWorkerSession snapshots a worker while its lane still belongs to the run.
 func (l *Loop) captureWorkerSession(ctx context.Context, c Candidate) (*WorkerSession, error) {
+	writerID := c.RunID
+	if c.Evaluator != nil || len(c.Writers) > 0 {
+		writerID = judgeWriterRun(c)
+	}
 	db, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		return nil, err
@@ -64,7 +69,7 @@ func (l *Loop) captureWorkerSession(ctx context.Context, c Candidate) (*WorkerSe
 	var decision Decision
 	err = db.ReadTx(ctx, func(r *store.Reader) error {
 		var raw []byte
-		if err := r.QueryRow(`SELECT payload FROM events WHERE kind=? AND object_type='run' AND object_id=? ORDER BY seq DESC LIMIT 1`, dispatchStartedKind, c.RunID).Scan(&raw); err != nil {
+		if err := r.QueryRow(`SELECT payload FROM events WHERE kind=? AND object_type='run' AND object_id=? ORDER BY seq DESC LIMIT 1`, dispatchStartedKind, writerID).Scan(&raw); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return nil
 			}
@@ -74,7 +79,9 @@ func (l *Loop) captureWorkerSession(ctx context.Context, c Candidate) (*WorkerSe
 		if err := json.Unmarshal(raw, &w); err != nil {
 			return err
 		}
-		if w.Decision.RunRequest != nil && w.Decision.RunRequest.RunID == c.RunID && (w.Decision.Seat == "" || w.Decision.Seat == "build") {
+		writingNode := w.Decision.Workflow != nil && w.Decision.NodeIndex >= 0 && w.Decision.NodeIndex < len(w.Decision.Workflow.Stages) && w.Decision.Workflow.Stages[w.Decision.NodeIndex].Access == "write"
+		eligible := w.Decision.Seat == "" || w.Decision.Seat == "build" || (writingNode && w.Decision.BlockConflict == nil && w.Decision.DeskDocument == "")
+		if w.Decision.RunRequest != nil && w.Decision.RunRequest.RunID == writerID && eligible {
 			req = w.Decision.RunRequest
 			decision = w.Decision
 		}
@@ -83,13 +90,36 @@ func (l *Loop) captureWorkerSession(ctx context.Context, c Candidate) (*WorkerSe
 	if err != nil || req == nil {
 		return nil, err
 	}
-	session, err := ReadSessionID(l.laneDirPath(c.LaneID))
-	if err != nil {
-		return nil, err
+	var session string
+	if len(c.Writers) > 0 {
+		session = strings.TrimSpace(c.Writers[len(c.Writers)-1].SessionID)
+	}
+	if session == "" && writerID != "" {
+		if id, err := ReadSessionID(RunDir(l.cfg.Root, writerID)); err == nil {
+			session = id
+		}
+	}
+	if session == "" {
+		session, err = ReadSessionID(l.laneDirPath(c.LaneID))
+		if err != nil {
+			return nil, err
+		}
 	}
 	base := l.laneBase(c.LaneID)
 	if session == "" || base == "" {
 		return nil, nil
+	}
+	if c.Evaluator != nil || len(c.Writers) > 0 {
+		if err := os.WriteFile(filepath.Join(l.laneDirPath(c.LaneID), SessionIDFile), []byte(session+"\n"), 0644); err != nil {
+			return nil, err
+		}
+		capability, err := stagedEndingCapability(RunDir(l.cfg.Root, writerID))
+		if err != nil {
+			return nil, err
+		}
+		if err := os.WriteFile(filepath.Join(l.laneDirPath(c.LaneID), endingCapabilityFile), []byte(capability+"\n"), 0644); err != nil {
+			return nil, err
+		}
 	}
 	head := c.WorkerHeadSHA
 	if head == "" {
@@ -98,7 +128,7 @@ func (l *Loop) captureWorkerSession(ctx context.Context, c Candidate) (*WorkerSe
 	if head == "" {
 		head = l.headOf(ctx, c.LaneID)
 	}
-	return &WorkerSession{SessionID: session, LaneDir: l.laneDirPath(c.LaneID), LaneID: c.LaneID, BaseSHA: base, HeadSHA: head, Backend: req.Backend, Route: req.Route(), Workflow: decision.Workflow, NodeIndex: decision.NodeIndex, NodeBaseSHA: decision.NodeBaseSHA, Attempt: decision.Attempt}, nil
+	return &WorkerSession{RunID: req.RunID, SessionID: session, LaneDir: l.laneDirPath(c.LaneID), LaneID: c.LaneID, BaseSHA: base, HeadSHA: head, Backend: req.Backend, Route: req.Route(), Workflow: decision.Workflow, NodeIndex: decision.NodeIndex, NodeBaseSHA: decision.NodeBaseSHA, Attempt: decision.Attempt}, nil
 }
 
 // captureLandedWorkerSession uses the run's immutable staging copies. A held
@@ -146,7 +176,7 @@ func (l *Loop) captureLandedWorkerSession(ctx context.Context, c Candidate) (*Wo
 	if head == "" {
 		head = c.HeadSHA
 	}
-	return &WorkerSession{SessionID: id, LaneDir: l.laneDirPath(req.LaneID), LaneID: req.LaneID, BaseSHA: base, HeadSHA: head, Backend: req.Backend, Route: req.Route(), Workflow: work.Decision.Workflow, NodeIndex: work.Decision.NodeIndex, NodeBaseSHA: work.Decision.NodeBaseSHA, Attempt: work.Decision.Attempt}, nil
+	return &WorkerSession{RunID: req.RunID, SessionID: id, LaneDir: l.laneDirPath(req.LaneID), LaneID: req.LaneID, BaseSHA: base, HeadSHA: head, Backend: req.Backend, Route: req.Route(), Workflow: work.Decision.Workflow, NodeIndex: work.Decision.NodeIndex, NodeBaseSHA: work.Decision.NodeBaseSHA, Attempt: work.Decision.Attempt}, nil
 }
 
 // landedWorkerSession reads the snapshot made before the landing released its lane.

@@ -2,10 +2,12 @@ package drain
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -353,4 +355,729 @@ func TestRequestExpressAndOrdinaryLaneAllocation(t *testing.T) {
 	if !found {
 		t.Fatal("fallback request not planned")
 	}
+}
+
+type requestVerifySteps struct {
+	*workflowSteps
+	plans        int
+	works        int
+	verifies     int
+	repeatSame   bool
+	workRuns     []run.Request
+	workSessions []string
+	briefs       []string
+	nodeIDs      []string
+}
+
+func (s *requestVerifySteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	s.runs = append(s.runs, req)
+	s.nodeIDs = append(s.nodeIDs, req.NodeID)
+	lane := filepath.Join(s.f.laneRoot, req.LaneID)
+	target := filepath.Join(lane, WorktreeDir)
+	brief, err := os.ReadFile(filepath.Join(lane, BriefFile))
+	if err != nil {
+		return run.Record{}, "", err
+	}
+	s.briefs = append(s.briefs, string(brief))
+	report := "RESULT: done\n"
+	switch req.NodeID {
+	case "plan":
+		s.plans++
+	case "work":
+		s.works++
+		s.workRuns = append(s.workRuns, req)
+		sess, err := ReadSessionID(lane)
+		if err != nil {
+			return run.Record{}, "", err
+		}
+		s.workSessions = append(s.workSessions, sess)
+		if s.repeatSame {
+			s.t.Setenv("GIT_AUTHOR_DATE", "2026-11-15T00:00:00Z")
+			s.t.Setenv("GIT_COMMITTER_DATE", "2026-11-15T00:00:00Z")
+			runGit(s.t, target, "reset", "--hard", "-q", s.firstHead)
+		}
+		if err := os.MkdirAll(filepath.Join(target, "tools/item-a"), 0755); err != nil {
+			return run.Record{}, "", err
+		}
+		body := fmt.Sprintf("work %d\n", s.works)
+		msg := fmt.Sprintf("work %d", s.works)
+		if s.repeatSame {
+			body = "work 1\n"
+			msg = "work 1"
+		}
+		writeForkFile(s.t, filepath.Join(target, "tools/item-a/result.txt"), body)
+		runGit(s.t, target, "add", ".")
+		runGit(s.t, target, "commit", "-qm", msg)
+	case "verify":
+		s.verifies++
+		head := runGit(s.t, target, "rev-parse", "HEAD")
+		tree := runGit(s.t, target, "rev-parse", head+"^{tree}")
+		var verdicts []item.JudgeEntry
+		fixtureRead(s.t, s.f, func(r *store.Reader) error {
+			rows, err := r.Query(`SELECT criterion_id,text,claim_class FROM item_criteria WHERE item_id=? ORDER BY criterion_id`, req.ItemID)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var cid, text, class string
+				if err := rows.Scan(&cid, &text, &class); err != nil {
+					return err
+				}
+				verdict := item.VerdictDone
+				reason := "verified"
+				if s.verifies == 1 && (cid == "c1" || cid == "c2") {
+					verdict = item.VerdictNotDone
+					reason = fmt.Sprintf("first verify finding for %s", cid)
+				} else if s.verifies == 2 && s.repeatSame && (cid == "c1" || cid == "c2") {
+					verdict = item.VerdictNotDone
+					reason = fmt.Sprintf("first verify finding for %s", cid)
+				} else if s.verifies == 2 && !s.repeatSame && cid == "c1" {
+					verdict = item.VerdictNotDone
+					reason = fmt.Sprintf("second distinct finding for %s", cid)
+				}
+				verdicts = append(verdicts, item.JudgeEntry{
+					CriterionID:   cid,
+					CriterionHash: item.CriterionHash(text),
+					Verdict:       verdict,
+					ClaimClass:    class,
+					Reason:        reason,
+					Evidence:      []string{"candidate.diff"},
+				})
+			}
+			return rows.Err()
+		})
+		outcome := "pass"
+		if s.verifies <= 2 {
+			outcome = "fail"
+		}
+		raw, _ := json.Marshal(item.JudgeOutput{EvaluatedHead: head, EvaluatedTree: tree, Outcome: outcome, Verdicts: verdicts})
+		writeForkFile(s.t, filepath.Join(run.DurableDir(lane, req.RunID), "eval.output"), string(raw))
+	default:
+		return run.Record{}, "", fmt.Errorf("unexpected node %s", req.NodeID)
+	}
+	path := filepath.Join(run.DurableDir(lane, req.RunID), "report.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return run.Record{}, "", err
+	}
+	writeForkFile(s.t, path, report)
+	rec := run.Record{RunID: req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Backend: req.Backend, State: run.StateExited, ExitCode: countPtr(0), StartedAt: "2026-11-15T00:00:00Z", FinishedAt: "2026-11-15T00:00:00Z", ArtifactRefs: []run.ArtifactRef{{Kind: "report", Ref: path}}}
+	st, err := store.Open(ctx, s.f.storePath, true)
+	if err != nil {
+		return rec, report, err
+	}
+	defer st.Close()
+	err = st.WriteTx(ctx, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
+	return rec, report, err
+}
+
+func TestRequestPlannedVerifyFailReturnsToBuilderSessionAndLands(t *testing.T) {
+	f, l, base := plannedFixture(t)
+	declareWorkerResumeFixture(t, l)
+	l.cfg.Policy.Backends["reviewer"] = Backend{Adapter: l.cfg.Policy.Backends["fixture"].Adapter, Model: "review-model"}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='closed'`)
+		return err
+	})
+	id := fileFixtureRequest(t, f, "build", "", requestFence)
+	base.firstHead = runGit(t, f.root, "rev-parse", TrunkRef)
+	steps := &requestVerifySteps{workflowSteps: base}
+	l.cfg.Steps = steps
+	result := &LoopResult{}
+
+	// Run through first verify (fail on c1, c2).
+	for i := 0; i < 15 && steps.verifies < 1; i++ {
+		graphPass(t, l, result)
+	}
+	if steps.verifies != 1 {
+		t.Fatalf("first verify did not run: nodes=%v", steps.nodeIDs)
+	}
+
+	// Assert item is not blocked or held: Why reports returned-with-evidence and mover "the next pass", no conflict.
+	var state string
+	fixtureRead(t, f, func(r *store.Reader) error {
+		return r.QueryRow(`SELECT state FROM items WHERE item_id=?`, id).Scan(&state)
+	})
+	if state == StateBlocked {
+		t.Fatalf("request state became blocked after verify fail")
+	}
+	var whyAns WhyAnswer
+	fixtureRead(t, f, func(r *store.Reader) error {
+		var err error
+		whyAns, err = Why(r, Pass{Now: l.cfg.Now().Format(time.RFC3339), AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
+		return err
+	})
+	var foundWhy bool
+	for _, row := range whyAns.Rows {
+		if row.ItemID == id {
+			foundWhy = true
+			if row.Reason != ReasonReturned && !strings.Contains(row.Why, ReasonReturned) {
+				t.Errorf("Reason=%q Why=%q, want %q", row.Reason, row.Why, ReasonReturned)
+			}
+			if !strings.Contains(row.Mover, "the next pass") {
+				t.Errorf("Mover = %q, want 'the next pass'", row.Mover)
+			}
+		}
+	}
+	if !foundWhy {
+		t.Fatalf("request %s missing from Why rows", id)
+	}
+
+	// Next pass resumes the builder node (work) in its same session with c1 and c2 findings.
+	var resumedPlan bool
+	for _, p := range mustPlan(t, l) {
+		d := p.decision
+		if d.ItemID == id {
+			if d.Action != ActionDispatch || d.Reason != ReasonReturned || d.Workflow == nil || d.Workflow.Stages[d.NodeIndex].ID != "work" || !d.RunRequest.SessionTurn {
+				t.Fatalf("expected resumed work dispatch, got: %+v", d)
+			}
+			if !strings.Contains(d.RunRequest.ResumePrompt, "c1: first verify finding for c1") || !strings.Contains(d.RunRequest.ResumePrompt, "c2: first verify finding for c2") {
+				t.Fatalf("resume prompt lacks findings:\n%s", d.RunRequest.ResumePrompt)
+			}
+			if strings.Contains(d.RunRequest.ResumePrompt, "Failing gate checks") {
+				t.Fatalf("resume prompt unexpectedly emitted gate check header:\n%s", d.RunRequest.ResumePrompt)
+			}
+			resumedPlan = true
+		}
+	}
+	if !resumedPlan {
+		t.Fatal("resumed work decision not planned")
+	}
+
+	// Run through second verify (different c1/c2 findings -> must also return, not conflict) and third verify (pass -> land).
+	for i := 0; i < 30 && result.Landed == 0; i++ {
+		graphPass(t, l, result)
+	}
+	if result.Landed != 1 {
+		t.Fatalf("request did not land after repair: result=%+v nodes=%v", result, steps.nodeIDs)
+	}
+	if steps.plans != 1 {
+		t.Fatalf("plan ran %d times, want 1 (reused via node_reused)", steps.plans)
+	}
+	if steps.works != 3 || steps.verifies != 3 {
+		t.Fatalf("works=%d verifies=%d, want 3 each", steps.works, steps.verifies)
+	}
+	for i := 1; i < len(steps.workRuns); i++ {
+		if !steps.workRuns[i].SessionTurn || steps.workSessions[i] != steps.workSessions[0] {
+			t.Errorf("work run %d did not resume session %s: turn=%v got=%s", i, steps.workSessions[0], steps.workRuns[i].SessionTurn, steps.workSessions[i])
+		}
+		if strings.Contains(steps.workRuns[i].ResumePrompt, "Failing gate checks") {
+			t.Errorf("work run %d resume prompt unexpectedly contained 'Failing gate checks'", i)
+		}
+	}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		var reused int
+		if err := r.QueryRow(`SELECT COUNT(*) FROM node_reused WHERE item_id=? AND node_id='plan'`, id).Scan(&reused); err != nil {
+			return err
+		}
+		if reused < 1 {
+			t.Errorf("plan was not recorded in node_reused")
+		}
+		var conflicts int
+		if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind='item.conflict' AND object_id=?`, id).Scan(&conflicts); err != nil {
+			return err
+		}
+		if conflicts != 0 {
+			t.Errorf("unexpected conflicts recorded: %d", conflicts)
+		}
+		return nil
+	})
+}
+
+func TestRequestPlannedVerifyIdenticalRepeatHoldsForOwner(t *testing.T) {
+	f, l, base := plannedFixture(t)
+	declareWorkerResumeFixture(t, l)
+	l.cfg.Policy.Backends["reviewer"] = Backend{Adapter: l.cfg.Policy.Backends["fixture"].Adapter, Model: "review-model"}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='closed'`)
+		return err
+	})
+	id := fileFixtureRequest(t, f, "build", "", requestFence)
+	base.firstHead = runGit(t, f.root, "rev-parse", TrunkRef)
+	steps := &requestVerifySteps{workflowSteps: base, repeatSame: true}
+	l.cfg.Steps = steps
+	result := &LoopResult{}
+
+	for i := 0; i < 20 && steps.verifies < 2; i++ {
+		graphPass(t, l, result)
+	}
+	if steps.verifies != 2 {
+		t.Fatalf("second verify did not run: nodes=%v", steps.nodeIDs)
+	}
+	// Run one more pass so repeated ending settlement runs.
+	graphPass(t, l, result)
+
+	var c item.Conflict
+	fixtureRead(t, f, func(r *store.Reader) error {
+		var raw []byte
+		if err := r.QueryRow(`SELECT payload FROM events WHERE kind='item.conflict' AND object_id=? ORDER BY seq DESC LIMIT 1`, id).Scan(&raw); err != nil {
+			return err
+		}
+		return json.Unmarshal(raw, &c)
+	})
+	if c.Status != "owner" || c.WaitingOn != "owner" {
+		t.Fatalf("identical repeat conflict status=%q waiting_on=%q, want owner/owner", c.Status, c.WaitingOn)
+	}
+}
+
+type requestSingleJudgeSteps struct {
+	*workflowSteps
+	works        int
+	judges       int
+	workReqs     []run.Request
+	workSessions []string
+}
+
+func (s *requestSingleJudgeSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	lane := filepath.Join(s.f.laneRoot, req.LaneID)
+	target := filepath.Join(lane, WorktreeDir)
+	brief, err := os.ReadFile(filepath.Join(lane, BriefFile))
+	if err != nil {
+		return run.Record{}, "", err
+	}
+	if strings.HasPrefix(string(brief), "# Judge candidate") {
+		s.judges++
+		head := runGit(s.t, target, "rev-parse", "HEAD")
+		tree := runGit(s.t, target, "rev-parse", head+"^{tree}")
+		var verdicts []item.JudgeEntry
+		fixtureRead(s.t, s.f, func(r *store.Reader) error {
+			rows, err := r.Query(`SELECT criterion_id,text,claim_class FROM item_criteria WHERE item_id=? ORDER BY criterion_id`, req.ItemID)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var cid, text, class string
+				if err := rows.Scan(&cid, &text, &class); err != nil {
+					return err
+				}
+				verdict := item.VerdictDone
+				reason := "verified"
+				if s.judges == 1 && (cid == "c1" || cid == "c2") {
+					verdict = item.VerdictNotDone
+					reason = fmt.Sprintf("single-worker finding for %s", cid)
+				}
+				verdicts = append(verdicts, item.JudgeEntry{
+					CriterionID:   cid,
+					CriterionHash: item.CriterionHash(text),
+					Verdict:       verdict,
+					ClaimClass:    class,
+					Reason:        reason,
+					Evidence:      []string{"candidate.diff"},
+				})
+			}
+			return rows.Err()
+		})
+		outcome := "pass"
+		if s.judges == 1 {
+			outcome = "fail"
+		}
+		raw, _ := json.Marshal(item.JudgeOutput{EvaluatedHead: head, EvaluatedTree: tree, Outcome: outcome, Verdicts: verdicts})
+		writeForkFile(s.t, filepath.Join(run.DurableDir(lane, req.RunID), "eval.output"), string(raw))
+	} else {
+		s.works++
+		s.workReqs = append(s.workReqs, req)
+		sess, err := ReadSessionID(lane)
+		if err != nil {
+			return run.Record{}, "", err
+		}
+		s.workSessions = append(s.workSessions, sess)
+		writeForkFile(s.t, filepath.Join(target, "candidate.txt"), fmt.Sprintf("single %d\n", s.works))
+		runGit(s.t, target, "add", ".")
+		runGit(s.t, target, "commit", "-qm", fmt.Sprintf("single %d", s.works))
+	}
+	report := "RESULT: done\n"
+	path := filepath.Join(run.DurableDir(lane, req.RunID), "report.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return run.Record{}, "", err
+	}
+	writeForkFile(s.t, path, report)
+	rec := run.Record{RunID: req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Backend: req.Backend, State: run.StateExited, ExitCode: countPtr(0), StartedAt: "2026-11-15T00:00:00Z", FinishedAt: "2026-11-15T00:00:00Z", ArtifactRefs: []run.ArtifactRef{{Kind: "report", Ref: path}}}
+	st, err := store.Open(ctx, s.f.storePath, true)
+	if err != nil {
+		return rec, report, err
+	}
+	defer st.Close()
+	err = st.WriteTx(ctx, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
+	return rec, report, err
+}
+
+func TestRequestSingleWorkerJudgeNotDoneReturnsToBuilderSession(t *testing.T) {
+	f, l, base := workflowLoopFixture(t, "")
+	declareWorkerResumeFixture(t, l)
+	l.cfg.Policy.Seats["review"] = "reviewer"
+	l.cfg.Policy.Backends["reviewer"] = Backend{Adapter: l.cfg.Policy.Backends["fixture"].Adapter, Model: "review-model"}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`UPDATE items SET state='closed'`); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`INSERT INTO item_grants(grant_id,claim_classes,grantor,issued_at,expires_at) VALUES('grant-review','verification-only','owner',?,?)`, l.cfg.Now().Add(-time.Hour).UnixMilli(), l.cfg.Now().Add(time.Hour).UnixMilli())
+		return err
+	})
+	id := fileFixtureRequest(t, f, "build", item.SingleWorkerWorkflow, []string{"candidate.txt"})
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET judge_mode='agent' WHERE item_id=?`, id)
+		return err
+	})
+	base.firstHead = runGit(t, f.root, "rev-parse", TrunkRef)
+	steps := &requestSingleJudgeSteps{workflowSteps: base}
+	l.cfg.Steps = steps
+	result := &LoopResult{}
+
+	// First pass runs worker and judge (judge fails with c1/c2 not-done).
+	for i := 0; i < 6 && steps.judges < 1; i++ {
+		if _, err := l.pass(context.Background(), result); err != nil {
+			t.Fatal(err)
+		}
+		drainOwned(t, l, result)
+	}
+	if steps.judges != 1 {
+		t.Fatalf("first judge did not run")
+	}
+
+	// Next plan must return to the builder's same session with both c1 and c2 findings.
+	var returned bool
+	for _, p := range mustPlan(t, l) {
+		d := p.decision
+		if d.ItemID == id {
+			if d.Action != ActionDispatch || d.Reason != ReasonReturned || d.RunRequest == nil || !d.RunRequest.SessionTurn {
+				t.Fatalf("expected returned session dispatch, got: %+v", d)
+			}
+			if !strings.Contains(d.RunRequest.ResumePrompt, "c1: single-worker finding for c1") || !strings.Contains(d.RunRequest.ResumePrompt, "c2: single-worker finding for c2") {
+				t.Fatalf("resume prompt lacks findings:\n%s", d.RunRequest.ResumePrompt)
+			}
+			if strings.Contains(d.RunRequest.ResumePrompt, "Failing gate checks") {
+				t.Fatalf("resume prompt unexpectedly contained 'Failing gate checks':\n%s", d.RunRequest.ResumePrompt)
+			}
+			returned = true
+		}
+	}
+	if !returned {
+		t.Fatal("returned dispatch not planned")
+	}
+
+	// Complete the second worker + judge + gate + land.
+	for i := 0; i < 10 && result.Landed == 0; i++ {
+		if _, err := l.pass(context.Background(), result); err != nil {
+			t.Fatal(err)
+		}
+		drainOwned(t, l, result)
+	}
+	if result.Landed != 1 || steps.works != 2 || steps.judges != 2 {
+		t.Fatalf("landed=%d works=%d judges=%d result=%+v", result.Landed, steps.works, steps.judges, result)
+	}
+	if !steps.workReqs[1].SessionTurn || steps.workSessions[1] != steps.workSessions[0] {
+		t.Errorf("second worker run did not resume session %s: turn=%v got=%s", steps.workSessions[0], steps.workReqs[1].SessionTurn, steps.workSessions[1])
+	}
+}
+
+type requestVerifySuspendsSteps struct {
+	*workflowSteps
+	transcript string
+	sessionID  string
+	t0         string
+	h1         string
+	h2         string
+	plans      int
+	works      int
+	verifies   int
+	nodeIDs    []string
+	workReqs   []run.Request
+	laneCaps   []string
+	laneBases  []string
+	itemBases  []string
+	answers    []landingAnswer
+}
+
+func (s *requestVerifySuspendsSteps) Land(ctx context.Context, c Candidate) (LandOutcome, error) {
+	out, err := s.workflowSteps.Land(ctx, c)
+	if err != nil {
+		return out, err
+	}
+	if out.Result == LandLanded && out.TrunkAfter == "" {
+		out.TrunkAfter = runGit(s.t, s.f.root, "rev-parse", "HEAD")
+	}
+	return out, nil
+}
+
+func (s *requestVerifySuspendsSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	s.runs = append(s.runs, req)
+	s.nodeIDs = append(s.nodeIDs, req.NodeID)
+	lane := filepath.Join(s.f.laneRoot, req.LaneID)
+	target := filepath.Join(lane, WorktreeDir)
+	scr := run.DurableDir(lane, req.RunID)
+	if err := os.MkdirAll(scr, 0755); err != nil {
+		return run.Record{}, "", err
+	}
+	report := "RESULT: done\n"
+	var exitCode int
+	switch req.NodeID {
+	case "plan":
+		s.plans++
+	case "work":
+		s.works++
+		s.workReqs = append(s.workReqs, req)
+		capRaw, err := os.ReadFile(filepath.Join(lane, endingCapabilityFile))
+		if err != nil {
+			return run.Record{}, "", err
+		}
+		s.laneCaps = append(s.laneCaps, strings.TrimSpace(string(capRaw)))
+		baseRaw, err := os.ReadFile(filepath.Join(lane, BaseSHAFile))
+		if err != nil {
+			return run.Record{}, "", err
+		}
+		s.laneBases = append(s.laneBases, strings.TrimSpace(string(baseRaw)))
+		itemBaseRaw, err := os.ReadFile(filepath.Join(lane, ItemBaseSHAFile))
+		if err != nil {
+			return run.Record{}, "", err
+		}
+		s.itemBases = append(s.itemBases, strings.TrimSpace(string(itemBaseRaw)))
+
+		if s.works == 1 {
+			sess, err := ReadSessionID(lane)
+			if err != nil {
+				return run.Record{}, "", err
+			}
+			s.sessionID = sess
+			if err := os.MkdirAll(filepath.Join(target, "tools/item-a"), 0755); err != nil {
+				return run.Record{}, "", err
+			}
+			writeForkFile(s.t, filepath.Join(target, "tools/item-a/result.txt"), "work 1\n")
+			runGit(s.t, target, "add", ".")
+			runGit(s.t, target, "commit", "-qm", "work 1")
+			s.h1 = runGit(s.t, target, "rev-parse", "HEAD")
+
+			parked := `{"type":"session","id":` + strconv.Quote(sess) + "}\n" +
+				`{"type":"message","id":"offered-1","parentId":null,"message":{"role":"assistant","content":[{"type":"toolCall","name":"land","id":"call-1"}]}}` + "\n"
+			writeForkFile(s.t, s.transcript, parked)
+			offer, _ := json.Marshal(landingOffer{
+				CallID:     "call-1",
+				Tool:       "land",
+				Commit:     s.h1,
+				Base:       s.t0,
+				Summary:    "work 1 offer",
+				Transcript: s.transcript,
+			})
+			writeForkFile(s.t, filepath.Join(scr, landingOfferFile), string(offer))
+			report = ""
+		} else {
+			ansRaw, err := os.ReadFile(filepath.Join(scr, landingAnswerFile))
+			if err != nil {
+				return run.Record{}, "", err
+			}
+			var ans landingAnswer
+			if err := json.Unmarshal(ansRaw, &ans); err != nil {
+				return run.Record{}, "", err
+			}
+			s.answers = append(s.answers, ans)
+			// Append toolResult for call-1 to session.jsonl.
+			trLine, _ := json.Marshal(map[string]any{
+				"type":     "message",
+				"id":       "result-1",
+				"parentId": "offered-1",
+				"message": map[string]any{
+					"role":       "toolResult",
+					"toolName":   "land",
+					"toolCallId": ans.CallID,
+					"isError":    true,
+					"content":    []map[string]string{{"type": "text", "text": ans.Text}},
+					"details":    ans,
+				},
+			})
+			f, err := os.OpenFile(s.transcript, os.O_APPEND|os.O_WRONLY, 0600)
+			if err != nil {
+				return run.Record{}, "", err
+			}
+			_, err = f.WriteString(string(trLine) + "\n")
+			_ = f.Close()
+			if err != nil {
+				return run.Record{}, "", err
+			}
+
+			writeForkFile(s.t, filepath.Join(target, "tools/item-a/result.txt"), "work 2\n")
+			runGit(s.t, target, "add", ".")
+			runGit(s.t, target, "commit", "-qm", "work 2")
+			s.h2 = runGit(s.t, target, "rev-parse", "HEAD")
+
+			offer, _ := json.Marshal(landingOffer{
+				CallID:     "call-2",
+				Tool:       "land",
+				Commit:     s.h2,
+				Base:       s.h1,
+				Summary:    "work 2 offer",
+				Transcript: s.transcript,
+			})
+			writeForkFile(s.t, filepath.Join(scr, landingOfferFile), string(offer))
+			report = ""
+		}
+	case "verify":
+		s.verifies++
+		head := runGit(s.t, target, "rev-parse", "HEAD")
+		tree := runGit(s.t, target, "rev-parse", head+"^{tree}")
+		var verdicts []item.JudgeEntry
+		fixtureRead(s.t, s.f, func(r *store.Reader) error {
+			rows, err := r.Query(`SELECT criterion_id,text,claim_class FROM item_criteria WHERE item_id=? ORDER BY criterion_id`, req.ItemID)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var cid, text, class string
+				if err := rows.Scan(&cid, &text, &class); err != nil {
+					return err
+				}
+				verdict := item.VerdictDone
+				reason := "verified"
+				if s.verifies == 1 && (cid == "c1" || cid == "c2") {
+					verdict = item.VerdictNotDone
+					reason = fmt.Sprintf("suspends verify finding for %s", cid)
+				}
+				verdicts = append(verdicts, item.JudgeEntry{
+					CriterionID:   cid,
+					CriterionHash: item.CriterionHash(text),
+					Verdict:       verdict,
+					ClaimClass:    class,
+					Reason:        reason,
+					Evidence:      []string{"candidate.diff"},
+				})
+			}
+			return rows.Err()
+		})
+		outcome := "pass"
+		if s.verifies == 1 {
+			outcome = "fail"
+		}
+		raw, _ := json.Marshal(item.JudgeOutput{EvaluatedHead: head, EvaluatedTree: tree, Outcome: outcome, Verdicts: verdicts})
+		writeForkFile(s.t, filepath.Join(scr, "eval.output"), string(raw))
+	default:
+		return run.Record{}, "", fmt.Errorf("unexpected node %s", req.NodeID)
+	}
+	var refs []run.ArtifactRef
+	if report != "" {
+		path := filepath.Join(scr, "report.md")
+		writeForkFile(s.t, path, report)
+		refs = []run.ArtifactRef{{Kind: "report", Ref: path}}
+	}
+	rec := run.Record{RunID: req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Backend: req.Backend, State: run.StateExited, ExitCode: countPtr(exitCode), StartedAt: "2026-11-15T00:00:00Z", FinishedAt: "2026-11-15T00:00:00Z", ArtifactRefs: refs}
+	st, err := store.Open(ctx, s.f.storePath, true)
+	if err != nil {
+		return rec, report, err
+	}
+	defer st.Close()
+	err = st.WriteTx(ctx, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
+	return rec, report, err
+}
+
+func TestRequestPlannedVerifyCallSuspendsEndToEnd(t *testing.T) {
+	f, l, base := plannedFixture(t)
+	declareWorkerResumeFixture(t, l)
+	suspendsDir := filepath.Join(scratchUnderDurable(t), "suspends-adapter")
+	if err := os.MkdirAll(suspendsDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	suspendsAdapter := filepath.Join(suspendsDir, "run-suspends")
+	writeForkFile(t, suspendsAdapter, "#!/bin/sh\nexit 0\n")
+	writeForkFile(t, filepath.Join(suspendsDir, "pause-kind"), run.PauseAtGap+"\n")
+	writeForkFile(t, filepath.Join(suspendsDir, "ending-capability"), run.EndingCallSuspends+"\n")
+	l.cfg.Policy.Backends["build-suspends"] = Backend{Adapter: suspendsAdapter, Model: "fixture-model"}
+	l.cfg.Policy.Backends["reviewer"] = Backend{Adapter: l.cfg.Policy.Backends["fixture"].Adapter, Model: "review-model"}
+	l.cfg.Policy.Seats["build"] = "build-suspends"
+	l.endingCapabilities = map[string]string{
+		l.cfg.Policy.Backends["fixture"].Adapter:  run.EndingFooter,
+		l.cfg.Policy.Backends["reviewer"].Adapter: run.EndingFooter,
+		suspendsAdapter: run.EndingCallSuspends,
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='closed'`)
+		return err
+	})
+	id := fileFixtureRequest(t, f, "build", "", requestFence)
+	t0 := runGit(t, f.root, "rev-parse", TrunkRef)
+	base.firstHead = t0
+	transcript := filepath.Join(scratchUnderDurable(t), "session.jsonl")
+	steps := &requestVerifySuspendsSteps{
+		workflowSteps: base,
+		transcript:    transcript,
+		t0:            t0,
+	}
+	l.cfg.Steps = steps
+	result := &LoopResult{}
+
+	// Attempt 1: plan -> work (call-suspends, call-1) -> verify (fails c1, c2 not-done).
+	for i := 0; i < 15 && steps.verifies < 1; i++ {
+		graphPass(t, l, result)
+	}
+	if steps.verifies != 1 || steps.works != 1 {
+		t.Fatalf("attempt 1 did not finish verify: works=%d verifies=%d nodes=%v", steps.works, steps.verifies, steps.nodeIDs)
+	}
+
+	// Verify call.answered is recorded for call-1 with Kind=='refused', Stage=='judge', Criterion findings, and no 'Check: c1' lines.
+	var ans landingAnswer
+	fixtureRead(t, f, func(r *store.Reader) error {
+		var raw []byte
+		if err := r.QueryRow(`SELECT payload FROM events WHERE kind=? AND object_type='call' AND object_id='call-1'`, callAnswered).Scan(&raw); err != nil {
+			return err
+		}
+		return json.Unmarshal(raw, &ans)
+	})
+	if ans.Kind != "refused" || ans.Stage != "judge" {
+		t.Fatalf("call-1 answer kind/stage = %q/%q, want refused/judge", ans.Kind, ans.Stage)
+	}
+	if !strings.Contains(ans.Text, "Criterion c1: suspends verify finding for c1") || !strings.Contains(ans.Text, "Criterion c2: suspends verify finding for c2") {
+		t.Fatalf("call-1 answer text missing criterion findings:\n%s", ans.Text)
+	}
+	if strings.Contains(ans.Text, "Check: c1") {
+		t.Fatalf("call-1 answer text unexpectedly contained 'Check: c1':\n%s", ans.Text)
+	}
+
+	// Run attempt 2 + verify pass + gate + land.
+	for i := 0; i < 20 && result.Landed == 0; i++ {
+		graphPass(t, l, result)
+	}
+	if result.Landed != 1 {
+		t.Fatalf("expected Landed==1, got %+v (nodes=%v)", result, steps.nodeIDs)
+	}
+	if steps.works != 2 || steps.verifies != 2 {
+		t.Fatalf("works=%d verifies=%d, want 2 each", steps.works, steps.verifies)
+	}
+	if !steps.workReqs[1].SessionTurn {
+		t.Fatalf("attempt 2 work was not a resumed SessionTurn")
+	}
+	if steps.laneCaps[1] != run.EndingCallSuspends {
+		t.Errorf("attempt 2 lane/ending-capability = %q, want %q", steps.laneCaps[1], run.EndingCallSuspends)
+	}
+	if steps.laneBases[1] != steps.h1 {
+		t.Errorf("attempt 2 lane/base_sha = %q, want H1=%q", steps.laneBases[1], steps.h1)
+	}
+	if steps.itemBases[1] != t0 {
+		t.Errorf("attempt 2 lane/item_base_sha = %q, want T0=%q", steps.itemBases[1], t0)
+	}
+	if len(steps.answers) != 1 || steps.answers[0].CallID != "call-1" {
+		t.Fatalf("attempt 2 staged landing-answer.json = %+v, want call-1", steps.answers)
+	}
+
+	// Verify state == landed, call.delivered recorded for call-1, and call.landed recorded for call-2.
+	fixtureRead(t, f, func(r *store.Reader) error {
+		var state string
+		if err := r.QueryRow(`SELECT state FROM items WHERE item_id=?`, id).Scan(&state); err != nil {
+			return err
+		}
+		if state != StateLanded {
+			t.Errorf("item state = %q, want %q", state, StateLanded)
+		}
+		var delivered, landed int
+		if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND object_type='call' AND object_id='call-1'`, callDelivered).Scan(&delivered); err != nil {
+			return err
+		}
+		if delivered != 1 {
+			t.Errorf("call-1 call.delivered count = %d, want 1", delivered)
+		}
+		if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND object_type='call' AND object_id='call-2'`, callLanded).Scan(&landed); err != nil {
+			return err
+		}
+		if landed != 1 {
+			t.Errorf("call-2 call.landed count = %d, want 1", landed)
+		}
+		return nil
+	})
 }

@@ -183,7 +183,13 @@ func returnedBrief(e ReturnedEnding) string {
 	case RefusalGate:
 		b.WriteString("The gate refused its candidate.")
 	case RefusalVerifyNotDone:
-		b.WriteString("The workflow verifier found criteria not done; revise the plan to cover them.")
+		if e.WorkerSession != nil {
+			b.WriteString("The judge refused its candidate.")
+		} else {
+			b.WriteString("The workflow verifier found criteria not done; revise the plan to cover them.")
+		}
+	case ReasonEvalFailed:
+		b.WriteString("The judge refused its candidate.")
 	case RefusalNoOp:
 		b.WriteString("It ended without committing anything, so there was no candidate to judge.")
 	case RefusalFence:

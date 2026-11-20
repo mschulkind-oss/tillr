@@ -84,10 +84,12 @@ The [item judge intake](https://github.com/mschulkind-oss/tillr/blob/main/tillr-
 file without recording verdicts. A missing or refused file holds the item as
 `judge-unreadable`, attributed to the review run rather than the worker, not to
 the worker's own endings. A valid
-`not-done` finding from an ordinary judge holds it as `eval-failed`, without a gate,
+`not-done` finding from an ordinary judge holds a document item as `eval-failed`, without a gate,
 landing, or criterion verdict. The waiting view includes the controlling criterion's
 reason. A workflow evaluator's `not-done` instead returns the named criteria to the
-workflow's first node as `verify-not-done`, without a gate or criterion verdict.
+workflow's first node as `verify-not-done`, without a gate or criterion verdict. On a
+[filed request](#filed-requests), `not-done` from either an evaluator or an ordinary
+judge returns all `not-done` findings to the builder's same session with no operator hold.
 
 A valid `blocked` finding moves the item to blocked with the entry's reason and
 its structured `waiting_on.waiter`; it records no criterion verdict. A valid
@@ -1448,9 +1450,11 @@ through the gate and landing again. Loop-owned item-block retirement is removed 
 retained checkout before the worker returns; the prepared head remains pinned as evidence.
 
 A workflow evaluator's `verify-not-done` return carries each not-done criterion id
-and reason, without a retained worker session. It starts a fresh workflow at its
-first node (the planner in `planned-build@v1`). Its repeat key is the sorted set
-of not-done criterion ids: the same finding again raises a design-seat conflict.
+and reason; for a document item it carries no retained worker session and starts a fresh
+workflow at its first node (the planner in `planned-build@v1`). For a filed request,
+`not-done` (whether `verify-not-done` or `eval-failed`) retains the builder's session and
+returns to the builder node (reusing completed prerequisite nodes) so distinct findings keep
+returning to the builder without an operator hold.
 
 The recorded decision's `worker_session_reason` explains the path: `resumed-worker` for
 that continuation, `cannot-resume` for an adapter without a positive resume declaration,
