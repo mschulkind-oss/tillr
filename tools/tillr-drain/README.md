@@ -280,7 +280,11 @@ run serially in the item's single git target, including a fork checkout; the nex
 node starts at the preceding node's final HEAD. At each writing node's exit, the
 drain checks only that node's changed paths, from its starting HEAD to its final
 HEAD. An escape is refused as `boundary-scope-escape`, naming the node and path;
-no successor starts. A dirty writing target is also refused. Passing every node
+no successor starts. A dirty writing target on a writing node that ended with a
+readable answer is also refused as `boundary-scope-escape`; a writing node ended
+for a repeating call, by a signal, or by a machinery fault preserves its
+uncommitted work under `refs/tillr/preserved/<run>` and restarts on its route
+instead of refusing as an escape. Passing every node
 does not waive the final check of the whole change against the item's fence.
 The staged node base and scope are kept separately from the item's original base
 and full fence so the final candidate includes all nodes and lands once.

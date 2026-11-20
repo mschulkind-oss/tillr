@@ -158,7 +158,7 @@ func (l *Loop) preserveWork(ctx context.Context, lane, runID, reason string) err
 			exists = true
 		}
 	}
-	if !exists {
+	if !exists || old != nil {
 		return nil
 	}
 	if err := appendJudgment(ctx, l.cfg.Store, workPreservedKind, "run", runID, p, l.cfg.Now().UTC()); err != nil {
@@ -179,6 +179,12 @@ func (l *Loop) preservationItem(ctx context.Context, runID string) (string, erro
 		err := r.QueryRow(`SELECT item_id FROM runs WHERE run_id = ?`, runID).Scan(&itemID)
 		if err == sql.ErrNoRows {
 			err = r.QueryRow(`SELECT item_id FROM dispatches WHERE run_id = ? ORDER BY dispatched_at DESC LIMIT 1`, runID).Scan(&itemID)
+		}
+		if err == sql.ErrNoRows {
+			var hasNodeRuns bool
+			if tableErr := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_runs')`).Scan(&hasNodeRuns); tableErr == nil && hasNodeRuns {
+				err = r.QueryRow(`SELECT item_id FROM node_runs WHERE run_id = ? LIMIT 1`, runID).Scan(&itemID)
+			}
 		}
 		return err
 	})
