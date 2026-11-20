@@ -46,11 +46,10 @@ func TestABareKindIsNotAnsweredByAnotherKindsPass(t *testing.T) {
 	}
 }
 
-// A fixer closed by hand while its check passes on the trunk releases the items acquitted
-// behind it, with no operator retry: on 2026-11-18 three items stayed `trunk-broken`
-// naming a closed fixer, each needing `tillr drain retry`. A closed fixer whose check has
-// not been proved releases nothing.
-func TestAClosedFixerReleasesItsAcquittalsOnceItsCheckPassesOnTheTrunk(t *testing.T) {
+// A fixer closed by hand releases the items acquitted behind it on the next pass without
+// an operator retry or waiting for a separate proof: closing the fixer is the operator's
+// ruling that the red no longer holds work, and the closed fixer's state is left alone.
+func TestAClosedFixerReleasesItsAcquittals(t *testing.T) {
 	ctx := context.Background()
 	f, l, fixer, _ := fixerRoutingFixture(t)
 	fixtureWrite(t, f, func(tx *store.Tx) error {
@@ -66,39 +65,12 @@ func TestAClosedFixerReleasesItsAcquittalsOnceItsCheckPassesOnTheTrunk(t *testin
 	if err := l.releaseTrunkAcquittals(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := fixerState(t, f, "item-spare"); got != StateBlocked {
-		t.Fatalf("a closed fixer with no proof released its acquittal: %s", got)
-	}
-
-	runGit(t, f.root, "commit", "--allow-empty", "-qm", "repair lands")
-	tip := runGit(t, f.root, "rev-parse", TrunkRef)
-	writeTipProgress(t, l, tip, nil, map[string]time.Time{"go-tool/unit": l.cfg.Now().UTC().Add(time.Minute)})
-	if err := l.resolveProvedFixers(ctx); err != nil {
-		t.Fatal(err)
-	}
 	if got := fixerState(t, f, fixer); got != "closed" {
-		t.Fatalf("the proof rewrote a closed fixer's state: %s", got)
-	}
-	if err := l.releaseTrunkAcquittals(ctx); err != nil {
-		t.Fatal(err)
+		t.Fatalf("closing and releasing rewrote the closed fixer's state: %s", got)
 	}
 	if got := fixerState(t, f, "item-spare"); got != StateInQueue {
-		t.Fatalf("acquittal behind the closed, proved fixer not released: %s", got)
+		t.Fatalf("acquittal behind a closed fixer stayed held: %s", got)
 	}
-	fixtureWrite(t, f, func(tx *store.Tx) error {
-		var raw []byte
-		if err := tx.QueryRow(`SELECT payload FROM events WHERE kind=? AND object_id=?`, FixerProvedKind, fixer).Scan(&raw); err != nil {
-			return err
-		}
-		var p fixerProof
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return err
-		}
-		if p.Green != tip {
-			t.Fatalf("proof event %+v, want %s", p, tip)
-		}
-		return nil
-	})
 }
 
 // A trunk fixer that names a fence obstacle for paths outside the gate's own code gets

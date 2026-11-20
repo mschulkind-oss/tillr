@@ -74,7 +74,7 @@ func TestTreeCheckAcquittalHoldsOnTheFixerWithoutAConflict(t *testing.T) {
 }
 
 func TestAcquittedTreeItemReturnsOnlyAfterItsFixerLands(t *testing.T) {
-	for _, state := range []string{"landed", "closed"} {
+	for _, state := range []string{"landed", "closed", "in-queue"} {
 		for _, check := range []string{"scratch", "unit"} {
 			t.Run(state+"/"+check, func(t *testing.T) {
 				f := newLoopFixture(t, stub(t, "adapter", committingAdapter)).withSeats()
@@ -91,8 +91,12 @@ func TestAcquittedTreeItemReturnsOnlyAfterItsFixerLands(t *testing.T) {
 					t.Fatalf("first=%+v err=%v", first, err)
 				}
 				fixer := drain.TrunkFixerID(base)
-				// Model the fixer's terminal disposition without rewriting its frozen criteria.
-				legacyItemState(t, f.store, fixer, state)
+				// Model the fixer's disposition without rewriting its frozen criteria.
+				if state == "in-queue" {
+					legacyItemState(t, f.store, fixer, "blocked")
+				} else {
+					legacyItemState(t, f.store, fixer, state)
+				}
 				git(t, f.root, "commit", "--allow-empty", "-m", "repaired trunk")
 				repaired := git(t, f.root, "rev-parse", "main")
 				steps.ProcessSteps.GateProgram = always(t, "green", 0)
@@ -100,7 +104,7 @@ func TestAcquittedTreeItemReturnsOnlyAfterItsFixerLands(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if state == "landed" {
+				if state == "landed" || state == "closed" {
 					if second.Dispatched != 1 || second.Landed != 1 {
 						t.Fatalf("second=%+v", second)
 					}
@@ -112,7 +116,7 @@ func TestAcquittedTreeItemReturnsOnlyAfterItsFixerLands(t *testing.T) {
 						t.Fatalf("release did not stage a fresh run from repaired trunk: %s", calls)
 					}
 				} else if second.Dispatched != 0 || itemStateOf(t, f.store, "item_041") != "blocked" {
-					t.Fatalf("closed fixer released the item: %+v", second)
+					t.Fatalf("open unproved fixer released the item: %+v", second)
 				}
 			})
 		}

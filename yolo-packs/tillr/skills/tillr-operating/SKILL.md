@@ -412,10 +412,9 @@ fails only checks already red on its base and the trunk tip, the loop compares i
 paths against each red check's declared `reads`: if they do not intersect, the verdict
 promotes to `pass-inherited` and the candidate lands; if they intersect, the candidate is
 acquitted without charge (`trunk-already-red`) and blocked behind the fixer (`trunk-broken`
-in waiting views). Once the fixer lands and the selected lane base contains the repair — or
-once a proof passes the named checks even if the fixer was closed without landing — the
-next pass clears the waiter and starts a fresh run from the repaired trunk without an
-authorized retry. A check green on the base, or a failure of the candidate's own, keeps the
+in waiting views). Once the fixer lands and the selected lane base contains the repair — or once the fixer is
+closed, or a proof at or past the red commit passes the named checks — the next pass clears
+the waiter and starts a fresh run from the repaired trunk without an authorized retry. A check green on the base, or a failure of the candidate's own, keeps the
 ordinary refusal.
 
 The verdict about the candidate. `tillr-gate dualrun` runs two gates and compares them,

@@ -136,6 +136,7 @@ func (l *Loop) releaseTrunkObstacleHolds(ctx context.Context) error {
 	if l.cfg.Root == "" {
 		return nil
 	}
+	registerRewriteStore(l.cfg.Root, l.cfg.Store)
 	proofs, err := readCheckProofs(ctx, l.cfg.Root)
 	if err != nil || len(proofs) == 0 {
 		return err
@@ -147,7 +148,13 @@ func (l *Loop) releaseTrunkObstacleHolds(ctx context.Context) error {
 	defer s.Close()
 
 	var holds []obstacles.Hold
+	var lost string
 	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		th, err := readTrunkHistory(r)
+		if err != nil {
+			return err
+		}
+		lost = th.Lost
 		active, _, err := obstacles.Read(r)
 		if err != nil {
 			return err
@@ -185,7 +192,7 @@ func (l *Loop) releaseTrunkObstacleHolds(ctx context.Context) error {
 				continue
 			}
 			if redCommit != "" {
-				ok, err := containsCommit(ctx, l.cfg.Root, redCommit, p.commit)
+				ok, err := proofPastRed(ctx, l.cfg.Root, lost, redCommit, p.commit)
 				if err != nil {
 					return err
 				}

@@ -11,10 +11,11 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// repairedTrunkWaiter returns the underlying state only for an acquittal whose
-// own fixer landed in the base staging will select, or whose fixer ended by any other
-// route (resolved by a proof, or closed) once a proof has passed its checks on a commit
-// the selected base contains. A landing newer than the proved base is not evidence.
+// repairedTrunkWaiter returns the underlying state for an item held behind a trunk fixer
+// or tooling defect item once the hold's condition is gone: when the fixer or defect item
+// is closed, when the fixer landed in the base staging will select, or when a proof has
+// passed the fixer's checks on a commit the selected base contains. A landing newer than
+// the proved base is not evidence.
 func (l *Loop) repairedTrunkWaiter(ctx context.Context, r *store.Reader, id string) (string, error) {
 	var state string
 	if err := r.QueryRow(`SELECT state FROM items WHERE item_id=?`, id).Scan(&state); err != nil {
@@ -28,7 +29,7 @@ func (l *Loop) repairedTrunkWaiter(ctx context.Context, r *store.Reader, id stri
 		return "", err
 	}
 	fixer := strings.TrimPrefix(waiting.Waiter, "item:")
-	trunk := IsTrunkFixer(fixer) && strings.HasPrefix(waiting.Reason, RefusalTrunkAlreadyRed+":")
+	trunk := IsTrunkFixer(fixer)
 	// A tooling obstacle's wait is released by the same rule: its defect item landed in
 	// the base staging will select (defect.go).
 	defect := IsDefectItem(fixer) && strings.HasPrefix(waiting.Reason, RefusalToolingDefect+":")
@@ -45,21 +46,21 @@ func (l *Loop) repairedTrunkWaiter(ctx context.Context, r *store.Reader, id stri
 	if err != nil {
 		return "", err
 	}
+	declared, err := definition.ForReader(r)
+	if err != nil {
+		return "", err
+	}
+	if state == declared.Parsed.Closed || state == "closed" {
+		// Closing a fixer or defect item is the operator's ruling that it no longer stands
+		// in the way (including when its fix was landed by hand): release every item held
+		// behind it on the next pass without an operator retry.
+		return underlying, nil
+	}
 	if defect && state != StateLanded {
-		// A defect item someone closed or resolved without landing is that person's ruling
-		// that the tooling no longer stands in the way: the waiter is released with it.
-		declared, err := definition.ForReader(r)
-		if err != nil {
-			return "", err
-		}
 		if finishedState(declared.Parsed, state) {
 			return underlying, nil
 		}
 		return "", nil
-	}
-	declared, err := definition.ForReader(r)
-	if err != nil {
-		return "", err
 	}
 	if state != StateLanded && !finishedState(declared.Parsed, state) {
 		return "", nil
@@ -69,17 +70,19 @@ func (l *Loop) repairedTrunkWaiter(ctx context.Context, r *store.Reader, id stri
 		return "", err
 	}
 	if state != StateLanded {
-		// A fixer a proof resolved (resolveProvedFixers) repaired nothing itself, and
-		// neither did one someone closed: in both the proof of its checks is the repair
-		// evidence, recorded by resolveProvedFixers whatever ended the fixer. Release once
-		// the selected base contains the proved commit, so the fresh run starts from a
-		// green tree. A closed fixer whose checks no proof has passed releases nothing.
+		// A fixer resolved without landing (resolveProvedFixers, or an already-on-trunk
+		// resolution later proved) repaired nothing itself: the proof of its checks is the
+		// repair evidence. Release once the selected base contains the proved commit.
 		proved, err := fixerProvedGreen(r, fixer)
 		if err != nil || proved == "" {
 			return "", err
 		}
 		if green != "" {
-			ok, err := containsCommit(ctx, l.cfg.Root, proved, green)
+			th, err := readTrunkHistory(r)
+			if err != nil {
+				return "", err
+			}
+			ok, err := proofPastRed(ctx, l.cfg.Root, th.Lost, proved, green)
 			if err != nil || !ok {
 				return "", err
 			}
@@ -102,6 +105,7 @@ func (l *Loop) repairedTrunkWaiter(ctx context.Context, r *store.Reader, id stri
 // cannot be overwritten by an earlier read. SetState clears the waiter and keeps
 // the release in the item's event history; the old candidate is never retained.
 func (l *Loop) releaseTrunkAcquittals(ctx context.Context) error {
+	registerRewriteStore(l.cfg.Root, l.cfg.Store)
 	if err := l.releaseTrunkObstacleHolds(ctx); err != nil {
 		return err
 	}

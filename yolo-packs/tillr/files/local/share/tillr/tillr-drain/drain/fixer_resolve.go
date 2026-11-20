@@ -232,7 +232,7 @@ func awaitedFixers(r *store.Reader) (map[string]bool, error) {
 		if err != nil {
 			return nil, err
 		}
-		if waiting == nil || !strings.HasPrefix(waiting.Reason, RefusalTrunkAlreadyRed+":") {
+		if waiting == nil {
 			continue
 		}
 		if fixer := strings.TrimPrefix(waiting.Waiter, "item:"); fixer != waiting.Waiter && IsTrunkFixer(fixer) {
@@ -264,12 +264,80 @@ func (p checkProof) passed(checks []string, seen int64) bool {
 		return false
 	}
 	for _, check := range checks {
-		at, ok := p.at[check]
-		if !ok || at.UnixMilli() <= seen {
-			return false
+		if at, ok := p.at[check]; ok && at.UnixMilli() > seen {
+			continue
 		}
+		if p.whole && !strings.Contains(check, "/") {
+			matched := false
+			prefix := check + "/"
+			for k, at := range p.at {
+				if strings.HasPrefix(k, prefix) && at.UnixMilli() > seen {
+					matched = true
+					break
+				}
+			}
+			if matched {
+				continue
+			}
+		}
+		return false
 	}
 	return true
+}
+
+// proofPastRed answers whether proofCommit is at or past red on the trunk. On an
+// unrewritten trunk (or one whose rewrite is in trunk_rewrites), containsCommit answers
+// directly. When the trunk was rewritten off red without a trunk_rewrites row (for
+// instance, an earlier accept-rewrite onto a moved base), red's patch-matched commit on
+// the trunk must be an ancestor of proofCommit; if red was dropped or amended off an
+// accepted trunk, proofCommit must contain their merge base.
+func proofPastRed(ctx context.Context, root, lost, red, proofCommit string) (bool, error) {
+	ok, err := containsCommit(ctx, root, red, proofCommit)
+	if err != nil || ok {
+		return ok, err
+	}
+	onTrunk, err := containsCommit(ctx, root, red, TrunkRef)
+	if err != nil || onTrunk {
+		return false, err
+	}
+	proofOnTrunk, err := containsCommit(ctx, root, proofCommit, TrunkRef)
+	if err != nil || !proofOnTrunk {
+		return false, err
+	}
+	out, err := gather(ctx, gitKey("past-red", root, []string{red, proofCommit, lost}), func(ctx context.Context) (string, error) {
+		_, oldIDs, err := patchIDs(ctx, root, TrunkRef+".."+red)
+		if err != nil {
+			return "", err
+		}
+		newCommits, newIDs, err := patchIDs(ctx, root, red+".."+TrunkRef)
+		if err != nil {
+			return "", err
+		}
+		if id := oldIDs[red]; id != "" {
+			for _, c := range newCommits {
+				if newIDs[c] == id {
+					yes, err := trunkAncestor(ctx, root, c, proofCommit)
+					if err != nil || !yes {
+						return "no", err
+					}
+					return "yes", nil
+				}
+			}
+		}
+		if lost != "" {
+			return "no", nil
+		}
+		mb, err := rawGit(ctx, root, nil, "merge-base", red, TrunkRef)
+		if err != nil {
+			return "no", nil
+		}
+		yes, err := trunkAncestor(ctx, root, strings.TrimSpace(mb), proofCommit)
+		if err != nil || !yes {
+			return "no", err
+		}
+		return "yes", nil
+	})
+	return out == "yes", err
 }
 
 // describe is the reason a fixer this proof covers is resolved with.
@@ -369,6 +437,7 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 	if l.cfg.Root == "" {
 		return nil
 	}
+	registerRewriteStore(l.cfg.Root, l.cfg.Store)
 	proofs, err := readCheckProofs(ctx, l.cfg.Root)
 	if err != nil || len(proofs) == 0 {
 		return err
@@ -410,7 +479,7 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 			}
 			if !finishedState(declared, state) {
 				found = append(found, o)
-			} else if state != StateLanded && state != StateResolvedElsewhere && awaited[o.id] {
+			} else if state != StateLanded && awaited[o.id] {
 				o.finished = true
 				found = append(found, o)
 			}
@@ -444,7 +513,13 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 		return found, nil
 	}
 	var candidates []open
+	var lost string
 	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		th, err := readTrunkHistory(r)
+		if err != nil {
+			return err
+		}
+		lost = th.Lost
 		candidates, err = read(r)
 		return err
 	}); err != nil || len(candidates) == 0 {
@@ -464,7 +539,7 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 			if !proof.passed(checks, o.seen) {
 				continue
 			}
-			contains, err := containsCommit(ctx, l.cfg.Root, red, proof.commit)
+			contains, err := proofPastRed(ctx, l.cfg.Root, lost, red, proof.commit)
 			if err != nil {
 				return err
 			}
@@ -491,7 +566,12 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 			}
 			reason := f.proof.describe(f.checks)
 			if f.finished {
-				if state == StateLanded || state == StateResolvedElsewhere || !finishedState(declared, state) {
+				if state == StateLanded || !finishedState(declared, state) {
+					continue
+				}
+				if proved, err := fixerProvedGreen(tx.Reader(), f.id); err != nil {
+					return err
+				} else if proved != "" {
 					continue
 				}
 				if f.checks == nil {

@@ -1160,10 +1160,11 @@ triage one.
 A green proof releases the trunk whatever the fixer's own state. A green run records
 the checks it passed beside its proof time. Before each plan, an open fixer is resolved
 (`resolved-elsewhere`, with a `drain.fixer-proved` event naming the proof) when the
-proved commit contains the fixer's red commit, the proof was recorded after the fixer's
-last red observation (its filing or a later attached tip), and every check the fixer
-names is among the proof's passed checks. The `trunk-broken` holds behind it are then
-gone on that plan, and an acquittal waiting on it is released once the selected lane
+proved commit is at or past the fixer's red commit (by ancestry, a recorded rewrite, or
+its patch-matched replacement after an accepted rebase), the proof was recorded after the
+fixer's last red observation (its filing or a later attached tip), and every check the
+fixer names is among the proof's passed checks. The `trunk-broken` holds behind it are
+then gone on that plan, and an acquittal waiting on it is released once the selected lane
 base contains the proved commit. A proof from before this rule, which lists no checks,
 resolves nothing. The tip run's own passes are proof too, check by check: the runner
 and the legacy program's adapter record when each check passed on the tip
@@ -1172,10 +1173,11 @@ checks already pass on a tip containing its red commit, is resolved by those pas
 while the rest of the run is still going or is red for another check. A fixer that names
 a check both by its kind (`tillr-docs`, the replay's selector) and by a labelled id of that
 kind (`tillr-docs/every-face-...`, the only spelling a proof records) is covered by the
-labelled passes. A fixer someone closed, or that ended by any route but a landing, while
-items are still acquitted behind it gets the same proof recorded (its state is left
-alone), and those items are released by it with no operator retry. A fixer that names
-no check needs a whole green run. The
+labelled passes. Closing a fixer (for instance, after landing its fix by hand) releases
+every item held behind it on the next pass without an operator retry; a fixer resolved
+without a landing while items are still acquitted behind it gets the proof recorded (its
+state is left alone), and those items are released once the selected base contains that
+proof. A fixer that names no check needs a whole green run. The
 waiting face names the fixer, its failing checks and whether it is waiting on the owner.
 With no pointer yet the report says there is no proved baseline to accuse a landing; it
 does not claim that a nonexistent pointer was judged red.
@@ -2031,7 +2033,8 @@ what differs, including each lost commit that has no match, and nothing changes.
 the rewrite yet: an observed tip that the trunk no longer contains is the same
 rewrite, unrecorded. Accepting it pins the lost tip at
 `refs/tillr/trunk-history/accepted/<lost-tip>`, so the replaced history stays
-readable. It clears the lost tip, makes the replacing commit the observed tip, and records a
+readable. It clears the lost tip, makes the replacing commit the observed tip, maps the replaced
+commits to their new shas in `trunk_rewrites`, and records a
 `drain.trunk-rewrite-accepted` event that names who accepted the rewrite, why, and
 both tips. When the rewrite moved `refs/tillr/green` off the trunk, the command moves
 it to the commit that replaced it: the one as far below the replacing commit as the

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -92,6 +93,10 @@ func AcceptRewrite(ctx context.Context, req AcceptRewriteRequest) (RewriteAccept
 		return a, err
 	}
 	current, err := commit("--current", req.Current)
+	if err != nil {
+		return a, err
+	}
+	oneForOnePairs, rebasedPairs, err := acceptedRewritePairs(ctx, req.Root, lost, current)
 	if err != nil {
 		return a, err
 	}
@@ -223,6 +228,24 @@ func AcceptRewrite(ctx context.Context, req AcceptRewriteRequest) (RewriteAccept
 		if _, err := tx.Exec(`INSERT INTO trunk_history(id,observed_tip,lost_tip) VALUES(1,?,'') ON CONFLICT(id) DO UPDATE SET observed_tip=excluded.observed_tip,lost_tip=excluded.lost_tip`, current); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(heavy.RewritesDDL); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM trunk_rewrite_unmatched WHERE lost_tip = ?`, lost); err != nil {
+			return err
+		}
+		pairs := oneForOnePairs
+		evidence := "accept-rewrite:same-tree"
+		if a.Rebased {
+			pairs = rebasedPairs
+			evidence = "accept-rewrite:patch-id"
+		}
+		at := req.At.Format(time.RFC3339)
+		for _, pair := range pairs {
+			if _, err := tx.Exec(`INSERT INTO trunk_rewrites(old_sha,new_sha,recorded_at,evidence) VALUES(?,?,?,?) ON CONFLICT(old_sha) DO UPDATE SET new_sha=excluded.new_sha,recorded_at=excluded.recorded_at,evidence=excluded.evidence`, pair[0], pair[1], at, evidence); err != nil {
+				return err
+			}
+		}
 		body, err := json.Marshal(a)
 		if err != nil {
 			return err
@@ -230,7 +253,57 @@ func AcceptRewrite(ctx context.Context, req AcceptRewriteRequest) (RewriteAccept
 		_, err = tx.Append(event.Event{Kind: rewriteAcceptedKind, ObjectType: "trunk", ObjectID: &lost, Payload: body, At: req.At.UTC()})
 		return err
 	})
+	if err == nil {
+		registerRewriteStore(req.Root, req.Store)
+	}
 	return a, err
+}
+
+// acceptedRewritePairs computes both candidate old->new commit mappings before the store
+// write opens: the positional 1-for-1 pairs for a same-tree replacement, and the
+// patch-matched pairs for a rebase onto a moved base.
+func acceptedRewritePairs(ctx context.Context, root, lost, current string) (oneForOne, rebased [][2]string, err error) {
+	oldCommits, oldIDs, err := patchIDs(ctx, root, current+".."+lost)
+	if err != nil {
+		return nil, nil, err
+	}
+	newCommits, newIDs, err := patchIDs(ctx, root, lost+".."+current)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(oldCommits) == len(newCommits) {
+		for i := range oldCommits {
+			oneForOne = append(oneForOne, [2]string{oldCommits[i], newCommits[i]})
+		}
+	}
+	taken := map[int]bool{}
+	cursor := 0
+	for _, old := range oldCommits {
+		id := oldIDs[old]
+		if id == "" {
+			continue
+		}
+		matched := -1
+		for j := cursor; j < len(newCommits); j++ {
+			if !taken[j] && newIDs[newCommits[j]] == id {
+				matched, cursor = j, j+1
+				break
+			}
+		}
+		if matched < 0 {
+			for j := 0; j < len(newCommits); j++ {
+				if !taken[j] && newIDs[newCommits[j]] == id {
+					matched = j
+					break
+				}
+			}
+		}
+		if matched >= 0 {
+			taken[matched] = true
+			rebased = append(rebased, [2]string{old, newCommits[matched]})
+		}
+	}
+	return oneForOne, rebased, nil
 }
 
 // patchMatches compares the commits only the lost tip reaches with the current commit's
