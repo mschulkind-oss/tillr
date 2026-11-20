@@ -96,6 +96,21 @@ def shared_cache_dir():
     return (base / 'go-build').resolve()
 
 
+LOCK_DIR_ENV = 'GO_TEST_SHARDS_LOCK_DIR'
+
+
+def default_lock_dir():
+    """Return the slot pool every invocation shares unless one is named.
+
+    GO_TEST_SHARDS_LOCK_DIR names another pool. It exists for this runner's own tests: a
+    test that runs the runner must not wait on slots the rest of the machine holds.
+    """
+    named = os.environ.get(LOCK_DIR_ENV, '').strip()
+    if named:
+        return Path(named).resolve()
+    return shared_cache_dir() / 'go-test-shards-locks'
+
+
 def default_shard_limit():
     """Machine-wide limit on concurrently running shards, sized from the core count."""
     return max(1, (os.cpu_count() or 1) // 2)
@@ -148,7 +163,7 @@ def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=N
     env = private_environment(label, scratch, git_values)
     if not binary.is_file() or not os.access(binary, os.X_OK):
         raise ShardError(f'{label} cannot start: test binary is missing or not executable: {binary}')
-    effective_lock_dir = lock_dir if lock_dir is not None else shared_cache_dir() / 'go-test-shards-locks'
+    effective_lock_dir = lock_dir if lock_dir is not None else default_lock_dir()
     effective_limit = shard_limit if shard_limit is not None else default_shard_limit()
     pattern = '^(' + '|'.join(re.escape(n) for n in names) + ')$'
     command = ['go', 'tool', 'test2json', '-t', '-p', package, str(binary),
@@ -263,7 +278,7 @@ def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHA
         stream = stream.lstrip()[end:]
     jobs = []
     git_values = global_git_config()
-    lock_dir = lock_dir if lock_dir is not None else shared_cache_dir() / 'go-test-shards-locks'
+    lock_dir = lock_dir if lock_dir is not None else default_lock_dir()
     shard_limit = default_shard_limit()
     for number, package in enumerate(packages):
         if not package.get('TestGoFiles') and not package.get('XTestGoFiles'):
@@ -309,7 +324,7 @@ def main():
     parser.add_argument('--record', type=Path, help='write measured top-level durations after success')
     parser.add_argument('--events', type=Path, help='write Go test JSON events, including failed shards')
     parser.add_argument('--scratch', type=Path, help='parent of private scratch; defaults to TMPDIR or YOLO_DURABLE_DIR')
-    parser.add_argument('--lock-dir', type=Path, help='shared lock directory; defaults to <GOCACHE>/go-test-shards-locks')
+    parser.add_argument('--lock-dir', type=Path, help='shared lock directory; defaults to $GO_TEST_SHARDS_LOCK_DIR, then <GOCACHE>/go-test-shards-locks')
     parser.add_argument('--timeout', default='0', help='explicit Go test timeout; default disables Go\'s own deadline')
     parser.add_argument('--shard-timeout', type=float, default=None, metavar='SECONDS',
                         help=f'maximum seconds without top-level test progress per shard (default {DEFAULT_SHARD_TIMEOUT:g})')

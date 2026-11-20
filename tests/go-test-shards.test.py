@@ -33,6 +33,18 @@ class RunnerTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory(dir=parent)
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
+        # Every runner these tests start, in this process or a child, takes its slot from a
+        # pool of its own. The machine-wide pool is held by whatever else is running, and
+        # waiting on it would make the suite's duration a measure of the machine's load.
+        pool = patch.dict(os.environ, {shards.LOCK_DIR_ENV: str(self.root / 'default-locks')})
+        pool.start()
+        self.addCleanup(pool.stop)
+
+    def test_named_environment_pool_replaces_the_machine_wide_one(self):
+        self.assertEqual(shards.default_lock_dir(), (self.root / 'default-locks').resolve())
+        with patch.dict(os.environ, {shards.LOCK_DIR_ENV: ''}):
+            self.assertEqual(shards.default_lock_dir(),
+                             shards.shared_cache_dir() / 'go-test-shards-locks')
 
     def fake(self, body):
         script = self.root / 'fake'
