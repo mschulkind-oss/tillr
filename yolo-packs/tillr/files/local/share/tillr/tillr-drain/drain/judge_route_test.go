@@ -68,7 +68,7 @@ func (s *judgeRouteSteps) Run(ctx context.Context, req run.Request) (run.Record,
 				return run.Record{}, "", fmt.Errorf("adapter preflight: %v: %s", err, out)
 			}
 		}
-		for _, want := range []string{"the first criterion of item-a", "candidate.diff", "eval.output", "read-only"} {
+		for _, want := range []string{"the first criterion of item-a", "candidate.diff", "eval.output", "read-only", "single-token locator strings with no spaces", "cmd:go-test-tillr-run"} {
 			if !strings.Contains(string(brief), want) {
 				s.t.Errorf("judge brief lacks %q", want)
 			}
@@ -187,6 +187,8 @@ func TestJudgeRouteBeforeGate(t *testing.T) {
 				want = append(want, "gate", "landing", "worker")
 			case "gate-fail":
 				want = append(want, "gate", "worker")
+			case "invalid":
+				want = append(want, "judge")
 			case "mechanical":
 				want = []string{"worker", "gate", "landing"}
 			case "no-grant":
@@ -263,6 +265,125 @@ func TestJudgeRouteBeforeGate(t *testing.T) {
 					}
 				}
 			}
+		})
+	}
+}
+
+type judgeFormRefusalSteps struct {
+	*judgeRouteSteps
+	judgeCalls    int
+	judgeSessions []string
+	judgeRequests []run.Request
+}
+
+func (s *judgeFormRefusalSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	isJudge := strings.HasSuffix(req.RunID, "-judge") || req.NodeID == "evaluate" || strings.HasSuffix(req.NodeID, "/evaluate")
+	if !isJudge {
+		return s.judgeRouteSteps.Run(ctx, req)
+	}
+	s.judgeCalls++
+	s.judgeRequests = append(s.judgeRequests, req)
+	session, err := ReadSessionID(filepath.Join(s.f.laneRoot, req.LaneID))
+	if err != nil {
+		return run.Record{}, "", err
+	}
+	s.judgeSessions = append(s.judgeSessions, session)
+	if s.judgeCalls == 1 {
+		s.entries = []item.JudgeEntry{{
+			CriterionID:   "c1",
+			CriterionHash: item.CriterionHash("the first criterion of item-a"),
+			Verdict:       item.VerdictDone,
+			ClaimClass:    item.ClaimVerification,
+			Reason:        "all tests pass",
+			Evidence:      []string{"cmd:cd tools/tillr-run && go test ./run -run TestExecRecordsQuickOutChoice (pass)"},
+		}}
+	} else {
+		s.entries = nil
+	}
+	rec, log, err := s.judgeRouteSteps.Run(ctx, req)
+	if s.judgeCalls == 1 {
+		// judgeRouteSteps sets Outcome="fail" whenever s.entries != nil; rewrite with Outcome="pass"
+		// to match the reported case where the judge wrote a full pass with prose in evidence.
+		target := filepath.Join(s.f.laneRoot, req.LaneID, WorktreeDir)
+		output := item.JudgeOutput{
+			EvaluatedHead: s.workerHead,
+			EvaluatedTree: runGit(s.t, target, "rev-parse", s.workerHead+"^{tree}"),
+			Outcome:       "pass",
+			Verdicts:      s.entries,
+		}
+		raw, _ := json.Marshal(output)
+		writeForkFile(s.t, filepath.Join(run.DurableDir(filepath.Join(s.f.laneRoot, req.LaneID), req.RunID), "eval.output"), string(raw))
+	}
+	return rec, log, err
+}
+
+func TestJudgeFormRefusalResumesSameSessionAndPasses(t *testing.T) {
+	for _, kind := range []string{"standalone", "evaluator"} {
+		t.Run(kind, func(t *testing.T) {
+			f, l, baseSteps := judgeRouteFixture(t, "pass", true)
+			steps := &judgeFormRefusalSteps{judgeRouteSteps: baseSteps}
+			l.cfg.Steps = steps
+			if kind == "evaluator" {
+				writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/scout-then-build@v1.json"), evaluatorWorkflow)
+				runGit(t, f.root, "add", "config/tillr/workflows")
+				runGit(t, f.root, "commit", "-qm", "evaluator workflow")
+				fixtureWrite(t, f, func(tx *store.Tx) error {
+					_, err := tx.Exec(`UPDATE items SET workflow='scout-then-build@v1' WHERE item_id='item-a'`)
+					return err
+				})
+			}
+			result := &LoopResult{}
+			for i := 0; i < 12; i++ {
+				if _, err := l.pass(context.Background(), result); err != nil {
+					t.Fatal(err)
+				}
+				drainOwned(t, l, result)
+			}
+			want := []string{"worker", "judge", "judge", "gate", "landing"}
+			if kind == "evaluator" {
+				want = []string{"worker", "worker", "judge", "judge", "gate", "landing"}
+			}
+			if !reflect.DeepEqual(steps.order, want) {
+				t.Fatalf("order %v, want %v", steps.order, want)
+			}
+			if steps.judgeCalls != 2 {
+				t.Fatalf("judgeCalls = %d, want 2", steps.judgeCalls)
+			}
+			if steps.judgeRequests[0].Resume {
+				t.Fatalf("first judge request unexpectedly marked Resume")
+			}
+			if !steps.judgeRequests[1].Resume {
+				t.Fatalf("second judge request did not set Resume=true")
+			}
+			if steps.judgeRequests[1].RunID != steps.judgeRequests[0].RunID {
+				t.Fatalf("resumed RunID %q != %q", steps.judgeRequests[1].RunID, steps.judgeRequests[0].RunID)
+			}
+			if steps.judgeSessions[0] == "" || steps.judgeSessions[1] != steps.judgeSessions[0] {
+				t.Fatalf("judge sessions = %v, want same non-empty session", steps.judgeSessions)
+			}
+			if !strings.Contains(steps.judgeRequests[1].ResumePrompt, "evidence must contain non-empty locators, not prose, for c1") {
+				t.Fatalf("resume prompt missing validator message: %s", steps.judgeRequests[1].ResumePrompt)
+			}
+			if result.Rejected != 0 || len(result.RefusedSteps) != 0 {
+				t.Fatalf("form refusal was counted: %+v", result)
+			}
+			fixtureRead(t, f, func(r *store.Reader) error {
+				var state string
+				if err := r.QueryRow(`SELECT state FROM items WHERE item_id='item-a'`).Scan(&state); err != nil {
+					return err
+				}
+				if state != StateLanded {
+					t.Errorf("item state = %s, want %s", state, StateLanded)
+				}
+				var refusals int
+				if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind='drain.refusal'`).Scan(&refusals); err != nil {
+					return err
+				}
+				if refusals != 0 {
+					t.Errorf("drain.refusal count = %d, want 0", refusals)
+				}
+				return nil
+			})
 		})
 	}
 }

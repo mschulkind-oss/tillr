@@ -37,6 +37,7 @@ type JudgeReceipt struct {
 	Options       item.JudgeOptions `json:"options"`
 	Raw           json.RawMessage   `json:"raw,omitempty"`
 	Request       run.Request       `json:"request"`
+	JudgeSession  string            `json:"judge_session,omitempty"`
 	WorkerBrief   []byte            `json:"worker_brief"`
 	WorkerSession []byte            `json:"worker_session"`
 	Writers       []JudgeWriter     `json:"writers,omitempty"`
@@ -108,7 +109,6 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		}
 	}
 	receipt := c.Judge
-	var executionError error
 	if receipt == nil {
 		raw, readErr := os.ReadFile(receiptPath)
 		if readErr == nil {
@@ -201,10 +201,28 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			}
 		}
 	}
+	seenErrors := map[string]bool{}
+	var resumedRequest *run.Request
 	for {
+		var executionError error
 		var judgeRec run.Record
 		var judgeLog string
-		if receipt == nil {
+		if resumedRequest != nil {
+			req := *resumedRequest
+			resumedRequest = nil
+			rec, log, runErr := l.runRestartable(ctx, req)
+			if errors.Is(runErr, errRestartPending) {
+				return c, false, runErr
+			}
+			if runErr != nil {
+				if ctx.Err() != nil {
+					return c, false, ctx.Err()
+				}
+				executionError = runErr
+			}
+			judgeRec, judgeLog = rec, log
+			l.countSpend(result, rec)
+		} else if receipt == nil {
 			if grant == "" {
 				if c.Evaluator != nil {
 					// The pending node retains its run id across regrant. A transient
@@ -260,7 +278,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				}
 				req = &selected
 			}
-			receipt = &JudgeReceipt{Build: buildHash, Request: *req, WorkerBrief: brief, WorkerSession: session, Options: item.JudgeOptions{ItemID: c.ItemID, Head: head, Tree: tree, Actor: "run=" + req.RunID + ";session=" + judgeSession + ";route=" + req.Route(), JudgedActor: "run=" + c.RunID + ";session=" + strings.TrimSpace(string(session)), GrantID: grant, At: l.cfg.Now()}}
+			receipt = &JudgeReceipt{Build: buildHash, Request: *req, JudgeSession: judgeSession, WorkerBrief: brief, WorkerSession: session, Options: item.JudgeOptions{ItemID: c.ItemID, Head: head, Tree: tree, Actor: "run=" + req.RunID + ";session=" + judgeSession + ";route=" + req.Route(), JudgedActor: "run=" + c.RunID + ";session=" + strings.TrimSpace(string(session)), GrantID: grant, At: l.cfg.Now()}}
 			receipt.Writers, receipt.Inputs, receipt.Producers = c.Writers, c.EvaluatorInputs, c.Producers
 			receipt.EvaluatorTask = c.EvaluatorTask
 			judged := c.Writers
@@ -313,6 +331,11 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		if err := RecordBackendOutcomes(ctx, l.cfg.Store); err != nil {
 			return c, false, err
 		}
+		if len(receipt.Raw) == 0 {
+			if id, readErr := ReadSessionID(l.laneDirPath(c.LaneID)); readErr == nil && id != "" {
+				receipt.JudgeSession = id
+			}
+		}
 		if err := l.restoreJudgeInputs(c, receipt); err != nil {
 			return c, false, err
 		}
@@ -338,9 +361,9 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			}
 			return c, false, l.holdJudge(ctx, c, receipt.Request.RunID, ReasonJudgeUnreadable, "read-only judge changed the worker's candidate", result)
 		}
+		outputPath := l.judgeEvalOutputPath(c.LaneID, receipt.Request.RunID)
 		if len(receipt.Raw) == 0 && judgeRec.RunID != "" && ClassifyAttempt(judgeRec, judgeLog) == AttemptInterrupted && ctx.Err() == nil {
-			evalPath := l.judgeEvalOutputPath(c.LaneID, receipt.Request.RunID)
-			_, evalStatErr := os.Stat(evalPath)
+			_, evalStatErr := os.Stat(outputPath)
 			evalMissing := os.IsNotExist(evalStatErr)
 			if evalStatErr != nil && !evalMissing {
 				return c, false, evalStatErr
@@ -364,7 +387,6 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				req.RunID += "-interrupted"
 				replacementRequest = &req
 				receipt = nil
-				executionError = nil
 				continue
 			}
 		}
@@ -379,55 +401,76 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			return c, false, l.holdJudge(ctx, c, receipt.Request.RunID, ReasonJudgeUnreadable, "saved judgment belongs to a different candidate", result)
 		}
 		if len(receipt.Raw) == 0 {
-			receipt.Raw, err = os.ReadFile(l.judgeEvalOutputPath(c.LaneID, receipt.Request.RunID))
+			receipt.Raw, err = os.ReadFile(outputPath)
 			if err != nil {
 				return c, false, l.holdJudge(ctx, c, receipt.Request.RunID, ReasonJudgeUnreadable, err.Error(), result)
 			}
 		}
-		break
-	}
-	db, err = store.OpenRead(ctx, l.cfg.Store)
-	if err != nil {
-		return c, false, err
-	}
-	var checked item.JudgeResult
-	c.Judge = receipt
-	options := receipt.Options
-	options.At = l.cfg.Now()
-	err = db.ReadTx(ctx, func(r *store.Reader) error {
-		grant, e := judgeGrant(r, c.ItemID, options.At)
-		if e != nil {
-			return e
+		db, err = store.OpenRead(ctx, l.cfg.Store)
+		if err != nil {
+			return c, false, err
 		}
-		if grant == "" {
-			return errJudgeGrantHeld
-		}
-		options.GrantID, receipt.Options.GrantID = grant, grant
-		checked, e = item.CheckJudge(ctx, r, receipt.Raw, options)
-		return e
-	})
-	db.Close()
-	if errors.Is(err, errJudgeGrantHeld) {
-		return c, false, err
-	}
-	if err != nil {
-		return c, false, l.holdJudge(ctx, c, receipt.Request.RunID, ReasonJudgeUnreadable, err.Error(), result)
-	}
-	if err := writeJudgeReceipt(receiptPath, receipt); err != nil {
-		return c, false, err
-	}
-	if checked.Outcome != "pass" {
-		// CheckJudge owns precedence. Select the first entry of that kind,
-		// not the first failing entry, which may describe a lesser outcome.
-		for _, entry := range checked.Output.Verdicts {
-			if entry.Verdict == checked.Outcome {
-				return c, false, l.settleJudgeFailure(ctx, c, entry, checked.Output.Verdicts, options, result)
+		var checked item.JudgeResult
+		c.Judge = receipt
+		options := receipt.Options
+		options.At = l.cfg.Now()
+		err = db.ReadTx(ctx, func(r *store.Reader) error {
+			grant, e := judgeGrant(r, c.ItemID, options.At)
+			if e != nil {
+				return e
 			}
+			if grant == "" {
+				return errJudgeGrantHeld
+			}
+			options.GrantID, receipt.Options.GrantID = grant, grant
+			checked, e = item.CheckJudge(ctx, r, receipt.Raw, options)
+			return e
+		})
+		db.Close()
+		if errors.Is(err, errJudgeGrantHeld) {
+			return c, false, err
 		}
-		return c, false, Internalf("checked judge outcome %q has no matching entry", checked.Outcome)
+		if err == nil {
+			if err := writeJudgeReceipt(receiptPath, receipt); err != nil {
+				return c, false, err
+			}
+			if checked.Outcome != "pass" {
+				// CheckJudge owns precedence. Select the first entry of that kind,
+				// not the first failing entry, which may describe a lesser outcome.
+				for _, entry := range checked.Output.Verdicts {
+					if entry.Verdict == checked.Outcome {
+						return c, false, l.settleJudgeFailure(ctx, c, entry, checked.Output.Verdicts, options, result)
+					}
+				}
+				return c, false, Internalf("checked judge outcome %q has no matching entry", checked.Outcome)
+			}
+			c.Judge = receipt
+			return c, true, nil
+		}
+		if !isJudgeFormRejection(err) || seenErrors[err.Error()] {
+			return c, false, l.holdJudge(ctx, c, receipt.Request.RunID, ReasonJudgeUnreadable, err.Error(), result)
+		}
+		seenErrors[err.Error()] = true
+		judgeSession := receipt.JudgeSession
+		if judgeSession == "" {
+			judgeSession = judgeSessionFromActor(receipt.Options.Actor)
+		}
+		if judgeSession == "" {
+			return c, false, l.holdJudge(ctx, c, receipt.Request.RunID, ReasonJudgeUnreadable, err.Error(), result)
+		}
+		l.reportf("loop: %s judge verdict refused (%s); resuming judge session %s\n", c.ItemID, err.Error(), receipt.Request.RunID)
+		receipt.Raw = nil
+		if err := l.stageJudge(ctx, c, receipt, judgeSession); err != nil {
+			return c, false, err
+		}
+		resumed := receipt.Request
+		resumed.Resume = true
+		resumed.ResumePrompt = fmt.Sprintf(
+			"Your verdict file %s was refused by the validator:\n\n%s\n\nFix the verdict file and rewrite %s, then return RESULT: done. Do not edit, stage, or commit anything in the worktree.",
+			outputPath, err.Error(), outputPath,
+		)
+		resumedRequest = &resumed
 	}
-	c.Judge = receipt
-	return c, true, nil
 }
 
 // settleJudgeFailure routes a checked ruling without running the gate or landing.
@@ -551,7 +594,10 @@ Act as an independent read-only judge. Do not commit, edit the worktree, or writ
 Write your JSON verdict to %s. The object has evaluated_head=%q, evaluated_tree=%q,
 outcome (pass or fail), and verdicts covering every criterion below. Each entry has
 criterion_id, criterion_hash, verdict (done, not-done, blocked, defective), claim_class,
-reason, and evidence (nonempty locator strings). A blocked entry also needs waiting_on
+reason, and evidence (non-empty single-token locator strings with no spaces, e.g.
+commit:<sha>, diff:candidate.diff, node:<id>, or for a command that was run,
+cmd:go-test-tillr-run or test:TestExecRecordsQuickOutChoice; put full command lines,
+arguments, and results in reason). A blocked entry also needs waiting_on
 with waiter (owner, design, plan, or item:<id> for a stored item). Its reason explains
 why that waiter must act. Do not include actor or judged_actor.
 Pass requires every criterion done. Return RESULT: done after writing the file.
@@ -719,4 +765,39 @@ func (l *Loop) recordLandedJudge(ctx context.Context, c Candidate) error {
 		_, err = item.SetState(ctx, tx, c.ItemID, StateLanded, l.cfg.Now())
 		return err
 	})
+}
+
+func isJudgeFormRejection(err error) bool {
+	rej, ok := item.RejectionOf(err)
+	if !ok {
+		return false
+	}
+	switch rej.Rule {
+	case "judge-output",
+		"actor-in-output",
+		"evaluated-head",
+		"evaluated-tree",
+		"judge-outcome",
+		"criterion-unknown",
+		"criterion-duplicate",
+		"criterion-missing",
+		"criterion-hash",
+		"claim-class-mismatch",
+		"verdict-value",
+		"verdict-reason",
+		"verdict-evidence",
+		"outcome-pass":
+		return true
+	default:
+		return false
+	}
+}
+
+func judgeSessionFromActor(actor string) string {
+	for _, part := range strings.Split(actor, ";") {
+		if after, ok := strings.CutPrefix(part, "session="); ok {
+			return strings.TrimSpace(after)
+		}
+	}
+	return ""
 }
