@@ -14,10 +14,7 @@ import (
 func TestWaitingDefaultStoppedRunKeepsPlannerAnswer(t *testing.T) {
 	dir := plannerFixtureDir(t)
 	gitRoot(t, dir)
-	drainBin := filepath.Join(dir, "tillr-drain")
-	if out, err := exec.Command("go", "-C", "../tillr-drain", "build", "-o", drainBin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build drain: %v %s", err, out)
-	}
+	viewBin, drainBin := buildPairInto(t, dir)
 	input := filepath.Join(dir, "pass.json")
 	if err := os.WriteFile(input, []byte(`{"record_version":1,"kind":"drain.pass","id":"fixture","producer":{"system":"tillr","utility":"drain","version":"0.1.0"},"created_at":"2026-11-16T00:00:00Z","payload":{}}`), 0600); err != nil {
 		t.Fatal(err)
@@ -44,10 +41,7 @@ INSERT INTO events(ts,kind,object_type,object_id,payload) VALUES (2000,'drain.or
 	if len(want) != 1 || want[0].Class != "needs you" || want[0].Why != "no-policy" || want[0].Mover != "operator; supply the loop's --policy file" {
 		t.Fatalf("planner answer: %+v", want)
 	}
-	viewBin := filepath.Join(dir, "tillr-view")
-	if out, err := exec.Command("go", "build", "-o", viewBin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build view: %v %s", err, out)
-	}
+
 	out, err := exec.Command(viewBin, "waiting", "--store", path, "--root", dir, "--tillr-drain", drainBin, "--json").CombinedOutput()
 	if err != nil {
 		t.Fatalf("waiting: %v %s", err, out)
