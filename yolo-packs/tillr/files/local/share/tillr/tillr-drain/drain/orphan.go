@@ -130,6 +130,11 @@ type reapEvidence struct {
 	// finished, whose lane is still leased to it with no expiry, and whose run face is
 	// gone (orphanedResume), keyed by run ID to its lane.
 	resumeStuck map[string]string
+	// offRotation is each unfinished run that ended with its lane still leased to it with
+	// no expiry, on a lane this loop does not run (offRotationStranded), whose run face is
+	// gone and whose claimants are dead, absent or this loop, keyed by run ID to its lane.
+	// The write re-verifies every one before it reclaims it.
+	offRotation map[string]string
 	// reclaimed collects the lines the write's reclaims print once its transaction has
 	// closed: no report is written inside a write transaction.
 	reclaimed *[]string
@@ -146,10 +151,11 @@ func (ev reapEvidence) ownerDead(owner *LoopOwner) bool {
 // the process table once, with no transaction open. The caller holds the run-start
 // lock from here through its write, so no run face starts in between.
 func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvidence, error) {
-	ev := reapEvidence{dead: map[LoopOwner]bool{}, live: map[string]bool{}, faces: map[string]bool{}, stuck: map[string]string{}, resumeStuck: map[string]string{}, reclaimed: &[]string{}, reapedSingle: &[]*pendingWork{}}
+	ev := reapEvidence{dead: map[LoopOwner]bool{}, live: map[string]bool{}, faces: map[string]bool{}, stuck: map[string]string{}, resumeStuck: map[string]string{}, offRotation: map[string]string{}, reclaimed: &[]string{}, reapedSingle: &[]*pendingWork{}}
 	var owners []LoopOwner
 	stuck := map[string]*pendingWork{}
 	resumed := map[string]*pendingWork{}
+	stranded := map[string]*pendingWork{}
 	here, err := currentLoopOwner()
 	if err != nil {
 		return ev, err
@@ -206,6 +212,13 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 			if (work.Done && !work.Examining) || work.Decision.RunRequest == nil {
 				continue
 			}
+			if l.offRotationStranded(work, unbounded) {
+				if rec, err := terminalRecord(r, work.Decision.RunRequest.RunID); err != nil {
+					return err
+				} else if rec != nil {
+					stranded[work.Decision.RunRequest.RunID] = work
+				}
+			}
 			for _, owner := range []*LoopOwner{work.Owner, work.Examiner} {
 				if owner != nil {
 					owners = append(owners, *owner)
@@ -243,7 +256,7 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 		ev.dead[owner] = dead
 		anyDead = anyDead || dead
 	}
-	if anyDead || len(stuck) > 0 || len(resumed) > 0 {
+	if anyDead || len(stuck) > 0 || len(resumed) > 0 || len(stranded) > 0 {
 		if ev.live, ev.faces, err = liveRunProcessIDs(l.cfg.Store); err != nil {
 			return ev, err
 		}
@@ -266,8 +279,76 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 				ev.resumeStuck[id] = work.Decision.LaneID
 			}
 		}
+		for id, work := range stranded {
+			if !ev.faces[id] && !(locator != nil && foreignRunLive(locator, id, foreignRuns[id], here.Domain)) && offRotationClaimGone(work, here, ev) {
+				ev.offRotation[id] = work.Decision.LaneID
+			}
+		}
 	}
 	return ev, nil
+}
+
+// offRotationStranded answers whether an unfinished run holds a lane this loop does not run
+// under a lease with no expiry. Such a lane is in no pass's rotation, so no examination is
+// ever claimed on it, and the lease of a run that already ended would otherwise hold its item
+// as no-lane for as long as the loop runs with fewer lanes than the run began on. A document
+// desk is a lane the loop never lists, and is not one of these. The run the loop itself
+// has in flight (l.active) is not stranded.
+func (l *Loop) offRotationStranded(work *pendingWork, unbounded map[string]string) bool {
+	if work.Done || work.LaneReleased || work.Decision.RunRequest == nil || len(work.Decision.Parallel) > 0 {
+		return false
+	}
+	id, lane := work.Decision.RunRequest.RunID, work.Decision.LaneID
+	if l.active[id] || unbounded[id] != lane || documentDesk(lane) {
+		return false
+	}
+	for _, rotated := range l.cfg.Lanes {
+		if rotated == lane {
+			return false
+		}
+	}
+	return true
+}
+
+// offRotationClaimGone answers whether nobody who could still be working an off-rotation run
+// holds a claim on it: its dispatch owner and its examiner are absent, proven dead, or this
+// loop, which already knows the run is not in flight (offRotationStranded).
+func offRotationClaimGone(work *pendingWork, here *LoopOwner, ev reapEvidence) bool {
+	for _, owner := range []*LoopOwner{work.Owner, work.Examiner} {
+		if owner == nil || ev.ownerDead(owner) {
+			continue
+		}
+		if owner.PID == here.PID && owner.Start == here.Start && owner.Domain == here.Domain {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// reclaimOffRotationLease releases the lane of a run that ended on a lane outside the loop's
+// rotation, guarded by the exact lease the evidence saw, and clears the claim that kept it.
+// The run keeps its terminal record, so the next plan settles it where it is, and the item
+// then goes on to a lane in rotation like any other settled item.
+func (l *Loop) reclaimOffRotationLease(tx *store.Tx, work *pendingWork, at time.Time) error {
+	id, lane := work.Decision.RunRequest.RunID, work.Decision.LaneID
+	res, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = NULL, leased_until = NULL WHERE lane_id = ? AND run_id = ? AND state = ? AND leased_until IS NULL`, run.LaneStateIdle, lane, id, run.LaneStateLeased)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return err
+	}
+	if work.Examiner != nil {
+		if err := appendEffect(tx, examinationOwnerKind, id, (*LoopOwner)(nil), at); err != nil {
+			return err
+		}
+	}
+	if err := appendEffect(tx, laneReleasedKind, id, laneReleased{LaneID: lane, Cause: laneReleaseReap}, at); err != nil {
+		return err
+	}
+	l.reportf("loop: reclaimed lane %s: run %s ended there, the lane is outside this loop's rotation, and nothing holds the run; it settles where it ended\n", lane, id)
+	return nil
 }
 
 // resumeUnfinished answers whether the run's last run.resume or run.finish event is a
@@ -402,6 +483,13 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 		if work.Decision.RunRequest != nil {
 			if lane, ok := ev.resumeStuck[work.Decision.RunRequest.RunID]; ok && lane == work.Decision.LaneID {
 				if err := l.reclaimOrphanedResume(tx, work, at); err != nil {
+					return err
+				}
+			}
+		}
+		if work.Decision.RunRequest != nil {
+			if lane, ok := ev.offRotation[work.Decision.RunRequest.RunID]; ok && lane == work.Decision.LaneID {
+				if err := l.reclaimOffRotationLease(tx, work, at); err != nil {
 					return err
 				}
 			}
