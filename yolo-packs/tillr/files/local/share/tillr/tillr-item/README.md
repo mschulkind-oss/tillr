@@ -255,7 +255,10 @@ The refusals are `words-empty`, `words-not-text`, `words-too-large`, `title-requ
 `criterion-braces`, `too-many-criteria`, `edge-target-missing`, `request-differs`, `unknown-item` and
 `not-in-order`. A `{{` in the title or a criterion is refused because the brief template
 reads it as a placeholder; the words may hold anything. Every refusal comes before the
-first write. The answer is an `item.request` record carrying `item_id`, `place`,
+first write. Filing a `build`-seat request whose fence admits `docs/`, `docs/design/`, or
+a file named like a design document prints a notice on standard error naming those paths
+and suggesting a separate `design`-seat item; it is a notice, not a refusal. The answer
+is an `item.request` record carrying `item_id`, `place`,
 `count`, `seat`, `workflow`, `allowed_paths`, `blocked_by` and `words_size`. An identical refile
 answers `item_id`, `place`, `count`, `event_seq` and `event_head_seq`. The
 [drain README](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md#filed-requests) says how the drain runs one.

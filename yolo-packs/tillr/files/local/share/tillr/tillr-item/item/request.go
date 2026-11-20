@@ -128,13 +128,9 @@ func normalizeRequest(f *RequestFiling) error {
 	seen := map[string]bool{}
 	paths := []string{}
 	for _, p := range f.Paths {
-		p = filepath.ToSlash(strings.TrimSpace(p))
-		clean := path.Clean(p)
-		if p == "" || clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains("/"+p+"/", "/../") {
-			return Rejectionf("fence-wildcard", "", "--path %q is not a plain repo-relative prefix", p)
-		}
-		if strings.HasSuffix(p, "/") && clean != "/" {
-			clean += "/"
+		clean, ok := cleanRequestPath(p)
+		if !ok {
+			return Rejectionf("fence-wildcard", "", "--path %q is not a plain repo-relative prefix", filepath.ToSlash(strings.TrimSpace(p)))
 		}
 		if !seen[clean] {
 			seen[clean] = true
@@ -266,6 +262,64 @@ func RequestWords(r *store.Reader, id string) ([]byte, error) {
 		return nil, Internalf("reading item %s's request words: %v", id, err)
 	}
 	return words, nil
+}
+
+func cleanRequestPath(raw string) (string, bool) {
+	p := filepath.ToSlash(strings.TrimSpace(raw))
+	clean := path.Clean(p)
+	if p == "" || clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains("/"+p+"/", "/../") {
+		return "", false
+	}
+	if strings.HasSuffix(p, "/") && clean != "/" {
+		clean += "/"
+	}
+	return clean, true
+}
+
+func isDesignDocPath(p string) bool {
+	lower := strings.ToLower(p)
+	if lower == "docs" || lower == "docs/" {
+		return true
+	}
+	if lower == "docs/design" || strings.HasPrefix(lower, "docs/design/") {
+		return true
+	}
+	if strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".markdown") {
+		stem := strings.TrimSuffix(strings.TrimSuffix(path.Base(lower), ".markdown"), ".md")
+		for _, token := range strings.FieldsFunc(stem, func(r rune) bool {
+			return r == '-' || r == '_' || r == '.' || r == ' '
+		}) {
+			if token == "design" || token == "redesign" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// RequestDesignPathNotice returns a notice when a build-seat request's allowed paths
+// include docs/, docs/design/, or a file named like a design document, or empty string
+// otherwise. It is a notice, never a refusal.
+func RequestDesignPathNotice(seat string, paths []string) string {
+	if seat == "" {
+		seat = "build"
+	}
+	if seat != "build" {
+		return ""
+	}
+	var flagged []string
+	seen := map[string]bool{}
+	for _, raw := range paths {
+		p, ok := cleanRequestPath(raw)
+		if ok && isDesignDocPath(p) && !seen[p] {
+			seen[p] = true
+			flagged = append(flagged, p)
+		}
+	}
+	if len(flagged) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("tillr-item: notice: build-seat request includes design-document path(s) (%s); consider filing a separate design-seat item (--seat design) for design changes", strings.Join(flagged, ", "))
 }
 
 // The words are kept apart from the item definition, which sync and placement may rewrite;
