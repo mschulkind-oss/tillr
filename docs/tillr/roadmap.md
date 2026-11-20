@@ -57,16 +57,15 @@ and none of it is built.
 
 [Live drain capacity and allocation changes](../design/tillr-live-drain-config.md) (with
 [its companion plan seed](../design/tillr-live-drain-config-plan.md)), written on 2026-11-19 to the
-owner's request of that day, designs live ordinary and express lane scaling with graceful slot
-retirement, live backend/seat/work concurrency allocations, store-backed persistence across restarts,
-and a survey of every startup setting. Four questions wait on the owner:
-[`OQ-LD1`](../design/tillr-live-drain-config.md#OQ-LD1) (whether lowering lanes also offers an
-opt-in `--pause` mode), [`OQ-LD2`](../design/tillr-live-drain-config.md#OQ-LD2) (wait vs fallback
-spillover when a backend hits its cap), [`OQ-LD3`](../design/tillr-live-drain-config.md#OQ-LD3)
-(where concurrency caps live), and [`OQ-LD4`](../design/tillr-live-drain-config.md#OQ-LD4)
-(whether the observatory displays only or also mutates lane counts); its designer's decisions await
-review in [its ledger](../design/tillr-live-drain-config.md#7-decision-ledger), and none of it is
-built.
+owner's request of that day, left this list on 2026-11-20 once the owner ruled its four questions:
+[`OQ-LD1`](../design/tillr-live-drain-config.md#OQ-LD1) on 2026-11-19 (graceful lane lowering by
+default plus opt-in `--pause`), [`OQ-LD3`](../design/tillr-live-drain-config.md#OQ-LD3) on
+2026-11-20 (baseline concurrency caps in `backend-policy.json` with live overrides in
+`.tillr/state.db`), [`OQ-LD4`](../design/tillr-live-drain-config.md#OQ-LD4) on 2026-11-20
+(interactive lane-scaling and cap controls in the observatory alongside the CLI), and
+[`OQ-LD2`](../design/tillr-live-drain-config.md#OQ-LD2) on 2026-11-20 (deferring multi-backend
+setups and cap spillover to the [Icebox](#icebox)). Six designer's decisions remain marked in
+[its ledger](../design/tillr-live-drain-config.md#7-decision-ledger), and none of it is built.
 
 Five more left this list on 2026-11-18, none by the owner's ruling, and each is his to overturn.
 Two are a designer's decisions: [`OQ-CR4`](../design/criterion-repair.md#OQ-CR4), that the judge
@@ -350,6 +349,16 @@ Wanted, not now, by the owner's call. Picking one up means giving it a place abo
   [`OQ-GM2`](../design/tillr-goal-monitor.md#OQ-GM2), are left unanswered. Picking it up means a
   use for a scheduled check-in, ruling those two, and filing the slices, starting with
   [scheduled tasks](../design/scheduled-tasks.md#12-open-questions), its substrate.
+
+- **Multi-backend setups and cap spillover** ([live drain capacity and allocation changes](../design/tillr-live-drain-config.md), [`OQ-LD2`](../design/tillr-live-drain-config.md#OQ-LD2)),
+  iceboxed 2026-11-20. The owner: "Icebox, a small design for what to do... for how to do
+  multi-backend setups like this. I'm not ready for this. I will manually switch them right now
+  and restart. But I do want to do this eventually, but put something in the Icebox and throw it
+  in there." Multi-backend cap spillover is out of scope for
+  [live drain capacity and allocation changes](../design/tillr-live-drain-config.md), and the
+  owner switches backends manually for now. Picking it up means writing a small design for
+  multi-backend seat setups — including whether work waits on a capped preferred backend or spills
+  over to a fallback backend — and ruling it before building.
 
 ## What this page does not cover
 
