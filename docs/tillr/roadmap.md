@@ -25,10 +25,10 @@ The first rule that separates two entries decides.
 
 ## 1. Rulings that are waiting on the owner
 
-The questions below are left for the owner on this page: 31 by `vantage-check index --roadmap docs/tillr/roadmap.md` on
+The questions below are left for the owner on this page: 34 by `vantage-check index --roadmap docs/tillr/roadmap.md` on
 2026-11-20, 11 of them the provenance review's (after the owner ruled [`OQ-PR21`](./decision-provenance-review.md#OQ-PR21)
 and [`OQ-PR22`](./decision-provenance-review.md#OQ-PR22) on 2026-11-19 and nine more on
-2026-11-20) and 20 across the seven designs of 2026-11-19 and 2026-11-20 placed in entries 2 to 8
+2026-11-20) and 23 across the eight designs of 2026-11-19 and 2026-11-20 placed in entries 2 to 9
 below. That placement and order are the designer's, made on 2026-11-20 at the owner's instruction
 not to wait for him, and are his to reorder. Each question has options and a recorded leaning.
 Twenty-three others that stood here were settled on 2026-11-15 and 2026-11-16 by the session's
@@ -111,14 +111,24 @@ AutoQA leaves the [Icebox](#icebox).
    ([`OQ-PSS3`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS3), after the owner ruled
    [`OQ-PSS1`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS1),
    [`OQ-PSS2`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS2) and subagent tier control
-   on 2026-11-20): placed ahead of the other five by the designer (and the owner's to reorder)
+   on 2026-11-20): placed ahead of the other six by the designer (and the owner's to reorder)
    because settling its one remaining question on higher-tier builder subagent calls finishes the
    unbuilt design that replaces the upfront plan step and failed-verify restart that cost the most
    rework on the night of 2026-11-19, blocking builder fan-out tier enforcement in
    [Planning and model tiering](../design/tillr-planning-node-model-tiering.md) and
    [entry 4](#4-choose-where-each-seat-runs).
 
-4. [Owner review comments and the Vantage seam](../design/tillr-review-comments.md)
+4. [Evidence registry and whole-suite lane guardrail](../design/tillr-evidence-registry-and-suite-guardrail.md)
+   (with [its companion plan seed](../design/tillr-evidence-registry-and-suite-guardrail-plan.md);
+   [`OQ-ER1`](../design/tillr-evidence-registry-and-suite-guardrail.md#OQ-ER1),
+   [`OQ-ER2`](../design/tillr-evidence-registry-and-suite-guardrail.md#OQ-ER2),
+   [`OQ-ER3`](../design/tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3)): next because lane
+   workers still wait up to 43 minutes re-running whole module suites or overload the host with
+   unpooled `go test ./...` while the gate and trunk proof keep separate pass caches, blocking
+   cross-stage check reuse and mechanical whole-suite prevention in
+   [entry 2](#2-keep-the-loop-running).
+
+5. [Owner review comments and the Vantage seam](../design/tillr-review-comments.md)
    ([`OQ-RC1`](../design/tillr-review-comments.md#OQ-RC1),
    [`OQ-RC2`](../design/tillr-review-comments.md#OQ-RC2),
    [`OQ-RC3`](../design/tillr-review-comments.md#OQ-RC3),
@@ -127,7 +137,7 @@ AutoQA leaves the [Icebox](#icebox).
    question reader in [entry 2](#2-keep-the-loop-running) and warm comment routing in
    [entry 8](#8-design-work-that-keeps-its-context).
 
-5. [Review and compliance routing by artifact class](../design/tillr-review-rules.md)
+6. [Review and compliance routing by artifact class](../design/tillr-review-rules.md)
    ([`OQ-RJ1`](../design/tillr-review-rules.md#OQ-RJ1),
    [`OQ-RJ2`](../design/tillr-review-rules.md#OQ-RJ2),
    [`OQ-RJ3`](../design/tillr-review-rules.md#OQ-RJ3),
@@ -137,7 +147,7 @@ AutoQA leaves the [Icebox](#icebox).
    [companion implementation plans](../design/tillr-queue-mirrors-designs.md) are neither checked
    against the wrong style rules nor dispatched unreviewed.
 
-6. [What a designer reads itself and what goes to scouts](../design/tillr-designer-scouts.md)
+7. [What a designer reads itself and what goes to scouts](../design/tillr-designer-scouts.md)
    ([`OQ-RD1`](../design/tillr-designer-scouts.md#OQ-RD1),
    [`OQ-RD2`](../design/tillr-designer-scouts.md#OQ-RD2),
    [`OQ-RD3`](../design/tillr-designer-scouts.md#OQ-RD3)): next because frontier `design` and
@@ -147,16 +157,16 @@ AutoQA leaves the [Icebox](#icebox).
    [entry 4](#4-choose-where-each-seat-runs) and [entry 8](#8-design-work-that-keeps-its-context)
    without stopping the running loop.
 
-7. [Drain seat profiles and one-command switching](../design/tillr-seat-profiles.md)
+8. [Drain seat profiles and one-command switching](../design/tillr-seat-profiles.md)
    ([`OQ-DSP1`](../design/tillr-seat-profiles.md#OQ-DSP1),
    [`OQ-DSP2`](../design/tillr-seat-profiles.md#OQ-DSP2),
-   [`OQ-DSP3`](../design/tillr-seat-profiles.md#OQ-DSP3)): after the five above because workloads
+   [`OQ-DSP3`](../design/tillr-seat-profiles.md#OQ-DSP3)): after the six above because workloads
    stay on Copilot Gemini while `claude-sub` is held on proving the Claude backend, blocking
    named profile selection in
    [live drain capacity and allocation changes](../design/tillr-live-drain-config.md) and
    [entry 4](#4-choose-where-each-seat-runs).
 
-8. [Self-hosted tillr building](../design/tillr-selfhosted-build.md)
+9. [Self-hosted tillr building](../design/tillr-selfhosted-build.md)
    ([`OQ-SH4`](../design/tillr-selfhosted-build.md#OQ-SH4), after the owner ruled
    [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2) on 2026-11-20 to follow every landing
    and directed reading from Git like `pi-fork`): how `yolo` builds and delivers tillr from Git so
@@ -294,6 +304,11 @@ comes first in recovery because an unavailable question reader holds otherwise a
 [`OQ-LS4`](../design/tillr-lane-shims.md#OQ-LS4)) blocks stopping worker cross-lane kills, shared
 `refs/tillr/` mutations, and unsharded Go suite runs before they execute rather than halting the
 loop or failing the trunk proof after the fact;
+[evidence registry and whole-suite lane guardrail](../design/tillr-evidence-registry-and-suite-guardrail.md)
+([`OQ-ER1`](../design/tillr-evidence-registry-and-suite-guardrail.md#OQ-ER1) to
+[`OQ-ER3`](../design/tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3)) blocks sharing check
+passes across the gate and trunk proof and stopping lane workers from burning shard slots on whole
+module suites;
 [owner review comments and the Vantage seam](../design/tillr-review-comments.md)
 ([`OQ-RC1`](../design/tillr-review-comments.md#OQ-RC1) to
 [`OQ-RC4`](../design/tillr-review-comments.md#OQ-RC4)) blocks replacing that subprocess reader
