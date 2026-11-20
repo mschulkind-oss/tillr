@@ -131,13 +131,16 @@ func piece(id, seat, access string) map[string]any {
 
 func TestPlannedBuildProposal(t *testing.T) {
 	for _, tc := range []struct {
-		name, rule string
-		change     func([]map[string]any)
+		name, rule, detail string
+		change             func([]map[string]any)
 	}{
 		{name: "accepted"},
-		{name: "unmapped", rule: "proposal-seat-unmapped", change: func(p []map[string]any) { p[0]["seat"] = "absent" }},
+		{name: "unmapped", rule: "proposal-seat-unmapped", detail: "fixture-policy.json", change: func(p []map[string]any) { p[0]["seat"] = "absent" }},
 		{name: "scope", rule: "proposal-scope-outside-fence", change: func(p []map[string]any) { p[0]["write_scope"] = []string{"outside/"} }},
 		{name: "readonly", rule: "proposal-read-only-seat-writes", change: func(p []map[string]any) { p[0]["seat"] = "scout" }},
+		{name: "verify-writes", rule: "proposal-read-only-seat-writes", detail: "build or edit", change: func(p []map[string]any) { p[0]["seat"] = "verify" }},
+		{name: "review-writes", rule: "proposal-read-only-seat-writes", detail: "build or edit", change: func(p []map[string]any) { p[0]["seat"] = "review" }},
+		{name: "plan-writes", rule: "proposal-read-only-seat-writes", detail: "build or edit", change: func(p []map[string]any) { p[0]["seat"] = "plan" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, l, base := plannedFixture(t)
@@ -163,8 +166,8 @@ func TestPlannedBuildProposal(t *testing.T) {
 					if before != after || detail == "" {
 						t.Fatalf("refusal changed graph or lacks detail: %s", detail)
 					}
-					if tc.name == "unmapped" && !strings.Contains(detail, "fixture-policy.json") {
-						t.Fatal(detail)
+					if tc.detail != "" && !strings.Contains(detail, tc.detail) {
+						t.Fatalf("detail %q lacks %q", detail, tc.detail)
 					}
 					return nil
 				}
@@ -237,6 +240,10 @@ func TestPlannedBuildPieceArguments(t *testing.T) {
 		{"reader scope", []any{map[string]any{"id": "x", "seat": "scout", "access": "read_only", "prompt": "x", "write_scope": []string{"tools/"}}}, "workflow-argument-type"},
 		{"bad output", []any{map[string]any{"id": "x", "seat": "build", "access": "read_only", "prompt": "x", "outputs": map[string]string{"bad/name": "markdown"}}}, "workflow-argument-type"},
 		{"duplicate", []any{good, good}, "workflow-argument-type"},
+		{"verify-writes", []any{piece("x", "verify", "write")}, "workflow-read-only-seat-writes"},
+		{"review-writes", []any{piece("x", "review", "write")}, "workflow-read-only-seat-writes"},
+		{"plan-writes", []any{piece("x", "plan", "write")}, "workflow-read-only-seat-writes"},
+		{"verify-readonly", []any{piece("x", "verify", "read_only")}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := bindWorkflow(f.root, raw, map[string]any{"pieces": tc.values})

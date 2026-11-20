@@ -136,6 +136,9 @@ func parseWorkflowPiece(root string, value any) (workflowPiece, error) {
 	if p.Access != "write" && p.Access != "read_only" {
 		return p, fmt.Errorf("invalid piece access")
 	}
+	if p.Access == "write" && (p.Seat == "verify" || p.Seat == "review" || p.Seat == "plan") {
+		return p, fmt.Errorf("workflow-read-only-seat-writes: seat %s may not have write access in a planned piece; use build or edit instead", p.Seat)
+	}
 	_, hasScope := fields["write_scope"]
 	if p.Access == "read_only" && hasScope || p.Access == "write" && (!hasScope || len(p.WriteScope) == 0) {
 		return p, fmt.Errorf("invalid piece write_scope for %s", p.Access)
