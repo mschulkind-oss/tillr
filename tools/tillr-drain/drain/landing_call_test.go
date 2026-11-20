@@ -613,6 +613,7 @@ func TestLandingCallLoopRecordsShippedCapabilities(t *testing.T) {
 			if err := writeForkSafe(piPath, []byte("#!/bin/sh\n"+tc.script+"\n"), 0755); err != nil {
 				t.Fatal(err)
 			}
+			fakeClaude(t, bin, "echo 'No conversation found to continue' >&2; exit 1")
 			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			f, l := passFixture(t)
 			l.cfg.Policy.Backends = map[string]Backend{}
@@ -678,6 +679,7 @@ func TestLandingCallLoopWithoutPiBackendSkipsProbe(t *testing.T) {
 	if err := writeForkSafe(piPath, []byte("#!/bin/sh\n: > "+marker+"\nexit 0\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
+	fakeClaude(t, bin, "echo 'No conversation found to continue' >&2; exit 1")
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	f, l := passFixture(t)
 	l.cfg.Policy.Backends = map[string]Backend{}
@@ -952,6 +954,51 @@ func TestLandingResultPersisted(t *testing.T) {
 			if got := landingResultPersisted([]byte(tc.transcript), "s", answer); got != tc.want {
 				t.Fatalf("persisted = %t; want %t", got, tc.want)
 			}
+		})
+	}
+}
+
+// fakeClaude keeps a loop test from starting the real harness when it probes for the capability.
+func fakeClaude(t *testing.T, dir, script string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/bin/sh\n"+script+"\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLandingCallLoopRecordsClaudeCallSuspendsOnlyWhenTheBinaryProbesSo(t *testing.T) {
+	for _, tc := range []struct{ name, script, want string }{
+		{"binary knows deferred resume", "echo 'No deferred tool marker found in the resumed session' >&2; exit 1", run.EndingCallSuspends},
+		{"binary predates it", "echo 'No conversation found to continue' >&2; exit 1", run.EndingFooter},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := t.TempDir()
+			fakeClaude(t, bin, tc.script)
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			t.Setenv("CLAUDE_CODE_DISABLE_DEFERRED_TOOL_RESUME", "")
+			f, l := passFixture(t)
+			adapter, err := filepath.Abs(filepath.Join("..", "..", "tillr-run", "backends", "claude", "run"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			l.cfg.Policy.Backends = map[string]Backend{"claude": {Adapter: adapter}}
+			if _, err := l.Run(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			fixtureRead(t, f, func(r *store.Reader) error {
+				var raw []byte
+				if err := r.QueryRow(`SELECT payload FROM events WHERE kind=?`, endingCapabilitiesKind).Scan(&raw); err != nil {
+					return err
+				}
+				got := map[string]string{}
+				if err := json.Unmarshal(raw, &got); err != nil {
+					return err
+				}
+				if !reflect.DeepEqual(got, map[string]string{adapter: tc.want}) {
+					t.Fatalf("effective capabilities %v; want %s", got, tc.want)
+				}
+				return nil
+			})
 		})
 	}
 }
