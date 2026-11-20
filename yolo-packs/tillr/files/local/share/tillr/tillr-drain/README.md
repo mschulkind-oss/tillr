@@ -2137,8 +2137,8 @@ artifacts, so a fast-tier stall cannot import remaining checks from a prior run.
 A gate that ran and reached no verdict is not a candidate failure either. Its answer is
 "error" (the gate's no-verdict exits, such as fork-check's `NOT VERIFIED`), and the loop
 records the wait as `gate-no-verdict` -- a reason this drain coined on 2026-11-18 for "the
-gate judged nothing; the loop gates this candidate again" -- keeps the candidate on its
-lane, and gates the same commit again on the next pass
+gate judged nothing; the loop gates this candidate again" -- releases an eligible lane
+after verifying the candidate pin, and gates the same commit again when a lane is available
 ([`drain/gate_no_verdict.go`](./drain/gate_no_verdict.go)). Nothing is counted, no fault is
 written, and no retry or acknowledgment is asked for, so the hold's mover is the loop and
 never a person. The `gate.verdict` with result `error` stays as the evidence of each

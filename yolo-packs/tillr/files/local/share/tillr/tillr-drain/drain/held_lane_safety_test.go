@@ -20,6 +20,7 @@ func TestRetainLaneHoldClasses(t *testing.T) {
 		keep bool
 	}{
 		{"gate stall", errGateStallHeld, false},
+		{"gate no verdict", errGateNoVerdict, false},
 		{"item fault", errItemFaultHeld, false},
 		{"held repair", errRepairHeld, false},
 		{"pending repair handoff", errRepairPending, true},
