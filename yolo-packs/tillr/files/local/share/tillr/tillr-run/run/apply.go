@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"syscall"
 	"time"
 
 	"github.com/mschulkind-oss/tillr/event"
@@ -118,6 +119,12 @@ type Record struct {
 	// EndCause is optional on legacy input records. Readers explicitly report its
 	// absence rather than inferring it from the less specific state or exit code.
 	EndCause string `json:"end_cause,omitempty"`
+	// Signal names the signal that ended the process (`SIGKILL`, `SIGSEGV`), whether the
+	// runner saw the process die by it or an adapter forwarded it as exit 128 plus the
+	// signal number. It is recorded for every signaled exit. end_cause is `signal` only for
+	// an external SIGTERM or SIGINT; any other signal (a crash signal, SIGKILL) stays a
+	// `normal-exit` that counts against the backend.
+	Signal string `json:"signal,omitempty"`
 	// Only settled-idle carries these observations. The finish event preserves
 	// them, and status reads that same event rather than inferring timestamps.
 	SettledAt      string `json:"settled_at,omitempty"`
@@ -390,3 +397,15 @@ func usageCostArg(usage *Usage) any {
 	}
 	return *usage.CostUSD
 }
+
+var signalNames = map[syscall.Signal]string{
+	syscall.SIGHUP: "SIGHUP", syscall.SIGINT: "SIGINT", syscall.SIGQUIT: "SIGQUIT",
+	syscall.SIGILL: "SIGILL", syscall.SIGTRAP: "SIGTRAP", syscall.SIGABRT: "SIGABRT",
+	syscall.SIGBUS: "SIGBUS", syscall.SIGFPE: "SIGFPE", syscall.SIGKILL: "SIGKILL",
+	syscall.SIGUSR1: "SIGUSR1", syscall.SIGSEGV: "SIGSEGV", syscall.SIGUSR2: "SIGUSR2",
+	syscall.SIGPIPE: "SIGPIPE", syscall.SIGALRM: "SIGALRM", syscall.SIGTERM: "SIGTERM",
+	syscall.SIGSYS: "SIGSYS",
+}
+
+// SignalName is the conventional name of sig, or "" for one this package does not name.
+func SignalName(sig syscall.Signal) string { return signalNames[sig] }

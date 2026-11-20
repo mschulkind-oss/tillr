@@ -335,3 +335,60 @@ func TestCanceledContextEndCauseIsSignal(t *testing.T) {
 }
 
 func intPtr(v int) *int { return &v }
+
+// TestRecordsSignalForEverySignaledExit pins that the record names the signal for both
+// forms (the process dying by it, and an adapter forwarding 128 plus its number), while
+// end_cause stays "signal" only for an external SIGTERM or SIGINT.
+func TestRecordsSignalForEverySignaledExit(t *testing.T) {
+	for _, tc := range []struct {
+		name, script, signal, cause string
+	}{
+		{"direct-kill", "kill -KILL $$", "SIGKILL", "normal-exit"},
+		{"forwarded-kill", "exit 137", "SIGKILL", "normal-exit"},
+		{"direct-abort", "kill -ABRT $$", "SIGABRT", "normal-exit"},
+		{"forwarded-abort", "exit 134", "SIGABRT", "normal-exit"},
+		{"direct-segv", "kill -SEGV $$", "SIGSEGV", "normal-exit"},
+		{"forwarded-segv", "exit 139", "SIGSEGV", "normal-exit"},
+		{"direct-term", "kill -TERM $$", "SIGTERM", "signal"},
+		{"forwarded-int", "exit 130", "SIGINT", "signal"},
+		{"plain-exit", "exit 7", "", "normal-exit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, root := leaseFixture(t)
+			env, err := run.Exec(context.Background(), s, run.Request{RunID: "run-sig", LaneID: "lane-sig", Backend: "fixture", Command: []string{"/bin/sh", "-c", tc.script}, WorkingDir: "."}, run.ExecOptions{LaneRoot: filepath.Join(root, "lanes"), Now: time.Now().UTC()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var body struct {
+				Signal string `json:"signal"`
+			}
+			if err := json.Unmarshal(env.Payload, &body); err != nil {
+				t.Fatal(err)
+			}
+			if body.Signal != tc.signal || endCause(t, env.Payload) != tc.cause {
+				t.Errorf("signal %q cause %q, want %q %q", body.Signal, endCause(t, env.Payload), tc.signal, tc.cause)
+			}
+			// The stored status must carry the signal too, not only the live envelope.
+			if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+				status, _, err := run.StatusRecord(r, "run-sig")
+				if err != nil {
+					return err
+				}
+				var st struct {
+					Run struct {
+						Signal string `json:"signal"`
+					} `json:"run"`
+				}
+				if err := json.Unmarshal(status.Payload, &st); err != nil {
+					return err
+				}
+				if st.Run.Signal != tc.signal {
+					t.Errorf("status signal %q, want %q", st.Run.Signal, tc.signal)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
