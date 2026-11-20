@@ -14,7 +14,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[3]
 SCRATCH = Path(os.environ.get("YOLO_DURABLE_DIR", ROOT / "tools/gate/.scratch"))
 SCRATCH.mkdir(parents=True, exist_ok=True)
-IDS = {"commit-identity", "citations", "documents", "file-size", "workflows"}
+IDS = {"commit-identity", "citations", "documents", "file-size", "workflows", "elapsed-time"}
 
 
 class Changes(unittest.TestCase):
@@ -614,7 +614,7 @@ sys.exit(rc)
         # whole-tree declarations, so its execution inventory includes those kinds
         # without reintroducing them as legacy implementations in the registry.
         before = {"file-size", "commit-identity", "citations",
-                  "documents", "pipeline-evidence", "self-suite", "workflows"}
+                  "documents", "pipeline-evidence", "self-suite", "workflows", "elapsed-time"}
         tree_ids = {"scratch", "design-citations", "structural", "pack-sync", "go-build", "format"}
         self.assertEqual(migrated | remaining, before | tree_ids)
         self.assertFalse((IDS - {"file-size"}) & remaining)
@@ -777,6 +777,175 @@ sys.exit(rc)
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         # The failed warm is tried again; the completed one is not repeated.
         self.assertEqual(log.read_text().split(), ["warm", "runner", "warm", "runner", "runner"])
+
+    def test_candidate_go_timing_assertion_is_refused_without_self_suite_and_declared_passes(self):
+        self.stub_tree_commands()
+        (self.repo / "tools/gate/checks/go-build.py").write_text("raise SystemExit(0)\n")
+        shutil.copy(ROOT / "tools/fork-check.py", self.repo / "tools/fork-check.py")
+        base = self.commit()
+
+        go_test = (
+            "package pkg\n\n"
+            "import (\n\t\"testing\"\n\t\"time\"\n)\n\n"
+            "func TestTiming(t *testing.T) {\n"
+            "\tbegan := time.Now()\n"
+            "\twaited := time.Since(began)\n"
+            "\tbound := time.Second\n"
+            "\tif waited > bound {\n"
+            "\t\tt.Fatal(waited)\n"
+            "\t}\n"
+            "}\n"
+        )
+        (self.repo / "pkg").mkdir()
+        (self.repo / "pkg/fairness_test.go").write_text(go_test)
+        self.git("add", "pkg")
+        red_head = self.commit()
+
+        explained = subprocess.run(
+            ["python3", "tools/fork-check.py", "--explain", "--since", base, "--tier", "landing"],
+            cwd=self.repo, env=self.env, capture_output=True, text=True,
+        )
+        self.assertEqual(explained.returncode, 0, explained.stdout + explained.stderr)
+        selection = next(line.removeprefix("fork-check: selection ") for line in explained.stdout.splitlines()
+                         if line.startswith("fork-check: selection "))
+        self.assertNotIn("self-suite", {c["kind"] for c in json.loads(selection)["checks"]})
+
+        red_logs = self.repo / "logs-red"
+        refused = subprocess.run(
+            ["python3", "tools/gate/change-gate.py", "--base", base, "--head", red_head,
+             "--runner", str(self.runner), "--logs", str(red_logs)],
+            cwd=self.repo, env=self.env, capture_output=True, text=True,
+        )
+        self.assertEqual(refused.returncode, 1, refused.stdout + refused.stderr)
+        checks = {c["check_id"]: c for c in json.loads(refused.stdout.splitlines()[0])["payload"]["checks"]}
+        self.assertEqual(checks["elapsed-time"]["result"], "fail", checks)
+        refusal_log = Path(checks["elapsed-time"]["log_ref"]).read_text()
+        self.assertIn("pkg/fairness_test.go:12: if waited > bound {", refusal_log)
+        self.assertIn("a check asserts elapsed time, which the gate's timing rule forbids", refusal_log)
+        self.assertIn("assert a count, an order or an equality over what the product recorded", refusal_log)
+        self.assertIn("declare it in tools/gate-timing-declarations.json with its reason and its repair", refusal_log)
+
+        # Reset to base and land a candidate that also declares the exception.
+        self.git("reset", "--hard", base)
+        (self.repo / "pkg").mkdir()
+        (self.repo / "pkg/fairness_test.go").write_text(go_test)
+        (self.repo / "tools/gate-timing-declarations.json").write_text(json.dumps({
+            "declarations": [{
+                "file": "pkg/fairness_test.go",
+                "snippet": "if waited > bound {",
+                "kind": "backlog",
+                "reason": "fixture elapsed-time assertion under test",
+                "repair": "replace wall-clock bound with an event-order assertion",
+            }]
+        }) + "\n")
+        self.git("add", "pkg", "tools/gate-timing-declarations.json")
+        green_head = self.commit()
+
+        explained_decl = subprocess.run(
+            ["python3", "tools/fork-check.py", "--explain", "--since", base, "--tier", "landing"],
+            cwd=self.repo, env=self.env, capture_output=True, text=True,
+        )
+        self.assertEqual(explained_decl.returncode, 0, explained_decl.stdout + explained_decl.stderr)
+        selection_decl = next(line.removeprefix("fork-check: selection ") for line in explained_decl.stdout.splitlines()
+                              if line.startswith("fork-check: selection "))
+        self.assertNotIn("self-suite", {c["kind"] for c in json.loads(selection_decl)["checks"]})
+
+        green_logs = self.repo / "logs-green"
+        passed = subprocess.run(
+            ["python3", "tools/gate/change-gate.py", "--base", base, "--head", green_head,
+             "--runner", str(self.runner), "--logs", str(green_logs)],
+            cwd=self.repo, env=self.env, capture_output=True, text=True,
+        )
+        self.assertEqual(passed.returncode, 0, passed.stdout + passed.stderr)
+        green_checks = {c["check_id"]: c for c in json.loads(passed.stdout.splitlines()[0])["payload"]["checks"]}
+        self.assertEqual(green_checks["elapsed-time"]["result"], "pass", green_checks)
+
+    def test_elapsed_time_check_scopes_to_changed_tests_and_validates_declarations(self):
+        # An untouched test file on base does not blame an unrelated candidate; touching
+        # that test file, adding a bad JS/Python test, or misdeclaring an exception fails.
+        (self.repo / "pkg").mkdir()
+        (self.repo / "pkg/legacy_test.go").write_text(
+            "package pkg\nimport (\n\t\"testing\"\n\t\"time\"\n)\n"
+            "func TestLegacy(t *testing.T) {\n"
+            "\tbegan := time.Now()\n"
+            "\tif time.Since(began) > time.Second { t.Fatal() }\n"
+            "}\n"
+        )
+        self.git("add", "pkg")
+        base_with_debt = self.commit()
+
+        # Unrelated non-test and clean deadline-wait test changes pass.
+        (self.repo / "pkg/clean_test.go").write_text(
+            "package pkg\nimport (\n\t\"testing\"\n\t\"time\"\n)\n"
+            "func TestDeadline(t *testing.T) {\n"
+            "\tdeadline := time.Now().Add(time.Second)\n"
+            "\tif time.Now().Before(deadline) {}\n"
+            "}\n"
+        )
+        # Delivered pack copies under yolo-packs/<pack>/files/ are excluded.
+        delivered = self.repo / "yolo-packs/example/files/pkg/copied_test.go"
+        delivered.parent.mkdir(parents=True)
+        delivered.write_text(
+            "package pkg\nimport (\n\t\"testing\"\n\t\"time\"\n)\n"
+            "func TestCopy(t *testing.T) {\n"
+            "\tbegan := time.Now()\n"
+            "\tif time.Since(began) > time.Second { t.Fatal() }\n"
+            "}\n"
+        )
+        self.git("add", "pkg", "yolo-packs")
+        clean_head = self.commit()
+        self.assertEqual(self.check("elapsed-time", base_with_debt, clean_head).returncode, 0)
+
+        # Touching the legacy test file itself brings it into the candidate's scan.
+        (self.repo / "pkg/legacy_test.go").write_text(
+            (self.repo / "pkg/legacy_test.go").read_text() + "// touched\n"
+        )
+        self.git("add", "pkg/legacy_test.go")
+        touched_head = self.commit()
+        touched = self.check("elapsed-time", clean_head, touched_head)
+        self.assertEqual(touched.returncode, 1, touched.stdout + touched.stderr)
+        self.assertIn("pkg/legacy_test.go:8: if time.Since(began) > time.Second { t.Fatal() }", touched.stdout)
+
+        # JS and Python test files are scanned too.
+        py_expr = "time." + "monotonic() - began > 1.0"
+        (self.repo / "tests").mkdir()
+        (self.repo / "tests/test_clock.py").write_text(
+            f"import time\nbegan = time.monotonic()\nassert not ({py_expr})\n"
+        )
+        self.git("add", "tests")
+        py_head = self.commit()
+        py_res = self.check("elapsed-time", touched_head, py_head)
+        self.assertEqual(py_res.returncode, 1, py_res.stdout + py_res.stderr)
+        self.assertIn("tests/test_clock.py:3:", py_res.stdout)
+
+        # Invalid schema and stale silencer declarations in gate-timing-declarations.json fail.
+        (self.repo / "tools/gate-timing-declarations.json").write_text(json.dumps({
+            "declarations": [{
+                "file": "tests/test_clock.py",
+                "snippet": f"assert not ({py_expr})",
+                "kind": "backlog",
+                "reason": "fixture",
+                "repair": "",
+            }]
+        }) + "\n")
+        invalid_head = self.commit()
+        invalid = self.check("elapsed-time", py_head, invalid_head)
+        self.assertEqual(invalid.returncode, 1, invalid.stdout + invalid.stderr)
+        self.assertIn("repair", invalid.stdout)
+
+        (self.repo / "tools/gate-timing-declarations.json").write_text(json.dumps({
+            "declarations": [{
+                "file": "pkg/clean_test.go",
+                "snippet": "if waited > bound {",
+                "kind": "backlog",
+                "reason": "fixture",
+                "repair": "remove stale silencer",
+            }]
+        }) + "\n")
+        stale_head = self.commit()
+        stale = self.check("elapsed-time", py_head, stale_head)
+        self.assertEqual(stale.returncode, 1, stale.stdout + stale.stderr)
+        self.assertIn("no longer matches a hit", stale.stdout)
 
 
 if __name__ == "__main__":

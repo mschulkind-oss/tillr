@@ -6721,7 +6721,11 @@ for gone in ("start_load", "stop_load", "BURNER", "BURNER_MARKER", "cell_load", 
 # pack that delivers a tree is excluded without an edit here. The canonical sources stay
 # in the corpus, and the stale-declaration check below is the positive control that says
 # so -- excluding them would leave every declaration unmatched and fail.
-DELIVERED_PACK_TREES = re.compile(r"^yolo-packs/[^/]+/files/")
+_ELAPSED_SPEC = importlib.util.spec_from_file_location(
+    "elapsed_time_check", ROOT / "tools" / "gate" / "checks" / "elapsed-time.py"
+)
+_elapsed_time_check = importlib.util.module_from_spec(_ELAPSED_SPEC)
+_ELAPSED_SPEC.loader.exec_module(_elapsed_time_check)
 
 
 def timing_corpus():
@@ -6731,11 +6735,7 @@ def timing_corpus():
     for name in tracked:
         if not (ROOT / name).is_file():
             continue
-        if DELIVERED_PACK_TREES.match(name):
-            continue
-        base = Path(name).name
-        if (base.endswith("_test.go") or ".test." in base or base.startswith("test_")
-                or base.endswith("_test.py")):
+        if _elapsed_time_check.is_timing_test_path(name):
             yield name, ROOT / name
 
 
@@ -6766,17 +6766,6 @@ for name, path in timing_corpus():
 assert not load_hits, (
     "a check starts load, which the gate's timing rule forbids: " + "; ".join(load_hits))
 
-GO_DELTA_DIRECT = re.compile(r"time\.Since\([^)]*\)\s*(?:[<>]=?)")
-GO_DELTA_INLINE = re.compile(r"(\w+)\s*:=\s*time\.Since\([^)]*\)\s*;\s*\1\s*(?:[<>]=?)")
-GO_DELTA_ASSIGN = re.compile(r"(\w+)\s*:?=\s*time\.Since\(")
-JS_DELTA_DIRECT = re.compile(r"(?:performance\.now\(\)|Date\.now\(\))\s*-\s*[\w.$]+\s*(?:[<>]=?)")
-JS_DELTA_ASSIGN = re.compile(
-    r"(?:const|let|var)\s+(\w+)\s*=\s*(?:performance\.now\(\)|Date\.now\(\))\s*-\s*[\w.$]+")
-PY_DELTA_DIRECT = re.compile(
-    r"time\.(?:monotonic|time|perf_counter)\(\)\s*-\s*[\w.]+\s*(?:[<>]=?)")
-PY_DELTA_ASSIGN = re.compile(
-    r"(\w+)\s*=\s*time\.(?:monotonic|time|perf_counter)\(\)\s*-\s*[\w.]+")
-
 
 def elapsed_time_hits():
     """Every place a check measures a wall-clock delta and compares it to a bound.
@@ -6787,27 +6776,9 @@ def elapsed_time_hits():
     decides a verdict by the machine.
     """
     for name, path in timing_corpus():
-        if name.endswith(".go"):
-            direct, inline, assign = GO_DELTA_DIRECT, GO_DELTA_INLINE, GO_DELTA_ASSIGN
-        elif name.endswith((".mjs", ".ts", ".js")):
-            direct, inline, assign = JS_DELTA_DIRECT, None, JS_DELTA_ASSIGN
-        elif name.endswith(".py"):
-            direct, inline, assign = PY_DELTA_DIRECT, None, PY_DELTA_ASSIGN
-        else:
-            continue
-        deltas = {}
-        for number, line in enumerate(path.read_text(errors="replace").splitlines(), 1):
-            if direct.search(line) or (inline is not None and inline.search(line)):
-                yield name, number, " ".join(line.split())
-                continue
-            assigned = assign.search(line)
-            if assigned:
-                deltas[assigned.group(1)] = number
-                continue
-            for variable in deltas:
-                if re.search(r"\b" + re.escape(variable) + r"\b\s*(?:[<>]=?)", line):
-                    yield name, number, " ".join(line.split())
-                    break
+        yield from _elapsed_time_check.elapsed_time_hits_in_text(
+            name, path.read_text(errors="replace")
+        )
 
 
 TIMING_DECLARATIONS = ROOT / "tools" / "gate-timing-declarations.json"
@@ -6821,24 +6792,7 @@ def load_timing_declarations(path):
     problem -- unreadable JSON, an unknown key, an empty reason, a kind no kind has -- is
     an error that names the entry, and the case fails.
     """
-    document = json.loads(path.read_text())
-    assert set(document) == {"declarations"}, document
-    entries = document["declarations"]
-    assert isinstance(entries, list), entries
-    seen = set()
-    for index, entry in enumerate(entries):
-        where = f"{path}: declarations[{index}]"
-        assert isinstance(entry, dict), where
-        assert set(entry) == {"file", "snippet", "kind", "reason", "repair"}, (where, sorted(entry))
-        for key in ("file", "snippet", "kind", "reason", "repair"):
-            assert isinstance(entry[key], str) and entry[key].strip(), \
-                f"{where} needs a non-empty '{key}'"
-        assert entry["kind"] in ("liveness", "backlog"), \
-            f"{where} names kind {entry['kind']!r}, which is not liveness or backlog"
-        key = (entry["file"], entry["snippet"])
-        assert key not in seen, f"{where} repeats the declaration for {key}"
-        seen.add(key)
-    return entries
+    return _elapsed_time_check.parse_timing_declarations(path.read_text(), str(path))
 
 
 declarations = load_timing_declarations(TIMING_DECLARATIONS)
@@ -6846,17 +6800,11 @@ declared = {(entry["file"], entry["snippet"]): entry for entry in declarations}
 hits = list(elapsed_time_hits())
 undeclared = [f"{name}:{number}: {snippet}" for name, number, snippet in hits
               if (name, snippet) not in declared]
-assert not undeclared, (
-    "a check asserts elapsed time, which the gate's timing rule forbids; assert a count, an "
-    "order or an equality over what the product recorded, or declare it in "
-    "tools/gate-timing-declarations.json with its reason and its repair: "
-    + "; ".join(undeclared))
+assert not undeclared, _elapsed_time_check.UNDECLARED_PREFIX + "; ".join(undeclared)
 matched = {(name, snippet) for name, _number, snippet in hits}
 stale = [f"{entry['file']}: {entry['snippet']}" for entry in declarations
          if (entry["file"], entry["snippet"]) not in matched]
-assert not stale, (
-    "a timing declaration no longer matches a hit, so it is a silencer rather than a record; "
-    "remove it or fix the snippet: " + "; ".join(stale))
+assert not stale, _elapsed_time_check.STALE_PREFIX + "; ".join(stale)
 backlog = [entry for entry in declarations if entry["kind"] == "backlog"]
 print(f"fork-check timing rule: {len(hits)} elapsed-time assertion(s) declared "
       f"({len(backlog)} backlog, {len(hits) - len(backlog)} liveness), no check starts load")
