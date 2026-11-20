@@ -2,7 +2,7 @@
 title: "Plan first, then spend each model where it is enough"
 status: in-review
 stage: DESIGN
-updated: 2026-11-19
+updated: 2026-11-20
 tags:
   - tillr
   - graphs
@@ -304,6 +304,20 @@ A wrong criterion and a fence that is too narrow take the same route. A worker's
 > [!NOTE]
 > The planner's prompt names only the owner obstacle today. Naming the `definition` and `fence` kinds there too is a prompt edit with no decision in it, and it is not made yet.
 
+**Piece `write_scope` versus an item's full fence (`D-PT8`).** When `plan` splits a filed request
+into `build-pieces@v1` pieces, staging narrows each piece's `fence.txt` to that piece's
+`write_scope` while still appending the request's full saved words — including all item-level
+criteria — to the piece's brief. On 2026-11-20, on the sharded-runner hang repair whose item fence
+already covered `tools/tillr-drain/`, `tools/go-test-shards.py`, and `tests/` ([`D-GR17`](./gate-rework.md#decision-ledger)),
+a piece narrowed to `tools/tillr-drain/` read the runner-lifetime criterion in those saved words
+and raised `OBSTACLE: fence` for `tools/go-test-shards.py` and `tests/go-test-shards.test.py`.
+When a request's criteria share one coupled diagnosis and full-suite verification across a module,
+its test runner, and `tests/` (`tools/tillr-drain/`, `tools/go-test-shards.py`, `tests/`), `plan`
+leaves `work` unsplit (`write_scope: "inherit"`) so one builder holds the whole item fence; and
+whenever pieces narrow an item's fence, a piece raises `OBSTACLE: fence` only when its own assigned
+slice needs paths outside the item's fence, never for sibling criteria whose paths already belong
+to the item's fence and another piece.
+
 ### 5.5 A worker that still works alone
 
 The worker's brief lists every seat the policy in force maps, one line each with its purpose, and marks the read-only ones. A fixed paragraph tells the worker to give mechanical searching, editing and checking to the cheaper sub-agents its own harness offers. Those sub-agents' models are chosen by the harness's configuration, not by tillr's policy, and their spend is inside the run's.
@@ -494,6 +508,7 @@ Three kinds of row, and each says which it is. An **owner ruling** quotes or cit
 | D-PT5 | **Designer's decision; the owner may overturn this.** tillr records each node's seat, model and cost, and comparisons between backends stay in the owner's project. One exception was built on 2026-11-18 by the design seat that cut the planning stage, with no owner ruling recorded for it: `tillr drain why` computes cost medians, in dollars | 2026-11-16, amended 2026-11-18 | [Section 5.6](#56-the-cost-report) | ✅ |
 | D-PT6 | **Withdrawn.** "One re-plan, as the next attempt" is a count. A re-plan is the verify node's return to the planner | 2026-11-16, withdrawn 2026-11-18 | [Section 5.3](#53-the-verify-node) | — |
 | D-PT7 | **Superseded.** A fix does not continue a session under a 150k-token bound; a refused run goes back to its worker's own session with no bound ([how a worker run's ending moves its item](./tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10)) | 2026-11-16, superseded 2026-11-18 | [Section 4](#4-kinds-of-work) | ✅ elsewhere |
+| D-PT8 | **Designer's decision; the owner may overturn this.** When a filed request's criteria share one coupled repair and verification run across a module, its test runner, and `tests/` (such as `tools/tillr-drain/`, `tools/go-test-shards.py`, and `tests/` in [`D-GR17`](./gate-rework.md#decision-ledger)), `plan` in `planned-build@v1` proposes no split so `work` inherits the full item fence (`write_scope: "inherit"`). Where `build-pieces@v1` narrows `write_scope` per piece, a piece satisfies only its own prompt's slice and never raises `OBSTACLE: fence` for sibling criteria whose paths are already inside the item's fence. **Rejected:** splitting coupled runner-and-suite defect work into narrower pieces whose briefs carry all item-wide request criteria against a single piece's `write_scope` | 2026-11-20 | [Section 5.4](#54-when-the-planner-cannot-plan) | Guidance recorded |
 
 ---
 

@@ -2,7 +2,7 @@
 title: "The gate lands a change in ten seconds and remembers nothing it cannot recompute"
 status: accepted
 stage: DECIDED
-updated: 2026-11-19
+updated: 2026-11-20
 tags:
   - tillr
   - gate
@@ -36,7 +36,10 @@ session's designer on recorded principle: [`OQ-GR3`](#OQ-GR3) stands, while the 
 2026-11-18 ([`OQ-GP7`](tillr-graph-is-the-path.md#OQ-GP7); the 20-landing cap stays live until
 that waiting rule is built). On 2026-11-17 the owner ruled on time limits in the gate
 ([`D-GR15`](#decision-ledger)): a budget is a target, nothing is carried at a budget, and only a
-stall ends a check.
+stall ends a check. On 2026-11-19 and 2026-11-20 the owner's orphaned-shard request added
+[`D-GR17`](#decision-ledger): a test that fails or hangs under load is fixed at its cause without
+adding a timeout, retry, or longer wait, and a test run started by a worker must not outlive the
+command that started it.
 
 > **In short.** The gate is slow and brittle for one reason: it decides what to run from a commit
 > it remembers, on a machine that may not be the one that remembered it. Give every run its base
@@ -493,6 +496,26 @@ replaces those separately. `go-build` uses `-trimpath` and the standard shared G
 cache to avoid rebuilding identical packages at every lane path. No product test
 may assert elapsed time; the timing audit’s existing rule remains unchanged.
 
+**Shard lifetime and broken tests under load (`D-GR17`).** On 2026-11-19, with thirty lanes active,
+fifteen `go tool test2json` shard processes from [`tools/go-test-shards.py`](../../tools/go-test-shards.py)
+([sharded runner contract](../pi/tillr-go-shards-2026-11-17.md#runner-contract)) were found
+orphaned under PID 1 for 20 to 55 minutes after the worker commands that started them had returned.
+The owner stated two rules: *"Rule of this repository: a test that fails or hangs under load is a
+broken test; do not add a timeout, a retry or a longer wait as the fix"*, and a test run started by
+a worker cannot outlive the command that started it (unless a documented reason requires it, which
+none does for test shards). Because `run_shard` starts each `test2json` child in its own session
+(`start_new_session=True`), ending or killing `tools/go-test-shards.py` leaves shard process groups
+alive unless the runner binds every shard process group's lifetime to the `go-test-shards.py`
+invocation and keeps the temporary binary directory intact until every shard exits. Under high
+concurrency, tests in `tools/tillr-drain/drain` also hung or failed at synchronization causes
+(polling indefinitely for a fixture marker when the producer had exited or failed to start, or
+relying on a single manual heartbeat tick that `beat` drops when SQLite is busy). Answering the
+2026-11-20 fence conflict on that repair: the build touches `tools/tillr-drain/` (with
+`yolo-packs/tillr/` mirrored via `just pack-sync`, keeping `runTests` in
+`tools/tillr-drain/main_test.go` self-contained or paired with `tests/tillr-testmain_test.go`),
+`tools/go-test-shards.py`, and `tests/` (`tests/go-test-shards.test.py` and
+`tests/tillr-testmain_test.go`).
+
 **The proposed fast tier**, with budgets set from [Section 3.2](#32-every-check):
 
 | Fast check | Scope | Measured (s) | `budget_ms` |
@@ -750,7 +773,9 @@ base by a heavy tree check, which needs no network.
 own decisions, made to carry them out; each is the owner's to overturn by comment. `D-GR13` and
 `D-GR14` are an implementer's decisions of 2026-11-16, made while building the fast tier; the
 owner ruled on both on 2026-11-17, and that ruling is `D-GR15`. `D-GR16` is this design's own
-decision carrying `D-GR15` out, and is the owner's to overturn. The three rows of this
+decision carrying `D-GR15` out, and is the owner's to overturn. `D-GR17` records the owner's
+2026-11-19 ruling on shard lifetime and tests that hang or fail under load, together with the
+2026-11-20 scope ruling for its build. The three rows of this
 document's former open questions ([`OQ-GR1`](#OQ-GR1) to [`OQ-GR3`](#OQ-GR3)) were initially
 settled by the session's designer on recorded principle: [`OQ-GR3`](#OQ-GR3) remains in force,
 while [`OQ-GR1`](#OQ-GR1) and [`OQ-GR2`](#OQ-GR2) were later withdrawn/overturned by the owner
@@ -776,6 +801,7 @@ overturned in `1fa2c069c` and withdrawn in
 | `D-GR14` | Carrying a fast tree check to the heavy tier is suspended until the heavy runner exists: until then an over-budget fast tree check is run to its ceiling and keeps its verdict, as in `D-GR13`. The switch is `tillr-gate`'s `--tree-overrun` (`keep` by default), stated once in `tools/gate/change-gate.py` as `TREE_OVERRUN`; `item-gate-heavy-runner` turns it to `carry`. Decided by the implementer because with no heavy runner a carried check's judgment is dropped, and `go-build` was carried on almost every ten-lane landing; the owner has not ruled on it and may overturn it. **Rejected:** carrying with nothing to take what is carried, and answering "could not judge" at the budget. **Ruled on 2026-11-17** by the owner's ruling `D-GR15`: only a stall ends a check early, so `keep` is the rule rather than a suspension, and carrying, which stops a check at its budget, is not turned on as designed. | 2026-11-16 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Built |
 | `D-GR15` | **The owner's ruling, 2026-11-17:** "target budgets, watch for stalls, but don't let 'load is high' cause failures that would otherwise finish just fine." A budget is a target that is measured and reported; exceeding one is never by itself a failure, a fault or "could not judge". What ends a check early is a stall, a check making no progress, seen by a watchdog, and a stall leads to a named next step, never a silent kill. Machine load must not turn work that would have finished into a failure. **Supersedes** the ceiling as a kill and "could not judge" for a check still making progress (`D-GR13`), and the per-check deadline of `D-GR11`. **Keeps** the budgets, the admission test against the 9,000 millisecond cap, the `over_budget_ms` record, and the ten-second landing as a target with its measured distribution visible. | 2026-11-17 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (`tools/tillr-gate/watchdog.go`; `item-gate-stall-watchdog` and `item-gate-wrapper-clocks-stall` landed) |
 | `D-GR16` | A check shows progress in a one-second sample when its output grew or its process group's CPU time rose; 60 consecutive samples with neither is a stall. The runner ends a stalled check's process group and records `stalled`, which is neither pass, fail nor over-budget, with what it observed. The drain keeps the candidate and re-gates it once, when fewer gates are in flight than at the stall or no other gate is; a second stall on the same candidate holds the item, naming the check. `gate-harness-error` stays for a check that could not start or crashed. Settled by the session's designer on 2026-11-17, on `D-GR15` and [landing principle 11](landing-principles.md#11-a-failure-is-diagnosed-not-waited-out) (a re-run waits on a named change, never on time passing); the owner may overturn it. **Rejected:** a longer fixed timeout, which fails the same way at a higher load; re-gating on the next pass, which names no change. | 2026-11-17 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (`tools/tillr-gate/watchdog.go`) |
+| `D-GR17` | **Owner ruling (2026-11-19) and scope answer (2026-11-20).** *"Rule of this repository: a test that fails or hangs under load is a broken test; do not add a timeout, a retry or a longer wait as the fix"*, and a test run started by a worker must not outlive the command that started it. `tools/go-test-shards.py` must tie every `go tool test2json` and compiled shard process group (`start_new_session=True`) to the invoking runner command's lifetime and keep the compiled binary directory valid until every shard exits; hanging or load-sensitive tests in `tools/tillr-drain` are fixed at their synchronization cause so multiple concurrent suite runs pass. The build scope covers `tools/tillr-drain/` (mirrored to `yolo-packs/tillr/` via `just pack-sync`, keeping `runTests` in `tools/tillr-drain/main_test.go` self-contained or paired with `tests/tillr-testmain_test.go`), `tools/go-test-shards.py`, and `tests/` (`tests/go-test-shards.test.py`, `tests/tillr-testmain_test.go`). **Rejected:** adding timeouts, retries, or longer sleeps to mask load hangs; leaving detached `test2json` sessions alive after `go-test-shards.py` exits or is killed. | 2026-11-19 / 2026-11-20, owner | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Queued |
 | `D-GR12` | A question about a moving upstream is a drift probe that files an item and never moves or holds the green pointer. **Rejected:** keeping it as a check on a commit. Made visible where it happens. | 2026-11-15 | [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) | — (`series` and `patch-branch-inv2` are `TIER_LANDING` in `tools/fork-check.py`; no probe exists) |
 | OQ-GR1 | The default of a per-repository setting, `red_cap`: landing stops at 20 landings or 60 minutes past the last green commit; a repository may set a different bound, and zero means no cap. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "a mechanism whose cost rises with trunk activity is pointed the wrong way" and the owner's 2026-11-15 ruling that the landing strategy is configurable per repository and red is brief. The owner may overturn it. **Rejected:** no cap, which lets the fixer's range and the deploy lag grow without limit. **Ruled out by the owner on 2026-11-18** ([OQ-GP7](tillr-graph-is-the-path.md#OQ-GP7)): under a red check, work lands only if it does not touch what that check reads, and there is no landing cap. The cap is still live in the tree (20 landings; its time bound was turned off on 2026-11-17, `d53580bfd`) until the graph design's waiting rule is built. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/redcap/cap.go`, `drain/red_cap.go`) |
 | OQ-GR2 | The default of a per-repository setting, `lane_base`: a new lane starts from the last green commit; a repository may choose the trunk tip. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are that a worker does not pay for a failure it did not cause, and the same cost-direction rule. The owner may overturn it. **Rejected:** always cutting from the tip. **Overturned by the owner on 2026-11-17** (`1fa2c069c`): work is always built against the latest trunk, never a past commit; a lane cut from the green pointer was handed a tree older than its own item's definition and produced false conflicts. This repository sets `tip`; the code's default when the key is absent is still `green`. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/drain/lane_base.go`; this repository sets `lane_base` to `tip` in `config/tillr/gate-policy.json`) |
