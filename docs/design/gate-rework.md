@@ -281,8 +281,8 @@ it assumes every lane changes Go code and no result is remembered.
 Five words are used from here on, and each is coined in this document.
 
 - A **change check** *(coined here)* judges a diff: "did this change add an entry to the frozen
-  seed", "does an added line cite an unreachable commit", "is every new commit authored by the
-  configured identity", "did this change add an oversized file". It is not a check that happens
+  seed", "does an added line cite an unreachable commit", "are the author and committer of each
+  added commit allowed by this repository", "did this change add an oversized file". It is not a check that happens
   to be selected by a diff.
 - A **tree check** *(coined here)* judges one tree and nothing else: a suite passes, a pack lints,
   a module builds. Its answer does not depend on where the tree came from.
@@ -309,6 +309,38 @@ The rules:
 The five change checks today are `commit-identity`, `seed-freeze`, `citations`, the added-file
 half of `file-size`, and `documents`, which reads the Markdown files a change touched. On a
 lane-sized range the first four measured at or under 0.05 seconds each and `documents` 1.66.
+
+#### Which identities this repository accepts
+
+The owner's 2026-11-20 ruling (`D-GR18` in the [Decision Ledger](#decision-ledger)) is about
+**checking a commit**, not choosing the identity to use when making one. On the operator's
+request, the designer specifies the following build; the owner may overturn these details.
+For each commit in the existing range, check the author and committer separately against one
+tracked list of exactly two `(name, email)` pairs:
+
+- Personal: `Matthew Schulkind <owner@example.invalid>`.
+- Professional: `Matthew Schulkind <owner@work.example.invalid>`.
+
+The name comes from [`gitconfig`](../../gitconfig); the addresses come from the
+[personal](../../tag-personal/gitconfig.local) and [work](../../tag-work/gitconfig.local) configs.
+Either pair passes in either role, regardless of which machine runs the check. Name the offending
+commit if either role has any other pair. Still refuse `user.name` or `user.email` in local or
+worktree config, even when the value matches the list.
+
+The filed request names the [standalone check](../../tests/git-identity.test.py). Changing that
+alone would leave the live gate comparing both roles to the current machine's identity. The
+build fence must also include `tools/gate/checks/`: the [`commit-identity` declaration](../../tools/gate/checks/commit-identity.json)
+runs [this entry point](../../tools/gate/checks/commit-identity.py), which calls `identity_findings`
+in [the change checks](../../tools/gate/checks/change_common.py). Use the same tracked list for both
+checks; keep the gate's caller-supplied `base..head` and the standalone script's existing base
+selection and `base..HEAD`. Exercise both allowed identities, including different allowed pairs
+on one commit, a third identity in either role, and config overrides in the [gate tests](../../tools/gate/checks/change_checks_test.py)
+and standalone tests.
+
+Update [the repository instructions](../../AGENTS.md) to distinguish this filter from authorship:
+when creating a commit, still read the identity from Git config; never type it. Leave the
+pre-commit hook, tillr's lander and its upstream-history checks unchanged. The pair list is a
+policy of this repository, not a tillr setting or default.
 
 ### 6.2 A tree check's result is remembered by fingerprint
 
@@ -802,6 +834,8 @@ overturned in `1fa2c069c` and withdrawn in
 | `D-GR15` | **The owner's ruling, 2026-11-17:** "target budgets, watch for stalls, but don't let 'load is high' cause failures that would otherwise finish just fine." A budget is a target that is measured and reported; exceeding one is never by itself a failure, a fault or "could not judge". What ends a check early is a stall, a check making no progress, seen by a watchdog, and a stall leads to a named next step, never a silent kill. Machine load must not turn work that would have finished into a failure. **Supersedes** the ceiling as a kill and "could not judge" for a check still making progress (`D-GR13`), and the per-check deadline of `D-GR11`. **Keeps** the budgets, the admission test against the 9,000 millisecond cap, the `over_budget_ms` record, and the ten-second landing as a target with its measured distribution visible. | 2026-11-17 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (`tools/tillr-gate/watchdog.go`; `item-gate-stall-watchdog` and `item-gate-wrapper-clocks-stall` landed) |
 | `D-GR16` | A check shows progress in a one-second sample when its output grew or its process group's CPU time rose; 60 consecutive samples with neither is a stall. The runner ends a stalled check's process group and records `stalled`, which is neither pass, fail nor over-budget, with what it observed. The drain keeps the candidate and re-gates it once, when fewer gates are in flight than at the stall or no other gate is; a second stall on the same candidate holds the item, naming the check. `gate-harness-error` stays for a check that could not start or crashed. Settled by the session's designer on 2026-11-17, on `D-GR15` and [landing principle 11](landing-principles.md#11-a-failure-is-diagnosed-not-waited-out) (a re-run waits on a named change, never on time passing); the owner may overturn it. **Rejected:** a longer fixed timeout, which fails the same way at a higher load; re-gating on the next pass, which names no change. | 2026-11-17 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (`tools/tillr-gate/watchdog.go`) |
 | `D-GR17` | **Owner ruling (2026-11-19) and scope answer (2026-11-20).** *"Rule of this repository: a test that fails or hangs under load is a broken test; do not add a timeout, a retry or a longer wait as the fix"*, and a test run started by a worker must not outlive the command that started it. `tools/go-test-shards.py` must tie every `go tool test2json` and compiled shard process group (`start_new_session=True`) to the invoking runner command's lifetime and keep the compiled binary directory valid until every shard exits; hanging or load-sensitive tests in `tools/tillr-drain` are fixed at their synchronization cause so multiple concurrent suite runs pass. The build scope covers `tools/tillr-drain/` (mirrored to `yolo-packs/tillr/` via `just pack-sync`, keeping `runTests` in `tools/tillr-drain/main_test.go` self-contained or paired with `tests/tillr-testmain_test.go`), `tools/go-test-shards.py`, and `tests/` (`tests/go-test-shards.test.py`, `tests/tillr-testmain_test.go`). **Rejected:** adding timeouts, retries, or longer sleeps to mask load hangs; leaving detached `test2json` sessions alive after `go-test-shards.py` exits or is killed. | 2026-11-19 / 2026-11-20, owner | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Queued |
+| `D-GR18` | **Owner ruling, 2026-11-20:** "for this repository, I want a personal filter that says the commits may only be one of the two identities, my personal or professional identity. But that is for this repository, not for Tiller." | 2026-11-20 | [Which identities this repository accepts](#which-identities-this-repository-accepts) | Not yet built |
+| `D-GR19` | **Designer's decision on the operator request; the owner may overturn it.** Apply one tracked list of exact pairs to author and committer in both the standalone check and the live `commit-identity` gate. Preserve their ranges and refusal of repository identity overrides; do not change commit creation or tillr. | 2026-11-20 | [Which identities this repository accepts](#which-identities-this-repository-accepts) | Not yet built |
 | `D-GR12` | A question about a moving upstream is a drift probe that files an item and never moves or holds the green pointer. **Rejected:** keeping it as a check on a commit. Made visible where it happens. | 2026-11-15 | [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) | — (`series` and `patch-branch-inv2` are `TIER_LANDING` in `tools/fork-check.py`; no probe exists) |
 | OQ-GR1 | The default of a per-repository setting, `red_cap`: landing stops at 20 landings or 60 minutes past the last green commit; a repository may set a different bound, and zero means no cap. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "a mechanism whose cost rises with trunk activity is pointed the wrong way" and the owner's 2026-11-15 ruling that the landing strategy is configurable per repository and red is brief. The owner may overturn it. **Rejected:** no cap, which lets the fixer's range and the deploy lag grow without limit. **Ruled out by the owner on 2026-11-18** ([OQ-GP7](tillr-graph-is-the-path.md#OQ-GP7)): under a red check, work lands only if it does not touch what that check reads, and there is no landing cap. The cap is still live in the tree (20 landings; its time bound was turned off on 2026-11-17, `d53580bfd`) until the graph design's waiting rule is built. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/redcap/cap.go`, `drain/red_cap.go`) |
 | OQ-GR2 | The default of a per-repository setting, `lane_base`: a new lane starts from the last green commit; a repository may choose the trunk tip. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are that a worker does not pay for a failure it did not cause, and the same cost-direction rule. The owner may overturn it. **Rejected:** always cutting from the tip. **Overturned by the owner on 2026-11-17** (`1fa2c069c`): work is always built against the latest trunk, never a past commit; a lane cut from the green pointer was handed a tree older than its own item's definition and produced false conflicts. This repository sets `tip`; the code's default when the key is absent is still `green`. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/drain/lane_base.go`; this repository sets `lane_base` to `tip` in `config/tillr/gate-policy.json`) |
