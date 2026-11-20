@@ -145,9 +145,13 @@ AutoQA leaves the [Icebox](#icebox).
    [live drain capacity and allocation changes](../design/tillr-live-drain-config.md) and
    [entry 4](#4-choose-where-each-seat-runs).
 
-7. [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2): whether the copy of tillr that other
-   workspaces run follows every landing or is refreshed only when it is published. Next because
-   it is a cost on every landing but stops nothing.
+7. [Self-hosted tillr building](../design/tillr-selfhosted-build.md)
+   ([`OQ-SH4`](../design/tillr-selfhosted-build.md#OQ-SH4), after the owner ruled
+   [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2) on 2026-11-20 to follow every landing
+   and directed reading from Git like `pi-fork`): how `yolo` builds and delivers tillr from Git so
+   the pack's source copy and `just pack-sync` can be removed, and whether `/workspace` keeps its
+   local `PATH` launcher. Next because the pack copy is a cost on every landing that stops nothing,
+   and none of Git delivery or the source launcher is built.
 
 [Criterion repair](../design/criterion-repair.md) left this list on 2026-11-20 once the owner ruled
 [`OQ-CR7`](../design/criterion-repair.md#OQ-CR7): the design seat replaces a frozen criterion's
