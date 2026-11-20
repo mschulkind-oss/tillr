@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
+	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
@@ -98,6 +99,7 @@ func whyFace(args []string) int {
 	}
 	var answer drain.WhyAnswer
 	var costs bytes.Buffer
+	rewriteNote := ""
 	if err := s.ReadTx(ctx, func(r *store.Reader) error {
 		if tick.AvailableLanes == nil {
 			liveLanes, ok, err := drain.LiveLoopLanes(r, *path, time.Now().UTC())
@@ -118,6 +120,13 @@ func whyFace(args []string) int {
 		if err == nil && !*asJSON && itemID == "" {
 			err = landedCosts(r, &costs)
 		}
+		if err == nil {
+			if absorbed, ok, rerr := heavy.LatestRewrite(r); rerr != nil {
+				err = rerr
+			} else if ok {
+				rewriteNote = absorbed.Line()
+			}
+		}
 		return err
 	}); err != nil {
 		return fail(err)
@@ -136,6 +145,9 @@ func whyFace(args []string) int {
 				if !*asJSON {
 					fmt.Println(formatWhyLanes(answer.Lanes, answer.LanesSource))
 					fmt.Println(answer.Summary.String())
+					if rewriteNote != "" {
+						fmt.Println(rewriteNote)
+					}
 				}
 				return record.ExitOK
 			}
@@ -161,6 +173,9 @@ func whyFace(args []string) int {
 		}
 		if err == nil {
 			_, err = fmt.Fprintln(os.Stdout, answer.Summary.String())
+		}
+		if err == nil && rewriteNote != "" {
+			_, err = fmt.Fprintln(os.Stdout, rewriteNote)
 		}
 		if err == nil {
 			_, err = io.Copy(os.Stdout, &costs)

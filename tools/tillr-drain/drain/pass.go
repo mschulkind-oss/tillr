@@ -624,7 +624,7 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 			return Decision{}, err
 		}
 		if h.Lost != "" {
-			d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, h.reason()
+			d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, rewriteReason(r, h)
 			identifyDecision(&d)
 			return d, nil
 		}

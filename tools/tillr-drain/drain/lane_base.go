@@ -16,16 +16,36 @@ import (
 const ReasonTrunkUnproved = "trunk-unproved"
 
 func containsCommit(ctx context.Context, root, ancestor, tip string) (bool, error) {
-	out, err := gather(ctx, gitKey("ancestry", root, []string{"merge-base", "--is-ancestor", ancestor, tip}), func(ctx context.Context) (string, error) {
-		cmd := exec.CommandContext(ctx, "git", "-C", root, "merge-base", "--is-ancestor", ancestor, tip)
+	ancestry := func(ctx context.Context, a, t string) (bool, error) {
+		cmd := exec.CommandContext(ctx, "git", "-C", root, "merge-base", "--is-ancestor", a, t)
 		raw, err := cmd.CombinedOutput()
 		if err == nil {
-			return "yes", nil
+			return true, nil
 		}
 		if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 1 {
-			return "no", nil
+			return false, nil
 		}
-		return "", Externalf("checking lane base ancestry: %v: %s", err, raw)
+		return false, Externalf("checking lane base ancestry: %v: %s", err, raw)
+	}
+	out, err := gather(ctx, gitKey("ancestry", root, []string{"merge-base", "--is-ancestor", ancestor, tip}), func(ctx context.Context) (string, error) {
+		yes, err := ancestry(ctx, ancestor, tip)
+		if err != nil {
+			return "", err
+		}
+		if !yes {
+			// A commit the trunk's rewrite replaced is contained as the commit that
+			// replaced it (trunk_rewrites); git itself no longer knows the old sha as
+			// ancestry.
+			if a, t := rewriteTranslate(ctx, root, ancestor, tip); a != ancestor || t != tip {
+				if yes, err = ancestry(ctx, a, t); err != nil {
+					return "", err
+				}
+			}
+		}
+		if yes {
+			return "yes", nil
+		}
+		return "no", nil
 	})
 	return out == "yes", err
 }

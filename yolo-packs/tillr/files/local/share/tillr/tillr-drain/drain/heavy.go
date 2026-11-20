@@ -590,7 +590,12 @@ func (r HeavyRunner) hasLandingRecord(ctx context.Context, sha string) (bool, er
 	var found bool
 	err = s.ReadTx(ctx, func(reader *store.Reader) error {
 		var one int
-		err := reader.QueryRow(`SELECT 1 FROM landings WHERE trunk_after = ? AND result = 'landed' LIMIT 1`, sha).Scan(&one)
+		shas, err := landingShas(reader, sha)
+		if err != nil {
+			return err
+		}
+		in, args := heavy.InList(shas)
+		err = reader.QueryRow(`SELECT 1 FROM landings WHERE trunk_after IN `+in+` AND result = 'landed' LIMIT 1`, args...).Scan(&one)
 		if errors.Is(err, sql.ErrNoRows) || err != nil && strings.Contains(err.Error(), "no such table") {
 			return nil
 		}

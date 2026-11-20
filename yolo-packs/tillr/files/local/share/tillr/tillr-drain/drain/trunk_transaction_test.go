@@ -46,7 +46,9 @@ func TestTrunkObservationWriteCallbackContainsOnlyStoreWork(t *testing.T) {
 						t.Errorf("unexpected call inside writer: %s", f.Name)
 					}
 				case *ast.SelectorExpr:
-					if f.Sel.Name != "Reader" && f.Sel.Name != "Exec" {
+					// record is rewriteAbsorption.record: Exec and Append on the transaction,
+					// no Git. Now reads the loop's clock.
+					if f.Sel.Name != "Reader" && f.Sel.Name != "Exec" && f.Sel.Name != "record" && f.Sel.Name != "Now" {
 						t.Errorf("unexpected method inside writer: %s", f.Sel.Name)
 					}
 				default:

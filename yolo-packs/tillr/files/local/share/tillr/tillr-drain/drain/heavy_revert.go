@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -244,7 +245,12 @@ func (l *Loop) landingRecord(ctx context.Context, sha string) (landingOf, bool, 
 	var of landingOf
 	found := false
 	err := l.readStore(ctx, func(r *store.Reader) error {
-		err := r.QueryRow(`SELECT item_id, run_id FROM landings WHERE trunk_after = ? AND result = 'landed' ORDER BY event_seq DESC LIMIT 1`, sha).Scan(&of.itemID, &of.runID)
+		shas, err := landingShas(r, sha)
+		if err != nil {
+			return err
+		}
+		in, args := heavy.InList(shas)
+		err = r.QueryRow(`SELECT item_id, run_id FROM landings WHERE trunk_after IN `+in+` AND result = 'landed' ORDER BY event_seq DESC LIMIT 1`, args...).Scan(&of.itemID, &of.runID)
 		if errors.Is(err, sql.ErrNoRows) || err != nil && strings.Contains(err.Error(), "no such table") {
 			return nil
 		}
