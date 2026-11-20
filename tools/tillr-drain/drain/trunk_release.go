@@ -102,6 +102,9 @@ func (l *Loop) repairedTrunkWaiter(ctx context.Context, r *store.Reader, id stri
 // cannot be overwritten by an earlier read. SetState clears the waiter and keeps
 // the release in the item's event history; the old candidate is never retained.
 func (l *Loop) releaseTrunkAcquittals(ctx context.Context) error {
+	if err := l.releaseTrunkObstacleHolds(ctx); err != nil {
+		return err
+	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return err

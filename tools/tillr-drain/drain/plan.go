@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-drain/ownercriteria"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
@@ -516,6 +517,10 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 	if err != nil {
 		return nil, readFailure(err)
 	}
+	obstacleHolds, releasedObstacles, err := ReadObstacleHolds(r)
+	if err != nil {
+		return nil, readFailure(err)
+	}
 	// released names the lanes a returned worker or a design continuation reserved but did
 	// not take in an earlier round of this plan. A reservation keeps a checkout for the one
 	// item that can continue in it; when that item cannot start this pass (it is held, blocked,
@@ -538,7 +543,8 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			quotaShut: quotaShut,
 			forks:     append([]plannedFork(nil), forks...),
 			tick:      tick, policy: policy, held: lanes, deskOwners: owners, itemStates: states, history: history,
-			priors: attemptPriors, retries: retries, classes: classes, latest: latest, questions: questions,
+			priors: attemptPriors, retries: retries, classes: classes, latest: latest,
+			obstacleHolds: obstacleHolds, releasedObstacles: releasedObstacles, questions: questions,
 			trunkWaiters: trunkWaiters, defectWaiters: defectWaiters, escalated: escalated,
 			at: at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items, def), unproved: unproved,
 			designHistory: designHistory, inputs: inputs, inputDecisions: inputDecisions, works: works, attempts: attempts, nodeCounts: nodeCounts, requests: requests,
@@ -684,6 +690,9 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 		} else if ownerOwed {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: ReasonOwnerOnlyOwed, From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			identifyDecision(&decision)
+		} else if obsHold, held := p.obstacleHolds[item.ItemID]; held && !p.finished(item.State) && holdEnabled(def, obsHold.ReasonCode()) && !(item.State == def.Ready && retries[item.ItemID].SupersedesRunID == obsHold.RunID && p.latest[item.ItemID] == obsHold.RunID) {
+			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: obsHold.ReasonCode(), From: "held", Attempt: p.nextAttempt(item.ItemID)}
+			identifyDecision(&decision)
 		} else if rewriteOwnerHolds[item.ItemID] != "" && !p.finished(item.State) {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: rewriteOwnerHolds[item.ItemID], From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			identifyDecision(&decision)
@@ -744,7 +753,8 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			}
 			hold := ""
 			_, hasRetry := retries[item.ItemID]
-			if w != nil && hasNodes && !p.finished(item.State) && !hasRetry {
+			obstacleReleased := p.latest[item.ItemID] != "" && p.releasedObstacles[item.ItemID] == p.latest[item.ItemID]
+			if w != nil && hasNodes && !p.finished(item.State) && !hasRetry && !obstacleReleased {
 				hold, err = commandNodeHold(r, item.ItemID)
 				if err != nil {
 					return nil, nil, readFailure(err)
@@ -872,9 +882,11 @@ type planner struct {
 	// every prior run's attempt class, keyed by run id; latest is each item's latest
 	// terminal run id. Together they let decide answer "is this authorization's run one
 	// the harness refused?" from the record rather than from the claim alone.
-	retries map[string]retryRow
-	classes map[string]AttemptClass
-	latest  map[string]string
+	retries           map[string]retryRow
+	classes           map[string]AttemptClass
+	latest            map[string]string
+	obstacleHolds     map[string]obstacles.Hold
+	releasedObstacles map[string]string
 	// questions answers what each item's design document still asks. It is the planner's
 	// only read outside the store, and it is nil-safe: a nil source answers "unknown".
 	questions  QuestionSource
@@ -1451,6 +1463,9 @@ func (p *planner) isBlocked(item itemRow, blockedBy []string) bool {
 // automatic walk.
 func (p *planner) mayBeARetry(itemID string) bool {
 	if acquittedRefusal(p.history.refusals[p.latest[itemID]]) {
+		return false
+	}
+	if p.latest[itemID] != "" && p.releasedObstacles[itemID] == p.latest[itemID] {
 		return false
 	}
 	return len(p.priors[itemID]) > 0 || !p.history.known[itemID] || p.history.ranBefore[itemID]

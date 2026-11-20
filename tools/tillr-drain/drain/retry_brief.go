@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
@@ -255,6 +256,35 @@ func itemGuidanceBrief(ctx context.Context, storePath, itemID, worktree string) 
 			return readFailure(err)
 		}
 		cRows.Close()
+
+		hRows, err := r.Query(
+			`SELECT payload FROM events WHERE kind = ? AND object_id = ? ORDER BY seq ASC`,
+			obstacles.HeldKind, itemID,
+		)
+		if err != nil {
+			return readFailure(err)
+		}
+		for hRows.Next() {
+			var (
+				payload []byte
+				h       obstacles.Hold
+			)
+			if err := hRows.Scan(&payload); err != nil {
+				hRows.Close()
+				return readFailure(err)
+			}
+			if json.Unmarshal(payload, &h) != nil {
+				continue
+			}
+			if h.Kind == ObstacleOwner && h.Fields["QUESTION"] != "" {
+				recordQuestion(h.RunID, h.Fields["QUESTION"])
+			}
+		}
+		if err := hRows.Err(); err != nil {
+			hRows.Close()
+			return readFailure(err)
+		}
+		hRows.Close()
 
 		rRows, err := r.Query(
 			`SELECT retry_id, supersedes_run_id, requested_by, reason, requested_at

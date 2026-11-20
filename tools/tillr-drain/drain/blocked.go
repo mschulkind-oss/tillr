@@ -326,14 +326,18 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 			c.WaitingOn, c.Status = "build", "answered"
 			c.Text += "\n\n" + GeneratedRepairRule
 		}
-	} else if isRequest && l.cfg.Policy != nil && len(l.cfg.Policy.seatList("design")) > 0 {
-		// A filed request has no item block, so the design seat answers in docs/ and never
-		// adds one (requestObstacleDesignInstruction). When policy maps no design seat,
-		// fall through to the owner hold rather than faulting the loop on no-policy.
-		if instruction := requestObstacleDesignInstruction(obstacle); obstacle.Problem == "" && instruction != "" {
+	} else if isRequest && obstacle.Problem == "" && obstacle.Kind == ObstacleDefinition && l.cfg.Policy != nil && len(l.cfg.Policy.seatList("design")) > 0 {
+		// A filed request has no item block, so a design-overturning definition obstacle
+		// goes to the design seat to answer in docs/ without adding one
+		// (requestObstacleDesignInstruction). When policy maps no design seat, fall through
+		// to the recorded obstacle hold rather than faulting the loop on no-policy.
+		if instruction := requestObstacleDesignInstruction(obstacle); instruction != "" {
 			c.Text += "\n\n" + instruction
 		}
 	} else if c.BodyRef == "" {
+		if isRequest && obstacle.Kind != "" && obstacle.Problem == "" {
+			return l.recordObstacleHold(ctx, d, obstacle)
+		}
 		c.WaitingOn, c.Status = "owner", "owner"
 		if isRequest {
 			c.Text += "\n\nDeliver the answer in the next run's brief with: " + retryCommand(d.ItemID, d.RunRequest.RunID, "")

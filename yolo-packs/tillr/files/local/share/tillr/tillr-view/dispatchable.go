@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 
+	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -63,6 +64,10 @@ type dispatchHistory struct {
 	refusals map[string]string
 	// gateFailed is every run the gate answered `fail` for.
 	gateFailed map[string]bool
+	// obstacleHolds is each item's active obstacle hold, and releasedObstacles each item's
+	// latest released obstacle-hold run id.
+	obstacleHolds     map[string]obstacles.Hold
+	releasedObstacles map[string]string
 }
 
 // returnedSteps are the refusal steps whose ending the planner sends back to the item's
@@ -123,6 +128,12 @@ func readDispatchHistory(r *store.Reader, runs []storeRun) (*dispatchHistory, er
 	if err := readRefusals(r, h); err != nil {
 		return nil, err
 	}
+	obsHolds, relObs, err := obstacles.Read(r)
+	if err != nil && !isMissingTable(err) {
+		return nil, err
+	}
+	h.obstacleHolds = obsHolds
+	h.releasedObstacles = relObs
 	return h, nil
 }
 
@@ -298,10 +309,19 @@ func (h *dispatchHistory) dispatchable(item storeItem, stateOf map[string]string
 	if unmetBlocker(stateOf, waiting, item.ItemID) {
 		return false
 	}
+	if obsHold, held := h.obstacleHolds[item.ItemID]; held {
+		authorization, ok := h.retries[item.ItemID]
+		if !ok || h.latest[item.ItemID] != obsHold.RunID || authorization.supersedes != obsHold.RunID {
+			return false
+		}
+	}
 	// An authorization that names a run that is no longer the item's latest no longer
 	// speaks, and the item is routed as if it had none.
 	if authorization, ok := h.retries[item.ItemID]; ok && h.latest[item.ItemID] == authorization.supersedes {
 		return !h.retryRefused(item.ItemID, authorization)
+	}
+	if latest := h.latest[item.ItemID]; latest != "" && h.releasedObstacles[item.ItemID] == latest {
+		return true
 	}
 	if latest := h.latest[item.ItemID]; latest != "" && (returnedSteps[h.refusals[latest]] || h.refusals[latest] == "" && h.gateFailed[latest]) {
 		return true

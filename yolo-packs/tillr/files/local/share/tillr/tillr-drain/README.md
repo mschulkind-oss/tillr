@@ -1444,8 +1444,19 @@ below, and an identical repeat goes to the design seat. The code is
 [`drain/obstacle.go`](./drain/obstacle.go) and
 [`drain/obstacle_route.go`](./drain/obstacle_route.go), with tests in
 [`drain/obstacle_test.go`](./drain/obstacle_test.go) and
-[`drain/obstacle_route_test.go`](./drain/obstacle_route_test.go). Workflow nodes still
-send any blocked report to the design seat.
+[`drain/obstacle_route_test.go`](./drain/obstacle_route_test.go). Workflow nodes with a
+document block still send a blocked report to the design seat.
+
+When a filed request (`tillr item request`) ends `RESULT: blocked` with an `OBSTACLE`
+line (other than a `definition` obstacle routed to a mapped `design` seat), the loop
+records `drain.obstacle-hold`
+([`drain/obstacle_hold.go`](./drain/obstacle_hold.go),
+[`obstacles/read.go`](./obstacles/read.go)) instead of a missing-document conflict:
+only `owner` blocks on `owner` with the `QUESTION` text; `fence` holds for `operator`
+naming `PATHS`; `trunk` holds on `CHECKS` and returns automatically when a green proof
+covers those checks; and `tooling`, `seat` (and `definition` when no `design` seat is
+mapped) hold for `operator` with the evidence line. Both `tillr drain why` and
+`tillr view waiting` display that reason and mover.
 
 ### A refused run goes back to its worker
 
