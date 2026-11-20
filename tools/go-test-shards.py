@@ -102,9 +102,14 @@ def default_shard_limit():
 
 
 @contextlib.contextmanager
-def acquire_shard_slot(lock_dir, limit):
-    """Acquire one slot from a counted flock pool under lock_dir; wait without timeout."""
+def acquire_shard_slot(lock_dir, limit, notify=None):
+    """Acquire one slot from a counted flock pool under lock_dir; wait without timeout.
+
+    When every slot is held, call notify(message) once, naming what is waited on. The wait
+    is outside every deadline the runner applies, so it cannot fail the work.
+    """
     limit = max(1, limit)
+    announced = False
     lock_dir.mkdir(parents=True, exist_ok=True)
     fd = None
     offset = os.getpid() + threading.get_ident()
@@ -123,6 +128,10 @@ def acquire_shard_slot(lock_dir, limit):
                 os.close(candidate)
                 raise
         if fd is None:
+            if not announced and notify is not None:
+                announced = True
+                notify(f'waiting for a test slot: all {limit} machine-wide slots in {lock_dir} '
+                       'are held by other test runners (not a failure; no timeout applies while waiting)')
             time.sleep(0.05)
     try:
         yield
@@ -148,7 +157,9 @@ def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=N
     try:
         # Files rather than pipes let us recover even if an escaped descendant keeps
         # its inherited output descriptors open after the shard itself is killed.
-        with acquire_shard_slot(effective_lock_dir, effective_limit), \
+        with acquire_shard_slot(effective_lock_dir, effective_limit,
+                                lambda message: print(f'go-test-shards: {label} {message}',
+                                                      file=sys.stderr, flush=True)), \
                 tempfile.NamedTemporaryFile(dir=scratch) as out, tempfile.NamedTemporaryFile(dir=scratch) as err, \
                 open(out.name, 'rb') as reader, open(err.name, 'rb') as error_reader:
             process = subprocess.Popen(command, cwd=cwd, env=env, stdout=out, stderr=err,

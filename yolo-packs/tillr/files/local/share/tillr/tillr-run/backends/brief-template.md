@@ -136,6 +136,14 @@ without Go's test result cache:
 python3 tools/go-test-shards.py tools/tillr-drain -k 6
 ```
 
+The runner takes a slot from one machine-wide pool shared by every lane, so total test
+parallelism stays near the core count however many lanes run suites at once. A runner
+that has to wait prints `waiting for a test slot` and names the lock directory; that wait
+is not a failure and no timeout applies to it. Do not call `go test ./...` on a whole
+suite directly: it bypasses the pool, and several lanes doing so at once drove the load
+average past 60 and made `go test` hit its ten-minute timeout. Never retry or raise a
+timeout to get past a wait.
+
 Replace the module path for another tillr suite. Set `TMPDIR` to this run's scratch
 or pass `--scratch` there. During a focused edit, prefer a targeted test first:
 
