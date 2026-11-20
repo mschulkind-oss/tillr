@@ -136,13 +136,15 @@ without Go's test result cache:
 python3 tools/go-test-shards.py tools/tillr-drain -k 6
 ```
 
-The runner takes a slot from one machine-wide pool shared by every lane, so total test
-parallelism stays near the core count however many lanes run suites at once. A runner
-that has to wait prints `waiting for a test slot` and names the lock directory; that wait
-is not a failure and no timeout applies to it. Do not call `go test ./...` on a whole
-suite directly: it bypasses the pool, and several lanes doing so at once drove the load
-average past 60 and made `go test` hit its ten-minute timeout. Never retry or raise a
-timeout to get past a wait.
+The runner takes a slot from one machine-wide pool shared by every lane, with a reserved
+share and wait priority kept for the trunk proof and the landing gate (`--slot-class
+proof`, which lane workers must never pass), so total test parallelism stays near the core
+count however many lanes run suites at once. A runner that has to wait prints `waiting for
+a test slot` with the lock directory and the runs holding slots; that wait is not a
+failure and no timeout applies to it. Do not call `go test ./...` on a whole suite
+directly: it bypasses the pool, and several lanes doing so at once drove the load average
+past 60 and made `go test` hit its ten-minute timeout. Never retry or raise a timeout to
+get past a wait.
 
 Never end processes by name or pattern: no `pkill`, no `killall`, no `kill` fed from
 `pgrep`. Every lane, the landing gate and the trunk's after-merge proof run this same
@@ -152,13 +154,15 @@ with SIGTERM, and the trunk went unproved for eight hours. End only a process yo
 started, by the process ID you recorded when you started it.
 
 Replace the module path for another tillr suite. Set `TMPDIR` to this run's scratch
-or pass `--scratch` there. During a focused edit, prefer a targeted test first:
+or pass `--scratch` there. On each iteration, run the narrowest test selection (the
+specific package and targeted `-run` pattern) that covers your change rather than a whole
+module suite:
 
 ```bash
-cd tools/tillr-drain && go test ./... -run '^TestName$'
+cd tools/tillr-drain && go test ./drain -run '^TestName$'
 ```
 
-Run the full applicable suite before committing; never run `just done` in a lane.
+Run the full applicable suite once before committing; never run `just done` in a lane.
 If this repository has no runner, use its documented test command instead.
 
 ## Verification commands

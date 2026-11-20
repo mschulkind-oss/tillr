@@ -346,22 +346,25 @@ separately controls Go's own test deadline.
 python3 tools/go-test-shards.py tools/tillr-drain -k 6 --scratch "$TMPDIR"
 ```
 
-Every shard takes a slot from one machine-wide pool shared by all lanes, so total test
-parallelism stays near the core count. A runner that must wait prints `waiting for a test
-slot` and names the lock directory; the wait is not a failure and no timeout applies to
-it, so do not retry or raise a timeout. Never run `go test ./...` on a whole suite
-directly: it bypasses the pool, and several lanes doing so at once overloaded the machine
-and hit Go's ten-minute timeout.
+Every shard takes a slot from one machine-wide pool shared by all lanes, with a reserved
+share and wait priority kept for the trunk proof and the landing gate (`--slot-class
+proof`, which lane workers must never pass), so total test parallelism stays near the core
+count. A runner that must wait prints `waiting for a test slot` with the lock directory
+and the runs holding slots; the wait is not a failure and no timeout applies to it, so do
+not retry or raise a timeout. Never run `go test ./...` on a whole suite directly: it
+bypasses the pool, and several lanes doing so at once overloaded the machine and hit Go's
+ten-minute timeout.
 
 Replace the module path for another tillr module and point `--scratch` at the run's
-scratch directory. For a focused edit, prefer a targeted test before the full suite:
+scratch directory. On each iteration, run the narrowest test selection (the specific
+package and targeted `-run` pattern) that covers your change rather than a whole module
+suite:
 
 ```bash
-cd tools/tillr-drain && go test ./... -run '^TestName$'
-# a full run: add -timeout 60m, because Go's default 10m can kill the drain package under load
+cd tools/tillr-drain && go test ./drain -run '^TestName$'
 ```
 
-Before committing, run the full suite for the modules the change reaches. Workers
+Before committing, run the full suite once for the modules the change reaches. Workers
 never run `just done`: the landing gate owns that check. In another repository,
 use that repository's documented test command, not this repository-specific runner.
 
