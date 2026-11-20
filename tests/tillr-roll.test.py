@@ -112,6 +112,9 @@ class RollTest(unittest.TestCase):
                 self.assertEqual(old.read_text(), 'old installation')
                 if args[:2] == ('go', 'test'):
                     calls.append('test')
+                    # Go's default deadline of ten minutes fails a working suite on a
+                    # loaded machine, so the roll must disable it.
+                    self.assertEqual(args[2:4], ('-timeout', '0'))
                 elif args[:2] == ('go', 'build'):
                     calls.append('build')
                     args[args.index('-o') + 1].write_text('new installation')
