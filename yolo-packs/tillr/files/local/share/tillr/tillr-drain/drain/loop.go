@@ -258,6 +258,9 @@ type GateOutcome struct {
 	InheritedFailures []InheritedFailure
 	// DurationMS is the gate program's wall time in milliseconds.
 	DurationMS int64
+	// ErrorDetail is set on a GateErrored answer that no later pass can change: the gate
+	// refused its own arguments (gate_usage_error.go). It is the hold's reason.
+	ErrorDetail string
 	// FailingChecks is the check ids the gate recorded as failed. It is the set the
 	// trunk-already-red replay re-runs on the base; a gate failure that names none cannot
 	// be replayed and takes the ordinary refusal.
@@ -2639,6 +2642,12 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	case GateErrored:
 		// The gate ran and reached no verdict: nothing was judged, so the same candidate is
 		// gated again on the next pass (gate_no_verdict.go), never held for an operator.
+		// A deterministic answer is the exception: a gate that refused its own arguments
+		// answers the same words on every pass, so the item is held for the operator with
+		// the gate's error as the reason, and its lane is released like any held one.
+		if gate.ErrorDetail != "" {
+			return "", false, l.gateFault(ctx, candidate, gate.ErrorDetail)
+		}
 		return "", false, l.holdGateNoVerdict(ctx, candidate)
 	default:
 		// An outcome the drain does not know is a contract defect between the drain and its

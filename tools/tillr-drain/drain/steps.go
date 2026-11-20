@@ -332,6 +332,9 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 		outcome.CandidateChangedPaths = outcome.SuspectPaths
 		outcome.CheckReads = s.gateCheckReads(candidate, outcome.CheckWatches)
 	}
+	if outcome.Outcome == GateErrored && gateUsageError(span.StderrTail) {
+		outcome.ErrorDetail = gateErrorDetail(span.StderrTail, candidateChangedPaths(ctx, candidate))
+	}
 	var firstStall *gateStallHold
 	if outcome.Outcome == GateStalled {
 		firstStall, err = s.firstStallHold(ctx, candidate, outcome.StalledChecks)
