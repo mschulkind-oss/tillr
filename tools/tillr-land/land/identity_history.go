@@ -64,9 +64,35 @@ func identityAccepted(r rowQueryer, sha string) (bool, error) {
 	return err == nil, err
 }
 
+// PublishedRefPrefix holds one pointer per remote branch, naming a commit this clone
+// confirmed on that remote (docs/design/tillr-refused-push.md, Section 4.3). A commit
+// reachable from one was already published by someone with push access.
+const PublishedRefPrefix = "refs/tillr/published/"
+
+// publishedTips lists the commits the published pointers name.
+func (t *Trunk) publishedTips() ([]string, error) {
+	raw, err := t.git("for-each-ref", "--format=%(objectname)", PublishedRefPrefix)
+	if err != nil {
+		return nil, err
+	}
+	return strings.Fields(raw), nil
+}
+
+// onPublished reports whether sha is reachable from any published pointer.
+func (t *Trunk) onPublished(tips []string, sha string) (bool, error) {
+	for _, tip := range tips {
+		on, err := t.historyAncestor(sha, tip)
+		if err != nil || on {
+			return on, err
+		}
+	}
+	return false, nil
+}
+
 // CheckIdentities includes all parents in old..tip and rechecks durable unanswered
 // commits. On first observation only the current tip is checked; earlier history
 // predates monitoring. A rewrite checks the replacement range, never the lost side.
+// A commit reachable from a published pointer is trusted: it arrived from the remote.
 func (t *Trunk) CheckIdentities(r rowQueryer, h IdentityHistory, old, tip string) (IdentityHistory, error) {
 	identity, err := t.LandingIdentity()
 	if err != nil {
@@ -93,6 +119,10 @@ func (t *Trunk) CheckIdentities(r rowQueryer, h IdentityHistory, old, tip string
 			ids = append(ids, c.SHA)
 		}
 	}
+	published, err := t.publishedTips()
+	if err != nil {
+		return h, err
+	}
 	next := IdentityHistory{Tip: tip}
 	seen := map[string]bool{}
 	for _, sha := range ids {
@@ -105,6 +135,11 @@ func (t *Trunk) CheckIdentities(r rowQueryer, h IdentityHistory, old, tip string
 			return h, err
 		}
 		if accepted {
+			continue
+		}
+		if on, err := t.onPublished(published, sha); err != nil {
+			return h, err
+		} else if on {
 			continue
 		}
 		raw, err := t.git("show", "-s", "--format=%an%x00%ae%x00%cn%x00%ce", sha)
