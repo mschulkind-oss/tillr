@@ -112,9 +112,11 @@ func TestARunStillInFlightOnALaneOutsideTheRotationKeepsItsLane(t *testing.T) {
 	}
 }
 
-// When an off-rotation run's lane cannot be released, the hold says the lane is outside the
-// loop's rotation and names the operator as its mover, not the drain that cannot move it.
-func TestAHoldOnALaneOutsideTheRotationNamesTheOperator(t *testing.T) {
+// Lowering --lanes while work is in flight strands nothing. When a lane above the count holds a
+// run whose lease a live holder keeps, `why` lists the lane as draining with the item it holds,
+// names the drain as the mover (it serves that lane), and no longer tells the operator to relaunch
+// with more lanes.
+func TestAHoldOnALaneAboveTheCountIsDrainingAndNamesTheDrain(t *testing.T) {
 	ctx := context.Background()
 	f, l, req := offRotationFixture(t)
 	endOffRotationRun(t, f, l, req)
@@ -138,15 +140,74 @@ func TestAHoldOnALaneOutsideTheRotationNamesTheOperator(t *testing.T) {
 		t.Fatalf("%d rows, want 1", len(answer.Rows))
 	}
 	row := answer.Rows[0]
-	for _, want := range []string{"operator; ", "lane-2", "--lanes"} {
-		if !strings.Contains(row.Mover, want) {
-			t.Fatalf("mover %q lacks %q", row.Mover, want)
+	if row.Mover != "drain; lane-2" {
+		t.Fatalf("mover %q, want the drain on lane-2", row.Mover)
+	}
+	if strings.Contains(row.Mover, "--lanes") || !strings.Contains(row.Why, "lane-2 is draining") {
+		t.Fatalf("why %q / mover %q: want a draining lane-2, no relaunch advice", row.Why, row.Mover)
+	}
+	if row.Class == "needs you" {
+		t.Fatalf("class %q: a draining lane waits on the drain, not the operator", row.Class)
+	}
+	if len(answer.Draining) != 1 || answer.Draining[0].LaneID != "lane-2" || answer.Draining[0].ItemID != "item-a" || answer.Draining[0].RunID != req.RunID {
+		t.Fatalf("draining = %+v, want lane-2 holding item-a under %s", answer.Draining, req.RunID)
+	}
+}
+
+// A lane above the count that holds a live run is observed, so the loop sees its lease: it is
+// not idle or drained while that run is unfinished, and no new item is planned onto the lane.
+func TestALaneAboveTheCountIsObservedWhileItHoldsWork(t *testing.T) {
+	ctx := context.Background()
+	f, l, _ := offRotationFixture(t)
+	_, leases, err := l.passPlansGeneration(ctx, l.cfg.Now(), new(string))
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, lease := range leases {
+		found = found || lease.LaneID == "lane-2"
+	}
+	if !found {
+		t.Fatalf("leases = %+v, want lane-2's lease observed: its run is live", leases)
+	}
+	if state, _ := offRotationLaneRow(t, f, "lane-2"); state != "leased" {
+		t.Fatalf("lane-2 is %s, want leased", state)
+	}
+}
+
+// After scaling from lane-8 down to five lanes, the held candidate finishes
+// where it is, and no new item is planned onto lane-8.
+func TestACandidateAboveTheCountFinishesAndTheLaneThenGoesUnused(t *testing.T) {
+	ctx := context.Background()
+	f, l, c := heldCandidateFixtureInLane(t, "lane-8")
+	l.cfg.Lanes = []string{"lane-1", "lane-2", "lane-3", "lane-4", "lane-5"}
+	if err := l.stageLanes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	judged := false
+	for i := 0; i < 3; i++ {
+		for _, p := range mustPlan(t, l) {
+			d := p.decision
+			switch {
+			case d.ItemID == "item-a" && i == 0:
+				judged = true
+				if d.Action != ActionJudge || d.LaneID != c.LaneID {
+					t.Fatalf("the candidate planned %s/%s on %s, want judged on %s", d.Action, d.Reason, d.LaneID, c.LaneID)
+				}
+			case d.ItemID != "item-a" && d.Action != ActionHold && d.LaneID == c.LaneID:
+				t.Fatalf("pass %d offered %s a lane above the count: %+v", i, d.ItemID, d)
+			}
 		}
+		var result LoopResult
+		if _, err := l.pass(ctx, &result); err != nil {
+			t.Fatal(err)
+		}
+		drainOwned(t, l, &result)
 	}
-	if !strings.Contains(row.Why, "outside") || !strings.Contains(row.Why, req.RunID) {
-		t.Fatalf("why %q does not say the lane is outside the rotation and name the run", row.Why)
+	if !judged {
+		t.Fatal("held candidate was not planned for judging")
 	}
-	if row.Class != "needs you" {
-		t.Fatalf("class %q, want needs you", row.Class)
+	if state, holder := offRotationLaneRow(t, f, c.LaneID); state != "idle" || holder != "" {
+		t.Fatalf("%s is %s held by %q, want idle: the work finished and the lane goes unused", c.LaneID, state, holder)
 	}
 }

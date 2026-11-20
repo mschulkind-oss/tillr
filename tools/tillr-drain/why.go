@@ -148,6 +148,9 @@ func whyFace(args []string) int {
 				}
 				if !*asJSON {
 					fmt.Println(formatWhyLanes(answer.Lanes, answer.LanesSource))
+					if line := formatWhyDraining(answer.Draining); line != "" {
+						fmt.Println(line)
+					}
 					fmt.Println(answer.Summary.String())
 					if rewriteNote != "" {
 						fmt.Println(rewriteNote)
@@ -177,6 +180,9 @@ func whyFace(args []string) int {
 		}
 		if err == nil {
 			_, err = fmt.Fprintln(os.Stdout, formatWhyLanes(answer.Lanes, answer.LanesSource))
+		}
+		if line := formatWhyDraining(answer.Draining); err == nil && line != "" {
+			_, err = fmt.Fprintln(os.Stdout, line)
 		}
 		if err == nil {
 			_, err = fmt.Fprintln(os.Stdout, answer.Summary.String())
@@ -233,6 +239,19 @@ func whyLanes(arg string, express int64) *[]string {
 	}
 	lanes := strings.Split(arg, ",")
 	return &lanes
+}
+
+// formatWhyDraining is the line that names each lane above the count with the item it still
+// holds, or "" when no lane is draining.
+func formatWhyDraining(draining []drain.DrainingLane) string {
+	if len(draining) == 0 {
+		return ""
+	}
+	parts := make([]string, len(draining))
+	for i, d := range draining {
+		parts[i] = d.LaneID + " (" + d.ItemID + ")"
+	}
+	return "draining: " + strings.Join(parts, ", ") + " (above the lane count: each finishes what it holds and takes nothing new)"
 }
 
 func formatWhyLanes(lanes []string, source string) string {

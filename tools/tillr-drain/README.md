@@ -2590,18 +2590,12 @@ the reason for a kept lane. The summary distinguishes `reserved` idle lanes,
 settlement or judgment. The existing `running` count describes planner positions,
 not a count of worker processes.
 
-### A run that ended on a lane outside the rotation
+### Lowering the lane count with work in flight
 
-A loop relaunched with fewer `--lanes` than a run began on no longer lists that run's lane,
-so no examination is ever claimed there. When the run has a terminal record, its lane is
-still leased to it with no expiry, no run face is alive, and its dispatch owner and examiner
-are absent, dead or this loop, the pass reaps that lease (`drain.lane-released`, cause
-`reap`). The run keeps its record, the next pass settles it where it ended, and the item
-goes on to a lane in rotation, an authorized `tillr drain retry` included. While a live
-holder still owns the lease, `tillr drain why` reports the item as `needs you` with the
-operator as mover (`relaunch the loop with --lanes covering <lane>, or end the lease the
-run holds on it`) and says in its detail that the lane is outside the loop's rotation,
-instead of naming `drain`, which has no way to act on that lane.
+Restarting with fewer `--lanes` stops new dispatches to lanes outside the new rotation.
+Those lanes keep serving work they already hold until it lands or the lane is released.
+`tillr drain why` lists these lanes as draining, with the item each holds. Once released,
+a lane outside the rotation stays unused; any retry dispatches to a lane in rotation.
 
 ## Conflict repair that cannot be staged
 
