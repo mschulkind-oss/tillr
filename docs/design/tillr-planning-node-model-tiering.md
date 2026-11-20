@@ -313,10 +313,16 @@ a piece narrowed to `tools/tillr-drain/` read the runner-lifetime criterion in t
 and raised `OBSTACLE: fence` for `tools/go-test-shards.py` and `tests/go-test-shards.test.py`.
 When a request's criteria share one coupled diagnosis and full-suite verification across a module,
 its test runner, and `tests/` (`tools/tillr-drain/`, `tools/go-test-shards.py`, `tests/`), `plan`
-leaves `work` unsplit (`write_scope: "inherit"`) so one builder holds the whole item fence; and
+leaves `work` unsplit (`write_scope: "inherit"`) so one builder holds the whole item fence;
 whenever pieces narrow an item's fence, a piece raises `OBSTACLE: fence` only when its own assigned
 slice needs paths outside the item's fence, never for sibling criteria whose paths already belong
-to the item's fence and another piece.
+to the item's fence and another piece; and `plan` never appends a trailing verification-only or
+`pack-sync`-only `access: "write"` piece after writing pieces have already made the edits and synced
+`yolo-packs/tillr/` ([`D-JL13`](./tillr-judge-and-lifecycle.md#46-a-held-item-never-occupies-a-lane-d-jl13),
+[`D-JL14`](./tillr-judge-and-lifecycle.md#47-offered-commits-own-candidate-lanes-unlaunched-claims-and-named-hold-movers-d-jl14)),
+because such a piece starts on its own workflow branch with nothing left to commit for
+[`keep-going.ts`](../../tools/tillr-run/backends/pi/keep-going.ts) and falsely raises
+`OBSTACLE: definition`.
 
 ### 5.5 A worker that still works alone
 
@@ -508,7 +514,7 @@ Three kinds of row, and each says which it is. An **owner ruling** quotes or cit
 | D-PT5 | **Designer's decision; the owner may overturn this.** tillr records each node's seat, model and cost, and comparisons between backends stay in the owner's project. One exception was built on 2026-11-18 by the design seat that cut the planning stage, with no owner ruling recorded for it: `tillr drain why` computes cost medians, in dollars | 2026-11-16, amended 2026-11-18 | [Section 5.6](#56-the-cost-report) | ✅ |
 | D-PT6 | **Withdrawn.** "One re-plan, as the next attempt" is a count. A re-plan is the verify node's return to the planner | 2026-11-16, withdrawn 2026-11-18 | [Section 5.3](#53-the-verify-node) | — |
 | D-PT7 | **Superseded.** A fix does not continue a session under a 150k-token bound; a refused run goes back to its worker's own session with no bound ([how a worker run's ending moves its item](./tillr-judge-and-lifecycle.md#44-how-a-worker-runs-ending-moves-its-item-d-jl10)) | 2026-11-16, superseded 2026-11-18 | [Section 4](#4-kinds-of-work) | ✅ elsewhere |
-| D-PT8 | **Designer's decision; the owner may overturn this.** When a filed request's criteria share one coupled repair and verification run across a module, its test runner, and `tests/` (such as `tools/tillr-drain/`, `tools/go-test-shards.py`, and `tests/` in [`D-GR17`](./gate-rework.md#decision-ledger)), `plan` in `planned-build@v1` proposes no split so `work` inherits the full item fence (`write_scope: "inherit"`). Where `build-pieces@v1` narrows `write_scope` per piece, a piece satisfies only its own prompt's slice and never raises `OBSTACLE: fence` for sibling criteria whose paths are already inside the item's fence. **Rejected:** splitting coupled runner-and-suite defect work into narrower pieces whose briefs carry all item-wide request criteria against a single piece's `write_scope` | 2026-11-20 | [Section 5.4](#54-when-the-planner-cannot-plan) | Guidance recorded |
+| D-PT8 | **Designer's decision; the owner may overturn this.** When a filed request's criteria share one coupled repair and verification run across a module, its test runner, and `tests/` (such as `tools/tillr-drain/`, `tools/go-test-shards.py`, and `tests/` in [`D-GR17`](./gate-rework.md#decision-ledger)), `plan` in `planned-build@v1` proposes no split so `work` inherits the full item fence (`write_scope: "inherit"`). Where `build-pieces@v1` narrows `write_scope` per piece, each `access: "write"` piece owns real repository edits (including `just pack-sync` when it touches `tools/tillr*`), satisfies only its own prompt's slice without raising `OBSTACLE: fence` for sibling criteria whose paths are already inside the item's fence, and leaves verification-only steps to `read_only` seats rather than a trailing no-op `write` piece ([`D-JL13`](./tillr-judge-and-lifecycle.md#46-a-held-item-never-occupies-a-lane-d-jl13), [`D-JL14`](./tillr-judge-and-lifecycle.md#47-offered-commits-own-candidate-lanes-unlaunched-claims-and-named-hold-movers-d-jl14)). **Rejected:** splitting coupled runner-and-suite defect work into narrower pieces whose briefs carry all item-wide request criteria against a single piece's `write_scope`; appending a trailing verification-only or `pack-sync`-only `access: "write"` piece | 2026-11-20 | [Section 5.4](#54-when-the-planner-cannot-plan) | Guidance recorded |
 
 ---
 

@@ -494,7 +494,14 @@ What is not enforced yet: the gate's trunk-already-red replay cannot judge a fas
 such as `documents`, so it never acquits a refusal the trunk caused. A design run refused for the
 trunk's sake goes back to the design seat each time until the trunk is fixed; the trunk-suspect
 re-raise (commit `41790b724`) that worked around this from the drain side was removed by the
-owner's ruling of 2026-11-17, and the gap is the gate's to close.
+owner's ruling of 2026-11-17, and the gap is the gate's to close. On the drain side (measured
+2026-11-19 and queued under
+[`D-JL14`](./tillr-judge-and-lifecycle.md#47-offered-commits-own-candidate-lanes-unlaunched-claims-and-named-hold-movers-d-jl14)),
+[`unlaunched_claim.go`](../../tools/tillr-drain/drain/unlaunched_claim.go) undoes only conflict
+moves today while `cancelStaging` marks an unlaunched workflow-node claim examined, leaving the
+item held as bare `run-link-missing`, and ten rules in
+[`holdrules.go`](../../tools/tillr-drain/holdrules/holdrules.go) still carry `"cause not recorded"`
+as their mover.
 
 *Scope:* **not lander-scoped.** The dispatch side holds candidates in repair states and items out of
 dispatch — `tillr-drain` and `tillr-loop` — and the lander keeps no held state of its own, so it
