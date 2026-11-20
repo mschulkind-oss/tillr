@@ -1493,8 +1493,11 @@ missing rather than report that the change failed verification.
   twenty-third run stopped before the build or gate: the missing input means `could not judge`
   (gate exit 4), not a failed build. This is a host publication task, not a request to choose
   another pin. The twenty-fifth, twenty-seventh and twenty-ninth runs received no host fetch
-  results. The twenty-ninth run cited the earlier Git exit 128, not a fresh fetch. The todo-list
-  pin's current availability is therefore unknown; the retry did not release the hold.
+  results. The twenty-ninth run cited the earlier Git exit 128, not a fresh fetch. The
+  thirty-first run asked whether the host operator had verified the three pins. Its retry
+  request included neither host ancestry results nor fresh exact-ID fetch results. Host
+  verification is unconfirmed: the earlier exit 128 does not establish that the todo-list
+  pin is still unavailable, and the hold remains in effect.
 
   The host operator's next action is to run the checks below and attach the results, not to
   choose a pin. Until then, do not dispatch another build or design run. Once the host evidence
@@ -1506,8 +1509,9 @@ missing rather than report that the change failed verification.
   three pass, fetch each exact ID from the locator into its own new empty bare repository.
   If a pin is unavailable, follow [the host publication step](../pi/patch-branches/published.md#5-the-host-step)
   and repeat the fetches in new empty repositories. The publisher sends branch tips, not
-  individual pins. Include the locator, object ID and Git exit status for each row in the
-  retry request. Only three successful fetches release the hold; a
+  individual pins. In the retry request, give the locator and, for each branch, the object ID
+  and Git exit statuses for both the ancestry check and the fetch. Only three successful
+  fetches after the ancestry checks pass release the hold; a
   successful push, an advertised branch tip or another lane retry does not.
 - **Existing test cases (2026-11-18, answers the sixth run's report of blocked):** The fork export
   tests run the scenario files under [their cases directory](../../tests/pi-forks/), so those
