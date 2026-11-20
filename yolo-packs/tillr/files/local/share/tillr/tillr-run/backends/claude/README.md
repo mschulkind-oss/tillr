@@ -10,7 +10,6 @@ sections 1 to 4; the adapter contract every backend shares is
 | :--- | :--- |
 | `run-claude` | The adapter. A `run.request`'s `Command[0]` names it. |
 | `extract-report` | The dialect: the harness's stream of JSON lines in, `report.md` out. |
-| [`landing`](./landing) | The delivery call: a stdio MCP server, the `PreToolUse` and `Stop` hooks, the transcript check and the config writer. Tested by [`landing_test.py`](./landing_test.py). |
 | [`quota`](./quota) | One authenticated usage GET, no model tokens; five-hour and seven-day fractions used and UTC reset times. |
 | [`testdata/complete.jsonl`](./testdata/complete.jsonl) | A complete stream, written by hand to the measured line shapes, ending in a `result` line whose text ends in the `RESULT:` footer. |
 | [`testdata/truncated.jsonl`](./testdata/truncated.jsonl) | The same stream cut off before its footer and its `result` line — the negative control. |
@@ -103,36 +102,6 @@ and the harness holds the spelling, so tillr has no permission vocabulary of its
 Paths are relative to the lane's worktree, a checkout of the repository, so a file a row
 names is versioned with the row. The pi, muse and agy adapters take no harness arguments
 and refuse the `--`, as they refuse any argument they do not know.
-
-## The delivery call
-
-Capability: `call-suspends`, declared in [`ending-capability`](./ending-capability) and
-confirmed by the drain's probe of the installed `claude`; without the probe's answer the
-drain records `footer` and a run ends with the `RESULT:` footer as before. The design is
-[section 7.1 of the landing-call design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-landing-call.md#71-the-mechanism-on-claude-code).
-
-A write node in a lane worktree, staged with that ending, ends with one tool call, as a pi
-worker does with `land`. `run-claude` writes `claude-mcp.json` and `claude-settings.json` into
-the run's scratch directory with `landing prepare` and passes both (`--mcp-config`,
-`--settings`; both the subscription override and any `--settings` in `harness_args` are
-merged into the same generated settings, while `--setting-sources` remains up to
-`harness_args`):
-
-- **The `tillr` MCP server** exposes `land` (`summary`) and `obstacle` (`kind` and that
-  kind's lowercase fields), which the model sees as `mcp__tillr__land` and
-  `mcp__tillr__obstacle`. Its `instructions` say they are the brief's `land` and `obstacle`.
-  Its call handler runs only on replay and returns the staged answer as an error result.
-- **`PreToolUse`** answers `deny` for what the worker can fix at once (no summary, `HEAD`
-  still the base, uncommitted paths, a commit already refused, another call open, an
-  incomplete obstacle), which returns in the same turn; `defer` for a valid call, after
-  writing `landing-offer.json` in the shape pi writes; and `allow` when `landing-answer.json`
-  names the call, so the server delivers the answer.
-- **`Stop`** nudges a plain-text stop once per distinct head, tree and last message.
-- **Delivery.** With `landing-answer.json` staged and `TILLR_SESSION_MODE=resume`, the
-  adapter resumes with empty standard input when the session file's last mebibyte holds the
-  call's unresolved deferral marker (`landing-delivery` says `tool-result`). Otherwise the
-  answer is the first message (`message`), and so it is when the harness refuses the replay
-  with `No deferred tool marker found in the resumed session`.
 
 ## Pausing and continuing
 

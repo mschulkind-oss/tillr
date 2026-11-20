@@ -160,100 +160,6 @@ export BOARD_DRAIN_BRIEF BOARD_DRAIN_RUN BOARD_DRAIN_SESSION
 YOLO_NO_LAUNCH_FLAGS=1
 export YOLO_NO_LAUNCH_FLAGS
 
-# --- the delivery call --------------------------------------------------------------
-#
-# A write node staged with the call-suspends ending ends its run with one MCP tool call,
-# `mcp__tillr__land` or `mcp__tillr__obstacle` (backends/claude/landing, design
-# docs/design/tillr-landing-call.md section 7.1): a PreToolUse hook defers the call, the
-# harness exits with it open, and the gate's answer is delivered as that call's own result
-# by a promptless `--resume`. The same goal test as run-pi's keep-going applies: a worker in
-# a lane worktree with a staged base, and not a read-only node.
-landing_args=
-landing_answer_retry=
-goal_base=
-target_kind=$(sed -n 's/^- \*\*Target:\*\* .* (\(.*\))$/\1/p' "$brief" | head -n 1)
-if [ -z "${TILLR_READ_ONLY_GROUP:-}" ] && [ "$target_kind" = "lane worktree" ] && [ -r "$(lane_path "$brief" base_sha)" ] &&
-    ! grep -Eq '^Run only node .+ on the .+ seat; access: read_only\.$' "$brief"; then
-    goal_base=$(tr -d ' \n' <"$(lane_path "$brief" base_sha)")
-fi
-capability=$(lane_path "$brief" ending-capability)
-if [ -n "$goal_base" ] && [ -r "$capability" ] && [ "$(cat "$capability")" = call-suspends ]; then
-    require_harness python3
-    [ -n "${YOLO_DURABLE_DIR:-}" ] || refuse "a call-suspends run needs YOLO_DURABLE_DIR, its scratch directory"
-    landing=$(cd -- "$SELF_DIR" && pwd -P)/landing
-    landing_dir=$YOLO_DURABLE_DIR
-    TILLR_GOAL_BASE=$goal_base
-    export TILLR_GOAL_BASE
-    unset CLAUDE_CODE_DISABLE_DEFERRED_TOOL_RESUME
-    extra_settings_file=$landing_dir/extra-settings.bin
-    : > "$extra_settings_file"
-    arg_count=$#
-    arg_index=0
-    while [ "$arg_index" -lt "$arg_count" ]; do
-        arg=$1
-        shift
-        arg_index=$((arg_index + 1))
-        case $arg in
-            --settings)
-                [ "$arg_index" -lt "$arg_count" ] || refuse "--settings in harness arguments needs a value"
-                printf '%s\0' "$1" >> "$extra_settings_file"
-                shift
-                arg_index=$((arg_index + 1))
-                ;;
-            --settings=*)
-                printf '%s\0' "${arg#--settings=}" >> "$extra_settings_file"
-                ;;
-            *)
-                set -- "$@" "$arg"
-                ;;
-        esac
-    done
-    prepared=$("$landing" prepare --durable "$landing_dir" --base "$goal_base" \
-        ${subscription_settings:+--settings-json} ${subscription_settings:+"$subscription_settings"} \
-        --extra-settings-file "$extra_settings_file") ||
-        refuse "cannot write the delivery call's MCP and settings files"
-    rm -f -- "$extra_settings_file"
-    # The generated settings carry the subscription override and any harness_args --settings,
-    # so one --settings is passed.
-    subscription_settings=
-    landing_args="--mcp-config $landing_dir/claude-mcp.json --settings $landing_dir/claude-settings.json"
-    if [ -e "$landing_dir/landing-answer.json" ]; then
-        [ -n "$session" ] && [ "${TILLR_SESSION_MODE:-new}" = resume ] || refuse "landing answer requires an existing Claude session"
-        "$landing" answer "$landing_dir/landing-answer.json" "$landing_dir/landing-call-id" "$landing_dir/landing-prompt" ||
-            refuse "landing answer requires a call id and text"
-        transcript=
-        if [ -r "$landing_dir/landing-transcript" ]; then
-            transcript=$(cat "$landing_dir/landing-transcript")
-        fi
-        if [ -n "$transcript" ] && [ ! -e "$transcript" ]; then
-            printf 'Claude landing transcript not found: %s\n' "$transcript" >&2
-            exit 1
-        fi
-        # A deferred call is replayed only while it is inside the harness's own tail-scan
-        # window; otherwise, or when the replay is refused, the answer travels as a message.
-        held=1
-        if [ -n "$transcript" ]; then
-            "$landing" held "$transcript" "$(cat "$landing_dir/landing-call-id")" && held=0 || held=$?
-        fi
-        case $held in
-            0)
-                printf '%s\n' tool-result > "$landing_dir/landing-delivery"
-                prompt=/dev/null
-                landing_answer_retry=1
-                ;;
-            3)
-                printf '%s\n' tool-result > "$landing_dir/landing-delivery"
-                printf '%s\n' "Continue from where the session stopped." > "$landing_dir/landing-continue"
-                prompt=$landing_dir/landing-continue
-                ;;
-            *)
-                printf '%s\n' message > "$landing_dir/landing-delivery"
-                prompt=$landing_dir/landing-prompt
-                ;;
-        esac
-    fi
-fi
-
 # The harness argv is built in front of the harness arguments still sitting in "$@", so
 # they keep their own words and order with no re-quoting. `${session:+...}` adds the pair
 # only when there is a session id to pass.
@@ -266,8 +172,6 @@ set -- claude -p --output-format stream-json --verbose \
     ${session:+"$session_flag"} ${session:+"$session"} \
     ${subscription_settings:+--settings} ${subscription_settings:+"$subscription_settings"} \
     --strict-mcp-config --dangerously-skip-permissions \
-    ${landing_args:+--mcp-config} ${landing_args:+"$landing_dir/claude-mcp.json"} \
-    ${landing_args:+--settings} ${landing_args:+"$landing_dir/claude-settings.json"} \
     "$@"
 
 # The wall wraps the whole argv, so the bound is one process group and not the harness's
@@ -276,16 +180,4 @@ if [ -n "$wall" ] && [ "$wall" -gt 0 ]; then
     set -- timeout "$wall" "$@"
 fi
 
-if [ -z "$landing_answer_retry" ]; then
-    exec "$@" <"$prompt" 2>"$err"
-fi
-
-# A promptless replay the harness refuses ("No deferred tool marker found") has run nothing:
-# the answer then travels as the session's next message, and the marker says so.
-status=0
-"$@" <"$prompt" 2>"$err" || status=$?
-if [ "$status" -ne 0 ] && grep -q 'No deferred tool marker found in the resumed session' "$err"; then
-    printf '%s\n' message > "$landing_dir/landing-delivery"
-    exec "$@" <"$landing_dir/landing-prompt" 2>"$err"
-fi
-exit "$status"
+exec "$@" <"$prompt" 2>"$err"
