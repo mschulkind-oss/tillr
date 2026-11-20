@@ -109,7 +109,12 @@ time is re-verified via `pidfd` before signaling, and the scan-and-kill pass rep
 briefly so a dying parent racing a fork cannot leak a child; if live marked processes
 survive past the bounded wait, `exec` returns an external error. For non-`stops-at-a-gap`
 pauses, `exec` sends `SIGTERM` to both the worker's process group and marked detached
-groups before waiting for the straggler bound. As a fallback if a process ever survives
+groups before waiting for the straggler bound. The same cleanup also runs before the
+worker starts, for processes of an earlier execution of the same run: a resume gets a new
+execution id, so a runner killed before it cleaned up leaves processes the id never finds.
+When `TILLR_LOOP_STORE` is set, those carry the run's `TILLR_RUN_ID` and that store, and
+are ended (the runner and its ancestors never are); without a store the run id is not
+unique and only the execution id is used. As a fallback if a process ever survives
 cleanup, the drain keeps the lane out of rotation while children still carry the run and
 store environment markers and have working directories inside the lane; see
 [lane holds](../tillr-drain/README.md#lanes-that-staging-refuses).

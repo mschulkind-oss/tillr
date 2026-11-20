@@ -329,3 +329,62 @@ func TestDetachedSessionAndNestedChildCleanedUpOnExitTimeoutCancelAndPause(t *te
 		assertProcessGone(t, filepath.Join(dir, "nested.pid"))
 	})
 }
+
+// A resumed run starts under a new execution id, so a process an earlier execution left
+// behind (its runner was killed before cleaning up) carries an id nothing looks for. It
+// still carries the run's id and the loop store, and the next execution of the run ends it.
+func TestExecEndsEarlierExecutionsMarkedProcess(t *testing.T) {
+	dir := scratch(t)
+	t.Setenv("TILLR_LOOP_STORE", filepath.Join(dir, "state.db"))
+	leftover := exec.Command("sleep", "300")
+	leftover.Env = append(os.Environ(), "TILLR_RUN_ID=resumed", "TILLR_RUN_EXEC_ID=an-earlier-execution")
+	leftover.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := leftover.Start(); err != nil {
+		t.Fatal(err)
+	}
+	reaped := make(chan struct{})
+	go func() { _ = leftover.Wait(); close(reaped) }()
+	t.Cleanup(func() { _ = leftover.Process.Kill(); <-reaped })
+	st, err := store.Open(context.Background(), filepath.Join(dir, "state.db"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	req := run.Request{RunID: "resumed", Backend: "command", Command: []string{"true"}, WorkingDir: run.WorktreeDir}
+	if _, err := run.Exec(context.Background(), st, req, run.ExecOptions{LaneRoot: filepath.Join(dir, "lanes"), Now: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-reaped:
+	case <-time.After(hangGuard):
+		t.Fatal("an earlier execution's marked process survived the run's next execution")
+	}
+}
+
+// Without a loop store the run id is not unique, so a process that merely shares it is
+// not touched.
+func TestExecLeavesSameRunIDProcessWithoutLoopStore(t *testing.T) {
+	dir := scratch(t)
+	t.Setenv("TILLR_LOOP_STORE", "")
+	other := exec.Command("sleep", "300")
+	other.Env = append(os.Environ(), "TILLR_RUN_ID=shared", "TILLR_LOOP_STORE="+filepath.Join(dir, "elsewhere.db"))
+	other.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := other.Start(); err != nil {
+		t.Fatal(err)
+	}
+	reaped := make(chan struct{})
+	go func() { _ = other.Wait(); close(reaped) }()
+	t.Cleanup(func() { _ = other.Process.Kill(); <-reaped })
+	st, err := store.Open(context.Background(), filepath.Join(dir, "state.db"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	req := run.Request{RunID: "shared", Backend: "command", Command: []string{"true"}, WorkingDir: run.WorktreeDir}
+	if _, err := run.Exec(context.Background(), st, req, run.ExecOptions{LaneRoot: filepath.Join(dir, "lanes"), Now: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := other.Process.Signal(syscall.Signal(0)); err != nil {
+		t.Fatalf("a process of another store was ended: %v", err)
+	}
+}

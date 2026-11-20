@@ -979,6 +979,17 @@ recorded supervisor is still running, or when a guard cannot be confirmed, it ho
 run, reports unconfirmed cleanup, and retains the checkout. A released lock alone is not
 treated as cleanup evidence.
 
+A stop does not carry an in-flight heavy trunk proof across the exit, and this is
+deliberate. Worker runs survive a loop stop because each is its own `tillr-run` process
+with a durable record that the next loop re-reads. A proof check is not: it runs under
+this loop's subreaper supervisor, so ending the loop ends the check tree, and nothing
+records how far a single check had got. What carries over is every check that had already
+passed, saved with the exact tip, which the next loop's first-tick proof reuses
+(`reused checks=`); only the check in flight starts over. A loop that exits repeatedly
+therefore stalls the proved commit only by the length of the check it keeps interrupting,
+which is why a fault that exits the loop on one item's leftovers (see the surviving
+processes section) is a defect and not a cost of doing business.
+
 Because the supervisor adopts every orphan its command leaves, it also reaps them as
 they exit, on each `SIGCHLD`, rather than only after the command ends. It looks before
 it reaps (`waitid` with `WNOWAIT`), so it never takes the exit status of its own direct
@@ -2117,7 +2128,14 @@ left no terminal run row. A paused run continued as the same attempt is not ende
 `run.resume` event is newer than its paused `runs` row and every release, so the
 continuation's own processes do not hold its lane, and `tillr view running` lists it as
 live rather than as a paused finished run. Once the continuation's terminal record lands,
-any process it left behind holds the lane as before. This check applies to both landing and hook definitions. Only processes whose current working directory is inside that
+any process it left behind holds the lane as before. Reading a landing offer or reconciling a landing answer takes the same path: both refuse
+while a marked process survives and raise a typed error that settlement turns into the
+hold above, never an error that exits the loop. A run's markers are swept again when the
+run is executed: `tillr-run` ends every process carrying the run's own `TILLR_RUN_ID` and
+the `TILLR_LOOP_STORE` it was started under before it starts a resumed execution, because
+an earlier execution whose runner was killed before cleaning up left processes under its
+own execution id, which the later execution's cleanup never looked for. The runner and its
+ancestors are never ended by that sweep. This check applies to both landing and hook definitions. Only processes whose current working directory is inside that
 run's lane directory hold it; a process elsewhere does not. The waiting row names the
 process ids and a `kill` command. This condition is checked on every pass, including after
 a restart, and clears with `drain.lane-restored` once none remain. Worktree changes and the
