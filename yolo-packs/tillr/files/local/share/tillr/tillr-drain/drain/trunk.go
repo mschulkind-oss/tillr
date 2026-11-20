@@ -603,6 +603,17 @@ func (l *Loop) redOnTip(ctx context.Context, replay ReplayStep, candidate Candid
 	return out.Red, true, nil
 }
 
+// laneBasedOnTrunk reports whether the lane's recorded base is the trunk's: false for a
+// fork-series lane, a workflow-node lane whose node base differs from its item base, and a
+// non-landing loop.
+func (l *Loop) laneBasedOnTrunk(lane string) bool {
+	if l.nonLanding || l.laneForkTarget(lane) != "" {
+		return false
+	}
+	itemBase := l.laneFile(lane, ItemBaseSHAFile)
+	return itemBase == "" || itemBase == l.laneFile(lane, BaseSHAFile)
+}
+
 // moveLaneOntoTip rebases a returned worker's commits onto the trunk tip and records the
 // tip as the lane's base, so the session it goes back to continues on the latest trunk. It
 // answers the moved head, or "" when the lane is left as it was: a fork or workflow-node
@@ -612,10 +623,7 @@ func (l *Loop) redOnTip(ctx context.Context, replay ReplayStep, candidate Candid
 // from is the worker's own head; a gate candidate's lane also carries the loop's
 // document-retirement commit, which is not the worker's to inherit.
 func (l *Loop) moveLaneOntoTip(ctx context.Context, lane, from, tip string) (string, error) {
-	if l.nonLanding || l.laneForkTarget(lane) != "" || from == "" {
-		return "", nil
-	}
-	if itemBase := l.laneFile(lane, ItemBaseSHAFile); itemBase != "" && itemBase != l.laneFile(lane, BaseSHAFile) {
+	if from == "" || !l.laneBasedOnTrunk(lane) {
 		return "", nil
 	}
 	target := l.laneTarget(lane)

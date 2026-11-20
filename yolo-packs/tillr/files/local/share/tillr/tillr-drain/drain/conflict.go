@@ -144,10 +144,6 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 		// the fresh repair. Do not open it on the trunk checkout.
 		reason = "lane-unavailable"
 	}
-	if reason == "resumed-worker" {
-		fix.SessionTurn = true
-		fix.ResumePrompt = returnedBrief(*ending) + fmt.Sprintf("\nThe trunk is %s. Reconcile your branch with it; the staged brief describes the conflict evidence.\n", mainSHA)
-	}
 	// Pin before resetting: the repair brief is not yet staged and its failure
 	// must leave the original candidate reachable even after garbage collection.
 	if err := l.pin(ctx, candidate.RunID, candidate.HeadSHA); err != nil {
@@ -159,14 +155,37 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	if err := l.preserveWork(ctx, candidate.LaneID, candidate.RunID, "candidate conflicted during landing"); err != nil {
 		return "", false, l.holdRepair(ctx, basis, err)
 	}
+	// Whatever the fix run commits is judged, fenced and landed against its recorded
+	// base, so that base must be the trunk the fix is made on. A resumed session on an
+	// ordinary lane therefore gets its commits replayed onto the trunk (the base moves
+	// with them); when they do not replay cleanly, which is the usual shape of a squash
+	// conflict, the session is not resumed and the lane is restaged on the trunk instead.
+	// Either way no recorded base is older than the trunk the conflict was read on.
 	base := mainSHA
-	if fix.SessionTurn {
-		base = worker.BaseSHA
+	if reason == "resumed-worker" {
 		if preparedHead != "" && reapplyHead != preparedHead {
 			if _, err := l.git(ctx, candidate.Worktree, "reset", "--hard", reapplyHead); err != nil {
 				return "", false, l.holdRepair(ctx, basis, err)
 			}
 		}
+		if l.laneBasedOnTrunk(candidate.LaneID) {
+			moved, err := l.moveLaneOntoTip(ctx, candidate.LaneID, reapplyHead, mainSHA)
+			if err != nil {
+				return "", false, l.holdRepair(ctx, basis, err)
+			}
+			if moved == "" {
+				reason = "trunk-conflict"
+			} else {
+				reapplyHead, preparedHead = moved, ""
+			}
+		} else {
+			// A fork or workflow-node lane keeps the base its boundary was cut from.
+			base = worker.BaseSHA
+		}
+	}
+	if reason == "resumed-worker" {
+		fix.SessionTurn = true
+		fix.ResumePrompt = returnedBrief(*ending) + fmt.Sprintf("\nThe trunk is %s and this lane's base is now %s. Reconcile your branch with it; the staged brief describes the conflict evidence.\n", mainSHA, base)
 	} else if err := l.resetLaneTo(ctx, candidate.LaneID, mainSHA); err != nil {
 		return "", false, l.holdRepair(ctx, basis, err)
 	}

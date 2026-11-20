@@ -1481,7 +1481,23 @@ removed rules held being planned again at the next pass with no repair.
 A squash conflict returns to the candidate's session and branch when they remain available.
 On a moved trunk the loop stages a conflict-fix run at once with the conflicting paths and
 three-way markers; otherwise the next pass returns it with the conflict lines. A fresh fallback
-starts from the latest trunk. For a reverted landing, the gated candidate's snapshot records
+starts from the latest trunk.
+
+A conflict-fix run is judged, fenced and landed against the trunk tip the fix was made on,
+never against the base the worker started from. The fence check diffs the recorded base to
+`HEAD`, and the lander runs `git merge-tree --merge-base=<recorded base>`; with the old base
+the first would show the trunk's own intervening changes as the worker's, and the second
+would conflict again on any line the trunk also changed, whatever the worker wrote. So
+`conflictFix` (in [`drain/conflict.go`](./drain/conflict.go)) replays the worker's commits
+onto the tip (`moveLaneOntoTip`) and resumes the session only when that replay is clean;
+the staged base is then the tip. A squash conflict usually means the replay conflicts too, so
+the usual case restages the lane on the tip and starts a fresh fix run (decision reason
+`trunk-conflict`) whose brief carries the conflict markers; the worker's head stays pinned.
+It was chosen over resuming the session and recording a merge as the new base because the
+fence check stays a plain diff of the item's own change from a base that is an ancestor of
+`HEAD`, and no merge commit or half-resolved merge reaches the fix run. A fork or workflow-node
+lane keeps its own base. Pinned by
+[`drain/conflict_base_test.go`](./drain/conflict_base_test.go). For a reverted landing, the gated candidate's snapshot records
 the landing run's session before its lane is released; a continuation uses the current trunk
 and receives the failing check's output. Older landings without a snapshot start fresh.
 Nothing counts these endings; the removed rule spent one fix run per candidate and then held
