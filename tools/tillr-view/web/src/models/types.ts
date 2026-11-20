@@ -619,6 +619,7 @@ export interface ItemData {
   owner_decisions: OwnerDecisionView[];
   state_moves: StateMoveView[];
   verify_refusals?: VerifyRefusalView[];
+  work_summary?: string;
 }
 
 export interface StageView {

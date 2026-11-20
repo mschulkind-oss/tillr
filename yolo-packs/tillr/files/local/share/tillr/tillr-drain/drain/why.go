@@ -22,21 +22,22 @@ import (
 // WhyRow decorates a planner decision with references a human can follow. Decision
 // retains the full planner record; the presentation fields do not decide readiness.
 type WhyRow struct {
-	Place       int      `json:"place,omitempty"`
-	ItemID      string   `json:"item_id"`
-	State       string   `json:"state"`
-	Position    string   `json:"position"`
-	Reason      string   `json:"reason"`
-	Why         string   `json:"why"`
-	Class       string   `json:"class"`
-	Where       string   `json:"where"`
-	Mover       string   `json:"mover"`
-	Since       string   `json:"since"`
-	ClassSource string   `json:"class_source"`
-	WaitingOn   []string `json:"waiting_on"`
-	Decision    Decision `json:"decision"`
-	LaneStatus  string   `json:"lane_status,omitempty"`
-	LaneReason  string   `json:"lane_reason,omitempty"`
+	Place       int            `json:"place,omitempty"`
+	ItemID      string         `json:"item_id"`
+	State       string         `json:"state"`
+	Position    string         `json:"position"`
+	Reason      string         `json:"reason"`
+	Why         string         `json:"why"`
+	Class       string         `json:"class"`
+	Where       string         `json:"where"`
+	Mover       string         `json:"mover"`
+	Since       string         `json:"since"`
+	ClassSource string         `json:"class_source"`
+	WaitingOn   []string       `json:"waiting_on"`
+	Decision    Decision       `json:"decision"`
+	LaneStatus  string         `json:"lane_status,omitempty"`
+	LaneReason  string         `json:"lane_reason,omitempty"`
+	Refusals    map[string]int `json:"refusals,omitempty"`
 }
 
 type WhySummary struct {
@@ -104,6 +105,10 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		return answer, readFailure(err)
 	}
 	answer.EventHeadSeq = head
+	refusals, err := readWhyRefusals(r)
+	if err != nil {
+		return answer, readFailure(err)
+	}
 	declared, err := definition.ForReader(r)
 	if err != nil {
 		return answer, readFailure(err)
@@ -600,6 +605,10 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		}
 		if count := answerCounts[it.ItemID]; count > 0 {
 			row.Mover += fmt.Sprintf("; answered obstacles: %d", count)
+		}
+		if steps := refusals[it.ItemID]; len(steps) > 0 {
+			row.Refusals = steps
+			row.Why += "; refusals: " + refusalStepsWords(steps)
 		}
 		answer.Rows = append(answer.Rows, row)
 	}

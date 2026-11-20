@@ -8,7 +8,7 @@ import (
 
 // itemProgress is what an item's work amounts to, beside the bare attempt number. The
 // attempt number is an ordinal the planner names the next run with; it is not a count of
-// work done. These three are:
+// work done. The progress figures are:
 //
 //   - RunsStarted: runs that started a worker, that is, runs the store holds a row for. A
 //     dispatch that ended before a worker started (a lane refused staging, a claim was
@@ -18,14 +18,17 @@ import (
 //   - VerifyRefusals: the times the loop refused a candidate because its verify step did
 //     not finish (the drain.refusal event with step verify-not-done).
 type itemProgress struct {
-	RunsStarted    int `json:"runs_started"`
-	VerifyCycles   int `json:"verify_cycles"`
-	VerifyRefusals int `json:"verify_refusals"`
+	RunsStarted      int `json:"runs_started"`
+	VerifyCycles     int `json:"verify_cycles"`
+	VerifyRefusals   int `json:"verify_refusals"`
+	GateRefusals     int `json:"gate_refusals"`
+	FenceRefusals    int `json:"fence_refusals"`
+	ConflictRefusals int `json:"conflict_refusals"`
 }
 
 // Text is the progress as one operator-readable clause.
 func (p itemProgress) Text() string {
-	return fmt.Sprintf("%d runs started · %d reached verify · %d verify refusals", p.RunsStarted, p.VerifyCycles, p.VerifyRefusals)
+	return fmt.Sprintf("%d runs started · %d reached verify · %d verify refusals · %d gate refusals · %d fence refusals · %d conflict refusals", p.RunsStarted, p.VerifyCycles, p.VerifyRefusals, p.GateRefusals, p.FenceRefusals, p.ConflictRefusals)
 }
 
 // readItemProgress answers each item's progress. A table a store does not carry leaves
@@ -65,13 +68,18 @@ func readItemProgress(r *store.Reader) (map[string]itemProgress, error) {
 	}
 	// A refusal is keyed by the run it refused, or by the item; the payload's own item id
 	// is not always set, so the run's row names the item.
-	if err := fill(`SELECT COALESCE(runs.item_id, e.object_id), COUNT(*) FROM events e
-		LEFT JOIN runs ON e.object_type = 'run' AND runs.run_id = e.object_id
-		WHERE e.kind = 'drain.refusal' AND json_extract(e.payload, '$.step') = 'verify-not-done'
-		  AND COALESCE(runs.item_id, e.object_id) IS NOT NULL
-		GROUP BY COALESCE(runs.item_id, e.object_id)`,
-		func(p *itemProgress, n int) { p.VerifyRefusals = n }); err != nil {
-		return nil, err
+	for step, set := range map[string]func(*itemProgress, int){
+		"verify-not-done": func(p *itemProgress, n int) { p.VerifyRefusals = n },
+		"gate":            func(p *itemProgress, n int) { p.GateRefusals = n },
+		"fence":           func(p *itemProgress, n int) { p.FenceRefusals = n },
+		"conflict":        func(p *itemProgress, n int) { p.ConflictRefusals = n },
+	} {
+		if err := fill(fmt.Sprintf(`SELECT COALESCE(NULLIF(json_extract(e.payload, '$.item_id'), ''), runs.item_id, CASE WHEN e.object_type = 'item' THEN e.object_id END) AS item, COUNT(*) FROM events e
+			LEFT JOIN runs ON e.object_type = 'run' AND runs.run_id = e.object_id
+			WHERE e.kind = 'drain.refusal' AND json_extract(e.payload, '$.step') = '%s'
+			AND item IS NOT NULL GROUP BY item`, step), set); err != nil {
+			return nil, err
+		}
 	}
 	return out, nil
 }

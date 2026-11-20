@@ -86,7 +86,7 @@ export function ItemPage({ id, live, paused, row, baseURL }: { id: string; live:
     </section> : null}
     <ItemDetailPane itemId={id} item={item.data?.data} itemError={item.error} loading={item.isPending} onRetry={() => void item.refetch()} latestRun={pinned?.latest_run ?? null} updatedAtMs={pinned?.updated_at_ms ?? null} selectedRunId={null}
       onSelectRun={run => { window.location.hash = `#/run/${encodeURIComponent(run)}`; }} doc={{ doc: doc.data?.data, error: doc.error, pending: doc.isPending, onRetry: () => void doc.refetch(), baseUrl: baseURL }} />
-    {item.data ? <><ItemGraph attempts={item.data.data.graph_attempts ?? []} /><DependencyLinks id={id} blockedBy={item.data.data.blocked_by} unblocks={item.data.data.unblocks} /><UsageSummary usage={item.data.data.usage} /><VerifyRefusals refusals={item.data.data.verify_refusals ?? []} /><ItemTimeline item={item.data.data} /></> : null}
+    {item.data ? <><ItemGraph attempts={item.data.data.graph_attempts ?? []} /><DependencyLinks id={id} blockedBy={item.data.data.blocked_by} unblocks={item.data.data.unblocks} /><UsageSummary usage={item.data.data.usage} />{item.data.data.work_summary ? <p>{item.data.data.work_summary}</p> : null}<VerifyRefusals refusals={item.data.data.verify_refusals ?? []} /><ItemTimeline item={item.data.data} /></> : null}
   </div>;
 }
 export function RunPage({ id, route, live, paused }: { id: string; route: string; live: boolean; paused: boolean }) {

@@ -25,7 +25,10 @@ INSERT INTO node_runs VALUES
 	h.exec(`INSERT INTO events (ts,kind,object_type,object_id,payload) VALUES
  (5000,'drain.refusal','run','run-2','{"step":"verify-not-done"}'),
  (5001,'drain.refusal','run','run-2','{"step":"gate"}'),
- (5002,'drain.refusal','item','item-seed-04','{"step":"verify-not-done"}')`)
+ (5002,'drain.refusal','item','item-seed-04','{"step":"verify-not-done"}'),
+ (5003,'drain.refusal','run','unstarted','{"step":"fence","item_id":"item-seed-04"}'),
+ (5004,'drain.refusal','run','run-2','{"step":"conflict"}'),
+ (5005,'drain.refusal','item','other','{"step":"gate"}')`)
 
 	s, err := store.OpenRead(context.Background(), h.store)
 	if err != nil {
@@ -40,7 +43,7 @@ INSERT INTO node_runs VALUES
 	}); err != nil {
 		t.Fatal(err)
 	}
-	want := itemProgress{RunsStarted: 1, VerifyCycles: 1, VerifyRefusals: 2}
+	want := itemProgress{RunsStarted: 1, VerifyCycles: 1, VerifyRefusals: 2, GateRefusals: 1, FenceRefusals: 1, ConflictRefusals: 1}
 	if got["item-seed-04"] != want {
 		t.Fatalf("item-seed-04 progress = %+v, want %+v (an allocation with no run row is not a started worker)", got["item-seed-04"], want)
 	}
@@ -69,6 +72,10 @@ INSERT INTO node_runs VALUES
 		t.Fatalf("lanes does not print the progress: %s", out.String())
 	}
 
+	status, item, raw := h.get("/api/v1/items/item-seed-04")
+	if status != 200 || item["data"].(map[string]any)["work_summary"] != want.Text() {
+		t.Fatalf("item response: %d %s", status, raw)
+	}
 	status, body, raw := h.get("/api/v1/snapshot")
 	if status != 200 {
 		t.Fatalf("items: %d %s", status, raw)
