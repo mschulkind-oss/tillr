@@ -371,38 +371,6 @@ func probePiEndingCapability(ctx context.Context) (string, string, []string) {
 	return run.EndingFooter, path, nil
 }
 
-const claudeDeferredMarker = "No deferred tool marker found in the resumed session"
-
-// Probe the executable, as pi's probe does: a binary that predates deferred-tool resume, an
-// absent one, or one with the feature switched off in the environment keeps the footer.
-// `--continue` in an empty directory has no session to continue, so the probe starts no
-// model turn; a binary that knows deferred-tool resume names its marker on standard error.
-func probeClaudeEndingCapability(ctx context.Context) (string, string) {
-	path, err := exec.LookPath("claude")
-	if err != nil || os.Getenv("CLAUDE_CODE_DISABLE_DEFERRED_TOOL_RESUME") != "" {
-		return run.EndingFooter, ""
-	}
-	dir, err := os.MkdirTemp("", "tillr-claude-probe-")
-	if err != nil {
-		return run.EndingFooter, path
-	}
-	defer os.RemoveAll(dir)
-	probe, cancel := context.WithTimeout(ctx, piFeaturesProbeTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(probe, path, "-p", "--setting-sources", "", "--continue")
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "YOLO_NO_LAUNCH_FLAGS=1")
-	cmd.Stdin = strings.NewReader("")
-	cmd.WaitDelay = piFeaturesWaitDelay
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	_ = cmd.Run()
-	if probe.Err() == nil && strings.Contains(stderr.String(), claudeDeferredMarker) {
-		return run.EndingCallSuspends, path
-	}
-	return run.EndingFooter, path
-}
-
 func (l *Loop) recordEndingCapabilities(ctx context.Context) error {
 	capabilities := make(map[string]string)
 	var (
@@ -410,9 +378,6 @@ func (l *Loop) recordEndingCapabilities(ctx context.Context) error {
 		piCapability string
 		piPath       string
 		piFeatures   []string
-
-		claudeProbed     bool
-		claudeCapability string
 	)
 	for _, backend := range l.cfg.Policy.Backends {
 		adapter := resolveAdapterPath(l.cfg.Root, backend.Adapter)
@@ -438,13 +403,6 @@ func (l *Loop) recordEndingCapabilities(ctx context.Context) error {
 				probed = true
 			}
 			capability = piCapability
-		}
-		if filepath.Base(filepath.Dir(path)) == "claude" && capability == run.EndingCallSuspends {
-			if !claudeProbed {
-				claudeCapability, _ = probeClaudeEndingCapability(ctx)
-				claudeProbed = true
-			}
-			capability = claudeCapability
 		}
 		capabilities[adapter] = capability
 	}
@@ -898,60 +856,7 @@ func (l *Loop) reconcileLandingDelivery(ctx context.Context, d Decision) error {
 	})
 }
 
-// Claude Code's session file is one JSON row per line with no session header: a user row
-// carries the tool_result block the harness saved when it replayed the deferred call.
-// Its content is a string or text blocks, and the harness trims a trailing newline from an
-// error result, so the comparison trims one from both sides.
-func claudeLandingResultPersisted(transcript []byte, session string, answer landingAnswer) bool {
-	type block struct {
-		Type      string          `json:"type"`
-		ToolUseID string          `json:"tool_use_id"`
-		IsError   bool            `json:"is_error"`
-		Content   json.RawMessage `json:"content"`
-	}
-	type row struct {
-		Type      string `json:"type"`
-		SessionID string `json:"sessionId"`
-		Message   struct {
-			Content json.RawMessage `json:"content"`
-		} `json:"message"`
-	}
-	want := strings.TrimSuffix(answer.Text, "\n")
-	for _, line := range strings.Split(string(transcript), "\n") {
-		var r row
-		if json.Unmarshal([]byte(line), &r) != nil || r.Type != "user" || (r.SessionID != "" && r.SessionID != session) {
-			continue
-		}
-		var blocks []block
-		if json.Unmarshal(r.Message.Content, &blocks) != nil {
-			continue
-		}
-		for _, b := range blocks {
-			if b.Type != "tool_result" || b.ToolUseID != answer.CallID || !b.IsError {
-				continue
-			}
-			var text string
-			if json.Unmarshal(b.Content, &text) != nil {
-				var parts []struct{ Type, Text string }
-				if json.Unmarshal(b.Content, &parts) != nil || len(parts) != 1 || parts[0].Type != "text" {
-					continue
-				}
-				text = parts[0].Text
-			}
-			if strings.TrimSuffix(text, "\n") == want {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 func landingResultPersisted(transcript []byte, session string, answer landingAnswer) bool {
-	first, _, _ := strings.Cut(string(transcript), "\n")
-	var header struct{ Type string }
-	if json.Unmarshal([]byte(first), &header) != nil || header.Type != "session" {
-		return claudeLandingResultPersisted(transcript, session, answer)
-	}
 	type entry struct {
 		Type, ID, ParentID string
 		Message            struct {
