@@ -630,6 +630,31 @@ Both faces open the store read-only and pin assembly to one read transaction. Te
 compare CLI and API rows, all table row counts, and the database bytes before and after
 reading.
 
+### Push states, status summary, and Observatory pill
+
+`waiting` and `/api/v1/waiting` read the structured `kind` on `drain.post-landing-action`
+(`action: "push"`) rather than treating every push outcome as waiting on `"the next green
+advance"`. Each non-`push-ok` state emits a `post-landing:push` row with its `Since`
+timestamp and unpublished proven commit count:
+
+- `remote-sync-proving` (`waits on work`, mover: the heavy runner proving the rebased tip);
+- `remote-sync-conflict` (`waits on work` naming `sync-remote-<short(R)>` while repair runs,
+  or `needs you` naming `owner` on gate-code conflicts and `operator` on escalated
+  obstacles);
+- `remote-sync-worktree-dirty`, `remote-rewritten`, `push-patch-move-held`,
+  `push-remote-declined`, and `push-failed` (`needs you`, each naming `operator` and the
+  remedy or `tillr drain push`).
+
+`tillr view status` and `/api/v1/snapshot` include a `push` summary computed from
+`refs/tillr/published/<remote>/<branch>`, `refs/tillr/green`, `refs/heads/main`, and the
+newest `drain.post-landing-action` push event (`what`, `remote`, `ref`, `published_sha`,
+`unpublished_green_count`, `unpublished_main_count`, `state_kind`, `detail`, `mover`, and
+`since`). `status --text` prints the unpublished proven commit count, destination, state
+kind, mover, and `since` whenever proven commits are unpublished or a push hold is active.
+In the Observatory header, `PushPill` renders `<N> unpublished` (and `· <state_kind>` when
+held) with the destination, mover, and `since` in its tooltip, and stays hidden when
+`what` is `"none"` or nothing is parked.
+
 ## What is running right now
 
 `running` is the one command an operator runs before deciding whether to touch a live

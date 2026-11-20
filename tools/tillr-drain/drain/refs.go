@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -36,7 +37,10 @@ type refRun struct {
 	item string
 	at   int64
 }
-type refLanding struct{ item, head, after string }
+
+// resolved is after as a rebase of the trunk spells it now (trunk_rewrites): the live landed
+// marker names that commit once the drain has moved it, and still names after when it has not.
+type refLanding struct{ item, head, after, resolved string }
 
 // SweepRefs is also the loop's settlement cleanup. The landing lock protects ref
 // enumeration and deletion from concurrent marker writes, before any store writer.
@@ -218,6 +222,12 @@ func planRefSweep(r *store.Reader, refs []RefDisposition, operators map[string][
 	if err != nil {
 		return nil, err
 	}
+	for id, land := range landings {
+		if land.resolved, err = heavy.RewriteResolve(r, land.after); err != nil {
+			return nil, err
+		}
+		landings[id] = land
+	}
 	current, history, err := readPendingHistory(r)
 	if err != nil {
 		return nil, err
@@ -393,7 +403,7 @@ func planRefSweep(r *store.Reader, refs []RefDisposition, operators map[string][
 			switch {
 			case !recorded:
 				ref.Reason = "no durable landed row; crash retry needs marker"
-			case land.after != ref.SHA:
+			case land.after != ref.SHA && land.resolved != ref.SHA:
 				ref.Reason = "marker differs from durable landing; retain for diagnosis"
 			case inFlight && (strings.HasPrefix(baseRefs[id], "refs/heads/patch/") || (baseRefs[id] == "" && land.head == land.after)):
 				ref.Reason = "fork delivery; in-flight boundary comparisons still need marker"
@@ -414,6 +424,14 @@ func planRefSweep(r *store.Reader, refs []RefDisposition, operators map[string][
 			default:
 				ref.Reason = "saved edits; item can still be retried"
 			}
+		case strings.HasPrefix(ref.Ref, remoteSyncRefPrefix):
+			id := strings.TrimPrefix(ref.Ref, remoteSyncRefPrefix)
+			if states[id] == "" || finishedState(declared.Parsed, states[id]) {
+				ref.Remove = true
+				ref.Reason = "remote-sync repair finished or removed"
+			} else {
+				ref.Reason = "active remote-sync repair needs this base pin"
+			}
 		default:
 			ref.Reason = "outside run-pin and landing-marker cleanup ownership"
 		}
@@ -423,7 +441,7 @@ func planRefSweep(r *store.Reader, refs []RefDisposition, operators map[string][
 
 func (l *Loop) pruneRunRefs(ctx context.Context) error {
 	// Proof and operator refs alone need no lifecycle replay on an idle pass.
-	raw, err := l.git(ctx, l.cfg.Root, "for-each-ref", "--count=1", "--format=%(refname)", "refs/tillr/runs", "refs/tillr/landed", preservedPrefix)
+	raw, err := l.git(ctx, l.cfg.Root, "for-each-ref", "--count=1", "--format=%(refname)", "refs/tillr/runs", "refs/tillr/landed", preservedPrefix, remoteSyncRefPrefix)
 	if err != nil {
 		return err
 	}

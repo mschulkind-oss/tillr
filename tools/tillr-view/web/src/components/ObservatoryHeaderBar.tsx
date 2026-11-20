@@ -20,7 +20,7 @@ import { useNow } from "../models/clock";
 import { durationText } from "../models/now";
 import { FALLBACK_POLL_MS } from "../models/queries";
 import type { BoardCounts, BoardFilter, BoardView } from "../models/board";
-import type { ApiEnvelope, GrantView, LaneView, SnapshotData } from "../models/types";
+import type { ApiEnvelope, GrantView, LaneView, PushSummary, SnapshotData } from "../models/types";
 
 const GRANT_WARN_WINDOW_MS = 60 * 60 * 1000;
 
@@ -109,6 +109,30 @@ export function LoopBand({ drain, now: suppliedNow }: { drain: SnapshotData["dra
     {stop ? <> · stopped since {new Date(stop.at_ms).toISOString()} · {stop.item_id || "no single item (loop-wide)"} · {stop.step} · {stop.sentence} Next: {stop.next}</> : !alive ? <> · {session?.ended_at_ms != null ? `Loop stopped since ${new Date(session.ended_at_ms).toISOString()}` : "Loop unobserved"} · stop explanation not recorded</> : null}
     {repeated ? <> · <strong className="loop-band__repeated">{alive ? "stuck drain (restarted after repeated exits)" : "stuck drain"}: exited {repeated.count} times in a row</strong> ({repeated.reason}{repeated.detail ? `: ${repeated.detail}` : ""}, {new Date(repeated.first_at_ms).toISOString()}..{new Date(repeated.last_at_ms).toISOString()}) · Next: {repeated.next}</> : null}
   </span>;
+}
+
+/** The proven commits the published pointer lacks, in the push's own mode. */
+export function unpublishedProven(push: PushSummary): number {
+  const count = push.what === "tip" ? push.unpublished_main_count : push.unpublished_green_count;
+  return count ?? 0;
+}
+
+/** PushPill keeps a drained queue from looking finished while proven commits sit
+ * unpublished or a push hold names a mover (design Section 7.2). It is absent when no push
+ * was ever recorded, and when nothing is parked. */
+export function PushPill({ push }: { push?: PushSummary }) {
+  if (!push || push.what === "none") return null;
+  const unpublished = unpublishedProven(push);
+  if (!push.state_kind && unpublished <= 0) return null;
+  const destination = push.remote && push.ref ? ` to ${push.remote}/${push.ref}` : "";
+  const label = `${unpublished} unpublished${push.state_kind ? ` · ${push.state_kind}` : ""}`;
+  const title = [
+    `${unpublished} proven commit(s) unpublished${destination}`,
+    push.state_kind ? `state: ${push.state_kind}${push.detail ? ` — ${push.detail}` : ""}` : "",
+    push.mover ? `waits on: ${push.mover}` : "",
+    push.since ? `since ${push.since}` : "",
+  ].filter(Boolean).join("\n");
+  return <span className={push.state_kind ? "push-pill push-pill--held" : "push-pill"} title={title}>{label}</span>;
 }
 
 /** LanePill is the header's always-visible lane state: how many of the store's lanes have
@@ -734,6 +758,7 @@ export function ObservatoryHeaderBar({
           <LiveChip live={live} paused={paused} />
           <LoopBand drain={drain} />
           <LanePill lanes={snapshot.data.lanes} />
+          <PushPill push={snapshot.data.push} />
           <PauseControl
             paused={paused}
             onPause={onPause}

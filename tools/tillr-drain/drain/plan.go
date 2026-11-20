@@ -1144,7 +1144,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 			decision.DeskDocument = doc
 			p.deskOwners[lane] = item.ItemID
 			ok = true
-		} else if !ok && IsTrunkFixer(item.ItemID) {
+		} else if !ok && (IsTrunkFixer(item.ItemID) || IsRemoteSyncItem(item.ItemID)) {
 			// Retained candidates can occupy every offered lane while waiting
 			// on this fixer. One serial repair desk breaks that dependency cycle
 			// without discarding their worktrees or admitting ordinary work.
@@ -1972,7 +1972,7 @@ func readItems(r *store.Reader) ([]itemRow, error) {
 		if item.Allowed, err = decodeFence(allowed); err != nil {
 			return nil, err
 		}
-		item.Express = !itemIsComment(item.ItemID) && (item.Express || strings.HasPrefix(item.ItemID, "item-idea-"))
+		item.Express = !itemIsComment(item.ItemID) && (item.Express || strings.HasPrefix(item.ItemID, "item-idea-") || IsRemoteSyncItem(item.ItemID))
 		item.OwnerOwed = owed[item.ItemID]
 		items = append(items, item)
 	}

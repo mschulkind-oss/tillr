@@ -511,7 +511,7 @@ type trunkReading struct {
 // A fixer item is never acquitted here: its whole purpose is to be red on the base, and
 // replaying its own failure would let it heal itself by doing nothing.
 func (l *Loop) trunkAlreadyRed(ctx context.Context, candidate Candidate, gate GateOutcome) (trunkReading, error) {
-	if IsTrunkFixer(candidate.ItemID) {
+	if IsTrunkFixer(candidate.ItemID) || IsRemoteSyncItem(candidate.ItemID) {
 		return trunkReading{}, nil
 	}
 	replay, ok := l.cfg.Steps.(ReplayStep)

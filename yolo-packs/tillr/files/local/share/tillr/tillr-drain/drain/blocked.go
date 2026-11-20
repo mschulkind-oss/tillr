@@ -354,6 +354,17 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 		c.Text += "\n\n" + instruction
 	}
 	l.reportf("loop: %s conflict %s waits on %s: %s\n", c.ItemID, c.ConflictID, c.WaitingOn, c.Text)
+	if IsRemoteSyncItem(c.ItemID) && c.Status == "owner" {
+		who := "operator"
+		if obstacle.Kind == ObstacleOwner || obstacle.Kind == ObstacleFence {
+			who = "owner"
+		}
+		reason := string(obstacle.Kind)
+		if reason == "" {
+			reason = "repeated or unresolved block"
+		}
+		l.escalateRemoteSyncPushState(ctx, c.ItemID, who, reason)
+	}
 	return l.saveBlockConflict(ctx, c)
 }
 

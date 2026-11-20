@@ -179,6 +179,13 @@ func statusFaceFormat(args []string, asText *bool) (record.Envelope, int) {
 		if err != nil {
 			return record.Envelope{}, exitFor(err)
 		}
+		if ps, err := store.OpenRead(context.Background(), *src.store); err == nil {
+			_ = ps.ReadTx(context.Background(), func(r *store.Reader) error {
+				payload.Push = readPushSummary(context.Background(), r, *root)
+				return nil
+			})
+			ps.Close()
+		}
 		proof, err := heavy.ReadStatus(context.Background(), *root, *src.store)
 		if err != nil {
 			payload.HeavyFault = err.Error()
