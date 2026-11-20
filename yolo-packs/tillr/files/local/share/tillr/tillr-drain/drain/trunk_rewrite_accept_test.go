@@ -269,7 +269,8 @@ next:
 
 // A pull that rebases unpushed landings onto a moved remote changes every sha and the
 // tip's tree. Each lost commit still has a commit with the same patch on the trunk, so
-// the rewrite kept the content and is accepted; the next pass does not hold again.
+// the rewrite kept the content and the operator's acceptance takes it before any pass has
+// seen it; the next pass does not hold.
 func TestAcceptARebaseOntoAMovedBase(t *testing.T) {
 	f, l := passFixture(t, "item-a")
 	base := runGit(t, f.root, "rev-parse", "HEAD")
@@ -282,9 +283,9 @@ func TestAcceptARebaseOntoAMovedBase(t *testing.T) {
 	if runGit(t, f.root, "rev-parse", lost+"^{tree}") == runGit(t, f.root, "rev-parse", current+"^{tree}") {
 		t.Fatal("the fixture's rebase kept the tree, so it does not exercise the moved base")
 	}
-	if h, err := l.observeTrunk(context.Background(), ""); err != nil || h.Lost != lost {
-		t.Fatalf("the rewrite was not held: %+v / %v", h, err)
-	}
+	// No pass runs between the rebase and the acceptance: a pass now absorbs this rewrite
+	// itself (TestPullRebaseOfUnpushedLandingsIsAbsorbed), so the operator's command is
+	// exercised on the rewrite no pass has recorded yet.
 	got, err := acceptRewrite(f, lost, current)
 	if err != nil {
 		t.Fatalf("accept: %v", err)
