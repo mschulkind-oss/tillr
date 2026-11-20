@@ -559,3 +559,56 @@ func TestTranscriptCursorRoundTrips(t *testing.T) {
 		t.Fatal("a cursor past the first line answered as the head")
 	}
 }
+
+// TestTranscriptReadsTheClaudeBackendsStream pins the stream-json spelling: prose and each
+// tool call come out in order, a result carries the time its call took, and the final tally
+// is a notice.
+func TestTranscriptReadsTheClaudeBackendsStream(t *testing.T) {
+	raw, err := os.ReadFile("testdata/claude-stream.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newTranscriptHarness(t)
+	if err := os.WriteFile(h.logPath(), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got := h.page(transcriptQuery{Limit: 50})
+	if got.Sources.Log.State != statePresent || got.EpistemicState != stateObserved {
+		t.Fatalf("the log reads %q/%q, want present/observed", got.Sources.Log.State, got.EpistemicState)
+	}
+	var kindList []string
+	for _, entry := range got.Entries {
+		kindList = append(kindList, entry.Kind)
+	}
+	if want := "message,tool_call,tool_result,tool_call,tool_result,message,notice"; strings.Join(kindList, ",") != want {
+		t.Fatalf("the entries are %q, want %q", strings.Join(kindList, ","), want)
+	}
+	call, first := got.Entries[1], got.Entries[2]
+	if call.Tool == nil || call.Tool.Name != "Bash" || !strings.Contains(call.Tool.Arguments, "git status") {
+		t.Fatalf("the first call is %+v, want Bash with its command", call.Tool)
+	}
+	if first.Role != "Bash" || first.ToolCallID != "toolu_A" || first.DurationMS == nil || *first.DurationMS != 2500 {
+		t.Fatalf("the first result is %+v, want Bash toolu_A taking 2500 ms", first)
+	}
+	second := got.Entries[4]
+	if second.IsError == nil || !*second.IsError || second.Text != "no such file" || *second.DurationMS != 250 {
+		t.Fatalf("the second result is %+v, want an error with text taking 250 ms", second)
+	}
+	if last := got.Entries[6]; !strings.Contains(last.Text, "3 turns") || !strings.Contains(last.Text, "2.5s was model time") {
+		t.Fatalf("the closing notice is %q, want the turn count and model time", last.Text)
+	}
+}
+
+// TestTranscriptSaysWhenALogYieldsNothing pins that a present log with no recognized line
+// reports it, with the count, rather than looking like a run that said nothing.
+func TestTranscriptSaysWhenALogYieldsNothing(t *testing.T) {
+	h := newTranscriptHarness(t)
+	h.writeLog(`{"type":"mystery","n":1}`, `{"type":"other"}`)
+	got := h.page(transcriptQuery{Limit: 50})
+	if got.Sources.Log.State != stateUnparsed || !strings.Contains(got.Sources.Log.Note, "2 lines") {
+		t.Fatalf("the log source is %+v, want unparsed with a count of 2 lines", got.Sources.Log)
+	}
+	if got.EpistemicState != stateUnobservedSeam || got.Note == "" {
+		t.Fatalf("the transcript is %q/%q, want a named seam", got.EpistemicState, got.Note)
+	}
+}

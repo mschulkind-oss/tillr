@@ -376,6 +376,25 @@ file or directory` and no action. A log that is truly absent is now a plain note
 `no stream log at <path>`. The JSON command prints the same array served as the API's
 `data`.
 
+## Run transcript
+
+`GET /api/v1/runs/{id}/transcript` merges the run's step record, its agent log and its
+shell record into one paged list. The agent log is read in two spellings: pi's
+(`message_end` events) and the Claude backend's (`claude -p --output-format
+stream-json`). From a Claude log each assistant text block is a `message`, each `tool_use`
+block is a `tool_call` (tool name and input, truncated like every entry), and each
+`tool_result` is a `tool_result` carrying the call's duration: the gap between the
+timestamps of the call line and the result line. A page that resumes after a call has
+no start for it and leaves the duration out. The closing `result` line is a notice with
+the turn count, the run's wall time and the model time (`duration_api_ms`). Claude's
+reasoning blocks are empty in the stream and are not shown. Before 2026-11-20 these
+lines were read and dropped, so a Claude run showed only its steps.
+
+A log that is present but has no line this reader recognizes reports
+`sources.log.state: "unparsed"` with the count of lines read, and the transcript's
+`epistemic_state` is `unobserved_seam`. It is not an empty transcript. A total of tool time
+is not computed.
+
 ## Trace downloads
 
 `trace` exports the same spans returned by the run's timeline route, including the
