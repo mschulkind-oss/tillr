@@ -1489,6 +1489,16 @@ missing rather than report that the change failed verification.
   commit and remote as `could not judge` (exit 4) and leave publication to the host operator.
   The lane must not push, substitute an older tip or a local cache for this proof, or change
   the locator. Fixture tests cover c2–c4; they do not prove the delivery has been published.
+- **Host action before retry (designer's decision, 2026-11-20; the owner may overturn it):**
+  The fifteenth run tried `git fetch <locator> <object-id>` in a separate empty bare repository
+  for each of the three pins above. All three returned `upload-pack: not our ref` (Git exit 128).
+  That is a missing input (`could not judge`, exit 4), not a failed build or a request to choose
+  new pins. Keep the build on hold. From the host's repository checkout, the operator should check
+  that the corresponding local `patch/*` branches contain the listed commits, then run
+  `bin/patch-branches-publish` as described in [the host step](../pi/patch-branches/published.md#5-the-host-step).
+  The publisher sends branch tips, not arbitrary object IDs: if a branch lacks its pin, report
+  the mismatch rather than rewinding the branch. Retry the build only after all three exact-ID
+  fetches succeed in fresh repositories; a successful push alone is not that proof.
 - **Existing test cases (2026-11-18, answers the sixth run's report of blocked):** The fork export
   tests run the scenario files under [their cases directory](../../tests/pi-forks/), so those
   files, [their shared library](../../tests/pi-forks/lib.sh),
