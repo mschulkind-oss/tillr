@@ -552,7 +552,7 @@ func TestPlanHoldsAnItemThatMayBeARetry(t *testing.T) {
 	tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, policy(t, "/bin/true"))
 
 	got := plan(t, storePath, tickPath)[0].Payload
-	if got.Action != drain.ActionHold || got.Reason != drain.ReasonRunLinkMissing {
+	if got.Action != drain.ActionHold || !reasonIs(got.Reason, drain.ReasonRunLinkMissing) {
 		t.Fatalf("the decision is %q / %q, want hold / run-link-missing", got.Action, got.Reason)
 	}
 	if got.RunRequest != nil {
@@ -613,7 +613,7 @@ func TestAPreviouslyRunItemHoldsWithItsOwnOutcomeReason(t *testing.T) {
 			if c.want == drain.ReasonReturned {
 				action = drain.ActionDispatch
 			}
-			if got.Action != action || got.Reason != c.want {
+			if got.Action != action || !reasonIs(got.Reason, c.want) {
 				t.Fatalf("the decision is %q / %q, want %s / %q", got.Action, got.Reason, action, c.want)
 			}
 			if got.Reason == drain.ReasonNotReady {
@@ -641,7 +641,7 @@ func TestPlanNeverEmitsAnUnauthorizedRetry(t *testing.T) {
 			t.Fatalf("the tick emitted an unauthorized retry for %q", record.Payload.ItemID)
 		}
 	}
-	if got := decisionFor(t, records, "item_042"); got.Reason != drain.ReasonRunLinkMissing {
+	if got := decisionFor(t, records, "item_042"); !reasonIs(got.Reason, drain.ReasonRunLinkMissing) {
 		t.Fatalf("the item that ran before is %q / %q, want hold / run-link-missing", got.Action, got.Reason)
 	}
 	if got := decisionFor(t, records, "item_043"); got.Action != drain.ActionDispatch {
@@ -674,7 +674,7 @@ func TestPlanHoldsAnItemWhoseHistoryIsUnknown(t *testing.T) {
 
 	tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, policy(t, "/bin/true"))
 	got := plan(t, storePath, tickPath)[0].Payload
-	if got.Action != drain.ActionHold || got.Reason != drain.ReasonRunLinkMissing {
+	if got.Action != drain.ActionHold || !reasonIs(got.Reason, drain.ReasonRunLinkMissing) {
 		t.Fatalf("the decision is %q / %q, want hold / run-link-missing", got.Action, got.Reason)
 	}
 }
@@ -2108,5 +2108,23 @@ func TestPlanHoldsAnItemWhenTheQuestionIndexCannotBeRead(t *testing.T) {
 				t.Fatalf("a questions-unknown hold carries a run_request: %+v", got.RunRequest)
 			}
 		})
+	}
+}
+
+// reasonIs reports whether a recorded reason is want or want with a detail after "<want>: ".
+func reasonIs(got, want string) bool {
+	return got == want || strings.HasPrefix(got, want+": ")
+}
+
+// The unclassifiable fallthrough names the run it found and what that run's record says.
+func TestRunLinkMissingNamesWhatWasFound(t *testing.T) {
+	storePath := fixture(t,
+		itemRecord("item_042", "in-queue"),
+		runRecord("run-item_042-a1", "item_042", "lane-1", "fixture", run.StateExited, exitCode(0), ""),
+	)
+	tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, policy(t, "/bin/true"))
+	got := plan(t, storePath, tickPath)[0].Payload
+	if !strings.HasPrefix(got.Reason, drain.ReasonRunLinkMissing+": ") || !strings.Contains(got.Reason, "run-item_042-a1") {
+		t.Fatalf("the reason is %q, want run-link-missing naming run-item_042-a1", got.Reason)
 	}
 }

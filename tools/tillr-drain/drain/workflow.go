@@ -729,6 +729,11 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 	if err := l.acceptNodeSettlement(ctx, &d, artifacts); err != nil {
 		return true, err
 	}
+	if !l.nonLanding && effectiveAccess == "write" && head != "" && head != nodeBase {
+		if err := l.pinLane(ctx, d.LaneID, rec.RunID, head); err != nil {
+			return true, err
+		}
+	}
 	if quickWay {
 		if err := l.settleQuickWay(ctx, d); err != nil {
 			return true, err

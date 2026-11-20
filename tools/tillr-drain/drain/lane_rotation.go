@@ -193,13 +193,17 @@ func (l *Loop) recheckLanes(ctx context.Context) error {
 	if err := l.recheckLaneChildren(ctx); err != nil {
 		return err
 	}
+	if l.replanning {
+		return nil
+	}
 	now := l.cfg.Now().UTC()
 	for lane, c := range l.laneConditions {
 		if !c.out || c.reason == ReasonLaneChildren {
 			continue
 		}
-		if now.Sub(c.at) >= laneRecheckInterval || l.laneFingerprint(ctx, lane) != c.fingerprint {
-			if l.laneStillRefuses(ctx, lane, c) {
+		retained := l.laneHeadRetained(ctx, lane, c)
+		if retained || now.Sub(c.at) >= laneRecheckInterval || l.laneFingerprint(ctx, lane) != c.fingerprint {
+			if !retained && l.laneStillRefuses(ctx, lane, c) {
 				// The lane refuses the same way: it stays out, and no item is
 				// allocated to it to find that out.
 				c.at, c.fingerprint = now, l.laneFingerprint(ctx, lane)
@@ -242,6 +246,26 @@ func (l *Loop) laneStillRefuses(ctx context.Context, lane string, c *laneConditi
 	}
 	refusal := asLaneRefusal(prober.ProbeLane(ctx, lane, strings.TrimSpace(base)))
 	return refusal != nil && refusal.Reason == c.reason && refusal.Msg == c.detail
+}
+
+// laneHeadRetained answers whether a lane refused for holding an unlanded change now holds
+// a commit that is retained elsewhere: a run pin contains its HEAD, or trunk does. Pinning
+// an offered commit changes neither the lane's HEAD nor its status, so the fingerprint
+// cannot see it, yet staging now clears such a copy (clearableLaneCopy) instead of
+// refusing it. The lane returns to rotation, and its next staging is the re-check.
+func (l *Loop) laneHeadRetained(ctx context.Context, lane string, c *laneCondition) bool {
+	if c.reason != ReasonLaneUnlandedChange {
+		return false
+	}
+	head, err := l.revParse(ctx, l.lanePath(lane), "HEAD")
+	if err != nil || head == "" {
+		return false
+	}
+	if out, err := l.git(ctx, l.cfg.Root, "for-each-ref", "--contains", head, "--format=%(refname)", "refs/tillr/runs/"); err == nil && strings.TrimSpace(out) != "" {
+		return true
+	}
+	contained, err := containsCommit(ctx, l.cfg.Root, head, TrunkRef)
+	return err == nil && contained
 }
 
 // loadLaneConditions seeds the session with the conditions the store still records — a
@@ -323,4 +347,15 @@ func appendLaneEvent(ctx context.Context, storePath, kind, lane string, payload 
 		_, err := tx.Append(event.Event{Kind: kind, ObjectType: "lane", ObjectID: &id, Payload: body, At: at})
 		return err
 	})
+}
+
+// outLanes answers the lanes a refusal has taken out of rotation.
+func (l *Loop) outLanes() map[string]bool {
+	out := map[string]bool{}
+	for lane, c := range l.laneConditions {
+		if c != nil && c.out {
+			out[lane] = true
+		}
+	}
+	return out
 }

@@ -600,8 +600,9 @@ as history. A later hold does not erase a recorded stage.
 question in the current design-document index. The index uses the same root and question
 command configuration as `status` and `serve`. An unreadable or missing document index is
 reported explicitly; a question hold whose question is no longer present reads
-`question not recorded`. Holds without a recorded cause read `cause not recorded`.
-No question or cause is invented from the reason text.
+`question not recorded`. Every hold reason resolves to a rule that names its mover; a reason with no rule reads
+"add a history rule for this recorded reason". No question or cause is invented from the
+reason text.
 
 A `run-processes-live` item fault reads `needs you` with the surviving process list in
 **Why** and the `clear-fault` command in **Mover**.

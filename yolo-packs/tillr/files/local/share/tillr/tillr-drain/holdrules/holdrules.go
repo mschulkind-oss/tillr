@@ -73,21 +73,21 @@ var Rules = map[string]Rule{
 	"restarted in a fresh session: the earlier session repeated one identical call": {"ready", "queue", "the next pass"},
 	"failover: the earlier sessions repeated one identical call":                    {"ready", "queue", "the next pass"},
 	"ready":                        {"ready", "queue", "the next pass"},
-	"blocked":                      {"waits on work", "queue", "cause not recorded"},
+	"blocked":                      {"waits on work", "queue", "the owner; clear the item's blocked state"},
 	"not-ready":                    {"needs you", "queue", "the owner"},
-	"run-link-missing":             {"needs a cause", "lane", "supersede the unanswered run with tillr drain retry"},
+	"run-link-missing":             {"needs a cause", "lane", "inspect the run the reason names, then `tillr drain retry --item <item> --run <that run>`"},
 	"boundary-scope-escape":        {"needs you", "fence", "inspect the named node and escaped path, then authorize a retry"},
 	"node-scope-outside-fence":     {"needs you", "fence", "narrow the named node's write_scope to the item's fence"},
-	"candidate-no-op":              {"needs a cause", "lane", "cause not recorded"},
-	"complete-item-fault":          {"needs a cause", "lane", "cause not recorded"},
-	"criteria-unjudged":            {"needs a cause", "lane", "cause not recorded"},
-	"run-unjudged":                 {"needs a cause", "lane", "cause not recorded"},
+	"candidate-no-op":              {"needs a cause", "lane", "inspect the run's report for why it committed nothing, then authorize a retry"},
+	"complete-item-fault":          {"needs a cause", "lane", "repair the fault the detail names, then authorize a retry"},
+	"criteria-unjudged":            {"needs a cause", "lane", "the judge seat; inspect the judge run and authorize a retry"},
+	"run-unjudged":                 {"needs a cause", "lane", "authorize a retry acknowledging the unjudged run: `tillr drain retry --item <item> --run <the held run>`"},
 	"judge-grant-absent":           {"needs you", "queue", "issue a grant covering the item's criteria: tillr item grant issue --store <path> --input <record> --now <RFC3339>"},
 	"judge-unreadable":             {"needs a cause", "judge", "inspect the judge run"},
 	"eval-failed":                  {"waits on work", "judge", "amend the candidate against the judge's reason"},
 	"judge-blocked":                {"waits on work", "judge", "the recorded waiter; answer the judge's blocker"},
 	"judge-defective":              {"needs you", "judge", "owner; reopen the closed item only if its premise is corrected"},
-	"gate-failed":                  {"needs a cause", "gate", "cause not recorded"},
+	"gate-failed":                  {"needs a cause", "gate", "inspect the gate verdict; the item's worker repairs the failing check"},
 	"red-cap":                      {"waits on work", "land", "the heavy runner; prove trunk or file its fixer"},
 	"land-refused":                 {"needs you", "land", "inspect the refused landing and authorize a retry"},
 	"no-policy":                    {"needs you", "queue", "the owner"},
@@ -100,7 +100,7 @@ var Rules = map[string]Rule{
 	"prose-criteria-count":         {"needs you", "queue", "the owner; reconcile the original criteria"},
 	"trunk-foreign-identity":       {"needs you", "trunk", "re-author the commit, or record its id with tillr-drain accept-identity"},
 	"awaits-rewrite":               {"waits on work", "queue", "the prose rewrite to land"},
-	"fork-held":                    {"waits on work", "queue", "cause not recorded"},
+	"fork-held":                    {"waits on work", "queue", "the fork lane landing the shared patch branch; the next pass"},
 	"failover":                     {"ready", "queue", "the next pass"},
 	"seat-degraded":                {"ready", "queue", "the next pass"},
 	"backend-closed":               {"waits on work", "backend", "a successful tillr-drain probe-backend or a non-infrastructure run"},
@@ -118,7 +118,7 @@ var Rules = map[string]Rule{
 	"retry-unjudged":                 {"needs you", "lane", "the owner"},
 	"question-removed":               {"needs you", "queue", "restore the removed question under the item's block and land it"},
 	"question-open":                  {"needs you", "queue", "question not recorded"},
-	"questions-unknown":              {"needs a cause", "queue", "cause not recorded"},
+	"questions-unknown":              {"needs a cause", "queue", "restore the Vantage index command (--questions-cmd)"},
 	"design-doc-missing":             {"needs you", "queue", "the owner"},
 	"trunk-path-dirty":               {"waits on work", "land", "commit, restore, or change your edit; the landing proceeds as soon as it no longer conflicts"},
 	"trunk-rewritten":                {"needs you", "trunk", "restore the trunk's history"},
@@ -126,12 +126,12 @@ var Rules = map[string]Rule{
 	"trunk-unproved":                 {"waits on work", "trunk", "the heavy runner; prove the trunk"},
 	"conflict-repair-staging-failed": {"needs you", "land", "correct the reported staging cause; the next pass retries the retained candidate"},
 	"conflict-fix":                   {"ready", "land", "the next pass"},
-	"item-unstagleable":              {"needs a cause", "queue", "cause not recorded"},
+	"item-unstagleable":              {"needs a cause", "queue", "correct the item's staging fault the detail names; the next pass stages it"},
 	"staging-failed":                 {"needs you", "lane", "correct the reported staging cause on the named lane; then tillr drain retry or clear the lane condition"},
 	// A terminal item leaves this view, so the rule names the settlement for history reads.
 	"item-already-terminal": {"moving", "lane", "the next pass settles the run without judging it"},
 	// Historical decisions remain readable after a planner removes a reason.
-	"fence-overlap": {"waits on work", "queue", "cause not recorded"},
+	"fence-overlap": {"waits on work", "queue", "the item holding the overlapping fence to land"},
 	// The owner's ruling of 2026-11-17 removed these three: nothing is re-admitted because
 	// an input changed, and a retry that names an old run no longer holds the item. A
 	// pass writes none of them; a recorded decision that carries one is history.
@@ -151,7 +151,7 @@ func For(reason string) Rule {
 	if strings.HasPrefix(reason, "workflow-invalid: ") {
 		return Rules["workflow-invalid"]
 	}
-	for _, named := range []string{"node-failed", "node-answer-unread", "node-scope-outside-fence", "boundary-scope-escape", "prose-criteria-count"} {
+	for _, named := range []string{"node-failed", "run-link-missing", "node-answer-unread", "node-scope-outside-fence", "boundary-scope-escape", "prose-criteria-count"} {
 		if strings.HasPrefix(reason, named+": ") {
 			return Rules[named]
 		}

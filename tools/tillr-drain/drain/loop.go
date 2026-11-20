@@ -528,6 +528,9 @@ type Loop struct {
 	laneConditions       map[string]*laneCondition
 	laneConditionsLoaded bool
 	laneRefusedNow       bool
+	// replanning is true while a pass re-plans after a refused claim: lanes that pass
+	// took out of rotation are not re-checked until the next pass.
+	replanning bool
 	// infraLines is the last infrastructure-class staging line printed per item and lane,
 	// so a refusal that repeats unchanged on every pass is printed once.
 	infraLines map[string]string
@@ -1270,52 +1273,52 @@ func (l *Loop) heldFor(r *store.Reader, itemID string) (string, bool) {
 	return hold.reason, true
 }
 
-func (l *Loop) prepareContinuedLane(ctx context.Context, decision Decision, expectedHead string) error {
+func (l *Loop) prepareContinuedLane(ctx context.Context, decision Decision, itemID, expectedHead string) (bool, error) {
 	target := l.laneTarget(decision.LaneID)
 	head, err := l.revParse(ctx, target, "HEAD")
 	if err != nil {
-		return err
+		return false, err
 	}
 	if head == expectedHead {
-		return nil
+		return false, nil
 	}
 	status, err := l.git(ctx, target, "--no-optional-locks", "status", "--porcelain", "--untracked-files=all")
 	if err != nil {
-		return err
+		return false, err
 	}
 	if strings.TrimSpace(status) != "" {
 		first := strings.TrimSpace(strings.Split(strings.TrimSpace(status), "\n")[0])
-		return laneRefusalf(decision.LaneID, ReasonLaneUncommittedWork,
+		return false, laneRefusalf(decision.LaneID, ReasonLaneUncommittedWork,
 			"commit or remove the files, or reset the lane deliberately",
 			"lane %s holds uncommitted work (%s)", decision.LaneID, first)
 	}
 	contained, err := containsCommit(ctx, l.cfg.Root, head, expectedHead)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !contained {
 		contained, err = containsCommit(ctx, l.cfg.Root, head, TrunkRef)
 		if err != nil {
-			return err
+			return false, err
 		}
 	}
 	if !contained {
 		stager := &LaneStager{Root: l.cfg.Root, Store: l.cfg.Store, LaneRoot: l.cfg.LaneRoot, Now: l.cfg.Now}
-		clearable, err := stager.clearableLaneCopy(ctx, decision.LaneID, head)
+		clearable, err := stager.clearableLaneCopy(ctx, decision.LaneID, itemID, head)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if !clearable {
-			return unlandedLaneRefusal(decision.LaneID, head, expectedHead)
+			return false, unlandedLaneRefusal(decision.LaneID, head, expectedHead)
 		}
 	}
 	if _, err := l.git(ctx, target, "reset", "--hard", expectedHead); err != nil {
-		return err
+		return false, err
 	}
 	if _, err := l.git(ctx, target, "clean", "-fd"); err != nil {
-		return err
+		return false, err
 	}
-	return nil
+	return true, nil
 }
 
 // stageDispatches stages the pass's claimed dispatches and returns those that may run.
@@ -1470,7 +1473,13 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 				expectedHead = decision.Returned.WorkerSession.HeadSHA
 			}
 			if expectedHead != "" {
-				err = l.prepareContinuedLane(ctx, decision, expectedHead)
+				var restaged bool
+				restaged, err = l.prepareContinuedLane(ctx, decision, request.ItemID, expectedHead)
+				if err == nil && restaged && l.cfg.Store != "" && spec.ItemBaseSHA == "" {
+					if itemBase, baseErr := l.pendingItemBase(ctx, request.ItemID); baseErr == nil && itemBase != "" {
+						spec.ItemBaseSHA = itemBase
+					}
+				}
 			}
 		}
 		if err == nil && !l.nonLanding && spec.Continue {
@@ -2190,6 +2199,11 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		return laneOutcome{err: err}
 	}
 	if deferJudge {
+		if candidate.HeadSHA != "" && candidate.HeadSHA != candidate.BaseSHA {
+			if err := l.pinLane(ctx, lane, request.RunID, candidate.HeadSHA); err != nil {
+				return laneOutcome{err: err}
+			}
+		}
 		if err := appendJudgment(ctx, l.cfg.Store, candidateReadyKind, "run", request.RunID, candidate, at); err != nil {
 			return laneOutcome{err: err}
 		}
@@ -2908,6 +2922,23 @@ func (l *Loop) pin(ctx context.Context, runID, sha string) error {
 	return nil
 }
 
+// pinLane pins a lane's commit. A fork-series lane's candidate lives in an isolated fork
+// checkout (laneTarget), whose objects are not in the repository root, and a fork change
+// delivers as a patch series, so there is nothing in the root to keep reachable: that one
+// case is skipped. A commit the root does hold, or a lane that is not a fork checkout, is
+// pinned, and any other `git update-ref` failure is returned.
+func (l *Loop) pinLane(ctx context.Context, lane, runID, sha string) error {
+	if runID == "" || sha == "" {
+		return nil
+	}
+	if l.laneTarget(lane) != l.lanePath(lane) {
+		if _, err := l.git(ctx, l.cfg.Root, "cat-file", "-e", sha+"^{commit}"); err != nil {
+			return nil
+		}
+	}
+	return l.pin(ctx, runID, sha)
+}
+
 // maxRefComponent is the longest one path component of a ref name the file system stores:
 // git keeps a loose ref as a file, and a file name holds 255 bytes.
 const maxRefComponent = 255
@@ -2934,6 +2965,26 @@ func (l *Loop) pinQuietly(ctx context.Context, runID, sha string) {
 	if err := l.pin(ctx, runID, sha); err != nil {
 		l.reportf("loop: could not pin %s at %s: %v\n", runID, sha, err)
 	}
+}
+
+func (l *Loop) pendingItemBase(ctx context.Context, itemID string) (string, error) {
+	r, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return "", err
+	}
+	defer r.Close()
+	var base string
+	err = r.ReadTx(ctx, func(reader *store.Reader) error {
+		works, err := readPending(reader)
+		if err != nil {
+			return err
+		}
+		if w := works[itemID]; w != nil {
+			base = w.BaseSHA
+		}
+		return nil
+	})
+	return base, err
 }
 
 // fenceViolation answers the reason a candidate is not inside its lane's fence, or "" when

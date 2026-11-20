@@ -496,13 +496,18 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 						}
 					}
 				}
-				if d.Reason == ReasonRunLinkMissing {
+				if strings.HasPrefix(d.Reason, ReasonRunLinkMissing) {
 					runID, whyDetail, moverAction := runLinkMissingHold(r, it.ItemID, d.SupersedesRunID)
 					actor = "operator"
 					if runID != "" {
 						row.WaitingOn = append(row.WaitingOn, runID)
 					}
-					row.Why = strings.Replace(row.Why, ReasonRunLinkMissing, ReasonRunLinkMissing+": "+whyDetail, 1)
+					if row.Why == ReasonRunLinkMissing {
+						row.Why = ReasonRunLinkMissing + ": " + whyDetail
+					} else {
+						// The planner already named what it found; the retry command follows it.
+						row.Why += "; " + whyDetail
+					}
 					row.Mover = moverAction
 				}
 				if d.Reason == ReasonQuestionRemoved {

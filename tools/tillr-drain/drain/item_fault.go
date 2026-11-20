@@ -128,9 +128,16 @@ func (l *Loop) gateFault(ctx context.Context, c Candidate, detail string) error 
 	return errItemFaultHeld
 }
 
-// cancelStaging retracts the claim and dispatch row together. The append-only
-// started/examined history still explains the aborted staging, but it cannot
-// collide with a later plan assigning the same attempt to a different lane.
+// cancelStaging retracts a claim that could not launch, undoing every store effect the
+// claim wrote (retractClaim): the dispatch row, the lane lease, the workflow node rows, the
+// conflict move and the parallel readers' memberships. The append-only started history
+// still explains the aborted staging, but it cannot collide with a later plan assigning
+// the same attempt to a different lane.
+//
+// A claim that continued a pending workflow node (drain.node-advanced) puts that pending
+// work back, so the item is offered its next node again; marking it examined instead ended
+// the pending work and left the item held as run-link-missing (2026-11-19, a build's
+// offered commit refused by the lane that held it). Any other claim is examined, as before.
 func (l *Loop) cancelStaging(ctx context.Context, d Decision) error {
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
@@ -138,45 +145,7 @@ func (l *Loop) cancelStaging(ctx context.Context, d Decision) error {
 	}
 	defer s.Close()
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
-		if err := appendEffect(tx, examinationDoneKind, d.RunRequest.RunID, struct{}{}, l.cfg.Now().UTC()); err != nil {
-			return err
-		}
-		for _, node := range parallelNodes(d) {
-			// Finished readers may be retained in a resumed parallel group. Only
-			// never-started claims lose their share count when staging is canceled.
-			if _, err := tx.Exec(`DELETE FROM seat_dispatches WHERE run_id=? AND NOT EXISTS(SELECT 1 FROM runs WHERE run_id=?)`, node.RunRequest.RunID, node.RunRequest.RunID); err != nil {
-				return err
-			}
-			// The claim wrote each reader's group membership. A never-started reader's
-			// membership goes with the claim; a retained finished reader's, reopened by
-			// the resume claim, is settled again. Either way no unsettled member is left
-			// on a lane this transaction releases, the rule run.freeLane keeps for a
-			// released group: an unsettled member reads back as a live run beside
-			// whatever claims the lane next.
-			if _, err := tx.Exec(`DELETE FROM read_only_runs WHERE run_id=? AND NOT EXISTS(SELECT 1 FROM runs WHERE run_id=?)`, node.RunRequest.RunID, node.RunRequest.RunID); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(`UPDATE read_only_runs SET settled=1 WHERE run_id=?`, node.RunRequest.RunID); err != nil {
-				return err
-			}
-			if hasNodes, err := tableExists(tx.Reader(), "node_runs"); err != nil {
-				return err
-			} else if hasNodes {
-				if _, err := tx.Exec(`DELETE FROM node_runs WHERE run_id=? AND outcome='running' AND NOT EXISTS(SELECT 1 FROM runs WHERE run_id=?)`, node.RunRequest.RunID, node.RunRequest.RunID); err != nil {
-					return err
-				}
-			}
-		}
-		if _, err := tx.Exec(`DELETE FROM dispatches WHERE decision_id=? AND item_id=? AND run_id=?`, d.DecisionID, d.ItemID, d.RunRequest.RunID); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`UPDATE lanes SET state=?,run_id=NULL,leased_until=NULL WHERE lane_id=? AND run_id=?`, "idle", d.LaneID, d.RunRequest.RunID); err != nil {
-			return err
-		}
-		// The run never started, so the claim's conflict move is undone with it
-		// (unlaunched_claim.go): the re-plan offers the item another lane.
-		_, err := undoClaimedConflict(tx, d, l.cfg.Now().UTC())
-		return err
+		return retractClaim(tx, d, l.cfg.Now().UTC(), true)
 	})
 }
 

@@ -60,8 +60,11 @@ type Pass struct {
 	StorePath      string    `json:"-"`
 	Now            string    `json:"now"`
 	AvailableLanes *[]string `json:"available_lanes"`
-	MaxDispatches  *int      `json:"max_dispatches"`
-	PolicyRef      string    `json:"policy_ref"`
+	// OutLanes are the lanes a staging refusal took out of rotation. A node waiting to
+	// start on one is planned onto a free lane.
+	OutLanes      map[string]bool `json:"-"`
+	MaxDispatches *int            `json:"max_dispatches"`
+	PolicyRef     string          `json:"policy_ref"`
 }
 
 // At is the tick's injected clock, parsed. It is the only clock this face reads: every
@@ -623,7 +626,11 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				identifyDecision(&decision)
 			}
 			ownerNextNode := ownerOwed && (work.Ready || decision.Action == ActionDispatch || decision.Action == ActionRetry)
-			if err == nil && work.LaneReleased && !ownerNextNode && decision.Action != ActionHold {
+			// A node waiting to start whose decision lane has left the rotation (a refused
+			// claim took it out) cannot be offered that lane again: it is planned onto a
+			// free one, as a released lane is.
+			laneOut := work.Ready && !work.Done && tick.OutLanes[work.Decision.LaneID]
+			if err == nil && (work.LaneReleased || laneOut) && !ownerNextNode && decision.Action != ActionHold {
 				lane, ok := p.freeLane(item.Express)
 				if !ok {
 					decision.Action, decision.Reason, decision.To = ActionHold, ReasonNoLane, ""
@@ -1414,7 +1421,7 @@ func (p *planner) mayBeARetry(itemID string) bool {
 func (p *planner) retryHoldReason(itemID string) string {
 	latest := p.latest[itemID]
 	if latest == "" {
-		return ReasonRunLinkMissing
+		return ReasonRunLinkMissing + ": no run record names the item, though its history says it ran"
 	}
 	if reason := p.history.judgeHolds[latest]; reason != "" {
 		return reason
@@ -1452,7 +1459,33 @@ func (p *planner) retryHoldReason(itemID string) string {
 	if p.classes[latest] == AttemptUnjudged {
 		return ReasonRunUnjudged
 	}
-	return ReasonRunLinkMissing
+	return p.unclassifiedRunReason(itemID, latest)
+}
+
+// unclassifiedRunReason is the last fallthrough of retryHoldReason: the run found no
+// refusal, gate verdict or landing to name. The reason says what the run's own records
+// do say, so the hold is never the bare run-link-missing a person cannot act on.
+func (p *planner) unclassifiedRunReason(itemID, latest string) string {
+	var found *priorRun
+	for i := range p.priors[itemID] {
+		if p.priors[itemID][i].RunID == latest {
+			found = &p.priors[itemID][i]
+		}
+	}
+	if found == nil {
+		return ReasonRunLinkMissing + ": latest run " + latest + " has no run row"
+	}
+	if !found.Finished {
+		return fmt.Sprintf("%s: run %s has no finish record (state %s)", ReasonRunLinkMissing, latest, found.State)
+	}
+	detail := found.State
+	if found.EndCause != "" {
+		detail += ", " + found.EndCause
+	}
+	if found.Node != "" {
+		detail += ", node " + found.Node + " " + found.NodeOutcome
+	}
+	return fmt.Sprintf("%s: latest run %s (%s) recorded no refusal or landing", ReasonRunLinkMissing, latest, detail)
 }
 
 // returnedEnding answers the item's latest run's ending when it goes back to the item's

@@ -14,7 +14,7 @@ const passes = [
 ];
 const waiting = [
   { place: 2, item_id: "item-owner-b", class: "needs you", where: "queue", why: "question-open", mover: "OQ-1", since: "2h", class_source: "rule" },
-  { place: 1, item_id: "item-cause", class: "needs a cause", where: "gate", why: "gate-failed", mover: "cause not recorded", since: "1h", class_source: "rule" },
+  { place: 1, item_id: "item-cause", class: "needs a cause", where: "gate", why: "gate-failed", mover: "inspect the gate verdict; the item's worker repairs the failing check", since: "1h", class_source: "rule" },
   { place: 3, item_id: "item-work", class: "waits on work", where: "queue", why: "blocked", mover: "item-cause", since: "1h", class_source: "rule" },
   { place: 1, item_id: "item-owner-a", class: "needs you", where: "queue", why: "question-open", mover: "OQ-2", since: "2h", class_source: "rule" },
 ];

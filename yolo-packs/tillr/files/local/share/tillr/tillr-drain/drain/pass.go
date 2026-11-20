@@ -1038,7 +1038,7 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 				loopHolds[id] = reason
 			}
 		}
-		tick := Pass{examineItem: l.ownerMigrationItem, ownerMigration: l.ownerMigrationItem != "", loopHolds: loopHolds, Comments: l.cfg.Comments, WorkflowDefaults: l.cfg.WorkflowDefaults, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available}
+		tick := Pass{examineItem: l.ownerMigrationItem, ownerMigration: l.ownerMigrationItem != "", loopHolds: loopHolds, Comments: l.cfg.Comments, WorkflowDefaults: l.cfg.WorkflowDefaults, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available, OutLanes: l.outLanes()}
 		if stager, ok := l.cfg.Stage.(*LaneStager); ok {
 			tick.BriefTemplate = &stager.Template
 		}
@@ -2338,21 +2338,43 @@ plans:
 					result.StopItemID, result.StopStep = d.ItemID, "cancel staging"
 					return "", err
 				}
-				if l.laneRefusedNow && replans < len(l.cfg.Lanes) {
+				// A claim that could not launch is offered again in this pass, not the next:
+				// the item on whatever lane the fresh plan chooses, and any item that
+				// waited for the lane the cancellation freed. A refusal the lane's own
+				// state caused, or a cancellation with no infrastructure fault behind
+				// it, replans; an infrastructure fault would only repeat and count again.
+				if (l.laneRefusedNow || !l.stageFault) && replans < len(l.cfg.Lanes)+1 {
 					replans++
+					// A lane this pass just refused stays out until the next pass: a
+					// re-check now would see its pinned HEAD as retained and offer it again.
+					l.replanning = true
 					fresh, freshLeases, err := l.passPlansGeneration(ctx, at, &timing.TickID)
+					l.replanning = false
 					if err != nil {
 						return "", err
 					}
 					leases = freshLeases
+					queued := map[string]bool{}
+					for _, rest := range plans[i+1:] {
+						queued[rest.decision.ItemID] = true
+					}
+					var again []plannedApplication
 					for _, next := range fresh {
-						if next.decision.ItemID == d.ItemID && (next.decision.Action == ActionDispatch || next.decision.Action == ActionRetry) {
+						if next.decision.Action != ActionDispatch && next.decision.Action != ActionRetry {
+							continue
+						}
+						if next.decision.ItemID == d.ItemID {
 							// Offer it again, now, on the lane the fresh plan chose. The
 							// rest of this pass's plans stay as they were: one that
 							// conflicts with the re-plan is refused as stale when applied.
-							plans = append(plans[:i+1], append([]plannedApplication{next}, plans[i+1:]...)...)
-							continue plans
+							again = append([]plannedApplication{next}, again...)
+						} else if !queued[next.decision.ItemID] {
+							again = append(again, next)
 						}
+					}
+					if len(again) > 0 {
+						plans = append(plans[:i+1], append(again, plans[i+1:]...)...)
+						continue plans
 					}
 				}
 				continue
