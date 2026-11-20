@@ -52,6 +52,8 @@ type WhySummary struct {
 type WhyAnswer struct {
 	Definition   string     `json:"definition"`
 	EventHeadSeq int64      `json:"event_head_seq"`
+	Lanes        []string   `json:"lanes"`
+	LanesSource  string     `json:"lanes_source,omitempty"`
 	Rows         []WhyRow   `json:"rows"`
 	Summary      WhySummary `json:"summary"`
 }
@@ -159,6 +161,8 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			return answer, readFailure(err)
 		}
 	}
+	answer.Lanes = make([]string, len(offered))
+	copy(answer.Lanes, offered)
 	leases, err := activeLeases(r, at, offered)
 	if err != nil {
 		return answer, err
@@ -590,4 +594,72 @@ func loopOwnerQuestion(text string) string {
 		q = q[:end]
 	}
 	return strings.TrimSpace(q)
+}
+
+// LiveLoopLanes returns the lane set recorded by a currently live loop session for
+// storePath, if any.
+func LiveLoopLanes(r *store.Reader, storePath string, now time.Time) ([]string, bool, error) {
+	rows, err := r.Query(`SELECT loop_owner, next_pass_at, COALESCE(lanes, '') FROM drain_sessions WHERE ended_at IS NULL AND loop_owner IS NOT NULL ORDER BY started_at DESC, rowid DESC`)
+	if err != nil {
+		msg := err.Error()
+		if strings.Contains(msg, "no such table") || strings.Contains(msg, "no such column") {
+			return nil, false, nil
+		}
+		return nil, false, readFailure(err)
+	}
+	type candidate struct {
+		ownerRaw   string
+		nextPassAt int64
+		lanesRaw   string
+	}
+	var candidates []candidate
+	for rows.Next() {
+		var c candidate
+		if err := rows.Scan(&c.ownerRaw, &c.nextPassAt, &c.lanesRaw); err != nil {
+			rows.Close()
+			return nil, false, readFailure(err)
+		}
+		candidates = append(candidates, c)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, false, readFailure(err)
+	}
+	rows.Close()
+
+	here, _ := currentLoopOwner()
+	identity, _ := processStoreIdentity(storePath)
+	for _, c := range candidates {
+		if c.lanesRaw == "" {
+			continue
+		}
+		var lanes []string
+		if err := json.Unmarshal([]byte(c.lanesRaw), &lanes); err != nil || len(lanes) == 0 {
+			continue
+		}
+		var owner LoopOwner
+		if err := json.Unmarshal([]byte(c.ownerRaw), &owner); err != nil {
+			continue
+		}
+		if here != nil && owner.Domain == here.Domain && owner.UID == here.UID {
+			dead, err := ownerDead(&owner, here)
+			if err == nil && !dead {
+				return lanes, true, nil
+			}
+			continue
+		}
+		if identity != "" {
+			state, err := openForWriting(loopPresencePath(identity, owner))
+			if err == nil && state == streamWritten {
+				return lanes, true, nil
+			}
+			if err == nil && state == streamUnwritten {
+				continue
+			}
+		}
+		if now.UnixMilli() <= c.nextPassAt+SessionGrace.Milliseconds() {
+			return lanes, true, nil
+		}
+	}
+	return nil, false, nil
 }

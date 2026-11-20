@@ -604,7 +604,7 @@ type Loop struct {
 	nonLanding       bool
 	syncedSHA        string
 	syncClearSeq     int64
-	questions        *VantageQuestions
+	questions        QuestionSource
 	ownerAnswerBlobs map[string]string
 }
 
@@ -977,7 +977,7 @@ func (l *Loop) refreshDocuments(ctx context.Context, result *LoopResult) (string
 		l.syncedSHA = sha
 		l.syncClearSeq = clearSeq
 		l.waitingDetail = ""
-		l.questions = &VantageQuestions{Root: l.cfg.Root, Command: l.cfg.QuestionsCmd, Context: ctx}
+		l.questions = newSavedQuestions(l.cfg.Root, sha, l.cfg.QuestionsCmd, ctx)
 		if err := l.settleOwnerAnswers(ctx, sha); err != nil {
 			return "", err
 		}

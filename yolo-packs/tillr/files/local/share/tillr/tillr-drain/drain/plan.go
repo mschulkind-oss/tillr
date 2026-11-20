@@ -338,8 +338,11 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 		build = ReadBuildStamp()
 	}
 	root := ""
-	if source, ok := questions.(*VantageQuestions); ok {
+	switch source := questions.(type) {
+	case *VantageQuestions:
 		root = source.Root
+	case interface{ RootDir() string }:
+		root = source.RootDir()
 	}
 	unshared := map[string]bool{}
 	rewriteHolds, rewriteOwnerHolds := map[string]string{}, map[string]string{}
@@ -1227,7 +1230,9 @@ func (p *planner) questionState(item itemRow) questionState {
 	}
 	var answer DocumentQuestions
 	var err error
-	if source, ok := p.questions.(*VantageQuestions); ok && !checkQuestions {
+	if source, ok := p.questions.(interface {
+		DocumentPresence(string) (DocumentQuestions, error)
+	}); ok && !checkQuestions {
 		answer, err = source.DocumentPresence(item.DesignDoc)
 	} else {
 		answer, err = p.questions.Document(item.DesignDoc)

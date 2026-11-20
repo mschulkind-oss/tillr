@@ -212,7 +212,7 @@ func init() {
 			panic(err)
 		}
 	}
-	for name, definition := range map[string]string{"loop_owner": "TEXT", "stop_requested": "INTEGER"} {
+	for name, definition := range map[string]string{"loop_owner": "TEXT", "stop_requested": "INTEGER", "lanes": "TEXT"} {
 		if err := store.RegisterColumn("drain", "drain_sessions", name, definition); err != nil {
 			panic(err)
 		}
