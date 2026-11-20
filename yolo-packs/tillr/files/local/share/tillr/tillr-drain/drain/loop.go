@@ -1443,7 +1443,10 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 					if decision.NodeIndex == 0 {
 						spec.BaseSHA = nodeBase
 					}
-					if err := l.preserveWork(ctx, decision.LaneID, previous, "orphaned workflow restarted"); err != nil {
+					if nodeBase == "" {
+						nodeBase = l.laneBase(decision.LaneID)
+					}
+					if err := l.preserveWorkFromBase(ctx, decision.LaneID, previous, nodeBase, "orphaned workflow restarted"); err != nil {
 						return nil, err
 					}
 					if _, err := l.git(ctx, target, "reset", "--hard", nodeBase); err != nil {
@@ -1848,6 +1851,13 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		return laneOutcome{err: err}
 	}
 	if orphaned && !offered {
+		runBase := mainSHA
+		if decision.Workflow != nil && decision.NodeBaseSHA != "" {
+			runBase = decision.NodeBaseSHA
+		}
+		if err := l.preserveWorkFromBase(ctx, lane, request.RunID, runBase, "orphaned by a loop stop"); err != nil {
+			return laneOutcome{stop: l.retainUnpreserved(ctx, lane, request.RunID, l.headOf(ctx, lane), err)}
+		}
 		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "orphaned by a loop stop")}
 	}
 	// pi ended the session because the model kept repeating one identical call. That
@@ -1880,8 +1890,12 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		class = AttemptAnswered
 	}
 	if class == AttemptInterrupted {
-		if err := l.preserveWork(ctx, lane, request.RunID, "run interrupted by signal"); err != nil {
-			return laneOutcome{err: err}
+		runBase := mainSHA
+		if decision.Workflow != nil && decision.NodeBaseSHA != "" {
+			runBase = decision.NodeBaseSHA
+		}
+		if err := l.preserveWorkFromBase(ctx, lane, request.RunID, runBase, "run interrupted by signal"); err != nil {
+			return laneOutcome{stop: l.retainUnpreserved(ctx, lane, request.RunID, l.headOf(ctx, lane), err)}
 		}
 		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "run interrupted by signal")}
 	}

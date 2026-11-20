@@ -258,7 +258,7 @@ func readRunning(ctx context.Context, storePath, loopDir, laneRoot string, now t
 		if err != nil {
 			return err
 		}
-		domain, err := readStoreDomain(r)
+		domain, err := readStoreDomainIn(r, loopDir)
 		if err != nil {
 			return err
 		}

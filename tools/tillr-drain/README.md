@@ -1349,23 +1349,26 @@ A pin (`refs/tillr/runs/<run>`) that a stop interrupts is finished rather than c
 bounded at thirty seconds, because the pin is what keeps a
 candidate reachable after its lane is reset.
 
-For an unbounded claim with no terminal record, replacement loops compare the recorded
-process ID and start time within the same Linux boot, process namespace, and user
-identity, then check that no worker carrying that run and store identity survives.
-Only a proven-dead owner with no live worker is reclaimed. A claim from another
-process domain of the same user, such as one a jail relaunch left behind (the new
-container has a fresh PID namespace, so recorded PIDs name nothing), is judged from
-files instead, because every container that mounts the repository sees the same
-inodes. Its loop is proven gone when every drain session it recorded is ended, or when
-its presence file (one per loop process under `<store>.loops/`, opened for writing
-before the session is recorded and held until the process exits) has no writer. Its
-run is live while any process still holds the run's `run.record.json` or `run.stderr`
-open for writing; the face and every child that inherited those streams hold them for
-as long as they live, and absent files mean the face never started. The writer check
-is a Linux read lease, granted only on a file nobody has open for writing, so it needs
-no timeout. A proven-gone loop's run with no writer is reclaimed like a local one on the
-next pass. A claim without that evidence, including any whose files cannot be judged,
-remains protected. A normal offline finish is still judged;
+For an unbounded claim with no terminal record, replacement loops check owner and
+stream evidence rather than elapsed time. Dead-owner detection covers an earlier Linux
+boot, an ended latest drain session (including across in-place binary restarts), dead
+local processes (comparing the recorded process ID and start time within the same Linux
+boot, process namespace, and user identity, then verifying no worker carrying that run
+and store identity survives), and claims from another process domain of the same user,
+such as one a jail relaunch left behind. Because a new container has a fresh PID
+namespace where recorded PIDs name nothing, foreign claims are judged from files on the
+shared mount: the loop is proven gone when its latest drain session has ended or when
+its presence file (`<store>.loops/*.present`, opened for writing before the session is
+recorded and held until exit) has no writer, and the run is live only while a process
+holds `run.record.json` or `run.stderr` open for writing (checked with a Linux read
+lease, which needs no timeout; absent files mean the face never started). Resumed
+continuations (`run.resume`) carry the resuming loop's owner and are closed as
+interrupted (`timed-out` / `lease-reclaimed`), with open `node_runs` marked
+`interrupted`. Both single-worker runs and workflow nodes preserve committed and
+uncommitted work under `refs/tillr/preserved/<run-id>`, return their lanes to rotation,
+and offer the items again in the starting loop's first pass. Only a proven-dead owner
+with no live worker is reclaimed; a claim without that evidence, including any whose
+files cannot be judged, remains protected. A normal offline finish is still judged;
 an external `SIGTERM`/`SIGINT` (`end_cause == "signal"`, or exit 130/143 without an
 ending exception or readable `RESULT:` footer) classifies as `interrupted` on its own,
 while a dead owner does not mark an already-terminal run orphaned or exempt a non-signal
@@ -1773,16 +1776,18 @@ reclaims a lane that is leased with no expiry to a run whose examination is reco
 when no examination in this loop holds the lane, its examiner is absent, dead or this loop,
 and its run face is gone. The reap prints one `loop: reclaimed lane ...` line for it.
 
-The same reap covers a paused run whose continuation died. A `run.resume` event clears the
-run's dispatch owner and leases the lane with no expiry, so when a restart kills the loop
-and the continuation's run face together, the run's last event is the resume, its row still
-reads `paused`, and no owner's death could release the lane. The item then planned as a
-`no-lane` hold on its own lease for as long as the store lasted (four lanes, 2026-11-19).
-A pass's reap now reclaims that lane, with the cause `reap`, when the run's last
-`run.resume` or `run.finish` event is a resume, no examination in this loop holds it and
-its run face is gone, in this process namespace or by its stream files in another. The
-paused record is left as it was, so the next plan settles the run and resumes it again.
-`TestAResumedRunWhoseFaceDiedWithoutAnEndIsSettledAndResumedByTheNextPass` builds that state.
+The same reap covers a paused run whose continuation face died while its owning loop is
+still live (or when an older `run.resume` event cleared the dispatch owner) and no
+`run.finish` was recorded. When the run's last `run.resume` or `run.finish` event is a
+resume, no examination in this loop holds the lane, and its run face is gone (in this
+process namespace or by its stream files in another), a pass's reap reclaims that lane
+with the cause `reap` and leaves the paused record as it was, so the next plan settles
+the run and resumes it again.
+`TestAResumedRunWhoseFaceDiedWithoutAnEndIsSettledAndResumedByTheNextPass` builds that
+state. (When the owning loop session itself is proven gone across a relaunch, reboot, or
+exit, Pass-1 dead-loop recovery instead closes the resumed run as interrupted, preserves
+its work under `refs/tillr/preserved/<run-id>`, returns its lane to rotation, and offers
+the item again.)
 
 An examination that ended in a refusal (a `drain.refusal` at the land, gate, fence, no-op
 or node-output step, after the run's latest candidate, assignment or retirement record)
@@ -2518,11 +2523,13 @@ repair transcript that only grew: everything written before the stop is still it
 Before resetting a settled lane, the loop saves its uncommitted edits at
 `refs/tillr/preserved/<run-id>`. This includes tracked edits and nonignored untracked
 files, both inside and outside the item's fence (the paths the worker may change).
+When an interrupted run is reset back to its base, `refs/tillr/preserved/<run-id>` also
+preserves commits already made past that base even when the working tree is clean.
 Files outside that fence are marked individually in the `drain.work-preserved`
 settlement event. The event names the item, run, ref, repository, stopped reason,
 and summary: file count, added and deleted text lines, binary-file count and
 outside-fence count. Git reports a dash instead of line counts for binary files.
-A clean lane creates no preservation ref or event.
+A clean lane with no unlanded commits past its base creates no preservation ref or event.
 
 The loop builds this commit with a separate [Git index](https://git-scm.com/docs/gitglossary#def_index),
 the file Git uses to prepare a commit's contents. It does not move the lane's branch

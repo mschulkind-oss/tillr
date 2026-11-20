@@ -50,13 +50,17 @@ type itemGraphAttempt struct {
 }
 
 func readItemGraph(r *store.Reader, id, selection string, runs []storeRun, children map[string]childrenView) ([]itemGraphAttempt, error) {
+	return readItemGraphIn(r, id, selection, runs, children, "")
+}
+
+func readItemGraphIn(r *store.Reader, id, selection string, runs []storeRun, children map[string]childrenView, loopDir string) ([]itemGraphAttempt, error) {
 	var base itemGraph
 	if selection != "" {
 		if err := json.Unmarshal([]byte(selection), &base); err != nil {
 			return nil, err
 		}
 	}
-	recorded, err := laneNodes(r, id)
+	recorded, err := laneNodesIn(r, id, loopDir)
 	if err != nil {
 		return nil, err
 	}

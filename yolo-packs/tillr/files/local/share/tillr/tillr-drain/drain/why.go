@@ -11,6 +11,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr-drain/judgegrants"
+	"github.com/mschulkind-oss/tillr-drain/presence"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
@@ -714,6 +715,10 @@ func LiveLoopLanes(r *store.Reader, storePath string, now time.Time) ([]string, 
 			if err == nil && !dead {
 				return lanes, true, nil
 			}
+			continue
+		}
+		if here != nil && !presence.SameBoot(owner.Domain, here.Domain) {
+			// A session recorded before this boot cannot be live, whatever its grace.
 			continue
 		}
 		if identity != "" {

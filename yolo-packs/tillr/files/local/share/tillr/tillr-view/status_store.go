@@ -35,6 +35,10 @@ type storeDomain struct {
 // is left empty rather than failing the whole report: a store written by a program that
 // never linked a utility's package still has a schema version to report.
 func readStoreDomain(r *store.Reader) (*storeDomain, error) {
+	return readStoreDomainIn(r, "")
+}
+
+func readStoreDomainIn(r *store.Reader, loopDir string) (*storeDomain, error) {
 	d := &storeDomain{
 		criteria: map[string][]storeCriterion{},
 		edges:    map[string][]storeEdge{},
@@ -83,7 +87,7 @@ func readStoreDomain(r *store.Reader) (*storeDomain, error) {
 	if d.ticks, err = readDrainTicks(r); err != nil && !isMissingTable(err) {
 		return nil, err
 	}
-	if d.lanes, err = readLanes(r); err != nil && !isMissingTable(err) {
+	if d.lanes, err = readLanesIn(r, loopDir); err != nil && !isMissingTable(err) {
 		return nil, err
 	}
 	if d.allocations, err = readAllocations(r); err != nil && !isMissingTable(err) {

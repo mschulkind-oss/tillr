@@ -266,7 +266,7 @@ func (s *laneReadStats) add(n int) {
 }
 
 func assembleLanesCounted(r *store.Reader, loop, lanes string, now time.Time, stats *laneReadStats) ([]laneRow, error) {
-	d, err := readStoreDomain(r)
+	d, err := readStoreDomainIn(r, loop)
 	if err != nil {
 		return nil, err
 	}
@@ -442,6 +442,9 @@ func buildLaneRowsCounted(d *storeDomain, verdicts map[string]gateVerdict, seats
 			since = run.FinishedAtMS
 			if run.RunID != "" {
 				row.Outcome, _ = runOutcome(run, verdicts, landed, candidates)
+				if lane.DeadRunID != "" && run.RunID == lane.DeadRunID && (run.State == liveRunState || lane.DeadResumedSeq > run.EventSeq) {
+					row.Outcome = "interrupted"
+				}
 			}
 		}
 		row.StateSinceMS = clockPointer(since, since > 0)

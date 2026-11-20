@@ -117,7 +117,7 @@ func (l *Loop) recordOrder(ctx context.Context, base string, result *LoopResult,
 					if err != nil {
 						return err
 					}
-					dead = foreignOwnerGone(identity, *prior.Owner, ended)
+					dead = foreignOwnerGone(identity, *prior.Owner, *here, ended)
 				}
 				if !dead {
 					return nil

@@ -627,7 +627,10 @@ carries `end_cause`, `loop_recovery` when recorded on `run.finish`, and, for a
 The face joins three sources because no two of them suffice: the lane rows and their
 `run.allocate` events (a run that is going has no `runs` row until its terminal write), the
 terminal `runs` rows (a lease is cleared the moment a run ends), and the loop's own
-`drain.loop` result files (the store records no loop stop). `--watch` re-renders once a
+`drain.loop` result files (the store records no loop stop). Across `running`, `lanes`,
+and `serve`, liveness applies the same owner and stream evidence (`tillr-drain/presence`)
+as the drain, so proven-dead local, foreign, or resumed runs and workflow nodes are not
+shown as live even before a replacement loop runs. `--watch` re-renders once a
 second in a terminal and appends every render when its output is a pipe; `--json` emits a
 `view.running` record instead of the table.
 
