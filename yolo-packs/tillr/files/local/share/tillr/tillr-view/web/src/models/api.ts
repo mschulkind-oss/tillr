@@ -1,5 +1,5 @@
 // The one place the browser talks to the server. Reads and the opt-in placement
-// action stay under /api/v1/ (observatory-actions.md, Section 6).
+// and idea actions stay under /api/v1/ (docs/reference/observatory-actions.md#browser-writes).
 
 import type {
   ApiEnvelope,

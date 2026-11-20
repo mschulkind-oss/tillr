@@ -113,7 +113,7 @@ The former stay option is removed; waiting no longer needs an option.
 
 ## Change an item's place without changing its work
 
-A [place](../../../../docs/design/observatory-actions.md#3-principles-and-words)
+A [place](../../../../docs/reference/observatory-actions.md#queue-order-and-places)
 is an item's position in the full order, counted from 1. Read faces show places,
 not stored ordering keys. Parked and finished items have no place. Filters keep
 true places, including gaps.

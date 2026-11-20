@@ -1,5 +1,6 @@
 // Package orderrecord reads the store's hand-placement receipt and its tracked
 // rebuild file without writing either. The loop and observatory share this read.
+// Architecture and invariants: docs/reference/observatory-actions.md
 package orderrecord
 
 import (

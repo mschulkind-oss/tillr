@@ -1,3 +1,4 @@
+// Architecture and invariants: docs/reference/observatory-actions.md
 package main
 
 import (

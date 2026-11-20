@@ -52,7 +52,7 @@ The first measurement on 2026-11-13 was taken against `/workspace/.tillr/state.d
 
 **Needs your ruling:** None in this document (every `OQ-IP*` row is closed in [§6.1](#61-settled-decisions); agent-settled decisions `D-IP1`, `D-IP2`, `D-IP4`, `D-IP5`, `D-IP6` and [`OQ-IP1`](#61-settled-decisions) remain overturnable by the owner and are catalogued in [the decision-provenance review](../tillr/decision-provenance-review.md)).
 
-**Reads with:** [observatory-actions.md](./observatory-actions.md#5-adding-an-idea) (terminal and browser intake, verbatim text files, and owner-selected place; takes precedence over this pipeline for saving ideas), [observatory-redesign.md](./observatory-redesign.md) (the built linked-page observatory that replaced [observatory-design.md](./observatory-design.md)'s four-region board), [tillr-designer-sessions.md](./tillr-designer-sessions.md) (Vantage review-comment delivery to resumed designer sessions, which superseded `tillr item answer`), [tillr-queue-persistence.md](./tillr-queue-persistence.md) and [tillr-queue-mirrors-designs.md](./tillr-queue-mirrors-designs.md) (tracked child definitions replacing `derived-items.json`, and the 2026-11-18 companion-plan ruling [`OQ-QM1`](./tillr-queue-mirrors-designs.md#OQ-QM1)), [board-item-state-model.md](./board-item-state-model.md) (the ruled seven-state projector), [tillr-selfhosted-build.md](./tillr-selfhosted-build.md) (restart and build substrate), [tillr-day2.md](./tillr-day2.md) (loop failure classes), and [tillr-intake-paths.md](./tillr-intake-paths.md) (the other doors work enters by).
+**Reads with:** [observatory-actions.md](../reference/observatory-actions.md#idea-intake-and-the-design-turn) (terminal and browser intake, verbatim text files, and owner-selected place; takes precedence over this pipeline for saving ideas), [observatory-redesign.md](./observatory-redesign.md) (the built linked-page observatory that replaced [observatory-design.md](./observatory-design.md)'s four-region board), [tillr-designer-sessions.md](./tillr-designer-sessions.md) (Vantage review-comment delivery to resumed designer sessions, which superseded `tillr item answer`), [tillr-queue-persistence.md](./tillr-queue-persistence.md) and [tillr-queue-mirrors-designs.md](./tillr-queue-mirrors-designs.md) (tracked child definitions replacing `derived-items.json`, and the 2026-11-18 companion-plan ruling [`OQ-QM1`](./tillr-queue-mirrors-designs.md#OQ-QM1)), [board-item-state-model.md](./board-item-state-model.md) (the ruled seven-state projector), [tillr-selfhosted-build.md](./tillr-selfhosted-build.md) (restart and build substrate), [tillr-day2.md](./tillr-day2.md) (loop failure classes), and [tillr-intake-paths.md](./tillr-intake-paths.md) (the other doors work enters by).
 
 ## 1. Item Kinds, States, and Edges
 
@@ -134,7 +134,7 @@ has no single schema number to move to 6. Each module owns its own tables (`Regi
 `item_edges` in `tools/tillr-item/item/schema.go` is still `(item_id, blocked_by)`. So "schema 6"
 above means the additive change to the `tillr-item` tables that Slice 1b makes.
 
-- **Slice 1a, clean intake: built.** [Observatory actions](./observatory-actions.md#5-adding-an-idea)
+- **Slice 1a, clean intake: built.** [Observatory actions](../reference/observatory-actions.md#idea-intake-and-the-design-turn)
   replaced this slice's intake (`D-IP3`). `tillr-item idea` saves the words and the place
   (`tools/tillr-item/item/idea.go`, `TestIdeaUniqueIDAndTitle` in
   `tools/tillr-item/item/idea_test.go`), and the observatory saves an idea through it
@@ -142,7 +142,7 @@ above means the additive change to the `tillr-item` tables that Slice 1b makes.
   `tools/tillr-view/idea_internal_test.go`). The wire shows `kind: "idea"`, but the view derives
   it from the `idea_intake` table (`tools/tillr-view/serve.go`): no `items.kind` column exists.
 - **Slice 1b, the `items.kind` column and a typed `derived_from` edge: not built.** Sync reads a
-  block's `from` attribute ([observatory actions, Section 5.4](./observatory-actions.md#54-what-the-design-seat-does-with-it))
+  block's `from` attribute ([observatory actions, outcomes](../reference/observatory-actions.md#staging-gate-refusals-and-outcomes))
   but keeps it only as a `placed_from` receipt on the item's update event
   (`tools/tillr-item/item/place.go`, whose comment says it is not this edge). The idea page
   finds an idea's outcomes through that receipt (`tools/tillr-view/idea_words.go`).
@@ -187,7 +187,7 @@ above means the additive change to the `tillr-item` tables that Slice 1b makes.
 | :--- | :--- | :--- |
 | `D-IP1` | Keep the closed seven-state item model; add `items.kind` (`idea`, `design`, `build`, default `build`). *(Not built: `items` has no `kind` column yet; see Slice 1b in [Section 8](#8-remaining-work).)* | Preserves [board-item-state-model.md](./board-item-state-model.md)'s single-projector guarantee while distinguishing intake, design, and code stages. |
 | `D-IP2` | Migrate `item_edges` to `(item_id, target_id, kind)` (`blocked_by` \| `derived_from`) with a single-parent partial unique index on `derived_from`; `tillr-drain` gates only on `blocked_by`. *(Not built: `item_edges` is still `(item_id, blocked_by)` in `tools/tillr-item/item/schema.go`; see Slice 1b in [Section 8](#8-remaining-work).)* | Separates strict tree genealogy from DAG scheduling dependencies in one event-logged table. |
-| `D-IP3` | Original intake ruling: Markdown words files and a reserved rank prefix. Replaced by [observatory-actions](./observatory-actions.md#5-adding-an-idea): `.txt` words files, terminal and browser saving, and owner-selected place; the `00..` prefix ends. *(Built in `tools/tillr-item/item/idea.go` and `tools/tillr-view/serveidea.go`.)* | Keeps the original ruling visible without prescribing the superseded intake mechanism. |
+| `D-IP3` | Original intake ruling: Markdown words files and a reserved rank prefix. Replaced by [observatory-actions](../reference/observatory-actions.md#idea-intake-and-the-design-turn): `.txt` words files, terminal and browser saving, and owner-selected place; the `00..` prefix ends. *(Built in `tools/tillr-item/item/idea.go` and `tools/tillr-view/serveidea.go`.)* | Keeps the original ruling visible without prescribing the superseded intake mechanism. |
 | `D-IP4` | Each `design` item owns one `docs/design/<slug>.md`; draft commits with `open_questions > 0` land on `main` and hold the item until `open_questions == 0`. *(Partly built in a different shape: the planner holds `in-queue` items with `reason: "question-open"` from Vantage's live index in `tools/tillr-drain/drain/plan.go` without rewriting `items.state` to `blocked`; reviewed in [`OQ-PR8`](../tillr/decision-provenance-review.md#OQ-PR8) and narrowed in `D-QM10` of [`tillr-queue-mirrors-designs.md`](./tillr-queue-mirrors-designs.md#decision-ledger).)* | Makes drafts immediately readable in Vantage while keeping unruled designs visible instead of prematurely archiving them as `landed`. |
 | `D-IP5` | Keep questions canonical in `docs/design/<slug>.md` (**built**); **superseded on answer delivery** by [designer sessions](./tillr-designer-sessions.md): pending owner answers do not travel through `tillr item mail` (`tillr item answer` was never built), and instead arrive as Vantage review comments delivered to the document's resumed designer session (`tools/tillr-drain/drain/comment_intake.go`, `comments.go`). | Avoids duplicating question prose in SQLite ([OQ-OBD2](./observatory-design.md#11-decision-ledger)) while delivering review comments straight to the session that holds the design context. |
 | `D-IP6` | **Superseded by `D-QP3` of [queue persistence](./tillr-queue-persistence.md#91-decision-ledger) (and further amended by [`OQ-QM1`](./tillr-queue-mirrors-designs.md#OQ-QM1) of [the queue mirrors the designs](./tillr-queue-mirrors-designs.md)):** a child item is declared in tracked Markdown rather than `.tillr/loop/<run_id>/derived-items.json` (moving from in-document blocks to companion `<topic>-plan.md` files once [that design](./tillr-queue-mirrors-designs.md) is built). The original ruling: lanes emit `.tillr/loop/<run_id>/derived-items.json`; only `tillr-drain` applies child items to `.tillr/state.db` after `tillr-land pass` succeeds. | Preserves single-writer store safety and prevents failed or rejected runs from leaking orphan child items onto the board. |
@@ -202,7 +202,7 @@ None. Every question this design carried is a row of the ledger above.
 
 ## 7. What This Design Does Not Cover
 
-- **Browser intake:** Governed by [observatory-actions](./observatory-actions.md#6-how-a-page-writes), not excluded. With `--write`, the observatory runs the terminal writer for saving ideas and moving items; its own store handle remains read-only. Vantage remains a separate reading and review surface.
+- **Browser intake:** Governed by [observatory-actions](../reference/observatory-actions.md#browser-writes), not excluded. With `--write`, the observatory runs the terminal writer for saving ideas and moving items; its own store handle remains read-only. Vantage remains a separate reading and review surface.
 - **Spend display, token budgets, or cost-based stopping:** Spend UI remains iceboxed per [OQ-OBD4](./observatory-design.md#11-decision-ledger), and `.tillr/state.db` continues recording `usage_cost_usd` without gating dispatch.
 - **Self-hosted binary compilation and reload mechanics:** Governed by [tillr-selfhosted-build.md](./tillr-selfhosted-build.md) ([OQ-SH1](./tillr-selfhosted-build.md#decision-ledger) through [OQ-SH3](./tillr-selfhosted-build.md#decision-ledger)), which Slice 1 assumes as its launcher substrate.
 - **Ruling the external owner-blocked queue items:** The Claude-whale counterpart, the pi-roadmap host-render row, and existing open design rulings in sibling specs remain owner decisions rather than automated dispositions.
@@ -226,9 +226,9 @@ fact about lineage, so nothing else can ask "where did this item come from". `D-
 settle the fix. Every item gets a kind (`idea`, `design` or `build`). The edge table gains a kind
 of its own, so that a `derived_from` edge, an item's single parent, sits beside the existing
 `blocked_by` edges without being mistaken for one. Sync writes the edge from a block's `from`
-attribute when it first imports the block, as
-[observatory actions, Section 5.4](./observatory-actions.md#54-what-the-design-seat-does-with-it)
-already says it will once the store has the table.
+attribute when it first imports the block, replacing the interim `placed_from` event receipt documented in
+[observatory actions](../reference/observatory-actions.md#staging-gate-refusals-and-outcomes)
+once the store has the table.
 
 **Outcomes:**
 

@@ -44,7 +44,7 @@ request shape, then runs `tillr-item place` as a separate process. Requests are
 serialized; the server never opens its store for writing. The writer is found
 beside this executable, including pack-cache siblings, then on PATH, or is named
 with `--tillr-item`. A missing writer is an explicit 503 `writer-unavailable`.
-The [observatory actions design](../../docs/design/observatory-actions.md#65-what-the-server-refuses)
+The [observatory actions reference](../../docs/reference/observatory-actions.md#http-refusals)
 lists the refusal rules. Whoever can reach a write-enabled server can reorder
 items; there is no login. These requests never edit the repository or move a ref.
 
@@ -79,7 +79,7 @@ close this gap, and uncommitted edits never replace the saved words on the page.
 The committed bytes or, before landing, the intake bytes must match the saved
 hash and size. A missing or altered copy is an explicit read refusal, never
 invented text.
-The [observatory actions design](../../docs/design/observatory-actions.md#65-what-the-server-refuses)
+The [observatory actions reference](../../docs/reference/observatory-actions.md#http-refusals)
 lists request and input statuses; a failed store write also returns 500
 `intake-store-failed`, naming the preserved file. Without `--write`, no New idea
 control or shortcut is available and POST is refused before request validation.
@@ -502,7 +502,7 @@ may supply the reason and recovery command, but does not hide the conflict's tra
 `GET /api/v1/waiting`. It prints one row per item except those stored as
 `landed`, `closed`, or `resolved-elsewhere`. The columns are #, item id,
 class, where, why, mover, and since. # is the item's
-[place](../../docs/design/observatory-actions.md#3-principles-and-words), counted
+[place](../../docs/reference/observatory-actions.md#queue-order-and-places), counted
 from 1 across the full order, with empty keys counted last by item id. Parked
 items have no place. Readers never print the stored key. Its JSON output and the historical API use the same row objects; the API
 places the array in its usual `data` field beside the read transaction's snapshot.

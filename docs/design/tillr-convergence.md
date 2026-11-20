@@ -308,7 +308,7 @@ Two attempts at this work built the retirement and neither produced a candidate 
 gate, for reasons this section did not state. Both replaced this section with a "Built" note.
 The loop refuses that before the gate, as a worker editing its own item block, and it writes the
 retirement itself once the change has landed. Removing the block also orphaned the dependency
-that `item-oa-move-to-top` in [`observatory-actions.md`](observatory-actions.md) declares on
+that `item-oa-move-to-top` in [`observatory-actions.md`](../reference/observatory-actions.md#moving-an-item) declares on
 this item, which is why document sync then failed. Criterion c6 states the boundary.
 
 The second attempt also stopped on test fallout from deleting the seed, and criterion c7 names

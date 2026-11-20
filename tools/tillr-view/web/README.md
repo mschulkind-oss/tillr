@@ -48,7 +48,7 @@ that execution.
 
 ## Recording queue priority
 
-The Items page shows [places](../../../docs/design/observatory-actions.md#3-principles-and-words),
+The Items page shows [places](../../../docs/reference/observatory-actions.md#queue-order-and-places),
 counted from 1 across the whole order. Filtering keeps those numbers, including
 any gaps. Parked and finished items have no place. Stored ordering keys are never
 sent to the page, and there is no separate unranked block.
