@@ -97,6 +97,13 @@ def shared_cache_dir():
 
 
 LOCK_DIR_ENV = 'GO_TEST_SHARDS_LOCK_DIR'
+SLOT_CLASS_ENV = 'GO_TEST_SHARDS_CLASS'
+HOLDER_ENV = 'GO_TEST_SHARDS_HOLDER'
+SLOT_CLASS_ORDINARY = 'ordinary'
+SLOT_CLASS_PROOF = 'proof'
+SLOT_CLASSES = (SLOT_CLASS_ORDINARY, SLOT_CLASS_PROOF)
+# Re-announce long waits periodically so neither logs nor output-based stall watchdogs go silent.
+WAIT_REPORT_INTERVAL = 30.0
 
 
 def default_lock_dir():
@@ -112,53 +119,237 @@ def default_lock_dir():
 
 
 def default_shard_limit():
-    """Machine-wide limit on concurrently running shards, sized from the core count."""
+    """Machine-wide limit on concurrently running ordinary shards, sized from the core count."""
     return max(1, (os.cpu_count() or 1) // 2)
 
 
+def default_proof_shard_limit(ordinary_limit=None):
+    """Reserved slots only proof and gate runs may take when ordinary slots are full."""
+    limit = max(1, default_shard_limit() if ordinary_limit is None else ordinary_limit)
+    return min(6, max(1, (limit + 1) // 2))
+
+
+def resolve_slot_class(slot_class=None):
+    chosen = (slot_class or os.environ.get(SLOT_CLASS_ENV, '')).strip() or SLOT_CLASS_ORDINARY
+    if chosen not in SLOT_CLASSES:
+        raise ValueError(f'invalid slot class {chosen!r}; expected one of {", ".join(SLOT_CLASSES)}')
+    return chosen
+
+
+def resolve_holder_run(holder=None, slot_class=SLOT_CLASS_ORDINARY):
+    """Name the run holding a slot so waiting callers see which runs own the pool."""
+    if holder is not None and str(holder).strip():
+        return str(holder).strip()
+    env_holder = os.environ.get(HOLDER_ENV, '').strip()
+    if env_holder:
+        return env_holder
+    run_id = os.environ.get('TILLR_RUN_ID', '').strip()
+    if run_id:
+        return run_id
+    spans = os.environ.get('TILLR_GATE_SPANS_OUT', '').strip()
+    if spans:
+        parent = Path(spans).parent.name
+        if parent == '.rolling':
+            return 'trunk-proof'
+        if parent:
+            return f'gate:{parent}'
+    if slot_class == SLOT_CLASS_PROOF:
+        return 'trunk-proof'
+    return f'pid-{os.getpid()}'
+
+
+def try_lock_slot(lock_dir, prefix, count, offset):
+    for step in range(count):
+        slot = (offset + step) % count
+        slot_name = f'{prefix}-{slot}'
+        path = lock_dir / f'{slot_name}.lock'
+        candidate = os.open(path, os.O_CREAT | os.O_RDWR, 0o666)
+        try:
+            fcntl.flock(candidate, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return candidate, slot_name
+        except BlockingIOError:
+            os.close(candidate)
+        except BaseException:
+            os.close(candidate)
+            raise
+    return None, None
+
+
+def proof_caller_waiting(lock_dir):
+    """Return True when at least one proof-class caller holds a shared lock on proof-waiting."""
+    path = lock_dir / 'proof-waiting.lock'
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    finally:
+        os.close(fd)
+    return False
+
+
+def write_slot_holder(lock_dir, slot_name, holder_name, slot_class):
+    """Publish a live-flock-backed holder record under the caller's exclusive slot lock."""
+    tmp_path = lock_dir / f'.{slot_name}.{os.getpid()}.{threading.get_ident()}.tmp'
+    meta_path = lock_dir / f'{slot_name}.holder.json'
+    payload = json.dumps({
+        'slot': slot_name,
+        'class': slot_class,
+        'run': holder_name,
+        'pid': os.getpid(),
+    }).encode('utf-8')
+    meta_fd = os.open(tmp_path, os.O_CREAT | os.O_TRUNC | os.O_RDWR, 0o666)
+    try:
+        os.write(meta_fd, payload)
+        fcntl.flock(meta_fd, fcntl.LOCK_SH)
+        os.replace(tmp_path, meta_path)
+        return meta_fd, meta_path
+    except BaseException:
+        os.close(meta_fd)
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
+        raise
+
+
+def read_slot_holders(lock_dir):
+    """Read metadata for every currently live slot holder without touching slot-*.lock."""
+    holders = []
+    try:
+        paths = sorted(lock_dir.glob('*.holder.json'))
+    except OSError:
+        return holders
+    for path in paths:
+        try:
+            fd = os.open(path, os.O_RDONLY)
+        except OSError:
+            continue
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raw = os.read(fd, 65536)
+                info = json.loads(raw.decode('utf-8', errors='replace'))
+                if isinstance(info, dict):
+                    holders.append(info)
+        except (OSError, ValueError):
+            pass
+        finally:
+            os.close(fd)
+    return holders
+
+
+def describe_slot_holders(holders, fallback_count=0):
+    counts = {}
+    for info in holders:
+        run_name = str(info.get('run') or 'unknown')
+        counts[run_name] = counts.get(run_name, 0) + 1
+    total = sum(counts.values())
+    if total == 0:
+        count = max(1, fallback_count)
+        return f'held by {count} active runner(s)'
+    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    runs = ', '.join(f'{name} ({count})' for name, count in ordered)
+    return f'held by {total} holder(s) across {len(ordered)} run(s): {runs}'
+
+
 @contextlib.contextmanager
-def acquire_shard_slot(lock_dir, limit, notify=None):
+def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
+                       proof_limit=None, holder=None):
     """Acquire one slot from a counted flock pool under lock_dir; wait without timeout.
 
-    When every slot is held, call notify(message) once, naming what is waited on. The wait
-    is outside every deadline the runner applies, so it cannot fail the work.
+    Ordinary callers take only from the ordinary share (`slot-0..limit-1`) and yield while
+    any proof-class caller is waiting. Proof-class callers (the trunk proof and landing
+    gate) try the ordinary share first, fall back to a reserved proof share (`proof-0..`),
+    and hold a shared lock on `proof-waiting.lock` while waiting so freed ordinary slots go
+    to them ahead of waiting lane workers. The wait is outside every deadline the runner
+    applies, so it cannot fail the work.
     """
     limit = max(1, limit)
-    announced = False
+    chosen_class = resolve_slot_class(slot_class)
+    reserved = (max(1, proof_limit) if proof_limit is not None
+                else default_proof_shard_limit(limit))
+    holder_name = resolve_holder_run(holder, chosen_class)
     lock_dir.mkdir(parents=True, exist_ok=True)
     fd = None
+    slot_name = None
+    wait_fd = None
+    wait_started = None
+    next_report_at = None
     offset = os.getpid() + threading.get_ident()
-    while fd is None:
-        for step in range(limit):
-            slot = (offset + step) % limit
-            path = lock_dir / f'slot-{slot}.lock'
-            candidate = os.open(path, os.O_CREAT | os.O_RDWR, 0o666)
-            try:
-                fcntl.flock(candidate, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                fd = candidate
+    try:
+        while fd is None:
+            yielding_to_proof = (chosen_class == SLOT_CLASS_ORDINARY
+                                 and proof_caller_waiting(lock_dir))
+            if not yielding_to_proof:
+                fd, slot_name = try_lock_slot(lock_dir, 'slot', limit, offset)
+            if fd is None and chosen_class == SLOT_CLASS_PROOF:
+                fd, slot_name = try_lock_slot(lock_dir, 'proof', reserved, offset)
+            if fd is not None:
                 break
-            except BlockingIOError:
-                os.close(candidate)
-            except BaseException:
-                os.close(candidate)
-                raise
-        if fd is None:
-            if not announced and notify is not None:
-                announced = True
-                notify(f'waiting for a test slot: all {limit} machine-wide slots in {lock_dir} '
-                       'are held by other test runners (not a failure; no timeout applies while waiting)')
-            time.sleep(0.05)
+            if chosen_class == SLOT_CLASS_PROOF and wait_fd is None:
+                wait_fd = os.open(lock_dir / 'proof-waiting.lock',
+                                  os.O_CREAT | os.O_RDWR, 0o666)
+                try:
+                    fcntl.flock(wait_fd, fcntl.LOCK_SH)
+                except BaseException:
+                    os.close(wait_fd)
+                    wait_fd = None
+                    raise
+            now = time.monotonic()
+            if wait_started is None:
+                wait_started = now
+                next_report_at = now
+            if notify is not None and now >= next_report_at:
+                holders = read_slot_holders(lock_dir)
+                expected = 1 if yielding_to_proof else limit
+                if len(holders) < expected:
+                    time.sleep(0.005)
+                    holders = read_slot_holders(lock_dir)
+                elapsed = int(round(now - wait_started))
+                after = f' after {elapsed}s' if elapsed > 0 else ''
+                pool_desc = (f'all {limit} ordinary and {reserved} proof slots in {lock_dir}'
+                             if chosen_class == SLOT_CLASS_PROOF
+                             else f'ordinary share ({limit} slots) in {lock_dir}')
+                why = ('yielding to a waiting proof/gate run; '
+                       if yielding_to_proof else '')
+                detail = describe_slot_holders(holders, fallback_count=limit)
+                notify(f'waiting for a test slot{after}: {pool_desc} busy ({why}{detail}; '
+                       'not a failure; no timeout applies while waiting)')
+                next_report_at = time.monotonic() + WAIT_REPORT_INTERVAL
+            time.sleep(0.02)
+        if wait_fd is not None:
+            os.close(wait_fd)
+            wait_fd = None
+        meta_fd, meta_path = write_slot_holder(lock_dir, slot_name, holder_name, chosen_class)
+    except BaseException:
+        if wait_fd is not None:
+            os.close(wait_fd)
+        if fd is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
+        raise
     try:
         yield
     finally:
         try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            with contextlib.suppress(OSError):
+                meta_path.unlink()
+            os.close(meta_fd)
         finally:
-            os.close(fd)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
 
 
 def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=None,
-              wall_timeout=DEFAULT_SHARD_TIMEOUT, lock_dir=None, shard_limit=None):
+              wall_timeout=DEFAULT_SHARD_TIMEOUT, lock_dir=None, shard_limit=None,
+              slot_class=None, proof_limit=None, holder=None):
     label = f'{package} shard {index}'
     env = private_environment(label, scratch, git_values)
     if not binary.is_file() or not os.access(binary, os.X_OK):
@@ -174,7 +365,8 @@ def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=N
         # its inherited output descriptors open after the shard itself is killed.
         with acquire_shard_slot(effective_lock_dir, effective_limit,
                                 lambda message: print(f'go-test-shards: {label} {message}',
-                                                      file=sys.stderr, flush=True)), \
+                                                      file=sys.stderr, flush=True),
+                                slot_class=slot_class, proof_limit=proof_limit, holder=holder), \
                 tempfile.NamedTemporaryFile(dir=scratch) as out, tempfile.NamedTemporaryFile(dir=scratch) as err, \
                 open(out.name, 'rb') as reader, open(err.name, 'rb') as error_reader:
             process = subprocess.Popen(command, cwd=cwd, env=env, stdout=out, stderr=err,
@@ -268,7 +460,8 @@ def load_durations(path):
     return record
 
 
-def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHARD_TIMEOUT, lock_dir=None):
+def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHARD_TIMEOUT,
+        lock_dir=None, slot_class=None, proof_limit=None, holder=None):
     stream = subprocess.check_output(['go', 'list', '-json', './...'], cwd=module, text=True)
     packages = []
     decoder = json.JSONDecoder()
@@ -280,6 +473,8 @@ def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHA
     git_values = global_git_config()
     lock_dir = lock_dir if lock_dir is not None else default_lock_dir()
     shard_limit = default_shard_limit()
+    resolved_class = resolve_slot_class(slot_class)
+    resolved_holder = resolve_holder_run(holder, resolved_class)
     for number, package in enumerate(packages):
         if not package.get('TestGoFiles') and not package.get('XTestGoFiles'):
             continue
@@ -298,7 +493,8 @@ def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHA
             if group or (not names and index == 0):
                 jobs.append((package['ImportPath'], Path(package['Dir']), binary, group,
                              index, scratch / f'package-{number}-shard-{index}', timeout, git_values,
-                             shard_timeout, lock_dir, shard_limit))
+                             shard_timeout, lock_dir, shard_limit, resolved_class,
+                             proof_limit, resolved_holder))
     events = []
     errors = []
     # Each package has at most K jobs. Run packages side by side, just as go test
@@ -325,6 +521,10 @@ def main():
     parser.add_argument('--events', type=Path, help='write Go test JSON events, including failed shards')
     parser.add_argument('--scratch', type=Path, help='parent of private scratch; defaults to TMPDIR or YOLO_DURABLE_DIR')
     parser.add_argument('--lock-dir', type=Path, help='shared lock directory; defaults to $GO_TEST_SHARDS_LOCK_DIR, then <GOCACHE>/go-test-shards-locks')
+    parser.add_argument('--slot-class', choices=SLOT_CLASSES, default=None,
+                        help='slot pool class: proof (reserved share and wait priority for trunk proof and gate) or ordinary (default, or $GO_TEST_SHARDS_CLASS)')
+    parser.add_argument('--holder', default=None,
+                        help='run name reported to waiting callers; defaults to $GO_TEST_SHARDS_HOLDER, $TILLR_RUN_ID, or $TILLR_GATE_SPANS_OUT')
     parser.add_argument('--timeout', default='0', help='explicit Go test timeout; default disables Go\'s own deadline')
     parser.add_argument('--shard-timeout', type=float, default=None, metavar='SECONDS',
                         help=f'maximum seconds without top-level test progress per shard (default {DEFAULT_SHARD_TIMEOUT:g})')
@@ -344,6 +544,10 @@ def main():
             options = {} if args.shard_timeout is None else {'shard_timeout': args.shard_timeout}
             if args.lock_dir is not None:
                 options['lock_dir'] = args.lock_dir.resolve()
+            if args.slot_class is not None:
+                options['slot_class'] = args.slot_class
+            if args.holder is not None:
+                options['holder'] = args.holder
             events = run(args.module.resolve(), args.shards, durations, Path(temporary), args.timeout, **options)
         if args.events:
             args.events.write_text(''.join(json.dumps(e) + '\n' for e in events))

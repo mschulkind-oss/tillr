@@ -2942,7 +2942,8 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "tools/tillr-drain" in module.GO_SHARD_DIRS
     for directory in module.GO_SHARD_DIRS:
         command = module.go_tool_command(directory)
-        assert "tools/go-test-shards.py" in command and "-k 6" in command, command
+        assert ("tools/go-test-shards.py" in command and "-k 6" in command
+                and "--slot-class proof" in command), command
         assert set(module.GO_SHARD_INPUTS) <= set(module.go_tool_watches(directory, repo))
     for directory in set(tool_dirs) - set(module.GO_SHARD_DIRS):
         command = module.go_tool_command(directory)

@@ -1854,7 +1854,7 @@ def go_tool_command(directory: str) -> str:
     """Complete suite: shards run fresh; native commands retain Go result caching."""
     if directory in GO_SHARD_DIRS:
         return (f"CGO_ENABLED=0 python3 tools/go-test-shards.py {shlex.quote(directory)} "
-                f"-k 6 --timeout {GO_TEST_TIMEOUT}")
+                f"-k 6 --slot-class proof --timeout {GO_TEST_TIMEOUT}")
     return (f"cd {directory} && CGO_ENABLED=0 go test -parallel {GO_TOOL_PARALLEL} "
             f"-timeout {GO_TEST_TIMEOUT} ./...")
 
