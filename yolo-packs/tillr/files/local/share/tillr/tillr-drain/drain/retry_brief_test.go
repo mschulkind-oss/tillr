@@ -605,3 +605,262 @@ func TestIdenticalRepeatHoldNamesWorkingCommandForFiledRequest(t *testing.T) {
 		t.Fatalf("expected third attempt to receive retry guidance and pass verify: verifies=%d sawGuidance=%v", steps.verifies, steps.sawGuidance)
 	}
 }
+
+func TestLandedRowItemWithLaterHeldRunNamesOnlyWorkingRemedy(t *testing.T) {
+	t.Run("identical-repeat conflict-owner hold after earlier landing", func(t *testing.T) {
+		f, l, base := plannedFixture(t)
+		writeForkFile(t, filepath.Join(f.root, "config/tillr/plan-guidance.md"), "cheap models")
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			_, err := tx.Exec(`UPDATE items SET state = 'closed' WHERE item_id = 'item-a'`)
+			return err
+		})
+		id := fileFixtureRequestWith(t, f, "Update cache in tools/item-a/cache.go.\n", "build", "planned-build@v1", []string{"tools/item-a/"}, false)
+		grantForItem(t, f, l, id)
+
+		// Seed an earlier landed row on the same item, matching an item whose earlier
+		// part landed through the drain before a later run ended in a hold.
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			return recordFixtureLanding(tx, id, "run-"+id+"-a0", "f6f45afdb", 1)
+		})
+
+		steps := &identicalRepeatRequestSteps{workflowSteps: base}
+		l.cfg.Steps = steps
+		result := &LoopResult{}
+
+		for i := 0; i < 25 && steps.verifies < 2; i++ {
+			graphPass(t, l, result)
+		}
+		if steps.verifies != 2 {
+			t.Fatalf("expected 2 verify runs before identical-repeat hold, got %d", steps.verifies)
+		}
+
+		// Confirm tillr item close refuses this item with already-landed.
+		st, err := store.Open(context.Background(), f.storePath, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		closeErr := st.WriteTx(context.Background(), func(tx *store.Tx) error {
+			_, err := item.Close(context.Background(), tx, id, "stop held item", "operator", time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC))
+			return err
+		})
+		st.Close()
+		if closeErr == nil || !strings.Contains(closeErr.Error(), "already landed; it cannot be closed") {
+			t.Fatalf("expected item.Close to refuse with already-landed, got %v", closeErr)
+		}
+
+		latestRun := steps.runs[len(steps.runs)-1].RunID
+		wantMover := "operator; deliver a revised instruction with tillr drain retry --item " + id + " --run " + latestRun + " --by <who> --why <reason>"
+
+		checkWhy := func(label string) {
+			t.Helper()
+			fixtureRead(t, f, func(r *store.Reader) error {
+				whyAns, err := Why(r, Pass{AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
+				if err != nil {
+					return err
+				}
+				var found bool
+				for _, row := range whyAns.Rows {
+					if row.ItemID != id {
+						continue
+					}
+					found = true
+					if row.Reason != ReasonConflictOwner {
+						t.Fatalf("%s: expected %s, got %+v", label, ReasonConflictOwner, row)
+					}
+					for _, bad := range []string{"tillr item close", "close the item"} {
+						if strings.Contains(row.Mover, bad) || strings.Contains(row.Why, bad) {
+							t.Fatalf("%s: why names refused close remedy (%q): mover=%q why=%q", label, bad, row.Mover, row.Why)
+						}
+					}
+					if row.Mover != wantMover {
+						t.Fatalf("%s: mover = %q, want %q", label, row.Mover, wantMover)
+					}
+				}
+				if !found {
+					t.Fatalf("%s: missing why row for %s", label, id)
+				}
+				return nil
+			})
+		}
+
+		fixtureRead(t, f, func(r *store.Reader) error {
+			conflicts, err := item.ReadConflicts(r)
+			if err != nil {
+				return err
+			}
+			held := conflicts[id]
+			if strings.Contains(held.Text, "tillr item close") || strings.Contains(held.Text, "close the item") {
+				t.Fatalf("recorded conflict text names refused close remedy:\n%s", held.Text)
+			}
+			return nil
+		})
+		checkWhy("freshly recorded hold")
+
+		// Also verify pre-existing conflict text recorded before this change is cleaned on read.
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			conflicts, err := item.ReadConflicts(tx.Reader())
+			if err != nil {
+				return err
+			}
+			c := conflicts[id]
+			c.Text = strings.TrimSuffix(c.Text, ".") + " (or close the item with tillr item close --item " + id + ")."
+			return item.RecordConflict(tx, c, time.Date(2026, 11, 20, 12, 1, 0, 0, time.UTC))
+		})
+		checkWhy("pre-existing conflict text")
+
+		// Execute the exact command named by why and confirm it accepts the retry and clears the hold.
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			_, err := AuthorizeRetry(context.Background(), tx, RetryRequest{
+				ItemID: id,
+				RunID:  latestRun,
+				By:     "operator",
+				Why:    "Include the regression test in tools/item-a/cache_test.go so c2 passes.",
+				At:     time.Date(2026, 11, 20, 12, 5, 0, 0, time.UTC),
+			})
+			return err
+		})
+		for i := 0; i < 15 && steps.verifies < 3; i++ {
+			graphPass(t, l, result)
+		}
+		if steps.verifies != 3 || !steps.sawGuidance {
+			t.Fatalf("expected named retry command to clear hold and complete: verifies=%d sawGuidance=%v", steps.verifies, steps.sawGuidance)
+		}
+	})
+
+	t.Run("owner obstacle hold after earlier landing", func(t *testing.T) {
+		f, l, base := plannedFixture(t)
+		writeForkFile(t, filepath.Join(f.root, "config/tillr/plan-guidance.md"), "cheap models")
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			_, err := tx.Exec(`UPDATE items SET state = 'closed' WHERE item_id = 'item-a'`)
+			return err
+		})
+		id := fileFixtureRequestWith(t, f, "Add eviction policy to tools/item-a/cache.go.\n", "build", "planned-build@v1", []string{"tools/item-a/"}, false)
+		grantForItem(t, f, l, id)
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			return recordFixtureLanding(tx, id, "run-"+id+"-a0", "f6f45afdb", 1)
+		})
+
+		steps := &ownerQuestionRequestSteps{
+			workflowSteps: base,
+			question:      "Should cache entries expire on read or only on write?",
+		}
+		l.cfg.Steps = steps
+		result := &LoopResult{}
+
+		for i := 0; i < 5 && steps.plans < 1; i++ {
+			graphPass(t, l, result)
+		}
+		graphPass(t, l, result)
+
+		blockedRunID := steps.runs[0].RunID
+		fixtureRead(t, f, func(r *store.Reader) error {
+			whyAns, err := Why(r, Pass{AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
+			if err != nil {
+				return err
+			}
+			for _, row := range whyAns.Rows {
+				if row.ItemID != id {
+					continue
+				}
+				for _, bad := range []string{"tillr item close", "close the item"} {
+					if strings.Contains(row.Mover, bad) || strings.Contains(row.Why, bad) {
+						t.Fatalf("owner hold why names refused close remedy (%q): mover=%q why=%q", bad, row.Mover, row.Why)
+					}
+				}
+				if !strings.Contains(row.Mover, "tillr drain retry --item "+id+" --run "+blockedRunID+" --by <who> --why <reason>") {
+					t.Fatalf("owner hold why missing working retry command: %+v", row)
+				}
+			}
+			return nil
+		})
+
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			_, err := AuthorizeRetry(context.Background(), tx, RetryRequest{
+				ItemID: id,
+				RunID:  blockedRunID,
+				By:     "matt",
+				Why:    "Expire only on write.",
+				At:     time.Date(2026, 11, 20, 12, 10, 0, 0, time.UTC),
+			})
+			return err
+		})
+		for i := 0; i < 15 && steps.verifies < 1; i++ {
+			graphPass(t, l, result)
+		}
+		if steps.verifies != 1 {
+			t.Fatalf("expected named retry command to unblock and pass verify, verifies=%d", steps.verifies)
+		}
+	})
+
+	t.Run("gate-judged and design-run conflict holds after earlier landing name exact accepted retry flags", func(t *testing.T) {
+		f, l := generatedFixture(t)
+		id := fileFixtureRequest(t, f, "build", item.SingleWorkerWorkflow, []string{"docs/notes.md"})
+		judgedRunID := "run-" + id + "-a15"
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			if err := recordFixtureLanding(tx, id, "run-"+id+"-a1", "f6f45afdb", 1); err != nil {
+				return err
+			}
+			if err := applyTerminal(tx, run.Record{
+				RunID:      judgedRunID,
+				ItemID:     id,
+				LaneID:     "lane-1",
+				Backend:    "fixture",
+				State:      run.StateExited,
+				ExitCode:   countPtr(0),
+				StartedAt:  "2026-11-20T10:00:00Z",
+				FinishedAt: "2026-11-20T10:01:00Z",
+			}); err != nil {
+				return err
+			}
+			if err := appendEffect(tx, GateVerdictKind, judgedRunID, map[string]any{
+				"verdict_id": "verdict-" + judgedRunID,
+				"item_id":    id,
+				"run_id":     judgedRunID,
+				"result":     "fail",
+			}, time.Date(2026, 11, 20, 10, 1, 5, 0, time.UTC)); err != nil {
+				return err
+			}
+			return item.RecordConflict(tx, item.Conflict{
+				ConflictID:      "conflict-" + judgedRunID,
+				ItemID:          id,
+				RunID:           judgedRunID,
+				Text:            IdenticalRepeatPrefix + " run " + judgedRunID + " ended (refused at gate) with the same evidence as run run-" + id + "-a14.",
+				Status:          "owner",
+				WaitingOn:       "owner",
+				BlockedCriteria: []string{"c1"},
+			}, time.Date(2026, 11, 20, 10, 1, 10, 0, time.UTC))
+		})
+
+		wantCmd := "tillr drain retry --item " + id + " --run " + judgedRunID + " --by <who> --why <reason> --acknowledge gate-failed"
+		fixtureRead(t, f, func(r *store.Reader) error {
+			whyAns, err := Why(r, Pass{AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
+			if err != nil {
+				return err
+			}
+			for _, row := range whyAns.Rows {
+				if row.ItemID != id {
+					continue
+				}
+				if strings.Contains(row.Mover, "close") || strings.Contains(row.Why, "close") {
+					t.Fatalf("judged conflict why names close after landing: %+v", row)
+				}
+				if row.Mover != "operator; deliver a revised instruction with "+wantCmd {
+					t.Fatalf("mover = %q, want %q", row.Mover, "operator; deliver a revised instruction with "+wantCmd)
+				}
+			}
+			return nil
+		})
+
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			_, err := AuthorizeRetry(context.Background(), tx, RetryRequest{
+				ItemID:      id,
+				RunID:       judgedRunID,
+				By:          "operator",
+				Why:         "Repair failing gate check.",
+				Acknowledge: RetryAckGateFailed,
+				At:          time.Date(2026, 11, 20, 10, 5, 0, 0, time.UTC),
+			})
+			return err
+		})
+	})
+}

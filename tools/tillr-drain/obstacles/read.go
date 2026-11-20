@@ -143,6 +143,101 @@ func (h Hold) MoverText() string {
 	return h.Mover + "; " + h.Action
 }
 
+// WithoutCloseRemedy returns h with any `tillr item close` / `close the item` clause
+// replaced by the retry remedy alone. Once an item has a landed receipt in landings,
+// `tillr item close` refuses it with already-landed (D-JL4).
+func (h Hold) WithoutCloseRemedy() Hold {
+	switch h.Kind {
+	case "owner":
+		if h.RunID != "" {
+			h.Action = "answer the question with tillr drain retry --item " + h.ItemID + " --run " + h.RunID + " --by <who> --why <reason>"
+		} else {
+			h.Action = "answer the question and retry the item"
+		}
+	case "", "definition":
+		ev := FirstLine(h.Fields["EVIDENCE"])
+		if h.RunID != "" {
+			retryCmd := "retry run " + h.RunID + " with tillr drain retry --item " + h.ItemID + " --run " + h.RunID + " --by <who> --why <reason>"
+			if ev != "" {
+				h.Action = ev + "; " + retryCmd
+			} else {
+				h.Action = retryCmd
+			}
+		} else if ev != "" {
+			h.Action = ev + "; retry the item"
+		} else {
+			h.Action = "retry the item"
+		}
+	default:
+		h.Action = strings.ReplaceAll(h.Action, ", or close the item (tillr item close --item "+h.ItemID+")", "")
+		h.Action = strings.ReplaceAll(h.Action, ", or close the item", "")
+	}
+	return h
+}
+
+// StripCloseRemedy removes close-item remedy clauses from hold text or mover text for
+// an item that already has a landed receipt in landings and therefore cannot be closed.
+func StripCloseRemedy(s, itemID string) string {
+	if itemID != "" {
+		s = strings.ReplaceAll(s, " (or close the item with tillr item close --item "+itemID+")", "")
+		s = strings.ReplaceAll(s, ", or close the item (tillr item close --item "+itemID+")", "")
+	}
+	s = strings.ReplaceAll(s, ". Or close the item with `tillr item close`.", ".")
+	s = strings.ReplaceAll(s, ". Or close the item with tillr item close.", ".")
+	s = strings.ReplaceAll(s, ", or should the item be closed?", "?")
+	s = strings.ReplaceAll(s, ", or the item closed?", "?")
+	s = strings.ReplaceAll(s, "refile or close the item, or ", "")
+	s = strings.ReplaceAll(s, "close the item or ", "")
+	s = strings.ReplaceAll(s, "close it or ", "")
+	s = strings.ReplaceAll(s, ", or close the item", "")
+	s = strings.ReplaceAll(s, " or close the item", "")
+	s = strings.ReplaceAll(s, ", or close it", "")
+	s = strings.ReplaceAll(s, " or close it", "")
+	return s
+}
+
+// HasLanded reports whether landings records at least one landed receipt for itemID.
+// A store created without tillr-land's schema has no landings table and answers false.
+func HasLanded(r *store.Reader, itemID string) (bool, error) {
+	var hasLandings bool
+	if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'landings')`).Scan(&hasLandings); err != nil {
+		return false, err
+	}
+	if !hasLandings {
+		return false, nil
+	}
+	var landed bool
+	if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM landings WHERE item_id = ? AND result = 'landed')`, itemID).Scan(&landed); err != nil {
+		return false, err
+	}
+	return landed, nil
+}
+
+// LandedItems answers the set of item IDs that have at least one landed receipt in landings.
+func LandedItems(r *store.Reader) (map[string]bool, error) {
+	var hasLandings bool
+	if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'landings')`).Scan(&hasLandings); err != nil {
+		return nil, err
+	}
+	if !hasLandings {
+		return nil, nil
+	}
+	rows, err := r.Query(`SELECT DISTINCT item_id FROM landings WHERE result = 'landed'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
 // OneLine collapses whitespace runs (including newlines) into single spaces.
 func OneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
@@ -289,6 +384,15 @@ func Read(r *store.Reader) (map[string]Hold, map[string]string, error) {
 			if relRun, ok := released[itemID]; ok && runID != relRun {
 				delete(released, itemID)
 			}
+		}
+	}
+	landed, err := LandedItems(r)
+	if err != nil {
+		return nil, nil, err
+	}
+	for id, h := range active {
+		if landed[id] {
+			active[id] = h.WithoutCloseRemedy()
 		}
 	}
 	return active, released, nil
