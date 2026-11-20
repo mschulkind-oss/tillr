@@ -297,7 +297,12 @@ When the installed `pi` binary advertises `parked-tool-calls`, the drain runs wo
 worktree ahead of `base_sha` and suspends the tool call, `obstacle` validates structured
 blocker fields and suspends, and a gate, land, or revert refusal reopens that session
 without a new prompt to deliver the refusal as the suspended call's result. Where
-`parked-tool-calls` is absent, workers end with `RESULT:` text footers.
+`parked-tool-calls` is absent, workers end with `RESULT:` text footers. A Claude-backed
+worker has the same one-call ending when the installed `claude` supports deferred-tool
+resume: it calls `mcp__tillr__land` or `mcp__tillr__obstacle`, the session ends with the
+call open, and the gate's answer, with the same text pi receives, comes back as that call's
+result on a promptless `--resume`. An older `claude`, or one run with
+`CLAUDE_CODE_DISABLE_DEFERRED_TOOL_RESUME` set, ends with the `RESULT:` footer.
 
 When `pi` recovers from a loop in-run (`loop_detected` with `action: "recovered"`), the
 runner records `loop_recovery` (count, shape, tokens before and after) on the run and
