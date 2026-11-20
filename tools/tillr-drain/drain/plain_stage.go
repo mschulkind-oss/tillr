@@ -103,6 +103,11 @@ func (s *LaneStager) stagePlain(ctx context.Context, spec StageSpec, def definit
 	if err != nil {
 		return err
 	}
+	guidance, err := itemGuidanceBrief(ctx, s.Store, spec.ItemID, "")
+	if err != nil {
+		return err
+	}
+	brief += guidance
 	brief, err = s.workflowNodeBrief(spec, brief, false)
 	if err != nil {
 		return err

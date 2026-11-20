@@ -577,6 +577,11 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 			return err
 		}
 	}
+	guidance, err := itemGuidanceBrief(ctx, s.Store, spec.ItemID, worktree)
+	if err != nil {
+		return err
+	}
+	brief += guidance
 	brief, err = s.workflowNodeBrief(spec, brief, true)
 	if err != nil {
 		return err

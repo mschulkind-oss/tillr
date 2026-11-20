@@ -260,6 +260,7 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 		return l.saveBlockConflict(ctx, c)
 	}
 	c := item.Conflict{ConflictID: "conflict-" + d.RunRequest.RunID, ItemID: d.ItemID, RunID: d.RunRequest.RunID, Text: text, Status: "raised", WaitingOn: "design", BlockedCriteria: []string{}}
+	var isRequest bool
 	r, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		return err
@@ -267,6 +268,10 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 	err = r.ReadTx(ctx, func(tx *store.Reader) error {
 		if err := tx.QueryRow(`SELECT COALESCE(body_ref, '') FROM items WHERE item_id = ?`, d.ItemID).Scan(&c.BodyRef); err != nil {
 			return err
+		}
+		var reqErr error
+		if isRequest, reqErr = isFiledRequest(tx, d.ItemID); reqErr != nil {
+			return reqErr
 		}
 		rows, err := tx.Query(`SELECT criterion_id FROM item_criteria WHERE item_id = ? ORDER BY criterion_id`, d.ItemID)
 		if err != nil {
@@ -319,6 +324,9 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 		}
 	} else if c.BodyRef == "" {
 		c.WaitingOn, c.Status = "owner", "owner"
+		if isRequest {
+			c.Text += "\n\nDeliver the answer in the next run's brief with: " + retryCommand(d.ItemID, d.RunRequest.RunID, "")
+		}
 	} else if instruction := obstacleDesignInstruction(obstacle); obstacle.Problem == "" && instruction != "" {
 		c.Text += "\n\n" + instruction
 	}

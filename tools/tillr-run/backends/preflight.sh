@@ -96,10 +96,16 @@ preflight_brief() {
     ' "$1"); then
         refuse "the brief '$1' has a saved words byte count that does not match its suffix"
     fi
-    if printf '%s\n' "$template_text" | grep -q '{{[A-Z][A-Z0-9_]*}}'; then
+    checked_template=$(printf '%s\n' "$template_text" | awk '
+        /^## (Answered owner questions|Retry reasons)$/ { in_recorded=1; print; next }
+        /^## / { in_recorded=0 }
+        in_recorded && /^>/ { next }
+        { print }
+    ')
+    if printf '%s\n' "$checked_template" | grep -q '{{[A-Z][A-Z0-9_]*}}'; then
         refuse "the brief '$1' still carries an unfilled template placeholder ('{{NAME}}'): the template backends/brief-template.md is the thing to fix, and an unfilled template is not a brief"
     fi
-    if printf '%s\n' "$template_text" | grep -q '{{'; then
+    if printf '%s\n' "$checked_template" | grep -q '{{'; then
         refuse "the brief '$1' carries a literal '{{' that is not a template placeholder: it arrived in an item field (the title, the body reference, a criterion or an allowed path), so the item's record is the thing to fix and backends/brief-template.md is not"
     fi
     headings=$REQUIRED_HEADINGS

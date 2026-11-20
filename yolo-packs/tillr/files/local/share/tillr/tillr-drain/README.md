@@ -423,6 +423,14 @@ never has a document block. The drain runs it like any other item, with four add
 - **Judge.** An agent judge or a workflow's `evaluator_slot` node reads the same words
   suffix at the end of its brief, because a request's criteria judge the work against
   them.
+- **Owner questions, retries, and identical repeats.** Because a filed request never has a
+  document block, an `owner` obstacle or an identical-repeat hold names `tillr drain retry`
+  on the item's latest finished run (or `tillr item close`) instead of asking for a block
+  amendment or document triage. Authorizing that retry releases the owner hold back to the
+  queue and delivers the recorded text into subsequent worker and judge briefs under
+  `## Answered owner questions` (pairing the worker's question with its answer, who
+  recorded it, and when, so the question is not asked again) or `## Retry reasons` (with
+  who recorded it and when).
 
 Completion is the normal gate and landing, plus whatever the workflow's own verify or
 judge stage decides. `planned-build@v1`, the build seat's default, has a `verify`
@@ -1416,7 +1424,13 @@ never a repeat, however many there are, and a refusal recorded before evidence k
 existed repeats nothing. An item with no design document still goes to the owner on a
 repeat, because there is no document for the design seat to amend, and so does an item
 whose backend policy names no design seat (a design route there would stop the loop for
-every item). The run named as repeated is the latest earlier match, so a repeat after the
+every item). When that item is a [filed request](#filed-requests), the identical-repeat
+hold names `tillr drain retry` to deliver a revised instruction in the next run's brief
+rather than asking to amend a nonexistent block. Every recorded retry reason and answered
+owner question (from `tillr drain retry`, a settled document question, or an item-scoped
+owner decision) appears in subsequent briefs under `## Answered owner questions` or
+`## Retry reasons`, with who recorded it and when
+([`drain/retry_brief_test.go`](./drain/retry_brief_test.go)). The run named as repeated is the latest earlier match, so a repeat after the
 owner put the item back and authorized a retry raises its own conflict on the new pair;
 the older conflict no longer holds the item and is not a reason to skip. The rule is the pure
 function `repeatedEnding` in [`drain/returned.go`](./drain/returned.go), with table tests
