@@ -2,6 +2,7 @@ package drain
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -2722,12 +2723,9 @@ func (l *Loop) pin(ctx context.Context, runID, sha string) error {
 	// The timeout bounds a wedged git rather than the stop.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), pinTimeout)
 	defer cancel()
-	if l.unpinnableOnTrunk(ctx, runID, sha) {
-		l.reportf("loop: no pin for %s at %s: its name is too long for a ref and the trunk already contains the commit\n", runID, sha)
-		return nil
-	}
-	if _, err := l.git(ctx, l.cfg.Root, "update-ref", "refs/tillr/runs/"+runID, sha); err != nil {
-		return Externalf("pinning refs/tillr/runs/%s at %s: %v", runID, sha, err)
+	ref := pinRef(runID)
+	if _, err := l.git(ctx, l.cfg.Root, "update-ref", ref, sha); err != nil {
+		return Externalf("pinning %s at %s: %v", ref, sha, err)
 	}
 	return nil
 }
@@ -2736,18 +2734,17 @@ func (l *Loop) pin(ctx context.Context, runID, sha string) error {
 // git keeps a loose ref as a file, and a file name holds 255 bytes.
 const maxRefComponent = 255
 
-// unpinnableOnTrunk answers whether a pin may be skipped: the run id is too long to be a
-// ref's file name, and the trunk already contains the commit. A pin exists to keep a commit
-// reachable, and a commit the trunk holds is reachable without one. A run id grown by
-// repeated failover and restart suffixes made `git update-ref` fail on every restart on
-// 2026-11-19, and each failure ended the loop. A head the trunk lacks is still pinned, so
-// an unwritable pin there is still an error.
-func (l *Loop) unpinnableOnTrunk(ctx context.Context, runID, sha string) bool {
+// pinRef names the ref that keeps a run's commit reachable. A run id that fits a file name
+// is pinned under its own name, which is where every reader looks. One that does not fit is
+// pinned under a digest of the name, in a namespace of its own: the commit stays reachable,
+// which is what a pin is for, and no reader that looks a pin up by run id finds it. A run id
+// grown by repeated failover and restart suffixes made `git update-ref` fail on every
+// restart on 2026-11-19, and each failure ended the loop.
+func pinRef(runID string) string {
 	if len(runID) <= maxRefComponent {
-		return false
+		return "refs/tillr/runs/" + runID
 	}
-	held, err := containsCommit(ctx, l.cfg.Root, sha, TrunkRef)
-	return err == nil && held
+	return fmt.Sprintf("refs/tillr/runs-long/%x", sha256.Sum256([]byte(runID)))
 }
 
 // pinTimeout bounds one pin's `git update-ref`, which survives the loop's stop.
