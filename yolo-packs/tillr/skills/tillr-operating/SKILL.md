@@ -52,8 +52,10 @@ naming any expired covering grant, when it expired, and `tillr item grant issue`
 running. The read-only judge runs after the fence check and before the gate; only a
 successful landing records the checked agent verdicts, without the mechanical
 verdict program. A workflow evaluator's `not-done` returns the named criteria to the
-workflow's first node as `verify-not-done`, whereas an opted-in item judge holds
-`not-done` as `eval-failed`. `judge-grant-absent`, `judge-unreadable`, and `eval-failed`
+workflow's first node as `verify-not-done`, whereas an opted-in item judge holds a
+document item's `not-done` as `eval-failed`. On a filed request (`tillr item request`),
+`not-done` from either path returns all `not-done` findings to the builder's same
+session with no operator hold. `judge-grant-absent`, `judge-unreadable`, and `eval-failed`
 are holds, not criterion verdicts. The
 [opted-in judge contract](../../../../tools/tillr-drain/README.md#opted-in-judgment-before-the-gate)
 explains the retained file, failure reasons, and candidate restoration.

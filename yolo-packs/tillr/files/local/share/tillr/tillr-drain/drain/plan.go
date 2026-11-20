@@ -1467,7 +1467,7 @@ func (p *planner) returnedEnding(itemID string) *ReturnedEnding {
 	reason := p.retryHoldReason(itemID)
 	cause, ok := returnedReasons[reason]
 	e := p.history.endings[latest]
-	if reason == ReasonEvalFailed && e.Step == reason && e.WorkerSession != nil {
+	if reason == ReasonEvalFailed && e.Step == reason && (e.WorkerSession != nil || e.Evidence != "") {
 		cause, ok = reason, true
 	}
 	if !ok {
@@ -2097,6 +2097,7 @@ func readRunHistory(r *store.Reader) (runHistory, error) {
 					}
 				}
 				history.obstacleCalls[call.RunID] = &WorkerSession{
+					RunID:     call.RunID,
 					SessionID: call.SessionID,
 					LaneDir:   filepath.Dir(call.RunLog),
 					LaneID:    filepath.Base(filepath.Dir(call.RunLog)),
@@ -2128,7 +2129,7 @@ func readRunHistory(r *store.Reader) (runHistory, error) {
 				history.endings[*e.ObjectID] = payload.refusalPayload
 				if payload.WriterRunID != "" {
 					history.judgeHolds[payload.WriterRunID] = payload.Step
-					if payload.WorkerSession != nil {
+					if payload.WorkerSession != nil || payload.Evidence != "" {
 						history.endings[payload.WriterRunID] = payload.refusalPayload
 					}
 				}

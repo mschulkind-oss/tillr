@@ -78,7 +78,7 @@ func readRepeatedEnding(r *store.Reader, d Decision) (*secondFailure, error) {
 		return nil, err
 	}
 	latest, ok := history.endings[current]
-	if !ok || !returnedCauses[latest.Step] || latest.Evidence == "" {
+	if !ok || (!returnedCauses[latest.Step] && latest.Step != ReasonEvalFailed) || latest.Evidence == "" {
 		return nil, nil
 	}
 	works, err := readPending(r)

@@ -236,9 +236,13 @@ func (l *Loop) validateLandingOffer(ctx context.Context, d Decision, rec run.Rec
 	if err != nil {
 		return landingCall{}, err
 	}
-	base := l.settleBase(d.LaneID, mainSHA)
-	if d.Workflow != nil && d.NodeBaseSHA != "" {
-		base = d.NodeBaseSHA
+	settledBase := l.settleBase(d.LaneID, mainSHA)
+	base := l.laneFile(d.LaneID, BaseSHAFile)
+	if base == "" {
+		base = settledBase
+		if d.Workflow != nil && d.NodeBaseSHA != "" {
+			base = d.NodeBaseSHA
+		}
 	}
 	if offer.toolName() == "obstacle" {
 		if offer.Base != base {
@@ -248,7 +252,7 @@ func (l *Loop) validateLandingOffer(ctx context.Context, d Decision, rec run.Rec
 		if obs.Problem != "" {
 			return landingCall{}, Externalf("obstacle call for %s is incomplete: %s", rec.RunID, obs.Problem)
 		}
-	} else if offer.Commit != head || offer.Base != base || head == base {
+	} else if offer.Commit != head || offer.Base != base || head == base || head == settledBase || (d.Workflow != nil && d.NodeBaseSHA != "" && head == d.NodeBaseSHA) {
 		return landingCall{}, Externalf("landing offer for %s does not name a call, summary and its staged base and new HEAD", rec.RunID)
 	}
 	artifactDir := laneDir
@@ -517,16 +521,21 @@ func (l *Loop) answerLandingRefusal(tx *store.Tx, candidate Candidate, refusal r
 		outcome = "conflict"
 	case RefusalReverted:
 		outcome = "reverted"
+	case RefusalVerifyNotDone:
+		if refusal.WorkerSession != nil {
+			outcome = "judge-refused"
+		}
 	case ReasonEvalFailed:
 		outcome = "judge-refused"
 	case IdenticalRepeatPrefix:
 		outcome = "identical-repeat"
 	}
+	writerID := judgeWriterRun(candidate)
 	choice := chooseLandingCallAnswer(outcome)
 	if choice.Kind == "" {
 		if refusal.Step == RefusalNoOp {
 			var tool string
-			if err := tx.QueryRow(`SELECT COALESCE(json_extract(payload,'$.tool'),'') FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=?`, callOffered, candidate.RunID).Scan(&tool); err == nil && tool == "obstacle" {
+			if err := tx.QueryRow(`SELECT COALESCE(json_extract(payload,'$.tool'),'') FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=?`, callOffered, writerID).Scan(&tool); err == nil && tool == "obstacle" {
 				choice = landingCallChoice{Kind: "obstacle-answer"}
 			}
 		}
@@ -535,7 +544,7 @@ func (l *Loop) answerLandingRefusal(tx *store.Tx, candidate Candidate, refusal r
 		}
 	}
 	var raw []byte
-	err := tx.QueryRow(`SELECT payload FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=?`, callOffered, candidate.RunID).Scan(&raw)
+	err := tx.QueryRow(`SELECT payload FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=?`, callOffered, writerID).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -639,6 +648,10 @@ func (l *Loop) returnedLandingAnswer(ctx context.Context, d Decision) (landingCa
 	if d.Returned == nil || d.Returned.RunID == "" {
 		return call, answer, nil
 	}
+	callRunID := d.Returned.RunID
+	if d.Returned.WorkerSession != nil && d.Returned.WorkerSession.RunID != "" {
+		callRunID = d.Returned.WorkerSession.RunID
+	}
 	db, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		return call, answer, err
@@ -648,7 +661,7 @@ func (l *Loop) returnedLandingAnswer(ctx context.Context, d Decision) (landingCa
 		var offerRaw, answerRaw []byte
 		err := r.QueryRow(`SELECT o.payload,a.payload FROM events o JOIN events a
    ON a.object_type=o.object_type AND a.object_id=o.object_id AND a.kind=?
-   WHERE o.object_type='call' AND o.kind=? AND json_extract(o.payload,'$.run_id')=?`, callAnswered, callOffered, d.Returned.RunID).Scan(&offerRaw, &answerRaw)
+   WHERE o.object_type='call' AND o.kind=? AND json_extract(o.payload,'$.run_id')=?`, callAnswered, callOffered, callRunID).Scan(&offerRaw, &answerRaw)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -662,7 +675,7 @@ func (l *Loop) returnedLandingAnswer(ctx context.Context, d Decision) (landingCa
 			return err
 		}
 		if answer.CallID != call.CallID || call.ItemID != d.ItemID || strings.TrimSpace(answer.Text) == "" {
-			return Externalf("invalid stored landing answer for %s", d.Returned.RunID)
+			return Externalf("invalid stored landing answer for %s", callRunID)
 		}
 		return nil
 	})
@@ -877,7 +890,16 @@ func landingResultPersisted(transcript []byte, session string, answer landingAns
 // refusal answer. The read is out of the writer transaction; only the drain
 // owns the item's examination, and an existing native refusal is idempotent.
 func (l *Loop) landingRefusalRepeats(ctx context.Context, c Candidate, refusal refusalPayload) (bool, error) {
-	if refusal.Evidence == "" || (refusal.Step != RefusalGate && refusal.Step != RefusalFence) {
+	if refusal.Evidence == "" {
+		return false, nil
+	}
+	switch refusal.Step {
+	case RefusalGate, RefusalFence:
+	case RefusalVerifyNotDone, ReasonEvalFailed:
+		if refusal.WorkerSession == nil {
+			return false, nil
+		}
+	default:
 		return false, nil
 	}
 	db, err := store.OpenRead(ctx, l.cfg.Store)
@@ -886,9 +908,10 @@ func (l *Loop) landingRefusalRepeats(ctx context.Context, c Candidate, refusal r
 	}
 	defer db.Close()
 	var repeated bool
+	writerID := judgeWriterRun(c)
 	err = db.ReadTx(ctx, func(r *store.Reader) error {
 		var offered bool
-		if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=?)`, callOffered, c.RunID).Scan(&offered); err != nil || !offered {
+		if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=?)`, callOffered, writerID).Scan(&offered); err != nil || !offered {
 			return err
 		}
 		history, err := readRunHistory(r)

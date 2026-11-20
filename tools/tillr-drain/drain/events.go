@@ -273,7 +273,15 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 	}
 	if returnedCauses[step] {
 		payload.Checks, payload.Evidence = l.endingEvidence(ctx, candidate, step)
-		if step != RefusalVerifyNotDone {
+		capture := step != RefusalVerifyNotDone
+		if !capture {
+			words, err := requestWordsFor(ctx, l.cfg.Store, candidate.ItemID)
+			if err != nil {
+				return err
+			}
+			capture = words != nil
+		}
+		if capture {
 			var err error
 			payload.WorkerSession, err = l.captureWorkerSession(ctx, candidate)
 			if err != nil {

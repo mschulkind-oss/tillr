@@ -2824,7 +2824,7 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 		}
 		return "", false, nil
 	}
-	if err := l.recordLandingCallLanded(ctx, candidate.RunID, landed.TrunkAfter); err != nil {
+	if err := l.recordLandingCallLanded(ctx, judgeWriterRun(candidate), landed.TrunkAfter); err != nil {
 		return "", false, err
 	}
 	if err := l.deliverCommentReplies(ctx, candidate); err != nil {
