@@ -5177,6 +5177,18 @@ INVARIANT_PHRASES = {
 # it is a check that could not answer, which is exit 2 and never a pass.
 COULD_NOT_ANSWER_CODES = (124, 125, 126, 127, 137)
 
+# A check whose process was ended by a signal the gate did not send (a worker's
+# `pkill -f go-test-shards` on a shared machine is the measured case, 2026-11-20: the
+# trunk proof read exit -15 as a red for eight hours) answers a negative status, since
+# Popen reports "killed by signal N" as -N. The gate's own kills never reach this: a
+# stall returns CHECK_STALLED_RC and a cancel is recorded as a stopped check.
+OUTSIDE_SIGNAL_RERUNS = 2
+
+
+def outside_signal(rc: int) -> int | None:
+    """The signal number that ended a check from outside, or None for any other status."""
+    return -rc if -64 <= rc < 0 else None
+
 # The ten-second line that decides the gate's first phase. A check estimated under this
 # many seconds runs to completion before any suite or fork check starts, so a cheap red
 # kills the run before the expensive work begins (board item 337). These are ESTIMATES
@@ -5549,7 +5561,8 @@ class Check:
         however it failed. A kind the table does not name is a verdict, because a red that
         quietly becomes "not a verdict" is a red nobody fixes.
         """
-        if self.rc == CHECK_STALLED_RC or self.rc in COULD_NOT_ANSWER_CODES:
+        if self.rc == CHECK_STALLED_RC or self.rc in COULD_NOT_ANSWER_CODES \
+                or outside_signal(self.rc) is not None:
             return False
         if getattr(self, "fast_tree", False) and self.preflight_refused:
             return False
@@ -8432,8 +8445,19 @@ def execute_attempt(root: Path, check: Check, diff_base: str,
         check.output = "\n".join(refusals)
         seconds = time.monotonic() - pass_started
     else:
-        check.rc, check.output, seconds = run_command(
-            root, check.argv, check.timeout, {**check.env, **(env or {})}, drop, cancel)
+        seconds = 0.0
+        for attempt in range(OUTSIDE_SIGNAL_RERUNS + 1):
+            check.rc, check.output, ran = run_command(
+                root, check.argv, check.timeout, {**check.env, **(env or {})}, drop, cancel)
+            seconds += ran
+            signal_number = outside_signal(check.rc)
+            if signal_number is None or (cancel is not None and cancel.cancelled):
+                break
+            note = f"ended by signal {signal_number} from outside"
+            if attempt < OUTSIDE_SIGNAL_RERUNS:
+                check.warnings.append(f"{note}; run again")
+            else:
+                check.output = f"{note}: not a failed check; nothing was judged\n{check.output}"
     if getattr(check, "fast_tree", False):
         if check.rc == 6:
             check.rc = CHECK_STALLED_RC

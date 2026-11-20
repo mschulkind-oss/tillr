@@ -5992,6 +5992,31 @@ for kind, rc in (("pipeline-evidence", 124), ("go-tool", 127), ("file-size", 137
     assert not could_not_run.conflict, f"{kind} exiting {rc} became a verdict"
     assert verdict.check_status(could_not_run) == "ERR", verdict.check_status(could_not_run)
     assert verdict.verdict_of([could_not_run]) == ("unproven", 2), verdict.verdict_of([could_not_run])
+# A check ended by a signal the gate did not send (a worker's pattern kill) is not a red:
+# it reports "ended by signal N from outside", is unproven, and is run again.
+for kind in ("go-tool", "gate-runner", "pipeline-evidence"):
+    signaled = verdict.Check(kind, "label", ["true"], "why", 1)
+    signaled.rc = -15
+    assert not signaled.conflict, f"{kind} killed by SIGTERM became a verdict"
+    assert verdict.verdict_of([signaled]) == ("unproven", 2), verdict.verdict_of([signaled])
+assert verdict.outside_signal(-15) == 15 and verdict.outside_signal(1) is None
+assert verdict.outside_signal(verdict.CHECK_STALLED_RC) is None
+import tempfile as _tf
+with _tf.TemporaryDirectory() as _d:
+    _root = Path(_d)
+    _marker = _root / "count"
+    _script = f"echo x >> {_marker}; if [ $(wc -l < {_marker}) -lt 2 ]; then kill -TERM $$; fi"
+    retried = verdict.Check("go-tool", "label", ["sh", "-c", _script], "why", 30)
+    verdict.execute_attempt(_root, retried, None)
+    assert retried.rc == 0, (retried.rc, retried.output)
+    assert any("ended by signal 15 from outside" in w for w in retried.warnings), retried.warnings
+    _marker.unlink()
+    always = verdict.Check("go-tool", "label", ["sh", "-c", "kill -TERM $$"], "why", 30)
+    verdict.execute_attempt(_root, always, None)
+    assert always.rc == -15 and not always.conflict, always.rc
+    assert "ended by signal 15 from outside" in always.output, always.output
+    assert verdict.check_status(always) == "ERR"
+
 print(f"fork-check verdict table: {len(planned_kinds)} planned kind(s), every one classified; "
       "a failing pipeline-evidence is FAIL/exit 1, a self-suite that names its assertion is "
       "FAIL/exit 1 while one that names none is unproven, and an undeclared kind fails closed")
