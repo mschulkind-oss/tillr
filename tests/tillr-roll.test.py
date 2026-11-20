@@ -3,12 +3,15 @@ import hashlib
 from importlib.machinery import SourceFileLoader
 import importlib.util
 import io
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 from pathlib import Path
 import sqlite3
+import re
 import subprocess
 import sys
+import threading
 import tempfile
 import time
 import tomllib
@@ -79,7 +82,7 @@ class RollTest(unittest.TestCase):
             revision = git('rev-parse', 'HEAD')
             (root / '.tillr').mkdir()
             with closing(sqlite3.connect(root / '.tillr/state.db')) as db, db:
-                db.execute('CREATE TABLE events(seq INTEGER PRIMARY KEY, kind TEXT, payload TEXT)')
+                db.execute('CREATE TABLE events(seq INTEGER PRIMARY KEY, ts INTEGER NOT NULL DEFAULT 0, kind TEXT, object_type TEXT, object_id TEXT, payload TEXT)')
                 db.executemany('INSERT INTO events(kind, payload) VALUES (?, ?)', (
                     ('drain.build-started', json.dumps({'role': role, 'revision': revision}))
                     for role in ('drain', 'view')))
@@ -96,39 +99,158 @@ class RollTest(unittest.TestCase):
             self.assertIn('tillr-view', result.stdout)
             self.assertEqual(checksums(), before)
 
-    def test_smoke_finishes_before_rename(self):
+    def fixture(self, work, view_source='package main\nfunc main() {}\n'):
+        """A repository of eight no-op tillr modules, a store with the build facts, a live bin."""
+        root = Path(work) / 'repo'
+        root.mkdir()
+        live = Path(work) / 'bin'
+        live.mkdir()
+
+        def git(*args):
+            return subprocess.check_output(
+                ['git', '-C', root, '-c', 'user.name=Fixture',
+                 '-c', 'user.email=fixture@example.invalid', *args], text=True).strip()
+
+        git('init', '-q')
+        (root / '.gitignore').write_text('/.tillr/\n')
+        for module in roll.MODULES:
+            source = root / 'tools' / f'tillr-{module}'
+            source.mkdir(parents=True)
+            (source / 'go.mod').write_text(f'module example.invalid/{module}\n\ngo 1.23\n')
+            (source / 'main.go').write_text(view_source if module == 'view' else 'package main\nfunc main() {}\n')
+        (root / 'tools/go-test-shards.py').write_text('')
+        git('add', '.')
+        git('commit', '-qm', 'fixture source')
+        revision = git('rev-parse', 'HEAD')
+        (root / '.tillr').mkdir()
+        with closing(sqlite3.connect(root / '.tillr/state.db')) as db, db:
+            db.execute('CREATE TABLE events(seq INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, kind TEXT NOT NULL,'
+                       ' actor TEXT, seat TEXT, session_id TEXT, object_type TEXT, object_id TEXT, revision INTEGER,'
+                       ' payload TEXT NOT NULL DEFAULT \'{}\')')
+            db.executemany('INSERT INTO events(ts, kind, payload) VALUES (0, ?, ?)', (
+                ('drain.build-started', json.dumps({'role': role, 'revision': revision}))
+                for role in ('drain', 'view')))
+        return root, live, git
+
+    def test_roll_of_a_commit_installs_that_commit_while_the_shared_checkout_advances(self):
         with tempfile.TemporaryDirectory() as work:
-            root = Path(work)
-            live = root / 'bin'
-            live.mkdir()
-            old = live / 'tillr'
-            old.write_text('old installation')
-            calls = []
-            module = root / 'tools/tillr-drain'
-            module.mkdir(parents=True)
-            (module / 'go.mod').touch()
+            root, live, git = self.fixture(work)
+            (root / 'tools/tillr-drain/main.go').write_text('package main\nfunc main() { _ = 1 }\n')
+            git('commit', '-qam', 'A')
+            commit_a = git('rev-parse', 'HEAD')
+            real_run = roll.run
+            advanced = []
 
-            def command(*args, **kwargs):
-                self.assertEqual(old.read_text(), 'old installation')
-                if args[:2] == ('go', 'test'):
-                    calls.append('test')
-                    # Go's default deadline of ten minutes fails a working suite on a
-                    # loaded machine, so the roll must disable it.
-                    self.assertEqual(args[2:4], ('-timeout', '0'))
-                elif args[:2] == ('go', 'build'):
-                    calls.append('build')
-                    args[args.index('-o') + 1].write_text('new installation')
-                else:
-                    calls.append(args[1])
-                    self.assertTrue(args[0].is_file())
+            def run(*args, **kwargs):
+                result = real_run(*args, **kwargs)
+                if args[:2] == ('go', 'build') and not advanced:
+                    # A landing arrives, then a dirty edit: neither may reach this roll.
+                    (root / 'tools/tillr-drain/main.go').write_text('package main\nfunc main() { _ = 2 }\n')
+                    git('commit', '-qam', 'B')
+                    (root / 'tools/tillr-cli/main.go').write_text('package main\nfunc main() { _ = 3 }\n')
+                    advanced.append(git('rev-parse', 'HEAD'))
+                return result
 
-            with old.open() as previous, patch.object(roll, 'git', return_value=''), \
-                    patch.object(roll, 'builds', return_value={}), \
-                    patch.object(roll, 'run', side_effect=command):
-                self.assertEqual(roll.roll(root, live, True), 0)
-                self.assertEqual(previous.read(), 'old installation')
-            self.assertEqual(old.read_text(), 'new installation')
-            self.assertEqual(calls, ['test'] + ['build'] * 8 + ['--help'] * 8 + ['loop'])
+            sharded = []
+
+            def shards(*args, **kwargs):
+                if args[:1] == ('python3',):
+                    sharded.append(args)
+                    return
+                return run(*args, **kwargs)
+
+            with patch.object(roll, 'run', side_effect=shards), \
+                    redirect_stdout(io.StringIO()):
+                self.assertEqual(roll.roll(root, live, True, commit=commit_a), 0)
+            self.assertNotEqual(advanced[0], commit_a)
+            self.assertEqual(git('rev-parse', 'HEAD'), advanced[0])
+            for name in ('tillr-drain', 'tillr', 'tillr-view'):
+                stamp = subprocess.check_output(['go', 'version', '-m', live / name], text=True)
+                self.assertIn(f'vcs.revision={commit_a}', stamp)
+                self.assertIn('vcs.modified=false', stamp)
+            self.assertEqual((live.parent / roll.ROLLED).read_text().strip(), commit_a)
+            # tillr-drain changed since the running build, and the gate shards it: the runner,
+            # without Go's own deadline, and not a bare `go test`.
+            self.assertEqual(len(sharded), 1)
+            self.assertTrue(sharded[0][1].endswith('tools/go-test-shards.py'))
+            self.assertEqual(sharded[0][2], 'tools/tillr-drain')
+            self.assertEqual(sharded[0][3:7], ('-k', '6', '--timeout', '0'))
+
+    def test_sharded_modules_match_the_gate(self):
+        text = (ROOT / 'tools/fork-check.py').read_text()
+        body = text.split('GO_SHARD_DIRS = (', 1)[1].split(')', 1)[0]
+        self.assertEqual(tuple(re.findall(r'"([^"]+)"', body)), roll.SHARDED)
+
+    def test_requests_during_a_roll_yield_one_further_roll_of_the_newest_tip(self):
+        with tempfile.TemporaryDirectory() as work:
+            root, live, git = self.fixture(work)
+            first = git('rev-parse', 'HEAD')
+            rolled = []
+            started = threading.Event()
+            release = threading.Event()
+            waiting = threading.Semaphore(0)
+
+            def roll_commit(root, live, tip, no_request, store):
+                rolled.append(tip)
+                (live.parent / roll.ROLLED).write_text(tip + '\n')
+                if len(rolled) == 1:
+                    started.set()
+                    self.assertTrue(release.wait(60))
+                return 0
+
+            def request():
+                return roll.roll(root, live, True, on_wait=waiting.release)
+
+            with patch.object(roll, 'roll_commit', side_effect=roll_commit), redirect_stdout(io.StringIO()):
+                with ThreadPoolExecutor(max_workers=3) as pool:
+                    one = pool.submit(request)
+                    self.assertTrue(started.wait(60))
+                    (root / 'second').write_text('b')
+                    git('add', '.')
+                    git('commit', '-qm', 'B')
+                    two = pool.submit(request)
+                    self.assertTrue(waiting.acquire(timeout=60))
+                    (root / 'third').write_text('c')
+                    git('add', '.')
+                    git('commit', '-qm', 'C')
+                    newest = git('rev-parse', 'HEAD')
+                    three = pool.submit(request)
+                    self.assertTrue(waiting.acquire(timeout=60))
+                    release.set()
+                    self.assertEqual([one.result(60), two.result(60), three.result(60)], [0, 0, 0])
+            self.assertEqual(rolled, [first, newest])
+
+    def test_failed_roll_records_the_commit_and_failing_step(self):
+        with tempfile.TemporaryDirectory() as work:
+            root, live, git = self.fixture(work, view_source='broken view source\n')
+            commit = git('rev-parse', 'HEAD')
+            with redirect_stdout(io.StringIO()), self.assertRaises(roll.RollFailed):
+                roll.roll(root, live, True)
+            with closing(sqlite3.connect(root / '.tillr/state.db')) as db:
+                kind, object_id, payload = db.execute(
+                    "SELECT kind, object_id, payload FROM events WHERE kind = 'drain.roll-failed'").fetchone()
+            self.assertEqual((kind, object_id), ('drain.roll-failed', commit))
+            self.assertEqual(json.loads(payload)['step'], 'build tillr-view')
+            self.assertFalse((live.parent / roll.ROLLED).exists())
+
+    def test_green_pointer_proves_every_suite_and_a_gated_landing_its_own(self):
+        with tempfile.TemporaryDirectory() as work:
+            root, live, git = self.fixture(work)
+            first = git('rev-parse', 'HEAD')
+            self.assertEqual(roll.evidence(root, first), set())
+            git('update-ref', 'refs/tillr/green', first)
+            self.assertIsNone(roll.evidence(root, first))
+            (root / 'tools/tillr-drain/main.go').write_text('package main\nfunc main() { _ = 1 }\n')
+            git('commit', '-qam', 'next')
+            tip = git('rev-parse', 'HEAD')
+            self.assertEqual(roll.evidence(root, tip), set())
+            store = root / '.tillr/state.db'
+            self.assertEqual(roll.gated_modules(root, tip, store), set())
+            tree = git('rev-parse', tip + '^{tree}')
+            with closing(sqlite3.connect(store)) as db, db:
+                db.execute('CREATE TABLE landings(trunk_after TEXT, result TEXT, gated_tree TEXT, landed_tree TEXT)')
+                db.execute("INSERT INTO landings VALUES (?, 'landed', ?, ?)", (tip, tree, tree))
+            self.assertEqual(roll.gated_modules(root, tip, store), {'tillr-drain'})
 
     def test_report_refuses_mismatched_digest_and_refused_answer(self):
         with tempfile.TemporaryDirectory() as work:
