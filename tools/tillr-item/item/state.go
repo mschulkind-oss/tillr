@@ -83,6 +83,9 @@ func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string
 	if err := checkStateReceipt(tx.Reader(), d, itemID, payload.State, state, receipt); err != nil {
 		return record.Envelope{}, err
 	}
+	if err := checkBlockedTransition(tx.Reader(), d, itemID, payload.State, state, receipt.conflictRelease); err != nil {
+		return record.Envelope{}, err
+	}
 	if receipt.RequireVerdicts {
 		// A verdict a withdrawal named (WithdrawVerdicts) no longer stands.
 		for _, criterion := range payload.Criteria {

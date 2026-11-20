@@ -17,6 +17,9 @@ type MoveReceipt struct {
 	RequireVerdicts bool
 	// Flags preserves explicit empty CLI arguments for flag-not-stored refusals.
 	Flags []string
+	// conflictRelease permits RecordConflict to return an item to the queue in the same
+	// transaction that answers, publishes, or closes its conflict.
+	conflictRelease bool
 }
 
 func itemDefinition(r *store.Reader) (definition.Definition, error) {

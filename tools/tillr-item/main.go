@@ -11,7 +11,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -104,7 +106,7 @@ func run(args []string) int {
 	// the answer to "may this item be written", not a dropped artifact. A face that
 	// could not answer at all returns no record and prints only its diagnostic.
 	if env.Kind != "" {
-		raw, err := record.Encode(env)
+		raw, err := encodeEnvelope(env)
 		if err != nil {
 			return fail(item.Internalf("encoding the record: %v", err))
 		}
@@ -781,6 +783,19 @@ func readStore(path string, fn func(context.Context, *store.Reader) (record.Enve
 
 // rejectionOrFailure answers a face's error: a rejection is a negative decision and
 // carries its record, anything else is a diagnostic and no record.
+// encodeEnvelope encodes one record envelope without HTML-escaping angle brackets in
+// command placeholders such as "--by <who> --why <reason>".
+func encodeEnvelope(env record.Envelope) ([]byte, error) {
+	env.CreatedAt = env.CreatedAt.UTC()
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(env); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(buf.Bytes(), []byte{'\n'}), nil
+}
+
 func rejectionOrFailure(err error, at time.Time) (record.Envelope, int) {
 	rej, ok := item.RejectionOf(err)
 	if !ok {

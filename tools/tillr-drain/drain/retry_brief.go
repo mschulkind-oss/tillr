@@ -78,6 +78,39 @@ func acceptedBuildRetryCommand(r *store.Reader, itemID, fallbackRunID string) (s
 	return retryCommand(itemID, rec.RunID, acceptedAck(judged, class)), nil
 }
 
+// runLinkMissingHold returns the unanswered run ID, the `Why` explanation suffix, and
+// the operator action string for an item held as `run-link-missing`. When the store has
+// no finished run row at all (an item inserted directly without event history), runID is
+// empty and the action directs the operator to record the item with `tillr item apply`.
+func runLinkMissingHold(r *store.Reader, itemID, fallbackRunID string) (runID, whyDetail, moverAction string) {
+	if conflicts, err := item.ReadConflicts(r); err == nil {
+		if c, ok := conflicts[itemID]; ok && c.Status == "owner" && c.DesignRunID != "" && c.TriageVersion == "" {
+			cmd := retryCommand(itemID, c.DesignRunID, "")
+			return c.DesignRunID,
+				"design run " + c.DesignRunID + " was never answered; use " + cmd,
+				"supersede design run " + c.DesignRunID + " with " + cmd
+		}
+	}
+	runID = fallbackRunID
+	if runID == "" {
+		_ = r.QueryRow(
+			`SELECT run_id FROM runs WHERE item_id = ? AND state IN (?, ?, ?)
+			  ORDER BY started_at DESC, event_seq DESC, rowid DESC LIMIT 1`,
+			itemID, run.StateExited, run.StateFailedToStart, run.StateTimedOut,
+		).Scan(&runID)
+	}
+	if runID == "" {
+		return "", "item history has no recorded run", "record the item with tillr item apply"
+	}
+	cmd, err := acceptedBuildRetryCommand(r, itemID, runID)
+	if err != nil {
+		cmd = retryCommand(itemID, runID, "")
+	}
+	return runID,
+		"run " + runID + " was never answered; use " + cmd,
+		"supersede run " + runID + " with " + cmd
+}
+
 // workerConflictReport isolates the worker's own report from loop-appended notes or design
 // turns inside a conflict's text.
 func workerConflictReport(text string) string {

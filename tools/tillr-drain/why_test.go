@@ -430,3 +430,39 @@ func TestWhyReusesFreshSavedQuestionsIndex(t *testing.T) {
 		t.Fatal("stale saved index was accepted for advanced trunk")
 	}
 }
+
+func TestWhyCLIPrintsRunAndRetryCommandOnRunLinkMissing(t *testing.T) {
+	runEnv := envelope("run.record", "run-rec-1", map[string]any{
+		"run_id":        "run-item_041-a1-n1",
+		"item_id":       "item_041",
+		"lane_id":       "lane-1",
+		"backend":       "fixture",
+		"state":         "exited",
+		"exit_code":     0,
+		"end_cause":     "normal-exit",
+		"started_at":    "2026-11-16T00:00:00Z",
+		"finished_at":   "2026-11-16T00:01:00Z",
+		"artifact_refs": []any{},
+	})
+	path := fixture(t, itemRecord("item_041", "in-queue"), runEnv)
+	ref := policy(t, "true")
+	wantCmd := "tillr drain retry --item item_041 --run run-item_041-a1-n1 --by <who> --why <reason>"
+
+	code, out := invoke(t, "why", "--store", path, "--policy", ref, "--lanes", "lane-1", "--now", "2026-11-16T01:00:00Z")
+	if code != 0 {
+		t.Fatalf("why table: %d %s", code, out)
+	}
+	table := string(out)
+	if strings.Contains(table, "cause not recorded") || !strings.Contains(table, "run-item_041-a1-n1") || !strings.Contains(table, wantCmd) {
+		t.Fatalf("why table output missing run or command:\n%s", table)
+	}
+
+	code, out = invoke(t, "why", "--store", path, "--policy", ref, "--lanes", "lane-1", "--now", "2026-11-16T01:00:00Z", "item_041")
+	if code != 0 {
+		t.Fatalf("why item detail: %d %s", code, out)
+	}
+	detail := string(out)
+	if strings.Contains(detail, "cause not recorded") || !strings.Contains(detail, "run-item_041-a1-n1") || !strings.Contains(detail, wantCmd) {
+		t.Fatalf("why item detail missing run or command:\n%s", detail)
+	}
+}

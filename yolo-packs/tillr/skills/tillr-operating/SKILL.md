@@ -495,7 +495,10 @@ and pair any answered worker owner question with its recorded answer (from
 under `## Answered owner questions` so an answered question is not asked again. For a
 filed request (which has no document block), both an `owner` obstacle and an
 identical-repeat hold name `tillr drain retry` to clear the hold and deliver the answer
-or revised instruction in the next run's brief. Keep the original item so
+or revised instruction in the next run's brief. Moving a blocked item with an
+unanswered run back to the queue through `tillr item state` is refused, printing the
+exact `tillr drain retry` command to run instead; if an item is already held as
+`run-link-missing`, the hold names that run and command. Keep the original item so
 its run history and other items' dependencies remain attached to the same id.
 Do not file a replacement item to escape a hold or mark the original resolved
 elsewhere when its intent has not been satisfied.

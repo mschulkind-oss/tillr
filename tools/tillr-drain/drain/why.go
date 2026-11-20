@@ -466,6 +466,15 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 						}
 					}
 				}
+				if d.Reason == ReasonRunLinkMissing {
+					runID, whyDetail, moverAction := runLinkMissingHold(r, it.ItemID, d.SupersedesRunID)
+					actor = "operator"
+					if runID != "" {
+						row.WaitingOn = append(row.WaitingOn, runID)
+					}
+					row.Why = strings.Replace(row.Why, ReasonRunLinkMissing, ReasonRunLinkMissing+": "+whyDetail, 1)
+					row.Mover = moverAction
+				}
 				if d.Reason == ReasonQuestionRemoved {
 					row.Mover = actor + "; " + row.Mover
 				} else {

@@ -132,6 +132,7 @@ func whyFace(args []string) int {
 		return fail(err)
 	}
 	enc := json.NewEncoder(os.Stdout)
+	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
 	if !*asJSON {
 		fmt.Fprintf(os.Stdout, "definition: %s\n", answer.Definition)

@@ -296,28 +296,31 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 
 	// A run that consumed its item — the fence refusal, the candidate-no-op — leaves the
 	// item in the queue now, and a retry changes nothing there. A legacy `in-progress` row
-	// is the one state this call moves: the retry is the operator's decision to put it back
-	// in the queue, and the frozen state is transitionable out through SetState. A blocked
-	// or already queued item is left as it is, because its own state is a fact a retry does
-	// not rewrite.
-	releaseOwnerHold := false
-	if state == StateBlocked {
+	// or a blocked item whose finished run this call supersedes returns to the ready state
+	// in the same transaction, so `tillr drain retry` is the single command that answers
+	// the run and releases the hold.
+	releaseBlocked := false
+	if state == declared.Parsed.Blocked {
 		conflicts, err := item.ReadConflicts(tx.Reader())
 		if err != nil {
 			return Retry{}, readFailure(err)
 		}
-		if c, ok := conflicts[req.ItemID]; ok && c.Status == "owner" && c.DesignRunID == "" && c.TriageVersion == "" {
-			releaseOwnerHold = true
-			var callID string
-			if err := tx.Reader().QueryRow(`SELECT COALESCE(object_id, '') FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=? ORDER BY seq DESC LIMIT 1`, callOffered, c.RunID).Scan(&callID); err == nil && callID != "" {
-				if err := projectLandingCall(tx, callID, "", "superseded", at); err != nil {
-					return Retry{}, Internalf("closing open call %q on %q: %v", callID, c.RunID, err)
+		if c, ok := conflicts[req.ItemID]; ok {
+			if c.Status != "awaiting" && c.Status != "raised" && c.DesignRunID == "" && c.TriageVersion == "" {
+				releaseBlocked = true
+				var callID string
+				if err := tx.Reader().QueryRow(`SELECT COALESCE(object_id, '') FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=? ORDER BY seq DESC LIMIT 1`, callOffered, c.RunID).Scan(&callID); err == nil && callID != "" {
+					if err := projectLandingCall(tx, callID, "", "superseded", at); err != nil {
+						return Retry{}, Internalf("closing open call %q on %q: %v", callID, c.RunID, err)
+					}
 				}
 			}
+		} else {
+			releaseBlocked = true
 		}
 	}
-	if state == StateInProgress || releaseOwnerHold {
-		if _, err := item.SetState(ctx, tx, req.ItemID, StateInQueue, at); err != nil {
+	if state == StateInProgress || releaseBlocked {
+		if _, err := item.SetState(ctx, tx, req.ItemID, declared.Parsed.Ready, at); err != nil {
 			return Retry{}, Internalf("moving item %q back to the queue: %v", req.ItemID, err)
 		}
 	}

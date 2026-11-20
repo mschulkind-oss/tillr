@@ -3,6 +3,7 @@ package drain
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/mschulkind-oss/tillr-item/item"
@@ -263,5 +264,134 @@ func TestWhyNamesOnlyTheOwnLaneOfWorkHeldBehindItsLease(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWhyRunLinkMissingNamesUnansweredRunAndRetryCommand(t *testing.T) {
+	f, l := passFixture(t, "item_041")
+	runID := "run-item_041-a1-n1"
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		at := l.cfg.Now().Format("2006-01-02T15:04:05Z07:00")
+		return applyTerminal(tx, run.Record{
+			RunID:        runID,
+			ItemID:       "item_041",
+			LaneID:       "lane-1",
+			Backend:      "fixture",
+			State:        run.StateExited,
+			ExitCode:     countPtr(0),
+			StartedAt:    at,
+			FinishedAt:   at,
+			ArtifactRefs: []run.ArtifactRef{},
+			EndCause:     run.EndNormalExit,
+		})
+	})
+
+	s := openFixture(t, f.storePath)
+	defer s.Close()
+	wantCmd := "tillr drain retry --item item_041 --run " + runID + " --by <who> --why <reason>"
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		answer, err := Why(r, Pass{}, l.cfg.Policy, nil)
+		if err != nil {
+			return err
+		}
+		if len(answer.Rows) != 1 {
+			t.Fatalf("rows = %+v, want 1", answer.Rows)
+		}
+		row := answer.Rows[0]
+		if row.Reason != ReasonRunLinkMissing {
+			t.Fatalf("reason = %q, want %q (%+v)", row.Reason, ReasonRunLinkMissing, row)
+		}
+		if row.Decision.SupersedesRunID != runID {
+			t.Fatalf("decision SupersedesRunID = %q, want %q", row.Decision.SupersedesRunID, runID)
+		}
+		if len(row.WaitingOn) != 1 || row.WaitingOn[0] != runID {
+			t.Fatalf("WaitingOn = %v, want [%s]", row.WaitingOn, runID)
+		}
+		for _, field := range []struct {
+			name string
+			got  string
+		}{
+			{"Why", row.Why},
+			{"Mover", row.Mover},
+		} {
+			if strings.Contains(field.got, "cause not recorded") {
+				t.Fatalf("%s still says 'cause not recorded': %q", field.name, field.got)
+			}
+			if !strings.Contains(field.got, runID) || !strings.Contains(field.got, wantCmd) {
+				t.Fatalf("%s = %q, want both %q and %q", field.name, field.got, runID, wantCmd)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Recording the pass decision also persists the action in dispatches.deferred_by so
+	// history-backed waiting views name the run and retry command instead of 'cause not recorded'.
+	heldDecision := planFor(t, l, "item_041")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return recordPassDecision(tx, heldDecision, l.cfg.Now())
+	})
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		var deferredBy string
+		if err := r.QueryRow(`SELECT COALESCE(deferred_by, '') FROM dispatches WHERE item_id = 'item_041' ORDER BY dispatched_at DESC LIMIT 1`).Scan(&deferredBy); err != nil {
+			return err
+		}
+		if !strings.Contains(deferredBy, runID) || !strings.Contains(deferredBy, wantCmd) {
+			t.Fatalf("dispatches.deferred_by = %q, want both %q and %q", deferredBy, runID, wantCmd)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAuthorizeRetryReleasesBlockedItemWithoutOwnerConflict(t *testing.T) {
+	f, l := passFixture(t, "item_041")
+	runID := "run-item_041-a1-n1"
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		at := l.cfg.Now()
+		atStr := at.Format("2006-01-02T15:04:05Z07:00")
+		if err := applyTerminal(tx, run.Record{
+			RunID:        runID,
+			ItemID:       "item_041",
+			LaneID:       "lane-1",
+			Backend:      "fixture",
+			State:        run.StateExited,
+			ExitCode:     countPtr(0),
+			StartedAt:    atStr,
+			FinishedAt:   atStr,
+			ArtifactRefs: []run.ArtifactRef{},
+			EndCause:     run.EndNormalExit,
+		}); err != nil {
+			return err
+		}
+		_, err := item.SetState(context.Background(), tx, "item_041", StateBlocked, at, item.WaitingOn{
+			Waiter: "owner",
+			Reason: "manual owner block after run",
+		})
+		return err
+	})
+
+	ws, err := store.Open(context.Background(), f.storePath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+	if err := ws.WriteTx(context.Background(), func(tx *store.Tx) error {
+		_, err := AuthorizeRetry(context.Background(), tx, RetryRequest{
+			ItemID: "item_041",
+			RunID:  runID,
+			By:     "matt",
+			Why:    "unblock and supersede",
+			At:     l.cfg.Now().Add(1),
+		})
+		return err
+	}); err != nil {
+		t.Fatalf("AuthorizeRetry: %v", err)
+	}
+	d := planFor(t, l, "item_041")
+	if d.Action != ActionRetry || d.SupersedesRunID != runID {
+		t.Fatalf("after AuthorizeRetry got %+v, want ActionRetry superseding %s", d, runID)
 	}
 }
