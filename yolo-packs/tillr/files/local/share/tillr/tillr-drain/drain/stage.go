@@ -246,22 +246,23 @@ func OutOfFence(durableDir string) string {
 // StageSpec is one dispatch as the stager reads it: the request's identity, the values the
 // brief's header carries, and the commit the worktree is pinned to.
 type StageSpec struct {
-	Policy         *Policy // policy in force at dispatch; seats are brief context, not adapter options
-	Isolated       bool    // parallel readers keep their own adapter metadata
-	Continue       bool
-	PreviousRunID  string
-	Node           *WorkflowStage
-	InputPaths     map[string][]NodeInput
-	PreviousReport string
-	BlockConflict  *item.Conflict
-	LaneID         string
-	ItemID         string
-	RunID          string
-	Backend        string
-	BaseSHA        string
-	ItemBaseSHA    string
-	WorkingDir     string
-	TimeoutMS      int
+	Policy             *Policy // policy in force at dispatch; seats are brief context, not adapter options
+	Isolated           bool    // parallel readers keep their own adapter metadata
+	Continue           bool
+	PreviousRunID      string
+	Node               *WorkflowStage
+	InputPaths         map[string][]NodeInput
+	PreviousReport     string
+	PreviousReportText string
+	BlockConflict      *item.Conflict
+	LaneID             string
+	ItemID             string
+	RunID              string
+	Backend            string
+	BaseSHA            string
+	ItemBaseSHA        string
+	WorkingDir         string
+	TimeoutMS          int
 	// EndingCapability is the adapter probe at dispatch; a retained session keeps its staged form.
 	EndingCapability string
 	// SessionID pins the harness session this dispatch runs under. Empty mints a UUID: a

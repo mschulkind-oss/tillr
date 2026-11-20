@@ -4,13 +4,18 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strings"
 
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -101,6 +106,201 @@ func (w *Workflow) hasNamedFiles() bool {
 		}
 	}
 	return false
+}
+
+// proposalOnlyPredecessors reports whether stage index declares no explicit
+// inputs, no graph.proposal replacement has occurred, and every incoming edge
+// comes from a read-only sibling stage whose only declared outputs are optional
+// graph.proposal files.
+func (w *Workflow) proposalOnlyPredecessors(index int) bool {
+	_, ok := w.proposalPredecessorIDs(index)
+	return ok
+}
+
+func (w *Workflow) proposalPredecessorIDs(index int) ([]string, bool) {
+	if w == nil || w.Revision != 0 || index < 0 || index >= len(w.Stages) {
+		return nil, false
+	}
+	stage := w.Stages[index]
+	if len(stage.Inputs) > 0 || stage.CopiesOf != "" {
+		return nil, false
+	}
+	byID := make(map[string]WorkflowStage, len(w.Stages))
+	for _, s := range w.Stages {
+		byID[s.ID] = s
+	}
+	var preds []string
+	seen := map[string]bool{}
+	for _, e := range w.Edges {
+		if e.To != stage.ID {
+			continue
+		}
+		if e.FromOutput != "" || e.ToInput != "" {
+			return nil, false
+		}
+		pred, ok := byID[e.From]
+		if !ok || pred.Access != "read_only" || pred.Parent != stage.Parent || !hasOnlyProposalOutputs(pred) {
+			return nil, false
+		}
+		if !seen[pred.ID] {
+			seen[pred.ID] = true
+			preds = append(preds, pred.ID)
+		}
+	}
+	if len(preds) == 0 {
+		return nil, false
+	}
+	return preds, true
+}
+
+func hasOnlyProposalOutputs(stage WorkflowStage) bool {
+	if len(stage.Outputs) == 0 {
+		return false
+	}
+	for _, typ := range stage.Outputs {
+		if typ != "graph.proposal" {
+			return false
+		}
+	}
+	return true
+}
+
+func (l *Loop) proposalPredecessorReport(ctx context.Context, d Decision) (string, string, error) {
+	preds, ok := d.Workflow.proposalPredecessorIDs(d.NodeIndex)
+	if !ok {
+		return "", "", nil
+	}
+	var paths, texts []string
+	if l.cfg.Store != "" {
+		s, err := store.OpenRead(ctx, l.cfg.Store)
+		if err != nil {
+			return "", "", err
+		}
+		defer s.Close()
+		var split bool
+		err = s.ReadTx(ctx, func(r *store.Reader) error {
+			hasNodes, err := tableExists(r, "node_runs")
+			if err != nil || !hasNodes {
+				return err
+			}
+			hasRevisions, err := tableExists(r, "graph_revisions")
+			if err != nil {
+				return err
+			}
+			hasRuns, err := tableExists(r, "runs")
+			if err != nil {
+				return err
+			}
+			for _, predID := range preds {
+				source, err := nodeSourceAttempt(r, d.ItemID, d.Attempt, predID)
+				if err != nil {
+					return err
+				}
+				var runID string
+				err = r.QueryRow(
+					`SELECT run_id FROM node_runs WHERE item_id=? AND attempt=? AND node_id=? AND outcome='passed'`,
+					d.ItemID, source, predID,
+				).Scan(&runID)
+				if errors.Is(err, sql.ErrNoRows) && d.ReusedAttempt > 0 && slices.Contains(d.ReusedNodes, predID) {
+					source, err = nodeSourceAttempt(r, d.ItemID, d.ReusedAttempt, predID)
+					if err != nil {
+						return err
+					}
+					err = r.QueryRow(
+						`SELECT run_id FROM node_runs WHERE item_id=? AND attempt=? AND node_id=? AND outcome='passed'`,
+						d.ItemID, source, predID,
+					).Scan(&runID)
+				}
+				if errors.Is(err, sql.ErrNoRows) || runID == "" {
+					continue
+				}
+				if err != nil {
+					return err
+				}
+				if hasRevisions {
+					var accepted bool
+					if err := r.QueryRow(
+						`SELECT EXISTS(SELECT 1 FROM graph_revisions WHERE proposing_run=? AND rule='')`,
+						runID,
+					).Scan(&accepted); err != nil {
+						return err
+					}
+					if accepted {
+						split = true
+						return nil
+					}
+				}
+				path, text, err := l.readNodeReportForRun(r, hasRuns, runID)
+				if err != nil {
+					return err
+				}
+				if path != "" {
+					paths = append(paths, path)
+				}
+				if strings.TrimSpace(text) != "" {
+					texts = append(texts, text)
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return "", "", err
+		}
+		if split {
+			return "", "", nil
+		}
+	}
+	if len(paths) == 0 && d.PreviousReport != "" {
+		paths = append(paths, d.PreviousReport)
+		if raw, err := os.ReadFile(d.PreviousReport); err == nil {
+			if strings.TrimSpace(string(raw)) != "" {
+				texts = append(texts, string(raw))
+			}
+		} else if !os.IsNotExist(err) {
+			return "", "", err
+		}
+	}
+	path := ""
+	if len(paths) > 0 {
+		path = paths[len(paths)-1]
+	}
+	return path, strings.Join(texts, "\n\n"), nil
+}
+
+func (l *Loop) readNodeReportForRun(r *store.Reader, hasRuns bool, runID string) (string, string, error) {
+	nodeReport := filepath.Join(RunDir(l.cfg.Root, runID), "node-report.md")
+	if raw, err := os.ReadFile(nodeReport); err == nil {
+		return nodeReport, string(raw), nil
+	} else if !os.IsNotExist(err) {
+		return "", "", err
+	}
+	if !hasRuns {
+		return "", "", nil
+	}
+	var refsJSON string
+	if err := r.QueryRow(`SELECT artifact_refs FROM runs WHERE run_id=?`, runID).Scan(&refsJSON); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", "", nil
+		}
+		return "", "", err
+	}
+	var refs []run.ArtifactRef
+	if json.Unmarshal([]byte(refsJSON), &refs) != nil {
+		return "", "", nil
+	}
+	for _, ref := range refs {
+		if ref.Kind == "report" && ref.Ref != "" {
+			if raw, err := os.ReadFile(ref.Ref); err == nil {
+				return ref.Ref, string(raw), nil
+			} else if !os.IsNotExist(err) {
+				return "", "", err
+			}
+		}
+	}
+	if tail := logTail(refs); strings.TrimSpace(tail) != "" {
+		return "", tail, nil
+	}
+	return "", "", nil
 }
 
 func nodeOutputsDir(root, runID string) string {

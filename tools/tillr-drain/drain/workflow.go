@@ -629,10 +629,13 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		}
 		if ClassifyAttempt(rec, log) == AttemptRefused {
 			stop, err := l.holdAdapterRefusal(ctx, d.LaneID, *d.RunRequest, log)
-			if err == nil && stop != "" {
-				err = retainedAfter(d.LaneID, stop)
+			if err != nil {
+				return true, err
 			}
-			return true, err
+			if stop != "" {
+				return true, retainedAfter(d.LaneID, stop)
+			}
+			return true, l.markExamined(ctx, d)
 		}
 		if ClassifyAttempt(rec, log) == AttemptInfrastructure || (rec.State == run.StateExited && !readableFooter(footer)) {
 			return true, l.retryWorkflowNode(ctx, d, base, rec, result)

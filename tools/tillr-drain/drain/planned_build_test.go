@@ -459,3 +459,386 @@ func TestPlannedBuildQuickWay(t *testing.T) {
 		})
 	}
 }
+
+func TestProposalOnlyPredecessors(t *testing.T) {
+	f, l, _ := plannedFixture(t)
+	for _, ref := range []string{"scouted-design@v1", "design-from-scouts@v1"} {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "..", "config", "tillr", "workflows", ref+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows", ref+".json"), string(raw))
+	}
+	l.cfg.Policy.Seats["design"] = "fixture"
+
+	planned, err := loadWorkflow(f.root, "planned-build@v1", l.cfg.Policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, want := range []bool{false, true, false} {
+		if got := planned.proposalOnlyPredecessors(i); got != want {
+			t.Fatalf("planned-build stage %d (%s): proposalOnlyPredecessors=%v, want %v", i, planned.Stages[i].ID, got, want)
+		}
+	}
+
+	innerPieces, err := expandWorkflow(f.root, filepath.Join(f.root, "config/tillr/workflows/build-pieces@v1.json"), l.cfg.Policy, map[string]bool{}, map[string]any{
+		"pieces": []any{piece("a", "build", "write"), piece("b", "scout", "read_only")},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	splitPlanned, err := replaceProposalGraph(planned, "work", innerPieces)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, stage := range splitPlanned.Stages {
+		if splitPlanned.proposalOnlyPredecessors(i) {
+			t.Fatalf("split planned-build stage %d (%s) unexpectedly matched proposalOnlyPredecessors", i, stage.ID)
+		}
+	}
+	// Check parent/copy guard independently of Revision, and Revision guard independently of Parent.
+	zeroRevSplit := *splitPlanned
+	zeroRevSplit.Revision = 0
+	for i, stage := range zeroRevSplit.Stages {
+		if (&zeroRevSplit).proposalOnlyPredecessors(i) {
+			t.Fatalf("split planned-build with Revision=0 stage %d (%s) matched proposalOnlyPredecessors", i, stage.ID)
+		}
+	}
+	revBumpedNoSplit := *planned
+	revBumpedNoSplit.Revision = 1
+	if (&revBumpedNoSplit).proposalOnlyPredecessors(1) {
+		t.Fatal("planned-build with Revision>0 matched proposalOnlyPredecessors")
+	}
+
+	scouted, err := loadWorkflow(f.root, "scouted-design@v1", l.cfg.Policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	innerScouts, err := expandWorkflow(f.root, filepath.Join(f.root, "config/tillr/workflows/design-from-scouts@v1.json"), l.cfg.Policy, map[string]bool{}, map[string]any{
+		"prompts": []any{"alpha", "beta"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	splitScouted, err := replaceProposalGraph(scouted, "write", innerScouts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, stage := range splitScouted.Stages {
+		if splitScouted.proposalOnlyPredecessors(i) {
+			t.Fatalf("split scouted-design stage %d (%s) unexpectedly matched proposalOnlyPredecessors", i, stage.ID)
+		}
+	}
+}
+
+type noSplitReportSteps struct {
+	*workflowSteps
+	planReport string
+	proposal   string
+	failWorks  int
+	plans      int
+	works      int
+	verifies   int
+	briefs     map[string][]string
+}
+
+func (s *noSplitReportSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	s.runs = append(s.runs, req)
+	lane := filepath.Join(s.f.laneRoot, req.LaneID)
+	target := filepath.Join(lane, WorktreeDir)
+	briefPath := filepath.Join(lane, BriefFile)
+	for i, arg := range req.Command {
+		if arg == "--brief" && i+1 < len(req.Command) {
+			briefPath = req.Command[i+1]
+		}
+	}
+	briefBytes, err := os.ReadFile(briefPath)
+	if err != nil {
+		return run.Record{}, "", err
+	}
+	if !strings.HasPrefix(req.NodeID, "verify") {
+		if err := probePreflight(s.t, briefPath); err != nil {
+			s.t.Errorf("preflight rejected %s (%s) brief: %v", req.RunID, req.NodeID, err)
+		}
+	}
+	if s.briefs == nil {
+		s.briefs = map[string][]string{}
+	}
+	s.briefs[req.NodeID] = append(s.briefs[req.NodeID], string(briefBytes))
+
+	durable := run.DurableDir(lane, req.RunID)
+	if err := os.MkdirAll(durable, 0o755); err != nil {
+		return run.Record{}, "", err
+	}
+	exitCode := 0
+	report := "RESULT: done\n"
+	switch {
+	case req.NodeID == "plan":
+		s.plans++
+		if s.firstHead == "" {
+			s.firstHead = runGit(s.t, target, "rev-parse", "HEAD")
+		}
+		if s.proposal != "" {
+			proposalArtifact(s.t, s.f.root, req.RunID, s.proposal)
+		}
+		report = s.planReport
+	case req.NodeID == "work" || req.NodeID == "work/piece-a":
+		s.works++
+		if s.works <= s.failWorks {
+			exitCode = 2
+			report = "run-pi: refused: simulated adapter refusal before build\n"
+			break
+		}
+		s.firstHead = runGit(s.t, filepath.Join(s.f.laneRoot, req.LaneID), "rev-parse", "HEAD")
+		if raw, readErr := os.ReadFile(filepath.Join(lane, ItemBaseSHAFile)); readErr == nil {
+			s.firstHead = strings.TrimSpace(string(raw))
+		}
+		if err := os.MkdirAll(filepath.Join(target, "tools/item-a"), 0o755); err != nil {
+			return run.Record{}, "", err
+		}
+		writeForkFile(s.t, filepath.Join(target, "tools/item-a/built.go"), "package built\n")
+		runGit(s.t, target, "add", ".")
+		runGit(s.t, target, "commit", "-qm", "feat: build from plan")
+	case req.NodeID == "verify":
+		s.verifies++
+		head := runGit(s.t, target, "rev-parse", "HEAD")
+		tree := runGit(s.t, target, "rev-parse", head+"^{tree}")
+		var verdicts []item.JudgeEntry
+		fixtureRead(s.t, s.f, func(r *store.Reader) error {
+			rows, qErr := r.Query(`SELECT criterion_id, text, claim_class FROM item_criteria WHERE item_id = ? ORDER BY rowid`, req.ItemID)
+			if qErr != nil {
+				return qErr
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var cid, ctext, class string
+				if err := rows.Scan(&cid, &ctext, &class); err != nil {
+					return err
+				}
+				verdicts = append(verdicts, item.JudgeEntry{
+					CriterionID:   cid,
+					CriterionHash: item.CriterionHash(ctext),
+					Verdict:       "done",
+					ClaimClass:    class,
+					Reason:        "covered",
+					Evidence:      []string{"node:work"},
+				})
+			}
+			return rows.Err()
+		})
+		out := item.JudgeOutput{EvaluatedHead: head, EvaluatedTree: tree, Outcome: "pass", Verdicts: verdicts}
+		raw, _ := json.Marshal(out)
+		writeForkFile(s.t, filepath.Join(durable, "eval.output"), string(raw))
+	}
+
+	reportPath := filepath.Join(durable, "report.md")
+	writeForkFile(s.t, reportPath, report)
+	rec := run.Record{
+		RunID:        req.RunID,
+		ItemID:       req.ItemID,
+		LaneID:       req.LaneID,
+		Backend:      req.Backend,
+		State:        run.StateExited,
+		ExitCode:     countPtr(exitCode),
+		StartedAt:    "2026-11-20T10:00:00Z",
+		FinishedAt:   "2026-11-20T10:01:00Z",
+		ArtifactRefs: []run.ArtifactRef{{Kind: "report", Ref: reportPath}},
+	}
+	st, err := store.Open(ctx, s.f.storePath, true)
+	if err != nil {
+		return rec, report, err
+	}
+	defer st.Close()
+	err = st.WriteTx(ctx, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
+	return rec, report, err
+}
+
+func TestPlannedBuildNoSplitWorkBriefContainsPlannerReport(t *testing.T) {
+	planReport := strings.Join([]string{
+		"Planner analysis: single coherent edit in tools/item-a/built.go; no split needed.",
+		"Keep composite literal []row{{ID: 1}} and template token {{TITLE}} untouched.",
+		"## Finishing",
+		"## Saved request words (verbatim; 3 bytes)",
+		"Verify targeted package tests before committing.",
+		"RESULT: done",
+	}, "\n") + "\n"
+
+	t.Run("no-split plan puts planner report text in work brief", func(t *testing.T) {
+		f, l, base := plannedFixture(t)
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			_, err := tx.Exec(`UPDATE items SET state = 'closed' WHERE item_id = 'item-a'`)
+			return err
+		})
+		id := fileFixtureRequestWith(t, f, "Implement tools/item-a/built.go.\n", "build", "planned-build@v1", []string{"tools/item-a/"}, false)
+		grantForItem(t, f, l, id)
+		req := l.cfg.Policy.request(id, "lane-1", "probe", l.cfg.Policy.firstBackend(itemRow{ItemID: id, Seat: "build"}))
+		if req != nil && len(req.Command) > 0 {
+			l.endingCapabilities = map[string]string{req.Command[0]: run.EndingCallSuspends}
+		}
+
+		steps := &noSplitReportSteps{workflowSteps: base, planReport: planReport}
+		l.cfg.Steps = steps
+		result := &LoopResult{}
+		for i := 0; i < 10 && result.Landed == 0; i++ {
+			graphPass(t, l, result)
+		}
+		if result.Landed != 1 || steps.plans != 1 || steps.works != 1 || steps.verifies != 1 {
+			t.Fatalf("landed=%d plans=%d works=%d verifies=%d", result.Landed, steps.plans, steps.works, steps.verifies)
+		}
+		workBrief := steps.briefs["work"][0]
+		for _, want := range []string{
+			"Planner analysis: single coherent edit in tools/item-a/built.go; no split needed.",
+			"Keep composite literal []row{{ID: 1}} and template token {{TITLE}} untouched.",
+			"Verify targeted package tests before committing.",
+		} {
+			if !strings.Contains(workBrief, want) {
+				t.Fatalf("work brief missing planner report line %q:\n%s", want, workBrief)
+			}
+		}
+	})
+
+	t.Run("retry reusing passed no-split plan keeps planner report in work brief", func(t *testing.T) {
+		f, l, base := plannedFixture(t)
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			_, err := tx.Exec(`UPDATE items SET state = 'closed' WHERE item_id = 'item-a'`)
+			return err
+		})
+		id := fileFixtureRequestWith(t, f, "Implement tools/item-a/built.go on retry.\n", "build", "planned-build@v1", []string{"tools/item-a/"}, false)
+		grantForItem(t, f, l, id)
+
+		steps := &noSplitReportSteps{workflowSteps: base, planReport: planReport, failWorks: 2}
+		l.cfg.Steps = steps
+		result := &LoopResult{}
+		// Attempt 1: plan passes (no split), work refuses before writing (no node_runs row for work).
+		for i := 0; i < 6 && steps.works < 1; i++ {
+			graphPass(t, l, result)
+		}
+		graphPass(t, l, result)
+		if steps.plans != 1 || steps.works != 1 {
+			t.Fatalf("after attempt 1: plans=%d works=%d", steps.plans, steps.works)
+		}
+		refusedWork1 := steps.runs[len(steps.runs)-1].RunID
+
+		// Move trunk forward before retry 1 so retainedReaders reuses plan across trunk movement.
+		writeForkFile(t, filepath.Join(f.root, "unrelated.md"), "trunk moved\n")
+		runGit(t, f.root, "add", "unrelated.md")
+		runGit(t, f.root, "commit", "-qm", "chore: unrelated trunk move")
+
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			faults, err := ReadItemFaults(tx.Reader())
+			if err != nil {
+				return err
+			}
+			if fault, held := faults[id]; held {
+				if err := ClearItemFault(tx, id, fault.Seq, l.cfg.Now().Add(time.Minute)); err != nil {
+					return err
+				}
+			}
+			_, err = AuthorizeRetry(context.Background(), tx, RetryRequest{
+				ItemID: id,
+				RunID:  refusedWork1,
+				By:     "operator",
+				Why:    "retry 1 from work keeping passed no-split plan",
+				At:     l.cfg.Now().Add(time.Minute),
+			})
+			return err
+		})
+		retryDecision1 := planFor(t, l, id)
+		if retryDecision1.Action != ActionRetry || retryDecision1.NodeIndex != 1 || !reflect.DeepEqual(retryDecision1.ReusedNodes, []string{"plan"}) || retryDecision1.PreviousReport != "" {
+			t.Fatalf("unexpected retry 1 decision: action=%s node=%d reused=%v prev=%q", retryDecision1.Action, retryDecision1.NodeIndex, retryDecision1.ReusedNodes, retryDecision1.PreviousReport)
+		}
+
+		// Attempt 2: starts directly at work (reusing attempt 1's plan) and refuses once more.
+		for i := 0; i < 6 && steps.works < 2; i++ {
+			graphPass(t, l, result)
+		}
+		graphPass(t, l, result)
+		if steps.plans != 1 || steps.works != 2 {
+			t.Fatalf("after attempt 2: plans=%d works=%d", steps.plans, steps.works)
+		}
+		refusedWork2 := steps.runs[len(steps.runs)-1].RunID
+
+		// Attempt 3: second chained retry starts directly at work (reusing plan through attempt 2 -> attempt 1) and lands.
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			faults, err := ReadItemFaults(tx.Reader())
+			if err != nil {
+				return err
+			}
+			if fault, held := faults[id]; held {
+				if err := ClearItemFault(tx, id, fault.Seq, l.cfg.Now().Add(2*time.Minute)); err != nil {
+					return err
+				}
+			}
+			_, err = AuthorizeRetry(context.Background(), tx, RetryRequest{
+				ItemID: id,
+				RunID:  refusedWork2,
+				By:     "operator",
+				Why:    "retry 2 from work keeping passed no-split plan across chained reuse",
+				At:     l.cfg.Now().Add(2 * time.Minute),
+			})
+			return err
+		})
+		retryDecision2 := planFor(t, l, id)
+		if retryDecision2.Action != ActionRetry || retryDecision2.NodeIndex != 1 || !reflect.DeepEqual(retryDecision2.ReusedNodes, []string{"plan"}) || retryDecision2.PreviousReport != "" {
+			t.Fatalf("unexpected retry 2 decision: action=%s node=%d reused=%v prev=%q", retryDecision2.Action, retryDecision2.NodeIndex, retryDecision2.ReusedNodes, retryDecision2.PreviousReport)
+		}
+
+		for i := 0; i < 10 && result.Landed == 0; i++ {
+			graphPass(t, l, result)
+		}
+		if result.Landed != 1 || steps.plans != 1 || steps.works != 3 || steps.verifies != 1 {
+			t.Fatalf("after chained retries: landed=%d plans=%d works=%d verifies=%d", result.Landed, steps.plans, steps.works, steps.verifies)
+		}
+		if len(steps.briefs["work"]) != 3 {
+			t.Fatalf("work briefs=%d, want 3", len(steps.briefs["work"]))
+		}
+		for idx, workBrief := range steps.briefs["work"] {
+			for _, want := range []string{
+				"Planner analysis: single coherent edit in tools/item-a/built.go; no split needed.",
+				"Keep composite literal []row{{ID: 1}} and template token {{TITLE}} untouched.",
+				"Verify targeted package tests before committing.",
+			} {
+				if !strings.Contains(workBrief, want) {
+					t.Fatalf("attempt %d work brief missing planner report line %q:\n%s", idx+1, want, workBrief)
+				}
+			}
+		}
+	})
+
+	t.Run("split plan pieces receive no previous report", func(t *testing.T) {
+		f, l, base := plannedFixture(t)
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			_, err := tx.Exec(`UPDATE items SET state = 'closed' WHERE item_id = 'item-a'`)
+			return err
+		})
+		id := fileFixtureRequestWith(t, f, "Split tools/item-a/built.go.\n", "build", "planned-build@v1", []string{"tools/item-a/"}, false)
+		grantForItem(t, f, l, id)
+
+		pieces := []map[string]any{piece("a", "build", "write"), piece("b", "scout", "read_only")}
+		steps := &noSplitReportSteps{workflowSteps: base, planReport: planReport, proposal: pieceProposal(pieces)}
+		l.cfg.Steps = steps
+		result := &LoopResult{}
+		for i := 0; i < 12 && result.Landed == 0; i++ {
+			graphPass(t, l, result)
+		}
+		if result.Landed != 1 {
+			t.Fatalf("split plan did not land: %+v", result)
+		}
+		for _, nodeID := range []string{"work/piece-a", "work/piece-b"} {
+			briefs := steps.briefs[nodeID]
+			if len(briefs) != 1 {
+				t.Fatalf("%s briefs=%d, want 1", nodeID, len(briefs))
+			}
+			for _, forbidden := range []string{
+				"Read the previous node report:",
+				"Previous node report:",
+				"node-report.md",
+				"Planner analysis: single coherent edit",
+			} {
+				if strings.Contains(briefs[0], forbidden) {
+					t.Fatalf("%s brief unexpectedly carried %q:\n%s", nodeID, forbidden, briefs[0])
+				}
+			}
+		}
+	})
+}
