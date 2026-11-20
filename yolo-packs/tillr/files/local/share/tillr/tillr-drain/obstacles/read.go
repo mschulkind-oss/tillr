@@ -143,6 +143,115 @@ func (h Hold) MoverText() string {
 	return h.Mover + "; " + h.Action
 }
 
+// WithoutCloseRemedy returns a copy of h whose action names only remedies that
+// remain valid once the item has a landed row in `landings` (where `tillr item
+// close` is refused as `already-landed`).
+func (h Hold) WithoutCloseRemedy() Hold {
+	switch h.Kind {
+	case "owner":
+		if h.RunID != "" {
+			h.Action = "answer the question with tillr drain retry --item " + h.ItemID + " --run " + h.RunID + " --by <who> --why <reason>"
+		} else {
+			h.Action = "answer the question and retry the item"
+		}
+	case "fence", "trunk", "tooling", "seat":
+		h.Action = StripCloseRemedy(h.Action)
+	default:
+		ev := FirstLine(h.Fields["EVIDENCE"])
+		retry := "retry the item"
+		if h.RunID != "" {
+			retry = "retry run " + h.RunID + " (tillr drain retry --item " + h.ItemID + " --run " + h.RunID + " --by <who> --why <reason>)"
+		}
+		if ev != "" {
+			h.Action = ev + "; refile or " + retry
+		} else {
+			h.Action = "refile or " + retry
+		}
+	}
+	return h
+}
+
+// StripCloseRemedy removes `tillr item close` / "close the item" clauses from
+// hold prose when an item already has a landed row and cannot be closed.
+func StripCloseRemedy(s string) string {
+	s = stripParenthesizedClose(s, " (or close the item with tillr item close --item ")
+	s = stripParenthesizedClose(s, ", or close the item (tillr item close --item ")
+	replacer := strings.NewReplacer(
+		" Or close the item with `tillr item close`.", "",
+		", or close the item", "",
+		", or close it", "",
+		"refile or close the item, or ", "refile, or ",
+		"close the item or ", "",
+		", or should the item be closed?", "?",
+		", or the item closed?", "?",
+		"Should the item be closed (for a trunk fixer, resolved by a heavy pass of its check), its criterion changed, or ", "Should its criterion be changed, or ",
+	)
+	return replacer.Replace(s)
+}
+
+func stripParenthesizedClose(s, prefix string) string {
+	for {
+		idx := strings.Index(s, prefix)
+		if idx < 0 {
+			return s
+		}
+		end := strings.IndexByte(s[idx+len(prefix):], ')')
+		if end < 0 {
+			return s
+		}
+		s = s[:idx] + s[idx+len(prefix)+end+1:]
+	}
+}
+
+func landingsHasItemResultColumns(r *store.Reader) (bool, error) {
+	var cols int
+	if err := r.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('landings') WHERE name IN ('item_id', 'result')`).Scan(&cols); err != nil {
+		return false, err
+	}
+	return cols == 2, nil
+}
+
+// HasLanded reports whether the `landings` table has a `landed` row for itemID.
+// When `landings` has not been created yet or lacks `item_id`/`result` columns
+// (for example in minimal read-only fixtures), it returns false, nil.
+func HasLanded(r *store.Reader, itemID string) (bool, error) {
+	if itemID == "" {
+		return false, nil
+	}
+	ok, err := landingsHasItemResultColumns(r)
+	if err != nil || !ok {
+		return false, err
+	}
+	var count int
+	if err := r.QueryRow(`SELECT COUNT(*) FROM landings WHERE item_id = ? AND result = 'landed'`, itemID).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+// LandedItems answers the set of item IDs that have at least one `landed` row in `landings`.
+// Stores without a complete `landings(item_id, result)` schema answer an empty map and nil error.
+func LandedItems(r *store.Reader) (map[string]bool, error) {
+	ok, err := landingsHasItemResultColumns(r)
+	if err != nil || !ok {
+		return nil, err
+	}
+	rows, err := r.Query(`SELECT DISTINCT item_id FROM landings WHERE result = 'landed'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
 // OneLine collapses whitespace runs (including newlines) into single spaces.
 func OneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
@@ -288,6 +397,17 @@ func Read(r *store.Reader) (map[string]Hold, map[string]string, error) {
 			}
 			if relRun, ok := released[itemID]; ok && runID != relRun {
 				delete(released, itemID)
+			}
+		}
+	}
+	if len(active) > 0 {
+		landed, err := LandedItems(r)
+		if err != nil {
+			return nil, nil, err
+		}
+		for id, h := range active {
+			if landed[id] {
+				active[id] = h.WithoutCloseRemedy()
 			}
 		}
 	}

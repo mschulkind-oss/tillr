@@ -461,11 +461,11 @@ never has a document block. The drain runs it like any other item, with four add
   them.
 - **Owner questions, retries, and identical repeats.** Because a filed request never has a
   document block, an `owner` obstacle or an identical-repeat hold names `tillr drain retry`
-  on the item's latest finished run (or `tillr item close`) instead of asking for a block
-  amendment or document triage. Authorizing that retry releases the owner hold back to the
-  queue and delivers the recorded text into subsequent worker and judge briefs under
-  `## Answered owner questions` (pairing the worker's question with its answer, who
-  recorded it, and when, so the question is not asked again) or `## Retry reasons` (with
+  on the held run (and `tillr item close` only while the item has no landed row) instead of
+  asking for a block amendment or document triage. Authorizing that retry releases the owner
+  hold back to the queue and delivers the recorded text into subsequent worker and judge
+  briefs under `## Answered owner questions` (pairing the worker's question with its answer,
+  who recorded it, and when, so the question is not asked again) or `## Retry reasons` (with
   who recorded it and when).
 
 Completion is the normal gate and landing, plus whatever the workflow's own verify or

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -106,7 +107,15 @@ func readRepeatedEnding(r *store.Reader, d Decision) (*secondFailure, error) {
 		if !cycle.restarted {
 			return nil, nil
 		}
-		text := fmt.Sprintf(conflictAfterRestartPrefix+" run %s, the fresh attempt that followed a restart from the current trunk, conflicted again at landing. The item's earlier attempt conflicted twice, so the operator decides: amend the item's work or its fence, or close it.\n\n%s", current, latest.Detail)
+		hasLanded, err := obstacles.HasLanded(r, d.ItemID)
+		if err != nil {
+			return nil, err
+		}
+		remedy := "amend the item's work or its fence, or close it."
+		if hasLanded {
+			remedy = "amend the item's work or its fence."
+		}
+		text := fmt.Sprintf(conflictAfterRestartPrefix+" run %s, the fresh attempt that followed a restart from the current trunk, conflicted again at landing. The item's earlier attempt conflicted twice, so the operator decides: %s\n\n%s", current, remedy, latest.Detail)
 		return &secondFailure{itemID: d.ItemID, outcomeRun: current, current: current, text: text, forceOwner: true, WorkerSession: nil}, nil
 	}
 	previous, repeated := repeatedEnding(chain, chainEnding{RunID: current, Producer: producerOf(d), Cause: latest.Step, Key: latest.Evidence})
@@ -121,13 +130,21 @@ func readRepeatedEnding(r *store.Reader, d Decision) (*secondFailure, error) {
 	if err != nil {
 		return nil, err
 	}
+	hasLanded, err := obstacles.HasLanded(r, d.ItemID)
+	if err != nil {
+		return nil, err
+	}
 	text := fmt.Sprintf("%s run %s ended (refused at %s) with the same evidence as run %s, so the worker is not sent it again. Change the instruction the worker builds from — amend the item's block — or object: a design run that commits nothing names its next actor.", IdenticalRepeatPrefix, current, latest.Step, previous)
 	if isRequest {
 		cmd, err := acceptedBuildRetryCommand(r, d.ItemID, current)
 		if err != nil {
 			return nil, err
 		}
-		text = fmt.Sprintf("%s run %s ended (refused at %s) with the same evidence as run %s, so the worker is not sent it again. A filed request has no document block; deliver a revised instruction in the next run's brief with %s (or close the item with tillr item close --item %s).", IdenticalRepeatPrefix, current, latest.Step, previous, cmd, d.ItemID)
+		closeClause := fmt.Sprintf(" (or close the item with tillr item close --item %s)", d.ItemID)
+		if hasLanded {
+			closeClause = ""
+		}
+		text = fmt.Sprintf("%s run %s ended (refused at %s) with the same evidence as run %s, so the worker is not sent it again. A filed request has no document block; deliver a revised instruction in the next run's brief with %s%s.", IdenticalRepeatPrefix, current, latest.Step, previous, cmd, closeClause)
 	}
 	for _, id := range []string{previous, current} {
 		rec, err := terminalRecord(r, id)
@@ -268,6 +285,13 @@ func recordSecondFailure(tx *store.Tx, sf *secondFailure, at time.Time) error {
 		// the owner, who can name a design seat in the policy or answer it.
 		c.Status, c.WaitingOn = "owner", "owner"
 		c.Text += "\n\nThe backend policy names no design seat, so no seat can diagnose this repeat, and it waits on the owner, the one who can rule on it or name a design seat in the policy."
+	}
+	hasLanded, err := obstacles.HasLanded(tx.Reader(), sf.itemID)
+	if err != nil {
+		return err
+	}
+	if hasLanded {
+		c.Text = obstacles.StripCloseRemedy(c.Text)
 	}
 	return item.RecordConflict(tx, c, at)
 }
