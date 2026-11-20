@@ -111,7 +111,7 @@ AutoQA leaves the [Icebox](#icebox).
    ([`OQ-PSS3`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS3), after the owner ruled
    [`OQ-PSS1`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS1),
    [`OQ-PSS2`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS2) and subagent tier control
-   on 2026-11-20): placed ahead of the other six by the designer (and the owner's to reorder)
+   on 2026-11-20): placed ahead of the following designs by the designer (and the owner's to reorder)
    because settling its one remaining question on higher-tier builder subagent calls finishes the
    unbuilt design that replaces the upfront plan step and failed-verify restart that cost the most
    rework on the night of 2026-11-19, blocking builder fan-out tier enforcement in
@@ -128,16 +128,7 @@ AutoQA leaves the [Icebox](#icebox).
    cross-stage check reuse and mechanical whole-suite prevention in
    [entry 2](#2-keep-the-loop-running).
 
-5. [Owner review comments and the Vantage seam](../design/tillr-review-comments.md)
-   ([`OQ-RC1`](../design/tillr-review-comments.md#OQ-RC1),
-   [`OQ-RC2`](../design/tillr-review-comments.md#OQ-RC2),
-   [`OQ-RC3`](../design/tillr-review-comments.md#OQ-RC3),
-   [`OQ-RC4`](../design/tillr-review-comments.md#OQ-RC4)): next because a fast comment track at
-   document desks speeds every other ruling without requiring Vantage, blocking the native
-   question reader in [entry 2](#2-keep-the-loop-running) and warm comment routing in
-   [entry 8](#8-design-work-that-keeps-its-context).
-
-6. [Review and compliance routing by artifact class](../design/tillr-review-rules.md)
+5. [Review and compliance routing by artifact class](../design/tillr-review-rules.md)
    ([`OQ-RJ1`](../design/tillr-review-rules.md#OQ-RJ1),
    [`OQ-RJ2`](../design/tillr-review-rules.md#OQ-RJ2),
    [`OQ-RJ3`](../design/tillr-review-rules.md#OQ-RJ3),
@@ -147,7 +138,7 @@ AutoQA leaves the [Icebox](#icebox).
    [companion implementation plans](../design/tillr-queue-mirrors-designs.md) are neither checked
    against the wrong style rules nor dispatched unreviewed.
 
-7. [What a designer reads itself and what goes to scouts](../design/tillr-designer-scouts.md)
+6. [What a designer reads itself and what goes to scouts](../design/tillr-designer-scouts.md)
    ([`OQ-RD1`](../design/tillr-designer-scouts.md#OQ-RD1),
    [`OQ-RD2`](../design/tillr-designer-scouts.md#OQ-RD2),
    [`OQ-RD3`](../design/tillr-designer-scouts.md#OQ-RD3)): next because frontier `design` and
@@ -157,7 +148,7 @@ AutoQA leaves the [Icebox](#icebox).
    [entry 4](#4-choose-where-each-seat-runs) and [entry 8](#8-design-work-that-keeps-its-context)
    without stopping the running loop.
 
-8. [Drain seat profiles and one-command switching](../design/tillr-seat-profiles.md)
+7. [Drain seat profiles and one-command switching](../design/tillr-seat-profiles.md)
    ([`OQ-DSP1`](../design/tillr-seat-profiles.md#OQ-DSP1),
    [`OQ-DSP2`](../design/tillr-seat-profiles.md#OQ-DSP2),
    [`OQ-DSP3`](../design/tillr-seat-profiles.md#OQ-DSP3)): after the six above because workloads
@@ -166,13 +157,16 @@ AutoQA leaves the [Icebox](#icebox).
    [live drain capacity and allocation changes](../design/tillr-live-drain-config.md) and
    [entry 4](#4-choose-where-each-seat-runs).
 
-9. [Self-hosted tillr building](../design/tillr-selfhosted-build.md)
+8. [Self-hosted tillr building](../design/tillr-selfhosted-build.md)
    ([`OQ-SH4`](../design/tillr-selfhosted-build.md#OQ-SH4), after the owner ruled
    [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2) on 2026-11-20 to follow every landing
    and directed reading from Git like `pi-fork`): how `yolo` builds and delivers tillr from Git so
    the pack's source copy and `just pack-sync` can be removed, and whether `/workspace` keeps its
    local `PATH` launcher. Next because the pack copy is a cost on every landing that stops nothing,
    and none of Git delivery or the source launcher is built.
+
+[Owner review comments](../design/tillr-review-comments.md#7-decision-ledger) left this list on
+2026-11-20. The owner answered all four questions; the fast track is not built.
 
 [Criterion repair](../design/criterion-repair.md) left this list on 2026-11-20 once the owner ruled
 [`OQ-CR7`](../design/criterion-repair.md#OQ-CR7): the design seat replaces a frozen criterion's
@@ -308,10 +302,8 @@ loop or failing the trunk proof after the fact;
 [`OQ-ER3`](../design/tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3)) blocks sharing check
 passes across the gate and trunk proof and stopping lane workers from burning shard slots on whole
 module suites;
-[owner review comments and the Vantage seam](../design/tillr-review-comments.md)
-([`OQ-RC1`](../design/tillr-review-comments.md#OQ-RC1) to
-[`OQ-RC4`](../design/tillr-review-comments.md#OQ-RC4)) blocks replacing that subprocess reader
-with a native question parser behind one Vantage adapter.
+the [review comments design](../design/tillr-review-comments.md#7-decision-ledger) proposes
+replacing that subprocess reader with a native question parser; no owner question blocks it.
 [The overnight velocity evaluation](../research/tillr-drain-velocity.md)
 puts identifying the store's live writer ahead of changing concurrency, because a lock-acquisition
 fault stops progress regardless of lane admission. It is evidence and a recommended investigation,
@@ -424,10 +416,8 @@ titled "Drain Pass and Successor Reference"; the owner's name for the step is co
 Three pieces, filed on this page: [a design conversation keeps its designer](#filed-2026-11-15-a-design-conversation-keeps-its-designer),
 [an item not written to the prose guide is rewritten before anyone builds it](#filed-2026-11-15-an-item-that-was-not-written-to-the-prose-guide-is-rewritten-before-anyone-builds-it),
 and [a design on the roadmap always has an item in the queue](#filed-2026-11-15-a-design-on-the-roadmap-always-has-an-item-in-the-queue);
-[owner review comments and the Vantage seam](../design/tillr-review-comments.md)
-([`OQ-RC1`](../design/tillr-review-comments.md#OQ-RC1) to
-[`OQ-RC4`](../design/tillr-review-comments.md#OQ-RC4)) blocks giving review comments a fast track
-at `desk-<doc>` without requiring Vantage, and
+the [review comments design](../design/tillr-review-comments.md#7-decision-ledger) now specifies
+how the fast track at `desk-<doc>` shares express capacity without requiring Vantage, and
 [what a designer reads itself and what goes to scouts](../design/tillr-designer-scouts.md)
 ([`OQ-RD1`](../design/tillr-designer-scouts.md#OQ-RD1) to
 [`OQ-RD3`](../design/tillr-designer-scouts.md#OQ-RD3)) blocks starting design work directly in one
@@ -462,6 +452,10 @@ get cheaper by being opened again.
 ## Icebox
 
 Wanted, not now, by the owner's call. Picking one up means giving it a place above.
+
+- **Fetch pending design comments from Vantage**, deferred 2026-11-20. The proposed server
+  poller, its per-document quiet window, and tracked `[comments.vantage]` intake settings are
+  outside the [review comments design](../design/tillr-review-comments.md#OQ-RC4).
 
 - **Prices on the observatory**, iceboxed 2026-11-15. The owner wants to see what work cost in
   dollars and ruled that the pricing cannot be computed accurately enough yet, so
