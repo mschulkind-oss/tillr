@@ -6,11 +6,11 @@ import { TranscriptView } from "./TranscriptView";
 import { DependencyLinks } from "./DependencyLinks";
 import { UsageSummary } from "./Usage";
 
-export interface GraphNode { id: string; label: string; runId?: string; state: string }
+export interface GraphNode { id: string; label: string; runId?: string; seat?: string; state: string }
 export interface GraphEdge { from: string; to: string }
 /** One renderer for recorded nodes and any directed dependencies supplied by the caller. */
 export function ItemGraph({ nodes, edges }: { nodes: GraphNode[]; edges: GraphEdge[] }) {
-  return <div className="lane-graph"><ol>{nodes.map(node => <li key={node.id} data-state={node.state}>{node.runId ? <a href={`#/run/${encodeURIComponent(node.runId)}?tab=transcript`}>{node.label}</a> : node.label} · {node.state}</li>)}</ol>
+  return <div className="lane-graph"><ol>{nodes.map(node => <li key={node.id} data-state={node.state}>{node.runId ? <a href={`#/run/${encodeURIComponent(node.runId)}?tab=transcript`}>{node.label}</a> : node.label}{node.seat ? ` · ${node.seat}` : ""} · {node.state}</li>)}</ol>
     {edges.length ? <ul aria-label="Graph edges">{edges.map(edge => <li key={`${edge.from}/${edge.to}`}>{edge.from} → {edge.to}</li>)}</ul> : null}</div>;
 }
 function elapsed(start: number, finish: number) { return `${(Math.max(0, finish - start) / 1000).toFixed(1)}s`; }
@@ -29,9 +29,9 @@ export function activeLaneRun(lane: LaneRow): string | null {
 export function LaneDetail({ lane, item, now }: { lane: LaneRow; item?: ItemData; now: number }) {
   const recorded = lane.nodes ?? [];
   const current = recorded.filter(node => node.attempt === lane.attempt);
-  const nodes: GraphNode[] = recorded.length ? current.map(node => ({id:node.node_id,label:node.node_id,runId:node.run_id,state:node.state})) : lane.run_id ? [{ id: lane.run_id, label: `${lane.seat || "worker"} · agent · ${lane.backend}`, runId: lane.run_id, state: lane.state === "running" ? "running" : lane.outcome === "landed" ? "passed" : "failed" }] : [];
+  const nodes: GraphNode[] = recorded.length ? current.map(node => ({id:node.node_id,label:node.node_id,runId:node.run_id,seat:node.seat,state:node.state})) : lane.run_id ? [{ id: lane.run_id, label: `${lane.seat || "worker"} · agent · ${lane.backend}`, runId: lane.run_id, state: lane.state === "running" ? "running" : lane.outcome === "landed" ? "passed" : "failed" }] : [];
   const attempts = recorded.length ? [...new Set(recorded.map(node => node.attempt))] : (item?.runs ?? []).map((_,index) => index+1);
-  const runLink = (id: string) => {const run = item?.runs.find(run => run.run_id === id); return <span key={id}><EntityLink kind="run" id={id} /> {run?.lane_id ? <>· <EntityLink kind="lane" id={run.lane_id} /></> : null} · {run?.state ?? "run state not read"}</span>;};
+  const runLink = (id: string) => {const run = item?.runs.find(run => run.run_id === id); const seat = run?.seat || recorded.find(node => node.run_id === id)?.seat; return <span key={id}><EntityLink kind="run" id={id} /> {run?.lane_id ? <>· <EntityLink kind="lane" id={run.lane_id} /></> : null}{seat ? <> · seat {seat}</> : null} · {run?.state ?? "run state not read"}</span>;};
   return <>
     <h1>Lane <EntityLink kind="lane" id={lane.lane_id} /></h1>
     <p>{lane.state} · {lane.state_since_ms === null ? "start not recorded" : elapsed(lane.state_since_ms, now)} · {lane.outcome}</p>
@@ -43,7 +43,7 @@ export function LaneDetail({ lane, item, now }: { lane: LaneRow; item?: ItemData
     {item ? <DependencyLinks id={item.item.item_id} blockedBy={item.blocked_by} unblocks={item.unblocks} /> : <section><h2>Waits on</h2>Dependencies not read yet.<h2>Unblocks</h2>Unblocks not read yet.</section>}
     <section><h2>Now</h2><p>{lane.latest_action.kind === "unrecorded" ? "latest action not recorded" : lane.latest_action.text} · {lane.latest_action.kind === "liveness" ? "liveness signal, not an action" : lane.latest_action.kind}</p>{nodes.length ? nodes.map(node => <ChildSessions key={node.runId} runID={node.runId!} record={lane.child_sessions?.[node.runId!]} />) : <p>child sessions: not recorded</p>}</section>
     <section><h2>Attempts on this item</h2>{item || recorded.length ? <ol>{attempts.map(number => <li key={number}>attempt {number} · {recorded.length ? recorded.filter(node => node.attempt === number).map(node => runLink(node.run_id)) : item?.runs[number-1] ? runLink(item.runs[number-1].run_id) : null}</li>)}</ol> : <p>Attempts not read yet.</p>}</section>
-    <section><h2>Lane history</h2>{lane.history ? <ol>{lane.history.map(run => <li key={run.run_id}><EntityLink kind="item" id={run.item_id} /> · <EntityLink kind="run" id={run.run_id} /> · <EntityLink kind="lane" id={run.lane_id} /> · {run.state} · {run.started_at_ms ? new Date(run.started_at_ms).toISOString() : "start not recorded"}</li>)}</ol> : <p>Lane history not recorded by this server.</p>}</section>
+    <section><h2>Lane history</h2>{lane.history ? <table><thead><tr><th>Item</th><th>Run</th><th>Lane</th><th>Seat</th><th>State</th><th>Started</th></tr></thead><tbody>{lane.history.map(run => <tr key={run.run_id}><td><EntityLink kind="item" id={run.item_id} /></td><td><EntityLink kind="run" id={run.run_id} /></td><td><EntityLink kind="lane" id={run.lane_id} /></td><td>{run.seat || "—"}</td><td>{run.state}</td><td>{run.started_at_ms ? new Date(run.started_at_ms).toISOString() : "start not recorded"}</td></tr>)}</tbody></table> : <p>Lane history not recorded by this server.</p>}</section>
   </>;
 }
 export function LanePage({ id, lanes, error, live, paused }: { id: string; lanes?: LaneRow[]; error: Error | null; live: boolean; paused: boolean }) {

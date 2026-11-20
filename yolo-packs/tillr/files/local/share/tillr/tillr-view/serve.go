@@ -751,6 +751,9 @@ type runSummary struct {
 	ItemID      string   `json:"item_id"`
 	LaneID      string   `json:"lane_id"`
 	Backend     string   `json:"backend"`
+	Seat        string   `json:"seat,omitempty"`
+	Workflow    string   `json:"workflow,omitempty"`
+	Node        string   `json:"node,omitempty"`
 	State       string   `json:"state"`
 	ExitCode    *int     `json:"exit_code"`
 	StartedMS   int64    `json:"started_at_ms"`
@@ -760,8 +763,21 @@ type runSummary struct {
 }
 
 func summarizeRun(r storeRun) runSummary {
-	return runSummary{r.RunID, r.ItemID, r.LaneID, r.Backend, r.State, r.ExitCode, r.StartedAtMS,
-		r.FinishedAtMS, r.CostUSD, r.UsageTokens}
+	return runSummary{
+		RunID:       r.RunID,
+		ItemID:      r.ItemID,
+		LaneID:      r.LaneID,
+		Backend:     r.Backend,
+		Seat:        r.Seat,
+		Workflow:    r.Workflow,
+		Node:        r.Node,
+		State:       r.State,
+		ExitCode:    r.ExitCode,
+		StartedMS:   r.StartedAtMS,
+		FinishedMS:  r.FinishedAtMS,
+		CostUSD:     r.CostUSD,
+		UsageTokens: r.UsageTokens,
+	}
 }
 
 // itemView is one item as the snapshot lists it: the projected state an operator reads,
@@ -872,6 +888,9 @@ func liveRuns(lanes []storeLane, known []storeRun, allocations map[string]alloca
 				ItemID:      allocated.ItemID,
 				LaneID:      lane.LaneID,
 				Backend:     allocated.Backend,
+				Seat:        allocated.Seat,
+				Workflow:    allocated.Workflow,
+				Node:        allocated.Node,
 				State:       liveRunState,
 				StartedAtMS: allocated.StartedAtMS,
 			})
@@ -927,6 +946,13 @@ func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiF
 	// run-item-obs-filter-20261114T063154Z, `runs_live: 0`, `running_runs: 0`.
 	if allocations, err := readAllocations(r); err == nil {
 		runs = append(runs, liveRuns(laneRows, runs, allocations)...)
+	}
+	if dispatchedSeats, err := dispatchSeats(r); err == nil {
+		for i := range runs {
+			if runs[i].Seat == "" {
+				runs[i].Seat = dispatchedSeats[runs[i].RunID]
+			}
+		}
 	}
 	candidates, _ := readCandidates(r)
 	attempts, _ := readAllAttempts(r)
@@ -1514,7 +1540,7 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 	for runID, a := range allocations {
 		if a.ItemID == id && !known[runID] {
 			itemRuns = append(itemRuns, storeRun{RunID: runID, ItemID: id, LaneID: a.LaneID,
-				Backend: a.Backend, StartedAtMS: a.StartedAtMS})
+				Backend: a.Backend, Seat: a.Seat, Workflow: a.Workflow, Node: a.Node, StartedAtMS: a.StartedAtMS})
 		}
 	}
 	out.Usage, err = sumUsage(r, itemRuns)
@@ -1578,6 +1604,9 @@ type runDetail struct {
 	ItemID      string   `json:"item_id"`
 	LaneID      string   `json:"lane_id"`
 	Backend     string   `json:"backend"`
+	Seat        string   `json:"seat,omitempty"`
+	Workflow    string   `json:"workflow,omitempty"`
+	Node        string   `json:"node,omitempty"`
 	State       string   `json:"state"`
 	ExitCode    *int     `json:"exit_code"`
 	StartedMS   int64    `json:"started_at_ms"`
@@ -1623,9 +1652,30 @@ func (s *server) runPayload(r *store.Reader, req *http.Request) (any, *apiFailur
 	if !found {
 		return nil, runNotFound(id)
 	}
+	seat := run.Seat
+	if seat == "" {
+		dispatched, err := dispatchSeats(r)
+		if err != nil {
+			return nil, unreadable(err)
+		}
+		seat = dispatched[run.RunID]
+	}
 	out := runData{
-		Run: runDetail{run.RunID, run.ItemID, run.LaneID, run.Backend, run.State, run.ExitCode,
-			run.StartedAtMS, run.FinishedAtMS, run.UsageTokens, run.CostUSD},
+		Run: runDetail{
+			RunID:       run.RunID,
+			ItemID:      run.ItemID,
+			LaneID:      run.LaneID,
+			Backend:     run.Backend,
+			Seat:        seat,
+			Workflow:    run.Workflow,
+			Node:        run.Node,
+			State:       run.State,
+			ExitCode:    run.ExitCode,
+			StartedMS:   run.StartedAtMS,
+			FinishedMS:  run.FinishedAtMS,
+			UsageTokens: run.UsageTokens,
+			CostUSD:     run.CostUSD,
+		},
 		ClaimChecks: []claimView{},
 	}
 	saved, err := preserved.ReadPreservedWork(r)

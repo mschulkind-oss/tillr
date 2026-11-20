@@ -308,14 +308,41 @@ func assembleLanesCounted(r *store.Reader, loop, lanes string, now time.Time, st
 	}
 	// The seat a run was dispatched for is on its decision row (tillr-drain's
 	// dispatches.seat), and it outranks the item's seat: an item's seat can change after the
-	// run started, and the lane is describing the run.
+	// run started, and the lane is describing the run. A run's own recorded seat (runs.seat
+	// / run.allocate) outranks both.
 	dispatched, err := dispatchSeats(r)
 	if err != nil {
 		return nil, err
 	}
+	runSeats := map[string]string{}
+	for runID, seat := range dispatched {
+		runSeats[runID] = seat
+	}
+	for id, a := range d.allocations {
+		if a.Seat != "" {
+			runSeats[id] = a.Seat
+		}
+	}
+	for _, run := range d.runs {
+		if run.Seat != "" {
+			runSeats[run.RunID] = run.Seat
+		}
+	}
 	for i := range rows {
-		if seat, ok := dispatched[rows[i].RunID]; ok && seat != "" {
-			rows[i].Seat, rows[i].SeatSource = seat, "dispatch"
+		if rows[i].SeatSource != "run" {
+			if seat, ok := dispatched[rows[i].RunID]; ok && seat != "" {
+				rows[i].Seat, rows[i].SeatSource = seat, "dispatch"
+			}
+		}
+		for j := range rows[i].History {
+			if rows[i].History[j].Seat == "" {
+				rows[i].History[j].Seat = runSeats[rows[i].History[j].RunID]
+			}
+		}
+		for j := range rows[i].Nodes {
+			if rows[i].Nodes[j].Seat == "" {
+				rows[i].Nodes[j].Seat = runSeats[rows[i].Nodes[j].RunID]
+			}
 		}
 	}
 	conditions, err := readLaneConditions(r)
@@ -372,9 +399,14 @@ func buildLaneRowsCounted(d *storeDomain, verdicts map[string]gateVerdict, seats
 	rows := []laneRow{}
 	runs := map[string]storeRun{}
 	for id, a := range d.allocations {
-		runs[id] = storeRun{RunID: id, ItemID: a.ItemID, LaneID: a.LaneID, Backend: a.Backend, State: liveRunState, StartedAtMS: a.StartedAtMS}
+		runs[id] = storeRun{RunID: id, ItemID: a.ItemID, LaneID: a.LaneID, Backend: a.Backend, Seat: a.Seat, Workflow: a.Workflow, Node: a.Node, State: liveRunState, StartedAtMS: a.StartedAtMS}
 	}
 	for _, r := range d.runs {
+		if r.Seat == "" {
+			if a, ok := d.allocations[r.RunID]; ok {
+				r.Seat = a.Seat
+			}
+		}
 		runs[r.RunID] = r
 	}
 	ordered := make([]storeRun, 0, len(runs))
@@ -421,7 +453,7 @@ func buildLaneRowsCounted(d *storeDomain, verdicts map[string]gateVerdict, seats
 		for i := len(ordered) - 1; i >= 0; i-- {
 			r := ordered[i]
 			if r.LaneID == lane.LaneID {
-				row.History = append(row.History, laneHistoryRun{RunID: r.RunID, ItemID: r.ItemID, LaneID: r.LaneID, State: r.State, StartedAtMS: r.StartedAtMS, FinishedAtMS: r.FinishedAtMS})
+				row.History = append(row.History, laneHistoryRun{RunID: r.RunID, ItemID: r.ItemID, LaneID: r.LaneID, Seat: r.Seat, State: r.State, StartedAtMS: r.StartedAtMS, FinishedAtMS: r.FinishedAtMS})
 			}
 		}
 		row.RunID = run.RunID
@@ -431,9 +463,12 @@ func buildLaneRowsCounted(d *storeDomain, verdicts map[string]gateVerdict, seats
 		}
 		row.ItemID = run.ItemID
 		row.Backend = run.Backend
-		row.Seat = seats[run.ItemID]
+		row.Seat = run.Seat
 		row.SeatSource = "none"
 		if row.Seat != "" {
+			row.SeatSource = "run"
+		} else if seat := seats[run.ItemID]; seat != "" {
+			row.Seat = seat
 			row.SeatSource = "item"
 		}
 		row.Attempt = numbers[run.RunID]

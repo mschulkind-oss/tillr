@@ -10,6 +10,7 @@ import (
 type laneNode struct {
 	NodeID  string `json:"node_id"`
 	RunID   string `json:"run_id"`
+	Seat    string `json:"seat,omitempty"`
 	Attempt int    `json:"attempt"`
 	State   string `json:"state"`
 }

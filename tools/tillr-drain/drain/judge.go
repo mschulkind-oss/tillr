@@ -251,6 +251,17 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 					return c, false, Usagef("agent judge requires the review seat")
 				}
 				req = l.cfg.Policy.request(c.ItemID, c.LaneID, c.RunID+"-judge", seat[0])
+				if req != nil {
+					req.Seat = "review"
+					req.Workflow = c.Workflow
+					if req.Workflow == "" && c.Request != nil {
+						req.Workflow = c.Request.Workflow
+					}
+					if req.Workflow == "" {
+						req.Workflow = singleWorkerWorkflow
+					}
+					req.Node = "judge"
+				}
 			}
 			if req == nil {
 				return c, false, Usagef("cannot build review request")

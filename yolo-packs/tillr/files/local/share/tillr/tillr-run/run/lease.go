@@ -183,6 +183,9 @@ func ClaimLease(ctx context.Context, tx *store.Tx, req Request, laneID string, s
 		RunID:         req.RunID,
 		ItemID:        req.ItemID,
 		Backend:       req.Backend,
+		Seat:          req.Seat,
+		Workflow:      req.Workflow,
+		Node:          req.effectiveNode(),
 		LaneID:        laneID,
 		StartedAt:     startedAt.UTC().Format(time.RFC3339),
 		LeasedUntil:   leasedUntil,
@@ -214,6 +217,9 @@ type claim struct {
 	RunID     string `json:"run_id"`
 	ItemID    string `json:"item_id,omitempty"`
 	Backend   string `json:"backend"`
+	Seat      string `json:"seat,omitempty"`
+	Workflow  string `json:"workflow,omitempty"`
+	Node      string `json:"node,omitempty"`
 	LaneID    string `json:"lane_id"`
 	StartedAt string `json:"started_at"`
 	// CorrelationID is the tick the request named, copied from the request so the
@@ -529,6 +535,9 @@ func closeRun(ctx context.Context, tx *store.Tx, lane lease, now time.Time) (boo
 		ItemID:     claimed.ItemID,
 		LaneID:     lane.laneID,
 		Backend:    claimed.Backend,
+		Seat:       claimed.Seat,
+		Workflow:   claimed.Workflow,
+		Node:       claimed.Node,
 		State:      StateTimedOut,
 		EndCause:   EndLeaseReclaimed,
 		StartedAt:  started.UTC().Format(time.RFC3339),

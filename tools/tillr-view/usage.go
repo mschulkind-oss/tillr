@@ -108,7 +108,7 @@ func readUsageRuns(r *store.Reader) ([]storeRun, error) {
 	}
 	for id, a := range allocated {
 		if !known[id] {
-			runs = append(runs, storeRun{RunID: id, ItemID: a.ItemID, LaneID: a.LaneID, Backend: a.Backend, StartedAtMS: a.StartedAtMS})
+			runs = append(runs, storeRun{RunID: id, ItemID: a.ItemID, LaneID: a.LaneID, Backend: a.Backend, Seat: a.Seat, Workflow: a.Workflow, Node: a.Node, StartedAtMS: a.StartedAtMS})
 		}
 	}
 	sort.Slice(runs, func(i, j int) bool { return runs[i].RunID < runs[j].RunID })

@@ -208,7 +208,7 @@ export function ItemsView({ waiting, snapshot, error, writesEnabled = false, onM
             else dropAt(row.item_id, below);
           }}>
           <td>{row.place ?? "—"}</td><td>{row.observation || row.document || <EntityLink kind="item" id={row.item_id} />}{item?.kind === "idea" ? <> <span className="chip">idea</span> {item.title}</> : null}</td><td><ClassState value={row.class} /></td><td>{row.where}</td><td>{row.why}{row.graph_changes?.map((change, index) => <p key={index}>{change}</p>)}</td>
-          <td><EntityText value={row.mover} snapshot={snapshot} rows={waiting} /></td><td>{row.since}</td><td>{item?.latest_run ? <EntityLink kind="run" id={item.latest_run.run_id} state={item.latest_run.state} /> : "—"}</td>
+          <td><EntityText value={row.mover} snapshot={snapshot} rows={waiting} /></td><td>{row.since}</td><td>{item?.latest_run ? <><EntityLink kind="run" id={item.latest_run.run_id} state={item.latest_run.state} />{item.latest_run.seat ? ` · ${item.latest_run.seat}` : ""}</> : "—"}</td>
           {writesEnabled ? <td>{canMove(row) ? <>
             {orderedMoves ? <button type="button" className="ledger__drag" aria-label={`Drag ${row.item_id}`} disabled={moving !== null} draggable={moving === null}
               onDragStart={event => { dragged.current = row.item_id; event.dataTransfer.effectAllowed = "move"; event.dataTransfer.setData("text/plain", row.item_id); list.focus(identity); }}
@@ -293,7 +293,7 @@ export function PassesView({ passes, error, more = false, loadingOlder = false, 
         <p>phases {pass.phases ? Object.entries(pass.phases).map(([name, ms]) => `${name.replace("_ms", "")} ${ms === null ? "—" : `${ms}ms`}`).join(" · ") : "— · no timing row"}</p>
         <PassSpend pass={pass} />
         <details open={index < 2 ? true : undefined}><summary>Decisions</summary><ul>{pass.decisions.filter(row => (!item || row.item_id === item) && (!action || row.action === action)).map((row, i) => <li key={`${row.item_id}-${i}`}>
-          {row.action} · <EntityLink kind="item" id={row.item_id} /> · {row.reason} {row.lane_id ? <EntityLink kind="lane" id={row.lane_id} /> : null} {row.run_id ? <EntityLink kind="run" id={row.run_id} /> : null}
+          {row.action} · <EntityLink kind="item" id={row.item_id} /> · {row.reason} {row.lane_id ? <EntityLink kind="lane" id={row.lane_id} /> : null} {row.run_id ? <EntityLink kind="run" id={row.run_id} /> : null}{row.seat ? ` · ${row.seat}` : ""}
         </li>)}</ul></details>
       </section>;
     })}

@@ -20,6 +20,8 @@ export interface LiveRun {
   itemId: string | null;
   /** The item's title from the snapshot's own rows, or null when the item is not there. */
   title: string | null;
+  /** The seat that ran this live run, when recorded. */
+  seat?: string;
   /** The run's recorded start. Null when the snapshot names the run but not its start —
    * an absence the screen says out loud rather than drawing as a zero. */
   startedAtMs: number | null;
@@ -62,6 +64,7 @@ export function liveRuns(snapshot: SnapshotData | undefined): LiveRun[] {
       runId: lane.run_id,
       itemId: owner?.itemId ?? null,
       title: owner?.title ?? null,
+      seat: run?.seat || undefined,
       // A run row with no start (the live projection carries the allocation's clock) is
       // an absent measurement, not 1970 and not zero elapsed.
       startedAtMs: run !== undefined && run.started_at_ms > 0 ? run.started_at_ms : null,

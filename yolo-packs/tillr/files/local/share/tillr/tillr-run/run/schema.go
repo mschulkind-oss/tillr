@@ -105,6 +105,9 @@ CREATE TABLE IF NOT EXISTS runs (
   backend       TEXT NOT NULL,
   route         TEXT,
   harness       TEXT,
+  seat          TEXT,
+  workflow      TEXT,
+  node          TEXT,
   state         TEXT NOT NULL,
   exit_code     INTEGER,
   end_cause     TEXT,
@@ -162,6 +165,17 @@ func init() {
 	// path and series key, or installed path and version). Nullable for other backends
 	// and legacy rows.
 	if err := store.RegisterColumn(Utility, "runs", "harness", "TEXT"); err != nil {
+		panic(err)
+	}
+	// seat, workflow, and node record which seat, workflow, and node ran the run.
+	// Nullable for runs dispatched without them and legacy rows.
+	if err := store.RegisterColumn(Utility, "runs", "seat", "TEXT"); err != nil {
+		panic(err)
+	}
+	if err := store.RegisterColumn(Utility, "runs", "workflow", "TEXT"); err != nil {
+		panic(err)
+	}
+	if err := store.RegisterColumn(Utility, "runs", "node", "TEXT"); err != nil {
 		panic(err)
 	}
 	if err := store.RegisterColumn(Utility, "runs", "extension_set", "TEXT"); err != nil {

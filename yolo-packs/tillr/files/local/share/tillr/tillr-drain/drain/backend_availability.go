@@ -148,6 +148,10 @@ func rerouteNodeRequest(policy *Policy, d Decision, name string) *run.Request {
 	request.TimeoutMS = d.RunRequest.TimeoutMS
 	request.ReadOnlyGroup = d.RunRequest.ReadOnlyGroup
 	request.NodeID = d.RunRequest.NodeID
+	request.Seat = d.RunRequest.Seat
+	request.Workflow = d.RunRequest.Workflow
+	request.Node = d.RunRequest.Node
 	request.CorrelationID = d.RunRequest.CorrelationID
+	stampDecisionRequest(d, &request)
 	return &request
 }

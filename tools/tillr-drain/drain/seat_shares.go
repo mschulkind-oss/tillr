@@ -168,6 +168,7 @@ func selectSeatDispatch(tx *store.Tx, d *Decision, p *Policy, shut map[string]bo
 	if d.Workflow != nil && d.Workflow.Stages[d.NodeIndex].TimeoutMS > 0 {
 		copy.TimeoutMS = d.Workflow.Stages[d.NodeIndex].TimeoutMS
 	}
+	stampDecisionRequest(*d, &copy)
 	d.RunRequest = &copy
 	if d.Designer != nil {
 		adapter := ""

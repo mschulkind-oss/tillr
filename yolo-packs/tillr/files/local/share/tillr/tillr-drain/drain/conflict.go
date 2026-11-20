@@ -142,7 +142,12 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 		if _, ok := policy.Backends[fix.Backend]; !ok {
 			return "", false, l.holdRepair(ctx, basis, fmt.Errorf("original repair backend %q is absent from the policy; restore that backend", fix.Backend))
 		}
+		prev := fix
 		fix = *policy.request(candidate.ItemID, candidate.LaneID, fixRunID, fix.Backend)
+		fix.Seat = prev.Seat
+		fix.Workflow = prev.Workflow
+		fix.Node = prev.Node
+		fix.NodeID = prev.NodeID
 	}
 	fix.RunID = fixRunID
 	fix.Resume = false
@@ -244,9 +249,10 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 		Attempt: attempt, From: "candidate", To: "running", PassID: candidate.TickID,
 		ItemID: candidate.ItemID, LaneID: candidate.LaneID,
 		Action: ActionDispatch, Reason: ReasonConflictFix,
-		RunRequest: &fix, Seat: candidate.Seat, Inputs: &basis.Inputs, BlockConflict: candidate.BlockConflict,
+		RunRequest: &fix, Seat: candidate.Seat, SelectedWorkflow: candidate.Workflow, Inputs: &basis.Inputs, BlockConflict: candidate.BlockConflict,
 		Returned: ending, WorkerSessionReason: reason,
 	}
+	stampDecisionRequest(decision, &fix)
 	identifyDecision(&decision)
 	if err := l.handoffRepair(ctx, candidate, decision, base); err != nil {
 		return "", false, err

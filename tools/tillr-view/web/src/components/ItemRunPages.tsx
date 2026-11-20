@@ -31,7 +31,7 @@ export function ItemTimeline({ item }: { item: ItemData }) {
       {" · target "}{revision.target}{" · workflow "}{revision.workflow}{" · proposing run "}<EntityLink kind="run" id={revision.proposing_run} />
     </> })),
     ...item.runs.map(run => ({ at: run.started_at_ms, key: `run-${run.run_id}`, body: <>
-      Run <EntityLink kind="run" id={run.run_id} /> · {run.backend} · {run.end_cause ?? "end cause not recorded"} · {run.state} · exit {run.exit_code ?? "not recorded"}
+      Run <EntityLink kind="run" id={run.run_id} />{run.seat ? ` · seat ${run.seat}` : ""} · {run.backend} · {run.end_cause ?? "end cause not recorded"} · {run.state} · exit {run.exit_code ?? "not recorded"}
       {" · finish "}{run.finished_at_ms ? new Date(run.finished_at_ms).toISOString() : "not recorded"}
       {" · "}{run.usage_tokens === null ? "tokens not recorded" : `${run.usage_tokens} tokens`}
     </> })),
@@ -83,7 +83,7 @@ export function RunPage({ id, route, live, paused }: { id: string; route: string
   const navigate = (key: string, value: string | null) => { const next = new URLSearchParams(params); if (value) next.set(key, value); else next.delete(key); window.location.hash = `#/run/${encodeURIComponent(id)}?${next}`; };
   if (run.error) return <main className="entity-page"><h1>Run <EntityLink kind="run" id={id} /></h1><RefusalState code={refusalCode(run.error)} message={run.error.message} onRetry={() => void run.refetch()} /></main>;
   return <main className="entity-page" aria-label="Run page"><h1>Run <EntityLink kind="run" id={id} /></h1>
-    {!data ? <p>Reading the run…</p> : <><p><EntityLink kind="item" id={data.run.item_id} /> · <EntityLink kind="lane" id={data.run.lane_id} /> · {data.run.backend} · {data.run.state} · exit {data.run.exit_code ?? "not recorded"}</p>
+    {!data ? <p>Reading the run…</p> : <><p><EntityLink kind="item" id={data.run.item_id} /> · <EntityLink kind="lane" id={data.run.lane_id} />{data.run.seat ? <> · seat {data.run.seat}</> : null}{data.run.workflow ? <> · workflow {data.run.workflow}</> : null}{data.run.node ? <> · node {data.run.node}</> : null} · {data.run.backend} · {data.run.state} · exit {data.run.exit_code ?? "not recorded"}</p>
       <RunUsageFigures usage={data.usage} />
       <PreservedWork records={data.preserved_work ?? []} />
       <nav aria-label="Run artifacts">{["brief", "fence", "base_sha", "request", "gate.verdict", "land.attempt"].map(kind => <button key={kind} onClick={() => navigate("artifact", kind)}>Open {kind}</button>)}</nav>

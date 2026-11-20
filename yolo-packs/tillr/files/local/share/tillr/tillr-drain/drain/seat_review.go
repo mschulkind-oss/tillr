@@ -40,6 +40,15 @@ func (l *Loop) selectReviewDispatch(ctx context.Context, req run.Request) (run.R
 			return errSeatWindowClosed
 		}
 		d := Decision{DecisionID: "decision-" + req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Seat: "review", Action: ActionDispatch, Reason: "agent-review", SelectSeat: true, RunRequest: policy.request(req.ItemID, req.LaneID, req.RunID, name)}
+		if d.RunRequest != nil {
+			d.RunRequest.Seat = req.Seat
+			if d.RunRequest.Seat == "" {
+				d.RunRequest.Seat = d.Seat
+			}
+			d.RunRequest.Workflow = req.Workflow
+			d.RunRequest.Node = req.Node
+			d.RunRequest.NodeID = req.NodeID
+		}
 		ok, err = selectSeatDispatch(tx, &d, &policy, shut, l.cfg.Now())
 		if err != nil {
 			return err

@@ -17,6 +17,7 @@ type laneHistoryRun struct {
 	RunID        string `json:"run_id"`
 	ItemID       string `json:"item_id"`
 	LaneID       string `json:"lane_id"`
+	Seat         string `json:"seat,omitempty"`
 	State        string `json:"state"`
 	StartedAtMS  int64  `json:"started_at_ms"`
 	FinishedAtMS int64  `json:"finished_at_ms"`

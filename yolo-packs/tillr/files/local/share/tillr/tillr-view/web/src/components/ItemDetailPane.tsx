@@ -275,7 +275,8 @@ export function ItemDetailPane({
                   onClick={() => onSelectRun(latestRun.run_id)}
                   aria-pressed={latestRun.run_id === selectedRunId}
                 >
-                  run <code>{latestRun.run_id}</code> · {latestRun.state} ·{" "}
+                  run <code>{latestRun.run_id}</code> · {latestRun.state}
+                  {latestRun.seat ? ` · seat ${latestRun.seat}` : ""} ·{" "}
                   {latestRun.usage_tokens ?? "unrecorded"} tokens
                 </button>
               ) : (
@@ -371,7 +372,8 @@ export function ItemDetailPane({
                     <code>{latestRun.run_id}</code>
                   </button>
                   <span className="pane__count">
-                    {latestRun.state} · lane {latestRun.lane_id || "unrecorded"} ·{" "}
+                    {latestRun.state} · lane {latestRun.lane_id || "unrecorded"}
+                    {latestRun.seat ? ` · seat ${latestRun.seat}` : ""} ·{" "}
                     {relativeTime(latestRun.started_at_ms)}
                   </span>
                 </li>

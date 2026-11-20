@@ -802,9 +802,9 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			}
 			identifyDecision(&decision)
 		}
-		if decision.Workflow != nil && decision.RunRequest != nil {
+		if decision.RunRequest != nil {
 			request := *decision.RunRequest
-			request.NodeID = decision.Workflow.Stages[decision.NodeIndex].ID
+			stampDecisionRequest(decision, &request)
 			decision.RunRequest = &request
 		}
 		if err := describeBackendHold(r, &decision, policy); err != nil {
@@ -1200,8 +1200,52 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.Designer = item.Designer
 		decision.DesignerSessionID, decision.DesignerReason = chooseDesigner(item.Designer, decision.RunRequest, p.at, previousAdapter)
 	}
+	if decision.RunRequest != nil {
+		stampDecisionRequest(decision, decision.RunRequest)
+	}
 	identifyDecision(&decision)
 	return decision
+}
+
+func (d Decision) workflowRef() string {
+	if d.SelectedWorkflow != "" {
+		return d.SelectedWorkflow
+	}
+	if d.Workflow != nil && d.Workflow.Name != "" {
+		return fmt.Sprintf("%s@v%d", d.Workflow.Name, d.Workflow.Version)
+	}
+	if d.ItemID != "" {
+		return singleWorkerWorkflow
+	}
+	return ""
+}
+
+func stampDecisionRequest(d Decision, req *run.Request) {
+	if req == nil {
+		return
+	}
+	if wf := d.workflowRef(); wf != "" {
+		req.Workflow = wf
+	}
+	if d.Workflow != nil && d.NodeIndex >= 0 && d.NodeIndex < len(d.Workflow.Stages) {
+		stage := d.Workflow.Stages[d.NodeIndex]
+		if stage.Kind == "command" {
+			req.Seat = ""
+		} else if d.Seat != "" {
+			req.Seat = d.Seat
+		} else {
+			req.Seat = stage.Seat
+		}
+		req.NodeID = stage.ID
+		req.Node = stage.ID
+		return
+	}
+	if d.Seat != "" {
+		req.Seat = d.Seat
+	}
+	if d.Workflow == nil && req.Node == "" {
+		req.Node = "worker"
+	}
 }
 
 // identifyDecision names the decision's current position, including loop-only holds

@@ -118,7 +118,11 @@ func (l *Loop) nextAvailableRequest(ctx context.Context, itemID, laneID, runID, 
 	if left != "" {
 		degraded = left
 	}
-	return policy.request(itemID, laneID, runID, next), degraded, true, nil
+	req := policy.request(itemID, laneID, runID, next)
+	if req != nil {
+		req.Seat = seat
+	}
+	return req, degraded, true, nil
 }
 
 func readShutBackends(r *store.Reader, at time.Time) (map[string]bool, error) {

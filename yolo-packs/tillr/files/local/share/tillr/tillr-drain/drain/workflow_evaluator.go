@@ -98,7 +98,8 @@ func evaluatorInputFiles(inputs map[string][]NodeInput) map[string]string {
 func (l *Loop) evaluatorCandidate(ctx context.Context, d Decision) (Candidate, error) {
 	req := *d.RunRequest
 	req.NodeID = d.Workflow.Stages[d.NodeIndex].ID
-	c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: d.RunRequest.RunID, Worktree: l.laneTarget(d.LaneID), BaseSHA: l.laneBase(d.LaneID), Evaluator: &req}
+	stampDecisionRequest(d, &req)
+	c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: d.RunRequest.RunID, Worktree: l.laneTarget(d.LaneID), BaseSHA: l.laneBase(d.LaneID), Workflow: d.workflowRef(), Evaluator: &req}
 	var err error
 	c.HeadSHA = d.NodeBaseSHA
 	if c.HeadSHA == "" {

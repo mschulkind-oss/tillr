@@ -530,6 +530,7 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 			d.RunRequest = d.Workflow.Stages[d.NodeIndex].commandRequest(d.ItemID, d.LaneID, previous.RunID)
 			d.RunRequest.ReadOnlyGroup = previous.ReadOnlyGroup
 			d.RunRequest.WorkingDir = previous.WorkingDir
+			stampDecisionRequest(d, d.RunRequest)
 			d.Inputs = inputs
 			identifyDecision(&d)
 			return d, nil
@@ -574,6 +575,7 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 			}
 			request.NodeID = d.Workflow.Stages[d.NodeIndex].ID
 			request.WorkingDir = d.RunRequest.WorkingDir
+			stampDecisionRequest(d, request)
 			d.RunRequest = request
 			if degraded != "" {
 				d.Reason = seatDegradedReason(degraded, name)
@@ -1662,6 +1664,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 						continue
 					}
 				}
+				stampDecisionRequest(node, node.RunRequest)
 				if _, err := run.ClaimLease(ctx, tx, *node.RunRequest, node.LaneID, at); err != nil {
 					return err
 				}
@@ -1929,7 +1932,9 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 			} else if len(d.Parallel) > 0 {
 				err = l.runParallel(ctx, d)
 			} else {
-				_, _, err = l.runRestartable(ctx, *d.RunRequest)
+				req := *d.RunRequest
+				stampDecisionRequest(d, &req)
+				_, _, err = l.runRestartable(ctx, req)
 			}
 			if err == nil {
 				completion.outcome.stop, err = l.closeAsyncBracket(context.WithoutCancel(ctx), d, at, before, &local, watched, epochs)
