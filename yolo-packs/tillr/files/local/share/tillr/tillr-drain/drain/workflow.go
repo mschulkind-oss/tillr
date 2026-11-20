@@ -555,7 +555,7 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		base = stagedBase
 	}
 	target := l.laneTarget(d.LaneID)
-	var head string
+	var head, nodeBase string
 	if !l.nonLanding {
 		head, err = l.revParse(ctx, target, "HEAD")
 		if err != nil {
@@ -570,7 +570,7 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		} else if !os.IsNotExist(err) {
 			return true, err
 		}
-		nodeBase := d.NodeBaseSHA
+		nodeBase = d.NodeBaseSHA
 		if nodeBase == "" {
 			nodeBase = l.laneBase(d.LaneID)
 			if nodeBase == "" {
@@ -593,27 +593,6 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 				return true, retainedAfter(d.LaneID, stop)
 			}
 			return true, l.markExamined(ctx, d)
-		}
-		if effectiveAccess == "write" {
-			c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: nodeBase, HeadSHA: head}
-			escape, err := l.fenceViolationAt(ctx, c, filepath.Join(l.laneDirPath(d.LaneID), FenceFile))
-			if err != nil {
-				return true, err
-			}
-			if escape != "" {
-				c.BaseSHA = base
-				c.RefusalDetail = "node " + stage.ID + ": " + escape
-				if err := l.nodeOutcome(ctx, d, "refused"); err != nil {
-					return true, err
-				}
-				if err := l.refuse(ctx, c, result, RefusalFence); err != nil {
-					return true, err
-				}
-				if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, c.RefusalDetail); stop != "" {
-					return true, retainedAfter(d.LaneID, stop)
-				}
-				return true, l.markExamined(ctx, d)
-			}
 		}
 	}
 	if stage.Kind == "command" && (rec.State != run.StateExited || rec.ExitCode == nil || (*rec.ExitCode != 0 && *rec.ExitCode != 1)) {
@@ -657,6 +636,29 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		if ClassifyAttempt(rec, log) == AttemptInfrastructure || (rec.State == run.StateExited && !readableFooter(footer)) {
 			return true, l.retryWorkflowNode(ctx, d, base, rec, result)
 		}
+	}
+	if !l.nonLanding && effectiveAccess == "write" {
+		c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: nodeBase, HeadSHA: head}
+		escape, err := l.fenceViolationAt(ctx, c, filepath.Join(l.laneDirPath(d.LaneID), FenceFile))
+		if err != nil {
+			return true, err
+		}
+		if escape != "" {
+			c.BaseSHA = base
+			c.RefusalDetail = "node " + stage.ID + ": " + escape
+			if err := l.nodeOutcome(ctx, d, "refused"); err != nil {
+				return true, err
+			}
+			if err := l.refuse(ctx, c, result, RefusalFence); err != nil {
+				return true, err
+			}
+			if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, c.RefusalDetail); stop != "" {
+				return true, retainedAfter(d.LaneID, stop)
+			}
+			return true, l.markExamined(ctx, d)
+		}
+	}
+	if stage.Kind == "agent" {
 		if footer != "done" && footer != "failed" {
 			if footer == "blocked" {
 				if err := l.reportedBlock(ctx, d, log); err != nil {

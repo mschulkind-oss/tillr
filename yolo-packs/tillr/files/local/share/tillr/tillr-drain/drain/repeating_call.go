@@ -179,12 +179,17 @@ func (l *Loop) settleRepeatingCall(ctx context.Context, d Decision, rec run.Reco
 func (l *Loop) restartRepeatingNode(ctx context.Context, d Decision, base string, rec run.Record) error {
 	policy := l.currentPolicy()
 	rc := newRepeatedCall(policy, d, rec)
-	head := l.headOf(ctx, d.LaneID)
-	if err := l.preserveWork(ctx, d.LaneID, rec.RunID, rc.describe()); err != nil {
-		return err
-	}
-	if head != "" {
-		l.pinQuietly(ctx, rec.RunID, head)
+	var head string
+	if !l.nonLanding {
+		head = l.headOf(ctx, d.LaneID)
+		if err := l.preserveWork(ctx, d.LaneID, rec.RunID, rc.describe()); err != nil {
+			if stop := l.retainUnpreserved(ctx, d.LaneID, rec.RunID, head, err); stop != "" {
+				return retainedAfter(d.LaneID, stop)
+			}
+		}
+		if head != "" {
+			l.pinQuietly(ctx, rec.RunID, head)
+		}
 	}
 	l.reportf("loop: %s %s; route %s %s\n", rec.RunID, rc.describe(), rc.Route, rc.NextBackend)
 	if rc.Route == repeatRouteHold {

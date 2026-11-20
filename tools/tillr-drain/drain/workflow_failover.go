@@ -12,6 +12,17 @@ import (
 // Restart staging preserves the faulted run and restores this node's start head,
 // retaining all earlier nodes' commits and the graph's original base.
 func (l *Loop) retryWorkflowNode(ctx context.Context, d Decision, base string, rec run.Record, result *LoopResult) error {
+	if !l.nonLanding {
+		head := l.headOf(ctx, d.LaneID)
+		if err := l.preserveWork(ctx, d.LaneID, rec.RunID, "infrastructure failure before failover"); err != nil {
+			if stop := l.retainUnpreserved(ctx, d.LaneID, rec.RunID, head, err); stop != "" {
+				return retainedAfter(d.LaneID, stop)
+			}
+		}
+		if head != "" {
+			l.pinQuietly(ctx, rec.RunID, head)
+		}
+	}
 	if err := l.recordBackendWindow(ctx, rec); err != nil {
 		return err
 	}
@@ -62,6 +73,17 @@ func (l *Loop) retryWorkflowNode(ctx context.Context, d Decision, base string, r
 }
 
 func (l *Loop) restartInterruptedNode(ctx context.Context, d Decision, base string, rec run.Record) error {
+	if !l.nonLanding {
+		head := l.headOf(ctx, d.LaneID)
+		if err := l.preserveWork(ctx, d.LaneID, rec.RunID, "run interrupted by signal"); err != nil {
+			if stop := l.retainUnpreserved(ctx, d.LaneID, rec.RunID, head, err); stop != "" {
+				return retainedAfter(d.LaneID, stop)
+			}
+		}
+		if head != "" {
+			l.pinQuietly(ctx, rec.RunID, head)
+		}
+	}
 	policy := l.currentPolicy()
 	if policy == nil {
 		return Usagef("workflow seat %s has no backend route", d.Seat)
