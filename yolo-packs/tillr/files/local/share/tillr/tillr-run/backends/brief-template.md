@@ -126,11 +126,18 @@ The runner records every line as a `run.progress` event while you work.
 printf '%s\n' c1 >> "$TILLR_PROGRESS_FILE"
 ```
 
-For the full suite before committing, use the sharded runner on modules the gate
-runs through it, as listed in the repository's verification report
-`docs/pi/tillr-go-shards-2026-11-17.md`. Each shard is an independent test process
-with its own scratch and git global configuration. The runner executes tests fresh,
-without Go's test result cache:
+Do not run a whole module suite in a lane. The landing gate runs every suite your change
+selects, once, with priority on the test slots, and a failure there comes back to this run
+naming the test. On 2026-11-20 a two-line trunk fix spent 43 of its 47 minutes of worker
+time waiting for slots to run whole suites the gate then ran again. When a failure is
+handed to you (a red check, a gate log, a triage packet), it already names the failing
+test: run that test, not the suite it came from.
+
+The sharded runner is how the gate runs a suite, on the modules listed in the repository's
+verification report `docs/pi/tillr-go-shards-2026-11-17.md`. Each shard is an independent
+test process with its own scratch and git global configuration, and tests run fresh,
+without Go's test result cache. Use it yourself only when a change is so broad that no
+selection covers it, and say so in your report:
 
 ```bash
 python3 tools/go-test-shards.py tools/tillr-drain -k 6
@@ -162,8 +169,8 @@ module suite:
 cd tools/tillr-drain && go test ./drain -run '^TestName$'
 ```
 
-Run the full applicable suite once before committing; never run `just done` in a lane.
-If this repository has no runner, use its documented test command instead.
+Before committing, run the tests for the behavior you changed and every test in a file
+you edited; leave whole suites to the gate. Never run `just done` in a lane.
 
 ## Verification commands
 
@@ -172,8 +179,8 @@ Run each of these and paste its output in your report. Never run the full gate
 
 {{VERIFICATION}}
 
-While working on Go code, use a targeted `-run` for the behavior being changed. Run the
-full suite once before committing. In the drain module, drop `-count=1` for the working
+While working on Go code, use a targeted `-run` for the behavior being changed, and leave
+the whole suite to the gate. In the drain module, drop `-count=1` for the working
 loop: the tests declare the sibling sources as inputs Go's result cache can see, so a
 sibling change reruns tests and an unchanged tree still caches. This is test verification,
 not permission to run the landing gate (`just done`).
