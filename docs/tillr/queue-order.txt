@@ -1,20 +1,18 @@
-# last_hand_move_event_seq: 1307775
-# hand_move_event_sha256: 6cdf4fe9fa338f4af68c63fb584d3bd4e8d8e51f8161dfa23525344312553e2d
+# last_hand_move_event_seq: 1309024
+# hand_move_event_sha256: 1f1d76aae862f33b13ae4560712f748c884f1abfb0df96ab918bbb6acd888f77
+item-request-fccf81196b
 item-request-8d596c05b4
 item-request-f16c0ce2d8
-item-request-05ac7dd8a0
 item-request-b205fbd881
 item-request-ab90e5da8f
 item-request-2656e7289b
 item-request-ae67aa405d
 item-request-add5da8454
-item-request-e074800ade
 item-request-e052790788
 item-request-3ee8dd349e
 item-request-ed0e11d000
 item-request-5be951c300
 item-request-c04ea25d47
-item-request-bb7e39762f
 item-request-e406ec3b31
 item-request-4ca25155ff
 item-gate-pinned-fork-inputs
@@ -24,23 +22,17 @@ item-request-b2ce2df89b
 item-request-926c73851f
 item-request-8176b4a9b6
 item-request-8304b61f6a
-item-request-52982a1ce4
 item-request-501d15a96a
 item-request-bc841265a1
 item-request-4bb0b8b03b
-item-request-f74814d1a5
 item-request-553e2d14f7
-item-request-1b032747a0
-item-request-4795bf8522
 item-request-7bbcb8dc81
-item-request-7aa97e258a
 item-request-3ccff5abbd
 item-request-59735b6305
-item-request-dc908f4fbf
 item-request-4c014f05ea
-item-request-94653a5f84
 item-request-25be7f7b54
 item-request-131d23d050
 item-request-5fa774afd5
 item-request-1f7351ab04
-item-request-b92ccc0180
+item-request-94653a5f84
+item-request-28a8cd3a1b
