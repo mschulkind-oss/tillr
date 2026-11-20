@@ -674,6 +674,7 @@ type drainSummary struct {
 	CostUnreportedRuns  int                       `json:"cost_unreported_runs"`
 	LastStopReason      *string                   `json:"last_stop_reason"`
 	Stop                *stopExplanation          `json:"stop"`
+	RepeatedStop        *repeatedStop             `json:"repeated_stop,omitempty"`
 	HeartbeatIntervalMS int64                     `json:"heartbeat_interval_ms"`
 	StopNote            string                    `json:"stop_note"`
 	LastDecision        *dispatchView             `json:"last_decision"`
@@ -1044,6 +1045,7 @@ func (s *server) snapshotPayload(r *store.Reader, _ *http.Request) (any, *apiFai
 	// records; a loop that has not written one answers an absence with a note, never a
 	// guessed reason.
 	loopResult := s.obs.newestLoopResult()
+	repeatedStop := s.obs.repeatedLoopStop()
 	stopReason, stopNote, loopBuild, buildNote := loopResult.Stop, loopResult.Note, loopResult.Build, loopResult.BuildNote
 	stop := loopResult.Explanation
 	tickCount, _ := countTicks(r)
@@ -1076,6 +1078,7 @@ func (s *server) snapshotPayload(r *store.Reader, _ *http.Request) (any, *apiFai
 		Rejected:            byResult["isolated"] + byResult["refused"],
 		StopNote:            stopNote,
 		Stop:                stop,
+		RepeatedStop:        repeatedStop,
 		HeartbeatIntervalMS: HeartbeatIntervalMS,
 		Build:               loopBuild,
 		BuildNote:           buildNote,

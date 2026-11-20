@@ -572,6 +572,15 @@ reported explicitly; a question hold whose question is no longer present reads
 `question not recorded`. Holds without a recorded cause read `cause not recorded`.
 No question or cause is invented from the reason text.
 
+A `run-processes-live` item fault reads `needs you` with the surviving process list in
+**Why** and the `clear-fault` command in **Mover**.
+
+When the trailing `.tillr/loop/drain-*.json` records share two or more consecutive
+abnormal exits for the same cause (reset by `queue-drained` or `operator-stop`), `waiting`
+and `/api/v1/waiting` also emit a `loop:repeated-exit` observation row (`needs you` at
+`loop`) naming the exit count, cause, first exit time, and the stop explanation's next
+action.
+
 Both faces open the store read-only and pin assembly to one read transaction. Tests
 compare CLI and API rows, all table row counts, and the database bytes before and after
 reading.
@@ -584,7 +593,11 @@ drain. It prints three blocks:
 1. **The loop and lane header** — `lanes leased: M/K` and the loop's last stop reason from
 the newest `.tillr/loop/drain-*.json`. When an event was appended after that file, the
 header says `stale stop record — newer run exists at seq <N>`: the shape that hid a loop
-whose newest stop record was an older take.
+whose newest stop record was an older take. When the trailing `drain-*.json` records
+show two or more consecutive abnormal exits for the same cause, `running` (both text and
+`loop.repeated_stop` JSON) and `/api/v1/snapshot` (`drain_summary.repeated_stop`, rendered
+in `LoopBand` and `LoopSummary`) report the stuck-drain streak, time window, and next
+action even while a newly restarted session is active.
 2. **The active runs** — the lane, run, item, place, title, elapsed (the viewer's clock from
 the run's start), turns and spend so far, in-run loop recoveries (`RECOVERIES`, summarizing
 `loop_detected` events with `action: "recovered"` by count, shape, and tokens before and

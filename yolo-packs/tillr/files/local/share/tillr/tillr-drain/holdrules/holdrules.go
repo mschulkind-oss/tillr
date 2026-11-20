@@ -53,6 +53,7 @@ var Rules = map[string]Rule{
 	"lane-branch-held":            {"needs you", "lane", "remove the worktree holding the lane's branch, or stage a different lane id"},
 	"lane-holds-uncommitted-work": {"needs you", "lane", "commit or remove the files, or reset the lane deliberately"},
 	"lane-run-children-live":      {"waits on work", "lane", "wait for the named processes to exit, or end them with the recorded kill command"},
+	"run-processes-live":          {"needs you", "lane", "end the surviving processes the detail lists, then tillr drain clear-fault"},
 	"preserve-failed":             {"needs you", "lane", "the process or cause the detail names (a live index.lock holder exits or is ended); then tillr drain clear-fault"},
 	"decision-collision":          {"needs a cause", "loop", "fix the drain defect the fault names, then tillr drain clear-fault"},
 	"settle-failed":               {"needs a cause", "loop", "fix the drain defect the fault names, then tillr drain clear-fault"},

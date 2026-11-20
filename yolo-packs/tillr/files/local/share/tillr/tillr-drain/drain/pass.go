@@ -2270,6 +2270,9 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 		}
 		if completion.outcome.err != nil || completion.laneRefusal != nil {
 			// The claimed lane remains pending so a replacement retries staging.
+		} else if out, held := l.checkSurvivingRunProcesses(ctx, d.ItemID, d.LaneID, examinationRunIDs(work)...); held {
+			completion.outcome = out
+			completion.laneRefusal = out.laneRefusal
 		} else if d.Reason == ReasonItemAlreadyTerminal {
 			// The plan read the terminal state and the claim's version check rebound it;
 			// the settling write rereads it for the record.
@@ -2344,6 +2347,9 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 				}
 				if completion.outcome.err == nil && completion.outcome.stop == "" {
 					completion.outcome = l.settle(ctx, work.Decision, *rec, log, work.BaseSHA, d.RunRequest.CorrelationID, at, local, &timing, watched, true)
+					if completion.outcome.laneRefusal != nil {
+						completion.laneRefusal = completion.outcome.laneRefusal
+					}
 				}
 				if terminal := asItemTerminal(completion.outcome.err); terminal != nil {
 					completion.outcome = laneOutcome{err: l.settleTerminalItem(ctx, work, terminal)}
@@ -2405,7 +2411,7 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 						err = l.markExamined(ctx, work.Decision)
 					}
 				}
-				completion.outcome = laneOutcome{stop, err}
+				completion.outcome = laneOutcome{stop: stop, err: err}
 			}
 		}
 		completion.outcome = retainedOutcome(completion.outcome)

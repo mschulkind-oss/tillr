@@ -282,6 +282,18 @@ export interface StopExplanation {
   next: string;
 }
 
+export interface RepeatedStop {
+  count: number;
+  reason: string;
+  detail: string;
+  item_id: string;
+  step: string;
+  first_at_ms: number;
+  last_at_ms: number;
+  sentence: string;
+  next: string;
+}
+
 /** The answer to one restart request, as the loop or the server recorded it (Go:
  * tillr-drain/restart). `from_build` and `to_build` are the builds' one-line stamps. */
 export interface RestartAnswer {
@@ -300,6 +312,7 @@ export interface DrainSummary {
   restarts?: Record<string, RestartAnswer>;
   active: boolean;
   stop?: StopExplanation | null;
+  repeated_stop?: RepeatedStop | null;
   heartbeat_interval_ms?: number;
   session?: {
     session_id: string;

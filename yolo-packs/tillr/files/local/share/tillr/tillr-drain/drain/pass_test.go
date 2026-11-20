@@ -233,7 +233,10 @@ func TestTheGateReclaimsItsLaneUntilItAnswers(t *testing.T) {
 	}
 	drainOwned(t, l, &result)
 	finished := make(chan laneOutcome, 1)
-	go func() { stop, err := l.pass(context.Background(), &result); finished <- laneOutcome{stop, err} }()
+	go func() {
+		stop, err := l.pass(context.Background(), &result)
+		finished <- laneOutcome{stop: stop, err: err}
+	}()
 	select {
 	case <-steps.gated:
 	case <-time.After(hangGuard):

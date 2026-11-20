@@ -192,7 +192,10 @@ lane. Its waiting row names the process ids and a `kill` command; wait for them 
 or end them deliberately. The loop checks this on every pass and restores rotation
 once none remain. A marked process outside the lane does not hold it. `run exec` ends
 the worker's remaining process group on normal exit too, but children that created
-another group can survive and are covered by this lane hold.
+another group can survive and are covered by this lane hold. If marked processes
+survive when an ended run is settled or examined, the loop retains that lane and holds
+only that run's item with `run-processes-live` (listing the surviving processes) so the
+rest of the loop keeps running; end those processes and run `tillr drain clear-fault`.
 
 ## Exit codes, once
 

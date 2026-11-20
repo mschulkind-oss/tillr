@@ -63,16 +63,17 @@ type runningLanes struct {
 // runningLoop prefers the recorded live session over historical stop evidence.
 // Stale describes a stop file followed by newer events, only when no session is live.
 type runningLoop struct {
-	Session     *loopSession `json:"session"`
-	Active      bool         `json:"active"`
-	SessionNote string       `json:"session_note"`
-	StopReason  string       `json:"stop_reason"`
-	StopNote    string       `json:"stop_note"`
-	RecordPath  string       `json:"record_path,omitempty"`
-	RecordedAt  *time.Time   `json:"recorded_at,omitempty"`
-	Stale       bool         `json:"stale"`
-	StaleSeq    int64        `json:"stale_seq,omitempty"`
-	StaleNote   string       `json:"stale_note,omitempty"`
+	Session      *loopSession  `json:"session"`
+	Active       bool          `json:"active"`
+	SessionNote  string        `json:"session_note"`
+	StopReason   string        `json:"stop_reason"`
+	StopNote     string        `json:"stop_note"`
+	RecordPath   string        `json:"record_path,omitempty"`
+	RecordedAt   *time.Time    `json:"recorded_at,omitempty"`
+	Stale        bool          `json:"stale"`
+	StaleSeq     int64         `json:"stale_seq,omitempty"`
+	StaleNote    string        `json:"stale_note,omitempty"`
+	RepeatedStop *repeatedStop `json:"repeated_stop,omitempty"`
 }
 
 // runningRun is one live run: the lane's lease, the run, the item it is for, and the two
@@ -233,7 +234,9 @@ func runningFace(args []string) (record.Envelope, int) {
 // the loop result is a file beside the store, and the stale test joins it to that same
 // transaction's event head.
 func readRunning(ctx context.Context, storePath, loopDir, laneRoot string, now time.Time) (runningPayload, error) {
-	stop := (&observations{loopDir: loopDir}).newestLoopResult()
+	obs := &observations{loopDir: loopDir}
+	stop := obs.newestLoopResult()
+	repeated := obs.repeatedLoopStop()
 	s, err := store.OpenRead(ctx, storePath)
 	if err != nil {
 		return runningPayload{}, err
@@ -284,6 +287,7 @@ func readRunning(ctx context.Context, storePath, loopDir, laneRoot string, now t
 		out.Loop.Session = session
 		out.Loop.Active = active
 		out.Loop.SessionNote = note
+		out.Loop.RepeatedStop = repeated
 		return readFinishedEndings(r, domain, out.Finished)
 	})
 	if err != nil {
@@ -583,6 +587,9 @@ func renderRunning(w io.Writer, p runningPayload) {
 	if p.Loop.Stale {
 		fmt.Fprintf(w, "%s\n", p.Loop.StaleNote)
 	}
+	if p.Loop.RepeatedStop != nil {
+		fmt.Fprintf(w, "%s\n", repeatedStopLine(p.Loop.Active, p.Loop.RepeatedStop))
+	}
 	fmt.Fprintln(w)
 
 	if len(p.Active) == 0 {
@@ -647,6 +654,21 @@ func loopLine(p runningPayload) string {
 		return "loop: " + p.Loop.StopNote
 	}
 	return "loop: no stop record"
+}
+
+func repeatedStopLine(active bool, rs *repeatedStop) string {
+	cause := rs.Reason
+	if rs.Detail != "" && rs.Detail != rs.Reason {
+		cause += ": " + rs.Detail
+	}
+	firstAt := time.UnixMilli(rs.FirstAtMS).UTC().Format(time.RFC3339)
+	lastAt := time.UnixMilli(rs.LastAtMS).UTC().Format(time.RFC3339)
+	prefix := "stuck drain"
+	if active {
+		prefix = "stuck drain (restarted after repeated exits)"
+	}
+	return fmt.Sprintf("%s: loop exited %d times in a row (%s, %s..%s). Next: %s",
+		prefix, rs.Count, cause, firstAt, lastAt, rs.Next)
 }
 
 // idleLine names the lanes a stopped board is not using. The lane list is the answer to

@@ -153,12 +153,12 @@ func (l *Loop) intakeLandingOffer(ctx context.Context, d Decision, rec run.Recor
 		}
 		return landingOfferAbsent, err
 	}
-	live, err := liveRunIDs(l.cfg.Store)
+	procs, err := survivingRunProcesses(l.cfg.Store, rec.RunID)
 	if err != nil {
 		return landingOfferAbsent, err
 	}
-	if live[rec.RunID] {
-		return landingOfferAbsent, Externalf("cannot read landing offer for %s while its processes survive", rec.RunID)
+	if len(procs) > 0 {
+		return landingOfferAbsent, &survivingProcessesError{RunID: rec.RunID, Step: "read landing offer", Processes: procs}
 	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -789,12 +789,12 @@ func (l *Loop) reconcileLandingDelivery(ctx context.Context, d Decision) error {
 			return err
 		}
 	}
-	live, err := liveRunIDs(l.cfg.Store)
+	procs, err := survivingRunProcesses(l.cfg.Store, d.RunRequest.RunID)
 	if err != nil {
 		return err
 	}
-	if live[d.RunRequest.RunID] {
-		return Externalf("cannot reconcile landing answer for %s while its processes survive", d.RunRequest.RunID)
+	if len(procs) > 0 {
+		return &survivingProcessesError{RunID: d.RunRequest.RunID, Step: "reconcile landing answer", Processes: procs}
 	}
 	if form == "tool-result" {
 		answer = landingAnswerForTurn(answer, d.RunRequest.RunID, dir)
