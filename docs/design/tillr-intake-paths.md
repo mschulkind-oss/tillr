@@ -12,7 +12,7 @@ tags:
 summary: "The owner's idea that each way work enters tillr (an agent files an item, the owner dumps a ramble, a worker raises a conflict) runs through its own small graph of steps that ends in one fixed item shape, so planning, build, gate and landing never learn which door was used. It records what the owner said and when, restates the idea, measures from the code what sync and the planner check today and what each door has, and lists what is not yet settled."
 next: "Talk through the points under Not yet settled; the prose-rewrite, idea-save, no-block triage and command-line request paths are built separately, while a unified cross-door intake graph is not."
 depends-on:
-  - tillr-item-graphs.md
+  - ../reference/tillr-item-graphs.md
   - tillr-idea-pipeline.md
   - tillr-core-and-git-landing.md
 ---
@@ -25,7 +25,7 @@ depends-on:
 
 **Why it matters.** Each intake path is currently wired as its own rule or store-declared special case across sync and the drain rather than as one shared intake-subgraph contract, and some checks are gated by repository settings or by whether the store is document-fed.
 
-**Reads with:** [item graphs](./tillr-item-graphs.md) (the graphs the doors are made of), [the idea pipeline](./tillr-idea-pipeline.md#2-the-pipeline-and-one-writer-rules) (the earlier flow from an idea to a landed commit), [the observatory's first two actions](../reference/observatory-actions.md#idea-intake-and-the-design-turn) (the owner's idea door in the browser), [the core and the landing definition](./tillr-core-and-git-landing.md) (where the use case ends and the core begins).
+**Reads with:** [item graphs](../reference/tillr-item-graphs.md) (the graphs the doors are made of), [the idea pipeline](./tillr-idea-pipeline.md#2-the-pipeline-and-one-writer-rules) (the earlier flow from an idea to a landed commit), [the observatory's first two actions](../reference/observatory-actions.md#idea-intake-and-the-design-turn) (the owner's idea door in the browser), [the core and the landing definition](./tillr-core-and-git-landing.md) (where the use case ends and the core begins).
 
 ## Words this document uses
 
@@ -48,7 +48,7 @@ That became the guide mark, a sync check, and the queued rewrite item described 
 
 > I ramble into a ticket. You then create an item. The first thing is a designer because it's like a rambling ticket. And then that designer writes a design doc or maybe that designer decides it needs scouting first. So it replaces itself with four scouts and a designer that joins them.
 
-That became the scouted-design workflow of [item graphs](./tillr-item-graphs.md) and the ruling [`OQ-IP1`](./tillr-idea-pipeline.md#61-settled-decisions) of the idea pipeline.
+That became the scouted-design workflow of [item graphs](../reference/tillr-item-graphs.md#shipped-workflows-and-command-registry) and the ruling [`OQ-IP1`](./tillr-idea-pipeline.md#61-settled-decisions) of the idea pipeline.
 
 **Just after midnight, 2026-11-16.** On a button that saves a ramble:
 
@@ -98,7 +98,7 @@ Checks remain split across sync and the drain's prerequisites rather than enforc
 
 ## 4. How this sits in the larger direction
 
-[Item graphs](./tillr-item-graphs.md) give an item a graph of nodes, each one agent or one command, and say a node may replace itself with several. Each door's steps are exactly that: a rewrite node, a triage node, a designer that fans out to scouts. The item shape of [section 2](#2-the-shape-every-door-must-end-in) is the interface between those intake subgraphs and the build graph: a subgraph with a declared output shape that downstream nodes depend on is the general mechanism, and it belongs to the core. Which doors exist, what shape they end in, and which checks a shape needs belong to the layer that describes a use case, as [the core and the landing definition](./tillr-core-and-git-landing.md#1-the-direction-in-the-owners-words) records: the owner put "item prerequisites" there. Landing a change in Git wants documents, blocks and the guide mark. Another use has other doors and another shape; the Product QA pipeline files an item with `apply` into a store of its own, and a bug it confirms is not a rambling request at all.
+[Item graphs](../reference/tillr-item-graphs.md) give an item a graph of nodes, each one agent or one command, and say a node may replace a later unstarted node with several. Each door's steps are exactly that: a rewrite node, a triage node, a designer that fans out to scouts. The item shape of [section 2](#2-the-shape-every-door-must-end-in) is the interface between those intake subgraphs and the build graph: a subgraph with a declared output shape that downstream nodes depend on is the general mechanism, and it belongs to the core. Which doors exist, what shape they end in, and which checks a shape needs belong to the layer that describes a use case, as [the core and the landing definition](./tillr-core-and-git-landing.md#1-the-direction-in-the-owners-words) records: the owner put "item prerequisites" there. Landing a change in Git wants documents, blocks and the guide mark. Another use has other doors and another shape; the Product QA pipeline files an item with `apply` into a store of its own, and a bug it confirms is not a rambling request at all.
 
 ## Not yet settled
 

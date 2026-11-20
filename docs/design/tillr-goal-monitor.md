@@ -6,7 +6,7 @@ stage: DESIGN
 next: "Nothing until it is picked up: the owner iceboxed this design on 2026-11-17 (\"let's icebox this goal stuff until we have a use for it again\"), on the tillr roadmap's Icebox. Picking it up means a use for a scheduled check-in, which answers OQ-GM1, then the owner's review of the designer's decisions in the ledger, then filing the three slices of Section 10, starting with scheduled tasks."
 depends-on:
   - scheduled-tasks.md
-  - tillr-item-graphs.md
+  - ../reference/tillr-item-graphs.md
   - agent-runtime.md#20-one-breakage-one-investigation
   - handoff-items-and-steering-timer.md
 tags: [tillr, board, monitor, steering, scheduling, graphs, design]
@@ -17,7 +17,7 @@ summary: "A goal is a recurring item whose criteria are a property of the system
 
 **Status:** 2026-11-17: **iceboxed by the owner**, who said "let's icebox this goal stuff until we have a use for it again." It is parked on [the tillr roadmap's Icebox](../tillr/roadmap.md#icebox), not abandoned and not accepted. Nothing is built, none of the three slices in [§10](#10-the-three-downstream-slices) is in the queue, and both questions are blocked so that they stop asking. The [ledger](#11-decision-ledger)'s rows are the designer's decisions of 2026-11-14; the owner has ruled on none of them. Written against the tree at `cb3488a8` and corrected on 2026-11-18 where the tree had moved: the loop now waits by default, the graph engine is built, and workflows live under `config/tillr/workflows/`.
 
-> **In short.** The owner asked for a monitor that inspects the board on a schedule and decides whether to act, built out of pieces this repository already has. It is **a composition, not a new mechanism**: a *goal* is a recurring board item whose frozen criteria are a property of the system rather than a change to it, the clock is [`due_at`](scheduled-tasks.md#21-the-two-columns), the execution is a [pre-approved item graph](tillr-item-graphs.md#31-named-versioned-graph-templates) whose leaves are read-only collectors, one deciding agent, and one filing command, and the decision shape is [§20](agent-runtime.md#20-one-breakage-one-investigation)'s stateless planner. The one new tracked file is `config/tillr/workflows/goal-checkin@v1.json`, and it is guarded by two keys and a fence because it is the file that says what the monitor may decide.
+> **In short.** The owner asked for a monitor that inspects the board on a schedule and decides whether to act, built out of pieces this repository already has. It is **a composition, not a new mechanism**: a *goal* is a recurring board item whose frozen criteria are a property of the system rather than a change to it, the clock is [`due_at`](scheduled-tasks.md#21-the-two-columns), the execution is a [pre-approved item graph](../reference/tillr-item-graphs.md#workflows-selection-and-expansion) whose leaves are read-only collectors, one deciding agent, and one filing command, and the decision shape is [§20](agent-runtime.md#20-one-breakage-one-investigation)'s stateless planner. The one new tracked file is `config/tillr/workflows/goal-checkin@v1.json`, and it is guarded by two keys and a fence because it is the file that says what the monitor may decide.
 
 **Why it matters.** Every day the loop runs, someone reads the board to notice that the queue has not landed anything since Tuesday, that an item has been held past its promise, or that a patch series has drifted three releases. That reading is *steering*, and it is the owner's attention spent as a polling loop. A goal monitor turns the repeating part of that reading into a due item: the schedule never forgets, the inspection is mechanical where it can be, and the only thing the agent does is decide what the mechanical collection means.
 
@@ -29,7 +29,7 @@ summary: "A goal is a recurring item whose criteria are a property of the system
 
 **Needs your ruling:** None. Blocked while the design is iceboxed: [OQ-GM1](#OQ-GM1) (what the first check-in watches) and [OQ-GM2](#OQ-GM2) (whether anything outside the loop pages the owner).
 
-**Reads with:** [`scheduled-tasks.md`](scheduled-tasks.md) (the clock, unbuilt), [`tillr-item-graphs.md`](tillr-item-graphs.md) (the graph engine, built), [`agent-runtime.md`](agent-runtime.md) (the on-call role), [`handoff-items-and-steering-timer.md`](handoff-items-and-steering-timer.md) (the protocol the monitor takes over).
+**Reads with:** [`scheduled-tasks.md`](scheduled-tasks.md) (the clock, unbuilt), [`tillr-item-graphs.md`](../reference/tillr-item-graphs.md) (the graph engine, built), [`agent-runtime.md`](agent-runtime.md) (the on-call role), [`handoff-items-and-steering-timer.md`](handoff-items-and-steering-timer.md) (the protocol the monitor takes over).
 
 **Terms.** *Goal* (coined here) — a recurring item whose frozen criteria state a property the system should hold, not a change to make, and whose correct outcome on a check-in is a no-op that the judge can still call done. *Check-in* (coined here) — one run of a goal's graph: the mechanical collection, the decision, and the actions it files. *Goal monitor* (coined here) — the composition of a goal, the clock that makes it due, and its check-in graph. *Outside authority* (coined here) — the actor that can see the monitor is not running, because it is not the monitor. *Not due*, *due time*, *recurrence*, *drain*, *admission* and *rank* are [scheduled-tasks §2](scheduled-tasks.md#2-the-item-fields)'s and are used here in exactly that sense. The role the repository already names is the **on-call** ([§20](agent-runtime.md#20-one-breakage-one-investigation)); the monitor is its scheduled half, and the breakage planner is its event-driven half. **Steering** is the manual act both replace, and the `active-steering` skill remains its protocol. **The board**, here and throughout, is the observatory's queue screen, never the retired work board; see [observatory-design.md §1.3](./observatory-design.md#13-non-purposes).
 
@@ -64,7 +64,7 @@ check-in, and the goal is carried in a field the item already has.
 | Piece | What it already provides | What this design does not re-implement |
 | :--- | :--- | :--- |
 | The clock: `items.due_at`, `items.recur_interval_ms` ([scheduled-tasks §2.1](scheduled-tasks.md#21-the-two-columns)) | A nullable due instant, a nullable interval, due-ness as a derived admission gate, the single-slot no-queue property, and re-arm at the completion transition | Any parser, timer, scheduler or daemon. The monitor's cadence *is* the interval |
-| The execution: pre-approved item graphs ([item graphs §3.1](tillr-item-graphs.md#31-named-versioned-graph-templates)) | Versioned JSON templates under `config/tillr/workflows/`, three node kinds over one argv boundary, static flattening, typed producer-bound artifacts, declarative `exit` | A per-goal workflow script, model-authored argv, a second sequencing runtime |
+| The execution: pre-approved item graphs ([item graphs](../reference/tillr-item-graphs.md#workflows-selection-and-expansion)) | Versioned JSON templates under `config/tillr/workflows/`, three stage kinds over one argv boundary, static flattening, typed producer-bound artifacts, declarative `exit` | A per-goal workflow script, model-authored argv, a second sequencing runtime |
 | The decision: one breakage, one investigation ([agent-runtime §20](agent-runtime.md#20-one-breakage-one-investigation)) | The durable record as memory, a stateless planner invoked per event, mechanical dedup by signature, and the rule that the planner writes records while the drain is the sole actor | A resident on-call, a second dispatcher, per-event bespoke scripts |
 | The protocol: the steering timer ([handoff items §4](handoff-items-and-steering-timer.md#4-the-steering-timer-keep-the-skill-build-the-mechanism-under-it)) | The measure→steer loop, the check-in shape, the drift signals, and the acknowledgement discipline, as the `active-steering` skill | Session-local turn injection, a timer that survives by being re-armed in a conversation |
 | `config/tillr/workflows/goal-checkin@v1.json` | — | This is the one thing that is new, and it is a data file, not code |
@@ -165,7 +165,7 @@ One mode does not satisfy it, and [§8](#8-a-not-due-item-when-the-loop-is-told-
 ### 5.1 The template
 
 `config/tillr/workflows/goal-checkin@v1.json`, tracked and gated like every template, is the check-in.
-Its shape, in [item graphs §3.2](tillr-item-graphs.md#32-three-node-kinds-over-one-argv-boundary)'s node kinds:
+Its shape, in [item graphs](../reference/tillr-item-graphs.md#schema-stage-kinds-and-static-expansion)' stage kinds:
 
 | Node | Kind | Access | Reads | Emits |
 | :--- | :--- | :--- | :--- | :--- |
@@ -204,7 +204,7 @@ the board and may never write a file.*
 
 ### 5.2 Parameters
 
-The template's `params` are typed data, bounded by the [item graphs §3.1](tillr-item-graphs.md#31-named-versioned-graph-templates) rule that a parameter never
+The template's `params` are typed data, bounded by the [item graphs](../reference/tillr-item-graphs.md#proposals-and-graph-revisions) rule that an argument never
 interpolates a shell string and never alters an exit or evaluator invariant:
 
 | Param | Type | Meaning | Default |
@@ -246,14 +246,14 @@ keys**, and a change takes effect only when both have signed.
 | Key | Who holds it | What it is | What it does alone |
 | :--- | :--- | :--- | :--- |
 | **Key 1 — the owner's approval** (new: nothing in the tree records an approval today) | The `owner` (or `whale`) seat, never a lane seat | A `graph.approved` record naming the template's `sha256`, written by `tillr graph approve goal-checkin@v1 --digest <sha>` | Loads nothing: with no gate-greened file behind the digest, the loader refuses an approved digest that matches no committed template |
-| **Key 2 — the gate's validation** | `just done` | The tracked-template check the gate runs: every template under `config/tillr/workflows/` parses, is acyclic, binds every port to a named producer, resolves every `command_ref`, and keeps every `write_scope` inside its item's fence — [item graphs](tillr-item-graphs.md#31-named-versioned-graph-templates)' `D-IG5` | Loads nothing: a committed template whose digest no `graph.approved` record names is refused at instantiation |
+| **Key 2 — the gate's validation** | `just done` | The tracked-template check the gate runs: every template under `config/tillr/workflows/` parses, is acyclic, binds every port to a named producer, resolves every `command_ref`, and keeps every `write_scope` inside its item's fence — [item graphs](../reference/tillr-item-graphs.md#why-its-this-way)' `D-IG5` | Loads nothing: a committed template whose digest no `graph.approved` record names is refused at instantiation |
 
 The loader's rule, in one sentence: *instantiate a template only when its committed bytes hash to a
 digest the owner has approved, and refuse with the two digests named when they differ.* The owner's
 approval is not a permission bit that a lane can flip, because the verb is seat-restricted on the
 same ground as [scheduled-tasks §2.3](scheduled-tasks.md#23-the-cli-surface)'s write rule.
 
-An in-flight item pins the digest at instantiation ([item graphs §3.1](tillr-item-graphs.md#31-named-versioned-graph-templates)), so a concurrent edit cannot shift the
+An in-flight item pins the digest at instantiation ([item graphs](../reference/tillr-item-graphs.md#selection-and-defaults)), so a concurrent edit cannot shift the
 graph under a check-in that has already started. **A running check-in's template is the one it
 began with, whatever the tree says now.**
 
@@ -441,9 +441,9 @@ monitor is exactly the feature that tempts each one:
   [§20.3](agent-runtime.md#203-what-the-on-call-agent-is)'s reason: context that lives in a conversation cannot be handed over, audited, or
   read after it is gone.
 - **The monitor may not author argv.** Every command leaf is a tracked `command_ref`
-  ([item graphs §5](tillr-item-graphs.md#5-what-a-node-may-never-be)).
+  ([what a workflow node may never be](../reference/tillr-item-graphs.md#what-a-workflow-node-may-never-be)).
 - **The check-in may not carry a clock, a sleep or a `now()`**, and it may not carry a timer of its
-  own. The clock is the item's `due_at`, outside the graph; [item graphs §5](tillr-item-graphs.md#5-what-a-node-may-never-be) refuses the inside.
+  own. The clock is the item's `due_at`, outside the graph; [what a workflow node may never be](../reference/tillr-item-graphs.md#what-a-workflow-node-may-never-be) refuses the inside.
 - **A check-in may not file more than `max_actions` items** plus one bound-hit item. A horde of
   near-identical rows is the failure this bound exists to make impossible.
 - **A check-in with no evidence may not claim a no-op.** A `no-op` verdict citing no snapshot fails
@@ -456,7 +456,7 @@ Declared here and built later; none is in the queue, and this document touches n
 | Slice | Builds | Depends on | What it must not do |
 | :--- | :--- | :--- | :--- |
 | `item-tillr-scheduled-items` | [scheduled-tasks](scheduled-tasks.md#9-staging-v1-v2-and-the-criterion)' V1 and V2: the two nullable columns and their migration, the `not-due` gate and its reason, the re-arm at completion and its event, the CLI flags, the view detail, and the rule of [§8](#8-a-not-due-item-when-the-loop-is-told-to-exit-once-drained) | Nothing. This is the substrate and it lands first | Add a scheduler, a daemon or a cron parser; assert elapsed time in a test |
-| `item-tillr-goal-checkin-graph` | `config/tillr/workflows/goal-checkin@v1.json`; the `graph.approved` record and its seat-restricted `tillr graph approve`; the digest pin and its refusal; the four `command_ref` registrations; and the first goal item's definition | The clock slice above. The graph engine it runs on is built: every block of [item graphs](tillr-item-graphs.md#9-build-order) has landed | Widen the item's fence to the workflow directory; give the check-in a write node; let the check-in approve a template |
+| `item-tillr-goal-checkin-graph` | `config/tillr/workflows/goal-checkin@v1.json`; the `graph.approved` record and its seat-restricted `tillr graph approve`; the digest pin and its refusal; the four `command_ref` registrations; and the first goal item's definition | The clock slice above. The graph engine it runs on is built ([item graphs](../reference/tillr-item-graphs.md)) | Widen the item's fence to the workflow directory; give the check-in a write node; let the check-in approve a template |
 | `item-retire-steering-timer` | Deletes the steering-timer extension, its durable record and its reference document, and amends the `active-steering` skill to name the monitor as the scheduled half of the protocol and the owner as the outside authority. Four companion paths failed the retirement run when the fence omitted them and must be named in it: `tools/fork-check.py`, `tests/fork-check.test.py`, `docs/reference/reload-residue.md`, `tests/active-steering-skill.test.py` | The check-in having run unattended long enough that the owner has stopped using the timer — the item states the observation, not a date | Remove the steering *protocol*, or the designer-seat steer, which the monitor does not replace ([§2](#2-what-this-composes-and-what-it-refuses-to-re-implement)) |
 
 **Order and why.** The clock is first because it is the only piece with no alternative. The check-in is second. The retirement is last and is deliberately a separate, single-row decision: deleting a working mechanism is a cleanup that must be able to be declined on evidence, not a step in a build.

@@ -15,7 +15,7 @@ depends-on:
   - tillr-core-and-git-landing.md
   - tillr-separable-parts.md
   - tillr-product-qa-requests.md
-  - tillr-item-graphs.md
+  - ../reference/tillr-item-graphs.md
   - tillr-judge-and-lifecycle.md
 ---
 
@@ -620,10 +620,10 @@ own items need the same history.
 
 **Product QA can try:** opening a finding's page and reading its runs, verdicts, decisions and moves.
 
-**Agent details:** the queued
-[item-page block](./tillr-item-graphs.md#add-an-items-nodes-and-their-runs-to-the-item-page) adds
-nodes on top of this; its c3 draws an item with no workflow as one node from its run, which this
-item's list of runs feeds. That block needs no edit.
+**Agent details:** the
+[item-page node graph](../reference/tillr-item-graphs.md#observatory) adds
+nodes on top of this; it draws an item with no workflow as one node from its run, which this
+item's list of runs feeds.
 
 
 
@@ -947,9 +947,8 @@ them. This answers the conflict it raised. No criterion and no ruling changes.
 ### Route a command node into the lane directory and name its node
 
 A findings workflow runs a command step, such as re-running the fuzzer's reproduction, and then an
-agent step that investigates. The queued
-[command-node block](./tillr-item-graphs.md#add-command-nodes-that-run-a-registered-program) adds
-command nodes, and its c2 runs one "in the item's worktree", which is right for Git landing and does
+agent step that investigates. [Command nodes](../reference/tillr-item-graphs.md#shipped-workflows-and-command-registry) run a registered program
+in the item's worktree, which is right for Git landing and does
 not exist in a store that does not land. This item runs a command node in the plain lane directory
 for such a store, and gives every node's program its node id. It is a new item rather than an edit
 to that block, because that block is ready and may be dispatched at any time.
@@ -1017,7 +1016,7 @@ still not filed, on purpose. Two things must happen first, and neither has:
   ([`OQ-CG2`](./tillr-core-and-git-landing.md#OQ-CG2)). The shape of the one file and four other
   choices (`D-CG1` to `D-CG5` there) are the designer's, and the owner has not reviewed them. Unit 4
   also waits on the owner confirming the designer's amendment to `D-IG4` in
-  [item graphs](./tillr-item-graphs.md#71-decision-ledger).
+  [item graphs](../reference/tillr-item-graphs.md#why-its-this-way).
 
 Filing these units now would put work in the queue that rests on decisions the owner has not seen.
 

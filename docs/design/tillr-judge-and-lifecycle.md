@@ -15,7 +15,7 @@ tags:
 summary: "Who may record a verdict on an item's criterion, what an item's stored state means, and what each ending of a run does to its item. Eleven of the fourteen build blocks have landed; three queue items remain."
 next: "Build the three queued items in Section 8: the owner-criterion hold, the evidence for finished states, and the design run's same-session refusal."
 depends-on:
-  - tillr-item-graphs.md
+  - ../reference/tillr-item-graphs.md
   - board-item-state-model.md
   - work-control-judge-in-tillr.md
   - escalation-ladder.md
@@ -37,7 +37,7 @@ depends-on:
 
 **Needs your ruling:** None.
 
-**Reads with:** [tillr-item-graphs.md](./tillr-item-graphs.md) (the graph and evaluator contract this judges inside), [the graph design](./tillr-graph-is-the-path.md#33-endings) (the closed set of next actors an objection may name), [board-item-state-model.md](./board-item-state-model.md) (the seven displayed states), [work-control-judge-in-tillr.md](./work-control-judge-in-tillr.md) (why the judge moved into tillr), [criterion-repair.md](./criterion-repair.md) (repairing a criterion a verdict has frozen), and [tillr-autoqa.md](./tillr-autoqa.md) (the external client of [Section 5](#5-core-boundary-for-external-autoqa-d-jl7)).
+**Reads with:** [tillr-item-graphs.md](../reference/tillr-item-graphs.md) (the graph and evaluator contract this judges inside), [the graph design](./tillr-graph-is-the-path.md#33-endings) (the closed set of next actors an objection may name), [board-item-state-model.md](./board-item-state-model.md) (the seven displayed states), [work-control-judge-in-tillr.md](./work-control-judge-in-tillr.md) (why the judge moved into tillr), [criterion-repair.md](./criterion-repair.md) (repairing a criterion a verdict has frozen), and [tillr-autoqa.md](./tillr-autoqa.md) (the external client of [Section 5](#5-core-boundary-for-external-autoqa-d-jl7)).
 
 **Words.** This document uses the names the built code uses. [The vocabulary](./tillr-vocabulary.md#5-the-words) defines item, criterion, fence, gate, candidate, judge, seat, backend, objection and mover. It also retires two words the code and this document still say: a *lane* is a pool slot holding one worktree and one run, and a *hold* is a wait together with the mover that ends it. Four more are used here:
 
@@ -62,7 +62,7 @@ depends-on:
 
 ### 2.1 Topology Relative to Gate and Land (`D-JL1`)
 
-Per [tillr-item-graphs.md](./tillr-item-graphs.md) ([§3.3](./tillr-item-graphs.md#33-producer-bound-artifacts-exit-conditions-and-the-evaluator-slot), [§4.2](./tillr-item-graphs.md#42-worktree-sequencing-at-single-lane-concurrency), `D-IG8`, `D-IG9`), intra-graph landing is forbidden and `Loop.Verify` runs at most once at root graph exit. In any pre-approved graph carrying an `evaluator_slot` (such as `build-judged@v1` or `design-draft@v1`), the judge leaf sits **topologically after all `access: "write"` leaves and any in-graph preflight `check` leaves, and strictly before root `exit` and `Loop.Verify` (`tillr-gate` -> `tillr-land pass`)**:
+Per [tillr-item-graphs.md](../reference/tillr-item-graphs.md) ([graph exit and evaluator routing](../reference/tillr-item-graphs.md#graph-exit-and-evaluator-routing), [lane lifecycle](../reference/tillr-item-graphs.md#lane-lifecycle-write-scopes-and-chained-commits), `D-IG8`, `D-IG9`), intra-graph landing is forbidden and `Loop.Verify` runs at most once at root graph exit. In any pre-approved graph carrying an `evaluator_slot` (such as `build-judged@v1` or `design-draft@v1`), the judge leaf sits **topologically after all `access: "write"` leaves and any in-graph preflight `check` leaves, and strictly before root `exit` and `Loop.Verify` (`tillr-gate` -> `tillr-land pass`)**:
 
 ```
 [write leaves: edit, pack-sync] ──► [optional check leaf (command, read_only)]
@@ -95,7 +95,7 @@ Per [tillr-item-graphs.md](./tillr-item-graphs.md) ([§3.3](./tillr-item-graphs.
 | :--- | :--- |
 | **`evaluated_head` & `evaluated_tree`** | Must match `Candidate.HeadSHA` and `Candidate.HeadSHA^{tree}` (or `item_base_sha` when `requires_candidate == "no_commit"`). |
 | **`verdicts[]` completeness** | Exactly one entry per stored criterion of `item_id`, each carrying `criterion_id`, `criterion_hash == CriterionHash(frozen_text)`, `verdict` in `{done, not-done, blocked, defective}`, `claim_class`, non-empty `reason`, and non-empty `evidence[]` (artifact/diff/commit locators, never prose-only). |
-| **Provenance-stamped `actor` & `judged_actor`** | Never trusted from model output. `tillr-drain` stamps `actor = "<evaluator_node_id>:<evaluator_run_id>:<evaluator_route>"` and `judged_actor = "<writer_run_ids>:<writer_routes>"` from W1's `node_runs` table ([tillr-item-graphs.md](./tillr-item-graphs.md) [§6](./tillr-item-graphs.md#6-boundary-with-judge-policy-and-item-lifecycle)), refusing any shared `run_id` or session handle (`checkIndependence`; [OQ-JL2](#decision-ledger)). |
+| **Provenance-stamped `actor` & `judged_actor`** | Never trusted from model output. `tillr-drain` stamps `actor = "<evaluator_node_id>:<evaluator_run_id>:<evaluator_route>"` and `judged_actor = "<writer_run_ids>:<writer_routes>"` from W1's `node_runs` table ([tillr-item-graphs.md](../reference/tillr-item-graphs.md#workflow-evaluator)), refusing any shared `run_id` or session handle (`checkIndependence`; [OQ-JL2](#decision-ledger)). |
 | **Store-enforced `grant_id`** | Resolved from active `item_grants` (`tillr-item/item/grant.go`); `RecordVerdict` refuses missing, expired, or out-of-scope grants (`grant-absent`, `grant-expired`, `grant-scope`) inside the SQLite transaction. |
 | **Multi-criterion aggregation** | `outcome == "pass"` iff **every** criterion is `done` (any claim of `"pass"` with a non-`done` entry is refused as malformed intake). On `"fail"`, precedence is: any `defective` -> record `defective` verdict(s) and `Close` item (`close_reason: "defective: <id>: <reason>"`); else any `blocked` -> move item to `blocked` with structured `waiting_on` from the judge's blocker payload; else (`not-done`) -> keep item `in-queue` held as `eval-failed` with `eval.output` indexed on the run. |
 
@@ -370,7 +370,7 @@ Read from the store on 2026-11-18. Each block is one queue item, and a block's n
 
 **Finished-state evidence is built.** Block 5 requires completed criteria and a current receipt for `landed`, and a pointer for `resolved-elsewhere`; the reverted-landing return remains the only way out of either finished state.
 
-**Two pieces outside the blocks.** A workflow's evaluator node belongs to [tillr-item-graphs.md](./tillr-item-graphs.md) and is built there; it hands its file to the same intake. What a worker's obstacle does not yet do is listed in [Section 4.5](#45-what-a-worker-may-end-with-d-jl11).
+**Two pieces outside the blocks.** A workflow's evaluator node belongs to [tillr-item-graphs.md](../reference/tillr-item-graphs.md#workflow-evaluator) and is built there; it hands its file to the same intake. What a worker's obstacle does not yet do is listed in [Section 4.5](#45-what-a-worker-may-end-with-d-jl11).
 
 ---
 

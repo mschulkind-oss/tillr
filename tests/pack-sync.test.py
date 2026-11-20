@@ -399,7 +399,7 @@ def case_docs_declaration():
     index = "\n".join([
         "| Document | Status | Pack |",
         "| :--- | :--- | :--- |",
-        "| [Item graphs](../design/tillr-item-graphs.md) | built | shipped |",
+        "| [Item graphs](../reference/tillr-item-graphs.md) | built | shipped |",
         "| [Seams](../design/autoqa-tillr-seams.md#top) | superseded | not shipped |",
         "| [Gate](../../tools/tillr-gate/README.md) | built | shipped |",
         "| [Unsure](../design/unsure.md) | ? | maybe |",
@@ -408,7 +408,7 @@ def case_docs_declaration():
         "| [Specimen](../design/specimen.md) | x | shipped |",
         "```",
     ])
-    assert pack_docs.declared(index) == ["docs/design/tillr-item-graphs.md",
+    assert pack_docs.declared(index) == ["docs/reference/tillr-item-graphs.md",
                                          "tools/tillr-gate/README.md"], pack_docs.declared(index)
     assert len(pack_docs.undecided_rows(index)) == 1, pack_docs.undecided_rows(index)
     assert pack_docs.MIRRORED_MODULES == MODULES, (

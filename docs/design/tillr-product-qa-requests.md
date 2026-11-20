@@ -520,7 +520,7 @@ but [tillr-autoqa.md](./tillr-autoqa.md) is exploratory testing of tillr itself.
 ### 1. What we read and ran
 
 - **Read** at snapshot `bdc40d858b50a430a2f598e2dadd71f174c3d09f` (2026-11-16): the index, the
-  direction and separable-parts documents whole, [tillr-item-graphs.md](./tillr-item-graphs.md), [run-wall-ruling.md](./run-wall-ruling.md) and
+  direction and separable-parts documents whole, [item graphs](../reference/tillr-item-graphs.md), [run-wall-ruling.md](./run-wall-ruling.md) and
   [gate-rework.md](./gate-rework.md) in part; and Guild's graph-runtime
   design (`guild/docs/design/guild/graph-runtime/README.md`), in this repository.
 - **Ran** 2026-11-16, 23:46 to 23:58 America/New_York, the installed binaries (build digest
