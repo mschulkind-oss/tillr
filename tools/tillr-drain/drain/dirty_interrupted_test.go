@@ -3,7 +3,9 @@ package drain
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -545,10 +547,28 @@ func (s *dirtyNormalExitSteps) Run(ctx context.Context, req run.Request) (run.Re
 	if err := os.MkdirAll(filepath.Join(target, "tools/item-a"), 0755); err != nil {
 		return run.Record{}, "", err
 	}
-	writeForkFile(s.t, filepath.Join(target, "tools/item-a/committed.txt"), "committed\n")
-	runGit(s.t, target, "add", "tools/item-a/committed.txt")
-	runGit(s.t, target, "commit", "-qm", "candidate commit")
-	writeForkFile(s.t, filepath.Join(target, "tools/item-a/dirty-after-commit.txt"), "uncommitted leftover\n")
+	// Each run commits its own file. A run that committed the same tree on the same parent
+	// as the run before it, in the same second, would make the identical commit, and the
+	// drain rightly reads an unchanged head as "no new commit" and continues the session.
+	// What this test pins is a run that does commit, so its commit must always be new.
+	committed := "tools/item-a/committed-" + req.RunID + ".txt"
+	if err := os.WriteFile(filepath.Join(target, committed), []byte("committed\n"), 0o644); err != nil {
+		return run.Record{}, "", err
+	}
+	if err := os.WriteFile(filepath.Join(target, "tools/item-a/dirty-after-commit.txt"), []byte("uncommitted leftover\n"), 0o644); err != nil {
+		return run.Record{}, "", err
+	}
+	for _, args := range [][]string{{"add", committed}, {"commit", "-qm", "candidate commit", "--", committed}} {
+		cmd := exec.Command("git", append([]string{"-C", target}, args...)...)
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=tillr", "GIT_AUTHOR_EMAIL=tillr@example.invalid",
+			"GIT_COMMITTER_NAME=tillr", "GIT_COMMITTER_EMAIL=tillr@example.invalid")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			// An error returned here fails the run at once; a t.Fatal from this goroutine
+			// would leave the loop waiting forever.
+			return run.Record{}, "", fmt.Errorf("git %v in %s: %v\n%s", args, target, err, out)
+		}
+	}
 
 	report := filepath.Join(s.f.laneRoot, req.LaneID, "report.md")
 	if req.NodeID != "" {
@@ -610,6 +630,11 @@ func TestNormalExitClaimingCommitWithDirtyWorktreeRefusesBoundaryScopeEscape(t *
 	})
 
 	t.Run("single_run", func(t *testing.T) {
+		// Pin both commit dates. The step runner commits the same tree on the same parent
+		// for every run; with the date fixed, two runs' commits are one commit, the case a
+		// second boundary otherwise decides by chance.
+		t.Setenv("GIT_AUTHOR_DATE", "2026-11-19T00:00:00Z")
+		t.Setenv("GIT_COMMITTER_DATE", "2026-11-19T00:00:00Z")
 		f, l, ws := workflowLoopFixture(t, "")
 		fixtureWrite(t, f, func(tx *store.Tx) error {
 			if _, err := tx.Exec(`UPDATE items SET state='closed' WHERE item_id='item-b'`); err != nil {
