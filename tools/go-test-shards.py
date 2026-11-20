@@ -21,6 +21,55 @@ DEFAULT_DURATIONS = Path(__file__).with_name('go-test-durations.json')
 DEFAULT_SHARD_TIMEOUT = 480.0
 
 
+# A shard runs under a guard process: the guard is the session and group leader, starts the
+# real command in its group, and kills the group when the runner's end of a pipe closes, so a
+# runner that is killed, even by SIGKILL, takes every shard process with it.
+GUARD_FLAG = '--shard-guard'
+_live_groups = set()
+_live_lock = threading.Lock()
+
+
+def guard_main(descriptor, command):
+    """Run command in this group and end the whole group when the runner's pipe closes."""
+    def watch():
+        try:
+            while os.read(descriptor, 4096):
+                pass
+        except OSError:
+            pass
+        os.killpg(0, signal.SIGKILL)
+    threading.Thread(target=watch, daemon=True).start()
+    child = subprocess.Popen(command)
+    code = child.wait()
+    return 128 - code if code < 0 else code
+
+
+def kill_group(group):
+    try:
+        os.killpg(group, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def kill_live_groups():
+    """Kill every shard process group this runner has started and not yet reaped."""
+    with _live_lock:
+        groups = list(_live_groups)
+    for group in groups:
+        kill_group(group)
+
+
+def end_with_runner(number, _frame):
+    """Signal handler: no shard outlives a runner that is told to stop."""
+    kill_live_groups()
+    raise SystemExit(128 + number)
+
+
+def install_signal_handlers():
+    for number in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(number, end_with_runner)
+
+
 class ShardError(RuntimeError):
     """A named shard failed or did not prove completion of its assigned tests."""
 
@@ -368,9 +417,30 @@ def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=N
                                                       file=sys.stderr, flush=True),
                                 slot_class=slot_class, proof_limit=proof_limit, holder=holder), \
                 tempfile.NamedTemporaryFile(dir=scratch) as out, tempfile.NamedTemporaryFile(dir=scratch) as err, \
-                open(out.name, 'rb') as reader, open(err.name, 'rb') as error_reader:
-            process = subprocess.Popen(command, cwd=cwd, env=env, stdout=out, stderr=err,
-                                       start_new_session=True)
+                open(out.name, 'rb') as reader, open(err.name, 'rb') as error_reader, \
+                contextlib.ExitStack() as cleanup:
+            lifeline_read, lifeline_write = os.pipe()
+            try:
+                process = subprocess.Popen(
+                    [sys.executable, str(Path(__file__).resolve()), GUARD_FLAG, str(lifeline_read), '--', *command],
+                    cwd=cwd, env=env, stdout=out, stderr=err, start_new_session=True,
+                    pass_fds=(lifeline_read,))
+            except BaseException:
+                os.close(lifeline_write)
+                raise
+            finally:
+                os.close(lifeline_read)
+            with _live_lock:
+                _live_groups.add(process.pid)
+            # Runs on every exit from this block, including an exception: the lifeline closes
+            # and the group is killed before the scratch directory the binary lives in can go.
+            def end_group():
+                kill_group(process.pid)
+                os.close(lifeline_write)
+                with _live_lock:
+                    _live_groups.discard(process.pid)
+                process.wait()
+            cleanup.callback(end_group)
             deadline = time.monotonic() + wall_timeout
             pending = b''
             seen_progress = set()
@@ -396,10 +466,7 @@ def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=N
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     # Kill test2json, the test binary, and its ordinary descendants together.
-                    try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
+                    kill_group(process.pid)
                     process.wait()
                     timed_out = True
                     break
@@ -513,6 +580,9 @@ def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHA
 
 
 def main():
+    if sys.argv[1:2] == [GUARD_FLAG]:
+        return guard_main(int(sys.argv[2]), sys.argv[4:])
+    install_signal_handlers()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('module', type=Path)
     parser.add_argument('-k', '--shards', type=int, default=6)

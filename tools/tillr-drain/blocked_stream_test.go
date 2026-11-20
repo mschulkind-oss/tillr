@@ -23,7 +23,7 @@ func TestPiStructuredBlockedReportsReachDesignAndOwner(t *testing.T) {
 	}
 	for _, backend := range []string{"fixture", "designer"} {
 		path := filepath.Join(filepath.Dir(f.policy.Backends[backend].Adapter), "extract-report")
-		if err := os.WriteFile(path, []byte(fmt.Sprintf("#!/bin/sh\nexec %q \"$@\"\n", extractor)), 0755); err != nil {
+		if err := writeForkSafe(path, []byte(fmt.Sprintf("#!/bin/sh\nexec %q \"$@\"\n", extractor)), 0755); err != nil {
 			t.Fatal(err)
 		}
 	}

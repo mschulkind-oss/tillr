@@ -17,7 +17,7 @@ func TestSyncForwardsRoadmapsInOrderEveryTime(t *testing.T) {
 			t.Setenv("SYNC_ARGS", log)
 			child := filepath.Join(dir, "item")
 			body := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$SYNC_ARGS\"\nprintf '{\"kind\":\"item.sync\",\"payload\":{}}\\n'\n"
-			if err := os.WriteFile(child, []byte(body), 0700); err != nil {
+			if err := writeForkSafe(child, []byte(body), 0700); err != nil {
 				t.Fatal(err)
 			}
 			steps := &ProcessSteps{Root: dir, Store: filepath.Join(dir, "fixture.db"), ItemBin: child, SyncRoadmaps: roadmaps}

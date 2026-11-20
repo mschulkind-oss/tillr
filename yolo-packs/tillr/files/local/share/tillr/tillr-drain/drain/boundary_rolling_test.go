@@ -13,15 +13,25 @@ import (
 )
 
 // waitForPath polls until path exists. The path is written by a fixture process with no
-// channel back to the test, so the poll is the only way to see it. No wall-clock bound: a
-// fixture that never writes it is stopped by the suite's own timeout.
-func waitForPath(t *testing.T, path string) {
+// channel back to the test, so the poll is the only way to see it. The wait ends when the
+// producer does: ended receives (or is closed) when the goroutine that runs the producer
+// returns, and a producer that ended on its own can never write the path, so that fails the
+// case at once instead of waiting on a file nobody will create. No wall-clock
+// bound is needed, and none is added.
+func waitForPath[T any](t testing.TB, path string, ended <-chan T) {
 	t.Helper()
 	for {
 		if _, err := os.Stat(path); err == nil {
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case result := <-ended:
+			// Every producer here blocks until the test releases or cancels it, so one that
+			// has ended did so on its own, before the test asked it to. Its result is the
+			// reason, so the failure carries it.
+			t.Fatalf("the producer ended with %v before it wrote %s", result, path)
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 
@@ -55,7 +65,7 @@ func TestARealRollingRunDuringASiblingRunConvictsNothing(t *testing.T) {
 		}
 		done <- err
 	}()
-	waitForPath(t, inside)
+	waitForPath(t, inside, done)
 	during, err := l.snapshot(ctx, own, watched)
 	if err != nil {
 		t.Fatal(err)
@@ -336,7 +346,7 @@ signal.pause()
 			done <- err
 		}
 	}()
-	waitForPath(t, inside)
+	waitForPath(t, inside, done)
 	raw, err := os.ReadFile(pidFile)
 	if err != nil {
 		t.Fatal(err)
@@ -383,7 +393,7 @@ PY`)
 	cmd := exec.CommandContext(ctx, program)
 	done := make(chan error, 1)
 	go func() { done <- runCheckGroup(cmd) }()
-	waitForPath(t, ready)
+	waitForPath(t, ready, done)
 	cancel()
 	if err := <-done; err == nil {
 		t.Fatal("a canceled check answered success")

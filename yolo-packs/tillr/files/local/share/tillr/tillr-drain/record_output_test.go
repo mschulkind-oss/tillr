@@ -92,7 +92,7 @@ func TestRecordFaceOutputSeparatesOnlyKnownOptInTrace(t *testing.T) {
 func TestDriveRecordPreservesTraceOffProtocolAndTraceOnUnknownRejection(t *testing.T) {
 	child := filepath.Join(scratch(t, "record-child"), "child")
 	script := "#!/bin/sh\nprintf '{\"kind\":\"fixture\"}\\n'\nprintf 'tillr-sqlite pid=1\\n' >&2\n"
-	if err := os.WriteFile(child, []byte(script), 0700); err != nil {
+	if err := writeForkSafe(child, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("TILLR_SQLITE_TRACE", "")
@@ -106,7 +106,7 @@ func TestDriveRecordPreservesTraceOffProtocolAndTraceOnUnknownRejection(t *testi
 		t.Fatalf("trace-on did not isolate record: %d/%q", code, output)
 	}
 	script += "printf 'unknown stderr\\n' >&2\n"
-	if err := os.WriteFile(child, []byte(script), 0700); err != nil {
+	if err := writeForkSafe(child, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
 	_, output = driveRecord(t, child)

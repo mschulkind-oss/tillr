@@ -2,7 +2,6 @@ package drain
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -18,7 +17,7 @@ func TestPiEndingCapabilityProbe(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
 			pi := filepath.Join(dir, "pi")
-			if err := os.WriteFile(pi, []byte("#!/bin/sh\n"+tc.script+"\n"), 0755); err != nil {
+			if err := writeForkSafe(pi, []byte("#!/bin/sh\n"+tc.script+"\n"), 0755); err != nil {
 				t.Fatal(err)
 			}
 			t.Setenv("PATH", dir)
@@ -40,7 +39,7 @@ func TestPiEndingCapabilityProbeBoundsSleeperAndChildHoldingOutput(t *testing.T)
 
 	dir := t.TempDir()
 	pi := filepath.Join(dir, "pi")
-	if err := os.WriteFile(pi, []byte("#!/bin/sh\nsleep 30 &\nsleep 30\n"), 0755); err != nil {
+	if err := writeForkSafe(pi, []byte("#!/bin/sh\nsleep 30 &\nsleep 30\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)

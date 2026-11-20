@@ -42,7 +42,7 @@ func TestStagedItemReadsStoredFieldsWithoutIndex(t *testing.T) {
 				t.Fatal(err)
 			}
 			command := filepath.Join(root, "uvx")
-			if err := os.WriteFile(command, []byte("#!/bin/sh\n: > index-started\nprintf '%s\\n' '{\"index\":{\"documents\":[]}}'\n"), 0o755); err != nil {
+			if err := writeForkSafe(command, []byte("#!/bin/sh\n: > index-started\nprintf '%s\\n' '{\"index\":{\"documents\":[]}}'\n"), 0o755); err != nil {
 				t.Fatal(err)
 			}
 			t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))

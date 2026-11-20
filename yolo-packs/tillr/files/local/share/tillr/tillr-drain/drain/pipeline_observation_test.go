@@ -14,7 +14,7 @@ func TestPipelineStartIsVisibleBeforeProgramFinishes(t *testing.T) {
 	path := filepath.Join(RunDir(root, "run-a"), "pipeline.jsonl")
 	// The program itself inspects the record while it is still running.
 	program := filepath.Join(root, "inspect")
-	if err := os.WriteFile(program, []byte("#!/bin/sh\ntest -s '"+path+"' || exit 1\ncat '"+path+"'\n"), 0o755); err != nil {
+	if err := writeForkSafe(program, []byte("#!/bin/sh\ntest -s '"+path+"' || exit 1\ncat '"+path+"'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	code, out, _, err := s.program(context.Background(), "gate", root, program, Candidate{RunID: "run-a"})

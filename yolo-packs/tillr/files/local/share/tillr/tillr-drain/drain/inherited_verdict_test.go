@@ -66,7 +66,7 @@ func TestProcessStepsGateReadsPassInheritedVerdict(t *testing.T) {
 	}
 
 	script := filepath.Join(root, "fake-gate.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\ncp "+planFile+" "+filepath.Join(runDir, GatePlanRecord)+"\ncp "+verdictFile+" "+filepath.Join(runDir, GateVerdictRecord)+"\n"), 0o755); err != nil {
+	if err := writeForkSafe(script, []byte("#!/bin/sh\ncp "+planFile+" "+filepath.Join(runDir, GatePlanRecord)+"\ncp "+verdictFile+" "+filepath.Join(runDir, GateVerdictRecord)+"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 

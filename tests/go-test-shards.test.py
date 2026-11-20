@@ -65,6 +65,80 @@ class RunnerTests(unittest.TestCase):
             self.assertEqual(shards.main(), 1)
         self.assertRegex(stderr.getvalue(), 'fixture shard 0.*' + message)
 
+    def start_hung_runner(self):
+        """Start a runner process whose one shard writes its pid and then never returns.
+
+        Returns (runner, shard pid). The shard's test binary has a child of its own, so the
+        proof covers a descendant of the test binary and not only test2json.
+        """
+        pids = self.root / 'pids'
+        pids.mkdir()
+        binary = self.fake(
+            "import os, subprocess, time, pathlib\n"
+            "grand = subprocess.Popen(['sleep', '1000'])\n"
+            f"pathlib.Path({str(pids / 'shard')!r} + '.part').write_text(f'{{os.getpid()}} {{grand.pid}}')\n"
+            f"os.replace({str(pids / 'shard')!r} + '.part', {str(pids / 'shard')!r})\n"
+            "time.sleep(1000)\n")
+        driver = self.root / 'driver.py'
+        driver.write_text(
+            'import importlib.util, signal, sys\n'
+            f'spec = importlib.util.spec_from_file_location("shards", {str(RUNNER)!r})\n'
+            'm = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n'
+            'm.install_signal_handlers()\n'
+            'from pathlib import Path\n'
+            f'm.run_shard("fixture", Path({str(self.root)!r}), Path({str(binary)!r}), ["TestHung"], 0, '
+            f'Path({str(self.root / "driver-scratch")!r}), "0", wall_timeout=3600)\n')
+        runner = subprocess.Popen(['python3', str(driver)], stderr=subprocess.PIPE, text=True)
+        self.addCleanup(lambda: (runner.poll() is None and runner.kill(), runner.wait(),
+                                 runner.stderr.close()))
+        marker = pids / 'shard'
+        while not marker.exists():
+            # The shard writes the marker as soon as it starts; ending first is the failure.
+            if runner.poll() is not None:
+                self.fail('the runner ended before its shard started: ' + runner.stderr.read())
+            time.sleep(0.01)
+        return runner, [int(p) for p in marker.read_text().split()]
+
+    def assert_gone(self, pids):
+        # The shard is killed by the runner's end, which is certain to happen; the deadline
+        # only turns a runner that leaves it alive into a failure rather than a hang.
+        deadline = time.monotonic() + 120
+        for pid in pids:
+            while True:
+                try:
+                    state = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[0]
+                except (FileNotFoundError, ProcessLookupError):
+                    break
+                # A zombie has ended; only its parent's wait is missing, and no wait is ours.
+                if state == 'Z':
+                    break
+                if time.monotonic() > deadline:
+                    os.kill(pid, 9)
+                    self.fail(f'shard process {pid} outlived the runner')
+                time.sleep(0.01)
+
+    def test_a_killed_runner_leaves_no_shard_process_behind(self):
+        runner, pids = self.start_hung_runner()
+        runner.kill()
+        runner.wait()
+        self.assert_gone(pids)
+
+    def test_a_terminated_runner_leaves_no_shard_process_behind(self):
+        runner, pids = self.start_hung_runner()
+        runner.terminate()
+        runner.wait()
+        self.assert_gone(pids)
+
+    def test_a_finished_shard_leaves_no_descendant_behind(self):
+        marker = self.root / 'grand'
+        binary = self.fake(
+            "import subprocess, pathlib\n"
+            f"grand = subprocess.Popen(['sleep', '1000'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+            f"pathlib.Path({str(marker)!r}).write_text(str(grand.pid))\n"
+            "print('=== RUN   TestLeaks'); print('--- PASS: TestLeaks (0.00s)'); print('PASS')\n")
+        shards.run_shard('fixture', self.root, binary, ['TestLeaks'], 0, self.root / 'scratch', '3600s')
+        self.assert_gone([int(marker.read_text())])
+
     def test_absent_global_config_is_valid(self):
         binary = self.fake("print('=== RUN   TestWorks'); print('--- PASS: TestWorks (0.00s)'); print('PASS')\n")
         with patch.dict(os.environ, GIT_CONFIG_GLOBAL=str(self.root / 'absent')):

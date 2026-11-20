@@ -194,7 +194,7 @@ func TestPreservationFailureDoesNotResetOrExamine(t *testing.T) {
 		t.Fatal(err)
 	}
 	wrapper := fmt.Sprintf("#!/bin/sh\ncase \"$3\" in commit-tree) echo snapshot-write-failed >&2; exit 99;; esac\nexec %q \"$@\"\n", realGit)
-	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(wrapper), 0755); err != nil {
+	if err := writeForkSafe(filepath.Join(dir, "git"), []byte(wrapper), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -231,7 +231,7 @@ func TestPreservationGitOutsideWriteTransaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	wrapper := fmt.Sprintf("#!/bin/sh\n%q -test.run '^TestPreservationGitProbe$' > %q 2>&1 || exit 99\nexec %q \"$@\"\n", binary, filepath.Join(dir, "probe.log"), realGit)
-	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(wrapper), 0755); err != nil {
+	if err := writeForkSafe(filepath.Join(dir, "git"), []byte(wrapper), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))

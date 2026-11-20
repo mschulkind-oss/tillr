@@ -90,7 +90,7 @@ func sinkElement(t *testing.T, path string, index int) []byte {
 // writeFile writes one file a face is given.
 func writeFile(t *testing.T, path, body string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+	if err := writeForkSafe(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("writing %s failed: %v", path, err)
 	}
 }

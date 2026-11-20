@@ -147,13 +147,16 @@ func fakeRunFace(t *testing.T, l *Loop, runID string) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = stdin.Close(); _ = cmd.Process.Kill(); _ = cmd.Wait() })
+	exited := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(exited) }()
+	t.Cleanup(func() { _ = stdin.Close(); _ = cmd.Process.Kill(); <-exited })
 	here, err := currentLoopOwner()
 	if err != nil {
 		t.Fatal(err)
 	}
 	// No wall-clock bound: the face is a child process with no channel back, so this polls
-	// until it is recognized; a face that never is is stopped by the suite's own timeout.
+	// until it is recognized. The face blocks on its stdin until the test ends, so one that
+	// has exited can never be recognized, and that fails the case instead of waiting for it.
 	for {
 		faces, err := liveRunFaces(l.cfg.Store, runID, here)
 		if err != nil {
@@ -162,7 +165,11 @@ func fakeRunFace(t *testing.T, l *Loop, runID string) {
 		if len(faces) == 1 {
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-exited:
+			t.Fatal("the fake run face exited before it was recognized")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 

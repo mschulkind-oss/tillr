@@ -37,7 +37,7 @@ func continuationShell(t *testing.T) string {
 		t.Fatal(err)
 	}
 	adapter := filepath.Join(dir, "run-shell")
-	if err := os.WriteFile(adapter, []byte("#!/bin/sh\nexec /bin/sh \"$@\"\n"), 0o755); err != nil {
+	if err := writeForkSafe(adapter, []byte("#!/bin/sh\nexec /bin/sh \"$@\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "pause-kind"), []byte("stops-where-it-stands\n"), 0o644); err != nil {

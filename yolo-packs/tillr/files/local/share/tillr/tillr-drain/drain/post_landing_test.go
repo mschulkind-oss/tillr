@@ -168,7 +168,7 @@ func TestPostLandingPush(t *testing.T) {
  if [ ! -f allow ]; then echo 'fixture rejected push' >&2; exit 1; fi
  while [ ! -f release ]; do sleep .01; done
  `
-	if err := os.WriteFile(hook, []byte(script), 0700); err != nil {
+	if err := writeForkSafe(hook, []byte(script), 0700); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -261,7 +261,7 @@ func TestPostLandingPushGreen(t *testing.T) {
 	git("remote", "add", "origin", remote)
 	git("push", "-u", "origin", TrunkRef)
 	hook := filepath.Join(l.cfg.Root, ".git", "hooks", "pre-push")
-	if err := os.WriteFile(hook, []byte("#!/bin/sh\necho hook >> pushes\nif [ -f refuse ]; then echo 'fixture rejected push' >&2; exit 1; fi\n"), 0700); err != nil {
+	if err := writeForkSafe(hook, []byte("#!/bin/sh\necho hook >> pushes\nif [ -f refuse ]; then echo 'fixture rejected push' >&2; exit 1; fi\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
@@ -392,7 +392,7 @@ func TestPostLandingPiSeriesRoll(t *testing.T) {
 	l, git, commit := actionFixture(t)
 	ctx := context.Background()
 	script := filepath.Join(l.cfg.Root, "roll.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"args:$*\" >> runs\nwhile [ ! -f release ]; do sleep .01; done\n"), 0700); err != nil {
+	if err := writeForkSafe(script, []byte("#!/bin/sh\necho \"args:$*\" >> runs\nwhile [ ! -f release ]; do sleep .01; done\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(l.cfg.Root, "release"), nil, 0600); err != nil {
@@ -490,7 +490,7 @@ func TestPostLandingPiRollFailurePreservesWorkingPiAndRecordsAction(t *testing.T
 		t.Fatal(err)
 	}
 	script := filepath.Join(l.cfg.Root, "roll.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nif [ ! -f allow ]; then echo 'pi build failed' >&2; exit 9; fi\necho 'working-v2' > working-pi\n"), 0700); err != nil {
+	if err := writeForkSafe(script, []byte("#!/bin/sh\nif [ ! -f allow ]; then echo 'pi build failed' >&2; exit 9; fi\necho 'working-v2' > working-pi\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	l.cfg.PostLanding.Roll = settings.Roll{
@@ -557,7 +557,7 @@ func TestPostLandingPiRollCoalesces(t *testing.T) {
 	l, _, _ := actionFixture(t)
 	ctx := context.Background()
 	script := filepath.Join(l.cfg.Root, "roll.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$*\" >> runs\nwhile [ ! -f release ]; do sleep .01; done\n"), 0700); err != nil {
+	if err := writeForkSafe(script, []byte("#!/bin/sh\necho \"$*\" >> runs\nwhile [ ! -f release ]; do sleep .01; done\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	l.cfg.PostLanding.Roll = settings.Roll{

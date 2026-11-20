@@ -47,7 +47,7 @@ func landStub(t *testing.T, body string, code int) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "land")
 	script := "#!/bin/sh\nprintf '%s\\n' '" + body + "'\nexit " + strconv.Itoa(code) + "\n"
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	if err := writeForkSafe(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("writing the land stub failed: %v", err)
 	}
 	return path
@@ -60,7 +60,7 @@ func TestLandForwardsOnlyAnExplicitWorkerHead(t *testing.T) {
 			root := t.TempDir()
 			argsPath := filepath.Join(root, "args")
 			stub := filepath.Join(root, "land")
-			if err := os.WriteFile(stub, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > '"+argsPath+"'\n"), 0o755); err != nil {
+			if err := writeForkSafe(stub, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > '"+argsPath+"'\n"), 0o755); err != nil {
 				t.Fatal(err)
 			}
 			steps := &ProcessSteps{LandProgram: stub, Root: root}

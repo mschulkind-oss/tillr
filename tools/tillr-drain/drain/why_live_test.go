@@ -52,7 +52,7 @@ func TestSavedQuestionsWritesAndReusesIndexAtSameTrunk(t *testing.T) {
 	counter := filepath.Join(t.TempDir(), "calls")
 	script := filepath.Join(t.TempDir(), "index.sh")
 	body := "#!/bin/sh\nprintf '1\\n' >> " + counter + "\nprintf '%s' '{\"index\":{\"documents\":[{\"path\":\"docs/design.md\",\"questions\":[{\"id\":\"OQ-1\",\"state\":\"open\"}]}]}}'\n"
-	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+	if err := writeForkSafe(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	cmd := []string{script}

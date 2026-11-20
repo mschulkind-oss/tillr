@@ -59,7 +59,7 @@ func TestRecordedVerdictExampleREADME(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		return os.WriteFile(target, raw, info.Mode().Perm())
+		return writeForkSafe(target, raw, info.Mode().Perm())
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestRecordedVerdictExampleREADME(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := filepath.Join(parent, "git-called")
-	if err := os.WriteFile(filepath.Join(sentinelDir, "git"), []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$GIT_CALLS\"\nexit 99\n"), 0755); err != nil {
+	if err := writeForkSafe(filepath.Join(sentinelDir, "git"), []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$GIT_CALLS\"\nexit 99\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", sentinelDir+":"+binaries+":"+os.Getenv("PATH"))

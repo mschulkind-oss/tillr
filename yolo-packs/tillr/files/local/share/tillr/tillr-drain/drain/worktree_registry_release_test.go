@@ -40,7 +40,7 @@ if '--git-common-dir' in sys.argv:
         sock.recv(1)
 os.execv(%q,[%q]+sys.argv[1:])
 `, address.IP.String(), address.Port, real, real)
-	if err := os.WriteFile(filepath.Join(scratch, "git"), []byte(script), 0755); err != nil {
+	if err := writeForkSafe(filepath.Join(scratch, "git"), []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", scratch+string(os.PathListSeparator)+os.Getenv("PATH"))

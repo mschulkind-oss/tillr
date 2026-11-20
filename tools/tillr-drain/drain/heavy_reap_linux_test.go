@@ -69,6 +69,11 @@ func subreaperHelper(t *testing.T, dir string) {
 			}
 			break
 		}
+		// The command blocks on stdin until the test closes it, so a command that has
+		// exited (a zombie, since nothing has waited on it) can never publish the file.
+		if p, perr := readHeavyProcess(direct); perr != nil || p.state == "Z" {
+			t.Fatalf("the command ended before it published the orphan's pid: state %q, err %v", p.state, perr)
+		}
 		time.Sleep(time.Millisecond)
 	}
 	awaitProcess(t, orphan, func(p heavyProcess) bool { return p.parent == os.Getpid() })

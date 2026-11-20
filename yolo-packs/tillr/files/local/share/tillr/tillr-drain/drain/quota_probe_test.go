@@ -65,7 +65,7 @@ func TestQuotaProbeReserveAndFreshness(t *testing.T) {
 		}
 	}
 	write(.8)
-	if err := os.WriteFile(command, []byte(fmt.Sprintf("#!/bin/sh\nprintf x >> %q\ncat %q\n", calls, payload)), 0700); err != nil {
+	if err := writeForkSafe(command, []byte(fmt.Sprintf("#!/bin/sh\nprintf x >> %q\ncat %q\n", calls, payload)), 0700); err != nil {
 		t.Fatal(err)
 	}
 	backend := l.cfg.Policy.Backends["fixture"]

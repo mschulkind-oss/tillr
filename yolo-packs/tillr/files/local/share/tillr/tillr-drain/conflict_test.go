@@ -70,7 +70,7 @@ fi
 printf '%%s\n' '%[3]s'
 exit %[4]d
 `, root, first, second, secondCode)
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+	if err := writeForkSafe(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("writing the land stub failed: %v", err)
 	}
 	return path

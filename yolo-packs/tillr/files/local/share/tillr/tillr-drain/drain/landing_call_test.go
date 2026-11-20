@@ -241,7 +241,7 @@ func TestLandingCallDeliversRefusalsAsToolResults(t *testing.T) {
 			transcript := filepath.Join(bin, "session.jsonl")
 			// Pi is the only stand-in at the reopening seam: run-pi must choose
 			// promptless delivery from the held call before invoking it.
-			if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(`#!/usr/bin/env python3
+			if err := writeForkSafe(filepath.Join(bin, "pi"), []byte(`#!/usr/bin/env python3
 import json, os, pathlib, sys
 scr = pathlib.Path(os.environ['YOLO_DURABLE_DIR'])
 prompt = sys.stdin.buffer.read()
@@ -610,7 +610,7 @@ func TestLandingCallLoopRecordsShippedCapabilities(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			bin := t.TempDir()
 			piPath := filepath.Join(bin, "pi")
-			if err := os.WriteFile(piPath, []byte("#!/bin/sh\n"+tc.script+"\n"), 0755); err != nil {
+			if err := writeForkSafe(piPath, []byte("#!/bin/sh\n"+tc.script+"\n"), 0755); err != nil {
 				t.Fatal(err)
 			}
 			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -675,7 +675,7 @@ func TestLandingCallLoopWithoutPiBackendSkipsProbe(t *testing.T) {
 	bin := t.TempDir()
 	marker := filepath.Join(bin, "pi-started")
 	piPath := filepath.Join(bin, "pi")
-	if err := os.WriteFile(piPath, []byte("#!/bin/sh\n: > "+marker+"\nexit 0\n"), 0755); err != nil {
+	if err := writeForkSafe(piPath, []byte("#!/bin/sh\n: > "+marker+"\nexit 0\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
