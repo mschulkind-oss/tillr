@@ -3,6 +3,7 @@ package drain
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -219,6 +220,10 @@ type reapEvidence struct {
 	// whose run face is gone (stuckExaminationLease), keyed by run ID to its lane. The
 	// write re-verifies every one before it reclaims it.
 	stuck map[string]string
+	// resumeStuck is each run whose last recorded event is a run.resume that nothing
+	// finished, whose lane is still leased to it with no expiry, and whose run face is
+	// gone (orphanedResume), keyed by run ID to its lane.
+	resumeStuck map[string]string
 	// reclaimed collects the lines the write's reclaims print once its transaction has
 	// closed: no report is written inside a write transaction.
 	reclaimed *[]string
@@ -232,9 +237,10 @@ func (ev reapEvidence) ownerDead(owner *LoopOwner) bool {
 // the process table once, with no transaction open. The caller holds the run-start
 // lock from here through its write, so no run face starts in between.
 func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvidence, error) {
-	ev := reapEvidence{dead: map[LoopOwner]bool{}, live: map[string]bool{}, faces: map[string]bool{}, stuck: map[string]string{}, reclaimed: &[]string{}}
+	ev := reapEvidence{dead: map[LoopOwner]bool{}, live: map[string]bool{}, faces: map[string]bool{}, stuck: map[string]string{}, resumeStuck: map[string]string{}, reclaimed: &[]string{}}
 	var owners []LoopOwner
 	stuck := map[string]*pendingWork{}
+	resumed := map[string]*pendingWork{}
 	here, err := currentLoopOwner()
 	if err != nil {
 		return ev, err
@@ -269,6 +275,16 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 					if work.Examiner != nil {
 						owners = append(owners, *work.Examiner)
 					}
+				}
+			}
+			if work.Decision.RunRequest != nil && !work.Done && !work.Examining && work.Owner == nil && len(work.Decision.Parallel) == 0 && !l.active[work.Decision.RunRequest.RunID] && unbounded[work.Decision.RunRequest.RunID] == work.Decision.LaneID {
+				// A continuation's run.resume event clears the dispatch owner, so no
+				// owner's death can ever release its lane. Whether the resume is still
+				// the run's last word is read here; the face is judged below.
+				if open, err := resumeUnfinished(r, work.Decision.RunRequest.RunID); err != nil {
+					return err
+				} else if open {
+					resumed[work.Decision.RunRequest.RunID] = work
 				}
 			}
 			if (work.Done && !work.Examining) || work.Decision.RunRequest == nil {
@@ -311,7 +327,7 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 		ev.dead[owner] = dead
 		anyDead = anyDead || dead
 	}
-	if anyDead || len(stuck) > 0 {
+	if anyDead || len(stuck) > 0 || len(resumed) > 0 {
 		if ev.live, ev.faces, err = liveRunProcessIDs(l.cfg.Store); err != nil {
 			return ev, err
 		}
@@ -329,8 +345,50 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 				ev.stuck[id] = work.Decision.LaneID
 			}
 		}
+		for id, work := range resumed {
+			if !ev.faces[id] && !(locator != nil && foreignRunLive(locator, id)) {
+				ev.resumeStuck[id] = work.Decision.LaneID
+			}
+		}
 	}
 	return ev, nil
+}
+
+// resumeUnfinished answers whether the run's last run.resume or run.finish event is a
+// run.resume: a continuation was claimed and has recorded no end since.
+func resumeUnfinished(r interface {
+	QueryRow(string, ...any) *sql.Row
+}, id string) (bool, error) {
+	var kind string
+	err := r.QueryRow(`SELECT kind FROM events WHERE object_type = 'run' AND object_id = ? AND kind IN (?, ?) ORDER BY seq DESC LIMIT 1`, id, run.ResumeKind, run.FinishKind).Scan(&kind)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return kind == run.ResumeKind, err
+}
+
+// reclaimOrphanedResume releases the lane of a continuation whose run face died with
+// nothing recorded (orphanedResume), guarded by the exact lease and the same last event the
+// evidence saw. The run keeps its paused record, so the next plan settles it, and a
+// settlement of a paused run resumes it again. This is what moves a run a loop restart
+// paused, resumed, and then killed again before the resumed segment could write its finish.
+func (l *Loop) reclaimOrphanedResume(tx *store.Tx, work *pendingWork, at time.Time) error {
+	id, lane := work.Decision.RunRequest.RunID, work.Decision.LaneID
+	if open, err := resumeUnfinished(tx, id); err != nil || !open {
+		return err
+	}
+	res, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = NULL, leased_until = NULL WHERE lane_id = ? AND run_id = ? AND state = ? AND leased_until IS NULL`, run.LaneStateIdle, lane, id, run.LaneStateLeased)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return err
+	}
+	if err := appendEffect(tx, laneReleasedKind, id, laneReleased{LaneID: lane, Cause: laneReleaseReap}, at); err != nil {
+		return err
+	}
+	l.reportf("loop: reclaimed lane %s: run %s resumed after a restart and its run face is gone with no end recorded; it settles and resumes again\n", lane, id)
+	return nil
 }
 
 // leasesWithNoExpiry answers every lane leased with no expiry, keyed by the run it is
@@ -396,6 +454,13 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 		return err
 	}
 	for _, work := range works {
+		if work.Decision.RunRequest != nil {
+			if lane, ok := ev.resumeStuck[work.Decision.RunRequest.RunID]; ok && lane == work.Decision.LaneID {
+				if err := l.reclaimOrphanedResume(tx, work, at); err != nil {
+					return err
+				}
+			}
+		}
 		if work.Done && work.Decision.RunRequest != nil {
 			if lane, ok := ev.stuck[work.Decision.RunRequest.RunID]; ok && lane == work.Decision.LaneID {
 				if err := l.reclaimStuckLease(tx, work, at, ev); err != nil {
