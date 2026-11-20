@@ -414,6 +414,7 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	next.Returned = nil
 	next.RepeatedCall = nil
 	next.WorkerSessionReason = ""
+	next.ConflictID = ""
 	index, err := l.nextWorkflowNode(ctx, d)
 	if err != nil {
 		return err

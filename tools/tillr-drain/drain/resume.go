@@ -327,6 +327,8 @@ func rederiveFence(ctx context.Context, cfg ResumeConfig, row resumeRun, laneDir
 			d := work.Decision
 			if c := d.BlockConflict; c != nil && c.TriageVersion != "" {
 				recorded.AllowedPaths = []string{triageDocument(c.BodyRef)}
+			} else if c != nil {
+				recorded.AllowedPaths = blockConflictPaths(recorded, *c)
 			}
 			if row.LaneID == "" {
 				row.LaneID = d.LaneID

@@ -221,6 +221,18 @@ func blockBase(ctx context.Context, r *store.Reader, root, base, itemID string) 
 	if err := r.QueryRow(`SELECT COALESCE(body_ref, '') FROM items WHERE item_id=?`, itemID).Scan(&ref); err != nil {
 		return "", err
 	}
+	if landed, err := designAnswerLanded(ctx, r, root, tip, itemID); err != nil {
+		return "", err
+	} else if landed != "" && landed != base {
+		// A design run's landed answer (a decision ledger under docs/, with no item block
+		// to compare) is part of what the returned worker's base must contain, even when
+		// the green pointer the base came from lags the trunk.
+		if ok, err := containsCommit(ctx, root, base, landed); err != nil {
+			return "", err
+		} else if ok {
+			base = landed
+		}
+	}
 	if ref == "" {
 		return base, nil
 	}
@@ -244,6 +256,44 @@ func blockBase(ctx context.Context, r *store.Reader, root, base, itemID string) 
 			return "", err
 		}
 		if body == want {
+			return sha, nil
+		}
+	}
+	return tip, nil
+}
+
+// designAnswerLanded answers the trunk commit at which an item's answered (or closed)
+// design conflict landed, or "" when it has none. It is the landing's trunk_after when the
+// tip contains it, else the answer's head when the tip contains that, else the tip itself
+// for a landed row whose commits were squashed away.
+func designAnswerLanded(ctx context.Context, r *store.Reader, root, tip, itemID string) (string, error) {
+	conflicts, err := item.ReadConflicts(r)
+	if err != nil {
+		return "", err
+	}
+	c, ok := conflicts[itemID]
+	if !ok || (c.Status != "answered" && c.Status != "closed") || c.AnswerHead == "" || c.DesignRunID == "" {
+		return "", nil
+	}
+	var exists bool
+	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='landings')`).Scan(&exists); err != nil || !exists {
+		return "", err
+	}
+	var after string
+	err = r.QueryRow(`SELECT COALESCE(trunk_after,'') FROM landings WHERE run_id=? AND result='landed' ORDER BY event_seq DESC LIMIT 1`, c.DesignRunID).Scan(&after)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	for _, sha := range []string{after, c.AnswerHead} {
+		if sha == "" {
+			continue
+		}
+		if ok, err := containsCommit(ctx, root, sha, tip); err != nil {
+			return "", err
+		} else if ok {
 			return sha, nil
 		}
 	}
