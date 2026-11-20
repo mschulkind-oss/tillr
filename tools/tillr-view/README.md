@@ -115,6 +115,39 @@ read-only projections of drain events, not inferences from the item's old lane
 number. See the [drain's held candidate capacity rule](../tillr-drain/README.md#held-candidate-capacity)
 for the kept classes and pinned-commit retry behavior.
 
+## Run wall-time split and drain scheduling decisions
+
+`GET /api/v1/runs/{id}` and `tillr view run` return `timing` and `schedule` for a
+single run, and the Run page (`#/run/<id>`) renders both alongside the span waterfall:
+a **Where wall time went** card, a **Drain scheduling decisions** ledger on the default
+timeline tab, and a **Time order** tab (`?tab=time-order`) that interleaves the drain's
+decisions with the agent's transcript entries on one clock (walking backward through
+`before` cursors when a transcript spans multiple pages and deduplicating supervisor
+`steps.jsonl` rows already carried in `schedule`).
+
+`timing` splits `wall_ms` into `model_ms` (union of recorded `run.finish` turn
+intervals, Pi `message_end` / `turn_end` spans, or Claude `stream-json`
+`duration_api_ms` and live turn intervals), `tool_ms` (union of tool execution spans,
+Claude `tool_use`-to-`tool_result` pairs, or `proc-exec.jsonl` subprocess intervals),
+`slot_wait_ms` (union of test-slot wait intervals clipped to the run's window),
+`tool_active_ms` (`tool_ms` minus overlapping `slot_wait_ms` when slot wait is
+`observed`, or `null` when slot wait is `absent` or only a `lower_bound`), and
+`uncovered_ms` (remaining harness and supervisor wall time outside recorded model and
+tool intervals). `tools/go-test-shards.py` appends fail-open `slot.wait` records to
+`slot-waits.jsonl` inside `TILLR_TRACE_DIR` whenever that directory exists, including
+immediate acquisitions (`waited_ms: 0`), contended waits, and interrupted waits
+(`acquired: false`); `GET /api/v1/runs/{id}/timeline` and `tillr view trace` emit the
+same intervals as `slot_wait` spans. Pre-change runs with no `slot-waits.jsonl` report
+`slot_wait_ms` as `lower_bound` when timed busy notices appear in logs, or `absent`
+(`null`, never `0 ms`) when only untimed `<30s` notices or uninstrumented commands exist.
+
+`schedule` orders the drain's recorded decisions for that run (`allocation`, `gate`,
+`refusal`, `retry`, `landing`, and `other` holds or conflict pauses) from `events`
+(including evaluator refusals that reference the worker run), `dispatches`, `retries`
+(both retries superseding the run and the retry that authorized it), `landings`,
+`steps.jsonl`, `pipeline.jsonl`, and `gate.plan.json` / `gate.verdict.json` /
+`gate_spans`.
+
 ## Verify refusals on the item page
 
 `GET /api/v1/items/{id}` includes `verify_refusals`, projecting each
@@ -150,6 +183,7 @@ tillr-view waiting --store /path/to/.tillr/state.db
 tillr-view passes --store /path/to/.tillr/state.db --last 2
 tillr-view lanes --store /path/to/.tillr/state.db [--json]
 tillr-view running --store /path/to/.tillr/state.db [--watch] [--json]
+tillr-view run --store /path/to/.tillr/state.db --run <run-id> [--json]
 ```
 
 An external caller points these at a store snapshot; `status --json` reads the same JSON the loop reads;

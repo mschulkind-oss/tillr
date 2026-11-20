@@ -1602,6 +1602,10 @@ type runData struct {
 	Usage         runUsage                  `json:"usage"`
 	Completeness  completenessView          `json:"completeness"`
 	PreservedWork []preserved.PreservedWork `json:"preserved_work,omitempty"`
+	// Timing is where the run's wall time went, and Schedule is the drain's own decisions
+	// about the run, oldest first.
+	Timing   runTiming       `json:"timing"`
+	Schedule []scheduleEntry `json:"schedule"`
 }
 
 type runDetail struct {
@@ -1697,6 +1701,10 @@ func (s *server) runPayload(r *store.Reader, req *http.Request) (any, *apiFailur
 		return nil, unreadable(err)
 	}
 	out.Stages = s.stages(r, run)
+	out.Timing = computeRunTiming(run, out.Usage, s.obs.laneRoot, s.obs.loopDir, time.Now().UnixMilli())
+	if out.Schedule, err = readRunSchedule(r, run, s.obs.loopDir); err != nil {
+		return nil, unreadable(err)
+	}
 	// One read of the run's artifacts answers the claims, the turn count and the stream
 	// states: each read parses them again.
 	read, readErr := s.obs.trace.run(id)
