@@ -114,6 +114,7 @@ type Decision struct {
 	DesignerReason    string         `json:"designer_reason,omitempty"`
 	NodeStartRunID    string         `json:"node_start_run_id,omitempty"`
 	WorkflowRestart   bool           `json:"workflow_restart,omitempty"`
+	NodeFencePaths    []string       `json:"node_fence_paths,omitempty"`
 	NodeInfraFailures int            `json:"node_infra_failures,omitempty"`
 	WorkflowRelease   bool           `json:"workflow_release,omitempty"`
 	Workflow          *Workflow      `json:"workflow,omitempty"`

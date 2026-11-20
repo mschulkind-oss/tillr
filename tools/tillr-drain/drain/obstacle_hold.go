@@ -65,6 +65,28 @@ func (l *Loop) recordObstacleHold(ctx context.Context, d Decision, obs Obstacle)
 			_ = json.Unmarshal([]byte(rawAllowed), &allowed)
 		}
 		hold = obstacles.NewHold(d.ItemID, runID, obs.Kind, obs.Fields, checks, baseSHA, allowed)
+		if obs.Kind == ObstacleFence {
+			fence := fencePaths(scopeForLane(allowed, d.LaneID))
+			var outside []string
+			paths := obs.List("PATHS")
+			for _, p := range paths {
+				if !scopeWithin(scopeForLane([]string{p}, d.LaneID), fence) {
+					outside = append(outside, p)
+				}
+			}
+			if len(outside) < len(paths) {
+				// Keep the raw report for audit, not in the operator's instruction:
+				// EVIDENCE can repeat the already allowed paths.
+				if len(outside) == 0 {
+					hold.Reason = "the reported paths are already allowed by the item"
+					hold.Action = "inspect the run's staged fence, then retry run " + runID
+				} else {
+					paths := strings.Join(outside, ", ")
+					hold.Reason = "paths: " + paths
+					hold.Action = "widen allowed_paths (" + paths + ") or split the request, then retry run " + runID
+				}
+			}
+		}
 		hasLanded, err := obstacles.HasLanded(tx.Reader(), d.ItemID)
 		if err != nil {
 			return err

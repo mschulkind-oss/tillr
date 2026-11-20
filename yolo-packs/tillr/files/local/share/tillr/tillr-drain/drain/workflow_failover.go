@@ -74,9 +74,13 @@ func (l *Loop) retryWorkflowNode(ctx context.Context, d Decision, base string, r
 }
 
 func (l *Loop) restartInterruptedNode(ctx context.Context, d Decision, base string, rec run.Record) error {
+	return l.restartWorkflowNode(ctx, d, base, rec, "interrupted", "run interrupted by signal")
+}
+
+func (l *Loop) restartWorkflowNode(ctx context.Context, d Decision, base string, rec run.Record, reason, preserveReason string) error {
 	if !l.nonLanding {
 		head := l.headOf(ctx, d.LaneID)
-		if err := l.preserveWork(ctx, d.LaneID, rec.RunID, "run interrupted by signal"); err != nil {
+		if err := l.preserveWork(ctx, d.LaneID, rec.RunID, preserveReason); err != nil {
 			if stop := l.retainUnpreserved(ctx, d.LaneID, rec.RunID, head, err); stop != "" {
 				return retainedAfter(d.LaneID, stop)
 			}
@@ -89,7 +93,7 @@ func (l *Loop) restartInterruptedNode(ctx context.Context, d Decision, base stri
 	if policy == nil {
 		return Usagef("workflow seat %s has no backend route", d.Seat)
 	}
-	request := policy.request(d.ItemID, d.LaneID, markRunID(d.RunRequest.RunID, "interrupted"), rec.Backend)
+	request := policy.request(d.ItemID, d.LaneID, markRunID(d.RunRequest.RunID, reason), rec.Backend)
 	if request == nil {
 		return Usagef("workflow seat %s has no backend %s", d.Seat, rec.Backend)
 	}
@@ -98,7 +102,7 @@ func (l *Loop) restartInterruptedNode(ctx context.Context, d Decision, base stri
 	stampDecisionRequest(d, request)
 	d.RunRequest = request
 	d.WorkflowRestart = true
-	d.Action, d.Reason = ActionDispatch, "workflow-node-interrupted"
+	d.Action, d.Reason = ActionDispatch, "workflow-node-"+reason
 	if d.Workflow.Stages[d.NodeIndex].TimeoutMS > 0 {
 		request.TimeoutMS = d.Workflow.Stages[d.NodeIndex].TimeoutMS
 	}
@@ -117,7 +121,7 @@ func (l *Loop) restartInterruptedNode(ctx context.Context, d Decision, base stri
 			return err
 		}
 		if n != 1 {
-			return fmt.Errorf("lost workflow node during interrupted restart")
+			return fmt.Errorf("lost workflow node during %s restart", reason)
 		}
 		return appendEffect(tx, nodeAdvancedKind, request.RunID, pendingWork{Decision: d, BaseSHA: base, Ready: true, ParentRunID: rec.RunID}, l.cfg.Now().UTC())
 	})

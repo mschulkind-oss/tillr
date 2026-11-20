@@ -1458,7 +1458,9 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 		// so the lane is not required to sit at this attempt's node start.
 		freshRetry := len(decision.ReusedNodes) > 0 && !decision.WorkflowRestart
 		if decision.Workflow != nil {
-			spec.Node = &decision.Workflow.Stages[decision.NodeIndex]
+			node := decision.effectiveNode()
+			spec.Node = &node
+			spec.nodeFenceWidened = len(decision.NodeFencePaths) > 0
 			paths, err := l.nodeInputPaths(ctx, decision)
 			if err != nil {
 				if holdErr := failStage("stage node inputs", err); holdErr != nil {

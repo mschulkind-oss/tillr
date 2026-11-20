@@ -252,6 +252,7 @@ type StageSpec struct {
 	Continue           bool
 	PreviousRunID      string
 	Node               *WorkflowStage
+	nodeFenceWidened   bool
 	InputPaths         map[string][]NodeInput
 	PreviousReport     string
 	PreviousReportText string
@@ -479,6 +480,9 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 			if _, name, suffix, ok := item.ForkCheckoutPath(raw); ok {
 				scope[i] = ".forks/lanes/" + spec.LaneID + "/" + name + suffix
 			}
+		}
+		if spec.nodeFenceWidened && !scopeWithin(scope, fencePaths(itemAllowed)) {
+			return Externalf("%s: widened scope for %s is no longer inside the item's fence", ReasonNodeScopeOutsideFence, spec.Node.ID)
 		}
 		recorded.AllowedPaths = scope
 	}
