@@ -93,16 +93,15 @@ func TestRefusedPushRebasesOntoTheMovedRemote(t *testing.T) {
 	}
 }
 
-// A conflicting remote commit changes nothing on main/green/checkout and files sync-remote-<r12>.
+// A conflicting remote commit changes nothing and the failure names the mover and commands.
 func TestRefusedPushConflictChangesNothing(t *testing.T) {
 	p := newPushFixture(t)
-	remoteTip := p.remoteCommit(t, "two.txt", "remote version\n")
+	p.remoteCommit(t, "two.txt", "remote version\n")
 	err := p.refused(t)
 	before := runGit(t, p.f.root, "rev-parse", "HEAD")
 	green := runGit(t, p.f.root, "rev-parse", GreenRef)
 	_, herr := p.l.healRefusedPush(context.Background(), settings.Push{}, err)
-	syncID := RemoteSyncItemID(remoteTip)
-	if herr == nil || !strings.Contains(herr.Error(), "mover: "+syncID) {
+	if herr == nil || !strings.Contains(herr.Error(), "mover: operator") || !strings.Contains(herr.Error(), "git rebase FETCH_HEAD") {
 		t.Fatalf("failure = %v", herr)
 	}
 	if runGit(t, p.f.root, "rev-parse", "HEAD") != before || runGit(t, p.f.root, "rev-parse", GreenRef) != green || runGit(t, p.f.root, "status", "--porcelain") != "" {

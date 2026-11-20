@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
@@ -114,7 +113,7 @@ func itemAsOf(r *store.Reader, itemID string, seq int64) (blockFields, []string,
 func runBaseLacks(ctx context.Context, r *store.Reader, root, runID, trunk string) (staleBase, error) {
 	out := staleBase{RunID: runID, TrunkSHA: trunk}
 	d, err := readDispatch(r, runID)
-	if err != nil || !d.present || d.base == "" || IsTrunkFixer(d.itemID) || IsRemoteSyncItem(d.itemID) {
+	if err != nil || !d.present || d.base == "" || IsTrunkFixer(d.itemID) {
 		return out, err
 	}
 	out.ItemID, out.BaseSHA = d.itemID, d.base
@@ -144,11 +143,6 @@ func runBaseLacks(ctx context.Context, r *store.Reader, root, runID, trunk strin
 		}
 		if err != nil {
 			return out, err
-		}
-		if landed != "" {
-			if landed, err = heavy.RewriteResolve(r, landed); err != nil {
-				return out, err
-			}
 		}
 		var fence string
 		if err := r.QueryRow(`SELECT COALESCE(allowed_paths, '') FROM items WHERE item_id=?`, blocker).Scan(&fence); err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -252,7 +246,7 @@ func (l *Loop) releaseStaleBaseConflicts(ctx context.Context) error {
 		sort.Strings(ids)
 		for _, id := range ids {
 			c := conflicts[id]
-			if c.Status != "owner" || c.RunID == "" || c.BodyRef == "" || c.TriageVersion != "" || IsTrunkFixer(c.ItemID) || IsRemoteSyncItem(c.ItemID) || l.staleBaseChecked[c.ConflictID] {
+			if c.Status != "owner" || c.RunID == "" || c.BodyRef == "" || c.TriageVersion != "" || IsTrunkFixer(c.ItemID) || l.staleBaseChecked[c.ConflictID] {
 				continue
 			}
 			stale, err := runBaseLacks(ctx, r, l.cfg.Root, c.RunID, trunk)
@@ -312,7 +306,7 @@ func (l *Loop) releaseStaleBaseConflicts(ctx context.Context) error {
 // design run answering a conflict raised by such a build run answers that conflict
 // the same way.
 func (l *Loop) staleBlockedReport(ctx context.Context, d Decision) (bool, error) {
-	if d.RunRequest == nil || IsTrunkFixer(d.ItemID) || IsRemoteSyncItem(d.ItemID) || (d.BlockConflict != nil && d.BlockConflict.TriageVersion != "") {
+	if d.RunRequest == nil || IsTrunkFixer(d.ItemID) || (d.BlockConflict != nil && d.BlockConflict.TriageVersion != "") {
 		return false, nil
 	}
 	trunk, err := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", TrunkRef)

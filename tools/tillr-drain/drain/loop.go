@@ -493,8 +493,6 @@ type LoopResult struct {
 type Loop struct {
 	endingCapabilities                   map[string]string
 	rollAction, piRollAction, pushAction landingAction
-	remoteRollMu                         sync.Mutex
-	pendingRemoteRoll                    *healResult
 	greenPushAtStart                     sync.Once
 	ownerMigrationItem                   string
 	laneBootstrapReported                bool
@@ -2600,22 +2598,6 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		}
 		return "", false, nil
 	}
-	if IsRemoteSyncItem(candidate.ItemID) {
-		treeViolation, err := l.checkRemoteSyncTree(ctx, worker)
-		if err != nil {
-			return "", false, err
-		}
-		if treeViolation != "" {
-			l.reportf("loop: refusing %s before the gate: %s\n", candidate.ItemID, treeViolation)
-			if candidate.RefusalDetail == "" {
-				candidate.RefusalDetail = treeViolation
-			}
-			if err := l.refuse(ctx, candidate, result, RefusalFence); err != nil {
-				return "", false, err
-			}
-			return "", false, nil
-		}
-	}
 	if detail, err := l.validateIdea(ctx, worker); err != nil {
 		return "", false, err
 	} else if detail != "" {
@@ -2918,9 +2900,6 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	runnerChange, err := l.runnerProofChange(ctx, candidate)
 	if err != nil {
 		return "", false, err
-	}
-	if IsRemoteSyncItem(candidate.ItemID) {
-		return l.landRemoteSync(ctx, candidate, result, timing)
 	}
 	landStart := time.Now()
 	landed, err := l.landWithActions(ctx, candidate)

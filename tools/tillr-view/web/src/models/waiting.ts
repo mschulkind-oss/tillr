@@ -10,7 +10,6 @@ export function waitingActors(rows: WaitingRow[]) {
     if (["ready", "moving", "done"].includes(row.class)) continue;
     if (row.mover.startsWith("owner; answer ") && row.mover.includes("#OQ-")) counts.owner++;
     else if (row.mover.startsWith("design seat;") || row.mover.includes("design seat")) counts.design++;
-    else if (row.mover.startsWith("owner;") && row.class === "needs you") counts.owner++;
     else if (row.mover.startsWith("operator;") || ["needs you", "needs a cause"].includes(row.class)) counts.operator++;
     else counts.drain++;
   }

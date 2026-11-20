@@ -2717,15 +2717,3 @@ kbd {
 .idea-form textarea { display: block; box-sizing: border-box; width: 100%; margin: var(--s2) 0; font: inherit; }
 .idea-form fieldset { display: flex; flex-wrap: wrap; gap: var(--s3); margin: var(--s3) 0; }
 .idea-form button { margin-right: var(--s2); }
-
-.push-pill {
-  display: inline-flex;
-  align-items: center;
-  padding: 0 0.5rem;
-  border: 1px solid currentColor;
-  border-radius: 999px;
-  font-size: 0.8em;
-}
-.push-pill--held {
-  font-weight: 600;
-}

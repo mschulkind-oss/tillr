@@ -1097,55 +1097,23 @@ it publishes fork patch branches at their local tips whatever the pushed commit 
 [Pushing what the proof has passed](../../docs/reference/tillr-restart.md#pushing-what-the-proof-has-passed).
 
 A push the remote refuses because it has moved (porcelain status `[rejected]` with `fetch first`,
-`non-fast-forward` or `stale info`) is told apart from every other failure: `[remote rejected]`
-from a server hook or branch protection records `push-remote-declined` (`needs you`) without
-fetching or rebasing; a non-zero exit with no porcelain ref line while an unacknowledged
-`patch_moves` hold is active records `push-patch-move-held` (`needs you`, naming
-`tillr drain acknowledge-patch-move`); and any other non-zero or timed-out push with no
-porcelain ref line (another hook failure, git-broker denial or timeout, auth, or network)
-records `push-failed` (`needs you`, retryable via `tillr drain push`). Only a non-fast-forward
-refusal triggers Step 2: the drain fetches `<remote> <ref>` and compares the fetched tip `R`
-against `refs/tillr/published/<remote>/<branch>` (`R_prev`) and `refs/heads/main`. If `R_prev`
-exists and is not an ancestor of `R`, the remote was force-pushed; the drain changes nothing
-and records `remote-rewritten` (`needs you`, `mover: operator`).
-
-Otherwise, under the landing lock, the drain replays the unpublished trunk commits one by one
-onto `R` via `git merge-tree --write-tree`: linear, no merge commit, never a forced push,
-authors and messages kept (skipping empty supersessions where `R` already carries the exact
-change). It then moves `refs/heads/main` and the main checkout with `git reset --keep`, so
-if the main checkout is off `main` or has uncommitted edits on a path changed by the move, it
-stops with nothing changed and records `remote-sync-worktree-dirty` (`needs you`,
-`mover: operator`). The loop's rewrite absorption maps each replaced commit by patch—or
-directly from the replay's recorded `old -> new` pairs when shifted context or conflict repair
-changes a diff—carries `refs/tillr/green` on clean replays, and raises no `trunk-rewritten`
-hold. In green mode the new tip is proved first and pushed at the next green advance; in tip
-mode the push runs again at once.
-
-When `git merge-tree --write-tree` hits a textual conflict at commit `C_k`, replay leaves
-`refs/heads/main`, `refs/tillr/green`, and the main checkout untouched, pins
-`refs/tillr/published/<remote>/<branch>` at `R`, and files (or reuses) one deduplicated
-express `build` item `sync-remote-<short(R)>` fenced to the conflicting paths. Before gating
-`sync-remote-<short(R)>`, the drain checks `D-RP5`: the candidate must be a single linear
-commit atop `P_{k-1}` with no merge parents, and every path outside its derived fence must
-match the mechanical three-way merge of `(P_{k-1}, C_k)` over `C_k^1` (otherwise refusing as
-`boundary-scope-escape`). On landing `sync-remote-<short(R)>`, the drain finishes replaying any
-remaining commits onto `R` under the landing lock, resets the main checkout, and records
-`trunk_rewrites`; if a later commit conflicts, the same item advances its base and continues.
-`refs/tillr/green` is never carried onto or past a conflict-repaired commit `C_k'`: it stays
-behind `C_k'` and records `remote-sync-proving` until the heavy runner proves the repaired
-tip. During conflict repair, a `fence` obstacle widens `allowed_paths` (except gate-code paths,
-which escalate to `owner`), while `definition`, `owner`, or `tooling` obstacles escalate to
-`owner` or `operator` and record `remote-sync-conflict`.
-
-`refs/tillr/published/<remote>/<branch>` advances on every successful push (`push-ok`), is
-confirmed when `pushGreen` skips an already-published tip, and is pinned at `R` on an accepted
-forward fetch. The identity check trusts every commit reachable from a pointer under
-`refs/tillr/published/`: a commit another machine pushed under its own address does not hold
-landings with `trunk-foreign-identity`. Replayed local commits are not under the pointer, and
-a foreign commit made here still holds until `tillr drain accept-identity`. Operators can run
-`tillr drain push` for one synchronous push-or-heal turn; the loop also triggers a push
-automatically once a `push-patch-move-held` or `remote-sync-worktree-dirty` hold clears and
-unpublished commits remain. ([the design](../../docs/design/tillr-refused-push.md))
+`non-fast-forward` or `stale info`) is told apart from every other failure (a server decline,
+a hook failure, an unreachable remote), and only it is acted on. The drain fetches the branch
+and, under the landing lock, replays the unpublished trunk commits one by one onto the fetched
+tip: linear, no merge commit, never a forced push, authors and messages kept. It then moves the
+main checkout with `git reset --keep`, so a path the move changes that holds owner content
+stops it with nothing changed. The loop's rewrite absorption maps each replaced commit by patch,
+carries `refs/tillr/green`, and raises no trunk-rewritten hold. In green mode the new tip is
+proved first and pushed at the next green advance; in tip mode the push runs again at once. A
+conflict, a merge commit among the unpublished commits, a checkout off the trunk or a dirty
+path fails the push with `mover: operator` and the commands to run by hand. Not built: the
+design's conflict-repair run and escalation and the rest of the published-ref bookkeeping
+([the design](../../docs/design/tillr-refused-push.md)).
+The fetched tip is pinned at `refs/tillr/published/<remote>/<branch>`, and the identity check
+trusts every commit reachable from a pointer under that prefix: a commit another machine
+pushed under its own address does not hold landings with `trunk-foreign-identity`. The
+replayed local commits are not under the pointer, and a foreign commit made here still holds
+until `tillr-drain accept-identity`.
 A failing check holds the pointer and is run alone at the pointer and by bisection on
 recorded landings in the range. Legacy span IDs retain their kind and label so replay
 uses the old program's selector vocabulary rather than confusing its stable report ID
@@ -2109,7 +2077,7 @@ lands in one of three outcomes:
 | :--- | :--- | :--- |
 | Remote-tracking refs, tags, `refs/stash`, notes, and branches outside `refs/heads/tillr/`, `refs/heads/patch/`, and `refs/tillr/` | Ignored | Ordinary Git users move them all day. |
 | Trunk commits or rewritten trunk history | Ignored | Trunk ancestry is a durable landing hold, not run guilt. |
-| Target's own checked-out branch, registered sibling branches, `refs/tillr/runs/` pins, saved edits under `refs/tillr/preserved/`, the lander's `refs/tillr/landed/` markers, the lander's recovery copy of the owner's content under `refs/tillr/owner-recovery/`, the heavy runner's proof ref `refs/tillr/green`, published pointers under `refs/tillr/published/`, and the two trunk-history refs (`refs/tillr/trunk-history/observed` and `refs/tillr/trunk-history/lost`) | Ignored | These are deliveries or concurrent loop work. |
+| Target's own checked-out branch, registered sibling branches, `refs/tillr/runs/` pins, saved edits under `refs/tillr/preserved/`, the lander's `refs/tillr/landed/` markers, the lander's recovery copy of the owner's content under `refs/tillr/owner-recovery/`, the heavy runner's proof ref `refs/tillr/green`, and the two trunk-history refs (`refs/tillr/trunk-history/observed` and `refs/tillr/trunk-history/lost`) | Ignored | These are deliveries or concurrent loop work. |
 | `refs/heads/patch/<fork>` moved to a commit that a `refs/tillr/landed/` marker written during the bracket names | Ignored | That is a fork-series landing: the lander marks the built fork head before it moves the patch branch. |
 | The loop's own scratch worktrees under the lane root: `<lane root>/.rolling/worktree` and `<lane root>/.replay/<sha>` while detached, and `<lane root>/desk-<doc>/worktree` on that desk's own lane branch `tillr/<scope>/desk-<doc>` (which is excused too) | Ignored | The loop creates and removes them itself, for the rolling tier, the trunk-already-red replay and the review-comment desk lanes. |
 | A registration that was already `prunable` (its directory gone) when the bracket opened, pruned during it | Ignored | `git worktree prune` removes it; the directory was gone before the run began. |

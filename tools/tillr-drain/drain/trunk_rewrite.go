@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
-	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -96,12 +95,11 @@ func rewriteReason(q heavy.Querier, h trunkHistory) string {
 // rewriteAbsorption is a rewrite the loop proved: old sha -> new sha for each replaced
 // commit, and the evidence. Or the commits it could not match.
 type rewriteAbsorption struct {
-	Lost, Tip     string
-	Pairs         map[string]string
-	Order         []string // old shas, oldest first
-	Unmatched     []string
-	Evidence      string
-	GreenOverride string // when set, pins refs/tillr/green here instead of Pairs[green]
+	Lost, Tip string
+	Pairs     map[string]string
+	Order     []string // old shas, oldest first
+	Unmatched []string
+	Evidence  string
 }
 
 func (a *rewriteAbsorption) proved() bool { return a != nil && len(a.Unmatched) == 0 }
@@ -231,10 +229,6 @@ func (a *rewriteAbsorption) record(tx *store.Tx, at time.Time) error {
 			return err
 		}
 		mapped++
-	}
-	// An acceptance of an old commit's identity holds for the commit that replaced it.
-	if err := land.CarryIdentityAcceptances(tx, a.Pairs); err != nil {
-		return err
 	}
 	body, err := json.Marshal(map[string]any{"lost_tip": a.Lost, "tip": a.Tip, "commits": mapped, "evidence": a.Evidence})
 	if err != nil {

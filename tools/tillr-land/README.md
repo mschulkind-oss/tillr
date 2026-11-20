@@ -116,12 +116,8 @@ since green with both bounds disabled.
 
   A `trunk_history` tip whose object Git no longer has is an external failure that names
   the commit, and nothing moves. A Git failure while reading that tip is reported as the
-  Git failure, not as a lost commit. When a trunk rebase replaces local commits and records
-  `trunk_rewrites`, `refs/tillr/landed/<run_id>` markers and `landings.trunk_after` lookups
-  resolve through the recorded rewrite chain (`old_sha -> new_sha`), so idempotent retries
-  and crash recovery still match the replacement commit without squashing again. The cases
-  are pinned in [`idempotent_test.go`](idempotent_test.go),
-  [`land/rewrite_alias_test.go`](land/rewrite_alias_test.go), and the writer-side recheck in
+  Git failure, not as a lost commit. The cases are pinned in
+  [`idempotent_test.go`](idempotent_test.go), and the writer-side recheck in
   [`contention_test.go`](contention_test.go). The [known cases](#known-cases-the-marker-does-not-settle)
   below are where this answer is not what an operator might expect.
 - **The lease on the trunk excludes other landers, never the gate.** `land.lock` spans
@@ -132,11 +128,7 @@ since green with both bounds disabled.
   cannot be garbage-collected before a conflict-fixer or a person reads it.
 - **Authorship follows the trunk landing.** The squashed commit carries the identity the
   repository's git config states, never the lane branch's, and a repository that states one
-  in a scope a lane can write is refused rather than trusted. On trunk history checks,
-  commits reachable from `refs/tillr/published/` are trusted as already published, and when
-  a trunk rebase replaces local commits, existing `trunk_identity_acceptances` rows are
-  carried forward onto each replacement commit so accepted local commits do not hold
-  landings again.
+  in a scope a lane can write is refused rather than trusted.
 
 ## Fork delivery
 

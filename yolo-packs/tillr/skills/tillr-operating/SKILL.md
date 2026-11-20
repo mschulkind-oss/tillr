@@ -498,17 +498,6 @@ movements that pause landings until the owner confirms them, use
 `tillr drain accept-rewrite`, `tillr drain accept-identity`, or
 `tillr drain acknowledge-patch-move`; `tillr drain sweep-refs` prunes retired run refs.
 
-For held autopushes shown in `tillr view waiting` or the Observatory header's push pill,
-clear the named cause first: acknowledge an unexpected fork move with
-`tillr drain acknowledge-patch-move` (`push-patch-move-held`), check out `main` or
-commit/stash clashing edits in the main checkout (`remote-sync-worktree-dirty`),
-reconcile a force-pushed upstream branch (`remote-rewritten`), resolve an escalated
-conflict item or gate-code conflict (`remote-sync-conflict`), or inspect server-side hook
-or broker rejections (`push-remote-declined`, `push-failed`). Once `push-patch-move-held`
-or `remote-sync-worktree-dirty` clears, the loop triggers a push automatically; run
-`tillr drain push` at any time to execute one synchronous push-or-heal turn against
-`.tillr.toml` `[push]`.
-
 Use `tillr drain examine` to judge one retained candidate through the loop's own
 gate, landing and verdict steps. Supply the same step programs and backend policy
 as the loop. It refuses a lane that is held: stop its loop first, then examine the

@@ -80,8 +80,6 @@ func dispatch(args []string) int {
 		return acceptRewriteFace(rest)
 	case "acknowledge-patch-move":
 		return acknowledgePatchMoveFace(rest)
-	case "push":
-		return pushFace(rest)
 	case "accept-identity":
 		return acceptIdentityFace(rest)
 	case "sweep-refs":
@@ -135,64 +133,6 @@ func acknowledgePatchMoveFace(args []string) int {
 		return fail(err)
 	}
 	fmt.Printf("acknowledged patch/%s observation %d by %s\n", *fork, *seq, *by)
-	if root := repoRootFromStore(*path); root != "" {
-		if repoSettings, rerr := settings.Read(root); rerr == nil && drain.HasUnpublishedCommits(ctx, root, repoSettings.Push) {
-			if out, perr := drain.PushOnce(ctx, root, *path); perr != nil {
-				fmt.Fprintf(os.Stderr, "push recovery after acknowledge-patch-move failed (%s): %v\n", out.Kind, perr)
-			} else if out.Tip != "" {
-				fmt.Printf("pushed %s %s\n", out.What, out.Tip)
-			}
-		}
-	}
-	return record.ExitOK
-}
-
-func repoRootFromStore(storePath string) string {
-	dir := filepath.Dir(storePath)
-	out, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
-}
-
-func pushFace(args []string) int {
-	fs := newFlagSet("push")
-	root := fs.String("root", ".", "the repository to push")
-	path := fs.String("store", "", "the store (default <root>/.tillr/state.db)")
-	asJSON := fs.Bool("json", false, "emit the push outcome as JSON")
-	if err := parseFlags(fs, args); err != nil {
-		return fail(err)
-	}
-	if *root == "" {
-		*root = "."
-	}
-	absRoot, err := filepath.Abs(*root)
-	if err != nil {
-		return fail(err)
-	}
-	storePath := *path
-	if storePath == "" {
-		storePath = filepath.Join(absRoot, ".tillr", "state.db")
-	}
-	out, err := drain.PushOnce(context.Background(), absRoot, storePath)
-	if *asJSON {
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		_ = enc.Encode(out)
-		if err != nil {
-			return drain.ExitCode(err)
-		}
-		return record.ExitOK
-	}
-	if err != nil {
-		return fail(err)
-	}
-	if out.Tip != "" {
-		fmt.Printf("pushed %s %s (%s)\n", out.What, out.Tip, out.Kind)
-	} else {
-		fmt.Printf("push %s (%s)\n", out.What, out.Kind)
-	}
 	return record.ExitOK
 }
 
@@ -808,7 +748,7 @@ func failLoopStartup(root string, at time.Time, err error) int {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "probe-backend, workflow, why, policy, plan, once, retry, clear-fault, accept-rewrite, accept-identity, acknowledge-patch-move, push, sweep-refs, acquit, examine, set-aside, boundary, resume, stop, restart or loop"
+const faceList = "probe-backend, workflow, why, policy, plan, once, retry, clear-fault, accept-rewrite, accept-identity, acknowledge-patch-move, sweep-refs, acquit, examine, set-aside, boundary, resume, stop, restart or loop"
 
 func stopFace(args []string) int {
 	fs := newFlagSet("stop")

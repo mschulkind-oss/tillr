@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"os"
 	"path/filepath"
 	"strings"
@@ -520,11 +519,6 @@ func (l *Loop) deliverCommentReplies(ctx context.Context, c Candidate) error {
 		err = r.QueryRow("SELECT trunk_after FROM landings WHERE item_id=? AND run_id=? AND result='landed' ORDER BY event_seq DESC LIMIT 1", c.ItemID, c.RunID).Scan(&revision)
 		if errors.Is(err, sql.ErrNoRows) {
 			return Externalf("reply delivery needs a recorded landing for %s", c.RunID)
-		}
-		if err == nil {
-			// A rebase of the trunk may have replaced the landed commit: read the document
-			// at the commit that carries it now.
-			revision, err = heavy.RewriteResolve(r, revision)
 		}
 		return err
 	})

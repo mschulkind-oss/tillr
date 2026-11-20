@@ -1064,14 +1064,14 @@ func waitingGateStall(r *store.Reader, itemID string) (string, error) {
 	return fmt.Sprintf("%s; %d gates in flight at stall", hold.Observations, hold.GatesInFlight), nil
 }
 
-// Report the latest result of each action; a successful retry clears its warning. A push
-// outcome that names a state (kind) becomes the row design Section 7.1 gives it, with its
-// real since; an older one keeps the {action, detail, what} reading.
+// Report the latest result of each action; a successful retry clears its warning.
 func appendPostLandingWaiting(r *store.Reader, out []waitingRow) ([]waitingRow, error) {
-	rows, err := r.Query(`SELECT json_extract(payload,'$.action'), COALESCE(object_id,''), payload, ts
-   FROM events e WHERE kind = 'drain.post-landing-action'
-   AND seq = (SELECT max(seq) FROM events WHERE kind = 'drain.post-landing-action' AND json_extract(payload,'$.action') IS json_extract(e.payload,'$.action'))
-   ORDER BY json_extract(payload,'$.action')`)
+	rows, err := r.Query(`WITH actions AS (
+    SELECT seq, json_extract(payload,'$.action') AS action, object_id, json_extract(payload,'$.detail') AS detail, COALESCE(json_extract(payload,'$.what'),'') AS what
+    FROM events WHERE kind = 'drain.post-landing-action'
+   ), latest AS (SELECT max(seq) AS seq FROM actions GROUP BY action)
+   SELECT action, object_id, detail, what FROM actions JOIN latest USING(seq)
+   WHERE detail <> '' ORDER BY action`)
 	if isMissingTable(err) {
 		return out, nil
 	}
@@ -1080,31 +1080,16 @@ func appendPostLandingWaiting(r *store.Reader, out []waitingRow) ([]waitingRow, 
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var action, tip, payload string
-		var ts int64
-		if err := rows.Scan(&action, &tip, &payload, &ts); err != nil {
+		var action, tip, detail, what string
+		if err := rows.Scan(&action, &tip, &detail, &what); err != nil {
 			return nil, err
-		}
-		ev, err := parsePushEvent(payload, tip, ts)
-		if err != nil {
-			return nil, err
-		}
-		if action == "push" && ev.structured() {
-			if class, mover, why, ok := ev.pushRow(); ok {
-				out = append(out, waitingRow{Observation: "post-landing:push", Class: class, Where: "push", Why: why, Mover: mover, Since: ev.since(), ClassSource: "store"})
-				continue
-			}
-		}
-		detail := ev.Detail
-		if detail == "" {
-			continue
 		}
 		why := "push failed"
 		if action == "roll" {
 			why = "running build is behind the trunk"
 		}
 		mover := "the next relevant landing"
-		if ev.What == "green" {
+		if what == "green" {
 			why = "push of the green commit failed"
 			mover = "the next green advance"
 		}

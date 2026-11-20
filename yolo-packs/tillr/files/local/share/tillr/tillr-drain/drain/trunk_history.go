@@ -70,15 +70,6 @@ func trunkAncestor(ctx context.Context, root, old, tip string) (bool, error) {
 // forget a candidate-free rewrite. Git work finishes before that transaction.
 // expected additionally preserves a rewrite the lander caught under its lock.
 func (l *Loop) observeTrunk(ctx context.Context, expected string) (trunkHistory, error) {
-	return l.observeTrunkWith(ctx, expected, nil)
-}
-
-// observeTrunkWith is observeTrunk for a caller that rewrote the trunk itself under
-// land.lock and so knows each old commit's replacement: known names them (docs/design/
-// tillr-refused-push.md, Section 4.1). The patch-id proof still answers first, so a clean
-// replay is recorded as it always was; the known pairs answer when a replayed commit's patch
-// changed (shifted context, an empty supersession), where no patch could match.
-func (l *Loop) observeTrunkWith(ctx context.Context, expected string, known *rewriteAbsorption) (trunkHistory, error) {
 	if l.nonLanding {
 		return trunkHistory{}, nil
 	}
@@ -185,24 +176,6 @@ func (l *Loop) observeTrunkWith(ctx context.Context, expected string, known *rew
 				} else if absorb, err = l.proveRewrite(ctx, h.Lost, tip); err != nil {
 					return h, err
 				}
-				if !absorb.proved() && known != nil {
-					covers := known.Lost == h.Lost
-					if !covers {
-						covers, _ = trunkAncestor(ctx, l.cfg.Root, h.Lost, known.Lost)
-					}
-					if covers {
-						if ok, err := trunkAncestor(ctx, l.cfg.Root, known.Tip, tip); err != nil {
-							return h, err
-						} else if ok {
-							adopted := *known
-							adopted.Tip = tip
-							absorb = &adopted
-						}
-					}
-				}
-				if absorb.proved() && known != nil && known.GreenOverride != "" {
-					absorb.GreenOverride = known.GreenOverride
-				}
 				if absorb.proved() {
 					// A proof names an unchanged tree. Carry it to the matching
 					// commit before clearing the lost-history hold.
@@ -211,31 +184,9 @@ func (l *Loop) observeTrunkWith(ctx context.Context, expected string, known *rew
 						return h, err
 					}
 					green = strings.TrimSpace(green)
-					if absorb.GreenOverride != "" {
-						if green != "" && absorb.GreenOverride != green {
-							if _, err := l.git(ctx, l.cfg.Root, "update-ref", GreenRef, absorb.GreenOverride, green); err != nil {
-								return h, err
-							}
-						}
-					} else if replacement := absorb.Pairs[green]; replacement != "" {
+					if replacement := absorb.Pairs[green]; replacement != "" {
 						if _, err := l.git(ctx, l.cfg.Root, "update-ref", GreenRef, replacement, green); err != nil {
 							return h, err
-						}
-					}
-					// A run's landed marker names the commit that replaced the one it named.
-					markers, err := l.git(ctx, l.cfg.Root, "for-each-ref", "--format=%(refname) %(objectname)", strings.TrimSuffix(land.LandedRefPrefix, "/"))
-					if err != nil {
-						return h, err
-					}
-					for _, line := range strings.Split(strings.TrimSpace(markers), "\n") {
-						f := strings.Fields(line)
-						if len(f) != 2 {
-							continue
-						}
-						if replacement := absorb.Pairs[f[1]]; replacement != "" {
-							if _, err := l.git(ctx, l.cfg.Root, "update-ref", f[0], replacement, f[1]); err != nil {
-								return h, err
-							}
 						}
 					}
 					// Keep the replaced history readable once the lost ref goes.
