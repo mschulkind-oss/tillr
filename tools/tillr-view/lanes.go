@@ -141,9 +141,19 @@ func laneCapacityLine(rows []laneRow) string {
 
 // laneWorkState distinguishes active work from a terminal run whose lease is held
 // while it settles. Parallel readers remain active even if their representative ended.
+const pausedRunState = "paused"
+
 func laneWorkState(lane storeLane, run storeRun) string {
 	if lane.State != laneStateLeased {
 		return "idle"
+	}
+	if len(lane.ActiveNodes) == 0 && run.State == pausedRunState {
+		// A restart pauses a run's row; its continuation keeps that row until it finishes,
+		// and claims the lane with a run.resume event newer than the row.
+		if lane.ResumedSeq > run.EventSeq {
+			return "running"
+		}
+		return "paused"
 	}
 	if len(lane.ActiveNodes) == 0 && run.State != "" && run.State != liveRunState {
 		return "settling"

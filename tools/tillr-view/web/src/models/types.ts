@@ -231,7 +231,7 @@ export interface LaneRow {
   history?: LaneHistoryRun[] | null;
   usage?: UsageSum;
   lane_id: string;
-  state: "idle" | "running" | "settling";
+  state: "idle" | "running" | "settling" | "paused";
   state_since_ms: number | null;
   run_id: string; item_id: string; seat: string; backend: string; attempt: number; outcome: string;
   /** Where `seat` was read: the run's dispatch, the item, or "none" — the item asked for no
@@ -244,7 +244,7 @@ export interface LaneRow {
 
 export interface LaneView {
   /** Active versus settling work, separate from the raw lease state. Older servers omit it. */
-  work_state?: "running" | "settling" | "idle";
+  work_state?: "running" | "settling" | "paused" | "idle";
   lane_id: string;
   state: string;
   run_id: string;

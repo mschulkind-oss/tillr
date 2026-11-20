@@ -328,6 +328,9 @@ uses this answer, links every lane, and computes its counts from those rows. The
 [Home lane-strip reference](../../docs/reference/observatory-redesign.md#home-waiting-classes-and-the-lane-strip)
 defines its three states: idle, running, and settling. A terminal run still held
 by a lease is settling, not evidence that a gate or landing is in progress.
+A lane whose run row is `paused` is running when a `run.resume` event newer than the
+row shows its continuation holds the lease, and otherwise `paused`: waiting to be
+resumed, not settling.
 
 Snapshot lane rows preserve the raw lease `state` and add `work_state` using the
 same idle/running/settling projection. The header counts running work, not held
