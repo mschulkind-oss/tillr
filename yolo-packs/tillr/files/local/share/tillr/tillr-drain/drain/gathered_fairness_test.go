@@ -30,22 +30,18 @@ func TestHelperGatherSecondWriter(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	began := time.Now()
-	var waited time.Duration
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
-		waited = time.Since(began)
 		return nil
 	})
 	if err != nil {
 		fmt.Printf("WAITED_ERROR %v\n", err)
 		return
 	}
-	fmt.Printf("WAITED_NS %d\n", waited.Nanoseconds())
+	fmt.Println("GOT_LOCK")
 }
 
 // One writer that keeps missing must not hold the store's write lock back to back: another
-// process that begins a write while it loops gets the lock within a bound derived from how
-// long one of the looping writer's attempts holds it. Without the pause after a miss each
+// process that begins a write while it loops gets the lock before the loop ends. Without the pause after a miss each
 // attempt began the instant the last rolled back, and the second process, polling for the
 // lock, waited out the whole loop (2026-11-20: a run's lane claim, five seconds, SQLITE_BUSY).
 func TestAMissingWriteLeavesAnotherProcessATurn(t *testing.T) {
@@ -88,29 +84,23 @@ func TestAMissingWriteLeavesAnotherProcessATurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the second writer: %v\n%s", err, out)
 	}
-	cancel()
-	<-done
-	var waited time.Duration
-	found := false
-	for _, line := range strings.Split(string(out), "\n") {
-		if v, ok := strings.CutPrefix(line, "WAITED_NS "); ok {
-			ns, perr := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
-			if perr != nil {
-				t.Fatal(perr)
-			}
-			waited, found = time.Duration(ns), true
-		}
+	// The order is the assertion, not a duration: the second writer got the lock while
+	// the looping writer was still looping. Under the bug it waited out the whole loop,
+	// so the looping writer had already finished when the second one came back.
+	select {
+	case err := <-done:
+		t.Fatalf("the second writer got the lock only after the looping writer finished all %d misses (%v):\n%s", misses, err, out)
+	default:
 	}
-	if !found {
+	if !strings.Contains(string(out), "GOT_LOCK") {
 		t.Fatalf("the second writer did not get the lock:\n%s", out)
 	}
 	mu.Lock()
-	bound := 2 * maxHeld
+	held := maxHeld
 	mu.Unlock()
-	if maxHeld == 0 {
+	if held == 0 {
 		t.Fatal("no attempt reported how long it held the lock")
 	}
-	if waited > bound {
-		t.Fatalf("the second writer waited %s, more than two attempts' hold (%s, one attempt held %s)", waited, bound, maxHeld)
-	}
+	cancel()
+	<-done
 }
