@@ -114,30 +114,30 @@ func TestSiblingPreservationIsLanderRef(t *testing.T) {
 	}
 }
 
-// A released workflow's head that the trunk already contains needs no pin, so a run id too
-// long to be a ref name does not fail the release. A head the trunk lacks is still pinned,
-// and an unwritable pin there is still an error.
-func TestPinReleasedHeadSkipsAHeadTheTrunkContains(t *testing.T) {
+// A run id too long to be a ref name does not fail a pin when the trunk already contains the
+// commit, because nothing needs keeping. A head the trunk lacks is still pinned, so an
+// unwritable pin there is still an error, and a storable name is pinned wherever it points.
+func TestPinSkipsAnUnstorableNameForAHeadTheTrunkContains(t *testing.T) {
 	f := newRefusalLoopFixture(t, "item-a")
 	l := f.loop(t, &recordingSteps{}, &itemContentStager{})
 	ctx := context.Background()
 	long := "run-item-a-a1-n1" + strings.Repeat("-failover", 40)
 	trunk := strings.TrimSpace(runGit(t, f.root, "rev-parse", TrunkRef))
 	before := runGit(t, f.root, "for-each-ref")
-	if err := l.pinReleasedHead(ctx, long, trunk); err != nil {
+	if err := l.pin(ctx, long, trunk); err != nil {
 		t.Fatalf("a head on the trunk was refused: %v", err)
 	}
 	if got := runGit(t, f.root, "for-each-ref"); got != before {
-		t.Fatalf("a head on the trunk was pinned: %s", got)
+		t.Fatalf("an unstorable name was pinned: %s", got)
 	}
 	off := strings.TrimSpace(runGit(t, f.root, "commit-tree", trunk+"^{tree}", "-p", trunk, "-m", "off trunk"))
-	if err := l.pinReleasedHead(ctx, long, off); err == nil {
+	if err := l.pin(ctx, long, off); err == nil {
 		t.Fatal("an unwritable pin for a head the trunk lacks was not reported")
 	}
-	if err := l.pinReleasedHead(ctx, "run-item-a-a1-n1", off); err != nil {
+	if err := l.pin(ctx, "run-item-a-a1-n1", trunk); err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.TrimSpace(runGit(t, f.root, "rev-parse", "refs/tillr/runs/run-item-a-a1-n1")); got != off {
-		t.Fatalf("pin = %s, want %s", got, off)
+	if got := strings.TrimSpace(runGit(t, f.root, "rev-parse", "refs/tillr/runs/run-item-a-a1-n1")); got != trunk {
+		t.Fatalf("pin = %s, want %s", got, trunk)
 	}
 }

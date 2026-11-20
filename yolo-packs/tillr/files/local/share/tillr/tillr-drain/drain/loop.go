@@ -2722,30 +2722,32 @@ func (l *Loop) pin(ctx context.Context, runID, sha string) error {
 	// The timeout bounds a wedged git rather than the stop.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), pinTimeout)
 	defer cancel()
+	if l.unpinnableOnTrunk(ctx, runID, sha) {
+		l.reportf("loop: no pin for %s at %s: its name is too long for a ref and the trunk already contains the commit\n", runID, sha)
+		return nil
+	}
 	if _, err := l.git(ctx, l.cfg.Root, "update-ref", "refs/tillr/runs/"+runID, sha); err != nil {
 		return Externalf("pinning refs/tillr/runs/%s at %s: %v", runID, sha, err)
 	}
 	return nil
 }
 
-// pinReleasedHead pins the head a released workflow leaves in its lane, unless the trunk
-// already contains that head. A pin exists to keep a commit reachable, and a commit the
-// trunk holds is reachable without one. Skipping it there is what lets a release finish
-// when the pin itself cannot be written: a run id grown past what a file name holds made
-// `git update-ref` fail on every restart on 2026-11-19, and each failure ended the loop.
-func (l *Loop) pinReleasedHead(ctx context.Context, runID, sha string) error {
-	if runID == "" || sha == "" {
-		return nil
+// maxRefComponent is the longest one path component of a ref name the file system stores:
+// git keeps a loose ref as a file, and a file name holds 255 bytes.
+const maxRefComponent = 255
+
+// unpinnableOnTrunk answers whether a pin may be skipped: the run id is too long to be a
+// ref's file name, and the trunk already contains the commit. A pin exists to keep a commit
+// reachable, and a commit the trunk holds is reachable without one. A run id grown by
+// repeated failover and restart suffixes made `git update-ref` fail on every restart on
+// 2026-11-19, and each failure ended the loop. A head the trunk lacks is still pinned, so
+// an unwritable pin there is still an error.
+func (l *Loop) unpinnableOnTrunk(ctx context.Context, runID, sha string) bool {
+	if len(runID) <= maxRefComponent {
+		return false
 	}
 	held, err := containsCommit(ctx, l.cfg.Root, sha, TrunkRef)
-	if err != nil {
-		return err
-	}
-	if held {
-		l.reportf("loop: no pin for %s at %s: the trunk already contains it\n", runID, sha)
-		return nil
-	}
-	return l.pin(ctx, runID, sha)
+	return err == nil && held
 }
 
 // pinTimeout bounds one pin's `git update-ref`, which survives the loop's stop.
