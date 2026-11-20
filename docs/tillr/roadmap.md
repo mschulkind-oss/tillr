@@ -146,12 +146,16 @@ AutoQA leaves the [Icebox](#icebox).
    workspaces run follows every landing or is refreshed only when it is published. Next because
    it is a cost on every landing but stops nothing.
 
-9. [Criterion repair](../design/criterion-repair.md), one question,
-   [`OQ-CR7`](../design/criterion-repair.md#OQ-CR7): who may replace a criterion's text once a
-   verdict has frozen it. The owner's ruling of 2026-11-17 gave that act to a role that was
-   deleted with the board. The rest of that day's four rulings stands: a replacement carries a
-   required reason, the judge sees both texts, an unsatisfiable criterion is repaired by reopen
-   then supersede, and a supersession refuses a verdict in flight. None of it is built.
+[Criterion repair](../design/criterion-repair.md) left this list on 2026-11-20 once the owner ruled
+[`OQ-CR7`](../design/criterion-repair.md#OQ-CR7): the design seat replaces a frozen criterion's
+text (when a judge closes an item as `defective`, the loop sends it to the design seat to reopen and
+write the replacement and its reason), joining his four rulings of 2026-11-17 (a replacement
+carries a required reason, the judge sees both texts, an unsatisfiable criterion is repaired by
+reopen then supersede, and a supersession refuses a verdict in flight). One designer's decision
+([`OQ-CR4`](../design/criterion-repair.md#OQ-CR4)) and one unattributed settlement
+([`OQ-CR1`](../design/criterion-repair.md#OQ-CR1)) remain marked in
+[its ledger](../design/criterion-repair.md#decision-ledger), and none of criterion supersession is
+built.
 
 [What a lane's agent is told](../design/agent-context-delivery.md#decision-ledger) left this list:
 its two tillr questions are closed as above, and the one it keeps, a startup profile for pi, is
