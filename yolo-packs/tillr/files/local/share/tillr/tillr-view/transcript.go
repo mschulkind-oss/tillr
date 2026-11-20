@@ -90,6 +90,10 @@ const (
 // and this is the absence of any clock at all.
 const stateNoneClock = "no_clock"
 
+// stateUnparsed is the log source's state when the file is present and no line of it was
+// recognized.
+const stateUnparsed = "unparsed"
+
 // runLogPath is the file `tillr-run` redirects the run's harness stream into. It is one
 // spelling in two places (here and the live channel's log watch), because two spellings of
 // a path a reader depends on is how a board watches a file nobody writes.
@@ -328,6 +332,19 @@ type transcriptSource struct {
 	haveClock bool
 	done      bool
 	err       error
+	// calls is when each tool call this walk has read was asked for, by call id, so a Claude
+	// result (which the stream stamps but does not time) can say how long its call took. A
+	// page that resumes after the call has no start to subtract and leaves the duration out.
+	calls map[string]claudeCall
+	// lines and produced count the lines read and the entries they gave, so a log that is
+	// there but that nothing in it is recognized as can say so.
+	lines, produced int
+}
+
+// claudeCall is one Claude tool call as the walk saw it asked for.
+type claudeCall struct {
+	name string
+	at   int64
 }
 
 // advance fills the source's held line until it has an entry to give, and answers whether
@@ -353,6 +370,8 @@ func (s *transcriptSource) advance() bool {
 			continue
 		}
 		s.held = s.parse(raw, s.offset, end)
+		s.lines++
+		s.produced += len(s.held.entries)
 		if s.resumeIndex != 0 {
 			s.held.next = s.resumeIndex
 			s.resumeIndex = 0
@@ -417,6 +436,12 @@ type logEvent struct {
 	ToolName    string          `json:"toolName"`
 	ThresholdMS int64           `json:"thresholdMs"`
 	Notice      string          `json:"notice"`
+
+	// The Claude backend's stream (`claude -p --output-format stream-json`) types a line
+	// `assistant`, `user` or `result` and carries the final tally on the result line.
+	DurationMS    int64 `json:"duration_ms"`
+	DurationAPIMS int64 `json:"duration_api_ms"`
+	NumTurns      int   `json:"num_turns"`
 }
 
 // logMessage is one message of the stream. `content` is a block list on a message a model
@@ -461,6 +486,13 @@ type logBlock struct {
 	ID        string          `json:"id"`
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
+
+	// Claude's spelling of a call (`tool_use`, with `input`) and of its answer
+	// (`tool_result`, linked by `tool_use_id`).
+	Input     json.RawMessage `json:"input"`
+	ToolUseID string          `json:"tool_use_id"`
+	Result    json.RawMessage `json:"content"`
+	IsError   bool            `json:"is_error"`
 }
 
 // procLine is one line of the bash shim's subprocess record. The shim writes the row from
@@ -532,6 +564,20 @@ func (s *transcriptSource) parseLog(raw json.RawMessage, start, end int64) *tran
 		}
 		line.entries = []transcriptEntry{notice(transcriptSourceLog, text, state, clock, have)}
 		return line
+	case "assistant", "user":
+		clock, have, state := s.resolveClock(recorded, recordedOK)
+		line.clock, line.haveClock = clock, have
+		line.entries = s.claudeEntries(&event, clock, have, recorded, recordedOK, state)
+		return line
+	case "result":
+		clock, have, state := s.resolveClock(recorded, recordedOK)
+		line.clock, line.haveClock = clock, have
+		text := fmt.Sprintf("the agent finished: %d turns, %s in all", event.NumTurns, durationText(event.DurationMS))
+		if event.DurationAPIMS > 0 {
+			text += fmt.Sprintf(", of which %s was model time", durationText(event.DurationAPIMS))
+		}
+		line.entries = []transcriptEntry{notice(transcriptSourceLog, text, state, clock, have)}
+		return line
 	case "message_end", "message": // Pi session JSONL and its live stream share message payloads.
 	default:
 		// a streaming delta, a turn boundary, an agent start: the transcript has the
@@ -580,6 +626,78 @@ func (s *transcriptSource) parseLog(raw json.RawMessage, start, end int64) *tran
 		line.entries = []transcriptEntry{entry}
 	}
 	return line
+}
+
+// claudeEntries answers one `assistant` or `user` line of the Claude backend's stream: the
+// model's prose and each tool call it made, and each result that came back, whose duration is
+// the gap between the call's stamp and the result's. Reasoning blocks are empty in this
+// stream and are left out.
+func (s *transcriptSource) claudeEntries(event *logEvent, clock int64, have bool, recorded int64, recordedOK bool, state string) []transcriptEntry {
+	if event.Message == nil {
+		return nil
+	}
+	at := clockPointer(clock, have)
+	var out []transcriptEntry
+	if text := event.Message.Content.Text; text != "" {
+		entry := transcriptEntry{Source: transcriptSourceLog, Kind: entryMessage, Role: event.Type, AtMS: at, EpistemicState: state}
+		entry.body(text)
+		out = append(out, entry)
+	}
+	for _, block := range event.Message.Content.Blocks {
+		switch block.Type {
+		case "text":
+			if block.Text == "" {
+				continue
+			}
+			entry := transcriptEntry{Source: transcriptSourceLog, Kind: entryMessage, Role: event.Type, AtMS: at, EpistemicState: state}
+			entry.body(block.Text)
+			out = append(out, entry)
+		case "tool_use":
+			arguments := string(block.Input)
+			if recordedOK {
+				if s.calls == nil {
+					s.calls = map[string]claudeCall{}
+				}
+				s.calls[block.ID] = claudeCall{name: block.Name, at: recorded}
+			}
+			out = append(out, transcriptEntry{
+				Source: transcriptSourceLog, Kind: entryToolCall, Role: "assistant", AtMS: at,
+				EpistemicState: state, ToolCallID: block.ID, Bytes: len(arguments),
+				Tool: &toolCallView{ID: block.ID, Name: block.Name, Arguments: arguments},
+			})
+		case "tool_result":
+			call, known := s.calls[block.ToolUseID]
+			entry := transcriptEntry{
+				Source: transcriptSourceLog, Kind: entryToolResult, Role: call.name, AtMS: at,
+				EpistemicState: state, ToolCallID: block.ToolUseID,
+			}
+			if block.IsError {
+				isError := true
+				entry.IsError = &isError
+			}
+			if known && recordedOK && recorded > call.at {
+				duration := recorded - call.at
+				entry.DurationMS = &duration
+			}
+			entry.body(claudeResultText(block.Result))
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// claudeResultText is a tool result's text: Claude writes it as a string or as a list of
+// text blocks.
+func claudeResultText(raw json.RawMessage) string {
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text
+	}
+	var blocks []logBlock
+	if err := json.Unmarshal(raw, &blocks); err == nil {
+		return blocksText(blocks)
+	}
+	return ""
 }
 
 // assistantEntries answers a model message's blocks: its prose, its reasoning, and one
@@ -1010,6 +1128,14 @@ func (obs *observations) transcript(run storeRun, query transcriptQuery) transcr
 		walk.keepLast = true
 	}
 	page := walk.run()
+	// a log that is there and was read to its end without one line it recognized is a gap, and
+	// the count says how much was dropped, so it cannot pass for a run that said nothing
+	if log := sources[1]; log.state == statePresent && log.done && log.lines > 0 && log.produced == 0 {
+		out.Sources.Log.State = stateUnparsed
+		out.Sources.Log.Note = fmt.Sprintf("%d lines were read and none was a message, a tool call or a notice this reader knows", log.lines)
+		out.EpistemicState = stateUnobservedSeam
+		out.Note = "the agent's own stream is there but nothing in it could be read as the agent's activity: " + out.Sources.Log.Note
+	}
 	out.Entries = page.entries
 	out.Cursor = page.cursor.encode()
 	out.HasMore = page.hasMore
