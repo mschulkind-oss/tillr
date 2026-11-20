@@ -644,6 +644,13 @@ Never change the worker's candidate.
 		brief += "\n## Evaluator task\n\n" + receipt.EvaluatorTask + "\n"
 	}
 	brief += fmt.Sprintf("\nEvaluator: run=%s; backend=%s; route=%s\n", receipt.Request.RunID, receipt.Request.Backend, receipt.Request.Route())
+	if l.cfg.Store != "" {
+		guidance, err := itemGuidanceBrief(ctx, l.cfg.Store, c.ItemID, c.Worktree)
+		if err != nil {
+			return err
+		}
+		brief += guidance
+	}
 	// A filed request's criteria judge the work against its words, so the judge reads them
 	// too, in the same byte-counted suffix the worker's brief ends with.
 	words, err := requestWordsFor(ctx, l.cfg.Store, c.ItemID)

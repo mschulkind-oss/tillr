@@ -478,7 +478,14 @@ re-runs nothing.
 
 Retry a failed item under its own id with `tillr drain retry`. Read the failed
 run's record, correct the cause, and authorize the retry through that face; learn
-its required inputs from `tillr drain retry --help`. Keep the original item so
+its required inputs from `tillr drain retry --help`. Subsequent worker and judge
+briefs carry the retry reason (with who recorded it and when) under `## Retry reasons`,
+and pair any answered worker owner question with its recorded answer (from
+`tillr drain retry`, a settled document question, or an item-scoped owner decision)
+under `## Answered owner questions` so an answered question is not asked again. For a
+filed request (which has no document block), both an `owner` obstacle and an
+identical-repeat hold name `tillr drain retry` to clear the hold and deliver the answer
+or revised instruction in the next run's brief. Keep the original item so
 its run history and other items' dependencies remain attached to the same id.
 Do not file a replacement item to escape a hold or mark the original resolved
 elsewhere when its intent has not been satisfied.

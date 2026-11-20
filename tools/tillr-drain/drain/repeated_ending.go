@@ -93,7 +93,18 @@ func readRepeatedEnding(r *store.Reader, d Decision) (*secondFailure, error) {
 	if err != nil {
 		return nil, err
 	}
+	isRequest, err := isFiledRequest(r, d.ItemID)
+	if err != nil {
+		return nil, err
+	}
 	text := fmt.Sprintf("%s run %s ended (refused at %s) with the same evidence as run %s, so the worker is not sent it again. Change the instruction the worker builds from — amend the item's block — or object: a design run that commits nothing names its next actor.", IdenticalRepeatPrefix, current, latest.Step, previous)
+	if isRequest {
+		cmd, err := acceptedBuildRetryCommand(r, d.ItemID, current)
+		if err != nil {
+			return nil, err
+		}
+		text = fmt.Sprintf("%s run %s ended (refused at %s) with the same evidence as run %s, so the worker is not sent it again. A filed request has no document block; deliver a revised instruction in the next run's brief with %s (or close the item with tillr item close --item %s).", IdenticalRepeatPrefix, current, latest.Step, previous, cmd, d.ItemID)
+	}
 	for _, id := range []string{previous, current} {
 		rec, err := terminalRecord(r, id)
 		if err != nil {
@@ -210,7 +221,21 @@ func recordSecondFailure(tx *store.Tx, sf *secondFailure, at time.Time) error {
 	// cannot amend the item. Keep the evidence in an explicit owner hold.
 	if ref == "" {
 		c.Status, c.WaitingOn = "owner", "owner"
-		c.Text += "\n\nNo item block reference is recorded; the owner must supply one before a design amendment."
+		isRequest, err := isFiledRequest(tx.Reader(), sf.itemID)
+		if err != nil {
+			return err
+		}
+		if isRequest {
+			if !strings.Contains(c.Text, "tillr drain retry") {
+				cmd, err := acceptedBuildRetryCommand(tx.Reader(), sf.itemID, sf.current)
+				if err != nil {
+					return err
+				}
+				c.Text += "\n\nThis item is a filed request with no document block; clear the hold and deliver a revised instruction in the next run's brief with: " + cmd
+			}
+		} else {
+			c.Text += "\n\nNo item block reference is recorded; the owner must supply one before a design amendment."
+		}
 	} else if sf.noDesignSeat {
 		// A design conflict with no design seat would be a policy refusal that stops the loop
 		// for every item. The loop never stops on one item's condition: the repeat waits on

@@ -426,6 +426,7 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 				}
 				if d.Reason == ReasonConflictOwner {
 					c := conflicts[it.ItemID]
+					isReq, _ := isFiledRequest(r, it.ItemID)
 					switch {
 					case IsGeneratedItem(it.ItemID):
 						// A generated item never has a document, so it is never triaged for one: it
@@ -438,6 +439,20 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 							row.Why += ": run " + c.RunID + "'s report names the owner as its next actor (conflict " + c.ConflictID + ")"
 						}
 						row.Mover = "answer conflict " + c.ConflictID + ", or close the item (tillr item close --item " + it.ItemID + ")"
+					case isReq:
+						cmd, cmdErr := acceptedBuildRetryCommand(r, it.ItemID, c.RunID)
+						if cmdErr != nil {
+							cmd = retryCommand(it.ItemID, c.RunID, "")
+						}
+						if obs := parseObstacle(workerConflictReport(c.Text)); obs.Kind == ObstacleOwner && obs.Field("QUESTION") != "" {
+							actor = "owner"
+							row.Why += ": " + collapseSingleLine(obs.Field("QUESTION"))
+							row.Mover = "answer with " + cmd + ", or close the item (tillr item close --item " + it.ItemID + ")"
+						} else {
+							actor = "operator"
+							row.Why += ": " + firstParagraph(c.Text)
+							row.Mover = "deliver a revised instruction with " + cmd + ", or close the item (tillr item close --item " + it.ItemID + ")"
+						}
 					case c.BodyRef == "":
 						actor, row.Why = "operator", row.Why+": no document exists; name or triage one for "+it.ItemID
 						row.Mover = "name or triage the item's document"

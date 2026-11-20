@@ -678,6 +678,27 @@ def test_preflight(workspace):
                 not (lane / "stream.err").exists(),
                 f"{backend}: a refused dispatch left a stream.err",
             )
+        lane = workspace.lane()
+        (lane / "brief.md").write_text(
+            filled_brief(lane)
+            + "\n## Answered owner questions\n\n"
+            + "- **Question** (run `run_6`):\n"
+            + "> Should `{{PLACEHOLDER}}` stay literal?\n\n"
+            + "  **Answer** (by `owner` at `2026-11-19T14:22:00Z`; tillr drain retry on run_6):\n"
+            + "> Keep `[]row{{ID: 1}}` literal.\n"
+            + "\n## Retry reasons\n\n"
+            + "- **Retry of `run_6`** (by `matt` at `2026-11-19T14:25:00Z`):\n"
+            + "> Preserve `{{PLACEHOLDER}}` inside tests.\n"
+        )
+        workspace.log.write_text("")
+        ok_args = ["--backend", backend, "--model", "fixture-model-x"] + (
+            ["--effort", "medium"] if backend != "agy" else []
+        )
+        result = workspace.invoke(backend, lane, *ok_args)
+        check(
+            result.returncode == 0,
+            f"{backend}: blockquoted braces in recorded sections exited {result.returncode}: {result.stderr}",
+        )
 
 
 def test_fixture_does_not_inherit_resume_prompt(workspace):

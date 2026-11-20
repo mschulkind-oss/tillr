@@ -119,6 +119,8 @@ type RetryRequest struct {
 type retryRow struct {
 	RetryID         string
 	SupersedesRunID string
+	RequestedBy     string
+	Reason          string
 	RequestedAt     time.Time
 	// Acknowledge is the outcome the authorization's `drain.retry.ack` event names, or
 	// "" when the authorization made no acknowledgment.
@@ -298,7 +300,23 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 	// in the queue, and the frozen state is transitionable out through SetState. A blocked
 	// or already queued item is left as it is, because its own state is a fact a retry does
 	// not rewrite.
-	if state == StateInProgress {
+	releaseOwnerHold := false
+	if state == StateBlocked {
+		conflicts, err := item.ReadConflicts(tx.Reader())
+		if err != nil {
+			return Retry{}, readFailure(err)
+		}
+		if c, ok := conflicts[req.ItemID]; ok && c.Status == "owner" && c.DesignRunID == "" && c.TriageVersion == "" {
+			releaseOwnerHold = true
+			var callID string
+			if err := tx.Reader().QueryRow(`SELECT COALESCE(object_id, '') FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=? ORDER BY seq DESC LIMIT 1`, callOffered, c.RunID).Scan(&callID); err == nil && callID != "" {
+				if err := projectLandingCall(tx, callID, "", "superseded", at); err != nil {
+					return Retry{}, Internalf("closing open call %q on %q: %v", callID, c.RunID, err)
+				}
+			}
+		}
+	}
+	if state == StateInProgress || releaseOwnerHold {
 		if _, err := item.SetState(ctx, tx, req.ItemID, StateInQueue, at); err != nil {
 			return Retry{}, Internalf("moving item %q back to the queue: %v", req.ItemID, err)
 		}
@@ -346,7 +364,7 @@ func readRetries(r *store.Reader) (map[string]retryRow, error) {
 	// insertion row number (rowid) preserves that order; the id's attempt spelling
 	// does not (an authorization for a10 sorts before one for a9).
 	rows, err := r.Query(
-		`SELECT retry_id, item_id, supersedes_run_id, requested_at
+		`SELECT retry_id, item_id, supersedes_run_id, requested_by, reason, requested_at
 		   FROM retries ORDER BY requested_at, rowid`)
 	if err != nil {
 		if strings.Contains(err.Error(), "no such table: retries") {
@@ -362,7 +380,7 @@ func readRetries(r *store.Reader) (map[string]retryRow, error) {
 			requestedAt int64
 			row         retryRow
 		)
-		if err := rows.Scan(&row.RetryID, &itemID, &row.SupersedesRunID, &requestedAt); err != nil {
+		if err := rows.Scan(&row.RetryID, &itemID, &row.SupersedesRunID, &row.RequestedBy, &row.Reason, &requestedAt); err != nil {
 			return nil, readFailure(err)
 		}
 		row.RequestedAt = time.UnixMilli(requestedAt).UTC()
