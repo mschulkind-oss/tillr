@@ -231,3 +231,23 @@ func obstacleDesignInstruction(o Obstacle) string {
 	}
 	return ""
 }
+
+// requestObstacleDesignInstruction is what the design seat is told to do with a worker's
+// obstacle on a filed request, by kind, or "" for a report that names none. A filed
+// request has no item block, and the design seat must never add one: it answers in the
+// design documents under docs/, or objects.
+func requestObstacleDesignInstruction(o Obstacle) string {
+	const noBlock = " The item is a filed request and has no item block: do not add, edit or remove a `<!-- tillr: item … -->` comment."
+	object := " Otherwise object with `" + DesignNextActorField + ": build` (the request stands as written) or `" + DesignNextActorField + ": owner` (only the owner can rule)."
+	switch o.Kind {
+	case ObstacleDefinition:
+		return "The worker named a definition obstacle: the request's words amend or overturn a decision, or contradict the tree. Update the design document's decision ledger under docs/ so the recorded decision matches the request." + noBlock + object
+	case ObstacleFence:
+		return "The worker named a fence obstacle: the change needs " + strings.Join(o.List("PATHS"), ", ") + ", outside the request's fence. Answer in docs/ with what the build may touch." + noBlock + object
+	case ObstacleOwner:
+		return "The worker named an owner obstacle, asking: " + o.Field("QUESTION") + " Answer it in the design documents under docs/ when they settle it." + noBlock + " If only the owner can rule, object with `" + DesignNextActorField + ": owner` and write the question in your report, where the owner reads it."
+	case ObstacleSeat:
+		return "The worker named a seat obstacle on the last backend the build seat escalates to. Tried: " + o.Field("TRIED") + " Missing: " + o.Field("MISSING") + " Write the plan the worker lacks into the design documents under docs/." + noBlock + object
+	}
+	return ""
+}

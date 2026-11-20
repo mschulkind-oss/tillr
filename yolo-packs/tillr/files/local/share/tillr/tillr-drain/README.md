@@ -364,6 +364,10 @@ refusals leave the old graph intact. An unmapped seat records
 [`config/tillr/plan-guidance.md`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/plan-guidance.md) when present.
 If a piece needs a design decision, the planner proposes nothing and reports an
 `owner` obstacle with its specific question; the design seat receives the conflict.
+When the request's words amend or overturn a decision recorded in a design document's
+ledger, the planner writes neither `do-it-now` nor a proposal and ends with a
+`definition` obstacle naming the document and decision so the item routes to the
+design seat to update the document before any build.
 The verifier asks for `node:<id>` evidence for each covered criterion and a
 `not-done` reason beginning `uncovered:` for each uncovered one. The judge intake
 does not enforce the node locator; the verifier makes that judgment. Document-declared
@@ -446,7 +450,10 @@ Completion is the normal gate and landing, plus whatever the workflow's own veri
 judge stage decides. `planned-build@v1`, the default workflow for `build` requests, has a
 `verify` evaluator, so the item waits as `judge-grant-absent` until an unexpired grant
 covers its criteria, which are all `verification-only`. `scouted-design@v1`, the default
-workflow for `design` requests, and `single-worker@v1` need no grant.
+workflow for `design` requests, and `single-worker@v1` need no grant. When a filed
+request raises an obstacle for the design seat, its design-answer run is fenced to
+`docs/`, updates the relevant design document without adding an item block (or objects
+with `NEXT-ACTOR`), and returns the request to its workflow once the answer lands.
 
 `write_scope` is either `"inherit"` (also the default) or a nonempty list of
 path prefixes. Every writing node inside a containing stage inherits its scope

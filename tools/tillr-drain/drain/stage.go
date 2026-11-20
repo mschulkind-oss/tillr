@@ -366,8 +366,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		return err
 	}
 	if spec.BlockConflict != nil {
-		file, _, _ := strings.Cut(spec.BlockConflict.BodyRef, "#")
-		recorded.AllowedPaths = []string{file}
+		recorded.AllowedPaths = blockConflictPaths(recorded, *spec.BlockConflict)
 	}
 	fork, isFork, err := forkTarget(s.Root, spec.LaneID, recorded.AllowedPaths)
 	if err != nil {
@@ -691,6 +690,7 @@ type stagedItem struct {
 	ItemID       string   `json:"item_id"`
 	Title        string   `json:"title"`
 	BodyRef      string   `json:"body_ref"`
+	DesignDoc    string   `json:"design_doc"`
 	Seat         string   `json:"seat"`
 	Workflow     string   `json:"workflow"`
 	AllowedPaths []string `json:"allowed_paths"`
@@ -698,6 +698,43 @@ type stagedItem struct {
 		CriterionID string `json:"criterion_id"`
 		Text        string `json:"text"`
 	} `json:"criteria"`
+}
+
+// docsDocumentPattern finds a design document path in a worker's report.
+var docsDocumentPattern = regexp.MustCompile(`docs/[A-Za-z0-9._/-]+\.md`)
+
+// blockConflictPaths is the fence of a design run answering a block conflict. A triage run
+// writes its one document. A filed request has no item block, so its design run may update
+// the design documents under docs/. Any other conflict allows the item's own document,
+// plus the item's design document and, for a definition obstacle, a design document the
+// worker's report names, because the obstacle may be a decision recorded there.
+func blockConflictPaths(recorded stagedItem, c item.Conflict) []string {
+	file, _, _ := strings.Cut(c.BodyRef, "#")
+	if c.TriageVersion != "" {
+		return []string{file}
+	}
+	if c.BodyRef == "" {
+		return []string{"docs/"}
+	}
+	paths := []string{file}
+	add := func(p string) {
+		if p == "" {
+			return
+		}
+		for _, have := range paths {
+			if have == p {
+				return
+			}
+		}
+		paths = append(paths, p)
+	}
+	add(triageDocument(recorded.DesignDoc))
+	if parseObstacle(c.Text).Kind == ObstacleDefinition {
+		for _, match := range docsDocumentPattern.FindAllString(c.Text, -1) {
+			add(triageDocument(match))
+		}
+	}
+	return paths
 }
 
 // readItem answers one item's staged fields. The store is opened read-only: staging reads
@@ -1267,7 +1304,20 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 			criteria = requestCriteria
 			settled = "Document-fed workflow prerequisite: an item needs a document block before it is built. This is its one triage run for this request version."
 		}
-		settled += " For a real owner decision, state the question as a sentence ending in a question mark and give at least two bulleted or numbered alternatives under an Options heading in the report. Settlement preserves that question and those options in a numbered Vantage question beneath the item's block, gated like a design ruling. A stale lane base is a staging fault, not an owner decision; report the missing base fact without inventing options."
+		if c.TriageVersion == "" && c.BodyRef == "" {
+			// A filed request has no item block, and the design seat must never add one.
+			task = fmt.Sprintf("Answer conflict %s raised by run %s against a filed request. Your brief is the complete conflict record at %s, and the request's words are saved in the item's request record. Read both before editing. Update the design document under docs/ that the request reaches, including its decision ledger, so the recorded decision matches the request. Do not add, edit or remove any `<!-- tillr: item … -->` comment, and do not implement the build work.", c.ConflictID, c.RunID, filepath.Join(filepath.Dir(target), "conflict.json"))
+			criteria = "The design document under docs/ is updated, decision ledger included, to answer the recorded conflict. No item block is added, edited or removed."
+			settled = strings.Replace(settled, "when the block stands as written", "when the request stands as written", 1)
+		} else if c.TriageVersion == "" && len(recorded.AllowedPaths) > 1 {
+			task = fmt.Sprintf("Answer conflict %s raised by run %s against %s. Your brief is the complete conflict record at %s. Read it before editing. Amend the item's block, or the design document under docs/ that the conflict names, so it answers the conflict; do not implement the original work.", c.ConflictID, c.RunID, c.BodyRef, filepath.Join(filepath.Dir(target), "conflict.json"))
+			criteria = "The item's block or the named design document is amended to answer the recorded conflict. Leave the block's directive and item identity intact."
+		}
+		question := " Settlement preserves that question and those options in a numbered Vantage question beneath the item's block, gated like a design ruling."
+		if c.BodyRef == "" {
+			question = ""
+		}
+		settled += " For a real owner decision, state the question as a sentence ending in a question mark and give at least two bulleted or numbered alternatives under an Options heading in the report." + question + " A stale lane base is a staging fault, not an owner decision; report the missing base fact without inventing options."
 	}
 	if carriesDesignDocumentRule(stagedSeat(recorded, spec)) {
 		settled += "\n\n" + DesignDocumentRule

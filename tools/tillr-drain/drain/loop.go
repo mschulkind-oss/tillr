@@ -2366,9 +2366,15 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	}
 	if candidate.BlockConflict != nil {
 		triage := candidate.BlockConflict.TriageVersion != ""
-		exists, answered, err := l.designBlockAnswer(ctx, candidate, ref)
-		if err != nil {
-			return "", false, err
+		exists, answered := true, false
+		if !triage && ref == "" {
+			// A filed request has no item block to compare: a commit is the answer.
+			answered = candidate.HeadSHA != candidate.BaseSHA
+		} else {
+			var err error
+			if exists, answered, err = l.designBlockAnswer(ctx, candidate, ref); err != nil {
+				return "", false, err
+			}
 		}
 		if !exists && triage {
 			c := *candidate.BlockConflict

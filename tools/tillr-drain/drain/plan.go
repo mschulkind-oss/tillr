@@ -464,7 +464,11 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_runs')`).Scan(&hasNodes); err != nil {
 		return nil, readFailure(err)
 	}
-	attempts := map[string]int{}
+	requests, err := readRequestIDs(r)
+	if err != nil {
+		return nil, readFailure(err)
+	}
+	attempts, nodeCounts := map[string]int{}, map[string]int{}
 	for _, row := range items {
 		var count int
 		if hasNodes {
@@ -472,11 +476,31 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 				return nil, readFailure(err)
 			}
 		}
-		if count > 0 {
-			attempts[row.ItemID] = count + 1
-		} else {
-			attempts[row.ItemID] = len(priors[row.ItemID]) + 1
+		nodeCounts[row.ItemID] = count
+		// A run that is not a node run (a design run for a block conflict is named
+		// run-<item>-a<N>) still holds its ordinal, so the next attempt is past it.
+		maxAttempt := count
+		for _, prior := range priors[row.ItemID] {
+			if n := attemptFromRunID(row.ItemID, prior.RunID); n > maxAttempt {
+				maxAttempt = n
+			}
 		}
+		ids, err := readRunIDs(r, row.ItemID)
+		if err != nil {
+			return nil, readFailure(err)
+		}
+		for _, id := range ids {
+			if n := attemptFromRunID(row.ItemID, id); n > maxAttempt {
+				maxAttempt = n
+			}
+		}
+		next := maxAttempt + 1
+		if count == 0 && len(priors[row.ItemID])+1 > next {
+			// With no node runs the count of prior runs is the ordinal, as it always was;
+			// a run id ordinal can only move it further.
+			next = len(priors[row.ItemID]) + 1
+		}
+		attempts[row.ItemID] = next
 	}
 	faults, err := ReadItemFaults(r)
 	if err != nil {
@@ -507,7 +531,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			priors: attemptPriors, retries: retries, classes: classes, latest: latest, questions: questions,
 			trunkWaiters: trunkWaiters, defectWaiters: defectWaiters, escalated: escalated,
 			at: at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items, def), unproved: unproved,
-			designHistory: designHistory, inputs: inputs, inputDecisions: inputDecisions, works: works, attempts: attempts,
+			designHistory: designHistory, inputs: inputs, inputDecisions: inputDecisions, works: works, attempts: attempts, nodeCounts: nodeCounts, requests: requests,
 		}
 		p.workerLanes = map[string]string{}
 		for _, row := range items {
@@ -681,6 +705,9 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			reusedFrom := 0
 			if _, retrying := retries[item.ItemID]; retrying && !retainedGraph && w != nil && loadErr == nil && hasNodes {
 				reusedFrom = p.nextAttempt(item.ItemID) - 1
+				if n := p.nodeCounts[item.ItemID]; n > 0 {
+					reusedFrom = n
+				}
 				resumeNode, reused, err = retainedReaders(r, item.ItemID, reusedFrom, w)
 				if err != nil {
 					return nil, nil, readFailure(err)
@@ -735,13 +762,15 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 						decision.WorkerSessionReason = "workflow-restarted"
 					}
 				}
-				decision.SelectedWorkflow, decision.WorkflowSource = selected, source
+				if decision.BlockConflict == nil {
+					decision.SelectedWorkflow, decision.WorkflowSource = selected, source
+				}
 				if len(reused) > 0 && decision.Action == ActionRetry {
 					decision.ReusedNodes, decision.ReusedAttempt = reused, reusedFrom
 				} else if len(reused) > 0 {
 					resumeNode = 0
 				}
-				if w != nil && decision.RunRequest != nil {
+				if w != nil && decision.RunRequest != nil && decision.BlockConflict == nil {
 					decision.Workflow = w
 					decision.NodeIndex = resumeNode
 					if decision.RunRequest.SessionTurn && decision.Returned.WorkerSession.Workflow != nil {
@@ -805,7 +834,11 @@ type planner struct {
 	commentHolds map[string]string
 	documentRoot string
 	attempts     map[string]int
-	shut         map[string]bool
+	// nodeCounts is each item's highest node-run attempt, which an operator retry reuses.
+	nodeCounts map[string]int
+	// requests holds the ids of filed requests, which have no item block.
+	requests map[string]bool
+	shut     map[string]bool
 	// quotaShut leaves out backends closed by an infrastructure ending: a retry
 	// the owner authorized is the one dispatch that may go to one.
 	quotaShut      map[string]bool
@@ -1578,6 +1611,64 @@ func (p *planner) nextAttempt(id string) int {
 		return n
 	}
 	return len(p.priors[id]) + 1
+}
+
+// attemptFromRunID answers the attempt N of `run-<item>-a<N>` or `run-<item>-a<N>-n<K>`,
+// or 0 for any other run id.
+func attemptFromRunID(itemID, runID string) int {
+	rest, ok := strings.CutPrefix(runID, "run-"+itemID+"-a")
+	if !ok {
+		return 0
+	}
+	digits := rest
+	if i := strings.IndexByte(rest, '-'); i >= 0 {
+		digits = rest[:i]
+	}
+	n, err := strconv.Atoi(digits)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// readRunIDs answers every run id the store holds for one item.
+func readRunIDs(r *store.Reader, itemID string) ([]string, error) {
+	rows, err := r.Query(`SELECT run_id FROM runs WHERE item_id = ?`, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+// readRequestIDs answers the ids of filed requests, which have no item block.
+func readRequestIDs(r *store.Reader) (map[string]bool, error) {
+	out := map[string]bool{}
+	var present int
+	if err := r.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='request_words'`).Scan(&present); err != nil || present == 0 {
+		return out, err
+	}
+	rows, err := r.Query(`SELECT item_id FROM request_words`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
 }
 
 // attemptRunID names one item's ordinal attempt, including terminal failover runs.

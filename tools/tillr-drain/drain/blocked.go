@@ -65,7 +65,7 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 		d.Reason = ReasonNoPolicy
 	case len(p.policy.seatList("design")) == 0:
 		d.Reason = ReasonNoPolicy
-	case c.BodyRef == "":
+	case c.BodyRef == "" && !p.requests[row.ItemID]:
 		d.Reason = ReasonConflictOwner
 	default:
 		// Unlike ordinary failover, a single design backend must not spill
@@ -325,6 +325,13 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 			c.WaitingOn, c.Status = "build", "answered"
 			c.Text += "\n\n" + GeneratedRepairRule
 		}
+	} else if isRequest && l.cfg.Policy != nil && len(l.cfg.Policy.seatList("design")) > 0 {
+		// A filed request has no item block, so the design seat answers in docs/ and never
+		// adds one (requestObstacleDesignInstruction). When policy maps no design seat,
+		// fall through to the owner hold rather than faulting the loop on no-policy.
+		if instruction := requestObstacleDesignInstruction(obstacle); obstacle.Problem == "" && instruction != "" {
+			c.Text += "\n\n" + instruction
+		}
 	} else if c.BodyRef == "" {
 		c.WaitingOn, c.Status = "owner", "owner"
 		if isRequest {
@@ -432,9 +439,14 @@ func (l *Loop) recordBlockAnswerThen(ctx context.Context, candidate Candidate, t
 		blockID = original
 	}
 	file, _, _ := strings.Cut(c.BodyRef, "#")
-	raw, err := l.git(ctx, l.cfg.Root, "show", TrunkRef+":"+file)
-	if err != nil {
-		return err
+	// A filed request has no item block (validateRequest refused any touch of one before the
+	// gate), so there is no document to read or sync for its answer.
+	var raw string
+	if file != "" {
+		var err error
+		if raw, err = l.git(ctx, l.cfg.Root, "show", TrunkRef+":"+file); err != nil {
+			return err
+		}
 	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
@@ -446,33 +458,10 @@ func (l *Loop) recordBlockAnswerThen(ctx context.Context, candidate Candidate, t
 		if err := refuseTerminalItem(tx.Reader(), c.ItemID, "conflict-answer"); err != nil {
 			return err
 		}
-		report, err := item.Sync(ctx, tx.Reader(), tx, item.SyncInput{Root: l.cfg.Root, Partial: true, Documents: []item.SyncDocument{{Path: file, Content: []byte(raw)}}, At: l.cfg.Now().UTC()})
-		if err != nil {
-			return err
-		}
-		// A finding skips the whole file, so it fails this answer whichever item it names;
-		// a frozen definition is that item's alone, and another item's frozen block in the
-		// same document is no reason to refuse this one (item-heavy-revert-time-to-verdict
-		// was held on 2026-11-18 for a sibling's frozen block).
-		frozen := false
-		for _, n := range report.Frozen {
-			if n.ItemID == blockID {
-				frozen = true
+		if file != "" {
+			if err := l.syncAnswerBlock(ctx, tx, c, blockID, file, raw); err != nil {
+				return err
 			}
-		}
-		if len(report.Findings) != 0 || frozen {
-			return &answerDefinitionError{detail: fmt.Sprintf("landed conflict answer %s could not sync its definition: %s", c.ConflictID, mustJSON(report))}
-		}
-		found := false
-		for _, ids := range [][]string{report.Created, report.Updated, report.Unchanged} {
-			for _, id := range ids {
-				if id == blockID {
-					found = true
-				}
-			}
-		}
-		if !found {
-			return &answerDefinitionError{detail: fmt.Sprintf("landed conflict answer %s does not declare item %s in %s", c.ConflictID, blockID, file)}
 		}
 		if c.QuestionRef != "" {
 			c.QuestionHead, c.AnswerHead = candidate.HeadSHA, ""
@@ -491,7 +480,10 @@ func (l *Loop) recordBlockAnswerThen(ctx context.Context, candidate Candidate, t
 			if offeredCall && (strings.HasPrefix(c.Text, IdenticalRepeatPrefix) || isObstacleCallRun(tx.Reader(), c.RunID)) {
 				design := candidate
 				design.RunID = c.RunID
-				detail := fmt.Sprintf("Design answer commit: %s\n%s", candidate.HeadSHA, item.DefinitionBodyContent(c.BodyRef, blockID, []byte(raw)))
+				detail := fmt.Sprintf("Design answer commit: %s", candidate.HeadSHA)
+				if file != "" {
+					detail += "\n" + item.DefinitionBodyContent(c.BodyRef, blockID, []byte(raw))
+				}
 				if err := l.answerLandingRefusal(tx, design, refusalPayload{Step: IdenticalRepeatPrefix, Detail: detail}, refusalEvidence{}, l.cfg.Now().UTC()); err != nil {
 					return err
 				}
@@ -502,6 +494,40 @@ func (l *Loop) recordBlockAnswerThen(ctx context.Context, candidate Candidate, t
 		}
 		return nil
 	})
+}
+
+// syncAnswerBlock syncs the landed document and refuses an answer whose document does not
+// declare the item as the trunk now holds it.
+func (l *Loop) syncAnswerBlock(ctx context.Context, tx *store.Tx, c item.Conflict, blockID, file, raw string) error {
+	report, err := item.Sync(ctx, tx.Reader(), tx, item.SyncInput{Root: l.cfg.Root, Partial: true, Documents: []item.SyncDocument{{Path: file, Content: []byte(raw)}}, At: l.cfg.Now().UTC()})
+	if err != nil {
+		return err
+	}
+	// A finding skips the whole file, so it fails this answer whichever item it names;
+	// a frozen definition is that item's alone, and another item's frozen block in the
+	// same document is no reason to refuse this one (item-heavy-revert-time-to-verdict
+	// was held on 2026-11-18 for a sibling's frozen block).
+	frozen := false
+	for _, n := range report.Frozen {
+		if n.ItemID == blockID {
+			frozen = true
+		}
+	}
+	if len(report.Findings) != 0 || frozen {
+		return &answerDefinitionError{detail: fmt.Sprintf("landed conflict answer %s could not sync its definition: %s", c.ConflictID, mustJSON(report))}
+	}
+	found := false
+	for _, ids := range [][]string{report.Created, report.Updated, report.Unchanged} {
+		for _, id := range ids {
+			if id == blockID {
+				found = true
+			}
+		}
+	}
+	if !found {
+		return &answerDefinitionError{detail: fmt.Sprintf("landed conflict answer %s does not declare item %s in %s", c.ConflictID, blockID, file)}
+	}
+	return nil
 }
 
 func isObstacleCallRun(r *store.Reader, runID string) bool {
