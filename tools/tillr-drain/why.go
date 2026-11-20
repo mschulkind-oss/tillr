@@ -10,12 +10,14 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
 	"github.com/mschulkind-oss/tillr-drain/heavy"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
@@ -131,6 +133,7 @@ func whyFace(args []string) int {
 	}); err != nil {
 		return fail(err)
 	}
+	answer.Trunk, answer.TrunkLine = whyTrunk(ctx, *root, *path, answer.Definition, tick.Now)
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
@@ -148,6 +151,9 @@ func whyFace(args []string) int {
 					fmt.Println(answer.Summary.String())
 					if rewriteNote != "" {
 						fmt.Println(rewriteNote)
+					}
+					if answer.TrunkLine != "" {
+						fmt.Println(answer.TrunkLine)
 					}
 				}
 				return record.ExitOK
@@ -178,6 +184,9 @@ func whyFace(args []string) int {
 		if err == nil && rewriteNote != "" {
 			_, err = fmt.Fprintln(os.Stdout, rewriteNote)
 		}
+		if err == nil && answer.TrunkLine != "" {
+			_, err = fmt.Fprintln(os.Stdout, answer.TrunkLine)
+		}
 		if err == nil {
 			_, err = io.Copy(os.Stdout, &costs)
 		}
@@ -186,6 +195,31 @@ func whyFace(args []string) int {
 		return fail(drain.Externalf("writing why: %v", err))
 	}
 	return record.ExitOK
+}
+
+// whyTrunk reads the trunk's proof and answers it only when the trunk is unproved. A root
+// with no repository, a store that is not the git-landing definition, and a repository
+// with no proof surface yet all say nothing: record-only fixtures have no trunk to prove.
+func whyTrunk(ctx context.Context, root, storePath, def, now string) (*heavy.HeavyStatus, string) {
+	if def != definition.GitLandingName {
+		return nil, ""
+	}
+	if _, err := os.Stat(filepath.Join(root, ".git")); err != nil {
+		return nil, ""
+	}
+	status, err := heavy.ReadStatus(ctx, root, storePath)
+	if err != nil || status.GreenCommit == "" && status.Result == "unjudged" {
+		return nil, ""
+	}
+	at, err := time.Parse(time.RFC3339, now)
+	if err != nil {
+		at = time.Now().UTC()
+	}
+	line := heavy.UnprovedLine(status, at)
+	if line == "" {
+		return nil, ""
+	}
+	return &status, line
 }
 
 // whyLanes answers the lanes `why --lanes` offers. A bare count is the loop's own --lanes

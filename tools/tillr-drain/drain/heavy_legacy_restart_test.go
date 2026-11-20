@@ -10,14 +10,19 @@ import (
 )
 
 func TestHeavyLegacyRestartPreservesPlannerSchedulerAndCompletedProof(t *testing.T) {
-	testHeavyLegacyRestart(t, false)
+	testHeavyLegacyRestart(t, false, false)
+}
+
+// The tip advances by a commit that changes no file; the completed check still stands.
+func TestHeavyLegacyRestartCarriesPassAcrossAnUnchangedTipAdvance(t *testing.T) {
+	testHeavyLegacyRestart(t, false, true)
 }
 
 func TestHeavyLegacyRestartReusesSuccessfulStallRetry(t *testing.T) {
-	testHeavyLegacyRestart(t, true)
+	testHeavyLegacyRestart(t, true, false)
 }
 
-func testHeavyLegacyRestart(t *testing.T, stalled bool) {
+func testHeavyLegacyRestart(t *testing.T, stalled, advance bool) {
 	t.Helper()
 	root, _ := heavyRepo(t)
 	work := scratchUnderDurable(t)
@@ -103,10 +108,13 @@ if __name__ == "__main__":
 		if err != nil {
 			t.Fatal(err)
 		}
-		p, err := loadHeavyProgress(dir, tip)
+		p, err := loadHeavyProgress(context.Background(), root, dir, tip)
 		if err != nil || p.Checks["fixture/a"].Result != "pass" {
 			t.Fatalf("retry not saved before b: %+v %v", p, err)
 		}
+	}
+	if advance {
+		heavyGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "--allow-empty", "-qm", "no file changes")
 	}
 	// A fresh ProcessSteps must recover from disk, not its replay-selector map.
 	steps = &ProcessSteps{Root: root, LaneRoot: work, RollingProgram: steps.RollingProgram, ReplayProgram: steps.ReplayProgram}

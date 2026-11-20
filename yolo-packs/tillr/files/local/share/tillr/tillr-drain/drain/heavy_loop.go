@@ -125,9 +125,10 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			if len(out.Runs) > 0 {
 				attempted = out.Runs[len(out.Runs)-1].TipSHA
 			}
-			// Losing the lock or waiting on an unconfirmed supervisor is not a judgment and
-			// must not consume this tip's trigger.
-			if !out.Busy && !errors.Is(err, errRestartPending) && !cleanupLost(err) {
+			// Only a completed run consumes this tip's trigger. Losing the lock, waiting on an
+			// unconfirmed supervisor, or a fault with no verdict is not a judgment: the next
+			// pass retries, so refs/tillr/green is not left unproved by a silenced tip.
+			if !out.Busy && err == nil {
 				l.heavyAttempted = attempted
 			}
 			// A trigger arriving after the runner's final tip read still owes work. Do not
@@ -149,7 +150,7 @@ func (l *Loop) heavyInFlight() bool {
 	return l.heavyRunning
 }
 func heavyStatusLine(status HeavyStatus) string {
-	return fmt.Sprintf("green=%s proved_age=%s landings_since=%d heavy=%s unavailable=%s", shortSHA(status.GreenCommit), heavy.ProofAge(status, time.Now()), status.LandingsSince, status.Result, strings.Join(heavyIDs(status.UnavailableChecks), ","))
+	return fmt.Sprintf("green=%s proved_age=%s landings_since=%d heavy=%s unavailable=%s failing=%s", shortSHA(status.GreenCommit), heavy.ProofAge(status, time.Now()), status.LandingsSince, status.Result, strings.Join(heavyIDs(status.UnavailableChecks), ","), strings.Join(heavyIDs(status.FailingChecks), ","))
 }
 func heavyIDs(checks []HeavyCheck) []string {
 	ids := []string{}

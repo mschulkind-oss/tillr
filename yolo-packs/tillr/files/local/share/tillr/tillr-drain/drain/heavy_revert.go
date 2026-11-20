@@ -93,6 +93,9 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 		return RevertOutcome{}, err
 	}
 	if !found {
+		if m, rebased, rerr := rebasedLanding(ctx, l.cfg.Root, l.cfg.Store, landing, tip); rerr == nil && rebased {
+			return refuse(rebaseNote(landing, m))
+		}
 		return refuse("no landing record names commit " + landing)
 	}
 	record.ItemID, record.RunID = of.itemID, of.runID

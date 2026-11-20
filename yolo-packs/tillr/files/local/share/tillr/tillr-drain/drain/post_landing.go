@@ -105,6 +105,7 @@ func (l *Loop) afterLandingCandidate(ctx context.Context, candidate Candidate, t
 	}
 	changed, err := actionCommand(ctx, l.cfg.Root, "git", "diff-tree", "--no-commit-id", "--name-only", "--no-renames", "-r", "-z", tip+"^", tip, "--")
 	if err != nil {
+		l.reportRollFailure(tip, "", err)
 		l.recordAction(ctx, "roll", tip, err)
 		return
 	}
@@ -118,6 +119,7 @@ func (l *Loop) afterLandingCandidate(ctx context.Context, candidate Candidate, t
 					}
 				}
 			}
+			l.reportRollFailure(tip, "", err)
 			l.recordAction(ctx, "roll", tip, err)
 		})
 	}
@@ -129,8 +131,22 @@ func (l *Loop) afterLandingCandidate(ctx context.Context, candidate Candidate, t
 func (l *Loop) submitPiRoll(ctx context.Context, command, tip string) {
 	l.piRollAction.submit(tip, func(tip string) {
 		_, err := actionCommand(ctx, l.cfg.Root, "sh", "-c", command+" --pi")
+		l.reportRollFailure(tip, "pi", err)
 		l.recordActionWhat(ctx, "roll", "pi", tip, err)
 	})
+}
+
+// reportRollFailure puts a failed post-landing roll in the loop's report, as recordPush does
+// for a push: the stored event alone is read only by whoever asks for it.
+func (l *Loop) reportRollFailure(tip, what string, failure error) {
+	if failure == nil {
+		return
+	}
+	kind := "roll"
+	if what != "" {
+		kind = what + " roll"
+	}
+	l.reportf("loop: post-landing %s at %s failed: %s\n", kind, shortSHA(tip), strings.Join(strings.Fields(failure.Error()), " "))
 }
 
 // afterGreen runs when the green pointer advances. In green mode it pushes the pointer's
