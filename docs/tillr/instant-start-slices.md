@@ -13,7 +13,7 @@ For every item, measure its parent and its candidate on the same workload: make 
 Measured in the lane on 2026-11-20. These Bash commands distinguish the kept change from the subsequent trunk edits:
 
 ```bash
-b=b3100bd6ec257eb5e18b51b607ff9a3ef2fe2485
+b=60b92bce2e782229e2c41e84e02ed86f4bbd298c
 v=keep/instant-start-5be951c300-verified
 l=keep/instant-start-5be951c300-latest
 m=$(git merge-base "$b" "$v")
@@ -29,7 +29,7 @@ printf '%s\n' "$both"
 git log --oneline --name-only "$m..$b" -- $both
 ```
 
-- Common ancestor `1d79a4e3b`; verified `d132f3546`, latest `9c23a0f12` [unlanded]. There are 56 commits on the lane-base side and two on verified; ten intervening commits touch the four scheduler files in the path-filtered count.
+- Common ancestor `1d79a4e3b`; verified `d132f3546`, latest `9c23a0f12` [unlanded]. There are 67 commits on the lane-base side and two on verified; ten intervening commits touch the four scheduler files in the path-filtered count.
 - Verified changes 78 files, +15,346/−794 including the mirror. Counted once under `tools/`: 26 source files +5,635/−349, 11 test files +1,989/−45, two READMEs +49/−3. `start_view.go` is +3,919/−0 and `pass.go` +725/−222. Neither is a single item.
 - Nine paths changed on both sides: drain's README and `blocked.go`, `item_fault.go`, `loop.go`, `pass.go`, `plan.go`, `refusal.go`; view's README and `web/src/models/types.ts`. Shared paths are not necessarily conflicting hunks. Recheck `git log` through the actual landing parent. In `pass`/`loop` preserve scale-down draining, live fixer settlement, fork/lane-base handling, restart answer retention, verify-to-build and missing-verdict retry. In `blocked`/`refusal` preserve landed-row suppression and current verify refusals; don't resurrect the reverted refused-push change. Keep the newer run wall-time, slot-wait and schedule fields in view and retain current README behavior. These constraints apply wherever those files recur below.
 - Latest differs from verified under `tools/` by `backend_outcomes.go` +9/−0, `lane_base.go` +10/−1, `start_view.go` +60/−23, `start_while_settling_test.go` +46/−0. This is a saved later experiment, not the work verify timed.
@@ -46,7 +46,7 @@ git log --oneline --name-only "$m..$b" -- $both
 
 4. **Cache the planner's inputs (≤580).** From `start_view.go` take the store seed in `seedLocked`, attempt ordinals, reverse edges, earliest future lease/window expiries and the relevant clone fields. Take incremental pending-history fold state from `pass.go`, per-item row readers from `plan.go`, `drain-root/faults/read.go` and `drain-root/ownercriteria/criteria.go`. Grow the snapshot from slice 1; initially reseed rather than optimizing deltas. **Proof:** `start_view_state_test.go` (`TestClonePendingHistoryStateKeepsDiscardedRuns`); add seeded-versus-store checks for pending attempts, held lanes and closed backends. The scheduler still reads the store as before.
 
-5. **Compute a proposed start in memory (≤570).** Take `buildPlannerLocked`, `evaluateEntryLocked`, `versionForLocked`, entry rebuild, free-lane ordering and `nextStart` from `start_view.go` with lane-independent decision helpers from `plan.go` and `blocked.go`. Cache holds, ready/free instants, express/pinned constraints, tip and proved-green bases. **Proof:** adapt `TestStartViewCutsOrdinaryItemsFromProvedGreen` in `start_view_repair_test.go`; compare the proposed item/lane and hold reasons with the planner for ready, blocked and pinned items. Tests alone ask the view for a start. A wrong prediction cannot claim a lane yet.
+5. **Compute a proposed start in memory (≤570).** Take `buildPlannerLocked`, `evaluateEntryLocked`, `versionForLocked`, entry rebuild, free-lane ordering and `nextStart` from `start_view.go` with lane-independent decision helpers from `plan.go` and `blocked.go`. Cache holds, ready/free instants, express/pinned constraints, tip and proved-green bases. **Proof:** adapt `TestStartViewCutsOrdinaryItemsFromProvedGreen` in `start_view_repair_test.go`; compare the proposed item/lane and hold reasons with the planner for ready, blocked and pinned items. Use trunk's `TestAnsweredObstacleRepeat` (`answered_obstacle_test.go`) as a parity fixture after a design answer. For the same disputed criterion, even with new evidence, both planners must hold for the operator; for the same owner question, both must hold for the owner. Neither repeat may produce a proposed start. As controls, a different criterion or a different question must still go to design. Only tests ask the view for a start; the existing planner still makes every dispatch decision.
 
 6. **Follow store changes without refolding idle history (≤480).** From `start_view.go` take the front of `syncStore`/`syncStoreOn`: data version, event cursor, expiry checks, pure-place delta, classification of event kinds. Refresh history, priors, input decisions and lane facts only for relevant records; keep full reseed as the fallback for unhandled changes. **Proof:** port the no-churn/progress and rerank cases of `TestStartViewIncrementalUpdatesAndZeroChurn` and `TestSyncRefreshesInputDecisionsOnARecordedInput` from `start_view_watcher_test.go` and `start_view_state_test.go`. Ignoring an unknown change is not a fallback. The pass is unaffected.
 
