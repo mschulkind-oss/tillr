@@ -238,16 +238,19 @@ func (l *Loop) attachWorkflowJudge(ctx context.Context, d Decision, c *Candidate
 		return err
 	}
 	defer db.Close()
-	var runID string
+	var runID, outcome string
 	err = db.ReadTx(ctx, func(r *store.Reader) error {
 		source, err := nodeSourceAttempt(r, d.ItemID, d.Attempt, id)
 		if err != nil {
 			return err
 		}
-		return r.QueryRow(`SELECT run_id FROM node_runs WHERE item_id=? AND attempt=? AND node_id=?`, d.ItemID, source, id).Scan(&runID)
+		return r.QueryRow(`SELECT run_id, outcome FROM node_runs WHERE item_id=? AND attempt=? AND node_id=?`, d.ItemID, source, id).Scan(&runID, &outcome)
 	})
 	if err != nil {
 		return err
+	}
+	if outcome == "skipped" {
+		return nil
 	}
 	raw, err := os.ReadFile(filepath.Join(RunDir(l.cfg.Root, runID), judgeReceiptFile))
 	if err != nil {

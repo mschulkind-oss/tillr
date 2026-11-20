@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS node_runs (
  outcome TEXT NOT NULL,
  seat TEXT,
  model TEXT,
+ quick_way INTEGER NOT NULL DEFAULT 0,
  PRIMARY KEY(item_id,attempt,node_id)
 );
 CREATE TABLE IF NOT EXISTS node_artifacts (
@@ -211,6 +212,9 @@ func init() {
 		if err := store.RegisterColumn("drain", "node_runs", name, "TEXT"); err != nil {
 			panic(err)
 		}
+	}
+	if err := store.RegisterColumn("drain", "node_runs", "quick_way", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		panic(err)
 	}
 	for name, definition := range map[string]string{"loop_owner": "TEXT", "stop_requested": "INTEGER", "lanes": "TEXT"} {
 		if err := store.RegisterColumn("drain", "drain_sessions", name, definition); err != nil {

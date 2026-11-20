@@ -27,16 +27,29 @@ func (s *LaneStager) workflowNodeBrief(spec StageSpec, brief string, landing boo
 	if landing && spec.Node.Access == "write" && spec.Node.WriteScope.Paths != nil {
 		brief += "\nThis node may write only these paths, within the item's fence:\n" + fenceText(scopeForLane(spec.Node.WriteScope.Paths, spec.LaneID))
 	}
-	if spec.Node.Access == "read_only" {
-		brief += "Read only: do not change files in the target"
-		if landing {
-			brief += " or commit"
-		}
-		brief += ". Write your findings in the report and finish with RESULT: done, or report a named obstacle when blocked. The item criteria describe the whole workflow, not this node.\n"
-	}
 	dir := nodeOutputsDir(s.Root, spec.RunID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err
+	}
+	if spec.Node.Access == "read_only" {
+		if planAllowsQuickWay(*spec.Node) {
+			quickPath := filepath.Join(dir, quickWayFile)
+			brief += "Read only unless you take the quick way: when the request is small and clear (one coherent change, no split into pieces, no question for the owner), your first move may be to decide 'do it now' by writing " + quickPath + ", then make the change within the item's fence, test it"
+			if landing {
+				brief += ", and commit once on this lane"
+			}
+			brief += " before finishing with RESULT: done (write no proposal). Otherwise, do not change files in the target"
+			if landing {
+				brief += " or commit"
+			}
+			brief += "; write your findings in the report and finish with RESULT: done, or report a named obstacle when blocked. The item criteria describe the whole workflow, not this node.\n"
+		} else {
+			brief += "Read only: do not change files in the target"
+			if landing {
+				brief += " or commit"
+			}
+			brief += ". Write your findings in the report and finish with RESULT: done, or report a named obstacle when blocked. The item criteria describe the whole workflow, not this node.\n"
+		}
 	}
 	brief += "Write declared outputs only in your output directory: " + dir + ". These files are outside the target"
 	if landing {
