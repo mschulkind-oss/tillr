@@ -1,7 +1,7 @@
 #!/bin/sh
 # The muse adapter: one `muse exec` run, from the staged brief to the stream.
 #
-# Design §9 of docs/design/tillr-muse-backend.md specifies this file. It is what a
+# Reference: docs/reference/tillr-muse-backend.md specifies this file. It is what a
 # `run.request`'s Command[0] names, and its whole contract is two halves: this argv
 # construction (launch) and `extract-report` beside it (read). Nothing here decides
 # anything about the item — the model id, the effort and the wall come from staging,

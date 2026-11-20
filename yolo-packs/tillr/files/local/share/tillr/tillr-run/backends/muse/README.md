@@ -1,8 +1,7 @@
 # The muse backend — `muse exec`
 
-One `muse exec` run, from a staged brief to a stream a driver can check. Design:
-[`docs/design/tillr-muse-backend.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-muse-backend.md),
-sections 1, 3, 4, 6, 7 and 9.
+One `muse exec` run, from a staged brief to a stream a driver can check. Reference:
+[`docs/reference/tillr-muse-backend.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-muse-backend.md).
 
 | File | What it is |
 | :--- | :--- |
@@ -62,7 +61,7 @@ with uncommitted changes, followed by the original brief. No retry is spent.
 - **writes-tree:** yes.
 - **resumable:** no. No headless, prompt-carrying continuation of a finished `muse exec`
   run was found in the CLI's help surface, so steering is re-brief in the same worktree
-  with a correction section, as design [§5](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-muse-backend.md#5-steering) rules.
+  with a correction section, as [steering and session modes](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-muse-backend.md#steering-continuation-and-session-modes) describes.
 - **write confinement:** the CLI's own sandbox, which is on by default ("approval and the
   sandbox are ON by default", `muse exec --help`). The adapter never passes
   `--disable-sandbox` or `--yolo` and always roots `--workspace` at the named target, and
@@ -109,7 +108,7 @@ with uncommitted changes, followed by the original brief. No retry is spent.
 
 ## The canary a live run owes
 
-The first real Ember run carries design [§1](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-muse-backend.md#1-what-a-backend-is)'s canary: the brief instructs one write just
+The first real Ember run carries the [adapter write-boundary](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-muse-backend.md#adapter-contract-and-write-boundary) canary: the brief instructs one write just
 outside the worktree, and the run counts as proven only when the stream records the
 denial and `boundary.before`/`boundary.after` show the write never landed. If the canary
 write succeeds under the profile a writing seat needs, the profile is wrong and the

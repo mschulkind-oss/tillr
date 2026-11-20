@@ -93,7 +93,7 @@ Earlier rulings of the owner's bind this design throughout: nothing re-runs on a
 | Outstanding designs with at least one unanswered question | 14 |
 | Live `<!-- tillr: item` comments across all of `docs/` (9 unfinished, 6 left behind by landed items) | 15 |
 
-*(Note: [`tillr-muse-backend.md`](./tillr-muse-backend.md) is also linked in the roadmap's Icebox, and its stage is `BUILT`, so it is finished rather than outstanding. The third Icebox bullet, "Prices on the observatory", links no document.)*
+*(Note: [`tillr-muse-backend.md`](../reference/tillr-muse-backend.md) is also linked in the roadmap's Icebox, and its stage is `CURRENT` (graduated from `BUILT`), so it is finished rather than outstanding. The third Icebox bullet, "Prices on the observatory", links no document.)*
 
 ---
 
@@ -240,7 +240,7 @@ Question references are resolved live against Vantage's index on each pass: an a
 - **Reverses two points of `D-QP5`:** parked designs with no pieces still materialize their `item-design-<slug>` row, and parked items use `blocked` (with waiter `owner` and reason `icebox`) rather than `not-started`.
 - **Hold-rule row:** reason `icebox`, location `queue`, class `parked`, mover `owner; move "<title>" out of the Icebox in <roadmap>`. `parked` counts neither in `draining` nor in `needs you`; `tillr view waiting` shows its count separately (`parked N`).
 - **Unparking:** when the owner moves the link out of `## Icebox` onto the roadmap's spine, the next whole sync moves `item-design-<slug>` (and any `blocked: icebox` pieces of its plan) back to `in-queue` and assigns a rank if unranked. Only the owner edits `## Icebox`; no agent may park or unpark work.
-- **Finished designs in the Icebox stay finished.** Row 1 precedes row 2, so [`tillr-muse-backend.md`](./tillr-muse-backend.md) (`stage: BUILT`) gets no open row.
+- **Finished designs in the Icebox stay finished.** Row 1 precedes row 2, so [`tillr-muse-backend.md`](../reference/tillr-muse-backend.md) (`stage: CURRENT`, graduated from `BUILT`) gets no open row.
 - **Documentless Icebox bullets** (such as "Prices on the observatory") create no item and are reported in sync's summary line (`icebox_without_doc: 1`) so nothing disappears silently.
 
 ---

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """The MM-1A acceptance test: four adapters, four dialects, one report shape.
 
+Reference: docs/reference/tillr-muse-backend.md
+
 What it pins, and why each case is here rather than in a live run:
 
   * every extractor over both of its own fixtures produces ONE report shape — the same
@@ -15,8 +17,8 @@ What it pins, and why each case is here rather than in a live run:
     failed" are different answers to the driver;
   * the backend policy names a default backend, every adapter it names exists and is
     executable, the agy entry carries no effort of its own, and NO MODEL ID FROM THE
-    POLICY APPEARS ANYWHERE IN THE TILLR TREE (design D-MM5: that tree ships publicly
-    and names no model vendor);
+    POLICY APPEARS ANYWHERE IN THE TILLR TREE (docs/reference/tillr-muse-backend.md D-MM5:
+    that tree ships publicly and names no model vendor);
   * each adapter's preflight refuses a missing brief, an unset model, a backend field
     naming another adapter, a brief missing a template section, and an unfilled
     placeholder — and refuses BEFORE the harness is started, which the stub proves by

@@ -1,7 +1,7 @@
 """The one report.md shape every backend's extractor produces.
 
-Design §4 of docs/design/tillr-muse-backend.md fixes the report's header and the
-`RESULT:` completeness rule; §9 gives each adapter its own extractor because each
+Reference: docs/reference/tillr-muse-backend.md fixes the report's header and the
+`RESULT:` completeness rule, while each adapter keeps its own extractor because each
 harness's stream dialect is adapter-private. So the DIALECT is per adapter and the
 SHAPE is here, once: three copies of this header would be three shapes within a month.
 

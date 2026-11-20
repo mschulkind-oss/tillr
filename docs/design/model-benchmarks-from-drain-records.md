@@ -50,7 +50,7 @@ results blind) and [OQ-MB10](#OQ-MB10) (what happens to a replay that overspends
 - [`tillr-planning-node-model-tiering.md`](./tillr-planning-node-model-tiering.md): which model
   does which kind of work, and the other way to compare them
   ([Section 6](#6-how-this-relates-to-planning-and-model-tiering)).
-- [`tillr-muse-backend.md`](./tillr-muse-backend.md): the lane layout and the brief every adapter
+- [`tillr-muse-backend.md`](../reference/tillr-muse-backend.md): the lane layout and the brief every adapter
   reads.
 - [`tillr-intake-paths.md`](./tillr-intake-paths.md): how the owner's request reached the queue.
 

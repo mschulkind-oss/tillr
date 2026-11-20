@@ -3,9 +3,8 @@
 The proof that the contract survives a harness whose **effort is part of the model id**
 and whose stream is **one envelope, not a JSONL stream**. Those are the two properties a
 policy schema and a stream-shaped extractor are most likely to have baked in by accident.
-Design:
-[`docs/design/tillr-muse-backend.md`](../../../../docs/design/tillr-muse-backend.md),
-sections 7 and 9.
+Reference:
+[`docs/reference/tillr-muse-backend.md`](../../../../docs/reference/tillr-muse-backend.md).
 
 | File | What it is |
 | :--- | :--- |

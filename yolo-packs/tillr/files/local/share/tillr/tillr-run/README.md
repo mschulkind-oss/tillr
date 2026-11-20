@@ -24,7 +24,9 @@ and clean up what a tick left behind. `copied-usage` detects repeated usage pair
 `mark-copied-usage` corrects one run whose usage came from an earlier run.
 
 The design that splits this surface into `--help`, this README and the composition
-skill is [`docs/design/tillr-distribution.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-distribution.md).
+skill is [`docs/design/tillr-distribution.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-distribution.md);
+the shared adapter, brief, report, and policy contract is
+[`docs/reference/tillr-muse-backend.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-muse-backend.md).
 
 ## State invariants
 

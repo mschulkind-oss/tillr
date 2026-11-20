@@ -3,9 +3,8 @@
 The proof that the adapter contract is not `muse`-shaped. Pi differs at both seams the
 contract leaves adapter-private: the brief arrives on stdin rather than through a
 prompt-file flag, and effort is Pi's own `--thinking` level rather than the muse's
-`--reasoning-effort`. Design:
-[`docs/design/tillr-muse-backend.md`](../../../../docs/design/tillr-muse-backend.md),
-sections 7 and 9.
+`--reasoning-effort`. Reference:
+[`docs/reference/tillr-muse-backend.md`](../../../../docs/reference/tillr-muse-backend.md).
 
 | File | What it is |
 | :--- | :--- |

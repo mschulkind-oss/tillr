@@ -54,7 +54,7 @@ frontmatter, and it disagrees with that pass in one place (section 7).
 | 3 | [`tillr-distribution.md`](./tillr-distribution.md) | fully, 317 lines | 9 |
 | 4 | [`tillr-loop-readiness.md`](./tillr-loop-readiness.md) | fully, 431 lines | 10 |
 | 5 | [`tillr-chunking-plan.md`](./tillr-chunking-plan.md) | fully, 266 lines | 21 |
-| 6 | [`tillr-muse-backend.md`](./tillr-muse-backend.md) | fully, 356 lines | 9 |
+| 6 | [`tillr-muse-backend.md`](../reference/tillr-muse-backend.md) | fully, 356 lines | 9 |
 | 7 | [`tillr-next-steps.md`](./tillr-next-steps.md) | fully, 181 lines | 10 |
 | 8 | `tillr-today.md` (retired) | fully, 545 lines | 12 |
 | 9 | `tillr-board-reshape.md` (retired) | fully, 426 lines | 7 |
@@ -169,7 +169,7 @@ that ends it.
 | section 6's remaining deferrals: landing-velocity's slices, `GAP7`'s document pass, `SPEC-*`, `RET-*`/`MISC-2`/`WRAP-1` | deleted | each is deferred or moot by its own ruling; the shadow slice alone is live and is `item-landing-tier-shadow` |
 | section 7's `Q1` question row | deleted | same ruling as `GATE-5` above |
 
-### 2.6 [`tillr-muse-backend.md`](./tillr-muse-backend.md) — 9
+### 2.6 [`tillr-muse-backend.md`](../reference/tillr-muse-backend.md) — 9
 
 | Claim | Disposition | Where it lands |
 | :--- | :--- | :--- |

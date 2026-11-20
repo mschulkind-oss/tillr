@@ -140,7 +140,8 @@ const (
 	ReasonForkHeld = "fork-held"
 	// ReasonFailover is a dispatch's reason: the item's last run failed in the
 	// infrastructure class, so this dispatch re-stages the same work on the next backend
-	// in the policy's preference (design §2, D-MM11). It is a dispatch reason rather than
+	// in the policy's preference (docs/reference/tillr-muse-backend.md, D-MM11). It is a
+	// dispatch reason rather than
 	// a hold's because the item *is* dispatched — the spend is a re-dispatch, and the
 	// record says so.
 	ReasonFailover = "failover"
