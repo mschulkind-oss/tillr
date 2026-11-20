@@ -2,7 +2,7 @@
 title: "One word per thing: the vocabulary of tillr's items, nodes, runs, sessions and worktrees"
 status: in-review
 stage: DESIGN
-updated: 2026-11-18
+updated: 2026-11-20
 tags:
   - tillr
   - vocabulary
@@ -315,7 +315,7 @@ Each term has one meaning. A term owned by another document is linked, not redef
 | Term | What it is | What it is not | Identified by; belongs to; has | Today's usage differs |
 | :--- | :--- | :--- | :--- | :--- |
 | **Objection** | The ending by which an actor says it should not continue and names who acts next ([the graph design](./tillr-graph-is-the-path.md#33-endings)) | Not a failure, and not a refusal | Its node | "Blocked", and a stored "conflict" (`conflict-<run id>`) |
-| **Obstacle kind** | The kind of a worker's objection, from a closed set: definition, fence, trunk, tooling, seat, owner ([`D-JL11`](./tillr-judge-and-lifecycle.md#45-what-a-worker-may-end-with-d-jl11)) | Not an open list | The `OBSTACLE:` line of a report | — |
+| **Obstacle kind** | The kind of a worker's objection, from a closed set: definition, fence, trunk, tooling, seat, owner ([`D-JL11`](./tillr-judge-and-lifecycle.md#45-what-a-worker-may-end-with-d-jl11)), plus `delivery` queued under [`D-JL15`](./tillr-judge-and-lifecycle.md#48-planning-time-fork-delivery-the-delivery-obstacle-and-patch-branch-refusal-d-jl15) | Not an open list | The `OBSTACLE:` line of a report | — |
 | **Refusal** | A checker's "no" about what the candidate is, with evidence: from the gate, from tillr's checks at a node's end, or from the lander | Not an objection (the worker's "no"), not an exception (the machinery failed), not a rejection | The ending of the checking node | Also used for a lane that staging refuses and for a store command that is rejected |
 | **Rejection** | The store declining a command | Not about a candidate | — | `item.rejection`; READMEs also say "refusal" |
 | **Conflict** | Two changes to the same lines, found at a take-in or at a landing, with the paths | Not an objection | The paths | Also the stored record of an objection |
