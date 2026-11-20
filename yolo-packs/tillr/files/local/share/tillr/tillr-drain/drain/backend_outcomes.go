@@ -36,6 +36,12 @@ type backendOutcome struct {
 // ending keeps its saved facts; an unsaved one is classified from the record and
 // the log as they are now. It writes nothing, so a read-only face may call it.
 func readBackendOutcomes(r *store.Reader) ([]backendOutcome, error) {
+	return readBackendOutcomesFrom(r, nil)
+}
+
+// readBackendOutcomesFrom reuses a supplied history from this transaction or a
+// snapshot validated against pendingHistoryHead. Nil asks it to fold for itself.
+func readBackendOutcomesFrom(r *store.Reader, byRun map[string]*pendingWork) ([]backendOutcome, error) {
 	rows, err := r.Query(`SELECT e.seq,e.payload,COALESCE(o.class,''),COALESCE(o.closes,0) FROM events e
  LEFT JOIN backend_outcomes o ON o.terminal_seq=e.seq WHERE e.kind=? ORDER BY e.seq DESC`, run.FinishKind)
 	if err != nil && strings.Contains(err.Error(), "no such table: backend_outcomes") {
@@ -96,9 +102,11 @@ func readBackendOutcomes(r *store.Reader) ([]backendOutcome, error) {
 	if err != nil {
 		return nil, err
 	}
-	_, byRun, err := readPendingHistory(r)
-	if err != nil {
-		return nil, err
+	if byRun == nil {
+		_, byRun, err = readPendingHistory(r)
+		if err != nil {
+			return nil, err
+		}
 	}
 	for i := range out {
 		if out[i].saved || offered[out[i].seq] {

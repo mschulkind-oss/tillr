@@ -54,6 +54,10 @@ func dispatchQuotaOpen(r *store.Reader, d Decision, shut map[string]bool, policy
 // claimParallel chooses the ready readers from the same store transaction as the
 // item's claim. A writer always keeps the lane to itself.
 func (l *Loop) claimParallel(tx *store.Tx, d *Decision) error {
+	return l.claimParallelFrom(tx, d, nil)
+}
+
+func (l *Loop) claimParallelFrom(tx *store.Tx, d *Decision, byRun map[string]*pendingWork) error {
 	if d.Workflow == nil || evaluatorNode(*d) || d.Workflow.Stages[d.NodeIndex].Access != "read_only" || len(d.Parallel) > 0 {
 		return nil
 	}
@@ -67,7 +71,7 @@ func (l *Loop) claimParallel(tx *store.Tx, d *Decision) error {
 	}
 	indices := []int{d.NodeIndex}
 	candidates := []int{}
-	shut, err := readQuotaShutBackends(tx.Reader(), l.cfg.Now(), l.currentPolicy())
+	shut, err := readQuotaShutBackendsFrom(tx.Reader(), l.cfg.Now(), l.currentPolicy(), byRun)
 	if err != nil {
 		return err
 	}

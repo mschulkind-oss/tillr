@@ -17,7 +17,11 @@ const backendProbeKind = "drain.backend-probe"
 // terminal event and an explicit successful probe share the store's event order;
 // a clock, policy edit, restart, or quota reading cannot reopen infrastructure.
 func readInfrastructureClosed(r *store.Reader) (map[string]bool, error) {
-	outcomes, err := readBackendOutcomes(r)
+	return readInfrastructureClosedFrom(r, nil)
+}
+
+func readInfrastructureClosedFrom(r *store.Reader, byRun map[string]*pendingWork) (map[string]bool, error) {
+	outcomes, err := readBackendOutcomesFrom(r, byRun)
 	if err != nil {
 		return nil, err
 	}
