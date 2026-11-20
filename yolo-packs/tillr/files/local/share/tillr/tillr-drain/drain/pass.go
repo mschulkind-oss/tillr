@@ -1950,7 +1950,8 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 // fails the step. A store that refuses the hold itself is not one item's condition either.
 func (l *Loop) holdSettleFailure(c runCompletion) bool {
 	var collision *decisionCollisionError
-	if c.itemID == "" || !errors.As(c.outcome.err, &collision) {
+	var started *runStartError
+	if c.itemID == "" || !(errors.As(c.outcome.err, &collision) || (c.step == "run" && errors.As(c.outcome.err, &started))) {
 		return false
 	}
 	detail := c.step + ": " + c.outcome.err.Error()
