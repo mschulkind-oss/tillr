@@ -86,10 +86,12 @@ file without recording verdicts. A missing or refused file holds the item as
 the worker's own endings. A valid
 `not-done` finding from an ordinary judge holds a document item as `eval-failed`, without a gate,
 landing, or criterion verdict. The waiting view includes the controlling criterion's
-reason. A workflow evaluator's `not-done` instead returns the named criteria to the
-workflow's first node as `verify-not-done`, without a gate or criterion verdict. On a
-[filed request](#filed-requests), `not-done` from either an evaluator or an ordinary
-judge returns all `not-done` findings to the builder's same session with no operator hold.
+reason. A workflow evaluator's `not-done` instead refuses the candidate as `verify-not-done`
+and returns it to the workflow's build step (for both document items and filed requests),
+without a gate or criterion verdict (see
+[the verify return below](#a-refused-run-goes-back-to-its-worker)). On a
+[filed request](#filed-requests), `not-done` from an ordinary judge also returns all
+`not-done` findings to the builder's same session with no operator hold.
 
 A valid `blocked` finding moves the item to blocked with the entry's reason and
 its structured `waiting_on.waiter`; it records no criterion verdict. A valid
@@ -376,7 +378,21 @@ ledger, the planner writes neither `do-it-now` nor a proposal and ends with a
 design seat to update the document before any build.
 The verifier asks for `node:<id>` evidence for each covered criterion and a
 `not-done` reason beginning `uncovered:` for each uncovered one. The judge intake
-does not enforce the node locator; the verifier makes that judgment. Document-declared
+does not enforce the node locator; the verifier makes that judgment. After
+`verify-not-done` (for both document items and filed requests), the loop pins the
+candidate commit the verifier read and dispatches the build step (`work` on the
+`build` seat, inserting `work` before the evaluator when `plan` expanded `work`
+into pieces) on that candidate commit with the verifier's `not-done` findings word
+for word (resuming the builder's session when available on the original lane, or
+staging a fresh builder on that candidate commit on any available lane, including
+fork checkouts). The `plan` step runs again only when (a) a verifier `not-done`
+reason begins with `plan-wrong:` (any case) because the plan itself was wrong, or
+(b) the builder reports it cannot meet the findings within the plan
+(`RESULT: blocked` with `OBSTACLE: definition` and `EVIDENCE: plan-wrong: <reason>`,
+a narrowed piece `OBSTACLE: fence` whose paths are inside the item's fence, or a
+report line beginning `PLAN-WRONG:`), recorded as `plan-wrong` (see
+[the verify return below](#a-refused-run-goes-back-to-its-worker)).
+Document-declared
 items do not select this workflow unless named on the block or in `[workflows.default]`,
 whereas `tillr item request` files `build` requests (its default seat) with
 `planned-build@v1` by default and `design` requests with
@@ -1516,11 +1532,36 @@ through the gate and landing again. Loop-owned item-block retirement is removed 
 retained checkout before the worker returns; the prepared head remains pinned as evidence.
 
 A workflow evaluator's `verify-not-done` return carries each not-done criterion id
-and reason; for a document item it carries no retained worker session and starts a fresh
-workflow at its first node (the planner in `planned-build@v1`). For a filed request,
-`not-done` (whether `verify-not-done` or `eval-failed`) retains the builder's session and
-returns to the builder node (reusing completed prerequisite nodes) so distinct findings keep
-returning to the builder without an operator hold.
+and its reason word for word (`<criterion id>: <reason>`, in criterion order, no
+truncation). After `verify-not-done` (for both document items and filed requests),
+the loop pins the candidate commit the verifier read and dispatches the build step
+(`work` on the `build` seat) on that candidate commit with the verifier's
+`not-done` findings in its brief word for word: the candidate head is pinned
+(for a fork series, pinned out of the fork checkout first), the lane keeps it,
+and the run resumes the builder's session when available on the original lane
+(`resumed-worker`), or stages a fresh builder on that candidate commit on any
+available lane, including fork checkouts (earlier nodes are carried as reused).
+When `plan` expanded `work` into pieces (`build-pieces@v1`), the return inserts a
+`work` build stage on the `build` seat before the evaluator, whose prompt
+summarizes the planned pieces, and the evaluator runs again after it. The
+whole-item diff, gate, and landing still measure from the item's own base;
+per-node checks measure the repair commit atop the candidate.
+
+The `plan` step runs again only in two cases: (a) a verifier's `not-done` reason
+begins with `plan-wrong:` (any case) because the plan itself was wrong, which is
+recorded as a replan return, or (b) the builder reports it cannot meet the findings
+within the plan (`RESULT: blocked` with `OBSTACLE: definition` and
+`EVIDENCE: plan-wrong: <reason>`, a narrowed piece `OBSTACLE: fence` whose paths
+are inside the item's fence, or a report line beginning `PLAN-WRONG:`), recorded
+as `plan-wrong`. `verify-not-done` repeat detection hashes each sorted not-done
+criterion ID with the candidate head and normalized finding text: two refusals of
+different candidates or with different findings do not collide, while an identical
+repeat raises a design-seat conflict (or, for a filed request, an operator hold).
+
+For an opted-in ordinary item judge, `eval-failed` still holds a document item for
+the operator, whereas on a filed request an ordinary judge's `not-done` retains the
+builder's session and returns all `not-done` findings to the builder without an
+operator hold.
 
 The recorded decision's `worker_session_reason` explains the path: `resumed-worker` for
 that continuation, `cannot-resume` for an adapter without a positive resume declaration,

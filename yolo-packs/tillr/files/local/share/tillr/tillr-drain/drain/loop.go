@@ -194,6 +194,9 @@ type Candidate struct {
 	Producers       []JudgeWriter     `json:"-"`
 	EvaluatorInputs map[string]string `json:"-"`
 	EvaluatorTask   string            `json:"-"`
+	// VerifyReplan is set on a verify-not-done refusal whose findings say the plan was
+	// wrong (a reason beginning plan-wrong:); the item then returns to the plan step.
+	VerifyReplan bool `json:"-"`
 	// Runtime-only observation, sampled when the gate records a stall.
 	gateCount     func() int
 	RefusalDetail string `json:"refusal_detail,omitempty"`
@@ -1406,7 +1409,15 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 			continue
 		}
-		if decision.Reason == ReasonReturned && decision.Returned != nil && !request.SessionTurn &&
+		freshVerifyReturn := (decision.Reason == ReasonReturned || decision.Reason == ReasonRetry) && verifyBuildReturn(decision.Returned) && !request.SessionTurn
+		if freshVerifyReturn {
+			// A fresh build run starts on the candidate the verifier read, never on the
+			// trunk: Stage cuts the lane at that head (cold or warm), and records the
+			// item's own base as the fence base.
+			s := decision.Returned.WorkerSession
+			spec.VerifyReturnHead = s.HeadSHA
+			spec.VerifyReturnItemBase = s.BaseSHA
+		} else if decision.Reason == ReasonReturned && decision.Returned != nil && !request.SessionTurn &&
 			((decision.Returned.WorkerSession != nil && decision.LaneID == decision.Returned.WorkerSession.LaneID) ||
 				(decision.Workflow != nil && decision.NodeIndex == 0)) {
 			// A returned run that continues no session starts from a clean lane. A workflow
@@ -1417,11 +1428,17 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			if decision.Workflow != nil && decision.NodeBaseSHA != "" {
 				revision = decision.NodeBaseSHA
 			}
-			if err := l.resetLaneTo(ctx, decision.LaneID, revision); err != nil {
-				if holdErr := failStage("reset lane", err); holdErr != nil {
-					return nil, holdErr
+			// A cold lane has no worktree to reset; Stage creates it.
+			if _, statErr := os.Stat(l.lanePath(decision.LaneID)); statErr != nil {
+				revision = ""
+			}
+			if revision != "" {
+				if err := l.resetLaneTo(ctx, decision.LaneID, revision); err != nil {
+					if holdErr := failStage("reset lane", err); holdErr != nil {
+						return nil, holdErr
+					}
+					continue
 				}
-				continue
 			}
 		}
 		if err := l.stageComment(ctx, &decision, &spec); err != nil {
@@ -1447,7 +1464,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 			spec.InputPaths = paths
 			if !revertedSession {
-				spec.Continue = spec.Continue || (decision.NodeIndex > 0 && !freshRetry) || decision.WorkflowRestart
+				spec.Continue = spec.Continue || (decision.NodeIndex > 0 && !freshRetry && !freshVerifyReturn) || decision.WorkflowRestart
 			}
 			if spec.Continue {
 				spec.PreviousRunID = decision.NodeStartRunID

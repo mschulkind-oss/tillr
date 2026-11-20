@@ -18,10 +18,12 @@ import (
 
 type plannedVerifySteps struct {
 	*workflowSteps
-	blocked  bool
-	plans    int
-	verifies int
-	base     string
+	blocked   bool
+	plans     int
+	works     int
+	candidate string
+	verifies  int
+	base      string
 }
 
 func (s *plannedVerifySteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
@@ -41,11 +43,31 @@ func (s *plannedVerifySteps) Run(ctx context.Context, req run.Request) (run.Reco
 		if s.blocked {
 			report = "OBSTACLE: owner\nQUESTION: Which design should be used?\nRESULT: blocked\n"
 		} else {
-			if s.plans > 1 && !strings.Contains(string(brief), "c2: uncovered:") {
-				s.t.Errorf("returned brief lacks c2: %s", brief)
+			if s.plans > 1 {
+				s.t.Errorf("a failed verify started a second plan: %s", brief)
 			}
 			proposalArtifact(s.t, s.f.root, req.RunID, pieceProposal([]map[string]any{piece("one", "build", "write"), piece("two", "edit", "write")}))
 		}
+	case "work":
+		// The build step, returned with the verifier's findings word for word.
+		s.works++
+		if !strings.Contains(string(brief), "c2: uncovered: no piece") {
+			s.t.Errorf("returned build brief lacks the finding: %s", brief)
+		}
+		if err := os.MkdirAll(filepath.Join(target, "tools/item-a"), 0755); err != nil {
+			return run.Record{}, "", err
+		}
+		// An identical repeat judges the same candidate, so every repair rebuilds the same
+		// commit from the candidate the first verifier read.
+		s.t.Setenv("GIT_AUTHOR_DATE", "2026-11-15T00:00:00Z")
+		s.t.Setenv("GIT_COMMITTER_DATE", "2026-11-15T00:00:00Z")
+		if s.candidate == "" {
+			s.candidate = runGit(s.t, target, "rev-parse", "HEAD")
+		}
+		runGit(s.t, target, "reset", "--hard", "-q", s.candidate)
+		writeForkFile(s.t, filepath.Join(target, "tools/item-a/repair.txt"), "repair")
+		runGit(s.t, target, "add", ".")
+		runGit(s.t, target, "commit", "-qm", "repair")
 	case "work/piece-one", "work/piece-two":
 		// An identical repeat judges the same candidate, so each attempt rebuilds the
 		// same commits from the same base.
@@ -133,18 +155,20 @@ func TestPlannedVerifyReturnsAndRepeats(t *testing.T) {
 	var found bool
 	for _, p := range mustPlan(t, l) {
 		d := p.decision
-		if d.ItemID == "item-a" && d.Action == ActionDispatch && d.Reason == ReasonReturned && d.Workflow.Stages[d.NodeIndex].ID == "plan" {
+		if d.ItemID == "item-a" && d.Action == ActionDispatch && d.Reason == ReasonReturned && d.Workflow.Stages[d.NodeIndex].ID == "work" && d.Seat == "build" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("no returned plan: %+v", mustPlan(t, l))
+		t.Fatalf("no returned build step: %+v", mustPlan(t, l))
 	}
-	for i := 0; i < 25 && steps.verifies < 2; i++ {
+	// The first repair is a new candidate; the second rebuilds that same commit, so its
+	// verdict repeats the second verifier's and the item goes to design.
+	for i := 0; i < 40 && steps.verifies < 3; i++ {
 		graphPass(t, l, result)
 	}
-	if steps.verifies != 2 {
-		t.Fatalf("second verifier did not run: %+v", steps.runs)
+	if steps.verifies != 3 {
+		t.Fatalf("third verifier did not run: %+v", steps.runs)
 	}
 	fixtureRead(t, f, func(r *store.Reader) error {
 		var n int
@@ -157,12 +181,12 @@ func TestPlannedVerifyReturnsAndRepeats(t *testing.T) {
 		return nil
 	})
 	for _, p := range mustPlan(t, l) {
-		if p.decision.ItemID == "item-a" && p.decision.Action == ActionDispatch && p.decision.Seat == "plan" {
-			t.Fatal("identical repeat dispatched a third plan")
+		if p.decision.ItemID == "item-a" && p.decision.Action == ActionDispatch && p.decision.Seat != "design" {
+			t.Fatalf("identical repeat dispatched %s again", p.decision.Seat)
 		}
 	}
-	if steps.plans != 2 || steps.gates != 0 {
-		t.Fatalf("plans=%d gates=%d", steps.plans, steps.gates)
+	if steps.plans != 1 || steps.works != 2 || steps.gates != 0 {
+		t.Fatalf("plans=%d works=%d gates=%d", steps.plans, steps.works, steps.gates)
 	}
 }
 

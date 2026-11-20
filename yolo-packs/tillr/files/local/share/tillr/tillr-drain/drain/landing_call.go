@@ -580,7 +580,7 @@ func (l *Loop) answerLandingRefusal(tx *store.Tx, candidate Candidate, refusal r
 	writerID := judgeWriterRun(candidate)
 	choice := chooseLandingCallAnswer(outcome)
 	if choice.Kind == "" {
-		if refusal.Step == RefusalNoOp {
+		if refusal.Step == RefusalNoOp || refusal.Step == RefusalPlanWrong {
 			var tool string
 			if err := tx.QueryRow(`SELECT COALESCE(json_extract(payload,'$.tool'),'') FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=?`, callOffered, writerID).Scan(&tool); err == nil && tool == "obstacle" {
 				choice = landingCallChoice{Kind: "obstacle-answer"}

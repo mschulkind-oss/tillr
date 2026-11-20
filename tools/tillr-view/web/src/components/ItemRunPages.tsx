@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useItemDocQuery, useItemQuery, useRunArtifactQuery, useRunExchangesQuery, useRunGateQuery, useRunQuery, useRunTimelineQuery, useRunTranscriptQuery } from "../models/queries";
-import type { DispatchView, ItemData, ItemView, TimelineData } from "../models/types";
+import type { DispatchView, ItemData, ItemView, TimelineData, VerifyRefusalView } from "../models/types";
 import { assembleSpans } from "../models/spans";
 import { ItemDetailPane } from "./ItemDetailPane";
 import { EntityLink } from "./EntityLink";
@@ -24,6 +24,20 @@ export function foldedDecisions(decisions: DispatchView[]) {
   }
   return folds;
 }
+function NextStep({ refusal }: { refusal: VerifyRefusalView }) {
+  if (!refusal.next_step) return <>No next step started yet</>;
+  return <>Next step: {refusal.next_step}{refusal.next_run_id ? <>{" · run "}<EntityLink kind="run" id={refusal.next_run_id} /></> : null}</>;
+}
+export function VerifyRefusals({ refusals }: { refusals: VerifyRefusalView[] }) {
+  if (!refusals.length) return null;
+  return <section aria-label="Verify refusals"><h2>Verify refusals</h2><ol>
+    {refusals.map(r => <li key={r.event_seq}>
+      Verify run <EntityLink kind="run" id={r.run_id} />{r.attempt !== null ? ` · attempt ${r.attempt}` : ""} · <time>{new Date(r.at_ms).toISOString()}</time> · <NextStep refusal={r} />
+      {r.replan ? <> · replan: the findings said the plan was wrong</> : null}
+      <pre className="refusal-detail">{r.detail}</pre>
+    </li>)}
+  </ol></section>;
+}
 export function ItemTimeline({ item }: { item: ItemData }) {
   const history: { at: number; key: string; body: ReactNode }[] = [
     ...(item.graph_revisions ?? []).map(revision => ({ at: revision.recorded_at_ms, key: `graph-${revision.revision_id}`, body: <>
@@ -34,6 +48,9 @@ export function ItemTimeline({ item }: { item: ItemData }) {
       Run <EntityLink kind="run" id={run.run_id} />{run.seat ? ` · seat ${run.seat}` : ""} · {run.backend} · {run.end_cause ?? "end cause not recorded"} · {run.state} · exit {run.exit_code ?? "not recorded"}
       {" · finish "}{run.finished_at_ms ? new Date(run.finished_at_ms).toISOString() : "not recorded"}
       {" · "}{run.usage_tokens === null ? "tokens not recorded" : `${run.usage_tokens} tokens`}
+    </> })),
+    ...(item.verify_refusals ?? []).map(r => ({ at: r.at_ms, key: `verify-refusal-${r.event_seq}`, body: <>
+      Verify refused · run <EntityLink kind="run" id={r.run_id} /> · {r.detail} · <NextStep refusal={r} />
     </> })),
     ...item.verdicts.map((v, i) => ({ at: Date.parse(v.recorded_at), key: `verdict-${i}`, body: <>
       Verdict {v.criterion_id} · {v.verdict} · {v.reason || "reason not recorded"} · {v.actor || "actor not recorded"} ({v.actor_kind || "kind not recorded"}) · evidence: {v.evidence?.length ? v.evidence.join(", ") : "not recorded"}
@@ -68,7 +85,7 @@ export function ItemPage({ id, live, paused, row, baseURL }: { id: string; live:
     </section> : null}
     <ItemDetailPane itemId={id} item={item.data?.data} itemError={item.error} loading={item.isPending} onRetry={() => void item.refetch()} latestRun={pinned?.latest_run ?? null} updatedAtMs={pinned?.updated_at_ms ?? null} selectedRunId={null}
       onSelectRun={run => { window.location.hash = `#/run/${encodeURIComponent(run)}`; }} doc={{ doc: doc.data?.data, error: doc.error, pending: doc.isPending, onRetry: () => void doc.refetch(), baseUrl: baseURL }} />
-    {item.data ? <><ItemGraph attempts={item.data.data.graph_attempts ?? []} /><DependencyLinks id={id} blockedBy={item.data.data.blocked_by} unblocks={item.data.data.unblocks} /><UsageSummary usage={item.data.data.usage} /><ItemTimeline item={item.data.data} /></> : null}
+    {item.data ? <><ItemGraph attempts={item.data.data.graph_attempts ?? []} /><DependencyLinks id={id} blockedBy={item.data.data.blocked_by} unblocks={item.data.data.unblocks} /><UsageSummary usage={item.data.data.usage} /><VerifyRefusals refusals={item.data.data.verify_refusals ?? []} /><ItemTimeline item={item.data.data} /></> : null}
   </div>;
 }
 export function RunPage({ id, route, live, paused }: { id: string; route: string; live: boolean; paused: boolean }) {

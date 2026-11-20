@@ -556,6 +556,21 @@ export interface StateMoveView {
   actor: string;
 }
 
+export interface VerifyRefusalView {
+  event_seq: number;
+  at_ms: number;
+  run_id: string;
+  attempt: number | null;
+  detail: string;
+  replan: boolean;
+  next_run_id: string | null;
+  next_attempt: number | null;
+  next_step: string | null;
+  next_seat: string | null;
+  next_event_seq: number | null;
+  next_at_ms: number | null;
+}
+
 export interface GraphRevisionView {
   revision_id: number;
   proposing_run: string;
@@ -603,6 +618,7 @@ export interface ItemData {
   runs: ItemRunView[];
   owner_decisions: OwnerDecisionView[];
   state_moves: StateMoveView[];
+  verify_refusals?: VerifyRefusalView[];
 }
 
 export interface StageView {

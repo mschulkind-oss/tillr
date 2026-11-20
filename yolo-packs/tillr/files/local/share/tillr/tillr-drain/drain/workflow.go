@@ -760,6 +760,26 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		}
 	}
 	if stage.Kind == "agent" {
+		if verifyBuildReturn(d.Returned) {
+			if why, wrong := l.builderPlanWrong(d, stage, footer, log); wrong {
+				// The build step cannot meet the findings within the plan: the plan step runs
+				// again, with the builder's explanation and the findings it was given.
+				if err := l.nodeOutcome(ctx, d, "refused"); err != nil {
+					return true, err
+				}
+				if strings.TrimSpace(d.Returned.Detail) != "" {
+					why += "\n\nThe findings this build step was given:\n" + strings.TrimSpace(d.Returned.Detail)
+				}
+				c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: base, HeadSHA: head, RefusalDetail: why}
+				if err := l.refuse(ctx, c, result, RefusalPlanWrong); err != nil {
+					return true, err
+				}
+				if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "build step reported plan-wrong: "+stage.ID); stop != "" {
+					return true, retainedAfter(d.LaneID, stop)
+				}
+				return true, l.markExamined(ctx, d)
+			}
+		}
 		if footer != "done" && footer != "failed" {
 			if footer == "blocked" {
 				if err := l.reportedBlock(ctx, d, log); err != nil {

@@ -27,8 +27,12 @@ const (
 	RefusalFence         = "fence"
 	RefusalGate          = "gate"
 	RefusalVerifyNotDone = "verify-not-done"
-	RefusalLand          = "land"
-	RefusalConflict      = "conflict"
+	// RefusalPlanWrong is a build step's report that it cannot meet the verifier's findings
+	// within the plan (or that the plan's narrowed piece cannot hold the work). It sends the
+	// item back to the plan step, the one other route a failed verify has.
+	RefusalPlanWrong = "plan-wrong"
+	RefusalLand      = "land"
+	RefusalConflict  = "conflict"
 	// RefusalNodeOutput means a successful run did not supply a usable declared file.
 	RefusalNodeOutput = "node-output-missing"
 	// RefusalStaging is the step that refused before anything ran: the item's own record
@@ -99,7 +103,7 @@ func (l *Loop) refuse(ctx context.Context, candidate Candidate, result *LoopResu
 		l.reportf("loop: repeated-refusal: %s\n", line)
 	}
 	switch step {
-	case RefusalLand, RefusalGate, RefusalVerifyNotDone, RefusalFence, RefusalNoOp, RefusalNodeOutput, RefusalWordsMissing, RefusalWordsAltered, RefusalIdeaNoOutcome:
+	case RefusalLand, RefusalGate, RefusalVerifyNotDone, RefusalPlanWrong, RefusalFence, RefusalNoOp, RefusalNodeOutput, RefusalWordsMissing, RefusalWordsAltered, RefusalIdeaNoOutcome:
 		return l.recordRefusal(ctx, candidate, step)
 	}
 	return nil
@@ -155,7 +159,7 @@ func RepeatedRefusalLine(result LoopResult) string {
 // refusalStepsWords is the steps breakdown as one phrase: `fence=2`, `gate=1, fence=1`.
 // The order is fixed rather than the map's, so the same report reads the same way twice.
 func refusalStepsWords(steps map[string]int) string {
-	order := []string{RefusalNoOp, RefusalFence, RefusalGate, RefusalVerifyNotDone, RefusalLand, RefusalConflict, RefusalNodeOutput, RefusalWordsMissing, RefusalWordsAltered, RefusalIdeaNoOutcome}
+	order := []string{RefusalNoOp, RefusalFence, RefusalGate, RefusalVerifyNotDone, RefusalPlanWrong, RefusalLand, RefusalConflict, RefusalNodeOutput, RefusalWordsMissing, RefusalWordsAltered, RefusalIdeaNoOutcome}
 	parts := make([]string, 0, len(order))
 	for _, step := range order {
 		if steps[step] > 0 {

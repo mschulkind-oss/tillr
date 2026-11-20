@@ -249,6 +249,9 @@ type refusalPayload struct {
 	// conflict of a retry cycle by discarding the candidate and returning the item for a
 	// fresh attempt from the current trunk (conflict_restart.go, D-JL12).
 	Restart bool `json:"restart,omitempty"`
+	// Replan marks a verify-not-done refusal whose findings say the plan was wrong: the
+	// item returns to the plan step instead of the build step, and no worker session is kept.
+	Replan bool `json:"replan,omitempty"`
 	// Selectors are a reverted landing's legacy replay selectors (kind:label) by check
 	// id, kept so the item's next gate can run a check a loop restart forgot.
 	Selectors map[string]string `json:"selectors,omitempty"`
@@ -273,15 +276,25 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 	}
 	if returnedCauses[step] {
 		payload.Checks, payload.Evidence = l.endingEvidence(ctx, candidate, step)
-		capture := step != RefusalVerifyNotDone
-		if !capture {
-			words, err := requestWordsFor(ctx, l.cfg.Store, candidate.ItemID)
-			if err != nil {
-				return err
+		switch step {
+		case RefusalVerifyNotDone:
+			if candidate.VerifyReplan {
+				payload.Replan = true
+			} else {
+				// The next run is the build step, on the candidate the verifier read:
+				// keep that head reachable and name the step that will repair it.
+				if err := l.pinCandidateHead(ctx, candidate); err != nil {
+					return err
+				}
+				var err error
+				payload.WorkerSession, err = l.verifyBuildSession(ctx, candidate)
+				if err != nil {
+					return err
+				}
 			}
-			capture = words != nil
-		}
-		if capture {
+		case RefusalPlanWrong:
+			// The plan, not a session, is what goes back.
+		default:
 			var err error
 			payload.WorkerSession, err = l.captureWorkerSession(ctx, candidate)
 			if err != nil {

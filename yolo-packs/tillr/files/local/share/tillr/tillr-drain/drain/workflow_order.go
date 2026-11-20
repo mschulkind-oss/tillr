@@ -88,6 +88,16 @@ func commandNodeHold(r *store.Reader, id string) (string, error) {
 		return ReasonRunUnjudged, nil
 	}
 	if outcome == "refused" {
+		// A build step that reported the plan wrong refused nothing about its checkout: the
+		// item goes back to the plan step (RefusalPlanWrong) rather than holding.
+		var step string
+		err := r.QueryRow(`SELECT json_extract(payload,'$.step') FROM events WHERE kind=? AND object_id=? ORDER BY seq DESC LIMIT 1`, RefusalKind, runID).Scan(&step)
+		if err != nil && err != sql.ErrNoRows {
+			return "", err
+		}
+		if step == RefusalPlanWrong {
+			return "", nil
+		}
 		return ReasonBoundaryScopeEscape, nil
 	}
 	if outcome == "fault" {

@@ -174,3 +174,140 @@ func readStateMoves(r *store.Reader, itemID string) ([]stateMoveView, error) {
 	sort.SliceStable(out, func(i, j int) bool { return out[i].AtMS < out[j].AtMS })
 	return out, rows.Err()
 }
+
+// verifyRefusalView is one verify-not-done refusal and the step that ran after it. NextStep is
+// the workflow node (`work`, `plan`, `work/piece-one`) of the next run the drain started for
+// the item, or that run's seat when it ran outside a workflow node. The Next fields are null
+// until a later step has started: nothing ran next yet is not an empty step name. Replan is
+// the drain's own marker that the findings said the plan was wrong.
+type verifyRefusalView struct {
+	EventSeq     int64   `json:"event_seq"`
+	AtMS         int64   `json:"at_ms"`
+	RunID        string  `json:"run_id"`
+	Attempt      *int    `json:"attempt"`
+	Detail       string  `json:"detail"`
+	Replan       bool    `json:"replan"`
+	NextRunID    *string `json:"next_run_id"`
+	NextAttempt  *int    `json:"next_attempt"`
+	NextStep     *string `json:"next_step"`
+	NextSeat     *string `json:"next_seat"`
+	NextEventSeq *int64  `json:"next_event_seq"`
+	NextAtMS     *int64  `json:"next_at_ms"`
+}
+
+func readVerifyRefusals(r *store.Reader, itemID string) ([]verifyRefusalView, error) {
+	out := []verifyRefusalView{}
+	rows, err := r.Query(`SELECT seq, ts, COALESCE(object_id, ''), COALESCE(json_extract(payload, '$.detail'), ''), COALESCE(json_extract(payload, '$.replan'), 0)
+ FROM events WHERE kind = 'drain.refusal' AND object_type = 'run' AND json_valid(payload)
+ AND json_extract(payload, '$.item_id') = ? AND json_extract(payload, '$.step') = 'verify-not-done' ORDER BY seq`, itemID)
+	if err != nil {
+		return nil, err
+	}
+	refusals := []verifyRefusalView{}
+	for rows.Next() {
+		var x verifyRefusalView
+		var replan int
+		if err := rows.Scan(&x.EventSeq, &x.AtMS, &x.RunID, &x.Detail, &replan); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		x.Replan = replan != 0
+		refusals = append(refusals, x)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil || len(refusals) == 0 {
+		return out, err
+	}
+	nodes, err := nodeRunsByRun(r, itemID)
+	if err != nil {
+		return nil, err
+	}
+	type started struct {
+		seq, atMS       int64
+		runID, seat, id string
+	}
+	var starts []started
+	srows, err := r.Query(`SELECT seq, ts, COALESCE(object_id, ''), payload FROM events
+ WHERE kind IN ('drain.started', 'drain.node-advanced') AND object_type = 'run' AND json_valid(payload)
+ AND json_extract(payload, '$.decision.item_id') = ? ORDER BY seq`, itemID)
+	if err != nil {
+		return nil, err
+	}
+	for srows.Next() {
+		var s started
+		var raw []byte
+		if err := srows.Scan(&s.seq, &s.atMS, &s.runID, &raw); err != nil {
+			srows.Close()
+			return nil, err
+		}
+		var d struct {
+			Decision struct {
+				Seat      string     `json:"seat"`
+				NodeIndex int        `json:"node_index"`
+				Workflow  *itemGraph `json:"workflow"`
+			} `json:"decision"`
+		}
+		if err := json.Unmarshal(raw, &d); err != nil {
+			srows.Close()
+			return nil, err
+		}
+		s.seat = d.Decision.Seat
+		if w := d.Decision.Workflow; w != nil && d.Decision.NodeIndex >= 0 && d.Decision.NodeIndex < len(w.Stages) {
+			s.id = w.Stages[d.Decision.NodeIndex].ID
+			if s.seat == "" {
+				s.seat = w.Stages[d.Decision.NodeIndex].Seat
+			}
+		}
+		starts = append(starts, s)
+	}
+	err = srows.Err()
+	srows.Close()
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range refusals {
+		if n, ok := nodes[v.RunID]; ok {
+			attempt := n.Attempt
+			v.Attempt = &attempt
+		}
+		for _, s := range starts {
+			if s.seq <= v.EventSeq || s.runID == v.RunID {
+				continue
+			}
+			step := s.id
+			if n, ok := nodes[s.runID]; ok {
+				step = n.NodeID
+				attempt := n.Attempt
+				v.NextAttempt = &attempt
+			}
+			if step == "" {
+				step = s.seat
+			}
+			run, seq, at := s.runID, s.seq, s.atMS
+			v.NextRunID, v.NextEventSeq, v.NextAtMS = &run, &seq, &at
+			if step != "" {
+				v.NextStep = &step
+			}
+			if s.seat != "" {
+				seat := s.seat
+				v.NextSeat = &seat
+			}
+			break
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+func nodeRunsByRun(r *store.Reader, itemID string) (map[string]laneNode, error) {
+	nodes, err := laneNodes(r, itemID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]laneNode, len(nodes))
+	for _, n := range nodes {
+		out[n.RunID] = n
+	}
+	return out, nil
+}
