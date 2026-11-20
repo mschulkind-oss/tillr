@@ -239,3 +239,80 @@ func TestAcceptRewriteRefusals(t *testing.T) {
 		})
 	}
 }
+
+// rebaseOnto replays base..tip onto a trunk that gained a commit of its own, as
+// `git pull --rebase` does to unpushed landings. skip names files whose commits are dropped.
+func rebaseOnto(t *testing.T, root, base, tip string, skip ...string) string {
+	t.Helper()
+	commits := strings.Fields(runGit(t, root, "rev-list", "--reverse", base+".."+tip))
+	runGit(t, root, "reset", "-q", "--hard", base)
+	ownerCommit(t, root, "upstream.txt")
+next:
+	for _, c := range commits {
+		subject := runGit(t, root, "log", "-1", "--format=%s", c)
+		for _, s := range skip {
+			if s == subject {
+				continue next
+			}
+		}
+		runGit(t, root, "cherry-pick", c)
+	}
+	return runGit(t, root, "rev-parse", "HEAD")
+}
+
+// A pull that rebases unpushed landings onto a moved remote changes every sha and the
+// tip's tree. Each lost commit still has a commit with the same patch on the trunk, so
+// the rewrite kept the content and is accepted; the next pass does not hold again.
+func TestAcceptARebaseOntoAMovedBase(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	base := runGit(t, f.root, "rev-parse", "HEAD")
+	ownerCommit(t, f.root, "one.txt")
+	lost := ownerCommit(t, f.root, "two.txt")
+	if _, err := l.observeTrunk(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	current := rebaseOnto(t, f.root, base, lost)
+	if runGit(t, f.root, "rev-parse", lost+"^{tree}") == runGit(t, f.root, "rev-parse", current+"^{tree}") {
+		t.Fatal("the fixture's rebase kept the tree, so it does not exercise the moved base")
+	}
+	if h, err := l.observeTrunk(context.Background(), ""); err != nil || h.Lost != lost {
+		t.Fatalf("the rewrite was not held: %+v / %v", h, err)
+	}
+	got, err := acceptRewrite(f, lost, current)
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	if !got.Rebased || got.Commits != 2 {
+		t.Fatalf("acceptance = %+v, want a rebase of 2 commits", got)
+	}
+	if runGit(t, f.root, "rev-parse", acceptedTrunkPrefix+lost) != lost {
+		t.Fatal("the lost tip is not pinned")
+	}
+	if h, err := l.observeTrunk(context.Background(), ""); err != nil || h.Lost != "" || h.Observed != current {
+		t.Fatalf("the next pass re-held: %+v / %v", h, err)
+	}
+}
+
+// A rebase that dropped a landed commit did not keep the content. It is refused, the
+// refusal names the commit with no match, and nothing changes.
+func TestAcceptRefusesARebaseThatDroppedACommit(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	base := runGit(t, f.root, "rev-parse", "HEAD")
+	one := ownerCommit(t, f.root, "one.txt")
+	lost := ownerCommit(t, f.root, "two.txt")
+	if _, err := l.observeTrunk(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	current := rebaseOnto(t, f.root, base, lost, "one.txt")
+	if _, err := l.observeTrunk(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	before := rewriteHistory(t, f)
+	_, err := acceptRewrite(f, lost, current)
+	if err == nil || !strings.Contains(err.Error(), "trees differ") || !strings.Contains(err.Error(), one) {
+		t.Fatalf("want a refusal naming the dropped commit %s, got %v", one, err)
+	}
+	if after := rewriteHistory(t, f); after != before {
+		t.Fatalf("a refusal changed history: %+v -> %+v", before, after)
+	}
+}
