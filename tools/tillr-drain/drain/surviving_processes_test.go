@@ -64,7 +64,7 @@ func TestSurvivingRunProcessesScansMarkedLiveProcesses(t *testing.T) {
 }
 
 type survivingLoopSteps struct {
-	recordingSteps
+	*recordingSteps
 	t         *testing.T
 	f         refusalLoopFixture
 	strayCmd  *exec.Cmd
@@ -149,7 +149,7 @@ func (s *survivingLoopSteps) Land(ctx context.Context, c Candidate) (LandOutcome
 func TestSurvivingProcessesHoldOnlyTheirItemAndKeepLoopRunning(t *testing.T) {
 	f, l := passFixture(t, "item-a", "item-b")
 	steps := &survivingLoopSteps{
-		recordingSteps: *l.cfg.Steps.(*recordingSteps),
+		recordingSteps: l.cfg.Steps.(*recordingSteps),
 		t:              t,
 		f:              f,
 		landedB:        make(chan struct{}),
