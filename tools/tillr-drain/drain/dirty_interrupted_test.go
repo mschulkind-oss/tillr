@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mschulkind-oss/tillr-run/run"
@@ -540,9 +541,14 @@ func TestRestartInterruptedNodeAndRetryWorkflowNodePreserveWorkBeforeRestart(t *
 
 type dirtyNormalExitSteps struct {
 	*workflowSteps
+	mu       sync.Mutex
+	requests []run.Request
 }
 
 func (s *dirtyNormalExitSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	s.mu.Lock()
+	s.requests = append(s.requests, req)
+	s.mu.Unlock()
 	target := filepath.Join(s.f.laneRoot, req.LaneID, WorktreeDir)
 	if err := os.MkdirAll(filepath.Join(target, "tools/item-a"), 0755); err != nil {
 		return run.Record{}, "", err
@@ -630,11 +636,12 @@ func TestNormalExitClaimingCommitWithDirtyWorktreeRefusesBoundaryScopeEscape(t *
 	})
 
 	t.Run("single_run", func(t *testing.T) {
-		// Pin both commit dates. The step runner commits the same tree on the same parent
-		// for every run; with the date fixed, two runs' commits are one commit, the case a
-		// second boundary otherwise decides by chance.
-		t.Setenv("GIT_AUTHOR_DATE", "2026-11-19T00:00:00Z")
-		t.Setenv("GIT_COMMITTER_DATE", "2026-11-19T00:00:00Z")
+		// What decides continuing in place against refusing at the fence is settle's
+		// `noNewCommit`: the head equals the staged base, the design continuation head, or
+		// the head the item's previous worker session ended on. A run that exits normally
+		// on a head none of those names is a candidate, and its dirty fenced file is refused
+		// as boundary-scope-escape; it is never continued. The step runner gives every run
+		// a commit of its own, so the outcome is fixed: no run here is a continuation.
 		f, l, ws := workflowLoopFixture(t, "")
 		fixtureWrite(t, f, func(tx *store.Tx) error {
 			if _, err := tx.Exec(`UPDATE items SET state='closed' WHERE item_id='item-b'`); err != nil {
@@ -643,7 +650,8 @@ func TestNormalExitClaimingCommitWithDirtyWorktreeRefusesBoundaryScopeEscape(t *
 			_, err := tx.Exec(`UPDATE items SET workflow='' WHERE item_id='item-a'`)
 			return err
 		})
-		l.cfg.Steps = &dirtyNormalExitSteps{workflowSteps: ws}
+		steps := &dirtyNormalExitSteps{workflowSteps: ws}
+		l.cfg.Steps = steps
 
 		result, err := l.Run(context.Background())
 		if err != nil {
@@ -651,6 +659,16 @@ func TestNormalExitClaimingCommitWithDirtyWorktreeRefusesBoundaryScopeEscape(t *
 		}
 		if result.Rejected < 1 || result.RefusedSteps[RefusalFence] < 1 || result.Landed != 0 {
 			t.Fatalf("expected normal-exit dirty single-run commit to be refused as RefusalFence, got %+v", result)
+		}
+		steps.mu.Lock()
+		defer steps.mu.Unlock()
+		for _, req := range steps.requests {
+			if req.ResumePrompt != "" {
+				t.Fatalf("run %s was continued in place (resume prompt %q); a run that committed must be refused at the fence", req.RunID, req.ResumePrompt)
+			}
+		}
+		if len(steps.requests) != result.RefusedSteps[RefusalFence] {
+			t.Fatalf("%d runs for %d fence refusals: every run must end at the fence, none by continuation", len(steps.requests), result.RefusedSteps[RefusalFence])
 		}
 		assertFenceEscapeRefusal(t, f, "run-item-a-a1")
 	})
