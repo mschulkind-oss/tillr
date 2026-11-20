@@ -12,6 +12,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/definition"
 )
 
 func TestBriefPolicySeatsAndPiIsolation(t *testing.T) {
@@ -284,6 +285,167 @@ func TestBriefDesignDocumentRuleBySeat(t *testing.T) {
 		got := strings.Contains(string(raw), DesignDocumentRule)
 		if got != tc.want {
 			t.Fatalf("Stage(%s): contains DesignDocumentRule = %v, want %v", tc.seat, got, tc.want)
+		}
+	}
+}
+
+func TestBriefDesignProvenanceRuleBySeat(t *testing.T) {
+	const wantSentence = "A decision the designer or operator made (including a filed request and any mechanism, format, field names, or rejected alternatives the design seat writes) is recorded as theirs — never presented as the owner's ruling, and marked in prose and Decision Ledger rows as the designer's (or from an operator request) that the owner may overturn — and only a quoted owner statement is recorded as an owner ruling (quoting the owner's dated words verbatim)."
+	if DesignProvenanceRule != wantSentence {
+		t.Fatalf("DesignProvenanceRule = %q, want %q", DesignProvenanceRule, wantSentence)
+	}
+	template, err := filepath.Abs(filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	renderFor := func(recorded stagedItem, spec StageSpec, capability string) string {
+		t.Helper()
+		values, err := briefValuesFor(recorded, spec, "/tmp/target", "lane worktree", strings.Repeat("0", 40), "/tmp/durable", time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC))
+		if err != nil {
+			t.Fatal(err)
+		}
+		brief, err := renderBriefWithEnding(template, recorded.ItemID, values, capability)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return brief
+	}
+
+	// 1. Single-worker item seats under both ending capabilities.
+	omitSeats := []string{"", "build", "edit", "docs", "test-write", "plan", "verify", "scout", "test-run", "review"}
+	for _, capability := range []string{run.EndingFooter, run.EndingCallSuspends} {
+		recorded := refusalStagedItem("item-a")
+		recorded.Seat = "design"
+		spec := refusalSpec(recorded.ItemID)
+		if brief := renderFor(recorded, spec, capability); !strings.Contains(brief, wantSentence) {
+			t.Fatalf("capability=%s seat=design: expected provenance rule in brief:\n%s", capability, brief)
+		}
+		for _, seat := range omitSeats {
+			recorded := refusalStagedItem("item-a")
+			recorded.Seat = seat
+			spec := refusalSpec(recorded.ItemID)
+			if brief := renderFor(recorded, spec, capability); strings.Contains(brief, wantSentence) {
+				t.Fatalf("capability=%s seat=%q: unexpected provenance rule in brief", capability, seat)
+			}
+		}
+	}
+
+	// 2. Workflow node seats follow spec.Node.Seat rather than recorded.Seat.
+	{
+		recorded := refusalStagedItem("item-a")
+		recorded.Seat = "build"
+		spec := refusalSpec(recorded.ItemID)
+		spec.Node = &WorkflowStage{ID: "node-design", Kind: "agent", Seat: "design", Access: "write"}
+		if brief := renderFor(recorded, spec, run.EndingFooter); !strings.Contains(brief, wantSentence) {
+			t.Fatalf("build item with design node: expected provenance rule in brief:\n%s", brief)
+		}
+	}
+	for _, nodeSeat := range omitSeats {
+		recorded := refusalStagedItem("item-a")
+		recorded.Seat = "design"
+		spec := refusalSpec(recorded.ItemID)
+		spec.Node = &WorkflowStage{ID: "node-1", Kind: "agent", Seat: nodeSeat, Access: "read_only"}
+		if brief := renderFor(recorded, spec, run.EndingFooter); strings.Contains(brief, wantSentence) {
+			t.Fatalf("design item with node seat %q: unexpected provenance rule in brief", nodeSeat)
+		}
+	}
+
+	// 3. Conflict and triage dispatches on a build item act on the design seat and carry the rule.
+	for _, c := range []item.Conflict{
+		{ConflictID: "conflict-doc", RunID: "run-1", BodyRef: "docs/design/example.md#item-a"},
+		{ConflictID: "conflict-req", RunID: "run-1"},
+		{ConflictID: "triage-item-a-v1", RunID: "run-1", BodyRef: "docs/design/example.md#item-a", TriageVersion: "v1"},
+	} {
+		recorded := refusalStagedItem("item-a")
+		recorded.Seat = "build"
+		spec := refusalSpec(recorded.ItemID)
+		conflict := c
+		spec.BlockConflict = &conflict
+		if brief := renderFor(recorded, spec, run.EndingFooter); !strings.Contains(brief, wantSentence) {
+			t.Fatalf("block conflict %s: expected provenance rule in brief:\n%s", c.ConflictID, brief)
+		}
+	}
+
+	// 4. End-to-end LaneStager.Stage (Git worktree) and stagePlain (plain directory).
+	ctx := context.Background()
+	f := newRefusalLoopFixture(t, "item-a")
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	stager := &LaneStager{
+		Root:     f.root,
+		LaneRoot: f.laneRoot,
+		Store:    f.storePath,
+		Template: template,
+	}
+	for i, tc := range []struct {
+		seat string
+		want bool
+	}{
+		{seat: "design", want: true},
+		{seat: "build", want: false},
+	} {
+		spec := StageSpec{
+			LaneID:     "lane-1",
+			ItemID:     "item-a",
+			RunID:      "run-prov-" + tc.seat,
+			Backend:    "fixture",
+			BaseSHA:    base,
+			WorkingDir: WorktreeDir,
+			Node:       &WorkflowStage{ID: "step-" + tc.seat, Kind: "agent", Seat: tc.seat, Access: "write"},
+		}
+		if i > 0 {
+			spec.Continue = true
+		}
+		if err := stager.Stage(ctx, spec); err != nil {
+			t.Fatalf("Stage(%s): %v", tc.seat, err)
+		}
+		raw, err := os.ReadFile(filepath.Join(f.laneRoot, "lane-1", BriefFile))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", tc.seat, err)
+		}
+		if got := strings.Contains(string(raw), wantSentence); got != tc.want {
+			t.Fatalf("Stage(%s): contains provenance rule = %v, want %v", tc.seat, got, tc.want)
+		}
+	}
+
+	plainTemplate := filepath.Join(t.TempDir(), "plain-brief.md")
+	if err := os.WriteFile(plainTemplate, []byte("# {{ITEM_ID}}: {{TITLE}}\n{{SETTLED}}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	plainStager := &LaneStager{
+		Root:     f.root,
+		LaneRoot: t.TempDir(),
+		Store:    f.storePath,
+	}
+	for _, tc := range []struct {
+		lane string
+		seat string
+		want bool
+	}{
+		{lane: "plain-design", seat: "design", want: true},
+		{lane: "plain-build", seat: "build", want: false},
+	} {
+		spec := StageSpec{
+			LaneID:     tc.lane,
+			ItemID:     "item-a",
+			RunID:      "run-" + tc.lane,
+			Backend:    "fixture",
+			WorkingDir: PlainDir,
+			Node:       &WorkflowStage{ID: "step-" + tc.seat, Kind: "agent", Seat: tc.seat, Access: "write"},
+		}
+		if err := plainStager.stagePlain(ctx, spec, definition.Definition{Name: "plain-fixture", BriefTemplate: plainTemplate}); err != nil {
+			t.Fatalf("stagePlain(%s): %v", tc.seat, err)
+		}
+		raw, err := os.ReadFile(filepath.Join(plainStager.LaneRoot, tc.lane, BriefFile))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", tc.lane, err)
+		}
+		if got := strings.Contains(string(raw), wantSentence); got != tc.want {
+			t.Fatalf("stagePlain(%s): contains provenance rule = %v, want %v", tc.seat, got, tc.want)
+		}
+		for _, word := range []string{"sha", "fence", "trunk"} {
+			if strings.Contains(strings.ToLower(string(raw)), word) {
+				t.Fatalf("stagePlain(%s): plain prose carries Git word %q: %s", tc.seat, word, raw)
+			}
 		}
 	}
 }

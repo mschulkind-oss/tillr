@@ -1295,6 +1295,10 @@ func dedupe(names []string) []string {
 // to end with an obstacle naming the document and needed edit so the design seat makes it.
 const DesignDocumentRule = "Only an item's designer changes a design document: when the change needs a design document edited, do not make the edit; end with an obstacle that names the document and the edit needed, so the design seat makes it."
 
+// DesignProvenanceRule instructs the design seat to record designer and operator decisions
+// as theirs, and never to present an unquoted decision as an owner ruling (design D-JL19).
+const DesignProvenanceRule = "A decision the designer or operator made (including a filed request and any mechanism, format, field names, or rejected alternatives the design seat writes) is recorded as theirs — never presented as the owner's ruling, and marked in prose and Decision Ledger rows as the designer's (or from an operator request) that the owner may overturn — and only a quoted owner statement is recorded as an owner ruling (quoting the owner's dated words verbatim)."
+
 // stagedSeat answers the seat that a staged run acts on.
 func stagedSeat(recorded stagedItem, spec StageSpec) string {
 	if spec.BlockConflict != nil {
@@ -1317,6 +1321,11 @@ func carriesDesignDocumentRule(seat string) bool {
 	default:
 		return false
 	}
+}
+
+// carriesDesignProvenanceRule answers whether a seat's brief carries DesignProvenanceRule.
+func carriesDesignProvenanceRule(seat string) bool {
+	return seat == "design"
 }
 
 // briefValuesFor answers the placeholder values for one item and one dispatch.
@@ -1399,8 +1408,12 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 		}
 		settled += " For a real owner decision, state the question as a sentence ending in a question mark and give at least two bulleted or numbered alternatives under an Options heading in the report." + question + " A stale lane base is a staging fault, not an owner decision; report the missing base fact without inventing options."
 	}
-	if carriesDesignDocumentRule(stagedSeat(recorded, spec)) {
+	seat := stagedSeat(recorded, spec)
+	if carriesDesignDocumentRule(seat) {
 		settled += "\n\n" + DesignDocumentRule
+	}
+	if carriesDesignProvenanceRule(seat) {
+		settled += "\n\n" + DesignProvenanceRule
 	}
 	// The order matters: it is the order a brace pair is attributed in, and the item's own
 	// fields come first so the record — not the run — is what a refusal names. TASK carries
