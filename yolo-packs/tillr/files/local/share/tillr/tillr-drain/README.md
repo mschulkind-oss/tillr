@@ -1068,6 +1068,20 @@ at loop start) because "remote is behind green" is recomputed each time. `what =
 the trunk tip after each landing instead; `"none"` pushes nothing. The pre-push hook runs, and
 it publishes fork patch branches at their local tips whatever the pushed commit is; see
 [Pushing what the proof has passed](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-restart.md#pushing-what-the-proof-has-passed).
+
+A push the remote refuses because it has moved (porcelain status `[rejected]` with `fetch first`,
+`non-fast-forward` or `stale info`) is told apart from every other failure (a server decline,
+a hook failure, an unreachable remote), and only it is acted on. The drain fetches the branch
+and, under the landing lock, replays the unpublished trunk commits one by one onto the fetched
+tip: linear, no merge commit, never a forced push, authors and messages kept. It then moves the
+main checkout with `git reset --keep`, so a path the move changes that holds owner content
+stops it with nothing changed. The loop's rewrite absorption maps each replaced commit by patch,
+carries `refs/tillr/green`, and raises no trunk-rewritten hold. In green mode the new tip is
+proved first and pushed at the next green advance; in tip mode the push runs again at once. A
+conflict, a merge commit among the unpublished commits, a checkout off the trunk or a dirty
+path fails the push with `mover: operator` and the commands to run by hand. Not built: the
+design's conflict-repair run and escalation, the published-ref bookkeeping and the trusted
+remote identities ([the design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md)).
 A failing check holds the pointer and is run alone at the pointer and by bisection on
 recorded landings in the range. Legacy span IDs retain their kind and label so replay
 uses the old program's selector vocabulary rather than confusing its stable report ID

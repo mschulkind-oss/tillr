@@ -88,7 +88,15 @@ func (l *Loop) afterLandingCandidate(ctx context.Context, candidate Candidate, t
 	if candidate.BaseRef == "" {
 		if p := l.cfg.PostLanding.Push; p.What == settings.PushTip {
 			l.pushAction.submit(tip, func(tip string) {
-				l.recordPush(ctx, settings.PushTip, tip, pushTrunk(ctx, l.cfg.Root, p))
+				err := pushTrunk(ctx, l.cfg.Root, p)
+				var refused *refusedPushError
+				if errors.As(err, &refused) {
+					// The remote moved: rebase onto it, then push once more.
+					if _, err = l.healRefusedPush(ctx, p, err); err == nil {
+						err = pushTrunk(ctx, l.cfg.Root, p)
+					}
+				}
+				l.recordPush(ctx, settings.PushTip, tip, err)
 			})
 		}
 	}
@@ -172,6 +180,16 @@ func (l *Loop) afterGreen(ctx context.Context, advanced string) {
 		if green == "" && err == nil {
 			return // no green pointer yet: nothing is proven
 		}
+		var refused *refusedPushError
+		if errors.As(err, &refused) {
+			// The remote moved: rebase onto it. The new tip is proved by the normal
+			// after-merge run, and the green advance that follows pushes it.
+			n, herr := l.healRefusedPush(ctx, p, err)
+			if herr == nil {
+				herr = fmt.Errorf("the remote had moved: %d unpublished commits were rebased onto it; the new tip is proved, then pushed at the next green advance", n)
+			}
+			err = herr
+		}
 		l.recordPush(ctx, settings.PushGreen, green, err)
 	})
 }
@@ -228,8 +246,7 @@ func pushTrunk(ctx context.Context, root string, p settings.Push) error {
 	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
 	defer cancel()
 	// Supply an explicit non-forcing refspec, independent of remote push defaults.
-	_, err = actionCommand(ctx, root, "git", "push", "--", remote, "refs/heads/"+TrunkRef+":"+ref)
-	return err
+	return pushCommand(ctx, root, "--", remote, "refs/heads/"+TrunkRef+":"+ref)
 }
 
 // pushGreen pushes the commit `refs/tillr/green` holds now to the remote branch, unless the
@@ -256,8 +273,7 @@ func pushGreen(ctx context.Context, root string, p settings.Push) (string, error
 	}
 	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
 	defer cancel()
-	_, err = actionCommand(ctx, root, "git", "push", "--", remote, green+":"+ref)
-	return green, err
+	return green, pushCommand(ctx, root, "--", remote, green+":"+ref)
 }
 
 // errAlreadyPublished marks the push that was not needed; it is a success, not a failure.
