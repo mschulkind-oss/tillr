@@ -1638,6 +1638,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 				if (decision.NodeIndex == 0 && !request.SessionTurn) || revertedSession {
 					decision.NodeBaseSHA = l.laneBase(decision.LaneID)
 				}
+				decision.NodeBaseSHA = l.baseInCheckout(ctx, decision.LaneID, decision.NodeBaseSHA)
 				decision.NodeStartRunID = decision.RunRequest.RunID
 				if recErr := l.recordStagedNode(ctx, decision); recErr != nil {
 					if holdErr := failStage("record staged node", recErr); holdErr != nil {

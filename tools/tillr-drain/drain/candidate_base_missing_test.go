@@ -23,3 +23,13 @@ func TestACandidateWhoseBaseIsNotInItsCheckoutHoldsTheItem(t *testing.T) {
 		t.Fatalf("fault = %+v (%v), want a candidate mismatch naming the base and the checkout", fault, ok)
 	}
 }
+
+// The same foreign base reached the preservation of a lane's work, where `git diff
+// --numstat` failed with "bad object" and ended the loop (2026-11-20 22:24 UTC). A base the
+// checkout does not hold is replaced by the lane's own recorded base.
+func TestPreservingWorkFromABaseTheCheckoutLacksUsesTheLaneBase(t *testing.T) {
+	_, l, c := heldCandidateFixture(t)
+	if err := l.preserveWorkFromBase(context.Background(), c.LaneID, "run-item-a-a9", "a89b3767732c5642733b81e1b872dd4e6a2ed9c8", "orphaned workflow released"); err != nil {
+		t.Fatalf("preserveWorkFromBase = %v, want the lane's work preserved", err)
+	}
+}

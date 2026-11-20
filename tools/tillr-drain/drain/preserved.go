@@ -46,6 +46,20 @@ func (l *Loop) preserveWork(ctx context.Context, lane, runID, reason string) err
 	return l.preserveWorkFromBase(ctx, lane, runID, "", reason)
 }
 
+// baseInCheckout answers base when the lane's checkout holds it as a commit, and the
+// lane's own recorded base otherwise. A fork item's later workflow node was recorded with
+// this repository's trunk commit as its node base (2026-11-20), which no git in the fork
+// checkout can read.
+func (l *Loop) baseInCheckout(ctx context.Context, lane, base string) string {
+	if base == "" {
+		return base
+	}
+	if _, err := l.git(ctx, l.laneTarget(lane), "cat-file", "-e", base+"^{commit}"); err != nil {
+		return l.laneBase(lane)
+	}
+	return base
+}
+
 func (l *Loop) preserveWorkFromBase(ctx context.Context, lane, runID, base, reason string) error {
 	if runID == "" {
 		return nil
@@ -65,6 +79,7 @@ func (l *Loop) preserveWorkFromBase(ctx context.Context, lane, runID, base, reas
 		return nil
 	}
 	target := l.laneTarget(lane)
+	base = l.baseInCheckout(ctx, lane, base)
 	ref := preservedPrefix + runID
 	refs, err := l.git(ctx, target, "for-each-ref", "--format=%(refname)", ref)
 	if err != nil {
