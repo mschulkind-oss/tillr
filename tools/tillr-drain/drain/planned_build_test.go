@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -280,5 +281,181 @@ func TestPlannedBuildSeatsMappedEveryPolicy(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+type quickWaySteps struct {
+	*workflowSteps
+	mode string
+	runs []string
+}
+
+func (s *quickWaySteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	s.runs = append(s.runs, req.NodeID)
+	target := filepath.Join(s.f.laneRoot, req.LaneID, WorktreeDir)
+	durable := run.DurableDir(filepath.Join(s.f.laneRoot, req.LaneID), req.RunID)
+	if err := os.MkdirAll(durable, 0755); err != nil {
+		return run.Record{}, "", err
+	}
+	if req.NodeID == "plan" {
+		s.firstHead = runGit(s.t, target, "rev-parse", "HEAD")
+		switch s.mode {
+		case "quick", "quick-escape":
+			outDir := nodeOutputsDir(s.f.root, req.RunID)
+			if err := os.MkdirAll(outDir, 0755); err != nil {
+				return run.Record{}, "", err
+			}
+			writeForkFile(s.t, filepath.Join(outDir, quickWayFile), "do it now\n")
+			rel := "tools/item-a/quick.txt"
+			if s.mode == "quick-escape" {
+				rel = "outside/escape.txt"
+			}
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(target, rel)), 0755); err != nil {
+				return run.Record{}, "", err
+			}
+			writeForkFile(s.t, filepath.Join(target, rel), "quick\n")
+			runGit(s.t, target, "add", ".")
+			runGit(s.t, target, "commit", "-qm", "quick")
+		case "commit-without-choice":
+			if err := os.MkdirAll(filepath.Join(target, "tools/item-a"), 0755); err != nil {
+				return run.Record{}, "", err
+			}
+			writeForkFile(s.t, filepath.Join(target, "tools/item-a/unrecorded.txt"), "nope\n")
+			runGit(s.t, target, "add", ".")
+			runGit(s.t, target, "commit", "-qm", "unrecorded")
+		}
+	} else if req.NodeID == "work" {
+		if err := os.MkdirAll(filepath.Join(target, "tools/item-a"), 0755); err != nil {
+			return run.Record{}, "", err
+		}
+		writeForkFile(s.t, filepath.Join(target, "tools/item-a/work.txt"), "work\n")
+		runGit(s.t, target, "add", ".")
+		runGit(s.t, target, "commit", "-qm", "work")
+	} else if req.NodeID == "verify" {
+		head := runGit(s.t, target, "rev-parse", "HEAD")
+		tree := runGit(s.t, target, "rev-parse", head+"^{tree}")
+		out := item.JudgeOutput{
+			EvaluatedHead: head,
+			EvaluatedTree: tree,
+			Outcome:       "pass",
+			Verdicts: []item.JudgeEntry{{
+				CriterionID:   "c1",
+				CriterionHash: item.CriterionHash("the first criterion of item-a"),
+				Verdict:       "done",
+				ClaimClass:    item.ClaimVerification,
+				Reason:        "verified",
+				Evidence:      []string{"node:work"},
+			}},
+		}
+		raw, err := json.Marshal(out)
+		if err != nil {
+			return run.Record{}, "", err
+		}
+		if err := os.WriteFile(filepath.Join(durable, "eval.output"), raw, 0644); err != nil {
+			return run.Record{}, "", err
+		}
+	}
+	report := "RESULT: done\n"
+	path := filepath.Join(durable, "report.md")
+	if err := os.WriteFile(path, []byte(report), 0644); err != nil {
+		return run.Record{}, "", err
+	}
+	rec := run.Record{RunID: req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Backend: req.Backend, State: run.StateExited, ExitCode: countPtr(0), StartedAt: "2026-11-15T00:00:00Z", FinishedAt: "2026-11-15T00:00:00Z", ArtifactRefs: []run.ArtifactRef{{Kind: "report", Ref: path}}}
+	st, err := store.Open(ctx, s.f.storePath, true)
+	if err != nil {
+		return rec, report, err
+	}
+	defer st.Close()
+	err = st.WriteTx(ctx, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
+	return rec, report, err
+}
+
+func TestPlannedBuildQuickWay(t *testing.T) {
+	for _, mode := range []string{"quick", "normal", "commit-without-choice", "quick-escape"} {
+		t.Run(mode, func(t *testing.T) {
+			f, l, base := plannedFixture(t)
+			steps := &quickWaySteps{workflowSteps: base, mode: mode}
+			l.cfg.Steps = steps
+			result := &LoopResult{}
+			for i := 0; i < 8; i++ {
+				graphPass(t, l, result)
+			}
+			switch mode {
+			case "quick":
+				if !reflect.DeepEqual(steps.runs, []string{"plan"}) {
+					t.Fatalf("runs = %v, want [plan]", steps.runs)
+				}
+				if base.gates != 1 || result.Landed != 1 {
+					t.Fatalf("gates=%d landed=%d result=%+v", base.gates, result.Landed, result)
+				}
+				fixtureRead(t, f, func(r *store.Reader) error {
+					var outcome string
+					var quickWay int
+					if err := r.QueryRow(`SELECT outcome, quick_way FROM node_runs WHERE item_id='item-a' AND node_id='plan'`).Scan(&outcome, &quickWay); err != nil {
+						return err
+					}
+					if outcome != "passed" || quickWay != 1 {
+						t.Fatalf("plan node_runs: outcome=%s quick_way=%d", outcome, quickWay)
+					}
+					for _, skipped := range []string{"work", "verify"} {
+						if err := r.QueryRow(`SELECT outcome FROM node_runs WHERE item_id='item-a' AND node_id=?`, skipped).Scan(&outcome); err != nil {
+							return err
+						}
+						if outcome != "skipped" {
+							t.Fatalf("%s outcome=%s, want skipped", skipped, outcome)
+						}
+					}
+					var eventCount int
+					if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=?`, planQuickWayKind).Scan(&eventCount); err != nil {
+						return err
+					}
+					if eventCount != 1 {
+						t.Fatalf("plan-quick events=%d, want 1", eventCount)
+					}
+					return nil
+				})
+			case "normal":
+				if !reflect.DeepEqual(steps.runs, []string{"plan", "work", "verify"}) {
+					t.Fatalf("runs = %v, want [plan work verify]", steps.runs)
+				}
+				if base.gates != 1 || result.Landed != 1 {
+					t.Fatalf("gates=%d landed=%d result=%+v", base.gates, result.Landed, result)
+				}
+				fixtureRead(t, f, func(r *store.Reader) error {
+					var quickWay int
+					if err := r.QueryRow(`SELECT quick_way FROM node_runs WHERE item_id='item-a' AND node_id='plan'`).Scan(&quickWay); err != nil {
+						return err
+					}
+					if quickWay != 0 {
+						t.Fatalf("normal plan quick_way=%d, want 0", quickWay)
+					}
+					return nil
+				})
+			case "commit-without-choice", "quick-escape":
+				if !reflect.DeepEqual(steps.runs, []string{"plan"}) {
+					t.Fatalf("runs = %v, want [plan]", steps.runs)
+				}
+				if base.gates != 0 || result.Landed != 0 {
+					t.Fatalf("refused run should not gate/land: gates=%d landed=%d", base.gates, result.Landed)
+				}
+				fixtureRead(t, f, func(r *store.Reader) error {
+					var outcome string
+					if err := r.QueryRow(`SELECT outcome FROM node_runs WHERE item_id='item-a' AND node_id='plan'`).Scan(&outcome); err != nil {
+						return err
+					}
+					if outcome != "refused" {
+						t.Fatalf("plan outcome=%s, want refused", outcome)
+					}
+					var refusalCount int
+					if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=?`, RefusalKind).Scan(&refusalCount); err != nil {
+						return err
+					}
+					if refusalCount != 1 {
+						t.Fatalf("refusal events=%d, want 1", refusalCount)
+					}
+					return nil
+				})
+			}
+		})
 	}
 }

@@ -3,6 +3,7 @@ package drain
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -467,11 +468,90 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	})
 }
 
+const (
+	quickWayFile     = "do-it-now"
+	planQuickWayKind = "drain.plan-quick"
+)
+
+func planAllowsQuickWay(stage WorkflowStage) bool {
+	return (stage.Kind == "" || stage.Kind == "agent") && stage.Seat == "plan" && stage.Access == "read_only"
+}
+
+func planTookQuickWay(root string, d Decision) (bool, error) {
+	if d.Workflow == nil || d.NodeIndex < 0 || d.NodeIndex >= len(d.Workflow.Stages) {
+		return false, nil
+	}
+	stage := d.Workflow.Stages[d.NodeIndex]
+	if !planAllowsQuickWay(stage) {
+		return false, nil
+	}
+	path := filepath.Join(nodeOutputsDir(root, d.RunRequest.RunID), quickWayFile)
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() {
+		return false, fmt.Errorf("plan-quick-invalid: %s is not a regular file", quickWayFile)
+	}
+	return true, nil
+}
+
+func (l *Loop) settleQuickWay(ctx context.Context, d Decision) error {
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		var alreadyQuick int
+		if err := tx.QueryRow(`SELECT quick_way FROM node_runs WHERE run_id=?`, d.RunRequest.RunID).Scan(&alreadyQuick); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE node_runs SET outcome='passed', quick_way=1 WHERE run_id=?`, d.RunRequest.RunID); err != nil {
+			return err
+		}
+		outcomes, err := workflowOutcomes(tx.Reader(), d.ItemID, d.Attempt)
+		if err != nil {
+			return err
+		}
+		for i, stage := range d.Workflow.Stages {
+			if outcomes[stage.ID] == "" {
+				if _, err := tx.Exec(`INSERT INTO node_runs(item_id,attempt,node_id,run_id,outcome) VALUES(?,?,?,?, 'skipped') ON CONFLICT(item_id,attempt,node_id) DO NOTHING`, d.ItemID, d.Attempt, stage.ID, attemptRunID(d.ItemID, d.Attempt)+"-n"+strconv.Itoa(i+1)); err != nil {
+					return err
+				}
+			}
+		}
+		if alreadyQuick == 0 {
+			stage := d.Workflow.Stages[d.NodeIndex]
+			if err := appendEffect(tx, planQuickWayKind, d.RunRequest.RunID, map[string]any{
+				"item_id": d.ItemID,
+				"attempt": d.Attempt,
+				"node_id": stage.ID,
+				"run_id":  d.RunRequest.RunID,
+			}, l.cfg.Now().UTC()); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, base string, result *LoopResult, offered bool) (bool, error) {
 	if evaluatorNode(d) {
 		return l.settleEvaluator(ctx, d, rec, base, result)
 	}
 	stage := d.Workflow.Stages[d.NodeIndex]
+	quickWay, err := planTookQuickWay(l.cfg.Root, d)
+	if err != nil {
+		return true, err
+	}
+	effectiveAccess := stage.Access
+	if quickWay {
+		effectiveAccess = "write"
+	}
 	if stage.Kind == "command" {
 		if handled, err := l.replayCommandHold(ctx, d); handled || err != nil {
 			return true, err
@@ -482,7 +562,6 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 	}
 	target := l.laneTarget(d.LaneID)
 	var head string
-	var err error
 	if !l.nonLanding {
 		head, err = l.revParse(ctx, target, "HEAD")
 		if err != nil {
@@ -508,11 +587,11 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		if err != nil {
 			return true, err
 		}
-		if (stage.Access == "read_only" && head != nodeBase) || ((stage.Access == "read_only" || stage.Kind == "command") && strings.TrimSpace(dirty) != "") {
+		if (effectiveAccess == "read_only" && head != nodeBase) || ((effectiveAccess == "read_only" || stage.Kind == "command") && strings.TrimSpace(dirty) != "") {
 			if err := l.nodeOutcome(ctx, d, "refused"); err != nil {
 				return true, err
 			}
-			c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: base, HeadSHA: head, RefusalDetail: "node " + stage.ID + " violated its " + stage.Access + " worktree boundary"}
+			c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: base, HeadSHA: head, RefusalDetail: "node " + stage.ID + " violated its " + effectiveAccess + " worktree boundary"}
 			if err := l.refuse(ctx, c, result, RefusalFence); err != nil {
 				return true, err
 			}
@@ -521,7 +600,7 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 			}
 			return true, l.markExamined(ctx, d)
 		}
-		if stage.Access == "write" {
+		if effectiveAccess == "write" {
 			c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: nodeBase, HeadSHA: head}
 			escape, err := l.fenceViolationAt(ctx, c, filepath.Join(l.laneDirPath(d.LaneID), FenceFile))
 			if err != nil {
@@ -623,6 +702,14 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		return true, l.markExamined(ctx, d)
 	}
 	artifacts, outputErr := checkNodeOutputs(l.cfg.Root, d)
+	if outputErr == nil && quickWay {
+		for _, a := range artifacts {
+			if a.Type == "graph.proposal" {
+				outputErr = fmt.Errorf("plan-quick-conflict: %s cannot both record quick way and propose a graph replacement", stage.ID)
+				break
+			}
+		}
+	}
 	if outputErr != nil {
 		if err := l.nodeOutcome(ctx, d, "failed"); err != nil {
 			return true, err
@@ -638,6 +725,16 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 	}
 	if err := l.acceptNodeSettlement(ctx, &d, artifacts); err != nil {
 		return true, err
+	}
+	if quickWay {
+		if err := l.settleQuickWay(ctx, d); err != nil {
+			return true, err
+		}
+		if l.nonLanding {
+			outcome := l.settleHook(ctx, d, result)
+			return true, outcome.err
+		}
+		return false, nil
 	}
 	next, err := l.nextWorkflowNode(ctx, d)
 	if err != nil {

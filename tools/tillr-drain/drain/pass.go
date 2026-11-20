@@ -42,7 +42,7 @@ const (
 )
 
 func init() {
-	for _, kind := range []string{backendProbeKind, backendOutcomeKind, commentReplyStateKind, designerCompactedKind, examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, examinationOwnerKind, loopOrphanedKind, laneReleasedKind, nodeAdvancedKind, graphChangedKind, candidateGatedKind} {
+	for _, kind := range []string{backendProbeKind, backendOutcomeKind, commentReplyStateKind, designerCompactedKind, examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, examinationOwnerKind, loopOrphanedKind, laneReleasedKind, nodeAdvancedKind, graphChangedKind, candidateGatedKind, planQuickWayKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
