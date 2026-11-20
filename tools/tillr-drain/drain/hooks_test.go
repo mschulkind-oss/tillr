@@ -235,7 +235,7 @@ if args[0] == 'rolling':
 		HeavyGateBin: executable(t, `echo '{"kind":"gate.verdict","payload":{"checks":[]}}'`)}
 	steps.ConfigureHooks(hooks, nil)
 	steps.heavyReplaySelectors.Store("legacy", "shell:a check with spaces")
-	runner := HeavyRunner{Root: root, Work: filepath.Join(steps.LaneRoot, ".rolling/worktree"), Trunk: TrunkRef,
+	runner := HeavyRunner{Root: root, Lock: loopHeld(t, root), Work: filepath.Join(steps.LaneRoot, ".rolling/worktree"), Trunk: TrunkRef,
 		Judge: func(ctx context.Context, dir, only string) ([]HeavyCheck, error) {
 			if _, err := steps.JudgeHeavy(ctx, dir, ""); err != nil {
 				return nil, err

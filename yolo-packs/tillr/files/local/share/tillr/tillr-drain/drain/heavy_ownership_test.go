@@ -111,7 +111,7 @@ func TestHeavyKilledOwnerHelper(t *testing.T) {
 	}
 	root, work := os.Getenv("TILLR_TEST_HEAVY_ROOT"), os.Getenv("TILLR_TEST_HEAVY_WORK")
 	steps := &ProcessSteps{Root: root, LaneRoot: work, HeavyGateBin: filepath.Join(work, "tillr-gate"), RollingProgram: os.Getenv("TILLR_TEST_HEAVY_LEGACY")}
-	runner := HeavyRunner{Root: root, Work: filepath.Join(work, ".rolling", "worktree"), Judge: steps.JudgeHeavy}
+	runner := HeavyRunner{Root: root, Lock: loopHeld(t, root), Work: filepath.Join(work, ".rolling", "worktree"), Judge: steps.JudgeHeavy}
 	if _, err := runner.Run(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +193,7 @@ _run_cancellable(Path.cwd(),['sh','-c','sleep 1000 & echo $! > '+sys.argv[2]+'.p
 	}
 	heavyChildDead(t, child)
 	syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-	runner := HeavyRunner{Root: root, Work: filepath.Join(work, ".rolling", "worktree"), Judge: func(context.Context, string, string) ([]HeavyCheck, error) {
+	runner := HeavyRunner{Root: root, Lock: loopHeld(t, root), Work: filepath.Join(work, ".rolling", "worktree"), Judge: func(context.Context, string, string) ([]HeavyCheck, error) {
 		heavyChildDead(t, child)
 		return []HeavyCheck{{CheckID: "unit", Result: "pass"}}, nil
 	}}

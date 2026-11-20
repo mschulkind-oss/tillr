@@ -37,7 +37,7 @@ func heavyCommit(t *testing.T, root, value string) string {
 }
 func heavyFixture(t *testing.T, root string, judge func(context.Context, string, string) ([]HeavyCheck, error)) HeavyRunner {
 	t.Helper()
-	return HeavyRunner{Root: root, Work: filepath.Join(scratchUnderDurable(t), "worktree"), Trunk: "refs/heads/main", Judge: judge}
+	return HeavyRunner{Root: root, Lock: loopHeld(t, root), Work: filepath.Join(scratchUnderDurable(t), "worktree"), Trunk: "refs/heads/main", Judge: judge}
 }
 func TestHeavyCoalescesLandingsAndHasOneWriter(t *testing.T) {
 	root, base := heavyRepo(t)

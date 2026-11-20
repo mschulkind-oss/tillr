@@ -46,7 +46,7 @@ exit 1`)
 	base := heavyCommit(t, root, "good")
 	heavyGit(t, root, "update-ref", GreenRef, base)
 	tip := heavyCommit(t, root, "bad")
-	runner := HeavyRunner{Root: root, Work: filepath.Join(work, ".rolling", "worktree"), Trunk: TrunkRef, Judge: steps.JudgeHeavy}
+	runner := HeavyRunner{Root: root, Lock: loopHeld(t, root), Work: filepath.Join(work, ".rolling", "worktree"), Trunk: TrunkRef, Judge: steps.JudgeHeavy}
 	offers := 0
 	runner.Revert = func(ctx context.Context, _, landing string, checks []HeavyCheck, replay HeavyReplay) (RevertOutcome, error) {
 		offers++

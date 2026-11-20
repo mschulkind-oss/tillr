@@ -1050,6 +1050,15 @@ A run with no failing or unjudged check advances `refs/tillr/green` with a guard
 update: the value read before judging must still be the current value, and it must be
 an ancestor of the judged tip. Unavailable checks are listed, not counted as passes.
 
+A proof that judged no checks is never green: an empty gate program is refused with a
+message that names it, and the pointer stays. Only the after-merge proof of the loop that
+holds the repository's loop lock (`tillr-loop.lock` in the git common directory, beside
+`tillr-gate/`) may move the pointer or write under `tillr-gate/`. A proof started from a
+linked worktree, or by a process without that lock, refuses before judging anything,
+because every worktree shares the one pointer and the one set of proof files. The
+drain package's tests install a guard that fails any proof, loop lock or fixer path that
+resolves to the real repository's common directory.
+
 With `[push] what = "green"` in `.tillr.toml`, the advance of the pointer is also what the
 loop pushes: it sends the pointer's commit to the trunk's upstream branch (`<green sha>:<ref>`,
 never forced), so the remote never receives a commit the proof has not passed. Landings push

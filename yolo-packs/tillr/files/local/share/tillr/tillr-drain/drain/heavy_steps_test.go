@@ -31,7 +31,7 @@ func TestHeavyProcessJudgeIncludesDeclarationsAndLegacyAndReplaysOneCheck(t *tes
 JSON`)
 	steps := &ProcessSteps{Root: root, LaneRoot: work, HeavyGateBin: bin, RollingProgram: legacy, ReplayProgram: executable(t, "echo '{only}' >/dev/null\nexit 0")}
 	var replay []HeavyCheck
-	runner := HeavyRunner{Root: root, Work: filepath.Join(work, ".rolling", "worktree"), Trunk: TrunkRef, Judge: func(ctx context.Context, dir, only string) ([]HeavyCheck, error) {
+	runner := HeavyRunner{Root: root, Lock: loopHeld(t, root), Work: filepath.Join(work, ".rolling", "worktree"), Trunk: TrunkRef, Judge: func(ctx context.Context, dir, only string) ([]HeavyCheck, error) {
 		checks, err := steps.JudgeHeavy(ctx, dir, only)
 		if err != nil {
 			return nil, err
@@ -73,7 +73,7 @@ func TestHeavyCancellationEndsDeclarationChildrenBeforeRemovingTree(t *testing.T
 	writeForkFile(t, filepath.Join(checks, "unit.json"), `{"id":"unit","label":"unit","scope":"tree","tier":"heavy","budget_ms":1,"timeout_ms":3600000,"command":["sh","-c","sleep 1000 & echo $! > `+child+`; touch `+marker+`; wait"],"reads":["value"],"remember":false}`)
 	heavyCommit(t, root, "ready")
 	steps := &ProcessSteps{Root: root, LaneRoot: work, HeavyGateBin: bin}
-	runner := HeavyRunner{Root: root, Work: filepath.Join(work, ".rolling", "worktree"), Trunk: TrunkRef, Judge: steps.JudgeHeavy}
+	runner := HeavyRunner{Root: root, Lock: loopHeld(t, root), Work: filepath.Join(work, ".rolling", "worktree"), Trunk: TrunkRef, Judge: steps.JudgeHeavy}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
@@ -164,6 +164,7 @@ JSON`)
 	}
 	runner := HeavyRunner{
 		Root:  root,
+		Lock:  loopHeld(t, root),
 		Work:  filepath.Join(work, ".rolling", "worktree"),
 		Trunk: TrunkRef,
 		Judge: func(ctx context.Context, dir, only string) ([]HeavyCheck, error) {

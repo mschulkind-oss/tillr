@@ -58,7 +58,7 @@ cat > "$TILLR_GATE_SPANS_OUT" <<'JSON'
 {"check_spans":[{"check_id":"legacy","status":"PASS","attributes_json":"{}"}]}
 JSON`)
 			steps := &ProcessSteps{Root: root, LaneRoot: work, HeavyGateBin: bin, RollingProgram: legacy}
-			runner := HeavyRunner{Root: root, Work: filepath.Join(work, ".rolling", "worktree"), Trunk: TrunkRef, Judge: func(ctx context.Context, dir, only string) ([]HeavyCheck, error) {
+			runner := HeavyRunner{Root: root, Lock: loopHeld(t, root), Work: filepath.Join(work, ".rolling", "worktree"), Trunk: TrunkRef, Judge: func(ctx context.Context, dir, only string) ([]HeavyCheck, error) {
 				judged, err := steps.JudgeHeavy(ctx, dir, only)
 				if err == nil {
 					var ids []string
