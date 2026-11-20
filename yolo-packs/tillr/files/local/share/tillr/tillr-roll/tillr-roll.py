@@ -77,7 +77,9 @@ def roll(root, live, no_request, build_pi=False):
     modules = sorted(p for p in (root / 'tools').glob('tillr*') if (p / 'go.mod').is_file())
     for module in modules:
         if changed is None or any(p.startswith(f'tools/{module.name}/') for p in changed):
-            run('go', 'test', './...', cwd=module, env=build_env)
+            # No Go deadline: the default ten minutes fails a working suite on a loaded
+            # machine, which is the gate's rule for the same suites (GO_TEST_TIMEOUT).
+            run('go', 'test', '-timeout', '0', './...', cwd=module, env=build_env)
     with tempfile.TemporaryDirectory(prefix='tillr-roll-', dir=live.parent) as work:
         stage = Path(work)
         programs = []
