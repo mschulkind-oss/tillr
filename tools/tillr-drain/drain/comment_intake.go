@@ -1,3 +1,4 @@
+// Architecture and invariants: docs/reference/tillr-designer-sessions.md
 package drain
 
 import (

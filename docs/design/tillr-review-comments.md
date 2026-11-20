@@ -7,7 +7,7 @@ next: "Owner rulings on OQ-RC1, OQ-RC2, OQ-RC3, and OQ-RC4; review of designer's
 vantage:
   status-chip: true
 related:
-  - ./tillr-designer-sessions.md
+  - ../reference/tillr-designer-sessions.md
   - ./tillr-intake-paths.md
   - ./tillr-early-design-landing.md
   - ./tillr-live-drain-config.md
@@ -17,7 +17,7 @@ related:
 
 # Owner Review Comments: Standing Rule, Fast Track, and Vantage Seam
 
-**Status:** In review · 2026-11-19. Nothing in this design beyond the Vantage-coupled path of [designer sessions](./tillr-designer-sessions.md) is built.
+**Status:** In review · 2026-11-19. Nothing in this design beyond the Vantage-coupled path of [designer sessions](../reference/tillr-designer-sessions.md) is built.
 
 **Start at:** [OQ-RC1](#OQ-RC1) in [Section 6](#6-open-questions).
 
@@ -40,7 +40,7 @@ What happened in that round exposes four gaps in the tree at `9a3b977af`:
   2. `readOrderedItems` in [`tools/tillr-drain/drain/plan.go`](../../tools/tillr-drain/drain/plan.go) puts `rewrite-item-*` in priority bucket `1` ahead of `item-comments-*` in bucket `2`.
   3. `TakeComments` in [`tools/tillr-item/item/comments.go`](../../tools/tillr-item/item/comments.go) prepends `"0m"` before the lowest existing rank, so a second comment batch gets `"00m"` ahead of an earlier waiting `"0m"` batch (last-in, first-out) and a later `tillr item request` can jump ahead of it.
   4. As measured in [the 2026-11-19 quick-request latency study](../tillr/latency/2026-11-19-quick-request-latency.md) ([Section 5](../tillr/latency/2026-11-19-quick-request-latency.md#5-ranked-avoidable-delays-and-one-piece-fixes)), two-pass post-run settlement (`deferJudge=true` in [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go)) and unscoped gate checks turn 11–40 seconds of active editing into 10–27 minutes of wall time.
-- **Vantage details leak across six packages, while hand-edited answer blocks fell between two designs.** [`tools/tillr/vantage/vantage.go`](../../tools/tillr/vantage/vantage.go) shells out unconditionally to `uvx vantage-check index --format json` to read open questions; `TakeComments` hardcodes `uvx vantage-check <doc> exits 0` as criterion `c2`; `commentThreadTask` and `writeCommentDelivery` in [`tools/tillr-drain/drain/comments.go`](../../tools/tillr-drain/drain/comments.go) embed `"Vantage round"` and `.vantage/inbox/` directly. Meanwhile [designer sessions](./tillr-designer-sessions.md) left hand-edited `**Answer:**` blocks to [the idea pipeline](./tillr-idea-pipeline.md), and [the idea pipeline](./tillr-idea-pipeline.md) ([Section 3](./tillr-idea-pipeline.md#3-the-questions-path)) marked its own answer-return path superseded by [designer sessions](./tillr-designer-sessions.md), leaving neither built.
+- **Vantage details leak across six packages, while hand-edited answer blocks fell between two designs.** [`tools/tillr/vantage/vantage.go`](../../tools/tillr/vantage/vantage.go) shells out unconditionally to `uvx vantage-check index --format json` to read open questions; `TakeComments` hardcodes `uvx vantage-check <doc> exits 0` as criterion `c2`; `commentThreadTask` and `writeCommentDelivery` in [`tools/tillr-drain/drain/comments.go`](../../tools/tillr-drain/drain/comments.go) embed `"Vantage round"` and `.vantage/inbox/` directly. Meanwhile [designer sessions](../reference/tillr-designer-sessions.md) left hand-edited `**Answer:**` blocks to [the idea pipeline](./tillr-idea-pipeline.md), and [the idea pipeline](./tillr-idea-pipeline.md) ([Section 3](./tillr-idea-pipeline.md#3-the-questions-path)) marked its own answer-return path superseded by [designer sessions](../reference/tillr-designer-sessions.md), leaving neither built.
 
 ---
 
@@ -65,7 +65,7 @@ Every owner comment or question ruling follows five steps, regardless of how it 
 
 ### 2.3. Target turnaround budget
 
-Grounded in the [2026-11-16 warm-resume measurement](./tillr-designer-sessions.md) (`$0.42` warm vs `$0.84` cold) and the [2026-11-19 quick-request latency study](../tillr/latency/2026-11-19-quick-request-latency.md) (`11–40 s` active tool work on single-file edits), the end-to-end target from batch intake to saved document and delivered reply is **under 60 seconds** on a warm desk and **under 90 seconds** cold:
+Grounded in the [2026-11-16 warm-resume measurement](../reference/tillr-designer-sessions.md#what-a-turn-costs-measured) (`$0.42` warm vs `$0.84` cold) and the [2026-11-19 quick-request latency study](../tillr/latency/2026-11-19-quick-request-latency.md) (`11–40 s` active tool work on single-file edits), the end-to-end target from batch intake to saved document and delivered reply is **under 60 seconds** on a warm desk and **under 90 seconds** cold:
 
 | Step | Actor | Target wall time | What keeps it inside budget |
 | :--- | :--- | :--- | :--- |
@@ -221,7 +221,7 @@ Per [OQ-PR21](../tillr/decision-provenance-review.md#OQ-PR21), nothing is built 
 
 2. 💬 **OQ-RC2: How long should automatic Vantage polling wait before taking a pending comment batch?**
 
-   Today's Vantage poller (`D-CD2` in [designer sessions](./tillr-designer-sessions.md), flagged as unruled in [OQ-PR12](../tillr/decision-provenance-review.md#OQ-PR12)) polls every 15 seconds and waits 60 quiet seconds after the last edit on a document before creating an item, adding 60–75 seconds of idle delay before a 30-second turn starts. (`tillr item comment` always dispatches with zero wait.)
+   Today's Vantage poller (`D-CD9` in [designer sessions](../reference/tillr-designer-sessions.md#why-its-this-way), reviewed in [OQ-PR12](../tillr/decision-provenance-review.md#OQ-PR12)) polls every 15 seconds and waits 60 quiet seconds after the last edit on a document before creating an item, adding 60–75 seconds of idle delay before a 30-second turn starts. (`tillr item comment` always dispatches with zero wait.)
 
    - **A — Short debounce: 5-second poll and 15-second quiet window per document.** Back-to-back edits within 15 seconds batch into one turn; a later comment coalesces while queued or runs next on the warm desk, cutting pre-dispatch wait to 15–20 seconds.
    - **B — Keep the 15-second poll and 60-second quiet window.** Favors batching slow multi-comment passes over one long document into one turn, at a 60–75 second floor.

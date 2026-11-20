@@ -715,7 +715,7 @@ Each of these is an amendment owed in the document that holds the row, to be mad
 | [Planning and tiering](./tillr-planning-node-model-tiering.md) | `D-PT1` | The seat list is open, not a longer closed list |
 | | `D-PT3`, `D-PT6` | Two rungs, one fix per rung and one re-plan are counts and are withdrawn. A stronger seat is named by a diagnosis |
 | | `D-PT7` | Kept as a scheduling choice: whether a resumed session is compacted |
-| [Designer sessions](./tillr-designer-sessions.md) | `D-CD10` | "One automatic fallback" becomes row 18: each reason a session cannot resume is a stated fact |
+| [Designer sessions](../reference/tillr-designer-sessions.md#why-its-this-way) | `D-CD10` | "One automatic fallback" becomes row 18: each reason a session cannot resume is a stated fact |
 | [The judge and the lifecycle](./tillr-judge-and-lifecycle.md#return-a-design-runs-gate-refusal-to-its-own-session) | The gate refusal's return to its own session | Kept, and made the rule for every producer |
 | [The gate rework](./gate-rework.md#decision-ledger) | [OQ-GR1](./gate-rework.md#decision-ledger), the red cap | Ruled out by the owner on 2026-11-18 ([OQ-GP7](#OQ-GP7)) and replaced by the one waiting rule of [Section 8.2](#82-proof-and-a-red-trunk); the cap is live until that rule is built |
 | | [OQ-GR2](./gate-rework.md#decision-ledger), lanes cut from the green pointer | Conflicts with R8. Withdrawn: every node starts on the latest trunk, and a worker is told when that trunk is red |

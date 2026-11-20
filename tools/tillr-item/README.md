@@ -659,9 +659,9 @@ to it. Generated ids end in a numeric batch counter, unlike the build items impl
 this feature, and `sync` excludes them from its missing-definition count. A document with an
 open batch does not get another one.
 
-The [designer-session design](../../docs/design/tillr-designer-sessions.md#the-words-this-design-uses)
-defines batches and desks. Automatic quiet-period intake is a later slice; this command is
-the hand-driven path.
+The [designer-session reference](../../docs/reference/tillr-designer-sessions.md#the-words-this-design-uses)
+defines batches and desks. When `[comments]` is configured in `.tillr.toml`, the drain polls
+Vantage automatically after each document's quiet window; this command is the hand-driven path.
 
 ## What it refuses
 

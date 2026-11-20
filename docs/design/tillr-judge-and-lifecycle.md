@@ -448,7 +448,7 @@ Today the drain raises the conflict again and starts a fresh design run. This wo
 
 **Agent Details:**
 
-- **Ref:** [Section 4.3](#43-how-a-design-runs-ending-moves-its-conflict-d-jl9) of this document; [the landing call design](./tillr-landing-call.md); [the build-commit continuation](../reference/tillr-build-commit.md); [the designer sessions design](./tillr-designer-sessions.md), whose desk already reuses a document's designer session.
+- **Ref:** [Section 4.3](#43-how-a-design-runs-ending-moves-its-conflict-d-jl9) of this document; [the landing call design](./tillr-landing-call.md); [the build-commit continuation](../reference/tillr-build-commit.md); [the designer sessions reference](../reference/tillr-designer-sessions.md#the-desk), whose desk already reuses a document's designer session.
 - **Where:** the gate-refusal branch of `verify` and the continuation in `settle` (`resumeAfterWall`, `continuationStarted`) in `tools/tillr-drain/drain/loop.go`, whose one-continuation-per-attempt rule must not apply to a design run's refusals; `settleUnansweredDesignRuns` and `designReraiseText` in `tools/tillr-drain/drain/design_unanswered.go`, which raise a fresh design run today; `conflictDecision` in `tools/tillr-drain/drain/blocked.go`; the designer session choice in `tools/tillr-drain/drain/designer.go`.
 - **Lane:** the refused run's lane is reset after the refusal today, so the block either keeps that lane and its session for the design run's next turn, or stages the continuation on another lane from the pinned commit at `refs/tillr/runs/<run>` with the recorded session. It states which and why.
 

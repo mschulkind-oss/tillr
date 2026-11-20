@@ -18,7 +18,7 @@ depends-on:
   - tillr-planning-node-model-tiering.md
   - tillr-seat-profiles.md
   - seat-profiles.md
-  - tillr-designer-sessions.md
+  - ../reference/tillr-designer-sessions.md
   - tillr-design-document-check.md
   - tillr-graph-is-the-path.md
   - ../tillr/decision-provenance-review.md
@@ -42,7 +42,7 @@ vantage:
 
 **Needs your ruling:** [OQ-RD1](#OQ-RD1), [OQ-RD2](#OQ-RD2), and [OQ-RD3](#OQ-RD3) (five engineering choices, `D-RD1` through `D-RD5`, await review in the [Decision Ledger](#decision-ledger)).
 
-**Reads with:** [the restricted design agent](./restricted-design-agent.md) (the 2026-10-22 rulings retiring `writer` and `verifier` and keeping read-only scouts), [planning and model tiering](./tillr-planning-node-model-tiering.md) (orientation cost and piece fan-out), [named drain seat profiles](./tillr-seat-profiles.md) and [interactive seat profiles](./seat-profiles.md) (model sets and child bounds), [designer sessions](./tillr-designer-sessions.md) (warm document desks), and [the compliance officer](./tillr-design-document-check.md) (post-gate style enforcement). No companion plan is seeded while [OQ-RD1](#OQ-RD1)–[OQ-RD3](#OQ-RD3) are open.
+**Reads with:** [the restricted design agent](./restricted-design-agent.md) (the 2026-10-22 rulings retiring `writer` and `verifier` and keeping read-only scouts), [planning and model tiering](./tillr-planning-node-model-tiering.md) (orientation cost and piece fan-out), [named drain seat profiles](./tillr-seat-profiles.md) and [interactive seat profiles](./seat-profiles.md) (model sets and child bounds), [designer sessions](../reference/tillr-designer-sessions.md#the-desk) (warm document desks), and [the compliance officer](./tillr-design-document-check.md) (post-gate style enforcement). No companion plan is seeded while [OQ-RD1](#OQ-RD1)–[OQ-RD3](#OQ-RD3) are open.
 
 ---
 
@@ -170,7 +170,7 @@ Second, **tool and budget enforcement on the `design` seat ([OQ-RD2](#OQ-RD2)):*
 - **Degenerate inputs (tiny items and zero-unknown conflicts).** An item naming 1–3 files with no empirical audit owed completes with **0 `scout` calls**, direct `read` + `edit`/`write`, `uvx vantage-check`, and `land`. Spawning scouts when nothing is unknown is explicitly discouraged in the brief.
 - **Scout failure or timeout.** Each `subagent` call on `design` carries a **300 s timeout** (`timeoutMs: 300000`). If a Tier-1 scout backend errors, hits rate limits, or returns empty output after one retry on the profile's `scout` fallback chain, the guard in Option A/B unlocks parent `read`/`bash` fallback for that run and records `scout_fallback: true` on the run receipt so the designer never deadlocks.
 - **Concurrency and one-writer rule.** All `scout`, `researcher`, and `evidence-auditor` children on `design` run strictly **read-only** (`worktree: false`, write/edit tools absent); the parent `design` session is the **sole writer** of the lane worktree and durable progress file. Parallel scouts launch in a single `{ workflow: "parallel", args: { tasks: [...] } }` call (default cap: **4 concurrent children per batch**, matching `pi-subagents` defaults).
-- **Existing sessions and runs in flight.** Tool flags and extension guards apply at process spawn in [`run-pi`](../../tools/tillr-run/backends/pi/run-pi) and [`run-claude`](../../tools/tillr-run/backends/claude/run-claude); live runs finish under the config they launched with, and resumed [designer desk](./tillr-designer-sessions.md) sessions pick up the updated tool surface on their next turn without invalidating session JSONL history.
+- **Existing sessions and runs in flight.** Tool flags and extension guards apply at process spawn in [`run-pi`](../../tools/tillr-run/backends/pi/run-pi) and [`run-claude`](../../tools/tillr-run/backends/claude/run-claude); live runs finish under the config they launched with, and resumed [designer desk](../reference/tillr-designer-sessions.md#the-desk) sessions pick up the updated tool surface on their next turn without invalidating session JSONL history.
 - **Forbidden behavior.** A `design` run must never spawn a writing subagent (`worker`, `delegate`), never spawn a Tier-3 child (`designer`, `oracle`), never drop child token/cost totals from `run.record.json`, and never execute `just done` inside a lane.
 - **What done looks like (`D-RD3`).** `run.record.json` and `tillr drain why` display both parent and child token/USD totals (`parent_cost_usd`, `child_cost_usd`, `child_runs`), plus parent `read` and non-check `bash` counts, making both under-delegation (>10 search `bash` calls) and over-delegation (>3 sequential scout batches on one run) immediately visible.
 

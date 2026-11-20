@@ -1,3 +1,4 @@
+// Architecture and invariants: docs/reference/tillr-designer-sessions.md
 package drain
 
 import (
@@ -15,7 +16,7 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// chooseDesigner applies the dispatch table in tillr-designer-sessions.md, in order.
+// chooseDesigner applies the dispatch table in docs/reference/tillr-designer-sessions.md, in order.
 // Unknown cache retention is expired, never an invented five-minute lifetime.
 func chooseDesigner(d *lastDesigner, req *run.Request, at time.Time, previousAdapter string) (string, string) {
 	if d == nil {

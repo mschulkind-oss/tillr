@@ -361,7 +361,7 @@ Which of the two landings ends the suspension is that design's question, not thi
 | :--- | :--- |
 | **Attempt** | Nothing. Returned work is new nodes on the same path |
 | **Lane; express lane; lane cap** | Worktree, scratch, running-agent limit; "work the owner is waiting on" |
-| **Desk** | The comment item's worktree and the document's session. [Designer sessions](./tillr-designer-sessions.md) owns the word and decides whether it stays |
+| **Desk** | The comment item's worktree and the document's session. [Designer sessions](../reference/tillr-designer-sessions.md#the-desk) owns the word and decides whether it stays |
 | **Node run** | Run |
 | **Child session** | Hoisted child |
 | **Hold; held; blocked** | Wait, with its mover |

@@ -148,7 +148,7 @@ Saved ideas use the `item-idea-` ID convention from
 this allocation support does not implement the intake command itself.
 
 Review-comment work stays at its document's
-[desk](../../docs/design/tillr-designer-sessions.md#the-desk), a lane assigned to that
+[desk](../../docs/reference/tillr-designer-sessions.md#the-desk), a lane assigned to that
 document, and is not express work even if its block names the attribute. Waiting
 output and the observatory lane strip count ordinary and express lanes separately;
 desks remain visible but count in neither pool.
@@ -160,7 +160,7 @@ with the offered-capacity display without deleting rows referenced by past runs.
 
 ## Designer retirement
 
-The [keep-warm rule](../../docs/design/tillr-designer-sessions.md#the-keep-warm-rule)
+The [keep-warm rule](../../docs/reference/tillr-designer-sessions.md#the-keep-warm-rule)
 ends a designer's session when its document is deleted or its stage is done.
 Deletion requires absence from both the trunk commit captured by the pass and the
 main checkout. An uncommitted removal or a file briefly missing during landing
@@ -2649,7 +2649,7 @@ widening of every fence.
 dispatch and writes it beside the brief as `session-id`; it never treats that file as the
 next item's session. `resume` explicitly names the id it continues. Review-comment items
 instead reuse their document's recorded designer at a fixed
-[desk](../../docs/design/tillr-designer-sessions.md#the-desk), outside the numbered pool.
+[desk](../../docs/reference/tillr-designer-sessions.md#the-desk), outside the numbered pool.
 A design-seat item also uses that desk when its fence names exactly one Markdown document
 under `comments.paths`; its completed run records the designer for later comments, even if
 the run failed. A directory fence does not identify a document. Zero or multiple eligible
@@ -2675,13 +2675,14 @@ the four-line answering rule, and the document's changes since the preceding tur
 The loop records the last designer from the completed stream, plus the document's blob and
 the session's dispatch reason. Unreported provider measurements remain absent rather than
 being replaced by a configured lifetime. Run spend stays in the ordinary run record. This
-path chooses a session by the design's ordered
-[dispatch table](../../docs/design/tillr-designer-sessions.md#choosing-at-dispatch).
+path chooses a session by the reference's ordered
+[dispatch table](../../docs/reference/tillr-designer-sessions.md#choosing-at-dispatch).
 Warm means the last request plus its reported cache lifetime; unknown retention is expired.
 Only an expired session over 40,000 tokens is compacted, and only when its adapter ships an
 executable compact step. Otherwise it resumes with `resumed-expired`. Nothing runs at expiry.
 Compaction receipts record before/after token measurements and reported cost against the item;
-missing cost stays unknown. Automatic intake remains a subsequent build item.
+missing cost stays unknown. Automatic quiet-period intake runs before planning when `[comments]`
+is configured in `.tillr.toml` ([comment intake](../../docs/reference/tillr-designer-sessions.md#comment-intake-and-batch-items)).
 
 A nonzero resumed run with no model response records `resume-failed` and dispatches once more
 to a new session in the same settlement pass. Partial answers are not replayed. A replacement
