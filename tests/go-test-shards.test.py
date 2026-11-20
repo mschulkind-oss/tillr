@@ -353,6 +353,24 @@ func TestMain(m *testing.M) {
         for cores, expected in [(32, 16), (4, 2), (2, 1), (1, 1), (None, 1)]:
             with patch.object(os, 'cpu_count', return_value=cores):
                 self.assertEqual(shards.default_shard_limit(), expected)
+                slots = expected + shards.default_proof_shard_limit()
+                self.assertLessEqual(slots * shards.TESTS_PER_SLOT, cores or 1)
+
+    def test_default_pool_bounds_test_parallelism_on_32_cores(self):
+        binary = self.fake(
+            "import sys\n"
+            "assert '-test.parallel=1' in sys.argv, sys.argv\n"
+            "print('=== RUN   TestWorks')\n"
+            "print('--- PASS: TestWorks (0.00s)')\n"
+            "print('PASS')\n"
+        )
+        with patch.object(os, 'cpu_count', return_value=32):
+            ordinary = shards.default_shard_limit()
+            proof = shards.default_proof_shard_limit()
+            self.assertEqual((ordinary, proof), (16, 6))
+            self.assertEqual((ordinary + proof) * shards.TESTS_PER_SLOT, 22)
+            shards.run_shard('fake', self.root, binary, ['TestWorks'], 0,
+                             self.root / 'scratch', '0', [])
 
     def test_shared_cache_dir_prefers_gocache_then_xdg_then_home(self):
         custom = self.root / 'custom-gocache'
