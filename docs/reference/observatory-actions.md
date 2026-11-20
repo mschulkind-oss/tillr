@@ -52,7 +52,7 @@ in `tillr-item`; the HTTP server keeps its SQLite handle read-only and invokes
 | Read-face place projection, idea file/commit reader, `--write` HTTP handlers | `tools/tillr-view/order.go`, `idea_words.go`, `idea_tree.go`, `serveplace.go`, `serveidea.go` |
 | Items table move controls and header `New idea` form | `tools/tillr-view/web/src/components/ItemsPasses.tsx`, `NewIdea.tsx`, `src/models/api.ts` |
 
-**Reads with:** [the observatory redesign](../design/observatory-redesign.md)
+**Reads with:** [the tillr observatory reference](./observatory-redesign.md)
 (the linked-page UI and read-only server contract),
 [tillr item states](./tillr-item-states.md) (the seven projected states and
 frozen criteria), [the queue persistence ruling](../design/queue-persistence-ruling.md)

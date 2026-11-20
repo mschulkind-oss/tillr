@@ -272,7 +272,7 @@ block runs one item through a workflow of two nodes, a scout that only reads and
 to one landed commit, and waits on nothing. Nothing of the design was built before the cut
 except the lander's squash, and
 [its eighth section](../design/tillr-item-graphs.md#8-what-the-tree-already-holds) measures that.
-[The observatory redesign](../design/observatory-redesign.md) is decided: the pages show
+[The observatory redesign](../reference/observatory-redesign.md#usage-without-dollar-prices) is decided and built: the pages show
 what a run used and never a price.
 
 ## 2. Keep the loop running
@@ -378,7 +378,7 @@ because every lane waits on that revert.
 
 ## 6. The observatory answers the owner's questions
 
-[The observatory redesign](../design/observatory-redesign.md) is built: all ten slices had landed
+[The observatory redesign](../reference/observatory-redesign.md) graduated to a system reference: all ten slices had landed
 by 2026-11-18, including the lane strip, lane page, dependency graph and usage figures, and so
 had [the observatory's first two writes](../reference/observatory-actions.md). Sixth, and not
 higher, because [entry 2](#2-keep-the-loop-running) fixes what the screens would only report.
@@ -436,7 +436,7 @@ Wanted, not now, by the owner's call. Picking one up means giving it a place abo
 
 - **Prices on the observatory**, iceboxed 2026-11-15. The owner wants to see what work cost in
   dollars and ruled that the pricing cannot be computed accurately enough yet, so
-  the pages show usage only (section 6.6 of the observatory redesign). Picking it up
+  the pages show usage only ([usage without dollar prices](../reference/observatory-redesign.md#usage-without-dollar-prices)). Picking it up
   means settling how a price is derived per backend, including a subscription that is not billed
   per run, cached tokens, and models whose price changes.
 
@@ -1341,10 +1341,9 @@ any commit: steps 1 and 5 create them.
 
 ## Filed 2026-11-15: the observatory redesign's remaining slices
 
-These are slices 3 to 10 of [the observatory redesign](../design/observatory-redesign.md#10-build-order),
-filed here because that document still carries one open question. Each block's criteria are the
-slice's own row in that table; the design is the reference for every screen, token and route a
-criterion names.
+These were slices 3 to 10 of the observatory redesign, which landed by 2026-11-18 and graduated into
+[the observatory reference](../reference/observatory-redesign.md); they were filed here while the
+design still carried an open question.
 
 ### The observatory has a new shell, its visual tokens, one link component and Home
 

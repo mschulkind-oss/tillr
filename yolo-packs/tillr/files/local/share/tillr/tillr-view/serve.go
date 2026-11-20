@@ -1,3 +1,4 @@
+// Architecture and invariants: docs/reference/observatory-redesign.md
 package main
 
 import (

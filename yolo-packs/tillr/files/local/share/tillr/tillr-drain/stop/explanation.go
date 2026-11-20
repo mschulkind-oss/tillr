@@ -1,3 +1,4 @@
+// Architecture and invariants: docs/reference/observatory-redesign.md
 // Package stop formats a loop's recorded cause without depending on its execution machinery.
 package stop
 
