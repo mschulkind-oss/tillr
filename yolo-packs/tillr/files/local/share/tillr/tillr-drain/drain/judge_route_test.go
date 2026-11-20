@@ -171,7 +171,7 @@ func TestJudgeRouteBeforeGate(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			f, l, s := judgeRouteFixture(t, mode, mode != "no-grant")
 			result := &LoopResult{}
-			for i := 0; i < 4; i++ {
+			for i := 0; i < 3; i++ {
 				if _, err := l.pass(context.Background(), result); err != nil {
 					t.Fatal(err)
 				}

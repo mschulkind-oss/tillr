@@ -31,12 +31,10 @@ func TestRefusedAndCurrentRestartKeepTheInflightJudge(t *testing.T) {
 			held := &heldBuildJudge{judgeRouteSteps: s, entered: make(chan struct{}, 1), release: make(chan struct{}), cleaned: make(chan struct{})}
 			l.cfg.Steps = held
 			result := &LoopResult{}
-			for i := 0; i < 2; i++ {
-				if _, err := l.pass(context.Background(), result); err != nil {
-					t.Fatal(err)
-				}
-				drainOwned(t, l, result)
+			if _, err := l.pass(context.Background(), result); err != nil {
+				t.Fatal(err)
 			}
+			drainOwned(t, l, result)
 			if _, err := l.pass(context.Background(), result); err != nil {
 				t.Fatal(err)
 			}

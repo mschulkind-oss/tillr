@@ -43,6 +43,11 @@ type Pass struct {
 	// the reason. The planner holds these items before it offers any lane, so a lane is
 	// never given to an item the loop will not stage and kept from the next item in order.
 	loopHolds map[string]string
+	// ownExaminationLane and ownExaminationRunID let an in-flight settle examination
+	// ask what the planner would decide once its own lease ends, without clearing
+	// that lease before the gate claim commits.
+	ownExaminationLane  string
+	ownExaminationRunID string
 	// GatesInFlight is the planning pass's observation, not a concurrency cap.
 	GatesInFlight int `json:"gates_in_flight,omitempty"`
 	// Build is supplied by a loop so the snapshot identifies that running binary.
@@ -605,13 +610,13 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			// (terminal_item.go); a workflow item is released below on the same fact.
 			settled := false
 			if p.finished(item.State) && work.Decision.Workflow == nil {
-				decision, settled, err = terminalSettlement(r, work, at)
+				decision, settled, err = terminalSettlementExcept(r, work, at, tick.ownExaminationLane, tick.ownExaminationRunID)
 				if err != nil {
 					return nil, nil, readFailure(err)
 				}
 			}
 			if !settled {
-				decision, err = pendingDecision(r, definitionWork(def, work), at, inputs[item.ItemID], tick.BriefTemplate, policy, shut, tick.GatesInFlight)
+				decision, err = pendingDecisionExcept(r, definitionWork(def, work), at, inputs[item.ItemID], tick.BriefTemplate, policy, shut, tick.GatesInFlight, tick.ownExaminationLane, tick.ownExaminationRunID)
 			}
 			if err == nil && !settled && decision.Action == ActionJudge && item.JudgeMode == "agent" && item.JudgeGrant == "" {
 				decision.From, decision.Action, decision.Reason, decision.To = "held", ActionHold, ReasonJudgeGrantAbsent, ""
@@ -647,7 +652,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					var leases []LaneLease
 					if !ownerNextNode || !work.LaneReleased {
 						var leaseErr error
-						leases, leaseErr = activeLeases(r, at, []string{laneID})
+						leases, leaseErr = activeLeasesExcept(r, at, []string{laneID}, tick.ownExaminationLane, tick.ownExaminationRunID)
 						if leaseErr != nil {
 							return nil, nil, readFailure(leaseErr)
 						}
@@ -1983,11 +1988,15 @@ type LaneLease struct {
 // wait, so a lease on it is not a reason to hold the loop: releasing it would not let the
 // loop dispatch anything it could not already dispatch.
 func activeLeases(r *store.Reader, now time.Time, lanes []string) ([]LaneLease, error) {
+	return activeLeasesExcept(r, now, lanes, "", "")
+}
+
+func activeLeasesExcept(r *store.Reader, now time.Time, lanes []string, exceptLane, exceptRunID string) ([]LaneLease, error) {
 	offered := make(map[string]bool, len(lanes))
 	for _, lane := range lanes {
 		offered[lane] = true
 	}
-	rows, err := r.Query(`SELECT lane_id, state, leased_until FROM lanes ORDER BY lane_id`)
+	rows, err := r.Query(`SELECT lane_id, state, run_id, leased_until FROM lanes ORDER BY lane_id`)
 	if err != nil {
 		return nil, readFailure(err)
 	}
@@ -1997,15 +2006,19 @@ func activeLeases(r *store.Reader, now time.Time, lanes []string) ([]LaneLease, 
 		var (
 			laneID      string
 			state       string
+			runID       sql.NullString
 			leasedUntil sql.NullInt64
 		)
-		if err := rows.Scan(&laneID, &state, &leasedUntil); err != nil {
+		if err := rows.Scan(&laneID, &state, &runID, &leasedUntil); err != nil {
 			return nil, readFailure(err)
 		}
 		if !offered[laneID] || state != LaneStateLeased {
 			continue
 		}
 		if !leasedUntil.Valid {
+			if exceptLane != "" && laneID == exceptLane && runID.Valid && runID.String == exceptRunID {
+				continue
+			}
 			leases = append(leases, LaneLease{LaneID: laneID})
 			continue
 		}

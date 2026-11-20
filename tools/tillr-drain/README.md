@@ -1739,7 +1739,11 @@ the block's own section between base and head. The
 [design answer tests](./drain/design_answer_test.go) cover both readings and the migration.
 
 An examination (the loop's settle or judge of a finished run) leases the run's lane with
-no expiry while it works, and releases that lease once it ends, on every path. The write
+no expiry while it works, and releases that lease once it ends, on every path. When
+settling yields a candidate ready for the gate on its own lane, the same examination
+records the `judge` decision and continues straight through gate and land unless a hold on
+the item or a waiting interactive request for that lane returns control to the planner
+([`drain/settle_judge_test.go`](./drain/settle_judge_test.go)). The write
 that records the run examined (`drain.examined`) also releases the lane. Only a live run
 face keeps the lease, because a face is a continuation that releases the lane itself when
 it finishes. A run face is the `tillr-run exec` process the loop started. A process that
