@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -98,6 +99,9 @@ func requestFace(args []string) (record.Envelope, int) {
 			return rejectionOrFailure(item.Rejectionf("store-busy", "", "the store's writer lock did not become available; no request was filed"), at)
 		}
 		return rejectionOrFailure(err, at)
+	}
+	if notice := item.RequestDesignPathNotice(filing.Seat, filing.Paths); notice != "" {
+		fmt.Fprintln(os.Stderr, notice)
 	}
 	return result, record.ExitOK
 }

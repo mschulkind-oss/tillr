@@ -100,3 +100,147 @@ func TestRequestFaceFilesTheWords(t *testing.T) {
 		t.Fatal("request --help failed")
 	}
 }
+
+func requestRunStreams(t *testing.T, words string, args ...string) (int, string, string) {
+	t.Helper()
+	cmd := exec.Command(bin, append([]string{"request"}, args...)...)
+	cmd.Stdin = bytes.NewReader([]byte(words))
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err := cmd.Run()
+	if e, ok := err.(*exec.ExitError); ok {
+		return e.ExitCode(), stdout.String(), stderr.String()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return 0, stdout.String(), stderr.String()
+}
+
+func TestRequestDesignPathNotice(t *testing.T) {
+	path, _ := placeFixture(t, "a")
+	root := scratch(t, "request-notice-root")
+	if err := os.MkdirAll(filepath.Join(root, "config/tillr/workflows"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, wf := range []string{"planned-build@v1.json", "scouted-design@v1.json"} {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "config", "tillr", "workflows", wf))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "config/tillr/workflows", wf), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cases := []struct {
+		name       string
+		seat       string
+		paths      []string
+		wantNotice bool
+		wantNamed  []string
+		wantAbsent []string
+	}{
+		{
+			name:       "build-docs-dir",
+			paths:      []string{"docs/"},
+			wantNotice: true,
+			wantNamed:  []string{"docs/"},
+		},
+		{
+			name:       "build-docs-design-dir",
+			seat:       "build",
+			paths:      []string{"docs/design/"},
+			wantNotice: true,
+			wantNamed:  []string{"docs/design/"},
+		},
+		{
+			name:       "build-docs-design-file",
+			paths:      []string{"docs/design/example.md"},
+			wantNotice: true,
+			wantNamed:  []string{"docs/design/example.md"},
+		},
+		{
+			name:       "build-design-named-md",
+			paths:      []string{"docs/pi/merge-queue-design.md"},
+			wantNotice: true,
+			wantNamed:  []string{"docs/pi/merge-queue-design.md"},
+		},
+		{
+			name:       "build-design-basename-md",
+			paths:      []string{"docs/pi/patch-branches/design.md"},
+			wantNotice: true,
+			wantNamed:  []string{"docs/pi/patch-branches/design.md"},
+		},
+		{
+			name:       "build-mixed-paths",
+			paths:      []string{"tools/tillr-item/", "docs/design/"},
+			wantNotice: true,
+			wantNamed:  []string{"docs/design/"},
+			wantAbsent: []string{"tools/tillr-item/"},
+		},
+		{
+			name:       "build-code-only",
+			paths:      []string{"tools/tillr-item/"},
+			wantNotice: false,
+		},
+		{
+			name:       "build-go-file-with-design-in-name",
+			paths:      []string{"tools/tillr-item/item/design_without_item.go"},
+			wantNotice: false,
+		},
+		{
+			name:       "build-non-design-doc",
+			paths:      []string{"docs/tillr/roadmap.md"},
+			wantNotice: false,
+		},
+		{
+			name:       "design-seat-docs-design",
+			seat:       "design",
+			paths:      []string{"docs/design/"},
+			wantNotice: false,
+		},
+		{
+			name:       "design-seat-docs-dir",
+			seat:       "design",
+			paths:      []string{"docs/"},
+			wantNotice: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			args := []string{"--store", path, "--root", root, "--title", "Notice " + tc.name, "--now", "2026-11-20T10:00:00-05:00"}
+			if tc.seat != "" {
+				args = append(args, "--seat", tc.seat)
+			}
+			for _, p := range tc.paths {
+				args = append(args, "--path", p)
+			}
+			code, stdout, stderr := requestRunStreams(t, "Request words for "+tc.name+".\n", args...)
+			if code != 0 {
+				t.Fatalf("exit %d: stdout=%s stderr=%s", code, stdout, stderr)
+			}
+			if !strings.Contains(stdout, `"kind":"item.request"`) {
+				t.Fatalf("stdout missing item.request envelope: %s", stdout)
+			}
+			if tc.wantNotice {
+				if !strings.Contains(stderr, "notice:") || !strings.Contains(stderr, "design") {
+					t.Fatalf("expected notice on stderr, got %q", stderr)
+				}
+				for _, want := range tc.wantNamed {
+					if !strings.Contains(stderr, want) {
+						t.Errorf("stderr %q missing path %q", stderr, want)
+					}
+				}
+				for _, absent := range tc.wantAbsent {
+					if strings.Contains(stderr, absent) {
+						t.Errorf("stderr %q unexpectedly named non-design path %q", stderr, absent)
+					}
+				}
+			} else if strings.Contains(stderr, "notice:") || strings.Contains(stderr, "tillr-item:") {
+				t.Fatalf("unexpected notice on stderr for %s: %q", tc.name, stderr)
+			}
+		})
+	}
+}
