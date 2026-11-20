@@ -483,10 +483,49 @@ type preparedLanding struct {
 // landingRecorded answers whether a landed row already names commit as its trunk_after.
 func landingRecorded(r rowQueryer, commit string) (bool, error) {
 	var recorded bool
-	if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM landings WHERE result = ? AND trunk_after = ?)`, ResultLanded, commit).Scan(&recorded); err != nil {
+	with, cond, err := rewriteAliasClause(r)
+	if err != nil {
+		return false, err
+	}
+	if err := r.QueryRow(with+`SELECT EXISTS (SELECT 1 FROM landings WHERE result = ? AND `+cond+`)`, commit, ResultLanded).Scan(&recorded); err != nil {
 		return false, Internalf("checking for a recorded landing at %s: %v", commit, err)
 	}
 	return recorded, nil
+}
+
+// rewriteAliasClause answers the SQL that matches a landing's trunk_after against a commit
+// under the trunk's recorded rewrites (docs/design/tillr-refused-push.md, Section 4.2): the
+// commit itself and every earlier commit a rebase of the trunk replaced with it. The commit
+// is the clause's first bound argument, ahead of the query's own. A store with no
+// trunk_rewrites table matches by equality alone.
+func rewriteAliasClause(r rowQueryer) (with, cond string, err error) {
+	var exists bool
+	if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'trunk_rewrites')`).Scan(&exists); err != nil {
+		return "", "", Internalf("checking the rewrite map: %v", err)
+	}
+	if !exists {
+		return `WITH a(sha) AS (SELECT ?) `, "trunk_after IN (SELECT sha FROM a)", nil
+	}
+	return `WITH RECURSIVE a(sha) AS (SELECT ? UNION SELECT w.old_sha FROM trunk_rewrites w JOIN a ON w.new_sha = a.sha) `, "trunk_after IN (SELECT sha FROM a)", nil
+}
+
+// forwardRewrite follows commit through the trunk's recorded rewrites to the commit that
+// replaced it, and answers commit itself when none did.
+func forwardRewrite(r rowQueryer, commit string) string {
+	var exists bool
+	if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'trunk_rewrites')`).Scan(&exists); err != nil || !exists {
+		return commit
+	}
+	seen := map[string]bool{}
+	for !seen[commit] {
+		seen[commit] = true
+		var next string
+		if err := r.QueryRow(`SELECT new_sha FROM trunk_rewrites WHERE old_sha = ?`, commit).Scan(&next); err != nil {
+			return commit
+		}
+		commit = next
+	}
+	return commit
 }
 
 // storedLanding answers the landed row this item's run already recorded for this head at
@@ -494,11 +533,15 @@ func landingRecorded(r rowQueryer, commit string) (bool, error) {
 func storedLanding(r rowQueryer, req LandingRequest, commit string) (*Landing, error) {
 	l := Landing{BaseRef: req.BaseRef}
 	var conflicts string
-	err := r.QueryRow(`SELECT landing_id, item_id, run_id, verdict_id, result, reason, base_sha, head_sha,
+	with, cond, err := rewriteAliasClause(r)
+	if err != nil {
+		return nil, err
+	}
+	err = r.QueryRow(with+`SELECT landing_id, item_id, run_id, verdict_id, result, reason, base_sha, head_sha,
 		       trunk_before, trunk_after, gated_tree, landed_tree, conflict_paths, gate_skipped_reason
 		  FROM landings
-		 WHERE result = ? AND trunk_after = ? AND item_id = ? AND run_id = ? AND head_sha = ?
-		 ORDER BY rowid LIMIT 1`, ResultLanded, commit, req.ItemID, req.RunID, req.HeadSHA).Scan(
+		 WHERE result = ? AND `+cond+` AND item_id = ? AND run_id = ? AND head_sha = ?
+		 ORDER BY rowid LIMIT 1`, commit, ResultLanded, req.ItemID, req.RunID, req.HeadSHA).Scan(
 		&l.LandingID, &l.ItemID, &l.RunID, &l.VerdictID, &l.Result, &l.Reason, &l.BaseSHA, &l.HeadSHA,
 		&l.TrunkBefore, &l.TrunkAfter, &l.GatedTree, &l.LandedTree, &conflicts, &l.GateSkippedReason)
 	if err == sql.ErrNoRows {
@@ -557,6 +600,11 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 			}
 			if markerRecorded, err = landingRecorded(r, marker); err != nil {
 				return err
+			}
+			if PatchRef(req.BaseRef) == "" {
+				// A rebase of the trunk replaced the commit the marker named: the landing
+				// is the commit that replaced it.
+				marker = forwardRewrite(r, marker)
 			}
 		}
 		if req.ObservedTrunk != "" {

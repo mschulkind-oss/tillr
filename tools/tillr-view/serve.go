@@ -806,6 +806,7 @@ type snapshotData struct {
 	Sources    sourceStates       `json:"sources"`
 	Counts     boardCounts        `json:"counts"`
 	Drain      drainSummary       `json:"drain_summary"`
+	Push       *pushSummary       `json:"push,omitempty"`
 	Lanes      []laneView         `json:"lanes"`
 	Items      []itemView         `json:"items"`
 	RecentRuns []runSummary       `json:"recent_runs"`
@@ -1115,6 +1116,7 @@ func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiF
 			buildNote = ""
 		}
 	}
+	out.Push = readPushSummary(req.Context(), r, s.root)
 	out.Drain = drainSummary{
 		UnreportedRuns:      unreported,
 		CostUnreportedRuns:  costUnreported,

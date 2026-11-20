@@ -754,7 +754,25 @@ def case_seed_retirement_documented():
     ok("seed intake is retired; seven unfinished rows survive as prose and places have a writer")
 
 
+def case_refused_push_documented():
+    """The push states and the push face are named where an operator looks."""
+    required = {
+        ROOT / "tools/tillr-drain/README.md": ("tillr drain push", "push-remote-declined",
+                                               "push-patch-move-held", "remote-sync-conflict"),
+        ROOT / "tools/tillr-view/README.md": ("remote-sync-conflict", "push-remote-declined",
+                                              "push-failed"),
+        SKILL: ("tillr drain push", "push-remote-declined", "remote-sync-conflict"),
+    }
+    for path, phrases in required.items():
+        text = text_of(path)
+        for phrase in phrases:
+            if phrase not in text:
+                fail(f"{path.relative_to(ROOT)} omits the refused-push term {phrase!r}")
+    ok("the refused-push states and the push face are documented")
+
+
 def main():
+    case_refused_push_documented()
     case_seed_retirement_documented()
     green_build_tests = subprocess.run(
         [sys.executable, str(ROOT / "tests/tillr-build.test.py")],

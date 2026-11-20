@@ -66,6 +66,9 @@ func statusText(p statusPayload) string {
 	if p.QuestionsState != "" {
 		fmt.Fprintf(&b, "questions: %s (%d)\n", p.QuestionsState, len(p.Questions))
 	}
+	if line := p.Push.text(); line != "" {
+		b.WriteString(line + "\n")
+	}
 	if p.HeavyFault != "" {
 		fmt.Fprintf(&b, "heavy status unavailable: %s\n", p.HeavyFault)
 	}

@@ -4,10 +4,8 @@ package drain
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"path"
 	"strings"
@@ -17,7 +15,6 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/settings"
-	"github.com/mschulkind-oss/tillr/store"
 )
 
 const postLandingKind = "drain.post-landing-action"
@@ -94,8 +91,13 @@ func (l *Loop) afterLandingCandidate(ctx context.Context, candidate Candidate, t
 				var refused *refusedPushError
 				if errors.As(err, &refused) {
 					// The remote moved: rebase onto it, then push once more.
-					if _, err = l.healRefusedPush(ctx, p, err); err == nil {
+					res, herr := l.healRefusedPushResult(ctx, p, err)
+					if herr == nil {
+						l.rollAfterRemoteSync(ctx, res)
+						tip = res.newTip
 						err = pushTrunk(ctx, l.cfg.Root, p)
+					} else {
+						err = herr
 					}
 				}
 				l.recordPush(ctx, settings.PushTip, tip, err)
@@ -123,6 +125,11 @@ func (l *Loop) afterLandingCandidate(ctx context.Context, candidate Candidate, t
 		l.recordAction(ctx, "roll", tip, err)
 		return
 	}
+	l.rollChanged(ctx, r, changed, tip)
+}
+
+// rollChanged submits the roll the NUL-separated changed paths call for.
+func (l *Loop) rollChanged(ctx context.Context, r settings.Roll, changed, tip string) {
 	if matchesRollPaths(changed, r.Paths) {
 		l.rollAction.submit(tip, func(tip string) {
 			_, err := actionCommand(ctx, l.cfg.Root, "sh", "-c", r.Command)
@@ -186,11 +193,19 @@ func (l *Loop) afterGreen(ctx context.Context, advanced string) {
 		if errors.As(err, &refused) {
 			// The remote moved: rebase onto it. The new tip is proved by the normal
 			// after-merge run, and the green advance that follows pushes it.
-			n, herr := l.healRefusedPush(ctx, p, err)
+			res, herr := l.healRefusedPushResult(ctx, p, err)
 			if herr == nil {
-				herr = fmt.Errorf("the remote had moved: %d unpublished commits were rebased onto it; the new tip is proved, then pushed at the next green advance", n)
+				l.maybeRollAfterRemoteSync(ctx, res)
+				herr = &pushStateError{
+					kind:       pushKindProving,
+					remoteTip:  res.remoteTip,
+					rebasedTip: res.newTip,
+					detail:     fmt.Sprintf("the remote had moved: %d unpublished commits were rebased onto it; the new tip is proved, then pushed at the next green advance", res.replayed),
+				}
 			}
 			err = herr
+		} else if err == nil || errors.Is(err, errAlreadyPublished) {
+			l.flushPendingRemoteRoll(ctx, green)
 		}
 		l.recordPush(ctx, settings.PushGreen, green, err)
 	})
@@ -247,8 +262,12 @@ func pushTrunk(ctx context.Context, root string, p settings.Push) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
 	defer cancel()
+	pushed := optionalCommit(ctx, root, "refs/heads/"+TrunkRef)
 	// Supply an explicit non-forcing refspec, independent of remote push defaults.
-	return pushCommand(ctx, root, "--", remote, "refs/heads/"+TrunkRef+":"+ref)
+	if err := pushCommand(ctx, root, "--", remote, "refs/heads/"+TrunkRef+":"+ref); err != nil {
+		return err
+	}
+	return advancePublished(ctx, root, remote, ref, pushed)
 }
 
 // pushGreen pushes the commit `refs/tillr/green` holds now to the remote branch, unless the
@@ -270,12 +289,18 @@ func pushGreen(ctx context.Context, root string, p settings.Push) (string, error
 	tracking := "refs/remotes/" + remote + "/" + strings.TrimPrefix(ref, "refs/heads/")
 	if _, err := actionCommand(ctx, root, "git", "rev-parse", "--verify", "--quiet", tracking+"^{commit}"); err == nil {
 		if _, err := actionCommand(ctx, root, "git", "merge-base", "--is-ancestor", green, tracking); err == nil {
+			if err := confirmPublished(ctx, root, remote, ref, green); err != nil {
+				return green, err
+			}
 			return green, errAlreadyPublished
 		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
 	defer cancel()
-	return green, pushCommand(ctx, root, "--", remote, green+":"+ref)
+	if err := pushCommand(ctx, root, "--", remote, green+":"+ref); err != nil {
+		return green, err
+	}
+	return green, advancePublished(ctx, root, remote, ref, green)
 }
 
 // errAlreadyPublished marks the push that was not needed; it is a success, not a failure.
@@ -286,19 +311,28 @@ var errAlreadyPublished = errors.New("remote already holds the green commit")
 func (l *Loop) recordPush(ctx context.Context, what, tip string, failure error) {
 	if errors.Is(failure, errAlreadyPublished) {
 		failure = nil // recorded as success so an earlier failure's warning clears
-		l.recordActionWhat(ctx, "push", what, tip, nil)
+		l.recordPushState(ctx, what, tip, pushKindOK, nil, nil)
 		return
+	}
+	kind, state := l.classifyPushFailure(ctx, failure)
+	if failure == nil {
+		kind, state = pushKindOK, nil
 	}
 	retry := "retried at the next landing"
 	if what == settings.PushGreen {
 		retry = "retried at the next green advance"
 	}
-	if failure != nil {
-		l.reportf("loop: push of %s %s failed (%s; the loop goes on): %s\n", what, shortSHA(tip), retry, strings.Join(strings.Fields(failure.Error()), " "))
-	} else {
+	switch {
+	case failure == nil:
 		l.reportf("loop: pushed %s %s\n", what, shortSHA(tip))
+	case kind == pushKindProving:
+		l.reportf("loop: push of %s %s waits for the rebased tip to be proved: %s\n", what, shortSHA(tip), strings.Join(strings.Fields(failure.Error()), " "))
+	case kind == pushKindConflict && (state == nil || state.escalated == ""):
+		l.reportf("loop: push of %s %s waits on conflict repair: %s\n", what, shortSHA(tip), strings.Join(strings.Fields(failure.Error()), " "))
+	default:
+		l.reportf("loop: push of %s %s failed as %s (%s; the loop goes on): %s\n", what, shortSHA(tip), kind, retry, strings.Join(strings.Fields(failure.Error()), " "))
 	}
-	l.recordActionWhat(ctx, "push", what, tip, failure)
+	l.recordPushState(ctx, what, tip, kind, state, failure)
 }
 
 func actionCommand(ctx context.Context, root, program string, args ...string) (string, error) {
@@ -324,19 +358,5 @@ func (l *Loop) recordActionWhat(ctx context.Context, action, what, tip string, f
 	if failure != nil {
 		detail = failure.Error()
 	}
-	s, err := store.Open(ctx, l.cfg.Store, false)
-	if err == nil {
-		defer s.Close()
-		err = s.WriteTx(ctx, func(tx *store.Tx) error {
-			body, err := json.Marshal(map[string]string{"action": action, "detail": detail, "what": what})
-			if err != nil {
-				return err
-			}
-			_, err = tx.Append(event.Event{Kind: postLandingKind, ObjectType: "landing", ObjectID: &tip, Payload: body, At: time.Now().UTC()})
-			return err
-		})
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "post-landing %s at %s: recording outcome: %v (action failure: %v)\n", action, tip, err, failure)
-	}
+	l.appendPostLanding(ctx, action, tip, map[string]any{"action": action, "detail": detail, "what": what}, failure)
 }

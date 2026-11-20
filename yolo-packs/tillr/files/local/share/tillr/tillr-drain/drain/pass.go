@@ -1515,7 +1515,13 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				return nil
 			}
 			base := trunkSHA
-			if !l.nonLanding && !IsTrunkFixer(d.ItemID) {
+			if IsRemoteSyncItem(d.ItemID) {
+				syncBase, err := l.remoteSyncDispatchBase(ctx, d.ItemID)
+				if err != nil {
+					return err
+				}
+				base = syncBase
+			} else if !l.nonLanding && !IsTrunkFixer(d.ItemID) {
 				green, err := provedLaneBase(ctx, l.cfg.Root, l.gatePolicy.LaneBase)
 				if err != nil {
 					return err
@@ -1884,6 +1890,9 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 		}
 		return recordSecondFailure(tx, routed, at)
 	})
+	if err == nil && routed != nil && IsRemoteSyncItem(routed.itemID) {
+		l.escalateRemoteSyncPushState(ctx, routed.itemID, "operator", "repeated ending")
+	}
 	return err
 }
 
@@ -2110,6 +2119,10 @@ planned:
 	if err := l.checkStopRequested(ctx); err != nil {
 		return "", err
 	}
+	if err := l.closeStaleRemoteSyncItems(ctx); err != nil {
+		return "", err
+	}
+	l.maybeRecoverClearedPushHold(ctx)
 	if err := l.maybeRolling(ctx, mainSHA, false, result); err != nil {
 		return "", err
 	}
