@@ -1635,7 +1635,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 			delete(l.infraLines, request.ItemID+"\x00"+decision.LaneID)
 			if decision.Workflow != nil {
-				if (decision.NodeIndex == 0 && !request.SessionTurn) || revertedSession {
+				if decision.NodeBaseSHA == "" || (decision.NodeIndex == 0 && !request.SessionTurn) || revertedSession {
 					decision.NodeBaseSHA = l.laneBase(decision.LaneID)
 				}
 				decision.NodeBaseSHA = l.baseInCheckout(ctx, decision.LaneID, decision.NodeBaseSHA)
@@ -2589,6 +2589,12 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	}
 	if head != candidate.HeadSHA {
 		return "", false, l.candidateFault(ctx, candidate, fmt.Sprintf("lane HEAD %s differs from recorded candidate %s", head, candidate.HeadSHA))
+	}
+	if _, err := l.git(ctx, candidate.Worktree, "cat-file", "-e", candidate.BaseSHA+"^{commit}"); err != nil {
+		if ctx.Err() != nil {
+			return "", false, ctx.Err()
+		}
+		return "", false, l.candidateFault(ctx, candidate, fmt.Sprintf("cannot resolve candidate base %s for head %s in %s: %v", candidate.BaseSHA, candidate.HeadSHA, candidate.Worktree, err))
 	}
 	// A prepared retirement tree is already bound; do not rebase it on rejudgment.
 	if candidate.WorkerHeadSHA == "" {
