@@ -285,7 +285,7 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 	// did not declare would be refused before the gate ever saw it. `fork-check.py` reads
 	// `TILLR_GATE_SPANS_OUT` when it is given no `--spans-out`, so the flag stays the
 	// gate's own explicit spelling and the environment is the drain's hand-off.
-	env := s.forkRootEnv()
+	env := append(s.forkRootEnv(), "PYTHONDONTWRITEBYTECODE=1")
 	if s.Root != "" {
 		for _, name := range []string{GateSpansFile, GateFastVerdictFile} {
 			if err := os.Remove(filepath.Join(RunDir(s.Root, candidate.RunID), name)); err != nil && !os.IsNotExist(err) {
@@ -552,17 +552,18 @@ func (s *ProcessSteps) programWithEnv(ctx context.Context, step, dir, program st
 		cmd = exec.CommandContext(ctx, argv[0], argv[1:]...)
 		baseEnv := os.Environ()
 		if step == "gate" {
-			baseEnv = withoutProcessEnv(baseEnv, "TILLR_SQLITE_TRACE")
+			baseEnv = withoutProcessEnv(baseEnv, "TILLR_SQLITE_TRACE", "PYTHONDONTWRITEBYTECODE")
 		}
 		cmd.Env = append(baseEnv, env...)
 	} else {
 		baseEnv := env
 		if step == "gate" {
 			// The gate runs candidate checks, not the loop's store: strip
-			// TILLR_SQLITE_TRACE so checks see the same environment as the
-			// trunk proof and a worker's own test runs.
-			cmd = s.stepCommand(ctx, argv, env)
-			cmd.Env = withoutProcessEnv(cmd.Env, "TILLR_SQLITE_TRACE")
+			// TILLR_SQLITE_TRACE and prior PYTHONDONTWRITEBYTECODE so checks
+			// see the same environment as the trunk proof and write no
+			// __pycache__ files into the checked-out worktree.
+			cmd = s.stepCommand(ctx, argv, nil)
+			cmd.Env = append(withoutProcessEnv(cmd.Env, "TILLR_SQLITE_TRACE", "PYTHONDONTWRITEBYTECODE"), env...)
 		} else {
 			cmd = s.stepCommand(ctx, argv, baseEnv)
 		}
@@ -647,6 +648,17 @@ func (s *ProcessSteps) forkRootEnv() []string {
 		return nil
 	}
 	return []string{"PI_FORKS_ROOT=" + s.Root}
+}
+
+// checkProcessEnv builds the environment for a replay, rolling or heavy check subprocess:
+// it strips the loop's own SQLite trace toggle and sets PYTHONDONTWRITEBYTECODE=1 so Python
+// imports inside a checked-out proof or scratch worktree never write __pycache__/*.pyc.<id>
+// or .pyc files that flip `git status --porcelain` during concurrent `go build` VCS stamping.
+func (s *ProcessSteps) checkProcessEnv(base []string, extra ...string) []string {
+	out := withoutProcessEnv(base, "TILLR_SQLITE_TRACE", "PYTHONDONTWRITEBYTECODE")
+	out = append(out, "PYTHONDONTWRITEBYTECODE=1")
+	out = append(out, s.forkRootEnv()...)
+	return append(out, extra...)
 }
 
 // stderrReason is the tail a failed step's error carries: why the program said it failed, from
@@ -870,7 +882,7 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 		}
 		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 		cmd.Dir = dir
-		cmd.Env = append(withoutProcessEnv(os.Environ(), "TILLR_SQLITE_TRACE"), s.forkRootEnv()...)
+		cmd.Env = s.checkProcessEnv(os.Environ())
 		var stderr stderrTail
 		var combined bytes.Buffer
 		cmd.Stdout = &combined
@@ -1067,7 +1079,7 @@ func (s *ProcessSteps) Rolling(ctx context.Context, baseSHA, tipSHA string) (Rol
 	_ = os.Remove(spans)
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
-	cmd.Env = append(append(withoutProcessEnv(os.Environ(), "TILLR_SQLITE_TRACE"), s.forkRootEnv()...), "TILLR_GATE_SPANS_OUT="+spans)
+	cmd.Env = s.checkProcessEnv(os.Environ(), "TILLR_GATE_SPANS_OUT="+spans)
 	var stderr stderrTail
 	cmd.Stderr = &stderr
 	rollingLog := ""

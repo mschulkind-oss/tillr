@@ -5,11 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -163,22 +165,89 @@ func whyFixture(t *testing.T, drainBin string) (dir, path string) {
 }
 
 // buildPair builds tillr-view and tillr-drain from this tree into one directory, the layout
-// `just observatory` produces. Both come from the same working tree, so they carry the
-// same revision and the same dirty flag.
+// `just observatory` produces.
 func buildPair(t *testing.T) (view, drain string) {
 	t.Helper()
-	bin := t.TempDir()
-	view, drain = filepath.Join(bin, "tillr-view"), filepath.Join(bin, "tillr-drain")
-	for _, b := range []*exec.Cmd{
-		exec.Command("go", "build", "-o", view, "."),
-		exec.Command("go", "-C", "../tillr-drain", "build", "-o", drain, "."),
-	} {
-		b.Env = append(os.Environ(), "CGO_ENABLED=0")
-		if out, err := b.CombinedOutput(); err != nil {
-			t.Fatalf("%v: %v %s", b.Args, err, out)
+	return buildPairInto(t, plannerFixtureDir(t))
+}
+
+// buildPairInto builds tillr-view and tillr-drain into bin in one `go build` invocation
+// over a scratch go.work spanning the sibling tillr modules. Within one `go build`
+// process, cmd/go/internal/load's vcsStatusCache runs `git status --porcelain` once for
+// the repository root and stamps both binaries from that single snapshot, so a concurrent
+// transient file in a shared checkout cannot stamp one binary `+dirty` and the other clean.
+func buildPairInto(t *testing.T, bin string) (view, drain string) {
+	t.Helper()
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	goVersion := goModVersion(t, "go.mod")
+	parent, err := filepath.Abs("..")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var work strings.Builder
+	fmt.Fprintf(&work, "go %s\n\nuse (\n", goVersion)
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "tillr") {
+			continue
+		}
+		modDir := filepath.Join(parent, entry.Name())
+		if _, err := os.Stat(filepath.Join(modDir, "go.mod")); err == nil {
+			fmt.Fprintf(&work, "\t%s\n", strconv.Quote(modDir))
 		}
 	}
-	return view, drain
+	work.WriteString(")\n")
+	workFile := filepath.Join(plannerFixtureDir(t), "go.work")
+	if err := os.WriteFile(workFile, []byte(work.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "build", "-o", bin+string(filepath.Separator), ".", "github.com/mschulkind-oss/tillr-drain")
+	cmd.Env = append(withoutEnv(os.Environ(), "CGO_ENABLED", "GOWORK"), "CGO_ENABLED=0", "GOWORK="+workFile)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v: %v %s", cmd.Args, err, out)
+	}
+	return filepath.Join(bin, "tillr-view"), filepath.Join(bin, "tillr-drain")
+}
+
+func goModVersion(t *testing.T, path string) string {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(line, "go "); ok {
+			if fields := strings.Fields(rest); len(fields) > 0 {
+				return fields[0]
+			}
+		}
+	}
+	t.Fatalf("%s declares no go directive", path)
+	return ""
+}
+
+func withoutEnv(env []string, keys ...string) []string {
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
+		name, _, _ := strings.Cut(entry, "=")
+		drop := false
+		for _, k := range keys {
+			if name == k {
+				drop = true
+				break
+			}
+		}
+		if !drop {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 // The screenshot of 2026-11-17: a server whose PATH held no tillr-drain answered every
@@ -242,6 +311,70 @@ func TestWaitingRefusesAPlannerOfAnotherBuild(t *testing.T) {
 				t.Fatalf("a planner of another build must be refused (%q): %v %s", tc.want, err, out)
 			}
 		})
+	}
+}
+
+// On 2026-11-20, the after-merge proof of 1d79a4e3b failed TestBuiltServerAsksItsOwnSiblingWhateverPATHHolds
+// with exit status 3 (`tillr-drain ... was built from 1d79a4e3bab2, and this server from 1d79a4e3bab2+dirty`):
+// a concurrent check transiently dirtied `git status --porcelain` between two separate `go build` calls.
+// Building the pair must sample the checkout's VCS status once so the server and its sibling never disagree.
+func TestBuildPairSharesOneVCSStampWhenWorkingTreeChangesMidBuild(t *testing.T) {
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapDir := plannerFixtureDir(t)
+	countFile := filepath.Join(wrapDir, "status-calls")
+	wrapper := filepath.Join(wrapDir, "git")
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = \"status\" ] && [ \"$2\" = \"--porcelain\" ]; then\n" +
+		"  n=0\n" +
+		"  [ -f \"" + countFile + "\" ] && n=$(cat \"" + countFile + "\")\n" +
+		"  n=$((n + 1))\n" +
+		"  printf '%d' \"$n\" > \"" + countFile + "\"\n" +
+		"  if [ \"$n\" -eq 1 ]; then\n" +
+		"    printf '?? tools/__pycache__/pack_docs.cpython-312.pyc.12345\\n'\n" +
+		"  fi\n" +
+		"  exit 0\n" +
+		"fi\n" +
+		"exec \"" + realGit + "\" \"$@\"\n"
+	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	origPath := os.Getenv("PATH")
+	t.Setenv("PATH", wrapDir+string(os.PathListSeparator)+origPath)
+	view, drain := buildPair(t)
+	t.Setenv("PATH", origPath)
+
+	dir, path := whyFixture(t, drain)
+	gitDir := plannerFixtureDir(t)
+	if err := os.Symlink(realGit, filepath.Join(gitDir, "git")); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(view, "waiting", "--store", path, "--root", dir, "--json")
+	cmd.Env = []string{"PATH=" + gitDir, "HOME=" + plannerFixtureDir(t)}
+	out, err := cmd.Output()
+	if err != nil {
+		stderr := ""
+		var exit *exec.ExitError
+		if errors.As(err, &exit) {
+			stderr = string(exit.Stderr)
+		}
+		t.Fatalf("waiting: %v %s %s", err, out, stderr)
+	}
+	var rows []waitingRow
+	if err := json.Unmarshal(out, &rows); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if len(rows) != 2 || rows[0].ItemID != "a" {
+		t.Fatalf("unexpected waiting rows: %s", out)
+	}
+	rawCalls, err := os.ReadFile(countFile)
+	if err != nil {
+		t.Fatalf("git status --porcelain was never called (%v): VCS stamping was disabled instead of shared", err)
+	}
+	if string(rawCalls) != "1" {
+		t.Fatalf("git status --porcelain called %s times, want 1", string(rawCalls))
 	}
 }
 

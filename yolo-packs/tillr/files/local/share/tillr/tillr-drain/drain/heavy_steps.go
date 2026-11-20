@@ -163,7 +163,7 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 		}
 		cmd := exec.CommandContext(ctx, bin, args...)
 		cmd.Dir = dir
-		cmd.Env = append(withoutProcessEnv(os.Environ(), "TILLR_SQLITE_TRACE"), s.forkRootEnv()...)
+		cmd.Env = s.checkProcessEnv(os.Environ())
 		var stderr stderrTail
 		cmd.Stderr = &stderr
 		var stdout strings.Builder
@@ -266,7 +266,7 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
-	cmd.Env = append(append(withoutProcessEnv(os.Environ(), "TILLR_SQLITE_TRACE"), s.forkRootEnv()...), "TILLR_GATE_SPANS_OUT="+spans)
+	cmd.Env = s.checkProcessEnv(os.Environ(), "TILLR_GATE_SPANS_OUT="+spans)
 	var stderr stderrTail
 	cmd.Stderr = &stderr
 	// The program's whole output goes to a file under the proof's log directory for

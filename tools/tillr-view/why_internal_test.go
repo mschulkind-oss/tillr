@@ -29,10 +29,7 @@ func storeFingerprint(t *testing.T, path string) string {
 func TestWhyAPIAndWaitingBeforeAnyPass(t *testing.T) {
 	dir := plannerFixtureDir(t)
 	gitRoot(t, dir)
-	drainBin := filepath.Join(dir, "tillr-drain")
-	if out, err := exec.Command("go", "-C", "../tillr-drain", "build", "-o", drainBin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build drain: %v %s", err, out)
-	}
+	viewBin, drainBin := buildPairInto(t, dir)
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	path := filepath.Join(dir, "state.db")
 	input := filepath.Join(dir, "pass.json")
@@ -88,10 +85,7 @@ func TestWhyAPIAndWaitingBeforeAnyPass(t *testing.T) {
 	if body["snapshot"].(map[string]any)["event_head_seq"] != data["event_head_seq"] {
 		t.Fatalf("cursor not planner's: %s", rawBody)
 	}
-	viewBin := filepath.Join(dir, "tillr-view")
-	if out, err := exec.Command("go", "build", "-o", viewBin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build view: %v %s", err, out)
-	}
+
 	out, err := exec.Command(viewBin, "waiting", "--store", path, "--root", dir, "--json").CombinedOutput()
 	if err != nil {
 		t.Fatalf("waiting: %v %s", err, out)

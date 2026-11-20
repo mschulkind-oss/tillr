@@ -63,14 +63,7 @@ func TestWaitingShowsJudgeReason(t *testing.T) {
 func TestViewWarnsBeforeGrantExpiresAndShowsExpiredGrantHold(t *testing.T) {
 	dir := plannerFixtureDir(t)
 	gitRoot(t, dir)
-	drainBin := filepath.Join(dir, "tillr-drain")
-	if out, err := exec.Command("go", "-C", "../tillr-drain", "build", "-o", drainBin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build drain: %v %s", err, out)
-	}
-	viewBin := filepath.Join(dir, "tillr-view")
-	if out, err := exec.Command("go", "build", "-o", viewBin, ".").CombinedOutput(); err != nil {
-		t.Fatalf("build view: %v %s", err, out)
-	}
+	viewBin, drainBin := buildPairInto(t, dir)
 
 	policyPath := filepath.Join(dir, "policy.json")
 	if err := os.WriteFile(policyPath, []byte(`{"version":1,"backends":{"pi":{"adapter":"pi","model":"m"}},"seats":{"build":["pi"],"review":["pi"]},"default_backend":"pi"}`), 0600); err != nil {

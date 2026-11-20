@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -188,6 +189,92 @@ JSON`)
 		}
 		if string(got) != "<unset>" {
 			t.Fatalf("%s saw TILLR_SQLITE_TRACE=%q, want <unset>", name, string(got))
+		}
+	}
+}
+
+// Importing a tracked Python module from a checked-out proof or gate worktree would
+// write `tools/__pycache__/<mod>.cpython-*.pyc.<id>` (never covered by `*.pyc`) and
+// `.pyc` into the checkout, making `git status --porcelain` transiently or permanently
+// dirty during concurrent `go build` VCS stamping. Every check subprocess gets
+// PYTHONDONTWRITEBYTECODE=1.
+func TestCheckSubprocessesSuppressPythonBytecodeInCheckedOutWorktrees(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", scratchUnderDurable(t))
+	t.Setenv("PYTHONDONTWRITEBYTECODE", "0")
+	root, base := heavyRepo(t)
+	work := scratchUnderDurable(t)
+	bin := filepath.Join(work, "tillr-gate")
+	cmd := exec.Command("go", "build", "-o", bin, ".")
+	cmd.Dir = filepath.Join("..", "..", "tillr-gate")
+	if raw, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build: %v %s", err, raw)
+	}
+
+	checksDir := filepath.Join(root, "tools", "gate", "checks")
+	if err := os.MkdirAll(checksDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(root, ".gitignore"), ".tillr/\n")
+	writeForkFile(t, filepath.Join(root, "tools", "helper_mod.py"), "VALUE = 1\n")
+	pyCheck := `python3 -c 'import os, subprocess, sys; sys.path.insert(0, "tools"); import helper_mod; st = subprocess.check_output(["git", "status", "--porcelain"]).decode(); assert os.environ.get("PYTHONDONTWRITEBYTECODE") == "1" and st == "", (os.environ.get("PYTHONDONTWRITEBYTECODE"), st)'`
+	writeForkFile(t, filepath.Join(checksDir, "py.json"), `{"id":"py","label":"py","scope":"tree","tier":"heavy","budget_ms":1,"timeout_ms":5000,"command":["sh","-c",`+strconv.Quote(pyCheck)+`],"reads":["value"],"remember":false}`)
+	heavyCommit(t, root, "python module and check")
+	tip := heavyGit(t, root, "rev-parse", "HEAD")
+
+	gateProg := executable(t, "set -eu\n"+pyCheck)
+	legacyProg := executable(t, "set -eu\n"+pyCheck+`
+cat > "$TILLR_GATE_SPANS_OUT" <<'JSON'
+{"check_spans":[{"check_id":"legacy","kind":"shell","label":"legacy","status":"PASS","attributes_json":"{\"writes\":[\"value\"]}"}]}
+JSON`)
+	replayProg := executable(t, "set -eu\necho '{only}' >/dev/null\n"+pyCheck)
+
+	f, _ := passFixture(t, "item-a")
+	steps := &ProcessSteps{
+		Root:           root,
+		Store:          f.storePath,
+		Now:            time.Now,
+		LaneRoot:       work,
+		GateProgram:    gateProg,
+		HeavyGateBin:   bin,
+		RollingProgram: legacyProg,
+		ReplayProgram:  replayProg,
+	}
+	cand := Candidate{
+		ItemID: "item-a", LaneID: "lane-1", RunID: "run-1",
+		Worktree: root, BaseSHA: base, HeadSHA: tip,
+	}
+	if outcome, err := steps.Gate(context.Background(), cand); err != nil || outcome.Outcome != GatePassed {
+		t.Fatalf("gate: %+v / %v", outcome, err)
+	}
+	if rep, err := steps.Replay(context.Background(), cand, tip, []string{"legacy"}); err != nil || !rep.Known || len(rep.Red) != 0 {
+		t.Fatalf("replay: %+v / %v", rep, err)
+	}
+	if roll, err := steps.Rolling(context.Background(), "", tip); err != nil || !roll.Known || !roll.Green {
+		t.Fatalf("rolling: %+v / %v", roll, err)
+	}
+	runner := HeavyRunner{
+		Root:  root,
+		Lock:  loopHeld(t, root),
+		Work:  filepath.Join(work, ".rolling", "worktree"),
+		Trunk: TrunkRef,
+		Judge: func(ctx context.Context, dir, only string) ([]HeavyCheck, error) {
+			checks, err := steps.JudgeHeavy(ctx, dir, only)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := steps.JudgeHeavy(ctx, dir, "legacy"); err != nil {
+				return nil, err
+			}
+			return checks, nil
+		},
+	}
+	res, err := runner.Run(context.Background())
+	if err != nil || len(res.Runs) != 1 {
+		t.Fatalf("heavy run: %+v / %v", res, err)
+	}
+	for _, c := range res.Runs[0].Checks {
+		if c.Result != "pass" {
+			t.Fatalf("heavy check %s = %s", c.CheckID, c.Result)
 		}
 	}
 }

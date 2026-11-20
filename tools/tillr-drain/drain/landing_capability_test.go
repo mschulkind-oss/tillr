@@ -78,7 +78,7 @@ func TestClaudeEndingCapabilityProbe(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if err := os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/bin/sh\n"+tc.script+"\n"), 0755); err != nil {
+			if err := writeForkSafe(filepath.Join(dir, "claude"), []byte("#!/bin/sh\n"+tc.script+"\n"), 0755); err != nil {
 				t.Fatal(err)
 			}
 			t.Setenv("PATH", dir)
@@ -102,7 +102,7 @@ func TestClaudeEndingCapabilityProbe(t *testing.T) {
 	})
 	hungDir := t.TempDir()
 	claudeBin := filepath.Join(hungDir, "claude")
-	if err := os.WriteFile(claudeBin, []byte("#!/bin/sh\necho 'No deferred tool marker found in the resumed session' >&2\nsleep 30 &\nsleep 30\n"), 0755); err != nil {
+	if err := writeForkSafe(claudeBin, []byte("#!/bin/sh\necho 'No deferred tool marker found in the resumed session' >&2\nsleep 30 &\nsleep 30\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", hungDir+string(os.PathListSeparator)+sysPath)
@@ -189,7 +189,7 @@ func TestClaudeLandingCallDeliversGateRefusalAndRecordsAcceptance(t *testing.T) 
 	transcript := filepath.Join(bin, "claude-session.jsonl")
 	// Stand-in `claude` exercising the real `run-claude` flags, `claude-settings.json`
 	// PreToolUse hook, and `claude-mcp.json` stdio MCP server.
-	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(`#!/usr/bin/env python3
+	if err := writeForkSafe(filepath.Join(bin, "claude"), []byte(`#!/usr/bin/env python3
 import json, os, pathlib, shlex, subprocess, sys
 argv = sys.argv[1:]
 if "--continue" in argv:
