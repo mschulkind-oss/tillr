@@ -106,6 +106,16 @@ func RecordLoopResult(root string, at time.Time, build BuildStamp, result LoopRe
 		reportRecordFailure(report, path, Externalf("creating %s: %v", filepath.Dir(path), err))
 		return
 	}
+	if result.FirstGeneration == "" && result.LastGeneration == "" {
+		if prior, err := os.ReadFile(path); err == nil {
+			archive := filepath.Join(filepath.Dir(path), fmt.Sprintf("drain-0-0-%d.json", at.UnixNano()))
+			if err := os.WriteFile(archive, prior, 0o644); err != nil {
+				reportRecordFailure(report, archive, Externalf("archiving %s: %v", path, err))
+			}
+		} else if !os.IsNotExist(err) {
+			reportRecordFailure(report, path, Externalf("reading %s: %v", path, err))
+		}
+	}
 	if err := os.WriteFile(path, append(body, '\n'), 0o644); err != nil {
 		reportRecordFailure(report, path, Externalf("writing %s: %v", path, err))
 	}

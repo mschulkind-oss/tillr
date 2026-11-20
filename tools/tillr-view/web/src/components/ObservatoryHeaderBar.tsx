@@ -100,10 +100,12 @@ export function LoopBand({ drain, now: suppliedNow }: { drain: SnapshotData["dra
   const session = drain.session;
   const alive = loopAlive(drain, now);
   const stop = alive ? null : drain.stop;
+  const repeated = drain.repeated_stop;
   const label = alive ? "Loop alive" : "no loop is running";
   return <span className="loop-band" title={drain.session_note}>
     {label}{alive && session ? ` · next pass ${new Date(session.next_pass_at_ms).toLocaleTimeString()}` : null}
     {stop ? <> · stopped since {new Date(stop.at_ms).toISOString()} · {stop.item_id || "no single item (loop-wide)"} · {stop.step} · {stop.sentence} Next: {stop.next}</> : !alive ? <> · {session?.ended_at_ms != null ? `Loop stopped since ${new Date(session.ended_at_ms).toISOString()}` : "Loop unobserved"} · stop explanation not recorded</> : null}
+    {repeated ? <> · <strong className="loop-band__repeated">{alive ? "stuck drain (restarted after repeated exits)" : "stuck drain"}: exited {repeated.count} times in a row</strong> ({repeated.reason}{repeated.detail ? `: ${repeated.detail}` : ""}, {new Date(repeated.first_at_ms).toISOString()}..{new Date(repeated.last_at_ms).toISOString()}) · Next: {repeated.next}</> : null}
   </span>;
 }
 

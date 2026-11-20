@@ -186,14 +186,17 @@ func (l *Loop) processInLane(p *runFaceOwner, lane string) (bool, error) {
 	return start == p.Start && start != "" && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)), nil
 }
 
-func (l *Loop) holdLaneChildren(ctx context.Context, lane string, pids []int) error {
+func holdLaneChildrenRefusal(lane string, pids []int) *LaneRefusalError {
 	sort.Ints(pids)
 	ids := make([]string, len(pids))
 	for i, pid := range pids {
 		ids[i] = strconv.Itoa(pid)
 	}
-	refusal := asLaneRefusal(laneRefusalf(lane, ReasonLaneChildren,
+	return asLaneRefusal(laneRefusalf(lane, ReasonLaneChildren,
 		"wait for these processes to exit, or end them with `kill "+strings.Join(ids, " ")+"`; the next pass rechecks the lane",
 		"ended runs still have live marked processes in lane %s: PIDs %s", lane, strings.Join(ids, ", ")))
-	return l.takeLaneOutOfRotation(ctx, refusal)
+}
+
+func (l *Loop) holdLaneChildren(ctx context.Context, lane string, pids []int) error {
+	return l.takeLaneOutOfRotation(ctx, holdLaneChildrenRefusal(lane, pids))
 }

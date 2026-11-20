@@ -161,6 +161,18 @@ func (b *drainBuild) named() bool {
 	return b != nil && (b.Revision != "" || b.Digest != "")
 }
 
+type repeatedStop struct {
+	Count     int    `json:"count"`
+	Reason    string `json:"reason"`
+	Detail    string `json:"detail"`
+	ItemID    string `json:"item_id"`
+	Step      string `json:"step"`
+	FirstAtMS int64  `json:"first_at_ms"`
+	LastAtMS  int64  `json:"last_at_ms"`
+	Sentence  string `json:"sentence"`
+	Next      string `json:"next"`
+}
+
 // loopResult is the newest drain.loop record under the loop directory: the record, the
 // path it was read from, its stop reason, and the reason it could not be read when it
 // could not. It is one value rather than four returns so a reader that needs the record's
@@ -304,6 +316,208 @@ func (obs *observations) newestLoopResult() loopResult {
 func (obs *observations) readLoopResult() (reason, note string, build *drainBuild, buildNote string) {
 	r := obs.newestLoopResult()
 	return r.Stop, r.Note, r.Build, r.BuildNote
+}
+
+func isCleanLoopStop(stopReason string) bool {
+	return stopReason == "queue-drained" || stopReason == "operator-stop"
+}
+
+func normalizeRepeatedDetail(detail string, expl *stopExplanation) string {
+	s := strings.Join(strings.Fields(detail), " ")
+	if s == "" && expl != nil {
+		s = strings.Join(strings.Fields(expl.Sentence), " ")
+	}
+	return s
+}
+
+func parseZeroGenArchive(path string) (isZeroGen, isCurrent bool, archiveSeq uint64, hasSeq bool) {
+	base := filepath.Base(path)
+	if base == "drain-0-0.json" {
+		return true, true, 0, false
+	}
+	if strings.HasPrefix(base, "drain-0-0-") && strings.HasSuffix(base, ".json") {
+		mid := strings.TrimSuffix(strings.TrimPrefix(base, "drain-0-0-"), ".json")
+		seq, err := strconv.ParseUint(mid, 10, 64)
+		return true, false, seq, err == nil
+	}
+	return false, false, 0, false
+}
+
+// repeatedLoopStop scans drain-*.json (drain.loop) records chronologically (oldest to newest)
+// and returns a repeatedStop account when the trailing streak of abnormal stops sharing the
+// same cause has Count >= 2. A clean stop (queue-drained or operator-stop) resets the streak.
+func (obs *observations) repeatedLoopStop() *repeatedStop {
+	if obs == nil || obs.loopDir == "" {
+		return nil
+	}
+	matches, err := filepath.Glob(filepath.Join(obs.loopDir, "drain-*.json"))
+	if err != nil || len(matches) == 0 {
+		return nil
+	}
+	type loopEntry struct {
+		base        string
+		modTime     time.Time
+		firstGen    uint64
+		lastGen     uint64
+		hasGen      bool
+		isZeroGen   bool
+		isCurrent00 bool
+		archiveSeq  uint64
+		hasArchSeq  bool
+		createdAt   time.Time
+		stop        string
+		detail      string
+		itemID      string
+		step        string
+		explanation *stopExplanation
+	}
+	entries := make([]loopEntry, 0, len(matches))
+	for _, path := range matches {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		env, err := record.Decode(raw)
+		if err != nil || env.Kind != loopResultKind {
+			continue
+		}
+		var payload struct {
+			Stop        string           `json:"stop"`
+			Detail      string           `json:"detail"`
+			ItemID      string           `json:"stop_item_id"`
+			Step        string           `json:"stop_step"`
+			Explanation *stopExplanation `json:"stop_explanation"`
+		}
+		if err := json.Unmarshal(env.Payload, &payload); err != nil {
+			continue
+		}
+		var modTime time.Time
+		if info, err := os.Stat(path); err == nil {
+			modTime = info.ModTime()
+		}
+		createdAt := env.CreatedAt
+		if createdAt.IsZero() && payload.Explanation != nil && payload.Explanation.AtMS > 0 {
+			createdAt = time.UnixMilli(payload.Explanation.AtMS).UTC()
+		}
+		if createdAt.IsZero() {
+			createdAt = modTime.UTC()
+		}
+		expl := payload.Explanation
+		if expl == nil && payload.Stop != "" {
+			step := payload.Step
+			if step == "" {
+				step = "not recorded (older loop result)"
+			}
+			expl = stop.Explain(payload.Stop, payload.Detail, payload.ItemID, step, createdAt)
+		}
+		firstGen, lastGen, okGen := loopGenerationRange(path)
+		isZero, isCurrent00, archSeq, hasArchSeq := parseZeroGenArchive(path)
+		entries = append(entries, loopEntry{
+			base:        filepath.Base(path),
+			modTime:     modTime,
+			firstGen:    firstGen,
+			lastGen:     lastGen,
+			hasGen:      okGen && lastGen > 0,
+			isZeroGen:   isZero,
+			isCurrent00: isCurrent00,
+			archiveSeq:  archSeq,
+			hasArchSeq:  hasArchSeq,
+			createdAt:   createdAt,
+			stop:        payload.Stop,
+			detail:      payload.Detail,
+			itemID:      payload.ItemID,
+			step:        payload.Step,
+			explanation: expl,
+		})
+	}
+	if len(entries) < 2 {
+		return nil
+	}
+	sort.SliceStable(entries, func(i, j int) bool {
+		a, b := entries[i], entries[j]
+		if a.hasGen && b.hasGen {
+			if a.lastGen != b.lastGen {
+				return a.lastGen < b.lastGen
+			}
+			if a.firstGen != b.firstGen {
+				return a.firstGen < b.firstGen
+			}
+		}
+		if a.isZeroGen && b.isZeroGen {
+			if a.isCurrent00 != b.isCurrent00 {
+				return !a.isCurrent00
+			}
+			if !a.isCurrent00 && !b.isCurrent00 && a.hasArchSeq && b.hasArchSeq && a.archiveSeq != b.archiveSeq {
+				return a.archiveSeq < b.archiveSeq
+			}
+		}
+		if !a.createdAt.Equal(b.createdAt) {
+			return a.createdAt.Before(b.createdAt)
+		}
+		if !a.modTime.Equal(b.modTime) {
+			return a.modTime.Before(b.modTime)
+		}
+		return a.base < b.base
+	})
+
+	last := entries[len(entries)-1]
+	if last.stop == "" || isCleanLoopStop(last.stop) {
+		return nil
+	}
+	wantDetail := normalizeRepeatedDetail(last.detail, last.explanation)
+	count := 1
+	firstAtMS := last.createdAt.UnixMilli()
+	lastAtMS := firstAtMS
+	for i := len(entries) - 2; i >= 0; i-- {
+		cur := entries[i]
+		if cur.stop == "" || isCleanLoopStop(cur.stop) {
+			break
+		}
+		if cur.stop != last.stop || normalizeRepeatedDetail(cur.detail, cur.explanation) != wantDetail {
+			break
+		}
+		count++
+		atMS := cur.createdAt.UnixMilli()
+		if atMS < firstAtMS {
+			firstAtMS = atMS
+		}
+		if atMS > lastAtMS {
+			lastAtMS = atMS
+		}
+	}
+	if count < 2 {
+		return nil
+	}
+	itemID := last.itemID
+	step := last.step
+	sentence := wantDetail
+	next := ""
+	if last.explanation != nil {
+		if last.explanation.ItemID != "" {
+			itemID = last.explanation.ItemID
+		}
+		if last.explanation.Step != "" {
+			step = last.explanation.Step
+		}
+		if last.explanation.Sentence != "" {
+			sentence = last.explanation.Sentence
+		}
+		next = last.explanation.Next
+	}
+	if next == "" {
+		next = "Owner resolves the failure described above, then restarts with tillr-drain loop."
+	}
+	return &repeatedStop{
+		Count:     count,
+		Reason:    last.stop,
+		Detail:    wantDetail,
+		ItemID:    itemID,
+		Step:      step,
+		FirstAtMS: firstAtMS,
+		LastAtMS:  lastAtMS,
+		Sentence:  sentence,
+		Next:      next,
+	}
 }
 
 // observations is the on-disk evidence beside the store: where a run's record files and

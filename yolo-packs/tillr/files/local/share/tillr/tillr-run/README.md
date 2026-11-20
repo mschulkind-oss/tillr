@@ -100,14 +100,19 @@ the waiting face see the pause without needing another settlement pass.
 
 ## Worker child cleanup
 
-When the worker exits, including a normal exit, `exec` sends `SIGKILL` to the remaining
-members of the process group it created for the worker, before writing the terminal
-record and releasing the lane. Children that created a different process group escape
-this cleanup. The drain keeps the lane out of rotation while such children still carry
-the run and store environment markers and have working directories inside the lane;
-see [lane holds](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md#lanes-that-staging-refuses). The waiting row names
-the remaining process ids and how to end them. Standalone executions have no drain to
-perform that hold.
+When the worker ends (normal exit, timeout, signal, settled-idle stop, or pause), `exec`
+sends `SIGKILL` to the remaining members of the worker's process group and scans `/proc`
+for any non-zombie processes owned by the caller's effective UID carrying this
+execution's `TILLR_RUN_EXEC_ID` marker, ending them across detached sessions and process
+groups before writing the terminal record and releasing the lane. Each matched PID's start
+time is re-verified via `pidfd` before signaling, and the scan-and-kill pass repeats
+briefly so a dying parent racing a fork cannot leak a child; if live marked processes
+survive past the bounded wait, `exec` returns an external error. For non-`stops-at-a-gap`
+pauses, `exec` sends `SIGTERM` to both the worker's process group and marked detached
+groups before waiting for the straggler bound. As a fallback if a process ever survives
+cleanup, the drain keeps the lane out of rotation while children still carry the run and
+store environment markers and have working directories inside the lane; see
+[lane holds](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md#lanes-that-staging-refuses).
 
 ## Worker CPU priority
 
@@ -124,6 +129,7 @@ node identity. A run with no item exports an empty item identity.
 
 ```text
 TILLR_RUN_ID              Always: the request's run_id.
+TILLR_RUN_EXEC_ID         Always: a unique per-execution token used to end detached child sessions when the run ends.
 TILLR_ITEM_ID             Always: the request's item_id, empty when omitted.
 TILLR_NODE_ID             Only when node_id is nonempty: the request's node_id; otherwise unset.
 TILLR_LANE_ID             Always: the resolved lane id (allocated if omitted).

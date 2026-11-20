@@ -107,7 +107,7 @@ func TestABlockedContinuationOrGateDoesNotHoldASiblingsNextItem(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			ended := make(chan laneOutcome, 1)
-			go func() { result, err := l.Run(ctx); ended <- laneOutcome{result.Stop, err} }()
+			go func() { result, err := l.Run(ctx); ended <- laneOutcome{stop: result.Stop, err: err} }()
 			select {
 			case <-steps.blocked:
 			case <-time.After(hangGuard):

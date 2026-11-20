@@ -347,7 +347,12 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 			hasPiBuilds = true
 		}
 	}
-	for _, key := range []string{"TILLR_RUN_ID", "TILLR_ITEM_ID", "TILLR_NODE_ID", "TILLR_LANE_ID", "TILLR_SESSION_MODE", "TILLR_RESUME_PROMPT_FILE", "TILLR_PAUSE_REQUEST", "TILLR_PROGRESS_FILE", "TILLR_CHILD_SESSIONS_ROOT", "TILLR_CHILD_SESSIONS_MARKER", "TILLR_READ_ONLY_GROUP", "TILLR_PI_BUILDS_DIR", "TILLR_HARNESS_RECORD_FILE"} {
+	execID, err := newExecID()
+	if err != nil {
+		logFile.Close()
+		return record.Envelope{}, err
+	}
+	for _, key := range []string{"TILLR_RUN_ID", "TILLR_ITEM_ID", "TILLR_NODE_ID", "TILLR_LANE_ID", "TILLR_SESSION_MODE", "TILLR_RESUME_PROMPT_FILE", "TILLR_PAUSE_REQUEST", "TILLR_PROGRESS_FILE", "TILLR_CHILD_SESSIONS_ROOT", "TILLR_CHILD_SESSIONS_MARKER", "TILLR_READ_ONLY_GROUP", "TILLR_PI_BUILDS_DIR", "TILLR_HARNESS_RECORD_FILE", "TILLR_RUN_EXEC_ID"} {
 		cmd.Env = withoutEnv(cmd.Env, key)
 	}
 	if req.ScratchEnv == nil || *req.ScratchEnv {
@@ -375,11 +380,12 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		"TILLR_RUN_ID="+req.RunID,
 		"TILLR_ITEM_ID="+req.ItemID,
 		"TILLR_LANE_ID="+laneID,
+		"TILLR_RUN_EXEC_ID="+execID,
 	)
-	// The child leads its own process group, and the bound kills the group: a bound
-	// that reached only the process would leave a command's children running.
+	// The child leads its own process group, and the bound kills the group plus any
+	// detached sessions carrying this execution's marker.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.Cancel = func() error { return endRunProcesses(cmd.Process.Pid, execID) }
 	// The terminal write is the record a stop must not lose: the caller's context is
 	// canceled exactly when the run is being stopped, so the write is detached from it. A
 	// stop that left no row and no release would be the orphan the operator cannot see.
@@ -428,14 +434,12 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	monitor.records = func() error { return workerRecords.sample(writeCtx, false) }
 	monitor.offset = streamOffset
 	monitor.startOffset = streamOffset
-	waitErr, paused, interrupted, pauseErr := waitForPause(runCtx, s, cmd, req.RunID, pauseKind, pausePath, opts.PauseAfter, monitor)
-	// Wait reaps the worker, not its background children. End the remaining group
-	// on normal exit too, before releasing the lane in the terminal write. A child
-	// that created its own group is left to drain's marked-process lane hold.
-	cleanupErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	if cleanupErr != nil && !errors.Is(cleanupErr, syscall.ESRCH) {
+	waitErr, paused, interrupted, pauseErr := waitForPause(runCtx, s, cmd, req.RunID, execID, pauseKind, pausePath, opts.PauseAfter, monitor)
+	// Wait reaps the worker, not its background children or detached sessions. End all
+	// remaining marked processes before releasing the lane in the terminal write.
+	if cleanupErr := endRunProcesses(cmd.Process.Pid, execID); cleanupErr != nil {
 		logFile.Close()
-		return record.Envelope{}, Externalf("ending worker process group %d: %v", cmd.Process.Pid, cleanupErr)
+		return record.Envelope{}, cleanupErr
 	}
 	finishedAt := time.Now().UTC()
 	logFile.Close()

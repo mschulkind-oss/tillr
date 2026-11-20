@@ -123,6 +123,9 @@ func waitingFace(args []string) (record.Envelope, int) {
 	if err == nil {
 		rows, err = heavyWaitingRows(ctx, *root, *path, rows)
 	}
+	if err == nil {
+		rows = appendRepeatedStopWaiting(waitingLoopDir(*path, *root), rows)
+	}
 	if err != nil {
 		var mismatch schemaMismatch
 		if errors.As(err, &mismatch) {
@@ -198,11 +201,57 @@ func (s *server) waitingPayload(r *store.Reader, req *http.Request) (any, *apiFa
 	if err == nil {
 		rows, err = heavyWaitingRows(req.Context(), s.root, s.storePath, rows)
 	}
+	if err == nil {
+		loopDir := ""
+		if s.obs != nil {
+			loopDir = s.obs.loopDir
+		}
+		if loopDir == "" {
+			loopDir = waitingLoopDir(s.storePath, s.root)
+		}
+		rows = appendRepeatedStopWaiting(loopDir, rows)
+	}
 	if err != nil {
 		return nil, failure(codeStoreUnreadable, "waiting could not read the store: %v", err)
 	}
 	sortWaitingDocuments(rows)
 	return rows, nil
+}
+
+func waitingLoopDir(storePath, root string) string {
+	beside := filepath.Join(filepath.Dir(storePath), "loop")
+	if matches, err := filepath.Glob(filepath.Join(beside, "drain-*.json")); err == nil && len(matches) > 0 {
+		return beside
+	}
+	if root != "" && root != "." {
+		underRoot := filepath.Join(root, ".tillr", "loop")
+		if matches, err := filepath.Glob(filepath.Join(underRoot, "drain-*.json")); err == nil && len(matches) > 0 {
+			return underRoot
+		}
+	}
+	return beside
+}
+
+func appendRepeatedStopWaiting(loopDir string, rows []waitingRow) []waitingRow {
+	rs := (&observations{loopDir: loopDir}).repeatedLoopStop()
+	if rs == nil {
+		return rows
+	}
+	why := fmt.Sprintf("loop exited %d times in a row (%s)", rs.Count, rs.Reason)
+	if rs.Detail != "" {
+		why += ": " + rs.Detail
+	}
+	row := waitingRow{
+		Observation: "loop:repeated-exit",
+		Class:       "needs you",
+		Where:       "loop",
+		Why:         why,
+		Mover:       rs.Next,
+		Since:       time.UnixMilli(rs.FirstAtMS).UTC().Format(time.RFC3339Nano),
+		ClassSource: "rule",
+	}
+	normalizeWaitingMover(&row)
+	return append(rows, row)
 }
 
 // One pinned read transaction supplies both callers. Optional utility tables are

@@ -196,7 +196,9 @@ including slow proofs. A measured duration does not fail a test or a landing.
 
 Loop reports are named by their inclusive first and last generations, not by the
 clock. A loop that allocated none uses zero endpoints, so a startup fault remains
-readable. For example:
+readable. When `drain-0-0.json` already exists on a consecutive zero-generation exit,
+the prior record is archived to `drain-0-0-<unixNano>.json` before writing the new
+`drain-0-0.json`. For example:
 
 ```text
 drain-1-3.json  -> record id loop-1-3
@@ -2042,7 +2044,12 @@ unchanged one again. It prints the line once more for its own operator.
 remedy as its mover. `tillr view lanes` prints the condition under the lane's row.
 
 An ended run's surviving processes can also keep a lane out of rotation, with reason
-`lane-run-children-live`. The store lease is released, but after any release or expiry
+`lane-run-children-live`. If marked processes (`TILLR_RUN_ID` and `TILLR_LOOP_STORE`)
+still survive when an ended run is settled or examined, the loop retains that lane
+without resetting or reading its landing files, holds only that run's item with
+`run-processes-live` and the list of surviving processes (`<pid> (<command>)`), and
+continues every other item and lane; if the item is already terminal, the lane is held
+out of rotation with `lane-run-children-live` without touching the worktree. The store lease is released, but after any release or expiry
 reaping and before offering a configured lane, the loop checks processes carrying both
 `TILLR_RUN_ID` and `TILLR_LOOP_STORE` (the canonical store path) in their inherited
 environment. Successful release events also identify ended runs when a legacy allocation

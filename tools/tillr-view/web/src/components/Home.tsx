@@ -39,6 +39,7 @@ export function LoopSummary({ drain, passes, error, snapshot, now = Date.now() }
   const ended = session != null && session.ended_at_ms !== null;
   const alive = loopAlive(drain, now);
   const stop = alive ? null : drain?.stop;
+  const repeated = drain?.repeated_stop;
   const state = stop || ended ? "stopped" : alive ? "moving" : "not known";
   const latest = newestPasses(passes ?? [])[0];
   return <section className="loop-summary" aria-label="Loop summary">
@@ -49,6 +50,12 @@ export function LoopSummary({ drain, passes, error, snapshot, now = Date.now() }
         {!alive ? <span>Stop explanation not recorded. {ended ? STOP_GUIDANCE[drain?.last_stop_reason ?? ""] ?? "Owner updates the reader for this stop reason before restarting" : "Owner checks the loop session before restarting"}</span> : null}
       </>}
     </div>
+    {repeated ? <p className="loop-summary__repeated" role="status">
+      <strong>{alive ? "Stuck drain (restarted after repeated exits)" : "Stuck drain"}:</strong>{" "}
+      loop exited {repeated.count} times in a row ({repeated.reason}{repeated.detail ? `: ${repeated.detail}` : ""}) ·{" "}
+      {new Date(repeated.first_at_ms).toISOString()}..{new Date(repeated.last_at_ms).toISOString()} ·{" "}
+      Next: <EntityText value={repeated.next} snapshot={snapshot} passes={passes} />
+    </p> : null}
     {!alive && drain?.stop_note ? <p><EntityText value={drain.stop_note} snapshot={snapshot} passes={passes} /></p> : null}
     {error ? <p role="alert">Passes refused: {error.message}</p> : latest ? <>
       <p>{latest.stop || "stop not recorded"} · {latest.detail ? <q><EntityText value={latest.detail} snapshot={snapshot} passes={passes} /></q> : "stop detail not recorded"}</p>

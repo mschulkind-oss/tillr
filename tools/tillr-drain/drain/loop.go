@@ -1214,8 +1214,9 @@ func heldDetail(holds []Decision) string {
 // reached, or the error that ended it. A lane that neither stopped nor failed answers the
 // zero value.
 type laneOutcome struct {
-	stop string
-	err  error
+	stop        string
+	err         error
+	laneRefusal *LaneRefusalError
 }
 
 // heldFor answers whether the loop still holds an item, and drops the hold when the item's
@@ -1564,6 +1565,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		}
 	}()
 	lane := decision.LaneID
+	if out, held := l.checkSurvivingRunProcesses(ctx, decision.ItemID, lane, record.RunID); held {
+		return out
+	}
 	worktree := l.lanePath(lane)
 	request := *decision.RunRequest
 	failedResume, err := failedDesignerResume(decision, record)
@@ -1572,11 +1576,19 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	}
 	if !failedResume {
 		if err := l.reconcileLandingDelivery(ctx, decision); err != nil {
+			var surviving *survivingProcessesError
+			if errors.As(err, &surviving) {
+				return l.retainSurvivingProcesses(ctx, decision.ItemID, lane, surviving.RunID, surviving.Processes)
+			}
 			return laneOutcome{err: err}
 		}
 	}
 	intake, err := l.intakeLandingOffer(ctx, decision, record, mainSHA)
 	if err != nil {
+		var surviving *survivingProcessesError
+		if errors.As(err, &surviving) {
+			return l.retainSurvivingProcesses(ctx, decision.ItemID, lane, surviving.RunID, surviving.Processes)
+		}
 		return laneOutcome{err: err}
 	}
 	if intake == landingOfferSettled {
