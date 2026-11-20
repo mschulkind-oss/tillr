@@ -25,10 +25,10 @@ The first rule that separates two entries decides.
 
 ## 1. Rulings that are waiting on the owner
 
-The questions below are left for the owner on this page: 31 by `vantage-check index` on
+The questions below are left for the owner on this page: 31 by `vantage-check index --roadmap docs/tillr/roadmap.md` on
 2026-11-20, 11 of them the provenance review's (after the owner ruled [`OQ-PR21`](./decision-provenance-review.md#OQ-PR21)
 and [`OQ-PR22`](./decision-provenance-review.md#OQ-PR22) on 2026-11-19 and nine more on
-2026-11-20) and 18 across the six designs of 2026-11-19 and 2026-11-20 placed in entries 2 to 7
+2026-11-20) and 20 across the seven designs of 2026-11-19 and 2026-11-20 placed in entries 2 to 8
 below. That placement and order are the designer's, made on 2026-11-20 at the owner's instruction
 not to wait for him, and are his to reorder. Each question has options and a recorded leaning.
 Twenty-three others that stood here were settled on 2026-11-15 and 2026-11-16 by the session's
@@ -96,7 +96,18 @@ AutoQA leaves the [Icebox](#icebox).
    owner keeps, overturns or reopens the decisions he did not make. First because every other
    design on this page is built on some of them.
 
-2. [Who chooses an item's seat, what the plan step is for, and how builders fan out](../design/tillr-plan-step-and-seat-selection.md)
+2. [Preventative shell shims and run boundaries for tillr lane workers](../design/tillr-lane-shims.md)
+   ([`OQ-LS1`](../design/tillr-lane-shims.md#OQ-LS1),
+   [`OQ-LS2`](../design/tillr-lane-shims.md#OQ-LS2),
+   [`OQ-LS3`](../design/tillr-lane-shims.md#OQ-LS3),
+   [`OQ-LS4`](../design/tillr-lane-shims.md#OQ-LS4)): placed ahead of the velocity, review and
+   profile designs by rule 2 (and the owner's to reorder) because on 2026-11-20 lane workers
+   killed outside test shards (holding the after-merge proof red for eight hours), moved
+   `refs/tillr/green` four times from a mis-rooted test, and saturated shared cores with unsharded
+   module suites and `just tillr-build`, blocking preventative worker boundaries in
+   [entry 2](#2-keep-the-loop-running).
+
+3. [Who chooses an item's seat, what the plan step is for, and how builders fan out](../design/tillr-plan-step-and-seat-selection.md)
    ([`OQ-PSS3`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS3), after the owner ruled
    [`OQ-PSS1`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS1),
    [`OQ-PSS2`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS2) and subagent tier control
@@ -107,7 +118,7 @@ AutoQA leaves the [Icebox](#icebox).
    [Planning and model tiering](../design/tillr-planning-node-model-tiering.md) and
    [entry 4](#4-choose-where-each-seat-runs).
 
-3. [Owner review comments and the Vantage seam](../design/tillr-review-comments.md)
+4. [Owner review comments and the Vantage seam](../design/tillr-review-comments.md)
    ([`OQ-RC1`](../design/tillr-review-comments.md#OQ-RC1),
    [`OQ-RC2`](../design/tillr-review-comments.md#OQ-RC2),
    [`OQ-RC3`](../design/tillr-review-comments.md#OQ-RC3),
@@ -116,7 +127,7 @@ AutoQA leaves the [Icebox](#icebox).
    question reader in [entry 2](#2-keep-the-loop-running) and warm comment routing in
    [entry 8](#8-design-work-that-keeps-its-context).
 
-4. [Review and compliance routing by artifact class](../design/tillr-review-rules.md)
+5. [Review and compliance routing by artifact class](../design/tillr-review-rules.md)
    ([`OQ-RJ1`](../design/tillr-review-rules.md#OQ-RJ1),
    [`OQ-RJ2`](../design/tillr-review-rules.md#OQ-RJ2),
    [`OQ-RJ3`](../design/tillr-review-rules.md#OQ-RJ3),
@@ -126,7 +137,7 @@ AutoQA leaves the [Icebox](#icebox).
    [companion implementation plans](../design/tillr-queue-mirrors-designs.md) are neither checked
    against the wrong style rules nor dispatched unreviewed.
 
-5. [What a designer reads itself and what goes to scouts](../design/tillr-designer-scouts.md)
+6. [What a designer reads itself and what goes to scouts](../design/tillr-designer-scouts.md)
    ([`OQ-RD1`](../design/tillr-designer-scouts.md#OQ-RD1),
    [`OQ-RD2`](../design/tillr-designer-scouts.md#OQ-RD2),
    [`OQ-RD3`](../design/tillr-designer-scouts.md#OQ-RD3)): next because frontier `design` and
@@ -136,16 +147,16 @@ AutoQA leaves the [Icebox](#icebox).
    [entry 4](#4-choose-where-each-seat-runs) and [entry 8](#8-design-work-that-keeps-its-context)
    without stopping the running loop.
 
-6. [Drain seat profiles and one-command switching](../design/tillr-seat-profiles.md)
+7. [Drain seat profiles and one-command switching](../design/tillr-seat-profiles.md)
    ([`OQ-DSP1`](../design/tillr-seat-profiles.md#OQ-DSP1),
    [`OQ-DSP2`](../design/tillr-seat-profiles.md#OQ-DSP2),
-   [`OQ-DSP3`](../design/tillr-seat-profiles.md#OQ-DSP3)): after the four above because workloads
+   [`OQ-DSP3`](../design/tillr-seat-profiles.md#OQ-DSP3)): after the five above because workloads
    stay on Copilot Gemini while `claude-sub` is held on proving the Claude backend, blocking
    named profile selection in
    [live drain capacity and allocation changes](../design/tillr-live-drain-config.md) and
    [entry 4](#4-choose-where-each-seat-runs).
 
-7. [Self-hosted tillr building](../design/tillr-selfhosted-build.md)
+8. [Self-hosted tillr building](../design/tillr-selfhosted-build.md)
    ([`OQ-SH4`](../design/tillr-selfhosted-build.md#OQ-SH4), after the owner ruled
    [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2) on 2026-11-20 to follow every landing
    and directed reading from Git like `pi-fork`): how `yolo` builds and delivers tillr from Git so
@@ -278,6 +289,11 @@ what a run used and never a price.
 
 Second by rule 2. [Make Vantage's intended invocation the default](#route-vantage-index-reads-through-uvx-by-default)
 comes first in recovery because an unavailable question reader holds otherwise actionable work;
+[preventative shell shims and run boundaries for tillr lane workers](../design/tillr-lane-shims.md)
+([`OQ-LS1`](../design/tillr-lane-shims.md#OQ-LS1) to
+[`OQ-LS4`](../design/tillr-lane-shims.md#OQ-LS4)) blocks stopping worker cross-lane kills, shared
+`refs/tillr/` mutations, and unsharded Go suite runs before they execute rather than halting the
+loop or failing the trunk proof after the fact;
 [owner review comments and the Vantage seam](../design/tillr-review-comments.md)
 ([`OQ-RC1`](../design/tillr-review-comments.md#OQ-RC1) to
 [`OQ-RC4`](../design/tillr-review-comments.md#OQ-RC4)) blocks replacing that subprocess reader
