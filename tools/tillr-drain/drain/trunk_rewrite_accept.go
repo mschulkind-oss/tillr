@@ -39,6 +39,9 @@ type RewriteAcceptance struct {
 	Current string `json:"current_tip"`
 	Tree    string `json:"tree"`
 	Commits int    `json:"commits"`
+	// Rebased says the rewrite was a rebase onto a moved base: the trees differ, and each
+	// of Commits lost commits has a commit with the same patch on the trunk.
+	Rebased bool   `json:"rebased,omitempty"`
 	Pin     string `json:"pin"`
 	// GreenFrom and GreenTo name the proof pointer's move, when the rewrite carried it.
 	GreenFrom string `json:"green_from,omitempty"`
@@ -47,7 +50,11 @@ type RewriteAcceptance struct {
 	Why       string `json:"why"`
 }
 
-// AcceptRewrite clears a trunk-rewritten hold for a rewrite that changed no content: the
+// AcceptRewrite clears a trunk-rewritten hold for a rewrite that kept the content. Two
+// shapes are accepted. The first is described below. The second is a rebase onto a moved
+// base, which is what `git pull --rebase` does to unpushed landings: the trees differ
+// because the new base brought commits of its own, and every commit only the lost tip
+// reaches has a commit with the same patch on the trunk. For the first shape, the
 // lost tip and the named current commit have the same tree, the current commit is on the
 // trunk, and each side of lost...current has the same number of commits, so the rewrite
 // replaced commits one for one (a re-authoring or a message edit) rather than adding,
@@ -131,31 +138,49 @@ func AcceptRewrite(ctx context.Context, req AcceptRewriteRequest) (RewriteAccept
 		if err != nil {
 			return err
 		}
+		rebased := 0
 		if lostTree != currentTree {
-			paths, err := git("diff", "--name-only", lost, current)
+			// A rebase onto a moved base changes the tree, because the new base brought
+			// commits of its own. It still kept the content when every commit only the
+			// lost tip reaches has a commit with the same patch under the current one.
+			matched, unmatched, err := patchMatches(git, lost, current)
 			if err != nil {
 				return err
 			}
-			names := strings.Fields(paths)
-			if len(names) > 10 {
-				names = append(names[:10], "...")
+			if matched == 0 || len(unmatched) > 0 {
+				paths, err := git("diff", "--name-only", lost, current)
+				if err != nil {
+					return err
+				}
+				names := strings.Fields(paths)
+				if len(names) > 10 {
+					names = append(names[:10], "...")
+				}
+				if len(unmatched) > 10 {
+					unmatched = append(unmatched[:10], "...")
+				}
+				return Usagef("the trees differ: lost %s has tree %s, current %s has tree %s; the rewrite changed %s, and it is not a rebase that kept every commit either: %d lost commits have a commit with the same patch on the trunk, and these have none: %s", lost, lostTree, current, currentTree, strings.Join(names, ", "), matched, strings.Join(unmatched, ", "))
 			}
-			return Usagef("the trees differ: lost %s has tree %s, current %s has tree %s; the rewrite changed %s, so it is not a content-preserving rewrite", lost, lostTree, current, currentTree, strings.Join(names, ", "))
+			rebased = matched
 		}
-		counts, err := git("rev-list", "--left-right", "--count", lost+"..."+current)
-		if err != nil {
-			return err
-		}
-		sides := strings.Fields(counts)
-		if len(sides) != 2 {
-			return Externalf("git rev-list --left-right --count answered %q", counts)
-		}
-		if sides[0] != sides[1] {
-			return Usagef("the commit counts differ: %s commits only the lost tip %s has, %s only the current %s has; the trees match, but commits were added, dropped or squashed", sides[0], lost, sides[1], current)
+		sides := []string{strconv.Itoa(rebased), strconv.Itoa(rebased)}
+		if rebased == 0 {
+			counts, err := git("rev-list", "--left-right", "--count", lost+"..."+current)
+			if err != nil {
+				return err
+			}
+			sides = strings.Fields(counts)
+			if len(sides) != 2 {
+				return Externalf("git rev-list --left-right --count answered %q", counts)
+			}
+			if sides[0] != sides[1] {
+				return Usagef("the commit counts differ: %s commits only the lost tip %s has, %s only the current %s has; the trees match, but commits were added, dropped or squashed", sides[0], lost, sides[1], current)
+			}
 		}
 		a = RewriteAcceptance{Lost: lost, Current: current, Tree: currentTree, Pin: acceptedTrunkPrefix + lost, By: req.By, Why: req.Why}
+		a.Rebased = rebased > 0
 		if a.Commits, err = strconv.Atoi(sides[0]); err != nil {
-			return Externalf("git rev-list --left-right --count answered %q", counts)
+			return Externalf("git rev-list --left-right --count answered %q", sides[0])
 		}
 		// The proof pointer names a tree that passed. When the rewrite moved it off the
 		// trunk, it moves to the commit that replaced it, which must have the same tree
@@ -169,6 +194,9 @@ func AcceptRewrite(ctx context.Context, req AcceptRewriteRequest) (RewriteAccept
 			if on, err := trunkAncestor(ctx, req.Root, green, tip); err != nil {
 				return err
 			} else if !on {
+				if a.Rebased {
+					return Usagef("%s %s is not on the trunk, and a rebase onto a moved base has no commit with the same tree to carry it to: prove the trunk again (the loop's after-merge run does) or move the pointer, then accept", GreenRef, green)
+				}
 				carried, err := carryGreen(git, ctx, req.Root, green, lost, current)
 				if err != nil {
 					return err
@@ -203,6 +231,30 @@ func AcceptRewrite(ctx context.Context, req AcceptRewriteRequest) (RewriteAccept
 		return err
 	})
 	return a, err
+}
+
+// patchMatches compares the commits only the lost tip reaches with the current commit's
+// history by patch, as `git cherry` does: it answers how many lost commits have a commit
+// with the same patch under current, and the lost commits that have none.
+func patchMatches(git func(...string) (string, error), lost, current string) (int, []string, error) {
+	out, err := git("cherry", current, lost)
+	if err != nil {
+		return 0, nil, err
+	}
+	matched := 0
+	var unmatched []string
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) != 2 {
+			continue
+		}
+		if f[0] == "-" {
+			matched++
+		} else {
+			unmatched = append(unmatched, f[1])
+		}
+	}
+	return matched, unmatched, nil
 }
 
 // carryGreen answers the commit of the rewritten history that replaced green: the one

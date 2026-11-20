@@ -1772,8 +1772,13 @@ can prove kept the content. The lost tip must be the one the hold names. The
 replacing commit must be on the trunk (the tip or one of its ancestors). The two
 commits must have the same tree, and the commits only the lost tip reaches must
 number the same as the commits only the replacing commit reaches, so the rewrite replaced commits one for one rather than
-adding, dropping or squashing any. Anything else is refused with a message naming
-what differs, and nothing changes. The command also works when no pass has recorded
+adding, dropping or squashing any. A second shape is accepted too: a rebase onto a moved base, which is what
+`git pull --rebase` does to landings that were not yet pushed. There the trees differ,
+because the new base brought commits of its own, and the command accepts the rewrite when
+every commit only the lost tip reaches has a commit with the same patch (`git cherry`) under
+the replacing commit. In that shape `refs/tillr/green` must already be on the trunk; the
+command does not carry it. Anything else is refused with a message naming
+what differs, including each lost commit that has no match, and nothing changes. The command also works when no pass has recorded
 the rewrite yet: an observed tip that the trunk no longer contains is the same
 rewrite, unrecorded. Accepting it pins the lost tip at
 `refs/tillr/trunk-history/accepted/<lost-tip>`, so the replaced history stays
