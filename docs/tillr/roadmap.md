@@ -2146,13 +2146,13 @@ pastes it into a session. The owner wants comments left in Vantage to go straigh
 session that last worked on that document's item, and wants that session kept ready for a few
 minutes and then compacted, so it can still be resumed later.
 
-[A comment on a design goes to the session that last worked on it](../design/tillr-designer-sessions.md)
-is the design. It measured the turn on 2026-11-16: a session resumed inside its cache's lifetime
+[A comment on a design goes to the session that last worked on it](../reference/tillr-designer-sessions.md)
+graduated from the design. It measured the turn on 2026-11-16: a session resumed inside its cache's lifetime
 answers a comment for $0.42 where a new session costs $0.84, and one resumed after it costs more
 than a new session. So a session is kept as a file and never as a process, is warm for the cache
 lifetime the machine uses (an hour here, not five minutes), and is compacted only when a comment
-next needs it. The six items that build it are in that document's
-[build order](../design/tillr-designer-sessions.md#build-order); the first delivers one comment to
+next needs it. All six build items landed by 2026-11-18
+([the graduated reference](../reference/tillr-designer-sessions.md)); the first delivered one comment to
 one resumed session end to end.
 
 ### Send review comments on a design to the session that last worked on it
@@ -2676,8 +2676,8 @@ designer's session.
 
 - **Ref:** [Item-graph decision ledger](../design/tillr-item-graphs.md#71-decision-ledger),
   [saved-idea actions](../reference/observatory-actions.md#the-saved-idea-item), and the
-  designer-session rules for [the desk](../design/tillr-designer-sessions.md#the-desk) and
-  [keeping sessions warm](../design/tillr-designer-sessions.md#the-keep-warm-rule).
+  designer-session rules for [the desk](../reference/tillr-designer-sessions.md#the-desk) and
+  [keeping sessions warm](../reference/tillr-designer-sessions.md#the-keep-warm-rule).
 - **Where:** [Settings reader](../../tools/tillr/settings/),
   [item reader](../../tools/tillr-item/item/sync.go),
   [drain planner](../../tools/tillr-drain/drain/plan.go),
@@ -2703,7 +2703,7 @@ the ID, creating it otherwise"), so the turn starts cold while the record says `
 move was never asked for, and it is withdrawn. Three points settle it:
 
 1. **Review-comment work stays at its document's desk.** A desk, defined in
-   [the designer sessions design](../design/tillr-designer-sessions.md#the-desk), is the lane that
+   [the designer sessions reference](../reference/tillr-designer-sessions.md#the-desk), is the lane that
    belongs to one design document. It is already outside the lane cap, a comment run already starts
    without waiting for a numbered lane, and at most `comments.max_running` of them run at once.
    That is the behavior this item's principle asks for, and the session is found again because the
@@ -2743,7 +2743,7 @@ item does not cause. Four points settle it, and c5 below is added.
   because the window is narrow.
 - **This item repairs the race, as c5.** The file is inside this item's paths, the repair is a few
   lines, and the candidate cannot be verified honestly while the test can fail by chance. The
-  [designer sessions design](../design/tillr-designer-sessions.md#the-keep-warm-rule) ends a session
+  [designer sessions reference](../reference/tillr-designer-sessions.md#the-keep-warm-rule) ends a session
   "when its document is deleted", and deleted means deleted from the trunk. So the loop treats a document
   as deleted only when it is absent from the trunk commit the pass has just read and also absent
   from the main checkout. A file that a landing is rewriting is in the trunk commit before and

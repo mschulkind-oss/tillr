@@ -32,7 +32,7 @@ depends-on:
 
 **Needs your ruling:** [OQ-RJ1](#OQ-RJ1), [OQ-RJ2](#OQ-RJ2), [OQ-RJ3](#OQ-RJ3), [OQ-RJ4](#OQ-RJ4).
 
-**Reads with:** [the landing review](./tillr-diff-review.md) (the substantive `review`-seat check on code landings), [the compliance officer](./tillr-design-document-check.md) (the `compliance`-seat policy checker), [the queue mirrors designs](./tillr-queue-mirrors-designs.md) (companion `<topic>-plan.md` files that drive worker dispatch), and [designer sessions](./tillr-designer-sessions.md) (how the owner's Vantage comments return to a document's designer). No implementation plan is seeded while the questions are open.
+**Reads with:** [the landing review](./tillr-diff-review.md) (the substantive `review`-seat check on code landings), [the compliance officer](./tillr-design-document-check.md) (the `compliance`-seat policy checker), [the queue mirrors designs](./tillr-queue-mirrors-designs.md) (companion `<topic>-plan.md` files that drive worker dispatch), and [designer sessions](../reference/tillr-designer-sessions.md) (how the owner's Vantage comments return to a document's designer). No implementation plan is seeded while the questions are open.
 
 ---
 
@@ -175,7 +175,7 @@ Unlike code commits — where the worker writes on a faster build model and merg
 | **1. Parallel scouts + authoring** (`scouted-design@v1` or designer desk) | `scout` (cheap) + `design` (strongest model: Carbon 4 / Fable 5.2) | Initial codebase reconnaissance and architectural synthesis | An author's own blind spots, misread scout notes, or silent drift from sibling designs |
 | **2. Mechanical gate** | Gate programs (`vantage-check`, `design-citations`, `citations`, `scratch`) | Broken links, dead `#OQ-*` anchors, invalid directives, unlanded commit SHAs, scratch paths | False prose claims about code, missing failure modes, unasked owner questions |
 | **3. Compliance officer** (`design-document-style`) | `compliance` (cheapest model: Flash / Luna) | Unreadable `OQ-*` options, missing header slots, wall-of-text prose, missing provenance tags (`D-DP7`: file + diff + skill only) | Anything requiring opening the tree or another design's Decision Ledger |
-| **4. Owner review in Vantage + warm designer session** ([designer sessions](./tillr-designer-sessions.md)) | **The owner**, routing comments back to the document's warm designer session | Wrong product direction, rejected trade-offs, over-engineering, unaccepted `D-*` rows | Factual claims about the codebase that look plausible on the page — checking them forces the owner to audit the tree or trust the prose |
+| **4. Owner review in Vantage + warm designer session** ([designer sessions](../reference/tillr-designer-sessions.md)) | **The owner**, routing comments back to the document's warm designer session | Wrong product direction, rejected trade-offs, over-engineering, unaccepted `D-*` rows | Factual claims about the codebase that look plausible on the page — checking them forces the owner to audit the tree or trust the prose |
 | **5. Planner tree read** (`plan` seat writing `<topic>-plan.md`) | `plan` (after design acceptance) | Claims in an *accepted* design that fail when mapped onto concrete files (`definition` obstacle returns to `design`) | Runs **after** the owner already spent review cycles ruling on a design built on false premises |
 
 ### 6.2 What still reached the owner unchecked
@@ -219,7 +219,7 @@ Every reader in [Section 3](#3-the-routing-matrix-by-kind-of-change) reuses the 
 | Register a `prose.md` / Go-style compliance policy on the cheap `compliance` seat for all code commits | Rejected (`D-DP7`). Code modularity and test adequacy require reading callers and tests across the tree, turning a cheap file linter into a noisy second code reviewer |
 | Run landing review sequentially after the compliance officer passes | Rejected (`D-DP9`). Both are read-only on the gated head; serializing them doubles latency on clean mixed commits to save pennies only when compliance objects |
 | Let workflows opt into or out of compliance policies or substantive review per workflow JSON | Rejected (`D-DR4`, `D-DP4`). A workflow file omitting a reader silently reopens the unreviewed-landing hole |
-| Have a design-review agent rewrite weak sections directly | Rejected. Violates read-only reviewer separation and overwrites the warm designer session's context ([designer sessions](./tillr-designer-sessions.md)) |
+| Have a design-review agent rewrite weak sections directly | Rejected. Violates read-only reviewer separation and overwrites the warm designer session's context ([designer sessions](../reference/tillr-designer-sessions.md)) |
 
 ## 9. What this does not cover
 
