@@ -122,3 +122,17 @@ func TestLanesAPIAndCLIShareRead(t *testing.T) {
 		t.Fatalf("API %+v CLI %+v", got.Data, rows)
 	}
 }
+
+func TestLaneWorkStatePausedRun(t *testing.T) {
+	paused := storeRun{RunID: "r", State: "paused", EventSeq: 10}
+	for _, c := range []struct {
+		name   string
+		resume int64
+		want   string
+	}{{"continuation live", 11, "running"}, {"no continuation", 0, "paused"}, {"resume older than row", 9, "paused"}} {
+		lane := storeLane{LaneID: "a", State: "leased", RunID: "r", ResumedSeq: c.resume}
+		if got := laneWorkState(lane, paused); got != c.want {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+}
