@@ -25,9 +25,12 @@ The first rule that separates two entries decides.
 
 ## 1. Rulings that are waiting on the owner
 
-The questions below are left for the owner on this page: 29 by `vantage-check index` on
-2026-11-19, 20 of them the provenance review's (after the owner ruled [`OQ-PR21`](./decision-provenance-review.md#OQ-PR21)
-and [`OQ-PR22`](./decision-provenance-review.md#OQ-PR22) that day). Each has options and a recorded leaning.
+The questions below are left for the owner on this page: 33 by `vantage-check index` on
+2026-11-20, 11 of them the provenance review's (after the owner ruled [`OQ-PR21`](./decision-provenance-review.md#OQ-PR21)
+and [`OQ-PR22`](./decision-provenance-review.md#OQ-PR22) on 2026-11-19 and nine more on
+2026-11-20) and 20 across the six designs of 2026-11-19 and 2026-11-20 placed in entries 2 to 7
+below. That placement and order are the designer's, made on 2026-11-20 at the owner's instruction
+not to wait for him, and are his to reorder. Each question has options and a recorded leaning.
 Twenty-three others that stood here were settled on 2026-11-15 and 2026-11-16 by the session's
 designer, at the owner's request, and each is the owner's to overturn. Not every one of them says
 so in its design: [the provenance review](./decision-provenance-review.md#3-corrections-that-need-no-ruling)
@@ -82,11 +85,66 @@ AutoQA leaves the [Icebox](#icebox).
    owner keeps, overturns or reopens the decisions he did not make. First because every other
    design on this page is built on some of them.
 
-2. [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2): whether the copy of tillr that other
+2. [Who chooses an item's seat, what the plan step is for, and how builders fan out](../design/tillr-plan-step-and-seat-selection.md)
+   ([`OQ-PSS1`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS1),
+   [`OQ-PSS2`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS2),
+   [`OQ-PSS3`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS3)): placed ahead of the
+   other five by the designer (and the owner's to reorder) because on the night of 2026-11-19 a
+   failed verify restarting at the plan step cost the most rework, blocking request intake,
+   builder fan-out and review return in [Planning and model tiering](../design/tillr-planning-node-model-tiering.md)
+   and [entry 4](#4-choose-where-each-seat-runs).
+
+3. [Refused autopushes](../design/tillr-refused-push.md)
+   ([`OQ-RP1`](../design/tillr-refused-push.md#OQ-RP1),
+   [`OQ-RP2`](../design/tillr-refused-push.md#OQ-RP2),
+   [`OQ-RP3`](../design/tillr-refused-push.md#OQ-RP3)): next because on the night of 2026-11-19 a
+   `git pull` that rebased unpushed landings broke the drain, blocking remote integration for
+   [entry 2](#2-keep-the-loop-running) and [entry 3](#3-roll-onto-new-code-without-ending-runs)'s
+   autopush after a green proof.
+
+4. [Owner review comments and the Vantage seam](../design/tillr-review-comments.md)
+   ([`OQ-RC1`](../design/tillr-review-comments.md#OQ-RC1),
+   [`OQ-RC2`](../design/tillr-review-comments.md#OQ-RC2),
+   [`OQ-RC3`](../design/tillr-review-comments.md#OQ-RC3),
+   [`OQ-RC4`](../design/tillr-review-comments.md#OQ-RC4)): next because a fast comment track at
+   document desks speeds every other ruling without requiring Vantage, blocking the native
+   question reader in [entry 2](#2-keep-the-loop-running) and warm comment routing in
+   [entry 8](#8-design-work-that-keeps-its-context).
+
+5. [Review and compliance routing by artifact class](../design/tillr-review-rules.md)
+   ([`OQ-RJ1`](../design/tillr-review-rules.md#OQ-RJ1),
+   [`OQ-RJ2`](../design/tillr-review-rules.md#OQ-RJ2),
+   [`OQ-RJ3`](../design/tillr-review-rules.md#OQ-RJ3),
+   [`OQ-RJ4`](../design/tillr-review-rules.md#OQ-RJ4)): next because it settles which changed
+   files trigger the unbuilt [landing review](../design/tillr-diff-review.md) and
+   [compliance officer](../design/tillr-design-document-check.md) above so
+   [companion implementation plans](../design/tillr-queue-mirrors-designs.md) are neither checked
+   against the wrong style rules nor dispatched unreviewed.
+
+6. [What a designer reads itself and what goes to scouts](../design/tillr-designer-scouts.md)
+   ([`OQ-RD1`](../design/tillr-designer-scouts.md#OQ-RD1),
+   [`OQ-RD2`](../design/tillr-designer-scouts.md#OQ-RD2),
+   [`OQ-RD3`](../design/tillr-designer-scouts.md#OQ-RD3)): next because frontier `design` and
+   `plan` sessions searched the tree directly instead of through cheap scouts, blocking
+   single-session design and scout bounds in
+   [Planning and model tiering](../design/tillr-planning-node-model-tiering.md),
+   [entry 4](#4-choose-where-each-seat-runs) and [entry 8](#8-design-work-that-keeps-its-context)
+   without stopping the running loop.
+
+7. [Drain seat profiles and one-command switching](../design/tillr-seat-profiles.md)
+   ([`OQ-DSP1`](../design/tillr-seat-profiles.md#OQ-DSP1),
+   [`OQ-DSP2`](../design/tillr-seat-profiles.md#OQ-DSP2),
+   [`OQ-DSP3`](../design/tillr-seat-profiles.md#OQ-DSP3)): after the five above because workloads
+   stay on Copilot Gemini while `claude-sub` is held on proving the Claude backend, blocking
+   named profile selection in
+   [live drain capacity and allocation changes](../design/tillr-live-drain-config.md) and
+   [entry 4](#4-choose-where-each-seat-runs).
+
+8. [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2): whether the copy of tillr that other
    workspaces run follows every landing or is refreshed only when it is published. Next because
    it is a cost on every landing but stops nothing.
 
-3. [Criterion repair](../design/criterion-repair.md), one question,
+9. [Criterion repair](../design/criterion-repair.md), one question,
    [`OQ-CR7`](../design/criterion-repair.md#OQ-CR7): who may replace a criterion's text once a
    verdict has frozen it. The owner's ruling of 2026-11-17 gave that act to a role that was
    deleted with the board. The rest of that day's four rulings stands: a replacement carries a
@@ -153,7 +211,17 @@ owner ruled on 2026-11-18 that Terra implements and Luna scouts, and the plannin
 [filed below](#filed-2026-11-18-plan-first-then-spend-each-model-where-it-is-enough) landed that
 day; no item runs through it yet. Nothing in it needs the owner today: its questions wait until
 planned items have run and their cost can be read, and its ledger holds designer's decisions he has
-not reviewed. Two faults in the run record that the design found are
+not reviewed. Two follow-up designs from the 2026-11-18 and 2026-11-19 run audit wait on his
+rulings above before changing how items enter and run:
+[who chooses an item's seat and what the plan step is for](../design/tillr-plan-step-and-seat-selection.md)
+([`OQ-PSS1`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS1) to
+[`OQ-PSS3`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS3)), because a failed verify
+restarting at the plan step cost the most rework on 2026-11-19, and
+[what a designer reads itself and what goes to scouts](../design/tillr-designer-scouts.md)
+([`OQ-RD1`](../design/tillr-designer-scouts.md#OQ-RD1) to
+[`OQ-RD3`](../design/tillr-designer-scouts.md#OQ-RD3)), because frontier `design` and `plan` runs
+searched the tree directly instead of using cheap scouts. Two faults in the run record that the
+design found are
 [filed below](#filed-2026-11-17-the-run-records-spend-corrected-before-it-is-compared).
 
 [Replaying the drain's recorded tasks against several models](../design/model-benchmarks-from-drain-records.md)
@@ -196,7 +264,11 @@ what a run used and never a price.
 ## 2. Keep the loop running
 
 Second by rule 2. [Make Vantage's intended invocation the default](#route-vantage-index-reads-through-uvx-by-default)
-comes first in recovery because an unavailable question reader holds otherwise actionable work.
+comes first in recovery because an unavailable question reader holds otherwise actionable work;
+[owner review comments and the Vantage seam](../design/tillr-review-comments.md)
+([`OQ-RC1`](../design/tillr-review-comments.md#OQ-RC1) to
+[`OQ-RC4`](../design/tillr-review-comments.md#OQ-RC4)) blocks replacing that subprocess reader
+with a native question parser behind one Vantage adapter.
 [The overnight velocity evaluation](../research/tillr-drain-velocity.md)
 puts identifying the store's live writer ahead of changing concurrency, because a lock-acquisition
 fault stops progress regardless of lane admission. It is evidence and a recommended investigation,
@@ -208,7 +280,11 @@ on this page, in this order:
 
 - [Other people and other agents change the repository while the drain runs](#filed-2026-11-15-other-people-and-other-agents-change-the-repository-while-the-drain-runs).
   First because an operator's uncommitted edit is what caused the stops, and the owner's ruling of
-  2026-10-23 already says such an edit is a wait and never a failure.
+  2026-10-23 already says such an edit is a wait and never a failure;
+  [refused autopushes](../design/tillr-refused-push.md)
+  ([`OQ-RP1`](../design/tillr-refused-push.md#OQ-RP1) to
+  [`OQ-RP3`](../design/tillr-refused-push.md#OQ-RP3)) blocks the remote half after a `git pull`
+  that rebased unpushed landings broke the drain on 2026-11-19.
 - [One item's trouble holds that item, and recovery is a command](#filed-2026-11-15-one-items-trouble-holds-that-item-and-recovery-is-a-command).
   Second because every recovery that night was done by hand and two of them caused the next stop.
 - [Anyone can ask why an item is not running](#filed-2026-11-15-anyone-can-ask-why-an-item-is-not-running)
@@ -247,6 +323,10 @@ order had landed by 2026-11-18, among them the pause, the restart request, the r
 after a landing, and this repository's settings file. It stays third as the record of why it
 came first: every restart on 2026-11-15 was a kill, so a fix to tillr itself cost the runs in
 flight, and [entry 4](#4-choose-where-each-seat-runs) reuses its stop-and-continue step.
+[Refused autopushes](../design/tillr-refused-push.md)
+([`OQ-RP1`](../design/tillr-refused-push.md#OQ-RP1) to
+[`OQ-RP3`](../design/tillr-refused-push.md#OQ-RP3)) blocks integrating a moved remote into that
+post-landing push without rewinding local `main`.
 
 ## 4. Choose where each seat runs
 
@@ -254,11 +334,23 @@ flight, and [entry 4](#4-choose-where-each-seat-runs) reuses its stop-and-contin
 mixed policy puts designers on the subscription and builders on pi. What is left is filed
 [on this page](#filed-2026-11-15-choose-where-each-seat-runs-by-quota-and-move-work-when-a-backend-runs-out):
 re-reading the policy without a restart, reading quota directly with a reserve, splitting a seat
-by share or at random for bake-offs, and moving a run when its backend runs out. Fourth because
-it saves money on every design run but stops nothing when it is missing.
+by share or at random for bake-offs, and moving a run when its backend runs out;
+[drain seat profiles and one-command switching](../design/tillr-seat-profiles.md)
+([`OQ-DSP1`](../design/tillr-seat-profiles.md#OQ-DSP1) to
+[`OQ-DSP3`](../design/tillr-seat-profiles.md#OQ-DSP3)) blocks named live-switchable profiles and
+the held `claude-sub` profile until the Claude backend is proven. Fourth because it saves money
+on every design run but stops nothing when it is missing.
 
 Also filed here: [a planning stage that fans implementation out by seat](#add-a-planning-stage-that-fans-implementation-out-by-seat),
-which the owner asked to be high priority on 2026-11-18 and which sets the queue's order for model savings.
+which the owner asked to be high priority on 2026-11-18 and which sets the queue's order for
+model savings; [who chooses an item's seat and what the plan step is for](../design/tillr-plan-step-and-seat-selection.md)
+([`OQ-PSS1`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS1) to
+[`OQ-PSS3`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS3)) blocks replacing that
+upfront plan step and failed-verify restart after they cost the most rework on 2026-11-19, and
+[what a designer reads itself and what goes to scouts](../design/tillr-designer-scouts.md)
+([`OQ-RD1`](../design/tillr-designer-scouts.md#OQ-RD1) to
+[`OQ-RD3`](../design/tillr-designer-scouts.md#OQ-RD3)) blocks cheap-scout routing on `design` and
+`plan` runs.
 
 ## 5. The ten-second gate
 
@@ -290,7 +382,15 @@ been renamed.
 
 Three pieces, filed on this page: [a design conversation keeps its designer](#filed-2026-11-15-a-design-conversation-keeps-its-designer),
 [an item not written to the prose guide is rewritten before anyone builds it](#filed-2026-11-15-an-item-that-was-not-written-to-the-prose-guide-is-rewritten-before-anyone-builds-it),
-and [a design on the roadmap always has an item in the queue](#filed-2026-11-15-a-design-on-the-roadmap-always-has-an-item-in-the-queue).
+and [a design on the roadmap always has an item in the queue](#filed-2026-11-15-a-design-on-the-roadmap-always-has-an-item-in-the-queue);
+[owner review comments and the Vantage seam](../design/tillr-review-comments.md)
+([`OQ-RC1`](../design/tillr-review-comments.md#OQ-RC1) to
+[`OQ-RC4`](../design/tillr-review-comments.md#OQ-RC4)) blocks giving review comments a fast track
+at `desk-<doc>` without requiring Vantage, and
+[what a designer reads itself and what goes to scouts](../design/tillr-designer-scouts.md)
+([`OQ-RD1`](../design/tillr-designer-scouts.md#OQ-RD1) to
+[`OQ-RD3`](../design/tillr-designer-scouts.md#OQ-RD3)) blocks starting design work directly in one
+warm writing session.
 Eighth because each makes the queue cheaper to feed and easier to read, and none of them is
 needed to keep it running.
 
