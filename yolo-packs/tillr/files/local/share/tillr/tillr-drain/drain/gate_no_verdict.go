@@ -11,10 +11,10 @@ import (
 // no verdict exists, so the candidate is kept on its lane and the next pass gates it again.
 var errGateNoVerdict = errors.New("candidate waits for the gate to reach a verdict")
 
-// holdGateNoVerdict records the wait after a gate that reached no verdict, and keeps the
-// candidate on its lane. "No verdict" is not a verdict about the candidate, so the owner's
-// ruling of 2026-11-18 applies: the loop gates the same commit again, on the same lane,
-// until the gate judges it. Nothing is counted, nothing is acknowledged, no retry is
+// holdGateNoVerdict records the wait after a gate that reached no verdict. The
+// examination may release the lane once the candidate pin is verified. The loop
+// gates the same commit again until the gate judges it. Nothing is counted,
+// nothing is acknowledged, no retry is
 // authorized and no fault is written, so the hold's mover is the next pass and never a
 // person. The gate's answer is already recorded as its own `gate.verdict` (result
 // "error"), which is the evidence a reader follows.

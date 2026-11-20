@@ -42,7 +42,7 @@ var Rules = map[string]Rule{
 	"gate-stalled":       {"needs you", "gate", "diagnose the stalled check and clear the fault"},
 	// A gate that ran and reached no verdict judged nothing: the next pass gates the same
 	// candidate again, uncounted, with no operator.
-	"gate-no-verdict": {"waits on the loop", "gate", "the next pass gates the same candidate again on its lane"},
+	"gate-no-verdict": {"waits on the loop", "gate", "the loop gates the same candidate again when a lane is available"},
 	// Now only the gate STEP failing (the drain could not run the gate or read or record
 	// what it answered, an Externalf from Steps.Gate), and holds recorded before 2026-11-18.
 	"gate-harness-error":          {"needs you", "gate", "diagnose the gate and clear the fault; or tillr drain retry naming the held run, which supersedes its candidate"},
