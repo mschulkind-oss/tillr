@@ -5,3 +5,6 @@ cause, design and risky core changes.
 
 Keep one effort level across all nodes of one fan-out stage: siblings share a
 prompt cache only when model, effort and tools match.
+
+Send `pack-sync` to an `edit` piece and suite runs to a `test-run` piece, never to
+`verify`, `review`, or `plan`.
