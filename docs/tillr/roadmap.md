@@ -2939,7 +2939,6 @@ dispatched it and its worker stopped after 34 seconds, reporting that the sectio
 does not exist. The block below is that section, restored with the same id, paths and criteria
 the queue already holds.
 
-<!-- tillr: item id="item-agent-default-bmad-superpowers-skills" paths="yolo-packs/,config/yolo-jail/,tag-personal/config/yolo-jail/,tag-work/config/yolo-jail/,tests/,docs/" blocked_by="" prose="2" -->
 
 **Ruling, 2026-11-17 (answers the first run's conflict):** the first run stopped because this
 document held no section under the heading above and no text about either skill. That was true
@@ -2979,11 +2978,6 @@ directory with its resources, not the upstream pack's hooks or other skills.
 - At the BMAD pin above, elicitation calls the project's `_bmad/scripts/resolve_customization.py` and `_bmad/scripts/resolve_config.py`. In an empty project the first call failed with “No such file or directory (os error 2)”. Document that running elicitation requires BMAD's project setup; do not run setup or install the `bmad` skill as part of this import.
 - At the Superpowers pin above, brainstorming ends by invoking `superpowers:writing-plans`. Document that this handoff is unavailable unless writing-plans is separately provided. Do not register it, substitute a house skill, or change the upstream instructions. A dependency readable in the Git checkout is not a registered skill.
 
-- **c1:** On a fresh project, supported agents discover both selected skills through the default packs without a per-project skill install. Discovery does not imply that BMAD project setup or the Superpowers planning handoff is available.
-- **c2:** BMAD is sourced through the Git URL https://github.com/bmad-code-org/BMAD-METHOD.git, selecting skills/core-tools/bmad-advanced-elicitation; Superpowers is sourced through https://github.com/obra/superpowers.git, selecting skills/brainstorming. Neither skill is vendored as a manually maintained local copy.
-- **c3:** Keep each selected skill directory's shipped resources and relative references intact. Document the two runtime prerequisites above alongside the import configuration. Do not populate `_bmad/`, activate other upstream skills, or import framework startup hooks.
-- **c4:** The existing house brainstorming skill remains unchanged and discoverable. Superpowers receives a distinct discoverable name if the source names collide; no silent replacement or ambiguous duplicate selection is accepted.
-- **c5:** Permanent pack-composition/render tests verify both selected registrations, readable resources from each selected directory, and distinct house and Superpowers brainstorming names. Check that the imports do not register `bmad` or `superpowers:writing-plans`; do not require end-to-end execution of either workflow. Every edited pack passes `yolo pack lint`, and an unavailable Git source produces a visible failure rather than omitting a skill silently.
 
 **Agent details:**
 
