@@ -242,25 +242,171 @@ func TestAPlanReadsTheLogABoundedNumberOfTimes(t *testing.T) {
 	}
 }
 
-// A dispatch's application checks the decision's input version, claims the lane and reads
-// the live forks, and all three read the pending runs. Inside one write transaction that is
-// one fold, not three: on 2026-11-19 each fold cost 160 ms against the live store, held
-// under the write lock. The application is a gathered write (gathered.go), which runs one
-// transaction per git or file fact it fetches and one more that commits, so the folds are
-// counted per transaction.
-func TestAnApplicationFoldsThePendingRunsOncePerTransaction(t *testing.T) {
+// A paused history fold must not prevent another writer from committing. This
+// models the 6.147s application fold seen in PID 1703174, tx8075, without a
+// large database or a timing assertion about how quickly the fold runs.
+func TestAnApplicationFoldsPendingHistoryWithoutBlockingAnotherWriter(t *testing.T) {
 	f, l := passFixture(t, "item-a")
 	base := runGit(t, f.root, "rev-parse", TrunkRef)
 	p := mustPlan(t, l)[0]
-	fetches := 0
-	writeGatheredHooks.Fetch = func(string) { fetches++ }
-	t.Cleanup(func() { writeGatheredHooks.Fetch = nil })
+	unsavedApplicationOutcome(t, f, l)
+	writer, err := store.Open(context.Background(), l.cfg.Store, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	var contentionErr error
+	foldsUnderWrite := 0
+	pendingHistoryFoldHook = func() {
+		if store.HoldsWrite() {
+			foldsUnderWrite++
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		done := make(chan error, 1)
+		go func() {
+			done <- writer.WriteTx(ctx, func(tx *store.Tx) error {
+				id := "run-elsewhere-a1"
+				_, err := tx.Append(event.Event{Kind: "run.child-session", ObjectType: "run", ObjectID: &id, Payload: []byte(`{"run_id":"run-elsewhere-a1","session_id":"child","turn_count":1}`), At: l.cfg.Now()})
+				return err
+			})
+		}()
+		if err := <-done; err != nil {
+			contentionErr = err
+		}
+	}
+	t.Cleanup(func() { pendingHistoryFoldHook = nil })
 	before := pendingFolds.Load()
 	if ok, _, err := l.applyPlan(context.Background(), p, base, l.cfg.Now()); err != nil || !ok {
 		t.Fatalf("dispatch claim: %v %v", ok, err)
 	}
-	if n, transactions := pendingFolds.Load()-before, int64(fetches+1); n != transactions {
-		t.Fatalf("applying a dispatch folded the pending runs %d times in %d write transactions, want one each", n, transactions)
+	if contentionErr != nil || foldsUnderWrite != 0 {
+		t.Fatalf("writer could not commit during the paused fold: %v; folds under write: %d", contentionErr, foldsUnderWrite)
+	}
+	if n := pendingFolds.Load() - before; n != 1 {
+		t.Fatalf("application folded pending history %d times, want one read-phase fold", n)
+	}
+}
+
+// Even an unsaved run.finish requires no second pending fold when availability
+// classifies it. Keep it outside this item's history so it does not change its plan.
+func unsavedApplicationOutcome(t *testing.T, f refusalLoopFixture, l *Loop) {
+	t.Helper()
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return applyTerminal(tx, run.Record{RunID: "run-elsewhere-a1", ItemID: "item-elsewhere", LaneID: "lane-elsewhere", Backend: "fixture", State: run.StateExited, ExitCode: countPtr(0), StartedAt: l.cfg.Now().Format(time.RFC3339), FinishedAt: l.cfg.Now().Format(time.RFC3339)})
+	})
+}
+
+func TestAnApplicationThreadsPendingHistoryToParallelAvailability(t *testing.T) {
+	f, l, _ := parallelFixture(t)
+	p := mustPlan(t, l)[0]
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	unsavedApplicationOutcome(t, f, l)
+	underWrite := 0
+	pendingHistoryFoldHook = func() {
+		if store.HoldsWrite() {
+			underWrite++
+		}
+	}
+	t.Cleanup(func() { pendingHistoryFoldHook = nil })
+	before := pendingFolds.Load()
+	ok, work, err := l.applyPlan(context.Background(), p, base, l.cfg.Now())
+	if err != nil || !ok || work == nil || len(work.Decision.Parallel) == 0 {
+		t.Fatalf("parallel claim: %v %+v %v", ok, work, err)
+	}
+	if n := pendingFolds.Load() - before; n != 1 || underWrite != 0 {
+		t.Fatalf("parallel claim folded history %d times, %d under write; want one outside write", n, underWrite)
+	}
+}
+
+func TestPendingHistoryHeadTracksOnlyFoldedKinds(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		for _, kind := range pendingHistoryKinds {
+			id := "run-history-head"
+			seq, err := tx.Append(event.Event{Kind: kind, ObjectType: "run", ObjectID: &id, Payload: []byte(`{}`), At: l.cfg.Now()})
+			if err != nil {
+				return err
+			}
+			head, err := pendingHistoryHead(tx.Reader())
+			if err != nil {
+				return err
+			}
+			if head != seq {
+				t.Fatalf("%s did not advance pending history: head=%d seq=%d", kind, head, seq)
+			}
+		}
+		head, err := pendingHistoryHead(tx.Reader())
+		if err != nil {
+			return err
+		}
+		id := "run-history-head"
+		if _, err := tx.Append(event.Event{Kind: "run.child-session", ObjectType: "run", ObjectID: &id, Payload: []byte(`{}`), At: l.cfg.Now()}); err != nil {
+			return err
+		}
+		after, err := pendingHistoryHead(tx.Reader())
+		if after != head {
+			t.Errorf("worker record advanced pending history: %d -> %d", head, after)
+		}
+		return err
+	})
+}
+
+// An append between the snapshot and the writer invalidates it, including when
+// it arrives between gathered attempts. It must not claim the competing lane,
+// refresh history under the lock, or allocate a pass generation for a skipped plan.
+func TestAnApplicationSkipsStalePendingHistory(t *testing.T) {
+	for _, phase := range []string{"fold", "gathered-fetch"} {
+		t.Run(phase, func(t *testing.T) {
+			f, l := passFixture(t, "item-a")
+			p := mustPlan(t, l)[0]
+			base := runGit(t, f.root, "rev-parse", TrunkRef)
+			changed := false
+			compete := func() {
+				if changed {
+					return
+				}
+				changed = true
+				fixtureWrite(t, f, func(tx *store.Tx) error {
+					d := p.decision
+					d.ItemID = "item-other"
+					r := *d.RunRequest
+					r.RunID, r.ItemID = "run-other-a1", d.ItemID
+					d.RunRequest = &r
+					return appendEffect(tx, dispatchStartedKind, r.RunID, pendingWork{Decision: d, BaseSHA: base}, l.cfg.Now())
+				})
+			}
+			if phase == "fold" {
+				pendingHistoryFoldHook = compete
+			} else {
+				writeGatheredHooks.Fetch = func(string) { compete() }
+			}
+			t.Cleanup(func() { pendingHistoryFoldHook = nil; writeGatheredHooks.Fetch = nil })
+			before := pendingFolds.Load()
+			generation := ""
+			ok, work, err := l.applyPlanRecorded(context.Background(), p, &base, l.cfg.Now(), &generation)
+			if err != nil || ok || work != nil || generation != "" || !changed {
+				t.Fatalf("stale claim: applied=%v work=%+v generation=%q changed=%v err=%v", ok, work, generation, changed, err)
+			}
+			if n := pendingFolds.Load() - before; n != 1 {
+				t.Fatalf("stale application refolded history %d times", n)
+			}
+			pendingHistoryFoldHook, writeGatheredHooks.Fetch = nil, nil
+			fixtureWrite(t, f, func(tx *store.Tx) error {
+				var claimed int
+				if err := tx.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND object_id=?`, dispatchStartedKind, p.decision.RunRequest.RunID).Scan(&claimed); err != nil {
+					return err
+				}
+				if claimed != 0 {
+					t.Error("stale dispatch was recorded")
+				}
+				leases, err := activeLeases(tx.Reader(), l.cfg.Now(), []string{p.decision.LaneID})
+				if len(leases) != 0 {
+					t.Error("stale dispatch leased the lane")
+				}
+				return err
+			})
+		})
 	}
 }
 

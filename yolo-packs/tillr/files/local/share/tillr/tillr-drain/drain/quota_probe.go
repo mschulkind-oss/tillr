@@ -220,11 +220,15 @@ func (l *Loop) quotaReplacementBackend(ctx context.Context, start, seat string) 
 // readQuotaShutBackends is every backend a dispatch must skip: shut by quota or
 // closed by its latest infrastructure ending.
 func readQuotaShutBackends(r *store.Reader, at time.Time, policy *Policy) (map[string]bool, error) {
+	return readQuotaShutBackendsFrom(r, at, policy, nil)
+}
+
+func readQuotaShutBackendsFrom(r *store.Reader, at time.Time, policy *Policy, byRun map[string]*pendingWork) (map[string]bool, error) {
 	shut, err := readQuotaOnlyShut(r, at, policy)
 	if err != nil {
 		return nil, err
 	}
-	closed, err := readInfrastructureClosed(r)
+	closed, err := readInfrastructureClosedFrom(r, byRun)
 	if err != nil {
 		return nil, err
 	}
@@ -239,10 +243,14 @@ func readQuotaShutBackends(r *store.Reader, at time.Time, policy *Policy) (map[s
 // readDispatchShut is the shut set a claim re-reads. A retry the owner authorized
 // is the one dispatch to a closed backend, so it is refused by quota only.
 func readDispatchShut(r *store.Reader, at time.Time, policy *Policy, d Decision) (map[string]bool, error) {
+	return readDispatchShutFrom(r, at, policy, d, nil)
+}
+
+func readDispatchShutFrom(r *store.Reader, at time.Time, policy *Policy, d Decision, byRun map[string]*pendingWork) (map[string]bool, error) {
 	if d.Action == ActionRetry {
 		return readQuotaOnlyShut(r, at, policy)
 	}
-	return readQuotaShutBackends(r, at, policy)
+	return readQuotaShutBackendsFrom(r, at, policy, byRun)
 }
 
 // No quota command means no reading-based hold. Refusal windows hold every backend.

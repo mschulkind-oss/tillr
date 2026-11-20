@@ -110,14 +110,34 @@ var pendingHistoryKinds = []string{
 	candidateDiscardedKind,
 }
 
-// pendingFolds counts readPendingHistory's folds in this process: observation for a test that
-// holds a write transaction to one fold of the pending runs.
+// pendingFolds counts readPendingHistory's folds in this process: observation
+// for tests that keep an application's fold in its read phase.
 var pendingFolds atomic.Int64
+
+// pendingHistoryFoldHook lets contention tests pause the expensive history fold.
+var pendingHistoryFoldHook func()
+
+// pendingHistoryHead checks only the kinds the fold consumes. Worker-session
+// traffic cannot invalidate a claim; each per-kind maximum is an indexed lookup.
+func pendingHistoryHead(r *store.Reader) (int64, error) {
+	queries := make([]string, len(pendingHistoryKinds))
+	args := make([]any, len(pendingHistoryKinds))
+	for i, kind := range pendingHistoryKinds {
+		queries[i] = "SELECT MAX(seq) AS head FROM events WHERE kind=?"
+		args[i] = kind
+	}
+	var head int64
+	err := r.QueryRow("SELECT COALESCE(MAX(head),0) FROM ("+strings.Join(queries, " UNION ALL ")+")", args...).Scan(&head)
+	return head, err
+}
 
 // Keep every attempt's effective examination state, including superseded dispatches.
 // Second-failure routing needs the same continuation semantics as current planning.
 func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*pendingWork, error) {
 	pendingFolds.Add(1)
+	if pendingHistoryFoldHook != nil {
+		pendingHistoryFoldHook()
+	}
 	events, err := r.EventsOfKind(0, pendingHistoryKinds...)
 	if err != nil {
 		return nil, nil, err
@@ -1331,6 +1351,28 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			return false, nil, err
 		}
 	}
+	// Fold once in a read snapshot, never while another writer is excluded. A
+	// relevant append makes this application stale; skip it instead of folding
+	// again under the lock (or retrying for the lock).
+	reader, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return false, nil, err
+	}
+	var works, designHistory map[string]*pendingWork
+	var historyHead int64
+	err = reader.ReadTx(ctx, func(r *store.Reader) error {
+		var err error
+		historyHead, err = pendingHistoryHead(r)
+		if err != nil {
+			return err
+		}
+		works, designHistory, err = readPendingHistory(r)
+		return err
+	})
+	reader.Close()
+	if err != nil {
+		return false, nil, err
+	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return false, nil, err
@@ -1349,11 +1391,8 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 		if err != nil || !current {
 			return err
 		}
-		// One fold of the pending runs serves the version check and the claim below: the
-		// statements between them only read, so both see the same history, and the write
-		// lock is held for one fold rather than two.
-		works, designHistory, err := readPendingHistory(tx.Reader())
-		if err != nil {
+		currentHead, err := pendingHistoryHead(tx.Reader())
+		if err != nil || currentHead != historyHead {
 			return err
 		}
 		faults, err := ReadItemFaults(tx.Reader())
@@ -1369,7 +1408,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 		}
 		d := p.decision
 		if (d.Action == ActionDispatch || d.Action == ActionRetry) && d.RunRequest != nil {
-			shut, err := readDispatchShut(tx.Reader(), l.cfg.Now(), l.currentPolicy(), d)
+			shut, err := readDispatchShutFrom(tx.Reader(), l.cfg.Now(), l.currentPolicy(), d, designHistory)
 			if err != nil {
 				return err
 			}
@@ -1628,10 +1667,10 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			if err := carryRetainedReaders(tx, d); err != nil {
 				return err
 			}
-			if err := l.claimParallel(tx, &d); err != nil {
+			if err := l.claimParallelFrom(tx, &d, designHistory); err != nil {
 				return err
 			}
-			shut, err := readDispatchShut(tx.Reader(), at, l.currentPolicy(), d)
+			shut, err := readDispatchShutFrom(tx.Reader(), at, l.currentPolicy(), d, designHistory)
 			if err != nil {
 				return err
 			}
@@ -1709,6 +1748,10 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			if err := correlate(tx, &d); err != nil {
 				return err
 			}
+			// Only this target is mutated; keep the read snapshot pristine for
+			// another gathered attempt after a rollback.
+			copy := *work
+			work = &copy
 			if err := l.assignPinnedCandidate(tx, work, &d, at); err != nil {
 				return err
 			}
@@ -2717,8 +2760,8 @@ func mergeExamination(dst, src *LoopResult) {
 // liveForks includes unfinished examinations and live leases, not only this
 // plan's dispatches. Allocate events retain the item link for foreign runs before
 // their terminal runs row exists. Examination keeps the fork during lease-free gaps.
-// liveForks reads works, the pending runs its caller already folded in the same transaction,
-// rather than folding them again.
+// liveForks reads works, the pending runs its caller already folded (and, for a
+// claim, validated against the event high-water), rather than folding them again.
 func liveForks(r *store.Reader, at time.Time, works map[string]*pendingWork) ([]plannedFork, error) {
 	held, err := readLanes(r, at)
 	if err != nil {
