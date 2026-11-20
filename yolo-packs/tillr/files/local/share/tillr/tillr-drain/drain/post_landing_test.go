@@ -215,8 +215,16 @@ func TestPostLandingPush(t *testing.T) {
 	}
 	// Rewind only the fixture's local trunk and land a divergent commit. A
 	// forced push would overwrite the published tip; an ordinary push refuses.
+	// The new commit also conflicts with the remote's, so the drain's rebase onto the
+	// moved remote cannot replay it and changes nothing.
 	git("reset", "--hard", failed)
 	diverged := commit("diverged")
+	if err := os.WriteFile(filepath.Join(l.cfg.Root, "arrival-a"), []byte("other\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "--", "arrival-a")
+	git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "conflicts")
+	diverged = git("rev-parse", "HEAD")
 	l.afterLanding(ctx, diverged)
 	waitAction(t, func() bool { return !l.pushAction.busy() })
 	if git("rev-parse", "HEAD") != diverged || git("--git-dir="+remote, "rev-parse", "refs/heads/published") != tip {
@@ -334,7 +342,12 @@ func TestPostLandingPushGreenNeverForces(t *testing.T) {
 	ahead := commit("remote-only")
 	git("push", "origin", TrunkRef)
 	git("reset", "--hard", base)
-	green := commit("diverged-green")
+	if err := os.WriteFile(filepath.Join(l.cfg.Root, "remote-only"), []byte("other\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "--", "remote-only")
+	git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", "diverged-green")
+	green := git("rev-parse", "HEAD")
 	git("update-ref", GreenRef, green)
 	l.cfg.PostLanding.Push.What = settings.PushGreen
 	l.afterGreen(context.Background(), green)
