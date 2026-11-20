@@ -666,7 +666,7 @@ def case_cache_safe_working_loop_documented():
     for path in (brief, SKILL):
         text = text_of(path)
         for instruction in ("targeted `-run`", "narrowest test selection",
-                            "full suite once before committing", "drop `-count=1`"):
+                            "leave\nthe whole suite to the gate", "drop `-count=1`"):
             if instruction not in text:
                 fail(f"{path.relative_to(ROOT)} omits cache-safe test guidance: {instruction}")
     readme = text_of(ROOT / "tools/tillr-drain/README.md")

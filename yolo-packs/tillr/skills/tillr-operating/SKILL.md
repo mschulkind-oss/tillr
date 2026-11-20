@@ -320,15 +320,16 @@ retried.
 
 ### Worker verification in this repository
 
-While working on Go code, use a targeted `-run` for the behavior being changed. Run the
-full suite once before committing. In the drain module, drop `-count=1` for the working
+While working on Go code, use a targeted `-run` for the behavior being changed, and leave
+the whole suite to the gate: it runs every suite the change selects once at landing, with
+priority on the test slots, and a failure comes back naming the test. In the drain module, drop `-count=1` for the working
 loop: the tests declare the sibling sources as inputs Go's result cache can see, so a
 sibling change reruns tests and an unchanged tree still caches. The drain README explains
 the mechanism and names the permanent cache regression check. A worker runs tests, not
 the landing gate (`just done`); the gate owns its landing lock.
 
-For the full suite before committing, use the repository's runner on modules the
-gate runs through it. The measured module list is in the
+The gate runs a whole suite through the repository's runner, on the modules the
+gate runs through it; a worker uses it only when no selection covers a change. The measured module list is in the
 [verification report](../../../../docs/pi/tillr-go-shards-2026-11-17.md).
 The runner always executes tests fresh; Go's test result cache does not apply.
 It builds each package's test binary once and runs up to six independent test
