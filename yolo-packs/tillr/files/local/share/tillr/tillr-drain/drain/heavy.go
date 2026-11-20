@@ -497,8 +497,16 @@ func (r HeavyRunner) offerRevert(ctx context.Context, tip, sha string, checks []
 	return out, nil
 }
 func (r HeavyRunner) one(ctx context.Context, sha, id string) (bool, error) {
+	red, _, err := r.oneLogged(ctx, sha, id)
+	return red, err
+}
+
+// oneLogged is one that also answers the file holding the replayed check's output when
+// it was red and the judge kept one.
+func (r HeavyRunner) oneLogged(ctx context.Context, sha, id string) (bool, string, error) {
 	ctx = context.WithValue(ctx, heavyProgressKey{}, (*heavyProgress)(nil))
 	var red bool
+	var logPath string
 	err := r.inTree(ctx, sha, func(dir string) error {
 		checks, err := r.Judge(ctx, dir, id)
 		if err != nil {
@@ -511,6 +519,7 @@ func (r HeavyRunner) one(ctx context.Context, sha, id string) (bool, error) {
 		case "pass":
 		case "fail":
 			red = true
+			logPath = checks[0].LogPath
 		default:
 			// The judge's own words are the reason; without them the fault is unreadable.
 			if detail := strings.TrimSpace(checks[0].Detail); detail != "" {
@@ -520,7 +529,7 @@ func (r HeavyRunner) one(ctx context.Context, sha, id string) (bool, error) {
 		}
 		return nil
 	})
-	return red, err
+	return red, logPath, err
 }
 func (r HeavyRunner) progressf(format string, args ...any) {
 	if r.Progress != nil {
@@ -624,7 +633,7 @@ func (r HeavyRunner) replay(ctx context.Context, sha, id, why string) (bool, err
 	}
 	started := r.Now()
 	r.progressf("loop: heavy %s replaying at %s (%s)\n", id, shortSHA(sha), why)
-	red, err := r.one(ctx, sha, id)
+	red, logPath, err := r.oneLogged(ctx, sha, id)
 	if err == nil {
 		if dir, derr := heavyDirectory(ctx, r.Root); derr == nil {
 			if serr := saveHeavyReplay(dir, sha, id, red); serr != nil {
@@ -638,7 +647,12 @@ func (r HeavyRunner) replay(ctx context.Context, sha, id, why string) (bool, err
 	case err != nil:
 		r.progressf("loop: heavy %s at %s: no verdict after %s, because %v\n", id, shortSHA(sha), took, err)
 	case red:
-		r.progressf("loop: heavy %s at %s: red after %s\n", id, shortSHA(sha), took)
+		switch {
+		case logPath != "":
+			r.progressf("loop: heavy %s at %s: red after %s; output: %s\n", id, shortSHA(sha), took, logPath)
+		default:
+			r.progressf("loop: heavy %s at %s: red after %s\n", id, shortSHA(sha), took)
+		}
 	default:
 		r.progressf("loop: heavy %s at %s: green after %s\n", id, shortSHA(sha), took)
 	}

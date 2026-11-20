@@ -1165,6 +1165,14 @@ recorded landing, or a bisection step), then its verdict and time, or `no verdic
 <time>, because <reason>`. A replay with no verdict is not retried: the search ends there,
 says so, and files the fixer against the tip.
 
+The legacy program's whole output (stdout and stderr) is also written to a file under
+the proof's log directory for the commit, `<lane root>/.rolling/logs/<commit>/legacy-proof.log`
+for the proof and `legacy-replay-<check>.log` for a replay of one check. When a check
+fails, the log line ends `; output: <file>` and a trunk fixer's brief names the file and
+quotes its failing lines (`FAIL`, `panic:`) and its last lines. A failed check whose
+program printed nothing is logged as `loop: heavy DEFECT: failed legacy check <check> left
+no output`, and a replay that fails with no output says the same, instead of staying silent.
+
 A generated repair item (a trunk fixer or a tooling-defect item) that reports `blocked`
 is sent back to its worker, except on an identical repeat. Its ending is keyed by the
 obstacle, not the prose: the trunk tip it was reported against and the obstacle kind its
