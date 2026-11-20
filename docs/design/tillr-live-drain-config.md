@@ -1,9 +1,9 @@
 ---
 title: "Live Drain Capacity and Allocation Changes"
-status: in-review
-stage: DESIGN
-updated: 2026-11-19
-next: "Rule OQ-LD2, OQ-LD3, and OQ-LD4 (OQ-LD1 ruled 2026-11-19); complete tillr-live-drain-config-plan.md into fenced build slices once open questions settle"
+status: accepted
+stage: DECIDED
+updated: 2026-11-20
+next: "Complete tillr-live-drain-config-plan.md into fenced build slices (excluding multi-backend cap spillover, deferred to the tillr roadmap Icebox); nothing is built yet"
 related:
   - ./tillr-restart.md
   - ./tillr-vocabulary.md
@@ -14,9 +14,9 @@ related:
 
 # Live Drain Capacity and Allocation Changes
 
-**Status:** 2026-11-19 — nothing built; audited against `84474e8a1`. [OQ-LD1](#OQ-LD1) ruled on 2026-11-19; three questions open for the owner, and six designer's decisions (`D-LD4`–`D-LD9`) await his review in [Section 7](#7-decision-ledger).
-**Needs your ruling:** [OQ-LD2](#OQ-LD2), [OQ-LD3](#OQ-LD3), [OQ-LD4](#OQ-LD4)
-**Implementation plan:** [tillr-live-drain-config-plan.md](./tillr-live-drain-config-plan.md) (sketch until open questions settle)
+**Status:** 2026-11-20 — nothing built; audited against `84474e8a1`. [OQ-LD1](#OQ-LD1) ruled on 2026-11-19 and [OQ-LD2](#OQ-LD2), [OQ-LD3](#OQ-LD3), and [OQ-LD4](#OQ-LD4) ruled on 2026-11-20; six designer's decisions (`D-LD4`–`D-LD9`) are marked in [Section 7](#7-decision-ledger).
+**Needs your ruling:** None — all four open questions are settled; six designer's decisions (`D-LD4`–`D-LD9`) in [Section 7](#7-decision-ledger) may be overturned by the owner.
+**Implementation plan:** [tillr-live-drain-config-plan.md](./tillr-live-drain-config-plan.md) (ready to complete into fenced build slices)
 
 ---
 
@@ -167,9 +167,10 @@ Today [`tools/tillr-view/lanes.go`](../../tools/tillr-view/lanes.go), [`tools/ti
   - `lanes_active` / `express_active`: rows with `lifecycle = 'active'`.
   - `lanes_draining` / `express_draining`: rows with `lifecycle = 'draining'` (each carrying its `lane_id`, current `run_id` / `item_id`, and why it has not yet retired: `running <run_id>`, `scale-paused <run_id>`, `finishing workflow for <item_id>`, or `holding candidate for <item_id>`).
   - `retired` rows are excluded from `lanes_offered`, `lanes_idle`, and the Observatory `LaneStrip`.
-- **CLI and Observatory display:**
+- **CLI and Observatory display and controls ([OQ-LD4](#OQ-LD4)):**
   - `tillr view status`, `tillr view lanes`, and `tillr drain status` print `ordinary: 16 target, 18 present (16 active, 2 draining: lane-19, lane-20); express: 2 target, 2 active`.
-  - In [`tools/tillr-view/web/src/components/LaneStrip.tsx`](../../tools/tillr-view/web/src/components/LaneStrip.tsx) and the Observatory header, `draining` lanes stay visible beside active lanes with an amber `draining` pill and tooltip naming the run or workflow they are finishing, then disappear once `retired`. Whether the Observatory also gets interactive scale controls is [OQ-LD4](#OQ-LD4).
+  - In [`tools/tillr-view/web/src/components/LaneStrip.tsx`](../../tools/tillr-view/web/src/components/LaneStrip.tsx) and the Observatory header, `draining` lanes stay visible beside active lanes with an amber `draining` pill and tooltip naming the run or workflow they are finishing, then disappear once `retired`, alongside active concurrency caps.
+  - **Interactive Observatory controls ([OQ-LD4](#OQ-LD4)):** Clicking the lane summary in the Observatory opens a small control to adjust ordinary and express lane counts (including the opt-in `--pause` toggle when lowering, per [OQ-LD1](#OQ-LD1)) and live concurrency caps, writing the same `drain_runtime_config` records and `drain.config-changed` events in `.tillr/state.db` as the CLI commands (`tillr drain scale` and `tillr drain alloc`), subject to whatever write-access rule governs the Observatory ([`--write` in `tools/tillr-view/serve.go`](../../tools/tillr-view/serve.go) today; [`OQ-PR16`](../tillr/decision-provenance-review.md#OQ-PR16)). *(Designer's engineering detail: to keep `tillr-view serve`'s own SQLite handle read-only, write endpoints delegate mutations to `tillr-drain` subprocesses just as existing Observatory writes delegate to `tillr-item`.)*
 
 ---
 
@@ -203,7 +204,13 @@ Three optional cap maps govern simultaneous active dispatches (`0` pauses new di
 | `seat_caps` | Declared seat names in `seats` | `{"design": 3, "scout": 8, "build": 14}` | Every active run dispatched under that logical seat across all backends |
 | `work_caps` | Workflow names (`<name>@v<N>`) or built-in work kinds (`build`, `fixer`, `read-only`, `design`, `triage`) | `{"scouted-design@v1": 2, "fixer": 1, "read-only": 8}` | Every active item/run of that workflow or work class |
 
-Where these caps are authored and overridden (`backend-policy.json` baseline plus live store overrides via `tillr drain alloc`, store-only, or policy-file-only) is [OQ-LD3](#OQ-LD3). Whether hitting a `backend_caps` limit waits for that backend or spills over to the seat's next fallback backend is [OQ-LD2](#OQ-LD2).
+- **Baseline caps in `backend-policy.json`, live per-checkout overrides in `.tillr/state.db` ([OQ-LD3](#OQ-LD3)):**
+  - Standing caps (`backend_caps`, `seat_caps`, `work_caps`) live in `config/tillr/backend-policy.json`, versioned in git beside the seats and backends they govern so subscription protections (such as `claude-designer: 2` or `fixer: 1`) apply on every checkout and reload automatically on file edits via `refreshPolicy`.
+  - Temporary per-checkout throttles (such as capping `build` at 4 lanes for an hour while running benchmarks) are set or cleared in `drain_runtime_config` in `.tillr/state.db` via `tillr drain alloc` (and the Observatory control of [OQ-LD4](#OQ-LD4)), never touching or dirtying the tracked policy file in the trunk checkout.
+  - Per-key overrides in `drain_runtime_config` take precedence over `backend-policy.json`'s baseline for each named key ([Section 5.2](#52-precedence-across-startups-tillr-drain-restart-and-tillr-keep)), while unoverridden keys keep their policy-file baseline; clearing an override on one key (or clearing all allocation overrides with `tillr drain config --reset alloc`) restores the policy-file baseline, and `tillr drain config` prints both sources and marks which one is active ([Section 5.3](#53-how-an-operator-reads-the-current-value)).
+- **Multi-backend setups and cap spillover are deferred out of scope ([OQ-LD2](#OQ-LD2)):**
+  - Automatic spillover from a capped preferred backend onto a fallback backend (and multi-backend setup policy more generally) is **out of this document's build scope** and parked as a small separate design in [the tillr roadmap's Icebox](../tillr/roadmap.md#icebox). On 2026-11-20 the owner ruled that he is not ready for multi-backend setups yet and will switch backends manually and restart for now.
+  - Accordingly, this build adds no cap-spillover routing or per-seat spillover switch; hitting a cap in `backend_caps`, `seat_caps`, or `work_caps` holds new claims as a scheduling constraint (`backend-capped`, `seat-capped`, `work-capped`; `D-LD8`).
 
 ### 4.3 Four scheduling invariants required so caps work cleanly
 
@@ -237,7 +244,7 @@ Keys stored in `drain_runtime_config`:
 - `ordinary_lanes`: integer `>= 0`
 - `express_lanes`: integer `>= 0`
 - `policy_path`: string path (relative to repo root or absolute)
-- `backend_caps`, `seat_caps`, `work_caps`: JSON maps when operator-set (under [OQ-LD3](#OQ-LD3)'s store or hybrid options)
+- `backend_caps`, `seat_caps`, `work_caps`: JSON maps of per-key operator overrides layered over `backend-policy.json`'s baseline caps ([OQ-LD3](#OQ-LD3); `null` on a key clears a policy-file baseline cap on this checkout)
 
 Every mutation via `tillr drain scale`, `tillr drain policy set`, `tillr drain alloc`, or `tillr drain config --reset` runs inside `db.WriteTx` and appends a `drain.config-changed` event recording `{key, previous, value, source, updated_by, loop_present}`. Because `waitForTrigger` already wakes on new store events (`100ms` poll), the running loop picks up every change with no IPC socket, signal hazard, or tracked-file edit.
 
@@ -366,10 +373,13 @@ Every flag, `.tillr.toml` setting, `gate-policy.json` key, auxiliary config file
 | `D-LD2` | Allocations — both seat-to-backend/model routing and concurrency caps on how many lanes a backend, a seat, or a kind of work may hold — can be changed on a running drain without restarting it. | 2026-11-19 | [Section 4](#4-changing-allocations-on-a-running-loop) | — |
 | `D-LD3` | Running configuration persists across loop restarts (`tillr-drain restart` and `tillr-keep` relaunches) so a restart keeps the last value set, and operators have a direct read surface showing current effective values and their sources. | 2026-11-19 | [Section 5](#5-where-running-configuration-lives-restart-persistence-and-reading-current-values) | — |
 | <a id="OQ-LD1"></a>[`OQ-LD1`](#OQ-LD1) | **Owner ruling:** Lowering lanes is graceful by default so normal scaling never interrupts work in flight, and `tillr drain scale` adds an opt-in `--pause` flag that asks excess running workers above the new target (newest-started first) to pause via session pause instead of killing processes, holding paused segments until pool running concurrency drops below the target. Ruled on 2026-11-19 (~6:45 PM ET): *"B — graceful by default, plus an opt-in --pause flag: normal scaling never interrupts work, while --pause restores the retired board's fast resource reclaim using session pause instead of killing processes."* | 2026-11-19 | [Section 3.1](#31-operator-command-surface), [Section 3.4](#34-removing-lanes-gracefully-target--active) | — |
+| <a id="OQ-LD2"></a>[`OQ-LD2`](#OQ-LD2) | **Owner ruling (deferred to Icebox):** Multi-backend setups and cap spillover across fallback backends are deferred out of this document's build scope to a small separate design in [the tillr roadmap's Icebox](../tillr/roadmap.md#icebox); none of the question's wait-versus-spillover options was chosen, and the owner switches backends manually for now. Ruled on 2026-11-20: *"Icebox, a small design for what to do... for how to do multi-backend setups like this. I'm not ready for this. I will manually switch them right now and restart. But I do want to do this eventually, but put something in the Icebox and throw it in there."* | 2026-11-20 | [Section 4.2](#42-concurrency-limits-per-backend-per-seat-and-per-kind-of-work), [tillr roadmap Icebox](../tillr/roadmap.md#icebox) | — |
+| <a id="OQ-LD3"></a>[`OQ-LD3`](#OQ-LD3) | **Owner ruling:** Baseline concurrency caps (`backend_caps`, `seat_caps`, `work_caps`) live in `config/tillr/backend-policy.json` in git, with live per-checkout CLI overrides in `drain_runtime_config` in `.tillr/state.db` via `tillr drain alloc` (reconciled and shown together in `tillr drain config`) so temporary throttles never dirty the trunk checkout. Ruled on 2026-11-20: *"A — baseline caps in backend-policy.json with live overrides in .tillr/state.db: standing subscription protections belong in git, while one-hour machine throttles must never dirty the trunk checkout."* | 2026-11-20 | [Section 4.2](#42-concurrency-limits-per-backend-per-seat-and-per-kind-of-work), [Section 5.1](#51-canonical-storage-in-tillrstatedb) | — |
+| <a id="OQ-LD4"></a>[`OQ-LD4`](#OQ-LD4) | **Owner ruling:** Both CLI commands and interactive controls in the Observatory adjust lane counts and caps, writing the same `drain_runtime_config` records in `.tillr/state.db` subject to the Observatory's write-access rule, rather than the designer's read-only leaning (`A`). Asked whether the Observatory should include controls to change lane counts and caps or only display them, his whole answer on 2026-11-20 was *"B"*, the option that read: *"Both CLI commands and controls in the observatory. Clicking the lane summary in the observatory opens a small control to adjust ordinary and express lane counts (writing the same store record as the CLI), subject to whatever write-access rule you set for the observatory."* | 2026-11-20 | [Section 3.5](#35-view-observatory-and-why-representation) | — |
 
 ### The designer's decisions, awaiting the owner's review
 
-Each `D-LD` row below is a decision the designer made on 2026-11-19 from the code and git-history evidence above. None is the owner's ruling, the owner may overturn any of them, and nothing is built before the open questions settle.
+Each `D-LD` row below is a decision the designer made on 2026-11-19 from the code and git-history evidence above. None is the owner's ruling, and the owner may overturn any of them.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
@@ -384,46 +394,4 @@ Each `D-LD` row below is a decision the designer made on 2026-11-19 from the cod
 
 ## Open Questions
 
-1. 💬 **OQ-LD2: When a backend reaches its concurrent-lane cap, should extra work wait for that backend or spill over to the seat's next fallback backend?**
-
-   Suppose your `design` seat lists your flat-rate Claude subscription first and paid per-token AWS Bedrock second (`["claude-designer", "pi-designer"]`). You cap `claude-designer` at 2 concurrent lanes so bursts do not trip rate limits, and a third design item becomes ready while two are running on Claude and Claude's quota window is still open. Today fallback to the second backend happens only when the first backend's quota window closes.
-
-   - **A — Wait for the capped backend.** The third design item waits in the queue (`backend-capped` on `claude-designer`) until one of the two finishes, and only moves to Bedrock if Claude's quota window closes. Your subscription covers the whole burst for $0, at the cost of the third item waiting.
-   - **B — Spill over to the next backend in the seat's list.** The third design item starts right away on `pi-designer` while `claude-designer` stays at 2. Ready work never waits behind a cap when a fallback backend is open, at the cost of every burst above 2 spending per-token Bedrock dollars.
-   - **C — Wait by default, with a per-seat spillover switch in the backend policy.** Subscription-first seats like `design` and `review` wait for the preferred backend by default, while seats where speed matters or both backends are paid (such as `build` or `scout`) can opt in to spill over onto the next backend.
-
-   <!-- vantage: question id=OQ-LD2 leaning="C — wait by default, with a per-seat spillover switch: capping a flat-rate subscription backend should not silently push bursts onto per-token Bedrock spend unless that seat opted in." -->
-
-   _Leaning:_ C — wait by default, with a per-seat spillover switch: capping a flat-rate subscription backend should not silently push bursts onto per-token Bedrock spend unless that seat opted in.
-
-   **Answer:**
-   > _(empty — fill in when decided)_
-
-2. 💬 **OQ-LD3: Where should concurrency caps on backends, seats, and kinds of work live — in the tracked backend policy file with live store overrides, only in the store, or only in the policy file?**
-
-   You have two kinds of allocation changes: standing rules you want on every checkout (such as keeping `claude-designer` at 2 lanes or `fixer` at 1 lane), and temporary operational throttles on one machine (such as capping `build` at 4 lanes for an hour while running benchmarks). The drain already reloads `config/tillr/backend-policy.json` from disk, but editing a tracked file for a temporary throttle dirties the main checkout where the lander advances `main`.
-
-   - **A — Baseline caps in `backend-policy.json`, with live CLI overrides in `.tillr/state.db`.** Standing caps are versioned in git beside the seats and backends they govern, and `tillr drain alloc` sets or clears temporary per-checkout overrides in `.tillr/state.db` without dirtying git; `tillr drain config` prints both and marks which one is active. Two sources exist, reconciled in one status view.
-   - **B — Only in `.tillr/state.db`, set by CLI commands.** Git stays clean on every change and caps live in only one place, at the cost that standing limits like `claude-designer = 2` are not tracked in git and must be re-applied on a fresh store or second machine.
-   - **C — Only in `backend-policy.json` (plus switching files via `tillr drain policy set`).** Every routing rule and cap lives in one JSON file with no override layer, at the cost that a temporary throttle either dirties the tracked policy file or requires maintaining a local untracked copy.
-
-   <!-- vantage: question id=OQ-LD3 leaning="A — baseline caps in backend-policy.json with live overrides in .tillr/state.db: standing subscription protections belong in git, while one-hour machine throttles must never dirty the trunk checkout." -->
-
-   _Leaning:_ A — baseline caps in `backend-policy.json` with live overrides in `.tillr/state.db`: standing subscription protections belong in git, while one-hour machine throttles must never dirty the trunk checkout.
-
-   **Answer:**
-   > _(empty — fill in when decided)_
-
-3. 💬 **OQ-LD4: Should the observatory web page include controls to change lane counts and caps, or only display them while CLI commands make changes?**
-
-   When you open the observatory in your browser (`tillr view serve`), the header and lane strip will show the current target, active lanes, any lanes draining out, and any capped backends. The observatory already has two write actions (reordering queue items and saving a new idea) and runs on localhost with no login ([`OQ-PR16`](../tillr/decision-provenance-review.md#OQ-PR16) asks whether unauthenticated local web writes stay).
-
-   - **A — CLI mutations only; read-only display in the observatory.** You change lane counts and allocations with `tillr drain scale`, `tillr drain policy`, and `tillr drain alloc` in a terminal, and the observatory displays targets, draining lanes, and active caps with zero web endpoints that can alter machine load or spend.
-   - **B — Both CLI commands and controls in the observatory.** Clicking the lane summary in the observatory opens a small control to adjust ordinary and express lane counts (writing the same store record as the CLI), subject to whatever write-access rule you set for the observatory.
-
-   <!-- vantage: question id=OQ-LD4 leaning="A — CLI mutations first, with read-only display in the observatory: one CLI command solves live scaling immediately without expanding unauthenticated browser writes, and a web control can be layered onto the same store record later if wanted." -->
-
-   _Leaning:_ A — CLI mutations first, with read-only display in the observatory: one CLI command solves live scaling immediately without expanding unauthenticated browser writes, and a web control can be layered onto the same store record later if wanted.
-
-   **Answer:**
-   > _(empty — fill in when decided)_
+None. [OQ-LD1](#OQ-LD1) was ruled by the owner on 2026-11-19, and [OQ-LD2](#OQ-LD2), [OQ-LD3](#OQ-LD3), and [OQ-LD4](#OQ-LD4) were ruled by the owner on 2026-11-20; all four are compacted into [Section 7](#7-decision-ledger).
