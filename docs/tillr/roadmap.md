@@ -1492,20 +1492,19 @@ missing rather than report that the change failed verification.
   returned `upload-pack: not our ref` (Git exit 128) for its pinned object above. The
   twenty-third run stopped before the build or gate: the missing input means `could not judge`
   (gate exit 4), not a failed build. This is a host publication task, not a request to choose
-  another pin. The twenty-fifth run received no host fetch results; it did not establish that
-  the remote still lacked the pin. The next action belongs to the host operator, not the build
-  lane or the design seat. Keep the build on hold and give the operator the three rows above
-  and the procedure below. A retry without those results is not a request to build, repeat the
-  probe in a lane, or reconsider the pins.
+  another pin. Neither the twenty-fifth nor the twenty-seventh run received host fetch results.
+  The twenty-seventh run did not probe or build, so the todo-list pin's current availability
+  remains unknown. Keep the item with the host operator until the fetch results are attached;
+  do not dispatch another build or design run to ask for them. No choice of pins is pending.
 
   In the host repository checkout, run `git merge-base --is-ancestor <object-id> refs/heads/<branch>`
   for each row above (`<branch>` includes `patch/`). If any check exits nonzero, stop and report
-  the branch and missing pin; do not rewind it or repin the delivery. If all three pass, follow
-  [the host publication step](../pi/patch-branches/published.md#5-the-host-step) to publish the
-  branches with `bin/patch-branches-publish`. The publisher sends branch tips, not individual pins.
-  Before requesting a build retry, repeat the three exact-ID fetches, each in its own new empty
-  bare repository, and include the locator, object ID and Git exit status for each row in
-  the retry request. Only three successful fetches release the hold; a
+  the branch and ancestry check's exit status; do not rewind it or repin the delivery. If all
+  three pass, fetch each exact ID from the locator into its own new empty bare repository.
+  If a pin is unavailable, follow [the host publication step](../pi/patch-branches/published.md#5-the-host-step)
+  and repeat the fetches in new empty repositories. The publisher sends branch tips, not
+  individual pins. Include the locator, object ID and Git exit status for each row in the
+  retry request. Only three successful fetches release the hold; a
   successful push, an advertised branch tip or another lane retry does not.
 - **Existing test cases (2026-11-18, answers the sixth run's report of blocked):** The fork export
   tests run the scenario files under [their cases directory](../../tests/pi-forks/), so those
