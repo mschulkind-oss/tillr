@@ -2961,8 +2961,17 @@ skill at a version its authors have moved on from. The Superpowers directory, `s
 at `22f0b463e7a5e579904dd6211a520321035526f7`, is where c2 says it is and does not change. If
 either project moves its skill again, that is the unavailable source c5 already covers: the
 launch must fail visibly, and the repair is a one-line change to the directory named in the pack.
-Whether to name a fixed commit for either source is the builder's choice, within what the pack
-format offers; neither answer changes a criterion.
+
+**Owner ruling, 2026-11-20:** “Add two such entries to the packs list in config/yolo-jail/config.toml (fence widened to it): BMAD's bmad-advanced-elicitation and Superpowers' brainstorming, the second under a namespace so it does not collide with the house brainstorming skill. Pin each ref to a commit.”
+
+The fifth run tested yolo 0.17.1, which rejected top-level `only`. Use the 0.18.0 form in
+`yolo config-ref` under “Direct user TOML scoped imports” instead. Edit the shared file,
+not a host installation. In each Git entry set `git` to the corresponding c2 URL and `ref`
+to a full commit SHA. Use `subdir = "skills"` for both. For BMAD, set
+`skills = { dir = "core-tools", only = ["bmad-advanced-elicitation"] }` and `bare = true`;
+for Superpowers, set `skills = { dir = ".", only = ["brainstorming"] }` and
+`namespace = "superpowers"`. The selectors name skills, not paths. Import each selected
+directory with its resources, not the upstream pack's hooks or other skills.
 
 - **c1:** The default selected packs expose BMAD Advanced Elicitation and Superpowers Brainstorming to their supported agents without a separate per-project installation.
 - **c2:** BMAD is sourced through the Git URL https://github.com/bmad-code-org/BMAD-METHOD.git, selecting skills/core-tools/bmad-advanced-elicitation; Superpowers is sourced through https://github.com/obra/superpowers.git, selecting skills/brainstorming. Neither skill is vendored as a manually maintained local copy.
@@ -2974,8 +2983,8 @@ format offers; neither answer changes a criterion.
 
 - **Ref:** Owner request, 2026-11-16: add these two skills to the default pack-loaded set, using Git URLs.
 - **Sources:** [BMAD Advanced Elicitation](https://github.com/bmad-code-org/BMAD-METHOD/tree/main/skills/core-tools/bmad-advanced-elicitation), [Superpowers Brainstorming](https://github.com/obra/superpowers/tree/main/skills/brainstorming).
-- **Where:** Inspect the default pack list and existing skill contributions in `config/yolo-jail/`, scoped configuration under `tag-personal/` and `tag-work/`, and `yolo-packs/`. Preserve host-config-synced prose and skills under `yolo-packs/matt/`; do not edit deployed home directories.
-- **Verify:** Resolve the supported Git locator syntax, test the default composition for supported agent renders, validate all auxiliary references, and lint each changed pack. Name the actual render and binary tested; in-jail lint is not proof of host rendering.
+- **Where:** The shared `config/yolo-jail/config.toml` applies on every host at its next launch. Leave the house skill, machine-specific configuration and deployed home directories unchanged.
+- **Verify:** Before committing the configuration, run `yolo pack explain` for each pinned import and `yolo check` against the candidate user layer in a scratch home. Confirm the selected names and resources; files merely staged or a selection not yet verified are not proof of discovery. Report which commands ran, their output, and the binary and render tested. These checks supplement c5, not replace it. If either import cannot deliver its skill, report the exact refusal for the yolo request document rather than importing the whole repository.
 
 ## Filed 2026-11-16: defects the first observed drain pass turned up
 
