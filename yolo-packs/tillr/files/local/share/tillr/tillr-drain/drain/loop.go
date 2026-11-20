@@ -2231,7 +2231,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	noNewCommit := headSHA == baseSHA || headSHA == decision.DesignContinuationHead
 	if decision.Returned != nil && decision.Returned.WorkerSession != nil && !verifyNoVerdictReturn(decision.Returned) {
 		previous := decision.Returned.WorkerSession.HeadSHA
-		noNewCommit = noNewCommit || headSHA == previous
+		// An evaluator can ask for evidence without asking for a code change.
+		// Keep the real base guard above, but let that retained commit be judged again.
+		noNewCommit = noNewCommit || (headSHA == previous && judgedCandidateReturn(decision) == nil)
 	}
 	if noNewCommit {
 		paths, err := l.uncommittedPaths(ctx, target)

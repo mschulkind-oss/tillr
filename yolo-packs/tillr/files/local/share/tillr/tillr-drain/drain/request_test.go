@@ -626,6 +626,8 @@ type requestSingleJudgeSteps struct {
 	judges       int
 	workReqs     []run.Request
 	workSessions []string
+	reportOnly   bool
+	judgedHeads  []string
 }
 
 func (s *requestSingleJudgeSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
@@ -638,6 +640,17 @@ func (s *requestSingleJudgeSteps) Run(ctx context.Context, req run.Request) (run
 	if strings.HasPrefix(string(brief), "# Judge candidate") {
 		s.judges++
 		head := runGit(s.t, target, "rev-parse", "HEAD")
+		s.judgedHeads = append(s.judgedHeads, head)
+		missingVerification := false
+		if s.reportOnly {
+			writer := s.workReqs[len(s.workReqs)-1]
+			path := filepath.Join(run.DurableDir(lane, writer.RunID), "report.md")
+			report, err := os.ReadFile(path)
+			if err != nil {
+				return run.Record{}, "", err
+			}
+			missingVerification = !strings.Contains(string(report), "## Verification\n")
+		}
 		tree := runGit(s.t, target, "rev-parse", head+"^{tree}")
 		var verdicts []item.JudgeEntry
 		fixtureRead(s.t, s.f, func(r *store.Reader) error {
@@ -653,7 +666,9 @@ func (s *requestSingleJudgeSteps) Run(ctx context.Context, req run.Request) (run
 				}
 				verdict := item.VerdictDone
 				reason := "verified"
-				if s.judges == 1 && (cid == "c1" || cid == "c2") {
+				if missingVerification && cid == "c2" {
+					verdict, reason = item.VerdictNotDone, "report lacks verification"
+				} else if !s.reportOnly && s.judges == 1 && (cid == "c1" || cid == "c2") {
 					verdict = item.VerdictNotDone
 					reason = fmt.Sprintf("single-worker finding for %s", cid)
 				}
@@ -669,7 +684,7 @@ func (s *requestSingleJudgeSteps) Run(ctx context.Context, req run.Request) (run
 			return rows.Err()
 		})
 		outcome := "pass"
-		if s.judges == 1 {
+		if missingVerification || (!s.reportOnly && s.judges == 1) {
 			outcome = "fail"
 		}
 		raw, _ := json.Marshal(item.JudgeOutput{EvaluatedHead: head, EvaluatedTree: tree, Outcome: outcome, Verdicts: verdicts})
@@ -682,11 +697,50 @@ func (s *requestSingleJudgeSteps) Run(ctx context.Context, req run.Request) (run
 			return run.Record{}, "", err
 		}
 		s.workSessions = append(s.workSessions, sess)
-		writeForkFile(s.t, filepath.Join(target, "candidate.txt"), fmt.Sprintf("single %d\n", s.works))
-		runGit(s.t, target, "add", ".")
-		runGit(s.t, target, "commit", "-qm", fmt.Sprintf("single %d", s.works))
+		if !s.reportOnly || s.works == 1 {
+			writeForkFile(s.t, filepath.Join(target, "candidate.txt"), fmt.Sprintf("single %d\n", s.works))
+			runGit(s.t, target, "add", ".")
+			runGit(s.t, target, "commit", "-qm", fmt.Sprintf("single %d", s.works))
+		}
+		if s.reportOnly {
+			raw, err := os.ReadFile(filepath.Join(lane, BaseSHAFile))
+			if err != nil {
+				return run.Record{}, "", err
+			}
+			staged := strings.TrimSpace(string(raw))
+			head := runGit(s.t, target, "rev-parse", "HEAD")
+			if head == staged {
+				return run.Record{}, "", fmt.Errorf("There is no commit to offer: HEAD is still the staged base")
+			}
+			scratch := run.DurableDir(lane, req.RunID)
+			var state struct {
+				Refused []struct{ Commit string }
+			}
+			raw, err = os.ReadFile(filepath.Join(scratch, "landing-state.json"))
+			if err != nil {
+				return run.Record{}, "", err
+			}
+			if err := json.Unmarshal(raw, &state); err != nil {
+				return run.Record{}, "", err
+			}
+			for _, refused := range state.Refused {
+				if refused.Commit == head {
+					return run.Record{}, "", fmt.Errorf("the staged landing state prohibits re-offering %s", head)
+				}
+			}
+			summary := "candidate"
+			if s.works == 2 {
+				summary += "\n\n## Verification\nTargeted check: pass."
+			}
+			if err := writeLandingArtifact(scratch, landingOfferFile, landingOffer{CallID: fmt.Sprintf("report-%d", s.works), Commit: head, Base: staged, Summary: summary}); err != nil {
+				return run.Record{}, "", err
+			}
+		}
 	}
 	report := "RESULT: done\n"
+	if s.reportOnly && s.works == 2 {
+		report = "## Verification\nTargeted check: pass.\n\n" + report
+	}
 	path := filepath.Join(run.DurableDir(lane, req.RunID), "report.md")
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return run.Record{}, "", err
@@ -703,6 +757,12 @@ func (s *requestSingleJudgeSteps) Run(ctx context.Context, req run.Request) (run
 }
 
 func TestRequestSingleWorkerJudgeNotDoneReturnsToBuilderSession(t *testing.T) {
+	t.Run("code repair", func(t *testing.T) { testSingleWorkerJudgeReturn(t, false) })
+	t.Run("report only", func(t *testing.T) { testSingleWorkerJudgeReturn(t, true) })
+}
+
+func testSingleWorkerJudgeReturn(t *testing.T, reportOnly bool) {
+	t.Helper()
 	f, l, base := workflowLoopFixture(t, "")
 	declareWorkerResumeFixture(t, l)
 	l.cfg.Policy.Seats["review"] = "reviewer"
@@ -720,7 +780,7 @@ func TestRequestSingleWorkerJudgeNotDoneReturnsToBuilderSession(t *testing.T) {
 		return err
 	})
 	base.firstHead = runGit(t, f.root, "rev-parse", TrunkRef)
-	steps := &requestSingleJudgeSteps{workflowSteps: base}
+	steps := &requestSingleJudgeSteps{workflowSteps: base, reportOnly: reportOnly}
 	l.cfg.Steps = steps
 	result := &LoopResult{}
 
@@ -743,7 +803,8 @@ func TestRequestSingleWorkerJudgeNotDoneReturnsToBuilderSession(t *testing.T) {
 			if d.Action != ActionDispatch || d.Reason != ReasonReturned || d.RunRequest == nil || !d.RunRequest.SessionTurn {
 				t.Fatalf("expected returned session dispatch, got: %+v", d)
 			}
-			if !strings.Contains(d.RunRequest.ResumePrompt, "c1: single-worker finding for c1") || !strings.Contains(d.RunRequest.ResumePrompt, "c2: single-worker finding for c2") {
+			if reportOnly && !strings.Contains(d.RunRequest.ResumePrompt, "c2: report lacks verification") ||
+				!reportOnly && (!strings.Contains(d.RunRequest.ResumePrompt, "c1: single-worker finding for c1") || !strings.Contains(d.RunRequest.ResumePrompt, "c2: single-worker finding for c2")) {
 				t.Fatalf("resume prompt lacks findings:\n%s", d.RunRequest.ResumePrompt)
 			}
 			if strings.Contains(d.RunRequest.ResumePrompt, "Failing gate checks") {
@@ -765,6 +826,9 @@ func TestRequestSingleWorkerJudgeNotDoneReturnsToBuilderSession(t *testing.T) {
 	}
 	if result.Landed != 1 || steps.works != 2 || steps.judges != 2 {
 		t.Fatalf("landed=%d works=%d judges=%d result=%+v", result.Landed, steps.works, steps.judges, result)
+	}
+	if reportOnly && steps.judgedHeads[0] != steps.judgedHeads[1] {
+		t.Errorf("report-only repair changed the judged commit: %v", steps.judgedHeads)
 	}
 	if !steps.workReqs[1].SessionTurn || steps.workSessions[1] != steps.workSessions[0] {
 		t.Errorf("second worker run did not resume session %s: turn=%v got=%s", steps.workSessions[0], steps.workReqs[1].SessionTurn, steps.workSessions[1])
