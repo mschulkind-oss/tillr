@@ -211,6 +211,14 @@ by hand produces the same row as an unattended one.
   about this change to act on.
 - **A head that does not squash onto the trunk** — the row records `squash-conflict` and the
   paths git reported; the head is pinned and the verdict stands.
+- **A squash whose tree does not build** — when the squash differs from the tree the gate judged
+  (the trunk moved), the lander extracts the squashed tree with `git archive` and runs `go build`
+  and `go vet` (which compiles test packages) in every Go module the candidate's `base..head`
+  touches, plus the sibling modules their `replace` lines name, before the trunk moves. Two changes
+  that merge cleanly as text and do not compile together are recorded as `squash-conflict`, with
+  one entry per failing module in place of paths, and returned to their author. The cost is
+  bounded by the candidate's own modules, not by the landings since the gate ran; a landing whose
+  squash is the gated tree is not checked, because the gate built that tree.
 - **A predicted conflict between the owner's content and the landed result, or a main checkout
   in the middle of a merge, rebase, cherry-pick or revert** — see
   [the owner's working tree](#the-owners-working-tree). Uncommitted content that restores

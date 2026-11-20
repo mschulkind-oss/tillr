@@ -435,7 +435,7 @@ delivery keeps the built fork head and refreshes its shared cache instead. A ref
 landing returns to the worker session with the lander's answer, uncounted
 (`returned-with-evidence`), except `already-on-trunk` (`resolved-elsewhere`) and boundary or
 author holds waiting on the operator. A land that conflicts — `squash-conflict`, because another
-landing moved the trunk first — is not a refusal: the loop stages a conflict-fix run for
+landing moved the trunk first, or because the squashed tree does not build (its paths are then `go build` or `go vet` entries naming a module) — is not a refusal: the loop stages a conflict-fix run for
 the same candidate, carrying the conflicting paths and the three-way markers in its brief,
 and judges that run like any other change. Conflicts are not counted: each one goes back
 to the worker with its paths on the latest trunk. The second conflict with the same paths

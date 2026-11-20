@@ -705,6 +705,10 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 			p.landing.Result, p.landing.Reason = ResultRefused, ReasonAlreadyOnTrunk
 		} else if p.squash.Conflicted() {
 			p.landing.Result, p.landing.ConflictPaths = ResultSquashConflict, p.squash.Conflicts
+		} else if failures, berr := t.buildFailures(req, p.landing.GatedTree, p.squash.Tree); berr != nil {
+			return p, berr
+		} else if len(failures) > 0 {
+			p.landing.Result, p.landing.ConflictPaths = ResultSquashConflict, failures
 		} else if p.landing.Landed() {
 			p.landing.LandedTree = p.squash.Tree
 			if p.plan, err = t.PlanOwner(req.BaseRef, req.RunID, trunkBefore, p.squash.Commit); err != nil {
@@ -1219,4 +1223,13 @@ func (t *Trunk) reconcileOwner(ctx context.Context, s *store.Store, req LandingR
 		}
 	}
 	return faults, nil
+}
+
+// buildFailures is the build check of a squash that is not the tree the gate judged. A
+// squash that is the gated tree needs none: the gate built exactly that tree.
+func (t *Trunk) buildFailures(req LandingRequest, gated, squashed string) ([]string, error) {
+	if gated == squashed {
+		return nil, nil
+	}
+	return t.CheckBuild(req.BaseSHA, req.HeadSHA, squashed)
 }
