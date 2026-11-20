@@ -1,9 +1,9 @@
-# last_hand_move_event_seq: 1323759
-# hand_move_event_sha256: 7be78574b0b57ce997da92d5a14d25624b95affad856faeb03907c6dfe1bc79d
+# last_hand_move_event_seq: 1324527
+# hand_move_event_sha256: c8c9c31d8fb76fd06be7c1077fefd12645d626f53ab27e5aa912c9afe8bcb9de
+item-request-ac2d96b05f
 item-request-cc2af28a50
 item-request-70d8825daf
 fixer-main-2127fe124d8c
-item-request-5bd3a053de
 item-request-5be951c300
 item-request-b205fbd881
 item-request-ab90e5da8f
@@ -19,7 +19,6 @@ item-request-59735b6305
 item-request-d40cdbb177
 item-request-8692f15f58
 item-request-760c0eb9d0
-item-request-1465e8759e
 item-request-b478edf600
 item-request-8970d30835
 item-request-28f8c86410
@@ -32,3 +31,20 @@ item-request-b45516e552
 item-request-bd281f5c8c
 item-request-d78c546468
 item-request-6d7eb3cf69
+item-request-8b478395a3
+item-request-737f4c5838
+item-request-3dc03a2469
+item-request-143f5cfbef
+item-request-7edf1a39fc
+item-request-b109d3ff20
+item-request-83a4a46d5e
+item-request-9b5bf1aceb
+item-request-a5238efbaf
+item-request-d354424c5b
+item-request-545aa1b0b1
+item-request-df3b91d21c
+item-request-8039c6ccfa
+item-request-39698a12b6
+item-request-2bfb745e42
+item-request-e64e5e9d04
+item-request-283beffde1
