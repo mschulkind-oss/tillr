@@ -133,7 +133,13 @@ func (l *Loop) migrateBuildRuns(ctx context.Context, result *LoopResult) error {
 		}
 		d, err := l.stageParallel(ctx, w.Decision, w.BaseSHA)
 		if err != nil {
-			return err
+			if cancelErr := l.cancelStaging(context.WithoutCancel(ctx), w.Decision); cancelErr != nil {
+				return cancelErr
+			}
+			if holdErr := l.holdStageFailed(ctx, w.Decision, "stage parallel", err); holdErr != nil {
+				return holdErr
+			}
+			continue
 		}
 		l.launchRun(ctx, d, l.cfg.Now(), nil, result)
 	}

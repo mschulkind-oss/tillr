@@ -2294,40 +2294,62 @@ plans:
 			var staged []Decision
 			var err error
 			owned := ""
+			parallelPrecheckFailed := false
 			if len(d.Parallel) > 0 && d.WorkflowRestart {
-				owned, err = l.stagedNodeRun(d)
-				if err != nil {
-					return "", err
+				var preErr error
+				owned, preErr = l.stagedNodeRun(d)
+				if preErr != nil {
+					if holdErr := l.holdStageFailed(ctx, d, "read staged node run", preErr); holdErr != nil {
+						err = holdErr
+					} else {
+						parallelPrecheckFailed = true
+					}
 				}
 			}
-			if owned != "" && len(d.Parallel) > 0 && d.WorkflowRestart {
+			if err == nil && !parallelPrecheckFailed && owned != "" && len(d.Parallel) > 0 && d.WorkflowRestart {
 				if d.NodeIndex == 0 && d.NodeStartRunID == "" {
-					raw, err := os.ReadFile(filepath.Join(RunDir(l.cfg.Root, owned), BaseSHAFile))
-					if err != nil {
-						return "", err
+					raw, readErr := os.ReadFile(filepath.Join(RunDir(l.cfg.Root, owned), BaseSHAFile))
+					if readErr != nil {
+						if holdErr := l.holdStageFailed(ctx, d, "read staged base", readErr); holdErr != nil {
+							err = holdErr
+						} else {
+							parallelPrecheckFailed = true
+						}
+					} else {
+						d.NodeBaseSHA = strings.TrimSpace(string(raw))
+						d.NodeStartRunID = owned
 					}
-					d.NodeBaseSHA = strings.TrimSpace(string(raw))
-					d.NodeStartRunID = owned
 				}
-				if stagedBase := l.laneBase(d.LaneID); stagedBase != "" {
-					base = stagedBase
-				}
-				head, err := l.revParse(ctx, l.laneTarget(d.LaneID), "HEAD")
-				if err != nil {
-					return "", err
-				}
-				dirty, err := l.git(ctx, l.laneTarget(d.LaneID), "status", "--porcelain", "--untracked-files=all")
-				if err != nil {
-					return "", err
-				}
-				if head != d.NodeBaseSHA || strings.TrimSpace(dirty) != "" {
-					if err = l.refuseParallelBoundary(ctx, d, base, head, result, true); err != nil {
-						return "", err
+				if err == nil && !parallelPrecheckFailed {
+					if stagedBase := l.laneBase(d.LaneID); stagedBase != "" {
+						base = stagedBase
 					}
-					continue
+					head, headErr := l.revParse(ctx, l.laneTarget(d.LaneID), "HEAD")
+					if headErr != nil {
+						if holdErr := l.holdStageFailed(ctx, d, "inspect parallel lane", headErr); holdErr != nil {
+							err = holdErr
+						} else {
+							parallelPrecheckFailed = true
+						}
+					} else {
+						dirty, dirtyErr := l.git(ctx, l.laneTarget(d.LaneID), "status", "--porcelain", "--untracked-files=all")
+						if dirtyErr != nil {
+							if holdErr := l.holdStageFailed(ctx, d, "inspect parallel lane", dirtyErr); holdErr != nil {
+								err = holdErr
+							} else {
+								parallelPrecheckFailed = true
+							}
+						} else if head != d.NodeBaseSHA || strings.TrimSpace(dirty) != "" {
+							if err = l.refuseParallelBoundary(ctx, d, base, head, result, true); err != nil {
+								return "", err
+							}
+							continue
+						} else {
+							staged = []Decision{d}
+						}
+					}
 				}
-				staged = []Decision{d}
-			} else {
+			} else if err == nil && !parallelPrecheckFailed {
 				staged, err = l.stageDispatches(ctx, []Decision{d}, base, result)
 			}
 			if err != nil {
@@ -2336,6 +2358,24 @@ plans:
 				}
 				result.StopItemID, result.StopStep = d.ItemID, "stage"
 				return "", err
+			}
+			if len(staged) > 0 {
+				parallel, pErr := l.stageParallel(ctx, staged[0], base)
+				if pErr != nil {
+					if stoppedByOperator(ctx, pErr) || ctx.Err() != nil {
+						_ = l.cancelStaging(context.WithoutCancel(ctx), d)
+						result.StopItemID, result.StopStep = d.ItemID, "stage"
+						return "", pErr
+					}
+					if holdErr := l.holdStageFailed(ctx, d, "stage parallel", pErr); holdErr != nil {
+						_ = l.cancelStaging(context.WithoutCancel(ctx), d)
+						result.StopItemID, result.StopStep = d.ItemID, "stage"
+						return "", holdErr
+					}
+					staged = nil
+				} else {
+					staged[0] = parallel
+				}
 			}
 			timing.StageMS += time.Since(start).Milliseconds()
 			if len(staged) == 0 {
@@ -2361,7 +2401,9 @@ plans:
 					leases = freshLeases
 					queued := map[string]bool{}
 					for _, rest := range plans[i+1:] {
-						queued[rest.decision.ItemID] = true
+						if rest.decision.Action == ActionDispatch || rest.decision.Action == ActionRetry {
+							queued[rest.decision.ItemID] = true
+						}
 					}
 					var again []plannedApplication
 					for _, next := range fresh {
@@ -2384,18 +2426,13 @@ plans:
 				}
 				continue
 			}
-			parallel, err := l.stageParallel(ctx, staged[0], base)
-			if err != nil {
-				_ = l.cancelStaging(context.WithoutCancel(ctx), d)
-				return "", err
-			}
 			if err := l.checkStopRequested(ctx); err != nil {
 				if cancelErr := l.cancelStaging(context.WithoutCancel(ctx), d); cancelErr != nil {
 					return "", cancelErr
 				}
 				return "", err
 			}
-			l.launchRun(ctx, parallel, at, watched, result)
+			l.launchRun(ctx, staged[0], at, watched, result)
 		case ActionSettle, ActionJudge:
 			if err := l.checkStopRequested(ctx); err != nil {
 				if releaseErr := l.releaseExamination(context.WithoutCancel(ctx), d); releaseErr != nil {

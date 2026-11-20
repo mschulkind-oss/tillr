@@ -136,7 +136,7 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 		return "", false, err
 	}
 	basis.TrunkSHA = mainSHA
-	fixRunID := candidate.RunID + ConflictFixSuffix
+	fixRunID := conflictFixRunID(candidate.RunID)
 	fix := *candidate.Request
 	if policy != nil {
 		if _, ok := policy.Backends[fix.Backend]; !ok {

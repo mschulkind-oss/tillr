@@ -1721,6 +1721,11 @@ func (p *planner) nextAttempt(id string) int {
 func attemptFromRunID(itemID, runID string) int {
 	rest, ok := strings.CutPrefix(runID, "run-"+itemID+"-a")
 	if !ok {
+		if slug := runItemSlug(itemID); slug != itemID {
+			rest, ok = strings.CutPrefix(runID, "run-"+slug+"-a")
+		}
+	}
+	if !ok {
 		return 0
 	}
 	digits := rest
@@ -1776,7 +1781,7 @@ func readRequestIDs(r *store.Reader) (map[string]bool, error) {
 
 // attemptRunID names one item's ordinal attempt, including terminal failover runs.
 func attemptRunID(itemID string, attempt int) string {
-	return "run-" + itemID + "-a" + strconv.Itoa(attempt)
+	return boundRunIDBase("run-" + runItemSlug(itemID) + "-a" + strconv.Itoa(attempt))
 }
 
 // An interruption retains the same backend; it is not a failover.

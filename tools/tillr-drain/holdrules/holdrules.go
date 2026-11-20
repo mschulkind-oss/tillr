@@ -59,6 +59,7 @@ var Rules = map[string]Rule{
 	"preserve-failed":             {"needs you", "lane", "the process or cause the detail names (a live index.lock holder exits or is ended); then tillr drain clear-fault"},
 	"decision-collision":          {"needs a cause", "loop", "fix the drain defect the fault names, then tillr drain clear-fault"},
 	"adapter-refused":             {"needs you", "lane", "correct what the adapter's words name, then tillr drain clear-fault"},
+	"stage-failed":                {"needs you", "lane", "fix the staging fault the detail names, then tillr drain clear-fault --item <item>"},
 	"settle-failed":               {"needs a cause", "loop", "fix the drain defect the fault names, then tillr drain clear-fault"},
 	// Every backend on the seat's list ended a session repeating one identical call (pi's
 	// loop_detected): nothing automatic is left to try.

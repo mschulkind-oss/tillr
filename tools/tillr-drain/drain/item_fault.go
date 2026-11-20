@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/mschulkind-oss/tillr-drain/faults"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/faults"
+	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
@@ -35,6 +36,10 @@ const (
 	// and the operator is the mover: the brief or the environment is what to fix, so no
 	// backend is closed, none is failed over to, and no second run is staged.
 	ReasonAdapterRefused = "adapter-refused"
+	// ReasonStageFailed holds an item whose run could not be staged on its lane or run
+	// directory. Staging one item's run is that item's condition, so its unlaunched claim
+	// is retracted, its lane is freed, and the loop continues for every other item.
+	ReasonStageFailed = "stage-failed"
 )
 
 func init() {
@@ -169,6 +174,42 @@ func (l *Loop) holdAdapterRefusal(ctx context.Context, lane string, request run.
 		return "", err
 	}
 	return l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "adapter refused the brief"), nil
+}
+
+// holdStageFailed records a durable stage-failed fault on d's item when staging d's run
+// fails on a per-item step. Operator stops and storeless unit tests return stageErr directly.
+func (l *Loop) holdStageFailed(ctx context.Context, d Decision, step string, stageErr error) error {
+	if stoppedByOperator(ctx, stageErr) || ctx.Err() != nil {
+		return stageErr
+	}
+	if l.cfg.Store == "" {
+		return stageErr
+	}
+	itemID := d.ItemID
+	runID := ""
+	if d.RunRequest != nil {
+		if itemID == "" {
+			itemID = d.RunRequest.ItemID
+		}
+		runID = d.RunRequest.RunID
+	}
+	if itemID == "" {
+		return stageErr
+	}
+	detail := stageErr.Error()
+	if step != "" {
+		detail = step + ": " + detail
+	}
+	if err := l.holdItemFault(ctx, Candidate{ItemID: itemID, RunID: runID, LaneID: d.LaneID}, ReasonStageFailed, detail); err != nil {
+		var termErr *itemTerminalError
+		if errors.As(err, &termErr) {
+			return nil
+		}
+		return err
+	}
+	delete(l.infraLines, itemID+"\x00"+d.LaneID)
+	l.reportf("loop: %s mover: %s\n", itemID, holdrules.For(ReasonStageFailed).Mover)
+	return nil
 }
 
 func (l *Loop) clearUnrunNode(ctx context.Context, runID string) error {
