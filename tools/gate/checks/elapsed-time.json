@@ -1,0 +1,19 @@
+{
+  "id": "elapsed-time",
+  "label": "elapsed-time against the caller's base and head",
+  "command": [
+    "python3",
+    "tools/gate/checks/elapsed-time.py"
+  ],
+  "scope": "change",
+  "tier": "fast",
+  "budget_ms": 200,
+  "reads": [
+    "."
+  ],
+  "tools": [
+    "python3",
+    "git"
+  ],
+  "remember": false
+}
