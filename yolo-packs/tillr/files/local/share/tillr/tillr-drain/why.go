@@ -198,7 +198,7 @@ func whyFace(args []string) int {
 }
 
 // whyTrunk reads the trunk's proof and answers it only when the trunk is unproved. A root
-// with no repository, a store that is not the git-landing definition, and a repository
+// with no repository, a store that is not the landing definition, and a repository
 // with no proof surface yet all say nothing: record-only fixtures have no trunk to prove.
 func whyTrunk(ctx context.Context, root, storePath, def, now string) (*heavy.HeavyStatus, string) {
 	if def != definition.GitLandingName {
