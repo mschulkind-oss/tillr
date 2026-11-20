@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import sqlite3
@@ -22,10 +23,30 @@ SHARDED = ('tools/tillr-store', 'tools/tillr-item', 'tools/tillr-run', 'tools/ti
 # The commit most recently installed, beside the bin directory.
 ROLLED = 'tillr-roll.commit'
 MODULES = ('cli', 'drain', 'gate', 'item', 'land', 'run', 'store', 'view')
+TRACE_PREFIXES = ('tillr-sqlite ', 'tillr-sqlite-stack ', 'tillr-git ')
+SHARD_FAILURE_RE = re.compile(r'^(?:go-test-shards:\s+)?\S+ shard \d+ (?:failed|timed out|cannot start|missing completion)\b')
+GO_FAIL_RE = re.compile(r'^---\s*FAIL:\s*(\S+)')
 
 
 def run(*args, **kwargs):
-    return subprocess.run(args, check=True, text=True, **kwargs)
+    if 'capture_output' in kwargs or ('stdout' in kwargs and 'stderr' in kwargs):
+        return subprocess.run(args, check=True, text=True, **kwargs)
+    call_kwargs = dict(kwargs)
+    capture_stdout = 'stdout' not in call_kwargs
+    capture_stderr = 'stderr' not in call_kwargs
+    if capture_stdout:
+        call_kwargs['stdout'] = subprocess.PIPE
+    if capture_stderr:
+        call_kwargs['stderr'] = subprocess.PIPE
+    completed = subprocess.run(args, check=False, text=True, **call_kwargs)
+    if capture_stdout and completed.stdout:
+        sys.stdout.write(completed.stdout)
+        sys.stdout.flush()
+    if capture_stderr and completed.stderr:
+        sys.stderr.write(completed.stderr)
+        sys.stderr.flush()
+    completed.check_returncode()
+    return completed
 
 
 def git(*args, cwd=None):
@@ -60,13 +81,63 @@ def report(old, new, answers, live):
     return int(failed)
 
 
+def is_slot_notice(line):
+    return line.startswith('go-test-shards: ') and (
+        ' waiting for a test slot' in line or ' yielding to a waiting ' in line
+    )
+
+
+def failure_detail(cause):
+    if not isinstance(cause, subprocess.CalledProcessError):
+        return str(cause)
+    raw = '\n'.join(part for part in (cause.stdout, cause.stderr) if part)
+    lines = [
+        line for line in raw.splitlines()
+        if line.strip() and not line.startswith(TRACE_PREFIXES) and not is_slot_notice(line)
+    ]
+    if not lines:
+        return str(cause)
+    shard_lines = []
+    fail_tests = []
+    diagnostics = []
+    for line in lines:
+        stripped = line.strip()
+        if SHARD_FAILURE_RE.match(stripped) or (
+            stripped.startswith('go-test-shards: ') and ' tests passed,' not in stripped
+        ):
+            normalized = stripped if stripped.startswith('go-test-shards: ') else f'go-test-shards: {stripped}'
+            shard_lines.append(normalized)
+            match = re.search(r'failed \(exit -?\d+\):\s*(.+)$', normalized)
+            if match:
+                fail_tests.extend(name.strip() for name in match.group(1).split(',') if name.strip())
+            continue
+        fail_match = GO_FAIL_RE.match(stripped)
+        if fail_match:
+            fail_tests.append(fail_match.group(1))
+            diagnostics.append(stripped)
+            continue
+        if line.startswith((' ', '\t')) and not stripped.startswith(('=== ', '--- PASS:')):
+            diagnostics.append(stripped)
+    if shard_lines or fail_tests:
+        summary = list(dict.fromkeys(shard_lines))
+        ordered_tests = list(dict.fromkeys(fail_tests))
+        joined = '\n'.join(summary)
+        missing_tests = [name for name in ordered_tests if name not in joined]
+        if missing_tests:
+            summary.append(f"failing tests: {', '.join(missing_tests)}")
+        summary.extend(list(dict.fromkeys(diagnostics))[:12])
+        return '\n'.join(summary)
+    return '\n'.join(lines[-12:])
+
+
 class RollFailed(RuntimeError):
     """A roll step failed; the step's name is what the recorded event carries."""
 
     def __init__(self, step, cause):
-        super().__init__(f'{step}: {cause}')
         self.step = step
         self.cause = cause
+        self.detail = failure_detail(cause)
+        super().__init__(f'{step}: {self.detail}')
 
 
 def stepped(step, call, *args, **kwargs):
@@ -124,7 +195,6 @@ def gated_modules(root, tip, store):
 
 def clean_checkout(root, tip, dest, shared):
     run('git', 'clone', '-q', '--shared', '--no-checkout', str(root), str(dest))
-    run('git', 'sparse-checkout', 'set', '--cone', 'tools', 'config', cwd=dest)
     run('git', '-c', 'advice.detachedHead=false', 'checkout', '-q', '--detach', tip, cwd=dest)
     dist = shared / 'tools/tillr-view/web/dist'
     # The front end is untracked output, not part of the commit; the view embeds it when present.
@@ -149,7 +219,8 @@ def roll_commit(root, live, tip, no_request, store):
         except subprocess.CalledProcessError:
             changed = None
             break
-    build_env = {**os.environ, 'CGO_ENABLED': '0'}
+    base_env = {k: v for k, v in os.environ.items() if k != 'TILLR_SQLITE_TRACE'}
+    build_env = {**base_env, 'CGO_ENABLED': '0'}
     live.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='tillr-roll-', dir=live.parent) as work:
         work = Path(work)
@@ -189,7 +260,7 @@ def roll_commit(root, live, tip, no_request, store):
         check = [stage / 'tillr-drain', 'loop', '--check', '--root', source, '--store', store]
         for face in ('gate', 'land', 'verdict'):
             check.extend([f'--{face}', shlex.join(['python3', str(adapter), face])])
-        stepped('loop check', run, *check, cwd=source, env={**os.environ, 'PATH': f'{stage}:{os.environ["PATH"]}'})
+        stepped('loop check', run, *check, cwd=source, env={**base_env, 'PATH': f'{stage}:{os.environ["PATH"]}'})
         # Smoke can take time; report the build that was running at the handoff.
         old = builds(store)
         live.mkdir(exist_ok=True)
@@ -253,7 +324,7 @@ def roll(root, live, no_request, build_pi=False, commit=None, on_wait=None):
         try:
             return roll_commit(root, live, tip, no_request, store)
         except RollFailed as failure:
-            record_failure(store, tip, failure.step, failure.cause)
+            record_failure(store, tip, failure.step, failure.detail)
             raise
 
 

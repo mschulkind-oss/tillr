@@ -504,8 +504,29 @@ def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=N
         raise ShardError(f'{label} timed out after {wall_timeout:g}s without top-level test progress; running: {detail}; '
                          f'not completed: {remaining}\n{stderr}', events)
     if process.returncode or any(e.get('Action') == 'fail' for e in events):
-        output = ''.join(e.get('Output', '') for e in events)
-        raise ShardError(f'{label} failed (exit {process.returncode}):\n{output}{stderr}', events)
+        raw_failed = list(dict.fromkeys(
+            e['Test'] for e in events if e.get('Action') == 'fail' and e.get('Test')
+        ))
+        failed_tests = [
+            name for name in raw_failed
+            if not any(other != name and other.startswith(name + '/') for other in raw_failed)
+        ]
+        if raw_failed:
+            def belongs_to_failure(test_name):
+                if not test_name:
+                    return True
+                return any(
+                    test_name == failed or test_name.startswith(failed + '/') or failed.startswith(test_name + '/')
+                    for failed in raw_failed
+                )
+            output = ''.join(e.get('Output', '') for e in events if belongs_to_failure(e.get('Test')))
+        else:
+            output = ''.join(e.get('Output', '') for e in events)
+        headline = f'{label} failed (exit {process.returncode})'
+        if failed_tests:
+            headline += f": {', '.join(failed_tests)}"
+        detail = f'{output}{stderr}'.rstrip('\n')
+        raise ShardError(f'{headline}\n{detail}' if detail else headline, events)
     completed = {e.get('Test') for e in events if e.get('Action') in ('pass', 'skip')}
     missing = set(names) - completed
     if missing:
@@ -563,19 +584,20 @@ def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHA
                              shard_timeout, lock_dir, shard_limit, resolved_class,
                              proof_limit, resolved_holder))
     events = []
-    errors = []
+    shard_errors = []
     # Each package has at most K jobs. Run packages side by side, just as go test
     # does, rather than making a second large package wait behind the first one's K.
     with ThreadPoolExecutor(max_workers=max(1, len(jobs))) as pool:
-        futures = [pool.submit(run_shard, *job) for job in jobs]
+        futures = {pool.submit(run_shard, *job): job_index for job_index, job in enumerate(jobs)}
         for future in as_completed(futures):
             try:
                 events.extend(future.result())
             except ShardError as exc:
                 events.extend(exc.events)
-                errors.append(str(exc))
-    if errors:
-        raise ShardError('\n'.join(errors), events)
+                shard_errors.append((futures[future], str(exc)))
+    if shard_errors:
+        shard_errors.sort(key=lambda item: item[0])
+        raise ShardError('\ngo-test-shards: '.join(text for _, text in shard_errors), events)
     return events
 
 
