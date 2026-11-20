@@ -142,7 +142,7 @@ func TestWhyNamesQuestionsAndCapacity(t *testing.T) {
 func TestWhyEmptyStoreAndMissingStore(t *testing.T) {
 	path := fixture(t)
 	code, out := invoke(t, "why", "--store", path)
-	if code != 0 || strings.TrimSpace(string(out)) != "definition: "+definition.GitLandingName+"\nsummary: lanes 0/0 busy; reserved 0; workers 0; examining 0; running 0; could run now 0; owner-waiting 0; next [drain=0, design seat=0, operator=0]; held []\nmedian cost, last 20 landed build items: unknown" {
+	if code != 0 || strings.TrimSpace(string(out)) != "definition: "+definition.GitLandingName+"\nlanes (store): none\nsummary: lanes 0/0 busy; reserved 0; workers 0; examining 0; running 0; could run now 0; owner-waiting 0; next [drain=0, design seat=0, operator=0]; held []\nmedian cost, last 20 landed build items: unknown" {
 		t.Fatalf("empty: %d %s", code, out)
 	}
 	path = filepath.Join(scratch(t, "absent-why"), "absent.db")
@@ -251,5 +251,182 @@ func TestWhyReadsAPreloadedQuestionsIndex(t *testing.T) {
 	}
 	if got := rows(out); got[2].Reason == drain.ReasonQuestionOpen || got[2].Reason == "" {
 		t.Fatalf("an unreadable index answered %+v", got[2])
+	}
+}
+
+func TestWhyDefaultsToLiveLoopLanesAndReportsLaneSet(t *testing.T) {
+	path := fixture(t,
+		itemRecordRanked("first", "in-queue", "a"),
+		itemRecordRanked("second", "in-queue", "b"),
+		itemRecordRanked("third", "in-queue", "c"),
+	)
+	ref := policy(t, "true")
+
+	// Seed the store with 4 historical lanes and a live loop session that only offers
+	// lane-1 and express-1.
+	ctx := context.Background()
+	s, err := store.Open(ctx, path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ns, err := os.Readlink("/proc/self/ns/pid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	statRaw, err := os.ReadFile("/proc/self/stat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rp := strings.LastIndexByte(string(statRaw), ')')
+	fields := strings.Fields(string(statRaw)[rp+1:])
+	owner := drain.LoopOwner{
+		PID:    os.Getpid(),
+		Start:  fields[19],
+		Domain: strings.TrimSpace(string(boot)) + ":" + ns,
+		UID:    uint32(os.Geteuid()),
+	}
+	ownerRaw, err := json.Marshal(owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lanesRaw, err := json.Marshal([]string{"lane-1", "express-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(time.Minute).UnixMilli()
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		for _, id := range []string{"lane-1", "lane-2", "lane-3", "express-1"} {
+			if _, err := tx.Exec(`INSERT INTO lanes(lane_id, state) VALUES (?, 'idle') ON CONFLICT(lane_id) DO NOTHING`, id); err != nil {
+				return err
+			}
+		}
+		_, err := tx.Exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at, loop_owner, lanes) VALUES ('live-1', 1, ?, ?, ?, ?)`,
+			time.Now().UnixMilli(), future, string(ownerRaw), string(lanesRaw))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Without --lanes, why defaults to the live loop's lane set (lane-1, express-1).
+	// Ordinary items only take ordinary lanes, so second and third are no-lane behind lane-1.
+	code, out := invoke(t, "why", "--store", path, "--policy", ref, "--json")
+	if code != 0 {
+		t.Fatalf("why json: %d %s", code, out)
+	}
+	var answer drain.WhyAnswer
+	if err := json.Unmarshal(out, &answer); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(answer.Lanes, []string{"lane-1", "express-1"}) || answer.LanesSource != "live loop" {
+		t.Fatalf("lanes=%v source=%q, want [lane-1 express-1] live loop", answer.Lanes, answer.LanesSource)
+	}
+	if answer.Summary.LanesOffered != 2 || answer.Rows[0].Reason != drain.ReasonReady || answer.Rows[1].Reason != drain.ReasonNoLane {
+		t.Fatalf("unexpected plan with live loop lanes: summary=%+v rows=%+v", answer.Summary, answer.Rows)
+	}
+
+	// Text output also states which lane set was used.
+	code, out = invoke(t, "why", "--store", path, "--policy", ref)
+	if code != 0 {
+		t.Fatalf("why text: %d %s", code, out)
+	}
+	if !strings.Contains(string(out), "lanes (live loop): lane-1, express-1\n") {
+		t.Fatalf("text output did not name live loop lane set:\n%s", out)
+	}
+
+	// Explicit --lanes overrides the live loop's lane set and says so.
+	code, out = invoke(t, "why", "--store", path, "--policy", ref, "--lanes", "lane-1,lane-2")
+	if code != 0 {
+		t.Fatalf("why --lanes: %d %s", code, out)
+	}
+	if !strings.Contains(string(out), "lanes (flag): lane-1, lane-2\n") {
+		t.Fatalf("text output did not name flag lane set:\n%s", out)
+	}
+
+	// Once the loop session ends, why falls back to all store lanes.
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE drain_sessions SET ended_at = ? WHERE session_id = 'live-1'`, time.Now().UnixMilli())
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	code, out = invoke(t, "why", "--store", path, "--policy", ref, "--json")
+	if code != 0 {
+		t.Fatalf("why after end: %d %s", code, out)
+	}
+	if err := json.Unmarshal(out, &answer); err != nil {
+		t.Fatal(err)
+	}
+	if answer.LanesSource != "store" || answer.Summary.LanesOffered != 4 {
+		t.Fatalf("after loop ended: source=%q offered=%d, want store / 4", answer.LanesSource, answer.Summary.LanesOffered)
+	}
+}
+
+func TestWhyReusesFreshSavedQuestionsIndex(t *testing.T) {
+	root := fixtureRepo(t, "docs/design/open.md")
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", root}, args...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-b", "main")
+	git("config", "user.name", "Test")
+	git("config", "user.email", "test@example.com")
+	git("add", ".")
+	git("commit", "-m", "initial")
+	sha1 := git("rev-parse", "main")
+
+	path := fixture(t, itemRecordWithDoc("question", "in-queue", "docs/design/open.md"))
+	ref := policy(t, "true")
+
+	// Save a valid question index for sha1, as the loop does.
+	rawIndex := []byte(`{"index":{"documents":[{"path":"docs/design/open.md","questions":[{"id":"OQ-1","state":"open"}]}]}}`)
+	if err := drain.SaveQuestionsIndex(root, sha1, nil, rawIndex); err != nil {
+		t.Fatalf("SaveQuestionsIndex: %v", err)
+	}
+
+	// Without --questions-cmd or --questions-index, why reuses the saved index when main == sha1.
+	code, out := invoke(t, "why", "--store", path, "--root", root, "--policy", ref, "--lanes", "lane-1", "--json")
+	if code != 0 {
+		t.Fatalf("why with fresh saved index: %d %s", code, out)
+	}
+	var answer drain.WhyAnswer
+	if err := json.Unmarshal(out, &answer); err != nil {
+		t.Fatal(err)
+	}
+	if len(answer.Rows) != 1 || answer.Rows[0].Reason != drain.ReasonQuestionOpen || answer.Rows[0].Mover != "owner; answer docs/design/open.md#OQ-1" {
+		t.Fatalf("did not reuse fresh saved index: %+v", answer.Rows)
+	}
+
+	// Explicit --questions-cmd overrides the saved index.
+	emptyCmd := indexStub(t)
+	code, out = invoke(t, "why", "--store", path, "--root", root, "--policy", ref, "--lanes", "lane-1", "--questions-cmd", emptyCmd, "--json")
+	if code != 0 {
+		t.Fatalf("why with explicit --questions-cmd: %d %s", code, out)
+	}
+	if err := json.Unmarshal(out, &answer); err != nil {
+		t.Fatal(err)
+	}
+	if answer.Rows[0].Reason != drain.ReasonReady {
+		t.Fatalf("explicit --questions-cmd did not override saved index: %+v", answer.Rows)
+	}
+
+	// Advancing main makes the sha1 saved index stale, so LoadSavedQuestionsIndex rejects it.
+	if err := os.WriteFile(filepath.Join(root, "docs/design/open.md"), []byte("# updated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", ".")
+	git("commit", "-m", "advance trunk")
+	sha2 := git("rev-parse", "main")
+	if _, ok := drain.LoadSavedQuestionsIndex(root, sha2, nil, false); ok {
+		t.Fatal("stale saved index was accepted for advanced trunk")
 	}
 }

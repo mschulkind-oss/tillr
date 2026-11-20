@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -24,7 +25,7 @@ func whyFace(args []string) int {
 	fs := newFlagSet("why")
 	path := fs.String("store", "", "the store to read (required)")
 	policyRef := fs.String("policy", "", "the loop's policy file; absent means no-policy, not a guessed backend")
-	lanesArg := fs.String("lanes", "", "lanes offered by the loop: a comma-separated list, or a count N as the loop's --lanes takes it (lane-1..lane-N plus the configured express lanes); default: all store lanes")
+	lanesArg := fs.String("lanes", "", "lanes offered by the loop: a comma-separated list, or a count N as the loop's --lanes takes it (lane-1..lane-N plus the configured express lanes); default: the running loop's lanes when a loop is live for the root, otherwise all store lanes")
 	root := fs.String("root", ".", questionsRootHelp)
 	questionsCmd := fs.String("questions-cmd", "", questionsCmdHelp)
 	questionsIndex := fs.String("questions-index", "", "an index document `vantage-check index --format json` already produced, read instead of running the index command; `-` reads it from stdin (the observatory hands one cached walk to every planner it asks)")
@@ -62,8 +63,10 @@ func whyFace(args []string) int {
 	if tick.Now == "" {
 		tick.Now = time.Now().UTC().Format(time.RFC3339)
 	}
+	lanesSource := ""
 	if *lanesArg != "" {
 		tick.AvailableLanes = whyLanes(*lanesArg, repositorySettings.Lanes.Express)
+		lanesSource = "flag"
 	}
 	ctx := context.Background()
 	s, err := store.OpenRead(ctx, *path)
@@ -86,11 +89,32 @@ func whyFace(args []string) int {
 			return fail(drain.Usagef("reading --questions-index %s: %v", *questionsIndex, err))
 		}
 		questions = vantage.Preloaded(*root, vantage.ParseIndex(raw, "--questions-index "+*questionsIndex))
+	} else if *questionsCmd == "" {
+		if sha, ok := revParseTrunk(ctx, *root); ok {
+			if preloaded, ok := drain.LoadSavedQuestionsIndex(*root, sha, nil, false); ok {
+				questions = preloaded
+			}
+		}
 	}
 	var answer drain.WhyAnswer
 	var costs bytes.Buffer
 	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		if tick.AvailableLanes == nil {
+			liveLanes, ok, err := drain.LiveLoopLanes(r, *path, time.Now().UTC())
+			if err != nil {
+				return err
+			}
+			if ok {
+				tick.AvailableLanes = &liveLanes
+				lanesSource = "live loop"
+			} else {
+				lanesSource = "store"
+			}
+		}
 		answer, err = drain.Why(r, tick, policy, questions)
+		if err == nil {
+			answer.LanesSource = lanesSource
+		}
 		if err == nil && !*asJSON && itemID == "" {
 			err = landedCosts(r, &costs)
 		}
@@ -110,6 +134,7 @@ func whyFace(args []string) int {
 					return fail(drain.Externalf("writing why: %v", err))
 				}
 				if !*asJSON {
+					fmt.Println(formatWhyLanes(answer.Lanes, answer.LanesSource))
 					fmt.Println(answer.Summary.String())
 				}
 				return record.ExitOK
@@ -130,6 +155,9 @@ func whyFace(args []string) int {
 			if _, err = fmt.Fprintf(os.Stdout, "%s\t%s\t%s\t%s\t%s\n", whyPlace(row.Place), row.ItemID, row.Position, row.Reason, row.Mover); err != nil {
 				break
 			}
+		}
+		if err == nil {
+			_, err = fmt.Fprintln(os.Stdout, formatWhyLanes(answer.Lanes, answer.LanesSource))
 		}
 		if err == nil {
 			_, err = fmt.Fprintln(os.Stdout, answer.Summary.String())
@@ -155,4 +183,25 @@ func whyLanes(arg string, express int64) *[]string {
 	}
 	lanes := strings.Split(arg, ",")
 	return &lanes
+}
+
+func formatWhyLanes(lanes []string, source string) string {
+	label := "lanes"
+	if source != "" {
+		label = fmt.Sprintf("lanes (%s)", source)
+	}
+	if len(lanes) == 0 {
+		return label + ": none"
+	}
+	return label + ": " + strings.Join(lanes, ", ")
+}
+
+func revParseTrunk(ctx context.Context, root string) (string, bool) {
+	cmd := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "--verify", drain.TrunkRef)
+	out, err := cmd.Output()
+	if err != nil {
+		return "", false
+	}
+	sha := strings.TrimSpace(string(out))
+	return sha, sha != ""
 }

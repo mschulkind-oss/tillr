@@ -85,12 +85,16 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 	if err != nil {
 		return err
 	}
+	lanesRaw, err := json.Marshal(l.cfg.Lanes)
+	if err != nil {
+		return err
+	}
 	stopFlag := 0
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
-		if _, err := tx.Exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at, loop_owner)
-   VALUES (?, ?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET
-   refreshed_at = excluded.refreshed_at, next_pass_at = excluded.next_pass_at`,
-			l.sessionID, l.sessionStarted, at.UnixMilli(), next.UnixMilli(), string(raw)); err != nil {
+		if _, err := tx.Exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at, loop_owner, lanes)
+   VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET
+   refreshed_at = excluded.refreshed_at, next_pass_at = excluded.next_pass_at, lanes = excluded.lanes`,
+			l.sessionID, l.sessionStarted, at.UnixMilli(), next.UnixMilli(), string(raw), string(lanesRaw)); err != nil {
 			return err
 		}
 		return tx.QueryRow(`SELECT COALESCE(stop_requested, 0) FROM drain_sessions WHERE session_id = ?`, l.sessionID).Scan(&stopFlag)
