@@ -3,6 +3,7 @@ package main
 import (
 	"path/filepath"
 
+	"github.com/mschulkind-oss/tillr-drain/presence"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -15,6 +16,10 @@ type laneNode struct {
 
 // rowid preserves the order the drain recorded, not lexical node-id order.
 func laneNodes(r *store.Reader, itemID string) ([]laneNode, error) {
+	return laneNodesIn(r, itemID, "")
+}
+
+func laneNodesIn(r *store.Reader, itemID, loopDir string) ([]laneNode, error) {
 	rows, err := r.Query(`SELECT node_id, run_id, attempt, outcome FROM node_runs WHERE item_id=? ORDER BY rowid`, itemID)
 	if err != nil {
 		if isMissingTable(err) {
@@ -24,13 +29,16 @@ func laneNodes(r *store.Reader, itemID string) ([]laneNode, error) {
 	}
 	defer rows.Close()
 	nodes := []laneNode{}
+	hasRunning := false
 	for rows.Next() {
 		var n laneNode
 		if err := rows.Scan(&n.NodeID, &n.RunID, &n.Attempt, &n.State); err != nil {
 			return nil, err
 		}
 		switch n.State {
-		case "running", "skipped":
+		case "running":
+			hasRunning = true
+		case "skipped":
 		case "passed", "handled-fail":
 			n.State = "passed"
 		default:
@@ -38,13 +46,28 @@ func laneNodes(r *store.Reader, itemID string) ([]laneNode, error) {
 		}
 		nodes = append(nodes, n)
 	}
-	return nodes, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if hasRunning {
+		storePath := readerStorePath(r)
+		dead, err := presence.DeadRuns(r, storePath, defaultLoopDir(storePath, loopDir))
+		if err != nil && !isMissingTable(err) {
+			return nil, err
+		}
+		for i := range nodes {
+			if nodes[i].State == "running" && dead[nodes[i].RunID] {
+				nodes[i].State = "failed"
+			}
+		}
+	}
+	return nodes, nil
 }
 
 func enrichLaneNodes(r *store.Reader, rows []laneRow, loop string, stats *laneReadStats) error {
 	for i := range rows {
 		row := &rows[i]
-		nodes, err := laneNodes(r, row.ItemID)
+		nodes, err := laneNodesIn(r, row.ItemID, loop)
 		if err != nil {
 			return err
 		}

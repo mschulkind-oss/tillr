@@ -314,7 +314,7 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 	if err != nil && !isMissingTable(err) {
 		return nil, err
 	}
-	lanes, err := readLanes(r)
+	lanes, err := readLanesIn(r, waitingLoopDir(storePath, ""))
 	if err != nil && !isMissingTable(err) {
 		return nil, err
 	}

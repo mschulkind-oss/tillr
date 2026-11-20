@@ -58,6 +58,11 @@ func (l *Loop) reapParallel(ctx context.Context, tx *store.Tx, work *pendingWork
 		if _, err := run.ReleaseLaneInTx(ctx, tx, d.LaneID, "read-only group owner died", l.cfg.Now()); err != nil {
 			return true, err
 		}
+		for _, node := range parallelNodes(d) {
+			if _, err := tx.Exec(`UPDATE node_runs SET outcome = 'interrupted' WHERE run_id = ? AND outcome = 'running'`, node.RunRequest.RunID); err != nil {
+				return true, err
+			}
+		}
 		return true, appendEffect(tx, loopOrphanedKind, d.RunRequest.RunID, struct{}{}, l.cfg.Now())
 	}
 	return true, nil

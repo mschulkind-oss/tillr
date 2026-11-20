@@ -106,7 +106,7 @@ func TestARelaunchedJailsEndedRunIsRecoveredByTheNewLoop(t *testing.T) {
 	recordSession(t, f, owner, true)
 	runStreams(t, f, p.decision.RunRequest.RunID)
 	next := f.loop(t, streamSteps{&recordingSteps{}, f.root}, &itemContentStager{})
-	if d := mustPlan(t, next)[0].decision; d.Action != ActionSettle {
+	if d := mustPlan(t, next)[0].decision; d.Action != ActionDispatch || !strings.Contains(d.Reason, "orphaned by a loop stop") {
 		t.Fatalf("a run whose loop ended and whose face holds nothing open was kept: %+v", d)
 	}
 	if holder := laneHolder(t, f, p.decision.LaneID); holder != "" {
@@ -122,7 +122,7 @@ func TestARelaunchedJailsUnstartedRunIsRecoveredByTheNewLoop(t *testing.T) {
 	owner := relaunchedJailClaim(t, f, l, p)
 	recordSession(t, f, owner, true)
 	next := f.loop(t, streamSteps{&recordingSteps{}, f.root}, &itemContentStager{})
-	if d := mustPlan(t, next)[0].decision; d.Action != ActionSettle {
+	if d := mustPlan(t, next)[0].decision; d.Action != ActionDispatch || !strings.Contains(d.Reason, "orphaned by a loop stop") {
 		t.Fatalf("an unstarted run of an ended loop was kept: %+v", d)
 	}
 }
@@ -185,7 +185,7 @@ func TestARelaunchedJailsKilledLoopIsJudgedByItsPresenceFile(t *testing.T) {
 	if err := presence.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if d := mustPlan(t, next)[0].decision; d.Action != ActionSettle {
+	if d := mustPlan(t, next)[0].decision; d.Action != ActionDispatch || !strings.Contains(d.Reason, "orphaned by a loop stop") {
 		t.Fatalf("a claim of a loop whose presence file nothing holds was kept: %+v", d)
 	}
 }
@@ -300,5 +300,271 @@ func TestALoopHoldsItsPresenceFileOnceItsSessionOpens(t *testing.T) {
 	}
 	if state, err := openForWriting(loopPresencePath(identity, *owner)); err != nil || state != streamWritten {
 		t.Fatalf("presence file of a loop with an open session: %v %v", state, err)
+	}
+}
+
+func TestSingleWorkerFirstPassRecoveryPreservesDirtyAndCleanCommittedWork(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		commit bool
+		reboot bool
+	}{
+		{name: "dirty-relaunch", commit: false, reboot: false},
+		{name: "clean-committed-relaunch", commit: true, reboot: false},
+		{name: "clean-committed-reboot", commit: true, reboot: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, l := passFixture(t, "item-a")
+			p := mustPlan(t, l)[0]
+			owner := relaunchedJailClaim(t, f, l, p)
+			if tc.reboot {
+				owner.Domain = "prior-boot-id:pid:[1]"
+				fixtureWrite(t, f, func(tx *store.Tx) error {
+					works, err := readPending(tx.Reader())
+					if err != nil {
+						return err
+					}
+					w := works["item-a"]
+					w.Owner = &owner
+					return appendEffect(tx, dispatchStartedKind, p.decision.RunRequest.RunID, w, l.cfg.Now())
+				})
+			} else {
+				recordSession(t, f, owner, true)
+			}
+			wt := l.laneTarget(p.decision.LaneID)
+			if err := os.MkdirAll(filepath.Join(wt, "tools/item-a"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeForkFile(t, filepath.Join(wt, "tools/item-a/work.txt"), "progress\n")
+			if tc.commit {
+				runGit(t, wt, "add", ".")
+				runGit(t, wt, "commit", "-qm", "worker commit")
+			}
+
+			var steps Steps = streamSteps{&recordingSteps{}, f.root}
+			if tc.reboot {
+				// Even with no stream locator, !SameBoot proves the old run is gone.
+				steps = &recordingSteps{}
+			}
+			next := f.loop(t, steps, &itemContentStager{})
+			d := mustPlan(t, next)[0].decision
+			if d.Action != ActionDispatch || !strings.Contains(d.Reason, "orphaned by a loop stop") {
+				t.Fatalf("expected Pass 1 dispatch after recovery, got: %+v", d)
+			}
+			if holder := laneHolder(t, f, p.decision.LaneID); holder != "" {
+				t.Fatalf("lane %s still leased to %s", p.decision.LaneID, holder)
+			}
+			ref := preservedPrefix + p.decision.RunRequest.RunID
+			if out := runGit(t, f.root, "for-each-ref", "--format=%(refname)", ref); strings.TrimSpace(out) != ref {
+				t.Fatalf("preserved ref %s missing: %q", ref, out)
+			}
+			s := openFixture(t, f.storePath)
+			defer s.Close()
+			if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+				rec, err := terminalRecord(r, p.decision.RunRequest.RunID)
+				if err != nil {
+					return err
+				}
+				if rec == nil || rec.State != run.StateTimedOut || rec.EndCause != run.EndLeaseReclaimed {
+					t.Fatalf("expected timed-out/lease-reclaimed record, got: %+v", rec)
+				}
+				saved, err := ReadPreservedWork(r)
+				if err != nil {
+					return err
+				}
+				if len(saved) == 0 || saved[0].RunID != p.decision.RunRequest.RunID {
+					t.Fatalf("preserved work event missing: %+v", saved)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestResumedSingleWorkerRunKilledByRelaunchRecoversInPass1(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	p := mustPlan(t, l)[0]
+	owner := relaunchedJailClaim(t, f, l, p)
+	recordSession(t, f, owner, true)
+	req := p.decision.RunRequest
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		// Prior segment paused, then resumed by the same dead owner.
+		rec := run.Record{
+			RunID:        req.RunID,
+			ItemID:       req.ItemID,
+			LaneID:       p.decision.LaneID,
+			Backend:      req.Backend,
+			State:        run.StatePaused,
+			StartedAt:    l.cfg.Now().Format("2006-01-02T15:04:05Z07:00"),
+			FinishedAt:   l.cfg.Now().Format("2006-01-02T15:04:05Z07:00"),
+			ArtifactRefs: []run.ArtifactRef{},
+		}
+		if err := applyTerminal(tx, rec); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = ?, leased_until = NULL WHERE lane_id = ?`, run.LaneStateLeased, req.RunID, p.decision.LaneID); err != nil {
+			return err
+		}
+		body, _ := json.Marshal(map[string]any{
+			"run_id":     req.RunID,
+			"item_id":    req.ItemID,
+			"lane_id":    p.decision.LaneID,
+			"backend":    req.Backend,
+			"session_id": "33b5f2d2-0cd4-4a49-b293-c58f5635561f",
+			"resumed_at": l.cfg.Now().Format("2006-01-02T15:04:05Z07:00"),
+		})
+		return appendEffect(tx, run.ResumeKind, req.RunID, json.RawMessage(body), l.cfg.Now())
+	})
+	next := f.loop(t, streamSteps{&recordingSteps{}, f.root}, &itemContentStager{})
+	d := mustPlan(t, next)[0].decision
+	if d.Action != ActionDispatch || !strings.Contains(d.Reason, "orphaned by a loop stop") {
+		t.Fatalf("resumed single-worker run not recovered in Pass 1: %+v", d)
+	}
+	s := openFixture(t, f.storePath)
+	defer s.Close()
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		active, err := runHasActiveResume(r, req.RunID)
+		if err != nil {
+			return err
+		}
+		if active {
+			t.Fatal("runHasActiveResume still true after reap")
+		}
+		rec, err := terminalRecord(r, req.RunID)
+		if err != nil {
+			return err
+		}
+		if rec == nil || rec.State != run.StateTimedOut || rec.EndCause != run.EndLeaseReclaimed || !rec.Resumed {
+			t.Fatalf("resumed run record not closed as timed-out/lease-reclaimed: %+v", rec)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResumedWorkflowNodeKilledByRelaunchMarksInterruptedAndPreservesCommit(t *testing.T) {
+	f, l, steps := restartGraphFixture(t)
+	result := &LoopResult{}
+	// Complete node one (dispatch + settle).
+	graphPass(t, l, result)
+	graphPass(t, l, result)
+	if len(steps.runs) != 1 {
+		t.Fatalf("expected 1 completed node, got %+v", steps.runs)
+	}
+	// Plan node two and claim it under a foreign-domain dead owner.
+	plans := mustPlan(t, l)
+	var p plannedApplication
+	for _, cand := range plans {
+		if cand.decision.ItemID == "item-a" && cand.decision.Action == ActionDispatch {
+			p = cand
+			break
+		}
+	}
+	if p.decision.RunRequest == nil {
+		t.Fatalf("expected node two dispatch for item-a, got %+v", plans)
+	}
+	owner := relaunchedJailClaim(t, f, l, p)
+	recordSession(t, f, owner, true)
+	req := p.decision.RunRequest
+	// Commit clean work on node two's branch, pause + resume under the dead owner.
+	if err := os.MkdirAll(RunDir(f.root, req.RunID), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(RunDir(f.root, req.RunID), BaseSHAFile), p.decision.NodeBaseSHA+"\n")
+	wt := l.laneTarget(p.decision.LaneID)
+	writeForkFile(t, filepath.Join(wt, "tools/item-a/node2.txt"), "node2 committed\n")
+	runGit(t, wt, "add", ".")
+	runGit(t, wt, "commit", "-qm", "node2 commit")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		rec := run.Record{
+			RunID:        req.RunID,
+			ItemID:       req.ItemID,
+			LaneID:       p.decision.LaneID,
+			Backend:      req.Backend,
+			State:        run.StatePaused,
+			StartedAt:    l.cfg.Now().Format("2006-01-02T15:04:05Z07:00"),
+			FinishedAt:   l.cfg.Now().Format("2006-01-02T15:04:05Z07:00"),
+			ArtifactRefs: []run.ArtifactRef{},
+		}
+		if err := applyTerminal(tx, rec); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`UPDATE lanes SET state = ?, run_id = ?, leased_until = NULL WHERE lane_id = ?`, run.LaneStateLeased, req.RunID, p.decision.LaneID); err != nil {
+			return err
+		}
+		body, _ := json.Marshal(map[string]any{
+			"run_id":     req.RunID,
+			"item_id":    req.ItemID,
+			"lane_id":    p.decision.LaneID,
+			"backend":    req.Backend,
+			"session_id": "33b5f2d2-0cd4-4a49-b293-c58f5635561f",
+			"resumed_at": l.cfg.Now().Format("2006-01-02T15:04:05Z07:00"),
+		})
+		return appendEffect(tx, run.ResumeKind, req.RunID, json.RawMessage(body), l.cfg.Now())
+	})
+
+	next := replaceGraphLoop(t, f, l, streamSteps{&recordingSteps{}, f.root})
+	d := mustPlan(t, next)[0].decision
+	if d.Action != ActionDispatch || !d.WorkflowRestart {
+		t.Fatalf("expected workflow restart dispatch in Pass 1, got: %+v", d)
+	}
+	s := openFixture(t, f.storePath)
+	defer s.Close()
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		var outcome string
+		if err := r.QueryRow(`SELECT outcome FROM node_runs WHERE run_id = ?`, req.RunID).Scan(&outcome); err != nil {
+			return err
+		}
+		if outcome != "interrupted" {
+			t.Fatalf("node_runs.outcome = %q, want interrupted", outcome)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Run pass on next so stageDispatches preserves node two's clean committed work and starts it.
+	if _, err := next.pass(context.Background(), result); err != nil {
+		t.Fatal(err)
+	}
+	ref := preservedPrefix + req.RunID
+	if out := runGit(t, f.root, "for-each-ref", "--format=%(refname)", ref); strings.TrimSpace(out) != ref {
+		t.Fatalf("preserved ref %s missing for clean committed workflow node: %q", ref, out)
+	}
+}
+
+func TestEndedSessionOwnersHandlesInPlaceRestartSessions(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	owner, err := currentLoopOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(*owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at, loop_owner, ended_at) VALUES('pre-exec', 10, 10, 10, ?, NULL)`, string(raw)); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at, loop_owner, ended_at) VALUES('post-exec', 20, 20, 20, ?, 30)`, string(raw))
+		return err
+	})
+	_ = l
+	s := openFixture(t, f.storePath)
+	defer s.Close()
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		ended, err := endedSessionOwners(r)
+		if err != nil {
+			return err
+		}
+		if !ended[*owner] {
+			t.Fatalf("endedSessionOwners[%+v] = false, want true when latest session ended", *owner)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

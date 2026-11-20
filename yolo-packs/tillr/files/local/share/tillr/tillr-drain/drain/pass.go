@@ -221,8 +221,16 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 			if segment.Backend != req.Backend {
 				continue
 			}
+			resumingOwner := work.Examiner
+			if resumingOwner == nil {
+				resumingOwner = work.Owner
+			}
+			if work.Done {
+				// Standalone resume after examination settled stays unowned.
+				resumingOwner = nil
+			}
 			work.Done, work.Orphaned, work.Examining = false, false, false
-			work.Owner, work.Candidate, work.DirtyHold, work.RepairHold, work.GateStall = nil, nil, nil, nil, nil
+			work.Owner, work.Examiner, work.Candidate, work.DirtyHold, work.RepairHold, work.GateStall = resumingOwner, nil, nil, nil, nil, nil
 		case examinationClaimedKind:
 			if work := byRun[*e.ObjectID]; work != nil {
 				if err := json.Unmarshal(e.Payload, &work.Owner); err != nil {
@@ -896,6 +904,7 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 	}
 	defer s.Close()
 	nextGeneration := *generation
+	var reapedSingle []*pendingWork
 	// The process-table evidence is gathered with no transaction open. The run-start
 	// lock spans it and the write, so no run face starts between the scan and the reap.
 	if err := withRunStartLock(ctx, l.cfg.Store, func() error {
@@ -908,7 +917,7 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 				l.reportf("%s", line)
 			}
 		}()
-		return s.WriteTx(ctx, func(tx *store.Tx) error {
+		err = s.WriteTx(ctx, func(tx *store.Tx) error {
 			var before, after int64
 			if err := tx.QueryRow("SELECT COALESCE(MAX(seq), 0) FROM events").Scan(&before); err != nil {
 				return err
@@ -928,10 +937,64 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 			}
 			return err
 		})
+		if err == nil && ev.reapedSingle != nil {
+			reapedSingle = *ev.reapedSingle
+		}
+		return err
 	}); err != nil {
 		return nil, nil, err
 	}
 	*generation = nextGeneration
+	for _, work := range reapedSingle {
+		d := work.Decision
+		id := d.RunRequest.RunID
+		_ = pipelineCloseGraph(l.cfg.Root, id)
+		if err := RecordBackendOutcomes(ctx, l.cfg.Store); err != nil {
+			return nil, nil, err
+		}
+		var rec *run.Record
+		if err := s.ReadTx(ctx, func(r *store.Reader) error {
+			var readErr error
+			rec, readErr = terminalRecord(r, id)
+			return readErr
+		}); err != nil {
+			return nil, nil, err
+		}
+		if rec != nil {
+			if err := l.recordSettlementSpend(ctx, nextGeneration, work.LoopID, *rec); err != nil {
+				return nil, nil, err
+			}
+		}
+		if !l.nonLanding {
+			base := work.BaseSHA
+			if base == "" {
+				base = l.laneBase(d.LaneID)
+			}
+			if err := l.preserveWorkFromBase(ctx, d.LaneID, id, base, "orphaned by a loop stop"); err != nil {
+				l.retainUnpreserved(ctx, d.LaneID, id, l.headOf(ctx, d.LaneID), err)
+				continue
+			}
+			if head := l.headOf(ctx, d.LaneID); head != "" {
+				l.pinQuietly(ctx, id, head)
+			}
+			if err := l.resetLane(ctx, d.LaneID); err != nil {
+				return nil, nil, err
+			}
+		}
+		if err := l.markExamined(ctx, d); err != nil {
+			return nil, nil, err
+		}
+		if d.BlockConflict != nil {
+			if rec != nil {
+				if err := l.recordDesigner(ctx, d, *rec); err != nil {
+					return nil, nil, err
+				}
+			}
+			if err := l.settleUnansweredDesignRuns(ctx); err != nil {
+				return nil, nil, err
+			}
+		}
+	}
 	if err := l.releaseIdleHeldCandidates(ctx); err != nil {
 		return nil, nil, err
 	}
@@ -2414,7 +2477,11 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 					}
 				}
 				if err == nil {
-					err = l.preserveWork(ctx, d.LaneID, d.RunRequest.RunID, "orphaned workflow released")
+					base := d.NodeBaseSHA
+					if base == "" {
+						base = work.BaseSHA
+					}
+					err = l.preserveWorkFromBase(ctx, d.LaneID, d.RunRequest.RunID, base, "orphaned workflow released")
 					if err == nil {
 						err = l.resetLane(ctx, d.LaneID)
 					}

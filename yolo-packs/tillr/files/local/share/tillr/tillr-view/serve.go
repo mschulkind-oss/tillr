@@ -906,7 +906,7 @@ func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiF
 	if err != nil {
 		return nil, unreadable(err)
 	}
-	laneRows, err := readLanes(r)
+	laneRows, err := readLanesIn(r, s.loopDir())
 	if err != nil {
 		laneRows = nil
 	}
@@ -1493,7 +1493,7 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 	if err != nil && !isMissingTable(err) {
 		return nil, unreadable(err)
 	}
-	lanes, err := readLanes(r)
+	lanes, err := readLanesIn(r, s.loopDir())
 	if err != nil && !isMissingTable(err) {
 		return nil, unreadable(err)
 	}
@@ -1531,7 +1531,7 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 	if err != nil {
 		return nil, unreadable(err)
 	}
-	out.GraphAttempts, err = readItemGraph(r, id, graph, itemRuns, children)
+	out.GraphAttempts, err = readItemGraphIn(r, id, graph, itemRuns, children, s.loopDir())
 	if err != nil {
 		return nil, unreadable(err)
 	}
@@ -1616,7 +1616,7 @@ type completenessView struct {
 // runPayload is `GET /api/v1/runs/:id`.
 func (s *server) runPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
 	id := req.PathValue("id")
-	run, found, err := readRunOrLive(r, id)
+	run, found, err := readRunOrLiveIn(r, id, s.loopDir())
 	if err != nil {
 		return nil, unreadable(err)
 	}
@@ -1997,7 +1997,7 @@ func (s *server) readGateSpansFile(runID string) ([]gateSkipView, map[string]any
 // transcript does not grow with the run's log.
 func (s *server) transcriptPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
 	id := req.PathValue("id")
-	run, found, err := readRunOrLive(r, id)
+	run, found, err := readRunOrLiveIn(r, id, s.loopDir())
 	if err != nil {
 		return nil, unreadable(err)
 	}
@@ -2026,7 +2026,7 @@ type transcriptEntryData struct {
 // is the page's own, so a click on `seq` answers that entry and not a re-scan of the log.
 func (s *server) transcriptEntryPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
 	id := req.PathValue("id")
-	run, found, err := readRunOrLive(r, id)
+	run, found, err := readRunOrLiveIn(r, id, s.loopDir())
 	if err != nil {
 		return nil, unreadable(err)
 	}
@@ -2115,4 +2115,12 @@ func (s *server) artifactPayload(r *store.Reader, req *http.Request) (any, *apiF
 		}
 	}
 	return artifactData{Run: id, Artifact: s.obs.readRunArtifact(id, kind, run, true)}, nil
+}
+
+// loopDir is the loop's record directory, or "" when the server has none.
+func (s *server) loopDir() string {
+	if s == nil || s.obs == nil {
+		return ""
+	}
+	return s.obs.loopDir
 }

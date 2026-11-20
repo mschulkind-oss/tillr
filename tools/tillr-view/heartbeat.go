@@ -2,8 +2,10 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/presence"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -25,9 +27,16 @@ type loopSession struct {
 func readLoopSession(r *store.Reader, now time.Time) (*loopSession, bool, string, error) {
 	var session loopSession
 	var ended sql.NullInt64
-	err := r.QueryRow(`SELECT session_id, started_at, refreshed_at, next_pass_at, ended_at
+	var rawOwner []byte
+	err := r.QueryRow(`SELECT session_id, started_at, refreshed_at, next_pass_at, ended_at, loop_owner
   FROM drain_sessions ORDER BY started_at DESC, rowid DESC LIMIT 1`).Scan(
-		&session.SessionID, &session.StartedAtMS, &session.RefreshedAtMS, &session.NextPassAtMS, &ended)
+		&session.SessionID, &session.StartedAtMS, &session.RefreshedAtMS, &session.NextPassAtMS, &ended, &rawOwner)
+	if isMissingColumn(err) {
+		err = r.QueryRow(`SELECT session_id, started_at, refreshed_at, next_pass_at, ended_at
+  FROM drain_sessions ORDER BY started_at DESC, rowid DESC LIMIT 1`).Scan(
+			&session.SessionID, &session.StartedAtMS, &session.RefreshedAtMS, &session.NextPassAtMS, &ended)
+		rawOwner = nil
+	}
 	if err == sql.ErrNoRows || isMissingTable(err) {
 		return nil, false, "no loop session has been recorded", nil
 	}
@@ -37,6 +46,16 @@ func readLoopSession(r *store.Reader, now time.Time) (*loopSession, bool, string
 	if ended.Valid {
 		session.EndedAtMS = &ended.Int64
 		return &session, false, "the loop session has ended", nil
+	}
+	if len(rawOwner) > 0 {
+		var owner presence.Owner
+		if json.Unmarshal(rawOwner, &owner) == nil {
+			if presence.SessionOwnerGone(r, readerStorePath(r), owner) {
+				endedAt := session.RefreshedAtMS
+				session.EndedAtMS = &endedAt
+				return &session, false, "the loop session owner is gone", nil
+			}
+		}
 	}
 	if now.UnixMilli()-session.RefreshedAtMS > 2*HeartbeatIntervalMS ||
 		(now.UnixMilli() > session.NextPassAtMS && now.UnixMilli()-session.NextPassAtMS > SessionGraceMS) {

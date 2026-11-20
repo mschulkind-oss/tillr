@@ -40,9 +40,9 @@ func TestReplacementRecoversUnboundedDeadLoopWithoutTerminalRecord(t *testing.T)
 		t.Fatal(err)
 	}
 	next := f.loop(t, &recordingSteps{}, &itemContentStager{})
-	settlement := mustPlan(t, next)[0].decision
-	if settlement.Action != ActionSettle {
-		t.Fatalf("dead unbounded run did not settle: %+v", settlement)
+	d := mustPlan(t, next)[0].decision
+	if d.Action != ActionDispatch || !strings.Contains(d.Reason, "orphaned by a loop stop") {
+		t.Fatalf("dead unbounded run did not recover and re-dispatch in Pass 1: %+v", d)
 	}
 	// The original dispatch and the replacement's reap each applied a transition.
 	// Recovering a dead owner must consume a generation even without a new dispatch.
@@ -51,13 +51,7 @@ func TestReplacementRecoversUnboundedDeadLoopWithoutTerminalRecord(t *testing.T)
 	}
 	s := openFixture(t, f.storePath)
 	defer s.Close()
-	var work *pendingWork
 	err := s.ReadTx(context.Background(), func(r *store.Reader) error {
-		works, err := readPending(r)
-		if err != nil {
-			return err
-		}
-		work = works["item-a"]
 		rec, err := terminalRecord(r, p.decision.RunRequest.RunID)
 		if err != nil {
 			return err
@@ -68,8 +62,7 @@ func TestReplacementRecoversUnboundedDeadLoopWithoutTerminalRecord(t *testing.T)
 		if rec.SpendStatus != "unreported" || !strings.Contains(rec.SpendNote, "no terminal record") {
 			t.Fatalf("reaped face has no spend reason: %+v", rec)
 		}
-		outcome := next.settle(context.Background(), work.Decision, *rec, "", work.BaseSHA, "tick", next.cfg.Now(), &LoopResult{}, &PassTiming{}, nil, true)
-		return outcome.err
+		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -85,13 +78,6 @@ func TestReplacementRecoversUnboundedDeadLoopWithoutTerminalRecord(t *testing.T)
 	if measured.RecordedSpend.Unreported != 1 || measured.RecordedSpend.CostUnreported != 1 {
 		t.Fatalf("reaped run not counted unreported: %+v", measured.RecordedSpend)
 	}
-	if err := next.releaseExamination(context.Background(), p.decision); err != nil {
-		t.Fatal(err)
-	}
-	d := mustPlan(t, next)[0].decision
-	if d.Action != ActionDispatch || !strings.Contains(d.Reason, "orphaned by a loop stop") {
-		t.Fatalf("recovered no-commit run not re-admitted: %+v", d)
-	}
 }
 
 func TestThreeDeadSupervisorsDoNotSpendAnyAttemptBudget(t *testing.T) {
@@ -103,30 +89,6 @@ func TestThreeDeadSupervisorsDoNotSpendAnyAttemptBudget(t *testing.T) {
 		}
 		deadOwnerClaim(t, f, l, p)
 		l = f.loop(t, &recordingSteps{}, &itemContentStager{})
-		if d := mustPlan(t, l)[0].decision; d.Action != ActionSettle {
-			t.Fatalf("crash recovery: %+v", d)
-		}
-		s := openFixture(t, f.storePath)
-		err := s.ReadTx(context.Background(), func(r *store.Reader) error {
-			works, err := readPending(r)
-			if err != nil {
-				return err
-			}
-			work := works["item-a"]
-			rec, err := terminalRecord(r, p.decision.RunRequest.RunID)
-			if err != nil {
-				return err
-			}
-			outcome := l.settle(context.Background(), work.Decision, *rec, "", work.BaseSHA, "tick", l.cfg.Now(), &LoopResult{}, &PassTiming{}, nil, true)
-			return outcome.err
-		})
-		s.Close()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := l.releaseExamination(context.Background(), p.decision); err != nil {
-			t.Fatal(err)
-		}
 	}
 	d := mustPlan(t, l)[0].decision
 	if d.Action != ActionDispatch || d.Attempt != 4 || d.Readmitted || d.RetryID != "" || d.Reason == ReasonFailover {

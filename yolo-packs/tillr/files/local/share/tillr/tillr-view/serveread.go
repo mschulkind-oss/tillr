@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/ownercriteria"
+	"github.com/mschulkind-oss/tillr-drain/presence"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -98,6 +100,11 @@ type storeLane struct {
 	// keeps its earlier (paused) row until it finishes: the lease is live work, not a
 	// finished run settling.
 	ResumedSeq int64
+	// DeadRunID and DeadResumedSeq preserve the lease's run identity when a leased run
+	// is proven dead before the loop reaps it, so lanes can report its outcome as
+	// "interrupted" while projecting the lane itself as idle.
+	DeadRunID      string
+	DeadResumedSeq int64
 }
 
 // storeRun is one row of runs, with the spend the run recorded. UsageTokens and CostUSD
@@ -423,8 +430,47 @@ func readEdges(r *store.Reader, itemID string) ([]storeEdge, error) {
 	return out, rows.Err()
 }
 
+func readerStorePath(r *store.Reader) string {
+	if r == nil {
+		return ""
+	}
+	rows, err := r.Query(`PRAGMA database_list`)
+	if err != nil {
+		return ""
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var seq int
+		var name, file string
+		if err := rows.Scan(&seq, &name, &file); err != nil {
+			return ""
+		}
+		if name == "main" {
+			if file == ":memory:" {
+				return ""
+			}
+			return file
+		}
+	}
+	return ""
+}
+
+func defaultLoopDir(storePath, loopDir string) string {
+	if loopDir != "" {
+		return loopDir
+	}
+	if storePath == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(storePath), "loop")
+}
+
 // readLanes answers every lane, ordered by id.
 func readLanes(r *store.Reader) ([]storeLane, error) {
+	return readLanesIn(r, "")
+}
+
+func readLanesIn(r *store.Reader, loopDir string) ([]storeLane, error) {
 	rows, err := r.Query(`SELECT lane_id, state, COALESCE(run_id, ''), leased_until FROM lanes ORDER BY lane_id`)
 	if err != nil {
 		return nil, err
@@ -447,8 +493,13 @@ func readLanes(r *store.Reader) ([]storeLane, error) {
 		return nil, err
 	}
 	rows.Close()
+	hasLeased := false
 	for i := range out {
-		if out[i].State != laneStateLeased || out[i].RunID == "" {
+		if out[i].State != laneStateLeased {
+			continue
+		}
+		hasLeased = true
+		if out[i].RunID == "" {
 			continue
 		}
 		if err := r.QueryRow(`SELECT COALESCE(MAX(seq), 0) FROM events WHERE kind = ? AND object_type = 'run' AND object_id = ?`, resumeKind, out[i].RunID).Scan(&out[i].ResumedSeq); err != nil && !isMissingTable(err) {
@@ -480,6 +531,40 @@ func readLanes(r *store.Reader) ([]storeLane, error) {
 			return nil, err
 		}
 	}
+	if hasLeased {
+		storePath := readerStorePath(r)
+		dead, err := presence.DeadRuns(r, storePath, defaultLoopDir(storePath, loopDir))
+		if err != nil && !isMissingTable(err) {
+			return nil, err
+		}
+		for i := range out {
+			if out[i].State != laneStateLeased {
+				continue
+			}
+			if len(out[i].ActiveNodes) > 0 {
+				kept := out[i].ActiveNodes[:0]
+				for _, id := range out[i].ActiveNodes {
+					if !dead[id] {
+						kept = append(kept, id)
+					}
+				}
+				if len(kept) == 0 {
+					out[i].ActiveNodes = nil
+				} else {
+					out[i].ActiveNodes = kept
+				}
+			}
+			if dead[out[i].RunID] && len(out[i].ActiveNodes) == 0 {
+				out[i].DeadRunID = out[i].RunID
+				out[i].DeadResumedSeq = out[i].ResumedSeq
+				out[i].State = "idle"
+				out[i].RunID = ""
+				out[i].LeasedUntilMS = nil
+				out[i].ResumedSeq = 0
+				out[i].ActiveNodes = nil
+			}
+		}
+	}
 	return out, nil
 }
 
@@ -508,6 +593,10 @@ func readRuns(r *store.Reader) ([]storeRun, error) {
 // snapshot's own (`liveRuns`), so the two answers agree rather than being two readings of a
 // lease.
 func readRunOrLive(r *store.Reader, runID string) (storeRun, bool, error) {
+	return readRunOrLiveIn(r, runID, "")
+}
+
+func readRunOrLiveIn(r *store.Reader, runID, loopDir string) (storeRun, bool, error) {
 	run, found, err := readRun(r, runID)
 	if err != nil || found {
 		return run, found, err
@@ -516,7 +605,7 @@ func readRunOrLive(r *store.Reader, runID string) (storeRun, bool, error) {
 	if childErr != nil || childFound {
 		return child, childFound, childErr
 	}
-	lanes, err := readLanes(r)
+	lanes, err := readLanesIn(r, loopDir)
 	if err != nil {
 		return storeRun{}, false, nil
 	}

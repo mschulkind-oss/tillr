@@ -4,103 +4,34 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/presence"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
 // LoopOwner identifies one OS process without mistaking a reused PID for it.
 // Domain binds the evidence to the boot and PID namespace where it was observed.
-type LoopOwner struct {
-	PID    int    `json:"pid"`
-	Start  string `json:"start"`
-	Domain string `json:"domain"`
-	UID    uint32 `json:"uid"`
-}
+type LoopOwner = presence.Owner
 
-func processStart(pid int) (string, error) {
-	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
-		return "", err
-	}
-	end := strings.LastIndexByte(string(raw), ')')
-	if end < 0 {
-		return "", fmt.Errorf("process %d has malformed stat", pid)
-	}
-	fields := strings.Fields(string(raw[end+1:]))
-	if len(fields) < 20 {
-		return "", fmt.Errorf("process %d stat has no start time", pid)
-	}
-	if fields[0] == "Z" {
-		return "", nil
-	}
-	return fields[19], nil
-}
-
-// processOwner is this process's identity, read from /proc once: the boot, PID
-// namespace, PID, start time and user never change for a running process.
-var processOwner = sync.OnceValues(readLoopOwner)
-
-// currentLoopOwner answers a copy of this process's identity. Only the first call
-// reads /proc, and NewLoop makes that call before any transaction, so no write
-// transaction pays for it.
-func currentLoopOwner() (*LoopOwner, error) {
-	owner, err := processOwner()
-	if err != nil {
-		return nil, err
-	}
-	copy := *owner
-	return &copy, nil
-}
-
-// ownerReads counts /proc identity reads, so a test can pin that claims and reaps
-// inside a write transaction never make one.
-var ownerReads atomic.Int64
-
-func readLoopOwner() (*LoopOwner, error) {
-	ownerReads.Add(1)
-	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
-	if err != nil {
-		return nil, fmt.Errorf("identifying loop boot: %w", err)
-	}
-	ns, err := os.Readlink("/proc/self/ns/pid")
-	if err != nil {
-		return nil, fmt.Errorf("identifying loop PID namespace: %w", err)
-	}
-	start, err := processStart(os.Getpid())
-	if err != nil {
-		return nil, err
-	}
-	return &LoopOwner{PID: os.Getpid(), Start: start, Domain: strings.TrimSpace(string(boot)) + ":" + ns, UID: uint32(os.Geteuid())}, nil
-}
-
-func processGone(err error) bool {
-	return os.IsNotExist(err) || errors.Is(err, syscall.ESRCH)
-}
-
-func ownerDead(owner, here *LoopOwner) (bool, error) {
-	if owner == nil || here == nil || owner.Domain != here.Domain || owner.UID != here.UID {
-		return false, nil
-	}
-	start, err := processStart(owner.PID)
-	if processGone(err) {
-		return true, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return start != owner.Start, nil
-}
+var (
+	processStart          = presence.ProcessStart
+	currentLoopOwner      = presence.CurrentOwner
+	ownerReads            = &presence.OwnerReads
+	processGone           = presence.ProcessGone
+	ownerDead             = presence.OwnerDead
+	processStoreIdentity  = presence.StoreIdentity
+	runProcessEnvironment = presence.RunProcessEnvironment
+)
 
 // A loop can die while its worker survives. Do not release that worker's tree.
 // The run face and its descendants carry both the run ID and the store identity.
@@ -119,31 +50,6 @@ func withoutProcessEnv(env []string, keys ...string) []string {
 		}
 	}
 	return out
-}
-
-func processStoreIdentity(path string) (string, error) {
-	absolute, err := filepath.Abs(path)
-	if err != nil {
-		return "", err
-	}
-	return filepath.EvalSymlinks(absolute)
-}
-
-// Workers inherit the loop's effective UID. A process owned by another UID
-// cannot be one of those workers, and its private environment is not ours to read.
-func runProcessEnvironment(dir string, uid uint32) ([]byte, error) {
-	info, err := os.Stat(dir)
-	if err != nil {
-		return nil, err
-	}
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return nil, fmt.Errorf("process ownership unavailable for %s", dir)
-	}
-	if stat.Uid != uid {
-		return nil, nil
-	}
-	return os.ReadFile(filepath.Join(dir, "environ"))
 }
 
 // procScans counts full process-table scans, so a test can pin how many a pass makes.
@@ -227,6 +133,9 @@ type reapEvidence struct {
 	// reclaimed collects the lines the write's reclaims print once its transaction has
 	// closed: no report is written inside a write transaction.
 	reclaimed *[]string
+	// reapedSingle collects single-worker runs reaped from a dead loop so the caller
+	// can finish their preservation, lane reset, and examination in Pass 1.
+	reapedSingle *[]*pendingWork
 }
 
 func (ev reapEvidence) ownerDead(owner *LoopOwner) bool {
@@ -237,7 +146,7 @@ func (ev reapEvidence) ownerDead(owner *LoopOwner) bool {
 // the process table once, with no transaction open. The caller holds the run-start
 // lock from here through its write, so no run face starts in between.
 func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvidence, error) {
-	ev := reapEvidence{dead: map[LoopOwner]bool{}, live: map[string]bool{}, faces: map[string]bool{}, stuck: map[string]string{}, resumeStuck: map[string]string{}, reclaimed: &[]string{}}
+	ev := reapEvidence{dead: map[LoopOwner]bool{}, live: map[string]bool{}, faces: map[string]bool{}, stuck: map[string]string{}, resumeStuck: map[string]string{}, reclaimed: &[]string{}, reapedSingle: &[]*pendingWork{}}
 	var owners []LoopOwner
 	stuck := map[string]*pendingWork{}
 	resumed := map[string]*pendingWork{}
@@ -245,10 +154,11 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 	if err != nil {
 		return ev, err
 	}
-	// foreignRuns is every run of a claim whose owner or examiner is this user's loop in
-	// another process domain (a relaunched jail): this loop's process table cannot see
-	// those runs, so their liveness is judged from their stream files (presence.go).
-	foreignRuns := map[string]bool{}
+	// foreignRuns maps each run of a claim whose owner or examiner is this user's loop in
+	// another process domain (a relaunched jail) to that owner's domain: this loop's
+	// process table cannot see those runs, so their liveness is judged from their stream
+	// files (presence.go) or boot mismatch.
+	foreignRuns := map[string]string{}
 	var ended map[LoopOwner]bool
 	if err := s.ReadTx(ctx, func(r *store.Reader) error {
 		works, err := readPending(r)
@@ -261,11 +171,17 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 		}
 		for _, work := range works {
 			if work.Decision.RunRequest != nil && (fromOtherDomain(work.Owner, here) || fromOtherDomain(work.Examiner, here)) {
-				foreignRuns[work.Decision.RunRequest.RunID] = true
-				foreignRuns[work.ParentRunID] = true
+				ownerDomain := ""
+				if fromOtherDomain(work.Owner, here) {
+					ownerDomain = work.Owner.Domain
+				} else if fromOtherDomain(work.Examiner, here) {
+					ownerDomain = work.Examiner.Domain
+				}
+				foreignRuns[work.Decision.RunRequest.RunID] = ownerDomain
+				foreignRuns[work.ParentRunID] = ownerDomain
 				for _, node := range parallelNodes(work.Decision) {
 					if node.RunRequest != nil {
-						foreignRuns[node.RunRequest.RunID] = true
+						foreignRuns[node.RunRequest.RunID] = ownerDomain
 					}
 				}
 			}
@@ -277,7 +193,7 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 					}
 				}
 			}
-			if work.Decision.RunRequest != nil && !work.Done && !work.Examining && work.Owner == nil && len(work.Decision.Parallel) == 0 && !l.active[work.Decision.RunRequest.RunID] && unbounded[work.Decision.RunRequest.RunID] == work.Decision.LaneID {
+			if work.Decision.RunRequest != nil && !work.Done && !work.Examining && (work.Owner == nil || (here != nil && *work.Owner == *here)) && len(work.Decision.Parallel) == 0 && !l.active[work.Decision.RunRequest.RunID] && unbounded[work.Decision.RunRequest.RunID] == work.Decision.LaneID {
 				// A continuation's run.resume event clears the dispatch owner, so no
 				// owner's death can ever release its lane. Whether the resume is still
 				// the run's last word is read here; the face is judged below.
@@ -320,7 +236,7 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 		o := owner
 		var dead bool
 		if fromOtherDomain(&o, here) {
-			dead = foreignOwnerGone(identity, o, ended)
+			dead = foreignOwnerGone(identity, o, *here, ended)
 		} else if dead, err = ownerDead(&o, here); err != nil {
 			return ev, err
 		}
@@ -335,8 +251,8 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 		// its streams are written: added to what this namespace's scan saw, never
 		// subtracted from it.
 		locator, _ := l.cfg.Steps.(runStreamLocator)
-		for id := range foreignRuns {
-			if foreignRunLive(locator, id) {
+		for id, ownerDomain := range foreignRuns {
+			if foreignRunLive(locator, id, ownerDomain, here.Domain) {
 				ev.live[id], ev.faces[id] = true, true
 			}
 		}
@@ -346,7 +262,7 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 			}
 		}
 		for id, work := range resumed {
-			if !ev.faces[id] && !(locator != nil && foreignRunLive(locator, id)) {
+			if !ev.faces[id] && !(locator != nil && foreignRunLive(locator, id, foreignRuns[id], here.Domain)) {
 				ev.resumeStuck[id] = work.Decision.LaneID
 			}
 		}
@@ -449,6 +365,35 @@ func (l *Loop) reclaimStuckLease(tx *store.Tx, work *pendingWork, at time.Time, 
 // It reads no process table: every liveness answer comes from ev, gathered before
 // the transaction, and each write is guarded by the exact claim it re-reads here.
 func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time, ev reapEvidence) error {
+	if len(ev.dead) > 0 {
+		sRows, err := tx.Query(`SELECT session_id, loop_owner FROM drain_sessions WHERE ended_at IS NULL AND loop_owner IS NOT NULL`)
+		if err != nil {
+			return err
+		}
+		var deadSessions []string
+		for sRows.Next() {
+			var sid string
+			var raw []byte
+			if err := sRows.Scan(&sid, &raw); err != nil {
+				sRows.Close()
+				return err
+			}
+			var owner LoopOwner
+			if err := json.Unmarshal(raw, &owner); err == nil && ev.dead[owner] {
+				deadSessions = append(deadSessions, sid)
+			}
+		}
+		if err := sRows.Err(); err != nil {
+			sRows.Close()
+			return err
+		}
+		sRows.Close()
+		for _, sid := range deadSessions {
+			if _, err := tx.Exec(`UPDATE drain_sessions SET ended_at = ? WHERE session_id = ?`, at.UnixMilli(), sid); err != nil {
+				return err
+			}
+		}
+	}
 	works, err := readPending(tx.Reader())
 	if err != nil {
 		return err
@@ -538,6 +483,95 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 			return err
 		}
 		if terminal > 0 {
+			resumed, err := runHasActiveResume(tx.Reader(), id)
+			if err != nil {
+				return err
+			}
+			if resumed {
+				result, err := tx.Exec(`UPDATE lanes SET leased_until = ? WHERE lane_id = ? AND run_id = ? AND state = ?`, at.UnixMilli(), work.Decision.LaneID, id, run.LaneStateLeased)
+				if err != nil {
+					return err
+				}
+				n, err := result.RowsAffected()
+				if err != nil {
+					return err
+				}
+				if n > 0 {
+					if _, err := run.ReapExpiredLeases(ctx, tx, at); err != nil {
+						return err
+					}
+				}
+				prev, err := terminalRecord(tx.Reader(), id)
+				if err != nil {
+					return err
+				}
+				backend := ""
+				var route, harness, startedAt string
+				var artifactRefs []run.ArtifactRef
+				var usage *run.Usage
+				if prev != nil {
+					backend = prev.Backend
+					route = prev.Route
+					harness = prev.Harness
+					startedAt = prev.StartedAt
+					artifactRefs = prev.ArtifactRefs
+					usage = prev.Usage
+				}
+				if work.Decision.RunRequest != nil && work.Decision.RunRequest.Backend != "" {
+					backend = work.Decision.RunRequest.Backend
+				}
+				if startedAt == "" {
+					startedAt = at.UTC().Format(time.RFC3339)
+				}
+				if usage != nil && usage.Tokens == nil && usage.CostUSD == nil && usage.Details == nil {
+					usage = nil
+				}
+				interruptedRec := run.Record{
+					RunID:        id,
+					ItemID:       work.Decision.ItemID,
+					LaneID:       work.Decision.LaneID,
+					Backend:      backend,
+					Route:        route,
+					Harness:      harness,
+					State:        run.StateTimedOut,
+					EndCause:     run.EndLeaseReclaimed,
+					Resumed:      true,
+					StartedAt:    startedAt,
+					FinishedAt:   at.UTC().Format(time.RFC3339),
+					ArtifactRefs: artifactRefs,
+					Usage:        usage,
+				}
+				if interruptedRec.Usage == nil {
+					interruptedRec.SpendStatus = "unreported"
+					interruptedRec.SpendNote = "the resumed run face left no terminal record; its lease was reclaimed"
+				}
+				body, err := json.Marshal(interruptedRec)
+				if err != nil {
+					return err
+				}
+				if _, err := run.Apply(ctx, tx, record.Envelope{
+					RecordVersion: record.SupportedVersion,
+					Kind:          run.RecordKind,
+					ID:            "run-record-" + id + "-reap",
+					Producer:      record.Producer{System: record.System, Utility: Utility, Version: Version},
+					CreatedAt:     at.UTC(),
+					Subject:       &record.Subject{Kind: "run", ID: id},
+					Payload:       body,
+				}); err != nil {
+					return err
+				}
+				if err := appendEffect(tx, loopOrphanedKind, id, struct{}{}, at); err != nil {
+					return err
+				}
+				if _, err := tx.Exec(`UPDATE node_runs SET outcome = 'interrupted' WHERE run_id = ? AND outcome = 'running'`, id); err != nil {
+					return err
+				}
+				if ev.reapedSingle != nil && isSingleWorkerRecoverable(work) {
+					cp := *work
+					*ev.reapedSingle = append(*ev.reapedSingle, &cp)
+				}
+				continue
+			}
 			// A terminal result alone does not establish that the supervisor
 			// interrupted it. Ordinary stops intentionally leave workers alive.
 			if work.Decision.Workflow != nil && !work.Orphaned {
@@ -553,6 +587,10 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 						return err
 					}
 				}
+			}
+			if work.Orphaned && ev.reapedSingle != nil && isSingleWorkerRecoverable(work) {
+				cp := *work
+				*ev.reapedSingle = append(*ev.reapedSingle, &cp)
 			}
 			continue
 		}
@@ -575,6 +613,30 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 		if err := appendEffect(tx, loopOrphanedKind, id, struct{}{}, at); err != nil {
 			return err
 		}
+		if _, err := tx.Exec(`UPDATE node_runs SET outcome = 'interrupted' WHERE run_id = ? AND outcome = 'running'`, id); err != nil {
+			return err
+		}
+		if ev.reapedSingle != nil && isSingleWorkerRecoverable(work) {
+			cp := *work
+			*ev.reapedSingle = append(*ev.reapedSingle, &cp)
+		}
 	}
 	return nil
+}
+
+func runHasActiveResume(r *store.Reader, id string) (bool, error) {
+	var latest string
+	err := r.QueryRow(`SELECT kind FROM events WHERE object_type='run' AND object_id=? AND kind IN (?,?) ORDER BY seq DESC LIMIT 1`, id, run.ResumeKind, run.FinishKind).Scan(&latest)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return latest == run.ResumeKind, nil
+}
+
+func isSingleWorkerRecoverable(work *pendingWork) bool {
+	d := work.Decision
+	return d.Workflow == nil && !work.Done && work.Candidate == nil && work.DirtyHold == nil && work.RepairHold == nil && work.GateStall == nil && !work.BoundaryFailed
 }

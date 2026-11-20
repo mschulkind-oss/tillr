@@ -43,6 +43,10 @@ type workSnapshot struct {
 // bytes when they differ from the working copy. The commit's message retains the
 // record for a crash between creating its ref and writing the settlement event.
 func (l *Loop) preserveWork(ctx context.Context, lane, runID, reason string) error {
+	return l.preserveWorkFromBase(ctx, lane, runID, "", reason)
+}
+
+func (l *Loop) preserveWorkFromBase(ctx context.Context, lane, runID, base, reason string) error {
 	if runID == "" {
 		return nil
 	}
@@ -115,6 +119,22 @@ func (l *Loop) preserveWork(ctx context.Context, lane, runID, reason string) err
 				return err
 			}
 		} else {
+			if base != "" && base != snapshot.head {
+				fenceBody, err := os.ReadFile(filepath.Join(l.laneDirPath(lane), FenceFile))
+				if err != nil && !os.IsNotExist(err) {
+					return err
+				}
+				fence := fenceEntries(string(fenceBody))
+				prefix := l.fencePrefix(ctx, target)
+				stats, err := l.git(ctx, target, "diff", "--numstat", "-z", "--no-renames", base, snapshot.tree)
+				if err != nil {
+					return err
+				}
+				snapshot.files, snapshot.summary, err = snapshotSummary(stats, prefix, fence)
+				if err != nil {
+					return err
+				}
+			}
 			if len(snapshot.files) == 0 && len(snapshot.indexFiles) == 0 {
 				return nil
 			}
@@ -149,6 +169,51 @@ func (l *Loop) preserveWork(ctx context.Context, lane, runID, reason string) err
 			}
 			args = append(args, "-m", string(body))
 			sha, err := l.git(ctx, target, args...)
+			if err != nil {
+				return err
+			}
+			if _, err := l.git(ctx, target, "update-ref", ref, strings.TrimSpace(sha), ""); err != nil {
+				return err
+			}
+			exists = true
+		}
+	} else if base != "" && !exists {
+		head, err := l.revParse(ctx, target, "HEAD")
+		if err != nil {
+			return err
+		}
+		if head != base {
+			fenceBody, err := os.ReadFile(filepath.Join(l.laneDirPath(lane), FenceFile))
+			if err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			fence := fenceEntries(string(fenceBody))
+			prefix := l.fencePrefix(ctx, target)
+			stats, err := l.git(ctx, target, "diff", "--numstat", "-z", "--no-renames", base, head)
+			if err != nil {
+				return err
+			}
+			files, summary, err := snapshotSummary(stats, prefix, fence)
+			if err != nil {
+				return err
+			}
+			p = PreservedWork{RunID: runID, LaneID: lane, Ref: ref, Repository: target, Reason: reason, Files: files, Summary: summary}
+			p.ItemID, err = l.preservationItem(ctx, runID)
+			if err != nil {
+				return err
+			}
+			if same, ok := l.sharesRepository(ctx, target); ok && same {
+				p.Repository = l.cfg.Root
+			}
+			headTree, err := l.revParse(ctx, target, "HEAD^{tree}")
+			if err != nil {
+				return err
+			}
+			body, err := json.Marshal(p)
+			if err != nil {
+				return err
+			}
+			sha, err := l.git(ctx, target, "commit-tree", headTree, "-p", head, "-m", string(body))
 			if err != nil {
 				return err
 			}

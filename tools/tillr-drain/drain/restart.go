@@ -106,6 +106,7 @@ func (l *Loop) gateRestart(ctx context.Context, result *LoopResult) (bool, strin
 		if err := l.releaseRestartExaminations(ctx); err != nil {
 			return err
 		}
+		l.endSession()
 		return execute(path, argv, env)
 	}
 	if err := rs.Replace(ctx, request, l.cfg.Restart.Argv, execReplacement); err != nil {
