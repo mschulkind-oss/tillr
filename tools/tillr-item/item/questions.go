@@ -1,3 +1,4 @@
+// Architecture and invariants: docs/reference/tillr-queue-persistence.md
 package item
 
 // Question is one unanswered question from Vantage's index. The identifier and title

@@ -1,3 +1,4 @@
+// Architecture and invariants: docs/reference/tillr-queue-persistence.md, docs/reference/observatory-actions.md
 package item
 
 import (
