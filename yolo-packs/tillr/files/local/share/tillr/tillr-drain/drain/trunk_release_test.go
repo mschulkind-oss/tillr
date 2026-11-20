@@ -3,8 +3,10 @@ package drain
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -116,5 +118,198 @@ func TestAToolingWaitHoldsUntilTheDefectItemLands(t *testing.T) {
 	}
 	if d := held(); d.Action != ActionDispatch {
 		t.Fatalf("the repaired tooling still holds its waiter: %+v", d)
+	}
+}
+
+// Closing the fixer a trunk-broken hold names releases every item held for that red on
+// the next pass without an operator retry or a separate proof step.
+func TestTrunkBrokenHoldReleasesOnPassWhenFixerIsClosed(t *testing.T) {
+	ctx := context.Background()
+	f, l, _ := workflowLoopFixture(t, "")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='closed'`)
+		return err
+	})
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	runGit(t, f.root, "update-ref", GreenRef, base)
+	red := ownerCommit(t, f.root, "red.txt")
+	fixer, err := l.fileTrunkFixer(ctx, red, []string{"go-substrate/tools-tillr-s-whole-suite-passes"}, GateOutcome{SuspectPaths: []string{"tools/item-a/a.txt"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	heldA := fileFixtureRequestWith(t, f, "First request held behind trunk fixer\n", "build", item.SingleWorkerWorkflow, requestFence, false)
+	heldB := fileFixtureRequestWith(t, f, "Second request held behind trunk fixer\n", "build", item.SingleWorkerWorkflow, requestFence, false)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		for _, id := range []string{heldA, heldB} {
+			if _, err := item.SetState(ctx, tx, id, StateBlocked, l.cfg.Now(), item.WaitingOn{
+				Waiter: "item:" + fixer,
+				Reason: RefusalTrunkAlreadyRed + ": go-substrate/tools-tillr-s-whole-suite-passes on " + red[:12],
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	for _, id := range []string{heldA, heldB} {
+		if d := planFor(t, l, id); d.Action != ActionHold || d.Reason != ReasonTrunkBroken || d.DeferredBy != fixer {
+			t.Fatalf("before closing fixer, %s plan = %+v", id, d)
+		}
+	}
+
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := item.Close(ctx, tx, fixer, "fix landed by hand", "operator", l.cfg.Now())
+		return err
+	})
+	steps := &obstacleRequestSteps{
+		t: t, f: f,
+		report: func(req run.Request) (string, *landingOffer) {
+			return wrapExtractedReport(req.RunID, "RESULT: done\n"), nil
+		},
+	}
+	l.cfg.Steps = steps
+	result := &LoopResult{}
+	if _, err := l.pass(ctx, result); err != nil {
+		t.Fatal(err)
+	}
+	drainOwned(t, l, result)
+	fixtureRead(t, f, func(r *store.Reader) error {
+		for _, id := range []string{heldA, heldB} {
+			var state string
+			if err := r.QueryRow(`SELECT state FROM items WHERE item_id=?`, id).Scan(&state); err != nil {
+				return err
+			}
+			waiting, _, err := item.ReadWaitingOn(r, id)
+			if err != nil {
+				return err
+			}
+			if state == StateBlocked || waiting != nil {
+				t.Fatalf("%s stayed held after fixer closed: state=%s waiting=%+v", id, state, waiting)
+			}
+		}
+		return nil
+	})
+}
+
+// Proving the trunk past the red commit releases items held trunk-broken on the next
+// pass, both on a linear trunk and after the red commit was rebased onto a moved base
+// (including when trunk_rewrites has no row for an older accepted rewrite).
+func TestTrunkBrokenHoldReleasesOnPassWhenTrunkIsProvedPastRedCommit(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		rebase          bool
+		clearRewrites   bool
+		closeFixerFirst bool
+	}{
+		{name: "linear"},
+		{name: "rebased-accepted", rebase: true},
+		{name: "rebased-without-rewrite-row", rebase: true, clearRewrites: true, closeFixerFirst: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			f, l, _ := workflowLoopFixture(t, "")
+			fixtureWrite(t, f, func(tx *store.Tx) error {
+				_, err := tx.Exec(`UPDATE items SET state='closed'`)
+				return err
+			})
+			base := runGit(t, f.root, "rev-parse", TrunkRef)
+			runGit(t, f.root, "update-ref", GreenRef, base)
+			red := ownerCommit(t, f.root, "red.txt")
+			if _, err := l.observeTrunk(ctx, ""); err != nil {
+				t.Fatal(err)
+			}
+			fixer, err := l.fileTrunkFixer(ctx, red, []string{"go-substrate/tools-tillr-s-whole-suite-passes"}, GateOutcome{SuspectPaths: []string{"tools/item-a/a.txt"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			held := fileFixtureRequestWith(t, f, "Request held behind trunk red\n", "build", item.SingleWorkerWorkflow, requestFence, false)
+			fixtureWrite(t, f, func(tx *store.Tx) error {
+				_, err := item.SetState(ctx, tx, held, StateBlocked, l.cfg.Now(), item.WaitingOn{
+					Waiter: "item:" + fixer,
+					Reason: RefusalTrunkAlreadyRed + ": go-substrate/tools-tillr-s-whole-suite-passes on " + red[:12],
+				})
+				return err
+			})
+
+			later := l.cfg.Now().UTC().Add(time.Minute)
+			belowRed := base
+			if tc.rebase {
+				rebased := rebaseOnto(t, f.root, base, red)
+				if _, err := acceptRewrite(f, red, rebased); err != nil {
+					t.Fatalf("acceptRewrite: %v", err)
+				}
+				if tc.clearRewrites {
+					fixtureWrite(t, f, func(tx *store.Tx) error {
+						_, err := tx.Exec(`DELETE FROM trunk_rewrites`)
+						return err
+					})
+				}
+				belowRed = runGit(t, f.root, "rev-parse", rebased+"^")
+			}
+
+			// A proof below the red commit (or below its rebased replacement) must not release the hold.
+			writeGreenProof(t, l, belowRed, later, []string{"go-substrate/tools-tillr-s-whole-suite-passes"})
+			if err := l.resolveProvedFixers(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := l.releaseTrunkAcquittals(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if got := fixerState(t, f, held); got != StateBlocked {
+				t.Fatalf("proof below red released held item early: %s", got)
+			}
+
+			if tc.closeFixerFirst {
+				fixtureWrite(t, f, func(tx *store.Tx) error {
+					_, err := item.Close(ctx, tx, fixer, "landed by hand", "operator", l.cfg.Now())
+					return err
+				})
+			}
+
+			repaired := ownerCommit(t, f.root, "repaired.txt")
+			writeGreenProof(t, l, repaired, later.Add(time.Minute), []string{"go-substrate/tools-tillr-s-whole-suite-passes"})
+			steps := &obstacleRequestSteps{
+				t: t, f: f,
+				report: func(req run.Request) (string, *landingOffer) {
+					return wrapExtractedReport(req.RunID, "RESULT: done\n"), nil
+				},
+			}
+			l.cfg.Steps = steps
+			result := &LoopResult{}
+			if _, err := l.pass(ctx, result); err != nil {
+				t.Fatal(err)
+			}
+			drainOwned(t, l, result)
+
+			if !tc.closeFixerFirst {
+				if got := fixerState(t, f, fixer); got != StateResolvedElsewhere {
+					t.Fatalf("fixer state = %s, want %s", got, StateResolvedElsewhere)
+				}
+			} else {
+				fixtureRead(t, f, func(r *store.Reader) error {
+					proved, err := fixerProvedGreen(r, fixer)
+					if err != nil {
+						return err
+					}
+					if proved != repaired {
+						t.Fatalf("closed fixer proof = %q, want %q", proved, repaired)
+					}
+					return nil
+				})
+			}
+			fixtureRead(t, f, func(r *store.Reader) error {
+				var state string
+				if err := r.QueryRow(`SELECT state FROM items WHERE item_id=?`, held).Scan(&state); err != nil {
+					return err
+				}
+				waiting, _, err := item.ReadWaitingOn(r, held)
+				if err != nil {
+					return err
+				}
+				if state == StateBlocked || waiting != nil {
+					t.Fatalf("%s stayed held after trunk proved past red: state=%s waiting=%+v", held, state, waiting)
+				}
+				return nil
+			})
+		})
 	}
 }
