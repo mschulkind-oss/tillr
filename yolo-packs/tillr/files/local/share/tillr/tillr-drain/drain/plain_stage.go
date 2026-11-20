@@ -83,8 +83,12 @@ func (s *LaneStager) stagePlain(ctx context.Context, spec StageSpec, def definit
 		now = s.Now
 	}
 	settled := "None recorded: the item names no settled decision."
-	if carriesDesignDocumentRule(stagedSeat(recorded, spec)) {
+	seat := stagedSeat(recorded, spec)
+	if carriesDesignDocumentRule(seat) {
 		settled += "\n\n" + DesignDocumentRule
+	}
+	if carriesDesignProvenanceRule(seat) {
+		settled += "\n\n" + DesignProvenanceRule
 	}
 	fixerFacts, fixerCopies, err := s.prepareTrunkFixerFacts(ctx, recorded, spec)
 	if err != nil {

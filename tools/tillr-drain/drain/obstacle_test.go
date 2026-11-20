@@ -77,6 +77,29 @@ func TestEachDesignKindCarriesItsOwnInstruction(t *testing.T) {
 	}
 }
 
+func TestRequestObstacleDesignInstructionCarriesProvenanceRule(t *testing.T) {
+	const wantSentence = "A decision the designer or operator made (including a filed request and any mechanism, format, field names, or rejected alternatives the design seat writes) is recorded as theirs — never presented as the owner's ruling, and marked in prose and Decision Ledger rows as the designer's (or from an operator request) that the owner may overturn — and only a quoted owner statement is recorded as an owner ruling (quoting the owner's dated words verbatim)."
+	seen := map[string]bool{}
+	for _, kind := range []string{ObstacleDefinition, ObstacleFence, ObstacleOwner, ObstacleSeat} {
+		text := requestObstacleDesignInstruction(Obstacle{Kind: kind, Fields: map[string]string{"PATHS": "x.go", "QUESTION": "q?", "TRIED": "t", "MISSING": "m"}})
+		if text == "" || seen[text] {
+			t.Fatalf("%s: instruction %q", kind, text)
+		}
+		if !strings.Contains(text, wantSentence) {
+			t.Fatalf("%s: request obstacle instruction omits provenance rule:\n%s", kind, text)
+		}
+		if !strings.Contains(text, "has no item block") {
+			t.Fatalf("%s: request obstacle instruction omits no-item-block rule:\n%s", kind, text)
+		}
+		seen[text] = true
+	}
+	for _, kind := range []string{ObstacleTrunk, ObstacleTooling} {
+		if requestObstacleDesignInstruction(Obstacle{Kind: kind}) != "" {
+			t.Fatalf("%s is the loop's to act on, not the design seat's", kind)
+		}
+	}
+}
+
 // A generated repair has no block to amend, so its obstacles that need a ruling reach the
 // owner with a question written from them, and its other reports go back to its worker.
 func TestAGeneratedRepairsObstacleIsAnOwnerQuestion(t *testing.T) {
