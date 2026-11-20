@@ -42,15 +42,18 @@ type laneRow struct {
 	// decision that started this run), "item" (the item's current seat, for a run whose
 	// decision predates the dispatch column), or "none" — the item asked for no seat, and
 	// the policy's default backend ran it. "none" is a recorded fact, not a missing record.
-	SeatSource   string     `json:"seat_source"`
-	Backend      string     `json:"backend"`
-	Attempt      int        `json:"attempt"`
-	Outcome      string     `json:"outcome"`
-	LastStep     string     `json:"last_step"`
-	LastStepAtMS *int64     `json:"last_step_at_ms"`
-	LatestAction laneAction `json:"latest_action"`
-	LogGrewAtMS  *int64     `json:"log_grew_at_ms"`
-	Note         string     `json:"note,omitempty"`
+	SeatSource string `json:"seat_source"`
+	Backend    string `json:"backend"`
+	Attempt    int    `json:"attempt"`
+	// Work is the item's work beside Attempt, which numbers allocations and so is not
+	// a count of work done (item_progress.go).
+	Work         itemProgress `json:"work"`
+	Outcome      string       `json:"outcome"`
+	LastStep     string       `json:"last_step"`
+	LastStepAtMS *int64       `json:"last_step_at_ms"`
+	LatestAction laneAction   `json:"latest_action"`
+	LogGrewAtMS  *int64       `json:"log_grew_at_ms"`
+	Note         string       `json:"note,omitempty"`
 	// Condition is the lane's standing staging refusal, when the drain took it out of
 	// rotation (drain.lane-refused with no later drain.lane-restored). It is omitted for a
 	// lane in rotation.
@@ -169,6 +172,9 @@ func printLanes(w io.Writer, rows []laneRow) error {
 		if _, err := fmt.Fprintf(w, "%s · %s since %s · %s · %s · %s · attempt %d · %s · %s · last finished %s · %s (%s, %s) @ %s\n", row.LaneID, row.State, since, row.ItemID, row.Seat, row.Backend, row.Attempt, row.RunID, row.Outcome, step, action, row.LatestAction.Kind, row.LatestAction.Clock, at); err != nil {
 			return err
 		}
+		if _, err := fmt.Fprintf(w, "  %s\n", row.Work.Text()); err != nil {
+			return err
+		}
 		if h := row.Hold; h != nil {
 			if _, err := fmt.Fprintf(w, "  held since %s: %s: %s. Mover: %s\n", time.UnixMilli(h.AtMS).UTC().Format(time.RFC3339), h.Reason, h.Detail, h.Mover); err != nil {
 				return err
@@ -277,6 +283,13 @@ func assembleLanesCounted(r *store.Reader, loop, lanes string, now time.Time, st
 		}
 	}
 	rows := buildLaneRowsCounted(d, verdicts, seats, loop, lanes, now, stats)
+	progress, err := readItemProgress(r)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		rows[i].Work = progress[rows[i].ItemID]
+	}
 	if err := enrichLaneNodes(r, rows, loop, stats); err != nil {
 		return nil, err
 	}
