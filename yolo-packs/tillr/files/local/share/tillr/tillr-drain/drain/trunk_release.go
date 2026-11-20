@@ -62,20 +62,30 @@ func (l *Loop) repairedTrunkWaiter(ctx context.Context, r *store.Reader, id stri
 		}
 		return "", nil
 	}
-	if state != StateLanded && !finishedState(declared.Parsed, state) {
-		return "", nil
-	}
 	green, err := provedLaneBase(ctx, l.cfg.Root, l.gatePolicy.LaneBase)
 	if err != nil {
 		return "", err
 	}
 	if state != StateLanded {
 		// A fixer resolved without landing (resolveProvedFixers, or an already-on-trunk
-		// resolution later proved) repaired nothing itself: the proof of its checks is the
-		// repair evidence. Release once the selected base contains the proved commit.
-		proved, err := fixerProvedGreen(r, fixer)
-		if err != nil || proved == "" {
+		// resolution later proved) — or a live fixer kept open after a rerun passed its
+		// checks — repaired nothing itself yet: the proof of its checks is the repair
+		// evidence, recorded by resolveProvedFixers. Release once the selected base
+		// contains the proved commit, so the fresh run starts from a green tree. An open
+		// fixer whose checks no proof has passed after its last red observation releases
+		// nothing.
+		proved, err := fixerProvedGreenAfterSeen(r, fixer)
+		if err != nil {
 			return "", err
+		}
+		if proved == "" && finishedState(declared.Parsed, state) {
+			proved, err = fixerProvedGreen(r, fixer)
+			if err != nil {
+				return "", err
+			}
+		}
+		if proved == "" {
+			return "", nil
 		}
 		if green != "" {
 			th, err := readTrunkHistory(r)

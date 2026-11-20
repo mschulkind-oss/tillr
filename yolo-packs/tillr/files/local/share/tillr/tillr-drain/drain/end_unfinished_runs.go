@@ -227,7 +227,22 @@ func runBelongsToItem(r *store.Reader, runID, itemID string, hasReadOnly, hasNod
 			return true, nil
 		}
 	}
-	return false, nil
+	if err := r.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM events WHERE kind=? AND object_type='run' AND object_id=? AND json_valid(payload) AND json_extract(payload,'$.decision.item_id')=?)`,
+		dispatchStartedKind, runID, itemID,
+	).Scan(&found); err != nil {
+		return false, err
+	}
+	if found {
+		return true, nil
+	}
+	if err := r.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM events WHERE kind=? AND json_valid(payload) AND json_extract(payload,'$.run_id')=? AND json_extract(payload,'$.item_id')=?)`,
+		run.AllocateKind, runID, itemID,
+	).Scan(&found); err != nil {
+		return false, err
+	}
+	return found, nil
 }
 
 func itemHasUnfinishedRuns(r *store.Reader, itemID, keepExaminingRunID string) (bool, error) {

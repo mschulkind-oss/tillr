@@ -565,10 +565,12 @@ type Loop struct {
 	policyRecorded bool
 	// active owns only completion triggers, never terminal outcomes. Outcomes are
 	// reconstructed from the store by the next pass or a replacement Loop.
-	examinations sync.WaitGroup
-	active       map[string]bool
-	completions  chan runCompletion
-	laneChanges  map[string]int
+	examinations  sync.WaitGroup
+	active        map[string]bool
+	activeCancels map[string]context.CancelFunc
+	stoppedRuns   map[string]bool
+	completions   chan runCompletion
+	laneChanges   map[string]int
 	// segmentEvidence is each settling run's uncommitted-work evidence as it stood before
 	// its session was last continued (segmentRepeated).
 	segmentEvidence map[string]string
@@ -706,7 +708,7 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 	if _, err := currentLoopOwner(); err != nil {
 		return nil, err
 	}
-	l := &Loop{gatePolicy: gatePolicy, cfg: cfg, gateBudget: budget, build: ReadBuildStamp(), held: map[string]heldItem{}, active: map[string]bool{}, laneConditions: map[string]*laneCondition{}, infraLines: map[string]string{}, completions: make(chan runCompletion, len(cfg.Lanes)), laneChanges: map[string]int{}, staleBaseChecked: map[string]bool{}}
+	l := &Loop{gatePolicy: gatePolicy, cfg: cfg, gateBudget: budget, build: ReadBuildStamp(), held: map[string]heldItem{}, active: map[string]bool{}, activeCancels: map[string]context.CancelFunc{}, stoppedRuns: map[string]bool{}, laneConditions: map[string]*laneCondition{}, infraLines: map[string]string{}, completions: make(chan runCompletion, len(cfg.Lanes)), laneChanges: map[string]int{}, staleBaseChecked: map[string]bool{}}
 	if cfg.PolicyRef != "" {
 		p, raw, hash, err := readPolicyContent(cfg.PolicyRef)
 		if err != nil {
@@ -2191,6 +2193,13 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			}
 		}
 		if !written {
+			if IsTrunkFixer(request.ItemID) && l.headOf(ctx, lane) == l.settleBase(lane, mainSHA) {
+				if resolved, err := l.resolveKeptFixerWithoutCommit(ctx, request.ItemID); err != nil {
+					return laneOutcome{err: err}
+				} else if resolved {
+					return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "resolved elsewhere: rerun passed")}
+				}
+			}
 			l.reportf("loop: %s reported blocked: leaving it on the board to be decided\n", request.ItemID)
 			if err := l.reportedBlock(ctx, decision, log); err != nil {
 				return laneOutcome{err: err}
@@ -2286,8 +2295,23 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			}
 			// No session to continue: an inspection is a person's, and re-dispatching is
 			// not the loop's (design §4.2: not infrastructure, no failover).
+			if IsTrunkFixer(request.ItemID) && headSHA == baseSHA {
+				if resolved, err := l.resolveKeptFixerWithoutCommit(ctx, request.ItemID); err != nil {
+					return laneOutcome{err: err}
+				} else if resolved {
+					return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, headSHA, "resolved elsewhere: rerun passed")}
+				}
+			}
 			l.reportf("loop: %s was cut short and is left unjudged on %s\n", request.ItemID, lane)
 			return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, headSHA)}
+		}
+		if IsTrunkFixer(request.ItemID) && headSHA == baseSHA {
+			if resolved, err := l.resolveKeptFixerWithoutCommit(ctx, request.ItemID); err != nil {
+				return laneOutcome{err: err}
+			} else if resolved {
+				l.forgetSegment(request.RunID)
+				return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, headSHA, "resolved elsewhere: rerun passed")}
+			}
 		}
 		// The model answered with no commit: `candidate-no-op`, a refusal rather than an
 		// infrastructure failure, and not a failover. Nobody judged the work, so the item
@@ -2575,6 +2599,11 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		} else {
 			candidate = rebased
 		}
+	}
+	if retitled, err := l.retitleIntermittentFixer(ctx, candidate); err != nil {
+		return "", false, err
+	} else {
+		candidate = retitled
 	}
 	// The fence is checked before the gate, because the gate answers a different question.
 	// A gate that passes says the tests pass; it never says the change is the one the item

@@ -239,6 +239,10 @@ type refusalPayload struct {
 	// A returned design gate refusal binds the exact pinned checkout and its fence base.
 	DesignBaseSHA string `json:"design_base_sha,omitempty"`
 	DesignHeadSHA string `json:"design_head_sha,omitempty"`
+	// BaseSHA and HeadSHA bind the candidate commit on a landing conflict or judge
+	// refusal, so a committed intermittent-fixer candidate returning from one stays live.
+	BaseSHA string `json:"base_sha,omitempty"`
+	HeadSHA string `json:"head_sha,omitempty"`
 	// Checks and Evidence are a returned ending's own fields (returned.go): the gate checks
 	// that failed, with their logs and normalized digests, and the ending's evidence key,
 	// which the identical-repeat rule compares. A refusal recorded before 2026-11-17 carries
@@ -305,6 +309,9 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 	repeated, err := l.landingRefusalRepeats(ctx, candidate, payload)
 	if err != nil {
 		return err
+	}
+	if !repeated {
+		payload.BaseSHA, payload.HeadSHA = candidate.BaseSHA, candidate.HeadSHA
 	}
 	at := l.cfg.Now().UTC()
 	evidence := l.readRefusalEvidence(candidate.RunID, payload)

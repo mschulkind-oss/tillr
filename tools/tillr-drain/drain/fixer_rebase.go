@@ -83,10 +83,16 @@ func (l *Loop) fixerRebaseConflicted(ctx context.Context, candidate Candidate, c
 			return "", false, err
 		}
 		if known && len(red) == 0 {
-			if err := l.resolveStaleFixer(ctx, candidate.ItemID, conflict.Tip, checks); err != nil {
+			intermittent, err := l.isIntermittentFixer(ctx, candidate.ItemID)
+			if err != nil {
 				return "", false, err
 			}
-			return "", false, l.checkItemTerminal(ctx, candidate.ItemID, "fixer rebase")
+			if !intermittent {
+				if err := l.resolveStaleFixer(ctx, candidate.ItemID, conflict.Tip, checks); err != nil {
+					return "", false, err
+				}
+				return "", false, l.checkItemTerminal(ctx, candidate.ItemID, "fixer rebase")
+			}
 		}
 	}
 	return l.conflictFix(ctx, candidate, LandOutcome{Result: LandSquashConflict, ConflictPaths: conflict.Reports}, result, timing)
@@ -119,6 +125,24 @@ func (l *Loop) fixerNamedChecks(ctx context.Context, fixer string) ([]string, er
 		return nil, err
 	}
 	return fixerChecks(text), nil
+}
+
+func (l *Loop) isIntermittentFixer(ctx context.Context, fixer string) (bool, error) {
+	if l.cfg.Store == "" {
+		return false, nil
+	}
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return false, err
+	}
+	defer s.Close()
+	var intermittent bool
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		var e error
+		intermittent, _, e = readIntermittentFixer(r, fixer)
+		return e
+	})
+	return intermittent, err
 }
 
 // resolveStaleFixer moves a fixer whose named checks pass on tip to resolved-elsewhere and

@@ -1893,7 +1893,12 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 	// next loop settles the run from its terminal record.
 	id := d.RunRequest.RunID
 	l.active[id] = true
+	runCtx, cancel := context.WithCancel(ctx)
 	l.mu.Lock()
+	if l.activeCancels == nil {
+		l.activeCancels = map[string]context.CancelFunc{}
+	}
+	l.activeCancels[id] = cancel
 	l.laneChanges[d.LaneID]++
 	epochs := map[string]int{}
 	for _, lane := range watched {
@@ -1909,34 +1914,35 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 	}
 	l.reportf("loop: tick %d dispatch %s -> %s on %s\n", result.Ticks, d.ItemID, d.RunRequest.Backend, d.LaneID)
 	go func() {
+		defer cancel()
 		start := time.Now()
 		completion := runCompletion{id: id, itemID: d.ItemID, step: "run", timing: &PassTiming{TickID: d.RunRequest.CorrelationID, AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}}
 		local := LoopResult{}
 		var evaluatorHold *Candidate
-		before, err := l.snapshot(ctx, []string{l.lanePath(d.LaneID)}, watched)
+		before, err := l.snapshot(runCtx, []string{l.lanePath(d.LaneID)}, watched)
 		if err != nil {
 			err = fmt.Errorf("run boundary before: %w", err)
 		}
 		if err == nil {
 			if evaluatorNode(d) {
-				c, candidateErr := l.evaluatorCandidate(ctx, d)
+				c, candidateErr := l.evaluatorCandidate(runCtx, d)
 				err = candidateErr
 				if err == nil {
 					var accepted bool
-					_, accepted, err = l.judgeCandidate(ctx, c, &local)
+					_, accepted, err = l.judgeCandidate(runCtx, c, &local)
 					if errors.Is(err, errJudgeGrantHeld) {
-						err = l.releaseExamination(ctx, d)
+						err = l.releaseExamination(runCtx, d)
 					} else if err == nil && !accepted {
 						evaluatorHold = &c
 						completion.result = &local
 					}
 				}
 			} else if len(d.Parallel) > 0 {
-				err = l.runParallel(ctx, d)
+				err = l.runParallel(runCtx, d)
 			} else {
 				req := *d.RunRequest
 				stampDecisionRequest(d, &req)
-				_, _, err = l.runRestartable(ctx, req)
+				_, _, err = l.runRestartable(runCtx, req)
 			}
 			if err == nil {
 				completion.outcome.stop, err = l.closeAsyncBracket(context.WithoutCancel(ctx), d, at, before, &local, watched, epochs)
@@ -1946,7 +1952,7 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 			}
 		}
 		if err == nil && evaluatorHold != nil {
-			err = l.finishEvaluatorHold(ctx, d, *evaluatorHold)
+			err = l.finishEvaluatorHold(runCtx, d, *evaluatorHold)
 		}
 		completion.outcome.err = err
 		completion.detail = local.Detail
@@ -1959,7 +1965,14 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 }
 
 func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, error) {
-	if errors.Is(c.outcome.err, errRestartPending) {
+	l.mu.Lock()
+	delete(l.activeCancels, c.id)
+	stopped := l.stoppedRuns != nil && l.stoppedRuns[c.id]
+	if stopped {
+		delete(l.stoppedRuns, c.id)
+	}
+	l.mu.Unlock()
+	if stopped || errors.Is(c.outcome.err, errRestartPending) {
 		delete(l.active, c.id)
 		return "", nil
 	}
@@ -2127,6 +2140,9 @@ planned:
 			return "", err
 		}
 		if err := l.resolveProvedFixers(ctx); err != nil {
+			return "", err
+		}
+		if err := l.settleResolvedFixerRuns(ctx); err != nil {
 			return "", err
 		}
 		if err := l.releaseTrunkAcquittals(ctx); err != nil {
@@ -2492,13 +2508,21 @@ plans:
 // the completion is a wake trigger and measurement, not its durable outcome.
 func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingWork, at time.Time, passTiming *PassTiming, watched []string) {
 	l.active[d.RunRequest.RunID] = true
+	runCtx, cancel := context.WithCancel(ctx)
+	l.mu.Lock()
+	if l.activeCancels == nil {
+		l.activeCancels = map[string]context.CancelFunc{}
+	}
+	l.activeCancels[d.RunRequest.RunID] = cancel
+	l.mu.Unlock()
 	l.examinations.Add(1)
 	timing := PassTiming{TickID: passTiming.TickID, AtMS: passTiming.AtMS, GateBudgetMS: passTiming.GateBudgetMS}
 	go func() {
+		defer cancel()
 		defer l.examinations.Done()
 		local := &LoopResult{}
 		completion := runCompletion{id: d.RunRequest.RunID, itemID: d.ItemID, step: d.Action, result: local, timing: &timing}
-		stepCtx, unlock, lockErr := l.lockRestartMechanical(ctx)
+		stepCtx, unlock, lockErr := l.lockRestartMechanical(runCtx)
 		if lockErr != nil {
 			completion.outcome.err = lockErr
 			l.completions <- completion
