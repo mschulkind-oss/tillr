@@ -1,3 +1,4 @@
+# Architecture and invariants: docs/reference/tillr-restart.md
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing

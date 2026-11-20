@@ -1,5 +1,7 @@
 package drain
 
+// Architecture and invariants: docs/reference/tillr-restart.md
+
 import (
 	"context"
 	"encoding/json"
@@ -253,7 +255,7 @@ func pushTrunk(ctx context.Context, root string, p settings.Push) error {
 // remote branch already contains it. It answers the commit it considered, empty when there
 // is no pointer yet. The refspec has no `+`, so a remote that is not an ancestor of the
 // commit refuses it; nothing here pulls, rebases or merges to make it succeed. The pre-push
-// hook runs as for any push (see the patch branches note in the restart design).
+// hook runs as for any push (see docs/reference/tillr-restart.md, "Pushing what the proof has passed").
 func pushGreen(ctx context.Context, root string, p settings.Push) (string, error) {
 	green, err := heavyGreen(ctx, root)
 	if err != nil || green == "" {

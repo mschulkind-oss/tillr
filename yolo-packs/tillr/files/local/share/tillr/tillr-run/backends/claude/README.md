@@ -113,7 +113,7 @@ message says the session was interrupted by a restart.
 **Owner-recorded measurement, 2026-11-16:** a Claude session was sent SIGTERM during
 `sleep 60`, exited 143, and the resumed session answered with the marker given
 before the signal. The accepted evidence is the owner's ruling in the
-[restart criteria](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-restart.md#pause-a-worker-between-tool-calls-and-resume-it-where-it-stopped).
+[restart reference](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-restart.md#pausing-a-session).
 This lane did not re-run Claude or recover the original exact argv; the command
 shape below describes how to reproduce the ruling, not an invented raw transcript.
 

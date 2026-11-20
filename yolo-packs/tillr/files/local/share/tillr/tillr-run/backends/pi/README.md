@@ -271,7 +271,7 @@ calls and a streaming model response, save results, start no further tool or mod
 request, flush output, and exit 0. Duplicate requests have the same effect as one.
 Session persistence stays enabled; the adapter does not pass `--no-session`.
 
-The runner enforces the [straggler bound](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-restart.md#pausing-a-session):
+The runner enforces the [straggler bound](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-restart.md#pausing-a-session):
 120 seconds by default, supplied by `pause_timeout_seconds`. At that bound it kills
 any surviving process group, including tools. Continuing opens the same session with
 a restart notice; a gap stop does not claim an interruption, but a bound kill tells

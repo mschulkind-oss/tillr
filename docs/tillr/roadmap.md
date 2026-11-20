@@ -360,7 +360,7 @@ invocation mistake does not hide the real reasons items are held.
 
 ## 3. Roll onto new code without ending runs
 
-[Rolling tillr onto new code](../design/tillr-restart.md) is built: all nine blocks of its build
+[Rolling tillr onto new code](../reference/tillr-restart.md) is built: all nine blocks of its build
 order had landed by 2026-11-18, among them the pause, the restart request, the roll and push
 after a landing, and this repository's settings file. It stays third as the record of why it
 came first: every restart on 2026-11-15 was a kill, so a fix to tillr itself cost the runs in
@@ -2563,7 +2563,7 @@ route to the next backend; it does not need a continuation handoff.
 
 **Agent Details**
 
-- **Ref:** [The restart design](../design/tillr-restart.md) for stopping a session;
+- **Ref:** [The restart reference](../reference/tillr-restart.md) for stopping a session;
   [the quota probe item](#add-direct-quota-checks-with-a-reserve) for backend windows;
   the numbered criteria below for the continuation contract.
 - **Where:** `tools/tillr-drain/`, `tools/tillr-run/`, `tools/tillr-view/` (the waiting face),
@@ -2653,7 +2653,7 @@ its failing test first, and the whole item is still one commit.
    continues its own session with `Resume` set and no fresh-session field, and a message saying
    the backend's quota reopened. When the answer is another backend, point 4 applies. The row is
    deleted in the transaction that claims the continuation. [The restart
-   design](../design/tillr-restart.md#pausing-a-session) calls a paused run that nobody resumes
+   reference](../reference/tillr-restart.md#pausing-a-session) calls a paused run that nobody resumes
    within one pass a fault; a run with such a row is the exception, and the view shows it as
    waiting with its reopening time, not as a fault. A loop with only such runs waits for the
    earliest reopening time or a new item, and does not exit.
@@ -5455,7 +5455,7 @@ adapter needs but the binary does not print should be refused as a build mismatc
 
 **Agent details:**
 
-- **Ref:** the verdict row of the exit-code table in `tools/tillr-loop/README.md`, which says a non-zero verdict stops the loop because a landed candidate whose item was not retired is landed work the board cannot see; that rule stands, and this item removes the skew that tripped it. `item-land-then-roll-and-push` in [the restart design](../design/tillr-restart.md) rebuilds binaries after a landing, but its roll runs after the landing's verdict, so it does not close this gap by itself.
+- **Ref:** the verdict row of the exit-code table in `tools/tillr-loop/README.md`, which says a non-zero verdict stops the loop because a landed candidate whose item was not retired is landed work the board cannot see; that rule stands, and this item removes the skew that tripped it. Post-landing roll in [the restart reference](../reference/tillr-restart.md#post-landing-roll-and-push) rebuilds binaries after a landing, but its roll runs after the landing's verdict, so it does not close this gap by itself.
 - **Where:** `compose_verdict` in `tools/tillr-loop/tillr-loop`; the `tillr-build` recipe in `.justfile`, which builds the binaries the loop runs; `Verdict` in `tools/tillr-drain/drain/steps.go`.
 - **Evidence:** 2026-11-17, the loop log: every start from about 09:52Z ended with `the verdict program answered exit 4 for item-jl-criterion-claim-class (pass): tillr-loop verdict: criterion c1 has no valid stored claim_class`, with the loop's build line naming `6221148e51e1`. `go version -m` on the installed `tillr-item` showed `vcs.revision=6221148e5`, and its `show` printed criteria with `criterion_id`, `text` and `state` only.
 - **Evidence:** 2026-11-17, after `just tillr-build` at `bb6e286b5` and a relaunch at 09:59:35Z, the loop's first writable open added the column, `tillr item show` printed `claim_class` `verification-only` for every criterion of `item-gate-red-cap` and `item-def-item-lifecycle`, and the loop logged `landed item-jl-criterion-claim-class` with every criterion `done`.
@@ -8860,7 +8860,7 @@ other items.
 
 **Agent Details:**
 
-- **Ref:** [the landing-call design](../design/tillr-landing-call.md): [Section 6.1](../design/tillr-landing-call.md#61-the-form-chosen-and-the-two-rejected) to [Section 6.5](../design/tillr-landing-call.md#65-the-fork-patches), and [Filing fork work](../../tools/tillr-drain/README.md#filing-fork-work). The same shape as [the safe-stop item](../design/tillr-restart.md).
+- **Ref:** [the landing-call design](../design/tillr-landing-call.md): [Section 6.1](../design/tillr-landing-call.md#61-the-form-chosen-and-the-two-rejected) to [Section 6.5](../design/tillr-landing-call.md#65-the-fork-patches), and [Filing fork work](../../tools/tillr-drain/README.md#filing-fork-work). The same shape as [the safe-stop patch](../reference/tillr-restart.md#pausing-a-session).
 - **Where:** `.forks/lanes/lane-1/pi/` is the fence spelling that staging reads. Staging rewrites it to the dispatched lane's checkout and starts that checkout at the delivered patch tip. Commit linearly on the fork's `main`. The replay already exists in the fork: `getPendingToolCalls` and `runAgentPendingToolCalls` in `packages/agent/src/agent-loop.ts`, `Agent.completePendingToolCalls` in `packages/agent/src/agent.ts`, from the fork commit titled "stop print workers safely on SIGUSR1". The park belongs where a tool result can already end a batch without a follow-up request; the no-prompt open is in `packages/coding-agent/src/modes/print-mode.ts` and its argument parsing; the flag is in the command line.
 - **What the 2026-11-18 experiment saw, and c5 is for.** With the default extension set loaded, an extension appended a message to the session as it opened, between the unanswered call and the replayed result, and the Bedrock request failed with "The number of toolResult blocks ... exceeds the number of toolUse blocks of previous turn". A worker loads no discovery extensions, so it is not expected there; the order is still a precondition.
 - **A resume still needs a prompt today:** print mode took a prompt and added it after the replayed result; that is what c2 and c3 replace.

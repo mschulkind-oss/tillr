@@ -1,5 +1,6 @@
 // Package settings reads the repository's .tillr.toml. It is shared by startup and
 // validation-only callers; neither caller has a second set of parsing rules.
+// Architecture and invariants: docs/reference/tillr-restart.md
 package settings
 
 import (

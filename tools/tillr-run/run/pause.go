@@ -1,5 +1,7 @@
 package run
 
+// Architecture and invariants: docs/reference/tillr-restart.md
+
 import (
 	"context"
 	"crypto/rand"

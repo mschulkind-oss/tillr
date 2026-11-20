@@ -1,8 +1,9 @@
 package main
 
 // `tillr view restart`, and the server's side of it: the same request the loop answers
-// (docs/design/tillr-restart.md), with no steps to protect. The server finishes the HTTP
-// requests it is serving and replaces itself in place; a browser's live channel reconnects.
+// (Architecture and invariants: docs/reference/tillr-restart.md), with no steps to protect.
+// The server finishes the HTTP requests it is serving and replaces itself in place; a
+// browser's live channel reconnects.
 
 import (
 	"context"
