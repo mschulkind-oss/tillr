@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -92,6 +93,10 @@ func readRepeatedEnding(r *store.Reader, d Decision) (*secondFailure, error) {
 	if err != nil {
 		return nil, err
 	}
+	landed, err := obstacles.HasLanded(r, d.ItemID)
+	if err != nil {
+		return nil, readFailure(err)
+	}
 	if latest.Step == RefusalConflict {
 		// A squash conflict has its own route (D-JL12): the second identical one of a retry
 		// cycle restarts the item and routes nowhere, and a conflict of the fresh attempt
@@ -107,6 +112,9 @@ func readRepeatedEnding(r *store.Reader, d Decision) (*secondFailure, error) {
 			return nil, nil
 		}
 		text := fmt.Sprintf(conflictAfterRestartPrefix+" run %s, the fresh attempt that followed a restart from the current trunk, conflicted again at landing. The item's earlier attempt conflicted twice, so the operator decides: amend the item's work or its fence, or close it.\n\n%s", current, latest.Detail)
+		if landed {
+			text = obstacles.StripCloseRemedy(text, d.ItemID)
+		}
 		return &secondFailure{itemID: d.ItemID, outcomeRun: current, current: current, text: text, forceOwner: true, WorkerSession: nil}, nil
 	}
 	previous, repeated := repeatedEnding(chain, chainEnding{RunID: current, Producer: producerOf(d), Cause: latest.Step, Key: latest.Evidence})
@@ -127,7 +135,11 @@ func readRepeatedEnding(r *store.Reader, d Decision) (*secondFailure, error) {
 		if err != nil {
 			return nil, err
 		}
-		text = fmt.Sprintf("%s run %s ended (refused at %s) with the same evidence as run %s, so the worker is not sent it again. A filed request has no document block; deliver a revised instruction in the next run's brief with %s (or close the item with tillr item close --item %s).", IdenticalRepeatPrefix, current, latest.Step, previous, cmd, d.ItemID)
+		if landed {
+			text = fmt.Sprintf("%s run %s ended (refused at %s) with the same evidence as run %s, so the worker is not sent it again. A filed request has no document block; deliver a revised instruction in the next run's brief with %s.", IdenticalRepeatPrefix, current, latest.Step, previous, cmd)
+		} else {
+			text = fmt.Sprintf("%s run %s ended (refused at %s) with the same evidence as run %s, so the worker is not sent it again. A filed request has no document block; deliver a revised instruction in the next run's brief with %s (or close the item with tillr item close --item %s).", IdenticalRepeatPrefix, current, latest.Step, previous, cmd, d.ItemID)
+		}
 	}
 	for _, id := range []string{previous, current} {
 		rec, err := terminalRecord(r, id)

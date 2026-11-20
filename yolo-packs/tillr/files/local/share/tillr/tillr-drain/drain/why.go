@@ -12,6 +12,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr-drain/judgegrants"
+	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-drain/presence"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/definition"
@@ -227,6 +228,10 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 	if err != nil {
 		return answer, readFailure(err)
 	}
+	landedItems, err := obstacles.LandedItems(r)
+	if err != nil {
+		return answer, readFailure(err)
+	}
 	assigned := map[string]string{}
 	for i, env := range envs {
 		it := items[i]
@@ -373,7 +378,11 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		if c := d.BlockConflict; c != nil && c.TriageVersion != "" {
 			row.Why += ": " + c.Text
 			if c.WaitingOn == "owner" {
-				row.Mover = "the owner; close the item or answer the conflict"
+				if landedItems[it.ItemID] {
+					row.Mover = "the owner; answer the conflict"
+				} else {
+					row.Mover = "the owner; close the item or answer the conflict"
+				}
 			} else {
 				row.Mover = "triage on the design seat"
 			}
@@ -489,20 +498,37 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 						} else {
 							row.Why += ": run " + c.RunID + "'s report names the owner as its next actor (conflict " + c.ConflictID + ")"
 						}
-						row.Mover = "answer conflict " + c.ConflictID + ", or close the item (tillr item close --item " + it.ItemID + ")"
+						if landedItems[it.ItemID] {
+							cmd, cmdErr := acceptedConflictRetryCommand(r, it.ItemID, c)
+							if cmdErr == nil && cmd != "" {
+								row.Mover = "answer conflict " + c.ConflictID + " with " + cmd
+							} else {
+								row.Mover = "answer conflict " + c.ConflictID
+							}
+						} else {
+							row.Mover = "answer conflict " + c.ConflictID + ", or close the item (tillr item close --item " + it.ItemID + ")"
+						}
 					case isReq:
-						cmd, cmdErr := acceptedBuildRetryCommand(r, it.ItemID, c.RunID)
+						cmd, cmdErr := acceptedConflictRetryCommand(r, it.ItemID, c)
 						if cmdErr != nil {
 							cmd = retryCommand(it.ItemID, c.RunID, "")
 						}
 						if obs := parseObstacle(workerConflictReport(c.Text)); obs.Kind == ObstacleOwner && obs.Field("QUESTION") != "" {
 							actor = "owner"
 							row.Why += ": " + collapseSingleLine(obs.Field("QUESTION"))
-							row.Mover = "answer with " + cmd + ", or close the item (tillr item close --item " + it.ItemID + ")"
+							if landedItems[it.ItemID] {
+								row.Mover = "answer with " + cmd
+							} else {
+								row.Mover = "answer with " + cmd + ", or close the item (tillr item close --item " + it.ItemID + ")"
+							}
 						} else {
 							actor = "operator"
 							row.Why += ": " + firstParagraph(c.Text)
-							row.Mover = "deliver a revised instruction with " + cmd + ", or close the item (tillr item close --item " + it.ItemID + ")"
+							if landedItems[it.ItemID] {
+								row.Mover = "deliver a revised instruction with " + cmd
+							} else {
+								row.Mover = "deliver a revised instruction with " + cmd + ", or close the item (tillr item close --item " + it.ItemID + ")"
+							}
 						}
 					case c.BodyRef == "":
 						actor, row.Why = "operator", row.Why+": no document exists; name or triage one for "+it.ItemID
@@ -556,9 +582,29 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		} else {
 			answer.Summary.Held[d.Reason]++
 		}
+		if landedItems[it.ItemID] {
+			row.Why = obstacles.StripCloseRemedy(row.Why, it.ItemID)
+			row.Mover = obstacles.StripCloseRemedy(row.Mover, it.ItemID)
+		}
 		answer.Rows = append(answer.Rows, row)
 	}
 	return answer, nil
+}
+
+// acceptedConflictRetryCommand returns the exact `tillr drain retry` command AuthorizeRetry
+// accepts for conflict c on itemID: the design-retry form when c waits on the owner after
+// a design run, and the build-retry form otherwise.
+func acceptedConflictRetryCommand(r *store.Reader, itemID string, c item.Conflict) (string, error) {
+	if c.Status == "owner" && c.DesignRunID != "" && c.TriageVersion == "" {
+		designRuns, err := designRunsOf(r, itemID)
+		if err != nil {
+			return "", err
+		}
+		if designRuns[c.DesignRunID] {
+			return retryCommand(itemID, c.DesignRunID, ""), nil
+		}
+	}
+	return acceptedBuildRetryCommand(r, itemID, c.RunID)
 }
 
 func whyPresentation(d Decision) (class, where, mover string) {

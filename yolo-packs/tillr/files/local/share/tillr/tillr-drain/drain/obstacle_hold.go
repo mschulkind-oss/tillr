@@ -65,6 +65,13 @@ func (l *Loop) recordObstacleHold(ctx context.Context, d Decision, obs Obstacle)
 			_ = json.Unmarshal([]byte(rawAllowed), &allowed)
 		}
 		hold = obstacles.NewHold(d.ItemID, runID, obs.Kind, obs.Fields, checks, baseSHA, allowed)
+		landed, err := obstacles.HasLanded(tx.Reader(), d.ItemID)
+		if err != nil {
+			return readFailure(err)
+		}
+		if landed {
+			hold = hold.WithoutCloseRemedy()
+		}
 		if err := requireHold(tx.Reader(), hold.ReasonCode()); err != nil {
 			return err
 		}
