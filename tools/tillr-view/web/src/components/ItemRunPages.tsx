@@ -14,6 +14,7 @@ import { RunUsageFigures, UsageSummary } from "./Usage";
 import { DependencyLinks } from "./DependencyLinks";
 import { PreservedWork } from "./PreservedWork";
 import { ItemGraph } from "./ItemGraph";
+import { DrainScheduleLedger, TimeOrderStream, WallTimeCard } from "./RunTiming";
 
 export function foldedDecisions(decisions: DispatchView[]) {
   const folds: { decision: DispatchView; count: number; since: number }[] = [];
@@ -92,7 +93,7 @@ export function RunPage({ id, route, live, paused }: { id: string; route: string
   const params = new URLSearchParams(route.split("?")[1]);
   const tab = params.get("tab") ?? "timeline", artifactKind = params.get("artifact"), exchangeID = params.get("exchange");
   const run = useRunQuery(id, live, paused), timeline = useRunTimelineQuery(id, live, true, paused), gate = useRunGateQuery(id, live, true, paused);
-  const transcript = useRunTranscriptQuery(id, live, tab === "transcript", paused);
+  const transcript = useRunTranscriptQuery(id, live, tab === "transcript" || tab === "time-order", paused);
   const exchanges = useRunExchangesQuery(id, live, tab === "exchanges" || exchangeID !== null, paused);
   const artifact = useRunArtifactQuery(id, artifactKind, live, paused);
   const data = run.data?.data;
@@ -102,14 +103,15 @@ export function RunPage({ id, route, live, paused }: { id: string; route: string
   return <main className="entity-page" aria-label="Run page"><h1>Run <EntityLink kind="run" id={id} /></h1>
     {!data ? <p>Reading the run…</p> : <><p><EntityLink kind="item" id={data.run.item_id} /> · <EntityLink kind="lane" id={data.run.lane_id} />{data.run.seat ? <> · seat {data.run.seat}</> : null}{data.run.workflow ? <> · workflow {data.run.workflow}</> : null}{data.run.node ? <> · node {data.run.node}</> : null} · {data.run.backend} · {data.run.state} · exit {data.run.exit_code ?? "not recorded"}</p>
       <RunUsageFigures usage={data.usage} />
+      <WallTimeCard timing={data.timing} />
       <PreservedWork records={data.preserved_work ?? []} />
       <nav aria-label="Run artifacts">{["brief", "fence", "base_sha", "request", "gate.verdict", "land.attempt"].map(kind => <button key={kind} onClick={() => navigate("artifact", kind)}>Open {kind}</button>)}</nav>
       {timeline.error ? <p role="alert">Timeline refused: {timeline.error.message}</p> : !timeline.data ? <p>Reading timeline spans…</p> : null}
       {gate.error ? <p role="alert">Gate refused: {gate.error.message}</p> : !gate.data ? <p>Reading gate spans…</p> : null}
       {timeline.data?.data.note ? <p>{timeline.data.data.note}</p> : null}{gate.data?.data.note ? <p>{gate.data.data.note}</p> : null}
       <SpanViewer key={id} spans={spans} initialComplete={!timeline.isPending && !gate.isPending} paused={paused} />
-      <nav aria-label="Causal record">{["timeline", "transcript", "exchanges", "claims"].map(name => <button key={name} aria-pressed={tab === name} onClick={() => navigate("tab", name)}>{name[0].toUpperCase() + name.slice(1)}</button>)}</nav>
-      {tab === "transcript" ? <TranscriptView runId={id} transcript={transcript.data?.data} error={transcript.error} /> : tab === "exchanges" ? <InterToolExchangeView runId={id} exchanges={exchanges.data?.data} selectedExchange={exchangeID} onSelectExchange={value => navigate("exchange", value)} /> : tab === "claims" ? <ClaimAuditBanner run={data} /> : null}
+      <nav aria-label="Causal record">{["timeline", "time-order", "transcript", "exchanges", "claims"].map(name => <button key={name} aria-pressed={tab === name} onClick={() => navigate("tab", name)}>{(name[0].toUpperCase() + name.slice(1)).replace("-", " ")}</button>)}</nav>
+      {tab === "timeline" ? <DrainScheduleLedger schedule={data.schedule} onOpenTimeOrder={() => navigate("tab", "time-order")} /> : tab === "time-order" ? <TimeOrderStream runId={id} schedule={data.schedule} transcript={transcript.data?.data} entriesPending={transcript.isPending} transcriptError={transcript.error} /> : tab === "transcript" ? <TranscriptView runId={id} transcript={transcript.data?.data} error={transcript.error} /> : tab === "exchanges" ? <InterToolExchangeView runId={id} exchanges={exchanges.data?.data} selectedExchange={exchangeID} onSelectExchange={value => navigate("exchange", value)} /> : tab === "claims" ? <ClaimAuditBanner run={data} /> : null}
       {exchangeID && exchanges.error ? <p role="alert">Exchange read refused: {exchanges.error.message}</p> : exchangeID && exchanges.data && !exchanges.data.data.exchanges.some(e => e.exchange_id === exchangeID) ? <p role="alert">Exchange {exchangeID} is not recorded in this run.</p> : exchangeID && !exchanges.data ? <p>Reading selected exchange…</p> : null}
       {artifactKind || (exchangeID && exchanges.data?.data.exchanges.some(e => e.exchange_id === exchangeID)) ? <PayloadInspectorDrawer exchange={exchanges.data?.data.exchanges.find(e => e.exchange_id === exchangeID) ?? null} artifact={artifact.data?.data} artifactKind={artifactKind} artifactError={artifact.error} onClose={() => { const next = new URLSearchParams(params); next.delete("artifact"); next.delete("exchange"); window.location.hash = `#/run/${encodeURIComponent(id)}?${next}`; }} /> : null}
     </>}

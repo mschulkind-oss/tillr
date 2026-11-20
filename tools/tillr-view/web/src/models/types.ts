@@ -687,6 +687,39 @@ export interface RunData {
   claim_checks: ClaimView[];
   cost: CostView;
   completeness: CompletenessView;
+  /** Where the run's wall time went; absent on a server that predates the field. */
+  timing?: RunTiming;
+  /** The drain's own scheduling decisions about the run, oldest first. */
+  schedule?: ScheduleEntry[];
+}
+
+/** One figure of the wall-time split. `ms` is null when the run's records do not carry it:
+ * render "not recorded", never zero. */
+export interface TimingMetric {
+  ms: number | null;
+  epistemic_state: EpistemicState | "derived" | "lower_bound";
+  source?: string;
+  note?: string;
+}
+
+export interface RunTiming {
+  wall_ms: TimingMetric;
+  model_ms: TimingMetric;
+  tool_ms: TimingMetric;
+  tool_active_ms: TimingMetric;
+  slot_wait_ms: TimingMetric;
+  uncovered_ms?: TimingMetric;
+}
+
+export interface ScheduleEntry {
+  at_ms: number | null;
+  seq?: number;
+  category: "allocation" | "gate" | "refusal" | "landing" | "retry" | "other";
+  kind: string;
+  summary: string;
+  source: string;
+  links?: Record<string, string>;
+  epistemic_state: EpistemicState;
 }
 
 export interface Exchange {

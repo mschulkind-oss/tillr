@@ -538,6 +538,124 @@ func hold(t *testing.T) {{
         self.assertEqual(peak, limit)
         self.assertEqual(len(list(markers.glob('started_B_*'))), second_count)
 
+    def test_slot_wait_spans_append_fail_open_to_trace_dir(self):
+        lock_dir = self.root / 'trace-pool'
+        trace_dir = self.root / 'trace-dir'
+        trace_dir.mkdir()
+        span_file = trace_dir / 'slot-waits.jsonl'
+
+        # 1. Immediate acquisition writes waited_ms == 0, acquired == True, slot-0.
+        with patch.dict(os.environ, {'TILLR_TRACE_DIR': str(trace_dir)}):
+            with shards.acquire_shard_slot(lock_dir, 1, holder='run-imm', label='pkg shard 1'):
+                pass
+
+        # 2. Contended acquisition writes waited_ms > 0, acquired == True; proof fallback writes proof-0.
+        entered_wait = threading.Event()
+        release_holder = threading.Event()
+
+        def hold_first():
+            with shards.acquire_shard_slot(lock_dir, 1, holder='run-holder'):
+                assert release_holder.wait(60)
+
+        holder_thread = threading.Thread(target=hold_first)
+        with patch.dict(os.environ, {'TILLR_TRACE_DIR': ''}):
+            holder_thread.start()
+        # Wait until slot-0.holder.json is live before starting contended waiters.
+        deadline = time.monotonic() + 30
+        while not shards.read_slot_holders(lock_dir):
+            if time.monotonic() > deadline:
+                self.fail('holder did not acquire slot-0')
+            time.sleep(0.005)
+
+        def contended_waiter():
+            with patch.dict(os.environ, {'TILLR_TRACE_DIR': str(trace_dir)}):
+                with shards.acquire_shard_slot(
+                    lock_dir, 1,
+                    notify=lambda _msg: entered_wait.set(),
+                    holder='run-contended',
+                    label='pkg shard 2',
+                ):
+                    pass
+
+        waiter_thread = threading.Thread(target=contended_waiter)
+        waiter_thread.start()
+        self.assertTrue(entered_wait.wait(30))
+
+        # Proof caller takes reserved proof-0 immediately while ordinary slot-0 is held.
+        with patch.dict(os.environ, {'TILLR_TRACE_DIR': str(trace_dir)}):
+            with shards.acquire_shard_slot(
+                lock_dir, 1, slot_class='proof', proof_limit=1, holder='gate:run-1',
+            ):
+                pass
+
+        # 3. Interrupted wait before acquisition writes acquired == False and slot is None.
+        class _StopWait( BaseException ):
+            pass
+
+        with patch.dict(os.environ, {'TILLR_TRACE_DIR': str(trace_dir)}):
+            with self.assertRaises(_StopWait):
+                with shards.acquire_shard_slot(
+                    lock_dir, 1,
+                    notify=lambda _msg: (_ for _ in ()).throw(_StopWait()),
+                    holder='run-interrupted',
+                    label='pkg shard 3',
+                ):
+                    pass
+
+        release_holder.set()
+        waiter_thread.join(30)
+        holder_thread.join(30)
+        self.assertFalse(waiter_thread.is_alive())
+        self.assertFalse(holder_thread.is_alive())
+
+        rows = [json.loads(line) for line in span_file.read_text().splitlines() if line.strip()]
+        by_run = {row['run']: row for row in rows}
+        self.assertEqual(set(by_run), {'run-imm', 'run-contended', 'gate:run-1', 'run-interrupted'})
+
+        imm = by_run['run-imm']
+        self.assertEqual(imm['kind'], 'slot.wait')
+        self.assertEqual(imm['waited_ms'], 0)
+        self.assertEqual(imm['ts_start_ms'], imm['ts_end_ms'])
+        self.assertEqual(imm['ts'], imm['ts_end'])
+        self.assertEqual(imm['slot'], 'slot-0')
+        self.assertEqual(imm['class'], 'ordinary')
+        self.assertIs(imm['acquired'], True)
+        self.assertEqual(imm['label'], 'pkg shard 1')
+
+        contended = by_run['run-contended']
+        self.assertGreater(contended['waited_ms'], 0)
+        self.assertEqual(contended['ts_end_ms'] - contended['ts_start_ms'], contended['waited_ms'])
+        self.assertEqual(contended['slot'], 'slot-0')
+        self.assertIs(contended['acquired'], True)
+        self.assertEqual(contended['label'], 'pkg shard 2')
+
+        proof = by_run['gate:run-1']
+        self.assertEqual(proof['slot'], 'proof-0')
+        self.assertEqual(proof['class'], 'proof')
+        self.assertIs(proof['acquired'], True)
+        self.assertNotIn('label', proof)
+
+        interrupted = by_run['run-interrupted']
+        self.assertIsNone(interrupted['slot'])
+        self.assertIs(interrupted['acquired'], False)
+        self.assertGreaterEqual(interrupted['waited_ms'], 0)
+        self.assertEqual(interrupted['label'], 'pkg shard 3')
+
+        # 4. Missing directory or unwritable destination fails open without breaking slot acquisition.
+        missing_dir = self.root / 'does-not-exist'
+        with patch.dict(os.environ, {'TILLR_TRACE_DIR': str(missing_dir)}):
+            with shards.acquire_shard_slot(lock_dir, 1, holder='run-missing'):
+                pass
+        self.assertFalse(missing_dir.exists())
+
+        blocked_dir = self.root / 'blocked-trace'
+        blocked_dir.mkdir()
+        # Make slot-waits.jsonl a directory so opening it for append fails with EISDIR.
+        (blocked_dir / 'slot-waits.jsonl').mkdir()
+        with patch.dict(os.environ, {'TILLR_TRACE_DIR': str(blocked_dir)}):
+            with shards.acquire_shard_slot(lock_dir, 1, holder='run-eisdir'):
+                pass
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -933,6 +933,33 @@ func (obs *observations) timeline(run storeRun) []span {
 		}
 	}
 
+	if slotRows, ok := readSlotWaitRows(filepath.Join(obs.runDir(runID), "slot-waits.jsonl")); ok {
+		parent := runID + "/run"
+		for i, sw := range slotRows {
+			if sw.StartMS <= 0 || sw.EndMS < sw.StartMS {
+				continue
+			}
+			start, end := sw.StartMS, sw.EndMS
+			label := "slot.wait"
+			if sw.Label != "" {
+				label += " · " + sw.Label
+			}
+			if sw.Slot != nil && *sw.Slot != "" {
+				label += " (" + *sw.Slot + ")"
+			}
+			status := "acquired"
+			if !sw.Acquired {
+				status = "interrupted"
+			}
+			out = append(out, span{
+				SpanID: runID + "/slot-wait/" + strconv.Itoa(i+1), ParentSpanID: &parent,
+				LaneID: lane, Category: "slot_wait", Label: label,
+				StartedAtMS: &start, FinishedAtMS: &end, TSSource: "slot_waits",
+				EpistemicState: stateObserved, Status: status, AttributesJSON: sw.Raw,
+			})
+		}
+	}
+
 	// One gap span per seam, so the waterfall shows the hole where the work happened.
 	for _, seam := range obs.seams(runID, row, indexed, readErr) {
 		id := seam.ExchangeID

@@ -728,6 +728,26 @@ def case_document_fed_prerequisite_documented():
         fail("the operating skill must route the reader to the drain prerequisite")
 
 
+def case_run_timing_and_schedule_documented():
+    readme = text_of(ROOT / "tools/tillr-view/README.md")
+    skill = text_of(SKILL)
+    for required in (
+        "tillr-view run",
+        "tillr view run",
+        "slot-waits.jsonl",
+        "slot_wait_ms",
+        "tool_active_ms",
+        "schedule",
+        "time-order",
+    ):
+        if required not in readme:
+            fail(f"tools/tillr-view/README.md omits run timing/schedule contract: {required}")
+    for required in ("tillr view run", "slot_wait_ms", "slot-waits.jsonl", "schedule"):
+        if required not in skill:
+            fail(f"{SKILL.relative_to(ROOT)} omits run timing/schedule audit guidance: {required}")
+    ok("view README and operating skill document tillr view run, slot-waits.jsonl, and schedule")
+
+
 def case_seed_retirement_documented():
     for retired in ("config/tillr/seed-items.json", "tools/tillr-drain/seed_test.go",
                     "tools/tillr-item/item/seed.go", "tools/gate/checks/seed-freeze.json",
@@ -755,6 +775,7 @@ def case_seed_retirement_documented():
 
 
 def main():
+    case_run_timing_and_schedule_documented()
     case_seed_retirement_documented()
     green_build_tests = subprocess.run(
         [sys.executable, str(ROOT / "tests/tillr-build.test.py")],

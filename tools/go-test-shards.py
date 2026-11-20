@@ -3,6 +3,7 @@
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import contextlib
+from datetime import datetime, timezone
 import fcntl
 import json
 import math
@@ -304,9 +305,49 @@ def describe_slot_holders(holders, fallback_count=0):
     return f'held by {total} holder(s) across {len(ordered)} run(s): {runs}'
 
 
+def _iso_utc_ms(epoch_ms):
+    return datetime.fromtimestamp(epoch_ms / 1000.0, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3] + 'Z'
+
+
+def record_slot_wait(*, start_wall_ms, waited_ms, slot, slot_class, holder_name, label, acquired):
+    """Fail-open append of one `slot.wait` JSON line to `$TILLR_TRACE_DIR/slot-waits.jsonl`."""
+    trace_dir = os.environ.get('TILLR_TRACE_DIR', '').strip()
+    if not trace_dir:
+        return
+    try:
+        if not os.path.isdir(trace_dir):
+            return
+        waited = max(0, int(waited_ms))
+        ts_start_ms = int(start_wall_ms)
+        ts_end_ms = ts_start_ms + waited
+        row = {
+            'kind': 'slot.wait',
+            'ts': _iso_utc_ms(ts_start_ms),
+            'ts_end': _iso_utc_ms(ts_end_ms),
+            'ts_start_ms': ts_start_ms,
+            'ts_end_ms': ts_end_ms,
+            'waited_ms': waited,
+            'slot': slot,
+            'class': slot_class,
+            'run': holder_name,
+            'acquired': bool(acquired),
+        }
+        if label is not None:
+            row['label'] = str(label)
+        payload = (json.dumps(row, separators=(',', ':')) + '\n').encode('utf-8')
+        out_path = os.path.join(trace_dir, 'slot-waits.jsonl')
+        out_fd = os.open(out_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        try:
+            os.write(out_fd, payload)
+        finally:
+            os.close(out_fd)
+    except OSError:
+        pass
+
+
 @contextlib.contextmanager
 def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
-                       proof_limit=None, holder=None):
+                       proof_limit=None, holder=None, label=None):
     """Acquire one slot from a counted flock pool under lock_dir; wait without timeout.
 
     Ordinary callers take only from the ordinary share (`slot-0..limit-1`) and yield while
@@ -327,6 +368,9 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
     wait_fd = None
     wait_started = None
     next_report_at = None
+    start_wall_ms = int(time.time() * 1000)
+    acquire_started = time.monotonic()
+    span_recorded = False
     offset = os.getpid() + threading.get_ident()
     try:
         while fd is None:
@@ -372,8 +416,23 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
         if wait_fd is not None:
             os.close(wait_fd)
             wait_fd = None
+        waited_ms = (0 if wait_started is None
+                     else max(1, int(round((time.monotonic() - acquire_started) * 1000))))
+        record_slot_wait(
+            start_wall_ms=start_wall_ms, waited_ms=waited_ms, slot=slot_name,
+            slot_class=chosen_class, holder_name=holder_name, label=label, acquired=True,
+        )
+        span_recorded = True
         meta_fd, meta_path = write_slot_holder(lock_dir, slot_name, holder_name, chosen_class)
     except BaseException:
+        if not span_recorded:
+            waited_ms = (0 if wait_started is None
+                         else max(0, int(round((time.monotonic() - acquire_started) * 1000))))
+            record_slot_wait(
+                start_wall_ms=start_wall_ms, waited_ms=waited_ms, slot=None,
+                slot_class=chosen_class, holder_name=holder_name, label=label, acquired=False,
+            )
+            span_recorded = True
         if wait_fd is not None:
             os.close(wait_fd)
         if fd is not None:
@@ -415,7 +474,8 @@ def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=N
         with acquire_shard_slot(effective_lock_dir, effective_limit,
                                 lambda message: print(f'go-test-shards: {label} {message}',
                                                       file=sys.stderr, flush=True),
-                                slot_class=slot_class, proof_limit=proof_limit, holder=holder), \
+                                slot_class=slot_class, proof_limit=proof_limit, holder=holder,
+                                label=label), \
                 tempfile.NamedTemporaryFile(dir=scratch) as out, tempfile.NamedTemporaryFile(dir=scratch) as err, \
                 open(out.name, 'rb') as reader, open(err.name, 'rb') as error_reader, \
                 contextlib.ExitStack() as cleanup:

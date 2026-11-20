@@ -14,6 +14,8 @@ const LABELS: Record<string, string> = {
   absent: "ABSENT",
   lane_copy: "LANE COPY",
   no_clock: "NO CLOCK",
+  derived: "DERIVED",
+  lower_bound: "LOWER BOUND",
 };
 
 /** The one sentence each state carries when it needs explaining. `observed` needs none. */
@@ -25,6 +27,8 @@ const EXPLANATIONS: Record<string, string> = {
   absent: "no writer produced this record",
   lane_copy: "this is the lane's copy, which the next tick overwrites, not a preserved one",
   no_clock: "the record this came from stamped no clock at all, so none is shown rather than 1970",
+  derived: "computed from the run's recorded intervals rather than written as one figure",
+  lower_bound: "at least this much was recorded; the true figure may be higher",
 };
 
 export function EpistemicBadge({ state }: { state: EpistemicState | string }) {

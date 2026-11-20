@@ -483,9 +483,12 @@ copying the store".
 The record of what happened (`tillr store events` exports raw event envelopes by cursor),
 alongside `tillr view status` for current board and green-proof state, `tillr view waiting`
 for held items and lanes, `tillr view passes` for per-pass decisions and timings,
-`tillr view lanes` and `tillr view running` for active work and leases, `tillr view trace`
+`tillr view lanes` and `tillr view running` for active work and leases, `tillr view run` for one run's wall-time split
+(`model_ms`, `tool_ms`, `tool_active_ms`, and unioned `slot_wait_ms` from
+`slot-waits.jsonl`) and chronological drain scheduling decisions (`schedule`), `tillr view trace`
 and `tillr view perf-log` for run spans and observatory latency logs, and `tillr view serve`
-for the read-only web observatory. Where an event was never recorded, the absence is the
+for the read-only web observatory (where `#/run/<id>` renders the same wall-time split,
+`slot_wait` spans, and interleaved time-order stream). Where an event was never recorded, the absence is the
 finding — never reconstruct history from memory.
 
 ## Recovery
