@@ -1,8 +1,6 @@
-# last_hand_move_event_seq: 1319948
-# hand_move_event_sha256: 4ca603d2c90fbe726a814c5735ad6213149504f05a7e49726bd83d1913b0daed
-item-request-5c09ce7174
-fixer-main-129509992c18
-item-request-031212b1ad
+# last_hand_move_event_seq: 1320123
+# hand_move_event_sha256: 1c1b15ec703b64c647fefca82412ed34abe0678422710eb4c8738e70de68c8e2
+item-request-174bfbf230
 item-request-5be951c300
 item-request-b205fbd881
 item-request-ab90e5da8f
@@ -13,7 +11,6 @@ item-request-c04ea25d47
 item-gate-pinned-fork-inputs
 item-agent-default-bmad-superpowers-skills
 item-bedrock-claude-latest-only
-item-request-926c73851f
 item-request-7bbcb8dc81
 item-request-59735b6305
 item-request-28a8cd3a1b
@@ -25,5 +22,5 @@ item-request-8692f15f58
 item-request-760c0eb9d0
 item-request-1465e8759e
 item-request-bd4a9b8061
-item-request-174bfbf230
 item-request-b478edf600
+item-request-8970d30835
