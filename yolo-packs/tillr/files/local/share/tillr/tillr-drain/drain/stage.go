@@ -263,6 +263,10 @@ type StageSpec struct {
 	BaseSHA            string
 	ItemBaseSHA        string
 	WorkingDir         string
+
+	// ReturnedNodeBaseSHA keeps the producing node's boundary when its judge returns
+	// a retained candidate for another look, without requiring a new commit.
+	ReturnedNodeBaseSHA string
 	// VerifyReturnHead and VerifyReturnItemBase stage the build step a failed verify
 	// returns to: the lane (or fork checkout) is cut at the commit the verifier read
 	// instead of the trunk, and the item's own base stays the fence base.
@@ -463,6 +467,9 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 				return err
 			}
 			baseSHA = strings.TrimSpace(head)
+			if spec.ReturnedNodeBaseSHA != "" {
+				baseSHA = spec.ReturnedNodeBaseSHA
+			}
 		}
 		scope, err := spec.Node.scopePaths(itemAllowed)
 		if err != nil {

@@ -319,6 +319,18 @@ func carryReturnedNodeInputs(tx *store.Tx, d Decision) error {
 	return nil
 }
 
+// judgedCandidateReturn identifies a retained candidate, not merely a resumed conversation.
+func judgedCandidateReturn(d Decision) *WorkerSession {
+	if d.Returned == nil || d.Returned.Cause != ReasonEvalFailed || d.WorkerSessionReason != "resumed-worker" {
+		return nil
+	}
+	s := d.Returned.WorkerSession
+	if s == nil || s.HeadSHA == "" || s.HeadSHA == s.BaseSHA || s.HeadSHA == s.NodeBaseSHA {
+		return nil
+	}
+	return s
+}
+
 func (l *Loop) stageWorkerSession(d *Decision, spec *StageSpec) error {
 	if d.Returned == nil {
 		return nil
@@ -342,6 +354,9 @@ func (l *Loop) stageWorkerSession(d *Decision, spec *StageSpec) error {
 	if d.Returned.Cause != RefusalReverted {
 		spec.Continue = true
 		spec.BaseSHA = s.BaseSHA
+		if judgedCandidateReturn(*d) != nil {
+			spec.ReturnedNodeBaseSHA = s.NodeBaseSHA
+		}
 	}
 	spec.SessionID = s.SessionID
 	return nil

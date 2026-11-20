@@ -129,7 +129,7 @@ func TestLandingStateIncludesPriorRefusalsAndOpenCalls(t *testing.T) {
 		}
 		return appendLandingCallEvent(tx, callDelivered, "old", landingCallDelivery{Form: "tool-result", RunID: "previous"}, l.cfg.Now())
 	})
-	state, err := l.landingState(context.Background(), "item-a", "session")
+	state, err := l.landingState(context.Background(), "item-a", "session", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

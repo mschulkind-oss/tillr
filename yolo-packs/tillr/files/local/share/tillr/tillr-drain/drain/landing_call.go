@@ -738,7 +738,7 @@ func landingAnswerForTurn(answer landingAnswer, runID, dir string) landingAnswer
 	return answer
 }
 
-func (l *Loop) landingState(ctx context.Context, itemID, session string) (map[string]any, error) {
+func (l *Loop) landingState(ctx context.Context, itemID, session string, retry *WorkerSession) (map[string]any, error) {
 	state := map[string]any{"open": []landingOffer{}, "refused": []map[string]string{}}
 	db, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
@@ -775,6 +775,11 @@ func (l *Loop) landingState(ctx context.Context, itemID, session string) (map[st
 				if err := json.Unmarshal(answerRaw, &answer); err != nil {
 					return err
 				}
+				// A judge return can be repaired by the report alone. Keep the
+				// answer in the transcript, but don't prohibit re-offering its head.
+				if retry != nil && call.Commit == retry.HeadSHA && answer.Kind == "refused" && answer.Stage == "judge" {
+					continue
+				}
 				if answer.Kind == "refused" || answer.Kind == "reverted" {
 					refused = append(refused, map[string]string{"commit": call.Commit, "answer": answer.Text})
 				}
@@ -787,7 +792,7 @@ func (l *Loop) landingState(ctx context.Context, itemID, session string) (map[st
 }
 
 func (l *Loop) stageLandingAnswer(ctx context.Context, d Decision, spec *StageSpec) error {
-	state, err := l.landingState(ctx, d.ItemID, spec.SessionID)
+	state, err := l.landingState(ctx, d.ItemID, spec.SessionID, judgedCandidateReturn(d))
 	if err != nil {
 		return err
 	}
