@@ -125,6 +125,10 @@ def dialect(stream_text):
     tokens, cost, session = None, None, init_session
     if final is not None:
         text = final.get("result") if isinstance(final.get("result"), str) else "".join(pieces)
+        if final.get("stop_reason") == "tool_deferred" and not text.strip():
+            # A parked delivery call ends the process with an empty result: say so, rather
+            # than leave a report that looks like a run that said nothing.
+            text = "[delivery call deferred; waiting for the gate's answer]"
         tokens = _usage_total(final.get("usage"))
         if isinstance(final.get("total_cost_usd"), (int, float)):
             cost = float(final["total_cost_usd"])

@@ -654,9 +654,18 @@ starts. Both files are written whole and renamed into place. Neither belongs in 
 record directory.
 
 The drain records the adapters' effective `ending-capability` declarations at loop start.
-Pi, Claude, Muse and Agy all ship `footer`: a run with only a footer follows the existing
-path. The offer/answer handoff is exercised with a stand-in harness; no shipped adapter
-opens a session to deliver a landing call answer yet. See the
+Muse and Agy ship `footer`: a run with only a footer follows the existing path. Pi ships
+`call-suspends` and the drain probes the installed `pi` for `parked-tool-calls`; Claude
+ships `call-suspends` and the drain probes the installed `claude` once
+(`probeClaudeEndingCapability`): `claude -p --setting-sources "" --continue` in an empty
+directory, with `CLAUDE_CODE_DISABLE_DEFERRED_TOOL_RESUME` unset, starts no model turn, and
+a binary that supports deferred-tool resume names `No deferred tool marker found in the
+resumed session` on standard error. An absent binary, an older one, or that variable set
+records `footer`. Both suspending backends offer through the same `landing-offer.json` and
+receive the same answer text as the suspended call's own result;
+[`backends/claude`](../tillr-run/backends/claude/README.md#the-delivery-call) explains how
+Claude Code does it. `landingResultPersisted` reads either backend's session file, and
+`reconcileLandingDelivery` records `call.delivered` from it. See the
 [landing-call design](../../docs/design/tillr-landing-call.md) for the full protocol.
 
 ## Backend policy changes
