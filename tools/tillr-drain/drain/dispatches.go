@@ -4,6 +4,7 @@ package drain
 import (
 	"database/sql"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
@@ -102,7 +103,7 @@ func (e *decisionCollisionError) Unwrap() error { return e.ExitError }
 // identity for different columns is an error, never permission to overwrite history.
 func recordPassDecision(tx *store.Tx, decision Decision, at time.Time) error {
 	columns := decisionColumns(decision)
-	if columns.deferredBy == nil && decision.Action == ActionHold && decision.Reason == ReasonRunLinkMissing {
+	if columns.deferredBy == nil && decision.Action == ActionHold && strings.HasPrefix(decision.Reason, ReasonRunLinkMissing) {
 		if _, _, moverAction := runLinkMissingHold(tx.Reader(), decision.ItemID, decision.SupersedesRunID); moverAction != "" {
 			columns.deferredBy = moverAction
 		}

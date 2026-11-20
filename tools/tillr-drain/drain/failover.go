@@ -194,6 +194,15 @@ type priorRun struct {
 	// Repeated is the recorded repeating-call ending of a run whose class is
 	// AttemptRepeating, with the route the settlement chose for it.
 	Repeated *RepeatedCall
+	// State, EndCause, Finished, Node and NodeOutcome are what the run's own records say,
+	// kept so a hold the planner cannot classify can name what was found (retryHoldReason).
+	// Finished is true when a run finish record exists; Node is empty for a run that is no
+	// workflow node.
+	State       string
+	EndCause    string
+	Finished    bool
+	Node        string
+	NodeOutcome string
 }
 
 // readPriorRuns answers every item's terminal runs, oldest first, keyed by item id.
@@ -247,6 +256,28 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 	isNode := `0`
 	if hasNodes {
 		isNode = `EXISTS (SELECT 1 FROM node_runs n WHERE n.run_id=runs.run_id)`
+	}
+	type nodeRecord struct{ node, outcome string }
+	nodeOf := map[string]nodeRecord{}
+	if hasNodes {
+		nodeRows, err := r.Query(`SELECT run_id, node_id, outcome FROM node_runs`)
+		if err != nil {
+			return nil, readFailure(err)
+		}
+		for nodeRows.Next() {
+			var id string
+			var rec nodeRecord
+			if err := nodeRows.Scan(&id, &rec.node, &rec.outcome); err != nil {
+				nodeRows.Close()
+				return nil, readFailure(err)
+			}
+			nodeOf[id] = rec
+		}
+		if err := nodeRows.Err(); err != nil {
+			nodeRows.Close()
+			return nil, readFailure(err)
+		}
+		nodeRows.Close()
 	}
 	rows, err := r.Query(
 		`SELECT item_id, run_id, backend, state, exit_code, COALESCE(end_cause, ''), artifact_refs, event_seq, started_at, rowid, ` + isNode + `
@@ -342,6 +373,9 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 			Class:    class,
 			Restaged: restaged[rec.RunID],
 			Repeated: repeat,
+			State:    string(rec.State), EndCause: rec.EndCause,
+			Finished: len(finishPayloads[rec.RunID]) > 0,
+			Node:     nodeOf[rec.RunID].node, NodeOutcome: nodeOf[rec.RunID].outcome,
 		})
 	}
 	return priors, nil

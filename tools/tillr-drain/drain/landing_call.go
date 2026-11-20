@@ -187,6 +187,11 @@ func (l *Loop) intakeLandingOffer(ctx context.Context, d Decision, rec run.Recor
 	// with no write open. Its inputs are all in hand, and the write below uses its answer
 	// only where it used to call it.
 	validated, validateErr := l.validateLandingOffer(ctx, d, rec, mainSHA, offer)
+	if validateErr == nil && validated.Commit != "" {
+		if err := l.pinLane(ctx, d.LaneID, rec.RunID, validated.Commit); err != nil {
+			return landingOfferAbsent, err
+		}
+	}
 	var intake landingOfferIntake
 	err = db.WriteTx(ctx, func(tx *store.Tx) error {
 		intake = landingOfferAbsent

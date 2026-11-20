@@ -1643,7 +1643,7 @@ func TestARetryStillHoldsAfterANonLandingRun(t *testing.T) {
 	if result.Stop != drain.StopQueueDrained {
 		t.Fatalf("the loop stopped %q (%s), want %q", result.Stop, result.Detail, drain.StopQueueDrained)
 	}
-	if !strings.Contains(result.Detail, "item_041 ("+drain.ReasonRunLinkMissing+")") {
+	if !strings.Contains(result.Detail, "item_041 ("+drain.ReasonRunLinkMissing+": ") {
 		t.Fatalf("the stop does not name the retry hold: %s", result.Detail)
 	}
 	if runs := lines(t, f.count); countMatching(runs, "adapter") != 0 {

@@ -68,7 +68,7 @@ func (s *LaneStager) retainingRunPins(ctx context.Context, sha string) ([]string
 //
 // A stager given no store can read no landing, so only a pin clears; it records nothing,
 // because the pin is the retention and the event only the account of it.
-func (s *LaneStager) clearableLaneCopy(ctx context.Context, lane, sha string) (bool, error) {
+func (s *LaneStager) clearableLaneCopy(ctx context.Context, lane, itemID, sha string) (bool, error) {
 	refs, err := s.retainingRunPins(ctx, sha)
 	if err != nil {
 		return false, err
@@ -84,13 +84,31 @@ func (s *LaneStager) clearableLaneCopy(ctx context.Context, lane, sha string) (b
 	if err != nil {
 		return false, err
 	}
+	var activeForeignOwner bool
+	var ownRunID string
 	err = r.ReadTx(ctx, func(reader *store.Reader) error {
+		works, err := readPending(reader)
+		if err != nil {
+			return err
+		}
+		for _, w := range works {
+			if w != nil && !w.Done && !w.LaneReleased && w.Decision.LaneID == lane && w.Decision.ItemID != itemID {
+				activeForeignOwner = true
+				return nil
+			}
+		}
+		if len(refs) == 0 && itemID != "" {
+			ownRunID, err = findOwnRunForCommit(reader, itemID, lane, sha)
+			if err != nil {
+				return err
+			}
+		}
 		runs := []string{}
 		for _, ref := range refs {
 			runs = append(runs, strings.TrimPrefix(ref, "refs/tillr/runs/"))
 		}
 		var runID string
-		err := reader.QueryRow(`SELECT json_extract(payload, '$.run_id') FROM events WHERE kind = 'land.landing' AND json_extract(payload, '$.result') = 'landed' AND json_extract(payload, '$.head_sha') = ? ORDER BY seq DESC LIMIT 1`, sha).Scan(&runID)
+		err = reader.QueryRow(`SELECT json_extract(payload, '$.run_id') FROM events WHERE kind = 'land.landing' AND json_extract(payload, '$.result') = 'landed' AND json_extract(payload, '$.head_sha') = ? ORDER BY seq DESC LIMIT 1`, sha).Scan(&runID)
 		if err == nil {
 			payload.Landed, payload.RunID = true, runID
 			return nil
@@ -223,6 +241,22 @@ func (s *LaneStager) clearableLaneCopy(ctx context.Context, lane, sha string) (b
 	if err != nil {
 		return false, err
 	}
+	if activeForeignOwner {
+		return false, nil
+	}
+	if ownRunID != "" {
+		ref := "refs/tillr/runs/" + ownRunID
+		if _, verifyErr := s.git(ctx, s.Root, "rev-parse", "--verify", "--quiet", ref); verifyErr != nil {
+			if _, pinErr := s.git(ctx, s.Root, "update-ref", ref, sha); pinErr != nil {
+				return false, Externalf("pinning %s at %s: %v", ref, sha, pinErr)
+			}
+		}
+		refs = append(refs, ref)
+		payload.Refs = refs
+		if payload.RunID == "" {
+			payload.RunID = ownRunID
+		}
+	}
 	if len(refs) == 0 && !payload.Landed && !payload.Closed && !payload.Superseded {
 		t, err := land.OpenTrunk(s.Root)
 		if err != nil {
@@ -258,4 +292,44 @@ func (s *LaneStager) clearableLaneCopy(ctx context.Context, lane, sha string) (b
 		return err
 	})
 	return err == nil, err
+}
+
+func findOwnRunForCommit(reader *store.Reader, itemID, lane, sha string) (string, error) {
+	var runID string
+	err := reader.QueryRow(`SELECT object_id FROM events WHERE kind = ? AND object_type = 'run' AND json_extract(payload, '$.item_id') = ? AND json_extract(payload, '$.head_sha') = ? ORDER BY seq DESC LIMIT 1`, candidateReadyKind, itemID, sha).Scan(&runID)
+	if err == nil && runID != "" {
+		return runID, nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return "", err
+	}
+	err = reader.QueryRow(`SELECT json_extract(payload, '$.run_id') FROM events WHERE kind = ? AND object_type = 'call' AND json_extract(payload, '$.item_id') = ? AND json_extract(payload, '$.commit') = ? ORDER BY seq DESC LIMIT 1`, callOffered, itemID, sha).Scan(&runID)
+	if err == nil && runID != "" {
+		return runID, nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return "", err
+	}
+	err = reader.QueryRow(`SELECT COALESCE(json_extract(payload, '$.parent_run_id'), '') FROM events WHERE kind = ? AND object_type = 'run' AND json_extract(payload, '$.decision.item_id') = ? AND json_extract(payload, '$.decision.node_base_sha') = ? ORDER BY seq DESC LIMIT 1`, nodeAdvancedKind, itemID, sha).Scan(&runID)
+	if err == nil && runID != "" {
+		return runID, nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return "", err
+	}
+	err = reader.QueryRow(`SELECT COALESCE(json_extract(payload, '$.candidate.run_id'), '') FROM events WHERE kind = ? AND object_type = 'run' AND json_extract(payload, '$.candidate.item_id') = ? AND json_extract(payload, '$.candidate.head_sha') = ? ORDER BY seq DESC LIMIT 1`, candidateLaneKind, itemID, sha).Scan(&runID)
+	if err == nil && runID != "" {
+		return runID, nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return "", err
+	}
+	err = reader.QueryRow(`SELECT COALESCE(json_extract(payload, '$.decision.returned.worker_session.run_id'), '') FROM events WHERE kind = ? AND object_type = 'run' AND json_extract(payload, '$.decision.item_id') = ? AND json_extract(payload, '$.decision.returned.worker_session.head_sha') = ? ORDER BY seq DESC LIMIT 1`, dispatchStartedKind, itemID, sha).Scan(&runID)
+	if err == nil && runID != "" {
+		return runID, nil
+	}
+	if err != nil && err != sql.ErrNoRows {
+		return "", err
+	}
+	return "", nil
 }

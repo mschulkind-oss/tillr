@@ -298,7 +298,7 @@ func TestWhyRunLinkMissingNamesUnansweredRunAndRetryCommand(t *testing.T) {
 			t.Fatalf("rows = %+v, want 1", answer.Rows)
 		}
 		row := answer.Rows[0]
-		if row.Reason != ReasonRunLinkMissing {
+		if !strings.HasPrefix(row.Reason, ReasonRunLinkMissing) {
 			t.Fatalf("reason = %q, want %q (%+v)", row.Reason, ReasonRunLinkMissing, row)
 		}
 		if row.Decision.SupersedesRunID != runID {

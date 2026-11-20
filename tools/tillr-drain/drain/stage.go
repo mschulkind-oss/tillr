@@ -259,6 +259,7 @@ type StageSpec struct {
 	RunID          string
 	Backend        string
 	BaseSHA        string
+	ItemBaseSHA    string
 	WorkingDir     string
 	TimeoutMS      int
 	// EndingCapability is the adapter probe at dispatch; a retained session keeps its staged form.
@@ -410,26 +411,35 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	itemAllowed := append([]string(nil), recorded.AllowedPaths...)
 	if spec.Node != nil {
 		if spec.Continue {
-			baseDir := laneDir
-			if spec.PreviousRunID != "" {
-				runDir := RunDir(s.Root, spec.PreviousRunID)
-				if _, statErr := os.Stat(filepath.Join(runDir, ItemBaseSHAFile)); statErr == nil {
-					baseDir = runDir
-				} else if _, statErr := os.Stat(filepath.Join(runDir, BaseSHAFile)); statErr == nil {
-					baseDir = runDir
+			if spec.ItemBaseSHA != "" && !isFork {
+				itemBaseSHA = spec.ItemBaseSHA
+			} else {
+				baseDir := laneDir
+				if spec.PreviousRunID != "" {
+					runDir := RunDir(s.Root, spec.PreviousRunID)
+					if _, statErr := os.Stat(filepath.Join(runDir, ItemBaseSHAFile)); statErr == nil {
+						baseDir = runDir
+					} else if _, statErr := os.Stat(filepath.Join(runDir, BaseSHAFile)); statErr == nil {
+						baseDir = runDir
+					}
+				}
+				raw, err := os.ReadFile(filepath.Join(baseDir, ItemBaseSHAFile))
+				if os.IsNotExist(err) {
+					// Before per-node scopes, base_sha retained the original item
+					// base across nodes. Migrate that recorded legacy boundary;
+					// never substitute the current trunk or target head.
+					raw, err = os.ReadFile(filepath.Join(baseDir, BaseSHAFile))
+				}
+				if err != nil {
+					if os.IsNotExist(err) && spec.ItemBaseSHA != "" {
+						itemBaseSHA = spec.ItemBaseSHA
+					} else {
+						return Externalf("reading the item's base: %v", err)
+					}
+				} else {
+					itemBaseSHA = strings.TrimSpace(string(raw))
 				}
 			}
-			raw, err := os.ReadFile(filepath.Join(baseDir, ItemBaseSHAFile))
-			if os.IsNotExist(err) {
-				// Before per-node scopes, base_sha retained the original item
-				// base across nodes. Migrate that recorded legacy boundary;
-				// never substitute the current trunk or target head.
-				raw, err = os.ReadFile(filepath.Join(baseDir, BaseSHAFile))
-			}
-			if err != nil {
-				return Externalf("reading the item's base: %v", err)
-			}
-			itemBaseSHA = strings.TrimSpace(string(raw))
 			head, err := s.git(ctx, target, "rev-parse", "HEAD")
 			if err != nil {
 				return err
@@ -922,7 +932,7 @@ func (s *LaneStager) refuseUnlandedCommit(ctx context.Context, spec StageSpec, w
 					"lane %s holds uncommitted work (%s)", spec.LaneID, first)
 			}
 		}
-		clearable, err := s.clearableLaneCopy(ctx, spec.LaneID, sha)
+		clearable, err := s.clearableLaneCopy(ctx, spec.LaneID, spec.ItemID, sha)
 		if err != nil {
 			return err
 		}
