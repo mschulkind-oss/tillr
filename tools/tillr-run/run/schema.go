@@ -111,7 +111,8 @@ CREATE TABLE IF NOT EXISTS runs (
   started_at    INTEGER NOT NULL,
   finished_at   INTEGER NOT NULL,
   artifact_refs TEXT NOT NULL DEFAULT '[]',
-  event_seq     INTEGER NOT NULL DEFAULT 0
+  event_seq     INTEGER NOT NULL DEFAULT 0,
+  extension_set TEXT
 );
 `
 
@@ -161,6 +162,9 @@ func init() {
 	// path and series key, or installed path and version). Nullable for other backends
 	// and legacy rows.
 	if err := store.RegisterColumn(Utility, "runs", "harness", "TEXT"); err != nil {
+		panic(err)
+	}
+	if err := store.RegisterColumn(Utility, "runs", "extension_set", "TEXT"); err != nil {
 		panic(err)
 	}
 	for _, kind := range []string{RecordKind, AllocateKind, FinishKind, UsageKind, CopiedUsageKind, ReleaseKind, ResumeKind, PauseRequestKind, "run.progress", "run.child-session", "run.children-recorded", "run.observation-error"} {

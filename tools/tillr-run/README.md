@@ -147,6 +147,8 @@ TILLR_CHILD_SESSIONS_MARKER Always: the child-sessions-recorded marker path in t
 TILLR_HARNESS_RECORD_FILE Always: the harness-record file in this run's scratch directory; an adapter writes one line naming the chosen binary, recorded on runs.harness.
 TILLR_PI_BUILDS_DIR       When set on the caller or when the caller's scratch directory is set: the shared pi-builds directory snapshotted before per-run scratch isolation; otherwise unset.
 TILLR_READ_ONLY_GROUP     Only when read_only_group is nonempty: the group sharing a lane lease; otherwise unset.
+TILLR_PI_AGENT_DIRS_DIR   When set in the caller's environment or derivable from the caller's durable directory: the shared directory holding content-keyed trunk Pi agent directories.
+TILLR_EXTENSION_SET_RECORD_FILE Always: the file path in this run's scratch directory where the Pi adapter records the selected extension set.
 YOLO_DURABLE_DIR          When scratch_env is omitted or true: <lane dir>/durable/<run_id>; false preserves the caller's value or absence.
 ```
 
@@ -178,6 +180,17 @@ which runs `bin/pi-forks build-pi`). Runs already in flight finish on the `pi` t
 started with, later runs pick up the new verified build, and a failed build discards its
 staging directory without removing any working build or `current.json`, recording a
 post-landing `roll` (`pi`) failure without stopping the loop.
+
+## Extension-set attribution
+
+Before starting a backend, `exec` clears any prior `extension-set` file in the run's
+scratch directory and exports `TILLR_EXTENSION_SET_RECORD_FILE` (along with the caller's
+`TILLR_PI_AGENT_DIRS_DIR`, or a path derived from the caller's durable directory before
+per-run scratch isolation). When the Pi adapter writes the selected extension set to that
+file, `exec` records it on `runs.extension_set` and `run.Record.ExtensionSet` (returned
+by `tillr-run status` and `run.finish`). See
+[trunk extension loading](./backends/pi/README.md#trunk-extension-loading-drain-workers-only)
+for how drain workers build, select, and hold extension sets.
 
 ## Ending a settled harness that lingers
 

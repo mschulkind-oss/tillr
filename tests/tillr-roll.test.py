@@ -315,6 +315,31 @@ class RollTest(unittest.TestCase):
                     cwd=root, env=env, capture_output=True, text=True,
                 )
 
+    def test_pi_extensions_invokes_build_agent_dir_without_restarts(self):
+        with tempfile.TemporaryDirectory() as work:
+            root = Path(work) / 'repo'
+            root.mkdir()
+            builder = root / 'tools/tillr-run/backends/pi/build-agent-dir'
+            builder.parent.mkdir(parents=True)
+            marker = Path(work) / 'built.txt'
+            builder.write_text(
+                '#!/usr/bin/env python3\n'
+                f'from pathlib import Path\nPath({str(marker)!r}).write_text("built\\n")\n'
+            )
+            builder.chmod(0o755)
+            with patch.object(roll, 'git', return_value=str(root)):
+                rc = roll.roll_pi_extensions(root)
+            self.assertEqual(rc, 0)
+            self.assertEqual(marker.read_text(), 'built\n')
+
+            with patch.object(roll, 'git', return_value=str(root)), \
+                    patch.object(roll, 'roll_pi_extensions', return_value=0) as mock_ext, \
+                    patch.object(roll, 'roll') as mock_roll, \
+                    patch.object(sys, 'argv', ['tillr-roll.py', '--pi-extensions']):
+                self.assertEqual(roll.main(), 0)
+                mock_ext.assert_called_once_with(root)
+                mock_roll.assert_not_called()
+
 
     def test_roll_pi_flag_invokes_pi_forks_build_pi(self):
         with tempfile.TemporaryDirectory() as work:

@@ -418,21 +418,23 @@ func TestPostLandingPiSeriesRoll(t *testing.T) {
 	}
 	waitAction(t, func() bool { return !l.piRollAction.busy() })
 
-	// Trunk landing touching bin/pi-forks.list triggers --pi roll.
+	// Trunk landing touching bin/pi-forks.list triggers --pi and --pi-extensions rolls.
 	nextTip = commit("bin/pi-forks.list")
 	if _, err := l.landWithActions(ctx, Candidate{ItemID: "item-pi-list", RunID: "run-pi-list"}); err != nil {
 		t.Fatal(err)
 	}
-	waitAction(t, func() bool { return !l.piRollAction.busy() })
+	waitAction(t, func() bool { return !l.piRollAction.busy() && !l.extRollAction.busy() })
 
 	runsFile := filepath.Join(l.cfg.Root, "runs")
 	b, err := os.ReadFile(runsFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantRuns := "args:--no-request --pi\nargs:--no-request --pi\nargs:--no-request --pi\n"
-	if string(b) != wantRuns {
-		t.Fatalf("runs = %q, want %q", string(b), wantRuns)
+	gotRuns := string(b)
+	if strings.Count(gotRuns, "args:--no-request --pi\n") != 3 ||
+		strings.Count(gotRuns, "args:--no-request --pi-extensions\n") != 1 ||
+		len(strings.Split(strings.TrimSpace(gotRuns), "\n")) != 4 {
+		t.Fatalf("runs = %q, want 3 --pi and 1 --pi-extensions", gotRuns)
 	}
 
 	// Pi-series rolls must not request drain or view restarts.

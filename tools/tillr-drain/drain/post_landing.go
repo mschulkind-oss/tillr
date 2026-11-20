@@ -100,6 +100,10 @@ func (l *Loop) afterLandingCandidate(ctx context.Context, candidate Candidate, t
 		l.submitPiRoll(ctx, r.Command, tip)
 		return
 	}
+	if isExtensionPatchBranch(candidate.BaseRef) {
+		l.submitExtensionRoll(ctx, r.Command, tip)
+		return
+	}
 	if candidate.BaseRef != "" {
 		return
 	}
@@ -125,6 +129,9 @@ func (l *Loop) afterLandingCandidate(ctx context.Context, candidate Candidate, t
 	}
 	if matchesRollPaths(changed, piSeriesPaths) {
 		l.submitPiRoll(ctx, r.Command, tip)
+	}
+	if matchesExtensionRollPaths(changed) {
+		l.submitExtensionRoll(ctx, r.Command, tip)
 	}
 }
 

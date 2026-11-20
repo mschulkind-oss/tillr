@@ -145,26 +145,37 @@ func StatusRecord(r *store.Reader, runID string) (record.Envelope, bool, error) 
 		tokens     sql.NullInt64
 		costUSD    sql.NullFloat64
 		endCause   sql.NullString
+		extSet     sql.NullString
 	)
-	read := func(causeColumn, harnessColumn string) error {
+	read := func(causeColumn, harnessColumn, extSetColumn string) error {
 		return r.QueryRow(
 			`SELECT run_id, item_id, lane_id, backend, route, `+harnessColumn+`, state, exit_code, started_at, finished_at, artifact_refs, event_seq,
-			        usage_tokens, usage_cost_usd, `+causeColumn+`
+			        usage_tokens, usage_cost_usd, `+causeColumn+`, `+extSetColumn+`
 			   FROM runs WHERE run_id = ?`, runID,
 		).Scan(&payload.RunID, &itemID, &payload.LaneID, &payload.Backend, &route, &harness, &payload.State, &exitCode,
-			&startedAt, &finishedAt, &refs, &payload.EventSeq, &tokens, &costUSD, &endCause)
+			&startedAt, &finishedAt, &refs, &payload.EventSeq, &tokens, &costUSD, &endCause, &extSet)
 	}
-	causeCol, harnessCol := "end_cause", "harness"
-	err := read(causeCol, harnessCol)
-	// Read-only opens cannot migrate a store written before optional columns existed.
-	for i := 0; i < 2 && err != nil; i++ {
-		if strings.Contains(err.Error(), "no such column: end_cause") {
-			causeCol = "NULL"
-			err = read(causeCol, harnessCol)
-		} else if strings.Contains(err.Error(), "no such column: harness") {
-			harnessCol = "NULL"
-			err = read(causeCol, harnessCol)
+	causeCol, harnessCol, extSetCol := "end_cause", "harness", "extension_set"
+	var err error
+	for range 4 {
+		err = read(causeCol, harnessCol, extSetCol)
+		if err == nil {
+			break
 		}
+		// Read-only opens cannot migrate a store written before optional columns existed.
+		if causeCol != "NULL" && strings.Contains(err.Error(), "no such column: end_cause") {
+			causeCol = "NULL"
+			continue
+		}
+		if harnessCol != "NULL" && strings.Contains(err.Error(), "no such column: harness") {
+			harnessCol = "NULL"
+			continue
+		}
+		if extSetCol != "NULL" && strings.Contains(err.Error(), "no such column: extension_set") {
+			extSetCol = "NULL"
+			continue
+		}
+		break
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return statusEnvelope(statusPayload{RunID: runID}, time.Now().UTC())
@@ -175,6 +186,9 @@ func StatusRecord(r *store.Reader, runID string) (record.Envelope, bool, error) 
 	payload.EndCause = endCause.String
 	if payload.EndCause == "" {
 		payload.EndCause = EndNotRecorded
+	}
+	if extSet.Valid {
+		payload.ExtensionSet = extSet.String
 	}
 	// A NULL item_id stays an empty string, which the record's own encoding omits: the
 	// run named no item, and the answer carries no id rather than an invented one.
@@ -234,6 +248,9 @@ func StatusRecord(r *store.Reader, runID string) (record.Envelope, bool, error) 
 			payload.LoopRecovery = finish.LoopRecovery
 			payload.SettledAt = finish.SettledAt
 			payload.HarnessEndedAt = finish.HarnessEndedAt
+			if payload.ExtensionSet == "" {
+				payload.ExtensionSet = finish.ExtensionSet
+			}
 		}
 	}
 	DescribeSpend(&payload)
