@@ -70,6 +70,17 @@ default plus opt-in `--pause`), [`OQ-LD3`](../design/tillr-live-drain-config.md#
 setups and cap spillover to the [Icebox](#icebox)). Six designer's decisions remain marked in
 [its ledger](../design/tillr-live-drain-config.md#7-decision-ledger), and none of it is built.
 
+[Refused autopushes](../design/tillr-refused-push.md), written on 2026-11-20, left this list the
+same day once the owner ruled its three questions:
+[`OQ-RP1`](../design/tillr-refused-push.md#OQ-RP1) (rebase unpublished local commits onto the
+moved remote, reset the main checkout, and remap landing SHAs rather than writing a merge commit),
+[`OQ-RP2`](../design/tillr-refused-push.md#OQ-RP2) (dispatch a fenced repair worker on conflict
+with ordinary obstacle escalation and no owner step in the routine case), and
+[`OQ-RP3`](../design/tillr-refused-push.md#OQ-RP3) (trust commit identities already reachable from
+the configured upstream branch). Six designer's decisions remain marked in
+[its ledger](../design/tillr-refused-push.md#decision-ledger), none of it is built, and it is
+placed in [entry 3](#3-roll-onto-new-code-without-ending-runs).
+
 Five more left this list on 2026-11-18, none by the owner's ruling, and each is his to overturn.
 Two are a designer's decisions: [`OQ-CR4`](../design/criterion-repair.md#OQ-CR4), that the judge
 step gets no separate check of a criterion's premise, and
@@ -96,15 +107,7 @@ AutoQA leaves the [Icebox](#icebox).
    [Planning and model tiering](../design/tillr-planning-node-model-tiering.md) and
    [entry 4](#4-choose-where-each-seat-runs).
 
-3. [Refused autopushes](../design/tillr-refused-push.md)
-   ([`OQ-RP1`](../design/tillr-refused-push.md#OQ-RP1),
-   [`OQ-RP2`](../design/tillr-refused-push.md#OQ-RP2),
-   [`OQ-RP3`](../design/tillr-refused-push.md#OQ-RP3)): next because on the night of 2026-11-19 a
-   `git pull` that rebased unpushed landings broke the drain, blocking remote integration for
-   [entry 2](#2-keep-the-loop-running) and [entry 3](#3-roll-onto-new-code-without-ending-runs)'s
-   autopush after a green proof.
-
-4. [Owner review comments and the Vantage seam](../design/tillr-review-comments.md)
+3. [Owner review comments and the Vantage seam](../design/tillr-review-comments.md)
    ([`OQ-RC1`](../design/tillr-review-comments.md#OQ-RC1),
    [`OQ-RC2`](../design/tillr-review-comments.md#OQ-RC2),
    [`OQ-RC3`](../design/tillr-review-comments.md#OQ-RC3),
@@ -113,7 +116,7 @@ AutoQA leaves the [Icebox](#icebox).
    question reader in [entry 2](#2-keep-the-loop-running) and warm comment routing in
    [entry 8](#8-design-work-that-keeps-its-context).
 
-5. [Review and compliance routing by artifact class](../design/tillr-review-rules.md)
+4. [Review and compliance routing by artifact class](../design/tillr-review-rules.md)
    ([`OQ-RJ1`](../design/tillr-review-rules.md#OQ-RJ1),
    [`OQ-RJ2`](../design/tillr-review-rules.md#OQ-RJ2),
    [`OQ-RJ3`](../design/tillr-review-rules.md#OQ-RJ3),
@@ -123,7 +126,7 @@ AutoQA leaves the [Icebox](#icebox).
    [companion implementation plans](../design/tillr-queue-mirrors-designs.md) are neither checked
    against the wrong style rules nor dispatched unreviewed.
 
-6. [What a designer reads itself and what goes to scouts](../design/tillr-designer-scouts.md)
+5. [What a designer reads itself and what goes to scouts](../design/tillr-designer-scouts.md)
    ([`OQ-RD1`](../design/tillr-designer-scouts.md#OQ-RD1),
    [`OQ-RD2`](../design/tillr-designer-scouts.md#OQ-RD2),
    [`OQ-RD3`](../design/tillr-designer-scouts.md#OQ-RD3)): next because frontier `design` and
@@ -133,16 +136,16 @@ AutoQA leaves the [Icebox](#icebox).
    [entry 4](#4-choose-where-each-seat-runs) and [entry 8](#8-design-work-that-keeps-its-context)
    without stopping the running loop.
 
-7. [Drain seat profiles and one-command switching](../design/tillr-seat-profiles.md)
+6. [Drain seat profiles and one-command switching](../design/tillr-seat-profiles.md)
    ([`OQ-DSP1`](../design/tillr-seat-profiles.md#OQ-DSP1),
    [`OQ-DSP2`](../design/tillr-seat-profiles.md#OQ-DSP2),
-   [`OQ-DSP3`](../design/tillr-seat-profiles.md#OQ-DSP3)): after the five above because workloads
+   [`OQ-DSP3`](../design/tillr-seat-profiles.md#OQ-DSP3)): after the four above because workloads
    stay on Copilot Gemini while `claude-sub` is held on proving the Claude backend, blocking
    named profile selection in
    [live drain capacity and allocation changes](../design/tillr-live-drain-config.md) and
    [entry 4](#4-choose-where-each-seat-runs).
 
-8. [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2): whether the copy of tillr that other
+7. [`OQ-SH2`](../design/tillr-selfhosted-build.md#OQ-SH2): whether the copy of tillr that other
    workspaces run follows every landing or is refreshed only when it is published. Next because
    it is a cost on every landing but stops nothing.
 
@@ -287,11 +290,9 @@ on this page, in this order:
 
 - [Other people and other agents change the repository while the drain runs](#filed-2026-11-15-other-people-and-other-agents-change-the-repository-while-the-drain-runs).
   First because an operator's uncommitted edit is what caused the stops, and the owner's ruling of
-  2026-10-23 already says such an edit is a wait and never a failure;
-  [refused autopushes](../design/tillr-refused-push.md)
-  ([`OQ-RP1`](../design/tillr-refused-push.md#OQ-RP1) to
-  [`OQ-RP3`](../design/tillr-refused-push.md#OQ-RP3)) blocks the remote half after a `git pull`
-  that rebased unpushed landings broke the drain on 2026-11-19.
+  2026-10-23 already says such an edit is a wait and never a failure; manual `git pull --rebase`
+  absorption landed on 2026-11-20 (`aed03075b`), while automatic remote rebase on a refused
+  autopush is placed in [entry 3](#3-roll-onto-new-code-without-ending-runs).
 - [One item's trouble holds that item, and recovery is a command](#filed-2026-11-15-one-items-trouble-holds-that-item-and-recovery-is-a-command).
   Second because every recovery that night was done by hand and two of them caused the next stop.
 - [Anyone can ask why an item is not running](#filed-2026-11-15-anyone-can-ask-why-an-item-is-not-running)
@@ -330,10 +331,12 @@ order had landed by 2026-11-18, among them the pause, the restart request, the r
 after a landing, and this repository's settings file. It stays third as the record of why it
 came first: every restart on 2026-11-15 was a kill, so a fix to tillr itself cost the runs in
 flight, and [entry 4](#4-choose-where-each-seat-runs) reuses its stop-and-continue step.
-[Refused autopushes](../design/tillr-refused-push.md)
+[Refused autopushes](../design/tillr-refused-push.md), decided on 2026-11-20
 ([`OQ-RP1`](../design/tillr-refused-push.md#OQ-RP1) to
-[`OQ-RP3`](../design/tillr-refused-push.md#OQ-RP3)) blocks integrating a moved remote into that
-post-landing push without rewinding local `main`.
+[`OQ-RP3`](../design/tillr-refused-push.md#OQ-RP3)) and unbuilt, sits here after
+[entry 2](#2-keep-the-loop-running) and ahead of [entry 4](#4-choose-where-each-seat-runs)
+because a push from another machine strands every later green publication behind a false wait
+without stopping local runs.
 
 ## 4. Choose where each seat runs
 
