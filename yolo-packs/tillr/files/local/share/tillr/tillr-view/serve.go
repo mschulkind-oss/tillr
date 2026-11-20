@@ -1351,6 +1351,7 @@ type itemData struct {
 	Runs           []itemRunView       `json:"runs"`
 	OwnerDecisions []ownerDecisionView `json:"owner_decisions"`
 	StateMoves     []stateMoveView     `json:"state_moves"`
+	VerifyRefusals []verifyRefusalView `json:"verify_refusals"`
 }
 
 // verdictView preserves each recorded judgment, not just the criterion's current state.
@@ -1511,6 +1512,10 @@ func (s *server) itemPayload(r *store.Reader, req *http.Request) (any, *apiFailu
 		return nil, failure(codeStoreUnreadable, "graph revisions could not read the store: %v", err)
 	}
 	out.StateMoves, err = readStateMoves(r, id)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	out.VerifyRefusals, err = readVerifyRefusals(r, id)
 	if err != nil {
 		return nil, unreadable(err)
 	}

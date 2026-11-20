@@ -263,7 +263,12 @@ type StageSpec struct {
 	BaseSHA            string
 	ItemBaseSHA        string
 	WorkingDir         string
-	TimeoutMS          int
+	// VerifyReturnHead and VerifyReturnItemBase stage the build step a failed verify
+	// returns to: the lane (or fork checkout) is cut at the commit the verifier read
+	// instead of the trunk, and the item's own base stays the fence base.
+	VerifyReturnHead     string
+	VerifyReturnItemBase string
+	TimeoutMS            int
 	// EndingCapability is the adapter probe at dispatch; a retained session keeps its staged form.
 	EndingCapability string
 	// SessionID pins the harness session this dispatch runs under. Empty mints a UUID: a
@@ -388,7 +393,11 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		if err := s.ensureForkCheckout(ctx, spec, fork); err != nil {
 			return err
 		}
-		if !spec.Continue {
+		if spec.VerifyReturnHead != "" {
+			if err := s.restageForkAtVerifyHead(ctx, spec, fork); err != nil {
+				return err
+			}
+		} else if !spec.Continue {
 			if err := s.refreshForkCheckout(ctx, fork); err != nil {
 				return err
 			}
@@ -410,6 +419,13 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	// agree on the spelling: exec resolves the lane root to an absolute path, and a brief
 	// naming a relative one would point the worker at a directory that does not exist.
 	itemBaseSHA := baseSHA
+	worktreeSpec := spec
+	if spec.VerifyReturnHead != "" {
+		baseSHA, itemBaseSHA = spec.VerifyReturnHead, spec.VerifyReturnItemBase
+		if !isFork {
+			worktreeSpec.BaseSHA = spec.VerifyReturnHead
+		}
+	}
 	itemAllowed := append([]string(nil), recorded.AllowedPaths...)
 	if spec.Node != nil {
 		if spec.Continue {
@@ -603,7 +619,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		brief += repeatedCallBrief(*spec.RepeatedCall)
 	}
 	if !spec.Continue {
-		if err := s.ensureWorktree(ctx, spec, laneDir, worktree); err != nil {
+		if err := s.ensureWorktree(ctx, worktreeSpec, laneDir, worktree); err != nil {
 			return err
 		}
 	}

@@ -563,6 +563,9 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 				id, err := ReadSessionID(e.WorkerSession.LaneDir)
 				if err == nil && id != "" && id == e.WorkerSession.SessionID {
 					p.workerLanes[e.WorkerSession.LaneID] = row.ItemID
+				} else if verifyBuildReturn(e) && e.WorkerSession.SessionID == "" {
+					// A build stage with no session of its own still holds the candidate.
+					p.workerLanes[e.WorkerSession.LaneID] = row.ItemID
 				}
 			}
 		}
@@ -712,7 +715,8 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			routed := item
 			resumeNode := 0
 			retainedGraph := false
-			if e := p.returnedEnding(item.ItemID); e != nil && e.WorkerSession != nil && e.WorkerSession.Workflow != nil && policy != nil && (item.Express || !isExpressLane(e.WorkerSession.LaneID)) && p.retainedLaneFreeFor(e.WorkerSession.LaneID, item.ItemID) {
+			e := p.returnedEnding(item.ItemID)
+			if e != nil && e.WorkerSession != nil && e.WorkerSession.Workflow != nil && policy != nil && (item.Express || !isExpressLane(e.WorkerSession.LaneID)) && p.retainedLaneFreeFor(e.WorkerSession.LaneID, item.ItemID) {
 				s := e.WorkerSession
 				if s.NodeIndex >= 0 && s.NodeIndex < len(s.Workflow.Stages) {
 					stage := s.Workflow.Stages[s.NodeIndex]
@@ -723,6 +727,14 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 						retainedGraph = true
 					}
 				}
+			}
+			// The build step runs again on the candidate the verifier read, in a fresh
+			// session when the writer's cannot be resumed, and on whatever lane the plan
+			// offers: the graph (with any expanded pieces and the inserted work stage) is
+			// retained even when the original lane is unavailable.
+			if !retainedGraph && verifyBuildReturn(e) && e.WorkerSession.NodeIndex >= 0 && e.WorkerSession.NodeIndex < len(e.WorkerSession.Workflow.Stages) {
+				w, resumeNode, loadErr = e.WorkerSession.Workflow, e.WorkerSession.NodeIndex, nil
+				retainedGraph = true
 			}
 			var reused []string
 			reusedFrom := 0
@@ -799,6 +811,11 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					decision.NodeIndex = resumeNode
 					if decision.RunRequest.SessionTurn && decision.Returned.WorkerSession.Workflow != nil {
 						decision.NodeBaseSHA = decision.Returned.WorkerSession.NodeBaseSHA
+					}
+					if verifyBuildReturn(decision.Returned) {
+						// Per-node checks measure the repair commit atop the candidate; the
+						// whole item still diffs against its own base.
+						decision.NodeBaseSHA = decision.Returned.WorkerSession.HeadSHA
 					}
 					request := *decision.RunRequest
 					request.RunID += "-n" + strconv.Itoa(resumeNode+1)
@@ -1005,6 +1022,12 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		attempt.backend, attempt.degraded = repeated.NextBackend, ""
 		attempt.failover = repeated.Route == repeatRouteFailover
 	}
+	// An operator's retry of a refused verify still repairs the candidate the verifier
+	// read, so that one ending outlives the retry that otherwise clears it.
+	var retriedVerify *ReturnedEnding
+	if retry != nil && !interrupted && repeated == nil && verifyBuildReturn(returned) {
+		retriedVerify = returned
+	}
 	if retry != nil || interrupted || repeated != nil {
 		returned = nil
 	}
@@ -1146,6 +1169,11 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 			decision.RetryID = retry.retryID
 			decision.SupersedesRunID = retry.supersedesRunID
 			decision.RunRequest = p.request(item.ItemID, lane, attempt.backend)
+			if retriedVerify != nil {
+				// The build step runs with the findings, and the nodes before it are
+				// carried rather than planned again.
+				decision.Returned = retriedVerify
+			}
 			break
 		}
 		decision.Action = ActionDispatch
@@ -1490,6 +1518,8 @@ func (p *planner) retryHoldReason(itemID string) string {
 		return p.history.refusals[latest]
 	case RefusalVerifyNotDone:
 		return RefusalVerifyNotDone
+	case RefusalPlanWrong:
+		return RefusalPlanWrong
 	case RefusalNodeOutput:
 		return ReasonNodeOutputMissing
 	case RefusalFence:
@@ -1573,7 +1603,7 @@ func (p *planner) returnedEnding(itemID string) *ReturnedEnding {
 		// The candidate was discarded: no session, lane or work of it carries over.
 		return &ReturnedEnding{RunID: latest, Cause: cause, Detail: detail, Restart: true}
 	}
-	return &ReturnedEnding{RunID: latest, Cause: cause, Detail: detail, Checks: e.Checks, WorkerSession: e.WorkerSession}
+	return &ReturnedEnding{RunID: latest, Cause: cause, Detail: detail, Checks: e.Checks, WorkerSession: e.WorkerSession, Replan: e.Replan}
 }
 
 // retry is one item's operator authorization, resolved against the store: which run it

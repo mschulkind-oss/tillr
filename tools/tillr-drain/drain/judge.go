@@ -526,6 +526,13 @@ func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.J
 			}
 		}
 		c.RefusalDetail, c.EvidenceKey = verifyNotDoneEvidence(c.HeadSHA, c.RunID, findings)
+		for _, v := range findings {
+			// The verifier's words go to the builder as written. Only a reason that begins
+			// plan-wrong: sends the item back to the plan step.
+			if strings.HasPrefix(strings.ToLower(strings.TrimSpace(v.Reason)), PlanWrongPrefix) {
+				c.VerifyReplan = true
+			}
+		}
 		return l.refuse(ctx, c, result, RefusalVerifyNotDone)
 	}
 	reason := ReasonEvalFailed
@@ -736,7 +743,9 @@ func (l *Loop) restoreJudgeInputs(c Candidate, r *JudgeReceipt) error {
 	if err := os.WriteFile(filepath.Join(lane, BriefFile), r.WorkerBrief, 0644); err != nil {
 		return err
 	}
-	capability, err := stagedEndingCapability(RunDir(l.cfg.Root, c.RunID))
+	// An evaluator run's own staging says footer; the writer's capability is the one
+	// a later resume of the writer must keep (a call-suspends writer ends by call).
+	capability, err := stagedEndingCapability(RunDir(l.cfg.Root, judgeWriterRun(c)))
 	if err != nil {
 		return err
 	}

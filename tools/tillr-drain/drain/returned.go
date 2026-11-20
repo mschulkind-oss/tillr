@@ -35,6 +35,9 @@ type ReturnedEnding struct {
 	// identical squash conflict: the next run is a fresh attempt from the current trunk,
 	// and its brief says so instead of asking for a reconciliation (D-JL12).
 	Restart bool `json:"restart,omitempty"`
+	// Replan is a verify-not-done ending whose findings say the plan was wrong; its next
+	// run is the plan step, not the build step.
+	Replan bool `json:"replan,omitempty"`
 }
 
 // EndingCheck is one failing gate check: its id, the log the gate wrote for it, and the
@@ -56,6 +59,7 @@ type EndingCheck struct {
 var returnedCauses = map[string]bool{
 	RefusalGate:          true,
 	RefusalVerifyNotDone: true,
+	RefusalPlanWrong:     true,
 	RefusalNoOp:          true,
 	RefusalFence:         true,
 	RefusalLand:          true,
@@ -69,6 +73,7 @@ var returnedCauses = map[string]bool{
 var returnedReasons = map[string]string{
 	ReasonGateFailed:          RefusalGate,
 	RefusalVerifyNotDone:      RefusalVerifyNotDone,
+	RefusalPlanWrong:          RefusalPlanWrong,
 	ReasonCandidateNoOp:       RefusalNoOp,
 	ReasonBoundaryScopeEscape: RefusalFence,
 	ReasonLandRefused:         RefusalLand,
@@ -191,13 +196,20 @@ func returnedBrief(e ReturnedEnding) string {
 	case RefusalGate:
 		b.WriteString("The gate refused its candidate.")
 	case RefusalVerifyNotDone:
-		if e.WorkerSession != nil {
+		switch {
+		case verifyBuildReturn(&e):
+			b.WriteString("The workflow verifier read the candidate commit this run starts from and found the criteria below not done. Fix the findings on this candidate commit and keep the commit clean; if they cannot be met within the plan, end with RESULT: blocked, OBSTACLE: definition, CRITERIA: plan, and EVIDENCE: plan-wrong: <reason>.")
+		case e.Replan:
+			b.WriteString("The workflow verifier found criteria not done and said the plan was wrong; revise the plan to cover them.")
+		case e.WorkerSession != nil:
 			b.WriteString("The judge refused its candidate.")
-		} else {
+		default:
 			b.WriteString("The workflow verifier found criteria not done; revise the plan to cover them.")
 		}
 	case ReasonEvalFailed:
 		b.WriteString("The judge refused its candidate.")
+	case RefusalPlanWrong:
+		b.WriteString("The build step reported that it cannot meet the verifier's findings within the plan; revise the plan so the work can be built.")
 	case RefusalNoOp:
 		b.WriteString("It ended without committing anything, so there was no candidate to judge.")
 	case RefusalFence:
@@ -213,6 +225,7 @@ func returnedBrief(e ReturnedEnding) string {
 	}
 	b.WriteString(" This is not a count against the item: fix what is named below and finish the item's work as this brief states it.\n")
 	if strings.TrimSpace(e.Detail) != "" {
+		// The detail is the refusal's own words, in the order and spelling it was recorded.
 		b.WriteString("\nThe refusal said:\n\n```\n" + strings.TrimSpace(e.Detail) + "\n```\n")
 	}
 	if len(e.Checks) > 0 {

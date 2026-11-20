@@ -1,6 +1,6 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, expect, test } from "vitest";
-import { ItemTimeline } from "../src/components/ItemRunPages";
+import { ItemTimeline, VerifyRefusals } from "../src/components/ItemRunPages";
 import { dispatchedItemData as itemData } from "./fixtures";
 
 afterEach(cleanup);
@@ -56,4 +56,43 @@ test("item history interleaves every run, verdict, owner ruling and state move o
   expect(entries[4].textContent).toContain("in-queue → closed");
   expect(entries[5].textContent).toContain("reopen");
   expect(within(history).getByRole("link", { name: "run-a" }).getAttribute("href")).toContain("run-a");
+});
+
+const none = { next_run_id: null, next_attempt: null, next_step: null, next_seat: null, next_event_seq: null, next_at_ms: null };
+const refusals = [
+  { event_seq: 2, at_ms: 2000, run_id: "verify-1", attempt: 1, detail: "c1: missing test\nc2: wrong file", replan: false, next_run_id: "work-2", next_attempt: 1, next_step: "work", next_seat: "build", next_event_seq: 3, next_at_ms: 3000 },
+  { event_seq: 5, at_ms: 5000, run_id: "verify-2", attempt: 2, detail: "the plan was wrong", replan: true, next_run_id: "plan-3", next_attempt: 3, next_step: "plan", next_seat: "plan", next_event_seq: 6, next_at_ms: 6000 },
+  { event_seq: 7, at_ms: 7000, run_id: "verify-3", attempt: 3, detail: "c1: still red", replan: false, ...none },
+];
+
+test("the item page shows each verify refusal, its findings and which step ran next", () => {
+  render(<VerifyRefusals refusals={refusals} />);
+  const section = screen.getByRole("region", { name: "Verify refusals" });
+  const rows = within(section).getAllByRole("listitem");
+  expect(rows).toHaveLength(3);
+  expect(rows[0].textContent).toContain("Next step: work");
+  expect(rows[0].textContent).toContain("c1: missing test\nc2: wrong file");
+  expect(rows[1].textContent).toContain("Next step: plan");
+  expect(rows[1].textContent).toContain("replan");
+  expect(rows[0].textContent).not.toContain("replan");
+  expect(rows[0].textContent).toContain("attempt 1");
+  expect(rows[2].textContent).toContain("No next step started yet");
+  expect(within(rows[0]).getByRole("link", { name: "verify-1" })).toBeTruthy();
+  expect(within(rows[0]).getByRole("link", { name: "work-2" })).toBeTruthy();
+  expect(within(rows[1]).getByRole("link", { name: "plan-3" })).toBeTruthy();
+});
+
+test("no verify refusals renders no section", () => {
+  render(<VerifyRefusals refusals={[]} />);
+  expect(screen.queryByRole("region", { name: "Verify refusals" })).toBeNull();
+});
+
+test("item history lists each verify refusal in time order with the next step", () => {
+  const item = { ...itemData, runs: [], verdicts: [], owner_decisions: [], state_moves: [], verify_refusals: [refusals[1], refusals[0]] };
+  render(<ItemTimeline item={item} />);
+  const rows = within(screen.getByRole("region", { name: "Item history" })).getAllByRole("listitem");
+  expect(rows).toHaveLength(2);
+  expect(rows[0].textContent).toContain("c1: missing test");
+  expect(rows[0].textContent).toContain("Next step: work");
+  expect(rows[1].textContent).toContain("Next step: plan");
 });

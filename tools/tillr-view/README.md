@@ -115,6 +115,19 @@ read-only projections of drain events, not inferences from the item's old lane
 number. See the [drain's held candidate capacity rule](../tillr-drain/README.md#held-candidate-capacity)
 for the kept classes and pinned-commit retry behavior.
 
+## Verify refusals on the item page
+
+`GET /api/v1/items/{id}` includes `verify_refusals`, projecting each
+`drain.refusal` event whose `step` is `verify-not-done` for that item alongside
+its `detail`, `replan` flag, and the next step the drain started after it
+(`next_step`, `next_seat`, `next_run_id`, `next_attempt`, `next_event_seq`, and
+`next_at_ms`, all `null` until a later step has started). The Item page renders a
+`Verify refusals` section showing each verify refusal and which step ran next
+(such as `work`, `plan`, or a piece node), and records the same entries on the item
+timeline. See
+[the drain's verify-return rule](../tillr-drain/README.md#a-refused-run-goes-back-to-its-worker)
+for when a refusal returns to `work` versus `plan`.
+
 ## State invariants
 
 - **Its store handle never writes.** No store is opened read-write by the view and

@@ -51,11 +51,22 @@ lapses, and items waiting on an absent or expired grant appear as held (`judge-g
 naming any expired covering grant, when it expired, and `tillr item grant issue`) rather than
 running. The read-only judge runs after the fence check and before the gate; only a
 successful landing records the checked agent verdicts, without the mechanical
-verdict program. A workflow evaluator's `not-done` returns the named criteria to the
-workflow's first node as `verify-not-done`, whereas an opted-in item judge holds a
-document item's `not-done` as `eval-failed`. On a filed request (`tillr item request`),
-`not-done` from either path returns all `not-done` findings to the builder's same
-session with no operator hold. `judge-grant-absent`, `judge-unreadable`, and `eval-failed`
+verdict program. A workflow evaluator's `not-done` is a `verify-not-done` refusal (for both
+document items and filed requests): the loop pins the candidate commit the verifier read and
+dispatches the build step (`work` on the `build` seat, inserting `work` before the evaluator
+when `plan` expanded `work` into pieces) on that candidate commit with the verifier's
+`not-done` findings word for word (resuming the builder's session when available on the
+original lane, or staging a fresh builder on that candidate commit on any available lane,
+including fork checkouts). The `plan` step runs again only when (a) a verifier's `not-done`
+reason begins with `plan-wrong:` (any case) because the plan itself was wrong, or (b) the
+builder reports it cannot meet the findings within the plan (`RESULT: blocked` with
+`OBSTACLE: definition` and `EVIDENCE: plan-wrong: <reason>`, a narrowed piece
+`OBSTACLE: fence` whose paths are inside the item's fence, or a report line beginning
+`PLAN-WRONG:`), recorded as `plan-wrong` (the rule is in
+[`planned-build@v1.json`](../../../../config/tillr/workflows/planned-build@v1.json)'s verify
+prompt). An opted-in item judge instead holds a document item's `not-done` as `eval-failed`,
+whereas on a filed request (`tillr item request`), an ordinary judge's `not-done` returns all
+`not-done` findings to the builder's same session with no operator hold. `judge-grant-absent`, `judge-unreadable`, and `eval-failed`
 are holds, not criterion verdicts. The
 [opted-in judge contract](../../../../tools/tillr-drain/README.md#opted-in-judgment-before-the-gate)
 explains the retained file, failure reasons, and candidate restoration.

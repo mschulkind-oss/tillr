@@ -419,6 +419,11 @@ func (s *identicalRepeatRequestSteps) Run(ctx context.Context, req run.Request) 
 			s.sawGuidance = true
 		}
 	case "work":
+		// A failed verify returns to the build step, so the operator's retry reason
+		// reaches the builder rather than a second plan run.
+		if strings.Contains(brief, "Include the regression test in tools/item-a/cache_test.go") {
+			s.sawGuidance = true
+		}
 		// The verifier's repeated finding is only an identical repeat when it judges the
 		// same candidate, so every attempt rebuilds the same commit from the same base.
 		s.t.Setenv("GIT_AUTHOR_DATE", "2026-11-15T00:00:00Z")

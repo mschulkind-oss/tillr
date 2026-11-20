@@ -1855,7 +1855,9 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 		if err != nil {
 			return err
 		}
-		if session == routed.WorkerSession.SessionID && l.headOf(ctx, d.LaneID) == routed.WorkerSession.HeadSHA {
+		// A verify return's build stage may have no session of its own; the lane then holds
+		// only the candidate, and the head names it.
+		if (session == routed.WorkerSession.SessionID || routed.WorkerSession.SessionID == "") && l.headOf(ctx, d.LaneID) == routed.WorkerSession.HeadSHA {
 			if err := l.resetLane(ctx, d.LaneID); err != nil {
 				return err
 			}
