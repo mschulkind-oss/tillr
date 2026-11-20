@@ -732,9 +732,11 @@ another restart.
   the lane's row. An exit 2 with no such words keeps the infrastructure class. An item's own
   text may contain two open braces in a row: staging carries it intact and writes the count of
   such pairs to the lane's `brace-literals` file, which the adapters' shared preflight reads.
-- **A run id carries one counter.** The second and later failover, restart, fresh session or
-  interruption of one node is `<id>-<count>-<kind>`, with the count padded to three digits,
-  so the id of the 30th turn is no longer than the id of the 2nd.
+- **A run id carries one counter and a bounded stem.** The second and later failover,
+  restart, fresh session or interruption of one node is `<id>-<count>-<kind>`, with the count
+  padded to at least three digits and advancing past 999 without clamping or repeating words,
+  over a digest-bounded stem (preserving trailing `-judge` and `-cfix` tags) so every run id
+  stays strictly under 120 characters across 100+ failovers, >999 turns, and long item ids.
 - **A seat may name its own fallback order.** A seat's value is one backend name or an
   ordered list of them, such as `"design": ["claude-designer", "pi-designer"]`. The item
   dispatches to the first open backend unless shares or a selection mode request a split.
@@ -2128,9 +2130,14 @@ run that landed and was examined) is recorded again, and when it applies the con
 answered for the build seat and the hold cleared in one transaction; a hold the
 whole-document sync wrote is cleared once a whole sync applies that item's block. Its
 mover is the correction of the block on the trunk, never a hand `clear-fault`.
-Two holds of this kind stand for the loop's own defects, held on the one item they
-touch so the loop goes on. The owner ruled that the loop never stops on one item's
-condition. `decision-collision` holds an item whose planned decision could not be
+Three holds of this kind stand for per-item loop or staging faults, held on the one
+item they touch so the loop goes on. The owner ruled that the loop never stops on one
+item's condition. `stage-failed` holds an item whose run could not be staged on its
+lane or run directory (`ENAMETOOLONG`, `RunDir` or per-run staging preparation
+failures, or `stageParallel`), retracting its unlaunched claim, freeing the lane,
+counting zero infrastructure failures, and naming the operator mover
+(`fix the staging fault the detail names, then tillr drain clear-fault --item <item>`).
+`decision-collision` holds an item whose planned decision could not be
 recorded, because its decision id is already recorded with other columns.
 `settle-failed` holds an item whose run could not be settled because of such a
 collision, naming the step and the error. It also holds the item of a run whose face

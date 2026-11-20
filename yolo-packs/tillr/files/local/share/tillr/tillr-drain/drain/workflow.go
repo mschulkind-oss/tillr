@@ -11,6 +11,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -329,12 +331,107 @@ func (l *Loop) stagedNodeRun(d Decision) (string, error) {
 	if d.NodeStartRunID != "" {
 		return d.NodeStartRunID, nil
 	}
-	for _, id := range append([]string{d.RunRequest.RunID}, runIDAncestors(d.RunRequest.RunID)...) {
+	check := func(id string) (bool, error) {
+		if id == "" {
+			return false, nil
+		}
 		_, err := os.Stat(filepath.Join(RunDir(l.cfg.Root, id), BaseSHAFile))
 		if err == nil {
-			return id, nil
+			return true, nil
 		}
-		if !os.IsNotExist(err) {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	runID := d.RunRequest.RunID
+	if ok, err := check(runID); err != nil || ok {
+		if ok {
+			return runID, nil
+		}
+		return "", err
+	}
+	base, turns, kind := splitRunID(runID)
+	if turns == 0 {
+		return "", nil
+	}
+	stems := []string{base}
+	if bounded := boundRunIDBase(base); bounded != base {
+		stems = append(stems, bounded)
+	}
+	if d.Workflow != nil && d.ItemID != "" && d.Attempt > 0 {
+		nodeStem := boundRunIDBase(attemptRunID(d.ItemID, d.Attempt) + "-n" + strconv.Itoa(d.NodeIndex+1))
+		if !slices.Contains(stems, nodeStem) {
+			stems = append(stems, nodeStem)
+		}
+	}
+	if turns <= 64 {
+		for n := turns - 1; n >= 1; n-- {
+			for _, stem := range stems {
+				cand := markRunIDTurns(stem, kind, n)
+				if ok, err := check(cand); err != nil || ok {
+					if ok {
+						return cand, nil
+					}
+					return "", err
+				}
+				for _, other := range runIDContinuationKinds {
+					if other == kind {
+						continue
+					}
+					alt := markRunIDTurns(stem, other, n)
+					if ok, err := check(alt); err != nil || ok {
+						if ok {
+							return alt, nil
+						}
+						return "", err
+					}
+				}
+			}
+		}
+	} else {
+		entries, err := os.ReadDir(LoopDir(l.cfg.Root))
+		if err != nil && !os.IsNotExist(err) {
+			return "", err
+		}
+		type priorCandidate struct {
+			id    string
+			turns int
+			same  bool
+		}
+		var priors []priorCandidate
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			eb, et, ek := splitRunID(entry.Name())
+			if et >= 1 && et < turns && slices.Contains(stems, eb) {
+				priors = append(priors, priorCandidate{id: entry.Name(), turns: et, same: ek == kind})
+			}
+		}
+		sort.Slice(priors, func(i, j int) bool {
+			if priors[i].turns != priors[j].turns {
+				return priors[i].turns > priors[j].turns
+			}
+			if priors[i].same != priors[j].same {
+				return priors[i].same
+			}
+			return priors[i].id < priors[j].id
+		})
+		for _, p := range priors {
+			if ok, err := check(p.id); err != nil || ok {
+				if ok {
+					return p.id, nil
+				}
+				return "", err
+			}
+		}
+	}
+	for _, stem := range stems {
+		if ok, err := check(stem); err != nil || ok {
+			if ok {
+				return stem, nil
+			}
 			return "", err
 		}
 	}

@@ -1339,6 +1339,26 @@ func (l *Loop) prepareContinuedLane(ctx context.Context, decision Decision, item
 //   - Anything else (a template that will not render, a git that will not answer) is the
 //     machinery's fault. Nothing about the item was learned, so it is infrastructure-class:
 //     it feeds the backoff and leaves the item in the plan for the next tick.
+func isPerItemStageFailure(spec StageSpec, err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.ENAMETOOLONG) {
+		return true
+	}
+	msg := err.Error()
+	if strings.Contains(strings.ToLower(msg), "file name too long") {
+		return true
+	}
+	if spec.RunID != "" && strings.Contains(msg, spec.RunID) {
+		return true
+	}
+	if spec.ItemID != "" && strings.Contains(msg, spec.ItemID) {
+		return true
+	}
+	return false
+}
+
 func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSHA string, result *LoopResult) ([]Decision, error) {
 	staged := make([]Decision, 0, len(decisions))
 	for _, decision := range decisions {
@@ -1347,6 +1367,16 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			// The judge owns this node's staging, including the verdict location.
 			staged = append(staged, decision)
 			continue
+		}
+		failStage := func(step string, stepErr error) error {
+			if refusal := asLaneRefusal(stepErr); refusal != nil {
+				if err := l.takeLaneOutOfRotation(ctx, refusal); err != nil {
+					return err
+				}
+				l.laneRefusedNow = true
+				return nil
+			}
+			return l.holdStageFailed(ctx, decision, step, stepErr)
 		}
 		var endingCapability string
 		if request.Backend != "command" && len(request.Command) > 0 {
@@ -1365,10 +1395,16 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			spec.DesignContinuationHead = decision.DesignContinuationHead
 		}
 		if err := l.stageWorkerSession(&decision, &spec); err != nil {
-			return nil, err
+			if holdErr := failStage("stage worker session", err); holdErr != nil {
+				return nil, holdErr
+			}
+			continue
 		}
 		if err := l.stageLandingAnswer(ctx, decision, &spec); err != nil {
-			return nil, err
+			if holdErr := failStage("stage landing answer", err); holdErr != nil {
+				return nil, holdErr
+			}
+			continue
 		}
 		if decision.Reason == ReasonReturned && decision.Returned != nil && !request.SessionTurn &&
 			((decision.Returned.WorkerSession != nil && decision.LaneID == decision.Returned.WorkerSession.LaneID) ||
@@ -1382,11 +1418,17 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 				revision = decision.NodeBaseSHA
 			}
 			if err := l.resetLaneTo(ctx, decision.LaneID, revision); err != nil {
-				return nil, err
+				if holdErr := failStage("reset lane", err); holdErr != nil {
+					return nil, holdErr
+				}
+				continue
 			}
 		}
 		if err := l.stageComment(ctx, &decision, &spec); err != nil {
-			return nil, err
+			if holdErr := failStage("stage comment", err); holdErr != nil {
+				return nil, holdErr
+			}
+			continue
 		}
 		revertedSession := decision.Returned != nil && decision.Returned.Cause == RefusalReverted && request.SessionTurn
 		// A retry that keeps the readers its earlier attempt passed starts a new attempt at
@@ -1398,7 +1440,10 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			spec.Node = &decision.Workflow.Stages[decision.NodeIndex]
 			paths, err := l.nodeInputPaths(ctx, decision)
 			if err != nil {
-				return nil, err
+				if holdErr := failStage("stage node inputs", err); holdErr != nil {
+					return nil, holdErr
+				}
+				continue
 			}
 			spec.InputPaths = paths
 			if !revertedSession {
@@ -1421,7 +1466,10 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			if decision.WorkflowRestart && len(decision.Parallel) > 0 && decision.NodeIndex == 0 {
 				previous, err := l.stagedNodeRun(decision)
 				if err != nil {
-					return nil, err
+					if holdErr := failStage("read staged node run", err); holdErr != nil {
+						return nil, holdErr
+					}
+					continue
 				}
 				if previous == "" {
 					spec.Continue = false
@@ -1430,7 +1478,10 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			if decision.WorkflowRestart && len(decision.Parallel) == 0 && !l.nonLanding {
 				previous, stagedErr := l.stagedNodeRun(decision)
 				if stagedErr != nil {
-					return nil, stagedErr
+					if holdErr := failStage("read staged node run", stagedErr); holdErr != nil {
+						return nil, holdErr
+					}
+					continue
 				}
 				// A crash before first staging owns no existing lane contents.
 				// Keep the ordinary unlanded-commit refusal in that case.
@@ -1442,7 +1493,10 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 					if decision.NodeIndex == 0 && decision.NodeStartRunID == "" && previous != "" {
 						raw, err := os.ReadFile(filepath.Join(RunDir(l.cfg.Root, previous), BaseSHAFile))
 						if err != nil {
-							return nil, err
+							if holdErr := failStage("read staged base", err); holdErr != nil {
+								return nil, holdErr
+							}
+							continue
 						}
 						nodeBase = strings.TrimSpace(string(raw))
 						spec.BaseSHA = nodeBase
@@ -1454,13 +1508,22 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 						nodeBase = l.laneBase(decision.LaneID)
 					}
 					if err := l.preserveWorkFromBase(ctx, decision.LaneID, previous, nodeBase, "orphaned workflow restarted"); err != nil {
-						return nil, err
+						if holdErr := failStage("preserve workflow lane", err); holdErr != nil {
+							return nil, holdErr
+						}
+						continue
 					}
 					if _, err := l.git(ctx, target, "reset", "--hard", nodeBase); err != nil {
-						return nil, err
+						if holdErr := failStage("reset workflow lane", err); holdErr != nil {
+							return nil, holdErr
+						}
+						continue
 					}
 					if _, err := l.git(ctx, target, "clean", "-fd"); err != nil {
-						return nil, err
+						if holdErr := failStage("clean workflow lane", err); holdErr != nil {
+							return nil, holdErr
+						}
+						continue
 					}
 				}
 			}
@@ -1472,29 +1535,36 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			} else if decision.Workflow.proposalOnlyPredecessors(decision.NodeIndex) {
 				reportPath, reportText, reportErr := l.proposalPredecessorReport(ctx, decision)
 				if reportErr != nil {
-					return nil, reportErr
+					if holdErr := failStage("read predecessor report", reportErr); holdErr != nil {
+						return nil, holdErr
+					}
+					continue
 				}
 				spec.PreviousReport = reportPath
 				spec.PreviousReportText = reportText
 			}
 		}
-		var err error
 		if !l.nonLanding && spec.Continue && !decision.WorkflowRestart && !revertedSession && !freshRetry {
 			expectedHead := decision.NodeBaseSHA
 			if request.SessionTurn && decision.Returned != nil && decision.Returned.WorkerSession != nil && decision.Returned.WorkerSession.HeadSHA != "" {
 				expectedHead = decision.Returned.WorkerSession.HeadSHA
 			}
 			if expectedHead != "" {
-				var restaged bool
-				restaged, err = l.prepareContinuedLane(ctx, decision, request.ItemID, expectedHead)
-				if err == nil && restaged && l.cfg.Store != "" && spec.ItemBaseSHA == "" {
+				restaged, prepErr := l.prepareContinuedLane(ctx, decision, request.ItemID, expectedHead)
+				if prepErr != nil {
+					if holdErr := failStage("prepare continued lane", prepErr); holdErr != nil {
+						return nil, holdErr
+					}
+					continue
+				}
+				if restaged && l.cfg.Store != "" && spec.ItemBaseSHA == "" {
 					if itemBase, baseErr := l.pendingItemBase(ctx, request.ItemID); baseErr == nil && itemBase != "" {
 						spec.ItemBaseSHA = itemBase
 					}
 				}
 			}
 		}
-		if err == nil && !l.nonLanding && spec.Continue {
+		if !l.nonLanding && spec.Continue {
 			prevRun := spec.PreviousRunID
 			if prevRun == "" {
 				if decision.RepeatedCall != nil && decision.RepeatedCall.RunID != "" {
@@ -1504,27 +1574,45 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 				}
 			}
 			if p, pErr := l.preservedWorkForDecision(ctx, decision, prevRun); pErr != nil {
-				err = pErr
+				if holdErr := failStage("read preserved work", pErr); holdErr != nil {
+					return nil, holdErr
+				}
+				continue
 			} else if p != nil && p.LaneID != "" && p.LaneID != decision.LaneID {
-				err = l.applyPreservedWork(ctx, l.laneTarget(decision.LaneID), *p)
+				if applyErr := l.applyPreservedWork(ctx, l.laneTarget(decision.LaneID), *p); applyErr != nil {
+					if holdErr := failStage("apply preserved work", applyErr); holdErr != nil {
+						return nil, holdErr
+					}
+					continue
+				}
 			}
 		}
-		if err == nil {
-			observation, observeErr := pipelineStart(l.cfg.Root, spec.RunID, "stage")
-			if observeErr != nil {
-				return nil, observeErr
+		observation, observeErr := pipelineStart(l.cfg.Root, spec.RunID, "stage")
+		if observeErr != nil {
+			if holdErr := failStage("start stage pipeline", observeErr); holdErr != nil {
+				return nil, holdErr
 			}
-			err = l.cfg.Stage.Stage(ctx, spec)
-			if observeErr := pipelineFinish(l.cfg.Root, spec.RunID, observation); observeErr != nil {
-				return nil, observeErr
+			continue
+		}
+		err := l.cfg.Stage.Stage(ctx, spec)
+		if finishErr := pipelineFinish(l.cfg.Root, spec.RunID, observation); finishErr != nil && err == nil {
+			if holdErr := failStage("finish stage pipeline", finishErr); holdErr != nil {
+				return nil, holdErr
 			}
+			continue
 		}
 		if err == nil {
-			err = l.compactDesigner(ctx, decision)
-		}
-		if err == nil {
-			if err := l.restoreLane(ctx, decision.LaneID); err != nil {
-				return nil, err
+			if compactErr := l.compactDesigner(ctx, decision); compactErr != nil {
+				if holdErr := failStage("compact designer", compactErr); holdErr != nil {
+					return nil, holdErr
+				}
+				continue
+			}
+			if restoreErr := l.restoreLane(ctx, decision.LaneID); restoreErr != nil {
+				if holdErr := failStage("restore lane", restoreErr); holdErr != nil {
+					return nil, holdErr
+				}
+				continue
 			}
 			delete(l.infraLines, request.ItemID+"\x00"+decision.LaneID)
 			if decision.Workflow != nil {
@@ -1532,12 +1620,18 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 					decision.NodeBaseSHA = l.laneBase(decision.LaneID)
 				}
 				decision.NodeStartRunID = decision.RunRequest.RunID
-				if err := l.recordStagedNode(ctx, decision); err != nil {
-					return nil, err
+				if recErr := l.recordStagedNode(ctx, decision); recErr != nil {
+					if holdErr := failStage("record staged node", recErr); holdErr != nil {
+						return nil, holdErr
+					}
+					continue
 				}
 			}
 			staged = append(staged, decision)
 			continue
+		}
+		if stoppedByOperator(ctx, err) || ctx.Err() != nil {
+			return nil, err
 		}
 		if refusal := asLaneRefusal(err); refusal != nil {
 			// The lane's own state refused, not the item and not the machinery: the lane
@@ -1547,6 +1641,12 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 				return nil, err
 			}
 			l.laneRefusedNow = true
+			continue
+		}
+		if !IsItemContent(err) && isPerItemStageFailure(spec, err) {
+			if holdErr := failStage("stage", err); holdErr != nil {
+				return nil, holdErr
+			}
 			continue
 		}
 		if !IsItemContent(err) {

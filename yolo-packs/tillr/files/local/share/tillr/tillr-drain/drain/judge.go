@@ -237,7 +237,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 					return c, false, errJudgeGrantHeld
 				}
 				detail, _ := judgegrants.FormatHold(expiredGrant, l.cfg.Store)
-				return c, false, l.holdJudge(ctx, c, c.RunID+"-judge", ReasonJudgeGrantAbsent, detail, result)
+				return c, false, l.holdJudge(ctx, c, judgeRunID(c.RunID), ReasonJudgeGrantAbsent, detail, result)
 			}
 			req := c.Evaluator
 			fromReplacement := replacementRequest != nil
@@ -250,7 +250,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				if len(seat) == 0 {
 					return c, false, Usagef("agent judge requires the review seat")
 				}
-				req = l.cfg.Policy.request(c.ItemID, c.LaneID, c.RunID+"-judge", seat[0])
+				req = l.cfg.Policy.request(c.ItemID, c.LaneID, judgeRunID(c.RunID), seat[0])
 				if req != nil {
 					req.Seat = "review"
 					req.Workflow = c.Workflow
