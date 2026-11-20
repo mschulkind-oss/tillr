@@ -20,7 +20,9 @@ import { useNow } from "../models/clock";
 import { durationText } from "../models/now";
 import { FALLBACK_POLL_MS } from "../models/queries";
 import type { BoardCounts, BoardFilter, BoardView } from "../models/board";
-import type { ApiEnvelope, LaneView, SnapshotData } from "../models/types";
+import type { ApiEnvelope, GrantView, LaneView, SnapshotData } from "../models/types";
+
+const GRANT_WARN_WINDOW_MS = 60 * 60 * 1000;
 
 export interface ObservatoryHeaderBarProps {
   snapshot: ApiEnvelope<SnapshotData> | undefined;
@@ -577,6 +579,38 @@ export function RestartLine({ drain }: { drain: SnapshotData["drain_summary"] | 
   );
 }
 
+/** GrantLine shows each active or unreplaced expired sign-off grant's expiry time, and
+ * warns from one hour before it lapses using the viewer's live clock. */
+export function GrantLine({ grants, now: suppliedNow }: { grants?: GrantView[]; now?: number }) {
+  const clock = useNow();
+  const now = suppliedNow ?? clock;
+  if (!grants || grants.length === 0) return null;
+  return (
+    <div className="head-meta__row head-grant-row">
+      {grants.map((grant) => {
+        const leftMs = grant.expires_at_ms - now;
+        const classes = grant.claim_classes.join(",");
+        const expired = leftMs <= 0;
+        const expiringSoon = !expired && leftMs <= GRANT_WARN_WINDOW_MS;
+        const warn = expired || expiringSoon;
+        return (
+          <span
+            key={grant.grant_id}
+            className={warn ? "head-build head-grant head-grant--warning" : "head-build head-grant"}
+            title={grant.summary}
+          >
+            {expired
+              ? <>warning: grant <strong>{grant.grant_id}</strong> ({classes}) expired at {grant.expires_at}; issue a new grant with <code>{grant.renew_command}</code></>
+              : expiringSoon
+                ? <>warning: grant <strong>{grant.grant_id}</strong> ({classes}) expires at {grant.expires_at} (in {durationText(leftMs)}); renew with <code>{grant.renew_command}</code></>
+                : <>grant <strong>{grant.grant_id}</strong> ({classes}) expires at {grant.expires_at} (in {durationText(leftMs)})</>}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 export function ObservatoryHeaderBar({
   snapshot,
   error,
@@ -726,6 +760,7 @@ export function ObservatoryHeaderBar({
         <div className="head-meta__row head-gate-row">
           <GateLine drain={drain} />
         </div>
+        <GrantLine grants={snapshot.data.grants} />
         <div className="head-meta__row head-artifact">
           <LiveSentence live={live} paused={paused} readAtMs={readAtMs} />
         </div>

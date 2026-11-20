@@ -45,8 +45,11 @@ An item may ask for an independent review with `judge="agent"` in its directive,
 workflow may declare a read-only evaluator node in `exit.evaluator_slot` (such as
 `planned-build@v1`, which runs `plan`, `work`, and `verify` by default on build work;
 naming `single-worker@v1` skips planning and that evaluator when one worker run is enough).
-Both require a covering unexpired grant (`tillr item grant`) before dispatch and a mapped
-seat. The read-only judge runs after the fence check and before the gate; only a
+Both require a covering unexpired grant (`tillr item grant issue`) before dispatch and a
+mapped seat; `tillr view` shows each grant's expiry time and warns from one hour before it
+lapses, and items waiting on an absent or expired grant appear as held (`judge-grant-absent`,
+naming any expired covering grant, when it expired, and `tillr item grant issue`) rather than
+running. The read-only judge runs after the fence check and before the gate; only a
 successful landing records the checked agent verdicts, without the mechanical
 verdict program. A workflow evaluator's `not-done` returns the named criteria to the
 workflow's first node as `verify-not-done`, whereas an opted-in item judge holds

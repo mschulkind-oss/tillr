@@ -60,7 +60,7 @@ func whyFace(args []string) int {
 	if err != nil {
 		return fail(drain.Usagef("%v", err))
 	}
-	tick := drain.Pass{Now: *now, Comments: repositorySettings.Comments}
+	tick := drain.Pass{Now: *now, StorePath: *path, Comments: repositorySettings.Comments}
 	if tick.Now == "" {
 		tick.Now = time.Now().UTC().Format(time.RFC3339)
 	}

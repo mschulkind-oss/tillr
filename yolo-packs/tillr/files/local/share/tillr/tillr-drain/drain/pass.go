@@ -420,7 +420,7 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 			return Decision{}, err
 		}
 		if grant == "" {
-			d.Reason = ReasonJudgeGrantAbsent
+			d.From, d.Reason = "held", ReasonJudgeGrantAbsent
 			identifyDecision(&d)
 			return d, nil
 		}
@@ -604,7 +604,7 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 			return Decision{}, err
 		}
 		if grant == "" {
-			d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, ReasonJudgeGrantAbsent
+			d.From, d.To, d.Action, d.Reason = "held", "", ActionHold, ReasonJudgeGrantAbsent
 			identifyDecision(&d)
 			return d, nil
 		}

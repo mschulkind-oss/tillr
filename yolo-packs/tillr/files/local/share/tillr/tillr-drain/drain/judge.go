@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/judgegrants"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
@@ -80,6 +81,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 	if err != nil {
 		return c, false, err
 	}
+	var expiredGrant *judgegrants.Grant
 	err = db.ReadTx(ctx, func(r *store.Reader) error {
 		rows, err := readItems(r)
 		if err != nil {
@@ -92,7 +94,11 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			}
 		}
 		if mode == "agent" || c.Evaluator != nil {
-			grant, err = judgeGrant(r, c.ItemID, l.cfg.Now())
+			now := l.cfg.Now()
+			grant, err = judgeGrant(r, c.ItemID, now)
+			if err == nil && grant == "" {
+				expiredGrant, err = judgegrants.ExpiredForItem(r, c.ItemID, now)
+			}
 		}
 		return err
 	})
@@ -229,7 +235,8 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 					// grant hold must not consume that run's terminal refusal record.
 					return c, false, errJudgeGrantHeld
 				}
-				return c, false, l.holdJudge(ctx, c, c.RunID+"-judge", ReasonJudgeGrantAbsent, "no unexpired grant covers the item's criteria", result)
+				detail, _ := judgegrants.FormatHold(expiredGrant, l.cfg.Store)
+				return c, false, l.holdJudge(ctx, c, c.RunID+"-judge", ReasonJudgeGrantAbsent, detail, result)
 			}
 			req := c.Evaluator
 			fromReplacement := replacementRequest != nil
