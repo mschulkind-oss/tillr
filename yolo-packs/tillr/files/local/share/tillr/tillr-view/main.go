@@ -126,8 +126,17 @@ func statusFaceFormat(args []string, asText *bool) (record.Envelope, int) {
 	asJSON := fs.Bool("json", false, "print the view.status record (the default)")
 	text := fs.Bool("text", false, "print a human-readable status summary and sync residue counts")
 	questionsCmd := fs.String("questions-cmd", "", questionsCmdHelp)
+	nowFlag := fs.String("now", "", "the clock grant expiry is measured against, RFC 3339 (default: now)")
 	if code := parseFlags(fs, args); code != record.ExitOK {
 		return record.Envelope{}, code
+	}
+	now := time.Now().UTC()
+	if *nowFlag != "" {
+		parsed, err := time.Parse(time.RFC3339, *nowFlag)
+		if err != nil {
+			return record.Envelope{}, usagef("--now %q is not an RFC 3339 timestamp: %v", *nowFlag, err)
+		}
+		now = parsed.UTC()
 	}
 
 	if asText != nil {
@@ -153,7 +162,23 @@ func statusFaceFormat(args []string, asText *bool) (record.Envelope, int) {
 		// the report carries, not a refusal.
 		return record.Envelope{}, code
 	}
+	if *nowFlag != "" {
+		payload.GeneratedAt = now
+	}
 	if *src.store != "" && subject == nil {
+		s, err := store.OpenRead(context.Background(), *src.store)
+		if err != nil {
+			return record.Envelope{}, exitFor(err)
+		}
+		err = s.ReadTx(context.Background(), func(r *store.Reader) error {
+			var gerr error
+			payload.Grants, gerr = waitingGrantLines(r, now, *src.store)
+			return gerr
+		})
+		s.Close()
+		if err != nil {
+			return record.Envelope{}, exitFor(err)
+		}
 		proof, err := heavy.ReadStatus(context.Background(), *root, *src.store)
 		if err != nil {
 			payload.HeavyFault = err.Error()

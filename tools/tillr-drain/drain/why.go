@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
+	"github.com/mschulkind-oss/tillr-drain/judgegrants"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
@@ -349,6 +350,15 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 				row.Mover = "triage on the design seat"
 			}
 		}
+		if d.Reason == ReasonJudgeGrantAbsent {
+			expired, err := judgegrants.ExpiredForItem(r, it.ItemID, at)
+			if err != nil {
+				return answer, readFailure(err)
+			}
+			detail, mover := judgegrants.FormatHold(expired, tick.StorePath)
+			row.Why = d.Reason + ": " + detail
+			row.Mover = mover
+		}
 		if work := works[it.ItemID]; work != nil && !work.Done && d.Action == ActionHold {
 			row.LaneStatus = "kept"
 			if work.LaneReleased {
@@ -554,7 +564,7 @@ func whyPresentation(d Decision) (class, where, mover string) {
 		// History only: the owner's ruling of 2026-11-17 returns such an item instead.
 		return "ready", "queue", "the next pass"
 	case ReasonJudgeGrantAbsent:
-		return "needs you", "queue", "issue a grant covering the item's criteria"
+		return "needs you", where, "issue a grant covering the item's criteria: " + judgegrants.IssueCommand("")
 	case ReasonJudgeUnreadable:
 		return "needs a cause", "judge", "inspect the judge run"
 	case ReasonEvalFailed:

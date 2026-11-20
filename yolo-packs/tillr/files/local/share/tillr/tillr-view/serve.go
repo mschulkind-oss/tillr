@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/mschulkind-oss/tillr-drain/judgegrants"
 	"github.com/mschulkind-oss/tillr-drain/orderrecord"
 	"github.com/mschulkind-oss/tillr-drain/preserved"
 	"github.com/mschulkind-oss/tillr-drain/restart"
@@ -783,12 +784,13 @@ type itemView struct {
 // snapshotData is the two-item drain view: every item projected, with its runs and the
 // stage each run reached.
 type snapshotData struct {
-	Sources    sourceStates `json:"sources"`
-	Counts     boardCounts  `json:"counts"`
-	Drain      drainSummary `json:"drain_summary"`
-	Lanes      []laneView   `json:"lanes"`
-	Items      []itemView   `json:"items"`
-	RecentRuns []runSummary `json:"recent_runs"`
+	Grants     []judgegrants.View `json:"grants,omitempty"`
+	Sources    sourceStates       `json:"sources"`
+	Counts     boardCounts        `json:"counts"`
+	Drain      drainSummary       `json:"drain_summary"`
+	Lanes      []laneView         `json:"lanes"`
+	Items      []itemView         `json:"items"`
+	RecentRuns []runSummary       `json:"recent_runs"`
 }
 
 // boardCounts is the header's numbers: the board's own tallies, computed once here so
@@ -877,8 +879,23 @@ func liveRuns(lanes []storeLane, known []storeRun, allocations map[string]alloca
 }
 
 // snapshotPayload is the initial screen load: the whole board as one moment.
-func (s *server) snapshotPayload(r *store.Reader, _ *http.Request) (any, *apiFailure) {
+func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
 	out := snapshotData{Sources: s.sources()}
+	now := time.Now().UTC()
+	if req != nil {
+		if rawNow := req.URL.Query().Get("now"); rawNow != "" {
+			parsed, err := time.Parse(time.RFC3339, rawNow)
+			if err != nil {
+				return nil, failure(codeBadQuery, "now %q is not an RFC 3339 timestamp: %v", rawNow, err)
+			}
+			now = parsed.UTC()
+		}
+	}
+	grants, err := judgegrants.CurrentViews(r, now, s.storePath)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	out.Grants = grants
 	ideas, err := ideaIDs(r)
 	if err != nil {
 		return nil, unreadable(err)

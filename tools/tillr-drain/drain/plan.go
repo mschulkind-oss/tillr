@@ -51,6 +51,7 @@ type Pass struct {
 	// BriefTemplate is the loop's actual staging input, not a stored tick field.
 	// A standalone plan with no stager compares the retained template instead.
 	BriefTemplate  *string   `json:"-"`
+	StorePath      string    `json:"-"`
 	Now            string    `json:"now"`
 	AvailableLanes *[]string `json:"available_lanes"`
 	MaxDispatches  *int      `json:"max_dispatches"`
@@ -612,7 +613,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				decision, err = pendingDecision(r, definitionWork(def, work), at, inputs[item.ItemID], tick.BriefTemplate, policy, shut, tick.GatesInFlight)
 			}
 			if err == nil && !settled && decision.Action == ActionJudge && item.JudgeMode == "agent" && item.JudgeGrant == "" {
-				decision.Action, decision.Reason, decision.To = ActionHold, ReasonJudgeGrantAbsent, ""
+				decision.From, decision.Action, decision.Reason, decision.To = "held", ActionHold, ReasonJudgeGrantAbsent, ""
 				identifyDecision(&decision)
 			}
 			ownerNextNode := ownerOwed && (work.Ready || decision.Action == ActionDispatch || decision.Action == ActionRetry)

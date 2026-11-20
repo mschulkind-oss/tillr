@@ -25,7 +25,14 @@ import (
 // planner answers from the same walk instead of starting its own, which was 98% of its time.
 // A nil index leaves the planner to run the index command itself, as it always has.
 func plannerWhy(ctx context.Context, program plannerProgram, self buildStamp, path, root, policy, lanes string, questionsCmd []string, index []byte) (json.RawMessage, []waitingRow, error) {
+	return plannerWhyAt(ctx, program, self, path, root, policy, lanes, "", questionsCmd, index)
+}
+
+func plannerWhyAt(ctx context.Context, program plannerProgram, self buildStamp, path, root, policy, lanes, now string, questionsCmd []string, index []byte) (json.RawMessage, []waitingRow, error) {
 	args := []string{"why", "--store", path, "--root", root, "--json"}
+	if now != "" {
+		args = append(args, "--now", now)
+	}
 	if policy != "" {
 		args = append(args, "--policy", policy)
 	}
@@ -161,11 +168,15 @@ func plannerWhy(ctx context.Context, program plannerProgram, self buildStamp, pa
 // askPlanner resolves the planner and asks it, so every caller gets the same refusal for a
 // planner that cannot be found as for one that cannot answer.
 func askPlanner(ctx context.Context, explicit string, self buildStamp, path, root, policy, lanes string, questionsCmd []string, index []byte) (json.RawMessage, []waitingRow, error) {
+	return askPlannerAt(ctx, explicit, self, path, root, policy, lanes, "", questionsCmd, index)
+}
+
+func askPlannerAt(ctx context.Context, explicit string, self buildStamp, path, root, policy, lanes, now string, questionsCmd []string, index []byte) (json.RawMessage, []waitingRow, error) {
 	program, err := resolvePlanner(explicit)
 	if err != nil {
 		return nil, nil, err
 	}
-	return plannerWhy(ctx, program, self, path, root, policy, lanes, questionsCmd, index)
+	return plannerWhyAt(ctx, program, self, path, root, policy, lanes, now, questionsCmd, index)
 }
 
 type whyPayloadData struct {

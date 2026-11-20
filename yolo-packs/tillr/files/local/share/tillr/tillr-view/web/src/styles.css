@@ -442,9 +442,15 @@ a {
   font-weight: 600;
 }
 
-.head-build--unknown {
+.head-build--unknown,
+.head-grant--warning {
   white-space: normal;
   color: var(--blocked);
+}
+
+.head-grant--warning code {
+  max-width: none;
+  white-space: normal;
 }
 
 .head-meta code {

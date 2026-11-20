@@ -17,6 +17,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/faults"
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
+	"github.com/mschulkind-oss/tillr-drain/judgegrants"
 	"github.com/mschulkind-oss/tillr-drain/quota"
 	"github.com/mschulkind-oss/tillr-drain/spend"
 	"github.com/mschulkind-oss/tillr/definition"
@@ -71,20 +72,29 @@ func waitingFace(args []string) (record.Envelope, int) {
 	root := fs.String("root", ".", "the directory a relative design_doc resolves against")
 	questionsCmd := fs.String("questions-cmd", "", questionsCmdHelp)
 	plannerFlag := fs.String("tillr-drain", "", "the tillr-drain whose `why` answers (default: the one beside this executable, then PATH); it must be this program's build")
+	nowFlag := fs.String("now", "", "the clock grant expiry, quota windows, and lease times are measured against, RFC 3339 (default: now)")
 	if code := parseFlags(fs, args); code != record.ExitOK {
 		return record.Envelope{}, code
 	}
 	if *path == "" {
 		return record.Envelope{}, usagef("waiting needs --store <path>")
 	}
+	now := time.Now().UTC()
+	if *nowFlag != "" {
+		parsed, err := time.Parse(time.RFC3339, *nowFlag)
+		if err != nil {
+			return record.Envelope{}, usagef("--now %q is not an RFC 3339 timestamp: %v", *nowFlag, err)
+		}
+		now = parsed.UTC()
+	}
 	ctx := context.Background()
 	questions := &vantage.VantageQuestions{Root: *root, Command: commandFields(*questionsCmd), Context: ctx}
 	var rows []waitingRow
 	var err error
 	if *history {
-		rows, err = readWaiting(ctx, *path, questions)
+		rows, err = readWaitingAt(ctx, *path, questions, now)
 	} else {
-		_, rows, err = askPlanner(ctx, *plannerFlag, buildInfo("none"), *path, *root, *policyRef, *lanesArg, commandFields(*questionsCmd), nil)
+		_, rows, err = askPlannerAt(ctx, *plannerFlag, buildInfo("none"), *path, *root, *policyRef, *lanesArg, *nowFlag, commandFields(*questionsCmd), nil)
 	}
 	if err == nil && !*history {
 		s, e := store.OpenRead(ctx, *path)
@@ -92,11 +102,16 @@ func waitingFace(args []string) (record.Envelope, int) {
 			err = e
 		} else {
 			err = s.ReadTx(ctx, func(r *store.Reader) error {
-				quotas, e := waitingBackendQuotas(r, time.Now())
+				quotas, e := waitingBackendQuotas(r, now)
 				if e != nil {
 					return e
 				}
 				rows = mergeQuotaWaiting(rows, quotas)
+				grantWarnings, e := waitingGrantWarnings(r, now, *path)
+				if e != nil {
+					return e
+				}
+				rows = append(rows, grantWarnings...)
 				extra, e := waitingCommentIntake(r)
 				if e != nil {
 					return e
@@ -139,6 +154,14 @@ func waitingFace(args []string) (record.Envelope, int) {
 		return record.Envelope{}, exitFor(err)
 	}
 	declared, err := definition.ForStore(ctx, s)
+	var grantViews []judgegrants.View
+	if err == nil {
+		err = s.ReadTx(ctx, func(r *store.Reader) error {
+			var gerr error
+			grantViews, gerr = waitingGrantLines(r, now, *path)
+			return gerr
+		})
+	}
 	s.Close()
 	if err != nil {
 		return record.Envelope{}, exitFor(err)
@@ -150,17 +173,23 @@ func waitingFace(args []string) (record.Envelope, int) {
 	if *asJSON {
 		err = json.NewEncoder(os.Stdout).Encode(rows)
 	} else {
-		window, readErr := spend.Read(ctx, *path, time.Now())
+		window, readErr := spend.Read(ctx, *path, now)
 		if readErr != nil {
 			return record.Envelope{}, exitFor(readErr)
 		}
 		_, err = fmt.Fprintf(os.Stdout, "definition: %s\n%s\n", declared.Name, window)
 		var laneRows []laneRow
 		if err == nil {
-			laneRows, err = readLaneRows(ctx, *path, filepath.Join(filepath.Dir(*path), "loop"), filepath.Join(filepath.Dir(*path), "lanes"), time.Now())
+			laneRows, err = readLaneRows(ctx, *path, filepath.Join(filepath.Dir(*path), "loop"), filepath.Join(filepath.Dir(*path), "lanes"), now)
 		}
 		if err == nil {
 			_, err = fmt.Fprintln(os.Stdout, laneCapacityLine(laneRows))
+		}
+		for _, g := range grantViews {
+			if err != nil {
+				break
+			}
+			_, err = fmt.Fprintln(os.Stdout, g.Summary)
 		}
 		if err == nil {
 			err = printWaiting(os.Stdout, rows)
@@ -173,6 +202,10 @@ func waitingFace(args []string) (record.Envelope, int) {
 }
 
 func readWaiting(ctx context.Context, path string, questions vantage.QuestionSource) ([]waitingRow, error) {
+	return readWaitingAt(ctx, path, questions, time.Now().UTC())
+}
+
+func readWaitingAt(ctx context.Context, path string, questions vantage.QuestionSource, now time.Time) ([]waitingRow, error) {
 	r, err := store.OpenRead(ctx, path)
 	if err != nil {
 		return nil, err
@@ -187,14 +220,22 @@ func readWaiting(ctx context.Context, path string, questions vantage.QuestionSou
 		if !schemaSupported(version) {
 			return schemaMismatch{version: version}
 		}
-		out, err = assembleWaiting(tx, questions, path)
+		out, err = assembleWaitingAt(tx, questions, path, now)
 		return err
 	})
 	return out, err
 }
 
 func (s *server) waitingPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
-	rows, err := assembleWaiting(r, s.vantage.source(req.Context()), s.storePath)
+	now := time.Now().UTC()
+	if rawNow := req.URL.Query().Get("now"); rawNow != "" {
+		parsed, err := time.Parse(time.RFC3339, rawNow)
+		if err != nil {
+			return nil, failure(codeBadQuery, "now %q is not an RFC 3339 timestamp: %v", rawNow, err)
+		}
+		now = parsed.UTC()
+	}
+	rows, err := assembleWaitingAt(r, s.vantage.source(req.Context()), s.storePath, now)
 	if err == nil {
 		rows, err = policyWaitingRows(s.root, rows)
 	}
@@ -257,6 +298,10 @@ func appendRepeatedStopWaiting(loopDir string, rows []waitingRow) []waitingRow {
 // One pinned read transaction supplies both callers. Optional utility tables are
 // absent on older stores; SQL errors other than absence always refuse the read.
 func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePath string) ([]waitingRow, error) {
+	return assembleWaitingAt(r, questions, storePath, time.Now().UTC())
+}
+
+func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storePath string, now time.Time) ([]waitingRow, error) {
 	conflicts, err := waitingConflicts(r)
 	if err != nil && !isMissingTable(err) {
 		return nil, err
@@ -429,6 +474,15 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 					row.Mover = strings.Join(blockers, ", ")
 				}
 			}
+		}
+		if found && last.Reason == "judge-grant-absent" {
+			expired, err := judgegrants.ExpiredForItem(r, item.ItemID, now)
+			if err != nil {
+				return nil, err
+			}
+			detail, mover := judgegrants.FormatHold(expired, storePath)
+			row.Why = last.Reason + ": " + detail
+			row.Mover = mover
 		}
 		if found && (last.Reason == "eval-failed" || last.Reason == "judge-unreadable" || last.Reason == "words-missing" || last.Reason == "words-altered" || last.Reason == "idea-no-outcome") {
 			var detail string
@@ -625,11 +679,11 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 	if err := addPreservedHistory(r, out); err != nil {
 		return nil, err
 	}
-	windows, err := waitingBackendWindows(r, time.Now())
+	windows, err := waitingBackendWindows(r, now)
 	if err != nil {
 		return nil, err
 	}
-	quotas, err := waitingBackendQuotas(r, time.Now())
+	quotas, err := waitingBackendQuotas(r, now)
 	if err != nil {
 		return nil, err
 	}
@@ -644,6 +698,10 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 		}
 	}
 	windows = append(filtered, quotas...)
+	grantWarnings, err := waitingGrantWarnings(r, now, storePath)
+	if err != nil {
+		return nil, err
+	}
 	extra, err := waitingCommentIntake(r)
 	if err != nil {
 		return nil, err
@@ -657,6 +715,7 @@ func assembleWaiting(r *store.Reader, questions vantage.QuestionSource, storePat
 		return nil, err
 	}
 	out = append(out, moves...)
+	out = append(out, grantWarnings...)
 	all, err := appendWaitingDesigns(r, append(append(mergeQuotaWaiting(out, windows), extra...), laneRows...))
 	if err != nil {
 		return nil, err
