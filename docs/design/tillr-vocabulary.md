@@ -13,12 +13,12 @@ summary: "Settles one meaning for each word the tillr work queue uses, so that t
 next: "The owner ruled OQ-VO4, OQ-VO5 and OQ-VO6 on 2026-11-18. He reviews the designer's decisions D-VO1 to D-VO12 in the ledger, which nothing is built on until he has. The drafted work in Section 9 is filed once he has ruled how work in a document becomes an item."
 depends-on:
   - tillr-graph-is-the-path.md
-  - tillr-item-graphs.md
+  - ../reference/tillr-item-graphs.md
 ---
 
 # One word per thing: the vocabulary of tillr's items, nodes, runs, sessions and worktrees
 
-**Status:** 2026-11-18. Written from a read of the tracked documents and the code's tables, ids and event kinds on that date. The workflow/node-run machinery ([item graphs](./tillr-item-graphs.md)) and landing-call closure on `proven` (`tools/tillr-drain/drain/landing_call_lifecycle.go`) are built; the vocabulary's own item-owned worktree lifecycle, scratch collection, and proposed renames are not built; where the code uses a word differently, the entry says so. Three questions were ruled by the owner ([`OQ-VO4`](#OQ-VO4), [`OQ-VO5`](#OQ-VO5), [`OQ-VO6`](#OQ-VO6)) and three closed by designer's decisions ([`OQ-VO1`](#OQ-VO1), [`OQ-VO2`](#OQ-VO2), [`OQ-VO3`](#OQ-VO3)); every designer's decision in [the ledger](#decision-ledger) awaits the owner's review, and nothing is to be built on one before he has seen it.
+**Status:** 2026-11-18. Written from a read of the tracked documents and the code's tables, ids and event kinds on that date. The workflow/node-run machinery ([item graphs](../reference/tillr-item-graphs.md)) and landing-call closure on `proven` (`tools/tillr-drain/drain/landing_call_lifecycle.go`) are built; the vocabulary's own item-owned worktree lifecycle, scratch collection, and proposed renames are not built; where the code uses a word differently, the entry says so. Three questions were ruled by the owner ([`OQ-VO4`](#OQ-VO4), [`OQ-VO5`](#OQ-VO5), [`OQ-VO6`](#OQ-VO6)) and three closed by designer's decisions ([`OQ-VO1`](#OQ-VO1), [`OQ-VO2`](#OQ-VO2), [`OQ-VO3`](#OQ-VO3)); every designer's decision in [the ledger](#decision-ledger) awaits the owner's review, and nothing is to be built on one before he has seen it.
 
 > **In short:** Three words carried several meanings each (item, run, lane), and that is why the stages of a change could not be told in one breath. This document gives each word one meaning, retires the words that had none left, and names the stages of a change once.
 
@@ -172,7 +172,7 @@ The pool used to do this by accident: `--lanes N` meant N agents because it mean
 
 - **The running-agent limit** is the number of agent runs in progress at once, overall and per backend. It is a scheduling setting in the sense of [the graph design's scheduling section](./tillr-graph-is-the-path.md#6-scheduling): it ends, refuses and re-routes nothing. Its default is today's `--lanes` value.
 - **At the limit,** ready nodes stay in fog, and the wait names the next ending of a running agent node as its mover.
-- **Work the owner is waiting on** runs outside the limit, as `D-IG10` of [item graphs](./tillr-item-graphs.md#71-decision-ledger) rules. That replaces "express lanes".
+- **Work the owner is waiting on** runs outside the limit, as `D-IG10` of [item graphs](../reference/tillr-item-graphs.md#why-its-this-way) rules. That replaces "express lanes".
 - **Command runs** do not count against it. Landing is one at a time because one program moves the trunk; how many gate runs go together is a resource setting whose default is the implementer's to measure.
 
 ---
@@ -382,7 +382,7 @@ Which of the two landings ends the suspension is that design's question, not thi
 | :--- | :--- | :--- | :--- |
 | "run = one recorded attempt by an agent" | Run = one node's execution; the whole is the **path** | The observatory's [`glossary.json`](../../tools/tillr-view/web/src/models/glossary.json); view labels | **Rename the text.** It is what the owner reads |
 | `runs` table, `run_id`, `run.*` events | Run | Store, events | Alias. The meaning already matches |
-| `node_runs`, "node run" | Run | Store; [item graphs](./tillr-item-graphs.md#the-words) | Alias in the store; reword the document |
+| `node_runs`, "node run" | Run | Store; [item graphs](../reference/tillr-item-graphs.md#the-words) | Alias in the store; reword the document |
 | `a<N>` in `run-<item>-a<N>-n<k>`, `node_runs.attempt`, `Decision.Attempt`, `AttemptClass` | None: attempt is retired | Run and transition ids, code | Alias for stored ids. New ids stop carrying it when the graph design's storage is built |
 | `exec --resume`, `run.resume` | **Recovery** | [tillr-run README](../../tools/tillr-run/README.md), events | Alias, documented. Worth renaming only with the resume node kind, when two things would otherwise share the word |
 | `session_turn`, "returned turn", `returned-with-evidence` | **Resume** node; **return** | Run request, planner reason | Alias until the graph design's resume kind is built |

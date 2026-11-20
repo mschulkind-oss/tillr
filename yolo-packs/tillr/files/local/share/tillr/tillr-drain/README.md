@@ -478,7 +478,7 @@ concrete paths and reports its actual expansion.
 
 ## Parallel read-only nodes
 
-Ready read-only [nodes](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-item-graphs.md#the-words)
+Ready read-only [nodes](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-item-graphs.md#the-words)
 of one item start together on its existing lane and worktree. A workflow's
 `max_parallel` sets how many may run together: omission means 4, and the
 maximum is 8. Writing nodes always run alone; neither a reader nor another

@@ -11,7 +11,7 @@ tags:
 summary: "The owner's direction for tillr: general machinery of queues and graphs whose nodes are agents and commands, with its tracking, and one small, separate charter ('definition' in shipped code) that turns it into machinery for landing changes in a Git repository. It records the workflow that charter wraps, the baseline measurement of where the Git-landing assumption was wired in, the shapes the one file could take and the one that was built (a data file plus one hook program), the extension points a second use fills, and what is built and unbuilt on 2026-11-19."
 next: "The owner reviews the designer's decisions D-CG1 to D-CG5 in the ledger. He named the two words on 2026-11-18 in tillr-vocabulary.md: a charter, and git-landing. The ten units of the build plan's next tranche are unfiled, and Product QA's third round has not arrived."
 depends-on:
-  - tillr-item-graphs.md
+  - ../reference/tillr-item-graphs.md
   - tillr-product-qa-requests.md
 ---
 
@@ -60,7 +60,7 @@ rulings, so its body still says "definition" where he now says charter; shipped 
 is), [the build plan](./tillr-definitions-plan.md) (the eighteen built items and the unfiled next
 tranche), [tillr-product-qa-requests.md](./tillr-product-qa-requests.md) (Product QA's second-round
 reply, as received), [tillr-separable-parts.md](./tillr-separable-parts.md) (tillr's answer to
-Product QA and the contract), [tillr-item-graphs.md](./tillr-item-graphs.md) (graphs inside one
+Product QA and the contract), [tillr-item-graphs.md](../reference/tillr-item-graphs.md) (graphs inside one
 item), [the graph design](./tillr-graph-is-the-path.md) (landing as nodes of an item's graph),
 [the vocabulary](./tillr-vocabulary.md) (one meaning per word, and the naming rulings),
 [board-utilities.md §5.9](./board-utilities.md#59-the-composed-pipeline) (utilities meet only
@@ -328,7 +328,7 @@ where it is: **nothing**, **small**, or **a design round**.
 | Keeper (`tillr-roll`) | restart a loop, one lock per root | the roll after a landing; `loop_command` names `tillr-loop`'s three faces | hard-coded | small |
 | Item block and sync | `id`, `blocked_by`, `seat`, `workflow`, `prose` | `paths` as the fence; documents are git-tracked files under `docs/`; a landed item's block is retired | hard-coded grammar | small |
 | Policy files | [backend-policy.json](../../config/tillr/backend-policy.json): seats to backends | [gate-policy.json](../../config/tillr/gate-policy.json): landing strategy, red cap, lane base | policy entries | nothing |
-| Workflows (`config/tillr/workflows/`) | stages, seats, access, edges ([scout-then-build@v1.json](../../config/tillr/workflows/scout-then-build@v1.json)) | none in the file; the landing runs after the exit, by rule ([item-graphs §5](./tillr-item-graphs.md#5-what-a-node-may-never-be)) | — | a design round, if landing becomes nodes |
+| Workflows (`config/tillr/workflows/`) | stages, seats, access, edges ([scout-then-build@v1.json](../../config/tillr/workflows/scout-then-build@v1.json)) | none in the file; the landing runs after the exit, by rule ([what a workflow node may never be](../reference/tillr-item-graphs.md#what-a-workflow-node-may-never-be)) | — | a design round, if landing becomes nodes |
 | `tillr-operating` skill and the pack | store, item, run and view faces | the seven-step loop ends in land, verify, audit ([SKILL.md](../../yolo-packs/tillr/skills/tillr-operating/SKILL.md)) | prose | small |
 
 **Lifecycle, prerequisites and retention, classified by the owner's rule** **[read]**:
@@ -431,7 +431,7 @@ findings@v1:     recheck (command) → investigate (agent, read_only) → verify
 
 It makes "land a change" one workflow among others, and Product QA's finding pipeline another, with
 command nodes and exit conditions doing the work. When it was written it ran into
-[item-graphs §5](./tillr-item-graphs.md#5-what-a-node-may-never-be), which refused "a landing or a
+[the item-graphs node boundary](../reference/tillr-item-graphs.md#what-a-workflow-node-may-never-be), which refused "a landing or a
 ref move inside the graph", and it leaves intake, staging and trunk observation outside any graph.
 **Verdict: not an alternative to D.** The owner's direction of 2026-11-17 makes the gate and the
 landing nodes of an item's graph, and [the graph design](./tillr-graph-is-the-path.md) amends that
@@ -519,7 +519,7 @@ rewritten here.
 | C1 Outcomes per kind | The closed seven states, one projector ([D-IP1](./tillr-idea-pipeline.md#61-settled-decisions)) | Yes | The definition's, by the owner's direction. The protection that stays in the core: each definition's set is closed and projected one way | Real: an inconclusive finding must be countable |
 | C2 Reopening a finished item | Terminal `landed` and `resolved-elsewhere` ([lifecycle §3.2](./tillr-judge-and-lifecycle.md#32-transition-preconditions-and-attempt-holds-d-jl4)) | Yes | The definition's, by the owner's direction. Stays true inside Git landing. Core protection: a move out of a finished state is an event, never silent | Real: the owner, as reported, rules it a definition's policy |
 | C3 Steps reshaping the graph | Bounded replacement only; no model-written wiring (`D-IG3`, `D-IG5`, `D-IG9`) | Partly | Which reshaping operations exist is the definition's. That each is applied by one writer, atomically with its event, and never to a node that has started, is a protection every use needs: without it the record lies. The owner's direction of 2026-11-17 is wider than the old ruling: anything not started may be changed | Real, narrowed to the four rules all three designs share: one writer applies each change atomically with its event, no node replaces itself, nothing started changes, and every change passes the downstream-shape check. Free rewriting is withdrawn |
-| C4 An uncertain outside effect as a state | No node changes anything outside its worktree ([item-graphs §5](./tillr-item-graphs.md#5-what-a-node-may-never-be)) | Yes | The worktree rule is Git landing's. Core protection: an effect a definition declares is recorded before and after, so a retry can see it | Real: a report send that lost its session |
+| C4 An uncertain outside effect as a state | No node changes anything outside its worktree ([what a workflow node may never be](../reference/tillr-item-graphs.md#what-a-workflow-node-may-never-be)) | Yes | The worktree rule is Git landing's. Core protection: an effect a definition declares is recorded before and after, so a retry can see it | Real: a report send that lost its session |
 | C5 Clocks and deadlines in the plan | No timers ([agent-runtime.md §6](./agent-runtime.md#6-the-task-graph)) | Partly | A deadline as an ordering input of dispatch policy is a tension and the definition's. The planner staying a function of the store, replayable, is a protection | Withdrawn: the time box is the fuzzer run's own |
 | C6 A Go library as the connection | Processes and records ([board-utilities.md §5.9](./board-utilities.md#59-the-composed-pipeline)) | No | A protection: it is how a definition injects anything without linking the core | Withdrawn: processes and records are enough |
 | C7 Completion that is not a landing | One item, one atomic change (`D-IG2`) | Yes | The completion rule is the definition's; Git landing's is a landing. Core protection: an item completes once, on a recorded receipt | Real: completion on a recorded, judged verdict |
@@ -530,7 +530,7 @@ rewritten here.
 
 ## 7. Where the documents disagree
 
-1. **Shape (c) against [item-graphs §5](./tillr-item-graphs.md#5-what-a-node-may-never-be).** That
+1. **Shape (c) against [the item-graphs node boundary](../reference/tillr-item-graphs.md#what-a-workflow-node-may-never-be).** That
    design refused "a landing or a ref move inside the graph", and the planning-node design's P3
    relies on it. [The graph design](./tillr-graph-is-the-path.md) amends the refusal on the owner's
    direction of 2026-11-17; item graphs and the planning-node design still carry the old text.
@@ -545,7 +545,7 @@ rewritten here.
    creep, and the owner describes the core as "queues and DAGs that have agents and other commands".
    Read together, the warnings are about features (cycles, timers, model-written wiring), not about
    generality **[inferred]**.
-5. **`D-IG4` in [tillr-item-graphs.md](./tillr-item-graphs.md#22-in-fog-refinement-and-the-flattening-projection)**
+5. **`D-IG4` in [tillr-item-graphs.md](../reference/tillr-item-graphs.md#why-its-this-way)**
    caps an expanded graph at 100 nodes and a depth of 8, and four criteria carry a cap. The graph
    design's ledger amends it: the caps go. Replacing the four criteria is
    [item 4 of the build plan's next tranche](./tillr-definitions-plan.md#3-the-next-tranche-in-prose),

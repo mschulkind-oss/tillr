@@ -10,7 +10,7 @@ This pack ([`pack.json`](./pack.json)) delivers tillr, the owner's work-queue to
 
 [`tasks/autoqa-handoff.md`](./tasks/autoqa-handoff.md) stays outside `briefing/` on purpose: it is a review task brief handed only to an agent asked for AutoQA or Product QA comments, never broadcast as a house rule.
 
-A delivered path mirrors the repository path, with a leading `tools/` dropped. So `docs/design/tillr-item-graphs.md` lands at `~/.local/share/tillr/docs/design/tillr-item-graphs.md`, and `tools/tillr/examples/recorded-verdict/README.md` lands at `~/.local/share/tillr/tillr/examples/recorded-verdict/README.md`.
+A delivered path mirrors the repository path, with a leading `tools/` dropped. So `docs/reference/tillr-item-graphs.md` lands at `~/.local/share/tillr/docs/reference/tillr-item-graphs.md`, and `tools/tillr/examples/recorded-verdict/README.md` lands at `~/.local/share/tillr/tillr/examples/recorded-verdict/README.md`.
 
 ## What tillr does today
 

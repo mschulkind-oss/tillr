@@ -320,8 +320,8 @@ One failure a worker meets in a lane is not this item's and is not a reason to s
 `go test . -run '^TestPlanHoldsAnItemBlockedByAnUnlandedItem$'` in `tools/tillr-drain` fails its
 `blocker landed` case with `hold / trunk-unproved`. The test plans against the checkout it runs
 in, a lane shares the main checkout's proved-trunk pointer, and the gate's clean checkout has
-none, so the gate does not see it. Its repair is criterion c8 of `item-ig-parallel-readers` in
-[`tillr-item-graphs.md`](tillr-item-graphs.md). A worker that sees exactly that one case fail
+none, so the gate does not see it. Its repair landed with parallel readers in
+[item graphs](../reference/tillr-item-graphs.md#parallel-read-only-nodes). A worker that sees exactly that one case fail
 reports it and carries on; any other failure in the drain suite is a real finding. The same
 measurement ran `python3 tests/fork-check.test.py` to exit 0 on that commit, so a failure there
 belongs to the candidate. That test keeps its gate records under the shared git directory by

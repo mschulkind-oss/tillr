@@ -7,8 +7,8 @@ adds the documents an agent in ANOTHER workspace needs to know what tillr does t
 what it is going to build: the status index `docs/tillr/design-status.md` and every
 document that index marks `shipped`. They land in a jail at `~/.local/share/tillr/`,
 under the same repository-relative path with a leading `tools/` dropped, so
-`docs/design/tillr-item-graphs.md` arrives at
-`~/.local/share/tillr/docs/design/tillr-item-graphs.md` and `tools/tillr-loop/README.md`
+`docs/reference/tillr-item-graphs.md` arrives at
+`~/.local/share/tillr/docs/reference/tillr-item-graphs.md` and `tools/tillr-loop/README.md`
 at `~/.local/share/tillr/tillr-loop/README.md`.
 
 WHY A SNAPSHOT, AND WHY IT IS NOT REFRESHED BY THE GATE. The module mirror is held to its

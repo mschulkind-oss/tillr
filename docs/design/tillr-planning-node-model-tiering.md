@@ -13,7 +13,7 @@ tags:
 summary: "A build item can be planned first: a planning node cuts it into pieces, each piece names a seat, the backend policy puts each seat on a model, and a verify node checks the joined result against the item's criteria before the gate. The owner ruled on 2026-11-18 that implementation runs on Terra and scouting on Luna, and the planning stage was built that day. Filed build requests default to planned-build@v1 (`5a5c459de`), and one planned build item has landed on the Copilot policy; document-declared build items still name none, so the ten-item planned median OQ-PT8 waits on is still unmeasured, while the run history of 2026-11-17 says the larger savings are in failed runs and in context written to the cache twice."
 next: "Run nine more build items through planned-build@v1 (choosing document-declared build items on the roadmap or running queued build requests) so that the cost report prints the ten-item planned median OQ-PT8 waits on alongside the last-20 build median."
 depends-on:
-  - tillr-item-graphs.md
+  - ../reference/tillr-item-graphs.md
   - tillr-judge-and-lifecycle.md
 ---
 
@@ -35,7 +35,7 @@ depends-on:
 
 **Reads with:**
 
-- [`tillr-item-graphs.md`](./tillr-item-graphs.md): workflows, nodes, proposals and fences.
+- [`tillr-item-graphs.md`](../reference/tillr-item-graphs.md): workflows, nodes, proposals and fences.
 - [`tillr-judge-and-lifecycle.md`](./tillr-judge-and-lifecycle.md): what a worker may end with, which is how a planner reports a wrong criterion or a narrow fence.
 - [`tillr-graph-is-the-path.md`](./tillr-graph-is-the-path.md): the rule against counts, and seats declared in the policy.
 - [`seat-profiles.md`](./seat-profiles.md): the October rulings on Bedrock models.
@@ -201,7 +201,7 @@ The design follows from this order. A planning node is worth having mainly becau
 
 - **P1. Each kind of work goes to the cheapest model that is enough for it.** This is the owner's rule, and the planner reads it in its brief from [`plan-guidance.md`](../../config/tillr/plan-guidance.md): "Use cheap models for well-specified implementation and mechanical work", "Have a mid model verify the work", "Keep the expensive model for root cause, design and risky core changes."
 - **P2. Kinds of work name seats, and models live only in the policy.** An item, a workflow and a plan name seats, never a model, so a provider change is one policy edit ([D-CB3](./tillr-claude-backend.md), and the owner's habit of switching providers often).
-- **P3. One item outside.** Planning changes only the inside of an item. The queue, the fence, the gate and the landing still see one item ([`D-IG2`](./tillr-item-graphs.md#21-intra-item-execution-graphs-vs-inter-item-lineage)).
+- **P3. One item outside.** Planning changes only the inside of an item. The queue, the fence, the gate and the landing still see one item ([`D-IG2`](../reference/tillr-item-graphs.md#why-its-this-way)).
 - **P4. A split pays for its seams.** Each extra node pays a first turn and a partial re-orientation ([Section 1.3](#13-orientation-the-price-of-starting-a-new-node)). A split is made only where it pays more than that.
 - **P5. Failures come first.** Failed and repeated runs are the largest lever in the history ([Section 1.6](#16-what-the-history-means-three-levers-ranked)), so planning is judged first by whether a stop loses one node instead of a whole run.
 - **P6. A planner never edits what it is held to.** It names criteria by id and paths inside the fence. It never rewrites a criterion's text and never widens the fence; when one of them is wrong it says so and the design seat acts ([Section 5.4](#54-when-the-planner-cannot-plan)).
@@ -211,7 +211,7 @@ The design follows from this order. A planning node is worth having mainly becau
 
 ## 3. The words
 
-[Item graphs](./tillr-item-graphs.md#the-words) defines workflow, stage, graph, node, node run and child session, and this document uses them unchanged.
+[Item graphs](../reference/tillr-item-graphs.md#the-words) defines workflow, stage, graph, node, node run and child session, and this document uses them unchanged.
 
 | Term | Meaning | What it is not |
 | :--- | :--- | :--- |
@@ -355,7 +355,7 @@ A run with no recorded cost makes every sum it belongs to print `unknown`, never
 | :--- | :--- |
 | The item, its criteria, fence and place in the queue | The item utility, from the documents or from a store-declared CLI filing (`doc-triage`, `request`). Planning writes none of it |
 | The proposal | The planning node's run, as an output the drain checks and records |
-| The graph and its revisions | The drain, in the one transaction that applies or refuses a proposal ([`D-IG3`](./tillr-item-graphs.md#22-in-fog-refinement-and-the-flattening-projection)) |
+| The graph and its revisions | The drain, in the one transaction that applies or refuses a proposal ([`D-IG3`](../reference/tillr-item-graphs.md#proposals-and-graph-revisions)) |
 | A piece's commits | That piece's node run, in the item's worktree, one writer at a time |
 | A node's seat, model, outcome and usage | The drain, when the node starts and settles |
 
@@ -446,7 +446,7 @@ The lessons:
 | **A cheap model only behind a command that checks it the moment it finishes**, with each piece carrying its own registered check | **Not adopted.** The owner's rule puts cheap models on well-specified work and has a mid model verify; the build seat is Terra with no per-piece command. A per-piece command check could still be added on top of the verify node, and it is not proposed until planned items show what the verifier misses |
 | **A ladder of models for each seat**, climbed one rung per failed check, with two rungs per piece and one re-plan per item | **Withdrawn.** Each of those is a count, and the owner ruled counts out. A stronger model is reached when a worker's tested attempt shows the task exceeds its model |
 | **A trial of Terra on five named items before it builds anything else** | **Overtaken.** The owner put Terra on the build seat on 2026-11-18. The five items had already landed on Sol |
-| **One session that switches model mid-run** | **Rejected.** A new model has none of the old one's cache, so a switch writes the whole context again: about $0.24 at a median 97k context on Sol, and about $1.94 on Fable at the one-hour rate. A node is one invocation on one route ([`D-IG12`](./tillr-item-graphs.md#34-several-nodes-or-one-node-with-child-sessions)) |
+| **One session that switches model mid-run** | **Rejected.** A new model has none of the old one's cache, so a switch writes the whole context again: about $0.24 at a median 97k context on Sol, and about $1.94 on Fable at the one-hour rate. A node is one invocation on one route ([`D-IG12`](../reference/tillr-item-graphs.md#why-its-this-way)) |
 | **Many tiny nodes** | **Rejected as a goal; the cap is 12 pieces.** Each node pays a seam, and every handoff loses context |
 | **Cheaper sub-agents inside one worker** | **Adopted beside planning, not in place of it.** The worker's brief encourages it ([Section 5.5](#55-a-worker-that-still-works-alone)). tillr cannot fence, check or count a sub-agent apart, which is what a piece is for |
 | **Planning on the expensive model** | **Rejected.** Fable's median orientation, $2.12, is more than most build items cost in total |
@@ -461,7 +461,7 @@ The lessons:
 - It does not count attempts, plans or fixes, and it sets no spending limit (P7; [the graph design's ruling that there is no spend target](./tillr-graph-is-the-path.md#decision-ledger)).
 - It does not turn planning on by default in `.tillr.toml` or on document-declared items (`tillr item request` defaults CLI `build` requests to `planned-build@v1`). Defaulting or sizing all build items is [OQ-PT8](#OQ-PT8).
 - It does not route design rulings below the design seat.
-- It does not run writing pieces in parallel ([`OQ-IG3`](./tillr-item-graphs.md#71-decision-ledger)).
+- It does not run writing pieces in parallel ([`OQ-IG3`](../reference/tillr-item-graphs.md#why-its-this-way)).
 - It does not touch the pi sub-agent seat profiles. They govern child sessions, and this design governs nodes.
 
 ---
@@ -486,7 +486,7 @@ The lessons:
 | [`OQ-SP5`](./seat-profiles.md#decision-ledger): on Bedrock only Sol and Luna were worth encoding | 2026-10-20 | **Overtaken for the work machine's seats** by the owner's instruction of 2026-11-18, which put Terra on implementation ([`OQ-PT1`](#OQ-PT1) in the Decision Ledger) |
 | [`OQ-SP6`](./seat-profiles.md#decision-ledger), the Luna-worker verdict: "replace, do not keep" | 2026-10-20 | **Holds.** Luna fills only read-only seats |
 | [`OQ-CP1`](./coordinator-pyramid.md#decision-ledger): the planner row is Sol at high | 2026-10-21 | That ruling is about pi's sub-agent profiles. tillr's `plan` seat runs Sol 6.2 at medium, the effort every backend row in the work policy states |
-| [`D-IG3`](./tillr-item-graphs.md#71-decision-ledger), [`D-IG4`](./tillr-item-graphs.md#71-decision-ledger), [`D-IG12`](./tillr-item-graphs.md#71-decision-ledger) and [`OQ-IG3`](./tillr-item-graphs.md#71-decision-ledger) | 2026-11-15 | **Hold.** Planning is a proposal; nothing loops; writers run one at a time |
+| [`D-IG3`](../reference/tillr-item-graphs.md#why-its-this-way), [`D-IG4`](../reference/tillr-item-graphs.md#why-its-this-way), [`D-IG12`](../reference/tillr-item-graphs.md#why-its-this-way) and [`OQ-IG3`](../reference/tillr-item-graphs.md#why-its-this-way) | 2026-11-15 | **Hold.** Planning is a proposal; nothing loops; writers run one at a time |
 | No attempt counts, retry budgets or exhausted states ([rule R1](./tillr-graph-is-the-path.md#1-the-direction-and-the-rules)); seats are declared in the policy, with no rungs ([`D-GP6`](./tillr-graph-is-the-path.md#decision-ledger)) | 2026-11-17 | **Hold**, and withdraw this design's ladders and caps |
 | A worker ends with its commit or a named obstacle ([`D-JL11`](./tillr-judge-and-lifecycle.md#45-what-a-worker-may-end-with-d-jl11)) | 2026-11-18 | **Holds**, and is how a planner reports a wrong criterion or a narrow fence |
 | Comparisons between backends are computed in the owner's own project | 2026-11-15 | **Holds**, except the cost medians of [Section 5.6](#56-the-cost-report) |

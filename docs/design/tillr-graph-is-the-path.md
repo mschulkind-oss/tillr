@@ -14,7 +14,7 @@ tags:
 summary: "A proposal that every act on a tillr item (build, rewrite, design answer, judge, gate, landing, revert, owner question, sub-agent) is a node in that item's graph, that a node is fixed once it starts and done once it ends, and that one pure function over the graph and a short list of facts adds whatever nodes are needed next. Counts, clocks, hash triggers and item-level holds are replaced by stated endings and named waits."
 next: "The owner ruled OQ-GP7 on 2026-11-18: while a check is red, work lands only if it does not touch what that check reads, with no landing cap. The designer's decisions D-GP1 to D-GP15 await the owner's review (the waiting rule of D-GP14 is now ruled as OQ-GP7), and no migration step is filed."
 depends-on:
-  - tillr-item-graphs.md
+  - ../reference/tillr-item-graphs.md
   - ../reference/tillr-drain-successor.md
   - gate-rework.md
   - landing-principles.md
@@ -22,7 +22,7 @@ depends-on:
 
 # The item graph is the whole path, and one pure function decides what comes next
 
-**Status:** 2026-11-19. The static per-attempt workflow machinery ([item graphs](./tillr-item-graphs.md)) is built (`config/tillr/workflows/` holds six workflow files and `tools/tillr-drain/drain/` runs multi-node workflows), though `.tillr.toml` names no default workflow per seat so items without a `workflow` attribute still run as one implicit single worker. This document's whole-life graph model (gate, judge, landing and later acts as nodes, and the pure policy function) is not built. Eight of its rules are built outside the graph, as rules of the single-run drain, and [Section 12](#12-what-this-replaces) lists them. The `D-GP` rows of the ledger are the designer's decisions and await the owner's review, except that the waiting rule of `D-GP14` is now ruled as [OQ-GP7](#OQ-GP7); the `OQ-GP` rows record what the owner said. The design is written to his direction of 2026-11-17, restated in [Section 1](#1-the-direction-and-the-rules). What was not verified is marked so.
+**Status:** 2026-11-19. The static per-attempt workflow machinery ([item graphs](../reference/tillr-item-graphs.md)) is built (`config/tillr/workflows/` holds six workflow files and `tools/tillr-drain/drain/` runs multi-node workflows), though `.tillr.toml` names no default workflow per seat so items without a `workflow` attribute still run as one implicit single worker. This document's whole-life graph model (gate, judge, landing and later acts as nodes, and the pure policy function) is not built. Eight of its rules are built outside the graph, as rules of the single-run drain, and [Section 12](#12-what-this-replaces) lists them. The `D-GP` rows of the ledger are the designer's decisions and await the owner's review, except that the waiting rule of `D-GP14` is now ruled as [OQ-GP7](#OQ-GP7); the `OQ-GP` rows record what the owner said. The design is written to his direction of 2026-11-17, restated in [Section 1](#1-the-direction-and-the-rules). What was not verified is marked so.
 
 > **In short.** An item's graph stops being a template for its build and becomes the record of everything that happened to it. Nothing routes work except one pure function that reads the graph and adds the nodes it lacks, so every "what next" is a table row with a test, and every repetition has a stated cause.
 
@@ -36,7 +36,7 @@ depends-on:
 
 **Needs your ruling:** nothing now. **Ruled by the owner on 2026-11-18:** [OQ-GP7](#OQ-GP7). **Ruled by the owner on 2026-11-17:** [OQ-GP1](#OQ-GP1), [OQ-GP3](#OQ-GP3), [OQ-GP4](#OQ-GP4), [OQ-GP5](#OQ-GP5), [OQ-GP6](#OQ-GP6). **Closed as superseded:** [OQ-GP2](#OQ-GP2), which [the storage design](./tillr-storage.md) now asks.
 
-**Reads with:** [item graphs](./tillr-item-graphs.md) (the built graph machinery this extends and partly overturns), [the drain's successor function](../reference/tillr-drain-successor.md) (the earlier pure function this splits in two), [the core and the landing definition](./tillr-core-and-git-landing.md) (why the rule table belongs to a definition), [the gate rework](./gate-rework.md) (the full-suite tier, the green pointer and the revert setting), [the landing principles](./landing-principles.md) (rulings a landing change is checked against), [early design landing](./tillr-early-design-landing.md) (how a question and its design reach the trunk ahead of their item), [the landing call](./tillr-landing-call.md) (how a worker states its ending), [the storage design](./tillr-storage.md) (the structure behind the store), [the vocabulary](./tillr-vocabulary.md) (one meaning for item, node, run, session and worktree; [Section 6](#6-scheduling) carries its text on worktrees).
+**Reads with:** [item graphs](../reference/tillr-item-graphs.md) (the built graph machinery this extends and partly overturns), [the drain's successor function](../reference/tillr-drain-successor.md) (the earlier pure function this splits in two), [the core and the landing definition](./tillr-core-and-git-landing.md) (why the rule table belongs to a definition), [the gate rework](./gate-rework.md) (the full-suite tier, the green pointer and the revert setting), [the landing principles](./landing-principles.md) (rulings a landing change is checked against), [early design landing](./tillr-early-design-landing.md) (how a question and its design reach the trunk ahead of their item), [the landing call](./tillr-landing-call.md) (how a worker states its ending), [the storage design](./tillr-storage.md) (the structure behind the store), [the vocabulary](./tillr-vocabulary.md) (one meaning for item, node, run, session and worktree; [Section 6](#6-scheduling) carries its text on worktrees).
 
 ---
 
@@ -87,7 +87,7 @@ Each term is used throughout with exactly this meaning. Terms marked *(coined he
 | :--- | :--- | :--- |
 | **Item graph** | The one directed, cycle-free graph an item has for its whole life. It holds every act taken on the item. | Not one graph per attempt. The word "attempt" is retired by this design. |
 | **Node** | One act: one invocation of a harness, one command, one landing attempt, or one question put to the owner. It has a definition, a start and an ending. | Not a stage of a template. A template is expanded into nodes and then is gone. |
-| **In fog** | The state of a node that has not started. "In fog" and "not started" are the same thing; [item graphs](./tillr-item-graphs.md#the-words) already uses both. | Not "pending in a queue": a node in fog may still be changed or removed. |
+| **In fog** | The state of a node that has not started. "In fog" and "not started" are the same thing; [item graphs](../reference/tillr-item-graphs.md#the-words) already uses both. | Not "pending in a queue": a node in fog may still be changed or removed. |
 | **Fixed** | The state of a node from its start. The part of its definition listed in [Section 3.2](#32-what-is-fixed-and-when) can never change again. | Not finished. A fixed node may still be running. |
 | **Done** | The state of a node that has an ending. Nothing about it changes again, and it never runs again. | Not "succeeded". A refused gate run is done. |
 | **Claim** *(coined here)* | The single store transaction that starts a node: it moves the node from in fog to fixed and records who runs it. | Not a lease. A lease is liveness bookkeeping and can lapse; a claim cannot be undone. |
@@ -169,7 +169,7 @@ Every node ends with an explicit cause. The rules that apply to all kinds:
 
 - **A session** is reused by a resume (the same session continues, on the backend that holds it), a fork (a copy continues, and the original may be resumed or forked again), or not at all. A backend move reuses the transcript as a file to read, not as a session.
 - **A commit** is reused by starting from it. Every writing node starts from the item-branch head the previous writer left, after a take-in.
-- **An output** is reused by an edge that names its producer and its name, as [item graphs](./tillr-item-graphs.md#71-decision-ledger) rules in `D-IG6`.
+- **An output** is reused by an edge that names its producer and its name, as [item graphs](../reference/tillr-item-graphs.md#why-its-this-way) rules in `D-IG6`.
 - **How a message is delivered to a resumed session** is an adapter capability: as the result of the suspended call where the harness supports it, otherwise as the session's next message. The model needs only that a session can be continued with one message.
 - **A session that cannot be resumed** (its transcript is gone, or its backend is no longer in the policy) is a fact with a stated reason. The rule table turns a resume in fog into a backend move ([Section 5.3](#53-the-starting-rule-table), row 18).
 
@@ -660,7 +660,7 @@ A status command is a read and needs no write lock. It used to take one, because
 
 **The queue's page** adds the trunk panel of [Section 8.2](#82-proof-and-a-red-trunk) and the inter-item edges, each with the reason and the node or author that added it.
 
-The queued block that [adds an item's nodes to the item page](./tillr-item-graphs.md#add-an-items-nodes-and-their-runs-to-the-item-page) is the starting point. Its fifth criterion, that a child session is never drawn as a node, is overturned by [Section 9](#9-subagent-hoisting) and needs amending before it is dispatched.
+The built observatory view that [draws an item's nodes on the item page](../reference/tillr-item-graphs.md#observatory) is the starting point. Its rule that a child session is never drawn as a node is overturned by [Section 9](#9-subagent-hoisting) and needs amending when subagent hoisting is built.
 
 ---
 
@@ -681,7 +681,7 @@ Still as audited: the red cap, now 20 landings with its time bound off, which th
 
 ### 12.1 The item graph ledger
 
-Every row of [the item-graph ledger](./tillr-item-graphs.md#71-decision-ledger), and what this design does to it.
+Every row of [the item-graph ledger](../reference/tillr-item-graphs.md#why-its-this-way), and what this design does to it.
 
 | Row | Verdict | What changes |
 | :--- | :--- | :--- |
@@ -694,9 +694,9 @@ Every row of [the item-graph ledger](./tillr-item-graphs.md#71-decision-ledger),
 | `D-IG7` | Amended | Scopes stay inside the fence. Added: the item's own block and design document are inside the scope of a rewrite, a triage and a design answer; a child's scope is inside its parent's |
 | `D-IG8` | Amended | The item keeps one worktree across its nodes, as a resource it acquires and that is collected and restored, not as a slot in a pool. The gate and the landing are nodes and run as often as the rule table adds them, so "once at the exit" is withdrawn. What survives: a graph runs correctly with one agent running at a time |
 | `D-IG9` | Amended | See [Section 4.5](#45-relation-to-the-item-graph-rulings) |
-| [OQ-IG1](./tillr-item-graphs.md#71-decision-ledger) | Kept | One commit on the trunk for an item's deliverable, by the lander's squash |
-| [OQ-IG2](./tillr-item-graphs.md#71-decision-ledger) | Kept | Refinement by a running node's request is row 20 |
-| [OQ-IG3](./tillr-item-graphs.md#71-decision-ledger) | Kept | Readers together, writers one at a time, now also for dispatched children |
+| [OQ-IG1](../reference/tillr-item-graphs.md#why-its-this-way) | Kept | One commit on the trunk for an item's deliverable, by the lander's squash |
+| [OQ-IG2](../reference/tillr-item-graphs.md#why-its-this-way) | Kept | Refinement by a running node's request is row 20 |
+| [OQ-IG3](../reference/tillr-item-graphs.md#why-its-this-way) | Kept | Readers together, writers one at a time, now also for dispatched children |
 | `D-IG10` | Kept | It is a scheduling rule and sits in [Section 6](#6-scheduling) |
 | `D-IG11` | Amended | A node is one act, which adds the owner question and the hoisted child. "Attempt" is retired. "Never a node" for a child session is withdrawn |
 | `D-IG12` | Superseded | See [Section 9](#9-subagent-hoisting) |
