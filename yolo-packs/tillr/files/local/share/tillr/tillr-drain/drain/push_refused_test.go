@@ -167,3 +167,35 @@ func TestRefusedGreenPushHealsThroughTheAction(t *testing.T) {
 		t.Fatalf("recorded %q (%v)", d, ok)
 	}
 }
+
+// A commit another machine pushed under another identity arrives with the rebase. It was
+// published by someone with push access, so it must not hold landings; the commits
+// replayed on top stay under the check, and a foreign commit made here still holds.
+func TestRefusedPushRebaseTrustsTheRemoteIdentity(t *testing.T) {
+	p := newPushFixture(t)
+	ctx := context.Background()
+	runGit(t, p.other, "-c", "user.name=Other", "-c", "user.email=other@example.invalid", "commit", "-q", "--allow-empty", "-m", "from another machine")
+	runGit(t, p.other, "push", "-q", "origin", TrunkRef)
+	foreign := runGit(t, p.other, "rev-parse", "HEAD")
+	err := p.refused(t)
+	if _, herr := p.l.healRefusedPush(ctx, settings.Push{}, err); herr != nil {
+		t.Fatal(herr)
+	}
+	if err := p.l.observeIdentity(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if held, err := p.l.identityHeld(ctx); err != nil || held {
+		t.Fatalf("a commit from the remote held landings: held=%v err=%v", held, err)
+	}
+	// Control: a foreign commit that did not come from the remote still holds.
+	local := foreignCommit(t, p.f.root, "HEAD", false)
+	if err := p.l.observeIdentity(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if held, err := p.l.identityHeld(ctx); err != nil || !held {
+		t.Fatalf("a local foreign commit %s did not hold: held=%v err=%v", local, held, err)
+	}
+	if runGit(t, p.f.root, "rev-parse", "--verify", "refs/tillr/published/origin/"+TrunkRef) != foreign {
+		t.Fatal("the fetched tip was not pinned")
+	}
+}

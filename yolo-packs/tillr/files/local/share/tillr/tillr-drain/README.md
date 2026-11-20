@@ -1080,8 +1080,13 @@ carries `refs/tillr/green`, and raises no trunk-rewritten hold. In green mode th
 proved first and pushed at the next green advance; in tip mode the push runs again at once. A
 conflict, a merge commit among the unpublished commits, a checkout off the trunk or a dirty
 path fails the push with `mover: operator` and the commands to run by hand. Not built: the
-design's conflict-repair run and escalation, the published-ref bookkeeping and the trusted
-remote identities ([the design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md)).
+design's conflict-repair run and escalation and the rest of the published-ref bookkeeping
+([the design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md)).
+The fetched tip is pinned at `refs/tillr/published/<remote>/<branch>`, and the identity check
+trusts every commit reachable from a pointer under that prefix: a commit another machine
+pushed under its own address does not hold landings with `trunk-foreign-identity`. The
+replayed local commits are not under the pointer, and a foreign commit made here still holds
+until `tillr-drain accept-identity`.
 A failing check holds the pointer and is run alone at the pointer and by bisection on
 recorded landings in the range. Legacy span IDs retain their kind and label so replay
 uses the old program's selector vocabulary rather than confusing its stable report ID

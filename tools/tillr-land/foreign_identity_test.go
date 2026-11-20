@@ -55,3 +55,31 @@ func TestLockedLandingFindsForeignCommitAfterLoopObservation(t *testing.T) {
 		})
 	}
 }
+
+// A foreign commit reachable from a published pointer arrived from the remote and is
+// trusted; the same commit with no pointer still holds the landing.
+func TestLockedLandingTrustsForeignCommitOnPublishedPointer(t *testing.T) {
+	for _, published := range []bool{false, true} {
+		f := newFixture(t)
+		tree := git(t, f.dir, "rev-parse", "HEAD^{tree}")
+		foreign := gitAs(t, f.dir, "Other", "other@example.invalid", "commit-tree", tree, "-p", f.baseSHA, "-m", "foreign")
+		git(t, f.dir, "update-ref", "refs/heads/master", foreign, f.baseSHA)
+		if published {
+			git(t, f.dir, "update-ref", land.PublishedRefPrefix+"origin/master", foreign)
+		}
+		db := filepath.Join(scratch(t, "identity-store"), "state.db")
+		s, err := store.Open(context.Background(), db, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Close()
+		code, out := run(t, "pass", "--store", db, "--repo", f.dir, "--item", "item_042", "--run", "run-identity", "--base", f.baseSHA, "--head", f.headSHA, "--verdict", f.verdictFile(t, "pass"), "--observed-trunk", foreign)
+		got := decodeLanding(t, out).Payload
+		if published && (code != 0 || got.Result != "landed") {
+			t.Fatalf("published commit refused: %d %s", code, out)
+		}
+		if !published && (code != 1 || got.Reason != "trunk-foreign-identity") {
+			t.Fatalf("unpublished foreign commit landed: %d %s", code, out)
+		}
+	}
+}

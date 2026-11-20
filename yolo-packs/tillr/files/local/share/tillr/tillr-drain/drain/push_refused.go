@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr/settings"
 )
 
@@ -143,6 +144,11 @@ func (l *Loop) healRefusedPush(ctx context.Context, p settings.Push, refused err
 		}
 		cur = strings.TrimSpace(string(made))
 		replayed++
+	}
+	// The fetched tip is published: pin it so the identity check trusts the commits that
+	// arrived with it (design Section 4.3). Commits replayed on top are not under it.
+	if _, err := rawGit(ctx, root, nil, "update-ref", land.PublishedRefPrefix+remote+"/"+strings.TrimPrefix(ref, "refs/heads/"), remoteTip); err != nil {
+		return fail("pinning the fetched tip failed: %v", err)
 	}
 	// Move the trunk, and the checkout with it. `reset --keep` refuses, changing nothing,
 	// when a path the move touches has local changes, and keeps changes elsewhere.
