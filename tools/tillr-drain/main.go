@@ -250,7 +250,7 @@ func acceptRewriteFace(args []string) int {
 	root := fs.String("root", "", "the repository whose trunk was rewritten")
 	path := fs.String("store", "", "the store holding the trunk history (default <root>/.tillr/state.db)")
 	lost := fs.String("lost", "", "the lost tip the hold names (trunk-rewritten: <lost> -> <current>)")
-	current := fs.String("current", "", "the commit on the trunk that replaces the lost tip with the same tree")
+	current := fs.String("current", "", "the commit on the trunk that replaces the lost tip")
 	by := fs.String("by", "", "who accepts the rewrite")
 	why := fs.String("why", "", "why the rewrite was made")
 	now := fs.String("now", "", "the injected clock, RFC 3339")
@@ -276,7 +276,11 @@ func acceptRewriteFace(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	fmt.Printf("accepted the rewrite %s -> %s: same tree %s, %d commits replaced one for one; lost tip pinned at %s\n", a.Lost, a.Current, a.Tree, a.Commits, a.Pin)
+	if a.Rebased {
+		fmt.Printf("accepted the rewrite %s -> %s: rebase onto a moved base, %d lost commits matched by patch, current tree %s; lost tip pinned at %s\n", a.Lost, a.Current, a.Commits, a.Tree, a.Pin)
+	} else {
+		fmt.Printf("accepted the rewrite %s -> %s: same tree %s, %d commits replaced one for one; lost tip pinned at %s\n", a.Lost, a.Current, a.Tree, a.Commits, a.Pin)
+	}
 	if a.GreenTo != "" {
 		fmt.Printf("moved %s from %s to the commit that replaced it, %s (same tree)\n", drain.GreenRef, a.GreenFrom, a.GreenTo)
 	}
