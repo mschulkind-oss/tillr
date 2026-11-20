@@ -1,3 +1,4 @@
+// Architecture and invariants: docs/reference/tillr-queue-persistence.md
 package item
 
 import (
@@ -23,7 +24,7 @@ type ReconcileInput struct {
 }
 
 // ReconcileDocument is one indexed document's classification. The six cases
-// follow the ordered table in docs/design/tillr-queue-persistence.md Section 10.2.
+// follow the ordered table in docs/reference/tillr-queue-persistence.md ("Document reconciliation").
 type ReconcileDocument struct {
 	Path      string
 	Case      string

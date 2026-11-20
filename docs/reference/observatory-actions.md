@@ -56,7 +56,7 @@ in `tillr-item`; the HTTP server keeps its SQLite handle read-only and invokes
 (the linked-page UI and read-only server contract),
 [tillr item states](./tillr-item-states.md) (the seven projected states and
 frozen criteria), [the queue persistence ruling](../design/queue-persistence-ruling.md)
-and [queue persistence](../design/tillr-queue-persistence.md) (document-backed
+and [queue persistence](./tillr-queue-persistence.md) (document-backed
 item blocks and private store state),
 [the idea pipeline](../design/tillr-idea-pipeline.md) (lineage and downstream
 shaping), and [the decision provenance review](../tillr/decision-provenance-review.md)
@@ -241,7 +241,7 @@ tillr-item idea --store <db> --root <repo-root> [--to first|last | --before <id>
   `GET /api/v1/items/{id}` sets `data.idea.in_tree = false` and the Item page
   displays `not yet in the tree`. The `retire-epoch` deletion lock and overdue
   header badge proposed in `D-QP4` of
-  [queue persistence](../design/tillr-queue-persistence.md#42-bounding-and-surfacing-the-bootstrap-gap)
+  [queue persistence](./tillr-queue-persistence.md#why-its-this-way)
   are not built in `tools/tillr*`.
 
 ### The saved idea item

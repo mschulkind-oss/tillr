@@ -75,7 +75,7 @@ The rules this design is held to, numbered so later sections can cite them:
 | **R9** | A pass over the whole queue may fix dependencies and order that no single item can see, without becoming a guess trigger. |
 | **R10** | The red cap is not accepted. Reds must not pile up, and there must be a way to pull things out and land them. An unproven trunk is never treated as red. |
 | **R11** | A design answer, a rewrite and a triage commit on the item's own branch. The item's deliverable reaches the trunk in one landing. A document that a design answer changed, or that carries a question for the owner, reaches it earlier, by an early landing ([early design landing](./tillr-early-design-landing.md)). |
-| **R12** | Nothing depends on the git trace record, which the owner ruled out on 2026-11-17 and `d09016bba` stopped recording (it reverses [`OQ-QP4`](./tillr-queue-persistence.md#91-decision-ledger), which had kept the trace on). The shell-command record stays. |
+| **R12** | Nothing depends on the git trace record, which the owner ruled out on 2026-11-17 and `d09016bba` stopped recording (it reverses [`OQ-QP4`](../reference/tillr-queue-persistence.md#why-its-this-way), which had kept the trace on). The shell-command record stays. |
 
 ---
 

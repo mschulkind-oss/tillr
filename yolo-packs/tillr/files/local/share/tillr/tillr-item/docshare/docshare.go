@@ -1,3 +1,4 @@
+// Architecture and invariants: docs/reference/tillr-queue-persistence.md
 // Package docshare compares document declarations and stored item states without
 // importing a writer or registering database migrations.
 package docshare

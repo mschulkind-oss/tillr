@@ -67,7 +67,7 @@ all, which is its own small finding.
 
 Session `deb6c97f-cfd7-486b-bb96-f1eb9c55c531`, 16:05:18Z -> 16:35:18Z.
 
-- 81 tool calls, 5 edits across 2 files (`docs/design/tillr-queue-persistence.md`, `docs/tillr/roadmap.md`).
+- 81 tool calls, 5 edits across 2 files (the pre-graduation queue-persistence design, since verified in [`docs/reference/tillr-queue-persistence.md`](../reference/tillr-queue-persistence.md), and `docs/tillr/roadmap.md`).
 - **Total tool time: 89 seconds.** The other ~28 minutes were the model thinking. It was not stuck on anything.
 - Its last tool call, at 16:35:00Z, finished **18 seconds before the wall**:
 

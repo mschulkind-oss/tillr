@@ -35,7 +35,7 @@ skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribut
 one of six cases: unstaged, terminal, built, accepted with item blocks, accepted
 without item blocks, or held for a ruling or design work. The ordered rules and
 path-derived item ids are defined in the
-[queue-persistence design](../../docs/design/tillr-queue-persistence.md#102-the-function-total-partition-three-outcomes-and-the-fourth-case).
+[queue-persistence reference](../../docs/reference/tillr-queue-persistence.md#document-reconciliation-tillr-item-reconcile).
 
 ```sh
 tillr-item reconcile --root /path/to/repo
