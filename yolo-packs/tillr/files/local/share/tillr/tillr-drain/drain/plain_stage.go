@@ -81,6 +81,10 @@ func (s *LaneStager) stagePlain(ctx context.Context, spec StageSpec, def definit
 	if s.Now != nil {
 		now = s.Now
 	}
+	settled := "None recorded: the item names no settled decision."
+	if carriesDesignDocumentRule(stagedSeat(recorded, spec)) {
+		settled += "\n\n" + DesignDocumentRule
+	}
 	values := briefValues{
 		{placeholder: "ITEM_ID", text: recorded.ItemID, field: "item_id"},
 		{placeholder: "TITLE", text: recorded.Title, field: "title"},
@@ -94,7 +98,7 @@ func (s *LaneStager) stagePlain(ctx context.Context, spec StageSpec, def definit
 		{placeholder: "DATE", text: now().UTC().Format("2006-01-02")},
 		{placeholder: "TIMEOUT_SECONDS", text: wallWords(spec.TimeoutMS)},
 		{placeholder: "DURABLE_DIR", text: durableDir},
-		{placeholder: "SETTLED", text: "None recorded: the item names no settled decision."},
+		{placeholder: "SETTLED", text: settled},
 		{placeholder: "FACTS", text: "None carried: staging read no facts about the task."},
 		{placeholder: "METHOD", text: "The item states no method; the order of work is yours."},
 		{placeholder: "VERIFICATION", text: "None recorded: report each verification command and its output."},

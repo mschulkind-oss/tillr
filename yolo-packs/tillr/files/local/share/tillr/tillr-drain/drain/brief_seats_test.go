@@ -9,6 +9,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr-run/run"
 )
 
 func TestBriefPolicySeatsAndPiIsolation(t *testing.T) {
@@ -158,5 +161,129 @@ func TestBriefSeatsFollowLoopPolicy(t *testing.T) {
 	}
 	if !strings.Contains(string(brief), "- `fixture-seat` (read-only) — A dynamically supplied purpose.") {
 		t.Fatalf("staged brief did not use current policy: %s", brief)
+	}
+}
+
+func TestBriefDesignDocumentRuleBySeat(t *testing.T) {
+	template, err := filepath.Abs(filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	renderFor := func(recorded stagedItem, spec StageSpec, capability string) string {
+		t.Helper()
+		values, err := briefValuesFor(recorded, spec, "/tmp/target", "lane worktree", strings.Repeat("0", 40), "/tmp/durable", time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC))
+		if err != nil {
+			t.Fatal(err)
+		}
+		brief, err := renderBriefWithEnding(template, recorded.ItemID, values, capability)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return brief
+	}
+
+	// 1. Single-worker item seats under both ending capabilities.
+	carrySeats := []string{"", "build", "edit", "docs", "test-write"}
+	omitSeats := []string{"design", "plan", "verify", "scout", "test-run", "review"}
+	for _, capability := range []string{run.EndingFooter, run.EndingCallSuspends} {
+		for _, seat := range carrySeats {
+			recorded := refusalStagedItem("item-a")
+			recorded.Seat = seat
+			spec := refusalSpec(recorded.ItemID)
+			brief := renderFor(recorded, spec, capability)
+			if !strings.Contains(brief, DesignDocumentRule) {
+				t.Fatalf("capability=%s seat=%q: expected DesignDocumentRule in brief", capability, seat)
+			}
+		}
+		for _, seat := range omitSeats {
+			recorded := refusalStagedItem("item-a")
+			recorded.Seat = seat
+			spec := refusalSpec(recorded.ItemID)
+			brief := renderFor(recorded, spec, capability)
+			if strings.Contains(brief, DesignDocumentRule) {
+				t.Fatalf("capability=%s seat=%q: unexpected DesignDocumentRule in brief", capability, seat)
+			}
+		}
+	}
+
+	// 2. Workflow node seats follow spec.Node.Seat rather than recorded.Seat.
+	for _, nodeSeat := range []string{"plan", "verify", "scout", "test-run", "design", "review", ""} {
+		recorded := refusalStagedItem("item-a")
+		recorded.Seat = "build"
+		spec := refusalSpec(recorded.ItemID)
+		spec.Node = &WorkflowStage{ID: "node-1", Kind: "agent", Seat: nodeSeat, Access: "read_only"}
+		brief := renderFor(recorded, spec, run.EndingFooter)
+		if strings.Contains(brief, DesignDocumentRule) {
+			t.Fatalf("build item with node seat %q: unexpected DesignDocumentRule in brief", nodeSeat)
+		}
+	}
+	for _, nodeSeat := range []string{"build", "edit", "docs", "test-write"} {
+		recorded := refusalStagedItem("item-a")
+		recorded.Seat = "design"
+		spec := refusalSpec(recorded.ItemID)
+		spec.Node = &WorkflowStage{ID: "node-1", Kind: "agent", Seat: nodeSeat, Access: "write"}
+		brief := renderFor(recorded, spec, run.EndingFooter)
+		if !strings.Contains(brief, DesignDocumentRule) {
+			t.Fatalf("design item with node seat %q: expected DesignDocumentRule in brief", nodeSeat)
+		}
+	}
+
+	// 3. Conflict/triage dispatches on a build item act on the design seat and omit DesignDocumentRule.
+	recorded := refusalStagedItem("item-a")
+	recorded.Seat = "build"
+	spec := refusalSpec(recorded.ItemID)
+	spec.BlockConflict = &item.Conflict{
+		ConflictID: "conflict-1",
+		RunID:      "run-1",
+		BodyRef:    "docs/design/example.md#item-a",
+	}
+	if brief := renderFor(recorded, spec, run.EndingFooter); strings.Contains(brief, DesignDocumentRule) {
+		t.Fatalf("block conflict dispatch on build item: unexpected DesignDocumentRule in brief")
+	}
+
+	// 4. End-to-end LaneStager.Stage check writing brief.md on disk.
+	ctx := context.Background()
+	f := newRefusalLoopFixture(t, "item-a")
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	stager := &LaneStager{
+		Root:     f.root,
+		LaneRoot: f.laneRoot,
+		Store:    f.storePath,
+		Template: filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"),
+	}
+	stageCases := []struct {
+		seat string
+		want bool
+	}{
+		{seat: "build", want: true},
+		{seat: "edit", want: true},
+		{seat: "docs", want: true},
+		{seat: "test-write", want: true},
+		{seat: "design", want: false},
+	}
+	for i, tc := range stageCases {
+		spec := StageSpec{
+			LaneID:     "lane-1",
+			ItemID:     "item-a",
+			RunID:      "run-stage-" + tc.seat,
+			Backend:    "fixture",
+			BaseSHA:    base,
+			WorkingDir: WorktreeDir,
+			Node:       &WorkflowStage{ID: "step-" + tc.seat, Kind: "agent", Seat: tc.seat, Access: "write"},
+		}
+		if i > 0 {
+			spec.Continue = true
+		}
+		if err := stager.Stage(ctx, spec); err != nil {
+			t.Fatalf("Stage(%s): %v", tc.seat, err)
+		}
+		raw, err := os.ReadFile(filepath.Join(f.laneRoot, "lane-1", BriefFile))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", tc.seat, err)
+		}
+		got := strings.Contains(string(raw), DesignDocumentRule)
+		if got != tc.want {
+			t.Fatalf("Stage(%s): contains DesignDocumentRule = %v, want %v", tc.seat, got, tc.want)
+		}
 	}
 }
