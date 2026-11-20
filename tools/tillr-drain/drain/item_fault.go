@@ -61,34 +61,37 @@ func (l *Loop) holdItemFault(ctx context.Context, c Candidate, reason, detail st
 	}
 	defer s.Close()
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
-		if err := requireHold(tx.Reader(), reason); err != nil {
-			return err
-		}
-		if c.RunID != "" {
-			// A run's fault judges that run; a terminal item's run is not judged.
-			if err := refuseTerminalItem(tx.Reader(), c.ItemID, reason); err != nil {
-				return err
-			}
-		}
-		faults, err := ReadItemFaults(tx.Reader())
-		if err != nil {
-			return err
-		}
-		if f, ok := faults[c.ItemID]; ok && f.Reason == reason && f.Detail == detail && f.RunID == c.RunID && f.LaneID == c.LaneID {
-			return nil
-		}
-		f := ItemFault{ItemID: c.ItemID, RunID: c.RunID, LaneID: c.LaneID, Reason: reason, Detail: detail}
-		body, err := json.Marshal(f)
-		if err != nil {
-			return err
-		}
-		id := c.ItemID
-		_, err = tx.Append(event.Event{Kind: itemFaultKind, ObjectType: "item", ObjectID: &id, Payload: body, At: l.cfg.Now().UTC()})
-		return err
+		return l.holdItemFaultTx(tx, c, reason, detail)
 	})
 	if err == nil {
 		l.reportf("loop: holding %s (%s, run %s, lane %s): %s\n", c.ItemID, reason, c.RunID, c.LaneID, detail)
 	}
+	return err
+}
+
+func (l *Loop) holdItemFaultTx(tx *store.Tx, c Candidate, reason, detail string) error {
+	if err := requireHold(tx.Reader(), reason); err != nil {
+		return err
+	}
+	if c.RunID != "" {
+		if err := refuseTerminalItem(tx.Reader(), c.ItemID, reason); err != nil {
+			return err
+		}
+	}
+	faults, err := ReadItemFaults(tx.Reader())
+	if err != nil {
+		return err
+	}
+	if f, ok := faults[c.ItemID]; ok && f.Reason == reason && f.Detail == detail && f.RunID == c.RunID && f.LaneID == c.LaneID {
+		return nil
+	}
+	f := ItemFault{ItemID: c.ItemID, RunID: c.RunID, LaneID: c.LaneID, Reason: reason, Detail: detail}
+	body, err := json.Marshal(f)
+	if err != nil {
+		return err
+	}
+	id := c.ItemID
+	_, err = tx.Append(event.Event{Kind: itemFaultKind, ObjectType: "item", ObjectID: &id, Payload: body, At: l.cfg.Now().UTC()})
 	return err
 }
 

@@ -73,6 +73,7 @@ var returnedCauses = map[string]bool{
 var returnedReasons = map[string]string{
 	ReasonGateFailed:          RefusalGate,
 	RefusalVerifyNotDone:      RefusalVerifyNotDone,
+	RefusalVerifyNoVerdict:    RefusalVerifyNoVerdict,
 	RefusalPlanWrong:          RefusalPlanWrong,
 	ReasonCandidateNoOp:       RefusalNoOp,
 	ReasonBoundaryScopeEscape: RefusalFence,
@@ -184,6 +185,9 @@ func returnedBrief(e ReturnedEnding) string {
 	if e.Restart {
 		return restartBrief(e)
 	}
+	if verifyNoVerdictReturn(&e) {
+		return "\n## Previous verify run\n\n" + e.Detail + ". No finding was made against the candidate; verify the retained candidate.\n"
+	}
 	var b strings.Builder
 	// A gate refusal's reply opens the turn, before the restated brief; an answer text that
 	// already carries it (Detail, from a parked call's answer) is not repeated.
@@ -250,12 +254,15 @@ func returnedBrief(e ReturnedEnding) string {
 // escape and a refused landing by the refusal's own words. Evidence that cannot be read
 // leaves the key built from what could be, never a guess.
 func (l *Loop) endingEvidence(ctx context.Context, c Candidate, step string) ([]EndingCheck, string) {
-	if c.EvidenceKey != "" {
+	if c.EvidenceKey != "" && step != RefusalGate {
 		return nil, c.EvidenceKey
 	}
 	switch step {
 	case RefusalGate:
 		checks := gateFailingChecks(RunDir(l.cfg.Root, c.RunID), c.RunID)
+		if c.EvidenceKey != "" {
+			return checks, c.EvidenceKey
+		}
 		return checks, endingKey(step, checks, c.RefusalDetail, c.RunID)
 	case RefusalNoOp:
 		return nil, endingKey(step, nil, l.uncommittedEvidence(ctx, c.Worktree), c.RunID)

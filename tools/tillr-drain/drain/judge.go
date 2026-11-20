@@ -422,6 +422,17 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		if len(receipt.Raw) == 0 {
 			receipt.Raw, err = os.ReadFile(outputPath)
 			if err != nil {
+				_, entryErr := os.Lstat(outputPath)
+				if c.Evaluator != nil && os.IsNotExist(err) && os.IsNotExist(entryErr) && judgeRec.State == run.StateExited && judgeRec.ExitCode != nil {
+					detail := fmt.Sprintf("verify run %s exited with code %d and wrote no verdict", receipt.Request.RunID, *judgeRec.ExitCode)
+					preflight := ClassifyAttempt(judgeRec, judgeLog) == AttemptRefused
+					if preflight {
+						words, _ := AdapterRefusal(judgeLog)
+						detail += ": " + words
+					}
+					c.RefusalDetail = detail
+					return c, false, l.recordMissingVerify(ctx, c, receipt.Request.RunID, preflight)
+				}
 				return c, false, l.holdJudge(ctx, c, receipt.Request.RunID, ReasonJudgeUnreadable, err.Error(), result)
 			}
 		}

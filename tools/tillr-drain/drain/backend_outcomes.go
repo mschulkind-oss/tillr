@@ -133,6 +133,11 @@ func answeredByAnotherRule(rec run.Record, interrupted map[string]bool, byRun ma
 			break
 		}
 	}
+	// An exited workflow evaluator is judged from its verdict file, not its
+	// process footer. Its exit alone is not evidence that the backend is closed.
+	if decision.Workflow != nil && decision.NodeIndex >= 0 && decision.NodeIndex < len(decision.Workflow.Stages) && evaluatorNode(decision) && rec.State == run.StateExited {
+		return true
+	}
 	gone, err := failedDesignerResume(decision, rec)
 	return err == nil && gone
 }

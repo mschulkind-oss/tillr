@@ -36,6 +36,10 @@ func verifyBuildReturn(e *ReturnedEnding) bool {
 	return e != nil && e.Cause == RefusalVerifyNotDone && !e.Replan && e.WorkerSession != nil && e.WorkerSession.Workflow != nil
 }
 
+func verifyNoVerdictReturn(e *ReturnedEnding) bool {
+	return e != nil && e.Cause == RefusalVerifyNoVerdict && e.WorkerSession != nil && e.WorkerSession.Workflow != nil
+}
+
 func workerSessionReason(s *WorkerSession, req *run.Request) string {
 	if s == nil {
 		return "session-missing"
@@ -298,7 +302,7 @@ func effectiveNodeRuns(r *store.Reader, itemID string, attempt int) ([]workflowN
 // Reuse references to accepted predecessor records, never synthetic runs or
 // copied terminal records. The writer and its successors are judged again.
 func carryReturnedNodeInputs(tx *store.Tx, d Decision) error {
-	if d.RunRequest == nil || (!d.RunRequest.SessionTurn && d.WorkerSessionReason != "resume-failed" && !verifyBuildReturn(d.Returned)) || d.Workflow == nil || d.Returned == nil || d.Returned.WorkerSession == nil {
+	if d.RunRequest == nil || (!d.RunRequest.SessionTurn && d.WorkerSessionReason != "resume-failed" && !verifyBuildReturn(d.Returned) && !verifyNoVerdictReturn(d.Returned)) || d.Workflow == nil || d.Returned == nil || d.Returned.WorkerSession == nil {
 		return nil
 	}
 	old := d.Returned.WorkerSession

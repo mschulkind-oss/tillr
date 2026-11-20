@@ -280,6 +280,9 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 	}
 	if returnedCauses[step] {
 		payload.Checks, payload.Evidence = l.endingEvidence(ctx, candidate, step)
+		if step == RefusalGate {
+			payload.Detail = gateRefusalDetail(RunDir(l.cfg.Root, candidate.RunID), payload.Detail, payload.Checks)
+		}
 		switch step {
 		case RefusalVerifyNotDone:
 			if candidate.VerifyReplan {
@@ -321,6 +324,58 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 		}
 		return l.answerLandingRefusal(tx, candidate, payload, evidence, at)
 	})
+}
+
+// gateRefusalDetail records the same gate evidence that is returned to the worker, without
+// discarding a diagnostic supplied by the caller. The step log contains the gate's stderr
+// tail; check output, when the gate started checks, lives in the sibling logs directory.
+func gateRefusalDetail(runDir, detail string, checks []EndingCheck) string {
+	var summary string
+	if len(checks) != 0 {
+		var ids []string
+		for _, check := range checks {
+			found := false
+			for _, failing := range check.Failing {
+				if failing.ID != "" {
+					ids = append(ids, failing.ID)
+					found = true
+				}
+			}
+			if !found {
+				ids = append(ids, check.CheckID)
+			}
+		}
+		answer := strings.TrimPrefix(failureSummary(checks), failureHeading+"\n")
+		summary = "failing checks: " + strings.Join(ids, ", ") + "\n" + strings.TrimSpace(answer)
+	} else {
+		verdict := false
+		for _, name := range []string{GateFastVerdictFile, GateVerdictRecord} {
+			body, err := os.ReadFile(filepath.Join(runDir, name))
+			if err != nil {
+				continue
+			}
+			var record struct {
+				Payload struct {
+					Result  string `json:"result"`
+					Verdict string `json:"verdict"`
+				} `json:"payload"`
+			}
+			if json.Unmarshal(body, &record) == nil && (record.Payload.Result != "" || record.Payload.Verdict != "") {
+				verdict = true
+				break
+			}
+		}
+		if verdict {
+			summary = "the gate produced no usable failure verdict (the record names no failing check)"
+		} else {
+			summary = "the gate produced no verdict (or no readable verdict)"
+		}
+		summary += fmt.Sprintf("; gate step log: %s; check logs, if any: %s", filepath.Join(runDir, StepsFile), filepath.Join(runDir, "logs"))
+	}
+	if strings.TrimSpace(detail) == "" {
+		return summary
+	}
+	return detail + "\n" + summary
 }
 
 // recordItemRefusal appends the `drain.refusal` for an item whose own record refused

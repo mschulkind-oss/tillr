@@ -1368,8 +1368,10 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 	staged := make([]Decision, 0, len(decisions))
 	for _, decision := range decisions {
 		request := decision.RunRequest
-		if evaluatorNode(decision) {
+		if evaluatorNode(decision) && !verifyNoVerdictReturn(decision.Returned) {
 			// The judge owns this node's staging, including the verdict location.
+			// A returned evaluator first needs its pinned candidate staged, possibly
+			// on a cold lane, before the judge can prepare its own inputs.
 			staged = append(staged, decision)
 			continue
 		}
@@ -1411,7 +1413,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 			continue
 		}
-		freshVerifyReturn := (decision.Reason == ReasonReturned || decision.Reason == ReasonRetry) && verifyBuildReturn(decision.Returned) && !request.SessionTurn
+		freshVerifyReturn := (decision.Reason == ReasonReturned || decision.Reason == ReasonRetry) && (verifyBuildReturn(decision.Returned) || verifyNoVerdictReturn(decision.Returned)) && !request.SessionTurn
 		if freshVerifyReturn {
 			// A fresh build run starts on the candidate the verifier read, never on the
 			// trunk: Stage cuts the lane at that head (cold or warm), and records the
@@ -2227,7 +2229,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		return laneOutcome{err: err}
 	}
 	noNewCommit := headSHA == baseSHA || headSHA == decision.DesignContinuationHead
-	if decision.Returned != nil && decision.Returned.WorkerSession != nil {
+	if decision.Returned != nil && decision.Returned.WorkerSession != nil && !verifyNoVerdictReturn(decision.Returned) {
 		previous := decision.Returned.WorkerSession.HeadSHA
 		noNewCommit = noNewCommit || headSHA == previous
 	}

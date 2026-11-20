@@ -32,6 +32,42 @@ import (
 // starts with to say the plan was wrong; it is compared case-insensitively.
 const PlanWrongPrefix = "plan-wrong:"
 
+// RefusalVerifyNoVerdict is a machinery ending, not a finding about the candidate.
+const RefusalVerifyNoVerdict = "verify-no-verdict"
+
+// recordMissingVerify pins the exact candidate and retains the expanded graph and all
+// preceding node runs. A subsequent attempt starts a fresh evaluator, not a builder.
+func (l *Loop) recordMissingVerify(ctx context.Context, c Candidate, runID string, preflight bool) error {
+	if err := l.pinCandidateHead(ctx, c); err != nil {
+		return err
+	}
+	var decision Decision
+	err := l.readStore(ctx, func(r *store.Reader) error {
+		var raw []byte
+		if err := r.QueryRow(`SELECT payload FROM events WHERE kind=? AND object_type='run' AND object_id=? ORDER BY seq DESC LIMIT 1`, dispatchStartedKind, c.RunID).Scan(&raw); err != nil {
+			return err
+		}
+		var work pendingWork
+		if err := json.Unmarshal(raw, &work); err != nil {
+			return err
+		}
+		decision = work.Decision
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	s := &WorkerSession{RunID: c.RunID, LaneDir: l.laneDirPath(c.LaneID), LaneID: c.LaneID, BaseSHA: c.BaseSHA, HeadSHA: c.HeadSHA, Workflow: decision.Workflow, NodeIndex: decision.NodeIndex, NodeBaseSHA: c.HeadSHA, Attempt: decision.Attempt}
+	p := refusalPayload{Step: RefusalVerifyNoVerdict, ItemID: c.ItemID, LaneID: c.LaneID, Detail: c.RefusalDetail, BaseSHA: c.BaseSHA, HeadSHA: c.HeadSHA, WorkerSession: s}
+	return appendJudgmentThen(ctx, l.cfg.Store, RefusalKind, "run", runID, p, l.cfg.Now(), func(tx *store.Tx) error {
+		if preflight {
+			c.RunID = runID
+			return l.holdItemFaultTx(tx, c, ReasonAdapterRefused, c.RefusalDetail)
+		}
+		return nil
+	})
+}
+
 // verifyReturnWorkStage is the id of the build stage inserted before the evaluator when the
 // plan expanded the work into pieces that no single build stage can repair as a whole.
 const verifyReturnWorkStage = "work"
