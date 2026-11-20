@@ -814,12 +814,19 @@ func inputVersionFrom(r *store.Reader, d Decision, folds versionFolds) (string, 
 	return string(raw), err
 }
 
+type heldExpressItem struct {
+	decision Decision
+	version  string
+}
+
 type plannedApplication struct {
-	decision      Decision
-	version       string
-	parentRunID   string
-	definitionSHA string
-	definition    *definition.Definition
+	decision            Decision
+	version             string
+	parentRunID         string
+	definitionSHA       string
+	definition          *definition.Definition
+	expressAheadChecked bool
+	expressAheadHeld    map[string]heldExpressItem
 }
 
 func (p plannedApplication) checksComments() bool {
@@ -976,6 +983,15 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 		if err != nil {
 			return err
 		}
+		planItems, err := readItems(r)
+		if err != nil {
+			return err
+		}
+		expressByID := make(map[string]bool, len(planItems))
+		for _, row := range planItems {
+			expressByID[row.ItemID] = row.Express
+		}
+		heldExpressSoFar := map[string]heldExpressItem{}
 		for _, env := range envs {
 			var d Decision
 			if err := json.Unmarshal(env.Payload, &d); err != nil {
@@ -997,7 +1013,31 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 			if work := folds.works[d.ItemID]; work != nil {
 				parent = work.ParentRunID
 			}
-			plans = append(plans, plannedApplication{decision: d, version: version, parentRunID: parent, definitionSHA: declared.SHA256, definition: &declared.Parsed})
+			var aheadHeld map[string]heldExpressItem
+			aheadChecked := false
+			if (d.Action == ActionDispatch || d.Action == ActionRetry) && isExpressLane(d.LaneID) {
+				aheadChecked = true
+				aheadHeld = make(map[string]heldExpressItem, len(heldExpressSoFar))
+				for k, v := range heldExpressSoFar {
+					aheadHeld[k] = v
+				}
+			}
+			if expressByID[d.ItemID] && d.Action == ActionHold && d.Reason != ReasonNoLane {
+				heldDec := Decision{ItemID: d.ItemID, BlockConflict: d.BlockConflict}
+				heldVer := version
+				if d.LaneID != "" {
+					heldVer, err = inputVersionFrom(r, heldDec, folds)
+					if err != nil {
+						return err
+					}
+				}
+				heldExpressSoFar[d.ItemID] = heldExpressItem{decision: heldDec, version: heldVer}
+			}
+			plans = append(plans, plannedApplication{
+				decision: d, version: version, parentRunID: parent,
+				definitionSHA: declared.SHA256, definition: &declared.Parsed,
+				expressAheadChecked: aheadChecked, expressAheadHeld: aheadHeld,
+			})
 		}
 		return nil
 	})
@@ -1341,6 +1381,35 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			if err != nil {
 				return err
 			}
+			if p.expressAheadChecked && isExpressLane(d.LaneID) && (work == nil || work.Done || work.LaneReleased) {
+				def := defaultDefinition()
+				if p.definition != nil {
+					def = *p.definition
+				}
+				folds := versionFolds{works: works, faults: faults}
+				for _, row := range items {
+					if row.ItemID == d.ItemID {
+						break
+					}
+					if !row.Express || finishedState(def, row.State) {
+						continue
+					}
+					if rowWork := works[row.ItemID]; rowWork != nil && !rowWork.Done && !rowWork.LaneReleased {
+						continue
+					}
+					held, wasHeld := p.expressAheadHeld[row.ItemID]
+					if !wasHeld {
+						return nil
+					}
+					curVer, err := inputVersionFrom(tx.Reader(), held.decision, folds)
+					if err != nil {
+						return err
+					}
+					if curVer != held.version {
+						return nil
+					}
+				}
+			}
 			if !l.nonLanding {
 				conflicts, err := item.ReadConflicts(tx.Reader())
 				if err != nil {
@@ -1351,7 +1420,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 						continue
 					}
 					c := conflicts[row.ItemID]
-					if origin := designContinuationWork(c, designHistory[c.DesignRunID]); origin != nil && origin.Decision.LaneID == d.LaneID {
+					if origin := designContinuationWork(c, designHistory[c.DesignRunID]); origin != nil && !isExpressLane(d.LaneID) && origin.Decision.LaneID == d.LaneID {
 						return nil
 					}
 				}

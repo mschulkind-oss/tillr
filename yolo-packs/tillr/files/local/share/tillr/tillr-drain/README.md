@@ -136,8 +136,12 @@ express = 2
 ```
 
 The loop names these lanes `express-1`, `express-2`, and so on. Express work prefers
-one of them, then an available ordinary lane; if neither is free it waits. Ordinary
-work never uses an express lane, and no running work is stopped to make room.
+one of them, then an available ordinary lane; if neither is free it waits. Free express
+lanes go in queue order among express items, so a returned worker session or design
+continuation further back in the queue does not reserve a free express lane ahead of an
+express item nearer the front, and a pass does not claim a free express lane for a later
+item once an earlier express item enters the queue ahead of it. Ordinary work never uses
+an express lane, and no running work is stopped to make room.
 Eligibility comes from the stored item definition, not its workflow's first seat.
 Saved ideas use the `item-idea-` ID convention from
 [idea intake](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-actions.md#the-saved-idea-item);
