@@ -124,7 +124,7 @@ release, and an unchanged trunk. The
 
 ## Express lanes
 
-The [saved-idea rule](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-actions.md#53-the-item-that-is-created)
+The [saved-idea rule](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-actions.md#the-saved-idea-item)
 names **express work**: a saved idea, extended here to a filed request (unless filed
 with `--ordinary`) and an item whose block sets `express="true"`.
 Express lanes are reserved for that work and do not consume the ordinary `--lanes` cap.
@@ -140,7 +140,7 @@ one of them, then an available ordinary lane; if neither is free it waits. Ordin
 work never uses an express lane, and no running work is stopped to make room.
 Eligibility comes from the stored item definition, not its workflow's first seat.
 Saved ideas use the `item-idea-` ID convention from
-[idea intake](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-actions.md#53-the-item-that-is-created);
+[idea intake](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-actions.md#the-saved-idea-item);
 this allocation support does not implement the intake command itself.
 
 Review-comment work stays at its document's

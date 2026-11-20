@@ -367,7 +367,7 @@ because every lane waits on that revert.
 
 [The observatory redesign](../design/observatory-redesign.md) is built: all ten slices had landed
 by 2026-11-18, including the lane strip, lane page, dependency graph and usage figures, and so
-had [the observatory's first two writes](../design/observatory-actions.md). Sixth, and not
+had [the observatory's first two writes](../reference/observatory-actions.md). Sixth, and not
 higher, because [entry 2](#2-keep-the-loop-running) fixes what the screens would only report.
 Also filed here: [a stopped loop says what stopped it](#filed-2026-11-15-the-observatory-speaks-to-its-reader-not-to-its-builders).
 
@@ -2663,7 +2663,7 @@ designer's session.
 **Agent Details:**
 
 - **Ref:** [Item-graph decision ledger](../design/tillr-item-graphs.md#71-decision-ledger),
-  [saved-idea actions](../design/observatory-actions.md#53-the-item-that-is-created), and the
+  [saved-idea actions](../reference/observatory-actions.md#the-saved-idea-item), and the
   designer-session rules for [the desk](../design/tillr-designer-sessions.md#the-desk) and
   [keeping sessions warm](../design/tillr-designer-sessions.md#the-keep-warm-rule).
 - **Where:** [Settings reader](../../tools/tillr/settings/),
@@ -2807,14 +2807,14 @@ already describes the flow from a sentence to a landed change, and
 [item graphs](../design/tillr-item-graphs.md) describes the designer that fleshes an idea out. So
 the first step is a short design that joins them, not a build.
 
-That design is [the observatory's first two actions](../design/observatory-actions.md), and it
+That design graduated into [the observatory actions reference](../reference/observatory-actions.md), and it
 leaves no question for the owner. The order becomes one list: the owner sees a place, the stored
 key is hidden, and a drag writes one item. An idea's words are saved as a text file before
 anything else happens, and the design seat's landing carries them into the tree with the titled
 items that came from them. The server runs the item tool for both and never writes the store or
-the tree itself. Its eight build blocks live in
-[the design's build order](../design/observatory-actions.md#10-build-order); the first, a
-move-to-top control that works from the Items page, waits on nothing.
+the tree itself. Its eight build blocks landed by 2026-11-18
+([the graduated reference](../reference/observatory-actions.md)); the first, a
+move-to-top control that works from the Items page, waited on nothing.
 
 ### Design the observatory's first two actions: reorder by dragging, and add an idea
 
@@ -5382,7 +5382,7 @@ says to skip items with a workflow.
 
 **Agent details:**
 
-- **Ref:** `item-seed-retire` in [the convergence design](../design/tillr-convergence.md#retire-the-seed-file-and-its-command) and `item-oa-move-to-top` in [the observatory actions design](../design/observatory-actions.md) rework how a rank is written, and both are queued. This item is small and should land first, so the ranking method is safe for every item until they land; both wait for it.
+- **Ref:** `item-seed-retire` in [the convergence design](../design/tillr-convergence.md#retire-the-seed-file-and-its-command) and `item-oa-move-to-top` in [the observatory actions reference](../reference/observatory-actions.md#moving-an-item) rework how a rank is written, and both are queued. This item is small and should land first, so the ranking method is safe for every item until they land; both wait for it.
 - **Where:** `storedItem` in `tools/tillr-item/item/seed.go`, whose `SELECT` lists the columns it reads and omits `workflow`; `planSeed`, which builds the re-rank payload from that stored item (`rerank := held`) and so writes whatever `storedItem` left empty; `sameDefinition` in the same file, which compares only definition fields and is not the cause. The itemPayload type, and the apply path that writes it, carry the workflow field.
 - **Evidence:** 2026-11-17, on a throwaway store: an item with `workflow` `scout-then-build@v1` came back with an empty workflow after a rank-only `tillr item seed`.
 - **Evidence:** 2026-11-17, `rg -n 'workflow' tools/tillr-item/item/seed.go` finds nothing, and `storedItem` there reads `item_id, title, body_ref, state, design_doc, allowed_paths, rank, seat, prose` from `items`, so `planSeed` re-applies an item with no workflow. `Workflow` is a field of the payload in `tools/tillr-item/item/apply.go`, which the apply path writes.

@@ -58,7 +58,7 @@ printed. Run `tillr-item reconcile --help` for the optional index-command overri
 ## Reading an order record
 
 `tillr-item order --store /path/to/state.db` prints a plain text
-[order record](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-actions.md#45-surviving-a-rebuild-the-order-record):
+[order record](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-actions.md#the-order-record):
 `# last_hand_move_event_seq: N`, then one item id per line in place order.
 The sequence is the last hand placement event (including a saved idea), or zero
 when none exists. Sync placements do not advance it. Parked and finished items
@@ -87,7 +87,7 @@ ids never create items, and editing the record never moves items the store holds
 ## Moving an item in the order
 
 `place` moves one item first, last, before another item, or after another item.
-The [observatory actions design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-actions.md#4-the-order-is-one-list)
+The [observatory actions reference](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-actions.md#queue-order-and-places)
 defines the order: terminal and parked items are excluded. The command emits an
 `item.place` record with the item's position counted from 1, the count of items
 in the order, and the event sequence. A normal move updates only that item's
@@ -125,7 +125,7 @@ a self-dependency (`edge-self`), and any addition that would form a cycle
 ## Saving an idea
 
 `idea` reads the owner's words from standard input and accepts the same destinations
-as `place`. The [idea intake design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-actions.md#5-adding-an-idea)
+as `place`. The [idea intake reference](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-actions.md#idea-intake-and-the-design-turn)
 defines the item: design seat, first-line title, three fixed criteria, and the tracked
 words path plus the configured paths as its fence.
 
@@ -437,7 +437,7 @@ The following rules describe Git-landing, including its established refusal name
   tillr item sync --store .tillr/state.db --root . --roadmap docs/tillr/roadmap.md --roadmap docs/pi/roadmap.md
   ```
 
-- **Read faces show places, not stored keys.** A [place](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-actions.md#3-principles-and-words)
+- **Read faces show places, not stored keys.** A [place](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-actions.md#queue-order-and-places)
   counts from 1 across the full order; parked and finished items have no place.
   Empty keys count after keyed items, in item id order. A writing sync fills those
   empty keys in that same order, one item update each in its own transaction;
