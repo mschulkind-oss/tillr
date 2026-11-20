@@ -761,7 +761,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: ReasonWorkflowInvalid + ": " + strings.SplitN(loadErr.Error(), "\n", 2)[0], From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			} else {
 				decision = p.decide(routed, edges[item.ItemID])
-				if decision.RunRequest != nil && decision.Returned != nil && decision.Returned.WorkerSession != nil && decision.Returned.WorkerSession.Workflow != nil && !retainedGraph {
+				if decision.RunRequest != nil && decision.Returned != nil && decision.Returned.WorkerSession != nil && w != nil && !retainedGraph {
 					decision.RunRequest.SessionTurn = false
 					decision.RunRequest.ResumePrompt = ""
 					decision.SelectSeat = true
@@ -1476,6 +1476,10 @@ func (p *planner) returnedEnding(itemID string) *ReturnedEnding {
 	detail := e.Detail
 	if cause == RefusalConflict && detail == "" {
 		detail = strings.Join(e.ConflictPaths, "\n")
+	}
+	if cause == RefusalConflict && e.Restart {
+		// The candidate was discarded: no session, lane or work of it carries over.
+		return &ReturnedEnding{RunID: latest, Cause: cause, Detail: detail, Restart: true}
 	}
 	return &ReturnedEnding{RunID: latest, Cause: cause, Detail: detail, Checks: e.Checks, WorkerSession: e.WorkerSession}
 }

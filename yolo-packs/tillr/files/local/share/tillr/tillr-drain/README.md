@@ -1487,6 +1487,18 @@ On a moved trunk the loop stages a conflict-fix run at once with the conflicting
 three-way markers; otherwise the next pass returns it with the conflict lines. A fresh fallback
 starts from the latest trunk.
 
+The second squash conflict with the same paths and hunks digest within the current retry cycle
+(the runs since the item's latest `tillr drain retry`) is not sent back again. `restartConflicted`
+(in [`drain/conflict_restart.go`](./drain/conflict_restart.go)) pins the candidate, resets the
+lane to the current trunk, closes any open landing call on it, records the conflict as a restart
+(`drain.refusal` with `restart: true`) and a `drain.candidate-discarded` effect that clears the
+run's dirty and repair holds. The planner then dispatches a fresh attempt of the item's workflow
+from its first stage with no session; its brief carries the item's source reference, says the
+earlier attempt conflicted twice, names the conflicting paths, and holds no conflict-fix
+instruction. A conflict of that fresh attempt parks the item for the operator (`conflict-owner`)
+whether or not its paths or hunks changed, and an explicit retry starts a new cycle. Design
+ruling `D-JL12` in [`docs/design/tillr-judge-and-lifecycle.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-judge-and-lifecycle.md).
+
 A conflict-fix run is judged, fenced and landed against the trunk tip the fix was made on,
 never against the base the worker started from. The fence check diffs the recorded base to
 `HEAD`, and the lander runs `git merge-tree --merge-base=<recorded base>`; with the old base

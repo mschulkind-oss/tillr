@@ -1363,8 +1363,18 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 		if err := l.stageLandingAnswer(ctx, decision, &spec); err != nil {
 			return nil, err
 		}
-		if decision.Reason == ReasonReturned && decision.Returned != nil && decision.Returned.WorkerSession != nil && !request.SessionTurn && decision.LaneID == decision.Returned.WorkerSession.LaneID {
-			if err := l.resetLane(ctx, decision.LaneID); err != nil {
+		if decision.Reason == ReasonReturned && decision.Returned != nil && !request.SessionTurn &&
+			((decision.Returned.WorkerSession != nil && decision.LaneID == decision.Returned.WorkerSession.LaneID) ||
+				(decision.Workflow != nil && decision.NodeIndex == 0)) {
+			// A returned run that continues no session starts from a clean lane. A workflow
+			// restarted at its first stage is cut from the node base, so a commit the earlier
+			// candidate left on the lane (it stays pinned) cannot turn a read-only first stage
+			// into a boundary violation.
+			revision := TrunkRef
+			if decision.Workflow != nil && decision.NodeBaseSHA != "" {
+				revision = decision.NodeBaseSHA
+			}
+			if err := l.resetLaneTo(ctx, decision.LaneID, revision); err != nil {
 				return nil, err
 			}
 		}

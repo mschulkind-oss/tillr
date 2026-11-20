@@ -414,9 +414,13 @@ author holds waiting on the operator. A land that conflicts — `squash-conflict
 landing moved the trunk first — is not a refusal: the loop stages a conflict-fix run for
 the same candidate, carrying the conflicting paths and the three-way markers in its brief,
 and judges that run like any other change. Conflicts are not counted: each one goes back
-to the worker with its paths on the latest trunk, and only a conflict with the same paths
-and the same hunks as an earlier one of the item stops that, going to the design seat with
-both records. `conflict-exhausted` is history: an item parked under it is returned at
+to the worker with its paths on the latest trunk. The second conflict with the same paths
+and the same hunks within the current retry cycle (since the item's latest `tillr drain
+retry`) discards the candidate, resets the lane to the current trunk and starts a fresh
+attempt of the item's workflow from its first stage, whose brief says the earlier attempt
+conflicted twice and names the paths. Only if that fresh attempt conflicts at landing does the
+item park for the operator (`conflict-owner`), whether or not the paths or hunks changed.
+`conflict-exhausted` is history: an item parked under it is returned at
 the next loop start. If repair staging
 fails, the affected item holds as `conflict-repair-staging-failed` without stopping
 siblings. Its original candidate and conflict evidence remain retained across restarts.
@@ -537,7 +541,9 @@ Stop the loop and read the record, rather than retrying, when:
 - a land refuses — the loop records it and sends the item back to its worker with the
   lander's answer, as it does a gate refusal. Two negative land answers are not stops. A squash
   conflict goes back to the worker with its paths on the latest trunk, uncounted; an
-  identical repeat (same paths, same hunks) goes to the design seat. On `already-on-trunk` (the trunk already carries the whole change) the
+  identical repeat (same paths, same hunks) discards the candidate and starts a fresh
+  attempt from the current trunk, parking for the operator (`conflict-owner`) only if that
+  fresh attempt conflicts again. On `already-on-trunk` (the trunk already carries the whole change) the
   loop records the verdict and settles the item as `resolved-elsewhere`. A pending run whose
   item was already landed or closed by hand is not a stop either: the loop settles it as
   `item-already-terminal`, which judges nothing and releases the lane.

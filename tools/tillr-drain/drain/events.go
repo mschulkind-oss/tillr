@@ -245,6 +245,10 @@ type refusalPayload struct {
 	// neither, and its empty key repeats nothing.
 	Checks   []EndingCheck `json:"checks,omitempty"`
 	Evidence string        `json:"evidence,omitempty"`
+	// Restart marks a squash-conflict refusal that answered the item's second identical
+	// conflict of a retry cycle by discarding the candidate and returning the item for a
+	// fresh attempt from the current trunk (conflict_restart.go, D-JL12).
+	Restart bool `json:"restart,omitempty"`
 	// Selectors are a reverted landing's legacy replay selectors (kind:label) by check
 	// id, kept so the item's next gate can run a check a loop restart forgot.
 	Selectors map[string]string `json:"selectors,omitempty"`

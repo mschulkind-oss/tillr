@@ -19,6 +19,10 @@ var repeatReading func()
 // "Second failed attempt:", is that routing's own and is not enriched twice.
 const IdenticalRepeatPrefix = "Identical repeat:"
 
+// conflictAfterRestartPrefix opens the text of the conflict a squash conflict of a fresh
+// attempt raises for the operator after a conflict restart (D-JL12).
+const conflictAfterRestartPrefix = "Conflict after restart:"
+
 // secondFailure is an identical repeat's routing to the design seat, as read from the store
 // before the write that records it: the item, the run the conflict is named for, the run it
 // is raised on, and the evidence text. (The name is the removed second-failure rule's; the
@@ -29,6 +33,9 @@ type secondFailure struct {
 	// noDesignSeat is a policy that names no design seat: no seat can diagnose the repeat,
 	// so it is the owner's (the policy is the owner's to change).
 	noDesignSeat bool
+	// forceOwner routes to the operator whatever the policy and the item's block hold: a
+	// conflict after a conflict restart (D-JL12).
+	forceOwner bool
 }
 
 // producerOf is who produced a run's ending, as the identical-repeat rule compares it: the
@@ -84,6 +91,23 @@ func readRepeatedEnding(r *store.Reader, d Decision) (*secondFailure, error) {
 	chain, _, err := readItemChain(r, history, d.ItemID)
 	if err != nil {
 		return nil, err
+	}
+	if latest.Step == RefusalConflict {
+		// A squash conflict has its own route (D-JL12): the second identical one of a retry
+		// cycle restarts the item and routes nowhere, and a conflict of the fresh attempt
+		// that followed a restart waits on the operator, whatever its paths and hunks.
+		if latest.Restart {
+			return nil, nil
+		}
+		cycle, err := readConflictCycle(r, history, d.ItemID)
+		if err != nil {
+			return nil, err
+		}
+		if !cycle.restarted {
+			return nil, nil
+		}
+		text := fmt.Sprintf(conflictAfterRestartPrefix+" run %s, the fresh attempt that followed a restart from the current trunk, conflicted again at landing. The item's earlier attempt conflicted twice, so the operator decides: amend the item's work or its fence, or close it.\n\n%s", current, latest.Detail)
+		return &secondFailure{itemID: d.ItemID, outcomeRun: current, current: current, text: text, forceOwner: true, WorkerSession: nil}, nil
 	}
 	previous, repeated := repeatedEnding(chain, chainEnding{RunID: current, Producer: producerOf(d), Cause: latest.Step, Key: latest.Evidence})
 	if !repeated {
@@ -187,7 +211,7 @@ func recordSecondFailure(tx *store.Tx, sf *secondFailure, at time.Time) error {
 	}
 	existing, hasConflict := conflicts[sf.itemID]
 	repeatText := func(text string) bool {
-		return strings.HasPrefix(text, IdenticalRepeatPrefix) || strings.HasPrefix(text, "Second failed attempt:")
+		return strings.HasPrefix(text, IdenticalRepeatPrefix) || strings.HasPrefix(text, "Second failed attempt:") || strings.HasPrefix(text, conflictAfterRestartPrefix)
 	}
 	// enrich is a conflict a blocked report of one of the two runs already routed: the
 	// repeat's evidence is added to it. An open repeat conflict on this same run is this
@@ -236,6 +260,8 @@ func recordSecondFailure(tx *store.Tx, sf *secondFailure, at time.Time) error {
 		} else {
 			c.Text += "\n\nNo item block reference is recorded; the owner must supply one before a design amendment."
 		}
+	} else if sf.forceOwner {
+		c.Status, c.WaitingOn = "owner", "owner"
 	} else if sf.noDesignSeat {
 		// A design conflict with no design seat would be a policy refusal that stops the loop
 		// for every item. The loop never stops on one item's condition: the repeat waits on
