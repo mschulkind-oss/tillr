@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -442,8 +443,10 @@ func TestBriefDesignProvenanceRuleBySeat(t *testing.T) {
 		if got := strings.Contains(string(raw), wantSentence); got != tc.want {
 			t.Fatalf("stagePlain(%s): contains provenance rule = %v, want %v", tc.seat, got, tc.want)
 		}
+		// Whole words only: the brief names its own directory, and a scratch path such as
+		// "go-shards-1" holds "sha" without the prose using the word.
 		for _, word := range []string{"sha", "fence", "trunk"} {
-			if strings.Contains(strings.ToLower(string(raw)), word) {
+			if regexp.MustCompile(`(?i)\b` + word + `\b`).Match(raw) {
 				t.Fatalf("stagePlain(%s): plain prose carries Git word %q: %s", tc.seat, word, raw)
 			}
 		}
