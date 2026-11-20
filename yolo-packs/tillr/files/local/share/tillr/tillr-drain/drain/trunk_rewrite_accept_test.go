@@ -14,14 +14,20 @@ import (
 
 var acceptAt = time.Date(2026, 11, 17, 20, 0, 0, 0, time.UTC)
 
-// reauthor recreates every commit in base..tip with the same tree but an edited
-// message. Identity-only rewrites now recover automatically; these fixtures must
+// reauthor recreates every commit in base..tip with an edited message, and moves the last
+// commit's content into the one before it, leaving the last empty: the commits are as many,
+// and the tip has the same tree, but those two have not the patches they had. Identity-only rewrites and rebases that keep each
+// commit's patch recover automatically (trunk_rewrite_pull_test.go); these fixtures must
 // still exercise the broader, explicitly accepted content-preserving rewrite.
 func reauthor(t *testing.T, root, base, tip string) string {
 	t.Helper()
 	parent := base
-	for _, c := range strings.Fields(runGit(t, root, "rev-list", "--reverse", base+".."+tip)) {
+	commits := strings.Fields(runGit(t, root, "rev-list", "--reverse", base+".."+tip))
+	for i, c := range commits {
 		tree := runGit(t, root, "rev-parse", c+"^{tree}")
+		if i >= len(commits)-2 {
+			tree = runGit(t, root, "rev-parse", tip+"^{tree}")
+		}
 		msg := runGit(t, root, "log", "-1", "--format=%B", c) + " [edited]"
 		cmd := exec.Command("git", "-C", root, "commit-tree", tree, "-p", parent, "-m", msg)
 		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=tillr", "GIT_AUTHOR_EMAIL=tillr@example.invalid",
@@ -92,7 +98,7 @@ func TestAcceptedReauthoringLandsTheRetainedCandidate(t *testing.T) {
 	runGit(t, f.root, "reset", "-q", "--hard", current)
 	var result LoopResult
 	historyPass(t, l, &result)
-	if d := mustPlan(t, l)[0].decision; d.Action != ActionHold || d.Reason != "trunk-rewritten: "+lost+" -> "+current {
+	if d := mustPlan(t, l)[0].decision; d.Action != ActionHold || !strings.HasPrefix(d.Reason, "trunk-rewritten: "+lost+" -> "+current) {
 		t.Fatalf("the rewrite did not hold: %+v", d)
 	}
 	if steps.lands != 0 {
@@ -149,7 +155,8 @@ func TestAcceptBeforeTheLoopObservesTheRewrite(t *testing.T) {
 	base := runGit(t, f.root, "rev-parse", "HEAD")
 	green := ownerCommit(t, f.root, "one.txt")
 	runGit(t, f.root, "update-ref", GreenRef, green)
-	lost := ownerCommit(t, f.root, "two.txt")
+	ownerCommit(t, f.root, "two.txt")
+	lost := ownerCommit(t, f.root, "three.txt")
 	if _, err := l.observeTrunk(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +170,7 @@ func TestAcceptBeforeTheLoopObservesTheRewrite(t *testing.T) {
 		t.Fatalf("history: %+v", h)
 	}
 	carried := runGit(t, f.root, "rev-parse", GreenRef)
-	if carried != runGit(t, f.root, "rev-parse", current+"~1") || carried == green || got.GreenFrom != green || got.GreenTo != carried {
+	if carried != runGit(t, f.root, "rev-parse", current+"~2") || carried == green || got.GreenFrom != green || got.GreenTo != carried {
 		t.Fatalf("green not carried: %s (from %s) / %+v", carried, green, got)
 	}
 	if runGit(t, f.root, "rev-parse", carried+"^{tree}") != runGit(t, f.root, "rev-parse", green+"^{tree}") {

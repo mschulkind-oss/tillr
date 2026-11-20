@@ -71,6 +71,9 @@ type HeavyStatus struct {
 	Overruns          []HeavyCheck `json:"overruns"`
 	Result            string       `json:"result"`
 	Detail            string       `json:"detail,omitempty"`
+	// Rewrite says in one line that the drain absorbed a rewrite of the trunk (a pull that
+	// rebased main), when, and how many commits it mapped. Empty when none was recorded.
+	Rewrite string `json:"rewrite,omitempty"`
 }
 
 func GitOutput(ctx context.Context, root string, args ...string) (string, error) {
@@ -133,7 +136,20 @@ func Landings(ctx context.Context, root, storePath, base, tip string) ([]string,
 			}
 			landed[sha] = true
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		// A landing recorded under a sha a rewrite replaced counts at the new sha.
+		for old := range landed {
+			now, err := RewriteResolve(reader, old)
+			if err != nil {
+				return err
+			}
+			if now != old {
+				landed[now] = true
+			}
+		}
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -197,6 +213,11 @@ func ReadStatus(ctx context.Context, root, storePath string) (HeavyStatus, error
 		}
 		status.LandingsSince = len(landings)
 	}
+	if storePath != "" {
+		if status.Rewrite, err = rewriteLine(ctx, storePath); err != nil {
+			return status, err
+		}
+	}
 	raw, err := os.ReadFile(filepath.Join(dir, "heavy.json"))
 	if os.IsNotExist(err) {
 		return status, nil
@@ -224,4 +245,22 @@ func ReadStatus(ctx context.Context, root, storePath string) (HeavyStatus, error
 		}
 	}
 	return status, nil
+}
+
+// rewriteLine is the one-line note of the latest absorbed rewrite, or "" when none.
+func rewriteLine(ctx context.Context, storePath string) (string, error) {
+	s, err := store.OpenRead(ctx, storePath)
+	if err != nil {
+		return "", err
+	}
+	defer s.Close()
+	line := ""
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		a, ok, err := LatestRewrite(r)
+		if ok {
+			line = a.Line()
+		}
+		return err
+	})
+	return line, err
 }

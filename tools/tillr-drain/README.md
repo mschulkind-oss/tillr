@@ -1784,6 +1784,39 @@ Restoring history means making the lost tip an ancestor of the trunk again. The
 next pass clears the lost tip and retries retained landings without another gate.
 The loop keeps waiting even with `--exit-when-drained`.
 
+**A `git pull` that rebases main** (the owner's `pull.rebase=true`) replays the
+commits main holds and the remote lacks, and gives each a new sha, while the store's
+landing rows, run pins and lane bases still name the old ones. The loop absorbs that
+itself, at start and at each pass. When the recorded tip is no longer an ancestor of the
+trunk, it finds the point where the old and new histories diverge and matches each
+commit from there to the old tip with a commit on the new trunk by
+`git patch-id --stable`, one to one and in order. When every commit matches it records
+each old sha and its new sha in the store's `trunk_rewrites` table, with the time and
+the evidence (the patch-id match and the trunk's reflog entries, which name the pull),
+pins the old tip at `refs/tillr/trunk-history/accepted/<old-tip>`, moves
+`refs/tillr/green` to its new sha if the pull moved it, appends a
+`drain.trunk-rewrite-absorbed` event, and goes on with no hold. After that:
+
+- A landing recorded under an old sha is found from its new sha (the first red commit's
+  landing record, and so the automatic revert), and the heavy status counts it.
+- Every ancestry question the drain asks (a lane's base, a run's head, a blocker's
+  landing, whether the trunk contains a commit) follows an old sha to its new one when git
+  no longer reaches it, so an idle lane based on the old trunk is reset and reused, and a
+  released run's old head counts as on the trunk.
+- `tillr drain why` and the heavy status (`rewrite`) say in one line when a rewrite was
+  absorbed and how many commits it mapped:
+  `trunk: absorbed a rewrite at <time>; <n> commits mapped to their new shas`.
+
+A rewrite the loop cannot prove is not absorbed. If any commit was dropped, changed,
+merged or squashed, it has no match; the loop records those commits and raises the
+`trunk-rewritten` hold above, whose reason ends
+`(no match on the trunk for <sha>, <sha>)`. Landings stay held and nothing is mapped. The
+operator then restores the lost history (reset or re-apply what the pull dropped, so the
+old tip is an ancestor again), or, if the change really was meant, accepts it with
+`tillr drain accept-rewrite` as below. The loop tries again whenever the trunk tip moves.
+The pull is safe whether or not the loop was running: the comparison is with the last
+recorded tip, not with an event the loop had to witness.
+
 A deliberate rewrite that kept the content, such as re-authoring commits or editing
 their messages, is accepted instead of restored, with `tillr drain accept-rewrite`
 (its `--help` lists the flags). It names the lost tip, the commit on the trunk that

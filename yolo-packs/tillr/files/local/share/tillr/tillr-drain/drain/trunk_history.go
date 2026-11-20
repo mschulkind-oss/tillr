@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"os/exec"
+	"sort"
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-land/land"
@@ -72,6 +73,7 @@ func (l *Loop) observeTrunk(ctx context.Context, expected string) (trunkHistory,
 	if l.nonLanding {
 		return trunkHistory{}, nil
 	}
+	registerRewriteStore(l.cfg.Root, l.cfg.Store)
 	l.historyMu.Lock()
 	defer l.historyMu.Unlock()
 	if err := l.observeIdentity(ctx); err != nil {
@@ -117,6 +119,7 @@ func (l *Loop) observeTrunk(ctx context.Context, expected string) (trunkHistory,
 	defer s.Close()
 	var h trunkHistory
 	for {
+		var absorb *rewriteAbsorption
 		err = s.ReadTx(ctx, func(r *store.Reader) error {
 			var err error
 			h, err = readTrunkHistory(r)
@@ -162,6 +165,18 @@ func (l *Loop) observeTrunk(ctx context.Context, expected string) (trunkHistory,
 					return h, err
 				}
 				if same {
+					absorb = &rewriteAbsorption{Lost: h.Lost, Tip: tip, Pairs: map[string]string{}, Evidence: "each replaced commit has the same tree and message; only authorship or dates differ"}
+					for old, now := range mapped {
+						if old != now {
+							absorb.Pairs[old] = now
+							absorb.Order = append(absorb.Order, old)
+						}
+					}
+					sort.Strings(absorb.Order)
+				} else if absorb, err = l.proveRewrite(ctx, h.Lost, tip); err != nil {
+					return h, err
+				}
+				if absorb.proved() {
 					// A proof names an unchanged tree. Carry it to the matching
 					// commit before clearing the lost-history hold.
 					green, err := l.git(ctx, l.cfg.Root, "for-each-ref", "--format=%(objectname)", GreenRef)
@@ -169,10 +184,14 @@ func (l *Loop) observeTrunk(ctx context.Context, expected string) (trunkHistory,
 						return h, err
 					}
 					green = strings.TrimSpace(green)
-					if replacement := mapped[green]; replacement != "" {
+					if replacement := absorb.Pairs[green]; replacement != "" {
 						if _, err := l.git(ctx, l.cfg.Root, "update-ref", GreenRef, replacement, green); err != nil {
 							return h, err
 						}
+					}
+					// Keep the replaced history readable once the lost ref goes.
+					if _, err := l.git(ctx, l.cfg.Root, "update-ref", acceptedTrunkPrefix+h.Lost, h.Lost); err != nil {
+						return h, err
 					}
 					restored = true
 				}
@@ -211,6 +230,11 @@ func (l *Loop) observeTrunk(ctx context.Context, expected string) (trunkHistory,
 				changed = true
 				return nil
 			}
+			if absorb != nil {
+				if err := absorb.record(tx, l.cfg.Now()); err != nil {
+					return err
+				}
+			}
 			_, err = tx.Exec(`INSERT INTO trunk_history(id,observed_tip,lost_tip) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET observed_tip=excluded.observed_tip,lost_tip=excluded.lost_tip`, h.Observed, h.Lost)
 			return err
 		})
@@ -239,7 +263,7 @@ func (l *Loop) holdRewrite(ctx context.Context, c Candidate, h trunkHistory) err
 		if err := refuseTerminalItem(tx.Reader(), c.ItemID, "trunk-rewritten"); err != nil {
 			return err
 		}
-		d := Decision{ItemID: c.ItemID, LaneID: c.LaneID, RunRequest: c.Request, Seat: c.Seat, From: "candidate", Action: ActionHold, Reason: h.reason(), PassID: c.TickID}
+		d := Decision{ItemID: c.ItemID, LaneID: c.LaneID, RunRequest: c.Request, Seat: c.Seat, From: "candidate", Action: ActionHold, Reason: rewriteReason(tx.Reader(), h), PassID: c.TickID}
 		identifyDecision(&d)
 		return recordDirtyDecision(tx, d, l.cfg.Now().UTC())
 	})

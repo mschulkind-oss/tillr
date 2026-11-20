@@ -79,7 +79,7 @@ func TestObservedRewriteSurvivesReplacementWithoutWaitingCandidate(t *testing.T)
 		t.Fatalf("rewrite landed or convicted: %+v / %+v", steps, result)
 	}
 	d := mustPlan(t, replacement)[0].decision
-	if d.Action != ActionHold || d.Reason != "trunk-rewritten: "+lost+" -> "+base {
+	if d.Action != ActionHold || !strings.HasPrefix(d.Reason, "trunk-rewritten: "+lost+" -> "+base) || !strings.Contains(d.Reason, "no match on the trunk for "+lost) {
 		t.Fatalf("lost rewrite: %+v", d)
 	}
 	runGit(t, f.root, "reset", "--hard", lost)
