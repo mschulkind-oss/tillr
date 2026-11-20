@@ -387,6 +387,14 @@ func (l *Loop) settleParallel(ctx context.Context, work *pendingWork, result *Lo
 		stage := node.Workflow.Stages[node.NodeIndex]
 		rec := recs[i]
 		log := logs[i]
+		if stage.Kind == "agent" {
+			if obs, isObstacle, obsErr := l.offeredObstacle(ctx, rec.RunID); obsErr != nil {
+				return laneOutcome{err: obsErr}
+			} else if isObstacle {
+				log = formatObstacleReport(obs)
+				logs[i] = log
+			}
+		}
 		if stage.Kind == "agent" && (ClassifyAttempt(rec, log) == AttemptUnjudged || rec.State == run.StatePaused) {
 			resumed, resumedLog, stop, e := l.resumeAfterWall(ctx, node.LaneID, *node.RunRequest, l.lanePath(node.LaneID), rec, timing.TickID, l.cfg.Now(), result, watched)
 			if e != nil || stop != "" {

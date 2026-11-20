@@ -223,6 +223,10 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 	if err != nil {
 		return answer, readFailure(err)
 	}
+	obstacleHolds, _, err := ReadObstacleHolds(r)
+	if err != nil {
+		return answer, readFailure(err)
+	}
 	assigned := map[string]string{}
 	for i, env := range envs {
 		it := items[i]
@@ -240,6 +244,10 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		// process the detail names" is read from it.
 		if fault, held := itemFaults[it.ItemID]; held && d.Action == ActionHold && d.Reason == fault.Reason && fault.Detail != "" {
 			row.Why += ": " + fault.Detail
+		}
+		if obsHold, held := obstacleHolds[it.ItemID]; held && d.Action == ActionHold && d.Reason == obsHold.ReasonCode() {
+			row.Why = obsHold.WhyText()
+			row.Mover = obsHold.Action
 		}
 		if d.Reason == ReasonEvalFailed || d.Reason == ReasonJudgeUnreadable {
 			detail, err := judgeFailureDetail(r, it.ItemID, d.Reason)
@@ -441,6 +449,19 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 					}
 				}
 				answer.Summary.OwnerWaiting++
+			} else if obsHold, held := obstacleHolds[it.ItemID]; held && d.Reason == obsHold.ReasonCode() {
+				row.Mover = obsHold.MoverText()
+				switch obsHold.Mover {
+				case "owner":
+					row.Class = "needs you"
+					answer.Summary.OwnerWaiting++
+				case "drain":
+					row.Class = "waits on work"
+					answer.Summary.DrainNext++
+				default:
+					row.Class = "needs you"
+					answer.Summary.OperatorNext++
+				}
 			} else if d.Reason == ReasonOwnerOnlyOwed {
 				answer.Summary.OwnerWaiting++
 			} else {

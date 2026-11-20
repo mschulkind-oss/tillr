@@ -116,15 +116,18 @@ func commandNodeHold(r *store.Reader, id string) (string, error) {
 // recorded report is the node's answer, so it is the evidence read here; the hold names
 // the node, and its row names the retry that keeps every read-only node that passed.
 func unreadAnswerHold(r *store.Reader, id string) (string, error) {
-	var node, refs string
-	err := r.QueryRow(`SELECT n.node_id,r.artifact_refs FROM node_runs n JOIN runs r ON r.run_id=n.run_id
+	var node, runID, refs string
+	err := r.QueryRow(`SELECT n.node_id,n.run_id,r.artifact_refs FROM node_runs n JOIN runs r ON r.run_id=n.run_id
  WHERE n.item_id=? AND n.attempt=(SELECT MAX(attempt) FROM node_runs WHERE item_id=?)
- AND n.outcome='blocked' ORDER BY n.rowid DESC LIMIT 1`, id, id).Scan(&node, &refs)
+ AND n.outcome='blocked' ORDER BY n.rowid DESC LIMIT 1`, id, id).Scan(&node, &runID, &refs)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
 	if err != nil {
 		return "", err
+	}
+	if isObstacleCallRun(r, runID) {
+		return "", nil
 	}
 	var artifacts []run.ArtifactRef
 	if err := json.Unmarshal([]byte(refs), &artifacts); err != nil {

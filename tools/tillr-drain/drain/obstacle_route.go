@@ -32,6 +32,11 @@ func (l *Loop) laneAttempted(ctx context.Context, lane, mainSHA string) bool {
 // and owner go to the design seat, or to the owner for a generated repair item, and so do a
 // generated item's tooling obstacle and a seat obstacle past the end of the escalation list.
 func (l *Loop) routeObstacle(ctx context.Context, d Decision, req run.Request, lane, tick, mainSHA string, o Obstacle, result *LoopResult) (laneOutcome, bool) {
+	if !IsGeneratedItem(req.ItemID) {
+		if words, err := requestWordsFor(ctx, l.cfg.Store, req.ItemID); err == nil && words != nil {
+			return laneOutcome{}, false
+		}
+	}
 	target := l.laneTarget(lane)
 	head := l.headOf(ctx, lane)
 	candidate := Candidate{ItemID: req.ItemID, LaneID: lane, RunID: req.RunID, TickID: tick, Worktree: target, BaseRef: l.lanePatchRef(lane), BaseSHA: l.settleBase(lane, mainSHA), HeadSHA: head}

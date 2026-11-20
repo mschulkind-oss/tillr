@@ -31,6 +31,7 @@ var landingHolds = map[string]string{
 	ReasonNoFence:             definition.PrerequisiteFence,
 	ReasonForkHeld:            "",
 	ReasonTrunkBroken:         "",
+	ReasonObstacleTrunk:       "",
 	ReasonConflictFix:         "",
 	ReasonConflictExhausted:   "",
 	ReasonConflictDesign:      "",
@@ -77,6 +78,8 @@ var generalHolds = map[string]string{
 	ReasonJudgeGrantAbsent: "", ReasonJudgeUnreadable: "", ReasonEvalFailed: "",
 	ReasonJudgeBlocked: "", ReasonJudgeDefective: "",
 	ReasonPiExtensionsBuildFailed: "",
+	ReasonObstacleOwner:           "", ReasonObstacleFence: "", ReasonObstacleTooling: "",
+	ReasonObstacleSeat: "", ReasonObstacleDefinition: "",
 }
 
 func hasPrerequisite(d definition.Definition, name string) bool {

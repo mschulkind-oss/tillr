@@ -18,6 +18,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/faults"
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr-drain/judgegrants"
+	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-drain/quota"
 	"github.com/mschulkind-oss/tillr-drain/spend"
 	"github.com/mschulkind-oss/tillr/definition"
@@ -351,6 +352,10 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 	if err != nil {
 		return nil, err
 	}
+	obstacleHolds, _, err := obstacles.Read(r)
+	if err != nil {
+		return nil, err
+	}
 	places := itemPlaces(items)
 	out := []waitingRow{}
 	for _, item := range items {
@@ -607,6 +612,16 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 				row.Class, row.Where = "needs you", "land"
 				row.Why, row.Mover = "conflict-repair-staging-failed: "+hold.Cause, hold.NextAction
 				row.Since = time.UnixMilli(since).UTC().Format(time.RFC3339Nano)
+			}
+		}
+		if obsHold, held := obstacleHolds[item.ItemID]; held {
+			if !(item.State == "in-queue" && found && (last.Action == "dispatch" || last.Action == "retry") && last.DispatchedMS >= obsHold.AtMS) {
+				rule := waitingRuleFor(obsHold.ReasonCode())
+				row.Class, row.Where = rule.class, rule.where
+				row.Why = obsHold.WhyText()
+				row.Mover = obsHold.MoverText()
+				row.Since = time.UnixMilli(obsHold.AtMS).UTC().Format(time.RFC3339Nano)
+				row.ClassSource = "store"
 			}
 		}
 		if fault, held := itemFaults[item.ItemID]; held {
@@ -945,6 +960,9 @@ func normalizeWaitingMover(row *waitingRow) {
 	if strings.HasPrefix(row.Why, "owner-only-owed: ") {
 		return
 	}
+	if strings.HasPrefix(row.Why, "obstacle-owner:") && strings.HasPrefix(row.Mover, "owner;") {
+		return
+	}
 	if strings.HasPrefix(row.Mover, "owner; answer ") && strings.Contains(row.Mover, "#OQ-") {
 		return
 	}
@@ -980,7 +998,7 @@ func printWaiting(w io.Writer, rows []waitingRow) error {
 			continue
 		}
 		switch {
-		case strings.HasPrefix(row.Mover, "owner; answer ") && strings.Contains(row.Mover, "#OQ-"):
+		case (strings.HasPrefix(row.Mover, "owner; answer ") && strings.Contains(row.Mover, "#OQ-")) || (strings.HasPrefix(row.Why, "obstacle-owner:") && strings.HasPrefix(row.Mover, "owner;")):
 			owner++
 		case strings.HasPrefix(row.Mover, "design seat;") || strings.Contains(row.Mover, "design seat"):
 			design++

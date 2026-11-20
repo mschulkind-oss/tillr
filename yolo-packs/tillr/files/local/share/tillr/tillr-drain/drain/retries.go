@@ -299,6 +299,12 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 	// or a blocked item whose finished run this call supersedes returns to the ready state
 	// in the same transaction, so `tillr drain retry` is the single command that answers
 	// the run and releases the hold.
+	var openCallID string
+	if err := tx.Reader().QueryRow(`SELECT COALESCE(object_id, '') FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=? ORDER BY seq DESC LIMIT 1`, callOffered, req.RunID).Scan(&openCallID); err == nil && openCallID != "" {
+		if err := projectLandingCall(tx, openCallID, "", "superseded", at); err != nil {
+			return Retry{}, Internalf("closing open call %q on %q: %v", openCallID, req.RunID, err)
+		}
+	}
 	releaseBlocked := false
 	if state == declared.Parsed.Blocked {
 		conflicts, err := item.ReadConflicts(tx.Reader())
