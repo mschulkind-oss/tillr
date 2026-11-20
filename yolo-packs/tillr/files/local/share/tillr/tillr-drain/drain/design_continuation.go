@@ -27,7 +27,7 @@ func (l *Loop) prepareDesignContinuation(ctx context.Context, r *store.Reader, d
 	if c == nil || designContinuationWork(*c, work) == nil {
 		return nil
 	}
-	if d.LaneID != work.Decision.LaneID {
+	if d.LaneID != work.Decision.LaneID && !isExpressLane(work.Decision.LaneID) {
 		return Internalf("design continuation of %s was offered a different lane", c.DesignRunID)
 	}
 	origin := c.DesignRunID
@@ -42,8 +42,11 @@ func (l *Loop) prepareDesignContinuation(ctx context.Context, r *store.Reader, d
 		return err
 	}
 	old := work.Decision.RunRequest
-	available := session != "" && designTranscriptAvailable(rec)
+	available := d.LaneID == work.Decision.LaneID && session != "" && designTranscriptAvailable(rec)
 	why := "is unavailable"
+	if d.LaneID != work.Decision.LaneID {
+		why = "is on another lane"
+	}
 	if available && len(old.Command) > 0 {
 		capability, err := os.ReadFile(filepath.Join(filepath.Dir(old.Command[0]), "pause-kind"))
 		if err == nil && strings.TrimSpace(string(capability)) == run.PauseCannotResume {

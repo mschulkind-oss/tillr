@@ -517,7 +517,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			if c, ok := conflicts[row.ItemID]; ok && c.Status != "answered" {
 				continue
 			}
-			if e := p.returnedEnding(row.ItemID); e != nil && e.WorkerSession != nil && !released[e.WorkerSession.LaneID] && p.retainedLaneFree(e.WorkerSession.LaneID) {
+			if e := p.returnedEnding(row.ItemID); e != nil && e.WorkerSession != nil && !isExpressLane(e.WorkerSession.LaneID) && !released[e.WorkerSession.LaneID] && p.retainedLaneFree(e.WorkerSession.LaneID) {
 				// Several reverted landings can name the same recycled lane. Only
 				// the item whose handle remains there can reserve that checkout.
 				id, err := ReadSessionID(e.WorkerSession.LaneDir)
@@ -530,7 +530,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			if row.State != p.rules().Blocked {
 				continue
 			}
-			if origin := designContinuationWork(conflicts[row.ItemID], designHistory[conflicts[row.ItemID].DesignRunID]); origin != nil && !released[origin.Decision.LaneID] {
+			if origin := designContinuationWork(conflicts[row.ItemID], designHistory[conflicts[row.ItemID].DesignRunID]); origin != nil && !isExpressLane(origin.Decision.LaneID) && !released[origin.Decision.LaneID] {
 				p.workerLanes[origin.Decision.LaneID] = row.ItemID
 			}
 		}
@@ -665,7 +665,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			routed := item
 			resumeNode := 0
 			retainedGraph := false
-			if e := p.returnedEnding(item.ItemID); e != nil && e.WorkerSession != nil && e.WorkerSession.Workflow != nil && policy != nil && p.retainedLaneFreeFor(e.WorkerSession.LaneID, item.ItemID) {
+			if e := p.returnedEnding(item.ItemID); e != nil && e.WorkerSession != nil && e.WorkerSession.Workflow != nil && policy != nil && (item.Express || !isExpressLane(e.WorkerSession.LaneID)) && p.retainedLaneFreeFor(e.WorkerSession.LaneID, item.ItemID) {
 				s := e.WorkerSession
 				if s.NodeIndex >= 0 && s.NodeIndex < len(s.Workflow.Stages) {
 					stage := s.Workflow.Stages[s.NodeIndex]
@@ -1042,7 +1042,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.Action, decision.Reason = ActionHold, ReasonNoLane
 	default:
 		lane, ok := p.freeLane(item.Express)
-		if returned != nil && returned.WorkerSession != nil && p.retainedLaneFreeFor(returned.WorkerSession.LaneID, item.ItemID) {
+		if returned != nil && returned.WorkerSession != nil && (item.Express || !isExpressLane(returned.WorkerSession.LaneID)) && p.retainedLaneFreeFor(returned.WorkerSession.LaneID, item.ItemID) {
 			lane = returned.WorkerSession.LaneID
 			ok = true
 		}
@@ -1538,16 +1538,20 @@ func (p *planner) retainedLaneFreeFor(id, itemID string) bool {
 	return p.retainedLaneFree(id) && (owner == "" || owner == itemID)
 }
 
+func isExpressLane(id string) bool {
+	return strings.HasPrefix(id, "express-")
+}
+
 func (p *planner) freeLane(express ...bool) (string, bool) {
 	if len(express) > 0 && express[0] {
 		for _, lane := range *p.tick.AvailableLanes {
-			if strings.HasPrefix(lane, "express-") && !p.assigned[lane] && !p.held[lane] && p.workerLanes[lane] == "" {
+			if isExpressLane(lane) && !p.assigned[lane] && !p.held[lane] && p.workerLanes[lane] == "" {
 				return lane, true
 			}
 		}
 	}
 	for _, lane := range *p.tick.AvailableLanes {
-		if strings.HasPrefix(lane, "desk-") || strings.HasPrefix(lane, "express-") {
+		if strings.HasPrefix(lane, "desk-") || isExpressLane(lane) {
 			continue
 		}
 		if p.assigned[lane] || p.workerLanes[lane] != "" {

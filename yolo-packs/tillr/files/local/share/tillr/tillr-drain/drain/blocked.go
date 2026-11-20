@@ -88,7 +88,10 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 		lane, ok := "", false
 		if origin := designContinuationWork(c, p.designHistory[c.DesignRunID]); origin != nil {
 			lane = origin.Decision.LaneID
-			ok = p.retainedLaneFreeFor(lane, row.ItemID)
+			ok = (row.Express || !isExpressLane(lane)) && p.retainedLaneFreeFor(lane, row.ItemID)
+			if !ok && isExpressLane(lane) {
+				lane, ok = p.freeLane(row.Express)
+			}
 		} else {
 			lane, ok = p.freeLane(row.Express)
 		}
