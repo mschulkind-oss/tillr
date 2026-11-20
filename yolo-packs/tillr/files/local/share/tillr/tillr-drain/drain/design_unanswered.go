@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/event"
@@ -242,13 +241,6 @@ func (l *Loop) settleUnansweredDesignRuns(ctx context.Context) error {
 					c.Text += "\n\nDesign run " + f.runID + "'s commit " + shortSHA(f.head) + " is pinned at refs/tillr/runs/" + f.runID + "."
 				}
 				l.routeDesignRepeat(&c, &mark, f.repeatOf)
-				landed, err := obstacles.HasLanded(tx.Reader(), c.ItemID)
-				if err != nil {
-					return readFailure(err)
-				}
-				if landed {
-					c.Text = obstacles.StripCloseRemedy(c.Text, c.ItemID)
-				}
 			} else {
 				c.Text += "\n\n" + designReraiseText(f)
 				c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
