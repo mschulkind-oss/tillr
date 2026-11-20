@@ -131,15 +131,25 @@ def roll(root, live, no_request, build_pi=False):
         time.sleep(0.05)
 
 
+def roll_pi_extensions(root):
+    builder = root / 'tools/tillr-run/backends/pi/build-agent-dir'
+    run(str(builder), cwd=root)
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description='Test and install the committed tillr tools.')
     parser.add_argument('--no-request', action='store_true',
                         help='install without requesting restarts; the drain will request them')
     parser.add_argument('--pi', action='store_true',
                         help='build the keyed pi fork binary and update current.json')
+    parser.add_argument('--pi-extensions', action='store_true',
+                        help='rebuild the drain pi extensions agent directory without restarting drain/view')
     args = parser.parse_args()
     try:
         root = Path(git('rev-parse', '--show-toplevel'))
+        if args.pi_extensions:
+            return roll_pi_extensions(root)
         live = Path(os.environ['YOLO_DURABLE_DIR']).resolve() / 'bin'
         return roll(root, live, args.no_request, build_pi=args.pi)
     except (OSError, RuntimeError, KeyError, sqlite3.Error, subprocess.CalledProcessError) as exc:

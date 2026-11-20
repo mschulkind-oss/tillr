@@ -141,6 +141,8 @@ BOARD_DRAIN_RUN=${TILLR_RUN_ID:-tillr-lane}
 BOARD_DRAIN_SESSION=${session:-${TILLR_RUN_ID:-tillr-lane}}
 export BOARD_DRAIN_BRIEF BOARD_DRAIN_RUN BOARD_DRAIN_SESSION
 
+. "$SELF_DIR/pi-agent-dir.sh"
+
 # Isolate persisted child metadata by tillr run, not by the interactive parent's
 # runtime root. Exec consumes Pi's status/history plus sessionFile tool results.
 if [ -n "${TILLR_CHILD_SESSIONS_ROOT:-}" ] && [ -n "${TILLR_CHILD_SESSIONS_MARKER:-}" ]; then
@@ -254,6 +256,91 @@ PY
     fi
 else
     unset TILLR_GOAL_BASE
+    if [ "${PI_AGENT_DIR_BUILT:-0}" -eq 1 ]; then
+        agent_dir=${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}
+        set -- "$@" --no-extensions
+        for extension in "$agent_dir"/extensions/*.ts "$agent_dir"/extensions/*.js; do
+            [ -f "$extension" ] && set -- "$@" -e "$extension"
+        done
+        if command -v python3 >/dev/null 2>&1; then
+            _pi_bin=${PI_HARNESS_BIN:-$(command -v pi 2>/dev/null || true)}
+            _old_ifs=$IFS
+            IFS='
+'
+            set -f
+            for _pkg_ext in $(python3 - "$agent_dir" "$_pi_bin" <<'PY'
+import json, os, re, sys
+from pathlib import Path
+
+agent_dir = Path(sys.argv[1])
+pi_bin = sys.argv[2]
+
+settings_path = agent_dir / "settings.json"
+if settings_path.is_file():
+    try:
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        for entry in data.get("packages", []):
+            if not isinstance(entry, str):
+                continue
+            if entry.startswith("~/.pi/agent/yolo-patched/"):
+                pkg = entry[len("~/.pi/agent/yolo-patched/"):]
+                target = agent_dir / "yolo-patched" / pkg
+                if target.exists():
+                    print(str(target))
+            elif entry.startswith("npm:"):
+                rest = entry[len("npm:"):]
+                if rest.startswith("@") and "/" in rest:
+                    scope, name_ver = rest.split("/", 1)
+                    pkg = scope + "/" + name_ver.split("@", 1)[0]
+                else:
+                    pkg = rest.split("@", 1)[0]
+                target = agent_dir / "npm" / "node_modules" / pkg
+                if target.exists():
+                    print(str(target))
+            elif os.path.exists(entry):
+                print(entry)
+    except Exception:
+        pass
+
+dist_candidates = []
+if pi_bin:
+    p = Path(pi_bin).resolve()
+    dist_candidates.extend([
+        p.parent / "extensions",
+        p.parent.parent / "extensions",
+        p.parent / "node_modules/@earendil-works/pi-coding-agent/dist/extensions",
+        p.parent.parent / "lib/node_modules/@earendil-works/pi-coding-agent/dist/extensions",
+        p.parent.parent / "node_modules/@earendil-works/pi-coding-agent/dist/extensions",
+    ])
+    try:
+        if p.is_file() and p.stat().st_size < 65536:
+            text = p.read_text(encoding="utf-8", errors="ignore")
+            for m in re.findall(r'(/[^"\'\s]+/node_modules(?:/\.bin/pi|/@earendil-works/pi-coding-agent))', text):
+                mp = Path(m)
+                if mp.name == "pi":
+                    dist_candidates.append(mp.parent.parent / "@earendil-works/pi-coding-agent/dist/extensions")
+                else:
+                    dist_candidates.append(mp / "dist/extensions")
+    except Exception:
+        pass
+dist_candidates.append(Path.home() / ".local/share/pi-fork/node_modules/@earendil-works/pi-coding-agent/dist/extensions")
+
+for cand in dist_candidates:
+    if cand.is_dir():
+        for name in ("llama", "codemode", "tool-search", "mcp"):
+            idx = cand / name / "index.js"
+            if idx.is_file():
+                print(str(idx))
+        break
+PY
+            ); do
+                [ -n "$_pkg_ext" ] && set -- "$@" -e "$_pkg_ext"
+            done
+            set +f
+            IFS=$_old_ifs
+            unset _pi_bin _old_ifs _pkg_ext
+        fi
+    fi
 fi
 
 # Only runner-managed launches have a pause file. Keep pi's PID private to the

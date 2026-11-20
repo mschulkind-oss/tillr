@@ -494,6 +494,7 @@ type Loop struct {
 	// process: a conflict's run base and dispatch record never change, so one read answers.
 	staleBaseChecked            map[string]bool
 	gatePolicy                  GatePolicy
+	extRollAction               landingAction
 	lastHeavyStatus             string // pass-owned status; cap zero still reports distance from green
 	restartMu                   sync.Mutex
 	restartReplaced             bool

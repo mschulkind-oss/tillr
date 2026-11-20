@@ -76,6 +76,7 @@ var generalHolds = map[string]string{
 	ReasonWorkflowInvalid:     "", ReasonNodeFailed: "", ReasonNodeAnswerUnread: "", ReasonNodeOutputMissing: "",
 	ReasonJudgeGrantAbsent: "", ReasonJudgeUnreadable: "", ReasonEvalFailed: "",
 	ReasonJudgeBlocked: "", ReasonJudgeDefective: "",
+	ReasonPiExtensionsBuildFailed: "",
 }
 
 func hasPrerequisite(d definition.Definition, name string) bool {

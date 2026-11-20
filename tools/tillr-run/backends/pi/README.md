@@ -11,6 +11,8 @@ sections 7 and 9.
 | :--- | :--- |
 | `run-pi` | The adapter. A `run.request`'s `Command[0]` names it. |
 | [`pi-harness.sh`](./pi-harness.sh) | Resolves a verified rebuilt `pi` privately, wires session env, and records the chosen binary. |
+| [`pi-agent-dir.sh`](./pi-agent-dir.sh) | Resolves the content-keyed trunk agent directory for drain workers and writes the extension-set record. |
+| [`build-agent-dir`](./build-agent-dir) | Builds and verifies a content-keyed Pi agent directory from trunk extensions and patch branches/series. |
 | `extract-report` | The dialect: Pi's event stream in, `report.md` out. |
 | [`compact`](./compact) | Compact an existing session by id, without a user prompt. |
 | [`keep-going.ts`](./keep-going.ts) | The pi extension that answers an ending that misses the goal, in the same session. |
@@ -101,6 +103,65 @@ adapter keeps passing its argument verbatim: the report's `effort:` is the level
 for, the stream's `thinkingLevel` is the level run, and on this family the two differ.
 An eval that compares routes by effort is comparing what was asked; the level a route
 actually ran at is only in the stream.
+
+## Trunk extension loading (drain workers only)
+
+Drain `pi` workers build and load a trunk agent directory inside the jail without
+`yolo host apply --assert` or a jail relaunch. Foreground sessions keep the deployed
+`~/.pi/agent` copies.
+
+### Content-keyed build (`build-agent-dir`)
+
+[`build-agent-dir`](./build-agent-dir) constructs a content-keyed agent directory under
+`TILLR_PI_AGENT_DIRS_DIR` (falling back to the repository's durable agent-dirs root)
+from the repository trunk (`refs/heads/main`, or `HEAD`):
+
+- **Key inputs.** A 12-character SHA-256 key is computed from
+  `yolo-packs/matt/files/extensions`, `yolo-packs/matt/pack.json` `yolo-patched`
+  declarations, `bin/pi-forks.list`, resolved `patch/<name>` commit SHAs or series
+  trees, and deployed non-matt extension entries. An unchanged key reuses the existing
+  verified directory.
+- **Deployed symlinks.** `sessions`, `auth.json`, `settings.json`, `models.json`, and
+  other non-extension/non-`yolo-patched` entries — plus non-matt entries under
+  `extensions/` — are symlinked to the deployed agent directory
+  (`TILLR_DEPLOYED_PI_AGENT_DIR` or `~/.pi/agent`) so sessions remain resumable and
+  credentials, settings, and models stay shared.
+- **Trunk extensions and patched packages.** `yolo-packs/matt/files/extensions` is copied
+  from the trunk. Each patched extension package declared in `yolo-packs/matt/pack.json`
+  and enabled in deployed settings/packages is built from its `patch/<name>` branch or
+  `yolo-packs/matt/patches/<name>` series in an isolated candidate directory
+  (`.candidates/<name>`), cached in `.pkg-cache/`, and verified with
+  `DefaultResourceLoader` before writing `.verified`, `current.json`, and `status.json`.
+
+### Adapter resolution, attribution, and failure handling
+
+`run-pi` sources [`pi-agent-dir.sh`](./pi-agent-dir.sh) after resolving the repository
+root. When `TILLR_PI_AGENT_DIRS_DIR` is non-empty (or defaulted) in a `matt`-pack
+repository, it exports `PI_CODING_AGENT_DIR` pointing at the built directory; setting
+`TILLR_PI_AGENT_DIRS_DIR` to an empty string opts out to the deployed directory.
+
+[`pi-agent-dir.sh`](./pi-agent-dir.sh) writes the selected extension set (agent directory path and key, or
+held/deployed status) to `TILLR_EXTENSION_SET_RECORD_FILE`, and `tillr-run exec` persists
+that value onto `runs.extension_set` and `run.Record.ExtensionSet`. Both
+`TILLR_PI_AGENT_DIRS_DIR` and `TILLR_EXTENSION_SET_RECORD_FILE` are unset before `pi`
+is launched.
+
+If a build fails (or `status.json` already records `state: "held"` for the target key),
+`build-agent-dir` writes `state: "held"` with condition `pi-extensions-build-failed` and
+mover `land a fix to yolo-packs/matt or patch/<fork> on trunk, or rerun tools/tillr-run/backends/pi/build-agent-dir`
+to `status.json`. [`pi-agent-dir.sh`](./pi-agent-dir.sh) preserves and selects the previous verified working
+set from `current.json` (falling back to the deployed directory if none exists), records
+the held condition in `TILLR_EXTENSION_SET_RECORD_FILE`, and reports the condition and
+mover on stderr.
+
+### Post-landing roll
+
+When a landing touches `yolo-packs/matt/files/extensions/`, `yolo-packs/matt/patches/`,
+`yolo-packs/matt/pack.json`, `bin/pi-forks.list`, or an extension `patch/<name>` branch
+(other than `patch/pi`), the drain's post-landing roll runs `tillr-roll --pi-extensions`,
+which invokes `build-agent-dir` to rebuild the trunk agent directory. If the roll fails,
+the drain records `pi-extensions-build-failed` and its mover on
+`drain.post-landing-action` while keeping the previous working set active.
 
 ## The recording seam
 

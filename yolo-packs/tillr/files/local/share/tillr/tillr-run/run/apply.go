@@ -147,6 +147,9 @@ type Record struct {
 	RepeatingCall *RepeatingCall `json:"repeating_call,omitempty"`
 	// LoopRecovery summarizes in-run loop recoveries pi performed during the session.
 	LoopRecovery *LoopRecovery `json:"loop_recovery,omitempty"`
+	// ExtensionSet records which Pi extension set (agent dir and content key or held
+	// status) the run's adapter selected, when applicable.
+	ExtensionSet string `json:"extension_set,omitempty"`
 }
 
 // Usage is one run's spend, as its backend reported it. Each field is a pointer because
@@ -242,18 +245,19 @@ func Apply(ctx context.Context, tx *store.Tx, env record.Envelope) (record.Envel
 		return record.Envelope{}, Internalf("writing the lane: %v", err)
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO runs (run_id, item_id, lane_id, backend, route, harness, state, exit_code, started_at, finished_at, artifact_refs, usage_tokens, usage_cost_usd, end_cause)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO runs (run_id, item_id, lane_id, backend, route, harness, state, exit_code, started_at, finished_at, artifact_refs, usage_tokens, usage_cost_usd, end_cause, extension_set)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(run_id) DO UPDATE SET
 		   item_id = excluded.item_id, lane_id = excluded.lane_id, backend = excluded.backend,
 		   route = excluded.route, harness = excluded.harness, state = excluded.state, exit_code = excluded.exit_code,
 		   started_at = excluded.started_at, finished_at = excluded.finished_at,
 		   artifact_refs = excluded.artifact_refs,
 		   usage_tokens = excluded.usage_tokens, usage_cost_usd = excluded.usage_cost_usd,
-		   end_cause = excluded.end_cause`,
+		   end_cause = excluded.end_cause,
+		   extension_set = excluded.extension_set`,
 		payload.RunID, nullableText(payload.ItemID), payload.LaneID, payload.Backend, nullableText(payload.Route), nullableText(payload.Harness), payload.State,
 		exitCodeArg(payload.ExitCode), started.UnixMilli(), finished.UnixMilli(), string(refs),
-		usageTokensArg(payload.Usage), usageCostArg(payload.Usage), nullableText(payload.EndCause),
+		usageTokensArg(payload.Usage), usageCostArg(payload.Usage), nullableText(payload.EndCause), nullableText(payload.ExtensionSet),
 	); err != nil {
 		return record.Envelope{}, Internalf("writing the run: %v", err)
 	}

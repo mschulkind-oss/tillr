@@ -1,0 +1,738 @@
+#!/usr/bin/env python3
+"""Build a content-keyed Pi agent directory from repository trunk."""
+
+import argparse
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+
+
+MOVER = "land a fix to yolo-packs/matt or patch/<fork> on trunk, or rerun tools/tillr-run/backends/pi/build-agent-dir"
+CONDITION = "pi-extensions-build-failed"
+
+
+def strip_jsonc(text):
+    out = []
+    i = 0
+    n = len(text)
+    in_str = False
+    escape = False
+    in_line_comment = False
+    in_block_comment = False
+    while i < n:
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if in_line_comment:
+            if ch == "\n":
+                in_line_comment = False
+                out.append(ch)
+            i += 1
+            continue
+        if in_block_comment:
+            if ch == "*" and nxt == "/":
+                in_block_comment = False
+                i += 2
+            else:
+                if ch == "\n":
+                    out.append(ch)
+                i += 1
+            continue
+        if in_str:
+            out.append(ch)
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            i += 1
+            continue
+        if ch == '"':
+            in_str = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and nxt == "/":
+            in_line_comment = True
+            i += 2
+            continue
+        if ch == "/" and nxt == "*":
+            in_block_comment = True
+            i += 2
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def parse_jsonc(text):
+    return json.loads(strip_jsonc(text))
+
+
+def run_git(repo, *args, check=True):
+    res = subprocess.run(
+        ["git", "-C", str(repo), *args],
+        text=True,
+        capture_output=True,
+    )
+    if check and res.returncode != 0:
+        raise RuntimeError(f"git {' '.join(args)} failed: {res.stderr.strip() or res.stdout.strip()}")
+    return res
+
+
+def resolve_repo_root():
+    res = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        text=True,
+        capture_output=True,
+    )
+    if res.returncode != 0:
+        raise RuntimeError("not inside a git repository")
+    common = Path(res.stdout.strip())
+    return common.parent
+
+
+def resolve_trunk_ref(repo_root):
+    res = run_git(repo_root, "rev-parse", "--verify", "--quiet", "refs/heads/main", check=False)
+    if res.returncode == 0 and res.stdout.strip():
+        return "refs/heads/main"
+    res = run_git(repo_root, "rev-parse", "--verify", "--quiet", "HEAD", check=False)
+    if res.returncode == 0 and res.stdout.strip():
+        return "HEAD"
+    raise RuntimeError("cannot resolve refs/heads/main or HEAD")
+
+
+def git_show_text(repo_root, ref, rel_path):
+    res = run_git(repo_root, "show", f"{ref}:{rel_path}", check=False)
+    if res.returncode != 0:
+        return None
+    return res.stdout
+
+
+def git_obj_hash(repo_root, ref, rel_path):
+    res = run_git(repo_root, "rev-parse", "--verify", "--quiet", f"{ref}:{rel_path}", check=False)
+    if res.returncode != 0:
+        return ""
+    return res.stdout.strip()
+
+
+def git_ls_tree_names(repo_root, ref, rel_path):
+    res = run_git(repo_root, "ls-tree", "--name-only", f"{ref}:{rel_path}", check=False)
+    if res.returncode != 0:
+        return []
+    return [line for line in res.stdout.splitlines() if line]
+
+
+def git_ls_pack_jsons(repo_root, ref):
+    res = run_git(repo_root, "ls-tree", "-r", "--name-only", ref, "--", "yolo-packs", check=False)
+    if res.returncode != 0:
+        return []
+    out = []
+    for line in res.stdout.splitlines():
+        parts = line.split("/")
+        if len(parts) == 3 and parts[0] == "yolo-packs" and parts[2] == "pack.json":
+            out.append(line)
+    return sorted(out)
+
+
+def resolve_agent_dirs_root(repo_root):
+    override = os.environ.get("TILLR_PI_AGENT_DIRS_DIR", "").strip()
+    if override:
+        return Path(override).resolve()
+    durable = os.environ.get("YOLO_DURABLE_DIR", "").strip()
+    if durable:
+        return Path(durable).resolve() / "pi-agent-dirs"
+    return repo_root / ".yolo" / "durable" / "pi-agent-dirs"
+
+
+def resolve_deployed_dir():
+    override = os.environ.get("TILLR_DEPLOYED_PI_AGENT_DIR", "").strip()
+    if override:
+        return Path(override).resolve()
+    return Path.home() / ".pi" / "agent"
+
+
+def atomic_write_json(path, data):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.parent / f".{path.name}.tmp.{os.getpid()}"
+    tmp.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def copy_tree_hardlink_or_copy(src, dst, exclude=()):
+    dst.mkdir(parents=True, exist_ok=True)
+    for entry in os.scandir(src):
+        if entry.name in exclude:
+            continue
+        target = dst / entry.name
+        if entry.is_dir(follow_symlinks=False):
+            copy_tree_hardlink_or_copy(Path(entry.path), target, exclude=())
+        elif entry.is_symlink():
+            os.symlink(os.readlink(entry.path), target)
+        else:
+            res = subprocess.run(["cp", "-al", entry.path, str(target)], capture_output=True)
+            if res.returncode != 0:
+                shutil.copy2(entry.path, target)
+
+
+def non_matt_pack_extension_names(repo_root, trunk_ref):
+    names = set()
+    for pack_rel in git_ls_pack_jsons(repo_root, trunk_ref):
+        pack_name = pack_rel.split("/")[1]
+        if pack_name == "matt":
+            continue
+        raw = git_show_text(repo_root, trunk_ref, pack_rel)
+        if not raw:
+            continue
+        try:
+            doc = parse_jsonc(raw)
+        except Exception:
+            continue
+        for c in doc.get("contributes", []):
+            if c.get("kind") != "files":
+                continue
+            into = c.get("into", "")
+            prefix = ".pi/agent/extensions/"
+            if into.startswith(prefix):
+                rel = into[len(prefix):].strip("/")
+                if rel:
+                    names.add(rel.split("/")[0])
+    return names
+
+
+def collect_deployed_non_matt(deployed_dir, matt_ext_names, non_matt_pack_names):
+    ext_dir = deployed_dir / "extensions"
+    entries = []
+    if not ext_dir.is_dir():
+        return entries
+    for entry in sorted(os.scandir(ext_dir), key=lambda e: e.name):
+        if entry.name in matt_ext_names:
+            continue
+        is_dir = entry.is_dir(follow_symlinks=True)
+        if is_dir or entry.name.startswith("yolo-") or entry.name in non_matt_pack_names:
+            link_target = os.readlink(entry.path) if entry.is_symlink() else ""
+            entries.append({
+                "name": entry.name,
+                "kind": "dir" if is_dir else "file",
+                "link_target": link_target,
+                "path": entry.path,
+            })
+    return entries
+
+
+def read_deployed_settings_packages(deployed_dir):
+    settings_path = deployed_dir / "settings.json"
+    if not settings_path.is_file():
+        return []
+    try:
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+        pkgs = data.get("packages", [])
+        return [p for p in pkgs if isinstance(p, str)]
+    except Exception:
+        return []
+
+
+def parse_branch_from_locator(locator, default_name):
+    if "?ref=" in locator:
+        return locator.split("?ref=", 1)[1].split("&", 1)[0]
+    return f"patch/{default_name}"
+
+
+def resolve_patched_packages(repo_root, trunk_ref, matt_pack, deployed_dir):
+    settings_packages = read_deployed_settings_packages(deployed_dir)
+    patched = []
+    all_decls = []
+    prefix = ".pi/agent/yolo-patched/"
+    for c in matt_pack.get("contributes", []):
+        if c.get("kind") != "files":
+            continue
+        into = c.get("into", "")
+        if not into.startswith(prefix):
+            continue
+        name = into[len(prefix):].strip("/")
+        if not name:
+            continue
+        all_decls.append(c)
+        in_deployed = (deployed_dir / "yolo-patched" / name).is_dir()
+        in_settings = any(
+            p == name or p.endswith(f"/yolo-patched/{name}")
+            for p in settings_packages
+        )
+        if not in_deployed and not in_settings:
+            continue
+
+        manifest_entry_hash = hashlib.sha256(
+            json.dumps(c, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+        if "patch_branch" in c:
+            branch = parse_branch_from_locator(c["patch_branch"], name)
+            source_repo = None
+            series_key = None
+            for candidate_repo in (repo_root, repo_root / ".forks" / name):
+                if not candidate_repo.exists():
+                    continue
+                res = run_git(
+                    candidate_repo,
+                    "rev-parse",
+                    "--verify",
+                    "--quiet",
+                    f"refs/heads/{branch}^{{commit}}",
+                    check=False,
+                )
+                if res.returncode == 0 and res.stdout.strip():
+                    source_repo = candidate_repo
+                    series_key = res.stdout.strip()
+                    break
+            if not source_repo:
+                raise RuntimeError(f"cannot resolve patch branch refs/heads/{branch} for {name}")
+            patched.append({
+                "name": name,
+                "contribution": c,
+                "source_kind": "branch",
+                "source_repo": source_repo,
+                "branch": branch,
+                "package_series_key": series_key,
+                "manifest_entry_hash": manifest_entry_hash,
+            })
+        elif "patches" in c:
+            patches_rel = c["patches"].strip("/")
+            if not patches_rel.startswith("yolo-packs/"):
+                patches_rel = f"yolo-packs/matt/{patches_rel}"
+            series_key = git_obj_hash(repo_root, trunk_ref, patches_rel)
+            if not series_key:
+                raise RuntimeError(f"cannot resolve patch series {patches_rel} for {name}")
+            patched.append({
+                "name": name,
+                "contribution": c,
+                "source_kind": "series",
+                "series_rel": patches_rel,
+                "package_series_key": series_key,
+                "manifest_entry_hash": manifest_entry_hash,
+            })
+        else:
+            raise RuntimeError(f"yolo-patched/{name} has neither patch_branch nor patches")
+    return patched, all_decls
+
+
+def compute_key(repo_root, trunk_ref, matt_ext_tree, all_decls, pi_forks_list_hash, patched, deployed_non_matt):
+    payload = {
+        "matt_extensions_tree": matt_ext_tree,
+        "yolo_patched_decls": all_decls,
+        "pi_forks_list": pi_forks_list_hash,
+        "packages": [
+            {
+                "name": p["name"],
+                "package_series_key": p["package_series_key"],
+                "manifest_entry_hash": p["manifest_entry_hash"],
+            }
+            for p in patched
+        ],
+        "deployed_non_matt": [
+            {
+                "name": e["name"],
+                "kind": e["kind"],
+                "link_target": e["link_target"],
+            }
+            for e in deployed_non_matt
+        ],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()[:12]
+
+
+def rewrite_build_cmd(cmd, cache_root):
+    pnpm_xdg = str(cache_root / "pnpm-xdg")
+    cmd = cmd.replace("/tmp/pnpm-xdg", pnpm_xdg)
+    py_del = (
+        f"{sys.executable} -c "
+        "\"import pathlib; [p.unlink() for p in pathlib.Path('packages').rglob('*.test.ts') if p.is_file()]\""
+    )
+    cmd = re.sub(
+        r"find\s+packages\s+-name\s+['\"]?\*\.test\.ts['\"]?\s+-type\s+f\s+-delete",
+        py_del,
+        cmd,
+    )
+    return cmd
+
+
+def materialize_and_build_package(pkg, repo_root, trunk_ref, agent_dirs_root):
+    name = pkg["name"]
+    pkg_key = hashlib.sha256(
+        json.dumps(
+            {
+                "name": name,
+                "package_series_key": pkg["package_series_key"],
+                "manifest_entry_hash": pkg["manifest_entry_hash"],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+
+    pkg_cache_root = agent_dirs_root / ".pkg-cache"
+    pkg_cache_dir = pkg_cache_root / f"{name}-{pkg_key}"
+    produces = pkg["contribution"].get("produces", [])
+
+    if (pkg_cache_dir / ".built").is_file() and all((pkg_cache_dir / p).exists() for p in produces):
+        return pkg_cache_dir
+
+    cand_dir = agent_dirs_root / ".candidates" / name
+    cand_dir.parent.mkdir(parents=True, exist_ok=True)
+    cache_root = agent_dirs_root / ".cache"
+    for sub in ("npm", "pnpm-xdg/data", "pnpm-xdg/state", "pnpm-xdg/cache", "pnpm-xdg/npm", "pnpm-xdg/store", "xdg-cache", "xdg-data", "xdg-state", "tmp"):
+        (cache_root / sub).mkdir(parents=True, exist_ok=True)
+
+    if pkg["source_kind"] == "branch":
+        src_repo = pkg["source_repo"]
+        branch = pkg["branch"]
+        if not (cand_dir / ".git").exists():
+            if cand_dir.exists():
+                shutil.rmtree(cand_dir)
+            run_git(cand_dir.parent, "clone", "-q", "--shared", "--no-checkout", str(src_repo), str(cand_dir))
+        run_git(cand_dir, "fetch", "-q", str(src_repo), f"+refs/heads/{branch}:refs/heads/{branch}")
+        run_git(cand_dir, "checkout", "-q", "-f", "--detach", check=False)
+        run_git(cand_dir, "checkout", "-q", "-f", "-B", "main", f"refs/heads/{branch}")
+        run_git(cand_dir, "clean", "-qfd")
+    else:
+        forks_cache = repo_root / ".forks" / name
+        if not forks_cache.exists():
+            raise RuntimeError(f"missing shared fork checkout at {forks_cache} for {name}")
+        patch_tmp = cache_root / f"patches-{name}-{os.getpid()}"
+        if patch_tmp.exists():
+            shutil.rmtree(patch_tmp)
+        patch_tmp.mkdir(parents=True)
+        try:
+            archive = subprocess.run(
+                ["git", "-C", str(repo_root), "archive", "--format=tar", f"{trunk_ref}:{pkg['series_rel']}"],
+                capture_output=True,
+                check=True,
+            )
+            subprocess.run(
+                ["tar", "-xf", "-", "-C", str(patch_tmp)],
+                input=archive.stdout,
+                check=True,
+            )
+            patch_files = sorted(p for p in patch_tmp.iterdir() if p.name.endswith(".patch"))
+            if not patch_files:
+                raise RuntimeError(f"no .patch files in {pkg['series_rel']}")
+            first_text = patch_files[0].read_text(encoding="utf-8", errors="replace")
+            m = re.search(r"^base-commit:\s*([0-9a-fA-F]{40})\s*$", first_text, re.MULTILINE)
+            if not m:
+                raise RuntimeError(f"missing base-commit in {patch_files[0].name}")
+            base_commit = m.group(1)
+            if not (cand_dir / ".git").exists():
+                if cand_dir.exists():
+                    shutil.rmtree(cand_dir)
+                run_git(cand_dir.parent, "clone", "-q", "--shared", "--no-checkout", str(forks_cache), str(cand_dir))
+            run_git(cand_dir, "fetch", "-q", str(forks_cache), check=False)
+            run_git(cand_dir, "checkout", "-q", "-f", "--detach", base_commit)
+            run_git(cand_dir, "clean", "-qfd")
+            run_git(cand_dir, "am", "-q", *[str(p) for p in patch_files])
+            run_git(cand_dir, "checkout", "-q", "-B", "main")
+        finally:
+            shutil.rmtree(patch_tmp, ignore_errors=True)
+
+    build_cmd = pkg["contribution"].get("build", "").strip()
+    if build_cmd:
+        rewritten = rewrite_build_cmd(build_cmd, cache_root)
+        build_env = os.environ.copy()
+        build_env.update({
+            "npm_config_cache": str(cache_root / "npm"),
+            "NPM_CONFIG_CACHE": str(cache_root / "npm"),
+            "XDG_CACHE_HOME": str(cache_root / "xdg-cache"),
+            "XDG_DATA_HOME": str(cache_root / "xdg-data"),
+            "XDG_STATE_HOME": str(cache_root / "xdg-state"),
+            "TMPDIR": str(cache_root / "tmp"),
+        })
+        res = subprocess.run(
+            ["/bin/sh", "-c", rewritten],
+            cwd=cand_dir,
+            env=build_env,
+            text=True,
+            capture_output=True,
+        )
+        if res.returncode != 0:
+            detail = (res.stderr or res.stdout or f"exit {res.returncode}").strip()
+            raise RuntimeError(f"build failed for {name}: {detail}")
+
+    for rel in produces:
+        if not (cand_dir / rel).exists():
+            raise RuntimeError(f"build for {name} did not produce {rel}")
+
+    pkg_cache_root.mkdir(parents=True, exist_ok=True)
+    pkg_stage = pkg_cache_root / f".staging-{name}-{pkg_key}-{os.getpid()}"
+    if pkg_stage.exists():
+        shutil.rmtree(pkg_stage)
+    try:
+        copy_tree_hardlink_or_copy(cand_dir, pkg_stage, exclude=(".git",))
+        (pkg_stage / ".built").write_text(pkg_key + "\n", encoding="utf-8")
+        if pkg_cache_dir.exists():
+            shutil.rmtree(pkg_cache_dir)
+        os.replace(pkg_stage, pkg_cache_dir)
+    except Exception:
+        shutil.rmtree(pkg_stage, ignore_errors=True)
+        raise
+    return pkg_cache_dir
+
+
+def find_pi_coding_agent_pkg():
+    candidates = []
+    which_pi = os.environ.get("PI_HARNESS_BIN", "").strip() or shutil.which("pi")
+    if which_pi:
+        p = Path(which_pi).resolve()
+        candidates.extend([
+            p.parent / "index.js",
+            p.parent.parent / "index.js",
+            p.parent / "node_modules/@earendil-works/pi-coding-agent/dist/index.js",
+            p.parent.parent / "lib/node_modules/@earendil-works/pi-coding-agent/dist/index.js",
+            p.parent.parent / "node_modules/@earendil-works/pi-coding-agent/dist/index.js",
+        ])
+        try:
+            if p.is_file() and p.stat().st_size < 65536:
+                text = p.read_text(encoding="utf-8", errors="ignore")
+                for m in re.findall(r'(/[^"\'\s]+/node_modules(?:/\.bin/pi|/@earendil-works/pi-coding-agent))', text):
+                    mp = Path(m)
+                    if mp.name == "pi":
+                        candidates.append(mp.parent.parent / "@earendil-works/pi-coding-agent/dist/index.js")
+                    else:
+                        candidates.append(mp / "dist/index.js")
+        except Exception:
+            pass
+    candidates.append(
+        Path.home() / ".local/share/pi-fork/node_modules/@earendil-works/pi-coding-agent/dist/index.js"
+    )
+    for c in candidates:
+        if c.is_file():
+            return c
+    return None
+
+
+def verify_extensions_load(stage_agent, agent_dirs_root):
+    node_bin = shutil.which("node")
+    pkg_index = find_pi_coding_agent_pkg()
+    if not node_bin or not pkg_index:
+        return
+    script = """
+import { pathToFileURL } from "node:url";
+import fs from "node:fs";
+import path from "node:path";
+
+const pkgIndex = process.argv[1];
+const agentDir = process.argv[2];
+const m = await import(pathToFileURL(pkgIndex).href);
+const paths = [];
+const extDir = path.join(agentDir, "extensions");
+if (fs.existsSync(extDir)) {
+  for (const e of fs.readdirSync(extDir, { withFileTypes: true })) {
+    const p = path.join(extDir, e.name);
+    if (e.name.endsWith(".ts") || e.name.endsWith(".js")) {
+      paths.push(p);
+    } else if (e.isDirectory() && (
+      fs.existsSync(path.join(p, "index.ts")) ||
+      fs.existsSync(path.join(p, "index.js")) ||
+      fs.existsSync(path.join(p, "package.json"))
+    )) {
+      paths.push(p);
+    }
+  }
+}
+const patchedDir = path.join(agentDir, "yolo-patched");
+if (fs.existsSync(patchedDir)) {
+  for (const e of fs.readdirSync(patchedDir, { withFileTypes: true })) {
+    if (e.isDirectory()) paths.push(path.join(patchedDir, e.name));
+  }
+}
+const loader = new m.DefaultResourceLoader({
+  cwd: agentDir,
+  agentDir,
+  noExtensions: true,
+  noSkills: true,
+  noPromptTemplates: true,
+  noThemes: true,
+  noContextFiles: true,
+  additionalExtensionPaths: paths,
+});
+await loader.reload();
+const res = loader.getExtensions();
+if (res.errors && res.errors.length > 0) {
+  console.error(JSON.stringify(res.errors));
+  process.exit(1);
+}
+process.exit(0);
+"""
+    env = os.environ.copy()
+    env["PI_INSPECTOR"] = "0"
+    if not env.get("NODE_COMPILE_CACHE"):
+        compile_cache = agent_dirs_root / ".cache" / "node-compile"
+        compile_cache.mkdir(parents=True, exist_ok=True)
+        env["NODE_COMPILE_CACHE"] = str(compile_cache)
+    res = subprocess.run(
+        [node_bin, "--input-type=module", "-e", script, str(pkg_index), str(stage_agent)],
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    if res.returncode != 0:
+        detail = (res.stderr or res.stdout or f"exit {res.returncode}").strip()
+        raise RuntimeError(f"DefaultResourceLoader verification failed: {detail}")
+
+
+def read_active_key(agent_dirs_root):
+    cur_path = agent_dirs_root / "current.json"
+    if not cur_path.is_file():
+        return ""
+    try:
+        return json.loads(cur_path.read_text(encoding="utf-8")).get("key", "")
+    except Exception:
+        return ""
+
+
+def write_ok_state(agent_dirs_root, key, key_dir):
+    agent_dir = key_dir / "agent"
+    atomic_write_json(
+        agent_dirs_root / "current.json",
+        {"key": key, "agent_dir": str(agent_dir), "dir": str(key_dir)},
+    )
+    atomic_write_json(
+        agent_dirs_root / "status.json",
+        {
+            "state": "ok",
+            "condition": "",
+            "active_key": key,
+            "target_key": key,
+            "mover": "",
+            "detail": "",
+        },
+    )
+
+
+def write_held_state(agent_dirs_root, target_key, detail):
+    active_key = read_active_key(agent_dirs_root)
+    atomic_write_json(
+        agent_dirs_root / "status.json",
+        {
+            "state": "held",
+            "condition": CONDITION,
+            "active_key": active_key,
+            "target_key": target_key,
+            "mover": MOVER,
+            "detail": detail,
+        },
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Build content-keyed Pi agent directory from trunk.")
+    parser.add_argument("--key", action="store_true", help="print only the 12-char content key")
+    args = parser.parse_args()
+
+    repo_root = resolve_repo_root()
+    trunk_ref = resolve_trunk_ref(repo_root)
+    agent_dirs_root = resolve_agent_dirs_root(repo_root)
+    deployed_dir = resolve_deployed_dir()
+
+    matt_raw = git_show_text(repo_root, trunk_ref, "yolo-packs/matt/pack.json")
+    if matt_raw is None:
+        raise RuntimeError("missing yolo-packs/matt/pack.json on trunk")
+    matt_pack = parse_jsonc(matt_raw)
+
+    matt_ext_tree = git_obj_hash(repo_root, trunk_ref, "yolo-packs/matt/files/extensions")
+    matt_ext_names = set(git_ls_tree_names(repo_root, trunk_ref, "yolo-packs/matt/files/extensions"))
+    non_matt_pack_names = non_matt_pack_extension_names(repo_root, trunk_ref)
+    deployed_non_matt = collect_deployed_non_matt(deployed_dir, matt_ext_names, non_matt_pack_names)
+    pi_forks_list_hash = git_obj_hash(repo_root, trunk_ref, "bin/pi-forks.list")
+
+    patched, all_decls = resolve_patched_packages(repo_root, trunk_ref, matt_pack, deployed_dir)
+    key = compute_key(
+        repo_root,
+        trunk_ref,
+        matt_ext_tree,
+        all_decls,
+        pi_forks_list_hash,
+        patched,
+        deployed_non_matt,
+    )
+
+    if args.key:
+        print(key)
+        return 0
+
+    agent_dirs_root.mkdir(parents=True, exist_ok=True)
+    lock_path = agent_dirs_root / ".build.lock"
+    with lock_path.open("w", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+
+        key_dir = agent_dirs_root / key
+        verified_file = key_dir / ".verified"
+        if verified_file.is_file() and verified_file.read_text(encoding="utf-8").strip() == key and (key_dir / "agent").is_dir():
+            write_ok_state(agent_dirs_root, key, key_dir)
+            print(str(key_dir / "agent"))
+            return 0
+
+        stage = agent_dirs_root / f".staging-{key}-{os.getpid()}"
+        if stage.exists():
+            shutil.rmtree(stage)
+
+        try:
+            stage_agent = stage / "agent"
+            stage_agent.mkdir(parents=True, exist_ok=True)
+
+            if deployed_dir.is_dir():
+                for entry in sorted(os.scandir(deployed_dir), key=lambda e: e.name):
+                    if entry.name in ("extensions", "yolo-patched"):
+                        continue
+                    os.symlink(entry.path, stage_agent / entry.name)
+
+            stage_ext = stage_agent / "extensions"
+            stage_ext.mkdir(parents=True, exist_ok=True)
+            for entry in deployed_non_matt:
+                os.symlink(entry["path"], stage_ext / entry["name"])
+
+            if matt_ext_tree:
+                archive = subprocess.run(
+                    ["git", "-C", str(repo_root), "archive", "--format=tar", f"{trunk_ref}:yolo-packs/matt/files/extensions"],
+                    capture_output=True,
+                    check=True,
+                )
+                subprocess.run(
+                    ["tar", "-xf", "-", "-C", str(stage_ext)],
+                    input=archive.stdout,
+                    check=True,
+                )
+
+            stage_patched = stage_agent / "yolo-patched"
+            stage_patched.mkdir(parents=True, exist_ok=True)
+            for pkg in patched:
+                pkg_cache_dir = materialize_and_build_package(pkg, repo_root, trunk_ref, agent_dirs_root)
+                copy_tree_hardlink_or_copy(
+                    pkg_cache_dir,
+                    stage_patched / pkg["name"],
+                    exclude=(".built",),
+                )
+
+            verify_extensions_load(stage_agent, agent_dirs_root)
+
+            (stage / ".verified").write_text(key + "\n", encoding="utf-8")
+            if key_dir.exists():
+                shutil.rmtree(key_dir)
+            os.replace(stage, key_dir)
+            write_ok_state(agent_dirs_root, key, key_dir)
+            print(str(key_dir / "agent"))
+            return 0
+        except Exception as exc:
+            shutil.rmtree(stage, ignore_errors=True)
+            detail = str(exc)
+            write_held_state(agent_dirs_root, key, detail)
+            print(f"{CONDITION}: {detail}\nmover: {MOVER}", file=sys.stderr)
+            return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

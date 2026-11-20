@@ -372,6 +372,23 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	if hasPiBuilds {
 		cmd.Env = append(cmd.Env, "TILLR_PI_BUILDS_DIR="+piBuildsDir)
 	}
+	agentDirsDir, hasAgentDirsDir := os.LookupEnv("TILLR_PI_AGENT_DIRS_DIR")
+	if !hasAgentDirsDir {
+		if callerDurable := os.Getenv("YOLO_DURABLE_DIR"); callerDurable != "" {
+			agentDirsDir = filepath.Join(callerDurable, "pi-agent-dirs")
+			hasAgentDirsDir = true
+		}
+	}
+	extSetPath := filepath.Join(durableDir, "extension-set")
+	if err := os.Remove(extSetPath); err != nil && !os.IsNotExist(err) {
+		logFile.Close()
+		return record.Envelope{}, Internalf("clearing prior extension-set record: %v", err)
+	}
+	cmd.Env = withoutEnv(cmd.Env, "TILLR_PI_AGENT_DIRS_DIR")
+	if hasAgentDirsDir {
+		cmd.Env = append(cmd.Env, "TILLR_PI_AGENT_DIRS_DIR="+agentDirsDir)
+	}
+	cmd.Env = append(withoutEnv(cmd.Env, "TILLR_EXTENSION_SET_RECORD_FILE"), "TILLR_EXTENSION_SET_RECORD_FILE="+extSetPath)
 	if req.NodeID != "" {
 		cmd.Env = append(cmd.Env, "TILLR_NODE_ID="+req.NodeID)
 	}
@@ -546,6 +563,9 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		if err := os.WriteFile(filepath.Join(artifactDir, "report.md"), body, 0o644); err != nil {
 			return record.Envelope{}, Internalf("writing the lane report: %v", err)
 		}
+	}
+	if rawExtSet, err := os.ReadFile(extSetPath); err == nil {
+		payload.ExtensionSet = strings.TrimSpace(string(rawExtSet))
 	}
 	stored, terminalErr := writeTerminal(writeCtx, s, payload, finishedAt, note)
 	if terminalErr != nil {

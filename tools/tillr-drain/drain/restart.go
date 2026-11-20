@@ -74,7 +74,7 @@ func (l *Loop) gateRestart(ctx context.Context, result *LoopResult) (bool, strin
 	}
 	// Exec would discard the pending follow-up actions, even if the current
 	// command survived as an inherited child. Keep processing passes meanwhile.
-	if l.rollAction.busy() || l.piRollAction.busy() || l.pushAction.busy() {
+	if l.rollAction.busy() || l.piRollAction.busy() || l.extRollAction.busy() || l.pushAction.busy() {
 		return false, "", nil
 	}
 	rs := l.restarter()
@@ -94,7 +94,7 @@ func (l *Loop) gateRestart(ctx context.Context, result *LoopResult) (bool, strin
 	defer l.restartMechanical.Unlock()
 	// A landing can finish while the replacement binary is being checked.
 	// Its action has already been queued when it releases the mechanical lock.
-	if l.rollAction.busy() || l.piRollAction.busy() || l.pushAction.busy() {
+	if l.rollAction.busy() || l.piRollAction.busy() || l.extRollAction.busy() || l.pushAction.busy() {
 		return false, "", nil
 	}
 	l.reportf("loop: restart %s: replacing build %s in place\n", request.ID, l.build)
