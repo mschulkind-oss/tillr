@@ -247,14 +247,11 @@ func (s *sessionConflictStager) Stage(ctx context.Context, spec drain.StageSpec)
 	return os.WriteFile(filepath.Join(runDir, drain.BaseSHAFile), []byte(spec.BaseSHA+"\n"), 0644)
 }
 
-func TestSquashConflictResumesOriginalWorkerOnItsBranch(t *testing.T) {
-	adapter := stub(t, "adapter", `if [ "$TILLR_SESSION_MODE" = resume ]; then
-  grep -q 'base.txt' "$TILLR_RESUME_PROMPT_FILE" || exit 71
-  test "$(cat base.txt)" = candidate || exit 72
-  echo fixed > base.txt
-else
-  echo candidate > base.txt
-fi
+// The worker's change here conflicts with the trunk move on the same line, so it cannot be
+// replayed onto the tip. The fix run is then staged fresh on the tip, never resumed on the
+// worker's old base: its commit is fenced and landed against the trunk it was made on.
+func TestSquashConflictRestagesOnTheTrunkTipWhenTheReplayConflicts(t *testing.T) {
+	adapter := stub(t, "adapter", `echo candidate > base.txt
 git add base.txt
 git -c user.name=stub -c user.email=stub@example.invalid commit -qm candidate
 printf 'RESULT: done\n'`)
@@ -268,8 +265,9 @@ printf 'RESULT: done\n'`)
 	if err != nil || result.Landed != 1 {
 		t.Fatalf("loop: %+v %v", result, err)
 	}
-	if len(stage.specs) != 2 || !stage.specs[1].Continue || stage.specs[1].SessionID != "11111111-1111-4111-8111-111111111111" {
-		t.Fatalf("fix did not retain session: %+v", stage.specs)
+	tip := strings.TrimSpace(git(t, f.root, "rev-parse", "main"))
+	if len(stage.specs) != 2 || stage.specs[1].Continue || stage.specs[1].BaseSHA != tip || stage.specs[1].BaseSHA == stage.specs[0].BaseSHA {
+		t.Fatalf("fix was not staged fresh on the trunk tip %s: %+v", tip, stage.specs)
 	}
 	var found bool
 	for _, e := range eventsOf(t, f.store) {
@@ -284,12 +282,12 @@ printf 'RESULT: done\n'`)
 		if err := json.Unmarshal(e.Payload, &payload); err != nil {
 			t.Fatal(err)
 		}
-		if payload.Decision.WorkerSessionReason == "resumed-worker" {
+		if payload.Decision.WorkerSessionReason == "trunk-conflict" {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatal("fix dispatch did not record resumed-worker")
+		t.Fatal("fix dispatch did not record trunk-conflict")
 	}
 }
 
