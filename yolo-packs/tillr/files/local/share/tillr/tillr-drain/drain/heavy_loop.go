@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -82,6 +84,11 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 					// runner's own words, with whatever output the judge recorded.
 					if check.FirstRedLanding == "" && strings.TrimSpace(check.Detail) != "" {
 						notes = append(notes, "No landing is named for "+check.CheckID+" ("+heavyBrief(check.Detail)+"); start from the tip and run the check there")
+					}
+					// The failed check's full output is on disk; the brief names the file and
+					// quotes its end, so the fixer does not rediscover an intermittent failure.
+					if check.LogPath != "" {
+						notes = append(notes, "Full output of "+check.CheckID+" is in "+check.LogPath+"; its failing lines and end: "+heavyBrief(legacyLogTail(check.LogPath)))
 					}
 					// A fixer filed after the automatic revert ended "not possible" says why,
 					// so its worker does not try the same revert again.
@@ -169,4 +176,51 @@ func heavyBrief(detail string) string {
 		detail = "..." + detail[len(detail)-keep:]
 	}
 	return detail
+}
+
+// legacyLogTail is the part of a check's log a brief quotes: the last failing lines
+// (test names, panics, the runner's own FAIL) and then the log's final lines, in file
+// order, each once. It is bounded; the whole file stays on disk.
+func legacyLogTail(path string) string {
+	file, err := os.Open(path)
+	if err != nil {
+		return "(the log could not be read: " + err.Error() + ")"
+	}
+	defer file.Close()
+	const window = 64 << 10
+	info, err := file.Stat()
+	if err != nil {
+		return "(the log could not be read: " + err.Error() + ")"
+	}
+	start := info.Size() - window
+	if start < 0 {
+		start = 0
+	}
+	buf := make([]byte, info.Size()-start)
+	if _, err := file.ReadAt(buf, start); err != nil && err != io.EOF {
+		return "(the log could not be read: " + err.Error() + ")"
+	}
+	lines := strings.Split(strings.TrimRight(string(buf), "\n"), "\n")
+	if start > 0 && len(lines) > 0 {
+		lines = lines[1:] // the first line is cut mid-way
+	}
+	const failing, ending = 15, 5
+	keep := map[int]bool{}
+	picked := 0
+	for i := len(lines) - 1; i >= 0 && picked < failing; i-- {
+		if strings.Contains(lines[i], "FAIL") || strings.Contains(lines[i], "panic:") {
+			keep[i] = true
+			picked++
+		}
+	}
+	for i := max(0, len(lines)-ending); i < len(lines); i++ {
+		keep[i] = true
+	}
+	out := []string{}
+	for i, line := range lines {
+		if keep[i] {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n")
 }

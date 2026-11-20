@@ -30,7 +30,11 @@ type HeavyCheck struct {
 	FirstRedLanding string   `json:"first_red_landing,omitempty"`
 	GateFault       bool     `json:"gate_fault,omitempty"`
 	Detail          string   `json:"detail,omitempty"`
-	Stalls          int      `json:"stalls,omitempty"`
+	// LogPath is the file holding the full output of the program that judged this check
+	// when it failed, under the proof's log directory for the commit. Empty when no
+	// output was kept.
+	LogPath string `json:"log_path,omitempty"`
+	Stalls  int    `json:"stalls,omitempty"`
 	// RevertedBy is the trunk commit that reverted FirstRedLanding automatically, and
 	// RevertRefused is why the automatic revert ended "not possible" so a fixer was filed
 	// instead (gate rework Section 6.8, graph design OQ-GP1). Both are empty when the

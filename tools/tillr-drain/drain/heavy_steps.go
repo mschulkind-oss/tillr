@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -83,15 +85,29 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 			result = append(result, legacy...)
 			if err == nil {
 				failed := []string{}
+				logs := []string{}
+				silent := []string{}
 				for _, check := range legacy {
 					if check.Result == "fail" {
 						failed = append(failed, check.CheckID)
+						if check.LogPath == "" {
+							silent = append(silent, check.CheckID)
+						} else if !slices.Contains(logs, check.LogPath) {
+							logs = append(logs, check.LogPath)
+						}
 					}
 				}
 				if len(failed) == 0 {
 					failed = append(failed, "none")
 				}
-				heavyProgressReport(ctx, "loop: heavy legacy program judged %d checks; failing: %s\n", len(legacy), strings.Join(failed, ", "))
+				line := fmt.Sprintf("loop: heavy legacy program judged %d checks; failing: %s", len(legacy), strings.Join(failed, ", "))
+				if len(logs) > 0 {
+					line += "; output: " + strings.Join(logs, ", ")
+				}
+				heavyProgressReport(ctx, "%s\n", line)
+				if len(silent) > 0 {
+					heavyProgressReport(ctx, "loop: heavy DEFECT: failed legacy check %s left no output, so the fixer has nothing to read; the legacy program must write its failure to stdout or stderr\n", strings.Join(silent, ", "))
+				}
 				for _, check := range legacy {
 					heavyCheckEnded(ctx, check)
 				}
@@ -253,6 +269,18 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 	cmd.Env = append(append(withoutProcessEnv(os.Environ(), "TILLR_SQLITE_TRACE"), s.forkRootEnv()...), "TILLR_GATE_SPANS_OUT="+spans)
 	var stderr stderrTail
 	cmd.Stderr = &stderr
+	// The program's whole output goes to a file under the proof's log directory for
+	// this commit, so a failure that cannot be reproduced still leaves something to read.
+	logPath := legacyLogPath(ctx, s.LaneRoot, dir, only)
+	if logPath != "" {
+		if logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
+			defer logFile.Close()
+			cmd.Stdout = logFile
+			cmd.Stderr = io.MultiWriter(logFile, &stderr)
+		} else {
+			logPath = ""
+		}
+	}
 	runErr := runOwnedHeavy(ctx, cmd, "legacy")
 	if cleanupLost(runErr) {
 		return nil, runErr
@@ -277,7 +305,11 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 		case 1:
 			verdict = "fail"
 		}
-		return []HeavyCheck{{CheckID: only, Result: verdict, Detail: stderr.String()}}, nil
+		kept := legacyKeptLog(logPath, verdict)
+		if verdict == "fail" && kept == "" {
+			heavyProgressReport(ctx, "loop: heavy DEFECT: the replay of legacy check %s failed and left no output\n", only)
+		}
+		return []HeavyCheck{{CheckID: only, Result: verdict, Detail: stderr.String(), LogPath: kept}}, nil
 	}
 	raw, err := os.ReadFile(spans)
 	if err != nil {
@@ -328,7 +360,11 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 		if span.Kind != "" && span.Label != "" {
 			s.heavyReplaySelectors.Store(span.CheckID, span.Kind+":"+span.Label)
 		}
-		result = append(result, HeavyCheck{CheckID: span.CheckID, Result: verdict, DurationMS: (span.EndNS - span.StartNS) / 1000000, Reads: reads})
+		kept := ""
+		if verdict == "fail" || verdict == "error" || verdict == "stalled" {
+			kept = legacyKeptLog(logPath, verdict)
+		}
+		result = append(result, HeavyCheck{CheckID: span.CheckID, Result: verdict, DurationMS: (span.EndNS - span.StartNS) / 1000000, Reads: reads, LogPath: kept})
 	}
 	for _, skip := range file.SkippedChecks {
 		if skip.Owed || skip.CheckID == "" {
@@ -337,9 +373,46 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 		result = append(result, HeavyCheck{CheckID: skip.CheckID, Result: "unavailable", Detail: skip.Reason})
 	}
 	if code != 0 && code != 1 {
-		result = append(result, HeavyCheck{CheckID: "legacy-runner", Result: "error", Detail: fmt.Sprintf("exit %d: %s", code, stderr.String())})
+		result = append(result, HeavyCheck{CheckID: "legacy-runner", Result: "error", Detail: fmt.Sprintf("exit %d: %s", code, stderr.String()), LogPath: legacyKeptLog(logPath, "error")})
 	}
 	return result, nil
+}
+
+// legacyLogPath is where the legacy program's output for the commit checked out in dir
+// goes: the proof's log directory for that commit, the same one the declaration judge
+// writes to. A proof of the whole program is legacy-proof.log; a replay of one check is
+// legacy-replay-<check>.log. It answers "" when the directory cannot be made.
+func legacyLogPath(ctx context.Context, laneRoot, dir, only string) string {
+	rev, err := heavyGitOutput(ctx, dir, "rev-parse", "HEAD")
+	if err != nil || rev == "" {
+		return ""
+	}
+	logs := filepath.Join(laneRoot, ".rolling", "logs", rev)
+	if err := os.MkdirAll(logs, 0o755); err != nil {
+		return ""
+	}
+	name := "legacy-proof.log"
+	if only != "" {
+		name = "legacy-replay-" + strings.Map(func(r rune) rune {
+			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_' || r == '.' {
+				return r
+			}
+			return '_'
+		}, only) + ".log"
+	}
+	return filepath.Join(logs, name)
+}
+
+// legacyKeptLog answers the log path for a failing verdict, or "" when the file is
+// missing or empty: a path to nothing would send the fixer to read nothing.
+func legacyKeptLog(path, verdict string) string {
+	if path == "" || verdict == "pass" {
+		return ""
+	}
+	if info, err := os.Stat(path); err != nil || info.Size() == 0 {
+		return ""
+	}
+	return path
 }
 
 // Declaration checks have their own process groups for CPU observation. Give the
