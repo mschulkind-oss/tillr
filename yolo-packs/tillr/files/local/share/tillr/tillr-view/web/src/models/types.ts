@@ -420,24 +420,8 @@ export interface GrantView {
   renew_command: string;
 }
 
-/** Publication state of proven commits (design Section 7.2). `what` is "none" when no push
- * outcome was ever recorded; a null count is unreadable, never zero. */
-export interface PushSummary {
-  what: "green" | "tip" | "none" | string;
-  remote?: string;
-  ref?: string;
-  published_sha?: string;
-  unpublished_green_count?: number | null;
-  unpublished_main_count?: number | null;
-  state_kind?: string;
-  detail?: string;
-  mover?: string;
-  since?: string;
-}
-
 export interface SnapshotData {
   grants?: GrantView[];
-  push?: PushSummary;
   sources: SourceStates;
   /** The server's own counts, when the build that answered has them. */
   counts?: ServerCounts;

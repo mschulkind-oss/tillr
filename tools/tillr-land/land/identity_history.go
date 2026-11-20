@@ -223,24 +223,3 @@ func (t *Trunk) IdentityRewrite(old, current string) (map[string]string, bool, e
 	ok, err := compare(old, current)
 	return mapped, ok, err
 }
-
-// CarryIdentityAcceptances copies an accepted commit's acceptance to the commit that replaced
-// it, for each old -> new pair of a rebase of the trunk, so replaying an accepted local commit
-// onto a moved remote does not hold landings on its foreign identity again
-// (docs/design/tillr-refused-push.md, Section 4.3). A store with no acceptances table has
-// nothing to carry.
-func CarryIdentityAcceptances(tx *store.Tx, pairs map[string]string) error {
-	var exists bool
-	if err := tx.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='trunk_identity_acceptances' AND type='table')`).Scan(&exists); err != nil || !exists {
-		return err
-	}
-	for old, now := range pairs {
-		if now == "" || now == old {
-			continue
-		}
-		if _, err := tx.Exec(`INSERT INTO trunk_identity_acceptances(sha,accepted_by,reason) SELECT ?, accepted_by, reason || ' (carried from ' || sha || ')' FROM trunk_identity_acceptances WHERE sha=? ON CONFLICT(sha) DO NOTHING`, now, old); err != nil {
-			return err
-		}
-	}
-	return nil
-}

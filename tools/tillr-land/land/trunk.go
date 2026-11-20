@@ -257,10 +257,7 @@ func (t *Trunk) Pin(runID, sha string) error {
 // commit again instead of squashing the change a second time. It lives under refs/tillr/
 // beside the run pins, is never pushed, and names no item: the commit itself stays the
 // head's message only (ruling D-RS3).
-func landedMarkerRef(runID string) string { return LandedRefPrefix + runID }
-
-// LandedRefPrefix is the namespace of the landed markers, one ref per run.
-const LandedRefPrefix = "refs/tillr/landed/"
+func landedMarkerRef(runID string) string { return "refs/tillr/landed/" + runID }
 
 // checkRunRef refuses a run id that is not a valid ref name component, by git's
 // check-ref-format rules. The id is spliced into the marker's ref name and from there into a

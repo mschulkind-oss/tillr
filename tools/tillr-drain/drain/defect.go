@@ -48,9 +48,7 @@ func IsDefectItem(itemID string) bool { return strings.HasPrefix(itemID, DefectI
 // IsGeneratedRepair answers whether the loop filed the item itself: a trunk fixer or a
 // tooling-defect item. Neither has a design document, so neither has a block the design
 // seat can amend.
-func IsGeneratedRepair(itemID string) bool {
-	return IsTrunkFixer(itemID) || IsDefectItem(itemID) || IsRemoteSyncItem(itemID)
-}
+func IsGeneratedRepair(itemID string) bool { return IsTrunkFixer(itemID) || IsDefectItem(itemID) }
 
 // acquittedRefusal answers whether a refusal step holds its item behind generated repair
 // work rather than against its own candidate. Such a run is not an attempt: the item

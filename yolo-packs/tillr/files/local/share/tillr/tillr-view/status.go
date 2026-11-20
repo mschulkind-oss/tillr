@@ -79,9 +79,6 @@ type statusPayload struct {
 	// rows to count, and a subject report is one item rather than the board, so both answer
 	// null rather than a second arithmetic.
 	Counts *boardCounts `json:"counts"`
-	// Push is the board report's publication state, read from refs and the newest push
-	// outcome. Only a board report from a store carries it.
-	Push *pushSummary `json:"push,omitempty"`
 }
 
 // gateSummary is the gate's measurement as a report reads it: the last tick's gate wall

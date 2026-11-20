@@ -50,7 +50,7 @@ func (l *Loop) routeObstacle(ctx context.Context, d Decision, req run.Request, l
 	}
 	switch o.Kind {
 	case ObstacleFence:
-		if !IsTrunkFixer(req.ItemID) && !IsRemoteSyncItem(req.ItemID) {
+		if !IsTrunkFixer(req.ItemID) {
 			return laneOutcome{}, false
 		}
 		// A trunk fixer's fence is the loop's own guess at where the red can be repaired
@@ -70,9 +70,6 @@ func (l *Loop) routeObstacle(ctx context.Context, d Decision, req run.Request, l
 	case ObstacleTrunk:
 		if IsTrunkFixer(req.ItemID) {
 			return returnToWorker(missingOutputDetail("this item is the trunk's repair, so a red trunk is its work and `trunk` is not an obstacle open to it"), ""), true
-		}
-		if IsRemoteSyncItem(req.ItemID) {
-			return returnToWorker(missingOutputDetail("this item is the remote-sync conflict repair, so `trunk` is not an obstacle open to it"), ""), true
 		}
 		// The replay runs in a scratch worktree of its own and holds no store transaction;
 		// it holds this lane only because a refuted claim continues this lane's session.

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"time"
 
-	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -89,18 +88,6 @@ func (l *Loop) reconcileLandingCalls(ctx context.Context) error {
 			if err := rows.Scan(&c.id, &c.itemID, &c.state, &c.landed, &c.recorded); err != nil {
 				rows.Close()
 				return err
-			}
-			if c.landed != "" {
-				if c.landed, err = heavy.RewriteResolve(r, c.landed); err != nil {
-					rows.Close()
-					return err
-				}
-			}
-			if c.recorded != "" {
-				if c.recorded, err = heavy.RewriteResolve(r, c.recorded); err != nil {
-					rows.Close()
-					return err
-				}
 			}
 			calls = append(calls, c)
 		}
