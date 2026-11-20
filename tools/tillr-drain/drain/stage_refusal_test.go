@@ -86,7 +86,7 @@ func TestConflictCodeWithBracePairsSurvivesBriefPreflight(t *testing.T) {
 	}
 }
 
-func TestABracePairInAnItemFieldIsReportedAgainstThatField(t *testing.T) {
+func TestABracePairInAnItemFieldIsCarriedIntact(t *testing.T) {
 	for _, c := range []struct {
 		name   string
 		itemID string
@@ -127,22 +127,44 @@ func TestABracePairInAnItemFieldIsReportedAgainstThatField(t *testing.T) {
 				t.Fatalf("building the brief's values failed before the brace pair could be seen: %v", err)
 			}
 			templatePath := writeTemplate(t, refusalTemplate(values))
-			_, err = renderBrief(templatePath, recorded.ItemID, values)
-			if err == nil {
-				t.Fatalf("the renderer accepted a %s carrying a brace pair, so the brief it would launch has an unfilled placeholder", c.field)
+			rendered, err := renderBrief(templatePath, recorded.ItemID, values)
+			if err != nil {
+				t.Fatalf("a brace pair in the %s refused staging, so the item loops through failover: %v", c.field, err)
 			}
-			var content *ItemContentError
-			if !errors.As(err, &content) {
-				t.Fatalf("a brace pair in the %s was classified as infrastructure (%T), so the loop would back the whole queue off for one record: %v", c.field, err, err)
+			if !strings.Contains(rendered, "{{x}}") {
+				t.Fatalf("the brief lost the item's own text for the %s:\n%s", c.field, rendered)
 			}
-			if content.ItemID != recorded.ItemID || content.Field != c.field {
-				t.Fatalf("the refusal names item %q field %q, want %q and %q", content.ItemID, content.Field, recorded.ItemID, c.field)
+			if braceLiteralCount(rendered) < 1 {
+				t.Fatalf("staging would state no brace pairs for a brief that carries one:\n%s", rendered)
 			}
-			if !strings.Contains(err.Error(), recorded.ItemID) || !strings.Contains(err.Error(), c.field) {
-				t.Fatalf("the refusal does not name both the item and the field: %v", err)
+			// Each adapter shares preflight.sh: it accepts the brief when staging states the
+			// pairs it carries, and still refuses the same brief when staging states none.
+			preflight, err := filepath.Abs(filepath.Join("..", "..", "tillr-run", "backends", "preflight.sh"))
+			if err != nil {
+				t.Fatal(err)
 			}
-			if strings.Contains(err.Error(), templatePath) {
-				t.Fatalf("the refusal for the %s blames the template, so an operator would edit the wrong file: %v", c.field, err)
+			dir := t.TempDir()
+			brief := filepath.Join(dir, "brief.md")
+			if err := os.WriteFile(brief, []byte(refusalBrief("a {{x}} title")), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			run := func() ([]byte, error) {
+				return exec.Command("sh", "-c", `. "$1"; PROG=probe; preflight_brief "$2"`, "preflight", preflight, brief).CombinedOutput()
+			}
+			if out, err := run(); err == nil {
+				t.Fatalf("the preflight accepted a brace pair staging did not state: %s", out)
+			}
+			if err := os.WriteFile(filepath.Join(dir, braceLiteralsFile), []byte(fmt.Sprintf("%d\n", braceLiteralCount(refusalBrief("a {{x}} title")))), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := run(); err != nil {
+				t.Fatalf("the preflight refused a brace pair staging stated: %v: %s", err, out)
+			}
+			if err := os.WriteFile(brief, []byte(refusalBrief("a {{x}} title {{TITLE}}")), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if out, err := run(); err == nil || !strings.Contains(string(out), "unfilled template placeholder") {
+				t.Fatalf("the preflight accepted an unfilled placeholder beyond the stated count: %v: %s", err, out)
 			}
 		})
 	}

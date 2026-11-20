@@ -717,6 +717,18 @@ another restart.
   is a model switch, so it is dispatched with the reason `seat-degraded` and both halves in
   the text — the seat that fell back and the backend that answered — rather than reading as
   an ordinary failover.
+- **An adapter's refusal of a brief is the brief's fault, not the backend's.** An adapter
+  that refuses before any model runs prints `run-<adapter>: refused: <reason>` and exits 2.
+  That run classifies as `refused`, not `infrastructure`: no backend failure is counted, no
+  backend is closed, and nothing fails over. The item is held as `adapter-refused`, an item
+  fault whose detail is the adapter's words and whose mover is the operator
+  (`tillr drain clear-fault` once the cause is fixed). `tillr view lanes` prints the words on
+  the lane's row. An exit 2 with no such words keeps the infrastructure class. An item's own
+  text may contain two open braces in a row: staging carries it intact and writes the count of
+  such pairs to the lane's `brace-literals` file, which the adapters' shared preflight reads.
+- **A run id carries one counter.** The second and later failover, restart, fresh session or
+  interruption of one node is `<id>-<count>-<kind>`, with the count padded to three digits,
+  so the id of the 30th turn is no longer than the id of the 2nd.
 - **A seat may name its own fallback order.** A seat's value is one backend name or an
   ordered list of them, such as `"design": ["claude-designer", "pi-designer"]`. The item
   dispatches to the first open backend unless shares or a selection mode request a split.

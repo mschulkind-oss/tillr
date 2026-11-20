@@ -160,7 +160,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				return c, false, err
 			}
 			req := receipt.Request
-			req.RunID += "-interrupted"
+			req.RunID = markRunID(req.RunID, "interrupted")
 			replacementRequest = &req
 			receipt = nil
 		} else if l.cfg.Restart != nil {
@@ -194,7 +194,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				}
 				req := receipt.Request
 				if !missing {
-					req.RunID += "-restart"
+					req.RunID = markRunID(req.RunID, "restart")
 				}
 				replacementRequest = &req
 				receipt = nil
@@ -384,7 +384,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 					}
 				}
 				req := receipt.Request
-				req.RunID += "-interrupted"
+				req.RunID = markRunID(req.RunID, "interrupted")
 				replacementRequest = &req
 				receipt = nil
 				continue

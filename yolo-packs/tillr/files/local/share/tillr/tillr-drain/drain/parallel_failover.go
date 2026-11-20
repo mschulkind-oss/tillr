@@ -17,12 +17,12 @@ func (l *Loop) parallelFailover(ctx context.Context, node Decision, rec run.Reco
 	result.InfraFailures++
 	l.infraStreak++
 	l.mu.Unlock()
-	request, _, ok, err := l.nextAvailableRequest(ctx, node.ItemID, node.LaneID, node.RunRequest.RunID+"-failover", rec.Backend, node.Seat)
+	request, _, ok, err := l.nextAvailableRequest(ctx, node.ItemID, node.LaneID, markRunID(node.RunRequest.RunID, "failover"), rec.Backend, node.Seat)
 	if err != nil {
 		return node, false, err
 	}
 	if !ok {
-		request, _, _ = l.currentPolicy().NextRequest(node.ItemID, node.LaneID, node.RunRequest.RunID+"-failover", rec.Backend, node.Seat)
+		request, _, _ = l.currentPolicy().NextRequest(node.ItemID, node.LaneID, markRunID(node.RunRequest.RunID, "failover"), rec.Backend, node.Seat)
 		if request == nil {
 			return node, false, Usagef("workflow seat %s has no backend route", node.Seat)
 		}
@@ -42,7 +42,7 @@ func (l *Loop) parallelInterrupted(node Decision, rec run.Record) (Decision, boo
 	if policy == nil {
 		return node, false, Usagef("workflow seat %s has no backend route", node.Seat)
 	}
-	request := policy.request(node.ItemID, node.LaneID, node.RunRequest.RunID+"-interrupted", rec.Backend)
+	request := policy.request(node.ItemID, node.LaneID, markRunID(node.RunRequest.RunID, "interrupted"), rec.Backend)
 	if request == nil {
 		return node, false, Usagef("workflow seat %s has no backend %s", node.Seat, rec.Backend)
 	}

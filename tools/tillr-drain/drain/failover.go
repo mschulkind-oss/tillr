@@ -42,6 +42,12 @@ const (
 	// AttemptInterrupted is a supervisor interruption, not an item outcome.
 	AttemptInterrupted    AttemptClass = "interrupted"
 	AttemptInfrastructure AttemptClass = "infrastructure"
+	// AttemptRefused is an adapter's own preflight refusal: it printed `<adapter>: refused:
+	// <reason>` and exited 2 before any model ran. The brief or the environment is what is
+	// wrong, so the same brief on another backend would be refused for the same reason: the
+	// item is held for the operator with the adapter's words, no backend is closed and no
+	// failover runs.
+	AttemptRefused AttemptClass = "refused"
 	// AttemptAnswered is a run that produced an answer, however disappointing: judged
 	// work, which never fails over.
 	AttemptAnswered AttemptClass = "answered"
@@ -105,7 +111,11 @@ func ClassifyAttempt(rec run.Record, log string) AttemptClass {
 			// not evidence about the backend or the item.
 			return AttemptInterrupted
 		case code == adapterRefusedExit:
-			// The adapter's preflight refusal: nothing ran, nothing was spent.
+			// The adapter's preflight refusal: nothing ran, nothing was spent. One that
+			// states its words is about the brief or the environment, and is the operator's.
+			if _, ok := AdapterRefusal(log); ok {
+				return AttemptRefused
+			}
 			return AttemptInfrastructure
 		case strings.Contains(log, ReportFooter):
 			// The harness answered and then exited non-zero. The answer is judged work,
@@ -121,6 +131,24 @@ func ClassifyAttempt(rec run.Record, log string) AttemptClass {
 	// it as infrastructure would re-dispatch on a guess. Answered is the direction that
 	// spends nothing.
 	return AttemptAnswered
+}
+
+// AdapterRefusal answers the adapter's own refusal words from a run's log: the text after
+// the last `run-<adapter>: refused: ` marker that backends/preflight.sh prints (`refuse`). It
+// reports false when the log carries none, which is how an exit 2 from anything other than
+// an adapter's preflight stays what it was.
+func AdapterRefusal(log string) (string, bool) {
+	const marker = ": refused: "
+	words := ""
+	for _, line := range strings.Split(log, "\n") {
+		line = strings.TrimRight(line, "\r")
+		idx := strings.Index(line, marker)
+		if idx <= 0 || !strings.HasPrefix(line, "run-") || strings.ContainsAny(line[:idx], " \t") {
+			continue
+		}
+		words = strings.TrimSpace(line[idx+len(marker):])
+	}
+	return words, words != ""
 }
 
 // reportFooter answers the model's own answer from a run's report footer: the word after

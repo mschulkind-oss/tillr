@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -162,7 +163,7 @@ func (s *LaneStager) stagePlain(ctx context.Context, spec StageSpec, def definit
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return err
 		}
-		for name, body := range map[string]string{BriefFile: brief, SessionIDFile: sessionID + "\n", endingCapabilityFile: run.EndingFooter + "\n"} {
+		for name, body := range map[string]string{BriefFile: brief, SessionIDFile: sessionID + "\n", endingCapabilityFile: run.EndingFooter + "\n", braceLiteralsFile: strconv.Itoa(braceLiteralCount(brief)) + "\n"} {
 			if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
 				return Externalf("writing %s: %v", name, err)
 			}

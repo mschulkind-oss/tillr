@@ -28,7 +28,7 @@ func (l *Loop) claimBuildReaders(ctx context.Context, tx *store.Tx, w *pendingWo
 		}
 		old := req.RunID
 		next := *req
-		next.RunID += "-restart"
+		next.RunID = markRunID(next.RunID, "restart")
 		next.Resume, next.FreshSession = false, false
 		node.RunRequest = &next
 		node.BuildRestartFrom = old

@@ -210,12 +210,12 @@ func (l *Loop) restartRepeatingNode(ctx context.Context, d Decision, base string
 	if policy == nil {
 		return Usagef("workflow seat %s has no backend route", d.Seat)
 	}
-	suffix := "-fresh"
+	suffix := "fresh"
 	reason := ReasonRepeatingCallFresh
 	if rc.Route == repeatRouteFailover {
-		suffix, reason = "-failover", ReasonRepeatingCallFailover
+		suffix, reason = "failover", ReasonRepeatingCallFailover
 	}
-	request := policy.request(d.ItemID, d.LaneID, d.RunRequest.RunID+suffix, rc.NextBackend)
+	request := policy.request(d.ItemID, d.LaneID, markRunID(d.RunRequest.RunID, suffix), rc.NextBackend)
 	request.NodeID = d.Workflow.Stages[d.NodeIndex].ID
 	request.WorkingDir = d.RunRequest.WorkingDir
 	if d.Workflow.Stages[d.NodeIndex].TimeoutMS > 0 {

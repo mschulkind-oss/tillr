@@ -1757,6 +1757,13 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		}
 		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "run interrupted by signal")}
 	}
+	if class == AttemptRefused {
+		// An adapter refused the brief before any model ran. The refusal is not a backend
+		// failure: no streak, no closed backend, no failover. The item is held for the
+		// operator with the adapter's words.
+		stop, err := l.holdAdapterRefusal(ctx, lane, request, log)
+		return laneOutcome{stop: stop, err: err}
+	}
 	for class == AttemptInfrastructure {
 		if err := l.recordBackendWindow(ctx, record); err != nil {
 			return laneOutcome{err: err}
@@ -1821,6 +1828,10 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 				return laneOutcome{err: err}
 			}
 			class = ClassifyAttempt(record, log)
+			if class == AttemptRefused {
+				stop, err := l.holdAdapterRefusal(ctx, lane, request, log)
+				return laneOutcome{stop: stop, err: err}
+			}
 			if class == AttemptInfrastructure {
 				if err := l.recordBackendWindow(ctx, record); err != nil {
 					return laneOutcome{err: err}
