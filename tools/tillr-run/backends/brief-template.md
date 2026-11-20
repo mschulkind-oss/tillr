@@ -144,6 +144,13 @@ suite directly: it bypasses the pool, and several lanes doing so at once drove t
 average past 60 and made `go test` hit its ten-minute timeout. Never retry or raise a
 timeout to get past a wait.
 
+Never end processes by name or pattern: no `pkill`, no `killall`, no `kill` fed from
+`pgrep`. Every lane, the landing gate and the trunk's after-merge proof run this same
+runner as the same user, so a pattern that matches your suite matches theirs. On
+2026-11-20 `pkill -f go-test-shards` from lane workers ended the proof's suite checks
+with SIGTERM, and the trunk went unproved for eight hours. End only a process you
+started, by the process ID you recorded when you started it.
+
 Replace the module path for another tillr suite. Set `TMPDIR` to this run's scratch
 or pass `--scratch` there. During a focused edit, prefer a targeted test first:
 
