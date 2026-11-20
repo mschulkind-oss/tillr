@@ -21,6 +21,7 @@ type plannedVerifySteps struct {
 	blocked  bool
 	plans    int
 	verifies int
+	base     string
 }
 
 func (s *plannedVerifySteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
@@ -46,10 +47,20 @@ func (s *plannedVerifySteps) Run(ctx context.Context, req run.Request) (run.Reco
 			proposalArtifact(s.t, s.f.root, req.RunID, pieceProposal([]map[string]any{piece("one", "build", "write"), piece("two", "edit", "write")}))
 		}
 	case "work/piece-one", "work/piece-two":
+		// An identical repeat judges the same candidate, so each attempt rebuilds the
+		// same commits from the same base.
+		s.t.Setenv("GIT_AUTHOR_DATE", "2026-11-15T00:00:00Z")
+		s.t.Setenv("GIT_COMMITTER_DATE", "2026-11-15T00:00:00Z")
+		if s.base == "" {
+			s.base = runGit(s.t, target, "rev-parse", "HEAD")
+		}
+		if req.NodeID == "work/piece-one" {
+			runGit(s.t, target, "reset", "--hard", "-q", s.base)
+		}
 		if err := os.MkdirAll(filepath.Join(target, "tools/item-a"), 0755); err != nil {
 			return run.Record{}, "", err
 		}
-		writeForkFile(s.t, filepath.Join(target, "tools/item-a", strings.TrimPrefix(req.NodeID, "work/piece-")+".txt"), req.RunID)
+		writeForkFile(s.t, filepath.Join(target, "tools/item-a", strings.TrimPrefix(req.NodeID, "work/piece-")+".txt"), "piece")
 		runGit(s.t, target, "add", ".")
 		runGit(s.t, target, "commit", "-qm", "build piece")
 	case "verify":
@@ -73,7 +84,6 @@ func (s *plannedVerifySteps) Run(ctx context.Context, req run.Request) (run.Reco
 		head := runGit(s.t, target, "rev-parse", "HEAD")
 		reason := "uncovered: no piece"
 		if s.verifies > 1 {
-			reason = "uncovered: differently worded"
 		}
 		v := item.JudgeOutput{EvaluatedHead: head, EvaluatedTree: runGit(s.t, target, "rev-parse", head+"^{tree}"), Outcome: "fail", Verdicts: []item.JudgeEntry{
 			{CriterionID: "c1", CriterionHash: item.CriterionHash("the first criterion of item-a"), Verdict: "done", ClaimClass: item.ClaimVerification, Reason: "covered", Evidence: []string{"node:work/piece-one"}},
