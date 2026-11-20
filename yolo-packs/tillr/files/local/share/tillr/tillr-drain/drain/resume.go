@@ -355,7 +355,8 @@ func rederiveFence(ctx context.Context, cfg ResumeConfig, row resumeRun, laneDir
 				if d.NodeIndex < 0 || d.NodeIndex >= len(d.Workflow.Stages) {
 					return Externalf("run %s has no saved workflow node", runID)
 				}
-				node = &d.Workflow.Stages[d.NodeIndex]
+				stage := d.effectiveNode()
+				node = &stage
 			}
 		}
 		return nil
@@ -369,7 +370,9 @@ func rederiveFence(ctx context.Context, cfg ResumeConfig, row resumeRun, laneDir
 	}
 	fence := fencePaths(recorded.AllowedPaths)
 	if node != nil {
-		if err := (&Workflow{Stages: []WorkflowStage{*node}}).checkScopes(recorded.AllowedPaths); err != nil {
+		stage := *node
+		stage.WriteScope.Paths = scopeForLane(stage.WriteScope.Paths, row.LaneID)
+		if err := (&Workflow{Stages: []WorkflowStage{stage}}).checkScopes(scopeForLane(recorded.AllowedPaths, row.LaneID)); err != nil {
 			return nil, err
 		}
 		fence, err = node.scopePaths(recorded.AllowedPaths)

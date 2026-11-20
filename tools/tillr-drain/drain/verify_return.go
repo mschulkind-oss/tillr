@@ -22,8 +22,7 @@ import (
 //  1. the verifier says the plan was wrong: a not-done reason that begins `plan-wrong:`
 //     (any case) sets Candidate.VerifyReplan, and the refusal is recorded with Replan;
 //  2. the builder says it cannot meet the findings within the plan: it ends blocked with
-//     an obstacle `definition` whose EVIDENCE begins `plan-wrong:`, a fence obstacle on a
-//     narrowed piece whose paths are all inside the item's fence, or a report line that
+//     an obstacle `definition` whose EVIDENCE begins `plan-wrong:` or a report line that
 //     begins `PLAN-WRONG:` (settleNode, planWrongReport).
 //
 // Every other not-done finding, including `uncovered:`, goes to the build step.
@@ -222,33 +221,19 @@ func (l *Loop) laneFileBody(lane, name string) string {
 // builderPlanWrong reads a blocked write stage's report for the second route back to the
 // plan step: the builder cannot meet the findings within the plan. It answers the builder's
 // explanation and true when the stage is a write stage of a graph whose first stage is the
-// plan, it ended blocked, and its report says so in one of three ways: a definition
-// obstacle whose EVIDENCE begins `plan-wrong:`; a complete fence obstacle on a piece with a
-// narrowed write scope whose every PATH is inside the item's own fence (the plan cut the
-// piece too small); or a line beginning `PLAN-WRONG:`.
+// plan, it ended blocked, and its report says so in a definition obstacle whose EVIDENCE
+// begins `plan-wrong:` or a line beginning `PLAN-WRONG:`.
 func (l *Loop) builderPlanWrong(d Decision, stage WorkflowStage, footer, log string) (string, bool) {
 	if footer != "blocked" || stage.Access != "write" || stage.Kind != "agent" || d.Workflow == nil || len(d.Workflow.Stages) == 0 || d.Workflow.Stages[0].Seat != "plan" || d.NodeIndex == 0 {
 		return "", false
 	}
 	obstacle := parseObstacle(log)
 	if obstacle.Problem == "" {
-		switch obstacle.Kind {
-		case ObstacleDefinition:
-			if strings.HasPrefix(strings.ToLower(obstacle.Field("EVIDENCE")), PlanWrongPrefix) {
-				return strings.TrimSpace(log), true
-			}
-		case ObstacleFence:
-			if stage.WriteScope.Paths != nil {
-				fence := fenceEntries(l.laneFileBody(d.LaneID, ItemFenceFile))
-				paths := obstacle.List("PATHS")
-				inside := len(paths) > 0
-				for _, p := range paths {
-					inside = inside && insideFence(filepath.ToSlash(filepath.Clean(p)), fence)
-				}
-				if inside {
-					return strings.TrimSpace(log), true
-				}
-			}
+		if obstacle.Kind == ObstacleFence {
+			return "", false
+		}
+		if obstacle.Kind == ObstacleDefinition && strings.HasPrefix(strings.ToLower(obstacle.Field("EVIDENCE")), PlanWrongPrefix) {
+			return strings.TrimSpace(log), true
 		}
 	}
 	for _, line := range strings.Split(log, "\n") {

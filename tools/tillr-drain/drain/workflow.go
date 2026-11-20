@@ -498,6 +498,7 @@ func (l *Loop) nodeOutcome(ctx context.Context, d Decision, outcome string) erro
 // examination lease. It never resets the worktree between nodes.
 func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string) error {
 	next := d
+	next.NodeFencePaths = nil
 	next.Parallel = nil
 	// The refusal has been answered by this node. Successors keep the repaired
 	// checkout and accepted-input references, not the return dispatch mode.
@@ -760,6 +761,12 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		}
 	}
 	if stage.Kind == "agent" {
+		if footer == "blocked" && !l.nonLanding && stage.Access == "write" && stage.WriteScope.Paths != nil {
+			if added := l.missingPieceFencePaths(d, parseObstacle(log)); len(added) > 0 {
+				d.NodeFencePaths = append(append([]string(nil), d.NodeFencePaths...), added...)
+				return true, l.restartWorkflowNode(ctx, d, base, rec, "piece-fence", "piece requested more of the item's fence")
+			}
+		}
 		if verifyBuildReturn(d.Returned) {
 			if why, wrong := l.builderPlanWrong(d, stage, footer, log); wrong {
 				// The build step cannot meet the findings within the plan: the plan step runs
