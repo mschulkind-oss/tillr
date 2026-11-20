@@ -2286,7 +2286,7 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 					head, headErr := l.revParse(ctx, l.laneTarget(d.LaneID), "HEAD")
 					err = headErr
 					if err == nil {
-						err = l.pinReleasedHead(ctx, d.RunRequest.RunID, head)
+						err = l.pin(ctx, d.RunRequest.RunID, head)
 					}
 				}
 				if err == nil {
