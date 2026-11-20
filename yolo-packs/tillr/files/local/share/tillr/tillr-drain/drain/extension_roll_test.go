@@ -80,7 +80,7 @@ func TestExtensionRollTrunkPaths(t *testing.T) {
 	// Note: sh -c "<Command> --pi-extensions" passes --pi-extensions as part of the command string,
 	// so test with a helper script that records its argv.
 	script := filepath.Join(l.cfg.Root, "roll-helper.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$*\" >> calls\n"), 0755); err != nil {
+	if err := writeForkSafe(script, []byte("#!/bin/sh\necho \"$*\" >> calls\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	l.cfg.PostLanding.Roll.Command = script + " --no-request"
@@ -128,7 +128,7 @@ func TestExtensionRollAlongsideToolRoll(t *testing.T) {
 	l, git, commit := actionFixture(t)
 	ctx := context.Background()
 	script := filepath.Join(l.cfg.Root, "roll-helper.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$*\" >> calls\n"), 0755); err != nil {
+	if err := writeForkSafe(script, []byte("#!/bin/sh\necho \"$*\" >> calls\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	l.cfg.PostLanding.Roll = settings.Roll{
@@ -177,7 +177,7 @@ func TestExtensionRollPatchBranch(t *testing.T) {
 	l, git, commit := actionFixture(t)
 	ctx := context.Background()
 	script := filepath.Join(l.cfg.Root, "roll-helper.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\necho \"$*\" >> calls\n"), 0755); err != nil {
+	if err := writeForkSafe(script, []byte("#!/bin/sh\necho \"$*\" >> calls\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	l.cfg.PostLanding.Roll = settings.Roll{
@@ -225,7 +225,7 @@ func TestExtensionRollCoalescing(t *testing.T) {
 	l, _, commit := actionFixture(t)
 	ctx := context.Background()
 	script := filepath.Join(l.cfg.Root, "roll-helper.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\necho run >> ext_runs\nwhile [ ! -f release ]; do sleep .01; done\n"), 0755); err != nil {
+	if err := writeForkSafe(script, []byte("#!/bin/sh\necho run >> ext_runs\nwhile [ ! -f release ]; do sleep .01; done\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	l.cfg.PostLanding.Roll = settings.Roll{Command: script}
@@ -250,7 +250,7 @@ func TestExtensionRollFailureAndClear(t *testing.T) {
 	l, _, commit := actionFixture(t)
 	ctx := context.Background()
 	script := filepath.Join(l.cfg.Root, "roll-helper.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nif [ -f fail ]; then echo 'build boom' >&2; exit 7; fi\n"), 0755); err != nil {
+	if err := writeForkSafe(script, []byte("#!/bin/sh\nif [ -f fail ]; then echo 'build boom' >&2; exit 7; fi\n"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	l.cfg.PostLanding.Roll = settings.Roll{Command: script}

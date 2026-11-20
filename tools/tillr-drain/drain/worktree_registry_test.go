@@ -37,7 +37,7 @@ if 'worktree' in args:
             sys.exit('registry command ran without land lock: '+action)
 os.execv(%q,[%q]+args)
 `, real, real)
-	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0755); err != nil {
+	if err := writeForkSafe(filepath.Join(bin, "git"), []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("TILLR_TEST_REGISTRY_LOCK", filepath.Join(root, ".git", "land.lock"))

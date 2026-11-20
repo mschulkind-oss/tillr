@@ -135,7 +135,7 @@ exit 1`)
 func executable(t *testing.T, body string) string {
 	t.Helper()
 	path := filepath.Join(scratchUnderDurable(t), "rolling-program")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+	if err := writeForkSafe(path, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
 		t.Fatalf("writing the rolling program failed: %v", err)
 	}
 	return path

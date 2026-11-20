@@ -235,7 +235,7 @@ func TestARunFaceHoldsItsStreamsOpenForWritingWhileItLives(t *testing.T) {
 	}
 	face := filepath.Join(dir, "face")
 	script := "#!/bin/sh\nprintf x > " + ready + "\nread line < " + release + "\n"
-	if err := os.WriteFile(face, []byte(script), 0o755); err != nil {
+	if err := writeForkSafe(face, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	steps := &ProcessSteps{RunBin: face, Store: f.storePath, LaneRoot: f.laneRoot, Root: f.root, Now: l.cfg.Now}

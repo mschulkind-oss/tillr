@@ -33,7 +33,7 @@ func TestBriefPolicySeatsAndPiIsolation(t *testing.T) {
 		}
 	}
 	stub := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CAPTURE_ARGS\"\nenv -0 | sort -z > \"$CAPTURE_ENV\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(stub), 0755); err != nil {
+	if err := writeForkSafe(filepath.Join(bin, "pi"), []byte(stub), 0755); err != nil {
 		t.Fatal(err)
 	}
 	old := &Policy{Seats: map[string]string{"build": "pi", "design": "pi", "review": "pi", "scout": "pi"}, ReadOnlySeats: []string{"scout"}, SeatPurposes: map[string]string{"build": "Build the change.", "scout": "Find evidence."}}

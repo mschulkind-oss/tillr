@@ -129,7 +129,7 @@ func TestHeldCandidateUnreadablePinKeepsLane(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := fmt.Sprintf("#!/bin/sh\ncase \"$4\" in 'refs/tillr/runs/'*'^{commit}') exit 1;; esac\nexec %q \"$@\"\n", realGit)
-	if err := os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0755); err != nil {
+	if err := writeForkSafe(filepath.Join(bin, "git"), []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))

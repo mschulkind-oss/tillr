@@ -79,7 +79,7 @@ func TestDocumentSyncAndQuestionsAreReusedUntilTrunkMoves(t *testing.T) {
 	count := filepath.Join(scratchUnderDurable(t), "questions-count")
 	command := filepath.Join(scratchUnderDurable(t), "questions")
 	body := fmt.Sprintf("#!/bin/sh\necho index >> '%s'\nprintf '%%s\\n' '{\"documents\":[{\"path\":\"docs/plan.md\",\"questions\":[{\"id\":\"OQ-1\",\"state\":\"open\"}]}]}'\n", count)
-	if err := os.WriteFile(command, []byte(body), 0o755); err != nil {
+	if err := writeForkSafe(command, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	l.cfg.QuestionsCmd = []string{command}

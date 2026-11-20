@@ -66,7 +66,7 @@ if 'for-each-ref' in sys.argv or 'update-ref' in sys.argv:
             sys.exit(91)
 os.execv(%q, [%q] + sys.argv[1:])
 `, filepath.Join(f.root, ".git", "land.lock"), real, real)
-	if err := os.WriteFile(filepath.Join(scratch, "git"), []byte(script), 0755); err != nil {
+	if err := writeForkSafe(filepath.Join(scratch, "git"), []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", scratch+string(os.PathListSeparator)+os.Getenv("PATH"))

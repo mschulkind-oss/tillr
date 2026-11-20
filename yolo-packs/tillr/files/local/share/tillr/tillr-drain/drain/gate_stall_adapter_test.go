@@ -36,7 +36,7 @@ if face=='run':
   Path(os.environ['TILLR_GATE_SPANS_OUT']).write_text(json.dumps({'check_spans':[{'check_id':'remaining-suite','status':'OK','start_ns':100,'end_ns':200}]}))
  sys.exit({'stalled':6,'pass':0,'error':4}[result])
 `
-	if err := os.WriteFile(stub, []byte(script), 0755); err != nil {
+	if err := writeForkSafe(stub, []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))

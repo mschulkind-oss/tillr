@@ -120,7 +120,7 @@ func copyFile(t *testing.T, from, to string, extra []byte) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(to, append(raw, extra...), 0o755); err != nil {
+	if err := writeForkSafe(to, append(raw, extra...), 0o755); err != nil {
 		t.Fatal(err)
 	}
 }

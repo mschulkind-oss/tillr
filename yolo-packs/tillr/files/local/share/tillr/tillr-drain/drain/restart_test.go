@@ -41,7 +41,7 @@ func newRestartHarness(t *testing.T, onDisk []byte, check func(context.Context, 
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(exe, onDisk, 0o755); err != nil {
+	if err := writeForkSafe(exe, onDisk, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	l.cfg.Restart = &RestartConfig{
@@ -246,12 +246,12 @@ func TestALauncherBackedProcessRestartsOntoTheLaunchersCurrentBinary(t *testing.
 	}
 	dir := t.TempDir()
 	next := filepath.Join(dir, "tillr-drain-next")
-	if err := os.WriteFile(next, []byte("the build the launcher now names"), 0o755); err != nil {
+	if err := writeForkSafe(next, []byte("the build the launcher now names"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	launcher := filepath.Join(dir, "launcher")
 	script := "#!/bin/sh\n[ -n \"$" + restart.LauncherResolveEnv + "\" ] && echo " + next + " && exit 0\nexit 9\n"
-	if err := os.WriteFile(launcher, []byte(script), 0o755); err != nil {
+	if err := writeForkSafe(launcher, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv(restart.LauncherEnv, launcher)
@@ -340,7 +340,7 @@ func TestRestartRechecksABinaryRenamedAfterTheCheck(t *testing.T) {
 		checks++
 		if checks == 1 {
 			replacement := path + ".new"
-			if err := os.WriteFile(replacement, []byte("unchecked bytes"), 0755); err != nil {
+			if err := writeForkSafe(replacement, []byte("unchecked bytes"), 0755); err != nil {
 				return err
 			}
 			return os.Rename(replacement, path)
@@ -362,14 +362,14 @@ func TestRestartRechecksABinaryRenamedAfterTheCheck(t *testing.T) {
 
 func TestDiskDigestReadsTheBytesEvenAtADigestNamedPath(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "tillr-drain-"+strings.Repeat("a", 64))
-	if err := os.WriteFile(path, []byte("first image"), 0755); err != nil {
+	if err := writeForkSafe(path, []byte("first image"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	first := DiskDigest(path)
 	if first != fileDigest(path) {
 		t.Fatal("disk digest trusted the filename")
 	}
-	if err := os.WriteFile(path+".new", []byte("second image"), 0755); err != nil {
+	if err := writeForkSafe(path+".new", []byte("second image"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Rename(path+".new", path); err != nil {
@@ -385,7 +385,7 @@ func TestRestartChecksAndExecutesOneResolvedPathDespiteASymlinkSwap(t *testing.T
 	target := h.l.cfg.Restart.Executable
 	link := target + "-link"
 	other := target + "-other"
-	if err := os.WriteFile(other, []byte("unchecked image"), 0755); err != nil {
+	if err := writeForkSafe(other, []byte("unchecked image"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(target, link); err != nil {

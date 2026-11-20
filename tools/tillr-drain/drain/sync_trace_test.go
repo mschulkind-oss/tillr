@@ -22,7 +22,7 @@ printf 'tillr-sqlite-stack pid=1 tx=1 frame="blocked migration"\n' >&2
 printf 'tillr-sqlite-lookalike private-noise\n' >&2
 printf '{"kind":"item.sync","payload":{}}\n'
 `
-			if err := os.WriteFile(child, []byte(body), 0700); err != nil {
+			if err := writeForkSafe(child, []byte(body), 0700); err != nil {
 				t.Fatal(err)
 			}
 			output := filepath.Join(dir, "stderr")

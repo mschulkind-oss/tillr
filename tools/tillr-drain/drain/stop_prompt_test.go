@@ -245,7 +245,7 @@ PY`)
 		got, err = steps.Gate(ctx, c)
 		done <- err
 	}()
-	waitForPath(t, ready)
+	waitForPath(t, ready, done)
 	raw, err := os.ReadFile(pidsFile)
 	if err != nil {
 		t.Fatal(err)
@@ -377,7 +377,7 @@ func TestStopDuringRollingProofEndsPromptlyAndNextLoopResumesProof(t *testing.T)
 		_, err := procSteps.Rolling(rollCtx, "", tip)
 		rollDone <- err
 	}()
-	waitForPath(t, ready)
+	waitForPath(t, ready, rollDone)
 	rollCancel()
 	if err := <-rollDone; err == nil {
 		t.Fatal("canceled ProcessSteps.Rolling returned nil error instead of ctx.Err()")
@@ -462,7 +462,7 @@ printf '{"kind":"gate.verdict","payload":{"checks":[{"check_id":"%s","result":"p
 		res, err := first.Run(context.Background())
 		done <- runOutcome{res, err}
 	}()
-	waitForPath(t, filepath.Join(f.laneRoot, "entered-b"))
+	waitForPath(t, filepath.Join(f.laneRoot, "entered-b"), done)
 
 	requestSessionStop(t, f.storePath, 1)
 	clock.advance(PassInterval)

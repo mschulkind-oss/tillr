@@ -269,7 +269,7 @@ func runGit(t *testing.T, dir string, args ...string) string {
 
 func writeForkFile(t *testing.T, path, body string) {
 	t.Helper()
-	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+	if err := writeForkSafe(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("writing %s failed: %v", path, err)
 	}
 }

@@ -63,7 +63,7 @@ func adapterStubs(t *testing.T) (log string) {
 		if name == "tillr-item" {
 			body += "[ \"$1\" = show ] && cat " + show + "\n"
 		}
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body+"exit 0\n"), 0o755); err != nil {
+		if err := writeForkSafe(filepath.Join(dir, name), []byte(body+"exit 0\n"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
