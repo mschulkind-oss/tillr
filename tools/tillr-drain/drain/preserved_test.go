@@ -113,3 +113,31 @@ func TestSiblingPreservationIsLanderRef(t *testing.T) {
 		t.Fatalf("sibling preservation convicted an in-flight run: %v / %v / %v", convicted, observed, err)
 	}
 }
+
+// A released workflow's head that the trunk already contains needs no pin, so a run id too
+// long to be a ref name does not fail the release. A head the trunk lacks is still pinned,
+// and an unwritable pin there is still an error.
+func TestPinReleasedHeadSkipsAHeadTheTrunkContains(t *testing.T) {
+	f := newRefusalLoopFixture(t, "item-a")
+	l := f.loop(t, &recordingSteps{}, &itemContentStager{})
+	ctx := context.Background()
+	long := "run-item-a-a1-n1" + strings.Repeat("-failover", 40)
+	trunk := strings.TrimSpace(runGit(t, f.root, "rev-parse", TrunkRef))
+	before := runGit(t, f.root, "for-each-ref")
+	if err := l.pinReleasedHead(ctx, long, trunk); err != nil {
+		t.Fatalf("a head on the trunk was refused: %v", err)
+	}
+	if got := runGit(t, f.root, "for-each-ref"); got != before {
+		t.Fatalf("a head on the trunk was pinned: %s", got)
+	}
+	off := strings.TrimSpace(runGit(t, f.root, "commit-tree", trunk+"^{tree}", "-p", trunk, "-m", "off trunk"))
+	if err := l.pinReleasedHead(ctx, long, off); err == nil {
+		t.Fatal("an unwritable pin for a head the trunk lacks was not reported")
+	}
+	if err := l.pinReleasedHead(ctx, "run-item-a-a1-n1", off); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(runGit(t, f.root, "rev-parse", "refs/tillr/runs/run-item-a-a1-n1")); got != off {
+		t.Fatalf("pin = %s, want %s", got, off)
+	}
+}

@@ -2728,6 +2728,26 @@ func (l *Loop) pin(ctx context.Context, runID, sha string) error {
 	return nil
 }
 
+// pinReleasedHead pins the head a released workflow leaves in its lane, unless the trunk
+// already contains that head. A pin exists to keep a commit reachable, and a commit the
+// trunk holds is reachable without one. Skipping it there is what lets a release finish
+// when the pin itself cannot be written: a run id grown past what a file name holds made
+// `git update-ref` fail on every restart on 2026-11-19, and each failure ended the loop.
+func (l *Loop) pinReleasedHead(ctx context.Context, runID, sha string) error {
+	if runID == "" || sha == "" {
+		return nil
+	}
+	held, err := containsCommit(ctx, l.cfg.Root, sha, TrunkRef)
+	if err != nil {
+		return err
+	}
+	if held {
+		l.reportf("loop: no pin for %s at %s: the trunk already contains it\n", runID, sha)
+		return nil
+	}
+	return l.pin(ctx, runID, sha)
+}
+
 // pinTimeout bounds one pin's `git update-ref`, which survives the loop's stop.
 const pinTimeout = 30 * time.Second
 
