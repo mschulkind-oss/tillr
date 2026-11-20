@@ -214,13 +214,18 @@ func TestUnsavedEndSignalClassifiedBeforeRecordBackendOutcomes(t *testing.T) {
 type seqSignalWorkflowSteps struct {
 	*workflowSteps
 	interruptFirst bool
+	signalNode     string
 	interrupted    bool
 	runs           []run.Request
 }
 
 func (s *seqSignalWorkflowSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
 	s.runs = append(s.runs, req)
-	if s.interruptFirst && !s.interrupted && req.NodeID == "work" {
+	node := s.signalNode
+	if node == "" {
+		node = "work"
+	}
+	if s.interruptFirst && !s.interrupted && req.NodeID == node {
 		s.interrupted = true
 		rec := run.Record{
 			RunID: req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Backend: req.Backend,
@@ -274,6 +279,41 @@ func TestSequentialWorkflowNodeInterruptedRestartsSameBackendAndLands(t *testing
 			t.Fatal("interrupted sequential workflow node closed fixture")
 		}
 		return nil
+	})
+}
+
+func TestInterruptedWorkflowDoesNotConsumeDesignAnswerTwice(t *testing.T) {
+	f, l, ws := workflowLoopFixture(t, "")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='closed' WHERE item_id='item-b'`)
+		return err
+	})
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='blocked' WHERE item_id='item-a'`)
+		return err
+	})
+	recordItemAConflict(t, f, l, "answered", "build")
+	steps := &seqSignalWorkflowSteps{workflowSteps: ws, interruptFirst: true, signalNode: "scout"}
+	l.cfg.Steps = steps
+	if err := l.stageLanes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	onePassNoStop(t, l)
+	onePassNoStop(t, l) // Settle the terminal run into a ready continuation.
+	p := decisionFor(t, l, "item-a")
+	if p.decision.RunRequest == nil || !strings.HasSuffix(p.decision.RunRequest.RunID, "-interrupted") {
+		t.Fatalf("missing interrupted continuation: %+v", p.decision)
+	}
+	ok, claimed, err := l.applyPlan(context.Background(), p, runGit(t, f.root, "rev-parse", TrunkRef), l.cfg.Now())
+	if err != nil || !ok || claimed == nil {
+		t.Fatalf("interrupted continuation could not claim its lane: %v, %v", ok, err)
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		why, err := Why(tx.Reader(), Pass{}, l.cfg.Policy, nil)
+		if err == nil && why.Summary.LanesReserved != 0 {
+			t.Fatalf("why reports a reserved lane after restart claim: %s", why.Summary)
+		}
+		return err
 	})
 }
 
