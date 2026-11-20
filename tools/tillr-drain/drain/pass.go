@@ -487,6 +487,9 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 		}
 	}
 	if work.Ready {
+		// The original dispatch already consumed the design answer. Ready
+		// continuations replay the node, not that one-time conflict transition.
+		d.ConflictID = ""
 		if len(d.Parallel) > 0 && d.WorkflowRestart {
 			nodes := parallelNodes(d)
 			for i, node := range nodes {
