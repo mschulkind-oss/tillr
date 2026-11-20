@@ -152,6 +152,8 @@ HOLDER_ENV = 'GO_TEST_SHARDS_HOLDER'
 SLOT_CLASS_ORDINARY = 'ordinary'
 SLOT_CLASS_PROOF = 'proof'
 SLOT_CLASSES = (SLOT_CLASS_ORDINARY, SLOT_CLASS_PROOF)
+# One lock pays for one concurrent Go test, not an entire parallel batch.
+TESTS_PER_SLOT = 1
 # Re-announce long waits periodically so neither logs nor output-based stall watchdogs go silent.
 WAIT_REPORT_INTERVAL = 30.0
 
@@ -176,7 +178,8 @@ def default_shard_limit():
 def default_proof_shard_limit(ordinary_limit=None):
     """Reserved slots only proof and gate runs may take when ordinary slots are full."""
     limit = max(1, default_shard_limit() if ordinary_limit is None else ordinary_limit)
-    return min(6, max(1, (limit + 1) // 2))
+    spare = max(0, (os.cpu_count() or 1) - limit)
+    return min(spare, 6, (limit + 1) // 2)
 
 
 def resolve_slot_class(slot_class=None):
@@ -462,11 +465,13 @@ def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=N
     env = private_environment(label, scratch, git_values)
     if not binary.is_file() or not os.access(binary, os.X_OK):
         raise ShardError(f'{label} cannot start: test binary is missing or not executable: {binary}')
+    # The lock is held for the whole binary lifetime. Neither the Go timeout nor
+    # the progress watchdog starts until this shard has its own test capacity.
     effective_lock_dir = lock_dir if lock_dir is not None else default_lock_dir()
     effective_limit = shard_limit if shard_limit is not None else default_shard_limit()
     pattern = '^(' + '|'.join(re.escape(n) for n in names) + ')$'
     command = ['go', 'tool', 'test2json', '-t', '-p', package, str(binary),
-               '-test.v=test2json', '-test.count=1', '-test.parallel=48',
+               '-test.v=test2json', '-test.count=1', f'-test.parallel={TESTS_PER_SLOT}',
                '-test.timeout=' + timeout, '-test.run=' + pattern]
     try:
         # Files rather than pipes let us recover even if an escaped descendant keeps
@@ -665,7 +670,13 @@ def main():
     if sys.argv[1:2] == [GUARD_FLAG]:
         return guard_main(int(sys.argv[2]), sys.argv[4:])
     install_signal_handlers()
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog='Each held slot permits one concurrent Go test. On 32 logical CPUs, '
+               '16 ordinary plus 6 proof slots permit at most 22 concurrent tests. '
+               'Waiting messages report live holders by run. Use the same shared pool '
+               'for all runs; direct go test does not participate.',
+    )
     parser.add_argument('module', type=Path)
     parser.add_argument('-k', '--shards', type=int, default=6)
     parser.add_argument('--durations', type=Path, default=DEFAULT_DURATIONS)
