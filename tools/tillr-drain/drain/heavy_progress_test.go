@@ -9,7 +9,7 @@ import (
 
 func TestHeavyProgressOnlyReusesPassOnExactTip(t *testing.T) {
 	dir := scratchUnderDurable(t)
-	p, err := loadHeavyProgress(dir, "tip-one")
+	p, err := loadHeavyProgress(context.Background(), dir, dir, "tip-one")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,7 +19,7 @@ func TestHeavyProgressOnlyReusesPassOnExactTip(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	restarted, err := loadHeavyProgress(dir, "tip-one")
+	restarted, err := loadHeavyProgress(context.Background(), dir, dir, "tip-one")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,14 +30,14 @@ func TestHeavyProgressOnlyReusesPassOnExactTip(t *testing.T) {
 			t.Fatalf("reused %s: %v", result, ok)
 		}
 	}
-	next, err := loadHeavyProgress(dir, "tip-two")
+	next, err := loadHeavyProgress(context.Background(), dir, dir, "tip-two")
 	if err != nil || len(next.Checks) != 0 {
 		t.Fatalf("different tip reused: %+v %v", next, err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "heavy-progress.json"), []byte("broken"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := loadHeavyProgress(dir, "tip-one"); err == nil {
+	if _, err := loadHeavyProgress(context.Background(), dir, dir, "tip-one"); err == nil {
 		t.Fatal("corrupt proof silently discarded")
 	}
 }

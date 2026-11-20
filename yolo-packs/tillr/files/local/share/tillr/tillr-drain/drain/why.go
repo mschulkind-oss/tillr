@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr-drain/judgegrants"
 	"github.com/mschulkind-oss/tillr-item/item"
@@ -57,6 +58,10 @@ type WhyAnswer struct {
 	LanesSource  string     `json:"lanes_source,omitempty"`
 	Rows         []WhyRow   `json:"rows"`
 	Summary      WhySummary `json:"summary"`
+	// Trunk and TrunkLine are set only when the trunk is unproved: TrunkLine is the one line
+	// that says so, for how long, and which check is failing.
+	Trunk     *heavy.HeavyStatus `json:"trunk,omitempty"`
+	TrunkLine string             `json:"trunk_line,omitempty"`
 }
 
 // LoadPolicy is shared by planning and read faces. No policy is an explicit input:

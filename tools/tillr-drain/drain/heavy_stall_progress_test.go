@@ -31,7 +31,7 @@ func TestHeavySuccessfulStallRetryIsDurableBeforeNextRetry(t *testing.T) {
 		}
 		return append(checks, HeavyCheck{CheckID: "b", Result: "stalled"}), nil
 	})
-	p, err := loadHeavyProgress(progressDir, tip)
+	p, err := loadHeavyProgress(context.Background(), progressDir, progressDir, tip)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func TestHeavySuccessfulStallRetryIsDurableBeforeNextRetry(t *testing.T) {
 		t.Fatal("interruption passed")
 	}
 	first = false
-	p, err = loadHeavyProgress(progressDir, tip)
+	p, err = loadHeavyProgress(context.Background(), progressDir, progressDir, tip)
 	if err != nil {
 		t.Fatal(err)
 	}

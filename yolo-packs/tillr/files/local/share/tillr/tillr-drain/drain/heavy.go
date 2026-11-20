@@ -153,7 +153,7 @@ func (r HeavyRunner) Run(ctx context.Context) (out HeavyOutcome, err error) {
 				return out, Externalf("%s", run.Detail)
 			}
 		}
-		progress, e := loadHeavyProgress(dir, tip)
+		progress, e := loadHeavyProgress(ctx, r.Root, dir, tip)
 		if e != nil {
 			return out, e
 		}
@@ -414,6 +414,12 @@ func (r HeavyRunner) attribute(ctx context.Context, run HeavyRun, check *HeavyCh
 			}
 			if recorded {
 				found = true
+			} else if m, rebased, err := rebasedLanding(ctx, r.Root, r.Store, red, run.TipSHA); err != nil && ctx.Err() != nil {
+				return "", false, err
+			} else if rebased {
+				note := rebaseNote(red, m)
+				r.progressf("loop: heavy %s first red commit %s: %s; filing a fixer against it\n", check.CheckID, shortSHA(red), note)
+				check.Detail = joinDetail(check.Detail, note)
 			} else {
 				r.progressf("loop: heavy %s first red commit %s has no landing record; not reverting automatically, filing a fixer against it\n", check.CheckID, shortSHA(red))
 				check.Detail = joinDetail(check.Detail, "commit "+shortSHA(red)+" has no landing record; not reverted automatically")
@@ -608,9 +614,24 @@ func (r HeavyRunner) hasLandingRecord(ctx context.Context, sha string) (bool, er
 // replay is one attribution replay with its outcome on the progress log: what was
 // replayed where and why, how long it took, and its verdict or why it gave none.
 func (r HeavyRunner) replay(ctx context.Context, sha, id, why string) (bool, error) {
+	// A commit's tree never changes, so a verdict already reached for (sha, id) holds across
+	// a restart that cut the culprit search short. The heavy lock owns the file.
+	if dir, derr := heavyDirectory(ctx, r.Root); derr == nil {
+		if saved, ok := readHeavyReplay(dir, sha, id); ok {
+			r.progressf("loop: heavy %s reused replay at %s (%s): %s\n", id, shortSHA(sha), why, map[bool]string{true: "red", false: "green"}[saved])
+			return saved, nil
+		}
+	}
 	started := r.Now()
 	r.progressf("loop: heavy %s replaying at %s (%s)\n", id, shortSHA(sha), why)
 	red, err := r.one(ctx, sha, id)
+	if err == nil {
+		if dir, derr := heavyDirectory(ctx, r.Root); derr == nil {
+			if serr := saveHeavyReplay(dir, sha, id, red); serr != nil {
+				r.progressf("loop: heavy %s replay at %s not saved: %v\n", id, shortSHA(sha), serr)
+			}
+		}
+	}
 	took := r.Now().Sub(started).Round(time.Second)
 	switch {
 	case err != nil && ctx.Err() != nil:

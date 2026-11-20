@@ -1991,6 +1991,17 @@ planned:
 	if _, err := l.observeTrunk(ctx, ""); err != nil {
 		return "", err
 	}
+	// After-merge proof starts before document sync and landing reconciliation, so a fault
+	// in either on every start cannot keep a restarting loop from ever proving the tip.
+	if !l.nonLanding && l.gatePolicy.LandingStrategy == "after-merge" {
+		early, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+		if err != nil {
+			return "", err
+		}
+		if err := l.maybeRolling(ctx, early, false, result); err != nil {
+			return "", err
+		}
+	}
 	mainSHA, err := l.refreshDocuments(ctx, result)
 	if err != nil {
 		return "", err
