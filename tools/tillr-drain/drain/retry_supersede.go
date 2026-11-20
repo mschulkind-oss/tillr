@@ -256,6 +256,9 @@ func (l *Loop) supersedeCandidate(ctx context.Context, s supersession) error {
 		if err := appendEffectOn(tx, itemFaultClearedKind, "item", itemID, body, at); err != nil {
 			return err
 		}
+		if err := supersedeItemUnfinishedRunsInTxAt(ctx, tx, s.fault.ItemID, s.work.Decision.Attempt, true, nil, "superseded by retry "+s.retry.RetryID, at); err != nil {
+			return err
+		}
 		applied = true
 		return nil
 	})

@@ -153,6 +153,13 @@ func (l *Loop) cancelStaging(ctx context.Context, d Decision) error {
 			if _, err := tx.Exec(`UPDATE read_only_runs SET settled=1 WHERE run_id=?`, node.RunRequest.RunID); err != nil {
 				return err
 			}
+			if hasNodes, err := tableExists(tx.Reader(), "node_runs"); err != nil {
+				return err
+			} else if hasNodes {
+				if _, err := tx.Exec(`DELETE FROM node_runs WHERE run_id=? AND outcome='running' AND NOT EXISTS(SELECT 1 FROM runs WHERE run_id=?)`, node.RunRequest.RunID, node.RunRequest.RunID); err != nil {
+					return err
+				}
+			}
 		}
 		if _, err := tx.Exec(`DELETE FROM dispatches WHERE decision_id=? AND item_id=? AND run_id=?`, d.DecisionID, d.ItemID, d.RunRequest.RunID); err != nil {
 			return err

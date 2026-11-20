@@ -156,5 +156,8 @@ func (l *Loop) completeGraphWithoutCommit(ctx context.Context, d Decision, c Can
 	if err != nil {
 		return err
 	}
-	return l.cfg.Steps.ItemState(ctx, c.ItemID, c.RunID, StateLanded)
+	if err := l.cfg.Steps.ItemState(ctx, c.ItemID, c.RunID, StateLanded); err != nil {
+		return err
+	}
+	return l.endItemUnfinishedRuns(ctx, c.ItemID, c.RunID)
 }
