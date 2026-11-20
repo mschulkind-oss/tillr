@@ -1,7 +1,7 @@
-# last_hand_move_event_seq: 1307041
-# hand_move_event_sha256: a647e8ecdfc5964267e5b0f0ea6c789a4c36372aeb6e861b8c88572b10ea6785
-item-request-f16c0ce2d8
+# last_hand_move_event_seq: 1307775
+# hand_move_event_sha256: 6cdf4fe9fa338f4af68c63fb584d3bd4e8d8e51f8161dfa23525344312553e2d
 item-request-8d596c05b4
+item-request-f16c0ce2d8
 item-request-05ac7dd8a0
 item-request-b205fbd881
 item-request-ab90e5da8f
