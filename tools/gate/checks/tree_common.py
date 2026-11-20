@@ -36,7 +36,6 @@ SCRATCH_EXCEPTIONS = (
     # past claim. Its marker is that line's own text, so the exception cannot grow to cover
     # a different line in the file.
     ("yolo-packs/matt/briefing/work-rules.md", "put cited artifacts in the repository or under `$YOLO_DURABLE_DIR`"),
-    ("yolo-packs/matt/files/pi-rules.md", 'git worktree add --lock "$YOLO_DURABLE_DIR/worktrees/<task>"'),
     ("docs/pi/system-prompts.md", 'git worktree add --lock "$YOLO_DURABLE_DIR/worktrees/<task>"'),
     # The coordinator spill directory its reference documents (that file is a separate
     # lane's work, so this gate must not refuse it).
