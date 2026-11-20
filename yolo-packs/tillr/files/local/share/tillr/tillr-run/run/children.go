@@ -30,6 +30,43 @@ func newExecID() (string, error) {
 	return hex.EncodeToString(raw[:]), nil
 }
 
+// execMark names the processes one execution owns. A process is the execution's when it
+// carries its TILLR_RUN_EXEC_ID, or when it carries the run's TILLR_RUN_ID together with
+// the TILLR_LOOP_STORE this runner itself was started under. The second form reaches the
+// processes of an earlier execution of the same run (a resume) whose runner died without
+// cleaning up: they hold the old execution id, so the id alone never finds them. Without
+// a loop store the run id alone is not unique, so only the execution id is used.
+type execMark struct {
+	execID string
+	runID  string
+	store  string
+}
+
+func newExecMark(execID, runID string) execMark {
+	return execMark{execID: execID, runID: runID, store: os.Getenv("TILLR_LOOP_STORE")}
+}
+
+func (m execMark) empty() bool { return m.execID == "" && !m.byRun() }
+
+func (m execMark) byRun() bool { return m.runID != "" && m.store != "" }
+
+// matches reports whether the NUL-separated environment carries the mark.
+func (m execMark) matches(env []byte) bool {
+	hasRun, hasStore := false, false
+	for _, item := range bytes.Split(env, []byte{0}) {
+		s := string(item)
+		switch {
+		case m.execID != "" && s == runExecIDEnv+"="+m.execID:
+			return true
+		case m.byRun() && s == "TILLR_RUN_ID="+m.runID:
+			hasRun = true
+		case m.byRun() && s == "TILLR_LOOP_STORE="+m.store:
+			hasStore = true
+		}
+	}
+	return hasRun && hasStore
+}
+
 type markedProcess struct {
 	pid   int
 	pgid  int
@@ -61,21 +98,49 @@ func readProcStat(pid int) (state string, pgid int, start string, err error) {
 	return fields[0], pgid, fields[19], nil
 }
 
-func scanMarkedProcesses(execID string) ([]markedProcess, error) {
-	if execID == "" {
+// runnerLineage returns this process and its ancestors. They carry the run's markers by
+// inheritance (the drain sets them on the runner it starts) and are never the run's
+// leftovers, so a sweep by run id must not end them.
+func runnerLineage() map[int]bool {
+	lineage := map[int]bool{}
+	for pid := os.Getpid(); pid > 1 && !lineage[pid]; {
+		lineage[pid] = true
+		raw, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+		if err != nil {
+			break
+		}
+		text := string(raw)
+		end := strings.LastIndexByte(text, ')')
+		if end < 0 {
+			break
+		}
+		fields := strings.Fields(text[end+1:])
+		if len(fields) < 2 {
+			break
+		}
+		ppid, err := strconv.Atoi(fields[1])
+		if err != nil {
+			break
+		}
+		pid = ppid
+	}
+	return lineage
+}
+
+func scanMarkedProcesses(mark execMark) ([]markedProcess, error) {
+	if mark.empty() {
 		return nil, nil
 	}
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return nil, Externalf("reading /proc: %v", err)
 	}
-	selfPID := os.Getpid()
+	lineage := runnerLineage()
 	uid := uint32(os.Geteuid())
-	marker := []byte(runExecIDEnv + "=" + execID)
 	var found []markedProcess
 	for _, entry := range entries {
 		pid, err := strconv.Atoi(entry.Name())
-		if err != nil || pid <= 1 || pid == selfPID {
+		if err != nil || pid <= 1 || lineage[pid] {
 			continue
 		}
 		dir := filepath.Join("/proc", entry.Name())
@@ -107,14 +172,7 @@ func scanMarkedProcesses(execID string) ([]markedProcess, error) {
 		if err != nil {
 			return nil, Externalf("reading environ for process %d: %v", pid, err)
 		}
-		matched := false
-		for _, item := range bytes.Split(env, []byte{0}) {
-			if bytes.Equal(item, marker) {
-				matched = true
-				break
-			}
-		}
-		if matched {
+		if mark.matches(env) {
 			found = append(found, markedProcess{pid: pid, pgid: pgid, start: start})
 		}
 	}
@@ -161,13 +219,13 @@ func signalMarkedProcess(p markedProcess, sig syscall.Signal, selfPgid int) erro
 
 // signalRunProcesses sends sig to the worker process group and any non-zombie
 // processes carrying execID, including those in detached sessions or process groups.
-func signalRunProcesses(pid int, execID string, sig syscall.Signal) error {
+func signalRunProcesses(pid int, mark execMark, sig syscall.Signal) error {
 	if pid > 0 {
 		if err := syscall.Kill(-pid, sig); err != nil && !errors.Is(err, syscall.ESRCH) {
 			return Externalf("signaling worker process group %d: %v", pid, err)
 		}
 	}
-	procs, err := scanMarkedProcesses(execID)
+	procs, err := scanMarkedProcesses(mark)
 	if err != nil {
 		return err
 	}
@@ -183,7 +241,7 @@ func signalRunProcesses(pid int, execID string, sig syscall.Signal) error {
 // endRunProcesses terminates the worker process group and all non-zombie processes
 // carrying execID across detached sessions and process groups, repeating briefly so
 // a dying parent racing a fork cannot leak a child.
-func endRunProcesses(pid int, execID string) error {
+func endRunProcesses(pid int, mark execMark) error {
 	if pid > 0 {
 		if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 			return Externalf("ending worker process group %d: %v", pid, err)
@@ -192,7 +250,7 @@ func endRunProcesses(pid int, execID string) error {
 	selfPgid := syscall.Getpgrp()
 	deadline := time.Now().Add(runCleanupTimeout)
 	for {
-		procs, err := scanMarkedProcesses(execID)
+		procs, err := scanMarkedProcesses(mark)
 		if err != nil {
 			return err
 		}
@@ -205,7 +263,7 @@ func endRunProcesses(pid int, execID string) error {
 			}
 		}
 		if !time.Now().Before(deadline) {
-			procs, err = scanMarkedProcesses(execID)
+			procs, err = scanMarkedProcesses(mark)
 			if err != nil {
 				return err
 			}

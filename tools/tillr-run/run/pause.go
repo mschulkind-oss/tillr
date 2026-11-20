@@ -95,7 +95,7 @@ func pendingPause(ctx context.Context, s *store.Store, id string) (*pauseRequest
 // waitForPause observes natural exits, durable pause requests and settled idle
 // sessions. At-gap adapters watch TILLR_PAUSE_REQUEST and exit at a tool-call gap;
 // the runner enforces the straggler bound. Other adapters receive TERM immediately.
-func waitForPause(ctx context.Context, s *store.Store, cmd *exec.Cmd, id, execID, kind, path string, after func(time.Duration) <-chan time.Time, monitor *settledMonitor) (error, bool, bool, error) {
+func waitForPause(ctx context.Context, s *store.Store, cmd *exec.Cmd, id string, mark execMark, kind, path string, after func(time.Duration) <-chan time.Time, monitor *settledMonitor) (error, bool, bool, error) {
 	if after == nil {
 		after = time.After
 	}
@@ -130,7 +130,7 @@ func waitForPause(ctx context.Context, s *store.Store, cmd *exec.Cmd, id, execID
 						continue
 					}
 					waitErr := <-done
-					if cleanupErr := endRunProcesses(cmd.Process.Pid, execID); cleanupErr != nil {
+					if cleanupErr := endRunProcesses(cmd.Process.Pid, mark); cleanupErr != nil {
 						return waitErr, false, false, cleanupErr
 					}
 					// The parent can exit naturally between the channel check and
@@ -147,7 +147,7 @@ func waitForPause(ctx context.Context, s *store.Store, cmd *exec.Cmd, id, execID
 		case <-ticker.C:
 			if monitor.records != nil {
 				if err := monitor.records(); err != nil {
-					_ = endRunProcesses(cmd.Process.Pid, execID)
+					_ = endRunProcesses(cmd.Process.Pid, mark)
 					return <-done, false, false, Internalf("recording worker progress and sessions: %v", err)
 				}
 			}
@@ -158,19 +158,19 @@ func waitForPause(ctx context.Context, s *store.Store, cmd *exec.Cmd, id, execID
 			request, err := pendingPause(ctx, s, id)
 			if err != nil {
 				if ctx.Err() != nil {
-					if cleanupErr := endRunProcesses(cmd.Process.Pid, execID); cleanupErr != nil {
+					if cleanupErr := endRunProcesses(cmd.Process.Pid, mark); cleanupErr != nil {
 						return <-done, false, false, cleanupErr
 					}
 					return <-done, false, false, nil
 				}
-				_ = endRunProcesses(cmd.Process.Pid, execID)
+				_ = endRunProcesses(cmd.Process.Pid, mark)
 				return <-done, false, false, Internalf("reading pause request: %v", err)
 			}
 			if request == nil {
 				continue
 			}
 			if err := os.WriteFile(path, []byte("pause\n"), 0600); err != nil {
-				_ = endRunProcesses(cmd.Process.Pid, execID)
+				_ = endRunProcesses(cmd.Process.Pid, mark)
 				return <-done, false, false, Internalf("handing pause request to adapter: %v", err)
 			}
 			// A request with no timeout_ms (the loop's build migration) has no straggler
@@ -179,7 +179,7 @@ func waitForPause(ctx context.Context, s *store.Store, cmd *exec.Cmd, id, execID
 			bound := time.Duration(request.TimeoutMS) * time.Millisecond
 			if kind != PauseAtGap {
 				bound = 10 * time.Second
-				_ = signalRunProcesses(cmd.Process.Pid, execID, syscall.SIGTERM)
+				_ = signalRunProcesses(cmd.Process.Pid, mark, syscall.SIGTERM)
 			}
 			var elapsed <-chan time.Time
 			if bound > 0 {
@@ -189,19 +189,19 @@ func waitForPause(ctx context.Context, s *store.Store, cmd *exec.Cmd, id, execID
 			case err := <-done:
 				// A harness may exit while its shell is still running. Pausing must not
 				// leave that shell writing concurrently with the next session.
-				if cleanupErr := endRunProcesses(cmd.Process.Pid, execID); cleanupErr != nil {
+				if cleanupErr := endRunProcesses(cmd.Process.Pid, mark); cleanupErr != nil {
 					return err, true, kind != PauseAtGap, cleanupErr
 				}
 				return err, true, kind != PauseAtGap, nil
 			case <-elapsed:
-				cleanupErr := endRunProcesses(cmd.Process.Pid, execID)
+				cleanupErr := endRunProcesses(cmd.Process.Pid, mark)
 				return <-done, true, true, cleanupErr
 			case <-ctx.Done():
-				cleanupErr := endRunProcesses(cmd.Process.Pid, execID)
+				cleanupErr := endRunProcesses(cmd.Process.Pid, mark)
 				return <-done, false, false, cleanupErr
 			}
 		case <-ctx.Done():
-			cleanupErr := endRunProcesses(cmd.Process.Pid, execID)
+			cleanupErr := endRunProcesses(cmd.Process.Pid, mark)
 			return <-done, false, false, cleanupErr
 		}
 	}

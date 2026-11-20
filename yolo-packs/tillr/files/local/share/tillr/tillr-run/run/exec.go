@@ -315,6 +315,17 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		}
 	}
 
+	// An earlier execution of this run (a resume) may have left processes behind when its
+	// runner died before cleaning up; they are this run's, and the lane is about to be
+	// worked again, so end them before the worker starts. This runs before the wall's clock
+	// starts, so a scan of a busy process table never spends the run's own time.
+	if sweep := newExecMark("", req.RunID); sweep.byRun() {
+		if err := endRunProcesses(0, sweep); err != nil {
+			logFile.Close()
+			return record.Envelope{}, err
+		}
+	}
+
 	// A wall is a bound on total run duration, and it exists only when the request names
 	// one: 0 is an unbounded run, whose lane lease carries no expiry either
 	// (`leased_until = NULL`, design D-RW1). The context is still cancellable, because a
@@ -385,7 +396,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	// The child leads its own process group, and the bound kills the group plus any
 	// detached sessions carrying this execution's marker.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return endRunProcesses(cmd.Process.Pid, execID) }
+	mark := newExecMark(execID, req.RunID)
 	// The terminal write is the record a stop must not lose: the caller's context is
 	// canceled exactly when the run is being stopped, so the write is detached from it. A
 	// stop that left no row and no release would be the orphan the operator cannot see.
@@ -434,10 +445,10 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	monitor.records = func() error { return workerRecords.sample(writeCtx, false) }
 	monitor.offset = streamOffset
 	monitor.startOffset = streamOffset
-	waitErr, paused, interrupted, pauseErr := waitForPause(runCtx, s, cmd, req.RunID, execID, pauseKind, pausePath, opts.PauseAfter, monitor)
+	waitErr, paused, interrupted, pauseErr := waitForPause(runCtx, s, cmd, req.RunID, mark, pauseKind, pausePath, opts.PauseAfter, monitor)
 	// Wait reaps the worker, not its background children or detached sessions. End all
 	// remaining marked processes before releasing the lane in the terminal write.
-	if cleanupErr := endRunProcesses(cmd.Process.Pid, execID); cleanupErr != nil {
+	if cleanupErr := endRunProcesses(cmd.Process.Pid, mark); cleanupErr != nil {
 		logFile.Close()
 		return record.Envelope{}, cleanupErr
 	}
