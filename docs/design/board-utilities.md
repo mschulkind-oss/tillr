@@ -738,7 +738,7 @@ only when staging passes an explicit `--timeout N`. What a wall does not
 excuse is the work a killed run produced: `drain`'s `settle` judges any
 run whose target `HEAD` moved off its base, whatever the exit status, and
 only a run that committed nothing is unjudged
-([`tillr-drain-successor.md`](./tillr-drain-successor.md) [Section 2.3](./tillr-drain-successor.md#23-the-transition-table)).
+([`tillr-drain-successor.md`](../reference/tillr-drain-successor.md) [Transition Table](../reference/tillr-drain-successor.md#transition-table)).
 
 **Requires:** a store and a caller-named lane root. In fixture use the
 command is a stub (`/bin/true`, a script that writes a known artifact), so

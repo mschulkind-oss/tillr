@@ -38,7 +38,7 @@ So a walled run gets none of the remedy an infrastructure failure gets. It is no
 
 ## 3. What the design says happens next
 
-`docs/design/tillr-drain-successor.md` (line 255), `running -> settle -> held`:
+The pre-graduation drain successor design (since verified in [`docs/reference/tillr-drain-successor.md`](../reference/tillr-drain-successor.md#transition-table); read at `fad4487603`), `running -> settle -> held`:
 
 > To **held** with ... `run-unjudged` when the attempt was cut short by a wall. Reset the lane.
 

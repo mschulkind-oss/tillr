@@ -1,3 +1,4 @@
+// Architecture and invariants: docs/reference/tillr-drain-successor.md
 package drain
 
 import (
@@ -475,7 +476,7 @@ type LoopResult struct {
 	Build *BuildStamp `json:"build,omitempty"`
 }
 
-// Loop supervises per-item passes (docs/design/tillr-drain-successor.md, Section 2.5).
+// Loop supervises per-item passes (docs/reference/tillr-drain-successor.md#one-pass-and-compare-and-swap-application).
 // Dispatch, settlement and judgment each claim their resource before launching an
 // independent worker. Terminal outcomes are read from the store; completion channels
 // are only this process's wake triggers. Each run retains its own boundary bracket.
