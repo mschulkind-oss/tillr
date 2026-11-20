@@ -15,6 +15,9 @@ type itemRunView struct {
 	RunID        string   `json:"run_id"`
 	LaneID       string   `json:"lane_id"`
 	Backend      string   `json:"backend"`
+	Seat         string   `json:"seat,omitempty"`
+	Workflow     string   `json:"workflow,omitempty"`
+	Node         string   `json:"node,omitempty"`
 	State        string   `json:"state"`
 	ExitCode     *int     `json:"exit_code"`
 	StartedAtMS  int64    `json:"started_at_ms"`
@@ -25,6 +28,10 @@ type itemRunView struct {
 }
 
 func readItemRunHistory(r *store.Reader, runs []storeRun) ([]itemRunView, error) {
+	dispatched, err := dispatchSeats(r)
+	if err != nil {
+		return nil, err
+	}
 	out := []itemRunView{}
 	for _, run := range runs {
 		var cause sql.NullString
@@ -37,7 +44,25 @@ func readItemRunHistory(r *store.Reader, runs []storeRun) ([]itemRunView, error)
 			v := cause.String
 			end = &v
 		}
-		out = append(out, itemRunView{run.RunID, run.LaneID, run.Backend, run.State, run.ExitCode, run.StartedAtMS, run.FinishedAtMS, end, run.UsageTokens, run.CostUSD})
+		seat := run.Seat
+		if seat == "" {
+			seat = dispatched[run.RunID]
+		}
+		out = append(out, itemRunView{
+			RunID:        run.RunID,
+			LaneID:       run.LaneID,
+			Backend:      run.Backend,
+			Seat:         seat,
+			Workflow:     run.Workflow,
+			Node:         run.Node,
+			State:        run.State,
+			ExitCode:     run.ExitCode,
+			StartedAtMS:  run.StartedAtMS,
+			FinishedAtMS: run.FinishedAtMS,
+			EndCause:     end,
+			UsageTokens:  run.UsageTokens,
+			CostUSD:      run.CostUSD,
+		})
 	}
 	return out, nil
 }

@@ -147,6 +147,7 @@ func (l *Loop) claimParallel(tx *store.Tx, d *Decision) error {
 		node.RunRequest.TimeoutMS = stage.TimeoutMS
 		node.RunRequest.ReadOnlyGroup = group
 		node.RunRequest.CorrelationID = d.RunRequest.CorrelationID
+		stampDecisionRequest(node, node.RunRequest)
 		if i == d.NodeIndex {
 			d.RunRequest = node.RunRequest
 		} else {
@@ -270,7 +271,9 @@ func (l *Loop) runParallel(ctx context.Context, d Decision) error {
 					return
 				}
 			}
-			_, _, errs[i] = l.runRestartable(ctx, *node.RunRequest)
+			req := *node.RunRequest
+			stampDecisionRequest(node, &req)
+			_, _, errs[i] = l.runRestartable(ctx, req)
 		}(i, node)
 	}
 	wg.Wait()

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -40,6 +41,7 @@ type passDecision struct {
 	Reason string `json:"reason"`
 	LaneID string `json:"lane_id,omitempty"`
 	RunID  string `json:"run_id,omitempty"`
+	Seat   string `json:"seat,omitempty"`
 	passID string
 }
 
@@ -233,11 +235,18 @@ func assemblePasses(r *store.Reader, loopDir string, b passBounds) ([]passRow, e
 }
 
 func readPassDecisions(r *store.Reader, at int64, places map[string]int) ([]passDecision, error) {
-	query := `SELECT item_id,action,reason,COALESCE(lane_id,''),COALESCE(run_id,''),COALESCE(pass_id,'') FROM dispatches WHERE dispatched_at = ? ORDER BY rowid`
+	query := `SELECT item_id,action,reason,COALESCE(lane_id,''),COALESCE(run_id,''),COALESCE(seat,''),COALESCE(pass_id,'') FROM dispatches WHERE dispatched_at = ? ORDER BY rowid`
 	rows, err := r.Query(query, at)
-	legacy := isMissingColumn(err)
-	if legacy {
-		rows, err = r.Query(`SELECT item_id,action,reason,COALESCE(lane_id,''),COALESCE(run_id,'') FROM dispatches WHERE dispatched_at = ? ORDER BY rowid`, at)
+	for isMissingColumn(err) {
+		switch {
+		case strings.Contains(err.Error(), "no such column: seat"):
+			query = strings.Replace(query, "COALESCE(seat,'')", "''", 1)
+		case strings.Contains(err.Error(), "no such column: pass_id"):
+			query = strings.Replace(query, "COALESCE(pass_id,'')", "''", 1)
+		default:
+			return nil, err
+		}
+		rows, err = r.Query(query, at)
 	}
 	if err != nil {
 		return nil, err
@@ -246,16 +255,21 @@ func readPassDecisions(r *store.Reader, at int64, places map[string]int) ([]pass
 	out := []passDecision{}
 	for rows.Next() {
 		var d passDecision
-		cols := []any{&d.ItemID, &d.Action, &d.Reason, &d.LaneID, &d.RunID}
-		if !legacy {
-			cols = append(cols, &d.passID)
-		}
-		if err := rows.Scan(cols...); err != nil {
+		if err := rows.Scan(&d.ItemID, &d.Action, &d.Reason, &d.LaneID, &d.RunID, &d.Seat, &d.passID); err != nil {
 			return nil, err
 		}
 		d.Place = places[d.ItemID]
 		if !passDispatchAction(d.Action) {
-			d.LaneID, d.RunID = "", ""
+			d.LaneID, d.RunID, d.Seat = "", "", ""
+		} else if d.Seat == "" && d.RunID != "" {
+			var seat string
+			err := r.QueryRow(`SELECT COALESCE(seat, '') FROM runs WHERE run_id = ?`, d.RunID).Scan(&seat)
+			if err != nil && !isMissingColumn(err) && !isMissingTable(err) && !errors.Is(err, sql.ErrNoRows) {
+				return nil, err
+			}
+			if err == nil {
+				d.Seat = seat
+			}
 		}
 		out = append(out, d)
 	}
@@ -473,11 +487,11 @@ func printPasses(w io.Writer, rows []passRow) error {
 			return err
 		}
 		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-		if _, err := fmt.Fprintln(tw, "  item_id\taction\treason\tlane_id\trun_id"); err != nil {
+		if _, err := fmt.Fprintln(tw, "  item_id\taction\treason\tlane_id\trun_id\tseat"); err != nil {
 			return err
 		}
 		for _, d := range row.Decisions {
-			if _, err := fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\n", d.ItemID, d.Action, d.Reason, d.LaneID, d.RunID); err != nil {
+			if _, err := fmt.Fprintf(tw, "  %s\t%s\t%s\t%s\t%s\t%s\n", d.ItemID, d.Action, d.Reason, d.LaneID, d.RunID, d.Seat); err != nil {
 				return err
 			}
 		}

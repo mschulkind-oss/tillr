@@ -429,7 +429,11 @@ func (p Policy) NextRequest(itemID, laneID, runID, failedBackend, seat string) (
 	if !ok {
 		return nil, "", false
 	}
-	return p.request(itemID, laneID, runID, next), degraded, true
+	req := p.request(itemID, laneID, runID, next)
+	if req != nil {
+		req.Seat = seat
+	}
+	return req, degraded, true
 }
 
 // request is the complete run.request one dispatch carries, built from the backend the

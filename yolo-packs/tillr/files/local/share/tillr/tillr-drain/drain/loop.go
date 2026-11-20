@@ -236,7 +236,8 @@ type Candidate struct {
 	Request *run.Request `json:"-"`
 	// Seat is the seat the item asked for, carried so the conflict-fix run's decision
 	// names the same seat the original dispatch did.
-	Seat string `json:"-"`
+	Seat     string `json:"-"`
+	Workflow string `json:"workflow,omitempty"`
 }
 
 // GateOutcome is what the gate step answers: the verdict the gate reached and the gate
@@ -1588,6 +1589,7 @@ func (l *Loop) runLane(ctx context.Context, decision Decision, mainSHA, tick str
 	lane := decision.LaneID
 	worktree := l.lanePath(lane)
 	request := *decision.RunRequest
+	stampDecisionRequest(decision, &request)
 	before, err := l.snapshot(ctx, []string{worktree}, watched)
 	if err != nil {
 		return laneOutcome{err: err}
@@ -1964,6 +1966,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			l.mu.Unlock()
 			// After the reset this work belongs to the new run, not the run whose
 			// snapshot was just preserved. Reusing its ref would lose failover edits.
+			stampDecisionRequest(decision, failover)
 			request = *failover
 			decision.RunRequest = failover
 			record, log, err = l.runRestartable(ctx, request)
@@ -2193,7 +2196,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	candidate := Candidate{
 		ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, TickID: tick,
 		Worktree: target, BaseRef: baseRef, BaseSHA: baseSHA, HeadSHA: headSHA,
-		Request: &request, Seat: decision.Seat, BlockConflict: decision.BlockConflict,
+		Request: &request, Seat: decision.Seat, Workflow: decision.workflowRef(), BlockConflict: decision.BlockConflict,
 	}
 	if err := l.attachWorkflowJudge(ctx, decision, &candidate); err != nil {
 		return laneOutcome{err: err}

@@ -226,6 +226,7 @@ func (l *Loop) restartRepeatingNode(ctx context.Context, d Decision, base string
 	if d.Workflow.Stages[d.NodeIndex].TimeoutMS > 0 {
 		request.TimeoutMS = d.Workflow.Stages[d.NodeIndex].TimeoutMS
 	}
+	stampDecisionRequest(d, request)
 	d.RunRequest = request
 	d.WorkflowRestart = true
 	d.Returned, d.WorkerSessionReason = nil, ""

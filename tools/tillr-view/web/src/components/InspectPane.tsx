@@ -144,6 +144,7 @@ export function InspectPane(props: InspectPaneProps) {
                     <span>
                       exit {run.run.exit_code === null ? "not recorded" : run.run.exit_code}
                     </span>
+                    {run.run.seat ? <span>· seat {run.run.seat}</span> : null}
                     <span>· {run.run.backend}</span>
                     <span>· lane {run.run.lane_id || "unrecorded"}</span>
                     <RunUsageFigures usage={run.usage} />

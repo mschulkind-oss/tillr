@@ -305,6 +305,10 @@ func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.
 			return laneOutcome{err: Usagef("designer replacement backend %s has no request", backend)}
 		}
 		replacement.CorrelationID = req.CorrelationID
+		replacement.Seat = req.Seat
+		replacement.Workflow = req.Workflow
+		replacement.Node = req.Node
+		replacement.NodeID = req.NodeID
 		req = *replacement
 	}
 	req.Resume = false
@@ -313,6 +317,7 @@ func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.
 	if old.RunRequest.SessionTurn && next.Workflow != nil {
 		req.RunID += "-n" + strconv.Itoa(next.NodeIndex+1)
 	}
+	stampDecisionRequest(next, &req)
 	next.RunRequest = &req
 	identifyDecision(&next)
 	spec := StageSpec{Policy: l.currentPolicy(), Continue: true, LaneID: next.LaneID, ItemID: next.ItemID, RunID: req.RunID, Backend: req.Backend, BaseSHA: l.laneBase(next.LaneID), WorkingDir: req.WorkingDir, TimeoutMS: req.TimeoutMS, Returned: old.Returned}

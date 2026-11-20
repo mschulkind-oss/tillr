@@ -594,19 +594,35 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 					return err
 				}
 				backend := ""
-				var route, harness, startedAt string
+				var route, harness, seat, workflow, node, startedAt string
 				var artifactRefs []run.ArtifactRef
 				var usage *run.Usage
 				if prev != nil {
 					backend = prev.Backend
 					route = prev.Route
 					harness = prev.Harness
+					seat = prev.Seat
+					workflow = prev.Workflow
+					node = prev.Node
 					startedAt = prev.StartedAt
 					artifactRefs = prev.ArtifactRefs
 					usage = prev.Usage
 				}
-				if work.Decision.RunRequest != nil && work.Decision.RunRequest.Backend != "" {
-					backend = work.Decision.RunRequest.Backend
+				if work.Decision.RunRequest != nil {
+					stamped := *work.Decision.RunRequest
+					stampDecisionRequest(work.Decision, &stamped)
+					if stamped.Backend != "" {
+						backend = stamped.Backend
+					}
+					if seat == "" {
+						seat = stamped.Seat
+					}
+					if workflow == "" {
+						workflow = stamped.Workflow
+					}
+					if node == "" {
+						node = stamped.Node
+					}
 				}
 				if startedAt == "" {
 					startedAt = at.UTC().Format(time.RFC3339)
@@ -621,6 +637,9 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 					Backend:      backend,
 					Route:        route,
 					Harness:      harness,
+					Seat:         seat,
+					Workflow:     workflow,
+					Node:         node,
 					State:        run.StateTimedOut,
 					EndCause:     run.EndLeaseReclaimed,
 					Resumed:      true,

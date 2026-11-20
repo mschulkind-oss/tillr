@@ -44,6 +44,7 @@ func (l *Loop) retryWorkflowNode(ctx context.Context, d Decision, base string, r
 	}
 	request.NodeID = d.Workflow.Stages[d.NodeIndex].ID
 	request.WorkingDir = d.RunRequest.WorkingDir
+	stampDecisionRequest(d, request)
 	d.RunRequest = request
 	d.NodeInfraFailures++
 	d.WorkflowRestart = true
@@ -94,6 +95,7 @@ func (l *Loop) restartInterruptedNode(ctx context.Context, d Decision, base stri
 	}
 	request.NodeID = d.Workflow.Stages[d.NodeIndex].ID
 	request.WorkingDir = d.RunRequest.WorkingDir
+	stampDecisionRequest(d, request)
 	d.RunRequest = request
 	d.WorkflowRestart = true
 	d.Action, d.Reason = ActionDispatch, "workflow-node-interrupted"

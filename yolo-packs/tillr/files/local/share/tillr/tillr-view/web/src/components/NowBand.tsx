@@ -59,6 +59,7 @@ export function NowBand({ snapshot, now: pinned, onSelectItem }: NowBandProps) {
               </span>
               <span className="now-band__meta">
                 <span className="now-band__lane">lane {run.laneId}</span>
+                {run.seat ? <span className="now-band__seat">seat {run.seat}</span> : null}
                 {elapsed === null ? (
                   <span className="now-band__absent">no start recorded</span>
                 ) : (

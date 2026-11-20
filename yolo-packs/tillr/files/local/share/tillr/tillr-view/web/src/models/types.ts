@@ -148,7 +148,7 @@ export interface PassRow {
   spend_started_in_loop?: SpendTotals | null;
   spend_carried_over?: SpendTotals | null;
   dispatched_at_ms: number;
-  decisions: { item_id: string; place?: number; action: string; reason: string; lane_id?: string; run_id?: string }[];
+  decisions: { item_id: string; place?: number; action: string; reason: string; lane_id?: string; run_id?: string; seat?: string }[];
   phases?: { stage_ms: number | null; dispatch_ms: number | null; gate_ms: number | null; land_ms: number | null } | null;
   session_id?: string;
   stop?: string;
@@ -170,6 +170,9 @@ export interface RunSummary {
   run_id: string;
   lane_id: string;
   backend: string;
+  seat?: string;
+  workflow?: string;
+  node?: string;
   state: string;
   exit_code: number | null;
   started_at_ms: number;
@@ -213,10 +216,10 @@ export interface PipelineStep {
   finished_at_ms: number | null;
 }
 export interface LaneHistoryRun {
-  run_id: string; item_id: string; lane_id: string; state: string;
+  run_id: string; item_id: string; lane_id: string; seat?: string; state: string;
   started_at_ms: number; finished_at_ms: number;
 }
-export interface LaneNode { node_id: string; run_id: string; attempt: number; state: "running" | "passed" | "failed" | "skipped" }
+export interface LaneNode { node_id: string; run_id: string; attempt: number; seat?: string; state: "running" | "passed" | "failed" | "skipped" }
 export interface ProgressClaim { run_id: string; criterion_id: string }
 export interface ChildSession { run_id: string; session_id: string; role: string; started_at_ms: number | null; ended_at_ms: number | null; turn_count: number | null; end_clock?: string; transcript: string }
 export interface ChildrenRecord { recorded: boolean; sessions: ChildSession[]; note?: string }
@@ -234,9 +237,10 @@ export interface LaneRow {
   state: "idle" | "running" | "settling" | "paused";
   state_since_ms: number | null;
   run_id: string; item_id: string; seat: string; backend: string; attempt: number; outcome: string;
-  /** Where `seat` was read: the run's dispatch, the item, or "none" — the item asked for no
-   * seat and the policy's default backend ran it. Absent from a server older than the field. */
-  seat_source?: "dispatch" | "item" | "none";
+  /** Where `seat` was read: the run itself, the run's dispatch, the item, or "none" — the item
+   * asked for no seat and the policy's default backend ran it. Absent from a server older than
+   * the field. */
+  seat_source?: "run" | "dispatch" | "item" | "none";
   last_step: string; last_step_at_ms: number | null; log_grew_at_ms: number | null;
   latest_action: { kind: "action" | "liveness" | "unrecorded"; text: string; at_ms: number | null; clock: string };
   note?: string;
@@ -517,6 +521,9 @@ export interface ItemRunView {
   run_id: string;
   lane_id: string;
   backend: string;
+  seat?: string;
+  workflow?: string;
+  node?: string;
   state: string;
   exit_code: number | null;
   started_at_ms: number;
@@ -637,6 +644,9 @@ export interface RunDetail {
   item_id: string;
   lane_id: string;
   backend: string;
+  seat?: string;
+  workflow?: string;
+  node?: string;
   state: string;
   exit_code: number | null;
   started_at_ms: number;

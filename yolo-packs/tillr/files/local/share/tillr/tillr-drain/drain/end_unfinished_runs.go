@@ -56,17 +56,17 @@ func isTerminalRunState(state string) bool {
 // When markSuperseded is true, it appends drain.run-superseded with the row's prior
 // event_seq first so readPriorRuns does not reorder this run ahead of newer attempts.
 func endNonTerminalRunRow(ctx context.Context, tx *store.Tx, runID, reason string, markSuperseded bool, at time.Time) error {
-	var itemID, route, harness sql.NullString
+	var itemID, route, harness, seat, workflow, node sql.NullString
 	var laneID, backend, state, artifactRefs string
 	var startedMS int64
 	var usageTokens sql.NullInt64
 	var usageCost sql.NullFloat64
 	var eventSeq int64
 	err := tx.Reader().QueryRow(
-		`SELECT item_id, lane_id, backend, route, harness, state, started_at, artifact_refs, usage_tokens, usage_cost_usd, event_seq
+		`SELECT item_id, lane_id, backend, route, harness, seat, workflow, node, state, started_at, artifact_refs, usage_tokens, usage_cost_usd, event_seq
 		   FROM runs WHERE run_id = ?`,
 		runID,
-	).Scan(&itemID, &laneID, &backend, &route, &harness, &state, &startedMS, &artifactRefs, &usageTokens, &usageCost, &eventSeq)
+	).Scan(&itemID, &laneID, &backend, &route, &harness, &seat, &workflow, &node, &state, &startedMS, &artifactRefs, &usageTokens, &usageCost, &eventSeq)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -106,6 +106,15 @@ func endNonTerminalRunRow(ctx context.Context, tx *store.Tx, runID, reason strin
 	}
 	if rec.Harness == "" && harness.Valid {
 		rec.Harness = harness.String
+	}
+	if rec.Seat == "" && seat.Valid {
+		rec.Seat = seat.String
+	}
+	if rec.Workflow == "" && workflow.Valid {
+		rec.Workflow = workflow.String
+	}
+	if rec.Node == "" && node.Valid {
+		rec.Node = node.String
 	}
 	if rec.ArtifactRefs == nil {
 		var refs []run.ArtifactRef

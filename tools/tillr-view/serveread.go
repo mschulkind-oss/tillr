@@ -116,6 +116,9 @@ type storeRun struct {
 	ItemID         string
 	LaneID         string
 	Backend        string
+	Seat           string
+	Workflow       string
+	Node           string
 	State          string
 	ExitCode       *int
 	StartedAtMS    int64
@@ -568,10 +571,36 @@ func readLanesIn(r *store.Reader, loopDir string) ([]storeLane, error) {
 	return out, nil
 }
 
+const runsSelectColumns = `run_id, COALESCE(item_id, ''), lane_id, backend, COALESCE(seat, ''), COALESCE(workflow, ''), COALESCE(node, ''), state, exit_code, started_at, finished_at, usage_tokens, usage_cost_usd, event_seq`
+
+// queryRuns runs a `runs` SELECT and projects any absent schema-migration columns
+// (seat, workflow, node, usage_tokens, usage_cost_usd) as empty/NULL so read-only opens
+// against pre-change stores succeed without migrating.
+func queryRuns(r *store.Reader, query string, args ...any) (*sql.Rows, error) {
+	rows, err := r.Query(query, args...)
+	for isMissingColumn(err) {
+		switch {
+		case strings.Contains(err.Error(), "no such column: seat"):
+			query = strings.Replace(query, "COALESCE(seat, '')", "''", 1)
+		case strings.Contains(err.Error(), "no such column: workflow"):
+			query = strings.Replace(query, "COALESCE(workflow, '')", "''", 1)
+		case strings.Contains(err.Error(), "no such column: node"):
+			query = strings.Replace(query, "COALESCE(node, '')", "''", 1)
+		case strings.Contains(err.Error(), "no such column: usage_tokens"):
+			query = strings.Replace(query, "usage_tokens", "NULL", 1)
+		case strings.Contains(err.Error(), "no such column: usage_cost_usd"):
+			query = strings.Replace(query, "usage_cost_usd", "NULL", 1)
+		default:
+			return nil, err
+		}
+		rows, err = r.Query(query, args...)
+	}
+	return rows, err
+}
+
 // readRuns answers every run, ordered by start so a caller's list reads as a history.
 func readRuns(r *store.Reader) ([]storeRun, error) {
-	rows, err := r.Query(`SELECT run_id, COALESCE(item_id, ''), lane_id, backend, state, exit_code,
-		started_at, finished_at, usage_tokens, usage_cost_usd, event_seq FROM runs ORDER BY started_at, run_id`)
+	rows, err := queryRuns(r, `SELECT `+runsSelectColumns+` FROM runs ORDER BY started_at, run_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -623,8 +652,7 @@ func readRunOrLiveIn(r *store.Reader, runID, loopDir string) (storeRun, bool, er
 
 // readRun answers one run, and whether the store carries it.
 func readRun(r *store.Reader, runID string) (storeRun, bool, error) {
-	rows, err := r.Query(`SELECT run_id, COALESCE(item_id, ''), lane_id, backend, state, exit_code,
-		started_at, finished_at, usage_tokens, usage_cost_usd, event_seq FROM runs WHERE run_id = ?`, runID)
+	rows, err := queryRuns(r, `SELECT `+runsSelectColumns+` FROM runs WHERE run_id = ?`, runID)
 	if err != nil {
 		return storeRun{}, false, err
 	}
@@ -641,24 +669,7 @@ func readRun(r *store.Reader, runID string) (storeRun, bool, error) {
 
 // readItemRuns answers the runs dispatched for one item.
 func readItemRuns(r *store.Reader, itemID string) ([]storeRun, error) {
-	query := `SELECT run_id, COALESCE(item_id, ''), lane_id, backend, state, exit_code,
-		started_at, finished_at, usage_tokens, usage_cost_usd, event_seq FROM runs
-		WHERE item_id = ? ORDER BY started_at, run_id`
-	rows, err := r.Query(query, itemID)
-	// Spend columns arrived after runs shipped. Project only the absent columns as
-	// NULL, preserving any spend the historical store does carry, without migrating
-	// it from this read-only face. Other schema errors still refuse the request.
-	for isMissingColumn(err) {
-		switch {
-		case strings.Contains(err.Error(), "no such column: usage_tokens"):
-			query = strings.Replace(query, "usage_tokens", "NULL", 1)
-		case strings.Contains(err.Error(), "no such column: usage_cost_usd"):
-			query = strings.Replace(query, "usage_cost_usd", "NULL", 1)
-		default:
-			return nil, err
-		}
-		rows, err = r.Query(query, itemID)
-	}
+	rows, err := queryRuns(r, `SELECT `+runsSelectColumns+` FROM runs WHERE item_id = ? ORDER BY started_at, run_id`, itemID)
 	if err != nil {
 		return nil, err
 	}
@@ -683,7 +694,7 @@ func scanRun(sc rowScanner) (storeRun, error) {
 	var run storeRun
 	var exitCode, tokens sql.NullInt64
 	var cost sql.NullFloat64
-	if err := sc.Scan(&run.RunID, &run.ItemID, &run.LaneID, &run.Backend, &run.State, &exitCode,
+	if err := sc.Scan(&run.RunID, &run.ItemID, &run.LaneID, &run.Backend, &run.Seat, &run.Workflow, &run.Node, &run.State, &exitCode,
 		&run.StartedAtMS, &run.FinishedAtMS, &tokens, &cost, &run.EventSeq); err != nil {
 		return storeRun{}, err
 	}
@@ -1238,6 +1249,9 @@ type allocation struct {
 	RunID       string
 	ItemID      string
 	Backend     string
+	Seat        string
+	Workflow    string
+	Node        string
 	LaneID      string
 	StartedAtMS int64
 }
@@ -1271,6 +1285,9 @@ func readAllocations(r *store.Reader) (map[string]allocation, error) {
 			RunID     string `json:"run_id"`
 			ItemID    string `json:"item_id"`
 			Backend   string `json:"backend"`
+			Seat      string `json:"seat"`
+			Workflow  string `json:"workflow"`
+			Node      string `json:"node"`
 			LaneID    string `json:"lane_id"`
 			StartedAt string `json:"started_at"`
 		}
@@ -1286,6 +1303,9 @@ func readAllocations(r *store.Reader) (map[string]allocation, error) {
 			RunID:       body.RunID,
 			ItemID:      body.ItemID,
 			Backend:     body.Backend,
+			Seat:        body.Seat,
+			Workflow:    body.Workflow,
+			Node:        body.Node,
 			LaneID:      body.LaneID,
 			StartedAtMS: started.UnixMilli(),
 		}

@@ -230,6 +230,9 @@ func requestFace(args []string) int {
 	itemID := fs.String("item", "", "the item the run is dispatched for")
 	laneID := fs.String("lane", "", "the lane the run holds")
 	runID := fs.String("run", "", "the run's id, which the route is drawn from")
+	seat := fs.String("seat", "", "the seat that runs the request")
+	workflow := fs.String("workflow", "", "the workflow the run belongs to")
+	node := fs.String("node", "", "the workflow node the run executes")
 	now := fs.String("now", "", "the injected clock, RFC 3339")
 	if err := parseFlags(fs, args); err != nil {
 		return fail(err)
@@ -260,8 +263,12 @@ func requestFace(args []string) int {
 	if missing := backend.Missing(); missing != "" {
 		return fail(run.Usagef("the policy's backend %q %s", *backendName, missing))
 	}
+	req := backend.Request(*itemID, *laneID, *runID, *backendName)
+	req.Seat = *seat
+	req.Workflow = *workflow
+	req.Node = *node
 	env, err := run.RequestRecord(
-		backend.Request(*itemID, *laneID, *runID, *backendName),
+		req,
 		record.Producer{System: record.System, Utility: run.Utility, Version: run.Version}, at)
 	if err != nil {
 		return fail(err)

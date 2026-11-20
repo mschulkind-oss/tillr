@@ -340,10 +340,10 @@ stay visible but count in neither number. When an older server omits `work_state
 the header reports an unknown running count rather than treating every lease as work.
 
 Rows carry the item, seat, backend, attempt number, run id, state-start clock,
-and latest action with its clock. The seat is the one the dispatch decision recorded
-(`dispatches.seat`), else the item's requested seat, and `seat_source` says which
-(`dispatch`, `item` or `none`). `none` means the item asked for no seat and the
-policy's default ran it, which Home shows as "no seat asked (policy default)". An idle row retains its last run and recorded
+and latest action with its clock. The seat is resolved from the run record first
+(`seat_source` = `run`), then `dispatch` (`dispatches.seat`), `item`, or `none`.
+`none` means the item asked for no seat and the policy's default ran it, which Home
+shows as "no seat asked (policy default)". An idle row retains its last run and recorded
 outcome. Attempt numbers count distinct runs for that item, including allocations
 that have no terminal row yet, so an attempt number is an ordinal and not a count of
 work done ([what it counts](../tillr-drain/README.md#what-the-attempt-number-counts)).
@@ -630,7 +630,7 @@ show two or more consecutive abnormal exits for the same cause, `running` (both 
 `loop.repeated_stop` JSON) and `/api/v1/snapshot` (`drain_summary.repeated_stop`, rendered
 in `LoopBand` and `LoopSummary`) report the stuck-drain streak, time window, and next
 action even while a newly restarted session is active.
-2. **The active runs** — the lane, run, item, place, title, elapsed (the viewer's clock from
+2. **The active runs** — the lane, run, item, seat, place, title, elapsed (the viewer's clock from
 the run's start), turns and spend so far, in-run loop recoveries (`RECOVERIES`, summarizing
 `loop_detected` events with `action: "recovered"` by count, shape, and tokens before and
 after), lease left, and the run's `.log` path. The store has no spend or recovery record
@@ -640,9 +640,10 @@ turn with no cost reported, or a run with no recovery shows `—`. With no live 
 `0 live runs; lanes idle: lane-1` rather than drawing an empty table.
 3. **The last five finished runs** — the outcome (`landed <sha>`, `gate-failed`,
 `exited <code>`, `timed-out`, or `repeating-call: <tool> ×<streak>` for a session pi ended
-for a loop), in-run loop recoveries (`RECOVERIES`), duration and cost. The JSON row
-carries `end_cause`, `loop_recovery` when recorded on `run.finish`, and, for a
-`repeating-call` cause, the `repeating_call` the runner recorded.
+for a loop), seat, in-run loop recoveries (`RECOVERIES`), duration and cost. Both active and
+finished rows display each run's seat. The JSON row carries `end_cause`, `loop_recovery`
+when recorded on `run.finish`, and, for a `repeating-call` cause, the `repeating_call` the
+runner recorded.
 
 The face joins three sources because no two of them suffice: the lane rows and their
 `run.allocate` events (a run that is going has no `runs` row until its terminal write), the

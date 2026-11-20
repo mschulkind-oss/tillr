@@ -31,6 +31,7 @@ func (l *Loop) parallelFailover(ctx context.Context, node Decision, rec run.Reco
 	request.NodeID = node.Workflow.Stages[node.NodeIndex].ID
 	request.TimeoutMS = node.Workflow.Stages[node.NodeIndex].TimeoutMS
 	request.CorrelationID = node.RunRequest.CorrelationID
+	stampDecisionRequest(node, request)
 	node.RunRequest = request
 	node.NodeInfraFailures++
 	node.WorkflowRestart = true
@@ -51,6 +52,7 @@ func (l *Loop) parallelInterrupted(node Decision, rec run.Record) (Decision, boo
 	request.WorkingDir = node.RunRequest.WorkingDir
 	request.TimeoutMS = node.Workflow.Stages[node.NodeIndex].TimeoutMS
 	request.CorrelationID = node.RunRequest.CorrelationID
+	stampDecisionRequest(node, request)
 	node.RunRequest = request
 	node.WorkflowRestart = true
 	return node, true, nil

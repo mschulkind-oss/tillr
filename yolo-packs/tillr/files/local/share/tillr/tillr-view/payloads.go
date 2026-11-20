@@ -107,6 +107,9 @@ type runRecord struct {
 	ItemID       string        `json:"item_id,omitempty"`
 	LaneID       string        `json:"lane_id"`
 	Backend      string        `json:"backend"`
+	Seat         string        `json:"seat,omitempty"`
+	Workflow     string        `json:"workflow,omitempty"`
+	Node         string        `json:"node,omitempty"`
 	State        string        `json:"state"`
 	ExitCode     *int          `json:"exit_code,omitempty"`
 	StartedAt    string        `json:"started_at"`

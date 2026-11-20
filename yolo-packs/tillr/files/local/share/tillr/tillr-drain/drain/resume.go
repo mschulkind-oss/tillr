@@ -228,6 +228,9 @@ type resumeRun struct {
 	LaneID        string
 	ItemID        string
 	Backend       string
+	Seat          string
+	Workflow      string
+	Node          string
 	State         string
 }
 
@@ -245,8 +248,23 @@ func readRunForResume(ctx context.Context, storePath, runID string) (resumeRun, 
 	var row resumeRun
 	var itemID *string
 	err = r.ReadTx(ctx, func(reader *store.Reader) error {
-		if err := reader.QueryRow(`SELECT lane_id,item_id,backend,state FROM runs WHERE run_id=?`, runID).Scan(&row.LaneID, &itemID, &row.Backend, &row.State); err != nil {
-			return err
+		query := `SELECT lane_id,item_id,backend,COALESCE(seat,''),COALESCE(workflow,''),COALESCE(node,''),state FROM runs WHERE run_id=?`
+		scanErr := reader.QueryRow(query, runID).Scan(&row.LaneID, &itemID, &row.Backend, &row.Seat, &row.Workflow, &row.Node, &row.State)
+		for scanErr != nil && strings.Contains(scanErr.Error(), "no such column:") {
+			switch {
+			case strings.Contains(scanErr.Error(), "no such column: seat"):
+				query = strings.Replace(query, "COALESCE(seat,'')", "''", 1)
+			case strings.Contains(scanErr.Error(), "no such column: workflow"):
+				query = strings.Replace(query, "COALESCE(workflow,'')", "''", 1)
+			case strings.Contains(scanErr.Error(), "no such column: node"):
+				query = strings.Replace(query, "COALESCE(node,'')", "''", 1)
+			default:
+				return scanErr
+			}
+			scanErr = reader.QueryRow(query, runID).Scan(&row.LaneID, &itemID, &row.Backend, &row.Seat, &row.Workflow, &row.Node, &row.State)
+		}
+		if scanErr != nil {
+			return scanErr
 		}
 		var exists bool
 		if err := reader.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='read_only_runs')`).Scan(&exists); err != nil {
@@ -420,6 +438,15 @@ func resumeRequest(cfg ResumeConfig, row resumeRun, spec ResumeSpec) (*run.Reque
 	}
 	resumed.LaneID = row.LaneID
 	resumed.Backend = row.Backend
+	if resumed.Seat == "" {
+		resumed.Seat = row.Seat
+	}
+	if resumed.Workflow == "" {
+		resumed.Workflow = row.Workflow
+	}
+	if resumed.Node == "" {
+		resumed.Node = row.Node
+	}
 	resumed.Resume = true
 	return &resumed, nil
 }

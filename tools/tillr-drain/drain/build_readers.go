@@ -30,6 +30,7 @@ func (l *Loop) claimBuildReaders(ctx context.Context, tx *store.Tx, w *pendingWo
 		next := *req
 		next.RunID = markRunID(next.RunID, "restart")
 		next.Resume, next.FreshSession = false, false
+		stampDecisionRequest(node, &next)
 		node.RunRequest = &next
 		node.BuildRestartFrom = old
 		node.WorkflowRestart = true

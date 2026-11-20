@@ -206,6 +206,7 @@ func readItemGraphIn(r *store.Reader, id, selection string, runs []storeRun, chi
 			n := itemGraphNode{ID: "worker", Kind: "agent", State: "not started", Runs: []string{}, Children: map[string]childrenView{}, Outputs: []itemNodeOutput{}}
 			if attempt > 0 && attempt <= len(runs) {
 				run := runs[attempt-1]
+				n.Seat = run.Seat
 				n.Runs = append(n.Runs, run.RunID)
 				n.State = singleRunState(run)
 				if c, ok := children[run.RunID]; ok {

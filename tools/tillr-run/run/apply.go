@@ -115,7 +115,12 @@ type Record struct {
 	// (for pi: rebuilt path and series key, or installed path and version). Omitted
 	// and stored as NULL when the adapter reports none.
 	Harness string `json:"harness,omitempty"`
-	State   string `json:"state"`
+	// Seat, Workflow, and Node record the dispatch provenance from the request.
+	// Omitted and stored as NULL when absent or on legacy records.
+	Seat     string `json:"seat,omitempty"`
+	Workflow string `json:"workflow,omitempty"`
+	Node     string `json:"node,omitempty"`
+	State    string `json:"state"`
 	// EndCause is optional on legacy input records. Readers explicitly report its
 	// absence rather than inferring it from the less specific state or exit code.
 	EndCause string `json:"end_cause,omitempty"`
@@ -252,17 +257,20 @@ func Apply(ctx context.Context, tx *store.Tx, env record.Envelope) (record.Envel
 		return record.Envelope{}, Internalf("writing the lane: %v", err)
 	}
 	if _, err := tx.Exec(
-		`INSERT INTO runs (run_id, item_id, lane_id, backend, route, harness, state, exit_code, started_at, finished_at, artifact_refs, usage_tokens, usage_cost_usd, end_cause, extension_set)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO runs (run_id, item_id, lane_id, backend, route, harness, seat, workflow, node, state, exit_code, started_at, finished_at, artifact_refs, usage_tokens, usage_cost_usd, end_cause, extension_set)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(run_id) DO UPDATE SET
 		   item_id = excluded.item_id, lane_id = excluded.lane_id, backend = excluded.backend,
-		   route = excluded.route, harness = excluded.harness, state = excluded.state, exit_code = excluded.exit_code,
+		   route = excluded.route, harness = excluded.harness,
+		   seat = excluded.seat, workflow = excluded.workflow, node = excluded.node,
+		   state = excluded.state, exit_code = excluded.exit_code,
 		   started_at = excluded.started_at, finished_at = excluded.finished_at,
 		   artifact_refs = excluded.artifact_refs,
 		   usage_tokens = excluded.usage_tokens, usage_cost_usd = excluded.usage_cost_usd,
 		   end_cause = excluded.end_cause,
 		   extension_set = excluded.extension_set`,
-		payload.RunID, nullableText(payload.ItemID), payload.LaneID, payload.Backend, nullableText(payload.Route), nullableText(payload.Harness), payload.State,
+		payload.RunID, nullableText(payload.ItemID), payload.LaneID, payload.Backend, nullableText(payload.Route), nullableText(payload.Harness),
+		nullableText(payload.Seat), nullableText(payload.Workflow), nullableText(payload.Node), payload.State,
 		exitCodeArg(payload.ExitCode), started.UnixMilli(), finished.UnixMilli(), string(refs),
 		usageTokensArg(payload.Usage), usageCostArg(payload.Usage), nullableText(payload.EndCause), nullableText(payload.ExtensionSet),
 	); err != nil {

@@ -103,6 +103,7 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 			d.SelectSeat = true
 			d.BlockConflict = &c
 			d.RunRequest = p.request(row.ItemID, lane, backend)
+			stampDecisionRequest(d, d.RunRequest)
 		} else {
 			d.Reason = ReasonNoLane
 		}

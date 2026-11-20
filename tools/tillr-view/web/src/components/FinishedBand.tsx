@@ -47,6 +47,9 @@ export function FinishedBand({ items, now, onSelectItem, onOpenArchive }: Finish
                 <span className="finished-band__title" title={item.title}>
                   {item.title}
                 </span>
+                {item.latest_run?.seat ? (
+                  <span className="finished-band__seat">seat {item.latest_run.seat}</span>
+                ) : null}
                 <span className="finished-band__state">{stateLabel(state)}</span>
                 <span className="finished-band__when">
                   {relativeTime(item.updated_at_ms, now)}

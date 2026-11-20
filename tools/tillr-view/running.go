@@ -88,6 +88,9 @@ type runningRun struct {
 	ItemID        string `json:"item_id"`
 	Place         int    `json:"place,omitempty"`
 	Title         string `json:"title"`
+	Seat          string `json:"seat,omitempty"`
+	Workflow      string `json:"workflow,omitempty"`
+	Node          string `json:"node,omitempty"`
 	StartedAtMS   int64  `json:"started_at_ms"`
 	ElapsedMS     *int64 `json:"elapsed_ms"`
 	LeasedUntilMS *int64 `json:"leased_until_ms"`
@@ -108,6 +111,9 @@ type finishedRun struct {
 	ItemID       string   `json:"item_id"`
 	LaneID       string   `json:"lane_id"`
 	Title        string   `json:"title"`
+	Seat         string   `json:"seat,omitempty"`
+	Workflow     string   `json:"workflow,omitempty"`
+	Node         string   `json:"node,omitempty"`
 	State        string   `json:"state"`
 	ExitCode     *int     `json:"exit_code"`
 	Outcome      string   `json:"outcome"`
@@ -261,6 +267,25 @@ func readRunning(ctx context.Context, storePath, loopDir, laneRoot string, now t
 		domain, err := readStoreDomainIn(r, loopDir)
 		if err != nil {
 			return err
+		}
+		dispatched, err := dispatchSeats(r)
+		if err != nil {
+			return err
+		}
+		if domain != nil {
+			for i := range domain.runs {
+				if domain.runs[i].Seat == "" {
+					domain.runs[i].Seat = dispatched[domain.runs[i].RunID]
+				}
+			}
+			for id, alloc := range domain.allocations {
+				if alloc.Seat == "" {
+					if seat := dispatched[id]; seat != "" {
+						alloc.Seat = seat
+						domain.allocations[id] = alloc
+					}
+				}
+			}
 		}
 		verdicts, err := readGateVerdicts(r)
 		if err != nil {
@@ -416,6 +441,9 @@ func buildRunningPayload(now time.Time, snap snapshot, domain *storeDomain, verd
 			ItemID:      live.ItemID,
 			Place:       places[item.ItemID],
 			Title:       item.Title,
+			Seat:        live.Seat,
+			Workflow:    live.Workflow,
+			Node:        live.Node,
 			StartedAtMS: live.StartedAtMS,
 			LogPath:     runLogPath(laneRoot, live.LaneID, live.RunID),
 		}
@@ -481,6 +509,9 @@ func buildRunningPayload(now time.Time, snap snapshot, domain *storeDomain, verd
 			ItemID:       run.ItemID,
 			LaneID:       run.LaneID,
 			Title:        item.Title,
+			Seat:         run.Seat,
+			Workflow:     run.Workflow,
+			Node:         run.Node,
 			State:        run.State,
 			ExitCode:     run.ExitCode,
 			Outcome:      outcome,
@@ -606,14 +637,14 @@ func renderRunning(w io.Writer, p runningPayload) {
 	} else {
 		fmt.Fprintf(w, "LIVE RUNS (%d)\n", len(p.Active))
 		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(tw, "LANE\tITEM\t#\tTITLE\tELAPSED\tTURNS\tSPENT\tRECOVERIES\tLEASE LEFT\tLOG")
+		fmt.Fprintln(tw, "LANE\tITEM\t#\tTITLE\tSEAT\tELAPSED\tTURNS\tSPENT\tRECOVERIES\tLEASE LEFT\tLOG")
 		for _, run := range p.Active {
 			lease := leaseLeftText(run.LeaseLeftMS)
 			if run.LeaseNoExpiry {
 				lease = "lease has no expiry"
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				orDash(run.LaneID), orDash(run.ItemID), placeText(run.Place), orDash(run.Title),
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				orDash(run.LaneID), orDash(run.ItemID), placeText(run.Place), orDash(run.Title), orDash(run.Seat),
 				elapsedText(run.ElapsedMS), turnsText(run.Spend.Turns), costText(run.Spend.CostUSD), loopRecoveryText(run.LoopRecovery), lease, orDash(run.LogPath))
 		}
 		tw.Flush()
@@ -626,10 +657,10 @@ func renderRunning(w io.Writer, p runningPayload) {
 		return
 	}
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "RUN\tITEM\tOUTCOME\tRECOVERIES\tDURATION\tCOST")
+	fmt.Fprintln(tw, "RUN\tITEM\tSEAT\tOUTCOME\tRECOVERIES\tDURATION\tCOST")
 	for _, run := range p.Finished {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			orDash(run.RunID), orDash(run.ItemID), run.Outcome, loopRecoveryText(run.LoopRecovery),
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			orDash(run.RunID), orDash(run.ItemID), orDash(run.Seat), run.Outcome, loopRecoveryText(run.LoopRecovery),
 			spanText(run.DurationMS), costText(run.CostUSD))
 	}
 	tw.Flush()

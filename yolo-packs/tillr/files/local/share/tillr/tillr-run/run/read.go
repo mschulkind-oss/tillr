@@ -138,6 +138,9 @@ func StatusRecord(r *store.Reader, runID string) (record.Envelope, bool, error) 
 		itemID     sql.NullString
 		route      sql.NullString
 		harness    sql.NullString
+		seat       sql.NullString
+		workflow   sql.NullString
+		node       sql.NullString
 		exitCode   sql.NullInt64
 		startedAt  int64
 		finishedAt int64
@@ -147,35 +150,33 @@ func StatusRecord(r *store.Reader, runID string) (record.Envelope, bool, error) 
 		endCause   sql.NullString
 		extSet     sql.NullString
 	)
-	read := func(causeColumn, harnessColumn, extSetColumn string) error {
+	read := func(causeColumn, harnessColumn, extSetColumn, seatColumn, workflowColumn, nodeColumn string) error {
 		return r.QueryRow(
-			`SELECT run_id, item_id, lane_id, backend, route, `+harnessColumn+`, state, exit_code, started_at, finished_at, artifact_refs, event_seq,
+			`SELECT run_id, item_id, lane_id, backend, route, `+harnessColumn+`, `+seatColumn+`, `+workflowColumn+`, `+nodeColumn+`, state, exit_code, started_at, finished_at, artifact_refs, event_seq,
 			        usage_tokens, usage_cost_usd, `+causeColumn+`, `+extSetColumn+`
 			   FROM runs WHERE run_id = ?`, runID,
-		).Scan(&payload.RunID, &itemID, &payload.LaneID, &payload.Backend, &route, &harness, &payload.State, &exitCode,
+		).Scan(&payload.RunID, &itemID, &payload.LaneID, &payload.Backend, &route, &harness, &seat, &workflow, &node, &payload.State, &exitCode,
 			&startedAt, &finishedAt, &refs, &payload.EventSeq, &tokens, &costUSD, &endCause, &extSet)
 	}
-	causeCol, harnessCol, extSetCol := "end_cause", "harness", "extension_set"
+	cols := map[string]string{"end_cause": "end_cause", "harness": "harness", "extension_set": "extension_set", "seat": "seat", "workflow": "workflow", "node": "node"}
 	var err error
-	for range 4 {
-		err = read(causeCol, harnessCol, extSetCol)
+	for range len(cols) + 1 {
+		err = read(cols["end_cause"], cols["harness"], cols["extension_set"], cols["seat"], cols["workflow"], cols["node"])
 		if err == nil {
 			break
 		}
 		// Read-only opens cannot migrate a store written before optional columns existed.
-		if causeCol != "NULL" && strings.Contains(err.Error(), "no such column: end_cause") {
-			causeCol = "NULL"
-			continue
+		missing := false
+		for name, col := range cols {
+			if col != "NULL" && strings.Contains(err.Error(), "no such column: "+name) {
+				cols[name] = "NULL"
+				missing = true
+				break
+			}
 		}
-		if harnessCol != "NULL" && strings.Contains(err.Error(), "no such column: harness") {
-			harnessCol = "NULL"
-			continue
+		if !missing {
+			break
 		}
-		if extSetCol != "NULL" && strings.Contains(err.Error(), "no such column: extension_set") {
-			extSetCol = "NULL"
-			continue
-		}
-		break
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return statusEnvelope(statusPayload{RunID: runID}, time.Now().UTC())
@@ -202,6 +203,15 @@ func StatusRecord(r *store.Reader, runID string) (record.Envelope, bool, error) 
 	}
 	if harness.Valid {
 		payload.Harness = harness.String
+	}
+	if seat.Valid {
+		payload.Seat = seat.String
+	}
+	if workflow.Valid {
+		payload.Workflow = workflow.String
+	}
+	if node.Valid {
+		payload.Node = node.String
 	}
 	if exitCode.Valid {
 		code := int(exitCode.Int64)
@@ -242,6 +252,15 @@ func StatusRecord(r *store.Reader, runID string) (record.Envelope, bool, error) 
 			payload.SpendNote = finish.SpendNote
 			if payload.Harness == "" {
 				payload.Harness = finish.Harness
+			}
+			if payload.Seat == "" {
+				payload.Seat = finish.Seat
+			}
+			if payload.Workflow == "" {
+				payload.Workflow = finish.Workflow
+			}
+			if payload.Node == "" {
+				payload.Node = finish.Node
 			}
 			payload.EndingException = finish.EndingException
 			payload.Signal = finish.Signal

@@ -40,6 +40,9 @@ type Request struct {
 	ItemID        string `json:"item_id"`
 	// NodeID optionally identifies the node whose program this run executes.
 	NodeID     string   `json:"node_id,omitempty"`
+	Seat       string   `json:"seat,omitempty"`
+	Workflow   string   `json:"workflow,omitempty"`
+	Node       string   `json:"node,omitempty"`
 	LaneID     string   `json:"lane_id"`
 	Backend    string   `json:"backend"`
 	Command    []string `json:"command"`
@@ -77,6 +80,13 @@ type Request struct {
 	// FreshSession continues the attempt with a new harness session, for example
 	// when quota forces it onto another backend. Only meaningful with Resume.
 	FreshSession bool `json:"fresh_session,omitempty"`
+}
+
+func (r Request) effectiveNode() string {
+	if r.Node != "" {
+		return r.Node
+	}
+	return r.NodeID
 }
 
 // ExecOptions is what the face supplies that the request does not: where the lane root
@@ -281,11 +291,14 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	}
 
 	payload := Record{
-		RunID:   req.RunID,
-		ItemID:  req.ItemID,
-		LaneID:  laneID,
-		Backend: req.Backend,
-		Resumed: req.Resume,
+		RunID:    req.RunID,
+		ItemID:   req.ItemID,
+		LaneID:   laneID,
+		Backend:  req.Backend,
+		Seat:     req.Seat,
+		Workflow: req.Workflow,
+		Node:     req.effectiveNode(),
+		Resumed:  req.Resume,
 		// The route is read from the argv this run is about to hand the adapter, not
 		// drawn again: the request is the record's only source, so the record names the
 		// model id that process received.

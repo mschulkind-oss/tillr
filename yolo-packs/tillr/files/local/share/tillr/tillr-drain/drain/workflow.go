@@ -447,6 +447,7 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	}
 	next.RunRequest.NodeID = stage.ID
 	next.RunRequest.WorkingDir = d.RunRequest.WorkingDir
+	stampDecisionRequest(next, next.RunRequest)
 	identifyDecision(&next)
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {

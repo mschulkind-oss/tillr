@@ -136,7 +136,7 @@ func commandPath(root, path string) error {
 }
 
 func (s WorkflowStage) commandRequest(itemID, laneID, runID string) *run.Request {
-	return &run.Request{RunID: runID, ItemID: itemID, NodeID: s.ID, LaneID: laneID, Backend: "command", Command: append([]string(nil), s.Command...), WorkingDir: WorktreeDir, TimeoutMS: s.TimeoutMS, EnvRefs: []string{}}
+	return &run.Request{RunID: runID, ItemID: itemID, NodeID: s.ID, Node: s.ID, LaneID: laneID, Backend: "command", Command: append([]string(nil), s.Command...), WorkingDir: WorktreeDir, TimeoutMS: s.TimeoutMS, EnvRefs: []string{}}
 }
 
 func commandStage(d Decision) bool {

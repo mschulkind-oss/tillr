@@ -30,6 +30,9 @@ skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribut
 
 - **One candidate, one lane, one record of what the run cost.** The record is written
   whatever the run's outcome, because a run with no record is a run nobody can judge.
+- **Run provenance is recorded from the request.** `run.record`, `run.allocate`, and
+  `runs` carry `seat`, `workflow`, and `node` from `run.request` alongside `backend` and
+  `route`, and remain nullable/omitted on pre-change records.
 - **A lane released is not a candidate retried.** Release reclaims the directory; the
   candidate's outcome is the store's.
 - **Spend is read from the backend's own report**, not reconstructed from a transcript, so
