@@ -184,8 +184,10 @@ func TestSignalVsCrashEndCauses(t *testing.T) {
 			wantCode:  intPtr(-1),
 		},
 		{
-			name:      "direct-sigint",
-			command:   []string{"/bin/sh", "-c", "kill -INT $$"},
+			name: "direct-sigint",
+			// A process inherits an ignored SIGINT across exec, and a test started from a
+			// background job has it ignored, so the fixture restores the default first.
+			command:   []string{"python3", "-c", "import os, signal; signal.signal(signal.SIGINT, signal.SIG_DFL); os.kill(os.getpid(), signal.SIGINT)"},
 			wantState: run.StateExited,
 			wantCause: run.EndSignal,
 			wantCode:  intPtr(-1),
