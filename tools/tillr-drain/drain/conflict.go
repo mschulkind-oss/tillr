@@ -23,8 +23,10 @@ import (
 // once as a fix run when the trunk moved under the candidate, or else at the next pass as
 // a returned run (ReasonReturned) cut from the trunk. What stops the repetition is the
 // identical-repeat rule: a conflict whose paths and hunks digest (conflictEndingKey) equal
-// those of an earlier conflict ending of the item is not sent again, and markExamined
-// routes it to the design seat with both records.
+// those of an earlier conflict ending of the item's current retry cycle is not sent back
+// again: the drain discards the candidate and the planner starts a fresh attempt from the
+// first stage on the current trunk (restartConflicted, D-JL12). If that fresh attempt
+// conflicts too, markExamined parks the item for the operator, whatever the paths and hunks.
 
 // isConflictFixRun reports whether this run is itself a conflict-fix run. A run id is the
 // one thing the loop can read from a candidate after the fact, and the suffix is the marker
@@ -43,8 +45,9 @@ func conflictFixOriginal(runID string) string {
 }
 
 // conflictFix records the conflict with its evidence and answers it. An identical repeat of
-// an earlier conflict ending is recorded and left to markExamined, which routes it to the
-// design seat. Any other conflict on a moved trunk stages a fix run at once; a conflict on
+// an earlier conflict ending of the retry cycle restarts the item (restartConflicted), and a
+// conflict after that restart is recorded and left to markExamined, which parks it for the
+// operator. Any other conflict on a moved trunk stages a fix run at once; a conflict on
 // an unmoved trunk, a fork-series candidate, or a candidate whose request the loop does not
 // hold is recorded, and the next pass returns it to the worker on the latest trunk.
 func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed LandOutcome, result *LoopResult, timing *PassTiming, repairReset ...string) (string, bool, error) {
@@ -97,15 +100,24 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	// With no run-keyed snapshot, the current lane could belong to another
 	// worker. Never infer the old session from its mutable marker.
 	candidate.WorkerSession = worker
-	repeated, err := l.conflictRepeats(ctx, candidate, key)
+	cycle, err := l.conflictCycleOf(ctx, candidate.ItemID)
 	if err != nil {
 		return "", false, err
 	}
-	if repeated {
+	if cycle.restarted {
+		// The fresh attempt that followed a conflict restart conflicted too, whether or not
+		// its paths or hunks changed: the item parks for the operator at its examination.
 		if err := l.recordConflict(ctx, candidate, landed, "", key, true); err != nil {
 			return "", false, err
 		}
-		l.reportf("loop: %s conflicted again with the same paths and hunks as an earlier conflict; it is not sent back again\n", candidate.ItemID)
+		l.reportf("loop: %s conflicted again after a restart from the current trunk; it waits on the operator\n", candidate.ItemID)
+		return "", false, nil
+	}
+	if conflictRepeatsIn(cycle, candidate, key) {
+		// The second identical conflict of the retry cycle: start over from the trunk.
+		if err := l.restartConflicted(ctx, candidate, landed, key, mainSHA); err != nil {
+			return "", false, err
+		}
 		return "", false, nil
 	}
 	// The fix run only makes sense when the trunk actually moved: a conflict against the
@@ -306,32 +318,23 @@ func (l *Loop) recordConflict(ctx context.Context, candidate Candidate, landed L
 	})
 }
 
-// conflictRepeats answers whether a conflict with this key repeats an earlier conflict
-// ending of the item by the same producer: the identical-repeat rule (repeatedEnding) over
-// the item's recorded chain. An empty key repeats nothing.
-func (l *Loop) conflictRepeats(ctx context.Context, candidate Candidate, key string) (bool, error) {
+// conflictRepeatsIn answers whether a conflict with this key repeats an earlier conflict
+// ending of the retry cycle: the identical-repeat rule (repeatedEnding) over the cycle's
+// endings. A squash conflict is a fact about the candidate against the trunk, not about who
+// produced it, so the producer is not compared: a returned run of a workflow restarts at its
+// first stage and so acts for another seat than the run it repeats. An empty key repeats
+// nothing.
+func conflictRepeatsIn(cycle conflictCycle, candidate Candidate, key string) bool {
 	if key == "" {
-		return false, nil
+		return false
 	}
-	s, err := store.OpenRead(ctx, l.cfg.Store)
-	if err != nil {
-		return false, readFailure(err)
+	chain := make([]chainEnding, len(cycle.chain))
+	for i, e := range cycle.chain {
+		e.Producer = ""
+		chain[i] = e
 	}
-	defer s.Close()
-	var repeated bool
-	err = s.ReadTx(ctx, func(r *store.Reader) error {
-		history, err := readRunHistory(r)
-		if err != nil {
-			return err
-		}
-		chain, decisions, err := readItemChain(r, history, candidate.ItemID)
-		if err != nil {
-			return err
-		}
-		_, repeated = repeatedEnding(chain, chainEnding{RunID: candidate.RunID, Producer: producerOf(decisions[candidate.RunID]), Cause: RefusalConflict, Key: key})
-		return nil
-	})
-	return repeated, err
+	_, repeated := repeatedEnding(chain, chainEnding{RunID: candidate.RunID, Cause: RefusalConflict, Key: key})
+	return repeated
 }
 
 // conflictPaths answers the bare paths in the lander's conflict lines. The lander records

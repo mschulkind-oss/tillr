@@ -31,6 +31,10 @@ type ReturnedEnding struct {
 	Detail        string         `json:"detail,omitempty"`
 	// Checks are the gate checks that failed, for a gate refusal.
 	Checks []EndingCheck `json:"checks,omitempty"`
+	// Restart marks the ending of a candidate the drain discarded after its second
+	// identical squash conflict: the next run is a fresh attempt from the current trunk,
+	// and its brief says so instead of asking for a reconciliation (D-JL12).
+	Restart bool `json:"restart,omitempty"`
 }
 
 // EndingCheck is one failing gate check: its id, the log the gate wrote for it, and the
@@ -169,6 +173,9 @@ func repeatedEnding(chain []chainEnding, latest chainEnding) (string, bool) {
 // what refused it, in the refusal's own words and the failing checks' own logs, and where
 // the earlier run's work is kept.
 func returnedBrief(e ReturnedEnding) string {
+	if e.Restart {
+		return restartBrief(e)
+	}
 	var b strings.Builder
 	b.WriteString("\n## Your previous attempt\n\n")
 	fmt.Fprintf(&b, "This item's previous run, %s, did not land. ", e.RunID)

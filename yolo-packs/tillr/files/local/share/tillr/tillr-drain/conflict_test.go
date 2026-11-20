@@ -155,15 +155,12 @@ func TestASquashConflictStagesOneConflictFixRunWithTheMarkersInItsBrief(t *testi
 	}
 }
 
-// TestARepeatedSquashConflictGoesToItsMoverInsteadOfAnotherRun replaces the exhausted half
-// (the owner's ruling of 2026-11-17): a conflict is never counted. The fix run conflicts
-// too, on an unmoved trunk, so it goes back to the worker with the conflict as evidence
-// and a fresh run on the latest trunk; that run's conflict is identical to the fix run's
-// (the same paths and the same hunks), so it is not sent again: the repeat goes to the
-// design seat, and with none in the fixture's policy it waits on the owner.
-//
-// Negative control: drop the identical-repeat check in conflictFix and the conflicts keep
-// being returned to the worker; the stager's limit then cancels the loop.
+// TestARepeatedSquashConflictGoesToItsMoverInsteadOfAnotherRun verifies D-JL12:
+// on the second identical conflict within the current retry cycle (here run 3 repeating
+// run 2's conflict), the drain discards the candidate, resets the lane to the current trunk,
+// and returns the item so the planner starts a fresh attempt from its first stage (run 4).
+// Only when that fresh attempt conflicts again at landing does the drain park the item for
+// the operator (conflict-owner).
 func TestARepeatedSquashConflictGoesToItsMoverInsteadOfAnotherRun(t *testing.T) {
 	f := newLoopFixture(t, stub(t, "adapter", conflictAdapter))
 	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
@@ -184,14 +181,14 @@ func TestARepeatedSquashConflictGoesToItsMoverInsteadOfAnotherRun(t *testing.T) 
 	if result.Landed != 0 {
 		t.Fatalf("the loop landed %d, want none: %s", result.Landed, result.Detail)
 	}
-	if result.Dispatched != 3 || len(stage.specs) != 3 {
-		t.Fatalf("the loop dispatched %d run(s) and staged %d, want the original, its fix and one return: %s", result.Dispatched, len(stage.specs), result.Detail)
+	if result.Dispatched != 4 || len(stage.specs) != 4 {
+		t.Fatalf("the loop dispatched %d run(s) and staged %d, want original, fix, return and one fresh restart: %s", result.Dispatched, len(stage.specs), result.Detail)
 	}
 	if !strings.Contains(result.Detail, "item_041 ("+drain.ReasonConflictOwner+")") {
-		t.Fatalf("the repeated conflict does not wait on its mover: %s", result.Detail)
+		t.Fatalf("the post-restart conflict does not wait on its mover: %s", result.Detail)
 	}
 	refusals := refusalsOf(t, eventsOf(t, f.store))
-	if len(refusals) != 3 {
+	if len(refusals) != 4 {
 		t.Fatalf("refusals %+v, want one conflict per run", refusals)
 	}
 	for _, r := range refusals {
@@ -203,14 +200,9 @@ func TestARepeatedSquashConflictGoesToItsMoverInsteadOfAnotherRun(t *testing.T) 
 	if returned.Returned == nil || returned.Returned.Cause != drain.RefusalConflict || !strings.Contains(returned.Returned.Detail, "base.txt") {
 		t.Fatalf("the returned run's brief does not carry the conflict: %+v", returned.Returned)
 	}
-	var routed bool
-	for _, e := range eventsOf(t, f.store) {
-		if e.Kind == "item.conflict" && strings.Contains(string(e.Payload), drain.IdenticalRepeatPrefix) {
-			routed = true
-		}
-	}
-	if !routed {
-		t.Fatal("the identical conflict raised no repeat conflict for its mover")
+	restarted := stage.specs[3]
+	if restarted.Conflict != nil || strings.HasSuffix(restarted.RunID, drain.ConflictFixSuffix) {
+		t.Fatalf("the fresh restart was staged as a conflict-fix run instead of a fresh attempt: %+v", restarted)
 	}
 }
 

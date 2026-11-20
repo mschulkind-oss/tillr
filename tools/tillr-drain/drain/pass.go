@@ -107,6 +107,7 @@ var pendingHistoryKinds = []string{
 	candidateAssignedKind,
 	candidateStagedKind,
 	examinationDoneKind,
+	candidateDiscardedKind,
 }
 
 // pendingFolds counts readPendingHistory's folds in this process: observation for a test that
@@ -125,6 +126,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 	byRun := map[string]*pendingWork{}
 	judged := map[string]bool{}
 	segments := map[string]bool{}
+	discarded := map[string]bool{}
 	for _, e := range events {
 		if e.ObjectID == nil {
 			continue
@@ -293,8 +295,14 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 				hold.Candidate.Request, hold.Candidate.Seat = work.Decision.RunRequest, work.Decision.Seat
 				work.RedCapHold, work.Candidate, work.Gated = &hold, &hold.Candidate, true
 			}
-		case dirtyHeldKind:
+		case candidateDiscardedKind:
+			// A discarded candidate's holds speak no more, including a replayed one.
+			discarded[*e.ObjectID] = true
 			if work := byRun[*e.ObjectID]; work != nil {
+				work.DirtyHold, work.RedCapHold, work.RepairHold, work.GateStall = nil, nil, nil, nil
+			}
+		case dirtyHeldKind:
+			if work := byRun[*e.ObjectID]; work != nil && !discarded[*e.ObjectID] {
 				var hold dirtyHold
 				if err := json.Unmarshal(e.Payload, &hold); err != nil {
 					return nil, nil, err
@@ -312,7 +320,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 				work.GateStall, work.Candidate = &hold, &hold.Candidate
 			}
 		case repairHeldKind:
-			if work := byRun[*e.ObjectID]; work != nil {
+			if work := byRun[*e.ObjectID]; work != nil && !discarded[*e.ObjectID] {
 				var hold repairHold
 				if err := json.Unmarshal(e.Payload, &hold); err != nil {
 					return nil, nil, err
@@ -1518,6 +1526,20 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				c.Status = "closed"
 				if err := item.RecordConflict(tx, c, at); err != nil {
 					return err
+				}
+			} else if d.Action == ActionRetry && d.SupersedesRunID != "" {
+				// The operator's retry answers the operator hold that the superseded run's
+				// conflict raised (a conflict after a restart, D-JL12): a later conflict is
+				// then read against the new retry cycle, not against that parked one.
+				conflicts, err := item.ReadConflicts(tx.Reader())
+				if err != nil {
+					return err
+				}
+				if c := conflicts[d.ItemID]; c.ConflictID != "" && c.Status == "owner" && c.RunID == d.SupersedesRunID && strings.HasPrefix(c.Text, conflictAfterRestartPrefix) {
+					c.Status = "closed"
+					if err := item.RecordConflict(tx, c, at); err != nil {
+						return err
+					}
 				}
 			}
 			if d.Workflow != nil && d.NodeBaseSHA == "" {
