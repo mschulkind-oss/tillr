@@ -86,6 +86,14 @@ func (s *LaneStager) stagePlain(ctx context.Context, spec StageSpec, def definit
 	if carriesDesignDocumentRule(stagedSeat(recorded, spec)) {
 		settled += "\n\n" + DesignDocumentRule
 	}
+	fixerFacts, fixerCopies, err := s.prepareTrunkFixerFacts(ctx, recorded, spec)
+	if err != nil {
+		return err
+	}
+	facts := "None carried: staging read no facts about the task."
+	if fixerFacts != "" {
+		facts = fixerFacts
+	}
 	values := briefValues{
 		{placeholder: "ITEM_ID", text: recorded.ItemID, field: "item_id"},
 		{placeholder: "TITLE", text: recorded.Title, field: "title"},
@@ -100,7 +108,7 @@ func (s *LaneStager) stagePlain(ctx context.Context, spec StageSpec, def definit
 		{placeholder: "TIMEOUT_SECONDS", text: wallWords(spec.TimeoutMS)},
 		{placeholder: "DURABLE_DIR", text: durableDir},
 		{placeholder: "SETTLED", text: settled},
-		{placeholder: "FACTS", text: "None carried: staging read no facts about the task."},
+		{placeholder: "FACTS", text: facts},
 		{placeholder: "METHOD", text: "The item states no method; the order of work is yours."},
 		{placeholder: "VERIFICATION", text: "None recorded: report each verification command and its output."},
 	}
@@ -158,6 +166,14 @@ func (s *LaneStager) stagePlain(ctx context.Context, spec StageSpec, def definit
 	metadataDir := laneDir
 	if spec.Isolated {
 		metadataDir = run.NodeDir(laneDir, spec.RunID)
+	}
+	for _, copyFile := range fixerCopies {
+		if err := os.MkdirAll(filepath.Dir(copyFile.path), 0o755); err != nil {
+			return Externalf("creating fixer log directory %s: %v", filepath.Dir(copyFile.path), err)
+		}
+		if err := os.WriteFile(copyFile.path, copyFile.body, 0o644); err != nil {
+			return Externalf("writing fixer log %s: %v", copyFile.path, err)
+		}
 	}
 	for _, dir := range []string{metadataDir, RunDir(s.Root, spec.RunID)} {
 		if err := os.MkdirAll(dir, 0755); err != nil {

@@ -279,6 +279,9 @@ type GateOutcome struct {
 	// CheckReads maps a check id to its declared `reads` (defaulting to ["."] when
 	// undeclared, matching checkfiles.go) for OQ-GP7 path intersection.
 	CheckReads map[string][]string
+	// CheckLogs maps a failing check id to its log or triage file path so a trunk
+	// fixer's brief can keep a copy with its run and show the failing cases.
+	CheckLogs map[string]string
 }
 
 // Steps is what the loop drives and does not own: one run on a lane, then the gate, land

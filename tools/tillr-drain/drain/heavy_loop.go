@@ -108,12 +108,23 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 				}
 				paths := l.rangePaths(ctx, green, tip)
 				detail := []string{}
+				logs := map[string]string{}
 				for _, check := range checks {
 					if check.FirstRedLanding == "" {
 						detail = append(detail, check.Detail)
 					}
+					logRef := check.LogRef
+					if logRef == "" {
+						logRef = check.LogPath
+					}
+					if logRef == "" {
+						logRef = l.heavyLog(tip, check.CheckID)
+					}
+					if logRef != "" {
+						logs[check.CheckID] = logRef
+					}
 				}
-				_, err = l.fileTrunkFixerNoted(ctx, sha, ids, GateOutcome{SuspectPaths: paths, CheckWatches: watches, RepairDetail: strings.Join(detail, "; ")}, strings.Join(notes, ". "))
+				_, err = l.fileTrunkFixerNoted(ctx, sha, ids, GateOutcome{SuspectPaths: paths, CheckWatches: watches, RepairDetail: strings.Join(detail, "; "), CheckLogs: logs}, strings.Join(notes, ". "))
 				return err
 			}}
 			runner.Progress = func(line string) { l.reportf("%s", line) }
