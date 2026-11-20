@@ -55,12 +55,15 @@ type WhySummary struct {
 }
 
 type WhyAnswer struct {
-	Definition   string     `json:"definition"`
-	EventHeadSeq int64      `json:"event_head_seq"`
-	Lanes        []string   `json:"lanes"`
-	LanesSource  string     `json:"lanes_source,omitempty"`
-	Rows         []WhyRow   `json:"rows"`
-	Summary      WhySummary `json:"summary"`
+	Definition   string   `json:"definition"`
+	EventHeadSeq int64    `json:"event_head_seq"`
+	Lanes        []string `json:"lanes"`
+	LanesSource  string   `json:"lanes_source,omitempty"`
+	// Draining lists the lanes above the offered count that still hold work, each with the
+	// item it holds. The loop serves them until that work lands or is released.
+	Draining []DrainingLane `json:"draining,omitempty"`
+	Rows     []WhyRow       `json:"rows"`
+	Summary  WhySummary     `json:"summary"`
 	// Trunk and TrunkLine are set only when the trunk is unproved: TrunkLine is the one line
 	// that says so, for how long, and which check is failing.
 	Trunk     *heavy.HeavyStatus `json:"trunk,omitempty"`
@@ -172,6 +175,7 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 	}
 	answer.Lanes = make([]string, len(offered))
 	copy(answer.Lanes, offered)
+	answer.Draining = drainingLanes(works, offered)
 	leases, err := activeLeases(r, at, offered)
 	if err != nil {
 		return answer, err
@@ -243,7 +247,6 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			return answer, Internalf("reading planner decision: %v", err)
 		}
 		class, where, mover := whyPresentation(d)
-		offRotation := false
 		row := WhyRow{Place: places[it.ItemID], ItemID: it.ItemID, State: it.State, Position: d.Position, Reason: d.Reason, Why: d.Reason, Class: class, Where: where, Mover: mover, Since: "current plan", ClassSource: "planner", WaitingOn: []string{}, Decision: d}
 		// A fault hold says what is wrong in its recorded detail; a mover such as "the
 		// process the detail names" is read from it.
@@ -302,14 +305,10 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			// Work that still holds its lane continues only in that worktree: it is held
 			// behind that lane's lease (its run, or its examination), not by the others.
 			row.WaitingOn = append(row.WaitingOn, d.LaneID)
-			if w := works[it.ItemID]; w.Decision.RunRequest != nil && !documentDesk(d.LaneID) && !slices.Contains(offered, d.LaneID) {
-				// The loop lists no examination for a lane it does not run, so nothing in it
-				// moves this hold: the operator relaunches the loop with the lane, or ends
-				// the lease. Saying drain here sent an operator to wait on a loop that had
-				// no way to act (2026-11-20, lane-24 under --lanes 20).
-				offRotation = true
-				row.Why += ": lane " + d.LaneID + " is outside this loop's rotation, and its lease is held by run " + works[it.ItemID].Decision.RunRequest.RunID
-				row.Class = "needs you"
+			if !documentDesk(d.LaneID) && !slices.Contains(offered, d.LaneID) {
+				// The lane is above the loop's count: the loop keeps serving it until this
+				// work lands or is released, and offers it nothing new (drainingLanes).
+				row.Why += ": lane " + d.LaneID + " is draining: above the loop's lane count, it finishes " + it.ItemID + " and takes nothing new"
 			}
 		case d.Reason == ReasonNoLane:
 			for _, lane := range offered {
@@ -336,9 +335,6 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		}
 		if len(row.WaitingOn) > 0 && d.Reason != ReasonQuestionRemoved {
 			row.Mover = strings.Join(row.WaitingOn, ", ")
-		}
-		if offRotation {
-			row.Mover = "relaunch the loop with --lanes covering " + d.LaneID + ", or end the lease the run holds on it"
 		}
 		if len(closedBlockers) > 0 {
 			row.Class = "needs you"

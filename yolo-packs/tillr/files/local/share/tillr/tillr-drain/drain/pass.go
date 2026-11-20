@@ -1025,6 +1025,15 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 				observed = append(observed, lane)
 			}
 		}
+		// A lane above the lane count that still holds work is observed too, so the loop
+		// neither calls itself drained nor stops waiting while that work is unfinished.
+		works, err := readPending(r)
+		if err != nil {
+			return err
+		}
+		for _, d := range drainingLanes(works, l.cfg.Lanes) {
+			observed = append(observed, d.LaneID)
+		}
 		leases, err = activeLeases(r, at, observed)
 		if err != nil {
 			return err
