@@ -121,6 +121,7 @@ func workerConflictReport(text string) string {
 		}
 	}
 	for _, marker := range []string{
+		repeatedObstacleMarker,
 		"\n\nDesign run ",
 		"\n\nOwner question: ",
 		"\n\nNo item block reference",

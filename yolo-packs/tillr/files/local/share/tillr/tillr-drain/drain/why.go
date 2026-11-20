@@ -118,6 +118,10 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 	if err != nil {
 		return answer, err
 	}
+	answerCounts, err := answeredObstacleCounts(r)
+	if err != nil {
+		return WhyAnswer{}, err
+	}
 	conflicts, err := item.ReadConflicts(r)
 	if err != nil {
 		return answer, err
@@ -585,6 +589,17 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			answer.Summary.CouldRun++
 		} else {
 			answer.Summary.Held[d.Reason]++
+		}
+		if c := conflicts[it.ItemID]; d.Reason == ReasonConflictOwner && strings.Contains(c.Text, repeatedObstacleMarker) {
+			row.Why = collapseSingleLine(c.Text)
+			row.Mover = repeatedObstacleActor(c) + "; resolve the recorded hold"
+			if cmd := acceptedConflictRetryCommand(r, it.ItemID, c); cmd != "" {
+				row.Mover = repeatedObstacleActor(c) + "; answer with " + cmd
+			}
+			row.Mover += "; " + row.Why
+		}
+		if count := answerCounts[it.ItemID]; count > 0 {
+			row.Mover += fmt.Sprintf("; answered obstacles: %d", count)
 		}
 		answer.Rows = append(answer.Rows, row)
 	}

@@ -38,6 +38,9 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 			d.Reason = ReasonQuestionRemoved
 			d.Seat = "operator"
 		}
+	case c.WaitingOn == "owner" && strings.Contains(c.Text, repeatedObstacleMarker):
+		d.Reason = ReasonConflictOwner
+		d.Seat = repeatedObstacleActor(c)
 	case c.WaitingOn == "owner" && p.tick.ownerMigration:
 		// This is a real command run, not a fabricated terminal record or an
 		// ungated store repair. Its report travels through the same settlement.
@@ -273,6 +276,7 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 	}
 	c := item.Conflict{ConflictID: "conflict-" + d.RunRequest.RunID, ItemID: d.ItemID, RunID: d.RunRequest.RunID, Text: text, Status: "raised", WaitingOn: "design", BlockedCriteria: []string{}}
 	var isRequest bool
+	var previous item.Conflict
 	r, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		return err
@@ -284,6 +288,15 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 		var reqErr error
 		if isRequest, reqErr = isFiledRequest(tx, d.ItemID); reqErr != nil {
 			return reqErr
+		}
+		if !IsGeneratedItem(d.ItemID) {
+			var raw []byte
+			if err := tx.QueryRow(`SELECT COALESCE((SELECT payload FROM events WHERE kind=? AND object_type='item' AND object_id=? ORDER BY seq DESC LIMIT 1), '{}')`, item.ConflictKind, d.ItemID).Scan(&raw); err != nil {
+				return err
+			}
+			if err := json.Unmarshal(raw, &previous); err != nil {
+				return err
+			}
 		}
 		rows, err := tx.Query(`SELECT criterion_id FROM item_criteria WHERE item_id = ? ORDER BY criterion_id`, d.ItemID)
 		if err != nil {
@@ -334,6 +347,15 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 			c.WaitingOn, c.Status = "build", "answered"
 			c.Text += "\n\n" + GeneratedRepairRule
 		}
+	} else if repeatedAnsweredObstacle(previous, c, obstacle) {
+		// The store's person hold is named owner; the planner distinguishes the operator.
+		c.Status, c.WaitingOn = "owner", "owner"
+		actor := repeatedObstacleActor(c)
+		answerRef := previous.AnswerHead
+		if answerRef == "" {
+			answerRef = previous.DesignRunID
+		}
+		c.Text += repeatedObstacleMarker + " (run " + previous.RunID + ", answer " + answerRef + "):\n" + workerConflictReport(previous.Text) + "\n\nHeld for the " + actor + ": the next worker reported the same obstacle after the design answer."
 	} else if isRequest && obstacle.Problem == "" && obstacle.Kind == ObstacleDefinition && l.cfg.Policy != nil && len(l.cfg.Policy.seatList("design")) > 0 {
 		// A filed request has no item block, so a design-overturning definition obstacle
 		// goes to the design seat to answer in docs/ without adding one
