@@ -2882,6 +2882,14 @@ func (l *Loop) candidateInItsLane(ctx context.Context, candidate Candidate) erro
 	if target := l.laneTarget(candidate.LaneID); candidate.Worktree != target {
 		return l.candidateFault(ctx, candidate, fmt.Sprintf("recorded candidate worktree %s is not lane %s's target %s", candidate.Worktree, candidate.LaneID, target))
 	}
+	// The same mismatch reached from the other side: a base recorded from another
+	// repository (a fork item's later node given the trunk commit, 2026-11-20) names a
+	// range no git in this checkout can diff.
+	if candidate.BaseSHA != "" {
+		if _, err := l.git(ctx, candidate.Worktree, "cat-file", "-e", candidate.BaseSHA+"^{commit}"); err != nil {
+			return l.candidateFault(ctx, candidate, fmt.Sprintf("recorded candidate base %s is not a commit in %s, whose head is %s", candidate.BaseSHA, candidate.Worktree, candidate.HeadSHA))
+		}
+	}
 	return nil
 }
 
