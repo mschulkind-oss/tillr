@@ -560,6 +560,10 @@ func (l *Loop) answerLandingRefusal(tx *store.Tx, candidate Candidate, refusal r
 	if choice.Stage != "" {
 		fmt.Fprintf(&text, "Stage: %s\n", choice.Stage)
 	}
+	if refusal.Step == RefusalGate {
+		// What failed comes first, in the gate's own words; the logs below are the supplement.
+		text.WriteString(failureSummary(refusal.Checks))
+	}
 	if refusal.Detail != "" {
 		fmt.Fprintln(&text, refusal.Detail)
 	}

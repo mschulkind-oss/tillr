@@ -1445,6 +1445,12 @@ immediate conflict-fix run, the next pass dispatches it as `returned-with-eviden
 new run's brief carries a section on the previous attempt: the refusal's own words, each failing gate check with its log, and the two refs
 that keep the earlier run's work (`refs/tillr/runs/<run>` for its committed head and
 `refs/tillr/preserved/<run>` for uncommitted work). It starts on the item's own backend.
+A gate refusal opens with the gate's answer on both backends (a parked `land` call's result
+on pi, the first prompt of the resumed turn on Claude): each failing check, each failing
+case's test name, file and line, its assertion and the command that reproduces only that
+case, then the instruction to run that test and not the whole suite. It is read from the
+triage block the gate wrote into this run's own log when the refusal is recorded, and says
+"no failing case was recorded" when the log has none; the log path stays beside it.
 The worker keeps the same lane and session when the adapter can resume it. The refusal
 records that session and the original base before the lane is released; planning reserves
 that lane for the returned worker, including after a loop restart. A workflow returns to
