@@ -10,7 +10,7 @@ tags:
 summary: "Adds a fourth adapter, run-claude, so the backend policy can put any seat on the Claude Code command line run headless (claude -p), which is the only way to spend the Claude subscription from a drain. Measures what a headless run loads by default, fixes what the adapter always passes, gives a backend row a list of harness arguments for tools, servers and prompt text, lets a seat name an ordered list of backends so a spent subscription window falls back to the next one, and adds direct subscription quota readings with an optional owner reserve."
 next: "If wanted, the owner opts the subscription rows in config/tillr/backend-policy.claude.json and config/tillr/backend-policy.mixed.json into quota admission (quota and reserve) and applies the tillr pack; existing policy rows without quota keep refusal-based holds. Pi-adapter harness_args (Section 6 step 3) remains deferred until a pi seat needs it."
 depends-on:
-  - tillr-muse-backend.md
+  - ../reference/tillr-muse-backend.md
   - tillr-convergence.md
 vantage:
   status-chip: true
@@ -44,7 +44,7 @@ runs (`ef55e9d99`) are built, while the tracked `config/tillr/backend-policy*.js
 do not yet configure `quota` or `reserve`.
 
 > **In short.** A backend is already an adapter program plus a row in the backend policy
-> ([the muse backend design](./tillr-muse-backend.md#1-what-a-backend-is)). This adds the adapter
+> ([the backend adapter reference](../reference/tillr-muse-backend.md#adapter-contract-and-write-boundary)). This adds the adapter
 > for Claude Code run headless, and two small things the policy lacked: a row can carry extra
 > arguments for its harness, and a seat can name more than one backend in order, so a seat on the
 > subscription moves to the next backend by itself when the subscription refuses.
@@ -56,7 +56,7 @@ is useless unless the fall-back is automatic.
 
 **Needs your ruling:** nothing.
 
-**Reads with:** [the muse backend design](./tillr-muse-backend.md) (what a backend is, the report
+**Reads with:** [the backend adapter reference](../reference/tillr-muse-backend.md) (what a backend is, the report
 shape, failover), [the convergence design](./tillr-convergence.md) (where models are named), and
 the adapters' own READMEs under `tools/tillr-run/backends/`.
 

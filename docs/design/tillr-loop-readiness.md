@@ -50,7 +50,7 @@ tests — under an hour of implementation before the canary re-run.
 worktree, and [Section 6](#6-what-we-would-not-fix-tonight) for the temptations to skip.
 **Needs your ruling:** none — all six questions from the brief are decided in
 [D-LR1](#d-lr1)–[D-LR6](#d-lr6).
-**Reads with:** [`tillr-day2.md`](tillr-day2.md), [`tillr-muse-backend.md`](tillr-muse-backend.md),
+**Reads with:** [`tillr-day2.md`](tillr-day2.md), [`tillr-muse-backend.md`](../reference/tillr-muse-backend.md),
 and [`tillr-seed-triage.md`](tillr-seed-triage.md).
 
 ---
@@ -66,15 +66,15 @@ and where it stops:
 1. **Staging works (`a7d942d2c8`).** [`tools/tillr-drain/drain/stage.go`](../../tools/tillr-drain/drain/stage.go)
    (`LaneStager.Stage`) created `<lane-dir>/worktree` on branch `tillr/lane-1` at `main`'s
    `base_sha`, rendered all nine sections of `<lane-dir>/brief.md` per
-   [`tillr-muse-backend.md`](tillr-muse-backend.md) [§3](tillr-muse-backend.md#3-how-a-tillr-item-becomes-a-prompt),
+   [`tillr-muse-backend.md`](../reference/tillr-muse-backend.md#staged-lane-and-brief-contract),
    and wrote `<lane-dir>/fence.txt` and `<lane-dir>/base_sha`.
 2. **Backend failover and Muse dispatch work (`fd98fd5e95`, `a4cc6e4579`).** On the first
    canary attempt, `pi` failed in the infrastructure class and
    [`tools/tillr-drain/drain/failover.go`](../../tools/tillr-drain/drain/failover.go) failed
    over to `agy` on the next tick. On the fourth attempt, `deepseek-v3.2` ran through
    [`tools/tillr-run/backends/muse`](../../tools/tillr-run/backends/muse), read `brief.md`,
-   wrote `CANARY.md`, committed `chore: add canary marker` on `tillr/lane-1` ([`tillr-muse-backend.md`](tillr-muse-backend.md)
-   [`D-MM12`](tillr-muse-backend.md#decision-ledger)), and emitted `status: answered`.
+   wrote `CANARY.md`, committed `chore: add canary marker` on `tillr/lane-1` ([`tillr-muse-backend.md`](../reference/tillr-muse-backend.md)
+   [`D-MM12`](../reference/tillr-muse-backend.md#why-its-this-way)), and emitted `status: answered`.
 3. **Candidate classification works (`a27243bf3c`).**
    [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go) (`classifyAttempt`)
    read `status: answered` from `run.log`, confirmed `HEAD != base_sha` in `<lane-dir>/worktree`,
@@ -395,7 +395,7 @@ before `Steps.Gate` is called:
 | **3. Four brief sections (`#2 Settled decisions`, `#4 Facts`, `#6 Method`, `#7 Verification`) are placeholders, and `body_ref` is referenced rather than inlined** | In `config/tillr/seed-items.json`, each item's `title`, `criteria` text (which already names the exact files, commands, and assertions), and `allowed_paths` (`#5 The fence`) carry the full task contract; `body_ref` (`docs/design/tillr-seed-triage.md#...`) is a file inside `<lane-dir>/worktree` that the model can read in one tool call, just as `deepseek-v3.2` did on the canary run. Expanding the SQLite `items` schema and seed format with four prose columns before draining 2 items is pure scope creep. | When authoring net-new items directly in `tillr-item` without a triage doc in the tree. |
 | **4. `session-id` is not minted at staging** | Every run already has a unique `run.id` (`<item>-tick-<n>-lane-<k>`) across the SQLite store, `<lane-dir>`, `run.log`, and `.tillr/loop/<run-id>/`. Headless `muse -p`, `pi -p`, and `claude -p` runs are one-shot processes; retries are held until a `run.link` is recorded rather than resumed in-place. | If `tillr-run` adds multi-turn session resumption across ticks. |
 | **5. All `Stage` errors classify as `AttemptInfrastructure` (including item defects)** | Once [B2](#b2-seed-items-fence-and-fork-filter) populates `allowed_paths` in `config/tillr/seed-items.json` and `tillr-item seed` validates the seed payload up front, no item-schema defect reaches `Stage` at runtime. Any remaining `Stage` failure is a git or filesystem error where `AttemptInfrastructure` + the 3-failure breaker is the right response. | When items can be mutated live in the store while a drain loop is running. |
-| **6. Intra-backend route advance on a route-level signature ([`tillr-muse-backend.md`](tillr-muse-backend.md) [§2](tillr-muse-backend.md#2-the-staged-path)) is unbuilt** | [`tools/tillr-run/backends/muse`](../../tools/tillr-run/backends/muse) delegates OpenRouter provider routing to `muse -p`, and [`tools/tillr-drain/drain/failover.go`](../../tools/tillr-drain/drain/failover.go) already fails over to a distinct second backend (`deepseek-v3.2 -> claude-sonnet-4.6`, `pi -> agy`) on the first infrastructure failure. | Only if `tillr-run` calls OpenRouter HTTP endpoints directly with provider-pinning headers. |
+| **6. Intra-backend route advance on a route-level signature ([`tillr-muse-backend.md`](../reference/tillr-muse-backend.md#backend-policy-selection-and-failover)) is unbuilt** | [`tools/tillr-run/backends/muse`](../../tools/tillr-run/backends/muse) delegates OpenRouter provider routing to `muse -p`, and [`tools/tillr-drain/drain/failover.go`](../../tools/tillr-drain/drain/failover.go) already fails over to a distinct second backend (`deepseek-v3.2 -> claude-sonnet-4.6`, `pi -> agy`) on the first infrastructure failure. | Only if `tillr-run` calls OpenRouter HTTP endpoints directly with provider-pinning headers. |
 | **7. Porting `file-size`, `scratch`, and `design-citations` into `tillr-gate`'s Go runner** | Delegating to [`tools/fork-check.py`](../../tools/fork-check.py) via `tillr-gate run --gate` ([D-LR2](#d-lr2)) executes all 3 in-process checks and all 65 command declarations today and emits a valid `gate.verdict` record for `tillr-land pass`. Porting those checks into Go tonight duplicates working Python logic before the first real candidate has ever landed through `tillr-land`. | Wave-next gate-parity work when retiring `tools/fork-check.py`. |
 
 ---

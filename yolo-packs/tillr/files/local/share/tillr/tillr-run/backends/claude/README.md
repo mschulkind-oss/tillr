@@ -4,7 +4,7 @@ The adapter that runs the Claude Code command line headless (`claude -p`). It is
 way a drain can spend a Claude subscription, which pi cannot reach. Design:
 [`docs/design/tillr-claude-backend.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-claude-backend.md),
 sections 1 to 4; the adapter contract every backend shares is
-[`docs/design/tillr-muse-backend.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-muse-backend.md).
+[`docs/reference/tillr-muse-backend.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-muse-backend.md).
 
 | File | What it is |
 | :--- | :--- |

@@ -2,12 +2,11 @@
 #
 #     . "$(dirname -- "$0")/../preflight.sh"
 #
-# Design §6 gives the muse adapter this discipline (brief present and sectioned, the
-# request's `backend` field naming this adapter, a model staging supplied) and §9 gives
-# the Pi and Agy Flash proof adapters "the same preflight discipline". One copy, sourced
-# three times, is how that stays true: three copies would be three disciplines within a
-# month. The refusal is exit 2 and nothing has run when it fires, so a refused dispatch
-# spends no model tokens and says nothing about the item.
+# Reference: docs/reference/tillr-muse-backend.md (brief present and sectioned, the
+# request's `backend` field naming this adapter, a model staging supplied). One copy,
+# sourced by every adapter, is how that discipline stays uniform rather than drifting
+# per harness. The refusal is exit 2 and nothing has run when it fires, so a refused
+# dispatch spends no model tokens and says nothing about the item.
 #
 # $PROG is the adapter's own name, set by the adapter before it sources this file.
 

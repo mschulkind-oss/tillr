@@ -1,3 +1,4 @@
+// Reference: docs/reference/tillr-muse-backend.md
 package drain
 
 import (
@@ -13,20 +14,23 @@ import (
 )
 
 // AttemptClass is the driver's classification of one terminal run: the one fact a failover
-// turns on (design §2, "Failover: Ember first"; D-MM11).
+// turns on (docs/reference/tillr-muse-backend.md, D-MM11).
 //
-// Three classes, and only the first fails over:
+// Five classes exist, and only AttemptInfrastructure fails over:
 //
+//   - AttemptInterrupted — external SIGTERM or SIGINT stopped the run; work is preserved
+//     without closing the backend or failing over.
 //   - AttemptInfrastructure — the attempt produced no judgable candidate because the
 //     harness or the model route failed, so nothing about the item has been learned. The
-//     adapter refused (it ran nothing), the harness could not start, or the harness died
-//     without ever writing a report. This is machinery, and the same brief on another
-//     backend costs one attempt rather than one attempt plus a wrong verdict.
-//   - AttemptAnswered — the run answered: it exited cleanly, or it wrote a report whose
-//     footer says the model's own `done`/`blocked`/`failed`. A failing test, an empty
-//     diff, an out-of-fence write and a red gate are all *this* class, because they are
-//     statements about the work; spending a second backend on them would pay twice to
-//     learn what the gate already said once (design §2, "Judged work never fails over").
+//     harness could not start, or died without ever writing a report. This is machinery:
+//     the backend closes until recovery evidence arrives and open backends pick up the work.
+//   - AttemptRefused — the adapter exited 2 with its refusal prefix before any model ran;
+//     the item is held for the operator without closing the backend or failing over.
+//   - AttemptAnswered — the run answered: it exited cleanly as a command/ended session, or
+//     wrote a report whose footer says the model's own `done`/`blocked`/`failed`/`trunk-broken`.
+//     A failing test, an empty diff, an out-of-fence write and a red gate are all *this*
+//     class, because they are statements about the work; spending a second backend on them
+//     would pay twice to learn what the gate already said once.
 //   - AttemptUnjudged — a wall cut the run short: `run exec`'s own timeout, or the
 //     adapter's inner `timeout` exiting 124. A tree exists that may hold half-finished
 //     work, and no report says anything about the item, so the run is inspected before

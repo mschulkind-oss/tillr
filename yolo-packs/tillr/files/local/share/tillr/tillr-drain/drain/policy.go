@@ -1,3 +1,4 @@
+// Reference: docs/reference/tillr-muse-backend.md
 package drain
 
 import (
@@ -24,7 +25,7 @@ type Backend = run.Backend
 // Policy is the document `policy_ref` names: the backends a tick may dispatch to, the one
 // it dispatches to by default, the ordered preference a failover walks, the seat map that
 // routes a role to a backend, and the per-item overrides that choose one item's first
-// backend (design §2, D-MM8).
+// backend (docs/reference/tillr-muse-backend.md, D-MM8).
 //
 // Per-item selection lives here and never on the item: a backend is an execution choice
 // made at dispatch time, so it belongs where changing it is one policy edit rather than a

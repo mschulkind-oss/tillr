@@ -454,11 +454,11 @@ Wanted, not now, by the owner's call. Picking one up means giving it a place abo
   means settling how a price is derived per backend, including a subscription that is not billed
   per run, cached tokens, and models whose price changes.
 
-- **The Muse backend** ([design](../design/tillr-muse-backend.md#1-what-a-backend-is)), iceboxed
+- **The Muse backend** ([reference](../reference/tillr-muse-backend.md#adapter-contract-and-write-boundary)), iceboxed
   2026-11-15: the owner is not subscribing to a Meta plan. The adapter stays in the tree and
   [`config/tillr/backend-policy.json`](../../config/tillr/backend-policy.json) keeps it out of
-  every fail-over. Picking it up means subscribing, naming `muse` in a policy again, and cutting
-  its second stage from the design.
+  every fail-over. Picking it up means subscribing, naming `muse` in a policy again, and running
+  its live sandbox canary.
 
 - **AutoQA, tillr's exploratory testing of itself** ([design](../design/tillr-autoqa.md)), iceboxed
   2026-11-17. The owner: "ice box this autoqa on the roadmap for now. I don't want to design this
@@ -1901,7 +1901,7 @@ Built: this landed in commit `d1bde2b171`.
 **Ruling, 2026-11-16 (answers the first run's fence conflict):** the first run stopped because
 `tests/tillr-muse-backend.test.py` pins the report header's exact key list and that suite was
 outside the item's paths. The suite is now inside them, with
-[`tillr-muse-backend.md`](../design/tillr-muse-backend.md#4-output-capture-and-verification),
+[`tillr-muse-backend.md`](../reference/tillr-muse-backend.md#report-extraction-and-attempt-classification),
 which describes the header. The report keeps one shape for every backend: the four window facts
 are four new header keys — `rate limit kind`, `fraction`, `status`, `reset` — added once to the
 shared key list in `tools/tillr-run/backends/report.py`, after `cost usd` and before `complete`,

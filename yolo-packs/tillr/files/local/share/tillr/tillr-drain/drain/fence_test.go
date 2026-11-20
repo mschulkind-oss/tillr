@@ -100,8 +100,8 @@ func TestFencePathsDeriveTheGateCompanions(t *testing.T) {
 		},
 		{
 			name:    "a path that names none of them",
-			allowed: []string{"docs/design/tillr-muse-backend.md"},
-			want:    []string{"docs/design/tillr-muse-backend.md"},
+			allowed: []string{"docs/reference/tillr-muse-backend.md"},
+			want:    []string{"docs/reference/tillr-muse-backend.md"},
 			why:     "the derivation is a rule about the paths given, not a widening of every fence",
 		},
 	}
@@ -125,7 +125,7 @@ func TestFencePathsDeriveTheGateCompanions(t *testing.T) {
 // the order the item stated them, and a reader of `fence.txt` sees what the item asked for
 // before it sees what the derivation added.
 func TestFencePathsKeepTheItemsOwnPathsFirst(t *testing.T) {
-	allowed := []string{"tools/tillr-drain/", "docs/design/tillr-muse-backend.md"}
+	allowed := []string{"tools/tillr-drain/", "docs/reference/tillr-muse-backend.md"}
 	got := fencePaths(allowed)
 	if len(got) < len(allowed) {
 		t.Fatalf("fencePaths dropped an item path: %v", got)

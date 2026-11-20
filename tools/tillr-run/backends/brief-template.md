@@ -6,7 +6,7 @@ working with tools until the goal in **Report shape** is met or one of the obsta
 names holds.
 
 <!--
-The brief a lane receives, from design §3 of docs/design/tillr-muse-backend.md.
+The brief a lane receives; reference: docs/reference/tillr-muse-backend.md.
 Instances are UNTRACKED: the driver copies this file into the lane directory as
 `brief.md` and fills every double-brace placeholder. An adapter refuses a brief that
 still carries an unfilled placeholder, is empty, or is missing one of the ten `##`
