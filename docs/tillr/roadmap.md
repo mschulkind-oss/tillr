@@ -1492,10 +1492,13 @@ missing rather than report that the change failed verification.
   returned `upload-pack: not our ref` (Git exit 128) for its pinned object above. The
   twenty-third run stopped before the build or gate: the missing input means `could not judge`
   (gate exit 4), not a failed build. This is a host publication task, not a request to choose
-  another pin. Neither the twenty-fifth nor the twenty-seventh run received host fetch results.
-  The twenty-seventh run did not probe or build, so the todo-list pin's current availability
-  remains unknown. Keep the item with the host operator until the fetch results are attached;
-  do not dispatch another build or design run to ask for them. No choice of pins is pending.
+  another pin. The twenty-fifth, twenty-seventh and twenty-ninth runs received no host fetch
+  results. The twenty-ninth run cited the earlier Git exit 128, not a fresh fetch. The todo-list
+  pin's current availability is therefore unknown; the retry did not release the hold.
+
+  The host operator's next action is to run the checks below and attach the results, not to
+  choose a pin. Until then, do not dispatch another build or design run. Once the host evidence
+  satisfies the hold, retry the build with the same pins; no further design ruling is needed.
 
   In the host repository checkout, run `git merge-base --is-ancestor <object-id> refs/heads/<branch>`
   for each row above (`<branch>` includes `patch/`). If any check exits nonzero, stop and report
