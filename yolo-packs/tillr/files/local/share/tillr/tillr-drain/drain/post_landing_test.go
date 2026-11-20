@@ -587,3 +587,72 @@ func TestPostLandingPiRollCoalesces(t *testing.T) {
 		t.Fatalf("runs = %q, %v", b, err)
 	}
 }
+
+func TestPostLandingRollFailureRecordsFailingTestsAndShardLineWithoutTrace(t *testing.T) {
+	l, _, commit := actionFixture(t)
+	ctx := context.Background()
+
+	script := filepath.Join(l.cfg.Root, "roll-fail.sh")
+	body := `#!/bin/sh
+if [ -n "${TILLR_SQLITE_TRACE+set}" ]; then
+  echo "LEAKED_TRACE=${TILLR_SQLITE_TRACE}" >&2
+fi
+echo "go-test-shards: example.com/drain shard 1 waiting for a test slot" >&2
+echo "go-test-shards: example.com/drain shard 1 failed (exit 1): TestBrokenInRoll" >&2
+echo "=== RUN   TestBrokenInRoll" >&2
+echo "    heavy_refusal_test.go:83: guard did not fire: <nil>" >&2
+echo "--- FAIL: TestBrokenInRoll (0.01s)" >&2
+i=1
+while [ "$i" -le 25 ]; do
+  echo "=== RUN   TestPassAfter${i}" >&2
+  echo "tillr-sqlite at=2026-11-20T19:00:00Z pid=1 tx=${i} store=\"/tmp/board.sqlite3\" operation=\"close\" phase=end elapsed=1ms error=\"\"" >&2
+  echo "--- PASS: TestPassAfter${i} (0.01s)" >&2
+  i=$((i + 1))
+done
+echo "--- PASS: TestRegistryLockCoversDetachedReplayAndLaneStaging (3.51s)" >&2
+echo "FAIL" >&2
+echo "tillr-roll: test tillr-drain: Command returned non-zero exit status 1." >&2
+exit 1
+`
+	if err := writeForkSafe(script, []byte(body), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	l.cfg.PostLanding.Roll = settings.Roll{
+		Paths:   []string{"tools/tillr*/"},
+		Command: "./roll-fail.sh --no-request",
+	}
+	tip := commit("tools/tillr-drain/change.go")
+	t.Setenv("TILLR_SQLITE_TRACE", "1")
+	l.afterLanding(ctx, tip)
+	waitAction(t, func() bool { return !l.rollAction.busy() })
+	t.Setenv("TILLR_SQLITE_TRACE", "")
+
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var detail string
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		return r.QueryRow(`SELECT json_extract(payload,'$.detail') FROM events WHERE kind='drain.post-landing-action' AND json_extract(payload,'$.action')='roll' AND object_id=?`, tip).Scan(&detail)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, surface := range []string{detail, l.reported()} {
+		if strings.Contains(surface, "LEAKED_TRACE") {
+			t.Fatalf("post-landing roll leaked TILLR_SQLITE_TRACE: %q", surface)
+		}
+		if !strings.Contains(surface, "go-test-shards: example.com/drain shard 1 failed (exit 1): TestBrokenInRoll") {
+			t.Fatalf("missing shard runner failure line in %q", surface)
+		}
+		if !strings.Contains(surface, "TestBrokenInRoll") {
+			t.Fatalf("missing failing test name in %q", surface)
+		}
+		for _, unwanted := range []string{"tillr-sqlite", "TestRegistryLockCoversDetachedReplayAndLaneStaging", "--- PASS:", "waiting for a test slot"} {
+			if strings.Contains(surface, unwanted) {
+				t.Fatalf("unexpected %q in %q", unwanted, surface)
+			}
+		}
+	}
+}

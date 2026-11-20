@@ -15,54 +15,81 @@ import (
 // trunk and moves the real refs/tillr/green (measured 2026-11-20). This guard fails any
 // proof, loop lock or fixer path that resolves to the real common directory.
 func init() {
-	real := realCommonDir()
-	if real == "" {
+	installRealRepoGuard()
+}
+
+func installRealRepoGuard() {
+	wd, _ := os.Getwd()
+	guarded := realCommonDirs(wd, os.Getenv("YOLO_DURABLE_DIR"), os.Getenv("TMPDIR"))
+	if len(guarded) == 0 {
+		heavyCommonGuard = nil
 		return
 	}
 	heavyCommonGuard = func(common string) error {
-		if sameDirKey(common) == real {
+		if guarded[sameDirKey(common)] {
 			return fmt.Errorf("test reached the real repository's common directory %s: give the fixture its own repository", common)
 		}
 		return nil
 	}
 }
 
-// realCommonDir finds the common git directory of the tree the suite runs in by reading
-// the filesystem, not by running git: some tests put a wrapper first on PATH that
-// re-runs the test binary on every git call, and a git call from here would recurse.
-func realCommonDir() string {
-	dir, err := os.Getwd()
+// realCommonDirs finds every enclosing common git directory above starts — including an
+// outer repository enclosing a nested roll clone or its durable scratch — by reading the
+// filesystem, not by running git: some tests put a wrapper first on PATH that re-runs the
+// test binary on every git call, and a git call from here would recurse.
+func realCommonDirs(starts ...string) map[string]bool {
+	found := map[string]bool{}
+	for _, start := range starts {
+		if start == "" {
+			continue
+		}
+		abs, err := filepath.Abs(start)
+		if err != nil {
+			continue
+		}
+		candidates := []string{abs}
+		if resolved, err := filepath.EvalSymlinks(abs); err == nil && resolved != abs {
+			candidates = append(candidates, resolved)
+		}
+		for _, dir := range candidates {
+			for ; ; dir = filepath.Dir(dir) {
+				if common := gitCommonDirAt(dir); common != "" {
+					found[common] = true
+				}
+				if filepath.Dir(dir) == dir {
+					break
+				}
+			}
+		}
+	}
+	return found
+}
+
+func gitCommonDirAt(dir string) string {
+	dotGit := filepath.Join(dir, ".git")
+	info, err := os.Stat(dotGit)
 	if err != nil {
 		return ""
 	}
-	for ; ; dir = filepath.Dir(dir) {
-		dotGit := filepath.Join(dir, ".git")
-		info, err := os.Stat(dotGit)
-		if err == nil && info.IsDir() {
-			return sameDirKey(dotGit)
-		}
-		if err == nil {
-			raw, err := os.ReadFile(dotGit)
-			if err != nil || !strings.HasPrefix(string(raw), "gitdir:") {
-				return ""
-			}
-			gitDir := strings.TrimSpace(strings.TrimPrefix(string(raw), "gitdir:"))
-			if !filepath.IsAbs(gitDir) {
-				gitDir = filepath.Join(dir, gitDir)
-			}
-			if rel, err := os.ReadFile(filepath.Join(gitDir, "commondir")); err == nil {
-				common := strings.TrimSpace(string(rel))
-				if !filepath.IsAbs(common) {
-					common = filepath.Join(gitDir, common)
-				}
-				return sameDirKey(common)
-			}
-			return sameDirKey(gitDir)
-		}
-		if filepath.Dir(dir) == dir {
-			return ""
-		}
+	if info.IsDir() {
+		return sameDirKey(dotGit)
 	}
+	raw, err := os.ReadFile(dotGit)
+	if err != nil || !strings.HasPrefix(string(raw), "gitdir:") {
+		return ""
+	}
+	gitDir := strings.TrimSpace(strings.TrimPrefix(string(raw), "gitdir:"))
+	if !filepath.IsAbs(gitDir) {
+		gitDir = filepath.Join(dir, gitDir)
+	}
+	if rel, err := os.ReadFile(filepath.Join(gitDir, "commondir")); err == nil {
+		common := strings.TrimSpace(string(rel))
+		if !filepath.IsAbs(common) {
+			common = filepath.Join(gitDir, common)
+		}
+		return sameDirKey(common)
+	}
+	return sameDirKey(gitDir)
 }
 
 func sameDirKey(p string) string {

@@ -74,12 +74,57 @@ func TestHeavyProofWithoutTheLoopLockRefuses(t *testing.T) {
 }
 
 func TestSuiteGuardFailsAProofAimedAtTheRealRepository(t *testing.T) {
-	// A scratch directory that is not its own repository resolves to the enclosing one.
-	dir := scratchUnderDurable(t)
-	if _, err := heavyDirectory(context.Background(), dir); err == nil || !strings.Contains(err.Error(), "real repository") {
-		if heavyCommonGuard == nil {
-			t.Skip("not inside a repository")
+	if heavyCommonGuard == nil {
+		t.Skip("not inside a repository")
+	}
+	// A scratch directory inside an enclosing repository resolves to that repository, as does cwd.
+	targets := []string{"."}
+	if dir := scratchUnderDurable(t); len(realCommonDirs(dir)) > 0 {
+		targets = append(targets, dir)
+	}
+	for _, target := range targets {
+		if _, err := heavyDirectory(context.Background(), target); err == nil || !strings.Contains(err.Error(), "real repository") {
+			t.Fatalf("guard did not fire for %s: %v", target, err)
 		}
-		t.Fatalf("guard did not fire: %v", err)
+	}
+}
+
+func TestSuiteGuardProtectsOuterRepositoryWhenRunningInsideNestedClone(t *testing.T) {
+	outer, _ := heavyRepo(t)
+	rollWork := filepath.Join(outer, ".yolo", "durable", "tillr-roll-fixture")
+	nested := filepath.Join(rollWork, "source")
+	siblingScratch := filepath.Join(rollWork, "go-shards-fixture", "package-1-shard-0", "drain-timing-fixture")
+	if err := os.MkdirAll(siblingScratch, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	heavyGit(t, outer, "clone", "-q", "--shared", outer, nested)
+	nestedPkg := filepath.Join(nested, "tools", "tillr-drain", "drain")
+	if err := os.MkdirAll(nestedPkg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	origGuard := heavyCommonGuard
+	t.Cleanup(func() {
+		_ = os.Chdir(origWD)
+		heavyCommonGuard = origGuard
+	})
+	t.Setenv("YOLO_DURABLE_DIR", filepath.Dir(siblingScratch))
+	if err := os.Chdir(nestedPkg); err != nil {
+		t.Fatal(err)
+	}
+	installRealRepoGuard()
+
+	for _, target := range []string{nestedPkg, siblingScratch} {
+		if _, err := heavyDirectory(context.Background(), target); err == nil || !strings.Contains(err.Error(), "real repository") {
+			t.Fatalf("guard did not fire for %s: %v", target, err)
+		}
+	}
+	isolated, _ := heavyRepo(t)
+	if _, err := heavyDirectory(context.Background(), isolated); err != nil {
+		t.Fatalf("guard rejected isolated fixture repository: %v", err)
 	}
 }

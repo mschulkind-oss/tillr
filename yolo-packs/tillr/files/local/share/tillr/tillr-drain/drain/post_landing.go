@@ -338,15 +338,150 @@ func (l *Loop) recordPush(ctx context.Context, what, tip string, failure error) 
 func actionCommand(ctx context.Context, root, program string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, program, args...)
 	cmd.Dir = root
+	cmd.Env = withoutProcessEnv(os.Environ(), "TILLR_SQLITE_TRACE")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		lines := strings.Split(strings.TrimRight(string(output), "\n"), "\n")
-		if len(lines) > 20 {
-			lines = lines[len(lines)-20:]
-		}
-		return "", fmt.Errorf("%s: %w: %s", program, err, strings.Join(lines, "\n"))
+		return "", fmt.Errorf("%s: %w: %s", program, err, summarizeActionOutput(output))
 	}
 	return string(output), nil
+}
+
+func isShardSlotNoticeLine(line string) bool {
+	return strings.HasPrefix(line, "go-test-shards: ") &&
+		(strings.Contains(line, " waiting for a test slot") || strings.Contains(line, " yielding to a waiting "))
+}
+
+func parseShardFailureLine(trimmed string) (string, []string) {
+	candidate := trimmed
+	if strings.HasPrefix(candidate, "tillr-roll: ") {
+		if idx := strings.Index(candidate, "go-test-shards: "); idx >= 0 {
+			candidate = candidate[idx:]
+		}
+	}
+	if strings.HasPrefix(candidate, "go-test-shards: ") {
+		if isShardSlotNoticeLine(candidate) || strings.Contains(candidate, " tests passed,") {
+			return "", nil
+		}
+		return candidate, shardFailureTestNames(candidate)
+	}
+	fields := strings.Fields(candidate)
+	if len(fields) >= 4 && fields[1] == "shard" && (fields[3] == "failed" || fields[3] == "timed" || fields[3] == "cannot" || fields[3] == "missing") {
+		normalized := "go-test-shards: " + candidate
+		return normalized, shardFailureTestNames(normalized)
+	}
+	return "", nil
+}
+
+func shardFailureTestNames(line string) []string {
+	idx := strings.Index(line, "failed (exit ")
+	if idx < 0 {
+		return nil
+	}
+	rest := line[idx:]
+	colon := strings.Index(rest, "):")
+	if colon < 0 {
+		return nil
+	}
+	var names []string
+	for _, part := range strings.Split(rest[colon+2:], ",") {
+		if name := strings.TrimSpace(part); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names
+}
+
+func appendUnique(dst []string, seen map[string]bool, items ...string) []string {
+	for _, item := range items {
+		if item != "" && !seen[item] {
+			seen[item] = true
+			dst = append(dst, item)
+		}
+	}
+	return dst
+}
+
+// summarizeActionOutput strips opt-in store/git trace lines and, when a test or shard
+// runner failed, records the shard runner's failure lines and failing test names rather
+// than the trailing bytes of passing test output.
+func summarizeActionOutput(output []byte) string {
+	rawLines := strings.Split(strings.TrimRight(string(output), "\n"), "\n")
+	var lines []string
+	for _, line := range rawLines {
+		if isTraceLine([]byte(line)) || isShardSlotNoticeLine(strings.TrimSpace(line)) {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	var shardLines, failedTests, diagnostics []string
+	seenShards := map[string]bool{}
+	seenTests := map[string]bool{}
+	seenDiag := map[string]bool{}
+	var pendingIndented []string
+	inTest := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if shardLine, names := parseShardFailureLine(trimmed); shardLine != "" {
+			shardLines = appendUnique(shardLines, seenShards, shardLine)
+			failedTests = appendUnique(failedTests, seenTests, names...)
+			continue
+		}
+		if strings.HasPrefix(trimmed, "=== RUN ") || strings.HasPrefix(trimmed, "=== CONT ") || strings.HasPrefix(trimmed, "=== PAUSE ") {
+			pendingIndented = nil
+			inTest = true
+			continue
+		}
+		if strings.HasPrefix(trimmed, "--- PASS:") {
+			pendingIndented = nil
+			inTest = false
+			continue
+		}
+		if strings.HasPrefix(trimmed, "--- FAIL:") {
+			rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "--- FAIL:"))
+			if fields := strings.Fields(rest); len(fields) > 0 {
+				failedTests = appendUnique(failedTests, seenTests, fields[0])
+			}
+			diagnostics = appendUnique(diagnostics, seenDiag, trimmed)
+			if len(pendingIndented) > 2 {
+				pendingIndented = pendingIndented[len(pendingIndented)-2:]
+			}
+			diagnostics = appendUnique(diagnostics, seenDiag, pendingIndented...)
+			pendingIndented = nil
+			inTest = false
+			continue
+		}
+		if inTest && (strings.HasPrefix(line, " ") || strings.HasPrefix(line, "\t")) {
+			pendingIndented = append(pendingIndented, trimmed)
+		}
+	}
+
+	if len(shardLines) > 0 || len(failedTests) > 0 {
+		summary := append([]string(nil), shardLines...)
+		joined := strings.Join(summary, "\n")
+		var missing []string
+		for _, name := range failedTests {
+			if !strings.Contains(joined, name) {
+				missing = append(missing, name)
+			}
+		}
+		if len(missing) > 0 {
+			summary = append(summary, "failing tests: "+strings.Join(missing, ", "))
+		}
+		if len(diagnostics) > 12 {
+			diagnostics = diagnostics[:12]
+		}
+		summary = append(summary, diagnostics...)
+		return strings.Join(summary, "\n")
+	}
+
+	if len(lines) > 20 {
+		lines = lines[len(lines)-20:]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (l *Loop) recordAction(ctx context.Context, action, tip string, failure error) {
