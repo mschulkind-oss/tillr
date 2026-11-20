@@ -245,9 +245,9 @@ build, the backend policy, and the base commit.
 - **Visibility ships with the behavior.** A change that adds a hold or a stop adds its row to these
   faces in the same commit.
 
-The board timeline already has two item blocks in
-[`observatory-design.md`](observatory-design.md); they are the drawn form of the second bullet and
-stay as written.
+The board timeline had two item blocks in the graduated observatory design
+([`docs/reference/observatory-design.md`](../reference/observatory-design.md)); they were the drawn form of the second bullet and
+stayed as written until landed and superseded by [observatory redesign](../reference/observatory-redesign.md).
 
 ### 3.4 A derived copy is produced by the pipeline
 

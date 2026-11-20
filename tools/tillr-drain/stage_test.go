@@ -124,7 +124,7 @@ resolve_target "$3"
 // derivation from the module and not a blanket widening of every fence.
 func TestTheFenceCarriesThePackMirrorOfEveryTillrModule(t *testing.T) {
 	f := newStageFixture(t, fencedItemRecord("item_041", "in-queue",
-		"tools/tillr-view", "docs/design/observatory-design.md"))
+		"tools/tillr-view", "docs/reference/observatory-design.md"))
 	if err := f.stager().Stage(context.Background(), f.spec("lane-1")); err != nil {
 		t.Fatalf("staging a lane failed: %v", err)
 	}
@@ -135,7 +135,7 @@ func TestTheFenceCarriesThePackMirrorOfEveryTillrModule(t *testing.T) {
 	}
 	fence := string(fenceRaw)
 	mirror := "yolo-packs/tillr/files/local/share/tillr/tillr-view/"
-	for _, want := range []string{"tools/tillr-view", "docs/design/observatory-design.md", mirror} {
+	for _, want := range []string{"tools/tillr-view", "docs/reference/observatory-design.md", mirror} {
 		if !strings.Contains(fence, want) {
 			t.Fatalf("the fence does not name %q, so a lane that runs `just pack-sync` is refused by fenceViolation:\n%s", want, fence)
 		}

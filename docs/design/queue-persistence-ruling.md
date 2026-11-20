@@ -144,7 +144,7 @@ The four-clause rule accepts **5** rows (`item-bar-ironbar-config-v2`, `item-vie
 **Files, in authoring order:**
 1. [`docs/design/status-bar-plan.md`](status-bar-plan.md) — add the `item-bar-ironbar-config-v2` block (`c1..c3`, including `tools/fork-check.py` and `tests/test_waybar_cpu.py` in `paths`) under Task 4; [`docs/roadmap.md`](../roadmap.md) `## Icebox` already keeps it parked.
 2. `config/tillr/seed-items.json` — remove `item-bar-ironbar-config` and `item-bar-ironbar-config-v2` (pure deletion allowed by `seed-freeze`).
-3. [`docs/design/observatory-design.md`](observatory-design.md) — add blocks for `item-view-board-timeline-api` and `item-view-board-timeline-ui` (`blocked_by="item-view-board-timeline-api"`).
+3. [`docs/reference/observatory-design.md`](../reference/observatory-design.md) *(graduated from the design edited in this historical commit)* — add blocks for `item-view-board-timeline-api` and `item-view-board-timeline-ui` (`blocked_by="item-view-board-timeline-api"`).
 4. [`docs/design/landing-velocity-plan.md`](landing-velocity-plan.md) — add the block for `item-gate-substrate-go-landing-tier`.
 5. [`docs/tillr/roadmap.md`](../tillr/roadmap.md) — add standalone defect blocks for `item-store-crash-recovery`, `item-gate-observatory-dev-check`, and `item-trace-incremental-ingest`.
 6. [`docs/pi/connection-error-turn-death-2026-10-18.md`](../pi/connection-error-turn-death-2026-10-18.md) — record the `_modelForMessage` `wireId` vs `model.id` root cause in prose (no item block).

@@ -94,6 +94,24 @@ class TreeChecks(unittest.TestCase):
         self.track("docs/design/citing.md", "---\ndepends-on: [target.md#html, 'target.md#q1']\n---\n")
         self.assertEqual(tree_common.design_citation_findings(self.root), [])
 
+    def test_design_citations_skip_delivered_pack_docs_snapshot(self):
+        # Delivered copies under yolo-packs/tillr/files/local/share/tillr/docs/ are a
+        # commit-pinned snapshot verified by tests/pack-sync.test.py against snapshot.json
+        # (and excluded in .vantage.toml). Graduating and deleting an unshipped design on
+        # HEAD must not convict a snapshot copy's historical frontmatter citation.
+        snapshot_copy = (
+            "yolo-packs/tillr/files/local/share/tillr/docs/design/shipped.md"
+        )
+        self.track(snapshot_copy, "---\ndepends-on:\n  - graduated-design.md\n---\n# Copy\n")
+        self.assertEqual(tree_common.design_citation_findings(self.root), [])
+        # Negative control: a live document outside the snapshot with the same missing
+        # target is still refused.
+        self.track("docs/design/live.md", "---\ndepends-on:\n  - graduated-design.md\n---\n")
+        findings = tree_common.design_citation_findings(self.root)
+        self.assertEqual(len(findings), 1)
+        self.assertIn("docs/design/live.md:3", findings[0])
+        self.assertIn("names no tracked document", findings[0])
+
     def test_missing_git_is_could_not_judge(self):
         for name in ["scratch", "design-citations"]:
             with patch.dict(os.environ, PATH="/not-a-tool-directory"):

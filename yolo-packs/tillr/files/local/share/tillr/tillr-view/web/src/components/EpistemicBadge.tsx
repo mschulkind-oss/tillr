@@ -1,4 +1,6 @@
-// The four-state provenance marker (design §2.3). Every span, exchange, claim and stage
+// Architecture and invariants: docs/reference/observatory-design.md
+//
+// The provenance marker across seven states. Every span, exchange, claim and stage
 // renders through this component, so a partial record can never look like a clean pass:
 // an absent clock is labelled, never drawn as a zero-width bar.
 

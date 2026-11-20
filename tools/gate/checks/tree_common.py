@@ -148,6 +148,7 @@ def tracked_markdown(root: Path) -> list[str]:
 # gate check reads nothing outside its own directory; tests/pack-sync.test.py asserts the
 # two agree.
 DELIVERED_PREFIX = "yolo-packs/tillr/files/local/share/tillr/"
+DELIVERED_DOCS_PREFIX = DELIVERED_PREFIX + "docs/"
 
 
 def excused_as(path: str) -> str:
@@ -310,6 +311,12 @@ def design_citation_findings(root: Path) -> list[str]:
         return anchor_cache[relative]
 
     for path in tracked_markdown(root):
+        if path.startswith(DELIVERED_DOCS_PREFIX):
+            # Delivered design copies (just pack-docs) are a commit-pinned snapshot
+            # verified by tests/pack-sync.test.py against snapshot.json and excluded
+            # in .vantage.toml; graduating an unshipped design on HEAD does not
+            # rewrite historical snapshot frontmatter.
+            continue
         try:
             text = (root / path).read_text(encoding="utf-8", errors="replace")
         except OSError:

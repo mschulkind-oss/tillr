@@ -48,9 +48,9 @@ clocks as recorded facts.
 **Reads with:** [observatory actions](./observatory-actions.md) (1-based queue
 places, drag reordering, verbatim `idea` intake, and `--write` HTTP mutations),
 [tillr item states](./tillr-item-states.md) (projected item states and frozen
-criteria), [the initial observatory design](../design/observatory-design.md)
-(the earlier four-region board whose provenance rules stay in force and whose
-pane layout this system replaced), [the observatory recording contract](../design/tillr-observatory.md)
+criteria), [observatory truthfulness and shared primitives](./observatory-design.md)
+(the provenance rules, shared glyph/refusal/document components, and earlier
+four-region board whose pane layout this system replaced), [the observatory recording contract](../design/tillr-observatory.md)
 (the store and artifact schemas behind these reads), and
 [the decision provenance review](../tillr/decision-provenance-review.md) (the
 2026-11-20 owner ruling [`OQ-PR5`](../tillr/decision-provenance-review.md#OQ-PR5)
@@ -279,7 +279,7 @@ The observatory deliberately excludes:
 
 - **Direct database or git writes from the server:** `tillr-view` never opens a writable SQLite handle or runs `git commit`; only `--write` enables the two `tillr-item` subprocess actions (`place` and `idea`) documented in [observatory actions](./observatory-actions.md).
 - **Authentication or multi-user accounts:** `tillr-view serve` binds to loopback by default and relies on loopback `Origin` checks rather than login sessions.
-- **In-app Markdown rendering or embedded Vantage:** Design documents stay in Vantage (or the repository); `DocumentPane` renders frontmatter metadata, question counts, and an external Vantage link ([`OQ-OBD2`](../design/observatory-design.md#11-decision-ledger), [`OQ-OBD6`](../design/observatory-design.md#11-decision-ledger)).
+- **In-app Markdown rendering or embedded Vantage:** Design documents stay in Vantage (or the repository); `DocumentPane` renders frontmatter metadata, question counts, and an external Vantage link ([`OQ-OBD2`](./observatory-design.md#why-its-this-way), [`OQ-OBD6`](./observatory-design.md#why-its-this-way)).
 - **Dollar cost or burn-rate projections:** Excluded under [`OQ-OR1`](#why-its-this-way) until pricing is accurate across subscriptions, cached tokens, and changing model rates ([Icebox](../tillr/roadmap.md#icebox)).
 
 Routes and controls present in link helpers or earlier sketches that are **not built** at `bc8dda147c84de98a239194961e0fb4b187bea79`:

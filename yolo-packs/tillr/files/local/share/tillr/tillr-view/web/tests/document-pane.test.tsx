@@ -27,7 +27,7 @@ afterEach(() => {
 
 const doc: DocData = {
   item_id: "item-obs-doc-link",
-  path: "docs/design/observatory-design.md",
+  path: "docs/reference/observatory-design.md",
   frontmatter: {
     title: "Observatory Design: The Board an Operator Reads",
     status: "accepted",
@@ -35,7 +35,7 @@ const doc: DocData = {
     next: "land the metadata-and-link pane",
     updated: "2026-11-13",
   },
-  anchor: "8-the-design-document",
+  anchor: "item-detail-and-design-document-metadata",
   open_questions: 3,
   questions_state: "questions-ok",
   bytes: 31204,
@@ -59,7 +59,7 @@ describe("the document pane links into Vantage", () => {
     const link = container.querySelector("a.doc__link");
     expect(link).not.toBeNull();
     expect(link?.getAttribute("href")).toBe(
-      "http://vantage.test:1234/#/docs/design/observatory-design.md#8-the-design-document",
+      "http://vantage.test:1234/#/docs/reference/observatory-design.md#item-detail-and-design-document-metadata",
     );
     // The link is drawn and the pane does not say it is inert.
     expect(container.textContent).not.toContain("goes nowhere");
@@ -71,7 +71,7 @@ describe("the document pane links into Vantage", () => {
       baseUrl: "http://vantage.test:1234",
     });
     const href = container.querySelector("a.doc__link")?.getAttribute("href");
-    expect(href).toBe("http://vantage.test:1234/#/docs/design/observatory-design.md");
+    expect(href).toBe("http://vantage.test:1234/#/docs/reference/observatory-design.md");
   });
 
   test("no configured base draws the link inert and says so in one line", () => {
@@ -109,7 +109,7 @@ describe("the document pane shows metadata and no prose", () => {
       "land the metadata-and-link pane",
       "2026-11-13",
       "3 open questions",
-      "docs/design/observatory-design.md",
+      "docs/reference/observatory-design.md",
       "31,204 bytes",
     ]) {
       expect(text).toContain(value);

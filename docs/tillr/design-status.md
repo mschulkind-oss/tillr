@@ -156,6 +156,7 @@ allow, first the ones that wait on nothing.
 | [Landing principles](../design/landing-principles.md) | The durable landing rulings, the measurement behind each and what enforces it. | Current reference | Nothing | shipped |
 | [SQLite contention recovery](../recovery/sqlite-contention/README.md) | Why the store's writer stalled the loop, and the fixes. | Built, pending independent review: shorter writer spans, no fsync under the writer, writer tracing, checkpoint ownership | The review | shipped |
 | [Observatory contract](../design/tillr-observatory.md) | What the drain must record so a read-only web page can show every item, stage and call. | Built: `tillr-view serve` with its Go API and React front end | Superseded in its screens by the redesign below | shipped |
+| [Observatory truthfulness and primitives](../reference/observatory-design.md) | Reference for epistemic provenance badges, three-way state glyphs, structured refusals, design-document metadata and Vantage links, CLI/HTTP count parity, and WebSocket invalidation (companion plan retired on graduation). | Current reference | Nothing | shipped |
 | [Observatory redesign](../reference/observatory-redesign.md) | Reference for the linked-page observatory, CLI/HTTP read faces, waiting classes, span waterfall, and usage display without dollar prices. | Current reference | Nothing | shipped |
 | [Observatory actions](../reference/observatory-actions.md) | Reference for reordering the queue (`place`, the order record) and saving an idea (`idea` intake, the design turn, and the `--write` HTTP routes). | Current reference | Nothing | shipped |
 | [Session recording](../design/session-recording.md) | Record agent work once, through a collector, a command shim and a usage hook, and query it later. | Partly built: slice 1 (`tools/tillr-trace`, the shim, writer tracing) | Slices 2 and 3 are not filed | shipped |
@@ -183,8 +184,6 @@ Kept for their evidence. None is delivered with the pack; each link goes to the 
 | [Coverage 2026-11-13](../design/tillr-coverage-2026-11-13.md) | A walk of fifteen designs for owed work. | Historical record | not shipped |
 | [Drain acceptance 2026-11-13](../design/tillr-drain-acceptance-2026-11-13.md) | The first unattended two-lane run, measured. | Historical record | not shipped |
 | [Observatory QA 2026-11-13](../design/observatory-qa-2026-11-13.md) | Findings against the first observatory. | Historical record | not shipped |
-| [Observatory design](../design/observatory-design.md) | The three-pane board design. | Superseded by the observatory redesign | not shipped |
-| [Observatory design plan](../design/observatory-design-plan.md) | Parking lot for that design. | Historical | not shipped |
 | [Queue inventory 2026-11-13](../design/queue-inventory-2026-11-13.md) | Every candidate piece of work, surveyed. | Historical record | not shipped |
 | [Board utilities plan](../design/board-utilities-plan.md) | The implementation plan for the seven programs. | Graduated: built | not shipped |
 | [Board utilities lanes](../design/board-utilities-lanes.md) | That plan cut into lanes. | Graduated | not shipped |

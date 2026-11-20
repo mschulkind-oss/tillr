@@ -1,3 +1,4 @@
+// Provenance, count parity, and refusal invariants: docs/reference/observatory-design.md
 package main
 
 import (

@@ -449,8 +449,9 @@ a time as each is cut into build items.
 Each predates the round above. They are behind it because a ruling that is already open does not
 get cheaper by being opened again.
 
-- [The observatory design](../design/observatory-design.md) is fully ruled and is superseded
-  screen by screen as [entry 6](#6-the-observatory-answers-the-owners-questions) lands.
+- [Observatory truthfulness and primitives](../reference/observatory-design.md) is built and graduated
+  to a system reference; its earlier four-region layout was superseded screen by screen as
+  [entry 6](#6-the-observatory-answers-the-owners-questions) landed.
 - [The evidence tool](../../tools/pipeline-evidence/) still carries a reader for the deleted
   merge queue. Replacing it with a reader of the tillr store's landings is owed
   ([the retirement design](../design/mq-retirement.md#9-open-questions)), and so is deleting
