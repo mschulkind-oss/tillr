@@ -1,10 +1,10 @@
-# last_hand_move_event_seq: 1309571
-# hand_move_event_sha256: 0e5e4033ce55522f945579a718aeaedb51d7d5ee426db62f615f4ba0fe9bcb8b
+# last_hand_move_event_seq: 1309781
+# hand_move_event_sha256: 826de1e1a9a6f80a06e8313965e4e5f0944ff4c3d0cb28b851b2c97e3e585e06
+item-request-b205fbd881
 item-request-b983843cc9
 item-request-f16c0ce2d8
 item-request-fccf81196b
 item-request-8d596c05b4
-item-request-b205fbd881
 item-request-ab90e5da8f
 item-request-2656e7289b
 item-request-ae67aa405d
