@@ -281,6 +281,43 @@ func TestMain(m *testing.M) {
         with patch.dict(os.environ, clean_env, clear=True):
             self.assertEqual(shards.shared_cache_dir(), (home / '.cache' / 'go-build').resolve())
 
+    def test_waiting_runners_announce_and_never_exceed_limit(self):
+        # Deterministic: no sleeps decide the outcome. Holders release only after every
+        # surplus runner has announced that it is waiting, so an over-admission would
+        # show as a peak above the limit.
+        limit, runners = 3, 8
+        lock_dir = self.root / 'pool'
+        state = threading.Lock()
+        active = peak = 0
+        notices = []
+        all_waiting = threading.Event()
+
+        def notify(message):
+            with state:
+                notices.append(message)
+                if len(notices) == runners - limit:
+                    all_waiting.set()
+
+        def runner():
+            nonlocal active, peak
+            with shards.acquire_shard_slot(lock_dir, limit, notify):
+                with state:
+                    active += 1
+                    peak = max(peak, active)
+                assert all_waiting.wait(60)
+                with state:
+                    active -= 1
+
+        threads = [threading.Thread(target=runner) for _ in range(runners)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(120)
+            self.assertFalse(thread.is_alive())
+        self.assertEqual(peak, limit)
+        self.assertEqual(len(notices), runners - limit)
+        self.assertTrue(all('waiting for a test slot' in n and str(lock_dir) in n for n in notices))
+
     def test_two_invocations_never_exceed_limit(self):
         limit = shards.default_shard_limit()
         first_count = max(1, limit - 1)
