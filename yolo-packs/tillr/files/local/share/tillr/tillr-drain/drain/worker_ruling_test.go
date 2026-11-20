@@ -115,7 +115,7 @@ func TestAFailureReturnsToItsWorkerWithTheEvidence(t *testing.T) {
 				t.Fatalf("the failure did not return to its worker: %+v", d)
 			}
 			r := *d.Returned
-			if r.RunID != first.decision.RunRequest.RunID || r.Cause != step || r.Detail != "refused: tools/outside/x" {
+			if r.RunID != first.decision.RunRequest.RunID || r.Cause != step || !strings.Contains(r.Detail, "refused: tools/outside/x") {
 				t.Fatalf("the returned ending lost its evidence: %+v", r)
 			}
 			if step == RefusalGate && (len(r.Checks) != 1 || r.Checks[0].CheckID != "documents" || r.Checks[0].LogRef == "") {

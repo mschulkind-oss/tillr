@@ -732,7 +732,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			// session when the writer's cannot be resumed, and on whatever lane the plan
 			// offers: the graph (with any expanded pieces and the inserted work stage) is
 			// retained even when the original lane is unavailable.
-			if !retainedGraph && verifyBuildReturn(e) && e.WorkerSession.NodeIndex >= 0 && e.WorkerSession.NodeIndex < len(e.WorkerSession.Workflow.Stages) {
+			if !retainedGraph && (verifyBuildReturn(e) || verifyNoVerdictReturn(e)) && e.WorkerSession.NodeIndex >= 0 && e.WorkerSession.NodeIndex < len(e.WorkerSession.Workflow.Stages) {
 				w, resumeNode, loadErr = e.WorkerSession.Workflow, e.WorkerSession.NodeIndex, nil
 				retainedGraph = true
 			}
@@ -812,7 +812,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					if decision.RunRequest.SessionTurn && decision.Returned.WorkerSession.Workflow != nil {
 						decision.NodeBaseSHA = decision.Returned.WorkerSession.NodeBaseSHA
 					}
-					if verifyBuildReturn(decision.Returned) {
+					if verifyBuildReturn(decision.Returned) || verifyNoVerdictReturn(decision.Returned) {
 						// Per-node checks measure the repair commit atop the candidate; the
 						// whole item still diffs against its own base.
 						decision.NodeBaseSHA = decision.Returned.WorkerSession.HeadSHA
@@ -1518,6 +1518,8 @@ func (p *planner) retryHoldReason(itemID string) string {
 		return p.history.refusals[latest]
 	case RefusalVerifyNotDone:
 		return RefusalVerifyNotDone
+	case RefusalVerifyNoVerdict:
+		return RefusalVerifyNoVerdict
 	case RefusalPlanWrong:
 		return RefusalPlanWrong
 	case RefusalNodeOutput:
