@@ -3,7 +3,6 @@ package drain
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -401,6 +400,7 @@ type identicalRepeatRequestSteps struct {
 	*workflowSteps
 	verifies    int
 	sawGuidance bool
+	base        string
 }
 
 func (s *identicalRepeatRequestSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
@@ -419,10 +419,18 @@ func (s *identicalRepeatRequestSteps) Run(ctx context.Context, req run.Request) 
 			s.sawGuidance = true
 		}
 	case "work":
+		// The verifier's repeated finding is only an identical repeat when it judges the
+		// same candidate, so every attempt rebuilds the same commit from the same base.
+		s.t.Setenv("GIT_AUTHOR_DATE", "2026-11-15T00:00:00Z")
+		s.t.Setenv("GIT_COMMITTER_DATE", "2026-11-15T00:00:00Z")
+		if s.base == "" {
+			s.base = runGit(s.t, target, "rev-parse", "HEAD")
+		}
+		runGit(s.t, target, "reset", "--hard", "-q", s.base)
 		if err := os.MkdirAll(filepath.Join(target, "tools/item-a"), 0o755); err != nil {
 			return run.Record{}, "", err
 		}
-		writeForkFile(s.t, filepath.Join(target, "tools/item-a/cache.go"), fmt.Sprintf("package cache // %s\n", req.RunID))
+		writeForkFile(s.t, filepath.Join(target, "tools/item-a/cache.go"), "package cache\n")
 		if s.sawGuidance {
 			writeForkFile(s.t, filepath.Join(target, "tools/item-a/cache_test.go"), "package cache\n")
 		}

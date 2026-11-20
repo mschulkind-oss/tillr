@@ -2,6 +2,7 @@ package drain
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -480,6 +481,29 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 	}
 }
 
+// verifyFindingDigest is the digest of one not-done finding as a worker would act on it:
+// the candidate it judged and the finding's text. The candidate is hashed beside the
+// normalized text, not inside it, because normalizeEvidence strips full commit hashes.
+// Two refusals that share a criterion id but differ in candidate or finding are not an
+// identical repeat.
+func verifyFindingDigest(head, reason, runID string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(head+"\n"+normalizeEvidence(reason, runID))))
+}
+
+// verifyNotDoneEvidence is a verify-not-done refusal's detail and evidence key: one line
+// per not-done criterion, and a key of each criterion id with the digest of its candidate
+// and finding text.
+func verifyNotDoneEvidence(head, runID string, findings []item.JudgeEntry) (string, string) {
+	sort.Slice(findings, func(i, j int) bool { return findings[i].CriterionID < findings[j].CriterionID })
+	var lines []string
+	var checks []EndingCheck
+	for _, v := range findings {
+		lines = append(lines, v.CriterionID+": "+v.Reason)
+		checks = append(checks, EndingCheck{CheckID: v.CriterionID, Digest: verifyFindingDigest(head, v.Reason, runID)})
+	}
+	return strings.Join(lines, "\n"), endingKey(RefusalVerifyNotDone, checks, "", runID)
+}
+
 // settleJudgeFailure routes a checked ruling without running the gate or landing.
 // Defective intake and closure share a transaction: neither can survive alone.
 func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.JudgeEntry, verdicts []item.JudgeEntry, options item.JudgeOptions, result *LoopResult) error {
@@ -490,15 +514,7 @@ func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.J
 				findings = append(findings, v)
 			}
 		}
-		sort.Slice(findings, func(i, j int) bool { return findings[i].CriterionID < findings[j].CriterionID })
-		var lines []string
-		var checks []EndingCheck
-		for _, v := range findings {
-			lines = append(lines, v.CriterionID+": "+v.Reason)
-			checks = append(checks, EndingCheck{CheckID: v.CriterionID})
-		}
-		c.RefusalDetail = strings.Join(lines, "\n")
-		c.EvidenceKey = endingKey(RefusalVerifyNotDone, checks, "", c.RunID)
+		c.RefusalDetail, c.EvidenceKey = verifyNotDoneEvidence(c.HeadSHA, c.RunID, findings)
 		return l.refuse(ctx, c, result, RefusalVerifyNotDone)
 	}
 	reason := ReasonEvalFailed
