@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -195,6 +196,13 @@ func (l *Loop) saveDesignEnding(ctx context.Context, c item.Conflict, mark desig
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
 		if err := refuseTerminalItem(tx.Reader(), c.ItemID, "blocked-report"); err != nil {
 			return err
+		}
+		hasLanded, err := obstacles.HasLanded(tx.Reader(), c.ItemID)
+		if err != nil {
+			return err
+		}
+		if hasLanded {
+			c.Text = obstacles.StripCloseRemedy(c.Text)
 		}
 		at := l.cfg.Now().UTC()
 		if err := item.RecordConflict(tx, c, at); err != nil {

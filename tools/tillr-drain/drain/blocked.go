@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -219,6 +220,13 @@ func (l *Loop) saveBlockConflict(ctx context.Context, c item.Conflict) error {
 		// terminal item. Such an item gets no conflict: its run is settled unjudged.
 		if err := refuseTerminalItem(tx.Reader(), c.ItemID, "blocked-report"); err != nil {
 			return err
+		}
+		hasLanded, err := obstacles.HasLanded(tx.Reader(), c.ItemID)
+		if err != nil {
+			return err
+		}
+		if hasLanded {
+			c.Text = obstacles.StripCloseRemedy(c.Text)
 		}
 		if err := item.RecordConflict(tx, c, l.cfg.Now().UTC()); err != nil {
 			return err

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/event"
@@ -89,7 +90,11 @@ func authorizeDesignRetry(ctx context.Context, tx *store.Tx, req RetryRequest, a
 	c := conflicts[req.ItemID]
 	switch {
 	case c.TriageVersion != "":
-		return nil, Usagef("run %q is a triage run of item %q's request: a triage conflict is raised again when the request changes. %s", req.RunID, req.ItemID, noRetryCommand("the owner moves: amend the request (tillr item apply), or release or close the item"))
+		remedy := "the owner moves: amend the request (tillr item apply), or release or close the item"
+		if hasLanded, err := obstacles.HasLanded(r, req.ItemID); err == nil && hasLanded {
+			remedy = "the owner moves: amend the request (tillr item apply), or release the item"
+		}
+		return nil, Usagef("run %q is a triage run of item %q's request: a triage conflict is raised again when the request changes. %s", req.RunID, req.ItemID, noRetryCommand(remedy))
 	case c.Status == "owner" && c.DesignRunID == req.RunID:
 	case c.Status == "owner" && c.DesignRunID != "":
 		return nil, Usagef("design run %q is not the one item %q's conflict %s now names: that is design run %s. The accepted command: %s", req.RunID, req.ItemID, c.ConflictID, c.DesignRunID, retryCommand(req.ItemID, c.DesignRunID, ""))
