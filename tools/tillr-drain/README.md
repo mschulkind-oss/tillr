@@ -2000,6 +2000,24 @@ answer. A no-verdict answer that would repeat on every machine is a classificati
 in the gate, fixed there: fork-check reads a fork build's `FAILED: build` and npm's
 lockfile refusal as verdicts, so such a red goes back to the worker as a gate refusal.
 
+A gate program that refuses its own arguments is the one no-verdict answer that is not
+re-gated. When the gate's stderr says `flag provided but not defined`, `unrecognized
+arguments` or another usage refusal ([`drain/gate_usage_error.go`](./drain/gate_usage_error.go)),
+the same program, arguments and installed binary will answer the same words on every pass,
+so the loop holds the item as `gate-harness-error` after the first answer, with the gate's
+first error lines as the reason, and releases the lane as it does for any held candidate.
+There is no attempt count or time limit: one such answer is enough. The operator fixes the
+gate and clears the fault, or runs `tillr drain retry` naming the held run. Observed
+2026-11-19/20: a candidate was gated every eight seconds for ten hours on
+`flag provided but not defined: -scope-to-change`.
+
+Which `tillr-gate` judges a candidate: always the **installed** one, built from the trunk,
+never the candidate's own build, because a candidate that built its own judge would certify
+itself. A candidate that changes both a gate script (`tools/gate/`) and the binary it calls
+(`tools/tillr-gate/`) must therefore keep the script compatible with the installed binary,
+or land the binary change first and the script change after. When such a candidate's gate
+answers with a usage refusal, the hold's reason says so in as many words.
+
 A gate step that could not be run at all (`gate-harness-error`): the drain could not start
 the gate program or read or record what it answered, so the same step would fail the same
 way until someone repairs it. That, a recorded boundary conviction
