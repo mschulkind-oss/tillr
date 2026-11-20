@@ -1,3 +1,5 @@
+// Architecture and invariants: docs/reference/observatory-redesign.md
+//
 // Package holdrules is the one table of how a recorded hold reason is shown: its
 // class, where it sits, and what moves it. It is a leaf package (no store, no
 // writer DDL) so the read-only view can import it, and the drain package's own

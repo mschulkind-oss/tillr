@@ -1,3 +1,4 @@
+// Architecture and invariants: docs/reference/observatory-redesign.md
 // Command tillr-view renders a board's status and event log from a store snapshot or
 // from a stream of records, and writes nothing anywhere: it is safe to point at the
 // live store while writers run (design §5.8).

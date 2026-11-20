@@ -322,7 +322,7 @@ working tree for a clean build, and its result is cached for three seconds. Rest
 
 `tillr-view lanes` and `GET /api/v1/lanes` read the same rows. Home's lane strip
 uses this answer, links every lane, and computes its counts from those rows. The
-[Home lane-strip design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-redesign.md#show-every-lane-and-its-current-work-on-home)
+[Home lane-strip reference](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-redesign.md#home-waiting-classes-and-the-lane-strip)
 defines its three states: idle, running, and settling. A terminal run still held
 by a lease is settling, not evidence that a gate or landing is in progress.
 
@@ -377,7 +377,7 @@ tillr-view trace --store /path/to/.tillr/state.db --pass 20261115T031405Z
 ```
 
 Choose exactly one of `--run`, `--item`, or `--pass`. A
-[pass](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-redesign.md#4-entities-and-urls) is a planning
+[pass](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-redesign.md#entities-and-urls) is a planning
 round identified by its UTC dispatch stamp; the second-resolution stamp selects
 all dispatch decisions in that second. Only decisions naming a recorded run can
 contribute a run. Each run keeps a separate trace id when an item or pass exports
@@ -423,7 +423,7 @@ route still keeps missing clocks null; only the downloads derive enclosing bound
 
 ## What each pass decided
 
-`tillr-view passes` lists the newest [passes](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/observatory-redesign.md#4-entities-and-urls)
+`tillr-view passes` lists the newest [passes](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-redesign.md#entities-and-urls)
 first. One pass contains every decision with the same `dispatched_at` millisecond.
 Decisions appear in current queue place order; items outside the order follow
 by item id. Each decision names its item, action, and verbatim reason; actions

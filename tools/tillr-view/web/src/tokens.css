@@ -1,4 +1,5 @@
-/* Observatory redesign §6. Ink-3 is adjusted from the draft to meet its 4.5:1
+/* Architecture and invariants: docs/reference/observatory-redesign.md#visual-tokens.
+ * Ink-3 is adjusted from the draft to meet its 4.5:1
  * text requirement on every surface; tests measure the actual palette below. */
 :root {
   --bg: #f6f7f9;

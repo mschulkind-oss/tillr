@@ -29,7 +29,7 @@ next: "OQ-SH2 is decided (follow every landing, 2026-11-20) with owner direction
 
 **Needs your ruling:** [OQ-SH4](#OQ-SH4).
 
-**Reads with:** [tillr-restart.md](./tillr-restart.md) (owns restarting and the roll command that turns the trunk into running binaries), [tillr-distribution.md](./tillr-distribution.md) (the launcher this implements, [§2](./tillr-distribution.md#2-build-and-delivery)), [tillr-convergence.md](./tillr-convergence.md) (its decision `D-TC5` on copies a pipeline derives), and [observatory-redesign.md](./observatory-redesign.md) (the board, which this design no longer sequences).
+**Reads with:** [tillr-restart.md](./tillr-restart.md) (owns restarting and the roll command that turns the trunk into running binaries), [tillr-distribution.md](./tillr-distribution.md) (the launcher this implements, [§2](./tillr-distribution.md#2-build-and-delivery)), [tillr-convergence.md](./tillr-convergence.md) (its decision `D-TC5` on copies a pipeline derives), and [observatory-redesign.md](../reference/observatory-redesign.md) (the observatory reference, which this design does not sequence).
 
 **Words.** A **pack** is a directory under `yolo-packs/` that yolo renders into an agent's home; the tillr pack is what puts `tillr` on `PATH` in a workspace ([AGENTS.md](../../AGENTS.md)). The **pack's copy** is the copy of tillr's Go source the pack ships, which the code and the recipes call the mirror. A **launcher** is the small program on `PATH` that builds a tillr binary on first use and then runs it. [The vocabulary](./tillr-vocabulary.md#5-the-words) defines fence, gate and lane.
 
@@ -53,7 +53,7 @@ Read from the tree on 2026-11-19.
 | **The fence covers the pack's copy** | Built: a lane fenced to a tillr module may also write that module's copy. |
 | **Delivering the pack from Git instead of a committed copy** ([§5](#5-the-packs-copy-of-the-source-what-it-is-for-and-what-it-costs), [OQ-SH2](#OQ-SH2), `D-SH6`) | Not built, and awaiting [OQ-SH4](#OQ-SH4). Other workspaces follow every landing today only because workers run `just pack-sync` and commit `yolo-packs/tillr/files/local/share/tillr/`. |
 | **The read faces refuse a missing or unreadable store** | Built in `tools/tillr-view`. |
-| **The observatory sequence** this design once set out, which promoted seven queue items by rank | Left this design. Ranks no longer exist, and the observatory was built and then redesigned ([observatory-redesign.md](./observatory-redesign.md)), which owns its own order. |
+| **The observatory sequence** this design once set out, which promoted seven queue items by rank | Left this design. Ranks no longer exist, and the observatory was built and redesigned ([docs/reference/observatory-redesign.md](../reference/observatory-redesign.md)). |
 
 ## 3. Mechanism and One-Writer Rules
 
@@ -139,6 +139,6 @@ Until [OQ-SH4](#OQ-SH4) is ruled and built, nothing in `yolo-packs/tillr/` chang
 ## 7. Out of Scope
 
 - **Sharing one store between versions** ([tillr-distribution.md](./tillr-distribution.md) Step 3): unnecessary while every binary in `/workspace` is built from `main`.
-- **The observatory's screens and their order**: [observatory-redesign.md](./observatory-redesign.md).
+- **The observatory's screens and their order**: [docs/reference/observatory-redesign.md](../reference/observatory-redesign.md).
 - **Restarting and the roll command**: [tillr-restart.md](./tillr-restart.md).
 - **Spend and burn-rate display**: iceboxed on [the tillr roadmap](../tillr/roadmap.md#icebox).
