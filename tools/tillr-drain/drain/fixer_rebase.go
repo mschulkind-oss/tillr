@@ -78,7 +78,7 @@ func (l *Loop) fixerRebaseConflicted(ctx context.Context, candidate Candidate, c
 		if !ok {
 			replay = unknownReplay{}
 		}
-		red, known, err := l.redOnTip(ctx, replay, candidate, conflict.Tip, checks)
+		red, _, known, err := l.redOnTip(ctx, replay, candidate, conflict.Tip, checks)
 		if err != nil {
 			return "", false, err
 		}

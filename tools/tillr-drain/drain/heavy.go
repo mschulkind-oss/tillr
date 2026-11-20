@@ -344,6 +344,12 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 		if a, ok := early.handled[check.CheckID]; ok && check.FirstRedLanding == "" {
 			// Recovery already ran for this check while the proof continued.
 			check.FirstRedLanding, check.GateFault, check.Detail = a.check.FirstRedLanding, a.check.GateFault, a.check.Detail
+			if check.LogPath == "" && a.check.LogPath != "" {
+				check.LogPath = a.check.LogPath
+			}
+			if check.LogRef == "" && a.check.LogRef != "" {
+				check.LogRef = a.check.LogRef
+			}
 			check.RevertedBy, check.RevertRefused = a.check.RevertedBy, a.check.RevertRefused
 			against = a.against
 			switch {
@@ -535,6 +541,9 @@ func (r HeavyRunner) oneLogged(ctx context.Context, sha, id string) (bool, strin
 		case "fail":
 			red = true
 			logPath = checks[0].LogPath
+			if logPath == "" {
+				logPath = checks[0].LogRef
+			}
 		default:
 			// The judge's own words are the reason; without them the fault is unreadable.
 			if detail := strings.TrimSpace(checks[0].Detail); detail != "" {

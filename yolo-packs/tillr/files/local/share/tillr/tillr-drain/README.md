@@ -1114,7 +1114,16 @@ attribution failure: it files nothing, and the next run judges again.
 A later red tip for the same check attaches to an unresolved fixer rather than filing a
 second repair, matching an open fixer by the checks its criterion
 names, because its id carries the earlier red commit. The attachment records the new observation and combines its paths without
-clearing an existing owner hold. A blocked fixer reaches the owner only by a complete
+clearing an existing owner hold. Both filing and attachment snapshot each failing check's
+output and triage packet under `<lane-root>/.fixers/` and record the paths in a
+`drain.fixer-logs` event, whether the red check came from an after-merge declaration or
+legacy proof, a before-merge rolling run, a candidate gate acquittal, or a `trunk` obstacle
+replay. When `LaneStager` stages a trunk fixer, it copies each recorded check log (along
+with any whole-log `.log` sibling of a `.triage.log`) into
+`<root>/.tillr/loop/<run-id>/fixer.logs/` and populates `## Facts carried` with the failing
+cases, file and line locations, assertions, single-case reproduce commands (or bounded log
+excerpts when no case was parsed), and the per-check log paths kept with the run, so the
+fixer runs the failing test directly instead of rerunning the whole suite. A blocked fixer reaches the owner only by a complete
 obstacle (see [A worker ends with its commit or a named obstacle](#a-worker-ends-with-its-commit-or-a-named-obstacle)):
 a `definition`, `owner` or `tooling` obstacle goes to the owner with a question the
 loop writes from it, because a generated item has no design block to amend. A trunk

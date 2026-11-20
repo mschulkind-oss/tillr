@@ -78,6 +78,14 @@ func (l *Loop) routeObstacle(ctx context.Context, d Decision, req run.Request, l
 		reading, err := l.trunkAlreadyRed(ctx, candidate, gate)
 		red := reading.Red
 		if err == nil && reading.Confirmed {
+			for id, ref := range reading.CheckLogs {
+				if gate.CheckLogs[id] == "" && ref != "" {
+					if gate.CheckLogs == nil {
+						gate.CheckLogs = map[string]string{}
+					}
+					gate.CheckLogs[id] = ref
+				}
+			}
 			if err = l.acquitRed(ctx, candidate, gate, reading.RedSHA, red, result); err == nil {
 				l.reportf("loop: %s named a trunk obstacle the replay confirmed on %s: held behind the trunk repair\n", req.ItemID, shortSHA(reading.RedSHA))
 				return laneOutcome{stop: l.abandon(ctx, lane, req.RunID, head, "trunk obstacle confirmed on the base")}, true

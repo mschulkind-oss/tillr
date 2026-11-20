@@ -59,6 +59,9 @@ func readTriageBlock(logRef string) []FailingCheck {
 		whole += ".log"
 	}
 	f, err := os.Open(whole)
+	if err != nil && whole != logRef {
+		f, err = os.Open(logRef)
+	}
 	if err != nil {
 		return nil
 	}
@@ -164,6 +167,85 @@ func failureSummary(checks []EndingCheck) string {
 			}
 			if b.Len()+part.Len() > failureSummaryMax {
 				b.WriteString("(more failing checks omitted; the gate's log has them)\n")
+				goto done
+			}
+			b.WriteString(part.String())
+		}
+	}
+done:
+	if ran {
+		b.WriteString("Run the named test with its command above, not the whole suite and not the gate.\n")
+	}
+	return b.String()
+}
+
+const fixerFailureHeading = "The proof's output for the red trunk:"
+
+// fixerFailureSummary formats the failing checks' triage cases, reproduce commands, and
+// bounded output excerpts for a trunk fixer's brief, mirroring failureSummary for gate
+// refusals so a fixer worker never reruns a whole suite to discover what failed.
+func fixerFailureSummary(checks []EndingCheck, excerpts map[string]string) string {
+	oneLine := func(s string) string {
+		s = strings.ReplaceAll(s, "\r", " ")
+		return strings.ReplaceAll(s, "\n", " ")
+	}
+	var b strings.Builder
+	b.WriteString(fixerFailureHeading + "\n")
+	ran := false
+	for _, c := range checks {
+		if len(c.Failing) == 0 {
+			fmt.Fprintf(&b, "check %s: %s", oneLine(c.CheckID), noCaseRecorded)
+			if c.LogRef != "" {
+				fmt.Fprintf(&b, "; the proof's log is %s", oneLine(c.LogRef))
+			}
+			b.WriteString("\n")
+			if ex := strings.TrimSpace(excerpts[c.CheckID]); ex != "" {
+				for _, line := range strings.Split(ex, "\n") {
+					line = strings.ReplaceAll(line, "\r", "")
+					if b.Len()+len(line)+5 > failureSummaryMax {
+						b.WriteString("  (more output omitted; read the proof's log above)\n")
+						break
+					}
+					b.WriteString("  | " + line + "\n")
+				}
+			}
+			continue
+		}
+		for _, fc := range c.Failing {
+			head := "check " + oneLine(fc.ID)
+			if fc.Label != "" {
+				head += " (" + oneLine(fc.Label) + ")"
+			}
+			var part strings.Builder
+			part.WriteString(head + "\n")
+			for _, cs := range fc.Cases {
+				fmt.Fprintf(&part, "  case: %s\n", oneLine(cs.Name))
+				if cs.Where != "" {
+					fmt.Fprintf(&part, "    at: %s\n", oneLine(cs.Where))
+				}
+				if cs.Assertion != "" {
+					fmt.Fprintf(&part, "    assertion: %s\n", oneLine(cs.Assertion))
+				}
+				if cs.Reproduce != "" {
+					fmt.Fprintf(&part, "    reproduce only this case: %s\n", oneLine(cs.Reproduce))
+					ran = true
+				}
+			}
+			if len(fc.Cases) == 0 {
+				fmt.Fprintf(&part, "  %s", noCaseRecorded)
+				if fc.Reproduce != "" {
+					fmt.Fprintf(&part, "; reproduce with: %s", oneLine(fc.Reproduce))
+					ran = true
+				}
+				part.WriteString("\n")
+				if ex := strings.TrimSpace(excerpts[c.CheckID]); ex != "" {
+					for _, line := range strings.Split(ex, "\n") {
+						part.WriteString("  | " + strings.ReplaceAll(line, "\r", "") + "\n")
+					}
+				}
+			}
+			if b.Len()+part.Len() > failureSummaryMax {
+				b.WriteString("(more failing checks omitted; the proof's logs below have them)\n")
 				goto done
 			}
 			b.WriteString(part.String())

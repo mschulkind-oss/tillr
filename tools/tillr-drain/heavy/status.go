@@ -34,7 +34,10 @@ type HeavyCheck struct {
 	// when it failed, under the proof's log directory for the commit. Empty when no
 	// output was kept.
 	LogPath string `json:"log_path,omitempty"`
-	Stalls  int    `json:"stalls,omitempty"`
+	// LogRef is the per-check triage or output log recorded by tillr-gate or extracted
+	// from fork-check for this check.
+	LogRef string `json:"log_ref,omitempty"`
+	Stalls int    `json:"stalls,omitempty"`
 	// RevertedBy is the trunk commit that reverted FirstRedLanding automatically, and
 	// RevertRefused is why the automatic revert ended "not possible" so a fixer was filed
 	// instead (gate rework Section 6.8, graph design OQ-GP1). Both are empty when the

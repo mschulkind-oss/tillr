@@ -219,6 +219,8 @@ type ReplayOutcome struct {
 	Red []string
 	// Known reports whether the replay actually ran.
 	Known bool
+	// CheckLogs maps a red check id to the output captured during replay.
+	CheckLogs map[string]string
 }
 
 // ReplayStep is the optional capability a Steps implementation may carry: replay a named
@@ -251,6 +253,8 @@ type RollingOutcome struct {
 	CheckWatches map[string][]string
 	// SuspectPaths is the range the run examined, combined with the check watches.
 	SuspectPaths []string
+	// CheckLogs maps a failing check id to its log or triage file path.
+	CheckLogs map[string]string
 }
 
 // RollingStep is the optional capability a Steps implementation may carry: run the rolling
@@ -489,6 +493,7 @@ type trunkReading struct {
 	Red        []string
 	Confirmed  bool
 	RepairedAt string
+	CheckLogs  map[string]string
 }
 
 // trunkAlreadyRed replays the gate's failing checks on the candidate's own base, and then
@@ -528,28 +533,38 @@ func (l *Loop) trunkAlreadyRed(ctx context.Context, candidate Candidate, gate Ga
 		return trunkReading{}, nil
 	}
 	if !allIn(gate.FailingChecks, out.Red) {
-		return trunkReading{Red: out.Red}, nil
+		return trunkReading{Red: out.Red, CheckLogs: out.CheckLogs}, nil
 	}
 	// A fork-series candidate's base is the fork's own HEAD, which the trunk tip does not
 	// describe, so its base answers alone.
 	if candidate.BaseRef != "" || l.cfg.Root == "" {
-		return trunkReading{RedSHA: base, Red: out.Red, Confirmed: true}, nil
+		return trunkReading{RedSHA: base, Red: out.Red, Confirmed: true, CheckLogs: out.CheckLogs}, nil
 	}
 	tip, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
 	if err != nil {
-		return trunkReading{Red: out.Red}, err
+		return trunkReading{Red: out.Red, CheckLogs: out.CheckLogs}, err
 	}
 	if tip == "" || tip == base {
-		return trunkReading{RedSHA: base, Red: out.Red, Confirmed: true}, nil
+		return trunkReading{RedSHA: base, Red: out.Red, Confirmed: true, CheckLogs: out.CheckLogs}, nil
 	}
-	tipRed, known, err := l.redOnTip(ctx, replay, candidate, tip, gate.FailingChecks)
+	tipRed, tipLogs, known, err := l.redOnTip(ctx, replay, candidate, tip, gate.FailingChecks)
 	if err != nil || !known {
 		// A tip nobody could judge confirms nothing: a fixer for the old base is the
 		// defect this reading exists to prevent.
-		return trunkReading{Red: out.Red}, err
+		return trunkReading{Red: out.Red, CheckLogs: out.CheckLogs}, err
+	}
+	mergedLogs := map[string]string{}
+	for id, ref := range out.CheckLogs {
+		mergedLogs[id] = ref
+	}
+	for id, ref := range tipLogs {
+		mergedLogs[id] = ref
+	}
+	if len(mergedLogs) == 0 {
+		mergedLogs = nil
 	}
 	if allIn(gate.FailingChecks, tipRed) {
-		return trunkReading{RedSHA: tip, Red: tipRed, Confirmed: true}, nil
+		return trunkReading{RedSHA: tip, Red: tipRed, Confirmed: true, CheckLogs: mergedLogs}, nil
 	}
 	return trunkReading{Red: out.Red, RepairedAt: tip}, nil
 }
@@ -572,7 +587,7 @@ func allIn(want, have []string) bool {
 // judged. A check the tip run's own record passed on this tip is green without a replay
 // (readCheckProofs, the record that resolves stale fixers); the rest are replayed there.
 // A proof the loop cannot read is not a pass, so it only costs a replay.
-func (l *Loop) redOnTip(ctx context.Context, replay ReplayStep, candidate Candidate, tip string, checks []string) ([]string, bool, error) {
+func (l *Loop) redOnTip(ctx context.Context, replay ReplayStep, candidate Candidate, tip string, checks []string) ([]string, map[string]string, bool, error) {
 	passed := map[string]bool{}
 	if proofs, err := readCheckProofs(ctx, l.cfg.Root); err == nil {
 		for _, proof := range proofs {
@@ -591,16 +606,16 @@ func (l *Loop) redOnTip(ctx context.Context, replay ReplayStep, candidate Candid
 		}
 	}
 	if len(rest) == 0 {
-		return nil, true, nil
+		return nil, nil, true, nil
 	}
 	out, err := replay.Replay(ctx, candidate, tip, rest)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	if !out.Known || out.Rev != "" && out.Rev != tip {
-		return nil, false, nil
+		return nil, nil, false, nil
 	}
-	return out.Red, true, nil
+	return out.Red, out.CheckLogs, true, nil
 }
 
 // laneBasedOnTrunk reports whether the lane's recorded base is the trunk's: false for a
@@ -779,6 +794,14 @@ func (l *Loop) settleTrunkAlreadyRed(ctx context.Context, candidate *Candidate, 
 		l.reportf("loop: %s acquitted as pass-inherited: red checks (%s) on %s do not read %s\n",
 			candidate.ItemID, strings.Join(reading.Red, ", "), shortSHA(reading.RedSHA), strings.Join(changedPaths, ", "))
 		return GatePassedInherited, false, nil
+	}
+	for id, ref := range reading.CheckLogs {
+		if gate.CheckLogs[id] == "" && ref != "" {
+			if gate.CheckLogs == nil {
+				gate.CheckLogs = map[string]string{}
+			}
+			gate.CheckLogs[id] = ref
+		}
 	}
 	return "", true, l.acquitRedWithPaths(ctx, *candidate, gate, reading.RedSHA, reading.Red, intersecting, result)
 }
@@ -1124,6 +1147,7 @@ func (l *Loop) fileTrunkFixerNoted(ctx context.Context, redSHA string, failing [
 		CreatedAt:     l.cfg.Now().UTC(),
 		Payload:       payload,
 	}
+	checkLogs := l.snapshotFixerLogs(fixerID, filterCheckLogs(gate.CheckLogs, failing))
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return "", Incompatiblef("%v", err)
@@ -1210,6 +1234,11 @@ func (l *Loop) fileTrunkFixerNoted(ctx context.Context, redSHA string, failing [
 			if _, err := tx.Exec(`UPDATE item_criteria SET text=? WHERE item_id=? AND criterion_id='trunk-green'`, text, fixerID); err != nil {
 				return err
 			}
+			if len(checkLogs) > 0 {
+				if err := appendEffectOn(tx, FixerLogsKind, "item", fixerID, map[string]any{"fixer_item": fixerID, "red_sha": redSHA, "check_logs": checkLogs}, l.cfg.Now()); err != nil {
+					return err
+				}
+			}
 			return appendEffect(tx, FixerAttachedKind, fixerID, map[string]any{"fixer_item": fixerID, "red_sha": redSHA, "failing_checks": failing, "allowed_paths": paths}, l.cfg.Now())
 		}
 		var state string
@@ -1225,6 +1254,11 @@ func (l *Loop) fileTrunkFixerNoted(ctx context.Context, redSHA string, failing [
 		}
 		if _, err := item.Apply(ctx, tx, env); err != nil {
 			return err
+		}
+		if len(checkLogs) > 0 {
+			if err := appendEffectOn(tx, FixerLogsKind, "item", fixerID, map[string]any{"fixer_item": fixerID, "red_sha": redSHA, "check_logs": checkLogs}, l.cfg.Now()); err != nil {
+				return err
+			}
 		}
 		created = true
 		return nil
@@ -1243,10 +1277,51 @@ func (l *Loop) fileTrunkFixerNoted(ctx context.Context, redSHA string, failing [
 // named them in a fence obstacle.
 const FixerFenceWidenedKind = "drain.fixer-fence-widened"
 
+// FixerLogsKind records the failing checks' log or triage paths for a trunk fixer.
+const FixerLogsKind = "drain.fixer-logs"
+
 func init() {
 	if err := event.Register(FixerFenceWidenedKind, Utility); err != nil {
 		panic(err)
 	}
+	if err := event.Register(FixerLogsKind, Utility); err != nil {
+		panic(err)
+	}
+}
+
+func (l *Loop) snapshotFixerLogs(observationID string, checkLogs map[string]string) map[string]string {
+	if len(checkLogs) == 0 {
+		return nil
+	}
+	if l.cfg.LaneRoot == "" {
+		return checkLogs
+	}
+	dstDir := filepath.Join(l.cfg.LaneRoot, ".fixers", observationID)
+	ids := make([]string, 0, len(checkLogs))
+	for id := range checkLogs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	out := make(map[string]string, len(ids))
+	seenNames := map[string]bool{}
+	for idx, id := range ids {
+		ref := checkLogs[id]
+		name := filepath.Base(ref)
+		if name == "" || name == "." || name == "/" || seenNames[name] {
+			suffix := ".log"
+			if strings.HasSuffix(ref, ".triage.log") {
+				suffix = ".triage.log"
+			}
+			name = fmt.Sprintf("%02d-%s%s", idx, sanitizeLogComponent(id), suffix)
+		}
+		seenNames[name] = true
+		if copied, ok := copyLogWithWhole(l.cfg.Root, ref, dstDir, name); ok {
+			out[id] = copied
+		} else {
+			out[id] = ref
+		}
+	}
+	return out
 }
 
 // widenFixerFence adds the requested paths to a trunk fixer's fence. It answers the paths
@@ -1469,7 +1544,7 @@ func (l *Loop) maybeRolling(ctx context.Context, mainSHA string, force bool, res
 	// whole tree is the fence — and that is a broad fence deliberately, because a narrower
 	// guess would leave the actual breakage outside the one item allowed to repair it.
 	suspect := append(out.SuspectPaths, l.rangePaths(ctx, base, mainSHA)...)
-	fixerGate := GateOutcome{SuspectPaths: suspect, FailingChecks: fixerChecks, CheckWatches: out.CheckWatches}
+	fixerGate := GateOutcome{SuspectPaths: suspect, FailingChecks: fixerChecks, CheckWatches: out.CheckWatches, CheckLogs: filterCheckLogs(out.CheckLogs, fixerChecks)}
 	fixerID, fixerErr := l.fileTrunkFixer(ctx, mainSHA, fixerChecks, fixerGate)
 	if fixerErr != nil {
 		l.reportf("loop: could not file %s: %v; continuing dispatch\n", TrunkFixerID(mainSHA), fixerErr)

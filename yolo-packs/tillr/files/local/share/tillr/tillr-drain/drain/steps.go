@@ -302,7 +302,7 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 	if IsTrunkFixer(candidate.ItemID) && s.FixerGateProgram != "" {
 		program = s.fixerGate(candidate)
 	}
-	code, _, span, err := s.programWithEnv(ctx, "gate", candidate.Worktree, program, candidate, env)
+	code, outStr, span, err := s.programWithEnv(ctx, "gate", candidate.Worktree, program, candidate, env)
 	if err != nil {
 		return GateOutcome{}, err
 	}
@@ -339,6 +339,34 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 		outcome.FailingChecks, outcome.SuspectPaths, outcome.CheckWatches = s.gateFailureContext(candidate)
 		outcome.CandidateChangedPaths = outcome.SuspectPaths
 		outcome.CheckReads = s.gateCheckReads(candidate, outcome.CheckWatches)
+		if s.Root != "" {
+			runDir := RunDir(s.Root, candidate.RunID)
+			wrapperWholeLog := ""
+			for _, c := range gateFailingChecks(runDir, candidate.RunID) {
+				if c.LogRef == "" {
+					continue
+				}
+				if outcome.CheckLogs == nil {
+					outcome.CheckLogs = map[string]string{}
+				}
+				outcome.CheckLogs[c.CheckID] = c.LogRef
+				if strings.HasPrefix(c.CheckID, "gate:") && wrapperWholeLog == "" {
+					whole := strings.TrimSuffix(c.LogRef, ".triage.log")
+					if whole != c.LogRef {
+						wrapperWholeLog = whole + ".log"
+					} else {
+						wrapperWholeLog = c.LogRef
+					}
+				}
+			}
+			perCheck := extractForkCheckLogs(ctx, candidate.Worktree, candidate.HeadSHA, filepath.Join(runDir, GateSpansFile), wrapperWholeLog, outStr, filepath.Join(runDir, "logs"))
+			for id, ref := range perCheck {
+				if outcome.CheckLogs == nil {
+					outcome.CheckLogs = map[string]string{}
+				}
+				outcome.CheckLogs[id] = ref
+			}
+		}
 	}
 	if outcome.Outcome == GateErrored && gateUsageError(span.StderrTail) {
 		outcome.ErrorDetail = gateErrorDetail(span.StderrTail, candidateChangedPaths(ctx, candidate))
@@ -844,7 +872,9 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 		cmd.Dir = dir
 		cmd.Env = append(withoutProcessEnv(os.Environ(), "TILLR_SQLITE_TRACE"), s.forkRootEnv()...)
 		var stderr stderrTail
-		cmd.Stderr = &stderr
+		var combined bytes.Buffer
+		cmd.Stdout = &combined
+		cmd.Stderr = io.MultiWriter(&combined, &stderr)
 		runErr := runCheckGroup(cmd)
 		if ctx.Err() != nil {
 			return ReplayOutcome{Rev: rev, Known: false}, ctx.Err()
@@ -857,6 +887,14 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 		case 0:
 		case 1:
 			out.Red = append(out.Red, check)
+			if s.LaneRoot != "" && rev != "" {
+				if replayLog := writeReplayCheckLog(ctx, dir, rev, check, combined.String(), filepath.Join(s.LaneRoot, ".rolling", "logs", rev)); replayLog != "" {
+					if out.CheckLogs == nil {
+						out.CheckLogs = map[string]string{}
+					}
+					out.CheckLogs[check] = replayLog
+				}
+			}
 		default:
 			// Unknown is never evidence for acquittal.
 			return ReplayOutcome{Rev: rev, Known: false}, nil
@@ -1032,6 +1070,20 @@ func (s *ProcessSteps) Rolling(ctx context.Context, baseSHA, tipSHA string) (Rol
 	cmd.Env = append(append(withoutProcessEnv(os.Environ(), "TILLR_SQLITE_TRACE"), s.forkRootEnv()...), "TILLR_GATE_SPANS_OUT="+spans)
 	var stderr stderrTail
 	cmd.Stderr = &stderr
+	rollingLog := ""
+	if s.LaneRoot != "" && tipSHA != "" {
+		logDir := filepath.Join(s.LaneRoot, ".rolling", "logs", tipSHA)
+		if os.MkdirAll(logDir, 0o755) == nil {
+			rollingLog = filepath.Join(logDir, "rolling.log")
+			if logFile, openErr := os.OpenFile(rollingLog, os.O_CREATE|os.O_TRUNC|os.O_WRONLY|os.O_APPEND, 0o644); openErr == nil {
+				defer logFile.Close()
+				cmd.Stdout = logFile
+				cmd.Stderr = io.MultiWriter(logFile, &stderr)
+			} else {
+				rollingLog = ""
+			}
+		}
+	}
 	runErr := runOwnedHeavy(ctx, cmd, "legacy")
 	if ctx.Err() != nil {
 		return RollingOutcome{}, ctx.Err()
@@ -1069,7 +1121,25 @@ func (s *ProcessSteps) Rolling(ctx context.Context, baseSHA, tipSHA string) (Rol
 			return RollingOutcome{Known: false, ExitCode: code, Coverage: coverage,
 				Detail: "it named no failing check. " + stderr.String()}, nil
 		}
-		return RollingOutcome{Green: false, Known: true, ExitCode: code, FailingChecks: failing, CheckWatches: watches, Coverage: coverage}, nil
+		var checkLogs map[string]string
+		if s.LaneRoot != "" && tipSHA != "" {
+			logDir := filepath.Join(s.LaneRoot, ".rolling", "logs", tipSHA)
+			perCheck := extractForkCheckLogs(ctx, dir, tipSHA, spans, rollingLog, "", logDir)
+			keptRolling := legacyKeptLog(rollingLog, "fail")
+			for _, id := range failing {
+				ref := perCheck[id]
+				if ref == "" {
+					ref = keptRolling
+				}
+				if ref != "" {
+					if checkLogs == nil {
+						checkLogs = map[string]string{}
+					}
+					checkLogs[id] = ref
+				}
+			}
+		}
+		return RollingOutcome{Green: false, Known: true, ExitCode: code, FailingChecks: failing, CheckWatches: watches, CheckLogs: checkLogs, Coverage: coverage}, nil
 	default:
 		return RollingOutcome{Known: false, ExitCode: code, Detail: stderr.String(), Coverage: coverage}, nil
 	}

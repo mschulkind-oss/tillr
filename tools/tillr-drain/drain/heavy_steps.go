@@ -323,6 +323,11 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 	if err != nil {
 		return nil, err
 	}
+	rev, _ := heavyGitOutput(ctx, dir, "rev-parse", "HEAD")
+	var perCheckLogs map[string]string
+	if s.LaneRoot != "" && rev != "" {
+		perCheckLogs = extractForkCheckLogs(ctx, dir, rev, spans, logPath, "", filepath.Join(s.LaneRoot, ".rolling", "logs", rev))
+	}
 	for _, span := range file.CheckSpans {
 		if span.CheckID == "" {
 			continue
@@ -360,11 +365,18 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 		if span.Kind != "" && span.Label != "" {
 			s.heavyReplaySelectors.Store(span.CheckID, span.Kind+":"+span.Label)
 		}
-		kept := ""
+		kept, logRef := "", ""
 		if verdict == "fail" || verdict == "error" || verdict == "stalled" {
 			kept = legacyKeptLog(logPath, verdict)
+			logRef = perCheckLogs[span.CheckID]
+			if kept == "" && logRef != "" {
+				kept = logRef
+			}
+			if logRef == "" && kept != "" {
+				logRef = kept
+			}
 		}
-		result = append(result, HeavyCheck{CheckID: span.CheckID, Result: verdict, DurationMS: (span.EndNS - span.StartNS) / 1000000, Reads: reads, LogPath: kept})
+		result = append(result, HeavyCheck{CheckID: span.CheckID, Result: verdict, DurationMS: (span.EndNS - span.StartNS) / 1000000, Reads: reads, LogPath: kept, LogRef: logRef})
 	}
 	for _, skip := range file.SkippedChecks {
 		if skip.Owed || skip.CheckID == "" {
@@ -446,6 +458,20 @@ func decodeHeavyVerdict(raw []byte) ([]HeavyCheck, error) {
 	}
 	if env.Kind != "gate.verdict" || env.Payload.Checks == nil {
 		return nil, fmt.Errorf("expected gate.verdict with checks")
+	}
+	for i := range env.Payload.Checks {
+		c := &env.Payload.Checks[i]
+		if (c.Result == "fail" || c.Result == "error" || c.Result == "stalled") && c.LogPath == "" && c.LogRef != "" {
+			whole := strings.TrimSuffix(c.LogRef, ".triage.log")
+			if whole != c.LogRef {
+				if kept := legacyKeptLog(whole+".log", c.Result); kept != "" {
+					c.LogPath = kept
+				}
+			}
+			if c.LogPath == "" {
+				c.LogPath = legacyKeptLog(c.LogRef, c.Result)
+			}
+		}
 	}
 	return env.Payload.Checks, nil
 }

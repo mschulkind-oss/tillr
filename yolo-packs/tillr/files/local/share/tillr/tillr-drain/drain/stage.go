@@ -520,6 +520,17 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	if err != nil {
 		return err
 	}
+	fixerFacts, fixerCopies, err := s.prepareTrunkFixerFacts(ctx, recorded, spec)
+	if err != nil {
+		return err
+	}
+	if fixerFacts != "" {
+		if earlier != "" {
+			earlier = fixerFacts + "\n\n" + strings.TrimSpace(earlier)
+		} else {
+			earlier = fixerFacts
+		}
+	}
 	trunkNotice := spec.TrunkRedNotice
 	if trunkNotice == "" && !IsTrunkFixer(spec.ItemID) && s.Store != "" {
 		if n, noticeErr := openTrunkRedNotice(ctx, s.Store); noticeErr == nil {
@@ -537,8 +548,10 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		if values[i].placeholder == "FACTS" && earlier != "" {
 			if strings.HasPrefix(values[i].text, "None carried:") {
 				values[i].text = strings.TrimSpace(earlier)
-			} else {
+			} else if strings.HasPrefix(earlier, "\n") {
 				values[i].text += earlier
+			} else {
+				values[i].text = strings.TrimRight(values[i].text, "\n") + "\n\n" + strings.TrimSpace(earlier)
 			}
 		}
 	}
@@ -674,6 +687,14 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		markerPath := filepath.Join(durableDir, "conflict-markers.txt")
 		if err := os.WriteFile(markerPath, []byte(spec.Conflict.Markers), 0o644); err != nil {
 			return Externalf("writing conflict evidence %s: %v", markerPath, err)
+		}
+	}
+	for _, copyFile := range fixerCopies {
+		if err := os.MkdirAll(filepath.Dir(copyFile.path), 0o755); err != nil {
+			return Externalf("creating fixer log directory %s: %v", filepath.Dir(copyFile.path), err)
+		}
+		if err := os.WriteFile(copyFile.path, copyFile.body, 0o644); err != nil {
+			return Externalf("writing fixer log %s: %v", copyFile.path, err)
 		}
 	}
 	runDir := RunDir(s.Root, spec.RunID)

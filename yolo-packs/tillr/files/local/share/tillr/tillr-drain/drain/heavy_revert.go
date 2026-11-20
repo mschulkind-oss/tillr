@@ -308,7 +308,14 @@ func (l *Loop) revertEnding(landing string, of landingOf, tip string, checks []H
 		if text := strings.TrimSpace(check.Detail); text != "" {
 			fmt.Fprintf(&detail, "\n\n%s output:\n%s", check.CheckID, heavyBrief(text))
 		}
-		c := EndingCheck{CheckID: check.CheckID, LogRef: l.heavyLog(tip, check.CheckID)}
+		logRef := check.LogRef
+		if logRef == "" {
+			logRef = check.LogPath
+		}
+		if logRef == "" {
+			logRef = l.heavyLog(tip, check.CheckID)
+		}
+		c := EndingCheck{CheckID: check.CheckID, LogRef: logRef}
 		if c.LogRef != "" {
 			if body, err := os.ReadFile(c.LogRef); err == nil {
 				c.Digest = evidenceDigest(string(body), of.runID)
@@ -327,12 +334,15 @@ func (l *Loop) revertEnding(landing string, of landingOf, tip string, checks []H
 
 // heavyLog is the declaration log the proof of tip wrote for check id, or "".
 func (l *Loop) heavyLog(tip, id string) string {
-	matches, _ := filepath.Glob(filepath.Join(l.cfg.LaneRoot, ".rolling", "logs", tip, "*-"+strings.ReplaceAll(id, "/", "-")+".log"))
-	if len(matches) == 0 {
-		return ""
+	safe := strings.ReplaceAll(id, "/", "-")
+	for _, suffix := range []string{".triage.log", ".log"} {
+		matches, _ := filepath.Glob(filepath.Join(l.cfg.LaneRoot, ".rolling", "logs", tip, "*-"+safe+suffix))
+		if len(matches) > 0 {
+			sort.Strings(matches)
+			return matches[len(matches)-1]
+		}
 	}
-	sort.Strings(matches)
-	return matches[len(matches)-1]
+	return ""
 }
 
 // heavySelectors keeps a legacy check's replay selector beside its id, so the item's
