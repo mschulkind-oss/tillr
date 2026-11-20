@@ -2,29 +2,29 @@
 title: "Who made the decisions recorded in the tillr designs, and which of them the owner should now rule on"
 status: in-review
 stage: DESIGN
-updated: 2026-11-19
+updated: 2026-11-20
 tags: [tillr, review, provenance, decisions, design]
-summary: "A one-time review for the owner of every decision of consequence in the tillr designs that carries no words of his. Two rulings recorded on 2026-11-19 (OQ-PR21 and OQ-PR22) settle how this stops happening: a decision that touches his documents, his repository, his money, his models or what he sees is put to him as a question before anything is built on that design, while engineering detail is marked as the agent's and may be built on; and an agent closes a question addressed to him only by quoting a dated ruling of his that answers it in so many words. Twenty questions each put one built, running decision to him as a situation and the choices it leaves, with what he would see and what it costs under each. The rest is lists: rows that are simply false now, high-significance decisions in designs that are not built, and the medium and low ones."
-next: "The owner answers OQ-PR1 to OQ-PR20. Each answer relabels or rewrites the ledger rows its question names; OQ-PR21 and OQ-PR22 were ruled on 2026-11-19 (nothing built yet), and the corrections in Section 3 were applied on 2026-11-18."
+summary: "A one-time review for the owner of every decision of consequence in the tillr designs that carries no words of his. Two rulings recorded on 2026-11-19 (OQ-PR21 and OQ-PR22) settle how this stops happening: a decision that touches his documents, his repository, his money, his models or what he sees is put to him as a question before anything is built on that design, while engineering detail is marked as the agent's and may be built on; and an agent closes a question addressed to him only by quoting a dated ruling of his that answers it in so many words. Nine of the twenty built-decision questions are now settled in the ledger (OQ-PR1 to OQ-PR5 and OQ-PR12 to OQ-PR14 ruled on 2026-11-20, and OQ-PR20 closed on his 2026-11-18 ruling of OQ-GP7); eleven remain open (OQ-PR6 to OQ-PR11 and OQ-PR15 to OQ-PR19). The rest is lists: rows that were false or mislabeled, high-significance decisions in designs that are not built, and the medium and low ones."
+next: "The owner answers the eleven remaining open questions (OQ-PR6 to OQ-PR11 and OQ-PR15 to OQ-PR19). Nine built-decision questions are settled in the ledger (OQ-PR1 to OQ-PR5 and OQ-PR12 to OQ-PR14 ruled on 2026-11-20; OQ-PR20 closed on the 2026-11-18 ruling of OQ-GP7), OQ-PR21 and OQ-PR22 were ruled on 2026-11-19 (nothing built yet), and the corrections in Section 3 were applied on 2026-11-18."
 depends-on:
   - ../design/tillr-queue-mirrors-designs.md#OQ-QM1
 ---
 
 # Who made the decisions recorded in the tillr designs, and which of them the owner should now rule on
 
-**Status:** 2026-11-19. Awaiting the owner's review of [OQ-PR1](#OQ-PR1) to [OQ-PR20](#OQ-PR20); he ruled [OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22) on 2026-11-19, and nothing from those rulings is built yet. Nothing here changes any behavior until it is built; no other document is edited by this one. The evidence is four read-only audits made on 2026-11-18 of 39 design documents and of the commits named below, each commit checked to be on the trunk.
+**Status:** 2026-11-20. Awaiting the owner's review of eleven remaining open questions ([OQ-PR6](#OQ-PR6) to [OQ-PR11](#OQ-PR11) and [OQ-PR15](#OQ-PR15) to [OQ-PR19](#OQ-PR19)). He ruled [OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22) on 2026-11-19, ruled [OQ-PR1](#OQ-PR1) to [OQ-PR5](#OQ-PR5) and [OQ-PR12](#OQ-PR12) to [OQ-PR14](#OQ-PR14) on 2026-11-20, and [OQ-PR20](#OQ-PR20) is closed on his 2026-11-18 ruling of [OQ-GP7](../design/tillr-graph-is-the-path.md#OQ-GP7); code, configuration and corpus changes owed by those rulings are not built yet. Nothing here changes any behavior until it is built; no other document is edited by this one. The evidence is four read-only audits made on 2026-11-18 of 39 design documents and of the commits named below, each commit checked to be on the trunk.
 
 > **In short.** Of 380 recorded decisions in the tillr designs, 303 carry no words of the owner's, 64 of those are of high significance, and more than half of the high ones are built and running. He delegated a method for answering questions and received answers; this page puts the answers that matter in front of him once.
 
 **Why it matters.** On 2026-11-18 the owner found that tillr reads a hidden comment of its own from his documents, a product decision he never made, and asked whether other decisions had come in the same way. They had.
 
-**The shape.** [Twenty open questions](#2-questions-for-the-owner) on built decisions, hardest to undo first; [the rule from here on](#6-how-this-stops-happening), settled by the owner in [OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22); then lists that need no ruling.
+**The shape.** [Eleven open questions](#2-questions-for-the-owner) on built decisions, hardest to undo first, alongside nine settled in [the ledger](#decision-ledger); [the rule from here on](#6-how-this-stops-happening), settled by the owner in [OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22); then lists that need no ruling.
 
 **Cost.** Reading time. An answer that leaves things as they run today costs nothing more. An answer that changes them becomes work, sized for each question in [Section 1.5](#15-evidence-behind-each-question).
 
-**Start at:** [OQ-PR1](#OQ-PR1).
+**Start at:** [OQ-PR6](#OQ-PR6).
 
-**Needs your ruling:** [OQ-PR1](#OQ-PR1), [OQ-PR2](#OQ-PR2), [OQ-PR3](#OQ-PR3), [OQ-PR4](#OQ-PR4), [OQ-PR5](#OQ-PR5), [OQ-PR6](#OQ-PR6), [OQ-PR7](#OQ-PR7), [OQ-PR8](#OQ-PR8), [OQ-PR9](#OQ-PR9), [OQ-PR10](#OQ-PR10), [OQ-PR11](#OQ-PR11), [OQ-PR12](#OQ-PR12), [OQ-PR13](#OQ-PR13), [OQ-PR14](#OQ-PR14), [OQ-PR15](#OQ-PR15), [OQ-PR16](#OQ-PR16), [OQ-PR17](#OQ-PR17), [OQ-PR18](#OQ-PR18), [OQ-PR19](#OQ-PR19), [OQ-PR20](#OQ-PR20) (plus the designer's decisions `D-PR1` to `D-PR4` in [the ledger](#decision-ledger), which the owner may overturn).
+**Needs your ruling:** [OQ-PR6](#OQ-PR6), [OQ-PR7](#OQ-PR7), [OQ-PR8](#OQ-PR8), [OQ-PR9](#OQ-PR9), [OQ-PR10](#OQ-PR10), [OQ-PR11](#OQ-PR11), [OQ-PR15](#OQ-PR15), [OQ-PR16](#OQ-PR16), [OQ-PR17](#OQ-PR17), [OQ-PR18](#OQ-PR18), [OQ-PR19](#OQ-PR19) (plus the designer's decisions `D-PR1` to `D-PR4` in [the ledger](#decision-ledger), which the owner may overturn).
 
 **Reads with:** [the queue mirrors the roadmap's designs](../design/tillr-queue-mirrors-designs.md) (whose [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1) the owner ruled on 2026-11-18 around the companion implementation plan; this page does not ask that again).
 
@@ -95,125 +95,58 @@ Read the counts with five cautions; the first four are the audits' own:
 
 ### 1.5. Evidence behind each question
 
-Each question in [Section 2](#2-questions-for-the-owner) states its situation and its choices only. Who made the earlier decision, whether it is running today and what undoing it costs are kept here.
+Each open question in [Section 2](#2-questions-for-the-owner) states its situation and its choices only. Who made the earlier decision, whether it is running today and what undoing it costs are kept here for both open and settled questions.
 
 | Question | Who decided, and when | Running today | Cost to undo |
 | --- | --- | --- | --- |
-| [OQ-PR1](#OQ-PR1) | A design agent, 2026-11-15, as `D-RS1`, `D-RS3` and `D-RS5` of [the "ruling"](../design/queue-persistence-ruling.md), under "Needs your ruling: None". Its stated reason was "the owner's no-tillr-in-commits rule", cited and not quoted; the audits did not find those words of the owner's in the tree. | Yes, since `cd68c87e3` and `1cdb67809`. After each landing the loop also makes a second commit, `chore: retire landed document block`, deleting its hidden comment and the step's pass conditions from the design (33 times so far). That deleting ends with the hidden comment under [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1). | Moderate. The lander writes the line again and the loop's delete step goes. The 72 past landings cannot be re-attributed. |
-| [OQ-PR2](#OQ-PR2) | Three agents. `D-UT16` in [board utilities](../design/board-utilities.md) is a "Design ruling, 2026-11-12" (`dcc4eef9f`); the same commit deleted the line "Owner accepts or rejects the MIGRATE ruling" and put a build instruction in its place, and no acceptance by the owner is recorded. [OQ-JL1](../design/tillr-judge-and-lifecycle.md#decision-ledger) was settled on 2026-11-15 "on recorded principle" (`aa13e9b16`), the principle being a sentence in an agent-written design and the owner's undated preference for token efficiency. `D-JL2`, the classes that pass conditions carry (a mechanical check can never retire one classed as the owner's alone), comes from the unruled drafts of 2026-11-14. The reviewing agent is called the judge there. | Yes (`bb6e286b5` and the verdict rules in `tools/tillr-item`). | Large. The store's tables, the grants and the verdict path, and one judge run per item in spend. A fuller question would belong in [judge and lifecycle](../design/tillr-judge-and-lifecycle.md). |
-| [OQ-PR3](#OQ-PR3) | `D-IG1`, `D-IG5` and `D-IG9` in [item graphs](../design/tillr-item-graphs.md) come from the unruled drafts of 2026-11-14 (`5e2e61040`). `D-IG13`, the file layout and the seat on each step, was "Settled on 2026-11-16 by the design seat while cutting the build order; the owner may overturn it". The step files are called workflows; an earlier design refused workflows built from workflows, and this one removed the refusal. | Yes (`b657ed406`, `064bf3e8a`). | Large. The workflow files, the expander and every item that names a workflow. The owner's own later rulings stand on it: the item-graph rulings of 2026-11-15 and 2026-11-17, and "Everything possible is a node in the item graph". |
-| [OQ-PR4](#OQ-PR4) | An agent: all sixteen rows of [the drain's successor design](../design/tillr-drain-successor.md), `D-DS1` to `D-DS16`, 2026-11-14 (`50216fff6`). The document is tagged as a design ruling and records none. Everything the loop does hangs on this step. | Partly (`a792a9df1`). | Large: the loop's pass and its tests. The graph design, which waits on the owner's questions, amends it. |
-| [OQ-PR5](#OQ-PR5) | Agents. `D-OBS1` to `D-OBS13` in [the first design](../design/observatory-design.md) (`c6c74c048`, 2026-11-13, "settled where it is technical"), and `D-OR1` to `D-OR6` in [the redesign](../design/observatory-redesign.md) (`7ab8fe577`, 2026-11-15). [OQ-OR2](../design/observatory-redesign.md#decision-ledger) and [OQ-OR3](../design/observatory-redesign.md#decision-ledger) were "Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ('fill them in through principles')... The owner may overturn it"; the principle is the owner's instruction that everything be linked, in paraphrase. [OQ-OBD6](../design/observatory-design.md#11-decision-ledger) is recorded as ruled with no words of the owner's. The web page is called the observatory. | Yes for the pages and Home (`98ecde6a6`, `34fd911b8`); the audits disagree on whether the stepping keys were confirmed in the source. | Large: every screen's routing. The two settled questions would reopen in the redesign. |
+| [OQ-PR1](#OQ-PR1) | A design agent, 2026-11-15, as `D-RS1`, `D-RS3` and `D-RS5` of [the "ruling"](../design/queue-persistence-ruling.md), under "Needs your ruling: None". Its stated reason was "the owner's no-tillr-in-commits rule", cited and not quoted; the audits did not find those words of the owner's in the tree. **Ruled by the owner on 2026-11-20** ([Decision Ledger](#decision-ledger)): commits say what was built in lasting words and carry no reference to tillr, tillr items or other ephemeral tillr state. | Yes, since `cd68c87e3` and `1cdb67809`. Commits omit item IDs and trailers; after each landing the loop also makes a second commit, `chore: retire landed document block`, deleting its hidden comment and the step's pass conditions from the design (33 times so far), which ends with the hidden comment under [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1). | None on commit trailers (the ban stands); the post-landing block-deletion commit ends under [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1). |
+| [OQ-PR2](#OQ-PR2) | Three agents. `D-UT16` in [board utilities](../design/board-utilities.md) is a "Design ruling, 2026-11-12" (`dcc4eef9f`); the same commit deleted the line "Owner accepts or rejects the MIGRATE ruling" and put a build instruction in its place, and no acceptance by the owner is recorded. [OQ-JL1](../design/tillr-judge-and-lifecycle.md#decision-ledger) was settled on 2026-11-15 "on recorded principle" (`aa13e9b16`), the principle being a sentence in an agent-written design and the owner's undated preference for token efficiency. `D-JL2`, the classes that pass conditions carry (a mechanical check can never retire one classed as the owner's alone), comes from the unruled drafts of 2026-11-14. The reviewing agent is called the judge there. **Ruled by the owner on 2026-11-20** ([Decision Ledger](#decision-ledger)): option A, every code change reviewed by a fresh agent before landing ([OQ-JL1](../design/tillr-judge-and-lifecycle.md#decision-ledger) overturned for code landings). | Mechanical-by-default is still running (`bb6e286b5` and the verdict rules in `tools/tillr-item`); mandatory code review is designed in [diff review](../design/tillr-diff-review.md) and not built yet. | Large: building the post-gate review step ([diff review](../design/tillr-diff-review.md)) and one review run per code landing in spend. |
+| [OQ-PR3](#OQ-PR3) | `D-IG1`, `D-IG5` and `D-IG9` in [item graphs](../design/tillr-item-graphs.md) come from the unruled drafts of 2026-11-14 (`5e2e61040`). `D-IG13`, the file layout and the seat on each step, was "Settled on 2026-11-16 by the design seat while cutting the build order; the owner may overturn it". The step files are called workflows; an earlier design refused workflows built from workflows, and this one removed the refusal. **Ruled by the owner on 2026-11-20** ([Decision Ledger](#decision-ledger)): option A, kept. | Yes (`b657ed406`, `064bf3e8a`). | Nothing to undo; the workflow files and expander stay. |
+| [OQ-PR4](#OQ-PR4) | An agent: all sixteen rows of [the drain's successor design](../design/tillr-drain-successor.md), `D-DS1` to `D-DS16`, 2026-11-14 (`50216fff6`). The document is tagged as a design ruling and records none. Everything the loop does hangs on this step. **Ruled by the owner on 2026-11-20** ([Decision Ledger](#decision-ledger)): option A, left to the engineers as engineering detail. | Partly (`a792a9df1`). | Nothing to undo; the graph design amends it when built. |
+| [OQ-PR5](#OQ-PR5) | Agents. `D-OBS1` to `D-OBS13` in [the first design](../design/observatory-design.md) (`c6c74c048`, 2026-11-13, "settled where it is technical"), and `D-OR1` to `D-OR6` in [the redesign](../design/observatory-redesign.md) (`7ab8fe577`, 2026-11-15). [OQ-OR2](../design/observatory-redesign.md#decision-ledger) and [OQ-OR3](../design/observatory-redesign.md#decision-ledger) were "Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ('fill them in through principles')... The owner may overturn it"; the principle is the owner's instruction that everything be linked, in paraphrase. [OQ-OBD6](../design/observatory-design.md#11-decision-ledger) is recorded as ruled with no words of the owner's. The web page is called the observatory. **Ruled by the owner on 2026-11-20** ([Decision Ledger](#decision-ledger)): option A, kept as the base. | Yes for the pages and Home (`98ecde6a6`, `34fd911b8`); the audits disagree on whether the stepping keys were confirmed in the source. | Nothing to undo; changes continue to be requested directly. |
 | [OQ-PR6](#OQ-PR6) | [OQ-TC2](../design/tillr-convergence.md#decision-ledger) by the designer "on recorded principle" (`26bccb5e6`, 2026-11-15). The settings name ten seats; the six newest (plan on Sol; edit, test-writing and docs on Terra; test-running on Luna; verify on Sol) were "settled by the design seat on 2026-11-18" (`73fd201d2`), and only Luna for scouts cites an instruction of the owner's, unquoted. The owner's recorded words cover part of it: Terra for implementation, Luna for scouts, Sol 6.2 "where appropriate", design seats on Fable, and more seat names with cheaper models where possible. | Yes, in the four `config/tillr/backend-policy*.json` files. The settings name the seat and the program that runs it; the model comes from that program's profile. | Moderate: those files and any workflow that names a seat. A seat-by-seat question would belong in [convergence](../design/tillr-convergence.md). |
 | [OQ-PR7](#OQ-PR7) | Agents, three times. `D-MM11` in [the Muse backend](../design/tillr-muse-backend.md) (`61b030959`, 2026-11-12): Ember first, DeepSeek behind it, one move allowed, judged work never moved; the owner's wish that Ember be used while it lasts is direction, the rule is the designer's. `D-CB3` and `D-CB4` in [the Claude backend](../design/tillr-claude-backend.md) (`600469a60`, built `6f9c6a971`): a refused Claude subscription is treated as a machine fault, so that work moves to Bedrock. Two roadmap answers by the design seat on 2026-11-17 (`72a077780`, `9f14ee05f`) continue a quota-refused run on the next provider and accept overshooting the reserve. | Yes. A seat lists its providers in order, and a refusal for quota or an outage moves the work in the same pass. | Moderate: the settings format and the loop's planner. |
 | [OQ-PR8](#OQ-PR8) | Agents. The hold was built on 2026-11-13 (`bffbbbf19`); `D-IP4` in [the idea pipeline](../design/tillr-idea-pipeline.md) is "Carbon's answer" (`074e17d7f`); `D-TC3` in [convergence](../design/tillr-convergence.md) names the class. The owner's principle is that questions live in documents; he did not rule that they gate work. | Yes. | Moderate: the hold rule and what the observatory says about it. The narrower rule, a question holding the design's own item and only the steps that name it, is what [the queue-mirror design](../design/tillr-queue-mirrors-designs.md) proposes as a designer's decision. |
 | [OQ-PR9](#OQ-PR9) | Agents. `D-QP5` and `D-QP8` in [queue persistence](../design/tillr-queue-persistence.md) come from the unruled draft of 2026-11-14; `D-QP10` and `D-QP11` were settled on 2026-11-16 "by the design seat while cutting the build order, on recorded principle; the owner may overturn it". The owner's words of 2026-11-18 cover the Icebox and one item for each outstanding design; nothing of his covers `Exploration` or a heading as a switch. | Yes (`311299e2c`, `4cc1877c3`, `45407ab68`). | Moderate: sync's parking and the report. [The queue-mirror design](../design/tillr-queue-mirrors-designs.md) already redesigns both. |
 | [OQ-PR10](#OQ-PR10) | `D-QP1` in the unruled draft of 2026-11-14, then [OQ-TC1](../design/tillr-convergence.md#decision-ledger): "Settled by the session's designer on recorded principle ... The owner may overturn it" (`26bccb5e6`). The list was called the seed file. | Yes; the file is gone and the command refuses. | Moderate. The file is recoverable from git; the command and its checks would be rebuilt. It could also be folded into the intake question, [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1). |
 | [OQ-PR11](#OQ-PR11) | `D-OA6` in [observatory actions](../design/observatory-actions.md) is listed there as "made by the designer on recorded principle, without the owner's ruling". `D-OA5`, the file format, names no author: a `.txt` file, not Markdown, checked by a hash, first under `.tillr/intake/` and then in the tree. | Yes (`420be1619`, `da191ae57`). | Moderate: the intake directory, the document check and the routing. |
-| [OQ-PR12](#OQ-PR12) | The designer. The ledger of [designer sessions](../design/tillr-designer-sessions.md) says "Every row was decided by the designer on 2026-11-16 from the measurements above", `D-CD1` to `D-CD11`. | Yes (`1e0fe3259`, `4b16f3af8`, `081eb89f3`). | Moderate: the comment intake and the hold. |
-| [OQ-PR13](#OQ-PR13) | `D-OA4` in [observatory actions](../design/observatory-actions.md), which says so itself: "made by the designer on recorded principle, without the owner's ruling". The owner's ruling of 2026-11-16 covers how items are ordered, not this file. `D-OA1` to `D-OA3`, how the order is shown, name no author. | Yes, since `b7ddee209` and `a4d86408e` on 2026-11-18; the commit is gated. | Small: one settings line and one file. |
-| [OQ-PR14](#OQ-PR14) | No ledger row exists for the mark or the limits. They arrived in code (`803d2a5e4`, `3122f481c`) and in the `tillr-prose-style` skill (`8343814ae`). The mark is the attribute `prose="2"` in the hidden comment. The idea is the owner's: text written without the prose guide should be marked and rewritten. | Yes; `.tillr.toml` has it on. | Small: the limits and one settings line. A fuller question would belong in the intake-paths design. |
+| [OQ-PR12](#OQ-PR12) | The designer. The ledger of [designer sessions](../design/tillr-designer-sessions.md) says "Every row was decided by the designer on 2026-11-16 from the measurements above", `D-CD1` to `D-CD11`. **Ruled by the owner on 2026-11-20** ([Decision Ledger](#decision-ledger)): option A, kept. | Yes (`1e0fe3259`, `4b16f3af8`, `081eb89f3`). | Nothing to undo; the comment intake and hold stay. |
+| [OQ-PR13](#OQ-PR13) | `D-OA4` in [observatory actions](../design/observatory-actions.md), which says so itself: "made by the designer on recorded principle, without the owner's ruling". The owner's ruling of 2026-11-16 covers how items are ordered, not this file. `D-OA1` to `D-OA3`, how the order is shown, name no author. **Ruled by the owner on 2026-11-20** ([Decision Ledger](#decision-ledger)): `"database only."`, overturning `D-OA4`. | Yes, since `b7ddee209` and `a4d86408e` on 2026-11-18; the commit is gated, and removal is unbuilt. | Small: remove [`queue-order.txt`](./queue-order.txt), the loop's commit path and the `.tillr.toml` setting. |
+| [OQ-PR14](#OQ-PR14) | No ledger row exists for the mark or the limits. They arrived in code (`803d2a5e4`, `3122f481c`) and in the `tillr-prose-style` skill (`8343814ae`). The mark is the attribute `prose="2"` in the hidden comment. The idea is the owner's: text written without the prose guide should be marked and rewritten. **Ruled by the owner on 2026-11-20** ([Decision Ledger](#decision-ledger)): option B, never inside human-read design documents. | `.tillr.toml` still has in-document rewriting on until [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1) moves build steps out of design documents. | Small: retire in-document `prose="2"` rewriting with [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1) and one settings line. |
 | [OQ-PR15](#OQ-PR15) | Nobody on record. It arrived as code on 2026-11-16 (`c24e60d36`) and has no ledger row. The bundle is the tillr pack, and a workspace is a jail, an agent's sandboxed workspace. | Yes. | Small: the tool, its test and the copies. [OQ-SH2](../design/tillr-selfhosted-build.md#OQ-SH2) already asks about the pack's copy of the programs. |
 | [OQ-PR16](#OQ-PR16) | `D-OA8` in [observatory actions](../design/observatory-actions.md), listed there as the designer's, "without the owner's ruling". It reverses `D-OBS2`, which was also an agent's. `D-OA7`, how the write is carried out, names no author. | Yes. | Small: one flag. |
 | [OQ-PR17](#OQ-PR17) | The designer, "on recorded principle" (`b5e5073cb`, 2026-11-16), in [the agent runtime design](../design/agent-runtime.md) as [OQ-SO1](../design/agent-runtime.md#the-default-grant-until-the-owner-rules). The design had said the owner deferred it on purpose: "a scope and an expiry written before any delegated verdict exists cannot be corrected from evidence". Of the 31 bulk answers this is the one that overrode a decision of his. The claims covered are verification claims only. | Yes, in the grant code of `tools/tillr-item`. | Small: one scope and one duration. |
 | [OQ-PR18](#OQ-PR18) | An agent: [`run-wall-ruling.md`](../design/run-wall-ruling.md), `D-RW1` to `D-RW3`, titled a "Design ruling" (`6ec85e450`, 2026-11-15, built `adc9b1269` nineteen minutes later). It cites six complaints of the owner's gathered in an evidence file and carries no note that he may overturn it. The limit is called a wall. | Yes. | Small: one default. |
 | [OQ-PR19](#OQ-PR19) | `D-GR16` in [the gate rework](../design/gate-rework.md): "Settled by the session's designer ... the owner may overturn it" (`5e367ffde`, 2026-11-17). The stall is 60 one-second samples in a row with no new output and no processor time used; the numbers and the count are not in the owner's words. | Yes (`724cb5853`, `6a75bf6dc`). | Small: the loop's stall handling. |
-| [OQ-PR20](#OQ-PR20) | [OQ-GR1](../design/gate-rework.md#decision-ledger), settled "at the owner's request of 2026-11-15 ('fill them in through principles')" (`26bccb5e6`). The cap was set at 20 landings or 60 minutes. The graph design recorded, as a rule it is held to, that the owner does not accept this cap, without quoting him; a proposal of 2026-11-18 that keeps the cap as the one thing that holds the queue was not ruled. | Yes (`c3a3a35a9`); the settings file today has 20 landings and the minutes off, and repairs still land past the cap. | Small: one settings key. |
+| [OQ-PR20](#OQ-PR20) | [OQ-GR1](../design/gate-rework.md#decision-ledger), settled "at the owner's request of 2026-11-15 ('fill them in through principles')" (`26bccb5e6`). The cap was set at 20 landings or 60 minutes. **Closed on the owner's 2026-11-18 ruling of [OQ-GP7](../design/tillr-graph-is-the-path.md#OQ-GP7)** ([Decision Ledger](#decision-ledger)): no 20-landing cap; work lands while a check is red only when it does not touch what that check reads. | Yes (`c3a3a35a9`); the settings file today has 20 landings and the minutes off, and repairs still land past the cap until [OQ-GP7](../design/tillr-graph-is-the-path.md#OQ-GP7)'s waiting rule is built. | Small once [OQ-GP7](../design/tillr-graph-is-the-path.md#OQ-GP7)'s waiting rule lands: remove the cap setting. |
 | [OQ-PR21](#OQ-PR21) | Not an earlier decision: settled by the owner on 2026-11-19 as the rule from here on ([Decision Ledger](#decision-ledger)). The earlier practice is in [Section 1.2](#12-what-was-delegated-and-what-principle-turned-out-to-mean) and the rule in [Section 6](#6-how-this-stops-happening). | The earlier practice continues today until the loop check in [Section 6](#6-how-this-stops-happening) is built. | Nothing to undo; the loop rule in [Section 6](#6-how-this-stops-happening) is unbuilt. |
-| [OQ-PR22](#OQ-PR22) | The owner's sentence of 2026-11-15, as three bulk commits applied it to 31 questions ([Section 1.2](#12-what-was-delegated-and-what-principle-turned-out-to-mean)); narrowed by the owner on 2026-11-19 to dated, quoted rulings of his ([Decision Ledger](#decision-ledger), [Section 6](#6-how-this-stops-happening)). | Yes: the 31 answers stand except the five since reversed or rejected, until each is reviewed here or in the lists below. | Nothing to undo in the sentence itself; the gate check in [Section 6](#6-how-this-stops-happening) is unbuilt, and each answer the sentence produced is reviewed on this page or in the lists below. |
+| [OQ-PR22](#OQ-PR22) | The owner's sentence of 2026-11-15, as three bulk commits applied it to 31 questions ([Section 1.2](#12-what-was-delegated-and-what-principle-turned-out-to-mean)); narrowed by the owner on 2026-11-19 to dated, quoted rulings of his ([Decision Ledger](#decision-ledger), [Section 6](#6-how-this-stops-happening)). | Yes: the 31 answers stand except the ones since reversed or rejected, until each is reviewed here or in the lists below. | Nothing to undo in the sentence itself; the gate check in [Section 6](#6-how-this-stops-happening) is unbuilt, and each answer the sentence produced is reviewed on this page or in the lists below. |
 
 ## 2. Questions for the owner
 
-Each question tells one situation: what you do, what tillr does today, and the choice that leaves. Its options say what you would see and what each costs you. Who made the earlier decision, whether it runs today and what undoing it costs are in [Section 1.5](#15-evidence-behind-each-question). They are ordered by how much is built on each and how hard it is to undo, hardest first.
+Each open question below tells one situation: what you do, what tillr does today, and the choice that leaves. Its options say what you would see and what each costs you. Who made the earlier decision, whether it runs today and what undoing it costs are in [Section 1.5](#15-evidence-behind-each-question). They are ordered by how much is built on each and how hard it is to undo, hardest first.
 
-**The rule for all the rest ([OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22), ruled 2026-11-19):** a decision that touches your documents, your repository, your money, your models or what you see is put to you as a question before anything is built on that design, while engineering detail is marked as the agent's and may be built on; and an agent closes a question addressed to you only when a dated ruling of yours answers it in so many words and the record carries the quote ([Section 6](#6-how-this-stops-happening)). Under those two rulings, none of [OQ-PR1](#OQ-PR1) to [OQ-PR20](#OQ-PR20) may be closed by an agent on its own leaning or on unquoted paraphrase: even the five below that appear settled by an earlier ruling of yours stay open here until you answer them yourself, and any question whose choice touches only engineering detail remains yours to leave to the agents rather than being closed on your behalf.
+**The rule for all the rest ([OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22), ruled 2026-11-19):** a decision that touches your documents, your repository, your money, your models or what you see is put to you as a question before anything is built on that design, while engineering detail is marked as the agent's and may be built on; and an agent closes a question addressed to you only when a dated ruling of yours answers it in so many words and the record carries the quote ([Section 6](#6-how-this-stops-happening)). Under [OQ-PR22](#OQ-PR22), a question answered by a dated quotation of yours is closed on that quote instead of asking you again ([OQ-PR20](#OQ-PR20)), and any question lacking a dated quotation of yours stays open as an unruled choice ([OQ-PR18](#OQ-PR18) and [OQ-PR19](#OQ-PR19)).
 
-**Already ruled, and asking only that you confirm:** [OQ-PR2](#OQ-PR2), [OQ-PR14](#OQ-PR14), [OQ-PR18](#OQ-PR18), [OQ-PR19](#OQ-PR19) and [OQ-PR20](#OQ-PR20). Each quotes the ruling of yours that appears to settle it, and stays open until you say it does.
+**Settled in this review ([Decision Ledger](#decision-ledger)):**
+
+- **[OQ-PR1](#OQ-PR1) (commit messages and tillr state, ruled 2026-11-20):** Neither option as written. Every landed commit says what was built in lasting words that make sense without anyone knowing what tillr is, and carries no reference to tillr, tillr items, runs or other ephemeral tillr state (*"Yes, we should obviously say what was built, but I don't want any references to tiller or tiller items. Those are temporarily ephemeral state. I only want references that will persist and make sense without anybody even knowing what tiller is."*). That keeps `D-RS3`'s ban on `Tillr-Item:` trailers and item IDs in commit messages while requiring durable repository wording; post-landing `chore: retire landed document block` commits end with the hidden comment under [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1).
+- **[OQ-PR2](#OQ-PR2), [OQ-PR3](#OQ-PR3), [OQ-PR4](#OQ-PR4), [OQ-PR5](#OQ-PR5) and [OQ-PR12](#OQ-PR12) (ruled 2026-11-20):** Option A on each — every code change is reviewed before landing by a fresh agent with no memory of making it while documents-only landings skip review ([OQ-PR2](#OQ-PR2), overturning [OQ-JL1](../design/tillr-judge-and-lifecycle.md#decision-ledger) for code landings; designed in [diff review](../design/tillr-diff-review.md) and not built yet); multi-step workflows in `config/tillr/workflows/` stay ([OQ-PR3](#OQ-PR3)); how the loop steps through the queue stays with the engineers as engineering detail ([OQ-PR4](#OQ-PR4)); the observatory layout stays as the base ([OQ-PR5](#OQ-PR5)); and while comment work on a design is open, unstarted build steps of that design wait ([OQ-PR12](#OQ-PR12)).
+- **[OQ-PR13](#OQ-PR13) (where the hand-dragged queue order is kept, ruled 2026-11-20):** *"database only."* The hand-dragged queue order lives solely in tillr's private database (`.tillr/state.db`). That overturns `D-OA4` in [observatory actions](../design/observatory-actions.md) and rules out saving the dragged queue order in the repository: it rules out the tracked file [`queue-order.txt`](./queue-order.txt), the loop's `docs: record the queue's order` commits that write it, and the `.tillr.toml` setting that turns repository persistence of queue order on (removing the file, the commit path and the setting is not yet built).
+- **[OQ-PR14](#OQ-PR14) (prose rewriting and human-read documents, ruled 2026-11-20):** Option B — under [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1), human-read design documents hold no build steps, so no cheap model rewrites wording inside them; any prose shaping happens only on tillr's side or inside the agent-only companion `<topic>-plan.md` file (retiring in-document `prose="2"` rewriting waits on the [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1) build).
+- **[OQ-PR20](#OQ-PR20) (the 20-landing stop under a failing trunk check, closed on the 2026-11-18 ruling of [OQ-GP7](../design/tillr-graph-is-the-path.md#OQ-GP7)):** Closed under [OQ-PR22](#OQ-PR22) on the owner's dated 2026-11-18 ruling in [the graph design](../design/tillr-graph-is-the-path.md#OQ-GP7), where after asking *"why does a red check hold a queue?"* he took the stated leaning in review (`c5ce34bfa`): *"C, weakly: it lets through exactly the items that cannot have made the red worse, so nothing is hidden and no 20-landing stop is needed; it is weak because a red on one of the eight whole-tree checks still holds the queue, and only B moves it then."* That overturns [OQ-GR1](../design/gate-rework.md#decision-ledger)'s 20-landing cap; the cap stays live in the drain only until that path-disjointness waiting rule is built.
 
 **Already asked elsewhere, so not asked again here:**
 
-- **The hidden comment itself**, with its grammar, its attributes and the rule that sync reads every tracked document, was asked as [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1) and ruled by the owner on 2026-11-18 around the companion implementation plan (`<topic>-plan.md`). That ruling governs these rows, which are all an agent's: [OQ-QP2](../design/tillr-queue-persistence.md#91-decision-ledger), `D-QP2` and the read-scope half of `D-QP9` in [queue persistence](../design/tillr-queue-persistence.md); the grammar half of `D-RS1` and its later `seat`, `from`, `prose`, `workflow`, `claims`, `judge` and `express` attributes in [the "ruling"](../design/queue-persistence-ruling.md); `D-TC1` and `D-TC2` in [convergence](../design/tillr-convergence.md); the attribute halves of `D-JL8` and `D-IG13`; the item id shape; and the test that fails the gate when a comment names a missing one. What the loop does to his document after a landing is [OQ-PR1](#OQ-PR1).
+- **The hidden comment itself**, with its grammar, its attributes and the rule that sync reads every tracked document, was asked as [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1) and ruled by the owner on 2026-11-18 around the companion implementation plan (`<topic>-plan.md`). That ruling governs these rows, which are all an agent's: [OQ-QP2](../design/tillr-queue-persistence.md#91-decision-ledger), `D-QP2` and the read-scope half of `D-QP9` in [queue persistence](../design/tillr-queue-persistence.md); the grammar half of `D-RS1` and its later `seat`, `from`, `prose`, `workflow`, `claims`, `judge` and `express` attributes in [the "ruling"](../design/queue-persistence-ruling.md); `D-TC1` and `D-TC2` in [convergence](../design/tillr-convergence.md); the attribute halves of `D-JL8` and `D-IG13`; the item id shape; and the test that fails the gate when a comment names a missing one. What commits say about landed work is settled in [OQ-PR1](#OQ-PR1).
 - **The file format that defines a kind of queue**, built at `f04088fb0` on a choice "recommended here and chosen by Product QA" (another project's agent), is now listed for his review in [the core and landing design](../design/tillr-core-and-git-landing.md) as the designer's decisions `D-CG1` to `D-CG5`, labeled as such. Who owns an item's states is recorded there in his own words, and the two names are asked in [the vocabulary](../design/tillr-vocabulary.md).
 - **The second copy of every tillr program, kept inside the pack,** is open as [OQ-SH2](../design/tillr-selfhosted-build.md#OQ-SH2).
 
-1. 💬 **OQ-PR1: Should each landed commit say which piece of work it built?**
-
-   You clone this repository on your laptop and want to know which commit built the third step of a design. You run `git log`. Today no commit says: a landed commit carries an ordinary message, and the list of which commit built which step exists only in tillr's database on the desktop. The line that used to name the work was dropped by a design agent on 2026-11-15, citing a rule of yours against tillr text in commits; no such rule was found in your words ([evidence](#15-evidence-behind-each-question)). So the choice is yours for the first time.
-
-   - **A — The commit names its work.** Every landed commit ends with one line naming the piece of work it built. `git log --grep` answers on any machine, and the answer survives losing tillr's database. Every landed commit carries a tillr line from then on; the 72 commits already landed stay unnamed.
-   - **B — Only tillr knows.** Commits carry no tillr text. You ask tillr on the desktop which commit built what; a fresh clone, or a lost database, cannot answer.
-
-   <!-- vantage: question id=OQ-PR1 leaning="A: the repository should be able to say what built what without one machine's database. Choose B only if keeping tillr out of commit messages is a rule you hold." -->
-
-   _Leaning:_ A: the repository should be able to say what built what without one machine's database. Choose B only if keeping tillr out of commit messages is a rule you hold.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
-
-2. 💬 **OQ-PR2: Should a fresh reviewing agent look at every code change before it counts as done?**
-
-   You open a finished piece of work on tillr's web page and ask who checked it. Today, when every pass condition is one a test can check, the answer is nobody: tillr marks the work finished on the test results alone, and a reviewing agent runs only when the work asks for one. A pass condition marked as yours alone always waits for you. On 2026-11-18 you said "I want to make sure that there's an agent at the end, before things land", one with no memory of making the change, and that "doc only landings have no review". That reads as a ruling against today's default, but you gave it about landing and not about this rule, so it is yours to confirm.
-
-   - **A — Every code change is reviewed.** A fresh agent reads the diff, the work's description, its pass conditions and the tests before the change lands. It costs one more agent run on every piece of work. Landings that change only documents skip it.
-   - **B — Tests are enough unless the work asks.** As today. Nothing is spent where a test already answers, and no fresh eyes read the diff.
-
-   <!-- vantage: question id=OQ-PR2 leaning="A, already ruled; confirm: on 2026-11-18 you asked for a fresh agent that reviews every code change before it lands." -->
-
-   _Leaning:_ A, already ruled; confirm: on 2026-11-18 you asked for a fresh agent that reviews every code change before it lands.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
-
-3. 💬 **OQ-PR3: May one piece of work run as a series of steps laid out in a file?**
-
-   You queue a piece of work and want one model to plan it, another to build it and a third to test it. Today you put a name on the work, and tillr reads a file under `config/tillr/workflows/` that lists those steps and the role that runs each; one such file may include another. Agents chose this in drafts you never ruled on. Your own later rulings are built on it, among them "Everything possible is a node in the item graph", so the stakes are low: this confirms something you already rely on.
-
-   - **A — Steps in files, as today.** Each step shows on its own on the web page and can run on a cheaper model. Because one file can include another, reading what a piece of work will do can mean opening two files.
-   - **B — One piece of work, one agent run.** There is nothing to configure. Planning, building and testing happen inside one run, on one model, where you cannot see them apart, and your later rulings that assume separate steps are reworked.
-
-   <!-- vantage: question id=OQ-PR3 leaning="A: your rulings on the item graph, made after this was built, already assume it." -->
-
-   _Leaning:_ A: your rulings on the item graph, made after this was built, already assume it.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
-
-4. 💬 **OQ-PR4: Do you want to choose how the loop steps through the queue?**
-
-   You start the loop and watch the queue drain. On each pass it looks at every piece of work and moves each one at most one step, decided from what is recorded about that work. Before 2026-11-14 it woke on a timer and launched one batch per wake-up; an agent replaced that and filed the change as a ruling, though you made none. The stakes are low: nothing you see on the web page differs between the two, and a later design that waits on other answers of yours will replace this part of the loop.
-
-   - **A — Leave it to the engineers.** Nothing changes. The decision is recorded as an engineering one that you have seen.
-   - **B — You choose.** The two schemes, one step per pass and the timer, are put to you side by side. The loop runs as it does today until you pick, and the cost is reading a design that is about to be replaced.
-
-   <!-- vantage: question id=OQ-PR4 leaning="A: you have said engineering detail is the agent's to decide, and nothing you see changes with it." -->
-
-   _Leaning:_ A: you have said engineering detail is the agent's to decide, and nothing you see changes with it.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
-
-5. 💬 **OQ-PR5: Is tillr's web page laid out the way you want?**
-
-   You open tillr's web page each morning to see what is moving. Today every kind of thing has its own page and link. A piece of work opens as a page, and `[` and `]` step to its neighbors. The home page groups work that is not moving by who must act, and the queue is shown in one order the page never re-sorts. Agents chose all of this across two designs; your one recorded instruction was that everything be linked. The stakes are low, because you already ask for changes as you use it.
-
-   - **A — It is fine as a base.** The layout stays, and you go on asking for changes as you notice them.
-   - **B — Change something now.** You name the screen and what is wrong with it. A change of detail is small; a change to which things have pages, or how they link, touches the address of every screen.
-
-   <!-- vantage: question id=OQ-PR5 leaning="A: you use it daily and already ask for changes directly, which tests it better than rereading the alternatives." -->
-
-   _Leaning:_ A: you use it daily and already ask for changes directly, which tests it better than rereading the alternatives.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
-
-6. 💬 **OQ-PR6: Are the right models planning and verifying your work?**
+1. 💬 **OQ-PR6: Are the right models planning and verifying your work?**
 
    A piece of work is planned, built, tested and verified, each by a named role with a model behind it. You have said which models you want: Terra for implementation, Luna for scouts, Sol "where appropriate", Fable for design. The settings today follow that. Editing, test-writing and documentation run on Terra, and test-running on Luna, which is kept to roles that only read. Two picks are not in your words: an agent put planning and verifying on Sol.
+
+   On 2026-11-20 you commented, *"I thought I ruled on basically this somkewhere elase recently."* A search across `docs/design/` and `docs/tillr/` — [planning and model tiering](../design/tillr-planning-node-model-tiering.md#decision-ledger), [convergence](../design/tillr-convergence.md#decision-ledger), [drain seat profiles](../design/tillr-seat-profiles.md#decision-ledger), [diff review](../design/tillr-diff-review.md#decision-ledger), [plan-step and seat selection](../design/tillr-plan-step-and-seat-selection.md#decision-ledger), [interactive seat profiles](../design/seat-profiles.md#decision-ledger), [coordinator pyramid](../design/coordinator-pyramid.md#decision-ledger) and [the tillr roadmap](./roadmap.md) — found related rulings of yours, none putting Bedrock's `plan` and `verify` drain seats on Sol: on 2026-11-18 [planning and model tiering](../design/tillr-planning-node-model-tiering.md#OQ-PT1) recorded Terra for implementation, Luna for scouts, Sol 6.2 *"where appropriate"* and splitting work into seats *"as we see fit"*, while [the roadmap](./roadmap.md) (`73fd201d2`) recorded `plan` on Sol and `verify` on Sol as settled by the design seat; on 2026-11-19 you put the post-gate `review` seat on the `build` route (Hydrogen on Copilot) in [OQ-DR1](../design/tillr-diff-review.md#OQ-DR1) and allowed same-model review and verification in [plan-step and seat selection](../design/tillr-plan-step-and-seat-selection.md#decision-ledger) while [OQ-PSS1](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS1) and [OQ-PSS2](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS2) remain open on retiring the `plan` step; [drain seat profiles](../design/tillr-seat-profiles.md#decision-ledger) covers the Copilot Gemini and held Claude subscription profiles rather than Bedrock; and [interactive seat profiles](../design/seat-profiles.md#decision-ledger) and [coordinator pyramid](../design/coordinator-pyramid.md#decision-ledger) (2026-10-20 and 2026-10-21) cover interactive pi sub-agent seats rather than tillr's drain policy.
 
    - **A — Planning and verifying stay on Sol.** Nothing changes, and the full set of roles becomes yours.
    - **B — Change one or both.** You name the model. A stronger one costs more on every piece of work; a cheaper one risks weaker plans or missed defects. The settings files and any step file that names a role change with it.
@@ -226,7 +159,7 @@ Each question tells one situation: what you do, what tillr does today, and the c
 
    > _(empty — fill in when decided)_
 
-7. 💬 **OQ-PR7: When a model provider refuses work, should tillr send it to the next provider without asking you?**
+2. 💬 **OQ-PR7: When a model provider refuses work, should tillr send it to the next provider without asking you?**
 
    The loop is running overnight and your Claude subscription runs out of quota. Today tillr sends the same work to the next provider on that role's list in the same pass, so it carries on at Bedrock and is billed there, and you are not asked. It moves a piece of work once only, and never moves work that is under review. Agents wrote this rule in three places; your one recorded wish was that Ember be used while it lasts.
 
@@ -241,7 +174,7 @@ Each question tells one situation: what you do, what tillr does today, and the c
 
    > _(empty — fill in when decided)_
 
-8. 💬 **OQ-PR8: Should one unanswered question in a design hold all of that design's work?**
+3. 💬 **OQ-PR8: Should one unanswered question in a design hold all of that design's work?**
 
    A design lists five build steps and has one question open for you, about the fifth. You expect the first four to be built while you think. Today none is: tillr holds every piece of work written in a document that has a question open. A step written on the roadmap instead is held by nothing. Agents built that hold. You ruled that questions live in documents, not that they stop work, and on 2026-11-18 you said the queue tracks each outstanding design "regardless of open questions".
 
@@ -256,7 +189,7 @@ Each question tells one situation: what you do, what tillr does today, and the c
 
    > _(empty — fill in when decided)_
 
-9. 💬 **OQ-PR9: Should renaming a heading in your roadmap be able to change the queue?**
+4. 💬 **OQ-PR9: Should renaming a heading in your roadmap be able to change the queue?**
 
    You tidy the roadmap and rename a heading from "Exploration" to "Ideas". The next `tillr item sync` stops treating the designs linked under it as parked, and prints nothing about it, because a heading that starts with `Icebox` or `Exploration` is what parks them. In the same way, a design's `stage` and `status` header fields decide whether tillr reports that the design owes work. You ruled on the Icebox on 2026-11-18 ("icebox items should be loaded too, marked blocked for icebox") and on one queue entry for each outstanding design. The `Exploration` heading, and a heading acting as a switch at all, are agents' choices.
 
@@ -271,167 +204,107 @@ Each question tells one situation: what you do, what tillr does today, and the c
 
    > _(empty — fill in when decided)_
 
-10. 💬 **OQ-PR10: Should there be a way to queue work that has no document?**
+5. 💬 **OQ-PR10: Should there be a way to queue work that has no document?**
 
-    You think of a small chore and want it in the queue without writing a design. tillr used to have a way: you added a line to a tracked list file and ran a command that loaded it. An agent deleted both, so the command now refuses and work enters only by being written in a document. The seven entries that had no document became prose on the pi roadmap. Your words of 2026-11-18, that syncing a roadmap is what creates the queue's entries, point the same way, but you never ruled on the list itself.
+   You think of a small chore and want it in the queue without writing a design. tillr used to have a way: you added a line to a tracked list file and ran a command that loaded it. An agent deleted both, so the command now refuses and work enters only by being written in a document. The seven entries that had no document became prose on the pi roadmap. Your words of 2026-11-18, that syncing a roadmap is what creates the queue's entries, point the same way, but you never ruled on the list itself.
 
-    - **A — Documents only.** There is one place to look for where work came from. A chore needs at least a line in a document.
-    - **B — The list returns.** A chore is one line and one command. Work then has two sources to keep in step, and the command and its checks are rebuilt; the file itself can be recovered from git.
+   - **A — Documents only.** There is one place to look for where work came from. A chore needs at least a line in a document.
+   - **B — The list returns.** A chore is one line and one command. Work then has two sources to keep in step, and the command and its checks are rebuilt; the file itself can be recovered from git.
 
-    <!-- vantage: question id=OQ-PR10 leaning="A: your goal that state lives in documents and your words of 2026-11-18 on syncing the roadmap both point this way." -->
+   <!-- vantage: question id=OQ-PR10 leaning="A: your goal that state lives in documents and your words of 2026-11-18 on syncing the roadmap both point this way." -->
 
-    _Leaning:_ A: your goal that state lives in documents and your words of 2026-11-18 on syncing the roadmap both point this way.
+   _Leaning:_ A: your goal that state lives in documents and your words of 2026-11-18 on syncing the roadmap both point this way.
 
-    **Answer:**
+   **Answer:**
 
-    > _(empty — fill in when decided)_
+   > _(empty — fill in when decided)_
 
-11. 💬 **OQ-PR11: When you jot down an idea, should a design agent turn it into work without checking back with you?**
+6. 💬 **OQ-PR11: When you jot down an idea, should a design agent turn it into work without checking back with you?**
 
-    You type a half-formed idea into the box on tillr's web page. You asked for that on 2026-11-16, with your own words saved. Today they are saved as a plain `.txt` file in the repository. A design agent then takes one turn on the idea, the result of that turn always lands, and titled pieces of work replace the idea in the queue. Only an idea the agent thinks needs you stops, as one held design entry. Saving your words was your request; what happens next was an agent's choice.
+   You type a half-formed idea into the box on tillr's web page. You asked for that on 2026-11-16, with your own words saved. Today they are saved as a plain `.txt` file in the repository. A design agent then takes one turn on the idea, the result of that turn always lands, and titled pieces of work replace the idea in the queue. Only an idea the agent thinks needs you stops, as one held design entry. Saving your words was your request; what happens next was an agent's choice.
 
-    - **A — Straight into the queue, as today.** The idea becomes queued work after one agent turn. You see the pieces once they exist, and your original words stay in the text file.
-    - **B — You approve first.** The agent's proposed pieces wait for your OK before they replace the idea. Nothing is queued that you have not seen, and every idea costs you a second visit.
+   - **A — Straight into the queue, as today.** The idea becomes queued work after one agent turn. You see the pieces once they exist, and your original words stay in the text file.
+   - **B — You approve first.** The agent's proposed pieces wait for your OK before they replace the idea. Nothing is queued that you have not seen, and every idea costs you a second visit.
 
-    <!-- vantage: question id=OQ-PR11 leaning="A: it does what you asked for, and an idea that needs you already stops for you." -->
+   <!-- vantage: question id=OQ-PR11 leaning="A: it does what you asked for, and an idea that needs you already stops for you." -->
 
-    _Leaning:_ A: it does what you asked for, and an idea that needs you already stops for you.
+   _Leaning:_ A: it does what you asked for, and an idea that needs you already stops for you.
 
-    **Answer:**
+   **Answer:**
 
-    > _(empty — fill in when decided)_
+   > _(empty — fill in when decided)_
 
-12. 💬 **OQ-PR12: While tillr works through your comments on a design, should the rest of that design's work wait?**
+7. 💬 **OQ-PR15: Should copies of your tillr designs be installed in every other workspace?**
 
-    You leave three comments on a design in Vantage while two of its build steps are still waiting to start. After 60 quiet seconds the loop gathers your comments into one new piece of work for the design agent that last worked on that document. Until that work is done, every step of the design that has not started is held. An agent chose both halves, on the reasoning that "A comment is the owner saying the design may be wrong".
+   An agent working on another project of yours, the Product QA pipeline for one, wants to know what tillr does. Today it reads a copy. A tool copies every design that [the status index](./design-status.md) marks `shipped` into the bundle that installs tillr, so every agent workspace gets them, with the hidden comments disabled in the copies. Nobody decided this on record; it arrived as code on 2026-11-16. The stakes are low: the copies are a dated snapshot, and removing them is a small job.
 
-    - **A — The rest waits.** No step is built on text you have just objected to. A comment about a typo holds the steps too, until the comment work closes.
-    - **B — Nothing waits.** Your comments still become work, and the steps go on being built. If the reply to your comments changes the design, steps built in the meantime are redone.
+   - **A — The designs travel with tillr.** Agents elsewhere can read what tillr does. Their copy lags your originals until the next copy is made.
+   - **B — Programs only.** Nothing stale is out there to mislead. An agent elsewhere has to be told what tillr does, or work it out from the programs.
 
-    <!-- vantage: question id=OQ-PR12 leaning="A: comment work closes quickly, and building on a design you have just objected to wastes runs." -->
+   <!-- vantage: question id=OQ-PR15 leaning="A: agents in other projects read them to learn what tillr does, and the cost is a snapshot that lags." -->
 
-    _Leaning:_ A: comment work closes quickly, and building on a design you have just objected to wastes runs.
+   _Leaning:_ A: agents in other projects read them to learn what tillr does, and the cost is a snapshot that lags.
 
-    **Answer:**
+   **Answer:**
 
-    > _(empty — fill in when decided)_
+   > _(empty — fill in when decided)_
 
-13. 💬 **OQ-PR13: Should the order you drag the queue into be saved in the repository?**
+8. 💬 **OQ-PR16: May tillr's web page change the queue without a login?**
 
-    You drag three pieces of work to the top of the queue on the web page, which you asked for on 2026-11-16 ("just a ranking"). That order lives in tillr's private database, so rebuilding the database would lose it. To prevent that, the loop today writes the order to a tracked file, [`queue-order.txt`](./queue-order.txt), in a commit of its own titled `docs: record the queue's order`. One line in `.tillr.toml` turns this on, and it is off unless a repository asks. An agent added the file; your ruling covered the ordering, not where it is kept. The stakes are low.
+   You drag a piece of work up the queue on tillr's web page, or type an idea into its box. Both change the queue, and the page was first designed to be read-only. Today the server accepts those two kinds of change when it is started with `--write`. It checks that the request came from its own page and asks for no login. An agent made that reversal when the dragging and the idea box were built.
 
-    - **A — Saved in the repository.** The order survives a rebuilt database and you can read it as plain text. The history gains a commit when the order changes.
-    - **B — Database only.** No extra commits. A rebuilt database forgets your order and you drag it again.
+   - **A — Changes allowed, no login.** You drag and type with nothing in the way. So can anyone else who can reach the page while it runs with `--write`.
+   - **B — Changes allowed behind a login.** You sign in first. A login has to be built and kept working.
+   - **C — Read-only again.** The page only shows. You reorder the queue and add ideas from the command line.
 
-    <!-- vantage: question id=OQ-PR13 leaning="A: it is the only way your hand order survives a rebuild." -->
+   <!-- vantage: question id=OQ-PR16 leaning="A: you asked for dragging, which needs the page to change things, and the server listens on your own machine." -->
 
-    _Leaning:_ A: it is the only way your hand order survives a rebuild.
+   _Leaning:_ A: you asked for dragging, which needs the page to change things, and the server listens on your own machine.
 
-    **Answer:**
+   **Answer:**
 
-    > _(empty — fill in when decided)_
+   > _(empty — fill in when decided)_
 
-14. 💬 **OQ-PR14: May a cheap model rewrite the wording of a piece of work inside your document?**
+9. 💬 **OQ-PR17: Should agents keep approving checkable results for you while you hold off deciding what they may approve?**
 
-    You write a build step in a design in your own words. You ruled on 2026-11-18 that text written without the prose guide is rewritten, as a step on a fast cheap model. Agents chose the rest. The rewrite edits the text where it sits, in your document, and records that it ran in the hidden comment beside it. It also enforces limits: a title starts with a verb and runs at most 12 words, with at most 8 pass conditions. Under your 2026-11-18 ruling on [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1), build steps live in the companion `<topic>-plan.md` file that humans never look at (and design-less requests live in tillr's store), never in your human-read design documents.
+   A piece of work finishes with a pass condition that someone must sign off, and you are away. Today an agent may sign it off for you when a recorded check can settle it, under a permission that lasts 24 hours. A judgment of value or an accepted risk still waits for you. The design records that you put this decision off on purpose, until real sign-offs existed to judge a rule by. On 2026-11-16 an agent answered it anyway, in a batch, with the rule now running.
 
-    - **A — Rewritten in your document.** The document and the queue say the same thing. Your wording is replaced, and you see the change in the commit's diff.
-    - **B — Never inside your human-read documents; rewritten on tillr's side (or inside the agent-only companion plan).** Your design documents stay as you wrote them, and any shaping happens only on tillr's side or in `<topic>-plan.md`.
+   - **A — The narrow permission keeps running.** Checkable results are signed off without you, 24 hours at a time. What agents may approve goes back to being the open decision you left, to make once there are sign-offs to look at.
+   - **B — No agent signs off anything.** Every such condition waits for you until you set a rule. Work that would have finished overnight sits.
 
-    <!-- vantage: question id=OQ-PR14 leaning="B, already settled by OQ-QM1; confirm: human-read design documents hold no build steps, so no cheap model rewrites wording inside them." -->
+   <!-- vantage: question id=OQ-PR17 leaning="A: the rule in force is the narrowest one on offer, so it is safe to leave running until you have sign-offs to judge it by." -->
 
-    _Leaning:_ B, already settled by [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1); confirm: human-read design documents hold no build steps, so no cheap model rewrites wording inside them.
+   _Leaning:_ A: the rule in force is the narrowest one on offer, so it is safe to leave running until you have sign-offs to judge it by.
 
-    **Answer:**
+   **Answer:**
 
-    > _(empty — fill in when decided)_
+   > _(empty — fill in when decided)_
 
-15. 💬 **OQ-PR15: Should copies of your tillr designs be installed in every other workspace?**
+10. 💬 **OQ-PR18: Should an agent's run have a time limit?**
 
-    An agent working on another project of yours, the Product QA pipeline for one, wants to know what tillr does. Today it reads a copy. A tool copies every design that [the status index](./design-status.md) marks `shipped` into the bundle that installs tillr, so every agent workspace gets them, with the hidden comments disabled in the copies. Nobody decided this on record; it arrived as code on 2026-11-16. The stakes are low: the copies are a dated snapshot, and removing them is a small job.
+    An agent is three hours into a hard piece of work. It used to be killed after 30 minutes. Today a run has no limit unless one is set, a run that has committed is judged on its commit before any set limit is looked at, and a run stopped at a set limit before committing is resumed once. An agent wrote those three rules on 2026-11-15, citing six October 2026 timeout complaints of yours. No dated quotation of yours rules on a default run limit or on how many times a stopped run resumes ("we said there are no timeouts" is undated in the documents, and the uncounted-resume rule in [judge and lifecycle](../design/tillr-judge-and-lifecycle.md#decision-ledger) is recorded without quoting your words), so this has not been ruled.
 
-    - **A — The designs travel with tillr.** Agents elsewhere can read what tillr does. Their copy lags your originals until the next copy is made.
-    - **B — Programs only.** Nothing stale is out there to mislead. An agent elsewhere has to be told what tillr does, or work it out from the programs.
+    - **A — No limit, and a stopped run always resumes.** A long run finishes, committed work is judged before any set limit, and the "once" cap on resuming a stopped run goes. A run that is going nowhere keeps spending until something else notices.
+    - **B — A default limit returns.** You say how long. Runs past it are stopped.
 
-    <!-- vantage: question id=OQ-PR15 leaning="A: agents in other projects read them to learn what tillr does, and the cost is a snapshot that lags." -->
+    <!-- vantage: question id=OQ-PR18 leaning="A: removing the 30-minute limit stopped false kills on finished work, and dropping the one-resume cap removes the remaining arbitrary count." -->
 
-    _Leaning:_ A: agents in other projects read them to learn what tillr does, and the cost is a snapshot that lags.
-
-    **Answer:**
-
-    > _(empty — fill in when decided)_
-
-16. 💬 **OQ-PR16: May tillr's web page change the queue without a login?**
-
-    You drag a piece of work up the queue on tillr's web page, or type an idea into its box. Both change the queue, and the page was first designed to be read-only. Today the server accepts those two kinds of change when it is started with `--write`. It checks that the request came from its own page and asks for no login. An agent made that reversal when the dragging and the idea box were built.
-
-    - **A — Changes allowed, no login.** You drag and type with nothing in the way. So can anyone else who can reach the page while it runs with `--write`.
-    - **B — Changes allowed behind a login.** You sign in first. A login has to be built and kept working.
-    - **C — Read-only again.** The page only shows. You reorder the queue and add ideas from the command line.
-
-    <!-- vantage: question id=OQ-PR16 leaning="A: you asked for dragging, which needs the page to change things, and the server listens on your own machine." -->
-
-    _Leaning:_ A: you asked for dragging, which needs the page to change things, and the server listens on your own machine.
+    _Leaning:_ A: removing the 30-minute limit stopped false kills on finished work, and dropping the one-resume cap removes the remaining arbitrary count.
 
     **Answer:**
 
     > _(empty — fill in when decided)_
 
-17. 💬 **OQ-PR17: Should agents keep approving checkable results for you while you hold off deciding what they may approve?**
+11. 💬 **OQ-PR19: When a check hangs a second time, should the work be handed to you?**
 
-    A piece of work finishes with a pass condition that someone must sign off, and you are away. Today an agent may sign it off for you when a recorded check can settle it, under a permission that lasts 24 hours. A judgment of value or an accepted risk still waits for you. The design records that you put this decision off on purpose, until real sign-offs existed to judge a rule by. On 2026-11-16 an agent answered it anyway, in a batch, with the rule now running.
+    The full test run on a piece of work goes silent. On 2026-11-17 you ruled that a time budget is a target and only a stall ends a check: "target budgets, watch for stalls, but don't let 'load is high' cause failures that would otherwise finish just fine." That quote did not say what happens after a stall. An agent defined a stall as 60 seconds with no new output and no processor time used, and chose what follows: the check runs once more when fewer checks are in flight, and a second stall on the same work hands the work to you. Neither a dated quotation on hung checks nor a quoted rule on attempt counts settles that second-stall stop, so the choice is open.
 
-    - **A — The narrow permission keeps running.** Checkable results are signed off without you, 24 hours at a time. What agents may approve goes back to being the open decision you left, to make once there are sign-offs to look at.
-    - **B — No agent signs off anything.** Every such condition waits for you until you set a rule. Work that would have finished overnight sits.
-
-    <!-- vantage: question id=OQ-PR17 leaning="A: the rule in force is the narrowest one on offer, so it is safe to leave running until you have sign-offs to judge it by." -->
-
-    _Leaning:_ A: the rule in force is the narrowest one on offer, so it is safe to leave running until you have sign-offs to judge it by.
-
-    **Answer:**
-
-    > _(empty — fill in when decided)_
-
-18. 💬 **OQ-PR18: Should an agent's run have a time limit?**
-
-    An agent is three hours into a hard piece of work. It used to be killed at a fixed time. Today a run has no limit unless one is set, a run that has committed is judged on its commit before any limit is looked at, and a run stopped at a set limit before committing is resumed, once. An agent wrote this on 2026-11-15 as a "Design ruling", citing six complaints of yours. You have since said "we said there are no timeouts" and ruled that a killed run resumes, uncounted. That settles it, except that "once" is a count.
-
-    - **A — No limit, and a stopped run always resumes.** A long run finishes. A run that is going nowhere keeps spending until something else notices. The word "once" goes.
-    - **B — A default limit returns.** You say how long. Runs past it are stopped, which is what you complained of.
-
-    <!-- vantage: question id=OQ-PR18 leaning="A, already ruled; confirm: you said there are no timeouts and that a killed run resumes uncounted." -->
-
-    _Leaning:_ A, already ruled; confirm: you said there are no timeouts and that a killed run resumes uncounted.
-
-    **Answer:**
-
-    > _(empty — fill in when decided)_
-
-19. 💬 **OQ-PR19: When a check hangs a second time, should the work be handed to you?**
-
-    The full test run on a piece of work goes silent. You ruled that a time budget is a target and only a stall ends a check: "target budgets, watch for stalls, but don't let 'load is high' cause failures". An agent then defined a stall as 60 seconds with no new output and no processor time used, and chose what follows: the check runs once more, and a second stall hands the work to you. You have since ruled out attempt counts, retry budgets and "exhausted" states, and said of a refused check going back to its session, "It can do that 7,000 times".
-
-    - **A — Restarted, never counted.** A stalled check is restarted each time while its cause is found and fixed. It reaches you only when an agent raises an objection that names you. A check that keeps stalling keeps spending until the cause is fixed.
+    - **A — Restarted, never counted.** A stalled check is restarted when load drops while its cause is diagnosed and fixed, and reaches you only when an agent raises an objection that names you. A check that keeps stalling keeps spending until the cause is fixed.
     - **B — Twice, then you.** As today. The second stall puts the work in front of you, whatever caused it.
 
-    <!-- vantage: question id=OQ-PR19 leaning="A, already ruled; confirm: your ruling against attempt counts decides it, and the sixty-second definition of a stall is engineering detail that stays." -->
+    <!-- vantage: question id=OQ-PR19 leaning="A: a second hang is a tool or check fault for an agent to diagnose rather than a stop count for you, while the sixty-second stall threshold stays as engineering detail." -->
 
-    _Leaning:_ A, already ruled; confirm: your ruling against attempt counts decides it, and the sixty-second definition of a stall is engineering detail that stays.
-
-    **Answer:**
-
-    > _(empty — fill in when decided)_
-
-20. 💬 **OQ-PR20: Should all landings stop once the main branch has failed its checks for long enough?**
-
-    The full checks fail on the main branch at midnight while the loop is running. Today landings carry on until 20 have gone in, and then everything stops except repairs. An agent set that in a batch on 2026-11-15. On 2026-11-18 you asked "why does a red check hold a queue?" Later that day, in [the graph design](../design/tillr-graph-is-the-path.md#decision-ledger), you took the stated answer to the same question: while a check is failing, work lands only if it does not touch what that check reads, with no landing cap. The setting is still in force, so this asks you to confirm that it goes.
-
-    - **A — No cap.** Work that does not touch what the failing check reads keeps landing, however long the failure lasts. Work that does touch it waits for the repair.
-    - **B — Stop after 20.** As today. After 20 landings everything waits for the repair, related to the failure or not.
-
-    <!-- vantage: question id=OQ-PR20 leaning="A, already ruled; confirm: on 2026-11-18 you took that answer in the graph design, with no landing cap." -->
-
-    _Leaning:_ A, already ruled; confirm: on 2026-11-18 you took that answer in the graph design, with no landing cap.
+    _Leaning:_ A: a second hang is a tool or check fault for an agent to diagnose rather than a stop count for you, while the sixty-second stall threshold stays as engineering detail.
 
     **Answer:**
 
@@ -466,7 +339,7 @@ These rows were false or mislabeled when this review was written. They were appl
 
 **Recorded rulings that contradict each other:**
 
-- [x] [Gate rework](../design/gate-rework.md), [OQ-GR1](../design/gate-rework.md#decision-ledger) sets a cap on landings while the trunk fails; [the graph design](../design/tillr-graph-is-the-path.md) lists as a rule that the owner does not accept one. One of them is wrong; [OQ-PR20](#OQ-PR20) decides which. **Resolved 2026-11-18 by the owner's ruling of [OQ-GP7](../design/tillr-graph-is-the-path.md#OQ-GP7), no landing cap:** the gate-rework row says he ruled the cap out and that it stays live until the rule that replaces it is built. [OQ-PR20](#OQ-PR20) is left open here for the owner to close.
+- [x] [Gate rework](../design/gate-rework.md), [OQ-GR1](../design/gate-rework.md#decision-ledger) sets a cap on landings while the trunk fails; [the graph design](../design/tillr-graph-is-the-path.md) lists as a rule that the owner does not accept one. One of them is wrong; [OQ-PR20](#OQ-PR20) decides which. **Resolved 2026-11-18 by the owner's ruling of [OQ-GP7](../design/tillr-graph-is-the-path.md#OQ-GP7), no landing cap:** the gate-rework row says he ruled the cap out and that it stays live until the rule that replaces it is built. [OQ-PR20](#OQ-PR20) is closed in [the ledger](#decision-ledger) on that ruling.
 - [x] The graph design's rule that the git trace is ruled out carries no quote and reverses [OQ-QP4](../design/tillr-queue-persistence.md#91-decision-ledger). Should cite `d09016bba`. **Applied 2026-11-18:** rule R12 cites `d09016bba` and the reversal.
 - [x] [Item graphs](../design/tillr-item-graphs.md), `D-IG11`: the owner's words of 2026-11-15 that a sub-agent is never a node. His words of 2026-11-17 hoist sub-agents into nodes. The row should say it is overturned in part. **Applied 2026-11-18:** the row reads "Overturned in part" and quotes the words of 2026-11-17.
 - [x] [Observatory design](../design/observatory-design.md), `D-OBS2`: "the board writes nothing". Should point at `D-OA8`, which reversed it. **Applied 2026-11-18:** the row reads reversed in part by `D-OA8`, with a link.
@@ -513,7 +386,7 @@ The escalation ladder's last row is the pattern this review is about, written do
 
 ### 5.1. Medium, live or partly live
 
-All are an agent's unless the row says nobody is named. Rows already covered by a question in [Section 2](#2-questions-for-the-owner) are left out.
+All are an agent's unless the row says nobody is named. Rows already covered by a question in [Section 2](#2-questions-for-the-owner) or [the ledger](#decision-ledger) are left out.
 
 | Id | Design | Decision | Live? |
 | :--- | :--- | :--- | :--- |
@@ -596,16 +469,25 @@ Two rules are the owner's rulings of 2026-11-19 ([OQ-PR21](#OQ-PR21) and [OQ-PR2
 
 - **For [OQ-PR21](#OQ-PR21):** a rule in sync and the loop that a design holding an unruled decision touching the owner's documents, repository, money, models or visible surface is put to him as an open question and holds building on that design until he answers, while decisions marked as engineering detail do not hold the build; plus the authoring and compliance-check rule that requires such decisions to be filed as open questions rather than recorded as designer's decisions.
 - **For [OQ-PR22](#OQ-PR22) and `D-PR1` to `D-PR3`:** the gate document check and its tests refusing added ledger rows that claim an owner ruling or close an owner question without a dated quotation of his words, and refusing a bare "Needs your ruling: None" over designer's decisions; plus updating agent instructions so "fill them in through principles" is never read as leave to close a question without a dated quote. The existing rows are a backlog, so the gate check judges added lines only, as the gate's other document checks do.
-- **Across the audited corpus:** a pass over the 39 audited documents to relabel or reopen rows as the owner answers [OQ-PR1](#OQ-PR1) to [OQ-PR20](#OQ-PR20).
+- **Across the audited corpus:** a pass over the 39 audited documents to relabel or reopen rows as the owner answers [OQ-PR1](#OQ-PR1) to [OQ-PR20](#OQ-PR20), plus removing repository persistence of the dragged queue order ([`queue-order.txt`](./queue-order.txt), its loop commit and its `.tillr.toml` setting) under [OQ-PR13](#OQ-PR13).
 
 **What the audits did not settle.** They disagree on three ratings: `D-QP9` and `D-RS5` are high in one and low or medium in another, and `D-QP10` is high in one and medium in another; this page treats each at the higher rating (`D-PR4`). They did not verify that rows recorded as the owner's are his: most are paraphrase. They did not open the sources of landing principles 1 to 10, the earlier ruling behind `D-QP5`, or the roughly 95 roadmap answers one by one.
 
 ## Decision Ledger
 
-[OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22) are the owner's rulings of 2026-11-19. `D-PR1` to `D-PR4` are designer's decisions made in writing this review, and the owner may overturn any of them. None is built.
+[OQ-PR1](#OQ-PR1) to [OQ-PR5](#OQ-PR5) and [OQ-PR12](#OQ-PR12) to [OQ-PR14](#OQ-PR14) are the owner's rulings of 2026-11-20; [OQ-PR20](#OQ-PR20) is closed on his 2026-11-18 ruling of [OQ-GP7](../design/tillr-graph-is-the-path.md#OQ-GP7); and [OQ-PR21](#OQ-PR21) and [OQ-PR22](#OQ-PR22) are his rulings of 2026-11-19. `D-PR1` to `D-PR4` are designer's decisions made in writing this review, and the owner may overturn any of them.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
+| OQ-PR1 | **Owner ruling:** Neither option as written. Every landed commit says what was built in lasting words that make sense without anyone knowing what tillr is, and carries no reference to tillr, tillr items, runs or other ephemeral tillr state: *"Yes, we should obviously say what was built, but I don't want any references to tiller or tiller items. Those are temporarily ephemeral state. I only want references that will persist and make sense without anybody even knowing what tiller is."* Keeps `D-RS3`'s ban on `Tillr-Item:` trailers and item IDs in commit messages while requiring durable repository wording; post-landing block-deletion commits end with [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1). | 2026-11-20 | [Section 2](#2-questions-for-the-owner) | Partly: commits omit item IDs and trailers; block-deletion commits end with [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1) |
+| OQ-PR2 | **Owner ruling:** Every code change is reviewed before it lands by a fresh agent with no memory of making the change, and documents-only landings skip review (overturning [OQ-JL1](../design/tillr-judge-and-lifecycle.md#decision-ledger)'s mechanical-by-default rule for code landings, as designed in [diff review](../design/tillr-diff-review.md); `D-UT16` and `D-JL2`'s criterion classes stand). He took option A: *"A, already ruled; confirm: on 2026-11-18 you asked for a fresh agent that reviews every code change before it lands."* | 2026-11-20 | [Section 2](#2-questions-for-the-owner) | Partly: `D-UT16` and `D-JL2` built; mandatory code review before landing unbuilt ([diff review](../design/tillr-diff-review.md)) |
+| OQ-PR3 | **Owner ruling:** A piece of work may run as a series of steps laid out in workflow files under `config/tillr/workflows/`, with a role per step and file inclusion (`D-IG1`, `D-IG5`, `D-IG9` and `D-IG13` in [item graphs](../design/tillr-item-graphs.md)). He took option A: *"A: your rulings on the item graph, made after this was built, already assume it."* | 2026-11-20 | [Section 2](#2-questions-for-the-owner) | Built (`b657ed406`, `064bf3e8a`) |
+| OQ-PR4 | **Owner ruling:** How the loop steps through the queue (`D-DS1` to `D-DS16` in [the drain's successor design](../design/tillr-drain-successor.md)) is left to the engineers as engineering detail that the owner has seen. He took option A: *"A: you have said engineering detail is the agent's to decide, and nothing you see changes with it."* | 2026-11-20 | [Section 2](#2-questions-for-the-owner) | Partly (`a792a9df1`) |
+| OQ-PR5 | **Owner ruling:** The observatory's layout — dedicated linked pages, stepping keys, home-page grouping by who must act, and fixed queue order (`D-OBS1` to `D-OBS13` and [OQ-OBD6](../design/observatory-design.md#11-decision-ledger) in [the first design](../design/observatory-design.md); `D-OR1` to `D-OR6`, [OQ-OR2](../design/observatory-redesign.md#decision-ledger) and [OQ-OR3](../design/observatory-redesign.md#decision-ledger) in [the redesign](../design/observatory-redesign.md)) — stays as the base, with changes requested as he uses it. He took option A: *"A: you use it daily and already ask for changes directly, which tests it better than rereading the alternatives."* | 2026-11-20 | [Section 2](#2-questions-for-the-owner) | Built (`98ecde6a6`, `34fd911b8`; stepping keys not re-verified) |
+| OQ-PR12 | **Owner ruling:** Comments on a design in Vantage become work for that document's design agent, and while that comment work is open, unstarted steps of that design wait (`D-CD1` to `D-CD11` in [designer sessions](../design/tillr-designer-sessions.md)). He took option A: *"A: comment work closes quickly, and building on a design you have just objected to wastes runs."* | 2026-11-20 | [Section 2](#2-questions-for-the-owner) | Built (`1e0fe3259`, `4b16f3af8`, `081eb89f3`) |
+| OQ-PR13 | **Owner ruling:** *"database only."* The hand-dragged queue order lives only in tillr's private database (`.tillr/state.db`). Overturns `D-OA4` in [observatory actions](../design/observatory-actions.md) and rules out saving the dragged order in the repository ([`queue-order.txt`](./queue-order.txt), loop commits `docs: record the queue's order`, and the `.tillr.toml` setting that enables them). | 2026-11-20 | [Section 2](#2-questions-for-the-owner) | — (removal of [`queue-order.txt`](./queue-order.txt), the loop commit and the `.tillr.toml` setting unbuilt) |
+| OQ-PR14 | **Owner ruling:** No cheap model rewrites wording inside the owner's human-read design documents; under [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1) build steps live in the agent-only companion `<topic>-plan.md` file (or in tillr's store), so prose shaping happens only on tillr's side or inside `<topic>-plan.md`. He took option B: *"B, already settled by [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1); confirm: human-read design documents hold no build steps, so no cheap model rewrites wording inside them."* | 2026-11-20 | [Section 2](#2-questions-for-the-owner) | — (awaits [OQ-QM1](../design/tillr-queue-mirrors-designs.md#OQ-QM1) build to retire in-document `prose="2"` rewrites) |
+| OQ-PR20 | **Owner ruling (closed under [OQ-PR22](#OQ-PR22) on his 2026-11-18 ruling of [OQ-GP7](../design/tillr-graph-is-the-path.md#OQ-GP7)):** There is no 20-landing cap when a check is failing on the main branch; work that does not touch what the failing check reads keeps landing, and work that touches it waits for the repair (overturning [OQ-GR1](../design/gate-rework.md#decision-ledger)). On 2026-11-18 he asked *"why does a red check hold a queue?"* and took the stated leaning on [OQ-GP7](../design/tillr-graph-is-the-path.md#OQ-GP7) in review (`c5ce34bfa`): *"C, weakly: it lets through exactly the items that cannot have made the red worse, so nothing is hidden and no 20-landing stop is needed; it is weak because a red on one of the eight whole-tree checks still holds the queue, and only B moves it then."* | 2026-11-18 | [Section 2](#2-questions-for-the-owner) | — (20-landing cap stays live until [OQ-GP7](../design/tillr-graph-is-the-path.md#OQ-GP7)'s waiting rule is built) |
 | OQ-PR21 | **Owner ruling:** A decision that touches the owner's documents, his repository, his money, his models or what he sees is put to him as a question, and nothing is built on that design until he answers; engineering detail is marked as the agent's and may be built on. He took option A, the stated leaning: *"A: it matches what you said on 2026-11-18, that you decide product direction and trade-offs and the agent decides engineering detail."* | 2026-11-19 | [Section 6](#6-how-this-stops-happening) | — |
 | OQ-PR22 | **Owner ruling:** An agent closes a question addressed to the owner only when a dated ruling of his answers it in so many words, and the record carries the quote; everything else stays open for him, and an agent's own leaning never counts as a principle. He took option A, the stated leaning: *"A: it keeps what you wanted, not being asked the same thing twice, and stops an agent's own leaning from counting as a principle."* | 2026-11-19 | [Section 6](#6-how-this-stops-happening) | — |
 | D-PR1 | **Designer's decision; the owner may overturn this.** Only the owner's quoted, dated words are recorded as a ruling. | 2026-11-18 | [Section 6](#6-how-this-stops-happening) | — |
