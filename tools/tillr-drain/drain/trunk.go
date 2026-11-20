@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -1688,5 +1689,142 @@ func (l *Loop) preRebaseFixer(ctx context.Context, candidate Candidate) (Candida
 	}
 	l.reportf("loop: pre-rebased %s onto %s so the gated tree is the landed tree\n",
 		candidate.ItemID, shortSHA(mainSHA))
+	return candidate, nil
+}
+
+// retitleIntermittentFixer rewrites a live intermittent fixer's commit message so the
+// landed squash commit is titled as a fix for an intermittent check while keeping the
+// worker's original commit message in the body.
+func (l *Loop) retitleIntermittentFixer(ctx context.Context, candidate Candidate) (Candidate, error) {
+	if !IsTrunkFixer(candidate.ItemID) || l.cfg.Store == "" || candidate.Worktree == "" ||
+		candidate.BaseSHA == "" || candidate.HeadSHA == "" || candidate.BaseSHA == candidate.HeadSHA {
+		return candidate, nil
+	}
+	r, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return candidate, err
+	}
+	var intermittent bool
+	var checks []string
+	err = r.ReadTx(ctx, func(rd *store.Reader) error {
+		var e error
+		intermittent, checks, e = readIntermittentFixer(rd, candidate.ItemID)
+		return e
+	})
+	r.Close()
+	if err != nil || !intermittent {
+		return candidate, err
+	}
+	source := candidate.WorkerHeadSHA
+	if source == "" {
+		source = candidate.HeadSHA
+	}
+	revs, err := l.git(ctx, candidate.Worktree, "rev-list", "--reverse", candidate.BaseSHA+".."+source)
+	if err != nil {
+		return candidate, err
+	}
+	fields := strings.Fields(revs)
+	first := source
+	if len(fields) > 0 {
+		first = fields[0]
+	} else {
+		fields = []string{source}
+	}
+	var msgParts []string
+	for _, rev := range fields {
+		part, err := l.git(ctx, candidate.Worktree, "log", "-1", "--format=%B", rev)
+		if err != nil {
+			return candidate, err
+		}
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			msgParts = append(msgParts, trimmed)
+		}
+	}
+	origMsg := strings.Join(msgParts, "\n\n")
+	firstLine, _, _ := strings.Cut(origMsg, "\n")
+	if strings.HasPrefix(firstLine, "fix: intermittent check") {
+		return candidate, nil
+	}
+	title := "fix: intermittent check"
+	if len(checks) > 0 {
+		joined := strings.Join(checks, ", ")
+		if len(title)+1+len(joined) <= 72 {
+			title += " " + joined
+		}
+	}
+	msg := title + "\n"
+	if origMsg != "" {
+		msg = title + "\n\n" + origMsg + "\n"
+	}
+	meta, err := l.git(ctx, candidate.Worktree, "log", "-1", "--format=%an%n%ae%n%aI", first)
+	if err != nil {
+		return candidate, err
+	}
+	lines := strings.Split(strings.TrimSpace(meta), "\n")
+	an, ae, ai := "", "", l.cfg.Now().UTC().Format(time.RFC3339)
+	if len(lines) >= 3 {
+		an = strings.TrimSpace(lines[0])
+		ae = strings.TrimSpace(lines[1])
+		if strings.TrimSpace(lines[2]) != "" {
+			ai = strings.TrimSpace(lines[2])
+		}
+	}
+	cfgName, _ := l.git(ctx, candidate.Worktree, "config", "user.name")
+	cfgEmail, _ := l.git(ctx, candidate.Worktree, "config", "user.email")
+	cfgName = strings.TrimSpace(cfgName)
+	cfgEmail = strings.TrimSpace(cfgEmail)
+	if an == "" {
+		an = cfgName
+	}
+	if ae == "" {
+		ae = cfgEmail
+	}
+	if an == "" || ae == "" {
+		return candidate, Externalf("retitling intermittent fixer %s: git user.name/user.email not configured", candidate.ItemID)
+	}
+	cn, ce := cfgName, cfgEmail
+	if cn == "" {
+		cn = an
+	}
+	if ce == "" {
+		ce = ae
+	}
+	tree, err := l.git(ctx, candidate.Worktree, "rev-parse", candidate.HeadSHA+"^{tree}")
+	if err != nil {
+		return candidate, err
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", candidate.Worktree, "commit-tree", strings.TrimSpace(tree), "-p", candidate.BaseSHA, "-m", msg)
+	cmd.Env = append(os.Environ(),
+		"GIT_AUTHOR_NAME="+an,
+		"GIT_AUTHOR_EMAIL="+ae,
+		"GIT_AUTHOR_DATE="+ai,
+		"GIT_COMMITTER_NAME="+cn,
+		"GIT_COMMITTER_EMAIL="+ce,
+		"GIT_COMMITTER_DATE="+l.cfg.Now().UTC().Format(time.RFC3339),
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return candidate, Externalf("retitling intermittent fixer %s: %v (%s)", candidate.ItemID, err, strings.TrimSpace(string(out)))
+	}
+	newHead := strings.TrimSpace(string(out))
+	if _, err := l.git(ctx, candidate.Worktree, "reset", "-q", "--hard", newHead); err != nil {
+		return candidate, err
+	}
+	candidate.HeadSHA = newHead
+	if candidate.WorkerHeadSHA != "" {
+		candidate.WorkerHeadSHA = newHead
+	}
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return candidate, err
+	}
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		return appendEffect(tx, candidatePreparedKind, candidate.RunID, candidate, l.cfg.Now().UTC())
+	})
+	s.Close()
+	if err != nil {
+		return candidate, err
+	}
+	l.reportf("loop: retitled intermittent fixer %s (%s) as %q\n", candidate.ItemID, shortSHA(newHead), title)
 	return candidate, nil
 }

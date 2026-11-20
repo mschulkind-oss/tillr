@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
@@ -180,9 +182,11 @@ func resolveCommit(ctx context.Context, root, sha string) (string, error) {
 // provedFixer is one open fixer a proof covers, and the proof that covers it.
 type provedFixer struct {
 	id       string
+	seen     int64
 	checks   []string
 	proof    checkProof
 	finished bool
+	keepLive bool
 }
 
 // provableChecks is the checks a proof must have passed to cover a fixer. A fixer can
@@ -454,6 +458,7 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 		// while items are still acquitted behind it. A proof of its checks is recorded for
 		// it, so those items are released (repairedTrunkWaiter); its state is not touched.
 		finished bool
+		keepLive bool
 	}
 	read := func(r *store.Reader) ([]open, error) {
 		lifecycle, err := definition.ForReader(r)
@@ -509,6 +514,13 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 				return nil, err
 			}
 			found[i].seen = seen.Int64
+			if !found[i].finished {
+				keep, err := fixerKeepsLive(r, found[i].id)
+				if err != nil {
+					return nil, err
+				}
+				found[i].keepLive = keep
+			}
 		}
 		return found, nil
 	}
@@ -544,7 +556,7 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 				return err
 			}
 			if contains {
-				covered = append(covered, provedFixer{id: o.id, checks: checks, proof: proof, finished: o.finished})
+				covered = append(covered, provedFixer{id: o.id, seen: o.seen, checks: checks, proof: proof, finished: o.finished, keepLive: o.keepLive})
 				break
 			}
 		}
@@ -586,14 +598,33 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 			if finishedState(declared, state) {
 				continue
 			}
-			if _, err := item.SetStateWithReceipt(ctx, tx, f.id, StateResolvedElsewhere, at, item.MoveReceipt{Reason: reason, By: Utility, ResolvesVia: "commit:" + f.proof.commit}); err != nil {
+			keep, err := fixerKeepsLive(tx.Reader(), f.id)
+			if err != nil {
 				return err
 			}
 			if f.checks == nil {
 				f.checks = []string{}
 			}
-			if err := appendEffect(tx, FixerProvedKind, f.id, fixerProof{FixerItem: f.id, Green: f.proof.commit, ProvedAt: f.proof.provedAt.UTC().Format("2006-01-02T15:04:05.000Z"), Checks: f.checks}, at); err != nil {
+			alreadyProved, err := fixerProvedAfter(tx.Reader(), f.id, f.seen)
+			if err != nil {
 				return err
+			}
+			if keep {
+				if !alreadyProved {
+					if err := appendEffect(tx, FixerProvedKind, f.id, fixerProof{FixerItem: f.id, Green: f.proof.commit, ProvedAt: f.proof.provedAt.UTC().Format("2006-01-02T15:04:05.000Z"), Checks: f.checks}, at); err != nil {
+						return err
+					}
+					l.reportf("loop: %s proved by rerun (%s), keeping live run to finish\n", f.id, reason)
+				}
+				continue
+			}
+			if _, err := item.SetStateWithReceipt(ctx, tx, f.id, StateResolvedElsewhere, at, item.MoveReceipt{Reason: reason, By: Utility, ResolvesVia: "commit:" + f.proof.commit}); err != nil {
+				return err
+			}
+			if !alreadyProved {
+				if err := appendEffect(tx, FixerProvedKind, f.id, fixerProof{FixerItem: f.id, Green: f.proof.commit, ProvedAt: f.proof.provedAt.UTC().Format("2006-01-02T15:04:05.000Z"), Checks: f.checks}, at); err != nil {
+					return err
+				}
 			}
 			l.reportf("loop: %s resolved: %s\n", f.id, reason)
 		}
@@ -617,4 +648,290 @@ func fixerProvedGreen(r *store.Reader, fixer string) (string, error) {
 		return "", err
 	}
 	return p.Green, nil
+}
+
+// fixerProvedAfter answers whether a FixerProvedKind event was already recorded for
+// fixer at or after seen.
+func fixerProvedAfter(r *store.Reader, fixer string, seen int64) (bool, error) {
+	var ok bool
+	err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE kind=? AND object_id=? AND ts>=?)`, FixerProvedKind, fixer, seen).Scan(&ok)
+	return ok, err
+}
+
+// fixerSeen answers the timestamp of the fixer's latest red observation (filing or a
+// newer red attachment).
+func fixerSeen(r *store.Reader, fixer string) (int64, error) {
+	var seen sql.NullInt64
+	if err := r.QueryRow(`SELECT MAX(ts) FROM events WHERE object_id=? AND kind IN (?, ?)`, fixer, item.AddKind, FixerAttachedKind).Scan(&seen); err != nil {
+		return 0, err
+	}
+	return seen.Int64, nil
+}
+
+// fixerProvedProof answers the latest FixerProvedKind recorded for fixer at or after its
+// latest red observation, or nil when none exists.
+func fixerProvedProof(r *store.Reader, fixer string) (*fixerProof, error) {
+	seen, err := fixerSeen(r, fixer)
+	if err != nil {
+		return nil, err
+	}
+	var raw []byte
+	err = r.QueryRow(`SELECT payload FROM events WHERE kind=? AND object_id=? AND ts>=? ORDER BY seq DESC LIMIT 1`, FixerProvedKind, fixer, seen).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var p fixerProof
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// fixerProvedGreenAfterSeen answers the green commit a FixerProvedKind event recorded at
+// or after the fixer's latest red observation, or "" when none exists.
+func fixerProvedGreenAfterSeen(r *store.Reader, fixer string) (string, error) {
+	p, err := fixerProvedProof(r, fixer)
+	if err != nil || p == nil {
+		return "", err
+	}
+	return p.Green, nil
+}
+
+// readIntermittentFixer answers whether a fixer has a FixerProvedKind record at or after
+// its latest red observation (a rerun passed its checks) and the checks named in that proof.
+func readIntermittentFixer(r *store.Reader, fixer string) (bool, []string, error) {
+	p, err := fixerProvedProof(r, fixer)
+	if err != nil || p == nil {
+		return false, nil, err
+	}
+	return true, p.Checks, nil
+}
+
+// resolveKeptFixerWithoutCommit moves a proved trunk fixer whose run ended with no commit
+// (headSHA == baseSHA) immediately to StateResolvedElsewhere (resolves_via commit:<proof>).
+// It returns false when the fixer is not open or has no current proof.
+func (l *Loop) resolveKeptFixerWithoutCommit(ctx context.Context, fixerID string) (bool, error) {
+	if !IsTrunkFixer(fixerID) || l.cfg.Store == "" {
+		return false, nil
+	}
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return false, err
+	}
+	defer s.Close()
+	resolved := false
+	at := l.cfg.Now().UTC()
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		r := tx.Reader()
+		lifecycle, err := definition.ForReader(r)
+		if err != nil {
+			return err
+		}
+		var state string
+		if err := r.QueryRow(`SELECT state FROM items WHERE item_id=?`, fixerID).Scan(&state); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			return err
+		}
+		if finishedState(lifecycle.Parsed, state) {
+			return nil
+		}
+		proof, err := fixerProvedProof(r, fixerID)
+		if err != nil || proof == nil || proof.Green == "" {
+			return err
+		}
+		reason := fmt.Sprintf("reran green on %s with no commit needed (%s)", shortSHA(proof.Green), strings.Join(proof.Checks, ", "))
+		if _, err := item.SetStateWithReceipt(ctx, tx, fixerID, StateResolvedElsewhere, at, item.MoveReceipt{
+			Reason:      reason,
+			By:          Utility,
+			ResolvesVia: "commit:" + proof.Green,
+		}); err != nil {
+			return err
+		}
+		resolved = true
+		l.reportf("loop: %s resolved: %s\n", fixerID, reason)
+		return nil
+	})
+	return resolved, err
+}
+
+// fixerKeepsLive answers whether an open fixer has an active claim/lease/dispatch, a
+// live or unexamined run, or a committed candidate in flight (awaiting examination, or
+// returning from a conflict or judge refusal), so resolveProvedFixers lets it finish
+// instead of closing it.
+func fixerKeepsLive(r *store.Reader, fixerID string) (bool, error) {
+	hasReadOnly, err := tableExists(r, "read_only_runs")
+	if err != nil {
+		return false, err
+	}
+	if hasReadOnly {
+		var exists bool
+		if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM read_only_runs WHERE item_id=? AND settled=0)`, fixerID).Scan(&exists); err != nil {
+			return false, err
+		}
+		if exists {
+			return true, nil
+		}
+	}
+	hasNodes, err := tableExists(r, "node_runs")
+	if err != nil {
+		return false, err
+	}
+	if hasNodes {
+		var exists bool
+		if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM node_runs WHERE item_id=? AND outcome='running')`, fixerID).Scan(&exists); err != nil {
+			return false, err
+		}
+		if exists {
+			return true, nil
+		}
+	}
+	hasDispatches, err := tableExists(r, "dispatches")
+	if err != nil {
+		return false, err
+	}
+
+	// Any leased lane whose run_id belongs to this fixer (including run.allocate leases
+	// before runs is written, and -judge leases) keeps the fixer live.
+	laneRows, err := r.Query(`SELECT run_id FROM lanes WHERE state='leased' AND run_id IS NOT NULL`)
+	if err != nil {
+		return false, err
+	}
+	var leasedRuns []string
+	for laneRows.Next() {
+		var runID string
+		if err := laneRows.Scan(&runID); err != nil {
+			laneRows.Close()
+			return false, err
+		}
+		leasedRuns = append(leasedRuns, runID)
+	}
+	if err := laneRows.Err(); err != nil {
+		laneRows.Close()
+		return false, err
+	}
+	laneRows.Close()
+	for _, runID := range leasedRuns {
+		belongs, err := runBelongsToItem(r, runID, fixerID, hasReadOnly, hasNodes, hasDispatches)
+		if err != nil {
+			return false, err
+		}
+		if belongs {
+			return true, nil
+		}
+	}
+
+	// Any unexamined drain.started (including a run that just exited before Loop.settle
+	// examines its commit) keeps the fixer live.
+	var unexaminedStarted bool
+	if err := r.QueryRow(
+		`SELECT EXISTS(
+			SELECT 1 FROM events e
+			WHERE e.kind = ? AND e.object_type = 'run'
+			  AND json_valid(e.payload) AND json_extract(e.payload, '$.decision.item_id') = ?
+			  AND NOT EXISTS(SELECT 1 FROM events x WHERE x.kind = ? AND x.object_type = 'run' AND x.object_id = e.object_id)
+		)`,
+		dispatchStartedKind, fixerID, examinationDoneKind,
+	).Scan(&unexaminedStarted); err != nil {
+		return false, err
+	}
+	if unexaminedStarted {
+		return true, nil
+	}
+
+	// Any active dispatch without a runs row or examinationDoneKind keeps the fixer live.
+	if hasDispatches {
+		var pendingDispatch bool
+		if err := r.QueryRow(
+			`SELECT EXISTS(
+				SELECT 1 FROM dispatches d
+				WHERE d.item_id = ? AND d.action IN ('dispatch', 'retry') AND d.run_id IS NOT NULL
+				  AND NOT EXISTS(SELECT 1 FROM runs r WHERE r.run_id = d.run_id)
+				  AND NOT EXISTS(SELECT 1 FROM events x WHERE x.kind = ? AND x.object_type = 'run' AND x.object_id = d.run_id)
+			)`,
+			fixerID, examinationDoneKind,
+		).Scan(&pendingDispatch); err != nil {
+			return false, err
+		}
+		if pendingDispatch {
+			return true, nil
+		}
+	}
+
+	var runID, state string
+	var eventSeq int64
+	err = r.QueryRow(
+		`SELECT run_id, state, event_seq FROM runs WHERE item_id = ? ORDER BY started_at DESC, event_seq DESC, rowid DESC LIMIT 1`,
+		fixerID,
+	).Scan(&runID, &state, &eventSeq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !isTerminalRunState(state) {
+		return true, nil
+	}
+	var resumed bool
+	if err := r.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM events WHERE kind = ? AND object_type = 'run' AND object_id = ? AND seq > ?)`,
+		run.ResumeKind, runID, eventSeq,
+	).Scan(&resumed); err != nil {
+		return false, err
+	}
+	if resumed {
+		return true, nil
+	}
+	var refusalRaw []byte
+	err = r.QueryRow(
+		`SELECT payload FROM events WHERE kind = ? AND (object_id = ? OR (json_valid(payload) AND json_extract(payload, '$.writer_run_id') = ?)) ORDER BY seq DESC LIMIT 1`,
+		RefusalKind, runID, runID,
+	).Scan(&refusalRaw)
+	if err == nil {
+		var p struct {
+			BaseSHA string `json:"base_sha"`
+			HeadSHA string `json:"head_sha"`
+		}
+		if err := json.Unmarshal(refusalRaw, &p); err != nil {
+			return false, err
+		}
+		return p.HeadSHA != "" && p.BaseSHA != "" && p.HeadSHA != p.BaseSHA, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return false, err
+	}
+	var done bool
+	if err := r.QueryRow(
+		`SELECT EXISTS(SELECT 1 FROM events WHERE kind = ? AND object_type = 'run' AND object_id = ?)`,
+		examinationDoneKind, runID,
+	).Scan(&done); err != nil {
+		return false, err
+	}
+	if done {
+		return false, nil
+	}
+	var candRaw []byte
+	err = r.QueryRow(
+		`SELECT payload FROM events WHERE kind IN (?, ?) AND object_type = 'run' AND object_id = ? ORDER BY seq DESC LIMIT 1`,
+		candidateReadyKind, candidatePreparedKind, runID,
+	).Scan(&candRaw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	var c struct {
+		BaseSHA string `json:"base_sha"`
+		HeadSHA string `json:"head_sha"`
+	}
+	if err := json.Unmarshal(candRaw, &c); err != nil {
+		return false, err
+	}
+	return c.HeadSHA != "" && c.BaseSHA != "" && c.HeadSHA != c.BaseSHA, nil
 }

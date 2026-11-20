@@ -40,6 +40,14 @@ func (l *Loop) routeObstacle(ctx context.Context, d Decision, req run.Request, l
 	target := l.laneTarget(lane)
 	head := l.headOf(ctx, lane)
 	candidate := Candidate{ItemID: req.ItemID, LaneID: lane, RunID: req.RunID, TickID: tick, Worktree: target, BaseRef: l.lanePatchRef(lane), BaseSHA: l.settleBase(lane, mainSHA), HeadSHA: head}
+	if IsTrunkFixer(req.ItemID) && head == candidate.BaseSHA {
+		if resolved, err := l.resolveKeptFixerWithoutCommit(ctx, req.ItemID); err != nil {
+			return laneOutcome{err: err}, true
+		} else if resolved {
+			l.forgetSegment(req.RunID)
+			return laneOutcome{stop: l.abandon(ctx, lane, req.RunID, head, "resolved elsewhere: rerun passed")}, true
+		}
+	}
 	returnToWorker := func(detail, key string) laneOutcome {
 		candidate.RefusalDetail, candidate.EvidenceKey = detail, key
 		if err := l.refuse(ctx, candidate, result, RefusalNoOp); err != nil {
