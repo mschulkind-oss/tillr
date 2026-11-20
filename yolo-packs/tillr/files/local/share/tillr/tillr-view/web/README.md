@@ -3,8 +3,9 @@
 A browser for the loop's items, runs, passes and landings, read-only by default.
 With `tillr-view serve --write`, eligible Items-page rows offer “Move to top”;
 the server delegates placement to the item command, as described in the
-[write-route reference](../README.md#opt-in-item-placement). The current
-page layout follows the [observatory reference](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-redesign.md#entities-and-urls).
+[write-route reference](../README.md#opt-in-item-placement). The current page layout follows the [observatory reference](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-redesign.md#entities-and-urls),
+and its provenance badges, state glyphs, refusals, document pane, and invalidation rules follow
+[observatory truthfulness and shared primitives](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/observatory-design.md).
 It reads the `/api/v1/*` routes and posts placement only when writes are enabled;
 the browser never writes the store directly.
 
