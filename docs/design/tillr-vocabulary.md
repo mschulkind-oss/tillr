@@ -334,7 +334,7 @@ Each term has one meaning. A term owned by another document is linked, not redef
 | **The drain** | The program that moves items along their paths; "draining" is the queue emptying | Not one process | — |
 | **Loop** | One long-running process of the drain | Not a session | Its lifetime is called a "session" (`drain_sessions`) |
 | **Pass** | One review of the queue by the loop | Not a tick | "Tick" survives in a table and a column name |
-| **Generation** | The ordinal of a pass ([drain successor](./tillr-drain-successor.md)) | — | — |
+| **Generation** | The ordinal of a pass ([drain successor](../reference/tillr-drain-successor.md#generations-timing-and-the-trigger-loop)) | — | — |
 | **Dispatch** | Starting a node's run | Not a decision to start one | — |
 | **Backend policy; gate policy** | The file mapping seats to backends; the file of landing settings | "Policy" is never used bare; neither is the graph design's policy function | — |
 | **Gate plan; queue plan** | The list of checks a gate run will run; the graph design's queue-level node | "Plan" is never used bare | Also the loop's pass plan and `tillr drain plan` |

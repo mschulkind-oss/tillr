@@ -15,7 +15,7 @@ summary: "A proposal that every act on a tillr item (build, rewrite, design answ
 next: "The owner ruled OQ-GP7 on 2026-11-18: while a check is red, work lands only if it does not touch what that check reads, with no landing cap. The designer's decisions D-GP1 to D-GP15 await the owner's review (the waiting rule of D-GP14 is now ruled as OQ-GP7), and no migration step is filed."
 depends-on:
   - tillr-item-graphs.md
-  - tillr-drain-successor.md
+  - ../reference/tillr-drain-successor.md
   - gate-rework.md
   - landing-principles.md
 ---
@@ -36,7 +36,7 @@ depends-on:
 
 **Needs your ruling:** nothing now. **Ruled by the owner on 2026-11-18:** [OQ-GP7](#OQ-GP7). **Ruled by the owner on 2026-11-17:** [OQ-GP1](#OQ-GP1), [OQ-GP3](#OQ-GP3), [OQ-GP4](#OQ-GP4), [OQ-GP5](#OQ-GP5), [OQ-GP6](#OQ-GP6). **Closed as superseded:** [OQ-GP2](#OQ-GP2), which [the storage design](./tillr-storage.md) now asks.
 
-**Reads with:** [item graphs](./tillr-item-graphs.md) (the built graph machinery this extends and partly overturns), [the drain's successor function](./tillr-drain-successor.md) (the earlier pure function this splits in two), [the core and the landing definition](./tillr-core-and-git-landing.md) (why the rule table belongs to a definition), [the gate rework](./gate-rework.md) (the full-suite tier, the green pointer and the revert setting), [the landing principles](./landing-principles.md) (rulings a landing change is checked against), [early design landing](./tillr-early-design-landing.md) (how a question and its design reach the trunk ahead of their item), [the landing call](./tillr-landing-call.md) (how a worker states its ending), [the storage design](./tillr-storage.md) (the structure behind the store), [the vocabulary](./tillr-vocabulary.md) (one meaning for item, node, run, session and worktree; [Section 6](#6-scheduling) carries its text on worktrees).
+**Reads with:** [item graphs](./tillr-item-graphs.md) (the built graph machinery this extends and partly overturns), [the drain's successor function](../reference/tillr-drain-successor.md) (the earlier pure function this splits in two), [the core and the landing definition](./tillr-core-and-git-landing.md) (why the rule table belongs to a definition), [the gate rework](./gate-rework.md) (the full-suite tier, the green pointer and the revert setting), [the landing principles](./landing-principles.md) (rulings a landing change is checked against), [early design landing](./tillr-early-design-landing.md) (how a question and its design reach the trunk ahead of their item), [the landing call](./tillr-landing-call.md) (how a worker states its ending), [the storage design](./tillr-storage.md) (the structure behind the store), [the vocabulary](./tillr-vocabulary.md) (one meaning for item, node, run, session and worktree; [Section 6](#6-scheduling) carries its text on worktrees).
 
 ---
 
@@ -390,7 +390,7 @@ The rule table is the landing definition's, not the core's. The core owns the gr
 
 ### 5.7 Relation to the successor function
 
-[The drain's successor function](./tillr-drain-successor.md#21-the-function-and-its-inputs) is one pure function, `next`, that answers which single transition an item takes, or `none` with a hold. This design keeps its properties (total, deterministic, order-independent, no clock) and splits its job in two:
+[The drain's successor function](../reference/tillr-drain-successor.md#the-successor-function-and-derived-positions) is one pure function, `next`, that answers which single transition an item takes, or `none` with a hold. This design keeps its properties (total, deterministic, order-independent, no clock) and splits its job in two:
 
 | `next` answered | Now answered by |
 | :--- | :--- |
@@ -708,7 +708,7 @@ Each of these is an amendment owed in the document that holds the row, to be mad
 
 | Where | Row | What this design does |
 | :--- | :--- | :--- |
-| [The successor function](./tillr-drain-successor.md) | `D-DS1`, `D-DS6` | One transition per item per pass becomes: evaluate the function, apply its transformation |
+| [The successor function](../reference/tillr-drain-successor.md#why-its-this-way) | `D-DS1`, `D-DS6` | One transition per item per pass becomes: evaluate the function, apply its transformation |
 | | `D-DS2` | Identity by attempt ordinal becomes the node's identity |
 | | `D-DS4` | The `held` position and the hold vocabulary become waits |
 | | `D-DS10` | Kept |

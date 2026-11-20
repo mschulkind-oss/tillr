@@ -386,10 +386,9 @@ Also filed here: [a stopped loop says what stopped it](#filed-2026-11-15-the-obs
 
 ## 7. The drain's own model
 
-[Replace the drain tick with a converge function](../design/tillr-drain-successor.md) is built:
-all five of its steps had landed by 2026-11-18, the last retiring the tick's names. The design is
-still titled "successor function"; the owner's name for it is converge, and the document has not
-been renamed.
+[Replace the drain tick with a converge function](../reference/tillr-drain-successor.md) graduated to a system reference:
+all five of its steps had landed by 2026-11-18, the last retiring the tick's names. The reference is
+titled "Drain Pass and Successor Reference"; the owner's name for the step is converge.
 
 ## 8. Design work that keeps its context
 
@@ -1491,7 +1490,7 @@ missing rather than report that the change failed verification.
 
 ## Filed 2026-11-15: the documents are part of the world the loop converges on
 
-[The drain's successor design](../design/tillr-drain-successor.md#21-the-function-and-its-inputs)
+[The drain's successor reference](../reference/tillr-drain-successor.md#the-successor-function-and-derived-positions)
 makes each pass a function of durable facts. Two facts are still read once, when the loop starts:
 the item blocks in the documents, and the open questions. A block committed while the loop runs is
 not seen until someone runs the sync by hand, which happened five times on 2026-11-15.

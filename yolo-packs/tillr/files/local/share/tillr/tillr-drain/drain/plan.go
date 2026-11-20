@@ -1,3 +1,4 @@
+// Architecture and invariants: docs/reference/tillr-drain-successor.md
 package drain
 
 import (

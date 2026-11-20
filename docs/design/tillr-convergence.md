@@ -14,7 +14,7 @@ next: "Build the two D-TC3 units at the end of Section 4 (written without hidden
 depends-on:
   - queue-persistence-ruling.md
   - landing-principles.md
-  - tillr-drain-successor.md
+  - ../reference/tillr-drain-successor.md
   - momentum-principle.md
 vantage:
   status-chip: true
@@ -86,7 +86,7 @@ the [Decision Ledger](#decision-ledger) remain open to the owner's review and ov
 two commits this design executes first), [`tillr-queue-mirrors-designs.md`](tillr-queue-mirrors-designs.md)
 (the 2026-11-18 ruling on [`OQ-QM1`](tillr-queue-mirrors-designs.md#OQ-QM1) retiring hidden item
 comments in favor of companion `<topic>-plan.md` files once built), [`landing-principles.md`](landing-principles.md) (the
-principles named here as unenforced), [`tillr-drain-successor.md`](tillr-drain-successor.md) (the
+principles named here as unenforced), [`tillr-drain-successor.md`](../reference/tillr-drain-successor.md) (the
 loop model the hold classes project onto), [`tillr-claude-backend.md`](tillr-claude-backend.md)
 (the harness a seat may name in [Section 3.5](#35-a-seat-names-its-harness-and-the-harness-names-the-model)), and
 [`failure-diagnosed-not-waited-out.md`](failure-diagnosed-not-waited-out.md) (the mechanism

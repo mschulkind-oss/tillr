@@ -168,7 +168,7 @@ therefore keeps the designer's row. Retirement deletes only that row, not its tr
 
 ## Pass observations and report identity
 
-The [successor design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-drain-successor.md#25-one-pass-what-it-advances-and-what-bounds-it)
+The [drain successor reference](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-drain-successor.md#one-pass-and-compare-and-swap-application)
 defines the item's positions and transitions. Each plan record prints `position` and
 `transition`: `dispatch`, `retry`, `settle`, or `judge` when work can advance, and `none`
 with a `reason` otherwise. Item holds and resource deferrals (`no-lane`, `fork-held`)
@@ -182,7 +182,7 @@ offered in lane-id order. Callers may still supply those fields for a simulation
 The live loop supplies no cap: lane leases bound dispatches.
 
 An applied pass receives a store-counted **generation**, the ordinal defined by the
-[trigger design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-drain-successor.md#44-s4--the-trigger-wait-replaces-the-ticks-clock).
+[trigger and generation model](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-drain-successor.md#generations-timing-and-the-trigger-loop).
 An empty pass allocates none. Requests carry that generation as their correlation.
 Timing measurements live in `drain_passes`, with the existing `tick_id` column
 carrying the generation. On write-open, historical `drain_ticks` rows are copied
