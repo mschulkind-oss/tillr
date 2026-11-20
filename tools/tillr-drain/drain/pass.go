@@ -457,7 +457,7 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 			workCopy := *work
 			request := *d.RunRequest
 			if !evaluatorNode(d) {
-				request.RunID += "-restart"
+				request.RunID = markRunID(request.RunID, "restart")
 			}
 			d.RunRequest = &request
 			d.WorkflowRestart = true

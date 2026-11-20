@@ -429,6 +429,9 @@ func (l *Loop) settleParallel(ctx context.Context, work *pendingWork, result *Lo
 					continue
 				}
 				outcome = "fault"
+			case class == AttemptRefused:
+				stop, e := l.holdAdapterRefusal(ctx, node.LaneID, *node.RunRequest, log)
+				return laneOutcome{stop: stop, err: e}
 			case class == AttemptInfrastructure || !readableFooter(reportFooter(log)):
 				// No footer, or one naming no ending, is no answer: this reader alone runs
 				// again and its finished siblings are kept.

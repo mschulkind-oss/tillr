@@ -277,8 +277,8 @@ func TestARepeatingWorkflowNodeStartsFreshThenFailsOverThenHolds(t *testing.T) {
 		backend []string
 	}{
 		{1, []string{"run-item-a-a1-n1", "run-item-a-a1-n1-fresh"}, []string{"fixture", "fixture"}},
-		{2, []string{"run-item-a-a1-n1", "run-item-a-a1-n1-fresh", "run-item-a-a1-n1-fresh-failover"}, []string{"fixture", "fixture", "alternate"}},
-		{3, []string{"run-item-a-a1-n1", "run-item-a-a1-n1-fresh", "run-item-a-a1-n1-fresh-failover"}, []string{"fixture", "fixture", "alternate"}},
+		{2, []string{"run-item-a-a1-n1", "run-item-a-a1-n1-fresh", "run-item-a-a1-n1-002-failover"}, []string{"fixture", "fixture", "alternate"}},
+		{3, []string{"run-item-a-a1-n1", "run-item-a-a1-n1-fresh", "run-item-a-a1-n1-002-failover"}, []string{"fixture", "fixture", "alternate"}},
 	} {
 		t.Run(strconv.Itoa(tc.repeat), func(t *testing.T) {
 			f, l, steps := repeatingNodeFixture(t, tc.repeat)

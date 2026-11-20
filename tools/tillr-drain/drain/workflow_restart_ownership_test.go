@@ -67,7 +67,7 @@ func TestWorkflowRestartTwiceBeforeRestagingKeepsOwnership(t *testing.T) {
 	deadOwnerClaim(t, f, next, p)
 	again := replaceGraphLoop(t, f, next, steps)
 	graphPass(t, again, result)
-	if len(steps.runs) != 1 || steps.runs[0].RunID != "run-item-a-a1-n1-restart-restart" || strings.Contains(runGit(t, target, "ls-files"), "unfinished.txt") {
+	if len(steps.runs) != 1 || steps.runs[0].RunID != "run-item-a-a1-n1-002-restart" || strings.Contains(runGit(t, target, "ls-files"), "unfinished.txt") {
 		t.Fatalf("staging ownership lost across repeated restart: %+v %+v", steps.runs, result)
 	}
 }

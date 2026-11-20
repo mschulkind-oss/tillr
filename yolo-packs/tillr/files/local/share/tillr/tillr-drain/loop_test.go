@@ -2256,3 +2256,60 @@ func TestARedGatePinsTheHeadAndFreezesNoVerdict(t *testing.T) {
 		t.Fatalf("a red gate froze a failing verdict: %v", runs)
 	}
 }
+
+// refusingAdapter is a stub adapter that refuses the way backends/preflight.sh does: its
+// own words on stderr, then exit 2, before any model runs.
+const refusingAdapter = counting + `echo 'run-pi: refused: the brief carries an unfilled template placeholder' >&2
+exit 2
+`
+
+// An adapter's refusal of a brief is the brief's fault, not the backend's: one refusal holds
+// its item with the adapter's words and the operator as mover, counts no backend failure,
+// closes no backend, and stages no second run. The second item still dispatches, which a
+// closed backend would not allow.
+func TestAnAdapterRefusalHoldsTheItemWithTheAdaptersWords(t *testing.T) {
+	f := newLoopFixture(t, stub(t, "adapter", refusingAdapter))
+	fixtureAt(t, f.store,
+		itemRecord("item_041", "in-queue"),
+		itemRecord("item_042", "in-queue"),
+	)
+	gate := always(t, "gate", 0)
+	land := always(t, "land", 0)
+	verdict := always(t, "verdict", 0)
+	var report strings.Builder
+
+	loop := f.newLoopWith(t, 1, f.steps(t, gate, land, verdict),
+		passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}}, &report)
+	result, err := loop.Run(context.Background())
+	if err != nil {
+		t.Fatalf("the loop failed: %v", err)
+	}
+	if result.InfraFailures != 0 {
+		t.Fatalf("an adapter refusal counted %d backend failure(s)", result.InfraFailures)
+	}
+	if got := countMatching(lines(t, f.count), "adapter"); got != 2 {
+		t.Fatalf("the adapter ran %d time(s), want one run per item and no second run: %v", got, lines(t, f.count))
+	}
+	if strings.Contains(report.String(), "failover") || strings.Contains(report.String(), "infrastructure class") {
+		t.Fatalf("the loop failed over or called the refusal infrastructure: %s", report.String())
+	}
+	reader, err := store.OpenRead(context.Background(), f.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	var held map[string]drain.ItemFault
+	if err := reader.ReadTx(context.Background(), func(r *store.Reader) error {
+		var err error
+		held, err = drain.ReadItemFaults(r)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"item_041", "item_042"} {
+		fault, ok := held[id]
+		if !ok || fault.Reason != drain.ReasonAdapterRefused || fault.Detail != "the brief carries an unfilled template placeholder" {
+			t.Fatalf("%s hold = %+v (found %v), want %s carrying the adapter's words", id, fault, ok, drain.ReasonAdapterRefused)
+		}
+	}
+}

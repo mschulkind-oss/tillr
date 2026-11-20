@@ -74,10 +74,11 @@ check_wall() {
 # filled: the template (backends/brief-template.md) is what must be filled, and the refusal
 # names it. A literal `{{` that is not a placeholder came in through an item's own field —
 # the title, the body reference, a criterion or an allowed path — and the template is fine,
-# so the refusal says the record is what must be fixed. Staging refuses that case before a
-# brief is written, with the field named (drain's renderBrief); this is the adapter's own
-# backstop for a brief that reached it some other way, and it must not send an operator to
-# edit a template that is not at fault.
+# so the refusal says the record is what must be fixed. Staging carries an item's own `{{`
+# intact and states how many it carries in the lane's `brace-literals` file; only pairs
+# beyond that count are refused, so this is the adapter's backstop for a brief that reached
+# it some other way, and it must not send an operator to edit a template that is not at
+# fault.
 preflight_brief() {
     if [ ! -s "$1" ]; then
         refuse "the brief '$1' is missing or empty: staging writes it from backends/brief-template.md before launch"
@@ -102,10 +103,20 @@ preflight_brief() {
         in_recorded && /^>/ { next }
         { print }
     ')
-    if printf '%s\n' "$checked_template" | grep -q '{{[A-Z][A-Z0-9_]*}}'; then
-        refuse "the brief '$1' still carries an unfilled template placeholder ('{{NAME}}'): the template backends/brief-template.md is the thing to fix, and an unfilled template is not a brief"
+    # Staging states in `brace-literals` how many `{{` pairs the brief carries on purpose,
+    # because they are the item's own text and are carried intact. Without that file the
+    # count is zero, and any pair is refused as before.
+    allowed=0
+    literals=$(lane_path "$1" brace-literals)
+    if [ -r "$literals" ]; then
+        allowed=$(tr -dc '0-9' < "$literals")
+        allowed=${allowed:-0}
     fi
-    if printf '%s\n' "$checked_template" | grep -q '{{'; then
+    found=$(printf '%s\n' "$checked_template" | grep -o '{{' | wc -l)
+    if [ "$found" -gt "$allowed" ]; then
+        if printf '%s\n' "$checked_template" | grep -q '{{[A-Z][A-Z0-9_]*}}'; then
+            refuse "the brief '$1' still carries an unfilled template placeholder ('{{NAME}}'): the template backends/brief-template.md is the thing to fix, and an unfilled template is not a brief"
+        fi
         refuse "the brief '$1' carries a literal '{{' that is not a template placeholder: it arrived in an item field (the title, the body reference, a criterion or an allowed path), so the item's record is the thing to fix and backends/brief-template.md is not"
     fi
     headings=$REQUIRED_HEADINGS

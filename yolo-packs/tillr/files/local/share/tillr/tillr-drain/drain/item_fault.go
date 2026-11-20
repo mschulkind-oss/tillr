@@ -7,6 +7,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/faults"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -29,6 +30,11 @@ const (
 	// ReasonSettleFailed holds an item whose run could not be settled: an error while
 	// settling one run is that item's condition, not the loop's.
 	ReasonSettleFailed = "settle-failed"
+	// ReasonAdapterRefused holds an item whose run an adapter refused before any model ran
+	// (`<adapter>: refused: <reason>`, exit 2). The adapter's words are the hold's detail
+	// and the operator is the mover: the brief or the environment is what to fix, so no
+	// backend is closed, none is failed over to, and no second run is staged.
+	ReasonAdapterRefused = "adapter-refused"
 )
 
 func init() {
@@ -180,4 +186,15 @@ func syncClearVersion(r *store.Reader) (int64, error) {
 	var seq int64
 	err := r.QueryRow(`SELECT COALESCE(MAX(seq),0) FROM events WHERE kind=? AND json_extract(payload,'$.reason')=?`, itemFaultClearedKind, ReasonDefinitionSyncFailed).Scan(&seq)
 	return seq, err
+}
+
+// holdAdapterRefusal holds the item whose run an adapter refused before any model ran, with
+// the adapter's own words as the reason, and settles the lane. It counts no backend failure.
+func (l *Loop) holdAdapterRefusal(ctx context.Context, lane string, request run.Request, log string) (string, error) {
+	words, _ := AdapterRefusal(log)
+	c := Candidate{ItemID: request.ItemID, LaneID: lane, RunID: request.RunID}
+	if err := l.holdItemFault(ctx, c, ReasonAdapterRefused, words); err != nil {
+		return "", err
+	}
+	return l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "adapter refused the brief"), nil
 }

@@ -329,7 +329,7 @@ func (l *Loop) stagedNodeRun(d Decision) (string, error) {
 	if d.NodeStartRunID != "" {
 		return d.NodeStartRunID, nil
 	}
-	for id := d.RunRequest.RunID; ; {
+	for _, id := range append([]string{d.RunRequest.RunID}, runIDAncestors(d.RunRequest.RunID)...) {
 		_, err := os.Stat(filepath.Join(RunDir(l.cfg.Root, id), BaseSHAFile))
 		if err == nil {
 			return id, nil
@@ -337,15 +337,8 @@ func (l *Loop) stagedNodeRun(d Decision) (string, error) {
 		if !os.IsNotExist(err) {
 			return "", err
 		}
-		switch {
-		case strings.HasSuffix(id, "-restart"):
-			id = strings.TrimSuffix(id, "-restart")
-		case strings.HasSuffix(id, "-interrupted"):
-			id = strings.TrimSuffix(id, "-interrupted")
-		default:
-			return "", nil
-		}
 	}
+	return "", nil
 }
 
 // recordStagedNode retains proof that this node was staged. The first node's
@@ -653,6 +646,13 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		}
 		if ClassifyAttempt(rec, log) == AttemptInterrupted && !offered {
 			return true, l.restartInterruptedNode(ctx, d, base, rec)
+		}
+		if ClassifyAttempt(rec, log) == AttemptRefused {
+			stop, err := l.holdAdapterRefusal(ctx, d.LaneID, *d.RunRequest, log)
+			if err == nil && stop != "" {
+				err = retainedAfter(d.LaneID, stop)
+			}
+			return true, err
 		}
 		if ClassifyAttempt(rec, log) == AttemptInfrastructure || (rec.State == run.StateExited && !readableFooter(footer)) {
 			return true, l.retryWorkflowNode(ctx, d, base, rec, result)

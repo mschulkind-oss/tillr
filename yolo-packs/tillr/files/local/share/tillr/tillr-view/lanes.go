@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/faults"
+	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -53,6 +55,17 @@ type laneRow struct {
 	// rotation (drain.lane-refused with no later drain.lane-restored). It is omitted for a
 	// lane in rotation.
 	Condition *laneCondition `json:"condition,omitempty"`
+	// Hold is the standing refusal an adapter made of this lane's run before any model ran
+	// (an item fault with reason adapter-refused, naming this run). Detail is the adapter's
+	// own words; Mover is the operator's act. It is omitted for a run nothing refused.
+	Hold *laneHold `json:"hold,omitempty"`
+}
+
+type laneHold struct {
+	Reason string `json:"reason"`
+	Detail string `json:"detail"`
+	Mover  string `json:"mover"`
+	AtMS   int64  `json:"at_ms"`
 }
 
 type laneAction struct {
@@ -155,6 +168,11 @@ func printLanes(w io.Writer, rows []laneRow) error {
 		}
 		if _, err := fmt.Fprintf(w, "%s · %s since %s · %s · %s · %s · attempt %d · %s · %s · last finished %s · %s (%s, %s) @ %s\n", row.LaneID, row.State, since, row.ItemID, row.Seat, row.Backend, row.Attempt, row.RunID, row.Outcome, step, action, row.LatestAction.Kind, row.LatestAction.Clock, at); err != nil {
 			return err
+		}
+		if h := row.Hold; h != nil {
+			if _, err := fmt.Fprintf(w, "  held since %s: %s: %s. Mover: %s\n", time.UnixMilli(h.AtMS).UTC().Format(time.RFC3339), h.Reason, h.Detail, h.Mover); err != nil {
+				return err
+			}
 		}
 		if c := row.Condition; c != nil {
 			if _, err := fmt.Fprintf(w, "  out of rotation since %s: %s: %s. Remedy: %s\n", time.UnixMilli(c.AtMS).UTC().Format(time.RFC3339), c.Reason, c.Detail, c.Remedy); err != nil {
@@ -284,6 +302,16 @@ func assembleLanesCounted(r *store.Reader, loop, lanes string, now time.Time, st
 	for i := range rows {
 		if c, ok := conditions[rows[i].LaneID]; ok {
 			rows[i].Condition = &c
+		}
+	}
+	itemFaults, err := faults.Read(r)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		f, ok := itemFaults[rows[i].ItemID]
+		if ok && f.Reason == "adapter-refused" && f.RunID == rows[i].RunID {
+			rows[i].Hold = &laneHold{Reason: f.Reason, Detail: f.Detail, Mover: holdrules.For(f.Reason).Mover, AtMS: f.AtMS}
 		}
 	}
 	return rows, nil

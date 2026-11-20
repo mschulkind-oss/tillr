@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -616,6 +617,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		{ItemFenceFile, fenceText(itemAllowed)},
 		{SessionIDFile, sessionID + "\n"},
 		{endingCapabilityFile, capability + "\n"},
+		{braceLiteralsFile, strconv.Itoa(braceLiteralCount(brief)) + "\n"},
 	}
 	if spec.BlockConflict != nil {
 		files = append(files, stagedFile{"conflict.json", mustJSON(spec.BlockConflict) + "\n"})
@@ -1085,35 +1087,40 @@ func (v briefValues) byName() map[string]string {
 	return values
 }
 
-// carriesABracePair answers the first value that carries a literal two-character brace pair,
-// as the placeholder that carries it, the item field it came from (empty for a run fact) and
-// whether one was found.
-func (v briefValues) carriesABracePair() (string, string, bool) {
-	for _, field := range itemFieldOrder {
-		for _, value := range v {
-			if value.field == field && strings.Contains(value.text, "{{") {
-				return value.placeholder, field, true
-			}
-		}
+// braceLiteralsFile is the lane file that tells an adapter's preflight how many `{{` pairs
+// the staged brief carries on purpose, because they are the item's own text.
+const braceLiteralsFile = "brace-literals"
+
+var savedWordsHeading = regexp.MustCompile(`(?m)^## Saved (idea|request) words \(verbatim; [0-9]+ bytes\)$`)
+
+// braceLiteralCount counts the `{{` pairs the adapter's preflight will see in a brief: those
+// before the saved-words suffix, outside the quoted lines of the recorded sections. It is the
+// same text preflight.sh checks, so what staging states is what the adapter counts.
+func braceLiteralCount(brief string) int {
+	if loc := savedWordsHeading.FindStringIndex(brief); loc != nil {
+		brief = brief[:loc[0]]
 	}
-	for _, value := range v {
-		if strings.Contains(value.text, "{{") {
-			return value.placeholder, "", true
+	count, recorded := 0, false
+	for _, line := range strings.Split(brief, "\n") {
+		switch {
+		case line == "## Answered owner questions" || line == "## Retry reasons":
+			recorded = true
+		case strings.HasPrefix(line, "## "):
+			recorded = false
+		case recorded && strings.HasPrefix(line, ">"):
+			continue
 		}
+		count += strings.Count(line, "{{")
 	}
-	return "", "", false
+	return count
 }
 
 // renderBrief fills the template's placeholders and answers the brief.
 //
-// Three refusals make the result safe to launch, and the first two are different faults
-// that used to be one message. A placeholder the values do not carry is an unfilled
-// template, refused by name. A brace pair the template itself carries outside its
-// placeholders is also the template's fault, and is refused naming the template. A brace
-// pair that arrived in an item's own field is the record's fault, and is refused as an
-// ItemContentError naming the item and the field: the template is fine, and what an
-// operator has to edit is the record. The third refusal is what the loop reads to hold one
-// item instead of backing the whole queue off (loop.go).
+// Two refusals make the result safe to launch. A placeholder the values do not carry is an
+// unfilled template, refused by name. A brace pair the template itself carries outside its
+// placeholders is the template's fault, and is refused naming the template. A brace pair in
+// a value is the item's own text and is carried intact (see braceLiteralsFile).
 //
 // The template's specimens of a form this brief is not (its commented main-checkout header
 // block, which carries placeholders of its own) are dropped before filling, because a
@@ -1155,22 +1162,13 @@ func renderBriefWithEnding(templatePath, itemID string, values briefValues, capa
 	if strings.Contains(placeholder.ReplaceAllString(body, ""), "{{") {
 		return "", Externalf("the brief template %s carries a '{{' that is not one of its placeholders: the template is the thing to fix, not the item, and a brief is refused rather than launched with an unfilled placeholder", templatePath)
 	}
-	if name, field, found := values.carriesABracePair(); found {
-		if field == "" {
-			return "", Externalf("the brief rendered from %s carries a '{{' in the value for %s, which staging derived from this run rather than from item %s: the run's own facts are the thing to fix",
-				templatePath, name, itemID)
-		}
-		return "", ItemContentf(itemID, field, "item %s: its %s field carries a literal '{{' (a two-character brace pair), which a brief cannot carry. The template is fine, so the record is the thing to fix: edit the item's %s and dispatch it again",
-			itemID, field, field)
-	}
+	// A brace pair in a value is carried intact: the substitution below is one pass, so text
+	// that looks like a placeholder is never filled again. Staging records how many such pairs
+	// the brief carries (braceLiteralsFile), which is how the adapter's preflight tells them
+	// from an unfilled placeholder.
 	rendered := placeholder.ReplaceAllStringFunc(body, func(found string) string {
 		return provided[placeholder.FindStringSubmatch(found)[1]]
 	})
-	if strings.Contains(rendered, "{{") {
-		// Every value and the template's residue were checked above, so this is a bug in the
-		// renderer rather than a fact about the item or the template.
-		return "", Internalf("the brief rendered from %s still carries a '{{' that neither the template's residue nor any value accounted for", templatePath)
-	}
 	return rendered, nil
 }
 
