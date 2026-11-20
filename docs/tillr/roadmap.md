@@ -1469,6 +1469,26 @@ missing rather than report that the change failed verification.
   A publisher that refused a branch differing from the record would refuse every push made
   between a lane's export and that lane's landing, because the branch moves at export and the
   record reaches the trunk only when the lane lands.
+- **Initial pins (designer's decision, 2026-11-20; the owner may overturn it):** Keep the
+  delivery commits selected in the thirteenth run. That run could fetch the older advertised
+  todo-list commit but got `upload-pack: not our ref` for the repaired one. The older commit
+  does not build; fetching it proves connectivity, not that the required input is available.
+  Before retrying the build, the host operator must make these exact inputs fetchable from
+  the pack locator, using the [existing publication procedure](../pi/patch-branches/published.md)
+  (`bin/patch-branches-publish`) if needed:
+
+  ```text
+  git@github.com:mschulkind-oss/tillr
+  patch/pi                   24c7e4f89e08740a99271379314b8eba67321a31
+  patch/pi-manage-todo-list  6e1b6bdd1a2a480dcb98d213b9dd9953a87bfe41
+  patch/pi-subagents         6daa160be67be20ca344c0414b3f79a9585b6df6
+  ```
+
+  Verify each by fetching its object ID from that remote into an empty repository. If all
+  three fetches succeed, retry without moving any refs. If one still fails, report the
+  commit and remote as `could not judge` (exit 4) and leave publication to the host operator.
+  The lane must not push, substitute an older tip or a local cache for this proof, or change
+  the locator. Fixture tests cover c2–c4; they do not prove the delivery has been published.
 - **Existing test cases (2026-11-18, answers the sixth run's report of blocked):** The fork export
   tests run the scenario files under [their cases directory](../../tests/pi-forks/), so those
   files, [their shared library](../../tests/pi-forks/lib.sh),
