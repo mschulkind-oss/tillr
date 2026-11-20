@@ -1737,6 +1737,17 @@ reclaims a lane that is leased with no expiry to a run whose examination is reco
 when no examination in this loop holds the lane, its examiner is absent, dead or this loop,
 and its run face is gone. The reap prints one `loop: reclaimed lane ...` line for it.
 
+The same reap covers a paused run whose continuation died. A `run.resume` event clears the
+run's dispatch owner and leases the lane with no expiry, so when a restart kills the loop
+and the continuation's run face together, the run's last event is the resume, its row still
+reads `paused`, and no owner's death could release the lane. The item then planned as a
+`no-lane` hold on its own lease for as long as the store lasted (four lanes, 2026-11-19).
+A pass's reap now reclaims that lane, with the cause `reap`, when the run's last
+`run.resume` or `run.finish` event is a resume, no examination in this loop holds it and
+its run face is gone, in this process namespace or by its stream files in another. The
+paused record is left as it was, so the next plan settles the run and resumes it again.
+`TestAResumedRunWhoseFaceDiedWithoutAnEndIsSettledAndResumedByTheNextPass` builds that state.
+
 An examination that ended in a refusal (a `drain.refusal` at the land, gate, fence, no-op
 or node-output step, after the run's latest candidate, assignment or retirement record)
 has already released and recut its lane. When the loop stops between that refusal and the
