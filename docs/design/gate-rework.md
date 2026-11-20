@@ -621,7 +621,7 @@ built by `just tillr-build`.
 
 **Pushing reads the pointer too.** Under `push.what = "green"` the drain loop pushes the pointer's
 commit to the remote branch when the pointer advances, so the remote never receives a commit the
-proof has not passed. [Pushing what the proof has passed](tillr-restart.md#pushing-what-the-proof-has-passed)
+proof has not passed. [Pushing what the proof has passed](../reference/tillr-restart.md#pushing-what-the-proof-has-passed)
 is the reference.
 
 One path is outside this rule and is named so nobody assumes otherwise: the pack's rendered copy

@@ -1,5 +1,7 @@
 package drain
 
+// Architecture and invariants: docs/reference/tillr-restart.md
+
 import (
 	"context"
 	"errors"

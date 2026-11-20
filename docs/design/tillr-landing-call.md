@@ -359,7 +359,7 @@ The `land` tool itself is not a fork patch. It is a tillr extension beside `keep
 
 ### 6.6 Delivery, and how the drain knows
 
-A fork patch reaches a running jail only through the delivery path [the repository guide](../../AGENTS.md) describes for a patch-branch fork: export the lane's commits to `patch/pi`, check, lint the pack, commit, push (the pre-push hook publishes the branch), let the host's next launch build it, apply on the host, and relaunch. The replay commit itself has not made that trip: on 2026-11-18 this repository's `patch/pi` was four commits ahead of the tracked remote branch, the replay commit and the park patch among them, and [the restart design](./tillr-restart.md) records that the installed pi is built from the remote branch.
+A fork patch reaches a running jail only through the delivery path [the repository guide](../../AGENTS.md) describes for a patch-branch fork: export the lane's commits to `patch/pi`, check, lint the pack, commit, push (the pre-push hook publishes the branch), let the host's next launch build it, apply on the host, and relaunch. The replay commit itself has not made that trip: on 2026-11-18 this repository's `patch/pi` was four commits ahead of the tracked remote branch, the replay commit and the park patch among them, and [the restart reference](../reference/tillr-restart.md#pushing-what-the-proof-has-passed) records that the pre-push hook publishes local `patch/*` branches to the remote branch that host builds read.
 
 **What must be true on the host before the switch:**
 

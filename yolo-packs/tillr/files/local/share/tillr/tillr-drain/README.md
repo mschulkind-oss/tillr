@@ -1067,7 +1067,7 @@ shows in `tillr view waiting`, holds nothing, and is retried at the next green a
 at loop start) because "remote is behind green" is recomputed each time. `what = "tip"` pushes
 the trunk tip after each landing instead; `"none"` pushes nothing. The pre-push hook runs, and
 it publishes fork patch branches at their local tips whatever the pushed commit is; see
-[Pushing what the proof has passed](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-restart.md#pushing-what-the-proof-has-passed).
+[Pushing what the proof has passed](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-restart.md#pushing-what-the-proof-has-passed).
 
 A push the remote refuses because it has moved (porcelain status `[rejected]` with `fetch first`,
 `non-fast-forward` or `stale info`) is told apart from every other failure (a server decline,

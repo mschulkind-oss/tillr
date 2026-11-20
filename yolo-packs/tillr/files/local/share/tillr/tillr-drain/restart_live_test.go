@@ -1,8 +1,8 @@
 package main_test
 
 // The restart protocol against real processes: a built loop, the real run face and pi
-// adapter, and a stub harness in place of the model (docs/design/tillr-restart.md,
-// "Add a restart request that replaces the loop in place").
+// adapter, and a stub harness in place of the model (docs/reference/tillr-restart.md,
+// "Replacing the loop and observatory in place").
 
 import (
 	"encoding/json"

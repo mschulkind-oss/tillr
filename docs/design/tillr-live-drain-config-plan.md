@@ -11,7 +11,7 @@ depends-on:
   - ./tillr-live-drain-config.md#OQ-LD4
 related:
   - ./tillr-live-drain-config.md
-  - ./tillr-restart.md
+  - ../reference/tillr-restart.md
   - ./tillr-vocabulary.md
 ---
 

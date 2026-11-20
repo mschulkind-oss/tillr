@@ -2,8 +2,9 @@ package restart
 
 // Package restart is the restart protocol both long-running roles share: a request is a
 // store fact addressed to a role, an answer is another fact naming the request and both
-// builds, and the newest request is the only one that is acted on
-// (docs/design/tillr-restart.md, "The roll, step by step"). It is a package of its own,
+// builds, and the newest request is the only one that is acted on.
+// Architecture and invariants: docs/reference/tillr-restart.md
+// It is a package of its own,
 // with no dependency on the drain package, because the observatory server imports it and
 // must not pull in the loop. The loop's own steps (what it stops starting, when it
 // replaces itself) are in drain/restart.go.
