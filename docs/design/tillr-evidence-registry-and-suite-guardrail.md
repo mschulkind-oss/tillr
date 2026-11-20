@@ -7,7 +7,7 @@ stage: DESIGN
 stage-since: 2026-11-20
 tags: [tillr, gate, drain, evidence, guardrails, testing]
 summary: "One input-bound evidence registry shared by the gate, trunk proof, and worker briefs so runs trust established results instead of re-deriving them, paired with a two-seam guardrail stopping lane workers from running whole module suites."
-next: "Rule OQ-ER1 through OQ-ER3 so the companion plan seed can split into build slices"
+next: "Rule OQ-ER1 so the companion plan seed can split into build slices"
 related:
   - ./tillr-evidence-registry-and-suite-guardrail-plan.md
   - ./tillr-lane-shims.md
@@ -24,7 +24,7 @@ vantage:
 
 # Evidence Registry and Whole-Suite Lane Guardrail
 
-**Status:** 2026-11-20 — proposed to the owner's direction of 2026-11-20; nothing built. Three open questions ([OQ-ER1](#OQ-ER1), [OQ-ER2](#OQ-ER2), [OQ-ER3](#OQ-ER3)) wait on the owner; eight designer's decisions (`D-ER1` to `D-ER8`) await his review in [the Decision Ledger](#decision-ledger). Companion implementation seed: [tillr-evidence-registry-and-suite-guardrail-plan.md](./tillr-evidence-registry-and-suite-guardrail-plan.md).
+**Status:** 2026-11-20 — proposed to the owner's direction of 2026-11-20; nothing built. Only [OQ-ER1](#OQ-ER1) remains open; the owner ruled option A for [OQ-ER2](#OQ-ER2) and [OQ-ER3](#OQ-ER3) on 2026-11-20 at about 6:00 PM ET. Eight designer's decisions (`D-ER1` to `D-ER8`) await his review in [the Decision Ledger](#decision-ledger). Companion implementation seed: [tillr-evidence-registry-and-suite-guardrail-plan.md](./tillr-evidence-registry-and-suite-guardrail-plan.md).
 
 ---
 
@@ -190,7 +190,7 @@ Under the unified registry:
 
 - **Immediate quarantine from pass reuse:** whenever **both** `<fingerprint>.pass.json` and `<fingerprint>.fail.json` (or `.invalid.json`) exist for the same `fingerprint`, that `fingerprint` is **contradicted** (`memory: "contradicted"`). Neither `tillr-gate` nor `HeavyRunner` may reuse `.pass.json` for that `fingerprint`; the check executes live until its inputs change to a new `fingerprint`.
 - **Forensic preservation and telemetry:** both `.pass.json` and `.fail.json` remain on disk with their `run_id`, `observed_at`, and `log_path`, and the runner emits a `gate.evidence-contradicted` event naming the check ID, `fingerprint`, failing case, and both logs.
-- **Defect filing policy:** whether a contradicted `fingerprint` also automatically files a deduplicated `flaky-<check-id>` repair item under `D-GR17` ("a test that fails or hangs under load is a broken test") or surfaces an operator warning only is left to the owner in [OQ-ER3](#OQ-ER3).
+- **Defect filing policy:** when a pass and a failure share a fingerprint, file a `flaky-<check-id>` repair item with the `.fail.json` case and both logs. If that check ID already has an open repair item for the flake, do not file another. Under `D-GR17` ("a test that fails or hangs under load is a broken test"), an intermittent failure is a real defect. The repair item does not hold unrelated landings ([OQ-ER3](#OQ-ER3), option A).
 
 ### 4.3 When targeted worker reproduction disagrees with a recorded failure
 
@@ -324,7 +324,7 @@ When a whole-suite lane run *is* authorized, the mechanism works through a loop-
 - Written only by `tillr-drain` (outside `TILLR_RUN_ID`), naming `{module, max_runs: 1, reason, granted_by}`.
 - Read by `tools/go-test-shards.py` (never opening unpooled `go test ./...`, always enforcing `--slot-class ordinary`, and recording usage in `.tillr/loop/<TILLR_RUN_ID>/suite-grants-used.jsonl` so a `max_runs: 1` grant cannot be spent twice in one run).
 
-Whether lane workers should have **no** self-service whole-suite runs (relying on `go test -exec true ./...` + `tillr-gate` return, with `suite-grants.json` reserved for operator/item grants), an obstacle-requested grant, or a diff-gated one-shot allowance is an owner policy decision in [OQ-ER2](#OQ-ER2).
+**Whole-suite runs are never self-served in lanes** ([OQ-ER2](#OQ-ER2), option A). Workers use `go test -exec true ./...` for whole-module compile checks and rely on `tillr-gate` with warm-session return for full suites. `suite-grants.json` is reserved for explicit item/operator grants only.
 
 ### 7.5 How refusals are recorded for the operator (`D-ER8`)
 
@@ -352,42 +352,12 @@ Refusal telemetry shares the exact stream and no-SQLite-index contract settled i
 
    > _(empty — fill in when decided)_
 
-2. 💬 **OQ-ER2: How, if at all, may a lane worker run a whole module suite on a broad cross-cutting change?**
-
-   In [Section 7.3](#73-what-the-refusal-tells-the-worker-to-do-instead-d-er6-d-er7) and [Section 7.4](#74-the-broad-change-exception-and-how-it-is-granted-oq-er2), `go test -exec true ./...` checks whole-module compilation in ~1.5 s with zero test slots, and `tillr-gate` runs affected suites once with reserved slot priority and returns named failing tests (`fc5cd652a`) to the same warm worker session without counting an attempt. In `fixer-main-1a02e657069a` (`[unlanded]` reverted trunk tip), the pre-commit whole-suite run after editing waited 33 minutes for slots, only for the gate to run the suite again.
-
-   - **A — Never self-served in lanes; rely on `go test -exec true ./...` plus the landing gate's warm-session return, with `suite-grants.json` reserved for explicit operator or item grants (`tillr item grant`).** Eliminates both pre-edit and pre-commit whole-suite slot waits in lanes completely; a distant behavioral regression on a broad refactor costs one warm-session gate return instead of running every broad item's suite twice.
-   - **B — Let a worker request a one-shot `go-test-shards.py <module>` grant via an obstacle/grant turn (`OBSTACLE: suite-grant` or planner metadata), never self-granted inline.** Adds a turn boundary so workers ask only when genuinely stuck, without letting an inline flag bypass the guardrail.
-   - **C — Allow at most one `go-test-shards.py <module>` run per `(run_id, module)` when the worker passes `--broad-change-reason <text>` and its diff touches at least 5 files in that module.** Avoids an extra turn on broad edits, but lets cautious models spend a full ordinary-class shard run before committing on multi-file items.
-
-   <!-- vantage: question id=OQ-ER2 leaning="A — never self-served in lanes (go test -exec true ./... for whole-module compile checks, tillr-gate with warm-session return for full suites, and explicit item/operator grants only): any inline worker flag gets used routinely, whereas letting the gate run the suite once eliminates duplicate runs and 33-minute pre-commit slot waits." -->
-
-   _Leaning:_ A — never self-served in lanes (`go test -exec true ./...` for whole-module compile checks, `tillr-gate` with warm-session return for full suites, and explicit item/operator grants only): any inline worker flag gets used routinely, whereas letting the gate run the suite once eliminates duplicate runs and 33-minute pre-commit slot waits.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
-
-3. 💬 **OQ-ER3: When the Evidence Registry records both `pass` and `fail` on the exact same `treeFingerprint`, should tillr automatically file a repair item as well as quarantining the cached pass?**
-
-   In [Section 4.2](#42-when-an-entry-is-contradicted-on-the-same-fingerprint-oq-er3), a `treeFingerprint` with both `.pass.json` and `.fail.json` stops short-circuiting as a `remembered` pass immediately (`memory: "contradicted"`) and keeps both logs. Under `D-GR17` (`7596d0dfe`), a test that fails intermittently under load or ordering is a broken test; on the other hand, a one-off check bug that exited `1` instead of `4` on a transient host hiccup also produces opposite outcomes on one fingerprint.
-
-   - **A — Quarantine the cached `pass` for that `fingerprint` AND automatically file one deduplicated `build` item (`flaky-<check-id>`) carrying the `.fail.json` case and both logs, without holding unrelated landings while live reruns pass.** Turns `D-GR17` into an automatic repair loop instead of letting intermittent failures hide behind a passing rerun.
-   - **B — Quarantine the cached `pass` for that `fingerprint` and surface a `contradicted` warning in `tillr view` / Observatory only, leaving item filing to the operator or a sustained trunk-proof red.** Avoids filing repair items from one-off host glitches while still preventing false `remembered` passes.
-
-   <!-- vantage: question id=OQ-ER3 leaning="A — quarantine the cached pass and file one deduplicated flaky-<check-id> repair item without holding unrelated landings: under D-GR17 an intermittent test failure is a real defect, and deduplicating to one open item per check ID bounds queue noise while ensuring the flake gets fixed." -->
-
-   _Leaning:_ A — quarantine the cached `pass` and file one deduplicated `flaky-<check-id>` repair item without holding unrelated landings: under `D-GR17` an intermittent test failure is a real defect, and deduplicating to one open item per check ID bounds queue noise while ensuring the flake gets fixed.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
 
 ---
 
 ## Decision Ledger
 
-Every row below is a designer's engineering decision made on 2026-11-20 while drafting this specification; none has been ruled by the owner yet, and the owner may overturn any of them.
+Rows `D-ER1` through `D-ER8` are designer's engineering decisions made on 2026-11-20 while drafting this specification; they await the owner's review and may be overturned. Rows [OQ-ER2](#OQ-ER2) and [OQ-ER3](#OQ-ER3) are owner rulings, each accepting option A as quoted below.
 
 | ID | Decision | Provenance & Date | Governing section |
 | :--- | :--- | :--- | :--- |
@@ -399,3 +369,5 @@ Every row below is a designer's engineering decision made on 2026-11-20 while dr
 | <a id="D-ER6"></a>**D-ER6** | Format every whole-suite guardrail refusal (`exit 1` per [`D-LS3`](./tillr-lane-shims.md#decision-ledger), `tillr-shim` + `Remedy:` per [`D-LS9`](./tillr-lane-shims.md#decision-ledger)) with three actionable alternatives computed from the worker's current state: `go test -exec true ./...` for whole-module compilation, the exact `go test ./<pkg> -run '^(...)$'` command extracted from touched `*_test.go` files, and any staged `reproduce` command from `$TILLR_EVIDENCE_FILE`. | Designer's decision; the owner may overturn this (2026-11-20) | [Section 7.3](#73-what-the-refusal-tells-the-worker-to-do-instead-d-er6-d-er7) |
 | <a id="D-ER7"></a>**D-ER7** | Normalize legacy whole-suite `go test ./...` and `go-test-shards.py <module>` lines in staged `{{VERIFICATION}}` blocks (unless the item holds an explicit suite grant) so queued items on `roadmap.md` never instruct a worker to run a command the guardrail refuses. | Designer's decision; the owner may overturn this (2026-11-20) | [Section 7.3](#73-what-the-refusal-tells-the-worker-to-do-instead-d-er6-d-er7) |
 | <a id="D-ER8"></a>**D-ER8** | Record every whole-suite guardrail refusal fail-open by atomic JSONL append (`kind: "shim.refusal"`, `rule: "whole-suite"`) to `$TILLR_TRACE_DIR/shim-refusals.jsonl` alongside [`tillr-lane-shims.md`](./tillr-lane-shims.md) (`D-LS10`), surfacing on `tillr-trace refusals`, `tillr-trace run <id>`, and Run Detail ([OQ-LS4](./tillr-lane-shims.md#OQ-LS4)) alongside `reused`/`executed` gate counts without touching `.tillr/state.db`. | Designer's decision; the owner may overturn this (2026-11-20) | [Section 7.5](#75-how-refusals-are-recorded-for-the-operator-d-er8) |
+| <a id="OQ-ER2"></a>[OQ-ER2](#OQ-ER2) | “A — never self-served in lanes (go test -exec true ./... for whole-module compile checks, tillr-gate with warm-session return for full suites, and explicit item/operator grants only): any inline worker flag gets used routinely, whereas letting the gate run the suite once eliminates duplicate runs and 33-minute pre-commit slot waits.” | Owner ruling; Vantage `a5fae9a5` (2026-11-20, about 6:00 PM ET) | [Section 7.4](#74-the-broad-change-exception-and-how-it-is-granted-oq-er2) |
+| <a id="OQ-ER3"></a>[OQ-ER3](#OQ-ER3) | “A — quarantine the cached pass and file one deduplicated flaky-<check-id> repair item without holding unrelated landings: under D-GR17 an intermittent test failure is a real defect, and deduplicating to one open item per check ID bounds queue noise while ensuring the flake gets fixed.” | Owner ruling; Vantage `a9359659` (2026-11-20, about 6:00 PM ET) | [Section 4.2](#42-when-an-entry-is-contradicted-on-the-same-fingerprint-oq-er3) |
