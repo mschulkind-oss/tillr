@@ -224,6 +224,16 @@ func TestScoutedDesignWorkflowLoop(t *testing.T) {
 					if !strings.Contains(scout, prompt) {
 						t.Errorf("missing own prompt %s", prompt)
 					}
+					for _, forbidden := range []string{"Read the previous node report:", "Previous node report:", "node-report.md", "Opened design."} {
+						if strings.Contains(scout, forbidden) {
+							t.Errorf("scout %d unexpectedly carried %q", i+1, forbidden)
+						}
+					}
+				}
+				for _, forbidden := range []string{"Read the previous node report:", "Previous node report:", "node-report.md", "Opened design."} {
+					if strings.Contains(steps.briefs[6], forbidden) {
+						t.Errorf("join unexpectedly carried %q", forbidden)
+					}
 				}
 			}
 		})

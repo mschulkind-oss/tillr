@@ -359,8 +359,8 @@ the graph. Ready writers run one at a time in that order; ready readers share
 the existing parallel scheduler. Named outputs are declared per piece.
 
 [`planned-build@v1`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/workflows/planned-build@v1.json) starts
-with a read-only planner, falls back to a build node when it proposes nothing,
-and ends at the verify evaluator. Its optional `graph.proposal` may replace
+with a read-only planner, falls back to a build node whose brief includes the
+planner's report when it proposes nothing, and ends at the verify evaluator. Its optional `graph.proposal` may replace
 `work` with [`build-pieces@v1`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/workflows/build-pieces@v1.json)
 and up to 12 pieces. The proposal and its graph revision are settled together;
 refusals leave the old graph intact. An unmapped seat records

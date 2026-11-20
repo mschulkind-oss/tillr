@@ -1462,9 +1462,17 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 				}
 			}
 			// Report-only workflows retain their original handoff. Once a graph
-			// declares named files, only explicit producer edges carry inputs.
+			// declares named files, only explicit producer edges carry inputs,
+			// except when a proposal-only predecessor proposed no graph replacement.
 			if !decision.Workflow.hasNamedFiles() {
 				spec.PreviousReport = decision.PreviousReport
+			} else if decision.Workflow.proposalOnlyPredecessors(decision.NodeIndex) {
+				reportPath, reportText, reportErr := l.proposalPredecessorReport(ctx, decision)
+				if reportErr != nil {
+					return nil, reportErr
+				}
+				spec.PreviousReport = reportPath
+				spec.PreviousReportText = reportText
 			}
 		}
 		var err error

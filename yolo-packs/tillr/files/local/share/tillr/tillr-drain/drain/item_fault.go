@@ -165,5 +165,27 @@ func (l *Loop) holdAdapterRefusal(ctx context.Context, lane string, request run.
 	if err := l.holdItemFault(ctx, c, ReasonAdapterRefused, words); err != nil {
 		return "", err
 	}
+	if err := l.clearUnrunNode(ctx, request.RunID); err != nil {
+		return "", err
+	}
 	return l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "adapter refused the brief"), nil
+}
+
+func (l *Loop) clearUnrunNode(ctx context.Context, runID string) error {
+	if l.cfg.Store == "" || runID == "" {
+		return nil
+	}
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		hasNodes, err := tableExists(tx.Reader(), "node_runs")
+		if err != nil || !hasNodes {
+			return err
+		}
+		_, err = tx.Exec(`DELETE FROM node_runs WHERE run_id=? AND outcome='running'`, runID)
+		return err
+	})
 }

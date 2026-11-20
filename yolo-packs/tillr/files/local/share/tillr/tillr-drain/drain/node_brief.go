@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // workflowNodeBrief supplies node instructions and wired files for both lane layouts.
@@ -74,6 +75,9 @@ func (s *LaneStager) workflowNodeBrief(spec StageSpec, brief string, landing boo
 	// Preserve report-only workflows; explicit inputs receive only their wired files.
 	if len(spec.Node.Inputs) == 0 && spec.PreviousReport != "" {
 		brief += "Read the previous node report: " + spec.PreviousReport + "\n"
+	}
+	if len(spec.Node.Inputs) == 0 && strings.TrimSpace(spec.PreviousReportText) != "" {
+		brief += "\nPrevious node report:\n" + quoteBriefLines(spec.PreviousReportText) + "\n"
 	}
 	return brief, nil
 }
