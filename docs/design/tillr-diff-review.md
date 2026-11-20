@@ -2,34 +2,34 @@
 title: "Before an item's commits land, an agent with no memory of writing them reads the diff and checks it against what was claimed"
 status: in-review
 stage: DESIGN
-updated: 2026-11-18
+updated: 2026-11-19
 tags:
   - tillr
   - landing
   - review
   - judge
   - design
-summary: "Every landing of an item's code gets one review first, by an agent that did not write the change: it reads the diff as it will land, then checks it against the item, its criteria and the tree. This is the judge step that exists and has never run, turned on for every such landing and moved after the gate. An objection goes back to the session that wrote the change, uncounted. Documents-only landings are not reviewed, by the owner's ruling. Asks which model reviews and who settles a repeated disagreement."
-next: "The owner answers OQ-DR1, which model reviews. Nothing in this document is built before he has. OQ-DR2 holds only the build step that settles a repeated disagreement."
+summary: "Every landing of an item's code gets one review first, by an agent that did not write the change: it reads the diff as it will land, then checks it against the item, its criteria and the tree. This is the judge step that exists and has never run, turned on for every such landing and moved after the gate, on the named review seat (set to the build seat's backend for now). An objection goes back to the session that wrote the change, uncounted; a repeated objection stops and waits for the owner with no dismissal built now. Documents-only landings are not reviewed, by the owner's ruling."
+next: "The owner reviews D-DR3 through D-DR13 so steps 1 to 4 can build; OQ-DR3 waits until a live review hits a repeated objection."
 ---
 
 # Before an item's commits land, an agent with no memory of writing them reads the diff and checks it against what was claimed
 
-**Status:** 2026-11-18. A proposal; the universal after-gate review is not built, and nothing in this design is built before the owner answers [OQ-DR1](#OQ-DR1) (the opt-in judge and workflow evaluator path it reuses is already built, before the gate). Written to the owner's three statements of 2026-11-18, quoted in [Section 1](#1-the-requirement-and-what-happens-today). Facts about the loop, the store and the prices were gathered by a scout on 2026-11-18 with the tree at `f6b71beb8`; what is an estimate or was not verified is marked where it appears. The `D-DR` rows of the ledger from `D-DR3` on are a designer's decisions and await the owner's review.
+**Status:** 2026-11-19. A proposal; the universal after-gate review is not built (the opt-in judge and workflow evaluator path it reuses is already built, before the gate). Written to the owner's statements of 2026-11-18 ([Section 1](#1-the-requirement-and-what-happens-today)) and updated with his rulings of 2026-11-19 on [OQ-DR1](#OQ-DR1) and [OQ-DR2](#OQ-DR2). Facts about the loop, the store and the prices were gathered by a scout on 2026-11-18 at `f6b71beb8`, and seat configuration was verified on 2026-11-19 at `9a3b977af`; what is an estimate or was not verified is marked where it appears. The `D-DR` rows from `D-DR3` on are a designer's decisions and await the owner's review.
 
-> **In short.** Today no agent has ever read a change before tillr landed it. The review the owner asks for is the judge step that is already built and has never run: one fresh agent, after a green gate and before the landing, that reads the diff and checks it against the item's claim and the tree. It should run for every landing of an item's code, not only when an item asks.
+> **In short.** Today no agent has ever read a change before tillr landed it. The review the owner asks for is the judge step that is already built and has never run: one fresh agent on the named `review` seat, after a green gate and before the landing, that reads the diff and checks it against the item's claim and the tree. It runs for every landing of an item's code, not only when an item asks.
 
 **Why it matters.** The store holds 803 landings and 1,221 criterion verdicts. Every verdict is mechanical: a criterion is marked done because the gate was green. There are 0 judge runs, 0 grants and 0 verdicts by an agent ([Section 1](#1-the-requirement-and-what-happens-today)).
 
-**The shape.** One read-only node, the landing review, after the gate run passes and before the land attempt. One reader does both jobs: it checks each criterion and it reads the diff for anything that looks wrong. Its outcomes are pass, an objection, and cannot judge.
+**The shape.** One read-only node, the landing review, after the gate run passes and before the land attempt, dispatched on the named `review` seat (pointed at the `build` seat's backend for now). One reader does both jobs: it checks each criterion and it reads the diff for anything that looks wrong. Its outcomes are pass, an objection, and cannot judge; a repeated objection stops and waits for the owner.
 
-**Cost.** One agent run per code landing, estimated at $0.02 to $1.60 by model and far less certain than that range looks, and one more wait before each landing. An objection costs a worker turn, a gate run and a second review. A fix for a red trunk waits on a review too.
+**Cost.** One agent run per code landing on the `review` seat's active backend — today Hydrogen on Copilot (unpriced here) or Terra 6.1 on the work Bedrock profile (estimated at $0.14 to $0.17 per review, unmeasured live) — and one more wait before each landing. An objection costs a worker turn, a gate run and a second review. A fix for a red trunk waits on a review too.
 
 **Start at [Section 4](#4-one-reader-and-what-stood-in-its-way)**, why this is one reader and what has to change in the built judge. [Section 5](#5-the-three-outcomes) has the outcomes and [Section 8](#8-cost) the prices.
 
-**Needs your ruling:** [OQ-DR1](#OQ-DR1), [OQ-DR2](#OQ-DR2).
+**Needs your ruling:** None (11 designer's decisions, `D-DR3` through `D-DR13`, await your review in the [Decision Ledger](#decision-ledger); one deferred question in [Open Questions](#open-questions) is blocked until live reviews run).
 
-**Reads with:** [who made the decisions](../tillr/decision-provenance-review.md) (its [OQ-PR2](../tillr/decision-provenance-review.md#OQ-PR2) asks whether work may be marked finished with nobody looking; [Section 7](#7-the-record-and-what-finished-means) says how this design answers it), [judge and lifecycle](./tillr-judge-and-lifecycle.md) (the judge step this design turns on), [the graph design](./tillr-graph-is-the-path.md) (node kinds, rules and the identical repeat), [the landing call](./tillr-landing-call.md) (how a refusal reaches the worker), [planning and model tiering](./tillr-planning-node-model-tiering.md) (the verify node, which becomes this review).
+**Reads with:** [which reviewer reads which change](./tillr-review-rules.md) (how compliance policies and substantive review divide across change kinds, and whether design documents want a review agent), [the compliance officer](./tillr-design-document-check.md) (the policy-adherence reader that runs alongside this review), [who made the decisions](../tillr/decision-provenance-review.md) (its [OQ-PR2](../tillr/decision-provenance-review.md#OQ-PR2) asks whether work may be marked finished with nobody looking; [Section 7](#7-the-record-and-what-finished-means) says how this design answers it), [judge and lifecycle](./tillr-judge-and-lifecycle.md) (the judge step this design turns on), [the graph design](./tillr-graph-is-the-path.md) (node kinds, rules and the identical repeat), [the landing call](./tillr-landing-call.md) (how a refusal reaches the worker), [planning and model tiering](./tillr-planning-node-model-tiering.md) (the verify node, which becomes this review).
 
 ---
 
@@ -109,7 +109,7 @@ The reviewer runs in the item's worktree, read-only, at the head the gate just p
 | **Earlier reviews of this item** | Each earlier objection and what the worker answered, when this is not the first review |
 | **The worker's report** | As a file the brief tells it to open last ([below](#the-workers-report)) |
 
-**What is withheld is the writer's memory.** The reviewer is never the worker's session, never a resume or a fork of it, and is not given its transcript. The store already refuses a judge that shares a run or a session with the writer, and the judge step starts every review in a new session ([OQ-JL2](./tillr-judge-and-lifecycle.md#decision-ledger)). The same model is allowed; [OQ-DR1](#OQ-DR1) is where a different one can be chosen.
+**What is withheld is the writer's memory.** The reviewer is never the worker's session, never a resume or a fork of it, and is not given its transcript. The store already refuses a judge that shares a run or a session with the writer, and the judge step starts every review in a new session ([OQ-JL2](./tillr-judge-and-lifecycle.md#decision-ledger)). Which model wrote the change has no bearing on which reviews it: the review runs on whatever backend the `review` seat is set to now ([Section 3.3](#33-the-review-seat)).
 
 **Read-only is checked, not enforced,** as it is today: after the review the loop compares the worktree with the head it started from, and a reviewer that changed anything has its changes saved and removed and its verdict discarded ([the judge step](../../tools/tillr-drain/drain/judge.go)).
 
@@ -141,7 +141,14 @@ The owner's ruling scopes the review to an item's code. The trigger is exact: a 
 | **An automatic revert** | **No** | No agent wrote it: it is the exact inverse of a landing, made by the loop, with no session to send an objection to. It lands only under its own checks |
 | A candidate whose diff is empty | No review runs | The lander refuses it as already on the trunk, as today |
 
-An item that landed before this is built keeps its record, and its page says it landed before reviews ran.
+An item that landed before this is built keeps its record, and its page says it landed before reviews ran. How non-code paths outside `docs/`, companion implementation plans and design documents map across this review and the compliance officer is specified in [which reviewer reads which change](./tillr-review-rules.md).
+
+### 3.3 The review seat
+
+By the owner's ruling ([OQ-DR1](#OQ-DR1)), code review is its own named seat, `review`, whose model is configured in the backend policy like any other seat's ([the judge step](../../tools/tillr-drain/drain/judge.go) already reads `review` from the active policy).
+
+- **The writer's model has no bearing.** A review runs on whatever backend the `review` seat is set to at the moment the review starts, never by looking up or avoiding the model that wrote the candidate. Matching or avoiding the author's model per item is a false requirement: a fresh session already withholds the writer's memory, and tying review routing to historical writer runs would make seat selection depend on past policy state rather than the operator's current choice.
+- **Set to the implementer seat's backend for now.** Until live reviews provide evidence to separate them, `review` uses the same backend as `build` (`pi-build`): today Hydrogen 4 (`github-copilot/gemini-4-hydrogen`) in [the Copilot backend policy](../../config/tillr/backend-policy.copilot.json), where `review` still points at `pi` (Carbon 4) and moves to `pi-build` in step 1, and Terra 6.1 in [the Bedrock backend policy](../../config/tillr/backend-policy.bedrock.json). Changing the reviewer later is a one-line backend-policy edit.
 
 ## 4. One reader, and what stood in its way
 
@@ -151,7 +158,7 @@ The owner's first sentence asks whether the change matches what was claimed, and
 
 So the design is to **make that review run for every code landing**, with one brief that does both, and not to add a second reader beside it.
 
-Two readers would be better in one case only: when the second is a different model from the first, so that their blind spots differ. That is a choice of model and is offered in [OQ-DR1](#OQ-DR1). Two runs of one model on the same inputs buy a second price and little else.
+Two readers would be better in one case only: when the second is a different model from the first, so that their blind spots differ. Two runs of one model on the same inputs buy a second price and little else, and keeping `review` as its own named seat lets the operator point it at a different model later if live counts show missed faults ([Section 3.3](#33-the-review-seat)).
 
 ### 4.2 What stood in the way, and what changes
 
@@ -233,14 +240,7 @@ No count stops them, by the owner's rule. Two things do, and both exist.
 
 **A new objection is not a disagreement.** If the second review objects to something else, the worker fixes that too. Each ending is new and nothing is counted.
 
-**An identical repeat goes to the design seat.** The evidence key of an objection is the sorted set of the criterion ids not met and of each finding's category and path. Wording is not in the key, because a model words the same objection differently each time. When an objection's key equals that of an earlier objection in the item's chain, the loop adds a design answer as diagnosis in place of the return to the worker ([the graph design, Section 7](./tillr-graph-is-the-path.md#7-what-stops-repetition)). The design seat reads both objections, the change and the worker's answers, and ends in one of these ways:
-
-- An instruction to the worker that differs from every earlier one.
-- An amendment to the criterion, when the criterion is what is wrong. A criterion with no verdict is still editable.
-- An objection that names the owner, with its question.
-- An objection that names the tooling, when the fault is the reviewer's brief.
-
-Whether it may also **dismiss a finding**, so that the change lands over the reviewer's objection, is the owner's to decide: [OQ-DR2](#OQ-DR2). Until he does, it may not.
+**An identical repeat stops and waits for the owner.** The evidence key of an objection is the sorted set of the criterion ids not met and of each finding's category and path. Wording is not in the key, because a model words the same objection differently each time. When an objection's key equals that of an earlier objection in the item's chain, no dismissal mechanism runs and the loop does not send a third turn to the worker ([OQ-DR2](#OQ-DR2)): the item stops under "needs you" and waits for the owner, with the repeated objection and the worker's reason shown on the item's page so the case can be examined and a better change chosen. What lasting rule should replace that stop once real cases have been seen stays open as [OQ-DR3](#OQ-DR3).
 
 The weak point is the one the graph design names for itself: a chain in which every objection is new never repeats. It is visible at the top of the draining list, which is ordered by spend, and the owner can object on any item.
 
@@ -314,7 +314,7 @@ The categories are the closed list a finding may use. Adding one is a change to 
 **Where it is read.**
 
 - **The item's page** lists the reviews in order with the rest of the item's path: when, by which model, the outcome, and the text of each objection.
-- **`tillr drain why`** on a waiting item says which holds: a review is running, since when and on which model; a review objected and the worker has it; the design seat has a repeated objection; or the review waits on a closed backend.
+- **`tillr drain why`** on a waiting item says which holds: a review is running, since when and on which model; a review objected and the worker has it; a repeated objection is waiting on the owner; or the review waits on a closed backend.
 - **A daily count** of reviews by outcome, and of objections after which the change was altered, tells the owner whether the review pays. Nothing else can, since none has ever run.
 
 **What finished means.** An item whose landing is a code landing is marked landed only when that candidate has a review that ended pass. The store checks this when it records the landing. Each criterion's verdict says who decided it:
@@ -337,7 +337,7 @@ The assumptions:
 - A review reads the diff, 25,000 tokens of fixed prompt, and 40,000 tokens of item and tree. It takes 10 turns and writes 6,000 tokens. Everything it reads is billed once at the cache-write price and re-read on later turns at the cache-read price.
 - The diff sizes are the 85 landings of 2026-11-18: median 27,000 bytes, ninetieth percentile 108,000 bytes, at 3.5 bytes per token. Those 85 include documents-only landings, which are small and will not be reviewed, so the ninetieth percentile is the fairer figure for a code landing.
 - How many of the 85 were code landings was not measured. Of the 575 commits on the trunk in those two days, 277 touched something other than Markdown and `docs/`; at that share, about 41 of the 85.
-- Prices are the work machine's, read on 2026-11-18 from [its profile](../../tag-work/config/yolo-jail/config.d/work.toml). The personal machines' were not priced.
+- Prices below are the work machine's Bedrock profile, read on 2026-11-18 from [its profile](../../tag-work/config/yolo-jail/config.d/work.toml). Copilot backends (including Hydrogen 4, which the owner selected for `review` via the `build` seat on 2026-11-19 in [OQ-DR1](#OQ-DR1)) and the personal machines were not priced here; on the Bedrock profile the `build`-seat rule selects the Terra 6.1 row.
 - One review per landing. Each objection adds a worker turn, a gate run and another review, and how often that happens is unknown.
 
 | Model | Its seat today | A review of a median diff | Of a ninetieth-percentile diff | A day: 41 reviews at the median | A day: 85 at the ninetieth percentile |
@@ -352,7 +352,7 @@ The assumptions:
 
 **A very large change** is read across more than one review ([Section 5.3](#53-cannot-judge)) and costs in proportion. Of the 85 landings, 4 had a diff over about 50,000 tokens and 1 over 100,000.
 
-There is no spend target ([OQ-GP3](./tillr-graph-is-the-path.md#decision-ledger)), so cost informs the choice of model and does not gate the review. The first step of the build measures a real review, and this table is replaced by what it finds.
+There is no spend target ([OQ-GP3](./tillr-graph-is-the-path.md#decision-ledger)), so cost informs seat configuration and does not gate the review. The first step of the build measures a real review on the active `review` seat, and this table is replaced by what it finds.
 
 ## 9. Alternatives considered
 
@@ -368,27 +368,27 @@ There is no spend target ([OQ-GP3](./tillr-graph-is-the-path.md#decision-ledger)
 
 ## 10. What this does not cover
 
-- **Documents-only landings,** by the owner's ruling. A separate, cheaper check of what an item commits against written policies, documents-only landings included, is proposed in [the compliance officer](./tillr-design-document-check.md); it runs in addition to this review and reads for no logic.
+- **Documents-only landings,** by the owner's ruling. A separate, cheaper check of what an item commits against written policies, documents-only landings included, is proposed in [the compliance officer](./tillr-design-document-check.md); how both readers map across every change kind — and whether design documents or companion plans want a review agent — is proposed in [which reviewer reads which change](./tillr-review-rules.md).
 - **Landings tillr does not make.** A commit a person or an operating session puts on the trunk by hand is outside the loop.
 - **What the gate runs,** and what may land while the trunk is red.
-- **Which model a seat maps to on each machine.** That is the backend policy; this design asks which model the review seat gets here.
+- **Per-machine backend-policy edits.** This design fixes `review` as its own named seat set to the `build` backend for now ([Section 3.3](#33-the-review-seat)); changing which model a machine maps to a seat later is a policy edit.
 - **Enforcing read-only.** It stays a check after the fact.
 - **Who may issue a grant, and for how long.** The grant keeps its design; fewer things need one.
 
 ## 11. Build order
 
-Nothing is built before [OQ-DR1](#OQ-DR1) is answered. Steps 1 to 4 then build on today's loop and wait on nothing else. Step 5 waits on [OQ-DR2](#OQ-DR2). Step 6 waits on the graph. Every step that changes a tillr source file changes its copy under `yolo-packs/tillr/files/local/share/tillr/` in the same commit, and [the pack sync test](../../tests/pack-sync.test.py) holds that. The files named are where the scout found the behavior; the planner confirms each against the tree.
+[OQ-DR1](#OQ-DR1) and [OQ-DR2](#OQ-DR2) are answered. Steps 1 to 4 wait on the owner's review of `D-DR3` through `D-DR13` and then build on today's loop. Step 5 waits on the graph; [OQ-DR3](#OQ-DR3) waits until a live review hits a repeated objection and holds nothing here. Every step that changes a tillr source file changes its copy under `yolo-packs/tillr/files/local/share/tillr/` in the same commit, and [the pack sync test](../../tests/pack-sync.test.py) holds that. The files named are where the scout found the behavior; the planner confirms each against the tree.
 
 1. **Review every code landing after its gate run passes.**
-   - *Changes:* the judge step runs for every code landing, after the gate; the documents-only and automatic-revert exemptions; the grant no longer required for a `verification-only` criterion, and the hold before the worker starts removed for it; the brief of [Section 6](#6-the-brief), with the item's text, the gate's passed checks, the worker's report and the two-part diff; findings and read paths in the verdict file and its check; the document paths declared for this repository.
-   - *Files:* [the judge step](../../tools/tillr-drain/drain/judge.go) and its tests; [the loop](../../tools/tillr-drain/drain/loop.go); [planning](../../tools/tillr-drain/drain/plan.go); [the verdict rules](../../tools/tillr-item/item/verdict.go); the review seat's purpose in the policies under `config/tillr/`; [the drain's guide](../../tools/tillr-drain/README.md).
-   - *Waits on:* [OQ-DR1](#OQ-DR1).
-   - *Done when:* a test candidate with a planted debug line is held from landing with a finding that names the line; one that misses a criterion is held with that criterion's id; a clean one lands with an agent's verdict on each criterion and no grant in the store; a documents-only candidate and an automatic revert land with no review; a second land attempt starts no second review; and one real review has run on the work machine, with its spend recorded in [Section 8](#8-cost).
-2. **Return an objection to the session that wrote the change.**
-   - *Changes:* the ordinary judge's hold and the evaluator's restart both replaced by the retained-session route; the evidence key; the earlier objection and the worker's answer given to the next review.
+   - *Changes:* the judge step runs for every code landing, after the gate; the documents-only and automatic-revert exemptions; the grant no longer required for a `verification-only` criterion, and the hold before the worker starts removed for it; the brief of [Section 6](#6-the-brief), with the item's text, the gate's passed checks, the worker's report and the two-part diff; findings and read paths in the verdict file and its check; the document paths declared for this repository; the `review` seat pointed at `pi-build` in the backend policies under `config/tillr/` ([Section 3.3](#33-the-review-seat)).
+   - *Files:* [the judge step](../../tools/tillr-drain/drain/judge.go) and its tests; [the loop](../../tools/tillr-drain/drain/loop.go); [planning](../../tools/tillr-drain/drain/plan.go); [the verdict rules](../../tools/tillr-item/item/verdict.go); the `review` seat mapping and purpose in the policies under `config/tillr/`; [the drain's guide](../../tools/tillr-drain/README.md).
+   - *Waits on:* owner review of `D-DR3` through `D-DR13`.
+   - *Done when:* a test candidate with a planted debug line is held from landing with a finding that names the line; one that misses a criterion is held with that criterion's id; a clean one lands with an agent's verdict on each criterion and no grant in the store; a documents-only candidate and an automatic revert land with no review; a second land attempt starts no second review; and one real review has run on the active `review` seat, with its spend recorded in [Section 8](#8-cost).
+2. **Return an objection to the session that wrote the change, and stop for the owner on an identical repeat.**
+   - *Changes:* the ordinary judge's hold and the evaluator's restart both replaced by the retained-session route; the evidence key; the earlier objection and the worker's answer given to the next review; an identical repeat stopping under "needs you" for the owner with both objections and the worker's reason shown, with no dismissal path ([OQ-DR2](#OQ-DR2)).
    - *Files:* [the return rules](../../tools/tillr-drain/drain/returned.go), [the retained session](../../tools/tillr-drain/drain/worker_session.go), [the evaluator](../../tools/tillr-drain/drain/workflow_evaluator.go) and their tests.
    - *Waits on:* step 1.
-   - *Done when:* a test shows the objection arriving as a turn in the worker's own session under a new run id; a second objection with the same criterion ids, categories and paths but different words goes to the design seat; one that differs goes back to the worker; a workflow's objection reaches the session that wrote the named path; no count is read on the route.
+   - *Done when:* a test shows the objection arriving as a turn in the worker's own session under a new run id; a second objection with the same criterion ids, categories and paths but different words stops the item waiting on the owner with the objection and the worker's reason recorded; one that differs goes back to the worker; a workflow's objection reaches the session that wrote the named path; no count is read on the route.
 3. **Give every cannot-judge a mover.**
    - *Changes:* the routes of [Section 5.3](#53-cannot-judge): a further review for unread paths, the design seat for an undecidable criterion, the reviewer's session for a bad verdict file; an item no longer closed on a reviewer's `defective`.
    - *Files:* [the judge step](../../tools/tillr-drain/drain/judge.go) and its disposition tests.
@@ -398,19 +398,15 @@ Nothing is built before [OQ-DR1](#OQ-DR1) is answered. Steps 1 to 4 then build o
    - *Changes:* the review rows on the item's page; the states in `tillr drain why`; the daily count by outcome; the store's check on the landed state.
    - *Files:* `tools/tillr-view`, `tools/tillr-item`, `tools/tillr-loop` and their tests.
    - *Waits on:* step 1.
-   - *Done when:* an item page shows an objection's text; the store refuses a landed state for a code landing with no passing review; an item landed before this step still reads correctly.
-5. **Let the design seat settle a repeated objection.**
-   - *Changes:* whatever [OQ-DR2](#OQ-DR2) rules: a dismissal ending with its record, or none.
-   - *Waits on:* [OQ-DR2](#OQ-DR2) and step 2.
-   - *Done when:* stated with the ruling.
-6. **Make the review a node the policy function adds.**
+   - *Done when:* an item page shows an objection's text and, on a repeat, the worker's reason beside it; the store refuses a landed state for a code landing with no passing review; an item landed before this step still reads correctly.
+5. **Make the review a node the policy function adds.**
    - *Changes:* the rule rows of [Section 12](#12-amendments-owed); the swap of the worker's brief and session removed.
    - *Waits on:* the graph design's executor and policy function.
    - *Done when:* the policy function's table test covers those rows.
 
 ## 12. Amendments owed
 
-None of these documents is edited by this one. **Made on 2026-11-18**, by a reconciliation pass, are only the parts that hold whatever the owner answers to [OQ-DR1](#OQ-DR1) and [OQ-DR2](#OQ-DR2), because they rest on his own rulings `D-DR1` and `D-DR2` or are pointers: the [OQ-JL1](./tillr-judge-and-lifecycle.md#decision-ledger) row now says it is overturned for code landings and that no agent has ever judged a landing; `D-JL8` says asking for a judge will no longer decide whether a code landing is reviewed; the graph design's row 23 and [early design landing](./tillr-early-design-landing.md) record that a cut is not reviewed; and the planning design's verify node points here. Everything else below rests on this design's own decisions and waits for the owner's review of them.
+None of these documents is edited by this one. **Made on 2026-11-18**, by a reconciliation pass, are the parts that rest on the owner's rulings `D-DR1` and `D-DR2` or are pointers: the [OQ-JL1](./tillr-judge-and-lifecycle.md#decision-ledger) row now says it is overturned for code landings and that no agent has ever judged a landing; `D-JL8` says asking for a judge will no longer decide whether a code landing is reviewed; the graph design's row 23 and [early design landing](./tillr-early-design-landing.md) record that a cut is not reviewed; and the planning design's verify node points here. Everything else below rests on this design's `D-DR` rows (and the 2026-11-19 rulings [OQ-DR1](#OQ-DR1) and [OQ-DR2](#OQ-DR2)) and lands with the build once the owner reviews those rows.
 
 - **[Judge and lifecycle](./tillr-judge-and-lifecycle.md):**
   - The [OQ-JL1](./tillr-judge-and-lifecycle.md#decision-ledger) row: overturned for code landings by the owner's requirement; mechanical retirement stays for documents-only landings.
@@ -426,7 +422,8 @@ None of these documents is edited by this one. **Made on 2026-11-18**, by a reco
 - **[Early design landing](./tillr-early-design-landing.md):** records the owner's ruling that a cut is not reviewed.
 - **[Who made the decisions](../tillr/decision-provenance-review.md):** [OQ-PR2](../tillr/decision-provenance-review.md#OQ-PR2) points here once the owner accepts this.
 - **`config/tillr/workflows/planned-build@v1.json`:** its `verify` stage's text, with the build of step 2. No other workflow file changes, because the loop adds the review.
-- **[The drain's guide](../../tools/tillr-drain/README.md)** and the backend policies' purpose for the review seat, with the build.
+- **[The drain's guide](../../tools/tillr-drain/README.md)** and the backend policies' `review` seat mapping (`pi-build`) and purpose, with the build of step 1.
+- **[The compliance officer](./tillr-design-document-check.md):** [Section 5.3](./tillr-design-document-check.md#53-when-the-officer-and-the-repairer-disagree) inherits [OQ-DR2](#OQ-DR2) (no dismissal built now).
 
 ## 13. Risks
 
@@ -435,19 +432,21 @@ None of these documents is edited by this one. **Made on 2026-11-18**, by a reco
 | The reviewer objects to things that are fine, and workers spend turns answering | The brief asks for objections it can point at. The daily count shows objections after which nothing changed. The brief is one file |
 | The reviewer passes everything | The same count shows it. The planner keeps a small set of planted defects as a standing test of the brief |
 | The reviewer believes the worker's report | The report is read last and cannot be evidence ([Section 3.1](#31-what-the-reviewer-is-given)) |
-| The same model wrote the change and reviews it | Allowed, as for the judge. [OQ-DR1](#OQ-DR1) offers a different one |
+| The same model wrote the change and reviews it | Chosen for now ([OQ-DR1](#OQ-DR1)): a fresh session withholds the writer's memory, and `review` is its own named seat so one policy line switches to a distinct model if live counts show missed faults |
 | The review costs what a worker costs | Step 1 measures it before anything else is built on the estimate |
 | A fix for a red trunk waits on a review | One review. If measurement shows it matters, that is evidence for a ruling, not for a silent exemption |
 | The judge step has tests and has never run with a real model | Step 1 is not done until one real review has run |
 
 ## Decision Ledger
 
-`D-DR1` and `D-DR2` are the owner's rulings. Every other row is a designer's decision of 2026-11-18, made from the scout's evidence and the owner's standing rulings. None of those is the owner's ruling; he may overturn any of them, and all await his review. None is built.
+`D-DR1`, `D-DR2`, [OQ-DR1](#OQ-DR1) and [OQ-DR2](#OQ-DR2) are the owner's rulings. Every other row is a designer's decision of 2026-11-18, made from the scout's evidence and the owner's standing rulings. None of those is the owner's ruling; he may overturn any of them, and all await his review. None is built.
 
 | ID | Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
 | `D-DR1` | **Owner ruling.** Before an item lands, a fresh agent reviews it: "it shouldn't rely on its memory of having made the change … it needs to, at the end, consider everything while looking at the diff. Not just the diff, but the diff has to be one of the things." It checks that the change "matches whatever was claimed". | 2026-11-18, owner | [Section 1](#1-the-requirement-and-what-happens-today) | — |
 | `D-DR2` | **Owner ruling.** "doc only landings have no review, no. this is for items that land as commits from a design doc." | 2026-11-18, owner | [Section 3.2](#32-which-landings) | — |
+| OQ-DR1 | **Owner ruling: code review is its own named `review` seat, independent of which model wrote the change, and set to the implementer (`build`) seat's backend (Hydrogen on Copilot) for now.** None of the question's three model options was chosen; he rejected tying the reviewer to or away from the author's model: "it has to be a named seat that we can pick a model for, because we don't know, and it shouldn't be the original one, that has no bearing, it's the currently active one ... For review, let's just stick with the implementer seat right now, although we may change this later with more evidence. So right now I think we're on hydrogen, so it's hydrogen I want you to use right now." | 2026-11-19, owner | [Section 3.3](#33-the-review-seat) | — |
+| OQ-DR2 | **Owner ruling: build no dismissal mechanism now; on a repeated objection, stop and wait for the owner with the objection and the worker's reason shown, and evaluate the real case then.** Asked whether a design agent may dismiss a repeated objection, refuse dismissal, or escalate to a stronger model, he ruled against building a settlement mechanism before seeing a case: "Maybe in principle it could dismiss the objection, but I would like to take a closer look here. So I think for now, let's not do anything. Like if we hit a situation like this, let's step back and evaluate and figure out a better change." What the lasting rule should be stays open in narrower form as [OQ-DR3](#OQ-DR3). | 2026-11-19, owner | [Section 5.4](#54-when-the-reviewer-and-the-worker-disagree) | — |
 | `D-DR3` | **Designer's decision; the owner may overturn this.** One reader: the built judge step, run for every code landing, checks the criteria and reads the diff for what is wrong. **Evidence:** that step is already a fresh read-only agent given the criteria and the exact diff. **Rejected:** a second reader beside it. | 2026-11-18, designer | [Section 4.1](#41-one-reader-not-two) | — |
 | `D-DR4` | **Designer's decision; the owner may overturn this.** The review runs after the gate passes, and the loop adds it, never a workflow file. **Evidence:** 360 refusals against 803 landings; a gate run costs seconds and no tokens. **Rejected:** before the gate, as built; a workflow's last node; a check in the gate. | 2026-11-18, designer | [Section 4.3](#43-the-position-after-the-gate) | — |
 | `D-DR5` | **Designer's decision; the owner may overturn this.** A reviewer retires a `verification-only` criterion with no grant, and the hold before the worker starts goes for it. **Evidence:** a program retires that class today on a green gate; no grant has ever been issued. **Rejected:** a standing grant, which must expire. | 2026-11-18, designer | [Section 4.2](#42-what-stood-in-the-way-and-what-changes) | — |
@@ -455,40 +454,20 @@ None of these documents is edited by this one. **Made on 2026-11-18**, by a reco
 | `D-DR7` | **Designer's decision; the owner may overturn this.** A documents-only landing is one whose every changed path is a document path, as declared for a cut; here, Markdown under `docs/`. One other path makes the whole landing reviewed. **Evidence:** early design landing's definition; skill and briefing files change agents' behavior. **Rejected:** any Markdown file. | 2026-11-18, designer | [Section 3.2](#32-which-landings) | — |
 | `D-DR8` | **Designer's decision; the owner may overturn this.** An agent-written fix for a red trunk or a defective tool, a conflict fix and an agent-edited revert are reviewed; a fix is reviewed against the criterion it was filed with. The automatic revert is exempt. **Evidence:** a fix is an item that lands commits; a revert has no author and no session. **Rejected:** exempting fixes to shorten a red trunk. | 2026-11-18, designer | [Section 3.2](#32-which-landings) | — |
 | `D-DR9` | **Designer's decision; the owner may overturn this.** An objection returns to the session that wrote the change, as a gate refusal does; this replaces the judge's hold and the evaluator's restart at the first node. Each review is a fresh session given the earlier objection and answer. **Evidence:** the owner's ruling that a refusal returns to the same session, uncounted. **Rejected:** keeping either built route. | 2026-11-18, designer | [Section 5.2](#52-an-objection) | — |
-| `D-DR10` | **Designer's decision; the owner may overturn this.** The evidence key is the criterion ids not met with each finding's category and path, and an identical repeat goes to the design seat. **Evidence:** the owner's rule that only an identical repeat stops a chain. **Rejected:** the objection's text as the key. | 2026-11-18, designer | [Section 5.4](#54-when-the-reviewer-and-the-worker-disagree) | — |
+| `D-DR10` | **Designer's decision; the owner may overturn this.** The evidence key is the criterion ids not met with each finding's category and path. (Its original routing of an identical repeat to the design seat is superseded for now by the owner's ruling in [OQ-DR2](#OQ-DR2), which stops the item and waits for him.) **Evidence:** the owner's rule that only an identical repeat stops a chain. **Rejected:** the objection's text as the key. | 2026-11-18, designer | [Section 5.4](#54-when-the-reviewer-and-the-worker-disagree) | — |
 | `D-DR11` | **Designer's decision; the owner may overturn this.** Pass requires every changed path read; unread paths get a further review; an undecidable criterion goes to the design seat; a reviewer's `defective` no longer closes an item. **Evidence:** the owner's rules that a held state names a mover and an item reaches him only by an objection naming him. **Rejected:** passing what was not read; the built holds with no mover. | 2026-11-18, designer | [Section 5.3](#53-cannot-judge) | — |
 | `D-DR12` | **Designer's decision; the owner may overturn this.** A workflow's evaluator is the one landing review with that workflow's extra instruction, after the gate. **Evidence:** the loop already runs the evaluator through the judge step, and an item with both gets one run. **Rejected:** an evaluator before the gate and a review after it. | 2026-11-18, designer | [Section 4.4](#44-the-verify-node-and-the-opted-in-judge) | — |
 | `D-DR13` | **Designer's decision; the owner may overturn this.** A code item is marked landed only with a review that passed. **Evidence:** the requirement. **Rejected:** recording the review beside an unchanged mechanical stamp. | 2026-11-18, designer | [Section 7](#7-the-record-and-what-finished-means) | — |
 
 ## Open Questions
 
-1. 💬 **OQ-DR1: Which model reviews every code change before it lands?**
+1. 🔒 **OQ-DR3: Once a live review hits a repeated objection, what lasting rule settles a repeated disagreement between reviewer and worker?**
 
-   A worker finishes a change, the gate passes it, and one fresh agent reviews it against the item before it lands. On 2026-11-18 that would have been about 41 reviews. No review has ever run, so the costs are rough estimates and nobody has measured what any model catches. The seat is one line of configuration and can be changed later.
+   A reviewer objects to a change, the worker keeps the change and explains why, and a fresh reviewer raises the same objection. For now the item stops and shows you the objection and the worker's reason so we can inspect a real case first.
 
-   - **A — The review model, Sol.** About $11 to $30 a day. It is the model already named for reviewing, and it wrote most of the changes, so it reviews its own work without its memory.
-   - **B — Opus, which wrote none of the work.** About $23 to $59 a day. A different model's blind spots differ from the writer's.
-   - **C — The cheap scout model first, and Sol as well when it objects or the change is large.** About $1 to $30 a day. A small change the cheap model wrongly passes is never seen by the stronger one.
+   <!-- vantage: question id=OQ-DR3 blocked-on="steps 1 and 2 running live and hitting a repeated objection" -->
 
-   <!-- vantage: question id=OQ-DR1 leaning="A: what you asked for is a reviewer without the writer's memory, and a fresh session gives that. Start there, read the daily counts, and move to B if it passes things it should not. This rests on judgement, not measurement." -->
-
-   _Leaning:_ A: what you asked for is a reviewer without the writer's memory, and a fresh session gives that. Start there, read the daily counts, and move to B if it passes things it should not. This rests on judgement, not measurement.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
-
-2. 💬 **OQ-DR2: When the reviewer raises the same objection twice, may the design agent let the change land anyway?**
-
-   A reviewer objects that a change deletes a test. The worker keeps the deletion and says why. A fresh reviewer reads the change and the reason, and objects to the same thing. By your standing rule a repeat goes to the design agent, which can instruct the worker again, correct the item, or bring you a question. Sometimes the reviewer is simply wrong.
-
-   - **A — It may dismiss the objection.** The change lands. The item's page says the objection was dismissed, by which model and why, and dismissals are counted daily. You hear nothing unless you look.
-   - **B — It may not.** It gets the worker to alter the change, or the item shows under "needs you" with the objection and the worker's reason, and waits for you.
-   - **C — A stronger model reviews it fresh, and its verdict stands.** One more review. You hear nothing; a second objection goes back to the worker.
-
-   <!-- vantage: question id=OQ-DR2 leaning="A: you said the agent decides an item's fate, and a wrong reviewer should not put routine changes in front of you. The dismissal is on the page and counted, so you can overturn this if the count looks bad." -->
-
-   _Leaning:_ A: you said the agent decides an item's fate, and a wrong reviewer should not put routine changes in front of you. The dismissal is on the page and counted, so you can overturn this if the count looks bad.
+   Waits on seeing a repeated objection in a live review; no build step in the initial rollout waits on it.
 
    **Answer:**
 
