@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -198,10 +199,49 @@ func (l *Loop) recheckLanes(ctx context.Context) error {
 			continue
 		}
 		if now.Sub(c.at) >= laneRecheckInterval || l.laneFingerprint(ctx, lane) != c.fingerprint {
+			if l.laneStillRefuses(ctx, lane, c) {
+				// The lane refuses the same way: it stays out, and no item is
+				// allocated to it to find that out.
+				c.at, c.fingerprint = now, l.laneFingerprint(ctx, lane)
+				continue
+			}
 			c.out = false
 		}
 	}
 	return nil
+}
+
+// LaneProber is a Stager that can answer whether a lane's own state still refuses staging,
+// without a claim, a run or a write. It reports the lane-owned refusal, or nil when the lane
+// would stage.
+type LaneProber interface {
+	ProbeLane(ctx context.Context, lane, base string) error
+}
+
+// ProbeLane is refuseUnlandedCommit on the lane's worktree: the one lane-owned refusal that
+// persists with no change to the lane itself, because only the trunk moving can clear it.
+func (s *LaneStager) ProbeLane(ctx context.Context, lane, base string) error {
+	return s.refuseUnlandedCommit(ctx, StageSpec{LaneID: lane, BaseSHA: base}, filepath.Join(s.LaneRoot, lane, WorktreeDir))
+}
+
+// laneStillRefuses re-checks a lane out of rotation for an unlanded change before it is
+// offered again. An allocation made only to learn that the lane still refuses is an attempt
+// number and a pass spent on no work, so a stager that can probe is asked first. A probe
+// that cannot answer returns the lane to rotation, where staging decides as it always did.
+func (l *Loop) laneStillRefuses(ctx context.Context, lane string, c *laneCondition) bool {
+	if c.reason != ReasonLaneUnlandedChange {
+		return false
+	}
+	prober, ok := l.cfg.Stage.(LaneProber)
+	if !ok {
+		return false
+	}
+	base, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+	if err != nil {
+		return false
+	}
+	refusal := asLaneRefusal(prober.ProbeLane(ctx, lane, strings.TrimSpace(base)))
+	return refusal != nil && refusal.Reason == c.reason && refusal.Msg == c.detail
 }
 
 // loadLaneConditions seeds the session with the conditions the store still records — a

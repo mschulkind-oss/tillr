@@ -342,7 +342,13 @@ and latest action with its clock. The seat is the one the dispatch decision reco
 (`dispatch`, `item` or `none`). `none` means the item asked for no seat and the
 policy's default ran it, which Home shows as "no seat asked (policy default)". An idle row retains its last run and recorded
 outcome. Attempt numbers count distinct runs for that item, including allocations
-that have no terminal row yet. Missing clocks are null, never zero elapsed time.
+that have no terminal row yet, so an attempt number is an ordinal and not a count of
+work done ([what it counts](../tillr-drain/README.md#what-the-attempt-number-counts)).
+Each row also carries `work`, the same three figures an item entry in the snapshot
+carries, and `tillr view lanes` prints them under the row: `runs_started` (runs that
+have a run row, so started a worker), `verify_cycles` (attempts in which a verify-seat
+node started a worker) and `verify_refusals` (`drain.refusal` events with step
+`verify-not-done`). Missing clocks are null, never zero elapsed time.
 
 A settling row carries only the last finished step and its finish clock. Home
 draws `after gate ~40s`; `~` marks elapsed time calculated from a recorded clock,

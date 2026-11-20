@@ -2133,10 +2133,35 @@ toward the infrastructure-failure streak that stops the loop.
 
 While the condition persists, the loop writes nothing per pass. It re-checks the lane on
 the next pass after the lane's HEAD, status or branch changes, and otherwise every ten
-minutes on its clock. A re-check is one staging attempt. If it is refused the same way,
-nothing is written. If it stages, the loop writes one `drain.lane-restored` event and
-prints one line. A restarted loop reads the recorded condition and does not record an
-unchanged one again. It prints the line once more for its own operator.
+minutes on its clock. For `lane-holds-unlanded-change` the re-check is a probe: the
+stager answers whether the lane still holds that change, with no claim, no run and no
+write, so no item is allocated to a lane only to learn that it still refuses. A probe
+that finds the same refusal keeps the lane out and writes nothing. For the other reasons,
+or a stager that cannot probe, a re-check is one staging attempt: if it is refused the same
+way, nothing is written. When the lane stages, or the probe finds it clear, the loop writes
+one `drain.lane-restored` event and prints one line. A restarted loop reads the recorded
+condition and does not record an unchanged one again. It prints the line once more for its
+own operator. A lane is first found refusing by the one staging that meets the refusal;
+that item's claim is cancelled with its node row, so it costs no attempt number (see
+[What the attempt number counts](#what-the-attempt-number-counts)).
+
+### What the attempt number counts
+
+The attempt number names an item's next dispatch: `run-<item>-a<N>` and the `attempt`
+field of a decision. It is one more than the highest attempt among the item's recorded
+node runs, or one more than its count of terminal runs when the store has no node runs.
+A dispatch that ends before a worker starts does not raise it. That covers a lane that
+refuses staging and any other cancelled claim: each leaves
+no node row behind, because cancelling a claim deletes the node rows that claim wrote for
+runs that never started, so the next dispatch reuses the number. An attempt number is
+therefore not a count of failed builds. It reads one higher than the number of retries
+only after a worker has started in each earlier attempt.
+
+On 2026-11-20 an item filed at 05:31 UTC showed "attempt 8" before its first worker,
+because seven claims refused by lane staging left `running` node rows behind; the cancel
+now deletes them. For a count of work done, read `tillr view lanes` and the item entry in
+the snapshot (`work`): the runs that started a worker, the attempts that reached a
+verify-seat worker, and the verify refusals (`drain.refusal` with step `verify-not-done`).
 
 `tillr view waiting` shows each lane out of rotation as a row named `lane:<id>`, with the
 remedy as its mover. `tillr view lanes` prints the condition under the lane's row.

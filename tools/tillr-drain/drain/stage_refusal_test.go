@@ -520,6 +520,13 @@ type refusalLoopFixture struct {
 
 func newRefusalLoopFixture(t *testing.T, ids ...string) refusalLoopFixture {
 	t.Helper()
+	return newRefusalLoopFixtureWithLanes(t, len(ids), ids...)
+}
+
+// newRefusalLoopFixtureWithLanes is the fixture with laneCount lane worktrees, however
+// many items it seeds.
+func newRefusalLoopFixtureWithLanes(t *testing.T, laneCount int, ids ...string) refusalLoopFixture {
+	t.Helper()
 	// Fixture commits and the deployed identity check must agree, without
 	// writing the owner's shared Git configuration.
 	config := filepath.Join(scratchUnderDurable(t), "gitconfig")
@@ -534,7 +541,7 @@ func newRefusalLoopFixture(t *testing.T, ids ...string) refusalLoopFixture {
 	runGit(t, root, "add", ".")
 	runGit(t, root, "commit", "-qm", "base")
 	laneRoot := filepath.Join(scratchUnderDurable(t), "lanes")
-	for i := range ids {
+	for i := 0; i < laneCount; i++ {
 		lane := fmt.Sprintf("lane-%d", i+1)
 		path := filepath.Join(laneRoot, lane, WorktreeDir)
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
