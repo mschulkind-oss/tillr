@@ -1177,6 +1177,34 @@ func dedupe(names []string) []string {
 	return out
 }
 
+// DesignDocumentRule instructs build-type seats not to edit design documents, and instead
+// to end with an obstacle naming the document and needed edit so the design seat makes it.
+const DesignDocumentRule = "Only an item's designer changes a design document: when the change needs a design document edited, do not make the edit; end with an obstacle that names the document and the edit needed, so the design seat makes it."
+
+// stagedSeat answers the seat that a staged run acts on.
+func stagedSeat(recorded stagedItem, spec StageSpec) string {
+	if spec.BlockConflict != nil {
+		return "design"
+	}
+	if spec.Node != nil {
+		return spec.Node.Seat
+	}
+	if recorded.Seat == "" {
+		return "build"
+	}
+	return recorded.Seat
+}
+
+// carriesDesignDocumentRule answers whether a seat's brief carries DesignDocumentRule.
+func carriesDesignDocumentRule(seat string) bool {
+	switch seat {
+	case "build", "edit", "docs", "test-write":
+		return true
+	default:
+		return false
+	}
+}
+
 // briefValuesFor answers the placeholder values for one item and one dispatch.
 //
 // Every value is either read from the item or is a fact about this run. Where the item
@@ -1240,6 +1268,9 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 			settled = "Document-fed workflow prerequisite: an item needs a document block before it is built. This is its one triage run for this request version."
 		}
 		settled += " For a real owner decision, state the question as a sentence ending in a question mark and give at least two bulleted or numbered alternatives under an Options heading in the report. Settlement preserves that question and those options in a numbered Vantage question beneath the item's block, gated like a design ruling. A stale lane base is a staging fault, not an owner decision; report the missing base fact without inventing options."
+	}
+	if carriesDesignDocumentRule(stagedSeat(recorded, spec)) {
+		settled += "\n\n" + DesignDocumentRule
 	}
 	// The order matters: it is the order a brace pair is attributed in, and the item's own
 	// fields come first so the record — not the run — is what a refusal names. TASK carries
