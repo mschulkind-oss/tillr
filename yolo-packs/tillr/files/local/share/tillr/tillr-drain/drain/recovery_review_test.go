@@ -21,7 +21,7 @@ func TestExaminePreparesThenJudgesUnrecordedTerminalCandidate(t *testing.T) {
 func TestExamineReleasesInvalidatedWorkflowWithoutJudgment(t *testing.T) {
 	f, l, steps := restartGraphFixture(t)
 	result := &LoopResult{}
-	for i := 0; i < 6; i++ {
+	for i := 0; i < 5; i++ {
 		graphPass(t, l, result)
 	}
 	w := pendingForTest(t, f, "item-a")

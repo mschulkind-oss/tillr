@@ -228,10 +228,6 @@ func TestTheGateReclaimsItsLaneUntilItAnswers(t *testing.T) {
 		return applyTerminal(tx, run.Record{RunID: plan.decision.RunRequest.RunID, ItemID: "item-a", LaneID: "lane-1", Backend: "fixture", State: run.StateExited, ExitCode: countPtr(0), StartedAt: l.cfg.Now().Format(time.RFC3339), FinishedAt: l.cfg.Now().Format(time.RFC3339), ArtifactRefs: []run.ArtifactRef{}})
 	})
 	var result LoopResult
-	if stop, err := l.pass(context.Background(), &result); err != nil || stop != "" {
-		t.Fatalf("settle %s / %v", stop, err)
-	}
-	drainOwned(t, l, &result)
 	finished := make(chan laneOutcome, 1)
 	go func() {
 		stop, err := l.pass(context.Background(), &result)
@@ -325,13 +321,11 @@ func TestAReplacementLoopSettlesTheStoredOutcomeWithoutRedispatch(t *testing.T) 
 	replacement.cfg.Lanes = []string{"lane-1"}
 	replacement.cfg.Policy.Backends = l.cfg.Policy.Backends
 	var result LoopResult
-	for i := 0; i < 2; i++ {
-		stop, err := replacement.pass(context.Background(), &result)
-		if err != nil || stop != "" {
-			t.Fatalf("replacement pass: %s / %v", stop, err)
-		}
-		drainOwned(t, replacement, &result)
+	stop, err := replacement.pass(context.Background(), &result)
+	if err != nil || stop != "" {
+		t.Fatalf("replacement pass: %s / %v", stop, err)
 	}
+	drainOwned(t, replacement, &result)
 	if result.Dispatched != 0 || result.Candidates != 1 || result.Landed != 1 {
 		t.Fatalf("replacement did not settle and judge exactly once: %+v", result)
 	}

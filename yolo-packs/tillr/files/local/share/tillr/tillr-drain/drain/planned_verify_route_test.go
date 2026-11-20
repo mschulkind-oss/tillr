@@ -477,7 +477,6 @@ func TestPlannedRequestDesignAmendmentRoutesDesignBeforeBuild(t *testing.T) {
 		graphPass(t, l, result)
 	}
 	graphPass(t, l, result)
-	graphPass(t, l, result)
 	if steps.designs != 1 {
 		t.Fatalf("design run did not execute: order=%v", steps.order)
 	}
@@ -541,7 +540,6 @@ func TestRequestDesignRunCannotAddItemBlock(t *testing.T) {
 	for i := 0; i < 5 && steps.designs < 1; i++ {
 		graphPass(t, l, result)
 	}
-	graphPass(t, l, result)
 	graphPass(t, l, result)
 	if steps.designs != 1 {
 		t.Fatalf("design run did not execute: order=%v", steps.order)

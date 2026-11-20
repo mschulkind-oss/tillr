@@ -412,6 +412,10 @@ func terminalRecord(r *store.Reader, id string) (*run.Record, error) {
 }
 
 func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *RunInputs, template *string, policy *Policy, shut map[string]bool, gates int) (Decision, error) {
+	return pendingDecisionExcept(r, work, at, inputs, template, policy, shut, gates, "", "")
+}
+
+func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inputs *RunInputs, template *string, policy *Policy, shut map[string]bool, gates int, exceptLane, exceptRunID string) (Decision, error) {
 	d := work.Decision
 	d.From, d.To = "running", ""
 	d.Action, d.Reason = ActionHold, ReasonRunLive
@@ -427,7 +431,7 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 		}
 	}
 	if len(d.Parallel) > 0 && work.Orphaned && !work.BoundaryFailed {
-		leases, err := activeLeases(r, at, []string{d.LaneID})
+		leases, err := activeLeasesExcept(r, at, []string{d.LaneID}, exceptLane, exceptRunID)
 		if err != nil {
 			return Decision{}, err
 		}
@@ -439,7 +443,7 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 			if changed {
 				copy := *work
 				copy.Decision, copy.Ready, copy.Orphaned = restarted, true, false
-				return pendingDecision(r, &copy, at, inputs, template, policy, shut, gates)
+				return pendingDecisionExcept(r, &copy, at, inputs, template, policy, shut, gates, exceptLane, exceptRunID)
 			}
 		}
 	}
@@ -448,7 +452,7 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 		if err != nil {
 			return Decision{}, err
 		}
-		leases, err := activeLeases(r, at, []string{d.LaneID})
+		leases, err := activeLeasesExcept(r, at, []string{d.LaneID}, exceptLane, exceptRunID)
 		if err != nil {
 			return Decision{}, err
 		}
@@ -463,7 +467,7 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 			d.RunRequest = &request
 			d.WorkflowRestart = true
 			workCopy.Decision, workCopy.Ready, workCopy.Orphaned = d, true, false
-			return pendingDecision(r, &workCopy, at, inputs, template, policy, shut, gates)
+			return pendingDecisionExcept(r, &workCopy, at, inputs, template, policy, shut, gates, exceptLane, exceptRunID)
 		}
 	}
 	if work.Ready {
@@ -711,7 +715,7 @@ func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *R
 	}
 	if d.Action != ActionHold {
 		if !work.LaneReleased {
-			leases, err := activeLeases(r, at, []string{d.LaneID})
+			leases, err := activeLeasesExcept(r, at, []string{d.LaneID}, exceptLane, exceptRunID)
 			if err != nil {
 				return Decision{}, err
 			}
@@ -2388,6 +2392,9 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 			completion.outcome.err = err
 		} else if d.Action == ActionSettle && len(work.Decision.Parallel) > 0 {
 			completion.outcome = l.settleParallel(ctx, work, local, &timing, watched)
+			if completion.outcome.err == nil && completion.outcome.stop == "" {
+				completion.outcome, completion.step = l.judgeSettledCandidate(ctx, d, local, &timing)
+			}
 		} else if d.Action == ActionSettle {
 			s, err := store.OpenRead(ctx, l.cfg.Store)
 			var rec *run.Record
@@ -2440,62 +2447,11 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 			} else {
 				completion.outcome.err = err
 			}
+			if completion.outcome.err == nil && completion.outcome.stop == "" && completion.laneRefusal == nil {
+				completion.outcome, completion.step = l.judgeSettledCandidate(ctx, d, local, &timing)
+			}
 		} else {
-			c := *work.Candidate
-			c.TickID = timing.TickID
-			var stop string
-			var landed bool
-			var err error
-			if work.RepairHold != nil {
-				// Retry the retained repair, not another gate and land of the same
-				// original candidate. The original conflict remains the evidence.
-				stop, landed, err = l.conflictFix(ctx, c, work.RepairHold.Conflict, local, &timing, work.RepairHold.TrunkSHA)
-			} else if work.DirtyHold != nil || work.Gated {
-				stop, landed, err = l.landCandidate(ctx, c, local, &timing)
-			} else {
-				stop, landed, err = l.verify(ctx, &c, local, &timing)
-			}
-			if terminal := asItemTerminal(err); terminal != nil {
-				// The item went terminal by another route during this examination.
-				completion.outcome = laneOutcome{err: l.settleTerminalItem(ctx, work, terminal)}
-			} else {
-				held, keep := retainLane(err)
-				itemFault := errors.Is(err, errItemFaultHeld)
-				repairHeld := errors.Is(err, errRepairHeld)
-				if held {
-					err = nil
-					if !keep {
-						copy := *work
-						copy.Candidate = &c
-						reason := ""
-						if repairHeld {
-							reason = ReasonRepairStagingFailed
-						}
-						// A candidate mismatch must retain the unexpected checkout.
-						if itemFault {
-							if head, headErr := l.revParse(ctx, c.Worktree, "HEAD"); headErr != nil || head != c.HeadSHA {
-								reason = ReasonCandidateMismatch
-							}
-						}
-						_, err = l.releaseCandidate(ctx, &copy, reason, true)
-					}
-				}
-				if err != nil || stop != "" {
-					l.pinQuietly(ctx, c.RunID, c.HeadSHA)
-				}
-				if err == nil && stop == "" && !held {
-					if landed {
-						stop = l.abandon(ctx, c.LaneID, "", "")
-						err = l.prunePreservedWork(ctx)
-					} else {
-						stop = l.abandon(ctx, c.LaneID, c.RunID, c.HeadSHA)
-					}
-					if stop == "" && err == nil {
-						err = l.markExamined(ctx, work.Decision)
-					}
-				}
-				completion.outcome = laneOutcome{stop: stop, err: err}
-			}
+			completion.outcome = l.runCandidateExamination(ctx, work, local, &timing)
 		}
 		completion.outcome = retainedOutcome(completion.outcome)
 		// A retained lane keeps its lease: releasing it would let the next staging clear the

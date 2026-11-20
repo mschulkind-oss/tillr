@@ -111,6 +111,10 @@ func (l *Loop) checkItemTerminal(ctx context.Context, itemID, step string) error
 // the host rather than the item, and only the operator clears it. A dirty-path,
 // trunk-rewritten or repair hold waits for something that no longer matters, so it settles.
 func terminalSettlement(r *store.Reader, work *pendingWork, at time.Time) (Decision, bool, error) {
+	return terminalSettlementExcept(r, work, at, "", "")
+}
+
+func terminalSettlementExcept(r *store.Reader, work *pendingWork, at time.Time, exceptLane, exceptRunID string) (Decision, bool, error) {
 	if work.BoundaryFailed || work.Decision.RunRequest == nil {
 		return Decision{}, false, nil
 	}
@@ -121,7 +125,7 @@ func terminalSettlement(r *store.Reader, work *pendingWork, at time.Time) (Decis
 		}
 	}
 	if !work.LaneReleased {
-		leases, err := activeLeases(r, at, []string{work.Decision.LaneID})
+		leases, err := activeLeasesExcept(r, at, []string{work.Decision.LaneID}, exceptLane, exceptRunID)
 		if err != nil || len(leases) != 0 {
 			return Decision{}, false, err
 		}

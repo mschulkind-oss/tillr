@@ -83,9 +83,9 @@ git commit -qm 'design answer'
 			steps := &designRepairSteps{returnedLandingSteps: &returnedLandingSteps{continuationSteps: &continuationSteps{t: t, store: f.storePath, laneRoot: f.laneRoot, at: l.cfg.Now()}, root: f.root}, failures: failures}
 			l.cfg.Steps = steps
 			l.cfg.Stage = &LaneStager{Root: f.root, LaneRoot: f.laneRoot, Store: f.storePath, Template: filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"), Now: l.cfg.Now}
-			// The rolling pass dispatches, settles and examines independently. Replace the
-			// loop after the first refusal, before it has planned the continuation.
-			for i := 0; i < 3; i++ {
+			// The rolling pass dispatches in one pass and settles and gates in the next.
+			// Replace the loop after the first refusal, before it has planned the continuation.
+			for i := 0; i < 2; i++ {
 				onePassNoStop(t, l)
 			}
 			if steps.gates != 1 || steps.lands != 0 {
@@ -96,7 +96,7 @@ git commit -qm 'design answer'
 			if err != nil {
 				t.Fatal(err)
 			}
-			for i := 0; i < 3*failures; i++ {
+			for i := 0; i < 2*failures; i++ {
 				onePassNoStop(t, l)
 			}
 			if steps.gates != failures+1 || steps.lands != 1 || len(steps.requests) != failures+1 {

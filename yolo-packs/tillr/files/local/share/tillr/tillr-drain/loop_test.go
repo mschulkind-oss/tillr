@@ -267,10 +267,10 @@ func TestTwoConsecutiveTicksDispatchAndRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	// Two items take dispatch, settlement and judgment in separate passes; no
-	// count limits the work, and the freed lane is reused for the second item.
-	if result.Stop != drain.StopQueueDrained || result.Ticks != 6 {
-		t.Fatalf("the loop stopped %q after %d pass(es), want %q after 6", result.Stop, result.Ticks, drain.StopQueueDrained)
+	// Each item takes one pass to dispatch and one pass to settle, gate and land;
+	// no count limits the work, and the freed lane is reused for the second item.
+	if result.Stop != drain.StopQueueDrained || result.Ticks != 4 {
+		t.Fatalf("the loop stopped %q after %d pass(es), want %q after 4", result.Stop, result.Ticks, drain.StopQueueDrained)
 	}
 	if result.Dispatched != 2 || result.Landed != 2 {
 		t.Fatalf("the loop dispatched %d and landed %d, want 2 and 2", result.Dispatched, result.Landed)
@@ -345,8 +345,8 @@ func TestTheLoopMeasuresWhatEveryRunSpentAndRunsOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	if result.Stop != drain.StopQueueDrained || result.Ticks != 6 || result.Landed != 2 {
-		t.Fatalf("the loop stopped %q after %d tick(s) and landed %d, want %q after 2 and 2: %s",
+	if result.Stop != drain.StopQueueDrained || result.Ticks != 4 || result.Landed != 2 {
+		t.Fatalf("the loop stopped %q after %d tick(s) and landed %d, want %q after 4 and 2: %s",
 			result.Stop, result.Ticks, result.Landed, drain.StopQueueDrained, result.Detail)
 	}
 	if result.Tokens != 2_000_000 || result.SpendUSD != 6 {
@@ -390,8 +390,8 @@ func TestTheLoopPrintsOneSpendLinePerRunAndComparesNoCeiling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	if result.Stop != drain.StopQueueDrained || result.Ticks != 6 {
-		t.Fatalf("the loop stopped %q (%s) after %d pass(es), want %q after 6",
+	if result.Stop != drain.StopQueueDrained || result.Ticks != 4 {
+		t.Fatalf("the loop stopped %q (%s) after %d pass(es), want %q after 4",
 			result.Stop, result.Detail, result.Ticks, drain.StopQueueDrained)
 	}
 	if result.Tokens != 2_000_000 || result.SpendUSD != 6 {
@@ -536,7 +536,7 @@ func TestACandidateFailureDoesNotStopTheLoopAndDoesNotFailOver(t *testing.T) {
 	// about one candidate, never a reason to stop. Each refusal goes back to its worker
 	// with the evidence once; the second, identical refusal is a repeat, which waits on the
 	// owner because the fixture's policy names no design seat (the ruling of 2026-11-17).
-	if result.Stop != drain.StopQueueDrained || result.Ticks != 12 || !strings.Contains(result.Detail, "item_041 ("+drain.ReasonConflictOwner+")") {
+	if result.Stop != drain.StopQueueDrained || result.Ticks != 8 || !strings.Contains(result.Detail, "item_041 ("+drain.ReasonConflictOwner+")") {
 		t.Fatalf("a candidate failure stopped the loop after %d pass(es): %q (%s)", result.Ticks, result.Stop, result.Detail)
 	}
 	if result.Rejected != 4 || result.Landed != 0 {
@@ -831,8 +831,8 @@ func TestTheLoopHasNoTickBudget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	if result.Stop != drain.StopQueueDrained || result.Ticks != 6 || result.Dispatched != 2 || result.Landed != 2 {
-		t.Fatalf("the loop stopped %q after %d tick(s), %d dispatch(es) and %d landing(s), want %q after 2, 2 and 2: %s",
+	if result.Stop != drain.StopQueueDrained || result.Ticks != 4 || result.Dispatched != 2 || result.Landed != 2 {
+		t.Fatalf("the loop stopped %q after %d tick(s), %d dispatch(es) and %d landing(s), want %q after 4, 2 and 2: %s",
 			result.Stop, result.Ticks, result.Dispatched, result.Landed, drain.StopQueueDrained, result.Detail)
 	}
 }
@@ -1393,8 +1393,8 @@ func TestALandedCandidateMovesItsItemToLanded(t *testing.T) {
 	}
 	// The second tick planned nothing, because the only item had landed: the loop stopped
 	// cleanly after one tick rather than re-dispatching what it had just landed.
-	if result.Stop != drain.StopQueueDrained || result.Ticks != 3 || result.Dispatched != 1 {
-		t.Fatalf("the loop stopped %q after %d tick(s) and %d dispatch(es), want %q after one and one: %s",
+	if result.Stop != drain.StopQueueDrained || result.Ticks != 2 || result.Dispatched != 1 {
+		t.Fatalf("the loop stopped %q after %d tick(s) and %d dispatch(es), want %q after two and one: %s",
 			result.Stop, result.Ticks, result.Dispatched, drain.StopQueueDrained, result.Detail)
 	}
 	if runs := lines(t, f.count); countMatching(runs, "adapter") != 1 {
@@ -1480,7 +1480,7 @@ func TestADrainThatRefusedEveryCandidateNamesItAsARepeatedRefusal(t *testing.T) 
 	for _, want := range []string{
 		"every one of its 4 candidate(s) was refused",
 		"fence=4",
-		"window: 12 tick(s)",
+		"window: 8 tick(s)",
 		"items left in the queue: item_041, item_042",
 	} {
 		if !strings.Contains(line, want) {

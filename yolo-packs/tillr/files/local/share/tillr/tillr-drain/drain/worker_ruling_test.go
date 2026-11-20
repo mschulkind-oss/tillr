@@ -25,7 +25,7 @@ func TestAnInFlightWorkflowIsNotInvalidatedByABlockOrFenceEdit(t *testing.T) {
 		t.Run(edit, func(t *testing.T) {
 			f, l, _ := restartGraphFixture(t)
 			result := &LoopResult{}
-			for i := 0; i < 6; i++ {
+			for i := 0; i < 5; i++ {
 				graphPass(t, l, result)
 			}
 			if w := pendingForTest(t, f, "item-a"); w == nil || w.Done {

@@ -48,7 +48,6 @@ func TestLandingCallOfferAndFooterSettlement(t *testing.T) {
 			l.cfg.Steps = landingCallGateSteps{steps}
 			var result LoopResult
 			settleContinuation(t, l, &result)
-			settleContinuation(t, l, &result)
 			if steps.gates != 1 || result.RefusedSteps[RefusalGate] != 1 {
 				t.Fatalf("did not judge commit: gates=%d result=%+v", steps.gates, result)
 			}
@@ -159,7 +158,6 @@ func returnedLandingFixture(t *testing.T, transcript string) (refusalLoopFixture
 	declareWorkerResumeFixture(t, l)
 	l.cfg.Steps = landingCallGateSteps{steps}
 	var result LoopResult
-	settleContinuation(t, l, &result)
 	settleContinuation(t, l, &result)
 	p := mustPlan(t, l)[0]
 	if p.decision.RunRequest == nil || !p.decision.RunRequest.SessionTurn || p.decision.LaneID != first.LaneID {
@@ -318,7 +316,6 @@ with path.open('a') as out:
 			}
 			declareWorkerResumeFixture(t, l)
 			var result LoopResult
-			settleContinuation(t, l, &result)
 			settleContinuation(t, l, &result)
 			plans := mustPlan(t, l)
 			if len(plans) != 1 || plans[0].decision.RunRequest == nil || !plans[0].decision.RunRequest.SessionTurn || plans[0].decision.LaneID != first.LaneID {
