@@ -33,7 +33,8 @@ while True:
             binary.chmod(0o755)
             with self.assertRaises(shards.ShardError) as caught:
                 shards.run_shard('fixture', root, binary, ['TestHung'], 2,
-                                 root / 'scratch', '0', [], wall_timeout=1)
+                                 root / 'scratch', '0', [], wall_timeout=1,
+                                 lock_dir=root / 'locks')
             self.assertIn('fixture shard 2', str(caught.exception))
             self.assertIn('TestHung', str(caught.exception))
             self.assertIn('timed out', str(caught.exception))
@@ -59,7 +60,8 @@ print('PASS', flush=True)
             binary.chmod(0o755)
             events = shards.run_shard('fixture', root, binary,
                                       ['TestOne', 'TestTwo', 'TestThree'], 0,
-                                      root / 'scratch', '0', [], wall_timeout=2)
+                                      root / 'scratch', '0', [], wall_timeout=2,
+                                      lock_dir=root / 'locks')
             self.assertEqual({e.get('Test') for e in events if e.get('Action') == 'pass' and e.get('Test')},
                              {'TestOne', 'TestTwo', 'TestThree'})
 
@@ -75,7 +77,11 @@ func TestHung(t *testing.T) { for { time.Sleep(time.Second) } }
 ''')
             events = root / 'events.jsonl'
             result = subprocess.run(['python3', str(RUNNER), str(root), '-k', '1',
-                                     '--shard-timeout', '2', '--events', str(events)],
+                                     '--shard-timeout', '2', '--events', str(events),
+                                     # A private slot pool: the machine-wide one is held by
+                                     # every other shard run, and waiting on it is not the
+                                     # stall this test measures.
+                                     '--lock-dir', str(root / 'locks')],
                                     capture_output=True, text=True, timeout=60)
             self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn('fixture shard 0 timed out', result.stderr)
