@@ -1028,6 +1028,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.SupersedesRunID = repeated.RunID
 	case retry == nil && !interrupted && repeated == nil && !attempt.failover && returned == nil && p.mayBeARetry(item.ItemID) && decision.ConflictID == "" && holdEnabled(p.rules(), p.retryHoldReason(item.ItemID)):
 		decision.Action, decision.Reason = ActionHold, p.retryHoldReason(item.ItemID)
+		decision.SupersedesRunID = p.latest[item.ItemID]
 	case holdEnabled(p.rules(), ReasonNoFence) && fenceAdmitsNothing(fence):
 		decision.Action, decision.Reason = ActionHold, ReasonNoFence
 	case p.lands() && forkHeld:

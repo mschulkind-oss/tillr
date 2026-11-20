@@ -1,6 +1,7 @@
 package item
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -86,16 +87,19 @@ func RejectionOf(err error) (*ExitError, bool) {
 // RejectionEnvelope is the record a negative decision carries: the rule it refused
 // under, the item it is about, and the reason in prose.
 func RejectionEnvelope(rej *ExitError, at time.Time) record.Envelope {
-	body, err := json.Marshal(map[string]string{
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(map[string]string{
 		"item_id": rej.ItemID,
 		"rule":    rej.Rule,
 		"reason":  rej.Msg,
-	})
-	if err != nil {
+	}); err != nil {
 		// The payload is a map of strings this file builds, so an encoding failure is a
 		// bug rather than an outcome.
 		panic(err)
 	}
+	body := bytes.TrimSuffix(buf.Bytes(), []byte{'\n'})
 	return record.Envelope{
 		RecordVersion: record.SupportedVersion,
 		Kind:          RejectionKind,

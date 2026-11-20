@@ -108,7 +108,7 @@ func RecordConflict(tx *store.Tx, c Conflict, at time.Time) error {
 		state = "in-queue"
 	}
 	reason, _, _ := strings.Cut(c.Text, "\n")
-	if _, err := SetState(nil, tx, c.ItemID, state, at, WaitingOn{Waiter: c.WaitingOn, Reason: strings.TrimSpace(reason)}); err != nil {
+	if _, err := SetStateWithReceipt(nil, tx, c.ItemID, state, at, MoveReceipt{conflictRelease: state == "in-queue"}, WaitingOn{Waiter: c.WaitingOn, Reason: strings.TrimSpace(reason)}); err != nil {
 		return err
 	}
 	body, err := json.Marshal(c)

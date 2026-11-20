@@ -111,7 +111,7 @@ func judgeFace(args []string) int {
 func printJudgeError(err error, at time.Time) int {
 	env, code := rejectionOrFailure(err, at)
 	if env.Kind != "" {
-		raw, err := record.Encode(env)
+		raw, err := encodeEnvelope(env)
 		if err != nil {
 			return fail(item.Internalf("encoding judge rejection: %v", err))
 		}

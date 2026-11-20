@@ -72,7 +72,7 @@ var Rules = map[string]Rule{
 	"ready":                        {"ready", "queue", "the next pass"},
 	"blocked":                      {"waits on work", "queue", "cause not recorded"},
 	"not-ready":                    {"needs you", "queue", "the owner"},
-	"run-link-missing":             {"needs a cause", "lane", "cause not recorded"},
+	"run-link-missing":             {"needs a cause", "lane", "supersede the unanswered run with tillr drain retry"},
 	"boundary-scope-escape":        {"needs you", "fence", "inspect the named node and escaped path, then authorize a retry"},
 	"node-scope-outside-fence":     {"needs you", "fence", "narrow the named node's write_scope to the item's fence"},
 	"candidate-no-op":              {"needs a cause", "lane", "cause not recorded"},

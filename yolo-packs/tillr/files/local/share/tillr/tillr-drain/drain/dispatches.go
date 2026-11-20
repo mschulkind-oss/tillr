@@ -101,6 +101,11 @@ func (e *decisionCollisionError) Unwrap() error { return e.ExitError }
 // identity for different columns is an error, never permission to overwrite history.
 func recordPassDecision(tx *store.Tx, decision Decision, at time.Time) error {
 	columns := decisionColumns(decision)
+	if columns.deferredBy == nil && decision.Action == ActionHold && decision.Reason == ReasonRunLinkMissing {
+		if _, _, moverAction := runLinkMissingHold(tx.Reader(), decision.ItemID, decision.SupersedesRunID); moverAction != "" {
+			columns.deferredBy = moverAction
+		}
+	}
 	var itemID, action, reason string
 	var laneID, runID, deferredBy, seat, backend sql.NullString
 	err := tx.QueryRow(`SELECT item_id, lane_id, run_id, action, reason, deferred_by, seat, backend
