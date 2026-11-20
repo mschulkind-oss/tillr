@@ -43,6 +43,9 @@ type EndingCheck struct {
 	CheckID string `json:"check_id"`
 	LogRef  string `json:"log_ref,omitempty"`
 	Digest  string `json:"digest,omitempty"`
+	// Failing is what the gate's own report named as failed in this run, read when the
+	// refusal is recorded (readTriageBlock); empty when the report named nothing.
+	Failing []FailingCheck `json:"failing,omitempty"`
 }
 
 // returnedCauses are the refusal steps whose ending goes back to the item's worker. Each
@@ -177,6 +180,11 @@ func returnedBrief(e ReturnedEnding) string {
 		return restartBrief(e)
 	}
 	var b strings.Builder
+	// A gate refusal's reply opens the turn, before the restated brief; an answer text that
+	// already carries it (Detail, from a parked call's answer) is not repeated.
+	if e.Cause == RefusalGate && !strings.Contains(e.Detail, failureHeading) {
+		b.WriteString("\n" + failureSummary(e.Checks))
+	}
 	b.WriteString("\n## Your previous attempt\n\n")
 	fmt.Fprintf(&b, "This item's previous run, %s, did not land. ", e.RunID)
 	switch e.Cause {
@@ -274,6 +282,7 @@ func gateFailingChecks(runDir, runID string) []EndingCheck {
 			if output, err := os.ReadFile(check.LogRef); err == nil && check.LogRef != "" {
 				c.Digest = evidenceDigest(string(output), runID)
 			}
+			c.Failing = readTriageBlock(check.LogRef)
 			byID[check.CheckID] = c
 		}
 	}

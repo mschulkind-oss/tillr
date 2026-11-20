@@ -14,6 +14,11 @@ import (
 
 func returnedSessionFixture(t *testing.T, cause string) (refusalLoopFixture, *Loop, plannedApplication, string) {
 	t.Helper()
+	return returnedSessionFixtureWith(t, cause, "dead anchor")
+}
+
+func returnedSessionFixtureWith(t *testing.T, cause, gateOutput string) (refusalLoopFixture, *Loop, plannedApplication, string) {
+	t.Helper()
 	f, l := designSeatFixture(t)
 	declareWorkerResumeFixture(t, l)
 	l.cfg.Lanes = []string{"lane-1"}
@@ -33,7 +38,7 @@ func returnedSessionFixture(t *testing.T, cause string) (refusalLoopFixture, *Lo
 		runGit(t, target, "add", "candidate.txt")
 		runGit(t, target, "commit", "-qm", "first")
 	}
-	finishRefused(t, f, l, first, cause, "fixture refusal", "documents", "dead anchor")
+	finishRefused(t, f, l, first, cause, "fixture refusal", "documents", gateOutput)
 	if stop := l.abandon(context.Background(), first.decision.LaneID, first.decision.RunRequest.RunID, runGit(t, target, "rev-parse", "HEAD")); stop != "" {
 		t.Fatal(stop)
 	}

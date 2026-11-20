@@ -15,6 +15,8 @@ import (
 type designRepairSteps struct {
 	*returnedLandingSteps
 	failures int
+	// output is the gate log's content when set; the default is one lint line.
+	output   string
 	sessions []string
 	requests []run.Request
 }
@@ -36,7 +38,7 @@ func (s *designRepairSteps) Gate(ctx context.Context, c Candidate) (GateOutcome,
 	s.gates++
 	dir := RunDir(s.root, c.RunID)
 	log := filepath.Join(dir, "documents.log")
-	if err := os.WriteFile(log, []byte("document lint: invalid heading\n"), 0600); err != nil {
+	if err := os.WriteFile(log, []byte("document lint: invalid heading\n"+s.output), 0600); err != nil {
 		return GateOutcome{}, err
 	}
 	verdict := fmt.Sprintf(`{"payload":{"checks":[{"check_id":"documents","result":"fail","log_ref":%q}]}}`, log)

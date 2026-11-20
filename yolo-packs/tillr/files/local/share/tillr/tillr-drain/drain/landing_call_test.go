@@ -294,10 +294,12 @@ with path.open('a') as out:
 			var detail []string
 			switch stage {
 			case "gate":
-				l.cfg.Steps = &designRepairSteps{returnedLandingSteps: &returnedLandingSteps{continuationSteps: steps, root: f.root}, failures: 1}
+				l.cfg.Steps = &designRepairSteps{returnedLandingSteps: &returnedLandingSteps{continuationSteps: steps, root: f.root}, failures: 1, output: triageFixtureBlock}
 				writeForkFile(t, filepath.Join(firstDir, GatePlanRecord), `{"record_version":1,"kind":"gate.plan","id":"plan","producer":{"system":"tillr","utility":"gate","version":"0.1.0"},"created_at":"2026-11-13T06:21:56Z","payload":{"checks":[{"check_id":"documents","command":["lint-docs","--strict"]}]}}`)
 				evidence = []string{filepath.Join(firstDir, "documents.log")}
-				detail = []string{"Check: documents", `Command: ["lint-docs" "--strict"]`, "document lint: invalid heading"}
+				detail = []string{"Check: documents", `Command: ["lint-docs" "--strict"]`, "document lint: invalid heading",
+					"check go-drain", "case: TestGatheredWriteFairness", "at: tools/tillr-drain/drain/gathered_fairness_test.go:113",
+					"assertion: a check asserts elapsed time", "reproduce only this case: " + triageFixtureOneCase, "not the whole suite"}
 			case "judge":
 				l.cfg.Policy.Seats = map[string]string{"review": "reviewer"}
 				l.cfg.Policy.Backends["reviewer"] = Backend{Adapter: "fixture", Model: "review-model"}
@@ -399,6 +401,12 @@ with path.open('a') as out:
 			for _, want := range append(detail, "Offer commit: "+head, "Branch head: "+head, "Last base: "+base, "Turn: "+d.RunRequest.RunID, "Scratch: "+dir) {
 				if !strings.Contains(answer.Text, want) {
 					t.Errorf("answer lacks %q: %s", want, answer.Text)
+				}
+			}
+			if stage == "gate" {
+				// The failing case opens the answer: before the offer lines and the logs.
+				if at, offer := strings.Index(answer.Text, "check go-drain"), strings.Index(answer.Text, "Offer commit:"); at < 0 || offer < at || !strings.Contains(answer.Text[:offer], failureHeading) {
+					t.Errorf("the failing case is not at the top of the answer: %s", answer.Text)
 				}
 			}
 			outcome := l.settle(ctx, d, rec, log, base, "tick", l.cfg.Now(), &LoopResult{}, nil, nil, false)
