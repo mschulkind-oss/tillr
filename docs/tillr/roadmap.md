@@ -25,10 +25,10 @@ The first rule that separates two entries decides.
 
 ## 1. Rulings that are waiting on the owner
 
-The questions below are left for the owner on this page: 33 by `vantage-check index` on
+The questions below are left for the owner on this page: 31 by `vantage-check index` on
 2026-11-20, 11 of them the provenance review's (after the owner ruled [`OQ-PR21`](./decision-provenance-review.md#OQ-PR21)
 and [`OQ-PR22`](./decision-provenance-review.md#OQ-PR22) on 2026-11-19 and nine more on
-2026-11-20) and 20 across the six designs of 2026-11-19 and 2026-11-20 placed in entries 2 to 7
+2026-11-20) and 18 across the six designs of 2026-11-19 and 2026-11-20 placed in entries 2 to 7
 below. That placement and order are the designer's, made on 2026-11-20 at the owner's instruction
 not to wait for him, and are his to reorder. Each question has options and a recorded leaning.
 Twenty-three others that stood here were settled on 2026-11-15 and 2026-11-16 by the session's
@@ -86,13 +86,15 @@ AutoQA leaves the [Icebox](#icebox).
    design on this page is built on some of them.
 
 2. [Who chooses an item's seat, what the plan step is for, and how builders fan out](../design/tillr-plan-step-and-seat-selection.md)
-   ([`OQ-PSS1`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS1),
-   [`OQ-PSS2`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS2),
-   [`OQ-PSS3`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS3)): placed ahead of the
-   other five by the designer (and the owner's to reorder) because on the night of 2026-11-19 a
-   failed verify restarting at the plan step cost the most rework, blocking request intake,
-   builder fan-out and review return in [Planning and model tiering](../design/tillr-planning-node-model-tiering.md)
-   and [entry 4](#4-choose-where-each-seat-runs).
+   ([`OQ-PSS3`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS3), after the owner ruled
+   [`OQ-PSS1`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS1),
+   [`OQ-PSS2`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS2) and subagent tier control
+   on 2026-11-20): placed ahead of the other five by the designer (and the owner's to reorder)
+   because settling its one remaining question on higher-tier builder subagent calls finishes the
+   unbuilt design that replaces the upfront plan step and failed-verify restart that cost the most
+   rework on the night of 2026-11-19, blocking builder fan-out tier enforcement in
+   [Planning and model tiering](../design/tillr-planning-node-model-tiering.md) and
+   [entry 4](#4-choose-where-each-seat-runs).
 
 3. [Refused autopushes](../design/tillr-refused-push.md)
    ([`OQ-RP1`](../design/tillr-refused-push.md#OQ-RP1),
@@ -214,9 +216,10 @@ planned items have run and their cost can be read, and its ledger holds designer
 not reviewed. Two follow-up designs from the 2026-11-18 and 2026-11-19 run audit wait on his
 rulings above before changing how items enter and run:
 [who chooses an item's seat and what the plan step is for](../design/tillr-plan-step-and-seat-selection.md)
-([`OQ-PSS1`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS1) to
-[`OQ-PSS3`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS3)), because a failed verify
-restarting at the plan step cost the most rework on 2026-11-19, and
+([`OQ-PSS3`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS3), after the owner ruled
+[`OQ-PSS1`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS1) and
+[`OQ-PSS2`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS2) on 2026-11-20), because a
+failed verify restarting at the plan step cost the most rework on 2026-11-19, and
 [what a designer reads itself and what goes to scouts](../design/tillr-designer-scouts.md)
 ([`OQ-RD1`](../design/tillr-designer-scouts.md#OQ-RD1) to
 [`OQ-RD3`](../design/tillr-designer-scouts.md#OQ-RD3)), because frontier `design` and `plan` runs
@@ -344,8 +347,7 @@ on every design run but stops nothing when it is missing.
 Also filed here: [a planning stage that fans implementation out by seat](#add-a-planning-stage-that-fans-implementation-out-by-seat),
 which the owner asked to be high priority on 2026-11-18 and which sets the queue's order for
 model savings; [who chooses an item's seat and what the plan step is for](../design/tillr-plan-step-and-seat-selection.md)
-([`OQ-PSS1`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS1) to
-[`OQ-PSS3`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS3)) blocks replacing that
+([`OQ-PSS3`](../design/tillr-plan-step-and-seat-selection.md#OQ-PSS3)) blocks replacing that
 upfront plan step and failed-verify restart after they cost the most rework on 2026-11-19, and
 [what a designer reads itself and what goes to scouts](../design/tillr-designer-scouts.md)
 ([`OQ-RD1`](../design/tillr-designer-scouts.md#OQ-RD1) to
