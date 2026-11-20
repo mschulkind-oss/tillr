@@ -57,7 +57,12 @@ skill is [`docs/design/tillr-distribution.md`](https://github.com/mschulkind-oss
   an adapter-forwarded exit code `130` (`SIGINT`) or `143` (`SIGTERM`). Crash signals
   (`SIGSEGV`, `SIGABRT`, `SIGBUS`, `SIGILL`, or unrequested `SIGKILL` with an uncanceled
   context) and all other non-zero exits keep `end_cause: normal-exit` so broken backends
-  still close.
+  still close. Whatever the cause, every signaled exit, whether the process died by the
+  signal or an adapter forwarded exit 128 plus its number, records the signal's name in the
+  record's `signal` field (`SIGKILL`, `SIGSEGV`), so a kill is distinguishable from a crash
+  and from a plain exit. The drain still classifies on `end_cause`: a crash signal or an
+  unrequested `SIGKILL` counts against the backend, and only `SIGTERM`/`SIGINT` is an
+  interruption.
 
 ## Standalone invocation
 

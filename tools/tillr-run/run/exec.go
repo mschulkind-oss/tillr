@@ -522,10 +522,21 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		payload.ExitCode = &code
 		payload.EndCause = EndNormalExit
 		status, hasStatus := exitErr.Sys().(syscall.WaitStatus)
-		signaled := hasStatus && status.Signaled()
-		if payload.EndingException == "" && (signaled && (status.Signal() == syscall.SIGTERM || status.Signal() == syscall.SIGINT) ||
-			errors.Is(runCtx.Err(), context.Canceled) ||
-			(!signaled && (code == 128+int(syscall.SIGTERM) || code == 128+int(syscall.SIGINT)))) {
+		var sig syscall.Signal
+		switch {
+		case hasStatus && status.Signaled():
+			sig = status.Signal()
+		case code > 128 && code < 128+65:
+			// An adapter forwards its harness's death as 128 plus the signal number.
+			sig = syscall.Signal(code - 128)
+		}
+		name := SignalName(sig)
+		payload.Signal = name
+		// Only an external SIGTERM or SIGINT is an interruption. Every other signal,
+		// crash or SIGKILL, keeps normal-exit so a broken backend still counts against
+		// itself; the Signal field says which one it was.
+		if payload.EndingException == "" && (sig == syscall.SIGTERM || sig == syscall.SIGINT ||
+			errors.Is(runCtx.Err(), context.Canceled)) {
 			payload.EndCause = EndSignal
 		}
 	default:
