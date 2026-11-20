@@ -769,8 +769,10 @@ func (l *Loop) recordLandedJudge(ctx context.Context, c Candidate) error {
 		if _, err := item.RecordJudge(ctx, tx, receipt.Raw, options); err != nil {
 			return err
 		}
-		_, err = item.SetState(ctx, tx, c.ItemID, StateLanded, l.cfg.Now())
-		return err
+		if _, err := item.SetState(ctx, tx, c.ItemID, StateLanded, l.cfg.Now()); err != nil {
+			return err
+		}
+		return endItemUnfinishedRunsInTx(ctx, tx, c.ItemID, c.RunID, l.cfg.Now().UTC())
 	})
 }
 

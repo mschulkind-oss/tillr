@@ -207,7 +207,10 @@ func (l *Loop) settleTerminalItem(ctx context.Context, work *pendingWork, found 
 		if err := appendEffect(tx, examinationDoneKind, runID, struct{}{}, at); err != nil {
 			return err
 		}
-		return appendEffect(tx, itemTerminalSettledKind, runID, body, at)
+		if err := appendEffect(tx, itemTerminalSettledKind, runID, body, at); err != nil {
+			return err
+		}
+		return endItemUnfinishedRunsInTx(ctx, tx, d.ItemID, "", at)
 	})
 	if err != nil {
 		return err
@@ -235,6 +238,9 @@ func (l *Loop) resolveElsewhere(ctx context.Context, c Candidate) error {
 		if rejection, ok := item.RejectionOf(err); ok && rejection.Rule == "already-landed" {
 			_, err = item.SetState(ctx, tx, c.ItemID, "landed", l.cfg.Now().UTC())
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		return endItemUnfinishedRunsInTx(ctx, tx, c.ItemID, c.RunID, l.cfg.Now().UTC())
 	})
 }

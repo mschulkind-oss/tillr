@@ -320,24 +320,45 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 }
 
 // readRunJudgmentsAndEndings answers the runs a judge request names and, for each run that
-// ended, the seq and payload of its newest ending, read by kind.
+// ended, the seq of its newest ending before supersession and the payload of its newest
+// finish event, read by kind.
 func readRunJudgmentsAndEndings(r *store.Reader) (map[string]bool, map[string]int64, map[string][]byte, error) {
-	events, err := r.EventsOfKind(0, judgeRequestKind, run.FinishKind)
+	events, err := r.EventsOfKind(0, judgeRequestKind, run.FinishKind, runSupersededKind)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	judged, endings, payloads := map[string]bool{}, map[string]int64{}, map[string][]byte{}
+	payloadSeq, supersededSeq := map[string]int64{}, map[string]int64{}
 	for _, e := range events {
 		if e.ObjectID == nil {
 			continue
 		}
+		id := *e.ObjectID
 		switch e.Kind {
 		case judgeRequestKind:
-			judged[*e.ObjectID] = true
+			judged[id] = true
+		case runSupersededKind:
+			if supersededSeq[id] == 0 {
+				supersededSeq[id] = e.Seq
+			}
+			if _, exists := endings[id]; !exists {
+				var p runSuperseded
+				if err := json.Unmarshal(e.Payload, &p); err == nil && p.PriorSeq > 0 {
+					endings[id] = p.PriorSeq
+				} else {
+					endings[id] = 0
+				}
+			}
 		case run.FinishKind:
-			if e.Seq > endings[*e.ObjectID] {
-				endings[*e.ObjectID] = e.Seq
-				payloads[*e.ObjectID] = e.Payload
+			if e.Seq > payloadSeq[id] {
+				payloadSeq[id] = e.Seq
+				payloads[id] = e.Payload
+			}
+			if seq, sup := supersededSeq[id]; sup && e.Seq >= seq {
+				continue
+			}
+			if e.Seq > endings[id] {
+				endings[id] = e.Seq
 			}
 		}
 	}

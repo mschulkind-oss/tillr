@@ -1552,7 +1552,17 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				return err
 			}
 			work = &pendingWork{Decision: d, BaseSHA: base, Owner: owner, LoopID: l.sessionID}
-			for _, node := range parallelNodes(d) {
+			nodes = parallelNodes(d)
+			keep := make(map[string]bool, len(nodes))
+			for _, node := range nodes {
+				if node.RunRequest != nil {
+					keep[node.RunRequest.RunID] = true
+				}
+			}
+			if err := supersedeItemUnfinishedRunsInTx(ctx, tx, d.ItemID, d.Attempt, keep, "superseded by "+d.RunRequest.RunID, at); err != nil {
+				return err
+			}
+			for _, node := range nodes {
 				if len(d.Parallel) > 0 {
 					rec, err := terminalRecord(tx.Reader(), node.RunRequest.RunID)
 					if err != nil {
@@ -1998,6 +2008,9 @@ planned:
 		return "", err
 	}
 	if err := l.releaseUnlaunchedClaims(ctx); err != nil {
+		return "", err
+	}
+	if err := l.repairStaleRunRecords(ctx); err != nil {
 		return "", err
 	}
 	if !l.nonLanding {

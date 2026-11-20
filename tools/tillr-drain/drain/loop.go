@@ -484,6 +484,7 @@ type Loop struct {
 	greenPushAtStart                     sync.Once
 	ownerMigrationItem                   string
 	laneBootstrapReported                bool
+	staleRunsRepaired                    bool
 	// staleBaseChecked holds the owner conflicts already read for a stale base in this
 	// process: a conflict's run base and dispatch record never change, so one read answers.
 	staleBaseChecked            map[string]bool

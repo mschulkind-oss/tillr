@@ -106,15 +106,25 @@ func (l *Loop) awaitBuildReader(ctx context.Context, id string) error {
 		}
 		if len(live) == 0 {
 			// A killed face can fail before writing run.finish. Its reserved replacement
-			// still owns the group; settle only the vanished old membership.
-			if rec == nil {
+			// still owns the group; settle only the vanished old membership, and end any
+			// non-terminal (e.g. paused) runs row for this replaced reader.
+			if rec == nil || !isTerminalRunState(rec.State) {
 				db, err := store.Open(ctx, l.cfg.Store, true)
 				if err != nil {
 					return err
 				}
 				err = db.WriteTx(ctx, func(tx *store.Tx) error {
-					_, err := tx.Exec(`UPDATE read_only_runs SET settled=1 WHERE run_id=?`, id)
-					return err
+					if hasReadOnly, err := tableExists(tx.Reader(), "read_only_runs"); err != nil {
+						return err
+					} else if hasReadOnly {
+						if _, err := tx.Exec(`UPDATE read_only_runs SET settled=1 WHERE run_id=?`, id); err != nil {
+							return err
+						}
+					}
+					if rec != nil && !isTerminalRunState(rec.State) {
+						return endNonTerminalRunRow(ctx, tx, id, "superseded by build reader restart", true, l.cfg.Now().UTC())
+					}
+					return nil
 				})
 				db.Close()
 				if err != nil {
