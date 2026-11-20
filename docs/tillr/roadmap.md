@@ -1490,10 +1490,12 @@ missing rather than report that the change failed verification.
   The lane must not push, substitute an older tip or a local cache for this proof, or change
   the locator. Fixture tests cover c2–c4; they do not prove the delivery has been published.
 - **Host action before retry (designer's decision, 2026-11-20; the owner may overturn it):**
-  The seventeenth run confirmed the fifteenth run's result: `git fetch --no-tags <locator> <object-id>`
-  in a separate empty bare repository for each pin returned `upload-pack: not our ref` three times
-  (Git exit 128). The gate could not judge (exit 4); no build failed. The next action belongs to
-  the host operator, not another build lane. The three pins above stand.
+  On 2026-11-20 the nineteenth run repeated the fifteenth and seventeenth runs' check:
+  `git fetch --no-tags <locator> <object-id>` in a separate empty bare repository for each
+  of the three rows above. All three fetches returned `upload-pack: not our ref` (Git exit
+  128). The inputs could not be judged; no build was attempted. This is a request for host
+  publication, not a decision about which pins to use. Keep the build on hold for the host
+  operator to complete the following steps.
 
   In the host repository checkout, run `git merge-base --is-ancestor <object-id> refs/heads/<branch>`
   for each row above (`<branch>` includes `patch/`). If any check exits nonzero, stop and report
@@ -1501,7 +1503,8 @@ missing rather than report that the change failed verification.
   [the host publication step](../pi/patch-branches/published.md#5-the-host-step) to publish the
   branches with `bin/patch-branches-publish`. The publisher sends branch tips, not individual pins.
   Before requesting a build retry, repeat the three exact-ID fetches, each in its own new empty
-  bare repository, and record the results. Only three successful fetches release the hold; a
+  bare repository, and include the locator, object ID and Git exit status for each row in
+  the retry request. Only three successful fetches release the hold; a
   successful push, an advertised branch tip or another lane retry does not.
 - **Existing test cases (2026-11-18, answers the sixth run's report of blocked):** The fork export
   tests run the scenario files under [their cases directory](../../tests/pi-forks/), so those
