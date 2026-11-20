@@ -65,6 +65,7 @@ func (l *Loop) recordResult(result *LoopResult) {
 	// totals carry it.
 	l.finalizeRepeatedRefusal(result)
 	l.reportLandingMeasurements()
+	l.recordLoopEnded(*result)
 	RecordLoopResult(l.cfg.Root, l.cfg.Now().UTC(), l.build, *result, l.cfg.Report)
 }
 

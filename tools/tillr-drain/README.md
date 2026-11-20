@@ -2062,9 +2062,26 @@ touch so the loop goes on. The owner ruled that the loop never stops on one item
 condition. `decision-collision` holds an item whose planned decision could not be
 recorded, because its decision id is already recorded with other columns.
 `settle-failed` holds an item whose run could not be settled because of such a
-collision, naming the step and the error. Other settle errors keep their own rules: a
+collision, naming the step and the error. It also holds the item of a run whose face
+could not start (`run exec` answered with no record, for example exit 5 when its lane
+claim met `SQLITE_BUSY`): the hold names the run and the face's words, and the loop goes
+on. Other settle errors keep their own rules: a
 step's usage refusal is a configuration fault and ends the loop, a judgment the loop
 cannot record fails the step, and a store that refuses the hold itself ends the loop.
+When the loop does end on an error, it appends a `drain.loop-ended` event (session,
+stop, detail, exit code) to the store before it writes its result file; a clean stop
+appends none.
+
+The loop does not starve its own runs of the store's write lock
+([`drain/gathered.go`](./drain/gathered.go), [`drain/claim_gate.go`](./drain/claim_gate.go)). A gathered write that misses a fact
+rolls back, fetches the fact with no lock held, and waits as long as that attempt held the
+lock before it begins again, so consecutive attempts hold the lock at most half the
+time and another process's busy wait meets it free. A miss itself still takes the lock,
+because the write's callback takes a `*store.Tx` and only a write transaction supplies
+one: making a miss lock-free needs a read-only transaction the callback can run in,
+which is a change to the store package. While a run the loop just started is claiming
+its lane, gathered writes and the session heartbeat wait for it (at most two seconds,
+and not at all once the lease shows its expiry or the face exits).
 These holds survive a supervisor restart and do not record a failing
 criterion verdict or spend a new model attempt. A retained candidate releases its
 ordinary lane once its pinned commit is read back; worktree-dependent holds keep

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -22,6 +23,23 @@ import (
 // changed nothing, the missing fact is fetched with nothing held, and the write runs again
 // from its first statement. Each attempt the write needs a fact it has not been given, the
 // set grows by that fact, so the write converges once its decision asks for nothing new.
+//
+// What a miss costs, and what keeps it from starving another writer. A write takes the
+// store's write lock when it begins (BEGIN IMMEDIATE), before fn has read anything, and fn
+// reads the store it decides from — on a large store that is the pending runs' whole
+// history, about half a second — before it reaches the fact it lacks. The lock is therefore
+// held for those reads even though the attempt then rolls back and writes nothing; a miss
+// cannot be answered without the lock because fn takes a *store.Tx, which only a write
+// transaction supplies. What changes between two attempts is the set: every attempt that
+// misses adds the one fact it missed, so the next attempt either misses a different fact or
+// commits; an attempt never repeats a miss. Because each retry begins the instant the last
+// one rolled back, a loop that needs several facts would hold the lock back to back, and
+// SQLite's busy wait is not a queue (a waiting process polls, at most every 100 ms), so
+// another process asking for the lock in the instants between attempts never sees it free:
+// on 2026-11-20 a run's lane claim waited out its five-second busy timeout behind ten such
+// attempts. After a miss the write therefore waits as long as that attempt held the lock
+// before it begins again, so the lock is held at most half the time across consecutive
+// attempts and every other writer meets it free for as long as the attempt before held it.
 //
 // What a gathered answer may be stale against is git or a file, never the store: the store
 // rows are read again by every attempt. Commits are immutable, so an ancestry answer about
@@ -115,6 +133,29 @@ func gather(ctx context.Context, key string, run func(context.Context) (string, 
 var writeGatheredHooks struct {
 	// Fetch runs after a missing fact was fetched with no write open.
 	Fetch func(key string)
+	// Held runs with how long an attempt held the write lock, and Yield with the pause
+	// that follows a miss, both before the next attempt begins.
+	Held  func(d time.Duration)
+	Yield func(d time.Duration)
+}
+
+// yieldAfterMiss waits d with the lock released, so another writer is served in the gap. It
+// answers the context's error when the context ends first.
+func yieldAfterMiss(ctx context.Context, d time.Duration) error {
+	if writeGatheredHooks.Yield != nil {
+		writeGatheredHooks.Yield(d)
+	}
+	if d <= 0 {
+		return ctx.Err()
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // writeGathered runs fn as one store write whose git and file reads are gathered with no
@@ -131,11 +172,19 @@ func writeGatheredFrom(ctx context.Context, s *store.Store, g *gathered, fn func
 	g.recording = false
 	g.mu.Unlock()
 	gctx := context.WithValue(ctx, gatheredKey{}, g)
+	gate := claimGateFor(s.Path())
 	for {
+		// A run this process just started is claiming its lane: its write goes first.
+		if err := gate.wait(ctx); err != nil {
+			return err
+		}
 		g.mu.Lock()
 		g.missed = nil
 		g.mu.Unlock()
+		var held time.Duration
 		err := s.WriteTx(ctx, func(tx *store.Tx) error {
+			began := time.Now()
+			defer func() { held = time.Since(began) }()
 			ferr := fn(gctx, tx)
 			g.mu.Lock()
 			missed := g.missed
@@ -149,6 +198,9 @@ func writeGatheredFrom(ctx context.Context, s *store.Store, g *gathered, fn func
 		var miss *gatherMiss
 		if !errors.As(err, &miss) {
 			return err
+		}
+		if writeGatheredHooks.Held != nil {
+			writeGatheredHooks.Held(held)
 		}
 		if err := store.CheckIO(miss.key); err != nil {
 			// A gathered write opened inside another write: fetching here would hold the
@@ -164,6 +216,9 @@ func writeGatheredFrom(ctx context.Context, s *store.Store, g *gathered, fn func
 		g.mu.Unlock()
 		if writeGatheredHooks.Fetch != nil {
 			writeGatheredHooks.Fetch(miss.key)
+		}
+		if err := yieldAfterMiss(ctx, held); err != nil {
+			return err
 		}
 	}
 }

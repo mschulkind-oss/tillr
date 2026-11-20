@@ -210,7 +210,13 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 	}
 	if err == nil {
 		finished := make(chan error, 1)
-		go func() { finished <- cmd.Wait() }()
+		exited := make(chan struct{})
+		s.holdForClaim(ctx, req, exited)
+		go func() {
+			err := cmd.Wait()
+			close(exited)
+			finished <- err
+		}()
 		select {
 		case err = <-finished:
 		case <-ctx.Done():
@@ -234,8 +240,10 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 		return run.Record{}, "", Externalf("reading run record output: %v", readErr)
 	}
 	if err != nil && len(out) == 0 {
-		return run.Record{}, "", Externalf("%s exec could not run %s: %v: %s",
-			s.RunBin, req.RunID, err, diagnostic)
+		return run.Record{}, "", &runStartError{
+			ExitError: Externalf("%s exec could not run %s: %v: %s", s.RunBin, req.RunID, err, diagnostic).(*ExitError),
+			RunID:     req.RunID,
+		}
 	}
 	rec, log, decodeErr := decodeRunRecord(out)
 	if decodeErr != nil {
@@ -1075,3 +1083,13 @@ func (s *ProcessSteps) rollingWorktree(ctx context.Context, tipSHA string) (stri
 	}
 	return s.detachedWorktree(ctx, filepath.Join(s.LaneRoot, ".rolling", "worktree"), tipSHA)
 }
+
+// runStartError is a run the face could not start: it answered with no record. It is that
+// run's failure, not the loop's, so the loop holds the run's item with the cause and goes on
+// (holdSettleFailure) instead of ending.
+type runStartError struct {
+	*ExitError
+	RunID string
+}
+
+func (e *runStartError) Unwrap() error { return e.ExitError }

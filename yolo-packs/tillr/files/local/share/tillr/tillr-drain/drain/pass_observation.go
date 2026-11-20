@@ -184,6 +184,11 @@ func (l *Loop) newHeartbeatTicker() heartbeatTicker {
 // its own errors. Any other refresh failure -- a store this program cannot open, an
 // unrecordable presence -- is still a fault.
 func (l *Loop) beat(ctx context.Context, next time.Time) error {
+	// A run just started is claiming its lane with a write of its own (claim_gate.go); the
+	// heartbeat is the loop's most frequent writer, so it takes its turn after the claim.
+	if err := claimGateFor(l.cfg.Store).wait(ctx); err != nil && ctx.Err() != nil {
+		return err
+	}
 	err := l.refreshSession(ctx, next)
 	if err != nil && store.IsBusy(err) && ctx.Err() == nil {
 		l.reportf("loop: the session heartbeat was not recorded, the store was busy: %v\n", err)
