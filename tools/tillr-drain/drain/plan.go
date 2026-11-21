@@ -644,6 +644,8 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 		wait, waiting := p.waits[item.ItemID]
 		fault, faulted := faults[item.ItemID]
 		faultHeld := faulted && !p.finished(item.State) && holdEnabled(def, fault.Reason)
+		obsHold, held := p.obstacleHolds[item.ItemID]
+		fenceAnswer := p.answeredFenceObstacle(item, obsHold)
 		if waiting && (work == nil || work.Done || faultHeld) {
 			decision = p.namedWaitDecision(item.ItemID, wait)
 		} else if faultHeld {
@@ -805,7 +807,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 		} else if ownerOwed {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: ReasonOwnerOnlyOwed, From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			identifyDecision(&decision)
-		} else if obsHold, held := p.obstacleHolds[item.ItemID]; held && !p.finished(item.State) && holdEnabled(def, obsHold.ReasonCode()) && !(item.State == def.Ready && retries[item.ItemID].SupersedesRunID == obsHold.RunID && p.latest[item.ItemID] == obsHold.RunID) {
+		} else if held && fenceAnswer == nil && !p.finished(item.State) && holdEnabled(def, obsHold.ReasonCode()) && !(item.State == def.Ready && retries[item.ItemID].SupersedesRunID == obsHold.RunID && p.latest[item.ItemID] == obsHold.RunID) {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: obsHold.ReasonCode(), From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			identifyDecision(&decision)
 		} else if rewriteOwnerHolds[item.ItemID] != "" && !p.finished(item.State) {
@@ -886,7 +888,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			hold := ""
 			_, hasRetry := retries[item.ItemID]
 			obstacleReleased := p.latest[item.ItemID] != "" && p.releasedObstacles[item.ItemID] == p.latest[item.ItemID]
-			if w != nil && hasNodes && !p.finished(item.State) && !hasRetry && !obstacleReleased && !p.waitReleased(item.ItemID) {
+			if w != nil && hasNodes && !p.finished(item.State) && !hasRetry && !obstacleReleased && fenceAnswer == nil && !p.waitReleased(item.ItemID) {
 				hold, err = commandNodeHold(r, item.ItemID)
 				if err != nil {
 					return nil, nil, readFailure(err)
@@ -909,7 +911,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			} else if loadErr != nil {
 				decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: ReasonWorkflowInvalid + ": " + strings.SplitN(loadErr.Error(), "\n", 2)[0], From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			} else {
-				decision = p.decide(routed, edges[item.ItemID])
+				decision = p.decide(routed, edges[item.ItemID], fenceAnswer)
 				if decision.RunRequest != nil && decision.Returned != nil && decision.Returned.WorkerSession != nil && w != nil && !retainedGraph {
 					decision.RunRequest.SessionTurn = false
 					decision.RunRequest.ResumePrompt = ""
@@ -1116,7 +1118,7 @@ func namedWaitHold(def definition.Definition, hold obstacles.Hold, id string, wa
 //
 // Under OQ-GP7, work that a red check does not read may start and run while a fixer is
 // open; only landing waits (via path intersection at gate-acquittal time).
-func (p *planner) decide(item itemRow, blockedBy []string) Decision {
+func (p *planner) decide(item itemRow, blockedBy []string, fenceAnswer *ReturnedEnding) Decision {
 	decision := Decision{ItemID: item.ItemID, Seat: item.Seat}
 	conflict, hasConflict := p.conflicts[item.ItemID]
 	// An explicit owner disposition (apply/state) can release a blocked item.
@@ -1163,7 +1165,10 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	// A gate refusal, a run with no commit, a fence escape and a refused landing go back to
 	// the item's worker with their evidence, every time and uncounted (returned.go). An
 	// operator's retry and the recovery of an interrupted run are their own moves.
-	returned := p.returnedEnding(item.ItemID)
+	returned := fenceAnswer
+	if returned == nil {
+		returned = p.returnedEnding(item.ItemID)
+	}
 	if returned == nil && answeredObstacle != nil {
 		returned = answeredObstacle
 	}

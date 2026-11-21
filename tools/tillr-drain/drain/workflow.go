@@ -572,9 +572,11 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	next := d
 	next.NodeFencePaths = nil
 	next.Parallel = nil
-	// The refusal has been answered by this node. Successors keep the repaired
-	// checkout and accepted-input references, not the return dispatch mode.
-	next.Returned = nil
+	// Successors normally keep the repaired checkout, not the return dispatch mode.
+	// Carry a fence answer past preliminary readers so the writer gets it too.
+	if d.Returned == nil || d.Returned.Cause != ReasonObstacleFence || d.Workflow.Stages[d.NodeIndex].Access == "write" {
+		next.Returned = nil
+	}
 	next.RetryCandidate = nil
 	next.RepeatedCall = nil
 	next.WorkerSessionReason = ""

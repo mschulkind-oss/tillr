@@ -13,6 +13,65 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+func TestRequestWithAlreadyAllowedFenceObstacleReturnsToWork(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name, workflow, paths string
+		wantReturn            bool
+	}{
+		{"all allowed", item.SingleWorkerWorkflow, "tools/item-a/new.go, docs/notes.md", true},
+		{"all allowed after scout", "scout-then-build@v1", "tools/item-a/new.go, docs/notes.md", true},
+		{"one outside", item.SingleWorkerWorkflow, "tools/item-a/new.go, docs/notes.md, docs/other.md", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, l, _ := workflowLoopFixture(t, "")
+			fixtureWrite(t, f, func(tx *store.Tx) error {
+				_, err := tx.Exec(`UPDATE items SET state='closed'`)
+				return err
+			})
+			id := fileFixtureRequest(t, f, "build", tc.workflow, requestFence)
+			var workerRuns, briefs []string
+			steps := &obstacleRequestSteps{
+				t: t, f: f,
+				report: func(req run.Request) (string, *landingOffer) {
+					if req.NodeID == "scout" {
+						return wrapExtractedReport(req.RunID, "Scout findings.\nRESULT: done\n"), nil
+					}
+					workerRuns = append(workerRuns, req.RunID)
+					content, err := os.ReadFile(filepath.Join(f.laneRoot, req.LaneID, BriefFile))
+					if err != nil {
+						t.Error(err)
+					}
+					briefs = append(briefs, string(content))
+					return wrapExtractedReport(req.RunID, "OBSTACLE: fence\nPATHS: "+tc.paths+"\nEVIDENCE: these files need changes\nRESULT: blocked\n"), nil
+				},
+			}
+			l.cfg.Steps = steps
+			result := &LoopResult{}
+			for i := 0; i < 8 && len(workerRuns) < 2; i++ {
+				if _, err := l.pass(ctx, result); err != nil {
+					t.Fatal(err)
+				}
+				drainOwned(t, l, result)
+			}
+			if !tc.wantReturn {
+				if d := planFor(t, l, id); len(workerRuns) != 1 || d.Action != ActionHold || d.Reason != ReasonObstacleFence {
+					t.Fatalf("expected a fence hold after one run, got %v and %+v", steps.runs, d)
+				}
+				return
+			}
+			if len(workerRuns) != 2 || workerRuns[0] == workerRuns[1] {
+				t.Fatalf("expected the item to return to work without operator action, got runs %v (writers %v)", steps.runs, workerRuns)
+			}
+			for _, fact := range []string{workerRuns[0], tc.paths, "already allowed by the item"} {
+				if !strings.Contains(briefs[1], fact) {
+					t.Errorf("second run's brief is missing %q", fact)
+				}
+			}
+		})
+	}
+}
+
 func TestAPathAdditionRetriesTheSameFenceHeldRequest(t *testing.T) {
 	ctx := context.Background()
 	f, l, _ := workflowLoopFixture(t, "")
