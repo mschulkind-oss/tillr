@@ -41,6 +41,7 @@ var landingHolds = map[string]string{
 	ReasonTrunkPathDirty:      definition.PrerequisiteOwnerClean,
 	ReasonTrunkRewritten:      "",
 	ReasonCandidateMismatch:   "",
+	ReasonPackSyncFailed:      "",
 	ReasonLandHarnessError:    "",
 	StopGateHarnessError:      "",
 	ReasonTrunkUnproved:       "",
