@@ -125,7 +125,13 @@ func (l *Loop) afterLandingCandidate(ctx context.Context, candidate Candidate, t
 	}
 	if matchesRollPaths(changed, r.Paths) {
 		l.rollAction.submit(tip, func(tip string) {
-			_, err := actionCommand(ctx, l.cfg.Root, "sh", "-c", r.Command)
+			// After-merge proof owns the suites for a landing. The deployment only
+			// builds and smoke-checks the replacement; it does not queue another proof.
+			program, args := "sh", []string{"-c", r.Command}
+			if l.gatePolicy.LandingStrategy == "after-merge" {
+				program, args = "env", append([]string{"TILLR_ROLL_VERIFICATION=after-merge", program}, args...)
+			}
+			_, err := actionCommand(ctx, l.cfg.Root, program, args...)
 			if err == nil {
 				for _, role := range []string{restart.RoleView, restart.RoleDrain} {
 					if _, err = restart.File(ctx, l.cfg.Store, role, time.Now()); err != nil {

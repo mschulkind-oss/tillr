@@ -11,7 +11,7 @@ import (
 var errRestartPending = errors.New("loop replacement pending")
 
 func (l *Loop) buildRestartPending(ctx context.Context) (bool, error) {
-	if l.cfg.Restart == nil || l.rollAction.busy() || l.piRollAction.busy() || l.extRollAction.busy() || l.pushAction.busy() {
+	if l.cfg.Restart == nil || l.restartDeferred() {
 		return false, nil
 	}
 	return l.restarter().Pending(ctx)

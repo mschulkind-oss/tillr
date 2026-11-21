@@ -26,6 +26,26 @@ func TestRunHandoffRechecksARequestFiledAfterWrapperAdmission(t *testing.T) {
 	}
 }
 
+func TestDeferredRestartDoesNotBlockRunHandoff(t *testing.T) {
+	h := newRestartHarness(t, nil, nil)
+	ctx := context.WithValue(context.Background(), runStartAdmissionKey{}, h.l)
+	release, done := make(chan struct{}), make(chan struct{})
+	h.l.rollAction.submit("tip", func(string) { defer close(done); <-release })
+	defer func() { close(release); <-done }()
+	h.request(t, 1)
+	if pending, err := h.l.buildRestartPending(ctx); err != nil || pending {
+		t.Fatalf("the roll is still in progress: admission=%v/%v", pending, err)
+	}
+	steps := &ProcessSteps{Store: h.f.storePath}
+	cmd := exec.Command("true")
+	if err := steps.startRunFaceContext(ctx, cmd, run.Request{RunID: "while-rolling"}); err != nil {
+		t.Fatalf("deferred restart prevented handoff: %v", err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRunHandoffDoesNotStartAfterItsContextWasCanceled(t *testing.T) {
 	h := newRestartHarness(t, nil, nil)
 	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), runStartAdmissionKey{}, h.l))

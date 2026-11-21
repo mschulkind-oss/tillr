@@ -123,7 +123,10 @@ type reapEvidence struct {
 	// A gap-capable serial workflow node with a staged session and output can
 	// continue even when its detached face vanished without a pause record.
 	restartSessions map[string]bool
-	live            map[string]bool
+	// unlaunched marks serial claims interrupted before the loop even opened
+	// the run face's streams. No face could have started from those claims.
+	unlaunched map[string]bool
+	live       map[string]bool
 	// faces is every run ID whose run face itself is alive (isRunFaceArgv), from the same
 	// scan as live. Only a face keeps a dead examiner's lease: a stray child that merely
 	// carries the run's markers is not the run.
@@ -166,7 +169,7 @@ func dispatchSessionEnded(r *store.Reader, id string) (bool, error) {
 // the process table once, with no transaction open. The caller holds the run-start
 // lock from here through its write, so no run face starts in between.
 func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvidence, error) {
-	ev := reapEvidence{dead: map[LoopOwner]bool{}, prior: map[string]string{}, restartSessions: map[string]bool{}, live: map[string]bool{}, faces: map[string]bool{}, stuck: map[string]string{}, resumeStuck: map[string]string{}, offRotation: map[string]string{}, reclaimed: &[]string{}, reapedSingle: &[]*pendingWork{}}
+	ev := reapEvidence{dead: map[LoopOwner]bool{}, prior: map[string]string{}, restartSessions: map[string]bool{}, unlaunched: map[string]bool{}, live: map[string]bool{}, faces: map[string]bool{}, stuck: map[string]string{}, resumeStuck: map[string]string{}, offRotation: map[string]string{}, reclaimed: &[]string{}, reapedSingle: &[]*pendingWork{}}
 	var owners []LoopOwner
 	stuck := map[string]*pendingWork{}
 	resumed := map[string]*pendingWork{}
@@ -307,6 +310,8 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 					return ev, err
 				} else if ready {
 					ev.restartSessions[id] = true
+				} else if len(work.Decision.Parallel) == 0 && missingRunStreams(locator, id) {
+					ev.unlaunched[id] = true
 				}
 			}
 		}
@@ -753,6 +758,15 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 			}
 			continue
 		}
+		if priorSession && ev.unlaunched[id] {
+			// ClaimLease records an allocation before staging, not proof that a
+			// process started. If exec overtook the handoff, restore the offer
+			// without inventing a finish or consuming the node's run ID.
+			if err := retractClaim(tx, work.Decision, at, true); err != nil {
+				return err
+			}
+			continue
+		}
 		// Reap under the same transaction and guarded by this exact claim. No
 		// unbounded lease becomes expiring merely because another loop started.
 		result, err := tx.Exec(`UPDATE lanes SET leased_until = ? WHERE lane_id = ? AND run_id = ? AND state = ?`, at.UnixMilli(), work.Decision.LaneID, id, run.LaneStateLeased)
@@ -793,6 +807,22 @@ func runHasActiveResume(r *store.Reader, id string) (bool, error) {
 		return false, err
 	}
 	return latest == run.ResumeKind, nil
+}
+
+// ProcessSteps opens these streams before Start and keeps them after exit. Only
+// their confirmed absence counts; a locator we don't know or an inaccessible
+// path cannot distinguish an unlaunched claim from a lost worker.
+func missingRunStreams(locator runStreamLocator, id string) bool {
+	if locator == nil {
+		return false
+	}
+	paths := locator.runOutputFiles(id)
+	for _, path := range paths {
+		if _, err := os.Lstat(path); !os.IsNotExist(err) {
+			return false
+		}
+	}
+	return len(paths) > 0
 }
 
 // hasInterruptedWorkflowSession checks local staging outside the write

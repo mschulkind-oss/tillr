@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
-	"github.com/mschulkind-oss/tillr-run/run"
 )
 
 // rollHarness keeps a fixture worker in flight and records any TERM it receives, so
@@ -182,8 +181,7 @@ func buildLines(out string) []string {
 
 func alive(pid int) bool { return syscall.Kill(pid, 0) == nil }
 
-// One run in flight: the replacement keeps the process id, prints a new build line, and does
-// not signal the run. The new loop then asks the older-build run to pause.
+// The replacement keeps its PID, prints a new build line, and leaves the run alone.
 func TestRestartReplacesTheLoopInPlaceWithoutSignalingARun(t *testing.T) {
 	s := startRoll(t, 1, "")
 	s.inFlight(t, 1)
@@ -207,17 +205,6 @@ func TestRestartReplacesTheLoopInPlaceWithoutSignalingARun(t *testing.T) {
 	workerPID, _ := strconv.Atoi(strings.Fields(lines(t, s.pids)[0])[0])
 	if !alive(workerPID) || len(lines(t, s.signal)) != 0 {
 		t.Fatal("replacement signaled or ended the in-flight worker")
-	}
-	s.waitFor(t, "a pause request for the older-build run", func() bool {
-		for _, e := range eventsOf(t, s.f.store) {
-			if e.Kind == run.PauseRequestKind {
-				return true
-			}
-		}
-		return false
-	})
-	if !alive(workerPID) || len(lines(t, s.signal)) != 0 {
-		t.Fatal("pause request signaled or ended the in-flight worker")
 	}
 }
 

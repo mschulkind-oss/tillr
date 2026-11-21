@@ -8,7 +8,64 @@ import (
 	"testing"
 
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/store"
 )
+
+type unlaunchedWorkflowSteps struct {
+	*restartWorkflowSteps
+	streams *ProcessSteps
+}
+
+func (s unlaunchedWorkflowSteps) runOutputFiles(id string) []string {
+	return s.streams.runOutputFiles(id)
+}
+
+func TestInPlaceRestartDoesNotReclaimAStagedButUnlaunchedNode(t *testing.T) {
+	f, old, steps := restartGraphFixture(t)
+	ctx := context.Background()
+	if err := old.refreshSession(ctx, old.cfg.Now()); err != nil {
+		t.Fatal(err)
+	}
+	result := &LoopResult{}
+	for range 4 {
+		graphPass(t, old, result)
+	}
+	p := mustPlan(t, old)[0]
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	ok, work, err := old.applyPlan(ctx, p, base, old.cfg.Now())
+	if err != nil || !ok || work.Decision.NodeIndex != 2 {
+		t.Fatalf("third node claim: %v %v %+v", ok, err, work)
+	}
+	staged, err := old.stageDispatches(ctx, []Decision{work.Decision}, work.BaseSHA, result)
+	if err != nil || len(staged) != 1 {
+		t.Fatalf("stage: %v %v", staged, err)
+	}
+	id := staged[0].RunRequest.RunID
+	old.endSession() // exec before ProcessSteps.Run created the face's streams
+
+	next := replaceGraphLoop(t, f, old, unlaunchedWorkflowSteps{steps, &ProcessSteps{Root: f.root}})
+	if err := next.refreshSession(ctx, next.cfg.Now()); err != nil {
+		t.Fatal(err)
+	}
+	defer next.endSession()
+	var planned Decision
+	for _, p := range mustPlan(t, next) {
+		if p.decision.ItemID == work.Decision.ItemID {
+			planned = p.decision
+			break
+		}
+	}
+	if planned.Action != ActionDispatch || planned.RunRequest == nil || planned.RunRequest.RunID != id {
+		t.Fatalf("expected reoffer of %s, got %s (%s): %+v", id, planned.Action, planned.Reason, planned.RunRequest)
+	}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		rec, err := terminalRecord(r, id)
+		if err == nil && rec != nil {
+			t.Errorf("a node never handed off has a terminal record: %+v", rec)
+		}
+		return err
+	})
+}
 
 type recoveryWorkflowSteps struct {
 	*restartWorkflowSteps

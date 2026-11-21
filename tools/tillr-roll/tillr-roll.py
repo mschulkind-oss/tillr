@@ -202,9 +202,7 @@ def clean_checkout(root, tip, dest, shared):
         shutil.copytree(dist, dest / 'tools/tillr-view/web/dist')
 
 
-def roll_commit(root, live, tip, no_request, store):
-    """Test, build, smoke and install `tip`, built from a clean checkout of that commit alone."""
-    old = builds(store)
+def test_commit(root, source, work, tip, store, old, build_env):
     # Either running part may lag. Unidentified builds cannot justify skipping tests.
     changed = set()
     for role in ('drain', 'view'):
@@ -219,30 +217,40 @@ def roll_commit(root, live, tip, no_request, store):
         except subprocess.CalledProcessError:
             changed = None
             break
-    base_env = {k: v for k, v in os.environ.items() if k != 'TILLR_SQLITE_TRACE'}
+    proved = stepped('evidence', evidence, root, tip)
+    if proved is None:
+        return
+    accepted = proved | stepped('evidence', gated_modules, root, tip, store)
+    modules = sorted(p for p in (source / 'tools').glob('tillr*') if (p / 'go.mod').is_file())
+    for module in modules:
+        if module.name in accepted:
+            continue
+        if changed is None or any(p.startswith(f'tools/{module.name}/') for p in changed):
+            relative = f'tools/{module.name}'
+            if relative in SHARDED:
+                # The shared slot pool bounds machine-wide test parallelism; Go's own deadline is off.
+                stepped(f'test {module.name}', run, 'python3', str(source / 'tools/go-test-shards.py'), relative,
+                        '-k', '6', '--timeout', '0', '--scratch', str(work), cwd=source, env=build_env)
+            else:
+                stepped(f'test {module.name}', run, 'go', 'test', '-timeout', '0', './...',
+                        cwd=module, env=build_env)
+
+
+def roll_commit(root, live, tip, no_request, store):
+    """Build, smoke and install `tip` from a clean checkout of that commit alone."""
+    old = builds(store)
+    # An automatic after-merge roll does not duplicate the repository's proof.
+    # A manual roll, including a build without restart, still tests by default.
+    after_merge = no_request and os.environ.get('TILLR_ROLL_VERIFICATION') == 'after-merge'
+    base_env = {k: v for k, v in os.environ.items() if k not in ('TILLR_SQLITE_TRACE', 'TILLR_ROLL_VERIFICATION')}
     build_env = {**base_env, 'CGO_ENABLED': '0'}
     live.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='tillr-roll-', dir=live.parent) as work:
         work = Path(work)
         source = work / 'source'
         stepped('checkout', clean_checkout, root, tip, source, root)
-        proved = stepped('evidence', evidence, root, tip)
-        accepted = None if proved is None else proved | stepped('evidence', gated_modules, root, tip, store)
-        modules = sorted(p for p in (source / 'tools').glob('tillr*') if (p / 'go.mod').is_file())
-        for module in modules:
-            if proved is None:
-                break
-            if module.name in accepted:
-                continue
-            if changed is None or any(p.startswith(f'tools/{module.name}/') for p in changed):
-                relative = f'tools/{module.name}'
-                if relative in SHARDED:
-                    # The shared slot pool bounds machine-wide test parallelism; Go's own deadline is off.
-                    stepped(f'test {module.name}', run, 'python3', str(source / 'tools/go-test-shards.py'), relative,
-                            '-k', '6', '--timeout', '0', '--scratch', str(work), cwd=source, env=build_env)
-                else:
-                    stepped(f'test {module.name}', run, 'go', 'test', '-timeout', '0', './...',
-                            cwd=module, env=build_env)
+        if not after_merge:
+            test_commit(root, source, work, tip, store, old, build_env)
         stage = work / 'stage'
         stage.mkdir()
         programs = []

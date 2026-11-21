@@ -2200,9 +2200,6 @@ func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err e
 	if err := l.checkStopRequested(ctx); err != nil {
 		return "", err
 	}
-	if err := l.migrateBuildRuns(ctx, result); err != nil {
-		return "", err
-	}
 	if !l.nonLanding {
 		if err := l.prunePreservedWork(ctx); err != nil {
 			return "", err
