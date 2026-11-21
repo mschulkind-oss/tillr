@@ -2,7 +2,7 @@
 title: "The gate lands a change in ten seconds and remembers nothing it cannot recompute"
 status: accepted
 stage: DECIDED
-updated: 2026-11-20
+updated: 2026-11-21
 tags:
   - tillr
   - gate
@@ -359,10 +359,15 @@ fingerprint, holding the check's id, verdict, seconds, time and tree. The rules:
 
 - **Only a pass is reused.** A tree check whose fingerprint has a remembered pass does not run,
   and the report line says `remembered` with the time of the pass.
-- **A fail is recorded and never reused.** It runs again on the next request. When a pass arrives
-  for a fingerprint that already holds a fail, the run passes and reports the check as `flaky`,
-  with both times, and the heavy runner files one item for it. A green re-run does not erase the
-  red; it names it.
+- **A fail is recorded and never reused.** It runs again on the next request.
+- **A check with a pass and a fail on one fingerprint is disabled** (`D-GR18`, the owner's ruling
+  of 2026-11-21; the mechanism is `D-GR19`). The owner's words: "The correct move for a flaky test
+  is disable it, file an item to fix it, and don't let it block anything. It is not considered
+  green, but it also doesn't let you block other things." The rule is stated in full under
+  [A contradicted check is disabled](#a-contradicted-check-is-disabled) below. It replaces this
+  section's earlier rule, built in `annotateMemory` of `tools/tillr-gate/memory.go`, that such a
+  run "passes and reports the check as `flaky`": that rule counted the check as passed, which let
+  a later pass stand in for the earlier fail.
 - **Any gate run may write.** Writes are whole-file renames, and the key is the content, so two
   runs that write the same key wrote the same inputs. There is no lock, no order and no
   per-branch entry, which is what [Section 5](#5-the-arithmetic-at-ten-and-twenty-lanes) needs.
@@ -383,6 +388,75 @@ record to copy. The existing record file is left in place and never read for pla
 > machine's tools", and the fingerprint carries only the tools a declaration names. A copied
 > store turns an undeclared tool difference into a silent green; a recomputation costs six
 > minutes once.
+
+
+#### A contradicted check is disabled
+
+The owner ruled on 2026-11-21, in these words: "The correct move for a flaky test is disable it,
+file an item to fix it, and don't let it block anything. It is not considered green, but it also
+doesn't let you block other things." That is `D-GR18`. It replaces three earlier answers: this
+section's `flaky` pass, the live re-run of
+[`OQ-ER3`](./tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3) option A, and a filed
+operator request of 2026-11-20 that asked for a red verdict.
+
+A fingerprint is **contradicted** *(the term is from
+[the evidence registry design](./tillr-evidence-registry-and-suite-guardrail.md#42-when-an-entry-is-contradicted-on-the-same-fingerprint-oq-er3))*
+when the result store holds both a pass record and a fail record for it: the same inputs gave two
+verdicts. A **disabled check** *(coined here)* is one the gate does not run for a verdict.
+
+The operator's reading of the ruling, sent with it on 2026-11-21, is recorded as the operator's and
+not as the owner's words; the owner may overturn any part of it:
+
+- a check whose fingerprint is contradicted is disabled, and is not run for a verdict;
+- it is reported as disabled, and never as passed or green;
+- it refuses no landing, and it does not turn the trunk red;
+- one deduplicated repair item is filed, carrying both times and both output locations;
+- the check is enabled again when that repair lands.
+
+What follows is the designer's mechanism for that reading (`D-GR19`, decided on 2026-11-21). None
+of it is the owner's ruling, and the owner may overturn it.
+
+- **The verdict has a result of its own.** A disabled check's result is `disabled`. It is neither
+  `pass` nor `fail`: the run's summary counts it apart ("1 disabled"), it is left out of the
+  passed and remembered counts, and the run's overall verdict is computed from the other checks.
+  The report line names the check, the time and output location of the pass, the time and output
+  location of the fail, and the repair item. This holds for the run that writes the second
+  record too: the run that discovers the contradiction reports `disabled`, whichever of the two
+  verdicts it produced itself.
+- **Each stored record keeps its output location.** A record gains the path of the check's output
+  log (`log_ref`, the name the verdict already uses). A record written before this field exists
+  has none, and the report says "output location not recorded" for it instead of omitting the
+  check.
+- **Disabling is by check, not by fingerprint.** When a run finds a contradicted fingerprint for a
+  check, it writes one marker file for that check id under `disabled/` in the result store,
+  holding the fingerprint, both times and both output locations. While the marker exists the
+  check is disabled on every fingerprint. Deriving the state from the fingerprint alone was
+  rejected: an unrelated change to the files the check reads gives a new fingerprint, the
+  unrepaired check would run for a verdict again, and its next intermittent fail would refuse
+  that landing, which is the blocking the ruling forbids.
+- **The repair item is filed from the verdict.** The gate has no access to the queue. The program
+  that reads the verdict files the item: the drain, for both the landing gate and the trunk
+  proof. Its id is `flaky-<check-id>`, and an open item with that id is not filed twice. Its
+  text carries both times, both output locations and the fingerprint.
+- **The repair is proved on its own candidate, then the check is enabled.** The gate run for the
+  repair item's candidate is told to run the check despite the marker (`--prove-disabled
+  <check-id>`), and there the check is an ordinary one whose fail refuses that candidate. When
+  the repair lands, `tillr-gate enable --check <check-id>` removes the marker and moves the two
+  contradicting records out of the lookup directory into `resolved/`, where they stay readable
+  and no longer count as a contradiction. Without that move a repair that left the check's
+  inputs unchanged would be disabled again by the old pair on the next run.
+- **No retry, count or clock.** One contradicted fingerprint disables the check; nothing re-runs
+  it to decide, and no time ends the disabling. The filed request asked for the same three
+  refusals, and they stand.
+- **This is not the case quarantine.** [The gate check rules](../reference/gate-check-rules.md)
+  describe a declared quarantine of one named failing case, which still runs. A disabled check
+  is a whole check, is set by the store's own evidence, and does not run.
+
+The build changes `annotateMemory` and the summary loop in `tools/tillr-gate`, and the two tests
+that pin the `flaky` pass (`TestMemoryFailRetriesAndFlakyPass` and
+`TestMemoryOppositeWritersNeverErase` in `tools/tillr-gate/memory_test.go`). Filing the repair
+item and calling `enable` are in `tools/tillr-drain`. Until the drain part is built, a disabled
+check is still reported on every gate run, so it is visible, but no item is filed for it.
 
 ### 6.3 A missing machine resource is named, not failed
 
@@ -672,7 +746,7 @@ pointer and the tip, by bisection, and remembered results make repeated steps fr
 | Green at the pointer, red from landing L on | L is named on the status line with the check. With `auto_revert` off, one fixer item is filed against L, deduplicated by commit as today. |
 | Red at the pointer too | The inputs did not change, so no landing is at fault. It is reported as a gate fault with the check's `needs` and `tools`, and no fixer is filed against a landing. One fixer is filed against the tip instead, so the red has a mover (built 2026-11-18). |
 | Attribution answers no verdict | No landing is named. As built on 2026-11-18, one fixer is filed against the tip, and its brief says why attribution failed. A loop stop is not this row: nothing is filed. |
-| Red, then green with no input change | `flaky`, per [Section 6.2](#62-a-tree-checks-result-is-remembered-by-fingerprint). |
+| Red, then green with no input change | The check is disabled and one repair item is filed, per [A contradicted check is disabled](#a-contradicted-check-is-disabled) (`D-GR18`). The trunk is not red on it, and the check is not reported green. |
 
 **With `auto_revert` on** (built 2026-11-18, on in this repository), the heavy runner builds
 the inverse of L on the tip, as one commit in its own checkout, and lands it only when three
@@ -831,7 +905,10 @@ own decisions, made to carry them out; each is the owner's to overturn by commen
 owner ruled on both on 2026-11-17, and that ruling is `D-GR15`. `D-GR16` is this design's own
 decision carrying `D-GR15` out, and is the owner's to overturn. `D-GR17` records the owner's
 2026-11-19 ruling on shard lifetime and tests that hang or fail under load, together with the
-2026-11-20 scope ruling for its build. The three rows of this
+2026-11-20 scope ruling for its build. `D-GR18` is the owner's ruling of 2026-11-21 on a check
+with a pass and a fail on one fingerprint, quoted verbatim; `D-GR19` is the operator's reading of
+it together with this design's mechanism, neither of which is the owner's ruling, and both are
+the owner's to overturn. The three rows of this
 document's former open questions ([`OQ-GR1`](#OQ-GR1) to [`OQ-GR3`](#OQ-GR3)) were initially
 settled by the session's designer on recorded principle: [`OQ-GR3`](#OQ-GR3) remains in force,
 while [`OQ-GR1`](#OQ-GR1) and [`OQ-GR2`](#OQ-GR2) were later withdrawn/overturned by the owner
@@ -849,7 +926,7 @@ overturned in `1fa2c069c` and withdrawn in
 | `D-GR5` | tillr deploys only from the last trunk commit whose after-merge checks passed. | 2026-11-15 | [Section 6.7](#67-deploys-read-the-green-pointer) | ✅ (`tools/tillr-drain/drain/trunk_release.go`) |
 | `D-GR6` | Automatic revert of an offending landing is a setting, and it is off in this repository to start. **Overturned by the owner on 2026-11-17** ([OQ-GP1](tillr-graph-is-the-path.md#OQ-GP1)): tillr reverts by itself when the full suite proves a landing broke the trunk, and a fixer is filed only when the revert is unsafe, does not repair, or the red is unattributed. | 2026-11-15, amended 2026-11-17 | [Section 6.8](#68-a-red-heavy-check) | 2026-11-18 (`auto_revert` true in `config/tillr/gate-policy.json`) |
 | `D-GR7` | A change check gets its base from the caller, runs once at landing, and never against a remembered commit. **Rejected:** repairing the remembered baseline's cold start. Structural fix. | 2026-11-15 | [Section 6.1](#61-the-caller-names-the-base) | ✅ (`DeriveChange` in `tools/tillr-gate/change.go` takes the base from the caller) |
-| `D-GR8` | A tree check's pass is remembered by a fingerprint of its declaration, the files it reads and the tools it names; a fail is recorded and never reused; the store is local to a machine. **Rejected:** remembering by commit, and publishing the store. Structural fix. | 2026-11-15 | [Section 6.2](#62-a-tree-checks-result-is-remembered-by-fingerprint) | ✅ (`tools/tillr-gate/memory.go`) |
+| `D-GR8` | A tree check's pass is remembered by a fingerprint of its declaration, the files it reads and the tools it names; a fail is recorded and never reused; the store is local to a machine. **Rejected:** remembering by commit, and publishing the store. Structural fix. **Amended 2026-11-21 by `D-GR18`:** this row's Section 6.2 rule that a pass arriving on a fingerprint with a fail "passes and reports the check as `flaky`" is replaced; the check is disabled. | 2026-11-15; amended 2026-11-21 | [Section 6.2](#62-a-tree-checks-result-is-remembered-by-fingerprint) | ✅ (`tools/tillr-gate/memory.go`) |
 | `D-GR9` | A check with an unmet machine need is `unavailable`, named with its command, and neither fails nor passes. Structural fix. | 2026-11-15 | [Section 6.3](#63-a-missing-machine-resource-is-named-not-failed) | ✅ (`tools/tillr-gate/needs.go`) |
 | `D-GR10` | A check is one declaration file with no verdict-changing default, read by `tillr-gate`; the gate program retires by attrition. **Rejected:** sharding the shared suite. Structural fix. | 2026-11-15 | [Section 6.4](#64-a-check-is-one-file) | ✅ (`tools/tillr-gate/checkfiles.go`; one declaration per check in `tools/gate/checks/`) |
 | `D-GR11` | The budget is enforced by an arithmetic test over declared costs and by a per-check deadline that carries an overrun to the heavy tier; a check that overruns alone turns the heavy run red on `gate-budget`. **Rejected:** failing landings on measured wall time. Structural fix. **Amended 2026-11-16** by `D-GR13` (a fast check is not stopped at its budget but at its ceiling) and `D-GR14` (carrying is suspended until the heavy runner exists); the arithmetic test is unchanged. **Superseded in part 2026-11-17** by the owner's ruling `D-GR15`: no deadline stops a check that is making progress, so the per-check deadline and carrying at it go, and an overrun alone never turns a run red; the arithmetic test stays. | 2026-11-15 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Arithmetic test built; the deadline as amended |
@@ -858,6 +935,8 @@ overturned in `1fa2c069c` and withdrawn in
 | `D-GR15` | **The owner's ruling, 2026-11-17:** "target budgets, watch for stalls, but don't let 'load is high' cause failures that would otherwise finish just fine." A budget is a target that is measured and reported; exceeding one is never by itself a failure, a fault or "could not judge". What ends a check early is a stall, a check making no progress, seen by a watchdog, and a stall leads to a named next step, never a silent kill. Machine load must not turn work that would have finished into a failure. **Supersedes** the ceiling as a kill and "could not judge" for a check still making progress (`D-GR13`), and the per-check deadline of `D-GR11`. **Keeps** the budgets, the admission test against the 9,000 millisecond cap, the `over_budget_ms` record, and the ten-second landing as a target with its measured distribution visible. | 2026-11-17 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (`tools/tillr-gate/watchdog.go`; `item-gate-stall-watchdog` and `item-gate-wrapper-clocks-stall` landed) |
 | `D-GR16` | A check shows progress in a one-second sample when its output grew or its process group's CPU time rose; 60 consecutive samples with neither is a stall. The runner ends a stalled check's process group and records `stalled`, which is neither pass, fail nor over-budget, with what it observed. The drain keeps the candidate and re-gates it once, when fewer gates are in flight than at the stall or no other gate is; a second stall on the same candidate holds the item, naming the check. `gate-harness-error` stays for a check that could not start or crashed. Settled by the session's designer on 2026-11-17, on `D-GR15` and [landing principle 11](landing-principles.md#11-a-failure-is-diagnosed-not-waited-out) (a re-run waits on a named change, never on time passing); the owner may overturn it. **Rejected:** a longer fixed timeout, which fails the same way at a higher load; re-gating on the next pass, which names no change. | 2026-11-17 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (`tools/tillr-gate/watchdog.go`) |
 | `D-GR17` | **Owner ruling (2026-11-19) and scope answer (2026-11-20).** *"Rule of this repository: a test that fails or hangs under load is a broken test; do not add a timeout, a retry or a longer wait as the fix"*, and a test run started by a worker must not outlive the command that started it. `tools/go-test-shards.py` must tie every `go tool test2json` and compiled shard process group (`start_new_session=True`) to the invoking runner command's lifetime and keep the compiled binary directory valid until every shard exits; hanging or load-sensitive tests in `tools/tillr-drain` are fixed at their synchronization cause so multiple concurrent suite runs pass. The build scope covers `tools/tillr-drain/` (mirrored to `yolo-packs/tillr/` via `just pack-sync`, keeping `runTests` in `tools/tillr-drain/main_test.go` self-contained or paired with `tests/tillr-testmain_test.go`), `tools/go-test-shards.py`, and `tests/` (`tests/go-test-shards.test.py`, `tests/tillr-testmain_test.go`). **Rejected:** adding timeouts, retries, or longer sleeps to mask load hangs; leaving detached `test2json` sessions alive after `go-test-shards.py` exits or is killed. | 2026-11-19 / 2026-11-20, owner | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Queued |
+| `D-GR18` | **Owner ruling (2026-11-21), verbatim:** *"The correct move for a flaky test is disable it, file an item to fix it, and don't let it block anything. It is not considered green, but it also doesn't let you block other things."* It governs a check whose result store holds both a pass and a fail for one fingerprint, and replaces the `flaky` pass of `D-GR8`, the live re-run of [`OQ-ER3`](./tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3) option A, and the red verdict a filed operator request of 2026-11-20 asked for. | 2026-11-21 | [A contradicted check is disabled](#a-contradicted-check-is-disabled) | — |
+| `D-GR19` | **Not the owner's ruling; the owner may overturn it.** The operator's reading of `D-GR18` (2026-11-21): the check is disabled and not run for a verdict, is reported as disabled and never as passed or green, refuses no landing, does not turn the trunk red, gets one deduplicated repair item with both times and both output locations, and is enabled again when the repair lands. The designer's mechanism for it (2026-11-21): a `disabled` result counted apart from passes; `log_ref` on each stored record; a marker per check id, so a new fingerprint does not re-arm an unrepaired check; the drain files `flaky-<check-id>` from the verdict; the repair's own candidate runs the check, and `tillr-gate enable` then removes the marker and sets the contradicting pair aside. **Rejected:** a red verdict (the filed request; replaced by `D-GR18`); a live re-run whose pass is green ([`OQ-ER3`](./tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3) option A; replaced by `D-GR18`); disabling by fingerprint alone; any retry, count or time window. | 2026-11-21 | [A contradicted check is disabled](#a-contradicted-check-is-disabled) | — |
 | `D-GR18` | **Owner ruling, 2026-11-20:** "for this repository, I want a personal filter that says the commits may only be one of the two identities, my personal or professional identity. But that is for this repository, not for Tiller." | 2026-11-20 | [Which identities this repository accepts](#which-identities-this-repository-accepts) | Not yet built |
 | `D-GR20` | **Designer's decision on the operator request; the owner may overturn it.** Bound aggregate test parallelism across runs. Lanes test the bound and exclusion of queue time; the proof operator measures before/after proof wall time and load with five active lanes. | 2026-11-20 | [Bound concurrent tests, not just shards](#bound-concurrent-tests-not-just-shards) | Not yet verified |
 | `D-GR19` | **Designer's decision on the operator request; the owner may overturn it.** Apply one tracked list of exact pairs to author and committer in both the standalone check and the live `commit-identity` gate. Preserve their ranges and refusal of repository identity overrides; do not change commit creation or tillr. | 2026-11-20 | [Which identities this repository accepts](#which-identities-this-repository-accepts) | Not yet built |
@@ -894,8 +973,10 @@ refines the result store of [Section 6.2](#62-a-tree-checks-result-is-remembered
 for this slice, and where the two differ this block governs: a fingerprint has up to two record
 files, one named for a pass and one named for a fail. A run that passed renames only onto the
 pass file, and a run that failed renames only onto the fail file. No run rewrites, merges into
-or deletes the other verdict's file. `flaky` is not stored: it is what a reader sees when both
-files exist. A pass published while a fail is being published therefore cannot lose the fail,
+or deletes the other verdict's file. A contradiction is not stored in either record: it is what a
+reader sees when both files exist, and since 2026-11-21 it disables the check
+([A contradicted check is disabled](#a-contradicted-check-is-disabled)); the one command that
+moves the pair is `tillr-gate enable`, after the repair lands. A pass published while a fail is being published therefore cannot lose the fail,
 in either order, and the store still has no lock and no order. Two writers of the same verdict
 may replace each other, and that loses nothing the rules read: either file states the verdict
 and a time it happened. **Rejected:** a per-fingerprint lock around read, merge and rename,
