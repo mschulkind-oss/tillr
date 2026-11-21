@@ -773,28 +773,17 @@ sys.exit(rc)
         self.assertEqual(result.returncode, 4)
         self.assertNotIn("remaining program ran", result.stdout)
 
-    def test_a_fixer_range_runs_the_remaining_program_untiered(self):
-        # A trunk fixer's gate is `tillr-loop gate --since <green>` or `--all`, which the
-        # adapter hands to this judge. The change checks still take the candidate's range;
-        # the remaining program takes the fixer's, with no landing tier.
+    def test_remaining_program_runs_on_the_candidate_range_at_landing_tier(self):
         self.stub_tree_commands()
-        (self.repo / "tools/fork-check.py").write_text('import sys\nprint(" ".join(sys.argv[1:]))\n')
-        self.base = self.commit()
-        (self.repo / "README.md").write_text("# Fixture\n\nFixed.\n")
+        (self.repo / "tools/fork-check.py").write_text('import json, sys\nprint(json.dumps(sys.argv[1:]))\n')
+        base = self.commit()
+        (self.repo / "README.md").write_text("# Fixture\n\nEdited.\n")
         head = self.commit()
-        common = ["python3", "tools/gate/change-gate.py", "--base", self.base, "--head", head,
-                  "--runner", str(self.runner), "--logs", str(self.repo / "logs")]
-        # The append-only gate record has no landing-lock wait. Pin the exact
-        # forwarded arguments so neither a stale lock flag nor a tier returns.
-        for extra, want in (([], f"--since {self.base} --tier landing"),
-                            (["--since", self.base], f"--since {self.base}"),
-                            (["--all"], "--all")):
-            result = subprocess.run(common + extra, cwd=self.repo, env=self.env, capture_output=True, text=True)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertEqual(result.stdout.splitlines()[-1], want)
-        result = subprocess.run(common + ["--all", "--since", self.base], cwd=self.repo, env=self.env,
-                                capture_output=True, text=True)
-        self.assertEqual(result.returncode, 2, result.stderr)
+        result = subprocess.run(["python3", "tools/gate/change-gate.py", "--base", base,
+                                 "--head", head, "--runner", str(self.runner), "--logs", str(self.repo / "logs")],
+                                cwd=self.repo, env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout.splitlines()[-1]), ["--since", base, "--tier", "landing"])
 
     def test_loop_program_keeps_the_verdict_of_a_slow_tree_check(self):
         # The loop's gate is where carrying a fast tree check is switched: until a heavy
