@@ -32,6 +32,9 @@ type verifyReturnSteps struct {
 	refusedAt      []time.Time
 	now            func() time.Time
 	cannotMeet     string // when set, the first repair run ends with this report
+	pieceObstacle  string // when set, the first ordinary piece-two run blocks
+	pieceRuns      []run.Request
+	widenedPath    string
 	plans          int
 	verifies       int
 	repairs        []run.Request
@@ -96,7 +99,14 @@ func (s *verifyReturnSteps) Run(ctx context.Context, req run.Request) (run.Recor
 			s.firstHead = runGit(s.t, target, "rev-parse", "HEAD")
 		}
 		if s.expanded {
-			proposalArtifact(s.t, s.f.root, req.RunID, pieceProposal([]map[string]any{piece("one", "build", "write"), piece("two", s.lastSeat(), "write")}))
+			one, two := piece("one", "build", "write"), piece("two", s.lastSeat(), "write")
+			if s.pieceObstacle != "" {
+				two["write_scope"] = []string{"tools/item-a/two.txt"}
+			} else if s.widenedPath != "" {
+				one["write_scope"] = []string{"tools/item-a/one.txt"}
+				two["write_scope"] = []string{"tools/item-a/one.txt", "tools/item-a/two.txt"}
+			}
+			proposalArtifact(s.t, s.f.root, req.RunID, pieceProposal([]map[string]any{one, two}))
 		}
 	case req.NodeID == "verify":
 		s.verifies++
@@ -110,6 +120,14 @@ func (s *verifyReturnSteps) Run(ctx context.Context, req run.Request) (run.Recor
 				reason = "uncovered: " + defects[(s.verifies-1)%len(defects)]
 				s.refusedAt = append(s.refusedAt, s.now())
 			}
+		}
+		if s.verifies == 1 && s.cannotMeet != "" && s.widenedPath != "" {
+			// The return selects the last writer using the verifier's staged fence.
+			// The new run can ask to use the permission added since staging.
+			fixtureWrite(s.t, s.f, func(tx *store.Tx) error {
+				_, err := tx.Exec(`UPDATE items SET allowed_paths='["tools/item-a/"]' WHERE item_id='item-a'`)
+				return err
+			})
 		}
 		producer := "node:work"
 		if s.expanded {
@@ -154,7 +172,11 @@ func (s *verifyReturnSteps) Run(ctx context.Context, req run.Request) (run.Recor
 			runGit(s.t, target, "add", ".")
 			runGit(s.t, target, "commit", "-qm", "repair")
 		} else {
-			if err := commit("repair.txt"); err != nil {
+			name := "repair.txt"
+			if s.widenedPath != "" {
+				name = s.widenedPath
+			}
+			if err := commit(name); err != nil {
 				return run.Record{}, "", err
 			}
 		}
@@ -162,6 +184,24 @@ func (s *verifyReturnSteps) Run(ctx context.Context, req run.Request) (run.Recor
 		name := "work.txt"
 		if strings.HasPrefix(req.NodeID, "work/piece-") {
 			name = strings.TrimPrefix(req.NodeID, "work/piece-") + ".txt"
+		}
+		if req.NodeID == "work/piece-two" && s.pieceObstacle != "" {
+			s.pieceRuns = append(s.pieceRuns, req)
+			body, err := os.ReadFile(filepath.Join(laneDir, FenceFile))
+			if err != nil {
+				return run.Record{}, "", err
+			}
+			fence := fenceEntries(string(body))
+			for _, path := range []string{"tools/item-a/one.txt", "tools/item-a/two.txt", "tools/item-a/other.txt"} {
+				if !insideFence(path, fence) {
+					s.t.Fatalf("run %s is missing item path %s: %v", req.RunID, path, fence)
+				}
+			}
+			if len(s.pieceRuns) == 1 {
+				report = s.pieceObstacle
+				break
+			}
+			name = s.widenedPath
 		}
 		if err := commit(name); err != nil {
 			return run.Record{}, "", err
@@ -583,5 +623,60 @@ func TestVerifyReturnForkSeriesColdSecondLane(t *testing.T) {
 	}
 	if status := runGit(t, fork2, "status", "--porcelain"); status != "" {
 		t.Errorf("lane-2 fork checkout is dirty: %s", status)
+	}
+}
+
+// A narrowed build piece that reports the plan cut the work wrongly, with a complete fence
+// obstacle whose paths are all inside the item's own fence, sends the item back to plan.
+func TestReturnedPieceFenceObstacleRetriesPiece(t *testing.T) {
+	report := "OBSTACLE: fence\nPATHS: tools/item-a/other.txt\nEVIDENCE: the piece's scope is narrower than the repair needs\nRESULT: blocked\n"
+	l, s, f := verifyReturnFixture(t, false, func(w *workflowSteps) *verifyReturnSteps {
+		return &verifyReturnSteps{workflowSteps: w, expanded: true, buildPieces: true, verdict: verifyFinding, cannotMeet: report, widenedPath: "other.txt"}
+	})
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET allowed_paths='["tools/item-a/one.txt","tools/item-a/two.txt"]' WHERE item_id='item-a'`)
+		return err
+	})
+	runVerifyReturn(t, f, l, s, func() bool { return s.lands >= 1 })
+	if s.plans != 1 || len(s.repairs) != 2 || s.repairs[0].NodeID != s.repairs[1].NodeID || s.repairs[0].RunID == s.repairs[1].RunID {
+		t.Fatalf("expected a fresh run of the same piece without replanning: plans=%d repairs=%+v", s.plans, s.repairs)
+	}
+}
+
+func TestOrdinaryPieceFenceObstacle(t *testing.T) {
+	for _, outside := range []bool{false, true} {
+		t.Run(fmt.Sprint(outside), func(t *testing.T) {
+			paths := "tools/item-a/other.txt"
+			if outside {
+				paths += ", outside.txt"
+			}
+			report := "OBSTACLE: fence\nPATHS: " + paths + "\nEVIDENCE: need " + paths + "\nRESULT: blocked\n"
+			l, s, f := verifyReturnFixture(t, false, func(w *workflowSteps) *verifyReturnSteps {
+				return &verifyReturnSteps{workflowSteps: w, expanded: true, buildPieces: true, pieceObstacle: report, widenedPath: "other.txt"}
+			})
+			fixtureWrite(t, f, func(tx *store.Tx) error {
+				if _, err := tx.Exec(`UPDATE items SET body_ref=NULL WHERE item_id='item-a'`); err != nil {
+					return err
+				}
+				_, err := tx.Exec(`INSERT INTO request_words(item_id,words,words_hash,input_hash) VALUES('item-a',?,'words','input')`, []byte("Build both pieces"))
+				return err
+			})
+			var reason, action string
+			runVerifyReturn(t, f, l, s, func() bool {
+				fixtureRead(t, f, func(r *store.Reader) error {
+					holds, _, err := ReadObstacleHolds(r)
+					reason, action = holds["item-a"].Reason, holds["item-a"].Action
+					return err
+				})
+				return reason != "" || s.verifies > 0
+			})
+			if outside {
+				if len(s.pieceRuns) != 1 || !strings.Contains(reason, "outside.txt") || !strings.Contains(action, "outside.txt") || strings.Contains(reason+action, "other.txt") {
+					t.Fatalf("expected only the outside path in the hold with no retry: runs=%d reason=%q action=%q", len(s.pieceRuns), reason, action)
+				}
+			} else if reason != "" || s.plans != 1 || len(s.pieceRuns) != 2 || s.pieceRuns[0].RunID == s.pieceRuns[1].RunID {
+				t.Fatalf("expected a fresh run of the same piece without a hold: plans=%d runs=%+v reason=%q", s.plans, s.pieceRuns, reason)
+			}
+		})
 	}
 }

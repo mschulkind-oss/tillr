@@ -136,6 +136,20 @@ func TestRequestObstacleHoldsRecordKindAndFields(t *testing.T) {
 			wantOwnerWait: 1,
 		},
 		{
+			kind:          ObstacleFence,
+			workflow:      "scout-then-build@v1",
+			useOffer:      true,
+			offerFields:   map[string]string{"PATHS": "tools/tillr-item/item/waiting.go", "EVIDENCE": "checkWaitingOn lives outside the fence"},
+			wantReason:    ReasonObstacleFence,
+			wantWhySub:    []string{"tools/tillr-item/item/waiting.go", "checkWaitingOn lives outside the fence"},
+			wantMoverPref: "operator; ",
+			wantMoverSub:  "tools/tillr-item/item/waiting.go",
+			wantClass:     "needs you",
+			wantWherePref: "queue",
+			wantState:     StateInQueue,
+			wantOpNext:    1,
+		},
+		{
 			kind:          ObstacleTrunk,
 			workflow:      "scout-then-build@v1",
 			body:          "OBSTACLE: trunk\nCHECKS: go-tool/unit, tillr-docs\nBASE: 0123456\nRESULT: blocked\n",
@@ -276,6 +290,12 @@ func TestRequestObstacleHoldsRecordKindAndFields(t *testing.T) {
 					}
 					if !strings.HasPrefix(row.Mover, tc.wantMoverPref) || !strings.Contains(row.Mover, tc.wantMoverSub) {
 						t.Fatalf("mover = %q, want prefix %q and %q", row.Mover, tc.wantMoverPref, tc.wantMoverSub)
+					}
+					if tc.kind == ObstacleFence {
+						want := "operator; widen allowed_paths (tools/tillr-item/item/waiting.go) with tillr item add-path --store <store> --item " + id + " --path <repo-relative-path> --by <who> --why <reason>, or split the request"
+						if row.Mover != want {
+							t.Fatalf("fence mover = %q, want %q", row.Mover, want)
+						}
 					}
 					return nil
 				}

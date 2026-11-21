@@ -109,7 +109,7 @@ func TestFenceViolationScopesAForkCheckoutToItsRepoRelativePath(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(laneDir, FenceFile), []byte("docs/\n"), 0o644); err != nil {
 		t.Fatalf("writing the fence failed: %v", err)
 	}
-	escape, err = loop.fenceViolationAt(context.Background(), candidate, filepath.Join(laneDir, FenceFile))
+	escape, err = loop.fenceViolation(context.Background(), candidate)
 	if err != nil {
 		t.Fatalf("reading the fence failed: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestFenceViolationScopesAForkCheckoutToItsRepoRelativePath(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(laneDir, FenceFile), []byte(".forks/lanes/lane-3/pi/\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	escape, err = loop.fenceViolationAt(context.Background(), candidate, filepath.Join(laneDir, FenceFile))
+	escape, err = loop.fenceViolation(context.Background(), candidate)
 	if err != nil || !strings.Contains(escape, ".forks/lanes/lane-1/pi/src/foo.ts") {
 		t.Fatalf("a sibling checkout escaped the rebound fence check: escape=%q error=%v", escape, err)
 	}
@@ -171,7 +171,7 @@ func TestFenceViolationAcceptsAMainRepoWorktree(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(laneRoot, "lane-1", FenceFile), []byte("docs/\n"), 0o644); err != nil {
 		t.Fatalf("writing the fence failed: %v", err)
 	}
-	escape, err = loop.fenceViolationAt(context.Background(), candidate, filepath.Join(laneRoot, "lane-1", FenceFile))
+	escape, err = loop.fenceViolation(context.Background(), candidate)
 	if err != nil {
 		t.Fatalf("reading the fence failed: %v", err)
 	}

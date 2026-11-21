@@ -109,14 +109,50 @@ resolve_target "$3"
 	return 0, string(out)
 }
 
-func TestStagingDoesNotCarryTheItemsOldAllowList(t *testing.T) {
-	f := newStageFixture(t, fencedItemRecord("item_041", "in-queue", "tools/tillr-view"))
+// A fence that names a tillr tool's source tree also names the pack's copy of that tool,
+// because `tools/tillr*` is delivered twice: the gate's `pack-sync` check compares the copy,
+// and `fenceViolation` refuses a change that touches a path outside the fence. Naming the
+// source and not the copy therefore makes every compliant change a `boundary-scope-escape`
+// before the gate ever runs.
+//
+// Measured 2026-11-14, and it cost an item: `item-obs-archive` was staged with a fence naming
+// only `tools/tillr-view/`, the lane ran `just pack-sync` because the brief told it to, and
+// the tick was refused with `boundary-scope-escape` on
+// `yolo-packs/tillr/files/local/share/tillr/tillr-view/web/README.md`.
+//
+// The negative control is the pivot: a fence naming `docs/` gains no mirror, so this is a
+// derivation from the module and not a blanket widening of every fence.
+func TestTheFenceCarriesThePackMirrorOfEveryTillrModule(t *testing.T) {
+	f := newStageFixture(t, fencedItemRecord("item_041", "in-queue",
+		"tools/tillr-view", "docs/reference/observatory-design.md"))
 	if err := f.stager().Stage(context.Background(), f.spec("lane-1")); err != nil {
-		t.Fatal(err)
+		t.Fatalf("staging a lane failed: %v", err)
 	}
-	body, err := os.ReadFile(filepath.Join(f.laneRoot, "lane-1", drain.FenceFile))
-	if err != nil || len(body) != 0 {
-		t.Fatalf("ordinary stage inherited the retired list: %q, %v", body, err)
+	laneDir := filepath.Join(f.laneRoot, "lane-1")
+	fenceRaw, err := os.ReadFile(filepath.Join(laneDir, drain.FenceFile))
+	if err != nil {
+		t.Fatalf("reading the staged fence failed: %v", err)
+	}
+	fence := string(fenceRaw)
+	mirror := "yolo-packs/tillr/files/local/share/tillr/tillr-view/"
+	for _, want := range []string{"tools/tillr-view", "docs/reference/observatory-design.md", mirror} {
+		if !strings.Contains(fence, want) {
+			t.Fatalf("the fence does not name %q, so a lane that runs `just pack-sync` is refused by fenceViolation:\n%s", want, fence)
+		}
+	}
+	// The brief states the same fence: a lane is told what it may write, and a widened fence
+	// the brief did not show would be a rule the lane can only discover by being convicted.
+	briefRaw, err := os.ReadFile(filepath.Join(laneDir, "brief.md"))
+	if err != nil {
+		t.Fatalf("reading the staged brief failed: %v", err)
+	}
+	if !strings.Contains(string(briefRaw), mirror) {
+		t.Fatalf("the brief's fence section does not name %q", mirror)
+	}
+	// The pivot: `docs/` names no module, so no mirror is derived for it. A fence that grew a
+	// mirror for every path would pass the assertions above and mean nothing.
+	if strings.Contains(fence, "yolo-packs/tillr/files/local/share/tillr/docs/") {
+		t.Fatalf("the fence invented a mirror for a path that names no module:\n%s", fence)
 	}
 }
 
@@ -152,8 +188,7 @@ func TestStagedLaneSatisfiesTheAdaptersPreflight(t *testing.T) {
 		"- **Base sha:** " + f.base,
 		"- **Target:** " + worktree + " (lane worktree)",
 		"1. the first criterion of item_041",
-		"## Scope and boundaries",
-		"Change what the work needs",
+		"tools/tillr-drain",
 		"briefs/item_041.md",
 	} {
 		if !strings.Contains(text, want) {
@@ -170,10 +205,15 @@ func TestStagedLaneSatisfiesTheAdaptersPreflight(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the staged fence failed: %v", err)
 	}
-	// Existing items' allowed_paths lists are ignored (owner ruling 2026-11-19):
-	// ordinary staged items write an empty fence.txt and rely on the global deny-list.
-	if string(fence) != "" {
-		t.Fatalf("the fence is %q, want empty", fence)
+	// One path per line, then the pack's copy of the module the source path names and the
+	// module's gate companions: staging derives them so a lane that runs `just pack-sync` and
+	// touches the skill and the documentation suite is not refused by fenceViolation.
+	wantFence := "tools/tillr-drain\n" +
+		"yolo-packs/tillr/files/local/share/tillr/tillr-drain/\n" +
+		"yolo-packs/tillr/skills/tillr-operating/SKILL.md\n" +
+		"tests/tillr-docs.test.py\n"
+	if string(fence) != wantFence {
+		t.Fatalf("the fence is %q, want %q", fence, wantFence)
 	}
 	base, err := os.ReadFile(filepath.Join(laneDir, "base_sha"))
 	if err != nil {
@@ -188,7 +228,7 @@ func TestStagedLaneSatisfiesTheAdaptersPreflight(t *testing.T) {
 
 	// The negative control: the same preflight refuses a brief that carries a placeholder.
 	broken := filepath.Join(scratch(t, "stage-broken"), "brief.md")
-	writeFile(t, broken, strings.Replace(text, "briefs/item_041.md", "{{UNFILLED}}", 1))
+	writeFile(t, broken, strings.Replace(text, "tools/tillr-drain", "{{FENCE_PATHS}}", 1))
 	if code, out := adapterPreflight(t, worktree, broken); code != 2 {
 		t.Fatalf("the preflight accepted a brief carrying a placeholder (exit %d): %s", code, out)
 	}
@@ -220,14 +260,17 @@ func TestLargeConflictEvidenceIsStoredOutsideTheBrief(t *testing.T) {
 	}
 }
 
-func TestStagingAcceptsAnItemWithNoFence(t *testing.T) {
+func TestStagingRefusesAnItemWithNoFence(t *testing.T) {
 	f := newStageFixture(t, fencedItemRecord("item_041", "in-queue"))
-	if err := f.stager().Stage(context.Background(), f.spec("lane-1")); err != nil {
-		t.Fatalf("staging an item with no allowed_paths failed: %v", err)
+	err := f.stager().Stage(context.Background(), f.spec("lane-1"))
+	if err == nil {
+		t.Fatalf("staging an item with no allowed_paths succeeded")
 	}
-	worktree := filepath.Join(f.laneRoot, "lane-1", "worktree")
-	if code, out := adapterPreflight(t, worktree, "../brief.md"); code != 0 {
-		t.Fatalf("preflight refused a staged item with no allowed_paths (exit %d): %s", code, out)
+	if !strings.Contains(err.Error(), "allowed_paths") {
+		t.Fatalf("the refusal does not name the field: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(f.laneRoot, "lane-1", "worktree")); !os.IsNotExist(statErr) {
+		t.Fatalf("a refused stage left a worktree behind: %v", statErr)
 	}
 }
 
@@ -580,9 +623,9 @@ func TestTheBriefNamesTheRunsOwnScratchDirectory(t *testing.T) {
 	laneDir := filepath.Join(f.laneRoot, "lane-1")
 	brief := readAll(t, filepath.Join(laneDir, "brief.md"))
 	scratch := filepath.Join(laneDir, "durable", spec.RunID)
-	start := strings.Index(brief, "## Scope and boundaries")
+	start := strings.Index(brief, "## Fence")
 	if start < 0 {
-		t.Fatalf("the brief carries no scope and boundaries section:\n%s", brief)
+		t.Fatalf("the brief carries no fence section:\n%s", brief)
 	}
 	fence := brief[start:]
 	if end := strings.Index(fence, "\n## "); end >= 0 {

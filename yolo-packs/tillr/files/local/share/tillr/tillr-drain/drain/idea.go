@@ -81,7 +81,7 @@ func (s *LaneStager) ideaTask(ctx context.Context, id string) (string, []byte, e
 Words path: %s
 
 1. Copy the words into the tree at the words path, unchanged.
-2. Decide what the words ask for, and write it as item blocks. Each block has a title, a paragraph that leads with why, criteria, and from="%s".
+2. Decide what the words ask for, and write it as item blocks. Each block has a title, a paragraph that leads with why, paths, criteria, and from="%s".
 3. Write a design document, in the house form, when the work needs decisions recorded. Route it from a roadmap.
 4. File every decision that is the owner's as an open question in that document. Do not wait and do not guess: a vague idea becomes a short document that holds only its questions.
 

@@ -4,6 +4,8 @@ package drain
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -74,4 +76,20 @@ func (l *Loop) uncommittedPaths(ctx context.Context, target string) ([]string, e
 	}
 	slices.Sort(paths)
 	return slices.Compact(paths), nil
+}
+
+func (l *Loop) fencedUncommittedPaths(ctx context.Context, lane, target string, paths []string) ([]string, error) {
+	body, err := os.ReadFile(filepath.Join(l.laneDirPath(lane), FenceFile))
+	if err != nil {
+		return nil, Externalf("reading the lane's fence before commit continuation: %v", err)
+	}
+	fence := fenceEntries(string(body))
+	prefix := l.fencePrefix(ctx, target)
+	fenced := []string{}
+	for _, path := range paths {
+		if insideFence(prefix+path, fence) {
+			fenced = append(fenced, path)
+		}
+	}
+	return fenced, nil
 }

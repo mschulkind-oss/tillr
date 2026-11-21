@@ -109,7 +109,7 @@ func TestWhyLegacyDefinitionReasonsUnchanged(t *testing.T) {
 	}
 	rows := string(out)
 	rows = strings.TrimPrefix(rows, "definition: "+definition.GitLandingName+"\n")
-	want := "1\tready\tqueued\tready\tthe next pass\n2\tblocked\theld\tblocked\tdrain; ready\n3\tempty\tqueued\tno-lane\tdrain; lane-1\n"
+	want := "1\tready\tqueued\tready\tthe next pass\n2\tblocked\theld\tblocked\tdrain; ready\n3\tempty\theld\tno-fence\toperator; tillr item apply: give the item allowed_paths\n"
 	if !strings.HasPrefix(rows, want) {
 		t.Fatalf("legacy rows: %q", rows)
 	}

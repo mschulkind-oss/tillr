@@ -91,7 +91,7 @@ func TestRemoteSyncConflictFilesRepairItemAndPins(t *testing.T) {
 		t.Fatalf("%s is not recognized as a generated repair", st.ItemID)
 	}
 	row, waiting, stages := filedRemoteSyncItem(t, p, st.ItemID)
-	if row.State != StateInQueue || !row.Express || len(row.Allowed) != 0 || waiting != nil || stages != 1 {
+	if row.State != StateInQueue || !row.Express || !reflect.DeepEqual(row.Allowed, []string{"two.txt"}) || waiting != nil || stages != 1 {
 		t.Fatalf("item = %+v, waiting = %+v, staging records = %d", row, waiting, stages)
 	}
 	if got, ok, err := p.l.readRemoteSyncState(ctx, st.ItemID); err != nil || !ok || !reflect.DeepEqual(got, st) || !strings.Contains(got.ConflictOutput, "CONFLICT") || !strings.Contains(got.RemoteMessages, "remote two.txt") || !strings.Contains(got.CommitMessage, "two.txt") {
@@ -148,7 +148,7 @@ func TestRemoteSyncConflictFilesRepairItemAndPins(t *testing.T) {
 }
 
 func TestRemoteSyncConflictPreservesLiteralPath(t *testing.T) {
-	for _, name := range []string{"café.txt", " space name.txt ", "notes?.txt", "notes*.txt", "notes\nsecond.txt"} {
+	for _, name := range []string{"café.txt", " space name.txt "} {
 		t.Run(name, func(t *testing.T) {
 			p := newPushFixture(t)
 			commit := ownerCommit(t, p.f.root, name)
@@ -159,8 +159,8 @@ func TestRemoteSyncConflictPreservesLiteralPath(t *testing.T) {
 				t.Fatal(err)
 			}
 			row, waiting, _ := filedRemoteSyncItem(t, p, st.ItemID)
-			if len(row.Allowed) != 0 || waiting != nil {
-				t.Fatalf("legacy list = %q, waiting = %+v; want dispatch for literal %q", row.Allowed, waiting, name)
+			if !reflect.DeepEqual(row.Allowed, []string{name}) || waiting != nil {
+				t.Fatalf("fence = %q, waiting = %+v; want literal %q", row.Allowed, waiting, name)
 			}
 			wt := filepath.Join(t.TempDir(), "literal-path-repair")
 			runGit(t, p.f.root, "worktree", "add", "-q", "--detach", wt, st.BaseSHA)
@@ -194,8 +194,16 @@ func TestRemoteSyncMixedGateConflictCannotPassPreGate(t *testing.T) {
 	checkRemoteSyncCandidate(t, p, st, wt, "three.txt\n", gatePath)
 }
 
-func TestRemoteSyncInvalidUTF8PathEscalates(t *testing.T) {
-	testRemoteSyncOwnerFence(t, "notes\xff.txt", true)
+func TestRemoteSyncWildcardPathEscalatesWithoutWideningFence(t *testing.T) {
+	for _, name := range []string{"notes?.txt", "notes*.txt"} {
+		t.Run(name, func(t *testing.T) { testRemoteSyncOwnerFence(t, name, true) })
+	}
+}
+
+func TestRemoteSyncUnrepresentablePathsEscalateWithoutWideningFence(t *testing.T) {
+	for _, name := range []string{"notes\nsecond.txt", "notes\xff.txt"} {
+		t.Run(name, func(t *testing.T) { testRemoteSyncOwnerFence(t, name, true) })
+	}
 }
 
 func testRemoteSyncOwnerFence(t *testing.T, excluded string, mixed bool) (*pushFixture, remoteSyncState) {
@@ -230,8 +238,8 @@ func testRemoteSyncOwnerFence(t *testing.T, excluded string, mixed bool) (*pushF
 	row, waiting, _ := filedRemoteSyncItem(t, p, st.ItemID)
 	// The owner-facing JSON replaces bytes that are not valid UTF-8; the fence
 	// must not acquire that replacement as a path.
-	if row.State != StateBlocked || waiting == nil || waiting.Waiter != "owner" || !strings.Contains(waiting.Reason, strings.ToValidUTF8(excluded, "\uFFFD")) || len(row.Allowed) != 0 {
-		t.Fatalf("state = %s, waiting = %+v, allowed = %q; want owner hold and no path list", row.State, waiting, row.Allowed)
+	if row.State != StateBlocked || waiting == nil || waiting.Waiter != "owner" || !strings.Contains(waiting.Reason, strings.ToValidUTF8(excluded, "\uFFFD")) || !reflect.DeepEqual(row.Allowed, want) {
+		t.Fatalf("state = %s, waiting = %+v, allowed = %q; want owner hold and %q", row.State, waiting, row.Allowed, want)
 	}
 	return p, st
 }

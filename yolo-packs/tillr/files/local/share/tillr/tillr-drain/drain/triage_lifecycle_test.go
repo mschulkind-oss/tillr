@@ -124,7 +124,8 @@ func TestTriageRejectsEverySyncWarningBeforeGateThenBindsByID(t *testing.T) {
 		{"length", strings.ReplaceAll(valid, "Add the requested feature", "Add one two three four five six seven eight nine ten eleven twelve"), "prose-shape"},
 		{"paragraph", strings.ReplaceAll(valid, "Readers need this feature to complete their work.\n", ""), "prose-shape"},
 		{"criteria-count", valid, ""},
-		{"finding", strings.ReplaceAll(valid, `paths="docs/"`, `unexpected="value"`), "unknown-attribute"},
+		{"path", strings.ReplaceAll(valid, `paths="docs/"`, `paths="missing/"`), "path-missing"},
+		{"finding", strings.ReplaceAll(valid, `paths="docs/"`, `paths="../escape"`), "invalid-path"},
 	}
 	many := valid
 	for i := 2; i <= 9; i++ {
@@ -148,8 +149,7 @@ func TestTriageRejectsEverySyncWarningBeforeGateThenBindsByID(t *testing.T) {
 		})
 	}
 	runGit(t, target, "reset", "--hard", base)
-	// Legacy path attributes, even with old invalid values, do not affect admission.
-	writeForkFile(t, filepath.Join(target, "docs/request.md"), strings.ReplaceAll(valid, `paths="docs/"`, `paths="../escape,missing/"`))
+	writeForkFile(t, filepath.Join(target, "docs/request.md"), valid)
 	runGit(t, target, "add", "docs")
 	runGit(t, target, "commit", "-qm", "ready triage block")
 	c := Candidate{ItemID: "item-request", RunID: p.decision.RunRequest.RunID, LaneID: p.decision.LaneID, Worktree: target, BaseSHA: base, HeadSHA: runGit(t, target, "rev-parse", "HEAD"), BlockConflict: p.decision.BlockConflict}

@@ -304,12 +304,9 @@ func loadWorkflowWith(root, ref string, policy *Policy, args map[string]any) (*W
 }
 
 // scopePaths expands a node's explicit paths by the same rules as an item's fence.
-// When WriteScope.Paths is nil (inherited) and allowed is empty, it returns nil.
+// An omitted scope also inherits for decisions recorded before scopes were supported.
 func (s WorkflowStage) scopePaths(allowed []string) ([]string, error) {
 	if s.WriteScope.Paths == nil {
-		if len(allowed) == 0 {
-			return nil, nil
-		}
 		return fencePaths(allowed), nil
 	}
 	paths := append([]string(nil), s.WriteScope.Paths...)
@@ -333,23 +330,13 @@ func (s WorkflowStage) scopePaths(allowed []string) ([]string, error) {
 const ReasonNodeScopeOutsideFence = "node-scope-outside-fence"
 
 func (w *Workflow) checkScopes(allowed []string) error {
-	var fence []string
-	if len(allowed) > 0 {
-		fence = fencePaths(allowed)
-		for i := range fence {
-			fence[i] = path.Clean(fence[i])
-		}
+	fence := fencePaths(allowed)
+	for i := range fence {
+		fence[i] = path.Clean(fence[i])
 	}
 	for _, stage := range w.Stages {
 		if stage.Access != "write" {
 			continue
-		}
-		for _, raw := range stage.WriteScope.Paths {
-			for _, seg := range strings.Split(filepath.ToSlash(raw), "/") {
-				if seg == ".." {
-					return fmt.Errorf("%s: node %s: %s traverses parent directory", ReasonNodeScopeOutsideFence, stage.ID, raw)
-				}
-			}
 		}
 		scope, err := stage.scopePaths(allowed)
 		if err != nil {
@@ -357,7 +344,7 @@ func (w *Workflow) checkScopes(allowed []string) error {
 		}
 		for _, p := range scope {
 			clean := path.Clean(p)
-			if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") || (len(fence) > 0 && !insideFence(clean, fence)) {
+			if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") || !insideFence(clean, fence) {
 				return fmt.Errorf("%s: node %s: %s is outside the item's fence", ReasonNodeScopeOutsideFence, stage.ID, p)
 			}
 		}
@@ -374,7 +361,7 @@ func restartWriter(d Decision) bool {
 		return false
 	}
 	_, _, cause := splitRunID(d.RunRequest.RunID)
-	node := d.Workflow.Stages[d.NodeIndex]
+	node := d.effectiveNode()
 	return cause == "restart" && node.Kind == "agent" && node.Access == "write"
 }
 
@@ -583,9 +570,13 @@ func (l *Loop) nodeOutcome(ctx context.Context, d Decision, outcome string) erro
 // examination lease. It never resets the worktree between nodes.
 func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string) error {
 	next := d
+	next.NodeFencePaths = nil
 	next.Parallel = nil
 	// Successors normally keep the repaired checkout, not the return dispatch mode.
-	next.Returned = nil
+	// Carry a fence answer past preliminary readers so the writer gets it too.
+	if d.Returned == nil || d.Returned.Cause != ReasonObstacleFence || d.Workflow.Stages[d.NodeIndex].Access == "write" {
+		next.Returned = nil
+	}
 	next.RetryCandidate = nil
 	next.RepeatedCall = nil
 	next.WorkerSessionReason = ""
@@ -852,15 +843,13 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		}
 	}
 	if !l.nonLanding && effectiveAccess == "write" {
-		c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: nodeBase, HeadSHA: head, BlockConflict: d.BlockConflict}
+		c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: nodeBase, HeadSHA: head}
 		blocked := stage.Kind == "agent" && footer == "blocked" && parseObstacle(log).Problem == ""
-		// An inherited scope on an ordinary node no longer uses the legacy
-		// fence file, including for already dispatched runs.
-		var scopeFile string
-		if stage.WriteScope.Paths != nil {
-			scopeFile = filepath.Join(l.laneDirPath(d.LaneID), FenceFile)
+		fencePath := filepath.Join(l.laneDirPath(d.LaneID), FenceFile)
+		if plannedWritePiece(stage) {
+			fencePath = "" // The plan's piece paths cannot override the current item fence.
 		}
-		escape, err := l.changeFenceViolationAt(ctx, c, scopeFile, blocked)
+		escape, err := l.changeFenceViolationAt(ctx, c, fencePath, blocked)
 		if err != nil {
 			return true, err
 		}
@@ -880,6 +869,12 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		}
 	}
 	if stage.Kind == "agent" {
+		if footer == "blocked" && !l.nonLanding && stage.Access == "write" && stage.WriteScope.Paths != nil {
+			if added := l.missingPieceFencePaths(d, parseObstacle(log)); len(added) > 0 {
+				d.NodeFencePaths = append(append([]string(nil), d.NodeFencePaths...), added...)
+				return true, l.restartWorkflowNode(ctx, d, base, rec, "piece-fence", "piece requested more of the item's fence")
+			}
+		}
 		if verifyBuildReturn(d.Returned) {
 			if why, wrong := l.builderPlanWrong(d, stage, footer, log); wrong {
 				// The build step cannot meet the findings within the plan: the plan step runs

@@ -38,12 +38,14 @@
  {
   "name": "fence complete with markdown",
   "report": "- **OBSTACLE:** fence\n- **PATHS:** tools/tillr-view/waiting.go, tools/tillr-view/waiting_test.go\n- **EVIDENCE:** the view must show the new hold\n\nRESULT: blocked",
-  "ending": false
+  "ending": true,
+  "kind": "fence"
  },
  {
   "name": "fence path list with backticks and newlines",
   "report": "- **OBSTACLE:** fence\n- **PATHS:** `tools/new.go`, `.tillr.toml`\n  - `tests/new/`\n- **EVIDENCE:** needed\nRESULT: blocked",
-  "ending": false
+  "ending": true,
+  "kind": "fence"
  },
  {
   "name": "fence prose",

@@ -117,7 +117,7 @@ func TestFixerBlockedReportReachesTheOwnerOnlyByName(t *testing.T) {
 		{"no actor", "Cannot see why the suite fails.\nRESULT: blocked", "answered", "build", StateInQueue},
 		{"build", "Retrying is the next step.\nNEXT-ACTOR: build\nRESULT: blocked", "answered", "build", StateInQueue},
 		{"owner", "Fix needs `tests/outside_test.go`, outside the fence.\nNEXT-ACTOR: owner\nRESULT: blocked", "owner", "owner", StateBlocked},
-		{"retired fence obstacle", "OBSTACLE: fence\nPATHS: tests/outside_test.go\nEVIDENCE: the failing test lives there\nRESULT: blocked", "answered", "build", StateInQueue},
+		{"fence obstacle", "OBSTACLE: fence\nPATHS: tests/outside_test.go\nEVIDENCE: the failing test lives there\nRESULT: blocked", "owner", "owner", StateBlocked},
 		{"owner obstacle", "OBSTACLE: owner\nQUESTION: may the fixer skip the flaky check?\nRESULT: blocked", "owner", "owner", StateBlocked},
 		{"incomplete obstacle", "OBSTACLE: fence\nRESULT: blocked", "answered", "build", StateInQueue},
 	} {
@@ -142,6 +142,11 @@ func TestFixerBlockedReportReachesTheOwnerOnlyByName(t *testing.T) {
 				}
 				if tc.waiting != "owner" && !strings.Contains(c.Text, "OBSTACLE: <kind>") {
 					t.Fatalf("returned report does not state the obstacle contract: %q", c.Text)
+				}
+				// A generated repair has no block to widen, so its fence obstacle reaches the
+				// owner as an explicit question naming the paths.
+				if tc.name == "fence obstacle" && (!strings.Contains(c.Text, "Question for the owner") || !strings.Contains(c.Text, "tests/outside_test.go")) {
+					t.Fatalf("the owner is not asked a question naming the paths: %q", c.Text)
 				}
 				return nil
 			})

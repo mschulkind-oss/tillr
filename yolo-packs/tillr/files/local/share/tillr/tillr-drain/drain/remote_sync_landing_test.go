@@ -120,6 +120,13 @@ func assertRemoteSyncSecondStage(t *testing.T, p *pushFixture, c Candidate) remo
 			t.Errorf("%s = %s, want %s", ref, got, want)
 		}
 	}
+	fixtureRead(t, p.f, func(r *store.Reader) error {
+		allowed, err := readItemAllowedPaths(r, c.ItemID)
+		if !slices.Equal(allowed, []string{"three.txt"}) {
+			t.Errorf("enforced fence = %v, want only three.txt", allowed)
+		}
+		return err
+	})
 	return st
 }
 
@@ -142,7 +149,7 @@ func TestRemoteSyncLaterConflictAdvancesBase(t *testing.T) {
 	writeForkFile(t, filepath.Join(wt, "two.txt"), "undo the first resolution\n")
 	runGit(t, wt, "add", "two.txt", "three.txt")
 	runGit(t, wt, "commit", "-qm", "resolved three.txt")
-	checkRemoteSyncCandidate(t, p, st, wt, "two.txt\nthree.txt\n", "altered non-conflicting path(s) relative to the mechanical merge: two.txt")
+	checkRemoteSyncCandidate(t, p, st, wt, "two.txt\nthree.txt\n", "altered unfenced path(s) relative to the mechanical merge: two.txt")
 	runGit(t, wt, "restore", "--source=HEAD^", "--staged", "--worktree", "--", "two.txt")
 	runGit(t, wt, "commit", "--amend", "--no-edit", "-q")
 	checkRemoteSyncCandidate(t, p, st, wt, "three.txt\n", "")

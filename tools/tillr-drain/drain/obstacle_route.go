@@ -28,7 +28,7 @@ func (l *Loop) laneAttempted(ctx context.Context, lane, mainSHA string) bool {
 }
 
 // routeObstacle takes a complete obstacle the loop acts on itself: trunk, tooling and seat.
-// It answers false for a kind the blocked route takes (reportedBlock): definition
+// It answers false for a kind the blocked route takes (reportedBlock): definition, fence
 // and owner go to the design seat, or to the owner for a generated repair item, and so do a
 // generated item's tooling obstacle and a seat obstacle past the end of the escalation list.
 func (l *Loop) routeObstacle(ctx context.Context, d Decision, req run.Request, lane, tick, mainSHA string, o Obstacle, result *LoopResult) (laneOutcome, bool) {
@@ -57,6 +57,21 @@ func (l *Loop) routeObstacle(ctx context.Context, d Decision, req run.Request, l
 		return laneOutcome{stop: l.abandon(ctx, lane, req.RunID, head, "returned to its worker: "+o.Kind+" obstacle")}
 	}
 	switch o.Kind {
+	case ObstacleFence:
+		if !IsTrunkFixer(req.ItemID) && !IsRemoteSyncItem(req.ItemID) {
+			return laneOutcome{}, false
+		}
+		// A repair worker may correct the loop's initial fence. The gate's own code
+		// is never granted, so any request that includes it still reaches the owner.
+		added, refused, err := l.widenFixerFence(ctx, req.ItemID, o.List("PATHS"))
+		if err != nil {
+			return laneOutcome{err: err}, true
+		}
+		if len(refused) > 0 || len(added) == 0 {
+			return laneOutcome{}, false
+		}
+		l.reportf("loop: %s named a fence obstacle: its fence grows by %s, and it goes back to its worker\n", req.ItemID, strings.Join(added, ", "))
+		return returnToWorker(fmt.Sprintf("The fence now includes %s, the paths this run named as outside it (%s). Continue the repair and commit. %s", strings.Join(added, ", "), o.Field("EVIDENCE"), ObstacleContract), ""), true
 	case ObstacleTrunk:
 		if IsTrunkFixer(req.ItemID) {
 			return returnToWorker(missingOutputDetail("this item is the trunk's repair, so a red trunk is its work and `trunk` is not an obstacle open to it"), ""), true

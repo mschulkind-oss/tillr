@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
@@ -64,18 +63,6 @@ func (s *seatRecordSteps) Land(ctx context.Context, c Candidate) (LandOutcome, e
 
 func (s *seatRecordSteps) Verdict(ctx context.Context, c Candidate, outcome string) error {
 	return nil
-}
-
-func (s *seatRecordSteps) ItemState(ctx context.Context, id, _, state string, _ ...item.WaitingOn) error {
-	st, err := store.Open(ctx, s.Store, true)
-	if err != nil {
-		return err
-	}
-	defer st.Close()
-	return st.WriteTx(ctx, func(tx *store.Tx) error {
-		_, err := tx.Exec(`UPDATE items SET state=? WHERE item_id=?`, state, id)
-		return err
-	})
 }
 
 func drainActiveRuns(t *testing.T, l *Loop, result *LoopResult) {

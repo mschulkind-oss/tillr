@@ -60,8 +60,6 @@ case "$prompt" in *candidate.txt*"one requested commit"*) ;; *) exit 71 ;; esac
 				command += "exit 0\n"
 			}
 			f, l, original, d := continuationDispatchFixture(t, command, false)
-			// A run already staged before retirement may still carry the old file.
-			writeForkFile(t, filepath.Join(l.laneDirPath(d.LaneID), FenceFile), "unrelated.txt\n")
 			steps := &commitContinuationSteps{continuationSteps: original}
 			l.cfg.Steps = steps
 			var result LoopResult

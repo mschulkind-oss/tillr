@@ -270,12 +270,9 @@ with path.open('a') as out:
 			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			script := "set -- first\n" + strings.Replace(standInLandingOffer, `"summary":"candidate"`, `"summary":"candidate","transcript":`+strconv.Quote(transcript), 1)
 			if stage == "fence" {
-				script = "mkdir -p .forks\n" + strings.ReplaceAll(strings.ReplaceAll(script, "candidate.txt", ".forks/outside.txt"), "git add ", "git add -f ")
+				script = strings.ReplaceAll(script, "candidate.txt", "outside.txt")
 			}
 			f, l, steps, first := continuationDispatchFixture(t, script, false)
-			if stage == "fence" {
-				commitDenyListFixture(t, f.root)
-			}
 			lane := l.laneDirPath(first.LaneID)
 			firstDir := RunDir(f.root, first.RunRequest.RunID)
 			for _, dir := range []string{lane, firstDir} {
@@ -316,7 +313,7 @@ with path.open('a') as out:
 				evidence = []string{"commit:" + head}
 				detail = []string{"Criterion c1 (content): the first judge reason"}
 			case "fence":
-				detail = []string{".forks/outside.txt matches denied entry"}
+				detail = []string{"outside.txt is outside allowed_paths"}
 			}
 			declareWorkerResumeFixture(t, l)
 			var result LoopResult

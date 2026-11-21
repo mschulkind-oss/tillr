@@ -137,8 +137,8 @@ class PreToolUse(Fixture):
     def test_obstacle_is_validated_and_deferred_in_the_pi_offer_shape(self):
         decision, reason = self.pre(tool="mcp__tillr__obstacle", tool_input={"kind": "fence", "evidence": "e"})
         self.assertEqual(decision, "deny")
-        self.assertIn('Invalid obstacle kind "fence"', reason)
-        decision, reason = self.pre(tool="mcp__tillr__obstacle", tool_input={"kind": "tooling", "command": "check", "paths": "---, ```", "evidence": "e"})
+        self.assertIn("missing required field(s): paths", reason)
+        decision, reason = self.pre(tool="mcp__tillr__obstacle", tool_input={"kind": "fence", "paths": "---, ```", "evidence": "e"})
         self.assertEqual(decision, "deny")
         self.assertIn("missing required field(s): paths", reason)
         decision, reason = self.pre(tool="mcp__tillr__obstacle", tool_input={"kind": "seat", "tried": "t", "missing": "m"})

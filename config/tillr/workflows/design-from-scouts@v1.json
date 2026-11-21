@@ -18,7 +18,7 @@
       "seat": "design",
       "access": "write",
       "inputs": { "findings": "markdown" },
-      "prompt": "Read every findings input named in this brief. Synthesize them into the item's design — changing what the work needs, and nothing else — keeping evidence and open decisions explicit. Verify the document and commit the finished deliverable."
+      "prompt": "Read every findings input named in this brief. Synthesize them into the item's design within its fence, keeping evidence and open decisions explicit. Verify the document and commit the finished deliverable."
     }
   ],
   "edges": [{ "from_node": "scout", "from_output": "findings", "to_node": "join", "to_input": "findings" }],

@@ -50,9 +50,8 @@ else
 fi
 echo "harness-segment: $seg"
 if [ "$seg" = 1 ]; then
-    mkdir -p .forks
-    echo leak > .forks/leak.txt
-    git add -f .forks/leak.txt
+    echo leak > leak.txt
+    git add leak.txt
     git -c user.name=stub -c user.email=stub@example.invalid commit -q -m "leak"
     exit 1
 fi
@@ -224,7 +223,6 @@ func TestAResumeContinuesTheKilledRunsOwnSession(t *testing.T) {
 // refuses it. That is why a resume re-derives the fence as well as re-taking the bracket.
 func TestAResumeRetakesTheBracketAndRefusesWhatTheStaleOneAdmits(t *testing.T) {
 	f := newResumableFixture(t)
-	installLoopTestDenyList(t, f.loop.root)
 	steps := f.steps(t)
 	// The bracket a dispatch takes: before the killed segment has written anything.
 	stale, err := drain.TakeBoundary(context.Background(), drain.BoundarySpec{
@@ -257,8 +255,8 @@ func TestAResumeRetakesTheBracketAndRefusesWhatTheStaleOneAdmits(t *testing.T) {
 		t.Fatalf("comparing the stale bracket failed: %v", err)
 	}
 	for _, violation := range staleViolations {
-		if strings.Contains(violation.Detail, ".forks/leak.txt") {
-			t.Fatalf("the stale bracket reported .forks/leak.txt, so this case cannot show what it misses: %s", violation)
+		if strings.Contains(violation.Detail, "leak.txt") {
+			t.Fatalf("the stale bracket reported leak.txt, so this case cannot show what it misses: %s", violation)
 		}
 	}
 	// …and the fence refuses it, which is why a resume re-derives the fence rather than

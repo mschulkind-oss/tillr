@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { OBSTACLE_REQUIRED, SEAT_NEEDS_ATTEMPT } from "./keep-going.ts";
+import { fencePathsProblem, OBSTACLE_REQUIRED, SEAT_NEEDS_ATTEMPT } from "./keep-going.ts";
 
 function readRecord(path: string) {
 	try {
@@ -46,6 +46,10 @@ export function validateObstacleArgs(args: ObstacleArgs): { kind: string; fields
 	}
 	if (missing.length) {
 		throw new Error(`The ${kind} obstacle is missing required field(s): ${missing.join(", ")}.`);
+	}
+	if (kind === "fence") {
+		const problem = fencePathsProblem(fields.PATHS);
+		if (problem) throw new Error(`${problem}.`);
 	}
 	if (kind === "tooling") {
 		const entries = fields.PATHS.split(/[\s,]+/).map((p) => p.replace(/^[`*-]+|[`*-]+$/g, "")).filter(Boolean);
@@ -123,7 +127,7 @@ export default function obstacle(pi: any) {
 				kind: { type: "string", enum: Object.keys(OBSTACLE_REQUIRED).sort() },
 				criteria: { type: "string" },
 				evidence: { type: "string" },
-				paths: { type: "string", description: "For a tooling obstacle, name the tool’s repository-relative paths." },
+				paths: { type: "string", description: "For a fence obstacle, list repository-relative paths separated by commas or newlines; no prose, Git refs, or placeholders." },
 				checks: { type: "string" },
 				base: { type: "string" },
 				command: { type: "string" },

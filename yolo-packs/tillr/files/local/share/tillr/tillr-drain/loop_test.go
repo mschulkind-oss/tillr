@@ -1012,104 +1012,59 @@ printf 'RESULT: done\n'
 const dirtyAdapterBody = `echo leftover > leftover.txt
 `
 
-// The same pre-gate policy admits ordinary paths regardless of legacy item lists and
-// refuses a denied path even when the item has no list.
-func TestACandidateTouchingDeniedPathIsRefusedWithoutTheGateAndOldFenceExcludedPathLands(t *testing.T) {
-	t.Run("old list excluded path lands", func(t *testing.T) {
-		f := newLoopFixture(t, stub(t, "adapter", committingAdapter))
-		// Even when the stored item record still carries an old allowed_paths list ("docs/")
-		// that excludes candidate.txt, the candidate stages, runs, gates, and lands.
-		installLoopTestDenyList(t, f.root)
-		fixtureAt(t, f.store, fencedItemRecord("item_041", "in-queue", "docs/"))
-		templatePath, err := filepath.Abs(filepath.Join("..", "tillr-run", "backends", "brief-template.md"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		report := &strings.Builder{}
-		stage := &drain.LaneStager{Root: f.root, LaneRoot: f.laneRoot, Store: f.store, Template: templatePath}
-		loop := f.newLoopWith(t, 1, f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0)), stage, report)
+// A candidate whose commit touches a path its lane does not fence is refused, and the gate
+// never runs: the gate answers whether the change works, and this change is not the change
+// the item asked for, however well it works.
+//
+// Negative control: the same adapter, the same commit and a fence that names the file is
+// TestACandidateInsideItsFenceIsGated below, so a loop that refused every candidate passes
+// here and fails there, and a loop that refused none passes there and fails here.
+func TestACandidateOutsideItsFenceIsRefusedWithoutTheGate(t *testing.T) {
+	f := newLoopFixture(t, stub(t, "adapter", committingAdapter))
+	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
+	report := &strings.Builder{}
+	// The stub commits candidate.txt; the fence names a directory that does not contain it.
+	stage := passStager{laneRoot: f.laneRoot, fence: []string{"docs/"}}
+	loop := f.newLoopWith(t, 1, f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0)), stage, report)
 
-		result, err := loop.Run(context.Background())
-		if err != nil {
-			t.Fatalf("the loop failed: %v", err)
-		}
-		if result.Rejected != 0 || result.Landed != 1 {
-			t.Fatalf("the loop rejected %d and landed %d, want 0 and 1: %s", result.Rejected, result.Landed, report)
-		}
-		if runs := lines(t, f.count); countMatching(runs, "gate --item") != 1 {
-			t.Fatalf("the gate ran %d time(s), want once: %v", countMatching(runs, "gate --item"), runs)
-		}
-	})
-
-	t.Run("item with no list stages runs gates and lands", func(t *testing.T) {
-		f := newLoopFixture(t, stub(t, "adapter", committingAdapter))
-		fixtureAt(t, f.store, fencedItemRecord("item_042", "in-queue"))
-		templatePath, err := filepath.Abs(filepath.Join("..", "tillr-run", "backends", "brief-template.md"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		realStager := &drain.LaneStager{
-			Root:     f.root,
-			LaneRoot: f.laneRoot,
-			Store:    f.store,
-			Template: templatePath,
-		}
-		report := &strings.Builder{}
-		loop := f.newLoopWith(t, 1, f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0)), realStager, report)
-
-		result, err := loop.Run(context.Background())
-		if err != nil {
-			t.Fatalf("the loop failed: %v", err)
-		}
-		if result.Rejected != 0 || result.Landed != 1 {
-			t.Fatalf("the loop rejected %d and landed %d, want 0 and 1: %s", result.Rejected, result.Landed, report)
-		}
-	})
-
-	t.Run("denied path refused without the gate", func(t *testing.T) {
-		deniedAdapter := stub(t, "denied-adapter", counting+`mkdir -p .tillr
-echo bad > .tillr/escaped.txt
-git add -f .tillr/escaped.txt
-git -c user.name=stub -c user.email=stub@example.invalid commit -q -m denied
-printf 'RESULT: done\n'`)
-		f := newLoopFixture(t, deniedAdapter)
-		installLoopTestDenyList(t, f.root)
-		fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
-		report := &strings.Builder{}
-		stage := passStager{laneRoot: f.laneRoot, fence: nil}
-		loop := f.newLoopWith(t, 1, f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0)), stage, report)
-
-		result, err := loop.Run(context.Background())
-		if err != nil {
-			t.Fatalf("the loop failed: %v", err)
-		}
-		if result.Stop != drain.StopQueueDrained {
-			t.Fatalf("the loop stopped %q (%s), want %q", result.Stop, result.Detail, drain.StopQueueDrained)
-		}
-		if result.Rejected != 2 || result.Landed != 0 {
-			t.Fatalf("the loop rejected %d and landed %d, want 2 and 0", result.Rejected, result.Landed)
-		}
-		runs := lines(t, f.count)
-		if countMatching(runs, "gate --item") != 0 {
-			t.Fatalf("the gate judged a candidate the deny-list refused: %v", runs)
-		}
-		if countMatching(runs, "verdict") != 0 {
-			t.Fatalf("the deny-list refusal recorded %d verdict(s), want none: %v", countMatching(runs, "verdict"), runs)
-		}
-		if got := itemStateOf(t, f.store, "item_041"); got != "blocked" {
-			t.Fatalf("the repeated deny-list refusal left the item %q, want blocked on its conflict", got)
-		}
-		refusals := refusalsOf(t, eventsOf(t, f.store))
-		if len(refusals) != 2 || refusals[0].step != drain.RefusalFence || refusals[1].step != drain.RefusalFence {
-			t.Fatalf("the deny-list refusals recorded %+v, want two %q refusals", refusals, drain.RefusalFence)
-		}
-		if !strings.Contains(report.String(), drain.ScopeEscape) || !strings.Contains(report.String(), ".tillr/escaped.txt") || !strings.Contains(report.String(), `denied entry ".tillr" (the store and lane state belong to the loop)`) {
-			t.Fatalf("the report does not name the escape, path, and deny-list entry: %s", report.String())
-		}
-		if !strings.Contains(result.Detail, "item_041 ("+drain.ReasonConflictOwner+")") {
-			t.Fatalf("the stop does not name the repeat's owner hold: %s", result.Detail)
-		}
-	})
+	result, err := loop.Run(context.Background())
+	if err != nil {
+		t.Fatalf("the loop failed: %v", err)
+	}
+	// A refusal is a verdict about the work, so the loop runs on to the drained pile
+	// instead of stopping: stopping would end an unattended night over one item's fence.
+	if result.Stop != drain.StopQueueDrained {
+		t.Fatalf("the loop stopped %q (%s), want %q", result.Stop, result.Detail, drain.StopQueueDrained)
+	}
+	// The refusal goes back to the worker with its evidence; the second run escapes the
+	// same way, an identical repeat, which waits on the owner because the fixture's policy
+	// names no design seat (the owner's ruling of 2026-11-17).
+	if result.Rejected != 2 || result.Landed != 0 {
+		t.Fatalf("the loop rejected %d and landed %d, want 2 and 0", result.Rejected, result.Landed)
+	}
+	runs := lines(t, f.count)
+	if countMatching(runs, "gate --item") != 0 {
+		t.Fatalf("the gate judged a candidate its fence refused: %v", runs)
+	}
+	// The gate never judged the candidate, so there is no verdict to record: the loop's
+	// `drain.refusal` event is the record, and the item stays where it was.
+	if countMatching(runs, "verdict") != 0 {
+		t.Fatalf("the fence refusal recorded %d verdict(s), want none: %v", countMatching(runs, "verdict"), runs)
+	}
+	if got := itemStateOf(t, f.store, "item_041"); got != "blocked" {
+		t.Fatalf("the repeated fence refusal left the item %q, want blocked on its conflict", got)
+	}
+	refusals := refusalsOf(t, eventsOf(t, f.store))
+	if len(refusals) != 2 || refusals[0].step != drain.RefusalFence || refusals[1].step != drain.RefusalFence {
+		t.Fatalf("the fence refusals recorded %+v, want two %q refusals", refusals, drain.RefusalFence)
+	}
+	if !strings.Contains(report.String(), drain.ScopeEscape) || !strings.Contains(report.String(), "candidate.txt") {
+		t.Fatalf("the report does not name the escape and the path: %s", report.String())
+	}
+	// The stop names the item's mover rather than the retired `not-ready` dead end.
+	if !strings.Contains(result.Detail, "item_041 ("+drain.ReasonConflictOwner+")") {
+		t.Fatalf("the stop does not name the repeat's owner hold: %s", result.Detail)
+	}
 }
 
 // refusalEvent is one `drain.refusal` the loop appended: the run it names and the step that
@@ -1448,20 +1403,15 @@ func TestAFailedCandidateGoesBackToItsWorkerUntilItRepeats(t *testing.T) {
 // (TestASingleRefusalIsNotARepeatedRefusal), so a loop that named every refusal or none
 // fails one of the three.
 func TestADrainThatRefusedEveryCandidateNamesItAsARepeatedRefusal(t *testing.T) {
-	deniedAdapter := counting + `mkdir -p .forks
-echo denied > .forks/escape.txt
-git add -f .forks/escape.txt
-git -c user.name=stub -c user.email=stub@example.invalid commit -q -m denied
-printf 'RESULT: done\n'
-`
-	f := newLoopFixture(t, stub(t, "adapter", deniedAdapter))
-	installLoopTestDenyList(t, f.root)
+	f := newLoopFixture(t, stub(t, "adapter", committingAdapter))
 	fixtureAt(t, f.store,
 		itemRecord("item_041", "in-queue"),
 		itemRecord("item_042", "in-queue"),
 	)
 	report := &strings.Builder{}
-	stage := passStager{laneRoot: f.laneRoot, fence: nil}
+	// The stub commits candidate.txt; the fence names a directory that does not contain
+	// it, so the fence refuses both candidates and the gate never runs.
+	stage := passStager{laneRoot: f.laneRoot, fence: []string{"docs/"}}
 	loop := f.newLoopWith(t, 1, f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0)), stage, report)
 
 	result, err := loop.Run(context.Background())
@@ -1517,17 +1467,10 @@ printf 'RESULT: done\n'
 // worker and was refused again: the threshold counts items, which is what keeps the report
 // from firing on the first item every drain refuses.
 func TestASingleRefusalIsNotARepeatedRefusal(t *testing.T) {
-	deniedAdapter := counting + `mkdir -p .forks
-echo denied > .forks/escape.txt
-git add -f .forks/escape.txt
-git -c user.name=stub -c user.email=stub@example.invalid commit -q -m denied
-printf 'RESULT: done\n'
-`
-	f := newLoopFixture(t, stub(t, "adapter", deniedAdapter))
-	installLoopTestDenyList(t, f.root)
+	f := newLoopFixture(t, stub(t, "adapter", committingAdapter))
 	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
 	report := &strings.Builder{}
-	stage := passStager{laneRoot: f.laneRoot, fence: nil}
+	stage := passStager{laneRoot: f.laneRoot, fence: []string{"docs/"}}
 	loop := f.newLoopWith(t, 1, f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0)), stage, report)
 
 	result, err := loop.Run(context.Background())
@@ -2046,9 +1989,9 @@ func TestEveryNonLandingOutcomeRecovers(t *testing.T) {
 fi
 case "$TILLR_RUN_ID" in
   *item_041*)
-    mkdir -p .forks
-    echo escape > .forks/escape.txt
-    git add -f .forks/escape.txt
+    mkdir -p docs
+    echo escape > docs/escape.txt
+    git add docs/escape.txt
     git -c user.name=stub -c user.email=stub@example.invalid commit -q -m escape
     printf 'RESULT: done\n'
     ;;
@@ -2070,7 +2013,6 @@ case "$TILLR_RUN_ID" in
 esac
 `)
 	f := newLoopFixture(t, adapter)
-	installLoopTestDenyList(t, f.root)
 	fixtureAt(t, f.store,
 		itemRecord("item_041", "in-queue"),
 		itemRecord("item_042", "in-queue"),
@@ -2327,19 +2269,4 @@ func TestAnAdapterRefusalHoldsTheItemWithTheAdaptersWords(t *testing.T) {
 			t.Fatalf("%s hold = %+v (found %v), want %s carrying the adapter's words", id, fault, ok, drain.ReasonAdapterRefused)
 		}
 	}
-}
-
-func installLoopTestDenyList(t *testing.T, root string) {
-	t.Helper()
-	const path = "config/tillr/deny-list.json"
-	policy, err := os.ReadFile("../../" + path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, filepath.Dir(path)), 0755); err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, filepath.Join(root, path), string(policy))
-	git(t, root, "add", path)
-	git(t, root, "commit", "-m", "deny list")
 }

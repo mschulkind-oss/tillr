@@ -94,11 +94,7 @@ func TestProposalTransactionRules(t *testing.T) {
 		{name: "bounds", rule: "proposal-argument-bounds", raw: `{"target":"three","workflow":"replacement@v1","args":{"prompts":["a","b"]}}`, change: func(t *testing.T, f refusalLoopFixture, d *Decision) {
 			expansionFile(t, f.root, "replacement", `"args":{"prompts":{"type":"strings","most":1}},`+replacementBody)
 		}},
-		{name: "outside-old-fence-accepted", change: func(t *testing.T, f refusalLoopFixture, d *Decision) {
-			expansionFile(t, f.root, "replacement", `"stages":[{"id":"scout","kind":"agent","seat":"scout","access":"read_only"},{"id":"write","kind":"agent","seat":"build","access":"write","write_scope":["outside/"]}],"edges":[{"from_node":"scout","to_node":"write"}]`)
-		}},
 		{name: "scope", rule: "proposal-scope-outside-fence", change: func(t *testing.T, f refusalLoopFixture, d *Decision) {
-			d.Workflow.Stages[2].WriteScope = WorkflowScope{Paths: []string{"tools/item-a/"}}
 			expansionFile(t, f.root, "replacement", `"stages":[{"id":"write","kind":"agent","seat":"build","access":"write","write_scope":["outside/"]}],"edges":[]`)
 		}},
 		{name: "promise", rule: "proposal-output-promise", change: func(t *testing.T, f refusalLoopFixture, d *Decision) {

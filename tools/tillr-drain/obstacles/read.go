@@ -62,6 +62,15 @@ func NewHold(itemID, runID, kind string, rawFields map[string]string, checks []s
 		} else {
 			h.Action = "answer the question and retry the item, or close the item (tillr item close --item " + itemID + ")"
 		}
+	case "fence":
+		paths := OneLine(fields["PATHS"])
+		ev := FirstLine(fields["EVIDENCE"])
+		h.Mover = "operator"
+		h.Reason = "paths: " + paths
+		if ev != "" {
+			h.Reason += "; " + ev
+		}
+		h.Action = FenceAction(itemID, paths)
 	case "trunk":
 		checksText := strings.Join(checks, ", ")
 		if checksText == "" {
@@ -112,7 +121,7 @@ func NewHold(itemID, runID, kind string, rawFields map[string]string, checks []s
 // ReasonCode answers the planner hold reason for this obstacle kind.
 func (h Hold) ReasonCode() string {
 	switch h.Kind {
-	case "owner", "trunk", "tooling", "seat", "definition":
+	case "owner", "fence", "trunk", "tooling", "seat", "definition":
 		return "obstacle-" + h.Kind
 	default:
 		return "obstacle-definition"
@@ -127,9 +136,23 @@ func (h Hold) WhyText() string {
 	return h.ReasonCode() + ": " + h.Reason
 }
 
+// FenceAction names the operator command that can release a fence hold.
+func FenceAction(itemID, paths string) string {
+	return "widen allowed_paths (" + paths + ") with tillr item add-path --store <store> --item " + itemID + " --path <repo-relative-path> --by <who> --why <reason>, or split the request"
+}
+
 // MoverText answers `<mover>; <action>`.
 func (h Hold) MoverText() string {
 	action := h.Action
+	if h.Kind == "fence" {
+		// Old hold events are immutable. Show the new remedy on those holds too,
+		// keeping the recorded path list (which may have been filtered at write time).
+		if paths, ok := strings.CutPrefix(action, "widen allowed_paths ("); ok {
+			if paths, ok := strings.CutSuffix(paths, ") or split the request, then retry run "+h.RunID); ok {
+				action = FenceAction(h.ItemID, paths)
+			}
+		}
+	}
 	if action == "" {
 		return h.Mover
 	}
@@ -146,7 +169,7 @@ func (h Hold) WithoutCloseRemedy() Hold {
 		} else {
 			h.Action = "answer the question and retry the item"
 		}
-	case "trunk", "tooling", "seat":
+	case "fence", "trunk", "tooling", "seat":
 		h.Action = StripCloseRemedy(h.Action)
 	default:
 		ev := FirstLine(h.Fields["EVIDENCE"])
@@ -287,11 +310,6 @@ func Read(r *store.Reader) (map[string]Hold, map[string]string, error) {
 			if err := json.Unmarshal(e.Payload, &h); err != nil {
 				return nil, nil, err
 			}
-			if h.Kind == "fence" {
-				delete(active, h.ItemID)
-				released[h.ItemID] = h.RunID
-				continue
-			}
 			h.AtMS = e.At.UnixMilli()
 			h.Seq = e.Seq
 			active[h.ItemID] = h
@@ -358,6 +376,10 @@ func Read(r *store.Reader) (map[string]Hold, map[string]string, error) {
 					continue
 				}
 			}
+			if h.Kind == "fence" && p.AllowedPaths != nil && !sameStrings(p.AllowedPaths, h.AllowedPaths) {
+				delete(active, id)
+				released[id] = h.RunID
+			}
 		case "run.allocate":
 			var p struct {
 				ItemID string `json:"item_id"`
@@ -405,4 +427,16 @@ func Read(r *store.Reader) (map[string]Hold, map[string]string, error) {
 		}
 	}
 	return active, released, nil
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

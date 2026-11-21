@@ -62,6 +62,7 @@ export function footerOf(text: string): Footer | undefined {
 // The closed set of obstacle kinds and each kind's required fields, as obstacle.go has them.
 export const OBSTACLE_REQUIRED: Record<string, string[]> = {
 	definition: ["CRITERIA", "EVIDENCE"],
+	fence: ["PATHS", "EVIDENCE"],
 	trunk: ["CHECKS", "BASE"],
 	tooling: ["COMMAND", "EVIDENCE", "PATHS"],
 	seat: ["TRIED", "MISSING"],
@@ -87,7 +88,21 @@ function fieldLine(line: string): [string, string] | undefined {
 	return [name, value.trim().replace(/^[*`]+|[*`]+$/g, "").trim()];
 }
 
-
+// Keep this grammar in sync with fenceObstaclePaths in the drain. A new path need not
+// exist yet, but a sentence is one bad entry, never a list of permissions.
+export function fencePathsProblem(value: string): string {
+	const ask = "Provide repository-relative paths separated by commas or newlines, not prose, Git refs, or placeholders";
+	const entries = value.split("\n").flatMap((line) => line.trim().replace(/^[-*] /, "").split(","))
+		.map((entry) => entry.trim()).filter(Boolean);
+	const bad = entries.filter((entry) => {
+		const path = entry.length >= 2 && entry.startsWith("`") && entry.endsWith("`") ? entry.slice(1, -1) : entry;
+		const parts = (path.endsWith("/") ? path.slice(0, -1) : path).split("/");
+		return /[^\p{L}\p{M}\p{N}._+@/\-]/u.test(path) || parts.some((part) => part === "" || part === "." || part === "..") ||
+			parts[0] === "refs" || parts[0] === ".git";
+	});
+	if (bad.length) return `the fence obstacle has invalid \`PATHS:\` entries: ${bad.map((entry) => JSON.stringify(entry)).join(", ")}. ${ask}`;
+	return entries.length ? "" : `the fence obstacle has no \`PATHS:\` entries. ${ask}`;
+}
 
 // obstacleProblem answers what makes a blocked report's obstacle incomplete, or "" when it
 // is complete. A field's value runs from its line to the next field or the footer.
@@ -123,6 +138,7 @@ export function obstacleProblem(text: string): string {
 	if (!required) return `\`OBSTACLE: ${kind}\` is not an obstacle kind; the kinds are ${kinds}`;
 	const missing = required.filter((name) => !(fields[name] ?? "").trim()).map((name) => `\`${name}:\``);
 	if (missing.length) return `the ${kind} obstacle is missing ${missing.join(", ")}`;
+	if (kind === "fence") return fencePathsProblem(fields.PATHS);
 	if (kind === "tooling") {
 		for (const path of fields.PATHS.split(/[\s,]+/).map((p) => p.replace(/^[`*-]+|[`*-]+$/g, "")).filter(Boolean)) {
 			if (path.startsWith("/") || path === ".." || path.startsWith("../")) return `the ${kind} obstacle's \`PATHS:\` must be repository-relative, and ${path} is not`;
@@ -148,7 +164,7 @@ export const SEAT_NEEDS_ATTEMPT =
 // The worker's two endings, in the words every return to a worker carries (obstacle.go's
 // ObstacleContract).
 export const OBSTACLE_CONTRACT =
-	"A worker run has two endings. The goal is the commit, ending `RESULT: done`. The only other ending is `RESULT: blocked` with a line `OBSTACLE: <kind>` and that kind's fields: `definition` (CRITERIA, EVIDENCE) when the item's words are wrong or contradict the tree; `trunk` (CHECKS, BASE) when the base is red and this change did not cause it; `tooling` (COMMAND, EVIDENCE, PATHS) when a tool or the harness is defective; `seat` (TRIED, MISSING) when an attempt you made and tested shows the task exceeds this model; `owner` (QUESTION) when only the owner can decide. A merge conflict, a patch to reconcile, a failing test, a long suite and unfinished work are work to continue, not obstacles.";
+	"A worker run has two endings. The goal is the commit, ending `RESULT: done`. The only other ending is `RESULT: blocked` with a line `OBSTACLE: <kind>` and that kind's fields: `definition` (CRITERIA, EVIDENCE) when the item's words are wrong or contradict the tree; `fence` (PATHS, EVIDENCE) when the change needs paths outside the fence; `trunk` (CHECKS, BASE) when the base is red and this change did not cause it; `tooling` (COMMAND, EVIDENCE, PATHS) when a tool or the harness is defective; `seat` (TRIED, MISSING) when an attempt you made and tested shows the task exceeds this model; `owner` (QUESTION) when only the owner can decide. A merge conflict, a patch to reconcile, a failing test inside the fence, a long suite and unfinished work are work to continue, not obstacles.";
 
 function goalObstacleProblem(text: string, footer: Footer | undefined, committed: boolean, clean: boolean): string | undefined {
 	if (footer !== "blocked" && footer !== "trunk-broken") return undefined;

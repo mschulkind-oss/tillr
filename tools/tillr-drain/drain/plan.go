@@ -123,6 +123,7 @@ type Decision struct {
 	DesignerReason    string         `json:"designer_reason,omitempty"`
 	NodeStartRunID    string         `json:"node_start_run_id,omitempty"`
 	WorkflowRestart   bool           `json:"workflow_restart,omitempty"`
+	NodeFencePaths    []string       `json:"node_fence_paths,omitempty"`
 	NodeInfraFailures int            `json:"node_infra_failures,omitempty"`
 	WorkflowRelease   bool           `json:"workflow_release,omitempty"`
 	Workflow          *Workflow      `json:"workflow,omitempty"`
@@ -644,6 +645,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 		fault, faulted := faults[item.ItemID]
 		faultHeld := faulted && !p.finished(item.State) && holdEnabled(def, fault.Reason)
 		obsHold, held := p.obstacleHolds[item.ItemID]
+		fenceAnswer := p.answeredFenceObstacle(item, obsHold)
 		if waiting && (work == nil || work.Done || faultHeld) {
 			decision = p.namedWaitDecision(item.ItemID, wait)
 		} else if faultHeld {
@@ -805,7 +807,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 		} else if ownerOwed {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: ReasonOwnerOnlyOwed, From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			identifyDecision(&decision)
-		} else if held && !p.finished(item.State) && holdEnabled(def, obsHold.ReasonCode()) && !(item.State == def.Ready && retries[item.ItemID].SupersedesRunID == obsHold.RunID && p.latest[item.ItemID] == obsHold.RunID) {
+		} else if held && fenceAnswer == nil && !p.finished(item.State) && holdEnabled(def, obsHold.ReasonCode()) && !(item.State == def.Ready && retries[item.ItemID].SupersedesRunID == obsHold.RunID && p.latest[item.ItemID] == obsHold.RunID) {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: obsHold.ReasonCode(), From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			identifyDecision(&decision)
 		} else if rewriteOwnerHolds[item.ItemID] != "" && !p.finished(item.State) {
@@ -886,15 +888,17 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			hold := ""
 			_, hasRetry := retries[item.ItemID]
 			obstacleReleased := p.latest[item.ItemID] != "" && p.releasedObstacles[item.ItemID] == p.latest[item.ItemID]
-			if w != nil && hasNodes && !p.finished(item.State) && !hasRetry && !obstacleReleased && !p.waitReleased(item.ItemID) {
+			if w != nil && hasNodes && !p.finished(item.State) && !hasRetry && !obstacleReleased && fenceAnswer == nil && !p.waitReleased(item.ItemID) {
 				hold, err = commandNodeHold(r, item.ItemID)
 				if err != nil {
 					return nil, nil, readFailure(err)
 				}
 			}
 			if loadErr == nil && w != nil {
-				if scopeErr := w.checkScopes(nil); scopeErr != nil {
+				if scopeErr := w.checkScopes(item.Allowed); scopeErr != nil {
 					hold = scopeErr.Error()
+				} else {
+					loadErr = inheritWorkflowScope(w, WorkflowScope{Paths: fencePaths(item.Allowed)})
 				}
 			}
 			if hold != "" {
@@ -907,7 +911,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			} else if loadErr != nil {
 				decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: ReasonWorkflowInvalid + ": " + strings.SplitN(loadErr.Error(), "\n", 2)[0], From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			} else {
-				decision = p.decide(routed, edges[item.ItemID])
+				decision = p.decide(routed, edges[item.ItemID], fenceAnswer)
 				if decision.RunRequest != nil && decision.Returned != nil && decision.Returned.WorkerSession != nil && w != nil && !retainedGraph {
 					decision.RunRequest.SessionTurn = false
 					decision.RunRequest.ResumePrompt = ""
@@ -1114,7 +1118,7 @@ func namedWaitHold(def definition.Definition, hold obstacles.Hold, id string, wa
 //
 // Under OQ-GP7, work that a red check does not read may start and run while a fixer is
 // open; only landing waits (via path intersection at gate-acquittal time).
-func (p *planner) decide(item itemRow, blockedBy []string) Decision {
+func (p *planner) decide(item itemRow, blockedBy []string, fenceAnswer *ReturnedEnding) Decision {
 	decision := Decision{ItemID: item.ItemID, Seat: item.Seat}
 	conflict, hasConflict := p.conflicts[item.ItemID]
 	// An explicit owner disposition (apply/state) can release a blocked item.
@@ -1161,7 +1165,10 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	// A gate refusal, a run with no commit, a fence escape and a refused landing go back to
 	// the item's worker with their evidence, every time and uncounted (returned.go). An
 	// operator's retry and the recovery of an interrupted run are their own moves.
-	returned := p.returnedEnding(item.ItemID)
+	returned := fenceAnswer
+	if returned == nil {
+		returned = p.returnedEnding(item.ItemID)
+	}
 	if returned == nil && answeredObstacle != nil {
 		returned = answeredObstacle
 	}
@@ -1225,6 +1232,10 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 			}
 		}
 	}
+	// The fence is read before the tick's resources because it is the item's own scope, and
+	// a fence that names nothing is a refusal rather than a deferral: a rule that treated
+	// it as overlapping everything would serialise the whole queue behind one blanket.
+	fence := itemFence(item.Allowed)
 	// One planner-level exclusion survives: two items that deliver one fork's patch branch
 	// cannot run at once, however disjoint their own fences are, because the second would
 	// move a branch the first is still building.
@@ -1262,6 +1273,8 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	case retry == nil && !interrupted && repeated == nil && !attempt.infrastructureFailure && returned == nil && p.mayBeARetry(item.ItemID) && decision.ConflictID == "" && !(item.Delivery.ForkRun != "" && item.Delivery.ForkRun == p.latest[item.ItemID]) && holdEnabled(p.rules(), p.retryHoldReason(item.ItemID)):
 		decision.Action, decision.Reason = ActionHold, p.retryHoldReason(item.ItemID)
 		decision.SupersedesRunID = p.latest[item.ItemID]
+	case holdEnabled(p.rules(), ReasonNoFence) && fenceAdmitsNothing(fence):
+		decision.Action, decision.Reason = ActionHold, ReasonNoFence
 	case p.lands() && forkHeld:
 		decision.Action, decision.Reason = ActionHold, ReasonForkHeld
 		decision.DeferredBy = heldBy

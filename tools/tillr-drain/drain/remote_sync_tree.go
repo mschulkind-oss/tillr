@@ -3,19 +3,37 @@ package drain
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os/exec"
 	"sort"
 	"strings"
+
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 // checkRemoteSyncTree requires a single commit atop the current conflict base.
-// Outside the paths Git reported conflicted, it must preserve the mechanical merge’s
+// Outside the current step's fence, it must preserve the mechanical merge's
 // exact tree entries (object IDs, modes, and presence).
 func (l *Loop) checkRemoteSyncTree(ctx context.Context, candidate Candidate) (string, error) {
-	st, found, err := l.readRemoteSyncState(ctx, candidate.ItemID)
+	s, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
+		return "", err
+	}
+	defer s.Close()
+	var st remoteSyncState
+	var found bool
+	var fence []string
+	// Read the stage and its fence in one snapshot, not from the lane's text file.
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		st, found, err = readRemoteSyncState(r, candidate.ItemID)
+		if err != nil || !found {
+			return err
+		}
+		fence, err = readItemAllowedPaths(r, candidate.ItemID)
+		return err
+	}); err != nil {
 		return "", err
 	}
 	if !found {
@@ -51,32 +69,46 @@ func (l *Loop) checkRemoteSyncTree(ctx context.Context, candidate Candidate) (st
 	if msg := protectedRemoteSyncConflict(candidate.ItemID, conflicts); msg != "" {
 		return msg, nil
 	}
-	conflicted := make(map[string]bool, len(conflicts))
 	for _, path := range conflicts {
-		conflicted[path] = true
+		if !insideFence(path, fence) {
+			return fmt.Sprintf("%s: mechanical merge left %q conflicted outside the current fence for %s", ScopeEscape, path, candidate.ItemID), nil
+		}
 	}
 	diff, err := rawGit(ctx, l.cfg.Root, nil, "diff-tree", "-r", "--no-renames", "--ignore-submodules=none", "--name-only", "-z", mergeTree, candidate.HeadSHA+"^{tree}")
 	if err != nil {
 		return "", err
 	}
-	var unrelated []string
+	var outOfFence []string
 	for _, path := range strings.Split(diff, "\x00") {
-		if path != "" && !conflicted[path] {
-			unrelated = append(unrelated, path)
+		if path != "" && !insideFence(path, fence) {
+			outOfFence = append(outOfFence, path)
 		}
 	}
-	if len(unrelated) > 0 {
-		sort.Strings(unrelated)
-		return fmt.Sprintf("%s: %s altered non-conflicting path(s) relative to the mechanical merge: %s",
-			ScopeEscape, candidate.ItemID, strings.Join(unrelated, ", ")), nil
+	if len(outOfFence) > 0 {
+		sort.Strings(outOfFence)
+		return fmt.Sprintf("%s: %s altered unfenced path(s) relative to the mechanical merge: %s",
+			ScopeEscape, candidate.ItemID, strings.Join(outOfFence, ", ")), nil
 	}
 	return "", nil
+}
+
+func readItemAllowedPaths(r *store.Reader, itemID string) ([]string, error) {
+	var raw string
+	if err := r.QueryRow(`SELECT COALESCE(NULLIF(allowed_paths, ''), '[]') FROM items WHERE item_id=?`, itemID).Scan(&raw); err != nil {
+		return nil, err
+	}
+	var paths []string
+	if err := json.Unmarshal([]byte(raw), &paths); err != nil {
+		return nil, err
+	}
+	return paths, nil
 }
 
 // protectedRemoteSyncConflict rejects protected or unrepresentable conflict
 // paths even if their conflict-marker blobs match the mechanical merge.
 func protectedRemoteSyncConflict(itemID string, conflicts []string) string {
-	if problem := remoteSyncProtectedPaths(conflicts); problem != "" {
+	_, gatePaths, literalPaths := remoteSyncSplitFence(conflicts)
+	if problem := remoteSyncFenceProblem(gatePaths, literalPaths); problem != "" {
 		return fmt.Sprintf("%s: repair %s needs the owner to resolve conflicts on %s", ScopeEscape, itemID, problem)
 	}
 	return ""

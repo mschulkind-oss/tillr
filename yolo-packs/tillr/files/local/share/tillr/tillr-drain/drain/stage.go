@@ -154,11 +154,7 @@ func fencePaths(allowed []string) []string {
 // text and the planner parses the same text with fenceEntries, so a plan and the escape
 // check that convicts a run cannot disagree about where a lane may write.
 func fenceText(allowed []string) string {
-	paths := fencePaths(allowed)
-	if len(paths) == 0 {
-		return ""
-	}
-	return strings.Join(paths, "\n") + "\n"
+	return strings.Join(fencePaths(allowed), "\n") + "\n"
 }
 
 // tillrModule answers the module a fence path names when it names a tillr tool's source tree:
@@ -199,13 +195,12 @@ type ForkTarget struct {
 // which is the fence violation the per-run durable directory exists to prevent. The path is
 // the one `run exec` exports as YOLO_DURABLE_DIR, so it is a value and not a constant.
 func OutOfFence(durableDir string) string {
-	return "- the store, under the repository's .tillr directory;\n" +
+	return "Nothing outside those paths. That includes:\n\n" +
+		"- the store, under the repository's .tillr directory;\n" +
 		"- any other lane directory under the lane root;\n" +
 		"- the main checkout, unless this brief names it as the target;\n" +
-		"- git internals and refs other than the lane's own branch (including every patch/<fork> delivery branch);\n" +
-		"- .forks/ outside the lane's own fork checkout;\n" +
-		"- any edited or removed `tillr: item` directive comment. Only saved idea intake and document triage may add the declarations their task calls for;\n" +
-		"- your scratch directory, " + durableDir + ": it is not part of the change, and it is the one path outside the target worktree that is yours to write."
+		"- git refs, which no run moves: a commit belongs to the lane's own branch;\n" +
+		"- your scratch directory, " + durableDir + ": it is outside the fence because it is not part of the change, and it is the one path outside the fence that is yours to write."
 }
 
 // StageSpec is one dispatch as the stager reads it: the request's identity, the values the
@@ -216,6 +211,7 @@ type StageSpec struct {
 	Continue           bool
 	PreviousRunID      string
 	Node               *WorkflowStage
+	nodeFenceWidened   bool
 	InputPaths         map[string][]NodeInput
 	PreviousReport     string
 	PreviousReportText string
@@ -353,16 +349,11 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		delivery = deliveryDecision{}
 	}
 	fork := checkoutForDelivery(s.Root, spec.LaneID, delivery)
-	if spec.BlockConflict == nil {
-		recorded.AllowedPaths = nil
-	}
 	isFork := fork.Fork != ""
-	if isFork {
-		recorded.AllowedPaths = []string{fork.Path + "/"}
-	}
 	target, targetKind := worktree, "lane worktree"
 	baseSHA := spec.BaseSHA
 	if isFork {
+		recorded.AllowedPaths = itemDeliveryFence(fork, recorded.AllowedPaths)
 		if err := s.ensureForkCheckout(ctx, spec, fork); err != nil {
 			return err
 		}
@@ -440,9 +431,12 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		if isFork {
 			node.WriteScope = WorkflowScope{Paths: forkFence(fork, node.WriteScope.Paths)}
 		}
-		scope, err := node.scopePaths(itemAllowed)
+		scope, err := node.runScopePaths(itemAllowed)
 		if err != nil {
 			return err
+		}
+		if spec.nodeFenceWidened && !scopeWithin(scope, fencePaths(itemAllowed)) {
+			return Externalf("%s: widened scope for %s is no longer inside the item's fence", ReasonNodeScopeOutsideFence, spec.Node.ID)
 		}
 		recorded.AllowedPaths = scope
 	}
@@ -1384,6 +1378,9 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 	if len(recorded.Criteria) == 0 && !triage {
 		return nil, ItemContentf(recorded.ItemID, "criteria", "item %s carries no criteria, and design §3 makes an item without one undispatachable: a brief's criteria are what a verdict judges. Add a criterion and dispatch it again", recorded.ItemID)
 	}
+	if len(recorded.AllowedPaths) == 0 {
+		return nil, ItemContentf(recorded.ItemID, "allowed_paths", "item %s names no allowed_paths, so the brief has no fence. A run whose change nothing constrains is not dispatchable: add allowed_paths to the item (its repo-relative path prefixes) and dispatch it again", recorded.ItemID)
+	}
 	// The template numbers its first criterion ("1. {{CRITERION_1}}"), so the value is the
 	// first criterion's text followed by the rest already numbered: an item with four
 	// criteria renders four numbered lines and one with one renders one.
@@ -1396,7 +1393,7 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 	}
 	requestCriteria := criteria
 	task := taskSection(recorded)
-	facts := "None carried: staging read no code facts for this item, so nothing here is evidence about the tree. Read the relevant paths yourself before editing."
+	facts := "None carried: staging read no code facts for this item, so nothing here is evidence about the tree. Read the fence's paths yourself before editing."
 	settled := "None recorded: this item names no settled decision, so this brief settles nothing. Where this brief is wrong about the tree, name the `definition` obstacle with its evidence instead of inventing a mechanism."
 	if spec.Conflict != nil {
 		task = conflictTask(recorded, *spec.Conflict, spec.Continue)
@@ -1456,6 +1453,7 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 		{placeholder: "TITLE", text: recorded.Title, field: "title"},
 		{placeholder: "TASK", text: task, field: "body_ref"},
 		{placeholder: "CRITERION_1", text: criteria, field: "criteria"},
+		{placeholder: "FENCE_PATHS", text: strings.Join(fencePaths(recorded.AllowedPaths), "\n"), field: "allowed_paths"},
 		{placeholder: "RUN_ID", text: spec.RunID},
 		{placeholder: "BACKEND", text: spec.Backend},
 		{placeholder: "SEAT_LINES", text: seatLines(spec.Policy)},
@@ -1470,7 +1468,7 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 		{placeholder: "OUT_OF_FENCE_PATHS", text: OutOfFence(durableDir)},
 		{placeholder: "SETTLED", text: settled},
 		{placeholder: "FACTS", text: facts},
-		{placeholder: "METHOD", text: "The item states no method. Change what the work needs, and nothing else; write the failing reproduction first where this repository's rules require one."},
+		{placeholder: "METHOD", text: "The item states no method. Within the fence the order of work is yours; write the failing reproduction first where this repository's rules require one."},
 		{placeholder: "VERIFICATION", text: "None recorded: this item carries no verification command of its own. Run targeted checks for the change."},
 	}, nil
 }
