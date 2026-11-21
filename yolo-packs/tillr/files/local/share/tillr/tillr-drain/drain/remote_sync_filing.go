@@ -64,6 +64,8 @@ type remoteSyncState struct {
 	OldTrunk       string            `json:"old_trunk"`
 	ReplayedPairs  map[string]string `json:"replayed_pairs,omitempty"`
 	ReplayedOrder  []string          `json:"replayed_order,omitempty"`
+
+	FirstConflictParent string `json:"first_conflict_parent,omitempty"`
 }
 
 // parseMergeTreeConflict reads `merge-tree --write-tree --name-only -z`:
@@ -232,28 +234,45 @@ func remoteSyncBriefFacts(ctx context.Context, storePath, itemID string) (string
 	return strings.TrimSpace(b.String()), nil
 }
 
-// fileOrUpdateRemoteSyncItem files the first conflict for a remote tip. Retries
-// attach to the original staging facts without moving its pin or changing its fence.
+// fileOrUpdateRemoteSyncItem files the first conflict for a remote tip. Push
+// retries attach to the current stage without moving its pin or changing its fence.
 func (l *Loop) fileOrUpdateRemoteSyncItem(ctx context.Context, st remoteSyncState) (*pushStateError, error) {
 	release, err := l.lockTrunkHistory(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
+	return l.fileOrUpdateRemoteSyncItemLocked(ctx, st, "")
+}
+
+// Only landing may supply priorBase to advance a gated step. Keep the history
+// lock across the original stage check, suffix replay and step publication.
+func (l *Loop) fileOrUpdateRemoteSyncItemLocked(ctx context.Context, st remoteSyncState, priorBase string) (*pushStateError, error) {
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return nil, Incompatiblef("%v", err)
 	}
 	defer s.Close()
 
-	var created bool
+	var created, advanced bool
 	var conflict *pushStateError
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
 		previous, found, err := readRemoteSyncState(tx.Reader(), st.ItemID)
 		if err != nil {
 			return err
 		}
-		if found {
+		if priorBase != "" {
+			if !found || previous.BaseSHA != priorBase {
+				return Externalf("remote-sync stage for %s changed before advancing", st.ItemID)
+			}
+			if err := refuseTerminalItem(tx.Reader(), st.ItemID, "advance remote-sync stage"); err != nil {
+				return err
+			}
+			if err := l.advanceRemoteSyncStep(ctx, tx, st, priorBase); err != nil {
+				return err
+			}
+			advanced = true
+		} else if found {
 			if previous.RemoteTip != st.RemoteTip {
 				return Internalf("remote-sync item %s already names tip %s, not %s", st.ItemID, previous.RemoteTip, st.RemoteTip)
 			}
@@ -272,6 +291,12 @@ func (l *Loop) fileOrUpdateRemoteSyncItem(ctx context.Context, st remoteSyncStat
 		return err
 	})
 	if err != nil {
+		if advanced {
+			// Restore the previous pin if the store did not publish the stage.
+			if _, restoreErr := rawGit(context.WithoutCancel(ctx), l.cfg.Root, nil, "update-ref", remoteSyncPinRef(st.ItemID), priorBase, st.BaseSHA); restoreErr != nil {
+				err = errors.Join(err, restoreErr)
+			}
+		}
 		return nil, classifyWrite(err)
 	}
 	if created {
@@ -311,6 +336,35 @@ func (l *Loop) fileRemoteSyncStep(ctx context.Context, tx *store.Tx, st remoteSy
 	// Write under the history lock before making the stage visible. If the store
 	// commit fails, the sweep treats the pin as belonging to a missing item.
 	_, err = rawGit(ctx, l.cfg.Root, nil, "update-ref", "--no-deref", remoteSyncPinRef(st.ItemID), st.BaseSHA)
+	return err
+}
+
+func (l *Loop) advanceRemoteSyncStep(ctx context.Context, tx *store.Tx, st remoteSyncState, priorBase string) error {
+	allowed, gateOnly, unfenceable := remoteSyncSplitFence(st.ConflictPaths)
+	// A widening belongs only to the prior step. Its resolution is now part of
+	// the base and may not be edited unless it also conflicts in this step.
+	fence, err := json.Marshal(allowed)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE items SET allowed_paths=? WHERE item_id=?`, string(fence), st.ItemID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`UPDATE item_criteria SET text=? WHERE item_id=? AND criterion_id=?`, remoteSyncCriterionText(st), st.ItemID, RemoteSyncCriterion); err != nil {
+		return err
+	}
+	at := l.cfg.Now().UTC()
+	if problem := remoteSyncFenceProblem(gateOnly, unfenceable); problem != "" {
+		if _, err := item.SetState(ctx, tx, st.ItemID, StateBlocked, at, item.WaitingOn{
+			Waiter: "owner", Reason: "rebase conflict onto " + remoteSyncDestination(st) + " includes " + problem,
+		}); err != nil {
+			return err
+		}
+	}
+	if err := appendEffect(tx, remoteSyncStagedKind, st.ItemID, st, at); err != nil {
+		return err
+	}
+	_, err = rawGit(ctx, l.cfg.Root, nil, "update-ref", "--no-deref", remoteSyncPinRef(st.ItemID), st.BaseSHA, priorBase)
 	return err
 }
 
