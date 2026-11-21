@@ -1,11 +1,29 @@
 package main_test
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestRepositoryGatePolicyUsesGreenLaneBase(t *testing.T) {
+	const path = "../../config/tillr/gate-policy.json"
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var policy struct {
+		LaneBase string `json:"lane_base"`
+	}
+	if err := json.Unmarshal(raw, &policy); err != nil {
+		t.Fatalf("%s: %v", path, err)
+	}
+	if policy.LaneBase != "green" {
+		t.Fatalf("%s: lane_base = %q, want explicit green", path, policy.LaneBase)
+	}
+}
 
 // Stop at the unrelated backend-policy read: the gate policy must be read and
 // reported before the loop can create a store, stage a lane, or dispatch a run.
