@@ -206,8 +206,9 @@ func (l *Loop) landedWorkerSession(ctx context.Context, runID string) (*WorkerSe
 	return candidate.WorkerSession, err
 }
 
-// retainedWorkerSession is read from the refusal rather than process memory, so
-// a loop restart makes the same decision. Legacy refusals have no retained lane.
+// retainedWorkerSession reports whether the refusal still needs its checkout.
+// A triage hold keeps the session in the refusal for retry, but not the lane:
+// the authorizing retry stages the returned session's head on an available lane.
 func (l *Loop) retainedWorkerSession(ctx context.Context, runID string) (*WorkerSession, error) {
 	db, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
@@ -215,6 +216,7 @@ func (l *Loop) retainedWorkerSession(ctx context.Context, runID string) (*Worker
 	}
 	defer db.Close()
 	var session *WorkerSession
+	var triaged bool
 	err = db.ReadTx(ctx, func(r *store.Reader) error {
 		var raw []byte
 		// A judge refusal belongs to the judge run. Read its writer link only
@@ -236,9 +238,25 @@ func (l *Loop) retainedWorkerSession(ctx context.Context, runID string) (*Worker
 			return err
 		}
 		session = p.WorkerSession
-		return nil
+		if session == nil || p.Step != RefusalVerifyNotDone {
+			return nil
+		}
+		// Use the recorded hold, not the current fault: an operator may have
+		// authorized retry between the hold and settlement (or its replay).
+		return r.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE kind=? AND object_type='item' AND object_id=?
+ AND json_extract(payload,'$.run_id')=? AND json_extract(payload,'$.reason')=?)`, itemFaultKind, p.ItemID, runID, reasonVerifyTriage).Scan(&triaged)
 	})
-	return session, err
+	if err != nil || !triaged {
+		return session, err
+	}
+	head, err := l.revParse(ctx, l.cfg.Root, pinRef(runID)+"^{commit}")
+	if err != nil {
+		return nil, err
+	}
+	if head != session.HeadSHA {
+		return nil, Externalf("triage pin for %s names %s, want %s", runID, head, session.HeadSHA)
+	}
+	return nil, nil
 }
 
 func init() {

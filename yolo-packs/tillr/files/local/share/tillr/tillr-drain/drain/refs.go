@@ -91,6 +91,24 @@ func SweepRefs(ctx context.Context, req RefSweepRequest) ([]RefDisposition, erro
 	if len(refs) == 0 {
 		return refs, nil
 	}
+	// Batch the ancestry check under the landing lock, outside the store writer.
+	// Bind it to the sampled object as well as the name: a pin may have moved
+	// between the two reads, in which case this sweep does not remove it.
+	merged, err := l.git(ctx, req.Root, "for-each-ref", "--merged="+TrunkRef, "--format=%(refname) %(objectname)", "refs/tillr/runs/")
+	if err != nil {
+		return nil, err
+	}
+	mergedPins := map[string]string{}
+	for _, line := range strings.Split(merged, "\n") {
+		if ref, sha, ok := strings.Cut(line, " "); ok {
+			mergedPins[ref] = sha
+		}
+	}
+	for _, ref := range refs {
+		if mergedPins[ref.Ref] == ref.SHA {
+			contained[ref.Ref] = true
+		}
+	}
 	var s *store.Store
 	if req.DryRun {
 		s, err = store.OpenRead(ctx, req.Store)
@@ -195,7 +213,6 @@ func planRefSweep(r *store.Reader, refs []RefDisposition, operators map[string][
 		return nil, err
 	}
 	landings := map[string]refLanding{}
-	landedItems := map[string]bool{}
 	rows, err = r.Query(`SELECT run_id,item_id,head_sha,trunk_after FROM landings WHERE result='landed'`)
 	if err != nil {
 		return nil, err
@@ -208,7 +225,6 @@ func planRefSweep(r *store.Reader, refs []RefDisposition, operators map[string][
 			return nil, err
 		}
 		landings[id] = land
-		landedItems[land.item] = true
 		if _, ok := runs[id]; !ok {
 			runs[id] = refRun{item: land.item}
 		}
@@ -370,9 +386,11 @@ func planRefSweep(r *store.Reader, refs []RefDisposition, operators map[string][
 				ref.Reason = "unknown run; ownership cannot be proved"
 			case needed[id]:
 				ref.Reason = "pending examination needs this pin for settlement or retry"
-			case landedItems[run.item]:
+			case !contained[ref.Ref]:
+				ref.Reason = "trunk does not contain this pinned commit"
+			case landings[id].head == ref.SHA:
 				ref.Remove = true
-				ref.Reason = "item has a durable landed row"
+				ref.Reason = "trunk contains this run's recorded landed head"
 			case states[run.item] == "" || finishedState(declared.Parsed, states[run.item]):
 				ref.Remove = true
 				ref.Reason = "item finished or removed"

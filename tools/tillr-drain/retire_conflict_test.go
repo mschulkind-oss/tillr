@@ -71,7 +71,8 @@ esac
 	if strings.Contains(prepared, "id=\"item-repair\"") {
 		t.Fatal("prepared candidate evidence was not retained")
 	}
-	if refs := git(t, worktree, "for-each-ref", "--format=%(refname)", "refs/tillr/runs"); refs != "" {
-		t.Fatalf("landed repair kept attempt pins: %s", refs)
+	brief := stage.specs[1].Conflict
+	if got := git(t, worktree, "rev-parse", "refs/tillr/runs/"+brief.OriginalRunID); got != brief.PreparedHead {
+		t.Fatalf("original attempt pin = %s, want %s", got, brief.PreparedHead)
 	}
 }
