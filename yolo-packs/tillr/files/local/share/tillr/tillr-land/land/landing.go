@@ -510,25 +510,76 @@ type preparedLanding struct {
 	staleClaims []landingClaim
 }
 
-// landingRecorded answers whether a landed row already names commit as its trunk_after.
+func hasTrunkRewrites(r rowQueryer) (bool, error) {
+	var exists bool
+	if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'trunk_rewrites')`).Scan(&exists); err != nil {
+		return false, Internalf("checking the rewrite map: %v", err)
+	}
+	return exists, nil
+}
+
+// rewriteAliasClause matches the commit (the first argument) and every earlier
+// SHA it replaced. On older stores only the commit itself can match.
+func rewriteAliasClause(r rowQueryer) (with, cond string, err error) {
+	exists, err := hasTrunkRewrites(r)
+	if err != nil {
+		return "", "", err
+	}
+	if !exists {
+		return `WITH aliases(sha) AS (SELECT ?) `, `trunk_after IN (SELECT sha FROM aliases)`, nil
+	}
+	return `WITH RECURSIVE aliases(sha) AS (SELECT ? UNION SELECT w.old_sha FROM trunk_rewrites w JOIN aliases a ON w.new_sha = a.sha) `,
+		`trunk_after IN (SELECT sha FROM aliases)`, nil
+}
+
+// forwardRewrite follows a landing marker to the last recorded replacement.
+func forwardRewrite(r rowQueryer, commit string) (string, error) {
+	exists, err := hasTrunkRewrites(r)
+	if err != nil || !exists {
+		return commit, err
+	}
+	seen := map[string]bool{}
+	for !seen[commit] {
+		seen[commit] = true
+		var next string
+		if err := r.QueryRow(`SELECT new_sha FROM trunk_rewrites WHERE old_sha = ?`, commit).Scan(&next); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return commit, nil
+			}
+			return "", Internalf("reading the rewrite of %s: %v", commit, err)
+		}
+		commit = next
+	}
+	return commit, nil
+}
+
+// landingRecorded answers whether a landed row names commit or a SHA it replaced.
 func landingRecorded(r rowQueryer, commit string) (bool, error) {
+	with, cond, err := rewriteAliasClause(r)
+	if err != nil {
+		return false, err
+	}
 	var recorded bool
-	if err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM landings WHERE result = ? AND trunk_after = ?)`, ResultLanded, commit).Scan(&recorded); err != nil {
+	if err := r.QueryRow(with+`SELECT EXISTS (SELECT 1 FROM landings WHERE result = ? AND `+cond+`)`, commit, ResultLanded).Scan(&recorded); err != nil {
 		return false, Internalf("checking for a recorded landing at %s: %v", commit, err)
 	}
 	return recorded, nil
 }
 
-// storedLanding answers the landed row this item's run already recorded for this head at
-// commit, if there is one: the receipt a retry of a recorded landing is answered with.
+// storedLanding answers the original receipt for this item's run and head, if
+// it already landed at commit or a SHA it replaced.
 func storedLanding(r rowQueryer, req LandingRequest, commit, baseRef string) (*Landing, error) {
 	l := Landing{BaseRef: baseRef}
 	var conflicts string
-	err := r.QueryRow(`SELECT landing_id, item_id, run_id, verdict_id, result, reason, base_sha, head_sha,
+	with, cond, err := rewriteAliasClause(r)
+	if err != nil {
+		return nil, err
+	}
+	err = r.QueryRow(with+`SELECT landing_id, item_id, run_id, verdict_id, result, reason, base_sha, head_sha,
 		       trunk_before, trunk_after, gated_tree, landed_tree, conflict_paths, gate_skipped_reason
 		  FROM landings
-		 WHERE result = ? AND trunk_after = ? AND item_id = ? AND run_id = ? AND head_sha = ?
-		 ORDER BY rowid LIMIT 1`, ResultLanded, commit, req.ItemID, req.RunID, req.HeadSHA).Scan(
+		 WHERE result = ? AND `+cond+` AND item_id = ? AND run_id = ? AND head_sha = ?
+		 ORDER BY rowid LIMIT 1`, commit, ResultLanded, req.ItemID, req.RunID, req.HeadSHA).Scan(
 		&l.LandingID, &l.ItemID, &l.RunID, &l.VerdictID, &l.Result, &l.Reason, &l.BaseSHA, &l.HeadSHA,
 		&l.TrunkBefore, &l.TrunkAfter, &l.GatedTree, &l.LandedTree, &conflicts, &l.GateSkippedReason)
 	if err == sql.ErrNoRows {
@@ -583,6 +634,13 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 			return err
 		}
 		if hasMarker {
+			// Normalize before lookup as well as recovery: an earlier retry may
+			// already have recorded a receipt at the replacement SHA.
+			if PatchRef(req.BaseRef) == "" {
+				if marker, err = forwardRewrite(r, marker); err != nil {
+					return err
+				}
+			}
 			if p.stored, err = storedLanding(r, req, marker, landing.BaseRef); err != nil || p.stored != nil {
 				return err
 			}

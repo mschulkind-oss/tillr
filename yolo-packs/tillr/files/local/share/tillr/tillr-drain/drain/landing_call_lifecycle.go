@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -101,6 +102,16 @@ func (l *Loop) reconcileLandingCalls(ctx context.Context) error {
 			return err
 		}
 		closedState = declared.Parsed.Closed
+		for i := range calls {
+			c := &calls[i]
+			for _, sha := range []*string{&c.landed, &c.recorded} {
+				if *sha != "" {
+					if *sha, err = heavy.RewriteResolve(r, *sha); err != nil {
+						return err
+					}
+				}
+			}
+		}
 		return nil
 	})
 	db.Close()

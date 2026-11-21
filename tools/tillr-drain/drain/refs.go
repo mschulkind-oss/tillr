@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -36,7 +37,7 @@ type refRun struct {
 	item string
 	at   int64
 }
-type refLanding struct{ item, head, after string }
+type refLanding struct{ item, head, after, resolved string }
 
 // SweepRefs is also the loop's settlement cleanup. The landing lock protects ref
 // enumeration and deletion from concurrent marker writes, before any store writer.
@@ -408,10 +409,15 @@ func planRefSweep(r *store.Reader, refs []RefDisposition, operators map[string][
 		case strings.HasPrefix(ref.Ref, "refs/tillr/landed/"):
 			id := strings.TrimPrefix(ref.Ref, "refs/tillr/landed/")
 			land, recorded := landings[id]
+			if recorded && land.after != ref.SHA {
+				if land.resolved, err = heavy.RewriteResolve(r, land.after); err != nil {
+					return nil, err
+				}
+			}
 			switch {
 			case !recorded:
 				ref.Reason = "no durable landed row; crash retry needs marker"
-			case land.after != ref.SHA:
+			case land.after != ref.SHA && land.resolved != ref.SHA:
 				ref.Reason = "marker differs from durable landing; retain for diagnosis"
 			case inFlight && (strings.HasPrefix(baseRefs[id], "refs/heads/patch/") || (baseRefs[id] == "" && land.head == land.after)):
 				ref.Reason = "fork delivery; in-flight boundary comparisons still need marker"
