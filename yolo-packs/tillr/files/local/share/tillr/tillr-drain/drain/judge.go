@@ -694,25 +694,31 @@ func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.J
 		if err != nil {
 			return err
 		}
-		if words != nil {
-			writer := judgeWriterRun(c)
-			var findings []item.JudgeEntry
-			for _, v := range verdicts {
-				if v.Verdict == item.VerdictNotDone {
-					findings = append(findings, v)
-				}
+		var findings []item.JudgeEntry
+		for _, v := range verdicts {
+			if v.Verdict == item.VerdictNotDone {
+				findings = append(findings, v)
 			}
+		}
+		detail := entry.Reason
+		if words != nil || len(findings) > 1 {
 			sort.Slice(findings, func(i, j int) bool { return findings[i].CriterionID < findings[j].CriterionID })
 			var lines []string
-			var checks []EndingCheck
 			for _, v := range findings {
 				lines = append(lines, v.CriterionID+": "+v.Reason)
+			}
+			detail = strings.Join(lines, "\n")
+		}
+		if words != nil {
+			writer := judgeWriterRun(c)
+			var checks []EndingCheck
+			for _, v := range findings {
 				checks = append(checks, EndingCheck{CheckID: v.CriterionID, Digest: evidenceDigest(c.HeadSHA+"\n"+v.Reason, writer)})
 			}
-			c.RefusalDetail = strings.Join(lines, "\n")
+			c.RefusalDetail = detail
 			c.EvidenceKey = endingKey(ReasonEvalFailed, checks, "", writer)
-			return l.holdJudge(ctx, c, c.Judge.Request.RunID, ReasonEvalFailed, c.RefusalDetail, result)
 		}
+		return l.holdJudge(ctx, c, c.Judge.Request.RunID, ReasonEvalFailed, detail, result)
 	}
 	if entry.Verdict == item.VerdictBlocked || entry.Verdict == item.VerdictDefective {
 		var waiting item.WaitingOn
@@ -781,6 +787,57 @@ func writeJudgeReceipt(path string, receipt *JudgeReceipt) error {
 	return os.Rename(path+".new", path)
 }
 
+// judgeRefusalHistory is item-wide, unlike retry-cycle triage. Only refusals
+// backed by a not-done verdict count; gate and verifier infrastructure failures do not.
+func judgeRefusalHistory(r *store.Reader, itemID string) (string, error) {
+	rows, err := r.Query(`WITH refusals AS (
+ SELECT MIN(seq) AS first_seq FROM events
+ WHERE kind=? AND object_type='run' AND json_valid(payload)
+   AND json_extract(payload,'$.item_id')=? AND json_extract(payload,'$.step') IN (?,?)
+   AND COALESCE(json_extract(payload,'$.detail'),'')<>''
+ GROUP BY object_id
+)
+SELECT e.object_id, json_extract(e.payload,'$.detail')
+ FROM refusals f JOIN events e ON e.seq=f.first_seq ORDER BY f.first_seq`,
+		RefusalKind, itemID, RefusalVerifyNotDone, ReasonEvalFailed)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	var history strings.Builder
+	count := 0
+	for rows.Next() {
+		var runID, detail string
+		if err := rows.Scan(&runID, &detail); err != nil {
+			return "", err
+		}
+		// JSON quoting preserves complete multiline findings as data, not headings.
+		// Escape brace pairs so a finding cannot look like an unfilled template to preflight.
+		quoted, err := json.Marshal(detail)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&history, "- run %s: %s\n", runID, strings.ReplaceAll(string(quoted), "{{", `\u007b\u007b`))
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if count < 2 {
+		return "", nil
+	}
+	return `
+## Earlier verifier refusals
+
+These are historical findings, not additional criteria. Recheck them against this
+candidate and the scope above; do not carry forward fixed or out-of-scope findings.
+Complete the review before refusing. State all remaining in-scope findings at once
+in this verdict, including multiple findings under the same criterion.
+
+Findings by run (JSON-quoted text):
+` + history.String(), nil
+}
+
 func (l *Loop) stageJudge(ctx context.Context, c Candidate, receipt *JudgeReceipt, session string) error {
 	dir := run.DurableDir(l.laneDirPath(c.LaneID), receipt.Request.RunID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -795,6 +852,7 @@ func (l *Loop) stageJudge(ctx context.Context, c Candidate, receipt *JudgeReceip
 		return err
 	}
 	var criteria strings.Builder
+	var history string
 	db, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		return err
@@ -812,7 +870,11 @@ func (l *Loop) stageJudge(ctx context.Context, c Candidate, receipt *JudgeReceip
 			}
 			fmt.Fprintf(&criteria, "- %s: %s (claim_class=%s, criterion_hash=%s)\n", id, text, class, item.CriterionHash(text))
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		history, err = judgeRefusalHistory(r, c.ItemID)
+		return err
 	})
 	db.Close()
 	if err != nil {
@@ -864,8 +926,17 @@ Read the exact candidate diff from this retained artifact:
 %s
 
 ## Method
-Judge the candidate commit against only the item's words and criteria. Use the diff and
-candidate tree. Do not read or judge a worker's summary, report, or account of tests.
+Use the diff and candidate tree to judge the candidate commit. A refusal must rest on
+the item's words or criteria or a regression this change introduces in existing behavior.
+For each refusal, name the applicable words or criterion, or explain what worked before
+and how the change breaks it.
+Report defects outside that scope as proposed follow-ups, not refusals. In the relevant
+criterion's reason, label them "Proposed follow-up:" and keep them separate from the
+verdict justification; they do not change the verdict or outcome. If only the owner can
+decide whether a finding is in scope, use a blocked verdict with waiter owner and state
+the question and options.
+
+Do not read or judge a worker's summary, report, or account of tests.
 A finding must concern the change or the item, not the worker's account of either.
 If an older standard criterion asks for a test inventory in a worker report, verify
 that criterion's checks directly; do not assess the inventory.
@@ -883,6 +954,7 @@ Write the verdict file, then report RESULT: done.
 ## Stop conditions
 Never change the worker's candidate.
 `, c.ItemID, receipt.Request.RunID, c.Worktree, output, receipt.Options.Head, receipt.Options.Tree, seatLines(l.currentPolicy()), diffPath, criteria.String())
+	brief += history
 	if len(receipt.Writers) == 0 {
 		for _, producer := range receipt.Producers {
 			brief += fmt.Sprintf("\nRead-only producer: node:%s\n", producer.NodeID)
