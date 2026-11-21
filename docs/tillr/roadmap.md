@@ -1496,11 +1496,12 @@ missing rather than report that the change failed verification.
   results. The twenty-ninth run cited the earlier Git exit 128, not a fresh fetch. The
   thirty-first, thirty-third and thirty-fifth runs asked for host verification.
 
-  **Answer to the thirty-seventh, thirty-ninth and forty-first runs (designer, 2026-11-21; the owner may overturn it):**
-  Keep the three pins and the build hold. The forty-first run received no host results and
-  attempted no fetch, publication or build. As with the two earlier requests, the missing
-  input is a measurement from the host operator, not a decision for the owner. Current
-  availability is unknown; the earlier Git exit 128 is not a result for this retry.
+  **Build hold (designer's answer to the forty-third run, 2026-11-21; the owner may overturn it):**
+  The forty-third run, like the thirty-seventh, thirty-ninth and forty-first, asked for host
+  verification. It received no host results and attempted no fetch, publication or build.
+  Keep the pins: the next actor is the host operator, not the owner choosing a different
+  commit. Current availability is unknown; the earlier Git exit 128 is not a result for
+  this retry.
 
   The host operator's next action is to run the checks below and attach the results, not to
   choose a pin. Until then, do not dispatch another build or design run. Once the host evidence
@@ -1512,10 +1513,11 @@ missing rather than report that the change failed verification.
   three pass, fetch each exact ID from the locator into its own new empty bare repository.
   If a pin is unavailable, follow [the host publication step](../pi/patch-branches/published.md#5-the-host-step)
   and repeat the fetches in new empty repositories. The publisher sends branch tips, not
-  individual pins. In the retry request, give the locator and, for each branch, the object ID
-  and Git exit statuses for both the ancestry check and the fetch. Only three successful
-  fetches after the ancestry checks pass release the hold; a
-  successful push, an advertised branch tip or another lane retry does not.
+  individual pins. Attach the locator and one row per pin to the retry request:
+  `branch | object ID | ancestry exit | empty-repository fetch exit`. Record the actual Git
+  statuses; write `not run` for a skipped fetch, never `0`. Release the hold only when all
+  three rows show `0` for both checks. Neither a successful push, an advertised tip nor a
+  lane retry substitutes for those results.
 - **Existing test cases (2026-11-18, answers the sixth run's report of blocked):** The fork export
   tests run the scenario files under [their cases directory](../../tests/pi-forks/), so those
   files, [their shared library](../../tests/pi-forks/lib.sh),
