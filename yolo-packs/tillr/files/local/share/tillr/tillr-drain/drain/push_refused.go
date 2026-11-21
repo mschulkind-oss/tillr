@@ -85,28 +85,28 @@ func (l *Loop) healRefusedPushResult(ctx context.Context, p settings.Push, refus
 		return res, fmt.Errorf("%s\nmover: operator. The push was refused because the remote moved and the drain could not rebase onto it (%s). Nothing was changed. With the loop stopped, in %s: git fetch %s %s; git rebase FETCH_HEAD; then run the loop, which maps the rebased commits by patch (or tillr-drain accept-rewrite if it holds trunk-rewritten)",
 			refused, fmt.Sprintf(why, a...), root, remote, ref)
 	}
+	prev := priorPublished(ctx, root, remote, ref)
+	fctx, cancel := context.WithTimeout(ctx, pushTimeout)
+	defer cancel()
+	remoteTip, err := fetchPushDestination(fctx, root, remote, ref)
+	if err != nil {
+		return fail("%v", err)
+	}
+	res.remoteTip = remoteTip
+	if err := checkPublishedAncestry(ctx, root, remote, ref, prev, remoteTip); err != nil {
+		return res, err
+	}
 	// Record the trunk as it stands, so the replay is seen as a rewrite of this tip.
 	if _, err := l.observeTrunk(ctx, ""); err != nil {
 		return fail("%v", err)
 	}
-	fctx, cancel := context.WithTimeout(ctx, pushTimeout)
-	defer cancel()
-	if _, err := rawGit(fctx, root, nil, "fetch", "--", remote, ref); err != nil {
-		return fail("fetching %s %s failed: %v", remote, ref, err)
-	}
-	out, err := rawGit(ctx, root, nil, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
-	if err != nil {
-		return fail("%v", err)
-	}
-	remoteTip := strings.TrimSpace(out)
-	res.remoteTip = remoteTip
 
 	release, err := l.lockTrunkHistory(ctx)
 	if err != nil {
 		return fail("%v", err)
 	}
 	defer release()
-	out, err = rawGit(ctx, root, nil, "rev-parse", "--verify", "refs/heads/"+TrunkRef+"^{commit}")
+	out, err := rawGit(ctx, root, nil, "rev-parse", "--verify", "refs/heads/"+TrunkRef+"^{commit}")
 	if err != nil {
 		return fail("%v", err)
 	}

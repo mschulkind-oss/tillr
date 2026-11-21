@@ -251,6 +251,9 @@ func pushTrunk(ctx context.Context, root string, p settings.Push) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
 	defer cancel()
+	if _, err := guardPublished(ctx, root, remote, ref); err != nil {
+		return err
+	}
 	pushed := optionalCommit(ctx, root, "refs/heads/"+TrunkRef)
 	if pushed == "" {
 		return fmt.Errorf("cannot resolve %s for push", TrunkRef)
@@ -278,9 +281,11 @@ func pushGreen(ctx context.Context, root string, p settings.Push) (string, error
 	}
 	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
 	defer cancel()
-	// Confirm the tracked commit when it already contains green, without fetching.
-	tracking := "refs/remotes/" + remote + "/" + strings.TrimPrefix(ref, "refs/heads/")
-	if remoteTip := optionalCommit(ctx, root, tracking); remoteTip != "" {
+	remoteTip, err := guardPublished(ctx, root, remote, ref)
+	if err != nil {
+		return green, err
+	}
+	if remoteTip != "" {
 		if contains, err := trunkAncestor(ctx, root, green, remoteTip); err != nil {
 			return green, err
 		} else if contains {
