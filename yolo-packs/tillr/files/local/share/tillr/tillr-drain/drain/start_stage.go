@@ -11,7 +11,7 @@ import (
 )
 
 // stageAndLaunchClaimed consumes an already recorded claim at its decided base.
-// It is separate from dispatch selection; no production caller uses it yet.
+// It runs separately from selection so a slow stage does not hold up other lanes.
 func (l *Loop) stageAndLaunchClaimed(ctx context.Context, d Decision, base string, at time.Time, result *LoopResult) (err error) {
 	id := d.RunRequest.RunID
 	l.mu.Lock()

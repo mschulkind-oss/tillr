@@ -248,12 +248,15 @@ func since(previous, at time.Time) time.Time {
 
 func (s *startSnapshot) evaluateEntry(r *store.Reader, row itemRow, d Decision, at time.Time, previous startSnapshot) error {
 	e := startViewEntry{decision: d, versionLane: d.LaneID, express: row.Express}
-	if isDispatch(d) && d.RunRequest != nil {
+	dispatch := isDispatch(d) && d.RunRequest != nil
+	if dispatch || (d.Action == ActionHold && persistentHold(d)) {
 		version, err := inputVersionFrom(r, d, versionFolds{works: s.pending.works, faults: s.faults, contentVersions: s.contentVersions})
 		if err != nil {
 			return err
 		}
 		e.version = version
+	}
+	if dispatch {
 		s.readyAt[row.ItemID] = since(previous.readyAt[row.ItemID], at)
 		if d.DeskDocument != "" {
 			s.laneFreeAt[d.LaneID] = since(previous.laneFreeAt[d.LaneID], at)
@@ -272,7 +275,20 @@ func (s *startSnapshot) evaluateEntry(r *store.Reader, row itemRow, d Decision, 
 // nextStart only reads the published snapshot. Selection cannot do I/O,
 // consume a lane or change any entry that another reader may observe.
 func (s startSnapshot) nextStart() (startViewEntry, bool) {
+	return s.selectStart(false)
+}
+
+func (s startSnapshot) nextFreshStart() (startViewEntry, bool) {
+	return s.selectStart(true)
+}
+
+func (s startSnapshot) selectStart(freshOnly bool) (startViewEntry, bool) {
 	for _, q := range s.items {
+		if freshOnly {
+			if work := s.pending.works[q.id]; work != nil && !work.Done {
+				continue // Retained attempts belong to the pass and its completion handoff.
+			}
+		}
 		e := s.entries[q.id]
 		d := e.decision
 		if !isDispatch(d) || d.RunRequest == nil {
@@ -284,7 +300,7 @@ func (s startSnapshot) nextStart() (startViewEntry, bool) {
 			if lane == "" && IsTrunkFixer(q.id) && !s.occupied["desk-trunk-fixer"] {
 				lane = "desk-trunk-fixer"
 			}
-		} else if owner := s.reservations[lane]; owner != "" && owner != q.id {
+		} else if owner := s.reservations[lane]; (owner != "" && owner != q.id) || (freshOnly && s.occupied[lane]) {
 			continue
 		}
 		if lane != "" {
