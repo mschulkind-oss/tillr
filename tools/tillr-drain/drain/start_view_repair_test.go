@@ -222,7 +222,7 @@ func TestStartViewBlockedAndPinnedParity(t *testing.T) {
 	l.cfg.Comments = &settings.Comments{Paths: []string{"docs/design/"}, MaxRunning: 3}
 	setDesignFence(t, f, "item-desk", "docs/design/example.md")
 	fixtureWrite(t, f, func(tx *store.Tx) error {
-		if _, err := tx.Exec(`UPDATE items SET allowed_paths='[]' WHERE item_id='item-blocked'`); err != nil {
+		if _, err := tx.Exec(`UPDATE items SET state='blocked' WHERE item_id='item-blocked'`); err != nil {
 			return err
 		}
 		_, err := tx.Exec(`UPDATE items SET express=1 WHERE item_id='item-express'`)
@@ -231,7 +231,7 @@ func TestStartViewBlockedAndPinnedParity(t *testing.T) {
 	at := l.cfg.Now()
 	s := proposeFixture(t, l, at, startSnapshot{})
 	legacy := decisionFor(t, l, "item-blocked").decision
-	if legacy.Action != ActionHold || s.holds[legacy.ItemID] != legacy.Reason {
+	if legacy.Action != ActionHold || legacy.Reason != ReasonBlocked || s.holds[legacy.ItemID] != legacy.Reason {
 		t.Fatalf("holds %v; legacy %+v", s.holds, legacy)
 	}
 	check := func(s startSnapshot, id, lane string) {
@@ -345,7 +345,7 @@ func TestSyncReadsOnlyWhatItsInputsChanged(t *testing.T) {
 		t.Fatal("reopening a backend did not rebuild the entries")
 	}
 	fixtureWrite(t, f, func(tx *store.Tx) error {
-		_, err := tx.Exec(`UPDATE items SET allowed_paths='[]' WHERE item_id='item-c'`)
+		_, err := tx.Exec(`UPDATE items SET state='blocked' WHERE item_id='item-c'`)
 		return err
 	})
 	if raw := refresh(at.Add(5 * time.Second)); raw.entries["item-c"].decision.RunRequest != nil || raw.pending == seed.pending {
