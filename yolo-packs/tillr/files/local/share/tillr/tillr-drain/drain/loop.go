@@ -2593,9 +2593,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		return laneOutcome{stop: stop}
 	}
 	if landed {
-		if err := l.prunePreservedWork(ctx); err != nil {
-			return laneOutcome{err: err}
-		}
+		l.reportRefSweepFailure(l.prunePreservedWork(ctx))
 		return laneOutcome{stop: l.abandon(ctx, lane, "", "")}
 	}
 	// Every non-landing outcome pins the head before the lane is reset, so a refused head

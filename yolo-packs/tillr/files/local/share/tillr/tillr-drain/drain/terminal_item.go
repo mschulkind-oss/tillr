@@ -202,9 +202,7 @@ func (l *Loop) settleTerminalItem(ctx context.Context, work *pendingWork, found 
 		if stop != "" {
 			return retainedAfter(d.LaneID, stop)
 		}
-		if err := l.prunePreservedWork(ctx); err != nil {
-			return err
-		}
+		l.reportRefSweepFailure(l.prunePreservedWork(ctx))
 	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {

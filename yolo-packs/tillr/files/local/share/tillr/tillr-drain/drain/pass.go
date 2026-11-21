@@ -2590,12 +2590,7 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 		return stop, err
 	}
 	if !l.nonLanding {
-		if err := l.prunePreservedWork(ctx); err != nil {
-			return "", err
-		}
-		if err := l.pruneRunRefs(ctx); err != nil {
-			return "", err
-		}
+		l.reportRefSweepFailure(l.pruneRunRefs(ctx))
 	}
 	if err := l.intakeComments(ctx); err != nil {
 		return "", err

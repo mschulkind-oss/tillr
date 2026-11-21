@@ -69,7 +69,7 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 	if err == nil && stop == "" && !held {
 		if landed {
 			stop = l.abandon(ctx, c.LaneID, "", "")
-			err = l.prunePreservedWork(ctx)
+			l.reportRefSweepFailure(l.prunePreservedWork(ctx))
 		} else {
 			stop = l.abandon(ctx, c.LaneID, c.RunID, c.HeadSHA)
 		}

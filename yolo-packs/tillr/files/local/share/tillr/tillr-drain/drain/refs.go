@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -39,12 +40,16 @@ type refRun struct {
 }
 type refLanding struct{ item, head, after, resolved string }
 
-// SweepRefs is also the loop's settlement cleanup. The landing lock protects ref
-// enumeration and deletion from concurrent marker writes, before any store writer.
-// The short write transaction excludes dispatch/lease acquisition while
-// Git deletes the planned refs, guarded by their observed object IDs in one transaction.
-// A crash leaves either the old refs or the deleted refs; replay computes the same plan.
+// SweepRefs is also the loop's settlement cleanup.
 func SweepRefs(ctx context.Context, req RefSweepRequest) ([]RefDisposition, error) {
+	return sweepRefs(ctx, req, false)
+}
+
+// All preserved-ref deletion goes through this sweep, including in separate lane
+// repositories. Take the common-directory landing lock before enumeration and
+// before the store writer. The write transaction intentionally excludes dispatch
+// and lease acquisition between eligibility checks and the guarded Git deletion.
+func sweepRefs(ctx context.Context, req RefSweepRequest, preservedOnly bool) ([]RefDisposition, error) {
 	if req.Root == "" || req.Store == "" {
 		return nil, Usagef("sweep-refs needs --root <repository> and --store <path>")
 	}
@@ -62,7 +67,11 @@ func SweepRefs(ctx context.Context, req RefSweepRequest) ([]RefDisposition, erro
 		return nil, err
 	}
 	defer unlock()
-	raw, err := l.git(ctx, req.Root, "for-each-ref", "--format=%(refname) %(objectname) %(symref)", "refs/tillr")
+	pattern := "refs/tillr"
+	if preservedOnly {
+		pattern = preservedPrefix
+	}
+	raw, err := l.git(ctx, req.Root, "for-each-ref", "--format=%(refname) %(objectname) %(symref)", pattern)
 	if err != nil {
 		return nil, err
 	}
@@ -89,25 +98,22 @@ func SweepRefs(ctx context.Context, req RefSweepRequest) ([]RefDisposition, erro
 			}
 		}
 	}
-	if len(refs) == 0 {
-		return refs, nil
-	}
-	// Batch the ancestry check under the landing lock, outside the store writer.
-	// Bind it to the sampled object as well as the name: a pin may have moved
-	// between the two reads, in which case this sweep does not remove it.
-	merged, err := l.git(ctx, req.Root, "for-each-ref", "--merged="+TrunkRef, "--format=%(refname) %(objectname)", "refs/tillr/runs/")
-	if err != nil {
-		return nil, err
-	}
-	mergedPins := map[string]string{}
-	for _, line := range strings.Split(merged, "\n") {
-		if ref, sha, ok := strings.Cut(line, " "); ok {
-			mergedPins[ref] = sha
+	if !preservedOnly && len(refs) != 0 {
+		// Batch ancestry outside the store writer; bind it to the sampled SHA.
+		merged, err := l.git(ctx, req.Root, "for-each-ref", "--merged="+TrunkRef, "--format=%(refname) %(objectname)", "refs/tillr/runs/")
+		if err != nil {
+			return nil, err
 		}
-	}
-	for _, ref := range refs {
-		if mergedPins[ref.Ref] == ref.SHA {
-			contained[ref.Ref] = true
+		mergedPins := map[string]string{}
+		for _, line := range strings.Split(merged, "\n") {
+			if ref, sha, ok := strings.Cut(line, " "); ok {
+				mergedPins[ref] = sha
+			}
+		}
+		for _, ref := range refs {
+			if mergedPins[ref.Ref] == ref.SHA {
+				contained[ref.Ref] = true
+			}
 		}
 	}
 	var s *store.Store
@@ -129,35 +135,36 @@ func SweepRefs(ctx context.Context, req RefSweepRequest) ([]RefDisposition, erro
 		err = s.ReadTx(ctx, plan)
 	} else {
 		err = s.WriteTx(ctx, func(tx *store.Tx) error {
-			if err := plan(tx.Reader()); err != nil {
-				return err
-			}
-			var commands strings.Builder
-			for _, ref := range refs {
-				if ref.Remove {
-					fmt.Fprintf(&commands, "option no-deref\ndelete %s %s\n", ref.Ref, ref.SHA)
-				}
-			}
-			if commands.Len() == 0 {
-				return nil
-			}
-			cmd := exec.CommandContext(ctx, "git", "-C", req.Root, "update-ref", "--stdin")
-			cmd.Stdin = strings.NewReader("start\n" + commands.String() + "prepare\ncommit\n")
-			if out, err := cmd.CombinedOutput(); err != nil {
-				return Externalf("deleting settled refs: %v: %s", err, out)
-			}
 			saved, err := ReadPreservedWork(tx.Reader())
 			if err != nil {
 				return err
 			}
+			// Replay a deletion whose Git commit survived but whose prune receipt did not.
+			sampled := map[string]bool{}
 			for _, ref := range refs {
-				if ref.Remove && strings.HasPrefix(ref.Ref, preservedPrefix) {
-					for _, p := range saved {
-						if p.Ref == ref.Ref && !p.Pruned {
-							if err := appendEffect(tx, workPrunedKind, p.RunID, p, req.At); err != nil {
-								return err
-							}
-						}
+				sampled[ref.Ref] = true
+			}
+			pending := map[string]PreservedWork{}
+			for _, p := range saved {
+				if p.Pruned || filepath.Clean(p.Repository) != req.Root || !strings.HasPrefix(p.Ref, preservedPrefix) {
+					continue
+				}
+				pending[p.Ref] = p
+				if !sampled[p.Ref] {
+					sampled[p.Ref] = true
+					refs = append(refs, RefDisposition{Ref: p.Ref})
+				}
+			}
+			if err := plan(tx.Reader()); err != nil {
+				return err
+			}
+			if err := deleteSettledRefs(ctx, req.Root, refs); err != nil {
+				return err
+			}
+			for _, ref := range refs {
+				if p, ok := pending[ref.Ref]; ok && ref.Remove {
+					if err := appendEffect(tx, workPrunedKind, p.RunID, p, req.At); err != nil {
+						return err
 					}
 				}
 			}
@@ -165,6 +172,71 @@ func SweepRefs(ctx context.Context, req RefSweepRequest) ([]RefDisposition, erro
 		})
 	}
 	return refs, err
+}
+
+// deleteSettledRefs keeps the expected-old guard on every retry. Only confirmed
+// absence, not a stale object ID, lock error or broken ref, satisfies a deletion.
+func deleteSettledRefs(ctx context.Context, root string, refs []RefDisposition) error {
+	var pending []int
+	for i := range refs {
+		ref := &refs[i]
+		if !ref.Remove {
+			continue
+		}
+		if ref.SHA != "" {
+			pending = append(pending, i)
+			continue
+		}
+		absent, err := refAbsent(ctx, root, ref.Ref)
+		if err != nil {
+			return err
+		}
+		if absent {
+			ref.Reason += "; already absent"
+		} else {
+			ref.Remove = false
+			ref.Reason = "not sampled; retain for the next sweep"
+		}
+	}
+	for len(pending) > 0 {
+		var commands strings.Builder
+		for _, i := range pending {
+			ref := refs[i]
+			fmt.Fprintf(&commands, "option no-deref\ndelete %s %s\n", ref.Ref, ref.SHA)
+		}
+		cmd := exec.CommandContext(ctx, "git", "-C", root, "update-ref", "--stdin")
+		cmd.Stdin = strings.NewReader("start\n" + commands.String() + "prepare\ncommit\n")
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			return nil
+		}
+		remaining := pending[:0]
+		for _, i := range pending {
+			absent, checkErr := refAbsent(ctx, root, refs[i].Ref)
+			if checkErr == nil && absent {
+				refs[i].Reason += "; already absent"
+			} else {
+				remaining = append(remaining, i)
+			}
+		}
+		if len(remaining) == len(pending) {
+			return Externalf("deleting settled refs: %v: %s", err, out)
+		}
+		pending = remaining
+	}
+	return nil
+}
+
+func refAbsent(ctx context.Context, root, ref string) (bool, error) {
+	// --exists tests the ref itself: a dangling symbolic ref is not absent.
+	out, err := exec.CommandContext(ctx, "git", "-C", root, "show-ref", "--exists", ref).CombinedOutput()
+	if err == nil {
+		return false, nil
+	}
+	if exit, ok := err.(*exec.ExitError); ok && exit.ExitCode() == 2 {
+		return true, nil
+	}
+	return false, Externalf("checking existence of %s: %v: %s", ref, err, out)
 }
 
 func operatorRef(ref string) bool {
@@ -460,16 +532,30 @@ func (l *Loop) pruneRunRefs(ctx context.Context) error {
 		return err
 	}
 	if strings.TrimSpace(raw) == "" {
-		return nil
+		// Include the root if an absent saved ref still needs a prune receipt.
+		return l.prunePreservedWork(ctx)
 	}
-	refs, err := SweepRefs(ctx, RefSweepRequest{Root: l.cfg.Root, Store: l.cfg.Store, At: l.cfg.Now()})
+	root, err := filepath.Abs(l.cfg.Root)
 	if err != nil {
 		return err
 	}
+	refs, sweepErr := SweepRefs(ctx, RefSweepRequest{Root: root, Store: l.cfg.Store, At: l.cfg.Now()})
+	if sweepErr == nil {
+		l.reportPrunedRefs(refs)
+	}
+	return errors.Join(sweepErr, l.prunePreservedRepositories(ctx, root))
+}
+
+func (l *Loop) reportPrunedRefs(refs []RefDisposition) {
 	for _, ref := range refs {
 		if ref.Remove {
 			l.reportf("loop: removed %s (%s): %s\n", ref.Ref, ref.SHA, ref.Reason)
 		}
 	}
-	return nil
+}
+
+func (l *Loop) reportRefSweepFailure(err error) {
+	if err != nil {
+		l.reportf("loop: ref sweep failed; will retry on a later pass: %v\n", err)
+	}
 }

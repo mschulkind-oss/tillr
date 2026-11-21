@@ -195,9 +195,7 @@ func (l *Loop) Examine(ctx context.Context, runID string) (LoopResult, error) {
 	result.Stop = completion.outcome.stop
 	result.Detail = completion.detail
 	if completion.outcome.err == nil && result.Stop == "" && !l.nonLanding {
-		if err := l.pruneRunRefs(ctx); err != nil {
-			return result, err
-		}
+		l.reportRefSweepFailure(l.pruneRunRefs(ctx))
 	}
 	if completion.outcome.err != nil || result.Stop != "" || d.Action != ActionSettle {
 		return result, completion.outcome.err

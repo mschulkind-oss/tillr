@@ -266,11 +266,6 @@ func TestPreservationGitOutsideWriteTransaction(t *testing.T) {
 	if err := l.preserveWork(context.Background(), d.LaneID, d.RunRequest.RunID, "blocked"); err != nil {
 		t.Fatal(err)
 	}
-	// Retention is Git outside the transaction too.
-	fixtureWrite(t, f, func(tx *store.Tx) error { _, err := tx.Exec(`UPDATE items SET state = 'closed'`); return err })
-	if err := l.prunePreservedWork(context.Background()); err != nil {
-		t.Fatal(err)
-	}
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		if _, err := l.git(context.Background(), f.root, "rev-parse", "HEAD"); err == nil {
 			t.Fatal("negative control: probe permitted Git inside a write")

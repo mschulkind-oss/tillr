@@ -2935,12 +2935,33 @@ known and whether the trunk contains their commit. A removed pin also names any
 operator ref that still holds its commit. Saved edits use the same terminal-state
 retention as the loop. A second sweep removes nothing unless the refs, trunk or lifecycle state changed.
 
+The sweep is the only automatic deleter of saved edits, including in separate lane
+repositories. It takes the repository's common-directory `land.lock` before
+sampling, so two sweeps (including a manual `sweep-refs`) cannot overlap there.
+Git deletion intentionally runs inside the store write transaction: it excludes
+lane allocation and item state changes between the eligibility check and delete.
+Ref enumeration and ancestry checks run outside that transaction. The transaction
+records prune receipts, not item state changes.
+
 Deletion is guarded by each ref's observed commit and never follows symbolic refs
-to their targets. A short store write transaction
-excludes lane allocation and state changes while Git atomically deletes the planned
-refs. It writes no item state. If Git rejects a changed ref, the command reports an
-error rather than deleting a newer pointer. Run this against the repository's own
-store; run ids must not be reused across stores sharing the repository.
+to their targets. If Git rejects the batch and a ref is confirmed absent, the sweep
+counts it as pruned and retries the remaining refs with their original guards.
+A changed ref or other Git error is not proof of absence. A failed sweep warns the
+loop without stopping it; an explicit `sweep-refs` still returns the error. Run
+this against the repository's own store; run ids must not be reused across stores
+sharing the repository.
+
+On 2026-11-21, a read-only query of the drain's `events` table found
+`drain.work-pruned` (sequence 1354434, 22:47:47 UTC) for the same preserved ref
+that `drain.loop-ended` (sequence 1354475, 22:51:33 UTC) reported missing at Git
+transaction prepare. The prune receipt follows the tillr-watch landing and item
+update and precedes release of that landing's examination, matching the former
+post-landing `prunePreservedWork` hook. The examination's `drain.started` event
+(sequence 1354363) names the same loop session that later faulted. That loop's
+examiner could delete without `land.lock` while a pass was sweeping. Reviewing
+`update-ref -d` call sites under `tools/tillr-land` found no deleter of preserved
+refs there, and two `SweepRefs` calls were already serialized. The events identify
+the competing cleanup path but do not timestamp the sweep's Git sample or unlink.
 
 Only the operator removes a held or recovery ref, after deciding it is no longer
 needed:
