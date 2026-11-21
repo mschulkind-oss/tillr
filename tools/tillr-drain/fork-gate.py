@@ -33,15 +33,15 @@ def build_command(root, fork):
         for contribution in jsonc(path).get('contributes', []):
             locator = contribution.get('patch_branch', '')
             if parse_qs(urlsplit(locator).query).get('ref') == ['patch/' + fork]:
-                matches.append((path, contribution.get('build', '')))
+                matches.append((path, contribution.get('build', ''), contribution.get('source', '')))
     if len(matches) != 1:
         raise ValueError(f'fork {fork} needs exactly one pack delivery, found {len(matches)}')
-    path, command = matches[0]
+    path, command, source = matches[0]
     if not command:
         # A pack with no build command delivers source only. Still run a real check.
         print(f'fork-build: {path} declares no build command; checking source-only delivery', flush=True)
         command = 'git diff --exit-code HEAD && git diff --cached --exit-code'
-    return path, command
+    return path, command, source
 
 
 # Mirrors tools/fork-check.py's FORK_QUALITY, extended with pi (tsc at root, npm test per touched package).
@@ -61,12 +61,63 @@ QUALITY_TOOL_ENV = (
 )
 
 
+def checked_quality_process(argv, **kwargs):
+    # npm and mise can report unresolved tools with the same status as a
+    # failing test. Inspect their specific diagnostics without hiding the log.
+    unavailable = None
+    with subprocess.Popen(argv, stderr=subprocess.PIPE, **kwargs) as process:
+        for line in process.stderr:
+            sys.stderr.buffer.write(line)
+            sys.stderr.buffer.flush()
+            diagnostic = line.strip()
+            if diagnostic in (b'npm error code ENOTCACHED', b'npm ERR! code ENOTCACHED'):
+                unavailable = 'npm could not resolve the runner offline (ENOTCACHED)'
+            shim = re.match(rb'mise ERROR ([\w.+-]+) is not a valid shim(?:\.|$)', diagnostic)
+            if shim:
+                unavailable = f'mise could not resolve {shim[1].decode("ascii")} in the isolated environment'
+        status = process.wait()
+    if status and unavailable:
+        raise RuntimeError(unavailable)
+    if status in (126, 127) or status < 0:
+        raise RuntimeError(f'{argv[0]} exited {status}; see tool diagnostics above')
+    return status
+
+
 def run_quality(directory, command):
     with tempfile.TemporaryDirectory(prefix='fork-quality-home-', dir=directory) as home:
         env = {name: os.environ[name] for name in QUALITY_TOOL_ENV if name in os.environ}
         env.update(HOME=home, NPM_CONFIG_GLOBALCONFIG=os.devnull)
-        result = subprocess.run(['sh', '-c', command], env=env, check=False)
-        return result.returncode if result.returncode >= 0 else 4
+        try:
+            return checked_quality_process(['sh', '-c', command], env=env)
+        except (OSError, RuntimeError) as error:
+            print(f'fork-quality: unable to run {command!r}: {error}', file=sys.stderr)
+            return 4
+
+
+def upstream_base(worktree, source, head):
+    def git(*args):
+        return subprocess.run(['git', *args], cwd=worktree, capture_output=True,
+                              text=True, check=False)
+
+    # As in pi-forks' followed_ref/load_series: use the pack's upstream, not
+    # the delivered fork tip or the current upstream tip itself.
+    ref = parse_qs(urlsplit(source).query).get('ref', [''])[0]
+    if not ref:
+        default = git('symbolic-ref', '--quiet', 'refs/remotes/upstream/HEAD')
+        refs = [default.stdout.strip() if default.returncode == 0 else 'refs/remotes/upstream/main']
+    elif re.fullmatch(r'[0-9a-f]{40}|[0-9a-f]{64}', ref):
+        refs = [ref]
+    else:
+        refs = [f'refs/remotes/upstream/{ref}', f'refs/tags/{ref}']
+    for candidate_ref in refs:
+        upstream = git('rev-parse', '--verify', '--end-of-options', f'{candidate_ref}^{{commit}}')
+        if upstream.returncode == 0:
+            base = git('merge-base', '--all', upstream.stdout.strip(), head)
+            bases = base.stdout.splitlines()
+            if base.returncode == 0 and len(bases) == 1:
+                return bases[0]
+            raise RuntimeError(f'fork-quality: cannot determine a unique upstream base for {head} on {candidate_ref}')
+    raise RuntimeError(f'fork-quality: cannot resolve upstream ref ({", ".join(refs)}) for {head}')
 
 
 def touched_packages(candidate, base, head):
@@ -102,20 +153,7 @@ def package_test(package):
         return 4
 
     try:
-        # npm exec/npx can fail to resolve an offline runner with status 1,
-        # the same status as a failed test. Keep its diagnostics in the gate log.
-        offline_cache_miss = False
-        with subprocess.Popen(['npm', 'test'], cwd=package, stderr=subprocess.PIPE) as npm:
-            for line in npm.stderr:
-                sys.stderr.buffer.write(line)
-                sys.stderr.buffer.flush()
-                if line.strip() in (b'npm error code ENOTCACHED', b'npm ERR! code ENOTCACHED'):
-                    offline_cache_miss = True
-            status = npm.wait()
-        if status and offline_cache_miss:
-            raise RuntimeError('npm could not resolve the runner offline (ENOTCACHED)')
-        if status in (126, 127) or status < 0:
-            raise RuntimeError(f'npm test exited {status}')
+        status = checked_quality_process(['npm', 'test'], cwd=package)
     except (OSError, RuntimeError) as error:
         print(f'fork-quality: {package}: unable to run scripts.test {script!r}: {error}', file=sys.stderr)
         return 4
@@ -159,7 +197,7 @@ def main():
     directory.mkdir(parents=True, exist_ok=True)
     for stale in ('gate.verdict.json', 'fork-cache-source', 'fork-build-passed'):
         (directory / stale).unlink(missing_ok=True)
-    pack, command = build_command(root, args.fork)
+    pack, command, source = build_command(root, args.fork)
     # Builds can delete tracked tests or generate files. Never run them in the writer's tree.
     candidate = Path(tempfile.mkdtemp(prefix='fork-build-', dir=directory))
     call(['git', 'clone', '--quiet', '--shared', '--no-checkout', args.worktree, str(candidate)], root)
@@ -173,7 +211,8 @@ def main():
         call(['git', 'remote', 'add', 'upstream', upstream.stdout.strip()], candidate)
     build_passed = directory / 'fork-build-passed'
     build_cmd = f'({command}) && : > {shlex.quote(str(build_passed))}'
-    quality = quality_command(args.fork, candidate, args.base, args.head)
+    quality_base = upstream_base(args.worktree, source, args.head) if args.fork == 'pi' else args.base
+    quality = quality_command(args.fork, candidate, quality_base, args.head)
     print(f'fork-build: {args.head} with {pack.relative_to(root)}: {command}', flush=True)
     declaration_list = [{
         'id': 'fork-build', 'kind': 'fork-build', 'label': f'{args.fork}: pack build',
