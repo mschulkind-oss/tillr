@@ -119,7 +119,9 @@ Two shared components turn entity names into links across every screen:
 
 ## Shell, live updates, and navigation
 
-`ObservatoryShell` (`src/components/ObservatoryShell.tsx`) wraps every page in a fixed two-band chrome:
+`ObservatoryShell` (`src/components/ObservatoryShell.tsx`) wraps every page in a fixed two-band chrome. An active backend alarm appears above both bands, before item rows or counts. The snapshot names the backend or judge that cannot run, the time in Eastern, the recorded cause, the items and lanes behind it, and the evidence and operator action that clear it. The same alarm block leads `tillr view status --text`, `tillr drain why`, and `tillr view waiting`. Alarms report a condition; they do not stop the loop or move work to another backend.
+
+The two bands are:
 
 1. **Top bar:** Holds the nine `NAV` links (`Home`, `Items`, `Graph`, `Passes`, `Runs`, `Performance`, `Trunk`, `Questions`, `Designs`), build-freshness warnings when the served checkout's `HEAD` has moved past the running binary (`checkoutWatch` in `tools/tillr-view`) or when `PAGE_BUILD` disagrees with `snapshot.build`, the connection/freshness indicator (`Live` over `/api/v1/ws`, fallback polling age when disconnected, or `Paused`), `Pause` / `Resume` and manual `Refresh` buttons, the opt-in `New idea` button when `snapshot.writes_enabled` is true, and a collapsible `Glossary` (`Item`, `Idea`, `Lane`, `Express lane`, `Run`, `Attempt`, `Gate`, `Trunk`).
 2. **Loop band (`LoopBand`):** Pinned directly beneath the top bar so it never scrolls out of view. Reads `drain_summary` and `loop_status` (`readLoopStatus` in `tools/tillr-view/heartbeat.go`):
@@ -139,14 +141,15 @@ Browser keyboard controls are scoped to the surfaces that mount them:
 
 ## Home, waiting classes, and the lane strip
 
-Every unlanded item is classified into one of six action classes (`holdrules.Classes` in `tools/tillr-drain/holdrules`):
+Every unlanded item is classified into one of seven action classes (`holdrules.Classes` in `tools/tillr-drain/holdrules`):
 
 | Class | Meaning |
 | :--- | :--- |
+| `alarm` | Held on a closed backend or unavailable quota; the operator acts on the backend alarm. |
 | `needs you` | Blocked on an owner action (an open design question, an owner-escalated conflict, a manual prerequisite). |
 | `needs a cause` | Stopped on a fault, red check, unmapped hold reason, or missing explanation that requires diagnosis or repair. |
 | `waits on work` | Held behind another item (`blocked_by`, overlapping path fence, document rewrite, active designer comment batch, or busy lane cap). |
-| `waits on the loop` | Waiting for the drain loop to run a pass, settle a finished run, or recover a backend/quota window. |
+| `waits on the loop` | Waiting for the drain loop to run a pass or settle a finished run. |
 | `ready` | Eligible to dispatch on the next pass with an available lane. |
 | `moving` | Currently executing a worker run, gate, or landing step. |
 
@@ -157,7 +160,7 @@ Two server routes produce `WaitingRow` records, and the browser's `fetchWaiting`
 
 `Home` (`src/components/Home.tsx`) renders a two-column triage workspace:
 
-- **Left column (grouped triage):** Partitions rows from `fetchWaiting` into the six classes in priority order (`needs you`, `needs a cause`, `waits on work`, `waits on the loop`, `ready`, `moving`), preserving 1-based queue `place` order inside each group, showing up to the per-group preview cap, and linking `see all N →` to `#/items?state=unlanded&class=<class>`.
+- **Left column (grouped triage):** Partitions rows from `fetchWaiting` into the seven classes in priority order (`alarm`, `needs you`, `needs a cause`, `waits on work`, `waits on the loop`, `ready`, `moving`), preserving 1-based queue `place` order inside each group, showing up to the per-group preview cap, and linking `see all N →` to `#/items?state=unlanded&class=<class>`.
 - **Right rail (`LaneStrip` and `Last passes`):**
   - **Every lane's current work (`LaneStrip` in `src/components/LaneStrip.tsx`, backed by `GET /api/v1/lanes` and `tillr-view lanes` in `tools/tillr-view/lanes.go`):** Displays ordinary lanes, express lanes (`express`), and document desks (`desk`), computing header and strip counts from `work_state`: `running` (live run), `settling` (a held lane lease whose run row is already terminal, rendered as `after <step> ~<elapsed>` using the last finished step clock rather than claiming a gate is running), and `idle` (retaining the lane's last run and outcome). Each row shows its item link, resolved seat and `seat_source` (`dispatch` from `dispatches.seat`, `item` from the item definition, or `none` rendered as `"no seat asked (policy default)"`), backend, 1-based attempt count across distinct runs, run link, state-start elapsed clock, and latest recorded action.
   - **Last passes:** Summarizes the newest passes from `GET /api/v1/passes` with dispatch/hold counts and non-hold decision links. (Landings live on `#/trunk` rather than a separate Home card.)

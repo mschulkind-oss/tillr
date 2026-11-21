@@ -30,7 +30,7 @@ func TestWaitingBackendClosedNamesBackendAndReopeningMover(t *testing.T) {
 	}
 	for _, row := range rows {
 		if row.ItemID == "item-backend" {
-			if row.Class != "waits on work" || row.Where != "queue" || !strings.Contains(row.Mover, "fixture") || !strings.Contains(row.Mover, "probe-backend") || !strings.Contains(row.Mover, "non-infrastructure run") {
+			if row.Class != "alarm" || row.Where != "queue" || !strings.Contains(row.Mover, "fixture") || !strings.Contains(row.Mover, "probe-backend") || !strings.Contains(row.Mover, "non-infrastructure run") {
 				t.Fatalf("hold lacks mover: %+v", row)
 			}
 			return

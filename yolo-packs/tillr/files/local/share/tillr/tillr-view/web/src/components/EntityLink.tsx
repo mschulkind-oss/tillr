@@ -15,7 +15,7 @@ export function EntityLink({ kind, id, title, state = "not known", children, ove
 }
 
 export function ClassState({ value }: { value: string }) {
-  const known = ["moving", "ready", "needs you", "waits on work", "needs a cause", "landed", "pass", "closed", "skipped", "stopped", "not known", "waits on the loop"].includes(value);
+  const known = ["alarm", "moving", "ready", "needs you", "waits on work", "needs a cause", "landed", "pass", "closed", "skipped", "stopped", "not known", "waits on the loop"].includes(value);
   return <span className="class-state" data-class={known ? value : "not known"}>
     <StateGlyph state={known ? value : "not known"} />{value}
   </span>;

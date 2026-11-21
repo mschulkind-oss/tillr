@@ -497,6 +497,7 @@ type LoopResult struct {
 // independent worker. Terminal outcomes are read from the store; completion channels
 // are only this process's wake triggers. Each run retains its own boundary bracket.
 type Loop struct {
+	reportedAlarms                       []string // Previous pass's display, not an availability input.
 	startView                            atomic.Pointer[startView]
 	endingCapabilities                   map[string]string
 	rollAction, piRollAction, pushAction landingAction

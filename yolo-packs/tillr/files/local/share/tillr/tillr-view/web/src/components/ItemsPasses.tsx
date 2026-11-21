@@ -109,7 +109,7 @@ function useRowKeys(ids: string[], focused: string | null, focus: (id: string) =
   }, [ids.join("\n"), focused, focus, href, move]);
 }
 
-const CLASSES = ["needs you", "waits on work", "needs a cause", "ready", "moving", "waits on the loop"];
+const CLASSES = ["alarm", "needs you", "waits on work", "needs a cause", "ready", "moving", "waits on the loop"];
 export function ItemsView({ waiting, snapshot, error, writesEnabled = false, onMoved }: { waiting?: WaitingRow[]; snapshot?: SnapshotData; error?: Error | null; writesEnabled?: boolean; onMoved?: () => Promise<unknown> }) {
   const [moving, setMoving] = useState<string | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);

@@ -37,7 +37,7 @@ func TestWaitingQuotaFailureShowsErrorInsteadOfFractions(t *testing.T) {
 			t.Fatalf("rows=%+v", rows)
 		}
 		row := rows[0]
-		if row.Class != "waits on work" || row.Mover != "a successful quota reading" || row.Quota == nil || row.Quota.Error == "" {
+		if row.Class != "alarm" || row.Mover != "operator; repair the quota probe for a successful reading" || row.Quota == nil || row.Quota.Error == "" {
 			t.Fatalf("failed reading not visible: %+v", row)
 		}
 		for _, want := range []string{"reserve 0.2", "invalid quota JSON", "reopening unknown", at.Add(quota.ProbeInterval).Format(time.RFC3339)} {

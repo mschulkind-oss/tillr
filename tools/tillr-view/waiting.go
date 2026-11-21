@@ -15,6 +15,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/alarms"
 	"github.com/mschulkind-oss/tillr-drain/faults"
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr-drain/judgegrants"
@@ -30,6 +31,7 @@ import (
 // waitingRow is shared by the terminal and HTTP faces. Since is an absolute UTC
 // time, or the explicit absence of a decision; it is not the item's update time.
 type waitingRow struct {
+	Alarm        *alarms.Alarm `json:"alarm,omitempty"`
 	backendReset time.Time
 	Quota        *quota.QuotaStatus `json:"quota,omitempty"`
 	GraphChanges []string           `json:"graph_changes,omitempty"`
@@ -91,11 +93,20 @@ func waitingFace(args []string) (record.Envelope, int) {
 	ctx := context.Background()
 	questions := &vantage.VantageQuestions{Root: *root, Command: commandFields(*questionsCmd), Context: ctx}
 	var rows []waitingRow
+	var active []alarms.Alarm
 	var err error
 	if *history {
 		rows, err = readWaitingAt(ctx, *path, questions, now)
 	} else {
-		_, rows, err = askPlannerAt(ctx, *plannerFlag, buildInfo("none"), *path, *root, *policyRef, *lanesArg, *nowFlag, commandFields(*questionsCmd), nil)
+		var raw json.RawMessage
+		raw, rows, err = askPlannerAt(ctx, *plannerFlag, buildInfo("none"), *path, *root, *policyRef, *lanesArg, *nowFlag, commandFields(*questionsCmd), nil)
+		if err == nil {
+			var answer struct {
+				Alarms []alarms.Alarm `json:"alarms"`
+			}
+			err = json.Unmarshal(raw, &answer)
+			active = answer.Alarms
+		}
 	}
 	if err == nil && !*history {
 		s, e := store.OpenRead(ctx, *path)
@@ -158,9 +169,15 @@ func waitingFace(args []string) (record.Envelope, int) {
 	var grantViews []judgegrants.View
 	if err == nil {
 		err = s.ReadTx(ctx, func(r *store.Reader) error {
-			var gerr error
-			grantViews, gerr = waitingGrantLines(r, now, *path)
-			return gerr
+			var err error
+			if *history {
+				active, err = readAlarms(r, *root, *policyRef, now)
+				if err != nil {
+					return err
+				}
+			}
+			grantViews, err = waitingGrantLines(r, now, *path)
+			return err
 		})
 	}
 	s.Close()
@@ -172,13 +189,16 @@ func waitingFace(args []string) (record.Envelope, int) {
 	}
 	sortWaitingDocuments(rows)
 	if *asJSON {
-		err = json.NewEncoder(os.Stdout).Encode(rows)
+		err = json.NewEncoder(os.Stdout).Encode(alarmWaitingRows(active, rows))
 	} else {
 		window, readErr := spend.Read(ctx, *path, now)
 		if readErr != nil {
 			return record.Envelope{}, exitFor(readErr)
 		}
-		_, err = fmt.Fprintf(os.Stdout, "definition: %s\n%s\n", declared.Name, window)
+		err = alarms.Print(os.Stdout, active)
+		if err == nil {
+			_, err = fmt.Fprintf(os.Stdout, "definition: %s\n%s\n", declared.Name, window)
+		}
 		var laneRows []laneRow
 		if err == nil {
 			laneRows, err = readLaneRows(ctx, *path, filepath.Join(filepath.Dir(*path), "loop"), filepath.Join(filepath.Dir(*path), "lanes"), now)
@@ -257,7 +277,11 @@ func (s *server) waitingPayload(r *store.Reader, req *http.Request) (any, *apiFa
 		return nil, failure(codeStoreUnreadable, "waiting could not read the store: %v", err)
 	}
 	sortWaitingDocuments(rows)
-	return rows, nil
+	active, err := readAlarms(r, s.root, s.policyRef, now)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	return alarmWaitingRows(active, rows), nil
 }
 
 func waitingLoopDir(storePath, root string) string {
@@ -429,8 +453,8 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 			row.Since = time.UnixMilli(since).UTC().Format(time.RFC3339Nano)
 			if deferredBy != "" {
 				row.Mover = deferredBy
-				if last.Reason == "backend-closed" {
-					row.Mover += ": " + rule.mover
+				if last.Reason == alarms.Closed || last.Reason == alarms.Window {
+					row.Mover = "operator; " + deferredBy + ": " + strings.TrimPrefix(rule.mover, "operator; ")
 				}
 			}
 			if last.Reason == "question-open" {
@@ -763,7 +787,7 @@ func waitingBackendWindows(r *store.Reader, now time.Time) ([]waitingRow, error)
 			return nil, err
 		}
 		reopens := time.UnixMilli(reset).UTC().Format(time.RFC3339)
-		out = append(out, waitingRow{ItemID: "backend:" + backend, Class: "waits on work", Where: "backend", Why: kind + " reopens " + reopens, Mover: "the reset time", Since: "—", ClassSource: "store", backendReset: time.UnixMilli(reset).UTC()})
+		out = append(out, waitingRow{ItemID: "backend:" + backend, Class: "alarm", Where: "backend", Why: kind + " reopens " + reopens, Mover: waitingRuleFor(alarms.Window).mover, Since: "—", ClassSource: "store", backendReset: time.UnixMilli(reset).UTC()})
 	}
 	return out, rows.Err()
 }

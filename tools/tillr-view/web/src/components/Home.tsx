@@ -92,7 +92,7 @@ export function EntityText({ value, snapshot, rows = [], passes = [] }: { value:
   })}</>;
 }
 
-const CLASSES = ["needs you", "needs a cause", "waits on work", "waits on the loop", "ready", "moving"];
+const CLASSES = ["alarm", "needs you", "needs a cause", "waits on work", "waits on the loop", "ready", "moving"];
 export function Home({ snapshot, waiting, waitingError, passes, passesError, lanes, lanesError, now }: {
   lanes?: LaneRow[]; lanesError?: Error | null; now?: number;
   snapshot?: SnapshotData; waiting?: WaitingRow[]; waitingError?: Error | null;

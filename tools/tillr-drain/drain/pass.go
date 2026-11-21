@@ -2520,7 +2520,10 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	}
 	at := l.cfg.Now().UTC()
 	timing := &PassTiming{AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}
-	defer func() { l.countGeneration(result, timing.TickID) }()
+	defer func() {
+		l.reportAlarms(ctx, at)
+		l.countGeneration(result, timing.TickID)
+	}()
 	epochs := l.idleLaneEpochs()
 	if err := l.retireOrderWork(ctx); err != nil {
 		return "", err

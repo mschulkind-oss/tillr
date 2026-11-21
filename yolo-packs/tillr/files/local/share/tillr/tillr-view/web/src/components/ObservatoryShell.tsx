@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { ApiEnvelope, PassRow, SnapshotData } from "../models/types";
 import { LoopSummary } from "./Home";
+import { BackendAlarms } from "./BackendAlarms";
 import { NewIdea } from "./NewIdea";
 import { Glossary } from "./Glossary";
 import { refusalCode } from "./RefusalState";
@@ -41,6 +42,7 @@ export function ObservatoryShell({ children, hash, snapshot, snapshotError, pass
   const age = Number.isFinite(generated) ? Math.max(0, Math.floor((clock - generated) / 1000)) : null;
   return <Glossary className="observatory-shell">
     <div className="observatory-shell__sticky">
+      <BackendAlarms alarms={snapshot?.data.alarms} />
       <header className="observatory-nav">
         <strong>tillr</strong><nav aria-label="Observatory">{NAV.map(([label, url]) => <a key={url} href={url}
           aria-current={(hash || "#/").split("?")[0] === url ? "page" : undefined}>{label}</a>)}</nav>

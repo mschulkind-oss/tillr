@@ -492,6 +492,13 @@ for the read-only web observatory (where `#/run/<id>` renders the same wall-time
 `slot_wait` spans, and interleaved time-order stream). Where an event was never recorded, the absence is the
 finding — never reconstruct history from memory.
 
+For a scheduled check-in, run `tillr view alarms --store <store>`. Exit 0 means no active
+alarms; exit 1 means at least one, and the output names the cause, affected items and
+lanes, and what clears it. Other exit codes mean the check could not answer. Fix an
+infrastructure failure before recording a probe; for quota, check the reported reset or
+repair the quota reading. An unavailable judge clears with its backend. Do not route work
+elsewhere to hide an alarm.
+
 ## Recovery
 
 Use `tillr drain acquit` when a run's recorded fault was not its doing. It closes

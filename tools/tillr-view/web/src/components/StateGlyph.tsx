@@ -31,6 +31,7 @@ export const CLASS_GLYPHS = {
   "needs you": "diamond",
   "waits on work": "bars",
   "needs a cause": "cross",
+  alarm: "cross",
   pass: "check",
   skipped: "slash",
   "waits on the loop": "ring",

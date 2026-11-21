@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/alarms"
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr-drain/judgegrants"
 	"github.com/mschulkind-oss/tillr/record"
@@ -26,6 +27,7 @@ import (
 // report: Items, Candidates and Runs answer every item, candidate and run the source
 // holds, and the subject components stay null because no single item was asked about.
 type statusPayload struct {
+	Alarms      []alarms.Alarm     `json:"alarms,omitempty"`
 	Grants      []judgegrants.View `json:"grants,omitempty"`
 	Heavy       *heavy.HeavyStatus `json:"heavy,omitempty"`
 	HeavyFault  string             `json:"heavy_fault,omitempty"`

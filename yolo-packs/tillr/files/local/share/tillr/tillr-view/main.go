@@ -75,6 +75,8 @@ func run(args []string) int {
 		env, code = passesFace(rest)
 	case "waiting":
 		env, code = waitingFace(rest)
+	case "alarms":
+		return alarmsFace(rest)
 	case "lanes":
 		env, code = lanesFace(rest)
 	case "running":
@@ -122,6 +124,7 @@ func statusFaceFormat(args []string, asText *bool) (record.Envelope, int) {
 	fs := newFlagSet("status")
 	src := newSourceFlags(fs)
 	item := fs.String("item", "", "the item to report on; without it the report covers the whole board")
+	policy := fs.String("policy", "", "the backend policy, when not using the loop's accepted policy")
 	// root is where a relative design_doc resolves, the same flag and default item's
 	// show face uses: the index answers for the tree rooted here.
 	root := fs.String("root", ".", "the directory a relative design_doc resolves against")
@@ -167,20 +170,26 @@ func statusFaceFormat(args []string, asText *bool) (record.Envelope, int) {
 	if *nowFlag != "" {
 		payload.GeneratedAt = now
 	}
-	if *src.store != "" && subject == nil {
+	if *src.store != "" {
 		s, err := store.OpenRead(context.Background(), *src.store)
 		if err != nil {
 			return record.Envelope{}, exitFor(err)
 		}
 		err = s.ReadTx(context.Background(), func(r *store.Reader) error {
-			var gerr error
-			payload.Grants, gerr = waitingGrantLines(r, now, *src.store)
-			return gerr
+			var err error
+			payload.Alarms, err = readAlarms(r, *root, *policy, now)
+			if err != nil || subject != nil {
+				return err
+			}
+			payload.Grants, err = waitingGrantLines(r, now, *src.store)
+			return err
 		})
 		s.Close()
 		if err != nil {
 			return record.Envelope{}, exitFor(err)
 		}
+	}
+	if *src.store != "" && subject == nil {
 		proof, err := heavy.ReadStatus(context.Background(), *root, *src.store)
 		if err != nil {
 			payload.HeavyFault = err.Error()
@@ -337,7 +346,7 @@ func newID() string {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "status, events, waiting, passes, lanes, running, run, trace, serve, restart or perf-log"
+const faceList = "status, events, waiting, alarms, passes, lanes, running, run, trace, serve, restart or perf-log"
 
 // helpExit is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer

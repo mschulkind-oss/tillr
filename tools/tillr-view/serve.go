@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/mschulkind-oss/tillr-drain/alarms"
 	"github.com/mschulkind-oss/tillr-drain/judgegrants"
 	"github.com/mschulkind-oss/tillr-drain/preserved"
 	"github.com/mschulkind-oss/tillr-drain/restart"
@@ -793,6 +794,7 @@ type itemView struct {
 // snapshotData is the two-item drain view: every item projected, with its runs and the
 // stage each run reached.
 type snapshotData struct {
+	Alarms     []alarms.Alarm     `json:"alarms,omitempty"`
 	Grants     []judgegrants.View `json:"grants,omitempty"`
 	Sources    sourceStates       `json:"sources"`
 	Counts     boardCounts        `json:"counts"`
@@ -903,6 +905,11 @@ func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiF
 			now = parsed.UTC()
 		}
 	}
+	alarms, err := readAlarms(r, s.root, s.policyRef, now)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	out.Alarms = alarms
 	grants, err := judgegrants.CurrentViews(r, now, s.storePath)
 	if err != nil {
 		return nil, unreadable(err)

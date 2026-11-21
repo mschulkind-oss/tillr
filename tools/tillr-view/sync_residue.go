@@ -49,6 +49,9 @@ func readSyncResidue(r *store.Reader) (*syncResidue, error) {
 
 func statusText(p statusPayload) string {
 	var b strings.Builder
+	for _, alarm := range p.Alarms {
+		fmt.Fprintln(&b, alarm)
+	}
 	fmt.Fprintf(&b, "status at %s\n", p.GeneratedAt.UTC().Format(time.RFC3339))
 	for _, g := range p.Grants {
 		fmt.Fprintf(&b, "%s\n", g.Summary)

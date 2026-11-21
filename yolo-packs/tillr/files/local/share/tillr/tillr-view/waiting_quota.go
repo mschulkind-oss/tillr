@@ -53,17 +53,17 @@ func waitingBackendQuotas(r *store.Reader, now time.Time) ([]waitingRow, error) 
 		switch {
 		case q.Error != "":
 			parts = append(parts, "probe failed: "+q.Error+"; reopening unknown; retry after "+q.ObservedAt.Add(quota.ProbeInterval).Format(time.RFC3339))
-			class, mover = "waits on work", "a successful quota reading"
+			class, mover = "alarm", "operator; repair the quota probe for a successful reading"
 		case now.Sub(q.ObservedAt) > quota.ProbeInterval || resetReached:
 			parts = append(parts, "reading stale; reopening unknown until the next probe")
-			class, mover = "waits on work", "a fresh quota reading"
+			class, mover = "alarm", "operator; check for a fresh quota reading"
 		case closed:
 			if reopen.IsZero() {
 				parts = append(parts, "closed by reserve; reopening unknown")
 			} else {
 				parts = append(parts, "reopens "+reopen.UTC().Format(time.RFC3339))
 			}
-			class, mover = "waits on work", "the reset time and a fresh quota reading"
+			class, mover = "alarm", "operator; wait for the reset and a fresh quota reading"
 		default:
 			parts = append(parts, "open now")
 		}

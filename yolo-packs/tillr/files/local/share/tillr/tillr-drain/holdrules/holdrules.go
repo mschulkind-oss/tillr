@@ -18,7 +18,7 @@ import "strings"
 type Rule struct{ Class, Where, Mover string }
 
 // Classes lists the valid Rule.Class spellings.
-var Classes = []string{"needs you", "waits on work", "needs a cause", "ready", "moving", "waits on the loop"}
+var Classes = []string{"alarm", "needs you", "waits on work", "needs a cause", "ready", "moving", "waits on the loop"}
 
 // Unknown is the rule for a recorded reason with no row.
 var Unknown = Rule{"needs a cause", "queue", "add a history rule for this recorded reason"}
@@ -50,7 +50,7 @@ var Rules = map[string]Rule{
 	"host-boundary-violation":     {"needs you", "fence", "inspect the recorded violation and clear the fault"},
 	"candidate-record-mismatch":   {"needs you", "lane", "restore the recorded candidate and clear the fault; or tillr drain retry naming the held run, which supersedes its candidate"},
 	"definition-sync-failed":      {"needs you", "queue", "correct the item's block on the trunk as the detail says; the next document sync applies it and ends the hold"},
-	"backend-window":              {"waits on work", "backend", "the reset time"},
+	"backend-window":              {"alarm", "backend", "operator; check the quota reading or wait for the recorded reset"},
 	"lane-holds-unlanded-change":  {"needs you", "lane", "land the change, or reset the lane deliberately"},
 	"lane-branch-held":            {"needs you", "lane", "remove the worktree holding the lane's branch, or stage a different lane id"},
 	"lane-holds-uncommitted-work": {"needs you", "lane", "commit or remove the files, or reset the lane deliberately"},
@@ -105,7 +105,8 @@ var Rules = map[string]Rule{
 	"fork-held":                    {"waits on work", "queue", "the fork lane landing the shared patch branch; the next pass"},
 	"failover":                     {"ready", "queue", "the next pass"},
 	"seat-degraded":                {"ready", "queue", "the next pass"},
-	"backend-closed":               {"waits on work", "backend", "a successful tillr-drain probe-backend or a non-infrastructure run"},
+	"backend-closed":               {"alarm", "backend", "operator; record a successful tillr-drain probe-backend or a non-infrastructure run"},
+	"judge-backend-unavailable":    {"alarm", "judge", "operator; clear the review backend alarm"},
 	"command-fault":                {"needs a cause", "lane", "repair the command process and authorize a retry"},
 
 	"judge-defective-evidence-mismatch": {"needs you", "judge", "inspect the verifier run and authorize a retry with the corrected verdict meaning"},
