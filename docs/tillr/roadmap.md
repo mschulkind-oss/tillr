@@ -1555,12 +1555,7 @@ missing rather than report that the change failed verification.
   stale-only caches produce the same answer. Check that a cache hit triggers no refresh and
   that a fetch refusal names the missing commit and remote and returns `could not judge`.
 
-<!-- tillr: item id="item-gate-pinned-fork-inputs" paths="tools/gate/,tools/fork-check.py,tests/fork-check.test.py,bin/pi-forks,bin/pi-forks.list,tests/pi-forks.test.sh,tests/pi-forks/,tests/pi-patch-series.test.sh,tools/tillr-gate/needs_test.go,tools/tillr-gate/README.md,yolo-packs/,docs/" blocked_by="" prose="2" -->
 
-- **c1:** Each fork a pack delivers from a patch branch records, in the tree, the commit that branch must be at, and exporting a series updates that record in the same change. The record is the input a check reads; publishing a branch is not changed.
-- **c2:** A check that needs a fork reads that commit and no local branch: with every local `patch/*` branch deleted, the check gives the same answer.
-- **c3:** The commit is fetched into a cache directory when the cache lacks it and is never refreshed otherwise, so a cache holding older or newer commits changes no answer; a test runs the check against a cache that is empty, one that is current and one that holds only stale commits.
-- **c4:** A machine that cannot fetch the commit is told which commit and which remote it lacks, and the check answers `could not judge`, not `failed`.
 
 ## Filed 2026-11-15: the documents are part of the world the loop converges on
 

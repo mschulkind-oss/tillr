@@ -199,10 +199,11 @@ the identifier of its declared inputs. Moving a ref reruns the check; removing i
 the check unavailable even if a pass was remembered. A ref changing while its command
 runs prevents that result from being remembered under the original inputs.
 
-The eight patch-ref declarations judge local fork delivery branches. The
-[structural suite](../../tests/pi-patch-series.test.sh) judges only the tree's locator
-and pack metadata, so it passes in a fresh clone without those branches. The pi ref
-check also judges the build script stored on its branch.
+The eight patch-ref declarations judge the commits recorded in `yolo-packs/fork-pins/`,
+not local branches. They fetch a missing commit into a cache and report a missing input
+if the fetch fails. The [structural suite](../../tests/pi-patch-series.test.sh) judges
+the tree's locator and pack metadata without fetching. The pi check also judges the
+build script at its recorded commit.
 
 ## Caller-owned change checks
 
