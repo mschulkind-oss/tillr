@@ -106,8 +106,8 @@ func planned(p *ownerPath) node {
 // index, the guarded ref update and any rollback, so none of them runs in the middle. Then the
 // comparison of every touched path against the prediction, and the install through anchored
 // directory handles. Nothing is computed here. It answers ErrOwnerChanged, having put every file
-// back, when the owner changed a path, a parent directory or the branch after the prediction was
-// read, and ErrIndexBusy, having changed nothing, when a Git command holds the lock.
+// back, when the owner changed a path or the checkout after prediction, and errTrunkChanged
+// when the trunk tip itself moved. ErrIndexBusy means another command holds the index lock.
 func (t *Trunk) MoveOwner(plan *OwnerPlan, ref, to, from string) (*OwnerInstall, error) {
 	worktree, err := t.WorktreeFor(ref)
 	if err != nil {
@@ -148,6 +148,8 @@ func (t *Trunk) MoveOwner(plan *OwnerPlan, ref, to, from string) (*OwnerInstall,
 		case errors.Is(cause, ErrOwnerChanged):
 			in.ct.dropRecovery(plan)
 			return nil, ErrOwnerChanged
+		case cause == errTrunkChanged:
+			return nil, cause
 		case errors.As(cause, &failure):
 			return nil, cause
 		}
@@ -193,7 +195,7 @@ func (t *Trunk) MoveOwner(plan *OwnerPlan, ref, to, from string) (*OwnerInstall,
 		return retry(err)
 	}
 	if _, err := t.gitIn(worktree, "-c", "tillr.move=final", "update-ref", "-m", "tillr-land: "+to, normalizeRef(ref), to, from); err != nil {
-		return retry(Externalf("moving %s to %s in %s: %v", ref, to, worktree, err))
+		return retry(t.failedMove(ref, to, from, Externalf("moving %s to %s in %s: %v", ref, to, worktree, err)))
 	}
 	// Published: nothing is undone from here. The names of the displaced inodes go; their
 	// handles stay open for the last read.
@@ -353,7 +355,7 @@ func (t *Trunk) checkPlan(plan *OwnerPlan, from string) error {
 		return Externalf("reading %s in %s: %v", plan.Ref, plan.Worktree, err)
 	}
 	if at = strings.TrimSpace(at); at != from {
-		return Externalf("moving %s in %s: it is at %s, not the %s the landing was decided against", plan.Ref, t.repo, at, from)
+		return errTrunkChanged
 	}
 	if busy, err := t.ownerBusy(plan.Worktree); err != nil {
 		return err

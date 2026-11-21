@@ -372,7 +372,7 @@ func TestCanceledGitPreparationDoesNotMoveOrRecord(t *testing.T) {
 }
 
 func TestPreparationRevalidatesTrunkAndHistory(t *testing.T) {
-	for _, change := range []string{"trunk", "history-row", "history-schema"} {
+	for _, change := range []string{"trunk", "trunk-conflict", "history-row", "history-schema"} {
 		t.Run(change, func(t *testing.T) {
 			f := newContentionFixture(t)
 			f.req.ObservedTrunk = f.f.baseSHA
@@ -388,9 +388,15 @@ func TestPreparationRevalidatesTrunkAndHistory(t *testing.T) {
 			done := startLanding(t, context.Background(), f)
 			awaitGit(t, entered)
 			expectedTip := f.f.baseSHA
-			if change == "trunk" {
+			switch change {
+			case "trunk":
 				expectedTip = f.f.advance(t)
-			} else {
+			case "trunk-conflict":
+				write(t, filepath.Join(f.f.dir, "candidate.txt"), "a conflicting change\n")
+				git(t, f.f.dir, "add", "candidate.txt")
+				git(t, f.f.dir, "commit", "-m", "conflicting trunk change")
+				expectedTip = f.f.trunk(t)
+			default:
 				err := f.writer.WriteTx(context.Background(), func(tx *store.Tx) error {
 					if change == "history-schema" {
 						_, err := tx.Exec(`CREATE TABLE trunk_history(id INTEGER PRIMARY KEY, observed_tip TEXT NOT NULL, lost_tip TEXT NOT NULL)`)
@@ -411,6 +417,25 @@ func TestPreparationRevalidatesTrunkAndHistory(t *testing.T) {
 			}
 			os.WriteFile(release, nil, 0600)
 			a := finishLanding(t, done)
+			switch change {
+			case "trunk":
+				assertLandedOnNewTip(t, f, a, expectedTip)
+				if got := git(t, f.f.dir, "show", "HEAD:other.txt"); got != "other" {
+					t.Fatalf("landing lost the unrelated change: %q", got)
+				}
+				return
+			case "trunk-conflict":
+				if a.err != nil || a.landing.Result != land.ResultSquashConflict || a.landing.TrunkBefore != expectedTip ||
+					len(a.landing.ConflictPaths) != 1 || !strings.Contains(a.landing.ConflictPaths[0], "candidate.txt") {
+					t.Fatalf("expected a squash conflict on the new tip: %+v %v", a.landing, a.err)
+				}
+				if tip := f.f.trunk(t); tip != expectedTip {
+					t.Fatalf("conflicting landing moved trunk: %s", tip)
+				}
+				assertLandingCount(t, f, 1)
+				assertNoLandingFault(t, f)
+				return
+			}
 			if a.err == nil || !strings.Contains(a.err.Error(), "changed during landing preparation") {
 				t.Fatalf("stale preparation not rejected: %+v %v", a.landing, a.err)
 			}
@@ -422,30 +447,74 @@ func TestPreparationRevalidatesTrunkAndHistory(t *testing.T) {
 	}
 }
 
-func TestFinalMoveFailureRollsBackReceiptAndReleasesWriter(t *testing.T) {
+func TestTrunkMoveDuringFinalUpdateRollsBackAndRetries(t *testing.T) {
 	f := newContentionFixture(t)
 	entered, release := stallGit(t, "tillr.move=final")
 	done := startLanding(t, context.Background(), f)
 	awaitGit(t, entered)
-	// A trunk that moves between the comparison and the ref write is refused by the
-	// guarded ref update; the install is undone and nothing is recorded.
-	moved := git(t, f.f.dir, "-c", "user.name=owner", "-c", "user.email=owner@example.invalid", "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "owner")
+	// Only plumbing can bypass the index lock. Advance the ref without changing its tree
+	// so the guarded update loses the race after the candidate's files are installed.
+	moved := git(t, f.f.dir, "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "advance trunk")
 	git(t, f.f.dir, "update-ref", "refs/heads/master", moved)
-	ownerTip := f.f.trunk(t)
-	os.WriteFile(release, nil, 0600)
-	a := finishLanding(t, done)
-	if a.err == nil {
-		t.Fatalf("the move went through a moved trunk: %+v", a.landing)
+	if err := os.WriteFile(release, nil, 0600); err != nil {
+		t.Fatal(err)
 	}
-	if tip := f.f.trunk(t); tip != ownerTip {
-		t.Fatalf("a failed move changed the trunk: %s", tip)
+	assertLandedOnNewTip(t, f, finishLanding(t, done), moved)
+	if status := git(t, f.f.dir, "status", "--porcelain"); status != "" {
+		t.Fatalf("retry left changes in the worktree or index: %s", status)
 	}
-	if _, err := os.Stat(filepath.Join(f.f.dir, "candidate.txt")); err == nil {
-		t.Fatal("a failed move left the installed file behind")
+}
+
+func TestTrunkMovesRepeatedlyAfterClaim(t *testing.T) {
+	f := newContentionFixture(t)
+	var tip string
+	moves := 0
+	t.Cleanup(func() { land.OwnerHooks.Publishing = nil })
+	land.OwnerHooks.Publishing = func() {
+		if moves < 3 {
+			git(t, f.f.dir, "commit", "--allow-empty", "-m", "advance after claim")
+			tip = f.f.trunk(t)
+			moves++
+		}
 	}
-	assertLandingCount(t, f, 0)
-	if out, err := f.close(); err != nil {
-		t.Fatalf("close after failed Move: %v %s", err, out)
+	l, err := land.Land(context.Background(), f.s, f.trunk, f.req)
+	if moves != 3 {
+		t.Fatalf("expected three stale claims, got %d: %v", moves, err)
+	}
+	assertLandedOnNewTip(t, f, landAnswer{l, err}, tip)
+}
+
+func assertLandedOnNewTip(t *testing.T, f contentionFixture, a landAnswer, tip string) {
+	t.Helper()
+	if a.err != nil || !a.landing.Landed() || a.landing.TrunkBefore != tip {
+		t.Fatalf("expected a landing on %s: %+v %v", tip, a.landing, a.err)
+	}
+	if got, parent := f.f.trunk(t), git(t, f.f.dir, "rev-parse", "HEAD^"); got != a.landing.TrunkAfter || parent != tip {
+		t.Fatalf("wrong landing at %s with parent %s", got, parent)
+	}
+	if got := git(t, f.f.dir, "show", "HEAD:candidate.txt"); got != "candidate" {
+		t.Fatalf("landing lost the candidate change: %q", got)
+	}
+	assertLandingCount(t, f, 1)
+	assertNoLandingFault(t, f)
+	if err := f.writer.ReadTx(context.Background(), func(r *store.Reader) error {
+		var claims int
+		if err := r.QueryRow(`SELECT count(*) FROM landing_claims`).Scan(&claims); err != nil {
+			return err
+		}
+		if claims != 0 {
+			t.Errorf("retry left %d claims", claims)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertNoLandingFault(t *testing.T, f contentionFixture) {
+	t.Helper()
+	if n := eventsOfKind(t, f.db, land.FaultKind); n != 0 {
+		t.Fatalf("recorded %d land faults for trunk contention", n)
 	}
 }
 

@@ -12,12 +12,6 @@ import (
 	"github.com/mschulkind-oss/tillr-land/land"
 )
 
-func moveBranchBehindTheLanding(t *testing.T, d string) {
-	t.Helper()
-	moved := git(t, d, "-c", "user.name=o", "-c", "user.email=o@example.invalid", "commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "owner")
-	git(t, d, "update-ref", "refs/heads/master", moved)
-}
-
 // Git's own add, commit and checkout must fail on the lander's index lock all the way through
 // the ref update and a rollback, so a rollback never overwrites what the owner just did.
 func TestOwnerGitCommandsAreRefusedByTheLockThroughPublicationAndRollback(t *testing.T) {
@@ -28,18 +22,26 @@ func TestOwnerGitCommandsAreRefusedByTheLockThroughPublicationAndRollback(t *tes
 			d := f.f.dir
 			write(t, filepath.Join(d, "owner.txt"), "owner\n")
 			var ran error
+			lock := filepath.Join(git(t, d, "rev-parse", "--absolute-git-dir"), "refs", "heads", "master.lock")
+			t.Cleanup(func() { os.Remove(lock) })
 			done := false
 			land.OwnerHooks.GitCall = func(_ string, args []string) {
 				for _, a := range args {
 					if a == "tillr.move=final" && !done {
 						done = true
-						moveBranchBehindTheLanding(t, d) // the guarded ref update will fail
+						// Refuse the guarded write without changing the tip: a real Git error,
+						// not stale preparation to retry.
+						write(t, lock, "")
 						ran = exec.Command("git", append([]string{"-C", d}, command...)...).Run()
 					}
 				}
 			}
-			if _, err := land.Land(context.Background(), f.s, f.trunk, f.req); err == nil {
-				t.Fatal("the guarded ref update did not fail")
+			var failure *land.InstallFailure
+			if _, err := land.Land(context.Background(), f.s, f.trunk, f.req); !errors.As(err, &failure) {
+				t.Fatalf("expected an install failure from the guarded ref update: %v", err)
+			}
+			if n := eventsOfKind(t, f.db, land.FaultKind); n != 1 {
+				t.Errorf("recorded %d faults for the failed update, want one", n)
 			}
 			if ran == nil {
 				t.Errorf("git %v succeeded while the lander held the checkout", command)

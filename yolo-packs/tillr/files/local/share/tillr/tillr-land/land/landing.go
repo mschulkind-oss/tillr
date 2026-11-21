@@ -326,8 +326,8 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (an
 		req.observation = &LockObservation{RunID: req.RunID, Events: []LockEvent{{Kind: "acquired", AtNS: lock.acquiredNS}}}
 	}
 
-	// A touched path the owner saved after the prediction sends the landing back to predict
-	// again, under the same lock: the transaction changed nothing.
+	// A changed trunk tip or a touched path saved after the prediction invalidates the
+	// preparation. Recompute under the same lock; neither case published the candidate.
 	decided := landing
 	busyPause := 25 * time.Millisecond
 	// changedAt is the readings of the prediction whose install answered that the owner changed
@@ -352,6 +352,18 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (an
 		// trunk moves with nothing held, and a short write records it (publishLanding).
 		pub := &publication{}
 		landing, err = publishLanding(ctx, s, t, prepared, req, pub)
+		// Only an unwrapped signal is retryable: a failed rollback or claim cleanup
+		// remains a harness failure even when a tip change triggered it.
+		if err == errTrunkChanged {
+			cleanup := *t
+			cleanup.ctx = context.WithoutCancel(ctx)
+			cleanup.dropRecovery(prepared.plan)
+			changedAt = ""
+			if err := ctx.Err(); err != nil {
+				return Landing{}, err
+			}
+			continue
+		}
 		if errors.Is(err, ErrIndexBusy) {
 			// Ordinary Git work holds the checkout's index lock. That is contention, not a
 			// finding about the owner's content: nothing is held or refused, and the landing
@@ -785,7 +797,10 @@ func publishLanding(ctx context.Context, s *store.Store, t *Trunk, p preparedLan
 			req.observation.note("trunk-move")
 			install, err := t.MoveOwner(p.plan, req.BaseRef, p.squash.Commit, p.tip)
 			if err != nil {
-				return Landing{}, errors.Join(err, t.abandonClaim(ctx, s, p, req, landing))
+				if cleanupErr := t.abandonClaim(ctx, s, p, req, landing); cleanupErr != nil {
+					return Landing{}, errors.Join(err, cleanupErr)
+				}
+				return Landing{}, err
 			}
 			pub.install = install
 			landing.TrunkAfter = p.squash.Commit
@@ -831,6 +846,9 @@ func checkTips(t *Trunk, p preparedLanding, req LandingRequest) error {
 		return err
 	}
 	if tip != p.tip {
+		if PatchRef(req.BaseRef) == "" {
+			return errTrunkChanged
+		}
 		return Externalf("trunk %s changed during landing preparation: expected %s, got %s", req.BaseRef, p.tip, tip)
 	}
 	if p.observationRef != "" && p.observationRef != req.BaseRef {

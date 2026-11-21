@@ -465,6 +465,21 @@ func failureText(stderr string, err error) string {
 	return err.Error()
 }
 
+var errTrunkChanged = errors.New("trunk tip changed during landing preparation")
+
+// failedMove distinguishes a stale squash from a Git failure. An unreadable ref, a
+// delivery ref, or a tip that may already carry the attempted move is not a retry signal.
+func (t *Trunk) failedMove(ref, to, from string, failure error) error {
+	if PatchRef(ref) == "" {
+		if tip, err := t.Head(ref); err == nil && tip != from {
+			if published, err := t.historyAncestor(to, tip); err == nil && !published {
+				return errTrunkChanged
+			}
+		}
+	}
+	return failure
+}
+
 // Move points ref at to, and only if it is at from, and leaves the worktree that has ref
 // checked out holding what to holds.
 //
@@ -493,11 +508,8 @@ func failureText(stderr string, err error) string {
 // are only refs — has no index or working tree to keep in step, so the guarded update-ref
 // is the whole of the move there.
 //
-// For a carry the swap is the whole safety argument: it names the tip the change was
-// re-applied onto, so the re-applied commit can only be published onto that tree. A
-// failure here is exit 4, not a refusal: the caller already decided against what it read,
-// so a move that still fails is a repository that would not take the write — another
-// writer, an external condition — and not a decision about the candidate.
+// The swap names the tip the change was re-applied onto. A stale squash must be
+// prepared again; other write failures still leave as external errors.
 func (t *Trunk) Move(ref, to, from string) error {
 	worktree, err := t.WorktreeFor(ref)
 	if err != nil {
@@ -505,7 +517,7 @@ func (t *Trunk) Move(ref, to, from string) error {
 	}
 	if worktree == "" {
 		if _, err := t.git("update-ref", normalizeRef(ref), to, from); err != nil {
-			return Externalf("moving %s to %s in %s: %v", ref, to, t.repo, err)
+			return t.failedMove(ref, to, from, Externalf("moving %s to %s in %s: %v", ref, to, t.repo, err))
 		}
 		return nil
 	}
@@ -514,6 +526,9 @@ func (t *Trunk) Move(ref, to, from string) error {
 		return Externalf("reading %s in %s: %v", ref, worktree, err)
 	}
 	if at = strings.TrimSpace(at); at != from {
+		if PatchRef(ref) == "" {
+			return errTrunkChanged
+		}
 		return Externalf("moving %s to %s in %s: %s is at %s, not the %s the landing was decided against",
 			ref, to, t.repo, ref, at, from)
 	}
