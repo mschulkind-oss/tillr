@@ -78,7 +78,11 @@ func Read(r *store.Reader, now time.Time, policy *Policy, current ...Hold) ([]Al
 	if err != nil {
 		return nil, err
 	}
-	active := append(infra, windows...)
+	rolls, err := storeRollAlarm(r)
+	if err != nil {
+		return nil, err
+	}
+	active := append(append(infra, windows...), rolls...)
 	if len(active) == 0 {
 		return active, nil
 	}

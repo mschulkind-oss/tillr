@@ -103,7 +103,9 @@ func File(ctx context.Context, storePath, role string, at time.Time) (Request, e
 		return Request{}, fmt.Errorf("minting a restart id: %v", err)
 	}
 	request := Request{ID: fmt.Sprintf("restart-%s-%d-%x", role, at.UnixMilli(), suffix), Role: role, At: at.UTC()}
-	s, err := store.Open(ctx, storePath, true)
+	// The caller can already be the replacement build, while the old loop is
+	// still writing. Filing a request must never migrate its store.
+	s, err := store.Open(ctx, storePath, false)
 	if err != nil {
 		return Request{}, err
 	}
@@ -322,7 +324,8 @@ func (rs *Restarter) record(ctx context.Context, answer Answer) error {
 	if err != nil {
 		return err
 	}
-	s, err := store.Open(ctx, rs.Store, true)
+	// A refusal may be reporting a migration that could not commit.
+	s, err := store.Open(ctx, rs.Store, false)
 	if err != nil {
 		return err
 	}

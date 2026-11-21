@@ -788,12 +788,7 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 // disk before the caller is answered (recordResult), so a stop is readable after the process
 // that made it is gone.
 func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
-	// Adopt before starting any new child, so inherited-child collection cannot
-	// steal a status from this image's subprocess waiters.
 	fmt.Fprintf(l.cfg.Report, "loop: build %s\n", l.build)
-	if err := l.adoptRestart(ctx); err != nil {
-		return faultResult(result, err)
-	}
 	defer l.recordResult(&result)
 	defer func() {
 		if spendErr := l.snapshotSpend(&result); spendErr != nil {
@@ -803,6 +798,15 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	defer l.closeWALKeeper()
 	defer l.endSession()
 	l.keepWALWhileRunning()
+	if err := l.activateSchemaRoll(ctx); err != nil {
+		return faultResult(result, err)
+	}
+	// A schema roll is acknowledged only after migration and installation.
+	// Adopt before starting any new child, so inherited-child collection cannot
+	// steal a status from this image's subprocess waiters.
+	if err := l.adoptRestart(ctx); err != nil {
+		return faultResult(result, err)
+	}
 	if l.cfg.Policy == nil || len(l.cfg.Policy.Backends) == 0 {
 		return faultResult(result, Usagef("the loop has no usable policy"))
 	}
