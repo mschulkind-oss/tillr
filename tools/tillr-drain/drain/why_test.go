@@ -105,6 +105,54 @@ func TestWhyConflictContextDoesNotReplaceCurrentMover(t *testing.T) {
 	}
 }
 
+func TestNamedWaitSurvivesDesignAnswer(t *testing.T) {
+	f, l, _, base := designAnswerFixture(t)
+	candidate := landedAnswer(t, base, "item-a")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if err := item.RecordConflict(tx, *candidate.BlockConflict, l.cfg.Now()); err != nil {
+			return err
+		}
+		_, err := item.SetState(context.Background(), tx, "item-a", StateBlocked, l.cfg.Now(), item.WaitingOn{Waiter: "owner", Reason: "host acknowledgement"})
+		return err
+	})
+	s := openFixture(t, f.storePath)
+	defer s.Close()
+	check := func() {
+		t.Helper()
+		if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+			answer, err := Why(r, Pass{}, l.cfg.Policy, nil)
+			if err != nil {
+				return err
+			}
+			row := answer.Rows[0]
+			if row.State != StateBlocked || row.Decision.Action != ActionHold || row.Reason != ReasonBlocked || row.Mover != "owner" {
+				t.Fatalf("named wait lost: %+v", row)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check()
+	if err := l.answerBlock(context.Background(), candidate); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ := conflictOf(t, f, "item-a"); c.Status != "answered" {
+		t.Fatalf("answer was not recorded: %+v", c)
+	}
+	check()
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		d := Decision{ItemID: "item-a", LaneID: "lane-1", Action: ActionDispatch, Reason: ReasonReady, Attempt: 1, RunRequest: &run.Request{ItemID: "item-a", RunID: "live-run", LaneID: "lane-1"}}
+		raw, err := json.Marshal(pendingWork{Decision: d})
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(`INSERT INTO events(ts,kind,object_type,object_id,payload) VALUES (0,?,'run','live-run',?)`, dispatchStartedKind, string(raw))
+		return err
+	})
+	check()
+}
+
 func TestWhyAccountsForBusyLanesAndPendingRun(t *testing.T) {
 	f, l := passFixture(t, "running", "queued", "held")
 	fixtureWrite(t, f, func(tx *store.Tx) error {
