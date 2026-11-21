@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 function readRecord(path: string) {
@@ -16,10 +16,10 @@ function readRecord(path: string) {
 const park = { content: [], details: {}, park: true };
 
 export function executeLand(
-	callId: string, cwd: string, durable: string, base: string, fenceFile: string,
+	callId: string, cwd: string, durable: string, base: string,
 	owedWakes: () => string[], answered: (id: string) => boolean = () => false, transcript = "",
 ) {
-	if (!durable || !base || !fenceFile) throw new Error("The run's scratch, base or fence is not staged.");
+	if (!durable || !base) throw new Error("The run's scratch or base is not staged.");
 	const answer = readRecord(join(durable, "landing-answer.json"));
 	if (answer !== undefined && answer?.call_id === callId) {
 		if (typeof answer.text !== "string" || !answer.text.trim()) throw new Error("The landing answer has no text.");
@@ -40,15 +40,14 @@ export function executeLand(
 	const git = (...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" });
 	const commit = git("rev-parse", "--verify", "HEAD").trim();
 	if (commit === base) throw new Error("There is no commit to offer: HEAD is still the staged base.");
-	const fence = readFileSync(fenceFile, "utf8").split(/\r?\n/).map((line) => line.trim().replace(/\/+$/, "")).filter(Boolean);
-	if (!fence.length) throw new Error("The staged fence is empty.");
+
 	const changed = new Set([
 		...git("diff", "--name-only", "--no-renames", "-z").split("\0"),
 		...git("diff", "--cached", "--name-only", "--no-renames", "-z").split("\0"),
 		...git("ls-files", "--others", "--exclude-standard", "-z").split("\0"),
 	]);
-	const dirty = [...changed].filter((name) => name && fence.some((prefix) => name === prefix || name.startsWith(`${prefix}/`)));
-	if (dirty.length) throw new Error(`Commit or remove these uncommitted paths inside the fence:\n${dirty.join("\n")}`);
+	const dirty = [...changed].filter((name) => name);
+	if (dirty.length) throw new Error(`Commit or remove these uncommitted paths:\n${dirty.join("\n")}`);
 	const refusal = state?.refused?.find((entry: { commit: string; report_only?: boolean }) =>
 		entry.commit === commit && entry.report_only !== true);
 	if (refusal) throw new Error(`This commit was already refused. A new commit is required.\n${refusal.answer}`);
@@ -75,10 +74,9 @@ export default function land(pi: any) {
 		// Pi settles execute's value with `.then`, so it must be a promise; async also turns a
 		// throw into a rejection.
 		async execute(callId: string, _args: Record<string, never>, _signal: unknown, _update: unknown, ctx: { cwd: string; sessionManager: { getSessionFile(): string | undefined; getBranch(): { type: string; message?: { role: string; toolCallId?: string } }[] } }) {
-			const { YOLO_DURABLE_DIR, TILLR_GOAL_BASE, BOARD_DRAIN_BRIEF } = process.env;
-			if (!YOLO_DURABLE_DIR || !TILLR_GOAL_BASE || !BOARD_DRAIN_BRIEF) throw new Error("The run's scratch, base or brief is not staged.");
-			return executeLand(callId, ctx.cwd, YOLO_DURABLE_DIR, TILLR_GOAL_BASE,
-				join(dirname(BOARD_DRAIN_BRIEF), "fence.txt"), () => {
+			const { YOLO_DURABLE_DIR, TILLR_GOAL_BASE } = process.env;
+			if (!YOLO_DURABLE_DIR || !TILLR_GOAL_BASE) throw new Error("The run's scratch or base is not staged.");
+			return executeLand(callId, ctx.cwd, YOLO_DURABLE_DIR, TILLR_GOAL_BASE, () => {
 					const raw = execFileSync("python3", [fileURLToPath(new URL("./stop-at-gap", import.meta.url)), "--owed-wakes", String(process.pid), String(since)], { encoding: "utf8" });
 					const wakes = JSON.parse(raw);
 					if (!Array.isArray(wakes)) throw new Error("Cannot determine whether this Pi session owes a background task wake; check its journal before offering.");

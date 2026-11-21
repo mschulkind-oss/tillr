@@ -1184,13 +1184,6 @@ func (l *Loop) routeTrunkFixer(ctx context.Context, redSHA string, failing []str
 		return "", err
 	}
 	fence, dropped := trunkFixerPaths(paths, nil)
-	if len(fence) == 0 {
-		// A fixer with no reachable paths cannot repair anything and would be dispatchable
-		// forever. Refusing to file it is the honest answer; the trunk is still red and the
-		// item is still held, so a person sees both facts.
-		return "", Externalf("the trunk is red at %s but the fixer fence is empty: the suspect change and the failing checks (%s) name no path outside the gate's own code, so no fixer can be filed",
-			shortSHA(redSHA), strings.Join(failing, ", "))
-	}
 	nextProof := "the next rolling run advances the watermark"
 	if l.gatePolicy.LandingStrategy == "after-merge" {
 		nextProof = "the next heavy run advances refs/tillr/green"
@@ -1209,7 +1202,7 @@ func (l *Loop) routeTrunkFixer(ctx context.Context, redSHA string, failing []str
 	}
 	// A generated fixer has no body reference: its criteria are the whole brief body.
 	if len(dropped) > 0 {
-		criteria += ". Dropped paths outside the repository-relative fence: " + strings.Join(dropped, ", ")
+		criteria += ". Paths omitted from the repair hints: " + strings.Join(dropped, ", ")
 	}
 	payload, err := json.Marshal(map[string]any{
 		"item_id":       fixerID,
@@ -1368,7 +1361,7 @@ func (l *Loop) routeTrunkFixer(ctx context.Context, redSHA string, failing []str
 		return "", classifyWrite(err)
 	}
 	if created {
-		l.reportf("loop: filed %s for the broken trunk at %s (fence %s)\n",
+		l.reportf("loop: filed %s for the broken trunk at %s (path hints: %s)\n",
 			fixerID, shortSHA(redSHA), strings.Join(fence, ", "))
 	}
 	return fixerID, nil
@@ -1423,62 +1416,6 @@ func (l *Loop) snapshotFixerLogs(observationID string, checkLogs map[string]stri
 		}
 	}
 	return out
-}
-
-// widenFixerFence adds the requested paths to a trunk fixer's fence. It answers the paths
-// added and the paths refused: the gate's own code and anything that is not a
-// repository-relative path are refused (trunkFixerPaths), and a request with any refused
-// path adds nothing, so the owner rules on the whole request.
-func (l *Loop) widenFixerFence(ctx context.Context, fixerID string, requested []string) ([]string, []string, error) {
-	granted, refused := trunkFixerPaths(requested, nil)
-	for _, path := range requested {
-		path = filepath.ToSlash(strings.TrimSpace(path))
-		if path != "" && !containsString(granted, path) && !containsString(refused, path) {
-			refused = append(refused, path)
-		}
-	}
-	if len(refused) > 0 || len(granted) == 0 {
-		return nil, refused, nil
-	}
-	s, err := store.Open(ctx, l.cfg.Store, true)
-	if err != nil {
-		return nil, nil, Incompatiblef("%v", err)
-	}
-	defer s.Close()
-	var added []string
-	err = s.WriteTx(ctx, func(tx *store.Tx) error {
-		var raw string
-		if err := tx.QueryRow(`SELECT allowed_paths FROM items WHERE item_id=?`, fixerID).Scan(&raw); err != nil {
-			return err
-		}
-		var fence []string
-		if raw != "" {
-			if err := json.Unmarshal([]byte(raw), &fence); err != nil {
-				return err
-			}
-		}
-		for _, path := range granted {
-			if !containsString(fence, path) {
-				added = append(added, path)
-			}
-		}
-		if len(added) == 0 {
-			return nil
-		}
-		widened := TrunkFixerFence(fence, added)
-		encoded, err := json.Marshal(widened)
-		if err != nil {
-			return err
-		}
-		if _, err := tx.Exec(`UPDATE items SET allowed_paths=? WHERE item_id=?`, string(encoded), fixerID); err != nil {
-			return err
-		}
-		return appendEffect(tx, FixerFenceWidenedKind, fixerID, map[string]any{"fixer_item": fixerID, "added": added, "allowed_paths": widened}, l.cfg.Now())
-	})
-	if err != nil {
-		return nil, nil, classifyWrite(err)
-	}
-	return added, nil, nil
 }
 
 func containsString(list []string, want string) bool {

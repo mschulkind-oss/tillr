@@ -851,6 +851,14 @@ func (l *Loop) stageJudge(ctx context.Context, c Candidate, receipt *JudgeReceip
 	if err := os.WriteFile(diffPath, []byte(diff), 0644); err != nil {
 		return err
 	}
+	changedPaths, err := l.git(ctx, c.Worktree, "diff", "--no-renames", "--name-only", c.BaseSHA, receipt.Options.Head, "--")
+	if err != nil {
+		return err
+	}
+	changedPaths = strings.TrimSpace(changedPaths)
+	if changedPaths == "" {
+		changedPaths = "(none)"
+	}
 	var criteria strings.Builder
 	var history string
 	db, err := store.OpenRead(ctx, l.cfg.Store)
@@ -908,7 +916,7 @@ with waiter (owner, design, plan, or item:<id> for a stored item). Its reason ex
 why that waiter must act. Do not include actor or judged_actor.
 Pass requires every criterion done. Return RESULT: done after writing the file.
 
-## Fence
+## Scope and boundaries
 Do not modify the worktree, store, or refs. If a check writes files, run it in a temporary
 copy of the exact candidate tree outside the worktree (for example, extract evaluated_head
 with git archive). The verdict file above is your only deliverable.
@@ -925,7 +933,11 @@ The item criteria are the bar; do not lower it.
 Read the exact candidate diff from this retained artifact:
 %s
 
+Changed paths (%s..%s):
+%s
+
 ## Method
+Name any changed path that the item's words do not account for.
 Use the diff and candidate tree to judge the candidate commit. A refusal must rest on
 the item's words or criteria or a regression this change introduces in existing behavior.
 For each refusal, name the applicable words or criterion, or explain what worked before
@@ -953,7 +965,7 @@ Write the verdict file, then report RESULT: done.
 
 ## Stop conditions
 Never change the worker's candidate.
-`, c.ItemID, receipt.Request.RunID, c.Worktree, output, receipt.Options.Head, receipt.Options.Tree, seatLines(l.currentPolicy()), diffPath, criteria.String())
+`, c.ItemID, receipt.Request.RunID, c.Worktree, output, receipt.Options.Head, receipt.Options.Tree, seatLines(l.currentPolicy()), diffPath, c.BaseSHA, receipt.Options.Head, changedPaths, criteria.String())
 	brief += history
 	if len(receipt.Writers) == 0 {
 		for _, producer := range receipt.Producers {

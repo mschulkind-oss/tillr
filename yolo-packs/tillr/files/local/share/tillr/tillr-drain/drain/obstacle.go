@@ -2,9 +2,7 @@ package drain
 
 import (
 	"path/filepath"
-	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 )
 
@@ -16,8 +14,6 @@ import (
 //
 //   - definition: the item's own words are wrong or contradict the tree. The design seat
 //     amends the block.
-//   - fence: the work needs paths outside the fence. The design seat widens the block's
-//     paths or splits the item.
 //   - trunk: the base is red and this item did not cause it. The named checks are replayed
 //     on the base; a red replay files (or attaches to) the trunk fixer, and the item waits
 //     on it.
@@ -39,9 +35,9 @@ import (
 const ObstacleField = "OBSTACLE"
 
 // The obstacle kinds. The set is closed: a kind outside it is a missing output.
+// Note: `fence` was retired on 2026-11-19 when per-item allow-lists were replaced by the global deny-list.
 const (
 	ObstacleDefinition = "definition"
-	ObstacleFence      = "fence"
 	ObstacleTrunk      = "trunk"
 	ObstacleTooling    = "tooling"
 	ObstacleSeat       = "seat"
@@ -51,7 +47,6 @@ const (
 // obstacleRequired is each kind's required fields, in the order a brief lists them.
 var obstacleRequired = map[string][]string{
 	ObstacleDefinition: {"CRITERIA", "EVIDENCE"},
-	ObstacleFence:      {"PATHS", "EVIDENCE"},
 	ObstacleTrunk:      {"CHECKS", "BASE"},
 	ObstacleTooling:    {"COMMAND", "EVIDENCE", "PATHS"},
 	ObstacleSeat:       {"TRIED", "MISSING"},
@@ -82,10 +77,6 @@ func (o Obstacle) Field(name string) string { return strings.TrimSpace(o.Fields[
 
 // List answers a list field as its entries. An invalid fence request yields no paths.
 func (o Obstacle) List(name string) []string {
-	if o.Kind == ObstacleFence && name == "PATHS" {
-		paths, _ := fenceObstaclePaths(o.Field(name))
-		return paths
-	}
 	var out []string
 	for _, part := range strings.FieldsFunc(o.Field(name), func(r rune) bool { return r == ',' || r == '\n' || r == ' ' || r == '\t' }) {
 		if part = strings.Trim(strings.TrimSpace(part), "`*-"); part != "" {
@@ -93,49 +84,6 @@ func (o Obstacle) List(name string) []string {
 		}
 	}
 	return out
-}
-
-var fencePathSpelling = regexp.MustCompile(`^[\p{L}\p{M}\p{N}._+@/-]+$`)
-
-// fenceObstaclePaths is lexical: a path for a new file may not exist yet. Split only at
-// explicit separators so prose cannot turn into a set of single-word permissions. Keep
-// this grammar in sync with fencePathsProblem in the Pi adapter.
-func fenceObstaclePaths(value string) ([]string, string) {
-	const ask = "Provide repository-relative paths separated by commas or newlines, not prose, Git refs, or placeholders"
-	var paths, bad []string
-	for _, line := range strings.Split(value, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") {
-			line = line[2:]
-		}
-		for _, entry := range strings.Split(line, ",") {
-			entry = strings.TrimSpace(entry)
-			if entry == "" {
-				continue
-			}
-			path := entry
-			if len(path) >= 2 && path[0] == '`' && path[len(path)-1] == '`' {
-				path = path[1 : len(path)-1]
-			}
-			valid := fencePathSpelling.MatchString(path)
-			for _, part := range strings.Split(strings.TrimSuffix(path, "/"), "/") {
-				valid = valid && part != "" && part != "." && part != ".."
-			}
-			first, _, _ := strings.Cut(path, "/")
-			if !valid || first == "refs" || first == ".git" {
-				bad = append(bad, strconv.Quote(entry))
-			} else {
-				paths = append(paths, path)
-			}
-		}
-	}
-	if len(bad) > 0 {
-		return nil, "the fence obstacle has invalid `PATHS:` entries: " + strings.Join(bad, ", ") + ". " + ask
-	}
-	if len(paths) == 0 {
-		return nil, "the fence obstacle has no `PATHS:` entries. " + ask
-	}
-	return paths, ""
 }
 
 // fieldLine answers the field a report line opens, and the value after it. A line opens a
@@ -227,10 +175,6 @@ func (o Obstacle) problem() string {
 	if len(missing) > 0 {
 		return "the " + o.Kind + " obstacle is missing " + strings.Join(missing, ", ")
 	}
-	if o.Kind == ObstacleFence {
-		_, problem := fenceObstaclePaths(o.Field("PATHS"))
-		return problem
-	}
 	if o.Kind == ObstacleTooling {
 		for _, path := range o.List("PATHS") {
 			if clean := filepath.ToSlash(filepath.Clean(path)); filepath.IsAbs(path) || clean == ".." || strings.HasPrefix(clean, "../") {
@@ -284,7 +228,7 @@ func missingOutputDetail(problem string) string {
 
 // ObstacleContract is the one statement of the worker's two endings, the text every
 // return to a worker carries.
-const ObstacleContract = "A worker run has two endings. The goal is the commit, ending `RESULT: done`. The only other ending is `RESULT: blocked` with a line `OBSTACLE: <kind>` and that kind's fields: `definition` (CRITERIA, EVIDENCE) when the item's words are wrong or contradict the tree; `fence` (PATHS, EVIDENCE) when the change needs paths outside the fence; `trunk` (CHECKS, BASE) when the base is red and this change did not cause it; `tooling` (COMMAND, EVIDENCE, PATHS) when a tool or the harness is defective; `seat` (TRIED, MISSING) when an attempt you made and tested shows the task exceeds this model; `owner` (QUESTION) when only the owner can decide. A merge conflict, a patch to reconcile, a failing test inside the fence, a long suite and unfinished work are work to continue, not obstacles."
+const ObstacleContract = "A worker run has two endings. The goal is the commit, ending `RESULT: done`. The only other ending is `RESULT: blocked` with a line `OBSTACLE: <kind>` and that kind's fields: `definition` (CRITERIA, EVIDENCE) when the item's words are wrong or contradict the tree; `trunk` (CHECKS, BASE) when the base is red and this change did not cause it; `tooling` (COMMAND, EVIDENCE, PATHS) when a tool or the harness is defective; `seat` (TRIED, MISSING) when an attempt you made and tested shows the task exceeds this model; `owner` (QUESTION) when only the owner can decide. A merge conflict, a patch to reconcile, a failing test, a long suite and unfinished work are work to continue, not obstacles."
 
 // obstacleDesignInstruction is what the design seat is told to do with a worker's
 // obstacle, by kind, or "" for a report that names none.
@@ -292,8 +236,6 @@ func obstacleDesignInstruction(o Obstacle) string {
 	switch o.Kind {
 	case ObstacleDefinition:
 		return "The worker named a definition obstacle: the item's words are wrong or contradict the tree. Amend the item's block so it is buildable as written, or object."
-	case ObstacleFence:
-		return "The worker named a fence obstacle: the change needs " + strings.Join(o.List("PATHS"), ", ") + ", outside the item's fence. Widen the block's paths to cover them, or split the item so each part fits its fence, or object."
 	case ObstacleOwner:
 		return "The worker named an owner obstacle, asking: " + o.Field("QUESTION") + " Answer it from the documents by amending the block. If only the owner can rule, object with `" + DesignNextActorField + ": owner` and write the question in your report, where the owner reads it."
 	case ObstacleSeat:
@@ -313,8 +255,6 @@ func requestObstacleDesignInstruction(o Obstacle) string {
 	switch o.Kind {
 	case ObstacleDefinition:
 		return "The worker named a definition obstacle: the request's words amend or overturn a decision, or contradict the tree. Update the design document's decision ledger under docs/ so the recorded decision matches the request." + noBlock + provenance + object
-	case ObstacleFence:
-		return "The worker named a fence obstacle: the change needs " + strings.Join(o.List("PATHS"), ", ") + ", outside the request's fence. Answer in docs/ with what the build may touch." + noBlock + provenance + object
 	case ObstacleOwner:
 		return "The worker named an owner obstacle, asking: " + o.Field("QUESTION") + " Answer it in the design documents under docs/ when they settle it." + noBlock + provenance + " If only the owner can rule, object with `" + DesignNextActorField + ": owner` and write the question in your report, where the owner reads it."
 	case ObstacleSeat:

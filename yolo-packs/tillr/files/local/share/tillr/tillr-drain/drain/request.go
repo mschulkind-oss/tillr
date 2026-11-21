@@ -46,7 +46,7 @@ func requestWordsFor(ctx context.Context, path, id string) ([]byte, error) {
 func requestTask(recorded stagedItem) string {
 	return recorded.Title + `
 
-This item was filed from the command line as a request: it has no document block, and the owner's words are its whole statement. They follow at the very end of this brief in a byte-counted section; every byte after that section's heading, through the end of the file, is the saved text. Do what they ask, within the fence, on this node's part of the workflow.
+This item was filed from the command line as a request: it has no document block, and the owner's words are its whole statement. They follow at the very end of this brief in a byte-counted section; every byte after that section's heading, through the end of the file, is the saved text. Do what they ask — change what the work needs, and nothing else — on this node's part of the workflow.
 
 Do not add, edit or remove a ` + "`<!-- tillr: item … -->`" + ` comment in any document, and do not depend on one: this item finishes without a block, and the loop refuses a candidate that touches one. Where the words leave a decision only the owner can make, do not guess: end blocked, naming the owner, with the question and its options.`
 }

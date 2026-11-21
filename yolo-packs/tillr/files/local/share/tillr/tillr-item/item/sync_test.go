@@ -172,7 +172,7 @@ func TestSyncReadsAMultiLineDirectiveAndMapsItsFields(t *testing.T) {
 	if stored.bodyRef != "docs/design/api.md#add-the-read-api" || stored.designDoc != "docs/design/api.md" {
 		t.Errorf("body_ref %q design_doc %q", stored.bodyRef, stored.designDoc)
 	}
-	if stored.paths != `["tools/view/","tools/view-web/"]` {
+	if stored.paths != "" {
 		t.Errorf("allowed_paths %s", stored.paths)
 	}
 	if stored.state != "in-queue" || stored.rank == "" || stored.seat != "" {
@@ -218,9 +218,6 @@ func TestSyncReportsEachFindingAndSkipsOnlyItsFile(t *testing.T) {
 	}{
 		{"missing id", "missing-id", "### H\n<!-- tillr: item paths=\"a/\" -->\n- **c1:** x\n"},
 		{"invalid id", "invalid-id", "### H\n<!-- tillr: item id=\"Item_Bad\" paths=\"a/\" -->\n- **c1:** x\n"},
-		{"no paths", "missing-paths", "### H\n<!-- tillr: item id=\"item-a\" -->\n- **c1:** x\n"},
-		{"glob path", "invalid-path", "### H\n<!-- tillr: item id=\"item-a\" paths=\"tools/*\" -->\n- **c1:** x\n"},
-		{"root path", "invalid-path", "### H\n<!-- tillr: item id=\"item-a\" paths=\".\" -->\n- **c1:** x\n"},
 		{"no criterion", "missing-criterion", "### H\n<!-- tillr: item id=\"item-a\" paths=\"a/\" -->\nprose only\n"},
 		{"unknown attribute", "unknown-attribute", "### H\n<!-- tillr: item id=\"item-a\" paths=\"a/\" rank=\"a\" -->\n- **c1:** x\n"},
 		{"unknown blocker", "unknown-blocker", "### H\n<!-- tillr: item id=\"item-a\" paths=\"a/\" blocked_by=\"item-nowhere\" -->\n- **c1:** x\n"},
@@ -376,7 +373,7 @@ func TestSyncUpdatesAnUnjudgedDefinitionAndKeepsStateAndRank(t *testing.T) {
 	if n := count(t, s, `SELECT count(*) FROM events WHERE kind = 'item.update'`); n != 1 || count(t, s, `SELECT count(*) FROM events`) != events+1 {
 		t.Fatalf("the update was not recorded as one item.update event")
 	}
-	if got := column(t, s, `SELECT state || '|' || rank || '|' || seat || '|' || title || '|' || allowed_paths FROM items`); got != `blocked|a|build|Build the thing well|["tools/thing/","tests/thing/"]` {
+	if got := column(t, s, `SELECT state || '|' || rank || '|' || seat || '|' || title || '|' || allowed_paths FROM items`); got != `blocked|a|build|Build the thing well|` {
 		t.Fatalf("stored %s", got)
 	}
 	if n := count(t, s, `SELECT count(*) FROM item_criteria WHERE item_id = 'item-build-thing'`); n != 2 {
@@ -521,13 +518,13 @@ func TestSyncOfNoBlocksIsAValidResult(t *testing.T) {
 }
 
 // A path that does not exist yet is a warning — the slice may create it — never a finding.
-func TestSyncWarnsOnAMissingPath(t *testing.T) {
+func TestSyncIgnoresLegacyPathValues(t *testing.T) {
 	root := scratch(t)
 	if err := os.MkdirAll(filepath.Join(root, "tools", "thing"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	s := syncStore(t)
-	report := runSync(t, s, root, doc("docs/a.md", strings.Replace(goodBlock, `paths="tools/thing/"`, `paths="tools/thing/,tools/new/"`, 1)))
+	report := runSync(t, s, root, doc("docs/a.md", strings.Replace(goodBlock, `paths="tools/thing/"`, `paths="tools/*,.,tools/new/"`, 1)))
 	if len(report.Findings) != 0 || report.CreatedCount != 1 {
 		t.Fatalf("findings %v created %v", report.Findings, report.Created)
 	}
@@ -537,7 +534,7 @@ func TestSyncWarnsOnAMissingPath(t *testing.T) {
 			pathWarnings = append(pathWarnings, warning)
 		}
 	}
-	if len(pathWarnings) != 1 || !strings.Contains(pathWarnings[0].Message, "tools/new/") {
+	if len(pathWarnings) != 0 {
 		t.Fatalf("path warnings %+v", pathWarnings)
 	}
 }
@@ -561,8 +558,8 @@ func TestSyncOverThisRepositorysDocuments(t *testing.T) {
 	if n := count(t, s, `SELECT count(*) FROM items`); n != report.CreatedCount {
 		t.Fatalf("the store holds %d items and the report created %d", n, report.CreatedCount)
 	}
-	if n := count(t, s, `SELECT count(*) FROM items WHERE allowed_paths = '' OR allowed_paths = '[]'`); n != 0 {
-		t.Fatalf("%d synced item(s) carry no fence", n)
+	if n := count(t, s, `SELECT count(*) FROM items WHERE allowed_paths NOT IN ('', '[]')`); n != 0 {
+		t.Fatalf("%d synced item(s) still carry a fence", n)
 	}
 	if n := count(t, s, `SELECT count(*) FROM items i WHERE NOT EXISTS (SELECT 1 FROM item_criteria c WHERE c.item_id = i.item_id)`); n != 0 {
 		t.Fatalf("%d synced item(s) carry no criterion", n)
@@ -583,7 +580,7 @@ func TestSyncUpdatesADefinitionWhoseVerdictsWereWithdrawn(t *testing.T) {
 	s := syncStore(t)
 	runSync(t, s, "", doc("docs/a.md", goodBlock))
 	exec(t, s, `UPDATE item_criteria SET state = 'done' WHERE item_id = 'item-build-thing'`)
-	changed := strings.Replace(goodBlock, `paths="tools/thing/"`, `paths="tools/thing/,tests/thing/"`, 1)
+	changed := strings.Replace(goodBlock, "Build the thing", "Build the replacement", 1)
 	if report := runSync(t, s, "", doc("docs/a.md", changed)); len(report.Frozen) != 1 {
 		t.Fatalf("a judged definition is not frozen: %+v", report.Frozen)
 	}
@@ -617,7 +614,7 @@ func TestSyncUpdatesADefinitionWhoseVerdictsWereWithdrawn(t *testing.T) {
 	if len(report.Frozen) != 0 || strings.Join(report.Updated, ",") != "item-build-thing" {
 		t.Fatalf("after the withdrawal: updated %v frozen %+v", report.Updated, report.Frozen)
 	}
-	if got := column(t, s, `SELECT allowed_paths FROM items WHERE item_id = 'item-build-thing'`); got != `["tools/thing/","tests/thing/"]` {
+	if got := column(t, s, `SELECT title FROM items WHERE item_id = 'item-build-thing'`); got != "Build the replacement" {
 		t.Fatalf("paths %s", got)
 	}
 }

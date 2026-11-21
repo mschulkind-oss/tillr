@@ -14,7 +14,7 @@
 # prefix, so `## Settled decisions — do not redesign` satisfies `Settled decisions`.
 REQUIRED_HEADINGS='Header
 Task
-Fence
+Scope and boundaries
 Seats
 Settled decisions
 Facts carried
@@ -132,6 +132,10 @@ Finishing"
         fi
     fi
     while IFS= read -r heading; do
+        # Runs staged before the fence was retired may still resume with an old brief.
+        if [ "$heading" = 'Scope and boundaries' ] && printf '%s\n' "$template_text" | grep -qx '## Fence'; then
+            continue
+        fi
         if ! printf '%s\n' "$template_text" | grep -q "^## $heading"; then
             refuse "the brief '$1' has no '## $heading' section: $contract are load-bearing, and one missing is a brief the driver must not dispatch"
         fi

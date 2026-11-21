@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -20,7 +19,7 @@ import (
 
 // A filed request is an item the owner or an operator files straight into the queue from
 // the command line: its words are the whole statement of the work, it names an existing
-// workflow and a fence, and it never has a document block. The store holds the words
+// workflow, and it never has a document block. The store holds the words
 // (request_words), so the record is the item's only declaration and sync never counts it
 // as unshared (see StoreDeclared in sync.go). The face is `tillr item request`.
 
@@ -39,7 +38,7 @@ const MaxRequestCriteria = 8
 // requestCriteria are every request's criteria. They judge the work against the words and
 // the repository's rules, and never ask for an item block.
 var requestCriteria = []string{
-	"The change does what the request's words ask, within the item's fence, and nothing the words do not ask for is changed.",
+	"The change does what the request's words ask, and nothing the words do not ask for is changed.",
 	"The change is verified the way this repository's rules require for its kind: new or changed behavior has a test in the same commit, and each changed Markdown document passes `uvx vantage-check` on that file.",
 	"No `<!-- tillr: item … -->` comment is added, edited or relied on: the item finishes with no document block.",
 	"Nothing only the owner can decide is guessed: such a decision is left to the owner, with a question and its options, not settled in the change.",
@@ -122,25 +121,7 @@ func normalizeRequest(f *RequestFiling) error {
 	if !WorkflowRefValid(f.Workflow) {
 		return Rejectionf("workflow-reference", "", "%q is not a workflow reference of the form <name>@v<N>", f.Workflow)
 	}
-	if len(f.Paths) == 0 {
-		return Rejectionf("fence-required", "", "a request needs at least one --path: the repo-relative prefixes its change may touch")
-	}
-	seen := map[string]bool{}
-	paths := []string{}
-	for _, p := range f.Paths {
-		clean, ok := cleanRequestPath(p)
-		if !ok {
-			return Rejectionf("fence-wildcard", "", "--path %q is not a plain repo-relative prefix", filepath.ToSlash(strings.TrimSpace(p)))
-		}
-		if !seen[clean] {
-			seen[clean] = true
-			paths = append(paths, clean)
-		}
-	}
-	if err := checkAllowedPaths("", paths); err != nil {
-		return err
-	}
-	f.Paths = paths
+	f.Paths = nil
 	criteria := []string{}
 	for _, c := range f.Criteria {
 		c = strings.TrimSpace(c)
@@ -191,7 +172,7 @@ func FileRequest(ctx context.Context, tx *store.Tx, f RequestFiling) (record.Env
 	err := tx.Reader().QueryRow(`SELECT item_id, input_hash FROM request_words WHERE words_hash=?`, hash).Scan(&id, &held)
 	if err == nil {
 		if held != input {
-			return record.Envelope{}, Rejectionf("request-differs", id, "these words already filed %s with a different title, seat, workflow, fence, criteria, express choice or dependencies; change that item, or file different words", id)
+			return record.Envelope{}, Rejectionf("request-differs", id, "these words already filed %s with a different title, seat, workflow, criteria, express choice or dependencies; change that item, or file different words", id)
 		}
 		return queuePosition(tx.Reader(), "item.request", id, f.At)
 	}
@@ -262,64 +243,6 @@ func RequestWords(r *store.Reader, id string) ([]byte, error) {
 		return nil, Internalf("reading item %s's request words: %v", id, err)
 	}
 	return words, nil
-}
-
-func cleanRequestPath(raw string) (string, bool) {
-	p := filepath.ToSlash(strings.TrimSpace(raw))
-	clean := path.Clean(p)
-	if p == "" || clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains("/"+p+"/", "/../") {
-		return "", false
-	}
-	if strings.HasSuffix(p, "/") && clean != "/" {
-		clean += "/"
-	}
-	return clean, true
-}
-
-func isDesignDocPath(p string) bool {
-	lower := strings.ToLower(p)
-	if lower == "docs" || lower == "docs/" {
-		return true
-	}
-	if lower == "docs/design" || strings.HasPrefix(lower, "docs/design/") {
-		return true
-	}
-	if strings.HasSuffix(lower, ".md") || strings.HasSuffix(lower, ".markdown") {
-		stem := strings.TrimSuffix(strings.TrimSuffix(path.Base(lower), ".markdown"), ".md")
-		for _, token := range strings.FieldsFunc(stem, func(r rune) bool {
-			return r == '-' || r == '_' || r == '.' || r == ' '
-		}) {
-			if token == "design" || token == "redesign" {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// RequestDesignPathNotice returns a notice when a build-seat request's allowed paths
-// include docs/, docs/design/, or a file named like a design document, or empty string
-// otherwise. It is a notice, never a refusal.
-func RequestDesignPathNotice(seat string, paths []string) string {
-	if seat == "" {
-		seat = "build"
-	}
-	if seat != "build" {
-		return ""
-	}
-	var flagged []string
-	seen := map[string]bool{}
-	for _, raw := range paths {
-		p, ok := cleanRequestPath(raw)
-		if ok && isDesignDocPath(p) && !seen[p] {
-			seen[p] = true
-			flagged = append(flagged, p)
-		}
-	}
-	if len(flagged) == 0 {
-		return ""
-	}
-	return fmt.Sprintf("tillr-item: notice: build-seat request includes design-document path(s) (%s); consider filing a separate design-seat item (--seat design) for design changes", strings.Join(flagged, ", "))
 }
 
 // The words are kept apart from the item definition, which sync and placement may rewrite;

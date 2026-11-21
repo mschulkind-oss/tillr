@@ -760,34 +760,29 @@ func TestPlanDispatchesTwoItemsWithDisjointFences(t *testing.T) {
 	}
 }
 
-// An item that names no fence is refused, not deferred: it would fence nothing, so its
-// change cannot be shown to be in scope. The alternative — treating no fence as
-// overlapping everything — would serialise the whole queue behind one blanket.
-func TestPlanRefusesAnItemThatNamesNoFence(t *testing.T) {
+// An item that names no fence is dispatched: items no longer carry allow-lists (owner ruling 2026-11-19).
+func TestPlanDispatchesAnItemThatNamesNoFence(t *testing.T) {
 	storePath := fixture(t, itemRecordFenced("item_041", "in-queue", "", nil))
 	tickPath := tick(t, "2026-11-14T00:00:00Z", []string{"lane-1"}, 1, policy(t, "/bin/true"))
 
 	got := decisionFor(t, plan(t, storePath, tickPath), "item_041")
-	if got.Action != drain.ActionHold || got.Reason != drain.ReasonNoFence {
-		t.Fatalf("the decision is %q / %q, want hold / %s", got.Action, got.Reason, drain.ReasonNoFence)
+	if got.Action != drain.ActionDispatch {
+		t.Fatalf("the decision is %q / %q, want dispatch", got.Action, got.Reason)
 	}
-	if got.RunRequest != nil {
-		t.Fatalf("a refused item carries a run_request")
+	if got.RunRequest == nil {
+		t.Fatalf("a dispatched item lacks a run_request")
 	}
 }
 
-// A fence naming the repository root fences nothing either, and it is refused for the same
-// reason. The item face refuses the spelling when an item is applied, so this rewrites the
-// stored column directly: a plan reads a store rather than an apply, and a hand-edited or
-// pre-column row can still carry one.
-func TestPlanRefusesAFenceThatNamesTheRepositoryRoot(t *testing.T) {
+// An item whose stored allowed_paths contains "." is still dispatched: existing items' lists are ignored.
+func TestPlanDispatchesAnItemWithRootAllowedPaths(t *testing.T) {
 	storePath := fixture(t, itemRecord("item_041", "in-queue"))
 	setFence(t, storePath, "item_041", ".")
 	tickPath := tick(t, "2026-11-14T00:00:00Z", []string{"lane-1"}, 1, policy(t, "/bin/true"))
 
 	got := decisionFor(t, plan(t, storePath, tickPath), "item_041")
-	if got.Action != drain.ActionHold || got.Reason != drain.ReasonNoFence {
-		t.Fatalf("the decision is %q / %q, want hold / %s", got.Action, got.Reason, drain.ReasonNoFence)
+	if got.Action != drain.ActionDispatch {
+		t.Fatalf("the decision is %q / %q, want dispatch", got.Action, got.Reason)
 	}
 }
 

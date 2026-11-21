@@ -87,7 +87,7 @@ truncated, because the killed segment's transcript is the evidence the resume co
 A request may supply `resume_prompt` to replace the default interrupted-session instruction;
 it is ignored on ordinary fresh executions and also included when an adapter requires a fresh session
 for the continuation. The drain uses it to ask an exited build worker to finish verification
-and commit existing fenced work, without changing the staged brief.
+and commit existing work, without changing the staged brief.
 
 The drain can instead set `session_turn` after a worker refusal: a new run id and
 normal allocation in the same retained harness session. Its first message includes

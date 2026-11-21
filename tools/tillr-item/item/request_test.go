@@ -129,8 +129,8 @@ func TestFileRequestFilesEachShape(t *testing.T) {
 			}); err != nil || express != 1 {
 				t.Fatalf("express=%d err=%v", express, err)
 			}
-			if !reflect.DeepEqual(shown.AllowedPaths, tc.filing.Paths) {
-				t.Fatalf("fence %v, want %v", shown.AllowedPaths, tc.filing.Paths)
+			if len(shown.AllowedPaths) != 0 {
+				t.Fatalf("allowed_paths %v, want empty", shown.AllowedPaths)
 			}
 			if want := 4 + len(tc.filing.Criteria); len(shown.Criteria) != want {
 				t.Fatalf("%d criteria, want %d: %s", len(shown.Criteria), want, raw)
@@ -250,23 +250,19 @@ func TestFileRequestRefusesBeforeWriting(t *testing.T) {
 		filing item.RequestFiling
 		rule   string
 	}{
-		"no-words":       {with(func(f *item.RequestFiling) { f.Words = []byte(" \n\t") }), "words-empty"},
-		"not-text":       {with(func(f *item.RequestFiling) { f.Words = []byte{0xff, 0xfe} }), "words-not-text"},
-		"no-title":       {with(func(f *item.RequestFiling) { f.Title = "  " }), "title-required"},
-		"two-lines":      {with(func(f *item.RequestFiling) { f.Title = "one\ntwo" }), "title-required"},
-		"title-braces":   {with(func(f *item.RequestFiling) { f.Title = "a {{TASK}}" }), "title-braces"},
-		"no-fence":       {with(func(f *item.RequestFiling) { f.Paths = nil }), "fence-required"},
-		"absolute":       {with(func(f *item.RequestFiling) { f.Paths = []string{"/etc/passwd"} }), "fence-wildcard"},
-		"traversal":      {with(func(f *item.RequestFiling) { f.Paths = []string{"docs/../../x"} }), "fence-wildcard"},
-		"wildcard":       {with(func(f *item.RequestFiling) { f.Paths = []string{"docs/*.md"} }), "fence-wildcard"},
-		"whole-tree":     {with(func(f *item.RequestFiling) { f.Paths = []string{"."} }), "fence-wildcard"},
-		"needs-args":     {with(func(f *item.RequestFiling) { f.Workflow = "doc-triage@v1" }), "workflow-needs-args"},
-		"no-such":        {with(func(f *item.RequestFiling) { f.Workflow = "no-such@v1" }), "workflow-missing"},
-		"bad-ref":        {with(func(f *item.RequestFiling) { f.Workflow = "Planned" }), "workflow-reference"},
-		"no-default":     {with(func(f *item.RequestFiling) { f.Seat, f.Workflow = "verify", "" }), "workflow-required"},
-		"many-criteria":  {with(func(f *item.RequestFiling) { f.Criteria = []string{"a", "b", "c", "d", "e"} }), "too-many-criteria"},
-		"empty-criteria": {with(func(f *item.RequestFiling) { f.Criteria = []string{" "} }), "criterion-empty"},
-		"unknown-after":  {with(func(f *item.RequestFiling) { f.Destination = item.Destination{After: "item-nope"} }), "unknown-item"},
+		"no-words":         {with(func(f *item.RequestFiling) { f.Words = []byte(" \n\t") }), "words-empty"},
+		"not-text":         {with(func(f *item.RequestFiling) { f.Words = []byte{0xff, 0xfe} }), "words-not-text"},
+		"no-title":         {with(func(f *item.RequestFiling) { f.Title = "  " }), "title-required"},
+		"two-lines":        {with(func(f *item.RequestFiling) { f.Title = "one\ntwo" }), "title-required"},
+		"title-braces":     {with(func(f *item.RequestFiling) { f.Title = "a {{TASK}}" }), "title-braces"},
+		"no-fence-allowed": {with(func(f *item.RequestFiling) { f.Paths = nil }), ""},
+		"needs-args":       {with(func(f *item.RequestFiling) { f.Workflow = "doc-triage@v1" }), "workflow-needs-args"},
+		"no-such":          {with(func(f *item.RequestFiling) { f.Workflow = "no-such@v1" }), "workflow-missing"},
+		"bad-ref":          {with(func(f *item.RequestFiling) { f.Workflow = "Planned" }), "workflow-reference"},
+		"no-default":       {with(func(f *item.RequestFiling) { f.Seat, f.Workflow = "verify", "" }), "workflow-required"},
+		"many-criteria":    {with(func(f *item.RequestFiling) { f.Criteria = []string{"a", "b", "c", "d", "e"} }), "too-many-criteria"},
+		"empty-criteria":   {with(func(f *item.RequestFiling) { f.Criteria = []string{" "} }), "criterion-empty"},
+		"unknown-after":    {with(func(f *item.RequestFiling) { f.Destination = item.Destination{After: "item-nope"} }), "unknown-item"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			s := syncStore(t)
@@ -279,6 +275,12 @@ func TestFileRequestRefusesBeforeWriting(t *testing.T) {
 				})
 			} else {
 				_, err = fileRequest(t, s, root, tc.filing)
+			}
+			if tc.rule == "" {
+				if err != nil {
+					t.Fatalf("want success, got %v", err)
+				}
+				return
 			}
 			if rej, ok := item.RejectionOf(err); !ok || rej.Rule != tc.rule {
 				t.Fatalf("want %s, got %v", tc.rule, err)

@@ -136,31 +136,36 @@ func TestNodeScopeUsesItemExpansion(t *testing.T) {
 			t.Fatalf("missing companion %s in %v", want, scope)
 		}
 	}
-	if err := w.checkScopes([]string{"tools/tillr-drain/drain/workflow.go"}); err == nil || !strings.Contains(err.Error(), ReasonNodeScopeOutsideFence) {
-		t.Fatalf("broader scope accepted: %v", err)
-	}
 }
 
 func TestNodeScopeOutsideFenceHoldsBeforeDispatch(t *testing.T) {
-	for _, scope := range []string{"outside/", "tools/item-a/../../outside/", "tools/tillr-view/"} {
-		t.Run(scope, func(t *testing.T) {
-			f, l, steps := workflowLoopFixture(t, "")
-			raw := strings.Replace(workflowFixture, `"access":"write"`, `"access":"write","write_scope":["`+scope+`"]`, 1)
-			writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/scout-then-build@v1.json"), raw)
-			found := false
-			for _, p := range mustPlan(t, l) {
-				if p.decision.ItemID == "item-a" {
-					found = true
-					if p.decision.Action != ActionHold || !strings.HasPrefix(p.decision.Reason, "node-scope-outside-fence:") || !strings.Contains(p.decision.Reason, "work") || p.decision.RunRequest != nil {
-						t.Fatalf("not held: %+v", p.decision)
-					}
+	t.Run("invalid traversal holds", func(t *testing.T) {
+		f, l, steps := workflowLoopFixture(t, "")
+		raw := strings.Replace(workflowFixture, `"access":"write"`, `"access":"write","write_scope":["tools/item-a/../../outside/"]`, 1)
+		writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/scout-then-build@v1.json"), raw)
+		found := false
+		for _, p := range mustPlan(t, l) {
+			if p.decision.ItemID == "item-a" {
+				found = true
+				if p.decision.Action != ActionHold || !strings.HasPrefix(p.decision.Reason, "node-scope-outside-fence:") || !strings.Contains(p.decision.Reason, "work") || p.decision.RunRequest != nil {
+					t.Fatalf("not held: %+v", p.decision)
 				}
 			}
-			if !found || len(steps.runs) != 0 {
-				t.Fatal("missing hold or ran a node")
+		}
+		if !found || len(steps.runs) != 0 {
+			t.Fatal("missing hold or ran a node")
+		}
+	})
+	t.Run("old item fence ignored", func(t *testing.T) {
+		f, l, _ := workflowLoopFixture(t, "")
+		raw := strings.Replace(workflowFixture, `"access":"write"`, `"access":"write","write_scope":["outside/"]`, 1)
+		writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/scout-then-build@v1.json"), raw)
+		for _, p := range mustPlan(t, l) {
+			if p.decision.ItemID == "item-a" && p.decision.Action == ActionHold {
+				t.Fatalf("explicit node write_scope held by retired item allowed_paths: %+v", p.decision)
 			}
-		})
-	}
+		}
+	})
 }
 
 type scopedWorkflowSteps struct {
@@ -205,10 +210,9 @@ func (s *scopedWorkflowSteps) Run(ctx context.Context, req run.Request) (run.Rec
 	if err != nil {
 		return run.Record{}, "", err
 	}
-	_, fenceBlock, ok := strings.Cut(string(brief), "## Fence\n")
-	fenceBlock, _, _ = strings.Cut(fenceBlock, "## Settled decisions")
+	_, fenceBlock, ok := strings.Cut(string(brief), "This node may write only these paths:\n")
 	if !ok || !strings.Contains(fenceBlock, wantFence) || strings.Contains(fenceBlock, prefix+"tools/item-a/\n") {
-		s.t.Fatalf("node fence not in brief: %s", fenceBlock)
+		s.t.Fatalf("node fence not in brief: %s", brief)
 	}
 	if s.escape && n == 1 {
 		dir = "two"
@@ -275,7 +279,7 @@ func TestNodeScopeOnNewerTrunk(t *testing.T) {
 	runGit(t, worktree, "rm", "outside.txt")
 	runGit(t, worktree, "commit", "--amend", "-q", "--no-edit")
 	candidate.HeadSHA = runGit(t, worktree, "rev-parse", "HEAD")
-	if escape, err := l.fenceViolationAt(context.Background(), candidate, fence); err != nil || !strings.Contains(escape, "outside.txt is outside allowed_paths") {
+	if escape, err := l.fenceViolationAt(context.Background(), candidate, fence); err != nil || !strings.Contains(escape, "outside.txt is outside node write_scope") {
 		t.Fatalf("worker's outside path was not refused: %q / %v", escape, err)
 	}
 }
@@ -401,8 +405,8 @@ func TestNodeScopeSerialBoundaries(t *testing.T) {
 				t.Fatalf("item exit used last node fence: %s %v", escape, err)
 			}
 			writeForkFile(t, filepath.Join(f.laneRoot, "lane-1", ItemFenceFile), prefix+"tools/item-a/one/\n")
-			if escape, err := l.fenceViolation(context.Background(), candidate); err != nil || !strings.Contains(escape, "tools/item-a/two/result.txt") {
-				t.Fatalf("full-item exit check did not enforce item fence: %s / %v", escape, err)
+			if escape, err := l.fenceViolation(context.Background(), candidate); err != nil || escape != "" {
+				t.Fatalf("full-item exit check enforced retired item fence: %s / %v", escape, err)
 			}
 			if mode == "fork" {
 				if steps.targets[0] != steps.fork || runGit(t, f.root, "rev-parse", "refs/heads/patch/pi") != steps.heads[1] {

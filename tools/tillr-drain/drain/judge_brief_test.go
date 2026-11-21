@@ -71,7 +71,11 @@ func TestJudgeBriefScopeAndRefusalHistory(t *testing.T) {
 	if strings.Contains(brief, heading) || strings.Contains(brief, "first finding") {
 		t.Fatal("history should not appear after only one candidate refusal")
 	}
+	if !strings.Contains(brief, "Changed paths ("+c.BaseSHA+".."+c.HeadSHA+"):\ncandidate.txt\n") {
+		t.Fatalf("judge did not receive the pinned changed paths:\n%s", brief)
+	}
 	for _, want := range []string{
+		"Name any changed path that the item's words do not account for.",
 		"A refusal must rest on the item's words or criteria or a regression this change introduces in existing behavior.",
 		"Report defects outside that scope as proposed follow-ups, not refusals.",
 		"If only the owner can decide whether a finding is in scope, use a blocked verdict with waiter owner and state the question and options.",
