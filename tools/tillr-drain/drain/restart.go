@@ -12,9 +12,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/mschulkind-oss/tillr-drain/alarms"
 	"github.com/mschulkind-oss/tillr-drain/restart"
-	"github.com/mschulkind-oss/tillr/record"
 )
 
 // StopRestarted is reachable only through a test replacement that returns. Real exec
@@ -32,22 +30,9 @@ type RestartConfig struct {
 
 func (l *Loop) restarter() *restart.Restarter {
 	rc := l.cfg.Restart
-	check := rc.Check
-	if check != nil {
-		check = func(ctx context.Context, executable string) error {
-			err := rc.Check(ctx, executable)
-			var exit *ExitError
-			if errors.As(err, &exit) && ExitCode(err) == record.ExitIncompatible {
-				if roll, readErr := readSchemaRoll(schemaRollDir(executable, DiskDigest(executable))); readErr == nil {
-					l.alarmStoreRoll(ctx, roll.Commit, "restart store check", err)
-				}
-			}
-			return err
-		}
-	}
 	return &restart.Restarter{Store: l.cfg.Store, Role: restart.RoleDrain,
 		Running:    restart.Build{Line: l.build.String(), Digest: l.build.Digest},
-		Executable: rc.Executable, Disk: DiskDigest, Check: check,
+		Executable: rc.Executable, Disk: DiskDigest, Check: rc.Check,
 		Candidate: restart.LauncherCandidate(rc.Executable), Now: l.cfg.Now}
 }
 
@@ -63,9 +48,6 @@ func (l *Loop) adoptRestart(ctx context.Context) error {
 		PID: os.Getpid(), At: l.cfg.Now().UTC(),
 	}); err != nil {
 		return err
-	}
-	if err := alarms.ClearStoreRollFallback(l.cfg.Store); err != nil {
-		l.reportf("loop: could not clear the store roll alarm file: %v\n", err)
 	}
 	adopted, err := l.restarter().Adopt(ctx)
 	if err != nil {

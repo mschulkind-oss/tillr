@@ -48,26 +48,6 @@ func Open(ctx context.Context, path string, create bool, options ...OpenOption) 
 	return open(ctx, path, create, create, options...)
 }
 
-// CheckMigration tries the migration on the existing WAL store under its writer
-// lock and rolls it back, even on success. A replacement can check a lower schema
-// without publishing a version that the still-running loop cannot write.
-func CheckMigration(ctx context.Context, path string) error {
-	s, err := Open(ctx, path, false)
-	if err != nil {
-		return err
-	}
-	defer s.Close()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("store: beginning the migration check: %w", err)
-	}
-	defer tx.Rollback()
-	if err := migrate(ctx, tx); err != nil {
-		return err
-	}
-	return tx.Rollback()
-}
-
 // open is Open with creating a missing store and migrating it separated: a checkpoint
 // owner that starts before any store exists creates the empty WAL database and leaves the
 // migration to the program that then opens it with create (CreateAndOwnCheckpoints).
