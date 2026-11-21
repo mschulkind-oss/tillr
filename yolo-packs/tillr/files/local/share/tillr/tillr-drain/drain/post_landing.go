@@ -129,19 +129,10 @@ func (l *Loop) afterLandingCandidate(ctx context.Context, candidate Candidate, t
 			if l.gatePolicy.LandingStrategy == "after-merge" {
 				program, args = "env", append([]string{"TILLR_ROLL_VERIFICATION=after-merge", program}, args...)
 			}
-			output, err := actionCommand(ctx, l.cfg.Root, program, args...)
+			_, err := actionCommand(ctx, l.cfg.Root, program, args...)
 			if err == nil {
-				roles := []string{restart.RoleView, restart.RoleDrain}
-				for _, line := range strings.Split(output, "\n") {
-					if line == SchemaRollCheckLine {
-						// The replacement requests the view after activating its binaries.
-						roles = []string{restart.RoleDrain}
-						break
-					}
-				}
-				for _, role := range roles {
+				for _, role := range []string{restart.RoleView, restart.RoleDrain} {
 					if _, err = restart.File(ctx, l.cfg.Store, role, time.Now()); err != nil {
-						l.alarmStoreRoll(ctx, tip, role+" restart request", err)
 						break
 					}
 				}

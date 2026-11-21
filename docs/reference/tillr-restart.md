@@ -9,9 +9,6 @@ covers:
   - tools/tillr/settings/settings.go
   - tools/tillr-drain/restart/restart.go
   - tools/tillr-drain/drain/restart.go
-  - tools/tillr-drain/drain/schema_roll.go
-  - tools/tillr-drain/alarms/store_roll.go
-  - tools/tillr/store/open.go
   - tools/tillr-drain/drain/restart_work.go
   - tools/tillr-drain/drain/restart_examination.go
   - tools/tillr-drain/drain/restart_judge.go
@@ -144,12 +141,11 @@ Before giving up its process image, the running loop runs the candidate binary
 with `--check` appended to its original CLI flags (`RestartConfig.Check`,
 [`D-RT5`](#why-its-this-way)). `tillr-drain loop --check` validates CLI flags,
 [`.tillr.toml`](../../.tillr.toml), the backend policy, the store's schema
-version, store hooks, and configured step-program executables (`steps.CheckPrograms`),
-then exits `0` without starting a pass. The store check is read-only at the
-current version. For a lower version it tries the migration in a transaction
-and rolls it back; a newer or unreadable schema is refused. Any non-zero exit
-records `"refused"` on the restart request with the candidate's diagnostic
-output and leaves the current loop running.
+version (`version == store.SchemaVersion`, opened read-only without migrating),
+store hooks, and configured step-program executables (`steps.CheckPrograms`),
+then exits `0` without starting a pass. Any non-zero exit records `"refused"` on
+the restart request with the candidate's diagnostic output and leaves the
+current loop running.
 
 ### Safe replacement boundaries inside `tillr-drain loop`
 
@@ -366,12 +362,11 @@ When `[roll] command` is non-empty, `afterLandingCandidate` checks the candidate
    `--root`. In this repository `.tillr.toml` sets
    `command = "python3 tools/tillr-roll/tillr-roll.py --no-request"`: the roll
    script tests, builds, smoke-checks, and swaps the binaries without waiting on
-   itself, and `rollAction` then files the restart requests in the store
-   (`restart.File`). It normally requests both roles; for a
-   [schema upgrade](#store-schema-upgrades) it requests only drain, and the new
-   drain requests view after migration. When preflight refuses a roll, the
-   loop keeps running the old build and records the failure. Store failures
-   raise the `store-roll-blocked` alarm.
+   itself, and `rollAction` then files `"view"` and `"drain"` restart requests
+   in the store (`restart.File`). When the roll fails, the loop logs
+   `loop: post-landing roll at <sha> failed: ...` and keeps running;
+   `tillr-roll.py` also appends `drain.roll-failed`, surfaced in
+   `tillr view waiting`.
 2. **Pi fork roll (`piRollAction`):** When `candidate.BaseRef` is
    `refs/heads/patch/pi` (`piForkPatchRef`) or a trunk landing touches
    `yolo-packs/pi-fork/` or `bin/pi-forks.list` (`piSeriesPaths`),
@@ -472,40 +467,17 @@ directory:
 - **Smoke check and atomic swap:** Compiles all eight binaries (`tillr`,
   `tillr-drain`, `tillr-gate`, `tillr-item`, `tillr-land`, `tillr-run`,
   `tillr-store`, `tillr-view`) into a staging directory, runs `--help` on each
-  and `tillr-drain loop --check` against `.tillr/state.db`. It installs binaries
-  into the jail's durable `bin/` directory with `os.replace`; on a schema
-  upgrade, only the replacement drain is exposed before the handoff. A failed
-  preflight leaves the installed binaries untouched and appends
-  `drain.roll-failed`.
+  and `tillr-drain loop --check` against `.tillr/state.db`, and atomically
+  installs them into the jail's durable `bin/` directory via `os.replace`. On
+  failure,
+  leaves existing binaries untouched and appends `drain.roll-failed` (`mover =
+  "operator"`).
 - **Restart handoff and verification:** Unless `--no-request` is passed, runs
   `tillr-drain restart --root <root> --wait` and `tillr-view restart --root
-  <root> --wait` concurrently for same-schema rolls. On an upgrade it waits
-  for drain to migrate and restart before waiting on view. It waits up to `5s`
-  for `drain.build-started` sequence numbers to advance on any `"restarted"`
-  role. It also supports `--pi` and `--pi-extensions` to rebuild the durable pi
-  fork and extension directories without touching Go binaries.
-
-### Store schema upgrades
-
-A landing that raises `store.SchemaVersion` follows the normal automatic roll.
-The staged drain's `loop --check` tests the migration without committing it.
-The roller then exposes only the replacement drain; the other programs stay
-staged so they cannot migrate the store while the old loop is still running.
-The old loop checks the candidate and replaces itself at its normal safe
-boundary. The new loop commits the migration on its first writable startup,
-promotes the staged programs, then publishes its build and acknowledges the
-restart. It requests the view upgrade only after migration. The keeper and
-worker processes are not stopped: a worker already running keeps its lease
-and store connection, and the new loop takes up its recorded result. Migrations
-must preserve the writes those already-running workers use to record their results.
-
-If the store check fails, the old loop stays running. A store failure during
-preflight or migration raises `store-roll-blocked` in the loop's alarms (also
-read by `tillr view alarms` when the store is readable). The mover is the
-operator: resolve the named store problem, then retry with `just tillr-roll`.
-The alarm clears on a later drain build-started event. If SQLite cannot append
-the event, the loop reads the alarm from `<store>.roll-alarm.json` instead; a
-later drain startup that publishes its build clears that file.
+  <root> --wait` concurrently, then waits up to `5s` for `drain.build-started`
+  sequence numbers to advance on any `"restarted"` role. Also supports `--pi`
+  and `--pi-extensions` to rebuild the durable pi fork and extension directories
+  without touching Go binaries.
 
 ### `tools/tillr-roll/tillr-keep` (`just tillr-keep` and `just tillr-restart`)
 
@@ -532,6 +504,14 @@ lightweight supervisor holding `<root>/.tillr/keeper.lock`:
 
 ## Invariants and warnings
 
+- **Store schema bumps cannot cross `tillr-drain loop --check` in place.** Both
+  `tillr-roll.py` and `gateRestart` run `tillr-drain loop --check` before
+  installing or `exec`ing a new binary, and `--check` opens SQLite read-only and
+  requires `version == store.SchemaVersion` (`tools/tillr-drain/main.go`). A
+  change that increments `store.SchemaVersion` will be refused by `--check`
+  against an unmigrated live store (`ExitIncompatible`); apply schema upgrades
+  via `just tillr-restart` so the stopped loop's next writable `store.Open` runs
+  the schema migration cleanly.
 - **`syscall.Exec` preserves PID and process start time.** Never infer across a
   restart that an examination or lease owner died by checking `/proc/<pid>/stat`
   alone; any in-memory ownership held by the loop must either live on a
@@ -605,7 +585,7 @@ to [`queue-persistence-ruling.md`](../design/queue-persistence-ruling.md)
 | D-RT2 | Record restart requests as durable store events (`drain.restart-request`) addressed to a role rather than OS signals *(designer decision, 2026-11-15)* | Signals require PID discovery, race with process startup or exit, carry no answer payload, and are lost when the target process is temporarily down. |
 | D-RT3 | Replace `tillr-drain loop` in place immediately via `syscall.Exec` so newly dispatched lanes run on the new build while older gap-capable sessions pause and resume one by one *(owner ruling, 2026-11-15)* | Waiting for all active runs to pause before `exec` would make every binary upgrade as slow as the slowest in-flight tool command across all lanes. |
 | D-RT4 | Pause gap-capable sessions between tool calls (`SIGUSR1`), applying a `120s` straggler bound only on bounded pauses (operator or scale-down) and **no** straggler bound on build migration *(owner ruling, 2026-11-15; amended 2026-11-18 so no time limit fails work, `d6c6cc238`)* | Resuming between tool calls wastes zero tokens or command work; operator pauses need a deterministic upper bound, while an automatic tillr upgrade must never kill a legitimate multi-minute test suite. |
-| D-RT5 | Validate the replacement binary on disk with `tillr-drain loop --check` (and `serve ... --check` for `tillr-view`) before relinquishing the running process *(designer decision, 2026-11-15)* | Catches broken flags, bad `.tillr.toml` edits, missing step programs, unsupported schemas, and failed trial migrations while the healthy loop is still serving and can report `"refused"`. |
+| D-RT5 | Validate the replacement binary on disk with `tillr-drain loop --check` (and `serve ... --check` for `tillr-view`) before relinquishing the running process *(designer decision, 2026-11-15)* | Catches broken flags, bad `.tillr.toml` edits, missing step programs, or unmigrated store schema mismatches while the healthy loop is still serving and can report `"refused"`. |
 | D-RT6 | Roll onto any landing that touches configured `roll.paths` automatically with no per-commit opt-out flag *(owner ruling, 2026-11-15)* | Every landed change must leave the system working; changes that must take effect together belong in a single commit rather than behind a deferred roll state. |
 | D-RT7 | Read repository-scoped automation from `.tillr.toml` with every default off and unknown keys refused *(owner ruling, 2026-11-15)* | Prevents other repositories from silently inheriting this repository's self-roll or autopush behavior and catches typos in configuration keys at startup. |
 | D-RT8 | Keep automatic `git push` optional, off by default, never forced, and non-blocking to the drain loop *(owner ruling, 2026-11-15)* | Remote network outages or diverged upstream branches must surface in `tillr view waiting` rather than halting local lane execution or overwriting remote history. |
