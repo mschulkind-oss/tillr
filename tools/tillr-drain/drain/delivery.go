@@ -224,14 +224,19 @@ func readDeliveries(r *store.Reader) (map[string]deliveryDecision, error) {
 	}
 	out := map[string]deliveryDecision{}
 	for _, e := range events {
-		if e.ObjectID == nil {
-			return nil, fmt.Errorf("delivery record has no item")
+		switch e.Kind {
+		case deliveryDecisionKind, deliveryPartialKind:
+			// A partial receipt includes the full decision. Events arrive in
+			// sequence order, so the latest record of either kind wins.
+			if e.ObjectID == nil {
+				return nil, fmt.Errorf("delivery record has no item")
+			}
+			var d deliveryDecision
+			if err := json.Unmarshal(e.Payload, &d); err != nil {
+				return nil, fmt.Errorf("reading delivery for %s: %w", *e.ObjectID, err)
+			}
+			out[*e.ObjectID] = d
 		}
-		var d deliveryDecision
-		if err := json.Unmarshal(e.Payload, &d); err != nil {
-			return nil, fmt.Errorf("reading delivery for %s: %w", *e.ObjectID, err)
-		}
-		out[*e.ObjectID] = d
 	}
 	return out, nil
 }
