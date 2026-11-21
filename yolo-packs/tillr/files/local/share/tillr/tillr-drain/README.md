@@ -1113,7 +1113,7 @@ resolves to the real repository's common directory.
 With `[push] what = "green"` in `.tillr.toml`, the advance of the pointer is also what the
 loop pushes: it sends the pointer's commit to the trunk's upstream branch (`<green sha>:<ref>`,
 never forced), so the remote never receives a commit the proof has not passed. Landings push
-nothing in this mode. A refused or timed-out push logs `loop: push of green <sha> failed (...)`,
+nothing in this mode. A failed push logs its outcome kind,
 shows in `tillr view waiting`, holds nothing, and is retried at the next green advance (and once
 at loop start) because "remote is behind green" is recomputed each time. `what = "tip"` pushes
 the trunk tip after each landing instead; `"none"` pushes nothing. The pre-push hook runs, and
@@ -1122,7 +1122,7 @@ it publishes fork patch branches at their local tips whatever the pushed commit 
 
 A push the remote refuses because it has moved (porcelain status `[rejected]` with `fetch first`,
 `non-fast-forward` or `stale info`) is told apart from every other failure (a server decline,
-a hook failure, an unreachable remote), and only it is acted on. The drain fetches the branch
+a hook failure, an unreachable remote), and only it triggers a fetch and replay. The drain fetches the branch
 and, under the landing lock, replays the unpublished trunk commits one by one onto the fetched
 tip: linear, no merge commit, never a forced push, authors and messages kept. It then moves the
 main checkout with `git reset --keep`, so a path the move changes that holds owner content
@@ -1138,6 +1138,14 @@ trusts every commit reachable from a pointer under that prefix: a commit another
 pushed under its own address does not hold landings with `trunk-foreign-identity`. The
 replayed local commits are not under the pointer, and a foreign commit made here still holds
 until `tillr-drain accept-identity`.
+
+Each `drain.post-landing-action` push event records a `kind` alongside the existing `detail`.
+`push-remote-declined` means the server returned `[remote rejected]`. A failed push that
+emits no ref status while a patch move awaits `tillr drain acknowledge-patch-move` records
+`push-patch-move-held`. Other failures record `push-failed`. The event keeps `since_ts` across
+failures until `push-ok`, and includes the last known `remote_tip` and unpublished green and
+trunk counts when available. The waiting view still reads `detail`.
+
 A failing check holds the pointer and is run alone at the pointer and by bisection on
 recorded landings in the range. Legacy span IDs retain their kind and label so replay
 uses the old program's selector vocabulary rather than confusing its stable report ID
