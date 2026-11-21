@@ -114,6 +114,11 @@ func (l *Loop) afterLandingCandidate(ctx context.Context, candidate Candidate, t
 		l.recordAction(ctx, "roll", tip, err)
 		return
 	}
+	l.rollChanged(ctx, r, changed, tip)
+}
+
+// rollChanged submits the deployment actions selected by NUL-separated paths.
+func (l *Loop) rollChanged(ctx context.Context, r settings.Roll, changed, tip string) {
 	if matchesRollPaths(changed, r.Paths) {
 		l.rollAction.submit(tip, func(tip string) {
 			// After-merge proof owns the suites for a landing. The deployment only
@@ -185,6 +190,10 @@ func (l *Loop) afterGreen(ctx context.Context, advanced string) {
 	}
 	l.pushAction.submit(advanced, func(string) {
 		green, err := l.pushGreenOnce(ctx, p)
+		// Proof, not publication, makes a roll due. Replay may have moved green.
+		if l.cfg.PostLanding.Roll.Command != "" {
+			l.flushPendingRemoteRoll(ctx, optionalCommit(ctx, l.cfg.Root, GreenRef))
+		}
 		if green != "" || err != nil {
 			l.recordPush(ctx, settings.PushGreen, green, err)
 		}
