@@ -535,38 +535,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			at: at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items, def), unproved: unproved,
 			designHistory: designHistory, inputs: inputs, inputDecisions: inputDecisions, works: works, attempts: attempts, nodeCounts: nodeCounts, requests: requests,
 		}
-		p.workerLanes = map[string]string{}
-		for _, row := range items {
-			if row.State != p.rules().Ready {
-				continue
-			}
-			if c, ok := conflicts[row.ItemID]; ok && c.Status != "answered" {
-				continue
-			}
-			if lane := p.returnedJudgeLane(row.ItemID, p.returnedEnding(row.ItemID)); lane != "" && !released[lane] && (row.Express || !isExpressLane(lane)) {
-				p.workerLanes[lane] = row.ItemID
-				continue
-			}
-			if e := p.returnedEnding(row.ItemID); e != nil && e.WorkerSession != nil && !isExpressLane(e.WorkerSession.LaneID) && !released[e.WorkerSession.LaneID] && p.retainedLaneFree(e.WorkerSession.LaneID) {
-				// Several reverted landings can name the same recycled lane. Only
-				// the item whose handle remains there can reserve that checkout.
-				id, err := ReadSessionID(e.WorkerSession.LaneDir)
-				if err == nil && id != "" && id == e.WorkerSession.SessionID {
-					p.workerLanes[e.WorkerSession.LaneID] = row.ItemID
-				} else if verifyBuildReturn(e) && e.WorkerSession.SessionID == "" {
-					// A build stage with no session of its own still holds the candidate.
-					p.workerLanes[e.WorkerSession.LaneID] = row.ItemID
-				}
-			}
-		}
-		for _, row := range items {
-			if row.State != p.rules().Blocked || waits[row.ItemID].Waiter != "" {
-				continue
-			}
-			if origin := designContinuationWork(conflicts[row.ItemID], designHistory[conflicts[row.ItemID].DesignRunID]); origin != nil && !isExpressLane(origin.Decision.LaneID) && !released[origin.Decision.LaneID] {
-				p.workerLanes[origin.Decision.LaneID] = row.ItemID
-			}
-		}
+		p.reserveWorkerLanes(items, released)
 		decisions, claimed, err := p.planItems(r, items, edges, faults, works, inputs, retries, rewriteOwnerHolds, rewriteHolds, unshared, hasNodes, buildHash, policy, shut, tick, root, def, at)
 		if err != nil {
 			return nil, err
@@ -580,6 +549,42 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 		}
 		if !unused || !p.laneShort {
 			return decisions, nil
+		}
+	}
+}
+
+func (p *planner) reserveWorkerLanes(items []itemRow, released map[string]bool) {
+	p.workerLanes = map[string]string{}
+	for _, row := range items {
+		if row.State != p.rules().Ready {
+			continue
+		}
+		if c, ok := p.conflicts[row.ItemID]; ok && c.Status != "answered" {
+			continue
+		}
+		if lane := p.returnedJudgeLane(row.ItemID, p.returnedEnding(row.ItemID)); lane != "" && !released[lane] && (row.Express || !isExpressLane(lane)) {
+			p.workerLanes[lane] = row.ItemID
+			continue
+		}
+		if e := p.returnedEnding(row.ItemID); e != nil && e.WorkerSession != nil && !isExpressLane(e.WorkerSession.LaneID) && !released[e.WorkerSession.LaneID] && p.retainedLaneFree(e.WorkerSession.LaneID) {
+			// Several reverted landings can name the same recycled lane. Only
+			// the item whose handle remains there can reserve that checkout.
+			id, err := ReadSessionID(e.WorkerSession.LaneDir)
+			if err == nil && id != "" && id == e.WorkerSession.SessionID {
+				p.workerLanes[e.WorkerSession.LaneID] = row.ItemID
+			} else if verifyBuildReturn(e) && e.WorkerSession.SessionID == "" {
+				// A build stage with no session of its own still holds the candidate.
+				p.workerLanes[e.WorkerSession.LaneID] = row.ItemID
+			}
+		}
+	}
+	for _, row := range items {
+		if row.State != p.rules().Blocked || p.waits[row.ItemID].Waiter != "" {
+			continue
+		}
+		c := p.conflicts[row.ItemID]
+		if origin := designContinuationWork(c, p.designHistory[c.DesignRunID]); origin != nil && !isExpressLane(origin.Decision.LaneID) && !released[origin.Decision.LaneID] {
+			p.workerLanes[origin.Decision.LaneID] = row.ItemID
 		}
 	}
 }
@@ -644,7 +649,9 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					req := *decision.RunRequest
 					req.LaneID = lane
 					decision.RunRequest = &req
-					p.assigned[lane] = true
+					if p.captureStart == nil {
+						p.assigned[lane] = true
+					}
 				}
 				identifyDecision(&decision)
 			}
@@ -865,6 +872,12 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 		if decision.Inputs == nil && decision.RunRequest != nil && (decision.Action == ActionDispatch || decision.Action == ActionRetry) {
 			decision.DispatchBuild = buildHash
 		}
+		if p.captureStart != nil {
+			if err := p.captureStart(item, decision); err != nil {
+				return nil, nil, err
+			}
+			continue
+		}
 		env, err := decisionEnvelope(decision, at)
 		if err != nil {
 			return nil, nil, err
@@ -888,8 +901,10 @@ func plannerDocumentKey(root, doc string) string {
 }
 
 type planner struct {
-	workerLanes map[string]string
-	definition  *definition.Definition
+	// Shadow evaluation shares routing without consuming lanes, desks or forks.
+	captureStart func(itemRow, Decision) error
+	workerLanes  map[string]string
+	definition   *definition.Definition
 	// An open review batch holds new build dispatches for its document; workers
 	// already running settle normally, without being interrupted by intake.
 	commentHolds map[string]string
@@ -1179,7 +1194,9 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 				break
 			}
 			decision.DeskDocument = doc
-			p.deskOwners[lane] = item.ItemID
+			if p.captureStart == nil {
+				p.deskOwners[lane] = item.ItemID
+			}
 			ok = true
 		} else if !ok && IsTrunkFixer(item.ItemID) {
 			// Retained candidates can occupy every offered lane while waiting
@@ -1192,9 +1209,10 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 			decision.Action, decision.Reason = ActionHold, ReasonNoLane
 			break
 		}
-		p.assigned[lane] = true
-		p.dispatched++
-		p.forks = append(p.forks, plannedFork{itemID: item.ItemID, fork: forkOf(item.Allowed)})
+		p.assignLane(lane)
+		if p.captureStart == nil {
+			p.forks = append(p.forks, plannedFork{itemID: item.ItemID, fork: forkOf(item.Allowed)})
+		}
 		decision.LaneID = lane
 		decision.Inputs = p.inputs[item.ItemID]
 		if retry != nil {
@@ -1757,7 +1775,17 @@ func isExpressLane(id string) bool {
 	return strings.HasPrefix(id, "express-")
 }
 
+func (p *planner) assignLane(lane string) {
+	if p.captureStart == nil {
+		p.assigned[lane] = true
+		p.dispatched++
+	}
+}
+
 func (p *planner) freeLane(express ...bool) (string, bool) {
+	if p.captureStart != nil {
+		return "", true
+	}
 	if len(express) > 0 && express[0] {
 		for _, lane := range *p.tick.AvailableLanes {
 			if isExpressLane(lane) && !p.assigned[lane] && !p.held[lane] && p.workerLanes[lane] == "" {

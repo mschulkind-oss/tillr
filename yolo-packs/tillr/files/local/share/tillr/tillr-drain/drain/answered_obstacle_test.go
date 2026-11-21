@@ -44,6 +44,7 @@ func TestAnsweredObstacleRepeat(t *testing.T) {
 				t.Fatalf("claim worker after answer: %v %v (%+v)", claimed, err, p.decision)
 			}
 			settleReport(t, f, l, nextWork, report(tc.next))
+			l.cfg.Policy.Seats["design"] = "fixture"
 			next, _ := conflictOf(t, f, "item-a")
 			if tc.waiter == "design" {
 				if next.WaitingOn != "design" {
@@ -52,11 +53,15 @@ func TestAnsweredObstacleRepeat(t *testing.T) {
 			} else if next.Status != "owner" || next.WaitingOn != "owner" || !strings.Contains(next.Text, "Held for the "+tc.waiter) || !strings.Contains(next.Text, report(tc.first)) || !strings.Contains(next.Text, report(tc.next)) {
 				t.Fatalf("repeat not held with both reports: %+v", next)
 			}
-			if tc.waiter != "design" {
-				d := decisionFor(t, l, "item-a").decision
-				if d.Action != ActionHold || d.Seat != tc.waiter {
-					t.Fatalf("repeat planner decision: %+v", d)
+			d := decisionFor(t, l, "item-a").decision
+			shadow := proposeFixture(t, l, l.cfg.Now(), startSnapshot{})
+			proposal, ok := shadow.nextStart()
+			if tc.waiter == "design" {
+				if d.Action != ActionDispatch || d.Seat != "design" || !ok || proposal.decision.Seat != d.Seat || proposal.decision.ItemID != d.ItemID || proposal.decision.LaneID != d.LaneID {
+					t.Fatalf("different obstacle should dispatch design: legacy %+v, proposal %+v (%v)", d, proposal, ok)
 				}
+			} else if d.Action != ActionHold || d.Seat != tc.waiter || ok || shadow.holds[d.ItemID] != d.Reason || shadow.entries[d.ItemID].decision.Seat != tc.waiter {
+				t.Fatalf("repeat must hold for %s: legacy %+v, shadow %+v, proposed %v", tc.waiter, d, shadow.entries[d.ItemID], ok)
 			}
 			s := openFixture(t, f.storePath)
 			defer s.Close()

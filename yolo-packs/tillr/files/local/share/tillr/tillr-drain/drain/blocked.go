@@ -45,8 +45,7 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 		// This is a real command run, not a fabricated terminal record or an
 		// ungated store repair. Its report travels through the same settlement.
 		if lane, ok := p.freeLane(row.Express); ok {
-			p.assigned[lane] = true
-			p.dispatched++
+			p.assignLane(lane)
 			d.Action, d.From, d.To, d.LaneID = ActionDispatch, "queued", "running", lane
 
 			d.Seat, d.BlockConflict = "design", &c
@@ -102,8 +101,7 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 			lane, ok = p.freeLane(row.Express)
 		}
 		if ok {
-			p.assigned[lane] = true
-			p.dispatched++
+			p.assignLane(lane)
 			d.Action, d.From, d.To, d.LaneID = ActionDispatch, "queued", "running", lane
 			d.Seat = "design"
 			d.SelectSeat = true

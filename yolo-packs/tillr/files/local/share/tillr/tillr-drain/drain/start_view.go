@@ -19,11 +19,17 @@ const startViewRefreshInterval = 15 * time.Second
 
 type startQueueRow struct{ id, rank string }
 
-// A snapshot and its collections are immutable after publication. The rows use
-// planner order, but carry no decision about whether any item can start.
+// A snapshot and its collections are immutable after publication. Its
+// proposals are advisory; the legacy pass alone decides what starts.
 type startSnapshot struct {
 	items    []startQueueRow
 	occupied map[string]bool
+
+	entries             map[string]startViewEntry
+	holds, reservations map[string]string
+	readyAt, laneFreeAt map[string]time.Time
+	freeLanes           []string
+	tip, green          string
 
 	def                               definition.Definition
 	definitionSHA                     string
@@ -104,13 +110,25 @@ func (v *startView) watch(parent context.Context, interval time.Duration, read f
 }
 
 func readStartSnapshot(ctx context.Context, path string, at time.Time, policy *Policy) (startSnapshot, error) {
+	return readStartSnapshotWith(ctx, path, at, policy, nil)
+}
+
+func readStartSnapshotWith(ctx context.Context, path string, at time.Time, policy *Policy, rebuild func(*store.Reader, *startSnapshot) error) (startSnapshot, error) {
 	s, err := store.OpenRead(ctx, path)
 	if err != nil {
 		return startSnapshot{}, err
 	}
 	defer s.Close()
 	var next startSnapshot
-	err = s.ReadTx(ctx, func(r *store.Reader) error { return next.seed(r, at, policy) })
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		if err := next.seed(r, at, policy); err != nil {
+			return err
+		}
+		if rebuild != nil {
+			return rebuild(r, &next)
+		}
+		return nil
+	})
 	if err != nil {
 		return startSnapshot{}, err
 	}
