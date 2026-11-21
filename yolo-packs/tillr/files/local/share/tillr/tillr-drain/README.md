@@ -36,9 +36,7 @@ skill is [`docs/design/tillr-distribution.md`](https://github.com/mschulkind-oss
 
 Start the drain and observatory from the `just tillr-build` bin directory.
 After a tillr landing the loop runs `just tillr-roll --no-request`, then requests restarts; under after-merge proof, the proof runner owns the suites.
-While an in-place drain restart waits for an active gate or landing, the loop still
-starts ready work on free lanes. Replacement leaves live workers on their original
-leases, and a refused restart leaves the old loop running.
+An in-place drain restart leaves live workers on their original leases and dispatches new work on free lanes. A refused restart leaves the old loop running.
 After a manual commit, run `just tillr-roll` (in-place) or `just tillr-restart` (rebuild HEAD, restart keeper and loop).
 Pack launchers use a separate install: run `yolo host apply --assert` before requesting a restart.
 
