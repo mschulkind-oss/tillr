@@ -160,7 +160,7 @@ func checkPublishedAncestry(ctx context.Context, root, remote, ref, prev, tip st
 	}
 	branch := strings.TrimPrefix(ref, "refs/heads/")
 	return &pushStateError{kind: pushKindRewritten, remoteTip: tip, previousTip: prev, escalated: "operator",
-		detail: fmt.Sprintf("remote-rewritten: %s/%s was force-pushed (%s -> %s); autopush stopped so the commits it dropped are not published again.\nmover: operator; reconcile force-pushed %s/%s (%s -> %s). Nothing was changed",
+		detail: fmt.Sprintf("remote-rewritten: %s/%s was force-pushed (%s -> %s); automatic pushes stopped so the commits it dropped are not published again.\nmover: operator; reconcile force-pushed %s/%s (%s -> %s). Nothing was changed",
 			remote, branch, shortSHA(prev), shortSHA(tip), remote, branch, shortSHA(prev), shortSHA(tip))}
 }
 
