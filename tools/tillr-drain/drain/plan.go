@@ -38,6 +38,9 @@ type Pass struct {
 	// every existing lane reservation and readiness dependency. It must not
 	// allocate free lanes to sibling plans that this command will not execute.
 	examineItem string
+	// pendingOnly plans unfinished attempts, including their resume and retry
+	// decisions, but leaves new attempts to the starter.
+	pendingOnly bool
 	// ownerMigration permits only the deterministic conversion of a legacy owner report.
 	ownerMigration bool
 	// loopHolds is the running loop's own in-memory holds (Loop.held), keyed by item, with
@@ -260,6 +263,10 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 	return planWithDetails(r, tick, policy, questions, def, nil)
 }
 
+func (t Pass) plansItem(id string, work *pendingWork) bool {
+	return (t.examineItem == "" || t.examineItem == id) && (!t.pendingOnly || (work != nil && !work.Done))
+}
+
 // planDetails supplies read faces with facts that are not part of the decisions.
 // A no-lane decision alone does not say whether it is an unspent retry waiting
 // for capacity, a continuation waiting for its own lane, or a dispatch cap.
@@ -289,8 +296,12 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	if err != nil {
 		return nil, err
 	}
+	works, designHistory, err := readPendingHistory(r)
+	if err != nil {
+		return nil, readFailure(err)
+	}
 	for i := range items {
-		if tick.examineItem != "" && items[i].ItemID != tick.examineItem {
+		if !tick.plansItem(items[i].ItemID, works[items[i].ItemID]) {
 			continue
 		}
 		if items[i].JudgeMode == "agent" {
@@ -376,7 +387,7 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	}
 	inputs := map[string]*RunInputs{}
 	for _, row := range items {
-		if (tick.examineItem != "" && row.ItemID != tick.examineItem) || row.State != def.Ready || unshared[row.ItemID] {
+		if !tick.plansItem(row.ItemID, works[row.ItemID]) || row.State != def.Ready || unshared[row.ItemID] {
 			continue
 		}
 		inputs[row.ItemID], err = currentRunInputs(context.Background(), r, row, policy, root, build)
@@ -423,16 +434,12 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	}
 	seatItems := make([]itemRow, 0, len(items))
 	for _, row := range items {
-		if !unshared[row.ItemID] {
+		if !unshared[row.ItemID] && (!tick.pendingOnly || tick.plansItem(row.ItemID, works[row.ItemID])) {
 			seatItems = append(seatItems, row)
 		}
 	}
 	if err := checkSeats(policy, seatItems); err != nil {
 		return nil, err
-	}
-	works, designHistory, err := readPendingHistory(r)
-	if err != nil {
-		return nil, readFailure(err)
 	}
 	forks, err := liveForks(r, at, works)
 	if err != nil {
@@ -504,7 +511,7 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	}
 	attempts, nodeCounts := map[string]int{}, map[string]int{}
 	for _, row := range items {
-		if tick.examineItem != "" && row.ItemID != tick.examineItem {
+		if !tick.plansItem(row.ItemID, works[row.ItemID]) {
 			continue
 		}
 		attempts[row.ItemID], nodeCounts[row.ItemID], err = readAttemptInputs(r, hasNodes, row.ItemID, priors[row.ItemID])
@@ -622,13 +629,13 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 	}
 	decisions := make([]record.Envelope, 0, len(items))
 	for _, item := range items {
-		if tick.examineItem != "" && item.ItemID != tick.examineItem {
+		work := works[item.ItemID]
+		if !tick.plansItem(item.ItemID, work) {
 			continue
 		}
 		var decision Decision
 		ownerOwed := item.State == StateInQueue && item.OwnerOwed != nil
 		wait, waiting := p.waits[item.ItemID]
-		work := works[item.ItemID]
 		fault, faulted := faults[item.ItemID]
 		faultHeld := faulted && !p.finished(item.State) && holdEnabled(def, fault.Reason)
 		if waiting && (work == nil || work.Done || faultHeld) {

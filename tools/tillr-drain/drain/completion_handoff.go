@@ -77,7 +77,7 @@ func (l *Loop) finishRunStep(ctx context.Context, c runCompletion, result *LoopR
 	var watched []string
 	epochs := l.idleLaneEpochs()
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
-		if err := l.readPassPlans(ctx, r, at, c.itemID, nil, &plans, nil); err != nil || len(plans) == 0 {
+		if err := l.readPassPlans(ctx, r, at, c.itemID, nil, &plans, nil, false); err != nil || len(plans) == 0 {
 			return err
 		}
 		busy, err := readLanes(r, at)

@@ -15,6 +15,81 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+// A failed hold rolls back the whole batch, not just the last write.
+func TestWriteHoldsIsOneTransaction(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	ctx := context.Background()
+	marker := func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET title = 'held' WHERE item_id = 'item-a'`)
+		return err
+	}
+	title := func() string {
+		var title string
+		fixtureRead(t, f, func(r *store.Reader) error {
+			return r.QueryRow(`SELECT title FROM items WHERE item_id = 'item-a'`).Scan(&title)
+		})
+		return title
+	}
+	original := title()
+	boom := errors.New("boom")
+	if err := l.writeHolds(ctx, []func(*store.Tx) error{marker, func(*store.Tx) error { return boom }}); !errors.Is(err, boom) {
+		t.Fatalf("writeHolds = %v, want %v", err, boom)
+	}
+	if got := title(); got != original {
+		t.Fatalf("the first write survived rollback: title = %q, want %q", got, original)
+	}
+	if err := l.writeHolds(ctx, []func(*store.Tx) error{marker}); err != nil {
+		t.Fatal(err)
+	}
+	if got := title(); got != "held" {
+		t.Fatalf("title = %q, want the batch to commit", got)
+	}
+	if err := l.writeHolds(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPendingOnlyPlansCompletionButNotFreshStart(t *testing.T) {
+	f, l := passFixture(t, "item-a", "item-b")
+	ctx := context.Background()
+	initial := mustPlan(t, l)[0]
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	if ok, _, err := l.applyPlan(ctx, initial, base, l.cfg.Now()); err != nil || !ok {
+		t.Fatalf("claim pending item: applied = %v, err = %v", ok, err)
+	}
+	d := initial.decision
+	at := l.cfg.Now()
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return applyTerminal(tx, run.Record{
+			RunID: d.RunRequest.RunID, ItemID: d.ItemID, LaneID: d.LaneID,
+			Backend: "fixture", State: run.StateExited, ExitCode: countPtr(0),
+			StartedAt: at.Format(time.RFC3339), FinishedAt: at.Format(time.RFC3339),
+			ArtifactRefs: []run.ArtifactRef{},
+		})
+	})
+	var generation string
+	pending, _, err := l.passPendingPlansGeneration(ctx, at, &generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name  string
+		plans []plannedApplication
+		want  map[string]string
+	}{
+		{"pending only", pending, map[string]string{"item-a": ActionSettle}},
+		{"default", mustPlan(t, l), map[string]string{"item-a": ActionSettle, "item-b": ActionDispatch}},
+	} {
+		got := make(map[string]string)
+		for _, p := range tc.plans {
+			got[p.decision.ItemID] = p.decision.Action
+		}
+		if len(tc.plans) != len(tc.want) || !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: planned %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestNoteLaneWriteCountsTheLane(t *testing.T) {
 	var l Loop
 	l.noteLaneWrite("lane-1")

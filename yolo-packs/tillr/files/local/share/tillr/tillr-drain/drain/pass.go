@@ -1039,6 +1039,10 @@ func (l *Loop) passPlans(ctx context.Context, at time.Time) ([]plannedApplicatio
 }
 
 func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation *string) ([]plannedApplication, []LaneLease, error) {
+	return l.passPlansMode(ctx, at, generation, false)
+}
+
+func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *string, pendingOnly bool) ([]plannedApplication, []LaneLease, error) {
 	if err := l.refreshQuotas(ctx); err != nil {
 		return nil, nil, err
 	}
@@ -1174,7 +1178,7 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 			refs = &startRefs{tip: tip}
 		}
 		err := s.ReadTx(ctx, func(r *store.Reader) error {
-			return l.readPassPlans(ctx, r, at, "", refs, &plans, &leases)
+			return l.readPassPlans(ctx, r, at, "", refs, &plans, &leases, pendingOnly)
 		})
 		if err != nil || !slices.ContainsFunc(plans, func(p plannedApplication) bool { return p.start != nil }) {
 			return plans, leases, err
@@ -1191,7 +1195,7 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 
 // readPassPlans binds the planner's decisions to a read snapshot. A completion
 // only plans an existing reservation, never a fresh attempt or another lane.
-func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time, onlyItem string, refs *startRefs, plans *[]plannedApplication, leases *[]LaneLease) error {
+func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time, onlyItem string, refs *startRefs, plans *[]plannedApplication, leases *[]LaneLease, pendingOnly bool) error {
 	var err error
 	observed := append([]string(nil), l.cfg.Lanes...)
 	held, err := readLanes(r, at)
@@ -1235,7 +1239,7 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 			loopHolds[id] = reason
 		}
 	}
-	tick := Pass{examineItem: onlyItem, ownerMigration: l.ownerMigrationItem != "", loopHolds: loopHolds, startRefs: refs, Comments: l.cfg.Comments, WorkflowDefaults: l.cfg.WorkflowDefaults, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available, OutLanes: l.outLanes()}
+	tick := Pass{examineItem: onlyItem, pendingOnly: pendingOnly, ownerMigration: l.ownerMigrationItem != "", loopHolds: loopHolds, startRefs: refs, Comments: l.cfg.Comments, WorkflowDefaults: l.cfg.WorkflowDefaults, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available, OutLanes: l.outLanes()}
 	if l.ownerMigrationItem != "" {
 		tick.examineItem = l.ownerMigrationItem
 	}
@@ -1454,6 +1458,51 @@ func (l *Loop) trunkAdvancedUntouched(ctx context.Context, r *store.Reader, d De
 	return true, nil
 }
 
+// holdWriter returns nil for report-only holds. Persistent holds recheck their
+// definition and input version at the write, just as a single hold would.
+func holdWriter(p plannedApplication, at time.Time) func(*store.Tx) error {
+	d := p.decision
+	c := d.BlockConflict
+	ownerConflict := c != nil && c.TriageVersion != "" && c.WaitingOn == "owner"
+	if !ownerConflict && !strings.HasPrefix(d.Reason, ReasonTrunkPathDirty+": ") && !strings.HasPrefix(d.Reason, ReasonTrunkRewritten+": ") && !strings.HasPrefix(d.Reason, ReasonRedCap+": ") {
+		return nil
+	}
+	return func(tx *store.Tx) error {
+		current, err := currentDefinition(tx.Reader(), p)
+		if err != nil || !current {
+			return err
+		}
+		version, err := inputVersion(tx.Reader(), d)
+		if err != nil || version != p.version {
+			return err
+		}
+		if ownerConflict {
+			return item.RecordConflict(tx, *c, at)
+		}
+		return recordDirtyDecision(tx, d, at)
+	}
+}
+
+// writeHolds commits a pass's persistent holds together, or none on error.
+func (l *Loop) writeHolds(ctx context.Context, writes []func(*store.Tx) error) error {
+	if len(writes) == 0 {
+		return nil
+	}
+	s, err := store.Open(ctx, l.cfg.Store, true)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		for _, write := range writes {
+			if err := write(tx); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, mainSHA *string, at time.Time, generation *string) (ok bool, result *pendingWork, applyErr error) {
 	var reason, waitingOn string
 	if isDispatch(p.decision) {
@@ -1473,45 +1522,10 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 		return nil
 	}
 	if p.decision.Action == ActionHold {
-		if c := p.decision.BlockConflict; c != nil && c.TriageVersion != "" && c.WaitingOn == "owner" {
-			s, err := store.Open(ctx, l.cfg.Store, true)
-			if err != nil {
-				return false, nil, err
-			}
-			defer s.Close()
-			err = s.WriteTx(ctx, func(tx *store.Tx) error {
-				current, err := currentDefinition(tx.Reader(), p)
-				if err != nil || !current {
-					return err
-				}
-				version, err := inputVersion(tx.Reader(), p.decision)
-				if err != nil || version != p.version {
-					return err
-				}
-				return item.RecordConflict(tx, *c, at)
-			})
-			return false, nil, err
+		if write := holdWriter(p, at); write != nil {
+			return false, nil, l.writeHolds(ctx, []func(*store.Tx) error{write})
 		}
-		if !strings.HasPrefix(p.decision.Reason, ReasonTrunkPathDirty+": ") && !strings.HasPrefix(p.decision.Reason, ReasonTrunkRewritten+": ") && !strings.HasPrefix(p.decision.Reason, ReasonRedCap+": ") {
-			return false, nil, nil
-		}
-		s, err := store.Open(ctx, l.cfg.Store, true)
-		if err != nil {
-			return false, nil, err
-		}
-		defer s.Close()
-		err = s.WriteTx(ctx, func(tx *store.Tx) error {
-			current, err := currentDefinition(tx.Reader(), p)
-			if err != nil || !current {
-				return err
-			}
-			version, err := inputVersion(tx.Reader(), p.decision)
-			if err != nil || version != p.version {
-				return err
-			}
-			return recordDirtyDecision(tx, p.decision, at)
-		})
-		return false, nil, err
+		return false, nil, nil
 	}
 	// Refresh before claiming; a claimed dispatch is never checked after staging.
 	if (p.decision.Action == ActionDispatch || p.decision.Action == ActionRetry) && p.decision.RunRequest != nil {
@@ -2381,7 +2395,11 @@ func (l *Loop) holdSettleFailure(c runCompletion) bool {
 
 // pass advances each item's one planned transition without waiting for a sibling.
 // A fixed point waits on completion, expiry, polling, or operator cancellation.
-func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err error) {
+func (l *Loop) pass(ctx context.Context, result *LoopResult) (string, error) {
+	return l.passMode(ctx, result, false)
+}
+
+func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly bool) (stop string, err error) {
 	defer func() {
 		if errors.Is(err, errRestartPending) {
 			_, stop, err = l.gateRestart(ctx, result)
@@ -2494,7 +2512,11 @@ func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err e
 	if stop, err := l.drainCompletions(ctx, result); stop != "" || err != nil {
 		return stop, err
 	}
-	plans, leases, err := l.passPlansGeneration(ctx, at, &timing.TickID)
+	plan := l.passPlansGeneration
+	if pendingOnly {
+		plan = l.passPendingPlansGeneration
+	}
+	plans, leases, err := plan(ctx, at, &timing.TickID)
 	if err != nil {
 		return "", err
 	}
@@ -2540,7 +2562,7 @@ func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err e
 		if !closedBatch {
 			break
 		}
-		plans, leases, err = l.passPlansGeneration(ctx, at, &timing.TickID)
+		plans, leases, err = plan(ctx, at, &timing.TickID)
 		if err != nil {
 			return "", err
 		}
@@ -2562,6 +2584,7 @@ func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err e
 		}
 	}()
 	var holds []Decision
+	var holdWrites []func(*store.Tx) error
 	// Watch currently idle offered lanes. A sibling legitimately started later
 	// is removed from both status comparisons when this run's bracket closes.
 	watched := []string{}
@@ -2622,6 +2645,12 @@ plans:
 				continue
 			}
 		}
+		if d.Action == ActionHold {
+			if write := holdWriter(p, at); write != nil {
+				holdWrites = append(holdWrites, write)
+			}
+			continue
+		}
 		cancelled, changed, err := l.applyReadyPlan(ctx, p, &mainSHA, at, timing, &laneWatch{watched, epochs}, result)
 		if err != nil {
 			return "", err
@@ -2641,7 +2670,7 @@ plans:
 				// A lane this pass just refused stays out until the next pass: a
 				// re-check now would see its pinned HEAD as retained and offer it again.
 				l.replanning = true
-				fresh, freshLeases, err := l.passPlansGeneration(ctx, at, &timing.TickID)
+				fresh, freshLeases, err := plan(ctx, at, &timing.TickID)
 				l.replanning = false
 				if err != nil {
 					return "", err
@@ -2673,6 +2702,9 @@ plans:
 				}
 			}
 		}
+	}
+	if err := l.writeHolds(ctx, holdWrites); err != nil {
+		return "", err
 	}
 	if timing.Applied > 0 || timing.TickID != "" {
 		l.waitingDetail = ""
