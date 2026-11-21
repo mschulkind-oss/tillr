@@ -34,15 +34,9 @@ import (
 //     that commit would compare the resumed segment against state the first segment had
 //     already left behind, and the target worktree's own tree is excused by Compare
 //     (boundary.go), so nothing else would notice.
-//   - the fence is re-derived from the item's own allowed_paths rather than read back out of
-//     the staged `fence.txt`. A fence edited between the kill and the resume is the item's
-//     current word, and a resume that kept the staged text would judge the continuation
-//     against a fence nobody is holding the item to.
-//
-// The negative control the tests pin: the stale bracket does not catch the killed segment's
-// committed change — a target worktree contributes no path deltas — while the fence refuses
-// it. That is why the fence is re-derived and the bracket re-taken, rather than either being
-// reused.
+//   - staging metadata is refreshed from the workflow and delivery, not the old
+//     item path list or staged fence. The common deny-list checks the pinned committed
+//     change independently of the bracket.
 
 // RunStep is the one thing a resume does to a run: execute its request. It is an interface so
 // a case can drive a resume without a repository and an adapter, and it is deliberately not
@@ -314,16 +308,11 @@ func refuseJudged(ctx context.Context, storePath, runID string) error {
 	return nil
 }
 
-// rederiveFence writes the current item fence and the resumed node's scope
-// to both the lane and run copies, and answers the resumed run's scope.
-//
-// The lane's `fence.txt` is the staged text; re-deriving it is what makes a fence edited
-// after the kill the one the continuation is judged by. The item is read from the store, so
-// an item whose allowed_paths were cleared or emptied is refused here rather than resumed
-// under a fence that admits nothing.
+// rederiveFence restores the saved node's explicit write scope in both the lane
+// and run metadata. Ordinary items do not regain an allow-list when resumed.
 func rederiveFence(ctx context.Context, cfg ResumeConfig, row resumeRun, laneDir, runID string) ([]string, error) {
 	if row.ItemID == "" {
-		return nil, Externalf("run %s names no item: a resume re-derives the fence from the item's allowed_paths, and a run with no item has no fence to derive", runID)
+		return nil, Externalf("run %s names no item: a resume needs its recorded item identity", runID)
 	}
 	recorded, err := readStagedItem(ctx, cfg.Store, cfg.Root, row.ItemID)
 	if err != nil {
@@ -336,6 +325,7 @@ func rederiveFence(ctx context.Context, cfg ResumeConfig, row resumeRun, laneDir
 		return nil, err
 	}
 	var node *WorkflowStage
+	var hasBlockConflict bool
 	err = r.ReadTx(ctx, func(reader *store.Reader) error {
 		_, works, err := readPendingHistory(reader)
 		if err != nil {
@@ -347,8 +337,10 @@ func rederiveFence(ctx context.Context, cfg ResumeConfig, row resumeRun, laneDir
 				recorded.Delivery = deliveryDecision{}
 			}
 			if c := d.BlockConflict; c != nil && c.TriageVersion != "" {
+				hasBlockConflict = true
 				recorded.AllowedPaths = []string{triageDocument(c.BodyRef)}
 			} else if c != nil {
+				hasBlockConflict = true
 				recorded.AllowedPaths = blockConflictPaths(recorded, *c)
 			}
 			if row.LaneID == "" {
@@ -358,7 +350,7 @@ func rederiveFence(ctx context.Context, cfg ResumeConfig, row resumeRun, laneDir
 				if d.NodeIndex < 0 || d.NodeIndex >= len(d.Workflow.Stages) {
 					return Externalf("run %s has no saved workflow node", runID)
 				}
-				stage := d.effectiveNode()
+				stage := d.Workflow.Stages[d.NodeIndex]
 				node = &stage
 			}
 		}
@@ -368,25 +360,23 @@ func rederiveFence(ctx context.Context, cfg ResumeConfig, row resumeRun, laneDir
 	if err != nil {
 		return nil, err
 	}
+	if !hasBlockConflict {
+		recorded.AllowedPaths = nil
+	}
 	if fork := checkoutForDelivery(cfg.Root, row.LaneID, recorded.Delivery); fork.Fork != "" && (node == nil || !classificationNode(*node)) {
-		recorded.AllowedPaths = itemDeliveryFence(fork, recorded.AllowedPaths)
+		recorded.AllowedPaths = []string{fork.Path + "/"}
 		if node != nil {
 			node.WriteScope = WorkflowScope{Paths: forkFence(fork, node.WriteScope.Paths)}
 		}
 	}
-	if len(recorded.AllowedPaths) == 0 {
-		return nil, Externalf("item %s names no allowed_paths: a resume refuses to continue under a fence that admits nothing", recorded.ItemID)
-	}
 	fence := fencePaths(recorded.AllowedPaths)
 	if node != nil {
-		if !plannedWritePiece(*node) {
-			stage := *node
-			stage.WriteScope.Paths = scopeForLane(stage.WriteScope.Paths, row.LaneID)
-			if err := (&Workflow{Stages: []WorkflowStage{stage}}).checkScopes(scopeForLane(recorded.AllowedPaths, row.LaneID)); err != nil {
-				return nil, err
-			}
+		stage := *node
+		stage.WriteScope.Paths = scopeForLane(stage.WriteScope.Paths, row.LaneID)
+		if err := (&Workflow{Stages: []WorkflowStage{stage}}).checkScopes(nil); err != nil {
+			return nil, err
 		}
-		fence, err = node.runScopePaths(recorded.AllowedPaths)
+		fence, err = node.scopePaths(recorded.AllowedPaths)
 		if err != nil {
 			return nil, err
 		}

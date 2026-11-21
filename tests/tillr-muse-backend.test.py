@@ -183,7 +183,6 @@ def filled_brief(lane):
         "MAIN_STATUS_BEFORE": "unused in the worktree form",
         "TASK": "Add the one line the item asks for.",
         "CRITERION_1": "the acceptance test passes (not command-verifiable in a fixture)",
-        "FENCE_PATHS": "- tools/tillr-run/backends/**",
         "OUT_OF_FENCE_PATHS": "- everything else",
         "SEAT_LINES": "- `build` — Build the change.",
         "SETTLED": "- the report shape is fixed by the extractor, not by the harness.",
@@ -683,7 +682,9 @@ def test_preflight(workspace):
                 (lane / "brief.md").unlink()
             elif brief == "sectionless":
                 (lane / "brief.md").write_text(
-                    filled_brief(lane).replace("## Fence", "## Not the fence")
+                    filled_brief(lane).replace(
+                        "## Scope and boundaries", "## Not the scope"
+                    )
                 )
             elif brief == "placeholder":
                 (lane / "brief.md").write_text(filled_brief(lane) + "\n{{UNFILLED}}\n")
@@ -728,6 +729,10 @@ def test_preflight(workspace):
             result.returncode == 0,
             f"{backend}: blockquoted braces in recorded sections exited {result.returncode}: {result.stderr}",
         )
+        lane = workspace.lane()
+        (lane / "brief.md").write_text(filled_brief(lane).replace("## Scope and boundaries", "## Fence"))
+        result = workspace.invoke(backend, lane, *ok_args)
+        check(result.returncode == 0, f"{backend}: a staged legacy brief was refused: {result.stderr}")
 
 
 def test_fixture_does_not_inherit_resume_prompt(workspace):

@@ -115,14 +115,18 @@ func TestAnIncompleteObstacleGoesBackToItsWorker(t *testing.T) {
 	}
 }
 
-// A fence obstacle reaches the design seat told to widen the fence over the named paths
-// or split the item.
+// With the fence obstacle retired (owner ruling 2026-11-19), an old report naming
+// OBSTACLE: fence is read as a missing output and returned to the worker, raising no conflict.
 func TestAFenceObstacleAsksTheDesignSeatToWidenOrSplit(t *testing.T) {
 	f, l, work := obstacleFixture(t, &obstacleSteps{}, "item-a")
+	runGit(t, l.laneTarget(work.Decision.LaneID), "reset", "-q", "--hard", work.BaseSHA)
 	settleReport(t, f, l, work, "OBSTACLE: fence\nPATHS: tools/tillr-view/waiting.go\nEVIDENCE: the view must show the hold\nRESULT: blocked\n")
-	c, ok := conflictOf(t, f, "item-a")
-	if !ok || c.WaitingOn != "design" || !strings.Contains(c.Text, "Widen the block's paths") || !strings.Contains(c.Text, "tools/tillr-view/waiting.go") {
-		t.Fatalf("conflict %+v", c)
+	if c, ok := conflictOf(t, f, "item-a"); ok {
+		t.Fatalf("retired fence obstacle raised a conflict: %+v", c)
+	}
+	p := refusalOf(t, f, work.Decision.RunRequest.RunID)
+	if p.Step != RefusalNoOp || !strings.Contains(p.Detail, "OBSTACLE: <kind>") {
+		t.Fatalf("refusal %+v, want missing-output return to worker", p)
 	}
 }
 

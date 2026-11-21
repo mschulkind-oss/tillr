@@ -92,17 +92,6 @@ func TestObstacleHoldsShowRealReasonAndMoverInWaitingAndAgreeWithPlan(t *testing
 			wantMover:  "owner; answer the question",
 		},
 		{
-			itemID:     "item-request-fence",
-			runID:      "run-fence-1",
-			kind:       "fence",
-			fields:     map[string]string{"PATHS": "tools/tillr-item/item/waiting.go", "EVIDENCE": "checkWaitingOn lives outside the fence"},
-			wantReason: "obstacle-fence",
-			wantClass:  "needs you",
-			wantWhere:  "queue",
-			wantWhySub: []string{"obstacle-fence:", "tools/tillr-item/item/waiting.go", "checkWaitingOn lives outside the fence"},
-			wantMover:  "operator; widen allowed_paths (tools/tillr-item/item/waiting.go)",
-		},
-		{
 			itemID:     "item-request-trunk",
 			runID:      "run-trunk-1",
 			kind:       "trunk",
@@ -200,7 +189,7 @@ func TestObstacleHoldsShowRealReasonAndMoverInWaitingAndAgreeWithPlan(t *testing
 	for _, sp := range specs {
 		wantHolds[sp.itemID] = sp.wantReason
 	}
-	assertAgreesWithPlan(t, storePath, "all six obstacle holds active", wantHolds, 0)
+	assertAgreesWithPlan(t, storePath, "all five obstacle holds active", wantHolds, 0)
 
 	checkRows := func(mode string, rows []waitingRow) {
 		t.Helper()
@@ -235,7 +224,7 @@ func TestObstacleHoldsShowRealReasonAndMoverInWaitingAndAgreeWithPlan(t *testing
 		if err := printWaiting(&out, rows); err != nil {
 			t.Fatal(err)
 		}
-		wantSummary := "summary: owner-waiting 1; next [drain=1, design seat=0, operator=4]"
+		wantSummary := "summary: owner-waiting 1; next [drain=1, design seat=0, operator=3]"
 		if !strings.Contains(out.String(), wantSummary) {
 			t.Fatalf("%s summary mismatch:\ngot:\n%s\nwant substring: %s", mode, out.String(), wantSummary)
 		}
@@ -283,15 +272,10 @@ func TestObstacleHoldsShowRealReasonAndMoverInWaitingAndAgreeWithPlan(t *testing
 	}
 	rs.Close()
 
-	// 5. Clearing owner blocked state and widening fence allowed_paths releases both in plan and view.
+	// 5. Clearing owner blocked state releases the hold in plan and view.
 	execSQL(`UPDATE items SET state='in-queue', waiting_on='', underlying_state='' WHERE item_id='item-request-owner'`)
 	execSQL(`INSERT INTO events (ts, kind, object_type, object_id, payload)
 		VALUES (2000, 'item.update', 'item', 'item-request-owner', '{"state":"in-queue","allowed_paths":["tools/item-owner/"]}')`)
-	execSQL(`UPDATE items SET allowed_paths='["tools/item-fence/","tools/tillr-item/item/waiting.go"]' WHERE item_id='item-request-fence'`)
-	execSQL(`INSERT INTO events (ts, kind, object_type, object_id, payload)
-		VALUES (2001, 'item.update', 'item', 'item-request-fence', '{"state":"in-queue","allowed_paths":["tools/item-fence/","tools/tillr-item/item/waiting.go"]}')`)
-
 	delete(wantHolds, "item-request-owner")
-	delete(wantHolds, "item-request-fence")
-	assertAgreesWithPlan(t, storePath, "after owner unblock and fence widen", wantHolds, 2)
+	assertAgreesWithPlan(t, storePath, "after owner unblock", wantHolds, 1)
 }

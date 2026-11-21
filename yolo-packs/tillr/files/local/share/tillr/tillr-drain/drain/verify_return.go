@@ -131,7 +131,6 @@ func (l *Loop) verifyBuildSession(ctx context.Context, c Candidate) (*WorkerSess
 	if index < 0 || index >= evaluator {
 		return nil, nil
 	}
-	allowed := fenceEntries(l.laneFileBody(c.LaneID, ItemFenceFile))
 	stage := w.Stages[index]
 	session := &WorkerSession{
 		LaneDir: l.laneDirPath(c.LaneID), LaneID: c.LaneID,
@@ -139,7 +138,7 @@ func (l *Loop) verifyBuildSession(ctx context.Context, c Candidate) (*WorkerSess
 		Workflow: &w,
 	}
 	if stage.Kind == "agent" && stage.Access == "write" && (stage.Seat == "build" || stage.Seat == "") &&
-		(stage.WriteScope.Paths == nil || scopeWithin(fencePaths(scopeForLane(allowed, "lane-1")), fencePaths(scopeForLane(stage.WriteScope.Paths, "lane-1")))) {
+		stage.WriteScope.Paths == nil {
 		session.NodeIndex = index
 		session.SessionID, session.Backend, session.Route, session.RunID = writer.SessionID, writer.Backend, writer.Route, writer.RunID
 		session.NodeBaseSHA = c.HeadSHA
@@ -177,8 +176,7 @@ func insertVerifyWorkStage(w *Workflow, evaluator int) {
 	}
 	prompt := "Repair the candidate commit this run starts from against the verifier's findings. The plan divided the work into these pieces:\n" + strings.Join(planned, "\n")
 	stage := WorkflowStage{ID: verifyReturnWorkStage, Parent: verifyReturnWorkStage, Kind: "agent", Seat: "build", Access: "write", Prompt: prompt}
-	// The scope is inherited from the item's fence, which staging remaps for the lane the
-	// run lands on; a literal path list would pin the lane the verifier ran on.
+	// A repair may need to change any piece of the candidate, not just the last writer's scope.
 	stage.WriteScope = WorkflowScope{}
 	evaluatorID := w.Stages[evaluator].ID
 	stages := append([]WorkflowStage(nil), w.Stages[:evaluator]...)
@@ -229,9 +227,6 @@ func (l *Loop) builderPlanWrong(d Decision, stage WorkflowStage, footer, log str
 	}
 	obstacle := parseObstacle(log)
 	if obstacle.Problem == "" {
-		if obstacle.Kind == ObstacleFence {
-			return "", false
-		}
 		if obstacle.Kind == ObstacleDefinition && strings.HasPrefix(strings.ToLower(obstacle.Field("EVIDENCE")), PlanWrongPrefix) {
 			return strings.TrimSpace(log), true
 		}

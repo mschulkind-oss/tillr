@@ -23,9 +23,8 @@ function landFixture(t) {
   git('init', '-q');
   put('repo/in', 'base'); git('add', 'in'); commit();
   const base = git('rev-parse', 'HEAD');
-  put('fence.txt', 'in\nnew\n');
   const forbidden = () => { throw new Error('unexpected wake query'); };
-  const land = (id = 'call', wakes = () => [], answered, transcript) => executeLand(id, cwd, dir, base, join(dir, 'fence.txt'), wakes, answered, transcript);
+  const land = (id = 'call', wakes = () => [], answered, transcript) => executeLand(id, cwd, dir, base, wakes, answered, transcript);
   const offer = join(dir, 'landing-offer.json');
   const refuses = (attempt, reason) => {
     assert.throws(attempt, reason);
@@ -67,7 +66,9 @@ test('land ignores old report-only refusals but honors content refusals', (t) =>
 test('killed before the offer exists: replay writes the offer and parks', (t) => {
   const { put, land, offer, base, change } = landFixture(t);
   const head = change();
-  put('repo/outside', 'not in fence');
+  put('repo/outside', 'uncommitted work');
+  assert.throws(() => land(), /uncommitted paths[\s\S]*outside/);
+  rmSync(join(offer, '..', 'repo', 'outside'));
   assert.equal(land().park, true);
   assert.deepEqual(JSON.parse(readFileSync(offer)), { call_id: 'call', commit: head, base, transcript: '' });
 });
@@ -126,11 +127,11 @@ test('registered land and obstacle settle through pi as promises, parking and re
   assert.equal(settled.kind, 'failed');
 });
 
-test('a fence obstacle call refuses invalid entries without writing an offer', (t) => {
+test('a retired fence obstacle is not offered', (t) => {
   const { cwd, base, refuses, forbidden } = landFixture(t);
   const paths = 'tests/new.go, refs/heads/patch/pi, .forks/lanes/<fork-lane>/pi/';
   refuses(() => executeObstacle('call', { kind: 'fence', paths, evidence: 'needed' }, cwd, join(cwd, '..'), base, forbidden),
-    /refs\/heads\/patch\/pi.*<fork-lane>.*Provide repository-relative paths/);
+    /Invalid obstacle kind/);
 });
 
 test('an offer whose call already has a result is stale and does not strand the run', (t) => {
@@ -190,7 +191,7 @@ test('run-pi keeps footer argv and opens an answer session without stdin', (t) =
   const dir = mkdtempSync(join(tmpdir(), 'run-pi-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const put = (name, value, options) => writeFileSync(join(dir, name), value, options);
-  const brief = '- **Target:** test (lane worktree)\n' + ['Header', 'Task', 'Fence', 'Seats', 'Settled decisions', 'Facts carried', 'Method', 'Verification commands', 'Report shape', 'Stop conditions'].map(heading => `## ${heading}\n`).join('');
+  const brief = '- **Target:** test (lane worktree)\n' + ['Header', 'Task', 'Scope and boundaries', 'Seats', 'Settled decisions', 'Facts carried', 'Method', 'Verification commands', 'Report shape', 'Stop conditions'].map(heading => `## ${heading}\n`).join('');
   put('brief.md', brief);
   put('base_sha', 'base\n');
   put('pi', '#!/bin/sh\nprintf "%s\\n" "$@"\nprintf "STDIN:"\ncat\n', { mode: 0o700 });
@@ -219,7 +220,7 @@ function answerLaunchFixture(t) {
   const dir = mkdtempSync(join(tmpdir(), 'run-pi-answer-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const put = (name, value, options) => writeFileSync(join(dir, name), value, options);
-  put('brief.md', '- **Target:** test (lane worktree)\n' + ['Header', 'Task', 'Fence', 'Seats', 'Settled decisions', 'Facts carried', 'Method', 'Verification commands', 'Finishing', 'Stop conditions'].map(heading => `## ${heading}\n`).join(''));
+  put('brief.md', '- **Target:** test (lane worktree)\n' + ['Header', 'Task', 'Scope and boundaries', 'Seats', 'Settled decisions', 'Facts carried', 'Method', 'Verification commands', 'Finishing', 'Stop conditions'].map(heading => `## ${heading}\n`).join(''));
   put('base_sha', 'base\n'); put('ending-capability', 'call-suspends\n');
   put('landing-answer.json', JSON.stringify({ call_id: 'call', text: 'answer text\nnext line' }));
   put('landing-transcript', join(dir, 'session.jsonl'));
@@ -334,7 +335,6 @@ test('obstacle accepts all six kinds, rejects missing required fields, and repla
 
   for (const args of [
     { kind: 'definition', criteria: 'c1', evidence: 'contradicts tree' },
-    { kind: 'fence', paths: 'tools/other/a.go', evidence: 'file is outside fence' },
     { kind: 'trunk', checks: 'go-build', base: '0123456789ab' },
     { kind: 'tooling', command: 'go test ./...', evidence: 'timed out', paths: 'tools/a_test.go' },
     { kind: 'seat', tried: 'two designs', missing: 'cannot keep both locks' },
@@ -352,10 +352,8 @@ test('obstacle accepts all six kinds, rejects missing required fields, and repla
 
   for (const [args, pattern] of [
     [{ kind: 'unknown' }, /Invalid obstacle kind/],
+    [{ kind: 'fence', paths: 'tools/a.go', evidence: 'outside' }, /Invalid obstacle kind/],
     [{ kind: 'definition', criteria: 'c1' }, /missing required field.*evidence/],
-    [{ kind: 'fence', paths: 'tools/a.go' }, /missing required field.*evidence/],
-    [{ kind: 'fence', paths: '/etc/passwd', evidence: 'abs' }, /repository-relative/],
-    [{ kind: 'fence', paths: '../other.go', evidence: 'parent' }, /repository-relative/],
     [{ kind: 'trunk', checks: 'go-build' }, /missing required field.*base/],
     [{ kind: 'tooling', command: 'go test', evidence: 'hung' }, /missing required field.*paths/],
     [{ kind: 'seat', missing: 'something' }, /missing required field.*tried/],
@@ -379,5 +377,5 @@ test('obstacle accepts all six kinds, rejects missing required fields, and repla
   obstacleTool({ registerTool: (value) => { registered = value; } });
   assert.equal(registered.name, 'obstacle');
   assert.deepEqual(registered.parameters.required, ['kind']);
-  assert.deepEqual(registered.parameters.properties.kind.enum, ['definition', 'fence', 'owner', 'seat', 'tooling', 'trunk']);
+  assert.deepEqual(registered.parameters.properties.kind.enum, ['definition', 'owner', 'seat', 'tooling', 'trunk']);
 });

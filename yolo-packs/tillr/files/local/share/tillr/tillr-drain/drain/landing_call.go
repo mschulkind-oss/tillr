@@ -258,7 +258,7 @@ func (l *Loop) validateLandingOffer(ctx context.Context, d Decision, rec run.Rec
 	// when it has not moved HEAD past its node's own start.
 	wholeItemWriter := false
 	if d.Workflow != nil && base == settledBase {
-		node := d.effectiveNode()
+		node := d.Workflow.Stages[d.NodeIndex]
 		wholeItemWriter = node.Kind == "agent" && node.Access == "write"
 	}
 	if offer.toolName() == "obstacle" {
