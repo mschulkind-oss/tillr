@@ -221,8 +221,9 @@ func TestProposalOptionalAndNotAllowed(t *testing.T) {
 
 type proposalSteps struct {
 	*workflowSteps
-	mode  string
-	nodes []string
+	mode      string
+	nodes     []string
+	writePath string
 }
 
 func (s *proposalSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
@@ -252,10 +253,14 @@ func (s *proposalSteps) Run(ctx context.Context, req run.Request) (run.Record, s
 		}
 	}
 	if node.Access == "write" {
-		if err := os.MkdirAll(filepath.Join(target, "tools/item-a"), 0755); err != nil {
+		path := s.writePath
+		if path == "" {
+			path = "tools/item-a/result.txt"
+		}
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(target, path)), 0755); err != nil {
 			return run.Record{}, "", err
 		}
-		writeForkFile(s.t, filepath.Join(target, "tools/item-a/result.txt"), "built\n")
+		writeForkFile(s.t, filepath.Join(target, path), "built\n")
 		runGit(s.t, target, "add", ".")
 		runGit(s.t, target, "commit", "-qm", "build")
 	}

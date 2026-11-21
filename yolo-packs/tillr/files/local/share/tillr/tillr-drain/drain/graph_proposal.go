@@ -563,9 +563,9 @@ func (l *Loop) settleProposal(tx *store.Tx, d *Decision, artifacts []nodeArtifac
 				if err != nil {
 					return err
 				}
-				if err := inheritWorkflowScope(inner, WorkflowScope{Paths: fencePaths(paths)}); err != nil {
-					refuse("proposal-scope-outside-fence", err)
-				} else if err := inner.checkScopes(paths); err != nil {
+				// Validate declared scopes now, but leave inherited ones unset. Staging
+				// resolves them against the item's current fence on every dispatch.
+				if err := inner.checkScopes(paths); err != nil {
 					refuse("proposal-scope-outside-fence", err)
 				} else {
 					next, err = replaceProposalGraph(d.Workflow, p.Target, inner)
