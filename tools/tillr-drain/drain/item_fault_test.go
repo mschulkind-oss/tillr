@@ -2,6 +2,7 @@ package drain
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,6 +20,9 @@ type faultSteps struct {
 func (s *faultSteps) Gate(ctx context.Context, c Candidate) (GateOutcome, error) {
 	if c.ItemID == "item-a" && s.fault == "internal" {
 		return GateOutcome{}, Internalf("gate could not bind its candidate")
+	}
+	if c.ItemID == "item-a" && s.fault == "gate-record" {
+		return GateOutcome{}, &gateJudgmentRecordError{Externalf("could not read the gate record")}
 	}
 	if c.ItemID == "item-a" && s.fault == "gate" {
 		// The gate STEP failed: the drain could not run the gate or record its answer.
@@ -45,10 +49,14 @@ func TestItemFaultHoldsOnlyItsItem(t *testing.T) {
 			candidatePath := "candidate.txt"
 			if fault == "mirror" {
 				candidatePath = "tools/tillr-drain/script"
-				writePackFixture(t, f.root, ".justfile", "unrelated:\n    @true\n")
 				writePackFixture(t, f.root, "yolo-packs/tillr/pack.json", "{}\n")
-				runGit(t, f.root, "add", ".justfile", "yolo-packs")
-				runGit(t, f.root, "commit", "-qm", "pack without renderer")
+				// Block the embedded renderer at its destination, not at a recipe
+				// in the candidate tree (which the drain no longer executes).
+				if err := os.Symlink("missing", filepath.Join(f.root, "yolo-packs/tillr/files")); err != nil {
+					t.Fatal(err)
+				}
+				runGit(t, f.root, "add", "yolo-packs")
+				runGit(t, f.root, "commit", "-qm", "pack with blocked mirror destination")
 			}
 			fixtureWrite(t, f, func(tx *store.Tx) error {
 				_, err := tx.Exec(`UPDATE items SET allowed_paths=CASE WHEN item_id='item-a' THEN json_array(?) ELSE '["candidate.txt"]' END`, candidatePath)
@@ -130,7 +138,7 @@ func TestItemFaultHoldsOnlyItsItem(t *testing.T) {
 				t.Fatalf("fault %s stopped siblings: %+v / %v", fault, result, err)
 			}
 			next := mustPlan(t, l)[0].decision
-			if next.Action != ActionHold || !strings.Contains(next.Reason, map[string]string{"gate": "gate-harness-error", "boundary": "host-boundary-violation", "candidate": "candidate-record-mismatch", "sync": "definition-sync-failed", "mirror": ReasonSettleFailed, "internal": ReasonSettleFailed}[fault]) {
+			if next.Action != ActionHold || !strings.Contains(next.Reason, map[string]string{"gate": "gate-harness-error", "boundary": "host-boundary-violation", "candidate": "candidate-record-mismatch", "sync": "definition-sync-failed", "mirror": ReasonPackSyncFailed, "internal": ReasonSettleFailed}[fault]) {
 				t.Fatalf("fault not held: %+v", next)
 			}
 			if fault == "candidate" {
@@ -142,7 +150,7 @@ func TestItemFaultHoldsOnlyItsItem(t *testing.T) {
 					return err
 				}
 				f := faults["item-a"]
-				if want := map[string]string{"mirror": "pack-sync", "internal": "gate could not bind its candidate"}[fault]; want != "" {
+				if want := map[string]string{"mirror": "pack-sync: refusing symlinked destination ancestor:", "internal": "gate could not bind its candidate"}[fault]; want != "" {
 					if !strings.Contains(f.Detail, want) || !strings.Contains(f.CompleteMover(holdrules.For(f.Reason).Mover, l.cfg.Store), "clear-fault") {
 						t.Fatalf("fault has no diagnostic or mover: %+v", f)
 					}
@@ -158,6 +166,22 @@ func TestItemFaultHoldsOnlyItsItem(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestExternalGateRecordingErrorStopsExamination(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	l.cfg.Steps = &faultSteps{fault: "gate-record"}
+	stageFinishedCandidateOnLane(t, f, l, "item-a", "lane-1")
+	result, err := l.Run(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "could not read the gate record") || result.Stop != StopFault {
+		t.Fatalf("gate recording error did not stop the loop: %+v / %v", result, err)
+	}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		if holds := mustFaults(t, r); len(holds) != 0 {
+			t.Fatalf("gate recording error was held against the candidate: %+v", holds)
+		}
+		return nil
+	})
 }
 
 func TestExaminationCannotHoldWithoutStoreOrTrunk(t *testing.T) {

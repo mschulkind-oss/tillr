@@ -2997,7 +2997,8 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	l.gatesInFlight--
 	l.mu.Unlock()
 	if err != nil {
-		if ctx.Err() != nil {
+		var judgmentErr *gateJudgmentRecordError
+		if ctx.Err() != nil || errors.As(err, &judgmentErr) {
 			return "", false, err
 		}
 		if ExitCode(err) == record.ExitExternal {

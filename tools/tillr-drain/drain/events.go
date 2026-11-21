@@ -403,6 +403,12 @@ func (l *Loop) recordItemRefusal(ctx context.Context, itemID, reason, detail str
 	}, l.cfg.Now().UTC())
 }
 
+// gateJudgmentRecordError distinguishes a failure to record the gate's answer
+// from a gate failure about a particular candidate.
+type gateJudgmentRecordError struct{ error }
+
+func (e *gateJudgmentRecordError) Unwrap() error { return e.error }
+
 // recordGateJudgment appends the gate step's plan and verdict events, in that order: the plan
 // the gate computed and then the verdict it answered, each carrying its own record's fields
 // plus what the loop observed of the step.
@@ -413,7 +419,12 @@ func (l *Loop) recordItemRefusal(ctx context.Context, itemID, reason, detail str
 // recorded with no verdict are both a record that disagrees with itself. A spans file that is
 // missing or unparseable is not a gate failure — the verdict is the judgment, and the row
 // insert degrades to zero rows with `spans_state` saying which of the two happened.
-func (s *ProcessSteps) recordGateJudgment(ctx context.Context, candidate Candidate, judgment gateStepJudgment) error {
+func (s *ProcessSteps) recordGateJudgment(ctx context.Context, candidate Candidate, judgment gateStepJudgment) (err error) {
+	defer func() {
+		if err != nil {
+			err = &gateJudgmentRecordError{err}
+		}
+	}()
 	if s.Root == "" {
 		return nil
 	}
