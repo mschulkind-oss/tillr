@@ -75,6 +75,11 @@ func TestForkReceiptRecoveryKeepsTheLaterDeliveryInTheCache(t *testing.T) {
 			if code != 0 || decodeLanding(t, out).Payload.TrunkAfter != f.headSHA {
 				t.Fatalf("old receipt recovery exited %d: %s", code, out)
 			}
+			// A pre-move marker and ancestry do not prove that this run moved
+			// the branch, much less that the staged base was its previous tip.
+			if before := decodeLanding(t, out).Payload.TrunkBefore; before != "" {
+				t.Fatalf("marker-only recovery invented a publication edge from %s", before)
+			}
 			if tip := git(t, cache, "rev-parse", "main"); tip != second {
 				t.Fatalf("old recovery rewound or left cache at %s want %s", tip, second)
 			}

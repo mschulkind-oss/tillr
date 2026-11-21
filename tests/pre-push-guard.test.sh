@@ -22,14 +22,11 @@
 #  2. a manifest push whose branch ANOTHER clone moved is refused: origin's branch is not
 #     fast-forwardable from here and it is not the value this clone published either, so
 #     the publish step refuses the rewrite naming origin's commit, and the message names
-#     the manifest, the locator and the OID and prints the exact force-with-lease remedy,
-#     while the manifest does not land;
-#  2b. a rewrite whose remote still holds the value THIS clone published (a re-export, the
-#     normal outcome for a derived branch) is force-pushed without --force-rewritten, and
-#     the value it published is recorded under refs/published/<branch>;
-#  2c. a clone that has published nothing refuses its first rewrite, naming the remote
-#     commit, and --force-rewritten publishes it and establishes the record; a refusal is
-#     about that branch alone, so a second required branch is published in the same run;
+#     the manifest, locator and OID without offering a force command;
+#  2b. a verified rewrite with a matching published record succeeds and records the OID;
+#     a direct refspec cannot substitute an unproved outgoing OID;
+#  2c. a clone that has published nothing refuses its first rewrite even with the old flag;
+#     a second required branch is still published in the same run;
 #  3. a manifest push naming a branch this repository does not have is refused, with
 #     the `git branch` remedy;
 #  4. a push that changes no manifest is untouched;
@@ -57,8 +54,7 @@
 # 14. a series in bin/pi-forks.list is required too, not only the branches a manifest
 #     names: its branch is published on the next push, a series whose branch exists
 #     neither here nor on the remote refuses the push, naming the series that needs it,
-#     and re-exporting that branch publishes the rewrite on its own -- the same rule a
-#     manifest-named branch follows, because a series' branch is derived the same way.
+#     and a verified transition publishes the rewrite without a manifest naming it.
 # 15. a patch branch this clone is BEHIND on is not refused and no rewrite is
 #     requested: the local tip is a strict ancestor of origin's, so there is nothing to
 #     publish. Refusing it and naming `--force-rewritten` (the 2026-10-30 failure) would
@@ -67,7 +63,7 @@
 # 17. the same behind branch with `refs/published/<branch>` naming origin's tip is still
 #     a no-op -- the record never licenses force-pushing an ancestor over origin;
 # 18. a GENUINELY divergent branch (neither tip descends from the other) is still
-#     refused without `--force-rewritten`, and origin's branch is left untouched.
+#     refused without proof, and origin's branch is left untouched.
 # 19. a push that NAMES the patch branch it changes is left to git: the ref is not
 #     published by the hook on the way, so the push's own update is not refused as a
 #     stale old-value claim (the 2026-11-08 `cannot lock ref ... but expected ...`), the
@@ -139,6 +135,16 @@ install_hook
 push() { if out="$(git -C "$work" push origin "$@" 2>&1)"; then rc=0; else rc=$?; fi; }
 origin_ref() { git -C "$origin" rev-parse --verify --quiet "refs/heads/$1" || true; }
 says() { printf '%s' "$out" | grep -q -- "$1"; }
+landing() {
+  mkdir -p "$work/.tillr"
+  python3 - "$work/.tillr/state.db" "$@" <<'PYTHON'
+import json, sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as db:
+    db.execute('CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY, kind TEXT, payload TEXT)')
+    db.execute('INSERT INTO events(kind,payload) VALUES (?,?)', ('land.landing', json.dumps(dict(
+        result='landed', base_ref=sys.argv[2], trunk_before=sys.argv[3], trunk_after=sys.argv[4]))))
+PYTHON
+}
 
 # ── 1. The hook pushes the branch itself, then lets the manifest through ────────
 printf 'upstream\n' > "$work/base.txt"
@@ -158,11 +164,8 @@ check "the manifest landed" \
 check "and the publish step recorded the value this clone published" \
   "$([ "$(git -C "$work" rev-parse --verify --quiet refs/published/patch/ext)" = "$patch_oid" ] && echo 1 || echo 0)"
 
-# ── 2b. This clone's own rewrite publishes without a flag ───────────────────────
-# The publish step recorded patch_oid as what THIS clone published in case 1, and origin
-# still holds it. Exporting the series again rewrites the branch -- the normal outcome for
-# a derived branch -- so the publish step publishes it on its own: the consent flag means
-# "someone else moved this", not "we exported again".
+# ── 2b. A rewrite needs a receipt for the actual outgoing OID ──────────────────
+# The publish step recorded patch_oid in case 1, and origin still holds it.
 git -C "$work" checkout -q patch/ext
 printf 're-exported\n' > "$work/re-exported.txt"
 git -C "$work" add re-exported.txt
@@ -173,20 +176,40 @@ git -C "$work" checkout -q main
 printf 'after\n' > "$work/after.txt"
 git -C "$work" add after.txt
 git -C "$work" commit -qm "a push after the re-export"
+push "+$rewritten_oid:refs/heads/patch/ext"
+check "an explicit refspec cannot push an unproved rewrite" \
+  "$([ "$rc" != 0 ] && says 'no verified landing chain' && [ "$(origin_ref patch/ext)" = "$patch_oid" ] && echo 1 || echo 0)"
+landing refs/heads/patch/ext "$patch_oid" "$rewritten_oid"
+unproved_oid="$(printf 'unlanded\n' | git -C "$work" commit-tree "$rewritten_oid^{tree}" -p "$rewritten_oid")"
+PI_FORKS_PUSH_GUARD_ACTIVE=1 push "+$unproved_oid:refs/heads/patch/ext"
+check "even with recursion disabled the outgoing OID must match the proof" \
+  "$([ "$rc" != 0 ] && says 'no verified landing chain' && [ "$(origin_ref patch/ext)" = "$patch_oid" ] && echo 1 || echo 0)"
+PI_FORKS_PUSH_GUARD_ACTIVE=1 push "--force-with-lease=refs/heads/patch/ext:$patch_oid" "$rewritten_oid:refs/heads/patch/ext"
+check "the recursion flag cannot turn a direct rewrite into recorded publication" \
+  "$([ "$rc" != 0 ] && says 'publish the verified rewrite with' && [ "$(origin_ref patch/ext)" = "$patch_oid" ] && [ "$(git -C "$work" rev-parse refs/published/patch/ext)" = "$patch_oid" ] && echo 1 || echo 0)"
+push "--force-with-lease=refs/heads/patch/ext:$patch_oid" "$rewritten_oid:refs/heads/patch/ext"
+check "a proved rewrite must use the publisher so it can record the result" \
+  "$([ "$rc" != 0 ] && says 'publish the verified rewrite with' && [ "$(origin_ref patch/ext)" = "$patch_oid" ] && [ "$(git -C "$work" rev-parse refs/published/patch/ext)" = "$patch_oid" ] && echo 1 || echo 0)"
+cat > "$work/.git/hooks/pre-push.local" <<'SH'
+#!/bin/sh
+if grep -q ' refs/heads/patch/ext '; then
+    echo 'chained hook refused publication' >&2
+    exit 1
+fi
+SH
+chmod +x "$work/.git/hooks/pre-push.local"
 push main
-check "a rewrite whose remote still holds this clone's value publishes without the flag" \
-  "$([ "$rc" = "0" ] && [ "$(origin_ref patch/ext)" = "$rewritten_oid" ] && echo 1 || echo 0)"
-check "and the publish step says nobody else moved it" \
-  "$(says "rewritten $(printf '%s' "$patch_oid" | cut -c1-12) -> $(printf '%s' "$rewritten_oid" | cut -c1-12)" && says 'nobody else moved it' && echo 1 || echo 0)"
-check "and it does not ask for the consent flag" "$(says 'force-rewritten' && echo 0 || echo 1)"
-check "and the record now holds the value it published" \
+check "a chained hook can reject the publisher's rewrite, not just the outer push" \
+  "$([ "$rc" != 0 ] && says 'chained hook refused publication' && [ "$(origin_ref patch/ext)" = "$patch_oid" ] && [ "$(git -C "$work" rev-parse refs/published/patch/ext)" = "$patch_oid" ] && echo 1 || echo 0)"
+rm "$work/.git/hooks/pre-push.local"
+push main
+check "the publisher delivers the verified tip" \
+  "$([ "$rc" = 0 ] && [ "$(origin_ref patch/ext)" = "$rewritten_oid" ] && echo 1 || echo 0)"
+check "and publication itself records the exact OID" \
   "$([ "$(git -C "$work" rev-parse --verify --quiet refs/published/patch/ext)" = "$rewritten_oid" ] && echo 1 || echo 0)"
 
-# ── 2c. A clone that has published nothing asks before its first rewrite ───────
-# Nothing to compare means nothing to overrule: with no record, the publish step cannot
-# tell this clone's rewrite from one that would overwrite somebody else's commit, so it
-# refuses and names the remote commit. `--force-rewritten` is the person's answer, and it
-# is what establishes the record that makes the next rewrite self-consenting.
+# ── 2c. A clone that has published nothing refuses its first rewrite ───────────
+# The old force flag cannot bypass the check.
 fresh_clone="$tmp/fresh-clone"
 git clone -q "$origin" "$fresh_clone"
 mkdir -p "$fresh_clone/bin" "$fresh_clone/hooks"
@@ -225,18 +248,14 @@ check "a clone with no published value refuses its first rewrite" "$([ "$rc" != 
 check "and a refused rewrite does not stop the branch beside it publishing" \
   "$([ "$(git -C "$origin" rev-parse --verify --quiet refs/heads/patch/other)" = "$other_oid" ] && says '1 pushed to origin' && echo 1 || echo 0)"
 check "and the refusal names the remote commit it would overwrite" \
-  "$(says "REFUSED $(printf '%s' "$rewritten_oid" | cut -c1-12) -> $(printf '%s' "$fresh_oid" | cut -c1-12)" && says "origin has $(printf '%s' "$rewritten_oid" | cut -c1-12)" && echo 1 || echo 0)"
+  "$(says "REFUSED $(printf '%s' "$rewritten_oid" | cut -c1-12) -> $(printf '%s' "$fresh_oid" | cut -c1-12)" && echo 1 || echo 0)"
 check "and says the clone has published nothing for it" \
   "$(says 'this clone has published nothing for it' && echo 1 || echo 0)"
 check "and origin's branch is untouched" "$([ "$(origin_ref patch/ext)" = "$rewritten_oid" ] && echo 1 || echo 0)"
 publish_in --force-rewritten
-check "--force-rewritten publishes that rewrite" \
-  "$([ "$rc" = "0" ] && [ "$(origin_ref patch/ext)" = "$fresh_oid" ] && echo 1 || echo 0)"
-check "and establishes the record from what it published" \
-  "$([ "$(git -C "$fresh_clone" rev-parse --verify --quiet refs/published/patch/ext)" = "$fresh_oid" ] && echo 1 || echo 0)"
-# Fixture plumbing: leave origin holding this checkout's branch again, so the next case
-# is about a branch both sides already agree on. Cases 3b, 6 and 9 do the same.
-PI_FORKS_PUSH_GUARD_ACTIVE=1 git -C "$work" push -q --force origin patch/ext
+check "--force-rewritten still refuses and leaves the remote and record unchanged" \
+  "$([ "$rc" != 0 ] && [ "$(origin_ref patch/ext)" = "$rewritten_oid" ] &&
+     ! git -C "$fresh_clone" show-ref --verify --quiet refs/published/patch/ext && echo 1 || echo 0)"
 
 # ── 5. A branch origin already has at the right OID is untouched ────────────────
 printf 'another\n' > "$work/another.txt"
@@ -255,10 +274,9 @@ check "a push that changes no manifest is untouched" "$([ "$rc" = "0" ] && echo 
 check "and it refuses nothing either" "$(says 'pre-push: refusing' && echo 0 || echo 1)"
 
 # ── 2. Origin's branch moved: the branch push fails, the manifest is refused ────
-# Another machine rewrites the patch branch and pushes it, so this repository's OID is
-# no longer a fast-forward from origin's, and origin's tip is not the value this clone
-# published either -- so the publish step refuses the rewrite and names origin's commit,
-# which is the case the consent flag exists for.
+# Another machine advances the patch branch. This repository's different child is not a
+# fast-forward, and origin's tip is not the value this clone published. The publisher
+# refuses the rewrite and the hook does not try a fallback push.
 other="$tmp/other"
 git clone -q "$origin" "$other"
 git -C "$other" checkout -q patch/ext
@@ -295,10 +313,8 @@ check "the refusal names the locator and the OID origin lacks" \
   "$(says '../..?ref=patch/ext' && says "$(printf '%s' "$new_oid" | cut -c1-12)" && echo 1 || echo 0)"
 check "the publish step refuses the rewrite, naming origin's commit and the value it published" \
   "$(says "REFUSED $(printf '%s' "$origin_oid" | cut -c1-12) -> $(printf '%s' "$new_oid" | cut -c1-12)" && says "origin moved to $(printf '%s' "$origin_oid" | cut -c1-12) since this clone published" && echo 1 || echo 0)"
-check "the refusal prints the exact force-with-lease remedy" \
-  "$(says "git push --force-with-lease=patch/ext:$origin_oid origin $new_oid:refs/heads/patch/ext" && echo 1 || echo 0)"
-check "the refusal prints the branch-push command it tried" \
-  "$(says "git push origin $new_oid:refs/heads/patch/ext" && echo 1 || echo 0)"
+check "the refusal does not suggest forcing a rewrite or retrying the push" \
+  "$(if says 'force-with-lease' || says 'force-rewritten' || says "git push origin $new_oid:refs/heads/patch/ext"; then echo 0; else echo 1; fi)"
 check "the refused manifest did not land" \
   "$([ "$(git -C "$origin" show main:yolo-packs/p/pack.json 2>/dev/null || true)" = "$before_manifest" ] && echo 1 || echo 0)"
 check "and origin's branch was not rewritten" "$([ "$(origin_ref patch/ext)" = "$origin_oid" ] && echo 1 || echo 0)"
@@ -325,7 +341,7 @@ check "the missing-branch manifest did not land" \
 # origin-only branch alone. This is fixture plumbing, not a guarded push: the tree still
 # names the branch case 3 proved is missing, and the publish step refuses any push while
 # a manifest in the tree names a branch this clone cannot supply.
-PI_FORKS_PUSH_GUARD_ACTIVE=1 git -C "$work" push -q --force origin patch/ext
+git -C "$work" push -q --no-verify --force origin patch/ext
 git -C "$origin" update-ref refs/heads/patch/absent "$(git -C "$origin" rev-parse main)"
 git -C "$origin" update-ref refs/heads/patch/remoteonly "$(git -C "$origin" rev-parse main)"
 manifest '../..?ref=patch/remoteonly'
@@ -340,9 +356,7 @@ check "and that manifest lands" \
   "$([ "$(git -C "$origin" show main:yolo-packs/p/pack.json 2>/dev/null | grep -c 'patch/remoteonly')" = "1" ] && echo 1 || echo 0)"
 
 # ── 6. A hook already installed as pre-push.local runs first ────────────────────
-# Reconcile the branch the case-2 refusal left diverged, and restore a manifest that
-# resolves, so this case is about the chained hook alone.
-git -C "$work" push -q --force origin patch/ext
+# Restore a manifest that resolves, so this case is about the chained hook alone.
 manifest '../..?ref=patch/ext'
 git -C "$work" add yolo-packs/p/pack.json
 git -C "$work" commit -qm "restore the good manifest"
@@ -374,7 +388,7 @@ manifest '../..?ref=patch/newbranch'
 git -C "$work" branch patch/newbranch
 git -C "$work" add yolo-packs/p/pack.json
 git -C "$work" commit -qm "name a fresh branch"
-printf 'main refs/heads/main %s refs/heads/main %s\n' \
+printf 'refs/heads/main %s refs/heads/main %s\n' \
   "$(git -C "$work" rev-parse main)" "$(git -C "$origin" rev-parse main)" > "$tmp/stdin"
 if PI_FORKS_PUSH_GUARD_ACTIVE=1 "$work/.git/hooks/pre-push" origin "$origin" < "$tmp/stdin" > "$tmp/active.out" 2>&1; then rc=0; else rc=$?; fi
 check "an active guard exits at once (no recursion)" "$([ "$rc" = "0" ] && [ ! -s "$tmp/active.out" ] && echo 1 || echo 0)"
@@ -406,7 +420,7 @@ check "and its refusal names the branch neither side has" \
 # Reconcile what cases 7 and 8 left behind -- origin holds every branch those
 # manifests named -- and push a manifest that resolves. The first push is fixture
 # plumbing, for the reason given in case 3b.
-PI_FORKS_PUSH_GUARD_ACTIVE=1 git -C "$work" push -q --force origin patch/ext
+git -C "$work" push -q --no-verify --force origin patch/ext
 git -C "$origin" update-ref refs/heads/patch/nobodyhas "$(git -C "$origin" rev-parse main)"
 manifest '../..?ref=patch/ext'
 printf 'identity\n' > "$work/identity.txt"
@@ -527,9 +541,8 @@ check "with the series' branch created, the push publishes it" \
   "$([ "$rc" = "0" ] && [ "$(origin_ref patch/gone)" = "$gone_oid" ] && echo 1 || echo 0)"
 check "and the publish summary counts both kinds of requirement" \
   "$(says 'patch branches: 2 required (1 named by a manifest, 1 declared by a series)' && echo 1 || echo 0)"
-# A series' branch is derived in exactly the same way, so the rewrite rule covers it: the
-# push above published patch/gone and recorded it, and re-exporting it here publishes the
-# rewrite on its own, with no flag and no manifest naming it.
+# The rewrite rule covers a series-only branch too: the push above recorded patch/gone.
+# A successful landing receipt lets the publisher move it without a manifest naming it.
 git -C "$work" checkout -q patch/gone
 printf 'series re-exported\n' > "$work/series-reexported.txt"
 git -C "$work" add series-reexported.txt
@@ -541,10 +554,11 @@ git -C "$work" checkout -q main
 printf 'after the series re-export\n' > "$work/after-series.txt"
 git -C "$work" add after-series.txt
 git -C "$work" commit -qm "a push after the series re-export"
+landing refs/heads/patch/gone "$gone_oid" "$reexported_oid"
 push main
-check "a series' branch rewritten here publishes without the flag" \
+check "a verified series-only rewrite publishes without the flag" \
   "$([ "$rc" = "0" ] && [ "$(origin_ref patch/gone)" = "$reexported_oid" ] && echo 1 || echo 0)"
-check "and the publish step names the series' rewrite as this clone's own" \
+check "and the publish step reports the series' rewrite" \
   "$(says "patch/gone  rewritten $(printf '%s' "$gone_oid" | cut -c1-12) -> $(printf '%s' "$reexported_oid" | cut -c1-12)" && echo 1 || echo 0)"
 
 # ── 15. A clone that is BEHIND origin publishes nothing, and is not refused ─────
@@ -619,9 +633,7 @@ check "a record naming origin's tip does not turn a behind branch into a rewrite
 check "and origin keeps the commits this clone does not have" \
   "$([ "$(origin_ref patch/ext)" = "$fresh_oid" ] && echo 1 || echo 0)"
 
-# ── 18. A genuinely divergent branch still needs the opt-in ────────────────────
-# The one case that IS a rewrite: neither tip descends from the other. The consent rule is
-# unchanged, so the push is refused and `--force-rewritten` is named.
+# ── 18. A genuinely divergent branch still needs proof ────────────────────────
 git -C "$work" branch patch/div main
 manifest '../..?ref=patch/div'
 git -C "$work" add yolo-packs/p/pack.json
@@ -648,10 +660,10 @@ printf 'divergent\n' > "$work/divergent.txt"
 git -C "$work" add divergent.txt yolo-packs/p/pack.json
 git -C "$work" commit -qm "a push while the patch branch diverged"
 push main
-check "a genuinely divergent branch is still refused without the opt-in" \
+check "a genuinely divergent branch is refused without proof" \
   "$([ "$rc" != "0" ] && echo 1 || echo 0)"
-check "and the refusal still names --force-rewritten" \
-  "$(says 'force-rewritten' && echo 1 || echo 0)"
+check "and the refusal does not offer --force-rewritten" \
+  "$(says 'force-rewritten' && echo 0 || echo 1)"
 check "and it says neither tip descends from the other" \
   "$(says 'neither tip descends from the other' && echo 1 || echo 0)"
 check "and origin's branch is untouched by the refusal" \
@@ -705,8 +717,7 @@ git -C "$work" checkout -q main
 python3 - "$work/.tillr/state.db" <<'PYTHON'
 import json, sqlite3, sys
 with sqlite3.connect(sys.argv[1]) as db:
-    db.execute('CREATE TABLE events (seq INTEGER PRIMARY KEY, kind TEXT, payload TEXT)')
-    db.execute('INSERT INTO events VALUES (1, ?, ?)', ('boundary.check', json.dumps({
+    db.execute('INSERT INTO events VALUES (100, ?, ?)', ('boundary.check', json.dumps({
         'patch_moves': [{'ref': 'refs/heads/patch/' + name} for name in ('ext', 'unrequired')],
     })))
 PYTHON
@@ -737,7 +748,7 @@ import json, sqlite3, sys
 with sqlite3.connect(sys.argv[1]) as db:
     for name in ('ext', 'unrequired'):
         db.execute('INSERT INTO events(kind,payload) VALUES (?,?)', ('drain.patch-move-acknowledged', json.dumps({
-            'observation': 1, 'ref': 'refs/heads/patch/' + name,
+            'observation': 100, 'ref': 'refs/heads/patch/' + name,
             'by': 'owner', 'acknowledged_at': '2026-11-18T00:00:00Z',
         })))
 PYTHON

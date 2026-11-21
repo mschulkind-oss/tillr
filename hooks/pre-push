@@ -69,6 +69,7 @@ import sys
 from pathlib import Path
 
 ACTIVE_ENV = "PI_FORKS_PUSH_GUARD_ACTIVE"
+LEASES_ENV = "PI_FORKS_PUBLISH_LEASES_FD"
 ZERO = re.compile(r"^0+$")
 
 
@@ -296,17 +297,20 @@ def remote_branch_oid(remote: str, branch: str):
 
 
 def refusal(remote: str, manifest: str, sha: str, locator: str, branch: str,
-            oid: str, origin_oid, push_reason: str):
+            oid: str, origin_oid, push_reason: str, *, tried=True):
     short = oid[:12]
     lines = [
         f"pre-push: refusing this push: {manifest} (commit {sha[:12]}) names "
         f"patch_branch {locator},",
         f"          and {remote} does not have {branch} at {short}.",
         "",
-        f"  tried : git push {remote} {oid}:refs/heads/{branch}",
-        f"  failed: {push_reason}",
-        "",
     ]
+    if tried:
+        lines.append(f"  tried : git push {remote} {oid}:refs/heads/{branch}")
+    lines.append(f"  failed: {push_reason}")
+    if branch.startswith("patch/"):
+        return "\n".join(lines)
+    lines.append("")
     if origin_oid:
         lines += [
             f"  {remote} has {branch} at {origin_oid[:12]} instead, so the branch was moved",
@@ -349,28 +353,35 @@ def main() -> int:
     repo = Path(top.stdout[:-1]).resolve()
     publisher = repo / "bin" / "patch-branches-publish"
 
-    def holds_allow(refs):
+    remote = sys.argv[1] if len(sys.argv) > 1 else "origin"
+    remote_url = sys.argv[2] if len(sys.argv) > 2 else remote
+
+    def updates_allowed(updates):
+        pass_fds = ()
+        if os.environ.get(ACTIVE_ENV):
+            try:
+                fd = int(os.environ.get(LEASES_ENV, ""))
+                if fd >= 3:
+                    os.fstat(fd)
+                    pass_fds = (fd,)
+            except (OSError, ValueError, OverflowError):
+                pass  # A direct push has no publisher descriptor.
         checked = subprocess.run(
-            [sys.executable, str(publisher), "--check-only",
-             *[arg for ref in sorted(refs) for arg in ("--skip-ref", ref)]],
-            cwd=repo, capture_output=True, text=True,
+            [sys.executable, str(publisher), "--remote", remote, "--check-only",
+             *[arg for ref, old, new in updates for arg in ("--outgoing", ref, old, new)]],
+            cwd=repo, capture_output=True, text=True, pass_fds=pass_fds,
         )
         if checked.returncode:
             print(checked.stdout + checked.stderr, file=sys.stderr, end="")
         return checked.returncode == 0
 
-    patch_destinations = {ref for ref in pushed_refs if ref.startswith("refs/heads/patch/")}
-    if patch_destinations and not holds_allow(patch_destinations):
-        return 1
-    # Internal pushes skip recursive publishing, never the destination hold check.
-    if os.environ.get(ACTIVE_ENV):
-        return 0
-    # WHICH HOOK RAN, said on every push this guard inspects. The 2026-10-24 failure was
+    internal = bool(os.environ.get(ACTIVE_ENV))
+    # WHICH HOOK RAN, said on every outer push this guard inspects. The 2026-10-24 failure was
     # not a wrong answer but a missing one: a push reached origin with the guard never
     # invoked, and nothing on the push said so. An absent report is now the signal, and
     # `core.hooksPath` -- which replaces the repository's hooks directory wholesale -- is
     # named rather than guessed at.
-    if not report_identity(repo):
+    if not internal and not report_identity(repo):
         return 1
 
     # The hooks directory git is running this from -- the repository's shared one, so a
@@ -386,8 +397,13 @@ def main() -> int:
         if result.returncode != 0:
             return result.returncode
 
-    remote = sys.argv[1] if len(sys.argv) > 1 else "origin"
-    remote_url = sys.argv[2] if len(sys.argv) > 2 else remote
+    patch_updates = [(ref, old, new) for _, new, ref, old in stdin_lines
+                     if ref.startswith("refs/heads/patch/")]
+    if patch_updates and not updates_allowed(patch_updates):
+        return 1
+    # Internal pushes skip recursion, not the update checks or the host gate.
+    if internal:
+        return 0
 
     # PUBLISH FIRST, on every push, not only on one carrying a manifest change. A patch
     # branch is the delivery only once the remote has it, and the check below fires on an
@@ -413,11 +429,8 @@ def main() -> int:
         if published.returncode == 3:  # An observation hold must not reach the fallback push.
             return 1
         if published.returncode != 0:
-            # NOT a refusal yet: fall through to the per-commit check below, which is
-            # what prints the exact remedy -- the manifest, the locator, both OIDs and
-            # the `--force-with-lease` command. Refusing here would shadow that with a
-            # bare git error. The publish step is the operation; the check is the one
-            # that explains it, and the check refuses when the branch push fails again.
+            # Keep checking for manifest context, but don't retry a failed patch push
+            # from that path: the publisher's decision stands.
             publish_failed = True
             detail = "\n".join(
                 line for line in published.stderr.splitlines() if line.strip()
@@ -480,8 +493,18 @@ def main() -> int:
                         # proposing the destructive remedy is the wrong direction to be
                         # wrong in (2026-10-30).
                         continue
-                    if branch.startswith("patch/") and not holds_allow({f"refs/heads/{branch}"}):
-                        return 1
+                    if branch.startswith("patch/"):
+                        # A historical locator may need a create or a fast-forward even
+                        # if it isn't in the publisher's working-tree inventory. Never
+                        # retry a refused publication or fall back to a rewrite.
+                        if publish_failed or (origin_oid and git(
+                                "merge-base", "--is-ancestor", origin_oid, oid).returncode != 0):
+                            failures.append(refusal(remote, path, sha, locator, branch, oid,
+                                                    origin_oid, "patch branch publication did not authorize this update",
+                                                    tried=False))
+                            continue
+                        if not updates_allowed([(f"refs/heads/{branch}", origin_oid or "0", oid)]):
+                            return 1
                     env = dict(os.environ, **{ACTIVE_ENV: "1"})
                     pushed = git("push", "--quiet", remote, f"{oid}:refs/heads/{branch}", env=env)
                     if pushed.returncode == 0 and remote_branch_oid(remote, branch) == oid:
