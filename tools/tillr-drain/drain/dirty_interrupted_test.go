@@ -551,8 +551,9 @@ func TestRestartInterruptedNodeAndRetryWorkflowNodePreserveWorkBeforeRestart(t *
 
 type dirtyNormalExitSteps struct {
 	*workflowSteps
-	mu       sync.Mutex
-	requests []run.Request
+	mu        sync.Mutex
+	requests  []run.Request
+	dirtyPath string
 }
 
 func (s *dirtyNormalExitSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
@@ -571,7 +572,11 @@ func (s *dirtyNormalExitSteps) Run(ctx context.Context, req run.Request) (run.Re
 	if err := os.WriteFile(filepath.Join(target, committed), []byte("committed\n"), 0o644); err != nil {
 		return run.Record{}, "", err
 	}
-	if err := os.WriteFile(filepath.Join(target, "tools/item-a/dirty-after-commit.txt"), []byte("uncommitted leftover\n"), 0o644); err != nil {
+	dirtyPath := s.dirtyPath
+	if dirtyPath == "" {
+		dirtyPath = "tools/item-a/dirty-after-commit.txt"
+	}
+	if err := os.WriteFile(filepath.Join(target, dirtyPath), []byte("uncommitted leftover\n"), 0o644); err != nil {
 		return run.Record{}, "", err
 	}
 	for _, args := range [][]string{{"add", committed}, {"commit", "-qm", "candidate commit", "--", committed}} {
@@ -627,13 +632,13 @@ func assertFenceEscapeRefusal(t *testing.T, f refusalLoopFixture, runID string) 
 }
 
 func TestNormalExitClaimingCommitWithDirtyWorktreeRefusesBoundaryScopeEscape(t *testing.T) {
-	t.Run("workflow_write_node", func(t *testing.T) {
+	t.Run("workflow_write_node_outside_fence", func(t *testing.T) {
 		f, l, ws := restartGraphFixture(t)
 		fixtureWrite(t, f, func(tx *store.Tx) error {
 			_, err := tx.Exec(`UPDATE items SET state='closed' WHERE item_id='item-b'`)
 			return err
 		})
-		l.cfg.Steps = &dirtyNormalExitSteps{workflowSteps: ws.workflowSteps}
+		l.cfg.Steps = &dirtyNormalExitSteps{workflowSteps: ws.workflowSteps, dirtyPath: "outside-fence.txt"}
 
 		result, err := l.Run(context.Background())
 		if err != nil {

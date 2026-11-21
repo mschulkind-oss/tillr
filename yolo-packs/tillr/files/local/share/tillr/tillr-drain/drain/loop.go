@@ -3402,13 +3402,28 @@ func (l *Loop) itemFencePath(lane string) (string, error) {
 }
 
 func (l *Loop) fenceViolationAt(ctx context.Context, candidate Candidate, fencePath string) (string, error) {
-	status, err := l.git(ctx, candidate.Worktree, "status", "--porcelain")
-	if err != nil {
-		return "", err
-	}
-	if dirty := strings.TrimSpace(status); dirty != "" {
-		return fmt.Sprintf("%s: the candidate worktree is not clean, so the commit is not the change that was judged: %s",
-			ScopeEscape, strings.Join(strings.Split(dirty, "\n"), "; ")), nil
+	return l.changeFenceViolationAt(ctx, candidate, fencePath, false)
+}
+
+// A blocked node with a complete obstacle offers no candidate. Check its unfinished
+// paths along with its commits, rather than requiring a clean candidate worktree.
+func (l *Loop) changeFenceViolationAt(ctx context.Context, candidate Candidate, fencePath string, blocked bool) (string, error) {
+	var pending []string
+	if blocked {
+		var err error
+		pending, err = l.uncommittedPaths(ctx, candidate.Worktree)
+		if err != nil {
+			return "", err
+		}
+	} else {
+		status, err := l.git(ctx, candidate.Worktree, "status", "--porcelain")
+		if err != nil {
+			return "", err
+		}
+		if dirty := strings.TrimSpace(status); dirty != "" {
+			return fmt.Sprintf("%s: the candidate worktree is not clean, so the commit is not the change that was judged: %s",
+				ScopeEscape, strings.Join(strings.Split(dirty, "\n"), "; ")), nil
+		}
 	}
 	if candidate.Worktree != "" && candidate.Worktree == l.laneForkTarget(candidate.LaneID) {
 		rebase, err := l.forkRebaseDir(ctx, candidate.Worktree)
@@ -3437,7 +3452,7 @@ func (l *Loop) fenceViolationAt(ctx context.Context, candidate Candidate, fenceP
 	}
 	fence := fenceEntries(string(body))
 	prefix := l.fencePrefix(ctx, candidate.Worktree)
-	for _, path := range strings.Split(changed, "\x00") {
+	for _, path := range append(strings.Split(changed, "\x00"), pending...) {
 		if path == "" {
 			continue
 		}
