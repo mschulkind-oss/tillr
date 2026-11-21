@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -56,6 +57,55 @@ func TestStartViewWatcherFilesAndReordersRows(t *testing.T) {
 	}
 	if filed.items[0].id != id || !filed.occupied["lane-1"] {
 		t.Fatalf("refresh changed an already published snapshot: %+v", filed)
+	}
+}
+
+func TestStartViewIncrementalUpdatesAndZeroChurn(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	id := fileFixtureRequest(t, f, "build", item.SingleWorkerWorkflow, []string{"docs/notes.md"})
+	var sync startStoreSync
+	t.Cleanup(sync.close)
+	ctx, at := context.Background(), l.cfg.Now()
+	tick := l.startViewPass()
+	questions := &VantageQuestions{Root: f.root}
+	var previous startSnapshot
+	refresh := func() startSnapshot {
+		t.Helper()
+		next, err := sync.syncStore(ctx, tick.StorePath, at, l.currentPolicy(), previous, func(r *store.Reader, next *startSnapshot) error {
+			return next.rebuildEntries(ctx, r, at, l.currentPolicy(), tick, questions, previous)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		previous = next
+		return next
+	}
+	seed := refresh()
+	at = at.Add(startViewRefreshInterval)
+	if idle := refresh(); idle.pending != seed.pending || idle.lastEventSeq != seed.lastEventSeq {
+		t.Fatal("unchanged safety refresh refolded history or advanced the cursor")
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		runID := "progress-run"
+		_, err := tx.Append(event.Event{Kind: "run.progress", ObjectType: "run", ObjectID: &runID, Payload: []byte(`{}`), At: at})
+		return err
+	})
+	progress := refresh()
+	if progress.pending != seed.pending || progress.lastEventSeq <= seed.lastEventSeq {
+		t.Fatal("progress did not advance the cursor without refolding history")
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := item.Place(ctx, tx, id, item.Destination{After: "item-a"}, at.Add(time.Second), "owner", "test")
+		return err
+	})
+	at = at.Add(time.Second)
+	placed := refresh()
+	if placed.pending != seed.pending || placed.items[0].id != "item-a" || placed.items[1].id != id || seed.items[0].id != id ||
+		!placed.readyAt[id].Equal(seed.readyAt[id]) || placed.contentVersions[id] != seed.contentVersions[id] {
+		t.Fatalf("rerank changed cached facts or failed to change order: %+v -> %+v", seed.items, placed.items)
+	}
+	if entry, ok := placed.nextStart(); !ok || entry.decision.ItemID != "item-a" {
+		t.Fatalf("proposal after place: %+v, %v", entry, ok)
 	}
 }
 

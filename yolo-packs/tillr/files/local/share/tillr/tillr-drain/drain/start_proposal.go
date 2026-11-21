@@ -20,7 +20,7 @@ type startViewEntry struct {
 }
 
 // Capture loop-owned configuration on the loop goroutine; the watcher must not
-// read its mutable holds, questions or rotation maps. This slice reseeds only.
+// read its mutable holds, questions or rotation maps.
 func (l *Loop) startViewPass() Pass {
 	available := append([]string(nil), l.cfg.Lanes...)
 	build := l.build
@@ -63,7 +63,7 @@ func shadowRotation(r *store.Reader, tick *Pass) error {
 }
 
 func (s *startSnapshot) buildPlanner(r *store.Reader, at time.Time, policy *Policy, tick Pass, questions *VantageQuestions, rows []itemRow, inputs map[string]*RunInputs, unproved map[string]bool) (*planner, error) {
-	lanes, owners := maps.Clone(s.occupied), maps.Clone(s.deskOwners)
+	lanes, owners := maps.Clone(s.storeLanes), maps.Clone(s.deskOwners)
 	for _, work := range s.pending.works {
 		if !work.Done && !work.LaneReleased {
 			lanes[work.Decision.LaneID] = true
@@ -167,6 +167,7 @@ func (s *startSnapshot) rebuildEntries(ctx context.Context, r *store.Reader, at 
 	s.occupied = p.held
 	s.holds, s.entries = map[string]string{}, map[string]startViewEntry{}
 	s.readyAt, s.laneFreeAt = map[string]time.Time{}, map[string]time.Time{}
+	s.freeLanes = nil
 	for _, lane := range *tick.AvailableLanes {
 		if !s.occupied[lane] {
 			s.freeLanes = append(s.freeLanes, lane)
