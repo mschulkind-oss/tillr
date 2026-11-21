@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -68,7 +69,6 @@ type survivingLoopSteps struct {
 	t         *testing.T
 	f         refusalLoopFixture
 	strayCmd  *exec.Cmd
-	landedB   chan struct{}
 	itemARun  string
 	itemALane string
 }
@@ -98,7 +98,7 @@ func (s *survivingLoopSteps) Run(ctx context.Context, req run.Request) (run.Reco
 		if err := os.WriteFile(filepath.Join(offerDir, landingOfferFile), []byte(offer), 0o600); err != nil {
 			return run.Record{}, "", err
 		}
-		cmd := exec.Command("sleep", "60")
+		cmd := exec.Command("sleep", "600")
 		cmd.Env = append(os.Environ(), "TILLR_RUN_ID="+req.RunID, "TILLR_LOOP_STORE="+s.f.storePath)
 		if err := cmd.Start(); err != nil {
 			return run.Record{}, "", err
@@ -136,14 +136,22 @@ func (s *survivingLoopSteps) Run(ctx context.Context, req run.Request) (run.Reco
 
 func (s *survivingLoopSteps) Land(ctx context.Context, c Candidate) (LandOutcome, error) {
 	out, err := s.recordingSteps.Land(ctx, c)
-	if err == nil && out.Result == LandLanded && c.ItemID == "item-b" {
-		select {
-		case <-s.landedB:
-		default:
-			close(s.landedB)
-		}
+	if err == nil && out.Result == LandLanded {
+		fixtureLanding(s.t, s.f.storePath, c)
 	}
 	return out, err
+}
+
+func (s *survivingLoopSteps) ItemState(ctx context.Context, id, _, state string, _ ...item.WaitingOn) error {
+	st, err := store.Open(ctx, s.f.storePath, true)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	return st.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state = ? WHERE item_id = ?`, state, id)
+		return err
+	})
 }
 
 func TestSurvivingProcessesHoldOnlyTheirItemAndKeepLoopRunning(t *testing.T) {
@@ -152,17 +160,20 @@ func TestSurvivingProcessesHoldOnlyTheirItemAndKeepLoopRunning(t *testing.T) {
 		recordingSteps: l.cfg.Steps.(*recordingSteps),
 		t:              t,
 		f:              f,
-		landedB:        make(chan struct{}),
 	}
 	l.cfg.Steps = steps
 
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
+	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct {
 		res LoopResult
 		err error
 	}, 1)
+	defer func() {
+		cancel()
+		<-done
+	}()
 	go func() {
+		defer close(done)
 		res, err := l.Run(ctx)
 		done <- struct {
 			res LoopResult
@@ -170,34 +181,49 @@ func TestSurvivingProcessesHoldOnlyTheirItemAndKeepLoopRunning(t *testing.T) {
 		}{res, err}
 	}()
 
-	select {
-	case <-steps.landedB:
-	case out := <-done:
-		t.Fatalf("loop exited before item-b landed: stop=%q detail=%q err=%v", out.res.Stop, out.res.Detail, out.err)
-	case <-ctx.Done():
-		t.Fatal("timed out waiting for item-b to land")
-	}
-
-	// Give the loop one brief moment to settle item-a's hold, then stop cleanly.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		var held bool
+	// A successful Land return precedes item settlement and lane examination.
+	// Wait for both items' durable outcomes before canceling the loop.
+	deadline := time.NewTimer(hangGuard)
+	defer deadline.Stop()
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var heldA, settledB bool
 		fixtureRead(t, f, func(r *store.Reader) error {
-			answer, err := Why(r, Pass{Now: l.cfg.Now().Format("2006-01-02T15:04:05Z07:00"), AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
-			if err == nil {
-				for _, row := range answer.Rows {
-					if row.ItemID == "item-a" && row.Reason == ReasonRunProcessesLive {
-						held = true
-						break
-					}
+			var stateB string
+			if err := r.QueryRow(`SELECT state FROM items WHERE item_id = 'item-b'`).Scan(&stateB); err != nil {
+				return err
+			}
+			works, err := readPending(r)
+			if err != nil {
+				return err
+			}
+			settledB = stateB == StateLanded && works["item-b"] != nil && works["item-b"].Done
+			if !settledB {
+				return nil
+			}
+			answer, err := Why(r, Pass{Now: l.cfg.Now().Format(time.RFC3339), AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
+			if err != nil {
+				return err
+			}
+			for _, row := range answer.Rows {
+				if row.ItemID == "item-a" && row.Reason == ReasonRunProcessesLive {
+					heldA = true
+					break
 				}
 			}
 			return nil
 		})
-		if held {
+		if heldA && settledB {
 			break
 		}
-		time.Sleep(20 * time.Millisecond)
+		select {
+		case out := <-done:
+			t.Fatalf("loop exited before settlement: stop=%q detail=%q err=%v", out.res.Stop, out.res.Detail, out.err)
+		case <-deadline.C:
+			t.Fatalf("timed out waiting for settlement: item-a held=%t, item-b settled=%t", heldA, settledB)
+		case <-ticker.C:
+		}
 	}
 	cancel()
 	out := <-done
@@ -215,8 +241,8 @@ func TestSurvivingProcessesHoldOnlyTheirItemAndKeepLoopRunning(t *testing.T) {
 		if err := r.QueryRow(`SELECT state FROM items WHERE item_id = 'item-b'`).Scan(&stateB); err != nil {
 			return err
 		}
-		if stateB == StateBlocked {
-			t.Fatalf("item-b state = %q, should not be blocked", stateB)
+		if stateB != StateLanded {
+			t.Fatalf("item-b state = %q, want %q", stateB, StateLanded)
 		}
 		var laneState string
 		if err := r.QueryRow(`SELECT state FROM lanes WHERE lane_id = ?`, steps.itemALane).Scan(&laneState); err != nil {
