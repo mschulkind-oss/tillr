@@ -875,9 +875,11 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	}
 	// The shadow reads the store independently; neither startup nor a pass waits
 	// for a snapshot. Use wall time for lease expiry, not the pass's clock hook.
-	storePath := l.cfg.Store
-	stopView := newStartView().watch(ctx, startViewRefreshInterval, func(ctx context.Context) (startSnapshot, error) {
-		return readStartSnapshot(ctx, storePath, time.Now(), l.currentPolicy())
+	shadow, shadowTick := newStartView(), l.startViewPass()
+	root, questionsCmd := l.cfg.Root, l.cfg.QuestionsCmd
+	stopView := shadow.watch(ctx, startViewRefreshInterval, func(ctx context.Context) (startSnapshot, error) {
+		questions := &VantageQuestions{Root: root, Command: questionsCmd, Context: ctx}
+		return readProposedStarts(ctx, shadowTick.StorePath, time.Now(), l.currentPolicy(), shadowTick, questions, shadow.snapshot())
 	})
 	defer stopView()
 	for {
