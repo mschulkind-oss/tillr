@@ -58,11 +58,6 @@ func (l *Loop) retainUnpreserved(ctx context.Context, lane, runID, headSHA strin
 	return stopLaneRetained
 }
 
-// The sequence comes from the event itself; don't persist a second copy in its detail.
-func preserveFaultDetail(f ItemFault, storePath string) string {
-	return f.Detail + "; after correcting the cause, run " + f.ClearCommand(storePath)
-}
-
 // runItem answers the item a run belongs to, or "" for no run.
 func (l *Loop) runItem(ctx context.Context, runID string) (string, error) {
 	if runID == "" {

@@ -1458,8 +1458,12 @@ func identifyDecision(decision *Decision) {
 	if decision.Workflow != nil {
 		decision.TransitionID += "-n" + strconv.Itoa(decision.NodeIndex+1)
 	}
-	if decision.WorkflowRestart && decision.RunRequest != nil {
-		decision.TransitionID += "-" + decision.RunRequest.RunID
+	if req := decision.RunRequest; req != nil {
+		// A detached quota retry stages fresh and clears WorkflowRestart. Its run
+		// still has its own turn at this attempt/node, including when it settles.
+		if decision.WorkflowRestart || (decision.Workflow != nil && runIDMarker.MatchString(req.RunID)) {
+			decision.TransitionID += "-" + req.RunID
+		}
 	}
 	decision.TransitionID += "-" + decision.From
 	if decision.To != "" {

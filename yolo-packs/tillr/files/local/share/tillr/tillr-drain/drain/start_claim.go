@@ -314,8 +314,7 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 	}
 	var collision *decisionCollisionError
 	if errors.As(err, &collision) {
-		detail := collision.Error() + "; the planned " + d.Action + " was not applied. A drain defect named two decisions alike: fix it, then clear this fault (tillr drain clear-fault)"
-		if holdErr := l.holdItemFault(ctx, Candidate{ItemID: d.ItemID}, ReasonDecisionCollision, detail); holdErr != nil {
+		if holdErr := l.holdItemFault(ctx, Candidate{ItemID: d.ItemID}, ReasonDecisionCollision, decisionCollisionDetail(collision, d.Action)); holdErr != nil {
 			return false, nil, "", Decision{}, holdErr
 		}
 		return false, nil, "", Decision{}, nil
