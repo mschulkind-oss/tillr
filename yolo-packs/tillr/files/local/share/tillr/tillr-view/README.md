@@ -200,8 +200,12 @@ reason still has an explicit classification. The
 defines those outcomes and when the judge's verdicts become records.
 
 The waiting summary counts document questions as one owner-waiting class. Each such
-row names the document and question id to answer. Other held rows name the drain,
-the design seat, or the operator as the next actor, with the required action. A
+row names the document and question id to answer. Other held rows name the next
+actor and the required action. A structured push outcome names the heavy runner
+for rebased-tip proof, the repair item for an active conflict, or the owner or
+operator for a hold that needs human action. `push-ok` and `remote-sync-cleared`
+show no waiting row; older push records without a kind keep their failure text
+and retry mover. A
 stored conflict without a document says that no document exists; it is an operator
 or triage task, not an owner question hidden from Vantage's planning index. Answering
 the saved document and landing that edit releases the question hold on the next sync,
