@@ -2,6 +2,7 @@ package drain
 
 import (
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -84,6 +85,27 @@ func (o Obstacle) List(name string) []string {
 		}
 	}
 	return out
+}
+
+var obstacleCheckID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_./:-]*$`)
+
+// trunkChecks reads whole entries, never individual words in an explanation. Reject
+// the entire claim if any entry is not an ID; a partial claim is not what was reported.
+func (o Obstacle) trunkChecks() []string {
+	var checks []string
+	for _, entry := range strings.FieldsFunc(o.Field("CHECKS"), func(r rune) bool { return r == ',' || r == '\n' }) {
+		id := strings.Trim(strings.TrimSpace(entry), "`")
+		if !obstacleCheckID.MatchString(id) {
+			return nil
+		}
+		checks = append(checks, id)
+	}
+	return checks
+}
+
+func invalidTrunkObstacleDetail(o Obstacle) string {
+	return "The run's trunk obstacle did not name only trunk check IDs: " + o.Field("CHECKS") +
+		". A failing test within your own fence, including in a fork checkout, is work to continue, not a trunk check to wait on. Continue the work and commit. Use CHECKS only for exact trunk check IDs, separated by commas or newlines."
 }
 
 // fieldLine answers the field a report line opens, and the value after it. A line opens a
@@ -228,7 +250,7 @@ func missingOutputDetail(problem string) string {
 
 // ObstacleContract is the one statement of the worker's two endings, the text every
 // return to a worker carries.
-const ObstacleContract = "A worker run has two endings. The goal is the commit, ending `RESULT: done`. The only other ending is `RESULT: blocked` with a line `OBSTACLE: <kind>` and that kind's fields: `definition` (CRITERIA, EVIDENCE) when the item's words are wrong or contradict the tree; `trunk` (CHECKS, BASE) when the base is red and this change did not cause it; `tooling` (COMMAND, EVIDENCE, PATHS) when a tool or the harness is defective; `seat` (TRIED, MISSING) when an attempt you made and tested shows the task exceeds this model; `owner` (QUESTION) when only the owner can decide. A merge conflict, a patch to reconcile, a failing test, a long suite and unfinished work are work to continue, not obstacles."
+const ObstacleContract = "A worker run has two endings. The goal is the commit, ending `RESULT: done`. The only other ending is `RESULT: blocked` with a line `OBSTACLE: <kind>` and that kind's fields: `definition` (CRITERIA, EVIDENCE) when the item's words are wrong or contradict the tree; `trunk` (CHECKS with exact trunk check IDs separated by commas or newlines, BASE) when the base is red and this change did not cause it; `tooling` (COMMAND, EVIDENCE, PATHS) when a tool or the harness is defective; `seat` (TRIED, MISSING) when an attempt you made and tested shows the task exceeds this model; `owner` (QUESTION) when only the owner can decide. A merge conflict, a patch to reconcile, a failing test, a long suite and unfinished work are work to continue, not obstacles."
 
 // obstacleDesignInstruction is what the design seat is told to do with a worker's
 // obstacle, by kind, or "" for a report that names none.

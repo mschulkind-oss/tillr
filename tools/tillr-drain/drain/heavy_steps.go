@@ -20,18 +20,15 @@ type HeavyStep interface {
 	JudgeHeavy(context.Context, string, string) ([]HeavyCheck, error)
 }
 
-// JudgeHeavy judges declaration-file heavy checks plus the legacy rolling checks
-// that have not yet migrated to declarations. Attribution runs exactly one named check.
-func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]HeavyCheck, error) {
-	if strings.HasPrefix(only, goTestPrefix) {
-		return s.judgeHeavyGo(ctx, dir, only)
-	}
+type heavyDeclaration struct{ Reads, Needs, Tools []string }
+
+func heavyCheckDeclarations(dir string) (map[string]heavyDeclaration, error) {
 	checksDir := filepath.Join(dir, "tools", "gate", "checks")
 	entries, err := os.ReadDir(checksDir)
 	if err != nil {
-		return nil, Externalf("heavy declarations unavailable: %v", err)
+		return nil, err
 	}
-	declared := map[string]struct{ Reads, Needs, Tools []string }{}
+	declared := map[string]heavyDeclaration{}
 	for _, entry := range entries {
 		if !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -48,8 +45,21 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 			return nil, err
 		}
 		if check.Scope == "tree" && check.Tier == "heavy" {
-			declared[check.ID] = struct{ Reads, Needs, Tools []string }{check.Reads, check.Needs, check.Tools}
+			declared[check.ID] = heavyDeclaration{check.Reads, check.Needs, check.Tools}
 		}
+	}
+	return declared, nil
+}
+
+// JudgeHeavy judges declaration-file heavy checks plus the legacy rolling checks
+// that have not yet migrated to declarations. Attribution runs exactly one named check.
+func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]HeavyCheck, error) {
+	if strings.HasPrefix(only, goTestPrefix) {
+		return s.judgeHeavyGo(ctx, dir, only)
+	}
+	declared, err := heavyCheckDeclarations(dir)
+	if err != nil {
+		return nil, Externalf("heavy declarations unavailable: %v", err)
 	}
 	if only == "" {
 		ids := []string{}

@@ -3,6 +3,7 @@ package drain
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-drain/obstacles"
@@ -31,6 +32,38 @@ func ReadObstacleHolds(r *store.Reader) (map[string]obstacles.Hold, map[string]s
 	return obstacles.Read(r)
 }
 
+// trunkProofLists checks against the inventory the trunk proof can actually run:
+// declared heavy tree checks and the legacy rolling tier, not landing-only checks.
+func (l *Loop) trunkProofLists(ctx context.Context, checks []string) (bool, error) {
+	if len(checks) == 0 || l.cfg.Root == "" {
+		return false, nil
+	}
+	heavy, err := heavyCheckDeclarations(l.cfg.Root)
+	if err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	var remaining []string
+	for _, id := range checks {
+		if _, ok := heavy[id]; !ok {
+			remaining = append(remaining, id)
+		}
+	}
+	if len(remaining) == 0 {
+		return true, nil
+	}
+	legacy, err := legacyCheckDeclarations(ctx, l.cfg.Root)
+	if err != nil {
+		return false, err
+	}
+	var rolling []string
+	for _, check := range legacy {
+		if check.Tier == "rolling" {
+			rolling = append(rolling, check.ID)
+		}
+	}
+	return allIn(remaining, rolling), nil
+}
+
 func (l *Loop) recordObstacleHold(ctx context.Context, d Decision, obs Obstacle) error {
 	baseSHA := d.NodeBaseSHA
 	if baseSHA == "" && d.LaneID != "" {
@@ -47,7 +80,22 @@ func (l *Loop) recordObstacleHold(ctx context.Context, d Decision, obs Obstacle)
 	if d.LaneID != "" {
 		headSHA = l.headOf(ctx, d.LaneID)
 	}
-	checks := obs.List("CHECKS")
+	var checks []string
+	if obs.Kind == ObstacleTrunk {
+		checks = obs.trunkChecks()
+		known, err := l.trunkProofLists(ctx, checks)
+		if err != nil {
+			return err
+		}
+		if !known {
+			l.reportf("loop: %s named an invalid trunk obstacle: returned to its worker\n", d.ItemID)
+			return l.recordRefusal(ctx, Candidate{
+				ItemID: d.ItemID, RunID: runID, LaneID: d.LaneID,
+				Worktree: l.laneTarget(d.LaneID), BaseSHA: baseSHA, HeadSHA: headSHA,
+				RefusalDetail: invalidTrunkObstacleDetail(obs),
+			}, RefusalNoOp)
+		}
+	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return err
