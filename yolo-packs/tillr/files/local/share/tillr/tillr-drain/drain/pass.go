@@ -162,15 +162,44 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 	if pendingHistoryFoldHook != nil {
 		pendingHistoryFoldHook()
 	}
-	events, err := r.EventsOfKind(0, pendingHistoryKinds...)
+	state, err := readPendingHistoryState(r)
 	if err != nil {
 		return nil, nil, err
 	}
-	works := map[string]*pendingWork{}
-	byRun := map[string]*pendingWork{}
-	judged := map[string]bool{}
-	segments := map[string]bool{}
-	discarded := map[string]bool{}
+	return state.works, state.byRun, nil
+}
+
+type pendingHistoryState struct {
+	works, byRun                map[string]*pendingWork
+	judged, segments, discarded map[string]bool
+}
+
+func newPendingHistoryState() *pendingHistoryState {
+	return &pendingHistoryState{
+		works: map[string]*pendingWork{}, byRun: map[string]*pendingWork{},
+		judged: map[string]bool{}, segments: map[string]bool{}, discarded: map[string]bool{},
+	}
+}
+
+func readPendingHistoryState(r *store.Reader) (*pendingHistoryState, error) {
+	state := newPendingHistoryState()
+	if err := foldPendingHistory(r, 0, state, nil); err != nil {
+		return nil, err
+	}
+	return state, nil
+}
+
+// foldPendingHistory extends a private state with ordered events, or reads the
+// relevant kinds after seq if no events were supplied.
+func foldPendingHistory(r *store.Reader, seq int64, s *pendingHistoryState, events []event.Event) error {
+	if events == nil {
+		var err error
+		events, err = r.EventsOfKind(seq, pendingHistoryKinds...)
+		if err != nil {
+			return err
+		}
+	}
+	works, byRun, judged, segments, discarded := s.works, s.byRun, s.judged, s.segments, s.discarded
 	for _, e := range events {
 		if e.ObjectID == nil {
 			continue
@@ -179,7 +208,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 		case dispatchStartedKind, nodeAdvancedKind, graphChangedKind:
 			var work pendingWork
 			if err := json.Unmarshal(e.Payload, &work); err != nil {
-				return nil, nil, err
+				return err
 			}
 			works[work.Decision.ItemID] = &work
 			byRun[*e.ObjectID] = &work
@@ -199,7 +228,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 						Checks []StallObservation `json:"checks"`
 					}
 					if err := json.Unmarshal(e.Payload, &verdict); err != nil {
-						return nil, nil, err
+						return err
 					}
 					if verdict.Result == GateStalled {
 						for _, check := range verdict.Checks {
@@ -215,7 +244,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 				RunID string `json:"run_id"`
 			}
 			if err := json.Unmarshal(e.Payload, &landing); err != nil {
-				return nil, nil, err
+				return err
 			}
 			judged[landing.RunID] = true
 		case run.ResumeKind:
@@ -233,7 +262,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 				ResumedAt string       `json:"resumed_at"`
 			}
 			if err := json.Unmarshal(e.Payload, &segment); err != nil {
-				return nil, nil, err
+				return err
 			}
 			key := fmt.Sprintf("%s@%d:%s", *e.ObjectID, e.At.UnixMilli(), e.Payload)
 			if segments[key] {
@@ -278,7 +307,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 		case examinationClaimedKind:
 			if work := byRun[*e.ObjectID]; work != nil {
 				if err := json.Unmarshal(e.Payload, &work.Owner); err != nil {
-					return nil, nil, err
+					return err
 				}
 				work.Examining = true
 			}
@@ -295,7 +324,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 			if work := byRun[*e.ObjectID]; work != nil {
 				var c Candidate
 				if err := json.Unmarshal(e.Payload, &c); err != nil {
-					return nil, nil, err
+					return err
 				}
 				c.Request = work.Decision.RunRequest
 				c.Seat = work.Decision.Seat
@@ -305,7 +334,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 			if work := byRun[*e.ObjectID]; work != nil {
 				var c Candidate
 				if err := json.Unmarshal(e.Payload, &c); err != nil {
-					return nil, nil, err
+					return err
 				}
 				c.Request, c.Seat = work.Decision.RunRequest, work.Decision.Seat
 				work.Candidate, work.Gated, work.JudgeLanded = &c, true, true
@@ -315,7 +344,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 			if work := byRun[*e.ObjectID]; work != nil {
 				var c Candidate
 				if err := json.Unmarshal(e.Payload, &c); err != nil {
-					return nil, nil, err
+					return err
 				}
 				c.Request, c.Seat = work.Decision.RunRequest, work.Decision.Seat
 				work.Candidate, work.Gated = &c, true
@@ -323,7 +352,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 		case BoundaryCheckKind:
 			var check boundaryCheckPayload
 			if err := json.Unmarshal(e.Payload, &check); err != nil {
-				return nil, nil, err
+				return err
 			}
 			if !check.Clean {
 				// Continuation checks have segment identities; the payload retains
@@ -338,7 +367,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 			if work := byRun[*e.ObjectID]; work != nil {
 				var interrupted orphanedRunEffect
 				if err := json.Unmarshal(e.Payload, &interrupted); err != nil {
-					return nil, nil, err
+					return err
 				}
 				work.Orphaned, work.ResumeAfterRestart = true, interrupted.ResumeAfterRestart
 			}
@@ -346,7 +375,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 			if work := byRun[*e.ObjectID]; work != nil {
 				var hold redCapHold
 				if err := json.Unmarshal(e.Payload, &hold); err != nil {
-					return nil, nil, err
+					return err
 				}
 				hold.Candidate.Request, hold.Candidate.Seat = work.Decision.RunRequest, work.Decision.Seat
 				work.RedCapHold, work.Candidate, work.Gated = &hold, &hold.Candidate, true
@@ -361,7 +390,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 			if work := byRun[*e.ObjectID]; work != nil && !discarded[*e.ObjectID] {
 				var hold dirtyHold
 				if err := json.Unmarshal(e.Payload, &hold); err != nil {
-					return nil, nil, err
+					return err
 				}
 				work.DirtyHold = &hold
 				work.Candidate = &hold.Candidate
@@ -370,7 +399,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 			if work := byRun[*e.ObjectID]; work != nil {
 				var hold gateStallHold
 				if err := json.Unmarshal(e.Payload, &hold); err != nil {
-					return nil, nil, err
+					return err
 				}
 				hold.Candidate.Request, hold.Candidate.Seat = work.Decision.RunRequest, work.Decision.Seat
 				work.GateStall, work.Candidate = &hold, &hold.Candidate
@@ -379,14 +408,14 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 			if work := byRun[*e.ObjectID]; work != nil && !discarded[*e.ObjectID] {
 				var hold repairHold
 				if err := json.Unmarshal(e.Payload, &hold); err != nil {
-					return nil, nil, err
+					return err
 				}
 				work.RepairHold = &hold
 			}
 		case itemFaultClearedKind:
 			var fault ItemFault
 			if err := json.Unmarshal(e.Payload, &fault); err != nil {
-				return nil, nil, err
+				return err
 			}
 			if work := byRun[fault.RunID]; work != nil && fault.Reason == StopHostBoundaryViolation {
 				work.BoundaryFailed = false
@@ -397,14 +426,14 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 		case examinationOwnerKind:
 			if work := byRun[*e.ObjectID]; work != nil {
 				if err := json.Unmarshal(e.Payload, &work.Examiner); err != nil {
-					return nil, nil, err
+					return err
 				}
 			}
 		case candidateReleaseStartedKind, candidateLaneKind:
 			if work := byRun[*e.ObjectID]; work != nil {
 				var lane candidateLane
 				if err := json.Unmarshal(e.Payload, &lane); err != nil {
-					return nil, nil, err
+					return err
 				}
 				lane.Candidate.Request, lane.Candidate.Seat = work.Decision.RunRequest, work.Decision.Seat
 				work.Candidate = &lane.Candidate
@@ -428,7 +457,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 				// stall's second observations.
 				work.LaneReleased, work.LaneKeepReason, work.ReleasePending = false, "", ""
 				if err := json.Unmarshal(e.Payload, work); err != nil {
-					return nil, nil, err
+					return err
 				}
 				if work.Candidate != nil {
 					work.Candidate.Request, work.Candidate.Seat = work.Decision.RunRequest, work.Decision.Seat
@@ -444,7 +473,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 			}
 		}
 	}
-	return works, byRun, nil
+	return nil
 }
 
 func terminalRecord(r *store.Reader, id string) (*run.Record, error) {

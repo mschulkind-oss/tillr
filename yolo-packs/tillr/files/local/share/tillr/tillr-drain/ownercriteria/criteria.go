@@ -51,3 +51,24 @@ func ReadOwnerCriteria(r *store.Reader) (map[string]*OwnerCriterion, error) {
 	}
 	return out, rows.Err()
 }
+
+// ReadOwnerCriteriaForItem reads the first unfinished owner-only criterion for one item.
+func ReadOwnerCriteriaForItem(r *store.Reader, itemID string) (*OwnerCriterion, error) {
+	var hasClass bool
+	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('item_criteria') WHERE name='claim_class')`).Scan(&hasClass); err != nil || !hasClass {
+		return nil, err
+	}
+	rows, err := r.Query(`SELECT criterion_id, text FROM item_criteria WHERE item_id=? AND claim_class='owner-only' AND state <> 'done' ORDER BY criterion_id LIMIT 1`, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, rows.Err()
+	}
+	var c OwnerCriterion
+	if err := rows.Scan(&c.CriterionID, &c.Text); err != nil {
+		return nil, err
+	}
+	return &c, nil
+}

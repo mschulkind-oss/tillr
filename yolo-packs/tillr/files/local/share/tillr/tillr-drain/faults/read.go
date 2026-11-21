@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -33,13 +34,23 @@ type Hold struct {
 // Read also reads historical boundary convictions. An old store needs no new
 // write before a restart can hold the convicted item or show its evidence.
 func Read(r *store.Reader) (map[string]Hold, error) {
-	// Only the kinds the fold reads: it runs inside write transactions, where a read of the
-	// whole log holds the store's write lock for the log's length.
-	events, err := r.EventsOfKind(0, HeldKind, "boundary.check", ClearedKind)
-	if err != nil {
+	byItem := map[string]map[string]Hold{}
+	if err := Fold(r, 0, byItem, nil); err != nil {
 		return nil, err
 	}
-	byItem := map[string]map[string]Hold{}
+	return Resolve(byItem), nil
+}
+
+// Fold extends per-item, per-reason state with ordered events. With no supplied
+// events, read only the relevant kinds after seq, not the whole log.
+func Fold(r *store.Reader, seq int64, byItem map[string]map[string]Hold, events []event.Event) error {
+	if events == nil {
+		var err error
+		events, err = r.EventsOfKind(seq, HeldKind, "boundary.check", ClearedKind)
+		if err != nil {
+			return err
+		}
+	}
 	put := func(f Hold) {
 		if byItem[f.ItemID] == nil {
 			byItem[f.ItemID] = map[string]Hold{}
@@ -51,7 +62,7 @@ func Read(r *store.Reader) (map[string]Hold, error) {
 		case HeldKind:
 			var f Hold
 			if err := json.Unmarshal(e.Payload, &f); err != nil {
-				return nil, err
+				return err
 			}
 			f.AtMS = e.At.UnixMilli()
 			f.Seq = e.Seq
@@ -67,7 +78,7 @@ func Read(r *store.Reader) (map[string]Hold, error) {
 				} `json:"first_violation"`
 			}
 			if err := json.Unmarshal(e.Payload, &c); err != nil {
-				return nil, err
+				return err
 			}
 			if c.Clean {
 				continue
@@ -83,13 +94,18 @@ func Read(r *store.Reader) (map[string]Hold, error) {
 		case ClearedKind:
 			var cleared Hold
 			if err := json.Unmarshal(e.Payload, &cleared); err != nil {
-				return nil, err
+				return err
 			}
 			if e.ObjectID != nil {
 				delete(byItem[*e.ObjectID], cleared.Reason)
 			}
 		}
 	}
+	return nil
+}
+
+// Resolve selects the newest active hold for each item.
+func Resolve(byItem map[string]map[string]Hold) map[string]Hold {
 	holds := map[string]Hold{}
 	for itemID, reasons := range byItem {
 		for _, f := range reasons {
@@ -98,7 +114,7 @@ func Read(r *store.Reader) (map[string]Hold, error) {
 			}
 		}
 	}
-	return holds, nil
+	return holds
 }
 
 // ClearCommand names the store and the precise evidence identity, preventing a
