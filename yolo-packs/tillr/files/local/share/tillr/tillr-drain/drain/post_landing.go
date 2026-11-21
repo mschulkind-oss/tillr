@@ -251,8 +251,15 @@ func pushTrunk(ctx context.Context, root string, p settings.Push) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
 	defer cancel()
-	// Supply an explicit non-forcing refspec, independent of remote push defaults.
-	return pushCommand(ctx, root, "--", remote, "refs/heads/"+TrunkRef+":"+ref)
+	pushed := optionalCommit(ctx, root, "refs/heads/"+TrunkRef)
+	if pushed == "" {
+		return fmt.Errorf("cannot resolve %s for push", TrunkRef)
+	}
+	// Push exactly the commit we will record, even if a landing advances main meanwhile.
+	if err := pushCommand(ctx, root, "--", remote, pushed+":"+ref); err != nil {
+		return err
+	}
+	return advancePublished(ctx, root, remote, ref, pushed)
 }
 
 // pushGreen pushes the commit `refs/tillr/green` holds now to the remote branch, unless the
@@ -269,17 +276,24 @@ func pushGreen(ctx context.Context, root string, p settings.Push) (string, error
 	if err != nil {
 		return green, err
 	}
-	// "Remote is behind green" from the remote-tracking ref a successful push or fetch
-	// updates; when it is missing or stale a push is attempted and git reports the truth.
+	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
+	defer cancel()
+	// Confirm the tracked commit when it already contains green, without fetching.
 	tracking := "refs/remotes/" + remote + "/" + strings.TrimPrefix(ref, "refs/heads/")
-	if _, err := actionCommand(ctx, root, "git", "rev-parse", "--verify", "--quiet", tracking+"^{commit}"); err == nil {
-		if _, err := actionCommand(ctx, root, "git", "merge-base", "--is-ancestor", green, tracking); err == nil {
+	if remoteTip := optionalCommit(ctx, root, tracking); remoteTip != "" {
+		if contains, err := trunkAncestor(ctx, root, green, remoteTip); err != nil {
+			return green, err
+		} else if contains {
+			if err := confirmPublished(ctx, root, remote, ref, remoteTip); err != nil {
+				return green, err
+			}
 			return green, errAlreadyPublished
 		}
 	}
-	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
-	defer cancel()
-	return green, pushCommand(ctx, root, "--", remote, green+":"+ref)
+	if err := pushCommand(ctx, root, "--", remote, green+":"+ref); err != nil {
+		return green, err
+	}
+	return green, advancePublished(ctx, root, remote, ref, green)
 }
 
 // errAlreadyPublished marks the push that was not needed; it is a success, not a failure.

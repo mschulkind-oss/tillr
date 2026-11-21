@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/mschulkind-oss/tillr-land/land"
 )
 
 // BoundarySpec is the span one boundary snapshot covers: the repository whose refs and
@@ -380,7 +382,8 @@ func tillrRef(ref string) bool {
 }
 
 func trunkHistoryRef(ref string) bool {
-	return ref == observedTrunkRef || ref == lostTrunkRef || strings.HasPrefix(ref, acceptedTrunkPrefix)
+	return ref == observedTrunkRef || ref == lostTrunkRef || strings.HasPrefix(ref, acceptedTrunkPrefix) ||
+		strings.HasPrefix(ref, land.PublishedRefPrefix)
 }
 
 // landerRef names the refs tillr-land writes for every landing: the run pin at the head
