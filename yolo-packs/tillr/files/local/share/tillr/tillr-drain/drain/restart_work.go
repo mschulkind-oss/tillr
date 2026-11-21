@@ -17,31 +17,16 @@ func (l *Loop) buildRestartPending(ctx context.Context) (bool, error) {
 	return l.restarter().Pending(ctx)
 }
 
-func (l *Loop) restartDefersToSettlement() bool {
-	return l.restartSettlements.Load() > 0
-}
-
 type runStartAdmissionKey struct{}
 type restartMechanicalKey struct{}
 type restartMechanicalHold struct {
-	loop     *Loop
-	held     bool
-	settling bool
+	loop *Loop
+	held bool
 }
 
-func (h *restartMechanicalHold) acquire() {
-	h.loop.restartMechanical.RLock()
-	h.held = true
-	if h.settling {
-		h.loop.restartSettlements.Add(1)
-	}
-}
-
+func (h *restartMechanicalHold) acquire() { h.loop.restartMechanical.RLock(); h.held = true }
 func (h *restartMechanicalHold) release() {
 	if h.held {
-		if h.settling {
-			h.loop.restartSettlements.Add(-1)
-		}
 		h.held = false
 		h.loop.restartMechanical.RUnlock()
 	}
@@ -50,49 +35,18 @@ func (h *restartMechanicalHold) release() {
 // Mechanical gate and landing steps finish before exec. A model session nested
 // inside one temporarily gives up this place; its lifetime never bounds restart.
 func (l *Loop) lockRestartMechanical(ctx context.Context) (context.Context, func(), error) {
-	return l.lockRestartStep(ctx, false)
-}
-
-// An already admitted gate can finish through landing, but a waiting roll need
-// not take on another settlement. While a settlement owns the read lock, other
-// work (including worker claims and staging) can still share it.
-func (l *Loop) lockRestartSettlement(ctx context.Context) (context.Context, func(), error) {
-	return l.lockRestartStep(ctx, true)
-}
-
-func (l *Loop) lockRestartStep(ctx context.Context, settling bool) (context.Context, func(), error) {
-	h, nested := ctx.Value(restartMechanicalKey{}).(*restartMechanicalHold)
-	if !nested {
-		h = &restartMechanicalHold{loop: l}
-		h.acquire()
-	} else if !settling || h.settling {
+	if _, ok := ctx.Value(restartMechanicalKey{}).(*restartMechanicalHold); ok {
 		return ctx, func() {}, nil
 	}
-	var err error
-	if l.restartReplaced {
+	h := &restartMechanicalHold{loop: l}
+	h.acquire()
+	pending, err := l.buildRestartPending(ctx)
+	if pending && err == nil {
 		err = errRestartPending
-	} else if settling || !l.restartDefersToSettlement() {
-		var pending bool
-		pending, err = l.buildRestartPending(ctx)
-		if pending && err == nil {
-			err = errRestartPending
-		}
 	}
 	if err != nil {
-		if !nested {
-			h.release()
-		}
+		h.release()
 		return ctx, func() {}, err
-	}
-	if settling {
-		h.settling = true
-		l.restartSettlements.Add(1)
-	}
-	if nested {
-		return ctx, func() {
-			l.restartSettlements.Add(-1)
-			h.settling = false
-		}, nil
 	}
 	return context.WithValue(ctx, restartMechanicalKey{}, h), h.release, nil
 }
