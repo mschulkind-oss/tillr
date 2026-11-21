@@ -159,9 +159,8 @@ func ReadSyncDocuments(root string) ([]SyncDocument, error) {
 // syncPlan is what one sync decided before writing: per file, the items to write in write
 // order, and the report as a dry run would print it.
 type syncPlan struct {
-	allowed     map[string]bool // nil for whole sync; declared ids for partial previews
-	orderRecord []string
-	report      SyncReport
+	allowed map[string]bool // nil for whole sync; declared ids for partial previews
+	report  SyncReport
 	// writes are the files with something to write, in the order they may be written, and
 	// each file's payloads in the order its items may be written.
 	writes []fileWrites
@@ -314,40 +313,14 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 			return SyncReport{}, Internalf("releasing the savepoint for %s: %v", fw.file, err)
 		}
 	}
-	// Apply under per-file savepoints, then place successful imports. Record
-	// items come first; the remaining items keep block order, not dependency order.
-	available := map[string]bool{}
+	// Follow source marks after all successful imports have appended.
+	// A source imported later in block order must not move away from its children.
 	places, err := OrderPlaces(tx.Reader())
 	if err != nil {
 		return SyncReport{}, err
 	}
-	for id := range places {
-		if !created[id] {
-			available[id] = true
-		}
-	}
-	recorded := map[string]bool{}
-	for _, id := range plan.orderRecord {
-		if created[id] {
-			if err := placeRecorded(tx, id, plan.orderRecord, available, in.At); err != nil {
-				return SyncReport{}, err
-			}
-			recorded[id], available[id] = true, true
-		}
-	}
 	for _, p := range plan.placements {
-		if created[p.id] && !recorded[p.id] {
-			if len(plan.orderRecord) != 0 && places[p.id] != 0 {
-				if _, err := Place(ctx, tx, p.id, Destination{To: "last"}, in.At, "", "sync"); err != nil {
-					return SyncReport{}, err
-				}
-			}
-		}
-	}
-	// Finish append placement before following source marks: a source imported
-	// later in block order must not subsequently move away from its children.
-	for _, p := range plan.placements {
-		if created[p.id] && places[p.id] != 0 && !recorded[p.id] && p.from != "" {
+		if created[p.id] && places[p.id] != 0 && p.from != "" {
 			if err := placeFrom(tx, p.id, p.from, in.At); err != nil {
 				return SyncReport{}, err
 			}
@@ -374,7 +347,7 @@ func Sync(ctx context.Context, r *store.Reader, tx *store.Tx, in SyncInput) (Syn
 		}
 	}
 	for _, p := range plan.placements {
-		if !created[p.id] || places[p.id] == 0 || recorded[p.id] || p.from == "" || p.from == p.id {
+		if !created[p.id] || places[p.id] == 0 || p.from == "" || p.from == p.id {
 			continue
 		}
 		var sourceKey string
@@ -777,18 +750,10 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	if err != nil {
 		return syncPlan{}, err
 	}
-	var orderRecord []string
 	if in.Root != "" {
 		config, err := settings.Read(in.Root)
 		if err != nil {
 			return syncPlan{}, err
-		}
-		orderRecord, err = readOrderRecord(in.Root, config.Order.Record)
-		if err != nil {
-			// A hand-edited rebuild file must not stop the loop that replaces
-			// it. Report the unusable anchors; retain ordinary source placement.
-			report.Warnings = append(report.Warnings, SyncNote{File: config.Order.Record, Rule: "order-record-unusable", Message: err.Error()})
-			orderRecord = nil
 		}
 		if config.Prose.Rewrite {
 			rewrites := proseRewriteWrites(&report, blocks, held, d.Ready)
@@ -804,7 +769,7 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	if in.Partial {
 		allowed = docshare.Declared(in.Documents)
 	}
-	return syncPlan{report: report, writes: writes, placements: placements, orderRecord: orderRecord, allowed: allowed}, nil
+	return syncPlan{report: report, writes: writes, placements: placements, allowed: allowed}, nil
 }
 
 // orderFileWrites answers the files with writes in an order where a file is written after

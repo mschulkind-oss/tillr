@@ -44,15 +44,7 @@ export interface BuildStamp {
   checkout?: { state: "current" | "behind" | "unknown"; head?: string; note: string };
 }
 
-export interface OrderRecording {
-  recorded: boolean;
-  hand_event_seq: number;
-  recorded_event_seq: number;
-  changed_at_ms?: number;
-}
-
 export interface ServerSnapshot {
-  order_recording?: OrderRecording;
   writes_enabled?: boolean;
   store_path: string;
   schema_version: number;

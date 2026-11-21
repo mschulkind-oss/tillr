@@ -497,6 +497,7 @@ type Loop struct {
 	ownerMigrationItem                   string
 	laneBootstrapReported                bool
 	staleRunsRepaired                    bool
+	orderWorkRetired                     bool // pass-owned check for interrupted pre-upgrade recorder work
 	// staleBaseChecked holds the owner conflicts already read for a stale base in this
 	// process: a conflict's run base and dispatch record never change, so one read answers.
 	staleBaseChecked            map[string]bool

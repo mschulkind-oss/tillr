@@ -73,7 +73,6 @@ func previewPlacements(r *store.Reader, plan syncPlan) ([]SyncPlacement, error) 
 		}
 	}
 	placed := map[string]string{}
-	available := map[string]bool{}
 	newIDs := map[string]bool{}
 	keyed := map[string]bool{}
 	order := []string{}
@@ -85,7 +84,6 @@ func previewPlacements(r *store.Reader, plan syncPlan) ([]SyncPlacement, error) 
 		if v.rank != "" {
 			order = append(order, v.id)
 			keyed[v.id] = true
-			available[v.id] = true
 		}
 	}
 	for _, v := range all {
@@ -93,7 +91,6 @@ func previewPlacements(r *store.Reader, plan syncPlan) ([]SyncPlacement, error) 
 			order = append(order, v.id)
 			placed[v.id] = ""
 			keyed[v.id] = true
-			available[v.id] = true
 		}
 	}
 	writes, err := previewAcceptedWrites(r, plan.writes, all)
@@ -119,7 +116,6 @@ func previewPlacements(r *store.Reader, plan syncPlan) ([]SyncPlacement, error) 
 			continue
 		}
 		delete(keyed, id)
-		delete(available, id)
 		delete(placed, id)
 		rest := []string{}
 		for _, v := range order {
@@ -156,42 +152,8 @@ func previewPlacements(r *store.Reader, plan syncPlan) ([]SyncPlacement, error) 
 		pos := posFor(rest)
 		order = append(append(append([]string{}, rest[:pos]...), id), rest[pos:]...)
 	}
-	recorded := map[string]bool{}
-	for i, id := range plan.orderRecord {
-		if !newIDs[id] || !keyed[id] {
-			continue
-		}
-		move(id, func(rest []string) int {
-			index := map[string]int{}
-			for j, v := range rest {
-				if available[v] && InOrder(states[v]) {
-					index[v] = j
-				}
-			}
-			for j := i - 1; j >= 0; j-- {
-				if p, ok := index[plan.orderRecord[j]]; ok {
-					return p + 1
-				}
-			}
-			for j := i + 1; j < len(plan.orderRecord); j++ {
-				if p, ok := index[plan.orderRecord[j]]; ok {
-					return p
-				}
-			}
-			return len(rest)
-		})
-		recorded[id] = true
-		available[id] = true
-	}
-	if len(plan.orderRecord) != 0 {
-		for _, p := range plan.placements {
-			if newIDs[p.id] && keyed[p.id] && !recorded[p.id] {
-				move(p.id, func(rest []string) int { return len(rest) })
-			}
-		}
-	}
 	for _, p := range plan.placements {
-		if !newIDs[p.id] || !InOrder(states[p.id]) || recorded[p.id] || p.from == "" || p.from == p.id || !keyed[p.from] {
+		if !newIDs[p.id] || !InOrder(states[p.id]) || p.from == "" || p.from == p.id || !keyed[p.from] {
 			continue
 		}
 		move(p.id, func(rest []string) int {

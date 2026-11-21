@@ -8,16 +8,12 @@ covers:
   - tools/tillr/settings/settings.go
   - tools/tillr-item/place.go
   - tools/tillr-item/idea.go
-  - tools/tillr-item/order.go
   - tools/tillr-item/item/place.go
   - tools/tillr-item/item/idea.go
   - tools/tillr-item/item/order.go
   - tools/tillr-item/item/order_ids.go
   - tools/tillr-item/item/order_places.go
-  - tools/tillr-item/item/order_record.go
   - tools/tillr-item/item/sync_from.go
-  - tools/tillr-drain/orderrecord/read.go
-  - tools/tillr-drain/drain/order_record.go
   - tools/tillr-drain/drain/idea.go
   - tools/tillr-view/serveplace.go
   - tools/tillr-view/serveidea.go
@@ -28,7 +24,7 @@ covers:
   - tools/tillr-view/web/src/components/NewIdea.tsx
   - tools/tillr-view/web/src/models/api.ts
 tags: [tillr, observatory, queue, intake, reference]
-summary: "How tillr numbers and moves items in the queue (`place`, `tillr-item place`, first-import placement, and the order record), saves verbatim owner ideas and routes their one-turn design run (`tillr-item idea`, `idea_intake`, `from` outcomes), and exposes both writes over HTTP when `tillr-view serve` runs with `--write`."
+summary: "How tillr numbers and moves items in the queue (`place`, `tillr-item place`, and first-import placement), saves verbatim owner ideas and routes their one-turn design run (`tillr-item idea`, `idea_intake`, `from` outcomes), and exposes both writes over HTTP when `tillr-view serve` runs with `--write`."
 ---
 
 # Observatory actions — queue placement, idea intake, and browser writes
@@ -45,10 +41,10 @@ in `tillr-item`; the HTTP server keeps its SQLite handle read-only and invokes
 
 | Component | Lives in |
 | :--- | :--- |
-| Repository `[order]` and `[intake]` settings | `tools/tillr/settings/settings.go` (`Order`, `Intake`) |
-| `tillr-item place`, `idea`, `order` CLI faces | `tools/tillr-item/place.go`, `idea.go`, `order.go` |
-| Sparse key math, `from` chaining, order-record sync, idea rows | `tools/tillr-item/item/place.go`, `order*.go`, `sync_from.go`, `idea.go` |
-| Order-record reader, idle-loop recorder, idea staging and candidate checks | `tools/tillr-drain/orderrecord/read.go`, `tools/tillr-drain/drain/order_record.go`, `idea.go` |
+| Repository `[intake]` settings | `tools/tillr/settings/settings.go` (`Intake`) |
+| `tillr-item place` and `idea` CLI faces | `tools/tillr-item/place.go`, `idea.go` |
+| Sparse key math, `from` chaining, idea rows | `tools/tillr-item/item/place.go`, `order*.go`, `sync_from.go`, `idea.go` |
+| Idea staging and candidate checks | `tools/tillr-drain/drain/idea.go` |
 | Read-face place projection, idea file/commit reader, `--write` HTTP handlers | `tools/tillr-view/order.go`, `idea_words.go`, `idea_tree.go`, `serveplace.go`, `serveidea.go` |
 | Items table move controls and header `New idea` form | `tools/tillr-view/web/src/components/ItemsPasses.tsx`, `NewIdea.tsx`, `src/models/api.ts` |
 
@@ -132,70 +128,32 @@ observe identical places before and after). Opening or migrating a store never
 assigns keys.
 
 When sync imports a new in-order item — or unparks an existing `not-started`
-item that still has no key — it places the item once by three rules in
-precedence order (`tools/tillr-item/item/sync.go`):
+item that still has no key — sync assigns an append position. New imports with
+an existing source mark then move beside their source (`tools/tillr-item/item/sync.go`):
 
-1. **Order record (`placeRecorded` in `order_record.go`):** If `order.record` is
-   configured and the tracked file exists and names the item, sync places it
-   after the nearest earlier ID in that file already in the order, or before the
-   nearest later ID if none earlier is present, or `last` if neither is present.
-2. **Source mark (`placeFrom` in `sync_from.go`):** Otherwise, if the item's
+1. **Source mark (`placeFrom` in `sync_from.go`):** If the item's
    HTML block carries `from="<source-id>"` and `<source-id>` is in the store
    with a non-empty `rank` (even if `<source-id>` has already `landed`), sync
    places the item immediately after `<source-id>` — or after the last sibling
    already placed with `placed_from = "<source-id>"`, preserving block order
    when one turn emits multiple child items. `insertOrdered` records
    `"placed_from": "<source-id>"` in the `item.update` event payload.
-3. **Append (`nextKeyAfter`):** Otherwise sync appends the item after the
+2. **Append (`nextKeyAfter`):** Otherwise sync appends the item after the
    highest existing `items.rank` in roadmap/document walk order. Sync finishes
    all append placements before running `placeFrom`, so a source imported later
    in the same sync is never moved away from its children.
 
-### The order record
+<a id="the-order-record"></a>
 
-> [!NOTE]
-> On 2026-11-20, owner ruling [`OQ-PR13`](../tillr/decision-provenance-review.md#OQ-PR13)
-> (*"database only"*) overturned `D-OA4`, ruling that hand-dragged queue order
-> lives solely in `.tillr/state.db` and that tracked `queue-order.txt` files,
-> loop `docs: record the queue's order` commits, and `order.record` in
-> [`.tillr.toml`](../../.tillr.toml) are to be removed. At `351b4186c` that
-> removal is unbuilt, and [`.tillr.toml`](../../.tillr.toml) still sets
-> `order.record = "docs/tillr/queue-order.txt"`. The paragraphs below describe
-> the code currently in the tree.
+### Where hand-set order lives
 
-When `[order] record = "<repo-relative-path>"` is set in `.tillr.toml`, the
-system maintains a plain-text list of in-order item IDs so a fresh store rebuild
-recovers hand moves:
-
-- **Format (`orderrecord.Read` in `tools/tillr-drain/orderrecord/read.go`):**
-  Line 1 is `# last_hand_move_event_seq: <seq>`, where `<seq>` is the highest
-  `events.seq` across hand placements (`item.update` with `placed_via` neither
-  empty nor `"sync"`) and saved ideas (`item.add` for an ID in `idea_intake`),
-  or `0` when none exists. When `<seq>` is non-zero, `orderrecord.Read` adds a
-  second comment `# hand_move_event_sha256: <hex>` hashing that event's `seq`,
-  `ts`, `kind`, `object_id`, and `payload` so a rebuilt store's low sequence
-  numbers cannot match an older store's header. `tillr-item order` prints the
-  first comment line followed by one in-order `item_id` per line (`item.OrderRecord`).
-- **Sync parsing (`ReadOrderRecord` in `tools/tillr-item/item/order_record.go`):**
-  Blank lines and `#` comment lines are ignored. A missing file is treated as an
-  empty list (first record not yet landed); unreadable files, malformed IDs, or
-  duplicate IDs fail sync with `invalid-order-record`. Unknown IDs in the file
-  never create items, and editing the file never moves items already in the store.
-- **Idle-loop recording (`recordOrder` in `tools/tillr-drain/drain/order_record.go`):**
-  Only `tillr-drain` writes the tracked file, and only when no worker runs are
-  active, no pass dispatched work, the configured `record` differs from trunk's
-  file, and the latest hand-move event is at least `order.settle_minutes` old
-  (see [Current values](#current-values)). The loop stages only `order.record`
-  on a scratch worktree, runs the landing gate (`--item order-record`), and
-  squash-lands `docs: record the queue's order` through `tillr-land`.
-  `item.OrderRecordID` (`"order-record"`) is reserved: `item.Apply` refuses new
-  items with that ID as `reserved-id`, and `recordOrder` refuses with
-  `order-record-refused` if a legacy store already holds an item with that ID.
-- **Snapshot status (`orderRecordingPayload` in `tools/tillr-view/serve.go`):**
-  When `order.record` is set, `GET /api/v1/snapshot` includes
-  `data.order_recording` (`path`, `recorded`, `last_event_seq`,
-  `changed_at_ms`), comparing `orderrecord.Read` against the file committed on
-  trunk.
+Hand-set order lives only in `.tillr/state.db`, as ruled by
+[`OQ-PR13`](../tillr/decision-provenance-review.md#OQ-PR13) on 2026-11-20.
+It survives a restart with the same database. A rebuilt store starts with the
+planner's order, using the normal first-import placement rules rather than
+restoring hand moves. Sync does not read a queue-order file, and reordering
+writes no repository file or commit. Historical `drain.order-record` events
+remain readable; the loop retires abandoned recording work without landing it.
 
 ---
 
@@ -258,10 +216,9 @@ tillr-item idea --store <db> --root <repo-root> [--to first|last | --before <id>
 - **`idea_intake` row:** Stores `item_id` (primary key), `words_hash` (full
   hex SHA-256), `words_size`, `words_path` (`<intake.dir>/<id>.txt`), and
   `intake_path` (`<store-dir>/intake/<id>.txt`).
-- **Placement and dispatch:** Default destination is `--to first`. The `item.add`
-  event for an `idea_intake` item counts as a hand placement in
-  `orderrecord.Read`. Saved ideas are exempt from the document-fed no-block
-  triage prerequisite (`document_prerequisite.go`) and are automatically
+- **Placement and dispatch:** Default destination is `--to first`. Saved ideas
+  are exempt from the document-fed no-block triage prerequisite
+  (`document_prerequisite.go`) and are automatically
   express-eligible (`strings.HasPrefix(item.ItemID, "item-idea-")` in
   `tools/tillr-drain/drain/plan.go`), preferring an idle `express-*` lane when
   `[lanes] express` is configured and falling back to an ordinary lane otherwise.
@@ -361,10 +318,9 @@ Every failed write returns `{snapshot, error: {code, message}}` (`apierror.go`,
 ### Browser controls
 
 - **Items page (`ItemsPasses.tsx`):** Displays `#` (`place`), renders an `idea`
-  chip plus title on idea rows (`item.kind === "idea"`), shows `order recorded`
-  or `order changed <rel>, not yet recorded` when `data.order_recording` is
-  present, and prints `This server is read-only.` when `writes_enabled` is
-  false. When writes are on, each movable row renders a `Move to top` button
+  chip plus title on idea rows (`item.kind === "idea"`), and prints `This server
+  is read-only.` when `writes_enabled` is false. When writes are on, each movable
+  row renders a `Move to top` button
   (`{"to":"first"}`); when sorted by `place` (`sort=place`), rows also offer a
   `↕` drag handle, a table-footer drop zone (`Drop here to move below the last
   row`, sending `after` the last movable item), and `J` / `K` keyboard moves
@@ -401,8 +357,6 @@ behave; this table is the single place their literal values are stated.
 | Max sparse key length before respacing | `64` characters | `betweenKeys` in `tools/tillr-item/item/place.go` |
 | Respacing stride and width | `36^8` step, `8`-character base-36 keys | `rekeyOrder` in `tools/tillr-item/item/place.go` |
 | Default placement receipt | `placed_by = "owner"`, `placed_via = "cli"` (`"web"` from HTTP) | `Place` in `tools/tillr-item/item/place.go`; `serveplace.go`, `serveidea.go` |
-| Order-record settings | `[order] record` (default `""`), `settle_minutes` (default `10`) | `Default`, `Order` in `tools/tillr/settings/settings.go` |
-| Reserved order-record item ID | `"order-record"` | `OrderRecordID` in `tools/tillr-item/item/apply.go` |
 | Idea ID format | `"item-idea-" + sha256(words)[:12]` | `IdeaID` in `tools/tillr-item/item/idea.go` |
 | Max idea words size | `65536` bytes (`64 KiB`) | `MaxIdeaWordsBytes` in `tools/tillr-item/item/idea.go` |
 | Max derived idea title length | `120` runes (truncated at `119` + `"…"`) | `maxIdeaTitleRunes` in `tools/tillr-item/item/idea.go` |
@@ -426,7 +380,7 @@ status.
 | `D-OA1` | Expose 1-based places on every face while keeping hidden sparse keys in `items.rank` | Storing dense integers rewrites every row below a move and appends `N` update events per drag; sparse keys keep a normal move to one row and one event. |
 | `D-OA2` | Anchor every move to `first`, `last`, or a named `before`/`after` neighbour, never a place number | "Move to place 4" lands in the wrong spot once another writer moves a row above it; naming the neighbour stays exact from a stale or filtered view without optimistic version checks. |
 | `D-OA3` | Keep legacy `items.rank` strings as opaque keys, key unranked in-order items once on sync, and reserve no prefix range | Rewriting existing keys on upgrade creates needless churn, and reserved `00..` prefixes invert priority when the owner moves another item above an idea. |
-| `D-OA4` | **Overturned 2026-11-20 by owner ruling [`OQ-PR13`](../tillr/decision-provenance-review.md#OQ-PR13) (*"database only"*; removal unbuilt at `351b4186c`).** Originally persisted hand order across rebuilds via an opt-in tracked text file (`order.record`) written only by an idle gated loop landing | Originally rejected `rank` attributes in Markdown item blocks (`D-RS1`) and server-made git commits outside `tillr-land`; the owner subsequently ruled that dragged order belongs exclusively in `.tillr/state.db` with no repository file or commit. |
+| `D-OA4` | **Overturned 2026-11-20 by owner ruling [`OQ-PR13`](../tillr/decision-provenance-review.md#OQ-PR13) (*"database only"*).** Originally persisted hand order across rebuilds via an opt-in tracked text file (`order.record`) written only by an idle gated loop landing | Originally rejected `rank` attributes in Markdown item blocks (`D-RS1`) and server-made git commits outside `tillr-land`; the owner subsequently ruled that dragged order belongs exclusively in `.tillr/state.db` with no repository file or commit. |
 | `D-OA5` | Store raw owner words as hash-verified `.txt` files — first in `<store-dir>/intake/`, then in `<intake.dir>/` on landing | Saving `.md` subjects unedited owner dumps to Markdown lint/check refusals, and keeping words only in SQLite loses them on a store rebuild. |
 | `D-OA6` | Every idea's design turn lands `<words_path>` plus new `from`-marked item blocks (or one `stage: DESIGN` doc with open questions and one `from`-marked design item), rather than retitling the idea item *(designer's decision; open for owner review as [`OQ-PR11`](../tillr/decision-provenance-review.md#OQ-PR11))* | An item in tillr lands once and retires its block; emitting child blocks carrying `from` lets one idea fan out into multiple items at the idea's place while keeping ambiguous ideas visible on `question-open` after committing the words into git. |
 | `D-OA7` | `tillr-view serve --write` keeps its SQLite handle read-only and executes `tillr-item` under a mutex for both writes | Having the HTTP server open a SQLite writer creates a second item-mutation code path with duplicate validation, event-receipt, and WAL lock-contention rules. |

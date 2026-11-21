@@ -179,28 +179,6 @@ func TestSyncRoadmapDrySkipsRefusedFilePlacements(t *testing.T) {
 	}
 }
 
-func TestSyncRoadmapDryOrderRecordIgnoresTerminalAnchor(t *testing.T) {
-	s := fromFixture(t, "a", "z")
-	exec(t, s, `UPDATE items SET state='landed' WHERE item_id='item-next'`)
-	root := orderRecordFixture(t, "item-next\nitem-new\nitem-source\n")
-	docs := []item.SyncDocument{doc("docs/new.md", fromBlock("item-new", ""))}
-	var dry item.SyncReport
-	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
-		var err error
-		dry, err = item.Sync(context.Background(), r, nil, item.SyncInput{Root: root, Documents: docs, At: syncAt})
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	live := runSync(t, s, root, docs...)
-	if !reflect.DeepEqual(dry.Placed, live.Placed) {
-		t.Fatalf("dry placements %+v; live %+v", dry.Placed, live.Placed)
-	}
-	if len(live.Placed) != 1 || live.Placed[0].Place != 1 {
-		t.Fatalf("live placements %+v", live.Placed)
-	}
-}
-
 func TestSyncRoadmapParkedFromDoesNotGetAKey(t *testing.T) {
 	s := fromFixture(t, "a", "a0")
 	runSync(t, s, "", doc("docs/roadmap.md", "## Next\n"+fromBlock("item-child", "item-source")+"## Icebox\n"+fromBlock("item-parked", "item-source")))

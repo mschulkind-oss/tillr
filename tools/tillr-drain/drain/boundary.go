@@ -509,7 +509,10 @@ func compareRunWorktrees(before, after *Boundary) (lanes, observed []Violation) 
 	}
 	for _, was := range before.Worktrees {
 		if worktreeFor(after.Worktrees, was.Path) == nil {
-			if insideSiblingDir(after.SiblingDirs, was.Path) || places.worktree(was) || was.Prunable {
+			// Retirement may remove an old recorder checkout, but the loop no
+			// longer creates one: appearances are not excused above.
+			if insideSiblingDir(after.SiblingDirs, was.Path) || places.worktree(was) || was.Prunable ||
+				(was.Branch == "" && !isTarget(before.Targets, was.Path) && legacyOrderWorktree(places.root, was.Path)) {
 				continue
 			}
 			if isTarget(before.Targets, was.Path) {
@@ -529,8 +532,6 @@ func compareRunWorktrees(before, after *Boundary) (lanes, observed []Violation) 
 //
 //   - <lane root>/.rolling/worktree, detached: the rolling tier's checkout of the tip
 //     (ProcessSteps.rollingWorktree);
-//   - <lane root>/.order-record/run-order-record-<seq>-<claim>/worktree, detached:
-//     the loop's record-only maintenance candidate;
 //   - <lane root>/.replay/<sha>, detached: the trunk-already-red replay's checkout of one
 //     revision (ProcessSteps.replayWorktree);
 //   - <lane root>/desk-<doc>/worktree, on that desk's own lane branch: a review-comment
@@ -552,17 +553,6 @@ func (p loopPlaces) worktree(wt Worktree) bool {
 	dir, base := filepath.Dir(wt.Path), filepath.Base(wt.Path)
 	switch {
 	case wt.Path == filepath.Join(root, ".rolling", "worktree"):
-		return wt.Branch == ""
-	case base == WorktreeDir && filepath.Dir(dir) == filepath.Join(root, ".order-record"):
-		parts := strings.Split(strings.TrimPrefix(filepath.Base(dir), "run-order-record-"), "-")
-		if !strings.HasPrefix(filepath.Base(dir), "run-order-record-") || len(parts) != 2 {
-			return false
-		}
-		for _, part := range parts {
-			if part == "" || strings.Trim(part, "0123456789") != "" {
-				return false
-			}
-		}
 		return wt.Branch == ""
 	case dir == filepath.Join(root, ".replay"):
 		return wt.Branch == ""
@@ -790,12 +780,17 @@ func compareStatus(before, after *Boundary) []Violation {
 // worktree half of a snapshot: a worktree appearing or disappearing, and a HEAD moving
 // anywhere, come from here with no per-worktree command.
 func listWorktrees(ctx context.Context, repo string) ([]Worktree, error) {
-	var out string
+	var worktrees []Worktree
 	err := withWorktreeRegistryLock(ctx, repo, func() error {
 		var err error
-		out, err = boundaryGit(ctx, repo, "worktree", "list", "--porcelain")
+		worktrees, err = listWorktreesLocked(ctx, repo)
 		return err
 	})
+	return worktrees, err
+}
+
+func listWorktreesLocked(ctx context.Context, repo string) ([]Worktree, error) {
+	out, err := boundaryGit(ctx, repo, "worktree", "list", "--porcelain")
 	if err != nil {
 		return nil, err
 	}
