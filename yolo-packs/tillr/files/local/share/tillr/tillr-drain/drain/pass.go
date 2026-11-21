@@ -2654,6 +2654,9 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 		return "", err
 	}
 	if !l.nonLanding {
+		if err := l.closeStaleRemoteSyncItems(ctx); err != nil {
+			return "", err
+		}
 		l.maybeRecoverClearedPushHold(ctx)
 	}
 	if err := l.maybeRolling(ctx, mainSHA, false, result); err != nil {

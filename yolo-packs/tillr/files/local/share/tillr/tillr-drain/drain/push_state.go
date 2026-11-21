@@ -452,7 +452,7 @@ func (l *Loop) lastPushRecord(ctx context.Context) pushRecord {
 
 func (l *Loop) lastPushSince(ctx context.Context) string {
 	prev := l.lastPushRecord(ctx)
-	if prev.Kind == "" || prev.Kind == pushKindOK {
+	if prev.Kind == "" || prev.Kind == pushKindOK || prev.Kind == pushKindConflictCleared {
 		return ""
 	}
 	return prev.Since
