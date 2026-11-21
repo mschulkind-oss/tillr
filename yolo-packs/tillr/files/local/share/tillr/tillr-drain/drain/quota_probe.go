@@ -84,6 +84,10 @@ func quotaFresh(q QuotaStatus, command string, at time.Time) bool {
 	return true
 }
 
+// Quota tables are not event folds, but their writes must advance the start
+// view's cursor so an older publication cannot certify a drained queue.
+const quotaUpdatedKind = "drain.quota-updated"
+
 // refreshQuotas performs I/O outside transactions, then records every success or
 // error. Failed readings close only that backend, never silently admit work.
 // The mutex serializes pass and examination/failover probes in this process.
@@ -144,9 +148,15 @@ func (l *Loop) refreshQuotas(ctx context.Context) error {
 				if _, err := tx.Exec(`DELETE FROM backend_quota WHERE backend=?`, name); err != nil {
 					return err
 				}
+				if err := appendEffectOn(tx, quotaUpdatedKind, "backend", name, struct{}{}, l.cfg.Now().UTC()); err != nil {
+					return err
+				}
 			}
 			for name, reserve := range reserves {
 				if _, err := tx.Exec(`UPDATE backend_quota SET reserve=? WHERE backend=?`, reserve, name); err != nil {
+					return err
+				}
+				if err := appendEffectOn(tx, quotaUpdatedKind, "backend", name, struct{}{}, l.cfg.Now().UTC()); err != nil {
 					return err
 				}
 			}
@@ -186,8 +196,10 @@ func (l *Loop) refreshQuotas(ctx context.Context) error {
 			if _, err := tx.Exec(`INSERT INTO backend_quota_readings(backend,command,observed_at,reserve,windows,error) VALUES(?,?,?,?,?,?)`, args...); err != nil {
 				return err
 			}
-			_, err := tx.Exec(`INSERT INTO backend_quota(backend,command,observed_at,reserve,windows,error) VALUES(?,?,?,?,?,?) ON CONFLICT(backend) DO UPDATE SET command=excluded.command,observed_at=excluded.observed_at,reserve=excluded.reserve,windows=excluded.windows,error=excluded.error WHERE excluded.observed_at>=backend_quota.observed_at`, args...)
-			return err
+			if _, err := tx.Exec(`INSERT INTO backend_quota(backend,command,observed_at,reserve,windows,error) VALUES(?,?,?,?,?,?) ON CONFLICT(backend) DO UPDATE SET command=excluded.command,observed_at=excluded.observed_at,reserve=excluded.reserve,windows=excluded.windows,error=excluded.error WHERE excluded.observed_at>=backend_quota.observed_at`, args...); err != nil {
+				return err
+			}
+			return appendEffectOn(tx, quotaUpdatedKind, "backend", name, struct{}{}, q.ObservedAt)
 		}); err != nil {
 			return err
 		}

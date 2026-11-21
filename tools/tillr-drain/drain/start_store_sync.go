@@ -221,7 +221,7 @@ func (d *startStoreDelta) classify(events []event.Event) bool {
 			}
 			d.items = append(d.items, e)
 			known = true
-		case backendProbeKind:
+		case backendProbeKind, quotaUpdatedKind:
 			d.quota, known = true, true
 		case laneRefusedKind, laneRestoredKind:
 			d.rotation, known = true, true

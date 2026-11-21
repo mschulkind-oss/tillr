@@ -411,9 +411,7 @@ func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.
 	if err != nil {
 		return laneOutcome{err: err}
 	}
-	l.mu.Lock()
 	l.addDispatched(result)
-	l.mu.Unlock()
 	l.reportf("loop: resume-failed %s -> new session %s on %s\n", rec.RunID, next.DesignerSessionID, next.LaneID)
 	replacement, log, err := l.runRestartable(ctx, req)
 	if err != nil {
