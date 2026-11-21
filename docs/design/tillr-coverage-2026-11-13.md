@@ -14,6 +14,9 @@ next: "Splice the twelve payloads in the durable scratch directory into config/t
 
 # The coverage claim
 
+> **History note, 2026-11-21.** This is a dated record. It names `docs/design/agent-runtime.md` as that file stood when the record was written; the file
+> was deleted on 2026-11-21, and [the retirement record](./agent-runtime-retirement.md) says what became of it.
+
 **What this is.** The owner's goal state is that *all work we know of that has been talked
 about, planned or is still valid is described by an item in the tillr queue*. This document is
 the proof attempt for that: a walk of every tillr design document, sentence by sentence, looking
@@ -180,7 +183,7 @@ that ends it.
 | `D-MM9`: the boundary snapshot checked in the loop | deleted | `checkBoundary`/`fenceViolation` in `drain/loop.go`; a non-empty diff stops the tick |
 | `D-MM11` (renumbered `D-MM12` on 2026-11-18): a lane-worktree run commits, a main-checkout run never does | deleted | the candidate is the lane's HEAD: `tools/tillr-drain/drain/steps.go`, `attempt.go` |
 | section 1: the boundary canary is owed by the first live run | deleted | the canary rides the first live run of whichever backend answers; with `muse` dormant and `pi` live, the snapshot half is exercised by `pi` and the muse half returns with the switch (`backend-policy.json`'s `about`) |
-| section 8: [`agent-runtime.md`](./agent-runtime.md) owes the process-and-records amendment | item | `item-agent-runtime-backend` |
+| section 8: [the retired agent runtime design](./agent-runtime-retirement.md) owes the process-and-records amendment | item | `item-agent-runtime-backend` |
 | section 8: `SUB-2`'s newly named trigger | deleted | same deferral as its chunking-plan row |
 
 ### 2.7 [`tillr-next-steps.md`](./tillr-next-steps.md) — 10

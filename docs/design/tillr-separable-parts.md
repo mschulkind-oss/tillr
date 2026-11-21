@@ -293,7 +293,7 @@ says which. The arguments from both sides are in
 | C2 | Reopening a landed or resolved-elsewhere item | Both are terminal ([lifecycle §3.2](./tillr-judge-and-lifecycle.md#32-transition-preconditions-and-attempt-holds-d-jl4)); a lifecycle rule, so the definition's | lists the move in its own definition's valid moves, which is built. Reopening a `closed` item works in the landing definition **[ran]** | Real tension: the owner, as reported, rules it the definition's policy (R2-3) |
 | C3 | A running step that rewrites the graph freely, and placeholders for work of unknown shape | Bounded replacement only, no model-written wiring (`D-IG2`, `D-IG3`, `D-IG5`, `D-IG9`, [proposals and graph revisions](../reference/tillr-item-graphs.md#proposals-and-graph-revisions)) | keeps its graph in its dispatcher, or one tillr item per finding | Real tension, narrowed: free rewriting withdrawn; insertion downstream and appending remain (R2-9) |
 | C4 | An uncertain outside effect, such as a lost send, as a state inside a graph | No node changes anything outside its worktree ([what a workflow node may never be](../reference/tillr-item-graphs.md#what-a-workflow-node-may-never-be)) | keeps its send step and its uncertain state. Outside a graph, `blocked` with a waiter works today **[ran]** | Real tension: a report send that lost its session (R2-12) |
-| C5 | Deadlines and clocks in the plan | No timers ([what a workflow node may never be](../reference/tillr-item-graphs.md#what-a-workflow-node-may-never-be), [agent-runtime.md §6](./agent-runtime.md#6-the-task-graph)) | orders and times work in its dispatcher | Withdrawn: the time box is the fuzzer run's own business |
+| C5 | Deadlines and clocks in the plan | No timers ([what a workflow node may never be](../reference/tillr-item-graphs.md#what-a-workflow-node-may-never-be), [the retired agent runtime design, section 6](./agent-runtime-retirement.md#what-happened-to-each-section)) | orders and times work in its dispatcher | Withdrawn: the time box is the fuzzer run's own business |
 | C6 | A Go library as the connection | Processes and records ([board-utilities.md §5.9](./board-utilities.md#59-the-composed-pipeline)) | calls the commands in [Section 2](#2-the-contract-between-tillr-and-product-qa-for-now) | Withdrawn: processes and records are enough |
 | C7 | Completion by "an artifact recorded and judged" in general | A landing completes an item; another definition completes on its hook's recorded verdict, which is built | declares `completes: "hook"` in its definition file | Real tension: a recorded, judged artifact (R2-2) |
 | C8 | A second loop and keeper beside the first, in one root | The keeper finds a loop by its working directory and locks per root ([tillr-keep](../../tools/tillr-roll/tillr-keep), `find_loop`) | runs a loop with its own root, which gets its own lock and lanes **[inferred]**, not run | Withdrawn: it runs its own store and root |
@@ -558,7 +558,7 @@ line on purpose and enforce it with loader checks:
 - one item, one outcome.
 
 These come from [what a workflow node may never be](../reference/tillr-item-graphs.md#what-a-workflow-node-may-never-be) and
-[agent-runtime.md §6](./agent-runtime.md#6-the-task-graph) **[read]**. Five of the thirteen
+[the retired agent runtime design, section 6](./agent-runtime-retirement.md#what-happened-to-each-section) **[read]**. Five of the thirteen
 requests cross that line: requests 3, 4, 5, 8 and 13.
 
 **Cost to the current goal.** Most of what Product QA would use is already queued on the drain's own
@@ -659,7 +659,7 @@ with its event, one writer", for one bounded operation.
 - "In fog" is Guild's word for a node that has not started
   ([The words](../reference/tillr-item-graphs.md#the-words),
   [proposals and graph revisions](../reference/tillr-item-graphs.md#proposals-and-graph-revisions)).
-- Guild is described in [agent-runtime.md §14](./agent-runtime.md#14-adopting-guilds-graph-algebra)
+- Guild is described in [the retired agent runtime design, section 14](./agent-runtime-retirement.md#what-happened-to-each-section)
   as "a Go implementation of dynamic graph transformation" from another of the owner's projects
   **[read]**.
 
@@ -672,7 +672,7 @@ The Guild archive those documents cite is no longer in this checkout **[ran]**.
    not ended" is a manifest of child items applied after the producer settles (D-IP6, unbuilt),
    not a node placeholder **[read]**.
 2. **No model writes wiring (`D-IG5`, `D-IG9`).** A step that edits edges freely is the
-   "workflow-engine creep" that [agent-runtime.md §14](./agent-runtime.md#14-adopting-guilds-graph-algebra)
+   "workflow-engine creep" that [the retired agent runtime design, section 14](./agent-runtime-retirement.md#what-happened-to-each-section)
    names as the first warning sign **[read]**.
 
 **For the request.** The findings graph really does change shape as it runs. Four operations are
@@ -718,7 +718,7 @@ consistent **[read]**:
 - **Files hold the bytes.** The item's prose is a document section, named by `body_ref`. Run
   reports, logs and briefs are files the run record points to. Node outputs will be files recorded
   with name, type, sha256 and location. An artifact is "a digest plus a locator"
-  ([agent-runtime.md §14](./agent-runtime.md#14-adopting-guilds-graph-algebra)).
+  ([the retired agent runtime design, section 14](./agent-runtime-retirement.md#what-happened-to-each-section)).
 
 Product QA's lean toward pointing is right. It needs one more rule: whatever a verdict relied on is
 bound by its digest, so an edited file cannot silently change what was judged.

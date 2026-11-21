@@ -38,7 +38,7 @@ split in [Retirement in the end state](#retirement-in-the-end-state).
 **Reads with:** [`board-utilities.md`](board-utilities.md) (the seven
 utilities), [`board-utilities-lanes.md`](board-utilities-lanes.md) (the
 build order), [`board-sanity-recovery.md`](board-sanity-recovery.md) (why
-the board is being rebuilt), [`agent-runtime.md`](agent-runtime.md) (what
+the board is being rebuilt), [the retired agent runtime design](./agent-runtime-retirement.md) (what
 Pi keeps; the work-control split), [`approver-agent.md`](approver-agent.md)
 (the approver seat's own design),
 [`work-control.md`](../reference/work-control.md) and
@@ -77,7 +77,7 @@ exists).
   nothing".
 - **Gate verdict** — a different verdict entirely: whether the checks in a
   gate plan passed on one candidate tree. It is about a tree, never about
-  whether an item's criterion is met. [`agent-runtime.md`](agent-runtime.md)
+  whether an item's criterion is met. [the retired agent runtime design](./agent-runtime-retirement.md)
   separates these as attempt result, candidate verdict, and **sign-off** —
   a recorded judgment, by a named actor, that a claim about work may
   stand. The item verdict is a sign-off in that sense.
@@ -85,7 +85,7 @@ exists).
 - **Whale seat** — my shorthand, from the code's own `whaleSeat`, for a
   session whose coordinator mode is `running` or `paused` (anything but
   `off`). What mode itself means is contested territory: the work-control
-  split in [`agent-runtime.md`](agent-runtime.md) rules the mode deleted
+  split in [the retired agent runtime design](./agent-runtime-retirement.md) rules the mode deleted
   as a state (its ledger row D1), replaced by two narrower facts — *the
   session may continue itself* and *continuation is paused*.
 - **Cutover** — the planned promotion of the approver seat from shadow to
@@ -163,7 +163,7 @@ does not cover is what the judge was built for: work landed outside the
 queue (a foreground session's own commits), criteria that turn on a
 document's *contents*, and the `defective` finding. Those need a reader
 of words against evidence — an agent — and
-[`agent-runtime.md`](agent-runtime.md) already rules that an agent may
+[the retired agent runtime design](./agent-runtime-retirement.md) already rules that an agent may
 hold that pen: delegated sign-off, bounded by a recorded grant, with
 actor kind and evidence in every verdict record, and never by the actor
 whose work is judged. The approver seat therefore survives migration
@@ -288,7 +288,7 @@ caller and then to nothing.
 | :--- | :--- |
 | The verdict itself | An `item.verdict` record kind owned by `tillr item`: item, criterion hash, verdict, reason, landed refs, actor kind, evidence pointers, evaluated head. `item` is its sole writer and refuses a verdict naming the wrong criterion hash, as the board store already does. |
 | The mechanical retirement | `land`'s landed attempt plus its `gate.verdict` produce a mechanical `item.verdict` in the composed pipeline — no agent involved, exactly as the landing queue retires drain items today. |
-| The approver seat | Survives only as an agent job outside tillr and outside Pi: a client that reads an item and its evidence and presents an `item.verdict` for intake. Invoked explicitly (a request, a drain policy step for non-landing completions), never by a turn end. Bounded by the sign-off grant rules in [`agent-runtime.md`](agent-runtime.md). |
+| The approver seat | Survives only as an agent job outside tillr and outside Pi: a client that reads an item and its evidence and presents an `item.verdict` for intake. Invoked explicitly (a request, a drain policy step for non-landing completions), never by a turn end. Bounded by the sign-off grant rules in [the retired agent runtime design](./agent-runtime-retirement.md). |
 | The in-process judge | Deleted. Its durable parts were never the model call — the deterministic intake, ancestry checks, and refusal accounting move with the record; the provider call inside a session hook does not. |
 | The automatic turn-end pass | Deleted. Nothing in tillr needs a verdict merely because a turn ended; a claim with no verdict is visible standing state ("claimed complete, awaiting a verdict"), and visibility was always the bounded failure. |
 | The shadow approver | Deleted, first. Its only consumer was the cutover; the cutover is cancelled by this ruling. |
@@ -318,7 +318,7 @@ two verdict paths that are never merged into one:
   an `item.verdict` in the composed pipeline, citing the landed commit and
   that verdict. No agent judges anything and no sign-off grant is involved:
   the evidence carries the verdict, which is the exemption
-  [`agent-runtime.md`](agent-runtime.md) already states for mechanical
+  [the retired agent runtime design](./agent-runtime-retirement.md) already states for mechanical
   verdicts. This path is the second shipped end state's (E2's) retirement
   path in [`tillr-chunking-plan.md`](tillr-chunking-plan.md)
   [Section 1](tillr-chunking-plan.md#1-the-end-state), and the writer rules
@@ -339,7 +339,7 @@ two verdict paths that are never merged into one:
   refusing a verdict whose grant is absent, expired or out of scope, and
   refusing any verdict from the actor whose work is judged. The grant's
   shape and its default terms are settled in
-  [`agent-runtime.md`](agent-runtime.md); what is missing is the mechanism —
+  [the retired agent runtime design](./agent-runtime-retirement.md); what is missing is the mechanism —
   the grant record, the store refusal, and the conformance case that pins
   both. That build is its own chunk, **GRANT** (ESTIMATE M — basis: one
   grant record kind, one intake check in `tillr item`, one conformance
@@ -379,7 +379,7 @@ window — that number sizes the surviving approver job, and if it is zero
 the owner may revisit DELETE for the seat with evidence in hand. (4) The
 delegated sign-off grant must be a mechanism before the approver job
 writes authoritative tillr records: today it is a stated convention with
-no store refusal behind it, and [`agent-runtime.md`](agent-runtime.md)
+no store refusal behind it, and [the retired agent runtime design](./agent-runtime-retirement.md)
 says plainly that no completion claim may credit it until one exists. The
 mechanical verdict needs no grant and waits for none of this — see
 [Retirement in the end state](#retirement-in-the-end-state).

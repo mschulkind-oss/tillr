@@ -8,6 +8,9 @@ summary: "A one-time triage of the 43 design documents the tillr roadmap links t
 
 # Triage of the 43 tillr roadmap designs, 2026-11-18
 
+> **History note, 2026-11-21.** This is a dated record. It names `docs/design/agent-runtime.md` as that file stood when the record was written; the file
+> was deleted on 2026-11-21, and [the retirement record](../../design/agent-runtime-retirement.md) says what became of it.
+
 This report triages the 43 design documents that the tillr roadmap links to. One read-only scout
 read each document and checked it against the repository. The 43 findings were written on
 2026-11-18, between 19:31 and 22:20 by the host clock (the modification times `ls -l` prints for
@@ -322,11 +325,11 @@ The frontmatter `status: in-review` and `stage: DESIGN` remain reasonable for th
 
 **Open questions**
 
-[`OQ-GP1`](../../design/tillr-graph-is-the-path.md#OQ-GP1) and [`OQ-GP3`](../../design/tillr-graph-is-the-path.md#OQ-GP3)–[`OQ-GP6`](../../design/tillr-graph-is-the-path.md#OQ-GP6) are already answered in the document's Decision Ledger as owner rulings; [`OQ-GP2`](../../design/tillr-graph-is-the-path.md#OQ-GP2) is explicitly closed as superseded and moved to `docs/design/tillr-storage.md` ([`OQ-TS1`](../../design/tillr-storage.md#OQ-TS1)). [`OQ-GP7`](../../design/tillr-graph-is-the-path.md#OQ-GP7) is unanswered in this document (the “Answer” remains empty), and `docs/tillr/roadmap.md` (“The item graph is the whole path”) still calls it open. However, `docs/design/agent-runtime.md` [§19.2](../../design/agent-runtime.md#192-red-trunk-gate-versus-red-candidate-gate) and its Decision Ledger (`D-G1`, `D-G7`) say non-remedy landing is absolutely blocked on a red trunk and reject scoped landing, which appears to answer GP7's central choice in favor of waiting. Because that file is marked “draft — for outside review,” the evidence does not establish that this newer position is a settled owner ruling; reconcile the documents before asking GP7 again unchanged. The document's statement that the remaining designer decisions await review is also no longer wholly true for `D-GP12`, as cited above.
+[`OQ-GP1`](../../design/tillr-graph-is-the-path.md#OQ-GP1) and [`OQ-GP3`](../../design/tillr-graph-is-the-path.md#OQ-GP3)–[`OQ-GP6`](../../design/tillr-graph-is-the-path.md#OQ-GP6) are already answered in the document's Decision Ledger as owner rulings; [`OQ-GP2`](../../design/tillr-graph-is-the-path.md#OQ-GP2) is explicitly closed as superseded and moved to `docs/design/tillr-storage.md` ([`OQ-TS1`](../../design/tillr-storage.md#OQ-TS1)). [`OQ-GP7`](../../design/tillr-graph-is-the-path.md#OQ-GP7) is unanswered in this document (the “Answer” remains empty), and `docs/tillr/roadmap.md` (“The item graph is the whole path”) still calls it open. However, `docs/design/agent-runtime.md` [retired section 19.2](../../design/agent-runtime-retirement.md#what-happened-to-each-section) and its Decision Ledger (`D-G1`, `D-G7`) say non-remedy landing is absolutely blocked on a red trunk and reject scoped landing, which appears to answer GP7's central choice in favor of waiting. Because that file is marked “draft — for outside review,” the evidence does not establish that this newer position is a settled owner ruling; reconcile the documents before asking GP7 again unchanged. The document's statement that the remaining designer decisions await review is also no longer wholly true for `D-GP12`, as cited above.
 
 **Action**
 
-**correct facts** — distinguish the built static workflow graph from the unbuilt whole-life model, update the overbroad review-status claim, and reconcile [`OQ-GP7`](../../design/tillr-graph-is-the-path.md#OQ-GP7) with `docs/design/agent-runtime.md` [§19](../../design/agent-runtime.md#19-a-red-trunk-gate-blocks-landing-and-only-scopes-dispatch) before treating it as open.
+**correct facts** — distinguish the built static workflow graph from the unbuilt whole-life model, update the overbroad review-status claim, and reconcile [`OQ-GP7`](../../design/tillr-graph-is-the-path.md#OQ-GP7) with `docs/design/agent-runtime.md` [retired section 19](../../design/agent-runtime-retirement.md#what-happened-to-each-section) before treating it as open.
 
 ### 9. tillr-storage
 
@@ -1166,7 +1169,7 @@ The explicitly dated historical measurements and proposals remain useful as a re
 
 **Open questions**
 
-- Its first open question (resident drain vs exit) is answered, not open: its answer in “Open questions” says it was ruled 2026-10-30; `docs/design/agent-runtime.md`, [OQ-RR4](../../design/agent-runtime.md#oq-rr4--is-the-drain-resident-or-does-it-exit), records the resident-drain ruling.
+- Its first open question (resident drain vs exit) is answered, not open: its answer in “Open questions” says it was ruled 2026-10-30; `docs/design/agent-runtime.md`, [OQ-RR4](../../design/agent-runtime-retirement.md#question-ids-that-outlive-the-document), records the resident-drain ruling.
 - Its second and third open questions (notification target and branch/worktree retention) have no answer text in this document and are not answered elsewhere in the cited retirement material. They are no longer askable as active design questions because the opening retirement notice says the design's open questions were closed with its retirement. Therefore they are unruled historical questions, not unresolved work for item 225. The proposed answers remain visible as history and should not be mistaken for owner decisions.
 - Its repair-budget and flake-rerun rulings are owner rulings in the decision ledger (Section 12), so they are answered within the document; their current effect should be read through the superseding [`docs/design/landing-principles.md`](../../design/landing-principles.md), not as a revived build plan.
 

@@ -245,7 +245,7 @@ the machine's pi profile. Claude Code takes it from arguments, so the policy row
 argument list after a `--` separator, and the adapter hands them to the harness unchanged.** The
 policy's rule that it holds data and the adapter holds spelling is kept: tillr does not invent one
 permission vocabulary for four harnesses, which
-[the runtime design](./agent-runtime.md#1-purpose-and-scope) names as a hole it does not fill.
+[the retired runtime design](./agent-runtime-retirement.md#what-happened-to-each-section) names as a hole it does not fill.
 
 | Wanted | Harness argument |
 | :--- | :--- |
