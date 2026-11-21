@@ -3988,8 +3988,8 @@ def flake_override_line(packet: dict) -> str:
             f"--failing <this run's evidence> --passing <the re-run's evidence>")
 
 
-def print_triage(plan: Plan, record: Record, packets: list[dict], path: str | None) -> None:
-    """Name every failing check's packet, and the record's older failures that did not run."""
+def print_current_triage(packets: list[dict], path: str | None = None) -> None:
+    """Print failures from this invocation only, including for record-free replays."""
     if packets:
         print()
         print(f"fork-check: triage -- {len(packets)} failed check(s), diagnosed from this run's "
@@ -4001,6 +4001,11 @@ def print_triage(plan: Plan, record: Record, packets: list[dict], path: str | No
                 print(f"       {line}")
         if path is not None:
             print(f"fork-check: the machine-readable packet is {path}")
+
+
+def print_triage(plan: Plan, record: Record, packets: list[dict], path: str | None) -> None:
+    """Name every failing check's packet, and the record's older failures that did not run."""
+    print_current_triage(packets, path)
     stale = recorded_triage(record, plan)
     if stale:
         # HISTORICAL, not this run's failures: the check did not run here, so its packet
@@ -10230,10 +10235,14 @@ def run_replay(argv: list[str]) -> int:
         status = "PASS" if check.rc == 0 else "FAIL"
         print(f"fork-check replay: {status} {check.kind}: {check.label} (exit {check.rc})")
         if check.rc != 0:
-            failed.append(f"{check.kind}: {check.label}")
+            failed.append(check)
+            if check.output:
+                print(check.output, end="" if check.output.endswith("\n") else "\n")
     if failed:
+        print_current_triage([triage_packet(check, root) for check in failed])
+        labels = ", ".join(f"{check.kind}: {check.label}" for check in failed)
         print(f"fork-check replay: {len(failed)} of {len(copies)} check(s) red on "
-              f"{gate.head[:12]}: {', '.join(failed)}", file=sys.stderr)
+              f"{gate.head[:12]}: {labels}", file=sys.stderr)
         return 1
     print(f"fork-check replay: all {len(copies)} named check(s) green on {gate.head[:12]}")
     return 0
