@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -702,55 +703,145 @@ func (l *Loop) preservedWorkForDecision(ctx context.Context, d Decision, runID s
 	return found, err
 }
 
-// applyPreservedWork applies preserved uncommitted work (working tree and staged index
-// when IndexRef exists) onto target when a continued step is staged on a different lane.
-func (l *Loop) applyPreservedWork(ctx context.Context, target string, p PreservedWork) error {
+type preservedConflict struct {
+	Ref   string
+	Paths []string
+}
+
+func (c preservedConflict) brief() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "\nKept work at %s could not be applied. No partial replay was kept in this checkout. Inspect the kept ref and reconcile its changes with this checkout before continuing.\n", c.Ref)
+	for _, path := range c.Paths {
+		fmt.Fprintf(&b, "- Kept-work conflict: %q\n", path)
+	}
+	return b.String()
+}
+
+// applyPreservedWork replays onto a clean destination lane. A content conflict
+// leaves that lane clean, including when the index replay succeeded but the
+// working-tree replay failed. The kept refs still hold both snapshots.
+func (l *Loop) applyPreservedWork(ctx context.Context, lane, target string, p PreservedWork) (*preservedConflict, error) {
 	if p.Ref == "" {
-		return nil
+		return nil, nil
 	}
 	if _, err := l.git(ctx, target, "rev-parse", "--verify", "--quiet", p.Ref); err != nil {
-		return nil
+		return nil, nil
 	}
-	applyDiff := func(from, to string, index bool) error {
-		patch, err := l.git(ctx, target, "diff", "--binary", from, to)
-		if err != nil {
-			return err
-		}
-		if patch == "" {
-			return nil
-		}
-		runApply := func(threeWay bool) error {
-			args := []string{"-C", target, "apply"}
-			if index {
-				args = append(args, "--index")
-			}
-			if threeWay {
-				args = append(args, "--3way")
-			}
-			cmd := exec.CommandContext(ctx, "git", args...)
-			cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
-			cmd.Stdin = strings.NewReader(patch)
-			var stderr strings.Builder
-			cmd.Stderr = &stderr
-			if err := cmd.Run(); err != nil {
-				return Externalf("applying preserved work %s (%s..%s): %v: %s", p.Ref, from, to, err, strings.TrimSpace(stderr.String()))
-			}
-			return nil
-		}
-		if err := runApply(false); err != nil {
-			if err3 := runApply(true); err3 != nil {
-				return err
-			}
-		}
-		return nil
+	status, err := l.git(ctx, target, "--no-optional-locks", "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		return nil, err
 	}
+	if status != "" {
+		first, _, _ := strings.Cut(status, "\n")
+		return nil, laneRefusalf(lane, ReasonLaneUncommittedWork, "commit or remove the files, or reset the lane deliberately",
+			"lane %s holds uncommitted work (%s)", lane, first)
+	}
+
+	from := p.Ref + "^1"
 	if p.IndexRef != "" {
 		if _, err := l.git(ctx, target, "rev-parse", "--verify", "--quiet", p.IndexRef); err == nil {
-			if err := applyDiff(p.IndexRef+"^1", p.IndexRef, true); err != nil {
-				return err
+			paths, err := l.applyPreservedDiff(ctx, target, p.IndexRef+"^1", p.IndexRef, true)
+			if err != nil || len(paths) > 0 {
+				return l.finishPreservedReplay(ctx, target, p.Ref, paths, err)
 			}
-			return applyDiff(p.IndexRef, p.Ref, false)
+			from = p.IndexRef
 		}
 	}
-	return applyDiff(p.Ref+"^1", p.Ref, false)
+	paths, err := l.applyPreservedDiff(ctx, target, from, p.Ref, false)
+	return l.finishPreservedReplay(ctx, target, p.Ref, paths, err)
+}
+
+func (l *Loop) finishPreservedReplay(ctx context.Context, target, ref string, paths []string, err error) (*preservedConflict, error) {
+	if err == nil && len(paths) == 0 {
+		return nil, nil
+	}
+	// The direct apply is atomic on a content mismatch; a three-way conflict
+	// and the first (index) patch both leave their changes tracked in the index.
+	if _, resetErr := l.git(ctx, target, "reset", "--hard", "HEAD"); resetErr != nil {
+		return nil, Externalf("rolling back preserved work %s: %v (apply error: %v)", ref, resetErr, err)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &preservedConflict{Ref: ref, Paths: paths}, nil
+}
+
+func (l *Loop) applyPreservedDiff(ctx context.Context, target, from, to string, index bool) ([]string, error) {
+	patch, err := l.git(ctx, target, "diff", "--binary", from, to)
+	if err != nil || patch == "" {
+		return nil, err
+	}
+	args := []string{"-C", target, "apply"}
+	if index {
+		args = append(args, "--index")
+	}
+	apply := func(args []string) (string, error) {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0", "LC_ALL=C")
+		cmd.Stdin = strings.NewReader(patch)
+		var stderr strings.Builder
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		return stderr.String(), err
+	}
+	if _, err := apply(args); err == nil {
+		return nil, nil
+	}
+	stderr, err := apply(append(args, "--3way"))
+	if err == nil {
+		return nil, nil
+	}
+	paths, contentFailure := applyMismatchPaths(stderr)
+	if ctx.Err() == nil && contentFailure {
+		unmerged, err := l.git(ctx, target, "diff", "--name-only", "--diff-filter=U", "-z")
+		if err != nil {
+			return nil, err
+		}
+		for _, path := range strings.Split(strings.TrimSuffix(unmerged, "\x00"), "\x00") {
+			if path != "" && !slices.Contains(paths, path) {
+				paths = append(paths, path)
+			}
+		}
+		if len(paths) > 0 {
+			return paths, nil
+		}
+	}
+	return nil, Externalf("applying preserved work (%s..%s): %v: %s", from, to, err, strings.TrimSpace(stderr))
+}
+
+// Some mismatches (such as a deleted path) cannot leave unmerged entries.
+// Recognize Git's direct-apply mismatch diagnostics, not arbitrary failures
+// such as an index lock, missing object, or inability to write the checkout.
+func applyMismatchPaths(stderr string) (paths []string, contentFailure bool) {
+	for _, line := range strings.Split(stderr, "\n") {
+		if strings.HasPrefix(line, "fatal: ") {
+			return nil, false
+		}
+		// A different file's mismatch can stop Git before it writes the
+		// unmerged entries it already diagnosed.
+		if path, ok := strings.CutPrefix(line, "Applied patch to '"); ok {
+			if path, ok := strings.CutSuffix(path, "' with conflicts."); ok {
+				paths = append(paths, path)
+			}
+			continue
+		}
+		msg, ok := strings.CutPrefix(line, "error: ")
+		if !ok || strings.HasPrefix(msg, "patch failed: ") {
+			continue
+		}
+		matched := false
+		for _, suffix := range []string{": patch does not apply", ": does not exist in index", ": already exists in index", ": already exists in working directory", ": does not match index", ": wrong type"} {
+			if path, ok := strings.CutSuffix(msg, suffix); ok {
+				if !slices.Contains(paths, path) {
+					paths = append(paths, path)
+				}
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return nil, false
+		}
+	}
+	return paths, true
 }
