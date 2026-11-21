@@ -192,11 +192,10 @@ func (s *verifyReturnSteps) Run(ctx context.Context, req run.Request) (run.Recor
 				return run.Record{}, "", err
 			}
 			fence := fenceEntries(string(body))
-			if got, want := insideFence("tools/item-a/other.txt", fence), len(s.pieceRuns) > 1; got != want {
-				s.t.Fatalf("run %s admits requested path: got %v, want %v; fence=%v", req.RunID, got, want, fence)
-			}
-			if !insideFence("tools/item-a/two.txt", fence) || insideFence("tools/item-a/one.txt", fence) {
-				s.t.Fatalf("run %s changed more than the requested scope: %v", req.RunID, fence)
+			for _, path := range []string{"tools/item-a/one.txt", "tools/item-a/two.txt", "tools/item-a/other.txt"} {
+				if !insideFence(path, fence) {
+					s.t.Fatalf("run %s is missing item path %s: %v", req.RunID, path, fence)
+				}
 			}
 			if len(s.pieceRuns) == 1 {
 				report = s.pieceObstacle

@@ -431,7 +431,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		if isFork {
 			node.WriteScope = WorkflowScope{Paths: forkFence(fork, node.WriteScope.Paths)}
 		}
-		scope, err := node.scopePaths(itemAllowed)
+		scope, err := node.runScopePaths(itemAllowed)
 		if err != nil {
 			return err
 		}

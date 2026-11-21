@@ -289,8 +289,11 @@ refuses invalid values, empty lists, and any scope on a read-only stage under
 separate rules. A scope outside the expanded item fence holds the item as
 `node-scope-outside-fence`, naming the node and path before any node starts.
 
-Each node receives its own scope in its staged fence and brief. Writing nodes
-run serially in the item's single git target, including a fork checkout; the next
+Each node receives its scope in its staged fence and brief. For a planned build
+piece, the planner's path list divides the work but does not restrict the item's
+fence: the piece is staged with the current item paths, and its exit check reads
+them again so an operator can add a path even while it runs. Writing nodes run
+serially in the item's single git target, including a fork checkout; the next
 node starts at the preceding node's final HEAD. At each writing node's exit, the
 drain checks only that node's changed paths, from its starting HEAD to its final
 HEAD. An escape is refused as `boundary-scope-escape`, naming the node and path;
@@ -299,14 +302,17 @@ readable answer is also refused as `boundary-scope-escape`; a writing node ended
 for a repeating call, by a signal, or by a machinery fault preserves its
 uncommitted work under `refs/tillr/preserved/<run>` and restarts on its route
 instead of refusing as an escape. Passing every node
-does not waive the final check of the whole change against the item's fence.
+does not waive the final check of the whole change against the item fence. For
+workflows with planned pieces, that check also reads the current item paths.
 The staged node base and scope are kept separately from the item's original base
 and full fence so the final candidate includes all nodes and lands once.
 
-A resumed node keeps the scope in its saved workflow, checked against the item's
-current allowed paths; reloading an edited workflow cannot broaden its authority.
-A held candidate saves the full item fence when it releases a lane. Restaging it
-restores that fence and its original base, replacing metadata left by a later item.
+A resumed planned piece uses the current item paths. Other resumed nodes keep
+the scope in their saved workflow, checked against the item's current allowed
+paths; reloading an edited workflow cannot broaden their authority. A held
+candidate saves the full item fence when it releases a lane. Restaging it
+restores that snapshot and its original base, replacing metadata left by a later
+item.
 
 ## Stages that name workflows
 
