@@ -2825,8 +2825,13 @@ The fork gate is [fork-gate.py](fork-gate.py), whose `fork-build` check runs thr
 `tillr-gate` on a clean copy of the exact candidate head with the pack's declared
 build command. When `fork-build` passes in that same clean clone, `fork-quality`
 runs after it from `FORK_QUALITY` (`pi` runs `npx tsc --noEmit` at the root and
-`npx vitest --run` in each `packages/` directory touched by the diff from base,
-skipping vitest when no package is touched; `pi-subagents` and `pi-session-search`
+`npm test` in each `packages/` directory touched by the diff from base, executing that
+package's `scripts.test` (for example, `packages/tui` uses `node --test test/*.test.ts`).
+When no package is touched it skips package tests. A missing test script or unavailable
+runner leaves the gate unable to judge, rather than reporting a test failure; the
+diagnostic names the package and, for an unavailable runner, its script. An actual
+test failure refuses the candidate.
+`pi-subagents` and `pi-session-search`
 install devDependencies and run their `FORK_QUALITY` scripts; forks absent from
 `FORK_QUALITY` keep a build-only verdict and report it). The ordinary repository gate's candidate-build step reconstructs the
 currently delivered branch, not this unlanded head, so it cannot certify a fork item.
