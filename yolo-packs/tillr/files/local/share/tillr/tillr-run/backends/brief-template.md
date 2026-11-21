@@ -200,7 +200,7 @@ the one that holds:
 | `OBSTACLE:` | When | Required lines | What happens next |
 |---|---|---|---|
 | `definition` | The item's own words are wrong or contradict the tree | `CRITERIA:` the criteria affected; `EVIDENCE:` the contradiction, quoted | The design seat amends the item |
-| `fence` | The change needs paths outside the fence | `PATHS:` the paths; `EVIDENCE:` why each is needed | The design seat widens the fence or splits the item |
+| `fence` | The change needs paths outside the fence | `PATHS:` repository-relative paths separated by commas or newlines (no prose, Git refs, or placeholders); `EVIDENCE:` why each is needed | The design seat widens the fence or splits the item |
 | `trunk` | The base is red, and this change did not cause it | `CHECKS:` the failing gate check ids; `BASE:` the base sha | The loop replays those checks on the base; if they are red there, the item waits on the trunk's repair |
 | `tooling` | A tool or the harness is defective: a hung suite, a broken adapter, a missing binary | `COMMAND:` the command; `EVIDENCE:` its output; `PATHS:` the tool's paths | The loop files a defect item for the tool, and this item waits on it |
 | `seat` | You made the attempt, and it shows the task exceeds what this model can do | `TRIED:` the change you made and what its tests showed; `MISSING:` what you could not do | The item moves to a stronger model, or to the design seat for a plan |

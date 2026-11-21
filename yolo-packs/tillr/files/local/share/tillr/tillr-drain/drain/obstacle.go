@@ -2,7 +2,9 @@ package drain
 
 import (
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -78,8 +80,12 @@ type Obstacle struct {
 // Field answers one field's value, trimmed.
 func (o Obstacle) Field(name string) string { return strings.TrimSpace(o.Fields[name]) }
 
-// List answers a comma- or whitespace-separated field as its entries.
+// List answers a list field as its entries. An invalid fence request yields no paths.
 func (o Obstacle) List(name string) []string {
+	if o.Kind == ObstacleFence && name == "PATHS" {
+		paths, _ := fenceObstaclePaths(o.Field(name))
+		return paths
+	}
 	var out []string
 	for _, part := range strings.FieldsFunc(o.Field(name), func(r rune) bool { return r == ',' || r == '\n' || r == ' ' || r == '\t' }) {
 		if part = strings.Trim(strings.TrimSpace(part), "`*-"); part != "" {
@@ -87,6 +93,49 @@ func (o Obstacle) List(name string) []string {
 		}
 	}
 	return out
+}
+
+var fencePathSpelling = regexp.MustCompile(`^[\p{L}\p{M}\p{N}._+@/-]+$`)
+
+// fenceObstaclePaths is lexical: a path for a new file may not exist yet. Split only at
+// explicit separators so prose cannot turn into a set of single-word permissions. Keep
+// this grammar in sync with fencePathsProblem in the Pi adapter.
+func fenceObstaclePaths(value string) ([]string, string) {
+	const ask = "Provide repository-relative paths separated by commas or newlines, not prose, Git refs, or placeholders"
+	var paths, bad []string
+	for _, line := range strings.Split(value, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "- ") || strings.HasPrefix(line, "* ") {
+			line = line[2:]
+		}
+		for _, entry := range strings.Split(line, ",") {
+			entry = strings.TrimSpace(entry)
+			if entry == "" {
+				continue
+			}
+			path := entry
+			if len(path) >= 2 && path[0] == '`' && path[len(path)-1] == '`' {
+				path = path[1 : len(path)-1]
+			}
+			valid := fencePathSpelling.MatchString(path)
+			for _, part := range strings.Split(strings.TrimSuffix(path, "/"), "/") {
+				valid = valid && part != "" && part != "." && part != ".."
+			}
+			first, _, _ := strings.Cut(path, "/")
+			if !valid || first == "refs" || first == ".git" {
+				bad = append(bad, strconv.Quote(entry))
+			} else {
+				paths = append(paths, path)
+			}
+		}
+	}
+	if len(bad) > 0 {
+		return nil, "the fence obstacle has invalid `PATHS:` entries: " + strings.Join(bad, ", ") + ". " + ask
+	}
+	if len(paths) == 0 {
+		return nil, "the fence obstacle has no `PATHS:` entries. " + ask
+	}
+	return paths, ""
 }
 
 // fieldLine answers the field a report line opens, and the value after it. A line opens a
@@ -97,9 +146,26 @@ func fieldLine(line string) (string, string, bool) {
 	if !ok {
 		return "", "", false
 	}
+	label := strings.TrimSpace(name)
 	name = strings.ToUpper(strings.Trim(name, " \t*`-"))
 	if !obstacleFields[name] {
 		return "", "", false
+	}
+	if name == "PATHS" {
+		// Close markup opened by the label (`**PATHS:**`), but leave the entries
+		// themselves intact for validation (`a*` is not a path prefix).
+		if strings.HasPrefix(label, "- ") || strings.HasPrefix(label, "* ") {
+			label = strings.TrimSpace(label[2:])
+		}
+		for _, mark := range []string{"**", "*", "`"} {
+			if strings.HasPrefix(label, mark) {
+				if !strings.HasSuffix(label, mark) {
+					value = strings.TrimPrefix(value, mark)
+				}
+				break
+			}
+		}
+		return name, strings.TrimSpace(value), true
 	}
 	return name, strings.TrimSpace(strings.Trim(strings.TrimSpace(value), "*`")), true
 }
@@ -161,7 +227,11 @@ func (o Obstacle) problem() string {
 	if len(missing) > 0 {
 		return "the " + o.Kind + " obstacle is missing " + strings.Join(missing, ", ")
 	}
-	if o.Kind == ObstacleFence || o.Kind == ObstacleTooling {
+	if o.Kind == ObstacleFence {
+		_, problem := fenceObstaclePaths(o.Field("PATHS"))
+		return problem
+	}
+	if o.Kind == ObstacleTooling {
 		for _, path := range o.List("PATHS") {
 			if clean := filepath.ToSlash(filepath.Clean(path)); filepath.IsAbs(path) || clean == ".." || strings.HasPrefix(clean, "../") {
 				return "the " + o.Kind + " obstacle's `PATHS:` must be repository-relative, and " + path + " is not"
