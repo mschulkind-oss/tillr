@@ -1678,9 +1678,11 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			if !revertedSession {
 				spec.Continue = spec.Continue || (decision.NodeIndex > 0 && !freshRetry && !freshVerifyReturn && decision.RetryCandidate == nil) || decision.WorkflowRestart
 			}
-			if decision.NodeIndex == 1 && classificationNode(decision.Workflow.Stages[0]) && l.laneForkTarget(decision.LaneID) == "" && spec.KeptHeadSHA == "" {
-				// The classifier had only a repository checkout. Start the fork
-				// worker (if selected) from its own independently pinned base.
+			if decision.NodeIndex == 1 && classificationNode(decision.Workflow.Stages[0]) && spec.KeptHeadSHA == "" &&
+				(l.laneForkTarget(decision.LaneID) == "" || (decision.Reason == "workflow-next-node" && decision.NodeStartRunID == "")) {
+				// A fresh successor may have reclaimed a different lane. The
+				// classifier's repository base and a prior item's target marker
+				// do not establish the new fork writer's base.
 				spec.Continue = false
 			}
 			if spec.Continue {

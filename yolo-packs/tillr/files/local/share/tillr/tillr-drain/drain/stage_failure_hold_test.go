@@ -15,6 +15,110 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+func TestForkStagingFaultFreesClassifiersLaneForOtherWork(t *testing.T) {
+	f, l, steps := workflowLoopFixture(t, "")
+	l.cfg.Policy.Seats["plan"] = "fixture"
+	if err := os.Mkdir(filepath.Join(f.root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(f.root, "bin/pi-forks.list"), "upstream/pi patch/pi\n")
+	writeForkFile(t, filepath.Join(f.root, ".gitignore"), ".forks/\n")
+	runGit(t, f.root, "add", "bin/pi-forks.list", ".gitignore")
+	runGit(t, f.root, "commit", "-qm", "fork catalog")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`UPDATE items SET state='landed' WHERE item_id='item-b'`); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`UPDATE items SET workflow='single-worker@v1' WHERE item_id='item-a'`)
+		return err
+	})
+	fork := filepath.Join(f.root, ".forks/lanes/lane-1/pi")
+	if err := os.MkdirAll(fork, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, fork, "init", "-qb", "main")
+	runGit(t, fork, "commit", "--allow-empty", "-qm", "delivered base")
+	runGit(t, f.root, "fetch", "--no-tags", fork, "refs/heads/main:refs/heads/patch/pi")
+	runGit(t, fork, "commit", "--allow-empty", "-qm", "unknown lane work")
+	head := runGit(t, fork, "rev-parse", "HEAD")
+	l.cfg.Steps = &mixedDeliverySteps{workflowSteps: steps}
+	for i := 0; i < 8; i++ {
+		graphPass(t, l, &LoopResult{})
+		if planFor(t, l, "item-a").Reason == ReasonStageFailed {
+			break
+		}
+	}
+	if d := planFor(t, l, "item-a"); d.Action != ActionHold || d.Reason != ReasonStageFailed {
+		t.Fatalf("fork item = %+v, want operator staging hold", d)
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='in-queue' WHERE item_id='item-b'`)
+		return err
+	})
+	claimed := false
+	for _, p := range mustPlan(t, l) {
+		if d := p.decision; d.ItemID == "item-b" {
+			if d.Action != ActionDispatch || d.LaneID != "lane-1" {
+				t.Fatalf("other item = %+v, want dispatch on the ordinary lane", d)
+			}
+			ok, _, err := l.applyPlan(context.Background(), p, runGit(t, f.root, "rev-parse", "HEAD"), l.cfg.Now())
+			if err != nil || !ok {
+				t.Fatalf("other item could not claim the freed lane: (%v, %v)", ok, err)
+			}
+			claimed = true
+		}
+	}
+	if !claimed {
+		t.Fatal("other item was not planned")
+	}
+	if got := runGit(t, fork, "rev-parse", "HEAD"); got != head {
+		t.Fatalf("unretained fork work moved from %s to %s", head, got)
+	}
+
+	// Once cleared, the writer must still be the classifier's successor. It
+	// can use another fork checkout even if that lane has an old target marker.
+	const delivery = "refs/heads/patch/pi"
+	base := runGit(t, f.root, "rev-parse", delivery)
+	fork2 := filepath.Join(f.root, ".forks/lanes/lane-2/pi")
+	if err := os.MkdirAll(filepath.Dir(fork2), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, f.root, "clone", "--quiet", "--branch", "patch/pi", f.root, fork2)
+	runGit(t, fork2, "branch", "-m", "main")
+	tip := runGit(t, f.root, "commit-tree", base+"^{tree}", "-p", base, "-m", "new delivery")
+	runGit(t, f.root, "update-ref", delivery, tip, base)
+	writeForkFile(t, filepath.Join(f.laneRoot, "lane-2", TargetFile), fork2+"\n")
+	l.cfg.Lanes = []string{"lane-1", "lane-2"}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		fault := mustFaults(t, tx.Reader())["item-a"]
+		return ClearItemFault(tx, "item-a", fault.Seq, l.cfg.Now())
+	})
+	staged := false
+	for _, p := range mustPlan(t, l) {
+		d := p.decision
+		if d.ItemID != "item-a" {
+			continue
+		}
+		if d.Action != ActionDispatch || d.LaneID != "lane-2" || d.NodeIndex != 1 {
+			t.Fatalf("cleared item = %+v, want writer successor on lane-2", d)
+		}
+		ctx := context.Background()
+		trunk := runGit(t, f.root, "rev-parse", "HEAD")
+		ok, work, err := l.applyPlan(ctx, p, trunk, l.cfg.Now())
+		if err != nil || !ok {
+			t.Fatalf("cleared item claim: (%v, %v)", ok, err)
+		}
+		prepared, err := l.stageDispatches(ctx, []Decision{work.Decision}, trunk, &LoopResult{})
+		if err != nil || len(prepared) != 1 || prepared[0].NodeBaseSHA != tip {
+			t.Fatalf("cleared item did not stage at current delivery %s: %+v, %v", tip, prepared, err)
+		}
+		staged = true
+	}
+	if !staged {
+		t.Fatal("cleared item was not planned")
+	}
+}
+
 type perItemENAMETOOLONGStager struct {
 	failingItem string
 }

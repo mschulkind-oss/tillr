@@ -79,7 +79,11 @@ func (s *LaneStager) refreshForkCheckout(ctx context.Context, fork ForkTarget) e
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(refs) == "" {
+	oldSeries, err := s.wasDeliveredForkHead(ctx, fork.Ref, head)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(refs) == "" && !oldSeries {
 		return &forkCheckoutUnretainedError{checkout: fork.Checkout, head: head, tip: tip}
 	}
 	// Do not replace a main we did not inspect (e.g. a detached rebase HEAD).
@@ -90,8 +94,36 @@ func (s *LaneStager) refreshForkCheckout(ctx context.Context, fork ForkTarget) e
 	if strings.TrimSpace(branch) != "refs/heads/main" {
 		return Externalf("fork checkout %s is on %s, not main; staging will not reset it", fork.Checkout, strings.TrimSpace(branch))
 	}
+	if oldSeries {
+		keep := "refs/heads/kept/pre-rebase-" + head
+		if _, err := s.git(ctx, fork.Checkout, "update-ref", "--no-deref", keep, head, ""); err != nil {
+			// An earlier attempt may have saved the branch but failed to switch.
+			// Reuse only the same direct ref; never overwrite another branch.
+			out, readErr := s.git(ctx, fork.Checkout, "for-each-ref", "--format=%(refname) %(objectname) %(symref)", keep)
+			if readErr != nil || strings.TrimSpace(out) != keep+" "+head {
+				return err
+			}
+		}
+	}
 	_, err = s.git(ctx, fork.Checkout, "switch", "--quiet", "--no-overwrite-ignore", "-C", "main", tip)
 	return err
+}
+
+// The lander pins this fork's old tip in the same transaction that delivers
+// a release rebase. If an old tip contains HEAD, it proves the entire history
+// we would leave behind was delivered, even if this lane missed several moves.
+func (s *LaneStager) wasDeliveredForkHead(ctx context.Context, ref, head string) (bool, error) {
+	name, ok := strings.CutPrefix(ref, forkPatchPrefix)
+	if !ok || name == "" || strings.Contains(name, "/") {
+		return false, nil
+	}
+	// A private lane commit need not exist in the delivery repository at all.
+	if _, err := s.git(ctx, s.Root, "--no-replace-objects", "cat-file", "-e", head+"^{commit}"); err != nil {
+		return false, ctx.Err()
+	}
+	refs, err := s.git(ctx, s.Root, "--no-replace-objects", "for-each-ref", "--contains", head,
+		"--count=1", "--format=%(refname)", "refs/tillr/patch-history/"+name+"/")
+	return strings.TrimSpace(refs) != "", err
 }
 
 // restageForkAtKeptHead cuts a fork checkout at the retained candidate rather than

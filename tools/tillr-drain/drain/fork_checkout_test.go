@@ -116,6 +116,61 @@ func TestForkCheckoutFreshStagingFastForwardsWithoutRunPin(t *testing.T) {
 	}
 }
 
+func TestForkCheckoutFreshStagingAfterLandedRebase(t *testing.T) {
+	for _, tc := range []struct {
+		name, recordedFork string
+		extraCommit        bool
+		alreadySaved       bool
+		wantRefresh        bool
+	}{
+		{name: "old-series-ancestor", recordedFork: "pi", wantRefresh: true},
+		{name: "previously-saved-old-tip", recordedFork: "pi", alreadySaved: true, wantRefresh: true},
+		{name: "unlanded-work-above-old-series", recordedFork: "pi", extraCommit: true},
+		{name: "other-fork-history", recordedFork: "other"},
+		{name: "no-history"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, l, fork, _, base := forkNodeBaseFixture(t)
+			const delivery = "refs/heads/patch/pi"
+			oldTip := runGit(t, f.root, "commit-tree", base+"^{tree}", "-p", base, "-m", "last commit before rebase")
+			newTip := runGit(t, f.root, "commit-tree", base+"^{tree}", "-m", "rebased series")
+			runGit(t, f.root, "update-ref", delivery, oldTip, base)
+			if tc.recordedFork != "" {
+				runGit(t, f.root, "update-ref", "refs/tillr/patch-history/"+tc.recordedFork+"/"+oldTip, oldTip)
+			}
+			runGit(t, f.root, "update-ref", delivery, newTip, oldTip)
+			if tc.extraCommit {
+				runGit(t, fork, "fetch", "--quiet", f.root, oldTip)
+				runGit(t, fork, "merge", "--ff-only", oldTip)
+				runGit(t, fork, "commit", "--allow-empty", "-qm", "unlanded work")
+			}
+			if tc.alreadySaved {
+				runGit(t, fork, "fetch", "--quiet", f.root, oldTip)
+				runGit(t, fork, "merge", "--ff-only", oldTip)
+				runGit(t, fork, "branch", "kept/pre-rebase-"+oldTip, oldTip)
+			}
+			head := runGit(t, fork, "rev-parse", "HEAD")
+			stager := l.cfg.Stage.(*LaneStager)
+			err := stager.refreshForkCheckout(context.Background(), ForkTarget{Checkout: fork, Ref: delivery})
+			if tc.wantRefresh {
+				if err != nil {
+					t.Fatalf("old delivered history refused: %v", err)
+				}
+				if got := runGit(t, fork, "rev-parse", "HEAD", "refs/heads/main", "refs/heads/kept/pre-rebase-"+head); got != newTip+"\n"+newTip+"\n"+head {
+					t.Fatalf("HEAD/main/kept = %q, want delivered tip %s and saved head %s", got, newTip, head)
+				}
+			} else {
+				if _, ok := err.(*forkCheckoutUnretainedError); !ok {
+					t.Fatalf("staging = %v, want unretained work refusal", err)
+				}
+				if got := runGit(t, fork, "rev-parse", "HEAD", "refs/heads/main"); got != head+"\n"+head {
+					t.Fatalf("HEAD/main = %q, want untouched %s", got, head)
+				}
+			}
+		})
+	}
+}
+
 func TestForkCheckoutFreshStagingDoesNotWriteThroughCacheAlias(t *testing.T) {
 	f, l, fork, _, _ := forkNodeBaseFixture(t)
 	cache := filepath.Join(f.root, ".forks", "pi")
