@@ -122,7 +122,7 @@ live `tillr-run` processes to end, and only then start again. Never signal a
 - Leave nothing as "not yet looked at".
 - Never ask the owner to run a command or to bless a decision already made. Act
   as the operator and record the evidence; the rule is
-  [Authority, not approval](../../../docs/design/agent-runtime.md#28-authority-not-approval).
+  [Authority, not approval](../../../docs/reference/authority-not-approval.md).
 - Record every owner statement verbatim in the rulings file, and label operator
   decisions as operator decisions.
 

@@ -13,7 +13,6 @@ related:
   - ./run-wall-ruling.md
   - ./failure-diagnosed-not-waited-out.md
   - ./tillr-judge-and-lifecycle.md
-  - ./agent-runtime.md
   - ./handoff-items-and-steering-timer.md
   - ./tillr-goal-monitor.md
   - ./tillr-live-drain-config.md
@@ -143,7 +142,7 @@ Four settled repository rulings forbid failing or stopping work on attempt count
 
 ### 3.3 Relation to One-Breakage Dedup, Steering Timers, and Goal Monitors
 
-- **Generalizes [`agent-runtime.md` Section 20 ("One breakage, one investigation")](./agent-runtime.md#20-one-breakage-one-investigation):** `D-OC1`–`D-OC8` established mechanical signature deduplication, transition-driven invocation, and the `D-OC5` precondition (*never dispatch a second investigation while an open breakage already has a non-terminal attempt*). `tillr-watch` lifts that exact episode discipline from gate check breakages to **all** cross-utility rules (`D-TW5`, `D-TW7`).
+- **Generalizes [the retired agent runtime design Section 20 ("One breakage, one investigation")](./agent-runtime-retirement.md#what-happened-to-each-section):** `D-OC1`–`D-OC8` established mechanical signature deduplication, transition-driven invocation, and the `D-OC5` precondition (*never dispatch a second investigation while an open breakage already has a non-terminal attempt*). `tillr-watch` lifts that exact episode discipline from gate check breakages to **all** cross-utility rules (`D-TW5`, `D-TW7`).
 - **Replaces time-polling in [`steering-timer`](../reference/steering-timer.md) when waiting on state:** `steering-timer.ts` ([`handoff-items-and-steering-timer.md` Section 4.2](./handoff-items-and-steering-timer.md#42-the-mechanism-a-pi-extension-owning-a-durable-steering-record)) injects periodic clock-based check-ins (`every N minutes`) so a foreground whale keeps nudging a long goal. When an agent is instead waiting on *specific store/git conditions* ("tell me when `refs/tillr/green` catches up, or when `item-X` reaches `verify`, or if `tillr-roll` fails"), waking every 10 minutes on a timer wastes turns when nothing happened and lags up to 10 minutes when it did. `tillr-watch` provides **event-driven, zero-polling wakeups** using the same durable-record + `pi.sendMessage(..., { deliverAs: "followUp", triggerTurn: true })` harness primitive (`D-TW8`).
 - **Complements [`tillr-goal-monitor.md`](./tillr-goal-monitor.md):** The iceboxed goal monitor evaluates high-level prose roadmap goals on a scheduled `due_at` cadence via an LLM node. `tillr-watch` is a **0-LLM-token mechanical evaluator** running continuously on event commits, invoking an agent *only* when a declared threshold or agent watch actually fires.
 
@@ -369,7 +368,7 @@ Testing the catalog above against the four concrete 2026-11-20 failures from the
 
 ### 6.1 One record per condition, never per pass: the Alert Episode state machine ([D-TW5](#D-TW5))
 
-If `tillr-drain` runs a pass every few seconds while `refs/tillr/green` lags for 25 minutes, a naive checker would emit hundreds of duplicate alerts and trigger hundreds of agent turns. Extending `D-OC1`–`D-OC5` in [`agent-runtime.md` Section 20](./agent-runtime.md#20-one-breakage-one-investigation), `tillr-watch` enforces **one active episode per `(rule_id, subject_key)`** in `.tillr/state.db`:
+If `tillr-drain` runs a pass every few seconds while `refs/tillr/green` lags for 25 minutes, a naive checker would emit hundreds of duplicate alerts and trigger hundreds of agent turns. Extending `D-OC1`–`D-OC5` in [the retired agent runtime design Section 20](./agent-runtime-retirement.md#what-happened-to-each-section), `tillr-watch` enforces **one active episode per `(rule_id, subject_key)`** in `.tillr/state.db`:
 
 ```sql
 CREATE TABLE IF NOT EXISTS alert_episodes (
@@ -442,7 +441,7 @@ When a standing rule fires, `tillr-watch` supports two low-cost in-system action
    - `release-dead-lease`: verifies `runs.state` is terminal and the recorded executor PID is dead (`ESRCH`), then calls `tillr run release <lane>` and records `watch.remedy.applied`.
    - `poke-heavy` / `poke-roll`: nudges an idle `HeavyRunner` or `tillr-roll` wakeup after a transient lock clears, without touching uncommitted files.
 2. **Episode-deduped drain-seat triage (`receiver = "drain:<seat>"`, governed by [OQ-TW4](#OQ-TW4)):** When a rule routes to an agent seat inside the drain (for example `receiver = "drain:design"` on `step-oscillation` or `drain:scout` on a diagnostic rule):
-   - `tillr-watch` writes a `watch.triage.requested` record bound to `(alert_id, condition_fingerprint)` rather than spawning processes itself (preserving drain-as-sole-dispatcher, [`D-OC4` in `agent-runtime.md`](./agent-runtime.md#205-dont-kick-off-everything-again-mechanically)).
+   - `tillr-watch` writes a `watch.triage.requested` record bound to `(alert_id, condition_fingerprint)` rather than spawning processes itself (preserving drain-as-sole-dispatcher, [`D-OC4` in the retired agent runtime design](./agent-runtime-retirement.md#what-happened-to-each-section)).
    - `tillr-drain` checks the hard precondition `episode.active_triage_run_id IS NULL` before dispatching, stamps `active_triage_run_id` when staged, and passes the `TimelineBundle` straight into `## Facts carried` in `brief.md`.
    - **Strict bound:** At most **one** triage run executes per `(episode, condition_fingerprint)`. A 90-minute outage costs 0 runs for `foreground`-routed rules and at most 1 bounded triage run if routed to `drain:<seat>` — never `N` runs across `N` passes.
 

@@ -7,7 +7,6 @@ next: "Nothing until it is picked up: the owner iceboxed this design on 2026-11-
 depends-on:
   - scheduled-tasks.md
   - ../reference/tillr-item-graphs.md
-  - agent-runtime.md#20-one-breakage-one-investigation
   - handoff-items-and-steering-timer.md
 tags: [tillr, board, monitor, steering, scheduling, graphs, design]
 summary: "A goal is a recurring item whose criteria are a property of the system rather than a change to it. The monitor is that item, the clock that makes it due, and a pre-approved check-in graph whose collector nodes are mechanical, whose one agent node decides, and whose one command node files. The goal is the item's frozen criteria, so there is no new record kind, and a missed check-in is simply an overdue item. The monitor cannot repair the drain, the schedule, or itself, and the design says so: the outside authority is the owner reading the board, and it stops being needed when the monitor runs in an instance that is not the one being developed."
@@ -17,7 +16,7 @@ summary: "A goal is a recurring item whose criteria are a property of the system
 
 **Status:** 2026-11-17: **iceboxed by the owner**, who said "let's icebox this goal stuff until we have a use for it again." It is parked on [the tillr roadmap's Icebox](../tillr/roadmap.md#icebox), not abandoned and not accepted. Nothing is built, none of the three slices in [§10](#10-the-three-downstream-slices) is in the queue, and both questions are blocked so that they stop asking. The [ledger](#11-decision-ledger)'s rows are the designer's decisions of 2026-11-14; the owner has ruled on none of them. Written against the tree at `cb3488a8` and corrected on 2026-11-18 where the tree had moved: the loop now waits by default, the graph engine is built, and workflows live under `config/tillr/workflows/`.
 
-> **In short.** The owner asked for a monitor that inspects the board on a schedule and decides whether to act, built out of pieces this repository already has. It is **a composition, not a new mechanism**: a *goal* is a recurring board item whose frozen criteria are a property of the system rather than a change to it, the clock is [`due_at`](scheduled-tasks.md#21-the-two-columns), the execution is a [pre-approved item graph](../reference/tillr-item-graphs.md#workflows-selection-and-expansion) whose leaves are read-only collectors, one deciding agent, and one filing command, and the decision shape is [§20](agent-runtime.md#20-one-breakage-one-investigation)'s stateless planner. The one new tracked file is `config/tillr/workflows/goal-checkin@v1.json`, and it is guarded by two keys and a fence because it is the file that says what the monitor may decide.
+> **In short.** The owner asked for a monitor that inspects the board on a schedule and decides whether to act, built out of pieces this repository already has. It is **a composition, not a new mechanism**: a *goal* is a recurring board item whose frozen criteria are a property of the system rather than a change to it, the clock is [`due_at`](scheduled-tasks.md#21-the-two-columns), the execution is a [pre-approved item graph](../reference/tillr-item-graphs.md#workflows-selection-and-expansion) whose leaves are read-only collectors, one deciding agent, and one filing command, and the decision shape is [retired section 20](./agent-runtime-retirement.md#what-happened-to-each-section)'s stateless planner. The one new tracked file is `config/tillr/workflows/goal-checkin@v1.json`, and it is guarded by two keys and a fence because it is the file that says what the monitor may decide.
 
 **Why it matters.** Every day the loop runs, someone reads the board to notice that the queue has not landed anything since Tuesday, that an item has been held past its promise, or that a patch series has drifted three releases. That reading is *steering*, and it is the owner's attention spent as a polling loop. A goal monitor turns the repeating part of that reading into a due item: the schedule never forgets, the inspection is mechanical where it can be, and the only thing the agent does is decide what the mechanical collection means.
 
@@ -29,9 +28,9 @@ summary: "A goal is a recurring item whose criteria are a property of the system
 
 **Needs your ruling:** None. Blocked while the design is iceboxed: [OQ-GM1](#OQ-GM1) (what the first check-in watches) and [OQ-GM2](#OQ-GM2) (whether anything outside the loop pages the owner).
 
-**Reads with:** [`scheduled-tasks.md`](scheduled-tasks.md) (the clock, unbuilt), [`tillr-item-graphs.md`](../reference/tillr-item-graphs.md) (the graph engine, built), [`agent-runtime.md`](agent-runtime.md) (the on-call role), [`handoff-items-and-steering-timer.md`](handoff-items-and-steering-timer.md) (the protocol the monitor takes over).
+**Reads with:** [`scheduled-tasks.md`](scheduled-tasks.md) (the clock, unbuilt), [`tillr-item-graphs.md`](../reference/tillr-item-graphs.md) (the graph engine, built), [the retirement record of the agent runtime design](./agent-runtime-retirement.md) (where the on-call role was first described; the definition this document uses is under Terms), [`handoff-items-and-steering-timer.md`](handoff-items-and-steering-timer.md) (the protocol the monitor takes over).
 
-**Terms.** *Goal* (coined here) — a recurring item whose frozen criteria state a property the system should hold, not a change to make, and whose correct outcome on a check-in is a no-op that the judge can still call done. *Check-in* (coined here) — one run of a goal's graph: the mechanical collection, the decision, and the actions it files. *Goal monitor* (coined here) — the composition of a goal, the clock that makes it due, and its check-in graph. *Outside authority* (coined here) — the actor that can see the monitor is not running, because it is not the monitor. *Not due*, *due time*, *recurrence*, *drain*, *admission* and *rank* are [scheduled-tasks §2](scheduled-tasks.md#2-the-item-fields)'s and are used here in exactly that sense. The role the repository already names is the **on-call** ([§20](agent-runtime.md#20-one-breakage-one-investigation)); the monitor is its scheduled half, and the breakage planner is its event-driven half. **Steering** is the manual act both replace, and the `active-steering` skill remains its protocol. **The board**, here and throughout, is the observatory's queue screen, never the retired work board; see [observatory-design.md](../reference/observatory-design.md#terms-and-non-purposes).
+**Terms.** *Goal* (coined here) — a recurring item whose frozen criteria state a property the system should hold, not a change to make, and whose correct outcome on a check-in is a no-op that the judge can still call done. *Check-in* (coined here) — one run of a goal's graph: the mechanical collection, the decision, and the actions it files. *Goal monitor* (coined here) — the composition of a goal, the clock that makes it due, and its check-in graph. *Outside authority* (coined here) — the actor that can see the monitor is not running, because it is not the monitor. *Not due*, *due time*, *recurrence*, *drain*, *admission* and *rank* are [scheduled-tasks §2](scheduled-tasks.md#2-the-item-fields)'s and are used here in exactly that sense. The **on-call** is the role that owns a breakage (a check that is red on the trunk) from first sight to repair. It is not a resident agent whose conversation holds the memory: it is a durable record of the breakage, a stateless decision step invoked once per event, and a short-lived fixing lane the drain creates. The name and that shape come from [retired section 20](./agent-runtime-retirement.md#what-happened-to-each-section), whose breakage planner was never built; the monitor is its scheduled half, and the breakage planner is its event-driven half. **Steering** is the manual act both replace, and the `active-steering` skill remains its protocol. **The board**, here and throughout, is the observatory's queue screen, never the retired work board; see [observatory-design.md](../reference/observatory-design.md#terms-and-non-purposes).
 
 ## 1. The request, verbatim
 
@@ -43,7 +42,7 @@ Every clause of it, and where this document answers it:
 
 | The request's clause | Answered in |
 | :--- | :--- |
-| "monitor technician repair guy … we maybe had a name for it … terminology here" | The name is settled: the **on-call** is the role ([§20](agent-runtime.md#20-one-breakage-one-investigation)) and the **goal monitor** is its scheduled half. **Steering** is the manual act being replaced, and it is not renamed. See the terms paragraph above |
+| "monitor technician repair guy … we maybe had a name for it … terminology here" | The name is settled: the **on-call** is the role ([retired section 20](./agent-runtime-retirement.md#what-happened-to-each-section)) and the **goal monitor** is its scheduled half. **Steering** is the manual act being replaced, and it is not renamed. See the terms paragraph above |
 | "you can define a tiller goal or something like board parity or whatever it is" | A goal is a recurring item's frozen criteria. No new record kind. [§3](#3-the-goal-is-the-items-frozen-criteria) |
 | "it just on some schedule" | `due_at` plus `recur_interval_ms`, decided by [scheduled-tasks](scheduled-tasks.md#21-the-two-columns). The schedule is the item's, not the monitor's. [§4](#4-the-clock-is-a-due-time-not-a-cron-job) |
 | "inspects everything and decides if some action needs to be taken" | The check-in graph: mechanical collectors, one deciding agent, one filing command. [§5](#5-the-check-in-graph-and-its-two-keys) |
@@ -65,7 +64,7 @@ check-in, and the goal is carried in a field the item already has.
 | :--- | :--- | :--- |
 | The clock: `items.due_at`, `items.recur_interval_ms` ([scheduled-tasks §2.1](scheduled-tasks.md#21-the-two-columns)) | A nullable due instant, a nullable interval, due-ness as a derived admission gate, the single-slot no-queue property, and re-arm at the completion transition | Any parser, timer, scheduler or daemon. The monitor's cadence *is* the interval |
 | The execution: pre-approved item graphs ([item graphs](../reference/tillr-item-graphs.md#workflows-selection-and-expansion)) | Versioned JSON templates under `config/tillr/workflows/`, three stage kinds over one argv boundary, static flattening, typed producer-bound artifacts, declarative `exit` | A per-goal workflow script, model-authored argv, a second sequencing runtime |
-| The decision: one breakage, one investigation ([agent-runtime §20](agent-runtime.md#20-one-breakage-one-investigation)) | The durable record as memory, a stateless planner invoked per event, mechanical dedup by signature, and the rule that the planner writes records while the drain is the sole actor | A resident on-call, a second dispatcher, per-event bespoke scripts |
+| The decision: one breakage, one investigation ([the retired agent runtime design, section 20](./agent-runtime-retirement.md#what-happened-to-each-section)) | The durable record as memory, a stateless planner invoked per event, mechanical dedup by signature, and the rule that the planner writes records while the drain is the sole actor | A resident on-call, a second dispatcher, per-event bespoke scripts |
 | The protocol: the steering timer ([handoff items §4](handoff-items-and-steering-timer.md#4-the-steering-timer-keep-the-skill-build-the-mechanism-under-it)) | The measure→steer loop, the check-in shape, the drift signals, and the acknowledgement discipline, as the `active-steering` skill | Session-local turn injection, a timer that survives by being re-armed in a conversation |
 | `config/tillr/workflows/goal-checkin@v1.json` | — | This is the one thing that is new, and it is a data file, not code |
 
@@ -226,11 +225,11 @@ bound that silently truncates is worse than no bound, because the truncation is 
 files each entry through a registered `tillr item add`, and the item's **id is derived from the
 signature** — `goal-<goal>-<sig8>` — so the store's primary key is the dedup mechanism.
 
-This is [§20.2](agent-runtime.md#202-the-signature-and-the-tree-trap)'s rule applied to actions instead of breakages: dedup is a key lookup, not a
+This is [retired section 20.2](./agent-runtime-retirement.md#what-happened-to-each-section)'s rule applied to actions instead of breakages: dedup is a key lookup, not a
 judgement. The signature is `(goal, violated clause, the narrowest stable subject)` — the check name
 for a gate goal, the item id for a held-item goal, the fork name for a series goal. **What the
 signature must not contain is anything that moves on its own** (a timestamp, a run id, the trunk
-tip), for the same reason [§20.2](agent-runtime.md#202-the-signature-and-the-tree-trap) excludes the tree: a key that includes an observation mints a fresh
+tip), for the same reason [retired section 20.2](./agent-runtime-retirement.md#what-happened-to-each-section) excludes the tree: a key that includes an observation mints a fresh
 entity every time it is observed, and the duplication returns wearing a new key.
 
 A second check-in that re-observes a violation finds the id taken and files nothing. The check-in
@@ -417,7 +416,7 @@ Four consequences an implementer would otherwise have to guess:
 
 Each refusal exists because the alternative smuggles in a promise this system cannot keep.
 
-**The board as a scheduler** — inherited from [agent-runtime §22.7](agent-runtime.md#227-what-is-refused-and-the-rule-that-keeps-the-board-from-becoming-a-scheduler) and repeated here because a
+**The board as a scheduler** — inherited from [the retired agent runtime design, section 22.7](./agent-runtime-retirement.md#what-happened-to-each-section) and repeated here because a
 monitor is exactly the feature that tempts each one:
 
 - A cron expression parser, timezones, daylight saving, or "09:00 sharp". The cadence is an
@@ -438,7 +437,7 @@ monitor is exactly the feature that tempts each one:
 - **The monitor may not land, gate, hold, unhold, retire or delete.** It files items. Every other
   verb stays with the drain and the owner.
 - **The monitor may not be resident.** It is a stateless planner invoked per check-in, for
-  [§20.3](agent-runtime.md#203-what-the-on-call-agent-is)'s reason: context that lives in a conversation cannot be handed over, audited, or
+  [retired section 20.3](./agent-runtime-retirement.md#what-happened-to-each-section)'s reason: context that lives in a conversation cannot be handed over, audited, or
   read after it is gone.
 - **The monitor may not author argv.** Every command leaf is a tracked `command_ref`
   ([what a workflow node may never be](../reference/tillr-item-graphs.md#what-a-workflow-node-may-never-be)).
@@ -467,7 +466,7 @@ Every row is a **designer's decision** of 2026-11-14, made so that the design is
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
-| `D-GM1` | The monitor is a **composition**: a recurring item (the clock), a pre-approved graph (the execution), and [§20](agent-runtime.md#20-one-breakage-one-investigation)'s stateless planner (the decision). No new record kind, no scheduler, no second dispatcher | 2026-11-14 | [§2](#2-what-this-composes-and-what-it-refuses-to-re-implement) | — |
+| `D-GM1` | The monitor is a **composition**: a recurring item (the clock), a pre-approved graph (the execution), and [retired section 20](./agent-runtime-retirement.md#what-happened-to-each-section)'s stateless planner (the decision). No new record kind, no scheduler, no second dispatcher | 2026-11-14 | [§2](#2-what-this-composes-and-what-it-refuses-to-re-implement) | — |
 | `D-GM2` | A **goal is the item's frozen criteria**. The "metadata spot" is `criteria[]`, the graph's `params`, `recur_interval_ms` and `due_at` — all existing fields | 2026-11-14 | [§3](#3-the-goal-is-the-items-frozen-criteria) | — |
 | `D-GM3` | The schedule is `due_at` + `recur_interval_ms`; a missed check-in is an overdue item; failure never advances the schedule | 2026-11-14 | [§4](#4-the-clock-is-a-due-time-not-a-cron-job) | — |
 | `D-GM4` | The check-in is `config/tillr/workflows/goal-checkin@v1.json` (amended 2026-11-18: workflows live in that directory): mechanical read-only collectors, one read-only agent that decides, one read-only-as-to-the-worktree command that files. No write node; `requires_candidate: no_commit` | 2026-11-14 | [§5.1](#51-the-template) | — |

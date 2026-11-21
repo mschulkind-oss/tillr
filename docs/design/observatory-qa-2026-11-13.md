@@ -1,5 +1,8 @@
 # Observatory QA — 2026-11-13
 
+> **History note, 2026-11-21.** This is a dated record. It names `docs/design/agent-runtime.md` as that file stood when the record was written; the file
+> was deleted on 2026-11-21, and [the retirement record](./agent-runtime-retirement.md) says what became of it.
+
 ## Verdict
 
 The observatory is honest about the *inside* of a run and wrong about the *shape of the board*
