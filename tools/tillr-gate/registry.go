@@ -84,6 +84,7 @@ func (p Pattern) Matches(path, root string) bool {
 // selected paths; a `Paths` entry in `Watches` is replaced by them too.
 type Declaration struct {
 	DeclarationDigest string `json:"declaration_digest,omitempty"`
+	undeclaredReads   bool   // Check files default to whole-tree fingerprinting even when reads is omitted.
 
 	Scope           string            `json:"scope,omitempty"`
 	BudgetMS        int               `json:"budget_ms,omitempty"`

@@ -347,7 +347,7 @@ func runFace(args []string) int {
 	if envelope.Kind != "" {
 		var verdict VerdictPayload
 		if err := json.Unmarshal(envelope.Payload, &verdict); err == nil {
-			passed, remembered, unavailable, inherited, failed := 0, 0, 0, 0, 0
+			passed, remembered, unavailable, inherited, skipped, failed := 0, 0, 0, 0, 0, 0
 			for _, check := range verdict.Checks {
 				switch {
 				case check.Result == ResultUnavailable:
@@ -361,6 +361,8 @@ func runFace(args []string) int {
 					passed++
 				case check.Result == ResultInherited:
 					inherited++
+				case check.Result == ResultSkipped:
+					skipped++
 				default:
 					failed++
 				}
@@ -376,11 +378,14 @@ func runFace(args []string) int {
 			for _, note := range budgetNotes(verdict) {
 				fmt.Fprintln(os.Stderr, note)
 			}
+			summary := fmt.Sprintf("checks: %d passed, %d remembered, %d unavailable", passed, remembered, unavailable)
 			if inherited > 0 {
-				fmt.Fprintf(os.Stderr, "checks: %d passed, %d remembered, %d unavailable, %d inherited, %d failed\n", passed, remembered, unavailable, inherited, failed)
-			} else {
-				fmt.Fprintf(os.Stderr, "checks: %d passed, %d remembered, %d unavailable, %d failed\n", passed, remembered, unavailable, failed)
+				summary += fmt.Sprintf(", %d inherited", inherited)
 			}
+			if skipped > 0 {
+				summary += fmt.Sprintf(", %d skipped", skipped)
+			}
+			fmt.Fprintf(os.Stderr, "%s, %d failed\n", summary, failed)
 		}
 	}
 	if runErr != nil && envelope.Kind == "" {

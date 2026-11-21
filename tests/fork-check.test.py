@@ -7868,6 +7868,21 @@ with tempfile.TemporaryDirectory() as tmp:
     assert [(skip.planned, skip.owed) for skip in unanswered_rolling.skips] == [(True, False)], \
         unanswered_rolling.skips
 
+    # Declared reads further constrain a lane verdict, not the rolling proof. Fork
+    # steps can declare tracked selection paths separately from their checkout watches.
+    for changed, expected in ((["README.md"], ["file-size"]),
+                              (["tools/tillr/main.go"], ["go-substrate", "file-size"]),
+                              (["yolo-packs/fork-pins/pi"], ["file-size", "forks-check"])):
+        scoped = tier_plan()
+        scoped.checks[0].watches = ("tools/tillr/",)
+        scoped.checks.append(module.Check("forks-check", "fork replay", ["true"], "why", 1,
+                                         watches=(".forks/pi/",),
+                                         selected_by=("yolo-packs/fork-pins/pi",)))
+        module.apply_tier(scoped, module.TIER_LANDING, changed=changed)
+        assert [check.kind for check in scoped.checks] == expected, scoped.checks
+        skipped = [skip for skip in scoped.skips if skip.why == "skipped: no changed path is read"]
+        assert {skip.kind for skip in skipped} == {"go-substrate", "forks-check"} - set(expected), skipped
+
     # 59b. The plan line names the tier, the owed kinds, and the landing-wall model. The
     #      model is `s1_floor` over the landing-tier checks, so a full run prices what the
     #      landing tier would have cost from the durations it just measured.
@@ -7959,6 +7974,21 @@ with tempfile.TemporaryDirectory() as tmp:
     assert fields["owed"] == "-", fields
     assert "go-tool" in fields["checks"].split(","), fields
     assert float(fields["landing"]) <= float(fields["seconds"]) + 0.1, fields
+
+    # The lane adapter passes this exact range. A docs-only candidate records Go as
+    # skipped, not passed, and names the unconditional check that actually ran.
+    docs_base = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
+    (repo / "README.md").write_text("# Docs only\n")
+    commit(repo, "docs only")
+    spans = base / "doc-spans.json"
+    result = run(repo, env, "--tier", "landing", "--since", docs_base, "--spans-out", str(spans))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "checks with no declared reads (always run): file-size" in result.stdout, result.stdout
+    observations = json.loads(spans.read_text())
+    assert [check["kind"] for check in observations["check_spans"]] == ["file-size"], observations
+    assert any("go-tool (tools/tillr-land)" in skip["label"] and
+               skip["reason"] == "skipped: no changed path is read" and not skip["planned"]
+               for skip in observations["skipped_checks"]), observations
 
     # A first rolling audit asks --all even when the gate has already verified this tip.
     # The remembered baseline must not turn the Go suite into a no-change skip.

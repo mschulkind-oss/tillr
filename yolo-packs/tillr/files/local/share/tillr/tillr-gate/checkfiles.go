@@ -91,6 +91,7 @@ func loadCheckDirectory(dir string) (*Registry, error) {
 			decl.TimeoutMS = *file.TimeoutMS
 		}
 		if len(file.Reads) == 0 {
+			decl.undeclaredReads = true
 			file.Reads = []string{"."}
 		}
 		for _, path := range file.Reads {

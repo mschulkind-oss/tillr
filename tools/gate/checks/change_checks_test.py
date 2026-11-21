@@ -703,7 +703,7 @@ sys.exit(rc)
                 declaration.update(command=["true"], remember=False)
                 path.write_text(json.dumps(declaration))
 
-    def test_adapter_executes_the_complete_disjoint_fast_inventory(self):
+    def test_adapter_records_the_complete_fast_inventory_including_skips(self):
         self.stub_tree_commands()
         (self.repo / "tools/fork-check.py").write_text('print("legacy inventory: file-size warning")\n')
         base = self.commit()  # The gate stub is fixture infrastructure, not the candidate.
@@ -718,7 +718,12 @@ sys.exit(rc)
         expected = IDS | {"gate-budget", "scratch", "design-citations", "structural", "pack-sync", "go-build", "format", "pi-forks-drain"}
         self.assertEqual({check["check_id"] for check in checks}, expected)
         self.assertEqual(len(checks), len(expected))
-        self.assertTrue(all(check["result"] == "pass" for check in checks))
+        skipped = {"format", "gate-budget", "go-build", "pi-forks-drain", "workflows"}
+        self.assertEqual({check["check_id"]: check["result"] for check in checks}, {
+            ident: "skipped: no changed path is read" if ident in skipped else "pass"
+            for ident in expected
+        })
+        self.assertIn("skipped: no changed path is read:", result.stderr)
         self.assertEqual(legacy, "legacy inventory: file-size warning")
 
     def test_real_format_declarations_execute_on_clean_tree(self):
@@ -825,7 +830,9 @@ sys.exit(rc)
         (self.repo / "README.md").write_text("# Changed\n")
         head = self.commit()
         runner = self.bin / "recording-runner"
-        runner.write_text(f"#!{sys.executable}\nimport sys\nopen({str(log)!r}, 'a').write('runner\\n')\nsys.exit(1)\n")
+        runner.write_text(f"#!{sys.executable}\nimport sys\n"
+                          "if '--help' in sys.argv:\n print('  -fast-tree')\n sys.exit(0)\n"
+                          f"open({str(log)!r}, 'a').write('runner\\n')\nsys.exit(1)\n")
         runner.chmod(0o755)
         gate = ["python3", "tools/gate/change-gate.py", "--base", self.base, "--head", head,
                 "--runner", str(runner), "--logs", str(self.repo / "logs")]

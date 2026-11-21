@@ -41,6 +41,7 @@ const (
 	ResultPassInherited = "pass-inherited"
 	ResultInherited     = "inherited"
 	ResultFail          = "fail"
+	ResultSkipped       = "skipped: no changed path is read"
 	ResultError         = "error"
 	ResultStalled       = "stalled"
 	// ResultOverBudget means a fast tree check must be judged by the heavy run.

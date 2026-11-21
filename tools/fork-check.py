@@ -5630,10 +5630,11 @@ class Skip:
 
     def __init__(self, label: str, why: str, planned: bool = False,
                  quarantine: "Quarantine | None" = None, kind: str = "",
-                 owed: bool = False):
+                 owed: bool = False, read_disjoint: bool = False):
         self.label = label
         self.why = why
         self.planned = planned
+        self.read_disjoint = read_disjoint
         # The step is deferred to the other tier, not unanswerable here. See the class
         # docstring: this is the state a landing's plan-coverage contract reads as debt.
         self.owed = owed
@@ -5715,9 +5716,9 @@ class Plan:
         # being handed it separately.
         self.tier: str | None = None
 
-    def not_planned(self, label: str, why: str, kind: str = "") -> None:
-        """A step the selected change gave no reason to run."""
-        self.skips.append(Skip(label, why, kind=kind))
+    def not_planned(self, label: str, why: str, kind: str = "", *, read_disjoint: bool = True) -> None:
+        """A step the selected change gave no reason to run, or which does not apply."""
+        self.skips.append(Skip(label, why, kind=kind, read_disjoint=read_disjoint))
 
     def unavailable(self, label: str, why: str, kind: str = "") -> None:
         """A step the change gave a reason to run that this machine could not answer."""
@@ -6515,7 +6516,17 @@ def apply_reuse(plan: Plan, selectors: list[str]) -> None:
     plan.checks = kept
 
 
-def apply_tier(plan: Plan, tier: str | None) -> None:
+CHANGE_READ_SKIP = "skipped: no changed path is read"
+
+
+def report_undeclared_reads(plan: Plan) -> None:
+    if plan.tier == TIER_LANDING:
+        names = [check.kind for check in plan.checks if not check.watches]
+        if names:
+            print(f"fork-check: checks with no declared reads (always run): {', '.join(names)}")
+
+
+def apply_tier(plan: Plan, tier: str | None, changed: list[str] | None = None) -> None:
     """Keep the checks a caller-requested tier plans, and name the rest.
 
     `None` is the full gate: every step the diff selected, exactly as before, and this
@@ -6551,10 +6562,21 @@ def apply_tier(plan: Plan, tier: str | None) -> None:
     plan.tier = tier
     if tier is None:
         return
+    if tier == TIER_LANDING and changed is not None:
+        changed_set = set(changed)
+        # Give checks omitted by the earlier selector the same read-skip reason.
+        for skip in plan.skips:
+            if skip.read_disjoint:
+                skip.why = CHANGE_READ_SKIP
     kept: list[Check] = []
     for check in plan.checks:
         if check_tier(check.kind) == tier:
-            kept.append(check)
+            if (tier == TIER_LANDING and changed is not None and check.watches
+                    and not changed_set.intersection(check.selected_by or ())
+                    and not any(watch_matches(path, watch) for path in changed for watch in check.watches)):
+                plan.not_planned(check.label, CHANGE_READ_SKIP, kind=check.kind)
+            else:
+                kept.append(check)
         elif tier == TIER_LANDING:
             plan.owed(check.label,
                       f"the landing tier defers it to the rolling tier "
@@ -6567,7 +6589,7 @@ def apply_tier(plan: Plan, tier: str | None) -> None:
                              f"the landing tier's business; its verdict reads the upstream "
                              f"a launch would build, not the trunk commit ({check.kind} is "
                              f"a landing kind)",
-                             kind=check.kind)
+                             kind=check.kind, read_disjoint=False)
     plan.checks = kept
     # A skip the diff selected for a kind this tier does not plan is the same news as a
     # check it would have run: under `landing` it is owed. Under `rolling` every kind is
@@ -6836,7 +6858,7 @@ def build_plan(
                   if any(pattern.match(path) for pattern in TILLR_DOCS_INPUT)]
     if tillr_docs and not (root / TILLR_DOCS_TEST).exists():
         plan.not_planned("tillr-docs (python3 tests/tillr-docs.test.py)",
-                         "this repository has no tillr documentation suite")
+                         "this repository has no tillr documentation suite", read_disjoint=False)
     elif tillr_docs and not shutil.which("go"):
         plan.unavailable("tillr-docs (python3 tests/tillr-docs.test.py)",
                          "go is unavailable here, and the suite builds the eight binaries it "
@@ -6859,7 +6881,7 @@ def build_plan(
                   if any(pattern.match(path) for pattern in TILLR_ROLL_INPUT)]
     if tillr_roll and not all((root / path).exists() for path in TILLR_ROLL_TESTS):
         plan.not_planned("tillr-roll (python3 tests/tillr-roll.test.py && tests/tillr-keep.test.py)",
-                         "this repository has no tillr roll and keeper suites")
+                         "this repository has no tillr roll and keeper suites", read_disjoint=False)
     elif tillr_roll:
         plan.checks.append(
             Check("tillr-roll", "the repository roll and keeper suites pass",
@@ -7333,7 +7355,8 @@ def build_plan(
             # The per-fork INV-2 and INV-3 checks below instead judge the recorded
             # commit, so the host's stamp cannot decide a candidate's verdict.
             plan.not_planned(f"pack {pack} (yolo series check)",
-                             "the pack contains a patch branch; pinned fork checks judge it instead")
+                             "the pack contains a patch branch; pinned fork checks judge it instead",
+                             read_disjoint=False)
             continue
         plan.checks.append(
             Check("series", f"pack {pack}: {len(reasons)} series", ["yolo", "pack", "series", "check", f"yolo-packs/{pack}"],
@@ -7581,10 +7604,9 @@ def build_plan(
                       # Why this execution happened, for the pass's cause breakdown.
                       cause=cause_of.get(one.owner_key, ""))
             )
-    # The caller's tier is applied last, to the plan the full gate would have made: the
-    # selection above is the one declaration of what a diff reaches, and a tier only
-    # decides which half of it this run carries.
-    apply_tier(plan, tier)
+    # Apply the tier to the plan the full gate would have made. A lane names a base;
+    # audit requests without a range keep their broader selection.
+    apply_tier(plan, tier, changed=changed if base is not None else None)
     plan_fast_tree(plan, root, base)
     return plan
 
@@ -7995,6 +8017,7 @@ def report(plan: Plan, record: Record, baseline: dict | None, head: str, changed
         print(f"       because: {skip.why}")
     print()
 
+    report_undeclared_reads(plan)
     # A verdict and a machine answer are counted apart: a step the gate could not
     # answer is not a red against the change, so it is never listed as one.
     verdicts = [check for check in plan.checks if check.verdict]
@@ -9283,6 +9306,7 @@ def run_gate(argv: list[str]) -> int:
             # answer nor a step nothing selected.
             word = "would owe" if skip.owed else ("would skip" if skip.planned else "would not run")
             print(f"  {word:<22} {skip.label}\n       because: {skip.why}")
+        report_undeclared_reads(plan)
         external_inputs(plan)
         if changed_while_planning:
             print(f"  would refuse           {len(changed_while_planning)} watched path(s) that changed while the plan was built")

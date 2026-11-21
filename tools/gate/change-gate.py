@@ -1,14 +1,38 @@
 #!/usr/bin/env python3
 """Judge the caller's change, then the remaining repository checks."""
 import argparse
+import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
 # Budgets are targets. Working checks keep their own verdict; only a sampled stall
 # ends one early. Carrying at a budget would discard its judgment.
 TREE_OVERRUN = "keep"
+
+
+def supports_change_scope(runner):
+    # The adapter is read from the candidate; the runner on PATH is from trunk.
+    # Inspect its help, without trying the judge and retrying a possible real verdict.
+    help_result = subprocess.run([runner, "checks", "--help"], capture_output=True)
+    return bool(re.search(rb"(?m)^[ \t]*--?scope-to-change(?:[ \t]|$)",
+                          help_result.stdout + b"\n" + (help_result.stderr or b"")))
+
+
+def go_build_needed(base, head):
+    try:
+        reads = json.loads(Path("tools/gate/checks/go-build.json").read_text()).get("reads")
+        if not isinstance(reads, list) or not reads or not all(isinstance(p, str) and p for p in reads):
+            return True
+        reads = [os.path.normpath(p) for p in reads]
+        paths = subprocess.run(["git", "diff", "--name-only", "--no-renames", "-z", base, head, "--"],
+                               check=True, capture_output=True).stdout
+    except (OSError, ValueError, AttributeError, subprocess.CalledProcessError):
+        return True
+    return any(read == "." or path == read or path.startswith(read + "/")
+               for path in os.fsdecode(paths).split("\0") if path for read in reads)
 
 
 def warm_trimmed_go_cache():
@@ -68,8 +92,13 @@ def main():
         if actual.stdout != named.stdout:
             print("change-gate: could not judge: --head is not checked out", file=sys.stderr)
             return 4
-        warm_trimmed_go_cache()
-        checked = subprocess.run([args.runner, "checks", "--fast-tree", "--base", args.base, "--head", args.head,
+        scoped = not args.all and args.since is None and supports_change_scope(args.runner)
+        if not scoped or go_build_needed(args.base, args.head):
+            warm_trimmed_go_cache()
+        checks_cmd = [args.runner, "checks", "--fast-tree"]
+        if scoped:
+            checks_cmd.append("--scope-to-change")
+        checked = subprocess.run([*checks_cmd, "--base", args.base, "--head", args.head,
                                   "--tree-overrun", TREE_OVERRUN,
                                   "--worktree", ".", "--checks", "tools/gate/checks", "--logs", args.logs],
                                  stdout=subprocess.PIPE)
