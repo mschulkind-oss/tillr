@@ -2,6 +2,8 @@ package drain
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"math"
 	"os"
 	"strconv"
@@ -9,12 +11,13 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// A backend window is a reported refusal lasting until its absolute UTC reset.
-// It is store state, not process state: restarting a loop must not spend another
-// refused start. Times use the store's Unix-millisecond convention.
+// A backend window is a reported refusal lasting until its UTC reset or a
+// successful operator probe. It is store state, not process state: restarting a
+// loop must not spend another refused start. Times are Unix milliseconds.
 const backendWindowDDL = `CREATE TABLE IF NOT EXISTS backend_windows (
  backend TEXT PRIMARY KEY,
  kind TEXT NOT NULL,
@@ -86,6 +89,35 @@ func (l *Loop) recordBackendWindow(ctx context.Context, rec run.Record) error {
 		}
 		return l.pauseQuotaPeers(tx, rec.Backend, rec.RunID)
 	})
+}
+
+const backendQuotaReopenedKind = "drain.backend-quota-reopened"
+
+func init() {
+	if err := event.Register(backendQuotaReopenedKind, Utility); err != nil {
+		panic(err)
+	}
+}
+
+// The probe event and deletion share one write transaction. The window must
+// already exist when the success is recorded; a later refusal can close it anew.
+func reopenBackendWindow(tx *store.Tx, backend string, probeSeq int64, at time.Time) error {
+	reopened := struct {
+		ProbeSeq int64   `json:"probe_seq"`
+		RunID    string  `json:"run_id"`
+		Kind     string  `json:"kind"`
+		Fraction float64 `json:"fraction"`
+		ResetAt  int64   `json:"reset_at"`
+	}{ProbeSeq: probeSeq}
+	err := tx.QueryRow(`DELETE FROM backend_windows WHERE backend=? AND reset_at>?
+		RETURNING run_id,kind,fraction,reset_at`, backend, at.UnixMilli()).Scan(&reopened.RunID, &reopened.Kind, &reopened.Fraction, &reopened.ResetAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return appendEffectOn(tx, backendQuotaReopenedKind, "backend", backend, reopened, at)
 }
 
 func (l *Loop) nextAvailableRequest(ctx context.Context, itemID, laneID, runID, failed, seat string) (*run.Request, bool, error) {

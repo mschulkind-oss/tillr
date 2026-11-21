@@ -96,7 +96,8 @@ func TestSingleBackendSeatNamesTheRecordedQuotaWindow(t *testing.T) {
 	d := planFor(t, l, "item-a")
 	if d.Action != ActionHold || d.Reason != ReasonBackendWindow || d.RunRequest != nil || d.DeferredBy != "fixture" ||
 		d.BackendHoldCause != "weekly quota refusal recorded by run refusing-run" ||
-		d.BackendHoldMover != "provider quota resets at "+reset.Format(time.RFC3339) {
+		!strings.Contains(d.BackendHoldMover, "provider quota resets at "+reset.Format(time.RFC3339)) ||
+		!strings.Contains(d.BackendHoldMover, "successful probe-backend") {
 		t.Fatalf("want the seat's quota hold with cause and mover, got %+v", d)
 	}
 }
