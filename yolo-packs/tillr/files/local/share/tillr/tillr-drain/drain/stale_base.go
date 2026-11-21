@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
@@ -149,6 +150,9 @@ func runBaseLacks(ctx context.Context, r *store.Reader, root, runID, trunk strin
 		if strings.HasPrefix(ref, "refs/heads/patch/") {
 			// A fork landing is delivered to its patch branch, which a trunk base never holds.
 			continue
+		}
+		if landed, err = heavy.RewriteResolve(r, landed); err != nil {
+			return out, err
 		}
 		onTrunk, err := containsCommit(ctx, root, landed, trunk)
 		if err != nil || !onTrunk {

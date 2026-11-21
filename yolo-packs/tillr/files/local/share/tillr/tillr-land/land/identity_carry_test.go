@@ -9,8 +9,8 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// This slice tests acceptance carry; landing alias readers are a separate change.
 func TestRewriteAliasesAndIdentityCarryForward(t *testing.T) {
+	t.Run("landing lookup", testRewriteAliasLookup)
 	ctx := context.Background()
 	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "board.sqlite3"), true)
 	if err != nil {

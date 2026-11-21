@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/record"
@@ -519,6 +520,10 @@ func (l *Loop) deliverCommentReplies(ctx context.Context, c Candidate) error {
 		err = r.QueryRow("SELECT trunk_after FROM landings WHERE item_id=? AND run_id=? AND result='landed' ORDER BY event_seq DESC LIMIT 1", c.ItemID, c.RunID).Scan(&revision)
 		if errors.Is(err, sql.ErrNoRows) {
 			return Externalf("reply delivery needs a recorded landing for %s", c.RunID)
+		}
+		if err == nil {
+			// Read the document from the commit that carries the landing now.
+			revision, err = heavy.RewriteResolve(r, revision)
 		}
 		return err
 	})
