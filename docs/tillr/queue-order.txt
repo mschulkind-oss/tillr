@@ -1,14 +1,12 @@
-# last_hand_move_event_seq: 1326891
-# hand_move_event_sha256: d95f1ca86b82032eddc79eea777a3127c32e38214e68437126976120915d5f44
-item-request-cae19a4382
+# last_hand_move_event_seq: 1327714
+# hand_move_event_sha256: 4fe271d685675960499533791ffb4b55b570a7563ac4d50f66e749ac1d929739
+item-request-1990fff4f0
 item-request-cc2af28a50
 item-request-5be951c300
 item-request-b205fbd881
 item-request-ab90e5da8f
 item-request-3ee8dd349e
-item-request-ed0e11d000
 item-request-c04ea25d47
-item-gate-pinned-fork-inputs
 item-bedrock-claude-latest-only
 item-request-7bbcb8dc81
 item-request-59735b6305
