@@ -136,13 +136,6 @@ const (
 	// the only planner-level exclusion: two ordinary items with disjoint fences run together,
 	// because each has its own worktree and its own land lock.
 	ReasonForkHeld = "fork-held"
-	// ReasonFailover is a dispatch's reason: the item's last run failed in the
-	// infrastructure class, so this dispatch re-stages the same work on the next backend
-	// in the policy's preference (docs/reference/tillr-muse-backend.md, D-MM11). It is a
-	// dispatch reason rather than
-	// a hold's because the item *is* dispatched — the spend is a re-dispatch, and the
-	// record says so.
-	ReasonFailover = "failover"
 	// ReasonInfraExhausted is retained for historical records only. New infrastructure
 	// holds use ReasonBackendClosed and wait for evidence, not a budget.
 	// Previously the preference had no backend

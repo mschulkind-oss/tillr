@@ -99,7 +99,10 @@ func infrastructure(r *store.Reader) ([]Alarm, error) {
   FROM backend_outcomes o JOIN events e ON e.seq=o.terminal_seq
   WHERE o.class <> 'interrupted'
  ) SELECT backend, ts, json_extract(payload,'$.run_id'), json_extract(payload,'$.state'),
-   coalesce('exit ' || json_extract(payload,'$.exit_code'), 'no exit code')
+   coalesce('exit ' || json_extract(payload,'$.exit_code'), 'no exit code'),
+   coalesce((SELECT json_extract(o.payload,'$.cause') FROM events o
+     WHERE o.kind='drain.backend-outcome' AND o.object_id=endings.backend
+     AND json_extract(o.payload,'$.terminal_seq')=endings.seq), '')
  FROM endings WHERE newest=1 AND closes=1 AND backend NOT IN ('', 'command')
  AND NOT EXISTS (SELECT 1 FROM events p WHERE p.kind='drain.backend-probe' AND p.object_id=backend
   AND p.seq>endings.seq AND json_extract(p.payload,'$.success')=1)
@@ -114,13 +117,16 @@ func infrastructure(r *store.Reader) ([]Alarm, error) {
 	defer rows.Close()
 	var out []Alarm
 	for rows.Next() {
-		var name, runID, state, exit string
+		var name, runID, state, exit, cause string
 		var since int64
-		if err := rows.Scan(&name, &since, &runID, &state, &exit); err != nil {
+		if err := rows.Scan(&name, &since, &runID, &state, &exit, &cause); err != nil {
 			return nil, err
 		}
+		if cause == "" {
+			cause = fmt.Sprintf("infrastructure failure: run %s (%s, %s)", runID, state, exit)
+		}
 		out = append(out, Alarm{Kind: Closed, Backend: name, Since: easternTime(time.UnixMilli(since)),
-			Cause:   fmt.Sprintf("infrastructure failure: run %s (%s, %s)", runID, state, exit),
+			Cause:   cause,
 			Clears:  "a successful probe or a later non-infrastructure ending",
 			Command: fmt.Sprintf("fix the reported cause, then tillr drain probe-backend --store <store> --backend %s -- <smoke-check>", name)})
 	}

@@ -105,6 +105,7 @@ var Rules = map[string]Rule{
 	"fork-held":                    {"waits on work", "queue", "the fork lane landing the shared patch branch; the next pass"},
 	"failover":                     {"ready", "queue", "the next pass"},
 	"seat-degraded":                {"ready", "queue", "the next pass"},
+	"infrastructure-repeat":        {"needs you", "backend", "the operator: repair the repeated fault, then acknowledge the item fault"},
 	"backend-closed":               {"alarm", "backend", "operator; record a successful tillr-drain probe-backend or a non-infrastructure run"},
 	"judge-backend-unavailable":    {"alarm", "judge", "operator; clear the review backend alarm"},
 	"command-fault":                {"needs a cause", "lane", "repair the command process and authorize a retry"},

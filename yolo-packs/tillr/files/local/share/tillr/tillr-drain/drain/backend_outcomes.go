@@ -210,9 +210,13 @@ func RecordBackendOutcomes(ctx context.Context, path string) error {
 		return err
 	}
 	pending := []backendOutcome{}
+	causes := map[int64]string{}
 	for _, o := range outcomes {
 		if !o.saved {
 			pending = append(pending, o)
+			if o.closes {
+				causes[o.seq] = infrastructureDetail(o.rec, logTail(o.rec.ArtifactRefs))
+			}
 		}
 	}
 	if len(pending) == 0 {
@@ -238,7 +242,8 @@ func RecordBackendOutcomes(ctx context.Context, path string) error {
 					TerminalSeq int64        `json:"terminal_seq"`
 					Class       AttemptClass `json:"class"`
 					Closes      bool         `json:"closes"`
-				}{o.seq, o.class, o.closes}, time.Now().UTC()); err != nil {
+					Cause       string       `json:"cause,omitempty"`
+				}{o.seq, o.class, o.closes, causes[o.seq]}, time.Now().UTC()); err != nil {
 					return err
 				}
 			}

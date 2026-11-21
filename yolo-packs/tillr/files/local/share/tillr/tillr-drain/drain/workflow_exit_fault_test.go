@@ -1,6 +1,7 @@
 package drain
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -15,10 +16,29 @@ func TestWorkflowExitMachineryFailureRetriesNodeNotRepair(t *testing.T) {
 	l.cfg.Policy.Backends["alternate"] = Backend{Adapter: "alternate"}
 	l.cfg.Policy.SeatLists = map[string][]string{"scout": {"fixture", "alternate"}, "build": {"fixture", "alternate"}}
 	result := &LoopResult{}
+	for i := 0; i < 5; i++ {
+		graphPass(t, l, result)
+	}
+	if len(steps.runs) != 2 || result.Landed != 0 {
+		t.Fatalf("failed node ran on an alternative before probe: runs %+v result %+v", steps.runs, result)
+	}
+	if held := planFor(t, l, "item-a"); held.Action != ActionHold || held.Reason != ReasonBackendClosed || held.DeferredBy != "fixture" {
+		t.Fatalf("failed node did not hold on fixture: %+v", held)
+	}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		closed, err := readInfrastructureClosed(r)
+		if !closed["fixture"] || closed["alternate"] {
+			t.Errorf("expected fixture closed with alternate open: %v", closed)
+		}
+		return err
+	})
+	if err := ProbeBackend(context.Background(), f.storePath, f.root, "fixture", []string{"/bin/true"}); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 10; i++ {
 		graphPass(t, l, result)
 	}
-	if len(steps.runs) != 3 || !strings.Contains(steps.runs[2].RunID, "-n2") || steps.runs[2].Backend != "alternate" || result.Landed != 1 {
+	if len(steps.runs) != 3 || steps.runs[2].RunID != "run-item-a-a1-n2-restart" || steps.runs[2].Backend != "fixture" || result.Landed != 1 {
 		t.Fatalf("fault routing: runs %+v result %+v", steps.runs, result)
 	}
 	fixtureWrite(t, f, func(tx *store.Tx) error {

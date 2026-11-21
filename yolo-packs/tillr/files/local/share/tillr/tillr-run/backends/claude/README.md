@@ -192,16 +192,13 @@ The stream is one JSON object per line:
 - **Cost** is `total_cost_usd`. It is the harness's estimate at list prices; a
   subscription is not billed per run. A stream with no `result` line says `unknown`.
 
-## Falling back when the subscription refuses
+## When the subscription refuses
 
-A run the subscription refuses exits non-zero and writes no `RESULT:` footer, which the
-drain classes as an infrastructure failure, the one class a failover fires on. A seat that
-names a list of backends in the policy, such as `"build": ["claude", "pi"]`, then re-runs
-the item on the next backend in its own list in the same pass. The work machine's
-Claude-first policy,
-[`config/tillr/backend-policy.claude.json`](https://github.com/mschulkind-oss/tillr/blob/main/config/tillr/backend-policy.claude.json),
-is set up that way. Its Bedrock-only policy, `backend-policy.bedrock.json`, names no claude
-backend, so a drain reaches this adapter only when it is started with the Claude-first file.
+A nonzero exit without a `RESULT:` footer can be an infrastructure failure. The drain
+holds an infrastructure-failed run on its Claude backend with the recorded cause,
+even if another backend in the seat is open. Fix the cause and record a successful
+`tillr drain probe-backend` before the work can run on that backend again. A quota
+refusal with a stated reset time is recorded as a quota window instead.
 
 ## What a live run needs
 

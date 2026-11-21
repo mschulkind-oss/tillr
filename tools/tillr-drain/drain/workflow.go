@@ -577,6 +577,7 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	next.NodeStartRunID = ""
 	next.WorkflowRestart = false
 	next.NodeInfraFailures = 0
+	next.InfrastructureFrom = ""
 	next.WorkflowRelease = false
 	// The kept readers were recorded at the attempt's claim; a later node continues the
 	// lane, so it is no fresh retry start.
@@ -806,7 +807,7 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 			return true, l.markExamined(ctx, d)
 		}
 		if ClassifyAttempt(rec, log) == AttemptInfrastructure || (rec.State == run.StateExited && !readableFooter(footer)) {
-			return true, l.retryWorkflowNode(ctx, d, base, rec, result)
+			return true, l.holdFailedWorkflowNode(ctx, d, base, rec, result)
 		}
 	}
 	if !l.nonLanding && effectiveAccess == "write" {

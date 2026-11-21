@@ -23,7 +23,7 @@ func TestAllDefinedHoldReasonsAreClassified(t *testing.T) {
 		"item-already-terminal": true,
 		ReasonRestagedStaleBase: true,
 		// Dispatch reasons of the runs that answer a repeating-call ending.
-		ReasonRepeatingCallFresh: true, ReasonRepeatingCallFailover: true,
+		ReasonRepeatingCallFresh: true,
 	}
 	packages, err := parser.ParseDir(token.NewFileSet(), ".", nil, 0)
 	if err != nil {

@@ -577,20 +577,14 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 		d.ConflictID = ""
 		if len(d.Parallel) > 0 && d.WorkflowRestart {
 			nodes := parallelNodes(d)
-			for i, node := range nodes {
+			for _, node := range nodes {
 				rec, err := terminalRecord(r, node.RunRequest.RunID)
 				if err != nil {
 					return Decision{}, err
 				}
-				if rec == nil && !commandStage(node) && node.NodeInfraFailures > 0 {
-					name, ok := policy.availableBackend(node.RunRequest.Backend, node.Seat, shut)
-					if ok {
-						nodes[i].RunRequest = rerouteNodeRequest(policy, node, name)
-					}
-				}
-				if rec == nil && !commandStage(node) && shut[nodes[i].RunRequest.Backend] {
+				if rec == nil && !commandStage(node) && shut[node.RunRequest.Backend] {
 					d.Seat = node.Seat
-					d.DeferredBy = nodes[i].RunRequest.Backend
+					d.DeferredBy = node.RunRequest.Backend
 					d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
 					identifyDecision(&d)
 					return d, nil
@@ -630,17 +624,14 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 			return d, nil
 		}
 		d.Action, d.Reason, d.From, d.To = ActionDispatch, "workflow-next-node", "running", "running"
-		d.SelectSeat = d.NodeInfraFailures == 0 && !d.WorkflowRestart
-		name := policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: d.Seat})
-		if d.NodeInfraFailures > 0 {
-			name = d.RunRequest.Backend
+		d.SelectSeat = !d.WorkflowRestart
+		backend := policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: d.Seat})
+		if d.WorkflowRestart {
+			backend = d.RunRequest.Backend
 		}
-		backend := name
-		name, ok := policy.availableBackend(name, d.Seat, shut)
-		if d.WorkflowRestart && d.NodeInfraFailures == 0 {
-			name = d.RunRequest.Backend
-			backend = name
-			ok = !shut[name]
+		name, ok := backend, !shut[backend]
+		if !d.WorkflowRestart {
+			name, ok = policy.availableBackend(backend, d.Seat, shut)
 		}
 		if !ok {
 			d.DeferredBy = backend
@@ -650,9 +641,6 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 			if d.WorkflowRestart {
 				retained := *d.RunRequest
 				request = &retained
-				if name != retained.Backend {
-					request = rerouteNodeRequest(policy, d, name)
-				}
 			}
 			if request == nil {
 				return Decision{}, Usagef("workflow seat %s cannot build a request", d.Seat)
@@ -701,11 +689,17 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 			seat := policy.seatList("review")
 			if len(seat) > 0 {
 				_, open := firstOpenSeatBackend(*policy, "review", shut)
+				blocked := seat[0]
+				failure, err := readRecordedInfrastructureFailure(r, d.ItemID, "$.node", "review:judge")
+				if err != nil {
+					return Decision{}, err
+				}
+				if stem, _, _ := splitRunID(failure.RunID); stem == judgeRunID(work.Candidate.RunID) {
+					blocked, open = failure.Backend, !shut[failure.Backend]
+				}
 				if !open {
 					d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, ReasonBackendWindow
-					if len(seat) == 1 {
-						d.Seat, d.DeferredBy = "review", seat[0]
-					}
+					d.Seat, d.DeferredBy = "review", blocked
 					identifyDecision(&d)
 					return d, nil
 				}
@@ -785,6 +779,12 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 			}
 		}
 		if finished {
+			if evaluatorNode(d) && rec != nil && rec.State == run.StateFailedToStart && shut[d.RunRequest.Backend] {
+				d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
+				d.DeferredBy = d.RunRequest.Backend
+				identifyDecision(&d)
+				return d, nil
+			}
 			if rec != nil && quotaSingleRun(d) {
 				backend, err := quotaPauseBackend(r, rec.RunID)
 				if err != nil {
@@ -813,12 +813,11 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 					// old run pending so the replacement can be planned after release.
 					return d, nil
 				}
-				if failed && policy != nil {
-					if _, open := policy.availableBackend(d.RunRequest.Backend, d.Seat, shut); !open {
-						d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
-						identifyDecision(&d)
-						return d, nil
-					}
+				if failed && shut[d.RunRequest.Backend] {
+					d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
+					d.DeferredBy = d.RunRequest.Backend
+					identifyDecision(&d)
+					return d, nil
 				}
 			}
 			d.To, d.Action, d.Reason = "candidate", ActionSettle, ActionSettle
@@ -2271,9 +2270,6 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watch *l
 	result.Dispatched++
 	ticks := result.Ticks
 	l.mu.Unlock()
-	if d.Reason == ReasonFailover {
-		l.reportf("loop: failover %s -> %s on %s\n", d.ItemID, d.RunRequest.Backend, d.LaneID)
-	}
 
 	l.reportf("loop: tick %d dispatch %s -> %s on %s\n", ticks, d.ItemID, d.RunRequest.Backend, d.LaneID)
 	handoff := !l.nonLanding && !l.pollOnly && l.ownerMigrationItem == ""
@@ -2296,8 +2292,9 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watch *l
 				if err == nil {
 					var accepted bool
 					_, accepted, err = l.judgeCandidate(runCtx, c, &local)
-					if errors.Is(err, errJudgeGrantHeld) {
+					if errors.Is(err, errJudgeGrantHeld) || errors.Is(err, errJudgeBackendHeld) {
 						err = l.releaseExamination(runCtx, d)
+						completion.result = &local
 					} else if err == nil && !accepted {
 						evaluatorHold = &c
 						completion.result = &local

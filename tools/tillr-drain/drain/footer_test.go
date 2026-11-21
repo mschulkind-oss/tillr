@@ -51,10 +51,10 @@ func TestParallelReaderWithAnUnreadableFooterRunsAgainAlone(t *testing.T) {
 		t.Fatalf("started=%d builders=%d", steps.started, steps.builders)
 	}
 	fixtureRead(t, f, func(r *store.Reader) error {
-		var id string
-		err := r.QueryRow(`SELECT run_id FROM node_runs WHERE node_id='scout2' AND outcome='passed'`).Scan(&id)
-		if id != "run-item-a-a1-n2-failover" {
-			t.Errorf("the unread reader did not run again alone: %q", id)
+		var id, backend string
+		err := r.QueryRow(`SELECT n.run_id,r.backend FROM node_runs n JOIN runs r ON r.run_id=n.run_id WHERE n.node_id='scout2' AND n.outcome='passed'`).Scan(&id, &backend)
+		if id != "run-item-a-a1-n2-restart" || backend != "fixture" {
+			t.Errorf("the unread reader did not run again alone on its original backend: %q on %q", id, backend)
 		}
 		return err
 	})

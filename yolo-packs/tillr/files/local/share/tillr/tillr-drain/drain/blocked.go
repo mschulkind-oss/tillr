@@ -71,19 +71,22 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 	case c.BodyRef == "" && !p.requests[row.ItemID]:
 		d.Reason = ReasonConflictOwner
 	default:
-		// Conflict design uses only its seat's declared backends.
-		backend := ""
-		for _, name := range p.policy.seatList("design") {
-			if !p.shut[name] {
-				backend = name
-				break
-			}
-		}
+		// Reopening a failed design run is not a fresh seat choice.
+		failedBackend := p.failedBackendFor(row.ItemID, c.DesignRunID)
+		backend := failedBackend
 		if backend == "" {
+			backend, _ = firstOpenSeatBackend(*p.policy, "design", p.shut)
+		}
+		if backend == "" || p.shut[backend] {
 			d.Reason = ReasonBackendWindow
-			if p.policy.singleBackendSeat("design") {
-				d.Seat, d.DeferredBy = "design", p.policy.seatList("design")[0]
+			d.Seat, d.DeferredBy = "design", failedBackend
+			if d.DeferredBy == "" {
+				d.DeferredBy = p.policy.seatList("design")[0]
 			}
+			break
+		}
+		if !policyHasBackend(p.policy, backend) {
+			d.Reason, d.DeferredBy = ReasonNoPolicy, backend
 			break
 		}
 		if p.tick.MaxDispatches != nil && p.dispatched >= *p.tick.MaxDispatches {
@@ -104,7 +107,7 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 			p.assignLane(lane)
 			d.Action, d.From, d.To, d.LaneID = ActionDispatch, "queued", "running", lane
 			d.Seat = "design"
-			d.SelectSeat = true
+			d.SelectSeat = failedBackend == ""
 			d.BlockConflict = &c
 			d.RunRequest = p.request(row.ItemID, lane, backend)
 			stampDecisionRequest(d, d.RunRequest)
@@ -114,6 +117,17 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 	}
 	identifyDecision(&d)
 	return d
+}
+
+func (p *planner) failedBackendFor(itemID, runID string) string {
+	if runID != "" {
+		for _, prior := range p.priors[itemID] {
+			if prior.RunID == runID && prior.BackendFailure {
+				return prior.Backend
+			}
+		}
+	}
+	return ""
 }
 
 // DesignNextActorField is the report line by which a design run that commits nothing names

@@ -173,6 +173,63 @@ func judgeRouteFixture(t *testing.T, mode string, grant bool) (refusalLoopFixtur
 	})
 	return f, l, s
 }
+
+type failingJudgeSteps struct{ *judgeRouteSteps }
+
+func (s failingJudgeSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	if req.Node != "judge" && req.NodeID != "evaluate" {
+		return s.judgeRouteSteps.Run(ctx, req)
+	}
+	s.runs = append(s.runs, req)
+	log := "review harness unavailable\n"
+	path := filepath.Join(s.t.TempDir(), "judge.log")
+	writeForkFile(s.t, path, log)
+	rec := run.Record{RunID: req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Backend: req.Backend,
+		State: run.StateExited, ExitCode: countPtr(4), StartedAt: "2026-11-15T00:00:00Z", FinishedAt: "2026-11-15T00:00:00Z",
+		ArtifactRefs: []run.ArtifactRef{{Kind: "log", Ref: path}}}
+	if req.NodeID == "evaluate" {
+		rec.State, rec.ExitCode = run.StateFailedToStart, nil
+	}
+	fixtureWrite(s.t, s.f, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
+	return rec, log, nil
+}
+
+func TestFailedJudgeWaitsAndStartsOnlyOnItsOwnBackend(t *testing.T) {
+	f, l, steps := judgeRouteFixture(t, "missing", true)
+	l.cfg.Steps = failingJudgeSteps{steps}
+	l.cfg.Policy.Backends["alternate"] = l.cfg.Policy.Backends["reviewer"]
+	l.cfg.Policy.SeatLists = map[string][]string{"review": {"reviewer", "alternate"}}
+	ctx := context.Background()
+	result := &LoopResult{}
+	for _, want := range []int{1, 2, 2} {
+		for i := 0; i < 3; i++ {
+			graphPass(t, l, result)
+		}
+		judges := 0
+		for _, req := range steps.runs {
+			if req.Node == "judge" {
+				judges++
+				if req.Backend != "reviewer" {
+					t.Fatalf("judge ran on %s, want reviewer", req.Backend)
+				}
+			}
+		}
+		if judges != want {
+			t.Fatalf("got %d judge starts, want %d; runs: %+v", judges, want, steps.runs)
+		}
+		d := decisionFor(t, l, "item-a").decision
+		if want == 1 && (d.Action != ActionHold || d.Reason != ReasonBackendClosed || d.DeferredBy != "reviewer" || !strings.Contains(d.BackendHoldCause, "review harness unavailable")) {
+			t.Fatalf("judge was not held with cause: %+v", d)
+		}
+		if want == 2 && (d.Action != ActionHold || d.Reason != ReasonInfrastructureRepeat) {
+			t.Fatalf("identical judge failure was not held: %+v", d)
+		}
+		if err := ProbeBackend(ctx, f.storePath, f.root, "reviewer", []string{"/bin/true"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestJudgeRouteBeforeGate(t *testing.T) {
 	for _, mode := range []string{"pass", "preflight", "not-done", "missing", "invalid", "dirty", "commit", "gate-fail", "land-fail", "mechanical", "no-grant"} {
 		t.Run(mode, func(t *testing.T) {

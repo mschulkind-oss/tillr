@@ -221,6 +221,9 @@ func (l *Loop) stageParallel(ctx context.Context, d Decision, base string) (Deci
 			return d, err
 		}
 		spec := StageSpec{Policy: l.currentPolicy(), Continue: true, Isolated: true, Node: &node.Workflow.Stages[node.NodeIndex], InputPaths: paths, LaneID: node.LaneID, ItemID: node.ItemID, RunID: node.RunRequest.RunID, Backend: node.RunRequest.Backend, BaseSHA: base, WorkingDir: node.RunRequest.WorkingDir, TimeoutMS: node.RunRequest.TimeoutMS}
+		if err := l.stageInfrastructureSession(ctx, &node, &spec); err != nil {
+			return d, err
+		}
 		if err = l.stageLane(ctx, spec); err != nil {
 			return d, err
 		}
@@ -367,7 +370,7 @@ func (l *Loop) runParallel(ctx context.Context, d Decision, result *LoopResult, 
 	}
 	if held {
 		work := &pendingWork{Decision: d, BaseSHA: d.NodeBaseSHA, LoopID: l.sessionID}
-		return l.advanceParallelRetry(ctx, work, nodes, "workflow-node-failover")
+		return l.advanceParallelRetry(ctx, work, nodes, "workflow-node-restart")
 	}
 	return nil
 }
@@ -482,7 +485,7 @@ func (l *Loop) settleParallel(ctx context.Context, work *pendingWork, result *Lo
 			nodes[i], recs[i], logs[i], outcome = updated, rec, log, ending
 		}
 		retry = retry || strings.HasPrefix(outcome, "workflow-node-")
-		infraRetry = infraRetry || outcome == "workflow-node-failover"
+		infraRetry = infraRetry || outcome == "workflow-node-restart"
 		failed = failed || outcome == "failed" || outcome == "fault" || outcome == "blocked" || outcome == "unjudged"
 	}
 	finalHead, err := l.revParse(ctx, target, "HEAD")
@@ -505,7 +508,7 @@ func (l *Loop) settleParallel(ctx context.Context, work *pendingWork, result *Lo
 	if retry {
 		reason := "workflow-node-interrupted"
 		if infraRetry {
-			reason = "workflow-node-failover"
+			reason = "workflow-node-restart"
 		}
 		return laneOutcome{err: l.advanceParallelRetry(ctx, work, nodes, reason)}
 	}
@@ -594,12 +597,12 @@ func (l *Loop) settleParallelReader(ctx context.Context, work *pendingWork, node
 		case class == AttemptInfrastructure || !readableFooter(reportFooter(log)):
 			// No footer, or one naming no ending, is no answer: this reader alone runs
 			// again and its finished siblings are kept.
-			updated, ok, e := l.parallelFailover(ctx, node, rec, result)
+			updated, ok, e := l.holdFailedParallelNode(ctx, node, rec, log, result)
 			if e != nil {
 				return node, rec, log, "", laneOutcome{err: e}
 			}
 			if ok {
-				return updated, rec, log, "workflow-node-failover", laneOutcome{}
+				return updated, rec, log, "workflow-node-restart", laneOutcome{}
 			}
 			outcome = "fault"
 		case reportFooter(log) == "failed":

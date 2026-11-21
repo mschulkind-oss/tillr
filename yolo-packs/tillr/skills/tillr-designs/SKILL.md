@@ -87,9 +87,8 @@ handoff are gone:
   ordinary), and express blocks so interactive requests do not queue behind long background work.
 - **Loop detection and recovery.** When `pi` ends a runaway worker for repeating the same tool
   call (`repeating-call`, `38f97995f`), the drain preserves uncommitted work, never resumes the
-  looping session, starts a fresh session on the same backend naming the repeated call, fails
-  over to the seat's next backend on a second repeat, and holds the item as `repeating-call` once
-  the chain wraps. The runner also terminates settled harnesses that linger idle (`settled-idle`),
+  looping session, and may start a fresh session on the same backend naming the repeated call.
+  If the fresh session repeats or pi already recovered in-run, the item holds as `repeating-call`. The runner also terminates settled harnesses that linger idle (`settled-idle`),
   reclaims orphan runs left by dead loops or container restarts, returns gate, fence, and land
   refusals to the worker session uncounted (`returned-with-evidence`) until an identical repeat
   escalates to design, migrates pause-capable live workers onto a rolled build at their next turn
@@ -98,8 +97,9 @@ handoff are gone:
   `build`, `test-write`, `test-run`, `verify`, `docs`, `design`, `review`) across preferred
   backends, fallback chains, escalation lists, and quota shares, reloading live without a restart.
   `pi` runs on GitHub Copilot or AWS Bedrock model tiers, while `run-claude` runs headless Claude
-  Code so design and review seats can spend a Claude subscription first and fail over to `pi` when
-  a quota or availability window closes (`muse` remains built in the tree but dormant).
+  Code so design and review seats can spend a Claude subscription (`muse` remains built in the
+  tree but dormant). An infrastructure failure holds on the backend that failed. A recorded
+  recovery permits work to continue on that backend; an identical repeat holds for the operator.
 - **Landing and obstacle tools a worker ends with.** When `pi --features` reports
   `parked-tool-calls`, the drain switches `pi` workers from `RESULT:` text footers to
   `call-suspends` mode and loads two extension tools: `land` (which checks for a clean worktree

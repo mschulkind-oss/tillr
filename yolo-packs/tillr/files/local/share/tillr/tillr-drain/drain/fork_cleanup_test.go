@@ -45,8 +45,8 @@ func TestWorkflowEmptyPiTurnRestartsRatherThanFinishes(t *testing.T) {
 		t.Fatalf("settlement: handled=%v, err=%v", handled, err)
 	}
 	next := pendingForTest(t, f, d.ItemID).Decision
-	if !next.WorkflowRestart || next.NodeIndex != d.NodeIndex || next.RunRequest.Backend != "alternate" {
-		t.Fatalf("expected a failover of the same node, got %+v", next)
+	if !next.WorkflowRestart || next.NodeIndex != d.NodeIndex || next.RunRequest.Backend != "fixture" || next.RunRequest.RunID != markRunID(d.RunRequest.RunID, "restart") {
+		t.Fatalf("expected a same-backend restart of the same node, got %+v", next)
 	}
 	fixtureRead(t, f, func(r *store.Reader) error {
 		var outcome string

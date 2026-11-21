@@ -120,40 +120,6 @@ func reopenBackendWindow(tx *store.Tx, backend string, probeSeq int64, at time.T
 	return appendEffectOn(tx, backendQuotaReopenedKind, "backend", backend, reopened, at)
 }
 
-func (l *Loop) nextAvailableRequest(ctx context.Context, itemID, laneID, runID, failed, seat string) (*run.Request, bool, error) {
-	policy := l.currentPolicy()
-	next, ok := policy.nextBackend(failed, seat)
-	if !ok {
-		return nil, false, nil
-	}
-	if err := l.refreshQuotas(ctx); err != nil {
-		return nil, false, err
-	}
-	s, err := store.OpenRead(ctx, l.cfg.Store)
-	if err != nil {
-		return nil, false, err
-	}
-	defer s.Close()
-	var shut map[string]bool
-	err = s.ReadTx(ctx, func(r *store.Reader) error {
-		var err error
-		shut, err = readQuotaShutBackends(r, l.cfg.Now(), policy)
-		return err
-	})
-	if err != nil {
-		return nil, false, err
-	}
-	next, ok = policy.availableBackend(next, seat, shut)
-	if !ok {
-		return nil, false, nil
-	}
-	req := policy.request(itemID, laneID, runID, next)
-	if req != nil {
-		req.Seat = seat
-	}
-	return req, true, nil
-}
-
 func readShutBackends(r *store.Reader, at time.Time) (map[string]bool, error) {
 	windows, err := readBackendWindows(r, at)
 	shut := map[string]bool{}

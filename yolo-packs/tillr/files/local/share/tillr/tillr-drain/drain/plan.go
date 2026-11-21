@@ -159,7 +159,7 @@ type Decision struct {
 	// RepeatedCall is the repeating-call ending this dispatch answers: the earlier run
 	// whose session pi ended because the model kept repeating one identical call. Staging
 	// writes it into the brief (repeatedCallBrief), and a run dispatched with it that ends
-	// the same way takes the failover rather than another fresh session (repeatingRoute).
+	// the same way holds rather than starting another session (repeatingRoute).
 	RepeatedCall *RepeatedCall `json:"repeated_call,omitempty"`
 	// TransitionID identifies (item, attempt, from, to), independently of the tick's
 	// clock. Attempt is one more than the item's count of terminal runs, including
@@ -189,9 +189,11 @@ type Decision struct {
 	// DeferredBy names the resource hold's blocker, such as a fork owner,
 	// the trunk's fixer, or a closed backend.
 	DeferredBy string `json:"deferred_by,omitempty"`
-	// Single-backend seat holds carry the closure evidence and what can reopen it.
+	// Backend holds carry the closure evidence and what can reopen the backend.
 	BackendHoldCause string `json:"backend_hold_cause,omitempty"`
 	BackendHoldMover string `json:"backend_hold_mover,omitempty"`
+	// InfrastructureFrom links a reopened dispatch to the run it can resume.
+	InfrastructureFrom string `json:"infrastructure_from,omitempty"`
 	// QuestionID names the question a `question-open` hold is waiting on: the first
 	// unanswered question in the design document's own order, as Vantage's index reports it.
 	// It is empty for every other hold and for every dispatch, so an operator who reads one
@@ -203,7 +205,7 @@ type Decision struct {
 	// answers "why this model" without the policy that happened to be live when it was
 	// planned. Empty for an item that asked for no seat.
 	Seat string `json:"seat,omitempty"`
-	// SelectSeat marks a fresh choice, as opposed to an ordered failover or continuation.
+	// SelectSeat marks a fresh backend choice, as opposed to a continuation.
 	SelectSeat bool `json:"select_seat,omitempty"`
 }
 
@@ -1104,10 +1106,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	if hasConflict && conflict.Status != "closed" && conflict.Status != "answered" {
 		return p.conflictDecision(item, conflict)
 	}
-	// The item's attempt and its authorization come first: whether its last run left a
-	// failover to walk, and whether a person asked for a retry of that run, are both
-	// properties of the item's own history. The authorization is resolved before the
-	// switch so a claim the store refuses can name its reason and the run it names.
+	// Resolve the last run's disposition and any operator retry before testing resources.
 	attempt := p.attempt(item)
 	retry := p.retryFor(item.ItemID)
 	// No item is re-admitted because an input changed: the owner ruled on 2026-11-17 that
@@ -1118,7 +1117,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	waitReleased := p.waitReleased(item.ItemID)
 	if waitReleased {
 		// The named blocker landed. Start fresh, not from the run that was held.
-		attempt.failover, attempt.singleBackendFailure = false, false
+		attempt.infrastructureFailure = false
 		if p.policy != nil {
 			attempt.backend = p.firstBackend(item)
 		}
@@ -1127,7 +1126,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		// A released acquittal starts fresh, including one whose dispatch had
 		// consumed an owner retry.
 		retry = nil
-		attempt.failover = false
+		attempt.infrastructureFailure = false
 		if p.policy != nil {
 			attempt.backend = p.firstBackend(item)
 		}
@@ -1154,20 +1153,19 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	}
 	if interrupted {
 		// Repeat the interrupted execution, not an authorized retry or a
-		// re-admission. Preserve its backend and do not walk the failover chain.
+		// re-admission. Preserve its backend.
 		attempt = attemptForInterruption(p.priors[item.ItemID])
 		retry = nil
 	}
 	// A run pi ended for a repeating call routes as its settlement recorded: a fresh
-	// session, a failover, or a hold for the operator (repeating_call.go). An operator's
+	// session or a hold for the operator (repeating_call.go). An operator's
 	// retry outranks it.
 	var repeated *RepeatedCall
 	if priors := p.priors[item.ItemID]; !waitReleased && retry == nil && !interrupted && len(priors) > 0 && priors[len(priors)-1].Class == AttemptRepeating {
 		repeated = priors[len(priors)-1].Repeated
 	}
 	if repeated != nil && repeated.Route != repeatRouteHold {
-		attempt.backend = repeated.NextBackend
-		attempt.failover = repeated.Route == repeatRouteFailover
+		attempt.backend = repeated.Backend
 	}
 	// An operator's retry of a refused verify still repairs the candidate the verifier
 	// read, so that one ending outlives the retry that otherwise clears it.
@@ -1182,11 +1180,11 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		// A returned ending is about the candidate, not the machinery: the next run starts
 		// on the item's own backend.
 		attempt.backend = p.firstBackend(item)
-		attempt.failover = false
+		attempt.infrastructureFailure = false
 	}
 	if hasConflict && conflict.Status == "answered" && p.policy != nil {
 		attempt.backend = p.firstBackend(item)
-		attempt.failover = false
+		attempt.infrastructureFailure = false
 		decision.ConflictID = conflict.ConflictID
 	}
 	windowShut := false
@@ -1201,9 +1199,13 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 			if retry != nil && retry.refusal == "" && !p.quotaShut[attempt.backend] {
 				shut = p.quotaShut
 			}
-			next, ok := p.policy.availableBackend(attempt.backend, item.Seat, shut)
-			windowShut = !ok
-			attempt.backend = next
+			if attempt.infrastructureFailure && !attempt.quotaRoute || repeated != nil || interrupted {
+				windowShut = shut[attempt.backend]
+			} else {
+				next, ok := p.policy.availableBackend(attempt.backend, item.Seat, shut)
+				windowShut = !ok
+				attempt.backend = next
+			}
 		}
 	}
 	// The fence is read before the tick's resources because it is the item's own scope, and
@@ -1246,7 +1248,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		// operator is the mover (holdrules "repeating-call").
 		decision.Action, decision.Reason = ActionHold, ReasonRepeatingCall
 		decision.SupersedesRunID = repeated.RunID
-	case retry == nil && !interrupted && repeated == nil && !attempt.failover && !attempt.singleBackendFailure && returned == nil && p.mayBeARetry(item.ItemID) && decision.ConflictID == "" && !(item.Delivery.ForkRun != "" && item.Delivery.ForkRun == p.latest[item.ItemID]) && holdEnabled(p.rules(), p.retryHoldReason(item.ItemID)):
+	case retry == nil && !interrupted && repeated == nil && !attempt.infrastructureFailure && returned == nil && p.mayBeARetry(item.ItemID) && decision.ConflictID == "" && !(item.Delivery.ForkRun != "" && item.Delivery.ForkRun == p.latest[item.ItemID]) && holdEnabled(p.rules(), p.retryHoldReason(item.ItemID)):
 		decision.Action, decision.Reason = ActionHold, p.retryHoldReason(item.ItemID)
 		decision.SupersedesRunID = p.latest[item.ItemID]
 	case holdEnabled(p.rules(), ReasonNoFence) && fenceAdmitsNothing(fence):
@@ -1259,6 +1261,8 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	case windowShut:
 		decision.Action, decision.Reason = ActionHold, ReasonBackendWindow
 		decision.DeferredBy = backendWaitStart
+	case attempt.infrastructureFailure && !attempt.quotaRoute && !policyHasBackend(p.policy, attempt.backend):
+		decision.Action, decision.Reason, decision.DeferredBy = ActionHold, ReasonNoPolicy, attempt.backend
 	case p.tick.MaxDispatches != nil && p.dispatched >= *p.tick.MaxDispatches:
 		decision.Action, decision.Reason = ActionHold, ReasonNoLane
 	default:
@@ -1317,9 +1321,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.LaneID = lane
 		decision.Inputs = p.inputs[item.ItemID]
 		if retry != nil {
-			// A retry is a fresh attempt, not a failover: it starts on the backend the
-			// item's first dispatch would have used, and the operator's authorization is
-			// what overrides the failover budget rather than a second automatic walk.
+			// A retry is a fresh attempt explicitly authorized by an operator.
 			decision.Action = ActionRetry
 			decision.Reason = ReasonRetry
 			decision.RetryID = retry.retryID
@@ -1335,8 +1337,8 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		}
 		decision.Action = ActionDispatch
 		decision.Reason = ReasonReady
-		if attempt.failover {
-			decision.Reason = ReasonFailover
+		if attempt.infrastructureFailure && !attempt.quotaRoute {
+			decision.InfrastructureFrom = attempt.failedRun
 		}
 		decision.RunRequest = p.request(item.ItemID, lane, attempt.backend)
 		if interrupted {
@@ -1347,9 +1349,6 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 			answered.NextBackend = decision.RunRequest.Backend
 			decision.RepeatedCall = &answered
 			decision.Reason = ReasonRepeatingCallFresh
-			if repeated.Route == repeatRouteFailover {
-				decision.Reason = ReasonRepeatingCallFailover
-			}
 		}
 		if restaged {
 			decision.Reason = ReasonRestagedStaleBase
@@ -1384,7 +1383,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	}
 	if decision.Action == ActionDispatch || decision.Action == ActionRetry {
 		decision.From, decision.To = "queued", "running"
-		decision.SelectSeat = !decision.RunRequest.SessionTurn && !interrupted && repeated == nil && (!attempt.failover || retry != nil || decision.ConflictID != "")
+		decision.SelectSeat = !decision.RunRequest.SessionTurn && !interrupted && repeated == nil && (!attempt.infrastructureFailure || retry != nil || decision.ConflictID != "")
 	}
 	if decision.DeskDocument != "" && decision.RunRequest != nil {
 		previousAdapter := ""
@@ -1624,10 +1623,8 @@ func (p *planner) waitReleased(itemID string) bool {
 // where a state event is not: an item that has been in progress ran before, and an item
 // whose history is not in the log at all is unknown rather than never-run.
 //
-// A failover is the one dispatch that is not a retry: it re-stages work whose attempt
-// failed for the machinery's reasons, and decide applies it before this rule. A retry an
-// operator authorized is applied before that too: the person's decision outranks the
-// automatic walk.
+// The planner handles recorded backend recovery separately: it admits a failed
+// run on its own backend, rather than treating machinery failure as judged work.
 func (p *planner) mayBeARetry(itemID string) bool {
 	if p.waitReleased(itemID) || acquittedRefusal(p.history.refusals[p.latest[itemID]]) {
 		return false
@@ -2006,12 +2003,12 @@ func readRequestIDs(r *store.Reader) (map[string]bool, error) {
 	return out, rows.Err()
 }
 
-// attemptRunID names one item's ordinal attempt, including terminal failover runs.
+// attemptRunID names one item's ordinal attempt.
 func attemptRunID(itemID string, attempt int) string {
 	return boundRunIDBase("run-" + runItemSlug(itemID) + "-a" + strconv.Itoa(attempt))
 }
 
-// An interruption retains the same backend; it is not a failover.
+// An interruption retains the same backend.
 func attemptForInterruption(priors []priorRun) attempt {
 	return attempt{backend: priors[len(priors)-1].Backend}
 }
@@ -2026,14 +2023,10 @@ func (p *planner) attempt(row itemRow) attempt {
 		a.backend = p.firstBackend(row)
 		return a
 	}
-	next, ok := p.policy.nextBackend(priors[len(priors)-1].Backend, row.Seat)
-	if !ok {
-		a.singleBackendFailure = p.policy.singleBackendSeat(row.Seat)
-		a.backend = p.firstBackend(row)
-		return a
-	}
-	a.backend = next
-	a.failover = true
+	prior := priors[len(priors)-1]
+	a.backend, a.failedRun = prior.Backend, prior.RunID
+	a.infrastructureFailure = true
+	a.quotaRoute = !prior.BackendFailure
 	return a
 }
 
@@ -2041,11 +2034,16 @@ func (p *planner) attempt(row itemRow) attempt {
 type attempt struct {
 	// backend is the name the request's backend field carries.
 	backend string
-	// failover says this dispatch re-stages an item whose last run failed in the
-	// infrastructure class, so the decision's reason says so and the spend is visible.
-	failover bool
-	// singleBackendFailure uses backend availability, not a candidate-retry hold.
-	singleBackendFailure bool
+	// Infrastructure settlement pins the backend and waits on recorded availability.
+	infrastructureFailure bool
+	// Non-closing infrastructure classifications retain their quota admission path.
+	quotaRoute bool
+	failedRun  string
+}
+
+func policyHasBackend(policy *Policy, backend string) bool {
+	_, ok := policy.Backends[backend]
+	return ok
 }
 
 // checkOverrides refuses a policy whose override map names an item the store does not

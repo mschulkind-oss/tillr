@@ -29,7 +29,7 @@ func (s *orderedParallelSteps) record(name string) {
 }
 
 func (s *orderedParallelSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
-	replacement := req.Resume || strings.HasSuffix(req.RunID, "-failover")
+	replacement := req.Resume || strings.HasSuffix(req.RunID, "-restart")
 	name := req.NodeID
 	if replacement {
 		name = "replacement"
@@ -70,13 +70,16 @@ func (s *orderedParallelSteps) Run(ctx context.Context, req run.Request) (run.Re
 	return rec, log, err
 }
 
+// Infrastructure cannot replace a reader before its held sibling ends: the backend
+// must reopen first. An unanswered zero-exit reader still restarts immediately.
 func TestParallelReaderReplacementEndsBeforeHeldSibling(t *testing.T) {
-	for _, kind := range []string{"failover", "continuation"} {
+	for _, kind := range []string{"missing-footer-restart", "continuation"} {
 		t.Run(kind, func(t *testing.T) {
 			f, l, steps := parallelFixture(t)
 			steps.writerAfter = 5
-			if kind == "failover" {
-				steps.failedStart = true
+			if kind == "missing-footer-restart" {
+				steps.badReportNode = "-n2"
+				steps.badReport = "no report footer\n"
 				l.cfg.Policy.Backends["alternate"] = Backend{Adapter: "alternate"}
 				l.cfg.Policy.Preference = []string{"fixture", "alternate"}
 				l.cfg.Policy.SeatLists = map[string][]string{"scout": {"fixture", "alternate"}, "build": {"fixture", "alternate"}}
@@ -99,6 +102,9 @@ func TestParallelReaderReplacementEndsBeforeHeldSibling(t *testing.T) {
 			case request = <-ordered.replacementStarted:
 			case <-time.After(hangGuard):
 				t.Fatal("replacement cannot start while its sibling is held")
+			}
+			if request.Backend != "fixture" || (kind == "missing-footer-restart" && request.RunID != "run-item-a-a1-n2-restart") {
+				t.Fatalf("replacement changed backend or restart identity: %+v", request)
 			}
 			fixtureRead(t, f, func(r *store.Reader) error {
 				works, err := readPending(r)

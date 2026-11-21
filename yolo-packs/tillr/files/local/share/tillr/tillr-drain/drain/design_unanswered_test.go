@@ -61,6 +61,8 @@ func endDesignRunWith(t *testing.T, f refusalLoopFixture, l *Loop, step, report,
 	state, cause, exit := run.StateExited, run.EndNormalExit, countPtr(0)
 	if step == "orphaned" || step == "reclaimed" {
 		state, cause, exit = run.StateTimedOut, run.EndLeaseReclaimed, nil
+	} else if step == "infrastructure" {
+		exit = countPtr(4)
 	}
 	rec := run.Record{RunID: d.RunRequest.RunID, ItemID: d.ItemID, LaneID: d.LaneID, Backend: d.RunRequest.Backend, State: state, ExitCode: exit, StartedAt: l.cfg.Now().Format(time.RFC3339), FinishedAt: l.cfg.Now().Format(time.RFC3339), EndCause: cause, ArtifactRefs: []run.ArtifactRef{}}
 	if report != "" {
@@ -76,6 +78,9 @@ func endDesignRunWith(t *testing.T, f refusalLoopFixture, l *Loop, step, report,
 		}
 		if step == "orphaned" {
 			return appendEffect(tx, loopOrphanedKind, rec.RunID, struct{}{}, l.cfg.Now())
+		}
+		if step == "infrastructure" {
+			return nil
 		}
 		if step == "reclaimed" {
 			// A lease reclaimed after its loop died (a jail relaunch): no refusal and no
@@ -163,6 +168,33 @@ func TestAGateRefusedDesignRunGoesBackToTheDesignSeatEveryTime(t *testing.T) {
 }
 
 // A run a loop stop interrupted said nothing about the conflict: it is run again.
+func TestFailedDesignRunWaitsAndStartsOnlyOnItsOwnBackend(t *testing.T) {
+	f, l := designConflictFixture(t)
+	l.cfg.Policy.Backends["alternate"] = l.cfg.Policy.Backends["fixture"]
+	l.cfg.Policy.SeatLists["design"] = []string{"fixture", "alternate"}
+	failed := endDesignRunReporting(t, f, l, "infrastructure", "design harness unavailable\n")
+	settleDesign(t, l)
+	wait := decisionFor(t, l, "item-a").decision
+	if wait.Action != ActionHold || wait.Reason != ReasonBackendClosed || wait.DeferredBy != "fixture" || !strings.Contains(wait.BackendHoldCause, "design harness unavailable") {
+		t.Fatalf("failed design run did not wait on fixture: %+v", wait)
+	}
+	if err := ProbeBackend(context.Background(), f.storePath, f.root, "fixture", []string{"/bin/true"}); err != nil {
+		t.Fatal(err)
+	}
+	next := decisionFor(t, l, "item-a").decision
+	if next.Action != ActionDispatch || next.RunRequest == nil || next.RunRequest.Backend != "fixture" || next.SelectSeat {
+		t.Fatalf("reopened design run not pinned: %+v", next)
+	}
+	runID := endDesignRunReporting(t, f, l, "infrastructure", "different design fault\n")
+	fixtureRead(t, f, func(r *store.Reader) error {
+		rec, err := terminalRecord(r, runID)
+		if err == nil && (rec == nil || rec.Backend != "fixture" || runID == failed) {
+			t.Fatalf("design run record = %+v, wanted a new run on fixture", rec)
+		}
+		return err
+	})
+}
+
 func TestAnInterruptedDesignRunRaisesItsConflictAgain(t *testing.T) {
 	f, l := designConflictFixture(t)
 	design := endDesignRun(t, f, l, "orphaned")

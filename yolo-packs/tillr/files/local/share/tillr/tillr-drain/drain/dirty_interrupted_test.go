@@ -131,10 +131,10 @@ func TestRepeatingAndSignaledWorkflowNodesWithDirtyWorktreePreserveAndContinue(t
 		if result.Rejected != 0 || result.RefusedSteps[RefusalFence] != 0 {
 			t.Fatalf("dirty repeating-call node refused as escape: %+v", result)
 		}
-		wantRuns := []string{"run-item-a-a1-n1", "run-item-a-a1-n1-fresh", "run-item-a-a1-n1-002-failover"}
-		wantBackends := []string{"fixture", "fixture", "alternate"}
-		if len(steps.runs) < 3 {
-			t.Fatalf("runs = %+v, want at least %v", steps.runs, wantRuns)
+		wantRuns := []string{"run-item-a-a1-n1", "run-item-a-a1-n1-fresh"}
+		wantBackends := []string{"fixture", "fixture"}
+		if len(steps.runs) != len(wantRuns) {
+			t.Fatalf("runs = %+v, want %v", steps.runs, wantRuns)
 		}
 		for i, want := range wantRuns {
 			if steps.runs[i].RunID != want || steps.backends[i] != wantBackends[i] {
@@ -157,18 +157,13 @@ func TestRepeatingAndSignaledWorkflowNodesWithDirtyWorktreePreserveAndContinue(t
 			if steps.savedCounts[i] != i {
 				t.Fatalf("active preserved record count on run %d = %d, want %d (duplicate preservation events?)", i, steps.savedCounts[i], i)
 			}
-			if i == 2 {
-				if got := runGit(t, f.root, "show", "refs/tillr/runs/"+prev+":tools/item-a/committed-"+prev+".txt"); got != "committed-"+prev {
-					t.Fatalf("pinned partial commit = %q, want %q", got, "committed-"+prev)
-				}
-			}
 		}
-
-		for i := 0; i < 8 && result.Landed == 0; i++ {
-			graphPass(t, l, result)
+		prev := wantRuns[1]
+		if got := runGit(t, f.root, "show", "refs/tillr/runs/"+prev+":tools/item-a/committed-"+prev+".txt"); got != "committed-"+prev {
+			t.Fatalf("held run's partial commit = %q, want %q", got, "committed-"+prev)
 		}
-		if result.Landed != 1 || result.Rejected != 0 {
-			t.Fatalf("workflow did not finish landing: %+v", result)
+		if d := mustPlan(t, l)[0].decision; d.Reason != ReasonRepeatingCall || d.Action != ActionHold {
+			t.Fatalf("workflow not held after fresh session repeated: %+v", d)
 		}
 	})
 
@@ -500,7 +495,7 @@ func TestRestartInterruptedNodeAndRetryWorkflowNodePreserveWorkBeforeRestart(t *
 		}
 		fixtureWrite(t, f, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
 
-		if err := l.retryWorkflowNode(ctx, d, work.BaseSHA, rec, &LoopResult{}); err != nil {
+		if err := l.holdFailedWorkflowNode(ctx, d, work.BaseSHA, rec, &LoopResult{}); err != nil {
 			t.Fatal(err)
 		}
 		ref := preservedPrefix + rec.RunID
@@ -522,8 +517,14 @@ func TestRestartInterruptedNodeAndRetryWorkflowNodePreserveWorkBeforeRestart(t *
 		})
 
 		restarted := pendingForTest(t, f, d.ItemID)
-		if restarted.Decision.RunRequest.Backend != "alternate" {
-			t.Fatalf("failover backend = %s, want alternate", restarted.Decision.RunRequest.Backend)
+		if restarted.Decision.RunRequest.Backend != "fixture" {
+			t.Fatalf("restart backend = %s, want fixture", restarted.Decision.RunRequest.Backend)
+		}
+		if d := mustPlan(t, l)[0].decision; d.Action != ActionHold || d.Reason != ReasonBackendClosed {
+			t.Fatalf("failed node not held before backend recovery: %+v", d)
+		}
+		if err := ProbeBackend(ctx, f.storePath, f.root, "fixture", []string{"/bin/true"}); err != nil {
+			t.Fatal(err)
 		}
 		if _, err := l.stageDispatches(ctx, []Decision{restarted.Decision}, restarted.BaseSHA, &LoopResult{}); err != nil {
 			t.Fatal(err)

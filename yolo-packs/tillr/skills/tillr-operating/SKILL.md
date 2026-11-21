@@ -103,9 +103,14 @@ Without `--end-runs`, stop ends supervision only: it cancels in-flight gate and
 trunk-proof checks without waiting for them to finish, leaves worker runs alone,
 and leaves unjudged candidates and proofs for the next loop to resume. With it, the drain records the
 interruption before sending SIGTERM to each in-flight run face. It does not ask the
-runs to pause, so those items start over on the next pass without
-spending a retry or a failover. Repeated stops
-need no authorization.
+runs to pause, so those items start over on their own backend without spending a
+retry. Repeated stops need no authorization.
+
+An infrastructure failure holds the item on the backend that failed. Read the
+run and cause in `tillr drain why` or `tillr view waiting`, repair the backend,
+then record a successful `tillr drain probe-backend`. If the same failure
+recurs, `infrastructure-repeat` names both runs. Reopening the backend does not
+clear that item hold; repair the cause before using `tillr drain clear-fault`.
 
 After a jail relaunch, a starting loop recovers dead runs (including resumed runs) on
 its own: a run whose loop ended its session (or left its presence file unheld) and whose

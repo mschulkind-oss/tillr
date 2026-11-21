@@ -537,7 +537,7 @@ A node's answer is the word after its report's last `RESULT:`, read through
 Markdown emphasis, code markers and a closing full stop, so `**RESULT: done**`
 answers `done`. An agent node whose footer is missing, or names no ending
 (`done`, `failed`, `blocked`), gave no answer the loop can read: that node
-alone runs again on the failover route, and its finished siblings are kept.
+waits for its own backend to reopen before it runs again. Its finished siblings are kept.
 
 Before 2026-11-18 the loop read `**RESULT: done**` as `done**`, recorded that
 reader `blocked` with no cause, and abandoned its set, so the planner could
@@ -624,33 +624,24 @@ along with the call. The drain does not judge it, does not charge it to the back
 and never continues the conversation that looped. It records a `drain.repeating-call`
 event with the call and the route it chose. It keeps the run's work the way an
 interrupted run's is kept: its commit is pinned at `refs/tillr/runs/<run>` and any
-uncommitted work is preserved. Then it takes one of three routes:
+uncommitted work is preserved. Then it takes one of two routes:
 
 1. **A new session on the same backend** (only for a pi without the `action` field on
    `loop_detected`, before in-run loop recovery). For a first such ending with neither
    recorded `loop_recovery` nor `action: "ended"`, the brief gains a "Your previous
    session" section that names the repeated call, says this is a new session that is not
    counted against the item, and points at the kept work.
-2. **The seat's next backend.** When pi recovers in-run (`action: "recovered"`) and still
-   ends the run for a loop (`action: "ended"`), the drain does not start the same seat
-   fresh — measured on 2026-11-19, four of five fresh restarts on the same model looped
-   again — and instead goes straight to the seat's next backend with the brief note that
-   names the repeated call. A fresh restart on an older pi that repeats a second time
-   takes the same backend walk.
-3. **A hold for the operator** (`repeating-call`). This is the route when the walk would
-   return to a backend this chain already ended on, or the list has no other backend.
-   The operator is the mover: read the call in the run record and run `tillr drain retry`.
+2. **A hold for the operator** (`repeating-call`). If pi already recovered in-run, or
+   the replacement session also repeats, the drain holds the item without starting on
+   another backend. Read the call in the run record before running `tillr drain retry`.
 
 The dispatch decision carries the ending it answers as `repeated_call`, so there is no
 counter. A run dispatched for any other reason starts the chain again. A workflow node
 takes the same routes: it is dispatched again at once on its lane and base, like an
 infrastructure restart. On a hold, its node row is marked `repeating-call` and the item
 is held. Design and desk-document runs keep their own routes for an unanswered run.
-`TestARepeatingCallAfterInRunRecoverySkipsFreshToFailover`,
-`TestARepeatingWorkflowNodeAfterInRunRecoverySkipsFresh`,
-`TestARepeatingCallStartsFreshThenFailsOverThenHolds`, and
-`TestARepeatingWorkflowNodeStartsFreshThenFailsOverThenHolds` cover the item and node
-paths with and without the `action` field.
+The [repeating-call tests](./drain/repeating_call_test.go) cover item and node paths
+with and without recorded in-run recovery.
 
 ## Landing calls
 
@@ -768,20 +759,14 @@ another restart.
   the lane's row. An exit 2 with no such words keeps the infrastructure class. An item's own
   text may contain two open braces in a row: staging carries it intact and writes the count of
   such pairs to the lane's `brace-literals` file, which the adapters' shared preflight reads.
-- **A run id carries one counter and a bounded stem.** The second and later failover,
+- **A run id carries one counter and a bounded stem.** The second and later
   restart, fresh session or interruption of one node is `<id>-<count>-<kind>`, with the count
-  padded to at least three digits and advancing past 999 without clamping or repeating words,
-  over a digest-bounded stem (preserving trailing `-judge` and `-cfix` tags) so every run id
-  stays strictly under 120 characters across 100+ failovers, >999 turns, and long item ids.
-- **A seat may name its own fallback order.** A seat's value is one backend name or an
-  ordered list of them, such as `"design": ["claude-designer", "pi-designer"]`. The item
-  dispatches to the first open backend unless shares or a selection mode request a split.
-  A failover walks a multi-backend seat's list forward, wrapping within the list and
-  skipping closed backends. Only an item with no seat walks the policy's `preference`.
-  An explicit item override can still select the first backend, but it does not give a
-  single-backend seat a fallback route. Every name in a list must be one of the policy's
-  backends; the check refuses the policy otherwise and names the seat
-  ([the claude backend design](../../docs/design/tillr-claude-backend.md#4-falling-back-when-the-window-is-spent)).
+  padded to at least three digits and advancing past 999 without clamping or repeating words.
+  A digest bounds the stem (preserving trailing `-judge` and `-cfix` tags) so every run id
+  stays strictly under 120 characters. Historical `-failover` ids remain readable.
+- **Seat lists choose the backend for new work.** A seat's value can be one backend name or
+  an ordered list. Every name must be a policy backend. A list, shares, or an override
+  can select a backend at admission; none sends an infrastructure-failed run elsewhere.
 
 ## Backend quota admission
 
@@ -805,7 +790,7 @@ The command runs from the drained repository root and answers one JSON document:
 
 Windows must have unique kinds, nonnegative fractions, and future reset times.
 An idle window with fraction 0 may have a null reset. Before planning dispatches
-and choosing a failover, the loop probes readings older than 60 seconds, changed
+and quota continuations, the loop probes readings older than 60 seconds, changed
 commands, and reached resets. Missing, malformed, failed, or stale readings hold
 that backend instead of assuming unlimited quota. Every probe is stored in
 `backend_quota_readings`; `backend_quota` holds the latest observation for planning
@@ -816,7 +801,7 @@ pass, not its history. Checks happen while choosing and claiming a backend, neve
 after staging; a claimed dispatch always starts. Reserve is a threshold on the
 last reading, not a guarantee against runs overshooting it within one interval.
 Readings and reserves do not stop already-running work. A failed designer resume
-remains unsettled until a replacement backend is open, before staging its new session.
+remains unsettled until its own backend is open, before staging its new session.
 
 To report an early provider-side reset, run `tillr drain probe-backend` for the
 same backend with a smoke check that exercises that route:
@@ -1733,15 +1718,18 @@ from the record and the log as they are, and does not save it. Once a class is
 saved it wins over the report.
 This migration does not require an operator to certify an outcome or run a probe.
 
-After a failure, a multi-backend seat stays within its own list and unseated
-work stays within the preference. A single-backend seat holds on its route;
-it does not fail over. When every allowed backend is unavailable, the item waits.
-An infrastructure hold is `backend-closed`. For a single-backend seat, the
-hold names the backend in `deferred_by`, with `backend_hold_cause` and
-`backend_hold_mover` also shown by the loop and `why`. The cause names the failed
-run or the quota fact that closed admission. The mover explains how to reopen it:
-for an infrastructure failure, the operator repairs the backend and records a
-successful explicit probe; a later non-infrastructure ending can also reopen it.
+An infrastructure failure holds the affected item as `backend-closed`, even if
+an alternate backend is open. The hold names the backend in `deferred_by`, with
+`backend_hold_cause` and `backend_hold_mover` also shown by the loop and `why`.
+The cause records the run, backend, exit or end cause, and last error words when
+available. The operator repairs the backend and records a successful explicit probe;
+a later non-infrastructure ending can also reopen it. Recovery admits the same
+work only on the original backend.
+
+If that run repeats the same infrastructure failure (same backend, end cause,
+and normalized error words), the drain holds the item as `infrastructure-repeat`
+with both runs' evidence. Reopening the backend does not clear this item hold.
+Once the cause is fixed, the operator clears it with `tillr drain clear-fault`.
 A successful explicit probe also clears an active refusal window for that backend;
 ordinary run outcomes and quota readings do not clear that window. No automatic
 probe or timer spends work on a closed backend. Legacy `max_failovers` policy keys

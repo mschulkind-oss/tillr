@@ -9,6 +9,38 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+func TestFailedTriageWaitsOnItsDesignBackend(t *testing.T) {
+	f, l := triageFixture(t)
+	ctx := context.Background()
+	p := findTriagePlan(t, l, "item-request")
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	ok, work, err := l.applyPlan(ctx, p, base, l.cfg.Now())
+	if err != nil || !ok {
+		t.Fatalf("triage claim: %v %v", ok, err)
+	}
+	d := work.Decision
+	backend := d.RunRequest.Backend
+	l.cfg.Policy.Backends["alternate"] = l.cfg.Policy.Backends[backend]
+	l.cfg.Policy.SeatLists = map[string][]string{"design": {backend, "alternate"}}
+	rec := run.Record{RunID: d.RunRequest.RunID, ItemID: d.ItemID, LaneID: d.LaneID, Backend: backend,
+		State: run.StateFailedToStart, StartedAt: l.cfg.Now().Format(time.RFC3339), FinishedAt: l.cfg.Now().Format(time.RFC3339)}
+	fixtureWrite(t, f, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
+	if err := l.markExamined(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	wait := findTriagePlan(t, l, d.ItemID).decision
+	if wait.Action != ActionHold || wait.Reason != ReasonBackendClosed || wait.DeferredBy != backend {
+		t.Fatalf("failed triage did not wait on %s: %+v", backend, wait)
+	}
+	if err := ProbeBackend(ctx, f.storePath, f.root, backend, []string{"/bin/true"}); err != nil {
+		t.Fatal(err)
+	}
+	next := findTriagePlan(t, l, d.ItemID).decision
+	if next.Action != ActionDispatch || next.RunRequest == nil || next.RunRequest.Backend != backend || next.SelectSeat {
+		t.Fatalf("recovered triage did not select its original backend: %+v", next)
+	}
+}
+
 // On 2026-11-17 a triage run was claimed and staged, the loop was stopped and the jail
 // relaunched before the run's face started, and the next loop reclaimed the claim as an
 // orphan. No triage ever ran, yet the item was held for the owner: the claim stamps its
