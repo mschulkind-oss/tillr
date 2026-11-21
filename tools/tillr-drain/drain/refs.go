@@ -438,6 +438,14 @@ func planRefSweep(r *store.Reader, refs []RefDisposition, operators map[string][
 			default:
 				ref.Reason = "saved edits; item can still be retried"
 			}
+		case strings.HasPrefix(ref.Ref, remoteSyncRefPrefix):
+			id := strings.TrimPrefix(ref.Ref, remoteSyncRefPrefix)
+			if states[id] == "" || finishedState(declared.Parsed, states[id]) {
+				ref.Remove = true
+				ref.Reason = "remote-sync repair finished or removed"
+			} else {
+				ref.Reason = "active remote-sync repair needs this base pin"
+			}
 		default:
 			ref.Reason = "outside run-pin and landing-marker cleanup ownership"
 		}
@@ -447,7 +455,7 @@ func planRefSweep(r *store.Reader, refs []RefDisposition, operators map[string][
 
 func (l *Loop) pruneRunRefs(ctx context.Context) error {
 	// Proof and operator refs alone need no lifecycle replay on an idle pass.
-	raw, err := l.git(ctx, l.cfg.Root, "for-each-ref", "--count=1", "--format=%(refname)", "refs/tillr/runs", "refs/tillr/landed", preservedPrefix)
+	raw, err := l.git(ctx, l.cfg.Root, "for-each-ref", "--count=1", "--format=%(refname)", "refs/tillr/runs", "refs/tillr/landed", preservedPrefix, remoteSyncRefPrefix)
 	if err != nil {
 		return err
 	}

@@ -383,7 +383,7 @@ func tillrRef(ref string) bool {
 
 func trunkHistoryRef(ref string) bool {
 	return ref == observedTrunkRef || ref == lostTrunkRef || strings.HasPrefix(ref, acceptedTrunkPrefix) ||
-		strings.HasPrefix(ref, land.PublishedRefPrefix)
+		strings.HasPrefix(ref, land.PublishedRefPrefix) || strings.HasPrefix(ref, remoteSyncRefPrefix)
 }
 
 // landerRef names the refs tillr-land writes for every landing: the run pin at the head
