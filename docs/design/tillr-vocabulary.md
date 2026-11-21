@@ -2,7 +2,7 @@
 title: "One word per thing: the vocabulary of tillr's items, nodes, runs, sessions and worktrees"
 status: in-review
 stage: DESIGN
-updated: 2026-11-20
+updated: 2026-11-21
 tags:
   - tillr
   - vocabulary
@@ -10,7 +10,7 @@ tags:
   - worktrees
   - design
 summary: "Settles one meaning for each word the tillr work queue uses, so that the owner, the documents and the code say the same thing. An item is a tracked piece of work with its own deliverable, whether or not a document declares it yet. The unit of progress is the node, the whole of what happened to an item is its path, and a run is only the bookkeeping of one node. The lane is retired: a worktree is a resource an item acquires, with a lifecycle and collection in place of a fixed pool. The owner ruled on charter, git-landing and finished-at-proof on 2026-11-18; the designer's decisions D-VO1 to D-VO12 await his review."
-next: "The owner ruled OQ-VO4, OQ-VO5 and OQ-VO6 on 2026-11-18. He reviews the designer's decisions D-VO1 to D-VO12 in the ledger, which nothing is built on until he has. The drafted work in Section 9 is filed once he has ruled how work in a document becomes an item."
+next: "The owner ruled OQ-VO4, OQ-VO5 and OQ-VO6 on 2026-11-18. He reviews the designer's decisions D-VO1 to D-VO13 in the ledger, which nothing is built on until he has. The drafted work in Section 9 is filed once he has ruled how work in a document becomes an item."
 depends-on:
   - tillr-graph-is-the-path.md
   - ../reference/tillr-item-graphs.md
@@ -27,7 +27,7 @@ depends-on:
 - **Cost:** "lane", "attempt", "node run", "hold" and eight other words are retired from documents and from what the owner reads; flags, stored names and paths that carry them stay as aliases ([Section 6](#6-renames)).
 - **Start at:** [Section 4](#4-the-stages-of-a-change) for the stages, then the three sections before it for the three words.
 - **Needs your ruling:** nothing now. **Ruled on 2026-11-18:** [OQ-VO4](#OQ-VO4), the charter; [OQ-VO5](#OQ-VO5), `git-landing`; [OQ-VO6](#OQ-VO6), an item is finished when the suite has passed on it. The designer's decisions in the ledger still await your review.
-- **Awaits your review:** the designer's decisions `D-VO1` to `D-VO12` in [the ledger](#decision-ledger). You may overturn any of them.
+- **Awaits your review:** the designer's decisions `D-VO1` to `D-VO13` in [the ledger](#decision-ledger). You may overturn any of them.
 - **Reads with:** [the graph design](./tillr-graph-is-the-path.md) (the direction these words must fit; its own terms are linked here, not redefined), [the direction document](./tillr-core-and-git-landing.md) (whose naming question is asked here as [OQ-VO4](#OQ-VO4) and [OQ-VO5](#OQ-VO5)), [the landing call](./tillr-landing-call.md) (its question on keeping a worktree after landing rests on [Section 3.3](#33-the-life-of-a-worktree)). There is no companion plan: [Section 9](#9-drafted-items) holds the work this design surfaced, as prose.
 
 ---
@@ -241,7 +241,17 @@ Each term has one meaning. A term owned by another document is linked, not redef
 
 **Why the fence is retired.** On 2026-11-19 four requests waited overnight for wider path lists; another change was refused for one test file missing from its list. The owner asked, "didn't we already rule that this is basically impossible and wasteful?" When the operator proposed dropping the lists, keeping common protections and having the judge check scope, the owner answered, "yes, file that."
 
-**Operator request (the owner may overturn it; not yet built).** The brief says: change what the work needs, nothing else. Filing, sync, staging and graph expansion need no list. Ignore existing lists rather than migrating them; accept `--path` for compatibility, ignore its value and give notice. Before the gate, every worker is checked against one tracked deny-list under `config/tillr/`. It protects other lanes, `.tillr/` and the store; Git internals and all refs except the lane's own branch (including every `patch/<fork>` delivery branch among the protected refs); `.forks/` outside the lane's own fork checkout; and item-declaration comments against addition, editing or removal. A refusal names the matched entry and its reason and returns to the worker. Passing this check does not establish scope: the judge receives the changed paths and diff and names any path the request's words do not account for.
+**Operator request (the owner may overturn it; not yet built).** The brief says: change what the work needs, nothing else. Filing, sync, staging and graph expansion need no list. Ignore existing lists rather than migrating them; accept `--path` for compatibility, ignore its value and give notice. Before the gate, every worker is checked against one tracked deny-list under `config/tillr/`. It protects other lanes, `.tillr/` and the store; Git internals and all refs except the lane's own branch (including every `patch/<fork>` delivery branch among the protected refs); `.forks/` outside the lane's own fork checkout; and item-declaration comments against addition, editing or removal, with the two additions that [`D-VO13`](#D-VO13) below admits. A refusal names the matched entry and its reason and returns to the worker. Passing this check does not establish scope: the judge receives the changed paths and diff and names any path the request's words do not account for.
+
+<a id="D-VO13"></a>**Which worker may add a declaration (`D-VO13`: the designer's decision of 2026-11-21, answering a build worker's objection; not the owner's ruling, and the owner may overturn it).** Read as written, the last protection above leaves two shipped turns with no candidate the loop can accept. A saved idea's turn is briefed to "write it as item blocks", and its check before the gate refuses the candidate with "no new item block carries from=" the idea's id (`validateIdea` in [`tools/tillr-drain/drain/idea.go`](../../tools/tillr-drain/drain/idea.go)). A triage turn on a stored request whose document holds no block for it is briefed to "Write a ready item block" under the same id (`triageTask` in [`tools/tillr-drain/drain/document_prerequisite.go`](../../tools/tillr-drain/drain/document_prerequisite.go)). An idea is defined in the table below as a request "whose deliverable is the blocks or questions it lands", so the protection cannot mean that an idea's turn adds none. The designer settles it this way:
+
+- **The declaration entry is a content check, not a path pattern.** It reads the candidate's changed Markdown files at the base and at the head from the pinned commits, and compares the item-declaration comments by item id and by text. A declaration moved unchanged, within a file or between files, is neither an edit nor a removal.
+- **Editing or removing a declaration that the base holds is refused for every worker.** There is no exception: not for a saved idea, a triage, a rewrite or a design answer.
+- **Adding a declaration is refused, except in two turns.** A saved idea's turn may add declarations whose id is new (in no document at the base and on no row of the store) and which carry `from="<the idea's id>"`. A triage turn may add one declaration, with the id of the item it triages. Any other addition in those turns is refused like anyone else's.
+- **The loop decides which turn it is, from what it recorded.** The exception is read from the store's own record of the turn (the idea's intake record, the triage staging), never from the candidate or the worker's report. A worker cannot claim it.
+- **Both checks stay.** The existing checks before the gate still require the idea's or the triage's outcome; this entry bounds what else the same candidate may do to declarations. A refusal names the entry, the file and the declaration's id, and returns to the worker.
+
+**Rejected:** keeping the ban universal and giving saved ideas an outcome that writes no declaration. That is a new intake to design (where the outcome items are recorded, how the owner reads and corrects them), it contradicts the definition of an idea, and the retirement of the fence would wait on it. **Also rejected:** skipping the declaration check whenever the item is a saved idea, which is what the unlanded candidate `8601942e9e` did [unlanded]: an idea's turn could then edit or delete any other item's declaration. **Not decided here:** an idea that needs the owner's answer leaves one design-seat item to "cut it into build items". That later item is neither of the two turns, so its added declarations are refused under this rule. How a design-seat turn's document becomes queue items is the owner's open review of how work written in a document enters the queue ([Section 9](#9-drafted-items)), and this decision does not reach it.
 
 | Term | What it is | What it is not | Identified by; belongs to; has | Today's usage differs |
 | :--- | :--- | :--- | :--- | :--- |
@@ -495,7 +505,7 @@ Each row quotes or cites words the owner said. These are the only rulings in thi
 
 ### The designer's decisions, awaiting the owner's review
 
-Each `D-VO` row is a decision the designer made on 2026-11-18 from the evidence named. None is the owner's ruling, the owner may overturn any of them, and nothing is to be built on one before he has seen it.
+Each `D-VO` row is a decision the designer made, on the date in its row, from the evidence named. None is the owner's ruling, the owner may overturn any of them, and nothing is to be built on one before he has seen it.
 
 | ID | Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
@@ -512,6 +522,7 @@ Each `D-VO` row is a decision the designer made on 2026-11-18 from the evidence 
 | `D-VO11` | Work tillr files for itself (the mechanic, a defect item, a comment item) is an item, listed with the others under a "generated" mark. **Evidence:** each lands its own commit and has its own ending, the view already lists `fixer-main-` and `defect-` rows beside the rest, and the owner calls the mechanic an item. **Rejected:** a separate list of "repairs", which is a second place to look for why the queue is not moving. The owner may overturn this. | 2026-11-18 | [Section 1](#1-what-an-item-is) | — |
 | OQ-VO3 | "Is work that tillr files for itself an item?" Closed by the designer's `D-VO11`, not by the owner: yes, an item with a "generated" mark. The owner may overturn this. | 2026-11-18 | [Section 1](#1-what-an-item-is) | — |
 | `D-VO12` | The retired words of [Section 5.8](#58-retired-words) and the rename-or-alias verdict on each row of [Section 6](#6-renames), as a set: reword what the owner reads, alias what is stored. **Rejected:** renaming stored tables, ids and events, which rewrites history for a word. The owner may overturn this, row by row. | 2026-11-18 | [Section 6](#6-renames) | — |
+| `D-VO13` | The deny-list's protection of item-declaration comments refuses an edit or a removal from every worker, and refuses an addition except in the two turns whose own check before the gate requires one: a saved idea's turn may add declarations with a new id that carry `from=` its own id, and a triage turn may add the one declaration of the item it triages. The loop reads which turn it is from the store, never from the candidate. **Evidence:** on 2026-11-21 a build worker stopped on the retirement's build because `validateIdea` refuses an idea's candidate that adds no declaration, while the operator request banned every addition. **Rejected:** a universal ban with a new saved-idea outcome that writes no declaration, which contradicts the definition of an idea and makes the retirement wait on a new intake design; and exempting saved ideas from the whole check, which lets an idea's turn edit or remove another item's declaration. Amends the operator request under `R-VO2`, not the owner's words there. Made by the design seat answering a worker's objection on an operator-filed request. The owner may overturn this. | 2026-11-21 | [Section 5.1](#51-the-work-and-its-statement) | — |
 
 ---
 
