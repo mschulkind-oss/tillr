@@ -188,7 +188,7 @@ func TestAToolingObstacleWaitsOnOneDefectItem(t *testing.T) {
 		}
 		return tx.QueryRow(`SELECT text FROM item_criteria WHERE item_id=? AND criterion_id=?`, defect, DefectCriterion).Scan(&criterion)
 	})
-	if !strings.Contains(paths, "hang_test.go") || rank != TrunkFixerRank || !strings.Contains(criterion, "no longer reproduces") || !strings.Contains(criterion, "timed out") {
+	if !strings.Contains(paths, "hang_test.go") || rank != TrunkFixerRank || !strings.Contains(criterion, "no longer reproduces") || !strings.Contains(criterion, "timed out") || strings.Contains(strings.ToLower(criterion), "report") {
 		t.Fatalf("defect item paths %s rank %s criterion %q", paths, rank, criterion)
 	}
 	// A second report of the same command attaches: one item, a wider fence.

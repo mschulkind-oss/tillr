@@ -10,6 +10,18 @@ EXTRACT = Path(__file__).resolve().parent.parent / "extract-report"
 
 
 class ParkedProbeTest(unittest.TestCase):
+    def test_commit_offer_supplies_the_footer_without_a_summary(self):
+        for legacy in ({}, {"summary": "I ran every check (unverified claim)."}):
+            with self.subTest(legacy=legacy), tempfile.TemporaryDirectory() as directory:
+                offer = Path(directory) / "landing-offer.json"
+                offer.write_text(json.dumps({"call_id": "call-1", "base": "base", "commit": "head", **legacy}))
+                report = subprocess.run(
+                    [str(EXTRACT), "--exit-code", "0", "--landing-offer", str(offer)],
+                    input="", text=True, capture_output=True,
+                )
+                self.assertEqual(report.returncode, 0, report.stderr)
+                self.assertEqual(report.stdout.split("\n---\n", 1)[1].strip(), "RESULT: done")
+
     def test_reasoning_only_last_turn_is_not_a_verdict(self):
         earlier = {"role": "assistant", "content": [{"type": "text", "text": "RESULT: done"}]}
         final = {"role": "assistant", "content": [{"type": "thinking", "thinking": "private"}]}

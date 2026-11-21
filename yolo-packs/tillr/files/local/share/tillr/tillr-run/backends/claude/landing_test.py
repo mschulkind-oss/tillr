@@ -45,7 +45,7 @@ class Fixture(unittest.TestCase):
                               env=dict(os.environ, **(env or {})))
 
     def pre(self, tool="mcp__tillr__land", call="toolu_1", tool_input=None):
-        event = {"tool_name": tool, "tool_use_id": call, "tool_input": {"summary": "done"} if tool_input is None else tool_input,
+        event = {"tool_name": tool, "tool_use_id": call, "tool_input": {} if tool_input is None else tool_input,
                  "cwd": str(self.repo), "transcript_path": str(self.transcript)}
         out = self.call("pre-tool-use", event)
         self.assertEqual(out.returncode, 0, out.stderr)
@@ -62,14 +62,27 @@ class PreToolUse(Fixture):
     def test_a_committed_clean_offer_is_deferred_and_recorded_as_pi_records_it(self):
         head = self.commit()
         self.assertEqual(self.pre(), ("defer", None))
-        self.assertEqual(self.offer(), {"call_id": "toolu_1", "commit": head, "base": self.base, "summary": "done", "transcript": str(self.transcript)})
+        self.assertEqual(self.offer(), {"call_id": "toolu_1", "commit": head, "base": self.base, "transcript": str(self.transcript)})
+
+    def test_extractor_uses_only_the_commit_offer_as_the_success_ending(self):
+        self.commit()
+        self.assertEqual(self.pre(), ("defer", None))
+        path = self.durable / "landing-offer.json"
+        extractor = Path(LANDING).with_name("extract-report")
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                if legacy:
+                    path.write_text(json.dumps({**self.offer(), "summary": "claimed test results"}))
+                out = subprocess.run([extractor, "--backend", "claude", "--landing-offer", path],
+                                     input="", text=True, capture_output=True, check=True)
+                self.assertIn("complete: yes\nresult: done\n", out.stdout)
+                self.assertNotIn("claimed test results", out.stdout)
 
     def test_checks_a_worker_can_fix_return_at_once_and_write_no_offer(self):
         decision, reason = self.pre()
         self.assertEqual(decision, "deny")
         self.assertIn("HEAD is still the staged base", reason)
         self.commit()
-        self.assertEqual(self.pre(tool_input={"summary": "  "})[0], "deny")
         (self.repo / "dirty").write_text("x")
         decision, reason = self.pre()
         self.assertEqual(decision, "deny")
@@ -90,26 +103,21 @@ class PreToolUse(Fixture):
         self.assertEqual(decision, "deny")
         self.assertIn("A new commit is required.\nANSWER: gate said no", reason)
 
-    def test_report_only_refusal_allows_a_corrected_offer_but_content_refusal_does_not(self):
+    def test_land_ignores_old_report_only_refusals_but_honors_content_refusals(self):
         commit = self.commit()
         self.assertEqual(self.pre()[0], "defer")
         first = self.offer()
         (self.durable / "landing-offer.json").unlink()
         state = self.durable / "landing-state.json"
-        report = {"commit": commit, "summary": first["summary"], "answer": "Criterion c2 (report): missing results", "report_only": True}
-        content = {"commit": commit, "summary": "earlier report", "answer": "Criterion c1 (content): missing test"}
-        corrected = {"summary": "done\nCheck: passed"}
+        report = {"commit": commit, "summary": "old summary", "answer": "Criterion c2 (report): missing results", "report_only": True}
+        content = {"commit": commit, "answer": "Criterion c1 (content): missing test"}
         state.write_text(json.dumps({"refused": [report, content]}))
-        decision, reason = self.pre(call="next", tool_input=corrected)
+        decision, reason = self.pre(call="next")
         self.assertEqual(decision, "deny")
         self.assertIn("Criterion c1 (content)", reason)
         state.write_text(json.dumps({"refused": [report]}))
-        decision, reason = self.pre(call="next")
-        self.assertEqual(decision, "deny")
-        self.assertIn("same report", reason)
-        self.assertFalse((self.durable / "landing-offer.json").exists())
-        self.assertEqual(self.pre(call="next", tool_input=corrected), ("defer", None))
-        self.assertEqual(self.offer(), {**first, "call_id": "next", **corrected})
+        self.assertEqual(self.pre(call="next"), ("defer", None))
+        self.assertEqual(self.offer(), {**first, "call_id": "next"})
 
     def test_a_sibling_call_is_denied_while_an_offer_is_open_and_allowed_once_it_has_its_result(self):
         self.commit()
@@ -146,7 +154,7 @@ class Mcp(Fixture):
         return [json.loads(line) for line in out.stdout.splitlines()]
 
     def call_msg(self, call="toolu_1"):
-        return {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "land", "arguments": {"summary": "s"}, "_meta": {"claudecode/toolUseId": call}}}
+        return {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "land", "arguments": {}, "_meta": {"claudecode/toolUseId": call}}}
 
     def test_it_lists_both_tools_and_carries_the_naming_instruction(self):
         init, tools = self.serve({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26"}},

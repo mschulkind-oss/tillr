@@ -70,8 +70,8 @@ func clip(text string, limit int) string {
 
 // defectCriterion is the defect item's one criterion: the command completes, and the
 // failure its evidence shows no longer reproduces.
-func defectCriterion(command, evidence, reporter string) string {
-	return fmt.Sprintf("`%s` completes, and the failure item %s reported no longer reproduces. Evidence reported by %s:\n\n%s", command, reporter, reporter, clip(evidence, defectEvidenceLimit))
+func defectCriterion(command, evidence, sourceItem string) string {
+	return fmt.Sprintf("`%s` completes, and the failure below no longer reproduces. Evidence from the tooling obstacle on item %s:\n\n%s", command, sourceItem, clip(evidence, defectEvidenceLimit))
 }
 
 // fileDefectItem files the defect item a tooling obstacle names, or attaches the report to

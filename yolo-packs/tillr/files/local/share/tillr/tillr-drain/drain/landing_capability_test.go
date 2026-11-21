@@ -204,9 +204,9 @@ pre_cmd = settings["hooks"]["PreToolUse"][-1]["hooks"][0]["command"]
 transcript = pathlib.Path(os.environ["TEST_CLAUDE_TRANSCRIPT"])
 cwd = os.getcwd()
 
-def run_pre(call_id, summary):
+def run_pre(call_id):
     ev = {"session_id": session, "transcript_path": str(transcript), "cwd": cwd,
-          "tool_name": "mcp__tillr__land", "tool_use_id": call_id, "tool_input": {"summary": summary}}
+          "tool_name": "mcp__tillr__land", "tool_use_id": call_id, "tool_input": {}}
     out = subprocess.run(shlex.split(pre_cmd), input=json.dumps(ev), text=True, capture_output=True, check=True)
     return json.loads(out.stdout)["hookSpecificOutput"]
 
@@ -218,22 +218,22 @@ if "--session-id" in argv:
     target.write_text("attempt-1\n")
     subprocess.run(["git", "add", "tools/item-a/candidate.txt"], cwd=cwd, check=True)
     subprocess.run(["git", "commit", "-qm", "attempt 1"], cwd=cwd, check=True)
-    decision = run_pre("toolu_1", "attempt 1 summary")
+    decision = run_pre("toolu_1")
     assert decision["permissionDecision"] == "defer", decision
     with transcript.open("a", encoding="utf-8") as out:
         out.write(json.dumps({"type": "attachment", "sessionId": session, "attachment": {
             "type": "hook_deferred_tool", "toolUseID": "toolu_1", "toolName": "mcp__tillr__land",
-            "toolInput": {"summary": "attempt 1 summary"}}}) + "\n")
+            "toolInput": {}}}) + "\n")
     call_id = "toolu_1"
 else:
     session = argv[argv.index("--resume") + 1]
     assert stdin_bytes == b"", f"promptless resume received stdin: {stdin_bytes!r}"
-    decision = run_pre("toolu_1", "attempt 1 summary")
+    decision = run_pre("toolu_1")
     assert decision["permissionDecision"] == "allow", decision
     reqs = [
         {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-03-26"}},
         {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
-            "name": "land", "arguments": {"summary": "attempt 1 summary"}, "_meta": {"claudecode/toolUseId": "toolu_1"}}},
+            "name": "land", "arguments": {}, "_meta": {"claudecode/toolUseId": "toolu_1"}}},
     ]
     mcp = subprocess.run([mcp_cfg["command"], *mcp_cfg["args"]],
                          input="".join(json.dumps(r) + "\n" for r in reqs), text=True, capture_output=True, check=True)
@@ -250,12 +250,12 @@ else:
     target.write_text("attempt-2\n")
     subprocess.run(["git", "add", "tools/item-a/candidate.txt"], cwd=cwd, check=True)
     subprocess.run(["git", "commit", "-qm", "attempt 2"], cwd=cwd, check=True)
-    decision2 = run_pre("toolu_2", "attempt 2 summary")
+    decision2 = run_pre("toolu_2")
     assert decision2["permissionDecision"] == "defer", decision2
     with transcript.open("a", encoding="utf-8") as out:
         out.write(json.dumps({"type": "attachment", "sessionId": session, "attachment": {
             "type": "hook_deferred_tool", "toolUseID": "toolu_2", "toolName": "mcp__tillr__land",
-            "toolInput": {"summary": "attempt 2 summary"}}}) + "\n")
+            "toolInput": {}}}) + "\n")
     call_id = "toolu_2"
 
 print(json.dumps({"type": "system", "subtype": "init", "session_id": session, "model": "fixture-model"}))

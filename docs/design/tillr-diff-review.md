@@ -48,9 +48,9 @@ And on which landings:
 > doc only landings have no review, no. this is for items that land as commits from a design doc.
 
 > [!WARNING]
-> The first statement does not limit what the reviewer reads. "Nothing but the git diff" is easy to read as "show the reviewer only the diff", and it was read that way for an hour on 2026-11-18. What is withheld is the writer's memory, and nothing else.
+> The first statement does not limit what the reviewer reads to the diff. "Nothing but the git diff" was read that way for an hour on 2026-11-18. The reviewer needs the item and tree as well. The owner later excluded [the worker's report](#the-workers-report) from judgment.
 
-The requirement, then:
+The original requirement, then:
 
 - **Every landing of an item's code gets one.** A landing that changes only documents gets none ([Section 3.2](#32-which-landings)).
 - **It is an agent, at the end.** After the work is written and checked, before the trunk moves.
@@ -115,7 +115,11 @@ The reviewer runs in the item's worktree, read-only, at the head the gate just p
 
 #### The worker's report
 
-The owner's "consider everything" includes it. The risk is a reviewer that reads the worker's account first and then sees what the account says. Two rules keep it a claim to check:
+> **Superseded on 2026-11-21.** The owner removed the worker's report from judgment. The
+> verifier reads the candidate against the item's words and criteria and runs its own checks.
+> The rules below record the earlier design, not the current verifier contract.
+
+The owner's "consider everything" originally included it. The risk is a reviewer that reads the worker's account first and then sees what the account says. Two rules keep it a claim to check:
 
 - **It is read last.** The brief has the reviewer write down its own reading of the diff before it opens the report.
 - **It is never evidence.** Every criterion the reviewer marks met must point at a place in the diff or the tree. The loop's check of the verdict file refuses an entry whose evidence is the report.
