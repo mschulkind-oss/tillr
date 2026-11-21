@@ -732,11 +732,16 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		if err != nil {
 			return true, err
 		}
-		if (effectiveAccess == "read_only" && head != nodeBase) || ((effectiveAccess == "read_only" || stage.Kind == "command") && strings.TrimSpace(dirty) != "") {
+		uncleanNoChange := plannedWritePiece(stage) && head == nodeBase && reportFooter(log) == "done" && strings.TrimSpace(dirty) != ""
+		if (effectiveAccess == "read_only" && head != nodeBase) || ((effectiveAccess == "read_only" || stage.Kind == "command") && strings.TrimSpace(dirty) != "") || uncleanNoChange {
 			if err := l.nodeOutcome(ctx, d, "refused"); err != nil {
 				return true, err
 			}
-			c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: base, HeadSHA: head, RefusalDetail: "node " + stage.ID + " violated its " + effectiveAccess + " worktree boundary"}
+			detail := "node " + stage.ID + " violated its " + effectiveAccess + " worktree boundary"
+			if uncleanNoChange {
+				detail = "node " + stage.ID + " reported done without a commit but left uncommitted changes"
+			}
+			c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: base, HeadSHA: head, RefusalDetail: detail}
 			if err := l.refuse(ctx, c, result, RefusalFence); err != nil {
 				return true, err
 			}

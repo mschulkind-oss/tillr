@@ -573,6 +573,9 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		// Node instructions and carried context belong before the closing contract.
 		at := strings.LastIndex(brief, "\n## Finishing\n")
 		brief, ending = brief[:at], brief[at:]
+		if spec.Node != nil && plannedWritePiece(*spec.Node) {
+			ending = strings.Replace(ending, callEndingRequired, "If the piece needs no change, use the verification report described above.\nOtherwise, this run ends with one tool call; a message without it is not an ending.", 1)
+		}
 	}
 	if isFork {
 		brief = strings.Replace(brief, "## Method\n", "## Method\n\nCommit the change in the named fork checkout, on its own branch. Do not run `bin/pi-forks export`: the lander alone moves the patch branch after the candidate build gate passes and refreshes the shared cache. Do not edit the shared cache or another lane's checkout.\n", 1)

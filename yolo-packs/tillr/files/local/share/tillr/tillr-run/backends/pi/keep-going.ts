@@ -8,6 +8,8 @@
 // The only endings it lets settle:
 //   - the goal is met: HEAD moved off the base, the worktree is clean, and the last
 //     message carries a RESULT footer;
+//   - a planned piece needs no change: HEAD is still its staged base, the worktree
+//     is clean, and the worker ends its verification report with `RESULT: done`;
 //   - the worker named a complete obstacle: `RESULT: blocked` (or the legacy
 //     `RESULT: trunk-broken`) with an `OBSTACLE: <kind>` line and every field that kind
 //     requires (the drain's obstacle.go holds the same rule; testdata/obstacle-cases.json
@@ -44,6 +46,7 @@ export interface GoalInput {
 	previous: string | undefined;
 	paused: boolean;
 	readOnly?: boolean;
+	allowUnchangedPiece?: boolean;
 }
 
 export type GoalDecision =
@@ -170,6 +173,10 @@ function goalObstacleProblem(text: string, footer: Footer | undefined, committed
 	return problem === "" && obstacleKind(text) === "seat" && !committed && clean ? SEAT_NEEDS_ATTEMPT : problem;
 }
 
+function unchangedPieceDone(allowed: boolean | undefined, footer: Footer | undefined, tree: Tree, base: string): boolean {
+	return !!allowed && footer === "done" && tree.head === base && tree.status.trim() === "";
+}
+
 export function decide(input: GoalInput): GoalDecision {
 	if (input.paused) return { action: "settle", reason: "a pause was requested" };
 	if (input.outcome !== undefined && input.outcome !== "completed") return { action: "settle", reason: `the run's outcome is ${input.outcome}` };
@@ -181,6 +188,9 @@ export function decide(input: GoalInput): GoalDecision {
 	if (obstacle === "") return { action: "settle", reason: `the worker named a complete obstacle (RESULT: ${footer})` };
 	if (committed && clean && footer) return { action: "settle", reason: "the goal is met: a commit, a clean worktree and a report" };
 	if (input.readOnly && clean && footer === "done") return { action: "settle", reason: "the goal is met: a read-only step with a clean worktree and a report" };
+	if (unchangedPieceDone(input.allowUnchangedPiece, footer, input.tree, input.base)) {
+		return { action: "settle", reason: "the goal is met: an unchanged piece with a clean worktree and a report" };
+	}
 	const fingerprint = createHash("sha256")
 		.update([input.tree.head, input.tree.status, input.tree.content, input.text.trim().replace(/\s+/g, " ")].join("\0"))
 		.digest("hex");
@@ -188,14 +198,16 @@ export function decide(input: GoalInput): GoalDecision {
 		return { action: "settle", reason: "identical repeat: the tree and the report are unchanged since the last nudge" };
 	}
 	const missing: string[] = [];
-	if (!committed && !input.readOnly) missing.push(`there is no commit: HEAD is still the base ${input.base.slice(0, 12)}`);
+	const needsCommit = !input.readOnly && !input.allowUnchangedPiece;
+	if (!committed && needsCommit) missing.push(`there is no commit: HEAD is still the base ${input.base.slice(0, 12)}`);
 	if (!clean) {
 		const paths = input.tree.status.trim().split("\n");
 		const shown = paths.slice(0, 20).join("\n");
 		missing.push(`these paths are uncommitted:\n${shown}${paths.length > 20 ? `\n(and ${paths.length - 20} more)` : ""}`);
 	}
 	if (!footer) missing.push("your last message has no RESULT footer");
-	else if (footer === "done" && !committed && !input.readOnly) missing.push("it says RESULT: done, but nothing is committed");
+	else if (footer === "done" && !committed && needsCommit) missing.push("it says RESULT: done, but nothing is committed");
+	else if (footer === "done" && input.allowUnchangedPiece && !input.tree.head) missing.push("HEAD could not be verified");
 	else if (footer === "failed") missing.push("RESULT: failed is not an ending");
 	if (obstacle) missing.push(`it says RESULT: blocked, but ${obstacle}`);
 	const message = input.readOnly ? [
@@ -204,6 +216,9 @@ export function decide(input: GoalInput): GoalDecision {
 		"Do not write another report: a report that says the work is unfinished is answered with this message again. Finish the read-only task and end with RESULT: done, or name a complete obstacle.",
 		"",
 		OBSTACLE_CONTRACT,
+	].join("\n") : input.allowUnchangedPiece ? [
+		`The run is not finished: ${missing.join("; ")}.`,
+		"Commit and verify any needed change, or verify that the piece already holds at its unchanged, clean base. Report the verification and end with RESULT: done, or name a complete obstacle.",
 	].join("\n") : [
 		`The run is not finished: ${missing.join("; ")}.`,
 		"",
@@ -217,19 +232,26 @@ export function decide(input: GoalInput): GoalDecision {
 	return { action: "continue", fingerprint, message };
 }
 
-export function isReadOnlyBrief(briefPath: string | undefined): boolean {
-	if (!briefPath) return false;
+function workflowNodeSection(briefPath: string | undefined): string {
+	if (!briefPath) return "";
 	let text = "";
 	try {
 		text = readFileSync(briefPath, "utf8");
 	} catch {
-		return false;
+		return "";
 	}
-	const saved = text.search(/\n## Saved (?:idea|request) words \(verbatim; \d+ bytes\)\n/);
+	const saved = text.search(/(?:^|\n)## Saved (?:idea|request) words \(verbatim; \d+ bytes\)\n/);
 	if (saved >= 0) text = text.slice(0, saved);
-	const match = /(?:^|\n)## Workflow node\n([\s\S]*?)(?=\n## |$)/.exec(text);
-	if (!match) return false;
-	return /^Run only node .+ on the .+ seat; access: read_only\.$/m.test(match[1]);
+	return /(?:^|\n)## Workflow node\n([\s\S]*?)(?=\n## |$)/.exec(text)?.[1] ?? "";
+}
+
+export function isReadOnlyBrief(briefPath: string | undefined): boolean {
+	return /^Run only node .+ on the .+ seat; access: read_only\.$/m.test(workflowNodeSection(briefPath));
+}
+
+function allowsUnchangedPiece(briefPath: string | undefined): boolean {
+	// The staged node header supplies this line before any piece prompt.
+	return /^\nRun only node .+ on the .+ seat; access: write\.\nAn unchanged piece may finish without a commit\.$/m.test(workflowNodeSection(briefPath));
 }
 
 function isReadOnlyStep(): boolean {
@@ -243,12 +265,12 @@ function textOf(message: any): string {
 }
 
 async function readTree(pi: any): Promise<Tree> {
-	const run = async (script: string) => {
+	const run = async (script: string, failure = "") => {
 		const r = await pi.exec("sh", ["-c", script]);
-		return r.code === 0 ? String(r.stdout ?? "") : "";
+		return r.code === 0 ? String(r.stdout ?? "") : failure;
 	};
 	const head = (await run("git rev-parse HEAD")).trim();
-	const status = await run("git status --porcelain=v1 --untracked-files=all");
+	const status = await run("git status --porcelain=v1 --untracked-files=all", "git status failed");
 	// The content key: tracked changes and every untracked file's blob id, so a repeat is
 	// a tree that did not change at all, not one whose path list happens to match.
 	const content = await run("{ git diff HEAD --binary; git ls-files -o --exclude-standard -z | xargs -0 -r git hash-object --; } | git hash-object --stdin");
@@ -258,6 +280,7 @@ async function readTree(pi: any): Promise<Tree> {
 export default function keepGoing(pi: any) {
 	const base = process.env.TILLR_GOAL_BASE;
 	if (!base) return;
+	const allowUnchangedPiece = allowsUnchangedPiece(process.env.BOARD_DRAIN_BRIEF);
 	let last: any;
 	let previous: string | undefined;
 	pi.on("agent_end", (event: any) => {
@@ -270,6 +293,7 @@ export default function keepGoing(pi: any) {
 				(event?.outcome !== undefined && event.outcome !== "completed")) return;
 			const text = textOf(last);
 			const footer = footerOf(text);
+			if (allowUnchangedPiece && footer === "done" && unchangedPieceDone(true, footer, await readTree(pi), base)) return;
 			let obstacle: string | undefined;
 			if (footer === "blocked" || footer === "trunk-broken") {
 				const tree = await readTree(pi);
@@ -281,7 +305,8 @@ export default function keepGoing(pi: any) {
 			return { continue: true, entries: [...(event?.entries ?? []), {
 				type: "custom_message", customType: "tillr-goal",
 				content: obstacle ? `Your obstacle is incomplete: ${obstacle}. ${OBSTACLE_CONTRACT}` :
-					"You ended without calling `land` or `obstacle`. Call `land` with a summary when your commit is ready, or call `obstacle` when an obstacle holds.", display: true,
+					"You ended without calling `land` or `obstacle`. Call `land` with a summary when your commit is ready, or call `obstacle` when an obstacle holds." +
+					(allowUnchangedPiece ? " If the piece already holds at its unchanged, clean base, report the verification and end with RESULT: done instead." : ""), display: true,
 			}] };
 		}
 		const decision = decide({
@@ -293,6 +318,7 @@ export default function keepGoing(pi: any) {
 			previous,
 			paused: !!pause && existsSync(pause),
 			readOnly: isReadOnlyStep(),
+			allowUnchangedPiece,
 		});
 		const entries = [...(event?.entries ?? [])];
 		if (decision.action === "settle") {

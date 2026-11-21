@@ -27,10 +27,12 @@ func stagedEndingCapability(dir string) (string, error) {
 	}
 }
 
+const callEndingRequired = `This run ends with one
+tool call, and a message without it is not an ending: you will be asked to continue.`
+
 const finishing = `## Finishing
 
-You are running unattended. Nobody reads a message from you. This run ends with one
-tool call, and a message without it is not an ending: you will be asked to continue.
+You are running unattended. Nobody reads a message from you. ` + callEndingRequired + `
 
 Call ` + "`" + `land` + "`" + ` when your change is committed on this branch and its verification has run.
 Give it a ` + "`" + `summary` + "`" + `: what changed, and each verification command with its result.
