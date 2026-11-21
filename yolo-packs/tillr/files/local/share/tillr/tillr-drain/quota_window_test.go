@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -48,13 +49,14 @@ func TestLoopSkipsSpentWindowAcrossRestartAndReopens(t *testing.T) {
 	reset := now.Add(time.Hour)
 	steps.BackendsDir = spendBackends(t, refused, "# run report\ntokens: unknown\ncost usd: unknown\nrate limit kind: five_hour\nfraction: 1\nstatus: rejected\nreset: "+strconv.FormatInt(reset.Unix(), 10)+"\n---\n"+strings.Repeat("x", 70000))
 	fixtureAt(t, f.store, itemRecordSeated("item_051", "in-queue", "build"), itemRecordSeated("item_052", "in-queue", "build"))
-	runLoop := func() {
+	runLoop := func() drain.LoopResult {
 		t.Helper()
 		steps.Now = func() time.Time { return now }
 		result, err := f.newLoopWith(t, 1, steps, passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}}, io.Discard).Run(context.Background())
 		if err != nil || result.Stop != drain.StopQueueDrained {
 			t.Fatalf("loop: %+v / %v", result, err)
 		}
+		return result
 	}
 	runLoop()
 	first := runsForItem(t, f.store, "item_051")
@@ -72,15 +74,20 @@ func TestLoopSkipsSpentWindowAcrossRestartAndReopens(t *testing.T) {
 		t.Fatalf("restart lost hold: %+v", third)
 	}
 	now = reset
+	// The provider admits work again at reset; don't keep returning the expired
+	// refusal from the reopened backend.
+	if err := os.WriteFile(refused, []byte("#!/bin/sh\n"+committingAdapter), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	fixtureAt(t, f.store, itemRecordSeated("item_054", "in-queue", "build"))
-	runLoop()
+	result := runLoop()
 	fourth := runsForItem(t, f.store, "item_054")
-	if len(fourth) != 2 || fourth[0].Backend != "fixture" {
-		t.Fatalf("window did not reopen: %+v", fourth)
+	if len(fourth) != 1 || fourth[0].Backend != "fixture" || result.Landed != 1 {
+		t.Fatalf("reopened backend did not land the item in one run: %+v / %+v", fourth, result)
 	}
 }
 
-func TestLoopDoesNotSkipBackendWithoutWindowFacts(t *testing.T) {
+func TestLoopHoldsInfrastructureFailureWithoutRefusedWindow(t *testing.T) {
 	for _, header := range []string{"", "rate limit kind: unknown\nfraction: unknown\nstatus: unknown\nreset: unknown\n", "rate limit kind: five_hour\nfraction: 0.5\nstatus: allowed\nreset: 9999999999\n"} {
 		t.Run(header, func(t *testing.T) {
 			refused := stub(t, "pi", "[ \"${1:-}\" != --features ] || exit 2\n"+counting+"exit 1\n")
@@ -94,14 +101,15 @@ func TestLoopDoesNotSkipBackendWithoutWindowFacts(t *testing.T) {
 			fixtureAt(t, f.store, itemRecord("item_051", "in-queue"), itemRecord("item_052", "in-queue"))
 			steps := f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0))
 			steps.BackendsDir = spendBackends(t, refused, "# run report\ntokens: unknown\ncost usd: unknown\n"+header+"---\n")
-			if _, err := f.newLoop(t, 1, steps).Run(context.Background()); err != nil {
-				t.Fatal(err)
+			result, err := f.newLoop(t, 1, steps).Run(context.Background())
+			if err != nil || result.Stop != drain.StopQueueDrained {
+				t.Fatalf("loop: %+v / %v", result, err)
 			}
-			// The failure records no window, and it closes pi: the first item fails
-			// over, and the second starts on the open backend.
+			// Without a refusal window this is an infrastructure failure. The first
+			// item holds on pi; only new work starts on the open backend.
 			first := runsForItem(t, f.store, "item_051")
-			if len(first) != 2 || first[0].Backend != "pi" || first[1].Backend != "fallback" {
-				t.Fatalf("first item did not fail over: %+v", first)
+			if len(first) != 1 || first[0].Backend != "pi" || !strings.Contains(result.Detail, "item_051 ("+drain.ReasonBackendClosed+": pi:") {
+				t.Fatalf("first item did not hold on pi: %+v / %s", first, result.Detail)
 			}
 			second := runsForItem(t, f.store, "item_052")
 			if len(second) != 1 || second[0].Backend != "fallback" {
