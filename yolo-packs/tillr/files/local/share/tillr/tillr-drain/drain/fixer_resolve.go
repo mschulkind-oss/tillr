@@ -277,6 +277,9 @@ func (p checkProof) passed(checks []string, seen int64) bool {
 		if at, ok := p.at[check]; ok && at.UnixMilli() > seen {
 			continue
 		}
+		if suite := goSuiteProofID(check); suite != "" && p.at[suite].UnixMilli() > seen {
+			continue
+		}
 		if p.whole && !strings.Contains(check, "/") {
 			matched := false
 			prefix := check + "/"

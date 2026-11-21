@@ -20,6 +20,23 @@ var goTestName = regexp.MustCompile(`^(Test|Example|Fuzz)[\pL\pN_]*(/[^[:space:]
 var goToolModule = regexp.MustCompile(`^tools/[a-z0-9-]+$`)
 var goImport = regexp.MustCompile(`^[a-zA-Z0-9._~-]+(/[a-zA-Z0-9._~-]+)*$`)
 
+// goSuiteProofID is the legacy declaration id for the suite that emitted a
+// named test. A passing suite is positive evidence even though it does not
+// enumerate tests. A red or unavailable suite provides no such evidence.
+func goSuiteProofID(id string) string {
+	test, ok := strings.CutPrefix(id, goTestPrefix)
+	if !ok {
+		return ""
+	}
+	module, _, ok := strings.Cut(test, ":")
+	if !ok || !goToolModule.MatchString(module) {
+		return ""
+	}
+	// Match fork-check.py's declaration_id for the go-tool suite label.
+	slug := strings.Join(strings.FieldsFunc(module, func(r rune) bool { return r == '/' || r == '-' }), "-")
+	return "go-tool/" + slug + "-s-whole-suite-passes"
+}
+
 func goSuiteFailures(label string, headers []string, suite HeavyCheck) []HeavyCheck {
 	module, ok := strings.CutSuffix(label, "'s whole suite passes")
 	if !ok || !goToolModule.MatchString(module) {
@@ -197,9 +214,6 @@ func (r HeavyRunner) additionalGoCulprits(ctx context.Context, run HeavyRun, che
 	removed := []string{first}
 	for {
 		replay := func(sha, why string) (bool, error) {
-			if err := r.requireCurrentTip(ctx, run.TipSHA); err != nil {
-				return false, err
-			}
 			r.progressf("loop: heavy %s replaying at %s without %s (%s)\n", check.CheckID, shortSHA(sha), strings.Join(removed, ", "), why)
 			red, _, err := r.oneLogged(ctx, sha, check.CheckID, removed...)
 			return red, err
