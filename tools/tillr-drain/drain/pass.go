@@ -1502,7 +1502,7 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 		work := folds.works[d.ItemID]
 		if refs != nil && isDispatch(d) && !d.WorkflowRestart && (work == nil || !work.Ready) {
 			start = &plannedStart{tip: refs.tip, base: refs.tip}
-			if !IsTrunkFixer(d.ItemID) {
+			if !IsTrunkFixer(d.ItemID) && !IsRemoteSyncItem(d.ItemID) {
 				start.green, err = refs.proved(ctx, l.cfg.Root, l.gatePolicy.LaneBase)
 				if err == nil && start.green != "" {
 					start.base, err = blockBaseAt(ctx, r, l.cfg.Root, start.green, refs.tip, d.ItemID)
@@ -1996,7 +1996,13 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			if p.start != nil {
 				base = p.start.base
 			}
-			if !l.nonLanding && !IsTrunkFixer(d.ItemID) {
+			if IsRemoteSyncItem(d.ItemID) {
+				syncBase, err := remoteSyncDispatchBase(tx.Reader(), d.ItemID)
+				if err != nil {
+					return err
+				}
+				base = syncBase
+			} else if !l.nonLanding && !IsTrunkFixer(d.ItemID) {
 				var green string
 				if p.start != nil {
 					green = p.start.green

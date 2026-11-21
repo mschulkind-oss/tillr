@@ -159,11 +159,15 @@ func remoteSyncCriterionText(st remoteSyncState) string {
 		shortSHA(st.ConflictCommit), st.Remote, branch, shortSHA(st.RemoteTip), shortSHA(st.BaseSHA), strings.Join(st.ConflictPaths, ", "))
 }
 
-func (l *Loop) readRemoteSyncState(ctx context.Context, itemID string) (st remoteSyncState, found bool, err error) {
-	if l.cfg.Store == "" {
+func (l *Loop) readRemoteSyncState(ctx context.Context, itemID string) (remoteSyncState, bool, error) {
+	return readRemoteSyncStateAt(ctx, l.cfg.Store, itemID)
+}
+
+func readRemoteSyncStateAt(ctx context.Context, storePath, itemID string) (st remoteSyncState, found bool, err error) {
+	if storePath == "" {
 		return st, false, nil
 	}
-	s, err := store.OpenRead(ctx, l.cfg.Store)
+	s, err := store.OpenRead(ctx, storePath)
 	if err != nil {
 		return st, false, err
 	}
@@ -187,6 +191,45 @@ func readRemoteSyncState(r *store.Reader, itemID string) (remoteSyncState, bool,
 	}
 	err = json.Unmarshal([]byte(raw), &st)
 	return st, err == nil, err
+}
+
+func remoteSyncDispatchBase(r *store.Reader, itemID string) (string, error) {
+	st, ok, err := readRemoteSyncState(r, itemID)
+	if err != nil {
+		return "", err
+	}
+	if !ok || st.BaseSHA == "" {
+		return "", Externalf("remote-sync item %s has no staged base SHA", itemID)
+	}
+	return st.BaseSHA, nil
+}
+
+// remoteSyncBriefFacts renders the context recorded when the repair was filed.
+func remoteSyncBriefFacts(ctx context.Context, storePath, itemID string) (string, error) {
+	st, ok, err := readRemoteSyncStateAt(ctx, storePath, itemID)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", Externalf("remote-sync item %s has no staged conflict context", itemID)
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "Remote-sync rebase conflict onto %s/%s (%s) from base %s:\n", st.Remote, strings.TrimPrefix(st.Ref, "refs/heads/"), shortSHA(st.RemoteTip), shortSHA(st.BaseSHA))
+	fmt.Fprintf(&b, "- Conflicting commit: %s (parent %s)\n", shortSHA(st.ConflictCommit), shortSHA(st.ConflictParent))
+	if st.LandingSummary != "" {
+		fmt.Fprintf(&b, "- Landing summary for %s: %s\n", shortSHA(st.ConflictCommit), st.LandingSummary)
+	}
+	fmt.Fprintf(&b, "- Conflicting paths: %s\n", strings.Join(st.ConflictPaths, ", "))
+	if st.ConflictOutput != "" {
+		fmt.Fprintf(&b, "\nMerge-tree conflict output:\n%s\n", st.ConflictOutput)
+	}
+	if st.RemoteMessages != "" {
+		fmt.Fprintf(&b, "\nRemote commits (%s..%s):\n%s\n", shortSHA(st.MergeBase), shortSHA(st.RemoteTip), st.RemoteMessages)
+	}
+	if st.CommitMessage != "" {
+		fmt.Fprintf(&b, "\nLocal commit message (%s):\n%s\n", shortSHA(st.ConflictCommit), st.CommitMessage)
+	}
+	return strings.TrimSpace(b.String()), nil
 }
 
 // fileOrUpdateRemoteSyncItem files the first conflict for a remote tip. Retries

@@ -112,6 +112,8 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 		return refuse(shortSHA(landing) + " is itself an automatic revert; a remedy is not undone by a remedy")
 	case IsTrunkFixer(of.itemID):
 		return refuse(shortSHA(landing) + " is trunk fixer " + of.itemID + "'s landing; a remedy is not undone by a remedy")
+	case IsRemoteSyncItem(of.itemID):
+		return refuse(shortSHA(landing) + " is remote-sync repair " + of.itemID + "'s landing; a remedy is not undone by a remedy")
 	}
 	dependents, err := l.landedDependents(ctx, of.itemID)
 	if err != nil {

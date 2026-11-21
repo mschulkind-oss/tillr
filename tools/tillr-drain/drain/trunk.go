@@ -508,6 +508,10 @@ type trunkReading struct {
 // A fixer cannot inherit any check it was filed to repair. A mixed refusal is
 // returned whole, not split into a new verdict and an inherited failure.
 func (l *Loop) trunkAlreadyRed(ctx context.Context, candidate Candidate, gate GateOutcome) (trunkReading, error) {
+	// A repair's replay base is outside the trunk proof's scope.
+	if IsRemoteSyncItem(candidate.ItemID) {
+		return trunkReading{}, nil
+	}
 	if IsTrunkFixer(candidate.ItemID) {
 		// A worker's trunk obstacle is not an ordinary gate verdict.
 		if gate.Outcome != GateFailed {

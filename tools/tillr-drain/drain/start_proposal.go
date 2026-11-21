@@ -297,7 +297,7 @@ func (s startSnapshot) selectStart(freshOnly bool) (startViewEntry, bool) {
 		lane := d.LaneID // concrete lanes include desks and retained continuations
 		if lane == "" {
 			lane = s.firstFreeLane(e.express)
-			if lane == "" && IsTrunkFixer(q.id) && !s.occupied["desk-trunk-fixer"] {
+			if lane == "" && (IsTrunkFixer(q.id) || IsRemoteSyncItem(q.id)) && !s.occupied["desk-trunk-fixer"] {
 				lane = "desk-trunk-fixer"
 			}
 		} else if owner := s.reservations[lane]; (owner != "" && owner != q.id) || (freshOnly && s.occupied[lane]) {
