@@ -2875,10 +2875,17 @@ history; in that case the run pin stays.
 | `runs/<run>` | The loop or lander pins an attempt. Once the trunk contains the pinned commit, settlement can remove the pin if it names that run's recorded landed head or the item is finished or removed. Live lanes and pending examinations still protect their pins. For retryable items, the newest eight examined attempt pins per item are kept, ordered by attempt time and run ID. Unexamined pins and pins outside trunk history are not removed by this limit. |
 | `landed/<run>` | The lander writes before publication. Cleanup requires that run's durable `landed` row and a matching published commit. Ordinary markers leave in settlement; fork-delivery markers wait until no pending examination or leased lane remains, so every overlapping boundary comparison has finished. Missing receipts keep markers for crash recovery. |
 | `preserved/<run>` | The loop saves uncommitted edits. The [saved-edit retention rule](#earlier-uncommitted-work) removes them when the item finishes or is removed; the pruning event remains. |
+| `sync-remote/<item>` | The repair filer pins the replay base for the first conflict at a remote tip. The pin stays until the item is finished or removed, even if the base is outside trunk history. |
 | `held/<name>` | An operator writes this by hand. No tillr program writes or deletes it; no age or count bound applies. |
 | `recovery/<name>` | An operator writes this by hand. No tillr program writes or deletes it; no age or count bound applies. |
 | `green` | The proof process advances this one pointer to proved trunk history. Cleanup never deletes it. |
 | `trunk-history/observed`, `trunk-history/lost`, `trunk-history/accepted/<lost-tip>` | The loop tracks the observed trunk and retains unresolved lost history. Accepting a rewrite removes `lost` and keeps its accepted-history pointer indefinitely. This cleanup deletes none of them. |
+
+Remote-sync filing describes a `remote-sync-conflict` as one express repair item
+per remote tip, with a fence containing only the literal, permitted conflict
+paths. If any path is gate code or cannot be represented in the fence, the
+item is blocked on the owner. The filer does not move main, green or the main
+checkout. The live refused-push path does not yet call the filer.
 
 Set-aside also writes `runs/<run>-set-aside-base`, a pointer to the lane's reset
 destination so an interrupted reset can resume. It follows its owning run's

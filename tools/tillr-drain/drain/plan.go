@@ -2135,7 +2135,7 @@ func scanItemRow(scanner interface{ Scan(...any) error }) (itemRow, error) {
 	if row.Allowed, err = decodeFence(allowed); err != nil {
 		return itemRow{}, err
 	}
-	row.Express = !itemIsComment(row.ItemID) && (row.Express || strings.HasPrefix(row.ItemID, "item-idea-"))
+	row.Express = !itemIsComment(row.ItemID) && (row.Express || strings.HasPrefix(row.ItemID, "item-idea-") || IsRemoteSyncItem(row.ItemID))
 	return row, nil
 }
 
