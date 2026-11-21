@@ -569,6 +569,7 @@ type Loop struct {
 	// reconstructed from the store by the next pass or a replacement Loop.
 	examinations  sync.WaitGroup
 	active        map[string]bool
+	activeItems   map[string]string // item -> local run or examination, owned by the pass
 	activeCancels map[string]context.CancelFunc
 	stoppedRuns   map[string]bool
 	completions   chan runCompletion

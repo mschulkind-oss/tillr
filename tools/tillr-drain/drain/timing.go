@@ -232,7 +232,7 @@ func (l *Loop) recordPass(timing *PassTiming) error {
 	}
 	wasOver := timing.OverBudget
 	*timing = aggregate
-	l.reportf("loop: tick %s gate %s over %d run(s), longest %s of a %s per-run budget (staging %s, dispatch %s, land %s)\n",
+	l.reportf("loop: tick %s gate %s over %d run(s), longest %s of a %s per-run budget (staging %s, worker run wall time %s, land %s)\n",
 		timing.TickID, seconds(time.Duration(timing.GateMS)*time.Millisecond), timing.Gates,
 		seconds(time.Duration(timing.GateMaxMS)*time.Millisecond), seconds(time.Duration(timing.GateBudgetMS)*time.Millisecond),
 		seconds(time.Duration(timing.StageMS)*time.Millisecond),

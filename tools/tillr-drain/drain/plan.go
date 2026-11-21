@@ -276,6 +276,9 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 		return nil, err
 	}
 	for i := range items {
+		if tick.examineItem != "" && items[i].ItemID != tick.examineItem {
+			continue
+		}
 		if items[i].JudgeMode == "agent" {
 			items[i].JudgeGrant, err = judgeGrant(r, items[i].ItemID, at)
 			if err != nil {
@@ -359,7 +362,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 	}
 	inputs := map[string]*RunInputs{}
 	for _, row := range items {
-		if row.State != def.Ready || unshared[row.ItemID] {
+		if (tick.examineItem != "" && row.ItemID != tick.examineItem) || row.State != def.Ready || unshared[row.ItemID] {
 			continue
 		}
 		inputs[row.ItemID], err = currentRunInputs(context.Background(), r, row, policy, root, build)
@@ -487,6 +490,9 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 	}
 	attempts, nodeCounts := map[string]int{}, map[string]int{}
 	for _, row := range items {
+		if tick.examineItem != "" && row.ItemID != tick.examineItem {
+			continue
+		}
 		var count int
 		if hasNodes {
 			if err := r.QueryRow(`SELECT COALESCE(MAX(attempt),0) FROM node_runs WHERE item_id=?`, row.ItemID).Scan(&count); err != nil {

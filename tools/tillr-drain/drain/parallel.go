@@ -241,47 +241,127 @@ func (l *Loop) stageParallel(ctx context.Context, d Decision, base string) (Deci
 
 // runParallel keeps one outside-boundary bracket around all readers. No sibling
 // completion can blame a still-running reader or release the item's lane early.
-func (l *Loop) runParallel(ctx context.Context, d Decision) error {
+func (l *Loop) runParallel(ctx context.Context, d Decision, result *LoopResult, timing *PassTiming, watched []string) error {
 	nodes := parallelNodes(d)
+	type readerCompletion struct {
+		index  int
+		node   Decision
+		reason string
+		result LoopResult
+		err    error
+	}
+	completions := make(chan readerCompletion, len(nodes))
 	var wg sync.WaitGroup
 	defer wg.Wait()
-	errs := make([]error, len(nodes))
-	for i, node := range nodes {
-		s, err := store.OpenRead(ctx, l.cfg.Store)
-		if err != nil {
-			return err
-		}
-		var finished bool
-		err = s.ReadTx(ctx, func(r *store.Reader) error {
-			rec, e := terminalRecord(r, node.RunRequest.RunID)
-			finished = rec != nil
-			return e
-		})
-		s.Close()
-		if err != nil {
-			return err
-		}
-		if finished {
-			continue
-		}
+	launch := func(i int) {
+		node := nodes[i]
+		group := nodes[0]
+		group.Parallel = append([]Decision(nil), nodes[1:]...)
 		wg.Add(1)
-		go func(i int, node Decision) {
+		go func() {
 			defer wg.Done()
-			if node.BuildRestartFrom != "" {
-				if errs[i] = l.awaitBuildReader(ctx, node.BuildRestartFrom); errs[i] != nil {
+			c := readerCompletion{index: i, node: node}
+			defer func() { completions <- c }()
+			var rec *run.Record
+			c.err = l.readStore(ctx, func(r *store.Reader) error {
+				var err error
+				rec, err = terminalRecord(r, node.RunRequest.RunID)
+				return err
+			})
+			if c.err != nil {
+				return
+			}
+			if rec == nil {
+				if node.BuildRestartFrom != "" {
+					if c.err = l.awaitBuildReader(ctx, node.BuildRestartFrom); c.err != nil {
+						return
+					}
+				}
+				req := *node.RunRequest
+				stampDecisionRequest(node, &req)
+				finished, _, err := l.runRestartable(ctx, req)
+				c.err = err
+				if err != nil {
 					return
 				}
+				rec = &finished
 			}
-			req := *node.RunRequest
-			stampDecisionRequest(node, &req)
-			_, _, errs[i] = l.runRestartable(ctx, req)
-		}(i, node)
+			// Hook groups retain their completion policy; their final hook is collective.
+			if l.nonLanding {
+				return
+			}
+			var outcome string
+			c.err = l.readStore(ctx, func(r *store.Reader) error {
+				return r.QueryRow(`SELECT outcome FROM node_runs WHERE run_id=?`, node.RunRequest.RunID).Scan(&outcome)
+			})
+			if c.err != nil || (outcome != "running" && outcome != "interrupted") {
+				return
+			}
+			log := logTail(rec.ArtifactRefs)
+			// An adapter refusal can release a lane. Leave that group-level disposition
+			// behind the collective boundary, even though the reader has already ended.
+			class := ClassifyAttempt(*rec, log)
+			if class == AttemptRefused || class == AttemptInterrupted || (rec.State != run.StatePaused && (rec.EndCause == run.EndSignal || rec.EndCause == run.EndLeaseReclaimed || rec.EndCause == run.EndRestart)) {
+				return
+			}
+			c.err = l.recordSettlementSpend(ctx, timing.TickID, l.sessionID, *rec)
+			if c.err != nil {
+				return
+			}
+			l.countSettledSpend(&c.result, *rec, l.sessionID)
+			work := &pendingWork{Decision: group, BaseSHA: group.NodeBaseSHA, LoopID: l.sessionID}
+			updated, _, _, ending, settled := l.settleParallelReader(ctx, work, node, *rec, log, &c.result, timing, watched)
+			c.err = settled.err
+			if settled.stop != "" {
+				c.err = retainedAfter(node.LaneID, settled.stop)
+			}
+			if strings.HasPrefix(ending, "workflow-node-") {
+				c.node, c.reason = updated, ending
+			}
+		}()
 	}
-	wg.Wait()
-	for i, err := range errs {
-		if err != nil {
-			return fmt.Errorf("reader %s: %w", nodes[i].RunRequest.RunID, err)
+	for i := range nodes {
+		launch(i)
+	}
+	pending := len(nodes)
+	var firstErr error
+	held := false
+	for pending > 0 {
+		c := <-completions
+		pending--
+		mergeExamination(result, &c.result)
+		if c.err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("reader %s: %w", c.node.RunRequest.RunID, c.err)
+			}
+			continue
 		}
+		if c.reason == "" || firstErr != nil {
+			continue
+		}
+		updated, claimed, err := l.claimParallelReplacement(ctx, nodes, c.index, c.node)
+		if err != nil {
+			firstErr = err
+			continue
+		}
+		nodes = updated
+		if !claimed {
+			held = true
+			continue
+		}
+		if err = l.stageParallelReplacement(ctx, nodes, c.index); err != nil {
+			firstErr = err
+			continue
+		}
+		launch(c.index)
+		pending++
+	}
+	if firstErr != nil {
+		return firstErr
+	}
+	if held {
+		work := &pendingWork{Decision: d, BaseSHA: d.NodeBaseSHA, LoopID: l.sessionID}
+		return l.advanceParallelRetry(ctx, work, nodes, "workflow-node-failover")
 	}
 	return nil
 }
@@ -382,125 +462,22 @@ func (l *Loop) settleParallel(ctx context.Context, work *pendingWork, result *Lo
 	}
 	failed, retry, infraRetry := false, false, false
 	for i, node := range nodes {
-		stage := node.Workflow.Stages[node.NodeIndex]
-		rec := recs[i]
-		log := logs[i]
-		if stage.Kind == "agent" {
-			if obs, isObstacle, obsErr := l.offeredObstacle(ctx, rec.RunID); obsErr != nil {
-				return laneOutcome{err: obsErr}
-			} else if isObstacle {
-				log = formatObstacleReport(obs)
-				logs[i] = log
-			}
-		}
-		if stage.Kind == "agent" && (ClassifyAttempt(rec, log) == AttemptUnjudged || rec.State == run.StatePaused) {
-			resumed, resumedLog, stop, e := l.resumeAfterWall(ctx, node.LaneID, *node.RunRequest, l.lanePath(node.LaneID), rec, timing.TickID, l.cfg.Now(), result, watched)
-			if e != nil || stop != "" {
-				return laneOutcome{err: e, stop: stop}
-			}
-			if resumed.State == run.StatePaused {
-				// Another replacement (or an operator pause) interrupted the
-				// continued segment. The group is still pending, not unjudged.
-				return laneOutcome{}
-			}
-			if resumed.RunID == "" || ClassifyAttempt(resumed, resumedLog) == AttemptUnjudged {
-				if err = l.nodeOutcome(ctx, node, "unjudged"); err != nil {
-					return laneOutcome{err: err}
-				}
-				failed = true
-				continue
-			}
-			rec, log = resumed, resumedLog
-			recs[i], logs[i] = rec, log
-		}
-		dir := RunDir(l.cfg.Root, rec.RunID)
-		if err = os.MkdirAll(dir, 0755); err != nil {
+		var outcome string
+		if err := l.readStore(ctx, func(r *store.Reader) error {
+			return r.QueryRow(`SELECT outcome FROM node_runs WHERE run_id=?`, node.RunRequest.RunID).Scan(&outcome)
+		}); err != nil {
 			return laneOutcome{err: err}
 		}
-		if err = os.WriteFile(filepath.Join(dir, "node-report.md"), []byte(log), 0644); err != nil {
-			return laneOutcome{err: err}
-		}
-		outcome := "passed"
-		workFailure := false
-		if stage.Kind == "command" {
-			if rec.State != run.StateExited || rec.ExitCode == nil || (*rec.ExitCode != 0 && *rec.ExitCode != 1) {
-				outcome = "fault"
-			} else if *rec.ExitCode == 1 {
-				outcome = "failed"
-				workFailure = true
+		if outcome == "running" || outcome == "interrupted" || (outcome == "unjudged" && ClassifyAttempt(recs[i], logs[i]) != AttemptUnjudged && recs[i].State != run.StatePaused) {
+			updated, rec, log, ending, settled := l.settleParallelReader(ctx, work, node, recs[i], logs[i], result, timing, watched)
+			if settled.err != nil || settled.stop != "" || ending == "" {
+				return settled
 			}
-		} else {
-			class := ClassifyAttempt(rec, log)
-			switch {
-			case class == AttemptInterrupted:
-				updated, ok, e := l.parallelInterrupted(node, rec)
-				if e != nil {
-					return laneOutcome{err: e}
-				}
-				if ok {
-					nodes[i] = updated
-					retry = true
-					continue
-				}
-				outcome = "fault"
-			case class == AttemptRefused:
-				stop, e := l.holdAdapterRefusal(ctx, node.LaneID, *node.RunRequest, log)
-				if e == nil && stop == "" {
-					e = l.markExamined(ctx, d)
-				}
-				return laneOutcome{stop: stop, err: e}
-			case class == AttemptInfrastructure || !readableFooter(reportFooter(log)):
-				// No footer, or one naming no ending, is no answer: this reader alone runs
-				// again and its finished siblings are kept.
-				updated, ok, e := l.parallelFailover(ctx, node, rec, result)
-				if e != nil {
-					return laneOutcome{err: e}
-				}
-				if ok {
-					nodes[i] = updated
-					retry = true
-					infraRetry = true
-					continue
-				}
-				outcome = "fault"
-			case reportFooter(log) == "failed":
-				outcome = "failed"
-				workFailure = true
-			case reportFooter(log) != "done":
-				outcome = "blocked"
-				if reportFooter(log) == "blocked" {
-					if err = l.reportedBlock(ctx, node, log); err != nil {
-						return laneOutcome{err: err}
-					}
-				}
-			}
+			nodes[i], recs[i], logs[i], outcome = updated, rec, log, ending
 		}
-		if outcome == "passed" {
-			artifacts, e := checkNodeOutputs(l.cfg.Root, node)
-			if e != nil {
-				outcome = "failed"
-				c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: work.BaseSHA, HeadSHA: head, RefusalDetail: e.Error()}
-				if err = l.refuse(ctx, c, result, RefusalNodeOutput); err != nil {
-					return laneOutcome{err: err}
-				}
-			} else if err = l.acceptNodeOutputs(ctx, node, artifacts); err != nil {
-				return laneOutcome{err: err}
-			}
-		}
-		if workFailure {
-			for _, edge := range d.Workflow.Edges {
-				if edge.From == stage.ID && edge.WhenOutcome == "fail" {
-					outcome = "handled-fail"
-					break
-				}
-			}
-		}
-		if outcome != "passed" {
-			if err = l.nodeOutcome(ctx, node, outcome); err != nil {
-				return laneOutcome{err: err}
-			}
-		}
-		failed = failed || outcome == "failed" || outcome == "fault" || outcome == "blocked"
+		retry = retry || strings.HasPrefix(outcome, "workflow-node-")
+		infraRetry = infraRetry || outcome == "workflow-node-failover"
+		failed = failed || outcome == "failed" || outcome == "fault" || outcome == "blocked" || outcome == "unjudged"
 	}
 	finalHead, err := l.revParse(ctx, target, "HEAD")
 	if err != nil {
@@ -540,4 +517,121 @@ func (l *Loop) settleParallel(ctx context.Context, work *pendingWork, result *Lo
 	primary := d
 	primary.Parallel = nil
 	return l.settle(ctx, primary, recs[0], logs[0], work.BaseSHA, d.RunRequest.CorrelationID, l.cfg.Now(), result, timing, nil, true)
+}
+
+// settleParallelReader records one reader's answer without advancing or releasing
+// the group. Only the collective settlement can inspect the lane boundary.
+func (l *Loop) settleParallelReader(ctx context.Context, work *pendingWork, node Decision, rec run.Record, log string, result *LoopResult, timing *PassTiming, watched []string) (Decision, run.Record, string, string, laneOutcome) {
+	d := work.Decision
+	target, head := l.laneTarget(d.LaneID), d.NodeBaseSHA
+	var err error
+	stage := node.Workflow.Stages[node.NodeIndex]
+	if stage.Kind == "agent" {
+		if obs, isObstacle, obsErr := l.offeredObstacle(ctx, rec.RunID); obsErr != nil {
+			return node, rec, log, "", laneOutcome{err: obsErr}
+		} else if isObstacle {
+			log = formatObstacleReport(obs)
+		}
+	}
+	if stage.Kind == "agent" && (ClassifyAttempt(rec, log) == AttemptUnjudged || rec.State == run.StatePaused) {
+		resumed, resumedLog, stop, e := l.resumeAfterWall(ctx, node.LaneID, *node.RunRequest, l.lanePath(node.LaneID), rec, timing.TickID, l.cfg.Now(), result, watched)
+		if e != nil || stop != "" {
+			return node, rec, log, "", laneOutcome{err: e, stop: stop}
+		}
+		if resumed.State == run.StatePaused {
+			// Another replacement (or an operator pause) interrupted the
+			// continued segment. The group is still pending, not unjudged.
+			return node, rec, log, "", laneOutcome{}
+		}
+		if resumed.RunID == "" || ClassifyAttempt(resumed, resumedLog) == AttemptUnjudged {
+			if err = l.nodeOutcome(ctx, node, "unjudged"); err != nil {
+				return node, rec, log, "", laneOutcome{err: err}
+			}
+			return node, rec, log, "unjudged", laneOutcome{}
+		}
+		rec, log = resumed, resumedLog
+	}
+	dir := RunDir(l.cfg.Root, rec.RunID)
+	if err = os.MkdirAll(dir, 0755); err != nil {
+		return node, rec, log, "", laneOutcome{err: err}
+	}
+	if err = os.WriteFile(filepath.Join(dir, "node-report.md"), []byte(log), 0644); err != nil {
+		return node, rec, log, "", laneOutcome{err: err}
+	}
+	outcome := "passed"
+	workFailure := false
+	if stage.Kind == "command" {
+		if rec.State != run.StateExited || rec.ExitCode == nil || (*rec.ExitCode != 0 && *rec.ExitCode != 1) {
+			outcome = "fault"
+		} else if *rec.ExitCode == 1 {
+			outcome = "failed"
+			workFailure = true
+		}
+	} else {
+		class := ClassifyAttempt(rec, log)
+		switch {
+		case class == AttemptInterrupted:
+			updated, ok, e := l.parallelInterrupted(node, rec)
+			if e != nil {
+				return node, rec, log, "", laneOutcome{err: e}
+			}
+			if ok {
+				return updated, rec, log, "workflow-node-interrupted", laneOutcome{}
+			}
+			outcome = "fault"
+		case class == AttemptRefused:
+			stop, e := l.holdAdapterRefusal(ctx, node.LaneID, *node.RunRequest, log)
+			if e == nil && stop == "" {
+				e = l.markExamined(ctx, d)
+			}
+			return node, rec, log, "", laneOutcome{stop: stop, err: e}
+		case class == AttemptInfrastructure || !readableFooter(reportFooter(log)):
+			// No footer, or one naming no ending, is no answer: this reader alone runs
+			// again and its finished siblings are kept.
+			updated, ok, e := l.parallelFailover(ctx, node, rec, result)
+			if e != nil {
+				return node, rec, log, "", laneOutcome{err: e}
+			}
+			if ok {
+				return updated, rec, log, "workflow-node-failover", laneOutcome{}
+			}
+			outcome = "fault"
+		case reportFooter(log) == "failed":
+			outcome = "failed"
+			workFailure = true
+		case reportFooter(log) != "done":
+			outcome = "blocked"
+			if reportFooter(log) == "blocked" {
+				if err = l.reportedBlock(ctx, node, log); err != nil {
+					return node, rec, log, "", laneOutcome{err: err}
+				}
+			}
+		}
+	}
+	if outcome == "passed" {
+		artifacts, e := checkNodeOutputs(l.cfg.Root, node)
+		if e != nil {
+			outcome = "failed"
+			c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: work.BaseSHA, HeadSHA: head, RefusalDetail: e.Error()}
+			if err = l.refuse(ctx, c, result, RefusalNodeOutput); err != nil {
+				return node, rec, log, "", laneOutcome{err: err}
+			}
+		} else if err = l.acceptNodeOutputs(ctx, node, artifacts); err != nil {
+			return node, rec, log, "", laneOutcome{err: err}
+		}
+	}
+	if workFailure {
+		for _, edge := range d.Workflow.Edges {
+			if edge.From == stage.ID && edge.WhenOutcome == "fail" {
+				outcome = "handled-fail"
+				break
+			}
+		}
+	}
+	if outcome != "passed" {
+		if err = l.nodeOutcome(ctx, node, outcome); err != nil {
+			return node, rec, log, "", laneOutcome{err: err}
+		}
+	}
+	return node, rec, log, outcome, laneOutcome{}
 }

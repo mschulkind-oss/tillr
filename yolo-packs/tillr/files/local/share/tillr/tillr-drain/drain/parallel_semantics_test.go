@@ -25,13 +25,17 @@ func TestParallelReadersDoNotFollowFailureEdgesForBlockedOrMissingReports(t *tes
 				}
 				drainOwned(t, l, result)
 			}
-			if steps.ended != 4 || steps.builders != 0 {
+			want := 4
+			if report == "no report footer\n" {
+				want = 5
+			}
+			if steps.ended != want || steps.builders != 0 {
 				t.Fatalf("ended=%d builders=%d", steps.ended, steps.builders)
 			}
 			fixtureRead(t, f, func(r *store.Reader) error {
 				var outcome string
 				err := r.QueryRow(`SELECT outcome FROM node_runs WHERE node_id='scout2'`).Scan(&outcome)
-				if outcome == "handled-fail" || outcome == "passed" {
+				if outcome == "handled-fail" || (report != "no report footer\n" && outcome == "passed") {
 					t.Errorf("invalid failure classification: %s", outcome)
 				}
 				return err
