@@ -130,7 +130,7 @@ func waitingFace(args []string) (record.Envelope, int) {
 				if e != nil {
 					return e
 				}
-				moves, e := waitingPublicationHolds(r, *path)
+				moves, e := waitingPatchMoves(r, *path)
 				if e != nil {
 					return e
 				}
@@ -724,7 +724,7 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 	if err != nil {
 		return nil, err
 	}
-	moves, err := waitingPublicationHolds(r, storePath)
+	moves, err := waitingPatchMoves(r, storePath)
 	if err != nil {
 		return nil, err
 	}
@@ -833,7 +833,10 @@ func waitingTerminal(state string) bool {
 func waitingDecision(r *store.Reader, itemID, stoppedRun string, stoppedAt int64) (storeDispatch, int64, string, bool, error) {
 	var last storeDispatch
 	var mover string
-	where := ` WHERE item_id = ? AND reason <> 'judge-grant-absent'`
+	// Old stores retain audit history for identity holds. Skip them for both the
+	// current decision and its streak, without discarding an earlier valid hold.
+	where := ` WHERE item_id = ? AND reason <> 'judge-grant-absent'
+		AND NOT (action = 'hold' AND (reason = 'trunk-foreign-identity' OR reason GLOB 'trunk-foreign-identity: *'))`
 	args := []any{itemID}
 	if stoppedRun != "" {
 		// A launch tied with (or recorded after) its stop cannot supersede the

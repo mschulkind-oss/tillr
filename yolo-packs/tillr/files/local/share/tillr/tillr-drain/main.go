@@ -28,7 +28,6 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/drain"
 	"github.com/mschulkind-oss/tillr-drain/patchmoves"
 	"github.com/mschulkind-oss/tillr-drain/restart"
-	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
@@ -82,8 +81,6 @@ func dispatch(args []string) int {
 		return acknowledgePatchMoveFace(rest)
 	case "push":
 		return pushFace(rest)
-	case "accept-identity":
-		return acceptIdentityFace(rest)
 	case "sweep-refs":
 		return sweepRefsFace(rest)
 	case "acquit", "examine", "set-aside":
@@ -243,52 +240,6 @@ func clearFaultFace(args []string) int {
 	if err := s.WriteTx(ctx, func(tx *store.Tx) error { return drain.ClearItemFault(tx, *itemID, *seq, time.Now().UTC()) }); err != nil {
 		return fail(err)
 	}
-	return record.ExitOK
-}
-
-// acceptIdentityFace records a decision about one full immutable trunk commit id.
-func acceptIdentityFace(args []string) int {
-	fs := newFlagSet("accept-identity")
-	root := fs.String("root", "", "the repository holding the foreign commit")
-	path := fs.String("store", "", "the loop's store (default <root>/.tillr/state.db)")
-	sha := fs.String("commit", "", "the full commit id the identity hold names")
-	by := fs.String("by", "", "who accepts this commit")
-	why := fs.String("why", "", "why this identity is intentional")
-	if err := parseFlags(fs, args); err != nil {
-		return fail(err)
-	}
-	if *root == "" {
-		return fail(drain.Usagef("accept-identity needs --root <repository>"))
-	}
-	t, err := land.OpenTrunk(*root)
-	if err != nil {
-		return fail(err)
-	}
-	if err := t.HasCommit(*sha); err != nil {
-		return fail(err)
-	}
-	tip, err := t.Head(drain.TrunkRef)
-	if err != nil {
-		return fail(err)
-	}
-	if !t.IsAncestor(*sha, tip) {
-		return fail(drain.Usagef("commit %s is not on the trunk", *sha))
-	}
-	if *path == "" {
-		*path = filepath.Join(*root, ".tillr", "state.db")
-	}
-	if _, err := os.Stat(*path); err != nil {
-		return fail(openFailure(err))
-	}
-	s, err := store.Open(context.Background(), *path, true)
-	if err != nil {
-		return fail(openFailure(err))
-	}
-	defer s.Close()
-	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error { return land.AcceptIdentity(tx, *sha, *by, *why) }); err != nil {
-		return fail(err)
-	}
-	fmt.Printf("accepted identity of trunk commit %s; landings resume on the next tick if no other holds remain\n", *sha)
 	return record.ExitOK
 }
 
@@ -797,7 +748,7 @@ func failLoopStartup(root string, at time.Time, err error) int {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "probe-backend, workflow, why, policy, plan, once, retry, clear-fault, accept-rewrite, accept-identity, acknowledge-patch-move, push, sweep-refs, acquit, examine, set-aside, boundary, resume, stop, restart or loop"
+const faceList = "probe-backend, workflow, why, policy, plan, once, retry, clear-fault, accept-rewrite, acknowledge-patch-move, push, sweep-refs, acquit, examine, set-aside, boundary, resume, stop, restart or loop"
 
 func stopFace(args []string) int {
 	fs := newFlagSet("stop")

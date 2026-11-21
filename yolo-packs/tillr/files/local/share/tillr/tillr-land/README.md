@@ -131,9 +131,10 @@ since green with both bounds disabled.
 - **A non-landing pins its head.** A squash conflict or a refusal, `already-on-trunk` included, answers
   `refs/tillr/runs/<run_id>` at the head before the lock is released, so a head the gate saw
   cannot be garbage-collected before a conflict-fixer or a person reads it.
-- **Authorship follows the trunk landing.** The squashed commit carries the identity the
-  repository's git config states, never the lane branch's, and a repository that states one
-  in a scope a lane can write is refused rather than trusted.
+- **Authorship follows the trunk landing.** Tillr stamps the author and committer of its own
+  trunk landings with the identity from Git config in a scope a lane cannot write, not the
+  worker's identity. It enforces no identity policy on anyone else's commits. Repositories
+  that want additional identity checks should implement them in their own gate.
 
 ## Fork delivery
 
@@ -402,6 +403,6 @@ verdict still binds the head's tree. A rewritten history is refused with `trunk-
 
 
 `go test ./...` in this directory builds the binary and drives the faces against scratch
-repositories. The land package's own suite pins the squash, the identity refusals, the pin,
+repositories. The land package's own suite pins the squash, the landing identity, the pin,
 and the lock: a gate that probes the lock with a non-blocking `flock` finds it free, and a
 second writer is refused while a landing holds it.

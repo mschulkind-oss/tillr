@@ -432,6 +432,14 @@ recovers linearly without force-pushing:
    more immediately; in `"green"` mode the rebased tip is proved first and
    pushed at the next green advance.
 
+Under [OQ-RP4](../design/tillr-refused-push.md#OQ-RP4), tillr stamps the configured Git
+identity on its own trunk landings; no other commit's identity can hold a landing. The
+owner ruled: *"we need to make sure that the Tiller machinery and sub-agents are producing
+commits that follow the identity that the author wants, which is what's configured in the Git
+config, or if we have settings to change this in our Tiller config, whatever that is. Apart
+from that ... The Tiller itself should not be enforcing anything about identities."* The
+published pointer guards against remote rewrites, not against other authors or committers.
+
 Any merge conflict, merge commit in the unpublished range, checkout off `main`,
 or dirty overlapping path leaves the repository untouched and fails the push
 with `mover: operator` and manual recovery commands.
@@ -560,11 +568,9 @@ lightweight supervisor holding `<root>/.tillr/keeper.lock`:
   test tool inside a `pi` worker is never killed by a tillr upgrade, and
   `claude`, `agy`, and `muse` workers finish their current segment on the build
   they started under.
-- **No forced pushes and no agent conflict repair on refused autopushes yet:**
-  `pushTrunk` and `pushGreen` never pass `--force`, and `healRefusedPush`
-  performs only clean linear `git merge-tree` replays; conflict-repair runs,
-  published-ref bookkeeping, and trusted remote committer checks remain unbuilt
-  in [`docs/design/tillr-refused-push.md`](../design/tillr-refused-push.md).
+- **No forced pushes on refused autopushes:** `pushTrunk` and `pushGreen` never
+  pass `--force`. Recovery uses a linear replay, as described in
+  [`docs/design/tillr-refused-push.md`](../design/tillr-refused-push.md).
 - **Patch-branch publication is not gated on `refs/tillr/green`:** When
   `push.what = "green"` pushes `main`, the `pre-push` hook still runs
   `bin/patch-branches-publish` at local `patch/*` branch tips; narrowing patch

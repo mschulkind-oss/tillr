@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr/settings"
 )
 
@@ -94,8 +95,7 @@ func (l *Loop) healRefusedPushResult(ctx context.Context, p settings.Push, refus
 	if err := checkPublishedAncestry(ctx, root, remote, ref, prev, remoteTip); err != nil {
 		return res, err
 	}
-	// Pin the accepted tip even if replay is unnecessary or cannot proceed.
-	// The identity check trusts commits under it, not commits replayed on top.
+	// Pin the accepted tip for future ancestry checks even if replay cannot proceed.
 	if err := advancePublished(ctx, root, remote, ref, remoteTip); err != nil {
 		return fail("pinning the fetched tip failed: %v", err)
 	}
@@ -126,6 +126,11 @@ func (l *Loop) healRefusedPushResult(ctx context.Context, p settings.Push, refus
 	if err != nil {
 		return fail("%v", err)
 	}
+	trunk, err := land.OpenTrunk(root)
+	if err != nil {
+		return fail("%v", err)
+	}
+	trunk.SetContext(ctx)
 	cur := remoteTip
 	known := &rewriteAbsorption{Lost: tip, Pairs: map[string]string{}}
 	for _, line := range strings.Split(strings.TrimSpace(listed), "\n") {
@@ -168,28 +173,10 @@ func (l *Loop) healRefusedPushResult(ctx context.Context, p settings.Push, refus
 			known.Pairs[c] = cur
 			continue
 		}
-		meta, err := rawGit(ctx, root, nil, "log", "-1", "--date=raw", "--format=%an%n%ae%n%ad", c)
+		cur, err = commitReplay(ctx, trunk, root, treeID, cur, c)
 		if err != nil {
 			return fail("%v", err)
 		}
-		m := strings.Split(strings.TrimRight(meta, "\n"), "\n")
-		if len(m) != 3 {
-			return fail("commit %s has unreadable author data", shortSHA(c))
-		}
-		msg, err := rawGit(ctx, root, nil, "log", "-1", "--format=%B", c)
-		if err != nil {
-			return fail("%v", err)
-		}
-		ct := exec.CommandContext(ctx, "git", "-C", root, "commit-tree", treeID, "-p", cur)
-		ct.Env = append(boundaryGitEnv(), "GIT_AUTHOR_NAME="+m[0], "GIT_AUTHOR_EMAIL="+m[1], "GIT_AUTHOR_DATE="+m[2])
-		ct.Stdin = strings.NewReader(msg)
-		var ctErr bytes.Buffer
-		ct.Stderr = &ctErr
-		made, err := ct.Output()
-		if err != nil {
-			return fail("recreating %s failed: %v: %s", shortSHA(c), err, strings.TrimSpace(ctErr.String()))
-		}
-		cur = strings.TrimSpace(string(made))
 		known.Pairs[c] = cur
 	}
 	known.Tip = cur

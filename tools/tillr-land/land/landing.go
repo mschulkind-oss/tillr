@@ -77,7 +77,6 @@ func Reasons() []string {
 		ReasonPatchAtHead,
 		ReasonItemNotLandable,
 		ReasonTrunkRewritten,
-		ReasonForeignIdentity,
 		ReasonAlreadyOnTrunk,
 	}
 }
@@ -746,29 +745,6 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 		if err != nil {
 			return p, err
 		}
-		if !rewritten && !p.recovered {
-			err = s.ReadTx(ctx, func(r *store.Reader) error {
-				h, err := ReadIdentityHistory(r)
-				if err != nil {
-					return err
-				}
-				// History observation is not identity certification: a commit
-				// can arrive between the loop's two reads. Check from both
-				// the durable checked tip and this request's observed tip.
-				checked := h.Tip
-				h, err = t.CheckIdentities(r, h, checked, p.observationTip)
-				if err == nil && req.ObservedTrunk != checked {
-					h, err = t.CheckIdentities(r, h, req.ObservedTrunk, p.observationTip)
-				}
-				if err == nil && len(h.Pending) != 0 {
-					p.landing.Result, p.landing.Reason = ResultRefused, ReasonForeignIdentity
-				}
-				return err
-			})
-			if err != nil {
-				return p, err
-			}
-		}
 		if rewritten {
 			p.landing.Result, p.landing.Reason = ResultRefused, ReasonTrunkRewritten
 			p.recovered = false
@@ -1237,15 +1213,17 @@ func recordLanding(ctx context.Context, tx *store.Tx, landing Landing, at time.T
 }
 
 // RecordReplayLanding records a linear replay after the caller publishes it
-// under land.lock. An identical retry returns the original receipt.
-func RecordReplayLanding(ctx context.Context, tx *store.Tx, itemID, runID, before, after, head, base, tree string, verdict Verdict, at time.Time) (Landing, error) {
-	if itemID == "" || runID == "" || before == "" || after == "" || head == "" || base == "" || tree == "" {
+// under land.lock. Head is the gated candidate, repair is the stamped commit
+// that carries its change, and after is the tip after replaying any suffix.
+// An identical retry returns the original receipt.
+func RecordReplayLanding(ctx context.Context, tx *store.Tx, itemID, runID, before, after, head, repair, base, tree string, verdict Verdict, at time.Time) (Landing, error) {
+	if itemID == "" || runID == "" || before == "" || after == "" || head == "" || repair == "" || base == "" || tree == "" {
 		return Landing{}, Usagef("recording a replay landing requires item, run, trunk tips and repair commit, base and tree")
 	}
 	if verdict.VerdictID == "" || verdict.BaseSHA != base || verdict.TreeSHA != tree || (verdict.Result != VerdictPass && verdict.Result != VerdictPassInherited) {
 		return Landing{}, Usagef("replay landing requires a passing gate verdict bound to the repair's base and tree")
 	}
-	l := Landing{ItemID: itemID, RunID: runID, VerdictID: verdict.VerdictID, Result: ResultLanded, Reason: "remote-sync-replay", BaseSHA: base, HeadSHA: head, TrunkBefore: before, TrunkAfter: head, GatedTree: tree, LandedTree: tree, ReplayTip: after}
+	l := Landing{ItemID: itemID, RunID: runID, VerdictID: verdict.VerdictID, Result: ResultLanded, Reason: "remote-sync-replay", BaseSHA: base, HeadSHA: head, TrunkBefore: before, TrunkAfter: repair, GatedTree: tree, LandedTree: tree, ReplayTip: after}
 	var raw []byte
 	err := tx.QueryRow(`SELECT e.payload FROM landings l JOIN events e ON e.seq=l.event_seq WHERE l.item_id=? AND l.run_id=? AND l.result=?`, itemID, runID, ResultLanded).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1258,7 +1236,7 @@ func RecordReplayLanding(ctx context.Context, tx *store.Tx, itemID, runID, befor
 	if err := json.Unmarshal(raw, &saved); err != nil {
 		return Landing{}, err
 	}
-	if saved.Reason != l.Reason || saved.HeadSHA != head || saved.BaseSHA != base || saved.VerdictID != verdict.VerdictID || saved.GatedTree != tree || saved.TrunkBefore != before || saved.ReplayTip != after {
+	if saved.Reason != l.Reason || saved.HeadSHA != head || saved.BaseSHA != base || saved.VerdictID != verdict.VerdictID || saved.GatedTree != tree || saved.TrunkBefore != before || saved.TrunkAfter != repair || saved.ReplayTip != after {
 		return Landing{}, Internalf("run %s already has a different landing receipt", runID)
 	}
 	return saved, nil

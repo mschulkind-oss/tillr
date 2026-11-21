@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
-	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -231,9 +230,6 @@ func (a *rewriteAbsorption) record(tx *store.Tx, at time.Time) error {
 			return err
 		}
 		mapped++
-	}
-	if err := land.CarryIdentityAcceptances(tx, a.Pairs); err != nil {
-		return err
 	}
 	body, err := json.Marshal(map[string]any{"lost_tip": a.Lost, "tip": a.Tip, "commits": mapped, "evidence": a.Evidence})
 	if err != nil {

@@ -154,19 +154,71 @@ func (t *Trunk) SquashWithMessage(base, trunk, head, source string, at time.Time
 	if err != nil {
 		return Squash{}, err
 	}
-	commit, stderr, err := t.runGit([]string{
+	commit, stderr, err := t.runGit(stampedCommitEnv(identity, authorDate, at), "commit-tree", tree, "-p", trunk, "-m", message)
+	if err != nil {
+		return Squash{}, Externalf("writing the squash of %s onto %s in %s: %s", head, trunk, t.repo, failureText(stderr, err))
+	}
+	return Squash{Commit: strings.TrimSpace(commit), Tree: tree}, nil
+}
+
+// StampRepair writes a gated replay repair with the configured landing identity.
+// Its caller has verified that head is a single repair with the given tree.
+// parent may replace the original parent if it has the same tree. An empty
+// resolution still needs a commit to represent the repaired step.
+func (t *Trunk) StampRepair(parent, head, tree string, at time.Time) (string, error) {
+	identity, err := t.LandingIdentity()
+	if err != nil {
+		return "", err
+	}
+	raw, err := t.git("cat-file", "commit", head)
+	if err != nil {
+		return "", err
+	}
+	header, message, ok := strings.Cut(raw, "\n\n")
+	if !ok {
+		return "", Externalf("commit %s has no message boundary", head)
+	}
+	authorDate, err := t.git("log", "-1", "--format=%aI", head)
+	if err != nil {
+		return "", err
+	}
+	env := stampedCommitEnv(identity, strings.TrimSpace(authorDate), at)
+	author, stderr, err := t.runGit(env, "var", "GIT_AUTHOR_IDENT")
+	if err != nil {
+		return "", Externalf("reading repair author: %s", failureText(stderr, err))
+	}
+	committer, stderr, err := t.runGit(env, "var", "GIT_COMMITTER_IDENT")
+	if err != nil {
+		return "", Externalf("reading repair committer: %s", failureText(stderr, err))
+	}
+	// Write a new envelope around the gated message. Unlike commit-tree,
+	// hash-object does not normalize the message or its declared encoding.
+	var body strings.Builder
+	fmt.Fprintf(&body, "tree %s\nparent %s\nauthor %s\ncommitter %s\n",
+		tree, parent, strings.TrimSuffix(author, "\n"), strings.TrimSuffix(committer, "\n"))
+	for _, line := range strings.Split(header, "\n") {
+		if strings.HasPrefix(line, "encoding ") {
+			body.WriteString(line + "\n")
+		}
+	}
+	body.WriteString("\n")
+	body.WriteString(message)
+	commit, stderr, err := t.runGitStdin(t.repo, []byte(body.String()), nil, "hash-object", "-t", "commit", "-w", "--stdin")
+	if err != nil {
+		return "", Externalf("%s", failureText(stderr, err))
+	}
+	return strings.TrimSpace(commit), nil
+}
+
+func stampedCommitEnv(identity Identity, authorDate string, at time.Time) []string {
+	return []string{
 		"GIT_AUTHOR_NAME=" + identity.Name,
 		"GIT_AUTHOR_EMAIL=" + identity.Email,
 		"GIT_AUTHOR_DATE=" + authorDate,
 		"GIT_COMMITTER_NAME=" + identity.Name,
 		"GIT_COMMITTER_EMAIL=" + identity.Email,
 		"GIT_COMMITTER_DATE=" + at.Local().Format(time.RFC3339),
-	}, "commit-tree", tree, "-p", trunk, "-m", message)
-	if err != nil {
-		return Squash{}, Externalf("writing the squash of %s onto %s in %s: %s",
-			head, trunk, t.repo, failureText(stderr, err))
 	}
-	return Squash{Commit: strings.TrimSpace(commit), Tree: tree}, nil
 }
 
 // squashMessageAndDate reads the commits in base..source in chronological order. A single
@@ -251,6 +303,10 @@ func (t *Trunk) Pin(runID, sha string) error {
 
 // LandedRefPrefix holds the per-run landing markers.
 const LandedRefPrefix = "refs/tillr/landed/"
+
+// PublishedRefPrefix holds one pointer per remote branch, naming the last tip
+// this clone knows was published there.
+const PublishedRefPrefix = "refs/tillr/published/"
 
 // landedMarkerRef is the ref a landing points at its squash commit before it moves the
 // trunk. It is the lander's own record, in Git, of which commit a run's landing wrote: Git's

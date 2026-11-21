@@ -516,8 +516,8 @@ that conviction with the operator's explanation, keeps the evidence, and makes
 the retained candidate eligible for examination again. A run with no conviction
 is refused; acquittal does not erase a failing gate verdict. For external Git
 movements that pause landings until the owner confirms them, use
-`tillr drain accept-rewrite`, `tillr drain accept-identity`, or
-`tillr drain acknowledge-patch-move`; `tillr drain sweep-refs` prunes retired run refs.
+`tillr drain accept-rewrite` or `tillr drain acknowledge-patch-move`;
+`tillr drain sweep-refs` prunes retired run refs.
 
 Acknowledging a patch move clears the hold, not the publication check. A fork rebase
 can replace the remote tip only when it matches this clone's last-published OID and

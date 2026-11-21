@@ -2,15 +2,38 @@ package drain
 
 import (
 	"context"
-	"github.com/mschulkind-oss/tillr/store"
 	"testing"
+
+	"github.com/mschulkind-oss/tillr/store"
 )
 
+func TestIdentityOnlyRewriteCarriesGreenWithoutHolding(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	ctx := context.Background()
+	base := runGit(t, f.root, "rev-parse", "HEAD")
+	old := foreignCommit(t, f.root, base)
+	if _, err := l.observeTrunk(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, f.root, "update-ref", GreenRef, old)
+	replacement := runGit(t, f.root, "commit-tree", old+"^{tree}", "-p", base, "-m", "foreign")
+	runGit(t, f.root, "reset", "--hard", replacement)
+	h, err := l.observeTrunk(ctx, "")
+	if err != nil || h.Lost != "" {
+		t.Fatalf("identity-only rewrite held: %+v, %v", h, err)
+	}
+	if green := runGit(t, f.root, "rev-parse", GreenRef); green != replacement {
+		t.Fatalf("green = %s, want %s", green, replacement)
+	}
+}
+
 func TestMessageRewriteKeepsLostHistoryHold(t *testing.T) {
-	f, l, steps := identityFixture(t)
+	f, l := passFixture(t, "item-a")
+	steps := &dirtyPathSteps{t: t, root: f.root, store: f.storePath}
+	l.cfg.Steps = steps
 	fixtureWrite(t, f, func(tx *store.Tx) error { _, err := tx.Exec(`UPDATE items SET state='blocked'`); return err })
 	base := runGit(t, f.root, "rev-parse", "HEAD")
-	bad := foreignCommit(t, f.root, base, false)
+	bad := foreignCommit(t, f.root, base)
 	if _, err := l.observeTrunk(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
@@ -21,39 +44,5 @@ func TestMessageRewriteKeepsLostHistoryHold(t *testing.T) {
 	h := rewriteHistory(t, f)
 	if h.Lost != bad || h.Observed != edited || steps.lands != 0 {
 		t.Fatalf("message edit waived history: %+v", h)
-	}
-}
-
-type identityRacingSteps struct {
-	*dirtyPathSteps
-	advanced bool
-}
-
-func (s *identityRacingSteps) Land(ctx context.Context, c Candidate) (LandOutcome, error) {
-	if !s.advanced {
-		s.advanced = true
-		foreignCommit(s.t, s.root, runGit(s.t, s.root, "rev-parse", "HEAD"), false)
-		return LandOutcome{Result: LandRefused, Reason: ReasonForeignIdentity}, nil
-	}
-	return s.dirtyPathSteps.Land(ctx, c)
-}
-func TestLockedIdentityRefusalRetainsCandidateWithoutConvictingIt(t *testing.T) {
-	f, l, baseSteps := identityFixture(t)
-	fixtureWrite(t, f, func(tx *store.Tx) error {
-		_, err := tx.Exec(`UPDATE items SET state='blocked' WHERE item_id='item-b'`)
-		return err
-	})
-	steps := &identityRacingSteps{dirtyPathSteps: baseSteps}
-	l.cfg.Steps = steps
-	base := runGit(t, f.root, "rev-parse", "HEAD")
-	historyCandidate(t, f, l, base)
-	var result LoopResult
-	historyPass(t, l, &result)
-	if result.Rejected != 0 || result.Landed != 0 || steps.verdicts != 0 {
-		t.Fatalf("race convicted candidate: %+v", result)
-	}
-	d := mustPlan(t, l)[0].decision
-	if d.Action != ActionHold || len(d.Reason) < len(ReasonForeignIdentity) || d.Reason[:len(ReasonForeignIdentity)] != ReasonForeignIdentity {
-		t.Fatalf("lock refusal not held: %+v", d)
 	}
 }

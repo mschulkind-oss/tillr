@@ -2,10 +2,11 @@ package land
 
 import (
 	"context"
-	"github.com/mschulkind-oss/tillr/store"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 func TestRecordReplayLandingBindsVerdictAndDeduplicates(t *testing.T) {
@@ -18,7 +19,7 @@ func TestRecordReplayLandingBindsVerdictAndDeduplicates(t *testing.T) {
 	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
 		v := Verdict{VerdictID: "v", BaseSHA: "base", TreeSHA: "other", Result: VerdictPass}
 		record := func(tip string) (Landing, error) {
-			return RecordReplayLanding(ctx, tx, "sync-remote-fixture", "run-sync", "before", tip, "repair", "base", "tree", v, time.Now())
+			return RecordReplayLanding(ctx, tx, "sync-remote-fixture", "run-sync", "before", tip, "worker-head", "repair", "base", "tree", v, time.Now())
 		}
 		if _, err := record("tip"); err == nil {
 			t.Error("accepted an unbound verdict")
@@ -29,7 +30,7 @@ func TestRecordReplayLandingBindsVerdictAndDeduplicates(t *testing.T) {
 			return err
 		}
 		again, err := record("tip")
-		if err != nil || again.LandingID != first.LandingID || again.TrunkAfter != "repair" || again.ReplayTip != "tip" {
+		if err != nil || again.LandingID != first.LandingID || again.HeadSHA != "worker-head" || again.TrunkAfter != "repair" || again.ReplayTip != "tip" {
 			t.Errorf("retry = %+v, %v; first = %+v", again, err, first)
 		}
 		if _, err := record("other-tip"); err == nil {

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"os/exec"
+	"strings"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -166,4 +167,71 @@ func writeHistoryRow(tx *store.Tx, h *trunkHistory) error {
 		return Internalf("writing trunk history: %v", err)
 	}
 	return nil
+}
+
+// IdentityRewrite compares the full ordered parent graph. Only author and committer
+// headers may differ: trees, messages, other headers and parent order must survive.
+// The returned mapping also carries proof pointers onto their unchanged trees.
+func (t *Trunk) IdentityRewrite(old, current string) (map[string]string, bool, error) {
+	mapped := map[string]string{}
+	reverse := map[string]string{}
+	var compare func(string, string) (bool, error)
+	compare = func(a, b string) (bool, error) {
+		if prior, ok := mapped[a]; ok {
+			return prior == b, nil
+		}
+		if prior, ok := reverse[b]; ok && prior != a {
+			return false, nil
+		}
+		if a == b {
+			mapped[a], reverse[b] = b, a
+			return true, nil
+		}
+		// A commit retained on both sides cannot also be substituted by an
+		// identity twin elsewhere. That would collapse or reorder the graph.
+		for _, pair := range [][2]string{{a, current}, {b, old}} {
+			shared, err := t.historyAncestor(pair[0], pair[1])
+			if err != nil || shared {
+				return false, err
+			}
+		}
+		x, err := t.git("cat-file", "commit", a)
+		if err != nil {
+			return false, err
+		}
+		y, err := t.git("cat-file", "commit", b)
+		if err != nil {
+			return false, err
+		}
+		strip := func(raw string) (string, []string) {
+			header, msg, _ := strings.Cut(raw, "\n\n")
+			var keep, parents []string
+			for _, line := range strings.Split(header, "\n") {
+				switch {
+				case strings.HasPrefix(line, "author "), strings.HasPrefix(line, "committer "):
+				case strings.HasPrefix(line, "parent "):
+					parents = append(parents, strings.TrimPrefix(line, "parent "))
+				default:
+					keep = append(keep, line)
+				}
+			}
+			return strings.Join(keep, "\n") + "\n\n" + msg, parents
+		}
+		xx, ap := strip(x)
+		yy, bp := strip(y)
+		if xx != yy || len(ap) != len(bp) {
+			return false, nil
+		}
+		mapped[a] = b
+		reverse[b] = a
+		for i := range ap {
+			ok, err := compare(ap[i], bp[i])
+			if err != nil || !ok {
+				return ok, err
+			}
+		}
+		return true, nil
+	}
+	ok, err := compare(old, current)
+	return mapped, ok, err
 }

@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS landing_attempts (
 // repository, so a fixture that seeded one would be describing a trunk move that never
 // happened. A store a reader inspects is written by a real landing or not at all.
 func init() {
-	if err := store.RegisterDDL("land", LandDDL+identityDDL); err != nil {
+	if err := store.RegisterDDL("land", LandDDL); err != nil {
 		panic(err)
 	}
 	if err := event.Register(LandingKind, "land"); err != nil {

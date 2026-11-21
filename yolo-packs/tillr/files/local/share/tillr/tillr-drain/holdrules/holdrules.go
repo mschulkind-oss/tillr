@@ -101,7 +101,6 @@ var Rules = map[string]Rule{
 	"no-fence":                     {"needs you", "queue", "the owner"},
 	"run-live":                     {"waits on work", "lane", "the run from the earlier loop to finish; `tillr drain stop --end-runs` ends it"},
 	"prose-criteria-count":         {"needs you", "queue", "the owner; reconcile the original criteria"},
-	"trunk-foreign-identity":       {"needs you", "trunk", "re-author the commit, or record its id with tillr-drain accept-identity"},
 	"awaits-rewrite":               {"waits on work", "queue", "the prose rewrite to land"},
 	"fork-held":                    {"waits on work", "queue", "the fork lane landing the shared patch branch; the next pass"},
 	"failover":                     {"ready", "queue", "the next pass"},
@@ -181,7 +180,7 @@ func For(reason string) Rule {
 	if rule, ok := Rules[reason]; ok {
 		return rule
 	}
-	for _, prefix := range []string{"trunk-foreign-identity: ", "trunk-rewritten: ", "red-cap: ", "trunk-path-dirty: ", "inputs-changed: ", "seat-degraded: seat ", "staging-failed: "} {
+	for _, prefix := range []string{"trunk-rewritten: ", "red-cap: ", "trunk-path-dirty: ", "inputs-changed: ", "seat-degraded: seat ", "staging-failed: "} {
 		if strings.HasPrefix(reason, prefix) {
 			return Rules[baseOf(prefix)]
 		}
