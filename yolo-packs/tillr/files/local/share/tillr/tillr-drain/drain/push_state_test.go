@@ -63,7 +63,7 @@ func TestPushAdvancesPublishedRefAndConfirmsOnAlreadyPublished(t *testing.T) {
 	}
 	checkPublished(p.local[2])
 
-	// Tracking is ahead of green. Confirm the tracked tip, not the older green.
+	// The remote is ahead of green. Confirm the fetched tip, not the older green.
 	runGit(t, root, "update-ref", pubRef, p.local[0])
 	if green, err := pushGreen(ctx, root, settings.Push{}); !errors.Is(err, errAlreadyPublished) || green != p.local[1] {
 		t.Fatalf("pushGreen = (%s, %v), want (%s, errAlreadyPublished)", green, err, p.local[1])
@@ -77,8 +77,101 @@ func TestPushAdvancesPublishedRefAndConfirmsOnAlreadyPublished(t *testing.T) {
 		t.Fatalf("pushGreen = (%s, %v), want (%s, nil)", green, err, next)
 	}
 	checkPublished(next)
-	if _, err := os.Stat(filepath.Join(root, ".git", "FETCH_HEAD")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("expected no fetch, stat FETCH_HEAD: %v", err)
+	if got := runGit(t, root, "rev-parse", "FETCH_HEAD"); got != p.local[2] {
+		t.Errorf("preflight fetched %s, want %s", got, p.local[2])
+	}
+}
+
+func TestPushStopsOnStraightBackwardRemoteRewrite(t *testing.T) {
+	for _, tc := range []struct {
+		name, what string
+		pointer    bool
+	}{
+		{"published/tip", settings.PushTip, true},
+		{"tracking-only/tip", settings.PushTip, false},
+		{"tracking-only/green-at-old-tip", settings.PushGreen, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newPushFixture(t)
+			ctx := context.Background()
+			root := p.f.root
+			ref := "refs/heads/" + TrunkRef
+			if err := pushTrunk(ctx, root, settings.Push{}); err != nil {
+				t.Fatal(err)
+			}
+			published, rewound := p.local[2], p.local[1]
+			if !tc.pointer {
+				runGit(t, root, "update-ref", "-d", publishedRef("origin", ref))
+			}
+			runGit(t, p.remote, "update-ref", ref, rewound, published)
+			tip := ownerCommit(t, root, "unpublished.txt")
+			runGit(t, root, "update-ref", GreenRef, published)
+			p.l.cfg.PostLanding.Push.What = tc.what
+			marker := filepath.Join(root, ".git", "push-attempted")
+			hook := filepath.Join(root, ".git", "hooks", "pre-push")
+			if err := os.WriteFile(hook, []byte("#!/bin/sh\ntouch .git/push-attempted\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			before := runGit(t, root, "show-ref")
+			remoteBefore := runGit(t, p.remote, "show-ref")
+			// The next attempt must still use the same baseline, even without a pointer.
+			for attempt := 0; attempt < 2; attempt++ {
+				if tc.what == settings.PushGreen {
+					green, err := pushGreen(ctx, root, settings.Push{})
+					p.l.recordPush(ctx, tc.what, green, err)
+				} else {
+					p.l.recordPush(ctx, tc.what, tip, pushTrunk(ctx, root, settings.Push{}))
+				}
+				ev := lastPushEvent(t, p.f)
+				if ev["kind"] != "remote-rewritten" || ev["escalated_mover"] != "operator" || ev["remote_tip"] != rewound || ev["previous_remote_tip"] != published {
+					t.Errorf("push event = %+v; want remote-rewritten from %s to %s naming the operator", ev, published, rewound)
+				}
+			}
+			if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("push attempted (marker stat: %v)", err)
+			}
+			if runGit(t, root, "show-ref") != before || runGit(t, p.remote, "show-ref") != remoteBefore {
+				t.Error("a ref moved despite the remote rewrite")
+			}
+		})
+	}
+}
+
+func TestRefusedPushStopsOnRemoteForcePush(t *testing.T) {
+	for _, baseline := range []string{"published", "tracking-only"} {
+		t.Run(baseline, func(t *testing.T) {
+			p := newPushFixture(t)
+			ctx := context.Background()
+			root := p.f.root
+			ref := "refs/heads/" + TrunkRef
+			if err := pushTrunk(ctx, root, settings.Push{}); err != nil {
+				t.Fatal(err)
+			}
+			if baseline == "tracking-only" {
+				runGit(t, root, "update-ref", "-d", publishedRef("origin", ref))
+			}
+			published := p.local[2]
+			runGit(t, p.remote, "update-ref", ref, published+"^", published)
+			runGit(t, p.other, "pull", "--ff-only", "-q")
+			rewritten := p.remoteCommit(t, "replacement.txt", "replacement\n")
+			tip := ownerCommit(t, root, "unpublished.txt")
+			// Bypass preflight to simulate a rewrite between the guard fetch and push.
+			refusal := pushCommand(ctx, root, "--", "origin", tip+":"+ref)
+			var refused *refusedPushError
+			if !errors.As(refusal, &refused) {
+				t.Fatalf("push = %v, want a refusal", refusal)
+			}
+			before := runGit(t, root, "show-ref")
+			_, err := p.l.healRefusedPush(ctx, settings.Push{}, refusal)
+			p.l.recordPush(ctx, settings.PushTip, tip, err)
+			ev := lastPushEvent(t, p.f)
+			if ev["kind"] != "remote-rewritten" || ev["escalated_mover"] != "operator" || ev["remote_tip"] != rewritten || ev["previous_remote_tip"] != published {
+				t.Errorf("push event = %+v; want remote-rewritten from %s to %s naming the operator", ev, published, rewritten)
+			}
+			if runGit(t, root, "show-ref") != before || runGit(t, p.remote, "rev-parse", ref) != rewritten {
+				t.Error("a ref moved during refused-push healing")
+			}
+		})
 	}
 }
 
@@ -91,7 +184,7 @@ func pushTestHook(t *testing.T, dir, name, message string) string {
 	return hook
 }
 
-func TestAfterLandingRemoteDeclinedDoesNotFetchOrRebase(t *testing.T) {
+func TestAfterLandingRemoteDeclinedDoesNotReplay(t *testing.T) {
 	p := newPushFixture(t)
 	p.l.cfg.PostLanding.Push.What = settings.PushTip
 	root := p.f.root
@@ -112,8 +205,8 @@ func TestAfterLandingRemoteDeclinedDoesNotFetchOrRebase(t *testing.T) {
 	if got := runGit(t, p.remote, "rev-parse", "refs/heads/"+TrunkRef); got != remoteBefore {
 		t.Errorf("remote tip moved to %s", got)
 	}
-	if _, err := os.Stat(filepath.Join(root, ".git", "FETCH_HEAD")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("expected no fetch, stat FETCH_HEAD: %v", err)
+	if got := runGit(t, root, "rev-parse", "FETCH_HEAD"); got != remoteBefore {
+		t.Errorf("preflight fetched %s, want %s", got, remoteBefore)
 	}
 }
 

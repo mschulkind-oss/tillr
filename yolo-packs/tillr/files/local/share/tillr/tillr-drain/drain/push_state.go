@@ -22,13 +22,15 @@ const (
 	pushKindRemoteDeclined = "push-remote-declined"
 	pushKindPatchMoveHeld  = "push-patch-move-held"
 	pushKindFailed         = "push-failed"
+	pushKindRewritten      = "remote-rewritten"
 )
 
 // pushStateError records what the push reported without changing its detail for older readers.
 type pushStateError struct {
-	kind, detail string
-	noRefLine    bool
-	escalated    string
+	kind, detail           string
+	remoteTip, previousTip string
+	noRefLine              bool
+	escalated              string
 }
 
 func (e *pushStateError) Error() string { return e.detail }
@@ -103,6 +105,59 @@ func confirmPublished(ctx context.Context, root, remote, ref, sha string) error 
 	return advancePublished(ctx, root, remote, ref, sha)
 }
 
+// priorPublished uses the tracking ref until this clone has a published pointer.
+func priorPublished(ctx context.Context, root, remote, ref string) string {
+	if sha := optionalCommit(ctx, root, publishedRef(remote, ref)); sha != "" {
+		return sha
+	}
+	return optionalCommit(ctx, root, "refs/remotes/"+remote+"/"+strings.TrimPrefix(ref, "refs/heads/"))
+}
+
+func guardPublished(ctx context.Context, root, remote, ref string) (string, error) {
+	prev := priorPublished(ctx, root, remote, ref)
+	if prev == "" {
+		return "", nil
+	}
+	tip, err := fetchPushDestination(ctx, root, remote, ref)
+	if err != nil {
+		return "", err
+	}
+	if err := checkPublishedAncestry(ctx, root, remote, ref, prev, tip); err != nil {
+		return "", err
+	}
+	return tip, nil
+}
+
+func fetchPushDestination(ctx context.Context, root, remote, ref string) (string, error) {
+	// Fetch only into FETCH_HEAD: a rejected observation must not replace the
+	// tracking fallback or change any other ref.
+	if _, err := rawGit(ctx, root, nil, "fetch", "--refmap=", "--no-tags", "--no-prune", "--no-recurse-submodules", "--", remote, ref); err != nil {
+		return "", &pushStateError{kind: pushKindFailed, detail: fmt.Sprintf("fetching %s %s failed: %v", remote, ref, err)}
+	}
+	out, err := rawGit(ctx, root, nil, "rev-parse", "--verify", "FETCH_HEAD^{commit}")
+	if err != nil {
+		return "", &pushStateError{kind: pushKindFailed, detail: err.Error()}
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func checkPublishedAncestry(ctx context.Context, root, remote, ref, prev, tip string) error {
+	if prev == "" {
+		return nil
+	}
+	forward, err := trunkAncestor(ctx, root, prev, tip)
+	if err != nil {
+		return &pushStateError{kind: pushKindFailed, detail: err.Error()}
+	}
+	if forward {
+		return nil
+	}
+	branch := strings.TrimPrefix(ref, "refs/heads/")
+	return &pushStateError{kind: pushKindRewritten, remoteTip: tip, previousTip: prev, escalated: "operator",
+		detail: fmt.Sprintf("remote-rewritten: %s/%s was force-pushed (%s -> %s); autopush stopped so the commits it dropped are not published again.\nmover: operator; reconcile force-pushed %s/%s (%s -> %s). Nothing was changed",
+			remote, branch, shortSHA(prev), shortSHA(tip), remote, branch, shortSHA(prev), shortSHA(tip))}
+}
+
 // pushCounts counts what the known remote tip lacks, or returns -1 for an unknown count.
 func pushCounts(ctx context.Context, root, remoteTip string) (green, main int) {
 	count := func(ref string) int {
@@ -130,10 +185,10 @@ func (l *Loop) recordPushState(ctx context.Context, what, tip, kind string, stat
 	root := l.cfg.Root
 	if remote, ref, err := pushDestination(ctx, root, l.cfg.PostLanding.Push); err == nil {
 		payload["remote"], payload["ref"] = remote, ref
-		remoteTip := optionalCommit(ctx, root, publishedRef(remote, ref))
-		if remoteTip == "" {
-			tracking := "refs/remotes/" + remote + "/" + strings.TrimPrefix(ref, "refs/heads/")
-			remoteTip = optionalCommit(ctx, root, tracking)
+		remoteTip := priorPublished(ctx, root, remote, ref)
+		if state != nil && state.remoteTip != "" {
+			remoteTip = state.remoteTip
+			payload["previous_remote_tip"] = state.previousTip
 		}
 		if remoteTip != "" {
 			payload["remote_tip"] = remoteTip
