@@ -139,15 +139,34 @@ func (l *Loop) healRefusedPushResult(ctx context.Context, p settings.Push, refus
 			return fail("commit %s is a merge or a root commit", shortSHA(f[0]))
 		}
 		c, parent := f[0], f[1]
-		mt := exec.CommandContext(ctx, "git", "-C", root, "merge-tree", "--write-tree", "--merge-base="+parent, cur, c)
+		args := []string{"-C", root, "merge-tree", "--write-tree", "--merge-base=" + parent}
+		// Only continue an interrupted repair here; first-conflict filing is separate.
+		replay := l.recoveredRemoteSync
+		continuing := replay != nil && remote == replay.Stage.Remote && ref == replay.Stage.Ref && remoteTip != replay.Stage.RemoteTip
+		if continuing {
+			args = append(args, "--name-only", "-z")
+		}
+		mt := exec.CommandContext(ctx, "git", append(args, cur, c)...)
 		mt.Env = boundaryGitEnv()
 		var mtErr bytes.Buffer
 		mt.Stderr = &mtErr
 		tree, err := mt.Output()
 		if err != nil {
+			if paths, detail := parseMergeTreeConflict(string(tree)); continuing && len(paths) > 0 {
+				remoteMsgs, commitMsg, summary := l.collectRemoteSyncContext(ctx, res.base, remoteTip, c)
+				st := remoteSyncState{ItemID: RemoteSyncItemID(remoteTip), Remote: remote, Ref: ref, RemoteTip: remoteTip,
+					MergeBase: res.base, BaseSHA: cur, ConflictCommit: c, ConflictParent: parent,
+					ConflictPaths: paths, ConflictOutput: detail, RemoteMessages: remoteMsgs, CommitMessage: commitMsg,
+					LandingSummary: summary, OldTrunk: tip, ReplayedPairs: known.Pairs, ReplayedOrder: known.Order}
+				conflict, err := l.fileOrUpdateRemoteSyncItemLocked(ctx, st, "")
+				if err != nil {
+					return fail("filing %s: %v", st.ItemID, err)
+				}
+				return res, conflict
+			}
 			return fail("replaying %s conflicts or failed: %s %s", shortSHA(c), strings.Join(strings.Fields(string(tree)), " "), strings.TrimSpace(mtErr.String()))
 		}
-		treeID, _, _ := strings.Cut(string(tree), "\n")
+		treeID := strings.TrimRight(string(tree), "\n\x00")
 		known.Order = append(known.Order, c)
 		curTree, err := rawGit(ctx, root, nil, "rev-parse", cur+"^{tree}")
 		if err != nil {

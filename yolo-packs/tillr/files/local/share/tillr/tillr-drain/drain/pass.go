@@ -2624,6 +2624,11 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	if err := l.refreshPolicy(); err != nil {
 		return "", err
 	}
+	if replay, err := l.recoverRemoteSyncReplay(ctx); err != nil {
+		return "", err
+	} else if replay != nil {
+		l.afterRemoteSyncReplay(ctx, replay, result)
+	}
 	if _, err := l.observeTrunk(ctx, ""); err != nil {
 		return "", err
 	}

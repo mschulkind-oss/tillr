@@ -119,6 +119,9 @@ func (l *Loop) closeRemoteSyncItem(ctx context.Context, st remoteSyncState) erro
 		return err
 	}
 	defer release()
+	if intent, err := l.readRemoteSyncReplay(ctx); err != nil || (intent != nil && intent.Candidate.ItemID == st.ItemID) {
+		return err
+	}
 	// Recheck ancestry under the same lock used by replay and filing.
 	reached, err := trunkAncestor(ctx, l.cfg.Root, st.RemoteTip, "refs/heads/"+TrunkRef)
 	if err != nil || !reached {

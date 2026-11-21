@@ -217,6 +217,13 @@ func TestRemoteSyncLandingRejectsVerdictForDifferentTree(t *testing.T) {
 }
 
 func TestRemoteSyncLandingSettlesRealItemEvidence(t *testing.T) {
+	for _, phase := range []string{"uninterrupted", "interrupted", "newer-conflict"} {
+		t.Run(phase, func(t *testing.T) { testRemoteSyncLandingEvidence(t, phase) })
+	}
+}
+
+func testRemoteSyncLandingEvidence(t *testing.T, phase string) {
+	ctx := context.Background()
 	p, st, c := stagedReplay(t)
 	bin := filepath.Join(t.TempDir(), "tillr-item")
 	declareSiblingInputs(t)
@@ -230,23 +237,111 @@ func TestRemoteSyncLandingSettlesRealItemEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.l.cfg.Steps = &ProcessSteps{Root: p.f.root, Store: p.f.storePath, Now: p.l.cfg.Now, ItemBin: bin, VerdictProgram: "python3 " + adapter + " verdict --tillr-item " + bin}
-	tip := landStagedReplay(t, p, c)
+	var tip string
+	if phase == "uninterrupted" {
+		tip = landStagedReplay(t, p, c)
+	} else {
+		fixtureWrite(t, p.f, func(tx *store.Tx) error {
+			_, err := tx.Exec(`CREATE TRIGGER stop_sync BEFORE INSERT ON landings BEGIN SELECT RAISE(ABORT, 'interrupted replay'); END`)
+			return err
+		})
+		var result LoopResult
+		if _, ok, err := p.l.landRemoteSync(ctx, c, &result); ok || err == nil || !strings.Contains(err.Error(), "interrupted replay") {
+			t.Fatalf("interrupted landing = %v, %v", ok, err)
+		}
+		tip = runGit(t, p.f.root, "rev-parse", TrunkRef)
+		fixtureRead(t, p.f, func(r *store.Reader) error {
+			got, err := heavy.RewriteResolve(r, st.ConflictCommit)
+			if err != nil || got != c.HeadSHA {
+				t.Fatalf("interrupted replay did not record the rewrite: %s, %v", got, err)
+			}
+			return nil
+		})
+		fixtureWrite(t, p.f, func(tx *store.Tx) error { _, err := tx.Exec(`DROP TRIGGER stop_sync`); return err })
+		var newerID string
+		if phase == "newer-conflict" {
+			remote := p.remoteCommit(t, "two.txt", "newer remote edit\n")
+			newerID = RemoteSyncItemID(remote)
+			writeForkFile(t, filepath.Join(p.f.root, ".tillr.toml"), "[push]\nwhat = \"tip\"\n")
+			if out, err := PushOnce(ctx, p.f.root, p.l.cfg.Store); err == nil || out.Kind != pushKindConflict || !strings.Contains(out.Detail, newerID) {
+				t.Fatalf("manual push did not file the newer conflict: %+v, %v", out, err)
+			}
+			if got := itemStateOf(t, p.f.storePath, st.ItemID); got != StateLanded {
+				t.Fatalf("manual push left the interrupted repair %s", got)
+			}
+		}
+		restarted := &Loop{cfg: p.l.cfg}
+		if _, err := restarted.passMode(ctx, &result, true); err != nil {
+			t.Fatal(err)
+		}
+		if got := runGit(t, p.f.root, "rev-parse", TrunkRef); got != tip {
+			t.Fatalf("recovery moved main to %s, want %s", got, tip)
+		}
+		if newerID == "" && result.Landed != 1 || newerID != "" && result.Landed != 0 {
+			t.Fatalf("next pass counted %d landings after %s", result.Landed, phase)
+		}
+		if newerID != "" {
+			if state := itemStateOf(t, p.f.storePath, newerID); state != StateInQueue {
+				t.Fatalf("newer repair is %s, want queued", state)
+			}
+			if ev := lastPushEvent(t, p.f); ev["kind"] != pushKindConflict || !strings.Contains(ev["detail"].(string), newerID) {
+				t.Fatalf("next pass hid the newer conflict: %+v", ev)
+			}
+		}
+	}
 	if got := itemStateOf(t, p.f.storePath, st.ItemID); got != StateLanded {
 		t.Fatalf("item state = %s, want landed", got)
 	}
 	if pin := optionalCommit(context.Background(), p.f.root, remoteSyncPinRef(st.ItemID)); pin != "" {
 		t.Fatalf("completed repair kept staging pin %s", pin)
 	}
+	if replay, err := p.l.readRemoteSyncReplay(ctx); err != nil || replay != nil {
+		t.Fatalf("settled repair kept its intent: %+v, %v", replay, err)
+	}
 	fixtureRead(t, p.f, func(r *store.Reader) error {
-		var head, attributed, tree, landedTree, verdict, replayTip string
-		if err := r.QueryRow(`SELECT head_sha,trunk_after,gated_tree,landed_tree,verdict_id,json_extract(e.payload,'$.replay_tip') FROM landings l JOIN events e ON e.seq=l.event_seq WHERE l.item_id=? AND l.run_id=? AND l.result='landed' AND e.kind='land.landing'`, st.ItemID, c.RunID).Scan(&head, &attributed, &tree, &landedTree, &verdict, &replayTip); err != nil {
+		var state, head, attributed, tree, landedTree, verdict, replayTip string
+		var receipts int
+		if err := r.QueryRow(`SELECT state FROM item_criteria WHERE item_id=? AND criterion_id=?`, st.ItemID, RemoteSyncCriterion).Scan(&state); err != nil {
 			return err
+		}
+		if state != "done" {
+			t.Errorf("repair criterion is %s, want done", state)
+		}
+		if err := r.QueryRow(`SELECT head_sha,trunk_after,gated_tree,landed_tree,verdict_id,json_extract(e.payload,'$.replay_tip'),count(*) OVER () FROM landings l JOIN events e ON e.seq=l.event_seq WHERE l.item_id=? AND l.run_id=? AND l.result='landed' AND e.kind='land.landing'`, st.ItemID, c.RunID).Scan(&head, &attributed, &tree, &landedTree, &verdict, &replayTip, &receipts); err != nil {
+			return err
+		}
+		if receipts != 1 {
+			t.Errorf("repair recorded %d landing receipts, want one", receipts)
 		}
 		if head != c.HeadSHA || attributed != c.HeadSHA || tree != runGit(t, c.Worktree, "rev-parse", "HEAD^{tree}") || landedTree != tree || verdict != "fixture-verdict" || replayTip != tip {
 			t.Errorf("landing evidence = %s %s %s %s %s %s", head, attributed, tree, landedTree, verdict, replayTip)
 		}
 		return nil
 	})
+}
+
+func TestRemoteSyncSupersededStageCannotResetMain(t *testing.T) {
+	p, st, c := stagedReplay(t)
+	ctx := context.Background()
+	remote := p.remoteCommit(t, "two.txt", "newer remote edit\n")
+	runGit(t, p.f.root, "fetch", "-q", "origin")
+	newer := remoteSyncFilingFixture(t, p, remote, remote, st.ConflictCommit)
+	if _, err := p.l.fileOrUpdateRemoteSyncItem(ctx, newer); err != nil {
+		t.Fatal(err)
+	}
+	if got := itemStateOf(t, p.f.storePath, st.ItemID); got != "closed" {
+		t.Fatalf("superseded stage is %s, want closed", got)
+	}
+	before := runGit(t, p.f.root, "rev-parse", TrunkRef)
+	if _, ok, err := p.l.landRemoteSync(ctx, c, &LoopResult{}); ok || asItemTerminal(err) == nil {
+		t.Fatalf("stale candidate landed=%v, err=%v", ok, err)
+	}
+	if got := runGit(t, p.f.root, "rev-parse", TrunkRef); got != before {
+		t.Fatalf("stale candidate reset main from %s to %s", before, got)
+	}
+	if replay, err := p.l.readRemoteSyncReplay(ctx); err != nil || replay != nil {
+		t.Fatalf("stale candidate wrote an intent: %+v, %v", replay, err)
+	}
 }
 
 func TestRemoteSyncLandingPreservesNewerPublication(t *testing.T) {
