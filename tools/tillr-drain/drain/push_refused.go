@@ -186,15 +186,18 @@ func (l *Loop) healRefusedPushResult(ctx context.Context, p settings.Push, refus
 	known.Evidence = "replayed onto " + remote + " " + shortSHA(remoteTip) + " under the landing lock; each replacement was determined by a three-way merge"
 	// Move the trunk, and the checkout with it. `reset --keep` refuses, changing nothing,
 	// when a path the move touches has local changes, and keeps changes elsewhere.
-	head, _ := rawGit(ctx, root, nil, "symbolic-ref", "-q", "HEAD")
-	if strings.TrimSpace(head) != "refs/heads/"+TrunkRef {
-		return fail("the main checkout is not on %s", TrunkRef)
+	dirty := func(detail string) (healResult, error) {
+		return res, &pushStateError{kind: pushKindWorktreeDirty, remoteTip: remoteTip,
+			resetTarget: cur, escalated: "operator", detail: fmt.Sprintf("%v\nmover: operator. %s", refused, detail)}
+	}
+	if !onMain(ctx, root) {
+		return dirty("The main checkout is not on " + TrunkRef + "; check out " + TrunkRef + " to allow replay.")
 	}
 	if got, err := rawGit(ctx, root, nil, "rev-parse", "refs/heads/"+TrunkRef); err != nil || strings.TrimSpace(got) != tip {
 		return fail("the trunk moved while the replay was built")
 	}
 	if _, err := rawGit(ctx, root, nil, "reset", "--keep", "-q", cur); err != nil {
-		return fail("the main checkout is dirty on a path the move changes: %v", err)
+		return dirty(fmt.Sprintf("The main checkout refused the replay reset; commit, stash or restore the clashing changes: %v", err))
 	}
 	res.replayed, res.newTip = len(known.Order), cur
 	release()

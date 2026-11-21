@@ -26,6 +26,7 @@ const (
 	pushKindFailed         = "push-failed"
 	pushKindRewritten      = "remote-rewritten"
 	pushKindProving        = "remote-sync-proving"
+	pushKindWorktreeDirty  = "remote-sync-worktree-dirty"
 )
 
 // pushStateError records what the push reported without changing its detail for older readers.
@@ -33,6 +34,7 @@ type pushStateError struct {
 	kind, detail           string
 	remoteTip, previousTip string
 	rebasedTip             string
+	resetTarget            string
 	noRefLine              bool
 	escalated              string
 }
@@ -392,6 +394,9 @@ func (l *Loop) recordPushState(ctx context.Context, what, tip, kind string, stat
 	}
 	if state != nil {
 		out.Mover = state.escalated
+		if state.resetTarget != "" {
+			payload["reset_target"] = state.resetTarget
+		}
 		if state.rebasedTip != "" {
 			payload["rebased_tip"] = state.rebasedTip
 			if kind == pushKindProving {
@@ -423,8 +428,9 @@ func (l *Loop) recordPushState(ctx context.Context, what, tip, kind string, stat
 }
 
 type pushRecord struct {
-	Kind  string `json:"kind"`
-	Since string `json:"since_ts"`
+	Kind        string `json:"kind"`
+	Since       string `json:"since_ts"`
+	ResetTarget string `json:"reset_target"`
 }
 
 func (l *Loop) lastPushRecord(ctx context.Context) pushRecord {

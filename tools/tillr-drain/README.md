@@ -1143,10 +1143,14 @@ contained in `refs/tillr/green`, the drain neither publishes the older green com
 records `push-ok` for it. A failed retry records its failure; an already-published retry
 records that outcome in the hold's detail. Neither clears the hold. After proof reaches
 the rebased tip, the next green push can publish and record `push-ok`. In tip mode the
-push runs again at once. A conflict, a merge commit among the unpublished commits, a
-checkout off the trunk or a dirty path fails the push with `mover: operator` and the
-commands to run by hand. Not built: the
-design's conflict-repair run and escalation ([the design](../../docs/design/tillr-refused-push.md)).
+push runs again at once. A checkout off `main` or a refused replay reset records
+`remote-sync-worktree-dirty` and names the operator as mover. The loop retries once
+`main` is checked out and the reset no longer clashes, or once a `push-patch-move-held`
+hold clears, and only if commits remain unpublished in the configured push mode.
+Unrelated edits do not have to be removed. A replay conflict or a merge commit among
+the unpublished commits fails the push with `mover: operator` and commands to run by
+hand. The [design's conflict-repair run and escalation](../../docs/design/tillr-refused-push.md)
+are not built yet.
 Before a due push and again after a refusal, the drain checks that the fetched remote tip
 contains `refs/tillr/published/<remote>/<branch>` (or the remote-tracking tip if there is no
 published pointer yet). Without either ref, a due push skips the guard fetch. A rewind or
