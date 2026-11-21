@@ -257,7 +257,8 @@ func (l *Loop) validateLandingOffer(ctx context.Context, d Decision, rec run.Rec
 		if obs.Problem != "" {
 			return landingCall{}, Externalf("obstacle call for %s is incomplete: %s", rec.RunID, obs.Problem)
 		}
-	} else if offer.Commit != head || offer.Base != base || head == base || head == settledBase || (d.Workflow != nil && d.NodeBaseSHA != "" && head == d.NodeBaseSHA) {
+	} else if offer.Commit != head || offer.Base != base || head == base || head == settledBase ||
+		(d.Workflow != nil && d.NodeBaseSHA != "" && head == d.NodeBaseSHA && !(base == settledBase && restartWriter(d))) {
 		return landingCall{}, Externalf("landing offer for %s does not name a call, summary and its staged base and new HEAD", rec.RunID)
 	}
 	artifactDir := laneDir

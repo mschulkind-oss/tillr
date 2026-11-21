@@ -268,6 +268,9 @@ type StageSpec struct {
 	// ReturnedNodeBaseSHA keeps the producing node's boundary when its judge returns
 	// a retained candidate for another look, without requiring a new commit.
 	ReturnedNodeBaseSHA string
+	// resumeCommitted keeps the checkout at its committed head but stages
+	// the whole item boundary for the restarted writer's offer.
+	resumeCommitted bool
 	// VerifyReturnHead and VerifyReturnItemBase stage the build step a failed verify
 	// returns to: the lane (or fork checkout) is cut at the commit the verifier read
 	// instead of the trunk, and the item's own base stays the fence base.
@@ -443,7 +446,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	itemAllowed := append([]string(nil), recorded.AllowedPaths...)
 	if spec.Node != nil {
 		if spec.Continue {
-			if spec.ItemBaseSHA != "" && !isFork {
+			if spec.ItemBaseSHA != "" && (!isFork || spec.resumeCommitted) {
 				itemBaseSHA = spec.ItemBaseSHA
 			} else {
 				baseDir := laneDir
@@ -472,13 +475,16 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 					itemBaseSHA = strings.TrimSpace(string(raw))
 				}
 			}
-			head, err := s.git(ctx, target, "rev-parse", "HEAD")
-			if err != nil {
-				return err
-			}
-			baseSHA = strings.TrimSpace(head)
-			if spec.ReturnedNodeBaseSHA != "" {
+			if spec.resumeCommitted {
+				baseSHA = itemBaseSHA
+			} else if spec.ReturnedNodeBaseSHA != "" {
 				baseSHA = spec.ReturnedNodeBaseSHA
+			} else {
+				head, err := s.git(ctx, target, "rev-parse", "HEAD")
+				if err != nil {
+					return err
+				}
+				baseSHA = strings.TrimSpace(head)
 			}
 		}
 		scope, err := spec.Node.scopePaths(itemAllowed)

@@ -1543,13 +1543,31 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 					if nodeBase == "" {
 						nodeBase = l.laneBase(decision.LaneID)
 					}
+					if previous != "" && restartWriter(decision) {
+						itemBase, scopeBase, err := l.committedRestartBases(ctx, decision.LaneID, nodeBase)
+						if err != nil {
+							if holdErr := failStage("inspect restart lane", err); holdErr != nil {
+								return nil, holdErr
+							}
+							continue
+						}
+						if itemBase != "" {
+							spec.resumeCommitted = true
+							spec.ItemBaseSHA = itemBase
+							nodeBase, decision.NodeBaseSHA = scopeBase, scopeBase
+						}
+					}
 					if err := l.preserveWorkFromBase(ctx, decision.LaneID, previous, nodeBase, "orphaned workflow restarted"); err != nil {
 						if holdErr := failStage("preserve workflow lane", err); holdErr != nil {
 							return nil, holdErr
 						}
 						continue
 					}
-					if _, err := l.git(ctx, target, "reset", "--hard", nodeBase); err != nil {
+					resetTo := nodeBase
+					if spec.resumeCommitted {
+						resetTo = "HEAD"
+					}
+					if _, err := l.git(ctx, target, "reset", "--hard", resetTo); err != nil {
 						if holdErr := failStage("reset workflow lane", err); holdErr != nil {
 							return nil, holdErr
 						}
@@ -1652,7 +1670,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 			delete(l.infraLines, request.ItemID+"\x00"+decision.LaneID)
 			if decision.Workflow != nil {
-				if decision.NodeBaseSHA == "" || (decision.NodeIndex == 0 && !request.SessionTurn) || revertedSession {
+				if decision.NodeBaseSHA == "" || (decision.NodeIndex == 0 && !request.SessionTurn && !spec.resumeCommitted) || revertedSession {
 					decision.NodeBaseSHA = l.laneBase(decision.LaneID)
 				}
 				decision.NodeBaseSHA = l.baseInCheckout(ctx, decision.LaneID, decision.NodeBaseSHA)
@@ -2241,7 +2259,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			if err := l.reportedBlock(ctx, decision, log); err != nil {
 				return laneOutcome{err: err}
 			}
-			return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "reported RESULT: blocked")}
+			return laneOutcome{stop: l.abandonFromBase(ctx, lane, request.RunID, l.headOf(ctx, lane), l.settleBase(lane, mainSHA), "reported RESULT: blocked")}
 		}
 		// The report remains pinned evidence, but the loop-authored document is now
 		// a design candidate, not the no-commit objection the report described.
@@ -3369,6 +3387,12 @@ func insideFence(path string, fence []string) bool {
 // a refused, conflicted or unjudged head is evidence, and a lane reset is what would make it
 // unreachable.
 func (l *Loop) abandon(ctx context.Context, lane, runID, headSHA string, reasons ...string) string {
+	return l.abandonFromBase(ctx, lane, runID, headSHA, "", reasons...)
+}
+
+// A hold supplies the whole-item base so clean committed work is recorded against
+// the item under a preserved ref before the lane is returned to rotation.
+func (l *Loop) abandonFromBase(ctx context.Context, lane, runID, headSHA, base string, reasons ...string) string {
 	if l.nonLanding {
 		// Plain lane files stay available for inspection; there is no Git tree to preserve or reset.
 		return ""
@@ -3377,7 +3401,7 @@ func (l *Loop) abandon(ctx context.Context, lane, runID, headSHA string, reasons
 	if len(reasons) > 0 {
 		reason = reasons[0]
 	}
-	if err := l.preserveWork(ctx, lane, runID, reason); err != nil {
+	if err := l.preserveWorkFromBase(ctx, lane, runID, base, reason); err != nil {
 		return l.retainUnpreserved(ctx, lane, runID, headSHA, err)
 	}
 	if headSHA != "" {
