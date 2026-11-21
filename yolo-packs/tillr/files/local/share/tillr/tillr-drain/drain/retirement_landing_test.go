@@ -33,7 +33,7 @@ func TestLoopRetiredBlockLandsUnderTheWorkerMessage(t *testing.T) {
 	runGit(t, repo, "add", ".")
 	runGit(t, repo, "commit", "-m", "feat: worker's own message")
 	worker := runGit(t, repo, "rev-parse", "HEAD")
-	candidate, err := loop.retireDocumentBlock(context.Background(), Candidate{ItemID: "item-a", RunID: "run-retired", Worktree: repo, BaseSHA: base, HeadSHA: worker})
+	candidate, err := loop.prepareCandidate(context.Background(), Candidate{ItemID: "item-a", RunID: "run-retired", Worktree: repo, BaseSHA: base, HeadSHA: worker}, true)
 	if err != nil {
 		t.Fatal(err)
 	}

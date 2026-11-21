@@ -224,7 +224,7 @@ type Candidate struct {
 	ObservedTrunk string `json:"observed_trunk,omitempty"`
 	BaseSHA       string `json:"base_sha"`
 	HeadSHA       string `json:"head_sha"`
-	// WorkerHeadSHA and RetirementTreeSHA bind loop-owned document maintenance to the
+	// WorkerHeadSHA and RetirementTreeSHA bind loop-owned maintenance to the
 	// worker commit and the exact staged tree. The intent is persisted before committing,
 	// so a restarted loop can recover HEAD without exempting any worker change from its fence.
 	WorkerHeadSHA     string         `json:"worker_head_sha,omitempty"`
@@ -2725,7 +2725,7 @@ func (l *Loop) Verify(ctx context.Context, candidate Candidate, result *LoopResu
 }
 
 // verify returns the prepared head to internal callers so refusal pins retain the same
-// tree the gate saw, including loop-owned document retirement.
+// tree the gate saw, including loop-owned maintenance.
 func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResult, timing *PassTiming) (string, bool, error) {
 	candidate := *prepared
 	defer func() { *prepared = candidate }()
@@ -2808,7 +2808,7 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		}
 		return "", false, l.candidateFault(ctx, candidate, fmt.Sprintf("cannot resolve candidate base %s for head %s in %s: %v", candidate.BaseSHA, candidate.HeadSHA, candidate.Worktree, err))
 	}
-	// A prepared retirement tree is already bound; do not rebase it on rejudgment.
+	// A prepared maintenance tree is already bound; do not rebase it on rejudgment.
 	if candidate.WorkerHeadSHA == "" {
 		if rebased, err := l.preRebaseFixer(ctx, candidate); err != nil {
 			if conflict := asFixerRebaseConflict(err); conflict != nil {
@@ -2964,14 +2964,12 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			return "", false, err
 		}
 	}
-	// A design answer amends the block for the next worker; only a completed
-	// worker candidate retires it. Recovery checks the original worker above,
-	// not the loop-owned retirement commit.
-	if candidate.BlockConflict == nil && item.ProseRewriteOriginal(candidate.ItemID) == "" {
-		candidate, err = l.retireDocumentBlock(ctx, candidate)
-		if err != nil {
-			return "", false, err
-		}
+	// A design answer amends the block for the next worker, but still gets the
+	// generated mirror before the gate binds a verdict to the prepared tree.
+	retireBlock := candidate.BlockConflict == nil && item.ProseRewriteOriginal(candidate.ItemID) == ""
+	candidate, err = l.prepareCandidate(ctx, candidate, retireBlock)
+	if err != nil {
+		return "", false, err
 	}
 	runnerChange, err := l.runnerProofChange(ctx, candidate)
 	if err != nil {
