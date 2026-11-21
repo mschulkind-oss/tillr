@@ -352,7 +352,7 @@ store.
 | :--- | :--- | :--- |
 | Worker needs a path outside its fence | Operator, after up to 15 minutes | Nobody: there is no fence. The owner retired it on 2026-11-19 and repeated that on 2026-11-21 ([OQ-UD4](#OQ-UD4)). One deny-list protects shared state from every worker, and the judge checks that the change does what the words ask and nothing more ([the vocabulary design](./tillr-vocabulary.md#51-the-work-and-its-statement)) |
 | Three verifier refusals | Operator | The item's designer step reads them and rewrites the item or splits it |
-| A verdict about the worker's report, not the candidate | A whole new build attempt | The verifier corrects its verdict against the same candidate; the worker has nothing to amend |
+| A refusal about the worker's report, not the candidate | A whole new build attempt | The worker amends the report; the candidate is not rebuilt |
 | Blocker has landed | Operator | The drain (built: `5709b4fc2`) |
 | Blocker was closed and filed again | Operator repoints | The new item records what it replaces, and waiters follow |
 | Worker stopped for a red trunk | Operator | The drain, when the named check is green |
@@ -419,7 +419,7 @@ revisited after the unattended night of [Section 8](#8-what-done-looks-like).
 | N-26 | 7 | structure | A blocker lands; its waiter is ready in the next pass |
 | N-27, N-32 | 4, 5 | structure | A worker ends mid-rebase; the next fork item stages |
 | N-28 | 7 | structure | Filing refuses a fence path under a lane checkout |
-| N-29 | 7 | structure | A finding about the worker's report returns to the verifier, not the builder |
+| N-29 | 7 | structure | A report-only refusal does not start a build step |
 | N-30, N-31 | 3 | structure | A rebase's gate runs only the packages the patches touch, with no credentials |
 | N-33, N-42 | 7 | structure | A worker changes a path its item never listed and is not stopped; a path on the deny-list is refused with the entry named |
 | N-34 | 7 | structure | Three refusals go to the designer step |

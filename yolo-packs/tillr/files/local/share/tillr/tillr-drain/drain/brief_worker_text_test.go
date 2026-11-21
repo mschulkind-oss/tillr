@@ -35,13 +35,9 @@ func TestARenderedBriefIsAddressedToAnUnattendedWorker(t *testing.T) {
 	if len(lines) < 3 || !strings.HasPrefix(lines[2], "You are running unattended: nobody reads or answers your messages") {
 		t.Fatalf("the brief does not open by saying the run is unattended:\n%s", strings.Join(lines[:min(len(lines), 6)], "\n"))
 	}
-	if strings.Contains(rendered, "paste its output in your report") || strings.Contains(rendered, "each verification command with its output") {
-		t.Fatalf("worker brief requests a verification inventory:\n%s", rendered)
-	}
 	shape := rendered[strings.Index(rendered, "## Report shape"):]
 	for _, want := range []string{
 		"The goal of this run is one commit in the target",
-		"Your final message on success is just `RESULT: done`",
 		"The only other ending is an **obstacle**",
 		"`OBSTACLE:`",
 		"are not obstacles, and are work to continue",

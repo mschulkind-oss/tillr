@@ -40,9 +40,9 @@ const MaxRequestCriteria = 8
 // the repository's rules, and never ask for an item block.
 var requestCriteria = []string{
 	"The change does what the request's words ask, within the item's fence, and nothing the words do not ask for is changed.",
-	"The change is verified the way this repository's rules require for its kind: new or changed behavior has a test in the same commit, and each changed Markdown document passes `uvx vantage-check` on that file.",
+	"The change is verified the way this repository's rules require for its kind: new or changed behavior has a test in the same commit, each changed Markdown document passes `uvx vantage-check` on that file, and the report names every verification command run and its result.",
 	"No `<!-- tillr: item … -->` comment is added, edited or relied on: the item finishes with no document block.",
-	"Nothing only the owner can decide is guessed: such a decision is left to the owner, with a question and its options, not settled in the change.",
+	"Nothing only the owner can decide is guessed: such a decision is reported as a question for the owner with its options, not settled in the change.",
 }
 
 // RequestFiling is one request to file. Words are the request's own words, byte for byte.

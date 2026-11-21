@@ -40,6 +40,7 @@ type landingOffer struct {
 	Tool       string                `json:"tool,omitempty"`
 	Commit     string                `json:"commit,omitempty"`
 	Base       string                `json:"base"`
+	Summary    string                `json:"summary,omitempty"`
 	Obstacle   *landingOfferObstacle `json:"obstacle,omitempty"`
 	Transcript string                `json:"transcript,omitempty"`
 }
@@ -52,7 +53,7 @@ func (o landingOffer) toolName() string {
 }
 
 func (o landingOffer) equalOffer(other landingOffer) bool {
-	if o.CallID != other.CallID || o.Tool != other.Tool || o.Commit != other.Commit || o.Base != other.Base || o.Transcript != other.Transcript {
+	if o.CallID != other.CallID || o.Tool != other.Tool || o.Commit != other.Commit || o.Base != other.Base || o.Summary != other.Summary || o.Transcript != other.Transcript {
 		return false
 	}
 	return reflect.DeepEqual(o.Obstacle, other.Obstacle)
@@ -77,6 +78,8 @@ type landingFinding struct {
 	CriterionID string `json:"criterion_id"`
 	Scope       string `json:"scope"`
 }
+
+const reportFindingPrefix = "report-only:"
 
 type landingAnswer struct {
 	CallID   string           `json:"call_id"`
@@ -180,8 +183,8 @@ func (l *Loop) intakeLandingOffer(ctx context.Context, d Decision, rec run.Recor
 		if offer.Obstacle == nil || strings.TrimSpace(offer.Obstacle.Kind) == "" {
 			return landingOfferAbsent, Externalf("obstacle call for %s is missing its obstacle kind", rec.RunID)
 		}
-	} else if offer.Commit == "" {
-		return landingOfferAbsent, Externalf("landing offer for %s is missing its commit", rec.RunID)
+	} else if strings.TrimSpace(offer.Summary) == "" || offer.Commit == "" {
+		return landingOfferAbsent, Externalf("landing offer for %s is missing its call id, summary, commit, or base", rec.RunID)
 	}
 	db, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
@@ -271,7 +274,7 @@ func (l *Loop) validateLandingOffer(ctx context.Context, d Decision, rec run.Rec
 		}
 	} else if offer.Commit != head || offer.Base != base || head == base || head == settledBase ||
 		(d.Workflow != nil && d.NodeBaseSHA != "" && head == d.NodeBaseSHA && !wholeItemWriter) {
-		return landingCall{}, Externalf("landing offer for %s does not name a call, its staged base, and new HEAD", rec.RunID)
+		return landingCall{}, Externalf("landing offer for %s does not name a call, summary and its staged base and new HEAD", rec.RunID)
 	}
 	artifactDir := laneDir
 	if d.RunRequest.ReadOnlyGroup != "" {
@@ -645,8 +648,12 @@ func (l *Loop) answerLandingRefusal(tx *store.Tx, candidate Candidate, refusal r
 				if verdict.Verdict != item.VerdictNotDone {
 					continue
 				}
-				answer.Findings = append(answer.Findings, landingFinding{CriterionID: verdict.CriterionID, Scope: "content"})
-				fmt.Fprintf(&text, "Criterion %s (content): %s\n", verdict.CriterionID, strings.TrimSpace(verdict.Reason))
+				scope, reason := "content", strings.TrimSpace(verdict.Reason)
+				if rest, tagged := strings.CutPrefix(reason, reportFindingPrefix); tagged && strings.TrimSpace(rest) != "" {
+					scope, reason = "report", strings.TrimSpace(rest)
+				}
+				answer.Findings = append(answer.Findings, landingFinding{CriterionID: verdict.CriterionID, Scope: scope})
+				fmt.Fprintf(&text, "Criterion %s (%s): %s\n", verdict.CriterionID, scope, reason)
 				answer.Evidence = append(answer.Evidence, verdict.Evidence...)
 			}
 		}
@@ -754,13 +761,13 @@ func landingAnswerForTurn(answer landingAnswer, runID, dir string) landingAnswer
 }
 
 type landingRefusal struct {
-	Commit string `json:"commit"`
-	Answer string `json:"answer"`
+	Commit     string `json:"commit"`
+	Summary    string `json:"summary"`
+	Answer     string `json:"answer"`
+	ReportOnly bool   `json:"report_only,omitempty"`
 }
 
-// Keep historical report findings in the event log, but never use them to
-// disqualify an offer in a new turn.
-func (a landingAnswer) legacyReportOnly() bool {
+func (a landingAnswer) reportOnly() bool {
 	if a.Kind != "refused" || a.Stage != "judge" || len(a.Findings) == 0 {
 		return false
 	}
@@ -809,8 +816,11 @@ func (l *Loop) landingState(ctx context.Context, itemID, session string) (map[st
 				if err := json.Unmarshal(answerRaw, &answer); err != nil {
 					return err
 				}
-				if (answer.Kind == "refused" || answer.Kind == "reverted") && !answer.legacyReportOnly() {
-					refused = append(refused, landingRefusal{Commit: call.Commit, Answer: answer.Text})
+				if answer.Kind == "refused" || answer.Kind == "reverted" {
+					refused = append(refused, landingRefusal{
+						Commit: call.Commit, Summary: call.Summary, Answer: answer.Text,
+						ReportOnly: call.Summary != "" && answer.reportOnly(),
+					})
 				}
 			}
 		}
@@ -824,17 +834,6 @@ func (l *Loop) stageLandingAnswer(ctx context.Context, d Decision, spec *StageSp
 	state, err := l.landingState(ctx, d.ItemID, spec.SessionID)
 	if err != nil {
 		return err
-	}
-	if retry := d.RetryCandidate; retry != nil && retry.Available {
-		// An authorized retry explicitly reopens this retained candidate.
-		refused := state["refused"].([]landingRefusal)
-		kept := refused[:0]
-		for _, entry := range refused {
-			if entry.Commit != retry.HeadSHA {
-				kept = append(kept, entry)
-			}
-		}
-		state["refused"] = kept
 	}
 	dir := run.DurableDir(l.laneDirPath(d.LaneID), d.RunRequest.RunID)
 	if err := writeLandingArtifact(dir, "landing-state.json", state); err != nil {

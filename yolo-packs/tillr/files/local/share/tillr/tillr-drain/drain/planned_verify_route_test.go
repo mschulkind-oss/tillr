@@ -96,8 +96,8 @@ func (s *plannedVerifySteps) Run(ctx context.Context, req run.Request) (run.Reco
 			for i := len(s.runs) - 1; i >= 0; i-- {
 				r := s.runs[i]
 				if r.NodeID == node {
-					if strings.Contains(string(brief), nodeOutputsDir(s.f.root, r.RunID)) {
-						s.t.Errorf("verify brief exposes the worker's output directory for %s", node)
+					if !strings.Contains(string(brief), nodeOutputsDir(s.f.root, r.RunID)) {
+						s.t.Errorf("missing output directory for %s", node)
 					}
 					break
 				}

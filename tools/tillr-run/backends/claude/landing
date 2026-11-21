@@ -195,15 +195,22 @@ def pre_tool_use(event, durable, base):
         tool_input = event.get("tool_input") or {}
         head = head_of(cwd)
         if name == LAND:
+            summary = tool_input.get("summary")
+            if not isinstance(summary, str) or not summary.strip() or len(summary) > 2000:
+                raise Refusal("Provide a nonempty summary of at most 2,000 characters.")
             if head == base:
                 raise Refusal("There is no commit to offer: HEAD is still the staged base.")
             dirty = dirty_paths(cwd)
             if dirty:
                 raise Refusal("Commit or remove these uncommitted paths:\n" + "\n".join(dirty))
-            refusal = next((e for e in state.get("refused") or [] if e.get("commit") == head and e.get("report_only") is not True), None)
-            if refusal:
-                raise Refusal(f"This commit was already refused. A new commit is required.\n{refusal.get('answer', '')}")
-            record = {"call_id": call_id, "commit": head, "base": base, "transcript": transcript}
+            refusals = [e for e in state.get("refused") or [] if e.get("commit") == head]
+            content = next((e for e in refusals if e.get("report_only") is not True or not isinstance(e.get("summary"), str)), None)
+            if content:
+                raise Refusal(f"This commit was already refused. A new commit is required.\n{content.get('answer', '')}")
+            duplicate = next((e for e in refusals if e.get("summary") == summary), None)
+            if duplicate:
+                raise Refusal(f"This commit was already refused with the same report. Correct the report and offer this commit again.\n{duplicate.get('answer', '')}")
+            record = {"call_id": call_id, "commit": head, "base": base, "summary": summary, "transcript": transcript}
         else:
             parsed = validate_obstacle(tool_input)
             if parsed["kind"] == "seat" and head == base and not dirty_paths(cwd):
@@ -266,10 +273,10 @@ def stop(event, durable, base):
         pass
     with open(mark, "w", encoding="utf-8") as out:
         out.write(fingerprint + "\n")
-    reason = ("You ended without calling `mcp__tillr__land` or `mcp__tillr__obstacle`. Call land "
+    reason = ("You ended without calling `mcp__tillr__land` or `mcp__tillr__obstacle`. Call land with a summary "
               "when your commit is ready, or obstacle when an obstacle holds.")
     if allow_unchanged_piece:
-        reason += " If the piece already holds at its unchanged, clean base, end with RESULT: done instead."
+        reason += " If the piece already holds at its unchanged, clean base, report the verification and end with RESULT: done instead."
     return reason
 
 
@@ -344,8 +351,8 @@ def prepare(durable, base, base_settings, extra_settings_file=""):
 
 def tools():
     return [
-        {"name": "land", "description": "Offer the commit at HEAD for landing, ending this run.",
-         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False}},
+        {"name": "land", "description": "Offer the commit at HEAD for landing, ending this run. Include what changed and which verification ran.",
+         "inputSchema": {"type": "object", "required": ["summary"], "properties": {"summary": {"type": "string", "maxLength": 2000}}, "additionalProperties": False}},
         {"name": "obstacle", "description": "Report an obstacle that prevents finishing this run, ending the run until resolved. Provide kind and that kind's required fields.",
          "inputSchema": {"type": "object", "required": ["kind"], "properties": dict(
              {"kind": {"type": "string", "enum": sorted(OBSTACLE_REQUIRED)}}, **{f: {"type": "string"} for f in OBSTACLE_FIELDS}), "additionalProperties": False}},

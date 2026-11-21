@@ -114,7 +114,7 @@ func (s *LaneStager) stagePlain(ctx context.Context, spec StageSpec, def definit
 		{placeholder: "SETTLED", text: settled},
 		{placeholder: "FACTS", text: facts},
 		{placeholder: "METHOD", text: "The item states no method; the order of work is yours."},
-		{placeholder: "VERIFICATION", text: "None recorded: run targeted checks for the change."},
+		{placeholder: "VERIFICATION", text: "None recorded: report each verification command and its output."},
 	}
 	brief, err := renderBrief(template, recorded.ItemID, values)
 	if err != nil {
