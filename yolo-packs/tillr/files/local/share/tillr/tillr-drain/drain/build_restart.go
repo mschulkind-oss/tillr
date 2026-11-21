@@ -48,7 +48,7 @@ func (l *Loop) migrateBuildRuns(ctx context.Context, result *LoopResult) error {
 		}
 		for _, w := range works {
 			d := w.Decision
-			if w.Done || w.Ready || w.Examining || d.RunRequest == nil {
+			if w.Done || w.Ready || w.Examining || w.Orphaned || d.RunRequest == nil {
 				continue
 			}
 			if len(d.Parallel) > 0 {
@@ -61,55 +61,7 @@ func (l *Loop) migrateBuildRuns(ctx context.Context, result *LoopResult) error {
 				}
 				continue
 			}
-			id := d.RunRequest.RunID
-			if f, ok := facts[id]; !ok || f.Inputs == nil || f.Inputs.TillrBuild == hash {
-				continue
-			}
-			kind, err := adapterPauseKind(ctx, l.cfg.Root, d.RunRequest)
-			if err != nil {
-				return err
-			}
-			if kind != run.PauseAtGap {
-				continue
-			}
-			rec, err := terminalRecord(tx.Reader(), id)
-			if err != nil {
-				return err
-			}
-			if rec != nil {
-				var latest string
-				err := tx.Reader().QueryRow(`SELECT kind FROM events WHERE object_id=? AND kind IN (?,?) ORDER BY seq DESC LIMIT 1`, id, run.ResumeKind, run.FinishKind).Scan(&latest)
-				if err != nil && err != sql.ErrNoRows {
-					return err
-				}
-				if latest != run.ResumeKind {
-					continue
-				}
-			}
-			var leased int
-			if err := tx.Reader().QueryRow(`SELECT count(*) FROM lanes WHERE run_id=? AND state=?`, id, run.LaneStateLeased).Scan(&leased); err != nil {
-				return err
-			}
-			if leased != 1 {
-				continue
-			}
-			var raw []byte
-			err = tx.Reader().QueryRow(`SELECT payload FROM events WHERE kind=? AND object_id=? ORDER BY seq DESC LIMIT 1`, run.PauseRequestKind, id).Scan(&raw)
-			if err != nil && err != sql.ErrNoRows {
-				return err
-			}
-			var previous struct {
-				Build string `json:"tillr_build"`
-			}
-			if len(raw) > 0 {
-				if err := json.Unmarshal(raw, &previous); err != nil {
-					return err
-				}
-			}
-			if previous.Build == hash {
-				continue
-			}
-			if err := appendEffect(tx, run.PauseRequestKind, id, map[string]any{"tillr_build": hash}, l.cfg.Now()); err != nil {
+			if err := l.requestBuildPause(ctx, tx, d.RunRequest, facts, hash); err != nil {
 				return err
 			}
 		}
@@ -126,6 +78,7 @@ func (l *Loop) migrateBuildRuns(ctx context.Context, result *LoopResult) error {
 		result.Ticks++
 		for _, node := range parallelNodes(w.Decision) {
 			if node.BuildRestartFrom != "" {
+				l.reportf("loop: restarting reader run %s as %s on %s: its adapter does not declare a tool-call gap\n", node.BuildRestartFrom, node.RunRequest.RunID, node.LaneID)
 				if err := l.interruptBuildRun(node.BuildRestartFrom); err != nil {
 					return err
 				}
@@ -144,6 +97,51 @@ func (l *Loop) migrateBuildRuns(ctx context.Context, result *LoopResult) error {
 		l.launchRun(ctx, d, l.cfg.Now(), nil, result)
 	}
 	return nil
+}
+
+// requestBuildPause applies the same migration rule to a serial worker or an
+// individual reader. A reader's group, not the individual run, owns its lane.
+func (l *Loop) requestBuildPause(ctx context.Context, tx *store.Tx, req *run.Request, facts map[string]Decision, hash string) error {
+	id := req.RunID
+	if f := facts[id]; f.Inputs == nil || f.Inputs.TillrBuild == "" || f.Inputs.TillrBuild == hash {
+		return nil
+	}
+	kind, err := adapterPauseKind(ctx, l.cfg.Root, req)
+	if err != nil || kind != run.PauseAtGap {
+		return err
+	}
+	leaseID := id
+	if req.ReadOnlyGroup != "" {
+		leaseID = req.ReadOnlyGroup
+	}
+	var leased bool
+	if err := tx.Reader().QueryRow(`SELECT EXISTS(SELECT 1 FROM lanes WHERE lane_id=? AND run_id=? AND state=?)`, req.LaneID, leaseID, run.LaneStateLeased).Scan(&leased); err != nil || !leased {
+		return err
+	}
+	// Look at the latest segment action, not just the last pause's build. A
+	// resume can consume that pause even if the loop later returns to this build.
+	var latest string
+	var raw []byte
+	err = tx.Reader().QueryRow(`SELECT kind,payload FROM events WHERE object_type='run' AND object_id=? AND kind IN (?,?,?) ORDER BY seq DESC LIMIT 1`, id, run.PauseRequestKind, run.ResumeKind, run.FinishKind).Scan(&latest, &raw)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	switch latest {
+	case run.FinishKind:
+		return nil
+	case run.PauseRequestKind:
+		var previous struct {
+			Build string `json:"tillr_build"`
+		}
+		if err := json.Unmarshal(raw, &previous); err != nil {
+			return err
+		}
+		// An operator/quota pause retains its own bounds and reason.
+		if previous.Build == "" || previous.Build == hash {
+			return nil
+		}
+	}
+	return appendEffect(tx, run.PauseRequestKind, id, map[string]any{"tillr_build": hash}, l.cfg.Now())
 }
 
 // adapterPauseKind answers the pause kind req's adapter declares in the pause-kind file

@@ -2516,12 +2516,12 @@ func (l *Loop) resumeAfterWall(ctx context.Context, lane string, request run.Req
 	if record.Resumed && record.State != run.StatePaused && request.ResumePrompt == "" {
 		return run.Record{}, "", "", nil
 	}
-	return l.runContinuation(ctx, lane, request, worktree, record, tick, at, result, watched)
+	return l.runContinuation(ctx, lane, request, worktree, record, tick, at, result, watched, "")
 }
 
-// Quota can interrupt multiple segments of an attempt. The ordinary wall path
-// retains its one-continuation bound; quota uses the same executor without it.
-func (l *Loop) runContinuation(ctx context.Context, lane string, request run.Request, worktree string, record run.Record, tick string, at time.Time, result *LoopResult, watched []string) (run.Record, string, string, error) {
+// Quota and restarts can interrupt multiple segments of the same attempt.
+// They use the same executor without the ordinary wall's one-continuation bound.
+func (l *Loop) runContinuation(ctx context.Context, lane string, request run.Request, worktree string, record run.Record, tick string, at time.Time, result *LoopResult, watched []string, restartReason string) (run.Record, string, string, error) {
 	if ctx.Err() != nil {
 		return run.Record{}, "", "", nil
 	}
@@ -2556,8 +2556,10 @@ func (l *Loop) runContinuation(ctx context.Context, lane string, request run.Req
 	l.mu.Lock()
 	result.Dispatched++
 	l.mu.Unlock()
-	if record.State == run.StatePaused {
-		l.reportf("loop: continuing paused run %s on %s as the same attempt\n", request.RunID, lane)
+	if restartReason != "" {
+		l.reportf("loop: continuing interrupted run %s on %s as the same attempt: %s\n", request.RunID, lane, restartReason)
+	} else if record.State == run.StatePaused {
+		l.reportf("loop: continuing paused run %s on %s as the same attempt: the runner recorded a pause and the staged session is available\n", request.RunID, lane)
 	} else if request.ResumePrompt != "" {
 		l.reportf("loop: %s exited with uncommitted fenced work; continuing its session on %s to finish and commit\n", request.ItemID, lane)
 	} else {

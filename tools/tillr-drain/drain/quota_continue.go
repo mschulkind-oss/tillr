@@ -152,7 +152,7 @@ func (l *Loop) resumeQuotaRun(ctx context.Context, d Decision, rec run.Record, t
 	} else {
 		req.ResumePrompt = "The backend's quota reopened. Continue the same attempt from where you stopped, preserving existing work."
 	}
-	resumed, log, stop, err := l.runContinuation(ctx, d.LaneID, req, l.lanePath(d.LaneID), rec, tick, at, result, watched)
+	resumed, log, stop, err := l.runContinuation(ctx, d.LaneID, req, l.lanePath(d.LaneID), rec, tick, at, result, watched, "")
 	if err == nil && stop == "" && resumed.RunID == "" && ctx.Err() == nil {
 		err = Externalf("quota-paused run %s cannot continue: its lane needs the staged brief and session-id", rec.RunID)
 	}

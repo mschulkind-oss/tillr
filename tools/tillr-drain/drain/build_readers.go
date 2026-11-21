@@ -13,14 +13,44 @@ import (
 // therefore the item never lends its lane between the old and new sessions.
 func (l *Loop) claimBuildReaders(ctx context.Context, tx *store.Tx, w *pendingWork, facts map[string]Decision, hash string) (*pendingWork, error) {
 	nodes := parallelNodes(w.Decision)
-	changed := false
+	gap := make([]bool, len(nodes))
+	waitingForGap := false
 	for i, node := range nodes {
 		req := node.RunRequest
-		rec, err := terminalRecord(tx.Reader(), req.RunID)
+		kind, err := adapterPauseKind(ctx, l.cfg.Root, req)
 		if err != nil {
 			return nil, err
 		}
-		if rec != nil {
+		if kind != run.PauseAtGap {
+			continue
+		}
+		gap[i] = true
+		if err := l.requestBuildPause(ctx, tx, req, facts, hash); err != nil {
+			return nil, err
+		}
+		finished, err := segmentFinished(tx.Reader(), req.RunID)
+		if err != nil {
+			return nil, err
+		}
+		waitingForGap = waitingForGap || !finished
+	}
+	// The existing replacement launcher skips finished members. Wait for retained
+	// gap readers to pause or finish before using it, so it cannot stage or launch
+	// a second copy of a live reader in a mixed group.
+	if waitingForGap {
+		return nil, nil
+	}
+	changed := false
+	for i, node := range nodes {
+		if gap[i] {
+			continue
+		}
+		req := node.RunRequest
+		finished, err := segmentFinished(tx.Reader(), req.RunID)
+		if err != nil {
+			return nil, err
+		}
+		if finished {
 			continue
 		}
 		if f := facts[req.RunID]; f.Inputs != nil && f.Inputs.TillrBuild == hash {
@@ -75,6 +105,7 @@ func (l *Loop) claimBuildReaders(ctx context.Context, tx *store.Tx, w *pendingWo
 	copy.Decision.Parallel = nodes[1:]
 	copy.Decision.WorkflowRestart = true
 	copy.Orphaned, copy.Examining = false, false
+	copy.LoopID = l.sessionID
 	copy.Owner, err = currentLoopOwner()
 	if err != nil {
 		return nil, err
@@ -83,6 +114,15 @@ func (l *Loop) claimBuildReaders(ctx context.Context, tx *store.Tx, w *pendingWo
 		return nil, err
 	}
 	return &copy, nil
+}
+
+func segmentFinished(r *store.Reader, id string) (bool, error) {
+	rec, err := terminalRecord(r, id)
+	if err != nil || rec == nil {
+		return false, err
+	}
+	active, err := runHasActiveResume(r, id)
+	return !active, err
 }
 
 func (l *Loop) awaitBuildReader(ctx context.Context, id string) error {

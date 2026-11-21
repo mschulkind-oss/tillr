@@ -74,6 +74,12 @@ type pendingWork struct {
 	HeldFence      string         `json:"held_fence,omitempty"`
 	NeedsStage     bool           `json:"needs_stage,omitempty"`
 	ReleasePending string         `json:"release_pending,omitempty"`
+
+	ResumeAfterRestart bool `json:"-"`
+}
+
+type orphanedRunEffect struct {
+	ResumeAfterRestart bool `json:"resume_after_restart,omitempty"`
 }
 
 func readPending(r *store.Reader) (map[string]*pendingWork, error) {
@@ -249,7 +255,7 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 				// Standalone resume after examination settled stays unowned.
 				resumingOwner = nil
 			}
-			work.Done, work.Orphaned, work.Examining = false, false, false
+			work.Done, work.Orphaned, work.Examining, work.ResumeAfterRestart = false, false, false, false
 			work.Owner, work.Examiner, work.Candidate, work.DirtyHold, work.RepairHold, work.GateStall = resumingOwner, nil, nil, nil, nil, nil
 		case examinationClaimedKind:
 			if work := byRun[*e.ObjectID]; work != nil {
@@ -312,7 +318,11 @@ func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*p
 			}
 		case loopOrphanedKind:
 			if work := byRun[*e.ObjectID]; work != nil {
-				work.Orphaned = true
+				var interrupted orphanedRunEffect
+				if err := json.Unmarshal(e.Payload, &interrupted); err != nil {
+					return nil, nil, err
+				}
+				work.Orphaned, work.ResumeAfterRestart = true, interrupted.ResumeAfterRestart
 			}
 		case redCapHeldKind:
 			if work := byRun[*e.ObjectID]; work != nil {
@@ -483,7 +493,7 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 			}
 		}
 	}
-	if d.Workflow != nil && len(d.Parallel) == 0 && work.Orphaned && !work.BoundaryFailed {
+	if d.Workflow != nil && len(d.Parallel) == 0 && work.Orphaned && !work.ResumeAfterRestart && !work.BoundaryFailed {
 		rec, err := terminalRecord(r, d.RunRequest.RunID)
 		if err != nil {
 			return Decision{}, err
@@ -492,9 +502,9 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 		if err != nil {
 			return Decision{}, err
 		}
-		// A real successful terminal record wins over an operator-stop marker.
-		// Reaped or interrupted work has no finished node to preserve.
-		if len(leases) == 0 && (rec == nil || rec.State != run.StateExited || rec.ExitCode == nil || *rec.ExitCode != 0) {
+		// A completed node or a saved pause wins over an operator-stop marker.
+		// Otherwise replay only this node of the pinned attempt.
+		if len(leases) == 0 && (rec == nil || (rec.State != run.StatePaused && (rec.State != run.StateExited || rec.ExitCode == nil || *rec.ExitCode != 0))) {
 			workCopy := *work
 			request := *d.RunRequest
 			if !evaluatorNode(d) {
@@ -2753,12 +2763,16 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 						completion.outcome.err = err
 					}
 				}
-				if rec.State == run.StatePaused && !quotaPaused && completion.outcome.err == nil {
-					resumed, resumedLog, stop, resumeErr := l.resumeAfterWall(ctx, d.LaneID, *d.RunRequest, l.lanePath(d.LaneID), *rec, d.RunRequest.CorrelationID, at, local, watched)
+				if (rec.State == run.StatePaused || work.ResumeAfterRestart) && !quotaPaused && completion.outcome.err == nil {
+					reason := ""
+					if work.ResumeAfterRestart {
+						reason = "the previous loop lost its run face, but the staged session and worktree are intact"
+					}
+					resumed, resumedLog, stop, resumeErr := l.runContinuation(ctx, d.LaneID, *d.RunRequest, l.lanePath(d.LaneID), *rec, d.RunRequest.CorrelationID, at, local, watched, reason)
 					if resumeErr != nil || stop != "" {
 						completion.outcome = laneOutcome{stop: stop, err: resumeErr}
 					} else if resumed.RunID == "" {
-						completion.outcome.err = Externalf("paused run %s cannot continue: its lane needs the staged brief and session-id", rec.RunID)
+						completion.outcome.err = Externalf("interrupted run %s cannot continue: its lane needs the staged brief and session-id", rec.RunID)
 					} else {
 						rec, log = &resumed, resumedLog
 					}

@@ -292,11 +292,8 @@ func (l *Loop) runParallel(ctx context.Context, d Decision) error {
 func parallelTerminal(r *store.Reader, d Decision) (bool, error) {
 	for _, node := range parallelNodes(d) {
 		rec, err := terminalRecord(r, node.RunRequest.RunID)
-		if err != nil {
+		if err != nil || rec == nil {
 			return false, err
-		}
-		if rec == nil {
-			return false, nil
 		}
 	}
 	return true, nil
@@ -404,7 +401,12 @@ func (l *Loop) settleParallel(ctx context.Context, work *pendingWork, result *Lo
 			if e != nil || stop != "" {
 				return laneOutcome{err: e, stop: stop}
 			}
-			if resumed.RunID == "" || ClassifyAttempt(resumed, resumedLog) == AttemptUnjudged || resumed.State == run.StatePaused {
+			if resumed.State == run.StatePaused {
+				// Another replacement (or an operator pause) interrupted the
+				// continued segment. The group is still pending, not unjudged.
+				return laneOutcome{}
+			}
+			if resumed.RunID == "" || ClassifyAttempt(resumed, resumedLog) == AttemptUnjudged {
 				if err = l.nodeOutcome(ctx, node, "unjudged"); err != nil {
 					return laneOutcome{err: err}
 				}
