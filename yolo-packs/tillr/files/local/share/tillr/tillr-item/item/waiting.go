@@ -12,6 +12,8 @@ import (
 type WaitingOn struct {
 	Waiter string `json:"waiter"`
 	Reason string `json:"reason"`
+	// Source distinguishes a state write from a conflict-owned wait. Empty is legacy.
+	Source string `json:"source,omitempty"`
 }
 
 // ReadWaitingOn reads blocked metadata without migrating a legacy store. Missing

@@ -71,9 +71,33 @@ func ReadConflicts(r *store.Reader) (map[string]Conflict, error) {
 	return result, rows.Err()
 }
 
-// RecordConflict appends a transition and changes the item's disposition in the
-// same transaction. A record equal in every field to this conflict's last record
-// writes nothing. Criteria and verdicts are never written by this operation.
+func (c Conflict) wait() WaitingOn {
+	reason, _, _ := strings.Cut(c.Text, "\n")
+	return WaitingOn{Waiter: c.WaitingOn, Reason: strings.TrimSpace(reason), Source: "conflict:" + c.ConflictID}
+}
+
+// HasIndependentWait reports whether the item's blocked metadata names a wait
+// outside the current conflict's routing.
+func (c Conflict) HasIndependentWait(waiting *WaitingOn) bool {
+	return waiting != nil && waiting.Waiter != "" && !c.ownsWait(*waiting)
+}
+
+func (c Conflict) ownsWait(waiting WaitingOn) bool {
+	switch c.Status {
+	case "raised", "awaiting", "owner":
+	default:
+		return false
+	}
+	want := c.wait()
+	if waiting.Source == "" { // Legacy writes used the conflict's waiter and first line.
+		want.Source = ""
+	}
+	return waiting == want
+}
+
+// RecordConflict appends a transition and, unless an independent wait stands,
+// changes the item's disposition in the same transaction. Repeating the current
+// record writes nothing. Criteria and verdicts are never written by this operation.
 func RecordConflict(tx *store.Tx, c Conflict, at time.Time) error {
 	noRunTriage := c.TriageVersion != "" && c.DesignRunID == "" &&
 		(c.Status == "owner" || c.Status == "answered" || c.Status == "closed")
@@ -89,11 +113,10 @@ func RecordConflict(tx *store.Tx, c Conflict, at time.Time) error {
 		return Usagef("a published owner question needs its document reference, publication head, and owner waiter")
 	}
 	var previous []byte
-	err := tx.Reader().QueryRow(`SELECT payload FROM events WHERE kind = ?
- AND json_extract(payload, '$.conflict_id') = ? AND json_extract(payload, '$.item_id') = ?
- ORDER BY seq DESC LIMIT 1`, ConflictKind, c.ConflictID, c.ItemID).Scan(&previous)
+	var last Conflict
+	err := tx.Reader().QueryRow(`SELECT payload FROM events WHERE kind = ? AND object_type = 'item' AND object_id = ?
+ ORDER BY seq DESC LIMIT 1`, ConflictKind, c.ItemID).Scan(&previous)
 	if err == nil {
-		var last Conflict
 		if err := json.Unmarshal(previous, &last); err != nil {
 			return err
 		}
@@ -107,9 +130,24 @@ func RecordConflict(tx *store.Tx, c Conflict, at time.Time) error {
 	if c.Status == "question" || c.Status == "answered" || c.Status == "closed" {
 		state = "in-queue"
 	}
-	reason, _, _ := strings.Cut(c.Text, "\n")
-	if _, err := SetStateWithReceipt(nil, tx, c.ItemID, state, at, MoveReceipt{conflictRelease: state == "in-queue"}, WaitingOn{Waiter: c.WaitingOn, Reason: strings.TrimSpace(reason)}); err != nil {
+	var currentState string
+	if err := tx.QueryRow(`SELECT state FROM items WHERE item_id = ?`, c.ItemID).Scan(&currentState); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return Rejectionf("not-found", c.ItemID, "no item %q in this store", c.ItemID)
+		}
 		return err
+	}
+	var waiting *WaitingOn
+	if currentState == "blocked" {
+		waiting, _, err = ReadWaitingOn(tx.Reader(), c.ItemID)
+		if err != nil {
+			return err
+		}
+	}
+	if !last.HasIndependentWait(waiting) {
+		if _, err := SetStateWithReceipt(nil, tx, c.ItemID, state, at, MoveReceipt{conflictRelease: state == "in-queue"}, c.wait()); err != nil {
+			return err
+		}
 	}
 	body, err := json.Marshal(c)
 	if err != nil {
