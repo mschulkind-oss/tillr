@@ -123,10 +123,11 @@ merged into the same generated settings, while `--setting-sources` remains up to
   `mcp__tillr__obstacle`. Its `instructions` say they are the brief's `land` and `obstacle`.
   Its call handler runs only on replay and returns the staged answer as an error result.
 - **`PreToolUse`** answers `deny` for what the worker can fix at once (no summary, `HEAD`
-  still the base, uncommitted paths, a commit already refused, another call open, an
-  incomplete obstacle), which returns in the same turn; `defer` for a valid call, after
-  writing `landing-offer.json` in the shape pi writes; and `allow` when `landing-answer.json`
-  names the call, so the server delivers the answer.
+  still the base, uncommitted paths, another call open, an incomplete obstacle), which
+  returns in the same turn; `defer` for a valid call, after writing `landing-offer.json` in
+  the shape pi writes; and `allow` when `landing-answer.json` names the call, so the server
+  delivers the answer. A refused commit may be offered again only if all its refusals
+  concern the report and the new `summary` differs from each refused summary.
 - **`Stop`** nudges a plain-text stop once per distinct head, tree and last message.
 - **Delivery.** With `landing-answer.json` staged and `TILLR_SESSION_MODE=resume`, the
   adapter resumes with empty standard input when the session file's last mebibyte holds the

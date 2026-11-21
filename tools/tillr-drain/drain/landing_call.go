@@ -74,12 +74,20 @@ type landingCall struct {
 	Tool        string `json:"tool"`
 }
 
+type landingFinding struct {
+	CriterionID string `json:"criterion_id"`
+	Scope       string `json:"scope"`
+}
+
+const reportFindingPrefix = "report-only:"
+
 type landingAnswer struct {
-	CallID   string   `json:"call_id"`
-	Kind     string   `json:"kind"`
-	Stage    string   `json:"stage,omitempty"`
-	Text     string   `json:"text"`
-	Evidence []string `json:"evidence,omitempty"`
+	CallID   string           `json:"call_id"`
+	Kind     string           `json:"kind"`
+	Stage    string           `json:"stage,omitempty"`
+	Text     string           `json:"text"`
+	Evidence []string         `json:"evidence,omitempty"`
+	Findings []landingFinding `json:"findings,omitempty"`
 }
 
 // The event stream is the call record. The existence check and append share the
@@ -637,10 +645,16 @@ func (l *Loop) answerLandingRefusal(tx *store.Tx, candidate Candidate, refusal r
 		var output item.JudgeOutput
 		if json.Unmarshal(c.Raw, &output) == nil {
 			for _, verdict := range output.Verdicts {
-				if verdict.Verdict == item.VerdictNotDone {
-					fmt.Fprintf(&text, "Criterion %s: %s\n", verdict.CriterionID, verdict.Reason)
-					answer.Evidence = append(answer.Evidence, verdict.Evidence...)
+				if verdict.Verdict != item.VerdictNotDone {
+					continue
 				}
+				scope, reason := "content", strings.TrimSpace(verdict.Reason)
+				if rest, tagged := strings.CutPrefix(reason, reportFindingPrefix); tagged && strings.TrimSpace(rest) != "" {
+					scope, reason = "report", strings.TrimSpace(rest)
+				}
+				answer.Findings = append(answer.Findings, landingFinding{CriterionID: verdict.CriterionID, Scope: scope})
+				fmt.Fprintf(&text, "Criterion %s (%s): %s\n", verdict.CriterionID, scope, reason)
+				answer.Evidence = append(answer.Evidence, verdict.Evidence...)
 			}
 		}
 	}
@@ -746,8 +760,27 @@ func landingAnswerForTurn(answer landingAnswer, runID, dir string) landingAnswer
 	return answer
 }
 
-func (l *Loop) landingState(ctx context.Context, itemID, session string, retry *WorkerSession) (map[string]any, error) {
-	state := map[string]any{"open": []landingOffer{}, "refused": []map[string]string{}}
+type landingRefusal struct {
+	Commit     string `json:"commit"`
+	Summary    string `json:"summary"`
+	Answer     string `json:"answer"`
+	ReportOnly bool   `json:"report_only,omitempty"`
+}
+
+func (a landingAnswer) reportOnly() bool {
+	if a.Kind != "refused" || a.Stage != "judge" || len(a.Findings) == 0 {
+		return false
+	}
+	for _, finding := range a.Findings {
+		if finding.Scope != "report" {
+			return false
+		}
+	}
+	return true
+}
+
+func (l *Loop) landingState(ctx context.Context, itemID, session string) (map[string]any, error) {
+	state := map[string]any{"open": []landingOffer{}, "refused": []landingRefusal{}}
 	db, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		return nil, err
@@ -764,7 +797,7 @@ func (l *Loop) landingState(ctx context.Context, itemID, session string, retry *
 		}
 		defer rows.Close()
 		open := []landingOffer{}
-		refused := []map[string]string{}
+		refused := []landingRefusal{}
 		for rows.Next() {
 			var raw, answerRaw []byte
 			var finished bool
@@ -783,13 +816,11 @@ func (l *Loop) landingState(ctx context.Context, itemID, session string, retry *
 				if err := json.Unmarshal(answerRaw, &answer); err != nil {
 					return err
 				}
-				// A judge return can be repaired by the report alone. Keep the
-				// answer in the transcript, but don't prohibit re-offering its head.
-				if retry != nil && call.Commit == retry.HeadSHA && answer.Kind == "refused" && answer.Stage == "judge" {
-					continue
-				}
 				if answer.Kind == "refused" || answer.Kind == "reverted" {
-					refused = append(refused, map[string]string{"commit": call.Commit, "answer": answer.Text})
+					refused = append(refused, landingRefusal{
+						Commit: call.Commit, Summary: call.Summary, Answer: answer.Text,
+						ReportOnly: call.Summary != "" && answer.reportOnly(),
+					})
 				}
 			}
 		}
@@ -800,7 +831,7 @@ func (l *Loop) landingState(ctx context.Context, itemID, session string, retry *
 }
 
 func (l *Loop) stageLandingAnswer(ctx context.Context, d Decision, spec *StageSpec) error {
-	state, err := l.landingState(ctx, d.ItemID, spec.SessionID, judgedCandidateReturn(d))
+	state, err := l.landingState(ctx, d.ItemID, spec.SessionID)
 	if err != nil {
 		return err
 	}

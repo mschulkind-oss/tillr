@@ -90,6 +90,27 @@ class PreToolUse(Fixture):
         self.assertEqual(decision, "deny")
         self.assertIn("A new commit is required.\nANSWER: gate said no", reason)
 
+    def test_report_only_refusal_allows_a_corrected_offer_but_content_refusal_does_not(self):
+        commit = self.commit()
+        self.assertEqual(self.pre()[0], "defer")
+        first = self.offer()
+        (self.durable / "landing-offer.json").unlink()
+        state = self.durable / "landing-state.json"
+        report = {"commit": commit, "summary": first["summary"], "answer": "Criterion c2 (report): missing results", "report_only": True}
+        content = {"commit": commit, "summary": "earlier report", "answer": "Criterion c1 (content): missing test"}
+        corrected = {"summary": "done\nCheck: passed"}
+        state.write_text(json.dumps({"refused": [report, content]}))
+        decision, reason = self.pre(call="next", tool_input=corrected)
+        self.assertEqual(decision, "deny")
+        self.assertIn("Criterion c1 (content)", reason)
+        state.write_text(json.dumps({"refused": [report]}))
+        decision, reason = self.pre(call="next")
+        self.assertEqual(decision, "deny")
+        self.assertIn("same report", reason)
+        self.assertFalse((self.durable / "landing-offer.json").exists())
+        self.assertEqual(self.pre(call="next", tool_input=corrected), ("defer", None))
+        self.assertEqual(self.offer(), {**first, "call_id": "next", **corrected})
+
     def test_a_sibling_call_is_denied_while_an_offer_is_open_and_allowed_once_it_has_its_result(self):
         self.commit()
         self.assertEqual(self.pre()[0], "defer")

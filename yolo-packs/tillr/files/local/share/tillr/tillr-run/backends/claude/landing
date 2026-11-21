@@ -202,9 +202,13 @@ def pre_tool_use(event, durable, base):
             dirty = dirty_paths(cwd)
             if dirty:
                 raise Refusal("Commit or remove these uncommitted paths:\n" + "\n".join(dirty))
-            refused = next((e for e in state.get("refused") or [] if e.get("commit") == head), None)
-            if refused:
-                raise Refusal(f"This commit was already refused. A new commit is required.\n{refused.get('answer', '')}")
+            refusals = [e for e in state.get("refused") or [] if e.get("commit") == head]
+            content = next((e for e in refusals if e.get("report_only") is not True or not isinstance(e.get("summary"), str)), None)
+            if content:
+                raise Refusal(f"This commit was already refused. A new commit is required.\n{content.get('answer', '')}")
+            duplicate = next((e for e in refusals if e.get("summary") == summary), None)
+            if duplicate:
+                raise Refusal(f"This commit was already refused with the same report. Correct the report and offer this commit again.\n{duplicate.get('answer', '')}")
             record = {"call_id": call_id, "commit": head, "base": base, "summary": summary, "transcript": transcript}
         else:
             parsed = validate_obstacle(tool_input)

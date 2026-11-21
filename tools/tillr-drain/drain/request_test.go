@@ -627,7 +627,44 @@ type requestSingleJudgeSteps struct {
 	workReqs     []run.Request
 	workSessions []string
 	reportOnly   bool
+	offerBackend string
 	judgedHeads  []string
+}
+
+func (s *requestSingleJudgeSteps) offer(ctx context.Context, lane, scratch, target string, offer landingOffer) error {
+	var cmd *exec.Cmd
+	switch s.offerBackend {
+	case "pi":
+		tool, err := filepath.Abs("../../tillr-run/backends/pi/land.ts")
+		if err != nil {
+			return err
+		}
+		cmd = exec.CommandContext(ctx, "node", "--input-type=module", "-e", `
+const [tool, id, summary, target, scratch, base, fence] = process.argv.slice(1);
+const { executeLand } = await import(tool);
+if (!executeLand(id, summary, target, scratch, base, fence, () => []).park) process.exit(1);
+`, tool, offer.CallID, offer.Summary, target, scratch, offer.Base, filepath.Join(lane, FenceFile))
+	case "claude":
+		cmd = exec.CommandContext(ctx, "../../tillr-run/backends/claude/landing", "pre-tool-use", "--durable", scratch, "--base", offer.Base)
+		event, err := json.Marshal(map[string]any{
+			"tool_name": "mcp__tillr__land", "tool_use_id": offer.CallID, "cwd": target,
+			"tool_input": map[string]string{"summary": offer.Summary},
+		})
+		if err != nil {
+			return err
+		}
+		cmd.Stdin = strings.NewReader(string(event))
+	default:
+		return writeLandingArtifact(scratch, landingOfferFile, offer)
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s land: %w: %s", s.offerBackend, err, out)
+	}
+	if s.offerBackend == "claude" && !strings.Contains(string(out), `"permissionDecision": "defer"`) {
+		return fmt.Errorf("Claude did not defer the offer: %s", out)
+	}
+	return nil
 }
 
 func (s *requestSingleJudgeSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
@@ -671,7 +708,7 @@ func (s *requestSingleJudgeSteps) Run(ctx context.Context, req run.Request) (run
 				verdict := item.VerdictDone
 				reason := "verified"
 				if missingVerification && cid == "c2" {
-					verdict, reason = item.VerdictNotDone, "report lacks verification"
+					verdict, reason = item.VerdictNotDone, "report-only: report lacks verification"
 				} else if !s.reportOnly && s.judges == 1 && (cid == "c1" || cid == "c2") {
 					verdict = item.VerdictNotDone
 					reason = fmt.Sprintf("single-worker finding for %s", cid)
@@ -718,7 +755,7 @@ func (s *requestSingleJudgeSteps) Run(ctx context.Context, req run.Request) (run
 			}
 			scratch := run.DurableDir(lane, req.RunID)
 			var state struct {
-				Refused []struct{ Commit string }
+				Refused []landingRefusal `json:"refused"`
 			}
 			raw, err = os.ReadFile(filepath.Join(scratch, "landing-state.json"))
 			if err != nil {
@@ -727,27 +764,30 @@ func (s *requestSingleJudgeSteps) Run(ctx context.Context, req run.Request) (run
 			if err := json.Unmarshal(raw, &state); err != nil {
 				return run.Record{}, "", err
 			}
-			for _, refused := range state.Refused {
-				if refused.Commit == head {
-					return run.Record{}, "", fmt.Errorf("the staged landing state prohibits re-offering %s", head)
-				}
-			}
 			summary := "candidate"
 			if s.works == 2 {
+				if len(state.Refused) != 1 || state.Refused[0].Commit != head || state.Refused[0].Summary != summary ||
+					!state.Refused[0].ReportOnly || !strings.Contains(state.Refused[0].Answer, "Criterion c2 (report): report lacks verification") {
+					s.t.Fatalf("staged state did not preserve report-only refusal: %+v", state.Refused)
+				}
 				summary += "\n\n## Verification\nTargeted check: pass."
 			}
-			if err := writeLandingArtifact(scratch, landingOfferFile, landingOffer{CallID: fmt.Sprintf("report-%d", s.works), Commit: head, Base: staged, Summary: summary}); err != nil {
+			if err := s.offer(ctx, lane, scratch, target, landingOffer{CallID: fmt.Sprintf("report-%d", s.works), Commit: head, Base: staged, Summary: summary}); err != nil {
 				return run.Record{}, "", err
 			}
 		}
 	}
 	report := "RESULT: done\n"
 	if s.reportOnly && !strings.HasPrefix(string(brief), "# Judge candidate") {
-		extractor, err := filepath.Abs("../../tillr-run/backends/pi/extract-report")
+		backend := s.offerBackend
+		if backend == "" {
+			backend = "pi"
+		}
+		extractor, err := filepath.Abs(filepath.Join("../../tillr-run/backends", backend, "extract-report"))
 		if err != nil {
 			return run.Record{}, "", err
 		}
-		cmd := exec.CommandContext(ctx, extractor, "--backend", "pi", "--landing-offer", filepath.Join(run.DurableDir(lane, req.RunID), landingOfferFile))
+		cmd := exec.CommandContext(ctx, extractor, "--backend", backend, "--landing-offer", filepath.Join(run.DurableDir(lane, req.RunID), landingOfferFile))
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			return run.Record{}, "", fmt.Errorf("extracting offer report: %w: %s", err, out)
@@ -770,15 +810,17 @@ func (s *requestSingleJudgeSteps) Run(ctx context.Context, req run.Request) (run
 }
 
 func TestRequestSingleWorkerJudgeNotDoneReturnsToBuilderSession(t *testing.T) {
-	t.Run("code repair", func(t *testing.T) { testSingleWorkerJudgeReturn(t, false) })
-	t.Run("report only", func(t *testing.T) { testSingleWorkerJudgeReturn(t, true) })
+	t.Run("code repair", func(t *testing.T) { testSingleWorkerJudgeReturn(t, false, "") })
+	t.Run("report only", func(t *testing.T) { testSingleWorkerJudgeReturn(t, true, "") })
 }
 
 func TestOperatorRetryReoffersJudgeCandidate(t *testing.T) {
-	testSingleWorkerJudgeReturn(t, true, true)
+	for _, backend := range []string{"pi", "claude"} {
+		t.Run(backend, func(t *testing.T) { testSingleWorkerJudgeReturn(t, true, backend) })
+	}
 }
 
-func testSingleWorkerJudgeReturn(t *testing.T, reportOnly bool, operatorRetry ...bool) {
+func testSingleWorkerJudgeReturn(t *testing.T, reportOnly bool, retryBackend string) {
 	t.Helper()
 	f, l, base := workflowLoopFixture(t, "")
 	declareWorkerResumeFixture(t, l)
@@ -797,7 +839,7 @@ func testSingleWorkerJudgeReturn(t *testing.T, reportOnly bool, operatorRetry ..
 		return err
 	})
 	base.firstHead = runGit(t, f.root, "rev-parse", TrunkRef)
-	steps := &requestSingleJudgeSteps{workflowSteps: base, reportOnly: reportOnly}
+	steps := &requestSingleJudgeSteps{workflowSteps: base, reportOnly: reportOnly, offerBackend: retryBackend}
 	l.cfg.Steps = steps
 	result := &LoopResult{}
 
@@ -812,7 +854,7 @@ func testSingleWorkerJudgeReturn(t *testing.T, reportOnly bool, operatorRetry ..
 		t.Fatalf("first judge did not run")
 	}
 
-	retrying := len(operatorRetry) > 0 && operatorRetry[0]
+	retrying := retryBackend != ""
 	if retrying {
 		writer := steps.workReqs[0]
 		fixtureWrite(t, f, func(tx *store.Tx) error {
@@ -842,7 +884,7 @@ func testSingleWorkerJudgeReturn(t *testing.T, reportOnly bool, operatorRetry ..
 			if d.Action != ActionDispatch || d.Reason != ReasonReturned || d.RunRequest == nil || !d.RunRequest.SessionTurn {
 				t.Fatalf("expected returned session dispatch, got: %+v", d)
 			}
-			if reportOnly && !strings.Contains(d.RunRequest.ResumePrompt, "c2: report lacks verification") ||
+			if reportOnly && !strings.Contains(d.RunRequest.ResumePrompt, "c2: report-only: report lacks verification") ||
 				!reportOnly && (!strings.Contains(d.RunRequest.ResumePrompt, "c1: single-worker finding for c1") || !strings.Contains(d.RunRequest.ResumePrompt, "c2: single-worker finding for c2")) {
 				t.Fatalf("resume prompt lacks findings:\n%s", d.RunRequest.ResumePrompt)
 			}
@@ -1140,7 +1182,7 @@ func TestRequestPlannedVerifyCallSuspendsEndToEnd(t *testing.T) {
 	if ans.Kind != "refused" || ans.Stage != "judge" {
 		t.Fatalf("call-1 answer kind/stage = %q/%q, want refused/judge", ans.Kind, ans.Stage)
 	}
-	if !strings.Contains(ans.Text, "Criterion c1: suspends verify finding for c1") || !strings.Contains(ans.Text, "Criterion c2: suspends verify finding for c2") {
+	if !strings.Contains(ans.Text, "Criterion c1 (content): suspends verify finding for c1") || !strings.Contains(ans.Text, "Criterion c2 (content): suspends verify finding for c2") {
 		t.Fatalf("call-1 answer text missing criterion findings:\n%s", ans.Text)
 	}
 	if strings.Contains(ans.Text, "Check: c1") {

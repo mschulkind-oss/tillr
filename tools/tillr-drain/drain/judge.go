@@ -674,7 +674,11 @@ criterion_id, criterion_hash, verdict (done, not-done, blocked, defective), clai
 reason, and evidence (non-empty single-token locator strings with no spaces, e.g.
 commit:<sha>, diff:candidate.diff, node:<id>, or for a command that was run,
 cmd:go-test-tillr-run or test:TestExecRecordsQuickOutChoice; put full command lines,
-arguments, and results in reason). A blocked entry also needs waiting_on
+arguments, and results in reason). For a not-done finding fixable solely by correcting
+what the producer reported (without editing the diff), begin reason with %q. Do not use
+that prefix for content findings, including missing tests or other changes to the diff.
+The same commit may be offered with a corrected report only if every finding is report-only.
+A blocked entry also needs waiting_on
 with waiter (owner, design, plan, or item:<id> for a stored item). Its reason explains
 why that waiter must act. Do not include actor or judged_actor.
 Pass requires every criterion done. Return RESULT: done after writing the file.
@@ -705,7 +709,7 @@ Write the verdict file, then report RESULT: done.
 
 ## Stop conditions
 Never change the worker's candidate.
-`, c.ItemID, receipt.Request.RunID, c.Worktree, output, receipt.Options.Head, receipt.Options.Tree, seatLines(l.currentPolicy()), diffPath, criteria.String())
+`, c.ItemID, receipt.Request.RunID, c.Worktree, output, receipt.Options.Head, receipt.Options.Tree, reportFindingPrefix, seatLines(l.currentPolicy()), diffPath, criteria.String())
 	reportPath := filepath.Join(RunDir(l.cfg.Root, c.RunID), "node-report.md")
 	if _, err := os.Stat(reportPath); err == nil {
 		brief += fmt.Sprintf("\nCandidate worker report: %s\n", reportPath)
