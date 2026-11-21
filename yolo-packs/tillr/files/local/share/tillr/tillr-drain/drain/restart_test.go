@@ -3,6 +3,8 @@ package drain
 import (
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/restart"
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -117,6 +120,128 @@ func TestRestartedAnswerReplacesTheProcessBeforeAnyDispatch(t *testing.T) {
 	a := h.answer(t, req.ID)
 	if a.Answer != restart.AnswerRestarted || a.FromBuild != "old-build" || a.ToBuild != h.l.build.String() || a.ToDigest != h.l.build.Digest {
 		t.Fatalf("answer = %+v", a)
+	}
+}
+
+type restartWhileSettlingSteps struct {
+	*settlingStartSteps
+	worker     *exec.Cmd
+	workerDone chan error
+	phase      string
+}
+
+func (s *restartWhileSettlingSteps) Gate(ctx context.Context, c Candidate) (GateOutcome, error) {
+	if s.phase == "gate" {
+		return s.settlingStartSteps.Gate(ctx, c)
+	}
+	return s.recordingSteps.Gate(ctx, c)
+}
+
+func (s *restartWhileSettlingSteps) Land(ctx context.Context, c Candidate) (LandOutcome, error) {
+	if s.phase == "land" && c.ItemID == "item-a" {
+		close(s.settling)
+		select {
+		case <-s.release:
+		case <-ctx.Done():
+			return LandOutcome{}, ctx.Err()
+		}
+	}
+	return s.recordingSteps.Land(ctx, c)
+}
+
+func (s *restartWhileSettlingSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	if req.ItemID == "item-a" {
+		return s.settlingStartSteps.Run(ctx, req)
+	}
+	// Exercise the real process handoff. There is no CommandContext: the worker
+	// outlives the old loop's wait, just as it does in ProcessSteps.Run.
+	p := &ProcessSteps{Store: s.fixture.storePath}
+	if err := p.startRunFaceContext(ctx, s.worker, req); err != nil {
+		return run.Record{}, "", err
+	}
+	go func() { s.workerDone <- s.worker.Wait() }()
+	s.started <- req.LaneID
+	<-ctx.Done()
+	return run.Record{}, "", ctx.Err()
+}
+
+func TestPendingRestartLetsWorkerStartWhileSettlementDrains(t *testing.T) {
+	for _, phase := range []string{"gate", "land"} {
+		t.Run(phase, func(t *testing.T) { testWorkerStartWhileRestartWaits(t, phase) })
+	}
+}
+
+func testWorkerStartWhileRestartWaits(t *testing.T, phase string) {
+	t.Helper()
+	t.Setenv("TILLR_LOOP_STORE", "")
+	f := newRefusalLoopFixtureWithLanes(t, 2, "item-a")
+	worker := exec.Command("sh", "-c", `read -r line && test "$line" = survived`)
+	input, err := worker.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	steps := &restartWhileSettlingSteps{worker: worker, workerDone: make(chan error, 1), phase: phase, settlingStartSteps: &settlingStartSteps{
+		fixture: f, now: time.Now, settling: make(chan struct{}), release: make(chan struct{}), started: make(chan string, 1),
+	}}
+	l := f.loop(t, steps, settlingStartStager{f.laneRoot})
+	l.cfg.QuestionsCmd = []string{"sh", "-c", `printf '%s' '{"index":{"documents":[]}}'`}
+	l.cfg.Report = io.Discard
+	holdWALKeeper(t, f.storePath)
+	exe := filepath.Join(t.TempDir(), "tillr-drain")
+	if err := writeForkSafe(exe, []byte("replacement"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	l.cfg.Restart = &RestartConfig{Executable: exe, Check: func(context.Context, string) error { return nil },
+		Exec: func(string, []string, []string) error {
+			select {
+			case <-steps.release:
+				return nil
+			default:
+				return fmt.Errorf("exec attempted while %s was blocked", phase)
+			}
+		}}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	var result LoopResult
+	var loopErr error
+	go func() { defer close(done); result, loopErr = l.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	select {
+	case <-steps.settling:
+	case <-done:
+		t.Fatalf("loop stopped before %s entry: %+v, %v", phase, result, loopErr)
+	case <-time.After(15 * time.Second):
+		t.Fatalf("item-a did not enter %s", phase)
+	}
+	req, err := restart.File(ctx, f.storePath, restart.RoleDrain, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handled, stop, err := l.gateRestart(ctx, &LoopResult{}); handled || stop != "" || err != nil {
+		t.Fatalf("replacement acted during %s: %v, %q, %v", phase, handled, stop, err)
+	}
+	fileStartWhileSettling(t, l, time.Now())
+	waitSettlingStart(t, steps.settlingStartSteps, "lane-2")
+	close(steps.release)
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatalf("loop did not replace itself after %s finished", phase)
+	}
+	if loopErr != nil || result.Stop != StopRestarted {
+		t.Fatalf("loop stopped without replacing: %+v, %v", result, loopErr)
+	}
+	if _, err := fmt.Fprintln(input, "survived"); err != nil {
+		t.Fatalf("worker did not survive replacement %s: %v", req.ID, err)
+	}
+	select {
+	case err := <-steps.workerDone:
+		if err != nil {
+			t.Fatalf("worker did not finish after replacement: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatal("worker did not exit after receiving input")
 	}
 }
 

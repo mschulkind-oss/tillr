@@ -38,6 +38,13 @@ func (s *ProcessSteps) startRunFaceContext(ctx context.Context, cmd *exec.Cmd, r
 		if loop == nil || loop.cfg.Restart == nil {
 			return cmd.Start()
 		}
+		// The deferred settlement may finish after we read the request. Keep
+		// exec excluded until the child is either started or refused.
+		loop.restartMechanical.RLock()
+		defer loop.restartMechanical.RUnlock()
+		if loop.restartReplaced {
+			return errRestartPending
+		}
 		db, err := store.Open(ctx, s.Store, true)
 		if err != nil {
 			return err
@@ -50,7 +57,7 @@ func (s *ProcessSteps) startRunFaceContext(ctx context.Context, cmd *exec.Cmd, r
 			if err != nil {
 				return err
 			}
-			if len(state.Pending) > 0 && !loop.restartDeferred() {
+			if len(state.Pending) > 0 && !loop.restartDefersToSettlement() && !loop.restartDeferred() {
 				return errRestartPending
 			}
 			if err := ctx.Err(); err != nil {
