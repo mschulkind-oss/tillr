@@ -144,7 +144,9 @@ func readRepeatedEnding(r *store.Reader, d Decision) (*secondFailure, error) {
 		return nil, err
 	}
 	text := fmt.Sprintf("%s run %s ended (refused at %s) with the same evidence as run %s, so the worker is not sent it again. Change the instruction the worker builds from — amend the item's block — or object: a design run that commits nothing names its next actor.", IdenticalRepeatPrefix, current, latest.Step, previous)
-	if isRequest {
+	if IsRemoteSyncItem(d.ItemID) {
+		text = fmt.Sprintf("%s run %s ended (refused at %s) with the same evidence as run %s, so the worker is not sent it again. Operator: stop the drain and reconcile main with the staged remote tip, then restart the drain and run tillr drain push. This generated repair has no document block.", IdenticalRepeatPrefix, current, latest.Step, previous)
+	} else if isRequest {
 		cmd, err := acceptedBuildRetryCommand(r, d.ItemID, current)
 		if err != nil {
 			return nil, err
@@ -269,7 +271,10 @@ func recordSecondFailure(tx *store.Tx, sf *secondFailure, at time.Time) error {
 	}
 	// Match the blocked-report route: without a source block the design seat
 	// cannot amend the item. Keep the evidence in an explicit owner hold.
-	if ref == "" {
+	if IsRemoteSyncItem(sf.itemID) {
+		// The queue names the human hold owner; publication names the operator.
+		c.Status, c.WaitingOn = "owner", "owner"
+	} else if ref == "" {
 		c.Status, c.WaitingOn = "owner", "owner"
 		isRequest, err := isFiledRequest(tx.Reader(), sf.itemID)
 		if err != nil {
