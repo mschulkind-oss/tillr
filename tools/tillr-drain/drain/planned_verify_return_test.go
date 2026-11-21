@@ -145,7 +145,11 @@ func (s *verifyReturnSteps) Run(ctx context.Context, req run.Request) (run.Recor
 	case strings.Contains(told, "read the candidate commit this run starts from"):
 		// The build step, returned with the verifier's findings.
 		s.repairs = append(s.repairs, req)
-		if out, err := exec.Command("git", "-C", s.f.root, "rev-parse", "--verify", "-q", pinRef(s.verifiedRun)).Output(); err == nil {
+		pinRepo := s.f.root
+		if s.forkName != "" {
+			pinRepo = filepath.Join(s.f.root, ".forks", "lanes", "lane-1", s.forkName)
+		}
+		if out, err := exec.Command("git", "-C", pinRepo, "rev-parse", "--verify", "-q", pinRef(s.verifiedRun)).Output(); err == nil {
 			s.pinnedAtRepair = strings.TrimSpace(string(out))
 		}
 		s.repairText = append(s.repairText, told)
@@ -577,8 +581,8 @@ func TestVerifyReturnOnColdSecondLane(t *testing.T) {
 	}
 }
 
-// A fork-series item runs the same route: the candidate is pinned out of the fork checkout,
-// and the build step restages on another lane's fork checkout at the verified commit.
+// A fork-series candidate is pinned in its source fork, and the build step
+// fetches it into another lane's fork checkout at the verified commit.
 func TestVerifyReturnForkSeriesColdSecondLane(t *testing.T) {
 	var fork2 string
 	l, s, f := verifyReturnFixture(t, true, func(w *workflowSteps) *verifyReturnSteps {

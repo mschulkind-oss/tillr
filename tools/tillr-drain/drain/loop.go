@@ -1704,7 +1704,19 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 					if nodeBase == "" {
 						nodeBase = l.laneBase(decision.LaneID)
 					}
-					if previous != "" && restartWriter(decision) {
+					forkTarget := l.laneForkTarget(decision.LaneID)
+					var rebase string
+					if forkTarget != "" {
+						var err error
+						rebase, err = l.forkRebaseDir(ctx, forkTarget)
+						if err != nil {
+							if holdErr := failStage("inspect fork rebase", err); holdErr != nil {
+								return nil, holdErr
+							}
+							continue
+						}
+					}
+					if previous != "" && restartWriter(decision) && rebase == "" {
 						itemBase, scopeBase, err := l.committedRestartBases(ctx, decision.LaneID, nodeBase)
 						if err != nil {
 							if holdErr := failStage("inspect restart lane", err); holdErr != nil {
@@ -1728,17 +1740,26 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 					if resumeCommitted {
 						resetTo = "HEAD"
 					}
-					if _, err := l.git(ctx, target, "reset", "--hard", resetTo); err != nil {
-						if holdErr := failStage("reset workflow lane", err); holdErr != nil {
-							return nil, holdErr
+					if forkTarget != "" {
+						if err := l.resetForkWork(ctx, forkTarget, previous, resetTo); err != nil {
+							if holdErr := failStage("reset workflow fork", err); holdErr != nil {
+								return nil, holdErr
+							}
+							continue
 						}
-						continue
-					}
-					if _, err := l.git(ctx, target, "clean", "-fd"); err != nil {
-						if holdErr := failStage("clean workflow lane", err); holdErr != nil {
-							return nil, holdErr
+					} else {
+						if _, err := l.git(ctx, target, "reset", "--hard", resetTo); err != nil {
+							if holdErr := failStage("reset workflow lane", err); holdErr != nil {
+								return nil, holdErr
+							}
+							continue
 						}
-						continue
+						if _, err := l.git(ctx, target, "clean", "-fd"); err != nil {
+							if holdErr := failStage("clean workflow lane", err); holdErr != nil {
+								return nil, holdErr
+							}
+							continue
+						}
 					}
 				}
 			}
@@ -2298,6 +2319,14 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			failover.CorrelationID = tick
 			if err := l.preserveWork(ctx, lane, request.RunID, "infrastructure failure before failover"); err != nil {
 				return laneOutcome{err: err}
+			}
+			if l.laneForkTarget(lane) != "" {
+				if err := l.pinLane(ctx, lane, request.RunID, l.headOf(ctx, lane)); err != nil {
+					return laneOutcome{err: err}
+				}
+				if err := l.restoreForkDelivery(ctx, lane, request.RunID); err != nil {
+					return laneOutcome{err: err}
+				}
 			}
 			if err := l.resetLane(ctx, lane); err != nil {
 				return laneOutcome{err: err}
@@ -3305,16 +3334,19 @@ func (l *Loop) headOf(ctx context.Context, lane string) string {
 
 // pin keeps a root commit reachable after lane reset and garbage collection.
 func (l *Loop) pin(ctx context.Context, runID, sha string) error {
-	return l.pinFrom(ctx, "", runID, sha)
+	return writeRunPin(ctx, l.git, l.cfg.Root, runID, sha, false)
 }
 
-func (l *Loop) pinFrom(ctx context.Context, checkout, runID, sha string) error {
-	return writeRunPin(ctx, l.git, l.cfg.Root, checkout, runID, sha, false)
+func (l *Loop) lanePinRepository(lane string) string {
+	if fork := l.laneForkTarget(lane); fork != "" {
+		return fork
+	}
+	return l.cfg.Root
 }
 
 // pinLane also handles fork lanes, whose candidates live in a separate repository.
 func (l *Loop) pinLane(ctx context.Context, lane, runID, sha string) error {
-	return l.pinFrom(ctx, l.laneForkTarget(lane), runID, sha)
+	return writeRunPin(ctx, l.git, l.lanePinRepository(lane), runID, sha, false)
 }
 
 // maxRefComponent is the longest one path component of a ref name the file system stores:
@@ -3394,6 +3426,15 @@ func (l *Loop) fenceViolationAt(ctx context.Context, candidate Candidate, fenceP
 	if dirty := strings.TrimSpace(status); dirty != "" {
 		return fmt.Sprintf("%s: the candidate worktree is not clean, so the commit is not the change that was judged: %s",
 			ScopeEscape, strings.Join(strings.Split(dirty, "\n"), "; ")), nil
+	}
+	if candidate.Worktree != "" && candidate.Worktree == l.laneForkTarget(candidate.LaneID) {
+		rebase, err := l.forkRebaseDir(ctx, candidate.Worktree)
+		if err != nil {
+			return "", err
+		}
+		if rebase != "" {
+			return ScopeEscape + ": the fork checkout is still rebasing, so its detached HEAD is not a finished candidate", nil
+		}
 	}
 	// Disable rename detection so both the removed source and added destination
 	// are checked; a rename into scope must not hide a deletion outside it.
@@ -3561,6 +3602,9 @@ func (l *Loop) abandonFromBase(ctx context.Context, lane, runID, headSHA, base s
 			}
 			return ""
 		}
+	}
+	if err := l.restoreForkDelivery(ctx, lane, runID); err != nil {
+		return l.retainUnpreserved(ctx, lane, runID, headSHA, err)
 	}
 	if err := l.resetLane(ctx, lane); err != nil {
 		// The reset is not the tick's outcome: the next tick's own stage step resets the

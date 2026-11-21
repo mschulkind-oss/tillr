@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A stale footer cannot make the runner's live probe end a parked call."""
+"""Earlier footers cannot stand in for a parked or empty final turn."""
 import json
 from pathlib import Path
 import subprocess
@@ -10,6 +10,27 @@ EXTRACT = Path(__file__).resolve().parent.parent / "extract-report"
 
 
 class ParkedProbeTest(unittest.TestCase):
+    def test_reasoning_only_last_turn_is_not_a_verdict(self):
+        earlier = {"role": "assistant", "content": [{"type": "text", "text": "RESULT: done"}]}
+        final = {"role": "assistant", "content": [{"type": "thinking", "thinking": "private"}]}
+        for ending in (
+            [{"type": "agent_end", "messages": [earlier, final]}],
+            [{"type": "message_end", "message": final}],
+            [{"type": "message", "message": final}],
+        ):
+            with self.subTest(ending=ending):
+                events = [
+                    {"type": "message_update", "message": earlier, "assistantMessageEvent": {"type": "text_delta", "delta": "RESULT: done"}},
+                    *ending,
+                ]
+                stream = "".join(json.dumps(event) + "\n" for event in events)
+                report = subprocess.run([str(EXTRACT), "--exit-code", "0"], input=stream, text=True, capture_output=True)
+                self.assertEqual(report.returncode, 4, report.stderr)
+                self.assertIn("result: missing", report.stdout)
+                self.assertIn("last assistant turn had no text or tool call", report.stdout)
+                self.assertNotIn("RESULT: done", report.stdout)
+                self.assertNotIn("private", report.stdout)
+
     def test_stale_footer_is_not_a_live_verdict(self):
         events = [
             {"type": "agent_settled"},

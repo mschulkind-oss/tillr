@@ -267,7 +267,7 @@ func TestContinuingWorkflowNodeStartsAfterTrunkMovesAndFromPin(t *testing.T) {
 	})
 }
 
-func TestPinLaneUsesTheForkAsSourceOnlyForItsOwnLane(t *testing.T) {
+func TestPinLaneDoesNotCrossRepositoryBoundaries(t *testing.T) {
 	ctx := context.Background()
 	root := scratchUnderDurable(t)
 	runGit(t, root, "init", "-q", "-b", "main")
@@ -302,11 +302,11 @@ func TestPinLaneUsesTheForkAsSourceOnlyForItsOwnLane(t *testing.T) {
 		t.Fatal("an ordinary lane's missing object must still fail the pin")
 	}
 
-	if err := l.pinLane(ctx, "lane-2", "run-held", rootHead); err != nil {
-		t.Fatal(err)
+	if err := l.pinLane(ctx, "lane-2", "run-held", rootHead); err == nil {
+		t.Fatal("a fork lane must not fall back to pinning a root-only commit")
 	}
-	if got := runGit(t, root, "rev-parse", "--verify", pinRef("run-held")+"^{commit}"); got != rootHead {
-		t.Fatalf("root-held commit pin = %s, want %s", got, rootHead)
+	if _, err := l.revParse(ctx, root, pinRef("run-held")+"^{commit}"); err == nil {
+		t.Fatal("fork lane wrote a pin in the root repository")
 	}
 
 	if err := l.pinLane(ctx, "lane-1", "run-plain", rootHead); err != nil {

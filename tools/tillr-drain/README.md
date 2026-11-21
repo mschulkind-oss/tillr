@@ -2902,6 +2902,13 @@ for sibling boundaries, and refreshes the shared cache's `main`; two items for t
 fork remain serialized. For a mixed item, the drain records the fork publication and
 only then starts a separate run for the repository part.
 
+Run pins for fork commits live in the lane's fork repository. Before releasing an
+unsuccessful fork run's checkout, the drain saves its staged and working changes under
+`refs/tillr/preserved/<run-id>` in that same repository. If a rebase was in progress,
+it also keeps the replayed head and the original tip under run pins before quitting the
+rebase. It then restores `main` to the current delivered patch tip. A workflow node that
+is being restarted, rather than released, restages at its recorded node base.
+
 The fork gate is [fork-gate.py](fork-gate.py), whose `fork-build` check runs through
 `tillr-gate` on a clean copy of the exact candidate head with the pack's declared
 build command. When `fork-build` passes in that same clean clone, `fork-quality`

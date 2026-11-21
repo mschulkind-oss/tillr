@@ -2973,7 +2973,7 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 			// The run pin is the release's retained head. A crash after
 			// reset but before markExamined must never replace it with
 			// the reset trunk head on replay.
-			pinned, pinErr := l.git(ctx, l.cfg.Root, "for-each-ref", "--format=%(objectname)", pinRef(d.RunRequest.RunID))
+			pinned, pinErr := l.git(ctx, l.lanePinRepository(d.LaneID), "for-each-ref", "--format=%(objectname)", pinRef(d.RunRequest.RunID))
 			err = pinErr
 			if err == nil && strings.TrimSpace(pinned) == "" {
 				head, headErr := l.revParse(ctx, l.laneTarget(d.LaneID), "HEAD")
@@ -2988,6 +2988,9 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 					base = work.BaseSHA
 				}
 				err = l.preserveWorkFromBase(ctx, d.LaneID, d.RunRequest.RunID, base, "orphaned workflow released")
+				if err == nil {
+					err = l.restoreForkDelivery(ctx, d.LaneID, d.RunRequest.RunID)
+				}
 				if err == nil {
 					err = l.resetLane(ctx, d.LaneID)
 				}

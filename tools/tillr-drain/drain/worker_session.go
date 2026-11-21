@@ -249,7 +249,7 @@ func (l *Loop) retainedWorkerSession(ctx context.Context, runID string) (*Worker
 	if err != nil || !triaged {
 		return session, err
 	}
-	head, err := l.revParse(ctx, l.cfg.Root, pinRef(runID)+"^{commit}")
+	head, err := l.revParse(ctx, l.lanePinRepository(session.LaneID), pinRef(runID)+"^{commit}")
 	if err != nil {
 		return nil, err
 	}

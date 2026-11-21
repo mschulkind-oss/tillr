@@ -214,6 +214,12 @@ New stdout, stderr (including the adapter's separate stream error file), CPU tic
 or changed group membership restarts the count. A new `agent_start` removes the
 settlement evidence. A resumed execution cannot reuse an earlier segment's footer.
 
+If Pi's last assistant turn has neither visible text nor a tool call, the extractor
+reports a missing result even if an earlier turn printed a footer or Pi exited zero.
+For a workflow worker, the drain uses its missing-report path: it preserves the work
+and restarts the same node through backend failover instead of marking it complete.
+A separately recorded landing offer remains independent evidence of a tool call.
+
 The kill reaches the harness and helpers in its private process group, not sibling
 processes in the lane. Linux process counters include helper CPU and the CPU of
 children the harness has reaped. Missing or unreadable evidence does not authorize
