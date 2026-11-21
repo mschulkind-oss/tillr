@@ -292,8 +292,26 @@ Leaving a finished state records its reason and actor in the event without repla
 that entry's stored evidence. Retrying the same state neither appends an event nor
 replaces the stored evidence. Old finished rows remain readable with no invented receipt.
 On Git-landing, `resolved-elsewhere` requires `--resolves-via` on `state` or
-`apply`; the reason and actor remain optional for entry. `landed` requires completed criteria and a current receipt,
-not these flags. Leaving `landed` for `in-queue` requires reason and actor.
+`apply`; the reason and actor remain optional for entry. An ordinary move to
+`landed` requires completed criteria and current landing evidence, not these
+flags. Leaving `landed` for `in-queue` requires reason and actor.
+
+### Finish an item that already landed
+
+If an open Git-landing item already has an unreverted landing and its remaining
+work is covered by another commit or item, the operator can finish it without
+recording criterion verdicts:
+
+Use `tillr item state --state landed --finish-existing-landing` with the
+operator's name, reason, and a `commit:<sha>` or `item:<id>` pointer to the
+remaining work. See `tillr item state --help` for the required arguments. This writes an `item.update`
+with `lifecycle_action: finish-existing-landing`, leaves the criteria and landing
+history unchanged, and refuses a missing or reverted landing. A graph completion
+alone is not a landing. The flag cannot be combined with `--require-verdicts`.
+An ordinary move to `landed` still requires completed criteria, and `close`
+still refuses an unreverted landing.
+
+### Other state-writing checks
 
 `state --require-verdicts` refuses a move as `criteria-unjudged` unless every
 criterion has an `item.verdict` event bound to the hash of its stored text. This

@@ -2454,6 +2454,26 @@ func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err e
 	if err != nil {
 		return "", err
 	}
+	// An explicit finish can arrive while a run face still owns its lease. End
+	// only those runs, using normal interruption and recovery before settlement.
+	var finished map[string]bool
+	for _, p := range plans {
+		if p.decision.Action == ActionHold && p.decision.Reason == ReasonItemAlreadyTerminal {
+			if finished == nil {
+				finished = map[string]bool{}
+			}
+			finished[p.decision.ItemID] = true
+		}
+	}
+	if len(finished) != 0 {
+		skipped, err := endRuns(ctx, l.cfg.Store, finished)
+		if err != nil {
+			return "", err
+		}
+		for _, line := range skipped {
+			l.reportf("loop: finish existing landing: %s\n", line)
+		}
+	}
 	// Resolve batches that disappeared before applying this snapshot. Closing a
 	// comment item changes dispatch eligibility for its document's build items,
 	// so take a fresh snapshot in this same pass, not at the next wake.

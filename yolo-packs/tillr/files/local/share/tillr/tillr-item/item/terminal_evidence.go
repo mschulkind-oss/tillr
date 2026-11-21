@@ -58,6 +58,9 @@ func checkTerminalEvidence(r *store.Reader, d definition.Definition, id, from, t
 		return nil
 	}
 	if to == "landed" {
+		if receipt.FinishExistingLanding {
+			return checkExistingLandingFinish(r, id, receipt)
+		}
 		p, _, err := readStoredItem(r, id)
 		if err != nil {
 			return err
@@ -80,6 +83,29 @@ func checkTerminalEvidence(r *store.Reader, d definition.Definition, id, from, t
 		if strings.TrimSpace(receipt.ResolvesVia) == "" {
 			return Rejectionf("resolved-pointer-missing", id, "item %q needs --resolves-via", id)
 		}
+	}
+	return nil
+}
+
+// Graph completion is not enough for an operator finish. Use the same unreverted
+// landing check that refuses Close, without changing the landing or its receipt.
+func checkExistingLandingFinish(r *store.Reader, id string, receipt MoveReceipt) error {
+	if strings.TrimSpace(receipt.Reason) == "" || strings.TrimSpace(receipt.By) == "" {
+		return Usagef("--finish-existing-landing needs non-empty --reason and --by")
+	}
+	if strings.TrimSpace(receipt.ResolvesVia) == "" {
+		return Rejectionf("resolved-pointer-missing", id, "item %q needs --resolves-via", id)
+	}
+	kind, _, _ := strings.Cut(receipt.ResolvesVia, ":")
+	if kind != "commit" && kind != "item" {
+		return Usagef("--finish-existing-landing needs --resolves-via item:<id> or commit:<sha>")
+	}
+	current, err := hasCurrentLanding(r, id)
+	if err != nil {
+		return Internalf("reading landings: %v", err)
+	}
+	if !current {
+		return Rejectionf("landed-receipt-missing", id, "item %q has no unreverted landing receipt", id)
 	}
 	return nil
 }
