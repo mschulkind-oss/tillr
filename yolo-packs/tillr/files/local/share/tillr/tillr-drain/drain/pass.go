@@ -2395,6 +2395,9 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 	if err == nil && releasedLane {
 		l.notifyStartLaneReleased(d.LaneID, d.RunRequest.RunID, true, at)
 	}
+	if err == nil && routed != nil && IsRemoteSyncItem(routed.itemID) {
+		l.escalateRemoteSyncPushState(ctx, routed.itemID, "operator", "repeated ending")
+	}
 	return err
 }
 

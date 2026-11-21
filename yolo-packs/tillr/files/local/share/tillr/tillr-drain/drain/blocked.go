@@ -401,7 +401,14 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 		c.Text += "\n\n" + instruction
 	}
 	l.reportf("loop: %s conflict %s waits on %s: %s\n", c.ItemID, c.ConflictID, c.WaitingOn, c.Text)
-	return l.saveBlockConflict(ctx, c)
+	if err := l.saveBlockConflict(ctx, c); err != nil {
+		return err
+	}
+	if IsRemoteSyncItem(c.ItemID) && c.Status == "owner" {
+		who, reason := remoteSyncObstacleMover(obstacle.Kind)
+		l.escalateRemoteSyncPushState(ctx, c.ItemID, who, reason)
+	}
+	return nil
 }
 
 func (l *Loop) blockReference(ctx context.Context, id string) (string, error) {

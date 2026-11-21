@@ -2891,8 +2891,12 @@ history; in that case the run pin stays.
 Remote-sync filing describes a `remote-sync-conflict` as one express repair item
 per remote tip, with a fence containing only the literal, permitted conflict
 paths. If any path is gate code or cannot be represented in the fence, the
-item is blocked on the owner. The filer does not move main, green or the main
-checkout. The live refused-push path does not yet call the filer.
+item is blocked on the owner. Once dispatched, the repair follows generated-item
+obstacle routing: it can widen its fence over permissible paths, or escalate the
+conflict to the owner or operator. An identical repeated refusal holds the repair
+for the operator to reconcile `main` with the staged remote tip; there is no item
+block to amend. The filer does not move main, green or the main checkout. The live
+refused-push path does not yet call the filer.
 
 Set-aside also writes `runs/<run>-set-aside-base`, a pointer to the lane's reset
 destination so an interrupted reset can resume. It follows its owning run's

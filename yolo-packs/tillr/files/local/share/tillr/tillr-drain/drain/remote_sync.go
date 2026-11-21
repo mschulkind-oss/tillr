@@ -24,6 +24,26 @@ type PushOutcome struct {
 	OK     bool   `json:"ok"`
 }
 
+func (l *Loop) escalateRemoteSyncPushState(ctx context.Context, itemID, who, reason string) {
+	st, ok, err := l.readRemoteSyncState(ctx, itemID)
+	if err != nil || !ok {
+		return
+	}
+	l.recordPush(ctx, l.cfg.PostLanding.Push.What, st.OldTrunk, remoteSyncConflictError(st, who, reason))
+}
+
+func remoteSyncObstacleMover(kind string) (who, reason string) {
+	who = "operator"
+	if kind == ObstacleOwner || kind == ObstacleFence {
+		who = "owner"
+	}
+	reason = kind
+	if reason == "" {
+		reason = "repeated or unresolved block"
+	}
+	return who, reason
+}
+
 // PushOnce uses the loop's publication and locked replay paths. The loop owns deployment.
 func PushOnce(ctx context.Context, root, storePath string) (PushOutcome, error) {
 	root, err := filepath.Abs(root)

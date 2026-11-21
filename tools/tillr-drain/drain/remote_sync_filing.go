@@ -321,8 +321,11 @@ func remoteSyncConflictError(st remoteSyncState, who, reason string) *pushStateE
 	destination := remoteSyncDestination(st)
 	action := "resolve rebase conflict onto " + destination
 	mover, detail := st.ItemID+"; "+action, "; "+action+" on "
-	if who == "owner" {
-		mover = "owner; resolve " + st.ItemID + " conflict onto " + destination
+	if who != "" {
+		mover = "operator; rebase " + TrunkRef + " onto " + destination
+		if who == "owner" {
+			mover = "owner; resolve " + st.ItemID + " conflict onto " + destination
+		}
 		detail = " escalated (" + reason + ") on "
 	}
 	return &pushStateError{
