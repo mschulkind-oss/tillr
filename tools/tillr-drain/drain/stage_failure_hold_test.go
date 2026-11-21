@@ -3,6 +3,7 @@ package drain
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -174,10 +175,6 @@ func TestStagingRunDirWrapperFailureHoldsItemWithNamedMoverAndKeepsLoopRunning(t
 	if got := steps.items(); !reflect.DeepEqual(got, []string{"item-b"}) {
 		t.Fatalf("dispatched items = %v, want [item-b] on the freed lane", got)
 	}
-	if !strings.Contains(report.String(), "tillr drain clear-fault --item <item>") {
-		t.Fatalf("loop report missing named mover: %s", report.String())
-	}
-
 	s := openFixture(t, f.storePath)
 	defer s.Close()
 	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
@@ -188,6 +185,10 @@ func TestStagingRunDirWrapperFailureHoldsItemWithNamedMoverAndKeepsLoopRunning(t
 		fault, ok := faults["item-a"]
 		if !ok || fault.Reason != ReasonStageFailed || fault.RunID != "run-item-a-a1" || fault.LaneID != "lane-1" {
 			t.Fatalf("item-a fault = %+v (ok=%v), want stage-failed on run-item-a-a1 / lane-1", fault, ok)
+		}
+		wantCommand := fmt.Sprintf("tillr drain clear-fault --store '%s' --item 'item-a' --fault %d", f.storePath, fault.Seq)
+		if !strings.Contains(report.String(), "loop: item-a mover: fix the staging fault the detail names, then "+wantCommand+"\n") {
+			t.Fatalf("loop report missing named mover with %q: %s", wantCommand, report.String())
 		}
 		if !strings.Contains(fault.Detail, "start stage pipeline") {
 			t.Fatalf("item-a fault detail = %q, want start stage pipeline detail", fault.Detail)
@@ -204,7 +205,7 @@ func TestStagingRunDirWrapperFailureHoldsItemWithNamedMoverAndKeepsLoopRunning(t
 			t.Fatalf("item-a retained %d unlaunched dispatch rows, want 0", dispatchesA)
 		}
 
-		answer, err := Why(r, Pass{Now: loop.cfg.Now().Format("2006-01-02T15:04:05Z07:00"), AvailableLanes: &loop.cfg.Lanes}, loop.cfg.Policy, nil)
+		answer, err := Why(r, Pass{StorePath: f.storePath, Now: loop.cfg.Now().Format("2006-01-02T15:04:05Z07:00"), AvailableLanes: &loop.cfg.Lanes}, loop.cfg.Policy, nil)
 		if err != nil {
 			return err
 		}
@@ -215,8 +216,8 @@ func TestStagingRunDirWrapperFailureHoldsItemWithNamedMoverAndKeepsLoopRunning(t
 				continue
 			}
 			found = true
-			if row.Reason != ReasonStageFailed || row.Class != rule.Class || row.Where != rule.Where || !strings.HasSuffix(row.Mover, "; "+rule.Mover) {
-				t.Fatalf("why row = (%q, %q, %q, %q), want rule %+v", row.Reason, row.Class, row.Where, row.Mover, rule)
+			if row.Reason != ReasonStageFailed || row.Class != rule.Class || row.Where != rule.Where || !strings.HasSuffix(row.Mover, wantCommand) {
+				t.Fatalf("why row = (%q, %q, %q, %q), want rule %+v with %q", row.Reason, row.Class, row.Where, row.Mover, rule, wantCommand)
 			}
 			if !strings.Contains(row.Why, fault.Detail) {
 				t.Fatalf("why = %q, missing fault detail %q", row.Why, fault.Detail)

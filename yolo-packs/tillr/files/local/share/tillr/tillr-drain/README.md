@@ -2291,8 +2291,9 @@ item they touch so the loop goes on. The owner ruled that the loop never stops o
 item's condition. `stage-failed` holds an item whose run could not be staged on its
 lane or run directory (`ENAMETOOLONG`, `RunDir` or per-run staging preparation
 failures, or `stageParallel`), retracting its unlaunched claim, freeing the lane,
-counting zero infrastructure failures, and naming the operator mover
-(`fix the staging fault the detail names, then tillr drain clear-fault --item <item>`).
+and counting zero infrastructure failures. The mover in `tillr drain why` and
+`tillr view waiting` tells the operator to fix the staging fault, then gives the
+complete `tillr drain clear-fault` command with the store, item ID and fault sequence.
 Fresh fork staging can move a clean lane checkout's `main` back to the delivered tip
 when a run pin or preserved-work ref in that checkout still reaches its old tip.
 After a landed release rebase, the lander's `refs/tillr/patch-history/<fork>/` pins
