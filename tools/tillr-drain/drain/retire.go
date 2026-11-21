@@ -12,14 +12,14 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// retireDocumentBlock is loop-owned maintenance, after the worker's fence check and before
-// the gate. Its separate commit may touch tracked documents outside the worker's fence;
-// the worker's already-checked diff is never exempted from that fence.
-func (l *Loop) retireDocumentBlock(ctx context.Context, candidate Candidate) (Candidate, error) {
+// prepareCandidate adds loop-owned maintenance after the worker's fence check. Document
+// retirement and mirror regeneration share one bound commit, so the gate and the lander
+// see the same tree while recovery can still check the original worker's diff.
+func (l *Loop) prepareCandidate(ctx context.Context, candidate Candidate, retireBlock bool) (Candidate, error) {
 	if candidate.BaseRef != "" {
 		// A patch-branch candidate was already exported to the delivery repository.
 		// A new commit here would be undeliverable, and its docs are not trunk docs.
-		l.reportf("loop: %s patch-branch candidate: trunk document retirement does not apply\n", candidate.ItemID)
+		l.reportf("loop: %s patch-branch candidate: trunk maintenance does not apply\n", candidate.ItemID)
 		return candidate, nil
 	}
 	if candidate.WorkerHeadSHA != "" {
@@ -30,11 +30,53 @@ func (l *Loop) retireDocumentBlock(ctx context.Context, candidate Candidate) (Ca
 		return candidate, err
 	}
 	if strings.TrimSpace(head) != candidate.HeadSHA {
-		return candidate, Externalf("candidate %s HEAD differs from its recorded head; refusing unbound document maintenance", candidate.ItemID)
+		return candidate, Externalf("candidate %s HEAD differs from its recorded head; refusing unbound maintenance", candidate.ItemID)
 	}
+	mirrored, err := l.stagePackMirror(ctx, candidate)
+	if err != nil {
+		return candidate, err
+	}
+	var retired bool
+	if retireBlock {
+		retired, err = l.retireDocumentBlock(ctx, candidate)
+		if err != nil {
+			return candidate, err
+		}
+	}
+	if !mirrored && !retired {
+		return candidate, nil
+	}
+	kind, message := candidatePreparedKind, "chore: regenerate tillr pack mirror"
+	if retired {
+		// Only a real block retirement is evidence for retiredOriginal.
+		kind, message = candidateRetirementKind, "chore: retire landed document block"
+	}
+	tree, err := l.git(ctx, candidate.Worktree, "write-tree")
+	if err != nil {
+		return candidate, err
+	}
+	candidate.WorkerHeadSHA = candidate.HeadSHA
+	candidate.RetirementTreeSHA = strings.TrimSpace(tree)
+	// Persist the tree before the ref-changing commit. Recovery validates HEAD's parent
+	// and tree against this intent; an interruption before the commit fails explicitly,
+	// rather than silently landing the old worker tree.
+	if err := appendJudgment(ctx, l.cfg.Store, kind, "run", candidate.RunID, candidate, l.cfg.Now().UTC()); err != nil {
+		return candidate, err
+	}
+	if _, err := l.git(ctx, candidate.Worktree, "commit", "-m", message); err != nil {
+		return candidate, err
+	}
+	candidate, err = l.recoverRetirement(ctx, candidate)
+	if err == nil {
+		l.reportf("loop: prepared %s (pack mirror: %t, document retirement: %t) at %s\n", candidate.ItemID, mirrored, retired, candidate.HeadSHA)
+	}
+	return candidate, err
+}
+
+func (l *Loop) retireDocumentBlock(ctx context.Context, candidate Candidate) (bool, error) {
 	docs, err := item.ReadSyncDocuments(candidate.Worktree)
 	if err != nil {
-		return candidate, Externalf("reading candidate documents for retirement: %v", err)
+		return false, Externalf("reading candidate documents for retirement: %v", err)
 	}
 	type change struct {
 		path, text string
@@ -51,10 +93,10 @@ func (l *Loop) retireDocumentBlock(ctx context.Context, candidate Candidate) (Ca
 		path := filepath.Join(candidate.Worktree, filepath.FromSlash(doc.Path))
 		info, err := os.Lstat(path)
 		if err != nil {
-			return candidate, Externalf("reading retirement document %s: %v", doc.Path, err)
+			return false, Externalf("reading retirement document %s: %v", doc.Path, err)
 		}
 		if !info.Mode().IsRegular() {
-			return candidate, Externalf("retirement document %s is not a regular file", doc.Path)
+			return false, Externalf("retirement document %s is not a regular file", doc.Path)
 		}
 		changes = append(changes, change{path: doc.Path, text: text, mode: info.Mode().Perm()})
 	}
@@ -62,39 +104,17 @@ func (l *Loop) retireDocumentBlock(ctx context.Context, candidate Candidate) (Ca
 		l.reportf("loop: %s document block not found; continuing candidate\n", candidate.ItemID)
 	}
 	if len(changes) == 0 {
-		return candidate, nil
+		return false, nil
 	}
 	paths := []string{"add", "--"}
 	for _, c := range changes {
 		if err := os.WriteFile(filepath.Join(candidate.Worktree, filepath.FromSlash(c.path)), []byte(c.text), c.mode); err != nil {
-			return candidate, Externalf("retiring document %s: %v", c.path, err)
+			return false, Externalf("retiring document %s: %v", c.path, err)
 		}
 		paths = append(paths, c.path)
 	}
-	if _, err := l.git(ctx, candidate.Worktree, paths...); err != nil {
-		return candidate, err
-	}
-	tree, err := l.git(ctx, candidate.Worktree, "write-tree")
-	if err != nil {
-		return candidate, err
-	}
-	candidate.WorkerHeadSHA = candidate.HeadSHA
-	candidate.RetirementTreeSHA = strings.TrimSpace(tree)
-	// Persist the tree before the ref-changing commit. Recovery validates HEAD's parent
-	// and tree against this intent; an interruption before the commit fails explicitly,
-	// rather than silently landing the old worker tree.
-	if err := appendJudgment(ctx, l.cfg.Store, candidateRetirementKind, "run", candidate.RunID, candidate, l.cfg.Now().UTC()); err != nil {
-		return candidate, err
-	}
-	if _, err := l.git(ctx, candidate.Worktree, "commit", "-m", "chore: retire landed document block"); err != nil {
-		return candidate, err
-	}
-	candidate, err = l.recoverRetirement(ctx, candidate)
-	if err != nil {
-		return candidate, err
-	}
-	l.reportf("loop: retired %s document block and dependencies in %d document(s) (%s)\n", candidate.ItemID, len(changes), candidate.HeadSHA)
-	return candidate, nil
+	_, err = l.git(ctx, candidate.Worktree, paths...)
+	return err == nil, err
 }
 
 // recoverRetirement accepts only the one maintenance commit whose parent and tree the

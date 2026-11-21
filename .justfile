@@ -261,7 +261,9 @@ session-liveness *args:
 # yolo-packs/tillr/files/local/share/tillr/<module>. The copy is committed because the
 # pack -- not this checkout -- is what puts `tillr` on PATH in a workspace that has no
 # tools/. `tests/pack-sync.test.py` fails when the copy diverges from its source.
-pack-sync:
+# With module arguments, render only those modules (used for drain candidates).
+[positional-arguments]
+pack-sync *modules:
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(cd "$(dirname "{{justfile()}}")" && pwd)"
@@ -271,7 +273,15 @@ pack-sync:
     # reads that as a broken link. Point the same prose at the repository on GitHub
     # instead; the source README keeps the relative links that work where it lives.
     mirror() {
-        local module="$1" dst="$2" rel file
+        local module="$1" dst="$2" rel file parent
+        parent="$(dirname "$dst")"
+        while [ "$parent" != "$root" ]; do
+            if [ -L "$parent" ]; then
+                echo "pack-sync: refusing symlinked destination ancestor: $parent" >&2
+                return 1
+            fi
+            parent="$(dirname "$parent")"
+        done
         rm -rf "$dst"
         mkdir -p "$dst"
         # Every file git would commit -- tracked, plus untracked-but-not-ignored, because
@@ -308,7 +318,15 @@ pack-sync:
     # ships as source only: `tillr-run`'s pi adapter sources its `bash-shim.sh` through
     # `BASH_ENV`, and nothing on PATH is built from it.
     # tillr-roll is source-only: the repository's keeper is run by the recipe below.
-    for module in tillr tillr-cli tillr-drain tillr-gate tillr-item tillr-land tillr-run tillr-store tillr-view tillr-trace tillr-roll; do
+    shipped=(tillr tillr-cli tillr-drain tillr-gate tillr-item tillr-land tillr-run tillr-store tillr-view tillr-trace tillr-roll)
+    if [ "$#" -eq 0 ]; then set -- "${shipped[@]}"; fi
+    for module in "$@"; do
+        if [[ ! "$module" =~ ^[a-z-]+$ || " ${shipped[*]} " != *" $module "* ]]; then
+            echo "pack-sync: unknown module: $module" >&2
+            exit 2
+        fi
+    done
+    for module in "$@"; do
         mirror "$module" "$root/yolo-packs/tillr/files/local/share/tillr/$module"
     done
 
