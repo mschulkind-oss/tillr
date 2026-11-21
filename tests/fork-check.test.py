@@ -62,11 +62,7 @@ of the command:
     suite, and a failing assertion it names is a verdict -- FAILED, exit 1 -- while a
     failure that names no case (a crash, a timeout, an import error, a `SystemExit`
     with only a message) stays NOT VERIFIED, so the gate's own integrity is unknown
-    rather than judged; a red self-suite never passes the batch either way, and the
-    step is declared EXCLUSIVE, because it spawns real gates and on 2026-10-29 it
-    errored only while other gate work was in flight, so contention is removed from
-    the run instead of stranding a candidate with `gate-unverified` (board items 315
-    and 420);
+    rather than judged; a red self-suite never passes the batch either way;
   * a change confined to the gate's own selection or reporting code (`GATE_CODE`)
     plans the self-suite and no fork check, while a change to the code that
     materializes or judges a series (`MECHANISM`) still forces every fork check -- so a
@@ -95,9 +91,8 @@ of the command:
     assertion, the paths it names, the commits that touched them, and the one-file command
     that reproduces it -- written machine-readably beside the record, printed in the report,
     and retrievable with `--triage` so the repair path can dispatch a debugger with it;
-  * a check whose verdict is decided by real time is declared EXCLUSIVE in the plan and runs
-    with nothing else of the gate beside it, while a step that merely spawns real children is
-    decided by what the product recorded and stays in the pool;
+  * the gate's own audit and the pi-subagents unit suite are admitted alongside independent
+    checks, and no fork-quality case is quarantined by default;
   * the shared pipeline-evidence format's conformance suite is planned when the format,
     its suite, or the gate's own record builder moves -- and a real gate run writes its own
     records in that format beside its record.
@@ -131,7 +126,6 @@ of the command:
 """
 
 import contextlib
-import copy
 import hashlib
 import importlib.util
 import io
@@ -358,7 +352,7 @@ def copy_identity_check(repo):
             stub.write_text("")
 
 
-# The stand-in for the one test file the gate's live quarantine names, and its git blob id:
+# The stand-in for the file named by the fixture quarantine, and its git blob id:
 # the hash of `blob <size>`, a NUL and the bytes, which is what `git hash-object` prints.
 QUARANTINE_FIXTURE_PATH = "test/unit/herdr-native-placement.test.ts"
 QUARANTINE_FIXTURE_CONTENT = b"// the fixture's copy of the quarantined test file\n"
@@ -374,7 +368,22 @@ def quarantine_fixture_file(checkout: Path, content: bytes = QUARANTINE_FIXTURE_
     return path
 
 
-def build_repo(base: Path):
+QUARANTINE_FIXTURE_CASE = "leaves the remote operator's APPEND_SYSTEM.md out of the child's prompt"
+QUARANTINE_FIXTURE_ARGS = {
+    "check": "fork pi-subagents: npm run test:unit",
+    "path": QUARANTINE_FIXTURE_PATH,
+    "cases": frozenset({
+        QUARANTINE_FIXTURE_CASE,
+        "preserves canonical contact_supervisor progress and structured-interview semantics",
+    }),
+    "item": "quarantine/herdr-native-placement",
+    "blob": QUARANTINE_FIXTURE_BLOB,
+    "reason": "Fixture quarantine for an upstream failure",
+    "classification": "upstream",
+}
+
+
+def build_repo(base: Path, *, quarantine=False):
     releases = upstream(base, "pi-subagents")   # follows its newest release tag
     heads = upstream(base, "pi-background-tasks")  # says follow: head
 
@@ -388,15 +397,17 @@ def build_repo(base: Path):
     (repo / "bin").mkdir()
     (repo / "tests").mkdir()
     (repo / "tools").mkdir()
-    # The fixture's gate is the real one with a single value changed: the blob id its live
-    # quarantine is declared against. A quarantine applies only to a file with the declared
-    # content, and the real content lives in the pi-subagents fork, not in this repository,
-    # so the fixture's gate declares the content `quarantine_fixture_file` writes instead.
-    live_blob = _RECORD_TOOL.QUARANTINED_FORK_QUALITY[0].blob
     gate_source = SCRIPT.read_text()
-    assert gate_source.count(live_blob) == 1, "the live quarantine's blob id is not written exactly once"
-    (repo / "tools" / "fork-check.py").write_text(
-        gate_source.replace(live_blob, QUARANTINE_FIXTURE_BLOB))
+    if quarantine:
+        # Install the declaration only in the report fixture's subprocess.
+        entry_point = '\nif __name__ == "__main__":'
+        assert gate_source.count(entry_point) == 1
+        gate_source = gate_source.replace(
+            entry_point,
+            f"\nQUARANTINED_FORK_QUALITY = (Quarantine(**{QUARANTINE_FIXTURE_ARGS!r}),)\n"
+            + entry_point,
+        )
+    (repo / "tools" / "fork-check.py").write_text(gate_source)
     shutil.copymode(SCRIPT, repo / "tools" / "fork-check.py")
 
     (repo / "yolo-packs" / "matt" / "pack.json").write_text(json.dumps({
@@ -2006,7 +2017,7 @@ with tempfile.TemporaryDirectory() as tmp:
 # reached the owner and never the gate. The steps ask for `--deps`, and a failing one is red.
 with tempfile.TemporaryDirectory() as tmp:
     base = Path(tmp)
-    repo, _, _ = build_repo(base)
+    repo, _, _ = build_repo(base, quarantine=True)
     env = build_stubs(base)
     assert run(repo, env).returncode == 0
     patch = repo / "yolo-packs/matt/patches/pi-subagents/0001-x.patch"
@@ -2037,15 +2048,15 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "FAILED" in result.stdout, result.stdout
 
     # A QUARANTINED step must not stop the run reaching a verdict. The unit suite's only
-    # failing case is the bridge acknowledgement's 30 ms real-time budget, declared in
-    # QUARANTINED_FORK_QUALITY, and the test file in the candidate checkout has the content
+    # failing case is covered by the fixture declaration in QUARANTINED_FORK_QUALITY,
+    # and the test file in the candidate checkout has the content
     # the declaration was written against, so the run verifies and the baseline moves. It
     # is still named -- on its own line, with the reason, counted as a quarantined case and
     # never as one that passed -- because a quarantine is not a claim that the case passes
     # (docs/reference/gate-check-rules.md).
     quarantined_file = quarantine_fixture_file(repo / ".forks/candidate/pi-subagents")
     quality = f"npm run test:unit in the clean checkout at {repo / '.forks/candidate/pi-subagents'}"
-    quarantined_case = "leaves the remote operator's APPEND_SYSTEM.md out of the child's prompt"
+    quarantined_case = QUARANTINE_FIXTURE_CASE
     (base / "pi-forks-out").write_text(
         "\u2139 tests 4671\n\u2139 pass 4651\n\u2139 fail 1\n\n\u2716 failing tests:\n\n"
         "test at test/unit/herdr-native-placement.test.ts:186:2\n"
@@ -2058,7 +2069,7 @@ with tempfile.TemporaryDirectory() as tmp:
         record(repo)["baseline"]
     # Named on its own line, with the reason, and not as one of the passing checks.
     assert f"  quarantined      fork pi-subagents: {quality}" in result.stdout, result.stdout
-    assert "because: QUARANTINED, not passed: its 30 ms budget" in result.stdout, result.stdout
+    assert f"because: {QUARANTINE_FIXTURE_ARGS['reason']}" in result.stdout, result.stdout
     assert f"  run  fork-quality fork pi-subagents: {quality}" not in result.stdout, result.stdout
     # The case, the item and the content the declaration was written against are printed
     # with it, with the classification: the cases ran and failed on an upstream timing
@@ -2842,15 +2853,8 @@ with tempfile.TemporaryDirectory() as tmp:
         assert steps[0].watches == ("tools/fork-check.py", "tests/fork-check.test.py",
                                     ".justfile", "tools/gate/", "tests/fast-tree-in-done.test.py",
                                     "tools/preflight-declarations.json"), steps[0].watches
-        # The step runs with nothing else of the gate beside it. It spawns real gates, and
-        # on 2026-10-29 it errored with exit 2 inside a landing pass while other gate work
-        # was in flight while passing standalone on the same tip -- which stranded item
-        # 258's candidate as `gate-unverified` (board item 315). The declaration and its
-        # reason are the fix, so a plan that loses either one fails here rather than
-        # relying on a comment.
-        assert steps[0].exclusive is True, (steps[0].kind, steps[0].exclusive_reason)
-        assert "board item 315" in steps[0].exclusive_reason, steps[0].exclusive_reason
-        assert "standalone" in steps[0].exclusive_reason, steps[0].exclusive_reason
+        assert not hasattr(steps[0], "exclusive")
+        assert not hasattr(steps[0], "exclusive_reason")
     planned = module.build_plan(
         repo, [], module.Record(base / "plan-state.json"), ["bashrc"], None, True,
     )
@@ -2872,12 +2876,12 @@ with tempfile.TemporaryDirectory() as tmp:
     assert result.returncode == 0, result.stdout + result.stderr
     assert "run  self-suite" in result.stdout, result.stdout
     assert calls(base, "self-suite-calls") == ["ran"], calls(base, "self-suite-calls")
-    #      The report says the step held the run alone, and the run's own record names it
-    #      under `exclusive` -- the two places a landing pass reads, rather than the code's
-    #      constant (board item 315).
-    assert "exclusive: runs alone -- it spawns real gates in fixtures" in result.stdout, \
-        result.stdout
-    assert "self-suite" in record(repo)["runs"][-1]["exclusive"], record(repo)["runs"][-1]
+    plan_line = result.stdout.splitlines()[-1]
+    assert plan_line.startswith("fork-check: plan "), plan_line
+    assert "exclusive=" not in plan_line, plan_line
+    assert "exclusive: runs alone" not in result.stdout, result.stdout
+    last_run = record(repo)["runs"][-1]
+    assert "exclusive" not in last_run, last_run
 
     #      The checker is the other input, and it plans the same step on its own.
     clear(base, "self-suite-calls")
@@ -4894,47 +4898,19 @@ with tempfile.TemporaryDirectory() as tmp:
     assert scheduler.write_conflict(("/w/out/frames",), ("/w/out/frames",)) == "/w/out/frames"
     assert scheduler.write_conflict((), ("/w/.forks/pi",)) is None
 
-    # A check the plan declared EXCLUSIVE runs with nothing else in flight: it starts only
-    # with the pool empty and no sibling starts beside it. That is the plan's answer to a
-    # step whose verdict is decided by real time, and it is not a retry at the verdict. The
-    # examples are the fork-quality timing case and the gate's own audit suite, whose runs
-    # disagreed by contention alone (board item 315); both declarations are pinned where
-    # their plans are built too (cases 27a and 27b).
-    exclusive = scheduler.Check("fork-quality",
-                                "fork pi-subagents: npm run test:unit", [], "", 0)
-    assert exclusive.exclusive is True, (exclusive.kind, exclusive.exclusive_reason)
-    own_suite = scheduler.Check("self-suite", "the gate's own audit suite still passes",
-                                [], "", 0)
-    assert own_suite.exclusive is True, (own_suite.kind, own_suite.exclusive_reason)
-    assert "board item 315" in own_suite.exclusive_reason, own_suite.exclusive_reason
-    # `rank-order` is NOT exclusive: its suite spawns real children, but every
-    # assertion in it is a count, an ordering or an equality over recorded state, so
-    # serializing it would spend the run's concurrency for nothing.
-    whale = scheduler.Check("rank-order", "a queued dispatch follows its rank", [], "", 0)
-    assert whale.exclusive is False and whale.exclusive_reason == "", whale.exclusive_reason
-    # `go-tool` is NOT exclusive: its one failure in the gate was an inherited environment,
-    # not contention, and the suite is hermetic against that itself.
-    tool = scheduler.Check("go-tool", "a Go tool's suite", [], "", 0)
-    assert tool.exclusive is False, tool.kind
-    plain = scheduler.Check("rank-order", "the board", [], "", 0)
-    assert plain.exclusive is False and plain.exclusive_reason == "", plain.kind
-    mixed = [scheduler.Check("t", "reader a", [], "", 0), exclusive,
-             scheduler.Check("t", "reader b", [], "", 0)]
-    live: set[int] = set()
-    alongside: list[int] = []
-
-    def tracked(index):
-        live.add(index)
-        if mixed[index].exclusive:
-            alongside.append(len(live))
-        time.sleep(0.05)
-        if mixed[index].exclusive:
-            alongside.append(len(live))
-        live.discard(index)
-
-    scheduler.run_checks(mixed, 3, tracked)
-    assert alongside == [1, 1], alongside
-    assert live == set(), live
+    # Both formerly isolated suites are admitted beside an independent check. Use the
+    # scheduler's submission and completion order, not a wall-clock overlap threshold.
+    mixed = [scheduler.Check("t", "independent reader", [], "", 0, cost=60),
+             scheduler.Check("fork-quality", "fork pi-subagents: npm run test:unit",
+                             [], "", 0, cost=60),
+             scheduler.Check("self-suite", "the gate's own audit suite still passes",
+                             [], "", 0, cost=60)]
+    transitions = []
+    scheduler.run_checks(mixed, 3, lambda _: None,
+                         on_start=lambda index: transitions.append(("start", index)),
+                         on_complete=lambda index: transitions.append(("complete", index)))
+    assert transitions[:3] == [("start", 0), ("start", 1), ("start", 2)], transitions
+    assert all(not hasattr(check, "exclusive") for check in mixed), mixed
 
     # A fork-quality step whose failures are ALL quarantined cases -- real-time budgets the
     # candidate the gate builds meets on an idle run and misses beside the gate's other
@@ -4949,26 +4925,15 @@ with tempfile.TemporaryDirectory() as tmp:
             "semantics")
     append_case = ("leaves the remote operator's APPEND_SYSTEM.md out of the child's prompt")
 
-    # The candidate checkout the step ran in, holding the quarantined file. The live
-    # declaration is installed with the fixture file's blob id in place of its own, because
-    # the real content lives in the fork and not in this repository.
+    # Install a declaration against the fixture candidate checkout, not the real fork.
     quarantine_checkout = base / "quarantine-candidate"
     quarantined_file = quarantine_fixture_file(quarantine_checkout)
     assert scheduler.file_blob_id(quarantined_file) == QUARANTINE_FIXTURE_BLOB == sh(
         base, "git", "hash-object", str(quarantined_file)).stdout.strip()
     assert scheduler.file_blob_id(quarantine_checkout / "absent.ts") is None
     live_declarations = scheduler.QUARANTINED_FORK_QUALITY
-    # The live declarations themselves: each names an item and a full blob id, none is
-    # classified as unable to answer, and no declaration has a date.
-    for one in live_declarations:
-        assert one.item.strip(), one.path
-        assert re.fullmatch(r"[0-9a-f]{40}", one.blob), (one.path, one.blob)
-        assert one.classification in (scheduler.QUARANTINE_UPSTREAM, scheduler.QUARANTINE_FLAKY), \
-            (one.path, one.classification)
-        assert not hasattr(one, "expires"), one.path
-    assert [one.classification for one in live_declarations] == [scheduler.QUARANTINE_UPSTREAM]
-    fixture_declaration = copy.copy(live_declarations[0])
-    fixture_declaration.blob = QUARANTINE_FIXTURE_BLOB
+    assert live_declarations == (), live_declarations
+    fixture_declaration = scheduler.Quarantine(**QUARANTINE_FIXTURE_ARGS)
     scheduler.QUARANTINED_FORK_QUALITY = (fixture_declaration,)
 
     def unit_step(output, rc=1, checkout=quarantine_checkout):
@@ -4985,10 +4950,8 @@ with tempfile.TemporaryDirectory() as tmp:
     known = transcript(at_file + f"✖ {case} (263.675482ms)", [case])
     skip = scheduler.sentinel_skip(unit_step(known))
     assert skip is not None, known
-    assert skip[0] == quality_label, skip
-    assert "QUARANTINED" in skip[1] and "30 ms budget" in skip[1], skip
-    # Which of the quarantined cases loses the race changes from run to run, so a run that
-    # failed the other one is the same skip.
+    assert skip == (quality_label, QUARANTINE_FIXTURE_ARGS["reason"]), skip
+    # Either declared case alone is the same skip.
     other = transcript(at_file + f"✖ {append_case} (381.543693ms)", [append_case])
     assert scheduler.sentinel_skip(unit_step(other)) == (quality_label, skip[1]), other
     # Two quarantined cases failing together are still only quarantined cases.
@@ -5006,10 +4969,8 @@ with tempfile.TemporaryDirectory() as tmp:
     # complete list of this run's failures.
     assert scheduler.sentinel_skip(unit_step(transcript(
         at_file + f"✖ {case} (1ms)", [case], count=2))) is None
-    # A case in the quarantined file that the declaration does not name is somebody's
-    # change, not this machine, and stays a verdict. The declaration names the two fixed
-    # waits around the configure acknowledgement and nothing else; the evidence for that
-    # scope is in `docs/pi/pi-subagents-quarantine-evidence.md`.
+    # A case in the quarantined file that the fixture declaration does not name stays
+    # a verdict.
     assert scheduler.sentinel_skip(unit_step(transcript(
         at_file + "✖ some other case (1ms)", ["some other case"]))) is None
     # A DIFFERENT file failing is somebody's change, not this machine, and stays a verdict.
@@ -5025,13 +4986,11 @@ with tempfile.TemporaryDirectory() as tmp:
     other_kind.kind = "rank-order"
     assert scheduler.sentinel_skip(other_kind) is None
 
-    # The live declaration against the content it was really written for does not apply to
-    # the fixture's file, which has other bytes.
+    # Without a fixture declaration the same failure is not quarantined or annotated.
     scheduler.QUARANTINED_FORK_QUALITY = live_declarations
-    mismatched = unit_step(known)
-    assert scheduler.sentinel_skip(mismatched) is None, "the live declaration applied to other content"
-    assert any(f"written against blob {live_declarations[0].blob}" in warning
-               for warning in mismatched.warnings), mismatched.warnings
+    undeclared = unit_step(known)
+    assert scheduler.sentinel_skip(undeclared) is None
+    assert undeclared.warnings == [], undeclared.warnings
 
     # A declaration that has lapsed suppresses nothing: the step is the red it already is,
     # and the lapse is recorded on the check's warnings so the red explains itself instead
@@ -5100,16 +5059,12 @@ with tempfile.TemporaryDirectory() as tmp:
         assert gone not in SCRIPT.read_text(), gone
     gate_text = SCRIPT.read_text()
     quarantine_code = (
-        gate_text[gate_text.index("def file_blob_id("):gate_text.index("\nQUARANTINED_FORK_QUALITY = (")]
+        gate_text[gate_text.index("def file_blob_id("):gate_text.index("\nQUARANTINED_FORK_QUALITY:")]
         + gate_text[gate_text.index("def declared_quarantine("):gate_text.index("def sentinel_skip(")])
     assert "class Quarantine:" in quarantine_code and "def applied_quarantine(" in quarantine_code
     for clock_read in ("datetime", "time.", "today", "expires"):
         assert clock_read not in quarantine_code, clock_read
     assert "agent-runtime" not in SCRIPT.read_text()
-
-    # (The suite's serial-file rule is pinned in its own discussion of real-time
-    # assertions: a suite whose verdict is decided by recorded counts runs in the pool,
-    # and only a suite decided by elapsed time is declared exclusive.)
 
     # The bound: four readers, two at a time, never three. And with nothing to conflict
     # with they really do overlap, so the bound is the only thing limiting them.
@@ -5210,7 +5165,7 @@ with tempfile.TemporaryDirectory() as tmp:
             time.sleep(0.05)
 
     scheduler.run_checks(pool_checks, 1, pool_run)
-    assert waited(pool_checks[0]) == {"pool": 0.0, "cheap": 0.0, "exclusive": 0.0,
+    assert waited(pool_checks[0]) == {"pool": 0.0, "cheap": 0.0,
                                       "heavy": 0.0, "writes": 0.0,
                                       "after": 0.0}, waited(pool_checks[0])
     assert waited(pool_checks[1])["pool"] > 0, waited(pool_checks[1])
@@ -5246,24 +5201,6 @@ with tempfile.TemporaryDirectory() as tmp:
     assert waited(cheap_check)["cheap"] == 0, waited(cheap_check)
     assert waited(suite_check)["cheap"] > 0, waited(suite_check)
     assert waited(suite_check)["pool"] == 0, waited(suite_check)
-
-    # An exclusive check: it holds the run alone, so the reader beside it waits on the
-    # declaration rather than on the bound.
-    alone = scheduler.Check("fork-quality", "fork pi-subagents: npm run test:unit", [], "", 0)
-    beside = scheduler.Check("t", "reader", [], "", 0)
-
-    def exclusive_run(index):
-        if index == 0:
-            time.sleep(0.05)
-
-    scheduler.run_checks([alone, beside], 2, exclusive_run)
-    assert waited(alone)["exclusive"] == 0, waited(alone)
-    assert waited(beside)["exclusive"] > 0, waited(beside)
-    # An exclusive wait is a thread-pool wait (the pool must be empty), so it is charged
-    # to `pool` as well; `exclusive` is the sub-count that names the mechanism.
-    assert waited(beside)["pool"] > 0, waited(beside)
-    assert waited(beside)["writes"] == 0, waited(beside)
-    assert waited(beside)["cheap"] == 0, waited(beside)
 
     # The same rules on a fixture repository. The pi-forks stand-in sleeps and records a
     # start and an end stamp, so this case can say when two steps overlapped instead of
@@ -5330,11 +5267,10 @@ with tempfile.TemporaryDirectory() as tmp:
     assert serial_timings["peak_concurrency"] == 1, serial_timings
     # Every check's record names why it waited, and a serial run's later checks waited on
     # the bound: the first check is the control that started at once.
-    assert all(set(one["waited"]) == {"pool", "cheap", "exclusive", "heavy", "writes",
-                                      "after"}
+    assert all(set(one["waited"]) == {"pool", "cheap", "heavy", "writes", "after"}
                for one in serial_timings["checks"]), serial_timings
     assert serial_timings["checks"][0]["waited"] == {"pool": 0.0, "cheap": 0.0,
-                                                      "exclusive": 0.0, "heavy": 0.0,
+                                                      "heavy": 0.0,
                                                       "writes": 0.0, "after": 0.0}, \
         serial_timings["checks"][0]
     assert any(sum(one["waited"].values()) > 0 for one in serial_timings["checks"][1:]), \
@@ -5358,24 +5294,18 @@ with tempfile.TemporaryDirectory() as tmp:
     concurrent_ratio = (concurrent_timings["check_seconds"]
                         / concurrent_timings["check_wall_seconds"])
     assert serial_ratio < 1.1, serial_ratio
-    # The property is that two gate runs OVERLAP and both record -- not how much. The old
-    # bound (> 1.5) assumed a plan with nothing serialized; once checks are declared
-    # exclusive the achievable ratio falls (1.3226 measured beside the gate's own run), and
-    # a threshold that assumes otherwise makes this suite refuse a correct gate. Overlap is
-    # > 1 by definition, and the record check below proves both runs landed.
+    # Assert overlap, not how much: write conflicts and prerequisites affect the ratio.
     assert concurrent_ratio > 1.0, concurrent_ratio
     concurrent_spans = [span for span in windows() if not span[0].startswith("patch-branch target")]
     assert len(concurrent_spans) == 5, concurrent_spans
     assert any_overlap(concurrent_spans), concurrent_spans
     # The prepare step is the only writer of pi-subagents' candidate checkout, and the two
-    # source checks wait for it even with four slots free. They do not overlap each other
-    # either: the unit suite is declared exclusive for its real-time case, so the typecheck
-    # waits for it (or it waits for the typecheck) rather than sharing the machine.
+    # source checks wait for it even with four slots free. Their admission alongside
+    # independent checks is tested above from the scheduler's recorded start order.
     prepare = [span for span in concurrent_spans if span[0] == "candidate --fork pi-subagents --deps"]
     readers = [span for span in concurrent_spans if "--prepared" in span[0]]
     assert len(prepare) == 1 and len(readers) == 2, concurrent_spans
     assert not any(overlapping(prepare[0], reader) for reader in readers), concurrent_spans
-    assert not overlapping(*readers), concurrent_spans
     # Plan order, not completion order: both calls took the same second, so the order they
     # finished in is a race, and the run must still report the plan's order.
     assert concurrent.stderr.index("fork pi-background-tasks: the series merges the upstream") \
@@ -5388,10 +5318,7 @@ with tempfile.TemporaryDirectory() as tmp:
 
     # A FORK WHOSE TWO QUALITY SCRIPTS WRITE DISJOINT PATHS RUNS THEM AT THE SAME TIME,
     # after one prepare step. pi-session-search's `check` is `tsc --noEmit` (writes
-    # nothing) and its `test` rebuilds the bundle into `dist/`; neither is declared
-    # exclusive, so the two overlap. pi-subagents' unit suite is declared exclusive for its
-    # real-time case, so its two do not -- the write sets are disjoint there too, and the
-    # exclusivity is what keeps them apart (board item 405).
+    # nothing) and its `test` rebuilds the bundle into `dist/`; the two can overlap.
     search = upstream(base, "pi-session-search")
     manifest = repo / "yolo-packs/matt/pack.json"
     data = json.loads(manifest.read_text())
@@ -5686,7 +5613,7 @@ with tempfile.TemporaryDirectory() as tmp:
     # the evidence file can attribute a start delay without the timings timeline.
     check_records = [line for line in lines if line["step"] != "run"]
     assert check_records, lines
-    assert all(set(line["detail"]["waited"]) == {"pool", "cheap", "exclusive", "heavy",
+    assert all(set(line["detail"]["waited"]) == {"pool", "cheap", "heavy",
                                                 "writes", "after"}
                for line in check_records), check_records
 
@@ -6309,12 +6236,9 @@ print("fork-check routing: 51 audit cases, range diagnostics, approved-baseline 
       "checks' own output beside the record and points the run entry at it; a failed check "
       "runs exactly once and is triaged from that output into a machine-readable packet -- "
       "case, file, assertion, named paths, the commits that touched them, the one-file "
-      "command that reproduces it, and the board command that files the flake when that "
-      "re-run passes -- and a step whose assertions are about real time is "
-      "declared exclusive in the plan rather than retried at the verdict, and a step that "
-      "spawns real children but is decided by recorded counts stays in the pool, while a "
-      "fork-quality suite whose only failing case is a real-time budget the candidate "
-      "cannot meet is named a skip with its reason instead of reported red, and a run "
+      "command that reproduces it; a fork-quality suite whose only failing cases are "
+      "covered by a fixture quarantine is named with its reason instead of reported red, "
+      "and a run "
       "whose only non-passing step is that one still reaches a verdict while any other "
       "failure still reds the run; and every run ends with one plan line naming the commit "
       "its diff was taken from, the steps it ran and did not, its own cost against the "
@@ -7282,10 +7206,7 @@ with tempfile.TemporaryDirectory() as tmp:
     # 23-check plan from the 2026-11-02T06:11:17Z pass, with each check's duration held at
     # its measured value. The durations are scaled by 100 so the replay runs in seconds;
     # the wall-time bound is scaled the same way, and the ordering and serialization
-    # assertions are exact. The exclusive declaration is a real-time constraint (the
-    # pi-subagents timing case, item 405), not an ordering rule, so the replay does not
-    # include it: the criterion names the write sets and the cheap_first barrier, and those
-    # are what this case pins.
+    # assertions are exact. The replay pins the write sets and the cheap_first barrier.
     spec = importlib.util.spec_from_file_location("fork_check_lpt", SCRIPT)
     lpt = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(lpt)
@@ -7325,16 +7246,6 @@ with tempfile.TemporaryDirectory() as tmp:
     assert len(measured) == 23, len(measured)
     checks = [lpt.Check(kind, label, [], "", 0, writes=writes, history=seconds)
               for kind, label, seconds, writes in measured]
-    # The exclusive declaration is a real-time constraint, not an ordering rule: the
-    # pi-subagents unit suite holds a ~30 s timing case that times out beside the gate's
-    # other checks, so it runs alone (item 405 splits the quality run around it). The
-    # criterion this case pins names the write sets and the cheap_first barrier, and the
-    # S1 floor is the write-serialized critical path, so the replay clears the declaration
-    # and measures the ordering rule on that path. The declaration's own binding is pinned
-    # by case 46, which is not changed here.
-    for check in checks:
-        check.exclusive = False
-        check.exclusive_reason = ""
     # The cheap phase is the declared cost, not the measured duration: a check is cheap
     # because its kind is declared under CHEAP_CHECK_SECONDS, and the measured duration is
     # only the ordering input for the heavy phase.
@@ -7532,11 +7443,10 @@ mixed = efficiency.classify_change(ROOT, ["tools/retired-board/x.go", "bashrc"],
 assert mixed.name == "other" and mixed.target is None, (mixed.name, mixed.target)
 
 # The S1 floor: the cheap phase is the longest cheap check, a fork's writers are one
-# chain, an exclusive check is additive, and independent heavy checks run together.
-def _floor_check(kind, seconds, cost, writes=(), exclusive=False):
+# chain, and independent heavy checks run together.
+def _floor_check(kind, seconds, cost, writes=()):
     check = efficiency.Check(kind, kind, ["true"], "why", 1, cost=cost, writes=writes)
     check.seconds = seconds
-    check.exclusive = exclusive
     return check
 
 floor_checks = [
@@ -7545,11 +7455,11 @@ floor_checks = [
     _floor_check("fork-quality", 100.0, 60.0, writes=("/candidate/a",)),
     _floor_check("patch-branch-inv2", 20.0, 10.0, writes=("/candidate/b",)),
     _floor_check("fork-quality", 200.0, 60.0, writes=("/candidate/b",)),
-    _floor_check("self-suite", 300.0, 600.0, exclusive=True),
+    _floor_check("self-suite", 300.0, 600.0),
     _floor_check("pi-forks", 50.0, 20.0),
 ]
-# 5s cheap phase + 300s exclusive + max(110s fork a, 220s fork b, 50s pi-forks).
-assert efficiency.s1_floor(floor_checks) == 525.0, efficiency.s1_floor(floor_checks)
+# 5s cheap phase + max(110s fork a, 220s fork b, 300s self-suite, 50s pi-forks).
+assert efficiency.s1_floor(floor_checks) == 305.0, efficiency.s1_floor(floor_checks)
 # A check that did not run contributes nothing: the floor is under what ran.
 not_run = _floor_check("fork-quality", 999.0, 60.0)
 not_run.not_run_reason = "the run stopped on a red"
