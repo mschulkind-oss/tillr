@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 )
 
 var errHeavyTipMoved = errors.New("trunk moved during proof attribution")
@@ -37,7 +38,10 @@ func (r HeavyRunner) findFirstRed(ctx context.Context, run HeavyRun, check Heavy
 		return "", false, "", err
 	}
 	records := readHeavyAttributions(dir)
-	if prior := records[check.CheckID]; prior.FirstRed != "" && prior.Base == run.BaseSHA && slices.Equal(prior.Reads, check.Reads) {
+	// The suite's pass does not enumerate passing tests. Reuse immutable
+	// commit replays for a case, never the case's inferred red episode.
+	goCase := strings.HasPrefix(check.CheckID, goTestPrefix)
+	if prior := records[check.CheckID]; !goCase && prior.FirstRed != "" && prior.Base == run.BaseSHA && slices.Equal(prior.Reads, check.Reads) {
 		if ancestor, err := trunkAncestor(ctx, r.Root, prior.Tip, run.TipSHA); err == nil && ancestor {
 			r.progressf("loop: heavy %s reused first red commit %s\n", check.CheckID, shortSHA(prior.FirstRed))
 			return prior.FirstRed, false, "", nil
@@ -45,7 +49,7 @@ func (r HeavyRunner) findFirstRed(ctx context.Context, run HeavyRun, check Heavy
 	}
 	r.progressf("loop: heavy %s failed at tip %s; searching for the first red commit since green %s\n", check.CheckID, shortSHA(run.TipSHA), shortSHA(run.BaseSHA))
 	red, fault, reason, err := r.firstRed(ctx, run.BaseSHA, run.TipSHA, check.CheckID, check.Reads)
-	if err == nil && !fault && red != "" {
+	if !goCase && err == nil && !fault && red != "" {
 		records[check.CheckID] = heavyAttribution{run.BaseSHA, run.TipSHA, red, check.Reads}
 		if saveErr := publishHeavyJSON(dir, heavyAttributionsFile, records); saveErr != nil {
 			r.progressf("loop: heavy %s first red commit not saved: %v\n", check.CheckID, saveErr)

@@ -706,15 +706,16 @@ sys.exit(rc)
     def test_adapter_executes_the_complete_disjoint_fast_inventory(self):
         self.stub_tree_commands()
         (self.repo / "tools/fork-check.py").write_text('print("legacy inventory: file-size warning")\n')
+        base = self.commit()  # The gate stub is fixture infrastructure, not the candidate.
         (self.repo / "README.md").write_text("# Changed\n")
         head = self.commit()
-        result = subprocess.run(["python3", "tools/gate/change-gate.py", "--base", self.base,
+        result = subprocess.run(["python3", "tools/gate/change-gate.py", "--base", base,
                                  "--head", head, "--runner", str(self.runner), "--logs", str(self.repo / "logs")],
                                 cwd=self.repo, env=self.env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         verdict, legacy = result.stdout.splitlines()
         checks = json.loads(verdict)["payload"]["checks"]
-        expected = IDS | {"gate-budget", "scratch", "design-citations", "structural", "pack-sync", "go-build", "format"}
+        expected = IDS | {"gate-budget", "scratch", "design-citations", "structural", "pack-sync", "go-build", "format", "pi-forks-drain"}
         self.assertEqual({check["check_id"] for check in checks}, expected)
         self.assertEqual(len(checks), len(expected))
         self.assertTrue(all(check["result"] == "pass" for check in checks))
@@ -748,6 +749,7 @@ sys.exit(rc)
     def test_loop_program_runs_change_runner_before_remaining_program(self):
         self.stub_tree_commands()
         (self.repo / "tools/fork-check.py").write_text('print("remaining program ran")\n')
+        self.base = self.commit()
         (self.repo / "README.md").write_text("# Fixture\n\nEdited.\n")
         head = self.commit()
         result = subprocess.run(["python3", "tools/gate/change-gate.py", "--base", self.base,
@@ -772,6 +774,7 @@ sys.exit(rc)
         # the remaining program takes the fixer's, with no landing tier.
         self.stub_tree_commands()
         (self.repo / "tools/fork-check.py").write_text('import sys\nprint(" ".join(sys.argv[1:]))\n')
+        self.base = self.commit()
         (self.repo / "README.md").write_text("# Fixture\n\nFixed.\n")
         head = self.commit()
         common = ["python3", "tools/gate/change-gate.py", "--base", self.base, "--head", head,

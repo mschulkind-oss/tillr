@@ -84,6 +84,8 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 					// runner's own words, with whatever output the judge recorded.
 					if check.FirstRedLanding == "" && strings.TrimSpace(check.Detail) != "" {
 						notes = append(notes, "No landing is named for "+check.CheckID+" ("+heavyBrief(check.Detail)+"); start from the tip and run the check there")
+					} else if strings.HasPrefix(check.CheckID, goTestPrefix) && check.Detail != "" {
+						notes = append(notes, check.CheckID+": "+check.Detail)
 					}
 					// The failed check's full output is on disk; the brief names the file and
 					// quotes its end, so the fixer does not rediscover an intermittent failure.

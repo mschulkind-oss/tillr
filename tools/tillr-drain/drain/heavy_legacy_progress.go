@@ -21,27 +21,29 @@ func heavyLegacyArgv(ctx context.Context, argv []string) ([]string, error) {
 	}
 	return append([]string{argv[0], "-c", heavyLegacyProgressProgram, argv[1], filepath.Join(p.dir, "heavy-legacy-progress.json"), p.TipSHA, filepath.Join(p.dir, "heavy-progress.json")}, argv[2:]...), nil
 }
-func readLegacyReuse(ctx context.Context) error {
+func readLegacyEvidence(ctx context.Context) (map[string][]string, error) {
 	p, _ := ctx.Value(heavyProgressKey{}).(*heavyProgress)
 	if p == nil {
-		return nil
+		return nil, nil
 	}
 	raw, err := os.ReadFile(filepath.Join(p.dir, "heavy-legacy-progress.json"))
 	if os.IsNotExist(err) {
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var saved struct {
-		TipSHA string   `json:"tip_sha"`
-		Reused []string `json:"reused"`
+		TipSHA     string              `json:"tip_sha"`
+		Reused     []string            `json:"reused"`
+		GoFailures map[string][]string `json:"go_failures"`
 	}
 	if err := json.Unmarshal(raw, &saved); err != nil {
-		return err
+		return nil, err
 	}
-	if saved.TipSHA == p.TipSHA {
-		p.reused = append(p.reused, saved.Reused...)
+	if saved.TipSHA != p.TipSHA {
+		return nil, nil
 	}
-	return nil
+	p.reused = append(p.reused, saved.Reused...)
+	return saved.GoFailures, nil
 }
