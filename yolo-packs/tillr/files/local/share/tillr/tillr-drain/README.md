@@ -1022,9 +1022,14 @@ the kernel to confirm every descendant has exited before acknowledging cleanup, 
 no cancellation timeout on that acknowledgement. When a declaration check fails or the
 legacy program reports a failure on exit, recovery searches for the culprit and offers a
 revert in `worktree-replay` while the proof continues. Recovery handles one failure at a
-time and files any fixers at the end of the run. Before each historical replay, recovery
-checks that the red verdict is still for the current tip. If trunk has moved, the runner
-keeps any finished replay verdict and proves the newest tip before searching again.
+time and files any fixers at the end of the run. Attribution stays on the commit the
+proof judged, even if trunk advances during the proof or a replay. Before filing, the
+runner samples the trunk once: a check whose declared inputs were touched by newer
+commits waits for the new proof. A named Go test has no declared read set, so the
+runner replays just that test on the sampled tip; a pass defers the repair, while a
+failure or no verdict leaves the finished red actionable. The runner does not restart
+attribution just because another landing arrives. Automatic reverts are not attempted
+from a proof already known to be behind the tip.
 A check still red on a descendant tip can reuse its recorded first-red commit while
 its green baseline and declared reads are unchanged and no pass has ended the red
 spell. The green pointer still moves only on a whole green run.
@@ -1215,7 +1220,9 @@ checks already pass on a tip containing its red commit, is resolved by those pas
 while the rest of the run is still going or is red for another check. A fixer that names
 a check both by its kind (`tillr-docs`, the replay's selector) and by a labelled id of that
 kind (`tillr-docs/every-face-...`, the only spelling a proof records) is covered by the
-labelled passes. Closing a fixer (for instance, after landing its fix by hand) releases
+labelled passes. A passing Go suite covers the named tests from that suite; a failed or
+unavailable suite does not establish a pass for a test it does not name. Closing a fixer
+(for instance, after landing its fix by hand) releases
 every item held behind it on the next pass without an operator retry; a fixer resolved
 without a landing while items are still acquitted behind it gets the proof recorded (its
 state is left alone), and those items are released once the selected base contains that

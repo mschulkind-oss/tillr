@@ -2,73 +2,76 @@ package drain
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
-func TestHeavyProvesNewestTipBeforeSearchingHistory(t *testing.T) {
-	for _, move := range []string{"at verdict", "during replay", "new tip stays red"} {
-		t.Run(move, func(t *testing.T) {
-			root, base := heavyRepo(t)
-			heavyGit(t, root, "update-ref", GreenRef, base)
-			older := heavyCommit(t, root, "older")
-			red := heavyCommit(t, root, "red")
-			var calls []string
-			var newest string
-			runner := heavyFixture(t, root, func(ctx context.Context, dir, only string) ([]HeavyCheck, error) {
-				sha := heavyGit(t, dir, "rev-parse", "HEAD")
-				check := HeavyCheck{CheckID: "unit", Result: "pass"}
-				switch {
-				case only == "" && sha == red:
-					calls = append(calls, "red tip")
-					check.Result = "fail"
-					if move != "during replay" {
-						newest = heavyCommit(t, root, "newest")
-					}
+func TestHeavyDefersOnlyRepairsWhoseDeclaredInputsWereTouched(t *testing.T) {
+	root, base := heavyRepo(t)
+	heavyGit(t, root, "update-ref", GreenRef, base)
+	red := heavyCommit(t, root, "red")
+	var calls []string
+	var newest string
+	checks := []HeavyCheck{
+		{CheckID: "unchanged", Result: "fail", Reads: []string{"value"}},
+		{CheckID: "touched", Result: "fail", Reads: []string{"value", "other"}},
+	}
+	runner := heavyFixture(t, root, func(ctx context.Context, dir, only string) ([]HeavyCheck, error) {
+		sha := heavyGit(t, dir, "rev-parse", "HEAD")
+		calls = append(calls, only+":"+sha)
+		if only == "" {
+			if sha == red {
+				for _, check := range checks {
 					heavyCheckEnded(ctx, check)
-				case only != "" && sha == base:
-					calls = append(calls, "base replay")
-					if newest == "" {
-						newest = heavyCommit(t, root, "newest")
-					}
-				case only == "" && sha == newest:
-					calls = append(calls, "newest tip")
-					if move == "new tip stays red" {
-						check.Result = "fail"
-					}
-				case move == "new tip stays red":
-					calls = append(calls, "search replay")
-					if sha != older {
-						check.Result = "fail"
-					}
-				default:
-					calls = append(calls, "unwanted replay")
-					check.Result = "fail"
 				}
-				return []HeavyCheck{check}, nil
-			})
-			out, err := runner.Run(context.Background())
-			if err != nil {
+				return append([]HeavyCheck(nil), checks...), nil
+			}
+			return []HeavyCheck{{CheckID: "touched", Result: "pass"}, checks[0]}, nil
+		}
+		if sha == base && newest == "" {
+			// Move during attribution, and restore the file so an endpoint diff
+			// would miss that the later commits touched this check's input.
+			if err := os.WriteFile(filepath.Join(root, "other"), []byte("new"), 0644); err != nil {
 				t.Fatal(err)
 			}
-			want := []string{"red tip", "newest tip"}
-			if move == "during replay" {
-				want = []string{"red tip", "base replay", "newest tip"}
-			}
-			if move == "new tip stays red" {
-				want = append(want, "base replay", "search replay", "search replay", "search replay")
-			}
-			if !reflect.DeepEqual(calls, want) {
-				t.Fatalf("judge order=%v, want %v", calls, want)
-			}
-			if move == "new tip stays red" {
-				if len(out.Runs) != 1 || out.Runs[0].TipSHA != newest || out.Runs[0].Checks[0].FirstRedLanding != red {
-					t.Fatalf("unexpected attribution: %+v", out)
-				}
-			} else if green := heavyGit(t, root, "rev-parse", GreenRef); green != newest {
-				t.Fatalf("green=%s, want %s", green, newest)
-			}
-		})
+			heavyGit(t, root, "add", "other")
+			heavyGit(t, root, "commit", "-qm", "touch other input")
+			heavyGit(t, root, "rm", "other")
+			heavyGit(t, root, "commit", "-qm", "restore other input")
+			newest = heavyGit(t, root, "rev-parse", "HEAD")
+		}
+		result := "fail"
+		if sha == base {
+			result = "pass"
+		}
+		return []HeavyCheck{{CheckID: only, Result: result}}, nil
+	})
+	runner.Revert = func(_ context.Context, tip, _ string, _ []HeavyCheck, _ HeavyReplay) (RevertOutcome, error) {
+		if tip != newest {
+			t.Fatalf("attempted an automatic revert from the superseded proof %s", tip)
+		}
+		return RevertOutcome{Refused: "fixture only files fixers"}, nil
+	}
+	runner.Fix = func(_ context.Context, sha string, failed []HeavyCheck) error {
+		if sha != red || len(failed) != 1 || failed[0].CheckID != "unchanged" {
+			t.Fatalf("unexpected repair against %s: %+v", sha, failed)
+		}
+		calls = append(calls, "repair")
+		return nil
+	}
+	out, err := runner.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{":" + red, "unchanged:" + base, "unchanged:" + red, "touched:" + base, "touched:" + red, "repair", ":" + newest, "repair"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("judge and repair order=%v, want %v", calls, want)
+	}
+	if len(out.Runs) != 2 || out.Runs[0].TipSHA != red || !strings.Contains(out.Runs[0].Checks[1].Detail, "touched a declared input: other") {
+		t.Fatalf("missing original verdict and deferral: %+v", out)
 	}
 }
 

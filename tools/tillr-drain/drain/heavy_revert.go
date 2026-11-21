@@ -160,6 +160,9 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 	if err != nil {
 		return RevertOutcome{}, err
 	}
+	if candidate.ObservedTrunk != tip {
+		return refuse("trunk advanced while the revert was being checked")
+	}
 	landed, err := l.landWithActions(ctx, candidate)
 	if err != nil {
 		if ctx.Err() != nil {

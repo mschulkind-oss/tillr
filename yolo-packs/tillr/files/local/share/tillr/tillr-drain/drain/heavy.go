@@ -194,10 +194,6 @@ func (r HeavyRunner) Run(ctx context.Context) (out HeavyOutcome, err error) {
 		if ctx.Err() != nil {
 			return out, ctx.Err()
 		}
-		if errors.Is(e, errHeavyTipMoved) {
-			r.progressf("loop: heavy tip %s moved; proving the newest tip before further attribution\n", shortSHA(tip))
-			continue
-		}
 		if e == nil && run.Result == "green" {
 			old := base
 			if old == "" {
@@ -409,6 +405,10 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 		return run, err
 	}
 	if r.Fix != nil {
+		order, err = r.retainRedRepairs(ctx, &run, order, byLanding)
+		if err != nil {
+			return run, err
+		}
 		for _, sha := range order {
 			if err := r.Fix(ctx, sha, byLanding[sha]); err != nil {
 				return run, err
@@ -426,9 +426,6 @@ func (r HeavyRunner) attribute(ctx context.Context, run HeavyRun, check *HeavyCh
 	against = check.FirstRedLanding
 	if check.FirstRedLanding == "" {
 		red, fault, reason, err := r.findFirstRed(ctx, run, *check)
-		if errors.Is(err, errHeavyTipMoved) {
-			return "", false, err
-		}
 		switch {
 		case err != nil && ctx.Err() == nil && !cleanupLost(err):
 			r.progressf("loop: heavy %s culprit search gave no verdict, because %v; the fixer is filed against the tip\n", check.CheckID, err)
@@ -461,11 +458,11 @@ func (r HeavyRunner) attribute(ctx context.Context, run HeavyRun, check *HeavyCh
 		} else if !fault {
 			if strings.HasPrefix(check.CheckID, goTestPrefix) {
 				others, err := r.additionalGoCulprits(ctx, run, *check, red)
-				if errors.Is(err, errHeavyTipMoved) || cleanupLost(err) {
-					return "", false, err
+				if ctx.Err() != nil {
+					return "", false, ctx.Err()
 				}
-				if currentErr := r.requireCurrentTip(ctx, run.TipSHA); currentErr != nil {
-					return "", false, currentErr
+				if cleanupLost(err) {
+					return "", false, err
 				}
 				if len(others) > 0 {
 					culprits := append([]string{red}, others...)
@@ -565,6 +562,12 @@ func (r HeavyRunner) revert(ctx context.Context, run *HeavyRun, order []string, 
 // offerRevert asks Revert about one landing. A revert that failed for its own reasons is
 // a refusal; only a stop or a lost cleanup is an error.
 func (r HeavyRunner) offerRevert(ctx context.Context, tip, sha string, checks []HeavyCheck) (RevertOutcome, error) {
+	if err := r.requireCurrentTip(ctx, tip); err != nil {
+		if errors.Is(err, errHeavyTipMoved) {
+			return RevertOutcome{Refused: "trunk advanced beyond the proved commit"}, nil
+		}
+		return RevertOutcome{}, err
+	}
 	out, err := r.Revert(ctx, tip, sha, checks, r.one)
 	if err != nil {
 		if ctx.Err() != nil || cleanupLost(err) {
@@ -765,9 +768,6 @@ func (r HeavyRunner) replay(ctx context.Context, sha, id, why string) (bool, err
 
 func (r HeavyRunner) firstRed(ctx context.Context, base, tip, id string, reads []string) (string, bool, string, error) {
 	return r.searchFirstRed(ctx, base, tip, reads, func(sha, why string) (bool, error) {
-		if err := r.requireCurrentTip(ctx, tip); err != nil {
-			return false, err
-		}
 		return r.replay(ctx, sha, id, why)
 	})
 }
