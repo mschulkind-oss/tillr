@@ -255,7 +255,8 @@ type refusalPayload struct {
 	Restart bool `json:"restart,omitempty"`
 	// Replan marks a verify-not-done refusal whose findings say the plan was wrong: the
 	// item returns to the plan step instead of the build step, and no worker session is kept.
-	Replan bool `json:"replan,omitempty"`
+	Replan         bool            `json:"replan,omitempty"`
+	VerifyFeedback *verifyFeedback `json:"verify_feedback,omitempty"`
 	// Selectors are a reverted landing's legacy replay selectors (kind:label) by check
 	// id, kept so the item's next gate can run a check a loop restart forgot.
 	Selectors map[string]string `json:"selectors,omitempty"`
@@ -285,6 +286,7 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 		}
 		switch step {
 		case RefusalVerifyNotDone:
+			payload.VerifyFeedback = candidate.verifyFeedback
 			if candidate.VerifyReplan {
 				payload.Replan = true
 			} else {
@@ -309,9 +311,28 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 			}
 		}
 	}
-	repeated, err := l.landingRefusalRepeats(ctx, candidate, payload)
-	if err != nil {
-		return err
+	var repeated bool
+	var repeatedFinding string
+	if payload.VerifyFeedback != nil {
+		db, err := store.OpenRead(ctx, l.cfg.Store)
+		if err != nil {
+			return err
+		}
+		err = db.ReadTx(ctx, func(r *store.Reader) error {
+			var err error
+			payload.Detail, repeatedFinding, err = collectVerifyFeedback(r, candidate.ItemID, candidate.RunID, judgeWriterRun(candidate), payload.VerifyFeedback)
+			return err
+		})
+		db.Close()
+		if err != nil {
+			return err
+		}
+	} else if step != RefusalVerifyNotDone {
+		var err error
+		repeated, err = l.landingRefusalRepeats(ctx, candidate, payload)
+		if err != nil {
+			return err
+		}
 	}
 	if !repeated {
 		payload.BaseSHA, payload.HeadSHA = candidate.BaseSHA, candidate.HeadSHA
@@ -319,17 +340,8 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 	at := l.cfg.Now().UTC()
 	evidence := l.readRefusalEvidence(candidate.RunID, payload)
 	return appendJudgmentThen(ctx, l.cfg.Store, RefusalKind, "run", candidate.RunID, payload, at, func(tx *store.Tx) error {
-		if step == RefusalVerifyNotDone {
-			findings, err := readVerifyTriage(tx.Reader(), candidate.ItemID)
-			if err != nil {
-				return err
-			}
-			if len(findings) == 3 {
-				hold := l.verifyTriageHold(candidate.ItemID, candidate.RunID, candidate.LaneID, "", findings)
-				if err := l.recordItemFaultTx(tx, hold); err != nil {
-					return err
-				}
-			}
+		if repeatedFinding != "" {
+			return l.recordItemFaultTx(tx, l.verifyRepeatHold(candidate, repeatedFinding))
 		}
 		if repeated {
 			return nil

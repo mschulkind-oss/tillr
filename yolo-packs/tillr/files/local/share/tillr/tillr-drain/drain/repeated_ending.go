@@ -83,13 +83,8 @@ func readRepeatedEnding(r *store.Reader, d Decision) (*secondFailure, error) {
 		return nil, nil
 	}
 	if latest.Step == RefusalVerifyNotDone {
-		// The third refusal takes the triage route, even if it was identical. Look
-		// for the historical hold so retry racing examination cannot raise a conflict.
-		var triaged bool
-		if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE kind=? AND object_type='item' AND object_id=?
- AND json_extract(payload,'$.reason')=? AND json_extract(payload,'$.run_id')=?)`, itemFaultKind, d.ItemID, reasonVerifyTriage, current).Scan(&triaged); err != nil || triaged {
-			return nil, err
-		}
+		// Workflow verifier repeats are decided per finding when the refusal is recorded.
+		return nil, nil
 	}
 	works, err := readPending(r)
 	if err != nil {

@@ -1625,23 +1625,19 @@ begins with `plan-wrong:` (any case) because the plan itself was wrong, which is
 recorded as a replan return, or (b) the builder reports it cannot meet the findings
 within the plan (`RESULT: blocked` with `OBSTACLE: definition` and
 `EVIDENCE: plan-wrong: <reason>`, or a report line beginning `PLAN-WRONG:`), recorded
-as `plan-wrong`. `verify-not-done` repeat detection hashes each sorted not-done
-criterion ID with the candidate head and normalized finding text: two refusals of
-different candidates or with different findings do not collide, while an identical
-repeat raises a design-seat conflict (or, for a filed request, an operator hold).
+as `plan-wrong`.
 
-The third `verify-not-done` since filing or the last operator retry takes precedence
-over both the repair return and identical-repeat routing. The drain holds the item
-for operator triage without closing it or changing its queue rank. The hold shows
-all three refusal dates and first findings in order and gives the `tillr drain retry`
-command with the item and held run filled in. Settlement pins the verifier's
-candidate and resets its lane for the next item; the authorized retry stages
-that candidate on an available lane. A drain upgraded after the third refusal
-checks the recorded refusals before redispatching the item. If an older
-drain already ran the item again, the hold still shows the first three findings
-and names the latest finished run in the retry command. That authorization
-releases the hold and starts the count over without deleting any refusals.
-`clear-fault` does not release a verifier triage hold.
+Each verifier refusal returns all unanswered findings together, with the criterion
+and full reason, including any reproduction commands and results. A `done` verdict
+answers earlier findings for that criterion. The number of refusals never holds an
+item. The drain holds for the operator only if the verifier repeats a finding given
+to the worker and the worker returns a candidate with unchanged evidence for it.
+It compares cited file contents for a file-scoped finding and the judged tree
+otherwise; a new commit alone is not a repair. The hold names the repeated finding,
+not the number of refusals, and gives the `tillr drain retry` command. Settlement
+pins the candidate and releases the lane. An authorized retry restores the candidate
+and resets repeat detection without dropping the feedback. A drain upgrade releases
+old count-only holds. `clear-fault` does not release a repeated-finding hold.
 
 For an opted-in ordinary item judge, `eval-failed` still holds a document item for
 the operator, whereas on a filed request an ordinary judge's `not-done` retains the
