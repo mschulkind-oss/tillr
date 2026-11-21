@@ -1,0 +1,280 @@
+---
+title: "A trunk fixer is gated on what its repair reaches and on the checks it was filed to repair"
+status: in-review
+stage: DESIGN
+updated: 2026-11-21
+tags: [tillr, gate, landing, drain, forks, design]
+summary: "The trunk fixer's gate stops being the untiered gate over every landing since the last green commit. It becomes the gate any candidate gets, plus the checks the fixer names, run on the fixer's tree. A fork check that is red only because an upstream published a release is reported as one rebase request per fork and release and refuses nobody whose change does not touch that fork. One question is open for the owner: whether he is told, beyond the queue, when an upstream moves."
+next: "The owner rules OQ-FG1. The gate scope (D-FG1 to D-FG4) does not wait on it and can be planned now."
+depends-on:
+  - landing-principles.md
+  - gate-rework.md
+vantage:
+  status-chip: true
+---
+
+# A trunk fixer is gated on what its repair reaches and on the checks it was filed to repair
+
+**Status:** 2026-11-21. Nothing built. Every statement about the tree was read at `6432ac37e`.
+
+> **In short.** The seat that restores a red trunk is the only seat whose gate reads every
+> landing since the last green commit, so it is the only seat an outside release can stop. Its
+> gate becomes the ordinary gate plus the checks it names, and upstream movement becomes a filed
+> rebase request instead of a refusal.
+
+**Why it matters.** On 2026-11-20 a correct two-file repair was refused by fork checks it did not
+touch, and the trunk stayed red for a cause outside the repository.
+
+**The shape.** Three rules: the [fixer's gate](#the-fixers-gate), the
+[drift rule](#upstream-drift-is-a-rebase-request-not-a-refusal) and
+[who is told](#who-is-told-when-an-upstream-moves).
+
+**Cost.** A fixer no longer re-judges other landings before it merges; the proof after the merge
+is the only judge of them. Upstream drift is noticed later until the drift probe is built.
+
+**Start at** [the fixer's gate](#the-fixers-gate).
+
+**Needs your ruling:** [OQ-FG1](#OQ-FG1). `D-FG1` to `D-FG5` in the
+[Decision Ledger](#decision-ledger) are the designer's decisions and the owner may overturn them.
+
+**Reads with:** [the gate rework](gate-rework.md) (its
+[Section 6.9](gate-rework.md#69-upstream-drift-is-a-probe-not-a-check) already takes drift out of
+the gate; this design applies it to the fixer), [landing principles](landing-principles.md), and
+[the fork workflow](../pi/forks.md).
+
+---
+
+## Terms
+
+- **Trunk fixer.** The generated item `fixer-main-<sha>` that the drain files when a trunk check
+  is red. It names the failing check ids. It is not a revert and not an ordinary queue item.
+- **Proof.** The run after each merge that judges the trunk tip and moves the green pointer
+  (the heavy runner of [the gate rework](gate-rework.md#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer)).
+- **Upstream reader** *(coined here)*. A check whose verdict depends on what an upstream
+  repository currently publishes, not only on the commit under judgment. In
+  `tools/fork-check.py` these are the checks declared not reusable (`reads_upstream`); `series`
+  and `patch-branch-inv2` are the two that fetch. It is not a check that merely needs the
+  network to install dependencies.
+- **Upstream drift** *(coined here)*. An upstream reader that is red on a candidate, red on the
+  candidate's base with the same answer, and whose watched paths the candidate did not change.
+  It is not a red the candidate caused, and it is not a check that could not run.
+- **Rebase request** *(coined here)*. One generated fork item that names a fork, the upstream
+  release its series does not merge, and the failing question. It is not a trunk fixer: the
+  trunk commit is not wrong, and the repair is made in the fork's checkout.
+
+## What happens today
+
+Read in the source on 2026-11-21:
+
+| Caller | Program | What it plans |
+| :--- | :--- | :--- |
+| Ordinary candidate | `tools/gate/change-gate.py`, then `fork-check.py --since <base> --tier landing` | The change and fast tree checks, then the landing-tier checks its own diff selects |
+| Proof | `fork-check.py --tier rolling --all` | Every tree check, except upstream readers, which it names as not a property of the trunk commit (`apply_tier` in `tools/fork-check.py`) |
+| Trunk fixer | The same `change-gate.py`, then `fork-check.py --since <last green>` or `--all`, with no tier (`DefaultFixerGateProgram` in `tools/tillr-drain/drain/trunk.go`, `fixerGate` in `steps.go`) | Every check any landing since the last green selects, upstream readers included |
+
+The fixer is therefore the only caller that plans upstream readers over a range of other
+changes. An ordinary candidate plans one only when its own diff touches a series or a pack
+declaration. The proof never plans one.
+
+A second rule compounds it. A candidate refused only by checks that are also red on its base and
+on the tip is acquitted and lands with the failures recorded as inherited
+(`trunkAlreadyRed` in `trunk.go`). A fixer is excluded from that rule in whole, so that it
+cannot heal itself by doing nothing.
+
+**The 2026-11-20 incident.** The trunk was red on one failing test in `tools/tillr-drain`. The
+fixer committed a two-file test repair, `1d1d0d877` [unlanded]. Its gate refused on
+`patch-branch-inv2` for the pi fork, because upstream pi had published `v1.6.0`, which conflicts
+with `patch/pi`. Three more fork checks could not judge, because the `pi-manage-todo-list` remote
+does not serve its pinned commit. The same repair filed as an ordinary item
+(`item-request-f0ef2f6b68`) planned none of those checks.
+
+## What the untiered range bought
+
+The untiered range re-judges, before the fixer merges, three groups of checks:
+
+| Group | Who else judges it | Lost by dropping it |
+| :--- | :--- | :--- |
+| Checks the fixer's own diff selects | The ordinary gate | Nothing; they stay |
+| Tree checks that other landings since the last green select | The proof, on the tip, after the fixer lands | An earlier answer only. A second red is found by the proof and gets its own fixer, as any red does |
+| Upstream readers that other landings select | Nobody | A verdict about the upstream, charged to a change that did not touch it |
+
+The third group is the only coverage unique to the fixer's gate, and it is the coverage
+[the gate rework](gate-rework.md#69-upstream-drift-is-a-probe-not-a-check) already ruled is not a
+verdict about a commit. The second group costs more the longer the trunk has been red, which is
+when the fixer is needed most. Both point the wrong way under the rule the
+[landing principles](landing-principles.md) keep proving: a mechanism whose cost rises with
+activity it does not control.
+
+## The fixer's gate
+
+A trunk fixer's gate runs two things, in this order, and passes only when both pass.
+
+1. **The ordinary gate, unchanged.** Exactly what any candidate of the repository's landing
+   strategy gets, over the fixer's own base and head: the change checks, the fast tree checks,
+   and the landing tier its diff selects.
+2. **The named checks.** Every check the fixer's criterion names, run on the fixer's tree by the
+   selectors the proof recorded for them (the ones `fork-check.py --replay --only` takes). This
+   includes a check of the rolling tier, which the ordinary gate would defer to the proof.
+
+The second part exists because the fixer's claim is that it repairs those checks, and the
+ordinary gate does not test that claim: the diff may not select the check, or the check may be
+deferred. A fixer that lands without repairing leaves the trunk red and is never reverted, so
+the claim is tested before the merge.
+
+Specified cases:
+
+- **No range since the last green is read.** The `{green}` value is no longer part of the
+  fixer's gate. The fixer is still rebased onto the tip before it is gated, as today.
+- **A fixer that names no check** runs the ordinary gate alone. It is resolved only by a whole
+  green proof, which is today's rule.
+- **A named check fails.** The gate refuses, and the refusal goes back to the fixer's own worker
+  naming the test. This is a verdict.
+- **A named check could not judge.** The gate answers "could not judge", never pass and never
+  fail, and names the check and what it lacked. The candidate is held and the existing
+  tooling-defect path takes it. A fixer is not landed on a check nobody could run.
+- **A named check that is an upstream reader** is not run as a named check. A red upstream
+  reader is drift or a change's own failure, decided by the [drift rule](#upstream-drift-is-a-rebase-request-not-a-refusal),
+  and no trunk fixer is filed for it from here on. A fixer already open that names one keeps
+  its other checks, and that name is dropped when its gate is composed, with a line saying so.
+- **The inherited-failure rule applies to checks the fixer does not name.** The fixer stays
+  excluded from acquittal for the checks it names, which is the whole reason for the
+  exclusion. For any other check it is judged as any candidate is.
+- **Order and concurrency.** One gate run per candidate, as today. The named checks run after
+  the ordinary gate passes; when the ordinary gate refuses, they do not run.
+- **Forbidden.** The gate's own code stays outside a fixer's fence. Nothing here lets a fixer
+  choose, narrow or rename the checks it is judged on: the list comes from the fixer's record.
+
+Done looks like this: with the trunk red on one test and an upstream release that conflicts with
+a patch branch, a fixer whose diff touches only that test's files passes its gate and lands, and
+its gate log lists the ordinary checks and the named check and no fork check.
+
+## Upstream drift is a rebase request, not a refusal
+
+[The gate rework](gate-rework.md#69-upstream-drift-is-a-probe-not-a-check) decides that `series`
+and `patch-branch-inv2` leave both tiers and run as a drift probe, at loop start and after a
+landing that changes a series or a pack declaration (`D-GR12`, that design's own decision). The
+probe is not built: both kinds are still `TIER_LANDING` in `tools/fork-check.py`. This design
+keeps that decision and says what happens until it is built, for every candidate and not only
+a fixer.
+
+When a gate plans an upstream reader and it is red, the loop replays it on the candidate's base,
+which the replay step already does for every red check. Then:
+
+| The check on the base | The candidate's diff and the check's watched paths | Outcome |
+| :--- | :--- | :--- |
+| Passes | Any | The candidate's own failure. Ordinary refusal |
+| Red, same answer | Do not intersect | Drift. The candidate lands with the failure recorded as inherited. One rebase request is filed |
+| Red, same answer | Intersect | Drift, and the candidate changes the same fork. One rebase request is filed, and the candidate waits on it by name unless it is that request's own work |
+| Could not judge | Any | Not drift and not a verdict. "Could not judge", named, as today |
+
+No trunk fixer is filed for drift, because no trunk commit is at fault and the proof does not
+judge these checks.
+
+**The rebase request.**
+
+- **One per fork and release.** A second observation of the same fork and release files nothing
+  and attaches to the open request. A newer release for the same fork updates the open request
+  in place.
+- **It is fork work.** It is filed the way fork work is filed, naming the fork, and it is
+  repaired in the fork's lane checkout. The rebase itself is the lander's and the operator's
+  step, by the existing rule that a drain worker never runs `bin/pi-forks rebase`.
+- **It holds nothing but changes to that fork.** It never holds the green pointer, the proof,
+  a fixer, or a candidate that does not touch the fork.
+- **A fork pinned to a commit** has no release to follow. Its upstream readers answer for the
+  pin, so a red there is never drift from a release.
+- **It closes** when a landing makes the check pass against that release, or when a newer
+  request replaces it.
+
+**The checks that could not judge.** A remote that does not serve a pinned commit is an
+unavailable resource, not drift. Under the fixer's new gate such a check is not planned unless
+the fixer's diff reaches it, so it no longer holds a repair that does not touch the fork. Where
+a candidate does reach it, it stays "could not judge" and takes the tooling-defect path, which
+names the remote and the commit. That path is unchanged here.
+
+> [!WARNING]
+> Do not make the fixer's gate pass by skipping fork checks by name. The repair is the scope:
+> a fixer whose diff does touch a series is still judged on that series, like any change.
+
+## Who is told when an upstream moves
+
+Settled here, as the designer's decision:
+
+| Who | How |
+| :--- | :--- |
+| The queue | The rebase request is the notice. It exists from the first observation |
+| A candidate that touches the same fork | Its hold names the rebase request as its waiter |
+| A candidate that lands with the failure inherited | Its verdict records the check, the fork and the release |
+| The operator | The loop prints one line when the request is filed, and the waiting face lists the request with its fork and release |
+| A fixer's worker | Nothing. The drift is not in its brief unless its fence includes that fork |
+
+Whether the owner is told in any further way is his to rule, because it decides what he sees
+([OQ-PR21](../tillr/decision-provenance-review.md#OQ-PR21)). That is [OQ-FG1](#OQ-FG1). Until
+it is ruled, no owner-facing row or hold is built for drift; the rows above do not depend on it.
+
+## What this does not change
+
+- The proof, the green pointer, automatic revert and the way a fixer is filed, attached and
+  resolved.
+- The ordinary gate, for any candidate.
+- The drift probe's design. It remains the gate rework's unit and is still the right discoverer;
+  until it is built, drift is seen only when a change touches a series or a pack declaration.
+- `item-gate-pinned-fork-inputs`, which changes how fork checks read their pinned inputs.
+- State that already exists. An open fixer is gated by the new rule the next time it is gated.
+  No record is migrated.
+
+## Alternatives
+
+| Alternative | Verdict |
+| :--- | :--- |
+| Keep the untiered range and acquit the fixer of checks red on its base | Rejected. It still runs every check in the range before deciding, so the cost still grows with the red range, and "could not judge" still holds the fixer |
+| Keep the untiered range and exclude upstream readers from it | Rejected. It fixes the incident and keeps the second group of [the table above](#what-the-untiered-range-bought), which the proof already judges |
+| The ordinary gate alone, with no named checks | Rejected. A fixer that repairs nothing would land, and a fixer's landing is never reverted |
+| Wait for the drift probe | Rejected as the only fix. The probe waits on other work, and the fixer's range is wrong for tree checks too |
+
+## Risks
+
+| Risk | Mitigation |
+| :--- | :--- |
+| A second red in the range is found one proof later than today | The proof names it and files its fixer, as for any red; the first fixer has already landed, so the range is shorter |
+| Drift goes unseen while no change touches a fork | Stated above; the probe closes it. A launch on the host still holds the last good build |
+| A named check's selector is missing from the fixer's record | The gate answers "could not judge" naming the check; it never passes by omission |
+
+## Open Questions
+
+1. 💬 **OQ-FG1: Should you be told, apart from the queue, when an upstream release breaks a patch series?**
+
+   Upstream pi publishes `v1.6.0` overnight, and it conflicts with the patches this repository
+   carries on pi. The next change that touches the pi series is gated and the conflict is
+   seen. Under this design the drain files one rebase item for pi and `v1.6.0`, an agent works
+   it, and changes that do not touch pi keep landing. Nothing addresses you unless that item
+   itself gets stuck. Today there is no rule either way: the 2026-11-20 release surfaced only
+   as a refused trunk repair.
+
+   - **A — The queue only.** You see a rebase item for pi in the queue and on the waiting list,
+     like any item, and later its landing. You are asked something only if the rebase hits a
+     conflict an agent cannot settle.
+   - **B — A `needs you` row as well.** The waiting list shows a row addressed to you naming the
+     fork and the release until the rebase lands. Agents still do the work without waiting.
+   - **C — The rebase waits for you.** The item is filed and held until you say to take the
+     release. No agent rebases a fork onto a release you have not seen; every release costs you
+     one answer.
+
+   <!-- vantage: question id=OQ-FG1 leaning="A (The queue only) — the fork workflow already says a series follows upstream releases, so a release is routine work, and a row or hold addressed to you would grow with upstream activity." -->
+
+   _Leaning:_ A (The queue only) — the fork workflow already says a series follows upstream releases, so a release is routine work, and a row or hold addressed to you would grow with upstream activity.
+
+   **Answer:**
+   > _(empty — fill in when decided)_
+
+## Decision Ledger
+
+Every row is the designer's decision of 2026-11-21, made from the request that opened this
+design. None is an owner ruling, and the owner may overturn each by comment.
+
+| ID | Ruling / Decision | Date | Settled in | Built |
+| :--- | :--- | :--- | :--- | :--- |
+| `D-FG1` | A trunk fixer's gate is the ordinary gate over its own diff plus the checks it names, run on its tree. The untiered range since the last green is removed. Structural fix. (Designer's decision.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate) | — |
+| `D-FG2` | A fixer stays excluded from acquittal only for the checks it names; for any other check it is judged as any candidate is. (Designer's decision.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate) | — |
+| `D-FG3` | An upstream reader red on a candidate and on its base, whose watched paths the candidate did not change, is drift: the candidate lands with the failure inherited and one rebase request per fork and release is filed. No trunk fixer is filed for drift. Structural fix. (Designer's decision, carrying out `D-GR12` of the gate rework, itself a designer's decision.) | 2026-11-21 | [Upstream drift](#upstream-drift-is-a-rebase-request-not-a-refusal) | — |
+| `D-FG4` | A fork check that could not judge is neither drift nor a verdict. It holds only a candidate whose diff reaches it or a fixer that names it, by the existing tooling-defect path. (Designer's decision.) | 2026-11-21 | [Upstream drift](#upstream-drift-is-a-rebase-request-not-a-refusal) | — |
+| `D-FG5` | The queue, the affected candidates and the operator's surfaces are told of drift by the rebase request and one loop line. Nothing owner-facing is built until [OQ-FG1](#OQ-FG1) is ruled. (Designer's decision.) | 2026-11-21 | [Who is told](#who-is-told-when-an-upstream-moves) | — |
