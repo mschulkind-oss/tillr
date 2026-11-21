@@ -44,6 +44,10 @@ func (l *Loop) recordObstacleHold(ctx context.Context, d Decision, obs Obstacle)
 	if d.RunRequest != nil {
 		runID = d.RunRequest.RunID
 	}
+	headSHA := ""
+	if d.LaneID != "" {
+		headSHA = l.headOf(ctx, d.LaneID)
+	}
 	checks := obs.List("CHECKS")
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
@@ -65,6 +69,7 @@ func (l *Loop) recordObstacleHold(ctx context.Context, d Decision, obs Obstacle)
 			_ = json.Unmarshal([]byte(rawAllowed), &allowed)
 		}
 		hold = obstacles.NewHold(d.ItemID, runID, obs.Kind, obs.Fields, checks, baseSHA, allowed)
+		hold.HeadSHA = headSHA
 		if obs.Kind == ObstacleFence {
 			fence := fencePaths(scopeForLane(allowed, d.LaneID))
 			var outside []string

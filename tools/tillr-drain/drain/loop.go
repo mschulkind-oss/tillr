@@ -1396,6 +1396,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			Backend: request.Backend, BaseSHA: mainSHA, WorkingDir: request.WorkingDir,
 			TimeoutMS: request.TimeoutMS, BlockConflict: decision.BlockConflict,
 			Returned: decision.Returned, RepeatedCall: decision.RepeatedCall,
+			RetryCandidate: decision.RetryCandidate,
 		}
 		if decision.DesignContinuationFrom != "" {
 			spec.SessionID = decision.DesignerSessionID
@@ -1412,6 +1413,11 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 				return nil, holdErr
 			}
 			continue
+		}
+		freshCandidateRetry := decision.RetryCandidate != nil && decision.RetryCandidate.Available
+		if freshCandidateRetry {
+			spec.VerifyReturnHead = decision.RetryCandidate.HeadSHA
+			spec.VerifyReturnItemBase = decision.RetryCandidate.BaseSHA
 		}
 		freshVerifyReturn := (decision.Reason == ReasonReturned || decision.Reason == ReasonRetry) && (verifyBuildReturn(decision.Returned) || verifyNoVerdictReturn(decision.Returned)) && !request.SessionTurn
 		if freshVerifyReturn {
@@ -1470,7 +1476,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 			spec.InputPaths = paths
 			if !revertedSession {
-				spec.Continue = spec.Continue || (decision.NodeIndex > 0 && !freshRetry && !freshVerifyReturn) || decision.WorkflowRestart
+				spec.Continue = spec.Continue || (decision.NodeIndex > 0 && !freshRetry && !freshVerifyReturn && decision.RetryCandidate == nil) || decision.WorkflowRestart
 			}
 			if spec.Continue {
 				spec.PreviousRunID = decision.NodeStartRunID
@@ -1567,7 +1573,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 				spec.PreviousReportText = reportText
 			}
 		}
-		if !l.nonLanding && spec.Continue && !decision.WorkflowRestart && !revertedSession && !freshRetry {
+		if !l.nonLanding && spec.Continue && !decision.WorkflowRestart && !revertedSession && !freshRetry && !freshCandidateRetry {
 			expectedHead := decision.NodeBaseSHA
 			if request.SessionTurn && decision.Returned != nil && decision.Returned.WorkerSession != nil && decision.Returned.WorkerSession.HeadSHA != "" {
 				expectedHead = decision.Returned.WorkerSession.HeadSHA

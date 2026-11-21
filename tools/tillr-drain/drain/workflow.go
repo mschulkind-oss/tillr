@@ -503,6 +503,7 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	// The refusal has been answered by this node. Successors keep the repaired
 	// checkout and accepted-input references, not the return dispatch mode.
 	next.Returned = nil
+	next.RetryCandidate = nil
 	next.RepeatedCall = nil
 	next.WorkerSessionReason = ""
 	next.ConflictID = ""
