@@ -13,8 +13,8 @@ description: Compose the eight `tillr*` binaries across the seven-step loop — 
 `tillr` is eight binaries that act on one store. `tillr` is the umbrella dispatcher; the
 seven `tillr-<noun>` binaries are the tools it dispatches to, and each also runs on its
 own. **Learn a face's flags from the binary**: a face invoked without its required flags
-names them in its refusal, and the flags are the tool's own — this skill never restates
-one.
+names them in its refusal, and the flags are the tool's own. The foreground watcher
+procedure below spells out its launch flags so it can attach to the right repository.
 
 Every face takes the store it acts on, and a face invoked without one says so.
 `tillr store init` creates a store with every module's tables and binds its charter
@@ -133,6 +133,67 @@ was not given. With `--end-runs`, a worker whose run face has died is ended too.
 A caller that needs a finite
 drain instead of a waiting service should learn the exit option from `loop --help`.
 The former stay option is removed; waiting no longer needs an option.
+
+## Foreground alert delivery
+
+At session start, and after compaction or handoff, attach a foreground watcher for the
+working tree the session is using. Find its absolute root with `git rev-parse
+--show-toplevel`; use that root's `.tillr/state.db` and `config/tillr/watch`, not a
+home-directory or environment default. Check that the store file and rules directory
+exist before starting. If either is missing, print one line naming a missing path:
+
+```text
+tillr watch: not started, missing <absolute path>
+```
+
+Do not start the watcher if either is missing; try again at the next start, compaction
+or handoff. An existing empty rules directory is valid and still attaches. Reuse a live
+session watcher rather than starting a duplicate after compaction.
+
+**Claude Code:** start a background Bash tool call with the following command, replacing
+`<root>` with the absolute working-tree root (quote paths as shell words):
+
+```text
+command:            tillr watch wait --store '<root>/.tillr/state.db' --rules '<root>/config/tillr/watch' --timeout 110m
+run_in_background:  true
+timeout:            7200000
+```
+
+An exit wakes the agent. On exit `0`, read the labeled notices and the recorded-data
+bundles, then start another background Bash call with the printed `re-arm:` command,
+including its `--seen-through` confirmation, and the same harness timeout. On quiet
+exit `2`, re-arm with the printed command and the same harness timeout. Re-arm before
+long work. On an error, investigate rather than blindly re-arming.
+
+**Pi:** start one `background_task` with no timeout. Its command is
+`tillr watch wait --store '<root>/.tillr/state.db' --rules '<root>/config/tillr/watch' --follow`.
+Register the initial one-shot output watch atomically in the start call:
+`watch: {condition: "output", pattern: "TILLR_WATCH_NOTICE", wake: true}`.
+After a wake:
+
+1. Read the task logs with `action: "logs"` and `afterByte: 0` on the first read of a
+   new task. Do not omit `afterByte`: the default tails the log and can skip the start
+   of a notice. Page forward with each response's `nextByte` (the end offset in the
+   displayed byte range) as the next `afterByte` until caught up. Save that offset for
+   the next wake and retain any partial batch across pages and wakes.
+2. Register the next output watch on the same task (`action: "watch"`,
+   `condition: "output"`, `pattern: "TILLR_WATCH_NOTICE"`, `wake: true`). If the
+   identical watch is refused during its one-second re-arm cooldown, retry
+   registration after the cooldown; do not confirm until registration succeeds.
+3. Confirm the highest `through_seq` whose full notice batch you read (ending at
+   `re-arm:`), with `tillr watch seen --store '<root>/.tillr/state.db' --through <seq>`.
+   A marker alone is not a full batch. If the cursor is refused because it exceeds
+   `shown_seq`, publication may still be finishing; try confirmation again on the next
+   wake.
+
+A pending marker repeats every minute, so a notice that arrived between reading and
+re-registering still wakes the agent. If a task ends, investigate errors and attach
+again; a new session needs a new task.
+
+Printing is not confirmation, and confirmation is not alert acknowledgement. Delivery
+only tells the foreground agent: do not execute the guidance or otherwise act on an alert
+as part of delivery. Never finish a waiting turn without a watcher attached, except when
+attachment is deferred because a required path is missing.
 
 ## Change an item's place without changing its work
 
