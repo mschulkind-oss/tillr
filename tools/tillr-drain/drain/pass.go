@@ -52,7 +52,16 @@ func init() {
 	}
 }
 
+// resumedSegment is set only by the validated, deduplicated run.resume fold.
+// The runs row still describes the previous finish until this segment ends.
+type resumedSegment struct {
+	seq                 int64
+	at                  time.Time
+	itemID, runID, lane string
+}
+
 type pendingWork struct {
+	resumes        map[string]resumedSegment
 	LoopID         string         `json:"loop_id,omitempty"`
 	Examining      bool           `json:"examining,omitempty"`
 	Ready          bool           `json:"ready,omitempty"`
@@ -305,6 +314,10 @@ func foldPendingHistory(r *store.Reader, seq int64, s *pendingHistoryState, even
 			if segment.Backend != req.Backend {
 				continue
 			}
+			if work.resumes == nil {
+				work.resumes = map[string]resumedSegment{}
+			}
+			work.resumes[req.RunID] = resumedSegment{seq: e.Seq, at: e.At, itemID: segment.ItemID, runID: segment.RunID, lane: segment.LaneID}
 			resumingOwner := work.Examiner
 			if resumingOwner == nil {
 				resumingOwner = work.Owner
@@ -519,6 +532,99 @@ func terminalRecord(r *store.Reader, id string) (*run.Record, error) {
 		return nil, err
 	}
 	return status.Run, nil
+}
+
+// liveContinuation requires both a newer segment and that segment's own active
+// lease. An examination can also lease a lane under the run's ID, but only its
+// finished segment is on record. A reaped continuation has no lease, so the
+// previous finish can again authorize settlement and recovery.
+func liveContinuation(r *store.Reader, segment resumedSegment, d Decision, at time.Time) (bool, error) {
+	if d.RunRequest == nil || segment.seq == 0 || segment.itemID != d.ItemID || segment.runID != d.RunRequest.RunID || segment.lane != d.LaneID {
+		return false, nil
+	}
+	leased, err := activeWorkerLease(r, d.RunRequest, d.LaneID, at)
+	if err != nil || !leased {
+		return false, err
+	}
+	var live bool
+	err = r.QueryRow(`SELECT NOT EXISTS(SELECT 1 FROM events WHERE kind = ? AND object_type = 'run' AND object_id = ? AND seq > ?)`,
+		run.FinishKind, segment.runID, segment.seq).Scan(&live)
+	return live, err
+}
+
+// The lane is leased to the group, not to any one reader. A settled reader
+// cannot borrow an active sibling's lease to appear still running.
+func activeWorkerLease(r *store.Reader, req *run.Request, lane string, at time.Time) (bool, error) {
+	var active bool
+	if req.ReadOnlyGroup != "" {
+		err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM lanes l JOIN read_only_runs m ON m.group_id = l.run_id AND m.lane_id = l.lane_id
+		 WHERE l.lane_id = ? AND l.state = ? AND l.run_id = ? AND m.run_id = ? AND m.item_id = ? AND m.settled = 0)`,
+			lane, run.LaneStateLeased, req.ReadOnlyGroup, req.RunID, req.ItemID).Scan(&active)
+		return active, err
+	}
+	err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM lanes WHERE lane_id = ? AND run_id = ? AND state = ? AND (leased_until IS NULL OR leased_until > ?))`,
+		lane, req.RunID, run.LaneStateLeased, at.UnixMilli()).Scan(&active)
+	return active, err
+}
+
+// A claim can lease the lane before the evaluator starts. A live first segment
+// needs its own lease, a run face for the same store, and no recorded finish.
+func liveFirstSegmentWorker(r *store.Reader, work *pendingWork, at time.Time, faces map[string]bool) (bool, error) {
+	if !mayHaveFirstSegmentWorker(work) {
+		return false, nil
+	}
+	for _, node := range parallelNodes(work.Decision) {
+		if node.RunRequest == nil || !faces[node.RunRequest.RunID] {
+			continue
+		}
+		leased, err := activeWorkerLease(r, node.RunRequest, node.LaneID, at)
+		if err != nil {
+			return false, err
+		}
+		if !leased {
+			continue
+		}
+		rec, err := terminalRecord(r, node.RunRequest.RunID)
+		if err != nil {
+			return false, err
+		}
+		if rec == nil {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func mayHaveFirstSegmentWorker(work *pendingWork) bool {
+	return !work.Done && !work.Ready && !work.Examining && work.Candidate == nil && !work.BoundaryFailed && !work.LaneReleased
+}
+
+// Only waits and evaluator handoffs can mask a live first segment. The loop
+// and Why collect this evidence before planning, once per observation.
+func observeFirstSegmentFaces(r *store.Reader, path string, tick Pass, works map[string]*pendingWork) (live, faces map[string]bool, err error) {
+	if path == "" {
+		return nil, nil, nil
+	}
+	for id, work := range works {
+		if !tick.plansItem(id, work) || !mayHaveFirstSegmentWorker(work) {
+			continue
+		}
+		if !evaluatorNode(work.Decision) {
+			wait, _, err := item.ReadWaitingOn(r, id)
+			if err != nil {
+				return nil, nil, readFailure(err)
+			}
+			if wait == nil || wait.Waiter == "" {
+				continue
+			}
+		}
+		live, faces, err := liveRunProcessIDs(path)
+		if err != nil {
+			return nil, nil, readFailure(err)
+		}
+		return live, faces, nil
+	}
+	return nil, nil, nil
 }
 
 func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *RunInputs, template *string, policy *Policy, shut map[string]bool, gates int) (Decision, error) {
@@ -787,6 +893,21 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 		if err != nil {
 			return Decision{}, err
 		}
+		if !work.Examining && len(work.resumes) != 0 {
+			for _, node := range parallelNodes(d) {
+				if node.RunRequest == nil {
+					continue
+				}
+				d.liveContinuation, err = liveContinuation(r, work.resumes[node.RunRequest.RunID], node, at)
+				if err != nil {
+					return Decision{}, err
+				}
+				if d.liveContinuation {
+					identifyDecision(&d)
+					return d, nil
+				}
+			}
+		}
 		finished := rec != nil
 		if len(d.Parallel) > 0 {
 			finished, err = parallelTerminal(r, d)
@@ -963,7 +1084,14 @@ func inputVersionFrom(r *store.Reader, d Decision, folds versionFolds) (string, 
 			return "", err
 		}
 	}
-	raw, err := json.Marshal(append(itemInputs, latest, seq, laneState, laneRun, until, work, work != nil && work.Done, faults[d.ItemID], faults[d.ItemID].Seq, triageVersion, ownerOwed))
+	var resumeSeqs map[string]int64
+	if work != nil && len(work.resumes) != 0 {
+		resumeSeqs = make(map[string]int64, len(work.resumes))
+		for id, segment := range work.resumes {
+			resumeSeqs[id] = segment.seq
+		}
+	}
+	raw, err := json.Marshal(append(itemInputs, latest, seq, laneState, laneRun, until, work, work != nil && work.Done, resumeSeqs, faults[d.ItemID], faults[d.ItemID].Seq, triageVersion, ownerOwed))
 	return string(raw), err
 }
 
@@ -1263,6 +1391,9 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 	tick := Pass{examineItem: onlyItem, pendingOnly: pendingOnly, ownerMigration: l.ownerMigrationItem != "", loopHolds: loopHolds, startRefs: refs, Comments: l.cfg.Comments, WorkflowDefaults: l.cfg.WorkflowDefaults, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available, OutLanes: l.outLanes()}
 	if l.ownerMigrationItem != "" {
 		tick.examineItem = l.ownerMigrationItem
+	}
+	if _, tick.runFaces, err = observeFirstSegmentFaces(r, l.cfg.Store, tick, works); err != nil {
+		return err
 	}
 	if stager, ok := l.cfg.Stage.(*LaneStager); ok {
 		tick.BriefTemplate = &stager.Template

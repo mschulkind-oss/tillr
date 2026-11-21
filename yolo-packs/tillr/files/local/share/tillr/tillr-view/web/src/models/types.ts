@@ -104,6 +104,7 @@ export interface WaitingRow {
   /** Publication observation identity; not an item and has no item controls. */
   observation?: string;
   class: string;
+  position?: string;
   where: string;
   why: string;
   mover: string;

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mschulkind-oss/tillr-drain/presence"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -103,6 +104,111 @@ func TestWhyAPIAndWaitingBeforeAnyPass(t *testing.T) {
 	var n int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM dispatches`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("recorded pass: %d %v", n, err)
+	}
+}
+
+// The drain's restart test exercises the real processes. Here the same event
+// ordering and lease feed the real planner, and we check what the view exposes.
+func TestWhyAPIAndWaitingShowTheLiveResumedWorker(t *testing.T) {
+	viewBin, drainBin := buildPair(t)
+	dir, path := whyFixture(t, drainBin)
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	owner, err := presence.CurrentOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerJSON, err := json.Marshal(owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`
+INSERT INTO drain_sessions(session_id,started_at,refreshed_at,next_pass_at,ended_at,loop_owner,lanes) VALUES
+  ('original',500,3000,3000,3500,NULL,'["lane-1"]'),
+  ('replacement',4000,4000,4000,NULL,?,'["lane-1"]');
+UPDATE items SET state='in-progress' WHERE item_id='a';
+UPDATE lanes SET state='leased',run_id='run-a-a1' WHERE lane_id='lane-1';
+INSERT INTO runs(run_id,item_id,lane_id,backend,state,end_cause,started_at,finished_at) VALUES
+  ('run-a-a1','a','lane-1','pi','paused','restart',1000,2000);
+INSERT INTO events(ts,kind,object_type,object_id,payload) VALUES
+  (1000,'drain.started','run','run-a-a1','{"loop_id":"original","decision":{"item_id":"a","lane_id":"lane-1","attempt":1,"run_request":{"run_id":"run-a-a1","item_id":"a","lane_id":"lane-1","backend":"pi"}}}'),
+  (2000,'run.finish','run','run-a-a1','{"run_id":"run-a-a1","state":"paused","end_cause":"restart"}'),
+  (3000,'run.resume','run','run-a-a1','{"run_id":"run-a-a1","item_id":"a","lane_id":"lane-1","backend":"pi","session_id":"11111111-1111-4111-8111-111111111111","resumed_at":"1970-01-01T00:00:03Z"}');`, string(ownerJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := storeFingerprint(t, path)
+	srv := newServer(context.Background(), path, "", "", filepath.Join(dir, "no-tillr-trace"), dir, "", nil)
+	defer srv.close()
+	srv.plannerFlag = drainBin
+	httpServer := httptest.NewServer(srv.routes())
+	defer httpServer.Close()
+	h := &serveHarness{t: t, http: httpServer}
+	status, body, raw := h.get("/api/v1/why")
+	if status != 200 {
+		t.Fatalf("why: %d %s", status, raw)
+	}
+	var worker map[string]any
+	for _, value := range body["data"].(map[string]any)["rows"].([]any) {
+		row := value.(map[string]any)
+		if row["item_id"] == "a" {
+			if worker != nil {
+				t.Fatalf("duplicate worker row: %s", raw)
+			}
+			worker = row
+		}
+	}
+	if worker["position"] != "running" || worker["class"] != "moving" || worker["reason"] != "run-live" || worker["class_source"] != "planner" {
+		t.Fatalf("expected the planner's running row, got %+v", worker)
+	}
+	why, _ := worker["why"].(string)
+	mover, _ := worker["mover"].(string)
+	if !strings.Contains(why, "run-a-a1 on lane-1") || !strings.Contains(why, "timing does not establish takeover") || strings.Contains(why, "does not take over") ||
+		!strings.HasPrefix(mover, "worker run-a-a1 on lane-1;") || !strings.Contains(mover, "waits for its recorded finish") {
+		t.Fatalf("why does not explain where the worker is and who moves: %+v", worker)
+	}
+	out, err := exec.Command(viewBin, "waiting", "--store", path, "--root", dir).CombinedOutput()
+	if err != nil {
+		t.Fatalf("waiting: %v %s", err, out)
+	}
+	var count int
+	for _, line := range strings.Split(string(out), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 2 && fields[1] == "a" {
+			count++
+			if strings.Contains(line, "no-lane") || !strings.Contains(line, "moving (running)") || !strings.Contains(line, why) || !strings.Contains(line, mover) {
+				t.Errorf("waiting must show running, location and next mover on one row: %s", line)
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected one waiting row for a, got %d:\n%s", count, out)
+	}
+	out, err = exec.Command(viewBin, "waiting", "--store", path, "--root", dir, "--json").CombinedOutput()
+	if err != nil {
+		t.Fatalf("waiting --json: %v %s", err, out)
+	}
+	var rows []waitingRow
+	if err := json.Unmarshal(out, &rows); err != nil {
+		t.Fatalf("waiting --json: %v %s", err, out)
+	}
+	count = 0
+	for _, row := range rows {
+		if row.ItemID == "a" {
+			count++
+			if row.Position != "running" || row.Why != why || row.Mover != mover {
+				t.Errorf("waiting --json disagrees with the planner: %+v", row)
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected one JSON waiting row for a, got %d: %s", count, out)
+	}
+	if storeFingerprint(t, path) != before {
+		t.Fatal("why/waiting wrote store")
 	}
 }
 
