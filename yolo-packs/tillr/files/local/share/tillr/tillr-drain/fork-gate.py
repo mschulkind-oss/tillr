@@ -8,6 +8,7 @@ branch for its build input. Build output is retained under the run directory.
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -50,24 +51,22 @@ FORK_QUALITY = {
     'pi-subagents': ('typecheck', 'test:unit'),
 }
 
-# Container/session variables that leak ambient cache retention or provider credentials into unit tests.
-QUALITY_UNSET_ENV = (
-    'PI_CACHE_RETENTION',
-    'AWS_ACCESS_KEY_ID',
-    'AWS_SECRET_ACCESS_KEY',
-    'AWS_SESSION_TOKEN',
-    'AWS_PROFILE',
-    'AWS_BEARER_TOKEN_BEDROCK',
-    'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
-    'AWS_CONTAINER_CREDENTIALS_FULL_URI',
-    'AWS_WEB_IDENTITY_TOKEN_FILE',
-    'OPENAI_API_KEY',
-    'ANTHROPIC_API_KEY',
-    'ANTHROPIC_OAUTH_TOKEN',
-    'ANTHROPIC_AUTH_TOKEN',
-    'AZURE_OPENAI_API_KEY',
-    'GEMINI_API_KEY',
+# Keep tool lookup, locale, scratch, certificate trust and explicit npm cache
+# settings. Do not inherit provider variables or config paths (including XDG
+# and PI_CODING_AGENT_DIR); a list of known credential names goes stale.
+QUALITY_TOOL_ENV = (
+    'PATH', 'LANG', 'LC_ALL', 'LC_CTYPE', 'TMPDIR',
+    'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS',
+    'NPM_CONFIG_CACHE', 'npm_config_cache', 'NPM_CONFIG_OFFLINE', 'npm_config_offline',
 )
+
+
+def run_quality(directory, command):
+    with tempfile.TemporaryDirectory(prefix='fork-quality-home-', dir=directory) as home:
+        env = {name: os.environ[name] for name in QUALITY_TOOL_ENV if name in os.environ}
+        env.update(HOME=home, NPM_CONFIG_GLOBALCONFIG=os.devnull)
+        result = subprocess.run(['sh', '-c', command], env=env, check=False)
+        return result.returncode if result.returncode >= 0 else 4
 
 
 def touched_packages(candidate, base, head):
@@ -183,12 +182,13 @@ def main():
     }]
     if quality:
         print(f'fork-quality: {args.head}: {quality}', flush=True)
-        unset_cmd = 'unset ' + ' '.join(QUALITY_UNSET_ENV)
+        isolated_quality = shlex.join([
+            sys.executable, str(Path(__file__).resolve()), '--run-quality', str(directory), quality,
+        ])
         guarded_quality = (
             f'if [ ! -f {shlex.quote(str(build_passed))} ]; then '
             f'echo "fork-quality: skipped because fork-build did not pass" >&2; exit 1; fi && '
-            f'{unset_cmd} && '
-            f'{quality}'
+            f'exec {isolated_quality}'
         )
         declaration_list.append({
             'id': 'fork-quality', 'kind': 'fork-quality', 'label': f'{args.fork}: quality',
@@ -222,6 +222,8 @@ def main():
 
 if __name__ == '__main__':
     try:
+        if len(sys.argv) == 4 and sys.argv[1] == '--run-quality':
+            sys.exit(run_quality(sys.argv[2], sys.argv[3]))
         if len(sys.argv) == 3 and sys.argv[1] == '--package-test':
             sys.exit(package_test(sys.argv[2]))
         sys.exit(main())
