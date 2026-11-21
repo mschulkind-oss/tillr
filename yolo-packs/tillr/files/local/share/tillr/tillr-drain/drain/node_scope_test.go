@@ -248,8 +248,41 @@ func (s *scopedWorkflowSteps) Land(ctx context.Context, c Candidate) (LandOutcom
 	return LandOutcome{Result: LandLanded}, nil
 }
 
+func TestNodeScopeOnNewerTrunk(t *testing.T) {
+	f := newRefusalLoopFixture(t, "item-a")
+	l := &Loop{cfg: LoopConfig{Root: f.root, LaneRoot: f.laneRoot}}
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	writeForkFile(t, filepath.Join(f.root, "outside.txt"), "trunk change\n")
+	runGit(t, f.root, "add", "outside.txt")
+	runGit(t, f.root, "commit", "-qm", "trunk landing after dispatch")
+
+	worktree := filepath.Join(f.laneRoot, "rebased-worktree")
+	runGit(t, f.root, "worktree", "add", "--detach", worktree, TrunkRef)
+	writeForkFile(t, filepath.Join(worktree, "result.txt"), "worker change\n")
+	runGit(t, worktree, "add", "result.txt")
+	runGit(t, worktree, "commit", "-qm", "worker change")
+	candidate := Candidate{Worktree: worktree, BaseSHA: base, HeadSHA: runGit(t, worktree, "rev-parse", "HEAD")}
+	// Trunk can advance again before scope is checked. Its tip is not the comparison base.
+	writeForkFile(t, filepath.Join(f.root, "outside.txt"), "another trunk change\n")
+	runGit(t, f.root, "commit", "-qam", "trunk landing after the worker commit")
+	fence := filepath.Join(f.laneRoot, "node-fence.txt")
+	writeForkFile(t, fence, "result.txt\n")
+	if escape, err := l.fenceViolationAt(context.Background(), candidate, fence); err != nil || escape != "" {
+		t.Fatalf("trunk's outside path was charged to the worker: %q / %v", escape, err)
+	}
+
+	// Reverting the trunk landing is a worker change even though it restores the old base.
+	runGit(t, worktree, "rm", "outside.txt")
+	runGit(t, worktree, "commit", "--amend", "-q", "--no-edit")
+	candidate.HeadSHA = runGit(t, worktree, "rev-parse", "HEAD")
+	if escape, err := l.fenceViolationAt(context.Background(), candidate, fence); err != nil || !strings.Contains(escape, "outside.txt is outside allowed_paths") {
+		t.Fatalf("worker's outside path was not refused: %q / %v", escape, err)
+	}
+}
+
 func TestNodeScopeChangedPathsKeepWhitespace(t *testing.T) {
 	f, l, _ := workflowLoopFixture(t, "")
+	runGit(t, f.root, "switch", "--detach")
 	base := runGit(t, f.root, "rev-parse", "HEAD")
 	if err := os.MkdirAll(filepath.Join(f.root, "tools/item-a"), 0755); err != nil {
 		t.Fatal(err)
@@ -268,6 +301,7 @@ func TestNodeScopeChangedPathsKeepWhitespace(t *testing.T) {
 
 func TestNodeScopeRenameChecksSourceDeletion(t *testing.T) {
 	f, l, _ := workflowLoopFixture(t, "")
+	runGit(t, f.root, "switch", "--detach")
 	for _, dir := range []string{"tools/item-a/one", "tools/item-a/two"} {
 		if err := os.MkdirAll(filepath.Join(f.root, dir), 0755); err != nil {
 			t.Fatal(err)
