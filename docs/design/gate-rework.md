@@ -9,7 +9,7 @@ tags:
   - landing
   - design
 summary: "Measures all 42 check kinds in tools/fork-check.py, then replaces the gate's remembered baseline with a base the caller supplies and results remembered by a fingerprint of the files each check reads. A ten-second landing budget becomes a failing test, heavy checks run after the merge in this repository, tillr deploys only from the last green trunk commit, and a new check is one new file."
-next: "The drift probe of D-GR12 is written as the last unit of Section 11, with no item directive; it becomes an item once the owner rules on how documents declare work, after item-gate-pinned-fork-inputs."
+next: "Two units of Section 11 are written with no item directive and become items once the owner rules on how documents declare work: the single check-result classifier of D-GR23, in ten slices, and the drift probe of D-GR12, after item-gate-pinned-fork-inputs."
 depends-on:
   - landing-principles.md
   - landing-velocity.md
@@ -26,7 +26,7 @@ vantage:
 [the tillr roadmap](../tillr/roadmap.md#filed-2026-11-15-the-three-gate-rulings-no-slice-builds)); the
 [Decision Ledger](#decision-ledger)'s `Built` column names the code for each. One decision is not
 built: the drift probe of `D-GR12`, because `series` and `patch-branch-inv2` are still
-landing-tier checks (`TIER_LANDING` in `tools/fork-check.py`). That remainder is written as [the last unit of the build order](#move-the-upstream-drift-checks-out-of-the-gate-into-a-probe). Every timing is from one run made for this design at
+landing-tier checks (`TIER_LANDING` in `tools/fork-check.py`). That remainder is written as [the last unit of the build order](#move-the-upstream-drift-checks-out-of-the-gate-into-a-probe). The disabled-check rule of `D-GR21` and `D-GR22` is not built either: on 2026-11-21 the designer listed the 70 places a check result is classified and decided that one function classifies for all of them (`D-GR23`, the owner's to overturn), with [its build order in ten slices](#classify-every-check-result-in-one-place). Every timing is from one run made for this design at
 `ebaab2794`, stated in [Section 3](#3-what-exists-today-measured); the six owner rulings of
 2026-11-15 are rows `D-GR1` to `D-GR6` of the [Decision Ledger](#decision-ledger) (`D-GR6` was
 overturned by the owner on 2026-11-17: automatic revert is on here). Its three former open
@@ -434,10 +434,14 @@ of it is the owner's ruling, and the owner may overturn it.
   rejected: an unrelated change to the files the check reads gives a new fingerprint, the
   unrepaired check would run for a verdict again, and its next intermittent fail would refuse
   that landing, which is the blocking the ruling forbids.
-- **The repair item is filed from the verdict.** The gate has no access to the queue. The program
-  that reads the verdict files the item: the drain, for both the landing gate and the trunk
-  proof. Its id is `flaky-<check-id>`, and an open item with that id is not filed twice. Its
-  text carries both times, both output locations and the fingerprint.
+- **The repair item is filed from the marker.** The gate has no access to the queue, so the drain
+  files the item. It files from the marker file, not from any one run's verdict (`D-GR23`, which
+  replaces "from the verdict" in `D-GR22`): the marker is written at the moment a run sees the
+  contradiction, so it exists even when that run is cancelled, errors on another check or never
+  writes a verdict. The item's id is `flaky-<check-id>`, and an open item with that id is not
+  filed twice. Its text carries both times, both output locations and the fingerprint. The sweep
+  that files it is specified under
+  [One classifier, five outcomes](#one-classifier-five-outcomes).
 - **A finished repair does not stand in for a new one.** The lookup that prevents a second
   item matches only an item that is not yet finished. Once a repair has landed and the check
   is enabled, a contradiction found later is a new defect: the drain files a new item carrying
@@ -459,11 +463,16 @@ of it is the owner's ruling, and the owner may overturn it.
   describe a declared quarantine of one named failing case, which still runs. A disabled check
   is a whole check, is set by the store's own evidence, and does not run.
 
-The build changes `annotateMemory` and the summary loop in `tools/tillr-gate`, and the two tests
-that pin the `flaky` pass (`TestMemoryFailRetriesAndFlakyPass` and
-`TestMemoryOppositeWritersNeverErase` in `tools/tillr-gate/memory_test.go`). Filing the repair
-item and calling `enable` are in `tools/tillr-drain`. Until the drain part is built, a disabled
-check is still reported on every gate run, so it is visible, but no item is filed for it.
+The build is not a change to `annotateMemory` and the summary loop alone. Seventy sites in four
+programs decide what a check's result means, and each one that is not taught the rule
+credits a contradicted check green, reports it as an error or blocks on it. They are listed under
+[Every place a check result is classified](#every-place-a-check-result-is-classified); the one
+function they call is under [One classifier, five outcomes](#one-classifier-five-outcomes); the
+order to build it in is [its own unit of the build order](#classify-every-check-result-in-one-place).
+The two tests that pin the `flaky` pass (`TestMemoryFailRetriesAndFlakyPass` and
+`TestMemoryOppositeWritersNeverErase` in `tools/tillr-gate/memory_test.go`) change with the slice
+that adds the rule. Until the drain's slices are built, a disabled check is still reported on
+every gate run, so it is visible, but no item is filed for it.
 
 **Where the filed request and this section differ, this section governs the build.** The
 operator request of 2026-11-20 says the check "is red in the verdict", and a build criterion
@@ -474,6 +483,368 @@ run whose only non-passing checks are disabled exits 0. This reconciliation is t
 made on 2026-11-21 from the owner's quoted words and the operator's reading; the owner may
 overturn it. What the request and the ruling share is kept: both times and both output
 locations are named, and there is no retry, count threshold or time window.
+
+#### Every place a check result is classified
+
+A **classification site** *(coined here)* is a function that reads a check's raw result and
+decides from it whether the check passed, failed, gave no verdict or does not count. A **raw
+result** is what the site was handed: a process exit code, a result word another program wrote,
+a stored record, or a verdict cached by an earlier run. A site is not the check itself: a check
+script that exits 1 produces a raw result and classifies nothing.
+
+The rule above was first built as one change that taught sites about `disabled` as each was
+found. On 2026-11-21 that change stood at 111 files and 10,088 added lines (`git diff
+--shortstat` of the kept candidate against its merge base), and its verifier had refused it
+eleven times. Each refusal named another site that still credited a contradicted check green,
+turned it into an error, or lost its repair item. The table is the inventory that build did not
+have. It was read from the tree on 2026-11-21 by searching the four programs for every
+comparison of a result word, a span status or a judging program's exit code, and then opening
+each function found. `tools/fork-check.py` is listed with `tools/gate` because
+`tools/gate/change-gate.py` runs it as the legacy part of the landing gate, and the drain runs
+it for replay and for the rolling tier.
+
+Each site has one kind:
+
+- **fresh**: it classifies a result the check just produced by running.
+- **cached**: it reuses a result stored earlier, from the result store, a proof record, a
+  checkpoint or an attribution record, and the check does not run.
+- **relay**: it translates another program's answer into its own words.
+- **aggregate**: it computes one result for a run from the results of its checks.
+- **settle**: it acts on a classified result (holds, releases, files, reverts, rewrites a
+  verdict) and compares result words to do so.
+
+**In `tools/tillr-gate`** (the runner):
+
+| Site | Kind | Function, in file | Raw result it reads | What it decides today | Consumed by |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| G1 | fresh | `runCheck`, `run.go` | The check command's exit code and wait error; the watchdog's count of silent samples | `pass` on exit 0; `error` on exit 4, a signal or a wait error; `fail` on any other exit; `stalled` after 60 silent samples | `(*treeMemory).run`; `Shadow` |
+| G2 | cached | `(*treeMemory).run`, with `(resultStore).read` and `(resultStore).publish`, `memory.go` | The pass and fail records for the fingerprint; the declaration's `ref:` needs; whether the worktree is the judged tree | A stored pass is returned as `pass` without running, also when a fail record exists; a missing `ref:` need is `unavailable`; an unreadable record is `error`; only `pass` and `fail` are stored | `runPlanChecks`, then G4 |
+| G3 | cached | `annotateMemory`, `memory.go` | The result and both records | The memory word: `flaky`, `remembered`, `passed` or `failed`. `flaky` leaves the result `pass` | The verdict's `memory` field; G7 |
+| G4 | aggregate | `RunWith`, with `runPlanChecks`, `run.go` | Per-check results; cancellation | The run's result and exit code: `error` (4) over `stalled` (6) over `fail` (1) over `pass` (0). `unavailable` and skipped checks do not count. A check not started when the run is cancelled is `error` | The verdict's `result`; the exit code read by L1, P1, P2 and D20 |
+| G5 | relay | `gateResult`, `runGateProgram`, `RunGate`, `gate.go` | The gate program's exit code | One wrapper check: 0 `pass`, 1 `fail`, 6 `stalled`, anything else `error`. The program's own per-check results are read only after a stall | The verdict file D1 reads |
+| G6 | relay | `readFastVerdict`, `watchdog.go` | The fast verdict file | Accepts only `stalled` checks with exactly 60 silent samples; any other content is an error | G5 |
+| G7 | aggregate | `runFace`, `main.go` | Per-check `result` and `memory` | The summary counts: passed, remembered, unavailable, inherited, skipped. Every other word counts as failed, and `flaky` counts as passed | The `checks:` summary line |
+| G8 | relay | `checksFace`, `checks.go` | Changed paths against each declaration's reads | `skipped: no changed path is read`, added after the run's result is fixed | The verdict on stdout, read by P1, P2 and D20 |
+| G9 | settle | `ApplyInheritedFailures`, `run.go` | Per-check `fail` and a list of inherited failures | `fail` becomes `inherited` and the run becomes `pass-inherited` | Nothing outside tests: `rg -n 'ApplyInheritedFailures' tools/tillr-gate --glob '!*_test.go'` finds the definition only |
+| G10 | aggregate | `Shadow`, `shadowResult`, `shadow.go` | G1's results | `error` over `fail` over `pass`; `stalled` counts as a pass | The `gate.shadow` record |
+| G11 | relay | `pythonVerdict`, `verdictResult`, `compare`, `dualrun.go` | The Python gate's exit code; the Go verdict file | 0 pass, 1 fail, anything else error; a verdict with no result is `none` | The dual-run report |
+| G12 | relay | `budgetNotes`, `run.go` | `stalled` and `over-budget` results | Note text only | Standard error |
+
+**In `tools/gate` and `tools/fork-check.py`** (the legacy gate):
+
+| Site | Kind | Function, in file | Raw result it reads | What it decides today | Consumed by |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| P1 | relay | `main`, `tools/gate/tree-check.py` | The runner's exit code and the one check's `result` word | Accepts exit 0 with `pass`, 1 with `fail` and 6 with `stalled`; any other pairing is exit 4. It hands the runner a re-serialized copy of the declaration, so the same check gets a different fingerprint than the landing gate gives it, and it keeps the logs in a temporary directory that is deleted on return | F1 |
+| P2 | relay | `main`, `tools/gate/change-gate.py` | The runner's exit code for the fast tree checks; `fork-check.py`'s exit code for the rest | The runner's exit code is passed through and its verdict is copied unread; the legacy exit is kept when 0, 1 or 6 and is 4 otherwise | G5; D2 reads the copied verdict |
+| P3 | fresh | `warm_trimmed_go_cache`, `change-gate.py` | The exit code of `go-build.py`, run outside the runner | Exit 0 or 1 counts as warmed | The warm stamp under the common Git directory |
+| P4 | cached | `stored_result`, `store_result`, `tools/gate/checks/change_common.py` | Result store files, read and written directly, not through the runner | A record or none; writes `pass` or `fail` | P5, P6 |
+| P5 | cached | `judge_document_set`, `change_common.py` | Per-document pass and fail records; the renderer's exit code and report | A pass with no fail record is remembered; a document with both runs again; exit 0 or 1 is the verdict and anything else is "could not judge" | P7 |
+| P6 | cached | `judge` inside `main`, `tools/gate/checks/go-build.py` | Per-module pass and fail records; `go` exit codes | The same rule as P5 | G1; P3 |
+| P7 | fresh | `run`, `change_common.py`, and the `main` of each script in `tools/gate/checks/` | Findings | Exit 0, 1 or 4. This is the raw result G1 reads, not a classification of one | G1 |
+| F1 | fresh | `execute_attempt`, `tools/fork-check.py` | A check command's exit code; `tree-check.py`'s exit code | For a fast tree check, 6 is stalled and any exit other than 0, 1 or 6 is "refused"; a stale candidate is exit 2; a cancelled check is given exit 0 and marked not run | F3, F4 |
+| F2 | cached | `cached_verdict`, `VerdictCache.lookup` | A verdict cache entry | An entry with `rc` 0 is `CACHED` and the check does not run; only passes are cached | F4 |
+| F3 | fresh | `Check.conflict`, `Check.failed`, `Check.unanswered`, `Check.verdict`, `candidate_stale` | Exit code, check kind and output | A verdict against the tree, or not a verdict, by the kind's group | F4, F6, F9 |
+| F4 | relay | `check_status` | F1 to F3 and F5 | One status word: `ok`, `FAIL`, `ERR`, `skip`, `STALE`, `STALLED`, `CACHED`, `QUARANTINED` or `not-run` | F6 to F8; the run record; the printed report |
+| F5 | settle | `sentinel_skip`, `fork_quality_skip`, `applied_quarantine` | A red `fork-quality` or `waybar` check | A declared quarantine or a skip; the check is removed before the run's verdict | `run_gate` |
+| F6 | aggregate | `verdict_of`, `run_gate` | F3 | `verified` (exit 0), `failed` (1), `unproven` (2) or `stalled` (6); `dirty` and `refused` are exit 2 | P2, D17, D21 |
+| F7 | relay | `write_gate_spans` | F4; stall observations | The spans file, and a `stalled` verdict file; both are written once, when the run ends | D2, D5, D17, D19, D21 |
+| F8 | relay | `evidence_records` | F4 | `ok`, `failed`, `aborted` or `skipped` | The evidence file |
+| F9 | aggregate | `run_replay` | F3 on the replayed checks | Exit 0 green, 1 red, 2 could not judge, 77 dropped | D8, D12, D21 |
+| F10 | fresh | `run_preflight`, `preflight_report` | Per-cell exit codes | `pass`, `declared`, `fail` or `unanswerable` | The manual preflight report |
+| F11 | settle | `read_series_transcript`, `observe_fork_conflict` | Check output | Exit 0 forced when a series is declared elsewhere; exit 4 when a fork target cannot be confirmed | F3 |
+| F12 | settle | `apply_tier`, `apply_reuse` | No result: the plan | A check is not planned, owed or reused; these produce the `skipped` and `reused` words with no result behind them | F7; the run record |
+| F13 | fresh | `run_shard`, `main`, `tools/go-test-shards.py` | Go test events and the shard's exit code | Exit 0 or 1. Like P7, a raw result | F1, G1 |
+
+**In `tools/tillr-loop`** (`tools/tillr-drain/drain/tillr-loop.py` is the same file, byte for
+byte: `diff -q` on 2026-11-21):
+
+| Site | Kind | Function, in file | Raw result it reads | What it decides today | Consumed by |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| L1 | relay | `execute`, `tillr-loop` | The exit code of `tillr-gate run`, `tillr-land pass` or `tillr-item verdict record` | For the gate: 0, 1 and 6 are kept and anything else is 4 | D1 |
+| L2 | relay | `revision_check` | None of its own | It replaces itself with `python3 tools/fork-check.py` in the current directory. For a replay or a rolling run that directory is the replayed checkout, so that checkout's own copy of F1 to F9 classifies | D8, D12, D17 |
+| L3 | settle | `compose_verdict` | The `--verdict` word | `pass` and `pass-inherited` record verification criteria as done; `fail` is refused | Item verdict records |
+| L4 | settle | `compose_land` | Whether the verdict file exists | A missing file is exit 4 | `tillr-land pass` |
+
+**In `tools/tillr-drain`** (files are under `drain/` unless a directory is given):
+
+| Site | Kind | Function, in file | Raw result it reads | What it decides today | Consumed by |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| D1 | relay | `(*ProcessSteps) Gate`, `steps.go` | The gate program's exit code; the verdict's `result` | `GatePassed`, `GatePassedInherited`, `GateStalled`, `GateFailed` or `GateErrored`. It reads the verdict only after the program returns | D3 |
+| D2 | relay | `gateFailureContext` (`steps.go`), `gateFailingChecks` (`returned.go`), `readFastGateSpans`, `readFailingSpans`, `readSpansWithWatches` (`gate_spans.go`) | Per-check `result` equal to `fail`; span status equal to `FAIL` | The failing-check list. Every other word is dropped without a record | `GateOutcome.FailingChecks`, read by D6, D10 and D13; `endingEvidence`; `designFailingChecks` |
+| D3 | settle | `(*Loop) verify`, `loop.go` | D1 | Land, refuse, hold for a stall, or hold for no verdict | The lander; item holds |
+| D4 | relay | `gateStallContext` (`gate_stall.go`), `foldPendingHistory` (`pass.go`) | `stalled` checks in a verdict | Stall observations | `holdGateStall` |
+| D5 | relay | `readForkConflicts`, `fork_drift.go` | Span statuses `not-run`, `ERR`, `STALE` and `FAIL` | Fork conflicts, unfinished checks and unanswered forks | D1, D6 |
+| D6 | settle | `(*Loop) settleGateFailure`, `markForkGateUnanswered`, `fork_drift.go` | D2; D11 on the base | Per check: regular, unknown, refused, waiting or inherited; writes `error` into the verdict | D3 |
+| D7 | fresh | `(*Loop) judgeRequired`, `(*ProcessSteps) JudgeRequired`, `heavy_revert.go` | A required heavy check's result | `pass`; `fail` refuses the candidate; any other word is "not a verdict" | D3 |
+| D8 | relay | `(*ProcessSteps) fixerCheck`, `(*Loop) settleFixerGate`, `pendingFixerVerdict`, `fixer_gate.go` | For each check a trunk fixer names: D7's result, or the fixer-gate program's exit code | `pass`, `fail`, `dropped` (exit 77) or `absent`; any other answer becomes `error` and holds the candidate; the verdict file is rewritten with the named checks | D3 |
+| D9 | settle | `gateRefusalDetail` (`events.go`), `readRunHistory`, `(*planner) retryHoldReason` (`plan.go`), `(*Loop) landRemoteSync` (`remote_sync_landing.go`) | The verdict's run-level `result` | Refusal text; the hold reason after a failed gate; whether a remote sync may land | Events; planning; the lander |
+| D10 | settle | `(*Loop) trunkAlreadyRed`, `redOnTip` (`trunk.go`); `(*Loop) routeObstacle` (`obstacle_route.go`) | D2's list, or the checks a worker's trunk obstacle names; D11 | The candidate's own failure, a red confirmed on the base or the tip, or a red already repaired at the tip | D13 |
+| D11 | cached | `(*Loop) judgeTrunkChecks`, `trunk.go` | D31's proofs; otherwise D12 | A check that a proof record lists as passed is credited green with no replay | D6, D10 |
+| D12 | relay | `(*ProcessSteps) Replay`, `steps.go` | The replay program's exit code for one check, run in a worktree of the replayed commit | 0 green, 1 red, anything else unknown. The default program is a relative path, so the copy that runs is the replayed checkout's | D11, D15, D29 |
+| D13 | settle | `(*Loop) settleTrunkAlreadyRed`, `intersectingRedPaths`, `acquitRedWithPaths`, `trunk.go` | The red checks, their reads and the candidate's changed paths | `pass-inherited` when no red check reads what the candidate changed; otherwise the item is held behind a fixer | D3; item state |
+| D14 | settle | `(*Loop) promoteVerdictPassInherited`, `trunk.go` | The verdict file | Rewrites each `fail` to `inherited` and the run to `pass-inherited` | The verdict file; the lander |
+| D15 | relay | `(*Loop) culpritLanding`, `trunk.go` | D12 over the landings since the last green commit | The first red landing | Fixer filing |
+| D16 | settle | `(*Loop) openFixerFor`, `routeTrunkFixer` (`trunk.go`); `fixerChecks` (`fixer_wait.go`); `fixerCheckOverlaps` (`fixer_gate.go`); `forkCheckDeclID` (`fork_check_triage.go`) | The check selectors in a fixer's `(red: …)` label | A match by exact id, or by kind and label | Attaching a red to an open fixer, or filing a new one |
+| D17 | relay | `(*ProcessSteps) Rolling`, `steps.go` | The rolling program's exit code; spans with status `FAIL` or `STALLED` | Green, stalled, red with named checks, or unknown | D18 |
+| D18 | settle | `(*Loop) maybeRolling`, `recordRollingRun`, `repeatedRollingStalls`, `rollingUnknownStreak`, `trunk.go` | D17 | `green`, `red`, `red-unfiled`, `stalled` or `unknown`; files a trunk fixer on red | The store; fixer filing |
+| D19 | relay | `readRollingCoverage`, `readGateSpans` (`gate_spans.go`); `readFailingSpanMeta` (`fork_check_triage.go`) | Span status and the `cached` attribute | Coverage counts, span rows and which logs to keep | Store tables; kept logs |
+| D20 | relay | `(*ProcessSteps) JudgeHeavy`, `decodeHeavyVerdict`, `heavy_steps.go` | The verdict of the installed `tillr-gate checks --heavy-tree` | Each check's result word as given | D7, D23 |
+| D21 | relay | `(*ProcessSteps) runHeavyLegacy`, `heavy_steps.go` | Legacy span statuses; the program's exit code | `PASS`, `ok` and `CACHED` are `pass`; `skip` and `QUARANTINED` are `unavailable`; `FAIL` is `fail`; `STALLED` is `stalled`; anything else is `error`; an exit other than 0 or 1 adds an `error` check named `legacy-runner` | D20 |
+| D22 | fresh | `(*ProcessSteps) judgeHeavyGo`, `heavy_go.go` | Go test events | `pass`, `fail`, or no verdict | D8, D20 |
+| D23 | aggregate | `(HeavyRunner) Run`, `judgeTip`, `heavy.go` | D20's results | `fail` makes the run red; `pass` and `unavailable` change nothing; any other word makes it unknown; a second stall is `fail`. The green proof lists the passed checks. Repairs are filed after attribution and reverts finish | The green pointer; `green-<sha>.json`; `heavy.json`; fixer filing |
+| D24 | cached | `loadHeavyProgress`, `reuseHeavyCheck`, `saveHeavyCheck`, `heavy_progress.go` | Checkpointed passes for a tip | A checkpointed pass is reused without judging | D20 |
+| D25 | cached | `completedHeavyRed`, `heavy_attribution.go` | A finished red run in `heavy.json` | The red run is reused after a restart | D23 |
+| D26 | cached | `(HeavyRunner) oneLogged`, `replay`, with `readHeavyReplay`, `heavy.go` and `heavy_progress.go` | One check judged at one commit; the replay cache | Red or green; any other word is an error; a cached answer is reused | D27, D28, D29 |
+| D27 | cached | `(HeavyRunner) findFirstRed`, `searchFirstRed`, `attribute`; `(*heavyEarly) offer`, `recover` (`heavy.go`, `heavy_attribution.go`, `heavy_early.go`) | The attribution cache; D26 | The first red landing, reused when the failure, base and reads match | D29; fixer filing |
+| D28 | settle | `(HeavyRunner) retainRedRepairs`, `forgetGreenAttributions`, `heavy_attribution.go` | D26 on a newer tip; passes | A repair is deferred or kept; a passed check's attribution is dropped | D23 |
+| D29 | settle | `(HeavyRunner) revert`, `offerRevert`, `resolveRevert` (`heavy.go`); `(*Loop) revertLanding` (`heavy_revert.go`) | D1 and D12 on the inverse of a landing | Reverted, refused, or still red | The lander; the `drain.revert` event |
+| D30 | settle | `(*Loop) startHeavy`, `heavyStatusLine` (`heavy_loop.go`); `ReadStatus` (`heavy/status.go`) | A run's checks with result `fail` or `unavailable` | The failing and unavailable lists | Status views; fixer filing |
+| D31 | cached | `readGreenProof`, `readGreenProofFile`, `readCheckProofs`, `readProgressCheckProof`, `(checkProof) passed`, `fixer_resolve.go` | A green proof's passed list; checkpointed passes | A check is proved green at a commit, matched by id or by a `kind/` prefix | D11, D32, D33 |
+| D32 | settle | `(*Loop) resolveProvedFixers`, `fixer_resolve.go` | D31 | A trunk fixer is finished as resolved elsewhere | Item state; the `drain.fixer-proved` event |
+| D33 | settle | `obstacleProofPassed`, `(*Loop) releaseTrunkObstacleHolds` (`obstacle_hold.go`); `(*Loop) repairedTrunkWaiter`, `releaseTrunkAcquittals` (`trunk_release.go`) | D31; fixer proof events | An item held behind a red check is released | Item state |
+| D34 | settle | `openTrunkRedNotice`, `trunk.go` | The labels of open trunk fixers | The "trunk check red" notice | New worker briefs |
+
+The eleven refusals map onto the table as follows. A path that appears here was reached by a
+real run in a verifier's scratch repository; the row says which sites it went through.
+
+| What the verifier found | Sites |
+| :--- | :--- |
+| The landing wrapper's summary left the disabled check out | G5, G7 |
+| A resumed proof credited a checkpointed pass, or reused a finished red | D24, D25 |
+| A named or required heavy check that came back disabled held the candidate as an error | D7, D8 |
+| The cold-cache warm-up ran the contradicted check | P3 |
+| A cached replay or a cached first-red attribution used the contradicted base as green | D26, D27 |
+| The repair item was lost when another check errored, a checkout could not be removed, or the run was cancelled | D1, D23, F7 |
+| A disabled member of a grouped revert stopped the revert for an independent red | D29 |
+| The fast tree adapter reported disabled as an error, under a different fingerprint, with logs already deleted | P1, F1, F4 |
+| A replay or a rolling run of an older commit used that commit's classifiers | L2, D12, D17, D21 |
+| Light attribution credited a proof record's pass | D11, D31 |
+| A check disabled late in attribution still counted in the paths the candidate was held on | D13 |
+| A pass recorded under the declaration's id no longer satisfied a fixer that names the labelled selector | D16, D31 |
+| An item held only on the disabled check stayed held, and new briefs still called the check red | D33, D34 |
+| The manual preflight had no disabled case | F10 |
+
+#### One classifier, five outcomes
+
+What follows is the designer's decision of 2026-11-21 (`D-GR23`). None of it is the owner's
+ruling, and the owner may overturn any part of it.
+
+**Every site in the table gets its answer from one function, and compares no result word
+itself.** The function is `Classify`, in a new package `checkresult` of the shared module
+`tools/tillr`, which the runner and the drain both import already. It is pure: it reads no file
+and runs nothing. The Python sites, and any site that needs the result store, reach the same
+function through one new face of the runner, `tillr-gate classify`, which reads the store and
+then calls it. There is no second implementation in Python.
+
+> [!WARNING]
+> Do not give the Python programs their own copy of the rule, even one generated from a shared
+> table. A replay and a rolling run execute the judged checkout's copy of `tools/fork-check.py`
+> and `tools/gate/tree-check.py` (L2, D12), so a rule that lives in those files is the rule as
+> it stood at the replayed commit. The installed `tillr-gate` is the only classifier that is
+> the same for every commit a run judges.
+
+An **observation** *(coined here)* is what a site hands the function about one check:
+
+- the check, by the selector the site holds;
+- the raw result and its source, one of: the exit code of the check's own command; the exit
+  code of a judging program (the runner, the gate program, the legacy gate, the replay program);
+  a result word or span status another program wrote; a cached record;
+- whether this run is **proving** the check: the gate run for the candidate of the check's own
+  repair item, which `--prove-disabled` names;
+- the store's facts for the check, when it is store-backed: whether a marker exists for its id,
+  and whether a pass record and a fail record exist for its fingerprint on the judged tree.
+
+A check is **store-backed** *(coined here)* when its results are kept in the result store: a
+tree-scope declaration that is remembered, and the two checks that write the store themselves
+(P5 and P6). A legacy check kind of `tools/fork-check.py`, a `go-test:` suite and a required
+check with no declaration have no store facts. They can never be `disabled`, because nothing
+records a pass and a fail for the same inputs of theirs; they are classified from the raw result
+alone.
+
+The function returns one **outcome** and a **detail**. The outcome is all that a site may use to
+decide whether a check blocks or is credited. The detail is the finer word the tree uses today,
+kept so that reports and the two existing kinds of no-verdict handling do not change.
+
+| Outcome | It means | Blocks a landing or turns the trunk red | May be credited green | Detail words |
+| :--- | :--- | :--- | :--- | :--- |
+| `pass` | The check ran, or a stored pass stands, and nothing contradicts it | No | Yes | `passed`, `remembered`, `cached` |
+| `fail` | A verdict against the judged tree | Yes | No | `failed` |
+| `unknown` | No verdict: the check could not run, stalled, was cancelled or was not reached, or its record cannot be read | Yes, as "could not judge", by the existing stall and no-verdict rules | No | `stalled`, `error`, `not-run`, `stale` |
+| `unavailable` | The check does not apply to this machine or this change: a missing resource ([Section 6.3](#63-a-missing-machine-resource-is-named-not-failed)), no changed path read, a declared quarantine skip, a check a fixer names that the commit does not have | No | No | `unavailable`, `skipped`, `quarantined`, `dropped`, `absent` |
+| `disabled` | A marker exists for the check, or its fingerprint is contradicted | No | No | `disabled`, with the fingerprint, both times and both output locations |
+
+`disabled` and `unavailable` answer the two questions the same way and differ in what follows:
+a disabled check gets a repair item and an unavailable one gets nothing. `unknown` is the word
+the request's "unknown" names; it is the union of what the tree calls `error`, `stalled`, `ERR`,
+`STALE` and `not-run`.
+
+The function applies these rules in order and stops at the first that answers:
+
+1. **A proving run judges the check.** If the run is proving this check, rules 2 and 3 are
+   skipped. A fail there is a `fail`.
+2. **A marker disables.** If a marker exists for the check's id, the outcome is `disabled`,
+   whatever the raw result is and on whatever tree.
+3. **A contradiction disables.** If the store holds a pass record and a fail record for the
+   check's fingerprint on the judged tree, the outcome is `disabled`. This includes the pair that
+   the observation itself completes: a fresh fail against a stored pass, or a fresh pass against
+   a stored fail.
+4. **Otherwise the raw result decides**, by one table:
+
+| Source | Raw result | Outcome and detail |
+| :--- | :--- | :--- |
+| The check's own command | Exit 0 | `pass` |
+| The check's own command | Exit 4, a signal, or a wait error | `unknown`, `error` |
+| The check's own command | Any other exit | `fail` |
+| The check's own command | 60 silent samples | `unknown`, `stalled` |
+| A judging program | Exit 0 | `pass` |
+| A judging program | Exit 1 | `fail` |
+| A judging program | Exit 6 | `unknown`, `stalled` |
+| A judging program | Exit 77 | `unavailable`, `dropped` |
+| A judging program | Any other exit, or it did not start | `unknown`, `error` |
+| A word or status | `pass`, `PASS`, `ok` | `pass` |
+| A word or status | `CACHED`; memory `remembered` | `pass`, `cached` or `remembered` |
+| A word or status | `fail`, `FAIL` | `fail` |
+| A word or status | `stalled`, `STALLED` | `unknown`, `stalled` |
+| A word or status | `unavailable`; `skip`; `QUARANTINED`; `skipped: no changed path is read`; `dropped`; `absent` | `unavailable`, with that detail |
+| A word or status | `disabled` | `disabled` |
+| A word or status | `error`, `ERR`, `ERROR`, `STALE`, `not-run`, `over-budget`, an empty word, or a word not in this table | `unknown`, `error` |
+| A cached record | A pass in a proof, a checkpoint, the verdict cache or the result store | `pass`, `cached` |
+| A cached record | A red in the replay cache, the attribution cache or a finished red run | `fail` |
+| A cached record | A record that cannot be read | `unknown`, `error` |
+
+The table is today's behavior written once: every row is a decision some site in the inventory
+already makes. The two source kinds are kept apart because they differ today. A check command
+that exits 6 has failed (G1); a judging program that exits 6 has reported a stall (G5, L1).
+
+**A cached result is a raw result, and it is classified when it is used, not when it was
+stored.** A pass in a proof record, a checkpoint, the replay cache or the attribution cache goes
+through the function with the store's facts as they are now. That is what makes the cached sites
+(G2, P5, P6, D11, D24 to D27, D31) correct without a rule of their own: a record written before a
+contradiction was known, or before this rule was built, is not credited once a marker or a pair
+exists. A record that carries no fingerprint needs none: the face computes the fingerprint from
+the check and the commit the record names.
+
+**Two words are settlements, not results, and the function is not asked about them.** `inherited`
+and `pass-inherited` are written by the drain after attribution (D14, G9): they record that a
+`fail` was acquitted, and they stay what they are. The sites that read them (D1, D9, G7, L3)
+read a decision, not a result.
+
+**One aggregate.** `Aggregate`, in the same package, computes a run's outcome from its checks'
+outcomes: `unknown` over `fail` over `pass`, where an `unknown` with detail `error` wins over
+one with detail `stalled`. `unavailable` and `disabled` checks do not contribute, and a run with
+no other checks passes. That is G4's order today, with `disabled` added to the checks that do
+not count. A run's summary counts the five outcomes apart.
+
+**The face.** `tillr-gate classify` takes a list of observations as JSON on standard input, each
+naming a check, a commit (or the worktree), the raw result and its source, and prints one answer
+per observation in the same order. It runs no check. For a store-backed check it does three
+things the pure function cannot:
+
+- **It resolves the selector.** A site may hold the declaration's own id, or a labelled selector
+  the legacy gate uses (`kind/label` or `kind:label`). The face reads the declarations of the
+  judged commit and resolves the selector to exactly one declaration id, by exact match and
+  never by prefix. A selector that resolves to no declaration is not store-backed. A proof that
+  lists a declaration's id satisfies a fixer that names the labelled selector only when the
+  selector resolves to that id on the proof's commit.
+- **It computes the one fingerprint.** The fingerprint is taken from the declaration file's bytes
+  as committed in the judged tree, as
+  [Section 6.2](#62-a-tree-checks-result-is-remembered-by-fingerprint) defines it. No site
+  computes a fingerprint from a copy it wrote (P1).
+- **It writes the marker.** When rule 3 answers and no marker exists, the face writes it before
+  it prints the answer, and copies both output logs into the marker's directory, so the two
+  output locations the marker names outlive the run that produced them. The runner does the
+  same when one of its own checks completes a contradiction.
+
+The answer for a `disabled` check carries the marker's content. An observation with no raw
+result is legal: it asks only whether the check is disabled, and a site asks it before running
+anything, so a disabled check is not run for a verdict.
+
+**The repair item is filed by a sweep of the markers, at the start of every drain pass and after
+every gate, replay, rolling or heavy step returns, whether it returned a result, an error or a
+cancellation.** The sweep is the only filer, and no site files from a verdict. For each marker:
+
+- no repair item names the marker's episode: file one;
+- an unfinished repair item names it: nothing;
+- a landed repair item names it: run `tillr-gate enable` for that episode again.
+
+An **episode** *(coined here)* is one disabling of one check: the check's id with the
+fingerprint and the two record times in its marker. `enable` names the episode and removes the
+marker only when the marker still holds it, so a repair that lands late cannot clear a newer
+contradiction. Two runs that see the same contradiction write the same marker; two that see
+different contradictions of one check write one marker each in turn, the last write stands, and
+either is a true episode for the one item. A sweep that fails to file leaves the marker, and the
+next sweep files. A repair item filed this way needs no document block, and the drain's check
+for one does not apply to it.
+
+**What each kind of site does with `disabled`:**
+
+- **fresh and relay sites** pass the outcome on with its evidence and never turn it into an
+  error, a pass or a failure.
+- **aggregate sites** leave the check out of the result and count it apart.
+- **cached sites** do not credit it, and drop any attribution, replay answer or checkpoint that
+  rests on it.
+- **settle sites** treat the check as absent from every red list:
+  - it is not in a candidate's failing checks, so it refuses nothing (D2, D3, D7, D8);
+  - it is removed from a red reading before the reading is compared with what the candidate
+    changed, and the comparison is made again if the check is disabled later in the same
+    settlement (D10, D13);
+  - no trunk fixer is filed for it, and it is taken out of an open fixer's label; a fixer left
+    naming no check is finished as resolved elsewhere, naming the repair item, with no proof
+    recorded and no pass claimed (D16, D18, D32). A run already working on that fixer is not
+    stopped;
+  - an item held only on disabled checks is released, without waiting for the repair to land
+    (D33), and the red notice does not name the check (D34);
+  - it neither authorizes a revert nor stops one: the other checks of a grouped revert are
+    still judged, and a passing inverse of an enabled check may revert (D29).
+
+**A commit that is being replayed supplies the declaration and the command, never the
+classification.** For a store-backed check on any commit, the drain asks the face before it runs
+anything and again with the raw result after, and uses the face's answer. Where the drain can
+judge the declaration with the installed runner directly, as it already does for heavy
+declarations (D20), it does that for fast declarations too and does not ask the replayed
+checkout's programs about them. An older checkout whose rolling program still runs a
+store-backed declaration itself is allowed to: the drain classifies that check's span through
+the face and uses the face's answer in place of the span's. The rolling program's exit code then
+counts only when the classified spans do not explain it: an exit that reports a failure when no
+remaining check is `fail`, or one that reports no verdict when no remaining check is `unknown`,
+makes the run `unknown` as it does today, unless every span that could explain it classified as
+`disabled`.
+
+**State that exists on the day this is built.** A store that already holds a pass and a fail for
+one fingerprint with no marker gets its marker from the first observation that touches the
+fingerprint. Proof records, checkpoints and attribution records written earlier are read as they
+are and classified at use. A stored record with no output location is reported as "output
+location not recorded", as above. Nothing is migrated.
+
+**What an operator reads.** The runner's summary line counts disabled checks apart, on the
+landing wrapper too (G5). The drain's trunk status lists disabled checks beside failing and
+unavailable ones (D30), each with its repair item. `tillr-gate classify` on one check prints
+why: the marker, or the two records.
+
+**What this does not do:**
+
+- It does not change which checks exist, their tiers or their fingerprints.
+- It does not make a legacy check kind disableable. That would need those kinds to record a
+  pass and a fail by fingerprint, which is the work of moving them to declarations.
+- It does not change the quarantine of one named failing case, or the settlement words.
+- It does not decide what a repair must contain. One consequence of `D-GR22` is left as it is
+  and named here because the inventory exposes it: the documents check (P5) keeps one record per
+  document, so one document that renders two ways disables the whole check until its repair
+  lands.
+
+**Alternatives, each rejected:**
+
+- **Teach each site the rule as it is found.** This is the build that was refused eleven times.
+  The rule has 70 sites, and the next site added to the tree would need to be taught again.
+- **A classifier per program, with a shared conformance table.** Four copies agree on the day
+  they are written. The replayed checkout runs the copy from its own commit, which is the
+  failure the verifier found in rounds 9 and 10.
+- **Keep filing from the verdict, and add a final filing step to every exit path.** The verifier
+  found a new exit path in rounds 4, 6, 7, 9 and 10. A marker that the sweep reads has no exit
+  path to miss.
+- **Only four outcomes, with `unavailable` as a detail of `unknown`.** A site would then need
+  the detail to know whether the check blocks, which is the comparison of words this design
+  removes.
 
 ### 6.3 A missing machine resource is named, not failed
 
@@ -925,7 +1296,8 @@ decision carrying `D-GR15` out, and is the owner's to overturn. `D-GR17` records
 2026-11-20 scope ruling for its build. `D-GR21` is the owner's ruling of 2026-11-21 on a check
 with a pass and a fail on one fingerprint, quoted verbatim; `D-GR22` is the operator's reading of
 it together with this design's mechanism, neither of which is the owner's ruling, and both are
-the owner's to overturn. Those two rows were first numbered `D-GR18` and `D-GR19`, which the
+the owner's to overturn. `D-GR23` is the designer's decision of 2026-11-21 on where that
+mechanism lives, and is also the owner's to overturn. The rows `D-GR21` and `D-GR22` were first numbered `D-GR18` and `D-GR19`, which the
 identity rows of 2026-11-20 already held; they were renumbered on 2026-11-21, so a record
 written that day that cites `D-GR18` for a disabled check means `D-GR21`. The three rows of this
 document's former open questions ([`OQ-GR1`](#OQ-GR1) to [`OQ-GR3`](#OQ-GR3)) were initially
@@ -959,6 +1331,7 @@ overturned in `1fa2c069c` and withdrawn in
 | `D-GR19` | **Designer's decision on the operator request; the owner may overturn it.** Apply one tracked list of exact pairs to author and committer in both the standalone check and the live `commit-identity` gate. Preserve their ranges and refusal of repository identity overrides; do not change commit creation or tillr. | 2026-11-20 | [Which identities this repository accepts](#which-identities-this-repository-accepts) | Not yet built |
 | `D-GR21` | **Owner ruling (2026-11-21), verbatim:** *"The correct move for a flaky test is disable it, file an item to fix it, and don't let it block anything. It is not considered green, but it also doesn't let you block other things."* It governs a check whose result store holds both a pass and a fail for one fingerprint, and replaces the `flaky` pass of `D-GR8`, the live re-run of [`OQ-ER3`](./tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3) option A, and the red verdict a filed operator request of 2026-11-20 asked for. | 2026-11-21 | [A contradicted check is disabled](#a-contradicted-check-is-disabled) | — |
 | `D-GR22` | **Not the owner's ruling; the owner may overturn it.** The operator's reading of `D-GR21` (2026-11-21): the check is disabled and not run for a verdict, is reported as disabled and never as passed or green, refuses no landing, does not turn the trunk red, gets one deduplicated repair item with both times and both output locations, and is enabled again when the repair lands. The designer's mechanism for it (2026-11-21): a `disabled` result counted apart from passes; `log_ref` on each stored record; a marker per check id, so a new fingerprint does not re-arm an unrepaired check; the drain files `flaky-<check-id>` from the verdict, matching only an unfinished item, so a contradiction found after a landed repair files a new item with the new evidence; the repair's own candidate runs the check, and `tillr-gate enable` then removes the marker and sets the contradicting pair aside. **Rejected:** a red verdict (the filed request; replaced by `D-GR21`); a live re-run whose pass is green ([`OQ-ER3`](./tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3) option A; replaced by `D-GR21`); disabling by fingerprint alone; any retry, count or time window. | 2026-11-21; numbering and repair-item rule amended 2026-11-21 | [A contradicted check is disabled](#a-contradicted-check-is-disabled) | — |
+| `D-GR23` | **Not the owner's ruling; the designer's decision, which the owner may overturn.** Every site that classifies a check result (70, listed by function and consumer) calls one function, `Classify` in a `checkresult` package of the shared `tools/tillr` module, reached from Python and for store reads through one face, `tillr-gate classify`. It has five outcomes: `pass`, `fail`, `unknown`, `unavailable` and `disabled`; a site decides blocking and credit from the outcome alone. A cached result is classified when it is used. A replayed commit supplies the declaration and the command, never the classification. The repair item is filed by a sweep of the marker files, which replaces "from the verdict" in `D-GR22`; a generated repair item needs no document block. **Rejected:** teaching each site the rule as it is found (refused by its verifier eleven times); a classifier per program held together by a shared table; filing from the verdict with a filing step on every exit path; four outcomes with `unavailable` folded into `unknown`. | 2026-11-21 | [One classifier, five outcomes](#one-classifier-five-outcomes) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
 | `D-GR12` | A question about a moving upstream is a drift probe that files an item and never moves or holds the green pointer. **Rejected:** keeping it as a check on a commit. Made visible where it happens. | 2026-11-15 | [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) | — (`series` and `patch-branch-inv2` are `TIER_LANDING` in `tools/fork-check.py`; no probe exists) |
 | OQ-GR1 | The default of a per-repository setting, `red_cap`: landing stops at 20 landings or 60 minutes past the last green commit; a repository may set a different bound, and zero means no cap. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "a mechanism whose cost rises with trunk activity is pointed the wrong way" and the owner's 2026-11-15 ruling that the landing strategy is configurable per repository and red is brief. The owner may overturn it. **Rejected:** no cap, which lets the fixer's range and the deploy lag grow without limit. **Ruled out by the owner on 2026-11-18** ([OQ-GP7](tillr-graph-is-the-path.md#OQ-GP7)): under a red check, work lands only if it does not touch what that check reads, and there is no landing cap. The cap is still live in the tree (20 landings; its time bound was turned off on 2026-11-17, `d53580bfd`) until the graph design's waiting rule is built. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/redcap/cap.go`, `drain/red_cap.go`) |
 | OQ-GR2 | The default of a per-repository setting, `lane_base`: a new lane starts from the last green commit; a repository may choose the trunk tip. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are that a worker does not pay for a failure it did not cause, and the same cost-direction rule. The owner may overturn it. **Rejected:** always cutting from the tip. **Overturned by the owner on 2026-11-17** (`1fa2c069c`): work is always built against the latest trunk, never a past commit; a lane cut from the green pointer was handed a tree older than its own item's definition and produced false conflicts. This repository sets `tip`; the code's default when the key is absent is still `green`. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/drain/lane_base.go`; this repository sets `lane_base` to `tip` in `config/tillr/gate-policy.json`) |
@@ -978,7 +1351,9 @@ as `item-gate-red-cap`, `item-gate-lane-base` and `item-gate-runner-pays-first`.
 every slice below has landed.
 Three more slices were filed on 2026-11-17 from the owner's ruling
 [`D-GR15`](#decision-ledger) and the measurements beside it in
-[Section 6.5](#65-ten-seconds-is-a-failing-test); they are the last three below.
+[Section 6.5](#65-ten-seconds-is-a-failing-test); they are the last three filed slices below.
+Two units after them are written and not filed: the single check-result classifier
+(`D-GR23`, 2026-11-21) and the drift probe.
 
 ### The runner reads one file per check
 
@@ -1242,6 +1617,61 @@ milliseconds. This item finds what each check spends its time on and removes the
 - **Evidence:** 2026-11-17, `git log --since=2026-11-14 --format=%h -- docs/tillr/roadmap.md | wc -l` is 112, against 365 for `git log --since=2026-11-14 --format=%h`.
 - **Evidence:** 2026-11-17, a document's remembered-pass key includes its own blob (`document_keys`), and the check judges only the documents the change touches, so a remembered pass is reused only when the same content is gated again.
 - **Evidence:** 2026-11-17, `python3 tools/gate/checks/go-build.py` in the main checkout: 2.72 s on the first run after the working tree's Go files changed, then 0.88 and 0.89 s with nothing changed. The drain's operator measured 2.7 to 3.3 s on warm lanes the same day. The check builds and compiles the tests of every module under ten tool directories on every run that is not remembered.
+
+### Classify every check result in one place
+
+The disabled-check rule (`D-GR21`, `D-GR22`) is built as ten slices, in three groups, in the
+order the table gives. The first group moves every
+[classification site](#every-place-a-check-result-is-classified) onto
+[the one function](#one-classifier-five-outcomes) and changes no behavior. The second adds the
+rule inside that function and gives each consumer its handling of `disabled`. The third covers
+evidence stored before the rule and commits older than it. Each slice lands alone, leaves the
+gate and the drain working, and is verified by the tests named in its row without any later
+slice. A slice in the first group is a refactor: its proof is that the module's existing tests
+pass unchanged, plus the scan test below.
+
+The **scan test** *(coined here)* is one test, added by the first slice, that reads the source
+of the four programs and fails when a file outside `checkresult` compares a result word, a span
+status or a judging program's exit code. It carries a list of files not yet moved; each slice of
+the first group removes its files from that list, and the list is empty when the group is done.
+It is what keeps a site added later from classifying on its own.
+
+| Slice | What it changes | Sites | Verified alone by |
+| :--- | :--- | :--- | :--- |
+| 1a | Add `checkresult` with `Classify` and `Aggregate` holding rule 4's table only, and the `tillr-gate classify` face. Nothing calls them. Add the scan test with every listed file exempt | none | Table tests in the package: one case per row of the raw-result table and per pair of the aggregate order. A face test: observations in, outcomes out in the same order, and no check command started |
+| 1b | Route the runner's sites through the function | G1 to G12 | `go test ./...` in `tools/tillr-gate` passes with no test edited; the scan list loses the runner's files |
+| 1c | Route the drain's landing-gate and light-attribution sites | D1 to D16, D34 | `go test ./...` in `tools/tillr-drain` passes with no test edited; the scan list loses those files |
+| 1d | Route the drain's rolling, heavy and proof sites | D17 to D33 | The same command; the scan list loses the rest of the drain |
+| 1e | Route the Python sites through the face: `check_status` and `verdict_of` take their words from it, and the adapters stop pairing exit codes with words themselves | P1 to P7, F1 to F13, L1 to L4 | `python3 tests/fork-check.test.py` and the tests under `tools/gate` pass with no test edited; the scan list is empty. The two copies of `tillr-loop` stay byte-identical |
+| 2a | Add rules 1 to 3 to the function. The runner reports `disabled`, counts it apart, writes the marker and the log copies, records `log_ref`, and gains `--prove-disabled` and `enable` | G2, G3, G4, G7, P4 to P6 | Runner tests alone: a stored pass with a fresh fail, and a stored fail with a fresh pass, each give `disabled`, exit 0, a marker and both logs beside it; a marker disables a new fingerprint; a proving run fails on a fail; `enable` removes only the episode it names. `TestMemoryFailRetriesAndFlakyPass` and `TestMemoryOppositeWritersNeverErase` are rewritten to these expectations |
+| 2b | The drain's marker sweep files the repair item and runs `enable` after the repair lands. A generated repair item needs no document block | a new step; no listed site changes | Drain tests with a marker file written by the test and no gate run: one item per episode; none while one is unfinished; a new item after a landed repair and a new episode; a sweep after a cancelled step and after a step that errored still files |
+| 2c | Every drain consumer handles `disabled` as the classifier section lists | D2, D3, D7, D8, D10, D13, D16, D18, D23, D29, D30, D32 to D34 | Drain tests, one per bullet of that list, each with a stub gate that returns `disabled`: no refusal, no red trunk, no fixer, the held item released, the notice silent, the grouped revert still judging its other members |
+| 3a | Cached evidence is classified at use | D11, D24 to D28, D31, F2 | Drain tests that write a proof, a checkpoint, a replay answer and an attribution record as the code before slice 2a wrote them, add a marker, and find none of them credited or reused |
+| 3b | The installed runner judges store-backed declarations on a replayed commit; the fast tree adapter passes the committed declaration bytes and keeps its logs; the legacy status words gain `DISABLED`; labelled selectors resolve through the face | P1, P3, F1, F4, F7, L2, D12, D16, D17, D21 | A test that replays a commit whose own `tools/fork-check.py` and `tools/gate/tree-check.py` predate slice 1e, with a marker present: the replay reports the check disabled, the rolling run is not `unknown`, and the fingerprint equals the landing gate's for the same declaration. A proof under a declaration's id satisfies a fixer that names its labelled selector |
+
+**Outcomes:**
+
+- Let a contradicted check stop blocking landings and stop turning the trunk red, on every path.
+- Never credit a contradicted check as green, from a fresh run or from stored evidence.
+- File one repair item per disabling, whatever happens to the run that found it.
+
+**Not yet filed.** On the owner's ruling of 2026-11-18, no document gains a new item directive
+while the owner reviews how documents declare work. The slices are written to become items
+however that ruling lands. The candidate that was refused eleven times is evidence for the site
+table and is not a base for these slices: slice 1a starts from the trunk.
+
+**Agent Details:**
+
+- **Paths:** `tools/tillr/checkresult/` (new), `tools/tillr-gate/`, `tools/tillr-drain/`,
+  `tools/tillr-loop/`, `tools/gate/`, `tools/fork-check.py`, `tools/go-test-shards.py`, their
+  pack mirrors, and this document. Run `just pack-sync` after the last source edit of a slice
+  and commit the regenerated mirror.
+- **Ref:** `D-GR21` to `D-GR23` in the [Decision Ledger](#decision-ledger).
+- **Order:** 1a first. 1b to 1e need only 1a and may land in any order. 2a needs 1b and 1e. 2b
+  and 2c need 2a and the drain's two routing slices. 3a and 3b need 2c.
+- **Forbidden in every slice:** a result word compared outside `checkresult`; a second
+  implementation of the rule; a retry or a rerun added to make a contradicted check agree with
+  itself.
 
 ### Move the upstream drift checks out of the gate into a probe
 
