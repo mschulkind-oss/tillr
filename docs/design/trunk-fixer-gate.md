@@ -5,7 +5,7 @@ stage: DESIGN
 updated: 2026-11-21
 tags: [tillr, gate, landing, drain, forks, design]
 summary: "The trunk fixer's gate stops being the untiered gate over every landing since the last green commit. It becomes the gate any candidate gets, plus the checks the fixer names, run on the fixer's tree. A fork check that is red only because an upstream published a release is reported as one rebase request per fork and release and refuses nobody whose change does not touch that fork; a fork that follows a branch head gets the same acquittal and no request. One question is open for the owner: whether he is told, beyond the queue, when an upstream moves."
-next: "The owner rules OQ-FG1. The gate scope (D-FG1 to D-FG4) does not wait on it and can be planned now."
+next: "Amend D-FG3 to say who rebases a fork onto a new release and whether the pin update is its own delivery (a design correction is queued), then build the drift rule. No owner-facing row or hold is built for drift."
 depends-on:
   - landing-principles.md
   - gate-rework.md
@@ -35,8 +35,8 @@ is the only judge of them. Upstream drift is noticed later until the drift probe
 
 **Start at** [the fixer's gate](#the-fixers-gate).
 
-**Needs your ruling:** [OQ-FG1](#OQ-FG1). `D-FG1` to `D-FG5` in the
-[Decision Ledger](#decision-ledger) are the designer's decisions and the owner may overturn them.
+**Needs your ruling:** nothing. The owner ruled [OQ-FG1](#OQ-FG1) on 2026-11-21. `D-FG1` to `D-FG5` in the
+[Decision Ledger](#decision-ledger) are the designer's and his to overturn.
 
 **Reads with:** [the gate rework](gate-rework.md) (its
 [Section 6.9](gate-rework.md#69-upstream-drift-is-a-probe-not-a-check) already takes drift out of
@@ -574,9 +574,10 @@ Settled here, as the designer's decision:
 For [a fork that follows a branch head](#a-fork-that-follows-a-branch-head) no request exists.
 The inherited record on the candidate and the loop's one line are the notice.
 
-Whether the owner is told in any further way is his to rule, because it decides what he sees
-([OQ-PR21](../tillr/decision-provenance-review.md#OQ-PR21)). That is [OQ-FG1](#OQ-FG1). Until
-it is ruled, no owner-facing row or hold is built for drift; the rows above do not depend on it.
+The owner is told by the queue only. He ruled this on 2026-11-21 ([OQ-FG1](#OQ-FG1)): the rebase
+request appears in the queue and on the waiting list like any item, and he is asked something only
+if the rebase hits a conflict an agent cannot settle. No owner-facing row and no hold addressed to
+him is built for drift.
 
 ## What this does not change
 
@@ -619,38 +620,16 @@ it is ruled, no owner-facing row or hold is built for drift; the rows above do n
 
 ## Open Questions
 
-1. 💬 **OQ-FG1: Should you be told, apart from the queue, when an upstream release breaks a patch series?**
-
-   Upstream pi publishes `v1.6.0` overnight, and it conflicts with the patches this repository
-   carries on pi. The next change that touches the pi series is gated and the conflict is
-   seen. Under this design the drain files one rebase item for pi and `v1.6.0`, an agent works
-   it, and changes that do not touch pi keep landing. Nothing addresses you unless that item
-   itself gets stuck. Today there is no rule either way: the 2026-11-20 release surfaced only
-   as a refused trunk repair.
-
-   - **A — The queue only.** You see a rebase item for pi in the queue and on the waiting list,
-     like any item, and later its landing. You are asked something only if the rebase hits a
-     conflict an agent cannot settle.
-   - **B — A `needs you` row as well.** The waiting list shows a row addressed to you naming the
-     fork and the release until the rebase lands. Agents still do the work without waiting.
-   - **C — The rebase waits for you.** The item is filed and held until you say to take the
-     release. No agent rebases a fork onto a release you have not seen; every release costs you
-     one answer.
-
-   <!-- vantage: question id=OQ-FG1 leaning="A (The queue only) — the fork workflow already says a series follows upstream releases, so a release is routine work, and a row or hold addressed to you would grow with upstream activity." -->
-
-   _Leaning:_ A (The queue only) — the fork workflow already says a series follows upstream releases, so a release is routine work, and a row or hold addressed to you would grow with upstream activity.
-
-   **Answer:**
-   > _(empty — fill in when decided)_
+None. The owner ruled the one question on 2026-11-21; it is a row in the [Decision Ledger](#decision-ledger).
 
 ## Decision Ledger
 
-Every row is the designer's decision of 2026-11-21, made from the request that opened this
-design. None is an owner ruling, and the owner may overturn each by comment.
+The `D-FG` rows are the designer's decisions of 2026-11-21, made from the request that opened
+this design; the owner may overturn each by comment. The [OQ-FG1](#OQ-FG1) row is his ruling.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
+| <a id="OQ-FG1"></a>[OQ-FG1](#OQ-FG1) | Owner ruling: when an upstream release breaks a patch series the owner is told by the queue only. No owner-facing row and no hold. | 2026-11-21 | [Who is told when an upstream moves](#who-is-told-when-an-upstream-moves) | — |
 | `D-FG1` | A trunk fixer's gate is the ordinary gate over its own diff plus the checks it names, run on its tree. The untiered range since the last green is removed. Structural fix. (Designer's decision.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate) | Built |
 | `D-FG2` | A fixer stays excluded from acquittal only for the checks it names; for any other check it is judged as any candidate is, except that it is never held behind itself or behind a fixer that waits on it: such a check is attached to the fixer and the refusal returns to its worker. No second fixer is filed for the same commit. (Designer's decision; the exception was added on 2026-11-21 to answer a build worker's finding that the ordinary route made a fixer wait on itself.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate), [A fixer never waits on itself](#a-fixer-never-waits-on-itself) | Built |
 | `D-FG3` | A `patch-branch-inv2` check red on a candidate and on its base with the same refusal against the same target ref, on a candidate whose diff does not include that fork's own paths, is drift: the candidate lands with the failure inherited and one rebase request per fork and release is filed. No trunk fixer is filed for drift. The request is filed only for a fork that follows releases. For a fork that follows a branch head the candidate still lands with the failure inherited, no item is filed, one loop line is printed, and a candidate that touches that fork is refused as today, because the lander delivers a rewritten patch branch only for a release. Structural fix. (Designer's decision, carrying out `D-GR12` of the gate rework, itself a designer's decision; the head-follower rule was added on 2026-11-21 to answer a build worker's finding that `pi-background-tasks` follows `head`. Narrowed on 2026-11-21, as the designer's decision, to answer a build worker's finding that `series` is planned per pack without a fetch and that `reads_upstream` matches checks that read no upstream: only `patch-branch-inv2` can be drift, selected by kind name; the fork is the check's `--fork` argument and the release is the ref `bin/pi-forks patch-branch target` prints; `series`, `patch-branch-inv3`, `forks-check`, `build` and `fork-quality` are never drift; the ordinary gate's plan is unchanged. Amended on 2026-11-21, as the designer's decision, to answer a build worker's finding that the lander delivers a rebased head without rebasing and that the check reads `yolo-packs/fork-pins/<fork>`, not the patch branch: the request's worker rebases the fork in its lane checkout with `git rebase --onto <release> <old base> main`; the request is a mixed item whose fork part is delivered first and whose repository part then rewrites `yolo-packs/fork-pins/<fork>`; the lander fetches each delivered fork commit into the gate's copy of the fork; the request closes when the repository part lands. The operator takes no step: the request that opened the amendment cites rule 7 of the unattended drain as an owner ruling of 2026-11-21.) | 2026-11-21 | [Upstream drift](#upstream-drift-is-a-rebase-request-not-a-refusal), [Which checks can be drift](#which-checks-can-be-drift), [A fork that follows a branch head](#a-fork-that-follows-a-branch-head), [Who rebases, and how the recorded commit follows](#who-rebases-and-how-the-recorded-commit-follows) | — |
