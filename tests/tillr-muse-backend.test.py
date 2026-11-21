@@ -38,12 +38,15 @@ No model tokens are spent: every harness is a stub on PATH that records its argv
 replays a fixture stream.
 """
 
+import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+from contextlib import redirect_stderr
 from pathlib import Path
 from unittest.mock import patch
 
@@ -515,16 +518,45 @@ def test_policy():
         ["git", "ls-files", "-z", "--", "tools/tillr*"],
         cwd=ROOT, check=True, capture_output=True,
     ).stdout.decode("utf-8").split("\0")
-    for path in (ROOT / name for name in listed if name):
+    check_no_model_ids(ROOT, (name for name in listed if name), ids)
+
+
+def check_no_model_ids(root, files, ids):
+    patterns = {model_id: re.compile(rf"\b{re.escape(model_id)}\b") for model_id in ids}
+    for name in files:
+        path = root / name
         if not path.is_file():
             continue
         text = path.read_bytes().decode("utf-8", "replace")
-        for model_id in ids:
+        for model_id, pattern in patterns.items():
             check(
-                model_id not in text,
-                f"{path.relative_to(ROOT)} names the model id {model_id!r}: the "
+                not pattern.search(text),
+                f"{name} names the model id {model_id!r}: the "
                 f"tillr tree must never name a model vendor (D-MM5)",
             )
+
+
+def test_model_id_scan(root):
+    name = "model-scan.txt"
+    path = root / name
+    ids = ["opus", "muse-ember-1.0-contributor"]
+    path.write_text("autopush stopped; muse-ember-1x0-contributor is not a model ID\n")
+    check_no_model_ids(root, [name], ids)
+
+    for model_id in ids:
+        path.write_text(f'model = "{model_id}"\n')
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            try:
+                check_no_model_ids(root, [name], ids)
+            except SystemExit as exc:
+                rejected = exc.code == 1
+            else:
+                rejected = False
+        check(
+            rejected and f"{name} names the model id {model_id!r}" in stderr.getvalue(),
+            f"the model ID scan did not report {model_id!r} in {name}",
+        )
 
 
 def test_claude_policy(policy):
@@ -1201,6 +1233,8 @@ def main():
     try:
         test_extractors(root)
         print("ok: every extractor renders both fixtures, and the footerless one is refused")
+        test_model_id_scan(root)
+        print("ok: the model ID scan accepts autopush and rejects real model IDs")
         test_policy()
         print("ok: the policy names a default backend, its adapters exist, and no id is in the tillr tree")
         workspace = Workspace(root)
