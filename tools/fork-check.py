@@ -1077,6 +1077,7 @@ SOURCE = re.compile(r"^git\+(?P<url>[^?]+)(?:\?ref=(?P<ref>[^&]+))?")
 FORK_INPUT = (
     re.compile(r"^yolo-packs/[^/]+/patches/"),
     re.compile(r"^yolo-packs/[^/]+/pack\.json$"),
+    re.compile(r"^yolo-packs/fork-pins/[^/]+$"),
     re.compile(r"^bin/pi-forks$"),
     re.compile(r"^bin/pi-forks\.list$"),
 )
@@ -5564,6 +5565,9 @@ class Check:
         if self.rc == CHECK_STALLED_RC or self.rc in COULD_NOT_ANSWER_CODES \
                 or outside_signal(self.rc) is not None:
             return False
+        if self.kind in ("patch-branch-inv2", "patch-branch-inv3", "forks-check", "build", "fork-quality") \
+                and self.rc == 4 and not (self.kind == "fork-quality" and "--prepared" in self.argv):
+            return False
         if getattr(self, "fast_tree", False) and self.preflight_refused:
             return False
         group = CHECK_KIND_GROUP.get(self.kind, KIND_VERDICT)
@@ -7191,7 +7195,9 @@ def build_plan(
             declaration_packs.add(match.group(1))
             continue
         for one in series:
-            if path.startswith(f"yolo-packs/{one.pack}/{one.rel}/"):
+            if path == f"yolo-packs/fork-pins/{one.fork}" or (
+                one.rel and path.startswith(f"yolo-packs/{one.pack}/{one.rel}/")
+            ):
                 touched_series.add(one.owner_key)
 
     # The upstream a launch would build, resolved by the bridge that carries the launch's
@@ -7296,8 +7302,9 @@ def build_plan(
         every series, or the gate's own mechanism when the change is the tooling itself.
         """
         paths = [path for path in changed
-                 if any(path.startswith(f"yolo-packs/{one.pack}/{one.rel}/")
-                        for one in series if one.fork == name)]
+                 if path == f"yolo-packs/fork-pins/{name}" or
+                 any(one.rel and path.startswith(f"yolo-packs/{one.pack}/{one.rel}/")
+                     for one in series if one.fork == name)]
         if manifest_touched:
             paths += [path for path in changed if path in ("bin/pi-forks", "bin/pi-forks.list")]
         if force_all:
@@ -7306,7 +7313,9 @@ def build_plan(
 
     def pack_selection(pack: str) -> tuple[str, ...]:
         """The changed paths that selected a pack's series check."""
-        paths = [path for path in changed if path.startswith(f"yolo-packs/{pack}/")]
+        paths = [path for path in changed if path.startswith(f"yolo-packs/{pack}/") or
+                 any(one.pack == pack and path == f"yolo-packs/fork-pins/{one.fork}"
+                     for one in series)]
         if manifest_touched:
             paths += [path for path in changed if path in ("bin/pi-forks", "bin/pi-forks.list")]
         if force_all:
@@ -7314,6 +7323,13 @@ def build_plan(
         return tuple(paths)
 
     for pack, reasons in sorted(affected_packs.items()):
+        if all(one.branch and not one.rel for one in series if one.pack == pack):
+            # Yolo's offline series command reads its host-local patch-branch stamp.
+            # The per-fork INV-2 and INV-3 checks below instead judge the recorded
+            # commit, so the host's stamp cannot decide a candidate's verdict.
+            plan.not_planned(f"pack {pack} (yolo series check)",
+                             "the pack contains a patch branch; pinned fork checks judge it instead")
+            continue
         plan.checks.append(
             Check("series", f"pack {pack}: {len(reasons)} series", ["yolo", "pack", "series", "check", f"yolo-packs/{pack}"],
                   "\n       ".join(reasons), SERIES_TIMEOUT, watches=(f"yolo-packs/{pack}/",),
@@ -7340,9 +7356,9 @@ def build_plan(
                   [str(root / "bin" / "pi-forks"), "patch-branch", "merge-check", "--candidate", "--fetch",
                    "--fork", name],
                   "the declaration or series changed, or the upstream moved", FORKS_TIMEOUT,
-                  watches=(f"yolo-packs/{carried[name].pack}/", "bin/pi-forks"),
+                  watches=(f"yolo-packs/{carried[name].pack}/", f"yolo-packs/fork-pins/{name}", "bin/pi-forks"),
                   selected_by=fork_selection(name),
-                  needs=(str(forks_root(root) / name),), remedy=fork_setup(name),
+                  needs=() if carried[name].branch and not carried[name].rel else (str(forks_root(root) / name),), remedy=fork_setup(name),
                   env=series_env(root),
                   # --candidate MATERIALIZES .forks/candidate/<fork>, so this step is a
                   # writer of that directory and must serialize with every other step that
@@ -7350,7 +7366,8 @@ def build_plan(
                   # nothing let the two collide, and the loser failed in under a second with
                   # "cannot check patch/<fork> out in .forks/candidate/<fork>" (2026-10-26,
                   # pi-subagents' merge-check against its typecheck).
-                  writes=(str(candidate_root(root) / name),), reusable=False)
+                  writes=(str(forks_root(root) / name), str(candidate_root(root) / name)) +
+                         ((str(forks_root(root) / 'inputs' / name),) if carried[name].branch and not carried[name].rel else ()), reusable=False)
         )
 
     # INV-3, offline (`bin/pi-forks patch-branch verify`): the series in the pack is exactly
@@ -7367,9 +7384,9 @@ def build_plan(
             Check("patch-branch-inv3", f"fork {name}: the series is exactly its working copy's export",
                   [str(root / "bin" / "pi-forks"), "patch-branch", "verify", "--fork", name],
                   "the series changed, so it must still be the export", FORKS_TIMEOUT,
-                  watches=(f"yolo-packs/{exported[name].pack}/", "bin/pi-forks"),
+                  watches=(f"yolo-packs/{exported[name].pack}/", f"yolo-packs/fork-pins/{name}", "bin/pi-forks"),
                   selected_by=fork_selection(name),
-                  needs=(str(forks_root(root) / name),), remedy=fork_setup(name),
+                  needs=() if exported[name].branch and not exported[name].rel else (str(forks_root(root) / name),), remedy=fork_setup(name),
                   env=series_env(root), reusable=False)
         )
 
@@ -7388,12 +7405,13 @@ def build_plan(
     for name in forks:
         checkout = forks_root(root) / name
         candidate = candidate_root(root) / name
+        converted = any(one.fork == name and one.branch and not one.rel for one in series)
         plan.checks.append(
             Check("forks-check", f"fork {name}: the series replays into a clean checkout at {candidate}",
                   [str(root / "bin" / "pi-forks"), "candidate", "--fork", name],
                   "the series changed, so it must still apply at its base", FORKS_TIMEOUT,
-                  watches=(f".forks/{name}/",), selected_by=fork_selection(name),
-                  needs=(str(checkout),), remedy=fork_setup(name),
+                  watches=(f".forks/{name}/", f"yolo-packs/fork-pins/{name}"), selected_by=fork_selection(name),
+                  needs=() if converted else (str(checkout),), remedy=fork_setup(name),
                   env=series_env(root), reusable=False,
                   # `candidate` replays into a scratch clone and may fetch the series base
                   # into the checkout, so it writes the same working copy a build does --
@@ -7405,7 +7423,7 @@ def build_plan(
                   # It does NOT install: the quality run's prepare step is the one producer
                   # of the candidate's dependency state, and the preflight that reads that
                   # state runs on the readers, behind it (board items 194 and 405).
-                  writes=(str(checkout), str(candidate)))
+                  writes=(str(checkout), str(candidate)) + ((str(forks_root(root) / 'inputs' / name),) if converted else ()))
         )
         # A build has one home: the candidate checkout. Without the shared checkout it
         # would need a clone of the upstream (`bin/pi-forks setup`), an `npm ci`, and a
@@ -7423,13 +7441,13 @@ def build_plan(
                 Check("build", build_labels[name],
                       [str(root / "bin" / "pi-forks"), "candidate", "--fork", name, "--build"],
                       "the series changed, so it must compile", BUILD_TIMEOUT,
-                      watches=(f".forks/{name}/",), selected_by=fork_selection(name),
+                      watches=(f".forks/{name}/", f"yolo-packs/fork-pins/{name}"), selected_by=fork_selection(name),
                       forced="--build" if not fork_selection(name) else "",
-                      needs=(str(checkout),), remedy=fork_setup(name),
+                      needs=() if converted else (str(checkout),), remedy=fork_setup(name),
                       env=series_env(root), reusable=False,
                       # The build materializes the candidate as well as building it, so it
                       # is a writer of both the shared checkout and the candidate.
-                      writes=(str(checkout), str(candidate)))
+                      writes=(str(checkout), str(candidate)) + ((str(forks_root(root) / 'inputs' / name),) if converted else ()))
             )
 
     # Every fork the gate has steps for, and the ones this run had no reason to look at.
@@ -7495,16 +7513,16 @@ def build_plan(
                       [str(root / "bin" / "pi-forks"), "candidate", "--fork", one.fork, "--deps"],
                       "its series, declaration, or upstream changed; the quality scripts read the "
                       f"tree this prepares (prepare a missing checkout with bin/pi-forks setup --fork {one.fork})",
-                      BUILD_TIMEOUT, watches=(f".forks/{one.fork}/", f"yolo-packs/{one.pack}/"),
+                      BUILD_TIMEOUT, watches=(f".forks/{one.fork}/", f"yolo-packs/{one.pack}/", f"yolo-packs/fork-pins/{one.fork}"),
                       selected_by=fork_selection(one.fork),
-                      needs=(str(checkout),), remedy=fork_setup(one.fork),
+                      needs=() if one.branch and not one.rel else (str(checkout),), remedy=fork_setup(one.fork),
                       env=series_env(root),
                       # The one step of a quality run that writes the checkout: it
                       # materializes the series and installs the dependencies. It also
                       # declares the shared checkout, because materializing may fetch the
                       # series base into it (`ensure_base`), the same write the replay step
                       # declares.
-                      writes=(str(checkout), str(candidate)),
+                      writes=(str(checkout), str(candidate)) + ((str(forks_root(root) / 'inputs' / one.fork),) if one.branch and not one.rel else ()),
                       # It materializes the same candidate the readers test, so it records
                       # that tree too: every fork-quality step carries the fingerprint of
                       # the checkout it ran in (board item 396).
@@ -7520,9 +7538,9 @@ def build_plan(
                        "--", *quality],
                       "its series, declaration, or upstream changed; build alone does not verify source quality "
                       f"(prepare a missing checkout with bin/pi-forks setup --fork {one.fork})",
-                      BUILD_TIMEOUT, watches=(f".forks/{one.fork}/", f"yolo-packs/{one.pack}/"),
+                      BUILD_TIMEOUT, watches=(f".forks/{one.fork}/", f"yolo-packs/{one.pack}/", f"yolo-packs/fork-pins/{one.fork}"),
                       selected_by=fork_selection(one.fork),
-                      needs=(str(checkout),), remedy=fork_setup(one.fork),
+                      needs=() if one.branch and not one.rel else (str(checkout),), remedy=fork_setup(one.fork),
                       # The series this reads is THIS tree's, pinned like every other fork
                       # step: an inherited PI_FORKS_SERIES_ROOT must not move a gate run to
                       # another tree's series (2026-10-24).

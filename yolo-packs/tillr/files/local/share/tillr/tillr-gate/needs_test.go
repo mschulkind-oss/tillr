@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,6 +28,18 @@ func TestFreshCloneStructuralWithoutPatchBranches(t *testing.T) {
 		t.Fatal(err)
 	}
 	memoryWrite(t, filepath.Join(clone, "tests/pi-patch-series.test.sh"), string(raw))
+	// The pins are new in the working tree and not yet in the cloned HEAD.
+	pins, err := os.ReadDir(filepath.Join(root, "yolo-packs/fork-pins"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, pin := range pins {
+		data, err := os.ReadFile(filepath.Join(root, "yolo-packs/fork-pins", pin.Name()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		memoryWrite(t, filepath.Join(clone, "yolo-packs/fork-pins", pin.Name()), string(data))
+	}
 	cmd = exec.Command("sh", "tests/pi-patch-series.test.sh")
 	cmd.Dir = clone
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -47,21 +58,19 @@ func TestFreshCloneStructuralWithoutPatchBranches(t *testing.T) {
 	if len(checks) != 8 {
 		t.Fatalf("fork ref declarations: %d", len(checks))
 	}
-	tree := memoryGit(t, clone, "rev-parse", "HEAD^{tree}")
-	envelope, err := Run(memoryPlan(t, tree, checks...), clone, t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var verdict VerdictPayload
-	if err := json.Unmarshal(envelope.Payload, &verdict); err != nil {
-		t.Fatal(err)
-	}
-	if verdict.Result != ResultPass {
-		t.Fatalf("verdict: %+v", verdict)
-	}
-	for _, check := range verdict.Checks {
-		if check.Result != "unavailable" || len(check.MissingNeeds) != 1 || !strings.HasPrefix(check.MissingNeeds[0].Command, "git fetch origin ") {
-			t.Fatalf("fork outcome: %+v", check)
+	for _, check := range checks {
+		for _, need := range check.Needs {
+			if strings.HasPrefix(need, "ref:refs/heads/patch/") {
+				t.Fatalf("local branch need: %s: %s", check.CheckID, need)
+			}
+		}
+		pin := "yolo-packs/fork-pins/" + strings.TrimPrefix(check.CheckID, "patch-ref-")
+		found := false
+		for _, read := range check.Reads {
+			found = found || read == pin
+		}
+		if !found {
+			t.Fatalf("%s does not read %s: %v", check.CheckID, pin, check.Reads)
 		}
 	}
 }
@@ -91,22 +100,59 @@ func TestPatchRefProgramJudgesPiBranchContents(t *testing.T) {
 		t.Fatal(err)
 	}
 	root, _ := memoryRepo(t)
-	memoryGit(t, root, "update-ref", "refs/heads/patch/pi", "HEAD")
-	run := func(wantPass bool) {
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	if out, err := exec.Command("git", "clone", "--bare", root, remote).CombinedOutput(); err != nil {
+		t.Fatalf("remote: %v: %s", err, out)
+	}
+	pin := filepath.Join(root, "yolo-packs/fork-pins/pi")
+	run := func(want int, contains ...string) {
+		t.Helper()
 		cmd := exec.Command("python3", program, "patch/pi")
 		cmd.Dir = root
 		out, err := cmd.CombinedOutput()
-		if (err == nil) != wantPass {
-			t.Fatalf("pi branch content: %v: %s", err, out)
+		code := 0
+		if err != nil {
+			if exit, ok := err.(*exec.ExitError); ok {
+				code = exit.ExitCode()
+			} else {
+				t.Fatal(err)
+			}
+		}
+		if code != want {
+			t.Fatalf("exit %d, want %d: %s", code, want, out)
+		}
+		for _, text := range contains {
+			if !strings.Contains(string(out), text) {
+				t.Fatalf("missing %q: %s", text, out)
+			}
 		}
 	}
-	run(false) // Branch exists but does not add the script.
 	for _, script := range []string{`["build:live"]`, `["build:offline"]`} {
 		memoryWrite(t, filepath.Join(root, "scripts/fork-build.mjs"), script)
-		memoryGit(t, root, "add", ".")
+		memoryGit(t, root, "add", "scripts")
 		memoryGit(t, root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-qm", "script fixture")
-		memoryGit(t, root, "update-ref", "refs/heads/patch/pi", "HEAD")
-		run(strings.Contains(script, "build:offline"))
+		oid := memoryGit(t, root, "rev-parse", "HEAD")
+		memoryGit(t, root, "push", "-q", remote, "HEAD:refs/heads/fixture")
+		memoryWrite(t, pin, oid+"\n"+remote+"\n"+oid+"\n")
+		want := 1
+		if strings.Contains(script, "build:offline") {
+			want = 0
+		}
+		run(want)
+	}
+	memoryGit(t, root, "update-ref", "refs/heads/patch/pi", "HEAD^")
+	run(0)
+	memoryGit(t, root, "update-ref", "-d", "refs/heads/patch/pi")
+	run(0)
+	missing := strings.Repeat("a", 40)
+	memoryWrite(t, pin, missing+"\n"+remote+"\n"+missing+"\n")
+	run(4, "could not judge", missing, remote)
+	check := memoryCheck(filepath.Join(t.TempDir(), "marker"))
+	check.Command = []string{"python3", program, "patch/pi"}
+	_, tree := root, memoryGit(t, root, "rev-parse", "HEAD^{tree}")
+	got, err := memoryRun(t, root, tree, check)
+	if err == nil || got.Result != ResultError {
+		t.Fatalf("missing input must be an error, not a failed check: %+v %v", got, err)
 	}
 }
 

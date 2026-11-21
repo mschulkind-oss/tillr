@@ -1,6 +1,6 @@
 {
   "id": "patch-ref-pi-subagents",
-  "label": "Local delivery branch patch/pi-subagents",
+  "label": "Recorded delivery commit patch/pi-subagents",
   "command": [
     "python3",
     "tools/gate/checks/patch-ref.py",
@@ -8,16 +8,15 @@
   ],
   "scope": "tree",
   "tier": "heavy",
-  "timeout_ms": 10000,
+  "timeout_ms": 120000,
   "reads": [
     "tools/gate/checks/patch-ref.py",
     "bin/pi-forks.list",
-    "yolo-packs/matt/pack.json"
+    "yolo-packs/matt/pack.json",
+    "tools/gate/checks/fork_input.py",
+    "yolo-packs/fork-pins/pi-subagents"
   ],
   "tools": [
     "git"
-  ],
-  "needs": [
-    "ref:refs/heads/patch/pi-subagents"
   ]
 }

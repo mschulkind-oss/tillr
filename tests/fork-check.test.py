@@ -1222,9 +1222,22 @@ with tempfile.TemporaryDirectory() as tmp:
         "patch-branch", "merge-check", "--candidate", "--fetch", "--fork", "pi-subagents"
     ], invariants["patch-branch-inv2"].argv
     assert invariants["patch-branch-inv3"].argv[1:] == ["patch-branch", "verify", "--fork", "pi-subagents"], invariants["patch-branch-inv3"].argv
-    expected_watches = ("yolo-packs/matt/", "bin/pi-forks")
+    expected_watches = ("yolo-packs/matt/", "yolo-packs/fork-pins/pi-subagents", "bin/pi-forks")
     assert invariants["patch-branch-inv2"].watches == expected_watches, invariants["patch-branch-inv2"].watches
     assert invariants["patch-branch-inv3"].watches == expected_watches, invariants["patch-branch-inv3"].watches
+
+    converted = module.Series(pack="matt", rel="", branch="patch/pi-subagents",
+                              source=f"git+{releases}?ref=main", follow=None)
+    pinned = module.build_plan(repo, [converted], module.Record(base / "pin-state.json"),
+                               ["yolo-packs/fork-pins/pi-subagents"], None, True,
+                               audit_upstreams=False)
+    pin_steps = [check for check in pinned.checks if check.kind in
+                 ("patch-branch-inv2", "patch-branch-inv3", "forks-check", "build", "fork-quality")]
+    assert pin_steps and all(not check.needs for check in pin_steps), [(c.kind, c.needs) for c in pin_steps]
+    assert all("yolo-packs/fork-pins/pi-subagents" in c.watches for c in pin_steps), [(c.kind, c.watches) for c in pin_steps]
+    assert all("yolo-packs/fork-pins/pi-subagents" in c.selected_by for c in pin_steps), [(c.kind, c.selected_by) for c in pin_steps]
+    prepare = next(c for c in pin_steps if c.kind == "fork-quality" and "--deps" in c.argv)
+    assert str(repo / ".forks/inputs/pi-subagents") in prepare.writes, prepare.writes
 
     # A failure from either check is the bridge's own refusal, and reads as FAILED
     # (a verdict); anything else it could not answer reads as NOT VERIFIED. The stub
@@ -1785,7 +1798,7 @@ with tempfile.TemporaryDirectory() as tmp:
                       for line in result.stdout.splitlines()
                       if "writes:" in line and "candidate/pi-session-search" in line]
     assert quality_writes == [
-        str(candidate),           # the patch-branch merge-check materializes it
+        f"{repo / '.forks' / 'pi-session-search'}, {candidate}",  # merge-check may populate the input cache
         # the replay materializes it too, and writes the shared checkout it replays from
         f"{repo / '.forks' / 'pi-session-search'}, {candidate}",
         # the prepare step materializes and installs it, and may fetch the series base into
@@ -6082,6 +6095,17 @@ for kind, text, is_verdict in (
     check = verdict.Check(kind, "label", ["true"], "why", 60)
     check.rc, check.output = 1, text
     assert check.conflict is is_verdict, (kind, text, check.conflict)
+
+for kind in ("patch-branch-inv2", "patch-branch-inv3", "forks-check", "build", "fork-quality"):
+    check = verdict.Check(kind, "label", ["true"], "why", 60)
+    check.rc, check.output = 4, "could not judge: cannot fetch commit abc from remote"
+    assert check.unanswered and not check.verdict, (kind, verdict.check_status(check))
+    check.rc, check.output = 1, "FAILED: conflicts with upstream; is not the export of main; does not take the patch series\ncould not judge: cannot fetch commit abc from remote"
+    assert check.verdict and not check.unanswered, (kind, verdict.check_status(check))
+
+check = verdict.Check("fork-quality", "label", ["bin/pi-forks", "candidate", "--prepared", "--", "npm"], "why", 60)
+check.rc, check.output = 4, "test command failed"
+assert check.verdict, verdict.check_status(check)
 
 print("fork-check routing: 51 audit cases, range diagnostics, approved-baseline and "
       "source-quality regressions pass; concurrency: independent checks run at the same "
