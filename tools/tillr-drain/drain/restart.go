@@ -94,6 +94,12 @@ func (l *Loop) gateRestart(ctx context.Context, result *LoopResult) (bool, strin
 	if err != nil || !pending {
 		return false, "", err
 	}
+	// Do not queue an exclusive waiter behind another item's gate or landing.
+	// The request stays unanswered and a subsequent pass can take it.
+	if !l.restartMechanical.TryLock() {
+		return false, "", nil
+	}
+	defer l.restartMechanical.Unlock()
 	request, replace, err := rs.Settle(ctx)
 	if err != nil {
 		return true, "", err
@@ -102,11 +108,8 @@ func (l *Loop) gateRestart(ctx context.Context, result *LoopResult) (bool, strin
 		l.reportf("loop: restart %s answered without replacing the process\n", request.ID)
 		return true, "", nil
 	}
-	l.restartMechanical.Lock()
-	defer l.restartMechanical.Unlock()
-	// A landing can finish while the replacement binary is being checked.
-	// Its action has already been queued when it releases the mechanical lock.
-	// A proof can similarly take ownership while the binary is checked.
+	// A landing may have queued a follow-up before we acquired the lock,
+	// or a proof may have taken ownership while checking the replacement.
 	if l.restartDeferred() {
 		return false, "", nil
 	}

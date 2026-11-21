@@ -32,12 +32,14 @@ type parallelSteps struct {
 	badReport     string
 	// badReports maps a run-id suffix to the report that reader writes instead of the
 	// plain `RESULT: done` one, for cases with more than one odd reader.
-	badReports  map[string]string
-	failedStart bool
-	writerFirst bool
-	wallNode    string
-	wallAgain   bool
-	resumes     int
+	badReports     map[string]string
+	failedStart    bool
+	writerFirst    bool
+	beforeTerminal func(run.Request) error
+	afterTerminal  func(run.Request) error
+	wallNode       string
+	wallAgain      bool
+	resumes        int
 }
 
 func (s *parallelSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
@@ -140,6 +142,11 @@ func (s *parallelSteps) Run(ctx context.Context, req run.Request) (run.Record, s
 		rec.EndCause = run.EndSignal
 		rec.ExitCode = nil
 	}
+	if s.beforeTerminal != nil {
+		if err := s.beforeTerminal(req); err != nil {
+			return rec, report, err
+		}
+	}
 	st, err := store.Open(ctx, s.f.storePath, true)
 	if err != nil {
 		return rec, report, err
@@ -149,6 +156,9 @@ func (s *parallelSteps) Run(ctx context.Context, req run.Request) (run.Record, s
 	s.mu.Lock()
 	s.ended++
 	s.mu.Unlock()
+	if err == nil && s.afterTerminal != nil {
+		err = s.afterTerminal(req)
+	}
 	return rec, report, err
 }
 

@@ -7,7 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -18,8 +21,6 @@ import (
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
-	"os"
-	"strconv"
 )
 
 // These events record effects, not a second stored item state: the request handed to
@@ -1120,152 +1121,8 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 	}
 	var plans []plannedApplication
 	var leases []LaneLease
-	var refs *startRefs
-	hasStart := false
-	readPlans := func(r *store.Reader) error {
-		var err error
-		observed := append([]string(nil), l.cfg.Lanes...)
-		held, err := readLanes(r, at)
-		if err != nil {
-			return err
-		}
-		for lane, busy := range held {
-			if busy && documentDesk(lane) {
-				observed = append(observed, lane)
-			}
-		}
-		// A lane above the lane count that still holds work is observed too, so the loop
-		// neither calls itself drained nor stops waiting while that work is unfinished.
-		works, err := readPending(r)
-		if err != nil {
-			return err
-		}
-		for _, d := range drainingLanes(works, l.cfg.Lanes) {
-			observed = append(observed, d.LaneID)
-		}
-		leases, err = activeLeases(r, at, observed)
-		if err != nil {
-			return err
-		}
-		// A lane a lane-owned staging refusal took out of rotation is offered to no item
-		// until a re-check puts it back (lane_rotation.go).
-		available := l.rotationLanes()
-		// The loop's own holds go to the planner, so it holds those items before it offers
-		// lanes rather than having a lane it gave one overridden below and left unused.
-		loopHolds := map[string]string{}
-		for id := range l.held {
-			if reason, held := l.heldFor(r, id); held {
-				loopHolds[id] = reason
-			}
-		}
-		tick := Pass{examineItem: l.ownerMigrationItem, ownerMigration: l.ownerMigrationItem != "", loopHolds: loopHolds, startRefs: refs, Comments: l.cfg.Comments, WorkflowDefaults: l.cfg.WorkflowDefaults, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available, OutLanes: l.outLanes()}
-		if stager, ok := l.cfg.Stage.(*LaneStager); ok {
-			tick.BriefTemplate = &stager.Template
-		}
-		questions := l.questions
-		if questions == nil {
-			// Standalone planner callers do not own a document refresh lifecycle.
-			questions = &VantageQuestions{Root: l.cfg.Root, Command: l.cfg.QuestionsCmd, Context: ctx}
-		}
-		declared, err := definition.ForReader(r)
-		if err != nil {
-			return readFailure(err)
-		}
-		envs, err := planDefinition(r, tick, l.cfg.Policy, questions, declared.Parsed)
-		if err != nil {
-			return err
-		}
-		folds, err := readVersionFolds(r)
-		if err != nil {
-			return err
-		}
-		planItems, err := readItems(r)
-		if err != nil {
-			return err
-		}
-		expressByID := make(map[string]bool, len(planItems))
-		for _, row := range planItems {
-			expressByID[row.ItemID] = row.Express
-		}
-		heldExpressSoFar := map[string]heldExpressItem{}
-		for _, env := range envs {
-			var d Decision
-			if err := json.Unmarshal(env.Payload, &d); err != nil {
-				return err
-			}
-			if d.Reason == ReasonNoPolicy {
-				return Usagef("the loop's policy cannot build a request for item %s (seat %s)", d.ItemID, d.Seat)
-			}
-			if reason, held := l.heldFor(r, d.ItemID); held && holdEnabled(declared.Parsed, reason) {
-				d.Action, d.Reason, d.From, d.To = ActionHold, reason, "held", ""
-				d.LaneID, d.RunRequest = "", nil
-				identifyDecision(&d)
-			}
-			if folds.contentVersions == nil && (d.Action == ActionDispatch || d.Action == ActionRetry) {
-				schema, err := readVersionSchema(r)
-				if err != nil {
-					return err
-				}
-				folds.contentVersions, err = readAllItemContentVersions(r, schema)
-				if err != nil {
-					return err
-				}
-			}
-			version, err := inputVersionFrom(r, d, folds)
-			if err != nil {
-				return err
-			}
-			parent := ""
-			if work := folds.works[d.ItemID]; work != nil {
-				parent = work.ParentRunID
-			}
-			var aheadHeld map[string]heldExpressItem
-			aheadChecked := false
-			if (d.Action == ActionDispatch || d.Action == ActionRetry) && isExpressLane(d.LaneID) {
-				aheadChecked = true
-				aheadHeld = make(map[string]heldExpressItem, len(heldExpressSoFar))
-				for k, v := range heldExpressSoFar {
-					aheadHeld[k] = v
-				}
-			}
-			// The planner offered lanes in queue order. If an earlier item was held
-			// for no-lane despite this later offer, it could not take that lane.
-			// Like other holds, trust that answer only while its inputs match.
-			if expressByID[d.ItemID] && d.Action == ActionHold {
-				heldDec := Decision{ItemID: d.ItemID, BlockConflict: d.BlockConflict}
-				heldVer := version
-				if d.LaneID != "" {
-					heldVer, err = inputVersionFrom(r, heldDec, folds)
-					if err != nil {
-						return err
-					}
-				}
-				heldExpressSoFar[d.ItemID] = heldExpressItem{decision: heldDec, version: heldVer}
-			}
-			var start *plannedStart
-			work := folds.works[d.ItemID]
-			if refs != nil && isDispatch(d) && !d.WorkflowRestart && (work == nil || !work.Ready) {
-				start = &plannedStart{tip: refs.tip, base: refs.tip}
-				hasStart = true
-				if !IsTrunkFixer(d.ItemID) {
-					start.green, err = refs.proved(ctx, l.cfg.Root, l.gatePolicy.LaneBase)
-					if err == nil && start.green != "" {
-						start.base, err = blockBaseAt(ctx, r, l.cfg.Root, start.green, refs.tip, d.ItemID)
-					}
-					if err != nil {
-						return err
-					}
-				}
-			}
-			plans = append(plans, plannedApplication{
-				decision: d, version: version, parentRunID: parent, start: start,
-				definitionSHA: declared.SHA256, definition: &declared.Parsed,
-				expressAheadChecked: aheadChecked, expressAheadHeld: aheadHeld,
-			})
-		}
-		return nil
-	}
 	for {
+		var refs *startRefs
 		if !l.nonLanding {
 			tip, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
 			if err != nil {
@@ -1273,7 +1130,10 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 			}
 			refs = &startRefs{tip: tip}
 		}
-		if err := s.ReadTx(ctx, readPlans); err != nil || !hasStart {
+		err := s.ReadTx(ctx, func(r *store.Reader) error {
+			return l.readPassPlans(ctx, r, at, "", refs, &plans, &leases)
+		})
+		if err != nil || !slices.ContainsFunc(plans, func(p plannedApplication) bool { return p.start != nil }) {
 			return plans, leases, err
 		}
 		// Planning also reads working-tree inputs. A landing during that read
@@ -1282,8 +1142,167 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 		if err != nil || current == refs.tip {
 			return plans, leases, err
 		}
-		plans, hasStart = nil, false
+		plans = nil
 	}
+}
+
+// readPassPlans binds the planner's decisions to a read snapshot. A completion
+// only plans an existing reservation, never a fresh attempt or another lane.
+func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time, onlyItem string, refs *startRefs, plans *[]plannedApplication, leases *[]LaneLease) error {
+	var err error
+	observed := append([]string(nil), l.cfg.Lanes...)
+	held, err := readLanes(r, at)
+	if err != nil {
+		return err
+	}
+	for lane, busy := range held {
+		if busy && documentDesk(lane) {
+			observed = append(observed, lane)
+		}
+	}
+	// A lane above the lane count that still holds work is observed too, so the loop
+	// neither calls itself drained nor stops waiting while that work is unfinished.
+	works, err := readPending(r)
+	if err != nil {
+		return err
+	}
+	if onlyItem != "" {
+		work := works[onlyItem]
+		if work == nil || work.Done || work.LaneReleased || l.laneConditions[work.Decision.LaneID] != nil {
+			return nil
+		}
+	}
+	for _, d := range drainingLanes(works, l.cfg.Lanes) {
+		observed = append(observed, d.LaneID)
+	}
+	if leases != nil {
+		*leases, err = activeLeases(r, at, observed)
+		if err != nil {
+			return err
+		}
+	}
+	// A lane a lane-owned staging refusal took out of rotation is offered to no item
+	// until a re-check puts it back (lane_rotation.go).
+	available := l.rotationLanes()
+	// The loop's own holds go to the planner, so it holds those items before it offers
+	// lanes rather than having a lane it gave one overridden below and left unused.
+	loopHolds := map[string]string{}
+	for id := range l.held {
+		if reason, held := l.heldFor(r, id); held {
+			loopHolds[id] = reason
+		}
+	}
+	tick := Pass{examineItem: onlyItem, ownerMigration: l.ownerMigrationItem != "", loopHolds: loopHolds, startRefs: refs, Comments: l.cfg.Comments, WorkflowDefaults: l.cfg.WorkflowDefaults, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available, OutLanes: l.outLanes()}
+	if l.ownerMigrationItem != "" {
+		tick.examineItem = l.ownerMigrationItem
+	}
+	if stager, ok := l.cfg.Stage.(*LaneStager); ok {
+		tick.BriefTemplate = &stager.Template
+	}
+	questions := l.questions
+	if questions == nil {
+		// Standalone planner callers do not own a document refresh lifecycle.
+		questions = &VantageQuestions{Root: l.cfg.Root, Command: l.cfg.QuestionsCmd, Context: ctx}
+	}
+	declared, err := definition.ForReader(r)
+	if err != nil {
+		return readFailure(err)
+	}
+	envs, err := planDefinition(r, tick, l.cfg.Policy, questions, declared.Parsed)
+	if err != nil {
+		return err
+	}
+	folds, err := readVersionFolds(r)
+	if err != nil {
+		return err
+	}
+	planItems, err := readItems(r)
+	if err != nil {
+		return err
+	}
+	expressByID := make(map[string]bool, len(planItems))
+	for _, row := range planItems {
+		expressByID[row.ItemID] = row.Express
+	}
+	heldExpressSoFar := map[string]heldExpressItem{}
+	for _, env := range envs {
+		var d Decision
+		if err := json.Unmarshal(env.Payload, &d); err != nil {
+			return err
+		}
+		if d.Reason == ReasonNoPolicy {
+			return Usagef("the loop's policy cannot build a request for item %s (seat %s)", d.ItemID, d.Seat)
+		}
+		if reason, held := l.heldFor(r, d.ItemID); held && holdEnabled(declared.Parsed, reason) {
+			d.Action, d.Reason, d.From, d.To = ActionHold, reason, "held", ""
+			d.LaneID, d.RunRequest = "", nil
+			identifyDecision(&d)
+		}
+		if onlyItem == "" && folds.contentVersions == nil && (d.Action == ActionDispatch || d.Action == ActionRetry) {
+			schema, err := readVersionSchema(r)
+			if err != nil {
+				return err
+			}
+			folds.contentVersions, err = readAllItemContentVersions(r, schema)
+			if err != nil {
+				return err
+			}
+		}
+		version, err := inputVersionFrom(r, d, folds)
+		if err != nil {
+			return err
+		}
+		parent := ""
+		if work := folds.works[d.ItemID]; work != nil {
+			parent = work.ParentRunID
+		}
+		var aheadHeld map[string]heldExpressItem
+		aheadChecked := false
+		if (d.Action == ActionDispatch || d.Action == ActionRetry) && isExpressLane(d.LaneID) {
+			aheadChecked = true
+			aheadHeld = make(map[string]heldExpressItem, len(heldExpressSoFar))
+			for k, v := range heldExpressSoFar {
+				aheadHeld[k] = v
+			}
+		}
+		// The planner offered lanes in queue order. If an earlier item was held
+		// for no-lane despite this later offer, it could not take that lane.
+		// Like other holds, trust that answer only while its inputs match.
+		if expressByID[d.ItemID] && d.Action == ActionHold {
+			heldDec := Decision{ItemID: d.ItemID, BlockConflict: d.BlockConflict}
+			heldVer := version
+			if d.LaneID != "" {
+				heldVer, err = inputVersionFrom(r, heldDec, folds)
+				if err != nil {
+					return err
+				}
+			}
+			heldExpressSoFar[d.ItemID] = heldExpressItem{decision: heldDec, version: heldVer}
+		}
+		if onlyItem != "" && (d.ItemID != onlyItem || d.LaneID != works[onlyItem].Decision.LaneID || d.RunRequest == nil) {
+			continue
+		}
+		var start *plannedStart
+		work := folds.works[d.ItemID]
+		if refs != nil && isDispatch(d) && !d.WorkflowRestart && (work == nil || !work.Ready) {
+			start = &plannedStart{tip: refs.tip, base: refs.tip}
+			if !IsTrunkFixer(d.ItemID) {
+				start.green, err = refs.proved(ctx, l.cfg.Root, l.gatePolicy.LaneBase)
+				if err == nil && start.green != "" {
+					start.base, err = blockBaseAt(ctx, r, l.cfg.Root, start.green, refs.tip, d.ItemID)
+				}
+				if err != nil {
+					return err
+				}
+			}
+		}
+		*plans = append(*plans, plannedApplication{
+			decision: d, version: version, parentRunID: parent, start: start,
+			definitionSHA: declared.SHA256, definition: &declared.Parsed,
+			expressAheadChecked: aheadChecked, expressAheadHeld: aheadHeld,
+		})
+	}
+	return nil
 }
 
 func appendEffect(tx *store.Tx, kind, id string, value any, at time.Time) error {
@@ -2125,7 +2144,7 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 	// wait: ProcessSteps.Run never signals the run face on cancellation, and the
 	// next loop settles the run from its terminal record.
 	id := d.RunRequest.RunID
-	l.active[id] = true
+	l.markStepActive(d.ItemID, id)
 	runCtx, cancel := context.WithCancel(ctx)
 	l.mu.Lock()
 	if l.activeCancels == nil {
@@ -2169,7 +2188,8 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 					}
 				}
 			} else if len(d.Parallel) > 0 {
-				err = l.runParallel(runCtx, d)
+				err = l.runParallel(runCtx, d, &local, completion.timing, watched)
+				completion.result = &local
 			} else {
 				req := *d.RunRequest
 				stampDecisionRequest(d, &req)
@@ -2203,11 +2223,13 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 		delete(l.stoppedRuns, c.id)
 	}
 	l.mu.Unlock()
+	delete(l.active, c.id)
+	if l.activeItems[c.itemID] == c.id {
+		delete(l.activeItems, c.itemID)
+	}
 	if stopped || errors.Is(c.outcome.err, errRestartPending) {
-		delete(l.active, c.id)
 		return "", nil
 	}
-	delete(l.active, c.id)
 	if c.result != nil {
 		mergeExamination(result, c.result)
 		if c.result.Rejected > 0 {
@@ -2243,11 +2265,6 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 		result.StopItemID, result.StopStep = c.itemID, c.step
 		if c.result != nil && c.result.StopStep != "" {
 			result.StopStep = c.result.StopStep
-		}
-	}
-	if c.outcome.stop == "" && c.outcome.err == nil && !l.nonLanding {
-		if err := l.pruneRunRefs(context.Background()); err != nil {
-			return "", err
 		}
 	}
 	return c.outcome.stop, c.outcome.err
@@ -2291,6 +2308,9 @@ func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err e
 	if err := l.checkStopRequested(ctx); err != nil {
 		return "", err
 	}
+	if stop, err := l.drainCompletions(ctx, result); stop != "" || err != nil {
+		return stop, err
+	}
 	if !l.nonLanding {
 		if err := l.prunePreservedWork(ctx); err != nil {
 			return "", err
@@ -2311,17 +2331,6 @@ func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err e
 	if err := l.refreshPolicy(); err != nil {
 		return "", err
 	}
-	for {
-		select {
-		case c := <-l.completions:
-			if stop, err := l.takeCompletion(c, result); stop != "" || err != nil {
-				return stop, err
-			}
-		default:
-			goto planned
-		}
-	}
-planned:
 	if _, err := l.observeTrunk(ctx, ""); err != nil {
 		return "", err
 	}
@@ -2391,15 +2400,7 @@ planned:
 	}
 	at := l.cfg.Now().UTC()
 	timing := &PassTiming{AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}
-	defer func() {
-		if timing.TickID != "" {
-			result.Ticks++
-			if result.FirstGeneration == "" {
-				result.FirstGeneration = strings.TrimPrefix(timing.TickID, "gen-")
-			}
-			result.LastGeneration = strings.TrimPrefix(timing.TickID, "gen-")
-		}
-	}()
+	defer func() { countGeneration(result, timing.TickID) }()
 	landedBeforeRecord := result.Landed
 	if err := l.recordOrder(ctx, mainSHA, result, timing); err != nil {
 		return "", err
@@ -2410,6 +2411,10 @@ planned:
 		if err != nil {
 			return "", err
 		}
+	}
+	// Maintenance may have overlapped a worker or examination finishing.
+	if stop, err := l.drainCompletions(ctx, result); stop != "" || err != nil {
+		return stop, err
 	}
 	plans, leases, err := l.passPlansGeneration(ctx, at, &timing.TickID)
 	if err != nil {
@@ -2423,7 +2428,7 @@ planned:
 		closedBatch := false
 		for _, p := range plans {
 			d := p.decision
-			if !p.checksComments() || !item.IsCommentItem(d.ItemID) || l.active[p.parentRunID] ||
+			if !p.checksComments() || !item.IsCommentItem(d.ItemID) || l.planStillActive(p) ||
 				(d.Action != ActionDispatch && d.Action != ActionRetry && d.Action != ActionHold) {
 				continue
 			}
@@ -2486,6 +2491,9 @@ planned:
 	// pass, so it is offered the next free lane; each re-plan removes a lane, so this is
 	// bounded by the lane count.
 	replans := 0
+	if stop, err := l.drainCompletions(ctx, result); stop != "" || err != nil {
+		return stop, err
+	}
 plans:
 	for i := 0; i < len(plans); i++ {
 		if err := l.checkStopRequested(ctx); err != nil {
@@ -2498,12 +2506,9 @@ plans:
 		if d.Action == ActionHold {
 			holds = append(holds, d)
 		}
-		if l.active[p.parentRunID] || ((d.Action == ActionSettle || d.Action == ActionJudge) && l.active[d.RunRequest.RunID]) {
-			if isDispatch(d) {
-				if err := l.recordDispatchDecline(ctx, d, at, "parent run "+p.parentRunID+" is still active", p.parentRunID+" to finish"); err != nil {
-					return "", err
-				}
-			}
+		if l.planStillActive(p) {
+			// The completion owns the next decision for this item. This snapshot
+			// has nothing to decline: even a sent completion may still be queued.
 			continue
 		}
 		if p.checksComments() && item.IsCommentItem(d.ItemID) && (isDispatch(d) || d.Action == ActionHold) {
@@ -2519,184 +2524,53 @@ plans:
 				continue
 			}
 		}
-		ok, work, err := l.applyPlanTrunk(ctx, p, &mainSHA, at, &timing.TickID)
+		cancelled, changed, err := l.applyReadyPlan(ctx, p, &mainSHA, at, timing, watched, result)
 		if err != nil {
-			result.StopItemID, result.StopStep = d.ItemID, "apply plan"
 			return "", err
 		}
-		if !ok {
-			if d.Action != ActionHold {
-				stale = true
-			}
-			continue
-		}
-		timing.Applied++
-		if d.RunRequest != nil {
-			request := *d.RunRequest
-			request.CorrelationID = timing.TickID
-			d.RunRequest = &request
-		}
-		switch d.Action {
-		case ActionDispatch, ActionRetry:
-			start := time.Now()
-			base := mainSHA
-			if work != nil {
-				base = work.BaseSHA
-			}
-			if work != nil {
-				d = work.Decision
-			}
-			l.laneRefusedNow = false
-			var staged []Decision
-			var err error
-			owned := ""
-			parallelPrecheckFailed := false
-			if len(d.Parallel) > 0 && d.WorkflowRestart {
-				var preErr error
-				owned, preErr = l.stagedNodeRun(d)
-				if preErr != nil {
-					if holdErr := l.holdStageFailed(ctx, d, "read staged node run", preErr); holdErr != nil {
-						err = holdErr
-					} else {
-						parallelPrecheckFailed = true
-					}
-				}
-			}
-			if err == nil && !parallelPrecheckFailed && owned != "" && len(d.Parallel) > 0 && d.WorkflowRestart {
-				if d.NodeIndex == 0 && d.NodeStartRunID == "" {
-					raw, readErr := os.ReadFile(filepath.Join(RunDir(l.cfg.Root, owned), BaseSHAFile))
-					if readErr != nil {
-						if holdErr := l.holdStageFailed(ctx, d, "read staged base", readErr); holdErr != nil {
-							err = holdErr
-						} else {
-							parallelPrecheckFailed = true
-						}
-					} else {
-						d.NodeBaseSHA = strings.TrimSpace(string(raw))
-						d.NodeStartRunID = owned
-					}
-				}
-				if err == nil && !parallelPrecheckFailed {
-					if stagedBase := l.laneBase(d.LaneID); stagedBase != "" {
-						base = stagedBase
-					}
-					head, headErr := l.revParse(ctx, l.laneTarget(d.LaneID), "HEAD")
-					if headErr != nil {
-						if holdErr := l.holdStageFailed(ctx, d, "inspect parallel lane", headErr); holdErr != nil {
-							err = holdErr
-						} else {
-							parallelPrecheckFailed = true
-						}
-					} else {
-						dirty, dirtyErr := l.git(ctx, l.laneTarget(d.LaneID), "status", "--porcelain", "--untracked-files=all")
-						if dirtyErr != nil {
-							if holdErr := l.holdStageFailed(ctx, d, "inspect parallel lane", dirtyErr); holdErr != nil {
-								err = holdErr
-							} else {
-								parallelPrecheckFailed = true
-							}
-						} else if head != d.NodeBaseSHA || strings.TrimSpace(dirty) != "" {
-							if err = l.refuseParallelBoundary(ctx, d, base, head, result, true); err != nil {
-								return "", err
-							}
-							continue
-						} else {
-							staged = []Decision{d}
-						}
-					}
-				}
-			} else if err == nil && !parallelPrecheckFailed {
-				staged, err = l.stageDispatches(ctx, []Decision{d}, base, result)
-			}
-			if err != nil {
-				if stoppedByOperator(ctx, err) {
-					_ = l.cancelStaging(context.WithoutCancel(ctx), d)
-				}
-				result.StopItemID, result.StopStep = d.ItemID, "stage"
-				return "", err
-			}
-			if len(staged) > 0 {
-				parallel, pErr := l.stageParallel(ctx, staged[0], base)
-				if pErr != nil {
-					if stoppedByOperator(ctx, pErr) || ctx.Err() != nil {
-						_ = l.cancelStaging(context.WithoutCancel(ctx), d)
-						result.StopItemID, result.StopStep = d.ItemID, "stage"
-						return "", pErr
-					}
-					if holdErr := l.holdStageFailed(ctx, d, "stage parallel", pErr); holdErr != nil {
-						_ = l.cancelStaging(context.WithoutCancel(ctx), d)
-						result.StopItemID, result.StopStep = d.ItemID, "stage"
-						return "", holdErr
-					}
-					staged = nil
-				} else {
-					staged[0] = parallel
-				}
-			}
-			timing.StageMS += time.Since(start).Milliseconds()
-			if len(staged) == 0 {
-				if err := l.cancelStaging(ctx, d); err != nil {
-					result.StopItemID, result.StopStep = d.ItemID, "cancel staging"
+		stale = stale || changed
+		if cancelled {
+			// A claim that could not launch is offered again in this pass, not the next:
+			// the item on whatever lane the fresh plan chooses, and any item that
+			// waited for the lane the cancellation freed. A refusal the lane's own
+			// state caused, or a cancellation with no infrastructure fault behind
+			// it, replans; an infrastructure fault would only repeat and count again.
+			if (l.laneRefusedNow || !l.stageFault) && replans < len(l.cfg.Lanes)+1 {
+				replans++
+				// A lane this pass just refused stays out until the next pass: a
+				// re-check now would see its pinned HEAD as retained and offer it again.
+				l.replanning = true
+				fresh, freshLeases, err := l.passPlansGeneration(ctx, at, &timing.TickID)
+				l.replanning = false
+				if err != nil {
 					return "", err
 				}
-				// A claim that could not launch is offered again in this pass, not the next:
-				// the item on whatever lane the fresh plan chooses, and any item that
-				// waited for the lane the cancellation freed. A refusal the lane's own
-				// state caused, or a cancellation with no infrastructure fault behind
-				// it, replans; an infrastructure fault would only repeat and count again.
-				if (l.laneRefusedNow || !l.stageFault) && replans < len(l.cfg.Lanes)+1 {
-					replans++
-					// A lane this pass just refused stays out until the next pass: a
-					// re-check now would see its pinned HEAD as retained and offer it again.
-					l.replanning = true
-					fresh, freshLeases, err := l.passPlansGeneration(ctx, at, &timing.TickID)
-					l.replanning = false
-					if err != nil {
-						return "", err
-					}
-					leases = freshLeases
-					queued := map[string]bool{}
-					for _, rest := range plans[i+1:] {
-						if rest.decision.Action == ActionDispatch || rest.decision.Action == ActionRetry {
-							queued[rest.decision.ItemID] = true
-						}
-					}
-					var again []plannedApplication
-					for _, next := range fresh {
-						if next.decision.Action != ActionDispatch && next.decision.Action != ActionRetry {
-							continue
-						}
-						if next.decision.ItemID == d.ItemID {
-							// Offer it again, now, on the lane the fresh plan chose. The
-							// rest of this pass's plans stay as they were: one that
-							// conflicts with the re-plan is refused as stale when applied.
-							again = append([]plannedApplication{next}, again...)
-						} else if !queued[next.decision.ItemID] {
-							again = append(again, next)
-						}
-					}
-					if len(again) > 0 {
-						plans = append(plans[:i+1], append(again, plans[i+1:]...)...)
-						continue plans
+				leases = freshLeases
+				queued := map[string]bool{}
+				for _, rest := range plans[i+1:] {
+					if rest.decision.Action == ActionDispatch || rest.decision.Action == ActionRetry {
+						queued[rest.decision.ItemID] = true
 					}
 				}
-				continue
-			}
-			if err := l.checkStopRequested(ctx); err != nil {
-				if cancelErr := l.cancelStaging(context.WithoutCancel(ctx), d); cancelErr != nil {
-					return "", cancelErr
+				var again []plannedApplication
+				for _, next := range fresh {
+					if next.decision.Action != ActionDispatch && next.decision.Action != ActionRetry {
+						continue
+					}
+					if next.decision.ItemID == d.ItemID {
+						// Offer it again, now, on the lane the fresh plan chose. The
+						// rest of this pass's plans stay as they were: one that
+						// conflicts with the re-plan is refused as stale when applied.
+						again = append([]plannedApplication{next}, again...)
+					} else if !queued[next.decision.ItemID] {
+						again = append(again, next)
+					}
 				}
-				return "", err
-			}
-			l.launchRun(ctx, staged[0], at, watched, result)
-		case ActionSettle, ActionJudge:
-			if err := l.checkStopRequested(ctx); err != nil {
-				if releaseErr := l.releaseExamination(context.WithoutCancel(ctx), d); releaseErr != nil {
-					return "", releaseErr
+				if len(again) > 0 {
+					plans = append(plans[:i+1], append(again, plans[i+1:]...)...)
+					continue plans
 				}
-				return "", err
 			}
-			l.launchExamination(ctx, d, work, at, timing, watched)
 		}
 	}
 	if timing.Applied > 0 || timing.TickID != "" {
@@ -2742,10 +2616,152 @@ plans:
 	return l.planNothing(ctx, holds, leases, at, result)
 }
 
+// applyReadyPlan is shared by the queue pass and an item-local completion handoff.
+// It leaves cancellation replanning to the queue pass, which owns lane offers.
+func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA *string, at time.Time, timing *PassTiming, watched []string, result *LoopResult) (cancelled, stale bool, err error) {
+	d := p.decision
+	ok, work, err := l.applyPlanTrunk(ctx, p, mainSHA, at, &timing.TickID)
+	if err != nil {
+		result.StopItemID, result.StopStep = d.ItemID, "apply plan"
+		return false, false, err
+	}
+	if !ok {
+		return false, d.Action != ActionHold, nil
+	}
+	timing.Applied++
+	if d.RunRequest != nil {
+		request := *d.RunRequest
+		request.CorrelationID = timing.TickID
+		d.RunRequest = &request
+	}
+	switch d.Action {
+	case ActionDispatch, ActionRetry:
+		start := time.Now()
+		base := *mainSHA
+		if work != nil {
+			base = work.BaseSHA
+		}
+		if work != nil {
+			d = work.Decision
+		}
+		l.laneRefusedNow = false
+		var staged []Decision
+		var err error
+		owned := ""
+		parallelPrecheckFailed := false
+		if len(d.Parallel) > 0 && d.WorkflowRestart {
+			var preErr error
+			owned, preErr = l.stagedNodeRun(d)
+			if preErr != nil {
+				if holdErr := l.holdStageFailed(ctx, d, "read staged node run", preErr); holdErr != nil {
+					err = holdErr
+				} else {
+					parallelPrecheckFailed = true
+				}
+			}
+		}
+		if err == nil && !parallelPrecheckFailed && owned != "" && len(d.Parallel) > 0 && d.WorkflowRestart {
+			if d.NodeIndex == 0 && d.NodeStartRunID == "" {
+				raw, readErr := os.ReadFile(filepath.Join(RunDir(l.cfg.Root, owned), BaseSHAFile))
+				if readErr != nil {
+					if holdErr := l.holdStageFailed(ctx, d, "read staged base", readErr); holdErr != nil {
+						err = holdErr
+					} else {
+						parallelPrecheckFailed = true
+					}
+				} else {
+					d.NodeBaseSHA = strings.TrimSpace(string(raw))
+					d.NodeStartRunID = owned
+				}
+			}
+			if err == nil && !parallelPrecheckFailed {
+				if stagedBase := l.laneBase(d.LaneID); stagedBase != "" {
+					base = stagedBase
+				}
+				head, headErr := l.revParse(ctx, l.laneTarget(d.LaneID), "HEAD")
+				if headErr != nil {
+					if holdErr := l.holdStageFailed(ctx, d, "inspect parallel lane", headErr); holdErr != nil {
+						err = holdErr
+					} else {
+						parallelPrecheckFailed = true
+					}
+				} else {
+					dirty, dirtyErr := l.git(ctx, l.laneTarget(d.LaneID), "status", "--porcelain", "--untracked-files=all")
+					if dirtyErr != nil {
+						if holdErr := l.holdStageFailed(ctx, d, "inspect parallel lane", dirtyErr); holdErr != nil {
+							err = holdErr
+						} else {
+							parallelPrecheckFailed = true
+						}
+					} else if head != d.NodeBaseSHA || strings.TrimSpace(dirty) != "" {
+						if err = l.refuseParallelBoundary(ctx, d, base, head, result, true); err != nil {
+							return false, false, err
+						}
+						return false, false, nil
+					} else {
+						staged = []Decision{d}
+					}
+				}
+			}
+		} else if err == nil && !parallelPrecheckFailed {
+			staged, err = l.stageDispatches(ctx, []Decision{d}, base, result)
+		}
+		if err != nil {
+			if stoppedByOperator(ctx, err) {
+				_ = l.cancelStaging(context.WithoutCancel(ctx), d)
+			}
+			result.StopItemID, result.StopStep = d.ItemID, "stage"
+			return false, false, err
+		}
+		if len(staged) > 0 {
+			parallel, pErr := l.stageParallel(ctx, staged[0], base)
+			if pErr != nil {
+				if stoppedByOperator(ctx, pErr) || ctx.Err() != nil {
+					_ = l.cancelStaging(context.WithoutCancel(ctx), d)
+					result.StopItemID, result.StopStep = d.ItemID, "stage"
+					return false, false, pErr
+				}
+				if holdErr := l.holdStageFailed(ctx, d, "stage parallel", pErr); holdErr != nil {
+					_ = l.cancelStaging(context.WithoutCancel(ctx), d)
+					result.StopItemID, result.StopStep = d.ItemID, "stage"
+					return false, false, holdErr
+				}
+				staged = nil
+			} else {
+				staged[0] = parallel
+			}
+		}
+		timing.StageMS += time.Since(start).Milliseconds()
+		if len(staged) == 0 {
+			if err := l.cancelStaging(ctx, d); err != nil {
+				result.StopItemID, result.StopStep = d.ItemID, "cancel staging"
+				return false, false, err
+			}
+			return true, false, nil
+		}
+		if err := l.checkStopRequested(ctx); err != nil {
+			if cancelErr := l.cancelStaging(context.WithoutCancel(ctx), d); cancelErr != nil {
+				return false, false, cancelErr
+			}
+			return false, false, err
+		}
+		l.launchRun(ctx, staged[0], at, watched, result)
+	case ActionSettle, ActionJudge:
+		if err := l.checkStopRequested(ctx); err != nil {
+			if releaseErr := l.releaseExamination(context.WithoutCancel(ctx), d); releaseErr != nil {
+				return false, false, releaseErr
+			}
+			return false, false, err
+		}
+		l.launchExamination(ctx, d, work, at, timing, watched)
+	}
+	return false, false, nil
+}
+
 // launchExamination runs the claimed settlement or judgment independently;
 // the completion is a wake trigger and measurement, not its durable outcome.
 func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingWork, at time.Time, passTiming *PassTiming, watched []string) {
-	l.active[d.RunRequest.RunID] = true
+	l.markStepActive(d.ItemID, d.RunRequest.RunID)
 	runCtx, cancel := context.WithCancel(ctx)
 	l.mu.Lock()
 	if l.activeCancels == nil {

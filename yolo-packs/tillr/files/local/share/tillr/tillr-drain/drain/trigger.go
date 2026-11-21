@@ -39,20 +39,28 @@ func (l *Loop) waitForTrigger(ctx context.Context, leases []LaneLease, at time.T
 	if l.pollOnly {
 		completions = nil
 	}
-	select {
-	case c := <-completions:
-		return l.takeCompletion(c, result)
-	case <-timer.C:
-		if err := l.checkStopRequested(ctx); err != nil {
-			if stoppedByOperator(ctx, err) {
-				result.Detail = "the loop was asked to stop while waiting for a trigger"
-				return StopOperatorStop, nil
+	for {
+		select {
+		case c := <-completions:
+			before := result.Dispatched
+			stop, err := l.finishRunStep(ctx, c, result)
+			if stop != "" || err != nil || result.Dispatched != before || l.activeItems[c.itemID] == "" {
+				return stop, err
 			}
-			return "", err
+			// The handoff began this item's examination. Keep listening for its
+			// answer without resetting the existing store/lease wake deadline.
+		case <-timer.C:
+			if err := l.checkStopRequested(ctx); err != nil {
+				if stoppedByOperator(ctx, err) {
+					result.Detail = "the loop was asked to stop while waiting for a trigger"
+					return StopOperatorStop, nil
+				}
+				return "", err
+			}
+			return "", nil
+		case <-ctx.Done():
+			result.Detail = "the loop was asked to stop while waiting for a trigger"
+			return StopOperatorStop, nil
 		}
-		return "", nil
-	case <-ctx.Done():
-		result.Detail = "the loop was asked to stop while waiting for a trigger"
-		return StopOperatorStop, nil
 	}
 }

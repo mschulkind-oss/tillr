@@ -43,16 +43,19 @@ func TestParallelReadersRetainUnjudgedHoldWhenContinuationCannotAnswer(t *testin
 			f, l, steps := parallelFixture(t)
 			steps.wallNode = "-n2"
 			steps.wallAgain = true
+			if missingSession {
+				steps.beforeTerminal = func(req run.Request) error {
+					if req.NodeID == "scout2" && !req.Resume {
+						return os.Remove(filepath.Join(run.NodeDir(l.laneDirPath(req.LaneID), req.RunID), SessionIDFile))
+					}
+					return nil
+				}
+			}
 			result := &LoopResult{}
 			if _, err := l.pass(context.Background(), result); err != nil {
 				t.Fatal(err)
 			}
 			drainOwned(t, l, result)
-			if missingSession {
-				if err := os.Remove(filepath.Join(run.NodeDir(l.laneDirPath("lane-1"), "run-item-a-a1-n2"), SessionIDFile)); err != nil {
-					t.Fatal(err)
-				}
-			}
 			if _, err := l.pass(context.Background(), result); err != nil {
 				t.Fatal(err)
 			}
@@ -142,6 +145,7 @@ func TestResumeParallelReaderUsesOwnSessionAndFence(t *testing.T) {
 		_, err := tx.Exec(`UPDATE items SET allowed_paths='["docs/read-only"]' WHERE item_id='item-a'`)
 		return err
 	})
+	priorResumes := steps.resumes
 	got, err := Resume(context.Background(), ResumeConfig{Root: f.root, Store: f.storePath, LaneRoot: f.laneRoot, Steps: steps}, ResumeSpec{RunID: req.RunID, Request: req})
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +154,7 @@ func TestResumeParallelReaderUsesOwnSessionAndFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.SessionID != ownSession || steps.resumes != 1 || string(afterFence) != string(sharedFence) || len(got.Fence) != 1 || got.Fence[0] != "docs/read-only" {
+	if got.SessionID != ownSession || steps.resumes != priorResumes+1 || string(afterFence) != string(sharedFence) || len(got.Fence) != 1 || got.Fence[0] != "docs/read-only" {
 		t.Fatalf("sibling metadata mixed: %+v resumes=%d", got, steps.resumes)
 	}
 }
@@ -158,6 +162,13 @@ func TestResumeParallelReaderUsesOwnSessionAndFence(t *testing.T) {
 func TestParallelReadersOrphanedUnjudgedReaderRestartsOnlyIt(t *testing.T) {
 	f, l, steps := parallelFixture(t)
 	steps.wallNode = "-n2"
+	// Lose the controller after the wall record, before it can continue the reader.
+	steps.afterTerminal = func(req run.Request) error {
+		if req.NodeID == "scout2" {
+			return errRestartPending
+		}
+		return nil
+	}
 	result := &LoopResult{}
 	if _, err := l.pass(context.Background(), result); err != nil {
 		t.Fatal(err)
@@ -170,6 +181,7 @@ func TestParallelReadersOrphanedUnjudgedReaderRestartsOnlyIt(t *testing.T) {
 		return appendEffect(tx, loopOrphanedKind, work.Decision.RunRequest.RunID, struct{}{}, l.cfg.Now())
 	})
 	steps.wallNode = ""
+	steps.afterTerminal = nil
 	if _, err := l.pass(context.Background(), result); err != nil {
 		t.Fatal(err)
 	}
