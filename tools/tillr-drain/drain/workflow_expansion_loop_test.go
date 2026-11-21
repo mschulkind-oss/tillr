@@ -99,6 +99,11 @@ func TestWorkflowExpansionNarrowFinalScopeDoesNotConvictEarlierNodes(t *testing.
 
 func TestWorkflowExpansionScopeChecksEachNodeDiff(t *testing.T) {
 	f, l, steps := restartGraphFixture(t)
+	// The final worker's inline refusal frees the lane for other queued items.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='closed' WHERE item_id='item-b'`)
+		return err
+	})
 	expansionFile(t, f.root, "scout-then-build", `"stages":[{"id":"one","kind":"agent","seat":"build","access":"write"},{"id":"two","kind":"agent","seat":"build","access":"write","write_scope":["tools/item-a/other/"]}],"edges":[{"from_node":"one","to_node":"two"}]`)
 	runGit(t, f.root, "commit", "-qm", "scope graph")
 	result := &LoopResult{}
