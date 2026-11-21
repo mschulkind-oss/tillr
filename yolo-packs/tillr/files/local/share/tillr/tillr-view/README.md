@@ -201,12 +201,14 @@ defines those outcomes and when the judge's verdicts become records.
 
 The waiting summary counts document questions as one owner-waiting class. Each such
 row names the document and question id to answer. Other held rows name the next
-actor and the required action. A structured push outcome names the heavy runner
-for rebased-tip proof, the repair item for an active conflict, or the owner or
-operator for a hold that needs human action. `push-ok` and `remote-sync-cleared`
-show no waiting row; older push records without a kind keep their failure text
-and retry mover. A
-stored conflict without a document says that no document exists; it is an operator
+actor and the required action. `remote-sync-conflict` names the active repair item
+(`waits on work`) or the owner or operator if escalated (`needs you`). Once a
+repair lands in green mode, `remote-sync-proving` names the heavy runner until
+proof reaches the repaired tip. `remote-sync-worktree-dirty`, `remote-rewritten`,
+`push-patch-move-held`, `push-remote-declined` and `push-failed` name the operator
+and the remedy or retry command. `push-ok` and `remote-sync-cleared` show no
+push waiting row; older push records without a kind keep their failure text and
+retry mover. A stored conflict without a document says that no document exists; it is an operator
 or triage task, not an owner question hidden from Vantage's planning index. Answering
 the saved document and landing that edit releases the question hold on the next sync,
 without a store command.

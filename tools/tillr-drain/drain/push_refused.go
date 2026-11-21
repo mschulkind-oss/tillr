@@ -18,11 +18,9 @@ import (
 // fetched remote tip under the landing lock, and the loop's own rewrite absorption
 // (trunk_rewrite.go) then maps each replaced commit by patch or by the replay's own pairs
 // and carries refs/tillr/green.
-// A conflict, a merge commit among the unpublished commits, a checkout that is not on the
-// trunk or is dirty on a changed path leaves the trunk and checkout unchanged and fails
-// with the operator's commands.
-// Never forced, never a merge commit. The conflict-repair work of
-// docs/design/tillr-refused-push.md is not built.
+// A conflict leaves main, green and the checkout unchanged and files a fenced repair.
+// A merge among unpublished commits or a checkout that cannot be reset safely requires
+// the operator. Never force a push or write a merge commit on main.
 
 // refusedPushError marks a push the remote refused because it has moved.
 type refusedPushError struct{ detail string }
@@ -139,20 +137,13 @@ func (l *Loop) healRefusedPushResult(ctx context.Context, p settings.Push, refus
 			return fail("commit %s is a merge or a root commit", shortSHA(f[0]))
 		}
 		c, parent := f[0], f[1]
-		args := []string{"-C", root, "merge-tree", "--write-tree", "--merge-base=" + parent}
-		// Only continue an interrupted repair here; first-conflict filing is separate.
-		replay := l.recoveredRemoteSync
-		continuing := replay != nil && remote == replay.Stage.Remote && ref == replay.Stage.Ref && remoteTip != replay.Stage.RemoteTip
-		if continuing {
-			args = append(args, "--name-only", "-z")
-		}
-		mt := exec.CommandContext(ctx, "git", append(args, cur, c)...)
+		mt := exec.CommandContext(ctx, "git", "-C", root, "merge-tree", "--write-tree", "--name-only", "-z", "--merge-base="+parent, cur, c)
 		mt.Env = boundaryGitEnv()
 		var mtErr bytes.Buffer
 		mt.Stderr = &mtErr
 		tree, err := mt.Output()
 		if err != nil {
-			if paths, detail := parseMergeTreeConflict(string(tree)); continuing && len(paths) > 0 {
+			if paths, detail := parseMergeTreeConflict(string(tree)); len(paths) > 0 && l.cfg.Store != "" {
 				remoteMsgs, commitMsg, summary := l.collectRemoteSyncContext(ctx, res.base, remoteTip, c)
 				st := remoteSyncState{ItemID: RemoteSyncItemID(remoteTip), Remote: remote, Ref: ref, RemoteTip: remoteTip,
 					MergeBase: res.base, BaseSHA: cur, ConflictCommit: c, ConflictParent: parent,
