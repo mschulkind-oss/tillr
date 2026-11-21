@@ -137,10 +137,10 @@ func TestCloseRefusals(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
-		if _, err := tx.Exec(`CREATE TABLE landings (item_id TEXT, result TEXT)`); err != nil {
+		if _, err := tx.Exec(`CREATE TABLE landings (item_id TEXT, result TEXT, run_id TEXT, trunk_after TEXT)`); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`INSERT INTO landings VALUES ('item_042', 'landed')`)
+		_, err := tx.Exec(`INSERT INTO landings VALUES ('item_042', 'landed', 'run-1', 'commit')`)
 		return err
 	})
 	s.Close()
