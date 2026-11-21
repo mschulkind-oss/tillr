@@ -1,6 +1,7 @@
 package drain
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -178,16 +179,7 @@ func (l *Loop) preserveWorkFromBase(ctx context.Context, lane, runID, base, reas
 			if snapshot.indexNote != "" {
 				p.Summary += "; " + snapshot.indexNote
 			}
-			body, err := json.Marshal(p)
-			if err != nil {
-				return err
-			}
-			args = append(args, "-m", string(body))
-			sha, err := l.git(ctx, target, args...)
-			if err != nil {
-				return err
-			}
-			if _, err := l.git(ctx, target, "update-ref", ref, strings.TrimSpace(sha), ""); err != nil {
+			if err := l.writePreservedRef(ctx, target, p, args...); err != nil {
 				return err
 			}
 			exists = true
@@ -224,15 +216,7 @@ func (l *Loop) preserveWorkFromBase(ctx context.Context, lane, runID, base, reas
 			if err != nil {
 				return err
 			}
-			body, err := json.Marshal(p)
-			if err != nil {
-				return err
-			}
-			sha, err := l.git(ctx, target, "commit-tree", headTree, "-p", head, "-m", string(body))
-			if err != nil {
-				return err
-			}
-			if _, err := l.git(ctx, target, "update-ref", ref, strings.TrimSpace(sha), ""); err != nil {
+			if err := l.writePreservedRef(ctx, target, p, "commit-tree", headTree, "-p", head); err != nil {
 				return err
 			}
 			exists = true
@@ -272,6 +256,25 @@ func (l *Loop) preservationItem(ctx context.Context, runID string) (string, erro
 		return "", fmt.Errorf("identifying dirty run %s: %w", runID, err)
 	}
 	return itemID, nil
+}
+
+// writePreservedRef keeps the full per-file record in the commit message, never in
+// argv or diagnostics. A large record can exceed the OS's per-argument size limit.
+func (l *Loop) writePreservedRef(ctx context.Context, target string, p PreservedWork, args ...string) error {
+	body, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", target}, args...)...)
+	cmd.Stdin = bytes.NewReader(body)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	sha, err := cmd.Output()
+	if err != nil {
+		return Externalf("writing %s (%d files, %d staged files): git commit-tree in %s: %v: %s", p.Ref, len(p.Files), len(p.IndexFiles), target, err, strings.TrimSpace(stderr.String()))
+	}
+	_, err = l.git(ctx, target, "update-ref", p.Ref, strings.TrimSpace(string(sha)), "")
+	return err
 }
 
 func (l *Loop) preservationDisposition(ctx context.Context, runID string) (*PreservedWork, bool, error) {
@@ -481,16 +484,24 @@ func (l *Loop) snapshotCovered(ctx context.Context, target, ref, tree string, fi
 	if len(files) == 0 {
 		return nil
 	}
-	args := []string{"--literal-pathspecs", "diff", "--name-only", "-z", ref, tree, "--"}
-	for _, file := range files {
-		args = append(args, file.Path)
-	}
-	changed, err := l.git(ctx, target, args...)
+	// Intersect the diff with the dirty paths instead of passing an unbounded
+	// path list on argv. Disable rename pairing so both paths remain visible.
+	changed, err := l.git(ctx, target, "diff", "--name-only", "-z", "--no-renames", ref, tree, "--")
 	if err != nil {
 		return err
 	}
-	if changed != "" {
-		return Externalf("lane contains newer dirty contents not covered by %s; retain it rather than discard %s", ref, strings.ReplaceAll(strings.TrimSuffix(changed, "\x00"), "\x00", ", "))
+	paths := make(map[string]bool)
+	for _, name := range strings.Split(changed, "\x00") {
+		paths[name] = true
+	}
+	uncovered := 0
+	for _, file := range files {
+		if paths[file.Path] {
+			uncovered++
+		}
+	}
+	if uncovered > 0 {
+		return Externalf("lane contains newer dirty contents not covered by %s; retain it rather than discard %d changed files", ref, uncovered)
 	}
 	return nil
 }

@@ -60,10 +60,16 @@ func (l *Loop) holdItemFault(ctx context.Context, c Candidate, reason, detail st
 		return err
 	}
 	defer s.Close()
+	f := ItemFault{ItemID: c.ItemID, RunID: c.RunID, LaneID: c.LaneID, Reason: reason, Detail: detail}
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
-		return l.holdItemFaultTx(tx, c, reason, detail)
+		var err error
+		f.Seq, err = l.appendItemFaultTx(tx, f)
+		return err
 	})
 	if err == nil {
+		if reason == ReasonPreserveFailed {
+			detail = preserveFaultDetail(f, l.cfg.Store)
+		}
 		l.reportf("loop: holding %s (%s, run %s, lane %s): %s\n", c.ItemID, reason, c.RunID, c.LaneID, detail)
 	}
 	return err
@@ -74,30 +80,36 @@ func (l *Loop) holdItemFaultTx(tx *store.Tx, c Candidate, reason, detail string)
 }
 
 func (l *Loop) recordItemFaultTx(tx *store.Tx, f ItemFault) error {
+	_, err := l.appendItemFaultTx(tx, f)
+	return err
+}
+
+// appendItemFaultTx returns the active fault's sequence, including on a duplicate.
+func (l *Loop) appendItemFaultTx(tx *store.Tx, f ItemFault) (int64, error) {
 	if err := requireHold(tx.Reader(), f.Reason); err != nil {
-		return err
+		return 0, err
 	}
 	if f.RunID != "" {
 		if err := refuseTerminalItem(tx.Reader(), f.ItemID, f.Reason); err != nil {
-			return err
+			return 0, err
 		}
 	}
 	faults, err := ReadItemFaults(tx.Reader())
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if prior, ok := faults[f.ItemID]; ok {
+		seq := prior.Seq
 		prior.Seq, prior.AtMS = 0, 0
 		if prior == f || prior.Reason == reasonVerifyTriage && f.Reason == reasonVerifyTriage {
-			return nil
+			return seq, nil
 		}
 	}
 	body, err := json.Marshal(f)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	_, err = tx.Append(event.Event{Kind: itemFaultKind, ObjectType: "item", ObjectID: &f.ItemID, Payload: body, At: l.cfg.Now().UTC()})
-	return err
+	return tx.Append(event.Event{Kind: itemFaultKind, ObjectType: "item", ObjectID: &f.ItemID, Payload: body, At: l.cfg.Now().UTC()})
 }
 
 // ClearItemFault acknowledges a diagnosed fault, binding the act to the latest

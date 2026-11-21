@@ -324,10 +324,14 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		}
 		class, where, mover := whyPresentation(d)
 		row := WhyRow{Place: places[it.ItemID], ItemID: it.ItemID, State: it.State, Position: d.Position, Reason: d.Reason, Why: d.Reason, Class: class, Where: where, Mover: mover, Since: "current plan", ClassSource: "planner", WaitingOn: []string{}, Decision: planned}
-		// A fault hold says what is wrong in its recorded detail; a mover such as "the
-		// process the detail names" is read from it.
+		// A fault hold says what is wrong in its recorded detail.
 		if fault, held := itemFaults[it.ItemID]; held && d.Action == ActionHold && d.Reason == fault.Reason && fault.Detail != "" {
-			row.Why += ": " + fault.Detail
+			if fault.Reason == ReasonPreserveFailed && tick.StorePath != "" {
+				row.Why += ": " + preserveFaultDetail(fault, tick.StorePath)
+				row.Mover += "; then " + fault.ClearCommand(tick.StorePath)
+			} else {
+				row.Why += ": " + fault.Detail
+			}
 		}
 		if obsHold, held := obstacleHolds[it.ItemID]; held && d.Action == ActionHold && d.Reason == obsHold.ReasonCode() {
 			row.Why = obsHold.WhyText()
