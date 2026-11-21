@@ -1494,10 +1494,12 @@ missing rather than report that the change failed verification.
   (gate exit 4), not a failed build. This is a host publication task, not a request to choose
   another pin. The twenty-fifth, twenty-seventh and twenty-ninth runs received no host fetch
   results. The twenty-ninth run cited the earlier Git exit 128, not a fresh fetch. The
-  thirty-first, thirty-third and thirty-fifth runs asked for host verification. The thirty-fifth
-  run requested the checks below but reported no host ancestry or fresh fetch results for any
-  pin. The hold therefore remains: the host operator must supply those results. No owner
-  decision is needed, and the earlier exit 128 is not a current result for the todo-list pin.
+  thirty-first, thirty-third and thirty-fifth runs asked for host verification.
+
+  **Answer to the thirty-seventh run (designer, 2026-11-21; the owner may overturn it):**
+  Keep the build on hold for the host operator. The retry supplied neither ancestry results
+  nor fresh fetch results for any pin. That leaves current availability unknown; it does not
+  establish a new fetch failure or call for an owner decision about the pins.
 
   The host operator's next action is to run the checks below and attach the results, not to
   choose a pin. Until then, do not dispatch another build or design run. Once the host evidence
