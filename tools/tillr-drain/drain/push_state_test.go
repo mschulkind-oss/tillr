@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -25,6 +26,60 @@ func lastPushEvent(t *testing.T, f refusalLoopFixture) map[string]any {
 		t.Fatal(err)
 	}
 	return out
+}
+
+func TestBoundaryExcusesPublishedRefs(t *testing.T) {
+	ref := land.PublishedRefPrefix + "origin/main"
+	before := &Boundary{Refs: map[string]string{ref: strings.Repeat("a", 40)}}
+	after := &Boundary{Refs: map[string]string{ref: strings.Repeat("b", 40)}}
+	violations, observed, err := CompareRunObserved(before, after)
+	if err != nil || len(violations) != 0 || len(observed) != 0 {
+		t.Fatalf("CompareRunObserved = (%v, %v, %v), want no boundary changes", violations, observed, err)
+	}
+	if violations, err := Compare(before, after); err != nil || len(violations) != 0 {
+		t.Fatalf("Compare = (%v, %v), want no boundary changes", violations, err)
+	}
+}
+
+func TestPushAdvancesPublishedRefAndConfirmsOnAlreadyPublished(t *testing.T) {
+	p := newPushFixture(t)
+	ctx := context.Background()
+	root := p.f.root
+	dest := "refs/heads/" + TrunkRef
+	pubRef := land.PublishedRefPrefix + "origin/" + TrunkRef
+	checkPublished := func(want string) {
+		t.Helper()
+		if got := runGit(t, p.remote, "rev-parse", dest); got != want {
+			t.Errorf("remote tip = %s, want %s", got, want)
+		}
+		out, err := rawGit(ctx, root, nil, "rev-parse", "--verify", "--quiet", pubRef)
+		if got := strings.TrimSpace(out); err != nil || got != want {
+			t.Errorf("published pointer = (%q, %v), want %s", got, err, want)
+		}
+	}
+
+	if err := pushTrunk(ctx, root, settings.Push{}); err != nil {
+		t.Fatalf("pushTrunk: %v", err)
+	}
+	checkPublished(p.local[2])
+
+	// Tracking is ahead of green. Confirm the tracked tip, not the older green.
+	runGit(t, root, "update-ref", pubRef, p.local[0])
+	if green, err := pushGreen(ctx, root, settings.Push{}); !errors.Is(err, errAlreadyPublished) || green != p.local[1] {
+		t.Fatalf("pushGreen = (%s, %v), want (%s, errAlreadyPublished)", green, err, p.local[1])
+	}
+	checkPublished(p.local[2])
+
+	next := ownerCommit(t, root, "proved.txt")
+	runGit(t, root, "update-ref", GreenRef, next)
+	ownerCommit(t, root, "unproved.txt")
+	if green, err := pushGreen(ctx, root, settings.Push{}); err != nil || green != next {
+		t.Fatalf("pushGreen = (%s, %v), want (%s, nil)", green, err, next)
+	}
+	checkPublished(next)
+	if _, err := os.Stat(filepath.Join(root, ".git", "FETCH_HEAD")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected no fetch, stat FETCH_HEAD: %v", err)
+	}
 }
 
 func pushTestHook(t *testing.T, dir, name, message string) string {

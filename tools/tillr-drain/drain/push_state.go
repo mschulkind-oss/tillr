@@ -66,6 +66,43 @@ func (l *Loop) patchMoveHeld(ctx context.Context) bool {
 	return err == nil && held
 }
 
+// publishedRef names the published pointer of a remote branch.
+func publishedRef(remote, ref string) string {
+	return land.PublishedRefPrefix + remote + "/" + strings.TrimPrefix(ref, "refs/heads/")
+}
+
+// optionalCommit answers the commit a ref names, or "" when it cannot be resolved.
+func optionalCommit(ctx context.Context, root, ref string) string {
+	out, err := rawGit(ctx, root, nil, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// advancePublished points the published pointer at a commit the remote branch now holds.
+func advancePublished(ctx context.Context, root, remote, ref, sha string) error {
+	if _, err := rawGit(ctx, root, nil, "update-ref", publishedRef(remote, ref), sha); err != nil {
+		return fmt.Errorf("recording %s as the published pointer failed: %w", shortSHA(sha), err)
+	}
+	return nil
+}
+
+// confirmPublished records a known remote tip without replacing a pointer read as
+// already at that tip, ahead of it, or diverged from it.
+func confirmPublished(ctx context.Context, root, remote, ref, sha string) error {
+	cur := optionalCommit(ctx, root, publishedRef(remote, ref))
+	if cur != "" {
+		if ahead, err := trunkAncestor(ctx, root, sha, cur); err != nil || ahead {
+			return err
+		}
+		if behind, err := trunkAncestor(ctx, root, cur, sha); err != nil || !behind {
+			return err
+		}
+	}
+	return advancePublished(ctx, root, remote, ref, sha)
+}
+
 // pushCounts counts what the known remote tip lacks, or returns -1 for an unknown count.
 func pushCounts(ctx context.Context, root, remoteTip string) (green, main int) {
 	count := func(ref string) int {
@@ -93,21 +130,13 @@ func (l *Loop) recordPushState(ctx context.Context, what, tip, kind string, stat
 	root := l.cfg.Root
 	if remote, ref, err := pushDestination(ctx, root, l.cfg.PostLanding.Push); err == nil {
 		payload["remote"], payload["ref"] = remote, ref
-		branch := strings.TrimPrefix(ref, "refs/heads/")
-		tracking := "refs/remotes/" + remote + "/" + branch
-		published := land.PublishedRefPrefix + remote + "/" + branch
-		// Ordinary pushes don't advance the published pointer yet. After success,
-		// prefer the tracking ref git updates; otherwise prefer the published pointer.
-		if kind == pushKindOK {
-			published, tracking = tracking, published
+		remoteTip := optionalCommit(ctx, root, publishedRef(remote, ref))
+		if remoteTip == "" {
+			tracking := "refs/remotes/" + remote + "/" + strings.TrimPrefix(ref, "refs/heads/")
+			remoteTip = optionalCommit(ctx, root, tracking)
 		}
-		var remoteTip string
-		for _, candidate := range []string{published, tracking} {
-			if out, err := rawGit(ctx, root, nil, "rev-parse", "--verify", "--quiet", candidate+"^{commit}"); err == nil {
-				remoteTip = strings.TrimSpace(out)
-				payload["remote_tip"] = remoteTip
-				break
-			}
+		if remoteTip != "" {
+			payload["remote_tip"] = remoteTip
 		}
 		g, m := pushCounts(ctx, root, remoteTip)
 		if g >= 0 {

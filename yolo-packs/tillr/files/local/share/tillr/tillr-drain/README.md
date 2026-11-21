@@ -1133,11 +1133,14 @@ conflict, a merge commit among the unpublished commits, a checkout off the trunk
 path fails the push with `mover: operator` and the commands to run by hand. Not built: the
 design's conflict-repair run and escalation and the rest of the published-ref bookkeeping
 ([the design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md)).
-The fetched tip is pinned at `refs/tillr/published/<remote>/<branch>`, and the identity check
-trusts every commit reachable from a pointer under that prefix: a commit another machine
-pushed under its own address does not hold landings with `trunk-foreign-identity`. The
-replayed local commits are not under the pointer, and a foreign commit made here still holds
-until `tillr-drain accept-identity`.
+The drain pins the fetched replay base at `refs/tillr/published/<remote>/<branch>` and
+updates that pointer to the exact commit it successfully pushes in tip or green mode. If the
+remote-tracking ref already contains green, the drain confirms that tracked tip without a fetch
+or push and does not move a newer or divergent pointer back to it. Worker boundary checks
+ignore these pointer updates. The identity check trusts every commit reachable from a pointer
+under that prefix: a commit another machine pushed under its own address does not hold
+landings with `trunk-foreign-identity`. Unpublished replayed commits are not under the pointer;
+an unpublished foreign commit made here still holds until `tillr-drain accept-identity`.
 
 Each `drain.post-landing-action` push event records a `kind` alongside the existing `detail`.
 `push-remote-declined` means the server returned `[remote rejected]`. A failed push that
