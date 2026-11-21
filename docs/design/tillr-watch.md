@@ -7,7 +7,7 @@ stage: DESIGN
 stage-since: 2026-11-20
 tags: [tillr, watch, alerting, lint, workflows, charter, foreground]
 summary: "A dedicated tillr-watch utility and shared core watch engine that observes emergent cross-utility behavior, raises deduplicated episode alerts with attached item timelines, supports one-command persistent foreground agent watches with zero-polling wakeups, and lints charters, workflows, and rules before execution."
-next: "Build the first build of Section 6.6 (the standalone binary, the rule loader, the event-rule evaluator, and eval, wait, seen and the skipped-event count of status), then the rest in order: the remaining patterns, projections and the CLI (the rest of status, daemon, ack, silence, resolve, rule); agent watches (watch add, list, edit, drop), wait --follow and the operator procedure of Section 6.4; tillr watch lint and its gate check"
+next: "Build the second build of Section 6.7 (the lag_behind and duration_without_event patterns, the items, charter and git_refs projections, named scopes, and the rest of status, daemon, ack, silence, resolve and rule); then agent watches (watch add, list, edit, drop), wait --follow, subscribe and the operator procedure of Section 6.4; then tillr watch lint and its gate check, pack delivery, and the rule catalog"
 related:
   - ./landing-principles.md
   - ./run-wall-ruling.md
@@ -22,7 +22,7 @@ vantage:
 
 # Agent Alerting and Process Watchdog (`tillr-watch`)
 
-**Status:** 2026-11-21 — the owner ruled all five questions on 2026-11-21 ([the Decision Ledger](#9-decision-ledger)); nothing is built, and no design is owed before a build. Foreground delivery is settled in [Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3) on the owner's existing background-watcher machinery ([OQ-TW3](#OQ-TW3), [D-TW11](#D-TW11)). The next action is the first build, whose contents [Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15) fixes: the standalone binary, the rule loader, the evaluator for rules that read events only, and `tillr watch eval`, `wait` and `seen`. The remaining patterns and the rest of the CLI, agent watches, and lint follow it. Twenty-six designer's decisions ([D-TW1](#D-TW1) through [D-TW26](#D-TW26)) await his review; D-TW7 is set aside by the ruling on [OQ-TW4](#OQ-TW4).
+**Status:** 2026-11-21 — the owner ruled all five questions on 2026-11-21 ([the Decision Ledger](#9-decision-ledger)). The first build of [Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15) is built: it landed on 2026-11-21 as commit `e85ae973d9`, with the standalone binary, the rule loader, the evaluator for rules that read events only, `tillr watch eval --once`, `wait` and `seen`, and the skipped-event count of `status`. Nothing else is built. The next action is the second build, whose contents [Section 6.7](#67-the-second-build-the-remaining-patterns-projections-and-the-alert-commands-d-tw27) fixes: the two remaining patterns, the projections a rule can read besides events, named scopes, and the rest of `status`, `daemon`, `ack`, `silence`, `resolve` and `rule`. No design is owed before it. Agent watches, `subscribe`, lint, pack delivery and the rule catalog follow it. Thirty-five designer's decisions ([D-TW1](#D-TW1) through [D-TW35](#D-TW35)) await the owner's review; D-TW7 is set aside by the ruling on [OQ-TW4](#OQ-TW4).
 
 ---
 
@@ -165,7 +165,7 @@ Putting alerting and cross-system linting inside an existing binary has two stru
 
 ```text
 # 1. Continuous or one-shot rule evaluation & status
-tillr watch status [--json]                     # active alert episodes + armed agent watches
+tillr watch status [--json]                     # rules, unresolved alert episodes, watchers + (later) armed agent watches
 tillr watch eval [--once]                       # advance cursor once, update episodes, exit 0
 tillr watch daemon                              # zero-polling follower supervised beside tillr-keep
 
@@ -173,7 +173,7 @@ tillr watch daemon                              # zero-polling follower supervis
 tillr watch ack <alert-id> --by <actor> [--note <text>]
 tillr watch silence <alert-id> (--until <dur|ts> | --until-change) [--reason <text>]
 tillr watch resolve <alert-id> --reason <text>
-tillr watch rule list | show <id> | add <file> | tune <id> [--threshold ...] [--receiver ...] | export
+tillr watch rule list | show <id> | add <file> --by <actor> | tune <id> --set <key>=<value>... --by <actor> | reset <id> --by <actor> | export
 
 # 3. Persistent foreground agent watches (Mode B — one command, no prescribed action)
 tillr watch add --when <expr> --note <text> [--owner <id>] [--once | --recurring]
@@ -252,7 +252,7 @@ severity = "warning"                            # "info" | "warning" | "high"
 
 [rule.reads]
 events = ["drain.node-advanced", "drain.refusal", "boundary.check"]   # registered event kinds only; drain.decision is a stored record, read as a projection
-projections = ["items", "work_nodes"]
+projections = ["items", "charter"]            # the subject's items row and the store's charter (D-TW30)
 
 [rule.when]
 group_by = "item_id"                            # one episode per item
@@ -261,7 +261,7 @@ field = "seat"
 pairs = [["plan", "design"], ["work", "verify"]] # extended automatically by workflow.watch.oscillation_pairs
 threshold = 4                                   # 4 consecutive observations alternating between the pair (plan, design, plan, design): fires on the 4th
 window = "4h"
-clear_when = "seat not in pair or item.state in charter.finished"
+clear_when = "item.state in charter.finished"   # judged with the item's state at the evaluation (D-TW30)
 
 [rule.guidance]
 summary = "Item {{subject}} bounced between {{pair_a}} and {{pair_b}} {{count}} times over {{elapsed}}."
@@ -281,7 +281,7 @@ receiver = "foreground"                         # "foreground" | "subscribers"
 also_notify = ["subscribers"]
 ```
 
-A second example shows a `charter:git-landing` rule reading both store events and Git ref projections:
+A second example shows a `charter:git-landing` rule that reads Git refs, with the keys [D-TW28](#D-TW28) fixes for `lag_behind`:
 
 ```toml
 [[rule]]
@@ -291,21 +291,20 @@ scope = "charter:git-landing"
 severity = "high"
 
 [rule.reads]
-events = ["land.landing", "drain.revert", "drain.fixer-proved"]
-projections = ["git_refs:refs/heads/main,refs/tillr/green", "heavy_lock_state"]
+events = ["land.landing", "drain.revert", "drain.fixer-proved"]   # kinds are checked; a lag_behind rule reads no event (D-TW28)
+projections = ["git_refs:refs/heads/main,refs/tillr/green"]
 
 [rule.when]
 group_by = "global"
 pattern = "lag_behind"
-leader = "git.ref('refs/heads/main')"
-follower = "git.ref('refs/tillr/green')"
+leader = "refs/heads/main"
+follower = "refs/tillr/green"
 threshold_commits = 3                           # >= 3 unproved landings ahead of green
 threshold_duration = "15m"                      # OR >= 15m with >= 1 unproved commit
 mode = "any"                                    # fires when either threshold crosses
-clear_when = "unproved_commits == 0"
 
 [rule.guidance]
-summary = "refs/tillr/green lags main by {{unproved_commits}} landings ({{oldest_unproved_age}} elapsed; green={{follower_short}}, main={{leader_short}})."
+summary = "{{follower}} lags {{leader}} by {{count}} landings ({{elapsed}} elapsed; green={{follower_short}}, main={{leader_short}})."
 check = [
   "Check HeavyRunner status in the attached bundle: is .git/tillr-gate/heavy.cleanup-pending present, is heavy.lock held by a dead PID, or did a proof shard die on SIGTERM?",
   "Inspect the newest failing proof log or active fixer-main-* item in the bundle."
@@ -454,6 +453,8 @@ An expression always yields true or false. A comparison, membership or text test
 "By pattern" means the pattern table above decides. For `predicate_match`, `count_in_window`, `consecutive_count` and `alternating_pair`, the keys that table lists for the pattern are the only ones allowed in `[rule.when]` besides `clear_when`. One it marks optional may be left out, every other one is required, and a key that belongs to a different pattern (`reset` in a `count_in_window` rule, `threshold` in a `predicate_match` rule) is refused.
 
 **The two patterns that are loaded and not checked.** `lag_behind` and `duration_without_event` have no evaluator yet, and this document does not fix their keys: the `lag_behind` example above shows a likely set (`leader`, `follower`, `threshold_commits`, `threshold_duration`, `mode`), and `duration_without_event` has no example at all. For a rule with either pattern, the loader checks every key outside `[rule.when]` and the three shared keys `group_by`, `pattern` and `clear_when` exactly as the table states, and accepts every other key in `[rule.when]` with any value, unread. No key is required beyond the shared ones. The build that adds each pattern's evaluator fixes that pattern's keys and makes the loader check them; until then such a rule loads, is not evaluated, and is named on standard error ([Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15)). The one refusal that still reaches inside these rules is a key named `remedy`, which is refused wherever it appears ([OQ-TW2](#OQ-TW2)). Two alternatives were set aside by the designer: inventing a key set for `duration_without_event` now, which would fix a schema nothing has evaluated; and refusing both patterns at load, which would refuse the `unproved-trunk-lag` example above.
+
+**The second build fixes both key sets.** The paragraph above describes the first build, which is the one that is built. [D-TW28](#D-TW28) fixes the keys of `lag_behind` and [D-TW29](#D-TW29) those of `duration_without_event`, both in [Section 6.7](#67-the-second-build-the-remaining-patterns-projections-and-the-alert-commands-d-tw27), and from that build the loader checks them like any other pattern's: a key they do not list is refused. The same section adds one optional key to `[rule.when]`, `fingerprint` ([D-TW32](#D-TW32)), fixes what an entry of `reads.projections` may be ([D-TW30](#D-TW30)), and lets a `lag_behind` rule leave `reads.events` out ([D-TW28](#D-TW28)). The `lag_behind` example above is written with the keys of [D-TW28](#D-TW28), and the first build loads it unread.
 
 **What the loader parses and the first build does not evaluate ([D-TW16](#D-TW16)).** The loader parses every expression, including those of rules it will not evaluate, so the two example rules above must parse. The parser therefore accepts three forms beyond the grammar table, and a rule that uses any of them is not evaluated by the first build:
 
@@ -933,6 +934,315 @@ The build also brings [the restart reference](../reference/tillr-restart.md) int
 
 Nothing in the first build acts on an alert ([OQ-TW2](#OQ-TW2), [OQ-TW4](#OQ-TW4)): it writes `watch.*` events and its own two tables, and prints.
 
+### 6.7 The second build: the remaining patterns, projections and the alert commands ([D-TW27](#D-TW27))
+
+This section, and [D-TW27](#D-TW27) through [D-TW35](#D-TW35), are the designer's decisions of 2026-11-21; the owner has not ruled on them and may overturn any of them. They follow an operator request filed on 2026-11-21 that names the second build: the remaining rule patterns, the projections rules can read besides events, and the rest of `status`, `daemon`, `ack`, `silence`, `resolve` and `rule`. A build worker stopped on that request with three gaps in this document, and each paragraph below that closes one says so: the keys of `lag_behind` and `duration_without_event` ([D-TW16](#D-TW16)), what a named scope reads and when ([D-TW21](#D-TW21)), and what a condition fingerprint is made of ([D-TW20](#D-TW20)). Where this section and the text on the first build disagree about the second build, this section governs.
+
+Two words are used throughout:
+
+- A **projection** is a fact the evaluator reads from somewhere other than the events a rule lists: a row of a store table, the store's charter, or a Git ref.
+- A **level pattern** is a pattern whose condition is read from projections alone and counts no event. `lag_behind` is the only one.
+
+**What the second build contains.**
+
+| Part | Contents |
+| :--- | :--- |
+| Patterns | `lag_behind` ([D-TW28](#D-TW28)) and `duration_without_event` ([D-TW29](#D-TW29)), with the loader checking their keys |
+| Projections | `items`, `charter` and `git_refs`, the operands that read them, and `age()` ([D-TW30](#D-TW30)) |
+| Scopes | Rules scoped to a named charter or a named workflow are evaluated ([D-TW31](#D-TW31)) |
+| Fingerprint | The `fingerprint` key and a computed `condition_fingerprint` ([D-TW32](#D-TW32)) |
+| Faces | `tillr watch ack`, `silence` and `resolve` ([D-TW33](#D-TW33)); the rest of `status`, and `daemon` ([D-TW34](#D-TW34)); `tillr watch rule list`, `show`, `add`, `tune`, `reset` and `export` ([D-TW35](#D-TW35)) |
+| Tables | `watch_rule_overrides` ([D-TW35](#D-TW35)). No column is added to `alert_episodes` or `foreground_delivery` |
+| Event kinds | `watch.alert.acknowledged`, `watch.alert.silenced`, `watch.alert.reopened`, `watch.rule.set` and `watch.rule.reset`, registered with `event.Register` |
+| `wait` | Takes the attachment lock of [D-TW26](#D-TW26), prints the `ack:` line of [Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3), and evaluates with everything in this table |
+
+- The `ack:` line is `  ack: tillr watch ack <alert_id> --by <owner> --store <path>`, where `<owner>` is the handle `wait` runs for and `<path>` is the `--store` argument as `wait` was given it.
+- `eval`, `wait`, `status` and `daemon` take one new option, `--root <dir>`: the Git repository that `git_refs` is read from. It has no default. When the rules to be evaluated include an enabled rule that lists a `git_refs` projection and `--root` was not given, the command prints a refusal naming the rule and the option and exits `1` without evaluating.
+- The `TimelineBundle` keeps the first build's keys and its cutting order ([D-TW19](#D-TW19)). The item metadata, runs, refusals and landings of [Section 6.2](#62-how-the-receiver-gets-the-items-timeline-with-the-alert-d-tw6) are still not added.
+- Delivery is unchanged: `tillr-roll` only, with no pack launcher ([D-TW24](#D-TW24)). The new files of `tools/tillr/watch` are mirrored by `just pack-sync` with the rest of that module.
+- The second build ships no rule file under `config/tillr/watch/`. Its tests carry their own rules, as the first build's do.
+
+**Which rules the second build evaluates.** This replaces the four conditions of [Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15) for the second build. A rule that loads is evaluated when all three of these hold:
+
+1. every entry of its `reads.projections` is `items`, `charter` or a `git_refs:` entry ([D-TW30](#D-TW30));
+2. every operand in its expressions is one the grammar table of [Section 5.1](#51-declarative-rule-schema-d-tw4-oq-tw5) lists, or `age(x)`, or one of the projection operands [D-TW30](#D-TW30) lists;
+3. it is in scope at that evaluation ([D-TW31](#D-TW31)), and none of its projections is unreadable ([D-TW30](#D-TW30)).
+
+A rule that fails the first or second condition is named on standard error when the command starts, as in the first build, with the reason. A bare name (`seat`, `pair`), a call other than `empty()`, `age()` and `git.ref()`, and a projection entry outside the three are the remaining reasons. The third condition is judged at each evaluation, and [D-TW30](#D-TW30) and [D-TW31](#D-TW31) say what is printed.
+
+**The order of one evaluation.** An evaluation does these in order, and a rule sees the same projection values for every event it reads:
+
+1. It reads every Git fact the rules need from `--root`, before it opens a store transaction, so no `git` process runs while the store's write lock is held.
+2. It opens one write transaction. Inside it, it reads the rules stored in the store ([D-TW35](#D-TW35)), the store's charter, and for each rule the `items` and `workflow_selections` rows it needs.
+3. It derives every rule's condition, then reconciles episodes, as the first build does.
+
+#### The `lag_behind` pattern ([D-TW28](#D-TW28))
+
+This closes the first half of the worker's first gap. `lag_behind` compares two Git refs. A leader that is not a Git ref (a file that holds a commit, such as `tillr-roll.commit`) is not covered, and belongs to the build that writes the catalog rule which needs it.
+
+| Key in `[rule.when]` | Required | Value the loader accepts |
+| :--- | :--- | :--- |
+| `group_by` | Yes | `global`, and nothing else |
+| `pattern` | Yes | `lag_behind` |
+| `leader`, `follower` | Yes | Two different strings, each a full ref name that begins `refs/`, holds no space or comma and is at most 255 bytes long. Both must be listed in a `git_refs:` entry of the rule's `reads.projections` |
+| `threshold_commits` | One of the two thresholds | An integer, 1 or more |
+| `threshold_duration` | One of the two thresholds | A duration as `window` is written (`"15m"`), longer than zero |
+| `mode` | No | `any` or `all`. Allowed only when both thresholds are given; `any` when left out |
+
+- Every other key in `[rule.when]` is refused, including `clear_when`, `match`, `reset`, `window`, `threshold` and `fingerprint`. The pattern reads no event, so nothing could be judged against one.
+- In a `lag_behind` rule `reads.events` may be left out or empty. When it is given, each kind is still checked against `event.Kinds()`, and the events are not read. This is the one change to the `reads.events` row of the key table in [Section 5.1](#51-declarative-rule-schema-d-tw4-oq-tw5).
+
+Three facts are read at each evaluation:
+
+- The **lag** is the number of commits reachable from the commit `leader` points to and not from the commit `follower` points to (what `git rev-list --count <follower>..<leader>` prints). It is used as counted even when the follower is not an ancestor of the leader.
+- The **oldest time** is the least committer time among those commits.
+- The **age** is the time of evaluation less the oldest time, and zero when that is negative or the lag is zero.
+
+The rule fires as this table states. With a lag of zero it never fires.
+
+| Thresholds given | Fires when |
+| :--- | :--- |
+| `threshold_commits` only | The lag is `threshold_commits` or more |
+| `threshold_duration` only | The lag is 1 or more and the age is `threshold_duration` or more |
+| Both, `mode = "any"` | Either row above holds |
+| Both, `mode = "all"` | Both rows above hold |
+
+- The one subject is `global`. A new episode's `opened_seq` and `last_observed_seq` are the greatest `events.seq` in the store when the evaluation started (zero in a store with no event), and its `observation_count` is 1.
+- An unresolved episode whose rule still fires is left exactly as it is: nothing is written, and no count goes up. It is resolved, with `resolved_reason = "condition-cleared"`, at the first evaluation where the rule does not fire. There is no clearing event for this pattern, so of the table in [D-TW17](#D-TW17) only the two rows without one apply.
+- In the guidance text, `{{count}}` is the lag, `{{elapsed}}` is the age (whole minutes, or whole seconds under one minute), `{{leader}}` and `{{follower}}` are the two ref names, and `{{leader_short}}` and `{{follower_short}}` are the first 12 characters of each commit's object name. `{{subject}}` is `global`.
+- The bundle's `events` list is empty, and its guidance carries the values above.
+- The build may use any `git` commands that give these three facts. Its tests build a repository whose commits have committer times the test sets, and set the clock.
+
+One example, with the example rule of [Section 5.1](#51-declarative-rule-schema-d-tw4-oq-tw5). `refs/heads/main` is two commits ahead of `refs/tillr/green`, and the older of the two was committed 16 minutes before the evaluation. The lag is 2, which is under `threshold_commits = 3`; the age is 16 minutes, which is over `threshold_duration = "15m"`; `mode` is `any`, so the rule fires and one episode opens for `global`. When `refs/tillr/green` reaches `refs/heads/main`, the lag is zero and the next evaluation resolves the episode.
+
+#### The `duration_without_event` pattern ([D-TW29](#D-TW29))
+
+This closes the second half of the worker's first gap. The pattern reports that something started and the event that should have followed has not arrived for a stated time.
+
+| Key in `[rule.when]` | Required | Value the loader accepts |
+| :--- | :--- | :--- |
+| `group_by` | Yes | As for every event pattern ([D-TW13](#D-TW13), [D-TW22](#D-TW22)) |
+| `pattern` | Yes | `duration_without_event` |
+| `after` | Yes | An expression |
+| `match` | No | An expression |
+| `threshold_duration` | Yes | A duration, longer than zero |
+| `window` | Yes | A duration longer than `threshold_duration` |
+| `clear_when` | No | An expression |
+| `fingerprint` | No | As [D-TW32](#D-TW32) states |
+
+Every other key in `[rule.when]` is refused. Three terms are used:
+
+- A **start event** is a read event for the subject on which `after` holds and `clear_when` does not.
+- An **end event** is a read event for the subject on which `clear_when` holds, or on which `match` holds and `after` does not. With `match` left out, only `clear_when` makes an end event.
+- The subject's **waiting event** is the newest of its start and end events inside `window`, when that newest one is a start event. A subject whose newest such event is an end event, or that has neither inside `window`, has no waiting event.
+
+The rule fires for a subject when it has a waiting event and the time of evaluation less that event's `ts` is `threshold_duration` or more.
+
+- A later start event replaces an earlier one, so the time is always measured from the newest. That makes the one-kind form work: with `after = 'event.kind == "drain.pass"'` (an illustrative kind) and no `match`, the rule fires when the newest `drain.pass` is older than `threshold_duration`.
+- The waiting event is the one counted event. `{{count}}` is 1, `{{elapsed}}` is the time of evaluation less the waiting event's `ts`, and the bundle's `events` list holds that one event. A new episode's `opened_seq` and `last_observed_seq` are its `seq`.
+- A **clearing event**, for [D-TW17](#D-TW17), is any start event or end event for the subject. A start event later than an unresolved episode's `opened_seq` therefore resolves that episode, and when the new wait has itself lasted `threshold_duration` by that evaluation, a new episode opens in the same evaluation, as the last row of the table in [D-TW17](#D-TW17) states.
+- The window rule of [D-TW23](#D-TW23) holds here too, and it sets two limits that are part of the design. A wait that has lasted longer than `window` stops firing, and its episode is resolved, because its start event is no longer read. A subject that has never had a start event cannot fire. A rule that must report a silence of any length needs a `window` at least that long.
+- Skipped events are counted as [D-TW22](#D-TW22) states.
+- Nothing wakes an evaluator when a time passes with no event, so such a rule fires at the first evaluation after the threshold is crossed. `wait` and `daemon` evaluate at least every 60 seconds ([Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3)).
+
+One example, with illustrative payload names. A rule reads `run.allocate` and `run.record`, groups by `run_id`, and has `after = 'event.kind == "run.allocate"'`, `match = 'event.kind == "run.record"'`, `threshold_duration = "30m"` and `window = "6h"`. A run allocated 31 minutes before the evaluation with no `run.record` since has a waiting event, and the rule fires for it. When its `run.record` arrives, that is an end event later than `opened_seq`, and the next evaluation resolves the episode.
+
+#### Projections, their operands and `age()` ([D-TW30](#D-TW30))
+
+This closes the part of the worker's second gap that is about where a projection's value comes from, when it is read and what a missing one means. The second build reads three projections, and a rule must list each one it uses in `reads.projections`.
+
+| Entry in `reads.projections` | What is read | Operands it allows | Their values |
+| :--- | :--- | :--- | :--- |
+| `items` | The row of the `items` table whose `item_id` equals the rule's subject | `item.state`, `item.seat`, `item.waiting_on` | The column's text |
+| `charter` | The store's charter, as `definition.ForReader` returns it; a store with no recorded charter gives the built-in `git-landing` | `charter.name`, `charter.ready`, `charter.blocked`, `charter.closed`; `charter.states`, `charter.finished` | A string for the first four; a list of strings for the last two |
+| `git_refs:<ref>[,<ref>...]` | The commit each named ref points to in the repository given by `--root` | `git.ref("<ref>")` | The commit's full object name, as a string |
+
+**What the loader checks.**
+
+- A `git_refs:` entry is the text `git_refs:` followed by one or more ref names separated by commas, each as [D-TW28](#D-TW28) accepts a ref name. Anything else beginning `git_refs:` is refused.
+- An operand is refused when the rule does not list its projection, when it names a column or member the table above does not list (`item.title`, `charter.hooks`), or, for `git.ref`, when its argument is not one string that a `git_refs:` entry of the rule lists.
+- An `item.` operand is refused in a rule with `group_by = "global"`, which has no item for a subject.
+- A listed projection that no operand uses is allowed.
+- An entry outside the three (`work_nodes`, `heavy_lock_state`) is not refused. The rule loads and is not evaluated, and the reason on standard error names the entry.
+- The call forms `item("<id>").state` and `git.ref()` with anything other than a listed string stay outside this build. `item("<id>")` comes with agent watches, which are its only user.
+
+**When a value is read.** Every projection value is read once per evaluation and is the value as of that evaluation. The store keeps no history of an item's state, of the charter or of a ref, so the value as of an event's time cannot be read.
+
+- `match`, `reset`, `after` and `clear_when` are still judged against each read event, and a projection operand has the same value for every one of them. So `clear_when = 'item.state in charter.finished'` holds on every read event of an item once the item is finished: the count is zero, and the episode resolves at the next evaluation.
+- One sentence of [D-TW17](#D-TW17) does not hold for a rule that reads a projection: an evaluator that ran after every event and one that ran once at the end can leave different episodes behind, because the two read the projection at different times. For a rule that reads events only, the sentence still holds.
+
+**What a missing value means.** Two cases are kept apart:
+
+- **No value.** The subject has no row in `items`, or the column is NULL. The operand then has no value, and a comparison with it is false, as the grammar already states for an absent name. This is ordinary: a subject that is a run or a backend has no item.
+- **Unreadable.** The projection itself could not be read: the `items` or `workflow_selections` table does not exist in the store, the store's charter does not parse, `git` failed or `--root` is not a repository, or a ref the rule lists does not point to a commit. A ref that does not exist is unreadable, not a value: a rule about a ref that is not there has nothing to compare.
+
+A rule with an unreadable projection is **not evaluated at that evaluation**. It reads nothing, and its episodes are neither opened, updated nor resolved, so an alert does not resolve because the fact behind it went missing.
+
+- `eval --once` prints `tillr watch: rule <id> not evaluated: <reason>` on standard error, and its exit code is unchanged. `wait` and `daemon` print that line at the first evaluation where it applies, and again whenever the reason changes; they print nothing when the rule becomes readable.
+- `status` prints `rule <id> unreadable=<reason>` in place of the rule's `skipped` line ([D-TW34](#D-TW34)), with the reason written as a JSON string.
+
+**`age()`.** `age(x)` takes one operand that is an integer of milliseconds since the Unix epoch, which is what `event.ts` holds. It yields the whole seconds from that time to the time of evaluation, as an integer, and can be negative. With any other operand it has no value. `age(event.ts) > 900` holds on an event more than fifteen minutes old. Like a projection, it is read as of the evaluation.
+
+#### Named scopes ([D-TW31](#D-TW31))
+
+This closes the rest of the worker's second gap: which fact names an item's workflow and the store's charter, whether it is read as of the event or the evaluation, and what its absence means. It replaces the third bullet of [D-TW21](#D-TW21) for the second build; rules scoped `core`, `workflow:*` and `charter:*` still apply to everything.
+
+**A rule scoped `charter:<name>`** is in scope at an evaluation when the `name` of the store's charter, read as the `charter` projection is read, equals `<name>` exactly.
+
+- When the store's charter has another name, the rule is not evaluated at that evaluation: it reads nothing and its episodes are left as they are. `eval`, `wait` and `daemon` print `tillr watch: rule <id> not evaluated: the store's charter is <name>` on the terms [D-TW30](#D-TW30) gives for an unreadable rule, and `status` prints `rule <id> out-of-scope=<the charter's name as a JSON string>`.
+- A charter that does not parse is unreadable, as [D-TW30](#D-TW30) states.
+- The rule need not list the `charter` projection. The scope reads the charter by itself.
+
+**A rule scoped `workflow:<name>`** reads only the events of items on that workflow.
+
+- The fact is the `workflow` column of the drain's `workflow_selections` table, which holds one row per item, written when the drain selects the item's workflow, in the form `planned-build@v1`. The `workflow` column of `items` is not used: it is empty for an item that left the choice to the drain.
+- A read event whose subject is a string is **in scope** when `workflow_selections` has a row whose `item_id` equals the subject and whose `workflow` equals `<name>` exactly. Every other read event with a string subject is **out of scope**: the rule does not read it. It is not an observation, it is not counted, it is not a skipped event, and it neither resets nor clears.
+- A read event whose subject is not a string is a skipped event before scope is looked at ([D-TW22](#D-TW22)).
+- The loader refuses a `workflow:<name>` rule whose `group_by` is `global`, which rules out `lag_behind` as well: such a rule has no item to look up. The subject of such a rule must be an item's id, and the loader cannot check that. A rule grouped by a name that holds something else finds no row and reads no event.
+- Membership is read once per evaluation, as of the evaluation, for the same reason as every projection ([D-TW30](#D-TW30)). An item's events from before its workflow was selected, when they are still inside `window`, are read once the row exists.
+- An item with no row has no workflow yet, so no named-workflow rule reads its events. That is an absent value, not an unreadable projection. A store with no `workflow_selections` table is unreadable.
+- `tools/tillr-watch` already links the drain package, so a store it migrates has the table.
+
+One example, the case of [D-TW21](#D-TW21). A `predicate_match` rule scoped `workflow:planned-build@v1` reads `drain.refusal` and groups by `item_id`. Two refusals are inside its `window`, for `item-a`, whose row in `workflow_selections` says `planned-build@v1`, and for `item-b`, whose row says `doc-triage@v1`. The rule opens one episode, for `item-a`, and its skipped count is zero.
+
+#### The condition fingerprint ([D-TW32](#D-TW32))
+
+This closes the worker's third gap: which facts are hashed, how a rule names them, how they are written out before hashing, and what `silence --until-change` does with an episode that has no fingerprint.
+
+**How a rule names the facts.** `[rule.when]` gains one optional key, `fingerprint`: a list of one or more names, each as [D-TW13](#D-TW13) defines a name and written as `group_by` and `field` are, without `event.` in front (`fingerprint = ["step", "detail.check"]`). It is allowed in every pattern except `lag_behind`. A rule without the key has no fingerprint.
+
+**Which event the facts are read from.** The **fingerprint event** is the subject's newest counted event at the evaluation. For `alternating_pair` it is the first event of the newest counted observation, and for `duration_without_event` it is the waiting event.
+
+**How the facts are written out and hashed.** The fingerprint is the SHA-256, in lowercase hexadecimal, of these bytes, for each name of `fingerprint` in the order the rule file writes them:
+
+| The name's value on the fingerprint event | Bytes written |
+| :--- | :--- |
+| A JSON string | The byte `0x01`, then the string's length in bytes as an 8-byte big-endian integer, then the string's UTF-8 bytes |
+| Anything else: missing, null, a number, a Boolean, a list or an object | The byte `0x00` |
+
+Only strings are hashed, for the reason [D-TW22](#D-TW22) gives for subjects: no value of another type is encoded into a string. The rule's `id` and the subject are not hashed, because a fingerprint is only ever compared with another of the same episode.
+
+**When it is stored.** `alert_episodes.condition_fingerprint` is written when an episode opens, at each update in place that moves `last_observed_seq`, and when an episode reopens ([D-TW33](#D-TW33)). An episode of a rule without the key stores the empty string, which still means that no fingerprint was computed and is compared with nothing ([D-TW20](#D-TW20)).
+
+**What `silence --until-change` does.** It copies the episode's `condition_fingerprint` into `silence_on_fingerprint`. For an episode whose `condition_fingerprint` is the empty string it is refused: the command exits `1`, changes nothing, and says that the episode has no fingerprint and that `--until` is the silence it can take. That covers every episode the first build opened, every episode of a rule without the key, and every `lag_behind` episode. Nothing is hashed in place of the missing fingerprint.
+
+One example. A `consecutive_count` rule reads `drain.roll-failed`, groups by `global` and has `fingerprint = ["step"]`. Its episode opens on a failure whose `step` is `"build"` and is silenced with `--until-change`. Two more failures with `step = "build"` leave the fingerprint as it was, and the episode stays silenced. A failure with `step = "smoke"` changes it, and the next evaluation reopens the episode.
+
+Two alternatives were set aside by the designer. Hashing the JSON text of each value needs one canonical JSON encoding for numbers and objects, which nothing here defines. Hashing every counted event's values, and not only the newest, would change the fingerprint each time an old event left `window`, and reopen a silenced alert whose cause had not changed.
+
+#### `ack`, `silence` and `resolve` ([D-TW33](#D-TW33))
+
+Each command takes `--store <path>` (required) and the `alert_id` as its one argument, and does its work in one store transaction. On success it prints `alert <alert_id> <state>` on standard output, with the state it left the episode in, and exits `0`. An `alert_id` that no episode has, a refusal below, and a store error each print the reason on standard error, change nothing and exit `1`. None of the three evaluates rules, and none takes `--rules`.
+
+| Command | Allowed when the episode is | What it writes | Event appended |
+| :--- | :--- | :--- | :--- |
+| `ack <alert-id> --by <actor> [--note <text>]` | `open` | `state = 'acknowledged'`, `acked_by`, `acked_note` (NULL without `--note`), `acked_at` | `watch.alert.acknowledged`, with `by` and `note` |
+| `silence <alert-id> --until <duration or time> [--reason <text>]` | `open`, `acknowledged` or `silenced` | `state = 'silenced'`, `silence_until_ms`, and `silence_on_fingerprint` set to NULL | `watch.alert.silenced`, with `until` (RFC 3339, UTC) and `reason` |
+| `silence <alert-id> --until-change [--reason <text>]` | The same, and `condition_fingerprint` is not empty ([D-TW32](#D-TW32)) | `state = 'silenced'`, `silence_on_fingerprint`, and `silence_until_ms` set to NULL | `watch.alert.silenced`, with `until_change` set to `true` and `reason` |
+| `resolve <alert-id> --reason <text>` | `open`, `acknowledged` or `silenced` | `state = 'resolved'`, `resolved_reason = 'manual'`, `resolved_seq`, `resolved_at` | `watch.alert.resolved`, with `reason` set to `manual` and `note` holding the text |
+
+- `--by` and `--reason` on `resolve` are required and may not be empty. Exactly one of `--until` and `--until-change` is given.
+- A refusal names the state the episode is in, and for an `acknowledged` episode it names `acked_by`. Acknowledging an episode that is already acknowledged is refused, so the second of two agents learns who has it.
+- `--until` takes a duration as `window` is written (`"90m"`), measured from the clock's time, or an RFC 3339 time. A time that is not later than the clock's time is refused.
+- Silencing a `silenced` episode replaces its terms and appends another `watch.alert.silenced` event. Silencing an `acknowledged` episode keeps `acked_by`, `acked_note` and `acked_at`.
+- The text of `--reason` on `silence` and on `resolve` is kept in the event's payload only. No column holds it.
+- Every event the three commands append carries `alert_id`, `rule_id`, `subject_key` and `severity`, read from the episode row. It does not carry the opening event's `receiver`, which is a fact of the rule, and these commands load no rule. `resolved_seq` for a manual resolve is the greatest `events.seq` in the store before the command's own event.
+
+**What the evaluator does with an episode that is not `open`.** An `acknowledged` or `silenced` episode is still the subject's one unresolved episode. It is updated in place and resolved exactly as an `open` one is, and the table in [D-TW17](#D-TW17) applies to it in every row: when a clearing event is read and the rule fires again, the old episode is resolved and the new one is `open`, with its own notice.
+
+**When a silenced episode reopens.** At an evaluation where the rule fires for the subject and no clearing event later than `opened_seq` was read, a `silenced` episode reopens when either of these holds:
+
+- `silence_until_ms` is set and the time of evaluation is that time or later;
+- `silence_on_fingerprint` is set and the fingerprint computed at that evaluation differs from it.
+
+Reopening sets `state = 'open'`, sets `silence_until_ms`, `silence_on_fingerprint`, `acked_by`, `acked_note` and `acked_at` to NULL, stores the new fingerprint, rebuilds the bundle from the condition at that evaluation, and appends `watch.alert.reopened`, whose payload carries `cause`: `silence-expired` or `fingerprint-changed`. `opened_seq` and `episode_num` are unchanged. The reopening event's `seq` is the notice seq, so `wait` prints the episode again ([D-TW14](#D-TW14)). A silenced episode whose rule no longer fires is resolved, not reopened.
+
+**When a manual resolve holds.** A subject whose rule fires and that has no unresolved episode gets a new one ([D-TW13](#D-TW13)), with one exception that makes `resolve` mean something: when the subject's episode with the greatest `episode_num` was resolved with `resolved_reason = 'manual'`, a new episode opens only if its `opened_seq` would be greater than that episode's `resolved_seq`. For an event pattern that means a counted event newer than the resolve. The events that were already counted when the agent resolved the episode do not open it again; one more does.
+
+- For `lag_behind`, `opened_seq` is the store's newest event, so a manual resolve holds only until any event at all is appended. `silence --until` is the command for a lag that the agent has seen and is waiting on.
+- No state is added for this: the evaluator reads the subject's latest episode row, which it already reads to number the next one.
+
+Two alternatives were set aside by the designer. Refusing `resolve` unless the rule no longer fires would make it a command that can only do what the evaluator is about to do. A stored "resolved until" time would be a second silence under another name.
+
+#### The rest of `status`, and `daemon` ([D-TW34](#D-TW34))
+
+**`status`.** `tillr watch status --store <path> --rules <dir> [--root <dir>] [--json]` still writes nothing to the store. It prints three groups of lines on standard output, in this order, and exits `0`:
+
+1. One line for each rule that would be evaluated, in order of `id`: `rule <id> skipped=<n>` as the first build prints it, or `rule <id> unreadable=<reason>` ([D-TW30](#D-TW30)), or `rule <id> out-of-scope=<charter>` ([D-TW31](#D-TW31)).
+2. One line for each unresolved episode, in order of `opened_seq` and then `alert_id`:
+
+   ```text
+   alert <alert_id> rule=<rule_id> subject=<subject_key as a JSON string> state=<state> severity=<severity> opened=<opened_at> observed=<observation_count>
+   ```
+
+   An `acknowledged` episode's line ends with ` by=<acked_by as a JSON string>`. A `silenced` episode's line ends with ` until=<silence_until_ms as a time>` or ` until=change`. Times are RFC 3339 in UTC. Episodes of rules that are no longer loaded are printed too, because the line is read from the row.
+3. One line for each row of `foreground_delivery`, as [D-TW26](#D-TW26) states.
+
+- A table that does not exist in the store (a store no watch command has migrated) is read as having no rows, so groups 2 and 3 are empty. `status` opens the store read-only and creates nothing.
+- `--json` prints one JSON object in place of the lines, with three keys: `rules`, a list of objects holding `id` and one of `skipped` (an integer), `unreadable` (a string) or `out_of_scope` (a string); `alerts`, a list of objects holding `alert_id`, `rule_id`, `subject`, `state`, `severity`, `opened`, `observed`, and `by` or `until` where the line has them (`until` is a time or the string `change`); and `owners`, the list [D-TW26](#D-TW26) states. Each list is in the order of its lines.
+- Armed agent watches are added to `status` by the build that adds agent watches.
+
+**`daemon`.** `tillr watch daemon --store <path> --rules <dir> [--root <dir>]` is the evaluator of `wait` without the delivery: it evaluates when it starts and then on every wakeup, sleeping on `.tillr/state.db-wal` and the 60-second timer exactly as `wait` does.
+
+- It prints nothing on standard output. On standard error it prints what `eval --once` prints, except that a rule's skipped-event line is printed only when its count differs from the count at the previous evaluation in that process.
+- It reads no seen cursor, prints no notice and takes no attachment lock. It runs until it receives `SIGINT` or `SIGTERM`, and then exits `0`. A store error, or a stored rule the loader refuses ([D-TW35](#D-TW35)), ends it with exit `1`.
+- Rule files are loaded once, when it starts; a changed file needs a restart. Stored rules are read at every evaluation.
+- Nothing starts `daemon` in this build, and nothing depends on it: `wait` evaluates the rules itself ([Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3)). Supervising it beside `tillr-keep` is a later change to `tools/tillr-roll`.
+- `tillr watch eval` still requires `--once`. `daemon` is the form that keeps running.
+
+#### Live rules in the store: `tillr watch rule` ([D-TW35](#D-TW35))
+
+The owner ruled that live tuning is stored in `watch_rule_overrides` over the tracked rule files, with `tillr watch rule export` to promote settled values ([OQ-TW5](#OQ-TW5)). The table's shape and the commands below are the designer's.
+
+**A stored rule is a whole rule.** The table holds one complete rule per row, and a stored rule replaces the rule of the same `id` in the rule files entirely. A stored rule whose `id` no file has is an added rule. The **effective rules** are the file rules without those that a stored rule replaces, plus the stored rules, and they are what every command that takes `--rules` evaluates and reports.
+
+```sql
+CREATE TABLE IF NOT EXISTS watch_rule_overrides (
+    rule_id    TEXT PRIMARY KEY,
+    rule_toml  TEXT NOT NULL,     -- one [[rule]] table, complete
+    set_by     TEXT NOT NULL,
+    set_at     INTEGER NOT NULL
+);
+```
+
+- `rule_toml` is one `[[rule]]` table as the TOML encoder writes it. Its bytes are not fixed by this document; what is required is that loading it gives the rule that was stored.
+- A stored rule is checked by the same loader as a file rule, at the command that stores it and again each time it is read. One that is refused when it is read (it was stored by another version of the binary, or names an event kind that is no longer registered) is a refusal like a file's, naming `store` as the file: the command exits `1` without evaluating.
+- `eval`, `wait` and `daemon` read the stored rules inside each evaluation, so a tuned rule takes effect at a running watcher's next evaluation. `status` reads them once. In a store without the table there are none.
+- An episode of a rule that was tuned is treated at the next evaluation like any other: it is updated in place if the tuned rule fires for the subject and resolved if it does not.
+
+Every `rule` command takes `--store <path>` and `--rules <dir>` (both required), and exits `1`, changing nothing, on a refusal.
+
+| Command | What it does |
+| :--- | :--- |
+| `rule list` | Prints one line for each effective rule, in order of `id`: `rule <id> source=<file or store> enabled=<true or false> scope=<scope> pattern=<pattern>` |
+| `rule show <id>` | Prints the effective rule of that `id` as one `[[rule]]` TOML table. An `id` no effective rule has is refused |
+| `rule add <file> --by <actor>` | Loads `<file>` with the loader, and stores each rule in it, replacing a stored rule of the same `id` |
+| `rule tune <id> --set <key>=<value>... --by <actor>` | Takes the effective rule of that `id`, sets each named key, checks the result with the loader, and stores it |
+| `rule reset <id> --by <actor>` | Deletes the stored rule of that `id`, so the file rule, if there is one, is effective again. An `id` with no stored rule is refused |
+| `rule export` | Prints every stored rule as one TOML document of `[[rule]]` tables, in order of `id`, and changes nothing. With no stored rule it prints nothing |
+
+- In `--set <key>=<value>`, `<key>` is a path of keys joined by dots, from the rule's own table (`enabled`, `severity`, `when.threshold`, `when.window`, `delivery.receiver`, `guidance.summary`), and `<value>` is a TOML value (`6`, `"30m"`, `false`, `["foreground"]`). `--set` may be given several times, and all of them are applied before the one check. `id` cannot be set. A key the loader does not allow in that rule is refused by the loader's own check, as it would be in a file.
+- `rule reset` was not in the command list of [Section 4.1](#41-new-utility-tillr-watch-vs-face-of-an-existing-utility-d-tw1-oq-tw1). It is added because without it a stored rule could never be removed, and `export` could not be followed by a return to the file.
+- `add` and `tune` each append one `watch.rule.set` event per rule stored, and `reset` appends one `watch.rule.reset`. The payload carries `rule_id` and `by`; the event's object is the rule (`object_type` `rule`, `object_id` the rule's `id`). So a change of threshold is in the same event stream as the alerts it changes.
+- Promoting a tuned rule is two steps the operator takes: write the output of `rule export` into a file under `config/tillr/watch/rules.d/` and land it, then `rule reset` the `id`. `export` does not write files and does not reset.
+- While a stored rule exists, a change to the file rule of the same `id` has no effect. `rule list` shows `source=store` for it, which is how that is seen.
+
+Two alternatives were set aside by the designer. Storing one row per overridden key leaves `rule add` with nowhere to put a new rule and makes the effective rule a merge that must be re-checked whenever either side changes. One `--threshold` and one `--receiver` flag, as [Section 4.1](#41-new-utility-tillr-watch-vs-face-of-an-existing-utility-d-tw1-oq-tw1) first listed, would need a flag for each key of each pattern.
+
+#### What the second build leaves out
+
+Each of these stays with the later build that owns it:
+
+- agent watches (`tillr watch add`, `list`, `edit`, `drop`, the `agent_watches` table and `watch.fired`), `wait --follow`, the `item("<id>")` call, and the operator procedure of [Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3);
+- `tillr watch subscribe` and the `watch_consumers` table ([Section 6.5](#65-how-other-mechanisms-subscribe-to-the-same-alerts-d-tw9));
+- every projection other than `items`, `charter` and `git_refs`, and a `lag_behind` leader that is not a Git ref;
+- the item metadata, runs, refusals and landings of the `TimelineBundle` ([Section 6.2](#62-how-the-receiver-gets-the-items-timeline-with-the-alert-d-tw6));
+- `watch` blocks in workflow files, `observability` blocks in charters, and `tillr watch lint`;
+- delivery by the pack ([D-TW24](#D-TW24)), and supervising `daemon`;
+- the rule catalog of [Section 5.2](#52-the-16-starting-rules-and-the-2026-11-20-cases-they-catch).
+
+Nothing in the second build acts on an alert. The owner ruled on 2026-11-21: "We don't cover issues. We use this to find the issues and fix them" ([OQ-TW2](#OQ-TW2)). `ack`, `silence` and `resolve` change only the episode's own row, a tuned rule changes only what is reported, and no command here runs a remedy, dispatches a run or moves an item.
+
 ---
 
 ## 7. Non-Git Workflows and `tillr watch lint`
@@ -980,7 +1290,7 @@ None. The owner ruled all five on 2026-11-21; each is a row in [the Decision Led
 
 ## 9. Decision Ledger
 
-The `OQ-TW` rows are the owner's rulings of 2026-11-21, given as Vantage review comments. Every `D-TW` row is a designer's engineering decision, made on 2026-11-20 except [D-TW11](#D-TW11) through [D-TW26](#D-TW26) (2026-11-21), of which [D-TW22](#D-TW22) and [D-TW23](#D-TW23) are the operator's design answers and [D-TW25](#D-TW25) is the designer's mechanism for an operator's request; none has been ruled by the owner, and he may overturn any of them. None of either kind is built.
+The `OQ-TW` rows are the owner's rulings of 2026-11-21, given as Vantage review comments. Every `D-TW` row is a designer's engineering decision, made on 2026-11-20 except [D-TW11](#D-TW11) through [D-TW35](#D-TW35) (2026-11-21), of which [D-TW22](#D-TW22) and [D-TW23](#D-TW23) are the operator's design answers and [D-TW25](#D-TW25) is the designer's mechanism for an operator's request; none has been ruled by the owner, and he may overturn any of them. The first build ([D-TW15](#D-TW15)) is built, and landed on 2026-11-21 as commit `e85ae973d9`; nothing else in either kind of row is built.
 
 | ID | Decision | Provenance & Date | Governing section |
 | :--- | :--- | :--- | :--- |
@@ -1001,17 +1311,26 @@ The `OQ-TW` rows are the owner's rulings of 2026-11-21, given as Vantage review 
 | <a id="D-TW10"></a>**D-TW10** | Provide `tillr watch lint` (wired into `tools/gate/checks/workflows.py` alongside `tillr drain workflow check`) to validate the combined `(charter, workflows, backend-policy, watch-rules)` tuple pre-flight, including `completes: "hook"` `describe` contract checks, seat mappings, unguarded oscillation cycles, signal/stage type-checking, non-empty guidance, and static rejection of item-failing remedies. | Designer's decision; the owner may overturn this (2026-11-20) | [Section 7.1](#71-running-the-same-rules-against-a-non-git-workflow-recorded-verdict-autoqa-custom-loops), [Section 7.2](#72-tillr-watch-lint-checking-a-workflows-whole-configuration-before-it-runs-d-tw10) |
 | <a id="D-TW11"></a>**D-TW11** | Deliver notices to the foreground agent with one harness-neutral primitive, `tillr watch wait`, run as a background watcher by the agent itself. In Claude Code it is a background Bash command started with `--timeout 110m` under the harness's two-hour limit, which exits when a notice is pending or the timeout passes; the exit wakes the agent, which re-arms it. In Pi it is one `background_task` running `tillr watch wait --follow` with no limit, waking the agent through an output watch. The only delivery state is a per-owner seen cursor in the store (`foreground_delivery`), moved only by the agent's confirmation (`--seen-through`, `tillr watch seen`), so a notice is repeated until confirmed and a stopped watcher loses nothing. The watcher executes no remedy ([OQ-TW2](#OQ-TW2)); the agent decides. Amended 2026-11-21 by [D-TW26](#D-TW26): whether a watcher is attached is read from a file lock, not from `waiting_since`. | Designer's decision, made under the owner's ruling on [OQ-TW3](#OQ-TW3); the owner may overturn this (2026-11-21) | [Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3) |
 | <a id="D-TW12"></a>**D-TW12** | The `alternating_pair` `threshold` counts consecutive observations, not moves: `threshold = 4` fires on the fourth observation (`plan, design, plan, design`), which is three moves. Consecutive observations with the same value count as one, an observation outside the pair ends the alternation ([D-TW18](#D-TW18) states the count it leaves), and only observations inside `window` count. Repeats are collapsed only among events inside `window` ([D-TW23](#D-TW23)). | Designer's decision, following an operator request of 2026-11-21 that answered a build worker's question about which count governs; the owner may overturn this (2026-11-21) | [Section 5.1](#51-declarative-rule-schema-d-tw4-oq-tw5) |
-| <a id="D-TW13"></a>**D-TW13** | A rule says which events count with `match` and, for `consecutive_count`, which events set the count to zero with `reset`; with `reset` left out, any read event for the subject on which `match` does not hold sets it to zero. `count_in_window` counts counting events inside `window` and nothing but age removes one; `predicate_match` is the same with the threshold fixed at 1. Counts are derived from the events inside `window` at each evaluation and are not stored. An episode resolves at the evaluation where its rule stops firing. The expression grammar for `match`, `reset` and `clear_when` is the table in Section 5.1. Amended 2026-11-21 by [D-TW22](#D-TW22): only a string value of the `group_by` name is a subject. | Designer's decision, answering a build worker's question of 2026-11-21 about how a rule declares what counts and what resets a consecutive count; the owner may overturn this (2026-11-21) | [Section 5.1](#51-declarative-rule-schema-d-tw4-oq-tw5) |
+| <a id="D-TW13"></a>**D-TW13** | A rule says which events count with `match` and, for `consecutive_count`, which events set the count to zero with `reset`; with `reset` left out, any read event for the subject on which `match` does not hold sets it to zero. `count_in_window` counts counting events inside `window` and nothing but age removes one; `predicate_match` is the same with the threshold fixed at 1. Counts are derived from the events inside `window` at each evaluation and are not stored. An episode resolves at the evaluation where its rule stops firing. The expression grammar for `match`, `reset` and `clear_when` is the table in Section 5.1. Amended 2026-11-21 by [D-TW22](#D-TW22): only a string value of the `group_by` name is a subject. Amended 2026-11-21 by [D-TW33](#D-TW33): after a manual resolve, a new episode opens only on a counted event newer than the resolve. | Designer's decision, answering a build worker's question of 2026-11-21 about how a rule declares what counts and what resets a consecutive count; the owner may overturn this (2026-11-21) | [Section 5.1](#51-declarative-rule-schema-d-tw4-oq-tw5) |
 | <a id="D-TW14"></a>**D-TW14** | `tillr watch wait` prints every pending notice for its owner: an alert episode whose rule's receiver is `foreground`, whose state is `open`, and whose opening event is later than the owner's seen cursor. A second `wait` with no confirmation prints the same notices again; one that confirms with `--seen-through` does not. The seen cursor (`foreground_delivery`, `--seen-through`, `tillr watch seen`) is part of the `wait` primitive and is built with it. | Designer's decision, following an operator request of 2026-11-21 that asked for `wait` ahead of the rest of Section 6.4, and answering a build worker's question of that day about which alerts `wait` selects; the owner may overturn this (2026-11-21) | [Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3) |
-| <a id="D-TW15"></a>**D-TW15** | The first build is the standalone binary, the loader for the whole rule schema, the evaluator for rules that read events only (`predicate_match`, `count_in_window`, `consecutive_count`, `alternating_pair`), episode opening and automatic resolution, and `tillr watch eval --once`, `wait` and `seen`. A loaded rule the first build cannot evaluate is named on standard error, not skipped silently. It ships no catalog rule and acts on no alert. Amended 2026-11-21 by [D-TW22](#D-TW22): it also ships `tillr watch status` in the form that prints each rule's skipped-event count and nothing else. Delivery of the first build is [D-TW24](#D-TW24). | Designer's decision, following an operator request of 2026-11-21 that named the binary, the rule schema, the evaluator and `wait` as the part to build; the owner may overturn this (2026-11-21) | [Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15) |
-| <a id="D-TW16"></a>**D-TW16** | The key table of Section 5.1 lists every key a rule may carry, whether it is required and what value the loader accepts. For the four evaluated patterns, the pattern's listed keys are the only ones allowed in `[rule.when]` besides `clear_when`. A `lag_behind` or `duration_without_event` rule loads with only `group_by`, `pattern` and `clear_when` checked in `[rule.when]`: its other keys there are accepted unread and none is required, because this document does not fix them, and the build that adds each pattern's evaluator does. The loader's parser also accepts bare names, calls and `not in`, so the document's example rules load; a rule using them is not evaluated. The first build renders `{{subject}}`, `{{rule_id}}`, `{{alert_id}}`, `{{count}}`, `{{elapsed}}`, `{{pair_a}}` and `{{pair_b}}` and leaves any other placeholder as written. Amended 2026-11-21 by [D-TW19](#D-TW19): an `id` longer than 128 bytes is refused. | Designer's decision, answering a build worker's question of 2026-11-21 about which keys a `duration_without_event` rule needs in order to load; the owner may overturn this (2026-11-21) | [Section 5.1](#51-declarative-rule-schema-d-tw4-oq-tw5), [Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15) |
+| <a id="D-TW15"></a>**D-TW15** | The first build is the standalone binary, the loader for the whole rule schema, the evaluator for rules that read events only (`predicate_match`, `count_in_window`, `consecutive_count`, `alternating_pair`), episode opening and automatic resolution, and `tillr watch eval --once`, `wait` and `seen`. A loaded rule the first build cannot evaluate is named on standard error, not skipped silently. It ships no catalog rule and acts on no alert. Amended 2026-11-21 by [D-TW22](#D-TW22): it also ships `tillr watch status` in the form that prints each rule's skipped-event count and nothing else. Delivery of the first build is [D-TW24](#D-TW24). Built: it landed on 2026-11-21 as commit `e85ae973d9`. What follows it is [D-TW27](#D-TW27). | Designer's decision, following an operator request of 2026-11-21 that named the binary, the rule schema, the evaluator and `wait` as the part to build; the owner may overturn this (2026-11-21) | [Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15) |
+| <a id="D-TW16"></a>**D-TW16** | The key table of Section 5.1 lists every key a rule may carry, whether it is required and what value the loader accepts. For the four evaluated patterns, the pattern's listed keys are the only ones allowed in `[rule.when]` besides `clear_when`. A `lag_behind` or `duration_without_event` rule loads with only `group_by`, `pattern` and `clear_when` checked in `[rule.when]`: its other keys there are accepted unread and none is required, because this document does not fix them, and the build that adds each pattern's evaluator does. The loader's parser also accepts bare names, calls and `not in`, so the document's example rules load; a rule using them is not evaluated. The first build renders `{{subject}}`, `{{rule_id}}`, `{{alert_id}}`, `{{count}}`, `{{elapsed}}`, `{{pair_a}}` and `{{pair_b}}` and leaves any other placeholder as written. Amended 2026-11-21 by [D-TW19](#D-TW19): an `id` longer than 128 bytes is refused. Amended 2026-11-21 for the second build: [D-TW28](#D-TW28) and [D-TW29](#D-TW29) fix the keys of the two patterns and the loader then checks them, [D-TW30](#D-TW30) fixes the entries of `reads.projections`, and [D-TW32](#D-TW32) adds the `fingerprint` key. | Designer's decision, answering a build worker's question of 2026-11-21 about which keys a `duration_without_event` rule needs in order to load; the owner may overturn this (2026-11-21) | [Section 5.1](#51-declarative-rule-schema-d-tw4-oq-tw5), [Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15) |
 | <a id="D-TW17"></a>**D-TW17** | A clearing event (one on which `clear_when` holds, a resetting event, or an `alternating_pair` observation that ends a run, as [D-TW18](#D-TW18) defines it) ends the episode that was unresolved when it arrived, even when the rule fires again by the next evaluation. An evaluation that reads a clearing event later than an unresolved episode's `opened_seq` resolves that episode, and when the rule fires at that evaluation it also opens a new episode with a new `watch.alert.opened` event, which `tillr watch wait` prints. With no such clearing event the episode is updated in place with no notice. A count that fell only through age and rose again between evaluations keeps its episode. | Designer's decision, answering a build worker's question of 2026-11-21 about an open episode that receives a clearing event and then a new matching event before the next evaluation; the owner may overturn this (2026-11-21) | [Section 5.1](#51-declarative-rule-schema-d-tw4-oq-tw5) |
 | <a id="D-TW18"></a>**D-TW18** | An `alternating_pair` rule with several entries in `pairs` keeps one count per subject, taken from the newest observations whichever entry they belong to: the run is the most recent observations that alternate between the two members of one entry, and no entry is remembered from an earlier run or episode. An observation ends a run, and is the pattern's clearing event, when the count after it is not one more than the count before it. That observation can be the first of the next run, so `a, b, a, b, c, d, c, d` with `threshold = 4` resolves the first episode at `c` and opens a second for `c`, `d` on the fourth observation of the second run. The matched entry is the first in file order whose members are the two newest values. | Designer's decision, answering a build worker's question of 2026-11-21 about which pair sets the clearing boundary when a second pair fires after the first, and whether the observation that clears one pair counts toward the next; the owner may overturn this (2026-11-21) | [Section 5.1](#51-declarative-rule-schema-d-tw4-oq-tw5) |
 | <a id="D-TW19"></a>**D-TW19** | The 8 KiB budget of a `TimelineBundle` is 8,192 bytes of the JSON text stored in `bundle_json`, and it covers the whole bundle, guidance included. A bundle over the budget is cut in a fixed order until it fits: counted events oldest first, then `guidance.do` lines from the last, then `guidance.check` lines from the last, then the end of `guidance.summary`, then the end of the bundle's copy of the subject. The bundle's `omitted` object records what was cut, and `wait` prints it. The loader refuses a rule `id` longer than 128 bytes, so the cutting always ends with a bundle that fits; no rule is refused for long guidance and no episode fails to open. | Designer's decision, answering a build worker's question of 2026-11-21 about a loadable rule whose rendered guidance alone exceeds 8 KiB; the owner may overturn this (2026-11-21) | [Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15) |
-| <a id="D-TW20"></a>**D-TW20** | The first build computes no condition fingerprint. It stores the empty string in `alert_episodes.condition_fingerprint`, which means "not computed" and is compared with nothing. The build that adds `tillr watch silence --until-change`, the column's one reader, fixes which cause facts are hashed, how a rule names them and their encoding. | Designer's decision, answering a build worker's question of 2026-11-21 about which facts and serialization the digest takes for the four event patterns; the owner may overturn this (2026-11-21) | [Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15) |
-| <a id="D-TW21"></a>**D-TW21** | The first build never filters events by a rule's scope, and reads no workflow membership or active charter. A rule scoped `core`, `workflow:*` or `charter:*` applies to every item and is evaluated. A rule scoped to a named workflow or charter loads, is not evaluated, and is named on standard error with that reason; it opens no episode. The build that adds projections fixes the fact that names an item's workflow and the store's charter, whether it is read as of the event or the evaluation, and what an absent fact means. | Designer's decision, answering a build worker's question of 2026-11-21 about a `workflow:planned-build@v1` rule reading `drain.refusal`, an event that does not carry the item's workflow; the owner may overturn this (2026-11-21) | [Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15) |
+| <a id="D-TW20"></a>**D-TW20** | The first build computes no condition fingerprint. It stores the empty string in `alert_episodes.condition_fingerprint`, which means "not computed" and is compared with nothing. The build that adds `tillr watch silence --until-change`, the column's one reader, fixes which cause facts are hashed, how a rule names them and their encoding. Those are fixed by [D-TW32](#D-TW32), under which the empty string keeps this meaning and `--until-change` is refused for an episode that has it. | Designer's decision, answering a build worker's question of 2026-11-21 about which facts and serialization the digest takes for the four event patterns; the owner may overturn this (2026-11-21) | [Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15) |
+| <a id="D-TW21"></a>**D-TW21** | The first build never filters events by a rule's scope, and reads no workflow membership or active charter. A rule scoped `core`, `workflow:*` or `charter:*` applies to every item and is evaluated. A rule scoped to a named workflow or charter loads, is not evaluated, and is named on standard error with that reason; it opens no episode. The build that adds projections fixes the fact that names an item's workflow and the store's charter, whether it is read as of the event or the evaluation, and what an absent fact means. Those are fixed by [D-TW31](#D-TW31), which replaces the rule on named scopes from the second build on. | Designer's decision, answering a build worker's question of 2026-11-21 about a `workflow:planned-build@v1` rule reading `drain.refusal`, an event that does not carry the item's workflow; the owner may overturn this (2026-11-21) | [Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15) |
 | <a id="D-TW22"></a>**D-TW22** | `group_by` groups on JSON string values only. A read event whose `group_by` value is missing, null, or a Boolean, number, list or object belongs to no subject and is not counted by that rule, and no value of another type is encoded into a string. The evaluator counts such skipped events per rule, derived from the rule's read events inside `window` at each evaluation and not stored, and `tillr watch status` shows the count. The first build ships `status` with that one output (`rule <id> skipped=<n>`, writing nothing to the store), and `eval --once` names each rule with a count above zero on standard error. | Operator's design answer of 2026-11-21 to a build worker's question about a `group_by` value that is not a string; the command form and output lines are the designer's. The owner has not ruled and may overturn this (2026-11-21) | [Section 5.1](#51-declarative-rule-schema-d-tw4-oq-tw5), [Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15) |
 | <a id="D-TW23"></a>**D-TW23** | The window is applied first, and nothing outside it is ever consulted, for any pattern. Repeats of one `field` value are collapsed only among events inside `window`, so a run of equal observations begins anew at the edge of `window` and is dated at its first event inside. With `plan` 61 minutes before the evaluation, `plan` 59 minutes before and `design` 1 minute before, `window = "60m"` and `threshold = 2`, the count is 2 and the rule fires. An event older than `window` neither counts, nor collapses a repeat, nor resets, nor clears. | Operator's design answer of 2026-11-21 to a build worker's question about a repeat that straddles the edge of the window, applying [D-TW13](#D-TW13); the owner has not ruled and may overturn this (2026-11-21) | [Section 5.1](#51-declarative-rule-schema-d-tw4-oq-tw5) |
 | <a id="D-TW24"></a>**D-TW24** | The first build is delivered from the source tree by `tillr-roll` only. It registers `watch` in `nouns` (`tools/tillr-cli/main.go`) and in `MODULES` (`tools/tillr-roll/tillr-roll.py`) and nowhere else: it adds no pack launcher, no `program` entry in `yolo-packs/tillr/pack.json`, no pack copy of `tools/tillr-watch`, and no entry in any mirrored-module list or in `tests/pack-sync.test.py`. The library `tools/tillr/watch` is mirrored with the `tools/tillr` module it belongs to. In a workspace served by the pack, `tillr watch` ends with the dispatcher's refusal that `tillr-watch` is not on `PATH`. Pack delivery is one later change by an item whose allowed paths include `tests/pack-sync.test.py` and `tests/tillr-docs.test.py`. What a roll to a revision without `tools/tillr-watch` does with the installed binary is [D-TW25](#D-TW25). | Designer's decision, answering a build worker's obstacle of 2026-11-21 that a pack launcher fails `tests/pack-sync.test.py`, which the build may not write; the owner has not ruled and may overturn this (2026-11-21) | [Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15) |
 | <a id="D-TW25"></a>**D-TW25** | A successful roll to a revision that has no `tools/tillr-watch` removes the installed `tillr-watch` from the install directory, on a deferred installation as well, and a failed roll removes nothing. The roller, `tools/tillr-roll/tillr-roll.py`, does every removal, because it runs from the repository's checkout and so survives a roll to an older revision. It builds `tillr-watch` only when the revision has `tools/tillr-watch`. On an immediate installation it removes the binary after the other binaries are installed. On a deferred installation it writes the marker `tillr-watch.retire` (`commit` and `stage`) beside `tillr-roll.commit`, and removes the binary when it settles the marker: at the start of every roll and after a requested restart is answered, once `tillr-roll.commit` holds that commit and the staging directory is gone. With `--no-request` on a deferred installation the binary therefore stays until the next roll starts. The build adds `tillr-watch` to the programs `activateSchemaRoll` moves. `watch` stays in `MODULES`, and the tests are Go tests in `tools/tillr-drain` that drive the real roller, new to old and old to new, with none added under `tests/`. | From an operator request of 2026-11-21 (the removal on success, nothing removed on failure, both directions tested, `watch` kept in `MODULES`, no test under `tests/`); the mechanism is the designer's decision, answering a build worker's obstacle of 2026-11-21 that nothing named who removes the binary after a deferred roll to a revision that predates it. The owner has not ruled and may overturn either (2026-11-21) | [Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15) |
 | <a id="D-TW26"></a>**D-TW26** | Whether an owner's watcher is attached is asked of the kernel, not read from the store. `tillr watch wait` holds a shared POSIX record lock on byte 0 of `<store path>.watch-attached/<SHA-256 of the owner handle, in hexadecimal>.lock` for the life of its process, and exits `1` when it cannot take it. `tillr watch status` asks with `F_GETLK` whether a write lock would be refused, taking no lock and writing nothing: a refusal is attached, anything else is unattached. A killed watcher's lock is released by the kernel, so it reads as unattached although its cleanup never ran. `waiting_since` becomes the start time of the newest `wait`, shown only when the lock says attached, and is never evidence of attachment. `status` prints one `owner <handle> watcher=attached|unattached ... pending=<n>` line per owner. A heartbeat column, a process ID in the row and a signal handler were set aside. | Designer's decision, answering a build worker's question of 2026-11-21 about a watcher ended by force leaving the same row as a healthy idle one; the owner may overturn this (2026-11-21) | [Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3) |
+| <a id="D-TW27"></a>**D-TW27** | The second build is the `lag_behind` and `duration_without_event` patterns; the `items`, `charter` and `git_refs` projections with their operands and `age()`; rules scoped to a named charter or workflow; a computed condition fingerprint; `tillr watch ack`, `silence` and `resolve`; the rest of `status`; `daemon`; and `tillr watch rule` with the `watch_rule_overrides` table. `eval`, `wait`, `status` and `daemon` gain `--root`, the repository Git refs are read from, and refuse to run without it when an enabled rule lists a `git_refs` projection. An evaluation reads Git before it opens its store transaction. It ships no rule file, is delivered by `tillr-roll` only, and acts on no alert. Agent watches, `subscribe`, lint, pack delivery and the catalog stay with later builds. | Designer's decision, following an operator request of 2026-11-21 that names the remaining patterns, the projections and the rest of `status`, `daemon`, `ack`, `silence`, `resolve` and `rule` as the second build; the owner has not ruled and may overturn this (2026-11-21) | [Section 6.7](#67-the-second-build-the-remaining-patterns-projections-and-the-alert-commands-d-tw27) |
+| <a id="D-TW28"></a>**D-TW28** | `lag_behind` compares two Git refs. Its keys are `group_by` (only `global`), `leader` and `follower` (full ref names listed in the rule's `git_refs:` projection), `threshold_commits`, `threshold_duration` (at least one of the two) and `mode` (`any` or `all`, only with both); every other key, `clear_when` included, is refused, and `reads.events` may be left out. The lag is the number of commits reachable from the leader and not from the follower, and the age is the time of evaluation less the least committer time among them. An unresolved episode whose rule still fires is left untouched, and it resolves at the first evaluation where the rule does not fire. A leader that is not a Git ref is not covered. | Designer's decision, answering a build worker's definition obstacle of 2026-11-21 on the operator's request for the second build, which named the keys of `lag_behind` as a gap; the owner has not ruled and may overturn this (2026-11-21) | [Section 6.7](#67-the-second-build-the-remaining-patterns-projections-and-the-alert-commands-d-tw27) |
+| <a id="D-TW29"></a>**D-TW29** | `duration_without_event` fires for a subject whose newest start or end event inside `window` is a start event at least `threshold_duration` old. Its keys are `group_by`, `after` (required: which read events start the wait), `match` (optional: which end it), `threshold_duration`, `window` (longer than `threshold_duration`), and optionally `clear_when` and `fingerprint`. A later start event replaces an earlier one, and every start or end event is a clearing event for [D-TW17](#D-TW17). The waiting event is the one counted event. A wait longer than `window` stops firing, and a subject with no start event cannot fire. | Designer's decision, answering a build worker's definition obstacle of 2026-11-21 on the operator's request for the second build, which named the keys of `duration_without_event` as a gap; the owner has not ruled and may overturn this (2026-11-21) | [Section 6.7](#67-the-second-build-the-remaining-patterns-projections-and-the-alert-commands-d-tw27) |
+| <a id="D-TW30"></a>**D-TW30** | A rule reads three projections, each listed in `reads.projections`: `items` (the subject's row: `item.state`, `item.seat`, `item.waiting_on`), `charter` (the store's charter: `charter.name`, `ready`, `blocked`, `closed`, `states`, `finished`) and `git_refs:<ref>,...` (`git.ref("<ref>")`, the commit's object name). The loader refuses an operand whose projection the rule does not list. Every value is read once per evaluation, as of the evaluation, and is the same for every event the rule reads. A subject with no row gives no value, so comparisons are false. A projection that cannot be read (a missing table, a charter that does not parse, a failing `git`, a ref that points to no commit) leaves the rule unevaluated at that evaluation with its episodes untouched, named on standard error and in `status`. `age(x)` is the whole seconds from a millisecond time to the evaluation. Any other projection entry loads and is not evaluated. | Designer's decision, answering a build worker's definition obstacle of 2026-11-21 on the operator's request for the second build, which named projection sources, evaluation timing and missing-data behavior as a gap; the owner has not ruled and may overturn this (2026-11-21) | [Section 6.7](#67-the-second-build-the-remaining-patterns-projections-and-the-alert-commands-d-tw27) |
+| <a id="D-TW31"></a>**D-TW31** | A rule scoped `charter:<name>` is evaluated when the store's charter has that name, and is otherwise left unevaluated at that evaluation with its episodes untouched. A rule scoped `workflow:<name>` reads a read event only when the drain's `workflow_selections` table has a row whose `item_id` is the event's subject and whose `workflow` is `<name>` exactly; every other event with a string subject is out of scope and is neither counted nor skipped. Membership is read as of the evaluation. An item with no row is on no workflow yet; a store with no such table is unreadable. A `workflow:<name>` rule grouped by `global` is refused at load. This replaces the named-scope rule of [D-TW21](#D-TW21) from the second build on. | Designer's decision, answering a build worker's definition obstacle of 2026-11-21 on the operator's request for the second build, which named the source, timing and missing-data behavior of a named scope as a gap; the owner has not ruled and may overturn this (2026-11-21) | [Section 6.7](#67-the-second-build-the-remaining-patterns-projections-and-the-alert-commands-d-tw27) |
+| <a id="D-TW32"></a>**D-TW32** | A rule names its cause facts with an optional `[rule.when]` key `fingerprint`, a list of names, allowed in every pattern except `lag_behind`. The fingerprint is the SHA-256, in lowercase hexadecimal, of one record per name in file order, read from the subject's newest counted event: the byte `0x01`, an 8-byte big-endian length and the UTF-8 bytes for a JSON string, and the byte `0x00` for anything else. It is stored when an episode opens, at each update in place that moves `last_observed_seq`, and at a reopening. `tillr watch silence --until-change` is refused for an episode whose stored fingerprint is the empty string, which is every episode of a rule without the key, every `lag_behind` episode and every episode the first build opened; nothing is hashed in its place. | Designer's decision, answering a build worker's definition obstacle of 2026-11-21 on the operator's request for the second build, which named which facts are hashed, their encoding, and what `silence --until-change` does with an empty fingerprint as a gap; the owner has not ruled and may overturn this (2026-11-21) | [Section 6.7](#67-the-second-build-the-remaining-patterns-projections-and-the-alert-commands-d-tw27) |
+| <a id="D-TW33"></a>**D-TW33** | `ack` moves an `open` episode to `acknowledged` and is refused in any other state, naming who holds it. `silence` moves an `open`, `acknowledged` or `silenced` episode to `silenced`, with `--until` a duration or an RFC 3339 time, or with `--until-change`. `resolve` moves any unresolved episode to `resolved` with `resolved_reason = 'manual'`. Each takes `--store` only, appends `watch.alert.acknowledged`, `watch.alert.silenced` or `watch.alert.resolved`, and exits `1` on a refusal. The evaluator updates and resolves an acknowledged or silenced episode as it does an open one. A silenced episode whose rule still fires reopens, with `watch.alert.reopened` and a new notice, when its time has passed or its fingerprint differs. After a manual resolve, a new episode opens only when its `opened_seq` would be greater than the resolved episode's `resolved_seq`. | Designer's decision, made so the second build's three alert commands have stated behavior; the owner has not ruled and may overturn this (2026-11-21) | [Section 6.7](#67-the-second-build-the-remaining-patterns-projections-and-the-alert-commands-d-tw27) |
+| <a id="D-TW34"></a>**D-TW34** | `status` prints, in order, one line per evaluated rule (`skipped=<n>`, `unreadable=<reason>` or `out-of-scope=<charter>`), one `alert ...` line per unresolved episode in order of `opened_seq`, and the owner lines of [D-TW26](#D-TW26); `--json` carries the same under `rules`, `alerts` and `owners`. It writes nothing, and reads a table that does not exist as empty. `daemon` evaluates at start and on every wakeup, as `wait` does, with no delivery: it prints no notice, takes no attachment lock, runs until `SIGINT` or `SIGTERM`, and nothing starts it or depends on it in this build. `eval` still requires `--once`. | Designer's decision, made so the second build's `status` and `daemon` have stated output and behavior; the owner has not ruled and may overturn this (2026-11-21) | [Section 6.7](#67-the-second-build-the-remaining-patterns-projections-and-the-alert-commands-d-tw27) |
+| <a id="D-TW35"></a>**D-TW35** | `watch_rule_overrides` holds one complete rule per row (`rule_id`, `rule_toml`, `set_by`, `set_at`), and a stored rule replaces the file rule of the same `id` entirely. The effective rules are what every command evaluates; running watchers read stored rules at each evaluation. `rule list` and `rule show` print the effective rules, `rule add <file>` stores a file's rules, `rule tune <id> --set <key>=<value>` stores the effective rule with those keys changed, `rule reset <id>` deletes a stored rule, and `rule export` prints every stored rule as TOML and changes nothing. Each takes `--store` and `--rules`, each change checks the result with the loader, and `add`, `tune` and `reset` take `--by` and append `watch.rule.set` or `watch.rule.reset`. `rule reset` and `--set` replace the command list first written in Section 4.1. | Designer's decision on the table's shape and the commands, made under the owner's ruling on [OQ-TW5](#OQ-TW5); the owner may overturn this (2026-11-21) | [Section 6.7](#67-the-second-build-the-remaining-patterns-projections-and-the-alert-commands-d-tw27) |
