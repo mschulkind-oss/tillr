@@ -690,6 +690,54 @@ def run(repo: Path, env, *args):
     )
 
 
+def run_parallel_gates(lanes, env):
+    """Run the fixture gates together, with a private output file for each stream.
+
+    Waiting on one gate must not stop another from writing. With serial communicate()
+    on pipes, a gate that filled its pipe could get stuck holding the old shared record
+    lock while we waited for the other gate to acquire it. Files remove the backpressure
+    independently of which gate starts, finishes or gets collected first.
+    """
+    with contextlib.ExitStack() as stack:
+        running = {}
+        for name, path in lanes.items():
+            stdout = stack.enter_context(tempfile.TemporaryFile(mode="w+t"))
+            stderr = stack.enter_context(tempfile.TemporaryFile(mode="w+t"))
+            proc = stack.enter_context(subprocess.Popen(
+                [sys.executable, str(path / "tools" / "fork-check.py"), "--jobs", "1"],
+                cwd=path, stdout=stdout, stderr=stderr, env=env,
+            ))
+            running[name] = proc, stdout, stderr
+        finished = {}
+        for name, (proc, stdout, stderr) in running.items():
+            code = proc.wait()
+            stdout.seek(0)
+            stderr.seek(0)
+            finished[name] = code, stdout.read(), stderr.read()
+        return finished
+
+
+# A concurrent fixture gate must be able to finish even when its output is collected
+# after another gate's. Check the file descriptors in the children rather than trying
+# to recreate a deadlock using a timeout or assuming a particular kernel pipe capacity.
+with tempfile.TemporaryDirectory() as tmp:
+    lanes = {}
+    for name in ("a", "b"):
+        lane = lanes[name] = Path(tmp) / name
+        (lane / "tools").mkdir(parents=True)
+        (lane / "tools/fork-check.py").write_text(
+            "import os, stat, sys\n"
+            "assert all(stat.S_ISREG(os.fstat(fd).st_mode) for fd in (1, 2)), 'output can back up in a pipe'\n"
+            f"print({name!r} * (1024 * 1024))\n"
+            f"print({name.upper()!r} * (1024 * 1024), file=sys.stderr)\n"
+        )
+    for name, (code, out, err) in run_parallel_gates(lanes, os.environ).items():
+        assert code == 0, err
+        assert out == name * (1024 * 1024) + "\n", name
+        assert err == name.upper() * (1024 * 1024) + "\n", name
+    print("fork-check fixture output: both concurrent gates can finish before capture is read")
+
+
 def waybar_fixture(repo):
     (repo / "config/waybar").mkdir(parents=True, exist_ok=True)
     (repo / "tests/waybar-ai-modules.test.sh").write_text("#!/bin/sh\necho ok fixture\n")
@@ -2542,18 +2590,7 @@ with tempfile.TemporaryDirectory() as tmp:
     uvx_stub = base / "stubs" / "uvx"
     uvx_stub.write_text(uvx_stub.read_text().replace("exit 0", "sleep 2\nexit 0"))
     clear(base, "uvx-calls")
-    running = {
-        name: subprocess.Popen(
-            [sys.executable, str(path / "tools" / "fork-check.py")],
-            cwd=str(path), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
-        )
-        for name, path in lanes.items()
-    }
-    finished = {}
-    for name, process in running.items():
-        out, err = process.communicate(timeout=300)
-        finished[name] = (process.returncode, out, err)
-    for name, (code, out, err) in finished.items():
+    for name, (code, out, err) in run_parallel_gates(lanes, env).items():
         assert code == 0, (name, out, err)
         assert "fork-check: VERIFIED" in out, (name, out)
         assert "REFUSED" not in out, (name, out)
@@ -4343,18 +4380,7 @@ with tempfile.TemporaryDirectory() as tmp:
         lanes[name] = path
     # One check at a time so the overlap is the RUNS', not the scheduler's: the stub's
     # `sleep 2` must still be running when the second run starts.
-    running = {
-        name: subprocess.Popen(
-            [sys.executable, str(path / "tools" / "fork-check.py"), "--jobs", "1"],
-            cwd=str(path), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
-        )
-        for name, path in lanes.items()
-    }
-    finished = {}
-    for name, process in running.items():
-        out, err = process.communicate(timeout=300)
-        finished[name] = (process.returncode, out, err)
-    for name, (code, out, err) in finished.items():
+    for name, (code, out, err) in run_parallel_gates(lanes, env).items():
         assert code == 0, (name, out, err)
         assert "VERIFIED" in out, (name, out)
     folded = record(repo)
