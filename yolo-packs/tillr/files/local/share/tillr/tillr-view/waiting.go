@@ -951,6 +951,10 @@ func decorateOwnerQuestionWaiting(row *waitingRow, c waitingConflict, source van
 // normalizeWaitingMover keeps question answers separate from operational acts,
 // including rows read from older stores that named only an owner.
 func normalizeWaitingMover(row *waitingRow) {
+	if row.Observation == "post-landing:push" && (row.Class == "needs you" ||
+		strings.HasPrefix(row.Mover, "the heavy runner;") || strings.HasPrefix(row.Mover, "sync-remote-")) {
+		return // Structured push rows already name their mover.
+	}
 	if row.Class == "ready" || row.Class == "moving" || row.Class == "done" {
 		return
 	}
@@ -995,6 +999,12 @@ func printWaiting(w io.Writer, rows []waitingRow) error {
 			continue
 		}
 		switch {
+		case row.Observation == "post-landing:push" && row.Class == "needs you":
+			if strings.HasPrefix(row.Mover, "owner;") {
+				owner++
+			} else {
+				operator++
+			}
 		case (strings.HasPrefix(row.Mover, "owner; answer ") && strings.Contains(row.Mover, "#OQ-")) || (strings.HasPrefix(row.Why, "obstacle-owner:") && strings.HasPrefix(row.Mover, "owner;")):
 			owner++
 		case strings.HasPrefix(row.Mover, "design seat;") || strings.Contains(row.Mover, "design seat"):
@@ -1062,13 +1072,15 @@ func waitingGateStall(r *store.Reader, itemID string) (string, error) {
 }
 
 // Report the latest result of each action; a successful retry clears its warning.
+// Structured push results name a mover; older outcomes keep the detail-based row.
 func appendPostLandingWaiting(r *store.Reader, out []waitingRow) ([]waitingRow, error) {
 	rows, err := r.Query(`WITH actions AS (
-    SELECT seq, json_extract(payload,'$.action') AS action, object_id, json_extract(payload,'$.detail') AS detail, COALESCE(json_extract(payload,'$.what'),'') AS what
+    SELECT seq, json_extract(payload,'$.action') AS action, object_id, json_extract(payload,'$.detail') AS detail, COALESCE(json_extract(payload,'$.what'),'') AS what,
+      COALESCE(json_extract(payload,'$.kind'),'') AS state, payload, ts
     FROM events WHERE kind = 'drain.post-landing-action'
    ), latest AS (SELECT max(seq) AS seq FROM actions GROUP BY action)
-   SELECT action, object_id, detail, what FROM actions JOIN latest USING(seq)
-   WHERE detail <> '' ORDER BY action`)
+   SELECT action, COALESCE(object_id,''), COALESCE(detail,''), what, state, payload, ts FROM actions JOIN latest USING(seq)
+   WHERE detail <> '' OR (action = 'push' AND state <> '') ORDER BY action`)
 	if isMissingTable(err) {
 		return out, nil
 	}
@@ -1077,9 +1089,26 @@ func appendPostLandingWaiting(r *store.Reader, out []waitingRow) ([]waitingRow, 
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var action, tip, detail, what string
-		if err := rows.Scan(&action, &tip, &detail, &what); err != nil {
+		var action, tip, detail, what, state, payload string
+		var ts int64
+		if err := rows.Scan(&action, &tip, &detail, &what, &state, &payload, &ts); err != nil {
 			return nil, err
+		}
+		if action == "push" && state != "" {
+			if state == "push-ok" || state == "remote-sync-cleared" {
+				continue
+			}
+			ev, err := parsePushEvent(payload, tip, ts)
+			if err != nil {
+				return nil, err
+			}
+			if class, mover, why, ok := ev.pushRow(); ok {
+				out = append(out, waitingRow{Observation: "post-landing:push", Class: class, Where: "push", Why: why, Mover: mover, Since: ev.since(), ClassSource: "store"})
+				continue
+			}
+		}
+		if detail == "" {
+			continue
 		}
 		why := "push failed"
 		if action == "roll" {
