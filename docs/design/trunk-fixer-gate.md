@@ -5,7 +5,7 @@ stage: DESIGN
 updated: 2026-11-21
 tags: [tillr, gate, landing, drain, forks, design]
 summary: "The trunk fixer's gate stops being the untiered gate over every landing since the last green commit. It becomes the gate any candidate gets, plus the checks the fixer names, run on the fixer's tree. A fork check that is red only because an upstream published a release is reported as one rebase request per fork and release and refuses nobody whose change does not touch that fork; a fork that follows a branch head gets the same acquittal and no request. One question is open for the owner: whether he is told, beyond the queue, when an upstream moves."
-next: "Amend D-FG3 to say who rebases a fork onto a new release and whether the pin update is its own delivery (a design correction is queued), then build the drift rule. No owner-facing row or hold is built for drift."
+next: "Build the drift rule (D-FG3 and D-FG4). A rebase request is filed only for a release follower delivered as a patch branch. No owner-facing row or hold is built for drift."
 depends-on:
   - landing-principles.md
   - gate-rework.md
@@ -244,8 +244,14 @@ candidate's base, which the replay step already does for every red check.
 No trunk fixer is filed for drift, because no trunk commit is at fault and the proof does not
 judge these checks.
 
-The table reads the same for every fork, whatever it follows. What is filed depends on what the
-fork follows, and that is [the next two parts](#a-fork-that-follows-a-branch-head).
+The table's first, second and fourth rows read the same for every fork, whatever it follows and
+however it is delivered. What is filed, and what the third row does, depend on both:
+
+| The fork | What is filed | Third row (the candidate touches the fork) |
+| :--- | :--- | :--- |
+| Follows releases and is delivered as a patch branch | One rebase request | The candidate waits on the request |
+| [Follows a branch head](#a-fork-that-follows-a-branch-head) | Nothing | Ordinary refusal |
+| [Still commits a series directory](#a-fork-that-still-commits-a-series-directory) | Nothing | Ordinary refusal |
 
 **The rebase request.**
 
@@ -266,11 +272,17 @@ fork follows, and that is [the next two parts](#a-fork-that-follows-a-branch-hea
   recorded commit and whose gate passed `patch-branch-inv2` against that release, or when a
   newer request replaces it. Delivering the patch branch alone does not close it
   ([why](#who-rebases-and-how-the-recorded-commit-follows)).
-- **It is filed only for a fork that follows releases.** That is a fork whose pack declaration
-  carries no `follow` key and no pin
-  ([the follow modes](../pi/forks.md#roll-forward-on-releases-never-on-a-branch-head)), which
-  the target line reports as the kind `release`
-  ([which checks can be drift](#which-checks-can-be-drift)).
+- **It is filed only for a fork that follows releases and is delivered as a patch branch.**
+  Both tests are read from the tree, not from the wording of the declaration:
+  1. *Follows releases* means the target line reports the kind `release`
+     ([which checks can be drift](#which-checks-can-be-drift)). A declaration with no `follow`
+     key, with `"follow": "release"` and with `"follow": "release:<prefix>"` all report that
+     kind (`follow_is_release` in `bin/pi-forks`), and all three count. The absence of the key
+     is not the test.
+  2. *Delivered as a patch branch* means the fork's entry in `bin/pi-forks.list` names
+     `patch/<name>` (`series_is_branch` in `bin/pi-forks`), which is every fork today.
+     [A fork that still commits a series directory](#a-fork-that-still-commits-a-series-directory)
+     gets no request.
 
 ### Which checks can be drift
 
@@ -391,6 +403,61 @@ Rejected, as the designer's decision:
   what the lander will rewrite on a published branch, which is a separate design.
 - **Leaving head-follower drift on the ordinary path in whole.** A change that does not touch
   the fork would still be refused for it, which is the incident this design answers.
+
+### A fork that still commits a series directory
+
+Added on 2026-11-21 to answer a build worker's finding; the tree was read at `c09a7232ef`. It is
+the designer's decision, part of `D-FG3`, and the owner may overturn it.
+
+The finding: this design said the table "reads the same for every fork" and gave the request's
+repository part a fence of the one path `yolo-packs/fork-pins/<fork>`. For a fork whose list
+entry names a series directory, `load_series` in `bin/pi-forks` takes its `read_series` branch
+and never reads that file, so the prescribed change cannot make `patch-branch-inv2` pass. The
+worker reproduced it on 2026-11-21 on a fixture fork with a committed series:
+`bin/pi-forks patch-branch merge-check --candidate --fetch --fork example` exited 1 with
+`main conflicts with refs/tags/v2.0.0 (INV-2)` both before and after the patch ref and the
+record were moved, while `git merge-tree --write-tree` of the rebased head and the release
+exited 0. The same worker found that `bin/pi-forks patch-branch target` prints the kind
+`release` with no `follow` key and with `"follow": "release:v"`, which the filing rule's
+earlier wording ("no `follow` key") did not cover. Both were the designer's errors.
+
+The rule for a fork whose entry in `bin/pi-forks.list` does not name `patch/<name>`:
+
+| The check on the base | The candidate's diff and the fork's own paths | Outcome |
+| :--- | :--- | :--- |
+| Passes | Any | The candidate's own failure. Ordinary refusal |
+| Red, same answer | Do not intersect | Drift. The candidate lands with the failure recorded as inherited. **No item is filed** |
+| Red, same answer | Intersect | Ordinary refusal, returned to the candidate's worker, as today. No item is filed and nothing is waited on |
+| Could not judge | Any | Not drift and not a verdict, as for any fork |
+
+- **The inherited record** names the check, the fork and the release, as for any release
+  follower.
+- **The loop prints one line** per fork and release, the first time a candidate lands with that
+  drift inherited. That line and the candidate's verdict are the whole notice.
+- **No rebase request, no trunk fixer and no hold** come from it.
+- **The rebase stays the operator's step**, `bin/pi-forks rebase`, which re-exports the series
+  directory, by the existing rule in [the fork workflow](../pi/forks.md).
+- **The build tests the delivery form before it files.** A request is filed only after
+  `series_is_branch` holds for the fork; the target kind `release` alone is not enough.
+
+**Why no request is filed.** The request's repository part is defined as a one-file change to
+the record, and for this delivery form the check does not read the record. The item would
+deliver a fork head and land a record change, and the check would still be red, so the request
+could never close and every candidate held behind it would wait with no mover. This is the same
+reasoning as for [a head follower](#a-fork-that-follows-a-branch-head).
+
+**What this leaves undone.** No fork is in this state: `rg -v '^#' bin/pi-forks.list` on
+2026-11-21 lists eight forks, each delivered as `patch/<name>`. A repository part that
+rewrites a committed series directory inside a drain run is not designed here.
+
+Rejected, as the designer's decision:
+
+- **A repository part that re-exports the series directory.** The only writer of a series is
+  `bin/pi-forks export`, which is refused in a drain run, and this design keeps that refusal.
+  It would be a second delivery route built for a form no fork uses.
+- **Filing the request anyway, with the record as its fence.** Shown above not to close.
+- **Leaving this drift on the ordinary path in whole.** A change that does not touch the fork
+  would still be refused for it.
 
 ### Who rebases, and how the recorded commit follows
 
@@ -571,8 +638,9 @@ Settled here, as the designer's decision:
 | The operator | The loop prints one line when the request is filed, and the waiting face lists the request with its fork and release |
 | A fixer's worker | Nothing. The drift is not in its brief unless its fence includes that fork |
 
-For [a fork that follows a branch head](#a-fork-that-follows-a-branch-head) no request exists.
-The inherited record on the candidate and the loop's one line are the notice.
+For [a fork that follows a branch head](#a-fork-that-follows-a-branch-head) and for
+[a fork that still commits a series directory](#a-fork-that-still-commits-a-series-directory)
+no request exists. The inherited record on the candidate and the loop's one line are the notice.
 
 The owner is told by the queue only. He ruled this on 2026-11-21 ([OQ-FG1](#OQ-FG1)): the rebase
 request appears in the queue and on the waiting list like any item, and he is asked something only
@@ -632,6 +700,6 @@ this design; the owner may overturn each by comment. The [OQ-FG1](#OQ-FG1) row i
 | <a id="OQ-FG1"></a>[OQ-FG1](#OQ-FG1) | Owner ruling: when an upstream release breaks a patch series the owner is told by the queue only. No owner-facing row and no hold. | 2026-11-21 | [Who is told when an upstream moves](#who-is-told-when-an-upstream-moves) | — |
 | `D-FG1` | A trunk fixer's gate is the ordinary gate over its own diff plus the checks it names, run on its tree. The untiered range since the last green is removed. Structural fix. (Designer's decision.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate) | Built |
 | `D-FG2` | A fixer stays excluded from acquittal only for the checks it names; for any other check it is judged as any candidate is, except that it is never held behind itself or behind a fixer that waits on it: such a check is attached to the fixer and the refusal returns to its worker. No second fixer is filed for the same commit. (Designer's decision; the exception was added on 2026-11-21 to answer a build worker's finding that the ordinary route made a fixer wait on itself.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate), [A fixer never waits on itself](#a-fixer-never-waits-on-itself) | Built |
-| `D-FG3` | A `patch-branch-inv2` check red on a candidate and on its base with the same refusal against the same target ref, on a candidate whose diff does not include that fork's own paths, is drift: the candidate lands with the failure inherited and one rebase request per fork and release is filed. No trunk fixer is filed for drift. The request is filed only for a fork that follows releases. For a fork that follows a branch head the candidate still lands with the failure inherited, no item is filed, one loop line is printed, and a candidate that touches that fork is refused as today, because the lander delivers a rewritten patch branch only for a release. Structural fix. (Designer's decision, carrying out `D-GR12` of the gate rework, itself a designer's decision; the head-follower rule was added on 2026-11-21 to answer a build worker's finding that `pi-background-tasks` follows `head`. Narrowed on 2026-11-21, as the designer's decision, to answer a build worker's finding that `series` is planned per pack without a fetch and that `reads_upstream` matches checks that read no upstream: only `patch-branch-inv2` can be drift, selected by kind name; the fork is the check's `--fork` argument and the release is the ref `bin/pi-forks patch-branch target` prints; `series`, `patch-branch-inv3`, `forks-check`, `build` and `fork-quality` are never drift; the ordinary gate's plan is unchanged. Amended on 2026-11-21, as the designer's decision, to answer a build worker's finding that the lander delivers a rebased head without rebasing and that the check reads `yolo-packs/fork-pins/<fork>`, not the patch branch: the request's worker rebases the fork in its lane checkout with `git rebase --onto <release> <old base> main`; the request is a mixed item whose fork part is delivered first and whose repository part then rewrites `yolo-packs/fork-pins/<fork>`; the lander fetches each delivered fork commit into the gate's copy of the fork; the request closes when the repository part lands. The operator takes no step: the request that opened the amendment cites rule 7 of the unattended drain as an owner ruling of 2026-11-21.) | 2026-11-21 | [Upstream drift](#upstream-drift-is-a-rebase-request-not-a-refusal), [Which checks can be drift](#which-checks-can-be-drift), [A fork that follows a branch head](#a-fork-that-follows-a-branch-head), [Who rebases, and how the recorded commit follows](#who-rebases-and-how-the-recorded-commit-follows) | — |
+| `D-FG3` | A `patch-branch-inv2` check red on a candidate and on its base with the same refusal against the same target ref, on a candidate whose diff does not include that fork's own paths, is drift: the candidate lands with the failure inherited and one rebase request per fork and release is filed. No trunk fixer is filed for drift. The request is filed only for a fork that follows releases and is delivered as a patch branch. For a fork that follows a branch head the candidate still lands with the failure inherited, no item is filed, one loop line is printed, and a candidate that touches that fork is refused as today, because the lander delivers a rewritten patch branch only for a release. Structural fix. (Designer's decision, carrying out `D-GR12` of the gate rework, itself a designer's decision; the head-follower rule was added on 2026-11-21 to answer a build worker's finding that `pi-background-tasks` follows `head`. Narrowed on 2026-11-21, as the designer's decision, to answer a build worker's finding that `series` is planned per pack without a fetch and that `reads_upstream` matches checks that read no upstream: only `patch-branch-inv2` can be drift, selected by kind name; the fork is the check's `--fork` argument and the release is the ref `bin/pi-forks patch-branch target` prints; `series`, `patch-branch-inv3`, `forks-check`, `build` and `fork-quality` are never drift; the ordinary gate's plan is unchanged. Amended on 2026-11-21, as the designer's decision, to answer a build worker's finding that the lander delivers a rebased head without rebasing and that the check reads `yolo-packs/fork-pins/<fork>`, not the patch branch: the request's worker rebases the fork in its lane checkout with `git rebase --onto <release> <old base> main`; the request is a mixed item whose fork part is delivered first and whose repository part then rewrites `yolo-packs/fork-pins/<fork>`; the lander fetches each delivered fork commit into the gate's copy of the fork; the request closes when the repository part lands. The operator takes no step: the request that opened the amendment cites rule 7 of the unattended drain as an owner ruling of 2026-11-21. Amended again on 2026-11-21, as the designer's decision, to answer a build worker's finding that a fork with a committed series directory never reads `yolo-packs/fork-pins/<fork>`, so the request's repository part could not make the check pass, and that `follow: release` and `follow: release:<prefix>` also report the kind `release`: "follows releases" is the target kind `release`, whatever the declaration's `follow` key says; a request is filed only when the fork's entry in `bin/pi-forks.list` also names `patch/<name>`; a fork that still commits a series directory gets the head follower's outcome, with the release named in the inherited record. No fork is in that state today.) | 2026-11-21 | [Upstream drift](#upstream-drift-is-a-rebase-request-not-a-refusal), [Which checks can be drift](#which-checks-can-be-drift), [A fork that follows a branch head](#a-fork-that-follows-a-branch-head), [A fork that still commits a series directory](#a-fork-that-still-commits-a-series-directory), [Who rebases, and how the recorded commit follows](#who-rebases-and-how-the-recorded-commit-follows) | — |
 | `D-FG4` | A fork check that could not judge is neither drift nor a verdict. It holds only a candidate whose diff reaches it or a fixer that names it, by the holds the tree already has: an ordinary candidate is held as `gate-no-verdict` and gated again, or as a gate fault when the gate states its own error; a fixer's named check is a gate fault. No gate answer files a tooling-defect item. The one thing to build is that "could not judge" on the base is never classified as drift. (Designer's decision; corrected on 2026-11-21 to answer a build worker's finding that the "tooling-defect path" the earlier wording named is entered only by a worker's reported obstacle.) | 2026-11-21 | [The checks that could not judge](#the-checks-that-could-not-judge) | — |
 | `D-FG5` | The queue, the affected candidates and the operator's surfaces are told of drift by the rebase request and one loop line; for a fork that follows a branch head, by the inherited record and one loop line. Nothing owner-facing is built until [OQ-FG1](#OQ-FG1) is ruled. (Designer's decision.) | 2026-11-21 | [Who is told](#who-is-told-when-an-upstream-moves) | — |
