@@ -257,6 +257,12 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 }
 
 func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, def definition.Definition) ([]record.Envelope, error) {
+	return planWithAttemptOrdinals(r, tick, policy, questions, def, nil)
+}
+
+// planWithAttemptOrdinals can also return the next dispatch ordinals for read faces.
+// They are derived from the same run evidence as the plan, not from its hold decisions.
+func planWithAttemptOrdinals(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, def definition.Definition, nextOrdinals *map[string]int) ([]record.Envelope, error) {
 	if err := tick.check(); err != nil {
 		return nil, err
 	}
@@ -498,6 +504,9 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 		if err != nil {
 			return nil, err
 		}
+	}
+	if nextOrdinals != nil {
+		*nextOrdinals = attempts
 	}
 	faults, err := ReadItemFaults(r)
 	if err != nil {
@@ -910,7 +919,7 @@ type planner struct {
 	commentHolds map[string]string
 	documentRoot string
 	attempts     map[string]int
-	// nodeCounts is each item's highest node-run attempt, which an operator retry reuses.
+	// nodeCounts is each item's highest attempt backed by a node run, which an operator retry reuses.
 	nodeCounts map[string]int
 	// requests holds the ids of filed requests, which have no item block.
 	requests map[string]bool
@@ -1827,7 +1836,10 @@ func (p *planner) nextAttempt(id string) int {
 func readAttemptInputs(r *store.Reader, hasNodes bool, id string, priors []priorRun) (int, int, error) {
 	var count int
 	if hasNodes {
-		if err := r.QueryRow(`SELECT COALESCE(MAX(attempt),0) FROM node_runs WHERE item_id=?`, id).Scan(&count); err != nil {
+		// Claiming a node writes node_runs before a run exists. Neither a
+		// claim nor its supersession is evidence that an attempt ran.
+		if err := r.QueryRow(`SELECT COALESCE(MAX(n.attempt),0) FROM node_runs n
+ JOIN runs r ON r.run_id=n.run_id AND r.item_id=n.item_id WHERE n.item_id=?`, id).Scan(&count); err != nil {
 			return 0, 0, readFailure(err)
 		}
 	}

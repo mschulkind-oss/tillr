@@ -31,6 +31,24 @@ test("distinguishes observed, none and not recorded children within the parent",
  expect(within(screen.getByRole("article", {name:"Node c"})).getByText("child sessions: not recorded")).toBeTruthy();
  expect(screen.getByRole("region", {name:"Item graph"}).textContent).not.toContain("dispatched");
 });
+test("shows an interrupted run and its restart under one attempt heading", () => {
+ const first = "run-item-seed-02-a2";
+ const restart = "run-item-seed-02-a2-002-restart";
+ const resumed = { attempt: 2, nodes: [node("worker", { parent: "", runs: [first, restart] })] };
+ const laterID = "run-item-seed-02-a4";
+ const later = { attempt: 4, nodes: [node("worker", { parent: "", runs: [laterID] })] };
+ const { rerender } = render(<ItemGraph attempts={[resumed]} />);
+ expect(screen.getByRole("heading", { name: "Nodes · attempt 2" })).toBeTruthy();
+ const worker = within(screen.getByRole("article", { name: "Node worker" }));
+ expect(worker.getAllByRole("link").map(link => link.getAttribute("href"))).toEqual([`#/run/${first}`, `#/run/${restart}`]);
+
+ rerender(<ItemGraph attempts={[later, resumed]} />);
+ expect(screen.getByRole("heading", { name: "Nodes · attempt 4" })).toBeTruthy();
+ expect(screen.getByRole("link", { name: laterID })).toBeTruthy();
+ expect(screen.getByText("Attempt 2").closest("details")?.open).toBe(false);
+ expect(screen.queryByText("Attempt 3")).toBeNull();
+});
+
 test("single worker remains a visible node", () => {
  render(<ItemGraph attempts={[{attempt:1,nodes:[node("worker", {parent:"",runs:["only-run"]})]}]} />);
  expect(within(screen.getByRole("article",{name:"Node worker"})).getByRole("link",{name:"only-run"})).toBeTruthy();

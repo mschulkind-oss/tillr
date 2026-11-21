@@ -1887,6 +1887,11 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			if d.Workflow != nil && d.NodeBaseSHA == "" && forkOf(targetRow.Allowed) == "" {
 				d.NodeBaseSHA = base
 			}
+			if d.Workflow != nil {
+				if err := clearSupersededNodeClaims(tx, d.ItemID); err != nil {
+					return err
+				}
+			}
 			// A retry's kept readers are recorded first, so the set claimed below is
 			// chosen from the nodes this attempt still has to run.
 			if err := carryRetainedReaders(tx, d); err != nil {

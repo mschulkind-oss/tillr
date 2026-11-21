@@ -1,8 +1,12 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"sort"
+	"strconv"
+	"strings"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -115,6 +119,7 @@ func readItemGraphIn(r *store.Reader, id, selection string, runs []storeRun, chi
 		graph     *itemGraph
 	}
 	starts := []start{}
+	workerAttempts := map[string]int{}
 	rows, err := r.Query(`SELECT object_id,payload FROM events WHERE kind='drain.started' AND object_type='run' AND json_extract(payload,'$.decision.item_id')=? ORDER BY seq`, id)
 	if err != nil {
 		return nil, err
@@ -132,7 +137,9 @@ func readItemGraphIn(r *store.Reader, id, selection string, runs []storeRun, chi
 			return nil, err
 		}
 		w := d.Decision.Workflow
-		if w != nil && d.Decision.NodeIndex >= 0 && d.Decision.NodeIndex < len(w.Stages) {
+		if w == nil && d.Decision.Attempt > 0 {
+			workerAttempts[run] = d.Decision.Attempt
+		} else if w != nil && d.Decision.NodeIndex >= 0 && d.Decision.NodeIndex < len(w.Stages) {
 			starts = append(starts, start{d.Decision.Attempt, w.Stages[d.Decision.NodeIndex].ID, run, w})
 		}
 	}
@@ -180,14 +187,13 @@ func readItemGraphIn(r *store.Reader, id, selection string, runs []storeRun, chi
 	if len(attempts) == 0 && len(base.Stages) > 0 {
 		attempts[1] = true
 	}
+	workers := groupWorkerRuns(id, runs, workerAttempts)
 	if len(attempts) == 0 {
-		// Pre-graph and implicit single-worker runs are separate attempts.
-		if len(runs) == 0 {
+		for attempt := range workers {
+			attempts[attempt] = true
+		}
+		if len(attempts) == 0 {
 			attempts[1] = true
-		} else {
-			for i := range runs {
-				attempts[i+1] = true
-			}
 		}
 	}
 	numbers := make([]int, 0, len(attempts))
@@ -204,8 +210,8 @@ func readItemGraphIn(r *store.Reader, id, selection string, runs []storeRun, chi
 		a := itemGraphAttempt{Attempt: attempt, Nodes: []itemGraphNode{}}
 		if len(graph.Stages) == 0 {
 			n := itemGraphNode{ID: "worker", Kind: "agent", State: "not started", Runs: []string{}, Children: map[string]childrenView{}, Outputs: []itemNodeOutput{}}
-			if attempt > 0 && attempt <= len(runs) {
-				run := runs[attempt-1]
+			for _, run := range workers[attempt] {
+				// The latest execution supplies the node state; all runs retain their links.
 				n.Seat = run.Seat
 				n.Runs = append(n.Runs, run.RunID)
 				n.State = singleRunState(run)
@@ -305,6 +311,53 @@ func readItemGraphIn(r *store.Reader, id, selection string, runs []storeRun, chi
 		}
 	}
 	return result, nil
+}
+
+// groupWorkerRuns receives runs in chronological order. An attempt can have
+// several executions; a restart suffix doesn't change its attempt number.
+func groupWorkerRuns(itemID string, runs []storeRun, dispatched map[string]int) map[int][]storeRun {
+	// Match drain's runItemSlug for runs whose dispatch event is unavailable.
+	slug := itemID
+	if len(slug) > 56 {
+		sum := sha256.Sum256([]byte(itemID))
+		slug = fmt.Sprintf("%s-%x", strings.TrimRight(itemID[:39], "-"), sum[:8])
+	}
+	numbers := make([]int, len(runs))
+	groups := map[int][]storeRun{}
+	for i, run := range runs {
+		n := dispatched[run.RunID]
+		if n == 0 {
+			rest, ok := strings.CutPrefix(run.RunID, "run-"+itemID+"-a")
+			if !ok && slug != itemID {
+				rest, ok = strings.CutPrefix(run.RunID, "run-"+slug+"-a")
+			}
+			if ok {
+				digits, _, _ := strings.Cut(rest, "-")
+				if parsed, err := strconv.Atoi(digits); err == nil && parsed > 0 {
+					n = parsed
+				}
+			}
+		}
+		if n > 0 {
+			numbers[i] = n
+			groups[n] = nil // reserve known attempts before numbering opaque runs
+		}
+	}
+	legacy := 1
+	for i, run := range runs {
+		n := numbers[i]
+		if n == 0 {
+			for {
+				if _, taken := groups[legacy]; !taken {
+					n = legacy
+					break
+				}
+				legacy++
+			}
+		}
+		groups[n] = append(groups[n], run)
+	}
+	return groups
 }
 
 func singleRunState(run storeRun) string {

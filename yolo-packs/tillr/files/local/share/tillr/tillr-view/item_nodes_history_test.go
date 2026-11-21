@@ -2,8 +2,75 @@ package main
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 )
+
+func TestItemGraphHistoryRestartKeepsAttempt(t *testing.T) {
+	for _, tc := range []struct {
+		name, first, restart, later, node, workflow string
+	}{
+		{"implicit run IDs", "run-item-seed-02-a2", "run-item-seed-02-a2-002-restart", "run-item-seed-02-a4", "worker", ""},
+		{"implicit dispatches with opaque IDs", "legacy-run", "legacy-restart", "legacy-later", "worker", "null"},
+		{"explicit workflow", "run-item-seed-02-a2-n1-g1-1456c14a8b7ed63d", "run-item-seed-02-a2-n1-g1-1456c14a8b7ed63d-restart", "run-item-seed-02-a4-n1-g1-1456c14a8b7ed63d", "work/build", `{"stages":[{"id":"work/build","kind":"agent","seat":"build"}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newServeHarness(t)
+			h.exec(`ALTER TABLE runs ADD COLUMN end_cause TEXT`)
+			h.exec(`INSERT INTO runs(run_id,item_id,lane_id,backend,state,exit_code,started_at,finished_at,artifact_refs,event_seq,end_cause) VALUES
+ (?, 'item-seed-02','lane-a','pi','paused',NULL,2000,2100,'[]',11,'restart'),
+ (?, 'item-seed-02','lane-a','pi','exited',0,2200,2300,'[]',12,'normal-exit'),
+ (?, 'item-seed-02','lane-a','pi','exited',0,2400,2500,'[]',13,'normal-exit')`, tc.first, tc.restart, tc.later)
+			if tc.workflow != "" {
+				h.exec(`INSERT INTO events(kind,object_type,object_id,payload,ts) VALUES
+ ('drain.started','run',?,json_object('decision',json_object('item_id','item-seed-02','attempt',2,'node_index',0,'workflow',json(?))),2000),
+ ('drain.started','run',?,json_object('decision',json_object('item_id','item-seed-02','attempt',2,'node_index',0,'workflow',json(?))),2200),
+ ('drain.started','run',?,json_object('decision',json_object('item_id','item-seed-02','attempt',4,'node_index',0,'workflow',json(?))),2400)`, tc.first, tc.workflow, tc.restart, tc.workflow, tc.later, tc.workflow)
+			}
+			if tc.node != "worker" {
+				// The restart overwrites the node row. Only the start event retains the interrupted run's node.
+				h.exec(`CREATE TABLE node_runs(item_id TEXT,attempt INTEGER,node_id TEXT,run_id TEXT,outcome TEXT);
+ INSERT INTO node_runs VALUES('item-seed-02',2,'work/build',?,'passed'),('item-seed-02',4,'work/build',?,'passed')`, tc.restart, tc.later)
+			}
+			h.exec(`INSERT INTO events(kind,object_type,object_id,payload,ts) VALUES
+ ('run.child-session','run',?,json_object('run_id',?,'item_id','item-seed-02','session_id','child','role','reviewer'),2050)`, tc.first, tc.first)
+
+			status, _, raw := h.get("/api/v1/items/item-seed-02")
+			if status != 200 {
+				t.Fatalf("%d: %s", status, raw)
+			}
+			var body struct {
+				Data struct {
+					GraphAttempts []itemGraphAttempt `json:"graph_attempts"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(raw, &body); err != nil {
+				t.Fatal(err)
+			}
+			type attemptRuns struct {
+				attempt int
+				runs    []string
+			}
+			want := []attemptRuns{{4, []string{tc.later}}, {2, []string{tc.first, tc.restart}}}
+			if tc.node == "worker" {
+				// The pre-graph fixture's opaque run ID still has its own attempt.
+				want = append(want, attemptRuns{1, []string{"run-1"}})
+			}
+			a := body.Data.GraphAttempts
+			if len(a) != len(want) {
+				t.Fatalf("attempts: %+v", a)
+			}
+			for i, w := range want {
+				if a[i].Attempt != w.attempt || len(a[i].Nodes) != 1 || a[i].Nodes[0].ID != tc.node || !slices.Equal(a[i].Nodes[0].Runs, w.runs) {
+					t.Fatalf("attempt[%d] = %+v, want %+v", i, a[i], w)
+				}
+			}
+			if n := a[1].Nodes[0]; n.State != "passed" || len(n.Children[tc.first].Sessions) != 1 {
+				t.Fatalf("restarted node state or child history: %+v", n)
+			}
+		})
+	}
+}
 
 func TestItemGraphHistoryRetriesChildrenAndRevisions(t *testing.T) {
 	h := newServeHarness(t)
