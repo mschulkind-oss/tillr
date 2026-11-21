@@ -539,7 +539,11 @@ type Loop struct {
 	// between attempts when it cannot dispatch anything, and it is not a stop condition:
 	// the pile is the only throttle.
 	infraStreak int
-	stageFault  bool
+	// stageFaults belongs to the pass boundary: it consumes these failures once
+	// their staging claims have been retracted. Only an idle, non-dispatching
+	// pass converts them to stageBackoff, which ends when backOff returns.
+	stageFaults  map[string]struct{} // faulting run IDs, including claims still retracting
+	stageBackoff bool
 	// laneConditions is each lane a lane-owned staging refusal took out of rotation this
 	// session (lane_rotation.go), and laneRefusedNow says the current staging refused its
 	// lane, so the pass offers the item another. laneMu guards rotation state;
@@ -944,7 +948,7 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 		l.mu.Lock()
 		dispatched := result.Dispatched
 		if !pendingOnly {
-			l.stageFault = false
+			l.stageFaults = nil
 		}
 		l.mu.Unlock()
 		done, err := l.passMode(ctx, result, pendingOnly)
@@ -970,27 +974,47 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 		// the pile answered "nothing dispatchable", the loop has a real answer and does not
 		// wait at all.
 		l.mu.Lock()
-		backOff := result.Dispatched == dispatched && l.stageFault && l.infraStreak > 0 && len(l.active) == 0
-		if backOff && !pendingOnly {
-			l.stageFault = false
+		if len(l.stageFaults) == 0 {
+			l.mu.Unlock()
+			continue
 		}
+		// Do not count the failed staging claim itself as a live worker. Let
+		// staging finish retracting it before deciding whether the loop is idle.
+		retracting := false
+		for id := range l.stageFaults {
+			if l.active[id] {
+				retracting = true
+				break
+			}
+		}
+		if retracting {
+			l.mu.Unlock()
+			continue
+		}
+		backOff := result.Dispatched == dispatched && l.infraStreak > 0 && len(l.active) == 0
+		l.stageFaults = nil
+		l.stageBackoff = backOff
 		l.mu.Unlock()
-		if backOff {
-			waited, err := l.backOff(ctx)
-			if err != nil && ctx.Err() == nil {
-				return err
-			}
-			if !waited {
-				result.Stop = StopOperatorStop
-				result.Detail = "the loop was asked to stop while waiting out an infrastructure failure"
-				return nil
-			}
+		if !backOff {
 			if pendingOnly {
-				l.mu.Lock()
-				l.stageFault = false
-				l.mu.Unlock()
 				view.notifyUpdate()
 			}
+			continue
+		}
+		waited, err := l.backOff(ctx)
+		l.mu.Lock()
+		l.stageBackoff = false
+		l.mu.Unlock()
+		if err != nil && ctx.Err() == nil {
+			return err
+		}
+		if !waited {
+			result.Stop = StopOperatorStop
+			result.Detail = "the loop was asked to stop while waiting out an infrastructure failure"
+			return nil
+		}
+		if pendingOnly {
+			view.notifyUpdate()
 		}
 	}
 }
@@ -1899,7 +1923,10 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 		}
 		if !IsItemContent(err) {
 			l.mu.Lock()
-			l.stageFault = true
+			if l.stageFaults == nil {
+				l.stageFaults = make(map[string]struct{})
+			}
+			l.stageFaults[request.RunID] = struct{}{}
 			result.InfraFailures++
 			l.infraStreak++
 			streak := l.infraStreak

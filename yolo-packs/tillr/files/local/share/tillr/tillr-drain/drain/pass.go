@@ -2710,7 +2710,7 @@ plans:
 			// state caused, or a cancellation with no infrastructure fault behind
 			// it, replans; an infrastructure fault would only repeat and count again.
 			l.mu.Lock()
-			canReplan := l.laneRefusedNow || !l.stageFault
+			canReplan := l.laneRefusedNow || len(l.stageFaults) == 0
 			l.mu.Unlock()
 			if canReplan && replans < len(l.cfg.Lanes)+1 {
 				replans++
