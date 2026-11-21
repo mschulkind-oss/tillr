@@ -1,57 +1,24 @@
 #!/usr/bin/env python3
-"""Every commit this range adds is authored and committed by the configured identity.
+"""Check author and committer against this repository's two allowed identity pairs.
 
-WHY THIS EXISTS. On 2026-10-28 an agent hand-landing a lane passed
-`-c user.name="Matthew Schulkind" -c user.email="matt@mschulkind.com"` on every commit,
-because AGENTS.md told it to "amend the landed commit to the landing identity" without
-saying where that identity comes from. Twenty-one commits carried the invented address,
-fourteen of them published, and the repair was a full history rewrite. Prose cannot
-prevent that -- the instruction was the prose -- so the act is what gets checked, and this
-is the act: the author and committer of every commit the change ADDS must be the identity
-`git config` states.
+This repository's history filter is not tillr's rule for creating commits. The filter
+shares the tracked list used by the live gate and does not derive it from Git config.
+It reads only BASE..HEAD: patch branches carry upstream authors, and existing history
+is not judged. BASE is `FORK_CHECK_PLAN_BASE` when set, otherwise the merge base with
+`origin/main` (falling back to `origin/HEAD`). With no usable base, no range is judged.
 
-That is not a new rule imposed from outside. It is already what the lander does:
-`tools/tillr-land` reads `user.name`/`user.email`, refuses to land when the repository
-states none or states one in a scope a lane can write, and re-authors every commit it
-publishes to them (`Trunk.NormalizeHead`). This check keeps
-a hand landing honest with the same identity those paths use, so inventing one is a gate
-refusal at the first commit instead of a rewrite later.
+Still require a configured identity for commit creation and reject local or worktree
+identity keys, even if they match an allowed pair. Lanes can write those scopes, and
+repo-local config is shared by all worktrees.
 
-THE RANGE, AND WHY IT IS A RANGE. This repository already holds work-identity commits
-(`owner@work.example.invalid`, `owner@work.example.invalid`) from machines whose
-global identity differs, and the patch branches carry upstream authors. A whole-history
-check would refuse every run over history nobody can change, so this reads BASE..HEAD: the
-commits the change brings.
-
-THE BASE is `FORK_CHECK_PLAN_BASE` when the lander set it -- the batch base the gate is
-judging -- and otherwise `merge-base HEAD origin/main`. A checkout with no `origin/main`
-cannot answer the question, and says so instead of passing: "could not ask" and "asked and
-fine" must never look alike.
-
-THE IDENTITY IS THE DEPLOYED ONE, AND THE REPOSITORY'S OWN CONFIG MAY NOT SET IT. A
-worktree shares `.git/config` with every other worktree of this repository, so a
-`user.name`/`user.email` there replaces the deployed identity for every commit and every
-landing in every worktree, and any lane can write it. On 2026-11-02 a lane fixture wrote
-`t <t@e.invalid>` into it at 15:02:50Z; the 16:19 gate then refused the 33 correctly
-authored commits in its range because they did not match the fixture (breakage 3), and the
-same value would have made the lander re-author landed commits to it.
-
-So the repo-local layer is asked about separately and refused before any range is judged,
-and the identity the commits are judged against is read from the scopes a lane cannot
-write: the deployed global config (rcm deploys `gitconfig` and the tag's
-`gitconfig.local` there), the system config, and the caller's command scope (a harness
-declaring its own identity, as this repository's own suites do). The per-worktree scope is
-ignored too, so a lane that enables `extensions.worktreeConfig` cannot steer the answer
-either. A lane's write therefore cannot change the identity this check reads: it is
-refused by name, and the value it would have supplied is never the one judged against.
-
-Exit status: 0 clean, or nothing to judge because the run has no diff base; 1 a finding
-(a commit carries an identity that is not the deployed one, no identity is configured at
-all, or the repository's own config overrides it); 2 the identity or the range could not
-be read.
+Exit status: 0 clean or no diff base; 1 disallowed identity in the range, missing
+configured identity, or a writable config override; 2 could not read config, policy,
+or the range.
 """
 
+import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -60,38 +27,31 @@ MAX_REPORTED = 10
 # The identity keys, which is also the whole set of keys a repo-local override may use to
 # steer a commit's author or committer.
 IDENTITY_KEYS = ("user.name", "user.email")
-# The scopes a lane can write. `local` is the repository's own config, shared by every
-# worktree of the checkout, so a lane's `git config user.name` lands there and would
-# otherwise be what the trunk gate expects. `worktree` is per-worktree: a lane's write
-# there cannot reach the trunk, but it is not the deployed identity either.
 LANE_WRITABLE_SCOPES = ("local", "worktree")
+POLICY = Path(__file__).resolve().parents[1] / "tools/gate/allowed-commit-identities.json"
 
 
 def git(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], capture_output=True, text=True)
 
 
-def configured(key: str) -> tuple[str, str]:
-    """The deployed value of one identity key, and why it could not be read.
-
-    `--show-scope` lists entries in increasing priority order with the scope each came
-    from, so the last one outside `LANE_WRITABLE_SCOPES` is the value the deployed config
-    states. A value that exists only in the repository's own config is not the deployed
-    identity: `local_identity_overrides` refuses it by name rather than letting it answer.
-    """
+def configured(key: str) -> tuple[str, list[str], str]:
+    """Read the deployed value and detect any local or worktree override of the key."""
     listed = git("config", "--show-scope", "--get-all", key)
     if listed.returncode == 1:
-        return "", ""
+        return "", [], ""
     if listed.returncode != 0:
         detail = listed.stderr.strip().splitlines()
-        return "", detail[0] if detail else f"git config exited {listed.returncode}"
+        return "", [], detail[0] if detail else f"git config exited {listed.returncode}"
     value = ""
+    overrides = []
     for line in listed.stdout.splitlines():
         scope, _, entry = line.partition("\t")
         if scope in LANE_WRITABLE_SCOPES:
-            continue
-        value = entry.strip()
-    return value, ""
+            overrides.append(scope)
+        else:
+            value = entry.strip()
+    return value, overrides, ""
 
 
 def refuse(message: str) -> int:
@@ -116,64 +76,27 @@ def base_of(env=os.environ) -> str:
     return ""
 
 
-def local_identity_overrides() -> list[tuple[str, str]]:
-    """The identity keys this repository's own config sets, with the values it sets.
-
-    `--local` is the repository config. In a linked worktree that is the file every
-    worktree of this repository SHARES (the common dir's `config`), which is exactly why
-    it is read here: a lane's write is the main checkout's identity too. `--worktree`
-    would be the worktree-private file instead, and it needs `extensions.worktreeConfig`,
-    which this repository does not enable -- so a value a lane writes lands in `--local`
-    whether it meant to or not.
-    """
-    found = []
-    for key in IDENTITY_KEYS:
-        got = git("config", "--local", "--get", key)
-        if got.returncode == 0 and got.stdout.strip():
-            found.append((key, got.stdout.strip()))
-    return found
-
-
 def main() -> int:
-    # The deployed identity is read first, so the refusal below can name the value the
-    # repository's own config is overriding. Reading it is not judging a range.
-    name, problem = configured("user.name")
-    if problem:
-        return refuse(f"the configured git identity could not be read: {problem}")
-    email, problem = configured("user.email")
-    if problem:
-        return refuse(f"the configured git identity could not be read: {problem}")
+    values = []
+    overrides = []
+    for key in IDENTITY_KEYS:
+        value, scopes, problem = configured(key)
+        if problem:
+            return refuse(f"the configured git identity could not be read: {problem}")
+        values.append(value)
+        overrides.extend((scope, key) for scope in scopes)
 
-    overrides = local_identity_overrides()
     if overrides:
-        set_keys = ", ".join(f"{key} = {value!r}" for key, value in overrides)
-        print("git-identity: FAIL: this repository's own config sets the landing identity "
-              f"({set_keys}), so the identity a commit carries is a value a lane can write "
-              "rather than the one this machine deploys:")
-        print("  why: `.git/config` is shared by every worktree of this repository, so a "
-              "value there replaces the deployed identity for every commit and every "
-              "landing in every worktree.")
-        if name and email:
-            print(f"  deployed: {name} <{email}> -- the identity this check reads, and the "
-                  "one the override above is not allowed to replace")
-        else:
-            print("  deployed: no identity is configured outside the repository's own "
-                  "config, so unsetting the override leaves nothing to judge against")
-        print("  remedy: unset it, so the deployed global identity answers: "
-              "git config --local --unset-all user.name && "
-              "git config --local --unset-all user.email")
+        print("git-identity: FAIL: this repository's own config sets the landing identity")
+        for scope, key in dict.fromkeys(overrides):
+            print(f"  {scope} {key} overrides the deployed identity; "
+                  f"unset it with git config --{scope} --unset-all {key}")
         return 1
 
-    if not name or not email:
-        # The wording `tools/tillr-land` prints, so one incident has one sentence.
+    if not all(values):
         print("git-identity: FAIL: the landing identity is not configured "
               "(git user.name and user.email)")
-        print("  remedy: declare it where the repository deploys it (`gitconfig` for the "
-              "name, tag-personal/ or tag-work/gitconfig.local for the email), then rcup. "
-              "The deployed identity is the global scope: a repository-local identity is "
-              "refused because every worktree shares `.git/config`, so a lane can rewrite "
-              "it. Never pass -c user.* to work around this: that is the act this check "
-              "refuses.")
+        print("  remedy: configure the deployed Git identity outside local and worktree scope.")
         return 1
 
     base = base_of()
@@ -189,6 +112,11 @@ def main() -> int:
               f"to take a merge base from)")
         return 0
 
+    try:
+        allowed = json.loads(POLICY.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        return refuse(f"cannot read the repository identity policy: {error}")
+
     listed = git("log", "--format=%H%x1f%an%x1f%ae%x1f%cn%x1f%ce", f"{base}..HEAD")
     if listed.returncode != 0:
         return refuse(f"cannot read commits in {base[:10]}..HEAD: {listed.stderr.strip()}")
@@ -200,28 +128,23 @@ def main() -> int:
             continue
         sha, author_name, author_email, committer_name, committer_email = line.split("\x1f")
         judged += 1
-        for role, actual, wanted in (
-            ("author name", author_name, name),
-            ("author email", author_email, email),
-            ("committer name", committer_name, name),
-            ("committer email", committer_email, email),
-        ):
-            if actual != wanted:
-                findings.append(f"{sha[:10]}  {role} is {actual!r}, want {wanted!r}")
+        for role, name, email in (("author", author_name, author_email),
+                                  ("committer", committer_name, committer_email)):
+            if [name, email] not in allowed:
+                findings.append(f"{sha}: {role} {name} <{email}> is not an allowed repository identity")
 
     if findings:
-        print(f"git-identity: FAIL: {len(findings)} commit field(s) in {base[:10]}..HEAD "
-              f"carry an identity that is not the configured one ({name} <{email}>):")
+        print(f"git-identity: FAIL: {len(findings)} disallowed author/committer pair(s) "
+              f"in {base[:10]}..HEAD:")
         for finding in findings[:MAX_REPORTED]:
             print(f"  {finding}")
         if len(findings) > MAX_REPORTED:
             print(f"  ... and {len(findings) - MAX_REPORTED} more")
-        print("  remedy: re-author those commits to the configured identity (git rebase "
-              "--exec 'git commit --amend --no-edit --reset-author'), or drop them. Do not "
-              "widen this check or pass a second identity: the point is that there is one.")
+        print("  remedy: drop the offending commits or recreate them with an approved identity "
+              "read from Git config.")
         return 1
 
-    print(f"git-identity: {judged} commit(s) in {base[:10]}..HEAD carry {name} <{email}>")
+    print(f"git-identity: {judged} commit(s) in {base[:10]}..HEAD carry only approved identities")
     return 0
 
 

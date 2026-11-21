@@ -265,11 +265,13 @@ MATT_RENDER_STUBS_EDITED = ["agent-inherit-skills", "bedrock-context-edited", "e
                             "research-tools"]
 
 
+IDENTITY_POLICY = Path("tools/gate/allowed-commit-identities.json")
+FIXTURE_NAME, FIXTURE_EMAIL = json.loads((ROOT / IDENTITY_POLICY).read_text(encoding="utf-8"))[0]
 ENV = {
-    "GIT_AUTHOR_NAME": "fork-check test",
-    "GIT_AUTHOR_EMAIL": "test@example.invalid",
-    "GIT_COMMITTER_NAME": "fork-check test",
-    "GIT_COMMITTER_EMAIL": "test@example.invalid",
+    "GIT_AUTHOR_NAME": FIXTURE_NAME,
+    "GIT_AUTHOR_EMAIL": FIXTURE_EMAIL,
+    "GIT_COMMITTER_NAME": FIXTURE_NAME,
+    "GIT_COMMITTER_EMAIL": FIXTURE_EMAIL,
     "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_CONFIG_SYSTEM": "/dev/null",
     # The fixtures DECLARE their identity in the config, because the gate's integrity
@@ -278,8 +280,8 @@ ENV = {
     # branches. `GIT_AUTHOR_*` above is not enough: it is what a commit uses, not what
     # `git config` answers.
     "GIT_CONFIG_COUNT": "2",
-    "GIT_CONFIG_KEY_0": "user.name", "GIT_CONFIG_VALUE_0": "fork-check test",
-    "GIT_CONFIG_KEY_1": "user.email", "GIT_CONFIG_VALUE_1": "test@example.invalid",
+    "GIT_CONFIG_KEY_0": "user.name", "GIT_CONFIG_VALUE_0": FIXTURE_NAME,
+    "GIT_CONFIG_KEY_1": "user.email", "GIT_CONFIG_VALUE_1": FIXTURE_EMAIL,
 }
 
 
@@ -340,6 +342,20 @@ def upstream(base: Path, name: str):
     return path
 
 
+def copy_identity_check(repo):
+    script = Path("tests/git-identity.test.py")
+    shutil.copy(ROOT / script, repo / script)
+    (repo / IDENTITY_POLICY).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(ROOT / IDENTITY_POLICY, repo / IDENTITY_POLICY)
+    # The policy lives under tools/gate/, a path the gate-runner step watches, so a full
+    # run in this fixture now plans that step. Its two Python suites are stubbed like the
+    # fixture's other suites: the step runs, and the real suites are not this fixture's.
+    for suite in ("change-gate.test.py", "runner-first.test.py"):
+        stub = repo / "tools/gate" / suite
+        if not stub.exists():
+            stub.write_text("")
+
+
 def build_repo(base: Path):
     releases = upstream(base, "pi-subagents")   # follows its newest release tag
     heads = upstream(base, "pi-background-tasks")  # says follow: head
@@ -378,11 +394,9 @@ def build_repo(base: Path):
         "from pathlib import Path\n"
         f"Path({str(base / 'tillr-backends-calls')!r}).open('a').write('backend\\n')\n"
     )
-    # The identity guard's own suite, COPIED rather than stubbed: it is stdlib-only and it
-    # answers from `git config`, so it really runs in this fixture -- where the ENV above
-    # declares an identity -- and a case can prove the refusal by unsetting it. A stub
-    # would plan the step and never exercise the thing this fixture exists to keep honest.
-    shutil.copy(ROOT / "tests" / "git-identity.test.py", repo / "tests" / "git-identity.test.py")
+    # Copy the real check and its policy. The fixture identity is allowed by the policy
+    # and declared in command-scope config, which the check still requires.
+    copy_identity_check(repo)
     # The pi-forks driver's own suite. The fixture's series are stubs, so nothing here can
     # use the real one; the stub records that the step ran, and a case that makes it fail
     # proves a failing case is a verdict about the change.
@@ -6453,7 +6467,7 @@ def build_pinned_repo(base: Path):
         "# comment\n"
         "samfoy/pi-session-search          yolo-packs/matt/patches/pi-session-search\n")
     (repo / "tests" / "pi-patch-series.test.sh").write_text("#!/bin/sh\necho 'ok   stub structural'\n")
-    shutil.copy(ROOT / "tests" / "git-identity.test.py", repo / "tests" / "git-identity.test.py")
+    copy_identity_check(repo)
     forks = repo / "bin" / "pi-forks"
     forks.write_text(
         "#!/bin/sh\n"

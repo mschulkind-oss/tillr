@@ -15,6 +15,9 @@ ROOT = Path(__file__).resolve().parents[3]
 SCRATCH = Path(os.environ.get("YOLO_DURABLE_DIR", ROOT / "tools/gate/.scratch"))
 SCRATCH.mkdir(parents=True, exist_ok=True)
 IDS = {"commit-identity", "citations", "documents", "file-size", "workflows", "elapsed-time"}
+PERSONAL = ("Matthew Schulkind", "owner@example.invalid")
+PROFESSIONAL = ("Matthew Schulkind", "owner@work.example.invalid")
+UNRELATED = ("Fixture", "fixture@example.invalid")
 
 
 class Changes(unittest.TestCase):
@@ -34,8 +37,8 @@ class Changes(unittest.TestCase):
         self.repo = Path(self.tmp.name)
         self.env = dict(os.environ)
         # Command scope, not shared repository config, declares the fixture identity.
-        self.env.update(GIT_CONFIG_COUNT="2", GIT_CONFIG_KEY_0="user.name", GIT_CONFIG_VALUE_0="Fixture",
-                        GIT_CONFIG_KEY_1="user.email", GIT_CONFIG_VALUE_1="fixture@example.invalid")
+        self.env.update(GIT_CONFIG_COUNT="2", GIT_CONFIG_KEY_0="user.name", GIT_CONFIG_VALUE_0=PERSONAL[0],
+                        GIT_CONFIG_KEY_1="user.email", GIT_CONFIG_VALUE_1=PERSONAL[1])
         self.git("init", "-q")
         (self.repo / "README.md").write_text("# Fixture\n")
         shutil.copytree(ROOT / "tools/gate", self.repo / "tools/gate", ignore=shutil.ignore_patterns("__pycache__"))
@@ -360,26 +363,72 @@ sys.exit(rc)
         validate.assert_called_once_with(self.base, "HEAD")
         identity.assert_called_once_with(Path.cwd(), self.base, "HEAD")
 
-    def test_identity_mismatch_and_local_override(self):
-        (self.repo / "README.md").write_text("# Fixture\n\nEdited.\n")
-        self.commit()
-        self.assertEqual(self.check("commit-identity").returncode, 0)
-        self.git("config", "--local", "user.name", "Wrong")
-        result = self.check("commit-identity")
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("repo-local", result.stdout)
-        self.git("config", "--local", "--unset-all", "user.name")
-        self.env["GIT_AUTHOR_NAME"] = "Wrong"
-        (self.repo / "README.md").write_text("# Wrong\n")
-        self.commit()
-        self.assertEqual(self.check("commit-identity").returncode, 1)
+    def standalone_identity(self, base=None):
+        env = {**self.env, "FORK_CHECK_PLAN_BASE": base or ""}
+        return subprocess.run([sys.executable, str(ROOT / "tests/git-identity.test.py")],
+                              cwd=self.repo, env=env, capture_output=True, text=True)
 
-    def test_worktree_identity_override_is_refused(self):
+    def commit_with_identities(self, author, committer):
+        env = {**self.env, "GIT_AUTHOR_NAME": author[0], "GIT_AUTHOR_EMAIL": author[1],
+               "GIT_COMMITTER_NAME": committer[0], "GIT_COMMITTER_EMAIL": committer[1]}
+        subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "chore: identity fixture"],
+                       cwd=self.repo, env=env, capture_output=True, text=True, check=True)
+        return self.git("rev-parse", "HEAD")
+
+    def test_identity_policy_for_each_role_in_both_checks(self):
+        # A configured third identity must not become an allowed pair.
+        self.env.update(GIT_CONFIG_VALUE_0=UNRELATED[0], GIT_CONFIG_VALUE_1=UNRELATED[1])
+        wrong_name = (UNRELATED[0], PERSONAL[1])
+        wrong_email = (PROFESSIONAL[0], UNRELATED[1])
+        for author, committer, rejected_role in (
+            (PERSONAL, PERSONAL, None),
+            (PROFESSIONAL, PROFESSIONAL, None),
+            (PERSONAL, PROFESSIONAL, None),
+            (PROFESSIONAL, PERSONAL, None),
+            (UNRELATED, PROFESSIONAL, "author"),
+            (PERSONAL, UNRELATED, "committer"),
+            (wrong_name, PERSONAL, "author"),
+            (PROFESSIONAL, wrong_name, "committer"),
+            (wrong_email, PERSONAL, "author"),
+            (PROFESSIONAL, wrong_email, "committer"),
+        ):
+            base = self.git("rev-parse", "HEAD")
+            # The standalone check falls back to the upstream merge base for this case.
+            self.git("update-ref", "refs/remotes/origin/main", base)
+            sha = self.commit_with_identities(author, committer)
+            for check, result in (("live", self.check("commit-identity", base, sha)),
+                                  ("standalone", self.standalone_identity())):
+                with self.subTest(check=check, author=author, committer=committer):
+                    self.assertEqual(result.returncode, int(rejected_role is not None),
+                                     result.stdout + result.stderr)
+                    if rejected_role:
+                        self.assertIn(f"{sha}: {rejected_role} ", result.stdout)
+                        accepted_role = "committer" if rejected_role == "author" else "author"
+                        self.assertNotIn(f"{sha}: {accepted_role} ", result.stdout)
+
+    def test_identity_checks_keep_their_explicit_range(self):
+        self.git("update-ref", "refs/remotes/origin/main", self.base)
+        explicit_base = self.commit_with_identities(UNRELATED, UNRELATED)
+        allowed_head = self.commit_with_identities(PERSONAL, PROFESSIONAL)
+        result = self.standalone_identity(explicit_base)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("1 commit(s)", result.stdout)
+        self.commit_with_identities(UNRELATED, UNRELATED)
+        result = self.check("commit-identity", explicit_base, allowed_head)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_local_and_worktree_identity_overrides_are_refused(self):
         self.git("config", "extensions.worktreeConfig", "true")
-        self.git("config", "--worktree", "user.name", "Wrong")
-        result = self.check("commit-identity")
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn("worktree", result.stdout)
+        self.commit_with_identities(PERSONAL, PERSONAL)
+        for scope in ("local", "worktree"):
+            for key, value in (("user.name", "Wrong"), ("user.name", PERSONAL[0]),
+                               ("user.email", PERSONAL[1]), ("user.email", "")):
+                with self.subTest(scope=scope, key=key, value=value):
+                    self.git("config", f"--{scope}", key, value)
+                    for result in (self.check("commit-identity"), self.standalone_identity(self.base)):
+                        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                        self.assertIn(f"{scope} {key} overrides", result.stdout)
+                    self.git("config", f"--{scope}", "--unset-all", key)
 
     def test_missing_deployed_identity_is_not_rejection(self):
         self.env.update(GIT_CONFIG_COUNT="0", GIT_CONFIG_GLOBAL="/dev/null",
@@ -387,6 +436,9 @@ sys.exit(rc)
         result = self.runner_check("--base", self.base, "--head", "HEAD")
         self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
         self.assertEqual(json.loads(result.stdout)["payload"]["result"], "error")
+        result = self.standalone_identity(self.base)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("landing identity is not configured", result.stdout)
 
     def test_unreadable_identity_is_not_a_rejection(self):
         actual_git = shutil.which("git")
@@ -397,6 +449,9 @@ sys.exit(rc)
         result = self.check("commit-identity")
         self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
         self.assertIn("could not judge", result.stderr)
+        result = self.standalone_identity(self.base)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("configured git identity could not be read", result.stdout)
 
     def test_missing_judgment_outranks_an_earlier_rejection(self):
         self.env["GIT_AUTHOR_NAME"] = "Wrong"
