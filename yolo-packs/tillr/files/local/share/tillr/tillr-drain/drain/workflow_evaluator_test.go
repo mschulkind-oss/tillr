@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -50,9 +51,16 @@ func TestWorkflowEvaluatorValidation(t *testing.T) {
 }
 
 func TestWorkflowEvaluatorJudgeRoute(t *testing.T) {
-	for _, mode := range []string{"pass", "mechanical", "not-done", "no-grant"} {
+	for _, mode := range []string{"pass", "mechanical", "not-done", "defective-mismatch", "no-grant"} {
 		t.Run(mode, func(t *testing.T) {
 			f, l, s := judgeRouteFixture(t, mode, mode != "no-grant")
+			if mode == "defective-mismatch" {
+				s.entries = []item.JudgeEntry{{
+					CriterionID: "c1", CriterionHash: item.CriterionHash("the first criterion of item-a"),
+					Verdict: item.VerdictDefective, ClaimClass: item.ClaimVerification,
+					Reason: "the candidate lost data", Evidence: []string{"diff:candidate.diff"},
+				}}
+			}
 			writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/scout-then-build@v1.json"), evaluatorWorkflow)
 			runGit(t, f.root, "add", "config/tillr/workflows")
 			runGit(t, f.root, "commit", "-qm", "evaluator workflow")
@@ -139,12 +147,22 @@ func TestWorkflowEvaluatorJudgeRoute(t *testing.T) {
 				}
 				return nil
 			})
-			reason := map[string]string{"not-done": ReasonReturned, "no-grant": ReasonJudgeGrantAbsent}[mode]
+			if mode == "defective-mismatch" && result.RefusedSteps[ReasonJudgeDefectiveMismatch] != 1 {
+				t.Errorf("verifier refusals: %v", result.RefusedSteps)
+			}
+			reason := map[string]string{"not-done": ReasonReturned, "no-grant": ReasonJudgeGrantAbsent, "defective-mismatch": ReasonJudgeDefectiveMismatch}[mode]
 			if reason != "" {
+				found := false
 				for _, p := range mustPlan(t, l) {
-					if p.decision.ItemID == "item-a" && p.decision.Reason != reason {
-						t.Errorf("hold %s, want %s", p.decision.Reason, reason)
+					if p.decision.ItemID == "item-a" {
+						found = true
+						if p.decision.Reason != reason || (mode == "defective-mismatch" && p.decision.Action != ActionHold) {
+							t.Errorf("decision %s / %s, want %s", p.decision.Action, p.decision.Reason, reason)
+						}
 					}
+				}
+				if !found {
+					t.Errorf("missing planner decision for item-a; want %s", reason)
 				}
 			}
 		})

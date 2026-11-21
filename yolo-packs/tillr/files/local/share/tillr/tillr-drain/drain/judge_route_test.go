@@ -68,8 +68,15 @@ func (s *judgeRouteSteps) Run(ctx context.Context, req run.Request) (run.Record,
 				return run.Record{}, "", fmt.Errorf("adapter preflight: %v: %s", err, out)
 			}
 		}
-		for _, want := range []string{"the first criterion of item-a", "candidate.diff", "eval.output", "read-only", "single-token locator strings with no spaces", "cmd:go-test-tillr-run"} {
-			if !strings.Contains(string(brief), want) {
+		for _, want := range []string{
+			"the first criterion of item-a", "candidate.diff", "eval.output", "read-only",
+			"single-token locator strings with no spaces", "cmd:go-test-tillr-run",
+			"defective means the request itself is wrong or impossible; it closes the item.",
+			"Example: the request requires incompatible outcomes for the same input.",
+			"A fault in the candidate is not-done, not defective.",
+			"Example: the request is valid but the candidate drops input on error.",
+		} {
+			if !strings.Contains(strings.Join(strings.Fields(string(brief)), " "), want) {
 				s.t.Errorf("judge brief lacks %q", want)
 			}
 		}

@@ -12,6 +12,78 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+func TestJudgeDefectiveRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		name, step, detail string
+		evidence           []string
+		priorLanding       bool
+	}{
+		{"diff", "judge-defective-evidence-mismatch", "diff:candidate.diff", []string{"diff:candidate.diff"}, false},
+		{"changed-path", "judge-defective-evidence-mismatch", "file:tools/item-a/result.txt:1", []string{"file:tools/item-a/result.txt:1"}, false},
+		{"bare-path", "judge-defective-evidence-mismatch", "tools/item-a/result.txt:1", []string{"tools/item-a/result.txt:1"}, false},
+		{"close-refused", "judge-defective-close-refused", `item "item-a" has already landed; it cannot be closed`, []string{"criterion:c1", "diff:candidate.diff"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, l, s := judgeRouteFixture(t, "pass", true)
+			s.entries = []item.JudgeEntry{{
+				CriterionID: "c1", CriterionHash: item.CriterionHash("the first criterion of item-a"),
+				Verdict: item.VerdictDefective, ClaimClass: item.ClaimVerification,
+				Reason: "the first judge reason", Evidence: tc.evidence,
+			}}
+			if tc.priorLanding {
+				tip := runGit(t, f.root, "rev-parse", "HEAD")
+				s.afterJudge = func() {
+					fixtureWrite(t, f, func(tx *store.Tx) error {
+						return recordFixtureLanding(tx, "item-a", "earlier-run", tip, 1)
+					})
+				}
+			}
+			result := &LoopResult{}
+			for i := 0; i < 4; i++ {
+				if _, err := l.pass(context.Background(), result); err != nil {
+					t.Fatal(err)
+				}
+				drainOwned(t, l, result)
+			}
+			if !reflect.DeepEqual(s.order, []string{"worker", "judge"}) || !reflect.DeepEqual(result.RefusedSteps, map[string]int{tc.step: 1}) {
+				t.Errorf("order %v and refusals %v; want one judge hold %s", s.order, result.RefusedSteps, tc.step)
+			}
+			judge := s.runs[1].RunID
+			fixtureRead(t, f, func(r *store.Reader) error {
+				var state, lane string
+				var verdicts int
+				if err := r.QueryRow(`SELECT state, (SELECT state FROM lanes WHERE lane_id='lane-1'),
+ (SELECT COUNT(*) FROM events WHERE kind='item.verdict') FROM items WHERE item_id='item-a'`).Scan(&state, &lane, &verdicts); err != nil {
+					return err
+				}
+				if state != StateInQueue || lane != "idle" || verdicts != 0 {
+					t.Errorf("state=%s lane=%s recorded verdicts=%d; want queued, idle, and no verdicts", state, lane, verdicts)
+				}
+				var detail string
+				if err := r.QueryRow(`SELECT json_extract(payload,'$.detail') FROM events
+ WHERE kind='drain.refusal' AND object_id=? AND json_extract(payload,'$.step')=?`, judge, tc.step).Scan(&detail); err != nil {
+					return err
+				}
+				if !strings.Contains(detail, judge) || !strings.Contains(detail, tc.detail) ||
+					(!tc.priorLanding && !strings.Contains(detail, "not-done")) {
+					t.Errorf("refusal detail %q must explain %q and name %s", detail, tc.detail, judge)
+				}
+				answer, err := Why(r, Pass{Now: l.cfg.Now().Format(time.RFC3339), Build: &l.build, BriefTemplate: &l.cfg.Stage.(*LaneStager).Template}, l.cfg.Policy, &VantageQuestions{Root: f.root})
+				if err != nil {
+					return err
+				}
+				for _, row := range answer.Rows {
+					if row.ItemID == "item-a" && row.Reason == tc.step && strings.Contains(row.Why, detail) {
+						return nil
+					}
+				}
+				t.Errorf("waiting view omitted %s and its detail: %+v", tc.step, answer.Rows)
+				return nil
+			})
+		})
+	}
+}
+
 func TestJudgeFailingDispositions(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -56,7 +128,11 @@ func TestJudgeFailingDispositions(t *testing.T) {
 						id, text = "c2", "second criterion"
 					}
 					reason := id + " judge reason"
-					s.entries = append(s.entries, item.JudgeEntry{CriterionID: id, CriterionHash: item.CriterionHash(text), Verdict: verdict, ClaimClass: item.ClaimVerification, Reason: reason, Evidence: []string{"diff:candidate.diff"}, WaitingOn: json.RawMessage(`{"waiter":"plan","reason":"nested reason does not override the entry"}`)})
+					evidence := []string{"diff:candidate.diff"}
+					if verdict == item.VerdictDefective {
+						evidence = []string{"criterion:" + id}
+					}
+					s.entries = append(s.entries, item.JudgeEntry{CriterionID: id, CriterionHash: item.CriterionHash(text), Verdict: verdict, ClaimClass: item.ClaimVerification, Reason: reason, Evidence: evidence, WaitingOn: json.RawMessage(`{"waiter":"plan","reason":"nested reason does not override the entry"}`)})
 					if verdict == tc.outcome {
 						controlling = id
 					}

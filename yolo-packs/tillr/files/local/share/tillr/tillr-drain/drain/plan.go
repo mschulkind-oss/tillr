@@ -1618,7 +1618,8 @@ func (p *planner) retryHoldReason(itemID string) string {
 		return reason
 	}
 	switch p.history.refusals[latest] {
-	case ReasonEvalFailed, ReasonJudgeUnreadable, ReasonJudgeGrantAbsent, RefusalWordsMissing, RefusalWordsAltered, RefusalIdeaNoOutcome:
+	case ReasonEvalFailed, ReasonJudgeUnreadable, ReasonJudgeGrantAbsent, ReasonJudgeDefectiveMismatch, ReasonJudgeCloseRefused,
+		RefusalWordsMissing, RefusalWordsAltered, RefusalIdeaNoOutcome:
 		return p.history.refusals[latest]
 	case RefusalVerifyNotDone:
 		return RefusalVerifyNotDone

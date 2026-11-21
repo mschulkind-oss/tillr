@@ -337,7 +337,8 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			row.Why = obsHold.WhyText()
 			row.Mover = obsHold.Action
 		}
-		if d.Reason == ReasonEvalFailed || d.Reason == ReasonJudgeUnreadable {
+		switch d.Reason {
+		case ReasonEvalFailed, ReasonJudgeUnreadable, ReasonJudgeDefectiveMismatch, ReasonJudgeCloseRefused:
 			detail, err := judgeFailureDetail(r, it.ItemID, d.Reason)
 			if err != nil {
 				return answer, err

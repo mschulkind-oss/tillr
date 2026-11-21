@@ -19,14 +19,16 @@ import (
 )
 
 const (
-	ReasonJudgeGrantAbsent = "judge-grant-absent"
-	ReasonJudgeUnreadable  = "judge-unreadable"
-	ReasonEvalFailed       = "eval-failed"
-	ReasonJudgeBlocked     = "judge-blocked"
-	ReasonJudgeDefective   = "judge-defective"
-	judgeRequestKind       = "drain.judge.request"
-	judgeReceiptFile       = "judge.json"
-	judgeLandedKind        = "drain.judge.landed"
+	ReasonJudgeGrantAbsent       = "judge-grant-absent"
+	ReasonJudgeUnreadable        = "judge-unreadable"
+	ReasonEvalFailed             = "eval-failed"
+	ReasonJudgeBlocked           = "judge-blocked"
+	ReasonJudgeDefective         = "judge-defective"
+	ReasonJudgeDefectiveMismatch = "judge-defective-evidence-mismatch"
+	ReasonJudgeCloseRefused      = "judge-defective-close-refused"
+	judgeRequestKind             = "drain.judge.request"
+	judgeReceiptFile             = "judge.json"
+	judgeLandedKind              = "drain.judge.landed"
 )
 
 var errJudgeGrantHeld = errors.New("judge settlement waits for a covering grant")
@@ -526,6 +528,56 @@ func verifyNotDoneEvidence(head, runID string, findings []item.JudgeEntry) (stri
 	return strings.Join(lines, "\n"), endingKey(RefusalVerifyNotDone, checks, "", runID)
 }
 
+// defectiveCandidateEvidence finds a defective entry backed by the candidate rather
+// than by a citation to the request. Check each entry separately: a premise citation
+// for one criterion cannot justify another criterion's defective verdict.
+func (l *Loop) defectiveCandidateEvidence(ctx context.Context, c Candidate, verdicts []item.JudgeEntry) (criterion, locator string, err error) {
+	var changed map[string]bool
+	for _, v := range verdicts {
+		if v.Verdict != item.VerdictDefective {
+			continue
+		}
+		premise := false
+		for _, cite := range v.Evidence {
+			premise = premise || cite == "request:words" || cite == "criterion:"+v.CriterionID
+		}
+		if premise {
+			continue
+		}
+		for _, cite := range v.Evidence {
+			if ref, ok := strings.CutPrefix(cite, "diff:"); ok {
+				path, _, _ := strings.Cut(ref, ":")
+				if filepath.Base(path) == "candidate.diff" {
+					return v.CriterionID, cite, nil
+				}
+			}
+		}
+		if changed == nil {
+			// Use the same base and judged head as the staged diff. Include both
+			// sides of a rename and use NUL separators so Git does not quote paths.
+			out, err := l.git(ctx, c.Worktree, "diff", "--name-only", "--no-renames", "-z", c.BaseSHA, c.Judge.Options.Head, "--")
+			if err != nil {
+				return "", "", err
+			}
+			changed = map[string]bool{}
+			for _, path := range strings.Split(strings.TrimSuffix(out, "\x00"), "\x00") {
+				if path != "" {
+					changed[path] = true
+				}
+			}
+		}
+		for _, cite := range v.Evidence {
+			path := strings.TrimPrefix(strings.TrimPrefix(cite, "file:"), "path:")
+			path = strings.TrimPrefix(path, "./")
+			name, _, _ := strings.Cut(path, ":") // also accept a line or line range
+			if changed[path] || changed[name] {
+				return v.CriterionID, cite, nil
+			}
+		}
+	}
+	return "", "", nil
+}
+
 // settleJudgeFailure routes a checked ruling without running the gate or landing.
 // Defective intake and closure share a transaction: neither can survive alone.
 func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.JudgeEntry, verdicts []item.JudgeEntry, options item.JudgeOptions, result *LoopResult) error {
@@ -582,11 +634,21 @@ func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.J
 			reason = ReasonJudgeBlocked
 		} else {
 			reason = ReasonJudgeDefective
+			criterion, cite, err := l.defectiveCandidateEvidence(ctx, c, verdicts)
+			if err != nil {
+				return err
+			}
+			if cite != "" {
+				judge := c.Judge.Request.RunID
+				detail := fmt.Sprintf("verifier run %s called %s defective but cited candidate evidence %q without citing a fault in the request; candidate faults are not-done", judge, criterion, cite)
+				return l.holdJudge(ctx, c, judge, ReasonJudgeDefectiveMismatch, detail, result)
+			}
 		}
 		db, err := store.Open(ctx, l.cfg.Store, true)
 		if err != nil {
 			return err
 		}
+		closeRefused := false
 		err = db.WriteTx(ctx, func(tx *store.Tx) error {
 			if entry.Verdict == item.VerdictBlocked {
 				_, err := item.SetState(ctx, tx, c.ItemID, StateBlocked, options.At, waiting)
@@ -596,10 +658,16 @@ func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.J
 				return err
 			}
 			_, err := item.Close(ctx, tx, c.ItemID, "defective: "+entry.CriterionID+": "+entry.Reason, options.Actor, options.At)
+			_, closeRefused = item.RejectionOf(err)
 			return err
 		})
 		db.Close()
 		if err != nil {
+			if closeRefused {
+				judge := c.Judge.Request.RunID
+				detail := fmt.Sprintf("verifier run %s: close after defective verdict refused: %v", judge, err)
+				return l.holdJudge(ctx, c, judge, ReasonJudgeCloseRefused, detail, result)
+			}
 			if _, rejected := item.RejectionOf(err); rejected {
 				return l.holdJudge(ctx, c, c.Judge.Request.RunID, ReasonJudgeUnreadable, err.Error(), result)
 			}
@@ -673,8 +741,17 @@ outcome (pass or fail), and verdicts covering every criterion below. Each entry 
 criterion_id, criterion_hash, verdict (done, not-done, blocked, defective), claim_class,
 reason, and evidence (non-empty single-token locator strings with no spaces, e.g.
 commit:<sha>, diff:candidate.diff, node:<id>, or for a command that was run,
-cmd:go-test-tillr-run or test:TestExecRecordsQuickOutChoice; put full command lines,
-arguments, and results in reason). For a not-done finding fixable solely by correcting
+file:path/to/changed.go:42, cmd:go-test-tillr-run or test:TestExecRecordsQuickOutChoice;
+put full command lines, arguments, and results in reason).
+
+A verdict of defective means the request itself is wrong or impossible; it closes the item.
+Example: the request requires incompatible outcomes for the same input.
+Quote the faulty words in reason and cite request:words (saved request) or criterion:<id>
+(the criterion judged). Candidate evidence alone cannot justify closing the item.
+A fault in the candidate is not-done, not defective.
+Example: the request is valid but the candidate drops input on error.
+
+For a not-done finding fixable solely by correcting
 what the producer reported (without editing the diff), begin reason with %q. Do not use
 that prefix for content findings, including missing tests or other changes to the diff.
 The same commit may be offered with a corrected report only if every finding is report-only.

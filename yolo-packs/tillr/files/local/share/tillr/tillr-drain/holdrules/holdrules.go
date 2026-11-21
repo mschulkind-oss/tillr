@@ -107,6 +107,10 @@ var Rules = map[string]Rule{
 	"seat-degraded":                {"ready", "queue", "the next pass"},
 	"backend-closed":               {"waits on work", "backend", "a successful tillr-drain probe-backend or a non-infrastructure run"},
 	"command-fault":                {"needs a cause", "lane", "repair the command process and authorize a retry"},
+
+	"judge-defective-evidence-mismatch": {"needs you", "judge", "inspect the verifier run and authorize a retry with the corrected verdict meaning"},
+	"judge-defective-close-refused":     {"needs you", "judge", "resolve the recorded close refusal before authorizing a retry"},
+
 	// History only: an infrastructure failure now closes the backend, not the item.
 	"run-infra-exhausted": {"waits on work", "backend", "a successful tillr-drain probe-backend or a non-infrastructure run"},
 	// History only: older operator retry decisions used this reason.
