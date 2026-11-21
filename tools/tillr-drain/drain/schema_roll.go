@@ -87,7 +87,7 @@ func (l *Loop) activateSchemaRoll(ctx context.Context) (resultErr error) {
 	}
 	step = "schema roll install"
 	live := filepath.Dir(l.build.Executable)
-	for _, program := range []string{"tillr", "tillr-gate", "tillr-item", "tillr-land", "tillr-run", "tillr-store", "tillr-view"} {
+	for _, program := range []string{"tillr", "tillr-gate", "tillr-item", "tillr-land", "tillr-run", "tillr-store", "tillr-view", "tillr-watch"} {
 		// Each rename is atomic. A keeper restart can resume a partial
 		// activation: a missing source has already been promoted.
 		if err := os.Rename(filepath.Join(dir, program), filepath.Join(live, program)); err != nil && !os.IsNotExist(err) {

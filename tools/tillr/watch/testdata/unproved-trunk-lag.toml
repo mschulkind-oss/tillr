@@ -1,0 +1,33 @@
+[[rule]]
+id = "unproved-trunk-lag"
+enabled = true
+scope = "charter:git-landing"
+severity = "high"
+
+[rule.reads]
+events = ["land.landing", "drain.revert", "drain.fixer-proved"]
+projections = ["git_refs:refs/heads/main,refs/tillr/green", "heavy_lock_state"]
+
+[rule.when]
+group_by = "global"
+pattern = "lag_behind"
+leader = "git.ref('refs/heads/main')"
+follower = "git.ref('refs/tillr/green')"
+threshold_commits = 3                           # >= 3 unproved landings ahead of green
+threshold_duration = "15m"                      # OR >= 15m with >= 1 unproved commit
+mode = "any"                                    # fires when either threshold crosses
+clear_when = "unproved_commits == 0"
+
+[rule.guidance]
+summary = "refs/tillr/green lags main by {{unproved_commits}} landings ({{oldest_unproved_age}} elapsed; green={{follower_short}}, main={{leader_short}})."
+check = [
+  "Check HeavyRunner status in the attached bundle: is .git/tillr-gate/heavy.cleanup-pending present, is heavy.lock held by a dead PID, or did a proof shard die on SIGTERM?",
+  "Inspect the newest failing proof log or active fixer-main-* item in the bundle."
+]
+do = [
+  "If heavy.cleanup-pending or a stale lock is blocking HeavyRunner with no live holder, clear the stale marker.",
+  "If a cross-module test is red without an active fixer-main item, verify bisection/revert progress or dispatch targeted repair."
+]
+
+[rule.delivery]
+receiver = "foreground"

@@ -1,0 +1,35 @@
+[[rule]]
+id = "step-oscillation"
+enabled = true
+scope = "core"                                  # "core" | "charter:<name>" | "workflow:<name>"
+severity = "warning"                            # "info" | "warning" | "high"
+
+[rule.reads]
+events = ["drain.node-advanced", "drain.refusal", "boundary.check"]   # registered event kinds only; drain.decision is a stored record, read as a projection
+projections = ["items", "work_nodes"]
+
+[rule.when]
+group_by = "item_id"                            # one episode per item
+pattern = "alternating_pair"                    # A -> B -> A -> B ...
+field = "seat"
+pairs = [["plan", "design"], ["work", "verify"]] # extended automatically by workflow.watch.oscillation_pairs
+threshold = 4                                   # 4 consecutive observations alternating between the pair (plan, design, plan, design): fires on the 4th
+window = "4h"
+clear_when = "seat not in pair or item.state in charter.finished"
+
+[rule.guidance]
+summary = "Item {{subject}} bounced between {{pair_a}} and {{pair_b}} {{count}} times over {{elapsed}}."
+check = [
+  "Inspect the attached TimelineBundle obstacles and boundary.check / OBSTACLE: fence or OBSTACLE: definition lines.",
+  "Compare the paths named in the planner/builder obstacle against the item's allowed_paths fence.",
+  "Check whether the designer updated a design doc without widening the item's fence (which design runs cannot edit unless fenced)."
+]
+do = [
+  "If allowed_paths is too narrow, widen the item fence (`tillr item update {{subject}} --add-path <path>`) or split a prerequisite item.",
+  "If a design decision needs the owner, hold with the exact owner question rather than re-dispatching plan.",
+  "Acknowledge this alert (`tillr watch ack {{alert_id}} --by <you>`) while acting."
+]
+
+[rule.delivery]
+receiver = "foreground"                         # "foreground" | "subscribers"
+also_notify = ["subscribers"]

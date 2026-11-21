@@ -20,12 +20,13 @@ import time
 # The modules the landing gate runs through tools/go-test-shards.py (fork-check's GO_SHARD_DIRS).
 SHARDED = ('tools/tillr-store', 'tools/tillr-item', 'tools/tillr-run', 'tools/tillr-gate',
            'tools/tillr-view', 'tools/tillr-land', 'tools/tillr-drain')
-# The commit most recently installed, beside the bin directory.
+# Installation records beside the bin directory.
 ROLLED = 'tillr-roll.commit'
+WATCH_RETIRE = 'tillr-watch.retire'
 SCHEMA_CHECK = 'tillr-drain: schema migration required'
 SCHEMA_STAGE = '.tillr-schema-roll-'
 EXIT_INCOMPATIBLE = 3  # tillr/record.ExitIncompatible
-MODULES = ('cli', 'drain', 'gate', 'item', 'land', 'run', 'store', 'view')
+MODULES = ('cli', 'drain', 'gate', 'item', 'land', 'run', 'store', 'view', 'watch')
 TRACE_PREFIXES = ('tillr-sqlite ', 'tillr-sqlite-stack ', 'tillr-git ')
 SHARD_FAILURE_RE = re.compile(r'^(?:go-test-shards:\s+)?\S+ shard \d+ (?:failed|timed out|cannot start|missing completion)\b')
 GO_FAIL_RE = re.compile(r'^---\s*FAIL:\s*(\S+)')
@@ -81,6 +82,9 @@ def report(old, new, answers, live):
         detail = '; part does not run from the live directory' if mismatch else ''
         print(f'{role}: old={before} new={after} answer={answer}{detail}')
         failed |= mismatch or answer in ('refused', 'error')
+    # A buffered write can fail after print returns. Surface it before the
+    # caller commits any watch retirement, not at interpreter shutdown.
+    sys.stdout.flush()
     return int(failed)
 
 
@@ -267,10 +271,105 @@ def stage_schema_roll(stage, live, tip, store):
     else:
         # A retry of the identical build can reuse the prepared siblings.
         os.replace(drain, live / drain.name)
+    return pending
+
+
+class WatchRetirement:
+    """Hide the installed binary, but keep it recoverable until success."""
+
+    def __init__(self, live):
+        self.watch = live / 'tillr-watch'
+        self.backup = None
+
+    def __enter__(self):
+        return self
+
+    def move_aside(self):
+        try:
+            self.watch.lstat()
+        except FileNotFoundError:
+            return
+        with tempfile.NamedTemporaryFile(prefix='.tillr-watch-', dir=self.watch.parent, delete=False) as tmp:
+            backup = Path(tmp.name)
+        try:
+            self.watch.replace(backup)
+        except BaseException:
+            backup.unlink()
+            raise
+        self.backup = backup
+
+    def commit(self):
+        if self.backup is not None:
+            self.backup.unlink()
+            self.backup = None
+
+    def __exit__(self, *_):
+        if self.backup is not None:
+            self.backup.replace(self.watch)
+
+
+def stamped_commit(live):
+    try:
+        return (live.parent / ROLLED).read_text().strip()
+    except FileNotFoundError:
+        return None
+
+
+def publish_watch_retirement(marker, tip, stage):
+    record = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', prefix='.' + marker.name + '-',
+                                         dir=marker.parent, delete=False) as file:
+            record = Path(file.name)
+            json.dump({'commit': tip, 'stage': stage.name}, file)
+        os.replace(record, marker)
+    except BaseException:
+        if record is not None:
+            record.unlink(missing_ok=True)
+        raise
+
+
+def settle_watch_retirement(live):
+    marker = live.parent / WATCH_RETIRE
+    try:
+        record = marker.read_text()
+        pending = json.loads(record)
+    except FileNotFoundError:
+        return
+    except ValueError:
+        pending = None
+    if isinstance(pending, dict):
+        stage = pending.get('stage')
+        commit = pending.get('commit')
+        if (isinstance(stage, str) and re.fullmatch(re.escape(SCHEMA_STAGE) + r'[a-f0-9]{64}', stage)
+                and isinstance(commit, str)):
+            if (live / stage).exists():
+                return
+            if stamped_commit(live) == commit:
+                with WatchRetirement(live) as retirement:
+                    retirement.move_aside()
+                    marker.unlink(missing_ok=True)
+                    try:
+                        retirement.commit()
+                    except OSError:
+                        marker.write_text(record)
+                        raise
+                return
+    marker.unlink(missing_ok=True)
 
 
 def roll_commit(root, live, tip, no_request, store):
     """Build, smoke and install `tip` from a clean checkout of that commit alone."""
+    # Keep the immediate-install backup outside the build workspace so it
+    # survives workspace cleanup, restart requests, and the final report.
+    with WatchRetirement(live) as retirement:
+        status = install_commit(root, live, tip, no_request, store, retirement)
+        if status == 0:
+            stepped('install', retirement.commit)
+        return status
+
+
+def install_commit(root, live, tip, no_request, store, retirement):
     old = stepped('store check', builds, store)
     # An automatic after-merge roll does not duplicate the repository's proof.
     # A manual roll, including a build without restart, still tests by default.
@@ -278,6 +377,8 @@ def roll_commit(root, live, tip, no_request, store):
     base_env = {k: v for k, v in os.environ.items() if k not in ('TILLR_SQLITE_TRACE', 'TILLR_ROLL_VERIFICATION')}
     build_env = {**base_env, 'CGO_ENABLED': '0'}
     live.parent.mkdir(parents=True, exist_ok=True)
+    marker = live.parent / WATCH_RETIRE
+    retire_after = None
     with tempfile.TemporaryDirectory(prefix='tillr-roll-', dir=live.parent) as work:
         work = Path(work)
         source = work / 'source'
@@ -287,7 +388,10 @@ def roll_commit(root, live, tip, no_request, store):
         stage = work / 'stage'
         stage.mkdir()
         programs = []
+        has_watch = (source / 'tools/tillr-watch').is_dir()
         for module in MODULES:
+            if module == 'watch' and not has_watch:
+                continue  # A named roll can target a revision before watch existed.
             name = 'tillr' if module == 'cli' else f'tillr-{module}'
             target = stage / name
             module_dir = source / 'tools' / f'tillr-{module}'
@@ -308,14 +412,25 @@ def roll_commit(root, live, tip, no_request, store):
         old = stepped('store check', builds, store)
         live.mkdir(exist_ok=True)
         if schema_roll:
-            stepped('stage schema roll', stage_schema_roll, stage, live, tip, store)
+            pending = stepped('stage schema roll', stage_schema_roll, stage, live, tip, store)
+            marker.unlink(missing_ok=True)
+            # Keep the new intent private until reporting succeeds. A failed
+            # roll must not cause a later invocation to retire the binary.
+            if not has_watch:
+                retire_after = pending
         else:
             for program in programs:
                 stepped('install', os.replace, program, live / program.name)
+            if not has_watch:
+                stepped('install', retirement.move_aside)
+            marker.unlink(missing_ok=True)
             (live.parent / ROLLED).write_text(tip + '\n')
     roles = ('drain', 'view')
     if no_request:
-        return report(old, old, dict.fromkeys(roles, 'not-requested'), live)
+        status = report(old, old, dict.fromkeys(roles, 'not-requested'), live)
+        if status == 0 and retire_after is not None:
+            publish_watch_retirement(marker, tip, retire_after)
+        return status
 
     def request(role):
         result = subprocess.run([live / f'tillr-{role}', 'restart', '--root', root, '--wait'],
@@ -340,7 +455,13 @@ def roll_commit(root, live, tip, no_request, store):
         new = builds(store)
         if all(answer != 'restarted' or new.get(role, {}).get('seq', 0) > old.get(role, {}).get('seq', 0)
                for role, answer in answers.items()) or time.monotonic() >= deadline:
-            return report(old, new, answers, live)
+            status = report(old, new, answers, live)
+            if status == 0 and retire_after is not None:
+                if retire_after.exists():
+                    publish_watch_retirement(marker, tip, retire_after)
+                elif stamped_commit(live) == tip:
+                    stepped('install', retirement.move_aside)
+            return status
         time.sleep(0.05)
 
 
@@ -367,6 +488,7 @@ def roll(root, live, no_request, build_pi=False, commit=None, on_wait=None):
             if on_wait:
                 on_wait()
             fcntl.flock(lock, fcntl.LOCK_EX)
+        settle_watch_retirement(live)
         tip = git('rev-parse', '--verify', (commit or 'HEAD') + '^{commit}', cwd=root)
         rolled = live.parent / ROLLED
         if waited and commit is None and rolled.is_file() and rolled.read_text().strip() == tip:
