@@ -227,10 +227,11 @@ type Candidate struct {
 	// WorkerHeadSHA and RetirementTreeSHA bind loop-owned maintenance to the
 	// worker commit and the exact staged tree. The intent is persisted before committing,
 	// so a restarted loop can recover HEAD without exempting any worker change from its fence.
-	WorkerHeadSHA     string         `json:"worker_head_sha,omitempty"`
-	RetirementTreeSHA string         `json:"retirement_tree_sha,omitempty"`
-	WorkerSession     *WorkerSession `json:"worker_session,omitempty"`
-	deferGateJudgment bool           // a fixer's ordinary judgment is not its final gate verdict
+	WorkerHeadSHA     string            `json:"worker_head_sha,omitempty"`
+	RetirementTreeSHA string            `json:"retirement_tree_sha,omitempty"`
+	WorkerSession     *WorkerSession    `json:"worker_session,omitempty"`
+	InheritedDrift    []forkObservation `json:"inherited_drift,omitempty"`
+	deferGateJudgment bool              // an ordinary phase's result may not be the final gate verdict
 	// Request is the run.request that produced this candidate. It is held so a
 	// conflict-fix run can be built from the same backend, command and timeout instead of
 	// inventing a second request. It is not persisted: the candidate is a value a step
@@ -268,7 +269,10 @@ type GateOutcome struct {
 	// FailingChecks is the check ids the gate recorded as failed. It is the set the
 	// trunk-already-red replay re-runs on the base; a gate failure that names none cannot
 	// be replayed and takes the ordinary refusal.
-	FailingChecks []string
+	FailingChecks  []string
+	forkConflicts  map[string]forkObservation
+	unfinished     bool // some planned checks could not be judged
+	unansweredFork bool // an INV-2 was unable to reach a verdict
 	// SuspectPaths is the candidate's changed paths, the first half of a fixer's fence.
 	SuspectPaths []string
 	// CheckWatches maps a check id to the read and write paths its plan declared, the
@@ -515,6 +519,7 @@ type Loop struct {
 	restartSettlements          atomic.Int32 // admitted gate/landing holds currently blocking exec
 	heavyMu                     sync.Mutex
 	fixerWaitMu                 sync.Mutex
+	forkRebaseMu                sync.Mutex
 	heavyWG                     sync.WaitGroup
 	heavyRunning                bool
 	heavyProofActive            bool // heavyMu; entry is serialized with exec by restartMechanical
@@ -3046,13 +3051,28 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		//     candidate lands with inherited failures recorded.
 		//   * Otherwise, acquit and hold behind the fixer naming the check, fixer, and
 		//     intersecting paths.
-		outcome, acquitted, err := l.settleTrunkAlreadyRed(ctx, &candidate, gate, result)
+		outcome, acquitted, err := l.settleGateFailure(ctx, &candidate, gate, result)
 		if err != nil {
 			return "", false, err
 		}
 		if outcome == GatePassedInherited {
 			gate.Outcome = GatePassedInherited
+			if !IsTrunkFixer(candidate.ItemID) {
+				if err := gate.finishJudgment(); err != nil {
+					return "", false, err
+				}
+			}
 			break
+		}
+		if outcome == GateErrored {
+			if err := l.markForkGateUnanswered(candidate); err != nil {
+				return "", false, err
+			}
+			gate.Outcome = GateErrored
+			if err := gate.finishJudgment(); err != nil {
+				return "", false, err
+			}
+			return "", false, l.holdGateNoVerdict(ctx, candidate)
 		}
 		if err := gate.finishJudgment(); err != nil {
 			return "", false, err
@@ -3138,6 +3158,12 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 		return "", false, lockErr
 	}
 	defer unlock()
+	if isForkRebaseItem(candidate.ItemID) {
+		// A newer release must not replace the request between validating this
+		// piece and recording its delivery receipt.
+		l.forkRebaseMu.Lock()
+		defer l.forkRebaseMu.Unlock()
+	}
 	if replay, err := l.recoverRemoteSyncReplay(ctx); err != nil {
 		return "", false, err
 	} else if replay != nil {
@@ -3165,6 +3191,14 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	}
 	if head != candidate.HeadSHA {
 		return "", false, l.candidateFault(ctx, candidate, fmt.Sprintf("lane HEAD %s differs from recorded candidate %s", head, candidate.HeadSHA))
+	}
+	if isForkRebaseItem(candidate.ItemID) {
+		if detail, err := l.checkForkRebasePiece(ctx, candidate); err != nil {
+			return "", false, err
+		} else if detail != "" {
+			candidate.RefusalDetail = detail
+			return "", false, l.refuse(ctx, candidate, result, RefusalDeliveryOrder)
+		}
 	}
 	if candidate.Judge != nil {
 		checked, err := l.checkJudgeForLanding(ctx, candidate)
@@ -3320,6 +3354,7 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 		l.reportf("loop: landed %s but could not record the landing count: %v\n", candidate.ItemID, err)
 	}
 	l.reportf("loop: landed %s (%s)\n", candidate.ItemID, candidate.HeadSHA)
+	l.reportInheritedDrift(ctx, candidate)
 	return "", true, nil
 }
 

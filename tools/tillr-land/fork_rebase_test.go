@@ -144,6 +144,10 @@ func TestForkReleaseRebaseLandsExactHead(t *testing.T) {
 		t.Fatalf("release rebase exited %d: %s\n%s", code, out, stderr)
 	}
 	r.delivered(t, r.headSHA)
+	input := filepath.Join(r.dir, ".forks", "inputs", "pi")
+	if got := git(t, input, "rev-parse", "refs/fork-inputs/"+r.headSHA); got != r.headSHA {
+		t.Fatalf("gate input = %s; want delivered %s", got, r.headSHA)
+	}
 	r.checkReceipt(t, db)
 }
 
