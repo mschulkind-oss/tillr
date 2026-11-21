@@ -13,7 +13,7 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-func TestInPlaceRestartContinuesThirdWorkflowNode(t *testing.T) {
+func TestInPlaceRestartKeepsLiveWorkflowReaders(t *testing.T) {
 	dir := scratch(t, "workflow-build-restart")
 	t.Setenv("RESTART_TEST_DIR", dir)
 	adapter := stub(t, "adapter", `set -eu
@@ -24,13 +24,8 @@ case "$TILLR_NODE_ID" in
         git commit -qm "$TILLR_NODE_ID"
         ;;
     three|four)
-        if [ "$TILLR_SESSION_MODE" = resume ]; then
-            git rev-parse HEAD > "$RESTART_TEST_DIR/$TILLR_NODE_ID.resumed"
-        else
-            printf '%s\n' "$TILLR_RUN_ID" >> "$RESTART_TEST_DIR/$TILLR_NODE_ID.started"
-            while [ ! -f "$TILLR_PAUSE_REQUEST" ] && [ ! -f "$RESTART_TEST_DIR/release" ]; do sleep 0.02; done
-            exit 0
-        fi
+        printf '%s %s\n' "$TILLR_RUN_ID" "$TILLR_SESSION_MODE" >> "$RESTART_TEST_DIR/$TILLR_NODE_ID.started"
+        while [ ! -f "$RESTART_TEST_DIR/release" ]; do sleep 0.02; done
         ;;
     last)
         while [ ! -f "$RESTART_TEST_DIR/release" ]; do sleep 0.02; done
@@ -98,28 +93,27 @@ printf 'RESULT: done\n'
 	s.waitFor(t, "the third and fourth nodes to start", func() bool {
 		return len(lines(t, filepath.Join(dir, "three.started"))) > 0 && len(lines(t, filepath.Join(dir, "four.started"))) > 0
 	})
-	target := filepath.Join(f.laneRoot, "lane-1", "worktree")
-	head := strings.TrimSpace(git(t, target, "rev-parse", "HEAD"))
+	first := map[string]string{}
+	for _, node := range []string{"three", "four"} {
+		first[node] = strings.Fields(lines(t, filepath.Join(dir, node+".started"))[0])[0]
+	}
 	s.replaceBinary(t)
 	if answer := s.restart(t); !strings.Contains(answer, "restarted") {
 		t.Fatalf("restart answer: %s", answer)
 	}
-	s.waitFor(t, "same-run continuation or unwanted redispatch", func() bool {
-		for _, node := range []string{"three", "four"} {
-			if len(lines(t, filepath.Join(dir, node+".started"))) > 1 {
-				return true
-			}
+	writeFile(t, filepath.Join(dir, "release"), "done")
+	s.waitFor(t, "the replacement loop to advance past both readers", func() bool {
+		var advanced bool
+		if err := db.ReadTx(ctx, func(r *store.Reader) error {
+			return r.QueryRow(`SELECT EXISTS(SELECT 1 FROM node_runs WHERE item_id='item_041' AND attempt=1 AND node_id='last')`).Scan(&advanced)
+		}); err != nil {
+			t.Fatal(err)
 		}
-		return len(lines(t, filepath.Join(dir, "three.resumed"))) > 0 && len(lines(t, filepath.Join(dir, "four.resumed"))) > 0
+		return advanced
 	})
 	for _, node := range []string{"three", "four"} {
-		started := lines(t, filepath.Join(dir, node+".started"))
-		resumed := lines(t, filepath.Join(dir, node+".resumed"))
-		if len(started) != 1 || len(resumed) != 1 || resumed[0] != head {
-			t.Fatalf("%s: started=%v resumed=%v, want one run with head %s\n%s", node, started, resumed, head, s.output(t))
-		}
-		if !strings.Contains(s.output(t), "continuing paused run "+started[0]+" on lane-1 as the same attempt") {
-			t.Errorf("no continuation decision for %s:\n%s", started[0], s.output(t))
+		if started := lines(t, filepath.Join(dir, node+".started")); len(started) != 1 || strings.Fields(started[0])[0] != first[node] {
+			t.Fatalf("%s restarted: %v\n%s", node, started, s.output(t))
 		}
 	}
 	if err := db.ReadTx(ctx, func(r *store.Reader) error {
@@ -127,7 +121,7 @@ printf 'RESULT: done\n'
 		if err := r.QueryRow(`SELECT count(*) FROM node_runs WHERE item_id='item_041' AND attempt=1 AND node_id IN ('one','two') AND outcome='passed'`).Scan(&passed); err != nil {
 			return err
 		}
-		if err := r.QueryRow(`SELECT count(*) FROM node_runs WHERE item_id='item_041' AND attempt=1 AND run_id IN (?,?)`, lines(t, filepath.Join(dir, "three.started"))[0], lines(t, filepath.Join(dir, "four.started"))[0]).Scan(&kept); err != nil {
+		if err := r.QueryRow(`SELECT count(*) FROM node_runs WHERE item_id='item_041' AND attempt=1 AND outcome='passed' AND run_id IN (?,?)`, first["three"], first["four"]).Scan(&kept); err != nil {
 			return err
 		}
 		if err := r.QueryRow(`SELECT count(*) FROM node_runs WHERE item_id='item_041' AND attempt>1`).Scan(&laterAttempts); err != nil {

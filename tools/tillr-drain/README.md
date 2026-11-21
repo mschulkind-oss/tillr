@@ -35,9 +35,9 @@ skill is [`docs/design/tillr-distribution.md`](../../docs/design/tillr-distribut
 ## Moving a running loop onto new code
 
 Start the drain and observatory from the `just tillr-build` bin directory.
-After a tillr landing the loop runs `just tillr-roll --no-request`, then requests restarts.
+After a tillr landing the loop runs `just tillr-roll --no-request`, then requests restarts; under after-merge proof, the proof runner owns the suites.
+An in-place drain restart leaves live workers on their original leases and dispatches new work on free lanes. A refused restart leaves the old loop running.
 After a manual commit, run `just tillr-roll` (in-place) or `just tillr-restart` (rebuild HEAD, restart keeper and loop).
-A refused restart leaves the current process running; replacing files alone does not restart it.
 Pack launchers use a separate install: run `yolo host apply --assert` before requesting a restart.
 
 ## Opted-in judgment before the gate

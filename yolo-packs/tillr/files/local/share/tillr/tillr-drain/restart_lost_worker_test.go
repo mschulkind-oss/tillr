@@ -27,6 +27,10 @@ func TestLandingRollRecoversLostWorker(t *testing.T) {
 	}
 }
 
+func TestLandingRollKeepsLiveWorkerAndDispatchesFreeLane(t *testing.T) {
+	testLandingRollLostWorker(t, "live")
+}
+
 func testLandingRollLostWorker(t *testing.T, mode string) {
 	t.Helper()
 	dir := scratch(t, "roll-lost-worker")
@@ -44,10 +48,18 @@ exec "$REAL_RUN_BIN" "$@"`)
     exec 3<>"$HOLD_FIFO"
     echo "$$ $TILLR_RUN_ID" >> "$WORKER_PIDS"
     read -r line <&3
-    exit 1
+    [ "$line" = finish ] || exit 1
+    echo done > other.txt
+    git add other.txt
+    git commit -qm 'finish original work'
+    printf 'RESULT: done\n'
+    exit 0
 fi
 while [ ! -s "$WORKER_PIDS" ]; do sleep 0.02; done
 `+committingAdapter)
+	if mode == "live" {
+		writeFile(t, filepath.Join(filepath.Dir(adapter), "pause-kind"), run.PauseAtGap+"\n")
+	}
 	land := stub(t, "land", `while [ "$#" -gt 1 ] && [ "$1" != --head ]; do shift; done
 [ "$1" = --head ] || exit 0
 cd "$FIXTURE_ROOT" || exit 5
@@ -57,6 +69,27 @@ printf '{"record_version":1,"kind":"land.record","id":"land-1","producer":{"syst
 	t.Setenv("FIXTURE_ROOT", f.root)
 	fixtureAt(t, f.store, fencedItemRecord("item_041", "in-queue", "other.txt"), fencedItemRecord("item_042", "in-queue", "candidate.txt"))
 	fixtureTerminalEvidence(t, f.store, "item_042")
+	if mode == "live" {
+		// Observe even a lease change that does not emit a run.release event.
+		ctx := context.Background()
+		db, err := store.Open(ctx, f.store, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = db.WriteTx(ctx, func(tx *store.Tx) error {
+			if _, err := tx.Exec(`CREATE TABLE fixture_lease_releases (run_id TEXT)`); err != nil {
+				return err
+			}
+			_, err := tx.Exec(`CREATE TRIGGER fixture_watch_lease AFTER UPDATE ON lanes
+				WHEN OLD.state='leased' AND (NEW.state<>'leased' OR NEW.run_id IS NOT OLD.run_id)
+				BEGIN INSERT INTO fixture_lease_releases VALUES (OLD.run_id); END`)
+			return err
+		})
+		db.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	s := &rollScenario{f: f, exe: filepath.Join(dir, "tillr-drain"), out: filepath.Join(dir, "loop.out")}
 	copyFile(t, bin, s.exe, nil)
 	copyFile(t, bin, s.exe+".next", []byte("\n# post-landing build\n"))
@@ -87,22 +120,17 @@ printf '{"record_version":1,"kind":"land.record","id":"land-1","producer":{"syst
 	s.waitFor(t, "in-place restart after the matching landing", func() bool {
 		return strings.Contains(s.output(t), "restarted in place onto build")
 	})
-	// Adoption reports before registering its session; wait for registration so
-	// stop targets the new session, not the just-ended one.
+	// Adoption reports before the new session and lanes are ready. Use the
+	// first pass's sync as the barrier before attempting the stop protocol.
+	s.waitFor(t, "the replacement loop's first pass", func() bool {
+		_, after, _ := strings.Cut(s.output(t), "restarted in place onto build")
+		return strings.Contains(after, "loop: synced documents at ")
+	})
 	db, err := store.Open(context.Background(), f.store, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	s.waitFor(t, "replacement session registration", func() bool {
-		var registered bool
-		if err := db.ReadTx(context.Background(), func(r *store.Reader) error {
-			return r.QueryRow(`SELECT EXISTS(SELECT 1 FROM drain_sessions WHERE ended_at IS NULL)`).Scan(&registered)
-		}); err != nil {
-			t.Fatal(err)
-		}
-		return registered
-	})
 	first := strings.Fields(lines(t, pids)[0])
 	worker, err := strconv.Atoi(first[0])
 	if err != nil || !alive(worker) {
@@ -117,6 +145,10 @@ printf '{"record_version":1,"kind":"land.record","id":"land-1","producer":{"syst
 	}
 	if face <= 0 || !alive(face) {
 		t.Fatalf("the original run face did not survive exec: %d", face)
+	}
+	if mode == "live" {
+		assertLiveRoll(t, s, db, first[1], fifo)
+		return
 	}
 	// Freeze planning, not the worker: this lets why observe the missing processes
 	// before recovery can change the store. Kill both fixture PIDs with no finish record.
@@ -212,6 +244,66 @@ printf '{"record_version":1,"kind":"land.record","id":"land-1","producer":{"syst
 		return r.QueryRow(`SELECT end_cause FROM runs WHERE run_id = ?`, first[1]).Scan(&cause)
 	}); err != nil || cause != run.EndLeaseReclaimed {
 		t.Fatalf("the original run was not reclaimed: cause %q, error %v", cause, err)
+	}
+}
+
+func assertLiveRoll(t *testing.T, s *rollScenario, db *store.Store, id, fifo string) {
+	t.Helper()
+	ctx := context.Background()
+	fixtureAt(t, s.f.store, fencedItemRecord("item_043", "in-queue", "candidate.txt"))
+	s.waitFor(t, "the replacement loop to dispatch a new item while the worker is blocked", func() bool {
+		var started bool
+		if err := db.ReadTx(ctx, func(r *store.Reader) error {
+			return r.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE kind=? AND json_extract(payload,'$.item_id')='item_043')`, run.AllocateKind).Scan(&started)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return started
+	})
+	if err := db.ReadTx(ctx, func(r *store.Reader) error {
+		var leased bool
+		var pauses, finishes, releases int
+		if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM lanes WHERE run_id=? AND state='leased'),
+			(SELECT count(*) FROM events WHERE object_id=? AND kind=?),
+			(SELECT count(*) FROM events WHERE object_id=? AND kind=?),
+			(SELECT count(*) FROM fixture_lease_releases WHERE run_id=?)`,
+			id, id, run.PauseRequestKind, id, run.FinishKind, id).Scan(&leased, &pauses, &finishes, &releases); err != nil {
+			return err
+		}
+		if !leased || pauses != 0 || finishes != 0 || releases != 0 {
+			t.Fatalf("replacement disturbed live run %s: leased=%v pauses=%d finishes=%d releases=%d\n%s", id, leased, pauses, finishes, releases, s.output(t))
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := os.OpenFile(fifo, os.O_WRONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = writer.WriteString("finish\n")
+	writer.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.waitFor(t, "the replacement loop to account for the original worker's finish", func() bool {
+		return strings.Contains(s.output(t), id+" on fixture spent")
+	})
+	if err := db.ReadTx(ctx, func(r *store.Reader) error {
+		var allocations, finishes int
+		var cause string
+		if err := r.QueryRow(`SELECT end_cause,
+			(SELECT count(*) FROM events WHERE kind=? AND json_extract(payload,'$.item_id')='item_041'),
+			(SELECT count(*) FROM events WHERE kind=? AND object_id=?) FROM runs WHERE run_id=?`,
+			run.AllocateKind, run.FinishKind, id, id).Scan(&cause, &allocations, &finishes); err != nil {
+			return err
+		}
+		if cause != run.EndNormalExit || allocations != 1 || finishes != 1 {
+			t.Errorf("run %s: cause=%s allocations=%d finishes=%d", id, cause, allocations, finishes)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

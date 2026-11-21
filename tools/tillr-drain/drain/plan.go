@@ -138,7 +138,7 @@ type Decision struct {
 
 	// DispatchBuild is the loop build that planned a dispatch whose decision carries no
 	// Inputs (a design-seat or owner-question dispatch). The dispatch fact records it as
-	// its TillrBuild, so build migration knows the run's build (migrateBuildRuns).
+	// its TillrBuild, so the dispatch records which build started it.
 	DispatchBuild string `json:"dispatch_build,omitempty"`
 	// Readmitted marked a dispatch the removed input-change rule allowed. No pass writes
 	// it since the owner's ruling of 2026-11-17; recorded decisions still carry it.

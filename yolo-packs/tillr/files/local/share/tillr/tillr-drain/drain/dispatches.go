@@ -142,8 +142,7 @@ func recordPassDecision(tx *store.Tx, decision Decision, at time.Time) error {
 		}
 	}
 	// Every dispatch fact names its build: a decision with no Inputs (a design-seat or
-	// owner-question dispatch) records the planning build alone, so build migration does not
-	// read its run as an older build's (migrateBuildRuns).
+	// owner-question dispatch) records the planning build alone.
 	inputs := decision.Inputs
 	if inputs == nil && decision.DispatchBuild != "" {
 		inputs = &RunInputs{TillrBuild: decision.DispatchBuild}
