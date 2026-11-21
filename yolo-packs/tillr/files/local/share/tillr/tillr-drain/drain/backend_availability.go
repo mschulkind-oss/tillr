@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -88,9 +89,18 @@ func ProbeBackend(ctx context.Context, path, root, backend string, argv []string
 	cmd.Stderr = io.Discard
 	probeErr := runCheckGroup(cmd)
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
-		return appendEffect(tx, backendProbeKind, backend, struct {
+		at := time.Now().UTC()
+		payload, err := json.Marshal(struct {
 			Success bool `json:"success"`
-		}{probeErr == nil}, time.Now().UTC())
+		}{probeErr == nil})
+		if err != nil {
+			return err
+		}
+		seq, err := tx.Append(event.Event{Kind: backendProbeKind, ObjectType: "run", ObjectID: &backend, Payload: payload, At: at})
+		if err != nil || probeErr != nil {
+			return err
+		}
+		return reopenBackendWindow(tx, backend, seq, at)
 	})
 	if err != nil {
 		return err
@@ -183,7 +193,7 @@ func describeQuotaHold(r *store.Reader, d *Decision, policy *Policy, at time.Tim
 			return err
 		}
 		d.BackendHoldCause = fmt.Sprintf("%s quota refusal recorded by run %s", kind, runID)
-		d.BackendHoldMover = "provider quota resets at " + reset.Format(time.RFC3339)
+		d.BackendHoldMover = "provider quota resets at " + reset.Format(time.RFC3339) + "; after an early reset, record a successful probe-backend"
 		return nil
 	}
 	b := policy.Backends[name]

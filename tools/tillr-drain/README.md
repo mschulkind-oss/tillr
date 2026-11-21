@@ -775,9 +775,9 @@ another restart.
 A backend row can name `quota`, an argument list for a command that reads remaining
 quota without starting work, and `reserve`, the fraction of every window kept for
 the owner (default 0, valid range 0 through 1). A row without `quota` is never
-probed or held by a reading or reserve; a run's refusal still holds it until reset.
-With reserve 0.2, a window at 0.8 used closes admission;
-a window at 0.79 remains open. The loop walks the seat's normal fallback order.
+probed or held by a reading or reserve; a run's refusal still holds it until reset
+or a successful operator probe. With reserve 0.2, a window at 0.8 used closes
+admission; a window at 0.79 remains open. The loop walks the seat's normal fallback order.
 
 ```json
 "quota": ["tools/tillr-run/backends/claude/quota"],
@@ -804,6 +804,18 @@ after staging; a claimed dispatch always starts. Reserve is a threshold on the
 last reading, not a guarantee against runs overshooting it within one interval.
 Readings and reserves do not stop already-running work. A failed designer resume
 remains unsettled until a replacement backend is open, before staging its new session.
+
+To report an early provider-side reset, run `tillr drain probe-backend` for the
+same backend with a smoke check that exercises that route:
+
+```bash
+tillr drain probe-backend --store .tillr/store.sqlite3 --backend <name> -- <smoke-check-command> <args>
+```
+
+A success recorded after the refusal removes its active window so the next pass
+can dispatch held work. A `drain.backend-quota-reopened` event links the refusal
+and the probe. A failed probe leaves the window in place; a new refusal closes
+the backend again. Quota readings and reserve checks still apply.
 
 For a single-worker item, a recorded quota refusal stops other live runs on that
 backend through the normal pause request. If the refusing run changed its head or
@@ -1709,10 +1721,10 @@ hold names the backend in `deferred_by`, with `backend_hold_cause` and
 run or the quota fact that closed admission. The mover explains how to reopen it:
 for an infrastructure failure, the operator repairs the backend and records a
 successful explicit probe; a later non-infrastructure ending can also reopen it.
-Quota holds remain independent; reopening the
-harness does not erase an unexpired quota refusal. No automatic probe or timer
-spends work on a closed backend. Legacy `max_failovers` policy keys are accepted
-but ignored; `run-infra-exhausted` is readable only as history.
+A successful explicit probe also clears an active refusal window for that backend;
+ordinary run outcomes and quota readings do not clear that window. No automatic
+probe or timer spends work on a closed backend. Legacy `max_failovers` policy keys
+are accepted but ignored; `run-infra-exhausted` is readable only as history.
 
 An operator can exercise the repaired backend with a smoke-check command and
 record the result:
@@ -1723,9 +1735,9 @@ tillr-drain probe-backend --store .tillr/store.sqlite3 --backend <name> -- <smok
 
 Use a command that actually exercises that named backend's harness and route,
 not a quota query or a command that merely exits zero. Exit zero records a
-successful `drain.backend-probe` event and reopens the backend; every other exit
-records a failed probe and leaves it closed. Output is discarded to keep credentials
-out of recorded state. The probe does not dispatch an item or consume its criteria.
+successful `drain.backend-probe` event and clears the closures described above;
+every other exit records a failed probe and leaves those closures in place. Output
+is discarded to keep credentials out of recorded state. The probe does not dispatch an item or consume its criteria.
 Its cost is the command's cost: a harness/model smoke check can spend provider tokens
 and quota, while the event write itself spends no model tokens. It is explicit,
 never automatic. A retry the owner authorized is the only dispatch to a closed
