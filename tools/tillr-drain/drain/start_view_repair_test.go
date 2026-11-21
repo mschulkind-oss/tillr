@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -111,4 +112,97 @@ func TestStartViewBlockedAndPinnedParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(proposeFixture(t, l, at.Add(5*time.Second), refused), "item-express", "lane-1")
+}
+
+func proposalFollower(t *testing.T, l *Loop) func(time.Time) startSnapshot {
+	t.Helper()
+	ctx := context.Background()
+	var follower startStoreSync
+	t.Cleanup(follower.close)
+	var previous startSnapshot
+	tick, policy := l.startViewPass(), l.currentPolicy()
+	questions := &VantageQuestions{Root: l.cfg.Root}
+	return func(at time.Time) startSnapshot {
+		t.Helper()
+		next, err := follower.syncStore(ctx, l.cfg.Store, at, policy, previous, func(r *store.Reader, next *startSnapshot, touched map[string]bool) error {
+			return next.repairEntries(ctx, r, at, policy, tick, questions, previous, touched)
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		previous = next
+		return next
+	}
+}
+
+func TestSyncReadsOnlyWhatItsInputsChanged(t *testing.T) {
+	f, l := passFixture(t, "item-a", "item-b", "item-c")
+	at := l.cfg.Now()
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`INSERT INTO item_edges VALUES ('item-b','item-a')`); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`INSERT INTO backend_windows VALUES ('other','weekly',1,'closed',?,'refused')`, at.Add(time.Minute).UnixMilli())
+		return err
+	})
+	refresh := proposalFollower(t, l)
+	seed := refresh(at)
+	untouched := seed.entries["item-c"].decision.RunRequest
+	if untouched == nil || seed.holds["item-b"] == "" {
+		t.Fatalf("invalid fixture: %+v", seed.holds)
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`UPDATE items SET state='landed' WHERE item_id='item-a'`); err != nil {
+			return err
+		}
+		// Only the blocker has an event. Find the dependent by its reverse edge.
+		id := "item-a"
+		_, err := tx.Append(event.Event{Kind: "item.update", ObjectType: "item", ObjectID: &id, At: at, Payload: []byte(`{"state":"landed"}`)})
+		return err
+	})
+	changed := refresh(at.Add(time.Second))
+	if changed.entries["item-b"].decision.RunRequest == nil || changed.entries["item-c"].decision.RunRequest != untouched || changed.pending != seed.pending || changed.contentVersions["item-b"] == seed.contentVersions["item-b"] || seed.holds["item-b"] == "" {
+		t.Fatalf("dependency change did not repair only affected entries: %+v", changed.holds)
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE backend_windows SET reset_at=? WHERE backend='other'`, at.Add(4*time.Second).UnixMilli())
+		return err
+	})
+	if same := refresh(at.Add(2 * time.Second)); !same.shut["other"] || same.entries["item-c"].decision.RunRequest != untouched || same.pending != seed.pending {
+		t.Fatal("an already closed backend reopened early or caused an unnecessary rebuild")
+	}
+	if reopened := refresh(at.Add(4 * time.Second)); reopened.shut["other"] || reopened.entries["item-c"].decision.RunRequest == untouched {
+		t.Fatal("reopening a backend did not rebuild the entries")
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET allowed_paths='[]' WHERE item_id='item-c'`)
+		return err
+	})
+	if raw := refresh(at.Add(5 * time.Second)); raw.entries["item-c"].decision.RunRequest != nil || raw.pending == seed.pending {
+		t.Fatal("raw item edit did not trigger reseeding")
+	}
+}
+
+func TestLaneChangeOwesRebuildUntilSafetyInterval(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	l.cfg.Lanes = []string{"lane-1"}
+	at := l.cfg.Now()
+	refresh := proposalFollower(t, l)
+	request := refresh(at).entries["item-a"].decision.RunRequest
+	if request == nil {
+		t.Fatal("fixture did not propose a start")
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`INSERT INTO lanes (lane_id,state,run_id) VALUES ('lane-1','leased','foreign')`)
+		return err
+	})
+	for _, dt := range []time.Duration{time.Second, startViewRefreshInterval / 2} {
+		busy := refresh(at.Add(dt))
+		if _, ok := busy.nextStart(); ok || !busy.occupied["lane-1"] || busy.entries["item-a"].decision.RunRequest != request {
+			t.Fatal("lane facts were stale or the full rebuild ran early")
+		}
+	}
+	if due := refresh(at.Add(startViewRefreshInterval)); due.entries["item-a"].decision.RunRequest == request {
+		t.Fatal("the safety interval did not pay the owed rebuild")
+	}
 }

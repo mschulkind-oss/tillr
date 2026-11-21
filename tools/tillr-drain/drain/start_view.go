@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"maps"
 	"reflect"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -26,16 +25,19 @@ type startSnapshot struct {
 	occupied   map[string]bool
 	storeLanes map[string]bool // raw leases, before overlaying pending work
 
-	entries             map[string]startViewEntry
-	holds, reservations map[string]string
-	readyAt, laneFreeAt map[string]time.Time
-	freeLanes           []string
-	tip, green          string
+	entries                         map[string]startViewEntry
+	holds, reservations             map[string]string
+	readyAt, laneFreeAt             map[string]time.Time
+	freeLanes                       []string
+	tip, green                      string
+	unshared                        map[string]bool
+	rewriteHolds, rewriteOwnerHolds map[string]string
 
 	def                               definition.Definition
 	definitionSHA                     string
 	lastEventSeq                      int64
 	trunkWaiters, defectWaiters       map[string]string
+	waits                             map[string]item.WaitingOn
 	itemsByID                         map[string]itemRow
 	states                            map[string]string
 	edges, reverseEdges               map[string][]string
@@ -154,6 +156,7 @@ func (s *startSnapshot) seed(r *store.Reader, at time.Time, policy *Policy) erro
 	s.itemsByID = make(map[string]itemRow, len(rows))
 	s.states = make(map[string]string, len(rows))
 	s.trunkWaiters, s.defectWaiters = map[string]string{}, map[string]string{}
+	s.waits = map[string]item.WaitingOn{}
 	for _, row := range rows {
 		if row.JudgeMode == "agent" {
 			row.JudgeGrant, err = judgeGrant(r, row.ItemID, at)
@@ -163,33 +166,14 @@ func (s *startSnapshot) seed(r *store.Reader, at time.Time, policy *Policy) erro
 		}
 		s.items = append(s.items, startQueueRow{id: row.ItemID, rank: row.Rank})
 		s.itemsByID[row.ItemID], s.states[row.ItemID] = row, row.State
-		if s.def.Completes == "landing" && row.State == s.def.Blocked {
-			wait, _, err := item.ReadWaitingOn(r, row.ItemID)
-			if err != nil {
-				return err
-			}
-			if wait != nil {
-				if id, ok := strings.CutPrefix(wait.Waiter, "item:"); ok {
-					switch {
-					case IsTrunkFixer(id):
-						s.trunkWaiters[row.ItemID] = id
-					case IsDefectItem(id):
-						s.defectWaiters[row.ItemID] = id
-					}
-				}
-			}
+		if err := s.refreshWait(r, row.ItemID, row.State); err != nil {
+			return err
 		}
 	}
 	if s.edges, err = readEdges(r); err != nil {
 		return err
 	}
-	s.reverseEdges = map[string][]string{}
-	// Iterate in queue order so a reseed of the same facts is identical.
-	for _, row := range rows {
-		for _, blocker := range s.edges[row.ItemID] {
-			s.reverseEdges[blocker] = append(s.reverseEdges[blocker], row.ItemID)
-		}
-	}
+	s.rebuildReverseEdges()
 	if s.pending, err = readPendingHistoryState(r); err != nil {
 		return err
 	}
@@ -245,12 +229,9 @@ func (s *startSnapshot) seed(r *store.Reader, at time.Time, policy *Policy) erro
 func (s *startSnapshot) refreshAttemptOrdinals(r *store.Reader) error {
 	s.attempts, s.nodeCounts = map[string]int{}, map[string]int{}
 	for _, row := range s.items {
-		id := row.id
-		attempt, count, err := readAttemptInputs(r, s.hasNodes, id, s.priors[id])
-		if err != nil {
+		if err := s.refreshAttempt(r, row.id); err != nil {
 			return err
 		}
-		s.attempts[id], s.nodeCounts[id] = attempt, count
 	}
 	return nil
 }

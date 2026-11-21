@@ -882,10 +882,10 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	defer follower.close() // stop and join the watcher before closing its connection
 	stopView := shadow.watch(ctx, startViewRefreshInterval, func(ctx context.Context) (startSnapshot, error) {
 		at, policy, previous := time.Now(), l.currentPolicy(), shadow.snapshot()
-		return follower.syncStore(ctx, shadowTick.StorePath, at, policy, previous, func(r *store.Reader, next *startSnapshot) error {
+		return follower.syncStore(ctx, shadowTick.StorePath, at, policy, previous, func(r *store.Reader, next *startSnapshot, touched map[string]bool) error {
 			questions := &VantageQuestions{Root: root, Command: questionsCmd, Context: ctx}
 			shadowTick.Now = at.Format(time.RFC3339Nano)
-			return next.rebuildEntries(ctx, r, at, policy, shadowTick, questions, previous)
+			return next.repairEntries(ctx, r, at, policy, shadowTick, questions, previous, touched)
 		})
 	})
 	defer stopView()

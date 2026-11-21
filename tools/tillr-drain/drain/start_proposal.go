@@ -63,23 +63,16 @@ func shadowRotation(r *store.Reader, tick *Pass) error {
 }
 
 func (s *startSnapshot) buildPlanner(r *store.Reader, at time.Time, policy *Policy, tick Pass, questions *VantageQuestions, rows []itemRow, inputs map[string]*RunInputs, unproved map[string]bool) (*planner, error) {
-	lanes, owners := maps.Clone(s.storeLanes), maps.Clone(s.deskOwners)
+	lanes, owners := s.heldLanes(), maps.Clone(s.deskOwners)
 	for _, work := range s.pending.works {
 		if !work.Done && !work.LaneReleased {
-			lanes[work.Decision.LaneID] = true
 			owners[work.Decision.LaneID] = work.Decision.ItemID
 		}
 	}
 	waits, commentHolds := map[string]item.WaitingOn{}, map[string]string{}
 	for _, row := range rows {
-		if row.State == s.def.Blocked {
-			wait, _, err := item.ReadWaitingOn(r, row.ItemID)
-			if err != nil {
-				return nil, err
-			}
-			if s.conflicts[row.ItemID].HasIndependentWait(wait) {
-				waits[row.ItemID] = *wait
-			}
+		if wait := s.waits[row.ItemID]; s.conflicts[row.ItemID].HasIndependentWait(&wait) {
+			waits[row.ItemID] = wait
 		}
 		if hasPrerequisite(s.def, definition.PrerequisiteDesignQuestions) && item.IsCommentItem(row.ItemID) && !finishedState(s.def, row.State) {
 			commentHolds[plannerDocumentKey(questions.Root, row.DesignDoc)] = row.ItemID
@@ -105,8 +98,26 @@ func (s *startSnapshot) buildPlanner(r *store.Reader, at time.Time, policy *Poli
 }
 
 func (s *startSnapshot) rebuildEntries(ctx context.Context, r *store.Reader, at time.Time, policy *Policy, tick Pass, questions *VantageQuestions, previous startSnapshot) error {
+	return s.repairEntries(ctx, r, at, policy, tick, questions, previous, nil)
+}
+
+func (s *startSnapshot) repairEntries(ctx context.Context, r *store.Reader, at time.Time, policy *Policy, tick Pass, questions *VantageQuestions, previous startSnapshot, touched map[string]bool) error {
+	if err := shadowRotation(r, &tick); err != nil {
+		return err
+	}
+	s.updateFreeLanes(tick, previous, at)
+	if touched != nil && len(touched) == 0 {
+		return nil
+	}
 	root := questions.Root
-	unshared, rewriteHolds, rewriteOwnerHolds := map[string]bool{}, map[string]string{}, map[string]string{}
+	unshared, rewriteHolds, rewriteOwnerHolds := s.unshared, s.rewriteHolds, s.rewriteOwnerHolds
+	docInputsChanged := touched == nil
+	for id := range touched {
+		docInputsChanged = docInputsChanged || s.contentVersions[id] != previous.contentVersions[id]
+		if IsTrunkFixer(id) && s.states[id] != previous.states[id] {
+			touched = nil // the fixer's disposition can change ordinary holds
+		}
+	}
 	if s.def.Completes == "landing" && root != "" {
 		var err error
 		s.tip, err = heavyGitOutput(ctx, root, "rev-parse", TrunkRef)
@@ -121,14 +132,26 @@ func (s *startSnapshot) rebuildEntries(ctx context.Context, r *store.Reader, at 
 		if err != nil {
 			return err
 		}
-		if hasPrerequisite(s.def, definition.PrerequisiteDesignDocument) {
+		if (docInputsChanged || s.tip != previous.tip) && hasPrerequisite(s.def, definition.PrerequisiteDesignDocument) {
 			unshared, rewriteHolds, rewriteOwnerHolds, err = documentPrerequisites(r, root)
 			if err != nil {
 				return err
 			}
 		}
 	}
-	unproved, err := unprovedBlockers(ctx, r, root, s.green, s.states, s.edges)
+	if s.tip != previous.tip || s.green != previous.green ||
+		!maps.Equal(s.unshared, unshared) || !maps.Equal(s.rewriteHolds, rewriteHolds) || !maps.Equal(s.rewriteOwnerHolds, rewriteOwnerHolds) {
+		touched = nil
+	}
+	s.unshared, s.rewriteHolds, s.rewriteOwnerHolds = unshared, rewriteHolds, rewriteOwnerHolds
+	edges := s.edges
+	if touched != nil {
+		edges = map[string][]string{}
+		for id := range touched {
+			edges[id] = s.edges[id]
+		}
+	}
+	unproved, err := unprovedBlockers(ctx, r, root, s.green, s.states, edges)
 	if err != nil {
 		return err
 	}
@@ -137,10 +160,15 @@ func (s *startSnapshot) rebuildEntries(ctx context.Context, r *store.Reader, at 
 		return err
 	}
 	rows := make([]itemRow, 0, len(s.items))
+	repair := make([]itemRow, 0, len(touched))
 	inputs := map[string]*RunInputs{}
 	for _, q := range s.items {
 		row := s.itemsByID[q.id]
 		if tick.examineItem != "" && tick.examineItem != row.ItemID {
+			continue
+		}
+		rows = append(rows, row)
+		if touched != nil && !touched[row.ItemID] {
 			continue
 		}
 		if doc := deskDocument(row, tick.Comments); doc != "" {
@@ -155,29 +183,26 @@ func (s *startSnapshot) rebuildEntries(ctx context.Context, r *store.Reader, at 
 				return err
 			}
 		}
-		rows = append(rows, row)
-	}
-	if err := shadowRotation(r, &tick); err != nil {
-		return err
+		repair = append(repair, row)
 	}
 	p, err := s.buildPlanner(r, at, policy, tick, questions, rows, inputs, unproved)
 	if err != nil {
 		return err
 	}
-	s.occupied = p.held
-	s.holds, s.entries = map[string]string{}, map[string]startViewEntry{}
-	s.readyAt, s.laneFreeAt = map[string]time.Time{}, map[string]time.Time{}
-	s.freeLanes = nil
-	for _, lane := range *tick.AvailableLanes {
-		if !s.occupied[lane] {
-			s.freeLanes = append(s.freeLanes, lane)
-			s.laneFreeAt[lane] = since(previous.laneFreeAt[lane], at)
+	if touched == nil {
+		s.holds, s.entries, s.readyAt = map[string]string{}, map[string]startViewEntry{}, map[string]time.Time{}
+	} else {
+		s.holds, s.entries, s.readyAt = maps.Clone(s.holds), maps.Clone(s.entries), maps.Clone(s.readyAt)
+		for id := range touched {
+			delete(s.holds, id)
+			delete(s.entries, id)
+			delete(s.readyAt, id)
 		}
 	}
 	p.captureStart = func(row itemRow, d Decision) error {
 		return s.evaluateEntry(r, row, d, at, previous)
 	}
-	_, _, err = p.planItems(r, rows, s.edges, s.faults, s.pending.works, inputs, s.retries, rewriteOwnerHolds, rewriteHolds, unshared, s.hasNodes, buildHash, policy, s.shut, tick, root, s.def, at)
+	_, _, err = p.planItems(r, repair, s.edges, s.faults, s.pending.works, inputs, s.retries, rewriteOwnerHolds, rewriteHolds, unshared, s.hasNodes, buildHash, policy, s.shut, tick, root, s.def, at)
 	if err != nil {
 		return err
 	}
@@ -188,6 +213,28 @@ func (s *startSnapshot) rebuildEntries(ctx context.Context, r *store.Reader, at 
 		}
 	}
 	return nil
+}
+
+func (s startSnapshot) heldLanes() map[string]bool {
+	lanes := maps.Clone(s.storeLanes)
+	for _, work := range s.pending.works {
+		if !work.Done && !work.LaneReleased {
+			lanes[work.Decision.LaneID] = true
+		}
+	}
+	return lanes
+}
+
+func (s *startSnapshot) updateFreeLanes(tick Pass, previous startSnapshot, at time.Time) {
+	s.occupied = s.heldLanes()
+	s.laneFreeAt = map[string]time.Time{}
+	s.freeLanes = nil
+	for _, lane := range *tick.AvailableLanes {
+		if !s.occupied[lane] {
+			s.freeLanes = append(s.freeLanes, lane)
+			s.laneFreeAt[lane] = since(previous.laneFreeAt[lane], at)
+		}
+	}
 }
 
 func since(previous, at time.Time) time.Time {
