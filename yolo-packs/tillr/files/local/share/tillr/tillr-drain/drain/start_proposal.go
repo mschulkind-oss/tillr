@@ -15,8 +15,9 @@ import (
 type startViewEntry struct {
 	decision Decision
 	// An unassigned entry is versioned without a lane. A proposal has no claim authority.
-	version string
-	express bool
+	version     string
+	versionLane string // concrete lane at versioning, before nextStart assigns one
+	express     bool
 }
 
 // Capture loop-owned configuration on the loop goroutine; the watcher must not
@@ -246,7 +247,7 @@ func since(previous, at time.Time) time.Time {
 }
 
 func (s *startSnapshot) evaluateEntry(r *store.Reader, row itemRow, d Decision, at time.Time, previous startSnapshot) error {
-	e := startViewEntry{decision: d, express: row.Express}
+	e := startViewEntry{decision: d, versionLane: d.LaneID, express: row.Express}
 	if isDispatch(d) && d.RunRequest != nil {
 		version, err := inputVersionFrom(r, d, versionFolds{works: s.pending.works, faults: s.faults, contentVersions: s.contentVersions})
 		if err != nil {

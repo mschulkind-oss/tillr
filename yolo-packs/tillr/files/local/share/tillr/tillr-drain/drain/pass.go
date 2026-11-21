@@ -125,6 +125,9 @@ var pendingFolds atomic.Int64
 // pendingHistoryFoldHook lets contention tests pause the expensive history fold.
 var pendingHistoryFoldHook func()
 
+// pendingDeltaFoldHook observes the fold itself, including incremental reads.
+var pendingDeltaFoldHook func()
+
 // pendingHistoryHead marks the event sequence covered by a read-phase fold.
 // Each per-kind maximum is an indexed lookup.
 func pendingHistoryHead(r *store.Reader) (int64, error) {
@@ -193,6 +196,9 @@ func readPendingHistoryState(r *store.Reader) (*pendingHistoryState, error) {
 // foldPendingHistory extends a private state with ordered events, or reads the
 // relevant kinds after seq if no events were supplied.
 func foldPendingHistory(r *store.Reader, seq int64, s *pendingHistoryState, events []event.Event) error {
+	if pendingDeltaFoldHook != nil {
+		pendingDeltaFoldHook()
+	}
 	if events == nil {
 		var err error
 		events, err = r.EventsOfKind(seq, pendingHistoryKinds...)
