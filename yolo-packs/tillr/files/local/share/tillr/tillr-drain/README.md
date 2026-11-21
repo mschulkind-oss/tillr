@@ -1126,8 +1126,12 @@ a hook failure, an unreachable remote), and only it triggers a fetch and replay.
 and, under the landing lock, replays the unpublished trunk commits one by one onto the fetched
 tip: linear, no merge commit, never a forced push, authors and messages kept. It then moves the
 main checkout with `git reset --keep`, so a path the move changes that holds owner content
-stops it with nothing changed. The loop's rewrite absorption maps each replaced commit by patch,
-carries `refs/tillr/green`, and raises no trunk-rewritten hold. In green mode the new tip is
+stops it with nothing changed. The loop tries to match replaced commits by patch first. If
+upstream context changes a patch or upstream already contains the change, the loop can use the
+replay's own old-to-new pairs instead. A superseded commit maps to the tip it would have
+followed, without creating an empty commit. The loop records the mapping in `trunk_rewrites`,
+moves matching `refs/tillr/landed/<run_id>` markers and `refs/tillr/green`, and raises no
+`trunk-rewritten` hold. In green mode the new tip is
 proved first and pushed at the next green advance; in tip mode the push runs again at once. A
 conflict, a merge commit among the unpublished commits, a checkout off the trunk or a dirty
 path fails the push with `mover: operator` and the commands to run by hand. Not built: the
@@ -1141,6 +1145,7 @@ ignore these pointer updates. The identity check trusts every commit reachable f
 under that prefix: a commit another machine pushed under its own address does not hold
 landings with `trunk-foreign-identity`. Unpublished replayed commits are not under the pointer;
 an unpublished foreign commit made here still holds until `tillr-drain accept-identity`.
+Once accepted, its acceptance carries to its replacement.
 
 Each `drain.post-landing-action` push event records a `kind` alongside the existing `detail`.
 `push-remote-declined` means the server returned `[remote rejected]`. A failed push that

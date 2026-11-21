@@ -70,19 +70,32 @@ func trunkAncestor(ctx context.Context, root, old, tip string) (bool, error) {
 // forget a candidate-free rewrite. Git work finishes before that transaction.
 // expected additionally preserves a rewrite the lander caught under its lock.
 func (l *Loop) observeTrunk(ctx context.Context, expected string) (trunkHistory, error) {
+	return l.observeTrunkWith(ctx, expected, nil)
+}
+
+// observeTrunkWith uses the pairs built by the replay under land.lock only if
+// ordinary rewrite matching cannot explain the lost history.
+func (l *Loop) observeTrunkWith(ctx context.Context, expected string, known *rewriteAbsorption) (_ trunkHistory, resultErr error) {
 	if l.nonLanding {
 		return trunkHistory{}, nil
 	}
 	registerRewriteStore(l.cfg.Root, l.cfg.Store)
 	l.historyMu.Lock()
 	defer l.historyMu.Unlock()
-	if err := l.observeIdentity(ctx); err != nil {
+	if known != nil {
+		// Check identities after recording the carried acceptances and releasing land.lock.
+		defer func() {
+			if resultErr == nil {
+				resultErr = l.observeIdentity(ctx)
+			}
+		}()
+	} else if err := l.observeIdentity(ctx); err != nil {
 		return trunkHistory{}, err
 	}
 	l.mu.Lock()
 	ready := l.historyPinned
 	l.mu.Unlock()
-	if ready {
+	if ready && known == nil {
 		// Commit ancestry is immutable. An unchanged observed tip cannot restore
 		// a lost tip or introduce a rewrite. Do not migrate or take the writer
 		// lock merely to record the same row again while runs write their records.
@@ -176,9 +189,29 @@ func (l *Loop) observeTrunk(ctx context.Context, expected string) (trunkHistory,
 				} else if absorb, err = l.proveRewrite(ctx, h.Lost, tip); err != nil {
 					return h, err
 				}
+				acceptedTip := h.Lost
+				if !absorb.proved() && known != nil {
+					// The tip may have advanced since the replay released land.lock.
+					// Use its map only if it still covers the entire lost range.
+					covers := known.Pairs[h.Lost] != ""
+					for _, old := range absorb.Order {
+						covers = covers && known.Pairs[old] != ""
+					}
+					if covers {
+						onTrunk, err := trunkAncestor(ctx, l.cfg.Root, known.Tip, tip)
+						if err != nil {
+							return h, err
+						}
+						if onTrunk {
+							acceptedTip = known.Lost
+							adopted := *known
+							adopted.Lost, adopted.Tip = h.Lost, tip
+							absorb = &adopted
+						}
+					}
+				}
 				if absorb.proved() {
-					// A proof names an unchanged tree. Carry it to the matching
-					// commit before clearing the lost-history hold.
+					// Carry green to its replacement before clearing the lost-history hold.
 					green, err := l.git(ctx, l.cfg.Root, "for-each-ref", "--format=%(objectname)", GreenRef)
 					if err != nil {
 						return h, err
@@ -189,8 +222,23 @@ func (l *Loop) observeTrunk(ctx context.Context, expected string) (trunkHistory,
 							return h, err
 						}
 					}
+					markers, err := l.git(ctx, l.cfg.Root, "for-each-ref", "--format=%(refname) %(objectname)", land.LandedRefPrefix)
+					if err != nil {
+						return h, err
+					}
+					for _, line := range strings.Split(markers, "\n") {
+						f := strings.Fields(line)
+						if len(f) != 2 {
+							continue
+						}
+						if replacement := absorb.Pairs[f[1]]; replacement != "" {
+							if _, err := l.git(ctx, l.cfg.Root, "update-ref", f[0], replacement, f[1]); err != nil {
+								return h, err
+							}
+						}
+					}
 					// Keep the replaced history readable once the lost ref goes.
-					if _, err := l.git(ctx, l.cfg.Root, "update-ref", acceptedTrunkPrefix+h.Lost, h.Lost); err != nil {
+					if _, err := l.git(ctx, l.cfg.Root, "update-ref", acceptedTrunkPrefix+acceptedTip, acceptedTip); err != nil {
 						return h, err
 					}
 					restored = true

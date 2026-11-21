@@ -17,7 +17,8 @@ import (
 // "non-fast-forward" or "stale info") is not a push that failed for any other reason. Only
 // the former is healed: the unpublished trunk commits are replayed, linear, onto the
 // fetched remote tip under the landing lock, and the loop's own rewrite absorption
-// (trunk_rewrite.go) then maps each replaced commit by patch and carries refs/tillr/green.
+// (trunk_rewrite.go) then maps each replaced commit by patch or by the replay's own pairs
+// and carries refs/tillr/green.
 // A conflict, a merge commit among the unpublished commits, a checkout that is not on the
 // trunk or is dirty on a changed path changes nothing and fails with the operator's commands.
 // Never forced, never a merge commit. The conflict-repair work of
@@ -58,16 +59,30 @@ func pushCommand(ctx context.Context, root string, args ...string) error {
 	}
 }
 
+// healResult describes a refused-push replay, including superseded commits in replayed.
+type healResult struct {
+	replayed  int
+	remoteTip string
+	base      string
+	newTip    string
+}
+
 // healRefusedPush replays the unpublished trunk commits onto the remote's tip. It answers
 // the number of commits replayed, or an error that names the mover and the commands.
 func (l *Loop) healRefusedPush(ctx context.Context, p settings.Push, refused error) (int, error) {
+	res, err := l.healRefusedPushResult(ctx, p, refused)
+	return res.replayed, err
+}
+
+func (l *Loop) healRefusedPushResult(ctx context.Context, p settings.Push, refused error) (healResult, error) {
 	root := l.cfg.Root
+	var res healResult
 	remote, ref, err := pushDestination(ctx, root, p)
 	if err != nil {
-		return 0, err
+		return res, err
 	}
-	fail := func(why string, a ...any) (int, error) {
-		return 0, fmt.Errorf("%s\nmover: operator. The push was refused because the remote moved and the drain could not rebase onto it (%s). Nothing was changed. With the loop stopped, in %s: git fetch %s %s; git rebase FETCH_HEAD; then run the loop, which maps the rebased commits by patch (or tillr-drain accept-rewrite if it holds trunk-rewritten)",
+	fail := func(why string, a ...any) (healResult, error) {
+		return res, fmt.Errorf("%s\nmover: operator. The push was refused because the remote moved and the drain could not rebase onto it (%s). Nothing was changed. With the loop stopped, in %s: git fetch %s %s; git rebase FETCH_HEAD; then run the loop, which maps the rebased commits by patch (or tillr-drain accept-rewrite if it holds trunk-rewritten)",
 			refused, fmt.Sprintf(why, a...), root, remote, ref)
 	}
 	// Record the trunk as it stands, so the replay is seen as a rewrite of this tip.
@@ -84,6 +99,7 @@ func (l *Loop) healRefusedPush(ctx context.Context, p settings.Push, refused err
 		return fail("%v", err)
 	}
 	remoteTip := strings.TrimSpace(out)
+	res.remoteTip = remoteTip
 
 	release, err := l.lockTrunkHistory(ctx)
 	if err != nil {
@@ -100,12 +116,15 @@ func (l *Loop) healRefusedPush(ctx context.Context, p settings.Push, refused err
 	} else if ok {
 		return fail("the remote tip %s is already under the trunk, so a moved remote does not explain the refusal", shortSHA(remoteTip))
 	}
+	if base, err := rawGit(ctx, root, nil, "merge-base", remoteTip, tip); err == nil {
+		res.base = strings.TrimSpace(base)
+	}
 	listed, err := rawGit(ctx, root, nil, "rev-list", "--reverse", "--topo-order", "--parents", remoteTip+".."+tip)
 	if err != nil {
 		return fail("%v", err)
 	}
 	cur := remoteTip
-	replayed := 0
+	known := &rewriteAbsorption{Lost: tip, Pairs: map[string]string{}}
 	for _, line := range strings.Split(strings.TrimSpace(listed), "\n") {
 		f := strings.Fields(line)
 		if len(f) == 0 {
@@ -124,6 +143,16 @@ func (l *Loop) healRefusedPush(ctx context.Context, p settings.Push, refused err
 			return fail("replaying %s conflicts or failed: %s %s", shortSHA(c), strings.Join(strings.Fields(string(tree)), " "), strings.TrimSpace(mtErr.String()))
 		}
 		treeID, _, _ := strings.Cut(string(tree), "\n")
+		known.Order = append(known.Order, c)
+		curTree, err := rawGit(ctx, root, nil, "rev-parse", cur+"^{tree}")
+		if err != nil {
+			return fail("%v", err)
+		}
+		if strings.TrimSpace(curTree) == treeID {
+			// The change is already present. Record its replacement without an empty commit.
+			known.Pairs[c] = cur
+			continue
+		}
 		meta, err := rawGit(ctx, root, nil, "log", "-1", "--date=raw", "--format=%an%n%ae%n%ad", c)
 		if err != nil {
 			return fail("%v", err)
@@ -146,8 +175,10 @@ func (l *Loop) healRefusedPush(ctx context.Context, p settings.Push, refused err
 			return fail("recreating %s failed: %v: %s", shortSHA(c), err, strings.TrimSpace(ctErr.String()))
 		}
 		cur = strings.TrimSpace(string(made))
-		replayed++
+		known.Pairs[c] = cur
 	}
+	known.Tip = cur
+	known.Evidence = "replayed onto " + remote + " " + shortSHA(remoteTip) + " under the landing lock; each replacement was determined by a three-way merge"
 	// The fetched tip is published: pin it so the identity check trusts the commits that
 	// arrived with it (design Section 4.3). Commits replayed on top are not under it.
 	if _, err := rawGit(ctx, root, nil, "update-ref", land.PublishedRefPrefix+remote+"/"+strings.TrimPrefix(ref, "refs/heads/"), remoteTip); err != nil {
@@ -165,10 +196,14 @@ func (l *Loop) healRefusedPush(ctx context.Context, p settings.Push, refused err
 	if _, err := rawGit(ctx, root, nil, "reset", "--keep", "-q", cur); err != nil {
 		return fail("the main checkout is dirty on a path the move changes: %v", err)
 	}
+	res.replayed, res.newTip = len(known.Order), cur
 	release()
-	// The replaced commits are mapped by patch, and green carried, by the loop's absorption.
-	if _, err := l.observeTrunk(ctx, ""); err != nil {
-		return replayed, fmt.Errorf("trunk rebased onto %s, recording the rewrite failed: %w", shortSHA(remoteTip), err)
+	// Prefer patch matching; the pairs built under the lock cover changed patches.
+	if len(known.Order) == 0 {
+		known = nil
 	}
-	return replayed, nil
+	if _, err := l.observeTrunkWith(ctx, "", known); err != nil {
+		return res, fmt.Errorf("trunk rebased onto %s, recording the rewrite failed: %w", shortSHA(remoteTip), err)
+	}
+	return res, nil
 }
