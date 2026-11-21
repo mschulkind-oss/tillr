@@ -3433,9 +3433,13 @@ func (l *Loop) changeFenceViolationAt(ctx context.Context, candidate Candidate, 
 			return ScopeEscape + ": the fork checkout is still rebasing, so its detached HEAD is not a finished candidate", nil
 		}
 	}
+	base, err := l.fenceDiffBase(ctx, candidate)
+	if err != nil {
+		return "", err
+	}
 	// Disable rename detection so both the removed source and added destination
 	// are checked; a rename into scope must not hide a deletion outside it.
-	changed, err := l.git(ctx, candidate.Worktree, "diff", "--no-renames", "--name-only", "-z", candidate.BaseSHA+".."+candidate.HeadSHA)
+	changed, err := l.git(ctx, candidate.Worktree, "diff", "--no-renames", "--name-only", "-z", base+".."+candidate.HeadSHA)
 	if err != nil {
 		return "", err
 	}
@@ -3469,6 +3473,35 @@ func (l *Loop) changeFenceViolationAt(ctx context.Context, candidate Candidate, 
 			ScopeEscape, scoped, fencePath), nil
 	}
 	return "", nil
+}
+
+// fenceDiffBase skips landings already in a candidate that moved onto newer trunk.
+// Only advance the comparison: a later workflow node can start at an earlier
+// node's unlanded commit, which must remain its base rather than counting that
+// earlier node's changes. A separate fork repository keeps its own staged base.
+func (l *Loop) fenceDiffBase(ctx context.Context, c Candidate) (string, error) {
+	if c.BaseSHA == c.HeadSHA {
+		return c.BaseSHA, nil
+	}
+	if same, ok := l.sharesRepository(ctx, c.Worktree); !ok || !same {
+		return c.BaseSHA, nil
+	}
+	out, err := l.git(ctx, c.Worktree, "merge-base", "--all", c.HeadSHA, "refs/heads/"+TrunkRef)
+	if err != nil {
+		return "", err
+	}
+	shared := strings.TrimSpace(out)
+	if shared == c.BaseSHA || strings.Contains(shared, "\n") {
+		return c.BaseSHA, nil
+	}
+	prior, err := l.git(ctx, c.Worktree, "merge-base", c.BaseSHA, shared)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(prior) == c.BaseSHA {
+		return shared, nil
+	}
+	return c.BaseSHA, nil
 }
 
 // fencePrefix is the repo-relative prefix a candidate's checkout sits under, when that
