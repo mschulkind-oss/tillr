@@ -179,8 +179,10 @@ belongs to only one store. Two cases follow from that.
   own landing. *Operator:* do not reuse run ids across stores over one repository. If it
   happened, correct the second store's row by hand.
 
-The lander still writes markers before publication; it does not delete them itself.
-The drain removes an ordinary marker in settlement only after that run has a durable
+The lander writes markers before publication and does not delete them itself. When the drain
+absorbs a trunk rewrite, it moves live markers to their replacement commits without changing
+historical landing receipts. The drain removes an ordinary marker in settlement only after
+that run has a durable
 `landed` row naming the marker's commit. A fork delivery marker stays until all pending
 examinations and leased lanes have finished: a sibling's boundary comparison needs the
 marker to recognize the patch branch's legitimate move. New landing events carry

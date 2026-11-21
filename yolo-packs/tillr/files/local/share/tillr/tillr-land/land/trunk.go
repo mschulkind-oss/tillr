@@ -249,6 +249,9 @@ func (t *Trunk) Pin(runID, sha string) error {
 	return nil
 }
 
+// LandedRefPrefix holds the per-run landing markers.
+const LandedRefPrefix = "refs/tillr/landed/"
+
 // landedMarkerRef is the ref a landing points at its squash commit before it moves the
 // trunk. It is the lander's own record, in Git, of which commit a run's landing wrote: Git's
 // trunk move and the store's receipt are two writes, so a process killed between them, or
@@ -257,7 +260,7 @@ func (t *Trunk) Pin(runID, sha string) error {
 // commit again instead of squashing the change a second time. It lives under refs/tillr/
 // beside the run pins, is never pushed, and names no item: the commit itself stays the
 // head's message only (ruling D-RS3).
-func landedMarkerRef(runID string) string { return "refs/tillr/landed/" + runID }
+func landedMarkerRef(runID string) string { return LandedRefPrefix + runID }
 
 // checkRunRef refuses a run id that is not a valid ref name component, by git's
 // check-ref-format rules. The id is spliced into the marker's ref name and from there into a
