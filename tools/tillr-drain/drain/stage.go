@@ -982,7 +982,7 @@ func (s *LaneStager) refuseUnlandedCommit(ctx context.Context, spec StageSpec, w
 					"lane %s holds uncommitted work (%s)", spec.LaneID, first)
 			}
 		}
-		clearable, err := s.clearableLaneCopy(ctx, spec.LaneID, spec.ItemID, sha)
+		clearable, err := s.clearableLaneCopy(ctx, spec.LaneID, spec.ItemID, sha, "")
 		if err != nil {
 			return err
 		}

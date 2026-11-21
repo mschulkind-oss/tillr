@@ -110,7 +110,7 @@ func TestClearableLaneCopyProtectsForeignActivePendingWork(t *testing.T) {
 
 	stager := &LaneStager{Root: f.root, Store: f.storePath}
 	// Another item must not clear item-a's live, unreleased lane.
-	clearable, err := stager.clearableLaneCopy(ctx, "lane-1", "item-b", sha)
+	clearable, err := stager.clearableLaneCopy(ctx, "lane-1", "item-b", sha, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +119,7 @@ func TestClearableLaneCopyProtectsForeignActivePendingWork(t *testing.T) {
 	}
 
 	// Owning item's own prior run pin is recognized as clearable.
-	clearable, err = stager.clearableLaneCopy(ctx, "lane-1", "item-a", sha)
+	clearable, err = stager.clearableLaneCopy(ctx, "lane-1", "item-a", sha, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestClearableLaneCopyProtectsForeignActivePendingWork(t *testing.T) {
 			Released:  true,
 		}, time.Now().UTC())
 	})
-	clearable, err = stager.clearableLaneCopy(ctx, "lane-1", "item-b", sha)
+	clearable, err = stager.clearableLaneCopy(ctx, "lane-1", "item-b", sha, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,11 +267,7 @@ func TestContinuingWorkflowNodeStartsAfterTrunkMovesAndFromPin(t *testing.T) {
 	})
 }
 
-// A fork-series lane's candidate lives in the isolated fork checkout, whose objects the
-// repository root does not hold, so pinning it there failed with "nonexistent object" and
-// ended the loop. The pin is skipped for that one case; an ordinary lane's commit is still
-// pinned, and a fork checkout's commit the root does hold is pinned too.
-func TestPinLaneSkipsForkCheckoutCommitAbsentFromRootButPinsOthers(t *testing.T) {
+func TestPinLaneUsesTheForkAsSourceOnlyForItsOwnLane(t *testing.T) {
 	ctx := context.Background()
 	root := scratchUnderDurable(t)
 	runGit(t, root, "init", "-q", "-b", "main")
@@ -302,11 +298,8 @@ func TestPinLaneSkipsForkCheckoutCommitAbsentFromRootButPinsOthers(t *testing.T)
 		t.Fatalf("lane target = %q, want the fork checkout %q", l.laneTarget("lane-2"), fork)
 	}
 
-	if err := l.pinLane(ctx, "lane-2", "run-fork", forkHead); err != nil {
-		t.Fatalf("pinLane of a fork commit absent from the root: %v", err)
-	}
-	if out, err := l.git(ctx, root, "rev-parse", "--verify", "--quiet", pinRef("run-fork")); err == nil {
-		t.Fatalf("a fork-only commit was pinned in the root: %s", out)
+	if err := l.pinLane(ctx, "lane-1", "run-missing", forkHead); err == nil {
+		t.Fatal("an ordinary lane's missing object must still fail the pin")
 	}
 
 	if err := l.pinLane(ctx, "lane-2", "run-held", rootHead); err != nil {
@@ -321,8 +314,5 @@ func TestPinLaneSkipsForkCheckoutCommitAbsentFromRootButPinsOthers(t *testing.T)
 	}
 	if got := runGit(t, root, "rev-parse", "--verify", pinRef("run-plain")+"^{commit}"); got != rootHead {
 		t.Fatalf("ordinary lane pin = %s, want %s", got, rootHead)
-	}
-	if err := l.pinLane(ctx, "lane-1", "run-missing", forkHead); err == nil {
-		t.Fatal("an ordinary lane's missing object must still fail the pin")
 	}
 }

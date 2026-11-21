@@ -178,7 +178,10 @@ func (l *Loop) supersedeCandidate(ctx context.Context, s supersession) error {
 			return nil
 		}
 		if err := l.pin(ctx, runID, c.HeadSHA); err != nil {
-			return err
+			// This retry starts from an existing item fault. Keep that hold and
+			// its mover; neither supersede the only copy nor stop other work.
+			l.reportf("loop: retry %s cannot supersede %s: %v\n", s.retry.RetryID, runID, err)
+			return nil
 		}
 		record.PinSHA = c.HeadSHA
 	}

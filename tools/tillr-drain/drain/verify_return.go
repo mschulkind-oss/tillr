@@ -244,20 +244,10 @@ func (l *Loop) builderPlanWrong(d Decision, stage WorkflowStage, footer, log str
 	return "", false
 }
 
-// pinCandidateHead keeps the commit the verifier read reachable in the root repository
-// before the lane moves on. A fork-series candidate lives in the fork checkout, outside
-// the root repository, so its head is fetched into the root first.
+// pinCandidateHead uses the recorded checkout, not the lane's current assignment.
 func (l *Loop) pinCandidateHead(ctx context.Context, c Candidate) error {
-	if c.HeadSHA == "" {
-		return nil
+	if filepath.Clean(c.Worktree) == filepath.Clean(l.lanePath(c.LaneID)) {
+		return l.pin(ctx, c.RunID, c.HeadSHA)
 	}
-	if c.Worktree != "" && filepath.Clean(c.Worktree) != filepath.Clean(l.lanePath(c.LaneID)) {
-		if _, err := l.git(ctx, l.cfg.Root, "fetch", "--quiet", "--no-tags", c.Worktree, c.HeadSHA); err != nil {
-			return Externalf("fetching %s from %s: %v", c.HeadSHA, c.Worktree, err)
-		}
-		if _, err := l.git(ctx, c.Worktree, "update-ref", pinRef(c.RunID), c.HeadSHA); err != nil {
-			return Externalf("pinning %s in %s: %v", pinRef(c.RunID), c.Worktree, err)
-		}
-	}
-	return l.pin(ctx, c.RunID, c.HeadSHA)
+	return l.pinFrom(ctx, c.Worktree, c.RunID, c.HeadSHA)
 }

@@ -163,7 +163,7 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	}
 	// Pin before resetting: the repair brief is not yet staged and its failure
 	// must leave the original candidate reachable even after garbage collection.
-	if err := l.pin(ctx, candidate.RunID, candidate.HeadSHA); err != nil {
+	if err := l.pinCandidateHead(ctx, candidate); err != nil {
 		return "", false, err
 	}
 	// The lane still holds the candidate's commit. Reset it to the moved trunk before

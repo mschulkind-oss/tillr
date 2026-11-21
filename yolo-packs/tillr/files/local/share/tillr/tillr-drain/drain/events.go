@@ -273,7 +273,7 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 	}
 	if step == RefusalGate && candidate.BlockConflict != nil && candidate.BlockConflict.TriageVersion == "" {
 		// Do not publish continuation feedback before its candidate is reachable.
-		if err := l.pin(ctx, candidate.RunID, candidate.HeadSHA); err != nil {
+		if err := l.pinCandidateHead(ctx, candidate); err != nil {
 			return err
 		}
 		payload.DesignBaseSHA, payload.DesignHeadSHA = candidate.BaseSHA, candidate.HeadSHA

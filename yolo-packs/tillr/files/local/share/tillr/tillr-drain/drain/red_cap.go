@@ -51,6 +51,9 @@ func (l *Loop) holdRedCap(ctx context.Context, c Candidate, cap *redcap.Hold) er
 	if cap == nil {
 		return Internalf("red-cap refusal for %s carries no bound or fixer evidence", c.ItemID)
 	}
+	if err := l.pinCandidateHead(ctx, c); err != nil {
+		return err
+	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return err
@@ -71,7 +74,6 @@ func (l *Loop) holdRedCap(ctx context.Context, c Candidate, cap *redcap.Hold) er
 	if err != nil {
 		return err
 	}
-	l.pinQuietly(ctx, c.RunID, c.HeadSHA)
 	l.reportf("loop: holding %s (%s)\n", c.ItemID, cap.Reason())
 	return errRedCapHeld
 }

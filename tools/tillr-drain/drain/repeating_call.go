@@ -187,8 +187,8 @@ func (l *Loop) restartRepeatingNode(ctx context.Context, d Decision, base string
 				return retainedAfter(d.LaneID, stop)
 			}
 		}
-		if head != "" {
-			l.pinQuietly(ctx, rec.RunID, head)
+		if err := l.pinLane(ctx, d.LaneID, rec.RunID, head); err != nil {
+			return err
 		}
 	}
 	l.reportf("loop: %s %s; route %s %s\n", rec.RunID, rc.describe(), rc.Route, rc.NextBackend)

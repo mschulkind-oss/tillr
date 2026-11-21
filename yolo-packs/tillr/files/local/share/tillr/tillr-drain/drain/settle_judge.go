@@ -56,8 +56,15 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 			_, err = l.releaseCandidate(ctx, &copy, reason, true)
 		}
 	}
-	if err != nil || stop != "" {
-		l.pinQuietly(ctx, c.RunID, c.HeadSHA)
+	var pinErr *runPinError
+	if (err != nil || stop != "") && !errors.As(err, &pinErr) {
+		if pinErr := l.pinCandidateHead(ctx, c); pinErr != nil {
+			if err == nil {
+				return laneOutcome{err: pinErr}
+			}
+			// Keep the original error when the pin was a secondary failure.
+			l.reportf("loop: %v\n", pinErr)
+		}
 	}
 	if err == nil && stop == "" && !held {
 		if landed {
