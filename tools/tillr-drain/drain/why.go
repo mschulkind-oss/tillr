@@ -330,8 +330,11 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		// A fault hold says what is wrong in its recorded detail.
 		if fault, held := itemFaults[it.ItemID]; held && d.Action == ActionHold && d.Reason == fault.Reason && fault.Detail != "" {
 			if fault.Reason == ReasonPreserveFailed && tick.StorePath != "" {
-				row.Why += ": " + preserveFaultDetail(fault, tick.StorePath)
+				row.Why += ": " + faultClearDetail(fault, tick.StorePath)
 				row.Mover += "; then " + fault.ClearCommand(tick.StorePath)
+			} else if fault.Reason == ReasonDecisionCollision && tick.StorePath != "" {
+				row.Why += ": " + faultClearDetail(fault, tick.StorePath)
+				row.Mover = "operator; fix the drain defect, then " + fault.ClearCommand(tick.StorePath)
 			} else {
 				row.Why += ": " + fault.Detail
 			}
@@ -512,6 +515,9 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				row.LaneReason = work.LaneKeepReason
 				if row.LaneReason == "" {
 					row.LaneReason = candidateKeepReason(work, d.Reason)
+				}
+				if row.LaneReason != "" && d.Reason == ReasonDecisionCollision && work.Candidate == nil && work.Decision.RunRequest != nil {
+					row.LaneReason = fmt.Sprintf("%s still owns %s: %s", work.Decision.RunRequest.RunID, work.Decision.LaneID, row.LaneReason)
 				}
 				if row.LaneReason == "" {
 					row.LaneReason = "candidate awaits pin verification and lane release"

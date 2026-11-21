@@ -1409,8 +1409,7 @@ func (l *Loop) applyPlanTrunk(ctx context.Context, p plannedApplication, mainSHA
 	if err == nil || !errors.As(err, &collision) {
 		return applied, work, err
 	}
-	detail := collision.Error() + "; the planned " + p.decision.Action + " was not applied. A drain defect named two decisions alike: fix it, then clear this fault (tillr drain clear-fault)"
-	if holdErr := l.holdItemFault(ctx, Candidate{ItemID: p.decision.ItemID}, ReasonDecisionCollision, detail); holdErr != nil {
+	if holdErr := l.holdItemFault(ctx, Candidate{ItemID: p.decision.ItemID}, ReasonDecisionCollision, decisionCollisionDetail(collision, p.decision.Action)); holdErr != nil {
 		return false, nil, err
 	}
 	return false, nil, nil
@@ -2415,16 +2414,24 @@ func (l *Loop) holdSettleFailure(c runCompletion) bool {
 	var collision *decisionCollisionError
 	var started *runStartError
 	var pinErr *runPinError
-	if c.itemID == "" || !(errors.As(c.outcome.err, &pinErr) || errors.As(c.outcome.err, &collision) || (c.step == "run" && errors.As(c.outcome.err, &started))) {
+	if c.itemID == "" {
+		return false
+	}
+	reason := ReasonSettleFailed
+	switch {
+	case errors.As(c.outcome.err, &collision):
+		reason = ReasonDecisionCollision
+	case errors.As(c.outcome.err, &pinErr), c.step == "run" && errors.As(c.outcome.err, &started):
+	default:
 		return false
 	}
 	detail := c.step + ": " + c.outcome.err.Error()
 	ctx := context.Background()
-	if l.holdItemFault(ctx, Candidate{ItemID: c.itemID, RunID: c.id}, ReasonSettleFailed, detail) == nil {
+	if l.holdItemFault(ctx, Candidate{ItemID: c.itemID, RunID: c.id}, reason, detail) == nil {
 		return true
 	}
 	// A terminal item's run is not judged, so its fault is recorded without the run.
-	return l.holdItemFault(ctx, Candidate{ItemID: c.itemID}, ReasonSettleFailed, detail) == nil
+	return l.holdItemFault(ctx, Candidate{ItemID: c.itemID}, reason, detail) == nil
 }
 
 // pass advances each item's one planned transition without waiting for a sibling.

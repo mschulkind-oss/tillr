@@ -67,12 +67,21 @@ func (l *Loop) holdItemFault(ctx context.Context, c Candidate, reason, detail st
 		return err
 	})
 	if err == nil {
-		if reason == ReasonPreserveFailed {
-			detail = preserveFaultDetail(f, l.cfg.Store)
+		if reason == ReasonPreserveFailed || reason == ReasonDecisionCollision {
+			detail = faultClearDetail(f, l.cfg.Store)
 		}
 		l.reportf("loop: holding %s (%s, run %s, lane %s): %s\n", c.ItemID, reason, c.RunID, c.LaneID, detail)
 	}
 	return err
+}
+
+// Render the command after append: the event sequence binds it to this exact fault.
+func faultClearDetail(f ItemFault, storePath string) string {
+	return f.Detail + "; after correcting the cause, run " + f.ClearCommand(storePath)
+}
+
+func decisionCollisionDetail(collision *decisionCollisionError, action string) string {
+	return collision.Error() + "; the planned " + action + " was not applied. A drain defect named two decisions alike"
 }
 
 func (l *Loop) holdItemFaultTx(tx *store.Tx, c Candidate, reason, detail string) error {

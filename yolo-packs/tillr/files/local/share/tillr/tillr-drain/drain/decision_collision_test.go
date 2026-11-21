@@ -1,11 +1,16 @@
 package drain
 
 import (
+	"bytes"
 	"context"
+	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -61,6 +66,118 @@ func TestADecisionCollisionHoldsTheItemAndNotTheLoop(t *testing.T) {
 	}
 }
 
+func TestFirstNodeSettlesAfterQuotaReopens(t *testing.T) {
+	for _, collide := range []bool{false, true} {
+		t.Run(fmt.Sprintf("inject_collision=%t", collide), func(t *testing.T) {
+			ctx := context.Background()
+			f, l, _ := workflowLoopFixture(t, "")
+			base := runGit(t, f.root, "rev-parse", TrunkRef)
+			at := l.cfg.Now().UTC().Truncate(time.Second)
+			reset := at.Add(time.Hour)
+			l.cfg.Now = func() time.Time { return at }
+			finish := func(wantRun string, exit int, log string) plannedApplication {
+				t.Helper()
+				p := decisionFor(t, l, "item-a")
+				if d := p.decision; d.Action != ActionDispatch || d.RunRequest == nil || d.RunRequest.RunID != wantRun || d.Attempt != 1 || d.NodeIndex != 0 || d.LaneID != "lane-1" {
+					t.Fatalf("not the expected first node (%s): %+v", wantRun, d)
+				}
+				ok, work, err := l.applyPlan(ctx, p, base, at)
+				if err != nil || !ok || work == nil {
+					t.Fatalf("claim %s: ok=%v err=%v", wantRun, ok, err)
+				}
+				staged, err := l.stageDispatches(ctx, []Decision{work.Decision}, work.BaseSHA, &LoopResult{})
+				if err != nil || len(staged) != 1 {
+					t.Fatalf("stage %s: %+v / %v", wantRun, staged, err)
+				}
+				d := staged[0]
+				path := filepath.Join(f.root, wantRun+".report")
+				writeForkFile(t, path, log)
+				rec := run.Record{RunID: wantRun, ItemID: d.ItemID, LaneID: d.LaneID, Backend: d.RunRequest.Backend,
+					State: run.StateExited, ExitCode: code(exit), StartedAt: at.Format(time.RFC3339), FinishedAt: at.Format(time.RFC3339),
+					ArtifactRefs: []run.ArtifactRef{{Kind: "report", Ref: path}}}
+				fixtureWrite(t, f, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
+				p = decisionFor(t, l, "item-a")
+				if d := p.decision; d.Action != ActionSettle || d.RunRequest == nil || d.RunRequest.RunID != wantRun {
+					t.Fatalf("not settling %s: %+v", wantRun, d)
+				}
+				return p
+			}
+			settle := func(p plannedApplication) {
+				t.Helper()
+				ok, work, err := l.applyPlan(ctx, p, base, at)
+				if err != nil || !ok || work == nil {
+					t.Fatalf("claim settlement %s: ok=%v err=%v; next: %+v", p.decision.DecisionID, ok, err, decisionFor(t, l, "item-a").decision)
+				}
+				out := l.examineClaimed(ctx, p.decision, work, at, &PassTiming{}, nil).outcome
+				if out.err != nil || out.stop != "" {
+					t.Fatalf("settle %s: %+v", p.decision.DecisionID, out)
+				}
+			}
+			first := finish("run-item-a-a1-n1", 2, fmt.Sprintf("# run report\nrate limit kind: five-hour\nstatus: rejected\nfraction: 1\nreset: %d\n---\nquota exhausted\n", reset.Unix()))
+			settle(first)
+			if d := decisionFor(t, l, "item-a").decision; d.Reason != ReasonBackendWindow || d.LaneID != "" || !strings.Contains(d.BackendHoldCause, first.decision.RunRequest.RunID) {
+				t.Fatalf("quota refusal did not release lane and name its run: %+v", d)
+			}
+			at = reset.Add(time.Second)
+			second := finish("run-item-a-a1-n1-fresh", 1, "The retried step ran and reported failure.\nRESULT: failed\n")
+			if !collide {
+				settle(second)
+				fixtureRead(t, f, func(r *store.Reader) error {
+					var outcome string
+					if err := r.QueryRow(`SELECT outcome FROM node_runs WHERE run_id=?`, second.decision.RunRequest.RunID).Scan(&outcome); err != nil {
+						return err
+					}
+					if outcome != "failed" {
+						t.Errorf("node outcome = %q, want failed", outcome)
+					}
+					return nil
+				})
+				if d := decisionFor(t, l, "item-b").decision; d.Action != ActionDispatch || d.LaneID != "lane-1" {
+					t.Fatalf("settled node did not free its lane: %+v", d)
+				}
+				return
+			}
+			// Supply a genuine conflicting row, independently of the old quota bug.
+			fixtureWrite(t, f, func(tx *store.Tx) error {
+				_, err := tx.Exec(`INSERT INTO dispatches (decision_id, item_id, action, reason, dispatched_at) VALUES (?, 'item-a', 'settle', 'different', 0)`, second.decision.DecisionID)
+				return err
+			})
+			var report bytes.Buffer
+			l.cfg.Report = &report
+			if ok, work, err := l.applyPlan(ctx, second, base, at); ok || work != nil || err != nil {
+				t.Fatalf("collision escaped its item: ok=%v work=%+v err=%v", ok, work, err)
+			}
+			fixtureRead(t, f, func(r *store.Reader) error {
+				faults, err := ReadItemFaults(r)
+				if err != nil {
+					return err
+				}
+				fault := faults["item-a"]
+				answer, err := Why(r, Pass{Now: at.Format(time.RFC3339), AvailableLanes: &l.cfg.Lanes, StorePath: f.storePath}, l.cfg.Policy, nil)
+				if err != nil {
+					return err
+				}
+				command := fmt.Sprintf("tillr drain clear-fault --store '%s' --item 'item-a' --fault %d", f.storePath, fault.Seq)
+				if !strings.Contains(report.String(), command) {
+					t.Errorf("loop report omits %q: %s", command, &report)
+				}
+				for _, row := range answer.Rows {
+					if row.ItemID != "item-a" {
+						continue
+					}
+					if fault.Seq == 0 || row.Reason != ReasonDecisionCollision || !strings.Contains(row.Why, command) || !strings.Contains(row.Mover, command) ||
+						(row.LaneStatus != "released" && !strings.Contains(row.LaneReason, second.decision.RunRequest.RunID)) {
+						t.Errorf("expected collision hold with lane explanation and %q: %+v", command, row)
+					}
+					return nil
+				}
+				t.Fatal("why omitted item-a")
+				return nil
+			})
+		})
+	}
+}
+
 // A decision collision while settling one run holds that run's item with a named fault and
 // the loop goes on; other settle errors keep their recorded rules.
 func TestASettleErrorHoldsTheItemAndNotTheLoop(t *testing.T) {
@@ -75,8 +192,8 @@ func TestASettleErrorHoldsTheItemAndNotTheLoop(t *testing.T) {
 		t.Fatalf("a settle error stopped the loop: stop=%q err=%v result=%+v", stop, err, result)
 	}
 	next := decisionFor(t, l, "item-a")
-	if next.decision.Action != ActionHold || next.decision.Reason != ReasonSettleFailed {
-		t.Fatalf("the item is not held for its settle error: %+v", next.decision)
+	if next.decision.Action != ActionHold || next.decision.Reason != ReasonDecisionCollision {
+		t.Fatalf("the item is not held for its settle collision: %+v", next.decision)
 	}
 	// A settle error of another class keeps its recorded rule and ends the loop.
 	if _, err := l.takeCompletion(runCompletion{id: "run-item-a-a2", itemID: "item-a", step: "run", outcome: laneOutcome{err: Internalf("reading the gate.plan payload failed")}}, &LoopResult{}); err == nil {
