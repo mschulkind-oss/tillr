@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"path/filepath"
@@ -493,37 +494,10 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 		if tick.examineItem != "" && row.ItemID != tick.examineItem {
 			continue
 		}
-		var count int
-		if hasNodes {
-			if err := r.QueryRow(`SELECT COALESCE(MAX(attempt),0) FROM node_runs WHERE item_id=?`, row.ItemID).Scan(&count); err != nil {
-				return nil, readFailure(err)
-			}
-		}
-		nodeCounts[row.ItemID] = count
-		// A run that is not a node run (a design run for a block conflict is named
-		// run-<item>-a<N>) still holds its ordinal, so the next attempt is past it.
-		maxAttempt := count
-		for _, prior := range priors[row.ItemID] {
-			if n := attemptFromRunID(row.ItemID, prior.RunID); n > maxAttempt {
-				maxAttempt = n
-			}
-		}
-		ids, err := readRunIDs(r, row.ItemID)
+		attempts[row.ItemID], nodeCounts[row.ItemID], err = readAttemptInputs(r, hasNodes, row.ItemID, priors[row.ItemID])
 		if err != nil {
-			return nil, readFailure(err)
+			return nil, err
 		}
-		for _, id := range ids {
-			if n := attemptFromRunID(row.ItemID, id); n > maxAttempt {
-				maxAttempt = n
-			}
-		}
-		next := maxAttempt + 1
-		if count == 0 && len(priors[row.ItemID])+1 > next {
-			// With no node runs the count of prior runs is the ordinal, as it always was;
-			// a run id ordinal can only move it further.
-			next = len(priors[row.ItemID]) + 1
-		}
-		attempts[row.ItemID] = next
 	}
 	faults, err := ReadItemFaults(r)
 	if err != nil {
@@ -1820,6 +1794,41 @@ func (p *planner) nextAttempt(id string) int {
 	return len(p.priors[id]) + 1
 }
 
+// readAttemptInputs is shared with the shadow seed so it cannot reuse an ordinal
+// the legacy planner already considers spent.
+func readAttemptInputs(r *store.Reader, hasNodes bool, id string, priors []priorRun) (int, int, error) {
+	var count int
+	if hasNodes {
+		if err := r.QueryRow(`SELECT COALESCE(MAX(attempt),0) FROM node_runs WHERE item_id=?`, id).Scan(&count); err != nil {
+			return 0, 0, readFailure(err)
+		}
+	}
+	// A run that is not a node run (a design run for a block conflict is named
+	// run-<item>-a<N>) still holds its ordinal, so the next attempt is past it.
+	maxAttempt := count
+	for _, prior := range priors {
+		if n := attemptFromRunID(id, prior.RunID); n > maxAttempt {
+			maxAttempt = n
+		}
+	}
+	ids, err := readRunIDs(r, id)
+	if err != nil {
+		return 0, 0, readFailure(err)
+	}
+	for _, id := range ids {
+		if n := attemptFromRunID(id, id); n > maxAttempt {
+			maxAttempt = n
+		}
+	}
+	next := maxAttempt + 1
+	if count == 0 && len(priors)+1 > next {
+		// With no node runs the count of prior runs is the ordinal, as it always was;
+		// a run id ordinal can only move it further.
+		next = len(priors) + 1
+	}
+	return next, count, nil
+}
+
 // attemptFromRunID answers the attempt N of `run-<item>-a<N>` or `run-<item>-a<N>-n<K>`,
 // or 0 for any other run id.
 func attemptFromRunID(itemID, runID string) int {
@@ -1982,18 +1991,14 @@ func decisionEnvelope(decision Decision, at time.Time) (record.Envelope, error) 
 const queueOrderSQL = `ORDER BY CASE WHEN item_id LIKE 'fixer-main-%' THEN 0 WHEN item_id LIKE 'rewrite-item-%' THEN 1 ELSE 2 END,
 		  COALESCE(rank, '') = '', COALESCE(rank, ''), item_id`
 
-func readItems(r *store.Reader) ([]itemRow, error) {
-	owed, err := ownercriteria.ReadOwnerCriteria(r)
-	if err != nil {
-		return nil, readFailure(err)
-	}
+func itemSelect(r *store.Reader) (string, error) {
 	var hasWorkflow bool
 	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name='workflow')`).Scan(&hasWorkflow); err != nil {
-		return nil, readFailure(err)
+		return "", readFailure(err)
 	}
 	var hasExpress bool
 	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name='express')`).Scan(&hasExpress); err != nil {
-		return nil, readFailure(err)
+		return "", readFailure(err)
 	}
 	expressColumn := "0"
 	if hasExpress {
@@ -2005,7 +2010,7 @@ func readItems(r *store.Reader) ([]itemRow, error) {
 	}
 	var hasArgs bool
 	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name='workflow_args')`).Scan(&hasArgs); err != nil {
-		return nil, readFailure(err)
+		return "", readFailure(err)
 	}
 	argsColumn := "''"
 	if hasArgs {
@@ -2013,46 +2018,84 @@ func readItems(r *store.Reader) ([]itemRow, error) {
 	}
 	var hasJudge bool
 	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name='judge_mode')`).Scan(&hasJudge); err != nil {
-		return nil, readFailure(err)
+		return "", readFailure(err)
 	}
 	judgeColumn := "''"
 	if hasJudge {
 		judgeColumn = "COALESCE(judge_mode, '')"
 	}
-	rows, err := r.Query(
-		`SELECT item_id, state, COALESCE(rank, ''), COALESCE(allowed_paths, ''), COALESCE(design_doc, ''),
-		        COALESCE(seat, ''), ` + workflowColumn + `, ` + judgeColumn + `, ` + expressColumn + `, ` + argsColumn + `
-		   FROM items ` + queueOrderSQL)
+	return `SELECT item_id, state, COALESCE(rank, ''), COALESCE(allowed_paths, ''), COALESCE(design_doc, ''),
+	        COALESCE(seat, ''), ` + workflowColumn + `, ` + judgeColumn + `, ` + expressColumn + `, ` + argsColumn + ` FROM items `, nil
+}
+
+func scanItemRow(scanner interface{ Scan(...any) error }) (itemRow, error) {
+	var row itemRow
+	var allowed, args string
+	if err := scanner.Scan(&row.ItemID, &row.State, &row.Rank, &allowed, &row.DesignDoc, &row.Seat, &row.Workflow, &row.JudgeMode, &row.Express, &args); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return itemRow{}, err
+		}
+		return itemRow{}, readFailure(err)
+	}
+	if args != "" {
+		if err := json.Unmarshal([]byte(args), &row.WorkflowArgs); err != nil {
+			return itemRow{}, Internalf("reading item %s's workflow_args %q: %v", row.ItemID, args, err)
+		}
+	}
+	var err error
+	if row.Allowed, err = decodeFence(allowed); err != nil {
+		return itemRow{}, err
+	}
+	row.Express = !itemIsComment(row.ItemID) && (row.Express || strings.HasPrefix(row.ItemID, "item-idea-"))
+	return row, nil
+}
+
+func readItems(r *store.Reader) ([]itemRow, error) {
+	owed, err := ownercriteria.ReadOwnerCriteria(r)
+	if err != nil {
+		return nil, readFailure(err)
+	}
+	query, err := itemSelect(r)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.Query(query + queueOrderSQL)
 	if err != nil {
 		return nil, readFailure(err)
 	}
 	defer rows.Close()
 	items := []itemRow{}
 	for rows.Next() {
-		var (
-			item    itemRow
-			allowed string
-			args    string
-		)
-		if err := rows.Scan(&item.ItemID, &item.State, &item.Rank, &allowed, &item.DesignDoc, &item.Seat, &item.Workflow, &item.JudgeMode, &item.Express, &args); err != nil {
-			return nil, readFailure(err)
-		}
-		if args != "" {
-			if err := json.Unmarshal([]byte(args), &item.WorkflowArgs); err != nil {
-				return nil, Internalf("reading item %s's workflow_args %q: %v", item.ItemID, args, err)
-			}
-		}
-		if item.Allowed, err = decodeFence(allowed); err != nil {
+		row, err := scanItemRow(rows)
+		if err != nil {
 			return nil, err
 		}
-		item.Express = !itemIsComment(item.ItemID) && (item.Express || strings.HasPrefix(item.ItemID, "item-idea-"))
-		item.OwnerOwed = owed[item.ItemID]
-		items = append(items, item)
+		row.OwnerOwed = owed[row.ItemID]
+		items = append(items, row)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, readFailure(err)
 	}
 	return items, nil
+}
+
+func readItemByID(r *store.Reader, id string) (itemRow, bool, error) {
+	query, err := itemSelect(r)
+	if err != nil {
+		return itemRow{}, false, err
+	}
+	row, err := scanItemRow(r.QueryRow(query+`WHERE item_id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return itemRow{}, false, nil
+	}
+	if err != nil {
+		return itemRow{}, false, err
+	}
+	row.OwnerOwed, err = ownercriteria.ReadOwnerCriteriaForItem(r, id)
+	if err != nil {
+		return itemRow{}, false, readFailure(err)
+	}
+	return row, true, nil
 }
 
 // decodeFence reads allowed_paths out of its column. The column is item's: a JSON list,

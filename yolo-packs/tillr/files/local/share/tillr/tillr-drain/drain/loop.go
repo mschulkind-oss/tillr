@@ -877,7 +877,7 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	// for a snapshot. Use wall time for lease expiry, not the pass's clock hook.
 	storePath := l.cfg.Store
 	stopView := newStartView().watch(ctx, startViewRefreshInterval, func(ctx context.Context) (startSnapshot, error) {
-		return readStartSnapshot(ctx, storePath, time.Now())
+		return readStartSnapshot(ctx, storePath, time.Now(), l.currentPolicy())
 	})
 	defer stopView()
 	for {

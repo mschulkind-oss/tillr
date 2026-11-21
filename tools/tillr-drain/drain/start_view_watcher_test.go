@@ -27,7 +27,7 @@ func TestStartViewWatcherFilesAndReordersRows(t *testing.T) {
 	})
 	view := newStartView()
 	defer view.watch(context.Background(), time.Millisecond, func(ctx context.Context) (startSnapshot, error) {
-		return readStartSnapshot(ctx, f.storePath, l.cfg.Now())
+		return readStartSnapshot(ctx, f.storePath, l.cfg.Now(), l.currentPolicy())
 	})()
 
 	awaitStartViewSignal(t, view.updated)
@@ -68,7 +68,7 @@ func TestStartViewPausedRefreshDoesNotBlockLegacyDispatch(t *testing.T) {
 	stop := view.watch(context.Background(), time.Millisecond, func(ctx context.Context) (startSnapshot, error) {
 		if !seeded {
 			seeded = true
-			return readStartSnapshot(ctx, f.storePath, l.cfg.Now())
+			return readStartSnapshot(ctx, f.storePath, l.cfg.Now(), l.currentPolicy())
 		}
 		close(paused)
 		<-ctx.Done()
