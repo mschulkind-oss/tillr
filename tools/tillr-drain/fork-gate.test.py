@@ -116,6 +116,11 @@ class ForkQualityGateTests(unittest.TestCase):
         (self.fork / 'packages' / 'pkg-a' / 'index.ts').write_text('export const a = 1;\n')
         (self.fork / 'packages' / 'pkg-b').mkdir(parents=True)
         (self.fork / 'packages' / 'pkg-b' / 'index.ts').write_text('export const b = 1;\n')
+        for name, script in (('pkg-a', 'npx vitest --run --reporter=dot'),
+                             ('pkg-b', 'npx vitest --run --untouched')):
+            (self.fork / 'packages' / name / 'package.json').write_text(json.dumps({
+                'name': name, 'version': '1.0.0', 'scripts': {'test': script},
+            }))
         self.git(self.fork, 'add', '.')
         self.git(self.fork, 'commit', '-m', 'fork base')
         self.base = self.git(self.fork, 'rev-parse', 'HEAD')
@@ -217,6 +222,25 @@ class ForkQualityGateTests(unittest.TestCase):
         self.git(self.fork, 'commit', '-m', 'add offline devcheck package')
         return self.git(self.fork, 'rev-parse', 'HEAD')
 
+    def add_tui_test(self, assertion='assert.equal(process.cwd().endsWith("/packages/tui"), true);', *,
+                     script='node --test test/*.test.ts'):
+        tui = self.fork / 'packages' / 'tui'
+        (tui / 'test').mkdir(parents=True, exist_ok=True)
+        (tui / 'package.json').write_text(json.dumps({
+            'name': 'tui', 'version': '1.0.0',
+            'scripts': {} if script is None else {'test': script},
+        }))
+        (tui / 'test' / 'fixture.test.ts').write_text(
+            'import { test } from "node:test";\n'
+            'import assert from "node:assert/strict";\n'
+            f'test("tui fixture ran in package", () => {{ {assertion} }});\n'
+        )
+
+    def quality_log(self, run_dir):
+        logs = list((run_dir / 'gate.logs').glob('*-fork-quality.log'))
+        self.assertEqual(len(logs), 1, str(logs))
+        return logs[0].read_text()
+
     def test_passing_build_and_failing_quality_fails_without_cache_source(self):
         self.write_pack('pi', build_cmd='touch build.marker')
         self.write_npx_stub('echo "$PWD:$*" >> "$NPX_LOG"\nexit 1\n')
@@ -254,7 +278,7 @@ class ForkQualityGateTests(unittest.TestCase):
         log_lines = self.npx_log.read_text().splitlines()
         self.assertEqual(len(log_lines), 2)
         self.assertTrue(log_lines[0].endswith(':tsc --noEmit'))
-        self.assertTrue(log_lines[1].endswith('/packages/pkg-a:vitest --run'))
+        self.assertTrue(log_lines[1].endswith('/packages/pkg-a:vitest --run --reporter=dot'))
 
     def test_failing_build_skips_quality_execution(self):
         self.write_pack('pi', build_cmd='exit 1')
@@ -273,7 +297,7 @@ class ForkQualityGateTests(unittest.TestCase):
         self.assertFalse((run_dir / 'fork-cache-source').exists())
         self.assertFalse(self.npx_log.exists(), 'fork-quality should not run npx when fork-build fails')
 
-    def test_diff_touching_no_package_skips_vitest(self):
+    def test_diff_touching_no_package_skips_package_tests(self):
         self.write_pack('pi', build_cmd='true')
         self.write_npx_stub('echo "$(pwd):$*" >> "$NPX_LOG"\n')
         (self.fork / 'README.md').write_text('updated\n')
@@ -282,13 +306,129 @@ class ForkQualityGateTests(unittest.TestCase):
 
         res = self.run_fork_gate('pi', 'run-no-pkg', head)
         self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
-        self.assertIn('skipping vitest', res.stdout)
+        self.assertIn('skipping package tests', res.stdout)
         run_dir = self.root / '.tillr' / 'loop' / 'run-no-pkg'
         verdict = json.loads((run_dir / 'gate.verdict.json').read_text())['payload']
         self.assertEqual(verdict['result'], 'pass')
         log_lines = self.npx_log.read_text().splitlines()
         self.assertEqual(len(log_lines), 1)
         self.assertTrue(log_lines[0].endswith(':tsc --noEmit'))
+
+    def test_touched_packages_run_their_declared_tests_not_untouched_packages(self):
+        self.write_pack('pi', build_cmd='touch build.marker')
+        self.write_npx_stub(
+            'test -f "$(git rev-parse --show-toplevel)/build.marker"\n'
+            'echo "$PWD:$*" >> "$NPX_LOG"\n'
+            'case "$*" in "tsc --noEmit"|"vitest --run --reporter=dot") ;; *) exit 1;; esac\n'
+        )
+        self.add_tui_test(script='node --test test/*.test.ts && echo tui-compound-step-ran')
+        (self.fork / 'packages' / 'pkg-a' / 'index.ts').write_text('export const a = 5;\n')
+        self.git(self.fork, 'add', '.')
+        self.git(self.fork, 'commit', '-m', 'touch tui and pkg-a')
+        head = self.git(self.fork, 'rev-parse', 'HEAD')
+
+        res = self.run_fork_gate('pi', 'run-package-scripts', head)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr)
+        run_dir = self.root / '.tillr' / 'loop' / 'run-package-scripts'
+        verdict = json.loads((run_dir / 'gate.verdict.json').read_text())['payload']
+        self.assertEqual(verdict['result'], 'pass')
+        self.assertEqual({c['check_id']: c['result'] for c in verdict['checks']},
+                         {'fork-build': 'pass', 'fork-quality': 'pass'})
+        self.assertTrue((run_dir / 'fork-cache-source').exists())
+        log = self.quality_log(run_dir)
+        self.assertIn('tui fixture ran in package', log)
+        self.assertIn('\ntui-compound-step-ran\n', log)
+        self.assertIn('node --test test/*.test.ts', res.stdout + res.stderr + log)
+        lines = self.npx_log.read_text().splitlines()
+        self.assertEqual(len(lines), 2, lines)
+        self.assertTrue(lines[0].endswith(':tsc --noEmit'))
+        self.assertTrue(lines[1].endswith('/packages/pkg-a:vitest --run --reporter=dot'))
+        self.assertNotIn('/packages/tui:vitest', '\n'.join(lines))
+        self.assertNotIn('/packages/pkg-b:', '\n'.join(lines))
+
+    def test_unavailable_package_runner_is_an_error_not_a_test_failure(self):
+        self.write_pack('pi', build_cmd='touch build.marker')
+        self.write_npx_stub('echo "$PWD:$*" >> "$NPX_LOG"\n')
+        package = self.fork / 'packages' / 'pkg-a' / 'package.json'
+        package.write_text(json.dumps({
+            'name': 'pkg-a', 'version': '1.0.0',
+            'scripts': {'test': 'tillr-nonexistent-test-runner --run'},
+        }))
+        self.git(self.fork, 'commit', '-qam', 'declare unavailable runner')
+        head = self.git(self.fork, 'rev-parse', 'HEAD')
+
+        res = self.run_fork_gate('pi', 'run-missing-runner', head)
+        run_dir = self.root / '.tillr' / 'loop' / 'run-missing-runner'
+        self.assertTrue((run_dir / 'gate.verdict.json').exists(), res.stdout + res.stderr)
+        verdict = json.loads((run_dir / 'gate.verdict.json').read_text())['payload']
+        self.assertEqual(res.returncode, 4, res.stdout + res.stderr)
+        self.assertEqual(verdict['result'], 'error')
+        self.assertEqual({c['check_id']: c['result'] for c in verdict['checks']},
+                         {'fork-build': 'pass', 'fork-quality': 'error'})
+        diagnostic = res.stdout + res.stderr + self.quality_log(run_dir)
+        self.assertIn('pkg-a', diagnostic)
+        self.assertIn('tillr-nonexistent-test-runner', diagnostic)
+        self.assertFalse((run_dir / 'fork-cache-source').exists())
+
+    def test_offline_npm_exec_cannot_resolve_declared_runner(self):
+        self.write_pack('pi', build_cmd='touch build.marker')
+        self.write_npx_stub('echo "$PWD:$*" >> "$NPX_LOG"\n')
+        runner = 'tillr-nonexistent-test-runner'
+        script = f'npm exec --offline --yes --cache .empty-npm-cache -- {runner} --run'
+        self.add_tui_test(script=script)
+        self.git(self.fork, 'add', '.')
+        self.git(self.fork, 'commit', '-m', 'declare unresolved npm exec runner')
+        head = self.git(self.fork, 'rev-parse', 'HEAD')
+
+        res = self.run_fork_gate('pi', 'run-unresolved-npm-exec', head)
+        run_dir = self.root / '.tillr' / 'loop' / 'run-unresolved-npm-exec'
+        log = self.quality_log(run_dir)
+        self.assertIn('ENOTCACHED', log)
+        self.assertEqual(res.returncode, 4, log)
+        verdict = json.loads((run_dir / 'gate.verdict.json').read_text())['payload']
+        self.assertEqual(verdict['result'], 'error')
+        self.assertEqual({c['check_id']: c['result'] for c in verdict['checks']},
+                         {'fork-build': 'pass', 'fork-quality': 'error'})
+        self.assertIn(f'packages/tui: unable to run scripts.test {script!r}', log)
+        self.assertFalse((run_dir / 'fork-cache-source').exists())
+
+    def test_missing_package_test_declaration_is_an_error(self):
+        self.write_pack('pi', build_cmd='touch build.marker')
+        self.write_npx_stub('echo "$PWD:$*" >> "$NPX_LOG"\n')
+        self.add_tui_test(script=None)
+        self.git(self.fork, 'add', '.')
+        self.git(self.fork, 'commit', '-m', 'add tui without a test declaration')
+        head = self.git(self.fork, 'rev-parse', 'HEAD')
+
+        res = self.run_fork_gate('pi', 'run-missing-declaration', head)
+        run_dir = self.root / '.tillr' / 'loop' / 'run-missing-declaration'
+        self.assertEqual(res.returncode, 4, res.stdout + res.stderr)
+        verdict = json.loads((run_dir / 'gate.verdict.json').read_text())['payload']
+        self.assertEqual(verdict['result'], 'error')
+        self.assertEqual({c['check_id']: c['result'] for c in verdict['checks']},
+                         {'fork-build': 'pass', 'fork-quality': 'error'})
+        log = self.quality_log(run_dir)
+        self.assertIn('packages/tui', log)
+        self.assertIn('no scripts.test', log)
+        self.assertFalse((run_dir / 'fork-cache-source').exists())
+
+    def test_a_genuine_failing_declared_package_test_is_a_failure(self):
+        self.write_pack('pi', build_cmd='touch build.marker')
+        self.write_npx_stub('echo "$PWD:$*" >> "$NPX_LOG"\n')
+        self.add_tui_test('assert.equal(1, 2);')
+        self.git(self.fork, 'add', '.')
+        self.git(self.fork, 'commit', '-m', 'add failing tui test')
+        head = self.git(self.fork, 'rev-parse', 'HEAD')
+
+        res = self.run_fork_gate('pi', 'run-failing-tui', head)
+        run_dir = self.root / '.tillr' / 'loop' / 'run-failing-tui'
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        verdict = json.loads((run_dir / 'gate.verdict.json').read_text())['payload']
+        self.assertEqual(verdict['result'], 'fail')
+        self.assertEqual({c['check_id']: c['result'] for c in verdict['checks']},
+                         {'fork-build': 'pass', 'fork-quality': 'fail'})
+        self.assertIn('tui fixture ran in package', self.quality_log(run_dir))
+        self.assertFalse((run_dir / 'fork-cache-source').exists())
 
     def test_unlisted_fork_keeps_build_only_verdict_and_reports_it(self):
         self.write_pack('custom-fork', build_cmd='true')

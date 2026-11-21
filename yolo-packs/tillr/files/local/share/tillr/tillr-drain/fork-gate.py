@@ -43,9 +43,9 @@ def build_command(root, fork):
     return path, command
 
 
-# Mirrors tools/fork-check.py's FORK_QUALITY, extended with pi (tsc at root, vitest per touched package).
+# Mirrors tools/fork-check.py's FORK_QUALITY, extended with pi (tsc at root, npm test per touched package).
 FORK_QUALITY = {
-    'pi': {'root': 'npx tsc --noEmit', 'package': 'npx vitest --run'},
+    'pi': {'root': 'npx tsc --noEmit'},
     'pi-session-search': ('check', 'test'),
     'pi-subagents': ('typecheck', 'test:unit'),
 }
@@ -87,6 +87,42 @@ def touched_packages(candidate, base, head):
     return sorted(packages)
 
 
+def package_test(package):
+    script = None
+    try:
+        manifest = json.loads((Path(package) / 'package.json').read_text())
+        scripts = manifest.get('scripts') if isinstance(manifest, dict) else None
+        script = scripts.get('test') if isinstance(scripts, dict) else None
+        if not isinstance(script, str) or not script.strip():
+            raise ValueError('no scripts.test declared')
+    except FileNotFoundError:
+        print(f'fork-quality: {package}: no scripts.test declared (missing package.json)', file=sys.stderr)
+        return 4
+    except (OSError, ValueError) as error:
+        print(f'fork-quality: {package}: cannot read scripts.test: {error}', file=sys.stderr)
+        return 4
+
+    try:
+        # npm exec/npx can fail to resolve an offline runner with status 1,
+        # the same status as a failed test. Keep its diagnostics in the gate log.
+        offline_cache_miss = False
+        with subprocess.Popen(['npm', 'test'], cwd=package, stderr=subprocess.PIPE) as npm:
+            for line in npm.stderr:
+                sys.stderr.buffer.write(line)
+                sys.stderr.buffer.flush()
+                if line.strip() in (b'npm error code ENOTCACHED', b'npm ERR! code ENOTCACHED'):
+                    offline_cache_miss = True
+            status = npm.wait()
+        if status and offline_cache_miss:
+            raise RuntimeError('npm could not resolve the runner offline (ENOTCACHED)')
+        if status in (126, 127) or status < 0:
+            raise RuntimeError(f'npm test exited {status}')
+    except (OSError, RuntimeError) as error:
+        print(f'fork-quality: {package}: unable to run scripts.test {script!r}: {error}', file=sys.stderr)
+        return 4
+    return int(status != 0)
+
+
 def quality_command(fork, candidate, base, head):
     entry = FORK_QUALITY.get(fork)
     if entry is None:
@@ -95,10 +131,12 @@ def quality_command(fork, candidate, base, head):
         commands = [entry['root']]
         packages = touched_packages(candidate, base, head)
         if not packages:
-            print(f'fork-quality: {fork} touches no packages/ workspace; skipping vitest', flush=True)
+            print(f'fork-quality: {fork} touches no packages/ workspace; skipping package tests', flush=True)
         else:
             for pkg in packages:
-                commands.append(f'(cd {shlex.quote(pkg)} && {entry["package"]})')
+                commands.append(shlex.join([
+                    sys.executable, str(Path(__file__).resolve()), '--package-test', pkg,
+                ]))
         return ' && '.join(commands)
     # Tuple entries (pi-subagents, pi-session-search) have devDependencies omitted or pruned by pack builds.
     scripts = ' && '.join(f'npm run {shlex.quote(script)}' for script in entry)
@@ -184,6 +222,8 @@ def main():
 
 if __name__ == '__main__':
     try:
+        if len(sys.argv) == 3 and sys.argv[1] == '--package-test':
+            sys.exit(package_test(sys.argv[2]))
         sys.exit(main())
     except (OSError, ValueError, RuntimeError, KeyError) as error:
         print(f'fork-build: {error}', file=sys.stderr)
