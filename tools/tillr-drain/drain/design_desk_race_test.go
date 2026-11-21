@@ -45,10 +45,11 @@ func TestDeskCapacityRecheckedAtApplication(t *testing.T) {
 				return appendEffect(tx, dispatchStartedKind, req.RunID, &pendingWork{Decision: Decision{ItemID: req.ItemID, LaneID: req.LaneID, RunRequest: &req}, BaseSHA: runGit(t, f.root, "rev-parse", "HEAD")}, l.cfg.Now())
 			})
 			before := eventCount(t, f.storePath)
-			applied, _, err := l.applyPlan(context.Background(), p, runGit(t, f.root, "rev-parse", "HEAD"), l.cfg.Now())
-			if err != nil || applied || eventCount(t, f.storePath) != before {
-				t.Fatalf("stale cap plan applied=%v err=%v events before=%d after=%d", applied, err, before, eventCount(t, f.storePath))
+			applied, work, err := l.applyPlan(context.Background(), p, runGit(t, f.root, "rev-parse", "HEAD"), l.cfg.Now())
+			if err != nil || applied || work != nil {
+				t.Fatalf("stale cap plan applied=%v work=%+v err=%v", applied, work, err)
 			}
+			assertOnlyDispatchDecline(t, f.storePath, before, p.decision, "document desks are at capacity")
 		})
 	}
 }
