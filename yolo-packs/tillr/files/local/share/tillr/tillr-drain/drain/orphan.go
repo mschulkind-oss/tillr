@@ -120,7 +120,10 @@ type reapEvidence struct {
 	// A prior session of this same PID can also lose its waiters (exec). Key
 	// that evidence by run and session, never by PID: new claims are not dead.
 	prior map[string]string
-	live  map[string]bool
+	// A gap-capable serial workflow node with a staged session and output can
+	// continue even when its detached face vanished without a pause record.
+	restartSessions map[string]bool
+	live            map[string]bool
 	// faces is every run ID whose run face itself is alive (isRunFaceArgv), from the same
 	// scan as live. Only a face keeps a dead examiner's lease: a stray child that merely
 	// carries the run's markers is not the run.
@@ -163,7 +166,7 @@ func dispatchSessionEnded(r *store.Reader, id string) (bool, error) {
 // the process table once, with no transaction open. The caller holds the run-start
 // lock from here through its write, so no run face starts in between.
 func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvidence, error) {
-	ev := reapEvidence{dead: map[LoopOwner]bool{}, prior: map[string]string{}, live: map[string]bool{}, faces: map[string]bool{}, stuck: map[string]string{}, resumeStuck: map[string]string{}, offRotation: map[string]string{}, reclaimed: &[]string{}, reapedSingle: &[]*pendingWork{}}
+	ev := reapEvidence{dead: map[LoopOwner]bool{}, prior: map[string]string{}, restartSessions: map[string]bool{}, live: map[string]bool{}, faces: map[string]bool{}, stuck: map[string]string{}, resumeStuck: map[string]string{}, offRotation: map[string]string{}, reclaimed: &[]string{}, reapedSingle: &[]*pendingWork{}}
 	var owners []LoopOwner
 	stuck := map[string]*pendingWork{}
 	resumed := map[string]*pendingWork{}
@@ -178,6 +181,7 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 	// files (presence.go) or boot mismatch.
 	foreignRuns := map[string]string{}
 	var ended map[LoopOwner]bool
+	priorWork := map[string]*pendingWork{}
 	if err := s.ReadTx(ctx, func(r *store.Reader) error {
 		works, err := readPending(r)
 		if err != nil {
@@ -201,6 +205,7 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 				}
 				if ended {
 					ev.prior[req.RunID] = work.LoopID
+					priorWork[req.RunID] = work
 				}
 			}
 			if work.Decision.RunRequest != nil && (fromOtherDomain(work.Owner, here) || fromOtherDomain(work.Examiner, here)) {
@@ -294,6 +299,15 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 		for id, ownerDomain := range foreignRuns {
 			if foreignRunLive(locator, id, ownerDomain, here.Domain) {
 				ev.live[id], ev.faces[id] = true, true
+			}
+		}
+		for id, work := range priorWork {
+			if !ev.live[id] {
+				if ready, err := l.hasInterruptedWorkflowSession(ctx, work.Decision); err != nil {
+					return ev, err
+				} else if ready {
+					ev.restartSessions[id] = true
+				}
 			}
 		}
 		for id, work := range stuck {
@@ -580,6 +594,16 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 		if ev.live[id] {
 			continue
 		}
+		markOrphaned := func() error {
+			effect := orphanedRunEffect{ResumeAfterRestart: priorSession && ev.restartSessions[id]}
+			if err := appendEffect(tx, loopOrphanedKind, id, effect, at); err != nil {
+				return err
+			}
+			if priorSession && !effect.ResumeAfterRestart && ev.reclaimed != nil {
+				*ev.reclaimed = append(*ev.reclaimed, fmt.Sprintf("loop: restarting run %s on %s: its run face vanished across the loop restart and no resumable session was confirmed\n", id, work.Decision.LaneID))
+			}
+			return nil
+		}
 		if work.Examining {
 			// Examination is not another execution of the node. Recover its
 			// lease without inventing a terminal node record or spending a run.
@@ -695,7 +719,7 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 				}); err != nil {
 					return err
 				}
-				if err := appendEffect(tx, loopOrphanedKind, id, struct{}{}, at); err != nil {
+				if err := markOrphaned(); err != nil {
 					return err
 				}
 				if _, err := tx.Exec(`UPDATE node_runs SET outcome = 'interrupted' WHERE run_id = ? AND outcome = 'running'`, id); err != nil {
@@ -718,7 +742,7 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 				// leaving no loop-stop marker. Proven owner death and no live
 				// worker still make this interrupted node safe to replay.
 				if rec != nil && rec.EndCause == run.EndSignal {
-					if err := appendEffect(tx, loopOrphanedKind, id, struct{}{}, at); err != nil {
+					if err := markOrphaned(); err != nil {
 						return err
 					}
 				}
@@ -745,7 +769,7 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 		if _, err := run.ReapExpiredLeases(ctx, tx, at); err != nil {
 			return err
 		}
-		if err := appendEffect(tx, loopOrphanedKind, id, struct{}{}, at); err != nil {
+		if err := markOrphaned(); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(`UPDATE node_runs SET outcome = 'interrupted' WHERE run_id = ? AND outcome = 'running'`, id); err != nil {
@@ -769,6 +793,42 @@ func runHasActiveResume(r *store.Reader, id string) (bool, error) {
 		return false, err
 	}
 	return latest == run.ResumeKind, nil
+}
+
+// hasInterruptedWorkflowSession checks local staging outside the write
+// transaction. A staged id alone is not evidence that a worker ever started.
+func (l *Loop) hasInterruptedWorkflowSession(ctx context.Context, d Decision) (bool, error) {
+	if d.Workflow == nil || len(d.Parallel) != 0 || commandStage(d) {
+		return false, nil
+	}
+	kind, err := adapterPauseKind(ctx, l.cfg.Root, d.RunRequest)
+	if err != nil || kind != run.PauseAtGap {
+		return false, err
+	}
+	id := d.RunRequest.RunID
+	staged, err := l.stagedNodeRun(d)
+	if err != nil || staged != id {
+		return false, err
+	}
+	lane := l.laneDirPath(d.LaneID)
+	if info, err := os.Stat(l.laneTarget(d.LaneID)); err != nil || !info.IsDir() {
+		return false, nil
+	}
+	log, err := os.Stat(filepath.Join(lane, id+".log"))
+	if err != nil || log.Size() == 0 {
+		return false, nil
+	}
+	if _, err := os.Stat(filepath.Join(lane, BriefFile)); err != nil {
+		return false, nil
+	}
+	session, err := ReadSessionID(lane)
+	if err != nil || session == "" {
+		return false, nil
+	}
+	// A reused lane's session file is not proof of ownership. Staging archived
+	// the session of this exact run before handing it off.
+	stagedSession, err := ReadSessionID(RunDir(l.cfg.Root, id))
+	return err == nil && session == stagedSession, nil
 }
 
 func isSingleWorkerRecoverable(work *pendingWork) bool {

@@ -120,9 +120,10 @@ func (l *Loop) settleHookGroup(ctx context.Context, work *pendingWork, result *L
 	if err != nil {
 		return laneOutcome{err: err}
 	}
+	nodes := parallelNodes(d)
 	var records []run.Record
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
-		for _, node := range parallelNodes(d) {
+		for _, node := range nodes {
 			rec, err := terminalRecord(r, node.RunRequest.RunID)
 			if err != nil {
 				return err
@@ -145,9 +146,20 @@ func (l *Loop) settleHookGroup(ctx context.Context, work *pendingWork, result *L
 		}
 		l.countSettledSpend(result, rec, work.LoopID)
 		if rec.State == run.StatePaused {
-			// A pause is not an ended run. Retain the existing unjudged-node
-			// hold rather than asking the definition to finish a live session.
-			if err := l.nodeOutcome(ctx, parallelNodes(d)[i], "unjudged"); err != nil {
+			node := nodes[i]
+			resumed, _, stop, err := l.resumeAfterWall(ctx, node.LaneID, *node.RunRequest, l.lanePath(node.LaneID), rec, timing.TickID, l.cfg.Now(), result, nil)
+			if err != nil || stop != "" {
+				return laneOutcome{err: err, stop: stop}
+			}
+			if resumed.State == run.StatePaused {
+				return laneOutcome{}
+			}
+			if resumed.RunID != "" {
+				continue
+			}
+			// No session to resume: retain the unjudged-node hold rather
+			// than asking the definition to finish a paused session.
+			if err := l.nodeOutcome(ctx, node, "unjudged"); err != nil {
 				return laneOutcome{err: err}
 			}
 			paused = true
