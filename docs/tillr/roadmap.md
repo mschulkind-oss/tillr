@@ -1496,11 +1496,11 @@ missing rather than report that the change failed verification.
   results. The twenty-ninth run cited the earlier Git exit 128, not a fresh fetch. The
   thirty-first, thirty-third and thirty-fifth runs asked for host verification.
 
-  **Answer to the thirty-seventh and thirty-ninth runs (designer, 2026-11-21; the owner may overturn it):**
-  Keep the three pins and the build hold. Neither retry supplied host ancestry or fresh fetch
-  results. The thirty-ninth run asked the host operator to perform the checks below, not the
-  owner to choose a pin. Current availability is unknown: do not report the earlier Git exit
-  128 as a result of either retry.
+  **Answer to the thirty-seventh, thirty-ninth and forty-first runs (designer, 2026-11-21; the owner may overturn it):**
+  Keep the three pins and the build hold. The forty-first run received no host results and
+  attempted no fetch, publication or build. As with the two earlier requests, the missing
+  input is a measurement from the host operator, not a decision for the owner. Current
+  availability is unknown; the earlier Git exit 128 is not a result for this retry.
 
   The host operator's next action is to run the checks below and attach the results, not to
   choose a pin. Until then, do not dispatch another build or design run. Once the host evidence
