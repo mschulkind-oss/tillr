@@ -421,13 +421,16 @@ func TestPolicyStartingSeats(t *testing.T) {
 			for _, seat := range p.ReadOnlySeats {
 				readOnly[seat] = true
 			}
-			for _, seat := range []string{"design", "build", "review", "scout", "plan", "edit", "test-write", "test-run", "docs", "verify"} {
+			for _, seat := range []string{"design", "build", "review", "scout", "classify", "plan", "edit", "test-write", "test-run", "docs", "verify"} {
 				if len(p.seatList(seat)) == 0 || strings.TrimSpace(p.SeatPurposes[seat]) == "" {
 					t.Errorf("missing mapping or purpose for %s", seat)
 				}
 			}
-			if !readOnly["scout"] || !readOnly["test-run"] {
-				t.Error("scout and test-run must be read-only")
+			if !readOnly["scout"] || !readOnly["classify"] || !readOnly["test-run"] {
+				t.Error("scout, classify and test-run must be read-only")
+			}
+			if got, want := p.seatList("classify"), p.seatList("scout"); !slices.Equal(got, want) {
+				t.Errorf("classify mapped to %v, want scout backends %v", got, want)
 			}
 			switch filepath.Base(path) {
 			case "backend-policy.bedrock.json":

@@ -1,11 +1,12 @@
 {
-  "about": "The tillr backend policy for a jail with a Claude subscription login and GitHub Copilot pi credentials (no Bedrock dispatch). Claude runs with account=subscription so run-claude strips the jail's Bedrock environment and uses the saved OAuth login. The design, plan, review, verify and build seats run Claude on the subscription; scout, edit, test-write, test-run and docs use the Copilot backends directly. These seat choices are the operator's, not the owner's. A drain names this file with --policy; like the other per-machine policy files, this is the stopgap docs/design/tillr-convergence.md OQ-TC2 records.",
+  "about": "The tillr backend policy for a jail with a Claude subscription login and GitHub Copilot pi credentials (no Bedrock dispatch). Claude runs with account=subscription so run-claude strips the jail's Bedrock environment and uses the saved OAuth login. The design, plan, review, verify and build seats run Claude on the subscription; scout, classify, edit, test-write, test-run and docs use the Copilot backends directly. These seat choices are the operator's, not the owner's. A drain names this file with --policy; like the other per-machine policy files, this is the stopgap docs/design/tillr-convergence.md OQ-TC2 records.",
   "default_backend": "claude",
   "seats": {
     "design": "claude-designer",
     "build": "claude",
     "review": "claude",
     "scout": "pi-scout",
+    "classify": "pi-scout",
     "plan": "claude",
     "edit": "pi-build",
     "test-write": "pi-build",
@@ -15,6 +16,7 @@
   },
   "read_only_seats": [
     "scout",
+    "classify",
     "test-run"
   ],
   "seat_purposes": {
@@ -22,6 +24,7 @@
     "build": "Implement the change described by the item or plan.",
     "review": "Review the candidate against the criteria.",
     "scout": "Search the tree and report findings without writing.",
+    "classify": "Decide whether delivery is to the repository, a fork, or both without editing either.",
     "plan": "Read the item and tree and write the piece list.",
     "edit": "Apply a settled edit named in the plan.",
     "test-write": "Write tests from the criteria.",

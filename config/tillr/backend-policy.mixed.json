@@ -6,6 +6,7 @@
     "build": "pi",
     "review": "pi",
     "scout": "pi",
+    "classify": "pi",
     "plan": "pi",
     "edit": "pi",
     "test-write": "pi",
@@ -13,12 +14,13 @@
     "docs": "pi",
     "verify": "pi"
   },
-  "read_only_seats": ["scout", "test-run"],
+  "read_only_seats": ["scout", "classify", "test-run"],
   "seat_purposes": {
     "design": "Settle design decisions and specify the intended change.",
     "build": "Implement the change described by the item or plan.",
     "review": "Review the candidate against the criteria.",
     "scout": "Search the tree and report findings without writing.",
+    "classify": "Decide whether delivery is to the repository, a fork, or both without editing either.",
     "plan": "Read the item and tree and write the piece list.",
     "edit": "Apply a settled edit named in the plan.",
     "test-write": "Write tests from the criteria.",

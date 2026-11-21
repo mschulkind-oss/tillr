@@ -18,7 +18,7 @@ import (
 
 func TestForkStagingFaultFreesClassifiersLaneForOtherWork(t *testing.T) {
 	f, l, steps := workflowLoopFixture(t, "")
-	l.cfg.Policy.Seats["plan"] = "fixture"
+	l.cfg.Policy.Seats["classify"] = "fixture"
 	if err := os.Mkdir(filepath.Join(f.root, "bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
