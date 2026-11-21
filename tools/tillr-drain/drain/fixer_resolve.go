@@ -147,7 +147,13 @@ func readGreenProof(ctx context.Context, root string) (heavy.GreenProof, error) 
 	if err != nil {
 		return heavy.GreenProof{}, err
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "green-"+green+".json"))
+	return readGreenProofFile(dir, green)
+}
+
+// readGreenProofFile reads the record for an exact commit, even after the green pointer
+// has advanced. The caller supplies a full commit SHA, not a ref or path.
+func readGreenProofFile(dir, sha string) (heavy.GreenProof, error) {
+	raw, err := os.ReadFile(filepath.Join(dir, "green-"+sha+".json"))
 	if os.IsNotExist(err) {
 		return heavy.GreenProof{}, nil
 	}
@@ -158,7 +164,7 @@ func readGreenProof(ctx context.Context, root string) (heavy.GreenProof, error) 
 	if err := json.Unmarshal(raw, &proof); err != nil {
 		return heavy.GreenProof{}, err
 	}
-	if proof.Commit != green {
+	if proof.Commit != sha {
 		return heavy.GreenProof{}, nil
 	}
 	return proof, nil
@@ -376,9 +382,22 @@ func readCheckProofs(ctx context.Context, root string) ([]checkProof, error) {
 	if err != nil {
 		return nil, err
 	}
+	progress, err := readProgressCheckProof(dir, "")
+	if err != nil {
+		return nil, err
+	}
+	if progress.commit != "" {
+		proofs = append(proofs, progress)
+	}
+	return proofs, nil
+}
+
+// readProgressCheckProof reads the tip run's passes. When rev is set, ignore progress
+// made on any other commit, including when native and legacy checks report different tips.
+func readProgressCheckProof(dir, rev string) (checkProof, error) {
 	tip, at := "", map[string]time.Time{}
 	add := func(sha, id string, when time.Time) {
-		if sha == "" || when.IsZero() || (tip != "" && sha != tip) {
+		if sha == "" || when.IsZero() || (rev != "" && sha != rev) || (tip != "" && sha != tip) {
 			return
 		}
 		tip = sha
@@ -389,7 +408,7 @@ func readCheckProofs(ctx context.Context, root string) ([]checkProof, error) {
 	var progress heavyProgress
 	if raw, err := os.ReadFile(filepath.Join(dir, "heavy-progress.json")); err == nil {
 		if err := json.Unmarshal(raw, &progress); err != nil {
-			return nil, err
+			return checkProof{}, err
 		}
 		for id, check := range progress.Checks {
 			if check.Result == "pass" {
@@ -397,7 +416,7 @@ func readCheckProofs(ctx context.Context, root string) ([]checkProof, error) {
 			}
 		}
 	} else if !os.IsNotExist(err) {
-		return nil, err
+		return checkProof{}, err
 	}
 	var legacy struct {
 		TipSHA string `json:"tip_sha"`
@@ -407,7 +426,7 @@ func readCheckProofs(ctx context.Context, root string) ([]checkProof, error) {
 	}
 	if raw, err := os.ReadFile(filepath.Join(dir, "heavy-legacy-progress.json")); err == nil {
 		if err := json.Unmarshal(raw, &legacy); err != nil {
-			return nil, err
+			return checkProof{}, err
 		}
 		for id, check := range legacy.Checks {
 			if when, err := time.Parse(time.RFC3339, check.ProvedAt); err == nil {
@@ -415,18 +434,15 @@ func readCheckProofs(ctx context.Context, root string) ([]checkProof, error) {
 			}
 		}
 	} else if !os.IsNotExist(err) {
-		return nil, err
+		return checkProof{}, err
 	}
-	if tip != "" && len(at) > 0 {
-		latest := time.Time{}
-		for _, when := range at {
-			if when.After(latest) {
-				latest = when
-			}
+	latest := time.Time{}
+	for _, when := range at {
+		if when.After(latest) {
+			latest = when
 		}
-		proofs = append(proofs, checkProof{commit: tip, at: at, provedAt: latest})
 	}
-	return proofs, nil
+	return checkProof{commit: tip, at: at, provedAt: latest}, nil
 }
 
 // resolveProvedFixers settles every open trunk fixer a recorded pass has made moot: the

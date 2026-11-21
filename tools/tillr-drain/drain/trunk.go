@@ -23,14 +23,14 @@ import (
 // Broken-trunk detection and healing.
 //
 // This file is the loop's half of one rule: a red gate is a suspect until the failing
-// checks are replayed on the base the candidate was staged from. A check that is red
+// checks are judged on the base the candidate was staged from. A check that is red
 // there is the trunk's failure, not the candidate's, and the item is acquitted while one
 // deduplicated fixer item is filed against the red sha. A check that is green on the base
 // stays the candidate's problem and takes the ordinary gate refusal.
 //
 // The three words this file uses:
 //
-//   - *suspect*: a red gate whose failing checks have not been replayed on the base yet.
+//   - *suspect*: a red gate whose failing checks have not been judged on the base yet.
 //   - *trunk-already-red*: the replay reproduced the failure on the base, so the trunk is
 //     red and the candidate is not at fault. The item is acquitted, never given a failing
 //     verdict.
@@ -479,7 +479,7 @@ func (l *Loop) rollingRuns(result *LoopResult) int {
 	return result.RollingGreen + result.RollingRed
 }
 
-// trunkReading is what a trunk claim's replay found.
+// trunkReading is what a trunk claim's proof lookup and replay found.
 //
 //   - Confirmed: every named check is red on the candidate's base and, when the trunk has
 //     moved past that base, on the trunk tip too. RedSHA is the commit the fixer is filed
@@ -495,10 +495,11 @@ type trunkReading struct {
 	Confirmed  bool
 	RepairedAt string
 	CheckLogs  map[string]string
+	Evidence   string // How the base (and tip, if needed) were judged.
 }
 
-// trunkAlreadyRed replays the gate's failing checks on the candidate's own base, and then
-// judges them on the current trunk tip. Only an all-red base replay can acquit: a newer
+// trunkAlreadyRed judges the failing checks on the candidate's own base, and then on
+// the current trunk tip. Only an all-red base replay can acquit: a newer
 // trunk red does not erase the candidate's failure on a check that passed where it started;
 // rolling files that newer trunk's independent fixer.
 //
@@ -526,48 +527,61 @@ func (l *Loop) trunkAlreadyRed(ctx context.Context, candidate Candidate, gate Ga
 	if base == "" {
 		return trunkReading{}, nil
 	}
-	out, err := replay.Replay(ctx, candidate, base, gate.FailingChecks)
-	if err != nil {
-		return trunkReading{}, err
+	// A worker's trunk obstacle still requests a base replay. For an actual gate
+	// failure, consult the proof first; a fork base is outside that proof's scope.
+	useBaseProof := gate.Outcome == GateFailed && candidate.BaseRef == ""
+	out, source, err := l.judgeTrunkChecks(ctx, replay, candidate, base, gate.FailingChecks, useBaseProof)
+	reading := trunkReading{Evidence: "base " + source}
+	if err != nil || !out.Known {
+		return reading, err
 	}
-	if !out.Known || out.Rev != "" && out.Rev != base {
-		return trunkReading{}, nil
-	}
+	reading.Red, reading.CheckLogs = out.Red, out.CheckLogs
 	if !allIn(gate.FailingChecks, out.Red) {
-		return trunkReading{Red: out.Red, CheckLogs: out.CheckLogs}, nil
+		return reading, nil
 	}
 	// A fork-series candidate's base is the fork's own HEAD, which the trunk tip does not
 	// describe, so its base answers alone.
 	if candidate.BaseRef != "" || l.cfg.Root == "" {
-		return trunkReading{RedSHA: base, Red: out.Red, Confirmed: true, CheckLogs: out.CheckLogs}, nil
+		reading.RedSHA, reading.Confirmed = base, true
+		return reading, nil
 	}
 	tip, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
 	if err != nil {
-		return trunkReading{Red: out.Red, CheckLogs: out.CheckLogs}, err
+		return reading, err
 	}
 	if tip == "" || tip == base {
-		return trunkReading{RedSHA: base, Red: out.Red, Confirmed: true, CheckLogs: out.CheckLogs}, nil
+		reading.RedSHA, reading.Confirmed = base, true
+		return reading, nil
 	}
-	tipRed, tipLogs, known, err := l.redOnTip(ctx, replay, candidate, tip, gate.FailingChecks)
-	if err != nil || !known {
+	tipOut, source, err := l.judgeTrunkChecks(ctx, replay, candidate, tip, gate.FailingChecks, true)
+	reading.Evidence += "; tip " + source
+	if err != nil || !tipOut.Known {
 		// A tip nobody could judge confirms nothing: a fixer for the old base is the
 		// defect this reading exists to prevent.
-		return trunkReading{Red: out.Red, CheckLogs: out.CheckLogs}, err
+		return reading, err
 	}
-	mergedLogs := map[string]string{}
-	for id, ref := range out.CheckLogs {
-		mergedLogs[id] = ref
+	if allIn(gate.FailingChecks, tipOut.Red) {
+		reading.CheckLogs = joinCheckLogs(out.CheckLogs, tipOut.CheckLogs)
+		reading.RedSHA, reading.Red, reading.Confirmed = tip, tipOut.Red, true
+		return reading, nil
 	}
-	for id, ref := range tipLogs {
-		mergedLogs[id] = ref
+	reading.RepairedAt, reading.CheckLogs = tip, nil
+	return reading, nil
+}
+
+// joinCheckLogs keeps the tip's reference when both replays logged a check.
+func joinCheckLogs(base, tip map[string]string) map[string]string {
+	if len(tip) == 0 {
+		return base
 	}
-	if len(mergedLogs) == 0 {
-		mergedLogs = nil
+	logs := make(map[string]string, len(base)+len(tip))
+	for id, ref := range base {
+		logs[id] = ref
 	}
-	if allIn(gate.FailingChecks, tipRed) {
-		return trunkReading{RedSHA: tip, Red: tipRed, Confirmed: true, CheckLogs: mergedLogs}, nil
+	for id, ref := range tip {
+		logs[id] = ref
 	}
-	return trunkReading{Red: out.Red, RepairedAt: tip}, nil
+	return logs
 }
 
 // allIn answers whether every one of want is in have.
@@ -584,39 +598,49 @@ func allIn(want, have []string) bool {
 	return true
 }
 
-// redOnTip answers which of the checks are red on the trunk tip, and whether that was
-// judged. A check the tip run's own record passed on this tip is green without a replay
-// (readCheckProofs, the record that resolves stale fixers); the rest are replayed there.
-// A proof the loop cannot read is not a pass, so it only costs a replay.
+// redOnTip answers which of the checks are red on the trunk tip and whether that was judged.
 func (l *Loop) redOnTip(ctx context.Context, replay ReplayStep, candidate Candidate, tip string, checks []string) ([]string, map[string]string, bool, error) {
-	passed := map[string]bool{}
-	if proofs, err := readCheckProofs(ctx, l.cfg.Root); err == nil {
-		for _, proof := range proofs {
-			if proof.commit != tip {
-				continue
+	out, _, err := l.judgeTrunkChecks(ctx, replay, candidate, tip, checks, true)
+	return out.Red, out.CheckLogs, out.Known, err
+}
+
+// judgeTrunkChecks uses only passes for the exact commit and exact check ID. Missing,
+// unreadable, or red records cannot replace a replay.
+func (l *Loop) judgeTrunkChecks(ctx context.Context, replay ReplayStep, candidate Candidate, rev string, checks []string, useProof bool) (ReplayOutcome, string, error) {
+	rest := checks
+	source := "replay"
+	if useProof && l.cfg.Root != "" && filepath.Base(rev) == rev {
+		if dir, err := heavyDirectory(ctx, l.cfg.Root); err == nil {
+			passed := map[string]bool{}
+			if green, err := readGreenProofFile(dir, rev); err == nil && !green.ProvedAt.IsZero() {
+				for _, id := range green.Passed {
+					passed[id] = true
+				}
 			}
-			for id := range proof.at {
-				passed[id] = true
+			if progress, err := readProgressCheckProof(dir, rev); err == nil {
+				for id := range progress.at {
+					passed[id] = true
+				}
+			}
+			rest = nil
+			for _, id := range checks {
+				if !passed[id] {
+					rest = append(rest, id)
+				}
+			}
+			if len(rest) == 0 {
+				return ReplayOutcome{Rev: rev, Known: true}, "proof record", nil
+			}
+			if len(rest) != len(checks) {
+				source = "proof record and replay"
 			}
 		}
 	}
-	rest := []string{}
-	for _, check := range checks {
-		if !passed[check] {
-			rest = append(rest, check)
-		}
+	out, err := replay.Replay(ctx, candidate, rev, rest)
+	if err != nil || !out.Known || out.Rev != "" && out.Rev != rev {
+		return ReplayOutcome{}, source, err
 	}
-	if len(rest) == 0 {
-		return nil, nil, true, nil
-	}
-	out, err := replay.Replay(ctx, candidate, tip, rest)
-	if err != nil {
-		return nil, nil, false, err
-	}
-	if !out.Known || out.Rev != "" && out.Rev != tip {
-		return nil, nil, false, nil
-	}
-	return out.Red, out.CheckLogs, true, nil
+	return out, source, nil
 }
 
 // laneBasedOnTrunk reports whether the lane's recorded base is the trunk's: false for a
@@ -769,9 +793,13 @@ func (l *Loop) settleTrunkAlreadyRed(ctx context.Context, candidate *Candidate, 
 		}
 		candidate.RefusalDetail = strings.TrimSpace(candidate.RefusalDetail + " " + detail)
 		l.reportf("loop: %s's gate failure is red only on its base %s; the trunk is repaired at %s, so no fixer is filed\n", candidate.ItemID, shortSHA(oldBase), shortSHA(reading.RepairedAt))
-		return "", false, nil
 	}
 	if !reading.Confirmed {
+		evidence := reading.Evidence
+		if evidence == "" {
+			evidence = "not checked"
+		}
+		l.reportf("loop: gate failed %s: recording a refusal, not a verdict (trunk evidence: %s)\n", candidate.ItemID, evidence)
 		return "", false, nil
 	}
 	changedPaths := gate.CandidateChangedPaths
@@ -970,7 +998,7 @@ func (l *Loop) acquitRedWithPaths(ctx context.Context, candidate Candidate, gate
 	l.mu.Lock()
 	result.TrunkAcquitted++
 	l.mu.Unlock()
-	l.reportf("loop: %s acquitted as trunk-already-red: %s is red on %s, so %s is held blocked by %s\n",
+	l.reportf("loop: %s acquitted as trunk-already-red: replay found %s red on %s, so %s is held blocked by %s\n",
 		candidate.ItemID, strings.Join(redChecks, ", "), shortSHA(redSHA), candidate.ItemID, fixerID)
 	return nil
 }

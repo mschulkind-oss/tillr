@@ -3033,8 +3033,8 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			return "", false, nil
 		}
 	case GateFailed:
-		// A red gate is a suspect, not a conviction. Replay the failing checks on the base
-		// and trunk tip first:
+		// A red gate is a suspect, not a conviction. Judge the failing checks on the base
+		// and trunk tip, reusing exact recorded passes before replaying:
 		// - If repaired on tip, send back to worker on tip.
 		// - If red on base and tip (OQ-GP7):
 		//   * Compare the candidate's changed paths against each red check's declared
@@ -3058,7 +3058,6 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		// A red gate is a refusal about the code, never a verdict: no judge retired the
 		// item's criteria, so the item stays in the queue with no verdict frozen against
 		// it (MQ1). The refusal event is what holds it.
-		l.reportf("loop: gate failed %s: recording a refusal, not a verdict\n", candidate.ItemID)
 		if err := l.refuse(ctx, candidate, result, RefusalGate); err != nil {
 			return "", false, err
 		}
