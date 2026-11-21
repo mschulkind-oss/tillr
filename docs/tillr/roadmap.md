@@ -268,6 +268,18 @@ design. Eleven have landed and three are queued, as
 lists. AutoQA's one design-seat item is not admitted to the queue while that design is in the
 [Icebox](#icebox).
 
+It returned to this list on 2026-11-20 with one question, counted after the 34 above:
+[`OQ-JL5`](../design/tillr-judge-and-lifecycle.md#OQ-JL5) asks whether a worker's `seat` obstacle still moves an item to a
+stronger model by itself. It was raised by [the section that removes automatic failover](../design/tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27),
+which records the owner's words of that evening ("I hate fallbacks... We need deliberate choices,
+not fallbacks", and of a judge that cannot run, "you raise a giant alarm and we fix it") and four
+designer's decisions made from them, which are his to overturn: a failed run holds on its own
+backend with its cause and no other model is tried (`D-JL24`); a backend or judge that cannot run
+is an alarm shown first on every face (`D-JL25`); a run refused for quota waits for its own window
+(`D-JL26`); and the lane release for judge waits is dropped (`D-JL27`). None is built. The section
+lists the code and tests each reaches and the five build items to file, and no item is filed yet.
+The removal does not wait on the question.
+
 [Queue persistence](../reference/tillr-queue-persistence.md) is decided, built, and graduated into
 a system reference: every question it carried is a row of
 [its ledger](../reference/tillr-queue-persistence.md#why-its-this-way), and on 2026-11-16 it was cut
@@ -369,7 +381,9 @@ without stopping local runs.
 mixed policy puts designers on the subscription and builders on pi. What is left is filed
 [on this page](#filed-2026-11-15-choose-where-each-seat-runs-by-quota-and-move-work-when-a-backend-runs-out):
 re-reading the policy without a restart, reading quota directly with a reserve, splitting a seat
-by share or at random for bake-offs, and moving a run when its backend runs out;
+by share or at random for bake-offs, and moving a run when its backend runs out (that last part
+is withdrawn on 2026-11-20 by [`D-JL26`](../design/tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27), a designer's decision from the owner's words
+of that day: a run waits for its own backend's window, and a person changes the policy);
 [drain seat profiles and one-command switching](../design/tillr-seat-profiles.md)
 ([`OQ-DSP1`](../design/tillr-seat-profiles.md#OQ-DSP1) to
 [`OQ-DSP3`](../design/tillr-seat-profiles.md#OQ-DSP3)) blocks named live-switchable profiles and
@@ -494,7 +508,11 @@ Wanted, not now, by the owner's call. Picking one up means giving it a place abo
   [live drain capacity and allocation changes](../design/tillr-live-drain-config.md), and the
   owner switches backends manually for now. Picking it up means writing a small design for
   multi-backend seat setups — including whether work waits on a capped preferred backend or spills
-  over to a fallback backend — and ruling it before building.
+  over to a fallback backend — and ruling it before building. Until then a seat runs on one
+  backend and nothing moves work to another by itself
+  ([`D-JL24` and `D-JL26`](../design/tillr-judge-and-lifecycle.md#415-no-automatic-move-to-another-model-d-jl24-to-d-jl27), designer's decisions of 2026-11-20 from the owner's words
+  "We need deliberate choices, not fallbacks"); that design is where an alternative the owner
+  enables would be specified.
 
 ## What this page does not cover
 
