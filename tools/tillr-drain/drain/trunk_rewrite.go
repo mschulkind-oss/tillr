@@ -96,11 +96,12 @@ func rewriteReason(q heavy.Querier, h trunkHistory) string {
 // rewriteAbsorption is a rewrite the loop proved: old sha -> new sha for each replaced
 // commit, and the evidence. Or the commits it could not match.
 type rewriteAbsorption struct {
-	Lost, Tip string
-	Pairs     map[string]string
-	Order     []string // old shas, oldest first
-	Unmatched []string
-	Evidence  string
+	Lost, Tip     string
+	Pairs         map[string]string
+	Order         []string // old shas, oldest first
+	Unmatched     []string
+	Evidence      string
+	GreenOverride string // a repair must hold green strictly behind its gated commit
 }
 
 func (a *rewriteAbsorption) proved() bool { return a != nil && len(a.Unmatched) == 0 }

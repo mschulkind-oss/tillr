@@ -2902,6 +2902,13 @@ repair and records `remote-sync-cleared` once without publishing or recording a
 landing. The filer does not move main, green or the main checkout. The live
 refused-push path does not yet call the filer.
 
+The one-step landing path rechecks the pin and the gate binding, then uses
+`git reset --keep` to install the resolution and the replayed suffix. It records
+the rewrite pairs and a landing receipt for the resolution. Tip mode pushes the
+new tip; green mode keeps green behind the resolution and records
+`remote-sync-proving` until proof reaches the replayed tip. Ordinary candidate
+landing does not yet call the repair landing path.
+
 Set-aside also writes `runs/<run>-set-aside-base`, a pointer to the lane's reset
 destination so an interrupted reset can resume. It follows its owning run's
 retention rule; closing the item can remove the reset pointer if the trunk contains it, without removing the candidate's unlanded pin.

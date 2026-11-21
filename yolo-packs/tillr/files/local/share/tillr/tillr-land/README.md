@@ -69,7 +69,7 @@ since green with both bounds disabled.
   A close before the claim prevents the landing. A close during publication is refused,
   but can be retried after the receipt if the item is still open. Closing it then does
   not undo the landing. Standalone stores with no item table remain usable.
-- **One trunk landing, one squash.** `Trunk.Squash` writes exactly one commit —
+- **One ordinary trunk landing, one squash.** `Trunk.Squash` writes exactly one commit —
   `git merge-tree --write-tree` to compute the tree, `git commit-tree` to write the commit —
   with the repository's scope-checked identity and the candidate's message: a single-commit
   change keeps its message unchanged, while a multi-commit change uses the first commit's
@@ -78,6 +78,10 @@ since green with both bounds disabled.
   [`queue-persistence-ruling.md`](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/queue-persistence-ruling.md#3-landing-receipts-without-commit-trailers)), and
   `Trunk.Move` fast-forwards the trunk onto it. The landed tree is the tree the verdict
   judged unless the trunk moved, and the row records both so a reader can tell.
+  A single-step remote-sync replay uses the same landing row and event, with
+  `trunk_after` identifying the gated repair and `replay_tip` identifying the
+  tip after the suffix was replayed. The ordinary landing command does not
+  invoke that repair path.
 - **No store write is open while git runs or a file is touched.** Under `land.lock`,
   ancestry, squash, clash checks and range preservation happen outside SQLite
   transactions. The publication is then three steps: a short write that rechecks

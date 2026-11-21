@@ -21,6 +21,8 @@ func fileDispatchableRemoteSyncRepair(t *testing.T) (*pushFixture, remoteSyncSta
 	tree := runGit(t, root, "merge-tree", "--write-tree", "--merge-base="+parent, remote, p.local[0])
 	base := runGit(t, root, "commit-tree", tree, "-p", remote, "-m", "replay one.txt")
 	st := remoteSyncFilingFixture(t, p, base, remote, p.local[1])
+	st.ReplayedOrder = []string{p.local[0]}
+	st.ReplayedPairs = map[string]string{p.local[0]: base}
 	if _, err := p.l.fileOrUpdateRemoteSyncItem(context.Background(), st); err != nil {
 		t.Fatal(err)
 	}

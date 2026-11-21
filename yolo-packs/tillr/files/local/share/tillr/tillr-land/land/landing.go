@@ -105,16 +105,19 @@ type Landing struct {
 	Reason          string           `json:"reason"`
 	// BaseRef is retained in the event payload for marker lifetime readers. Older
 	// rows/events omit it; their cleanup is conservative while a run is in flight.
-	BaseRef           string       `json:"base_ref,omitempty"`
-	BaseSHA           string       `json:"base_sha"`
-	HeadSHA           string       `json:"head_sha"`
-	TrunkBefore       string       `json:"trunk_before"`
-	TrunkAfter        string       `json:"trunk_after"`
-	GatedTree         string       `json:"gated_tree"`
-	LandedTree        string       `json:"landed_tree"`
-	ConflictPaths     []string     `json:"conflict_paths"`
-	GateSkippedReason string       `json:"gate_skipped_reason"`
-	RedCap            *redcap.Hold `json:"red_cap,omitempty"`
+	BaseRef           string   `json:"base_ref,omitempty"`
+	BaseSHA           string   `json:"base_sha"`
+	HeadSHA           string   `json:"head_sha"`
+	TrunkBefore       string   `json:"trunk_before"`
+	TrunkAfter        string   `json:"trunk_after"`
+	GatedTree         string   `json:"gated_tree"`
+	LandedTree        string   `json:"landed_tree"`
+	ConflictPaths     []string `json:"conflict_paths"`
+	GateSkippedReason string   `json:"gate_skipped_reason"`
+	// ReplayTip is the new trunk tip after replaying the suffix. TrunkAfter
+	// attributes the landing to the gated repair, not to a replayed commit.
+	ReplayTip string       `json:"replay_tip,omitempty"`
+	RedCap    *redcap.Hold `json:"red_cap,omitempty"`
 	// Faults name what the landing could not finish cleanly: a recovery ref an earlier
 	// landing left, or bytes the owner saved after the trunk moved, with the ref that
 	// holds them. A landing with no fault leaves no recovery ref.
@@ -1231,6 +1234,34 @@ func recordLanding(ctx context.Context, tx *store.Tx, landing Landing, at time.T
 		return Landing{}, err
 	}
 	return landing, nil
+}
+
+// RecordReplayLanding records a linear replay after the caller publishes it
+// under land.lock. An identical retry returns the original receipt.
+func RecordReplayLanding(ctx context.Context, tx *store.Tx, itemID, runID, before, after, head, base, tree string, verdict Verdict, at time.Time) (Landing, error) {
+	if itemID == "" || runID == "" || before == "" || after == "" || head == "" || base == "" || tree == "" {
+		return Landing{}, Usagef("recording a replay landing requires item, run, trunk tips and repair commit, base and tree")
+	}
+	if verdict.VerdictID == "" || verdict.BaseSHA != base || verdict.TreeSHA != tree || (verdict.Result != VerdictPass && verdict.Result != VerdictPassInherited) {
+		return Landing{}, Usagef("replay landing requires a passing gate verdict bound to the repair's base and tree")
+	}
+	l := Landing{ItemID: itemID, RunID: runID, VerdictID: verdict.VerdictID, Result: ResultLanded, Reason: "remote-sync-replay", BaseSHA: base, HeadSHA: head, TrunkBefore: before, TrunkAfter: head, GatedTree: tree, LandedTree: tree, ReplayTip: after}
+	var raw []byte
+	err := tx.QueryRow(`SELECT e.payload FROM landings l JOIN events e ON e.seq=l.event_seq WHERE l.item_id=? AND l.run_id=? AND l.result=?`, itemID, runID, ResultLanded).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return recordLanding(ctx, tx, l, at)
+	}
+	if err != nil {
+		return Landing{}, err
+	}
+	var saved Landing
+	if err := json.Unmarshal(raw, &saved); err != nil {
+		return Landing{}, err
+	}
+	if saved.Reason != l.Reason || saved.HeadSHA != head || saved.BaseSHA != base || saved.VerdictID != verdict.VerdictID || saved.GatedTree != tree || saved.TrunkBefore != before || saved.ReplayTip != after {
+		return Landing{}, Internalf("run %s already has a different landing receipt", runID)
+	}
+	return saved, nil
 }
 
 // appendLanding appends one landing's event in the caller's transaction and answers its
