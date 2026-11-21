@@ -41,7 +41,7 @@ func actionFixture(t *testing.T) (*Loop, func(...string) string, func(string) st
 		git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-m", name)
 		return git("rev-parse", "HEAD")
 	}
-	l := &Loop{cfg: LoopConfig{Root: root, Store: filepath.Join(t.TempDir(), "store.db"), Report: &strings.Builder{}}}
+	l := &Loop{cfg: LoopConfig{Root: root, Store: filepath.Join(t.TempDir(), "store.db"), Now: time.Now, Report: &strings.Builder{}}}
 	s, err := store.Open(context.Background(), l.cfg.Store, true)
 	if err != nil {
 		t.Fatal(err)
