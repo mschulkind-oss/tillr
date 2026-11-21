@@ -156,7 +156,7 @@ func (l *Loop) evaluatorCandidate(ctx context.Context, d Decision) (Candidate, e
 			req := work.Decision.RunRequest
 			identity := JudgeWriter{NodeID: node, RunID: id, SessionID: strings.TrimSpace(string(raw)), Backend: req.Backend, Route: req.Route()}
 			c.Producers = append(c.Producers, identity)
-			c.EvaluatorTask += fmt.Sprintf("\nNode %s: seat=%s; access=%s; prompt=%s; output directory=%s", node, producer.Seat, producer.Access, producer.Prompt, nodeOutputsDir(l.cfg.Root, id))
+			c.EvaluatorTask += fmt.Sprintf("\nNode %s: seat=%s; access=%s; prompt=%s", node, producer.Seat, producer.Access, producer.Prompt)
 			if writing {
 				c.Writers = append(c.Writers, identity)
 			}

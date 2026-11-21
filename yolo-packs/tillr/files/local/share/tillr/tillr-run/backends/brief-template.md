@@ -1,7 +1,7 @@
 # {{ITEM_ID}} — {{TITLE}}
 
 You are running unattended: nobody reads or answers your messages while you work. Your
-first message without a tool call ends the run and is read as your final report, so keep
+first message without a tool call ends the run, so keep
 working with tools until the goal in **Report shape** is met or one of the obstacles it
 names holds.
 
@@ -137,7 +137,7 @@ The sharded runner is how the gate runs a suite, on the modules listed in the re
 verification report `docs/pi/tillr-go-shards-2026-11-17.md`. Each shard is an independent
 test process with its own scratch and git global configuration, and tests run fresh,
 without Go's test result cache. Use it yourself only when a change is so broad that no
-selection covers it, and say so in your report:
+selection covers it:
 
 ```bash
 python3 tools/go-test-shards.py tools/tillr-drain -k 6
@@ -174,7 +174,7 @@ you edited; leave whole suites to the gate. Never run `just done` in a lane.
 
 ## Verification commands
 
-Run each of these and paste its output in your report. Never run the full gate
+Run each of these. Never run the full gate
 (`just done`): it holds the landing lock and is the gate's job at landing time.
 
 {{VERIFICATION}}
@@ -189,9 +189,8 @@ not permission to run the landing gate (`just done`).
 
 The goal of this run is one commit in the target that meets the criteria above (in the
 main-checkout form, the finished change, left uncommitted). Do not end your turn until
-that commit exists and its verification has run. Nobody reads a report in the meantime,
-so a report that says the work is unfinished is not an ending: there is nobody to hand the
-work back to.
+that commit exists and its verification has run. The verifier checks the commit itself;
+do not write a summary or a test inventory.
 
 The only other ending is an **obstacle**: a fact this run cannot change, of one of the
 kinds below, together with what it needs. Each kind leads to a different action, so name
@@ -211,13 +210,9 @@ merge conflict, a test inside the fence that fails, a suite that takes long, and
 yet done. An obstacle the loop cannot confirm (a `trunk` claim the base replay does not
 reproduce, for instance) comes back to this run with what the loop found.
 
-Your final message contains, in this order:
-
-1. paths changed;
-2. each verification command with its output;
-3. for an obstacle, its `OBSTACLE:` line and its required lines, each on a line of its own.
-
-Its last line is exactly one of:
+Your final message on success is just `RESULT: done`. For an obstacle, give its
+`OBSTACLE:` line and its required fields, each on a line of its own.
+In either case the last line is exactly one of:
 
     RESULT: done
     RESULT: blocked

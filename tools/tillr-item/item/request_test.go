@@ -207,6 +207,9 @@ func TestFileRequestOrdinaryAndIdempotence(t *testing.T) {
 	if shown.Express {
 		t.Fatalf("ordinary request marked express: %s", raw)
 	}
+	if n := count(t, s, `SELECT COUNT(*) FROM item_criteria WHERE item_id=? AND lower(text) LIKE '%report%'`, id); n != 0 {
+		t.Fatalf("filed request attached %d criteria about a report", n)
+	}
 	var express int
 	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
 		return r.QueryRow(`SELECT express FROM items WHERE item_id=?`, id).Scan(&express)
