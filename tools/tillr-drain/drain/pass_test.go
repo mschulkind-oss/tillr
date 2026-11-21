@@ -151,8 +151,7 @@ func applyTerminal(tx *store.Tx, rec run.Record) error {
 func TestALiveLeaseFromAnEarlierPassDefersTheSameFork(t *testing.T) {
 	f, l := passFixture(t, "item-a", "item-b")
 	fixtureWrite(t, f, func(tx *store.Tx) error {
-		_, err := tx.Exec(`UPDATE items SET allowed_paths = ?`, `[".forks/lanes/lane-1/pi/"]`)
-		return err
+		return recordFixtureFork(tx, "item-a", "item-b")
 	})
 	plans := mustPlan(t, l)
 	ok, _, err := l.applyPlan(context.Background(), plans[0], runGit(t, f.root, "rev-parse", TrunkRef), l.cfg.Now())

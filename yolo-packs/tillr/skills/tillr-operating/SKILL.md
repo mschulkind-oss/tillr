@@ -285,11 +285,12 @@ checkout matches it. An answer-only run records `answered`, skips gate and landi
 its replies, and closes the item. Delivery waiting on an owner's edit remains in the store
 for a later pass; repeated delivery retains the same nonce.
 
-To file fork work, name a checkout in the fence, for example
-`.forks/lanes/lane-1/pi/` (or a subdirectory of it). The filed lane is a placeholder;
-staging materializes the dispatched lane's checkout and names it in the brief and
-fence, starting from the delivered patch tip. The worker commits there only, never
-runs `bin/pi-forks export`, and never edits the shared cache. The fork gate's `fork-build` check builds a clean copy of that exact head with the pack
+To file fork work, use `tillr item request`. Name the fork and the change in the words
+on standard input; supply the required `--title` and repository-relative `--path`
+fence entries, not a lane checkout path. Planning records the delivery target. For
+mixed delivery, the fork lands before the repository part starts. Staging materializes
+the dispatched lane's checkout from the delivered patch tip. The worker commits there
+only, never runs `bin/pi-forks export`, and never edits the shared cache. The fork gate's `fork-build` check builds a clean copy of that exact head with the pack
 command, and `fork-quality` runs after a passing `fork-build` in the same clean clone
 for forks in `FORK_QUALITY`; only then does the lander move `refs/heads/patch/pi` to the
 built head, write its landed marker, and refresh the shared cache's `main`. Items for the same fork are serialized.

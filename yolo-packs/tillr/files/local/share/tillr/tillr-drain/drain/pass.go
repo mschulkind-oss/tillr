@@ -1775,7 +1775,10 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				}
 			}
 			if hasTargetRow {
-				fork := forkOf(targetRow.Allowed)
+				fork := targetRow.Delivery.activeFork()
+				if d.Workflow != nil && classificationNode(d.Workflow.Stages[d.NodeIndex]) {
+					fork = ""
+				}
 				for _, held := range heldForks {
 					if fork != "" && held.fork == fork && !(work != nil && (work.Ready || d.WorkflowRestart) && held.itemID == d.ItemID) {
 						return decline("fork "+fork+" is held by "+held.itemID, held.itemID+" to release fork "+fork)
@@ -1884,7 +1887,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				}
 			}
 			// A fork's base comes from staging its checkout, not from the trunk observation.
-			if d.Workflow != nil && d.NodeBaseSHA == "" && forkOf(targetRow.Allowed) == "" {
+			if d.Workflow != nil && d.NodeBaseSHA == "" && targetRow.Delivery.activeFork() == "" {
 				d.NodeBaseSHA = base
 			}
 			if d.Workflow != nil {
@@ -3021,7 +3024,7 @@ func liveForks(r *store.Reader, at time.Time, works map[string]*pendingWork) ([]
 	}
 	forks := map[string]string{}
 	for _, item := range items {
-		forks[item.ItemID] = forkOf(item.Allowed)
+		forks[item.ItemID] = item.Delivery.activeFork()
 	}
 	events, err := r.EventsOfKind(0, run.AllocateKind)
 	if err != nil {
@@ -3044,7 +3047,7 @@ func liveForks(r *store.Reader, at time.Time, works map[string]*pendingWork) ([]
 	}
 	var out []plannedFork
 	for id, work := range works {
-		if !work.Done && forks[id] != "" {
+		if !work.Done && forks[id] != "" && !awaitingForkClaim(work) {
 			out = append(out, plannedFork{id, forks[id]})
 		}
 	}
@@ -3056,11 +3059,26 @@ func liveForks(r *store.Reader, at time.Time, works map[string]*pendingWork) ([]
 		if err := r.QueryRow(`SELECT run_id FROM lanes WHERE lane_id = ?`, lane).Scan(&current); err != nil {
 			return nil, err
 		}
-		if current.Valid && current.String == owner.run && forks[owner.item] != "" {
+		if current.Valid && current.String == owner.run && forks[owner.item] != "" && !awaitingForkClaim(works[owner.item]) {
 			out = append(out, plannedFork{owner.item, forks[owner.item]})
 		}
 	}
 	return out, nil
+}
+
+// Classification is read-only and holds no fork. Its ready successor must win
+// the writer claim before it can reserve that fork, so two classifiers that
+// choose the same fork cannot hold it against one another.
+func awaitingForkClaim(work *pendingWork) bool {
+	if work == nil || work.Decision.Workflow == nil {
+		return false
+	}
+	d := work.Decision
+	if d.NodeIndex < 0 || d.NodeIndex >= len(d.Workflow.Stages) {
+		return false
+	}
+	return classificationNode(d.Workflow.Stages[d.NodeIndex]) ||
+		(work.Ready && d.NodeIndex == 1 && d.NodeBaseSHA == "" && classificationNode(d.Workflow.Stages[0]))
 }
 
 // A sibling started after the bracket opened has its own writer and bracket.

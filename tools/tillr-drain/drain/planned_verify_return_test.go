@@ -602,8 +602,7 @@ func TestVerifyReturnForkSeriesColdSecondLane(t *testing.T) {
 	}
 	runGit(t, f.root, "clone", "-q", "--no-tags", "-b", "main", fork1, fork2)
 	fixtureWrite(t, f, func(tx *store.Tx) error {
-		_, err := tx.Exec(`UPDATE items SET allowed_paths='[".forks/lanes/lane-1/pi"]'`)
-		return err
+		return recordFixtureFork(tx, "item-a", "item-b")
 	})
 	offerColdLane(t, f, l, s)
 	runVerifyReturn(t, f, l, s, func() bool { return s.lands >= 1 })

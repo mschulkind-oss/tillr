@@ -2852,13 +2852,19 @@ refused.
 
 ## Filing fork work
 
-File a fork item with a fence entry such as `.forks/lanes/lane-1/pi/`, optionally
-restricted to a subdirectory. The filed lane id is a placeholder, not a reserved
-checkout: staging rewrites it to the dispatched lane in both the brief and the fence,
-materializes that checkout, and starts it at the delivered patch tip. The worker
-commits only in that checkout and must not run `bin/pi-forks export`. The lander alone
-moves `refs/heads/patch/pi`, marks the delivery for sibling boundaries, and refreshes
-the shared cache's `main`; two items for the same fork remain serialized.
+File with `tillr item request`. Name one fork from `bin/pi-forks.list` and describe the
+change in the words on standard input. Supply `--title` and the required
+repository-relative `--path` entries for the repository fence, not a lane checkout path.
+The `plan` step, or the first read-only step of `single-worker@v1`, records the delivery
+as repository, fork, or both. A path list does not select a fork. Before resuming
+pending fork work, make sure the item's words identify its fork explicitly.
+
+For a fork piece, staging materializes the dispatched lane's checkout and starts it at
+the delivered patch tip. The worker commits only in that checkout and must not run
+`bin/pi-forks export`. The lander alone moves `refs/heads/patch/pi`, marks the delivery
+for sibling boundaries, and refreshes the shared cache's `main`; two items for the same
+fork remain serialized. For a mixed item, the drain records the fork publication and
+only then starts a separate run for the repository part.
 
 The fork gate is [fork-gate.py](fork-gate.py), whose `fork-build` check runs through
 `tillr-gate` on a clean copy of the exact candidate head with the pack's declared

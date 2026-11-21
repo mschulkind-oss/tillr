@@ -123,9 +123,11 @@ func unprovedBlockers(ctx context.Context, r *store.Reader, root, green string, 
 			}
 			ok, seen := proved[blocker]
 			if !seen {
-				var sha string
+				var sha, ref string
 				if exists {
-					err := r.QueryRow(`SELECT trunk_after FROM landings WHERE item_id=? AND result='landed' ORDER BY event_seq DESC LIMIT 1`, blocker).Scan(&sha)
+					err := r.QueryRow(`SELECT l.trunk_after, COALESCE(json_extract(e.payload, '$.base_ref'), '')
+						FROM landings l LEFT JOIN events e ON e.seq=l.event_seq AND e.kind='land.landing'
+						WHERE l.item_id=? AND l.result='landed' ORDER BY l.event_seq DESC LIMIT 1`, blocker).Scan(&sha, &ref)
 					if err != nil && err != sql.ErrNoRows {
 						return nil, err
 					}
@@ -134,18 +136,11 @@ func unprovedBlockers(ctx context.Context, r *store.Reader, root, green string, 
 					// A fork landing delivers an already judged commit to its patch
 					// branch, not to main. Its recorded trunk_after must be retained
 					// by that delivery branch; main's green pointer cannot contain it.
-					var fence string
-					if err := r.QueryRow(`SELECT COALESCE(allowed_paths, '') FROM items WHERE item_id=?`, blocker).Scan(&fence); err != nil {
-						return nil, err
-					}
-					allowed, err := decodeFence(fence)
-					if err != nil {
-						return nil, err
-					}
 					target := green
-					if fork := forkOf(allowed); fork != "" {
-						target = "refs/heads/patch/" + fork
+					if strings.HasPrefix(ref, "refs/heads/patch/") {
+						target = ref
 					}
+					var err error
 					ok, err = containsCommit(ctx, root, sha, target)
 					if err != nil {
 						return nil, err

@@ -317,8 +317,10 @@ func TestNodeScopeSerialBoundaries(t *testing.T) {
 				runGit(t, f.root, "commit", "-qm", "ignore fork")
 				runGit(t, f.root, "fetch", "--no-tags", fork, "refs/heads/main:refs/heads/patch/pi")
 				fixtureWrite(t, f, func(tx *store.Tx) error {
-					_, err := tx.Exec(`UPDATE items SET allowed_paths='[".forks/lanes/lane-1/pi/tools/item-a/"]' WHERE item_id='item-a'`)
-					return err
+					if _, err := tx.Exec(`UPDATE items SET allowed_paths='[".forks/lanes/lane-1/pi/tools/item-a/"]' WHERE item_id='item-a'`); err != nil {
+						return err
+					}
+					return recordFixtureFork(tx, "item-a")
 				})
 				steps.fork = fork
 				prefix = ".forks/lanes/lane-1/pi/"

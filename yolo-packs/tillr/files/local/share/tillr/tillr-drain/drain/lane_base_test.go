@@ -159,14 +159,21 @@ func TestLaneBaseForkBlockerUsesDeliveredPatchHistory(t *testing.T) {
 	runGit(t, f.root, "update-ref", "refs/heads/patch/pi", forkBase)
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		for _, q := range []string{
-			`UPDATE items SET state='landed', allowed_paths='[".forks/lanes/lane-1/pi/"]' WHERE item_id='blocker'`,
+			`UPDATE items SET state='landed' WHERE item_id='blocker'`,
 			`INSERT INTO item_edges(item_id,blocked_by) VALUES('dependent','blocker')`,
 		} {
 			if _, err := tx.Exec(q); err != nil {
 				return err
 			}
 		}
-		return recordFixtureLanding(tx, "blocker", "fixture-run", forkHead, 1)
+		if err := appendEffectOn(tx, "land.landing", "item", "blocker", map[string]string{"base_ref": "refs/heads/patch/pi"}, l.cfg.Now()); err != nil {
+			return err
+		}
+		var seq int
+		if err := tx.QueryRow(`SELECT MAX(seq) FROM events`).Scan(&seq); err != nil {
+			return err
+		}
+		return recordFixtureLanding(tx, "blocker", "fixture-run", forkHead, seq)
 	})
 	dependent := func() Decision {
 		for _, plan := range mustPlan(t, l) {
