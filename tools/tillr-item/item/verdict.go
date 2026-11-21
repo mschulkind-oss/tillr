@@ -198,8 +198,9 @@ func frozenCriterion(ctx context.Context, r *store.Reader, itemID, criterionID s
 }
 
 // checkIndependence is the independence rule for a delegated verdict: the judge is never
-// the actor whose work is judged (agent-runtime.md §12, "the independence rule is neither
-// waived nor widened"; §14 states it for sign-off). A mechanical verdict is exempt
+// the actor whose work is judged
+// (docs/reference/authority-not-approval.md#a-judge-never-judges-its-own-work). A
+// mechanical verdict is exempt
 // because its evidence, not its actor, is what carries it, and a human verdict is exempt
 // because the rule is about delegation — a person signing off does not need a judge.
 func checkIndependence(v verdictPayload) error {
