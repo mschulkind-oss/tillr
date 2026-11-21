@@ -3181,6 +3181,10 @@ It defaults to `<root>/.tillr/state.db` and uses the same trunk-history lock as 
 before replaying a refused push. Its exit status and text or JSON report reflect the stored
 `drain.post-landing-action` event, including the kind and any named mover. A proof hold
 exits non-zero and names the heavy runner even when the old green is already on the remote.
+In green mode, a replay by the loop or by `tillr drain push` records the imported range as
+`drain.remote-roll-pending`. On startup or a green advance, the loop claims covered ranges
+with `drain.remote-roll-claimed` and checks their upstream changes against the roll paths.
+This survives a drain restart and does not require a successful push.
 `acknowledge-patch-move` also attempts publication if the configured tip has unpublished
 commits; an unsuccessful push does not undo the acknowledgment.
 

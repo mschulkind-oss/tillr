@@ -23,7 +23,7 @@ type PushOutcome struct {
 	OK     bool   `json:"ok"`
 }
 
-// PushOnce uses the loop's publication and locked replay paths, without rolling a deployment.
+// PushOnce uses the loop's publication and locked replay paths. The loop owns deployment.
 func PushOnce(ctx context.Context, root, storePath string) (PushOutcome, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
@@ -64,6 +64,7 @@ func (l *Loop) pushGreenOnce(ctx context.Context, p settings.Push) (string, erro
 	if errors.As(err, &refused) {
 		res, err := l.healRefusedPushResult(ctx, p, err)
 		if err == nil {
+			l.maybeRollAfterRemoteSync(ctx, res)
 			err = &pushStateError{kind: pushKindProving, remoteTip: res.remoteTip, rebasedTip: res.newTip,
 				detail: fmt.Sprintf("the remote had moved: %d unpublished commits were rebased onto it; %s", res.replayed, awaitingRebasedProof(res.newTip))}
 		}

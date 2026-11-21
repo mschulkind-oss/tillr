@@ -2,6 +2,7 @@ package drain
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -225,6 +226,124 @@ func (l *Loop) greenProofHold(ctx context.Context, remote, ref, green string) (s
 
 func awaitingRebasedProof(tip string) string {
 	return "mover: the heavy runner; prove rebased tip " + shortSHA(tip) + " before pushing"
+}
+
+// rollAfterRemoteSync checks the imported range, not the replayed local commit.
+func (l *Loop) rollAfterRemoteSync(ctx context.Context, res healResult) {
+	changed, err := actionCommand(ctx, l.cfg.Root, "git", "diff", "--name-only", "--no-renames", "-z", res.base, res.remoteTip, "--")
+	if err != nil {
+		l.reportRollFailure(res.newTip, "", err)
+		l.recordAction(ctx, "roll", res.newTip, err)
+		return
+	}
+	l.rollChanged(ctx, l.cfg.PostLanding.Roll, changed, res.newTip)
+}
+
+// Always persist the range: even if the replay carried green, PushOnce may
+// exit before an asynchronous roll could run. The loop owns deployment.
+func (l *Loop) maybeRollAfterRemoteSync(ctx context.Context, res healResult) {
+	if l.cfg.PostLanding.Roll.Command == "" || res.base == "" || res.remoteTip == "" || res.base == res.remoteTip {
+		return
+	}
+	err := l.writeRemoteRoll(ctx, func(tx *store.Tx) error {
+		return appendEffectOn(tx, remoteRollPending, "trunk", res.remoteTip, remoteRollRange{Base: res.base}, l.cfg.Now().UTC())
+	})
+	l.reportRollFailure(res.newTip, "remote sync", err)
+}
+
+const (
+	remoteRollPending = "drain.remote-roll-pending"
+	remoteRollClaimed = "drain.remote-roll-claimed"
+)
+
+type remoteRollRange struct {
+	Base string `json:"base"`
+}
+
+func init() {
+	for _, kind := range []string{remoteRollPending, remoteRollClaimed} {
+		if err := event.Register(kind, Utility); err != nil {
+			panic(err)
+		}
+	}
+}
+
+func (l *Loop) writeRemoteRoll(ctx context.Context, write func(*store.Tx) error) error {
+	s, err := store.Open(ctx, l.cfg.Store, false)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	return s.WriteTx(ctx, write)
+}
+
+func (l *Loop) flushPendingRemoteRoll(ctx context.Context, green string) {
+	if green == "" || l.cfg.Store == "" || l.cfg.PostLanding.Roll.Command == "" {
+		return
+	}
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		l.reportRollFailure(green, "remote sync", err)
+		return
+	}
+	type pendingRange struct {
+		seq       int64
+		remoteTip string
+		remoteRollRange
+	}
+	var pending []pendingRange
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		rows, err := r.Query(`SELECT e.seq, e.object_id, e.payload FROM events e
+ WHERE e.kind=? AND e.object_type='trunk' AND NOT EXISTS (SELECT 1 FROM events newer
+ WHERE newer.kind IN (?, ?) AND newer.object_type=e.object_type AND newer.object_id=e.object_id AND newer.seq>e.seq)
+ ORDER BY e.seq`, remoteRollPending, remoteRollPending, remoteRollClaimed)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var p pendingRange
+			var raw string
+			if err := rows.Scan(&p.seq, &p.remoteTip, &raw); err != nil {
+				return err
+			}
+			if err := json.Unmarshal([]byte(raw), &p.remoteRollRange); err != nil {
+				return err
+			}
+			pending = append(pending, p)
+		}
+		return rows.Err()
+	})
+	s.Close()
+	if err != nil {
+		l.reportRollFailure(green, "remote sync", err)
+		return
+	}
+	for _, p := range pending {
+		if ok, err := trunkAncestor(ctx, l.cfg.Root, p.remoteTip, green); err != nil || !ok {
+			continue
+		}
+		// A replacement loop must not claim a range already taken since the read.
+		claimed := false
+		err := l.writeRemoteRoll(ctx, func(tx *store.Tx) error {
+			var seq int64
+			err := tx.QueryRow(`SELECT seq FROM events WHERE kind IN (?, ?) AND object_type='trunk' AND object_id=? ORDER BY seq DESC LIMIT 1`,
+				remoteRollPending, remoteRollClaimed, p.remoteTip).Scan(&seq)
+			if errors.Is(err, sql.ErrNoRows) {
+				return nil
+			}
+			if err != nil || seq != p.seq {
+				return err
+			}
+			claimed = true
+			return appendEffectOn(tx, remoteRollClaimed, "trunk", p.remoteTip, p.remoteRollRange, l.cfg.Now().UTC())
+		})
+		if err != nil {
+			l.reportRollFailure(green, "remote sync", err)
+		} else if claimed {
+			l.rollAfterRemoteSync(ctx, healResult{base: p.Base, remoteTip: p.remoteTip, newTip: green})
+		}
+	}
 }
 
 // pushCounts counts what the known remote tip lacks, or returns -1 for an unknown count.
