@@ -1137,7 +1137,10 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 					aheadHeld[k] = v
 				}
 			}
-			if expressByID[d.ItemID] && d.Action == ActionHold && d.Reason != ReasonNoLane {
+			// The planner offered lanes in queue order. If an earlier item was held
+			// for no-lane despite this later offer, it could not take that lane.
+			// Like other holds, trust that answer only while its inputs match.
+			if expressByID[d.ItemID] && d.Action == ActionHold {
 				heldDec := Decision{ItemID: d.ItemID, BlockConflict: d.BlockConflict}
 				heldVer := version
 				if d.LaneID != "" {
@@ -1265,7 +1268,24 @@ func (l *Loop) trunkAdvancedUntouched(ctx context.Context, r *store.Reader, d De
 	return true, nil
 }
 
-func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, mainSHA *string, at time.Time, generation *string) (bool, *pendingWork, error) {
+func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, mainSHA *string, at time.Time, generation *string) (ok bool, result *pendingWork, applyErr error) {
+	var reason, waitingOn string
+	if isDispatch(p.decision) {
+		defer func() {
+			if ok {
+				return
+			}
+			if applyErr != nil {
+				l.logDispatchDecline(p.decision, applyErr.Error())
+			} else if reason != "" {
+				applyErr = l.recordDispatchDecline(ctx, p.decision, at, reason, waitingOn)
+			}
+		}()
+	}
+	decline := func(detail, mover string) error {
+		reason, waitingOn = detail, mover
+		return nil
+	}
 	if p.decision.Action == ActionHold {
 		if c := p.decision.BlockConflict; c != nil && c.TriageVersion != "" && c.WaitingOn == "owner" {
 			s, err := store.Open(ctx, l.cfg.Store, true)
@@ -1392,13 +1412,20 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 	// and the write runs again from its first statement with the answer (gathered.go).
 	err = writeGathered(ctx, s, func(ctx context.Context, tx *store.Tx) error {
 		applied, work, nextGeneration, trunkSHA = false, nil, *generation, *mainSHA
+		reason, waitingOn = "", ""
 		current, err := currentDefinition(tx.Reader(), p)
-		if err != nil || !current {
+		if err != nil {
 			return err
 		}
+		if !current {
+			return decline("the store definition changed", "replan under the current store definition")
+		}
 		currentHead, err := pendingHistoryHead(tx.Reader())
-		if err != nil || currentHead != historyHead {
+		if err != nil {
 			return err
+		}
+		if currentHead != historyHead {
+			return decline("pending work changed during the claim", "replan with the current pending work")
 		}
 		faults, err := ReadItemFaults(tx.Reader())
 		if err != nil {
@@ -1409,7 +1436,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			return err
 		}
 		if version != p.version {
-			return nil
+			return decline("item or lane state changed since planning", "replan with the current item and lane state")
 		}
 		d := p.decision
 		if (d.Action == ActionDispatch || d.Action == ActionRetry) && d.RunRequest != nil {
@@ -1422,7 +1449,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				return err
 			}
 			if !open {
-				return nil
+				return decline("the dispatch backend window closed", "an eligible backend window to open for the "+d.Seat+" seat")
 			}
 		}
 		var items []itemRow
@@ -1450,18 +1477,21 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			}
 			if head != trunkSHA {
 				if !hasTargetRow {
-					return nil
+					return decline("the item is no longer in the queue", "the item to return to the queue")
 				}
 				untouched, err := l.trunkAdvancedUntouched(ctx, tx.Reader(), d, targetRow, trunkSHA, head)
-				if err != nil || !untouched {
+				if err != nil {
 					return err
+				}
+				if !untouched {
+					return decline("trunk moved and the planned inputs or fence are not known to be unchanged", "replan against the current trunk")
 				}
 				trunkSHA = head
 			}
 		}
 		if d.Inputs != nil && (d.Action == ActionDispatch || d.Action == ActionRetry) && l.nonLanding {
 			if plainInputs == nil || *plainInputs != *d.Inputs {
-				return nil
+				return decline("run inputs changed since planning", "replan with the current run inputs")
 			}
 		}
 		if d.Inputs != nil && (d.Action == ActionDispatch || d.Action == ActionRetry) && !l.nonLanding {
@@ -1471,7 +1501,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 					return err
 				}
 				if *now != *d.Inputs {
-					return nil
+					return decline("run inputs changed since planning", "replan with the current run inputs")
 				}
 			}
 		}
@@ -1480,7 +1510,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 		case ActionDispatch, ActionRetry:
 			for _, owner := range works {
 				if !owner.Done && !owner.LaneReleased && owner.Decision.LaneID == d.LaneID && !(owner.Decision.ItemID == d.ItemID && (owner.Ready || d.WorkflowRestart)) {
-					return nil
+					return decline("lane is held by "+owner.Decision.ItemID, owner.Decision.ItemID+" to release "+d.LaneID)
 				}
 			}
 			leases, err := activeLeases(tx.Reader(), at, []string{d.LaneID})
@@ -1488,7 +1518,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				return err
 			}
 			if len(leases) != 0 {
-				return nil
+				return decline("lane has an active lease", d.LaneID+"'s lease to end")
 			}
 			// Capacity is a dispatch invariant, not just a snapshot prediction.
 			// The writer transaction excludes a competing claim until this one
@@ -1508,7 +1538,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				// live leases on this desk were rejected above.
 				delete(held, d.LaneID)
 				if countDocumentDesks(held, nil) >= l.cfg.Comments.MaxRunning {
-					return nil
+					return decline("document desks are at capacity", "a document desk to become free")
 				}
 			}
 			heldForks, err := liveForks(tx.Reader(), at, works)
@@ -1533,14 +1563,14 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 					}
 					held, wasHeld := p.expressAheadHeld[row.ItemID]
 					if !wasHeld {
-						return nil
+						return decline("earlier express item "+row.ItemID+" has not been dispatched or held", row.ItemID+" to dispatch or be held")
 					}
 					curVer, err := inputVersionFrom(tx.Reader(), held.decision, folds)
 					if err != nil {
 						return err
 					}
 					if curVer != held.version {
-						return nil
+						return decline("the hold for earlier express item "+row.ItemID+" changed", "replan the hold for "+row.ItemID)
 					}
 				}
 			}
@@ -1560,7 +1590,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 							return err
 						}
 						if !c.HasIndependentWait(waiting) {
-							return nil
+							return decline("lane is reserved for the design continuation of "+row.ItemID, row.ItemID+" to release its design lane")
 						}
 					}
 				}
@@ -1569,12 +1599,12 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				fork := forkOf(targetRow.Allowed)
 				for _, held := range heldForks {
 					if fork != "" && held.fork == fork && !(work != nil && (work.Ready || d.WorkflowRestart) && held.itemID == d.ItemID) {
-						return nil
+						return decline("fork "+fork+" is held by "+held.itemID, held.itemID+" to release fork "+fork)
 					}
 				}
 			}
 			if work != nil && !work.Done && !work.Ready && !d.WorkflowRestart {
-				return nil
+				return decline("the item still has unfinished work", "the previous work for "+d.ItemID+" to settle")
 			}
 			base := trunkSHA
 			if !l.nonLanding && !IsTrunkFixer(d.ItemID) {
@@ -1596,7 +1626,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 						return err
 					}
 					if waits[d.ItemID] {
-						return nil
+						return decline("the proved lane base does not contain a dependency", "a trunk proof containing the item's dependencies")
 					}
 					base = green
 					// Sync read the item's block at the tip. A proved commit carrying
@@ -1648,7 +1678,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				}
 				c := conflicts[d.ItemID]
 				if c.ConflictID != d.ConflictID || c.Status != "answered" {
-					return nil
+					return decline("conflict "+d.ConflictID+" is no longer answered", "replan with the current conflict answer")
 				}
 				c.Status = "closed"
 				if err := item.RecordConflict(tx, c, at); err != nil {
@@ -1791,7 +1821,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 		return nil
 	})
 	if err == errSeatWindowClosed {
-		return false, nil, nil
+		return false, nil, decline("a workflow seat's backend window closed during the claim", "an eligible backend window to open for the workflow seat")
 	}
 	if err == nil && applied {
 		*generation = nextGeneration
@@ -2338,10 +2368,20 @@ plans:
 			holds = append(holds, d)
 		}
 		if l.active[p.parentRunID] || ((d.Action == ActionSettle || d.Action == ActionJudge) && l.active[d.RunRequest.RunID]) {
+			if isDispatch(d) {
+				if err := l.recordDispatchDecline(ctx, d, at, "parent run "+p.parentRunID+" is still active", p.parentRunID+" to finish"); err != nil {
+					return "", err
+				}
+			}
 			continue
 		}
-		if p.checksComments() && item.IsCommentItem(d.ItemID) && (d.Action == ActionDispatch || d.Action == ActionRetry || d.Action == ActionHold) {
+		if p.checksComments() && item.IsCommentItem(d.ItemID) && (isDispatch(d) || d.Action == ActionHold) {
 			if !commentReady[d.ItemID] {
+				if isDispatch(d) {
+					if err := l.recordDispatchDecline(ctx, d, at, "the Vantage comment is not ready", "Vantage to make the comment available"); err != nil {
+						return "", err
+					}
+				}
 				d.Action = ActionHold
 				d.Reason = ReasonVantageUnavailable
 				holds = append(holds, d)
