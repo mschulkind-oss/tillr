@@ -155,7 +155,10 @@ func describeBackendHold(r *store.Reader, d *Decision, policy *Policy, at time.T
 		}
 		name = next
 	}
-	if policy.singleBackendSeat(d.Seat) {
+	// A detached first-node retry waits for its recorded backend even if
+	// the seat's route also has other backends.
+	pinnedRetry := d.LaneID == "" && d.RunRequest != nil && d.WorkflowRestart && d.NodeInfraFailures == 0
+	if policy.singleBackendSeat(d.Seat) || pinnedRetry {
 		d.DeferredBy = start
 		if outcome, ok := closed[start]; ok {
 			d.Reason = ReasonBackendClosed
