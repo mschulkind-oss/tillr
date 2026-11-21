@@ -99,8 +99,9 @@ func (l *Loop) bumpLaneEpoch(lane string) {
 func (l *Loop) idleLaneEpochs() map[string]int {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	epochs := make(map[string]int, len(l.cfg.Lanes))
-	for _, lane := range l.cfg.Lanes {
+	lanes := l.lanes()
+	epochs := make(map[string]int, len(lanes))
+	for _, lane := range lanes {
 		if l.stagingLanes[lane] == 0 {
 			epochs[lane] = l.laneChanges[lane]
 		}
@@ -126,9 +127,10 @@ func unmovedLanes(watched []string, seen, now map[string]int) []string {
 }
 
 type startView struct {
-	current   atomic.Pointer[startSnapshot]
-	updated   chan struct{} // Coalesced notification for the start coordinator.
-	storePoll time.Duration // Used when the filesystem watcher is unavailable.
+	current           atomic.Pointer[startSnapshot]
+	laneTargetChanged chan struct{} // Coalesced notification for the watcher.
+	updated           chan struct{} // Coalesced notification for the start coordinator.
+	storePoll         time.Duration // Used when the filesystem watcher is unavailable.
 
 	mu       sync.Mutex // Serializes publication, never held across a read.
 	syncing  bool
@@ -138,7 +140,7 @@ type startView struct {
 }
 
 func newStartView() *startView {
-	return &startView{updated: make(chan struct{}, 1)}
+	return &startView{updated: make(chan struct{}, 1), laneTargetChanged: make(chan struct{}, 1)}
 }
 
 func (v *startView) snapshot() startSnapshot {
@@ -259,6 +261,8 @@ func (v *startView) runWatcherLoop(ctx context.Context, interval time.Duration, 
 		select {
 		case <-ctx.Done():
 			return
+		case <-v.laneTargetChanged:
+			refresh()
 		case <-safety.C:
 			pending |= startWatchExternal // Recheck even when a store wake is pending.
 			refresh()

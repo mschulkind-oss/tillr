@@ -1330,7 +1330,7 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 // only plans an existing reservation, never a fresh attempt or another lane.
 func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time, onlyItem string, refs *startRefs, plans *[]plannedApplication, leases *[]LaneLease, pendingOnly bool, commentChecks *[]plannedApplication) error {
 	var err error
-	observed := append([]string(nil), l.cfg.Lanes...)
+	observed := append([]string(nil), l.lanes()...)
 	held, err := readLanes(r, at)
 	if err != nil {
 		return err
@@ -1352,7 +1352,7 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 			return nil
 		}
 	}
-	for _, d := range drainingLanes(works, l.cfg.Lanes) {
+	for _, d := range drainingLanes(works, l.lanes()) {
 		observed = append(observed, d.LaneID)
 	}
 	if leases != nil {
@@ -2470,7 +2470,7 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watch *l
 		if handoff && err == nil && completion.outcome.stop == "" && (len(d.Parallel) > 0 || answered) {
 			l.examineWorkerEnd(runCtx, d, watched, &completion)
 		}
-		l.completions <- completion
+		l.sendCompletion(ctx, completion)
 	}()
 }
 
@@ -2584,6 +2584,9 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 		return stop, err
 	}
 	if err := l.checkStopRequested(ctx); err != nil {
+		return "", err
+	}
+	if err := l.refreshLaneCount(ctx, false); err != nil {
 		return "", err
 	}
 	if stop, err := l.drainCompletions(ctx, result); stop != "" || err != nil {
@@ -2786,7 +2789,7 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 			busy[p.decision.LaneID] = true
 		}
 	}
-	for _, lane := range l.cfg.Lanes {
+	for _, lane := range l.lanes() {
 		// A refused lane may have no worktree here to snapshot, even after a
 		// re-check offers it again or changes the reason before recreating it.
 		// A holding worktree elsewhere is not a sibling this bracket watches.
@@ -2857,7 +2860,7 @@ plans:
 			l.mu.Lock()
 			canReplan := l.laneRefusedNow || len(l.stageFaults) == 0
 			l.mu.Unlock()
-			if canReplan && replans < len(l.cfg.Lanes)+1 {
+			if canReplan && replans < len(l.lanes())+1 {
 				replans++
 				// A lane this pass just refused stays out until the next pass: a
 				// re-check now would see its pinned HEAD as retained and offer it again.
@@ -3099,7 +3102,7 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 	go func() {
 		defer cancel()
 		defer l.examinations.Done()
-		l.completions <- l.examineClaimed(runCtx, d, work, at, &timing, watched)
+		l.sendCompletion(ctx, l.examineClaimed(runCtx, d, work, at, &timing, watched))
 	}()
 }
 
@@ -3370,10 +3373,10 @@ func awaitingForkClaim(work *pendingWork) bool {
 
 // If staging invalidated a sibling while Git was reading it, retry without that
 // sibling. Failures reading an untouched worktree or the target still surface.
-func (l *Loop) snapshotIdleSiblings(ctx context.Context, target string, watched []string, epochs map[string]int) (*Boundary, error) {
+func (l *Loop) snapshotIdleSiblings(ctx context.Context, target string, watched []string, epochs map[string]int, opening ...*Boundary) (*Boundary, error) {
 	watched = unmovedLanes(watched, epochs, l.idleLaneEpochs())
 	for {
-		b, err := l.snapshot(ctx, []string{target}, watched)
+		b, err := l.snapshot(ctx, []string{target}, watched, opening...)
 		if err == nil {
 			return b, nil
 		}
@@ -3392,7 +3395,7 @@ func (l *Loop) closeAsyncBracket(ctx context.Context, d Decision, at time.Time, 
 		return "", nil
 	}
 	worktree := l.lanePath(d.LaneID)
-	after, err := l.snapshotIdleSiblings(ctx, worktree, watched, epochs)
+	after, err := l.snapshotIdleSiblings(ctx, worktree, watched, epochs, before)
 	if err != nil {
 		return "", err
 	}

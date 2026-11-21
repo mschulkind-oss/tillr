@@ -91,6 +91,8 @@ func dispatch(args []string) int {
 		return boundaryFace(rest)
 	case "resume":
 		return resumeFace(rest)
+	case "scale":
+		return scaleFace(rest)
 	case "stop":
 		return stopFace(rest)
 	case "loop":
@@ -748,7 +750,28 @@ func failLoopStartup(root string, at time.Time, err error) int {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "probe-backend, workflow, why, policy, plan, once, retry, clear-fault, accept-rewrite, acknowledge-patch-move, push, sweep-refs, acquit, examine, set-aside, boundary, resume, stop, restart or loop"
+const faceList = "probe-backend, workflow, why, policy, plan, once, retry, clear-fault, accept-rewrite, acknowledge-patch-move, push, sweep-refs, acquit, examine, set-aside, boundary, resume, scale, stop, restart or loop"
+
+func scaleFace(args []string) int {
+	fs := newFlagSet("scale")
+	root := fs.String("root", "", "the repository whose ordinary lanes should change")
+	path := fs.String("store", "", "the loop's store (default: <root>/.tillr/state.db)")
+	lanes := fs.Int("lanes", -1, "ordinary lane target (0 stops new ordinary starts)")
+	if err := parseFlags(fs, args); err != nil {
+		return fail(err)
+	}
+	if *path == "" {
+		if *root == "" {
+			return fail(drain.Usagef("scale needs --root <repository> or --store <path>"))
+		}
+		*path = filepath.Join(*root, ".tillr", "state.db")
+	}
+	if err := drain.Scale(context.Background(), *path, *lanes); err != nil {
+		return fail(err)
+	}
+	fmt.Printf("loop: saved ordinary lane target %d; takes effect on the next pass or start\n", *lanes)
+	return record.ExitOK
+}
 
 func stopFace(args []string) int {
 	fs := newFlagSet("stop")
@@ -941,7 +964,7 @@ func loopFace(args []string) int {
 	}
 	loop, err := drain.NewLoop(drain.LoopConfig{
 		Root: *root, Store: *path, LaneRoot: *laneRoot, MigrateOwnerQuestions: *migrateOwner,
-		Lanes: append(laneIDs(*laneCount), expressLaneIDs(repositorySettings.Lanes.Express)...), BackoffBase: *backoffBase, ExitWhenDrained: *exitWhenDrained,
+		Lanes: append(laneIDs(*laneCount), expressLaneIDs(repositorySettings.Lanes.Express)...), LiveScale: true, BackoffBase: *backoffBase, ExitWhenDrained: *exitWhenDrained,
 		Policy: policy, PolicyRef: *policyPath, QuestionsCmd: commandFields(*questionsCmd), QuestionsIndex: *questionsIndex,
 		Steps: steps, Stage: stager, Now: at, Report: os.Stderr,
 		Comments: repositorySettings.Comments, WorkflowDefaults: repositorySettings.WorkflowDefaults,

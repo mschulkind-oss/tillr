@@ -87,7 +87,7 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 	if err != nil {
 		return err
 	}
-	lanesRaw, err := json.Marshal(l.cfg.Lanes)
+	lanesRaw, err := json.Marshal(l.lanes())
 	if err != nil {
 		return err
 	}

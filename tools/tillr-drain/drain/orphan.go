@@ -348,7 +348,7 @@ func (l *Loop) offRotationStranded(work *pendingWork, unbounded map[string]strin
 	if l.isActive(id) || unbounded[id] != lane || documentDesk(lane) {
 		return false
 	}
-	for _, rotated := range l.cfg.Lanes {
+	for _, rotated := range l.lanes() {
 		if rotated == lane {
 			return false
 		}

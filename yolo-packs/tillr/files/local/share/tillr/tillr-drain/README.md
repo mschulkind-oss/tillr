@@ -1437,7 +1437,8 @@ longer speaks. Either the retry it authorized consumed it, or a newer run ended 
 was written. The item then routes by its latest run, as it would with no authorization;
 the `retry-stale` hold is gone.
 
-A loop stop or fault leaves in-flight runs alone. Their terminal records survive the
+A loop stop or fault leaves in-flight runs alone. `tillr drain stop` waits for the
+supervisor to exit, not for those runs to finish. Their terminal records survive the
 supervisor, and the next loop settles and judges each normally, including runs that
 finished while no loop was running.
 
@@ -2702,12 +2703,18 @@ the reason for a kept lane. The summary distinguishes `reserved` idle lanes,
 settlement or judgment. The existing `running` count describes planner positions,
 not a count of worker processes.
 
-### Lowering the lane count with work in flight
+### Changing the ordinary lane count with work in flight
 
-Restarting with fewer `--lanes` stops new dispatches to lanes outside the new rotation.
-Those lanes keep serving work they already hold until it lands or the lane is released.
-`tillr drain why` lists these lanes as draining, with the item each holds. Once released,
-a lane outside the rotation stays unused; any retry dispatches to a lane in rotation.
+Run `tillr drain scale --root . --lanes 3` to set the ordinary lane count. The
+running loop applies the saved target on its next pass without signaling workers.
+The target is stored per checkout and overrides the startup `--lanes` count on
+subsequent launches. Reserved express lanes are unchanged.
+
+Lowering the target stops fresh dispatch to lanes outside the new rotation;
+`--lanes 0` takes all ordinary lanes out of rotation. Those lanes keep serving
+work they already hold until it lands or the lane is released. `tillr drain why`
+lists them as draining, with the item each holds. Once released, a lane outside
+the rotation stays unused until it is offered again.
 
 ## Conflict repair that cannot be staged
 

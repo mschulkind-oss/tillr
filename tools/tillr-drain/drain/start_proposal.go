@@ -23,7 +23,7 @@ type startViewEntry struct {
 // Capture loop-owned configuration on the loop goroutine; the watcher must not
 // read its mutable holds, questions or rotation maps.
 func (l *Loop) startViewPass() Pass {
-	available := append([]string(nil), l.cfg.Lanes...)
+	available := l.lanes()
 	build := l.build
 	tick := Pass{Comments: l.cfg.Comments, WorkflowDefaults: l.cfg.WorkflowDefaults,
 		Build: &build, AvailableLanes: &available, StorePath: l.cfg.Store,

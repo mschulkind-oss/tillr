@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -339,6 +340,8 @@ type Steps interface {
 // LoopConfig is one loop's parameters: where it works, what it may dispatch, and how it
 // spends.
 type LoopConfig struct {
+	// LiveScale lets an operator override the startup ordinary lane pool in the store.
+	LiveScale   bool
 	PostLanding settings.Settings
 	// MigrateOwnerQuestions converts only existing owner decisions, through ordinary
 	// command runs and the design gate, then exits without dispatching other work.
@@ -499,7 +502,9 @@ type LoopResult struct {
 // independent worker. Terminal outcomes are read from the store; completion channels
 // are only this process's wake triggers. Each run retains its own boundary bracket.
 type Loop struct {
-	reportedAlarms                       []string // Previous pass's display, not an availability input.
+	liveLanes                            atomic.Pointer[[]string]
+	laneOfferMu                          sync.RWMutex // orders target publication against fast-start claims
+	reportedAlarms                       []string     // Previous pass's display, not an availability input.
 	startView                            atomic.Pointer[startView]
 	endingCapabilities                   map[string]string
 	rollAction, piRollAction, pushAction landingAction
@@ -516,6 +521,7 @@ type Loop struct {
 	lastHeavyStatus             string // pass-owned status; cap zero still reports distance from green
 	restartMu                   sync.Mutex
 	restartReplaced             bool
+	stopInheritedReaper         func()
 	restartMechanical           sync.RWMutex
 	restartSettlements          atomic.Int32 // admitted gate/landing holds currently blocking exec
 	heavyMu                     sync.Mutex
@@ -814,6 +820,9 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	if err := l.adoptRestart(ctx); err != nil {
 		return faultResult(result, err)
 	}
+	if l.stopInheritedReaper != nil {
+		defer l.stopInheritedReaper()
+	}
 	if l.cfg.Policy == nil || len(l.cfg.Policy.Backends) == 0 {
 		return faultResult(result, Usagef("the loop has no usable policy"))
 	}
@@ -912,6 +921,13 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	// and a lane that does not exist yet cannot be watched. A stop that arrives during
 	// staging is the operator's stop, not a staging failure: the signal is why the git
 	// worktree add was abandoned.
+	if err := l.refreshLaneCount(ctx, true); err != nil {
+		if stoppedByOperator(ctx, err) {
+			result.Stop, result.Detail = StopOperatorStop, "the loop was asked to stop"
+			return result, nil
+		}
+		return faultResult(result, err)
+	}
 	if err := l.stageLandingLanes(ctx); err != nil {
 		if stoppedByOperator(ctx, err) {
 			result.Stop = StopOperatorStop
@@ -2054,7 +2070,7 @@ func spendWords(usage *run.Usage) string {
 // convicts only what a run may not do, and the event that records either answer. It answers
 // the stop a violation is.
 func (l *Loop) closeRunBracket(ctx context.Context, worktree string, request run.Request, tick string, at time.Time, before *Boundary, result *LoopResult, watched []string) (string, error) {
-	after, err := l.snapshot(ctx, []string{worktree}, watched)
+	after, err := l.snapshot(ctx, []string{worktree}, watched, before)
 	if err != nil {
 		return "", err
 	}
@@ -3691,7 +3707,7 @@ func (l *Loop) reportf(format string, args ...any) {
 // delta there has a legitimate cause and cannot be a stop signal (BoundarySpec.Store). The
 // sibling lanes are named: the loop holds them, and one run's write into another's worktree
 // is an escape, not a neighbour's work.
-func (l *Loop) snapshot(ctx context.Context, targets, watched []string) (*Boundary, error) {
+func (l *Loop) snapshot(ctx context.Context, targets, watched []string, opening ...*Boundary) (*Boundary, error) {
 	if l.nonLanding {
 		return nil, nil
 	}
@@ -3710,7 +3726,22 @@ func (l *Loop) snapshot(ctx context.Context, targets, watched []string) (*Bounda
 			spec.Lanes = append(spec.Lanes, path)
 		}
 	}
-	for _, lane := range l.cfg.Lanes {
+	// A live resize must not change the identity of an open bracket.
+	if len(opening) > 0 {
+		spec.SiblingDirs = opening[0].SiblingDirs
+		spec.PatchRefs = opening[0].PatchRefs
+		return TakeBoundary(ctx, spec)
+	}
+	lanes := l.lanes()
+	for _, target := range targets {
+		lane := laneOfWorktree(target)
+		if !slices.Contains(lanes, lane) && l.lanePath(lane) == target {
+			if ref := l.lanePatchRef(lane); ref != "" {
+				spec.PatchRefs = append(spec.PatchRefs, ref)
+			}
+		}
+	}
+	for _, lane := range lanes {
 		if !isTarget(targets, l.lanePath(lane)) {
 			// Every lane this bracket does not own, dispatching or not: what a sibling's
 			// run registers inside its own lane directory is the sibling's to answer for.
@@ -3839,8 +3870,12 @@ func (l *Loop) stageLanes(ctx context.Context) error {
 	if err := l.recheckLanes(ctx); err != nil {
 		return err
 	}
+	return l.stageLaneSet(ctx, l.lanes(), true)
+}
+
+func (l *Loop) stageLaneSet(ctx context.Context, lanes []string, startup bool) error {
 	var held []string
-	for _, lane := range l.cfg.Lanes {
+	for _, lane := range lanes {
 		path := l.lanePath(lane)
 		if err := os.MkdirAll(l.laneDirPath(lane), 0o755); err != nil {
 			return Externalf("creating the lane directory %s: %v", l.laneDirPath(lane), err)
@@ -3903,7 +3938,7 @@ func (l *Loop) stageLanes(ctx context.Context) error {
 			return err
 		}
 	}
-	if len(held) == len(l.cfg.Lanes) {
+	if startup && len(lanes) > 0 && len(held) == len(lanes) {
 		return Externalf("no lane is available at loop start: %s", strings.Join(held, "\n"))
 	}
 	return nil
@@ -3913,13 +3948,17 @@ func (l *Loop) stageLanes(ctx context.Context) error {
 // Register unused lanes too, so views can show the configured pools before
 // their first dispatch. Never replace an existing lease or its holder.
 func (l *Loop) registerLanePools(ctx context.Context) error {
+	return l.registerLaneSet(ctx, l.lanes())
+}
+
+func (l *Loop) registerLaneSet(ctx context.Context, lanes []string) error {
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return Externalf("registering configured lanes in %s: %v", l.cfg.Store, err)
 	}
 	defer s.Close()
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
-		for _, lane := range l.cfg.Lanes {
+		for _, lane := range lanes {
 			if _, err := tx.Exec(`INSERT INTO lanes(lane_id,state) VALUES(?,?) ON CONFLICT(lane_id) DO NOTHING`, lane, run.LaneStateIdle); err != nil {
 				return err
 			}

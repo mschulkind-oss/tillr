@@ -129,7 +129,7 @@ func (l *Loop) recheckLaneChildren(ctx context.Context) error {
 			pids[lane] = append(pids[lane], p.PID)
 		}
 	}
-	for _, lane := range l.cfg.Lanes {
+	for _, lane := range l.lanes() {
 		if len(pids[lane]) > 0 {
 			if err := l.holdLaneChildren(ctx, lane, pids[lane]); err != nil {
 				return err

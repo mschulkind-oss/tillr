@@ -198,21 +198,17 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 	err = s.startRunFaceContext(ctx, cmd, req)
 	stdout.Close()
 	stderr.Close()
-	if errors.Is(err, errRestartPending) {
-		return run.Record{}, "", err
-	}
-	if err != nil && ctx.Err() != nil {
-		return run.Record{}, "", ctx.Err()
-	}
-	if err == nil {
+	if cmd.Process != nil {
+		// Start can succeed before the admission transaction reports cancellation.
+		// A started face always has a waiter, regardless of the transaction result.
 		finished := make(chan error, 1)
 		exited := make(chan struct{})
-		s.holdForClaim(ctx, req, exited)
 		go func() {
 			err := cmd.Wait()
 			close(exited)
 			finished <- err
 		}()
+		s.holdForClaim(ctx, req, exited)
 		select {
 		case err = <-finished:
 		case <-ctx.Done():
@@ -220,6 +216,10 @@ func (s *ProcessSteps) Run(ctx context.Context, req run.Request) (run.Record, st
 			// output files and terminal bookkeeping for the replacement.
 			return run.Record{}, "", ctx.Err()
 		}
+	} else if errors.Is(err, errRestartPending) {
+		return run.Record{}, "", err
+	} else if err != nil && ctx.Err() != nil {
+		return run.Record{}, "", ctx.Err()
 	}
 	if observeErr := pipelineFinish(s.Root, req.RunID, observation); observeErr != nil {
 		return run.Record{}, "", observeErr

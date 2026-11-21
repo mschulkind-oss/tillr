@@ -133,7 +133,7 @@ func (l *Loop) claimSettledCandidateJudge(ctx context.Context, d Decision, timin
 		if err != nil || !owned {
 			return err
 		}
-		available, err := availableRotationLanes(r, l.cfg.Lanes)
+		available, err := availableRotationLanes(r, l.lanes())
 		if err != nil {
 			return err
 		}
