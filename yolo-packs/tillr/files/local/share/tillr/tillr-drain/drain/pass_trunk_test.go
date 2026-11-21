@@ -10,6 +10,8 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+const trunkMovedDecline = "trunk moved and the planned inputs or fence are not known to be unchanged"
+
 // A design landing can answer the conflict between document refresh and planning.
 // The store's item/run/lease version can then be current while the pass's base is old.
 func TestDispatchDefersWhenTrunkMovesAfterDocumentRefresh(t *testing.T) {
@@ -38,9 +40,10 @@ func TestDispatchDefersWhenTrunkMovesAfterDocumentRefresh(t *testing.T) {
 			if err != nil || ok || work != nil {
 				t.Fatalf("dispatch used stale refreshed trunk %s: applied=%v work=%+v error=%v", base, ok, work, err)
 			}
-			if got := eventCount(t, f.storePath); got != before || generation != "" {
-				t.Fatalf("stale dispatch wrote events or a generation: events=%d want=%d generation=%q", got, before, generation)
+			if generation != "" {
+				t.Fatalf("stale dispatch allocated generation %q", generation)
 			}
+			assertOnlyDispatchDecline(t, f.storePath, before, plan.decision, trunkMovedDecline)
 			fresh, err := l.refreshDocuments(ctx, &result)
 			if err != nil {
 				t.Fatal(err)
@@ -268,9 +271,10 @@ func TestMidPassLandingTouchingInputsOrFenceCancelsStart(t *testing.T) {
 			if trunk != base {
 				t.Fatalf("cancelled dispatch mutated pass trunk: got %s, want %s", trunk, base)
 			}
-			if got := eventCount(t, f.storePath); got != before || generation != "" {
-				t.Fatalf("cancelled dispatch wrote events or generation: events=%d want=%d generation=%q", got, before, generation)
+			if generation != "" {
+				t.Fatalf("cancelled dispatch allocated generation %q", generation)
 			}
+			assertOnlyDispatchDecline(t, f.storePath, before, plan.decision, trunkMovedDecline)
 		})
 	}
 }
@@ -301,7 +305,8 @@ func TestMidPassTrunkRewriteCancelsStart(t *testing.T) {
 	if err != nil || ok || work != nil {
 		t.Fatalf("dispatch applied across non-fast-forward trunk rewrite: ok=%v work=%+v err=%v", ok, work, err)
 	}
-	if got := eventCount(t, f.storePath); got != before || generation != "" {
-		t.Fatalf("cancelled dispatch wrote events or generation: events=%d want=%d generation=%q", got, before, generation)
+	if generation != "" {
+		t.Fatalf("cancelled dispatch allocated generation %q", generation)
 	}
+	assertOnlyDispatchDecline(t, f.storePath, before, plan.decision, trunkMovedDecline)
 }

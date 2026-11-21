@@ -51,7 +51,7 @@ func fixtureWrite(t *testing.T, f refusalLoopFixture, change func(*store.Tx) err
 	}
 }
 
-func TestAPassDefersChangedItemRunAndLeaseWithoutWriting(t *testing.T) {
+func TestAPassDeclinesDispatchWhenItemRunOrLeaseChanges(t *testing.T) {
 	for _, change := range []string{"item", "run", "lease"} {
 		t.Run(change, func(t *testing.T) {
 			f, l := passFixture(t, "item-a")
@@ -74,9 +74,7 @@ func TestAPassDefersChangedItemRunAndLeaseWithoutWriting(t *testing.T) {
 			if err != nil || ok {
 				t.Fatalf("stale %s applied: %v / %v", change, ok, err)
 			}
-			if got := eventCount(t, f.storePath); got != before {
-				t.Fatalf("stale application wrote %d event(s)", got-before)
-			}
+			assertOnlyDispatchDecline(t, f.storePath, before, plan.decision, "item or lane state changed since planning")
 			s := openFixture(t, f.storePath)
 			defer s.Close()
 			s.ReadTx(context.Background(), func(r *store.Reader) error {
@@ -97,6 +95,36 @@ func TestAPassDefersChangedItemRunAndLeaseWithoutWriting(t *testing.T) {
 				t.Fatalf("next pass dispatched changed %s: %+v", change, next.decision)
 			}
 		})
+	}
+}
+
+// A declined dispatch records why the drain refused the plan for `tillr why`.
+// This observation must be the only event: it is not a dispatch or a lane claim.
+func assertOnlyDispatchDecline(t *testing.T, path string, before int, d Decision, reason string) {
+	t.Helper()
+	ctx := context.Background()
+	s, err := store.OpenRead(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	events, err := s.Events(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != before+1 {
+		t.Fatalf("cancelled dispatch appended %d events, want exactly one %s", len(events)-before, dispatchDeclinedKind)
+	}
+	e := events[before]
+	if e.Kind != dispatchDeclinedKind || e.ObjectType != "item" || e.ObjectID == nil || *e.ObjectID != d.ItemID {
+		t.Fatalf("cancelled dispatch appended %+v, want %s for %s", e, dispatchDeclinedKind, d.ItemID)
+	}
+	var decline dispatchDecline
+	if err := json.Unmarshal(e.Payload, &decline); err != nil {
+		t.Fatal(err)
+	}
+	if decline.DecisionID != d.DecisionID || decline.LaneID != d.LaneID || decline.RunID != d.RunRequest.RunID || decline.Reason != reason {
+		t.Fatalf("decline payload %s, want decision %s, lane %s, run %s, reason %q", e.Payload, d.DecisionID, d.LaneID, d.RunRequest.RunID, reason)
 	}
 }
 

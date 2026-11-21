@@ -41,9 +41,7 @@ func TestDispatchRejectsALaneThatReturnedToIdleWithAnUnexaminedCandidate(t *test
 	if err != nil || ok {
 		t.Fatalf("stale B overwrote A's unfinished ownership: %v / %v", ok, err)
 	}
-	if got := eventCount(t, f.storePath); got != before {
-		t.Fatalf("rejected application wrote %d events", got-before)
-	}
+	assertOnlyDispatchDecline(t, f.storePath, before, stale.decision, "lane is held by item-a")
 	next := mustPlan(t, l)[1]
 	if next.decision.LaneID != "lane-2" {
 		t.Fatalf("fresh plan did not preserve A's candidate lane: %+v", next)
