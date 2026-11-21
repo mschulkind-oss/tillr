@@ -184,6 +184,32 @@ Upstream released `pi` v1.6.0. The fix is one item: replay our patches onto it.
 | N-37 | since 2026-11-20 | Fourteen open questions, five of them the alerting design's, reached no roadmap and no report | Nothing fails when a question is unrouted | open |
 | N-38 | all night | The refused-push repair ran 16 attempts and the rebase 13 | One item too large to verify; see [`nonconverging-items.md`](../tillr/nonconverging-items.md) | split into 22 slices, `793e165b84` |
 
+#### Evidence for N-42
+
+On 2026-11-21 the read-only queries below showed that attempt 62 conflicted and attempt 67
+landed only the six Markdown files in `352e1c71d45`. The wait then cleared when the fork
+classification work landed. The operator's `finish-existing-landing` event at 11:27:14 UTC
+set the item to `landed` with `resolves_via` pointing to that work, not to a deny-list
+implementation. The two linked landings delivered fork classification and routing. The
+base had no tracked deny-list; the path's history on that base was empty.
+
+```bash
+python3 - <<'PY'
+import sqlite3
+c = sqlite3.connect('file:/workspace/.tillr/state.db?mode=ro', uri=True)
+i = 'item-request-3ee8dd349e'
+for row in c.execute('select state,lifecycle_by,lifecycle_reason,resolves_via from items where item_id=?', (i,)):
+    print(row)
+for row in c.execute('select run_id,result,trunk_after from landings where item_id=?', (i,)):
+    print(row)
+for row in c.execute('select seq,kind,payload from events where seq in (1327583,1339466,1339645)'):
+    print(row)
+PY
+git show --format='%h %s' --name-only 352e1c71d45 7b2fac8e8a 3537272f7a
+git ls-tree f60cfc0801ec1119120588567a786fd4684a0419 config/tillr/deny-list.json
+git log --oneline f60cfc0801ec1119120588567a786fd4684a0419 -- config/tillr/deny-list.json
+```
+
 ### 4.6 Nobody watching
 
 | # | When | What happened | Cause | State |

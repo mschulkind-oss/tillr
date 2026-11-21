@@ -162,7 +162,7 @@ func TestGitLandingLiteralValues(t *testing.T) {
 			{"landed", "in-queue"},
 			{"closed", "not-started"}, {"closed", "blocked"}, {"closed", "in-queue"},
 		},
-		Prerequisites: []string{"fence", "design-document", "design-questions", "owner-clean"},
+		Prerequisites: []string{"design-document", "design-questions", "owner-clean"},
 		Completes:     "landing", Retention: "keep", BriefTemplate: "", Hooks: nil,
 	}
 	if !reflect.DeepEqual(got, want) {

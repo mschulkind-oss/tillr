@@ -112,10 +112,6 @@ func TestABracePairInAnItemFieldIsCarriedIntact(t *testing.T) {
 				return s
 			},
 		},
-		{
-			name: "an allowed path", field: "allowed_paths",
-			item: func(s stagedItem) stagedItem { s.AllowedPaths = []string{"tools/{{x}}/"}; return s },
-		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			recorded := c.item(refusalStagedItem("item-a"))
@@ -239,13 +235,14 @@ func TestTheAdaptersPreflightTellsATemplateFaultFromAnItemFault(t *testing.T) {
 // Task section, so the section check cannot fire before the brace-pair check does.
 func refusalBrief(task string) string {
 	return "# a brief\n\n## Header\n\n- **Item:** item-a\n\n## Task\n\n" + task + "\n\n" +
-		"## Fence\n\n- tools/item-a/\n\n## Seats\n\nnone\n\n## Settled decisions\n\nnone\n\n" +
+		"## Scope and boundaries\n\nChange what the work needs.\n\n## Seats\n\nnone\n\n## Settled decisions\n\nnone\n\n" +
 		"## Facts carried\n\nnone\n\n## Method\n\nnone\n\n## Verification commands\n\nnone\n\n" +
 		"## Report shape\n\nnone\n\n## Stop conditions\n\nnone\n"
 }
 
-// An item the item model itself cannot describe — no title, no criterion, no fence — is
+// An item the item model itself cannot describe — no title, no criterion — is
 // refused as the record's fault too, because staging it again cannot succeed.
+// An item with no allowed_paths list is valid (owner ruling 2026-11-19).
 func TestAnItemWithNoTitleOrCriterionOrFenceIsRefusedAgainstItsOwnField(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -254,7 +251,6 @@ func TestAnItemWithNoTitleOrCriterionOrFenceIsRefusedAgainstItsOwnField(t *testi
 	}{
 		{"no title", "title", func(s *stagedItem) { s.Title = "" }},
 		{"no criterion", "criteria", func(s *stagedItem) { s.Criteria = nil }},
-		{"no fence", "allowed_paths", func(s *stagedItem) { s.AllowedPaths = nil }},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -273,6 +269,13 @@ func TestAnItemWithNoTitleOrCriterionOrFenceIsRefusedAgainstItsOwnField(t *testi
 			}
 		})
 	}
+	t.Run("no fence accepted", func(t *testing.T) {
+		recorded := refusalStagedItem("item-a")
+		recorded.AllowedPaths = nil
+		if _, err := briefValuesFor(recorded, refusalSpec(recorded.ItemID), "/wt", "lane worktree", strings.Repeat("0", 40), "/lane/durable", time.Now()); err != nil {
+			t.Fatalf("staging refused an item with no allowed_paths: %v", err)
+		}
+	})
 }
 
 // The loop's half. One item's record carries a brace pair in its criterion, so staging

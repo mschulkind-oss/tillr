@@ -16,7 +16,7 @@
       "kind": "agent",
       "seat": "design",
       "access": "write",
-      "prompt": "Write the item's design within its fence. Use sub-agents of your own when their work need not be planned, fenced, or judged apart. Verify the document and commit the finished deliverable."
+      "prompt": "Write the item's design — change what the work needs, and nothing else. Use sub-agents of your own when their work need not be planned, fenced, or judged apart. Verify the document and commit the finished deliverable."
     }
   ],
   "edges": [{ "from_node": "open", "to_node": "write" }],

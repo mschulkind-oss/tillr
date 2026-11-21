@@ -60,6 +60,7 @@ func TestStagingKeepsEachRunsBriefFenceAndBaseSHAAfterTheLaneMovesOn(t *testing.
 
 	first := f.spec("lane-1")
 	first.RunID = "run-item_041-20261112T000000Z"
+	first.Node = &drain.WorkflowStage{ID: "work", Kind: "agent", Access: "write", Prompt: "build", WriteScope: drain.WorkflowScope{Paths: []string{"tools/tillr-drain/"}}}
 	if err := stager.Stage(ctx, first); err != nil {
 		t.Fatalf("staging the first run failed: %v", err)
 	}
@@ -69,6 +70,7 @@ func TestStagingKeepsEachRunsBriefFenceAndBaseSHAAfterTheLaneMovesOn(t *testing.
 	second := f.spec("lane-1")
 	second.ItemID = "item_042"
 	second.RunID = "run-item_042-20261112T000010Z"
+	second.Node = &drain.WorkflowStage{ID: "work", Kind: "agent", Access: "write", Prompt: "build", WriteScope: drain.WorkflowScope{Paths: []string{"tools/tillr-view/"}}}
 	second.BaseSHA = git(t, f.root, "rev-parse", "main")
 	if second.BaseSHA == first.BaseSHA {
 		t.Fatalf("the fixture's trunk did not move, so the two base shas are one and the copy under test is invisible")
@@ -92,7 +94,7 @@ func TestStagingKeepsEachRunsBriefFenceAndBaseSHAAfterTheLaneMovesOn(t *testing.
 		"yolo-packs/tillr/skills/tillr-operating/SKILL.md\n" +
 		"tests/tillr-docs.test.py"
 	if fence := strings.TrimSpace(kept[drain.FenceFile]); fence != wantFence {
-		t.Fatalf("the first run's kept fence is %q, want its own item's paths %q", fence, wantFence)
+		t.Fatalf("the first run's kept fence is %q, want its own staged scope %q", fence, wantFence)
 	}
 	if base := strings.TrimSpace(kept[drain.BaseSHAFile]); base != first.BaseSHA {
 		t.Fatalf("the first run's kept base sha is %q, want the %s it was staged from", base, first.BaseSHA)
@@ -102,14 +104,12 @@ func TestStagingKeepsEachRunsBriefFenceAndBaseSHAAfterTheLaneMovesOn(t *testing.
 	if !strings.Contains(moved[drain.BriefFile], "item_042") {
 		t.Fatalf("the second run's kept brief is not its own:\n%s", moved[drain.BriefFile])
 	}
-	wantMoved := "tools/tillr-loop/\n" +
-		"yolo-packs/tillr/files/local/share/tillr/tillr-loop/\n" +
+	wantMoved := "tools/tillr-view/\n" +
+		"yolo-packs/tillr/files/local/share/tillr/tillr-view/\n" +
 		"yolo-packs/tillr/skills/tillr-operating/SKILL.md\n" +
-		"tests/tillr-docs.test.py\n" +
-		"tools/tillr-drain/drain/tillr-loop.py\n" +
-		"yolo-packs/tillr/files/local/share/tillr/tillr-drain/drain/tillr-loop.py"
+		"tests/tillr-docs.test.py"
 	if fence := strings.TrimSpace(moved[drain.FenceFile]); fence != wantMoved {
-		t.Fatalf("the second run's kept fence is %q, want its own item's paths %q", fence, wantMoved)
+		t.Fatalf("the second run's kept fence is %q, want its own staged scope %q", fence, wantMoved)
 	}
 	if base := strings.TrimSpace(moved[drain.BaseSHAFile]); base != second.BaseSHA {
 		t.Fatalf("the second run's kept base sha is %q, want the %s it was staged from", base, second.BaseSHA)

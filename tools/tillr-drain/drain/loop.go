@@ -241,8 +241,6 @@ type Candidate struct {
 	// names the same seat the original dispatch did.
 	Seat     string `json:"-"`
 	Workflow string `json:"workflow,omitempty"`
-	// Planned pieces use the current item fence even on candidate re-examination.
-	LiveItemFence bool `json:"live_item_fence,omitempty"`
 }
 
 // GateOutcome is what the gate step answers: the verdict the gate reached and the gate
@@ -1672,9 +1670,8 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 		freshRetry := len(decision.ReusedNodes) > 0 && !decision.WorkflowRestart
 		resumeCommitted := false
 		if decision.Workflow != nil {
-			node := decision.effectiveNode()
+			node := decision.Workflow.Stages[decision.NodeIndex]
 			spec.Node = &node
-			spec.nodeFenceWidened = len(decision.NodeFencePaths) > 0
 			paths, err := l.nodeInputPaths(ctx, decision)
 			if err != nil {
 				if holdErr := failStage("stage node inputs", err); holdErr != nil {
@@ -2471,15 +2468,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		// back to the item's worker with that evidence (returned.go).
 		repeated := false
 		if len(paths) > 0 && !item.IsCommentItem(request.ItemID) && (decision.Seat == "" || decision.Seat == "build") && class == AttemptAnswered && record.State == run.StateExited && record.EndCause == run.EndNormalExit {
-			fenced, err := l.fencedUncommittedPaths(ctx, lane, target, paths)
-			if err != nil {
-				return laneOutcome{err: err}
-			}
-			if len(fenced) > 0 {
-				repeated = l.segmentRepeated(request.RunID, l.uncommittedEvidence(ctx, target))
-			}
-			if len(fenced) > 0 && !repeated {
-				request.ResumePrompt = "Your previous turn ended without the requested commit. Uncommitted fenced paths: " + strings.Join(fenced, ", ") + ". Preserve this work, finish the applicable verification (wait for any checks still running), and make the one requested commit before ending. Do not bypass failed checks or commit outside the fence. " + ObstacleContract
+			repeated = l.segmentRepeated(request.RunID, l.uncommittedEvidence(ctx, target))
+			if !repeated {
+				request.ResumePrompt = "Your previous turn ended without the requested commit. Uncommitted paths: " + strings.Join(paths, ", ") + ". Preserve this work, finish the applicable verification (wait for any checks still running), and make the one requested commit before ending. Do not bypass failed checks or change anything the item does not need. " + ObstacleContract
 				resumed, resumedLog, stop, err := l.resumeAfterWall(ctx, lane, request, worktree, record, tick, at, result, watched)
 				if err != nil || stop != "" {
 					return laneOutcome{err: err, stop: stop}
@@ -2572,7 +2563,6 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, TickID: tick,
 		Worktree: target, BaseRef: baseRef, BaseSHA: baseSHA, HeadSHA: headSHA,
 		Request: &request, Seat: decision.Seat, Workflow: decision.workflowRef(), BlockConflict: decision.BlockConflict,
-		LiveItemFence: workflowHasPlannedPiece(decision.Workflow),
 	}
 	if err := l.attachWorkflowJudge(ctx, decision, &candidate); err != nil {
 		return laneOutcome{err: err}
@@ -3428,29 +3418,16 @@ func (l *Loop) pendingItemBase(ctx context.Context, itemID string) (string, erro
 	return base, err
 }
 
-// fenceViolation answers the reason a candidate is not inside its lane's fence, or "" when
-// it is. Two things make a candidate out of scope, and the first is the one a reader does
-// not expect: a worktree whose status is not clean. The rest of the loop reads a candidate
-// as a commit, and a working tree holding more than that commit is either work the commit
-// dropped or a tree the gate would have judged in place of the one that lands.
-//
-// Planned workflows use the current item fence at the whole-candidate check
-// as well as at piece exit. Other candidates use their staged fence.
+// fenceViolation checks that the candidate worktree is clean and that the candidate
+// does not touch any entry in the common deny-list (config/tillr/deny-list.json).
+// Items no longer carry per-item allow-lists (owner ruling 2026-11-19).
 func (l *Loop) fenceViolation(ctx context.Context, candidate Candidate) (string, error) {
-	if candidate.LiveItemFence {
-		return l.changeFenceViolationAt(ctx, candidate, "", false)
-	}
-	fencePath, err := l.itemFencePath(candidate.LaneID)
-	if err != nil {
-		return "", err
-	}
-	return l.fenceViolationAt(ctx, candidate, fencePath)
+	return l.fenceViolationAt(ctx, candidate, "")
 }
 
 func (l *Loop) itemFencePath(lane string) (string, error) {
 	fencePath := filepath.Join(l.laneDirPath(lane), ItemFenceFile)
 	if _, err := os.Stat(fencePath); errors.Is(err, os.ErrNotExist) {
-		// Legacy stages wrote only fence.txt, which was the full item fence.
 		fencePath = filepath.Join(l.laneDirPath(lane), FenceFile)
 	} else if err != nil {
 		return "", err
@@ -3462,7 +3439,7 @@ func (l *Loop) fenceViolationAt(ctx context.Context, candidate Candidate, fenceP
 	return l.changeFenceViolationAt(ctx, candidate, fencePath, false)
 }
 
-// An empty fencePath selects the item's current allowed paths instead of a staged file.
+// An empty fencePath means the node has no explicit write scope.
 // A blocked node with a complete obstacle offers no candidate. Check its unfinished
 // paths along with its commits, rather than requiring a clean candidate worktree.
 func (l *Loop) changeFenceViolationAt(ctx context.Context, candidate Candidate, fencePath string, blocked bool) (string, error) {
@@ -3492,28 +3469,24 @@ func (l *Loop) changeFenceViolationAt(ctx context.Context, candidate Candidate, 
 			return ScopeEscape + ": the fork checkout is still rebasing, so its detached HEAD is not a finished candidate", nil
 		}
 	}
-	var fence []string
-	source := fencePath
-	if fencePath == "" {
-		var err error
-		fence, err = l.currentItemFence(ctx, candidate)
-		if err != nil {
-			return "", err
+	if !blocked {
+		if detail, err := l.denyListViolation(ctx, candidate); err != nil || detail != "" {
+			return detail, err
 		}
-		source = "from the current item " + candidate.ItemID
-	} else {
-		body, err := os.ReadFile(fencePath)
-		if errors.Is(err, os.ErrNotExist) {
-			// A missing staged fence cannot establish a run's scope.
-			return fmt.Sprintf("%s: the lane has no fence at %s, so nothing shows the change is in scope", ScopeEscape, fencePath), nil
+		if IsRemoteSyncItem(candidate.ItemID) {
+			return l.checkRemoteSyncTree(ctx, candidate)
 		}
-		if err != nil {
-			return "", Externalf("reading the lane's fence %s: %v", fencePath, err)
-		}
-		fence = fenceEntries(string(body))
 	}
-	if !blocked && IsRemoteSyncItem(candidate.ItemID) {
-		return l.checkRemoteSyncTree(ctx, candidate)
+	if fencePath == "" {
+		return "", nil
+	}
+	body, err := os.ReadFile(fencePath)
+	if err != nil {
+		return "", err
+	}
+	fence := fenceEntries(string(body))
+	if len(fence) == 0 {
+		return "", nil
 	}
 	base, err := l.fenceDiffBase(ctx, candidate)
 	if err != nil {
@@ -3540,8 +3513,8 @@ func (l *Loop) changeFenceViolationAt(ctx context.Context, candidate Candidate, 
 		if insideFence(scoped, fence) {
 			continue
 		}
-		return fmt.Sprintf("%s: %s is outside allowed_paths (the fence is %s)",
-			ScopeEscape, scoped, source), nil
+		return fmt.Sprintf("%s: %s is outside node write_scope (the scope file is %s)",
+			ScopeEscape, scoped, fencePath), nil
 	}
 	return "", nil
 }

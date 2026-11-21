@@ -51,14 +51,15 @@ func TestNodeScopeResumeKeepsSavedScope(t *testing.T) {
 	if err != nil || !strings.Contains(escape, "tools/item-a/two/escaped.txt") {
 		t.Fatalf("resumed node escape admitted: %q / %v", escape, err)
 	}
-	// An owner narrowing the item cannot authorize the saved node to widen it.
+	// Stored items.allowed_paths edits are ignored on resume (owner ruling 2026-11-19);
+	// the saved node's own explicit write_scope remains in force.
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE items SET allowed_paths='["tools/item-a/two/"]' WHERE item_id='item-a'`)
 		return err
 	})
-	_, err = rederiveFence(context.Background(), ResumeConfig{Root: f.root, Store: f.storePath, LaneRoot: f.laneRoot}, resumeRun{ItemID: d.ItemID, LaneID: d.LaneID}, l.laneDirPath(d.LaneID), d.RunRequest.RunID)
-	if err == nil || !strings.Contains(err.Error(), ReasonNodeScopeOutsideFence) {
-		t.Fatalf("resumed node widened edited item fence: %v", err)
+	got, err := rederiveFence(context.Background(), ResumeConfig{Root: f.root, Store: f.storePath, LaneRoot: f.laneRoot}, resumeRun{ItemID: d.ItemID, LaneID: d.LaneID}, l.laneDirPath(d.LaneID), d.RunRequest.RunID)
+	if err != nil || len(got) != 1 || got[0] != "tools/item-a/one/" {
+		t.Fatalf("resumed node lost its explicit write_scope (%v): %v", got, err)
 	}
 }
 

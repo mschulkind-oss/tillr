@@ -531,7 +531,7 @@ run's bracket into what it convicts and what it only observes. It convicts a wri
 watched, idle sibling lane worktree, and the run's own lane worktree going away. It observes a
 rogue ref inside tillr's namespaces, any other worktree's registration, and a main-checkout
 branch switch. The observations go on the run's `boundary.check` event, and the check stays
-clean. The fence check still convicts a candidate whose committed change leaves its fence. The
+clean. The [common deny-list](./tillr-vocabulary.md#51-the-work-and-its-statement) refuses a candidate whose committed change touches protected paths or item declarations. The
 gate still judges what lands. `TestOrdinaryGitUseDuringARunNeverConvictsIt` pins the ruling.
 *Not enforced:* a worker whose only escape lies outside the lanes is no longer stopped. A rogue
 ref or a stray worktree is named for an operator, and nothing acts on it.
