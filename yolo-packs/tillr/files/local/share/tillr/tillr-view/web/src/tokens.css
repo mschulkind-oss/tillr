@@ -127,6 +127,7 @@
 .performance__phases .entity-link { display: flex; flex-wrap: wrap; }
 .performance__phase-plot { width: 240px; display: inline-flex; height: var(--s4); background: var(--surface-2); }
 .performance__phase { display: block; background: var(--ink-2); }
+.performance__phase--claim_ms { background: var(--ink-3); }
 .performance__phase--stage_ms { background: repeating-linear-gradient(45deg, var(--ink-2) 0 2px, var(--surface-2) 2px 4px); }
 .performance__phase--dispatch_ms { background: repeating-linear-gradient(90deg, var(--ink-2) 0 2px, var(--surface-2) 2px 4px); }
 .performance__phase--gate_ms { background: var(--state-work); }

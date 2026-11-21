@@ -46,6 +46,7 @@ type passDecision struct {
 }
 
 type passPhases struct {
+	ClaimMS    *int64 `json:"claim_ms"`
 	StageMS    *int64 `json:"stage_ms"`
 	DispatchMS *int64 `json:"dispatch_ms"`
 	GateMS     *int64 `json:"gate_ms"`
@@ -321,11 +322,22 @@ func readPassPhases(r *store.Reader, row passRow) (*passPhases, error) {
 		}
 		predicate += ")"
 	}
+	var claim sql.NullInt64
 	var values [4]sql.NullInt64
-	err := r.QueryRow(`SELECT SUM(stage_ms),SUM(dispatch_ms),
+	err := r.QueryRow(`SELECT MAX(claim_ms),SUM(stage_ms),SUM(dispatch_ms),
+  SUM(CASE WHEN COALESCE(gate_count,1) > 0 THEN gate_ms END),SUM(land_ms)
+  FROM drain_passes WHERE `+predicate, args...).Scan(&claim, &values[0], &values[1], &values[2], &values[3])
+	if isMissingColumn(err) {
+		err = r.QueryRow(`SELECT MAX(claim_ms),SUM(stage_ms),SUM(dispatch_ms),SUM(gate_ms),SUM(land_ms) FROM drain_passes WHERE `+predicate, args...).Scan(&claim, &values[0], &values[1], &values[2], &values[3])
+	}
+	if isMissingColumn(err) {
+		claim = sql.NullInt64{}
+		err = r.QueryRow(`SELECT SUM(stage_ms),SUM(dispatch_ms),
   SUM(CASE WHEN COALESCE(gate_count,1) > 0 THEN gate_ms END),SUM(land_ms)
   FROM drain_passes WHERE `+predicate, args...).Scan(&values[0], &values[1], &values[2], &values[3])
+	}
 	if isMissingColumn(err) {
+		claim = sql.NullInt64{}
 		err = r.QueryRow(`SELECT SUM(stage_ms),SUM(dispatch_ms),SUM(gate_ms),SUM(land_ms) FROM drain_passes WHERE `+predicate, args...).Scan(&values[0], &values[1], &values[2], &values[3])
 	}
 	if isMissingTable(err) {
@@ -334,10 +346,14 @@ func readPassPhases(r *store.Reader, row passRow) (*passPhases, error) {
 	if err != nil {
 		return nil, err
 	}
-	if !values[0].Valid && !values[1].Valid && !values[2].Valid && !values[3].Valid {
+	if !claim.Valid && !values[0].Valid && !values[1].Valid && !values[2].Valid && !values[3].Valid {
 		return nil, nil
 	}
 	phases := &passPhases{}
+	if claim.Valid {
+		v := claim.Int64
+		phases.ClaimMS = &v
+	}
 	dest := []**int64{&phases.StageMS, &phases.DispatchMS, &phases.GateMS, &phases.LandMS}
 	for i := range values {
 		if values[i].Valid {
@@ -506,7 +522,7 @@ func printPasses(w io.Writer, rows []passRow) error {
 			for _, phase := range []struct {
 				name string
 				ms   *int64
-			}{{"stage", row.Phases.StageMS}, {"dispatch", row.Phases.DispatchMS}, {"gate", row.Phases.GateMS}, {"land", row.Phases.LandMS}} {
+			}{{"claim", row.Phases.ClaimMS}, {"stage", row.Phases.StageMS}, {"dispatch", row.Phases.DispatchMS}, {"gate", row.Phases.GateMS}, {"land", row.Phases.LandMS}} {
 				value := "absent"
 				if phase.ms != nil {
 					value = fmt.Sprintf("%d ms", *phase.ms)

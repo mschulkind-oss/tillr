@@ -7,7 +7,7 @@ import { PerformanceView, CheckView } from "../src/components/PerformanceView";
 import { envelope, cursor, snapshotData } from "./fixtures";
 
 const end = Date.parse(cursor.generated_at);
-const passes = Array.from({length: 25}, (_, i) => ({dispatched_at_ms: end - (i + 1) * 1000, decisions: [], phases: {stage_ms: 20, dispatch_ms: null, gate_ms: 100, land_ms: 30}}));
+const passes = Array.from({length: 25}, (_, i) => ({dispatched_at_ms: end - (i + 1) * 1000, decisions: [], phases: {claim_ms: i === 0 ? 0 : i === 1 ? null : 5, stage_ms: 20, dispatch_ms: null, gate_ms: 100, land_ms: 30}}));
 const trend = passes.slice(0, 20).map((p, i) => ({tick_id: `tick-${i}`, at_ms: p.dispatched_at_ms, gate_ms: 100, budget_ms: i % 2 ? 200 : 50, over_budget: i % 3 === 0}));
 const check = {check_id: "go-test:tillr", count: 4, sample_count: 4, median_ms: 10, p95_ms: null, max_ms: 20, waited_ms: 2, failures: 1};
 const item = {item_id: "item-a", run_count: 2, usage_tokens: 100, cost_usd: .1, lower_bound: true, unrecorded_runs: 1, tokens_unrecorded_runs: 1, cost_unrecorded_runs: 1};
@@ -49,7 +49,11 @@ test("25 gated passes use only the 20 served budgets and recorded shapes, with l
   expect(bar.textContent?.includes("▲")).toBe(trend[i].over_budget);
   expect(bar.textContent).toContain(`Budget ${trend[i].budget_ms} ms`);
  }
- expect(within(view.getByRole("region",{name:"Phases per pass"})).getAllByRole("link")).toHaveLength(25);
+ const phaseLinks = within(view.getByRole("region",{name:"Phases per pass"})).getAllByRole("link");
+ expect(phaseLinks).toHaveLength(25);
+ expect(phaseLinks[0].textContent).toContain("claim: 0 ms · stage: 20 ms");
+ expect(phaseLinks[1].textContent).toContain("claim: unrecorded · stage: 20 ms");
+ expect(phaseLinks[2].querySelector(".performance__phase--claim_ms")).not.toBeNull();
  expect(view.getByRole("link",{name:/go-test:tillr/}).getAttribute("href")).toBe("#/check/go-test%3Atillr");
  expect(view.getByRole("link",{name:/item-a/}).getAttribute("href")).toBe("#/item/item-a");
  expect(view.getByText("≥ 100 tokens · 1 unrecorded runs")).toBeTruthy();

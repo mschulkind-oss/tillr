@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -139,5 +140,41 @@ func TestPassesActiveSessionHasNoInventedStop(t *testing.T) {
 	rows := passData(t, h, "")
 	if rows[0].(map[string]any)["stop"] != "stop not recorded" {
 		t.Fatalf("invented active stop: %v", rows)
+	}
+}
+
+func TestPassesClaimMS(t *testing.T) {
+	h := newServeHarness(t)
+	seedPasses(t, h)
+	perfExec(t, h, `ALTER TABLE drain_passes ADD COLUMN claim_ms INTEGER`)
+
+	// NULL claim_ms stays null in API and prints "claim: absent" before "stage:".
+	rows := passData(t, h, "")
+	phases := rows[2].(map[string]any)["phases"].(map[string]any)
+	if _, has := phases["claim_ms"]; !has || phases["claim_ms"] != nil {
+		t.Fatalf("null claim_ms: %v", phases)
+	}
+
+	// A measured zero is preserved and prints before the separate stage duration.
+	perfExec(t, h, `UPDATE drain_passes SET claim_ms = 0 WHERE tick_id = 'p1'`)
+	rows = passData(t, h, "")
+	phases = rows[2].(map[string]any)["phases"].(map[string]any)
+	if phases["claim_ms"] != float64(0) {
+		t.Fatalf("claim_ms: %v", phases)
+	}
+	var buf bytes.Buffer
+	claim := int64(0)
+	stage := int64(12)
+	if err := printPasses(&buf, []passRow{{
+		DispatchedAtMS: 1000,
+		Phases:         &passPhases{ClaimMS: &claim, StageMS: &stage},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	claimIdx := strings.Index(out, "  claim: 0 ms\n")
+	stageIdx := strings.Index(out, "  stage: 12 ms\n")
+	if claimIdx < 0 || stageIdx < 0 || claimIdx >= stageIdx {
+		t.Fatalf("expected claim before stage in table output:\n%s", out)
 	}
 }

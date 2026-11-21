@@ -141,7 +141,7 @@ export interface PassRow {
   spend_carried_over?: SpendTotals | null;
   dispatched_at_ms: number;
   decisions: { item_id: string; place?: number; action: string; reason: string; lane_id?: string; run_id?: string; seat?: string }[];
-  phases?: { stage_ms: number | null; dispatch_ms: number | null; gate_ms: number | null; land_ms: number | null } | null;
+  phases?: { claim_ms: number | null; stage_ms: number | null; dispatch_ms: number | null; gate_ms: number | null; land_ms: number | null } | null;
   session_id?: string;
   stop?: string;
   detail?: string;

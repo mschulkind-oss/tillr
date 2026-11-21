@@ -3,6 +3,7 @@ package drain
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -46,6 +47,8 @@ const DefaultGateBudget = 330 * time.Second
 type PassTiming struct {
 	TickID     string
 	AtMS       int64
+	ClaimMS    int64
+	Claims     int
 	StageMS    int64
 	DispatchMS int64
 	GateMS     int64
@@ -84,6 +87,7 @@ const PassDDL = `
 CREATE TABLE IF NOT EXISTS drain_passes (
   tick_id          TEXT PRIMARY KEY,
   started_at       INTEGER NOT NULL,
+  claim_ms         INTEGER,
   stage_ms         INTEGER NOT NULL,
   dispatch_ms      INTEGER NOT NULL,
   gate_ms          INTEGER NOT NULL,
@@ -117,13 +121,14 @@ CREATE TABLE IF NOT EXISTS drain_passes (
 // nothing.
 var legacyPassMigrationDDL = strings.Replace(PassDDL, "drain_passes", "drain_ticks", 1) + `
 DROP TRIGGER IF EXISTS drain_copy_legacy_passes;
-CREATE TRIGGER IF NOT EXISTS drain_copy_legacy_runner_passes
+DROP TRIGGER IF EXISTS drain_copy_legacy_runner_passes;
+CREATE TRIGGER IF NOT EXISTS drain_copy_legacy_claim_passes
 BEFORE INSERT ON schema_migrations BEGIN
  INSERT OR IGNORE INTO drain_passes
- (tick_id, started_at, stage_ms, dispatch_ms, gate_ms, land_ms,
+ (tick_id, started_at, claim_ms, stage_ms, dispatch_ms, gate_ms, land_ms,
   gate_budget_ms, gate_over_budget, ended_at, decision_counts, applied_count, gate_count,
   runner_gate_count, runner_gate_ms, runner_land_ms)
- SELECT tick_id, started_at, stage_ms, dispatch_ms, gate_ms, land_ms,
+ SELECT tick_id, started_at, claim_ms, stage_ms, dispatch_ms, gate_ms, land_ms,
  gate_budget_ms, gate_over_budget, ended_at, decision_counts, applied_count, gate_count,
  runner_gate_count, runner_gate_ms, runner_land_ms
  FROM drain_ticks;
@@ -143,6 +148,13 @@ func recordPassTiming(ctx context.Context, storePath string, timing PassTiming) 
 	return recordAccumulatedPassTiming(ctx, storePath, &timing)
 }
 
+func claimMSValue(timing *PassTiming) any {
+	if timing.Claims == 0 {
+		return nil
+	}
+	return timing.ClaimMS
+}
+
 func recordAccumulatedPassTiming(ctx context.Context, storePath string, timing *PassTiming) error {
 	s, err := store.Open(ctx, storePath, true)
 	if err != nil {
@@ -153,25 +165,28 @@ func recordAccumulatedPassTiming(ctx context.Context, storePath string, timing *
 	if err != nil {
 		return err
 	}
+	claimVal := claimMSValue(timing)
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
 		if timing.DecisionCounts == nil {
 			// Asynchronous examinations add measurements to their originating pass,
 			// never replace its decision counts or create a second pass row.
-			_, err := tx.Exec(`UPDATE drain_passes SET dispatch_ms = dispatch_ms + ?,
+			_, err := tx.Exec(`UPDATE drain_passes SET
+			 claim_ms = CASE WHEN ? IS NULL THEN claim_ms WHEN claim_ms IS NULL OR ? > claim_ms THEN ? ELSE claim_ms END,
+			 stage_ms = stage_ms + ?, dispatch_ms = dispatch_ms + ?,
 			 gate_ms = gate_ms + ?, land_ms = land_ms + ?, gate_count = gate_count + ?,
 			 gate_max_ms = MAX(COALESCE(gate_max_ms, 0), ?),
 			 gate_over_budget = (gate_budget_ms > 0 AND MAX(COALESCE(gate_max_ms, 0), ?) > gate_budget_ms),
 			 runner_gate_count = runner_gate_count + ?, runner_gate_ms = runner_gate_ms + ?,
 			 runner_land_ms = runner_land_ms + ?
-			 WHERE tick_id = ?`, timing.DispatchMS, timing.GateMS, timing.LandMS, timing.Gates, timing.GateMaxMS, timing.GateMaxMS,
+			 WHERE tick_id = ?`, claimVal, claimVal, claimVal, timing.StageMS, timing.DispatchMS, timing.GateMS, timing.LandMS, timing.Gates, timing.GateMaxMS, timing.GateMaxMS,
 				timing.RunnerGates, timing.RunnerGateMS, timing.RunnerLandMS, timing.TickID)
 			return err
 		}
 		_, err := tx.Exec(
-			`INSERT INTO drain_passes (tick_id, started_at, stage_ms, dispatch_ms, gate_ms, gate_max_ms, land_ms, gate_budget_ms, gate_over_budget, ended_at, decision_counts, applied_count, gate_count, runner_gate_count, runner_gate_ms, runner_land_ms)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			`INSERT INTO drain_passes (tick_id, started_at, claim_ms, stage_ms, dispatch_ms, gate_ms, gate_max_ms, land_ms, gate_budget_ms, gate_over_budget, ended_at, decision_counts, applied_count, gate_count, runner_gate_count, runner_gate_ms, runner_land_ms)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(tick_id) DO UPDATE SET
-			   started_at = excluded.started_at, stage_ms = excluded.stage_ms,
+			   started_at = excluded.started_at, claim_ms = excluded.claim_ms, stage_ms = excluded.stage_ms,
 			   dispatch_ms = excluded.dispatch_ms, gate_ms = excluded.gate_ms, gate_max_ms = excluded.gate_max_ms,
 			   land_ms = excluded.land_ms, gate_budget_ms = excluded.gate_budget_ms,
 			   gate_over_budget = excluded.gate_over_budget,
@@ -179,7 +194,7 @@ func recordAccumulatedPassTiming(ctx context.Context, storePath string, timing *
 			   applied_count = excluded.applied_count, gate_count = excluded.gate_count,
 			   runner_gate_count = excluded.runner_gate_count, runner_gate_ms = excluded.runner_gate_ms,
 			   runner_land_ms = excluded.runner_land_ms`,
-			timing.TickID, timing.AtMS, timing.StageMS, timing.DispatchMS, timing.GateMS, timing.GateMaxMS,
+			timing.TickID, timing.AtMS, claimVal, timing.StageMS, timing.DispatchMS, timing.GateMS, timing.GateMaxMS,
 			timing.LandMS, timing.GateBudgetMS, boolInt(timing.OverBudget), timing.EndMS,
 			string(counts), timing.Applied, timing.Gates, timing.RunnerGates, timing.RunnerGateMS, timing.RunnerLandMS,
 		)
@@ -198,12 +213,20 @@ func aggregatePassTiming(ctx context.Context, storePath, id string) (PassTiming,
 	defer s.Close()
 	timing := PassTiming{TickID: id}
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
-		return r.QueryRow(`SELECT started_at, stage_ms, dispatch_ms, gate_ms, COALESCE(gate_max_ms, 0), land_ms,
+		var claim sql.NullInt64
+		if err := r.QueryRow(`SELECT started_at, claim_ms, stage_ms, dispatch_ms, gate_ms, COALESCE(gate_max_ms, 0), land_ms,
 		 gate_budget_ms, COALESCE(gate_count, 0), runner_gate_count, runner_gate_ms, runner_land_ms
 		 FROM drain_passes WHERE tick_id = ?`, id).
-			Scan(&timing.AtMS, &timing.StageMS, &timing.DispatchMS, &timing.GateMS, &timing.GateMaxMS,
+			Scan(&timing.AtMS, &claim, &timing.StageMS, &timing.DispatchMS, &timing.GateMS, &timing.GateMaxMS,
 				&timing.LandMS, &timing.GateBudgetMS, &timing.Gates,
-				&timing.RunnerGates, &timing.RunnerGateMS, &timing.RunnerLandMS)
+				&timing.RunnerGates, &timing.RunnerGateMS, &timing.RunnerLandMS); err != nil {
+			return err
+		}
+		if claim.Valid {
+			timing.ClaimMS = claim.Int64
+			timing.Claims = 1
+		}
+		return nil
 	})
 	timing.OverBudget = timing.IsOverBudget()
 	return timing, err

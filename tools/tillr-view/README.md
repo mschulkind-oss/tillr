@@ -518,9 +518,11 @@ bounds receive `bad-query`; no decisions is an empty array, not a missing route.
 Hold-only passes remain visible with `phases: null`, even when a newer writer stored
 zero phase values for them. For dispatched passes, recorded pass ids select their
 measurements; older rows without that link use an exact timing-row start clock.
+`claim_ms` shows the longest measured start-claim latency before `stage_ms` (worktree
+staging). The text output prints `claim: <N> ms` or `claim: absent` before `stage:`.
 No matching measurement means absent phases, not zero. Individual unrecorded phase
-values remain null; a recorded gate count of zero leaves `gate_ms` null, while a gate
-actually measured at zero milliseconds retains that measured zero.
+values remain null, including `claim_ms` for older writers. A recorded gate count of
+zero leaves `gate_ms` null. Measured zero claim and gate durations remain zero.
 
 Only the newest pass in each loop session carries `stop` and its recorded `detail`.
 Paging never moves that annotation to an older pass. Session rows bound decisions by

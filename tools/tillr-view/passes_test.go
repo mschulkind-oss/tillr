@@ -92,7 +92,7 @@ func TestPassesDecisionsTimingsSessionsAndCLI(t *testing.T) {
 		t.Fatalf("stop repeated: %v", oldest)
 	}
 	phases := oldest["phases"].(map[string]any)
-	if phases["stage_ms"] != float64(12) || phases["gate_ms"] != float64(14) {
+	if phases["stage_ms"] != float64(12) || phases["gate_ms"] != float64(14) || phases["claim_ms"] != nil {
 		t.Fatalf("phases: %v", phases)
 	}
 	dispatch := oldest["decisions"].([]any)[0].(map[string]any)
@@ -127,7 +127,7 @@ func TestPassesDecisionsTimingsSessionsAndCLI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CLI table: %v %s", err, table)
 	}
-	for _, want := range []string{"item-seed-04", "dispatch", "ready", "lane-a", "run-1", "operator-stop", "The operator stopped this session.", "stop not recorded"} {
+	for _, want := range []string{"item-seed-04", "dispatch", "ready", "lane-a", "run-1", "claim: absent", "operator-stop", "The operator stopped this session.", "stop not recorded"} {
 		if !strings.Contains(string(table), want) {
 			t.Errorf("table lacks %q: %s", want, table)
 		}

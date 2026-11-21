@@ -189,8 +189,12 @@ An applied pass receives a store-counted **generation**, the ordinal defined by 
 [trigger and generation model](../../docs/reference/tillr-drain-successor.md#generations-timing-and-the-trigger-loop).
 An empty pass allocates none. Requests carry that generation as their correlation.
 Timing measurements live in `drain_passes`, with the existing `tick_id` column
-carrying the generation. On write-open, historical `drain_ticks` rows are copied
-without replacing new measurements or inventing missing historical values. The old
+carrying the generation. `claim_ms` is the longest measured start-claim latency
+in the pass, before worktree staging. It stays null when the writer did not
+measure a claim, and preserves a measured zero. `stage_ms` records staging
+separately and includes any asynchronous staging reported for that pass.
+On write-open, historical `drain_ticks` rows are copied without replacing new
+measurements or inventing missing historical values. The old
 table remains a migration source; new measurements never write it.
 
 A change to the gate runner or its wrapper, or to the legacy checker and its audit,
