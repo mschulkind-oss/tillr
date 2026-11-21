@@ -96,7 +96,9 @@ numbered comments on the five areas that matter now:
    reproduction commands, gates, `complete-item` hooks, or `tillr item verdict`, `judge`, and
    `decision` flows, what exact records, event kinds, correlation IDs, cursor guarantees, or
    `tillr view` / `tillr store` read outputs do you still need — or find missing, underspecified,
-   or awkward when you run them?
+   or awkward when you run them? For agent verdicts, test against a selected workflow whose
+   evaluator lists the stored criterion class in `judge_classes`. The verdict is bound to
+   that step and the exact candidate, not to a renewable approval.
 2. **Filing work and reading its outcome from another repository.** What do you need to file
    items, findings, or requests into a tillr store (including across repository boundaries) and
    read back progress, artifacts, criterion verdicts, and terminal outcomes without polling

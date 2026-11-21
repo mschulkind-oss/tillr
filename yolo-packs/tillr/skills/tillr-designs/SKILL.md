@@ -174,7 +174,7 @@ Depend only on Section 2.1 ("The stable surface") of `docs/design/tillr-separabl
 - **Stable:** Calling `tillr <noun> <face>` or `tillr-<noun> <face>` with explicit paths
   (`--store`, `--root`, `--lane-root`, `--backends-dir`, `--input`, `--now`, `--item`, `--since`,
   and `--definition` on `store init`); the consumer faces on `store` (`init`, `check`, `events`),
-  `item` (`apply`, `list`, `show`, `state`, `close`, `reopen`, `verdict`, `grant`, `decision`,
+  `item` (`apply`, `list`, `show`, `state`, `close`, `reopen`, `verdict`, `judge`, `decision`,
   `mail`), `run` (`exec`, `status`, `lanes`, `release`), `view` (`status`, `events`, `waiting`,
   `passes`, `lanes`, `running`), `drain` (`why`, `plan`, plus `once` and `loop` on your own store
   and root), and no-store `gate` (`change`, `plan`, `shadow`); exit codes `0..5` (plus `6`

@@ -4,7 +4,7 @@ status: proposed
 stage: DESIGN
 updated: 2026-11-10
 tags: [tillr, work-control, approver, judge, item, verdict, pi]
-next: "Build ITEM-V (the `item.verdict` writer rules) on the E2 critical path; the delegated sign-off grant mechanism follows as its own chunk, off that path. The stopgap seat-gating lands before any migration work"
+next: "Build ITEM-V (the `item.verdict` writer rules) on the E2 critical path; agent judging uses a selected workflow step. The stopgap seat-gating lands before any migration work"
 ---
 
 # The item judge in tillr: migrate the verdict, delete the turn-end judge and the shadow
@@ -162,11 +162,10 @@ change, pinned by that test or recorded in that document, lands." What it
 does not cover is what the judge was built for: work landed outside the
 queue (a foreground session's own commits), criteria that turn on a
 document's *contents*, and the `defective` finding. Those need a reader
-of words against evidence — an agent — and
-[the retired agent runtime design](./agent-runtime-retirement.md) already rules that an agent may
-hold that pen: delegated sign-off, bounded by a recorded grant, with
-actor kind and evidence in every verdict record, and never by the actor
-whose work is judged. The approver seat therefore survives migration
+of words against evidence — an agent acting as the independent evaluator
+of a selected workflow. The [workflow rulebook](./tillr-judge-and-lifecycle.md#rulebook-and-its-enforcement)
+bounds which claims that step may judge. The verdict records actor kind and
+evidence and cannot come from the actor whose work is judged. The approver seat therefore survives migration
 only in that reduced form — **a client of `item`** (an agent job, run
 through the ordinary run machinery, whose output passes the deterministic
 intake and lands as an `item.verdict` record) — which is also what the
@@ -288,7 +287,7 @@ caller and then to nothing.
 | :--- | :--- |
 | The verdict itself | An `item.verdict` record kind owned by `tillr item`: item, criterion hash, verdict, reason, landed refs, actor kind, evidence pointers, evaluated head. `item` is its sole writer and refuses a verdict naming the wrong criterion hash, as the board store already does. |
 | The mechanical retirement | `land`'s landed attempt plus its `gate.verdict` produce a mechanical `item.verdict` in the composed pipeline — no agent involved, exactly as the landing queue retires drain items today. |
-| The approver seat | Survives only as an agent job outside tillr and outside Pi: a client that reads an item and its evidence and presents an `item.verdict` for intake. Invoked explicitly (a request, a drain policy step for non-landing completions), never by a turn end. Bounded by the sign-off grant rules in [the retired agent runtime design](./agent-runtime-retirement.md). |
+| The approver seat | Survives only as an agent job outside tillr and outside Pi: a client that reads an item and its evidence and presents an `item.verdict` for intake. Invoked as the evaluator of a selected workflow, never by a turn end. Its class list and candidate binding follow [the workflow rulebook](./tillr-judge-and-lifecycle.md#rulebook-and-its-enforcement). |
 | The in-process judge | Deleted. Its durable parts were never the model call — the deterministic intake, ancestry checks, and refusal accounting move with the record; the provider call inside a session hook does not. |
 | The automatic turn-end pass | Deleted. Nothing in tillr needs a verdict merely because a turn ended; a claim with no verdict is visible standing state ("claimed complete, awaiting a verdict"), and visibility was always the bounded failure. |
 | The shadow approver | Deleted, first. Its only consumer was the cutover; the cutover is cancelled by this ruling. |
@@ -306,8 +305,8 @@ candidate's head and tree. Blocked findings also identify the waiter.
 [D-JL2](./tillr-judge-and-lifecycle.md#22-when-generic-judging-survives--and-closing-the-mechanical-stamp-hole-d-jl2)
 keeps standalone generic judging on that same checked file intake, rather than
 running a second generic judge after a graph's evaluator. Agent rulings require
-a covering grant; mechanical rulings are limited to verification-only criteria,
-not owner decisions.
+a selected workflow's evaluator to list the stored claim class; mechanical
+rulings are limited to `verification-only`. Neither can decide `owner-only` claims.
 
 The end state retires pipeline completions with no human in the loop, by
 two verdict paths that are never merged into one:
@@ -316,10 +315,8 @@ two verdict paths that are never merged into one:
   A landed [`land.attempt`](board-utilities.md#54-land-alone) plus the
   [`gate.verdict`](board-utilities.md#57-gate-alone) that admitted it produce
   an `item.verdict` in the composed pipeline, citing the landed commit and
-  that verdict. No agent judges anything and no sign-off grant is involved:
-  the evidence carries the verdict, which is the exemption
-  [the retired agent runtime design](./agent-runtime-retirement.md) already states for mechanical
-  verdicts. This path is the second shipped end state's (E2's) retirement
+  that verdict. No agent judges anything: the evidence carries the
+  `verification-only` verdict. This path is the second shipped end state's (E2's) retirement
   path in [`tillr-chunking-plan.md`](tillr-chunking-plan.md)
   [Section 1](tillr-chunking-plan.md#1-the-end-state), and the writer rules
   that make it mean anything — criterion state moves only on an
@@ -329,26 +326,14 @@ two verdict paths that are never merged into one:
   verdict at all, and a mechanical verdict would then guarantee nothing.
   The writer contract itself is stated where the record is owned, in
   [`board-utilities.md`](board-utilities.md) [§5.3](board-utilities.md#53-item-alone).
-- **An agent-issued verdict retires the rest only under a grant mechanism
-  that does not exist yet.** Completions with no pipeline landing behind
-  them — a foreground session's own commits, criteria that turn on a
-  document's contents, and the `defective` finding — need a reader of words
-  against evidence. That reader is the approver job above, and its verdicts
-  count only under a delegated sign-off grant enforced by the store: a
-  recorded grant naming its scope, its grantor and its expiry, with `item`
-  refusing a verdict whose grant is absent, expired or out of scope, and
-  refusing any verdict from the actor whose work is judged. The grant's
-  shape and its default terms are settled in
-  [the retired agent runtime design](./agent-runtime-retirement.md); what is missing is the mechanism —
-  the grant record, the store refusal, and the conformance case that pins
-  both. That build is its own chunk, **GRANT** (ESTIMATE M — basis: one
-  grant record kind, one intake check in `tillr item`, one conformance
-  case), and it sits off E2's critical path: E2 retires only what E2 lands.
-  Until GRANT lands, a claim with no landing behind it stands as claimed
-  complete, awaiting a verdict — visible, owed, and unretired — and a person
-  may still issue that verdict explicitly, recorded with actor kind `human`.
-  E2 is therefore never described as having agent sign-off; it has
-  mechanical retirement, which is a different and smaller claim.
+- **An agent-issued verdict comes from an independent workflow step.**
+  The store checks the selected expanded graph, evaluator node, stored
+  criterion class, and exact candidate head and tree. The class must be
+  listed in the step's `judge_classes`; the shipped evaluators list only
+  `verification-only`. An external client or foreground session cannot
+  supply its own authority: without a matching step, its agent verdict is
+  refused. A claim awaiting judgment remains visible and unretired; a
+  person may still issue a verdict with actor kind `human`.
 
 The rejected alternatives, briefly. **KEEP** contradicts three accepted
 rulings (mode deleted, pile out, approver out) to preserve a trigger
@@ -377,12 +362,9 @@ verdict journal and the board's verdict rows, how many retirements the
 judge uniquely provided (no queue landing behind them) over a recent
 window — that number sizes the surviving approver job, and if it is zero
 the owner may revisit DELETE for the seat with evidence in hand. (4) The
-delegated sign-off grant must be a mechanism before the approver job
-writes authoritative tillr records: today it is a stated convention with
-no store refusal behind it, and [the retired agent runtime design](./agent-runtime-retirement.md)
-says plainly that no completion claim may credit it until one exists. The
-mechanical verdict needs no grant and waits for none of this — see
-[Retirement in the end state](#retirement-in-the-end-state).
+approver job needs a selected workflow with a matching evaluator before
+it can write authoritative tillr records. Mechanical verdicts do not need
+an evaluator — see [Retirement in the end state](#retirement-in-the-end-state).
 (5) Someone must name what happens to audit re-judgment and to `blocked`
 parks whose `resumeOn` events (`head-move`, `run-completion`, timeout)
 were previously observed by the turn-end trigger; in tillr those are

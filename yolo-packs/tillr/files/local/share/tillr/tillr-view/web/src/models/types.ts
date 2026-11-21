@@ -410,23 +410,8 @@ export interface QuestionsData {
   note?: string;
 }
 
-export interface GrantView {
-  grant_id: string;
-  claim_classes: string[];
-  grantor: string;
-  issued_at_ms: number;
-  expires_at_ms: number;
-  issued_at: string;
-  expires_at: string;
-  state: "active" | "expiring" | "expired";
-  warning: boolean;
-  summary: string;
-  renew_command: string;
-}
-
 export interface SnapshotData {
   alarms?: BackendAlarm[];
-  grants?: GrantView[];
   sources: SourceStates;
   /** The server's own counts, when the build that answered has them. */
   counts?: ServerCounts;

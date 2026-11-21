@@ -6,7 +6,7 @@ import (
 )
 
 func TestWaitingClassifiesJudgeDispositions(t *testing.T) {
-	for _, reason := range []string{"judge-blocked", "judge-defective"} {
+	for _, reason := range []string{"judge-blocked", "judge-defective", "judge-unreadable"} {
 		rule := waitingRuleFor(reason)
 		if rule.class == "unclassified" || rule.where != "judge" || rule.mover == "" {
 			t.Errorf("judge outcome %s: %+v", reason, rule)
@@ -14,7 +14,7 @@ func TestWaitingClassifiesJudgeDispositions(t *testing.T) {
 	}
 }
 
-func TestWaitingShowsJudgeReason(t *testing.T) {
+func TestWaitingShowsJudgeReasonDespiteHistoricalGrantHold(t *testing.T) {
 	h := newServeHarness(t)
 	db, err := sql.Open("sqlite", "file:"+h.store)
 	if err != nil {

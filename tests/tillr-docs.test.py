@@ -774,7 +774,21 @@ def case_seed_retirement_documented():
     ok("seed intake is retired; seven unfinished rows survive as prose and places have a writer")
 
 
+def case_workflow_judge_documented():
+    pack = ROOT / "yolo-packs/tillr"
+    for path in (pack / "README.md", pack / "skills/tillr-designs/SKILL.md"):
+        stable = next(line for line in text_of(path).splitlines() if "`item` (`apply`" in line)
+        if "`grant`" in stable or "`judge`" not in stable:
+            fail(f"{path.relative_to(ROOT)} must advertise judge, not the retired grant face")
+    for path in (SKILL, pack / "tasks/autoqa-handoff.md",
+                 ROOT / "docs/reference/tillr-item-graphs.md"):
+        if "`judge_classes`" not in text_of(path):
+            fail(f"{path.relative_to(ROOT)} omits the evaluator's class list")
+    ok("operator and consumer docs describe judgment as a workflow step")
+
+
 def main():
+    case_workflow_judge_documented()
     case_run_timing_and_schedule_documented()
     case_seed_retirement_documented()
     green_build_tests = subprocess.run(

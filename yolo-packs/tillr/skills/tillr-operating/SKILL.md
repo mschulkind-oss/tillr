@@ -47,9 +47,10 @@ workflow may declare a read-only evaluator node in `exit.evaluator_slot` (such a
 naming `single-worker@v1` skips planning and that evaluator when one worker run is enough).
 The selected evaluator needs a mapped seat and can judge only criteria whose stored
 claim class appears in its `judge_classes`. The shipped `verify` and compatibility
-`review` steps list only `verification-only`. The read-only judge runs after the
-fence check and before the gate; only a
-successful landing records the checked agent verdicts, without the mechanical
+`review` steps list only `verification-only`; `owner-only` stays with the owner.
+The judge's authority is part of the selected workflow, so there is no renewal
+command or timer. The read-only judge runs after the fence check and before the
+gate; only a successful landing records the checked agent verdicts, without the mechanical
 verdict program. A workflow evaluator's `not-done` is a `verify-not-done` refusal (for both
 document items and filed requests): the loop pins the candidate commit the verifier read and
 dispatches the build step (`work` on the `build` seat, inserting `work` before the evaluator
