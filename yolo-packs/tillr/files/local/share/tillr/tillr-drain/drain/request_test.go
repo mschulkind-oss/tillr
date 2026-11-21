@@ -644,12 +644,16 @@ func (s *requestSingleJudgeSteps) Run(ctx context.Context, req run.Request) (run
 		missingVerification := false
 		if s.reportOnly {
 			writer := s.workReqs[len(s.workReqs)-1]
-			path := filepath.Join(run.DurableDir(lane, writer.RunID), "report.md")
+			path := filepath.Join(RunDir(s.f.root, writer.RunID), "node-report.md")
+			if !strings.Contains(string(brief), "Candidate worker report: "+path+"\n") {
+				return run.Record{}, "", fmt.Errorf("judge brief does not name the candidate report %s", path)
+			}
 			report, err := os.ReadFile(path)
 			if err != nil {
 				return run.Record{}, "", err
 			}
-			missingVerification = !strings.Contains(string(report), "## Verification\n")
+			missingVerification = !strings.Contains(string(report), "complete: yes\nresult: done\n") ||
+				!strings.Contains(string(report), "candidate\n\n## Verification\nTargeted check: pass.")
 		}
 		tree := runGit(s.t, target, "rev-parse", head+"^{tree}")
 		var verdicts []item.JudgeEntry
@@ -738,8 +742,17 @@ func (s *requestSingleJudgeSteps) Run(ctx context.Context, req run.Request) (run
 		}
 	}
 	report := "RESULT: done\n"
-	if s.reportOnly && s.works == 2 {
-		report = "## Verification\nTargeted check: pass.\n\n" + report
+	if s.reportOnly && !strings.HasPrefix(string(brief), "# Judge candidate") {
+		extractor, err := filepath.Abs("../../tillr-run/backends/pi/extract-report")
+		if err != nil {
+			return run.Record{}, "", err
+		}
+		cmd := exec.CommandContext(ctx, extractor, "--backend", "pi", "--landing-offer", filepath.Join(run.DurableDir(lane, req.RunID), landingOfferFile))
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return run.Record{}, "", fmt.Errorf("extracting offer report: %w: %s", err, out)
+		}
+		report = string(out)
 	}
 	path := filepath.Join(run.DurableDir(lane, req.RunID), "report.md")
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {

@@ -213,6 +213,7 @@ def _parse_args(argv, prog):
         "--exit-code", default=UNKNOWN, help="the harness's exit code, as staging saw it"
     )
     parser.add_argument("--out", default=None, help="report path; default stdout")
+    parser.add_argument("--landing-offer", help="commit offer artifact from the finished run")
     parser.add_argument(
         "stream", nargs="?", default="-", help="stream path; default stdin"
     )
@@ -243,6 +244,19 @@ def run(dialect, argv=None):
 
     found = dialect(stream_text)
     text = found.get("text") or ""
+    if args.landing_offer:
+        try:
+            with open(args.landing_offer, encoding="utf-8") as handle:
+                offer = json.load(handle)
+        except (OSError, ValueError) as error:
+            print(f"{prog}: reading the landing offer: {error}", file=sys.stderr)
+        else:
+            if (isinstance(offer, dict) and offer.get("tool") in (None, "land")
+                    and all(isinstance(offer.get(key), str) and offer[key].strip()
+                            for key in ("call_id", "base", "commit", "summary"))):
+                # The call ends the session before the worker can write a footer.
+                # Preserve its summary verbatim, including its verification inventory.
+                text = offer["summary"] + "\n\nRESULT: done\n"
     report, result = render(
         backend=args.backend,
         model=args.model or found.get("model"),

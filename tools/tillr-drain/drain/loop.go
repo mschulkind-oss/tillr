@@ -1886,6 +1886,25 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	if offered {
 		code := 0
 		record.State, record.ExitCode = run.StateExited, &code
+		// A commit offer can go directly to a judge without advancing a workflow
+		// node. Retain its extracted report at the same path as other node reports.
+		for _, ref := range record.ArtifactRefs {
+			if ref.Kind != "report" {
+				continue
+			}
+			body, err := os.ReadFile(ref.Ref)
+			if err != nil {
+				return laneOutcome{err: err}
+			}
+			dir := RunDir(l.cfg.Root, record.RunID)
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				return laneOutcome{err: err}
+			}
+			if err := os.WriteFile(filepath.Join(dir, "node-report.md"), body, 0644); err != nil {
+				return laneOutcome{err: err}
+			}
+			break
+		}
 	}
 	if err := RecordBackendOutcomes(ctx, l.cfg.Store); err != nil {
 		return laneOutcome{err: err}

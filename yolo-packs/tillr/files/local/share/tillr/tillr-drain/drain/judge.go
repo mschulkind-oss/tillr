@@ -706,6 +706,12 @@ Write the verdict file, then report RESULT: done.
 ## Stop conditions
 Never change the worker's candidate.
 `, c.ItemID, receipt.Request.RunID, c.Worktree, output, receipt.Options.Head, receipt.Options.Tree, seatLines(l.currentPolicy()), diffPath, criteria.String())
+	reportPath := filepath.Join(RunDir(l.cfg.Root, c.RunID), "node-report.md")
+	if _, err := os.Stat(reportPath); err == nil {
+		brief += fmt.Sprintf("\nCandidate worker report: %s\n", reportPath)
+	} else if !os.IsNotExist(err) {
+		return err
+	}
 	if len(receipt.Writers) == 0 {
 		for _, producer := range receipt.Producers {
 			brief += fmt.Sprintf("\nRead-only producer %s: run=%s; session=%s; backend=%s; route=%s\n", producer.NodeID, producer.RunID, producer.SessionID, producer.Backend, producer.Route)
