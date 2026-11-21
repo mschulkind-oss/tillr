@@ -24,7 +24,6 @@ type heavyAttributed struct {
 	check             HeavyCheck
 	against           string
 	bisected, offered bool
-	stillRed          bool
 }
 
 // heavyEarly recovers failing checks one at a time, in the order they ended, in a
@@ -57,7 +56,7 @@ func (r HeavyRunner) startEarly(ctx context.Context, run HeavyRun) *heavyEarly {
 
 func (e *heavyEarly) offer(check HeavyCheck) {
 	// Attribute all failed tests in a suite before any of them can move the tip.
-	if check.Result != "fail" || check.FirstRedLanding != "" || strings.HasPrefix(check.CheckID, goTestPrefix) {
+	if check.Result != "fail" || check.Stalls >= 2 || check.FirstRedLanding != "" || strings.HasPrefix(check.CheckID, goTestPrefix) {
 		return
 	}
 	e.mu.Lock()
@@ -113,9 +112,12 @@ func (e *heavyEarly) recover(check HeavyCheck) error {
 			if err != nil {
 				return err
 			}
-			check.RevertedBy, check.RevertRefused, a.stillRed = out.Reverted, out.Refused, out.StillRed
-			if out.Reverted != "" {
-				e.reverted[against] = out.Reverted
+			a.against, err = e.runner.resolveRevert(e.ctx, e.run, &check, against, out)
+			if err != nil {
+				return err
+			}
+			if check.RevertedBy != "" {
+				e.reverted[a.against] = check.RevertedBy
 			}
 		}
 	}

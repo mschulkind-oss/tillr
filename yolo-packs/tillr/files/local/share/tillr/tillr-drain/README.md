@@ -1011,9 +1011,11 @@ runner replays just that test on the sampled tip; a pass defers the repair, whil
 failure or no verdict leaves the finished red actionable. The runner does not restart
 attribution just because another landing arrives. Automatic reverts are not attempted
 from a proof already known to be behind the tip.
-A check still red on a descendant tip can reuse its recorded first-red commit while
-its green baseline and declared reads are unchanged and no pass has ended the red
-spell. The green pointer still moves only on a whole green run.
+A check still red on a descendant tip can reuse its recorded first-red commit only if
+that commit is in the first-parent range being proved, the green baseline and declared
+reads are unchanged, and the recorded failure output matches. A known pass, changed
+failure, or missing evidence prevents reuse. The green pointer still moves only on a
+whole green run.
 
 `heavy.cleanup-pending` and `heavy.replay-cleanup-pending` guard the proof and recovery
 respectively and remain beside the result store until confirmation, recording the
@@ -1247,10 +1249,12 @@ only when all three pass. L's item moves from `landed` back to `in-queue` with a
 its run carries a returned `reverted` ending with the check's output, so the next pass hands it
 back to its worker (a fresh session on the same backend). Its next gate runs that check as a
 required one until it lands again. L is not reverted when it is a revert, a fixer's landing,
-or a landed item's dependency; a revert that does not apply, does not pass the fast gate, or
-leaves the check red ends "not possible" and files the fixer with that reason in its brief
-(against the tip when the check is still red without L). The loop log reads, for a reverted
-red:
+or a landed item's dependency. If the attributed check still fails with L removed, even
+when the fast gate also refused the revert, the loop records that the attribution did not
+explain the red, drops the remembered culprit, and searches again with fresh replays. It
+offers a revert for a different verified landing; if the fresh search cannot explain the red,
+it files a fixer against the tip without blaming L. Other revert refusals file the fixer with
+the reason in its brief. The loop log reads, for a reverted red:
 
 ```text
 loop: heavy unit red from landing 1a2b3c4d5e6f (item item-x); reverting it on tip 7a8b9c0d1e2f
@@ -1277,9 +1281,12 @@ line as the check ends (`loop: heavy <check> <result> in <time>`), and the legac
 gives one line with its failing checks. A failing check starts the culprit search with
 `loop: heavy <check> failed at tip <sha>; searching for the first red landing since green
 <sha>`, and each replay is two lines: where and why it replays (the green base, the last
-recorded landing, or a bisection step), then its verdict and time, or `no verdict after
-<time>, because <reason>`. A replay with no verdict is not retried: the search ends there,
-says so, and files the fixer against the tip.
+candidate landing, a bisection step, or a candidate's first parent), then its verdict and
+time, or `no verdict after <time>, because <reason>`. A landing is named only when the
+check passes on its first parent and fails on the landing itself. If the watch-filtered
+search skips over a failing parent, the runner searches the full first-parent prefix.
+A replay with no verdict is not retried: the search ends there, says so, and files the
+fixer against the tip.
 
 The legacy program's whole output (stdout and stderr) is also written to a file under
 the proof's log directory for the commit, `<lane root>/.rolling/logs/<commit>/legacy-proof.log`

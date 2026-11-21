@@ -81,7 +81,11 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 	record := revertPayload{Landing: landing, Tip: tip, Checks: ids}
 	refuse := func(reason string) (RevertOutcome, error) {
 		record.Result, record.Reason, record.StillRed = "not-possible", reason, out.StillRed
-		l.reportf("loop: heavy %s red from %s: automatic revert not possible: %s; filing a fixer\n", strings.Join(ids, ","), shortSHA(landing), reason)
+		next := "filing a fixer"
+		if out.StillRed {
+			next = "discarding attribution and searching again"
+		}
+		l.reportf("loop: heavy %s red from %s: automatic revert not possible: %s; %s\n", strings.Join(ids, ","), shortSHA(landing), reason, next)
 		if err := l.appendRevert(ctx, record, nil); err != nil {
 			return RevertOutcome{}, err
 		}
@@ -134,27 +138,32 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 		}
 		return refuse("the fast gate could not judge the revert: " + err.Error())
 	}
+	// Even a fast-gate refusal can be the original red. Replay the attributed
+	// checks before classifying the refusal, so that it cannot hide a wrong culprit.
+	gateRefused := ""
 	if gate.Outcome != GatePassed && gate.Outcome != GatePassedInherited {
 		detail := gate.Outcome
 		if len(gate.FailingChecks) > 0 {
 			detail += " (" + strings.Join(gate.FailingChecks, ", ") + ")"
 		}
-		return refuse("the fast gate did not pass with the revert: " + detail)
+		gateRefused = "the fast gate did not pass with the revert: " + detail
 	}
-	// The replay is the test that the attribution was right: each check the landing
-	// broke must pass on the tip with the landing taken out. One check, not a proof.
 	for _, id := range ids {
 		red, err := replay(ctx, revert, id)
 		if err != nil {
 			if ctx.Err() != nil || cleanupLost(err) {
 				return RevertOutcome{}, err
 			}
-			return refuse(id + " gave no verdict on the tip with " + shortSHA(landing) + " reverted: " + err.Error())
+			reason := id + " gave no verdict on the tip with " + shortSHA(landing) + " reverted: " + err.Error()
+			return refuse(joinDetail(gateRefused, reason))
 		}
 		if red {
-			out.StillRed = true
-			return refuse(id + " still fails on the tip with " + shortSHA(landing) + " reverted, so that landing does not explain the red; the fixer starts from the tip")
+			out.StillRed, out.stillRedCheck = true, id
+			return refuse(joinDetail(gateRefused, id+" still fails on the tip with "+shortSHA(landing)+" reverted, so the attribution did not explain the red"))
 		}
+	}
+	if gateRefused != "" {
+		return refuse(gateRefused)
 	}
 	candidate.ObservedTrunk, err = heavyGitOutput(ctx, l.cfg.Root, "rev-parse", TrunkRef)
 	if err != nil {

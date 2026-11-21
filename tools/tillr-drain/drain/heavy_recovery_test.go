@@ -55,7 +55,7 @@ func TestHeavyOnlyASecondStallIsRed(t *testing.T) {
 					t.Fatalf("first stall=%+v fixes=%d", out, fixes)
 				}
 			} else {
-				if out.Runs[0].Result != "red" || fixes != 1 || out.Runs[0].Checks[0].Stalls != 2 {
+				if out.Runs[0].Result != "red" || fixes != 1 || out.Runs[0].Checks[0].Stalls != 2 || out.Runs[0].Checks[0].FirstRedLanding != "" {
 					t.Fatalf("second stall=%+v fixes=%d", out, fixes)
 				}
 				if green, err := heavyGreen(context.Background(), root); err != nil || green != "" {

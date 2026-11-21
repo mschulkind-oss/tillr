@@ -88,7 +88,7 @@ func TestHeavyKeepsRecordedFirstRedOnLaterRedTip(t *testing.T) {
 		if sha == base {
 			result = "pass"
 		}
-		return []HeavyCheck{{CheckID: "unit", Result: result}}, nil
+		return []HeavyCheck{{CheckID: "unit", Result: result, Detail: "same fixture failure"}}, nil
 	})
 	first, err := runner.Run(context.Background())
 	if err != nil || first.Runs[0].Checks[0].FirstRedLanding != red {
