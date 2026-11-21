@@ -14,7 +14,7 @@ import (
 )
 
 func designContinuationWork(c item.Conflict, work *pendingWork) *pendingWork {
-	if c.Status == "raised" && c.DesignRunID != "" && c.TriageVersion == "" && work != nil && work.Decision.RunRequest != nil && work.Decision.RunRequest.RunID == c.DesignRunID {
+	if c.Status == "raised" && c.DesignRunID != "" && c.TriageVersion == "" && work != nil && work.DesignQuotaBackend == "" && work.Decision.RunRequest != nil && work.Decision.RunRequest.RunID == c.DesignRunID {
 		return work
 	}
 	return nil

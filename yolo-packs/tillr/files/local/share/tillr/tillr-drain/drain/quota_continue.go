@@ -3,7 +3,6 @@ package drain
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"strings"
 	"time"
 
@@ -116,42 +115,26 @@ func (l *Loop) clearQuotaPause(ctx context.Context, id string) error {
 	return s.WriteTx(ctx, func(tx *store.Tx) error { _, err := tx.Exec(`DELETE FROM quota_pauses WHERE run_id=?`, id); return err })
 }
 
-func requestForQuotaBackend(policy *Policy, req run.Request, backend string) *run.Request {
-	replacement := policy.request(req.ItemID, req.LaneID, req.RunID, backend)
-	if replacement == nil {
-		return nil
-	}
-	req.Backend, req.Command, req.TimeoutMS = replacement.Backend, replacement.Command, replacement.TimeoutMS
-	return &req
-}
-
-// resumeQuotaRun preserves the original attempt, lane, staged base and files.
-// The row remains until the executor's resume claim commits, not until selection.
+// resumeQuotaRun preserves the original backend, session, attempt, lane, staged
+// base and files. The row remains until the executor's resume claim commits.
 func (l *Loop) resumeQuotaRun(ctx context.Context, d Decision, rec run.Record, tick string, at time.Time, result *LoopResult, watched []string) (run.Record, string, string, error) {
+	req := *d.RunRequest
+	if req.Backend != rec.Backend {
+		return run.Record{}, "", "", Externalf("quota-paused run %s was recorded on %s, not %s", rec.RunID, rec.Backend, req.Backend)
+	}
 	if err := l.holdQuotaRun(ctx, d, rec.Backend); err != nil {
 		return run.Record{}, "", "", err
 	}
-	name, open, err := l.quotaReplacementBackend(ctx, rec.Backend)
+	if err := l.refreshQuotas(ctx); err != nil {
+		return run.Record{}, "", "", err
+	}
+	open, err := l.recordedBackendOpen(ctx, req.Backend)
 	if err != nil || !open {
 		return run.Record{}, "", "", err
 	}
-	req := *d.RunRequest
 	req.Resume = true
-	req.FreshSession = name != rec.Backend
-	if req.FreshSession {
-		replacement := l.currentPolicy().request(req.ItemID, d.LaneID, req.RunID, name)
-		if replacement == nil {
-			return run.Record{}, "", "", Usagef("quota continuation cannot build backend %s", name)
-		}
-		req.Backend, req.Command, req.TimeoutMS = replacement.Backend, replacement.Command, replacement.TimeoutMS
-		paths, err := l.uncommittedPaths(ctx, l.laneTarget(d.LaneID))
-		if err != nil {
-			return run.Record{}, "", "", err
-		}
-		req.ResumePrompt = fmt.Sprintf("The earlier session ran out of quota on backend %s. Uncommitted paths: %s. Keep existing work and continue the same attempt; do not repeat completed work or make a second candidate.", rec.Backend, strings.Join(paths, ", "))
-	} else {
-		req.ResumePrompt = "The backend's quota reopened. Continue the same attempt from where you stopped, preserving existing work."
-	}
+	req.FreshSession = false
+	req.ResumePrompt = "The backend's quota reopened. Continue the same attempt from where you stopped, preserving existing work."
 	resumed, log, stop, err := l.runContinuation(ctx, d.LaneID, req, l.lanePath(d.LaneID), rec, tick, at, result, watched, "")
 	if err == nil && stop == "" && resumed.RunID == "" && ctx.Err() == nil {
 		err = Externalf("quota-paused run %s cannot continue: its lane needs the staged brief and session-id", rec.RunID)

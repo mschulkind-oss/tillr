@@ -80,6 +80,15 @@ func (l *Loop) recordBackendWindow(ctx context.Context, rec run.Record) error {
 	}
 	defer s.Close()
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		// Settling a durable refusal again must not undo a successful probe.
+		// Compare finish events, not just run IDs: a continued run can refuse again.
+		var reopened bool
+		if err := tx.Reader().QueryRow(`SELECT EXISTS (
+			SELECT 1 FROM events WHERE object_type='backend' AND object_id=? AND kind=? AND seq > (
+				SELECT max(seq) FROM events WHERE object_type='run' AND object_id=? AND kind=?
+			))`, rec.Backend, backendQuotaReopenedKind, rec.RunID, run.FinishKind).Scan(&reopened); err != nil || reopened {
+			return err
+		}
 		_, err := tx.Exec(`INSERT INTO backend_windows (backend,kind,fraction,status,reset_at,run_id)
    VALUES (?,?,?,'rejected',?,?) ON CONFLICT(backend) DO UPDATE SET
    kind=excluded.kind,fraction=excluded.fraction,status=excluded.status,reset_at=excluded.reset_at,run_id=excluded.run_id

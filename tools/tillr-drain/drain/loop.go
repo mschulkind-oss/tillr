@@ -2187,11 +2187,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 				return laneOutcome{stop: stop, err: err}
 			}
 			if resumed.Backend != request.Backend {
-				next := requestForQuotaBackend(l.currentPolicy(), request, resumed.Backend)
-				if next == nil {
-					return laneOutcome{err: Usagef("quota continuation lost backend %s from policy", resumed.Backend)}
-				}
-				decision.RunRequest = next
+				return laneOutcome{err: Externalf("quota continuation %s returned backend %s, not %s", resumed.RunID, resumed.Backend, request.Backend)}
 			}
 			return l.settle(ctx, decision, resumed, resumedLog, mainSHA, tick, at, result, timing, watched, deferJudge)
 		}
@@ -2296,12 +2292,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 				return laneOutcome{err: err}
 			}
 			c := *decision.BlockConflict
-			c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
-			if c.TriageVersion != "" {
-				c.Status, c.WaitingOn, c.DesignRunID = "owner", "owner", record.RunID
-			}
+			c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", record.RunID
 			c.Text += "\n\nDesign run " + record.RunID + " refused by backend quota on " + record.Backend
-			if err := l.saveBlockConflict(ctx, c); err != nil {
+			if err := l.saveBlockConflictWithQuota(ctx, c, record.Backend); err != nil {
 				return laneOutcome{err: err}
 			}
 			return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane))}

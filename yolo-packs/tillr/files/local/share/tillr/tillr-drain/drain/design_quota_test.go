@@ -70,8 +70,24 @@ func TestConflictDesignHoldsOnItsShutBackend(t *testing.T) {
 }
 
 func TestDesignQuotaRefusalHoldsConflictOnSameSeat(t *testing.T) {
-	f, l := designQuotaFixture(t)
-	p := mustPlan(t, l)[0]
+	t.Run("conflict", func(t *testing.T) {
+		f, l := designQuotaFixture(t)
+		checkDesignQuotaRefusal(t, f, l, func() plannedApplication { return mustPlan(t, l)[0] })
+	})
+	t.Run("triage", func(t *testing.T) {
+		f, l := triageFixture(t)
+		checkDesignQuotaRefusal(t, f, l, func() plannedApplication { return findTriagePlan(t, l, "item-request") })
+	})
+}
+
+func checkDesignQuotaRefusal(t *testing.T, f refusalLoopFixture, l *Loop, plan func() plannedApplication) {
+	t.Helper()
+	backend := plan().decision.RunRequest.Backend
+	l.cfg.Policy.Backends["designer-b"] = l.cfg.Policy.Backends[backend]
+	l.cfg.Policy.SeatLists = map[string][]string{"design": {backend, "designer-b"}}
+	l.cfg.Policy.SeatShares = map[string][]float64{"design": {1, 1}}
+	l.cfg.Policy.SeatPicks = map[string]string{"design": "round-robin"}
+	p := plan()
 	base := runGit(t, f.root, "rev-parse", TrunkRef)
 	ok, _, err := l.applyPlan(context.Background(), p, base, l.cfg.Now())
 	if err != nil || !ok {
@@ -101,9 +117,8 @@ func TestDesignQuotaRefusalHoldsConflictOnSameSeat(t *testing.T) {
 		if c := cs[d.ItemID]; c.Status != "raised" || c.WaitingOn != "design" {
 			t.Errorf("quota refusal stranded conflict: %+v", c)
 		}
-		var backend string
 		var at int64
-		if err := tx.QueryRow(`SELECT backend, reset_at FROM backend_windows WHERE backend = 'fixture'`).Scan(&backend, &at); err != nil {
+		if err := tx.QueryRow(`SELECT reset_at FROM backend_windows WHERE backend = ?`, backend).Scan(&at); err != nil {
 			return err
 		}
 		if at != reset.UnixMilli() {
@@ -111,9 +126,19 @@ func TestDesignQuotaRefusalHoldsConflictOnSameSeat(t *testing.T) {
 		}
 		return nil
 	})
-	next := mustPlan(t, l)[0].decision
-	if next.Action != ActionHold || next.Reason != ReasonBackendWindow || next.DeferredBy != "fixture" {
-		t.Fatalf("next pass did not hold on fixture: %+v", next)
+	next := plan().decision
+	if next.Action != ActionHold || next.Reason != ReasonBackendWindow || next.DeferredBy != backend {
+		t.Fatalf("next pass did not hold on %s: %+v", backend, next)
+	}
+	l.cfg.Now = func() time.Time { return reset }
+	p = plan()
+	next = p.decision
+	if next.Action != ActionDispatch || next.RunRequest == nil || next.RunRequest.Backend != backend || next.SelectSeat || next.RunRequest.RunID == rec.RunID {
+		t.Fatalf("reopened conflict did not start a new run on its recorded backend: %+v", next)
+	}
+	ok, _, err = l.applyPlan(context.Background(), p, base, l.cfg.Now())
+	if err != nil || !ok {
+		t.Fatalf("reopened dispatch tried to continue the refused session: %v / %v", ok, err)
 	}
 }
 

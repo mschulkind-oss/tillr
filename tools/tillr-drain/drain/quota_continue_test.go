@@ -41,7 +41,8 @@ func quotaContinuationFixture(t *testing.T, work bool) (refusalLoopFixture, *Loo
 	f, l := passFixture(t, "item-a")
 	l.cfg.Lanes = []string{"lane-1"}
 	backends := t.TempDir()
-	steps := &quotaContinuationSteps{continuationSteps: continuationSteps{t: t, store: f.storePath, laneRoot: f.laneRoot, at: l.cfg.Now()}, backends: backends}
+	// Anchor the synthetic window to wall time so an operator probe can reopen it.
+	steps := &quotaContinuationSteps{continuationSteps: continuationSteps{t: t, store: f.storePath, laneRoot: f.laneRoot, at: time.Now().UTC()}, backends: backends}
 	l.cfg.Steps = steps
 	l.cfg.Now = func() time.Time { return steps.at }
 	for _, name := range []string{"alpha", "beta"} {
@@ -140,6 +141,30 @@ func TestQuotaContinuationKeepsFilesAttemptAndJudgesOnce(t *testing.T) {
 				return nil
 			})
 		})
+	}
+}
+
+func TestQuotaContinuationResumesAfterSuccessfulProbeBeforeReset(t *testing.T) {
+	f, l, steps, d, _ := quotaContinuationFixture(t, true)
+	var result LoopResult
+	settleContinuation(t, l, &result)
+	if len(steps.requests) != 1 {
+		t.Fatalf("started while alpha was shut: %+v", steps.requests)
+	}
+	if err := ProbeBackend(context.Background(), f.storePath, f.root, "alpha", []string{"/bin/true"}); err != nil {
+		t.Fatal(err)
+	}
+	if d := mustPlan(t, l)[0].decision; d.Action != ActionSettle {
+		t.Fatalf("probe did not reopen the window: %+v", d)
+	}
+	// Do not advance the clock: settling the old refusal must not undo the probe.
+	settleContinuation(t, l, &result)
+	if len(steps.requests) != 2 {
+		t.Fatalf("probe did not resume alpha: %+v", steps.requests)
+	}
+	next := steps.requests[1]
+	if next.RunID != d.RunRequest.RunID || next.Backend != "alpha" || !next.Resume || next.FreshSession {
+		t.Fatalf("lost original attempt or session: %+v", next)
 	}
 }
 

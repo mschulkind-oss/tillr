@@ -207,28 +207,20 @@ func (l *Loop) refreshQuotas(ctx context.Context) error {
 	return nil
 }
 
-func (l *Loop) quotaReplacementBackend(ctx context.Context, start string) (string, bool, error) {
-	if err := l.refreshQuotas(ctx); err != nil {
-		return "", false, err
-	}
+// A continuation or restart tests its recorded backend, not the seat's choices.
+func (l *Loop) recordedBackendOpen(ctx context.Context, backend string) (bool, error) {
 	s, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
-		return "", false, err
+		return false, err
 	}
 	defer s.Close()
-	name, open := "", false
-	policy := l.currentPolicy()
+	open := false
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
-		shut, err := readQuotaShutBackends(r, l.cfg.Now(), policy)
-		if err != nil {
-			return err
-		}
-		if start != "" && !shut[start] {
-			name, open = start, true
-		}
-		return nil
+		shut, err := readQuotaShutBackends(r, l.cfg.Now(), l.currentPolicy())
+		open = err == nil && backend != "" && !shut[backend]
+		return err
 	})
-	return name, open, err
+	return open, err
 }
 
 // readQuotaShutBackends is every backend a dispatch must skip: shut by quota or
