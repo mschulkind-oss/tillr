@@ -3165,12 +3165,21 @@ is read from it (`TestAFaultHoldShowsItsRecordedMoverAndDetail` in
 
 ```sh
 tillr-drain plan
+tillr-drain push --root <repository> [--store <path>] [--json]
 tillr-drain resume --run <run-id>
 tillr-drain loop
 ```
 
 `plan` is the read-only half an external caller composes against its own reporter; `loop` is
 the whole service and needs the three judging programs named.
+
+`tillr drain push` runs one publication attempt using the repository's `[push]` settings.
+It defaults to `<root>/.tillr/state.db` and uses the same trunk-history lock as the loop
+before replaying a refused push. Its exit status and text or JSON report reflect the stored
+`drain.post-landing-action` event, including the kind and any named mover. A proof hold
+exits non-zero and names the heavy runner even when the old green is already on the remote.
+`acknowledge-patch-move` also attempts publication if the configured tip has unpublished
+commits; an unsuccessful push does not undo the acknowledgment.
 
 `resume` is one attempt continued and not a second attempt: the run id, the lane and the brief
 are the ones the run already had, the session the lane carries is continued so the provider's

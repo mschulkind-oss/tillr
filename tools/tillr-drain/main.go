@@ -80,6 +80,8 @@ func dispatch(args []string) int {
 		return acceptRewriteFace(rest)
 	case "acknowledge-patch-move":
 		return acknowledgePatchMoveFace(rest)
+	case "push":
+		return pushFace(rest)
 	case "accept-identity":
 		return acceptIdentityFace(rest)
 	case "sweep-refs":
@@ -133,7 +135,54 @@ func acknowledgePatchMoveFace(args []string) int {
 		return fail(err)
 	}
 	fmt.Printf("acknowledged patch/%s observation %d by %s\n", *fork, *seq, *by)
+	if raw, err := exec.CommandContext(ctx, "git", "-C", filepath.Dir(*path), "rev-parse", "--show-toplevel").Output(); err == nil {
+		root := strings.TrimSpace(string(raw))
+		if cfg, err := settings.Read(root); err == nil && drain.HasUnpublishedCommits(ctx, root, cfg.Push) {
+			out, err := drain.PushOnce(ctx, root, *path)
+			printPushOutcome(out, err, false)
+		}
+	}
 	return record.ExitOK
+}
+
+func pushFace(args []string) int {
+	fs := newFlagSet("push")
+	root := fs.String("root", ".", "the repository to push")
+	path := fs.String("store", "", "the store (default <root>/.tillr/state.db)")
+	asJSON := fs.Bool("json", false, "emit the recorded push outcome as JSON")
+	if err := parseFlags(fs, args); err != nil {
+		return fail(err)
+	}
+	if *path == "" {
+		*path = filepath.Join(*root, ".tillr", "state.db")
+	}
+	out, err := drain.PushOnce(context.Background(), *root, *path)
+	return printPushOutcome(out, err, *asJSON)
+}
+
+func printPushOutcome(out drain.PushOutcome, err error, asJSON bool) int {
+	if out.Kind == "" {
+		return fail(err)
+	}
+	if asJSON {
+		if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
+			return fail(err)
+		}
+	} else {
+		line := fmt.Sprintf("push %s (%s)", strings.TrimSpace(out.What+" "+out.Tip), out.Kind)
+		if out.OK {
+			fmt.Println(line)
+		} else {
+			fmt.Fprintf(os.Stderr, "%s: %s\n", line, out.Detail)
+			if out.Mover != "" && !strings.Contains(out.Detail, out.Mover) {
+				fmt.Fprintf(os.Stderr, "mover: %s\n", out.Mover)
+			}
+		}
+	}
+	if out.OK {
+		return record.ExitOK
+	}
+	return drain.ExitCode(err)
 }
 
 func sweepRefsFace(args []string) int {
@@ -748,7 +797,7 @@ func failLoopStartup(root string, at time.Time, err error) int {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "probe-backend, workflow, why, policy, plan, once, retry, clear-fault, accept-rewrite, accept-identity, acknowledge-patch-move, sweep-refs, acquit, examine, set-aside, boundary, resume, stop, restart or loop"
+const faceList = "probe-backend, workflow, why, policy, plan, once, retry, clear-fault, accept-rewrite, accept-identity, acknowledge-patch-move, push, sweep-refs, acquit, examine, set-aside, boundary, resume, stop, restart or loop"
 
 func stopFace(args []string) int {
 	fs := newFlagSet("stop")
