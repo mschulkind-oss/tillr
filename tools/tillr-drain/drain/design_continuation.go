@@ -27,24 +27,27 @@ func (l *Loop) prepareDesignContinuation(ctx context.Context, r *store.Reader, d
 	if c == nil || designContinuationWork(*c, work) == nil {
 		return nil
 	}
-	if d.LaneID != work.Decision.LaneID && !isExpressLane(work.Decision.LaneID) {
-		return Internalf("design continuation of %s was offered a different lane", c.DesignRunID)
-	}
 	origin := c.DesignRunID
-	d.DesignContinuationFrom = origin
-	dir := RunDir(l.cfg.Root, origin)
-	session, err := ReadSessionID(dir)
-	if err != nil {
-		return err
-	}
+	sameLane := d.LaneID == work.Decision.LaneID
 	rec, err := terminalRecord(r, origin)
 	if err != nil {
 		return err
 	}
+	if !sameLane && !isExpressLane(work.Decision.LaneID) && (rec == nil || !designInterrupted(work, ClassifyAttempt(*rec, logTail(rec.ArtifactRefs)), rec.EndCause)) {
+		return Internalf("design continuation of %s was offered a different lane", origin)
+	}
+	d.DesignContinuationFrom = origin
+	var session string
+	if sameLane {
+		session, err = ReadSessionID(RunDir(l.cfg.Root, origin))
+		if err != nil {
+			return err
+		}
+	}
 	old := work.Decision.RunRequest
-	available := d.LaneID == work.Decision.LaneID && session != "" && designTranscriptAvailable(rec)
+	available := session != "" && designTranscriptAvailable(rec)
 	why := "is unavailable"
-	if d.LaneID != work.Decision.LaneID {
+	if !sameLane {
 		why = "is on another lane"
 	}
 	if available && len(old.Command) > 0 {
