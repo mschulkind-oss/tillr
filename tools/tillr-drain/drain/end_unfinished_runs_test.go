@@ -232,12 +232,12 @@ func TestApplyPlanSupersessionEndsOlderUnfinishedRunsWithoutReorderingPriors(t *
 		if _, err := tx.Exec(`INSERT INTO quota_pauses(run_id, item_id, lane_id, backend, state, paused_at) VALUES(?, 'item-a', 'lane-2', 'claude', 'waiting', ?)`, oldPaused, at.UnixMilli()); err != nil {
 			return err
 		}
-		// Newer attempt a2 finished with infrastructure failure so item-a can be dispatched as a3.
+		// Newer attempt a2 finished with infrastructure failure; a3 must wait for recovery.
 		if err := applyTerminal(tx, run.Record{
 			RunID:        newerFinished,
 			ItemID:       "item-a",
 			LaneID:       "lane-3",
-			Backend:      "claude",
+			Backend:      "fixture",
 			State:        run.StateFailedToStart,
 			EndCause:     run.EndFailedToStart,
 			StartedAt:    at.Add(time.Minute).Format(time.RFC3339),
@@ -249,10 +249,14 @@ func TestApplyPlanSupersessionEndsOlderUnfinishedRunsWithoutReorderingPriors(t *
 		return nil
 	})
 
-	// Plan and apply the next dispatch (attempt 3).
+	// Record recovery of a2's backend before planning its next dispatch.
+	if err := ProbeBackend(ctx, f.storePath, f.root, "fixture", []string{"/bin/true"}); err != nil {
+		t.Fatal(err)
+	}
 	plans := mustPlan(t, l)
-	if len(plans) == 0 || plans[0].decision.Action != ActionDispatch {
-		t.Fatalf("expected dispatch plan, got %+v", plans)
+	if len(plans) == 0 || plans[0].decision.Action != ActionDispatch || plans[0].decision.Attempt != 3 ||
+		plans[0].decision.RunRequest == nil || plans[0].decision.RunRequest.Backend != "fixture" {
+		t.Fatalf("expected attempt 3 on the recovered backend, got %+v", plans)
 	}
 	base := runGit(t, f.root, "rev-parse", TrunkRef)
 	ok, _, err := l.applyPlan(ctx, plans[0], base, at.Add(3*time.Minute))

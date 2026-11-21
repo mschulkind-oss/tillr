@@ -329,14 +329,19 @@ func TestAGateFailureGreenOnTheBaseIsTheCandidatesRefusal(t *testing.T) {
 	}
 }
 
-// The fixer is exempt from the acquittal: a fixer whose own failing check is red on its
-// base is doing its job, and letting it acquit itself would be a loop that never repairs
-// anything.
+// A fixer must repair the check it names, even when that check is red on its base.
+// Only unrelated gate failures are eligible for base replay.
 func TestAFixerIsNeverAcquittedByItsOwnBase(t *testing.T) {
 	f := newLoopFixture(t, stub(t, "adapter", committingAdapter)).withSeats()
 	base := git(t, f.root, "rev-parse", "main")
 	fixer := drain.TrunkFixerID(base)
-	fixtureAt(t, f.store, itemRecordSeated(fixer, "in-queue", "build"))
+	fixtureAt(t, f.store, envelope("item.record", "item-"+fixer, map[string]any{
+		"item_id": fixer, "title": "fix unit", "state": "in-queue", "seat": "build",
+		"blocked_by": []string{}, "allowed_paths": []string{"candidate.txt"},
+		"criteria": []map[string]string{{
+			"criterion_id": "trunk-green", "text": "the full gate is green (red: unit)", "state": "not-done",
+		}},
+	}))
 	steps := &trunkSteps{
 		ProcessSteps: f.steps(t, stub(t, "gate", failingGateBody), always(t, "land", 0), always(t, "verdict", 0)),
 		replays:      map[string]drain.ReplayOutcome{base: {Red: []string{"unit"}, Known: true}},
@@ -345,8 +350,8 @@ func TestAFixerIsNeverAcquittedByItsOwnBase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	if result.TrunkAcquitted != 0 {
-		t.Fatalf("a fixer acquitted itself: %d", result.TrunkAcquitted)
+	if result.Rejected == 0 || result.Landed != 0 || result.TrunkAcquitted != 0 {
+		t.Fatalf("the fixer's own red check did not refuse it: %+v", result)
 	}
 	if replayCalls, _ := steps.calls(); len(replayCalls) != 0 {
 		t.Fatalf("a fixer's gate failure was replayed on its base: %v", replayCalls)

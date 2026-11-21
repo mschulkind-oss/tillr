@@ -149,7 +149,7 @@ func workflowLoopFixture(t *testing.T, mode string) (refusalLoopFixture, *Loop, 
 }
 
 func TestWorkflowPlanningKeepsBackendPolicy(t *testing.T) {
-	for _, mode := range []string{"override", "window", "failover"} {
+	for _, mode := range []string{"override", "window", "backend-closed"} {
 		t.Run(mode, func(t *testing.T) {
 			f, l, _ := workflowLoopFixture(t, "")
 			l.cfg.Policy.Backends["alternate"] = Backend{Adapter: "alternate"}
@@ -163,15 +163,20 @@ func TestWorkflowPlanningKeepsBackendPolicy(t *testing.T) {
 					_, err := tx.Exec(`INSERT INTO backend_windows(backend,kind,fraction,status,reset_at,run_id) VALUES('fixture','weekly',1,'refused',?,'window')`, l.cfg.Now().Add(time.Hour).UnixMilli())
 					return err
 				})
-			case "failover":
+			case "backend-closed":
 				fixtureWrite(t, f, func(tx *store.Tx) error {
 					return applyTerminal(tx, run.Record{RunID: "run-item-a-a1-n1", ItemID: "item-a", LaneID: "lane-1", Backend: "fixture", State: run.StateExited, ExitCode: countPtr(1), StartedAt: "2026-11-15T00:00:00Z", FinishedAt: "2026-11-15T00:00:00Z", ArtifactRefs: []run.ArtifactRef{}})
 				})
 			}
 			for _, p := range mustPlan(t, l) {
 				if p.decision.ItemID == "item-a" {
-					if p.decision.RunRequest == nil || p.decision.RunRequest.Backend != "alternate" {
-						t.Fatalf("policy bypassed: %+v", p.decision)
+					d := p.decision
+					if mode == "backend-closed" {
+						if d.Action != ActionHold || d.Reason != ReasonBackendClosed || d.DeferredBy != "fixture" || d.RunRequest != nil || d.Seat != "scout" {
+							t.Fatalf("workflow escaped its failed backend: %+v", d)
+						}
+					} else if d.Action != ActionDispatch || d.RunRequest == nil || d.RunRequest.Backend != "alternate" {
+						t.Fatalf("policy bypassed: %+v", d)
 					}
 					return
 				}

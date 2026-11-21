@@ -61,10 +61,12 @@ func TestConflictDesignSkipsShutWindows(t *testing.T) {
 					return err
 				}
 				row := answer.Rows[0]
-				for _, want := range []string{"design", "fixture", "designer-b", reset.Format(time.RFC3339)} {
-					if !strings.Contains(row.Why, want) {
-						t.Errorf("hold does not name %q: %+v", want, row)
-					}
+				if row.Decision.Seat != "design" || row.Decision.DeferredBy != "fixture" {
+					t.Errorf("hold lost the design seat or selected backend: %+v", row.Decision)
+				}
+				if !strings.Contains(row.Why, "fixture: weekly quota refusal recorded by run refused") ||
+					!strings.Contains(row.Mover, reset.Format(time.RFC3339)) {
+					t.Errorf("hold has the wrong quota evidence or mover: %+v", row)
 				}
 				var n int
 				if err := r.QueryRow(`SELECT COUNT(*) FROM dispatches`).Scan(&n); err != nil {

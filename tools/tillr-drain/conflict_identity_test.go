@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
@@ -17,7 +18,6 @@ if [ -f "$CONFLICT_ATTEMPT_COUNT" ]; then read -r n < "$CONFLICT_ATTEMPT_COUNT";
 n=$((n+1))
 echo "$n" > "$CONFLICT_ATTEMPT_COUNT"
 if [ "$n" -eq 2 ]; then exit 2; fi
-if [ "$n" -gt 2 ]; then printf 'RESULT: done\n'; exit 0; fi
 `+conflictAdapter)
 	f := newLoopFixture(t, adapter)
 	f.policy = &drain.Policy{DefaultBackend: "first", Preference: []string{"first", "second"}, Backends: map[string]drain.Backend{
@@ -31,24 +31,29 @@ if [ "$n" -gt 2 ]; then printf 'RESULT: done\n'; exit 0; fi
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The original, its conflict fix, the fix's failover (which commits nothing), and that
-	// no-op's return to its worker with the evidence, which starts on the first backend
-	// again: the owner's ruling of 2026-11-17 returns a refusal instead of holding it.
-	if result.Dispatched != 4 {
-		t.Fatalf("dispatches=%d, want original, fix, one failover and its return", result.Dispatched)
+	if result.Dispatched != 2 || !strings.Contains(result.Detail, "item_041 ("+drain.ReasonBackendClosed+": first:") {
+		t.Fatalf("expected original and failed fix, then a hold on first: %+v", result)
+	}
+	original := itemRun{RunID: "run-item_041-a1", Backend: "first"}
+	fix := itemRun{RunID: original.RunID + drain.ConflictFixSuffix, Backend: "first"}
+	before := runsForItem(t, f.store, "item_041")
+	if len(before) != 2 || before[0] != original || before[1] != fix {
+		t.Fatalf("expected distinct original and fix runs: %+v", before)
+	}
+
+	if err := drain.ProbeBackend(context.Background(), f.store, f.root, "first", []string{"/bin/true"}); err != nil {
+		t.Fatal(err)
+	}
+	result, err = f.newLoopWith(t, 1, steps, stage, os.Stderr).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Dispatched != 1 || result.Landed != 1 {
+		t.Fatalf("expected one recovered dispatch and landing: %+v", result)
 	}
 	runs := runsForItem(t, f.store, "item_041")
-	if runs[0].Backend != "first" {
-		t.Fatalf("original run overwritten: %+v", runs[0])
-	}
-	runs = runsForItem(t, f.store, "item_041")
-	want := []string{"run-item_041-a1", "run-item_041-a1" + drain.ConflictFixSuffix, "run-item_041-a3", "run-item_041-a4"}
-	if len(runs) != len(want) {
-		t.Fatalf("runs: %+v", runs)
-	}
-	for i, rec := range runs {
-		if rec.RunID != want[i] {
-			t.Errorf("run %d = %s, want %s", i, rec.RunID, want[i])
-		}
+	retry := itemRun{RunID: "run-item_041-a3", Backend: "first"}
+	if len(runs) != 3 || runs[0] != original || runs[1] != fix || runs[2] != retry {
+		t.Fatalf("retry did not get its own run on the recovered backend: %+v", runs)
 	}
 }
