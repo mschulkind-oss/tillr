@@ -110,6 +110,8 @@ func TestFixerGateJudgesOwnDiffThenNamedChecksAndLands(t *testing.T) {
 	const testPath = "tools/tillr-drain/repair_test.go"
 	const namedID = "go-tool/tools-tillr-drain-s-whole-suite-passes"
 	const upstreamID = "patch-branch-inv2"
+	const retiredID = "go-test:tools/tillr-drain:example.invalid/repair:TestVariants/failover=true"
+	const skippedID = "go-test:tools/tillr-drain:example.invalid/repair:TestVariants/skipped"
 	for _, tc := range []struct {
 		name, repair, want string
 		names              []string
@@ -120,6 +122,9 @@ func TestFixerGateJudgesOwnDiffThenNamedChecksAndLands(t *testing.T) {
 		{"named failure", "still red", "fail", []string{namedID}, false},
 		{"named unavailable", "unavailable", "error", []string{namedID}, false},
 		{"old upstream name", "repaired", "pass", []string{upstreamID, namedID}, true},
+		{"removed subtest", "repaired", "pass", []string{retiredID, namedID}, true},
+		{"removed subtest with failure", "still red", "fail", []string{retiredID, namedID}, false},
+		{"skipped subtest", "repaired", "error", []string{skippedID}, false},
 		{"ordinary refuses first", "ordinary red", "fail", []string{namedID}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -144,6 +149,9 @@ func TestFixerGateJudgesOwnDiffThenNamedChecksAndLands(t *testing.T) {
 				return `package repair
 import "testing"
 func TestBroken(t *testing.T) { if "` + value + `" != "repaired" { t.Fatal("repair test still red") } }
+func TestVariants(t *testing.T) {
+    t.Run("skipped", func(t *testing.T) { t.Skip("fixture skipped") })
+}
 `
 			}
 			write(testPath, test("repaired"))
@@ -169,7 +177,13 @@ os.execvp("go", ["go", "test", "-run", "^TestBroken$"])
 			if tc.name == "conflicting release" || tc.name == "old upstream name" {
 				write("yolo-packs/fixture/pack.json", `{"contributes":[{"source":"file:///fixture.git","patch_branch":"file:///downstream.git?ref=patch/fixture"}]}`)
 			}
-			write(testPath, test("broken on trunk"))
+			removed := allIn([]string{retiredID}, tc.names)
+			redTest := test("broken on trunk")
+			if removed {
+				redTest = strings.Replace(redTest, "func TestVariants(t *testing.T) {", `func TestVariants(t *testing.T) {
+    t.Run("failover=true", func(t *testing.T) { t.Fatal("old dispatch test") })`, 1)
+			}
+			write(testPath, redTest)
 			runGit(t, f.root, "add", ".")
 			runGit(t, f.root, "commit", "-qm", "break the rolling test after green")
 			base := runGit(t, f.root, "rev-parse", "HEAD")
@@ -188,6 +202,11 @@ os.execvp("go", ["go", "test", "-run", "^TestBroken$"])
 			id, err := l.fileTrunkFixer(ctx, base, tc.names, GateOutcome{SuspectPaths: []string{testPath}})
 			if err != nil {
 				t.Fatal(err)
+			}
+			if removed {
+				write(testPath, test("broken on trunk"))
+				runGit(t, f.root, "commit", "-qam", "replace the old dispatch subtest")
+				base = runGit(t, f.root, "rev-parse", "HEAD")
 			}
 			lane := l.lanePath("lane-1")
 			if err := os.MkdirAll(filepath.Dir(lane), 0755); err != nil {
@@ -230,6 +249,7 @@ os.execvp("go", ["go", "test", "-run", "^TestBroken$"])
 			var verdict struct {
 				Result string `json:"result"`
 				Checks []struct {
+					ID     string `json:"check_id"`
 					LogRef string `json:"log_ref"`
 				} `json:"checks"`
 			}
@@ -246,6 +266,14 @@ os.execvp("go", ["go", "test", "-run", "^TestBroken$"])
 				if count != 1 || saved != tc.want {
 					t.Fatalf("stored gate judgment: %d records at %q, want one at %q", count, saved, tc.want)
 				}
+				if removed {
+					if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND object_id=?`, itemFaultKind, id).Scan(&count); err != nil {
+						return err
+					}
+					if count != 0 {
+						t.Fatalf("a removed subtest recorded %d fault holds", count)
+					}
+				}
 				return nil
 			}); err != nil {
 				t.Fatal(err)
@@ -260,7 +288,7 @@ os.execvp("go", ["go", "test", "-run", "^TestBroken$"])
 			text := string(log)
 			ordinary := strings.Index(text, "fixture-change")
 			named := strings.Index(text, "fixer named check "+namedID+":")
-			if ordinary < 0 || !strings.Contains(text, "fixture-fast") || (named >= 0) != (len(tc.names) > 0 && tc.name != "ordinary refuses first") || (named >= 0 && named < ordinary) {
+			if ordinary < 0 || !strings.Contains(text, "fixture-fast") || (named >= 0) != (allIn([]string{namedID}, tc.names) && tc.name != "ordinary refuses first") || (named >= 0 && named < ordinary) {
 				t.Fatalf("ordinary checks must run before named checks:\n%s", text)
 			}
 			if tc.name == "conflicting release" && (strings.Contains(text, upstreamID) || !strings.Contains(text, "PASS go-tool")) {
@@ -269,8 +297,21 @@ os.execvp("go", ["go", "test", "-run", "^TestBroken$"])
 			if tc.name == "named unavailable" && (!strings.Contains(text, "could not judge") || !strings.Contains(text, "tool unavailable")) {
 				t.Fatalf("missing unknown evidence:\n%s", text)
 			}
+			if tc.name == "skipped subtest" && !strings.Contains(text, skippedID+": could not judge\ntest or enclosing test skipped at this commit") {
+				t.Fatalf("skipped subtest must remain unjudged:\n%s", text)
+			}
 			if tc.name == "old upstream name" && !strings.Contains(text, upstreamID+": dropped (reads upstream)") {
 				t.Fatalf("missing dropped-name line:\n%s", text)
+			}
+			if removed {
+				for _, check := range verdict.Checks {
+					if check.ID == retiredID {
+						t.Fatalf("removed subtest was not omitted: %s", payload)
+					}
+				}
+				if !strings.Contains(text, retiredID+": dropped (test not present at this commit)") {
+					t.Fatalf("missing dropped-subtest evidence:\n%s", text)
+				}
 			}
 			if tc.name == "named failure" && !strings.Contains(text, "TestBroken") {
 				t.Fatalf("missing named failure evidence:\n%s", text)
