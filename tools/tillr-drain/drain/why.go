@@ -587,9 +587,9 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				}
 			} else if d.Reason == ReasonOwnerOnlyOwed || (row.ClassSource == "store" && row.Mover == "owner") {
 				answer.Summary.OwnerWaiting++
-			} else if row.ClassSource == "store" && row.Class == "waits on work" && row.Mover != "plan" && row.Mover != "design" {
-				// A named waiter is the mover, not the drain. Planning waits still
-				// use their existing design-seat action below.
+			} else if (d.Reason == ReasonForkHeld && d.DeferredBy != "") || (row.ClassSource == "store" && row.Class == "waits on work" && row.Mover != "plan" && row.Mover != "design") {
+				// A fork holder or named waiter is the mover, not the drain.
+				// Planning waits still use their existing design-seat action below.
 			} else {
 				actor := "drain"
 				if d.Reason == ReasonConflictDesign || d.Reason == ReasonDeskCapacity || d.Reason == ReasonDocumentDeskBusy {
@@ -832,7 +832,9 @@ func whyPresentation(d Decision) (class, where, mover string) {
 		return "waits on work", where, "the owner; clear the item's blocked state"
 	case ReasonDeskCapacity, ReasonDocumentDeskBusy:
 		return "waits on work", "desk", d.DeferredBy
-	case ReasonNoLane, ReasonForkHeld:
+	case ReasonForkHeld:
+		return "waits on work", where, d.DeferredBy
+	case ReasonNoLane:
 		return "waits on work", where, "the next pass"
 	case ReasonTrunkBroken:
 		return "waits on work", "trunk", "the trunk fixer"

@@ -3192,8 +3192,10 @@ func awaitingForkClaim(work *pendingWork) bool {
 	if d.NodeIndex < 0 || d.NodeIndex >= len(d.Workflow.Stages) {
 		return false
 	}
+	// advanceNode can record the classifier's repository HEAD before the
+	// successor claims a fork. A recorded node base is not a fork claim.
 	return classificationNode(d.Workflow.Stages[d.NodeIndex]) ||
-		(work.Ready && d.NodeIndex == 1 && d.NodeBaseSHA == "" && classificationNode(d.Workflow.Stages[0]))
+		(work.Ready && d.NodeIndex == 1 && d.Reason == "workflow-next-node" && d.NodeStartRunID == "" && classificationNode(d.Workflow.Stages[0]))
 }
 
 // If staging invalidated a sibling while Git was reading it, retry without that
