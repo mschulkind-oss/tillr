@@ -14,7 +14,13 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-const startViewRefreshInterval = 15 * time.Second
+const (
+	startViewRefreshInterval = 15 * time.Second
+	// One filesystem operation can emit several inotify records, and SQLite
+	// emits writes before the transaction is visible. Batch without extending
+	// the window on every write, so a busy store cannot starve refresh.
+	startViewWatchBatch = 100 * time.Millisecond
+)
 
 type startQueueRow struct{ id, rank string }
 
@@ -76,39 +82,97 @@ func (v *startView) snapshot() startSnapshot {
 	return startSnapshot{}
 }
 
-// watch seeds once and then refreshes on the timer, all off the dispatch path.
-// It owns publication; a failed read leaves the last good snapshot in place.
-// The returned function cancels and joins the watcher.
-func (v *startView) watch(parent context.Context, interval time.Duration, read func(context.Context) (startSnapshot, error)) func() {
+type startWatchChange uint8
+
+const (
+	startWatchStore startWatchChange = 1 << iota
+	startWatchExternal
+)
+
+type startWatchPaths struct {
+	root, store, index, gitDir, commonDir string
+}
+
+type startWatcher interface {
+	events() <-chan startWatchChange
+	updateDocs(map[string]itemRow)
+	close()
+}
+
+// watch seeds once, then refreshes on filesystem wakes or the safety timer,
+// all off the dispatch path. The returned function cancels and joins both readers.
+func (v *startView) watch(parent context.Context, interval time.Duration, open func(context.Context) startWatcher, read func(context.Context, startWatchChange) (startSnapshot, error)) func() {
 	ctx, cancel := context.WithCancel(parent)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		timer := time.NewTimer(interval)
-		defer timer.Stop()
-		for ctx.Err() == nil {
-			next, err := read(ctx)
-			if err == nil && ctx.Err() == nil {
-				prev := v.current.Load()
-				if !reflect.DeepEqual(prev, &next) {
-					v.current.Store(&next)
-					select {
-					case v.updated <- struct{}{}:
-					default:
-					}
-				}
-			}
-			timer.Reset(interval)
-			select {
-			case <-ctx.Done():
-				return
-			case <-timer.C:
-			}
+		var w startWatcher
+		if open != nil && ctx.Err() == nil {
+			w = open(ctx)
 		}
+		if w != nil {
+			defer w.close()
+		}
+		v.runWatcherLoop(ctx, interval, w, read)
 	}()
 	return func() {
 		cancel()
 		<-done
+	}
+}
+
+func (v *startView) runWatcherLoop(ctx context.Context, interval time.Duration, w startWatcher, read func(context.Context, startWatchChange) (startSnapshot, error)) {
+	var events <-chan startWatchChange
+	if w != nil {
+		events = w.events()
+	}
+	safety := time.NewTicker(interval)
+	defer safety.Stop()
+	batch := time.NewTimer(startViewWatchBatch)
+	batch.Stop()
+	defer batch.Stop()
+	var batchDue <-chan time.Time
+	var pending startWatchChange
+	refresh := func() {
+		change := pending
+		pending, batchDue = 0, nil
+		batch.Stop()
+		if ctx.Err() != nil {
+			return
+		}
+		next, err := read(ctx, change)
+		previous := v.current.Load()
+		if err == nil && ctx.Err() == nil && !reflect.DeepEqual(previous, &next) {
+			if w != nil && (previous == nil || !reflect.DeepEqual(previous.itemsByID, next.itemsByID)) {
+				w.updateDocs(next.itemsByID)
+			}
+			v.current.Store(&next)
+			select {
+			case v.updated <- struct{}{}:
+			default:
+			}
+		}
+	}
+	refresh() // seed
+	for ctx.Err() == nil {
+		select {
+		case <-ctx.Done():
+			return
+		case <-safety.C:
+			refresh()
+		case <-batchDue:
+			refresh()
+		case event, ok := <-events:
+			if !ok {
+				events = nil // Keep polling after a watcher failure.
+				continue
+			}
+			pending |= event
+			if batchDue == nil {
+				batch.Reset(startViewWatchBatch)
+				batchDue = batch.C
+			}
+		}
 	}
 }
 
