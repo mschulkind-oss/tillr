@@ -11,7 +11,11 @@ import (
 	"strings"
 )
 
-const goTestPrefix = "go-test:"
+const (
+	goTestPrefix  = "go-test:"
+	goTestAbsent  = "test not present at this commit"
+	goTestSkipped = "test or enclosing test skipped at this commit"
+)
 
 // The shard runner reports package-qualified leaf failures. Use its shard headers,
 // not --- FAIL lines (which repeat a failing subtest's parents and omit the package).
@@ -142,20 +146,28 @@ func (s *ProcessSteps) judgeHeavyGo(ctx context.Context, dir, id string) ([]Heav
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	failed, passed := false, false
+	failed, passed, skipped := false, false, false
 	for _, line := range strings.Split(stdout.String(), "\n") {
 		var event struct{ Package, Test, Action string }
-		if json.Unmarshal([]byte(line), &event) != nil || event.Package != pkg || event.Test != name {
+		if json.Unmarshal([]byte(line), &event) != nil || event.Package != pkg {
 			continue
 		}
-		failed = failed || event.Action == "fail"
-		passed = passed || event.Action == "pass"
+		if event.Action == "skip" && event.Test != "" && (event.Test == name || strings.HasPrefix(name, event.Test+"/")) {
+			skipped = true
+		}
+		if event.Test == name {
+			failed = failed || event.Action == "fail"
+			passed = passed || event.Action == "pass"
+		}
 	}
 	check := HeavyCheck{CheckID: id, Result: "pass"}
 	switch {
 	case runErr == nil && !failed:
 		if !passed {
-			check.Detail = "test not run at this commit"
+			check.Detail = goTestAbsent
+			if skipped {
+				check.Detail = goTestSkipped
+			}
 		}
 	case failed && cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 1:
 		check.Result = "fail"

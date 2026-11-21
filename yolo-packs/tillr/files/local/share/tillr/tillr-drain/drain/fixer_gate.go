@@ -72,7 +72,10 @@ func (s *ProcessSteps) fixerCheck(ctx context.Context, c Candidate, id string) (
 		if err != nil {
 			return "error", err.Error()
 		}
-		if check.Detail == "test not run at this commit" {
+		switch check.Detail {
+		case goTestAbsent:
+			return "absent", check.Detail
+		case goTestSkipped:
 			return "error", check.Detail
 		}
 		for _, path := range []string{check.LogRef, check.LogPath} {
@@ -159,8 +162,12 @@ func (l *Loop) settleFixerGate(ctx context.Context, c *Candidate, gate *GateOutc
 		if ctx.Err() != nil {
 			return false, ctx.Err()
 		}
-		if answer == "dropped" {
-			if _, err := fmt.Fprintf(log, "fixer named check %s: dropped (reads upstream)\n%s\n", id, output); err != nil {
+		if answer == "dropped" || answer == "absent" {
+			reason := "reads upstream"
+			if answer == "absent" {
+				reason, output = output, ""
+			}
+			if _, err := fmt.Fprintf(log, "fixer named check %s: dropped (%s)\n%s\n", id, reason, output); err != nil {
 				return false, err
 			}
 			continue
