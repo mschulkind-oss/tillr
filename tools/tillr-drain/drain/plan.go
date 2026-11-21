@@ -1317,10 +1317,10 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 				p.deskOwners[lane] = item.ItemID
 			}
 			ok = true
-		} else if !ok && IsTrunkFixer(item.ItemID) {
-			// Retained candidates can occupy every offered lane while waiting
-			// on this fixer. One serial repair desk breaks that dependency cycle
-			// without discarding their worktrees or admitting ordinary work.
+		} else if !ok && (IsTrunkFixer(item.ItemID) || IsRemoteSyncItem(item.ItemID)) {
+			// Retained candidates can occupy every offered lane. One serial
+			// repair desk lets repairs proceed without discarding those
+			// worktrees or admitting ordinary work.
 			lane = "desk-trunk-fixer"
 			ok = !p.held[lane] && !p.assigned[lane]
 		}
