@@ -174,7 +174,8 @@ func TestGitPreparationAllowsHeartbeatAndClose(t *testing.T) {
 // landing with no write open", docs/design/tillr-storage.md): while the move's git command
 // is blocked, this process holds no write transaction, another connection's heartbeat write
 // commits, and a close of the item is refused by the landing's claim rather than waiting on
-// a lock. Releasing git lets the landing record its receipt, and the close then sees it.
+// a lock. Releasing git lets the landing record its receipt and release its claim. The
+// still-open item can then be closed without changing the landing.
 func TestFinalMoveHoldsNoStoreWriteAndTheClaimRefusesClose(t *testing.T) {
 	f := newContentionFixture(t)
 	entered, release := stallGit(t, "tillr.move=final")
@@ -205,8 +206,12 @@ func TestFinalMoveHoldsNoStoreWriteAndTheClaimRefusesClose(t *testing.T) {
 	}
 	assertLandingCount(t, f, 1)
 	assertNoClaims(t, f)
-	if out, err := f.close(); err == nil || !strings.Contains(string(out), "already-landed") {
-		t.Fatalf("Close did not see the committed receipt: %v %s", err, out)
+	if out, err := f.close(); err != nil || !strings.Contains(string(out), `"state":"closed"`) {
+		t.Fatalf("close of the open item after the receipt: %v %s", err, out)
+	}
+	assertLandingCount(t, f, 1)
+	if tip := f.f.trunk(t); tip != a.landing.TrunkAfter {
+		t.Fatalf("close changed the trunk tip to %s", tip)
 	}
 }
 

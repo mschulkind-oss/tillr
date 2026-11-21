@@ -104,7 +104,8 @@ tillr item add-path --store .tillr/state.db --item item-example --path docs/note
 The command adds one repository-relative path prefix and records who authorized it
 and why in an `item.update` event. It preserves the item's place and run history.
 Adding the same path again is a no-op. Finished items and calls from worker runs
-are refused. The command changes the store, not any authored item block.
+are refused. An earlier step's landing does not prevent widening an open item's
+fence. The command changes the store, not any authored item block.
 
 For a request held on its fence, drain can dispatch a new run after the fence
 changes. No close, refile, or separate retry is needed. Run
@@ -296,8 +297,7 @@ remaining work. See `tillr item state --help` for the required arguments. This w
 with `lifecycle_action: finish-existing-landing`, leaves the criteria and landing
 history unchanged, and refuses a missing or reverted landing. A graph completion
 alone is not a landing. The flag cannot be combined with `--require-verdicts`.
-An ordinary move to `landed` still requires completed criteria, and `close`
-still refuses an unreverted landing.
+An ordinary move to `landed` still requires completed criteria.
 
 ### Other state-writing checks
 
@@ -367,8 +367,10 @@ The following rules describe Git-landing, including its established refusal name
   `tillr item state --item <id> --state in-queue` after the blocker lands.
 - **Closing and reopening are explicit commands.** `close` accepts only
   `not-started`, `in-queue`, or `blocked`, records
-  `close_reason`, `closed_at`, `closed_by`, and `closed_from`, and refuses a successful
-  landing receipt as `already-landed`. Blank reasons are `close-reason-missing`.
+  `close_reason`, `closed_at`, `closed_by`, and `closed_from`. An earlier step's
+  landing does not prevent closing an open item or get reverted by the close.
+  A landing that is still publishing refuses the close as `landing-in-progress`.
+  Blank reasons are `close-reason-missing`.
   `reopen` also requires a reason and actor and restores `closed_from`, preserving a blocked
   item's waiter, reason, and underlying state. Its reason and actor are recorded in
   the update event. Raw `state` and `apply` writes cannot close or reopen an item;

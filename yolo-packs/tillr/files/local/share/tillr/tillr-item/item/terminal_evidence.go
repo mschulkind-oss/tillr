@@ -87,8 +87,8 @@ func checkTerminalEvidence(r *store.Reader, d definition.Definition, id, from, t
 	return nil
 }
 
-// Graph completion is not enough for an operator finish. Use the same unreverted
-// landing check that refuses Close, without changing the landing or its receipt.
+// Graph completion is not enough for an operator finish. Require an unreverted
+// landing without changing the landing or its receipt.
 func checkExistingLandingFinish(r *store.Reader, id string, receipt MoveReceipt) error {
 	if strings.TrimSpace(receipt.Reason) == "" || strings.TrimSpace(receipt.By) == "" {
 		return Usagef("--finish-existing-landing needs non-empty --reason and --by")

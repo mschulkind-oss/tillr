@@ -46,10 +46,6 @@ func TestFinishExistingLanding(t *testing.T) {
 			updates := eventsOfKind(t, db, "item.update")
 			code, out := findingState(t, db, id, "landed", "--resolves-via", "commit:abcd1234")
 			assertRefused(t, code, out, "landed-criteria-unmet")
-			if tc.landing && !tc.reverted {
-				code, out = lifecycle(t, db, "close", "superseded")
-				assertRefused(t, code, out, "already-landed")
-			}
 			flags := []string{"--finish-existing-landing", "--reason", "remaining work covered", "--by", "operator"}
 			if tc.via != "" {
 				flags = append(flags, "--resolves-via", tc.via)
@@ -64,6 +60,8 @@ func TestFinishExistingLanding(t *testing.T) {
 				if code != 0 {
 					t.Fatalf("finish: %d %s", code, out)
 				}
+				code, out = lifecycle(t, db, "close", "superseded")
+				assertRefused(t, code, out, "close-state-invalid")
 				stored := showItem(t, db, id)
 				if stored.Payload.State != "landed" || criterionOf(t, stored, "c1").State != "open" || eventsOfKind(t, db, "item.update") != updates+1 {
 					t.Fatalf("expected one state move, without judging the criterion: %+v", stored.Payload)

@@ -131,6 +131,15 @@ func TestCloseRefusals(t *testing.T) {
 	if code, out := lifecycle(t, db, "reopen", "wanted"); code != 1 || decode(t, out).Payload.Rule != "item-not-closed" {
 		t.Fatalf("not closed: %d %s", code, out)
 	}
+}
+
+func TestCloseAfterDesignLanding(t *testing.T) {
+	db := filepath.Join(scratch(t, "close-after-design"), "state.db")
+	seeded := base("item_042", "an item")
+	seeded.State = "in-queue"
+	if code, out := apply(t, db, envelope(t, "item.record", "rec-1", seeded)); code != 0 {
+		t.Fatalf("apply: %d %s", code, out)
+	}
 	ctx := context.Background()
 	s, err := store.Open(ctx, db, false)
 	if err != nil {
@@ -140,17 +149,17 @@ func TestCloseRefusals(t *testing.T) {
 		if _, err := tx.Exec(`CREATE TABLE landings (item_id TEXT, result TEXT, run_id TEXT, trunk_after TEXT)`); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`INSERT INTO landings VALUES ('item_042', 'landed', 'run-1', 'commit')`)
+		_, err := tx.Exec(`INSERT INTO landings VALUES ('item_042', 'landed', 'run-design', 'design-commit')`)
 		return err
 	})
 	s.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if code, out := lifecycle(t, db, "close", "not wanted"); code != 1 || decode(t, out).Payload.Rule != "already-landed" {
-		t.Fatalf("landed close: %d %s", code, out)
+	if code, out := lifecycle(t, db, "close", "not wanted"); code != 0 || lifecyclePayload(t, out)["closed_from"] != "in-queue" {
+		t.Fatalf("close after design landing: %d %s", code, out)
 	}
-	if got := stateRow(t, db, "item_042"); got != "not-started" {
-		t.Fatalf("refusal changed state: %s", got)
+	if got := stateRow(t, db, "item_042"); got != "closed" {
+		t.Fatalf("expected closed, got %s", got)
 	}
 }
