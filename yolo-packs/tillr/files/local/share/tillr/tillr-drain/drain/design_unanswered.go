@@ -95,9 +95,10 @@ type designUnanswered struct {
 }
 
 type designFinding struct {
-	conflict    item.Conflict
-	runID       string
-	interrupted bool
+	conflict       item.Conflict
+	runID          string
+	interrupted    bool
+	infrastructure bool
 	// uncounted is an owner hold the removed count wrote.
 	uncounted bool
 	outcome   string
@@ -176,6 +177,12 @@ func (l *Loop) settleUnansweredDesignRuns(ctx context.Context) error {
 					found = append(found, f)
 					continue
 				}
+				if isBackendFailure(*rec, logTail(rec.ArtifactRefs)) {
+					f.infrastructure = true
+					f.outcome = "infrastructure failure"
+					found = append(found, f)
+					continue
+				}
 				if c.TriageVersion != "" {
 					continue
 				}
@@ -244,7 +251,7 @@ func (l *Loop) settleUnansweredDesignRuns(ctx context.Context) error {
 			} else {
 				c.Text += "\n\n" + designReraiseText(f)
 				c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
-				if c.TriageVersion == "" && !f.uncounted && (f.interrupted || f.outcome == "refused at "+RefusalGate) {
+				if f.infrastructure || (c.TriageVersion == "" && !f.uncounted && (f.interrupted || f.outcome == "refused at "+RefusalGate)) {
 					// Keep the originating run until the next claim. Its immutable
 					// staging files identify the session even after lane reuse.
 					c.DesignRunID = f.runID

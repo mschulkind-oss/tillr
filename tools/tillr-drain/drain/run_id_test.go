@@ -9,9 +9,9 @@ import (
 	"github.com/mschulkind-oss/tillr-run/run"
 )
 
-// A node's run id carries one counter however many times it fails over or restarts, so
-// 100+ failovers and >999 mixed turns stay distinct, carry no repeated marker words, and
-// remain strictly under 120 characters even on long item stems.
+// A node's run id carries one counter across restarts and historical failover ids.
+// Repeated and mixed turns stay distinct, carry no repeated marker words, and remain
+// strictly under 120 characters even on long item stems.
 func TestARunIDDoesNotGrowPerFailoverOrRestart(t *testing.T) {
 	for _, kinds := range [][]string{{"failover"}, {"restart"}, {"failover", "restart"}, {"restart", "failover", "fresh", "interrupted"}} {
 		id := "run-item-a-a1-n2"
@@ -34,27 +34,27 @@ func TestARunIDDoesNotGrowPerFailoverOrRestart(t *testing.T) {
 	}
 }
 
-func TestARunFailedOverOneHundredTimesStaysUnder120Characters(t *testing.T) {
+func TestARunRestartedOneHundredTimesStaysUnder120Characters(t *testing.T) {
 	seen := map[string]int{}
 	id := attemptRunID("item-request-b983843cc9", 1) + "-n1"
 	for turn := 1; turn <= 100; turn++ {
-		id = markRunID(id, "failover")
+		id = markRunID(id, "restart")
 		if len(id) >= 120 {
 			t.Fatalf("turn %d id %q has length %d, want < 120", turn, id, len(id))
 		}
-		if strings.Count(id, "-failover") != 1 {
-			t.Fatalf("turn %d id %q repeats -failover", turn, id)
+		if strings.Count(id, "-restart") != 1 {
+			t.Fatalf("turn %d id %q repeats -restart", turn, id)
 		}
 		if prev, dup := seen[id]; dup {
 			t.Fatalf("turn %d collided with turn %d on %q", turn, prev, id)
 		}
 		seen[id] = turn
 	}
-	if id != "run-item-request-b983843cc9-a1-n1-100-failover" {
-		t.Fatalf("100th failover id = %q", id)
+	if id != "run-item-request-b983843cc9-a1-n1-100-restart" {
+		t.Fatalf("100th restart id = %q", id)
 	}
 
-	// Continue past 999 mixed turns without clamping or colliding, still < 120 chars.
+	// Historical mixed ids still read past 999 turns without clamping or colliding.
 	kinds := []string{"failover", "restart", "fresh", "interrupted"}
 	for turn := 101; turn <= 1050; turn++ {
 		id = markRunID(id, kinds[turn%len(kinds)])
@@ -86,10 +86,10 @@ func TestLongStemsJudgeAndConflictFixSuffixesStayBoundedUnder120Characters(t *te
 
 	id := base + "-n1"
 	for i := 0; i < 100; i++ {
-		id = markRunID(id, "failover")
+		id = markRunID(id, "restart")
 	}
 	if len(id) >= 120 {
-		t.Fatalf("100 failovers on long item = %q (%d chars), want < 120", id, len(id))
+		t.Fatalf("100 restarts on long item = %q (%d chars), want < 120", id, len(id))
 	}
 
 	jID := judgeRunID(id)
@@ -143,7 +143,7 @@ func TestStagedNodeRunFindsArchiveAcrossMixedContinuationsAndBoundedStems(t *tes
 	longItem := "item-request-" + strings.Repeat("segment-", 12)
 	wf := &Workflow{Stages: []WorkflowStage{{ID: "plan"}}}
 
-	// Stage archive on turn 1 as -failover, then query from turn 105 as -restart.
+	// Read a historical turn-1 -failover archive from turn 105 as -restart.
 	stem := attemptRunID(longItem, 1) + "-n1"
 	turn1 := markRunID(stem, "failover")
 	if err := os.MkdirAll(RunDir(root, turn1), 0o755); err != nil {

@@ -18,9 +18,9 @@ const (
 )
 
 var (
-	// A node's run id is its attempt's id plus one marker for what produced this run: a
-	// failover to another backend, a restart, a fresh session, or an interruption. The
-	// marker is one numeric counter: the first is `-<kind>`, and the second and later are
+	// A node's run id carries a restart, fresh-session or interruption marker.
+	// Failover markers are parsed for history only. The first marker is
+	// `-<kind>`, and the second and later are
 	// `-<count>-<kind>` with the count padded to at least three digits and advancing past
 	// 999 without clamping or repeating words.
 	runIDMarker = regexp.MustCompile(`(?:-([0-9]{3,12}))?-(failover|restart|fresh|interrupted)$`)
@@ -92,7 +92,7 @@ func splitRunID(id string) (base string, turns int, kind string) {
 
 // markRunID answers the run id for the next turn of the node that ran as id, produced by
 // kind. Its counter advances without clamping and its stem stays bounded, so every run id
-// stays strictly under 120 characters across any number of failovers or restarts.
+// stays strictly under 120 characters across any number of restarts.
 func markRunID(id, kind string) string {
 	base, turns, _ := splitRunID(id)
 	turns++

@@ -3,6 +3,7 @@ package drain
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mschulkind-oss/tillr-run/run"
@@ -34,8 +35,8 @@ func TestSavedInfrastructureClassKeepsItemWaitingAfterReportEdit(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeForkFile(t, report, "RESULT: failed\n")
-	if got := mustPlan(t, l)[0].decision; got.Reason != ReasonBackendClosed {
-		t.Fatalf("edited report displaced saved infrastructure class: %+v", got)
+	if got := mustPlan(t, l)[0].decision; got.Reason != ReasonBackendClosed || !strings.Contains(got.BackendHoldCause, "dropped stream without footer") {
+		t.Fatalf("edited report displaced saved infrastructure class or cause: %+v", got)
 	}
 	if err := ProbeBackend(context.Background(), f.storePath, f.root, "fixture", []string{"/bin/true"}); err != nil {
 		t.Fatal(err)
@@ -106,10 +107,12 @@ func TestParallelBackendHoldNamesWaitingNodeNotFirstSibling(t *testing.T) {
 	d := mustPlan(t, l)[0].decision
 	first := d
 	first.WorkflowRestart = true
-	first.RunRequest = rerouteNodeRequest(l.cfg.Policy, first, "fixture")
+	firstRequest := *d.RunRequest
+	first.RunRequest = &firstRequest
 	first.RunRequest.RunID = "first-ready"
 	second := first
-	second.RunRequest = rerouteNodeRequest(l.cfg.Policy, second, "fixture")
+	secondRequest := firstRequest
+	second.RunRequest = &secondRequest
 	second.RunRequest.Backend = "broken"
 	second.RunRequest.RunID = "second-ready"
 	second.NodeIndex = 1
@@ -133,7 +136,7 @@ func TestParallelBackendHoldNamesWaitingNodeNotFirstSibling(t *testing.T) {
 				return err
 			}
 			if hold.Action != ActionHold || hold.Reason != ReasonBackendClosed || hold.DeferredBy != "broken" ||
-				hold.BackendHoldCause != "infrastructure failure: run broken-ending (exited), exit 2" || hold.BackendHoldMover == "" {
+				hold.BackendHoldCause != "run broken-ending on broken (exited), exit 2" || hold.BackendHoldMover == "" {
 				t.Errorf("restart=%v hold names wrong backend: %+v", restart, hold)
 			}
 			return nil

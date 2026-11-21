@@ -1572,6 +1572,14 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 			continue
 		}
+		if len(decision.Parallel) == 0 {
+			if err := l.stageInfrastructureSession(ctx, &decision, &spec); err != nil {
+				if holdErr := failStage("stage recovered backend session", err); holdErr != nil {
+					return nil, holdErr
+				}
+				continue
+			}
+		}
 		if err := l.stageLandingAnswer(ctx, decision, &spec); err != nil {
 			if holdErr := failStage("stage landing answer", err); holdErr != nil {
 				return nil, holdErr
@@ -2288,91 +2296,15 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		stop, err := l.holdAdapterRefusal(ctx, lane, request, log)
 		return laneOutcome{stop: stop, err: err}
 	}
-	for class == AttemptInfrastructure {
+	if class == AttemptInfrastructure {
 		if err := l.recordBackendWindow(ctx, record); err != nil {
 			return laneOutcome{err: err}
 		}
-		l.mu.Lock()
-		result.InfraFailures++
-		l.infraStreak++
-		streak := l.infraStreak
-		l.mu.Unlock()
-		l.reportf("loop: %s failed in the infrastructure class (%d consecutive)\n", request.ItemID, streak)
-		// Machinery failed: close that backend and walk to the next open one after reset.
-		// A fully closed route ends this walk until recorded evidence reopens it. It
-		// runs in this lane's own goroutine, so its bracket has one target and a violation
-		// there names this run.
-		if deferJudge {
-			// The next pass's planner owns a failover dispatch. Settlement is one
-			// transition, not a second run smuggled into the same item application.
-			return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane))}
-		}
-		failover, ok, err := l.nextAvailableRequest(ctx, request.ItemID, lane, attemptRunID(request.ItemID, decision.Attempt+1), request.Backend, decision.Seat)
-		if err != nil {
+		l.countInfrastructureFailure(result, request.ItemID)
+		if _, err := l.recordInfrastructureFailure(ctx, decision, record, log); err != nil {
 			return laneOutcome{err: err}
 		}
-		if !ok {
-			break
-		}
-		if ok {
-			decision.Attempt++
-			failover.CorrelationID = tick
-			if err := l.preserveWork(ctx, lane, request.RunID, "infrastructure failure before failover"); err != nil {
-				return laneOutcome{err: err}
-			}
-			if l.laneForkTarget(lane) != "" {
-				if err := l.pinLane(ctx, lane, request.RunID, l.headOf(ctx, lane)); err != nil {
-					return laneOutcome{err: err}
-				}
-				if err := l.restoreForkDelivery(ctx, lane, request.RunID); err != nil {
-					return laneOutcome{err: err}
-				}
-			}
-			if err := l.resetLane(ctx, lane); err != nil {
-				return laneOutcome{err: err}
-			}
-			before, err := l.snapshot(ctx, []string{worktree}, watched)
-			if err != nil {
-				return laneOutcome{err: err}
-			}
-			l.reportf("loop: failover %s -> %s on %s\n", request.ItemID, failover.Backend, lane)
-			l.mu.Lock()
-			result.Dispatched++
-			l.mu.Unlock()
-			// After the reset this work belongs to the new run, not the run whose
-			// snapshot was just preserved. Reusing its ref would lose failover edits.
-			stampDecisionRequest(decision, failover)
-			request = *failover
-			decision.RunRequest = failover
-			record, log, err = l.runRestartable(ctx, request)
-			if err != nil {
-				return laneOutcome{err: err}
-			}
-			l.countSpend(result, record)
-			stop, err := l.closeRunBracket(ctx, worktree, request, tick, at, before, result, watched)
-			if err != nil || stop != "" {
-				return laneOutcome{stop: stop, err: err}
-			}
-			if err := RecordBackendOutcomes(ctx, l.cfg.Store); err != nil {
-				return laneOutcome{err: err}
-			}
-			class = ClassifyAttempt(record, log)
-			if class == AttemptRefused {
-				stop, err := l.holdAdapterRefusal(ctx, lane, request, log)
-				return laneOutcome{stop: stop, err: err}
-			}
-			if class == AttemptInfrastructure {
-				if err := l.recordBackendWindow(ctx, record); err != nil {
-					return laneOutcome{err: err}
-				}
-			}
-		}
-	}
-	if class == AttemptInfrastructure {
-		// No backend is open: the next pass waits on recorded backend recovery.
-		// The criteria are untouched, the
-		// head is pinned, and the loop moves on.
-		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane))}
+		return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "infrastructure failure")}
 	}
 	l.mu.Lock()
 	l.infraStreak = 0

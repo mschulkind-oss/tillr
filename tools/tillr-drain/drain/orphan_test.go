@@ -91,7 +91,7 @@ func TestThreeDeadSupervisorsDoNotSpendAnyAttemptBudget(t *testing.T) {
 		l = f.loop(t, &recordingSteps{}, &itemContentStager{})
 	}
 	d := mustPlan(t, l)[0].decision
-	if d.Action != ActionDispatch || d.Attempt != 4 || d.Readmitted || d.RetryID != "" || d.Reason == ReasonFailover {
+	if d.Action != ActionDispatch || d.Attempt != 4 || d.Readmitted || d.RetryID != "" || d.Reason == "failover" {
 		t.Fatalf("fourth crash dispatch spent a budget: %+v", d)
 	}
 }

@@ -134,6 +134,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		return c, false, err
 	}
 	var replacementRequest *run.Request
+	var replacementSession string
 	if receipt != nil && len(receipt.Raw) == 0 {
 		var rec *run.Record
 		db, err := store.OpenRead(ctx, l.cfg.Store)
@@ -155,7 +156,31 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		if evalStatErr != nil && !evalMissing {
 			return c, false, evalStatErr
 		}
-		if evalMissing && rec != nil && ClassifyAttempt(*rec, logTail(rec.ArtifactRefs)) == AttemptInterrupted {
+		if evalMissing && rec != nil && judgeBackendFailure(c, *rec, logTail(rec.ArtifactRefs)) {
+			if err := l.holdJudgeInfrastructure(ctx, c, receipt, *rec, logTail(rec.ArtifactRefs)); err != nil {
+				return c, false, err
+			}
+			shut, err := l.judgeQuotaShutBackends(ctx)
+			if err != nil {
+				return c, false, err
+			}
+			if shut[receipt.Request.Backend] {
+				return c, false, errJudgeBackendHeld
+			}
+			if err := l.restoreJudgeInputs(c, receipt); err != nil {
+				return c, false, err
+			}
+			req := receipt.Request
+			req.RunID = markRunID(req.RunID, "restart")
+			req.SessionTurn, req.ResumePrompt = false, ""
+			if receipt.JudgeSession != "" && canResumeInfrastructure(rec, &req) {
+				replacementSession = receipt.JudgeSession
+				req.SessionTurn = true
+				req.ResumePrompt = "The backend has recovered. Continue reviewing the same candidate and write the verdict."
+			}
+			replacementRequest = &req
+			receipt = nil
+		} else if evalMissing && rec != nil && ClassifyAttempt(*rec, logTail(rec.ArtifactRefs)) == AttemptInterrupted {
 			if c.Evaluator == nil {
 				shut, err := l.judgeQuotaShutBackends(ctx)
 				if err != nil {
@@ -277,9 +302,13 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			if err != nil {
 				return c, false, err
 			}
-			judgeSession, err := NewSessionID()
-			if err != nil {
-				return c, false, err
+			judgeSession := replacementSession
+			replacementSession = ""
+			if judgeSession == "" {
+				judgeSession, err = NewSessionID()
+				if err != nil {
+					return c, false, err
+				}
 			}
 			head := c.HeadSHA
 			if c.WorkerHeadSHA != "" {
@@ -409,6 +438,15 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				replacementRequest = &req
 				receipt = nil
 				continue
+			}
+		}
+		if len(receipt.Raw) == 0 && judgeRec.RunID != "" && judgeBackendFailure(c, judgeRec, judgeLog) {
+			if _, err := os.Lstat(outputPath); os.IsNotExist(err) {
+				l.countInfrastructureFailure(result, c.ItemID)
+				if err := l.holdJudgeInfrastructure(ctx, c, receipt, judgeRec, judgeLog); err != nil {
+					return c, false, err
+				}
+				return c, false, errJudgeBackendHeld
 			}
 		}
 		if executionError != nil {
@@ -871,6 +909,22 @@ func (l *Loop) judgeQuotaShutBackends(ctx context.Context) (map[string]bool, err
 	})
 	return shut, err
 }
+
+// An exited workflow evaluator is judged from its verdict file, not its
+// process footer. A failed start has no possible verdict and closes the backend.
+func judgeBackendFailure(c Candidate, rec run.Record, log string) bool {
+	return rec.Backend != "command" && (c.Evaluator == nil || rec.State == run.StateFailedToStart) && isBackendFailure(rec, log)
+}
+
+func (l *Loop) holdJudgeInfrastructure(ctx context.Context, c Candidate, receipt *JudgeReceipt, rec run.Record, log string) error {
+	if err := l.recordBackendWindow(ctx, rec); err != nil {
+		return err
+	}
+	d := Decision{ItemID: c.ItemID, LaneID: c.LaneID, Seat: "review", RunRequest: &receipt.Request}
+	_, err := l.recordInfrastructureFailure(ctx, d, rec, log)
+	return err
+}
+
 func (l *Loop) holdJudge(ctx context.Context, c Candidate, judgeID, reason, detail string, result *LoopResult) error {
 	l.mu.Lock()
 	result.Rejected++

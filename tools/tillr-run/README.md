@@ -217,7 +217,8 @@ settlement evidence. A resumed execution cannot reuse an earlier segment's foote
 If Pi's last assistant turn has neither visible text nor a tool call, the extractor
 reports a missing result even if an earlier turn printed a footer or Pi exited zero.
 For a workflow worker, the drain uses its missing-report path: it preserves the work
-and restarts the same node through backend failover instead of marking it complete.
+and holds the node on its original backend instead of marking it complete. The node
+can run again there after recorded backend recovery.
 A separately recorded landing offer remains independent evidence of a tool call.
 
 The kill reaches the harness and helpers in its private process group, not sibling

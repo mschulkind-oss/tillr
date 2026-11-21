@@ -68,7 +68,7 @@ func TestBackendInfrastructureClosureAndRecordedReopening(t *testing.T) {
 	}
 }
 
-func TestBackendWalkWrapsAndKeepsSeat(t *testing.T) {
+func TestQuotaWindowWalkWrapsAndKeepsSeat(t *testing.T) {
 	p := Policy{Preference: []string{"a", "b", "c"}, SeatLists: map[string][]string{"design": {"a", "b"}}}
 	name, ok := p.availableBackend("c", "", map[string]bool{"c": true})
 	if !ok || name != "a" {
@@ -112,7 +112,7 @@ func TestWorkflowBackendFailureWaitsAndReopensSameNode(t *testing.T) {
 	}
 	d := p.decision
 	backendRun(t, f, d.RunRequest.RunID, "fixture", 2)
-	if err := l.retryWorkflowNode(context.Background(), d, runGit(t, f.root, "rev-parse", TrunkRef), run.Record{RunID: d.RunRequest.RunID, Backend: "fixture", State: run.StateExited, ExitCode: code(2)}, &LoopResult{}); err != nil {
+	if err := l.holdFailedWorkflowNode(context.Background(), d, runGit(t, f.root, "rev-parse", TrunkRef), run.Record{RunID: d.RunRequest.RunID, Backend: "fixture", State: run.StateExited, ExitCode: code(2)}, &LoopResult{}); err != nil {
 		t.Fatal(err)
 	}
 	wait := mustPlan(t, l)[0].decision
@@ -172,7 +172,7 @@ func TestBackendAvailabilityIgnoresMetadataAndReportEdits(t *testing.T) {
 	}
 }
 
-func TestBackendHoldNamesOnlyThePostFailureWalk(t *testing.T) {
+func TestBackendHoldNamesOnlyTheFailedBackend(t *testing.T) {
 	f, l := passFixture(t, "item-a")
 	b := l.cfg.Policy.Backends["fixture"]
 	l.cfg.Policy.Backends["override"] = b
@@ -180,14 +180,16 @@ func TestBackendHoldNamesOnlyThePostFailureWalk(t *testing.T) {
 	l.cfg.Policy.Preference = []string{"fixture", "alternate"}
 	l.cfg.Policy.Overrides = map[string]string{"item-a": "override"}
 	backendRun(t, f, "override-failed", "override", 2)
-	// Other items close the route without changing this item's failover start.
-	for _, backend := range []string{"fixture", "alternate"} {
-		fixtureWrite(t, f, func(tx *store.Tx) error {
-			return applyTerminal(tx, run.Record{RunID: backend + "-failed", ItemID: "item-b", LaneID: "lane-1", Backend: backend, State: run.StateExited, ExitCode: code(2), StartedAt: "2026-11-18T00:00:00Z", FinishedAt: "2026-11-18T00:00:01Z"})
-		})
-	}
 	d := mustPlan(t, l)[0].decision
-	if d.Reason != ReasonBackendClosed || d.DeferredBy != "fixture, alternate" {
-		t.Fatalf("hold named an unreachable reopening: %+v", d)
+	if d.Action != ActionHold || d.Reason != ReasonBackendClosed || d.DeferredBy != "override" ||
+		!strings.Contains(d.BackendHoldCause, "override-failed") || !strings.Contains(d.BackendHoldCause, "exit 2") {
+		t.Fatalf("hold did not name the measured failure on override: %+v", d)
+	}
+	if err := ProbeBackend(context.Background(), f.storePath, f.root, "override", []string{"/bin/true"}); err != nil {
+		t.Fatal(err)
+	}
+	d = mustPlan(t, l)[0].decision
+	if d.Action != ActionDispatch || d.RunRequest.Backend != "override" {
+		t.Fatalf("did not redispatch on override: %+v", d)
 	}
 }

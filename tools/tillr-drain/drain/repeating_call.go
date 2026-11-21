@@ -20,15 +20,9 @@ import (
 //
 //   - The first such ending starts the same item or node again in a fresh session on the
 //     same backend, with a note in its brief that names the call (repeatedCallBrief),
-//     unless the run already recovered from a loop in-run (LoopRecovery count > 0), in
-//     which case it skips the fresh session on the same backend and goes straight to the
-//     seat's next backend.
-//   - When that fresh run, dispatched for that reason, ends the same way (or when a run
-//     with in-run recovery ends that way), the existing failover walks the seat's backend
-//     list to the next backend.
-//   - When the next backend is one this unbroken chain already ended on (the walk wraps)
-//     or the list has none, the item is held with ReasonRepeatingCall, whose mover is the
-//     operator.
+//     unless the run already recovered from a loop in-run.
+//   - If that fresh session or a session recovered in-run ends the same way, the item
+//     is held with ReasonRepeatingCall, whose mover is the operator.
 //
 // Nothing is counted. "The same way again" is read from the dispatch decision itself:
 // a dispatch made for this reason carries the RepeatedCall it answers, and its Backends
@@ -42,20 +36,14 @@ const repeatingCallKind = "drain.repeating-call"
 // infrastructure (it never closes a backend) and not an answer.
 const AttemptRepeating AttemptClass = "repeating-call"
 
-// ReasonRepeatingCall holds an item every backend on its seat's list ended for a
-// repeating call. ReasonRepeatingCallFresh and ReasonRepeatingCallFailover are the
-// dispatch reasons of the runs that answer such an ending.
 const (
-	ReasonRepeatingCall         = "repeating-call"
-	ReasonRepeatingCallFresh    = "restarted in a fresh session: the earlier session repeated one identical call"
-	ReasonRepeatingCallFailover = "failover: the earlier sessions repeated one identical call"
+	ReasonRepeatingCall      = "repeating-call"
+	ReasonRepeatingCallFresh = "restarted in a fresh session: the earlier session repeated one identical call"
 )
 
-// The three routes a repeating-call ending takes.
 const (
-	repeatRouteFresh    = "fresh"
-	repeatRouteFailover = "failover"
-	repeatRouteHold     = "hold"
+	repeatRouteFresh = "fresh"
+	repeatRouteHold  = "hold"
 )
 
 // RepeatedCall is one repeating-call ending, as its event records it and as the dispatch
@@ -74,8 +62,8 @@ type RepeatedCall struct {
 	// Backends are the backends whose sessions in this unbroken chain repeated, oldest
 	// first, ending with Backend.
 	Backends []string `json:"backends"`
-	// Route is what follows: fresh, failover or hold. NextBackend names the backend the
-	// fresh run or the failover runs on, and is empty for a hold.
+	// Route is fresh or hold. NextBackend is the original backend for a fresh
+	// session, and is empty for a hold. Older records can carry a failover route.
 	Route       string `json:"route"`
 	NextBackend string `json:"next_backend,omitempty"`
 }
@@ -88,9 +76,8 @@ func init() {
 
 // repeatingRoute answers the route for a run that ended for a repeating call on backend,
 // given the RepeatedCall its own dispatch answered (nil when it answered none) and whether
-// the run already recovered from a loop in-run. It is pure: the same chain, recovery
-// state, and policy always give the same route.
-func repeatingRoute(policy *Policy, seat string, prior *RepeatedCall, backend string, recovered bool) (route, next string, chain []string) {
+// the run already recovered from a loop in-run.
+func repeatingRoute(prior *RepeatedCall, backend string, recovered bool) (route, next string, chain []string) {
 	if prior != nil {
 		chain = append(chain, prior.Backends...)
 	}
@@ -100,23 +87,11 @@ func repeatingRoute(policy *Policy, seat string, prior *RepeatedCall, backend st
 	if prior == nil && !recovered {
 		return repeatRouteFresh, backend, chain
 	}
-	if policy == nil {
-		return repeatRouteHold, "", chain
-	}
-	candidate, ok := policy.nextBackend(backend, seat)
-	if !ok {
-		return repeatRouteHold, "", chain
-	}
-	for _, tried := range chain {
-		if tried == candidate {
-			return repeatRouteHold, "", chain
-		}
-	}
-	return repeatRouteFailover, candidate, chain
+	return repeatRouteHold, "", chain
 }
 
 // newRepeatedCall is the record of one repeating-call ending and its route.
-func newRepeatedCall(policy *Policy, d Decision, rec run.Record) RepeatedCall {
+func newRepeatedCall(d Decision, rec run.Record) RepeatedCall {
 	rc := RepeatedCall{RunID: rec.RunID, ItemID: d.ItemID, Backend: rec.Backend}
 	if rec.RepeatingCall != nil {
 		rc.Tool, rc.Args, rc.ArgsDigest, rc.Streak = rec.RepeatingCall.Tool, rec.RepeatingCall.Args, rec.RepeatingCall.ArgsDigest, rec.RepeatingCall.Streak
@@ -127,7 +102,7 @@ func newRepeatedCall(policy *Policy, d Decision, rec run.Record) RepeatedCall {
 	}
 	recovered := (rec.LoopRecovery != nil && rec.LoopRecovery.Count > 0) ||
 		(rec.RepeatingCall != nil && rec.RepeatingCall.Action == "ended")
-	rc.Route, rc.NextBackend, rc.Backends = repeatingRoute(policy, d.Seat, d.RepeatedCall, rec.Backend, recovered)
+	rc.Route, rc.NextBackend, rc.Backends = repeatingRoute(d.RepeatedCall, rec.Backend, recovered)
 	return rc
 }
 
@@ -163,7 +138,7 @@ func (l *Loop) recordRepeatedCall(ctx context.Context, rc RepeatedCall) error {
 // and pinning the run's work exactly as an interrupted run's is. The next pass's planner
 // acts on the recorded route (planner.repeatedDecision).
 func (l *Loop) settleRepeatingCall(ctx context.Context, d Decision, rec run.Record, lane string) laneOutcome {
-	rc := newRepeatedCall(l.currentPolicy(), d, rec)
+	rc := newRepeatedCall(d, rec)
 	if err := l.recordRepeatedCall(ctx, rc); err != nil {
 		return laneOutcome{err: err}
 	}
@@ -173,12 +148,12 @@ func (l *Loop) settleRepeatingCall(ctx context.Context, d Decision, rec run.Reco
 
 // restartRepeatingNode settles a workflow node pi ended for a repeating call: the same
 // node is dispatched again, on its lane and base, in a fresh session on the same backend
-// or the failover's, or the node is recorded `repeating-call` so the planner holds the
-// item (commandNodeHold). Unlike retryWorkflowNode it charges nothing to the backend: a
+// or the node is recorded `repeating-call` so the planner holds the
+// item (commandNodeHold). It charges nothing to the backend: a
 // model that loops is not machinery that failed.
 func (l *Loop) restartRepeatingNode(ctx context.Context, d Decision, base string, rec run.Record) error {
 	policy := l.currentPolicy()
-	rc := newRepeatedCall(policy, d, rec)
+	rc := newRepeatedCall(d, rec)
 	var head string
 	if !l.nonLanding {
 		head = l.headOf(ctx, d.LaneID)
@@ -215,12 +190,7 @@ func (l *Loop) restartRepeatingNode(ctx context.Context, d Decision, base string
 	if policy == nil {
 		return Usagef("workflow seat %s has no backend route", d.Seat)
 	}
-	suffix := "fresh"
-	reason := ReasonRepeatingCallFresh
-	if rc.Route == repeatRouteFailover {
-		suffix, reason = "failover", ReasonRepeatingCallFailover
-	}
-	request := policy.request(d.ItemID, d.LaneID, markRunID(d.RunRequest.RunID, suffix), rc.NextBackend)
+	request := policy.request(d.ItemID, d.LaneID, markRunID(d.RunRequest.RunID, "fresh"), rc.NextBackend)
 	request.NodeID = d.Workflow.Stages[d.NodeIndex].ID
 	request.WorkingDir = d.RunRequest.WorkingDir
 	if d.Workflow.Stages[d.NodeIndex].TimeoutMS > 0 {
@@ -229,8 +199,9 @@ func (l *Loop) restartRepeatingNode(ctx context.Context, d Decision, base string
 	stampDecisionRequest(d, request)
 	d.RunRequest = request
 	d.WorkflowRestart = true
+	d.InfrastructureFrom = ""
 	d.Returned, d.WorkerSessionReason = nil, ""
-	d.Action, d.Reason = ActionDispatch, reason
+	d.Action, d.Reason = ActionDispatch, ReasonRepeatingCallFresh
 	answered := rc
 	d.RepeatedCall = &answered
 	s, err := store.Open(ctx, l.cfg.Store, true)
@@ -272,6 +243,9 @@ func readRepeatedCalls(r *store.Reader) (map[string]RepeatedCall, error) {
 		var rc RepeatedCall
 		if err := json.Unmarshal(body, &rc); err != nil {
 			return nil, Internalf("reading the repeating-call ending of %q: %v", id.String, err)
+		}
+		if rc.Route == "failover" {
+			rc.Route, rc.NextBackend = repeatRouteHold, ""
 		}
 		out[id.String] = rc
 	}

@@ -138,6 +138,10 @@ func (p *planner) triageDecision(r *store.Reader, row itemRow) (Decision, error)
 			interrupted := c.DesignRunID
 			c.Status, c.WaitingOn, c.DesignRunID, c.RunID = "raised", "design", "", ""
 			c.Text = "Request has no document block; triage must declare it before it is built.\nTriage run " + interrupted + " was interrupted before it answered; an interrupted run is no attempt, so triage is dispatched again."
+		} else if c.Status != "owner" && p.failedBackendFor(row.ItemID, c.DesignRunID) != "" {
+			// A machinery ending did not perform triage. Keep the failed run's
+			// identity so conflictDecision waits for, then reuses, that backend.
+			c.Status, c.WaitingOn = "raised", "design"
 		} else if c.DesignRunID != "" {
 			c.Status, c.WaitingOn = "owner", "owner"
 			if !strings.Contains(c.Text, "still has no document block") {

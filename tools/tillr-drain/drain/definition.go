@@ -58,7 +58,7 @@ var landingHolds = map[string]string{
 // checks. These are not landing-specific; the value names an optional prerequisite.
 var generalHolds = map[string]string{
 	ReasonCompleteItemFault: "", ReasonCriteriaUnjudged: "", ReasonCandidateNoOp: "",
-	ReasonBackendWindow: "", ReasonBackendClosed: "", ReasonBlocked: "", ReasonNotReady: "",
+	ReasonBackendWindow: "", ReasonBackendClosed: "", ReasonInfrastructureRepeat: "", ReasonBlocked: "", ReasonNotReady: "",
 	ReasonRunLinkMissing: "", ReasonRunUnjudged: "", ReasonNoPolicy: "", ReasonOwnerOnlyOwed: "",
 	ReasonNoLane: "", ReasonRunLive: "", ReasonInfraExhausted: "", ReasonCommandFault: "",
 	ReasonDeskCapacity: "", ReasonDocumentDeskBusy: "",

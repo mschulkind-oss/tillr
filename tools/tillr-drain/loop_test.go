@@ -616,37 +616,13 @@ func TestConsecutiveInfrastructureFailuresDoNotStopTheLoop(t *testing.T) {
 	}
 }
 
-// The one-hop failover, end to end: the first backend's adapter fails in the infrastructure
-// class, and the loop re-dispatches the same item once on the next backend in the policy's
-// preference, after resetting the lane. The run face writes both records, so the store — not
-// the loop's echo — is what the case reads for the backends and the run ids.
-//
-// The first attempt leaves a commit before it fails, which is the leftover the reset is for:
-// staging refuses a lane holding an unlanded commit, so the failover's own reset is what
-// makes the same worktree runnable on the second backend. The second adapter records the
-// base it was given and whether that commit is still in the tree, so the assertion about
-// the trunk is the adapter's reading rather than an assumption about the reset's code.
-//
-// The negative controls are the run rows: a loop that re-dispatched without walking the
-// policy would leave one row on `pi`, and a loop that re-dispatched without resetting would
-// leave the second adapter's base at the first attempt's commit instead of the trunk.
-func TestAnInfrastructureFailureFailsOverOnceToTheNextBackend(t *testing.T) {
-	pi := stub(t, "pi-adapter", counting+`echo leftover > leftover.txt
-git add leftover.txt
-git -c user.name=stub -c user.email=stub@example.invalid commit -q -m leftover
+// Count actual starts across two explicit reopenings. An open alternative must
+// never run, and the second identical terminal failure holds only this item.
+func TestAnInfrastructureFailureHoldsAndRepeatsOnlyOnTheBuildBackend(t *testing.T) {
+	pi := stub(t, "pi-adapter", counting+`printf 'harness credential failed\n' >&2
 exit 4
 `)
-	baseFile := filepath.Join(scratch(t, "failover-base"), "base")
-	leftoverFile := filepath.Join(scratch(t, "failover-leftover"), "leftover")
-	agy := stub(t, "agy-adapter", counting+`git rev-parse HEAD > "$STUB_BASE"
-if [ -e leftover.txt ]; then echo present > "$STUB_LEFTOVER"; else echo absent > "$STUB_LEFTOVER"; fi
-echo candidate > candidate.txt
-git add candidate.txt
-git -c user.name=stub -c user.email=stub@example.invalid commit -q -m candidate
-printf 'RESULT: done\n'
-`)
-	t.Setenv("STUB_BASE", baseFile)
-	t.Setenv("STUB_LEFTOVER", leftoverFile)
+	agy := stub(t, "agy-adapter", counting+`printf 'RESULT: done\n'`)
 
 	f := newLoopFixture(t, pi)
 	f.policy = &drain.Policy{
@@ -659,7 +635,6 @@ printf 'RESULT: done\n'
 	}
 	fixtureAt(t, f.store, fencedItemRecord("item_041", "in-queue", "candidate.txt"))
 	fixtureTerminalEvidence(t, f.store, "item_041")
-	trunk := git(t, f.root, "rev-parse", "main")
 
 	raw, err := json.Marshal(f.policy)
 	if err != nil {
@@ -668,53 +643,37 @@ printf 'RESULT: done\n'
 	policyPath := filepath.Join(scratch(t, "failover-policy"), "policy.json")
 	writeFile(t, policyPath, string(raw))
 
-	cmd := exec.Command(bin, "loop", "--exit-when-drained",
-		"--root", f.root, "--store", f.store, "--lane-root", f.laneRoot,
-		"--lanes", "1", "--policy", policyPath,
-		"--run-bin", sibling(t, "run"), "--item-bin", sibling(t, "item"),
-		"--brief-template", filepath.Join("..", "tillr-run", "backends", "brief-template.md"),
-		"--gate", always(t, "gate", 0), "--land", always(t, "land", 0), "--verdict", always(t, "verdict", 0),
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("the loop exited %v: %s", err, out)
+	for i, want := range []int{1, 2, 2} {
+		cmd := exec.Command(bin, "loop", "--exit-when-drained",
+			"--root", f.root, "--store", f.store, "--lane-root", f.laneRoot,
+			"--lanes", "1", "--policy", policyPath,
+			"--run-bin", sibling(t, "run"), "--item-bin", sibling(t, "item"),
+			"--brief-template", filepath.Join("..", "tillr-run", "backends", "brief-template.md"),
+			"--gate", always(t, "gate", 0), "--land", always(t, "land", 0), "--verdict", always(t, "verdict", 0),
+		)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("the loop exited %v: %s", err, out)
+		}
+		runs := runsForItem(t, f.store, "item_041")
+		if len(runs) != want || runs[len(runs)-1].Backend != "pi" {
+			t.Fatalf("pass %d: want %d runs on pi, got %+v", i, want, runs)
+		}
+		if i == 0 && (!strings.Contains(string(out), drain.ReasonBackendClosed) || !strings.Contains(string(out), "harness credential failed")) {
+			t.Fatalf("backend hold missing measured cause: %s", out)
+		}
+		if i == 2 && !strings.Contains(string(out), drain.ReasonInfrastructureRepeat) {
+			t.Fatalf("identical failure did not hold after reopening: %s", out)
+		}
+		if i < 2 {
+			if err := drain.ProbeBackend(context.Background(), f.store, f.root, "pi", []string{"/bin/true"}); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
-
-	runs := runsForItem(t, f.store, "item_041")
-	if len(runs) != 2 {
-		t.Fatalf("the store holds %d run(s) for item_041, want 2: %+v", len(runs), runs)
-	}
-	if runs[0].Backend != "pi" {
-		t.Fatalf("the first run names backend %q, want pi: %+v", runs[0].Backend, runs)
-	}
-	if runs[1].Backend != "agy" {
-		t.Fatalf("the second run names backend %q, want agy: %+v", runs[1].Backend, runs)
-	}
-	if runs[1].RunID != "run-item_041-a2" {
-		t.Fatalf("the failover run is %q, want run-item_041-a2", runs[1].RunID)
-	}
-	if got := strings.TrimSpace(readText(t, baseFile)); got != trunk {
-		t.Fatalf("the failover run started from %q, want the trunk %q", got, trunk)
-	}
-	if got := strings.TrimSpace(readText(t, leftoverFile)); got != "absent" {
-		t.Fatalf("the failover run's tree still holds the first attempt's leftover (%q)", got)
-	}
-	// The item landed, so it is not held as an exhausted failover: the hold the stop detail
-	// names is the ordinary `not-ready` of an item that is no longer queued.
-	if got := itemStateOf(t, f.store, "item_041"); got != "landed" {
-		t.Fatalf("the item is %q after the failover, want landed", got)
-	}
-	if strings.Contains(string(out), drain.ReasonInfraExhausted) {
-		t.Fatalf("the loop held the item as %s: %s", drain.ReasonInfraExhausted, out)
-	}
-	if !strings.Contains(string(out), "failover item_041 -> agy on lane-1") {
-		t.Fatalf("the loop did not report the failover: %s", out)
-	}
-	// One attempt per backend: a failover that walked more than one hop would run the
-	// second adapter twice.
 	invocations := lines(t, f.count)
-	if countMatching(invocations, "pi-adapter") != 1 || countMatching(invocations, "agy-adapter") != 1 {
-		t.Fatalf("the adapters did not run once each: %v", invocations)
+	if countMatching(invocations, "pi-adapter") != 2 || countMatching(invocations, "agy-adapter") != 0 {
+		t.Fatalf("unexpected adapters: %v", invocations)
 	}
 }
 

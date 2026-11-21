@@ -121,22 +121,50 @@ func TestPreservationBriefsAndRetention(t *testing.T) {
 	}
 }
 
-func TestFailoverPreservesBothRunsWork(t *testing.T) {
+func TestInfrastructureHoldPreservesWorkBeforeSameBackendSettlement(t *testing.T) {
 	f, l, d, rec := savedFixture(t)
 	ctx := context.Background()
 	l.cfg.Policy.Backends["other"] = Backend{Adapter: "other"}
 	l.cfg.Policy.Preference = []string{"fixture", "other"}
+	started := 0
 	l.cfg.Steps = &callbackRunSteps{run: func(req run.Request) (run.Record, string, error) {
-		writeForkFile(t, filepath.Join(l.laneTarget(d.LaneID), "base.txt"), "failover work\n")
-		next := rec
-		next.RunID, next.Backend, next.State = req.RunID, req.Backend, run.StateExited
-		fixtureWrite(t, f, func(tx *store.Tx) error { return applyTerminal(tx, next) })
-		return next, "RESULT: done\n", nil
+		started++
+		return run.Record{}, "", fmt.Errorf("unexpected dispatch on %s", req.Backend)
 	}}
 	rec.State = run.StateFailedToStart
-	out := l.settle(ctx, d, rec, "", runGit(t, f.root, "rev-parse", TrunkRef), "tick", l.cfg.Now(), &LoopResult{}, &PassTiming{}, nil, false)
-	if out.err != nil || out.stop != "" {
-		t.Fatalf("settle failover: %+v", out)
+	rec.ExitCode = nil
+	fixtureWrite(t, f, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	out := l.settle(ctx, d, rec, "", base, "tick", l.cfg.Now(), &LoopResult{}, &PassTiming{}, nil, false)
+	if out.err != nil || out.stop != "" || started != 0 {
+		t.Fatalf("settle infrastructure hold: %+v, started=%d", out, started)
+	}
+	if got := runGit(t, f.root, "show", preservedPrefix+rec.RunID+":base.txt"); got != "earlier work" {
+		t.Fatalf("first failure lost its work: %q", got)
+	}
+	if got := runGit(t, f.root, "rev-parse", pinRef(rec.RunID)); got != base {
+		t.Fatalf("first failure was not pinned: %s, want %s", got, base)
+	}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		closed, err := readInfrastructureClosed(r)
+		if !closed["fixture"] || closed["other"] {
+			t.Errorf("expected fixture closed with other open: %v", closed)
+		}
+		return err
+	})
+	if err := ProbeBackend(ctx, f.storePath, f.root, "fixture", []string{"/bin/true"}); err != nil {
+		t.Fatal(err)
+	}
+	// Settle a later run on the reopened backend; its snapshot must not replace
+	// the work pinned before the hold, even though the lane has been reset.
+	next := rec
+	next.RunID, next.State, next.ExitCode = markRunID(rec.RunID, "restart"), run.StateExited, countPtr(0)
+	d.RunRequest = l.cfg.Policy.request(d.ItemID, d.LaneID, next.RunID, "fixture")
+	writeForkFile(t, filepath.Join(l.laneTarget(d.LaneID), "base.txt"), "restart work\n")
+	fixtureWrite(t, f, func(tx *store.Tx) error { return applyTerminal(tx, next) })
+	out = l.settle(ctx, d, next, "RESULT: done\n", base, "tick-restart", l.cfg.Now(), &LoopResult{}, &PassTiming{}, nil, true)
+	if out.err != nil || out.stop != "" || started != 0 {
+		t.Fatalf("settle reopened backend: %+v, started=%d", out, started)
 	}
 	fixtureRead(t, f, func(r *store.Reader) error {
 		saved, err := ReadPreservedWork(r)
@@ -144,9 +172,9 @@ func TestFailoverPreservesBothRunsWork(t *testing.T) {
 			return err
 		}
 		if len(saved) != 2 || saved[0].RunID == saved[1].RunID {
-			t.Fatalf("failover overwrote the earlier run's snapshot: %+v", saved)
+			t.Fatalf("restart overwrote the earlier run's snapshot: %+v", saved)
 		}
-		for i, want := range []string{"earlier work", "failover work"} {
+		for i, want := range []string{"earlier work", "restart work"} {
 			if got := runGit(t, f.root, "show", saved[i].Ref+":base.txt"); got != want {
 				t.Fatalf("run %s preserved %q, want %q", saved[i].RunID, got, want)
 			}

@@ -4,6 +4,9 @@ import (
 	"context"
 	"os"
 	"testing"
+	"time"
+
+	"github.com/mschulkind-oss/tillr-run/run"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -63,14 +66,54 @@ func TestParallelReadersMissingOutputRefusesInsteadOfFollowingFailEdge(t *testin
 	}
 }
 
-func TestParallelReadersRetryOnlyFailedHarness(t *testing.T) {
+func TestParallelReadersHoldThenRestartOnlyFailedHarness(t *testing.T) {
 	f, l, steps := parallelFixture(t)
 	steps.failedStart = true
 	steps.writerAfter = 5
+	// Successful sibling endings also reopen a backend. Record them before the
+	// failed reader so the fixture stays closed until the explicit probe below.
+	siblingsEnded := make(chan struct{}, 3)
+	steps.beforeTerminal = func(req run.Request) error {
+		if req.RunID == "run-item-a-a1-n2" {
+			for i := 0; i < 3; i++ {
+				select {
+				case <-siblingsEnded:
+				case <-time.After(hangGuard):
+					return context.DeadlineExceeded
+				}
+			}
+		}
+		return nil
+	}
+	steps.afterTerminal = func(req run.Request) error {
+		switch req.RunID {
+		case "run-item-a-a1-n1", "run-item-a-a1-n3", "run-item-a-a1-n4":
+			siblingsEnded <- struct{}{}
+		}
+		return nil
+	}
 	l.cfg.Policy.Backends["alternate"] = Backend{Adapter: "alternate"}
 	l.cfg.Policy.Preference = []string{"fixture", "alternate"}
 	l.cfg.Policy.SeatLists = map[string][]string{"scout": {"fixture", "alternate"}, "build": {"fixture", "alternate"}}
 	result := &LoopResult{}
+	graphPass(t, l, result)
+	graphPass(t, l, result)
+	if steps.started != 4 || steps.ended != 4 || steps.builders != 0 {
+		t.Fatalf("closed backend reran readers: started=%d ended=%d builders=%d", steps.started, steps.ended, steps.builders)
+	}
+	if held := planFor(t, l, "item-a"); held.Action != ActionHold || held.Reason != ReasonBackendClosed || held.DeferredBy != "fixture" {
+		t.Fatalf("failed reader did not hold on its original backend: %+v", held)
+	}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		closed, err := readInfrastructureClosed(r)
+		if !closed["fixture"] || closed["alternate"] {
+			t.Errorf("expected fixture closed with alternate open: %v", closed)
+		}
+		return err
+	})
+	if err := ProbeBackend(context.Background(), f.storePath, f.root, "fixture", []string{"/bin/true"}); err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 5; i++ {
 		if _, err := l.pass(context.Background(), result); err != nil {
 			t.Fatal(err)
@@ -81,13 +124,20 @@ func TestParallelReadersRetryOnlyFailedHarness(t *testing.T) {
 		t.Fatalf("started=%d builders=%d", steps.started, steps.builders)
 	}
 	fixtureRead(t, f, func(r *store.Reader) error {
-		var id string
-		err := r.QueryRow(`SELECT run_id FROM node_runs WHERE node_id='scout2'`).Scan(&id)
-		if id != "run-item-a-a1-n2-failover" {
-			t.Errorf("wrong retry: %s", id)
+		var id, backend string
+		err := r.QueryRow(`SELECT n.run_id,r.backend FROM node_runs n JOIN runs r ON r.run_id=n.run_id WHERE n.node_id='scout2'`).Scan(&id, &backend)
+		if id != "run-item-a-a1-n2-restart" || backend != "fixture" {
+			t.Errorf("wrong retry: %s on %s", id, backend)
 		}
 		if err != nil {
 			return err
+		}
+		var siblings int
+		if err := r.QueryRow(`SELECT COUNT(*) FROM node_runs WHERE node_id IN ('scout1','scout3','scout4') AND outcome='passed' AND run_id IN ('run-item-a-a1-n1','run-item-a-a1-n3','run-item-a-a1-n4')`).Scan(&siblings); err != nil {
+			return err
+		}
+		if siblings != 3 {
+			t.Errorf("kept %d finished siblings, want 3", siblings)
 		}
 		var duplicates int
 		err = r.QueryRow(`SELECT COUNT(*) FROM (SELECT run_id FROM drain_pass_spend GROUP BY run_id HAVING COUNT(*)>1)`).Scan(&duplicates)

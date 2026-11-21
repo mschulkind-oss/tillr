@@ -291,14 +291,17 @@ func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.
 	if err := l.readStore(ctx, checkWait); err != nil || held {
 		return laneOutcome{err: err}
 	}
-	backend, open, err := l.quotaReplacementBackend(ctx, old.RunRequest.Backend, old.Seat)
-	if err != nil {
+	var shut map[string]bool
+	if err := l.readStore(ctx, func(r *store.Reader) error {
+		var err error
+		shut, err = readQuotaShutBackends(r, l.cfg.Now(), l.currentPolicy())
+		return err
+	}); err != nil {
 		return laneOutcome{err: err}
 	}
-	if !open {
-		l.reportf("loop: failed designer resume %s waits for backend quota\n", rec.RunID)
-		// Keep the original terminal run pending. Planning holds it by quota, and
-		// reopening retries this same replacement without another failed resume.
+	if shut[old.RunRequest.Backend] {
+		l.reportf("loop: failed designer resume %s waits for %s\n", rec.RunID, old.RunRequest.Backend)
+		// Keep the original terminal run pending until its backend reopens.
 		return laneOutcome{}
 	}
 	next := old
@@ -312,18 +315,6 @@ func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.
 	}
 	req := *old.RunRequest
 	req.RunID = attemptRunID(old.ItemID, next.Attempt)
-	if backend != req.Backend {
-		replacement := l.currentPolicy().request(old.ItemID, old.LaneID, req.RunID, backend)
-		if replacement == nil {
-			return laneOutcome{err: Usagef("designer replacement backend %s has no request", backend)}
-		}
-		replacement.CorrelationID = req.CorrelationID
-		replacement.Seat = req.Seat
-		replacement.Workflow = req.Workflow
-		replacement.Node = req.Node
-		replacement.NodeID = req.NodeID
-		req = *replacement
-	}
 	req.Resume = false
 	req.SessionTurn = false
 	req.ResumePrompt = ""

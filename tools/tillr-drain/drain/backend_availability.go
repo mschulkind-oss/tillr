@@ -2,14 +2,15 @@ package drain
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os/exec"
 	"strings"
 	"time"
 
-	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -111,8 +112,7 @@ func ProbeBackend(ctx context.Context, path, root, backend string, argv []string
 	return nil
 }
 
-// A mixed quota/infrastructure hold names the closed backends on this route and
-// their mover. The walk uses the same seat boundary as dispatch.
+// Describe the recorded evidence for the backend the decision is waiting on.
 func describeBackendHold(r *store.Reader, d *Decision, policy *Policy, at time.Time, shut map[string]bool) error {
 	if d.Action != ActionHold || d.Reason != ReasonBackendWindow || policy == nil {
 		return nil
@@ -142,43 +142,31 @@ func describeBackendHold(r *store.Reader, d *Decision, policy *Policy, at time.T
 			}
 		}
 	}
-	names := []string{}
-	seen := map[string]bool{}
-	for name := start; name != "" && !seen[name]; {
-		seen[name] = true
-		if _, isClosed := closed[name]; isClosed {
-			names = append(names, name)
-		}
-		next, ok := policy.nextBackend(name, d.Seat)
-		if !ok {
-			break
-		}
-		name = next
-	}
-	// A detached first-node retry waits for its recorded backend even if
-	// the seat's route also has other backends.
-	pinnedRetry := d.LaneID == "" && d.RunRequest != nil && d.WorkflowRestart && d.NodeInfraFailures == 0
-	if policy.singleBackendSeat(d.Seat) || pinnedRetry {
-		d.DeferredBy = start
-		if outcome, ok := closed[start]; ok {
-			d.Reason = ReasonBackendClosed
-			d.BackendHoldCause = fmt.Sprintf("infrastructure failure: run %s (%s)", outcome.rec.RunID, outcome.rec.State)
-			if outcome.rec.ExitCode != nil {
-				d.BackendHoldCause += fmt.Sprintf(", exit %d", *outcome.rec.ExitCode)
-			}
-			d.BackendHoldMover = "operator: repair the backend and record a successful probe-backend"
-		} else if err := describeQuotaHold(r, d, policy, at); err != nil {
+	d.DeferredBy = start
+	if outcome, ok := closed[start]; ok {
+		d.Reason = ReasonBackendClosed
+		failure, err := readRecordedInfrastructureFailure(r, outcome.rec.ItemID, "$.run_id", outcome.rec.RunID)
+		if err != nil {
 			return err
 		}
-		identifyDecision(d)
-		return nil
+		d.BackendHoldCause = failure.Detail
+		if d.BackendHoldCause == "" {
+			err := r.QueryRow(`SELECT COALESCE(json_extract(payload,'$.cause'),'') FROM events
+ WHERE kind=? AND object_id=? AND json_extract(payload,'$.terminal_seq')=?`, backendOutcomeKind, start, outcome.seq).Scan(&d.BackendHoldCause)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return err
+			}
+			if d.BackendHoldCause == "" {
+				d.BackendHoldCause = infrastructureDetail(outcome.rec, logTail(outcome.rec.ArtifactRefs))
+			}
+		}
+		d.BackendHoldMover = "operator: repair the backend and record a successful tillr-drain probe-backend"
+	} else if start != "" {
+		if err := describeQuotaHold(r, d, policy, at); err != nil {
+			return err
+		}
 	}
-	d.DeferredBy = ""
-	if len(names) > 0 {
-		d.Reason = ReasonBackendClosed
-		d.DeferredBy = strings.Join(names, ", ")
-		identifyDecision(d)
-	}
+	identifyDecision(d)
 	return nil
 }
 
@@ -233,19 +221,4 @@ func describeQuotaHold(r *store.Reader, d *Decision, policy *Policy, at time.Tim
 		break
 	}
 	return nil
-}
-
-// Retain node identity, timeout, and parallel-group provenance while changing
-// only the backend's execution fields.
-func rerouteNodeRequest(policy *Policy, d Decision, name string) *run.Request {
-	request := *policy.request(d.ItemID, d.LaneID, d.RunRequest.RunID, name)
-	request.TimeoutMS = d.RunRequest.TimeoutMS
-	request.ReadOnlyGroup = d.RunRequest.ReadOnlyGroup
-	request.NodeID = d.RunRequest.NodeID
-	request.Seat = d.RunRequest.Seat
-	request.Workflow = d.RunRequest.Workflow
-	request.Node = d.RunRequest.Node
-	request.CorrelationID = d.RunRequest.CorrelationID
-	stampDecisionRequest(d, &request)
-	return &request
 }

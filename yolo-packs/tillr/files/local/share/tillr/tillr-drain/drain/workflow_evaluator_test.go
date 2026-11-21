@@ -50,6 +50,37 @@ func TestWorkflowEvaluatorValidation(t *testing.T) {
 	}
 }
 
+func TestWorkflowEvaluatorFailedStartHoldsItsBackend(t *testing.T) {
+	f, l, s := judgeRouteFixture(t, "pass", true)
+	l.cfg.Steps = failingJudgeSteps{s}
+	l.cfg.Policy.Backends["alternate"] = l.cfg.Policy.Backends["reviewer"]
+	l.cfg.Policy.SeatLists = map[string][]string{"review": {"reviewer", "alternate"}}
+	writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/scout-then-build@v1.json"), evaluatorWorkflow)
+	runGit(t, f.root, "add", "config/tillr/workflows")
+	runGit(t, f.root, "commit", "-qm", "evaluator workflow")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET workflow='scout-then-build@v1' WHERE item_id='item-a'`)
+		return err
+	})
+	result := &LoopResult{}
+	for i := 0; i < 8; i++ {
+		graphPass(t, l, result)
+	}
+	d := decisionFor(t, l, "item-a").decision
+	if d.Action != ActionHold || d.Reason != ReasonBackendClosed || d.DeferredBy != "reviewer" || len(s.runs) != 3 {
+		t.Fatalf("evaluator did not hold on reviewer: %+v; runs: %+v", d, s.runs)
+	}
+	if err := ProbeBackend(context.Background(), f.storePath, f.root, "reviewer", []string{"/bin/true"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		graphPass(t, l, result)
+	}
+	if len(s.runs) != 4 || s.runs[3].NodeID != "evaluate" || s.runs[3].Backend != "reviewer" {
+		t.Fatalf("evaluator not restarted on reviewer: %+v", s.runs)
+	}
+}
+
 func TestWorkflowEvaluatorJudgeRoute(t *testing.T) {
 	for _, mode := range []string{"pass", "mechanical", "not-done", "defective-mismatch", "no-grant"} {
 		t.Run(mode, func(t *testing.T) {

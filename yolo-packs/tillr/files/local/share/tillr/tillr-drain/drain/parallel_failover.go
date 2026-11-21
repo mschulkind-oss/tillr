@@ -11,23 +11,17 @@ import (
 
 // Retry only the reader whose harness failed. Finished siblings keep both their
 // run identities and their checked outputs, and are not sent to a backend again.
-func (l *Loop) parallelFailover(ctx context.Context, node Decision, rec run.Record, result *LoopResult) (Decision, bool, error) {
+func (l *Loop) holdFailedParallelNode(ctx context.Context, node Decision, rec run.Record, log string, result *LoopResult) (Decision, bool, error) {
 	if err := l.recordBackendWindow(ctx, rec); err != nil {
 		return node, false, err
 	}
-	l.mu.Lock()
-	result.InfraFailures++
-	l.infraStreak++
-	l.mu.Unlock()
-	request, ok, err := l.nextAvailableRequest(ctx, node.ItemID, node.LaneID, markRunID(node.RunRequest.RunID, "failover"), rec.Backend, node.Seat)
-	if err != nil {
+	l.countInfrastructureFailure(result, node.ItemID)
+	if held, err := l.recordInfrastructureFailure(ctx, node, rec, log); held || err != nil {
 		return node, false, err
 	}
-	if !ok {
-		request, _ = l.currentPolicy().NextRequest(node.ItemID, node.LaneID, markRunID(node.RunRequest.RunID, "failover"), rec.Backend, node.Seat)
-		if request == nil {
-			return node, false, Usagef("workflow seat %s has no backend route", node.Seat)
-		}
+	request := l.currentPolicy().request(node.ItemID, node.LaneID, markRunID(node.RunRequest.RunID, "restart"), rec.Backend)
+	if request == nil {
+		return node, false, Usagef("workflow seat %s has no backend %s", node.Seat, rec.Backend)
 	}
 	request.ReadOnlyGroup = node.RunRequest.ReadOnlyGroup
 	request.NodeID = node.Workflow.Stages[node.NodeIndex].ID
@@ -36,8 +30,9 @@ func (l *Loop) parallelFailover(ctx context.Context, node Decision, rec run.Reco
 	request.CorrelationID = node.RunRequest.CorrelationID
 	stampDecisionRequest(node, request)
 	node.RunRequest = request
-	node.NodeInfraFailures++
 	node.WorkflowRestart = true
+	node.InfrastructureFrom = rec.RunID
+	node.SelectSeat = false
 	return node, true, nil
 }
 
@@ -58,6 +53,7 @@ func (l *Loop) parallelInterrupted(node Decision, rec run.Record) (Decision, boo
 	stampDecisionRequest(node, request)
 	node.RunRequest = request
 	node.WorkflowRestart = true
+	node.InfrastructureFrom = ""
 	return node, true, nil
 }
 
@@ -111,11 +107,6 @@ func (l *Loop) claimParallelReplacement(ctx context.Context, nodes []Decision, i
 		if err != nil {
 			return err
 		}
-		if replacement.NodeInfraFailures > 0 {
-			if name, open := l.currentPolicy().availableBackend(replacement.RunRequest.Backend, replacement.Seat, shut); open {
-				replacement.RunRequest = rerouteNodeRequest(l.currentPolicy(), replacement, name)
-			}
-		}
 		open, err := selectSeatDispatch(tx, &replacement, l.currentPolicy(), shut, l.cfg.Now())
 		if err != nil {
 			return err
@@ -150,6 +141,9 @@ func (l *Loop) stageParallelReplacement(ctx context.Context, nodes []Decision, i
 		base = stagedBase
 	}
 	spec := StageSpec{Policy: l.currentPolicy(), Continue: true, Isolated: true, Node: &node.Workflow.Stages[node.NodeIndex], InputPaths: paths, LaneID: node.LaneID, ItemID: node.ItemID, RunID: node.RunRequest.RunID, Backend: node.RunRequest.Backend, BaseSHA: base, WorkingDir: node.RunRequest.WorkingDir, TimeoutMS: node.RunRequest.TimeoutMS}
+	if err := l.stageInfrastructureSession(ctx, &node, &spec); err != nil {
+		return err
+	}
 	if err := l.stageLane(ctx, spec); err != nil {
 		return err
 	}

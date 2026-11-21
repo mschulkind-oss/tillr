@@ -192,6 +192,9 @@ type priorRun struct {
 	RunID   string
 	Backend string
 	Class   AttemptClass
+	// BackendFailure distinguishes machinery closure from quota and other
+	// infrastructure classifications answered by their own rule.
+	BackendFailure bool
 	// Restaged marks an interruption the loop made itself: the run was staged on a
 	// base that lacked what made its item ready (drain.stale-base).
 	Restaged bool
@@ -238,10 +241,14 @@ func readPriorRunsFrom(r *store.Reader, byRun map[string]*pendingWork) (map[stri
 	if err != nil {
 		return nil, err
 	}
-	classes := map[string]AttemptClass{}
+	type disposition struct {
+		class         AttemptClass
+		closes, saved bool
+	}
+	byID := make(map[string]disposition, len(outcomes))
 	for _, o := range outcomes {
-		if _, seen := classes[o.rec.RunID]; !seen && o.saved {
-			classes[o.rec.RunID] = o.class
+		if _, seen := byID[o.rec.RunID]; !seen {
+			byID[o.rec.RunID] = disposition{o.class, o.closes, o.saved}
 		}
 	}
 	// Endings define run order, not mutable row metadata: a usage correction
@@ -352,8 +359,9 @@ func readPriorRunsFrom(r *store.Reader, byRun map[string]*pendingWork) (map[stri
 		if err := json.Unmarshal([]byte(artifactRefs), &refs); err != nil {
 			return nil, Internalf("reading the artifact refs of run %q: %v", rec.RunID, err)
 		}
-		class := classes[rec.RunID]
-		if class == "" {
+		ending, measured := byID[rec.RunID]
+		class := ending.class
+		if !ending.saved {
 			if payload := finishPayloads[rec.RunID]; len(payload) > 0 {
 				var terminal run.Record
 				if err := json.Unmarshal(payload, &terminal); err != nil {
@@ -376,12 +384,13 @@ func readPriorRunsFrom(r *store.Reader, byRun map[string]*pendingWork) (map[stri
 			class, repeat = AttemptRepeating, &rc
 		}
 		priors[itemID] = append(priors[itemID], priorRun{
-			RunID:    rec.RunID,
-			Backend:  rec.Backend,
-			Class:    class,
-			Restaged: restaged[rec.RunID],
-			Repeated: repeat,
-			State:    string(rec.State), EndCause: rec.EndCause,
+			RunID:          rec.RunID,
+			Backend:        rec.Backend,
+			Class:          class,
+			BackendFailure: class == AttemptInfrastructure && (!measured || ending.closes),
+			Restaged:       restaged[rec.RunID],
+			Repeated:       repeat,
+			State:          string(rec.State), EndCause: rec.EndCause,
 			Finished: len(finishPayloads[rec.RunID]) > 0,
 			Node:     nodeOf[rec.RunID].node, NodeOutcome: nodeOf[rec.RunID].outcome,
 		})

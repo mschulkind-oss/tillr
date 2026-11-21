@@ -354,12 +354,9 @@ func TestPlanStagesTheSeatListsHeadWithItsHarnessArgs(t *testing.T) {
 	}
 }
 
-// A design item whose design backend failed in the infrastructure class fails over to the
-// next backend on the design seat's own list, not to the preference's build backend, and
-// the decision is an ordinary failover: a step along the seat's own list is not a seat
-// degradation. Once the list is spent the item holds as exhausted rather than walking onto
-// a build backend.
-func TestPlanFailsAListedSeatOverAlongItsOwnList(t *testing.T) {
+// A listed seat holds on the backend that actually failed, even if the list's
+// other backend is open.
+func TestPlanHoldsAListedSeatOnItsFailedBackend(t *testing.T) {
 	storePath := fixture(t,
 		itemRecordSeated("item_042", "in-queue", "design"),
 		runRecord("run-item_042-20261109T000000Z", "item_042", "lane-9", "designer-a", run.StateFailedToStart, nil, ""),
@@ -367,23 +364,12 @@ func TestPlanFailsAListedSeatOverAlongItsOwnList(t *testing.T) {
 	tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, listedSeatPolicy(t))
 
 	got := decisionFor(t, plan(t, storePath, tickPath), "item_042")
-	if got.Action != drain.ActionDispatch || got.RunRequest == nil {
-		t.Fatalf("the item was %q / %q, want a failover dispatch", got.Action, got.Reason)
-	}
-	if got.RunRequest.Backend != "designer-b" {
-		t.Fatalf("the failover dispatched to %q, want designer-b from the design seat's list", got.RunRequest.Backend)
-	}
-	if got.Reason != drain.ReasonFailover {
-		t.Fatalf("the failover's reason is %q, want %q and no seat degradation", got.Reason, drain.ReasonFailover)
-	}
-	for _, element := range got.RunRequest.Command {
-		if element == "--" {
-			t.Fatalf("designer-b names no harness arguments but its argv %q carries a separator", got.RunRequest.Command)
-		}
+	if got.Action != drain.ActionHold || got.Reason != drain.ReasonBackendClosed || got.DeferredBy != "designer-a" || got.RunRequest != nil {
+		t.Fatalf("want hold on designer-a, got %+v", got)
 	}
 
-	// The list's last backend failed too: with a larger budget there is still no hop, so
-	// the item holds rather than reaching the build seat's backends.
+	// If the last recorded failure was on another backend, hold on that one.
+	// Neither the earlier closed backend nor the legacy budget changes the hold.
 	spent := fixture(t,
 		itemRecordSeated("item_042", "in-queue", "design"),
 		runRecord("run-item_042-20261109T000000Z", "item_042", "lane-9", "designer-a", run.StateFailedToStart, nil, ""),
@@ -402,8 +388,8 @@ func TestPlanFailsAListedSeatOverAlongItsOwnList(t *testing.T) {
 		},
 	})
 	got = decisionFor(t, plan(t, spent, tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, policyPath)), "item_042")
-	if got.Action != drain.ActionHold || got.Reason != drain.ReasonBackendClosed || got.DeferredBy != "designer-a, designer-b" {
-		t.Fatalf("the item past its list's end was %q / %q waiting on %q, want a hold with %q on both designers", got.Action, got.Reason, got.DeferredBy, drain.ReasonBackendClosed)
+	if got.Action != drain.ActionHold || got.Reason != drain.ReasonBackendClosed || got.DeferredBy != "designer-b" || got.RunRequest != nil {
+		t.Fatalf("want hold on designer-b, got %+v", got)
 	}
 }
 

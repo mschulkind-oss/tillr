@@ -328,19 +328,20 @@ func policyDoc(t *testing.T, document map[string]any) string {
 
 // decision is the drain.decision payload as a case reads it.
 type decision struct {
-	Position        string       `json:"position"`
-	Transition      string       `json:"transition"`
-	DecisionID      string       `json:"decision_id"`
-	ItemID          string       `json:"item_id"`
-	Action          string       `json:"action"`
-	Reason          string       `json:"reason"`
-	LaneID          string       `json:"lane_id"`
-	RunRequest      *run.Request `json:"run_request"`
-	RetryID         string       `json:"retry_id"`
-	SupersedesRunID string       `json:"supersedes_run_id"`
-	DeferredBy      string       `json:"deferred_by"`
-	QuestionID      string       `json:"question_id"`
-	Seat            string       `json:"seat"`
+	Position         string       `json:"position"`
+	Transition       string       `json:"transition"`
+	DecisionID       string       `json:"decision_id"`
+	ItemID           string       `json:"item_id"`
+	Action           string       `json:"action"`
+	Reason           string       `json:"reason"`
+	LaneID           string       `json:"lane_id"`
+	RunRequest       *run.Request `json:"run_request"`
+	RetryID          string       `json:"retry_id"`
+	SupersedesRunID  string       `json:"supersedes_run_id"`
+	DeferredBy       string       `json:"deferred_by"`
+	BackendHoldCause string       `json:"backend_hold_cause"`
+	QuestionID       string       `json:"question_id"`
+	Seat             string       `json:"seat"`
 }
 
 // decisionRecord is one record of the output file.
@@ -1170,10 +1171,7 @@ func TestPlanSendsEachItemToTheBackendThePolicyNamesForIt(t *testing.T) {
 	}
 }
 
-// DRAIN-2B's positive direction: a run that failed for the machinery's reasons — here the
-// adapter's own preflight refusal, exit 2 — is re-staged on the next backend in the
-// preference, under a new run id, and the decision says it was a failover.
-func TestPlanFailsOverAnInfrastructureFailureOnceToTheNextBackend(t *testing.T) {
+func TestPlanHoldsAnInfrastructureFailureOnTheFailedBackend(t *testing.T) {
 	const failedRun = "run-item_042-20261109T000000Z"
 	storePath := fixture(t,
 		itemRecord("item_042", "in-queue"),
@@ -1182,14 +1180,8 @@ func TestPlanFailsOverAnInfrastructureFailureOnceToTheNextBackend(t *testing.T) 
 	tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, twoBackendPolicy(t, 1, nil))
 
 	got := plan(t, storePath, tickPath)[0].Payload
-	if got.Action != drain.ActionDispatch || got.Reason != drain.ReasonFailover {
-		t.Fatalf("the decision is %q / %q, want dispatch / failover", got.Action, got.Reason)
-	}
-	if got.RunRequest == nil || got.RunRequest.Backend != "second" {
-		t.Fatalf("the failover names %+v, want the next backend in the preference", got.RunRequest)
-	}
-	if got.RunRequest.RunID == failedRun {
-		t.Fatalf("the failover reused the failed run's id %q: a re-dispatch is a new run", failedRun)
+	if got.Action != drain.ActionHold || got.Reason != drain.ReasonBackendClosed || got.RunRequest != nil || got.DeferredBy != "first" || !strings.Contains(got.BackendHoldCause, failedRun) {
+		t.Fatalf("want a measured hold on first, got %+v", got)
 	}
 }
 
@@ -1252,7 +1244,7 @@ func TestPlanHoldsWhenEveryBackendIsClosed(t *testing.T) {
 	}
 }
 
-// A legacy zero budget cannot stop the walk to an open backend.
+// A legacy zero budget does not change the recorded backend hold.
 func TestPlanIgnoresLegacyZeroFailoverBudget(t *testing.T) {
 	storePath := fixture(t,
 		itemRecord("item_042", "in-queue"),
@@ -1261,8 +1253,8 @@ func TestPlanIgnoresLegacyZeroFailoverBudget(t *testing.T) {
 	tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1, twoBackendPolicy(t, 0, nil))
 
 	got := plan(t, storePath, tickPath)[0].Payload
-	if got.Action != drain.ActionDispatch || got.RunRequest == nil || got.RunRequest.Backend != "second" {
-		t.Fatalf("legacy zero budget changed routing: %+v", got)
+	if got.Action != drain.ActionHold || got.Reason != drain.ReasonBackendClosed || got.DeferredBy != "first" || got.RunRequest != nil {
+		t.Fatalf("legacy zero budget changed the hold: %+v", got)
 	}
 }
 

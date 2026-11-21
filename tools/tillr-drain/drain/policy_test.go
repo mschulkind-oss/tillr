@@ -406,8 +406,8 @@ func TestASeatDecodesFromAStringOrAList(t *testing.T) {
 	}
 }
 
-// Failover wraps within the declared seat list, or preference for unseated work.
-func TestAFailoverWalksTheItemsSeatBackends(t *testing.T) {
+// Quota admission may skip a shut window, but stays within the declared seat list.
+func TestQuotaAdmissionWalkKeepsTheItemsSeat(t *testing.T) {
 	policy := seatListPolicy(t)
 	cases := []struct {
 		name, failed, seat string
@@ -425,7 +425,7 @@ func TestAFailoverWalksTheItemsSeatBackends(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			next, ok := policy.nextBackend(c.failed, c.seat)
+			next, ok := policy.availableBackend(c.failed, c.seat, map[string]bool{c.failed: true})
 			if next != c.next || ok != c.ok {
 				t.Fatalf("after %q on seat %q the walk is %q / %v, want %q / %v",
 					c.failed, c.seat, next, ok, c.next, c.ok)
@@ -433,15 +433,6 @@ func TestAFailoverWalksTheItemsSeatBackends(t *testing.T) {
 		})
 	}
 
-	// NextRequest is the walk the loop performs inside a tick, so it must follow the same
-	// list and stop at the same end.
-	request, ok := policy.NextRequest("item_042", "lane-1", "run-2", "designer-a", "design")
-	if !ok || request.Backend != "designer-b" {
-		t.Fatalf("the loop's failover off designer-a is %+v / %v, want designer-b", request, ok)
-	}
-	if req, ok := policy.NextRequest("item_042", "lane-1", "run-3", "designer-b", "design"); !ok || req.Backend != "designer-a" {
-		t.Fatalf("the loop's failover did not wrap within the design seat's list")
-	}
 }
 
 // Every name in a seat's list must be one of the policy's backends, and the refusal names

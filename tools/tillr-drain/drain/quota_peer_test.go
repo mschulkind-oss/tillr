@@ -17,22 +17,22 @@ func TestQuotaFirstMessageRefusalHasNoContinuation(t *testing.T) {
 			var result LoopResult
 			if pending {
 				settleContinuation(t, l, &result)
-				next := mustPlan(t, l)[0].decision
-				if next.RunRequest == nil || next.RunRequest.Backend != "beta" || next.RunRequest.RunID == d.RunRequest.RunID || next.RunRequest.Resume || next.RunRequest.ResumePrompt != "" {
-					t.Fatalf("refusal became continuation: %+v", next)
-				}
 			} else {
-				out := l.settle(context.Background(), d, rec, logTail(rec.ArtifactRefs), l.laneBase(d.LaneID), "tick", steps.at, &result, &PassTiming{}, nil, false)
+				ctx := context.Background()
+				out := l.settle(ctx, d, rec, logTail(rec.ArtifactRefs), l.laneBase(d.LaneID), "tick", steps.at, &result, &PassTiming{}, nil, false)
 				if out.err != nil || out.stop != "" {
 					t.Fatalf("settle: %+v", out)
 				}
-				if len(steps.requests) != 2 {
-					t.Fatalf("requests=%+v", steps.requests)
+				if err := l.markExamined(ctx, d); err != nil {
+					t.Fatal(err)
 				}
-				next := steps.requests[1]
-				if next.Backend != "beta" || next.RunID == d.RunRequest.RunID || next.Resume || next.ResumePrompt != "" {
-					t.Fatalf("refusal became continuation: %+v", next)
-				}
+			}
+			if len(steps.requests) != 1 {
+				t.Fatalf("settlement started another run: %+v", steps.requests)
+			}
+			next := mustPlan(t, l)[0].decision
+			if next.RunRequest == nil || next.RunRequest.Backend != "beta" || next.RunRequest.RunID == d.RunRequest.RunID || next.RunRequest.Resume || next.RunRequest.ResumePrompt != "" {
+				t.Fatalf("quota refusal did not plan a new run on beta: %+v", next)
 			}
 		})
 	}
