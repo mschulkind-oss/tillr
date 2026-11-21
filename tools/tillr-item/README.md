@@ -93,23 +93,6 @@ a self-dependency (`edge-self`), and any addition that would form a cycle
 (`edge-cycle`), and prints the resulting `item.record` envelope. Run
 `tillr-item dep --help` for all flags.
 
-## Adding a path to an open item
-
-Use `tillr item add-path` when a request needs one more path to complete:
-
-```sh
-tillr item add-path --store .tillr/state.db --item item-example --path docs/notes.md --by owner --why 'Repair the link to the removed file'
-```
-
-The command adds one repository-relative path prefix and records who authorized it
-and why in an `item.update` event. It preserves the item's place and run history.
-Adding the same path again is a no-op. Finished items and calls from worker runs
-are refused. The command changes the store, not any authored item block.
-
-For a request held on its fence, drain can dispatch a new run after the fence
-changes. No close, refile, or separate retry is needed. Run
-`tillr item add-path --help` for all flags.
-
 ## Saving an idea
 
 `idea` reads the owner's words from standard input and accepts the same destinations

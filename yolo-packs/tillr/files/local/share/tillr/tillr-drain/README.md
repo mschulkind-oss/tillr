@@ -3052,9 +3052,6 @@ lanes and what holds each one: unfinished work, an active lease, or an item
 that took the lane earlier in the plan. Express retries can use express or
 ordinary lanes; ordinary retries can use only ordinary lanes. If the plan
 can start the retry, the report names the planned lane and says it is free.
-For a request held on `obstacle-fence`, the mover names `tillr item add-path`.
-Adding a needed path changes the stored fence, making the same item eligible to
-run again without replacing its earlier attempts.
 
 Closed and resolved-elsewhere items remain visible with no further work required.
 Landed items are omitted from the queue-wide report. `tillr drain why <item>`
