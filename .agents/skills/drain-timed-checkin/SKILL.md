@@ -35,6 +35,13 @@ Run **2 ordinary lanes** plus the 2 express lanes. The goal is that 2 means 2:
 each ordinary lane has a live worker. Do not raise the count until both stay
 full across several check-ins.
 
+## The bar (owner, 2026-11-20)
+
+"You should be able to operate this drain in a way such that changes land in
+nearly the same speed as if you were running yourself as sub-agents. There
+shouldn't be random pauses, and if there is, that's a bug that you fix." Every
+idle minute on a lane that has schedulable work is a defect with a cause to find.
+
 ## Start or resume
 
 A session relaunch kills the loop, its keeper, the watcher and the Observatory
