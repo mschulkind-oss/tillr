@@ -785,8 +785,9 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 // against that one answer. On 2026-11-19 a pass folded them afresh for each of 342 decisions,
 // 217 ms each against the live store's 1.3 million events: 74 seconds a plan.
 type versionFolds struct {
-	works  map[string]*pendingWork
-	faults map[string]ItemFault
+	works           map[string]*pendingWork
+	faults          map[string]ItemFault
+	contentVersions map[string]string // optional bulk snapshot for starts
 }
 
 func readVersionFolds(r *store.Reader) (versionFolds, error) {
@@ -814,21 +815,43 @@ func inputVersion(r *store.Reader, d Decision) (string, error) {
 // inputVersionFrom answers d's input version in r, reading the pending runs and the item
 // faults from folds, which must have been read in the same transaction as r.
 func inputVersionFrom(r *store.Reader, d Decision, folds versionFolds) (string, error) {
-	var itemState, rank, allowed, design, seat sql.NullString
-	var updated, itemSeq int64
-	var express bool
-	var hasExpress bool
-	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name='express')`).Scan(&hasExpress); err != nil {
-		return "", err
-	}
-	if hasExpress {
-		if err := r.QueryRow(`SELECT express FROM items WHERE item_id=?`, d.ItemID).Scan(&express); err != nil {
+	var itemInputs []any
+	if d.Action == ActionDispatch || d.Action == ActionRetry {
+		var version string
+		if folds.contentVersions != nil {
+			var ok bool
+			if version, ok = folds.contentVersions[d.ItemID]; !ok {
+				return "", sql.ErrNoRows
+			}
+		} else {
+			schema, err := readVersionSchema(r)
+			if err != nil {
+				return "", err
+			}
+			version, err = readItemContentVersion(r, schema, d.ItemID)
+			if err != nil {
+				return "", err
+			}
+		}
+		itemInputs = []any{version}
+	} else {
+		// Settlement, judging and recorded holds keep their existing validation.
+		var itemState, rank, allowed, design, seat sql.NullString
+		var updated, itemSeq int64
+		var express, hasExpress bool
+		if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name='express')`).Scan(&hasExpress); err != nil {
 			return "", err
 		}
-	}
-	if err := r.QueryRow(`SELECT state, rank, allowed_paths, design_doc, seat, updated_at, event_seq FROM items WHERE item_id = ?`, d.ItemID).
-		Scan(&itemState, &rank, &allowed, &design, &seat, &updated, &itemSeq); err != nil {
-		return "", err
+		if hasExpress {
+			if err := r.QueryRow(`SELECT express FROM items WHERE item_id=?`, d.ItemID).Scan(&express); err != nil {
+				return "", err
+			}
+		}
+		if err := r.QueryRow(`SELECT state, rank, allowed_paths, design_doc, seat, updated_at, event_seq FROM items WHERE item_id = ?`, d.ItemID).
+			Scan(&itemState, &rank, &allowed, &design, &seat, &updated, &itemSeq); err != nil {
+			return "", err
+		}
+		itemInputs = []any{itemState, rank, allowed, design, seat, express, updated, itemSeq}
 	}
 	var latest, laneState, laneRun sql.NullString
 	var seq, until sql.NullInt64
@@ -861,7 +884,7 @@ func inputVersionFrom(r *store.Reader, d Decision, folds versionFolds) (string, 
 			return "", err
 		}
 	}
-	raw, err := json.Marshal([]any{itemState, rank, allowed, design, seat, express, updated, itemSeq, latest, seq, laneState, laneRun, until, work, work != nil && work.Done, faults[d.ItemID], faults[d.ItemID].Seq, triageVersion, ownerOwed})
+	raw, err := json.Marshal(append(itemInputs, latest, seq, laneState, laneRun, until, work, work != nil && work.Done, faults[d.ItemID], faults[d.ItemID].Seq, triageVersion, ownerOwed))
 	return string(raw), err
 }
 
@@ -1119,6 +1142,16 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 				d.Action, d.Reason, d.From, d.To = ActionHold, reason, "held", ""
 				d.LaneID, d.RunRequest = "", nil
 				identifyDecision(&d)
+			}
+			if folds.contentVersions == nil && (d.Action == ActionDispatch || d.Action == ActionRetry) {
+				schema, err := readVersionSchema(r)
+				if err != nil {
+					return err
+				}
+				folds.contentVersions, err = readAllItemContentVersions(r, schema)
+				if err != nil {
+					return err
+				}
 			}
 			version, err := inputVersionFrom(r, d, folds)
 			if err != nil {
