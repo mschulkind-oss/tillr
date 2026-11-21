@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
+	"reflect"
 	"slices"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -18,10 +20,12 @@ import (
 // The watcher alone owns this reader and its cursor. data_version values are
 // comparable only on the same SQLite connection, not across fresh opens.
 type startStoreSync struct {
-	reader       *store.Store
-	dataVersion  int64
-	policy       *Policy
-	quotaChecked time.Time
+	reader                 *store.Store
+	dataVersion            int64
+	policy                 *Policy
+	quotaChecked, lastFull time.Time
+	itemsSignature         [32]byte
+	laneRebuildOwed        bool
 }
 
 func (s *startStoreSync) close() {
@@ -31,7 +35,7 @@ func (s *startStoreSync) close() {
 	}
 }
 
-func (s *startStoreSync) syncStore(ctx context.Context, path string, at time.Time, policy *Policy, prev startSnapshot, rebuild func(*store.Reader, *startSnapshot) error) (startSnapshot, error) {
+func (s *startStoreSync) syncStore(ctx context.Context, path string, at time.Time, policy *Policy, prev startSnapshot, rebuild func(*store.Reader, *startSnapshot, map[string]bool) error) (startSnapshot, error) {
 	fresh := s.reader == nil
 	if fresh {
 		var err error
@@ -42,7 +46,8 @@ func (s *startStoreSync) syncStore(ctx context.Context, path string, at time.Tim
 	}
 	var dv int64
 	next := prev
-	quotaChecked := s.quotaChecked
+	quotaChecked, lastFull := s.quotaChecked, s.lastFull
+	signature, owed := s.itemsSignature, s.laneRebuildOwed
 	err := s.reader.ReadTx(ctx, func(r *store.Reader) error {
 		if err := r.QueryRow(`PRAGMA data_version`).Scan(&dv); err != nil {
 			return err
@@ -56,16 +61,14 @@ func (s *startStoreSync) syncStore(ctx context.Context, path string, at time.Tim
 			if err := next.seed(r, at, policy); err != nil {
 				return err
 			}
-			quotaChecked = at
-			if rebuild != nil {
-				return rebuild(r, &next)
+			quotaChecked, lastFull, owed = at, at, false
+			signature, err = readStartItemsSignature(r, next.versionSchema)
+			if err == nil && rebuild != nil {
+				err = rebuild(r, &next, nil)
 			}
-			return nil
+			return err
 		}
-		// Without an event to explain a write, don't presume cached inputs
-		// are still valid. Narrower raw-write detection belongs in slice 7.
-		if fresh || prev.pending == nil || head < prev.lastEventSeq || dv < s.dataVersion ||
-			(head == prev.lastEventSeq && dv != s.dataVersion) || s.policy != policy {
+		if fresh || prev.pending == nil || head < prev.lastEventSeq || dv < s.dataVersion || s.policy != policy {
 			return reseed()
 		}
 		var delta startStoreDelta
@@ -81,13 +84,41 @@ func (s *startStoreSync) syncStore(ctx context.Context, path string, at time.Tim
 				return reseed()
 			}
 		}
-		if delta.place {
+		// An unlogged write can be an observation or a lease/window update,
+		// but it can also be a raw edit of the queue.
+		if head == prev.lastEventSeq && dv != s.dataVersion {
+			declared, readErr := definition.ForReader(r)
+			if readErr != nil {
+				return readErr
+			}
+			if declared.SHA256 != prev.definitionSHA {
+				return reseed()
+			}
+			signature, err = readStartItemsSignature(r, next.versionSchema)
+			if err != nil {
+				return err
+			}
+			if signature != s.itemsSignature {
+				return reseed()
+			}
+			delta.lanes, delta.quota = true, true
+		}
+		touched := map[string]bool{}
+		if err := delta.refreshItems(r, &next, at, touched); err != nil {
+			return err
+		}
+		if delta.place || len(delta.items) > 0 {
 			ok, err := next.refreshRanks(r)
 			if err != nil {
 				return err
 			}
 			if !ok {
 				return reseed()
+			}
+			next.rebuildReverseEdges()
+			signature, err = readStartItemsSignature(r, next.versionSchema)
+			if err != nil {
+				return err
 			}
 		}
 		next.lastEventSeq = head
@@ -97,11 +128,31 @@ func (s *startStoreSync) syncStore(ctx context.Context, path string, at time.Tim
 		if delta.quota {
 			quotaChecked = at
 		}
-		// Rank-only and observation-only changes keep the already computed
-		// decisions and readiness instants. Other supported changes still
-		// rebuild all proposals; per-item recomputation is a separate step.
-		if rebuild != nil && delta.rebuild() {
-			return rebuild(r, &next)
+		delta.touchEventItems(prev, next, touched)
+		if len(touched) > 0 {
+			next.attempts, next.nodeCounts = maps.Clone(next.attempts), maps.Clone(next.nodeCounts)
+			for id := range touched {
+				if err := next.refreshAttempt(r, id); err != nil {
+					return err
+				}
+			}
+		}
+		lanesChanged := delta.rotation || !maps.Equal(prev.storeLanes, next.storeLanes) ||
+			!maps.Equal(prev.deskOwners, next.deskOwners) || !reflect.DeepEqual(prev.forks, next.forks) ||
+			((delta.lanes || len(delta.pending) > 0) && !maps.Equal(prev.heldLanes(), next.heldLanes()))
+		// Publish occupancy now; amortize the queue-wide repair of cached
+		// lane-sensitive holds over the safety interval.
+		full := !maps.Equal(prev.shut, next.shut) || !maps.Equal(prev.quotaShut, next.quotaShut) ||
+			(owed && at.Sub(lastFull) >= startViewRefreshInterval)
+		owed = owed || lanesChanged
+		if full {
+			lastFull, owed, touched = at, false, nil
+		}
+		if rebuild != nil && (full || lanesChanged || len(touched) > 0) {
+			return rebuild(r, &next, touched)
+		}
+		if rebuild != nil {
+			next.occupied = prev.occupied
 		}
 		return nil
 	})
@@ -112,12 +163,14 @@ func (s *startStoreSync) syncStore(ctx context.Context, path string, at time.Tim
 		return prev, err
 	}
 	s.dataVersion, s.policy, s.quotaChecked = dv, policy, quotaChecked
+	s.lastFull, s.itemsSignature, s.laneRebuildOwed = lastFull, signature, owed
 	return next, nil
 }
 
 type startStoreDelta struct {
 	place, history, priors, inputs, lanes, quota, rotation bool
 	pending, faults                                        []event.Event
+	relevant, items                                        []event.Event
 }
 
 func isPlaceOnlyEvent(e event.Event) bool {
@@ -158,6 +211,14 @@ func (d *startStoreDelta) classify(events []event.Event) bool {
 		switch e.Kind {
 		case run.AllocateKind, run.FinishKind, run.ReleaseKind:
 			d.lanes, known = true, true
+		case item.AddKind, item.RecordKind, item.UpdateKind, item.ConflictKind, item.VerdictRecordKind, item.GrantRecordKind, item.VerdictsWithdrawnKind:
+			if e.ObjectType != "item" || e.ObjectID == nil {
+				return false
+			}
+			d.items = append(d.items, e)
+			known = true
+		case backendProbeKind:
+			d.quota, known = true, true
 		case laneRefusedKind, laneRestoredKind:
 			d.rotation, known = true, true
 		case inputRecordedKind:
@@ -167,17 +228,17 @@ func (d *startStoreDelta) classify(events []event.Event) bool {
 			known = true
 		case "run.progress", run.UsageKind, run.CopiedUsageKind:
 			// These are observations, not scheduling changes.
-			known = e.ObjectType == "run"
+			if e.ObjectType != "run" {
+				return false
+			}
+			continue
 		}
 		if !known {
 			return false
 		}
+		d.relevant = append(d.relevant, e)
 	}
 	return true
-}
-
-func (d startStoreDelta) rebuild() bool {
-	return d.history || d.priors || d.inputs || d.lanes || d.quota || d.rotation || len(d.pending) > 0 || len(d.faults) > 0
 }
 
 func (d startStoreDelta) apply(r *store.Reader, s *startSnapshot, at time.Time, policy *Policy) error {
@@ -202,9 +263,19 @@ func (d startStoreDelta) apply(r *store.Reader, s *startSnapshot, at time.Time, 
 			return err
 		}
 	}
-	if d.priors || len(d.pending) > 0 {
-		if err := s.refreshAttemptOrdinals(r); err != nil {
-			return err
+	if !d.history && len(d.items) > 0 {
+		s.history.known, s.history.ranBefore = maps.Clone(s.history.known), maps.Clone(s.history.ranBefore)
+		for _, e := range d.items {
+			var payload struct {
+				State string `json:"state"`
+			}
+			if json.Unmarshal(e.Payload, &payload) == nil && payload.State != "" {
+				id := *e.ObjectID
+				s.history.known[id] = true
+				if payload.State == StateInProgress {
+					s.history.ranBefore[id] = true
+				}
+			}
 		}
 	}
 	if d.inputs {
@@ -254,7 +325,7 @@ func (s *startSnapshot) refreshRanks(r *store.Reader) (bool, error) {
 	if err := rows.Err(); err != nil {
 		return false, err
 	}
-	if len(items) != len(s.items) {
+	if len(items) != len(byID) {
 		return false, nil
 	}
 	s.items, s.itemsByID = items, byID
