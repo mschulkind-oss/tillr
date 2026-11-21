@@ -11,10 +11,12 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// releasableItemWait returns the next state for a fulfilled named item wait.
-// Generated repair holds keep their stronger rules: closing the repair can release
-// the hold, and a repair landing newer than the selected staging base does not.
-func (l *Loop) releasableItemWait(ctx context.Context, r *store.Reader, id string) (string, error) {
+// repairedTrunkWaiter returns the underlying state for an item held behind a trunk fixer
+// or tooling defect item once the hold's condition is gone: when the fixer or defect item
+// is closed, when the fixer landed in the base staging will select, or when a proof has
+// passed the fixer's checks on a commit the selected base contains. A landing newer than
+// the proved base is not evidence.
+func (l *Loop) repairedTrunkWaiter(ctx context.Context, r *store.Reader, id string) (string, error) {
 	var state string
 	if err := r.QueryRow(`SELECT state FROM items WHERE item_id=?`, id).Scan(&state); err != nil {
 		return "", err
@@ -26,33 +28,18 @@ func (l *Loop) releasableItemWait(ctx context.Context, r *store.Reader, id strin
 	if err != nil || waiting == nil {
 		return "", err
 	}
-	fixer, ok := strings.CutPrefix(waiting.Waiter, "item:")
-	if !ok || fixer == "" {
-		return "", nil
-	}
+	fixer := strings.TrimPrefix(waiting.Waiter, "item:")
 	trunk := IsTrunkFixer(fixer)
 	// A tooling obstacle's wait is released by the same rule: its defect item landed in
 	// the base staging will select (defect.go).
 	defect := IsDefectItem(fixer) && strings.HasPrefix(waiting.Reason, RefusalToolingDefect+":")
-	if !trunk && !defect {
-		blocker, err := item.LandedBlocker(r, waiting)
-		if err != nil || blocker == "" {
-			return "", err
-		}
-		if underlying == "not-started" {
-			return underlying, nil // Restore a draft without admitting it to dispatch.
-		}
-		return StateInQueue, nil
+	if !strings.HasPrefix(waiting.Waiter, "item:") || (!trunk && !defect) {
+		return "", nil
 	}
-	return l.repairedTrunkWaiter(ctx, r, id, fixer, underlying, defect)
-}
-
-func (l *Loop) repairedTrunkWaiter(ctx context.Context, r *store.Reader, id, fixer, underlying string, defect bool) (string, error) {
 	if underlying != StateInQueue && underlying != "not-started" {
 		return "", nil
 	}
-	var state string
-	err := r.QueryRow(`SELECT state FROM items WHERE item_id=?`, fixer).Scan(&state)
+	err = r.QueryRow(`SELECT state FROM items WHERE item_id=?`, fixer).Scan(&state)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -123,9 +110,10 @@ func (l *Loop) repairedTrunkWaiter(ctx context.Context, r *store.Reader, id, fix
 	return underlying, nil
 }
 
-// releaseTrunkAcquittals also releases ordinary named item waits before planning.
-// Recheck under the write transaction so an owner's newer disposition cannot be
-// overwritten by an earlier read. No write is needed when nothing is releasable.
+// releaseTrunkAcquittals runs before planning, without a write when nothing is
+// releasable. Recheck under the write transaction so an owner's newer disposition
+// cannot be overwritten by an earlier read. SetState clears the waiter and keeps
+// the release in the item's event history; the old candidate is never retained.
 func (l *Loop) releaseTrunkAcquittals(ctx context.Context) error {
 	registerRewriteStore(l.cfg.Root, l.cfg.Store)
 	if err := l.releaseTrunkObstacleHolds(ctx); err != nil {
@@ -149,7 +137,7 @@ func (l *Loop) releaseTrunkAcquittals(ctx context.Context) error {
 			if row.State != StateBlocked {
 				continue
 			}
-			state, err := l.releasableItemWait(gctx, r, row.ItemID)
+			state, err := l.repairedTrunkWaiter(gctx, r, row.ItemID)
 			if err != nil {
 				return err
 			}
@@ -164,7 +152,7 @@ func (l *Loop) releaseTrunkAcquittals(ctx context.Context) error {
 	}
 	return writeGatheredFrom(ctx, s, facts, func(ctx context.Context, tx *store.Tx) error {
 		for _, id := range ready {
-			state, err := l.releasableItemWait(ctx, tx.Reader(), id)
+			state, err := l.repairedTrunkWaiter(ctx, tx.Reader(), id)
 			if err != nil {
 				return err
 			}
