@@ -42,9 +42,12 @@ func (l *Loop) waitForTrigger(ctx context.Context, leases []LaneLease, at time.T
 	for {
 		select {
 		case c := <-completions:
-			before := result.Dispatched
+			before := l.dispatched(result)
 			stop, err := l.finishRunStep(ctx, c, result)
-			if stop != "" || err != nil || result.Dispatched != before || l.activeItems[c.itemID] == "" {
+			l.mu.Lock()
+			advanced := result.Dispatched != before || l.activeItems[c.itemID] == ""
+			l.mu.Unlock()
+			if stop != "" || err != nil || advanced {
 				return stop, err
 			}
 			// The handoff began this item's examination. Keep listening for its

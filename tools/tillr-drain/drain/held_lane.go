@@ -397,7 +397,7 @@ func (l *Loop) releaseIdleHeldCandidates(ctx context.Context) error {
 		return err
 	}
 	for id, w := range works {
-		if w.Done || w.LaneReleased || w.NeedsStage || w.Candidate == nil || w.Decision.RunRequest == nil || l.active[w.Decision.RunRequest.RunID] || busy[w.Decision.LaneID] {
+		if w.Done || w.LaneReleased || w.NeedsStage || w.Candidate == nil || w.Decision.RunRequest == nil || l.isActive(w.Decision.RunRequest.RunID) || busy[w.Decision.LaneID] {
 			continue
 		}
 		reason := faults[id].Reason

@@ -2,13 +2,108 @@ package drain
 
 import (
 	"context"
+	"errors"
+	"reflect"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
+
+func TestNoteLaneWriteCountsTheLane(t *testing.T) {
+	var l Loop
+	l.noteLaneWrite("lane-1")
+	l.noteLaneWrite("lane-1")
+	l.noteLaneWrite("")
+	if got := l.laneChanges; !reflect.DeepEqual(got, map[string]int{"lane-1": 2}) {
+		t.Fatalf("laneChanges = %v, want only lane-1 counted twice", got)
+	}
+}
+
+func TestUnmovedLanesDropsLanesThatMoved(t *testing.T) {
+	got := unmovedLanes([]string{"lane-1", "lane-2", "lane-3"}, map[string]int{"lane-1": 4, "lane-2": 7, "lane-3": 0}, map[string]int{"lane-1": 4, "lane-2": 9, "lane-3": 0})
+	if want := []string{"lane-1", "lane-3"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("unmovedLanes = %v, want %v", got, want)
+	}
+}
+
+func TestLaneSnapshotOverlapsStaging(t *testing.T) {
+	boom := errors.New("stage failed")
+	entered, release := make(chan struct{}), make(chan struct{})
+	l := Loop{cfg: LoopConfig{Lanes: []string{"moving", "untouched"}, Stage: stagerFunc(func(context.Context, StageSpec) error {
+		close(entered)
+		<-release
+		return boom
+	})}}
+	watch := l.idleLaneEpochs()
+	result := make(chan error, 1)
+	go func() { result <- l.stageLane(context.Background(), StageSpec{LaneID: "moving"}) }()
+	<-entered
+	during := l.idleLaneEpochs()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for range 100 {
+			l.idleLaneEpochs()
+		}
+	}()
+	close(release)
+	if err := <-result; !errors.Is(err, boom) {
+		t.Errorf("stage error = %v, want %v", err, boom)
+	}
+	for range 100 {
+		l.noteLaneWrite("moving")
+	}
+	wg.Wait()
+	if _, ok := during["moving"]; ok {
+		t.Errorf("snapshot during staging still watches moving lane: %v", during)
+	}
+	after := l.idleLaneEpochs()
+	if after["moving"] != 102 {
+		t.Errorf("epoch after failed staging and 100 notes = %d, want 102", after["moving"])
+	}
+	if got := unmovedLanes(l.cfg.Lanes, watch, after); !reflect.DeepEqual(got, []string{"untouched"}) {
+		t.Errorf("still watching %v, want only untouched", got)
+	}
+}
+
+func TestAsyncBracketStillChecksUntouchedSibling(t *testing.T) {
+	for _, escape := range []bool{false, true} {
+		f := newRefusalLoopFixtureWithLanes(t, 3)
+		l := f.loop(t, &recordingSteps{}, stagerFunc(func(_ context.Context, spec StageSpec) error {
+			writeRepoFile(t, f.laneRoot+"/"+spec.LaneID+"/"+WorktreeDir, "authorized.txt", "staging")
+			return nil
+		}))
+		l.cfg.Lanes = []string{"lane-1", "lane-2", "lane-3"}
+		ctx := context.Background()
+		watched := []string{"lane-2", "lane-3"}
+		epochs := l.idleLaneEpochs()
+		before, err := l.snapshotIdleSiblings(ctx, l.lanePath("lane-1"), watched, epochs)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := l.stageLane(ctx, StageSpec{LaneID: "lane-2"}); err != nil {
+			t.Fatal(err)
+		}
+		if escape {
+			writeRepoFile(t, l.lanePath("lane-3"), "escape.txt", "outside target")
+		}
+		var result LoopResult
+		d := Decision{LaneID: "lane-1", RunRequest: &run.Request{RunID: "run-sibling-bracket", ItemID: "item-sibling-bracket"}}
+		if _, err := l.closeAsyncBracket(ctx, d, l.cfg.Now(), before, &result, watched, epochs); err != nil {
+			t.Fatal(err)
+		}
+		if (result.StopStep == "boundary check") != escape || (escape && !strings.Contains(result.Detail, "escape.txt")) {
+			t.Fatalf("escape=%v, boundary step=%q detail=%q", escape, result.StopStep, result.Detail)
+		}
+	}
+}
 
 func proposeFixture(t *testing.T, l *Loop, at time.Time, previous startSnapshot) startSnapshot {
 	t.Helper()

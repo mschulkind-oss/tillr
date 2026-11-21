@@ -19,14 +19,8 @@ import (
 // marked processes can still write there. This also recovers holds after a crash
 // between release and recording the refusal, and after a supervisor restart.
 func (l *Loop) recheckLaneChildren(ctx context.Context) error {
-	if l.laneConditions == nil {
-		l.laneConditions = map[string]*laneCondition{}
-	}
-	if !l.laneConditionsLoaded {
-		if err := l.loadLaneConditions(ctx); err != nil {
-			return err
-		}
-		l.laneConditionsLoaded = true
+	if err := l.loadLaneConditions(ctx); err != nil {
+		return err
 	}
 	s, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
@@ -140,7 +134,7 @@ func (l *Loop) recheckLaneChildren(ctx context.Context) error {
 			if err := l.holdLaneChildren(ctx, lane, pids[lane]); err != nil {
 				return err
 			}
-		} else if c := l.laneConditions[lane]; c != nil && c.reason == ReasonLaneChildren {
+		} else if l.hasLaneCondition(lane, ReasonLaneChildren) {
 			if err := l.restoreLane(ctx, lane); err != nil {
 				return err
 			}

@@ -116,6 +116,8 @@ type laneCondition struct {
 
 // rotationLanes answers the configured lanes not out of rotation.
 func (l *Loop) rotationLanes() []string {
+	l.laneMu.Lock()
+	defer l.laneMu.Unlock()
 	lanes := make([]string, 0, len(l.cfg.Lanes))
 	for _, lane := range l.cfg.Lanes {
 		if c := l.laneConditions[lane]; c != nil && c.out {
@@ -126,9 +128,27 @@ func (l *Loop) rotationLanes() []string {
 	return lanes
 }
 
+// hasLaneCondition matches even a condition provisionally put back in rotation.
+func (l *Loop) hasLaneCondition(lane, reason string) bool {
+	l.laneMu.Lock()
+	defer l.laneMu.Unlock()
+	c := l.laneConditions[lane]
+	return c != nil && (reason == "" || c.reason == reason)
+}
+
 // takeLaneOutOfRotation records a lane-owned refusal: one event and one line per condition,
 // and nothing while the same condition persists.
 func (l *Loop) takeLaneOutOfRotation(ctx context.Context, refusal *LaneRefusalError) error {
+	l.laneMu.Lock()
+	at, err := l.recordLaneRefusal(ctx, refusal)
+	l.laneMu.Unlock()
+	if err == nil {
+		l.noteStartRotation(at)
+	}
+	return err
+}
+
+func (l *Loop) recordLaneRefusal(ctx context.Context, refusal *LaneRefusalError) (time.Time, error) {
 	lane := refusal.LaneID
 	if l.laneConditions == nil {
 		l.laneConditions = map[string]*laneCondition{}
@@ -145,11 +165,10 @@ func (l *Loop) takeLaneOutOfRotation(ctx context.Context, refusal *LaneRefusalEr
 	}
 	if !c.recorded {
 		if err := appendLaneEvent(ctx, l.cfg.Store, laneRefusedKind, lane, laneRefusal{LaneID: lane, Reason: c.reason, Detail: c.detail, Remedy: c.remedy}, c.at); err != nil {
-			return err
+			return c.at, err
 		}
 		c.recorded = true
 	}
-	l.noteStartRotation(c.at)
 	if !c.printed {
 		recheck := fmt.Sprintf("when its HEAD or status changes, or every %s", laneRecheckInterval)
 		if c.reason == ReasonLaneChildren {
@@ -159,20 +178,23 @@ func (l *Loop) takeLaneOutOfRotation(ctx context.Context, refusal *LaneRefusalEr
 			lane, c.reason, c.detail, c.remedy, recheck)
 		c.printed = true
 	}
-	return nil
+	return c.at, nil
 }
 
 // restoreLane records a lane that staged after a refusal back in rotation.
 func (l *Loop) restoreLane(ctx context.Context, lane string) error {
-	c := l.laneConditions[lane]
-	if c == nil {
+	l.laneMu.Lock()
+	if l.laneConditions[lane] == nil {
+		l.laneMu.Unlock()
 		return nil
 	}
 	delete(l.laneConditions, lane)
 	at := l.cfg.Now().UTC()
-	if err := appendLaneEvent(ctx, l.cfg.Store, laneRestoredKind, lane, struct {
+	err := appendLaneEvent(ctx, l.cfg.Store, laneRestoredKind, lane, struct {
 		LaneID string `json:"lane_id"`
-	}{lane}, at); err != nil {
+	}{lane}, at)
+	l.laneMu.Unlock()
+	if err != nil {
 		return err
 	}
 	l.reconcileStartLanes(ctx, l.rotationLanes(), at)
@@ -184,15 +206,6 @@ func (l *Loop) restoreLane(ctx context.Context, lane string) error {
 // interval passed. The next staging on it is the re-check: a lane refused the same way goes
 // back out silently.
 func (l *Loop) recheckLanes(ctx context.Context) error {
-	if l.laneConditions == nil {
-		l.laneConditions = map[string]*laneCondition{}
-	}
-	if !l.laneConditionsLoaded {
-		if err := l.loadLaneConditions(ctx); err != nil {
-			return err
-		}
-		l.laneConditionsLoaded = true
-	}
 	if err := l.recheckLaneChildren(ctx); err != nil {
 		return err
 	}
@@ -200,6 +213,7 @@ func (l *Loop) recheckLanes(ctx context.Context) error {
 		return nil
 	}
 	now := l.cfg.Now().UTC()
+	l.laneMu.Lock()
 	restored := false
 	for lane, c := range l.laneConditions {
 		if !c.out || c.reason == ReasonLaneChildren {
@@ -217,6 +231,7 @@ func (l *Loop) recheckLanes(ctx context.Context) error {
 			restored = true
 		}
 	}
+	l.laneMu.Unlock()
 	if restored {
 		l.reconcileStartLanes(ctx, l.rotationLanes(), now)
 	}
@@ -281,12 +296,20 @@ func (l *Loop) laneHeadRetained(ctx context.Context, lane string, c *laneConditi
 // record an unchanged condition again. Each starts in rotation: the first staging re-checks
 // it.
 func (l *Loop) loadLaneConditions(ctx context.Context) error {
+	l.laneMu.Lock()
+	defer l.laneMu.Unlock()
+	if l.laneConditionsLoaded {
+		return nil
+	}
+	if l.laneConditions == nil {
+		l.laneConditions = map[string]*laneCondition{}
+	}
 	s, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
-	return s.ReadTx(ctx, func(r *store.Reader) error {
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
 		rows, err := r.Query(`SELECT kind, object_id, payload FROM events WHERE kind IN (?, ?) AND object_type = 'lane' ORDER BY seq`, laneRefusedKind, laneRestoredKind)
 		if err != nil {
 			return err
@@ -310,6 +333,8 @@ func (l *Loop) loadLaneConditions(ctx context.Context) error {
 		}
 		return rows.Err()
 	})
+	l.laneConditionsLoaded = err == nil
+	return err
 }
 
 // laneFingerprint is what a re-check compares: the lane worktree's HEAD and status,
@@ -359,6 +384,8 @@ func appendLaneEvent(ctx context.Context, storePath, kind, lane string, payload 
 
 // outLanes answers the lanes a refusal has taken out of rotation.
 func (l *Loop) outLanes() map[string]bool {
+	l.laneMu.Lock()
+	defer l.laneMu.Unlock()
 	out := map[string]bool{}
 	for lane, c := range l.laneConditions {
 		if c != nil && c.out {

@@ -69,6 +69,55 @@ type startSnapshot struct {
 	nextLeaseExpiry, nextWindowExpiry int64 // Unix milliseconds, zero when none.
 }
 
+// noteLaneWrite invalidates sibling observations of an authorized lane writer.
+func (l *Loop) noteLaneWrite(lane string) {
+	if lane == "" {
+		return
+	}
+	l.mu.Lock()
+	l.bumpLaneEpoch(lane)
+	l.mu.Unlock()
+}
+
+// bumpLaneEpoch requires mu.
+func (l *Loop) bumpLaneEpoch(lane string) {
+	if l.laneChanges == nil {
+		l.laneChanges = map[string]int{}
+	}
+	l.laneChanges[lane]++
+}
+
+// idleLaneEpochs excludes local staging writers; callers additionally exclude
+// lanes that their store snapshot reports as busy.
+func (l *Loop) idleLaneEpochs() map[string]int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	epochs := make(map[string]int, len(l.cfg.Lanes))
+	for _, lane := range l.cfg.Lanes {
+		if l.stagingLanes[lane] == 0 {
+			epochs[lane] = l.laneChanges[lane]
+		}
+	}
+	return epochs
+}
+
+type laneWatch struct {
+	lanes  []string
+	epochs map[string]int
+}
+
+func unmovedLanes(watched []string, seen, now map[string]int) []string {
+	kept := make([]string, 0, len(watched))
+	for _, lane := range watched {
+		epoch, seenIdle := seen[lane]
+		current, stillIdle := now[lane]
+		if seenIdle && stillIdle && epoch == current {
+			kept = append(kept, lane)
+		}
+	}
+	return kept
+}
+
 type startView struct {
 	current atomic.Pointer[startSnapshot]
 	updated chan struct{} // Coalesced notification; nothing in dispatch waits on it.

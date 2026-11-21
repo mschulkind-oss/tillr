@@ -18,6 +18,8 @@ import (
 // question needs positive evidence of compaction in the index's ledger;
 // otherwise the operator must restore it.
 func (l *Loop) settleOwnerAnswers(ctx context.Context, sha string) error {
+	l.ownerAnswerMu.Lock()
+	defer l.ownerAnswerMu.Unlock()
 	s, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		return err

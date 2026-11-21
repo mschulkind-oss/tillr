@@ -46,7 +46,9 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 		if err != nil {
 			return err
 		}
+		l.mu.Lock()
 		l.sessionID, l.sessionStarted = id, at.UnixMilli()
+		l.mu.Unlock()
 	}
 	// Only a successful first refresh proves this Loop initialized all registered
 	// owners and legacy data. Later heartbeats open that existing store, not a
@@ -100,16 +102,42 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 		return tx.QueryRow(`SELECT COALESCE(stop_requested, 0) FROM drain_sessions WHERE session_id = ?`, l.sessionID).Scan(&stopFlag)
 	})
 	if err == nil {
+		l.mu.Lock()
 		l.sessionInitialized = true
-		if stopFlag > 0 && l.sessionStop != nil {
-			l.sessionStop()
+		l.mu.Unlock()
+		if stopFlag > 0 {
+			l.signalSessionStop()
 		}
 	}
 	return err
 }
 
+func (l *Loop) currentSessionID() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.sessionID
+}
+
+func (l *Loop) setSessionStop(stop func()) {
+	l.mu.Lock()
+	l.sessionStop = stop
+	l.mu.Unlock()
+}
+
+func (l *Loop) signalSessionStop() {
+	l.mu.Lock()
+	stop := l.sessionStop
+	l.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
+}
+
 func (l *Loop) stopRequested(ctx context.Context) (bool, error) {
-	if l.sessionID == "" || !l.sessionInitialized {
+	l.mu.Lock()
+	id, initialized := l.sessionID, l.sessionInitialized
+	l.mu.Unlock()
+	if id == "" || !initialized {
 		return false, nil
 	}
 	if operatorStopped(ctx) {
@@ -122,7 +150,7 @@ func (l *Loop) stopRequested(ctx context.Context) (bool, error) {
 	defer s.Close()
 	flag := 0
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
-		err := r.QueryRow(`SELECT COALESCE(stop_requested, 0) FROM drain_sessions WHERE session_id = ?`, l.sessionID).Scan(&flag)
+		err := r.QueryRow(`SELECT COALESCE(stop_requested, 0) FROM drain_sessions WHERE session_id = ?`, id).Scan(&flag)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
@@ -143,9 +171,7 @@ func (l *Loop) checkStopRequested(ctx context.Context) error {
 		return err
 	}
 	if stopped {
-		if l.sessionStop != nil {
-			l.sessionStop()
-		}
+		l.signalSessionStop()
 		if err := ctx.Err(); err != nil {
 			return err
 		}

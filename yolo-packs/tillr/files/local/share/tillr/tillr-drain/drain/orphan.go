@@ -197,7 +197,7 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 		endedDispatches := map[string]bool{}
 		for _, work := range works {
 			if req := work.Decision.RunRequest; req != nil && !work.Done && !work.Ready && !work.Examining &&
-				work.Owner != nil && *work.Owner == *here && work.LoopID != l.sessionID && !l.active[req.RunID] {
+				work.Owner != nil && *work.Owner == *here && work.LoopID != l.currentSessionID() && !l.isActive(req.RunID) {
 				ended, seen := endedDispatches[work.LoopID]
 				if !seen {
 					ended, err = dispatchSessionEnded(r, work.LoopID)
@@ -226,7 +226,7 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 					}
 				}
 			}
-			if work.Done && work.Decision.RunRequest != nil && !l.active[work.Decision.RunRequest.RunID] {
+			if work.Done && work.Decision.RunRequest != nil && !l.isActive(work.Decision.RunRequest.RunID) {
 				if unbounded[work.Decision.RunRequest.RunID] == work.Decision.LaneID {
 					stuck[work.Decision.RunRequest.RunID] = work
 					if work.Examiner != nil {
@@ -234,7 +234,7 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 					}
 				}
 			}
-			if work.Decision.RunRequest != nil && !work.Done && !work.Examining && (work.Owner == nil || (here != nil && *work.Owner == *here)) && len(work.Decision.Parallel) == 0 && !l.active[work.Decision.RunRequest.RunID] && unbounded[work.Decision.RunRequest.RunID] == work.Decision.LaneID {
+			if work.Decision.RunRequest != nil && !work.Done && !work.Examining && (work.Owner == nil || (here != nil && *work.Owner == *here)) && len(work.Decision.Parallel) == 0 && !l.isActive(work.Decision.RunRequest.RunID) && unbounded[work.Decision.RunRequest.RunID] == work.Decision.LaneID {
 				// A continuation's run.resume event clears the dispatch owner, so no
 				// owner's death can ever release its lane. Whether the resume is still
 				// the run's last word is read here; the face is judged below.
@@ -345,7 +345,7 @@ func (l *Loop) offRotationStranded(work *pendingWork, unbounded map[string]strin
 		return false
 	}
 	id, lane := work.Decision.RunRequest.RunID, work.Decision.LaneID
-	if l.active[id] || unbounded[id] != lane || documentDesk(lane) {
+	if l.isActive(id) || unbounded[id] != lane || documentDesk(lane) {
 		return false
 	}
 	for _, rotated := range l.cfg.Lanes {

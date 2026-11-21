@@ -119,7 +119,7 @@ func (l *Loop) migrateOwnerQuestions(ctx context.Context, result *LoopResult) er
 		if e != nil {
 			return e
 		}
-		result.Dispatched++
+		l.addDispatched(result)
 		l.countSpend(result, rec)
 		stop, e := l.closeRunBracket(ctx, l.lanePath(d.LaneID), *d.RunRequest, d.PassID, at, before, result, nil)
 		if e != nil {
