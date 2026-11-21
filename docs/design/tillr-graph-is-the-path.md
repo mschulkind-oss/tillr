@@ -2,7 +2,7 @@
 title: "The item graph is the whole path, and one pure function decides what comes next"
 status: in-review
 stage: DESIGN
-updated: 2026-11-18
+updated: 2026-11-21
 tags:
   - tillr
   - graphs
@@ -509,7 +509,7 @@ The trunk's health is a set of facts written by proof nodes. Nothing else may ca
 | :--- | :--- | :--- |
 | Green at the pointer, red from landing L on | Red on K, attributed to L | L can be pulled out |
 | Red at the pointer too, with unchanged inputs | Red on K, unattributed: **wrong judge** | No landing is at fault. The check or its environment is broken, and no revert repairs it |
-| Red, then green, with no change to K's inputs | K is flaky | A defect in the check. It is filed as a defect item, and the trunk is not red on K |
+| Red, then green, with no change to K's inputs | K is flaky, and K is disabled | A defect in the check. By the owner's ruling of 2026-11-21 ("The correct move for a flaky test is disable it, file an item to fix it, and don't let it block anything. It is not considered green, but it also doesn't let you block other things."), K is disabled and one defect item is filed. The trunk is not red on K, K is not reported green, and nothing waits on K. The mechanism is the designer's, in [the gate rework](./gate-rework.md#a-contradicted-check-is-disabled) |
 | A bisection step has no verdict | Attribution is pending | An exception; the step resumes |
 
 **The remedies, in order.**
@@ -717,7 +717,8 @@ Each of these is an amendment owed in the document that holds the row, to be mad
 | | `D-PT7` | Kept as a scheduling choice: whether a resumed session is compacted |
 | [Designer sessions](../reference/tillr-designer-sessions.md#why-its-this-way) | `D-CD10` | "One automatic fallback" becomes row 18: each reason a session cannot resume is a stated fact |
 | [The judge and the lifecycle](./tillr-judge-and-lifecycle.md#return-a-design-runs-gate-refusal-to-its-own-session) | The gate refusal's return to its own session | Kept, and made the rule for every producer |
-| [The gate rework](./gate-rework.md#decision-ledger) | [OQ-GR1](./gate-rework.md#decision-ledger), the red cap | Ruled out by the owner on 2026-11-18 ([OQ-GP7](#OQ-GP7)) and replaced by the one waiting rule of [Section 8.2](#82-proof-and-a-red-trunk); the cap is live until that rule is built |
+| [The gate rework](./gate-rework.md#decision-ledger) | `D-GR18`, a contradicted check is disabled | Kept. The owner's ruling of 2026-11-21; the attribution table of [Section 8.2](#82-proof-and-a-red-trunk) follows it |
+| | [OQ-GR1](./gate-rework.md#decision-ledger), the red cap | Ruled out by the owner on 2026-11-18 ([OQ-GP7](#OQ-GP7)) and replaced by the one waiting rule of [Section 8.2](#82-proof-and-a-red-trunk); the cap is live until that rule is built |
 | | [OQ-GR2](./gate-rework.md#decision-ledger), lanes cut from the green pointer | Conflicts with R8. Withdrawn: every node starts on the latest trunk, and a worker is told when that trunk is red |
 | | `D-GR6`, automatic revert off | Overturned by the owner on 2026-11-17 ([OQ-GP1](#OQ-GP1)); amended in [gate rework Section 6.8](gate-rework.md#68-a-red-heavy-check) and built 2026-11-18 |
 | The retired board landing design | Suspend and resume by a tool result | The only earlier design of "done is a suspended tool call". It is retired with the board; [the landing call](./tillr-landing-call.md) designs the mechanism for tillr |
