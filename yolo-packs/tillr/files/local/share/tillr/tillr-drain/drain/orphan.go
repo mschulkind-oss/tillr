@@ -117,7 +117,10 @@ func liveRunProcessIDs(storePath string) (live, faces map[string]bool, err error
 // proven dead and its claim keeps its protection.
 type reapEvidence struct {
 	dead map[LoopOwner]bool
-	live map[string]bool
+	// A prior session of this same PID can also lose its waiters (exec). Key
+	// that evidence by run and session, never by PID: new claims are not dead.
+	prior map[string]string
+	live  map[string]bool
 	// faces is every run ID whose run face itself is alive (isRunFaceArgv), from the same
 	// scan as live. Only a face keeps a dead examiner's lease: a stray child that merely
 	// carries the run's markers is not the run.
@@ -147,11 +150,20 @@ func (ev reapEvidence) ownerDead(owner *LoopOwner) bool {
 	return owner != nil && ev.dead[*owner]
 }
 
+func dispatchSessionEnded(r *store.Reader, id string) (bool, error) {
+	if id == "" {
+		return false, nil
+	}
+	var ended bool
+	err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM drain_sessions WHERE session_id = ? AND ended_at IS NOT NULL)`, id).Scan(&ended)
+	return ended, err
+}
+
 // gatherReapEvidence reads the pending claims, then judges their owners and scans
 // the process table once, with no transaction open. The caller holds the run-start
 // lock from here through its write, so no run face starts in between.
 func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvidence, error) {
-	ev := reapEvidence{dead: map[LoopOwner]bool{}, live: map[string]bool{}, faces: map[string]bool{}, stuck: map[string]string{}, resumeStuck: map[string]string{}, offRotation: map[string]string{}, reclaimed: &[]string{}, reapedSingle: &[]*pendingWork{}}
+	ev := reapEvidence{dead: map[LoopOwner]bool{}, prior: map[string]string{}, live: map[string]bool{}, faces: map[string]bool{}, stuck: map[string]string{}, resumeStuck: map[string]string{}, offRotation: map[string]string{}, reclaimed: &[]string{}, reapedSingle: &[]*pendingWork{}}
 	var owners []LoopOwner
 	stuck := map[string]*pendingWork{}
 	resumed := map[string]*pendingWork{}
@@ -175,7 +187,22 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 		if err != nil {
 			return err
 		}
+		endedDispatches := map[string]bool{}
 		for _, work := range works {
+			if req := work.Decision.RunRequest; req != nil && !work.Done && !work.Ready && !work.Examining &&
+				work.Owner != nil && *work.Owner == *here && work.LoopID != l.sessionID && !l.active[req.RunID] {
+				ended, seen := endedDispatches[work.LoopID]
+				if !seen {
+					ended, err = dispatchSessionEnded(r, work.LoopID)
+					if err != nil {
+						return err
+					}
+					endedDispatches[work.LoopID] = ended
+				}
+				if ended {
+					ev.prior[req.RunID] = work.LoopID
+				}
+			}
 			if work.Decision.RunRequest != nil && (fromOtherDomain(work.Owner, here) || fromOtherDomain(work.Examiner, here)) {
 				ownerDomain := ""
 				if fromOtherDomain(work.Owner, here) {
@@ -256,7 +283,7 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 		ev.dead[owner] = dead
 		anyDead = anyDead || dead
 	}
-	if anyDead || len(stuck) > 0 || len(resumed) > 0 || len(stranded) > 0 {
+	if anyDead || len(ev.prior) > 0 || len(stuck) > 0 || len(resumed) > 0 || len(stranded) > 0 {
 		if ev.live, ev.faces, err = liveRunProcessIDs(l.cfg.Store); err != nil {
 			return ev, err
 		}
@@ -538,7 +565,9 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 				}
 			}
 		}
-		if !ev.ownerDead(work.Owner) {
+		id := work.Decision.RunRequest.RunID
+		priorSession := ev.prior[id] != "" && ev.prior[id] == work.LoopID && !work.Ready && !work.Examining
+		if !ev.ownerDead(work.Owner) && !priorSession {
 			continue
 		}
 		if !work.Examining {
@@ -548,7 +577,6 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 				continue
 			}
 		}
-		id := work.Decision.RunRequest.RunID
 		if ev.live[id] {
 			continue
 		}
