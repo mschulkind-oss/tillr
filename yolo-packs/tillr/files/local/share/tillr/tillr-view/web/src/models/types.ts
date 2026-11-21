@@ -84,7 +84,19 @@ export interface ApiFailure {
   error: ApiErrorBody;
 }
 
+export interface BackendAlarm {
+  kind: string;
+  backend: string;
+  since: string;
+  cause: string;
+  clears: string;
+  command: string;
+  items: string[];
+  lanes: string[];
+}
+
 export interface WaitingRow {
+  alarm?: BackendAlarm;
   graph_changes?: string[];
   place?: number;
   item_id: string;
@@ -413,6 +425,7 @@ export interface GrantView {
 }
 
 export interface SnapshotData {
+  alarms?: BackendAlarm[];
   grants?: GrantView[];
   sources: SourceStates;
   /** The server's own counts, when the build that answered has them. */

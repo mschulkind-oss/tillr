@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/alarms"
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr-drain/judgegrants"
@@ -58,6 +59,7 @@ func (row WhyRow) TableReason() string {
 }
 
 type WhySummary struct {
+	Alarms         []alarms.Alarm `json:"alarms,omitempty"`
 	LanesBusy      int            `json:"lanes_busy"`
 	LanesReserved  int            `json:"lanes_reserved"`
 	LanesWorkers   int            `json:"lanes_workers"`
@@ -73,10 +75,11 @@ type WhySummary struct {
 }
 
 type WhyAnswer struct {
-	Definition   string   `json:"definition"`
-	EventHeadSeq int64    `json:"event_head_seq"`
-	Lanes        []string `json:"lanes"`
-	LanesSource  string   `json:"lanes_source,omitempty"`
+	Alarms       []alarms.Alarm `json:"alarms,omitempty"`
+	Definition   string         `json:"definition"`
+	EventHeadSeq int64          `json:"event_head_seq"`
+	Lanes        []string       `json:"lanes"`
+	LanesSource  string         `json:"lanes_source,omitempty"`
 	// Draining lists the lanes above the offered count that still hold work, each with the
 	// item it holds. The loop serves them until that work lands or is released.
 	Draining []DrainingLane `json:"draining,omitempty"`
@@ -595,7 +598,7 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				if row.Mover == "plan" || row.Mover == "design" || strings.Contains(row.Mover, "design seat") {
 					actor = "design seat"
 				}
-				if row.Class == "needs you" || row.Class == "needs a cause" || strings.HasPrefix(d.Reason, ReasonTrunkPathDirty+": ") {
+				if row.Class == "alarm" || row.Class == "needs you" || row.Class == "needs a cause" || strings.HasPrefix(d.Reason, ReasonTrunkPathDirty+": ") {
 					actor = "operator"
 				}
 				if d.Reason == ReasonConflictOwner {
@@ -736,6 +739,16 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		}
 		answer.Rows = append(answer.Rows, row)
 	}
+	current := make([]alarms.Hold, 0, len(answer.Rows))
+	for _, row := range answer.Rows {
+		d := row.Decision
+		current = append(current, alarms.Hold{Item: row.ItemID, Lane: d.LaneID, Reason: row.Reason, Backends: d.DeferredBy, Judge: d.Seat == "review" && d.From == "candidate"})
+	}
+	answer.Alarms, err = alarms.Read(r, at, alarmPolicy(policy, time.Time{}), current...)
+	if err != nil {
+		return answer, readFailure(err)
+	}
+	answer.Summary.Alarms = answer.Alarms
 	return answer, nil
 }
 
@@ -783,6 +796,10 @@ func whyPresentation(d Decision) (class, where, mover string) {
 	}
 	if strings.HasPrefix(d.Reason, ReasonRedCap+": ") {
 		return "waits on work", "land", "the heavy runner; prove trunk or file its fixer"
+	}
+	if d.Action == ActionHold && (d.Reason == ReasonBackendClosed || d.Reason == ReasonBackendWindow) {
+		rule := holdrules.For(d.Reason)
+		return rule.Class, rule.Where, rule.Mover
 	}
 	where = "queue"
 	if c := d.BlockConflict; c != nil && c.TriageVersion != "" && c.WaitingOn == "design" {
@@ -838,12 +855,10 @@ func whyPresentation(d Decision) (class, where, mover string) {
 		return "needs a cause", "fence", "inspect the idea outcome and authorize a retry"
 	case ReasonBoundaryScopeEscape, StopHostBoundaryViolation:
 		return "needs a cause", "fence", "inspect the boundary report"
-	case ReasonBackendClosed, ReasonInfraExhausted:
+	case ReasonInfraExhausted:
 		return "waits on work", "backend", "a successful tillr-drain probe-backend or a non-infrastructure run"
 	case ReasonCommandFault:
 		return "needs a cause", "lane", "repair the command process and authorize a retry"
-	case ReasonBackendWindow:
-		return "waits on work", "backend", "the backend reset time"
 	case ReasonQuestionRemoved:
 		rule := holdrules.For(d.Reason)
 		return rule.Class, rule.Where, rule.Mover
@@ -876,7 +891,7 @@ func whyPresentation(d Decision) (class, where, mover string) {
 }
 
 func nextActorAction(mover string) string {
-	for _, prefix := range []string{"the owner; ", "owner; ", "the operator; ", "operator; ", "design seat; ", "drain; "} {
+	for _, prefix := range []string{"the owner; ", "owner; ", "the operator; ", "operator; ", "operator: ", "design seat; ", "drain; "} {
 		mover = strings.TrimPrefix(mover, prefix)
 	}
 	switch mover {

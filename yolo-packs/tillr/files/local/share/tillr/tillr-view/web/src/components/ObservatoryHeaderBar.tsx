@@ -21,6 +21,7 @@ import { durationText } from "../models/now";
 import { FALLBACK_POLL_MS } from "../models/queries";
 import type { BoardCounts, BoardFilter, BoardView } from "../models/board";
 import type { ApiEnvelope, GrantView, LaneView, SnapshotData } from "../models/types";
+import { BackendAlarms } from "./BackendAlarms";
 
 const GRANT_WARN_WINDOW_MS = 60 * 60 * 1000;
 
@@ -704,6 +705,7 @@ export function ObservatoryHeaderBar({
 
   return (
     <header className="app-head">
+      <BackendAlarms alarms={snapshot.data.alarms} />
       <div className="brand">
         {railToggle}
         <span className="brand__mark" aria-hidden="true">

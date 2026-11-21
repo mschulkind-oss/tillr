@@ -46,6 +46,9 @@ func appendWaitingDesigns(r *store.Reader, rows []waitingRow) ([]waitingRow, err
 func sortWaitingDocuments(rows []waitingRow) {
 	// Keep the existing order for all non-document rows, including auxiliary rows.
 	sort.SliceStable(rows, func(i, j int) bool {
+		if (rows[i].Class == "alarm") != (rows[j].Class == "alarm") {
+			return rows[i].Class == "alarm"
+		}
 		if rows[i].Document == "" {
 			return rows[j].Document != ""
 		}

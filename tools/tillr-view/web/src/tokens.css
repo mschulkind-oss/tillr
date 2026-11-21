@@ -57,6 +57,9 @@
 }
 .observatory-shell { font: var(--t-body); height: 100dvh; overflow: auto; }
 .observatory-shell__sticky { position: sticky; top: 0; z-index: 20; background: var(--surface); border-bottom: 1px solid var(--line); }
+.backend-alarms { grid-column: 1 / -1; color: var(--ink-1); border: 2px solid var(--state-cause); padding: var(--s2) var(--s4); overflow-wrap: anywhere; }
+.backend-alarms ul { margin: 0; padding-inline-start: var(--s4); }
+.backend-alarms strong { color: var(--state-cause); }
 .observatory-nav { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s4); padding: var(--s3) var(--s4); }
 .observatory-nav nav { display: flex; flex-wrap: wrap; gap: var(--s3); }
 .observatory-nav a, .home a, .loop-summary a { color: var(--accent); }
@@ -75,7 +78,7 @@
 .class-state[data-class="ready"] { color: var(--state-ready); }
 .class-state[data-class="needs you"] { color: var(--state-owner); }
 .class-state[data-class="waits on work"] { color: var(--state-work); }
-.class-state[data-class="needs a cause"] { color: var(--state-cause); }
+.class-state[data-class="needs a cause"], .class-state[data-class="alarm"] { color: var(--state-cause); }
 .class-state[data-class="landed"], .class-state[data-class="pass"] { color: var(--state-pass); }
 .class-state[data-class="closed"], .class-state[data-class="skipped"] { color: var(--ink-3); }
 .home { padding: var(--s4); }

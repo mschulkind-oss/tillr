@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/alarms"
 	"github.com/mschulkind-oss/tillr-drain/drain"
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr/definition"
@@ -138,12 +139,22 @@ func whyFace(args []string) int {
 	enc.SetEscapeHTML(false)
 	enc.SetIndent("", "  ")
 	if !*asJSON {
+		if err := alarms.Print(os.Stdout, answer.Alarms); err != nil {
+			return fail(drain.Externalf("writing why: %v", err))
+		}
 		fmt.Fprintf(os.Stdout, "definition: %s\n", answer.Definition)
 	}
 	if itemID != "" {
 		for _, row := range answer.Rows {
 			if row.ItemID == itemID {
-				if err := enc.Encode(row); err != nil {
+				var report any = row
+				if *asJSON {
+					report = struct {
+						Alarms []alarms.Alarm `json:"alarms,omitempty"`
+						drain.WhyRow
+					}{answer.Alarms, row}
+				}
+				if err := enc.Encode(report); err != nil {
 					return fail(drain.Externalf("writing why: %v", err))
 				}
 				if !*asJSON {
