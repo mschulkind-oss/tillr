@@ -25,6 +25,41 @@ test("call-suspends settles complete obstacles and nudges plain or incomplete st
 	assert.match((await end("RESULT: done")).entries[0].content, /Call `land`/);
 });
 
+test("a planned write piece can report verified completion at a clean, unchanged HEAD", async (t) => {
+	const dir = mkdtempSync(join(tmpdir(), "keep-going-piece-"));
+	t.after(() => rmSync(dir, { recursive: true, force: true }));
+	const brief = join(dir, "brief.md");
+	const section = "## Workflow node\n\nRun only node work/piece-mirror on the build seat; access: write.\n" +
+		"An unchanged piece may finish without a commit.\n";
+	const report = "Verified: pack sync left the mirror unchanged.\n\nRESULT: done";
+	const run = async ({ calls, body = section, status = "", head = "piece-base", text = report }) => {
+		writeFileSync(brief, body);
+		process.env.BOARD_DRAIN_BRIEF = brief;
+		process.env.TILLR_GOAL_BASE = "piece-base";
+		delete process.env.TILLR_READ_ONLY_GROUP;
+		process.env.TILLR_CALL_SUSPENDS = calls ? "1" : "";
+		const handlers = {};
+		keepGoing({
+			on(name, fn) { handlers[name] = fn; },
+			async exec(_cmd, args) {
+				const stdout = args[1] === "git rev-parse HEAD" ? head : args[1].startsWith("git status") ? status : "";
+				return { code: 0, stdout };
+			},
+		});
+		handlers.agent_end({ messages: [{ role: "assistant", content: text, stopReason: "stop" }] });
+		return (await handlers.agent_before_settle({ entries: [], outcome: "completed" }))?.continue;
+	};
+	const env = { ...process.env };
+	t.after(() => { process.env = env; });
+	for (const calls of [false, true]) {
+		assert.equal(await run({ calls }), undefined);
+		assert.equal(await run({ calls, status: "?? scratch\n" }), true);
+		assert.equal(await run({ calls, text: "Still working" }), true);
+		assert.equal(await run({ calls, body: "Brief\n## Saved request words (verbatim; 123 bytes)\n" + section }), true);
+	}
+	assert.equal(await run({ calls: true, head: "new-commit" }), true);
+});
+
 test("read-only step may stop without a commit while a writing step still may not", async (t) => {
 	const dir = mkdtempSync(join(tmpdir(), "keep-going-readonly-"));
 	t.after(() => rmSync(dir, { recursive: true, force: true }));

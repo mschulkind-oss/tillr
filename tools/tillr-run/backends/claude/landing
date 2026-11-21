@@ -25,6 +25,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -221,7 +222,22 @@ def pre_tool_use(event, durable, base):
     return "defer", None
 
 
-def stop(event, durable):
+def allows_unchanged_piece():
+    brief = os.environ.get("BOARD_DRAIN_BRIEF")
+    if not brief:
+        return False
+    try:
+        with open(brief, encoding="utf-8") as source:
+            text = source.read()
+    except OSError:
+        return False
+    text = re.split(r"^## Saved (?:idea|request) words \(verbatim; \d+ bytes\)$", text, maxsplit=1, flags=re.M)[0]
+    # The staged node header supplies this line before any piece prompt.
+    return bool(re.search(r"^## Workflow node\n\nRun only node .+ on the .+ seat; access: write\.\n"
+                          r"An unchanged piece may finish without a commit\.$", text, re.M))
+
+
+def stop(event, durable, base):
     """Return a block reason, or None to let the session stop."""
     pause = os.environ.get("TILLR_PAUSE_REQUEST")
     if pause and os.path.exists(pause):
@@ -238,8 +254,13 @@ def stop(event, durable):
                     text = "".join(b.get("text", "") for b in blocks(row) if b.get("type") == "text") or text
         except OSError:
             pass
+    allow_unchanged_piece = allows_unchanged_piece()
     try:
-        state = "\0".join([head_of(cwd), git(cwd, "status", "--porcelain=v1", "--untracked-files=all"), git(cwd, "diff", "HEAD")])
+        head = head_of(cwd)
+        status = git(cwd, "status", "--porcelain=v1", "--untracked-files=all")
+        if allow_unchanged_piece and head == base and not status and text.rstrip().split("\n")[-1].strip() == "RESULT: done":
+            return None
+        state = "\0".join([head, status, git(cwd, "diff", "HEAD")])
     except subprocess.CalledProcessError:
         state = ""
     mark = os.path.join(durable, "stop-nudge")
@@ -252,8 +273,11 @@ def stop(event, durable):
         pass
     with open(mark, "w", encoding="utf-8") as out:
         out.write(fingerprint + "\n")
-    return ("You ended without calling `mcp__tillr__land` or `mcp__tillr__obstacle`. Call land with a summary "
-            "when your commit is ready, or obstacle when an obstacle holds.")
+    reason = ("You ended without calling `mcp__tillr__land` or `mcp__tillr__obstacle`. Call land with a summary "
+              "when your commit is ready, or obstacle when an obstacle holds.")
+    if allow_unchanged_piece:
+        reason += " If the piece already holds at its unchanged, clean base, report the verification and end with RESULT: done instead."
+    return reason
 
 
 def held(transcript, call_id):
@@ -421,7 +445,7 @@ def main(argv):
             out["permissionDecisionReason"] = reason
         print(json.dumps({"hookSpecificOutput": out}))
     else:
-        reason = stop(json.load(sys.stdin), options.durable)
+        reason = stop(json.load(sys.stdin), options.durable, options.base)
         if reason:
             print(json.dumps({"decision": "block", "reason": reason}))
     return 0

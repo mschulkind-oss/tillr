@@ -205,6 +205,31 @@ class Stop(Fixture):
         self.commit()
         self.assertEqual(self.stop()["decision"], "block")  # the state moved
 
+    def test_only_a_clean_unchanged_piece_can_finish_with_a_done_report(self):
+        brief = self.transcript.with_name("brief.md")
+        section = ("## Workflow node\n\nRun only node work/piece-mirror on the build seat; access: write.\n"
+                   "An unchanged piece may finish without a commit.\n")
+        env = {"BOARD_DRAIN_BRIEF": str(brief)}
+
+        def report(text):
+            self.transcript.write_text(json.dumps({"type": "assistant", "message": {
+                "content": [{"type": "text", "text": text}]}}) + "\n")
+
+        brief.write_text(section)
+        report("Verified: pack sync left no diff.\n\nRESULT: done")
+        self.assertIsNone(self.stop(**env))
+        brief.write_text("Brief\n## Saved request words (verbatim; 123 bytes)\n" + section)
+        self.assertEqual(self.stop(**env)["decision"], "block")
+        brief.write_text(section)
+        (self.repo / "scratch").touch()
+        self.assertEqual(self.stop(**env)["decision"], "block")
+        (self.repo / "scratch").unlink()
+        report("Still working")
+        self.assertEqual(self.stop(**env)["decision"], "block")
+        self.commit()
+        report("Changed and verified.\n\nRESULT: done")
+        self.assertEqual(self.stop(**env)["decision"], "block")
+
     def test_a_requested_pause_is_never_nudged(self):
         pause = Path(self._tmp.name) / "pause"
         pause.write_text("")

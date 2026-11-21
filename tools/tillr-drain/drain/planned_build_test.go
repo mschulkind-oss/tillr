@@ -539,6 +539,9 @@ type noSplitReportSteps struct {
 	plans      int
 	works      int
 	verifies   int
+	builtHead  string
+	mirrorRun  string
+	dirtyPiece bool
 	briefs     map[string][]string
 }
 
@@ -599,9 +602,23 @@ func (s *noSplitReportSteps) Run(ctx context.Context, req run.Request) (run.Reco
 		writeForkFile(s.t, filepath.Join(target, "tools/item-a/built.go"), "package built\n")
 		runGit(s.t, target, "add", ".")
 		runGit(s.t, target, "commit", "-qm", "feat: build from plan")
+		s.builtHead = runGit(s.t, target, "rev-parse", "HEAD")
+	case req.NodeID == "work/piece-mirror":
+		s.mirrorRun = req.RunID
+		base := runGit(s.t, target, "rev-parse", "HEAD")
+		if base != s.builtHead || runGit(s.t, target, "show", "HEAD:tools/item-a/built.go") != "package built" || runGit(s.t, target, "status", "--porcelain") != "" {
+			return run.Record{}, "", fmt.Errorf("earlier piece did not leave the expected committed file")
+		}
+		if s.dirtyPiece {
+			writeForkFile(s.t, filepath.Join(target, "tools/item-a/scratch"), "uncommitted\n")
+		}
+		report = "git show HEAD:tools/item-a/built.go: package built (already committed)\n\nRESULT: done\n"
 	case req.NodeID == "verify":
 		s.verifies++
 		head := runGit(s.t, target, "rev-parse", "HEAD")
+		if s.mirrorRun != "" && head != s.builtHead {
+			return run.Record{}, "", fmt.Errorf("unchanged piece moved HEAD from %s to %s", s.builtHead, head)
+		}
 		tree := runGit(s.t, target, "rev-parse", head+"^{tree}")
 		var verdicts []item.JudgeEntry
 		fixtureRead(s.t, s.f, func(r *store.Reader) error {
@@ -651,6 +668,59 @@ func (s *noSplitReportSteps) Run(ctx context.Context, req run.Request) (run.Reco
 	defer st.Close()
 	err = st.WriteTx(ctx, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
 	return rec, report, err
+}
+
+func TestPlannedWritePieceAlreadySatisfied(t *testing.T) {
+	for _, tc := range []struct {
+		name, capability string
+		dirty            bool
+	}{
+		{name: "footer", capability: run.EndingFooter},
+		{name: "call-suspends", capability: run.EndingCallSuspends},
+		{name: "uncommitted-changes-refused", capability: run.EndingFooter, dirty: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, l, base := plannedFixture(t)
+			fixtureWrite(t, f, func(tx *store.Tx) error {
+				_, err := tx.Exec(`UPDATE items SET state = 'closed' WHERE item_id = 'item-a'`)
+				return err
+			})
+			id := fileFixtureRequestWith(t, f, "Implement tools/item-a/built.go.\n", "build", "planned-build@v1", []string{"tools/item-a/"}, false)
+			grantForItem(t, f, l, id)
+			req := l.cfg.Policy.request(id, "lane-1", "probe", l.cfg.Policy.firstBackend(itemRow{ItemID: id, Seat: "build"}))
+			l.endingCapabilities = map[string]string{req.Command[0]: tc.capability}
+			steps := &noSplitReportSteps{
+				workflowSteps: base, planReport: "RESULT: done\n", dirtyPiece: tc.dirty,
+				proposal: pieceProposal([]map[string]any{piece("a", "build", "write"), piece("mirror", "build", "write")}),
+			}
+			l.cfg.Steps = steps
+			result := &LoopResult{}
+			for i := 0; i < 10 && result.Landed == 0 && result.Rejected == 0; i++ {
+				graphPass(t, l, result)
+			}
+			if tc.dirty {
+				if result.Rejected != 1 || steps.mirrorRun == "" || steps.verifies != 0 {
+					t.Fatalf("rejected=%d mirror=%q verifies=%d", result.Rejected, steps.mirrorRun, steps.verifies)
+				}
+				return
+			}
+			if result.Landed != 1 || steps.mirrorRun == "" || steps.verifies != 1 {
+				t.Fatalf("landed=%d mirror=%q verifies=%d", result.Landed, steps.mirrorRun, steps.verifies)
+			}
+			brief := steps.briefs["work/piece-mirror"][0]
+			if !strings.Contains(brief, "An unchanged piece may finish without a commit.") ||
+				!strings.Contains(brief, "finish with RESULT: done") {
+				t.Fatal("piece brief does not explain how to finish without a commit")
+			}
+			if tc.capability == run.EndingCallSuspends && !strings.Contains(brief, "Otherwise, this run ends with one tool call") {
+				t.Fatal("Finishing does not exempt the unchanged piece from the tool call requirement")
+			}
+			report, err := os.ReadFile(filepath.Join(RunDir(f.root, steps.mirrorRun), "node-report.md"))
+			if err != nil || !strings.Contains(string(report), "git show HEAD:tools/item-a/built.go: package built (already committed)") {
+				t.Fatalf("verification report = %q, err = %v", report, err)
+			}
+		})
+	}
 }
 
 func TestPlannedBuildNoSplitWorkBriefContainsPlannerReport(t *testing.T) {
