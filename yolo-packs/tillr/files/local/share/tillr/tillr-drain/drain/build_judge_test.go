@@ -45,10 +45,8 @@ func TestRestartAnswersDuringAgentJudgeAndReplacementJudgesCandidateOnce(t *test
 	if _, err := l.pass(context.Background(), result); err != nil {
 		t.Fatal(err)
 	}
-	drainOwned(t, l, result)
-	if _, err := l.pass(context.Background(), result); err != nil {
-		t.Fatal(err)
-	}
+	// The worker starts examination on completion; do not drain the owned
+	// step until after the replacement has interrupted its judge.
 	awaitRestartTest(t, held.entered, "judge entry")
 	request := h.request(t, 1)[0]
 	if _, _, err := l.judgeCandidate(context.Background(), Candidate{}, &LoopResult{}); !errors.Is(err, errRestartPending) {

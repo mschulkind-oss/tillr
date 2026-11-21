@@ -511,11 +511,10 @@ func TestPlannedRequestDesignAmendmentRoutesDesignBeforeBuild(t *testing.T) {
 	}
 
 	// Run 2: design BlockConflict run updates docs/design/example.md, gates and lands.
-	for i := 0; i < 5 && steps.designs < 1; i++ {
+	for i := 0; i < 5 && result.Landed == 0; i++ {
 		graphPass(t, l, result)
 	}
-	graphPass(t, l, result)
-	if steps.designs != 1 {
+	if steps.designs != 1 || result.Landed != 1 {
 		t.Fatalf("design run did not execute: order=%v", steps.order)
 	}
 	if green := runGit(t, f.root, "rev-parse", GreenRef); green != preDesign {
@@ -575,11 +574,10 @@ func TestRequestDesignRunCannotAddItemBlock(t *testing.T) {
 		graphPass(t, l, result)
 	}
 	graphPass(t, l, result)
-	for i := 0; i < 5 && steps.designs < 1; i++ {
+	for i := 0; i < 5 && result.RefusedSteps[RefusalFence] == 0; i++ {
 		graphPass(t, l, result)
 	}
-	graphPass(t, l, result)
-	if steps.designs != 1 {
+	if steps.designs != 1 || result.RefusedSteps[RefusalFence] != 1 {
 		t.Fatalf("design run did not execute: order=%v", steps.order)
 	}
 	if steps.gates != 0 {

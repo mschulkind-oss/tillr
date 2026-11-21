@@ -216,6 +216,7 @@ func TestWorkflowContinuationKeepsBackendPolicy(t *testing.T) {
 
 func TestWorkflowForkContinuationKeepsItsOwnReservation(t *testing.T) {
 	f, l, steps := workflowLoopFixture(t, "")
+	l.pollOnly = true // Exercise pre-gate continuation through store polling, not the live handoff.
 	fork := filepath.Join(f.root, ".forks/lanes/lane-1/pi")
 	if err := os.MkdirAll(fork, 0755); err != nil {
 		t.Fatal(err)
@@ -430,6 +431,11 @@ func TestWorkflowReadOnlyEscapeStopsNextNode(t *testing.T) {
 
 func TestWorkflowNextAttemptCountsItemsNotNodes(t *testing.T) {
 	f, l, steps := workflowLoopFixture(t, "fail-work")
+	// Only item-a participates; the unrelated sibling must not take its freed lane.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='closed' WHERE item_id='item-b'`)
+		return err
+	})
 	result := &LoopResult{}
 	for i := 0; i < 4; i++ {
 		if _, err := l.pass(context.Background(), result); err != nil {

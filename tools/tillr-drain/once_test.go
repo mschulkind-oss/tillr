@@ -156,10 +156,8 @@ func TestOnceRecordsTheDecisionsPlanMakes(t *testing.T) {
 // branch holds the delivery, so the loop's durable record answers "why wasn't this one run"
 // without the terminal that printed it.
 func TestOnceRecordsTheItemAForkDeferralWaitsBehind(t *testing.T) {
-	storePath := fixture(t,
-		itemRecordFenced("item_041", "in-queue", "", []string{".forks/lanes/lane-1/pi/"}),
-		itemRecordFenced("item_042", "in-queue", "", []string{".forks/lanes/lane-2/pi/"}),
-	)
+	storePath := fixture(t, itemRecord("item_041", "in-queue"), itemRecord("item_042", "in-queue"))
+	recordForkDelivery(t, storePath, "item_041", "item_042")
 	tickPath := tick(t, "2026-11-14T00:00:00Z", []string{"lane-1", "lane-2"}, 2, policy(t, "/bin/true"))
 
 	onceOK(t, storePath, tickPath, "record-sink", filepath.Join(scratch(t, "sink"), "requests.json"))

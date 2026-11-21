@@ -293,9 +293,9 @@ print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "st
 	if err := l.recordEndingCapabilities(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// Pass 1 dispatches Turn 1; Pass 2 settles Turn 1 (gate fails with triageFixtureBlock);
-	// Pass 3 dispatches Turn 2 (resume); Pass 4 settles Turn 2 (reconciles toolu_1 delivery, gates & lands toolu_2).
-	for i := 0; i < 4; i++ {
+	// Turn 1 is refused at the gate. The resumed turn delivers the refusal and
+	// lands toolu_2. Stop at landing, which can happen on worker completion.
+	for i := 0; i < 4 && steps.lands == 0; i++ {
 		onePassNoStop(t, l)
 	}
 	if len(steps.requests) != 2 || steps.gates != 2 || steps.lands != 1 {

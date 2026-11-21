@@ -34,19 +34,28 @@ func newForkStageFixture(t *testing.T) stageFixture {
 	t.Helper()
 	id := "item_041"
 	f := newStageFixture(t, fencedItemRecord(id, "in-queue", "base.txt"))
+	recordForkDelivery(t, f.store, id)
+	return f
+}
+
+func recordForkDelivery(t *testing.T, path string, ids ...string) {
+	t.Helper()
 	ctx := context.Background()
-	db, err := store.Open(ctx, f.store, true)
+	db, err := store.Open(ctx, path, true)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 	if err := db.WriteTx(ctx, func(tx *store.Tx) error {
-		_, err := tx.Append(event.Event{Kind: "drain.delivery-decision", ObjectType: "item", ObjectID: &id, At: time.Now(), Payload: json.RawMessage(`{"kind":"fork","fork":"pi"}`)})
-		return err
+		for _, id := range ids {
+			if _, err := tx.Append(event.Event{Kind: "drain.delivery-decision", ObjectType: "item", ObjectID: &id, At: time.Now(), Payload: json.RawMessage(`{"kind":"fork","fork":"pi"}`)}); err != nil {
+				return err
+			}
+		}
+		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	return f
 }
 
 func newForkLaneFixture(t *testing.T) forkLaneFixture {

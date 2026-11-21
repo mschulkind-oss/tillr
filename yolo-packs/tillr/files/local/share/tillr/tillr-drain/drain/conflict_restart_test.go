@@ -103,6 +103,7 @@ func TestSecondIdenticalConflictDiscardsCandidateResetsLaneAndRestartsWorkflowFr
 		}
 		t.Run(name, func(t *testing.T) {
 			f, l := designSeatFixture(t)
+			l.pollOnly = true // This fixture injects the landing conflict after the worker finishes.
 			l.cfg.Lanes = []string{"lane-1"}
 			l.cfg.Policy.Seats = map[string]string{"plan": "fixture", "build": "fixture", "design": "fixture"}
 			l.cfg.Stage = &LaneStager{
@@ -136,7 +137,7 @@ func TestSecondIdenticalConflictDiscardsCandidateResetsLaneAndRestartsWorkflowFr
 				itemID = fileFixtureRequestWith(t, f, "Saved request words: update base.txt cleanly.", "plan", "plan-then-build@v1", []string{"base.txt"}, false)
 			} else {
 				fixtureWrite(t, f, func(tx *store.Tx) error {
-					_, err := tx.Exec(`UPDATE items SET workflow = 'plan-then-build@v1' WHERE item_id = 'item-a'`)
+					_, err := tx.Exec(`UPDATE items SET workflow = 'plan-then-build@v1', allowed_paths = '["base.txt"]' WHERE item_id = 'item-a'`)
 					return err
 				})
 			}

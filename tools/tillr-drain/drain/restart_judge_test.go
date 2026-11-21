@@ -34,10 +34,7 @@ func TestRefusedAndCurrentRestartKeepTheInflightJudge(t *testing.T) {
 			if _, err := l.pass(context.Background(), result); err != nil {
 				t.Fatal(err)
 			}
-			drainOwned(t, l, result)
-			if _, err := l.pass(context.Background(), result); err != nil {
-				t.Fatal(err)
-			}
+			// Worker completion starts the judge before the next pass.
 			awaitRestartTest(t, held.entered, "judge")
 			request := h.request(t, 1)[0]
 			ctx, cancel := context.WithTimeout(context.Background(), hangGuard)

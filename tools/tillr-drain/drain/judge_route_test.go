@@ -171,7 +171,11 @@ func TestJudgeRouteBeforeGate(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			f, l, s := judgeRouteFixture(t, mode, mode != "no-grant")
 			result := &LoopResult{}
-			for i := 0; i < 3; i++ {
+			passes := 3
+			if mode == "gate-fail" || mode == "land-fail" {
+				passes = 2 // The refusal and its returned worker each settle on completion.
+			}
+			for i := 0; i < passes; i++ {
 				if _, err := l.pass(context.Background(), result); err != nil {
 					t.Fatal(err)
 				}
@@ -184,9 +188,9 @@ func TestJudgeRouteBeforeGate(t *testing.T) {
 			// A refused gate or landing goes back to the worker with its evidence (the
 			// owner's ruling of 2026-11-17), so the worker runs again within the passes.
 			case "land-fail":
-				want = append(want, "gate", "landing", "worker")
+				want = append(want, "gate", "landing", "worker", "judge", "gate", "landing")
 			case "gate-fail":
-				want = append(want, "gate", "worker")
+				want = append(want, "gate", "worker", "judge", "gate")
 			case "invalid":
 				want = append(want, "judge")
 			case "mechanical":

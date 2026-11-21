@@ -350,18 +350,12 @@ type decisionRecord struct {
 	Payload decision `json:"payload"`
 }
 
-// plan runs the face against the real repository tree, with an index that reports nothing
-// open.
-//
-// The tree is the real one because a seed row names a document that is really there, and a
-// case that is about the seed's ranks and fences must not also fail because a document was
-// missing. The questions are stubbed to none for the opposite reason: whether a real
-// document has an open question is the owner's business and changes between rulings, so a
-// case about order that read the real index would go red on a morning nobody touched the
-// code.
+// plan runs the face with no fork catalog and an index that reports nothing
+// open. Tests of repository-dependent decisions name their tree in planFrom;
+// the live checkout's fork catalog and documents are not fixture inputs.
 func plan(t *testing.T, storePath, tickPath string) []decisionRecord {
 	t.Helper()
-	return planFrom(t, storePath, tickPath, repoRoot(t), indexStub(t))
+	return planFrom(t, storePath, tickPath, fixtureRepo(t), indexStub(t))
 }
 
 // planFrom is plan with the tree and the index command named: the root the items'
@@ -727,16 +721,11 @@ func TestPlanHoldsWhenNoLaneIsAvailable(t *testing.T) {
 	}
 }
 
-// Two items that deliver one fork's patch branch cannot run at once, whatever their own
-// fences name: `.forks/lanes/lane-1/pi` and `.forks/lanes/lane-2/pi` both advance
-// `refs/heads/patch/pi`, so the second would move a branch the first is still building. It
-// is the only planner-level exclusion left; two ordinary items with disjoint fences run
-// together.
+// Two items classified to deliver one fork's patch branch cannot run at once,
+// even with disjoint fences. The recorded delivery names the branch they share.
 func TestPlanHoldsASecondItemDeliveringTheSameFork(t *testing.T) {
-	storePath := fixture(t,
-		itemRecordFenced("item_041", "in-queue", "", []string{".forks/lanes/lane-1/pi/"}),
-		itemRecordFenced("item_042", "in-queue", "", []string{".forks/lanes/lane-2/pi/"}),
-	)
+	storePath := fixture(t, itemRecord("item_041", "in-queue"), itemRecord("item_042", "in-queue"))
+	recordForkDelivery(t, storePath, "item_041", "item_042")
 	tickPath := tick(t, "2026-11-14T00:00:00Z", []string{"lane-1", "lane-2"}, 2, policy(t, "/bin/true"))
 
 	records := plan(t, storePath, tickPath)
