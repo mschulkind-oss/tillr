@@ -303,7 +303,7 @@ func TestTheJudgeOfARequestReadsItsWords(t *testing.T) {
 	}
 	if strings.Contains(string(raw), report) || strings.Contains(string(raw), "Worker claims") ||
 		strings.Contains(string(raw), "worker-session-sentinel") || !strings.Contains(string(raw), "Writing node: node:work") ||
-		!strings.Contains(string(raw), "Judge the candidate commit against only the item's words and criteria") ||
+		!strings.Contains(strings.Join(strings.Fields(string(raw)), " "), "A refusal must rest on the item's words or criteria or a regression this change introduces in existing behavior.") ||
 		!strings.Contains(string(raw), "Run the checks you need yourself") {
 		t.Fatalf("judge brief does not isolate independent verification:\n%s", raw)
 	}
