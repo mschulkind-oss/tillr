@@ -60,15 +60,19 @@ class ForkBuildContracts(unittest.TestCase):
             'url': 'https://example.invalid/', 'literal': '/*not a comment*/,}', 'array': [1, 2]})
 
     def test_declared_command_is_not_replaced_by_an_npm_guess(self):
+        source = 'git+https://example.invalid/repo?ref=main'
         path = self.pack('fork', {'patch_branch': 'git+https://example.invalid/repo?ref=patch%2Fpi',
-                                 'build': 'node scripts/fork-build.mjs'})
-        self.assertEqual(gate.build_command(self.root, 'pi'), (path, 'node scripts/fork-build.mjs'))
+                                 'source': source, 'build': 'node scripts/fork-build.mjs'})
+        self.assertEqual(gate.build_command(self.root, 'pi'), (path, 'node scripts/fork-build.mjs', source))
 
     def test_source_only_delivery_has_an_explicit_check(self):
-        path = self.pack('source', {'patch_branch': 'git+https://example.invalid/repo?ref=patch/pi'})
-        found, command = gate.build_command(self.root, 'pi')
+        source = 'git+https://example.invalid/repo?ref=main'
+        path = self.pack('source', {'patch_branch': 'git+https://example.invalid/repo?ref=patch/pi',
+                                   'source': source})
+        found, command, found_source = gate.build_command(self.root, 'pi')
         self.assertEqual(found, path)
         self.assertEqual(command, 'git diff --exit-code HEAD && git diff --cached --exit-code')
+        self.assertEqual(found_source, source)
 
     def test_no_delivery_is_an_error(self):
         with self.assertRaisesRegex(ValueError, 'found 0'):
@@ -76,7 +80,8 @@ class ForkBuildContracts(unittest.TestCase):
 
     def test_ambiguous_delivery_is_an_error(self):
         for name in ('one', 'two'):
-            self.pack(name, {'patch_branch': 'git+https://example.invalid/repo?ref=patch/pi'})
+            self.pack(name, {'patch_branch': 'git+https://example.invalid/repo?ref=patch/pi',
+                             'source': 'git+https://example.invalid/repo?ref=main'})
         with self.assertRaisesRegex(ValueError, 'found 2'):
             gate.build_command(self.root, 'pi')
 
@@ -125,6 +130,8 @@ class ForkQualityGateTests(unittest.TestCase):
         self.git(self.fork, 'add', '.')
         self.git(self.fork, 'commit', '-m', 'fork base')
         self.base = self.git(self.fork, 'rev-parse', 'HEAD')
+        self.git(self.fork, 'tag', 'v1.0.0')
+        self.git(self.fork, 'update-ref', 'refs/remotes/upstream/main', self.base)
 
         self.bin_dir = self.tmp / 'bin'
         self.bin_dir.mkdir()
@@ -140,6 +147,7 @@ class ForkQualityGateTests(unittest.TestCase):
         pack.write_text(json.dumps({
             'contributes': [{
                 'patch_branch': f'git+https://example.invalid/repo?ref=patch/{fork_name}',
+                'source': 'git+https://example.invalid/repo?ref=main',
                 'build': build_cmd,
             }],
         }))
@@ -386,6 +394,125 @@ class ForkQualityGateTests(unittest.TestCase):
         self.assertTrue(lines[1].endswith('/packages/pkg-a:vitest --run --reporter=dot'))
         self.assertNotIn('/packages/tui:vitest', '\n'.join(lines))
         self.assertNotIn('/packages/pkg-b:', '\n'.join(lines))
+
+    def test_rebased_candidate_tests_only_patch_packages_not_upstream_changes(self):
+        self.write_pack('pi', build_cmd='touch build.marker')
+        self.write_npx_stub(
+            'test -f "$(git rev-parse --show-toplevel)/build.marker"\n'
+            'echo "$PWD:$*" >> "$NPX_LOG"\n'
+        )
+        old_upstream = self.base
+        (self.fork / 'packages' / 'pkg-a' / 'index.ts').write_text('export const a = 2;\n')
+        self.git(self.fork, 'commit', '-qam', 'old delivered pkg-a patch')
+        old_delivered = self.git(self.fork, 'rev-parse', 'HEAD')
+        self.git(self.fork, 'update-ref', 'refs/heads/patch/pi', old_delivered)
+
+        self.git(self.fork, 'checkout', '--detach', old_upstream)
+        (self.fork / 'packages' / 'pkg-b' / 'index.ts').write_text('export const b = 2;\n')
+        self.git(self.fork, 'commit', '-qam', 'upstream-only pkg-b change')
+        new_upstream = self.git(self.fork, 'rev-parse', 'HEAD')
+        self.git(self.fork, 'tag', 'v2.0.0')
+        (self.fork / 'packages' / 'pkg-b' / 'index.ts').write_text('export const b = 3;\n')
+        self.git(self.fork, 'commit', '-qam', 'upstream moves past release')
+        self.git(self.fork, 'update-ref', 'refs/remotes/upstream/main', 'HEAD')
+        self.git(self.fork, 'checkout', '--detach', 'v2.0.0')
+        self.git(self.fork, 'cherry-pick', old_delivered)
+        head = self.git(self.fork, 'rev-parse', 'HEAD')
+        self.base = old_delivered
+        ancestry = subprocess.run(
+            ['git', 'merge-base', '--is-ancestor', self.base, head], cwd=self.fork,
+            capture_output=True, text=True,
+        )
+        self.assertEqual(ancestry.returncode, 1, 'fixture must have divergent fork tips')
+        self.assertEqual(gate.touched_packages(self.fork, self.base, head), ['packages/pkg-b'])
+        self.assertEqual(gate.touched_packages(self.fork, new_upstream, head), ['packages/pkg-a'])
+
+        res = self.run_fork_gate('pi', 'run-rebased-candidate', head)
+        run_dir = self.root / '.tillr' / 'loop' / 'run-rebased-candidate'
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr + self.quality_log(run_dir))
+        verdict = json.loads((run_dir / 'gate.verdict.json').read_text())['payload']
+        self.assertEqual(verdict['result'], 'pass')
+        self.assertEqual({c['check_id']: c['result'] for c in verdict['checks']},
+                         {'fork-build': 'pass', 'fork-quality': 'pass'})
+        lines = self.npx_log.read_text().splitlines()
+        self.assertEqual(len(lines), 2, lines)
+        self.assertTrue(lines[0].endswith(':tsc --noEmit'), lines)
+        self.assertTrue(lines[1].endswith('/packages/pkg-a:vitest --run --reporter=dot'), lines)
+        self.assertNotIn('/packages/pkg-b:', '\n'.join(lines))
+        self.assertTrue((run_dir / 'fork-cache-source').exists())
+
+    def write_mise_cargo_stub(self):
+        caller_home = self.tmp / 'caller home'
+        auth_file = caller_home / '.pi' / 'agent' / 'auth.json'
+        auth_file.parent.mkdir(parents=True)
+        auth_file.write_text('fixture-only\n')
+        cargo = self.bin_dir / 'cargo'
+        cargo.write_text(
+            '#!/bin/sh\nset -eu\n'
+            'test -d "$HOME" && test -w "$HOME"\n'
+            'test ! -e "$HOME/.pi/agent/auth.json"\n'
+            'test "${OPENAI_API_KEY+x}" != x\n'
+            'test "${GITHUB_TOKEN+x}" != x\n'
+            'test "${AWS_SHARED_CREDENTIALS_FILE+x}" != x\n'
+            'test "${XDG_CONFIG_HOME+x}" != x\n'
+            'test "${PI_CODING_AGENT_DIR+x}" != x\n'
+            'echo "cargo shim ran with isolated home and environment"\n'
+            'echo "mise ERROR cargo is not a valid shim. This likely means you uninstalled a tool" >&2\n'
+            'exit 1\n'
+        )
+        cargo.chmod(0o755)
+        return {
+            'HOME': str(caller_home),
+            'OPENAI_API_KEY': 'fixture-only',
+            'GITHUB_TOKEN': 'fixture-only',
+            'AWS_SHARED_CREDENTIALS_FILE': str(auth_file),
+            'XDG_CONFIG_HOME': str(caller_home / '.config'),
+            'PI_CODING_AGENT_DIR': str(auth_file.parent),
+        }
+
+    def test_mise_invalid_cargo_shim_in_nested_npm_script_is_an_error(self):
+        caller_env = self.write_mise_cargo_stub()
+        self.write_pack('pi', build_cmd='touch build.marker')
+        self.write_npx_stub('echo "$PWD:$*" >> "$NPX_LOG"\n')
+        package = self.fork / 'packages' / 'pkg-a' / 'package.json'
+        package.write_text(json.dumps({
+            'name': 'pkg-a', 'version': '1.0.0',
+            'scripts': {'test': 'npm run selected', 'selected': 'cargo test'},
+        }))
+        self.git(self.fork, 'commit', '-qam', 'declare nested cargo test')
+        head = self.git(self.fork, 'rev-parse', 'HEAD')
+
+        res = self.run_fork_gate('pi', 'run-mise-cargo-nested', head, extra_env=caller_env)
+        run_dir = self.root / '.tillr' / 'loop' / 'run-mise-cargo-nested'
+        log = self.quality_log(run_dir)
+        self.assertIn('cargo shim ran with isolated home and environment', log)
+        self.assertIn('mise ERROR cargo is not a valid shim', log)
+        self.assertIn('cargo test', log)
+        self.assertEqual(res.returncode, 4, res.stdout + res.stderr + log)
+        verdict = json.loads((run_dir / 'gate.verdict.json').read_text())['payload']
+        self.assertEqual(verdict['result'], 'error')
+        self.assertEqual({c['check_id']: c['result'] for c in verdict['checks']},
+                         {'fork-build': 'pass', 'fork-quality': 'error'})
+        self.assertIn("packages/pkg-a: unable to run scripts.test 'npm run selected'", log)
+        self.assertIn('mise could not resolve cargo in the isolated environment', log)
+        self.assertFalse((run_dir / 'fork-cache-source').exists())
+        self.assertEqual((Path(caller_env['HOME']) / '.pi/agent/auth.json').read_text(), 'fixture-only\n')
+
+    def test_mise_invalid_cargo_shim_in_direct_run_quality_is_an_error(self):
+        caller_env = self.write_mise_cargo_stub()
+        env = os.environ.copy()
+        env.update(caller_env)
+        env['PATH'] = f'{self.bin_dir}:{env.get("PATH", "")}'
+        res = subprocess.run(
+            ['python3', str(FORK_GATE), '--run-quality', str(self.tmp), 'cargo test'],
+            cwd=self.fork, env=env, capture_output=True, text=True,
+        )
+        self.assertIn('cargo shim ran with isolated home and environment', res.stdout)
+        self.assertIn('mise ERROR cargo is not a valid shim', res.stderr)
+        self.assertEqual(res.returncode, 4, res.stdout + res.stderr)
+        self.assertIn('fork-quality:', res.stderr)
+        self.assertIn('mise could not resolve cargo in the isolated environment', res.stderr)
+        self.assertEqual((Path(caller_env['HOME']) / '.pi/agent/auth.json').read_text(), 'fixture-only\n')
 
     def test_unavailable_package_runner_is_an_error_not_a_test_failure(self):
         self.write_pack('pi', build_cmd='touch build.marker')
