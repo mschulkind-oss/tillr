@@ -7,7 +7,7 @@ stage: DESIGN
 stage-since: 2026-11-20
 tags: [tillr, watch, alerting, lint, workflows, charter, foreground]
 summary: "A dedicated tillr-watch utility and shared core watch engine that observes emergent cross-utility behavior, raises deduplicated episode alerts with attached item timelines, supports one-command persistent foreground agent watches with zero-polling wakeups, and lints charters, workflows, and rules before execution."
-next: "Build in four slices, in order: (1) core schema and watch event kinds in tools/tillr/watch; (2) the rule evaluator and the tillr-watch CLI (status, eval, daemon, ack, silence, resolve, rule); (3) foreground delivery (watch add, list, edit, drop, wait, seen, and the operator procedure of Section 6.4); (4) tillr watch lint and its gate check"
+next: "Build the first build of Section 6.6 (the standalone binary, the rule loader, the event-rule evaluator, and eval, wait and seen), then the rest in order: the remaining patterns, projections and the CLI (status, daemon, ack, silence, resolve, rule); agent watches (watch add, list, edit, drop), wait --follow and the operator procedure of Section 6.4; tillr watch lint and its gate check"
 related:
   - ./landing-principles.md
   - ./run-wall-ruling.md
@@ -22,7 +22,7 @@ vantage:
 
 # Agent Alerting and Process Watchdog (`tillr-watch`)
 
-**Status:** 2026-11-21 — the owner ruled all five questions on 2026-11-21 ([the Decision Ledger](#9-decision-ledger)); nothing is built, and no design is owed before a build. Foreground delivery is settled in [Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3) on the owner's existing background-watcher machinery ([OQ-TW3](#OQ-TW3), [D-TW11](#D-TW11)). The next action is the build, in four slices: the core schema and event kinds; the rule evaluator and the CLI; foreground delivery; and lint. Eleven designer's decisions ([D-TW1](#D-TW1) through [D-TW11](#D-TW11)) await his review; D-TW7 is set aside by the ruling on [OQ-TW4](#OQ-TW4).
+**Status:** 2026-11-21 — the owner ruled all five questions on 2026-11-21 ([the Decision Ledger](#9-decision-ledger)); nothing is built, and no design is owed before a build. Foreground delivery is settled in [Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3) on the owner's existing background-watcher machinery ([OQ-TW3](#OQ-TW3), [D-TW11](#D-TW11)). The next action is the first build, whose contents [Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15) fixes: the standalone binary, the rule loader, the evaluator for rules that read events only, and `tillr watch eval`, `wait` and `seen`. The remaining patterns and the rest of the CLI, agent watches, and lint follow it. Fifteen designer's decisions ([D-TW1](#D-TW1) through [D-TW15](#D-TW15)) await his review; D-TW7 is set aside by the ruling on [OQ-TW4](#OQ-TW4).
 
 ---
 
@@ -327,6 +327,46 @@ receiver = "foreground"
 - With `threshold = 4`, the sequence `plan, design, plan, design` fires on the fourth observation. That is three moves; the rule does not wait for a fifth observation.
 - `{{count}}` in `guidance.summary` is that count of observations.
 
+**What the other three event patterns count ([D-TW13](#D-TW13)).** This is the designer's decision of 2026-11-21, made to answer a build worker's question; the owner has not ruled on it and may overturn it. It fixes how a rule declares which events count and what sets a count back to zero. Three terms are used:
+
+- A **read event** is an event whose kind is listed in the rule's `reads.events`.
+- A rule's **subject** for a read event is the value of the name in `group_by`, or the one subject `global` when `group_by = "global"`. A read event that lacks that name belongs to no subject and is ignored by the rule.
+- A **name** (in `group_by`, in `field`, and after `event.` in an expression) is one of the `events` table's columns `seq`, `ts`, `kind`, `seat`, `object_type`, `object_id` and `revision`, or otherwise a key of the event's JSON payload, with dots descending into nested objects (`event.detail.step`). A name that is absent or null has no value.
+
+Two keys in `[rule.when]` select events, and both are expressions in the grammar below:
+
+- `match` says which read events **count**. It is optional for `count_in_window` and `predicate_match`, where leaving it out makes every read event count. It is required for `consecutive_count`.
+- `reset` is used only by `consecutive_count`. It says which read events set the count to zero.
+
+| Pattern | Keys in `[rule.when]` | What is counted | What sets the count to zero | Fires when |
+| :--- | :--- | :--- | :--- | :--- |
+| `predicate_match` | `group_by`, optional `match`, `window` (required, longer than zero) | The same as `count_in_window`, with the threshold fixed at 1 | Nothing | The subject has a counting event inside `window`, so the episode stays unresolved for `window` after the newest one |
+| `count_in_window` | `group_by`, optional `match`, `threshold` (integer, 1 or more), `window` (required, longer than zero) | The subject's counting events whose `ts` is within `window` of the time of evaluation | Nothing. An event stops counting only by becoming older than `window` | The count is `threshold` or more |
+| `consecutive_count` | `group_by`, `match` (required), optional `reset`, `threshold` (integer, 1 or more), `window` (required, longer than zero) | The subject's counting events since the most recent resetting event, counting only those whose `ts` is within `window` of the time of evaluation | With `reset` given: a read event for the subject on which `reset` holds; a read event on which neither `match` nor `reset` holds changes nothing. With `reset` left out: any read event for the subject on which `match` does not hold | The count is `threshold` or more |
+| `alternating_pair` | `group_by`, `field`, `pairs`, `threshold`, `window`, as [D-TW12](#D-TW12) states | As [D-TW12](#D-TW12) states | As [D-TW12](#D-TW12) states | As [D-TW12](#D-TW12) states |
+
+An event on which both `match` and `reset` hold resets the count and is not counted. For every pattern in the table, `{{count}}` in `guidance.summary` is the count the table defines.
+
+Two worked examples, with illustrative payload names. A `consecutive_count` rule with `match = 'event.kind == "gate.verdict" and event.pass == false'`, `reset = 'event.kind == "gate.verdict" and event.pass == true'` and `threshold = 2` reads the sequence fail, fail and fires on the second event; it reads fail, pass, fail and does not fire, because the pass set the count to zero. The same rule with `reset` left out and `reads.events = ["gate.verdict", "drain.refusal"]` reads fail, `drain.refusal`, fail and does not fire, because the `drain.refusal` event is a read event on which `match` does not hold.
+
+**How these rules are evaluated, and when an episode ends ([D-TW13](#D-TW13)).** The evaluator keeps no count between evaluations. At each evaluation it reads, for each rule, the read events whose `ts` is within the rule's `window` of the time of evaluation, in `seq` order, and derives each subject's count from them. A restarted evaluator therefore reaches the same counts as one that never stopped. The time of evaluation is the clock's time when the evaluation starts, and the clock is an input the tests set. In an episode row, `opened_seq` is the `seq` of the newest counted event at the evaluation that opened it, `last_observed_seq` is the `seq` of the newest counted event seen so far, and `observation_count` goes up by one at each evaluation that moves `last_observed_seq`. An evaluation that finds no new counted event and no episode to open or resolve writes nothing to the store.
+
+- A subject whose rule fires and that has no episode other than resolved ones gets a new `open` episode and one `watch.alert.opened` event. A subject that already has one is updated in place ([Section 6.1](#61-one-record-per-condition-never-per-pass-the-alert-episode-state-machine-d-tw5)).
+- A subject with an unresolved episode whose rule no longer fires at an evaluation (the count fell below `threshold` through a reset, through a value outside the pair, or through events growing older than `window`) is resolved with `resolved_reason = "condition-cleared"` and one `watch.alert.resolved` event.
+- `clear_when`, when given, is an expression judged against each read event for the subject. An event on which it holds sets the pattern's count to zero, exactly as a resetting event does, so the episode resolves at that evaluation. `clear_when` is optional.
+
+**The expression grammar ([D-TW13](#D-TW13)).** `match`, `reset` and `clear_when` are written in this grammar, and so is everything else [D-TW4](#D-TW4) calls a predicate:
+
+| Part | Forms |
+| :--- | :--- |
+| Operands | `event.<name>`; a string in double quotes; an integer; `true` and `false`; a list `[a, b]` of those |
+| Comparisons | `==`, `!=`, and for two integers `<`, `<=`, `>`, `>=` |
+| Membership and text | `x in [a, b]` (x equals a member); `x contains y` (a string holds a substring, or a list holds a value); `x matches "re"` (the string matches the RE2 regular expression) |
+| Functions | `empty(x)`: true when x has no value or is `""`, an empty list or an empty object |
+| Connectives | `not`, `and`, `or` and parentheses. Comparisons bind tightest, then `not`, then `and`, then `or` |
+
+An expression always yields true or false. A comparison, membership or text test in which an operand has no value, or in which the two sides have different types, is false; that includes `!=`. An expression that does not parse is refused when the rule file is loaded. `age()` and the operands that read a projection (`item(...)`, `git.ref(...)`, `charter.<name>`, and bare names such as `seat` in the examples above) are part of the full grammar and are not evaluated by the first build ([Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15)).
+
 **No arbitrary code execution in rules (`D-TW4`):** Predicates use a small, total, typed expression grammar over registered event payloads and store read-views (`==`, `!=`, `<`, `<=`, `>`, `>=`, `in`, `contains`, `matches`, `empty()`, `age()`, plus the six stateful window aggregators `predicate_match`, `count_in_window`, `consecutive_count`, `alternating_pair`, `lag_behind`, `duration_without_event`). Because rules are pure data with no shell or Turing-complete script execution, agents can create and edit rules safely, and `tillr watch lint` can statically type-check every field reference before the rule runs.
 
 ### 5.2 The 16 starting rules and the 2026-11-20 cases they catch
@@ -549,6 +589,17 @@ CREATE TABLE IF NOT EXISTS foreground_delivery (
 );
 ```
 
+**Which notices `wait` selects, and what a second `wait` prints ([D-TW14](#D-TW14)).** This is the designer's decision of 2026-11-21, made to answer a build worker's question; the owner has not ruled on it and may overturn it. A request filed that day asked for `wait` in a build that leaves out the rest of this section, on the ground that this section was still being designed. The section has since been settled, and the seen cursor is what makes "pending" a defined word, so the cursor is part of the `wait` primitive and is built with it: the `foreground_delivery` row, `--seen-through` and `tillr watch seen`. What that build leaves out is listed in [Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15).
+
+- An alert episode is a notice for the owner handle `foreground` when its rule's `delivery.receiver` is `foreground`, and for no other handle. A `wait` for another handle is shown fired agent watches only.
+- A notice's **notice seq** is the `events.seq` of the `watch.alert.opened` or `watch.alert.reopened` event that last opened the episode, or of the `watch.fired` event for a watch.
+- An alert notice is **pending** for an owner when the episode's state is `open` and its notice seq is greater than the owner's `seen_seq`.
+- `wait` prints every pending notice in notice seq order. `through_seq` is the greatest notice seq printed. Printing sets `shown_seq` to `through_seq` when that is greater, and never changes `seen_seq`.
+- A `wait` that finds notices pending when it starts prints them and exits `0` at once, before sleeping.
+- A second `wait` with no confirmation between the two prints the same notices again, for as long as their episodes are `open`. A second `wait` started with `--seen-through <seq>`, or after `tillr watch seen --through <seq>`, does not print a notice whose notice seq is `<seq>` or lower; it blocks until a later one is pending.
+- An episode that resolves and later opens again is a new episode with a new `watch.alert.opened` event, so its notice seq is greater than a cursor confirmed before it, and it is printed.
+- Without `--timeout`, `wait` blocks until a notice is pending. `--seen-through` is applied before the first evaluation, and a refused `--seen-through` (one above `shown_seq`) ends `wait` with exit `1` and prints nothing else.
+
 Seeing a notice is not acting on it. `tillr watch ack` still means "I own this alert" ([Section 6.1](#61-one-record-per-condition-never-per-pass-the-alert-episode-state-machine-d-tw5)), and an alert the agent has seen but not acknowledged stays `open` on `tillr watch status` without being shown again by `wait`.
 
 **In Claude Code: exit and re-arm, inside the two-hour limit.** The agent starts the watcher with its Bash tool as a background command:
@@ -611,6 +662,47 @@ Each line on stdout is a self-contained NDJSON envelope carrying `seq`, `ts`, `k
 - **`steering-timer` & supervisor hooks:** Can subscribe with `--severity high` or query `tillr watch status --json` during scheduled check-ins instead of running custom event-export scripts.
 - **External webhooks, desktop notifications, or Slack/pager bridges:** Pipe `tillr watch subscribe --consumer desktop-notify --kind alert` into `jq` / `notify-send` / `curl` with lossless cursor resumption via `watch_consumers(consumer_id, last_seq)` across restarts.
 
+### 6.6 The first build: event rules, episodes and `wait` ([D-TW15](#D-TW15))
+
+This section is the designer's decision of 2026-11-21; the owner has not ruled on it and may overturn it. It fixes what the first build contains, so that a builder has a stated answer for each part of the document the first build does not reach. It follows a request filed on 2026-11-21 that names four things to build: the standalone binary ([OQ-TW1](#OQ-TW1)), the rule schema, the evaluator, and `tillr watch wait`.
+
+**What the first build contains.**
+
+| Part | Contents |
+| :--- | :--- |
+| The binary | `tools/tillr-watch`, reached as `tillr watch`, with the library in `tools/tillr/watch` ([D-TW1](#D-TW1)). It is added to `nouns` in `tools/tillr-cli/main.go` and to `MODULES` in `tools/tillr-roll/tillr-roll.py` |
+| Faces | `tillr watch eval --once`, `tillr watch wait` and `tillr watch seen`. Each takes `--store <path>` (required). `eval` and `wait` take `--rules <dir>` (required), and read every `*.toml` file under that directory, at any depth |
+| Tables | `alert_episodes` ([Section 6.1](#61-one-record-per-condition-never-per-pass-the-alert-episode-state-machine-d-tw5)) and `foreground_delivery` ([Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3)). No cursor table is needed, because counts are derived from the events inside each rule's `window` ([D-TW13](#D-TW13)). They are registered with `store.RegisterDDL` |
+| Event kinds | `watch.alert.opened` and `watch.alert.resolved`, registered with `event.Register` |
+| The loader | Reads the whole schema of [Section 5.1](#51-declarative-rule-schema-d-tw4-oq-tw5) and refuses a file as the list below states |
+| The evaluator | Evaluates the rules the paragraph below calls evaluated, as [D-TW12](#D-TW12) and [D-TW13](#D-TW13) state |
+| Episodes | Opening, updating in place and automatic resolution. The other transitions of [Section 6.1](#61-one-record-per-condition-never-per-pass-the-alert-episode-state-machine-d-tw5) come with the commands that cause them |
+
+**What the loader refuses.** One refusal names the file, the rule's `id` and the key, and the binary exits `1` without evaluating anything:
+
+- a key named `remedy` anywhere in a rule ([OQ-TW2](#OQ-TW2));
+- a `delivery.receiver`, or a member of `delivery.also_notify`, that begins `drain:` ([OQ-TW4](#OQ-TW4)), or that is anything other than `foreground` or `subscribers`;
+- a key the schema does not name, a missing `id`, `scope`, `severity`, `reads.events`, `when.group_by`, `when.pattern`, `guidance.summary` or `delivery.receiver`, an empty `guidance.check` or `guidance.do`, or a value outside the set its key allows;
+- an `id` that two rules share;
+- a kind in `reads.events` that `event.Kinds()` does not list;
+- a pattern's required key that is missing, a `threshold` below 1, a `window` that is not a duration (`"90s"`, `"15m"`, `"4h"`), or an expression that does not parse.
+
+`enabled` defaults to `true`, and a rule with `enabled = false` is loaded and not evaluated.
+
+**Which rules are evaluated.** A rule is evaluated by the first build when all three of these hold: its `pattern` is `predicate_match`, `count_in_window`, `consecutive_count` or `alternating_pair`; it has no `reads.projections`, or an empty one; and every operand in its expressions is one the grammar table of [Section 5.1](#51-declarative-rule-schema-d-tw4-oq-tw5) lists. Every other rule that loads (a `lag_behind` or `duration_without_event` rule, one that reads a projection, one whose expression uses `age()` or a projection operand) is not evaluated, and the binary says so: `eval` and `wait` print one line per such rule on standard error when they start, naming the rule and the reason. Both example rules in [Section 5.1](#51-declarative-rule-schema-d-tw4-oq-tw5) are in that set as written, because each reads projections.
+
+**What `wait` prints in the first build.** The output of [Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3), with alert notices only. The `TimelineBundle` of the first build holds the rule's `id`, the subject, the severity, the rendered `guidance`, and the counted events (`seq`, `ts`, `kind`, and the value of `field` where the pattern has one), newest first and cut off at 8 KiB; the item metadata, runs, refusals and landings of [Section 6.2](#62-how-the-receiver-gets-the-items-timeline-with-the-alert-d-tw6) are added later. The `ack:` line is left out until `tillr watch ack` exists. `wait` sleeps on `.tillr/state.db-wal` and the 60-second timer; a build that also watches `.tillr/watch.wakeup` is correct, and nothing touches that file yet.
+
+**What the first build leaves out,** each for the later build that owns it:
+
+- the `lag_behind` and `duration_without_event` patterns, every projection, and `age()`;
+- `tillr watch status`, `daemon`, `ack`, `silence`, `resolve`, `rule` and `subscribe`, the `watch_rule_overrides` and `watch_consumers` tables, and the event kinds for acknowledging, silencing and reopening;
+- agent watches (`tillr watch add`, `list`, `edit`, `drop`, the `agent_watches` table and `watch.fired`), `wait --follow`, and the operator procedure of [Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3);
+- `watch` blocks in workflow files, `observability` blocks in charters, and `tillr watch lint`;
+- the rule catalog of [Section 5.2](#52-the-16-starting-rules-and-the-2026-11-20-cases-they-catch). The first build ships no rule file under `config/tillr/watch/`; its tests carry their own rules. Each catalog rule is written against the payload its events really carry, in the build that can evaluate it.
+
+Nothing in the first build acts on an alert ([OQ-TW2](#OQ-TW2), [OQ-TW4](#OQ-TW4)): it writes `watch.*` events and its own two tables, and prints.
+
 ---
 
 ## 7. Non-Git Workflows and `tillr watch lint`
@@ -658,7 +750,7 @@ None. The owner ruled all five on 2026-11-21; each is a row in [the Decision Led
 
 ## 9. Decision Ledger
 
-The `OQ-TW` rows are the owner's rulings of 2026-11-21, given as Vantage review comments. Every `D-TW` row is a designer's engineering decision, made on 2026-11-20 except [D-TW11](#D-TW11) and [D-TW12](#D-TW12) (2026-11-21); none has been ruled by the owner, and he may overturn any of them. None of either kind is built.
+The `OQ-TW` rows are the owner's rulings of 2026-11-21, given as Vantage review comments. Every `D-TW` row is a designer's engineering decision, made on 2026-11-20 except [D-TW11](#D-TW11) through [D-TW15](#D-TW15) (2026-11-21); none has been ruled by the owner, and he may overturn any of them. None of either kind is built.
 
 | ID | Decision | Provenance & Date | Governing section |
 | :--- | :--- | :--- | :--- |
@@ -679,3 +771,6 @@ The `OQ-TW` rows are the owner's rulings of 2026-11-21, given as Vantage review 
 | <a id="D-TW10"></a>**D-TW10** | Provide `tillr watch lint` (wired into `tools/gate/checks/workflows.py` alongside `tillr drain workflow check`) to validate the combined `(charter, workflows, backend-policy, watch-rules)` tuple pre-flight, including `completes: "hook"` `describe` contract checks, seat mappings, unguarded oscillation cycles, signal/stage type-checking, non-empty guidance, and static rejection of item-failing remedies. | Designer's decision; the owner may overturn this (2026-11-20) | [Section 7.1](#71-running-the-same-rules-against-a-non-git-workflow-recorded-verdict-autoqa-custom-loops), [Section 7.2](#72-tillr-watch-lint-checking-a-workflows-whole-configuration-before-it-runs-d-tw10) |
 | <a id="D-TW11"></a>**D-TW11** | Deliver notices to the foreground agent with one harness-neutral primitive, `tillr watch wait`, run as a background watcher by the agent itself. In Claude Code it is a background Bash command started with `--timeout 110m` under the harness's two-hour limit, which exits when a notice is pending or the timeout passes; the exit wakes the agent, which re-arms it. In Pi it is one `background_task` running `tillr watch wait --follow` with no limit, waking the agent through an output watch. The only delivery state is a per-owner seen cursor in the store (`foreground_delivery`), moved only by the agent's confirmation (`--seen-through`, `tillr watch seen`), so a notice is repeated until confirmed and a stopped watcher loses nothing. The watcher executes no remedy ([OQ-TW2](#OQ-TW2)); the agent decides. | Designer's decision, made under the owner's ruling on [OQ-TW3](#OQ-TW3); the owner may overturn this (2026-11-21) | [Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3) |
 | <a id="D-TW12"></a>**D-TW12** | The `alternating_pair` `threshold` counts consecutive observations, not moves: `threshold = 4` fires on the fourth observation (`plan, design, plan, design`), which is three moves. Consecutive observations with the same value count as one, an observation outside the pair sets the count to zero, and only observations inside `window` count. | Designer's decision, following an operator request of 2026-11-21 that answered a build worker's question about which count governs; the owner may overturn this (2026-11-21) | [Section 5.1](#51-declarative-rule-schema-d-tw4-oq-tw5) |
+| <a id="D-TW13"></a>**D-TW13** | A rule says which events count with `match` and, for `consecutive_count`, which events set the count to zero with `reset`; with `reset` left out, any read event for the subject on which `match` does not hold sets it to zero. `count_in_window` counts counting events inside `window` and nothing but age removes one; `predicate_match` is the same with the threshold fixed at 1. Counts are derived from the events inside `window` at each evaluation and are not stored. An episode resolves at the evaluation where its rule stops firing. The expression grammar for `match`, `reset` and `clear_when` is the table in Section 5.1. | Designer's decision, answering a build worker's question of 2026-11-21 about how a rule declares what counts and what resets a consecutive count; the owner may overturn this (2026-11-21) | [Section 5.1](#51-declarative-rule-schema-d-tw4-oq-tw5) |
+| <a id="D-TW14"></a>**D-TW14** | `tillr watch wait` prints every pending notice for its owner: an alert episode whose rule's receiver is `foreground`, whose state is `open`, and whose opening event is later than the owner's seen cursor. A second `wait` with no confirmation prints the same notices again; one that confirms with `--seen-through` does not. The seen cursor (`foreground_delivery`, `--seen-through`, `tillr watch seen`) is part of the `wait` primitive and is built with it. | Designer's decision, following an operator request of 2026-11-21 that asked for `wait` ahead of the rest of Section 6.4, and answering a build worker's question of that day about which alerts `wait` selects; the owner may overturn this (2026-11-21) | [Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3) |
+| <a id="D-TW15"></a>**D-TW15** | The first build is the standalone binary, the loader for the whole rule schema, the evaluator for rules that read events only (`predicate_match`, `count_in_window`, `consecutive_count`, `alternating_pair`), episode opening and automatic resolution, and `tillr watch eval --once`, `wait` and `seen`. A loaded rule the first build cannot evaluate is named on standard error, not skipped silently. It ships no catalog rule and acts on no alert. | Designer's decision, following an operator request of 2026-11-21 that named the binary, the rule schema, the evaluator and `wait` as the part to build; the owner may overturn this (2026-11-21) | [Section 6.6](#66-the-first-build-event-rules-episodes-and-wait-d-tw15) |
