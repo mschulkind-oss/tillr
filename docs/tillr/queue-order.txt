@@ -1,6 +1,8 @@
-# last_hand_move_event_seq: 1329191
-# hand_move_event_sha256: fb549df1b24424ac22d5f1f9a6ed748313547d9a96527c9f7a85698bfca7073a
-item-request-cae19a4382
+# last_hand_move_event_seq: 1331915
+# hand_move_event_sha256: e4e1696fb145bc79254baf7bf2d9d6144f95424f28d061e205d9f84cdaf779c8
+item-request-1b2a7051b5
+item-request-dd77346d5d
+item-request-4c47582fc2
 item-request-cc2af28a50
 item-request-5be951c300
 item-request-b205fbd881
@@ -11,7 +13,6 @@ item-bedrock-claude-latest-only
 item-request-7bbcb8dc81
 item-request-59735b6305
 item-request-d40cdbb177
-item-request-8692f15f58
 item-request-760c0eb9d0
 item-request-b478edf600
 item-request-8970d30835
@@ -19,7 +20,6 @@ item-request-28f8c86410
 item-request-165203fd73
 item-request-b72af834ae
 item-request-6d7eb3cf69
-item-request-737f4c5838
 item-request-3dc03a2469
 item-request-143f5cfbef
 item-request-7edf1a39fc
@@ -43,3 +43,4 @@ item-request-1aec0b0d05
 item-request-7a26b6a6b5
 item-request-44928aca44
 item-request-3068839494
+item-request-8692f15f58
