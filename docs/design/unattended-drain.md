@@ -17,8 +17,8 @@ vantage:
 # Why the drain could not run one night alone, and the eight rules that let it
 
 **Status:** 2026-11-21. Nothing in this document is built. The incident record was read from the
-loop's log, the store's faces, the sampler and `git log` on 2026-11-21 between 10:30 AM and
-noon ET, with the trunk at `687b1a2c97`.
+loop's log, the store's faces, the sampler and `git log` on the morning of 2026-11-21, with the
+trunk at `687b1a2c97`.
 
 > **In short.** The night did not fail forty-one times. It failed eight ways. The drain lets a
 > change to its own code land before that code's tests run, and then depends on a repair path,
