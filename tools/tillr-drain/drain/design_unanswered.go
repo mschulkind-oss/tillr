@@ -112,6 +112,10 @@ type designFinding struct {
 	feedback             string
 }
 
+func designInterrupted(w *pendingWork, class AttemptClass, endCause string) bool {
+	return w.Orphaned || class == AttemptInterrupted || endCause == run.EndSignal || endCause == run.EndLeaseReclaimed || endCause == run.EndRestart
+}
+
 // settleUnansweredDesignRuns applies the rule above to every blocked item whose conflict
 // is awaiting an ended design run, or is with the owner by the removed count.
 func (l *Loop) settleUnansweredDesignRuns(ctx context.Context) error {
@@ -172,12 +176,13 @@ func (l *Loop) settleUnansweredDesignRuns(ctx context.Context) error {
 					continue
 				}
 				f := designFinding{conflict: c, runID: c.DesignRunID, base: w.BaseSHA}
-				if w.Orphaned || rec.EndCause == run.EndSignal || rec.EndCause == run.EndLeaseReclaimed || rec.EndCause == run.EndRestart {
+				log := logTail(rec.ArtifactRefs)
+				if designInterrupted(w, ClassifyAttempt(*rec, log), rec.EndCause) {
 					f.interrupted = true
 					found = append(found, f)
 					continue
 				}
-				if isBackendFailure(*rec, logTail(rec.ArtifactRefs)) {
+				if isBackendFailure(*rec, log) {
 					f.infrastructure = true
 					f.outcome = "infrastructure failure"
 					found = append(found, f)

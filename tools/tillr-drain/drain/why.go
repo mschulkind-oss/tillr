@@ -426,6 +426,25 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 					row.Why += "; " + strings.Join(closedBlockers, ", ") + " closed without landing"
 				}
 			}
+		case d.Reason == ReasonConflictDesign && d.DeferredBy != "":
+			rec, err := terminalRecord(r, d.DeferredBy)
+			if err != nil {
+				return answer, err
+			}
+			exit := ""
+			if rec != nil && rec.ExitCode != nil {
+				exit = fmt.Sprintf(" (exit %d)", *rec.ExitCode)
+			}
+			row.Why = "design run " + d.DeferredBy + " was interrupted" + exit + " without answering"
+			row.tableReason = row.Why
+			if slices.ContainsFunc(offered, func(lane string) bool {
+				return !tick.OutLanes[lane] && !strings.HasPrefix(lane, "desk-") && (it.Express || !isExpressLane(lane))
+			}) {
+				row.Mover = "restart design when an eligible lane is free"
+			} else {
+				row.Class = "needs you"
+				row.Mover = "offer an eligible lane with --lanes so drain can restart design"
+			}
 		case d.Action == ActionHold && (d.Reason == ReasonConflictDesign || d.Reason == ReasonConflictOwner) && d.ConflictID != "":
 			row.WaitingOn = append(row.WaitingOn, d.ConflictID)
 			if d.Reason == ReasonConflictOwner && d.DeferredBy != "" {

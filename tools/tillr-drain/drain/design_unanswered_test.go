@@ -63,6 +63,10 @@ func endDesignRunWith(t *testing.T, f refusalLoopFixture, l *Loop, step, report,
 		state, cause, exit = run.StateTimedOut, run.EndLeaseReclaimed, nil
 	} else if step == "infrastructure" {
 		exit = countPtr(4)
+	} else if step == "killed" {
+		cause, exit = run.EndSignal, countPtr(143)
+	} else if step == "exit-143" {
+		exit = countPtr(143)
 	}
 	rec := run.Record{RunID: d.RunRequest.RunID, ItemID: d.ItemID, LaneID: d.LaneID, Backend: d.RunRequest.Backend, State: state, ExitCode: exit, StartedAt: l.cfg.Now().Format(time.RFC3339), FinishedAt: l.cfg.Now().Format(time.RFC3339), EndCause: cause, ArtifactRefs: []run.ArtifactRef{}}
 	if report != "" {
@@ -79,7 +83,7 @@ func endDesignRunWith(t *testing.T, f refusalLoopFixture, l *Loop, step, report,
 		if step == "orphaned" {
 			return appendEffect(tx, loopOrphanedKind, rec.RunID, struct{}{}, l.cfg.Now())
 		}
-		if step == "infrastructure" {
+		if step == "infrastructure" || step == "killed" || step == "exit-143" {
 			return nil
 		}
 		if step == "reclaimed" {
@@ -200,6 +204,83 @@ func TestAnInterruptedDesignRunRaisesItsConflictAgain(t *testing.T) {
 	design := endDesignRun(t, f, l, "orphaned")
 	settleDesign(t, l)
 	raisedForDesign(t, f, l, design, "interrupted")
+}
+
+func TestWhyKilledDesignRunNamesTheInterruptionAndMover(t *testing.T) {
+	f, l := designConflictFixture(t)
+	origin := endDesignRun(t, f, l, "killed")
+	settleDesign(t, l)
+	l.cfg.Lanes = []string{"express-1"} // not eligible for this ordinary item
+	fixtureRead(t, f, func(r *store.Reader) error {
+		answer, err := Why(r, Pass{AvailableLanes: &l.cfg.Lanes, Now: l.cfg.Now().Format(time.RFC3339)}, l.cfg.Policy, nil)
+		if err != nil {
+			return err
+		}
+		for _, row := range answer.Rows {
+			if row.ItemID != "item-a" {
+				continue
+			}
+			if row.Decision.Action != ActionHold || row.Position != "held" || row.Reason == ReasonNoLane || answer.Summary.CouldRun != 0 || answer.Summary.Held[row.Reason] != 1 {
+				t.Fatalf("killed design run counted as waiting for a lane: %+v (summary %+v)", row, answer.Summary)
+			}
+			for _, want := range []string{origin, "exit 143", "without answering"} {
+				if !strings.Contains(row.Why, want) || !strings.Contains(row.TableReason(), want) {
+					t.Errorf("killed design run explanation lacks %q: why=%q, table=%q", want, row.Why, row.TableReason())
+				}
+			}
+			if !strings.Contains(row.Mover, "offer an eligible lane") {
+				t.Errorf("missing recovery action: %+v", row)
+			}
+			return nil
+		}
+		t.Fatal("missing item-a from why")
+		return nil
+	})
+}
+
+func TestKilledDesignRunRestartsWhenItsLaneIsUnavailable(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		step string
+		busy bool
+	}{
+		{name: "no longer offered", step: "killed"},
+		{name: "occupied after exit 143 without a signal cause", step: "exit-143", busy: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, l := designConflictFixture(t)
+			origin := endDesignRun(t, f, l, tc.step)
+			settleDesign(t, l)
+			l.cfg.Lanes = []string{"lane-2", "lane-3", "express-1"}
+			if tc.busy {
+				l.cfg.Lanes = append([]string{"lane-1"}, l.cfg.Lanes...)
+				fixtureWrite(t, f, func(tx *store.Tx) error {
+					_, err := run.ClaimLease(context.Background(), tx, run.Request{RunID: "occupant", ItemID: "other", Backend: "fixture"}, "lane-1", l.cfg.Now())
+					return err
+				})
+			}
+			ctx := context.Background()
+			snapshot, err := readProposedStarts(ctx, f.storePath, l.cfg.Now(), l.cfg.Policy, l.startViewPass(), &VantageQuestions{Root: f.root, Context: ctx}, startSnapshot{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if start, ok := snapshot.nextFreshStart(); !ok || start.decision.ItemID != "item-a" || start.decision.LaneID != "lane-2" {
+				t.Fatalf("start coordinator did not propose the replacement lane: %+v", start.decision)
+			}
+			p := decisionFor(t, l, "item-a")
+			if p.decision.Action != ActionDispatch || p.decision.LaneID != "lane-2" {
+				t.Fatalf("killed design run was not restarted on a free eligible lane: %+v", p.decision)
+			}
+			ok, w, err := l.applyPlan(context.Background(), p, runGit(t, f.root, "rev-parse", TrunkRef), l.cfg.Now())
+			if err != nil || !ok {
+				t.Fatalf("claim on replacement lane: %v %v", ok, err)
+			}
+			got := w.Decision
+			if got.RunRequest.SessionTurn || got.DesignContinuationFrom != origin || !strings.Contains(got.BlockConflict.Text, "starting a fresh design session") {
+				t.Fatalf("replacement lane did not start a fresh design session: %+v", got)
+			}
+		})
+	}
 }
 
 func TestKilledDesignRunUsesRecordedSessionOrExplainsFreshSession(t *testing.T) {

@@ -88,15 +88,33 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 			d.Reason, d.DeferredBy = ReasonNoPolicy, backend
 			break
 		}
-		if p.tick.MaxDispatches != nil && p.dispatched >= *p.tick.MaxDispatches {
+		origin := designContinuationWork(c, p.designHistory[c.DesignRunID])
+		interrupted := false
+		if origin != nil {
+			for _, prior := range p.priors[row.ItemID] {
+				if prior.RunID == c.DesignRunID {
+					interrupted = designInterrupted(origin, prior.Class, prior.EndCause)
+					break
+				}
+			}
+		}
+		hold := func() {
 			d.Reason = ReasonNoLane
+			if interrupted {
+				d.Reason, d.DeferredBy = ReasonConflictDesign, c.DesignRunID
+			}
+		}
+		if p.tick.MaxDispatches != nil && p.dispatched >= *p.tick.MaxDispatches {
+			hold()
 			break
 		}
 		lane, ok := "", false
-		if origin := designContinuationWork(c, p.designHistory[c.DesignRunID]); origin != nil {
+		if origin != nil {
 			lane = origin.Decision.LaneID
-			ok = (row.Express || !isExpressLane(lane)) && p.retainedLaneFreeFor(lane, row.ItemID)
-			if !ok && isExpressLane(lane) {
+			ok = !p.tick.OutLanes[lane] && (row.Express || !isExpressLane(lane)) && p.retainedLaneFreeFor(lane, row.ItemID)
+			// A killed run can resume only on its old lane. If that lane is
+			// unavailable, another eligible lane can start a fresh design session.
+			if !ok && (isExpressLane(lane) || interrupted) {
 				lane, ok = p.freeLane(row.Express)
 			}
 		} else {
@@ -111,7 +129,7 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 			d.RunRequest = p.request(row.ItemID, lane, backend)
 			stampDecisionRequest(d, d.RunRequest)
 		} else {
-			d.Reason = ReasonNoLane
+			hold()
 		}
 	}
 	identifyDecision(&d)
