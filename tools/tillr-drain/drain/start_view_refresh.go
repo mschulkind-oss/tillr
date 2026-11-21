@@ -26,6 +26,9 @@ func (l *Loop) watchStartView(ctx context.Context, view *startView, interval tim
 	tick := l.startViewPass()
 	root, cmd, index := l.cfg.Root, l.cfg.QuestionsCmd, l.questionsIndexPath()
 	var refresh startRefresh
+	// The incremental fold never consumes optimistic loop notes. Only the
+	// published copy receives those; the next store read reconciles them.
+	var previous startSnapshot
 	stop := view.watch(ctx, interval, func(ctx context.Context) startWatcher {
 		paths := startWatchPaths{root: root, store: tick.StorePath, index: index}
 		if root != "" && !l.nonLanding {
@@ -36,7 +39,11 @@ func (l *Loop) watchStartView(ctx context.Context, view *startView, interval tim
 		return newStartWatcher(paths)
 	}, func(ctx context.Context, change startWatchChange) (startSnapshot, error) {
 		// Lease expiry uses wall time, not the legacy pass's clock hook.
-		return refresh.read(ctx, time.Now(), l.currentPolicy(), tick, root, cmd, index, view.snapshot(), change)
+		next, err := refresh.read(ctx, time.Now(), l.currentPolicy(), tick, root, cmd, index, previous, change)
+		if err == nil {
+			previous = next
+		}
+		return next, err
 	})
 	return func() {
 		stop()

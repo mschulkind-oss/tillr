@@ -225,6 +225,7 @@ func TestStartViewPausedRefreshDoesNotBlockLegacyDispatch(t *testing.T) {
 	l.cfg.Lanes = []string{"lane-1"}
 	paused, exited := make(chan struct{}), make(chan struct{})
 	view := newStartView()
+	l.startView.Store(view)
 	seeded := false
 	stop := view.watch(context.Background(), time.Millisecond, nil, func(ctx context.Context, _ startWatchChange) (startSnapshot, error) {
 		if !seeded {
@@ -247,6 +248,9 @@ func TestStartViewPausedRefreshDoesNotBlockLegacyDispatch(t *testing.T) {
 	}
 	if result.Dispatched != 1 {
 		t.Fatalf("dispatches with refresh paused: %d", result.Dispatched)
+	}
+	if got := view.snapshot(); got.holds["item-a"] != ReasonRunLive || !got.occupied["lane-1"] || got.pending.works["item-a"] == nil {
+		t.Fatal("successful legacy dispatch did not publish its claim while refresh was paused")
 	}
 	if len(l.active) > 0 {
 		select {

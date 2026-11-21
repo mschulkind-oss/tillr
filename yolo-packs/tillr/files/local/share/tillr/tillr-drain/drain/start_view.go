@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"maps"
 	"reflect"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,6 +31,8 @@ type startSnapshot struct {
 	items      []startQueueRow
 	occupied   map[string]bool
 	storeLanes map[string]bool // raw leases, before overlaying pending work
+	storeRuns  map[string]string
+	rotation   []string
 
 	entries                         map[string]startViewEntry
 	holds, reservations             map[string]string
@@ -69,6 +72,12 @@ type startSnapshot struct {
 type startView struct {
 	current atomic.Pointer[startSnapshot]
 	updated chan struct{} // Coalesced notification; nothing in dispatch waits on it.
+
+	mu       sync.Mutex // Serializes publication, never held across a read.
+	syncing  bool
+	journal  []startNote
+	holds    map[string]heldItem
+	rotation []string // nil until the loop publishes its own rotation
 }
 
 func newStartView() *startView {
@@ -140,18 +149,37 @@ func (v *startView) runWatcherLoop(ctx context.Context, interval time.Duration, 
 		if ctx.Err() != nil {
 			return
 		}
+		v.mu.Lock()
+		v.syncing = true
+		v.mu.Unlock()
 		next, err := read(ctx, change)
-		previous := v.current.Load()
-		if err == nil && ctx.Err() == nil && !reflect.DeepEqual(previous, &next) {
-			if w != nil && (previous == nil || !reflect.DeepEqual(previous.itemsByID, next.itemsByID)) {
-				w.updateDocs(next.itemsByID)
+		if previous := v.current.Load(); err == nil && ctx.Err() == nil && w != nil &&
+			(previous == nil || !reflect.DeepEqual(previous.itemsByID, next.itemsByID)) {
+			// Install watch registrations before announcing the snapshot. Notes
+			// do not change the document set and may arrive during registration.
+			w.updateDocs(next.itemsByID)
+		}
+		v.mu.Lock()
+		if err == nil && ctx.Err() == nil {
+			for _, note := range v.journal {
+				note(&next)
 			}
-			v.current.Store(&next)
-			select {
-			case v.updated <- struct{}{}:
-			default:
+			for id, hold := range v.holds {
+				if version := next.contentVersions[id]; version != "" && hold.contentVersion != "" && version != hold.contentVersion {
+					delete(v.holds, id)
+					continue
+				}
+				next.applyLocalHold(id, hold)
+			}
+			if v.rotation != nil {
+				next.offerLanes(v.rotation, time.Now())
+			}
+			if !reflect.DeepEqual(v.current.Load(), &next) {
+				v.publishLocked(&next)
 			}
 		}
+		v.syncing, v.journal = false, nil
+		v.mu.Unlock()
 	}
 	refresh() // seed
 	for ctx.Err() == nil {
@@ -327,7 +355,7 @@ func (s *startSnapshot) refreshRunFacts(r *store.Reader, history, priors bool) e
 func (s *startSnapshot) refreshLaneFacts(r *store.Reader, at time.Time, leases bool) error {
 	var err error
 	if leases {
-		if s.storeLanes, err = readLanes(r, at); err != nil {
+		if s.storeLanes, err = readLanesWithRuns(r, at, &s.storeRuns); err != nil {
 			return err
 		}
 		if s.deskOwners, err = readDeskOwners(r, s.storeLanes); err != nil {

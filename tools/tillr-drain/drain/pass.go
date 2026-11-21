@@ -71,6 +71,7 @@ type pendingWork struct {
 	Orphaned       bool           `json:"-"`
 	BoundaryFailed bool           `json:"boundary_failed,omitempty"`
 	LaneReleased   bool           `json:"lane_released,omitempty"`
+	Optimistic     bool           `json:"-"` // shadow claim, not folded from the store
 	LaneKeepReason string         `json:"lane_keep_reason,omitempty"`
 	HeldFence      string         `json:"held_fence,omitempty"`
 	NeedsStage     bool           `json:"needs_stage,omitempty"`
@@ -1043,6 +1044,7 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 	defer s.Close()
 	nextGeneration := *generation
 	var reapedSingle []*pendingWork
+	reapedAny := false
 	// The process-table evidence is gathered with no transaction open. The run-start
 	// lock spans it and the write, so no run face starts between the scan and the reap.
 	if err := withRunStartLock(ctx, l.cfg.Store, func() error {
@@ -1070,7 +1072,8 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 			if err := tx.QueryRow("SELECT COALESCE(MAX(seq), 0) FROM events").Scan(&after); err != nil {
 				return err
 			}
-			if (len(released) > 0 || after != before) && nextGeneration == "" {
+			reapedAny = len(released) > 0 || after != before
+			if reapedAny && nextGeneration == "" {
 				nextGeneration, err = allocateGeneration(tx)
 			}
 			return err
@@ -1132,6 +1135,9 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 				return nil, nil, err
 			}
 		}
+	}
+	if reapedAny {
+		l.reconcileStartLanes(ctx, nil, at)
 	}
 	if err := l.releaseIdleHeldCandidates(ctx); err != nil {
 		return nil, nil, err
@@ -2077,6 +2083,7 @@ func (l *Loop) releaseExamination(ctx context.Context, d Decision) error {
 		return err
 	}
 	defer s.Close()
+	releasedLane := false
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
 		_, byRun, err := readPendingHistory(tx.Reader())
 		if err != nil {
@@ -2091,6 +2098,8 @@ func (l *Loop) releaseExamination(ctx context.Context, d Decision) error {
 		if err != nil {
 			return err
 		}
+		n, rowsErr := res.RowsAffected()
+		releasedLane = rowsErr == nil && n > 0
 		if d.Workflow != nil {
 			return appendEffect(tx, examinationReleasedKind, d.RunRequest.RunID, struct{}{}, l.cfg.Now().UTC())
 		}
@@ -2099,11 +2108,14 @@ func (l *Loop) releaseExamination(ctx context.Context, d Decision) error {
 				return err
 			}
 		}
-		if n, err := res.RowsAffected(); err != nil || n == 0 {
-			return err
+		if rowsErr != nil || n == 0 {
+			return rowsErr
 		}
 		return appendEffect(tx, laneReleasedKind, d.RunRequest.RunID, laneReleased{LaneID: d.LaneID, Cause: laneReleaseEnded}, l.cfg.Now().UTC())
 	})
+	if err == nil && releasedLane {
+		l.notifyStartLaneReleased(d.LaneID, d.RunRequest.RunID, false, l.cfg.Now().UTC())
+	}
 	if err == nil && len(strays) > 0 {
 		l.reportf("loop: run %s ended, but process(es) %s still carry its markers; lane %s's lease was released. Before offering it again, the next pass holds it out of rotation if any of these processes are still inside it\n", d.RunRequest.RunID, strings.Join(strays, ", "), d.LaneID)
 	}
@@ -2154,8 +2166,10 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 			}
 		}
 	}
+	releasedLane := false
+	var at time.Time
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
-		at := l.cfg.Now().UTC()
+		at = l.cfg.Now().UTC()
 		if err := appendEffect(tx, examinationDoneKind, d.RunRequest.RunID, struct{}{}, at); err != nil {
 			return err
 		}
@@ -2169,12 +2183,16 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 		if n, err := res.RowsAffected(); err != nil {
 			return err
 		} else if n > 0 {
+			releasedLane = true
 			if err := appendEffect(tx, laneReleasedKind, d.RunRequest.RunID, laneReleased{LaneID: d.LaneID, Cause: laneReleaseExamined}, at); err != nil {
 				return err
 			}
 		}
 		return recordSecondFailure(tx, routed, at)
 	})
+	if err == nil && releasedLane {
+		l.notifyStartLaneReleased(d.LaneID, d.RunRequest.RunID, true, at)
+	}
 	return err
 }
 
@@ -2702,7 +2720,6 @@ func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA
 	}
 	switch d.Action {
 	case ActionDispatch, ActionRetry:
-		start := time.Now()
 		base := *mainSHA
 		if work != nil {
 			base = work.BaseSHA
@@ -2710,6 +2727,10 @@ func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA
 		if work != nil {
 			d = work.Decision
 		}
+		if v := l.startView.Load(); v != nil {
+			v.noteStartClaimed(d, work)
+		}
+		start := time.Now()
 		l.laneRefusedNow = false
 		var staged []Decision
 		var err error
