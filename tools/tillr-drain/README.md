@@ -1357,9 +1357,10 @@ landing cap (`red_cap` is removed per [`OQ-GP7`](../../docs/design/tillr-graph-i
 
 The red base is only half the question when the trunk has moved past it. Work is always
 built against the latest trunk (the owner's ruling of 2026-11-18), so the failing checks
-are also judged on the current trunk tip. A check the tip run's recorded progress already
-passed on that tip counts as green there, and only the rest are replayed on the tip. When
-every check is red on the tip too, the fixer is filed for the tip. When any check passes
+are also judged on the current trunk tip. At the base and at the tip, the loop skips a
+replay only when the after-merge proof or its progress record lists a pass for that exact
+check and commit. A missing or red record still requires replay. The refusal line names
+which evidence was used. When every check is red on the tip too, the fixer is filed for the tip. When any check passes
 on the tip, the trunk is already repaired there: no fixer is filed, the loop rebases the
 worker's commits onto the tip and records the tip as the lane's base, and the ordinary
 refusal goes back to the worker saying the trunk is repaired at the tip. A tip the replay
