@@ -131,6 +131,8 @@ of the command:
 """
 
 import contextlib
+import copy
+import hashlib
 import importlib.util
 import io
 import json
@@ -356,6 +358,22 @@ def copy_identity_check(repo):
             stub.write_text("")
 
 
+# The stand-in for the one test file the gate's live quarantine names, and its git blob id:
+# the hash of `blob <size>`, a NUL and the bytes, which is what `git hash-object` prints.
+QUARANTINE_FIXTURE_PATH = "test/unit/herdr-native-placement.test.ts"
+QUARANTINE_FIXTURE_CONTENT = b"// the fixture's copy of the quarantined test file\n"
+QUARANTINE_FIXTURE_BLOB = hashlib.sha1(
+    b"blob %d\0" % len(QUARANTINE_FIXTURE_CONTENT) + QUARANTINE_FIXTURE_CONTENT).hexdigest()
+
+
+def quarantine_fixture_file(checkout: Path, content: bytes = QUARANTINE_FIXTURE_CONTENT) -> Path:
+    """Write the quarantined test file into a candidate checkout, and return its path."""
+    path = checkout / QUARANTINE_FIXTURE_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    return path
+
+
 def build_repo(base: Path):
     releases = upstream(base, "pi-subagents")   # follows its newest release tag
     heads = upstream(base, "pi-background-tasks")  # says follow: head
@@ -370,7 +388,16 @@ def build_repo(base: Path):
     (repo / "bin").mkdir()
     (repo / "tests").mkdir()
     (repo / "tools").mkdir()
-    shutil.copy(SCRIPT, repo / "tools" / "fork-check.py")
+    # The fixture's gate is the real one with a single value changed: the blob id its live
+    # quarantine is declared against. A quarantine applies only to a file with the declared
+    # content, and the real content lives in the pi-subagents fork, not in this repository,
+    # so the fixture's gate declares the content `quarantine_fixture_file` writes instead.
+    live_blob = _RECORD_TOOL.QUARANTINED_FORK_QUALITY[0].blob
+    gate_source = SCRIPT.read_text()
+    assert gate_source.count(live_blob) == 1, "the live quarantine's blob id is not written exactly once"
+    (repo / "tools" / "fork-check.py").write_text(
+        gate_source.replace(live_blob, QUARANTINE_FIXTURE_BLOB))
+    shutil.copymode(SCRIPT, repo / "tools" / "fork-check.py")
 
     (repo / "yolo-packs" / "matt" / "pack.json").write_text(json.dumps({
         "name": "matt",
@@ -1963,11 +1990,12 @@ with tempfile.TemporaryDirectory() as tmp:
 
     # A QUARANTINED step must not stop the run reaching a verdict. The unit suite's only
     # failing case is the bridge acknowledgement's 30 ms real-time budget, declared in
-    # UNANSWERABLE_FORK_QUALITY: the step cannot answer for the series on this machine, and
-    # nothing is left unanswered about the change, so the run verifies and the baseline
-    # moves. It is still named -- on its own skip line, with the reason, counted as a step
-    # that could not answer and never as one that passed -- because a quarantine is not a
-    # claim that the case passes (docs/design/agent-runtime.md section 27, D6).
+    # QUARANTINED_FORK_QUALITY, and the test file in the candidate checkout has the content
+    # the declaration was written against, so the run verifies and the baseline moves. It
+    # is still named -- on its own line, with the reason, counted as a quarantined case and
+    # never as one that passed -- because a quarantine is not a claim that the case passes
+    # (docs/reference/gate-check-rules.md).
+    quarantined_file = quarantine_fixture_file(repo / ".forks/candidate/pi-subagents")
     quality = f"npm run test:unit in the clean checkout at {repo / '.forks/candidate/pi-subagents'}"
     quarantined_case = "leaves the remote operator's APPEND_SYSTEM.md out of the child's prompt"
     (base / "pi-forks-out").write_text(
@@ -1982,12 +2010,57 @@ with tempfile.TemporaryDirectory() as tmp:
         record(repo)["baseline"]
     # Named on its own line, with the reason, and not as one of the passing checks.
     assert f"  quarantined      fork pi-subagents: {quality}" in result.stdout, result.stdout
-    assert "because: QUARANTINED, not answered: its 30 ms budget" in result.stdout, result.stdout
+    assert "because: QUARANTINED, not passed: its 30 ms budget" in result.stdout, result.stdout
     assert f"  run  fork-quality fork pi-subagents: {quality}" not in result.stdout, result.stdout
+    # The case, the item and the content the declaration was written against are printed
+    # with it, with the classification: the cases ran and failed on an upstream timing
+    # race, which is not "could not answer here".
+    assert ("       case: test/unit/herdr-native-placement.test.ts -- "
+            f"{quarantined_case}, ") in result.stdout, result.stdout
+    assert (f"       item quarantine/herdr-native-placement, declared against blob "
+            f"{QUARANTINE_FIXTURE_BLOB} (upstream)") in result.stdout, result.stdout
     # It is counted as a quarantined case, never as one that passed and never folded into
     # the "could not answer" tally: it ran, it failed, and a recorded decision suppressed it.
-    assert "1 case(s) quarantined -- 1 unanswerable" in result.stdout, result.stdout
+    assert "1 case(s) quarantined -- each named above" in result.stdout, result.stdout
+    assert "a quarantined case is not a passing one" in result.stdout, result.stdout
+    assert "unanswerable" not in result.stdout, result.stdout
+    assert "expire" not in result.stdout, result.stdout
     assert "FAILED" not in result.stdout, result.stdout
+    # The run's record carries the declaration with the skip: item, blob and classification.
+    recorded_quarantines = [skip["quarantine"] for skip in record(repo)["runs"][-1]["skips"]
+                            if "quarantine" in skip]
+    assert recorded_quarantines == [{"item": "quarantine/herdr-native-placement",
+                                     "blob": QUARANTINE_FIXTURE_BLOB,
+                                     "classification": "upstream"}], recorded_quarantines
+    approved = record(repo)["baseline"]["commit"]
+
+    # The declaration applies to the content it was written against and to nothing else.
+    # The series moves again and the same case fails, but the test file in the candidate
+    # checkout has changed: a changed file is a new subject the old evidence does not
+    # cover, so the step is the red it already is, with the reason beside it.
+    patch.write_text(patch.read_text() + "\n")
+    commit(repo, "move the pi-subagents series under a changed test file")
+    changed = QUARANTINE_FIXTURE_CONTENT + b"// edited\n"
+    quarantine_fixture_file(repo / ".forks/candidate/pi-subagents", changed)
+    changed_blob = hashlib.sha1(b"blob %d\0" % len(changed) + changed).hexdigest()
+    result = run(repo, env)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "FAILED" in result.stdout, result.stdout
+    assert "  quarantined      " not in result.stdout, result.stdout
+    assert "case(s) quarantined" not in result.stdout, result.stdout
+    assert (f"warn: the quarantine declaration for test/unit/herdr-native-placement.test.ts is "
+            f"not applied: it was written against blob {QUARANTINE_FIXTURE_BLOB} and the file "
+            f"at {quarantined_file} is now blob {changed_blob}") in result.stdout, result.stdout
+    assert record(repo)["baseline"]["commit"] == approved, record(repo)["baseline"]
+    # So is a file that is not there to read.
+    quarantined_file.unlink()
+    result = run(repo, env)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"the file could not be read at {quarantined_file}" in result.stdout, result.stdout
+    quarantine_fixture_file(repo / ".forks/candidate/pi-subagents")
+    result = run(repo, env)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 case(s) quarantined" in result.stdout, result.stdout
     approved = record(repo)["baseline"]["commit"]
 
     # The safety property is untouched: a quarantine must never mask a second failure. The
@@ -4850,9 +4923,31 @@ with tempfile.TemporaryDirectory() as tmp:
             "semantics")
     append_case = ("leaves the remote operator's APPEND_SYSTEM.md out of the child's prompt")
 
-    def unit_step(output, rc=1):
+    # The candidate checkout the step ran in, holding the quarantined file. The live
+    # declaration is installed with the fixture file's blob id in place of its own, because
+    # the real content lives in the fork and not in this repository.
+    quarantine_checkout = base / "quarantine-candidate"
+    quarantined_file = quarantine_fixture_file(quarantine_checkout)
+    assert scheduler.file_blob_id(quarantined_file) == QUARANTINE_FIXTURE_BLOB == sh(
+        base, "git", "hash-object", str(quarantined_file)).stdout.strip()
+    assert scheduler.file_blob_id(quarantine_checkout / "absent.ts") is None
+    live_declarations = scheduler.QUARANTINED_FORK_QUALITY
+    # The live declarations themselves: each names an item and a full blob id, none is
+    # classified as unable to answer, and no declaration has a date.
+    for one in live_declarations:
+        assert one.item.strip(), one.path
+        assert re.fullmatch(r"[0-9a-f]{40}", one.blob), (one.path, one.blob)
+        assert one.classification in (scheduler.QUARANTINE_UPSTREAM, scheduler.QUARANTINE_FLAKY), \
+            (one.path, one.classification)
+        assert not hasattr(one, "expires"), one.path
+    assert [one.classification for one in live_declarations] == [scheduler.QUARANTINE_UPSTREAM]
+    fixture_declaration = copy.copy(live_declarations[0])
+    fixture_declaration.blob = QUARANTINE_FIXTURE_BLOB
+    scheduler.QUARANTINED_FORK_QUALITY = (fixture_declaration,)
+
+    def unit_step(output, rc=1, checkout=quarantine_checkout):
         step = scheduler.Check("fork-quality", quality_label, ["npm", "run", "test:unit"],
-                              "its series changed", 0)
+                              "its series changed", 0, fingerprint_dir=str(checkout))
         step.rc, step.output = rc, output
         return step
 
@@ -4904,54 +4999,87 @@ with tempfile.TemporaryDirectory() as tmp:
     other_kind.kind = "rank-order"
     assert scheduler.sentinel_skip(other_kind) is None
 
-    # D7 and D8 in the gate's own form. A declaration that has lapsed -- past its expiry,
-    # or carrying no pile item -- suppresses nothing: the step is the red it already is, and
-    # the lapse is recorded on the check's warnings so the red explains itself instead of
-    # merely appearing. A declaration past either budget is refused the same way. The store
-    # enforces the same policy on its `flake_overrides` row (D5's foreign key, D7's
-    # `expires_at`, D8's counts); these are the in-tree half, where the gate itself is the
-    # only reader that can refuse.
+    # The live declaration against the content it was really written for does not apply to
+    # the fixture's file, which has other bytes.
+    scheduler.QUARANTINED_FORK_QUALITY = live_declarations
+    mismatched = unit_step(known)
+    assert scheduler.sentinel_skip(mismatched) is None, "the live declaration applied to other content"
+    assert any(f"written against blob {live_declarations[0].blob}" in warning
+               for warning in mismatched.warnings), mismatched.warnings
+
+    # A declaration that has lapsed suppresses nothing: the step is the red it already is,
+    # and the lapse is recorded on the check's warnings so the red explains itself instead
+    # of merely appearing. Two things lapse a declaration -- it names no item, or the file
+    # in the candidate checkout no longer has the content it was written against -- and
+    # neither is a date or a count (docs/reference/gate-check-rules.md).
     def declaration(**fields):
-        stated = dict(check=quality_label, path="test/unit/herdr-native-placement.test.ts",
-                      cases=None, classification=scheduler.QUARANTINE_UNANSWERABLE,
-                      item="quarantine/herdr-native-placement", expires="2999-01-01",
+        stated = dict(check=quality_label, path=QUARANTINE_FIXTURE_PATH,
+                      cases=None, classification=scheduler.QUARANTINE_UPSTREAM,
+                      item="quarantine/herdr-native-placement", blob=QUARANTINE_FIXTURE_BLOB,
                       reason="a quarantined timing case")
         stated.update(fields)
         return scheduler.Quarantine(**stated)
 
-    declared_before = scheduler.UNANSWERABLE_FORK_QUALITY
     try:
-        scheduler.UNANSWERABLE_FORK_QUALITY = (declaration(expires="2000-01-01"),)
-        expired = unit_step(known)
-        assert scheduler.sentinel_skip(expired) is None, "an expired declaration still suppressed its case"
-        assert any("expired on 2000-01-01" in warning for warning in expired.warnings), expired.warnings
+        # Matching content: the declaration applies, and the check's status says so.
+        scheduler.QUARANTINED_FORK_QUALITY = (declaration(),)
+        matching = unit_step(known)
+        assert scheduler.sentinel_skip(matching) == (quality_label, "a quarantined timing case")
+        assert scheduler.applied_quarantine(matching) is scheduler.QUARANTINED_FORK_QUALITY[0]
+        assert matching.warnings == [], matching.warnings
 
-        scheduler.UNANSWERABLE_FORK_QUALITY = (declaration(item=""),)
+        # Changed content: the same declaration, the same failing case, a file with other
+        # bytes. The declaration stops applying and names both blob ids.
+        changed_checkout = base / "quarantine-candidate-changed"
+        changed_file = quarantine_fixture_file(changed_checkout, QUARANTINE_FIXTURE_CONTENT + b"\n")
+        changed = unit_step(known, checkout=changed_checkout)
+        assert scheduler.sentinel_skip(changed) is None, "a declaration applied to a changed file"
+        assert scheduler.applied_quarantine(changed) is None
+        assert any(f"written against blob {QUARANTINE_FIXTURE_BLOB}" in warning
+                   and f"is now blob {scheduler.file_blob_id(changed_file)}" in warning
+                   for warning in changed.warnings), changed.warnings
+        # The lapse is recorded once however often the step is read.
+        scheduler.sentinel_skip(changed)
+        assert len(changed.warnings) == 1, changed.warnings
+
+        # A file that cannot be read is not a match, and neither is a step that recorded no
+        # candidate checkout at all.
+        for checkout in (base / "quarantine-candidate-absent", ""):
+            unreadable = unit_step(known, checkout=checkout)
+            assert scheduler.sentinel_skip(unreadable) is None, checkout
+            assert any("could not be read" in warning for warning in unreadable.warnings), \
+                unreadable.warnings
+
+        scheduler.QUARANTINED_FORK_QUALITY = (declaration(item=""),)
         ticketless = unit_step(known)
         assert scheduler.sentinel_skip(ticketless) is None, "a declaration with no item still suppressed its case"
-        assert any("no pile item" in warning for warning in ticketless.warnings), ticketless.warnings
+        assert any("no queue item" in warning for warning in ticketless.warnings), ticketless.warnings
 
-        # D8 per check: three declarations on one check are the whole budget, and a fourth
-        # refuses the step whole rather than letting some of its cases through.
-        scheduler.UNANSWERABLE_FORK_QUALITY = tuple(declaration() for _ in range(4))
-        over_check = unit_step(known)
-        assert scheduler.sentinel_skip(over_check) is None, "a fourth declaration on one check was applied"
-        assert any("budget of 3 per check" in warning for warning in over_check.warnings), over_check.warnings
-
-        # At the per-check budget it still applies: the budget refuses the next one, not
-        # the third.
-        scheduler.UNANSWERABLE_FORK_QUALITY = tuple(declaration() for _ in range(3))
-        assert scheduler.sentinel_skip(unit_step(known)) is not None, "a quarantine at the per-check budget stopped applying"
-
-        # D8 repository-wide: ten live declarations are the budget even spread one per
-        # check, and the eleventh refuses the declaration it would have been.
-        scheduler.UNANSWERABLE_FORK_QUALITY = (declaration(),) + tuple(
-            declaration(check=f"{quality_label} #{n}") for n in range(10))
-        over_repo = unit_step(known)
-        assert scheduler.sentinel_skip(over_repo) is None, "an eleventh declaration repository-wide was applied"
-        assert any("budget of 10" in warning for warning in over_repo.warnings), over_repo.warnings
+        # No count refuses a declaration: eleven of them, four on this one check, and the
+        # step's own declaration still applies.
+        scheduler.QUARANTINED_FORK_QUALITY = tuple(declaration() for _ in range(4)) + tuple(
+            declaration(check=f"another check #{n}") for n in range(7))
+        assert scheduler.sentinel_skip(unit_step(known)) is not None, \
+            "a declaration was refused for how many declarations there are"
     finally:
-        scheduler.UNANSWERABLE_FORK_QUALITY = declared_before
+        scheduler.QUARANTINED_FORK_QUALITY = live_declarations
+
+    # The retired mechanisms are gone by name, and nothing about a quarantine reads a
+    # clock: no expiry, no budget, and no "unanswerable" classification for a case that
+    # ran and failed.
+    for gone in ("QUARANTINE_BUDGET_REPOSITORY", "QUARANTINE_BUDGET_PER_CHECK",
+                 "quarantine_budget_lapse", "QUARANTINE_UNANSWERABLE",
+                 "UNANSWERABLE_FORK_QUALITY"):
+        assert not hasattr(scheduler, gone), gone
+        assert gone not in SCRIPT.read_text(), gone
+    gate_text = SCRIPT.read_text()
+    quarantine_code = (
+        gate_text[gate_text.index("def file_blob_id("):gate_text.index("\nQUARANTINED_FORK_QUALITY = (")]
+        + gate_text[gate_text.index("def declared_quarantine("):gate_text.index("def sentinel_skip(")])
+    assert "class Quarantine:" in quarantine_code and "def applied_quarantine(" in quarantine_code
+    for clock_read in ("datetime", "time.", "today", "expires"):
+        assert clock_read not in quarantine_code, clock_read
+    assert "agent-runtime" not in SCRIPT.read_text()
 
     # (The suite's serial-file rule is pinned in its own discussion of real-time
     # assertions: a suite whose verdict is decided by recorded counts runs in the pool,
