@@ -182,6 +182,9 @@ printf '{"record_version":1,"kind":"land.record","id":"land-1","producer":{"syst
 		if file, err := os.ReadFile(filepath.Join(filepath.Dir(s.exe), "tillr-view")); err != nil || string(file) != "#!/bin/sh\nexit 0\n" {
 			t.Fatalf("sibling was not installed after migration: %q, %v", file, err)
 		}
+		if file, err := os.ReadFile(filepath.Join(filepath.Dir(s.exe), "tillr-watch")); err != nil || string(file) != "#!/bin/sh\nexit 0\n" {
+			t.Fatalf("watch was not installed after migration: %q, %v", file, err)
+		}
 		if err := db.ReadTx(context.Background(), func(r *store.Reader) error {
 			var exists bool
 			if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='fixture_roll_upgrade')`).Scan(&exists); err != nil {

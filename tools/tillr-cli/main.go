@@ -1,11 +1,11 @@
-// Command tillr is the control surface over the seven tillr binaries: it resolves
+// Command tillr is the control surface over the tillr binaries: it resolves
 // `tillr <noun> ...` to `tillr-<noun> ...` on PATH and replaces itself with that binary,
 // so argv, stdio and the exit code reach the caller untouched (design §11).
 //
 // It holds no behavior of its own (D-UT7). It never parses, validates, defaults or
 // rewrites a noun's arguments, and it composes nothing: the binaries are the product and
 // this is the convenience that lets a caller type `tillr gate plan` instead of
-// `tillr-gate plan`. A noun outside the seven is refused here rather than forwarded
+// `tillr-gate plan`. An unknown noun is refused here rather than forwarded
 // anywhere, so the wrapper cannot become a second interface to anything else
 // (design §12's shim rule).
 package main
@@ -24,10 +24,9 @@ func main() {
 	os.Exit(run(os.Args[1:]))
 }
 
-// nouns is the dispatch set: the seven extracted utilities, in the order the usage line
-// prints them. A noun has to be added here to be reachable, which is what keeps the
-// wrapper from forwarding to a binary this design did not name.
-var nouns = []string{"store", "item", "land", "drain", "run", "gate", "view"}
+// nouns is the dispatch set, in the order the usage line prints it. A noun
+// has to be added here to be reachable; the wrapper never forwards unknown nouns.
+var nouns = []string{"store", "item", "land", "drain", "run", "gate", "view", "watch"}
 
 // dispatch is one invocation, resolved: the binary that answers it and the arguments it
 // is handed, unread.
@@ -64,7 +63,7 @@ func run(args []string) int {
 }
 
 // resolve maps an invocation to the binary it dispatches to. A missing noun and a noun
-// outside the seven are usage errors; a noun in the set whose binary is not installed is
+// outside the dispatch set are usage errors; a noun whose binary is not installed is
 // an external failure, because the invocation was well formed and the artifact is
 // missing.
 func resolve(args []string) (dispatch, error) {
@@ -78,12 +77,12 @@ func resolve(args []string) (dispatch, error) {
 	name := "tillr-" + noun
 	binary, err := exec.LookPath(name)
 	if err != nil {
-		return dispatch{}, externalf("%s is not on PATH; the seven binaries install together", name)
+		return dispatch{}, externalf("%s is not on PATH", name)
 	}
 	return dispatch{binary: binary, argv: rest}, nil
 }
 
-// isNoun reports whether noun is one of the seven. It is exact: no prefix matching and no
+// isNoun reports whether noun is in the dispatch set. It is exact: no prefix matching and no
 // aliases, so a near-miss is refused instead of resolving to a neighbour.
 func isNoun(noun string) bool {
 	for _, known := range nouns {

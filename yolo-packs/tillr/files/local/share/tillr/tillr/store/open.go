@@ -48,6 +48,12 @@ func Open(ctx context.Context, path string, create bool, options ...OpenOption) 
 	return open(ctx, path, create, create, options...)
 }
 
+// OpenMigrated opens an existing store for writing and applies the registered
+// migrations. It does not create a missing store.
+func OpenMigrated(ctx context.Context, path string, options ...OpenOption) (*Store, error) {
+	return open(ctx, path, false, true, options...)
+}
+
 // CheckMigration tries the migration on the existing WAL store under its writer
 // lock and rolls it back, even on success. A replacement can check a lower schema
 // without publishing a version that the still-running loop cannot write.

@@ -477,14 +477,17 @@ directory:
   `.tillr/state.db` with `gated_tree == landed_tree` (zero concurrent merge
   drift since its pre-merge gate). Otherwise, runs `tools/gate/go-test-shards.py`
   (`-k 6`) or `go test ./...` for each affected module.
-- **Smoke check and atomic swap:** Compiles all eight binaries (`tillr`,
-  `tillr-drain`, `tillr-gate`, `tillr-item`, `tillr-land`, `tillr-run`,
-  `tillr-store`, `tillr-view`) into a staging directory, runs `--help` on each
-  and `tillr-drain loop --check` against `.tillr/state.db`. It installs binaries
-  into the jail's durable `bin/` directory with `os.replace`; on a schema
-  upgrade, only the replacement drain is exposed before the handoff. A failed
-  preflight leaves the installed binaries untouched and appends
-  `drain.roll-failed`.
+- **Smoke check and atomic swap:** Compiles `tillr`, `tillr-drain`,
+  `tillr-gate`, `tillr-item`, `tillr-land`, `tillr-run`, `tillr-store`, and
+  `tillr-view` into a staging directory. It also compiles `tillr-watch` if
+  the target revision has `tools/tillr-watch`. It runs `--help` on each and
+  `tillr-drain loop --check` against `.tillr/state.db`, then installs the
+  binaries into the jail's durable `bin/` directory with `os.replace`. On an
+  immediate install of a pre-watch revision, the roller moves `tillr-watch`
+  aside before writing `tillr-roll.commit`. It deletes the backup only after
+  successful reporting and restores it if the roll fails. On a schema upgrade,
+  only the replacement drain is exposed before the handoff. A failed preflight
+  leaves the installed binaries untouched and appends `drain.roll-failed`.
 - **Restart handoff and verification:** Unless `--no-request` is passed, runs
   `tillr-drain restart --root <root> --wait` and `tillr-view restart --root
   <root> --wait` concurrently for same-schema rolls. On an upgrade it waits
@@ -506,6 +509,26 @@ restart. It requests the view upgrade only after migration. The keeper and
 worker processes are not stopped: a worker already running keeps its lease
 and store connection, and the new loop takes up its recorded result. Migrations
 must preserve the writes those already-running workers use to record their results.
+
+The new loop promotes `tillr-watch` if it was staged. For a deferred install
+of a pre-watch revision, after a successful requested handoff and report the
+roller checks the staging directory and `tillr-roll.commit` directly. If
+staging is gone and the stamp matches the target commit, it retires the
+installed `tillr-watch` without using a marker.
+
+If staging is still present after a successful report, the roller records
+pending retirement in `tillr-watch.retire` beside `tillr-roll.commit`. A
+successful deferred roll with `--no-request` also writes this marker rather
+than retiring watch directly. The marker records the target commit and the
+staging directory name. A refused restart or failed report neither removes
+the binary as part of that install nor publishes a new eligible marker.
+
+At the start of each binary roll, under the roll lock, the roller checks for
+a marker from an earlier successful roll. If the recorded staging directory
+still exists, it keeps both the marker and the binary. Once the directory is
+gone, it removes both if the stamp matches the recorded commit; otherwise it
+discards only the marker. This lets an older activator finish its install
+without having to know about watch ([D-TW25](../design/tillr-watch.md#D-TW25)).
 
 If the store check fails, the old loop stays running. A store failure during
 preflight or migration raises `store-roll-blocked` in the loop's alarms (also

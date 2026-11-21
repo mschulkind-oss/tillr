@@ -41,7 +41,7 @@ func runTests(m *testing.M) int {
 
 // nouns is the dispatch set under test, spelled here rather than imported so a wrapper
 // that narrowed or widened it disagrees with this list instead of agreeing with itself.
-var nouns = []string{"store", "item", "land", "drain", "run", "gate", "view"}
+var nouns = []string{"store", "item", "land", "drain", "run", "gate", "view", "watch"}
 
 // stubScript is one fake tillr-<noun>. It records that it ran and the argv it was handed,
 // copies stdin to stdout, writes one line to stderr, and exits with the code the test
@@ -123,7 +123,7 @@ func expectArgv(args ...string) string {
 	return want.String()
 }
 
-// TestDispatchPassesArgvStdioAndExitCode is the pass-through pin: every one of the seven
+// TestDispatchPassesArgvStdioAndExitCode is the pass-through pin: every one of the
 // nouns reaches its own binary, gets the arguments after the noun byte for byte, gets
 // this wrapper's stdin and stdout as its own, and answers the caller with its own exit
 // code -- including the non-zero ones, which are the child's outcome and not a wrapper
@@ -137,6 +137,7 @@ func TestDispatchPassesArgvStdioAndExitCode(t *testing.T) {
 		{"run", 4},
 		{"gate", 6},
 		{"view", 7},
+		{"watch", 2},
 	}
 	for _, spec := range specs {
 		t.Run(spec.noun, func(t *testing.T) {
@@ -198,11 +199,10 @@ func TestWrapperReadsNothingAfterTheNoun(t *testing.T) {
 	}
 }
 
-// TestUnknownNounIsRefusedNamingTheSeven pins the refusal: a noun outside the seven exits
-// 2, names all seven, writes nothing to stdout, and starts no process at all -- even
-// though a binary for that very name is on PATH and would have run if the wrapper
-// forwarded anything it did not recognise.
-func TestUnknownNounIsRefusedNamingTheSeven(t *testing.T) {
+// TestUnknownNounIsRefusedNamingTheNouns pins the refusal: an unknown noun exits
+// 2, names the nouns, writes nothing to stdout, and starts no process at all -- even
+// though a binary for that very name is on PATH.
+func TestUnknownNounIsRefusedNamingTheNouns(t *testing.T) {
 	dir := stubDir(t, stub{"bogus", 0})
 	code, stdout, stderr := runWrapper(t, dir, "", "bogus", "--anything")
 	if code != 2 {
@@ -224,9 +224,9 @@ func TestUnknownNounIsRefusedNamingTheSeven(t *testing.T) {
 	}
 }
 
-// TestNoNounIsRefusedNamingTheSeven pins the empty invocation: with nothing to dispatch,
+// TestNoNounIsRefusedNamingTheNouns pins the empty invocation: with nothing to dispatch,
 // the wrapper explains the set instead of guessing or exiting silently.
-func TestNoNounIsRefusedNamingTheSeven(t *testing.T) {
+func TestNoNounIsRefusedNamingTheNouns(t *testing.T) {
 	dir := stubDir(t, stub{"store", 0})
 	code, stdout, stderr := runWrapper(t, dir, "")
 	if code != 2 {
@@ -251,14 +251,14 @@ func TestNoNounIsRefusedNamingTheSeven(t *testing.T) {
 // the noun never gave.
 func TestMissingBinaryIsAnExternalFailure(t *testing.T) {
 	dir := t.TempDir() // empty: nothing on this PATH answers any noun
-	cmd := exec.Command(wrapperBin, "store", "status")
+	cmd := exec.Command(wrapperBin, "watch", "status")
 	cmd.Env = append(os.Environ(), "PATH="+dir, "TILLR_STUB_DIR="+dir)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err := cmd.Run()
 	exit, ok := err.(*exec.ExitError)
 	if !ok {
-		t.Fatalf("running the wrapper without tillr-store: %v", err)
+		t.Fatalf("running the wrapper without tillr-watch: %v", err)
 	}
 	if got := exit.ExitCode(); got != 4 {
 		t.Errorf("exit code = %d, want 4", got)
@@ -266,14 +266,14 @@ func TestMissingBinaryIsAnExternalFailure(t *testing.T) {
 	if stdout.String() != "" {
 		t.Errorf("stdout = %q, want nothing", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "tillr-store") || !strings.Contains(stderr.String(), "PATH") {
+	if !strings.Contains(stderr.String(), "tillr-watch is not on PATH") {
 		t.Errorf("stderr = %q, want it to name the missing binary and PATH", stderr.String())
 	}
 }
 
 // TestHelpNamesTheNouns pins the wrapper's own surface (docs/design/tillr-distribution.md
-// Section 3 makes `<bin> --help` layer 1 for all eight binaries): `tillr --help` names the
-// seven nouns and exits 0, and starts none of them. The wrapper still answers nothing that
+// Section 3 makes `<bin> --help` layer 1): `tillr --help` names the
+// dispatchable nouns and exits 0, and starts none of them. The wrapper still answers nothing that
 // comes after a noun -- TestWrapperReadsNothingAfterTheNoun is the other half of that rule.
 func TestHelpNamesTheNouns(t *testing.T) {
 	dir := stubDir(t, stub{"store", 4}, stub{"gate", 4})
