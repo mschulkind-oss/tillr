@@ -3,11 +3,62 @@
 import json
 import os
 from pathlib import Path
+import runpy
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 PROGRAM = Path(__file__).with_name("change-gate.py").resolve()
+
+
+class ChangeGateCompatibilityTest(unittest.TestCase):
+    def test_probes_installed_runner_before_using_optional_flag(self):
+        for supported, full, changed in ((False, [], b"README.md\0"),
+                                          (True, [], b"README.md\0"),
+                                          (True, [], b"tools/tillr-gate/main.go\0"),
+                                          (True, ["--all"], b"README.md\0"),
+                                          (True, ["--since", "green"], b"README.md\0")):
+            with self.subTest(supported=supported, full=full, changed=changed):
+                adapter = runpy.run_path(str(PROGRAM))
+                commands = []
+
+                def invoke(args, **kwargs):
+                    commands.append(args)
+                    if args[:2] == ["git", "diff"]:
+                        self.assertEqual(args[2:], ["--name-only", "--no-renames", "-z", "base", "head", "--"])
+                        return subprocess.CompletedProcess(args, 0, stdout=changed)
+                    if args[0] == "git":
+                        return subprocess.CompletedProcess(args, 0, stdout="head\n")
+                    if args == ["runner", "checks", "--help"]:
+                        help_text = b"Usage of checks:\n  -fast-tree\n"
+                        if supported:
+                            help_text += b"  -scope-to-change\n    skip unrelated checks\n"
+                        # Even with a similar flag listed, an old runner must get the legacy call.
+                        else:
+                            help_text += b"  -scope-to-change-later\n"
+                        return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=help_text)
+                    if args[0] == "runner":
+                        self.assertEqual("--scope-to-change" in args, supported and not full)
+                        return subprocess.CompletedProcess(args, 0, stdout=b"")
+                    self.assertEqual(args[1:], ["tools/fork-check.py", *(full or
+                                     ["--since", "base", "--tier", "landing"])])
+                    return subprocess.CompletedProcess(args, 0)
+
+                argv = [str(PROGRAM), "--base", "base", "--head", "head", "--runner",
+                        "runner", "--logs", "logs", *full]
+                warming = []
+                with patch.object(adapter["sys"], "argv", argv), \
+                     patch.dict(os.environ, {"TILLR_FAST_VERDICT_OUT": ""}), \
+                     patch.object(Path, "read_text", return_value='{"reads": ["tools/tillr-gate/"]}'), \
+                     patch.dict(adapter["main"].__globals__, {"warm_trimmed_go_cache": lambda: warming.append(True)}), \
+                     patch.object(subprocess, "run", side_effect=invoke):
+                    self.assertEqual(adapter["main"](), 0)
+                self.assertEqual(bool(warming), not supported or bool(full) or changed.startswith(b"tools/"))
+                runner_commands = [c for c in commands if c[0] == "runner"]
+                self.assertEqual(len(runner_commands), 1 if full else 2)
+                if not full:
+                    self.assertEqual(runner_commands[0], ["runner", "checks", "--help"])
 
 
 class ChangeGateStallTest(unittest.TestCase):
@@ -31,6 +82,7 @@ commands=[]
 def invoke(args, **kwargs):
  commands.append(args)
  if args[0]=='git':return subprocess.CompletedProcess(args,0,stdout='head\n')
+ if args==['stub-checks','checks','--help']:return subprocess.CompletedProcess(args,0,stdout=b'')
  if args[0]=='stub-checks':return subprocess.CompletedProcess(args,6,stdout=record)
  raise AssertionError('remaining gate must not run after a stall: '+repr(args))
 sys.argv=['change-gate','--base','base','--head','head','--runner','stub-checks','--logs','logs']

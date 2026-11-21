@@ -75,17 +75,17 @@ func DeriveChange(candidate ChangeCandidate, now time.Time) (record.Envelope, er
 	if err != nil {
 		return record.Envelope{}, err
 	}
-	diff, err := changeGit(candidate.Worktree, "diff", "--name-only",
+	diff, err := changeGitOutput(candidate.Worktree, "diff", "--name-only", "--no-renames", "-z",
 		candidate.Base+"..."+candidate.Head)
 	if err != nil {
 		return record.Envelope{}, err
 	}
 	// An empty diff is an empty list, never a missing one: `decodeChange` refuses a record
 	// with no `changed_paths`, so a nil slice here would be a record `plan` cannot read.
-	paths := make([]string, 0, strings.Count(diff, "\n")+1)
-	for _, line := range strings.Split(diff, "\n") {
-		if line != "" {
-			paths = append(paths, line)
+	paths := make([]string, 0, strings.Count(diff, "\x00"))
+	for _, path := range strings.Split(diff, "\x00") {
+		if path != "" {
+			paths = append(paths, path)
 		}
 	}
 	raw, err := json.Marshal(Change{
@@ -113,10 +113,15 @@ func DeriveChange(candidate ChangeCandidate, now time.Time) (record.Envelope, er
 // worktree. A git that cannot be started at all is the machine's: nothing was read, so the
 // face answers "no judgment" rather than "bad request".
 func changeGit(worktree string, args ...string) (string, error) {
+	out, err := changeGitOutput(worktree, args...)
+	return strings.TrimSpace(out), err
+}
+
+func changeGitOutput(worktree string, args ...string) (string, error) {
 	cmd := exec.Command("git", append([]string{"-C", worktree}, args...)...)
 	out, err := cmd.Output()
 	if err == nil {
-		return strings.TrimSpace(string(out)), nil
+		return string(out), nil
 	}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
