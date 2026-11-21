@@ -1,11 +1,11 @@
 ---
 title: "Why the drain could not run one night alone, and the eight rules that let it"
-status: in-review
-stage: DESIGN
+status: accepted
+stage: DECIDED
 updated: 2026-11-21
 tags: [tillr, drain, gate, landing, lanes, incident, design]
-summary: "The night of 2026-11-21 produced 41 separate incidents and no proved-green trunk for nine hours. They reduce to eight structural gaps. Each gets one rule, a mechanism that enforces it, and a permanent scenario that fails if the incident returns."
-next: "The owner rules OQ-UD1 to OQ-UD4. Rules 2, 3, 6 and 7 do not wait on them and can be planned now."
+summary: "The night of 2026-11-21 produced 42 separate incidents and no proved-green trunk for nine hours. They reduce to eight structural gaps. Each gets one rule, a mechanism that enforces it, and a permanent scenario that fails if the incident returns."
+next: "Write the implementation plan. The owner ruled all four questions on 2026-11-21; first in the build order are the revert that cannot be outrun, fault injection, and putting the fence retirement of 2026-11-19 into effect."
 depends-on:
   - landing-principles.md
   - trunk-fixer-gate.md
@@ -16,11 +16,11 @@ vantage:
 
 # Why the drain could not run one night alone, and the eight rules that let it
 
-**Status:** 2026-11-21. Nothing in this document is built. The incident record was read from the
+**Status:** 2026-11-21. The owner ruled all four questions the same day ([the ledger](#14-decision-ledger)). Nothing in this document is built. The incident record was read from the
 loop's log, the store's faces, the sampler and `git log` on the morning of 2026-11-21, with the
 trunk at `687b1a2c97`.
 
-> **In short.** The night did not fail forty-one times. It failed eight ways. The drain lets a
+> **In short.** The night did not fail forty-two times. It failed eight ways. The drain lets a
 > change to its own code land before that code's tests run, and then depends on a repair path,
 > an operator and a subscription that were each able to stop. Close those eight gaps by
 > mechanism and every incident below loses the condition it needs.
@@ -39,8 +39,8 @@ minutes, not the ten seconds every other change gets. Lanes stop being a fixed c
 
 **Start at [Section 5](#5-the-eight-gaps)**: the diagnosis. The rules fall out of it.
 
-**Needs your ruling:** [OQ-UD1](#OQ-UD1), [OQ-UD2](#OQ-UD2), [OQ-UD3](#OQ-UD3),
-[OQ-UD4](#OQ-UD4).
+**Needs your ruling:** nothing. The nine designer's decisions in [the ledger](#14-decision-ledger)
+are yours to overturn.
 
 **Reads with:** [`landing-principles.md`](./landing-principles.md) (the settled rulings these
 rules extend), [`trunk-fixer-gate.md`](./trunk-fixer-gate.md) (the fixer's gate, built this
@@ -69,7 +69,9 @@ Each term is used below in exactly this sense.
 - **Drain.** The `tillr-drain` loop: one long-running process that takes items from the queue,
   starts workers on them, gates their results and lands them.
 - **Item.** One piece of queued work, with words, pass conditions and a fence.
-- **Fence.** The list of paths an item's worker may change.
+- **Fence.** The list of paths an item's worker may change. The owner retired it on 2026-11-19
+  ([the vocabulary design](./tillr-vocabulary.md#51-the-work-and-its-statement)); the drain still
+  enforced it all night (N-42).
 - **Lane.** A worktree the drain keeps for running one item at a time. The drain ran two
   ordinary lanes and two express lanes all night. An express lane takes only items filed as
   urgent.
@@ -174,7 +176,8 @@ Upstream released `pi` v1.6.0. The fix is one item: replay our patches onto it.
 
 | # | When | What happened | Cause | State |
 | :--- | :--- | :--- | :--- | :--- |
-| N-33 | all night | Items stopped at their fence at least nine times and waited for a check-in | A worker that needs one more path stops; only the operator widens a fence; the pack copy of a changed file is a second path nobody remembers | `1e87beb33` adds the command; the wait is open |
+| N-33 | all night | Items stopped at their fence at least nine times and waited for a check-in | The fence is still enforced (N-42); a worker that needs one more path stops and only the operator widens a fence | `1e87beb33` adds a command to widen; the cause is open |
+| N-42 | since 2026-11-19 | The owner's ruling that retires the fence is not in effect | The item that replaces path lists with one deny-list reads as landed in the queue after 69 attempts, yet `rg -l -i deny tools/tillr-drain/drain config/tillr` finds nothing on 2026-11-21. How it came to read as landed is not established | open |
 | N-34 | 4:58, 6:16 AM | Items held after three verifier refusals until the operator read them | The hold's mover is the operator | open |
 | N-35 | 10:15 AM | A worker that stopped correctly for a red trunk was held as a fence escape | The loop judged its uncommitted work before reading the reason it stopped | queued |
 | N-36 | 4:14 to 9:14 AM | The fixer-gate design landed and its build was not filed for five hours | Filing a build from a landed design is a hand step | open |
@@ -215,7 +218,8 @@ Every incident above needed at least one of these to be true.
 7. **Mechanical remedies wait for a person.** More than thirty times the operator did something
    the drain had every fact to do itself: add a path the worker named, release an item whose
    blocker had landed, read three refusals and retry, repoint a dependency (N-26, N-33, N-34,
-   N-35, N-36).
+   N-35, N-36). Nine or more of those were fence stops, under a fence the owner retired two days
+   earlier (N-42).
 8. **Noticing depends on someone being awake, and one account going quiet removes everyone.**
    The operator polls every 15 minutes, on the same subscription as the designers (N-39, N-40).
    Nothing tells the owner that the trunk has been red for an hour.
@@ -242,8 +246,8 @@ check keeps its place. Changes outside those paths keep the short gate.
 - **Evidence.** The gate's plan lists the suite in the landing tier for such a candidate. The
   count of first-red landings whose failing check sits in a module the landing changed is zero.
 
-This is [OQ-UD1](#OQ-UD1), because it sets aside the ten-second target for this one class of
-change.
+The owner ruled this on 2026-11-21 ([OQ-UD1](#OQ-UD1)): it sets aside the ten-second target for
+this one class of change and no other.
 
 ### 6.2 Rule 2: a red trunk is repaired by a step that cannot be outrun
 
@@ -299,8 +303,8 @@ count against that number.
 - Worktrees are removed when their item lands, closes or is preserved to a ref.
 
 This follows the owner's words of 12:07 AM: "It's fine to hold a lane if there's a good reason.
-Lanes are nearly free." It is [OQ-UD2](#OQ-UD2), because it replaces the lane count as the unit
-the drain is run by.
+Lanes are nearly free." The owner ruled it on 2026-11-21 ([OQ-UD2](#OQ-UD2)): the worker count
+replaces the lane count as the unit the drain is run by.
 
 - **Degenerate cases.** Zero free slots: items queue, as today. One item with many held
   attempts: one worktree, reused.
@@ -346,8 +350,7 @@ store.
 
 | Hold last night | Who moved it | Who moves it under this rule |
 | :--- | :--- | :--- |
-| Worker needs a path outside its fence | Operator, after up to 15 minutes | The item's designer step rules: widen, split or refuse ([OQ-UD4](#OQ-UD4)) |
-| The pack copy of a file in the fence | Operator | Nobody: a fence that names a source path includes its pack copy |
+| Worker needs a path outside its fence | Operator, after up to 15 minutes | Nobody: there is no fence. The owner retired it on 2026-11-19 and repeated that on 2026-11-21 ([OQ-UD4](#OQ-UD4)). One deny-list protects shared state from every worker, and the judge checks that the change does what the words ask and nothing more ([the vocabulary design](./tillr-vocabulary.md#51-the-work-and-its-statement)) |
 | Three verifier refusals | Operator | The item's designer step reads them and rewrites the item or splits it |
 | A refusal about the worker's report, not the candidate | A whole new build attempt | The worker amends the report; the candidate is not rebuilt |
 | Blocker has landed | Operator | The drain (built: `5709b4fc2`) |
@@ -378,11 +381,12 @@ What this design adds is the first rule set and one requirement on delivery.
 | Backend closed | A seat's backend refuses for quota or credentials | immediately |
 | Same class twice | A second incident is filed under a class that already has one this run | 2 incidents |
 
-**Delivery requirement.** An alert reaches the owner by a route that does not pass through the
-operator's session or the designers' account. [`tillr-watch.md`](./tillr-watch.md) designs
-delivery to the foreground session and to a drain seat ([OQ-TW3](./tillr-watch.md#OQ-TW3)); it
-does not design a route to the owner that survives both stopping. That route is
-[OQ-UD3](#OQ-UD3).
+**Delivery, as ruled on 2026-11-21.** Alerts go to the foreground agent
+([`tillr-watch.md`](./tillr-watch.md#OQ-TW4)). When the shared subscription reaches its limit the
+operator and the designers stop, and for now that stop is accepted ([OQ-UD3](#OQ-UD3)): no route
+to the owner outside the session is built. What makes the stop affordable is rules 2 and 7, under
+which a red trunk and a mechanical hold do not wait for the operator. The owner's "for now" is
+revisited after the unattended night of [Section 8](#8-what-done-looks-like).
 
 **The operator's part, which is procedure and not mechanism:**
 
@@ -417,14 +421,14 @@ does not design a route to the owner that survives both stopping. That route is
 | N-28 | 7 | structure | Filing refuses a fence path under a lane checkout |
 | N-29 | 7 | structure | A report-only refusal does not start a build step |
 | N-30, N-31 | 3 | structure | A rebase's gate runs only the packages the patches touch, with no credentials |
-| N-33 | 7 | structure | A fence stop is ruled by the designer step; the pack copy needs no ruling |
+| N-33, N-42 | 7 | structure | A worker changes a path its item never listed and is not stopped; a path on the deny-list is refused with the entry named |
 | N-34 | 7 | structure | Three refusals go to the designer step |
 | N-35 | 7 | structure | A stop for a red trunk holds on that check and releases on green |
 | N-36 | 7 | structure | A landed design's ready decisions are queued |
 | N-37 | 7 | structure | The finishing check fails on an unrouted question |
 | N-38 | 7 | signal | [`nonconverging-items.md`](../tillr/nonconverging-items.md); rule 8 raises the alert |
-| N-39 | 8 | structure or signal | By the ruling on [OQ-UD3](#OQ-UD3) |
-| N-40 | 8 | signal | A closed backend reaches the owner off the session |
+| N-39 | 2, 7 | accepted for now | None for the stop itself ([OQ-UD3](#OQ-UD3)); the scenarios of rules 2 and 7 run with no operator present |
+| N-40 | 8 | signal | A closed backend raises an alert to the foreground agent |
 | N-41 | 8 | procedure | None. This is the one row that rests on conduct, and the "same class twice" alert is its backstop |
 
 ## 8. What done looks like
@@ -446,8 +450,7 @@ Until that night has happened, the claim "the drain repairs itself" is not made 
 - The ten-second gate for every change outside the drain's own code.
 - The landing transaction and its principles.
 - The ruling against attempt counts, time limits that fail work, and fallbacks to another model.
-- Who designs: only an item's designer changes its definition. Rule 7 moves fence rulings to
-  that seat; it does not let a worker widen its own fence.
+- Who designs: only an item's designer changes its definition.
 - The alerting utility's design, which stays in [`tillr-watch.md`](./tillr-watch.md).
 
 ## 10. Alternatives
@@ -467,133 +470,40 @@ Until that night has happened, the claim "the drain repairs itself" is not made 
 | Rule 1 slows drain changes so much that repairs queue up | Suites run outside the landing lock; a repair for a red trunk is a fixer and keeps the fixer's gate |
 | The scenario suite becomes slow or flaky and blocks every roll | Scenarios may not sleep or read the clock; a red scenario is a trunk failure with a first-red search like any other |
 | Unlimited worktrees fill the disk | A reported count, a disk check before each new worktree, removal on land, close or preserve |
-| Designer rulings on fences spend the subscription faster | A fence ruling is one short step; the pack-copy case, the most common last night, needs none |
+| With no fence a worker wanders outside its item | The deny-list refuses shared state before the gate, and the judge names any changed path the item's words do not account for |
 | Alert rules fire constantly during the build-out | Thresholds are data the operator tunes, as [`tillr-watch.md`](./tillr-watch.md) designs |
 
 ## 12. Order of work
 
-1. **Rule 2, the revert that cannot be outrun**, and **rule 5, fault injection**. Neither waits
-   on a ruling, and together they end the two ways the night was lost: a trunk that stayed red
-   and a loop that stopped.
-2. **Rule 6, the scenario suite**, seeded with the incidents whose fixes have landed, so those
+1. **Rule 2, the revert that cannot be outrun**, and **rule 5, fault injection**. Together they
+   end the two ways the night was lost: a trunk that stayed red and a loop that stopped.
+2. **The fence retirement, put into effect** (rule 7, N-42). It was ruled on 2026-11-19 and
+   accounts for the largest single group of hand releases.
+3. **Rule 1**, drain changes prove their own suites before landing.
+4. **Rule 6, the scenario suite**, seeded with the incidents whose fixes have landed, so those
    fixes cannot be undone.
-3. **Rule 3, outside inputs**, with the `pi` rebase delivered through it.
-4. **Rule 1**, on the ruling of [OQ-UD1](#OQ-UD1).
-5. **Rule 7**, on the ruling of [OQ-UD4](#OQ-UD4).
-6. **Rule 8**, on the delivery design [`tillr-watch.md`](./tillr-watch.md) still owes and on
-   [OQ-UD3](#OQ-UD3).
-7. **Rule 4**, on the ruling of [OQ-UD2](#OQ-UD2). It is last because it changes the most and
+5. **Rule 3, outside inputs**, with the `pi` rebase delivered through it.
+6. **The rest of rule 7.**
+7. **Rule 8**, once [`tillr-watch.md`](./tillr-watch.md) has its delivery design.
+8. **Rule 4**, workers limited and worktrees not. It is last because it changes the most and
    because rules 5 and 7 remove most of what made lanes scarce.
-8. **The unattended night** of [Section 8](#8-what-done-looks-like).
+9. **The unattended night** of [Section 8](#8-what-done-looks-like).
 
 ## 13. Open Questions
 
-1. <a id="OQ-UD1"></a>💬 **OQ-UD1: Should a change to the drain's own code wait for the drain's own tests before it lands?**
-
-   At 9:51 AM a worker finished the change that removes failover. It rewrote more than twenty
-   files in the drain's main package and handed its commit to the lane gate. The gate passed it
-   in 62 seconds and it landed. The drain's test suite, which takes about seven and a half
-   minutes, ran afterwards on the trunk and failed three tests; by then other items had built on
-   the change. This happened six times in ten hours. The short gate is your target for every
-   landing, so making this class wait is yours to decide.
-
-   - **A — Drain changes wait for their own suite.** A change under `tools/tillr*` lands seven
-     or eight minutes later than today. Other lanes keep landing meanwhile. Everything else
-     keeps the short gate.
-   - **B — Nothing waits; the revert gets faster.** Every landing stays quick. A bad drain
-     change reaches the trunk, and you see a revert some minutes later and a retry after it.
-   - **C — Drain changes wait only for the tests of the packages they touch.** Shorter than A.
-     A change that breaks a test in a package it did not touch still reaches the trunk.
-
-   <!-- vantage: question id=OQ-UD1 leaning="A (Drain changes wait for their own suite) — six red landings in ten hours each cost far more than eight minutes, and 49 of 53 landings were drain changes." -->
-
-   _Leaning:_ A (Drain changes wait for their own suite) — six red landings in ten hours each cost far more than eight minutes, and 49 of 53 landings were drain changes.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
-
-2. <a id="OQ-UD2"></a>💬 **OQ-UD2: Should the number you set limit running workers, with worktrees unlimited?**
-
-   At 12:48 AM the designer backend closed for quota. Four items at the head of the queue were
-   each waiting for a designer, and each sat in one of the four lanes. Twelve to fourteen other
-   items needed no designer and did not start for three hours, because there was no lane to
-   start them in. You said that night: "It's fine to hold a lane if there's a good reason. Lanes
-   are nearly free." Today the drain is started with a lane count, and a held item uses one up.
-
-   - **A — The number is workers.** You set "10" and ten workers run whenever ten items are
-     ready. A held item keeps its checkout on disk and costs no slot. You would see more
-     worktrees than workers.
-   - **B — The number stays lanes, and held items give theirs up.** The count on disk matches
-     the number you set. Every kind of hold needs its own rule for giving the lane back and
-     getting the work back, which is where four of last night's incidents came from.
-
-   <!-- vantage: question id=OQ-UD2 leaning="A (The number is workers) — it removes the whole class instead of writing a release rule per hold, and it is what your words describe." -->
-
-   _Leaning:_ A (The number is workers) — it removes the whole class instead of writing a release rule per hold, and it is what your words describe.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
-
-3. <a id="OQ-UD3"></a>💬 **OQ-UD3: What keeps watching when the Claude subscription runs out?**
-
-   The operator session and every designer step run on your one Claude subscription. At 12:48 AM
-   it reached its five-hour limit. Designers stopped, which the drain handles, and the operator
-   stopped too, so nobody checked in until 4:10 AM. It happened again from 6:38 to 9:10 AM. A
-   finished trunk repair waited two and a half hours in the first gap for someone to carry it.
-   You have ruled against falling back to another model, so this is not the operator's to
-   settle.
-
-   - **A — The watch moves off the subscription.** Alerts reach you by a route that needs no
-     Claude session. Designers and the operator still stop at the limit; you are told within
-     minutes and the drain keeps doing what needs no designer.
-   - **B — The operator runs on metered access; designers stay on the subscription.** Check-ins
-     never stop. It costs money per check-in, and the operator is no longer the model you chose
-     for it unless the metered model is the same one.
-   - **C — Accept the stop.** Nothing changes. Once rules 2 and 7 are built the drain needs the
-     operator far less, and a limit costs designer work only.
-
-   <!-- vantage: question id=OQ-UD3 leaning="A (The watch moves off the subscription) — it is the only option that costs nothing per hour and still tells you; C becomes reasonable only after an unattended night has passed." -->
-
-   _Leaning:_ A (The watch moves off the subscription) — it is the only option that costs nothing per hour and still tells you; C becomes reasonable only after an unattended night has passed.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
-
-4. <a id="OQ-UD4"></a>💬 **OQ-UD4: When a worker needs a file outside its fence, who says yes?**
-
-   A worker fixing how the drain stages a fork item found the fault in a file its item did not
-   list. It stopped, as it must, and named the file. The item then waited for the operator's
-   next check-in, up to 15 minutes, and the operator added the path. This happened at least
-   nine times last night; the answer was yes every time. Today only the operator runs the
-   command that widens a fence.
-
-   - **A — The item's designer step rules.** The worker's request goes to the designer seat for
-     that item, which answers widen, split into a new item, or refuse, with its reason. No one
-     waits for a check-in. A designer step is spent each time.
-   - **B — The operator keeps the ruling; only the pack copy is automatic.** Naming a source
-     file covers its pack copy without a request. Every other request waits for the operator as
-     today.
-   - **C — The worker may take any file its change needs, and the verifier judges the fence
-     afterwards.** No waiting and no designer step. A worker that wanders is caught only after
-     it has done the work.
-
-   <!-- vantage: question id=OQ-UD4 leaning="A (The item's designer step rules) — the designer already owns the item's definition, so this adds no new authority and removes the wait." -->
-
-   _Leaning:_ A (The item's designer step rules) — the designer already owns the item's definition, so this adds no new authority and removes the wait.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
+None. The owner ruled all four on 2026-11-21; each is a row in [the ledger](#14-decision-ledger).
 
 ## 14. Decision Ledger
 
-These are the designer's decisions. Each is the owner's to overturn. None is built.
+The `OQ-UD` rows are the owner's rulings of 2026-11-21, given as Vantage review comments. The
+`D-UD` rows are the designer's decisions, each the owner's to overturn. None of either is built.
 
 | ID | Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
+| <a id="OQ-UD1"></a>[OQ-UD1](#OQ-UD1) | Owner ruling: a change to the drain's own code waits for the drain's own suite before it lands | 2026-11-21 | [Rule 1](#61-rule-1-the-drains-code-proves-its-own-suites-before-it-lands) | — |
+| <a id="OQ-UD2"></a>[OQ-UD2](#OQ-UD2) | Owner ruling: the number the owner sets limits running workers; worktrees are not counted | 2026-11-21 | [Rule 4](#64-rule-4-workers-are-limited-worktrees-are-not) | — |
+| <a id="OQ-UD3"></a>[OQ-UD3](#OQ-UD3) | Owner ruling: for now, accept that the operator and designers stop when the subscription runs out | 2026-11-21 | [Rule 8](#68-rule-8-noticing-does-not-depend-on-anyone-being-awake) | — |
+| <a id="OQ-UD4"></a>[OQ-UD4](#OQ-UD4) | Withdrawn. The owner had already retired the fence on 2026-11-19; the question should not have been asked. What is owed is that ruling's build | 2026-11-21 | [Rule 7](#67-rule-7-a-hold-names-the-operator-only-for-a-decision-the-rulebook-reserves) | — |
 | D-UD1 | A revert is a landing and is never abandoned because the trunk moved | 2026-11-21 | [Rule 2](#62-rule-2-a-red-trunk-is-repaired-by-a-step-that-cannot-be-outrun) | — |
 | D-UD2 | A check with an input outside the tree reports and files work; it does not refuse a candidate | 2026-11-21 | [Rule 3](#63-rule-3-only-the-candidates-tree-can-refuse-a-candidate) | — |
 | D-UD3 | The fork gate tests the packages that differ between the upstream base and the fork head | 2026-11-21 | [Rule 3](#63-rule-3-only-the-candidates-tree-can-refuse-a-candidate) | — |
@@ -601,6 +511,5 @@ These are the designer's decisions. Each is the owner's to overturn. None is bui
 | D-UD5 | A drain build is admitted to the live queue by the scenario suite, and a roll holds no start | 2026-11-21 | [Rule 6](#66-rule-6-a-drain-build-runs-the-live-queue-only-after-it-passes-the-scenarios) | — |
 | D-UD6 | An incident is closed only when its scenario exists | 2026-11-21 | [Rule 6](#66-rule-6-a-drain-build-runs-the-live-queue-only-after-it-passes-the-scenarios) | — |
 | D-UD7 | A hold reason whose mover is the operator declares the decision it reserves, and a test reads the table | 2026-11-21 | [Rule 7](#67-rule-7-a-hold-names-the-operator-only-for-a-decision-the-rulebook-reserves) | — |
-| D-UD8 | A fence that names a source path includes its pack copy | 2026-11-21 | [Rule 7](#67-rule-7-a-hold-names-the-operator-only-for-a-decision-the-rulebook-reserves) | — |
 | D-UD9 | A refusal about the report amends the report and does not rebuild the candidate | 2026-11-21 | [Rule 7](#67-rule-7-a-hold-names-the-operator-only-for-a-decision-the-rulebook-reserves) | — |
 | D-UD10 | The first alert rules and their defaults | 2026-11-21 | [Rule 8](#68-rule-8-noticing-does-not-depend-on-anyone-being-awake) | — |
