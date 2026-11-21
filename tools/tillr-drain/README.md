@@ -2882,7 +2882,7 @@ history; in that case the run pin stays.
 | `runs/<run>` | The loop or lander pins an attempt. Once the trunk contains the pinned commit, settlement can remove the pin if it names that run's recorded landed head or the item is finished or removed. Live lanes and pending examinations still protect their pins. For retryable items, the newest eight examined attempt pins per item are kept, ordered by attempt time and run ID. Unexamined pins and pins outside trunk history are not removed by this limit. |
 | `landed/<run>` | The lander writes before publication. Cleanup requires that run's durable `landed` row and a matching published commit. Ordinary markers leave in settlement; fork-delivery markers wait until no pending examination or leased lane remains, so every overlapping boundary comparison has finished. Missing receipts keep markers for crash recovery. |
 | `preserved/<run>` | The loop saves uncommitted edits. The [saved-edit retention rule](#earlier-uncommitted-work) removes them when the item finishes or is removed; the pruning event remains. |
-| `sync-remote/<item>` | The repair filer pins the replay base for the first conflict at a remote tip. The pin stays until the item is finished or removed, even if the base is outside trunk history. |
+| `sync-remote/<item>` | The repair filer pins the replay base for the current conflict at a remote tip. The pin advances to the next conflict's base and stays until the item is finished or removed, even if the base is outside trunk history. |
 | `held/<name>` | An operator writes this by hand. No tillr program writes or deletes it; no age or count bound applies. |
 | `recovery/<name>` | An operator writes this by hand. No tillr program writes or deletes it; no age or count bound applies. |
 | `green` | The proof process advances this one pointer to proved trunk history. Cleanup never deletes it. |
@@ -2902,10 +2902,13 @@ repair and records `remote-sync-cleared` once without publishing or recording a
 landing. The filer does not move main, green or the main checkout. The live
 refused-push path does not yet call the filer.
 
-The one-step landing path rechecks the pin and the gate binding, then uses
-`git reset --keep` to install the resolution and the replayed suffix. It records
-the rewrite pairs and a landing receipt for the resolution. Tip mode pushes the
-new tip; green mode keeps green behind the resolution and records
+The repair landing path rechecks the pin and the gate binding. If replay hits
+another conflict, landing advances the pinned base and replaces the fence with
+that step's permitted conflict paths, without moving `main`. A candidate gated
+for an earlier step is refused at landing. Once replay is clean, landing uses
+`git reset --keep` to install the resolutions and replayed suffix. It records
+the rewrite pairs and a landing receipt. Tip mode pushes the new tip; green
+mode keeps green behind the first resolution and records
 `remote-sync-proving` until proof reaches the replayed tip. Ordinary candidate
 landing does not yet call the repair landing path.
 

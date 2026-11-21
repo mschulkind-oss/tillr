@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
@@ -15,6 +17,11 @@ import (
 func stagedReplay(t *testing.T) (*pushFixture, remoteSyncState, Candidate) {
 	t.Helper()
 	p, st := fileDispatchableRemoteSyncRepair(t)
+	return p, st, gateFirstRemoteSyncRepair(t, p, st)
+}
+
+func gateFirstRemoteSyncRepair(t *testing.T, p *pushFixture, st remoteSyncState) Candidate {
+	t.Helper()
 	if err := advancePublished(context.Background(), p.f.root, st.Remote, st.Ref, st.RemoteTip); err != nil {
 		t.Fatal(err)
 	}
@@ -25,11 +32,16 @@ func stagedReplay(t *testing.T) (*pushFixture, remoteSyncState, Candidate) {
 	runGit(t, wt, "add", "two.txt")
 	runGit(t, wt, "commit", "-qm", "resolved two.txt")
 	c := Candidate{ItemID: st.ItemID, LaneID: lane, RunID: "run-sync-replay", Worktree: wt, BaseSHA: st.BaseSHA, HeadSHA: runGit(t, wt, "rev-parse", "HEAD")}
+	gateRemoteSyncRepair(t, p, c)
+	return c
+}
+
+func gateRemoteSyncRepair(t *testing.T, p *pushFixture, c Candidate) {
+	t.Helper()
 	gate := &recoveryLandingSteps{t: t, ProcessSteps: &ProcessSteps{Root: p.f.root, Store: p.f.storePath, Now: p.l.cfg.Now}}
 	if _, err := gate.Gate(context.Background(), c); err != nil {
 		t.Fatal(err)
 	}
-	return p, st, c
 }
 
 func landStagedReplay(t *testing.T, p *pushFixture, c Candidate) string {
@@ -74,21 +86,116 @@ func TestRemoteSyncLandCompletesLinearlyAndHoldsGreen(t *testing.T) {
 	})
 }
 
-func TestRemoteSyncLandingLeavesLaterConflictUnpublished(t *testing.T) {
-	p, st, c := stagedReplay(t)
+func stagedRemoteSyncWithLaterConflict(t *testing.T) (*pushFixture, remoteSyncState, Candidate) {
+	t.Helper()
+	p := newPushFixture(t)
 	root := p.f.root
-	writeForkFile(t, filepath.Join(root, "two.txt"), "a later local edit\n")
-	runGit(t, root, "commit", "-qam", "later conflict")
-	before := runGit(t, root, "rev-parse", TrunkRef)
+	p.remoteCommit(t, "two.txt", "remote two\n")
+	remote := p.remoteCommit(t, "three.txt", "remote three\n")
+	runGit(t, root, "fetch", "-q", "origin")
+	parent := runGit(t, root, "rev-parse", p.local[0]+"^")
+	tree := runGit(t, root, "merge-tree", "--write-tree", "--merge-base="+parent, remote, p.local[0])
+	base := runGit(t, root, "commit-tree", tree, "-p", remote, "-m", "replay one.txt")
+	st := remoteSyncFilingFixture(t, p, base, remote, p.local[1])
+	st.ReplayedOrder = []string{p.local[0]}
+	st.ReplayedPairs = map[string]string{p.local[0]: base}
+	if _, err := p.l.fileOrUpdateRemoteSyncItem(context.Background(), st); err != nil {
+		t.Fatal(err)
+	}
+	fixtureWrite(t, p.f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET allowed_paths='["two.txt","base.txt"]' WHERE item_id=?`, st.ItemID)
+		return err
+	})
+	return p, st, gateFirstRemoteSyncRepair(t, p, st)
+}
+
+func assertRemoteSyncSecondStage(t *testing.T, p *pushFixture, c Candidate) remoteSyncState {
+	t.Helper()
+	st, found, err := p.l.readRemoteSyncState(context.Background(), c.ItemID)
+	if err != nil || !found || st.BaseSHA != c.HeadSHA || st.ConflictCommit != p.local[2] || !slices.Equal(st.ConflictPaths, []string{"three.txt"}) {
+		t.Fatalf("second stage = %+v, %v, %v", st, found, err)
+	}
+	for ref, want := range map[string]string{TrunkRef: p.local[2], GreenRef: p.local[1], remoteSyncPinRef(c.ItemID): c.HeadSHA} {
+		if got := runGit(t, p.f.root, "rev-parse", ref); got != want {
+			t.Errorf("%s = %s, want %s", ref, got, want)
+		}
+	}
+	fixtureRead(t, p.f, func(r *store.Reader) error {
+		allowed, err := readItemAllowedPaths(r, c.ItemID)
+		if !slices.Equal(allowed, []string{"three.txt"}) {
+			t.Errorf("enforced fence = %v, want only three.txt", allowed)
+		}
+		return err
+	})
+	return st
+}
+
+func TestRemoteSyncLaterConflictAdvancesBase(t *testing.T) {
+	ctx := context.Background()
+	p, first, c := stagedRemoteSyncWithLaterConflict(t)
 	var result LoopResult
-	if tip, ok, err := p.l.landRemoteSync(context.Background(), c, &result); err == nil || ok || tip != "" || result.Landed != 0 {
-		t.Fatalf("landing with a conflicted suffix = %q, %v, %v", tip, ok, err)
+	if tip, ok, err := p.l.landRemoteSync(ctx, c, &result); err != nil || ok || tip != "" || result.Landed != 0 || result.RefusedSteps[RefusalLand] != 1 {
+		t.Fatalf("landing with a conflicted suffix = %q, %v, %v; result %+v", tip, ok, err, result)
 	}
-	if got := runGit(t, root, "rev-parse", TrunkRef); got != before {
-		t.Errorf("later conflict moved main to %s; want %s", got, before)
+	st := assertRemoteSyncSecondStage(t, p, c)
+	// A repeated first conflict from the push path must not replace the new step.
+	if _, err := p.l.fileOrUpdateRemoteSyncItem(ctx, first); err != nil {
+		t.Fatal(err)
 	}
-	if got := runGit(t, root, "rev-parse", remoteSyncPinRef(st.ItemID)); got != st.BaseSHA {
-		t.Errorf("later conflict moved the stage to %s; want %s", got, st.BaseSHA)
+	assertRemoteSyncSecondStage(t, p, c)
+
+	wt := c.Worktree
+	writeForkFile(t, filepath.Join(wt, "three.txt"), "resolved three\n")
+	writeForkFile(t, filepath.Join(wt, "two.txt"), "undo the first resolution\n")
+	runGit(t, wt, "add", "two.txt", "three.txt")
+	runGit(t, wt, "commit", "-qm", "resolved three.txt")
+	checkRemoteSyncCandidate(t, p, st, wt, "two.txt\nthree.txt\n", "altered unfenced path(s) relative to the mechanical merge: two.txt")
+	runGit(t, wt, "restore", "--source=HEAD^", "--staged", "--worktree", "--", "two.txt")
+	runGit(t, wt, "commit", "--amend", "--no-edit", "-q")
+	checkRemoteSyncCandidate(t, p, st, wt, "three.txt\n", "")
+	second := Candidate{ItemID: st.ItemID, RunID: "run-sync-replay-second", LaneID: c.LaneID, Worktree: wt, BaseSHA: st.BaseSHA, HeadSHA: runGit(t, wt, "rev-parse", "HEAD")}
+	gateRemoteSyncRepair(t, p, second)
+	landStagedReplay(t, p, second)
+	if got := runGit(t, p.f.root, "rev-parse", GreenRef); got != st.MergeBase {
+		t.Fatalf("green crossed the first resolution: %s, want %s", got, st.MergeBase)
+	}
+}
+
+func TestRemoteSyncLaterConflictRefusesRetainedCandidateAfterInterruption(t *testing.T) {
+	ctx := context.Background()
+	p, _, c := stagedRemoteSyncWithLaterConflict(t)
+	// Lose the first refusal write after the new stage and fence are durable.
+	fixtureWrite(t, p.f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`CREATE TRIGGER interrupt_remote_sync_refusal BEFORE INSERT ON events
+			WHEN NEW.kind='drain.refusal' AND NEW.object_id='run-sync-replay'
+			BEGIN SELECT RAISE(ABORT,'fixture interrupted refusal'); END`)
+		return err
+	})
+	var interrupted LoopResult
+	if tip, ok, err := p.l.landRemoteSync(ctx, c, &interrupted); err == nil || !strings.Contains(err.Error(), "fixture interrupted refusal") || ok || tip != "" {
+		t.Fatalf("interrupted landing = %q, %v, %v", tip, ok, err)
+	}
+	st := assertRemoteSyncSecondStage(t, p, c)
+	if refused, err := p.l.concludedByRefusal(ctx, c.RunID); err != nil || refused {
+		t.Fatalf("interrupted refusal recorded = %v, %v", refused, err)
+	}
+	fixtureWrite(t, p.f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`DROP TRIGGER interrupt_remote_sync_refusal`)
+		return err
+	})
+	for _, base := range []string{c.BaseSHA, st.BaseSHA} {
+		// On retry the retained candidate is still gated for the first step.
+		// Rewriting its advertised base alone cannot make its head a repair either.
+		retry := c
+		retry.BaseSHA = base
+		var result LoopResult
+		if tip, ok, err := p.l.landRemoteSync(ctx, retry, &result); err != nil || ok || tip != "" || result.Landed != 0 || result.RefusedSteps[RefusalLand] != 1 {
+			t.Fatalf("retained landing at base %s = %q, %v, %v; result %+v", base, tip, ok, err, result)
+		}
+		assertRemoteSyncSecondStage(t, p, c)
+	}
+	if refused, err := p.l.concludedByRefusal(ctx, c.RunID); err != nil || !refused {
+		t.Fatalf("retained refusal recorded = %v, %v", refused, err)
 	}
 }
 

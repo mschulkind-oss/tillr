@@ -72,9 +72,20 @@ func (l *Loop) landRemoteSync(ctx context.Context, c Candidate, result *LoopResu
 	} else if !present {
 		return refuse("remote-sync conflicting commit is no longer on main")
 	}
-	known, err := replayRemoteSyncSuffix(ctx, root, st, c.HeadSHA, before)
+	known, next, err := replayRemoteSyncSuffix(ctx, root, st, c.HeadSHA, before)
 	if err != nil {
 		return "", false, err
+	}
+	if next != nil {
+		_, next.CommitMessage, next.LandingSummary = l.collectRemoteSyncContext(ctx, "", "", next.ConflictCommit)
+		conflict, err := l.fileOrUpdateRemoteSyncItemLocked(ctx, *next, st.BaseSHA)
+		if err != nil {
+			return "", false, err
+		}
+		release()
+		l.recordPush(ctx, l.cfg.PostLanding.Push.What, before, conflict)
+		return refuse(fmt.Sprintf("later commit %s conflicted on %s; %s advanced to base %s",
+			shortSHA(next.ConflictCommit), strings.Join(next.ConflictPaths, ", "), st.ItemID, shortSHA(next.BaseSHA)))
 	}
 	dirty := func(detail string) (string, bool, error) {
 		release()
@@ -148,7 +159,7 @@ func (l *Loop) landRemoteSync(ctx context.Context, c Candidate, result *LoopResu
 	return known.Tip, true, nil
 }
 
-func replayRemoteSyncSuffix(ctx context.Context, root string, st remoteSyncState, repair, before string) (*rewriteAbsorption, error) {
+func replayRemoteSyncSuffix(ctx context.Context, root string, st remoteSyncState, repair, before string) (*rewriteAbsorption, *remoteSyncState, error) {
 	known := &rewriteAbsorption{
 		Lost: before, Tip: repair, Pairs: make(map[string]string),
 		Order:    append(append([]string{}, st.ReplayedOrder...), st.ConflictCommit),
@@ -160,7 +171,7 @@ func replayRemoteSyncSuffix(ctx context.Context, root string, st remoteSyncState
 	known.Pairs[st.ConflictCommit] = repair
 	listed, err := rawGit(ctx, root, nil, "rev-list", "--reverse", "--topo-order", "--parents", st.ConflictCommit+".."+before)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	previous := st.ConflictCommit
 	for _, line := range strings.Split(strings.TrimSpace(listed), "\n") {
@@ -169,33 +180,43 @@ func replayRemoteSyncSuffix(ctx context.Context, root string, st remoteSyncState
 			continue
 		}
 		if len(f) != 2 || f[1] != previous {
-			return nil, Externalf("commit %s is not part of the linear suffix after %s", shortSHA(f[0]), shortSHA(st.ConflictCommit))
+			return nil, nil, Externalf("commit %s is not part of the linear suffix after %s", shortSHA(f[0]), shortSHA(st.ConflictCommit))
 		}
 		old, parent := f[0], f[1]
 		previous = old
-		mt := exec.CommandContext(ctx, "git", "-C", root, "merge-tree", "--write-tree", "--merge-base="+parent, known.Tip, old)
+		mt := exec.CommandContext(ctx, "git", "-C", root, "merge-tree", "--write-tree", "--name-only", "-z", "--merge-base="+parent, known.Tip, old)
 		mt.Env = boundaryGitEnv()
 		var stderr strings.Builder
 		mt.Stderr = &stderr
 		out, err := mt.Output()
-		tree, detail, _ := strings.Cut(string(out), "\n")
 		if err != nil {
-			return nil, Externalf("replaying %s onto %s failed: %v\n%s", shortSHA(old), shortSHA(known.Tip), err, strings.TrimSpace(detail+stderr.String()))
+			paths, output := parseMergeTreeConflict(string(out))
+			if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 1 || len(paths) == 0 {
+				return nil, nil, Externalf("replaying %s onto %s failed: %v\n%s", shortSHA(old), shortSHA(known.Tip), err, strings.TrimSpace(stderr.String()))
+			}
+			next := st
+			next.FirstConflictParent = remoteSyncFirstConflictParent(st)
+			next.BaseSHA, next.OldTrunk = known.Tip, before
+			next.ConflictCommit, next.ConflictParent = old, parent
+			next.ConflictPaths, next.ConflictOutput = paths, output
+			next.ReplayedOrder, next.ReplayedPairs = known.Order, known.Pairs
+			return nil, &next, nil
 		}
+		tree, _, _ := strings.Cut(string(out), "\x00")
 		currentTree, err := rawGit(ctx, root, nil, "rev-parse", known.Tip+"^{tree}")
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if tree != strings.TrimSpace(currentTree) {
 			known.Tip, err = commitRemoteSyncSuffix(ctx, root, tree, known.Tip, old)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		known.Order = append(known.Order, old)
 		known.Pairs[old] = known.Tip
 	}
-	return known, nil
+	return known, nil, nil
 }
 
 func commitRemoteSyncSuffix(ctx context.Context, root, tree, parent, old string) (string, error) {
@@ -223,13 +244,20 @@ func commitRemoteSyncSuffix(ctx context.Context, root, tree, parent, old string)
 	return strings.TrimSpace(string(out)), nil
 }
 
+func remoteSyncFirstConflictParent(st remoteSyncState) string {
+	if st.FirstConflictParent != "" {
+		return st.FirstConflictParent
+	}
+	return st.ConflictParent
+}
+
 func remoteSyncGreen(ctx context.Context, root string, st remoteSyncState, pairs map[string]string) (string, error) {
 	green := optionalCommit(ctx, root, GreenRef)
 	if green == "" {
 		// Still identify an authoritative repair replay, without creating green.
 		return st.MergeBase, nil
 	}
-	if preceded, err := trunkAncestor(ctx, root, green, st.ConflictParent); err != nil {
+	if preceded, err := trunkAncestor(ctx, root, green, remoteSyncFirstConflictParent(st)); err != nil {
 		return "", err
 	} else if preceded {
 		if mapped := pairs[green]; mapped != "" {
