@@ -3435,16 +3435,6 @@ func (l *Loop) changeFenceViolationAt(ctx context.Context, candidate Candidate, 
 			return ScopeEscape + ": the fork checkout is still rebasing, so its detached HEAD is not a finished candidate", nil
 		}
 	}
-	base, err := l.fenceDiffBase(ctx, candidate)
-	if err != nil {
-		return "", err
-	}
-	// Disable rename detection so both the removed source and added destination
-	// are checked; a rename into scope must not hide a deletion outside it.
-	changed, err := l.git(ctx, candidate.Worktree, "diff", "--no-renames", "--name-only", "-z", base+".."+candidate.HeadSHA)
-	if err != nil {
-		return "", err
-	}
 	body, err := os.ReadFile(fencePath)
 	if errors.Is(err, os.ErrNotExist) {
 		// A lane with no fence is a lane whose candidate cannot be shown to be in scope.
@@ -3454,6 +3444,19 @@ func (l *Loop) changeFenceViolationAt(ctx context.Context, candidate Candidate, 
 	}
 	if err != nil {
 		return "", Externalf("reading the lane's fence %s: %v", fencePath, err)
+	}
+	if !blocked && IsRemoteSyncItem(candidate.ItemID) {
+		return l.checkRemoteSyncTree(ctx, candidate)
+	}
+	base, err := l.fenceDiffBase(ctx, candidate)
+	if err != nil {
+		return "", err
+	}
+	// Disable rename detection so both the removed source and added destination
+	// are checked; a rename into scope must not hide a deletion outside it.
+	changed, err := l.git(ctx, candidate.Worktree, "diff", "--no-renames", "--name-only", "-z", base+".."+candidate.HeadSHA)
+	if err != nil {
+		return "", err
 	}
 	fence := fenceEntries(string(body))
 	prefix := l.fencePrefix(ctx, candidate.Worktree)

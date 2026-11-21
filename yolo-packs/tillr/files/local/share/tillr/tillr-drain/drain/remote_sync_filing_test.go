@@ -162,6 +162,12 @@ func TestRemoteSyncConflictPreservesLiteralPath(t *testing.T) {
 			if !reflect.DeepEqual(row.Allowed, []string{name}) || waiting != nil {
 				t.Fatalf("fence = %q, waiting = %+v; want literal %q", row.Allowed, waiting, name)
 			}
+			wt := filepath.Join(t.TempDir(), "literal-path-repair")
+			runGit(t, p.f.root, "worktree", "add", "-q", "--detach", wt, st.BaseSHA)
+			writeForkFile(t, filepath.Join(wt, name), "resolved\n")
+			runGit(t, wt, "add", "--", name)
+			runGit(t, wt, "commit", "-qm", "resolve literal path conflict")
+			checkRemoteSyncCandidate(t, p, st, wt, name+"\n", "")
 		})
 	}
 }
@@ -171,8 +177,21 @@ func TestRemoteSyncGateOnlyConflictEscalatesToOwner(t *testing.T) {
 }
 
 func TestRemoteSyncMixedGateConflictCannotPassPreGate(t *testing.T) {
-	// Filing half only: the tree check belongs to a later slice.
-	testRemoteSyncOwnerFence(t, "tools/tillr-gate/main.go", true)
+	gatePath := "tools/tillr-gate/main.go"
+	p, st := testRemoteSyncOwnerFence(t, gatePath, true)
+	root := p.f.root
+	wt := filepath.Join(t.TempDir(), "mixed-gate-repair")
+	runGit(t, root, "worktree", "add", "-q", "--detach", wt, st.BaseSHA)
+	tree := remoteSyncMechanicalTree(t, root, st)
+	runGit(t, wt, "read-tree", "--reset", "-u", tree)
+	gate, err := os.ReadFile(filepath.Join(wt, gatePath))
+	if err != nil || !strings.Contains(string(gate), "<<<<<<<") {
+		t.Fatalf("gate file lacks conflict markers: %q, %v", gate, err)
+	}
+	writeForkFile(t, filepath.Join(wt, "three.txt"), "resolved three\n")
+	runGit(t, wt, "add", "three.txt")
+	runGit(t, wt, "commit", "-qm", "keep the unresolved gate blob")
+	checkRemoteSyncCandidate(t, p, st, wt, "three.txt\n", gatePath)
 }
 
 func TestRemoteSyncWildcardPathEscalatesWithoutWideningFence(t *testing.T) {
@@ -187,7 +206,7 @@ func TestRemoteSyncUnrepresentablePathsEscalateWithoutWideningFence(t *testing.T
 	}
 }
 
-func testRemoteSyncOwnerFence(t *testing.T, excluded string, mixed bool) {
+func testRemoteSyncOwnerFence(t *testing.T, excluded string, mixed bool) (*pushFixture, remoteSyncState) {
 	t.Helper()
 	p := newPushFixture(t)
 	for _, root := range []string{p.f.root, p.other} {
@@ -222,4 +241,5 @@ func testRemoteSyncOwnerFence(t *testing.T, excluded string, mixed bool) {
 	if row.State != StateBlocked || waiting == nil || waiting.Waiter != "owner" || !strings.Contains(waiting.Reason, strings.ToValidUTF8(excluded, "\uFFFD")) || !reflect.DeepEqual(row.Allowed, want) {
 		t.Fatalf("state = %s, waiting = %+v, allowed = %q; want owner hold and %q", row.State, waiting, row.Allowed, want)
 	}
+	return p, st
 }
