@@ -1484,7 +1484,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			spec.KeptHeadSHA = decision.RetryCandidate.HeadSHA
 			spec.KeptItemBaseSHA = decision.RetryCandidate.BaseSHA
 		}
-		freshVerifyReturn := (decision.Reason == ReasonReturned || decision.Reason == ReasonRetry) && (verifyBuildReturn(decision.Returned) || verifyNoVerdictReturn(decision.Returned)) && !request.SessionTurn
+		freshVerifyReturn := (decision.Reason == ReasonReturned || decision.Action == ActionRetry) && (verifyBuildReturn(decision.Returned) || verifyNoVerdictReturn(decision.Returned)) && !request.SessionTurn
 		if freshVerifyReturn {
 			// A fresh build run keeps the candidate the verifier read, even on a cold lane.
 			s := decision.Returned.WorkerSession

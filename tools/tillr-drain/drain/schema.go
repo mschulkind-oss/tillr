@@ -149,9 +149,8 @@ const (
 	// after the one that failed, and a chain is refused rather than walked on past what
 	// the policy allows.
 	ReasonInfraExhausted = "run-infra-exhausted"
-	// ReasonRetry is a retry's reason: the item's latest run was refused by the harness —
-	// it produced no judgable candidate — and an operator authorized the second attempt.
-	ReasonRetry = "harness-refused"
+	// ReasonRetry records that the operator authorized another run.
+	ReasonRetry = "operator-retry"
 	// ReasonReturned is a dispatch's reason: the item's latest run ended in a gate refusal,
 	// with no commit, in a fence escape or in a refused landing, and the ending goes back
 	// to the item's worker with its evidence (Decision.Returned). It is uncounted: the
