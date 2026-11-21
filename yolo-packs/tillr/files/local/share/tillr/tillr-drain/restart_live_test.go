@@ -191,6 +191,9 @@ func alive(pid int) bool { return syscall.Kill(pid, 0) == nil }
 
 // The replacement keeps its PID, prints a new build line, and leaves the run alone.
 func TestRestartReplacesTheLoopInPlaceWithoutSignalingARun(t *testing.T) {
+	// waitForSuccessorPass counts SQLite trace lines. Enable tracing before
+	// launch so the loop carries it through the exec regardless of the runner.
+	t.Setenv("TILLR_SQLITE_TRACE", "1")
 	s := startRoll(t, 1, "")
 	s.inFlight(t, 1)
 	const id = "run-item_041-a1"
