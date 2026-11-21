@@ -360,11 +360,7 @@ The following rules describe Git-landing, including its established refusal name
   `underlying_state`, the state before the first blocked move. Updating a blocked
   item's waiter preserves that original state. Moving to `not-started` or `in-queue`
   clears all three values. `show` prints the stored metadata; an older blocked row
-  with none remains readable and says `waiter not recorded`. When an ordinary
-  `item:<id>` blocker lands, the drain restores the waiting item's prior state on
-  its next pass and records `item.wait-released`. No retry is required, even when
-  an earlier run is unanswered. To return it to the queue immediately, use
-  `tillr item state --item <id> --state in-queue` after the blocker lands.
+  with none remains readable and says `waiter not recorded`.
 - **Closing and reopening are explicit commands.** `close` accepts only
   `not-started`, `in-queue`, or `blocked`, records
   `close_reason`, `closed_at`, `closed_by`, and `closed_from`, and refuses a successful
