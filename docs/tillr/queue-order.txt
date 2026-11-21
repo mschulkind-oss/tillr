@@ -1,7 +1,5 @@
-# last_hand_move_event_seq: 1334366
-# hand_move_event_sha256: 1a6be912ef747b7041a0775161a6c2cf8da56a83da88322cebb92ff40be26967
-item-request-1b5cb9a97c
-item-request-cc2af28a50
+# last_hand_move_event_seq: 1334578
+# hand_move_event_sha256: 7fa7bfa12afd78dd85688d3611c90a6d61015df44e9bf7959e212046fcd59075
 item-request-4a50ae99da
 item-request-118890abb1
 item-request-5be951c300
@@ -15,7 +13,6 @@ item-request-59735b6305
 item-request-d40cdbb177
 item-request-b478edf600
 item-request-8970d30835
-item-request-28f8c86410
 item-request-b72af834ae
 item-request-6d7eb3cf69
 item-request-143f5cfbef
