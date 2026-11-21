@@ -314,7 +314,7 @@ func refuseJudged(ctx context.Context, storePath, runID string) error {
 	return nil
 }
 
-// rederiveFence writes the current item fence and the saved node's narrower scope
+// rederiveFence writes the current item fence and the resumed node's scope
 // to both the lane and run copies, and answers the resumed run's scope.
 //
 // The lane's `fence.txt` is the staged text; re-deriving it is what makes a fence edited
@@ -379,12 +379,14 @@ func rederiveFence(ctx context.Context, cfg ResumeConfig, row resumeRun, laneDir
 	}
 	fence := fencePaths(recorded.AllowedPaths)
 	if node != nil {
-		stage := *node
-		stage.WriteScope.Paths = scopeForLane(stage.WriteScope.Paths, row.LaneID)
-		if err := (&Workflow{Stages: []WorkflowStage{stage}}).checkScopes(scopeForLane(recorded.AllowedPaths, row.LaneID)); err != nil {
-			return nil, err
+		if !plannedWritePiece(*node) {
+			stage := *node
+			stage.WriteScope.Paths = scopeForLane(stage.WriteScope.Paths, row.LaneID)
+			if err := (&Workflow{Stages: []WorkflowStage{stage}}).checkScopes(scopeForLane(recorded.AllowedPaths, row.LaneID)); err != nil {
+				return nil, err
+			}
 		}
-		fence, err = node.scopePaths(recorded.AllowedPaths)
+		fence, err = node.runScopePaths(recorded.AllowedPaths)
 		if err != nil {
 			return nil, err
 		}

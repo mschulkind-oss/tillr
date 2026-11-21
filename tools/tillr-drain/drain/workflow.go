@@ -845,7 +845,11 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 	if !l.nonLanding && effectiveAccess == "write" {
 		c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: nodeBase, HeadSHA: head}
 		blocked := stage.Kind == "agent" && footer == "blocked" && parseObstacle(log).Problem == ""
-		escape, err := l.changeFenceViolationAt(ctx, c, filepath.Join(l.laneDirPath(d.LaneID), FenceFile), blocked)
+		fencePath := filepath.Join(l.laneDirPath(d.LaneID), FenceFile)
+		if plannedWritePiece(stage) {
+			fencePath = "" // The plan's piece paths cannot override the current item fence.
+		}
+		escape, err := l.changeFenceViolationAt(ctx, c, fencePath, blocked)
 		if err != nil {
 			return true, err
 		}

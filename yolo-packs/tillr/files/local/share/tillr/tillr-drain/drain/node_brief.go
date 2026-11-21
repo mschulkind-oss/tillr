@@ -36,7 +36,7 @@ func (s *LaneStager) workflowNodeBrief(spec StageSpec, brief string, landing boo
 			brief += "\n## Model-use guidance\n\n" + string(guidance) + "\n"
 		}
 	}
-	if landing && spec.Node.Access == "write" && spec.Node.WriteScope.Paths != nil {
+	if landing && spec.Node.Access == "write" && spec.Node.WriteScope.Paths != nil && !plannedWritePiece(*spec.Node) {
 		brief += "\nThis node may write only these paths, within the item's fence:\n" + fenceText(scopeForLane(spec.Node.WriteScope.Paths, spec.LaneID))
 	}
 	dir := nodeOutputsDir(s.Root, spec.RunID)

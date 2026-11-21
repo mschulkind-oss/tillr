@@ -241,6 +241,8 @@ type Candidate struct {
 	// names the same seat the original dispatch did.
 	Seat     string `json:"-"`
 	Workflow string `json:"workflow,omitempty"`
+	// Planned pieces use the current item fence even on candidate re-examination.
+	LiveItemFence bool `json:"live_item_fence,omitempty"`
 }
 
 // GateOutcome is what the gate step answers: the verdict the gate reached and the gate
@@ -2570,6 +2572,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, TickID: tick,
 		Worktree: target, BaseRef: baseRef, BaseSHA: baseSHA, HeadSHA: headSHA,
 		Request: &request, Seat: decision.Seat, Workflow: decision.workflowRef(), BlockConflict: decision.BlockConflict,
+		LiveItemFence: workflowHasPlannedPiece(decision.Workflow),
 	}
 	if err := l.attachWorkflowJudge(ctx, decision, &candidate); err != nil {
 		return laneOutcome{err: err}
@@ -3431,11 +3434,12 @@ func (l *Loop) pendingItemBase(ctx context.Context, itemID string) (string, erro
 // as a commit, and a working tree holding more than that commit is either work the commit
 // dropped or a tree the gate would have judged in place of the one that lands.
 //
-// The fence itself is the file staging wrote: one repo-relative path per line. A path is
-// inside the fence when it is the entry, or lies under it. An entry with no line for the
-// path is a fence the path is outside of, and a lane whose fence is empty admits nothing —
-// staging refuses such an item, so an empty fence here is a lane someone edited by hand.
+// Planned workflows use the current item fence at the whole-candidate check
+// as well as at piece exit. Other candidates use their staged fence.
 func (l *Loop) fenceViolation(ctx context.Context, candidate Candidate) (string, error) {
+	if candidate.LiveItemFence {
+		return l.changeFenceViolationAt(ctx, candidate, "", false)
+	}
 	fencePath, err := l.itemFencePath(candidate.LaneID)
 	if err != nil {
 		return "", err
@@ -3458,6 +3462,7 @@ func (l *Loop) fenceViolationAt(ctx context.Context, candidate Candidate, fenceP
 	return l.changeFenceViolationAt(ctx, candidate, fencePath, false)
 }
 
+// An empty fencePath selects the item's current allowed paths instead of a staged file.
 // A blocked node with a complete obstacle offers no candidate. Check its unfinished
 // paths along with its commits, rather than requiring a clean candidate worktree.
 func (l *Loop) changeFenceViolationAt(ctx context.Context, candidate Candidate, fencePath string, blocked bool) (string, error) {
@@ -3487,15 +3492,25 @@ func (l *Loop) changeFenceViolationAt(ctx context.Context, candidate Candidate, 
 			return ScopeEscape + ": the fork checkout is still rebasing, so its detached HEAD is not a finished candidate", nil
 		}
 	}
-	body, err := os.ReadFile(fencePath)
-	if errors.Is(err, os.ErrNotExist) {
-		// A lane with no fence is a lane whose candidate cannot be shown to be in scope.
-		// That is a refusal, not a halt: the item is recorded as failed and the loop moves
-		// on, rather than an unattended run ending on one lane's missing file.
-		return fmt.Sprintf("%s: the lane has no fence at %s, so nothing shows the change is in scope", ScopeEscape, fencePath), nil
-	}
-	if err != nil {
-		return "", Externalf("reading the lane's fence %s: %v", fencePath, err)
+	var fence []string
+	source := fencePath
+	if fencePath == "" {
+		var err error
+		fence, err = l.currentItemFence(ctx, candidate)
+		if err != nil {
+			return "", err
+		}
+		source = "from the current item " + candidate.ItemID
+	} else {
+		body, err := os.ReadFile(fencePath)
+		if errors.Is(err, os.ErrNotExist) {
+			// A missing staged fence cannot establish a run's scope.
+			return fmt.Sprintf("%s: the lane has no fence at %s, so nothing shows the change is in scope", ScopeEscape, fencePath), nil
+		}
+		if err != nil {
+			return "", Externalf("reading the lane's fence %s: %v", fencePath, err)
+		}
+		fence = fenceEntries(string(body))
 	}
 	if !blocked && IsRemoteSyncItem(candidate.ItemID) {
 		return l.checkRemoteSyncTree(ctx, candidate)
@@ -3510,7 +3525,6 @@ func (l *Loop) changeFenceViolationAt(ctx context.Context, candidate Candidate, 
 	if err != nil {
 		return "", err
 	}
-	fence := fenceEntries(string(body))
 	prefix := l.fencePrefix(ctx, candidate.Worktree)
 	for _, path := range append(strings.Split(changed, "\x00"), pending...) {
 		if path == "" {
@@ -3527,7 +3541,7 @@ func (l *Loop) changeFenceViolationAt(ctx context.Context, candidate Candidate, 
 			continue
 		}
 		return fmt.Sprintf("%s: %s is outside allowed_paths (the fence is %s)",
-			ScopeEscape, scoped, fencePath), nil
+			ScopeEscape, scoped, source), nil
 	}
 	return "", nil
 }
