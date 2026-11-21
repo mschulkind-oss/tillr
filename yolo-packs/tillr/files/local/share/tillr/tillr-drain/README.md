@@ -2295,9 +2295,15 @@ counting zero infrastructure failures, and naming the operator mover
 (`fix the staging fault the detail names, then tillr drain clear-fault --item <item>`).
 Fresh fork staging can move a clean lane checkout's `main` back to the delivered tip
 when a run pin or preserved-work ref in that checkout still reaches its old tip.
-If no such ref keeps the undelivered tip, staging leaves it in place and records a
-`stage-failed` hold. The operator saves the commits on a branch, resets the lane's
-fork checkout to the delivered tip, and clears the fault.
+After a landed release rebase, the lander's `refs/tillr/patch-history/<fork>/` pins
+also prove whether that fork previously delivered the lane's entire history. Staging
+then saves the old lane tip on `kept/pre-rebase-<sha>` and switches `main` to the
+current delivery. If neither check proves it safe, staging leaves the fork work in
+place and holds the item. The operator saves the commits on a branch, resets the
+lane's fork checkout to the delivered tip, and clears the fault. A classifier's
+pending writer keeps its selected delivery, but does not reserve the lane while
+held: no writer has started, so other items can use the lane and the writer can
+claim a free lane after clearance.
 `decision-collision` holds an item whose planned decision could not be
 recorded, because its decision id is already recorded with other columns.
 `settle-failed` holds an item whose run could not be settled because of such a

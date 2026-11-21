@@ -175,6 +175,22 @@ func restorePendingBeforeClaim(tx *store.Tx, d Decision, at time.Time) (bool, er
 	if err := refuseTerminalItem(tx.Reader(), d.ItemID, "unlaunched-claim"); err != nil {
 		return false, nil
 	}
+	var work pendingWork
+	if err := json.Unmarshal([]byte(payload), &work); err != nil {
+		return false, err
+	}
+	if work.Ready && work.Candidate == nil && !work.LaneReleased && work.Decision.NodeIndex > 0 && awaitingForkClaim(&work) {
+		faults, err := ReadItemFaults(tx.Reader())
+		if err != nil {
+			return false, err
+		}
+		if fault := faults[d.ItemID]; fault.Reason == ReasonStageFailed && fault.RunID == runID {
+			// No fork writer has run yet. Keep the classifier's result, not its
+			// lane: the next writer can claim any free lane after clearance.
+			work.LaneReleased = true
+			return true, appendEffect(tx, kind, runID, work, at)
+		}
+	}
 	return true, appendEffect(tx, kind, runID, json.RawMessage(payload), at)
 }
 
