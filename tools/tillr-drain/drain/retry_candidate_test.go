@@ -143,7 +143,7 @@ func TestRetryStagingPreservesDirtyCandidateAndTrunkLanes(t *testing.T) {
 			before := runGit(t, target, "rev-parse", "HEAD")
 			writeForkFile(t, filepath.Join(target, "untracked.txt"), "do not discard\n")
 			stager := &LaneStager{Root: f.root, LaneRoot: f.laneRoot, Store: f.storePath, Template: filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"), Now: l.cfg.Now}
-			err := stager.Stage(context.Background(), StageSpec{ItemID: d.ItemID, LaneID: d.LaneID, RunID: "retry-dirty", Backend: "fixture", WorkingDir: WorktreeDir, BaseSHA: base, VerifyReturnHead: head, VerifyReturnItemBase: base, RetryCandidate: &RetryCandidate{BaseSHA: base, HeadSHA: head, Available: true}})
+			err := stager.Stage(context.Background(), StageSpec{ItemID: d.ItemID, LaneID: d.LaneID, RunID: "retry-dirty", Backend: "fixture", WorkingDir: WorktreeDir, BaseSHA: base, KeptHeadSHA: head, KeptItemBaseSHA: base, RetryCandidate: &RetryCandidate{BaseSHA: base, HeadSHA: head, Available: true}})
 			if err == nil || asLaneRefusal(err) == nil {
 				t.Fatalf("dirty retry not refused: %v", err)
 			}

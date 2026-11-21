@@ -265,18 +265,12 @@ type StageSpec struct {
 	ItemBaseSHA        string
 	WorkingDir         string
 
-	// ReturnedNodeBaseSHA keeps the producing node's boundary when its judge returns
-	// a retained candidate for another look, without requiring a new commit.
-	ReturnedNodeBaseSHA string
-	// resumeCommitted keeps the checkout at its committed head but stages
-	// the whole item boundary for the restarted writer's offer.
-	resumeCommitted bool
-	// VerifyReturnHead and VerifyReturnItemBase stage the build step a failed verify
-	// returns to: the lane (or fork checkout) is cut at the commit the verifier read
-	// instead of the trunk, and the item's own base stays the fence base.
-	VerifyReturnHead     string
-	VerifyReturnItemBase string
-	TimeoutMS            int
+	// KeptItemBaseSHA is the offer boundary when a dispatch keeps a candidate.
+	// KeptHeadSHA, when set, materializes that candidate in the checkout; an
+	// in-place continuation can already have the candidate checked out.
+	KeptItemBaseSHA string
+	KeptHeadSHA     string
+	TimeoutMS       int
 	// EndingCapability is the adapter probe at dispatch; a retained session keeps its staged form.
 	EndingCapability string
 	// SessionID pins the harness session this dispatch runs under. Empty mints a UUID: a
@@ -366,6 +360,9 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	if spec.BaseSHA == "" {
 		return Usagef("staging %s needs a base sha: a run is staged from a sha pinned before launch, never from whatever the trunk says at launch time", spec.RunID)
 	}
+	if spec.KeptHeadSHA != "" && spec.KeptItemBaseSHA == "" {
+		return Usagef("staging kept candidate %s needs its recorded item base", spec.KeptHeadSHA)
+	}
 	if err := checkRunID(spec.RunID); err != nil {
 		return err
 	}
@@ -402,8 +399,8 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		if err := s.ensureForkCheckout(ctx, spec, fork); err != nil {
 			return err
 		}
-		if spec.VerifyReturnHead != "" {
-			if err := s.restageForkAtVerifyHead(ctx, spec, fork); err != nil {
+		if spec.KeptHeadSHA != "" {
+			if err := s.restageForkAtKeptHead(ctx, spec, fork); err != nil {
 				return err
 			}
 		} else if !spec.Continue {
@@ -424,29 +421,20 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		}
 		target, targetKind = fork.Checkout, "fork checkout"
 	}
-	// The brief names the same scratch directory `run exec` exports, so the two have to
-	// agree on the spelling: exec resolves the lane root to an absolute path, and a brief
-	// naming a relative one would point the worker at a directory that does not exist.
 	itemBaseSHA := baseSHA
 	worktreeSpec := spec
-	if spec.VerifyReturnHead != "" {
-		baseSHA, itemBaseSHA = spec.VerifyReturnHead, spec.VerifyReturnItemBase
-		if !isFork {
-			worktreeSpec.BaseSHA = spec.VerifyReturnHead
-		}
+	if spec.KeptHeadSHA != "" && !isFork {
+		worktreeSpec.BaseSHA = spec.KeptHeadSHA
 	}
-	if c := spec.RetryCandidate; c != nil && c.Available {
-		// The head is the checkout start, not the boundary: report-only retries
-		// must still be able to offer the already-authored candidate.
-		baseSHA, itemBaseSHA = c.BaseSHA, c.BaseSHA
-		if spec.Node != nil && c.WorkerSession != nil && c.WorkerSession.NodeBaseSHA != "" {
-			baseSHA = c.WorkerSession.NodeBaseSHA
-		}
+	if spec.KeptItemBaseSHA != "" {
+		// Where the checkout starts (or a prior node started) does not bound
+		// the offer. Every kept candidate is offered against its recorded item base.
+		baseSHA, itemBaseSHA = spec.KeptItemBaseSHA, spec.KeptItemBaseSHA
 	}
 	itemAllowed := append([]string(nil), recorded.AllowedPaths...)
 	if spec.Node != nil {
-		if spec.Continue {
-			if spec.ItemBaseSHA != "" && (!isFork || spec.resumeCommitted) {
+		if spec.Continue && spec.KeptItemBaseSHA == "" {
+			if spec.ItemBaseSHA != "" && !isFork {
 				itemBaseSHA = spec.ItemBaseSHA
 			} else {
 				baseDir := laneDir
@@ -475,17 +463,11 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 					itemBaseSHA = strings.TrimSpace(string(raw))
 				}
 			}
-			if spec.resumeCommitted {
-				baseSHA = itemBaseSHA
-			} else if spec.ReturnedNodeBaseSHA != "" {
-				baseSHA = spec.ReturnedNodeBaseSHA
-			} else {
-				head, err := s.git(ctx, target, "rev-parse", "HEAD")
-				if err != nil {
-					return err
-				}
-				baseSHA = strings.TrimSpace(head)
+			head, err := s.git(ctx, target, "rev-parse", "HEAD")
+			if err != nil {
+				return err
 			}
+			baseSHA = strings.TrimSpace(head)
 		}
 		scope, err := spec.Node.scopePaths(itemAllowed)
 		if err != nil {
@@ -501,6 +483,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		}
 		recorded.AllowedPaths = scope
 	}
+	// The brief names the same absolute scratch directory `run exec` exports.
 	durableDir, err := filepath.Abs(run.DurableDir(laneDir, spec.RunID))
 	if err != nil {
 		return Internalf("resolving the run's scratch directory under %s: %v", laneDir, err)

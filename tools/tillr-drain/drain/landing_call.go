@@ -249,6 +249,13 @@ func (l *Loop) validateLandingOffer(ctx context.Context, d Decision, rec run.Rec
 			base = d.NodeBaseSHA
 		}
 	}
+	// A writer staged against the whole item can offer a kept candidate even
+	// when it has not moved HEAD past its node's own start.
+	wholeItemWriter := false
+	if d.Workflow != nil && base == settledBase {
+		node := d.effectiveNode()
+		wholeItemWriter = node.Kind == "agent" && node.Access == "write"
+	}
 	if offer.toolName() == "obstacle" {
 		if offer.Base != base {
 			return landingCall{}, Externalf("obstacle call for %s does not match its staged base", rec.RunID)
@@ -258,7 +265,7 @@ func (l *Loop) validateLandingOffer(ctx context.Context, d Decision, rec run.Rec
 			return landingCall{}, Externalf("obstacle call for %s is incomplete: %s", rec.RunID, obs.Problem)
 		}
 	} else if offer.Commit != head || offer.Base != base || head == base || head == settledBase ||
-		(d.Workflow != nil && d.NodeBaseSHA != "" && head == d.NodeBaseSHA && !(base == settledBase && restartWriter(d))) {
+		(d.Workflow != nil && d.NodeBaseSHA != "" && head == d.NodeBaseSHA && !wholeItemWriter) {
 		return landingCall{}, Externalf("landing offer for %s does not name a call, summary and its staged base and new HEAD", rec.RunID)
 	}
 	artifactDir := laneDir
