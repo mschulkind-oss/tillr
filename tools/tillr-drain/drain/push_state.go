@@ -246,11 +246,12 @@ func pushCounts(ctx context.Context, root, remoteTip string) (green, main int) {
 	return count(GreenRef), count("refs/heads/" + TrunkRef)
 }
 
-func (l *Loop) recordPushState(ctx context.Context, what, tip, kind string, state *pushStateError, failure error) {
-	payload := map[string]any{"action": "push", "what": what, "detail": "", "kind": kind}
+func (l *Loop) recordPushState(ctx context.Context, what, tip, kind string, state *pushStateError, failure error) (PushOutcome, error) {
+	out := PushOutcome{Action: "push", What: what, Kind: kind, Tip: tip, OK: kind == pushKindOK}
 	if failure != nil {
-		payload["detail"] = failure.Error()
+		out.Detail = failure.Error()
 	}
+	payload := map[string]any{"action": out.Action, "what": out.What, "detail": out.Detail, "kind": out.Kind}
 	root := l.cfg.Root
 	if remote, ref, err := pushDestination(ctx, root, l.cfg.PostLanding.Push); err == nil {
 		payload["remote"], payload["ref"] = remote, ref
@@ -270,11 +271,17 @@ func (l *Loop) recordPushState(ctx context.Context, what, tip, kind string, stat
 			payload["unpublished_main_count"] = m
 		}
 	}
-	if state != nil && state.escalated != "" {
-		payload["escalated_mover"] = state.escalated
+	if state != nil {
+		out.Mover = state.escalated
+		if state.rebasedTip != "" {
+			payload["rebased_tip"] = state.rebasedTip
+			if kind == pushKindProving {
+				out.Mover = strings.TrimPrefix(awaitingRebasedProof(state.rebasedTip), "mover: ")
+			}
+		}
 	}
-	if state != nil && state.rebasedTip != "" {
-		payload["rebased_tip"] = state.rebasedTip
+	if out.Mover != "" {
+		payload["escalated_mover"] = out.Mover
 	}
 	if kind != pushKindOK {
 		since := l.lastPushSince(ctx)
@@ -287,7 +294,13 @@ func (l *Loop) recordPushState(ctx context.Context, what, tip, kind string, stat
 		}
 		payload["since_ts"] = since
 	}
-	l.appendPostLanding(ctx, "push", tip, payload, failure)
+	if err := l.appendPostLanding(ctx, "push", tip, payload, failure); err != nil {
+		return PushOutcome{}, fmt.Errorf("recording push outcome: %w", err)
+	}
+	if !out.OK {
+		return out, Externalf("%s", out.Detail)
+	}
+	return out, nil
 }
 
 type pushRecord struct {
@@ -320,7 +333,7 @@ func (l *Loop) lastPushSince(ctx context.Context) string {
 	return prev.Since
 }
 
-func (l *Loop) appendPostLanding(ctx context.Context, action, tip string, payload map[string]any, failure error) {
+func (l *Loop) appendPostLanding(ctx context.Context, action, tip string, payload map[string]any, failure error) error {
 	s, err := store.Open(ctx, l.cfg.Store, false)
 	if err == nil {
 		defer s.Close()
@@ -336,4 +349,5 @@ func (l *Loop) appendPostLanding(ctx context.Context, action, tip string, payloa
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "post-landing %s at %s: recording outcome: %v (action failure: %v)\n", action, tip, err, failure)
 	}
+	return err
 }

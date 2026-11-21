@@ -88,14 +88,7 @@ func (l *Loop) afterLandingCandidate(ctx context.Context, candidate Candidate, t
 	if candidate.BaseRef == "" {
 		if p := l.cfg.PostLanding.Push; p.What == settings.PushTip {
 			l.pushAction.submit(tip, func(tip string) {
-				err := pushTrunk(ctx, l.cfg.Root, p)
-				var refused *refusedPushError
-				if errors.As(err, &refused) {
-					// The remote moved: rebase onto it, then push once more.
-					if _, err = l.healRefusedPush(ctx, p, err); err == nil {
-						err = pushTrunk(ctx, l.cfg.Root, p)
-					}
-				}
+				_, err := l.pushTipOnce(ctx, p)
 				l.recordPush(ctx, settings.PushTip, tip, err)
 			})
 		}
@@ -191,22 +184,10 @@ func (l *Loop) afterGreen(ctx context.Context, advanced string) {
 		return
 	}
 	l.pushAction.submit(advanced, func(string) {
-		green, err := pushGreenChecked(ctx, l.cfg.Root, p, l.greenProofHold)
-		if green == "" && err == nil {
-			return // no green pointer yet: nothing is proven
+		green, err := l.pushGreenOnce(ctx, p)
+		if green != "" || err != nil {
+			l.recordPush(ctx, settings.PushGreen, green, err)
 		}
-		var refused *refusedPushError
-		if errors.As(err, &refused) {
-			// The remote moved: rebase onto it. The new tip is proved by the normal
-			// after-merge run, and the green advance that follows pushes it.
-			res, herr := l.healRefusedPushResult(ctx, p, err)
-			if herr == nil {
-				herr = &pushStateError{kind: pushKindProving, remoteTip: res.remoteTip, rebasedTip: res.newTip,
-					detail: fmt.Sprintf("the remote had moved: %d unpublished commits were rebased onto it; %s", res.replayed, awaitingRebasedProof(res.newTip))}
-			}
-			err = herr
-		}
-		l.recordPush(ctx, settings.PushGreen, green, err)
 	})
 }
 
@@ -255,24 +236,30 @@ func pushDestination(ctx context.Context, root string, p settings.Push) (remote,
 
 // pushTrunk pushes the trunk tip (mode "tip"), proven or not.
 func pushTrunk(ctx context.Context, root string, p settings.Push) error {
+	_, err := pushTrunkResult(ctx, root, p)
+	return err
+}
+
+func pushTrunkResult(ctx context.Context, root string, p settings.Push) (string, error) {
 	remote, ref, err := pushDestination(ctx, root, p)
 	if err != nil {
-		return err
+		return "", err
 	}
 	ctx, cancel := context.WithTimeout(ctx, pushTimeout)
 	defer cancel()
-	if _, err := guardPublished(ctx, root, remote, ref); err != nil {
-		return err
-	}
+	_, err = guardPublished(ctx, root, remote, ref)
 	pushed := optionalCommit(ctx, root, "refs/heads/"+TrunkRef)
+	if err != nil {
+		return pushed, err
+	}
 	if pushed == "" {
-		return fmt.Errorf("cannot resolve %s for push", TrunkRef)
+		return "", fmt.Errorf("cannot resolve %s for push", TrunkRef)
 	}
 	// Push exactly the commit we will record, even if a landing advances main meanwhile.
 	if err := pushCommand(ctx, root, "--", remote, pushed+":"+ref); err != nil {
-		return err
+		return pushed, err
 	}
-	return advancePublished(ctx, root, remote, ref, pushed)
+	return pushed, advancePublished(ctx, root, remote, ref, pushed)
 }
 
 // pushGreen pushes the commit `refs/tillr/green` holds now to the remote branch, unless the
@@ -333,10 +320,9 @@ func pushGreenChecked(ctx context.Context, root string, p settings.Push, proofHo
 var errAlreadyPublished = errors.New("remote already holds the green commit")
 
 // recordPush records and logs the outcome of the push turn, after any replay and retry.
-func (l *Loop) recordPush(ctx context.Context, what, tip string, failure error) {
+func (l *Loop) recordPush(ctx context.Context, what, tip string, failure error) (PushOutcome, error) {
 	if errors.Is(failure, errAlreadyPublished) {
-		l.recordPushState(ctx, what, tip, pushKindOK, nil, nil)
-		return
+		return l.recordPushState(ctx, what, tip, pushKindOK, nil, nil)
 	}
 	kind, state := pushKindOK, (*pushStateError)(nil)
 	if failure != nil {
@@ -353,7 +339,7 @@ func (l *Loop) recordPush(ctx context.Context, what, tip string, failure error) 
 	} else {
 		l.reportf("loop: pushed %s %s\n", what, shortSHA(tip))
 	}
-	l.recordPushState(ctx, what, tip, kind, state, failure)
+	return l.recordPushState(ctx, what, tip, kind, state, failure)
 }
 
 func actionCommand(ctx context.Context, root, program string, args ...string) (string, error) {
