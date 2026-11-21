@@ -1852,11 +1852,36 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 				}
 				continue
 			} else if p != nil && p.LaneID != "" && p.LaneID != decision.LaneID {
-				if applyErr := l.applyPreservedWork(ctx, l.laneTarget(decision.LaneID), *p); applyErr != nil {
+				end := l.beginLaneStaging(decision.LaneID)
+				conflict, applyErr := l.applyPreservedWork(ctx, decision.LaneID, l.laneTarget(decision.LaneID), *p)
+				end()
+				if applyErr != nil {
 					if holdErr := failStage("apply preserved work", applyErr); holdErr != nil {
 						return nil, holdErr
 					}
 					continue
+				}
+				if conflict != nil {
+					spec.preservedConflict = conflict
+					if l.laneForkTarget(decision.LaneID) == "" {
+						// The dispatch's usual base may be green. Conflict work
+						// starts at the actual trunk tip, with a fresh offer range.
+						tip, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+						if err != nil {
+							if holdErr := failStage("read trunk for preserved conflict", err); holdErr != nil {
+								return nil, holdErr
+							}
+							continue
+						}
+						if _, err := l.prepareContinuedLane(ctx, decision, request.ItemID, tip); err != nil {
+							if holdErr := failStage("stage preserved conflict at trunk tip", err); holdErr != nil {
+								return nil, holdErr
+							}
+							continue
+						}
+						spec.BaseSHA, spec.ItemBaseSHA = tip, tip
+						spec.KeptHeadSHA, spec.KeptItemBaseSHA = "", ""
+					}
 				}
 			}
 		}
@@ -1889,7 +1914,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 			l.clearStageInfraLine(request.ItemID, decision.LaneID)
 			if decision.Workflow != nil {
-				if decision.NodeBaseSHA == "" || (decision.NodeIndex == 0 && !request.SessionTurn && !resumeCommitted) || revertedSession {
+				if spec.preservedConflict != nil || decision.NodeBaseSHA == "" || (decision.NodeIndex == 0 && !request.SessionTurn && !resumeCommitted) || revertedSession {
 					decision.NodeBaseSHA = l.laneBase(decision.LaneID)
 				}
 				decision.NodeBaseSHA = l.baseInCheckout(ctx, decision.LaneID, decision.NodeBaseSHA)

@@ -245,8 +245,9 @@ type StageSpec struct {
 	Conflict *ConflictBrief
 	// Returned is the earlier run's ending this dispatch carries back to the worker
 	// (Decision.Returned). A non-nil value appends its evidence to the brief.
-	Returned       *ReturnedEnding
-	RetryCandidate *RetryCandidate
+	Returned          *ReturnedEnding
+	RetryCandidate    *RetryCandidate
+	preservedConflict *preservedConflict
 	// RepeatedCall is the repeating-call ending this dispatch answers
 	// (Decision.RepeatedCall). A non-nil value appends its note to the brief.
 	RepeatedCall *RepeatedCall
@@ -501,6 +502,9 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	if err != nil {
 		return err
 	}
+	if spec.preservedConflict != nil {
+		earlier += spec.preservedConflict.brief()
+	}
 	if delivery.Kind == "both" {
 		if delivery.ForkLanded != "" {
 			earlier += fmt.Sprintf("\n\nMixed delivery: the lander published fork %s at %s. Work only on the repository part now; do not repeat the fork work.", delivery.Fork, delivery.ForkLanded)
@@ -583,7 +587,11 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	if item.IsCommentItem(spec.ItemID) {
 		brief = strings.Replace(brief, "When the work is done, **commit it in the target worktree**", "For a reply-only answer, the task's no-commit exception overrides the ordinary commit requirement below.\n\nWhen the work is done, **commit it in the target worktree**", 1)
 	}
-	brief += retryCandidateBrief(spec.RetryCandidate)
+	if c := spec.RetryCandidate; c != nil && c.Available && spec.preservedConflict != nil && !isFork {
+		brief += fmt.Sprintf("\n## Retried candidate\n\nPrevious run: %s. The kept candidate %s (original base %s) is available for inspection, but was not checked out because this run starts on the trunk to resolve the kept-work conflict.\n\nPrevious hold:\n\n%s\n", c.RunID, c.HeadSHA, c.BaseSHA, quoteBriefLines(c.Detail))
+	} else {
+		brief += retryCandidateBrief(spec.RetryCandidate)
+	}
 	if spec.Returned != nil {
 		previous := returnedBrief(*spec.Returned)
 		if capability == run.EndingCallSuspends {
