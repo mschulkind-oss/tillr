@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -65,8 +66,11 @@ type RevertOutcome struct {
 	// carry. It is "" exactly when Reverted is set.
 	Refused string
 	// StillRed is set when a failing check still fails on the tip with the landing
-	// reverted: the attribution did not explain the red, so the fixer starts from the tip.
+	// reverted: the attribution did not explain the red and must be searched again.
 	StillRed bool
+	// When one of several attributed checks refutes the revert, only that
+	// check's attribution was disproved.
+	stillRedCheck string
 }
 
 func heavyGitOutput(ctx context.Context, root string, args ...string) (string, error) {
@@ -312,7 +316,6 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 				if retry[0].Result == "stalled" {
 					check.Stalls = 2
 					check.Result = "fail"
-					check.FirstRedLanding = run.TipSHA
 					check.Detail = "second stall on the same tip"
 				} else {
 					// A green retry does not erase the first stall, but it is not a failing verdict.
@@ -379,8 +382,6 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 			switch {
 			case check.RevertedBy != "":
 				continue
-			case a.offered && a.stillRed && against != run.TipSHA:
-				against = run.TipSHA
 			case !a.offered && a.bisected:
 				bisected[check.CheckID] = true
 			}
@@ -423,6 +424,10 @@ func (r HeavyRunner) attribute(ctx context.Context, run HeavyRun, check *HeavyCh
 	// names one, otherwise the tip. A red with no named landing still gets a mover
 	// (graph design, Section 8.2: the mechanic for an unattributed red); it is
 	// never left holding landings while nobody acts.
+	if check.Stalls >= 2 {
+		check.FirstRedLanding = ""
+		return run.TipSHA, false, nil // A stall is not a proved pass-to-fail transition.
+	}
 	against = check.FirstRedLanding
 	if check.FirstRedLanding == "" {
 		red, fault, reason, err := r.findFirstRed(ctx, run, *check)
@@ -503,15 +508,18 @@ func (r HeavyRunner) attribute(ctx context.Context, run HeavyRun, check *HeavyCh
 // revert offers each bisected landing to Revert before any fixer is filed, and answers
 // the landings that still need one. A reverted landing leaves the list and its checks
 // name the revert. A refused revert keeps its fixer, and the reason rides on its checks
-// into the fixer's brief; when the check stayed red with the landing reverted, its
-// fixer moves to the tip, because the landing did not explain the red. A revert that
-// failed for its own reasons is a refusal too: the red keeps a mover either way.
+// into the fixer's brief. A failed inverse triggers fresh attribution before a
+// fixer is filed.
 func (r HeavyRunner) revert(ctx context.Context, run *HeavyRun, order []string, byLanding map[string][]HeavyCheck, bisected map[string]bool, reverted map[string]string) ([]string, error) {
 	if r.Revert == nil {
 		return order, nil
 	}
 	remaining := []string{}
-	moved := []HeavyCheck{}
+	type movedRepair struct {
+		sha   string
+		check HeavyCheck
+	}
+	var moved []movedRepair
 	for _, sha := range order {
 		var eligible, keep []HeavyCheck
 		for _, check := range byLanding[sha] {
@@ -530,16 +538,19 @@ func (r HeavyRunner) revert(ctx context.Context, run *HeavyRun, order []string, 
 				}
 			}
 			for _, check := range eligible {
-				check.RevertedBy, check.RevertRefused = out.Reverted, out.Refused
+				against, err := r.resolveRevert(ctx, *run, &check, sha, out)
+				if err != nil {
+					return nil, err
+				}
 				for i := range run.Checks {
 					if run.Checks[i].CheckID == check.CheckID {
 						run.Checks[i] = check
 					}
 				}
 				switch {
-				case out.Reverted != "":
-				case out.StillRed && sha != run.TipSHA:
-					moved = append(moved, check)
+				case check.RevertedBy != "":
+				case against != sha:
+					moved = append(moved, movedRepair{against, check})
 				default:
 					keep = append(keep, check)
 				}
@@ -550,13 +561,58 @@ func (r HeavyRunner) revert(ctx context.Context, run *HeavyRun, order []string, 
 			remaining = append(remaining, sha)
 		}
 	}
-	if len(moved) > 0 {
-		if len(byLanding[run.TipSHA]) == 0 {
-			remaining = append(remaining, run.TipSHA)
+	for _, repair := range moved {
+		if len(byLanding[repair.sha]) == 0 {
+			remaining = append(remaining, repair.sha)
 		}
-		byLanding[run.TipSHA] = append(byLanding[run.TipSHA], moved...)
+		byLanding[repair.sha] = append(byLanding[repair.sha], repair.check)
 	}
 	return remaining, nil
+}
+
+// A failed inverse refutes the landing as the sole explanation for this red.
+// Discard the remembered result and search with fresh focused verdicts. Only a
+// different attribution can authorize another revert; otherwise repair the tip.
+func (r HeavyRunner) resolveRevert(ctx context.Context, run HeavyRun, check *HeavyCheck, landing string, out RevertOutcome) (string, error) {
+	check.RevertedBy, check.RevertRefused = out.Reverted, out.Refused
+	if !out.StillRed || out.stillRedCheck != "" && out.stillRedCheck != check.CheckID {
+		return landing, nil
+	}
+	discard := func(sha, reason string) error {
+		check.FirstRedLanding, check.RevertRefused = "", ""
+		check.Detail = joinDetail(check.Detail, "Automatic revert of "+shortSHA(sha)+" for "+check.CheckID+" was not possible: "+reason)
+		return r.forgetHeavyAttribution(ctx, check.CheckID)
+	}
+	if err := discard(landing, out.Refused); err != nil {
+		return "", err
+	}
+	r.progressf("loop: heavy %s discarded attribution to %s after a red revert; searching again\n", check.CheckID, shortSHA(landing))
+	// Keep original failure evidence separate from the attribution notes. Do
+	// not memoize the retry's attribution until a later proof sees it again.
+	retry := *check
+	retry.Detail = ""
+	fresh := context.WithValue(ctx, freshHeavyAttributionKey{}, true)
+	against, found, err := r.attribute(fresh, run, &retry)
+	if err != nil {
+		return "", err
+	}
+	check.FirstRedLanding, check.GateFault = retry.FirstRedLanding, retry.GateFault
+	check.Detail = joinDetail(check.Detail, retry.Detail)
+	if against == landing || check.FirstRedLanding == landing {
+		check.FirstRedLanding = ""
+		return run.TipSHA, nil
+	}
+	if found {
+		revised, err := r.offerRevert(ctx, run.TipSHA, against, []HeavyCheck{*check})
+		if err != nil {
+			return "", err
+		}
+		if revised.StillRed {
+			return run.TipSHA, discard(against, revised.Refused)
+		}
+		check.RevertedBy, check.RevertRefused = revised.Reverted, revised.Refused
+	}
+	return against, nil
 }
 
 // offerRevert asks Revert about one landing. A revert that failed for its own reasons is
@@ -658,6 +714,9 @@ func joinDetail(old, add string) string {
 	if old = strings.TrimSpace(old); old == "" {
 		return add
 	}
+	if add == "" {
+		return old
+	}
 	return old + "; " + add
 }
 func heavyLandings(ctx context.Context, root, storePath, base, tip string) ([]string, error) {
@@ -732,7 +791,8 @@ func (r HeavyRunner) hasLandingRecord(ctx context.Context, sha string) (bool, er
 func (r HeavyRunner) replay(ctx context.Context, sha, id, why string) (bool, error) {
 	// A commit's tree never changes, so a verdict already reached for (sha, id) holds across
 	// a restart that cut the culprit search short. The heavy lock owns the file.
-	if dir, derr := heavyDirectory(ctx, r.Root); derr == nil {
+	fresh, _ := ctx.Value(freshHeavyAttributionKey{}).(bool)
+	if dir, derr := heavyDirectory(ctx, r.Root); !fresh && derr == nil {
 		if saved, ok := readHeavyReplay(dir, sha, id); ok {
 			r.progressf("loop: heavy %s reused replay at %s (%s): %s\n", id, shortSHA(sha), why, map[bool]string{true: "red", false: "green"}[saved])
 			return saved, nil
@@ -772,7 +832,18 @@ func (r HeavyRunner) firstRed(ctx context.Context, base, tip, id string, reads [
 	})
 }
 
-func (r HeavyRunner) searchFirstRed(ctx context.Context, base, tip string, reads []string, replay func(sha, why string) (bool, error)) (string, bool, string, error) {
+func (r HeavyRunner) searchFirstRed(ctx context.Context, base, tip string, reads []string, judge func(sha, why string) (bool, error)) (string, bool, string, error) {
+	verdicts := map[string]bool{}
+	replay := func(sha, why string) (bool, error) {
+		if red, ok := verdicts[sha]; ok {
+			return red, nil
+		}
+		red, err := judge(sha, why)
+		if err == nil {
+			verdicts[sha] = red
+		}
+		return red, err
+	}
 	if base == "" {
 		return "", true, "no proved baseline", nil
 	} // no proved baseline: never accuse a commit without one
@@ -809,12 +880,44 @@ func (r HeavyRunner) searchFirstRed(ctx context.Context, base, tip string, reads
 	if !red {
 		return "", true, "the last candidate commit touching the check's reads is green", nil
 	}
+	// The filtered bracket is only a shortcut: a green candidate is not
+	// necessarily the next candidate's parent. Never blame the latter until
+	// the real parent has a passing verdict.
+	for {
+		candidate, err := bisectHeavyRed(commits, replay)
+		if err != nil {
+			return "", false, "", err
+		}
+		parent, err := heavyGitOutput(ctx, r.Root, "rev-parse", candidate+"^1")
+		if err != nil {
+			return "", false, "", err
+		}
+		red, err := replay(parent, "the first parent of candidate "+shortSHA(candidate))
+		if err != nil {
+			return "", false, "", err
+		}
+		if !red {
+			return candidate, false, "", nil
+		}
+		// The watches missed a red parent. Search the full first-parent prefix
+		// ending at that parent, whose red verdict is already established.
+		i := slices.Index(allCommits, parent)
+		if i < 0 {
+			return "", true, "red parent lies outside the first-parent range", nil
+		}
+		commits = allCommits[:i+1]
+	}
+}
+
+// bisectHeavyRed takes a contiguous (or watch-filtered) sequence with an
+// established green predecessor and red last commit.
+func bisectHeavyRed(commits []string, replay func(sha, why string) (bool, error)) (string, error) {
 	low, high := 0, len(commits)-1
 	for low < high {
 		mid := (low + high) / 2
 		red, err := replay(commits[mid], fmt.Sprintf("commit %d of %d, between %d and %d", mid+1, len(commits), low+1, high+1))
 		if err != nil {
-			return "", false, "", err
+			return "", err
 		}
 		if red {
 			high = mid
@@ -822,7 +925,7 @@ func (r HeavyRunner) searchFirstRed(ctx context.Context, base, tip string, reads
 			low = mid + 1
 		}
 	}
-	return commits[low], false, "", nil
+	return commits[low], nil
 }
 
 func ReadHeavyStatus(ctx context.Context, root, storePath string) (HeavyStatus, error) {

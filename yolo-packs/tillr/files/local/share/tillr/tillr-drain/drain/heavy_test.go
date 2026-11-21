@@ -230,10 +230,10 @@ func TestHeavyFirstRedSkipsCommitsNotTouchingReadsAndFilesAgainstTipWhenNoneTouc
 		if len(fixes) != 1 || fixes[0] != culprit {
 			t.Fatalf("fixes=%v, want [%s]", fixes, culprit)
 		}
-		for _, sha := range replayed {
-			if sha == doc1 || sha == doc2 {
-				t.Fatalf("replayed commit %s that did not touch check reads; replayed=%v", sha, replayed)
-			}
+		// The first parent is required evidence even when it did not touch the
+		// declared reads. The later unrelated commit is still skipped.
+		if strings.Join(replayed, " ") != strings.Join([]string{base, culprit, doc1}, " ") {
+			t.Fatalf("replayed=%v, want base %s, candidate %s and parent %s, but not %s", replayed, base, culprit, doc1, doc2)
 		}
 	})
 
