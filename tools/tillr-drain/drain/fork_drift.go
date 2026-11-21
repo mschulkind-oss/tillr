@@ -323,6 +323,9 @@ func (l *Loop) fileForkRebase(ctx context.Context, o forkObservation) (string, e
 		var open string
 		var last forkObservation
 		for _, e := range events {
+			if e.Kind != forkRebaseKind {
+				continue
+			}
 			var prev forkObservation
 			if err := json.Unmarshal(e.Payload, &prev); err != nil {
 				return err
