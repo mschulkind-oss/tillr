@@ -22,7 +22,7 @@ func (s *LaneStager) workflowNodeBrief(spec StageSpec, brief string, landing boo
 	if landing && plannedWritePiece(*spec.Node) {
 		// The runner recognizes this generated line immediately after the node header.
 		brief += "An unchanged piece may finish without a commit.\n"
-		brief += "If verification shows this piece's criteria already hold at the staged lane HEAD and the worktree is clean, leave both unchanged. Finish with RESULT: done. This is an exception to the general commit requirement, not an obstacle; do not make an empty commit or call land. If a change is needed, follow the ordinary commit and finishing instructions.\n"
+		brief += "If verification shows this piece's criteria already hold at the staged lane HEAD and the worktree is clean, leave both unchanged. Report what you verified, including each command and result, and finish with RESULT: done. This is an exception to the general commit requirement, not an obstacle; do not make an empty commit or call land. If a change is needed, follow the ordinary commit and finishing instructions.\n"
 	}
 	if spec.Node.Prompt != "" {
 		brief += "\nNode task: " + spec.Node.Prompt + "\n"

@@ -71,7 +71,7 @@ func TestLandingCallOfferAndFooterSettlement(t *testing.T) {
 					return err
 				}
 				dir := l.laneDirPath(d.LaneID)
-				if c.RunID != d.RunRequest.RunID || c.Base != l.laneBase(d.LaneID) || c.Commit != l.headOf(context.Background(), d.LaneID) || c.SessionID != "33b5f2d2-0cd4-4a49-b293-c58f5635561f" || c.Worktree != l.laneTarget(d.LaneID) || c.RunLog != filepath.Join(dir, c.RunID+".log") {
+				if c.RunID != d.RunRequest.RunID || c.Base != l.laneBase(d.LaneID) || c.Commit != l.headOf(context.Background(), d.LaneID) || c.Summary != "candidate" || c.SessionID != "33b5f2d2-0cd4-4a49-b293-c58f5635561f" || c.Worktree != l.laneTarget(d.LaneID) || c.RunLog != filepath.Join(dir, c.RunID+".log") {
 					t.Fatalf("incorrect call: %+v", c)
 				}
 				return nil
@@ -862,7 +862,7 @@ func TestLandingCallAnswersJudgeAndRevertFromTheirDurableRecords(t *testing.T) {
 			})
 			switch outcome {
 			case "judge":
-				c := Candidate{RunID: "different-candidate", ItemID: "item-a", Judge: &JudgeReceipt{Writers: []JudgeWriter{{RunID: "writer"}}, Raw: json.RawMessage(`{"verdicts":[{"criterion_id":"c1","verdict":"not-done","reason":"check failed","evidence":["commit:head"]},{"criterion_id":"c2","verdict":"not-done","reason":"missing candidate test","evidence":["node:work"]}]}`)}}
+				c := Candidate{RunID: "different-candidate", ItemID: "item-a", Judge: &JudgeReceipt{Writers: []JudgeWriter{{RunID: "writer"}}, Raw: json.RawMessage(`{"verdicts":[{"criterion_id":"c1","verdict":"not-done","reason":"check failed","evidence":["commit:head"]},{"criterion_id":"c2","verdict":"not-done","reason":"report-only: missing results","evidence":["node:work"]}]}`)}}
 				if err := l.holdJudge(ctx, c, "judge", ReasonEvalFailed, "check failed", &LoopResult{}); err != nil {
 					t.Fatal(err)
 				}
@@ -882,9 +882,9 @@ func TestLandingCallAnswersJudgeAndRevertFromTheirDurableRecords(t *testing.T) {
 					return err
 				}
 				if outcome == "judge" {
-					want := []landingFinding{{CriterionID: "c1", Scope: "content"}, {CriterionID: "c2", Scope: "content"}}
-					if answer.Kind != "refused" || answer.Stage != "judge" || !reflect.DeepEqual(answer.Findings, want) ||
-						!strings.Contains(answer.Text, "Criterion c1 (content): check failed") || !strings.Contains(answer.Text, "Criterion c2 (content): missing candidate test") ||
+					want := []landingFinding{{CriterionID: "c1", Scope: "content"}, {CriterionID: "c2", Scope: "report"}}
+					if answer.Kind != "refused" || answer.Stage != "judge" || answer.reportOnly() || !reflect.DeepEqual(answer.Findings, want) ||
+						!strings.Contains(answer.Text, "Criterion c1 (content): check failed") || !strings.Contains(answer.Text, "Criterion c2 (report): missing results") ||
 						!reflect.DeepEqual(answer.Evidence, []string{"commit:head", "node:work"}) {
 						t.Fatalf("judge answer: %+v", answer)
 					}

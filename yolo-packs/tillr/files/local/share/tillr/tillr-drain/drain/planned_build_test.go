@@ -611,7 +611,7 @@ func (s *noSplitReportSteps) Run(ctx context.Context, req run.Request) (run.Reco
 		if s.dirtyPiece {
 			writeForkFile(s.t, filepath.Join(target, "tools/item-a/scratch"), "uncommitted\n")
 		}
-		report = "RESULT: done\n"
+		report = "git show HEAD:tools/item-a/built.go: package built (already committed)\n\nRESULT: done\n"
 	case req.NodeID == "verify":
 		s.verifies++
 		head := runGit(s.t, target, "rev-parse", "HEAD")
@@ -708,15 +708,15 @@ func TestPlannedWritePieceAlreadySatisfied(t *testing.T) {
 			}
 			brief := steps.briefs["work/piece-mirror"][0]
 			if !strings.Contains(brief, "An unchanged piece may finish without a commit.") ||
-				!strings.Contains(brief, "Finish with RESULT: done.") || strings.Contains(brief, "Report what you verified") {
+				!strings.Contains(brief, "finish with RESULT: done") {
 				t.Fatal("piece brief does not explain how to finish without a commit")
 			}
 			if tc.capability == run.EndingCallSuspends && !strings.Contains(brief, "Otherwise, this run ends with one tool call") {
 				t.Fatal("Finishing does not exempt the unchanged piece from the tool call requirement")
 			}
 			report, err := os.ReadFile(filepath.Join(RunDir(f.root, steps.mirrorRun), "node-report.md"))
-			if err != nil || strings.TrimSpace(string(report)) != "RESULT: done" {
-				t.Fatalf("unchanged piece ending = %q, err = %v", report, err)
+			if err != nil || !strings.Contains(string(report), "git show HEAD:tools/item-a/built.go: package built (already committed)") {
+				t.Fatalf("verification report = %q, err = %v", report, err)
 			}
 		})
 	}

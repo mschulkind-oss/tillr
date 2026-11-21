@@ -67,9 +67,9 @@ The rulings of [the graph design, Section 1](./tillr-graph-is-the-path.md#1-the-
 | The landing principles that superseded the board documents say nothing for or against it | `rg -n -i 'suspend\|tool call' docs/design/landing-principles.md` returned nothing relevant |
 | The graph design makes the call the form of a stated ending | [Its Section 3.3](./tillr-graph-is-the-path.md#33-endings), rule 1 |
 
-**The footer path**, which [Section 9](#9-what-this-replaces) maps onto the landing call:
+**What tillr does today at a run's end**, which [Section 9](#9-what-this-replaces) maps onto the new form:
 
-- A footer worker ends with `RESULT: done`, or with a named obstacle and `RESULT: blocked` ([the brief template](../../tools/tillr-run/backends/brief-template.md), "Report shape"). No summary is required.
+- The worker's brief ends with a report whose last line is `RESULT: done` or `RESULT: blocked` ([the brief template](../../tools/tillr-run/backends/brief-template.md), "Report shape").
 - On pi, the extension [`keep-going.ts`](../../tools/tillr-run/backends/pi/keep-going.ts) answers a worker that stops without a commit or a footer, inside the same session, with no count.
 - The drain then examines the run: fence, optional judge, gate, lander. A refusal dispatches the item again as `returned-with-evidence`, in the worker's own session when the adapter can resume it, with the evidence as a new user message ([the drain's guide](../../tools/tillr-drain/README.md#a-refused-run-goes-back-to-its-worker)).
 - A squash conflict and a reverted landing return to the session that wrote the change, as a new user message, when its lane and session remain. Otherwise a fresh session starts with the evidence and the reason is recorded: `lane-unavailable`, `session-missing` or `seat-changed`. This is step 1 of [Section 10](#10-build-order), landed on 2026-11-18.
@@ -86,7 +86,7 @@ Each term is used in this sense for the rest of the document.
 | **Node** | One act on an item, recorded in the item's graph, with a stated ending ([the graph design](./tillr-graph-is-the-path.md#31-node-kinds)) | Not a session: several nodes can continue one session |
 | **Trunk** | The branch landings go to, `main` here | — |
 | **Landing** | The lander ([`tillr-land`](../../tools/tillr-land/README.md)) putting an item's change on the trunk as one squashed commit | Not the push to a remote |
-| **Offer** *(coined here)* | The commit at the head of the item's branch at the moment the worker calls `land` | Not the worktree's uncommitted state, and not a later commit |
+| **Offer** *(coined here)* | The commit at the head of the item's branch at the moment the worker calls `land`, with the call's summary | Not the worktree's uncommitted state, and not a later commit |
 | **Landing call** *(coined here)* | One invocation of `land`, identified by the tool call id the harness gave it | Not the item: an item may make several calls |
 | **Park** *(coined here)* | The harness ends its process on purpose with a tool call that has no result yet | Not a kill, and not a process that waits |
 | **Answer** *(coined here)* | The one result delivered to the worker for a landing call. A call has at most one | Not every outcome: a landing that holds is recorded and never delivered |
@@ -102,9 +102,13 @@ A worker's run ends in a tool call. There is no report to compose and no last li
 
 ### 3.1 The call
 
-**`land` takes no arguments.** The judge reads the item's words and criteria and verifies the
-commit itself; it does not judge the worker's account of the work. The worker cannot offer
-anything but its own branch head.
+`land` takes one argument:
+
+| Argument | Type | Meaning |
+| :--- | :--- | :--- |
+| `summary` | text, required, at most 2,000 characters | What changed and which verification commands ran with what result. It is kept for the item's page and decides nothing |
+
+**It takes no claim about criteria.** A claim the machinery does not check is narration, and a judge that checks criteria reads them itself. It takes no commit id either: the worker cannot offer anything but its own branch head.
 
 **Calling it means one thing: the commit at the head of this branch, now, is my change; put it on the trunk.** Work that is not committed is not offered.
 
@@ -121,8 +125,6 @@ The tool checks the offer before it parks. A failed check returns immediately, a
 | The session still owes a wake to a background task (a task started with a wake-on-completion policy that has not ended) | The task |
 
 The last row exists because a parked session cannot take a wake: the process that would receive it is gone.
-Historical report-only refusals no longer disqualify a commit, and an explicit operator retry
-may reopen the retained candidate.
 
 ### 3.3 What can come back
 
@@ -175,6 +177,7 @@ You are running unattended. Nobody reads a message from you. This run ends with 
 tool call, and a message without it is not an ending: you will be asked to continue.
 
 Call `land` when your change is committed on this branch and its verification has run.
+Give it a `summary`: what changed, and each verification command with its result.
 
 The commit at the head of this branch when you call is what you offer. Uncommitted work
 is not offered, and the call returns at once, naming the paths, if there is any.
@@ -230,7 +233,7 @@ The call record lives in tillr's store and the drain is its only writer. The har
 | Field | Written when |
 | :--- | :--- |
 | Call id, tool name, item, node and run, session id and transcript path, worktree path, adapter and ending capability | The offer is recorded |
-| Offer commit, base commit | The offer is recorded |
+| Offer commit, base commit, summary | The offer is recorded |
 | Landed commit; revert commit | The lander's and the revert's records are written |
 | Answer: kind, stage, evidence references | An answer is chosen |
 | Delivery: form, the run it was delivered in, time | The harness reports the result written |
@@ -292,10 +295,10 @@ sequenceDiagram
     participant P as pi process
     participant T as land tool
     participant D as Drain
-    M->>P: tool call land(), id C
+    M->>P: tool call land(summary), id C
     P->>T: execute(C)
     T->>T: checks of Section 3.2
-    T->>D: offer file for C (commit)
+    T->>D: offer file for C (commit, summary)
     T->>P: park
     P->>P: save transcript, emit parked event, exit 0
     D->>D: record call.offered, run the landing nodes
@@ -401,12 +404,12 @@ Three alternatives raised during step 7's intake are rejected:
 
 When a worker run's staged ending capability is `call-suspends`, `run-claude` wires four pieces around `claude -p`:
 
-1. **Adapter-managed stdio MCP server (`tillr`).** `run-claude` generates an MCP configuration file in the run's own durable directory and passes `--mcp-config <file>` alongside its existing `--strict-mcp-config` (`D-CB1` in [the Claude backend design](./tillr-claude-backend.md); `--mcp-config` is repeatable, so any policy `--mcp-config` in `harness_args` still loads while ambient account connectors stay off). The `tillr` server exposes `land` (no arguments) and `obstacle` (`kind` and that kind's lowercase fields), which Claude Code names `mcp__tillr__land` and `mcp__tillr__obstacle` on the wire even when `--tools` restricts built-in tools. Its `initialize` `instructions` tell the model that `mcp__tillr__land` and `mcp__tillr__obstacle` implement the brief's `land` and `obstacle` calls.
+1. **Adapter-managed stdio MCP server (`tillr`).** `run-claude` generates an MCP configuration file in the run's own durable directory and passes `--mcp-config <file>` alongside its existing `--strict-mcp-config` (`D-CB1` in [the Claude backend design](./tillr-claude-backend.md); `--mcp-config` is repeatable, so any policy `--mcp-config` in `harness_args` still loads while ambient account connectors stay off). The `tillr` server exposes `land` (`summary`) and `obstacle` (`kind` and that kind's lowercase fields), which Claude Code names `mcp__tillr__land` and `mcp__tillr__obstacle` on the wire even when `--tools` restricts built-in tools. Its `initialize` `instructions` tell the model that `mcp__tillr__land` and `mcp__tillr__obstacle` implement the brief's `land` and `obstacle` calls.
 2. **`PreToolUse` hook (`deny`, `defer`, `allow`).** `run-claude` passes `--settings <generated-settings>` while keeping `--setting-sources ""` so user and project hooks remain off (merging any `--settings` from `harness_args` if present). On `PreToolUse`, Claude Code passes `session_id`, `transcript_path`, `cwd`, `tool_name`, `tool_input`, and `tool_use_id` on standard input:
    - **Replay delivery (`allow`):** If `landing-answer.json` in the run's durable directory has `call_id == tool_use_id`, the hook returns `permissionDecision: "allow"`. Claude Code then calls the MCP `tillr` server (`tools/call`, carrying `_meta["claudecode/toolUseId"]`), which reads `landing-answer.json` and returns `{ content: [{ type: "text", text: answer.text }], isError: true }` as that call's `tool_result`.
    - **Idempotent re-park (`defer`):** If `landing-offer.json` or `landing-state.json`'s `open` list already holds `tool_use_id` and no answer file matches, the hook returns `permissionDecision: "defer"` again.
-   - **Immediate checks (`deny`):** Otherwise, for `mcp__tillr__land` or `mcp__tillr__obstacle`, the hook runs the [Section 3.2](#32-what-is-answered-at-once) checks (clean worktree via `git status --porcelain=v1 --untracked-files=all`, `HEAD != base`, `HEAD` not already refused in `landing-state.json`, no other unanswered open call after unlinking any `landing-offer.json` whose `call_id` already has a `tool_result` in `transcript_path`; or for `obstacle`, valid `kind`, required fields, repository-relative `paths`, and an attempt on `seat`). Pi's `stop-at-gap --owed-wakes` journal check does not apply because Claude Code does not load Pi's detached background-task extension. On any failed check, the hook returns `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "<reason>"}}`, which Claude Code delivers immediately in-session as an error `tool_result` without ending the turn or the process.
-   - **Offer and park (`defer`):** When the checks pass, the hook writes `landing-offer.json` atomically (`call_id`, `tool` when `obstacle`, `commit` when `land`, `base`, `obstacle` when applicable, and `transcript: transcript_path`) and returns `permissionDecision: "defer"`.
+   - **Immediate checks (`deny`):** Otherwise, for `mcp__tillr__land` or `mcp__tillr__obstacle`, the hook runs the [Section 3.2](#32-what-is-answered-at-once) checks (non-empty `summary`, clean worktree via `git status --porcelain=v1 --untracked-files=all`, `HEAD != base`, `HEAD` not already refused in `landing-state.json`, no other unanswered open call after unlinking any `landing-offer.json` whose `call_id` already has a `tool_result` in `transcript_path`; or for `obstacle`, valid `kind`, required fields, repository-relative `paths`, and an attempt on `seat`). Pi's `stop-at-gap --owed-wakes` journal check does not apply because Claude Code does not load Pi's detached background-task extension. On any failed check, the hook returns `{"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "<reason>"}}`, which Claude Code delivers immediately in-session as an error `tool_result` without ending the turn or the process.
+   - **Offer and park (`defer`):** When the checks pass, the hook writes `landing-offer.json` atomically (`call_id`, `tool` when `obstacle`, `commit` when `land`, `base`, `summary` or `obstacle`, and `transcript: transcript_path`) and returns `permissionDecision: "defer"`.
    - **Sibling-call guard:** Once an unanswered `landing-offer.json` exists in the current invocation, `PreToolUse` denies any subsequent sibling tool call in the same assistant batch so neither `HEAD` nor the worktree can move after the offer is recorded. Conversely, if Claude Code ever ignores `defer` (for example, in a non-streamed multi-tool batch where Claude Code treats `defer` as solo-only) and invokes MCP `tools/call` without a matching `landing-answer.json`, the MCP handler unlinks any matching `landing-offer.json` and returns `isError: true` instructing the worker to call `land` or `obstacle` by itself.
 3. **`Stop` hook (missing-call nudge).** Configured in the same generated `--settings`. Because Claude Code skips `Stop` hooks when a turn ends with `stop_reason: "tool_deferred"`, `Stop` fires only when the worker stops with a plain message (`end_turn`). Unless the run's pause-request file exists or the `(head, status, content, text)` fingerprint matches the previous `Stop` nudge in the run's durable directory (keyed by fingerprint rather than `stop_hook_active`, because Claude Code keeps `stop_hook_active: true` across subsequent tool calls within the same prompt), `Stop` returns `{"decision": "block", "reason": "..."}` nudging the worker to finish by calling `land` or `obstacle`.
 4. **Promptless resume and fallback in `run-claude`.** When `TILLR_SESSION_MODE=resume` and `landing-answer.json` is staged in the run's durable directory:
@@ -424,7 +427,7 @@ When a worker run's staged ending capability is `call-suspends`, `run-claude` wi
 
 ### 8.1 The nodes
 
-- **The work node ends `submitted`, and the call is its stated ending.** The ending record is the offer: call id and commit. It is written by the tool, not composed by the model.
+- **The work node ends `submitted`, and the call is its stated ending.** The ending record is the offer: call id, commit, summary. It is written by the tool, not composed by the model.
 - **The gate run, the judge and the land attempt are nodes**, as [the graph design](./tillr-graph-is-the-path.md#31-node-kinds) has them. They run against the offer's commit. This design adds none.
 - **"The session is suspended" means no node of the item is running that uses it.** The item waits on its landing nodes. The session and its open call are assets of the done work node.
 - **An answer is what makes the next node a resume.** The rule table adds a resume node with a `resumes` edge to the node that made the call, and the resume's one message is the answer, delivered in the form of [Section 5.3](#53-delivery-forms). The resume ends, in its turn, with a new call.
@@ -522,7 +525,7 @@ A landing that the full suite later reverts should come back as the answer to th
 
 | ID | Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
-| `D-LC1` | A worker's run ends with `land`, with no arguments. The commit at the branch head at that moment is the offer. **Rejected:** a claimed-criteria argument or worker summary (neither is evidence) and a commit argument (the worker has one branch). The owner removed the original required summary on 2026-11-21. | 2026-11-18, amended 2026-11-21 | [Section 3.1](#31-the-call) | Yes on Pi and Claude Code |
+| `D-LC1` | A worker's run ends with the tool call `land`, which takes a summary and nothing else. The commit at the branch head at that moment is the offer. **Rejected:** a claimed-criteria argument (narration nobody checks) and a commit argument (the worker has one branch). | 2026-11-18 | [Section 3.1](#31-the-call) | Yes on pi (`land.ts`, `run-pi`, `fe2e7a2b9`); queued on Claude Code (`D-LC12`) |
 | `D-LC2` | Checks the worker can fix at once (no commit, uncommitted paths, an unchanged offer, a second open call, a wake still owed) return inside the call and end nothing. | 2026-11-18 | [Section 3.2](#32-what-is-answered-at-once) | Yes on pi (`executeLand` in `tools/tillr-run/backends/pi/land.ts`); queued on Claude Code (`D-LC12`) |
 | `D-LC3` | The answers are a closed set: `refused` (fence, judge, gate), `conflict`, `reverted`, `design-answer`. Machinery outcomes and a clean take-in are never answers. | 2026-11-18 | [Section 3.3](#33-what-can-come-back) | Partly: chooser and failing-case triage (`chooseLandingCallAnswer`, `fc5cd652a`) and pi `tool-result` delivery (`run-pi`, `reconcileLandingDelivery`) are built; step 5 (`reverted`/`conflict` while holding open to proof) and Claude Code delivery remain |
 | `D-LC4` | A named obstacle is a second tool, `obstacle`, with typed fields. **Rejected:** an argument of `land`, which would admit an offer that is also a refusal; and keeping the footer on a harness that can suspend. | 2026-11-18 | [Section 3.5](#35-a-named-obstacle-is-a-second-tool) | Yes on pi (`obstacle.ts`, `02aa6caf9`); queued on Claude Code (`D-LC12`) |

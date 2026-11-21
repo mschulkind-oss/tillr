@@ -16,7 +16,7 @@ function readRecord(path: string) {
 const park = { content: [], details: {}, park: true };
 
 export function executeLand(
-	callId: string, cwd: string, durable: string, base: string, fenceFile: string,
+	callId: string, summary: string, cwd: string, durable: string, base: string, fenceFile: string,
 	owedWakes: () => string[], answered: (id: string) => boolean = () => false, transcript = "",
 ) {
 	if (!durable || !base || !fenceFile) throw new Error("The run's scratch, base or fence is not staged.");
@@ -37,6 +37,9 @@ export function executeLand(
 	if (open) throw new Error(`Another land call is open: ${open.call_id}.`);
 	if (state?.open?.some((entry: { call_id: string }) => entry.call_id === callId)) return park;
 	if (answer !== undefined && !answered(answer?.call_id)) throw new Error("The staged landing answer belongs to a different call.");
+	if (typeof summary !== "string" || !summary.trim() || [...summary].length > 2000) {
+		throw new Error("Provide a nonempty summary of at most 2,000 characters.");
+	}
 	const git = (...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" });
 	const commit = git("rev-parse", "--verify", "HEAD").trim();
 	if (commit === base) throw new Error("There is no commit to offer: HEAD is still the staged base.");
@@ -49,15 +52,18 @@ export function executeLand(
 	]);
 	const dirty = [...changed].filter((name) => name && fence.some((prefix) => name === prefix || name.startsWith(`${prefix}/`)));
 	if (dirty.length) throw new Error(`Commit or remove these uncommitted paths inside the fence:\n${dirty.join("\n")}`);
-	const refusal = state?.refused?.find((entry: { commit: string; report_only?: boolean }) =>
-		entry.commit === commit && entry.report_only !== true);
-	if (refusal) throw new Error(`This commit was already refused. A new commit is required.\n${refusal.answer}`);
+	const refusals = state?.refused?.filter((entry: { commit: string }) => entry.commit === commit) ?? [];
+	const content = refusals.find((entry: { report_only?: boolean; summary?: string }) =>
+		entry.report_only !== true || typeof entry.summary !== "string");
+	if (content) throw new Error(`This commit was already refused. A new commit is required.\n${content.answer}`);
+	const duplicate = refusals.find((entry: { summary: string }) => entry.summary === summary);
+	if (duplicate) throw new Error(`This commit was already refused with the same report. Correct the report and offer this commit again.\n${duplicate.answer}`);
 	const wakes = owedWakes();
 	if (wakes.length) throw new Error(`Wait for these background task wakes before calling land: ${wakes.join(", ")}.`);
 
 	const temp = `${path}.${randomUUID()}`;
 	try {
-		writeFileSync(temp, JSON.stringify({ call_id: callId, commit, base, transcript }) + "\n", { mode: 0o600, flag: "wx" });
+		writeFileSync(temp, JSON.stringify({ call_id: callId, commit, base, summary, transcript }) + "\n", { mode: 0o600, flag: "wx" });
 		renameSync(temp, path);
 	} finally {
 		try { unlinkSync(temp); } catch (error: any) { if (error.code !== "ENOENT") throw error; }
@@ -70,14 +76,14 @@ export default function land(pi: any) {
 	pi.registerTool({
 		name: "land",
 		label: "Land",
-		description: "Offer the commit at HEAD for landing, ending this run.",
-		parameters: { type: "object", properties: {}, additionalProperties: false },
+		description: "Offer the commit at HEAD for landing, ending this run. Include what changed and which verification ran.",
+		parameters: { type: "object", required: ["summary"], properties: { summary: { type: "string", maxLength: 2000 } }, additionalProperties: false },
 		// Pi settles execute's value with `.then`, so it must be a promise; async also turns a
 		// throw into a rejection.
-		async execute(callId: string, _args: Record<string, never>, _signal: unknown, _update: unknown, ctx: { cwd: string; sessionManager: { getSessionFile(): string | undefined; getBranch(): { type: string; message?: { role: string; toolCallId?: string } }[] } }) {
+		async execute(callId: string, args: { summary: string }, _signal: unknown, _update: unknown, ctx: { cwd: string; sessionManager: { getSessionFile(): string | undefined; getBranch(): { type: string; message?: { role: string; toolCallId?: string } }[] } }) {
 			const { YOLO_DURABLE_DIR, TILLR_GOAL_BASE, BOARD_DRAIN_BRIEF } = process.env;
 			if (!YOLO_DURABLE_DIR || !TILLR_GOAL_BASE || !BOARD_DRAIN_BRIEF) throw new Error("The run's scratch, base or brief is not staged.");
-			return executeLand(callId, ctx.cwd, YOLO_DURABLE_DIR, TILLR_GOAL_BASE,
+			return executeLand(callId, args.summary, ctx.cwd, YOLO_DURABLE_DIR, TILLR_GOAL_BASE,
 				join(dirname(BOARD_DRAIN_BRIEF), "fence.txt"), () => {
 					const raw = execFileSync("python3", [fileURLToPath(new URL("./stop-at-gap", import.meta.url)), "--owed-wakes", String(process.pid), String(since)], { encoding: "utf8" });
 					const wakes = JSON.parse(raw);

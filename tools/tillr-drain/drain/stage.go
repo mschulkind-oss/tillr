@@ -574,7 +574,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		at := strings.LastIndex(brief, "\n## Finishing\n")
 		brief, ending = brief[:at], brief[at:]
 		if spec.Node != nil && plannedWritePiece(*spec.Node) {
-			ending = strings.Replace(ending, callEndingRequired, "If the piece needs no change, finish with the footer described above.\nOtherwise, this run ends with one tool call; a message without it is not an ending.", 1)
+			ending = strings.Replace(ending, callEndingRequired, "If the piece needs no change, use the verification report described above.\nOtherwise, this run ends with one tool call; a message without it is not an ending.", 1)
 		}
 	}
 	if isFork {
@@ -1438,7 +1438,7 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 		{placeholder: "SETTLED", text: settled},
 		{placeholder: "FACTS", text: facts},
 		{placeholder: "METHOD", text: "The item states no method. Within the fence the order of work is yours; write the failing reproduction first where this repository's rules require one."},
-		{placeholder: "VERIFICATION", text: "None recorded: this item carries no verification command of its own. Run targeted checks for the change."},
+		{placeholder: "VERIFICATION", text: "None recorded: this item carries no verification command of its own. Report every command you ran and its output, and never run the full gate (`just done`)."},
 	}, nil
 }
 
