@@ -1,8 +1,5 @@
-# last_hand_move_event_seq: 1331915
-# hand_move_event_sha256: e4e1696fb145bc79254baf7bf2d9d6144f95424f28d061e205d9f84cdaf779c8
-item-request-1b2a7051b5
-item-request-dd77346d5d
-item-request-4c47582fc2
+# last_hand_move_event_seq: 1332459
+# hand_move_event_sha256: 89c312392c1483d49a682f30bcae2e699ad46ef21ac4c29a85d87fc842cc0005
 item-request-cc2af28a50
 item-request-5be951c300
 item-request-b205fbd881
