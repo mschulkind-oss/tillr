@@ -26,19 +26,12 @@ func Close(ctx context.Context, tx *store.Tx, id, reason, by string, at time.Tim
 	if err != nil {
 		return record.Envelope{}, err
 	}
-	// An item utility can create a store without the land utility's tables.
-	var hasLandings bool
-	if err := tx.Reader().QueryRow(`SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'landings')`).Scan(&hasLandings); err != nil {
-		return record.Envelope{}, Internalf("checking landing schema: %v", err)
+	landed, err := hasCurrentLanding(tx.Reader(), id)
+	if err != nil {
+		return record.Envelope{}, Internalf("reading landings: %v", err)
 	}
-	if hasLandings {
-		var landed bool
-		if err := tx.Reader().QueryRow(`SELECT EXISTS (SELECT 1 FROM landings WHERE item_id = ? AND result = 'landed')`, id).Scan(&landed); err != nil {
-			return record.Envelope{}, Internalf("reading landings: %v", err)
-		}
-		if landed {
-			return record.Envelope{}, Rejectionf("already-landed", id, "item %q has already landed; it cannot be closed", id)
-		}
+	if landed {
+		return record.Envelope{}, Rejectionf("already-landed", id, "item %q has already landed; it cannot be closed", id)
 	}
 	if err := refuseClaimedLanding(tx.Reader(), id, "closed"); err != nil {
 		return record.Envelope{}, err
