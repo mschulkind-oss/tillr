@@ -302,10 +302,15 @@ func effectiveNodeRuns(r *store.Reader, itemID string, attempt int) ([]workflowN
 // Reuse references to accepted predecessor records, never synthetic runs or
 // copied terminal records. The writer and its successors are judged again.
 func carryReturnedNodeInputs(tx *store.Tx, d Decision) error {
-	if d.RunRequest == nil || (!d.RunRequest.SessionTurn && d.WorkerSessionReason != "resume-failed" && !verifyBuildReturn(d.Returned) && !verifyNoVerdictReturn(d.Returned)) || d.Workflow == nil || d.Returned == nil || d.Returned.WorkerSession == nil {
+	var old *WorkerSession
+	if c := d.RetryCandidate; c != nil && c.Available {
+		old = c.WorkerSession
+	} else if d.Returned != nil && d.RunRequest != nil && (d.RunRequest.SessionTurn || d.WorkerSessionReason == "resume-failed" || verifyBuildReturn(d.Returned) || verifyNoVerdictReturn(d.Returned)) {
+		old = d.Returned.WorkerSession
+	}
+	if d.RunRequest == nil || d.Workflow == nil || old == nil {
 		return nil
 	}
-	old := d.Returned.WorkerSession
 	for i := 0; i < d.NodeIndex; i++ {
 		id := d.Workflow.Stages[i].ID
 		source, err := nodeSourceAttempt(tx.Reader(), d.ItemID, old.Attempt, id)
@@ -321,6 +326,9 @@ func carryReturnedNodeInputs(tx *store.Tx, d Decision) error {
 
 // judgedCandidateReturn identifies a retained candidate, not merely a resumed conversation.
 func judgedCandidateReturn(d Decision) *WorkerSession {
+	if c := d.RetryCandidate; c != nil && c.Available && c.Cause == ReasonEvalFailed {
+		return &WorkerSession{RunID: c.RunID, BaseSHA: c.BaseSHA, HeadSHA: c.HeadSHA}
+	}
 	if d.Returned == nil || d.Returned.Cause != ReasonEvalFailed || d.WorkerSessionReason != "resumed-worker" {
 		return nil
 	}

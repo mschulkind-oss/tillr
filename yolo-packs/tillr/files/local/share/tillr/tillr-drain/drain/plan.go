@@ -147,6 +147,9 @@ type Decision struct {
 	// a gate refusal, a run that committed nothing, a fence escape or a refused landing.
 	// Staging writes it into the brief (returnedBrief). It is nil on every other decision.
 	Returned *ReturnedEnding `json:"returned,omitempty"`
+	// RetryCandidate restores recorded judge/obstacle work without resuming its session
+	// or requiring a new code commit. Detail remains visible when the work is missing.
+	RetryCandidate *RetryCandidate `json:"retry_candidate,omitempty"`
 	// RepeatedCall is the repeating-call ending this dispatch answers: the earlier run
 	// whose session pi ended because the model kept repeating one identical call. Staging
 	// writes it into the brief (repeatedCallBrief), and a run dispatched with it that ends
@@ -717,6 +720,19 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			resumeNode := 0
 			retainedGraph := false
 			e := p.returnedEnding(item.ItemID)
+			if retry := p.retryFor(item.ItemID); retry != nil && retry.refusal == "" {
+				c := p.retryCandidate(item.ItemID, retry.supersedesRunID)
+				if c != nil && !c.Available {
+					e = nil
+				}
+				if c != nil && c.Available && c.WorkerSession != nil && c.WorkerSession.Workflow != nil {
+					s := c.WorkerSession
+					if s.NodeIndex >= 0 && s.NodeIndex < len(s.Workflow.Stages) && s.Workflow.Stages[s.NodeIndex].Access == "write" {
+						w, resumeNode, loadErr = s.Workflow, s.NodeIndex, nil
+						retainedGraph = true
+					}
+				}
+			}
 			if e != nil && e.WorkerSession != nil && e.WorkerSession.Workflow != nil && policy != nil && (item.Express || !isExpressLane(e.WorkerSession.LaneID)) && p.retainedLaneFreeFor(e.WorkerSession.LaneID, item.ItemID) {
 				s := e.WorkerSession
 				if s.NodeIndex >= 0 && s.NodeIndex < len(s.Workflow.Stages) {
@@ -810,6 +826,12 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				if w != nil && decision.RunRequest != nil && decision.BlockConflict == nil {
 					decision.Workflow = w
 					decision.NodeIndex = resumeNode
+					if c := decision.RetryCandidate; c != nil && c.Available {
+						decision.NodeBaseSHA = c.BaseSHA
+						if c.WorkerSession != nil && c.WorkerSession.NodeBaseSHA != "" {
+							decision.NodeBaseSHA = c.WorkerSession.NodeBaseSHA
+						}
+					}
 					if decision.RunRequest.SessionTurn && decision.Returned.WorkerSession.Workflow != nil {
 						decision.NodeBaseSHA = decision.Returned.WorkerSession.NodeBaseSHA
 					}
@@ -1170,6 +1192,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 			decision.RetryID = retry.retryID
 			decision.SupersedesRunID = retry.supersedesRunID
 			decision.RunRequest = p.request(item.ItemID, lane, attempt.backend)
+			decision.RetryCandidate = p.retryCandidate(item.ItemID, retry.supersedesRunID)
 			if retriedVerify != nil {
 				// The build step runs with the findings, and the nodes before it are
 				// carried rather than planned again.
@@ -1642,7 +1665,14 @@ func (p *planner) retryFor(itemID string) *retry {
 		}
 	}
 	r := &retry{retryID: row.RetryID, supersedesRunID: row.SupersedesRunID}
-	if p.latest[itemID] != row.SupersedesRunID {
+	latestMatches := p.latest[itemID] == row.SupersedesRunID
+	if e := p.history.endings[row.SupersedesRunID]; !latestMatches && e.Step == ReasonEvalFailed && e.ItemID == itemID {
+		// The finished judge is the operator face's latest run, while prior runs
+		// track the producer. Only that exact durable judge-to-writer link speaks.
+		writer := p.history.judgeWriters[row.SupersedesRunID]
+		latestMatches = writer != "" && writer == p.latest[itemID]
+	}
+	if !latestMatches {
 		// The authorization names a run that is no longer the item's latest: it was
 		// consumed by the retry it authorized, or a newer run ended after it was written.
 		// Either way it no longer speaks, and the item's latest ending routes it, as it
@@ -2192,8 +2222,10 @@ type runHistory struct {
 	gateResults map[string]string
 	// endings is every refusal's own record, keyed by run id: its detail, its failing
 	// checks and its evidence key. A returned ending is built from it.
-	endings       map[string]refusalPayload
-	obstacleCalls map[string]*WorkerSession
+	endings         map[string]refusalPayload
+	obstacleCalls   map[string]*WorkerSession
+	judgeWriters    map[string]string
+	obstacleEndings map[string]obstacles.Hold
 }
 
 // readRunHistory reads the item-object events and answers, per item, whether its history
@@ -2204,14 +2236,14 @@ type runHistory struct {
 // an item state write is an event about an item that says what state the item is in,
 // whatever kind item chose to append.
 func readRunHistory(r *store.Reader) (runHistory, error) {
-	events, err := r.EventsSelected(0, store.EventSelection{Kinds: []string{GateVerdictKind, RefusalKind, callOffered}, ObjectTypes: []string{"item"}})
+	events, err := r.EventsSelected(0, store.EventSelection{Kinds: []string{GateVerdictKind, RefusalKind, callOffered, obstacles.HeldKind}, ObjectTypes: []string{"item"}})
 	if err != nil {
 		return runHistory{}, readFailure(err)
 	}
 	history := runHistory{
 		known: map[string]bool{}, ranBefore: map[string]bool{}, judged: map[string]bool{},
 		refusals: map[string]string{}, judgeHolds: map[string]string{}, gateResults: map[string]string{},
-		endings: map[string]refusalPayload{}, obstacleCalls: map[string]*WorkerSession{},
+		endings: map[string]refusalPayload{}, obstacleCalls: map[string]*WorkerSession{}, judgeWriters: map[string]string{}, obstacleEndings: map[string]obstacles.Hold{},
 	}
 	for _, e := range events {
 		if e.Kind == callOffered && e.ObjectType == "call" {
@@ -2239,6 +2271,15 @@ func readRunHistory(r *store.Reader) (runHistory, error) {
 			}
 			continue
 		}
+		if e.Kind == obstacles.HeldKind {
+			var h obstacles.Hold
+			if err := json.Unmarshal(e.Payload, &h); err != nil {
+				return history, err
+			}
+			if h.RunID != "" {
+				history.obstacleEndings[h.RunID] = h
+			}
+		}
 		if e.Kind == GateVerdictKind && e.ObjectType == "run" && e.ObjectID != nil {
 			history.judged[*e.ObjectID] = true
 			var payload struct {
@@ -2258,6 +2299,7 @@ func readRunHistory(r *store.Reader) (runHistory, error) {
 				history.refusals[*e.ObjectID] = payload.Step
 				history.endings[*e.ObjectID] = payload.refusalPayload
 				if payload.WriterRunID != "" {
+					history.judgeWriters[*e.ObjectID] = payload.WriterRunID
 					history.judgeHolds[payload.WriterRunID] = payload.Step
 					if payload.WorkerSession != nil || payload.Evidence != "" {
 						history.endings[payload.WriterRunID] = payload.refusalPayload

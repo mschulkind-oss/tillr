@@ -761,7 +761,11 @@ func TestRequestSingleWorkerJudgeNotDoneReturnsToBuilderSession(t *testing.T) {
 	t.Run("report only", func(t *testing.T) { testSingleWorkerJudgeReturn(t, true) })
 }
 
-func testSingleWorkerJudgeReturn(t *testing.T, reportOnly bool) {
+func TestOperatorRetryReoffersJudgeCandidate(t *testing.T) {
+	testSingleWorkerJudgeReturn(t, true, true)
+}
+
+func testSingleWorkerJudgeReturn(t *testing.T, reportOnly bool, operatorRetry ...bool) {
 	t.Helper()
 	f, l, base := workflowLoopFixture(t, "")
 	declareWorkerResumeFixture(t, l)
@@ -795,11 +799,33 @@ func testSingleWorkerJudgeReturn(t *testing.T, reportOnly bool) {
 		t.Fatalf("first judge did not run")
 	}
 
-	// Next plan must return to the builder's same session with both c1 and c2 findings.
+	retrying := len(operatorRetry) > 0 && operatorRetry[0]
+	if retrying {
+		writer := steps.workReqs[0]
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			var latest string
+			if err := tx.QueryRow(`SELECT run_id FROM runs WHERE item_id=? ORDER BY started_at DESC,event_seq DESC,rowid DESC LIMIT 1`, id).Scan(&latest); err != nil {
+				return err
+			}
+			_, err := AuthorizeRetry(context.Background(), tx, RetryRequest{ItemID: id, RunID: latest, By: "owner", Why: "Provide the verification report for the retained candidate", At: l.cfg.Now()})
+			return err
+		})
+		tip := conflictTestCommit(t, f.root, "later-trunk.txt", "new trunk\n", "advance trunk after judge refusal")
+		runGit(t, l.laneTarget(writer.LaneID), "reset", "--hard", tip)
+	}
+	// An operator retry reoffers the candidate in a fresh session; the automatic
+	// return still resumes its builder with both findings.
 	var returned bool
 	for _, p := range mustPlan(t, l) {
 		d := p.decision
 		if d.ItemID == id {
+			if retrying {
+				if d.Action != ActionRetry || d.RetryCandidate == nil || !d.RetryCandidate.Available || d.RunRequest == nil || d.RunRequest.SessionTurn {
+					t.Fatalf("expected retained candidate retry: %+v", d)
+				}
+				returned = true
+				continue
+			}
 			if d.Action != ActionDispatch || d.Reason != ReasonReturned || d.RunRequest == nil || !d.RunRequest.SessionTurn {
 				t.Fatalf("expected returned session dispatch, got: %+v", d)
 			}
@@ -829,6 +855,12 @@ func testSingleWorkerJudgeReturn(t *testing.T, reportOnly bool) {
 	}
 	if reportOnly && steps.judgedHeads[0] != steps.judgedHeads[1] {
 		t.Errorf("report-only repair changed the judged commit: %v", steps.judgedHeads)
+	}
+	if retrying {
+		if steps.workReqs[1].SessionTurn || steps.workSessions[1] == steps.workSessions[0] {
+			t.Fatal("operator retry unexpectedly resumed the previous conversation")
+		}
+		return
 	}
 	if !steps.workReqs[1].SessionTurn || steps.workSessions[1] != steps.workSessions[0] {
 		t.Errorf("second worker run did not resume session %s: turn=%v got=%s", steps.workSessions[0], steps.workReqs[1].SessionTurn, steps.workSessions[1])

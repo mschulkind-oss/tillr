@@ -21,6 +21,7 @@ type Hold struct {
 	Fields       map[string]string `json:"fields"`
 	Checks       []string          `json:"checks,omitempty"`
 	BaseSHA      string            `json:"base_sha,omitempty"`
+	HeadSHA      string            `json:"head_sha,omitempty"`
 	AllowedPaths []string          `json:"allowed_paths,omitempty"`
 	Reason       string            `json:"reason"`
 	Mover        string            `json:"mover"`

@@ -289,7 +289,8 @@ type StageSpec struct {
 	Conflict *ConflictBrief
 	// Returned is the earlier run's ending this dispatch carries back to the worker
 	// (Decision.Returned). A non-nil value appends its evidence to the brief.
-	Returned *ReturnedEnding
+	Returned       *ReturnedEnding
+	RetryCandidate *RetryCandidate
 	// RepeatedCall is the repeating-call ending this dispatch answers
 	// (Decision.RepeatedCall). A non-nil value appends its note to the brief.
 	RepeatedCall *RepeatedCall
@@ -429,6 +430,14 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		baseSHA, itemBaseSHA = spec.VerifyReturnHead, spec.VerifyReturnItemBase
 		if !isFork {
 			worktreeSpec.BaseSHA = spec.VerifyReturnHead
+		}
+	}
+	if c := spec.RetryCandidate; c != nil && c.Available {
+		// The head is the checkout start, not the boundary: report-only retries
+		// must still be able to offer the already-authored candidate.
+		baseSHA, itemBaseSHA = c.BaseSHA, c.BaseSHA
+		if spec.Node != nil && c.WorkerSession != nil && c.WorkerSession.NodeBaseSHA != "" {
+			baseSHA = c.WorkerSession.NodeBaseSHA
 		}
 	}
 	itemAllowed := append([]string(nil), recorded.AllowedPaths...)
@@ -619,6 +628,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	if item.IsCommentItem(spec.ItemID) {
 		brief = strings.Replace(brief, "When the work is done, **commit it in the target worktree**", "For a reply-only answer, the task's no-commit exception overrides the ordinary commit requirement below.\n\nWhen the work is done, **commit it in the target worktree**", 1)
 	}
+	brief += retryCandidateBrief(spec.RetryCandidate)
 	if spec.Returned != nil {
 		previous := returnedBrief(*spec.Returned)
 		if capability == run.EndingCallSuspends {
@@ -903,6 +913,20 @@ func (s *LaneStager) ensureForkCheckout(ctx context.Context, spec StageSpec, for
 func (s *LaneStager) ensureWorktree(ctx context.Context, spec StageSpec, laneDir, worktree string) error {
 	if err := os.MkdirAll(laneDir, 0o755); err != nil {
 		return Externalf("creating the lane directory %s: %v", laneDir, err)
+	}
+	if spec.RetryCandidate != nil {
+		if _, err := os.Stat(worktree); err == nil {
+			status, err := s.git(ctx, worktree, "--no-optional-locks", "status", "--porcelain", "--untracked-files=all")
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(status) != "" {
+				first := strings.TrimSpace(strings.Split(strings.TrimSpace(status), "\n")[0])
+				return laneRefusalf(spec.LaneID, ReasonLaneUncommittedWork, "commit or remove the files, or reset the lane deliberately", "lane %s holds uncommitted work (%s)", spec.LaneID, first)
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
 	}
 	if err := s.refuseUnlandedCommit(ctx, spec, worktree); err != nil {
 		return err
