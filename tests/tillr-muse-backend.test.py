@@ -569,6 +569,7 @@ def test_claude_policy(policy):
             "build": "claude",
             "review": "claude",
             "scout": "claude",
+            "classify": "claude",
             "plan": "claude",
             "edit": "claude",
             "test-write": "claude",
@@ -595,7 +596,7 @@ def test_claude_policy(policy):
 
 def test_claude_copilot_policy(policy):
     """Claude on subscription for design, plan, review, verify and build;
-    Copilot for scout, edit, test-write, test-run and docs.
+    Copilot for scout, classify, edit, test-write, test-run and docs.
     """
     check("about" in policy, "the Claude-Copilot policy does not say what it is")
     check(
@@ -610,6 +611,7 @@ def test_claude_copilot_policy(policy):
             "build": "claude",
             "review": "claude",
             "scout": "pi-scout",
+            "classify": "pi-scout",
             "plan": "claude",
             "edit": "pi-build",
             "test-write": "pi-build",

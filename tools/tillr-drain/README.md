@@ -2959,8 +2959,10 @@ refused.
 File with `tillr item request`. Name one fork from `bin/pi-forks.list` and describe the
 change in the words on standard input. Supply `--title` and the required
 repository-relative `--path` entries for the repository fence, not a lane checkout path.
-The `plan` step, or the first read-only step of `single-worker@v1`, records the delivery
-as repository, fork, or both. A path list does not select a fork. Before resuming
+The `plan` step of `planned-build@v1` records the delivery as repository, fork, or
+both. A new `single-worker@v1` item with no recorded target instead uses the
+read-only `classify` seat, which routes to the same backend as `scout` in the
+shipped policies. A path list does not select a fork. Before resuming
 pending fork work, make sure the item's words identify its fork explicitly.
 
 For a fork piece, staging materializes the dispatched lane's checkout and starts it at

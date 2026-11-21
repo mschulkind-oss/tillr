@@ -30,6 +30,20 @@ func TestDeliveryClassificationPrecedesWriterDispatch(t *testing.T) {
 func testDeliveryClassificationDispatch(t *testing.T, workflow string) {
 	f, l, _ := workflowLoopFixture(t, "")
 	l.cfg.Policy.Seats["plan"] = "fixture"
+	l.cfg.Policy.Seats["classify"] = "fixture"
+	wantSeat := "plan"
+	if workflow == "single-worker@v1" {
+		wantSeat = "classify"
+		l.cfg.Policy.Seats["plan"] = "planner"
+		l.cfg.Policy.Seats["design"] = "designer"
+		for _, backend := range []string{"planner", "designer"} {
+			l.cfg.Policy.Backends[backend] = Backend{Adapter: backend}
+			fixtureWrite(t, f, func(tx *store.Tx) error {
+				_, err := tx.Exec(`INSERT INTO backend_windows(backend,kind,fraction,status,reset_at,run_id) VALUES(?,'weekly',1,'refused',?,'window')`, backend, l.cfg.Now().Add(time.Hour).UnixMilli())
+				return err
+			})
+		}
+	}
 	if err := os.Mkdir(filepath.Join(f.root, "bin"), 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -44,18 +58,21 @@ func testDeliveryClassificationDispatch(t *testing.T, workflow string) {
 		writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/planned-build@v1.json"), string(raw))
 	}
 	fixtureWrite(t, f, func(tx *store.Tx) error {
-		_, err := tx.Exec(`UPDATE items SET workflow=? WHERE item_id='item-a'`, workflow)
+		_, err := tx.Exec(`UPDATE items SET workflow=?,seat='build' WHERE item_id='item-a'`, workflow)
 		return err
 	})
-	var got bool
 	for _, p := range mustPlan(t, l) {
-		if d := p.decision; d.ItemID == "item-a" && d.Action == ActionDispatch {
-			got = d.Workflow != nil && d.Seat == "plan" && d.Workflow.Stages[d.NodeIndex].Access == "read_only" && classificationNode(d.Workflow.Stages[d.NodeIndex])
+		d := p.decision
+		if d.ItemID != "item-a" {
+			continue
 		}
+		if d.Action != ActionDispatch || d.Seat != wantSeat || d.RunRequest == nil || d.RunRequest.Backend != "fixture" ||
+			d.Workflow == nil || d.Workflow.Stages[d.NodeIndex].Access != "read_only" || !classificationNode(d.Workflow.Stages[d.NodeIndex]) {
+			t.Fatalf("want first dispatch on read-only %s seat via fixture, got action=%s seat=%s reason=%s deferred_by=%s", wantSeat, d.Action, d.Seat, d.Reason, d.DeferredBy)
+		}
+		return
 	}
-	if !got {
-		t.Fatal("workflow did not dispatch its read-only classifier first")
-	}
+	t.Fatal("missing decision for item-a")
 }
 
 func TestDeliveryPartialReceiptSurvivesRestart(t *testing.T) {
@@ -141,7 +158,7 @@ func (s *mixedDeliverySteps) Land(ctx context.Context, c Candidate) (LandOutcome
 
 func TestDeliveryMixedContinuesAfterLoopRestart(t *testing.T) {
 	f, l, steps := workflowLoopFixture(t, "")
-	l.cfg.Policy.Seats["plan"] = "fixture"
+	l.cfg.Policy.Seats["classify"] = "fixture"
 	if err := os.Mkdir(filepath.Join(f.root, "bin"), 0755); err != nil {
 		t.Fatal(err)
 	}

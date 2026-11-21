@@ -18,6 +18,7 @@ import (
 const deliveryDecisionKind = "drain.delivery-decision"
 const deliveryPartialKind = "drain.delivery-partial"
 const deliveryOutput = "delivery"
+const deliverySeat = "classify"
 
 func init() {
 	for _, kind := range []string{deliveryDecisionKind, deliveryPartialKind} {
@@ -30,7 +31,9 @@ func init() {
 const deliveryPrompt = `Classify delivery from the item's words and repository. Write the required delivery JSON output with kind "repo", "fork", or "both". For fork or both, name exactly one fork using the "fork" field and bin/pi-forks.list. A both decision delivers the fork first. Never infer the target from fence entries. For fork or both, do not use do-it-now and do not propose repository pieces before fork delivery.`
 
 func classificationNode(stage WorkflowStage) bool {
-	return stage.Seat == "plan" && stage.Access == "read_only" && stage.Outputs[deliveryOutput] == "json"
+	// Planned-build planners and previously recorded single-worker graphs
+	// can still carry the delivery output on the plan seat.
+	return (stage.Seat == deliverySeat || stage.Seat == "plan") && stage.Access == "read_only" && stage.Outputs[deliveryOutput] == "json"
 }
 
 func classifyDelivery(root string, artifacts []nodeArtifact, quickWay bool) (*deliveryDecision, error) {
@@ -79,7 +82,7 @@ func planDelivery(w *Workflow, selected string, row itemRow, known map[string]bo
 	}
 	if w == nil && selected == singleWorkerWorkflow && row.Delivery.Kind == "" {
 		return &Workflow{Name: "single-worker", Version: 1, Stages: []WorkflowStage{
-			{ID: "classify", Kind: "agent", Access: "read_only", Seat: "plan", Prompt: deliveryPrompt, Outputs: map[string]string{deliveryOutput: "json"}},
+			{ID: "classify", Kind: "agent", Access: "read_only", Seat: deliverySeat, Prompt: deliveryPrompt, Outputs: map[string]string{deliveryOutput: "json"}},
 			{ID: "work", Kind: "agent", Access: "write", Seat: row.Seat},
 		}, Edges: []WorkflowEdge{{From: "classify", To: "work"}}}
 	}
