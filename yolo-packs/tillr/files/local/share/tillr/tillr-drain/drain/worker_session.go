@@ -362,8 +362,8 @@ func (l *Loop) stageWorkerSession(d *Decision, spec *StageSpec) error {
 	if d.Returned.Cause != RefusalReverted {
 		spec.Continue = true
 		spec.BaseSHA = s.BaseSHA
-		if judgedCandidateReturn(*d) != nil {
-			spec.ReturnedNodeBaseSHA = s.NodeBaseSHA
+		if judgedCandidateReturn(*d) != nil || verifyBuildReturn(d.Returned) || verifyNoVerdictReturn(d.Returned) {
+			spec.KeptItemBaseSHA = s.BaseSHA
 		}
 	}
 	spec.SessionID = s.SessionID

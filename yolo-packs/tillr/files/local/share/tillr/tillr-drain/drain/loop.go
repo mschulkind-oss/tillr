@@ -1453,17 +1453,15 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 		}
 		freshCandidateRetry := decision.RetryCandidate != nil && decision.RetryCandidate.Available
 		if freshCandidateRetry {
-			spec.VerifyReturnHead = decision.RetryCandidate.HeadSHA
-			spec.VerifyReturnItemBase = decision.RetryCandidate.BaseSHA
+			spec.KeptHeadSHA = decision.RetryCandidate.HeadSHA
+			spec.KeptItemBaseSHA = decision.RetryCandidate.BaseSHA
 		}
 		freshVerifyReturn := (decision.Reason == ReasonReturned || decision.Reason == ReasonRetry) && (verifyBuildReturn(decision.Returned) || verifyNoVerdictReturn(decision.Returned)) && !request.SessionTurn
 		if freshVerifyReturn {
-			// A fresh build run starts on the candidate the verifier read, never on the
-			// trunk: Stage cuts the lane at that head (cold or warm), and records the
-			// item's own base as the fence base.
+			// A fresh build run keeps the candidate the verifier read, even on a cold lane.
 			s := decision.Returned.WorkerSession
-			spec.VerifyReturnHead = s.HeadSHA
-			spec.VerifyReturnItemBase = s.BaseSHA
+			spec.KeptHeadSHA = s.HeadSHA
+			spec.KeptItemBaseSHA = s.BaseSHA
 		} else if decision.Reason == ReasonReturned && decision.Returned != nil && !request.SessionTurn &&
 			((decision.Returned.WorkerSession != nil && decision.LaneID == decision.Returned.WorkerSession.LaneID) ||
 				(decision.Workflow != nil && decision.NodeIndex == 0)) {
@@ -1500,6 +1498,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 		// offered. Its first node is staged fresh, like node 0: it continues no lane state,
 		// so the lane is not required to sit at this attempt's node start.
 		freshRetry := len(decision.ReusedNodes) > 0 && !decision.WorkflowRestart
+		resumeCommitted := false
 		if decision.Workflow != nil {
 			node := decision.effectiveNode()
 			spec.Node = &node
@@ -1582,8 +1581,8 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 							continue
 						}
 						if itemBase != "" {
-							spec.resumeCommitted = true
-							spec.ItemBaseSHA = itemBase
+							resumeCommitted = true
+							spec.KeptItemBaseSHA = itemBase
 							nodeBase, decision.NodeBaseSHA = scopeBase, scopeBase
 						}
 					}
@@ -1594,7 +1593,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 						continue
 					}
 					resetTo := nodeBase
-					if spec.resumeCommitted {
+					if resumeCommitted {
 						resetTo = "HEAD"
 					}
 					if _, err := l.git(ctx, target, "reset", "--hard", resetTo); err != nil {
@@ -1700,7 +1699,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 			delete(l.infraLines, request.ItemID+"\x00"+decision.LaneID)
 			if decision.Workflow != nil {
-				if decision.NodeBaseSHA == "" || (decision.NodeIndex == 0 && !request.SessionTurn && !spec.resumeCommitted) || revertedSession {
+				if decision.NodeBaseSHA == "" || (decision.NodeIndex == 0 && !request.SessionTurn && !resumeCommitted) || revertedSession {
 					decision.NodeBaseSHA = l.laneBase(decision.LaneID)
 				}
 				decision.NodeBaseSHA = l.baseInCheckout(ctx, decision.LaneID, decision.NodeBaseSHA)

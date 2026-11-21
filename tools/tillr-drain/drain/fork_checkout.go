@@ -37,12 +37,12 @@ func (s *LaneStager) refreshForkCheckout(ctx context.Context, fork ForkTarget) e
 	return err
 }
 
-// restageForkAtVerifyHead cuts a fork checkout at the commit a verifier read, so the build
-// step a failed verify returns to repairs that candidate rather than the delivery's tip.
+// restageForkAtKeptHead cuts a fork checkout at the retained candidate rather than
+// the delivery's tip.
 // Uncommitted work is refused, as in refreshForkCheckout. A checkout whose own HEAD holds a
 // commit no pin, landing or the delivery's tip contains is refused too, because resetting
 // would delete the only copy of unjudged work.
-func (s *LaneStager) restageForkAtVerifyHead(ctx context.Context, spec StageSpec, fork ForkTarget) error {
+func (s *LaneStager) restageForkAtKeptHead(ctx context.Context, spec StageSpec, fork ForkTarget) error {
 	status, err := s.git(ctx, fork.Checkout, "status", "--porcelain")
 	if err != nil {
 		return err
@@ -55,7 +55,7 @@ func (s *LaneStager) restageForkAtVerifyHead(ctx context.Context, spec StageSpec
 		return err
 	}
 	head := strings.TrimSpace(headOut)
-	if head != spec.VerifyReturnHead {
+	if head != spec.KeptHeadSHA {
 		tip, err := s.git(ctx, s.Root, "rev-parse", "--verify", fork.Ref+"^{commit}")
 		if err != nil {
 			return err
@@ -69,16 +69,16 @@ func (s *LaneStager) restageForkAtVerifyHead(ctx context.Context, spec StageSpec
 				return cerr
 			}
 			if !clearable {
-				return Externalf("fork checkout %s has unlanded or divergent commits; staging will not reset it to %s", fork.Checkout, spec.VerifyReturnHead)
+				return Externalf("fork checkout %s has unlanded or divergent commits; staging will not reset it to %s", fork.Checkout, spec.KeptHeadSHA)
 			}
 		}
 	}
-	if _, err := s.git(ctx, fork.Checkout, "fetch", "--quiet", "--no-tags", s.Root, spec.VerifyReturnHead); err != nil {
+	if _, err := s.git(ctx, fork.Checkout, "fetch", "--quiet", "--no-tags", s.Root, spec.KeptHeadSHA); err != nil {
 		return err
 	}
-	if _, err := s.git(ctx, fork.Checkout, "checkout", "-q", "-B", "main", spec.VerifyReturnHead); err != nil {
+	if _, err := s.git(ctx, fork.Checkout, "checkout", "-q", "-B", "main", spec.KeptHeadSHA); err != nil {
 		return err
 	}
-	_, err = s.git(ctx, fork.Checkout, "reset", "--hard", "-q", spec.VerifyReturnHead)
+	_, err = s.git(ctx, fork.Checkout, "reset", "--hard", "-q", spec.KeptHeadSHA)
 	return err
 }
