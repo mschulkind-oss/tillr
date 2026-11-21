@@ -65,10 +65,10 @@ since green with both bounds disabled.
   `closed` or `resolved-elsewhere` is refused as `item-not-landable`, even if its gate
   already passed. The check is made in the short write that claims the landing (below),
   and the claim row it writes in `landing_claims` refuses `tillr-item close` and a move to
-  `resolved-elsewhere` with `landing-in-progress` until the receipt write removes it, so a
-  concurrent close either wins before the claim and the landing is refused, or is refused
-  itself and then sees the receipt (`already-landed`). Standalone stores with no item table
-  remain usable.
+  `resolved-elsewhere` with `landing-in-progress` until the receipt write removes it.
+  A close before the claim prevents the landing. A close during publication is refused,
+  but can be retried after the receipt if the item is still open. Closing it then does
+  not undo the landing. Standalone stores with no item table remain usable.
 - **One trunk landing, one squash.** `Trunk.Squash` writes exactly one commit —
   `git merge-tree --write-tree` to compute the tree, `git commit-tree` to write the commit —
   with the repository's scope-checked identity and the candidate's message: a single-commit

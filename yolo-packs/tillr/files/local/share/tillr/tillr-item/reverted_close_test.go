@@ -11,28 +11,27 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-func TestCloseAfterLandingRevert(t *testing.T) {
+func TestFinishExistingLandingChecksReverts(t *testing.T) {
 	cases := []struct {
 		name, objectType, objectID, item, run, result string
-		rewrite, second, claim, mismatch, wantClose   bool
+		rewrite, second, mismatch, wantFinish         bool
 		unrelatedMalformed                            bool
 	}{
-		{name: "unreverted", wantClose: false},
-		{name: "reverted", objectType: "landing", objectID: "commit", item: "item_042", run: "run-1", result: "reverted", wantClose: true},
-		{name: "rewritten", objectType: "landing", objectID: "new-commit", item: "item_042", run: "run-1", result: "reverted", rewrite: true, wantClose: true},
-		{name: "unrelated receipt is not read", objectType: "landing", objectID: "commit", item: "item_042", run: "run-1", result: "reverted", unrelatedMalformed: true, wantClose: true},
-		{name: "reverted but publishing", objectType: "landing", objectID: "commit", item: "item_042", run: "run-1", result: "reverted", claim: true},
-		{name: "not possible", objectType: "landing", objectID: "commit", item: "item_042", run: "run-1", result: "not-possible"},
-		{name: "wrong object", objectType: "item", objectID: "commit", item: "item_042", run: "run-1", result: "reverted"},
-		{name: "mismatched payload", objectType: "landing", objectID: "commit", item: "item_042", run: "run-1", result: "reverted", mismatch: true},
-		{name: "landing id not commit", objectType: "landing", objectID: "landing-1", item: "item_042", run: "run-1", result: "reverted"},
-		{name: "wrong run", objectType: "landing", objectID: "commit", item: "item_042", run: "run-2", result: "reverted"},
-		{name: "wrong item", objectType: "landing", objectID: "commit", item: "other", run: "run-1", result: "reverted"},
-		{name: "later landing", objectType: "landing", objectID: "commit", item: "item_042", run: "run-1", result: "reverted", second: true},
+		{name: "unreverted", wantFinish: true},
+		{name: "reverted", objectType: "landing", objectID: "commit", item: "item_042", run: "run-1", result: "reverted"},
+		{name: "rewritten", objectType: "landing", objectID: "new-commit", item: "item_042", run: "run-1", result: "reverted", rewrite: true},
+		{name: "unrelated receipt is not read", objectType: "landing", objectID: "commit", item: "item_042", run: "run-1", result: "reverted", unrelatedMalformed: true},
+		{name: "not possible", objectType: "landing", objectID: "commit", item: "item_042", run: "run-1", result: "not-possible", wantFinish: true},
+		{name: "wrong object", objectType: "item", objectID: "commit", item: "item_042", run: "run-1", result: "reverted", wantFinish: true},
+		{name: "mismatched payload", objectType: "landing", objectID: "commit", item: "item_042", run: "run-1", result: "reverted", mismatch: true, wantFinish: true},
+		{name: "landing id not commit", objectType: "landing", objectID: "landing-1", item: "item_042", run: "run-1", result: "reverted", wantFinish: true},
+		{name: "wrong run", objectType: "landing", objectID: "commit", item: "item_042", run: "run-2", result: "reverted", wantFinish: true},
+		{name: "wrong item", objectType: "landing", objectID: "commit", item: "other", run: "run-1", result: "reverted", wantFinish: true},
+		{name: "later landing", objectType: "landing", objectID: "commit", item: "item_042", run: "run-1", result: "reverted", second: true, wantFinish: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			db := filepath.Join(scratch(t, "reverted-close"), "state.db")
+			db := filepath.Join(scratch(t, "reverted-finish"), "state.db")
 			if code, out := apply(t, db, envelope(t, "item.record", "rec", base("item_042", "an item"))); code != 0 {
 				t.Fatalf("apply: %d %s", code, out)
 			}
@@ -62,14 +61,6 @@ func TestCloseAfterLandingRevert(t *testing.T) {
 						return err
 					}
 				}
-				if tc.claim {
-					if _, err := tx.Exec(`CREATE TABLE landing_claims (item_id TEXT, run_id TEXT)`); err != nil {
-						return err
-					}
-					if _, err := tx.Exec(`INSERT INTO landing_claims VALUES ('item_042','run-2')`); err != nil {
-						return err
-					}
-				}
 				if tc.unrelatedMalformed {
 					other := "unrelated-commit"
 					if _, err := tx.Append(event.Event{Kind: "drain.revert", ObjectType: "landing", ObjectID: &other, Payload: json.RawMessage(`"not a receipt"`), At: time.Now()}); err != nil {
@@ -91,18 +82,13 @@ func TestCloseAfterLandingRevert(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			code, out := lifecycle(t, db, "close", "not wanted")
-			if tc.wantClose && code != 0 {
-				t.Fatalf("close after revert: %d %s", code, out)
-			}
-			if !tc.wantClose {
-				rule := "already-landed"
-				if tc.claim {
-					rule = "landing-in-progress"
+			code, out := findingState(t, db, "item_042", "landed", "--finish-existing-landing", "--reason", "covered", "--by", "operator", "--resolves-via", "commit:abcd1234")
+			if tc.wantFinish {
+				if code != 0 {
+					t.Fatalf("finish with unreverted landing: %d %s", code, out)
 				}
-				if code != 1 || decode(t, out).Payload.Rule != rule {
-					t.Fatalf("close must refuse with %s: %d %s", rule, code, out)
-				}
+			} else {
+				assertRefused(t, code, out, "landed-receipt-missing")
 			}
 		})
 	}

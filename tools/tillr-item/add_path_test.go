@@ -57,13 +57,35 @@ func TestAddPathRecordsAnOperatorReceipt(t *testing.T) {
 	}
 }
 
+func TestAddPathAfterDesignLanding(t *testing.T) {
+	t.Setenv("TILLR_RUN_ID", "")
+	for _, state := range []string{"in-queue", "blocked"} {
+		t.Run(state, func(t *testing.T) {
+			db, s := placeFixture(t, "rank")
+			if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+				if _, err := tx.Exec(`UPDATE items SET state=? WHERE item_id='0'`, state); err != nil {
+					return err
+				}
+				_, err := tx.Exec(`CREATE TABLE landings(item_id TEXT, result TEXT, run_id TEXT, trunk_after TEXT);
+					INSERT INTO landings VALUES ('0', 'landed', 'run-design', 'design-commit')`)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if code, out := addPathCommand(t, db, "docs/new.md", "owner", "needed for build"); code != 0 || !strings.Contains(out, `"allowed_paths":["docs/new.md"]`) || !strings.Contains(out, `"state":"`+state+`"`) {
+				t.Fatalf("add-path after design landing: %d %s", code, out)
+			}
+		})
+	}
+}
+
 func TestAddPathRefusesWithoutWriting(t *testing.T) {
 	for _, tc := range []struct {
 		name, state, runID, path, by, why, diagnostic string
 	}{
 		{"closed", "closed", "", "docs/new.md", "owner", "needed", "state-terminal"},
 		{"landed", "landed", "", "docs/new.md", "owner", "needed", "state-terminal"},
-		{"landing receipt before state update", "in-queue", "", "docs/new.md", "owner", "needed", "already-landed"},
+		{"resolved elsewhere", "resolved-elsewhere", "", "docs/new.md", "owner", "needed", "state-terminal"},
 		{"worker's own item", "in-queue", "run-0-a1", "docs/new.md", "owner", "needed", "operator-only"},
 		{"missing actor", "in-queue", "", "docs/new.md", " ", "needed", "--by"},
 		{"missing reason", "in-queue", "", "docs/new.md", "owner", " ", "--why"},
@@ -77,15 +99,8 @@ func TestAddPathRefusesWithoutWriting(t *testing.T) {
 			t.Setenv("TILLR_ITEM_ID", "0")
 			db, s := placeFixture(t, "rank")
 			if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
-				if _, err := tx.Exec(`UPDATE items SET state=? WHERE item_id='0'`, tc.state); err != nil {
-					return err
-				}
-				if tc.diagnostic == "already-landed" {
-					_, err := tx.Exec(`CREATE TABLE landings(item_id TEXT, result TEXT, run_id TEXT, trunk_after TEXT);
-						INSERT INTO landings VALUES ('0', 'landed', 'run-0-a1', 'abc1234')`)
-					return err
-				}
-				return nil
+				_, err := tx.Exec(`UPDATE items SET state=? WHERE item_id='0'`, tc.state)
+				return err
 			}); err != nil {
 				t.Fatal(err)
 			}

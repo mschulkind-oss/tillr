@@ -38,13 +38,6 @@ func AddPath(tx *store.Tx, id, path, by, why string, at time.Time) (record.Envel
 	if p.State == d.Closed || d.IsFinished(p.State) || frozenStates[p.State] {
 		return record.Envelope{}, terminalRejection(id, p.State)
 	}
-	landed, err := hasCurrentLanding(tx.Reader(), id)
-	if err != nil {
-		return record.Envelope{}, Internalf("reading landings: %v", err)
-	}
-	if landed {
-		return record.Envelope{}, Rejectionf("already-landed", id, "item %q has already landed; its fence cannot be widened", id)
-	}
 	for _, existing := range p.AllowedPaths {
 		if strings.TrimSuffix(existing, "/") == prefix {
 			return envelopeOf(RecordKind, "item-"+id, storedAt, p)

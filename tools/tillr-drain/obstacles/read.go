@@ -159,9 +159,8 @@ func (h Hold) MoverText() string {
 	return h.Mover + "; " + action
 }
 
-// WithoutCloseRemedy returns a copy of h whose action names only remedies that
-// remain valid once the item has a landed row in `landings` (where `tillr item
-// close` is refused as `already-landed`).
+// WithoutCloseRemedy returns a copy of h whose action focuses on retrying or
+// refiling work when the item already has a landing receipt.
 func (h Hold) WithoutCloseRemedy() Hold {
 	switch h.Kind {
 	case "owner":
@@ -188,7 +187,7 @@ func (h Hold) WithoutCloseRemedy() Hold {
 }
 
 // StripCloseRemedy removes `tillr item close` / "close the item" clauses from
-// hold prose when an item already has a landed row and cannot be closed.
+// hold prose for items that already have a landing receipt.
 func StripCloseRemedy(s string) string {
 	s = stripParenthesizedClose(s, " (or close the item with tillr item close --item ")
 	s = stripParenthesizedClose(s, ", or close the item (tillr item close --item ")

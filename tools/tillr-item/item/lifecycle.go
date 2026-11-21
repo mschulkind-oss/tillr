@@ -26,13 +26,6 @@ func Close(ctx context.Context, tx *store.Tx, id, reason, by string, at time.Tim
 	if err != nil {
 		return record.Envelope{}, err
 	}
-	landed, err := hasCurrentLanding(tx.Reader(), id)
-	if err != nil {
-		return record.Envelope{}, Internalf("reading landings: %v", err)
-	}
-	if landed {
-		return record.Envelope{}, Rejectionf("already-landed", id, "item %q has already landed; it cannot be closed", id)
-	}
 	if err := refuseClaimedLanding(tx.Reader(), id, "closed"); err != nil {
 		return record.Envelope{}, err
 	}
@@ -62,7 +55,7 @@ func Close(ctx context.Context, tx *store.Tx, id, reason, by string, at time.Tim
 // and its receipt write removes the claim; between them the trunk moves with no store write
 // open, so this row, not the write lock, is what keeps an item from being closed under a
 // landing that is about to put it on the trunk. The refusal names the run: once that
-// landing records its receipt the item is landed, and a landing killed mid-way is finished
+// landing records its receipt the claim is gone, and a landing killed mid-way is finished
 // by its run's retry or, when its move never happened, cleared by the next landing.
 func refuseClaimedLanding(r *store.Reader, id, to string) error {
 	var hasClaims bool

@@ -611,7 +611,7 @@ func TestIdenticalRepeatHoldNamesWorkingCommandForFiledRequest(t *testing.T) {
 	}
 }
 
-func TestLandedRowItemWithLaterHeldRunNamesOnlyWorkingRemedy(t *testing.T) {
+func TestLandedRowItemWithLaterHeldRunNamesWorkingRetry(t *testing.T) {
 	t.Run("identical-repeat conflict-owner hold after earlier landing", func(t *testing.T) {
 		f, l, base := plannedFixture(t)
 		writeForkFile(t, filepath.Join(f.root, "config/tillr/plan-guidance.md"), "cheap models")
@@ -639,20 +639,6 @@ func TestLandedRowItemWithLaterHeldRunNamesOnlyWorkingRemedy(t *testing.T) {
 			t.Fatalf("expected 2 verify runs before identical-repeat hold, got %d", steps.verifies)
 		}
 
-		// Confirm tillr item close refuses this item with already-landed.
-		st, err := store.Open(context.Background(), f.storePath, true)
-		if err != nil {
-			t.Fatal(err)
-		}
-		closeErr := st.WriteTx(context.Background(), func(tx *store.Tx) error {
-			_, err := item.Close(context.Background(), tx, id, "stop held item", "operator", time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC))
-			return err
-		})
-		st.Close()
-		if closeErr == nil || !strings.Contains(closeErr.Error(), "already landed; it cannot be closed") {
-			t.Fatalf("expected item.Close to refuse with already-landed, got %v", closeErr)
-		}
-
 		latestRun := steps.runs[len(steps.runs)-1].RunID
 		wantMover := "operator; deliver a revised instruction with tillr drain retry --item " + id + " --run " + latestRun + " --by <who> --why <reason>"
 
@@ -674,7 +660,7 @@ func TestLandedRowItemWithLaterHeldRunNamesOnlyWorkingRemedy(t *testing.T) {
 					}
 					for _, bad := range []string{"tillr item close", "close the item"} {
 						if strings.Contains(row.Mover, bad) || strings.Contains(row.Why, bad) {
-							t.Fatalf("%s: why names refused close remedy (%q): mover=%q why=%q", bad, label, row.Mover, row.Why)
+							t.Fatalf("%s: why includes close advice (%q): mover=%q why=%q", bad, label, row.Mover, row.Why)
 						}
 					}
 					if row.Mover != wantMover {
@@ -695,7 +681,7 @@ func TestLandedRowItemWithLaterHeldRunNamesOnlyWorkingRemedy(t *testing.T) {
 			}
 			held := conflicts[id]
 			if strings.Contains(held.Text, "tillr item close") || strings.Contains(held.Text, "close the item") {
-				t.Fatalf("recorded conflict text names refused close remedy:\n%s", held.Text)
+				t.Fatalf("recorded conflict text includes close advice:\n%s", held.Text)
 			}
 			return nil
 		})
@@ -769,7 +755,7 @@ func TestLandedRowItemWithLaterHeldRunNamesOnlyWorkingRemedy(t *testing.T) {
 				}
 				for _, bad := range []string{"tillr item close", "close the item"} {
 					if strings.Contains(row.Mover, bad) || strings.Contains(row.Why, bad) {
-						t.Fatalf("owner hold why names refused close remedy (%q): mover=%q why=%q", bad, row.Mover, row.Why)
+						t.Fatalf("owner hold why includes close advice (%q): mover=%q why=%q", bad, row.Mover, row.Why)
 					}
 				}
 				if !strings.Contains(row.Mover, "tillr drain retry --item "+id+" --run "+blockedRunID+" --by <who> --why <reason>") {
