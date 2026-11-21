@@ -159,6 +159,7 @@ func (v *startView) runWatcherLoop(ctx context.Context, interval time.Duration, 
 		case <-ctx.Done():
 			return
 		case <-safety.C:
+			pending |= startWatchExternal // Recheck even when a store wake is pending.
 			refresh()
 		case <-batchDue:
 			refresh()

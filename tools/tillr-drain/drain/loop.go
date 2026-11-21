@@ -372,6 +372,9 @@ type LoopConfig struct {
 	// DefaultIndexCommand, and a program that is not there holds the affected items with
 	// `questions-unknown` rather than dispatching them.
 	QuestionsCmd []string
+	// QuestionsIndex overrides the shadow watcher's saved Vantage index path.
+	// It does not replace the pass's trunk-bound question cache.
+	QuestionsIndex string
 	// VantageURL and VantageRepo are handed over at startup for reply confirmation.
 	// Empty values disable confirmation; this check never reads settings.
 	VantageURL       string
@@ -874,33 +877,8 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 		result.Stop, result.Detail = StopQueueDrained, "owner question migration finished"
 		return result, nil
 	}
-	// The shadow reads the store independently; neither startup nor a pass waits
-	// for a snapshot. Use wall time for lease expiry, not the pass's clock hook.
-	shadow, shadowTick := newStartView(), l.startViewPass()
-	root, questionsCmd := l.cfg.Root, l.cfg.QuestionsCmd
-	var follower startStoreSync
-	defer follower.close() // stop and join the watcher before closing its connection
-	stopView := shadow.watch(ctx, startViewRefreshInterval, func(ctx context.Context) startWatcher {
-		paths := startWatchPaths{root: root, store: shadowTick.StorePath, index: QuestionsIndexFile(root)}
-		if root != "" {
-			gitDir, _ := l.git(ctx, root, "rev-parse", "--absolute-git-dir")
-			commonDir, _ := l.git(ctx, root, "rev-parse", "--path-format=absolute", "--git-common-dir")
-			paths.gitDir, paths.commonDir = strings.TrimSpace(gitDir), strings.TrimSpace(commonDir)
-		}
-		return newStartWatcher(paths)
-	}, func(ctx context.Context, change startWatchChange) (startSnapshot, error) {
-		at, policy, previous := time.Now(), l.currentPolicy(), shadow.snapshot()
-		cached := previous
-		if change&startWatchExternal != 0 {
-			cached.pending = nil // Reseed on external changes until the split refresh lands.
-		}
-		return follower.syncStore(ctx, shadowTick.StorePath, at, policy, cached, func(r *store.Reader, next *startSnapshot, touched map[string]bool) error {
-			questions := &VantageQuestions{Root: root, Command: questionsCmd, Context: ctx}
-			shadowTick.Now = at.Format(time.RFC3339Nano)
-			return next.repairEntries(ctx, r, at, policy, shadowTick, questions, previous, touched)
-		})
-	})
-	defer stopView()
+	// Neither startup nor a pass waits for the advisory snapshot.
+	defer l.watchStartView(ctx, newStartView(), startViewRefreshInterval)()
 	for {
 		if err := ctx.Err(); err != nil {
 			result.Stop = StopOperatorStop
@@ -1029,7 +1007,7 @@ func (l *Loop) refreshDocuments(ctx context.Context, result *LoopResult) (string
 		l.syncedSHA = sha
 		l.syncClearSeq = clearSeq
 		l.waitingDetail = ""
-		l.questions = newSavedQuestions(l.cfg.Root, sha, l.cfg.QuestionsCmd, ctx)
+		l.resetPassQuestions(ctx)
 		if err := l.settleOwnerAnswers(ctx, sha); err != nil {
 			return "", err
 		}
@@ -1037,6 +1015,18 @@ func (l *Loop) refreshDocuments(ctx context.Context, result *LoopResult) (string
 		l.reportf("loop: synced documents at %s\n", sha)
 		return sha, nil
 	}
+}
+
+// The pass's question source is loop-owned and pinned to its synced SHA.
+func (l *Loop) resetPassQuestions(ctx context.Context) {
+	l.questions = newSavedQuestions(l.cfg.Root, l.syncedSHA, l.cfg.QuestionsCmd, ctx)
+}
+
+func (l *Loop) designerQuestions(ctx context.Context) QuestionSource {
+	if l.questions == nil {
+		l.resetPassQuestions(ctx)
+	}
+	return l.questions
 }
 
 // syncDocuments reports one summary line and each finding and frozen definition

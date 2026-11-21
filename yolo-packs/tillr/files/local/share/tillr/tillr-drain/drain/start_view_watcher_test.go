@@ -2,13 +2,18 @@ package drain
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
+	"github.com/mschulkind-oss/tillr/vantage"
 )
 
 func awaitStartViewSignal(t *testing.T, signal <-chan struct{}) {
@@ -106,6 +111,112 @@ func TestStartViewIncrementalUpdatesAndZeroChurn(t *testing.T) {
 	}
 	if entry, ok := placed.nextStart(); !ok || entry.decision.ItemID != "item-a" {
 		t.Fatalf("proposal after place: %+v, %v", entry, ok)
+	}
+}
+
+func TestStartViewWatcherDocumentAndIndexUpdatesRepairProposals(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("filesystem wakes require inotify")
+	}
+	for _, updateIndex := range []bool{false, true} {
+		name := "editing_design_doc"
+		if updateIndex {
+			name = "replacing_saved_index"
+		}
+		t.Run(name, func(t *testing.T) {
+			f, l := passFixture(t, "item-a")
+			doc := "docs/design.md"
+			if err := os.MkdirAll(filepath.Join(f.root, "docs"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeForkFile(t, filepath.Join(f.root, doc), "# Design\n\nOPEN\n")
+			runGit(t, f.root, "add", doc)
+			runGit(t, f.root, "commit", "-qm", "design doc")
+			fixtureWrite(t, f, func(tx *store.Tx) error {
+				_, err := tx.Exec(`UPDATE items SET design_doc=? WHERE item_id='item-a'`, doc)
+				return err
+			})
+			index := func(state string) string {
+				// Keep both payloads the same size so the rename proof does not
+				// depend on a changed length or clock resolution.
+				return `{"index":{"documents":[{"path":"docs/design.md","questions":[{"id":"OQ-1","state":"` + state + `","title":"Which?"}]}]}}` + strings.Repeat(" ", len("answered")-len(state))
+			}
+			dir := t.TempDir()
+			countPath := filepath.Join(dir, "calls")
+			l.cfg.QuestionsIndex = filepath.Join(dir, "index.json")
+			l.cfg.QuestionsCmd = []string{"sh", "-c", `echo call >> "$1"; if grep -q ANSWERED docs/design.md; then printf '%s' "$2"; else printf '%s' "$3"; fi`, "index-fixture", countPath, index("answered"), index("open")}
+			if updateIndex {
+				writeForkFile(t, l.cfg.QuestionsIndex, index("open"))
+				l.questions = vantage.Preloaded(f.root, vantage.ParseIndex([]byte(index("open")), "pass fixture"))
+			}
+			view := newStartView()
+			defer l.watchStartView(context.Background(), view, startViewRefreshInterval)()
+			awaitStartViewSignal(t, view.updated)
+			seed := view.snapshot()
+			if seed.holds["item-a"] != ReasonQuestionOpen {
+				t.Fatalf("initial holds: %v", seed.holds)
+			}
+			if updateIndex {
+				replacement := filepath.Join(dir, "replacement")
+				writeForkFile(t, replacement, index("answered"))
+				oldIndex, err := os.Stat(l.cfg.QuestionsIndex)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chtimes(replacement, oldIndex.ModTime(), oldIndex.ModTime()); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(replacement, l.cfg.QuestionsIndex); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				writeForkFile(t, filepath.Join(f.root, doc), "# Design\n\nANSWERED\n")
+			}
+			awaitStartViewSignal(t, view.updated)
+			next := view.snapshot()
+			if next.holds["item-a"] != "" || next.entries["item-a"].decision.RunRequest == nil || next.pending != seed.pending || seed.holds["item-a"] != ReasonQuestionOpen {
+				t.Fatalf("refresh failed to repair the proposal without reseeding: %v -> %v", seed.holds, next.holds)
+			}
+			saved, err := os.ReadFile(l.cfg.QuestionsIndex)
+			if err != nil || string(saved) != index("answered") {
+				t.Fatalf("saved index: %s, %v", saved, err)
+			}
+			calls, err := os.ReadFile(countPath)
+			if updateIndex {
+				if got := decisionFor(t, l, "item-a").decision.Reason; got != ReasonQuestionOpen {
+					t.Fatalf("shadow index changed the pass's independent question source: %q", got)
+				}
+				if !os.IsNotExist(err) {
+					t.Fatalf("external index unexpectedly ran the scanner: %s, %v", calls, err)
+				}
+			} else if err != nil || strings.Count(string(calls), "call") != 2 {
+				t.Fatalf("want initial and document-edit scans: %s, %v", calls, err)
+			}
+		})
+	}
+}
+
+func TestStartViewWatcherRefreshesBasesWithoutStoreChanges(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("filesystem wakes require inotify")
+	}
+	f, l := passFixture(t, "item-a")
+	base := runGit(t, f.root, "rev-parse", "HEAD")
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "next")
+	tip := runGit(t, f.root, "rev-parse", "HEAD")
+	runGit(t, f.root, "update-ref", GreenRef, base)
+	view := newStartView()
+	defer l.watchStartView(context.Background(), view, startViewRefreshInterval)()
+	awaitStartViewSignal(t, view.updated)
+	seed := view.snapshot()
+	if seed.tip != tip || seed.green != base {
+		t.Fatalf("initial bases: %s, %s", seed.tip, seed.green)
+	}
+	runGit(t, f.root, "update-ref", GreenRef, tip)
+	awaitStartViewSignal(t, view.updated)
+	next := view.snapshot()
+	if next.tip != tip || next.green != tip || next.pending != seed.pending || seed.green != base {
+		t.Fatalf("green-only update changed history or missed the base: %s, %s", next.tip, next.green)
 	}
 }
 

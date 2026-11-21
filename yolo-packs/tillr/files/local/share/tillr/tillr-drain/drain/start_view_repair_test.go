@@ -183,6 +183,61 @@ func TestSyncReadsOnlyWhatItsInputsChanged(t *testing.T) {
 	}
 }
 
+func TestNextStartDoesNotWaitOnASyncInItsRead(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	l.cfg.Lanes = []string{"lane-1"}
+	tick, policy := l.startViewPass(), l.currentPolicy()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var follower startStoreSync
+	defer follower.close()
+	at := l.cfg.Now()
+	seed := proposeFixture(t, l, at, startSnapshot{})
+	view := newStartView()
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`INSERT INTO lanes (lane_id,state,run_id) VALUES ('lane-1','leased','foreign')`)
+		return err
+	})
+	insideRead, release := make(chan struct{}), make(chan struct{})
+	wakes := make(testStartWatcher, 1)
+	stop := view.watch(ctx, time.Hour, func(context.Context) startWatcher { return wakes }, func(ctx context.Context, change startWatchChange) (startSnapshot, error) {
+		if change == 0 {
+			return seed, nil
+		}
+		return follower.syncStoreWithRefresh(ctx, f.storePath, at, policy, view.snapshot(), true, func(r *store.Reader, next *startSnapshot, touched map[string]bool) error {
+			close(insideRead)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-release:
+			}
+			return next.repairEntries(ctx, r, at, policy, tick, &VantageQuestions{Root: f.root}, seed, touched)
+		})
+	})
+	defer stop()
+	awaitStartViewSignal(t, view.updated)
+	wakes <- startWatchExternal
+	awaitStartViewSignal(t, insideRead)
+	proposed := make(chan string, 1)
+	go func() {
+		entry, _ := view.snapshot().nextStart()
+		proposed <- entry.decision.LaneID
+	}()
+	select {
+	case lane := <-proposed:
+		if lane != "lane-1" {
+			t.Fatalf("proposal while refresh was paused: %q", lane)
+		}
+	case <-time.After(hangGuard):
+		t.Fatal("nextStart waited for a paused store read")
+	}
+	close(release)
+	awaitStartViewSignal(t, view.updated)
+	if _, ok := view.snapshot().nextStart(); ok || !view.snapshot().occupied["lane-1"] || seed.occupied["lane-1"] {
+		t.Fatal("refresh did not publish the private lane update")
+	}
+}
+
 func TestLaneChangeOwesRebuildUntilSafetyInterval(t *testing.T) {
 	f, l := passFixture(t, "item-a")
 	l.cfg.Lanes = []string{"lane-1"}

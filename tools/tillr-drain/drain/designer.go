@@ -212,13 +212,7 @@ func (l *Loop) retireDesigners(ctx context.Context) error {
 	if err != nil || len(docs) == 0 {
 		return err
 	}
-	if l.questions == nil {
-		if l.syncedSHA != "" {
-			l.questions = newSavedQuestions(l.cfg.Root, l.syncedSHA, l.cfg.QuestionsCmd, ctx)
-		} else {
-			l.questions = &VantageQuestions{Root: l.cfg.Root, Command: l.cfg.QuestionsCmd, Context: ctx}
-		}
-	}
+	questions := l.designerQuestions(ctx)
 	retired := []string{}
 	// refreshDocuments pins the trunk commit this pass read. Never consult the moving
 	// ref here: a concurrent landing may have advanced it after that observation.
@@ -247,7 +241,7 @@ func (l *Loop) retireDesigners(ctx context.Context) error {
 			return err
 		}
 		var done bool
-		if ds, ok := l.questions.(interface{ Done(string) (bool, error) }); ok {
+		if ds, ok := questions.(interface{ Done(string) (bool, error) }); ok {
 			done, err = ds.Done(doc)
 		}
 		if err != nil {
