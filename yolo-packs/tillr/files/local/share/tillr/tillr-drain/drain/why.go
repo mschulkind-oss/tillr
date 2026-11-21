@@ -310,6 +310,9 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			if d.Reason == ReasonConflictOwner && d.DeferredBy != "" {
 				row.WaitingOn = append(row.WaitingOn, "design run "+d.DeferredBy)
 			}
+		case d.Reason == ReasonNoLane && d.Returned != nil && d.Returned.Cause == ReasonEvalFailed && d.LaneID != "":
+			row.WaitingOn = append(row.WaitingOn, d.LaneID)
+			row.Why += ": own lane " + d.LaneID + " holds the offered commit; waiting for that lane to become available"
 		case d.Reason == ReasonNoLane && works[it.ItemID] != nil && !works[it.ItemID].Done && !works[it.ItemID].LaneReleased && d.LaneID != "":
 			// Work that still holds its lane continues only in that worktree: it is held
 			// behind that lane's lease (its run, or its examination), not by the others.
