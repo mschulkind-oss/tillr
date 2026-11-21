@@ -166,8 +166,6 @@ func TestHeldCandidateWorktreeDependentHoldsKeepLane(t *testing.T) {
 		name, reason string
 		mutate       func(*pendingWork)
 	}{
-		{"fork delivery", "gate-harness-error", func(w *pendingWork) { w.Candidate.BaseRef = "refs/heads/patch/pi" }},
-		{"workflow", "gate-harness-error", func(w *pendingWork) { w.Decision.Workflow = &Workflow{} }},
 		{"boundary", StopHostBoundaryViolation, func(w *pendingWork) { w.BoundaryFailed = true }},
 		{"mismatch", ReasonCandidateMismatch, func(w *pendingWork) {}},
 	} {

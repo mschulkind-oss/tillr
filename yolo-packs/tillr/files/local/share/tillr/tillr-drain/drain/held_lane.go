@@ -23,11 +23,21 @@ const candidateAssignedKind = "drain.candidate-assigned"
 const candidateStagedKind = "drain.candidate-staged"
 
 type candidateLane struct {
-	Candidate Candidate `json:"candidate"`
-	Released  bool      `json:"released"`
-	Reason    string    `json:"reason"`
-	Fence     string    `json:"fence"`
-	ResetSHA  string    `json:"reset_sha,omitempty"`
+	Candidate Candidate      `json:"candidate"`
+	Released  bool           `json:"released"`
+	Reason    string         `json:"reason"`
+	Fence     string         `json:"fence"`
+	ResetSHA  string         `json:"reset_sha,omitempty"`
+	Stage     *heldLaneStage `json:"stage,omitempty"`
+}
+
+// The stage-local fence is separate from the whole-item fence. Workflow
+// artifacts and reports already live in immutable run directories, not here.
+type heldLaneStage struct {
+	SourceLane string          `json:"source_lane"`
+	NodeFence  string          `json:"node_fence"`
+	NodeBase   string          `json:"node_base"`
+	Fork       *heldForkInputs `json:"fork,omitempty"`
 }
 
 func init() {
@@ -52,11 +62,7 @@ func retainLane(err error) (held, keep bool) {
 }
 
 func candidateKeepReason(work *pendingWork, reason string) string {
-	baseRef := ""
-	if work.Candidate != nil {
-		baseRef = work.Candidate.BaseRef
-	}
-	return lanestate.KeepReason(work.Candidate != nil, baseRef, work.Decision.Workflow != nil, work.BoundaryFailed, reason)
+	return lanestate.KeepReason(work.Candidate != nil, work.BoundaryFailed, reason)
 }
 
 // pinnedCandidate reads the commit back, not merely the ref name. A successful
@@ -65,12 +71,22 @@ func (l *Loop) pinnedCandidate(ctx context.Context, c Candidate) error {
 	if c.RunID == "" || c.HeadSHA == "" {
 		return fmt.Errorf("candidate has no run or head")
 	}
-	head, err := l.revParse(ctx, l.cfg.Root, "refs/tillr/runs/"+c.RunID+"^{commit}")
+	head, err := l.revParse(ctx, l.cfg.Root, candidatePinRef(c)+"^{commit}")
 	if err != nil {
 		return err
 	}
 	if head != c.HeadSHA {
 		return fmt.Errorf("pin names %s, want %s", head, c.HeadSHA)
+	}
+	if c.BaseRef != "" {
+		ref := candidatePinRef(c)
+		out, err := l.git(ctx, l.cfg.Root, "for-each-ref", "--format=%(refname) %(objectname) %(symref)", ref)
+		if err != nil || strings.TrimSpace(out) != ref+" "+c.HeadSHA {
+			return fmt.Errorf("fork pin %s is not a direct ref to %s", ref, c.HeadSHA)
+		}
+		if _, err := l.git(ctx, l.cfg.Root, "merge-base", "--is-ancestor", c.BaseSHA, c.HeadSHA); err != nil {
+			return fmt.Errorf("fork pin does not retain its recorded base: %w", err)
+		}
 	}
 	return nil
 }
@@ -96,7 +112,7 @@ func (l *Loop) claimCandidateRelease(ctx context.Context, work *pendingWork, rea
 			return err
 		}
 		current := works[c.ItemID]
-		if current == nil || current.Done || current.LaneReleased || current.Candidate == nil || current.Candidate.RunID != c.RunID || current.Candidate.HeadSHA != c.HeadSHA || current.Decision.LaneID != c.LaneID || candidateKeepReason(current, reason) != "" {
+		if current == nil || current.Done || current.LaneReleased || current.Candidate == nil || current.Candidate.RunID != c.RunID || current.Candidate.HeadSHA != c.HeadSHA || (c.BaseRef != "" && (current.Candidate.BaseRef != c.BaseRef || current.Candidate.BaseSHA != c.BaseSHA || current.Candidate.Worktree != c.Worktree)) || current.Decision.LaneID != c.LaneID || candidateKeepReason(current, reason) != "" {
 			return nil
 		}
 		var state string
@@ -122,7 +138,7 @@ func (l *Loop) claimCandidateRelease(ctx context.Context, work *pendingWork, rea
 		}
 		// Preserve the examination's freshly prepared candidate, while taking
 		// interrupted-release state from the current durable reservation.
-		work.ReleasePending, work.HeldFence = current.ReleasePending, current.HeldFence
+		work.ReleasePending, work.HeldFence, work.HeldStage = current.ReleasePending, current.HeldFence, current.HeldStage
 		claimed = true
 		return nil
 	})
@@ -166,6 +182,28 @@ const retiredHeadKeep = "lane holds the loop's retirement commit; the retry gate
 // without claiming the lane to find out.
 func (l *Loop) recordedHeadKeep(ctx context.Context, work *pendingWork, reason string) (string, error) {
 	c := *work.Candidate
+	if c.BaseRef != "" {
+		trunk := work.ReleasePending
+		if trunk == "" {
+			var err error
+			trunk, err = l.revParse(ctx, l.cfg.Root, TrunkRef)
+			if err != nil {
+				return "", err
+			}
+		}
+		if err := l.checkHeldForkRelease(ctx, c, trunk, work.ReleasePending != ""); err != nil {
+			return err.Error(), nil
+		}
+		return "", nil
+	}
+	if work.Decision.Workflow != nil {
+		if c.Worktree != l.lanePath(c.LaneID) || l.laneTarget(c.LaneID) != c.Worktree {
+			return "workflow checkout does not match its recorded target", nil
+		}
+		if paths, err := l.uncommittedPaths(ctx, c.Worktree); err != nil || len(paths) != 0 {
+			return "workflow checkout has uncommitted or unreadable files; inspect before retry", nil
+		}
+	}
 	// Failed repair staging may have reset to its captured trunk, but never
 	// authorizes discarding arbitrary later commits in the retained checkout.
 	repairReset := ""
@@ -266,9 +304,15 @@ func (l *Loop) releaseCandidate(ctx context.Context, work *pendingWork, reason s
 	if err != nil {
 		return false, err
 	}
-	if kept == "" {
-		if err := l.pin(ctx, c.RunID, c.HeadSHA); err != nil {
-			kept = "candidate pin failed: " + err.Error()
+	if kept == "" && work.ReleasePending == "" {
+		var pinErr error
+		if c.BaseRef != "" {
+			pinErr = l.pinHeldFork(ctx, c)
+		} else {
+			pinErr = l.pin(ctx, c.RunID, c.HeadSHA)
+		}
+		if pinErr != nil {
+			kept = "candidate pin failed: " + pinErr.Error()
 		}
 	}
 	if kept == "" {
@@ -276,8 +320,8 @@ func (l *Loop) releaseCandidate(ctx context.Context, work *pendingWork, reason s
 			kept = "candidate pin cannot be read back: " + err.Error()
 		}
 	}
-	fence := work.HeldFence
-	if kept == "" && fence == "" {
+	fence, stage := work.HeldFence, work.HeldStage
+	if kept == "" && work.ReleasePending == "" && (fence == "" || c.BaseRef != "" || work.Decision.Workflow != nil) {
 		path, err := l.itemFencePath(c.LaneID)
 		var raw []byte
 		if err == nil {
@@ -289,7 +333,18 @@ func (l *Loop) releaseCandidate(ctx context.Context, work *pendingWork, reason s
 			fence = string(raw)
 		}
 	}
-	if kept == "" {
+	if kept == "" && (c.BaseRef != "" || work.Decision.Workflow != nil) {
+		if work.ReleasePending == "" {
+			stage, err = l.saveHeldLaneStage(ctx, c)
+		} else if stage == nil {
+			err = fmt.Errorf("saved lane stage is missing")
+		} else if c.BaseRef != "" {
+			err = l.verifyHeldForkRefs(ctx, c, stage.Fork)
+		}
+		if err != nil {
+			kept = "candidate staging inputs cannot be saved or read back: " + err.Error()
+		}
+	} else if kept == "" {
 		if err := l.preserveWork(ctx, c.LaneID, c.RunID, "held candidate releases its lane"); err != nil {
 			kept = "uncommitted work cannot be preserved: " + err.Error()
 		}
@@ -301,19 +356,10 @@ func (l *Loop) releaseCandidate(ctx context.Context, work *pendingWork, reason s
 		if err != nil {
 			return false, err
 		}
-		// Git cannot commit together with the store. Persist the saved candidate,
-		// fence and exact reset destination before changing the checkout.
-		intent := candidateLane{Candidate: c, Fence: fence, ResetSHA: resetSHA, Reason: "candidate lane reset awaits completion"}
-		if err := appendJudgment(ctx, l.cfg.Store, candidateReleaseStartedKind, "run", c.RunID, intent, l.cfg.Now()); err != nil {
-			return false, err
-		}
 	}
 	released = kept == ""
 	if !released && kept == work.LaneKeepReason && fence == work.HeldFence {
 		return false, nil
-	}
-	if !released {
-		l.reportf("loop: lane %s kept for %s: %s\n", c.LaneID, c.ItemID, kept)
 	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
@@ -321,30 +367,81 @@ func (l *Loop) releaseCandidate(ctx context.Context, work *pendingWork, reason s
 	}
 	defer s.Close()
 	writeRelease := func() error {
-		return s.WriteTx(ctx, func(tx *store.Tx) error {
-			owned, err := candidateReleaseOwned(tx.Reader(), c, owner)
-			if err != nil {
-				return err
-			}
-			if !owned {
-				return Externalf("candidate release lost its lane claim for %s", c.RunID)
-			}
-			// Keep the writer through the destructive Git operation and receipt:
-			// an operator cannot claim this checkout between validation and reset.
+		return withRunStartLock(ctx, l.cfg.Store, func() error {
+			var live map[string]bool
 			if released {
-				if err := l.resetLaneToRegistryLocked(ctx, c.LaneID, resetSHA); err != nil {
-					released, kept = false, "lane reset failed: "+err.Error()
+				procs, why, err := l.heldLaneProcesses(c, owner)
+				if err != nil {
+					return err
 				}
+				live, kept = procs, why
+				if kept == "" && work.Decision.Workflow != nil && c.BaseRef == "" {
+					kept, err = l.recordedHeadKeep(ctx, work, reason)
+					if err != nil {
+						return err
+					}
+				}
+				released = kept == ""
 			}
-			if err := appendEffect(tx, candidateLaneKind, c.RunID, candidateLane{Candidate: c, Released: released, Reason: kept, Fence: fence}, l.cfg.Now().UTC()); err != nil {
-				return err
-			}
-			if released || !examining {
-				if err := clearCandidateRelease(tx, c, l.cfg.Now()); err != nil {
+			if released {
+				// Commit the reset intent separately so Git changes can be recovered
+				// if the final receipt is interrupted. No face starts between the
+				// liveness check and the reset, and the lane remains examiner-owned.
+				if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+					owned, err := candidateReleaseOwned(tx.Reader(), c, owner)
+					if err != nil || !owned {
+						return errors.Join(err, Externalf("candidate release lost its lane claim for %s", c.RunID))
+					}
+					why, err := l.candidateResetBlocked(tx.Reader(), c, owner, live)
+					if err != nil {
+						return err
+					}
+					if why != "" {
+						released, kept = false, why
+						return nil
+					}
+					if work.ReleasePending != "" {
+						return nil
+					}
+					intent := candidateLane{Candidate: c, Fence: fence, Stage: stage, ResetSHA: resetSHA, Reason: "candidate lane reset awaits completion"}
+					return appendEffect(tx, candidateReleaseStartedKind, c.RunID, intent, l.cfg.Now())
+				}); err != nil {
 					return err
 				}
 			}
-			return nil
+			return s.WriteTx(ctx, func(tx *store.Tx) error {
+				owned, err := candidateReleaseOwned(tx.Reader(), c, owner)
+				if err != nil {
+					return err
+				}
+				if !owned {
+					return Externalf("candidate release lost its lane claim for %s", c.RunID)
+				}
+				// Keep the writer through the destructive Git operation and receipt:
+				// an operator cannot claim this checkout between validation and reset.
+				if released {
+					var resetErr error
+					if c.BaseRef != "" {
+						resetErr = l.resetHeldFork(ctx, c, resetSHA)
+					} else {
+						resetErr = l.resetLaneToRegistryLocked(ctx, c.LaneID, resetSHA)
+					}
+					if resetErr != nil {
+						released, kept = false, "lane reset failed: "+resetErr.Error()
+					}
+				}
+				if released || kept != work.LaneKeepReason || fence != work.HeldFence {
+					if err := appendEffect(tx, candidateLaneKind, c.RunID, candidateLane{Candidate: c, Released: released, Reason: kept, Fence: fence, Stage: stage}, l.cfg.Now().UTC()); err != nil {
+						return err
+					}
+				}
+				if released || !examining {
+					if err := clearCandidateRelease(tx, c, l.cfg.Now()); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
 		})
 	}
 	if released && strings.HasPrefix(c.LaneID, "desk-") {
@@ -357,8 +454,12 @@ func (l *Loop) releaseCandidate(ctx context.Context, work *pendingWork, reason s
 	if err == nil && (released || !examining) {
 		claimed = false
 	}
-	if err == nil && released {
-		l.notifyStartLaneReleased(c.LaneID, c.RunID, true, l.cfg.Now().UTC())
+	if err == nil {
+		if released {
+			l.notifyStartLaneReleased(c.LaneID, c.RunID, true, l.cfg.Now().UTC())
+		} else if kept != work.LaneKeepReason {
+			l.reportf("loop: lane %s kept for %s: %s\n", c.LaneID, c.ItemID, kept)
+		}
 	}
 	return released && err == nil, err
 }
@@ -455,9 +556,19 @@ func (l *Loop) assignPinnedCandidate(tx *store.Tx, work *pendingWork, d *Decisio
 		return nil
 	}
 	c := *work.Candidate
+	oldTarget, oldLane := c.Worktree, c.LaneID
 	c.LaneID, c.Worktree = d.LaneID, l.lanePath(d.LaneID)
+	if c.BaseRef != "" {
+		fork, err := l.heldForkTarget(c, d.LaneID)
+		if err != nil {
+			return err
+		}
+		c.Worktree = fork.Checkout
+	}
 	req := *d.RunRequest
 	req.LaneID = d.LaneID
+	req.WorkingDir = rebaseHeldPath(req.WorkingDir, oldTarget, c.Worktree)
+	req.WorkingDir = rebaseHeldPath(req.WorkingDir, l.laneDirPath(oldLane), l.laneDirPath(d.LaneID))
 	d.RunRequest = &req
 	work.Decision, work.Candidate, work.LaneReleased, work.NeedsStage = *d, &c, false, true
 	c.Request, c.Seat = d.RunRequest, d.Seat
@@ -470,6 +581,12 @@ func (l *Loop) stagePinnedCandidate(ctx context.Context, work *pendingWork) erro
 	c := *work.Candidate
 	if err := l.pinnedCandidate(ctx, c); err != nil {
 		return err
+	}
+	if c.BaseRef != "" {
+		if err := l.stageHeldFork(ctx, work, c); err != nil {
+			return err
+		}
+		return l.markPinnedStaged(ctx, work)
 	}
 	// Reuse ordinary worktree admission without rendering another worker brief
 	// or overwriting the archived run inputs and session. Admission compares a
@@ -517,9 +634,13 @@ func (l *Loop) stagePinnedCandidate(ctx context.Context, work *pendingWork) erro
 	// A released lane may have belonged to another item since this candidate
 	// was pinned. Replace both legacy and whole-item metadata with the saved
 	// authority; no sibling base or fence may survive the restaging.
+	nodeFence, nodeBase := work.HeldFence, c.BaseSHA
+	if work.HeldStage != nil {
+		nodeFence, nodeBase = work.HeldStage.NodeFence, work.HeldStage.NodeBase
+	}
 	for name, body := range map[string]string{
-		BaseSHAFile: c.BaseSHA + "\n", ItemBaseSHAFile: c.BaseSHA + "\n",
-		FenceFile: work.HeldFence, ItemFenceFile: work.HeldFence,
+		BaseSHAFile: nodeBase + "\n", ItemBaseSHAFile: c.BaseSHA + "\n",
+		FenceFile: nodeFence, ItemFenceFile: work.HeldFence,
 	} {
 		if err := os.WriteFile(filepath.Join(l.laneDirPath(c.LaneID), name), []byte(body), 0600); err != nil {
 			return err
@@ -528,7 +649,11 @@ func (l *Loop) stagePinnedCandidate(ctx context.Context, work *pendingWork) erro
 	if head, err := l.revParse(ctx, c.Worktree, "HEAD"); err != nil || strings.TrimSpace(head) != c.HeadSHA {
 		return fmt.Errorf("staging candidate %s: head %s, want %s: %v", c.RunID, head, c.HeadSHA, err)
 	}
-	if err := appendJudgment(ctx, l.cfg.Store, candidateStagedKind, "run", c.RunID, struct{}{}, l.cfg.Now()); err != nil {
+	return l.markPinnedStaged(ctx, work)
+}
+
+func (l *Loop) markPinnedStaged(ctx context.Context, work *pendingWork) error {
+	if err := appendJudgment(ctx, l.cfg.Store, candidateStagedKind, "run", work.Candidate.RunID, struct{}{}, l.cfg.Now()); err != nil {
 		return err
 	}
 	work.NeedsStage = false
@@ -560,7 +685,7 @@ func (l *Loop) releaseRefusedAssignment(ctx context.Context, work *pendingWork) 
 		if err != nil || !owned {
 			return err
 		}
-		if err := appendEffect(tx, candidateLaneKind, c.RunID, candidateLane{Candidate: c, Released: true, Fence: work.HeldFence}, l.cfg.Now().UTC()); err != nil {
+		if err := appendEffect(tx, candidateLaneKind, c.RunID, candidateLane{Candidate: c, Released: true, Fence: work.HeldFence, Stage: work.HeldStage}, l.cfg.Now().UTC()); err != nil {
 			return err
 		}
 		released = true
