@@ -21,17 +21,16 @@
     ]
   },
   {
-    "case": "fixer-gate-all",
+    "case": "fixer-ordinary",
     "face": "gate",
-    "run": "run-fixer-gate-all",
+    "run": "run-fixer-ordinary",
     "args": [
-      "--all",
       "--item",
       "fixer-main-111111111111",
       "--lane",
       "lane-1",
       "--run",
-      "run-fixer-gate-all",
+      "run-fixer-ordinary",
       "--worktree",
       "<worktree>",
       "--base",
@@ -43,26 +42,26 @@
     ]
   },
   {
-    "case": "fixer-gate-since",
-    "face": "gate",
-    "run": "run-fixer-gate-since",
+    "case": "fixer-named",
+    "face": "fixer-gate",
+    "run": "run-fixer-named",
     "args": [
-      "--since",
-      "3333333333333333333333333333333333333333",
       "--item",
       "fixer-main-111111111111",
       "--lane",
       "lane-1",
       "--run",
-      "run-fixer-gate-since",
+      "run-fixer-named",
       "--worktree",
       "<worktree>",
       "--base",
       "1111111111111111111111111111111111111111",
       "--head",
-      "2222222222222222222222222222222222222222",
+      "<head>",
       "--root",
-      "<root>"
+      "<root>",
+      "--only",
+      "fixture/check"
     ]
   },
   {

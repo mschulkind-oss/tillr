@@ -444,7 +444,7 @@ def test_describe_answers_the_hook_contract(tmp):
         "gate": candidate,
         "land": candidate | {"--observed-trunk", "--base-ref", "--message-from"},
         "verdict": candidate | {"--store", "--verdict"},
-        "fixer-gate": candidate | {"--all", "--since"},
+        "fixer-gate": candidate | {"--only"},
         "replay": {"--only"},
         "rolling": {"--all", "--since"},
     }
@@ -524,13 +524,16 @@ def test_every_argv_the_drain_sends_is_accepted(tmp):
     drain sends fails this case, at the landing tier, before a loop faults on it.
     """
     cases = json.loads((HERE / "drain-argv.json").read_text())
-    assert {case["face"] for case in cases} == {"gate", "land", "verdict"}, cases
+    assert {case["face"] for case in cases} == {"gate", "fixer-gate", "land", "verdict"}, cases
     fixture = Fixture(tmp)
+    fixture.write_stub("python3", PYTHON_STUB)
+    git(fixture.repo, "checkout", "tillr/lane-1")
     store = fixture.tmp / "state.db"
     env = fixture.env(TILLR_LOOP_REGISTRY=fixture.tmp / "registry.json")
     for case in cases:
         args = [word.replace("<worktree>", str(fixture.repo)).replace("<store>", str(store))
-                .replace("<root>", str(fixture.repo)) for word in case["args"]]
+                .replace("<root>", str(fixture.repo)).replace("<head>", fixture.head)
+                for word in case["args"]]
         run_dir = fixture.repo / ".tillr" / "loop" / case["run"]
         run_dir.mkdir(parents=True, exist_ok=True)
         (run_dir / "gate.verdict.json").write_text("{}\n")
@@ -540,7 +543,8 @@ def test_every_argv_the_drain_sends_is_accepted(tmp):
         assert result.returncode == 0, (case["case"], result.returncode, result.stderr)
         calls = [call for call in fixture.calls() if not call.startswith("env ")]
         last = calls[-1] if calls else ""
-        want = {"gate": "run ", "land": "pass ", "verdict": "verdict record "}[case["face"]]
+        want = {"gate": "run ", "fixer-gate": "python3-cwd: ",
+                "land": "pass ", "verdict": "verdict record "}[case["face"]]
         assert last.startswith(want), (case["case"], calls)
         # Every flag the drain added after the candidate's own reaches the lander unchanged.
         for flag in ("--observed-trunk", "--message-from", "--base-ref"):
@@ -567,22 +571,20 @@ def test_check_argv_parses_without_reading_or_judging(tmp):
     assert refused.returncode == 2 and "--unknown" in refused.stderr, refused
 
 
-def test_fixer_range_reaches_the_judge(tmp):
-    """A fixer's `--since`/`--all` widens the default judge, and refuses a named one."""
+def test_fixer_runs_only_the_named_selector_on_candidate_head(tmp):
     fixture = Fixture(tmp)
-    registry = ["--registry", str(fixture.tmp / "registry.json")]
-    for extra, want in ((["--since", fixture.base], f"--gate-arg --since --gate-arg {fixture.base}"),
-                        (["--all"], "--gate-arg --all")):
-        fixture.log.write_text("")
-        result = fixture.run_adapter("gate", registry + extra)
-        assert result.returncode == GATE_PASS, (extra, result.returncode, result.stderr)
-        run = [call for call in fixture.calls() if call.startswith("run ")]
-        assert run and run[-1].endswith(want), (extra, run)
-        assert "--gate-arg --tier" not in run[-1], run
-    result = fixture.run_adapter("gate", registry + ["--all", "--gate-program", "true"])
-    assert result.returncode == ADAPTER_REFUSED, (result.returncode, result.stderr)
-    result = fixture.run_adapter("gate", registry + ["--all", "--since", fixture.base])
-    assert result.returncode == ADAPTER_REFUSED, (result.returncode, result.stderr)
+    fixture.write_stub("python3", PYTHON_STUB)
+    git(fixture.repo, "checkout", "tillr/lane-1")
+    result = fixture.run_adapter("fixer-gate", ["--only", "test:one label"])
+    assert result.returncode == GATE_PASS, (result.returncode, result.stderr)
+    assert fixture.calls() == [
+        "python3-argv: tools/fork-check.py --replay --only=test:one label --fixer",
+        "python3-cwd: " + str(fixture.repo),
+    ], fixture.calls()
+    for obsolete in (["--all"], ["--since", fixture.base]):
+        for face in ("gate", "fixer-gate"):
+            result = fixture.run_adapter(face, obsolete)
+            assert result.returncode == ADAPTER_REFUSED, (result.returncode, result.stderr)
 
 
 def test_land_without_a_gate_verdict_refuses(tmp):
@@ -911,7 +913,7 @@ def main():
             test_hook_dispatch_matches_drain_flag_cases,
             test_every_argv_the_drain_sends_is_accepted,
             test_check_argv_parses_without_reading_or_judging,
-            test_fixer_range_reaches_the_judge,
+            test_fixer_runs_only_the_named_selector_on_candidate_head,
             test_land_without_a_gate_verdict_refuses,
             test_verdict_exit_mapping,
             test_verdict_leaves_owner_criterion,

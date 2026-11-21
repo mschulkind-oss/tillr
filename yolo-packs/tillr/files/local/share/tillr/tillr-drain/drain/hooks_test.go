@@ -68,7 +68,7 @@ func TestDefinitionHookArgumentsAndPreflight(t *testing.T) {
 		case "verdict":
 			argv = steps.programArgv(steps.VerdictProgram, c, steps.verdictArgs("pass")...)
 		case "fixer-gate":
-			argv = steps.programArgv(steps.fixerGate(c), c)
+			argv = steps.programArgv(steps.FixerGateProgram, c, "--only", "check")
 		case "replay":
 			argv = steps.commandArgv(strings.ReplaceAll(steps.ReplayProgram, "{only}", "check"))
 		case "rolling":
@@ -103,8 +103,8 @@ func TestDefinitionHookArgumentsAndPreflight(t *testing.T) {
 			want = append(want, candidateArgs(c, root)...)
 			want = append(want, "--store", "store", "--verdict", "pass")
 		case "fixer-gate":
-			want = append(want, "--all")
 			want = append(want, candidateArgs(c, root)...)
+			want = append(want, "--only", "check")
 		case "replay":
 			want = append(want, "--only", "check")
 		case "rolling":

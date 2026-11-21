@@ -1325,6 +1325,12 @@ While a trunk check is red and a fixer is open, every non-fixer item may still s
 run (the blanket `trunk-broken` hold on dispatch is removed per [`OQ-GP7`](../../docs/design/tillr-graph-is-the-path.md#OQ-GP7)); a non-fixer run
 staged while a fixer is open carries a trunk-state notice in its brief naming the red
 checks and open fixer so the worker does not spend its run on a failure it did not cause.
+A trunk fixer runs the same gate as any candidate, over its own diff onto the tip.
+After that gate accepts the diff, the named checks in its stored criterion must pass on
+its tree, even if they are normally deferred to proof. The gate log records any upstream
+reader dropped from those names. A named failure returns to the worker; a check that
+could not judge holds the candidate on the tooling-defect path.
+
 Only landing waits, based on path intersection:
 
 A candidate refused only by checks that also fail on its base and on the trunk tip is
@@ -1346,6 +1352,11 @@ landing releases nothing until a proof passes its checks (see
 [After-merge heavy runs](#after-merge-heavy-runs)). A check green on the base, or a
 candidate with an additional failure of its own, keeps the ordinary refusal. There is no
 landing cap (`red_cap` is removed per [`OQ-GP7`](../../docs/design/tillr-graph-is-the-path.md#OQ-GP7)).
+
+A fixer can inherit only failures it does not name. A refusal containing even one named
+failure returns whole to its worker. If an intersecting, unnamed failure would make the
+fixer wait on itself or form a cycle of fixers, the check is attached to this fixer and
+the refusal goes back to its worker instead. The next gate must judge the new name too.
 
 The red base is only half the question when the trunk has moved past it. Work is always
 built against the latest trunk (the owner's ruling of 2026-11-18), so the failing checks
@@ -2544,9 +2555,9 @@ checks the argument interface, not the candidate's validity.
 Both `tillr drain loop --check` and normal startup negotiate support using help,
 then pass every candidate flag through this mode. The land check includes
 `--observed-trunk`, `--base-ref` and `--message-from`; verdict checks include
-`--store` and both verdict values. Fixer gates check both `{green}` expansions
-(`--all` and `--since <sha>`) separately, because those options are mutually
-exclusive. The [tillr-loop adapter](../tillr-loop/README.md) implements the mode.
+`--store` and both verdict values. The fixer's named-check step checks `--only`
+alongside the candidate flags. The [tillr-loop adapter](../tillr-loop/README.md)
+implements the mode.
 No run is dispatched before these checks finish.
 
 A command that does not advertise support is named once as `unchecked` at startup

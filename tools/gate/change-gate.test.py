@@ -14,12 +14,10 @@ PROGRAM = Path(__file__).with_name("change-gate.py").resolve()
 
 class ChangeGateCompatibilityTest(unittest.TestCase):
     def test_probes_installed_runner_before_using_optional_flag(self):
-        for supported, full, changed in ((False, [], b"README.md\0"),
-                                          (True, [], b"README.md\0"),
-                                          (True, [], b"tools/tillr-gate/main.go\0"),
-                                          (True, ["--all"], b"README.md\0"),
-                                          (True, ["--since", "green"], b"README.md\0")):
-            with self.subTest(supported=supported, full=full, changed=changed):
+        for supported, changed in ((False, b"README.md\0"),
+                                   (True, b"README.md\0"),
+                                   (True, b"tools/tillr-gate/main.go\0")):
+            with self.subTest(supported=supported, changed=changed):
                 adapter = runpy.run_path(str(PROGRAM))
                 commands = []
 
@@ -39,14 +37,13 @@ class ChangeGateCompatibilityTest(unittest.TestCase):
                             help_text += b"  -scope-to-change-later\n"
                         return subprocess.CompletedProcess(args, 0, stdout=b"", stderr=help_text)
                     if args[0] == "runner":
-                        self.assertEqual("--scope-to-change" in args, supported and not full)
+                        self.assertEqual("--scope-to-change" in args, supported)
                         return subprocess.CompletedProcess(args, 0, stdout=b"")
-                    self.assertEqual(args[1:], ["tools/fork-check.py", *(full or
-                                     ["--since", "base", "--tier", "landing"])])
+                    self.assertEqual(args[1:], ["tools/fork-check.py", "--since", "base", "--tier", "landing"])
                     return subprocess.CompletedProcess(args, 0)
 
                 argv = [str(PROGRAM), "--base", "base", "--head", "head", "--runner",
-                        "runner", "--logs", "logs", *full]
+                        "runner", "--logs", "logs"]
                 warming = []
                 with patch.object(adapter["sys"], "argv", argv), \
                      patch.dict(os.environ, {"TILLR_FAST_VERDICT_OUT": ""}), \
@@ -54,11 +51,10 @@ class ChangeGateCompatibilityTest(unittest.TestCase):
                      patch.dict(adapter["main"].__globals__, {"warm_trimmed_go_cache": lambda: warming.append(True)}), \
                      patch.object(subprocess, "run", side_effect=invoke):
                     self.assertEqual(adapter["main"](), 0)
-                self.assertEqual(bool(warming), not supported or bool(full) or changed.startswith(b"tools/"))
+                self.assertEqual(bool(warming), not supported or changed.startswith(b"tools/"))
                 runner_commands = [c for c in commands if c[0] == "runner"]
-                self.assertEqual(len(runner_commands), 1 if full else 2)
-                if not full:
-                    self.assertEqual(runner_commands[0], ["runner", "checks", "--help"])
+                self.assertEqual(len(runner_commands), 2)
+                self.assertEqual(runner_commands[0], ["runner", "checks", "--help"])
 
 
 class ChangeGateStallTest(unittest.TestCase):

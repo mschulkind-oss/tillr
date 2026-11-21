@@ -230,11 +230,7 @@ type Candidate struct {
 	WorkerHeadSHA     string         `json:"worker_head_sha,omitempty"`
 	RetirementTreeSHA string         `json:"retirement_tree_sha,omitempty"`
 	WorkerSession     *WorkerSession `json:"worker_session,omitempty"`
-	// FixerBaseSHA is the rolling watermark a fixer's full gate plans from: the last
-	// trunk commit a rolling run proved green. It is set only for a fixer, so the fixer's
-	// gate is the untiered range since the last green while an ordinary candidate's gate
-	// stays the diff-scoped landing tier.
-	FixerBaseSHA string `json:"fixer_base_sha,omitempty"`
+	deferGateJudgment bool           // a fixer's ordinary judgment is not its final gate verdict
 	// Request is the run.request that produced this candidate. It is held so a
 	// conflict-fix run can be built from the same backend, command and timeout instead of
 	// inventing a second request. It is not persisted: the candidate is a value a step
@@ -255,7 +251,8 @@ type Candidate struct {
 // include the step's own store write (the gate judgment), which is the loop's bookkeeping
 // and not the gate.
 type GateOutcome struct {
-	StallHeld     bool // first-stall transition committed atomically with the judgment
+	finish        func(current GateOutcome) error // publish after the named phase, at most once
+	StallHeld     bool                            // first-stall transition committed atomically with the judgment
 	StalledChecks []StallObservation
 
 	// Outcome is GatePassed, GatePassedInherited, GateFailed, GateErrored or GateStalled.
@@ -516,6 +513,7 @@ type Loop struct {
 	restartReplaced             bool
 	restartMechanical           sync.RWMutex
 	heavyMu                     sync.Mutex
+	fixerWaitMu                 sync.Mutex
 	heavyWG                     sync.WaitGroup
 	heavyRunning                bool
 	heavyProofActive            bool // heavyMu; entry is serialized with exec by restartMechanical
@@ -2974,6 +2972,7 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	l.gatesInFlight++
 	l.mu.Unlock()
 	candidate.gateCount = l.gateCount
+	candidate.deferGateJudgment = IsTrunkFixer(candidate.ItemID)
 	ctx, unlock, err := l.lockRestartMechanical(ctx)
 	if err != nil {
 		return "", false, err
@@ -3041,6 +3040,9 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			gate.Outcome = GatePassedInherited
 			break
 		}
+		if err := gate.finishJudgment(); err != nil {
+			return "", false, err
+		}
 		if acquitted {
 			return "", false, nil
 		}
@@ -3065,6 +3067,14 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		// An outcome the drain does not know is a contract defect between the drain and its
 		// gate step; gating again would answer the same unknown word.
 		return "", false, l.gateFault(ctx, candidate, fmt.Sprintf("the gate answered %q", gate.Outcome))
+	}
+	// Both ordinary passes and disjoint inherited passes must prove the named repairs.
+	// A refusal or hold above never invokes the named checks.
+	if IsTrunkFixer(candidate.ItemID) {
+		accepted, err := l.settleFixerGate(ctx, &candidate, &gate, result)
+		if err != nil || !accepted {
+			return "", false, err
+		}
 	}
 	// The lane is released after landing, possibly long before a rolling check
 	// reverts it. Capture its worker now, never from the later lane occupant.

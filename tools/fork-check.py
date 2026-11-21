@@ -8622,7 +8622,8 @@ def plan_gate(root: Path, options) -> GatePlan:
     # The commit this run plans from: the newest verified entry this history contains,
     # whatever branch recorded it. Set on the record as well, because the plan's own
     # yolo/node comparisons read it there.
-    baseline, baseline_origin, baseline_notes = select_baseline(root, record, branch, head)
+    fixer_replay = getattr(options, "fixer", False)
+    baseline, baseline_origin, baseline_notes = (None, None, []) if fixer_replay else select_baseline(root, record, branch, head)
     record.planning_baseline = baseline
     gate.baseline = baseline
     gate.baseline_origin = baseline_origin
@@ -8723,11 +8724,12 @@ def plan_gate(root: Path, options) -> GatePlan:
     gate.started = started
     gate.started_at = started_at
     progress(f"fork-check: planning {len(changed)} changed path(s) against {len(series)} series")
+    audit_inputs = since is None and not fixer_replay
     with heartbeat("the plan"):
         plan = build_plan(root, series, record, changed, force_all, options.build,
-                          audit_upstreams=since is None, yolo=yolo_build,
-                          audit_yolo=since is None, node=node_version,
-                          audit_node=since is None, base=diff_base,
+                          audit_upstreams=audit_inputs, yolo=yolo_build,
+                          audit_yolo=audit_inputs, node=node_version,
+                          audit_node=audit_inputs, base=diff_base,
                           # The preflight's parser has no `--tier`, and a preflight is a
                           # diagnostic of the full gate, so an absent attribute is the
                           # full gate rather than an error.
@@ -8735,7 +8737,8 @@ def plan_gate(root: Path, options) -> GatePlan:
     # A re-gate on a moved tip is told which checks the caller already holds a result
     # for. They are removed before anything runs, so the run buys only what the landed
     # paths can reach, and the plan line names them in `reused`.
-    apply_reuse(plan, reuse_selectors())
+    if not fixer_replay:
+        apply_reuse(plan, reuse_selectors())
     # The heavy phase is ordered longest-first by what each check actually cost last time.
     # The timeline is machine-local instrumentation, so a missing one is no history rather
     # than a refusal: the plan then keeps plan order, which is what it did before.
@@ -10207,6 +10210,10 @@ def show_triage(common_dir: Path, selector: str) -> int:
 # staged. Exit 2 is "could not answer" (no planning, no matching check, a check whose
 # working copy is absent), which the loop reads as unknown and never as green.
 
+# The fixer's named-check adapter distinguishes an omitted upstream reader from a pass.
+FIXER_UPSTREAM_DROPPED = 77
+
+
 def run_replay(argv: list[str]) -> int:
     """Re-run a named set of checks on a revision, and answer their verdict.
 
@@ -10223,8 +10230,24 @@ def run_replay(argv: list[str]) -> int:
     parser.add_argument("--build", dest="build", action="store_true", default=True, help=argparse.SUPPRESS)
     parser.add_argument("--no-build", dest="build", action="store_false", help=argparse.SUPPRESS)
     parser.add_argument("--replay", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--fixer", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--jobs", default=None, help=argparse.SUPPRESS)
     options = parser.parse_args(argv)
+    if options.fixer:
+        names = [name.strip() for value in options.only for name in value.split(",") if name.strip()]
+        if not names:
+            print("fork-check replay: fixer check could not judge: no selector", file=sys.stderr)
+            return 2
+        options.only = []
+        for name in names:
+            # These historical names can survive the fork declaration that planned them.
+            kind = re.split(r"[/:]", name, maxsplit=1)[0]
+            if kind in ("series", "patch-branch-inv2"):
+                print(f"fork-check replay: {name}: dropped (reads upstream)")
+            else:
+                options.only.append(name)
+        if not options.only:
+            return FIXER_UPSTREAM_DROPPED
     # Force the full plan: a replay names checks that the current revision's diff may not
     # select, and a narrowing plan would silently replay nothing.
     options.all = True
@@ -10242,19 +10265,38 @@ def run_replay(argv: list[str]) -> int:
     checks = [check for check in gate.plan.checks if preflight_selected(check, options.only)]
     if not checks:
         print("fork-check replay: no planned check matches --only", file=sys.stderr)
+        if options.fixer:
+            kinds = {re.split(r"[/:]", name, maxsplit=1)[0] for name in options.only}
+            for skip in gate.plan.skips:
+                if skip.kind in kinds:
+                    print(f"fork-check replay: {skip.label}: {skip.why}", file=sys.stderr)
         return 2
-    missing = {id(check) for check, _ in gate.missing}
-    if any(id(check) in missing for check in checks):
-        print("fork-check replay: a named check's working copy is absent, so it cannot run",
-              file=sys.stderr)
+    if options.fixer:
+        upstream = [check for check in checks if reads_upstream(check)]
+        for check in upstream:
+            print(f"fork-check replay: {check.kind}: {check.label}: dropped (reads upstream)")
+        if upstream:
+            checks = [check for check in checks if not reads_upstream(check)]
+            if not checks:
+                return FIXER_UPSTREAM_DROPPED
+    missing = {id(check): paths for check, paths in gate.missing}
+    if absent := [check for check in checks if id(check) in missing]:
+        for check in absent:
+            print(f"fork-check replay: {check.label}: missing {', '.join(missing[id(check)])}",
+                  file=sys.stderr)
         return 2
     copies = [copy.copy(check) for check in checks]
     cancellation = Cancellation()
     with cancellation.on_sigterm():
         for check in copies:
             execute_attempt(root, check, gate.diff_base, cancel=cancellation)
-    if any(check.unanswered or check.rc == CHECK_STALLED_RC for check in copies):
-        print("fork-check replay: a named check could not judge", file=sys.stderr)
+    unanswered = [check for check in copies if check.unanswered or check.was_cancelled or check.rc == CHECK_STALLED_RC]
+    if unanswered:
+        for check in unanswered:
+            print(f"fork-check replay: {check.kind}: {check.label} could not judge (exit {check.rc})",
+                  file=sys.stderr)
+            if check.output:
+                print(check.output, file=sys.stderr)
         return 2
     failed = []
     for check in copies:
@@ -10514,7 +10556,15 @@ def main(argv: list[str]) -> int:
     # writes no record and advances no baseline, so it takes no record lock and is
     # dispatched before the common Git directory is read, the same shape as --preflight.
     if known.replay:
-        return run_replay(argv)
+        if "--fixer" not in argv:
+            return run_replay(argv)
+        try:
+            return run_replay(argv)
+        except (Exception, SystemExit) as error:
+            # Only the replay's explicit exit 1 is a negative judgment. A Python
+            # exception (including malformed tree metadata) cannot refuse a fixer.
+            print(f"fork-check replay: could not judge: {error}", file=sys.stderr)
+            return 2
 
     root = Path(__file__).resolve().parents[1]
     # The pin-drift detector is a read of the upstream and the checkout, plus one board

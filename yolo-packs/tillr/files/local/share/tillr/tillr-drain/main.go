@@ -845,7 +845,7 @@ func loopFace(args []string) int {
 	replay := fs.String("replay", drain.DefaultReplayProgram, "the program that re-runs a red gate's failing checks on the base, so a trunk-red failure acquits the item instead of convicting it; {only} is the comma-separated failing check ids. Empty disables the acquittal")
 	heavyGate := fs.String("heavy-gate", "tillr-gate", "the declaration judge for after-merge heavy runs")
 	rolling := fs.String("rolling", drain.DefaultRollingProgram, "the program that runs the rolling tier over the trunk range; {since} is `--since <watermark>` or `--all`. Empty disables the rolling tier")
-	fixerGate := fs.String("fixer-gate", drain.DefaultFixerGateProgram, "the FULL untiered gate a fixer item runs instead of --gate; it is handed the candidate's flags like --gate, and its verdict record is what the land program reads; {green} is `--since <last_green_sha>` or `--all`. Empty leaves a fixer on --gate, which cannot prove the sibling breakage its range reaches")
+	fixerGate := fs.String("fixer-gate", drain.DefaultFixerGateProgram, "the named-check judge a trunk fixer runs after --gate; receives the candidate flags and --only <proof selector>")
 	now := fs.String("now", "", "the injected clock, RFC 3339 (default: the wall clock, once per tick)")
 	questionsCmd := fs.String("questions-cmd", "", questionsCmdHelp)
 	questionsIndex := fs.String("questions-index", "", "saved Vantage index JSON for the advisory start view (default <store>.questions-index.json on landing loops)")

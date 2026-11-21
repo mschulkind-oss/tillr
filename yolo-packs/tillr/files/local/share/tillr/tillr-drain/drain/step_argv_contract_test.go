@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -125,7 +126,6 @@ type argvCase struct {
 const (
 	fixtureBase     = "1111111111111111111111111111111111111111"
 	fixtureHead     = "2222222222222222222222222222222222222222"
-	fixtureGreen    = "3333333333333333333333333333333333333333"
 	fixtureObserved = "4444444444444444444444444444444444444444"
 	fixtureWorker   = "5555555555555555555555555555555555555555"
 )
@@ -167,33 +167,24 @@ func TestEveryArgvTheDrainSendsIsAcceptedByTheTillrLoopAdapter(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	// Gate: the ordinary program, and the fixer's full gate in both of its ranges.
-	gates := []struct {
-		name  string
-		item  string
-		green string
-		want  string
-	}{
-		{"gate", "item-a", "", ""},
-		{"fixer-gate-all", TrunkFixerID(fixtureBase), "", "--gate-arg --all"},
-		{"fixer-gate-since", TrunkFixerID(fixtureBase), fixtureGreen, "--gate-arg --since --gate-arg " + fixtureGreen},
-	}
-	for _, g := range gates {
+	// Both ordinary and fixer candidates use the same ordinary gate face.
+	for _, g := range []struct{ name, item string }{{"gate", "item-a"}, {"fixer-ordinary", TrunkFixerID(fixtureBase)}} {
 		run := "run-" + g.name
-		c := candidate(g.item, run)
-		c.FixerBaseSHA = g.green
-		out, err := steps.Gate(ctx, c)
+		out, err := steps.Gate(ctx, candidate(g.item, run))
 		if err != nil || out.Outcome != GatePassed {
-			t.Fatalf("%s: the adapter did not accept the drain's gate argv: %+v, %v\n%s", g.name, out, err, strings.Join(lastSpanArgv(t, f.root, run), " "))
+			t.Fatalf("%s: gate argv: %+v, %v", g.name, out, err)
 		}
-		calls := stubCalls(t, log)
-		if g.want != "" && !strings.Contains(calls[len(calls)-1], g.want) {
-			t.Fatalf("%s: the fixer's range did not reach the gate program: %s", g.name, calls[len(calls)-1])
-		}
-		// Both programs are `python3 <adapter> gate` before the words the drain adds: the
-		// fixer's range is the first of those words, so it is pinned with the candidate.
 		keep(g.name, run, "gate", 3)
 	}
+	c := candidate(TrunkFixerID(fixtureBase), "run-fixer-named")
+	c.HeadSHA = runGit(t, worktree, "rev-parse", "HEAD")
+	writeForkFile(t, filepath.Join(worktree, "tools", "fork-check.py"), "import sys\nassert sys.argv[1:] == ['--replay', '--only=fixture/check', '--fixer']\n")
+	if answer, output := steps.fixerCheck(ctx, c, "fixture/check"); answer != "pass" {
+		t.Fatalf("named check %s: %s", answer, output)
+	}
+	keep("fixer-named", c.RunID, "fixer-gate", 3)
+	args := generated[len(generated)-1].Args
+	args[slices.Index(args, "--head")+1] = "<head>"
 
 	// Land: every optional flag Land appends, alone and together.
 	lands := []struct {

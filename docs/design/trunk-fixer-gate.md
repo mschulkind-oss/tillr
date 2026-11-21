@@ -15,7 +15,8 @@ vantage:
 
 # A trunk fixer is gated on what its repair reaches and on the checks it was filed to repair
 
-**Status:** 2026-11-21. Nothing built. Every statement about the tree was read at `6432ac37e`.
+**Status:** The fixer's gate is built (`D-FG1` and `D-FG2`). The drift and notification work is not built.
+The original tree description was read at `6432ac37e`.
 
 > **In short.** The seat that restores a red trunk is the only seat whose gate reads every
 > landing since the last green commit, so it is the only seat an outside release can stop. Its
@@ -343,8 +344,8 @@ design. None is an owner ruling, and the owner may overturn each by comment.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
-| `D-FG1` | A trunk fixer's gate is the ordinary gate over its own diff plus the checks it names, run on its tree. The untiered range since the last green is removed. Structural fix. (Designer's decision.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate) | — |
-| `D-FG2` | A fixer stays excluded from acquittal only for the checks it names; for any other check it is judged as any candidate is, except that it is never held behind itself or behind a fixer that waits on it: such a check is attached to the fixer and the refusal returns to its worker. No second fixer is filed for the same commit. (Designer's decision; the exception was added on 2026-11-21 to answer a build worker's finding that the ordinary route made a fixer wait on itself.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate), [A fixer never waits on itself](#a-fixer-never-waits-on-itself) | — |
+| `D-FG1` | A trunk fixer's gate is the ordinary gate over its own diff plus the checks it names, run on its tree. The untiered range since the last green is removed. Structural fix. (Designer's decision.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate) | Built |
+| `D-FG2` | A fixer stays excluded from acquittal only for the checks it names; for any other check it is judged as any candidate is, except that it is never held behind itself or behind a fixer that waits on it: such a check is attached to the fixer and the refusal returns to its worker. No second fixer is filed for the same commit. (Designer's decision; the exception was added on 2026-11-21 to answer a build worker's finding that the ordinary route made a fixer wait on itself.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate), [A fixer never waits on itself](#a-fixer-never-waits-on-itself) | Built |
 | `D-FG3` | An upstream reader red on a candidate and on its base, whose watched paths the candidate did not change, is drift: the candidate lands with the failure inherited and one rebase request per fork and release is filed. No trunk fixer is filed for drift. Structural fix. (Designer's decision, carrying out `D-GR12` of the gate rework, itself a designer's decision.) | 2026-11-21 | [Upstream drift](#upstream-drift-is-a-rebase-request-not-a-refusal) | — |
 | `D-FG4` | A fork check that could not judge is neither drift nor a verdict. It holds only a candidate whose diff reaches it or a fixer that names it, by the existing tooling-defect path. (Designer's decision.) | 2026-11-21 | [Upstream drift](#upstream-drift-is-a-rebase-request-not-a-refusal) | — |
 | `D-FG5` | The queue, the affected candidates and the operator's surfaces are told of drift by the rebase request and one loop line. Nothing owner-facing is built until [OQ-FG1](#OQ-FG1) is ruled. (Designer's decision.) | 2026-11-21 | [Who is told](#who-is-told-when-an-upstream-moves) | — |
