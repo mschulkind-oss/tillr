@@ -21,11 +21,13 @@ is right.**
 | edit, test-write, docs, scout, test-run | `pi-build`, `pi-scout` | Terra 6.1 on Bedrock |
 
 - Every designer is Fable 5.2 through `claude -p`. A designer never implements.
-- Astra 6.2 (`pi-designer`) stays in the policy file only as the fallback when
-  the `claude-designer` backend is closed. That fallback is the operator's
-  choice, not the owner's ruling.
-- Changing a model is a policy-file edit plus a clean loop restart, never a
-  per-item retry on "another model".
+- **No fallbacks (owner, 2026-11-20): "We need deliberate choices, not fallbacks.
+  We need to fix what's wrong."** Every seat list in the policy file names
+  exactly one backend. When a backend fails or closes, the work holds with its
+  cause; find and fix the cause. Never add a second backend to a seat, and never
+  move an item to another model to get past an error.
+- Changing a model is a deliberate policy-file edit, never a per-item retry on
+  "another model". The running loop accepts a valid policy file when it changes.
 
 ## Lanes (owner, 2026-11-20)
 
@@ -68,6 +70,22 @@ live `tillr-run` processes to end, and only then start again. Never signal a
    ```bash
    ps -eo etime,args | rg '^ *\S+ tillr-run exec'
    ```
+
+   **An idle lane, a gap, or a step that took longer than it should gets a full
+   root cause analysis in the same check-in (owner, 2026-11-20: "you don't
+   guess, you read everything before making a decision").** Before naming a
+   cause or acting:
+
+   - Read the run's own log to its last line, its report, and every recorded
+     event for that run in order, with times.
+   - Read the loop's messages for the same minutes: restarts, declined
+     dispatches, holds, failed restart checks.
+   - Account for every minute of the gap: who had the lane, what they were
+     waiting on, and what ended the wait.
+   - Do not blame a model, a backend, or "a restart" from a summary line. A run
+     that ended with an error is not evidence that its work was bad or lost.
+   - State what is measured and what is still unknown, and file the defect with
+     the timeline in it.
 
 3. **Triage every running or open item.** Export the events since the last
    cursor and read each item's timeline. Any item with a verify refusal, more
