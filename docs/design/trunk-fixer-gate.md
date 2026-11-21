@@ -4,7 +4,7 @@ status: in-review
 stage: DESIGN
 updated: 2026-11-21
 tags: [tillr, gate, landing, drain, forks, design]
-summary: "The trunk fixer's gate stops being the untiered gate over every landing since the last green commit. It becomes the gate any candidate gets, plus the checks the fixer names, run on the fixer's tree. A fork check that is red only because an upstream published a release is reported as one rebase request per fork and release and refuses nobody whose change does not touch that fork. One question is open for the owner: whether he is told, beyond the queue, when an upstream moves."
+summary: "The trunk fixer's gate stops being the untiered gate over every landing since the last green commit. It becomes the gate any candidate gets, plus the checks the fixer names, run on the fixer's tree. A fork check that is red only because an upstream published a release is reported as one rebase request per fork and release and refuses nobody whose change does not touch that fork; a fork that follows a branch head gets the same acquittal and no request. One question is open for the owner: whether he is told, beyond the queue, when an upstream moves."
 next: "The owner rules OQ-FG1. The gate scope (D-FG1 to D-FG4) does not wait on it and can be planned now."
 depends-on:
   - landing-principles.md
@@ -131,8 +131,10 @@ Specified cases:
 - **A named check fails.** The gate refuses, and the refusal goes back to the fixer's own worker
   naming the test. This is a verdict.
 - **A named check could not judge.** The gate answers "could not judge", never pass and never
-  fail, and names the check and what it lacked. The candidate is held and the existing
-  tooling-defect path takes it. A fixer is not landed on a check nobody could run.
+  fail, and names the check and what it lacked. The fixer is held as a gate fault (the
+  `gate-harness-error` stop), which is how it is built, and no defect item is filed for it
+  ([what "could not judge" does](#the-checks-that-could-not-judge)). A fixer is not landed on a
+  check nobody could run.
 - **A named check that is an upstream reader** is not run as a named check. A red upstream
   reader is drift or a change's own failure, decided by the [drift rule](#upstream-drift-is-a-rebase-request-not-a-refusal),
   and no trunk fixer is filed for it from here on. A fixer already open that names one keeps
@@ -238,6 +240,9 @@ which the replay step already does for every red check. Then:
 No trunk fixer is filed for drift, because no trunk commit is at fault and the proof does not
 judge these checks.
 
+The table reads the same for every fork, whatever it follows. What is filed depends on what the
+fork follows, and that is [the next two parts](#a-fork-that-follows-a-branch-head).
+
 **The rebase request.**
 
 - **One per fork and release.** A second observation of the same fork and release files nothing
@@ -252,12 +257,95 @@ judge these checks.
   pin, so a red there is never drift from a release.
 - **It closes** when a landing makes the check pass against that release, or when a newer
   request replaces it.
+- **It is filed only for a fork that follows releases.** That is a fork whose pack declaration
+  carries no `follow` key and no pin
+  ([the follow modes](../pi/forks.md#roll-forward-on-releases-never-on-a-branch-head)).
 
-**The checks that could not judge.** A remote that does not serve a pinned commit is an
-unavailable resource, not drift. Under the fixer's new gate such a check is not planned unless
-the fixer's diff reaches it, so it no longer holds a repair that does not touch the fork. Where
-a candidate does reach it, it stays "could not judge" and takes the tooling-defect path, which
-names the remote and the commit. That path is unchanged here.
+### A fork that follows a branch head
+
+Added on 2026-11-21 to answer a build worker's finding; the tree was read at `746f87e2b3`. It is
+the designer's decision, part of `D-FG3`, and the owner may overturn it.
+
+The finding: "one per fork and release" has no answer for a fork that is neither pinned nor a
+release follower. `yolo-packs/matt/pack.json` declares one, `pi-background-tasks`, with
+`"follow": "head"`, because its upstream cuts no tags. The lander delivers a rewritten patch
+branch only for a release: `releaseRebase` in `tools/tillr-land/land/fork_rebase.go` accepts
+the rewrite only when the followed target's kind is `release`, and any other rewrite is refused
+as `patch-rewind`. A rebase request for a head follower would therefore be an item no drain
+landing can close, and a candidate held behind it would never be released.
+
+The rule for a fork whose declaration says `follow: "head"`:
+
+| The check on the base | The candidate's diff and the check's watched paths | Outcome |
+| :--- | :--- | :--- |
+| Passes | Any | The candidate's own failure. Ordinary refusal |
+| Red, same answer | Do not intersect | Drift. The candidate lands with the failure recorded as inherited. **No item is filed** |
+| Red, same answer | Intersect | Ordinary refusal, returned to the candidate's worker, as today. No item is filed and nothing is waited on |
+| Could not judge | Any | Not drift and not a verdict, as for any fork |
+
+- **The inherited record** names the check, the fork, the followed branch and the upstream
+  commit the check read, in place of a release.
+- **The loop prints one line** per fork and upstream commit, the first time a candidate lands
+  with that drift inherited. That line and the candidate's verdict are the whole notice.
+- **No rebase request, no trunk fixer and no hold** come from head-follower drift.
+- **The rebase stays the operator's step**, `bin/pi-forks rebase`, by the existing rule in
+  [the fork workflow](../pi/forks.md). The lander's release-only rule is unchanged.
+
+**Why no request is filed.** A request is useful only when the queue can close it. For a head
+follower nothing in the drain can, so filing one would add an item that never lands and a hold
+that never releases. The acquittal in the second row is the part of `D-FG3` that keeps an
+unrelated change landing, and it does not need the item.
+
+**What this leaves undone.** A candidate that does touch a head follower's series or its pack
+declaration while that fork has drifted is refused as it is today, and its worker cannot rebase
+the fork. One fork is in this state. A delivery route for a head follower's rebase belongs to
+the lander and is not designed here.
+
+Rejected, as the designer's decision:
+
+- **Filing the request keyed by fork and upstream commit.** The lander refuses its delivery, so
+  the item and every candidate held behind it would wait with no mover.
+- **Widening the lander to accept a head-follower rewrite inside this decision.** It changes
+  what the lander will rewrite on a published branch, which is a separate design.
+- **Leaving head-follower drift on the ordinary path in whole.** A change that does not touch
+  the fork would still be refused for it, which is the incident this design answers.
+
+### The checks that could not judge
+
+Rewritten on 2026-11-21 to answer a build worker's finding; the tree was read at `746f87e2b3`.
+It is the designer's decision, `D-FG4`, and the owner may overturn it.
+
+The finding: this part said such a check "takes the tooling-defect path", and that the path was
+unchanged. No gate answer takes that path. A tooling-defect item is filed only when a worker's
+report names a tooling obstacle (`fileDefectItem`, called from
+`tools/tillr-drain/drain/obstacle_route.go`). The earlier wording was the designer's error.
+
+A remote that does not serve a pinned commit is an unavailable resource, not drift. Such a check
+is planned only when a candidate's diff reaches it or a fixer names it, so it no longer holds a
+repair that does not touch the fork. Where it is planned, `D-FG4` keeps what the tree does today
+and adds no route:
+
+| Where the check could not judge | What happens, unchanged |
+| :--- | :--- |
+| An ordinary candidate's gate, with no verdict reached | The candidate is held as `gate-no-verdict` and the next pass gates the same candidate again (`holdGateNoVerdict` in `gate_no_verdict.go`). The mover is the loop |
+| An ordinary candidate's gate, when the gate states an error of its own | The item is held as a gate fault, `gate-harness-error`, with the gate's words as the reason (`gateFault` in `item_fault.go`) |
+| A fixer's named check | The fixer is held as a gate fault, `gate-harness-error`, naming the checks that could not judge (`fixer_gate.go`). Built with `D-FG1` |
+| The replay of a red upstream reader on the candidate's base | The red is not classified as drift. No request is filed and nothing is inherited; the candidate is handled as the gate's own answer says, by the rows above or as an ordinary refusal |
+
+- **No gate answer files a tooling-defect item.** That stays the route for a worker's reported
+  tooling obstacle and nothing else.
+- **What `D-FG4` asks of the build** is the last row only: the drift classification treats
+  "could not judge" on the base as a third answer, never as "red, same answer" and never as
+  "passes".
+- **The name of what was lacking** is the check's own output in the gate log. No new record is
+  added for it.
+
+Rejected, as the designer's decision:
+
+- **Filing a defect item from a gate's "could not judge".** The cause is usually outside the
+  repository (a remote, a network), so the item would have no fence a worker could repair in.
+- **Changing the fixer's hold to match the ordinary candidate's re-gate.** It is built and
+  works; the difference is recorded here, not removed.
 
 > [!WARNING]
 > Do not make the fixer's gate pass by skipping fork checks by name. The repair is the scope:
@@ -275,12 +363,18 @@ Settled here, as the designer's decision:
 | The operator | The loop prints one line when the request is filed, and the waiting face lists the request with its fork and release |
 | A fixer's worker | Nothing. The drift is not in its brief unless its fence includes that fork |
 
+For [a fork that follows a branch head](#a-fork-that-follows-a-branch-head) no request exists.
+The inherited record on the candidate and the loop's one line are the notice.
+
 Whether the owner is told in any further way is his to rule, because it decides what he sees
 ([OQ-PR21](../tillr/decision-provenance-review.md#OQ-PR21)). That is [OQ-FG1](#OQ-FG1). Until
 it is ruled, no owner-facing row or hold is built for drift; the rows above do not depend on it.
 
 ## What this does not change
 
+- The lander. Its release-only rule for a rewritten patch branch stays, which is why
+  [a head follower](#a-fork-that-follows-a-branch-head) gets no rebase request.
+- The tooling-defect route. It is still entered only by a worker's reported tooling obstacle.
 - The proof, the green pointer, automatic revert and the way a fixer is filed, attached and
   resolved. [A fixer never waits on itself](#a-fixer-never-waits-on-itself) uses the existing
   attachment and changes only what happens to the fixer after it: returned to its worker, not
@@ -308,6 +402,8 @@ it is ruled, no owner-facing row or hold is built for drift; the rows above do n
 | A second red in the range is found one proof later than today | The proof names it and files its fixer, as for any red; the first fixer has already landed, so the range is shorter |
 | Drift goes unseen while no change touches a fork | Stated above; the probe closes it. A launch on the host still holds the last good build |
 | A named check's selector is missing from the fixer's record | The gate answers "could not judge" naming the check; it never passes by omission |
+| A head follower drifts and no queue item says so | One fork is a head follower. Its drift is on the verdict of every candidate that inherits it and in one loop line; the rebase is the operator's step. A lander route for it is separate design |
+| A candidate reaching a check whose remote stays unavailable is gated again every pass | This is today's behavior and `D-FG4` keeps it. `item-gate-pinned-fork-inputs` changes how those checks read their pinned inputs |
 | A fixer's named list grows while it works, because unnamed reds its diff reaches attach to it | Only a check whose read paths the fixer's own diff changes can attach this way, and only when no other fixer can be waited on. The existing limits on returned refusals bound the loop |
 
 ## Open Questions
@@ -346,6 +442,6 @@ design. None is an owner ruling, and the owner may overturn each by comment.
 | :--- | :--- | :--- | :--- | :--- |
 | `D-FG1` | A trunk fixer's gate is the ordinary gate over its own diff plus the checks it names, run on its tree. The untiered range since the last green is removed. Structural fix. (Designer's decision.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate) | Built |
 | `D-FG2` | A fixer stays excluded from acquittal only for the checks it names; for any other check it is judged as any candidate is, except that it is never held behind itself or behind a fixer that waits on it: such a check is attached to the fixer and the refusal returns to its worker. No second fixer is filed for the same commit. (Designer's decision; the exception was added on 2026-11-21 to answer a build worker's finding that the ordinary route made a fixer wait on itself.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate), [A fixer never waits on itself](#a-fixer-never-waits-on-itself) | Built |
-| `D-FG3` | An upstream reader red on a candidate and on its base, whose watched paths the candidate did not change, is drift: the candidate lands with the failure inherited and one rebase request per fork and release is filed. No trunk fixer is filed for drift. Structural fix. (Designer's decision, carrying out `D-GR12` of the gate rework, itself a designer's decision.) | 2026-11-21 | [Upstream drift](#upstream-drift-is-a-rebase-request-not-a-refusal) | — |
-| `D-FG4` | A fork check that could not judge is neither drift nor a verdict. It holds only a candidate whose diff reaches it or a fixer that names it, by the existing tooling-defect path. (Designer's decision.) | 2026-11-21 | [Upstream drift](#upstream-drift-is-a-rebase-request-not-a-refusal) | — |
-| `D-FG5` | The queue, the affected candidates and the operator's surfaces are told of drift by the rebase request and one loop line. Nothing owner-facing is built until [OQ-FG1](#OQ-FG1) is ruled. (Designer's decision.) | 2026-11-21 | [Who is told](#who-is-told-when-an-upstream-moves) | — |
+| `D-FG3` | An upstream reader red on a candidate and on its base, whose watched paths the candidate did not change, is drift: the candidate lands with the failure inherited and one rebase request per fork and release is filed. No trunk fixer is filed for drift. The request is filed only for a fork that follows releases. For a fork that follows a branch head the candidate still lands with the failure inherited, no item is filed, one loop line is printed, and a candidate that touches that fork is refused as today, because the lander delivers a rewritten patch branch only for a release. Structural fix. (Designer's decision, carrying out `D-GR12` of the gate rework, itself a designer's decision; the head-follower rule was added on 2026-11-21 to answer a build worker's finding that `pi-background-tasks` follows `head`.) | 2026-11-21 | [Upstream drift](#upstream-drift-is-a-rebase-request-not-a-refusal), [A fork that follows a branch head](#a-fork-that-follows-a-branch-head) | — |
+| `D-FG4` | A fork check that could not judge is neither drift nor a verdict. It holds only a candidate whose diff reaches it or a fixer that names it, by the holds the tree already has: an ordinary candidate is held as `gate-no-verdict` and gated again, or as a gate fault when the gate states its own error; a fixer's named check is a gate fault. No gate answer files a tooling-defect item. The one thing to build is that "could not judge" on the base is never classified as drift. (Designer's decision; corrected on 2026-11-21 to answer a build worker's finding that the "tooling-defect path" the earlier wording named is entered only by a worker's reported obstacle.) | 2026-11-21 | [The checks that could not judge](#the-checks-that-could-not-judge) | — |
+| `D-FG5` | The queue, the affected candidates and the operator's surfaces are told of drift by the rebase request and one loop line; for a fork that follows a branch head, by the inherited record and one loop line. Nothing owner-facing is built until [OQ-FG1](#OQ-FG1) is ruled. (Designer's decision.) | 2026-11-21 | [Who is told](#who-is-told-when-an-upstream-moves) | — |
