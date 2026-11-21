@@ -530,23 +530,22 @@ func TestIdenticalRepeatHoldNamesWorkingCommandForFiledRequest(t *testing.T) {
 	latestRun := steps.runs[len(steps.runs)-1].RunID
 	expectedCmdPrefix := "tillr drain retry --item " + id + " --run " + latestRun + " --by <who> --why <reason>"
 
-	var held item.Conflict
 	fixtureRead(t, f, func(r *store.Reader) error {
-		conflicts, err := item.ReadConflicts(r)
+		holds, err := ReadItemFaults(r)
 		if err != nil {
 			return err
 		}
-		held = conflicts[id]
-		if held.Status != "owner" || !strings.HasPrefix(held.Text, IdenticalRepeatPrefix) {
-			t.Fatalf("expected identical-repeat owner hold, got %+v", held)
+		held := holds[id]
+		if held.Reason != reasonVerifyTriage || held.RunID != latestRun {
+			t.Fatalf("expected repeated-finding hold for %s, got %+v", latestRun, held)
 		}
 		for _, bad := range []string{"amend the item's block", "No item block reference is recorded"} {
-			if strings.Contains(held.Text, bad) {
-				t.Errorf("filed request hold still tells operator %q:\n%s", bad, held.Text)
+			if strings.Contains(held.Detail, bad) {
+				t.Errorf("filed request hold still tells operator %q:\n%s", bad, held.Detail)
 			}
 		}
-		if !strings.Contains(held.Text, expectedCmdPrefix) {
-			t.Fatalf("identical-repeat hold does not name accepted command %q:\n%s", expectedCmdPrefix, held.Text)
+		if !strings.Contains(held.Detail, expectedCmdPrefix) {
+			t.Fatalf("repeated-finding hold does not name accepted command %q:\n%s", expectedCmdPrefix, held.Detail)
 		}
 		whyAns, err := Why(r, Pass{AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
 		if err != nil {
@@ -559,10 +558,13 @@ func TestIdenticalRepeatHoldNamesWorkingCommandForFiledRequest(t *testing.T) {
 			if strings.Contains(row.Why, "no document exists") || strings.Contains(row.Mover, "name or triage") {
 				t.Fatalf("why still tells operator to triage a document for filed request: %+v", row)
 			}
-			if !strings.Contains(row.Mover, expectedCmdPrefix) {
-				t.Fatalf("why mover does not name accepted command %q: %+v", expectedCmdPrefix, row)
+			if row.Reason != reasonVerifyTriage || !strings.Contains(row.Why, expectedCmdPrefix) ||
+				!strings.Contains(row.Mover, "retry command in the hold detail") {
+				t.Fatalf("why does not direct the operator to accepted command %q: %+v", expectedCmdPrefix, row)
 			}
+			return nil
 		}
+		t.Fatalf("missing why row for %s", id)
 		return nil
 	})
 
@@ -587,7 +589,7 @@ func TestIdenticalRepeatHoldNamesWorkingCommandForFiledRequest(t *testing.T) {
 }
 
 func TestLandedRowItemWithLaterHeldRunNamesWorkingRetry(t *testing.T) {
-	t.Run("identical-repeat conflict-owner hold after earlier landing", func(t *testing.T) {
+	t.Run("repeated verifier finding after earlier landing", func(t *testing.T) {
 		f, l, base := plannedFixture(t)
 		writeForkFile(t, filepath.Join(f.root, "config/tillr/plan-guidance.md"), "cheap models")
 		fixtureWrite(t, f, func(tx *store.Tx) error {
@@ -614,64 +616,29 @@ func TestLandedRowItemWithLaterHeldRunNamesWorkingRetry(t *testing.T) {
 		}
 
 		latestRun := steps.runs[len(steps.runs)-1].RunID
-		wantMover := "operator; deliver a revised instruction with tillr drain retry --item " + id + " --run " + latestRun + " --by <who> --why <reason>"
-
-		checkWhy := func(label string) {
-			t.Helper()
-			fixtureRead(t, f, func(r *store.Reader) error {
-				whyAns, err := Why(r, Pass{AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
-				if err != nil {
-					return err
+		wantCmd := "tillr drain retry --item " + id + " --run " + latestRun + " --by <who> --why <reason>"
+		fixtureRead(t, f, func(r *store.Reader) error {
+			whyAns, err := Why(r, Pass{AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
+			if err != nil {
+				return err
+			}
+			for _, row := range whyAns.Rows {
+				if row.ItemID != id {
+					continue
 				}
-				var found bool
-				for _, row := range whyAns.Rows {
-					if row.ItemID != id {
-						continue
-					}
-					found = true
-					if row.Reason != ReasonConflictOwner {
-						t.Fatalf("%s: expected %s, got %+v", label, ReasonConflictOwner, row)
-					}
-					for _, bad := range []string{"tillr item close", "close the item"} {
-						if strings.Contains(row.Mover, bad) || strings.Contains(row.Why, bad) {
-							t.Fatalf("%s: why includes close advice (%q): mover=%q why=%q", bad, label, row.Mover, row.Why)
-						}
-					}
-					if row.Mover != wantMover {
-						t.Fatalf("%s: mover = %q, want %q", label, row.Mover, wantMover)
-					}
+				if row.Reason != reasonVerifyTriage || !strings.Contains(row.Why, wantCmd) {
+					t.Fatalf("why does not name the repeated-finding hold and accepted command %q: %+v", wantCmd, row)
 				}
-				if !found {
-					t.Fatalf("%s: missing why row for %s", label, id)
+				for _, bad := range []string{"tillr item close", "close the item"} {
+					if strings.Contains(row.Mover, bad) || strings.Contains(row.Why, bad) {
+						t.Fatalf("why includes close advice (%q): mover=%q why=%q", bad, row.Mover, row.Why)
+					}
 				}
 				return nil
-			})
-		}
-
-		fixtureRead(t, f, func(r *store.Reader) error {
-			conflicts, err := item.ReadConflicts(r)
-			if err != nil {
-				return err
 			}
-			held := conflicts[id]
-			if strings.Contains(held.Text, "tillr item close") || strings.Contains(held.Text, "close the item") {
-				t.Fatalf("recorded conflict text includes close advice:\n%s", held.Text)
-			}
+			t.Fatalf("missing why row for %s", id)
 			return nil
 		})
-		checkWhy("freshly recorded hold")
-
-		// Also verify pre-existing conflict text recorded before this change is cleaned on read.
-		fixtureWrite(t, f, func(tx *store.Tx) error {
-			conflicts, err := item.ReadConflicts(tx.Reader())
-			if err != nil {
-				return err
-			}
-			c := conflicts[id]
-			c.Text = strings.TrimSuffix(c.Text, ".") + " (or close the item with tillr item close --item " + id + ")."
-			return item.RecordConflict(tx, c, time.Date(2026, 11, 20, 12, 1, 0, 0, time.UTC))
-		})
-		checkWhy("pre-existing conflict text")
 
 		// Execute the exact command named by why and confirm it accepts the retry and clears the hold.
 		fixtureWrite(t, f, func(tx *store.Tx) error {
@@ -786,10 +753,11 @@ func TestLandedRowItemWithLaterHeldRunNamesWorkingRetry(t *testing.T) {
 				return err
 			}
 			return item.RecordConflict(tx, item.Conflict{
-				ConflictID:      "conflict-" + judgedRunID,
-				ItemID:          id,
-				RunID:           judgedRunID,
-				Text:            IdenticalRepeatPrefix + " run " + judgedRunID + " ended (refused at gate) with the same evidence as run run-" + id + "-a14.",
+				ConflictID: "conflict-" + judgedRunID,
+				ItemID:     id,
+				RunID:      judgedRunID,
+				// Legacy conflict text must not advertise closing an already-landed item.
+				Text:            IdenticalRepeatPrefix + " run " + judgedRunID + " ended (refused at gate) with the same evidence as run run-" + id + "-a14 (or close the item with tillr item close --item " + id + ").",
 				Status:          "owner",
 				WaitingOn:       "owner",
 				BlockedCriteria: []string{"c1"},

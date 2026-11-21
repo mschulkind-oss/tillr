@@ -619,19 +619,20 @@ func TestRequestPlannedVerifyIdenticalRepeatHoldsForOwner(t *testing.T) {
 	if steps.verifies != 2 {
 		t.Fatalf("second verify did not run: nodes=%v", steps.nodeIDs)
 	}
-	// Run one more pass so repeated ending settlement runs.
-	graphPass(t, l, result)
-
-	var c item.Conflict
 	fixtureRead(t, f, func(r *store.Reader) error {
-		var raw []byte
-		if err := r.QueryRow(`SELECT payload FROM events WHERE kind='item.conflict' AND object_id=? ORDER BY seq DESC LIMIT 1`, id).Scan(&raw); err != nil {
+		holds, err := ReadItemFaults(r)
+		if err != nil {
 			return err
 		}
-		return json.Unmarshal(raw, &c)
+		hold := holds[id]
+		if hold.Reason != reasonVerifyTriage || hold.RunID != steps.runs[len(steps.runs)-1].RunID ||
+			!strings.Contains(hold.Detail, "Repeated verifier finding on unchanged candidate evidence:\nc1: first verify finding for c1") {
+			t.Fatalf("expected operator hold naming the repeated finding and verify run, got %+v", hold)
+		}
+		return nil
 	})
-	if c.Status != "owner" || c.WaitingOn != "owner" {
-		t.Fatalf("identical repeat conflict status=%q waiting_on=%q, want owner/owner", c.Status, c.WaitingOn)
+	if n := storeCount(t, f, `SELECT COUNT(*) FROM events WHERE kind='item.conflict' AND object_id=?`, id); n != 0 {
+		t.Fatalf("operator hold also raised %d conflicts", n)
 	}
 }
 
