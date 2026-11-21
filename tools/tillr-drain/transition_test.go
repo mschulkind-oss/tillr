@@ -52,7 +52,7 @@ func transitionPlan(t *testing.T, storePath, now string, lanes []string, capacit
 
 func transitionPolicy() *drain.Policy {
 	return &drain.Policy{
-		DefaultBackend: "first", Preference: []string{"first", "second"},
+		DefaultBackend: "first",
 		Backends: map[string]drain.Backend{
 			"first":  {Adapter: "/bin/true", Model: "first-model"},
 			"second": {Adapter: "/bin/true", Model: "second-model"},
@@ -130,7 +130,11 @@ func TestPlanTransitionPayloadCountsTerminalRuns(t *testing.T) {
 		runRecord("run-landed-second", "item_landed", "lane-7", "second", run.StateExited, exitCode(0), ""),
 	)
 	seedRetry(t, storePath, "item_retry", retryRun, "the owner", "the harness could not start", "2026-11-09T01:00:00Z")
-	decisions, payloads := transitionPlan(t, storePath, "2026-11-10T00:00:00Z", []string{"lane-1", "lane-2", "lane-3", "lane-4"}, 4, transitionPolicy())
+	policy := transitionPolicy()
+	// Fresh work can dispatch while the default backend is closed only if the
+	// policy explicitly assigns it to another backend.
+	policy.Overrides = map[string]string{"item_dispatch": "second"}
+	decisions, payloads := transitionPlan(t, storePath, "2026-11-10T00:00:00Z", []string{"lane-1", "lane-2", "lane-3", "lane-4"}, 4, policy)
 	want := map[string]struct {
 		action, from, to string
 		attempt          int

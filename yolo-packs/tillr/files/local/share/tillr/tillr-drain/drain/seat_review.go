@@ -7,15 +7,6 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-func firstOpenSeatBackend(p Policy, seat string, shut map[string]bool) (string, bool) {
-	for _, name := range p.seatList(seat) {
-		if !shut[name] {
-			return name, true
-		}
-	}
-	return "", false
-}
-
 // An implicit agent judge is not a workflow node but still dispatches the review
 // seat. Journal its choice before constructing the receipt; restored receipts
 // retain that request instead of drawing again. Workflow evaluators were already
@@ -35,9 +26,9 @@ func (l *Loop) selectReviewDispatch(ctx context.Context, req run.Request) (run.R
 		policy := *l.cfg.Policy
 		// Item overrides select the worker, not its independent review.
 		policy.Overrides = nil
-		name, ok := firstOpenSeatBackend(policy, "review", shut)
-		if !ok {
-			return errSeatWindowClosed
+		name := policy.firstBackend(itemRow{Seat: "review"})
+		if len(policy.seatList("review")) == 0 || !policy.seatMayStart("", "review", name, shut) {
+			return nil
 		}
 		d := Decision{DecisionID: "decision-" + req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Seat: "review", Action: ActionDispatch, Reason: "agent-review", SelectSeat: true, RunRequest: policy.request(req.ItemID, req.LaneID, req.RunID, name)}
 		if d.RunRequest != nil {
@@ -49,12 +40,14 @@ func (l *Loop) selectReviewDispatch(ctx context.Context, req run.Request) (run.R
 			d.RunRequest.Node = req.Node
 			d.RunRequest.NodeID = req.NodeID
 		}
-		ok, err = selectSeatDispatch(tx, &d, &policy, shut, l.cfg.Now())
-		if err != nil {
+		ok := false
+		err = keepSeatWait(tx, func() error {
+			var err error
+			ok, err = selectSeatDispatch(tx, &d, &policy, shut, l.cfg.Now())
 			return err
-		}
-		if !ok {
-			return errSeatWindowClosed
+		})
+		if err != nil || !ok {
+			return err
 		}
 		if err := recordPassDecision(tx, d, l.cfg.Now()); err != nil {
 			return err
@@ -63,8 +56,5 @@ func (l *Loop) selectReviewDispatch(ctx context.Context, req run.Request) (run.R
 		open = true
 		return nil
 	})
-	if err == errSeatWindowClosed {
-		return req, false, nil
-	}
 	return req, open, err
 }

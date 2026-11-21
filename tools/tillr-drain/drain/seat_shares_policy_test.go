@@ -52,10 +52,11 @@ func TestSeatSharesLegacyReplayAndBackendImmutable(t *testing.T) {
 
 func TestSeatSharesImplicitReviewRecordsChoice(t *testing.T) {
 	f, l := passFixture(t, "item-a")
-	p := sharesPolicy(t, `{"backends":["builder-a","builder-b"],"pick":"round-robin"}`)
+	p := sharesPolicy(t, `{"backends":[{"backend":"builder-a","share":1},{"backend":"builder-b","share":1}],"pick":"round-robin"}`)
 	p.Seats["review"] = p.Seats["build"]
 	p.SeatLists["review"] = p.SeatLists["build"]
 	p.SeatPicks["review"] = p.SeatPicks["build"]
+	p.SeatShares["review"] = p.SeatShares["build"]
 	l.cfg.Policy = &p
 	for i, id := range []string{"judge-1", "judge-2"} {
 		req, open, err := l.selectReviewDispatch(context.Background(), *p.request("item-a", "lane-1", id, "builder-a"))

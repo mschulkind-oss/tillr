@@ -81,7 +81,6 @@ func TestParallelReaderReplacementEndsBeforeHeldSibling(t *testing.T) {
 				steps.badReportNode = "-n2"
 				steps.badReport = "no report footer\n"
 				l.cfg.Policy.Backends["alternate"] = Backend{Adapter: "alternate"}
-				l.cfg.Policy.Preference = []string{"fixture", "alternate"}
 				l.cfg.Policy.SeatLists = map[string][]string{"scout": {"fixture", "alternate"}, "build": {"fixture", "alternate"}}
 			} else {
 				steps.wallNode = "-n2"

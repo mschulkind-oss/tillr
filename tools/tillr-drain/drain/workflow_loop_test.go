@@ -153,8 +153,6 @@ func TestWorkflowPlanningKeepsBackendPolicy(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			f, l, _ := workflowLoopFixture(t, "")
 			l.cfg.Policy.Backends["alternate"] = Backend{Adapter: "alternate"}
-			l.cfg.Policy.Preference = []string{"fixture", "alternate"}
-			l.cfg.Policy.SeatLists = map[string][]string{"scout": {"fixture", "alternate"}, "build": {"fixture", "alternate"}}
 			switch mode {
 			case "override":
 				l.cfg.Policy.Overrides = map[string]string{"item-a": "alternate"}
@@ -175,6 +173,10 @@ func TestWorkflowPlanningKeepsBackendPolicy(t *testing.T) {
 						if d.Action != ActionHold || d.Reason != ReasonBackendClosed || d.DeferredBy != "fixture" || d.RunRequest != nil || d.Seat != "scout" {
 							t.Fatalf("workflow escaped its failed backend: %+v", d)
 						}
+					} else if mode == "window" {
+						if d.Action != ActionHold || d.Reason != ReasonBackendWindow || d.DeferredBy != "fixture" || d.RunRequest != nil || d.Seat != "scout" {
+							t.Fatalf("workflow escaped its closed window: %+v", d)
+						}
 					} else if d.Action != ActionDispatch || d.RunRequest == nil || d.RunRequest.Backend != "alternate" {
 						t.Fatalf("policy bypassed: %+v", d)
 					}
@@ -191,8 +193,6 @@ func TestWorkflowContinuationKeepsBackendPolicy(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			f, l, steps := workflowLoopFixture(t, "")
 			l.cfg.Policy.Backends["alternate"] = Backend{Adapter: "alternate"}
-			l.cfg.Policy.Preference = []string{"fixture", "alternate"}
-			l.cfg.Policy.SeatLists = map[string][]string{"build": {"fixture", "alternate"}}
 			result := &LoopResult{}
 			for i := 0; i < 2; i++ {
 				if _, err := l.pass(context.Background(), result); err != nil {
@@ -212,7 +212,20 @@ func TestWorkflowContinuationKeepsBackendPolicy(t *testing.T) {
 				t.Fatal(err)
 			}
 			drainOwned(t, l, result)
-			if len(steps.runs) != 2 || steps.runs[1].Backend != "alternate" {
+			if mode == "window" {
+				if len(steps.runs) != 1 {
+					t.Fatalf("next node escaped its closed window: %+v", steps.runs)
+				}
+				afterReset := l.cfg.Now().Add(2 * time.Hour)
+				l.cfg.Now = func() time.Time { return afterReset }
+				if _, err := l.pass(context.Background(), result); err != nil {
+					t.Fatal(err)
+				}
+				drainOwned(t, l, result)
+				if len(steps.runs) != 2 || steps.runs[1].Backend != "fixture" {
+					t.Fatalf("next node did not run on its backend after reset: %+v", steps.runs)
+				}
+			} else if len(steps.runs) != 2 || steps.runs[1].Backend != "alternate" {
 				t.Fatalf("next node policy bypassed: %+v", steps.runs)
 			}
 		})

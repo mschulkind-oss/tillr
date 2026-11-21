@@ -12,10 +12,43 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/drain"
 )
 
+func TestPolicyFaceAcceptsEveryShippedPolicy(t *testing.T) {
+	paths, err := filepath.Glob("../../config/tillr/backend-policy*.json")
+	if err != nil || len(paths) < 6 {
+		t.Fatalf("expected at least six shipped policies: %v, %v", paths, err)
+	}
+	for _, path := range paths {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			p, err := drain.LoadPolicy(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			content, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := scratch(t, "shipped-policy-")
+			state := drain.PolicyState{Ref: path, Hash: fmt.Sprintf("%x", sha256.Sum256(content)), Content: string(content)}
+			raw, err := json.Marshal(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(drain.LoopDir(root), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, drain.PolicyStateFile(root), string(raw))
+			code, out := invoke(t, "policy", "--root", root)
+			if code != 0 || !strings.Contains(string(out), p.Description()) {
+				t.Fatalf("policy: %d %s", code, out)
+			}
+		})
+	}
+}
+
 func TestPolicyFaceReadsAcceptedContentNotDisk(t *testing.T) {
 	root := scratch(t, "policy-face-")
 	content := `{
- "default_backend":"a", "seats":{"build":["a","b"],"design":"b"},
+ "default_backend":"a", "seats":{"build":[{"backend":"a","share":1},{"backend":"b","share":1}],"design":"b"},
  "backends":{"a":{"adapter":"true","model":"cheap","effort":"medium"},"b":{"adapter":"true","models":["strong","stronger"],"effort":"high"}},
  "overrides":{"special":"b"}
  }`
@@ -38,7 +71,7 @@ func TestPolicyFaceReadsAcceptedContentNotDisk(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("policy: %d %s", code, out)
 	}
-	for _, want := range []string{"build=a,b", "design=b", "backend a: models=cheap effort=medium", "backend b: models=strong,stronger effort=high", "override special=b", "policy on disk is not the policy in force: the policy names no backends"} {
+	for _, want := range []string{"build=a:1,b:1", "design=b", "backend a: models=cheap effort=medium", "backend b: models=strong,stronger effort=high", "override special=b", "policy on disk is not the policy in force: the policy names no backends"} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("missing %q in %s", want, out)
 		}

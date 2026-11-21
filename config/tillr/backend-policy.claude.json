@@ -1,21 +1,17 @@
 {
-  "about": "The work machine's tillr backend policy for spending the owner's Claude subscription first, with Amazon Bedrock as the fall-back. A drain names this file with --policy when it should run on the subscription; backend-policy.bedrock.json beside it is the same machine's Bedrock-only policy, and backend-policy.json is the personal machines' policy. Every seat first runs on the Claude Code command line (the claude adapter), and each seat names its own fall-back: the design seat falls back to pi-designer and the build, review and scout seats fall back to pi, both of which run on Bedrock through the pi adapter. A run the subscription refuses writes no report, so the drain fails it over to the seat's next backend in the same pass. Why and how: docs/design/tillr-claude-backend.md. Several policy files is the stopgap docs/design/tillr-convergence.md OQ-TC2 records: the target is that tillr names only seats and the machine's profile resolves them, at which point this file is deleted.",
+  "about": "The work machine's tillr backend policy for spending the owner's Claude subscription. A drain names this file with --policy when it should run on the subscription; backend-policy.bedrock.json beside it is the same machine's Bedrock-only policy, and backend-policy.json is the personal machines' policy. Every seat runs on the Claude Code command line (the claude adapter). The Bedrock backends remain declared but are not selected by these seats. Why and how: docs/design/tillr-claude-backend.md. Several policy files is the stopgap docs/design/tillr-convergence.md OQ-TC2 records: the target is that tillr names only seats and the machine's profile resolves them, at which point this file is deleted.",
   "default_backend": "claude",
-  "preference": [
-    "claude",
-    "pi"
-  ],
   "seats": {
-    "design": ["claude-designer", "pi-designer"],
-    "build": ["claude", "pi"],
-    "review": ["claude", "pi"],
-    "scout": ["claude", "pi"],
-    "plan": ["claude", "pi"],
-    "edit": ["claude", "pi"],
-    "test-write": ["claude", "pi"],
-    "test-run": ["claude", "pi"],
-    "docs": ["claude", "pi"],
-    "verify": ["claude", "pi"]
+    "design": "claude-designer",
+    "build": "claude",
+    "review": "claude",
+    "scout": "claude",
+    "plan": "claude",
+    "edit": "claude",
+    "test-write": "claude",
+    "test-run": "claude",
+    "docs": "claude",
+    "verify": "claude"
   },
   "read_only_seats": ["scout", "test-run"],
   "seat_purposes": {

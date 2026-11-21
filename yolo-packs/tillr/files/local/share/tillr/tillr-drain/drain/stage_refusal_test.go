@@ -587,7 +587,7 @@ func (f refusalLoopFixture) loop(t *testing.T, steps Steps, stage Stager) *Loop 
 	loop, err := NewLoop(LoopConfig{
 		Root: f.root, Store: f.storePath, LaneRoot: f.laneRoot, ExitWhenDrained: true,
 		Lanes:  []string{"lane-1", "lane-2"},
-		Policy: &Policy{DefaultBackend: "fixture", Preference: []string{"fixture"}, Backends: map[string]Backend{"fixture": {Adapter: "fixture"}}},
+		Policy: &Policy{DefaultBackend: "fixture", Backends: map[string]Backend{"fixture": {Adapter: "fixture"}}},
 		Steps:  steps, Stage: stage, Now: now,
 	})
 	if err != nil {

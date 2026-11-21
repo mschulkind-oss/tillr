@@ -207,7 +207,7 @@ func (l *Loop) refreshQuotas(ctx context.Context) error {
 	return nil
 }
 
-func (l *Loop) quotaReplacementBackend(ctx context.Context, start, seat string) (string, bool, error) {
+func (l *Loop) quotaReplacementBackend(ctx context.Context, start string) (string, bool, error) {
 	if err := l.refreshQuotas(ctx); err != nil {
 		return "", false, err
 	}
@@ -223,7 +223,9 @@ func (l *Loop) quotaReplacementBackend(ctx context.Context, start, seat string) 
 		if err != nil {
 			return err
 		}
-		name, open = policy.availableBackend(start, seat, shut)
+		if start != "" && !shut[start] {
+			name, open = start, true
+		}
 		return nil
 	})
 	return name, open, err

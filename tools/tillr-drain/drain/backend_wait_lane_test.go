@@ -27,7 +27,6 @@ func TestBackendWaitLane(t *testing.T) {
 			}
 			base := runGit(t, f.root, "rev-parse", TrunkRef)
 			l.cfg.Policy.Backends["open"] = l.cfg.Policy.Backends["fixture"]
-			l.cfg.Policy.Preference = []string{"open"}
 			plan := mustPlan(t, l)[0]
 			if ok, _, err := l.applyPlan(ctx, plan, base, l.cfg.Now()); err != nil || !ok {
 				t.Fatalf("claim first node: %v / %v", ok, err)
@@ -79,7 +78,7 @@ func TestBackendWaitLane(t *testing.T) {
 					UPDATE items SET rank='z' WHERE item_id='item-b'`)
 				return err
 			})
-			l.cfg.Policy.Seats["build"] = "open"
+			l.cfg.Policy.Overrides = map[string]string{"item-b": "open"}
 
 			plans := mustPlan(t, l)
 			if len(plans) != 5 || plans[4].decision.ItemID != "item-b" {
@@ -132,8 +131,8 @@ func TestBackendWaitLane(t *testing.T) {
 				t.Fatalf("claim freed lane for open item: %v / %v", ok, err)
 			}
 			l.cfg.Lanes = append(l.cfg.Lanes, "lane-2")
-			// Adding an open backend to the seat must not reroute the refused node.
-			l.cfg.Policy.SeatLists = map[string][]string{"scout": {rec.Backend, "open"}}
+			// Changing the seat's assignment must not reroute the refused node.
+			l.cfg.Policy.Seats["scout"] = "open"
 			wait := mustPlan(t, l)[0].decision
 			if wait.Reason != ReasonBackendWindow || wait.DeferredBy != rec.Backend || !strings.Contains(wait.BackendHoldMover, reset.Format(time.RFC3339)) {
 				t.Fatalf("released node should wait for the original backend: %+v", wait)

@@ -37,7 +37,7 @@ func TestReturnedWorkflowResumesProducingNode(t *testing.T) {
 func TestReturnedWorkflowKeepsRepairForSuccessor(t *testing.T) {
 	testReturnedWorkflow(t, false, true, false)
 }
-func TestReturnedWorkflowQuotaFallbackStartsAtEntry(t *testing.T) {
+func TestReturnedWorkflowWaitsWhenItsBackendIsShut(t *testing.T) {
 	testReturnedWorkflow(t, false, false, true)
 }
 
@@ -95,7 +95,6 @@ func testReturnedWorkflow(t *testing.T, gone, successor, quota bool) {
 		runGit(t, f.root, "commit", "-qm", "workflow")
 		base = runGit(t, f.root, "rev-parse", TrunkRef)
 		l.cfg.Policy.Backends["alternate"] = l.cfg.Policy.Backends["fixture"]
-		l.cfg.Policy.SeatLists = map[string][]string{"build": {"fixture", "alternate"}, "read": {"fixture", "alternate"}}
 		fixtureWrite(t, f, func(tx *store.Tx) error {
 			if _, err := tx.Exec(`UPDATE items SET workflow='scout-build@v1' WHERE item_id='item-a'`); err != nil {
 				return err
@@ -104,12 +103,8 @@ func testReturnedWorkflow(t *testing.T, gone, successor, quota bool) {
 			return err
 		})
 		p := mustPlan(t, l)[0]
-		if p.decision.Action != ActionDispatch || p.decision.NodeIndex != 0 || p.decision.RunRequest.SessionTurn || p.decision.RunRequest.Backend != "alternate" {
-			t.Fatalf("fresh quota fallback kept later node: %+v", p.decision)
-		}
-		d := applyReturnedTurn(t, l, p, base)
-		if d.WorkerSessionReason == "resumed-worker" {
-			t.Fatal("fresh workflow recorded as resumed")
+		if p.decision.Action != ActionHold || p.decision.Reason != ReasonBackendWindow || p.decision.DeferredBy != "fixture" {
+			t.Fatalf("returned workflow escaped its closed backend: %+v", p.decision)
 		}
 		return
 	}

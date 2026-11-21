@@ -819,8 +819,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				if s.NodeIndex >= 0 && s.NodeIndex < len(s.Workflow.Stages) {
 					stage := s.Workflow.Stages[s.NodeIndex]
 					backend := policy.firstBackend(itemRow{ItemID: item.ItemID, Seat: stage.Seat})
-					backend, open := policy.availableBackend(backend, stage.Seat, p.shut)
-					if open && workerSessionReason(s, policy.request(item.ItemID, s.LaneID, attemptRunID(item.ItemID, p.nextAttempt(item.ItemID)), backend)) == "resumed-worker" {
+					if !p.shut[backend] && workerSessionReason(s, policy.request(item.ItemID, s.LaneID, attemptRunID(item.ItemID, p.nextAttempt(item.ItemID)), backend)) == "resumed-worker" {
 						w, resumeNode, loadErr = s.Workflow, s.NodeIndex, nil
 						retainedGraph = true
 					}
@@ -1181,12 +1180,10 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 			if retry != nil && retry.refusal == "" && !p.quotaShut[attempt.backend] {
 				shut = p.quotaShut
 			}
-			if attempt.infrastructureFailure && !attempt.quotaRoute || repeated != nil || interrupted {
+			if attempt.infrastructureFailure || repeated != nil || interrupted {
 				windowShut = shut[attempt.backend]
 			} else {
-				next, ok := p.policy.availableBackend(attempt.backend, item.Seat, shut)
-				windowShut = !ok
-				attempt.backend = next
+				windowShut = !p.policy.seatMayStart(item.ItemID, item.Seat, attempt.backend, shut)
 			}
 		}
 	}

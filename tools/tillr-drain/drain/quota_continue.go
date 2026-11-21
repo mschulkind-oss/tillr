@@ -131,7 +131,7 @@ func (l *Loop) resumeQuotaRun(ctx context.Context, d Decision, rec run.Record, t
 	if err := l.holdQuotaRun(ctx, d, rec.Backend); err != nil {
 		return run.Record{}, "", "", err
 	}
-	name, open, err := l.quotaReplacementBackend(ctx, rec.Backend, d.Seat)
+	name, open, err := l.quotaReplacementBackend(ctx, rec.Backend)
 	if err != nil || !open {
 		return run.Record{}, "", "", err
 	}

@@ -12,7 +12,6 @@ func TestWorkflowExitMachineryFailureRetriesNodeNotRepair(t *testing.T) {
 	raw := strings.Replace(exitRepair, `["check-again"]`, `["check"]`, 1)
 	f, l, steps := exitFixture(t, raw, true, 0)
 	steps.infraNode = 2
-	l.cfg.Policy.Preference = []string{"fixture", "alternate"}
 	l.cfg.Policy.Backends["alternate"] = Backend{Adapter: "alternate"}
 	l.cfg.Policy.SeatLists = map[string][]string{"scout": {"fixture", "alternate"}, "build": {"fixture", "alternate"}}
 	result := &LoopResult{}

@@ -78,7 +78,6 @@ func newResumableFixture(t *testing.T) resumableFixture {
 	// The adapter's own name is `pi` (or a `pi-<seat>` alias), and it refuses a backend value
 	// that disagrees with it: the policy's backend for this fixture is therefore pi's own.
 	f.policy.DefaultBackend = "pi"
-	f.policy.Preference = []string{"pi"}
 	delete(f.policy.Backends, "fixture")
 	f.policy.Backends["pi"] = drain.Backend{
 		Adapter: adapter, Model: "fixture-model", Effort: "low", TimeoutSeconds: 60,

@@ -65,7 +65,6 @@ func repeatedEndings(t *testing.T, f refusalLoopFixture) map[string]RepeatedCall
 func TestARepeatingCallStartsFreshThenHolds(t *testing.T) {
 	f, l := passFixture(t, "item-a")
 	l.cfg.Policy.Backends["second"] = Backend{Adapter: "fixture"}
-	l.cfg.Policy.Preference = []string{"fixture", "second"}
 
 	first := endRepeating(t, f, l)
 	if got := repeatedEndings(t, f)[first.RunRequest.RunID]; got.Route != repeatRouteFresh || got.NextBackend != "fixture" || got.Tool != "read" || got.Args != repeatedArgs || got.Streak != 40 {
@@ -127,7 +126,6 @@ func TestARepeatingCallRouteReadsOnlyTheChain(t *testing.T) {
 func TestARepeatingCallAfterInRunRecoveryHolds(t *testing.T) {
 	f, l := passFixture(t, "item-a")
 	l.cfg.Policy.Backends["second"] = Backend{Adapter: "fixture"}
-	l.cfg.Policy.Preference = []string{"fixture", "second"}
 
 	recovery := &run.LoopRecovery{Count: 1, Shape: "identical", TokensBefore: 120000, TokensAfter: 45000}
 	first := endRepeatingRecord(t, f, l, recovery, "ended")
@@ -146,7 +144,6 @@ func TestARepeatingCallAfterInRunRecoveryHolds(t *testing.T) {
 func TestARepeatingCallEndedActionWithoutPriorRecoveryHolds(t *testing.T) {
 	f, l := passFixture(t, "item-a")
 	l.cfg.Policy.Backends["second"] = Backend{Adapter: "fixture"}
-	l.cfg.Policy.Preference = []string{"fixture", "second"}
 
 	first := endRepeatingRecord(t, f, l, nil, "ended")
 	if got := repeatedEndings(t, f)[first.RunRequest.RunID]; got.Route != repeatRouteHold || got.NextBackend != "" {
@@ -231,7 +228,6 @@ func repeatingNodeFixture(t *testing.T, repeat int) (refusalLoopFixture, *Loop, 
 	t.Helper()
 	f, l, restart := restartGraphFixture(t)
 	l.cfg.Policy.Backends["alternate"] = Backend{Adapter: "fixture"}
-	l.cfg.Policy.Preference = []string{"fixture", "alternate"}
 	l.cfg.Policy.SeatLists = map[string][]string{"build": {"fixture", "alternate"}}
 	steps := &repeatingNodeSteps{restartWorkflowSteps: restart, repeat: repeat}
 	l.cfg.Steps = steps
@@ -328,7 +324,6 @@ func TestARepeatingWorkflowNodeAfterInRunRecoveryHolds(t *testing.T) {
 			steps.recovery = recovery
 			steps.action = "ended"
 			if tc.single {
-				l.cfg.Policy.Preference = []string{"fixture"}
 				l.cfg.Policy.SeatLists = map[string][]string{"build": {"fixture"}}
 			}
 			result := &LoopResult{}

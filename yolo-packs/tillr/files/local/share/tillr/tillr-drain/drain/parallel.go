@@ -24,15 +24,15 @@ func parallelNodes(d Decision) []Decision {
 // parallel groups keep completed results; those backends cannot block a retry.
 func dispatchQuotaOpen(r *store.Reader, d Decision, shut map[string]bool, policy *Policy) (bool, error) {
 	for _, node := range parallelNodes(d) {
-		if policy != nil && !node.WorkflowRestart && node.SelectSeat {
-			_, override := policy.Overrides[node.ItemID]
-			pick := policy.SeatPicks[node.Seat]
-			if !override && (len(policy.SeatShares[node.Seat]) > 0 || pick == "round-robin" || pick == "random") {
-				// The proposed backend is only a preview; the claim checks the draw.
-				continue
-			}
-		}
 		if node.RunRequest == nil || node.RunRequest.Backend == "command" {
+			continue
+		}
+		if policy.usesSeatShares(node) {
+			// The proposed backend is only a preview; a previous draw is binding.
+			saved, err := waitingSeatBackend(r, node.RunRequest.RunID, node.Seat, policy.seatList(node.Seat))
+			if err != nil || shut[saved] {
+				return false, err
+			}
 			continue
 		}
 		if len(d.Parallel) > 0 {
@@ -109,8 +109,8 @@ func (l *Loop) claimParallelWithShut(tx *store.Tx, d *Decision, byRun map[string
 		}
 		if ready && (!incoming || followed) {
 			if s.Kind == "agent" {
-				_, ok := l.cfg.Policy.availableBackend(l.cfg.Policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: s.Seat}), s.Seat, shut)
-				if !ok {
+				backend := l.cfg.Policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: s.Seat})
+				if !l.cfg.Policy.seatMayStart(d.ItemID, s.Seat, backend, shut) {
 					continue
 				}
 			}
@@ -139,7 +139,7 @@ func (l *Loop) claimParallelWithShut(tx *store.Tx, d *Decision, byRun map[string
 			if stage.Kind == "command" {
 				node.RunRequest = stage.commandRequest(d.ItemID, d.LaneID, id)
 			} else {
-				name, _ := l.cfg.Policy.availableBackend(l.cfg.Policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: stage.Seat}), stage.Seat, shut)
+				name := l.cfg.Policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: stage.Seat})
 				node.RunRequest = l.cfg.Policy.request(d.ItemID, d.LaneID, id, name)
 			}
 		} else {

@@ -56,12 +56,10 @@ func TestPolicyDeclaresSeatsForItemsAndWorkflows(t *testing.T) {
 	}
 }
 
-// twoBackends is a policy whose preference walks a backend it names: the shape a failover
-// needs, and the shape a single-backend policy degenerates from.
+// twoBackends declares a default and a second backend an item or seat can name.
 func twoBackends() Policy {
 	return Policy{
 		DefaultBackend: "first",
-		Preference:     []string{"first", "second"},
 		Backends: map[string]Backend{
 			"first": {
 				Adapter: "/adapter/first", Models: []string{"route-a", "route-b", "route-c"},
@@ -91,18 +89,6 @@ func TestPolicyCheckRefusesADocumentThatCannotBuildARequest(t *testing.T) {
 		"default not one of the backends": {
 			mutate: func(p *Policy) { p.DefaultBackend = "third" },
 			names:  `"third"`,
-		},
-		"default not the preference head": {
-			mutate: func(p *Policy) { p.Preference = []string{"second", "first"} },
-			names:  "head of its preference",
-		},
-		"preference names an unknown backend": {
-			mutate: func(p *Policy) { p.Preference = []string{"first", "third"} },
-			names:  `"third"`,
-		},
-		"preference names a backend twice": {
-			mutate: func(p *Policy) { p.Preference = []string{"first", "first"} },
-			names:  "twice",
 		},
 		"backend with no adapter": {
 			mutate: func(p *Policy) {
@@ -234,44 +220,8 @@ func TestPolicyOmitsTheEffortFlagWhenTheBackendNamesNone(t *testing.T) {
 	}
 }
 
-// An override chooses the item's first backend and outranks the preference; the preference
-// orders everything after that, forward only, and a backend reached by an override that the
-// preference does not name starts the walk at its head.
-func TestSelectionFollowsOverrideThenPreference(t *testing.T) {
-	policy := twoBackends()
-	policy.Overrides = map[string]string{"item_042": "second"}
-
-	if got := policy.firstBackend(itemRow{ItemID: "item_042"}); got != "second" {
-		t.Fatalf("the overridden item's first backend is %q, want second", got)
-	}
-	if got := policy.firstBackend(itemRow{ItemID: "item_043"}); got != "first" {
-		t.Fatalf("the un-overridden item's first backend is %q, want the default", got)
-	}
-	if got, ok := policy.nextBackend("first", ""); !ok || got != "second" {
-		t.Fatalf("the failover after first is %q / %v, want second with no seat", got, ok)
-	}
-	if got, ok := policy.nextBackend("second", ""); !ok || got != "first" {
-		t.Fatalf("the failover after the last backend is %q, want wrapped first", got)
-	}
-	if got, ok := policy.nextBackend("unlisted", ""); !ok || got != "first" {
-		t.Fatalf("the failover after an unlisted backend is %q / %v, want the preference head", got, ok)
-	}
-}
-
-func TestSingleBackendSeatHasNoFailover(t *testing.T) {
-	policy := twoBackends()
-	policy.Seats = map[string]string{"design": "designer", "build": "first"}
-	for _, tc := range []struct{ failed, seat string }{
-		{"designer", "design"}, {"first", "build"}, {"second", "build"},
-	} {
-		if got, ok := policy.nextBackend(tc.failed, tc.seat); ok || got != "" {
-			t.Fatalf("seat %s: failover after %s = %q, %v; want no route", tc.seat, tc.failed, got, ok)
-		}
-	}
-}
-
-// Legacy budgets are accepted but ignored, even when their old value was invalid.
-func TestLegacyFailoverBudgetIsIgnored(t *testing.T) {
+// Legacy policy keys decode as unknown metadata and are not emitted.
+func TestLegacyPreferenceAndFailoverBudgetAreIgnored(t *testing.T) {
 	raw, err := json.Marshal(twoBackends())
 	if err != nil {
 		t.Fatal(err)
@@ -281,6 +231,7 @@ func TestLegacyFailoverBudgetIsIgnored(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc["max_failovers"] = -1
+	doc["preference"] = []string{"second", "unknown"}
 	raw, _ = json.Marshal(doc)
 	var policy Policy
 	if err := json.Unmarshal(raw, &policy); err != nil {
@@ -289,9 +240,12 @@ func TestLegacyFailoverBudgetIsIgnored(t *testing.T) {
 	if err := policy.Check(); err != nil {
 		t.Fatal(err)
 	}
-	next, ok := policy.nextBackend("second", "")
-	if !ok || next != "first" {
-		t.Fatalf("legacy budget changed walk: %s %v", next, ok)
+	if policy.seatMayStart("item_042", "", "first", map[string]bool{"first": true}) {
+		t.Fatal("the retired preference routed unseated work off its closed default")
+	}
+	raw, err = json.Marshal(policy)
+	if err != nil || strings.Contains(string(raw), `"preference"`) {
+		t.Fatalf("the effective policy retained the retired preference: %s, %v", raw, err)
 	}
 }
 
@@ -354,18 +308,15 @@ func TestPolicyCheckRefusesSeatsItCannotRoute(t *testing.T) {
 	}
 }
 
-// seatListPolicy is the shape docs/design/tillr-claude-backend.md §4 ships: each seat names
-// its own ordered fallback, decoded from the document's array form, beside a seat that
-// still names one backend as a plain string.
+// seatListPolicy exercises shared lists and both singleton spellings.
 func seatListPolicy(t *testing.T) Policy {
 	t.Helper()
 	var policy Policy
 	doc := `{
 	  "default_backend": "builder-a",
-	  "preference": ["builder-a", "builder-b"],
 	  "seats": {
-	    "design": ["designer-a", "designer-b"],
-	    "build": ["builder-a", "builder-b"],
+	    "design": [{"backend":"designer-a", "share":1}, {"backend":"designer-b", "share":1}],
+	    "build": [{"backend":"builder-a", "share":1}, {"backend":"builder-b", "share":1}],
 	    "review": ["builder-a"],
 	    "scout": "builder-b"
 	  },
@@ -385,9 +336,7 @@ func seatListPolicy(t *testing.T) Policy {
 	return policy
 }
 
-// A seat's value decodes in both shapes: a string is today's one backend, an array is an
-// ordered list whose first name is where the seat dispatches. Seats keeps the head either
-// way, so code that reads Seats sees the same answer it did before lists existed.
+// Singleton and shared seats keep their first backend for previews.
 func TestASeatDecodesFromAStringOrAList(t *testing.T) {
 	policy := seatListPolicy(t)
 	for seat, want := range map[string]string{"design": "designer-a", "build": "builder-a", "review": "builder-a", "scout": "builder-b"} {
@@ -406,50 +355,21 @@ func TestASeatDecodesFromAStringOrAList(t *testing.T) {
 	}
 }
 
-// Quota admission may skip a shut window, but stays within the declared seat list.
-func TestQuotaAdmissionWalkKeepsTheItemsSeat(t *testing.T) {
-	policy := seatListPolicy(t)
-	cases := []struct {
-		name, failed, seat string
-		next               string
-		ok                 bool
-	}{
-		{"the design list's next backend", "designer-a", "design", "designer-b", true},
-		{"the end of the design list wraps", "designer-b", "design", "designer-a", true},
-		{"the build list's next backend", "builder-a", "build", "builder-b", true},
-		{"the end of the build list wraps", "builder-b", "build", "builder-a", true},
-		{"a backend off the list starts at its head", "builder-b", "design", "designer-a", true},
-		{"a one-element seat stops", "builder-a", "review", "", false},
-		{"no seat walks the preference", "builder-a", "", "builder-b", true},
-		{"no seat wraps at the preference's end", "builder-b", "", "builder-a", true},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			next, ok := policy.availableBackend(c.failed, c.seat, map[string]bool{c.failed: true})
-			if next != c.next || ok != c.ok {
-				t.Fatalf("after %q on seat %q the walk is %q / %v, want %q / %v",
-					c.failed, c.seat, next, ok, c.next, c.ok)
-			}
-		})
-	}
-
-}
-
-// Every name in a seat's list must be one of the policy's backends, and the refusal names
-// the seat so the operator knows which list to fix. An empty list, a name listed twice, and
-// a value that is neither a string nor a list of strings are refused too.
-func TestPolicyCheckRefusesASeatListItCannotWalk(t *testing.T) {
+// Malformed and unshared lists are refused with the seat's name.
+func TestPolicyCheckRefusesInvalidSeatLists(t *testing.T) {
 	base := func(seats string) string {
-		return `{"default_backend": "builder-a", "preference": ["builder-a"], "seats": ` + seats + `,
+		return `{"default_backend": "builder-a", "seats": ` + seats + `,
 		  "backends": {"builder-a": {"adapter": "/a", "model": "model-x"}, "builder-b": {"adapter": "/b", "model": "model-y"}}}`
 	}
 	refused := map[string]struct {
 		seats string
 		names string
 	}{
-		"an undeclared backend": {`{"design": ["builder-a", "nobody"]}`, `seat "design" to backend "nobody", which is not one of its backends`},
+		"an undeclared backend": {`{"design": ["nobody"]}`, `seat "design" to backend "nobody", which is not one of its backends`},
 		"an empty list":         {`{"build": []}`, `seat "build" to an empty list`},
-		"a backend twice":       {`{"build": ["builder-a", "builder-b", "builder-a"]}`, `seat "build" to backend "builder-a" twice`},
+		"an unshared list":      {`{"build": ["builder-a", "builder-b"]}`, `seat "build" must name one backend`},
+		"a pick without shares": {`{"design": {"backends": ["builder-a", "builder-b"], "pick": "random"}}`, `seat "design" must name one backend`},
+		"a backend twice":       {`{"build": [{"backend":"builder-a", "share":1}, {"backend":"builder-a", "share":1}]}`, `seat "build" to backend "builder-a" twice`},
 		"a malformed seat":      {`{"Desgn": ["builder-a"]}`, `seat "Desgn" must start with a lowercase letter and contain only lowercase letters, digits and hyphens; seats are declared in the backend policy file`},
 	}
 	for name, c := range refused {
@@ -478,8 +398,7 @@ func TestPolicyCheckRefusesASeatListItCannotWalk(t *testing.T) {
 		}
 	}
 
-	// A list built in code whose head disagrees with Seats would dispatch to one backend
-	// and fall back as though it had started at another.
+	// The shared list must agree with the preview.
 	policy := seatListPolicy(t)
 	policy.Seats["design"] = "builder-a"
 	if err := policy.Check(); err == nil || !strings.Contains(err.Error(), "read two ways") {
@@ -526,11 +445,11 @@ func TestPolicyStartingSeats(t *testing.T) {
 				}
 			case "backend-policy.claude-copilot.json":
 				want := map[string][]string{
-					"design":     {"claude-designer", "pi-designer", "pi"},
-					"build":      {"claude", "pi-build"},
-					"review":     {"claude", "pi"},
-					"plan":       {"claude", "pi"},
-					"verify":     {"claude", "pi"},
+					"design":     {"claude-designer"},
+					"build":      {"claude"},
+					"review":     {"claude"},
+					"plan":       {"claude"},
+					"verify":     {"claude"},
 					"edit":       {"pi-build"},
 					"test-write": {"pi-build"},
 					"docs":       {"pi-build"},

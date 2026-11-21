@@ -15,7 +15,6 @@ import (
 func TestWorkflowEmptyPiTurnRestartsRatherThanFinishes(t *testing.T) {
 	f, l, _ := restartGraphFixture(t)
 	l.cfg.Policy.Backends["alternate"] = Backend{Adapter: "fixture"}
-	l.cfg.Policy.Preference = []string{"fixture", "alternate"}
 	l.cfg.Policy.SeatLists = map[string][]string{"build": {"fixture", "alternate"}}
 	ctx := context.Background()
 	base := runGit(t, f.root, "rev-parse", TrunkRef)

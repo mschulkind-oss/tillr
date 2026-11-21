@@ -74,15 +74,14 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 		// Reopening a failed design run is not a fresh seat choice.
 		failedBackend := p.failedBackendFor(row.ItemID, c.DesignRunID)
 		backend := failedBackend
+		open := !p.shut[backend]
 		if backend == "" {
-			backend, _ = firstOpenSeatBackend(*p.policy, "design", p.shut)
+			backend = p.policy.seatList("design")[0]
+			open = p.policy.seatMayStart(row.ItemID, "design", backend, p.shut)
 		}
-		if backend == "" || p.shut[backend] {
+		if !open {
 			d.Reason = ReasonBackendWindow
-			d.Seat, d.DeferredBy = "design", failedBackend
-			if d.DeferredBy == "" {
-				d.DeferredBy = p.policy.seatList("design")[0]
-			}
+			d.Seat, d.DeferredBy = "design", backend
 			break
 		}
 		if !policyHasBackend(p.policy, backend) {

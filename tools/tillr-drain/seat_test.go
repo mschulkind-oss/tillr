@@ -276,7 +276,6 @@ func TestLoopHoldsASingleBackendSeatWithoutFailover(t *testing.T) {
 	f := newLoopFixture(t, floor)
 	f.policy = &drain.Policy{
 		DefaultBackend: "pi",
-		Preference:     []string{"pi"},
 		Seats:          map[string]string{"design": "pi-designer"},
 		Backends: map[string]drain.Backend{
 			"pi":          {Adapter: floor, Model: "floor-model", TimeoutSeconds: 60},
@@ -309,19 +308,15 @@ func TestLoopHoldsASingleBackendSeatWithoutFailover(t *testing.T) {
 	}
 }
 
-// listedSeatPolicy writes the shape docs/design/tillr-claude-backend.md §4 ships: the
-// design seat falls back through its own list and the build seat through another, while
-// the preference names only the build backends. The first design backend carries harness
-// arguments, so the staged argv can be read for them.
+// listedSeatPolicy assigns shares to the design and build seats. The preview
+// uses the first design backend's harness arguments.
 func listedSeatPolicy(t *testing.T) string {
 	t.Helper()
 	return policyDoc(t, map[string]any{
 		"default_backend": "builder-a",
-		"preference":      []string{"builder-a", "builder-b"},
-		"max_failovers":   1,
 		"seats": map[string]any{
-			"design": []string{"designer-a", "designer-b"},
-			"build":  []string{"builder-a", "builder-b"},
+			"design": []map[string]any{{"backend": "designer-a", "share": 1}, {"backend": "designer-b", "share": 1}},
+			"build":  []map[string]any{{"backend": "builder-a", "share": 1}, {"backend": "builder-b", "share": 1}},
 		},
 		"backends": map[string]any{
 			"builder-a": map[string]any{"adapter": "/bin/true", "model": "model-x"},
@@ -369,7 +364,7 @@ func TestPlanHoldsAListedSeatOnItsFailedBackend(t *testing.T) {
 	}
 
 	// If the last recorded failure was on another backend, hold on that one.
-	// Neither the earlier closed backend nor the legacy budget changes the hold.
+	// The current seat mapping does not change where the earlier run holds.
 	spent := fixture(t,
 		itemRecordSeated("item_042", "in-queue", "design"),
 		runRecord("run-item_042-20261109T000000Z", "item_042", "lane-9", "designer-a", run.StateFailedToStart, nil, ""),
@@ -377,9 +372,7 @@ func TestPlanHoldsAListedSeatOnItsFailedBackend(t *testing.T) {
 	)
 	policyPath := policyDoc(t, map[string]any{
 		"default_backend": "builder-a",
-		"preference":      []string{"builder-a", "builder-b"},
-		"max_failovers":   5,
-		"seats":           map[string]any{"design": []string{"designer-a", "designer-b"}},
+		"seats":           map[string]string{"design": "designer-a"},
 		"backends": map[string]any{
 			"builder-a":  map[string]any{"adapter": "/bin/true", "model": "model-x"},
 			"builder-b":  map[string]any{"adapter": "/bin/true", "model": "model-y"},
@@ -394,11 +387,8 @@ func TestPlanHoldsAListedSeatOnItsFailedBackend(t *testing.T) {
 }
 
 // The Claude-first policy is the one a drain on the work machine names with --policy to
-// spend the subscription, so it must decode with its seat lists, pass the same Check the
-// face runs, map every seat, and put each seat's first dispatch on the claude adapter with
-// its pi counterpart next. The Bedrock-only policy beside it, whose seats are plain strings,
-// must still decode and pass Check under the two-shape seat decoder.
-func TestTheClaudePolicyLoadsWithItsSeatLists(t *testing.T) {
+// spend the subscription. The Claude seats each name one backend using that adapter.
+func TestTheClaudePolicyLoadsWithSingleBackends(t *testing.T) {
 	var bedrock drain.Policy
 	if raw, err := os.ReadFile("../../config/tillr/backend-policy.bedrock.json"); err != nil {
 		t.Fatalf("reading the Bedrock policy failed: %v", err)
@@ -426,18 +416,10 @@ func TestTheClaudePolicyLoadsWithItsSeatLists(t *testing.T) {
 	if err := policy.Check(); err != nil {
 		t.Fatalf("the Claude policy fails its own check: %v", err)
 	}
-	want := map[string][]string{
-		item.SeatDesign: {"claude-designer", "pi-designer"},
-		item.SeatBuild:  {"claude", "pi"},
-		item.SeatReview: {"claude", "pi"},
-		item.SeatScout:  {"claude", "pi"},
-	}
-	for seat, list := range want {
-		if got := strings.Join(policy.SeatLists[seat], ","); got != strings.Join(list, ",") {
-			t.Fatalf("the Claude policy's %s seat is %q, want %q", seat, got, strings.Join(list, ","))
-		}
-		if policy.Seats[seat] != list[0] {
-			t.Fatalf("the Claude policy's %s seat dispatches to %q, want %q", seat, policy.Seats[seat], list[0])
+	want := map[string]string{item.SeatDesign: "claude-designer", item.SeatBuild: "claude", item.SeatReview: "claude", item.SeatScout: "claude"}
+	for seat, backend := range want {
+		if policy.Seats[seat] != backend || len(policy.SeatLists[seat]) != 0 {
+			t.Fatalf("the Claude policy's %s seat is %q (%v), want only %q", seat, policy.Seats[seat], policy.SeatLists[seat], backend)
 		}
 	}
 	for _, name := range []string{"claude", "claude-designer"} {
@@ -467,7 +449,7 @@ func TestTheClaudePolicyLoadsWithItsSeatLists(t *testing.T) {
 	for _, name := range []string{"pi", "pi-designer", "pi-build", "pi-scout"} {
 		b := claudeCopilot.Backends[name]
 		if b.Account != "" {
-			t.Fatalf("the Claude-Copilot policy's %s fallback row has account %q, want empty", name, b.Account)
+			t.Fatalf("the Claude-Copilot policy's %s backend has account %q, want empty", name, b.Account)
 		}
 	}
 }

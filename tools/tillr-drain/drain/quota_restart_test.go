@@ -9,7 +9,7 @@ import (
 )
 
 func TestQuotaPausedPeerSurvivesRestartBeforeSettlement(t *testing.T) {
-	f, l, steps, d, rec := quotaContinuationFixture(t, false, true)
+	f, l, steps, d, rec := quotaContinuationFixture(t, true)
 	if err := l.recordBackendWindow(context.Background(), rec); err != nil {
 		t.Fatal(err)
 	}

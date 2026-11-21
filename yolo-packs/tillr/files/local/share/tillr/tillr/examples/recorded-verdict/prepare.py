@@ -8,7 +8,6 @@ config = root / "config/tillr"
 config.mkdir(parents=True, exist_ok=True)
 (config / "backend-policy.json").write_text(json.dumps({
     "default_backend": "stub",
-    "preference": ["stub"],
     "seats": {"build": "stub"},
     "backends": {"stub": {
         "adapter": str(root / "stub-adapter.sh"),

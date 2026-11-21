@@ -1,15 +1,8 @@
 {
-  "about": "The tillr backend policy for a jail whose pi has only GitHub Copilot. Same shape and rules as backend-policy.bedrock.json beside it; a drain names this file with --policy. The owner's instruction of 2026-11-18: the design seat runs Carbon 4, the build seat runs Hydrogen 4 and the scout seat runs Flash 3.8, all on Copilot through the pi adapter. He named only those three. The plan, review and verify seats run Carbon 4 here because they are judgement seats; that choice is the operator's, not his. The design seat lists its fallback (the plan backend, also Carbon 4) so a closed design backend never falls back to the build model. Like the other per-machine policy files this is the stopgap docs/design/tillr-convergence.md OQ-TC2 records.",
+  "about": "The tillr backend policy for a jail whose pi has only GitHub Copilot. Same shape and rules as backend-policy.bedrock.json beside it; a drain names this file with --policy. The owner's instruction of 2026-11-18: the design seat runs Carbon 4, the build seat runs Hydrogen 4 and the scout seat runs Flash 3.8, all on Copilot through the pi adapter. He named only those three. The plan, review and verify seats run Carbon 4 here because they are judgement seats; that choice is the operator's, not his. Like the other per-machine policy files this is the stopgap docs/design/tillr-convergence.md OQ-TC2 records.",
   "default_backend": "pi-build",
-  "preference": [
-    "pi-build",
-    "pi"
-  ],
   "seats": {
-    "design": [
-      "pi-designer",
-      "pi"
-    ],
+    "design": "pi-designer",
     "build": "pi-build",
     "review": "pi",
     "scout": "pi-scout",

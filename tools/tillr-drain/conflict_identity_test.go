@@ -20,7 +20,7 @@ echo "$n" > "$CONFLICT_ATTEMPT_COUNT"
 if [ "$n" -eq 2 ]; then exit 2; fi
 `+conflictAdapter)
 	f := newLoopFixture(t, adapter)
-	f.policy = &drain.Policy{DefaultBackend: "first", Preference: []string{"first", "second"}, Backends: map[string]drain.Backend{
+	f.policy = &drain.Policy{DefaultBackend: "first", Backends: map[string]drain.Backend{
 		"first": {Adapter: adapter, Model: "first"}, "second": {Adapter: stub(t, "second", noOpAdapter), Model: "second"},
 	}}
 	fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))

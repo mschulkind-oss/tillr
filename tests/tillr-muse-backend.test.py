@@ -481,20 +481,18 @@ def test_policy():
         "agy: an effort key, but its effort lives inside the model id and the "
         "adapter refuses --effort",
     )
-    # Failover walks an ordered preference, skipping backends closed by run facts.
-    # No policy carries the retired dispatch budget.
-    preference = policy.get("preference", [])
-    check(preference, "the policy names no failover preference")
-    check(
-        preference[0] == policy["default_backend"],
-        "the default backend is not the preference head: staging would read the policy two ways",
-    )
-    check(
-        all(name in backends for name in preference),
-        f"the preference {preference} names a backend with no entry",
-    )
+    # No shipped policy carries preference or unshared multi-backend seats.
     for path in (ROOT / "config/tillr").glob("backend-policy*.json"):
-        check("max_failovers" not in json.loads(path.read_text()), f"{path.name}: retired max_failovers key")
+        document = json.loads(path.read_text())
+        check("preference" not in document, f"{path.name}: retired preference key")
+        check("max_failovers" not in document, f"{path.name}: retired max_failovers key")
+        for seat, value in document.get("seats", {}).items():
+            entries = value.get("backends") if isinstance(value, dict) else value
+            if isinstance(entries, list) and len(entries) > 1:
+                check(
+                    all(isinstance(entry, dict) and "share" in entry for entry in entries),
+                    f"{path.name}: {seat} has an unshared multi-backend list",
+                )
     for name, entry in backends.items():
         if "models" in entry:
             check(
@@ -560,28 +558,23 @@ def test_model_id_scan(root):
 
 
 def test_claude_policy(policy):
-    """The work machine's Claude-first policy (docs/design/tillr-claude-backend.md §4, §6 step 1).
-
-    Every seat starts on the claude adapter and names its own fallback, so a design item
-    falls back to the design backend and never to the build one.
-    """
+    """The work machine's Claude policy: every seat selects the claude adapter."""
     check("about" in policy, "the Claude policy does not say what it is")
     backends = policy["backends"]
     check(policy["default_backend"] == "claude", f"the Claude default is {policy['default_backend']!r}")
-    check(policy.get("preference") == ["claude", "pi"], f"the Claude preference is {policy.get('preference')}")
     check("max_failovers" not in policy, "the Claude policy names the retired max_failovers key")
     check(
         policy.get("seats") == {
-            "design": ["claude-designer", "pi-designer"],
-            "build": ["claude", "pi"],
-            "review": ["claude", "pi"],
-            "scout": ["claude", "pi"],
-            "plan": ["claude", "pi"],
-            "edit": ["claude", "pi"],
-            "test-write": ["claude", "pi"],
-            "test-run": ["claude", "pi"],
-            "docs": ["claude", "pi"],
-            "verify": ["claude", "pi"],
+            "design": "claude-designer",
+            "build": "claude",
+            "review": "claude",
+            "scout": "claude",
+            "plan": "claude",
+            "edit": "claude",
+            "test-write": "claude",
+            "test-run": "claude",
+            "docs": "claude",
+            "verify": "claude",
         },
         f"the Claude seats are {policy.get('seats')}",
     )
@@ -601,8 +594,8 @@ def test_claude_policy(policy):
 
 
 def test_claude_copilot_policy(policy):
-    """The Claude-subscription + Copilot-fallback policy: Claude on subscription for
-    design, plan, review, verify and first choice for build, with Copilot fallback.
+    """Claude on subscription for design, plan, review, verify and build;
+    Copilot for scout, edit, test-write, test-run and docs.
     """
     check("about" in policy, "the Claude-Copilot policy does not say what it is")
     check(
@@ -613,16 +606,16 @@ def test_claude_copilot_policy(policy):
     check(policy["default_backend"] == "claude", f"the Claude-Copilot default is {policy['default_backend']!r}")
     check(
         policy.get("seats") == {
-            "design": ["claude-designer", "pi-designer", "pi"],
-            "build": ["claude", "pi-build"],
-            "review": ["claude", "pi"],
+            "design": "claude-designer",
+            "build": "claude",
+            "review": "claude",
             "scout": "pi-scout",
-            "plan": ["claude", "pi"],
+            "plan": "claude",
             "edit": "pi-build",
             "test-write": "pi-build",
             "test-run": "pi-scout",
             "docs": "pi-build",
-            "verify": ["claude", "pi"],
+            "verify": "claude",
         },
         f"the Claude-Copilot seats are {policy.get('seats')}",
     )

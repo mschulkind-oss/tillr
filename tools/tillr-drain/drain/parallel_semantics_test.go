@@ -93,7 +93,6 @@ func TestParallelReadersHoldThenRestartOnlyFailedHarness(t *testing.T) {
 		return nil
 	}
 	l.cfg.Policy.Backends["alternate"] = Backend{Adapter: "alternate"}
-	l.cfg.Policy.Preference = []string{"fixture", "alternate"}
 	l.cfg.Policy.SeatLists = map[string][]string{"scout": {"fixture", "alternate"}, "build": {"fixture", "alternate"}}
 	result := &LoopResult{}
 	graphPass(t, l, result)

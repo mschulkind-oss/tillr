@@ -125,7 +125,6 @@ func TestInfrastructureHoldPreservesWorkBeforeSameBackendSettlement(t *testing.T
 	f, l, d, rec := savedFixture(t)
 	ctx := context.Background()
 	l.cfg.Policy.Backends["other"] = Backend{Adapter: "other"}
-	l.cfg.Policy.Preference = []string{"fixture", "other"}
 	started := 0
 	l.cfg.Steps = &callbackRunSteps{run: func(req run.Request) (run.Record, string, error) {
 		started++

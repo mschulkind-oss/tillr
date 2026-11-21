@@ -38,7 +38,6 @@ func TestParallelReaderWithAnUnreadableFooterRunsAgainAlone(t *testing.T) {
 	steps.badReport = "Scout findings.\nRESULT: finished\n"
 	steps.writerAfter = 5
 	l.cfg.Policy.Backends["alternate"] = Backend{Adapter: "alternate"}
-	l.cfg.Policy.Preference = []string{"fixture", "alternate"}
 	l.cfg.Policy.SeatLists = map[string][]string{"scout": {"fixture", "alternate"}, "build": {"fixture", "alternate"}}
 	result := &LoopResult{}
 	for i := 0; i < 5; i++ {

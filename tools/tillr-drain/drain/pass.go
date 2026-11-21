@@ -618,15 +618,24 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 		if d.WorkflowRestart {
 			backend = d.RunRequest.Backend
 		}
-		name, ok := backend, !shut[backend]
+		ok := !shut[backend]
 		if !d.WorkflowRestart {
-			name, ok = policy.availableBackend(backend, d.Seat, shut)
+			ok = policy.seatMayStart(d.ItemID, d.Seat, backend, shut)
+			if policy.usesSeatShares(d) {
+				saved, err := waitingSeatBackend(r, d.RunRequest.RunID, d.Seat, policy.seatList(d.Seat))
+				if err != nil {
+					return Decision{}, err
+				}
+				if saved != "" {
+					backend, ok = saved, !shut[saved]
+				}
+			}
 		}
 		if !ok {
 			d.DeferredBy = backend
 			d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
 		} else {
-			request := policy.request(d.ItemID, d.LaneID, d.RunRequest.RunID, name)
+			request := policy.request(d.ItemID, d.LaneID, d.RunRequest.RunID, backend)
 			if d.WorkflowRestart {
 				retained := *d.RunRequest
 				request = &retained
@@ -677,8 +686,17 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 			}
 			seat := policy.seatList("review")
 			if len(seat) > 0 {
-				_, open := firstOpenSeatBackend(*policy, "review", shut)
 				blocked := seat[0]
+				open := policy.seatMayStart("", "review", blocked, shut)
+				if len(policy.SeatShares["review"]) > 0 {
+					saved, err := waitingSeatBackend(r, judgeRunID(work.Candidate.RunID), "review", seat)
+					if err != nil {
+						return Decision{}, err
+					}
+					if saved != "" {
+						blocked, open = saved, !shut[saved]
+					}
+				}
 				failure, err := readRecordedInfrastructureFailure(r, d.ItemID, "$.node", "review:judge")
 				if err != nil {
 					return Decision{}, err
@@ -770,15 +788,9 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 				}
 				_, _, _, refused := refusedWindow(*rec)
 				if backend != "" && (rec.State == run.StatePaused || refused) && (policy == nil || shut[backend]) {
-					open := false
-					if policy != nil {
-						_, open = policy.availableBackend(backend, d.Seat, shut)
-					}
-					if !open {
-						d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
-						identifyDecision(&d)
-						return d, nil
-					}
+					d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
+					identifyDecision(&d)
+					return d, nil
 				}
 			}
 			if rec != nil {
@@ -1621,7 +1633,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 	// at a commit) and files (the item's definition body, its workflow) about rows it
 	// reads here, so the write is gathered: each of those is fetched with no write open,
 	// and the write runs again from its first statement with the answer (gathered.go).
-	err = writeGathered(ctx, s, func(ctx context.Context, tx *store.Tx) error {
+	err = writeGathered(ctx, s, seatClaim(l.currentPolicy(), func(ctx context.Context, tx *store.Tx) error {
 		applied, work, nextGeneration, trunkSHA = false, nil, *generation, *mainSHA
 		reason, waitingOn = "", ""
 		current, err := currentDefinition(tx.Reader(), p)
@@ -2050,7 +2062,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 		}
 		applied = d.Action != ActionHold
 		return nil
-	})
+	}))
 	if err == errSeatWindowClosed {
 		return false, nil, decline("a workflow seat's backend window closed during the claim", "an eligible backend window to open for the workflow seat")
 	}

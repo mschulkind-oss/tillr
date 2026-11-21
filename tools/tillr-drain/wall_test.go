@@ -87,7 +87,6 @@ func newWalledFixture(t *testing.T, harness string) walledFixture {
 	// The adapter refuses a backend value that is not its own name or a seat alias, so the
 	// fixture's backend is pi's.
 	f.policy.DefaultBackend = "pi"
-	f.policy.Preference = []string{"pi"}
 	delete(f.policy.Backends, "fixture")
 	f.policy.Backends["pi"] = drain.Backend{
 		Adapter: adapter, Model: "fixture-model", Effort: "low", TimeoutSeconds: 60,
