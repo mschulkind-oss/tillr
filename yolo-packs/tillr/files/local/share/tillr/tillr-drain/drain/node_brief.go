@@ -14,7 +14,8 @@ func plannedWritePiece(node WorkflowStage) bool {
 }
 
 // workflowNodeBrief supplies node instructions and wired files for both lane layouts.
-func (s *LaneStager) workflowNodeBrief(spec StageSpec, brief string, landing bool) (string, error) {
+// The fence is the effective write scope computed by staging, not the workflow's declaration.
+func (s *LaneStager) workflowNodeBrief(spec StageSpec, brief string, landing bool, fence string) (string, error) {
 	if spec.Node == nil {
 		return brief, nil
 	}
@@ -36,8 +37,8 @@ func (s *LaneStager) workflowNodeBrief(spec StageSpec, brief string, landing boo
 			brief += "\n## Model-use guidance\n\n" + string(guidance) + "\n"
 		}
 	}
-	if landing && spec.Node.Access == "write" && spec.Node.WriteScope.Paths != nil {
-		brief += "\nThis node may write only these paths:\n" + fenceText(scopeForLane(spec.Node.WriteScope.Paths, spec.LaneID))
+	if landing && spec.Node.Access == "write" && fence != "" {
+		brief += "\nThis node may write only these paths:\n" + fence
 	}
 	dir := nodeOutputsDir(s.Root, spec.RunID)
 	if err := os.MkdirAll(dir, 0755); err != nil {

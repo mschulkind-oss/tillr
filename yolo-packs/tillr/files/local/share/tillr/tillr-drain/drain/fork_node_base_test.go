@@ -32,6 +32,43 @@ func forkNodeBaseFixture(t *testing.T) (refusalLoopFixture, *Loop, string, strin
 	return f, l, fork, runGit(t, f.root, "rev-parse", "HEAD"), runGit(t, fork, "rev-parse", "HEAD")
 }
 
+func TestForkNodeBriefMatchesStagedFence(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		paths []string
+		want  string
+	}{
+		{name: "repository scope", paths: []string{"tools/tillr-drain/"}, want: ".forks/lanes/lane-1/pi/\n"},
+		{name: "inherited scope", want: ".forks/lanes/lane-1/pi/\n"},
+		{name: "narrowed fork scope", paths: []string{".forks/lanes/old-lane/pi/src/"}, want: ".forks/lanes/lane-1/pi/src/\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, l, _, trunk, _ := forkNodeBaseFixture(t)
+			spec := StageSpec{
+				LaneID: "lane-1", ItemID: "item-a", RunID: "run-fork-node", Backend: "fixture", BaseSHA: trunk, WorkingDir: WorktreeDir,
+				Node: &WorkflowStage{ID: "build", Kind: "agent", Seat: "build", Access: "write", WriteScope: WorkflowScope{Paths: tc.paths}},
+			}
+			if err := l.cfg.Stage.Stage(context.Background(), spec); err != nil {
+				t.Fatal(err)
+			}
+			lane := filepath.Join(l.cfg.LaneRoot, spec.LaneID)
+			fence, err := os.ReadFile(filepath.Join(lane, FenceFile))
+			if err != nil || string(fence) != tc.want {
+				t.Fatalf("staged fence = %q, want %q (error: %v)", fence, tc.want, err)
+			}
+			brief, err := os.ReadFile(filepath.Join(lane, BriefFile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, scope, ok := strings.Cut(string(brief), "This node may write only these paths:\n")
+			scope, _, _ = strings.Cut(scope, "Write declared outputs only")
+			if !ok || scope != string(fence) {
+				t.Fatalf("brief scope = %q (present: %t), want staged fence %q", scope, ok, fence)
+			}
+		})
+	}
+}
+
 func TestLaterForkNodeRecordsStagedBase(t *testing.T) {
 	f, l, fork, trunk, base := forkNodeBaseFixture(t)
 	ctx := context.Background()

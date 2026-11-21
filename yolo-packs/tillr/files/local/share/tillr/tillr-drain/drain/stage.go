@@ -639,7 +639,8 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		return err
 	}
 	brief += guidance
-	brief, err = s.workflowNodeBrief(spec, brief, true)
+	fence := fenceText(recorded.AllowedPaths)
+	brief, err = s.workflowNodeBrief(spec, brief, true, fence)
 	if err != nil {
 		return err
 	}
@@ -668,7 +669,7 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	}
 	files := []stagedFile{
 		{BriefFile, brief},
-		{FenceFile, fenceText(recorded.AllowedPaths)},
+		{FenceFile, fence},
 		{BaseSHAFile, baseSHA + "\n"},
 		{ItemBaseSHAFile, itemBaseSHA + "\n"},
 		{ItemFenceFile, fenceText(itemAllowed)},
