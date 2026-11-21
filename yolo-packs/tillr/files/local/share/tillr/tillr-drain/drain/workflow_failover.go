@@ -3,6 +3,8 @@ package drain
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
@@ -73,12 +75,32 @@ func (l *Loop) retryWorkflowNode(ctx context.Context, d Decision, base string, r
 	})
 }
 
+// A refused first message is not a paused session. Release only when the
+// staged base proves that no checkout or node output needs to follow the retry.
+func (l *Loop) emptyQuotaRefusal(d Decision, rec run.Record, base, head, dirty string) (bool, error) {
+	if _, _, _, refused := refusedWindow(rec); !refused || l.nonLanding || d.NodeIndex != 0 || len(d.Parallel) != 0 ||
+		len(d.ReusedNodes) != 0 || d.Returned != nil || d.RetryCandidate != nil || d.RepeatedCall != nil ||
+		d.WorkflowRestart || rec.Resumed || d.RunRequest.Resume || d.RunRequest.SessionTurn || l.laneForkTarget(d.LaneID) != "" ||
+		base == "" || head != base || d.NodeBaseSHA != base || strings.TrimSpace(dirty) != "" {
+		return false, nil
+	}
+	entries, err := os.ReadDir(nodeOutputsDir(l.cfg.Root, rec.RunID))
+	if os.IsNotExist(err) {
+		return true, nil
+	}
+	return len(entries) == 0 && err == nil, err
+}
+
 func (l *Loop) restartInterruptedNode(ctx context.Context, d Decision, base string, rec run.Record) error {
 	return l.restartWorkflowNode(ctx, d, base, rec, "interrupted", "run interrupted by signal")
 }
 
 func (l *Loop) restartWorkflowNode(ctx context.Context, d Decision, base string, rec run.Record, reason, preserveReason string) error {
-	if !l.nonLanding {
+	return l.recordWorkflowRestart(ctx, d, base, rec, reason, preserveReason, false)
+}
+
+func (l *Loop) recordWorkflowRestart(ctx context.Context, d Decision, base string, rec run.Record, reason, preserveReason string, released bool) error {
+	if !l.nonLanding && !released {
 		head := l.headOf(ctx, d.LaneID)
 		if err := l.preserveWork(ctx, d.LaneID, rec.RunID, preserveReason); err != nil {
 			if stop := l.retainUnpreserved(ctx, d.LaneID, rec.RunID, head, err); stop != "" {
@@ -102,6 +124,10 @@ func (l *Loop) restartWorkflowNode(ctx context.Context, d Decision, base string,
 	stampDecisionRequest(d, request)
 	d.RunRequest = request
 	d.WorkflowRestart = true
+	if released {
+		d.NodeStartRunID = ""
+		d.NodeInfraFailures = 0 // The quota retry is pinned to the refusing backend.
+	}
 	d.Action, d.Reason = ActionDispatch, "workflow-node-"+reason
 	if d.Workflow.Stages[d.NodeIndex].TimeoutMS > 0 {
 		request.TimeoutMS = d.Workflow.Stages[d.NodeIndex].TimeoutMS
@@ -123,6 +149,6 @@ func (l *Loop) restartWorkflowNode(ctx context.Context, d Decision, base string,
 		if n != 1 {
 			return fmt.Errorf("lost workflow node during %s restart", reason)
 		}
-		return appendEffect(tx, nodeAdvancedKind, request.RunID, pendingWork{Decision: d, BaseSHA: base, Ready: true, ParentRunID: rec.RunID}, l.cfg.Now().UTC())
+		return appendEffect(tx, nodeAdvancedKind, request.RunID, pendingWork{Decision: d, BaseSHA: base, Ready: true, ParentRunID: rec.RunID, LaneReleased: released}, l.cfg.Now().UTC())
 	})
 }

@@ -702,11 +702,12 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 			return true, err
 		}
 	}
-	if stagedBase := l.laneBase(d.LaneID); stagedBase != "" {
+	stagedBase := l.laneBase(d.LaneID)
+	if stagedBase != "" {
 		base = stagedBase
 	}
 	target := l.laneTarget(d.LaneID)
-	var head, nodeBase string
+	var head, nodeBase, dirty string
 	if !l.nonLanding {
 		head, err = l.revParse(ctx, target, "HEAD")
 		if err != nil {
@@ -728,7 +729,7 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 				nodeBase = base
 			}
 		}
-		dirty, err := l.git(ctx, target, "status", "--porcelain", "--untracked-files=all")
+		dirty, err = l.git(ctx, target, "status", "--porcelain", "--untracked-files=all")
 		if err != nil {
 			return true, err
 		}
@@ -781,6 +782,18 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		}
 		if ClassifyAttempt(rec, log) == AttemptInterrupted && !offered {
 			return true, l.restartInterruptedNode(ctx, d, base, rec)
+		}
+		if !offered {
+			empty, err := l.emptyQuotaRefusal(d, rec, stagedBase, head, dirty)
+			if err != nil {
+				return true, err
+			}
+			if empty {
+				if err := l.recordBackendWindow(ctx, rec); err != nil {
+					return true, err
+				}
+				return true, l.recordWorkflowRestart(ctx, d, base, rec, "fresh", "", true)
+			}
 		}
 		if ClassifyAttempt(rec, log) == AttemptRefused {
 			stop, err := l.holdAdapterRefusal(ctx, d.LaneID, *d.RunRequest, log)

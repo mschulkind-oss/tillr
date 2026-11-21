@@ -680,7 +680,13 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			// claim took it out) cannot be offered that lane again: it is planned onto a
 			// free one, as a released lane is.
 			laneOut := work.Ready && !work.Done && tick.OutLanes[work.Decision.LaneID]
+			detachedNode := work.Ready && work.LaneReleased
 			if err == nil && (work.LaneReleased || laneOut) && !waiting && !ownerNextNode && decision.Action != ActionHold {
+				if detachedNode {
+					// A released first node has no staged state to resume. Keep the
+					// selected request, but stage it fresh on the newly assigned lane.
+					decision.WorkflowRestart = false
+				}
 				lane, ok := p.freeLane(item.Express)
 				if !ok {
 					decision.Action, decision.Reason, decision.To = ActionHold, ReasonNoLane, ""
@@ -732,6 +738,16 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			}
 			if err != nil {
 				return nil, nil, readFailure(err)
+			}
+			if detachedNode && decision.Action == ActionHold {
+				// The recorded lane is historical, not a reservation for the waiting node.
+				decision.LaneID = ""
+				if decision.RunRequest != nil {
+					req := *decision.RunRequest
+					req.LaneID = ""
+					decision.RunRequest = &req
+				}
+				identifyDecision(&decision)
 			}
 			// The wait does not cancel or prevent settling work already started, but
 			// it bars another launch and is the mover, even while a run winds down.
