@@ -164,9 +164,15 @@ func (l *Loop) cancelStaging(ctx context.Context, d Decision) error {
 		return err
 	}
 	defer s.Close()
-	return s.WriteTx(ctx, func(tx *store.Tx) error {
-		return retractClaim(tx, d, l.cfg.Now().UTC(), true)
+	var at time.Time
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		at = l.cfg.Now().UTC()
+		return retractClaim(tx, d, at, true)
 	})
+	if err == nil {
+		l.notifyStartLaneReleased(d.LaneID, d.RunRequest.RunID, true, at)
+	}
+	return err
 }
 
 // A sync fault's explicit clearance invalidates the cached document read even

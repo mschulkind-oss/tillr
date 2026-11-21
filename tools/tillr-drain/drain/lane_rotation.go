@@ -149,6 +149,7 @@ func (l *Loop) takeLaneOutOfRotation(ctx context.Context, refusal *LaneRefusalEr
 		}
 		c.recorded = true
 	}
+	l.noteStartRotation(c.at)
 	if !c.printed {
 		recheck := fmt.Sprintf("when its HEAD or status changes, or every %s", laneRecheckInterval)
 		if c.reason == ReasonLaneChildren {
@@ -168,11 +169,13 @@ func (l *Loop) restoreLane(ctx context.Context, lane string) error {
 		return nil
 	}
 	delete(l.laneConditions, lane)
+	at := l.cfg.Now().UTC()
 	if err := appendLaneEvent(ctx, l.cfg.Store, laneRestoredKind, lane, struct {
 		LaneID string `json:"lane_id"`
-	}{lane}, l.cfg.Now().UTC()); err != nil {
+	}{lane}, at); err != nil {
 		return err
 	}
+	l.reconcileStartLanes(ctx, l.rotationLanes(), at)
 	l.reportf("loop: lane %s is back in rotation: it is available to stage again\n", lane)
 	return nil
 }
@@ -197,6 +200,7 @@ func (l *Loop) recheckLanes(ctx context.Context) error {
 		return nil
 	}
 	now := l.cfg.Now().UTC()
+	restored := false
 	for lane, c := range l.laneConditions {
 		if !c.out || c.reason == ReasonLaneChildren {
 			continue
@@ -210,7 +214,11 @@ func (l *Loop) recheckLanes(ctx context.Context) error {
 				continue
 			}
 			c.out = false
+			restored = true
 		}
+	}
+	if restored {
+		l.reconcileStartLanes(ctx, l.rotationLanes(), now)
 	}
 	return nil
 }

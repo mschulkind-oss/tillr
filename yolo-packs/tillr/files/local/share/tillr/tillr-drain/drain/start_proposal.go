@@ -41,8 +41,8 @@ func readProposedStarts(ctx context.Context, path string, at time.Time, policy *
 	})
 }
 
-// Use recorded refusals at the same read boundary as leases. Local-only loop
-// state is not observed until the loop starts publishing its own notes.
+// Use recorded refusals at the same read boundary as leases. Local rotation
+// notes overlay this baseline when the snapshot is published.
 func shadowRotation(r *store.Reader, tick *Pass) error {
 	lanes := make([]string, 0, len(*tick.AvailableLanes))
 	tick.OutLanes = map[string]bool{}
@@ -227,6 +227,7 @@ func (s startSnapshot) heldLanes() map[string]bool {
 
 func (s *startSnapshot) updateFreeLanes(tick Pass, previous startSnapshot, at time.Time) {
 	s.occupied = s.heldLanes()
+	s.rotation = *tick.AvailableLanes
 	s.laneFreeAt = map[string]time.Time{}
 	s.freeLanes = nil
 	for _, lane := range *tick.AvailableLanes {

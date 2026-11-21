@@ -2248,7 +2248,16 @@ func readEdges(r *store.Reader) (map[string][]string, error) {
 // before it plans for that reason, and the two cannot disagree about which lanes are
 // expired because they compare the same column against the same clock.
 func readLanes(r *store.Reader, now time.Time) (map[string]bool, error) {
-	rows, err := r.Query(`SELECT lane_id, state, leased_until FROM lanes`)
+	return readLanesWithRuns(r, now, nil)
+}
+
+func readLanesWithRuns(r *store.Reader, now time.Time, runs *map[string]string) (map[string]bool, error) {
+	query := `SELECT lane_id, state, leased_until FROM lanes`
+	if runs != nil {
+		query = `SELECT lane_id, state, leased_until, run_id FROM lanes`
+		*runs = map[string]string{}
+	}
+	rows, err := r.Query(query)
 	if err != nil {
 		return nil, readFailure(err)
 	}
@@ -2260,13 +2269,21 @@ func readLanes(r *store.Reader, now time.Time) (map[string]bool, error) {
 			state       string
 			leasedUntil sql.NullInt64
 		)
-		if err := rows.Scan(&laneID, &state, &leasedUntil); err != nil {
+		var runID sql.NullString
+		dest := []any{&laneID, &state, &leasedUntil}
+		if runs != nil {
+			dest = append(dest, &runID)
+		}
+		if err := rows.Scan(dest...); err != nil {
 			return nil, readFailure(err)
 		}
 		// A leased lane with no expiry cannot be judged by the clock, so it is held: an
 		// operator releases it by hand, which is the one answer that does not need a
 		// clock.
 		held[laneID] = state == LaneStateLeased && (!leasedUntil.Valid || leasedUntil.Int64 > now.UnixMilli())
+		if runs != nil && held[laneID] {
+			(*runs)[laneID] = runID.String
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, readFailure(err)

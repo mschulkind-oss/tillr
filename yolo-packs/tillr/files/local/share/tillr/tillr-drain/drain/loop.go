@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -496,6 +497,7 @@ type LoopResult struct {
 // independent worker. Terminal outcomes are read from the store; completion channels
 // are only this process's wake triggers. Each run retains its own boundary bracket.
 type Loop struct {
+	startView                            atomic.Pointer[startView]
 	endingCapabilities                   map[string]string
 	rollAction, piRollAction, pushAction landingAction
 	greenPushAtStart                     sync.Once
@@ -884,7 +886,10 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 		return result, nil
 	}
 	// Neither startup nor a pass waits for the advisory snapshot.
-	defer l.watchStartView(ctx, newStartView(), startViewRefreshInterval)()
+	view := newStartView()
+	l.startView.Store(view)
+	defer l.startView.Store(nil)
+	defer l.watchStartView(ctx, view, startViewRefreshInterval)()
 	for {
 		if err := ctx.Err(); err != nil {
 			result.Stop = StopOperatorStop
@@ -1282,6 +1287,9 @@ func (l *Loop) holdLocal(ctx context.Context, itemID, reason string) {
 		})
 	}
 	l.held[itemID] = hold
+	if v := l.startView.Load(); v != nil {
+		v.noteItemHold(itemID, hold)
+	}
 }
 
 func localHoldVersion(r *store.Reader, itemID string) (string, error) {

@@ -114,31 +114,39 @@ func (testStartWatcher) close()                            {}
 func TestStartViewWatcherBatchesAndFallsBackOnClosure(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		w := make(testStartWatcher, 2)
-		var reads []startWatchChange
+		reads := make(chan startWatchChange, 4)
 		const safety = time.Second
 		view := newStartView()
 		defer view.watch(context.Background(), safety, func(context.Context) startWatcher { return w }, func(_ context.Context, change startWatchChange) (startSnapshot, error) {
-			reads = append(reads, change)
+			reads <- change
 			return startSnapshot{}, nil
 		})()
-		synctest.Wait()
+		checkRead := func(want startWatchChange) {
+			t.Helper()
+			synctest.Wait()
+			select {
+			case got := <-reads:
+				if got != want {
+					t.Fatalf("refresh = %v, want %v", got, want)
+				}
+			default:
+				t.Fatalf("missing refresh %v", want)
+			}
+		}
+		checkRead(0)
 		w <- startWatchStore
 		w <- startWatchExternal
 		synctest.Wait()
-		if len(reads) != 1 {
-			t.Fatalf("refresh before batch was due: %v", reads)
+		select {
+		case got := <-reads:
+			t.Fatalf("refresh before batch was due: %v", got)
+		default:
 		}
 		close(w)
 		time.Sleep(startViewWatchBatch)
-		synctest.Wait()
-		if len(reads) != 2 || reads[1] != startWatchStore|startWatchExternal {
-			t.Fatalf("batch did not merge both wakes: %v", reads)
-		}
+		checkRead(startWatchStore | startWatchExternal)
 		time.Sleep(safety - startViewWatchBatch)
-		synctest.Wait()
-		if len(reads) != 3 || reads[2] != startWatchExternal {
-			t.Fatalf("safety timer stopped after the filesystem source closed: %v", reads)
-		}
+		checkRead(startWatchExternal)
 	})
 }
 

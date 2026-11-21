@@ -357,6 +357,9 @@ func (l *Loop) releaseCandidate(ctx context.Context, work *pendingWork, reason s
 	if err == nil && (released || !examining) {
 		claimed = false
 	}
+	if err == nil && released {
+		l.notifyStartLaneReleased(c.LaneID, c.RunID, true, l.cfg.Now().UTC())
+	}
 	return released && err == nil, err
 }
 
@@ -551,7 +554,8 @@ func (l *Loop) releaseRefusedAssignment(ctx context.Context, work *pendingWork) 
 		return err
 	}
 	defer s.Close()
-	return s.WriteTx(ctx, func(tx *store.Tx) error {
+	released := false
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
 		owned, err := candidateReleaseOwned(tx.Reader(), c, owner)
 		if err != nil || !owned {
 			return err
@@ -559,6 +563,11 @@ func (l *Loop) releaseRefusedAssignment(ctx context.Context, work *pendingWork) 
 		if err := appendEffect(tx, candidateLaneKind, c.RunID, candidateLane{Candidate: c, Released: true, Fence: work.HeldFence}, l.cfg.Now().UTC()); err != nil {
 			return err
 		}
+		released = true
 		return clearCandidateRelease(tx, c, l.cfg.Now())
 	})
+	if err == nil && released {
+		l.notifyStartLaneReleased(c.LaneID, c.RunID, true, l.cfg.Now().UTC())
+	}
+	return err
 }
