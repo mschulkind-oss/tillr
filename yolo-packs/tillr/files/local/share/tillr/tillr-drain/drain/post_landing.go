@@ -182,7 +182,7 @@ func (l *Loop) afterGreen(ctx context.Context, advanced string) {
 		return
 	}
 	l.pushAction.submit(advanced, func(string) {
-		green, err := pushGreen(ctx, l.cfg.Root, p)
+		green, err := pushGreenChecked(ctx, l.cfg.Root, p, l.greenProofHold)
 		if green == "" && err == nil {
 			return // no green pointer yet: nothing is proven
 		}
@@ -190,9 +190,10 @@ func (l *Loop) afterGreen(ctx context.Context, advanced string) {
 		if errors.As(err, &refused) {
 			// The remote moved: rebase onto it. The new tip is proved by the normal
 			// after-merge run, and the green advance that follows pushes it.
-			n, herr := l.healRefusedPush(ctx, p, err)
+			res, herr := l.healRefusedPushResult(ctx, p, err)
 			if herr == nil {
-				herr = fmt.Errorf("the remote had moved: %d unpublished commits were rebased onto it; the new tip is proved, then pushed at the next green advance", n)
+				herr = &pushStateError{kind: pushKindProving, remoteTip: res.remoteTip, rebasedTip: res.newTip,
+					detail: fmt.Sprintf("the remote had moved: %d unpublished commits were rebased onto it; %s", res.replayed, awaitingRebasedProof(res.newTip))}
 			}
 			err = herr
 		}
@@ -271,6 +272,10 @@ func pushTrunk(ctx context.Context, root string, p settings.Push) error {
 // commit refuses it; nothing here pulls, rebases or merges to make it succeed. The pre-push
 // hook runs as for any push (see docs/reference/tillr-restart.md, "Pushing what the proof has passed").
 func pushGreen(ctx context.Context, root string, p settings.Push) (string, error) {
+	return pushGreenChecked(ctx, root, p, nil)
+}
+
+func pushGreenChecked(ctx context.Context, root string, p settings.Push, proofHold func(context.Context, string, string, string) (string, error)) (string, error) {
 	green, err := heavyGreen(ctx, root)
 	if err != nil || green == "" {
 		return green, err
@@ -285,12 +290,29 @@ func pushGreen(ctx context.Context, root string, p settings.Push) (string, error
 	if err != nil {
 		return green, err
 	}
+	alreadyPublished := false
 	if remoteTip != "" {
-		if contains, err := trunkAncestor(ctx, root, green, remoteTip); err != nil {
+		alreadyPublished, err = trunkAncestor(ctx, root, green, remoteTip)
+		if err != nil {
 			return green, err
-		} else if contains {
-			return green, errAlreadyPublished
 		}
+	}
+	if proofHold != nil {
+		rebased, err := proofHold(ctx, remote, ref, green)
+		if err != nil {
+			return green, fmt.Errorf("checking the rebased tip's proof: %w", err)
+		}
+		if rebased != "" {
+			detail := "publication deferred"
+			if alreadyPublished {
+				detail = errAlreadyPublished.Error()
+			}
+			return green, &pushStateError{kind: pushKindProving, rebasedTip: rebased,
+				detail: detail + "; " + awaitingRebasedProof(rebased)}
+		}
+	}
+	if alreadyPublished {
+		return green, errAlreadyPublished
 	}
 	if err := pushCommand(ctx, root, "--", remote, green+":"+ref); err != nil {
 		return green, err
@@ -315,7 +337,9 @@ func (l *Loop) recordPush(ctx context.Context, what, tip string, failure error) 
 	if what == settings.PushGreen {
 		retry = "retried at the next green advance"
 	}
-	if failure != nil {
+	if kind == pushKindProving {
+		l.reportf("loop: push of %s %s waits for proof: %s\n", what, shortSHA(tip), failure)
+	} else if failure != nil {
 		l.reportf("loop: push of %s %s failed as %s (%s; the loop goes on): %s\n", what, shortSHA(tip), kind, retry, strings.Join(strings.Fields(failure.Error()), " "))
 	} else {
 		l.reportf("loop: pushed %s %s\n", what, shortSHA(tip))

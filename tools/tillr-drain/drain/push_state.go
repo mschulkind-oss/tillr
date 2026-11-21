@@ -14,6 +14,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/patchmoves"
 	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr/event"
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -23,12 +24,14 @@ const (
 	pushKindPatchMoveHeld  = "push-patch-move-held"
 	pushKindFailed         = "push-failed"
 	pushKindRewritten      = "remote-rewritten"
+	pushKindProving        = "remote-sync-proving"
 )
 
 // pushStateError records what the push reported without changing its detail for older readers.
 type pushStateError struct {
 	kind, detail           string
 	remoteTip, previousTip string
+	rebasedTip             string
 	noRefLine              bool
 	escalated              string
 }
@@ -164,6 +167,66 @@ func checkPublishedAncestry(ctx context.Context, root, remote, ref, prev, tip st
 			remote, branch, shortSHA(prev), shortSHA(tip), remote, branch, shortSHA(prev), shortSHA(tip))}
 }
 
+// greenProofHold reads replay facts independently of later push outcomes. Only
+// tips still on main and not contained in the selected green commit can hold it.
+func (l *Loop) greenProofHold(ctx context.Context, remote, ref, green string) (string, error) {
+	root := l.cfg.Root
+	main := optionalCommit(ctx, root, "refs/heads/"+TrunkRef)
+	if main == "" {
+		return "", fmt.Errorf("cannot resolve %s for the proof hold", TrunkRef)
+	}
+	if main == green {
+		return "", nil
+	}
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return "", err
+	}
+	defer s.Close()
+	var tips []string
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		rows, err := r.Query(`SELECT json_extract(payload,'$.rebased_tip') AS tip FROM events
+ WHERE kind=? AND json_extract(payload,'$.action')='push' AND json_extract(payload,'$.what')=?
+ AND json_extract(payload,'$.remote')=? AND json_extract(payload,'$.ref')=?
+ AND json_extract(payload,'$.kind')=? AND json_extract(payload,'$.rebased_tip')<>''
+ GROUP BY tip ORDER BY max(seq) DESC`, postLandingKind, settings.PushGreen, remote, ref, pushKindProving)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var tip string
+			if err := rows.Scan(&tip); err != nil {
+				return err
+			}
+			tips = append(tips, tip)
+		}
+		return rows.Err()
+	})
+	if err != nil || len(tips) == 0 {
+		return "", err
+	}
+	// Intersect the recorded tips with the unproved range in one Git call.
+	out, err := rawGit(ctx, root, nil, "rev-list", green+".."+main, "--")
+	if err != nil {
+		return "", err
+	}
+	unproved := make(map[string]bool)
+	for _, sha := range strings.Fields(out) {
+		unproved[sha] = true
+	}
+	for _, tip := range tips {
+		if unproved[tip] {
+			return tip, nil
+		}
+	}
+	return "", nil
+}
+
+func awaitingRebasedProof(tip string) string {
+	return "mover: the heavy runner; prove rebased tip " + shortSHA(tip) + " before pushing"
+}
+
 // pushCounts counts what the known remote tip lacks, or returns -1 for an unknown count.
 func pushCounts(ctx context.Context, root, remoteTip string) (green, main int) {
 	count := func(ref string) int {
@@ -209,6 +272,9 @@ func (l *Loop) recordPushState(ctx context.Context, what, tip, kind string, stat
 	}
 	if state != nil && state.escalated != "" {
 		payload["escalated_mover"] = state.escalated
+	}
+	if state != nil && state.rebasedTip != "" {
+		payload["rebased_tip"] = state.rebasedTip
 	}
 	if kind != pushKindOK {
 		since := l.lastPushSince(ctx)
