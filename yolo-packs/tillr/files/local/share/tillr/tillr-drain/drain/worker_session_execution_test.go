@@ -20,7 +20,6 @@ func returnedSessionFixture(t *testing.T, cause string) (refusalLoopFixture, *Lo
 func returnedSessionFixtureWith(t *testing.T, cause, gateOutput string) (refusalLoopFixture, *Loop, plannedApplication, string) {
 	t.Helper()
 	f, l := designSeatFixture(t)
-	commitDenyListFixture(t, f.root)
 	declareWorkerResumeFixture(t, l)
 	l.cfg.Lanes = []string{"lane-1"}
 	fixtureWrite(t, f, func(tx *store.Tx) error {
@@ -193,9 +192,8 @@ func TestReturnedSessionIdenticalRepeat(t *testing.T) {
 			t.Fatal("session was not continued")
 		}
 		p.decision.RunRequest.Command = []string{continuationShell(t), "-c", `test "$TILLR_SESSION_MODE" = resume || exit 71
-mkdir -p .forks
-printf '%s\n' "$TILLR_RUN_ID" > .forks/outside.txt
-git add -f .forks/outside.txt
+printf '%s\n' "$TILLR_RUN_ID" > outside.txt
+git add outside.txt
 git commit -qm escaped
 `}
 		d := applyReturnedTurn(t, l, p, base)

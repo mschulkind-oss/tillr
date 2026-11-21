@@ -36,8 +36,8 @@ func (s *LaneStager) workflowNodeBrief(spec StageSpec, brief string, landing boo
 			brief += "\n## Model-use guidance\n\n" + string(guidance) + "\n"
 		}
 	}
-	if landing && spec.Node.Access == "write" && spec.Node.WriteScope.Paths != nil {
-		brief += "\nThis node may write only these paths:\n" + fenceText(scopeForLane(spec.Node.WriteScope.Paths, spec.LaneID))
+	if landing && spec.Node.Access == "write" && spec.Node.WriteScope.Paths != nil && !plannedWritePiece(*spec.Node) {
+		brief += "\nThis node may write only these paths, within the item's fence:\n" + fenceText(scopeForLane(spec.Node.WriteScope.Paths, spec.LaneID))
 	}
 	dir := nodeOutputsDir(s.Root, spec.RunID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -46,7 +46,7 @@ func (s *LaneStager) workflowNodeBrief(spec StageSpec, brief string, landing boo
 	if spec.Node.Access == "read_only" {
 		if planAllowsQuickWay(*spec.Node) {
 			quickPath := filepath.Join(dir, quickWayFile)
-			brief += "Read only unless you take the quick way: when the request is small and clear (one coherent change, no split into pieces, no question for the owner), your first move may be to decide 'do it now' by writing " + quickPath + ", then make the change (changing what the work needs, and nothing else), test it"
+			brief += "Read only unless you take the quick way: when the request is small and clear (one coherent change, no split into pieces, no question for the owner), your first move may be to decide 'do it now' by writing " + quickPath + ", then make the change within the item's fence, test it"
 			if landing {
 				brief += ", and commit once on this lane"
 			}

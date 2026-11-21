@@ -38,6 +38,7 @@ TAIL_WINDOW = 1 << 20  # the window Claude Code scans for a deferred-tool marker
 
 OBSTACLE_REQUIRED = {
     "definition": ["CRITERIA", "EVIDENCE"],
+    "fence": ["PATHS", "EVIDENCE"],
     "trunk": ["CHECKS", "BASE"],
     "tooling": ["COMMAND", "EVIDENCE", "PATHS"],
     "seat": ["TRIED", "MISSING"],
@@ -137,7 +138,7 @@ def validate_obstacle(args):
             missing.append(name.lower())
     if missing:
         raise Refusal(f"The {kind} obstacle is missing required field(s): {', '.join(missing)}.")
-    if kind == "tooling":
+    if kind in ("fence", "tooling"):
         entries = [p.strip("`*-") for p in fields["PATHS"].replace(",", " ").split()]
         entries = [p for p in entries if p]
         if not entries:

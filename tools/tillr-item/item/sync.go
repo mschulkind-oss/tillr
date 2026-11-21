@@ -450,6 +450,22 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 	blocks = roadmapBlocks(in.Documents, blocks, in.Roadmaps)
 	report.Blocks = len(blocks)
 
+	// The fence's paths may name what a slice creates, so a path that is not on disk is a
+	// warning, never a finding.
+	if in.Root != "" {
+		for _, b := range blocks {
+			for _, p := range b.payload.AllowedPaths {
+				if _, _, _, checkout := ForkCheckoutPath(p); checkout {
+					continue // staging materializes the dispatched lane's checkout
+				}
+				if _, err := os.Stat(filepath.Join(in.Root, filepath.FromSlash(p))); err != nil {
+					report.Warnings = append(report.Warnings, note(b, "path-missing",
+						fmt.Sprintf("paths names %q, which does not exist under the repository root; the slice may create it", p)))
+				}
+			}
+		}
+	}
+
 	// One id, one block, across every document: two blocks with one id are two definitions
 	// of one item, and neither file can be trusted to be the one meant.
 	byID := map[string][]syncBlock{}
@@ -676,9 +692,6 @@ func planSync(r *store.Reader, in SyncInput) (syncPlan, error) {
 			report.Created = append(report.Created, desired.ItemID)
 			continue
 		}
-		// Legacy lists are inert history. Sync neither compares the declaration's
-		// retired paths attribute nor clears the previously stored value.
-		desired.AllowedPaths = stored.AllowedPaths
 		// Only a whole sync can observe that a roadmap no longer parks this document.
 		unpark := !in.Partial && stored.State == "not-started" && !b.parked
 		park := stored.State == "in-queue" && b.parked && d.HasState("not-started")
@@ -1061,6 +1074,17 @@ func parseItemBlocks(file string, content []byte) ([]syncBlock, []SyncNote) {
 		if from, named := attrs["from"]; named && !itemIDShape.MatchString(from) {
 			bad("invalid-from", "from %q does not match ^item-[a-z0-9-]+$", from)
 		}
+
+		paths := splitList(attrs["paths"])
+		if len(paths) == 0 {
+			bad("missing-paths", "the directive names no paths: an item with no fence cannot be staged")
+		}
+		for _, p := range paths {
+			if reason := badFencePath(p); reason != "" {
+				bad("invalid-path", "paths carries %q: %s", p, reason)
+			}
+		}
+		b.payload.AllowedPaths = paths
 
 		blockers := splitList(attrs["blocked_by"])
 		for _, blocker := range blockers {

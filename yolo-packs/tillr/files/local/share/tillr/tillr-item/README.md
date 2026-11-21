@@ -94,7 +94,21 @@ a self-dependency (`edge-self`), and any addition that would form a cycle
 
 ## Adding a path to an open item
 
-Item paths no longer restrict work. Filing still accepts `--path` for compatibility, but ignores its value and prints a notice.
+Use `tillr item add-path` when a request needs one more path to complete:
+
+```sh
+tillr item add-path --store .tillr/state.db --item item-example --path docs/notes.md --by owner --why 'Repair the link to the removed file'
+```
+
+The command adds one repository-relative path prefix and records who authorized it
+and why in an `item.update` event. It preserves the item's place and run history.
+Adding the same path again is a no-op. Finished items and calls from worker runs
+are refused. An earlier step's landing does not prevent widening an open item's
+fence. The command changes the store, not any authored item block.
+
+For a request held on its fence, drain can dispatch a new run after the fence
+changes. No close, refile, or separate retry is needed. Run
+`tillr item add-path --help` for all flags.
 
 ## Saving an idea
 
@@ -190,9 +204,8 @@ only the store holds. Sync therefore never counts a store-declared item in
 ## Filing a request
 
 `request` files one piece of work straight into the queue. The request's words, read
-from standard input, are its whole statement. The item runs an existing workflow,
-constrained only by the repository's global deny-list (`config/tillr/deny-paths.json`),
-lands through the normal gate, and never has a document block. The
+from standard input, are its whole statement. The item runs an existing workflow inside
+a fence you name, lands through the normal gate, and never has a document block. The
 face's name, the `item-request-` id prefix and the four fixed criteria below were chosen
 by the implementer on 2026-11-18, and the owner may rename them. "Request" is the
 [vocabulary's word](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-vocabulary.md#51-the-work-and-its-statement)
@@ -200,15 +213,15 @@ for an item that has no block.
 
 ```sh
 printf '%s\n' 'Add two rows to yolo-packs/copilot-models/pack.toml: ...' |
-  tillr-item request --store .tillr/state.db --root . --title "List two more Copilot models" --workflow single-worker@v1
+  tillr-item request --store .tillr/state.db --root . --title "List two more Copilot models" --workflow single-worker@v1 --path yolo-packs/copilot-models/pack.toml
 ```
 
-The flags are `--title`, `--path`, `--seat`, `--workflow`, `--criterion`, `--blocked-by`, `--ordinary`, `--to`, `--before` and `--after`; run `tillr-item request --help` for their details. `--title` is required; `--path` is deprecated and ignored with a notice (items no longer carry a list of allowed paths, per the owner's 2026-11-19 ruling). `--seat` is `build` by default. `--workflow` names a file under `config/tillr/workflows/` or the built-in `single-worker@v1` (one run on the item's seat); by default `design` runs `scouted-design@v1` and `build` runs `planned-build@v1`, other seats must name one, and a workflow that declares top-level `args` is refused as `workflow-needs-args` (`doc-triage@v1` has its own face). `--criterion` (repeatable, at most four) adds criteria after the fixed four. `--blocked-by` (repeatable) names an existing item this request waits on and stores the dependency when the item is filed so it never looks ready. `--ordinary` files the request for the ordinary lanes only; by default a filed request is marked `express` when the item is written so it is eligible for the express lanes. `--to`, `--before` and `--after` place the item (last by default).
+The flags are `--title`, `--path`, `--seat`, `--workflow`, `--criterion`, `--blocked-by`, `--ordinary`, `--to`, `--before` and `--after`; run `tillr-item request --help` for their details. `--title` and `--path` (repeatable, one repo-relative prefix of the fence; a directory ends in `/`, and wildcards, absolute paths and paths that leave the repository are refused) are required. `--seat` is `build` by default. `--workflow` names a file under `config/tillr/workflows/` or the built-in `single-worker@v1` (one run on the item's seat); by default `design` runs `scouted-design@v1` and `build` runs `planned-build@v1`, other seats must name one, and a workflow that declares top-level `args` is refused as `workflow-needs-args` (`doc-triage@v1` has its own face). `--criterion` (repeatable, at most four) adds criteria after the fixed four. `--blocked-by` (repeatable) names an existing item this request waits on and stores the dependency when the item is filed so it never looks ready. `--ordinary` files the request for the ordinary lanes only; by default a filed request is marked `express` when the item is written so it is eligible for the express lanes. `--to`, `--before` and `--after` place the item (last by default).
 
 The face reads the workflow file before the store's write transaction opens, so the
 transaction does no I/O but the store's own. It writes the item (with `express` set unless
 `--ordinary` is given) and a `request_words` row in that one transaction: the words byte
-for byte, their SHA-256, and a hash of the title, seat, workflow, criteria,
+for byte, their SHA-256, and a hash of the title, seat, workflow, fence, criteria,
 express choice and dependencies. Nothing tracked is written.
 
 The id is `item-request-` plus ten digits of the words' hash, lengthened on a collision.
@@ -216,7 +229,7 @@ Filing the same words with the same choices again answers the first item's place
 without writing anything. The same words with any other choice (including the express
 choice) are refused as `request-differs`, naming the existing item. The four fixed criteria are:
 
-1. The change does what the words ask, and nothing else.
+1. The change does what the words ask, within the fence, and nothing else.
 2. The change is verified the way this repository's rules require: a test for new or
    changed behavior and `uvx vantage-check` for each changed Markdown document.
 3. No `<!-- tillr: item … -->` comment is added, edited or relied on.
@@ -224,13 +237,16 @@ choice) are refused as `request-differs`, naming the existing item. The four fix
    with a question and its options.
 
 The refusals are `words-empty`, `words-not-text`, `words-too-large`, `title-required`,
-`title-braces`, `workflow-reference`,
+`title-braces`, `fence-required`, `fence-wildcard`, `workflow-reference`,
 `workflow-missing`, `workflow-needs-args`, `workflow-required`, `criterion-empty`,
 `criterion-braces`, `too-many-criteria`, `edge-target-missing`, `request-differs`, `unknown-item` and
 `not-in-order`. A `{{` in the title or a criterion is refused because the brief template
 reads it as a placeholder; the words may hold anything. Every refusal comes before the
-first write. The answer is an `item.request` record carrying `item_id`, `place`,
-`count`, `seat`, `workflow`, `blocked_by` and `words_size`. An identical refile
+first write. Filing a `build`-seat request whose fence admits `docs/`, `docs/design/`, or
+a file named like a design document prints a notice on standard error naming those paths
+and suggesting a separate `design`-seat item; it is a notice, not a refusal. The answer
+is an `item.request` record carrying `item_id`, `place`,
+`count`, `seat`, `workflow`, `allowed_paths`, `blocked_by` and `words_size`. An identical refile
 answers `item_id`, `place`, `count`, `event_seq` and `event_head_seq`. The
 [drain README](https://github.com/mschulkind-oss/tillr/blob/main/tillr-drain/README.md#filed-requests) says how the drain runs one.
 

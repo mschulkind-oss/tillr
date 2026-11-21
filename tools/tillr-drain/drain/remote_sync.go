@@ -34,7 +34,7 @@ func (l *Loop) escalateRemoteSyncPushState(ctx context.Context, itemID, who, rea
 
 func remoteSyncObstacleMover(kind string) (who, reason string) {
 	who = "operator"
-	if kind == ObstacleOwner {
+	if kind == ObstacleOwner || kind == ObstacleFence {
 		who = "owner"
 	}
 	reason = kind

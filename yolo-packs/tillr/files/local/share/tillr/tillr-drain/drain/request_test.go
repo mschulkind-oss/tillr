@@ -86,8 +86,8 @@ func TestARequestIsDispatchedWithItsWordsAndFence(t *testing.T) {
 		t.Fatalf("brief does not end with the words:\n%s", raw)
 	}
 	fence, err := os.ReadFile(filepath.Join(f.laneRoot, d.LaneID, FenceFile))
-	if err != nil || string(fence) != "" {
-		t.Fatalf("fence %q %v, want empty (request requires no allowed_paths)", fence, err)
+	if err != nil || string(fence) != fenceText([]string{"docs/notes.md"}) {
+		t.Fatalf("fence %q %v", fence, err)
 	}
 	if err := probePreflight(t, brief); err != nil {
 		t.Fatalf("the adapter refused the request's brief: %v", err)
@@ -217,8 +217,8 @@ func TestARequestLandsWithoutADocumentBlock(t *testing.T) {
 		if !strings.HasSuffix(brief, requestWordsSuffix([]byte(requestWords))) || !strings.Contains(brief, "filed from the command line as a request") {
 			t.Errorf("node %s brief lacks the request:\n%s", steps.nodes[i], brief)
 		}
-		if steps.fences[i] != "" {
-			t.Errorf("node %s fence %q, want empty", steps.nodes[i], steps.fences[i])
+		if steps.fences[i] != fenceText(requestFence) {
+			t.Errorf("node %s fence %q", steps.nodes[i], steps.fences[i])
 		}
 	}
 	if !strings.Contains(steps.briefs[0], "Run only node scout on the scout seat; access: read_only.") {
@@ -300,9 +300,6 @@ func TestTheJudgeOfARequestReadsItsWords(t *testing.T) {
 	}
 	if !strings.HasPrefix(string(raw), "# Judge candidate") || !strings.HasSuffix(string(raw), requestWordsSuffix([]byte(requestWords))) {
 		t.Fatalf("judge brief:\n%s", raw)
-	}
-	if !strings.Contains(string(raw), "Changed paths (") || !strings.Contains(string(raw), "\ntools/item-a/result.txt\n") {
-		t.Fatalf("judge brief does not identify the changed path:\n%s", raw)
 	}
 	if strings.Contains(string(raw), report) || strings.Contains(string(raw), "Worker claims") ||
 		strings.Contains(string(raw), "worker-session-sentinel") || !strings.Contains(string(raw), "Writing node: node:work") ||
@@ -646,7 +643,7 @@ type requestSingleJudgeSteps struct {
 	judgedHeads  []string
 }
 
-func (s *requestSingleJudgeSteps) offer(ctx context.Context, scratch, target string, offer landingOffer) error {
+func (s *requestSingleJudgeSteps) offer(ctx context.Context, lane, scratch, target string, offer landingOffer) error {
 	var cmd *exec.Cmd
 	switch s.offerBackend {
 	case "pi":
@@ -655,10 +652,10 @@ func (s *requestSingleJudgeSteps) offer(ctx context.Context, scratch, target str
 			return err
 		}
 		cmd = exec.CommandContext(ctx, "node", "--input-type=module", "-e", `
-const [tool, id, target, scratch, base] = process.argv.slice(1);
+const [tool, id, target, scratch, base, fence] = process.argv.slice(1);
 const { executeLand } = await import(tool);
-if (!executeLand(id, target, scratch, base, () => []).park) process.exit(1);
-`, tool, offer.CallID, target, scratch, offer.Base)
+if (!executeLand(id, target, scratch, base, fence, () => []).park) process.exit(1);
+`, tool, offer.CallID, target, scratch, offer.Base, filepath.Join(lane, FenceFile))
 	case "claude":
 		cmd = exec.CommandContext(ctx, "../../tillr-run/backends/claude/landing", "pre-tool-use", "--durable", scratch, "--base", offer.Base)
 		event, err := json.Marshal(map[string]any{
@@ -765,7 +762,7 @@ func (s *requestSingleJudgeSteps) Run(ctx context.Context, req run.Request) (run
 				return run.Record{}, "", fmt.Errorf("There is no commit to offer: HEAD is still the staged base")
 			}
 			scratch := run.DurableDir(lane, req.RunID)
-			if err := s.offer(ctx, scratch, target, landingOffer{CallID: fmt.Sprintf("offer-%d", s.works), Commit: head, Base: staged}); err != nil {
+			if err := s.offer(ctx, lane, scratch, target, landingOffer{CallID: fmt.Sprintf("offer-%d", s.works), Commit: head, Base: staged}); err != nil {
 				return run.Record{}, "", err
 			}
 		}

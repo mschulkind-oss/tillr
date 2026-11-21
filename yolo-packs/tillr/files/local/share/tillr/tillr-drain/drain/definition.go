@@ -81,7 +81,7 @@ var generalHolds = map[string]string{
 	ReasonJudgeBlocked: "", ReasonJudgeDefective: "",
 	ReasonJudgeDefectiveMismatch: "", ReasonJudgeCloseRefused: "",
 	ReasonPiExtensionsBuildFailed: "",
-	ReasonObstacleOwner:           "", ReasonObstacleTooling: "",
+	ReasonObstacleOwner:           "", ReasonObstacleFence: "", ReasonObstacleTooling: "",
 	ReasonObstacleSeat: "", ReasonObstacleDefinition: "",
 }
 

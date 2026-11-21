@@ -3,6 +3,7 @@ package drain
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -40,7 +41,7 @@ func TestRemoteSyncObstacleEscalation(t *testing.T) {
 	checkRemoteSyncMover(t, p, st, "operator", "mover: operator; rebase main onto origin/main")
 }
 
-func TestRemoteSyncSeatAndOwnerObstacleEscalation(t *testing.T) {
+func TestRemoteSyncFenceSeatAndOwnerObstacleEscalation(t *testing.T) {
 	p, st := fileDispatchableRemoteSyncRepair(t)
 	ctx := context.Background()
 	obstacle := func(id, report string, wantHandled bool, who string) {
@@ -65,6 +66,12 @@ func TestRemoteSyncSeatAndOwnerObstacleEscalation(t *testing.T) {
 			t.Fatalf("%s conflict = %+v", id, c)
 		}
 		checkRemoteSyncMover(t, p, st, who, "escalated ("+o.Kind+")")
+	}
+	obstacle("run-fence", "OBSTACLE: fence\nPATHS: three.txt\nEVIDENCE: needed\nRESULT: blocked\n", true, "")
+	obstacle("run-gate", "OBSTACLE: fence\nPATHS: tools/tillr-gate/main.go, four.txt\nEVIDENCE: gate\nRESULT: blocked\n", false, "owner")
+	row, _, _ := filedRemoteSyncItem(t, p, st.ItemID)
+	if !reflect.DeepEqual(row.Allowed, []string{"three.txt", "two.txt"}) {
+		t.Fatalf("allowed paths = %v", row.Allowed)
 	}
 	obstacle("run-seat", "OBSTACLE: seat\nTRIED: x\nMISSING: stronger model\nRESULT: blocked\n", false, "operator")
 	obstacle("run-owner", "OBSTACLE: owner\nQUESTION: which value wins?\nRESULT: blocked\n", false, "owner")

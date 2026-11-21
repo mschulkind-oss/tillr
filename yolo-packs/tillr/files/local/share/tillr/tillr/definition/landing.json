@@ -27,7 +27,7 @@
     {"from": "closed", "to": "blocked"},
     {"from": "closed", "to": "in-queue"}
   ],
-  "prerequisites": ["design-document", "design-questions", "owner-clean"],
+  "prerequisites": ["fence", "design-document", "design-questions", "owner-clean"],
   "completes": "landing",
   "retention": "keep",
   "brief_template": "",

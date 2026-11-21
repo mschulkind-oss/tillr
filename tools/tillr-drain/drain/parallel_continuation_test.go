@@ -140,11 +140,7 @@ func TestResumeParallelReaderUsesOwnSessionAndFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sharedFencePath := filepath.Join(l.laneDirPath(d.LaneID), FenceFile)
-	if err := os.WriteFile(sharedFencePath, []byte("shared/scope/\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	sharedFence, err := os.ReadFile(sharedFencePath)
+	sharedFence, err := os.ReadFile(filepath.Join(l.laneDirPath(d.LaneID), FenceFile))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +157,7 @@ func TestResumeParallelReaderUsesOwnSessionAndFence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.SessionID != ownSession || steps.resumes != priorResumes+1 || string(afterFence) != string(sharedFence) || len(got.Fence) != 0 {
+	if got.SessionID != ownSession || steps.resumes != priorResumes+1 || string(afterFence) != string(sharedFence) || len(got.Fence) != 1 || got.Fence[0] != "docs/read-only" {
 		t.Fatalf("sibling metadata mixed: %+v resumes=%d", got, steps.resumes)
 	}
 }

@@ -13,6 +13,7 @@ import (
 
 const (
 	ReasonObstacleOwner      = "obstacle-owner"
+	ReasonObstacleFence      = "obstacle-fence"
 	ReasonObstacleTrunk      = "obstacle-trunk"
 	ReasonObstacleTooling    = "obstacle-tooling"
 	ReasonObstacleSeat       = "obstacle-seat"
@@ -29,6 +30,35 @@ func init() {
 
 func ReadObstacleHolds(r *store.Reader) (map[string]obstacles.Hold, map[string]string, error) {
 	return obstacles.Read(r)
+}
+
+func outsideObstaclePaths(paths, allowed []string, lane string) []string {
+	fence := fencePaths(scopeForLane(allowed, lane))
+	var outside []string
+	for _, p := range paths {
+		if !scopeWithin(scopeForLane([]string{p}, lane), fence) {
+			outside = append(outside, p)
+		}
+	}
+	return outside
+}
+
+// An active hold can already be answered by the current fence, even when the
+// allowance was added before the hold was recorded. Trust the paths, not the
+// hold's display text, and only return the run the planner is about to replace.
+func (p *planner) answeredFenceObstacle(row itemRow, hold obstacles.Hold) *ReturnedEnding {
+	if hold.Kind != ObstacleFence || hold.RunID == "" || hold.RunID != p.latest[row.ItemID] {
+		return nil
+	}
+	paths := (Obstacle{Kind: hold.Kind, Fields: hold.Fields}).List("PATHS")
+	lane := ""
+	if work := p.designHistory[hold.RunID]; work != nil {
+		lane = work.Decision.LaneID
+	}
+	if len(paths) == 0 || len(outsideObstaclePaths(paths, row.Allowed, lane)) != 0 {
+		return nil
+	}
+	return &ReturnedEnding{RunID: hold.RunID, Cause: ReasonObstacleFence, Detail: strings.Join(paths, ", ")}
 }
 
 func (l *Loop) recordObstacleHold(ctx context.Context, d Decision, obs Obstacle) error {
@@ -59,8 +89,33 @@ func (l *Loop) recordObstacleHold(ctx context.Context, d Decision, obs Obstacle)
 		if err := refuseTerminalItem(tx.Reader(), d.ItemID, "blocked-report"); err != nil {
 			return err
 		}
-		hold = obstacles.NewHold(d.ItemID, runID, obs.Kind, obs.Fields, checks, baseSHA, nil)
+		var allowed []string
+		var rawAllowed string
+		if err := tx.QueryRow(`SELECT COALESCE(allowed_paths, '') FROM items WHERE item_id = ?`, d.ItemID).Scan(&rawAllowed); err != nil {
+			return err
+		}
+		if rawAllowed != "" {
+			_ = json.Unmarshal([]byte(rawAllowed), &allowed)
+		}
+		hold = obstacles.NewHold(d.ItemID, runID, obs.Kind, obs.Fields, checks, baseSHA, allowed)
 		hold.HeadSHA = headSHA
+		if obs.Kind == ObstacleFence {
+			paths := obs.List("PATHS")
+			outside := outsideObstaclePaths(paths, allowed, d.LaneID)
+			if len(outside) < len(paths) {
+				// Keep the raw report for audit, not in the operator's instruction:
+				// EVIDENCE can repeat the already allowed paths.
+				if len(outside) == 0 {
+					hold.Reason = "the reported paths are already allowed by the item"
+					hold.Mover = "drain"
+					hold.Action = "returns to work with the allowed paths in its brief"
+				} else {
+					paths := strings.Join(outside, ", ")
+					hold.Reason = "paths: " + paths
+					hold.Action = obstacles.FenceAction(d.ItemID, paths)
+				}
+			}
+		}
 		hasLanded, err := obstacles.HasLanded(tx.Reader(), d.ItemID)
 		if err != nil {
 			return err

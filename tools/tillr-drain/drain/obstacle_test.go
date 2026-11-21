@@ -60,12 +60,15 @@ func TestAnObstacleFieldRunsToTheNextField(t *testing.T) {
 // the loop acts on itself need none.
 func TestEachDesignKindCarriesItsOwnInstruction(t *testing.T) {
 	seen := map[string]bool{}
-	for _, kind := range []string{ObstacleDefinition, ObstacleOwner, ObstacleSeat} {
-		text := obstacleDesignInstruction(Obstacle{Kind: kind, Fields: map[string]string{"QUESTION": "q?", "TRIED": "t", "MISSING": "m"}})
+	for _, kind := range []string{ObstacleDefinition, ObstacleFence, ObstacleOwner, ObstacleSeat} {
+		text := obstacleDesignInstruction(Obstacle{Kind: kind, Fields: map[string]string{"PATHS": "x.go", "QUESTION": "q?", "TRIED": "t", "MISSING": "m"}})
 		if text == "" || seen[text] {
 			t.Fatalf("%s: instruction %q", kind, text)
 		}
 		seen[text] = true
+	}
+	if !strings.Contains(obstacleDesignInstruction(Obstacle{Kind: ObstacleFence, Fields: map[string]string{"PATHS": "x.go"}}), "x.go") {
+		t.Fatal("the fence instruction does not name the paths")
 	}
 	for _, kind := range []string{ObstacleTrunk, ObstacleTooling} {
 		if obstacleDesignInstruction(Obstacle{Kind: kind}) != "" {
@@ -77,7 +80,7 @@ func TestEachDesignKindCarriesItsOwnInstruction(t *testing.T) {
 func TestRequestObstacleDesignInstructionCarriesProvenanceRule(t *testing.T) {
 	const wantSentence = "A decision the designer or operator made (including a filed request and any mechanism, format, field names, or rejected alternatives the design seat writes) is recorded as theirs — never presented as the owner's ruling, and marked in prose and Decision Ledger rows as the designer's (or from an operator request) that the owner may overturn — and only a quoted owner statement is recorded as an owner ruling (quoting the owner's dated words verbatim)."
 	seen := map[string]bool{}
-	for _, kind := range []string{ObstacleDefinition, ObstacleOwner, ObstacleSeat} {
+	for _, kind := range []string{ObstacleDefinition, ObstacleFence, ObstacleOwner, ObstacleSeat} {
 		text := requestObstacleDesignInstruction(Obstacle{Kind: kind, Fields: map[string]string{"PATHS": "x.go", "QUESTION": "q?", "TRIED": "t", "MISSING": "m"}})
 		if text == "" || seen[text] {
 			t.Fatalf("%s: instruction %q", kind, text)
@@ -100,15 +103,10 @@ func TestRequestObstacleDesignInstructionCarriesProvenanceRule(t *testing.T) {
 // A generated repair has no block to amend, so its obstacles that need a ruling reach the
 // owner with a question written from them, and its other reports go back to its worker.
 func TestAGeneratedRepairsObstacleIsAnOwnerQuestion(t *testing.T) {
-	def := parseObstacle("OBSTACLE: definition\nCRITERIA: c1\nEVIDENCE: the criterion contradicts the tree\nRESULT: blocked")
-	q := generatedQuestion("fixer-main-abc", def)
-	if !strings.Contains(q, "c1") || !strings.Contains(q, "contradicts the tree") {
+	fence := parseObstacle("OBSTACLE: fence\nPATHS: tools/a.go\nEVIDENCE: the test lives there\nRESULT: blocked")
+	q := generatedQuestion("fixer-main-abc", fence)
+	if !strings.Contains(q, "tools/a.go") || !strings.Contains(q, "allowed_paths") {
 		t.Fatalf("question %q", q)
-	}
-	// A report naming the retired fence obstacle is a missing output, not an ending.
-	retiredFence := parseObstacle("OBSTACLE: fence\nPATHS: tools/a.go\nEVIDENCE: the test lives there\nRESULT: blocked")
-	if retiredFence.Problem == "" {
-		t.Fatalf("retired fence obstacle was accepted as valid: %+v", retiredFence)
 	}
 	if generatedQuestion("fixer-main-abc", parseObstacle("OBSTACLE: trunk\nCHECKS: x\nBASE: y\nRESULT: blocked")) != "" {
 		t.Fatal("a trunk obstacle is not a question for the owner")

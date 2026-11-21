@@ -2,6 +2,7 @@ package drain
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -70,6 +71,81 @@ func TestAClosedFixerReleasesItsAcquittals(t *testing.T) {
 	if got := fixerState(t, f, "item-spare"); got != StateInQueue {
 		t.Fatalf("acquittal behind a closed fixer stayed held: %s", got)
 	}
+}
+
+// A trunk fixer that names a fence obstacle for paths outside the gate's own code gets
+// its fence widened and goes back to its worker; it is not parked on the owner. This is
+// the 2026-11-18 fixer for the red documentation check, which needed
+// tests/tillr-roll.test.py and waited on the owner for it with every other item held.
+// A path in the gate's own code is never granted: that one still reaches the owner.
+func TestATrunkFixersFenceObstacleWidensItsFence(t *testing.T) {
+	const fixer = "fixer-main-0123456789ab"
+	t.Run("widened", func(t *testing.T) {
+		f, l, work := obstacleFixture(t, &obstacleSteps{}, fixer)
+		settleReport(t, f, l, work, "OBSTACLE: fence\nPATHS: `tests/tillr-roll.test.py`,\n- `.tillr.toml`\nEVIDENCE: the failing test asserts the old key\nRESULT: blocked\n")
+		if c, ok := conflictOf(t, f, fixer); ok && c.WaitingOn == "owner" {
+			t.Fatalf("the fence obstacle reached the owner: %+v", c)
+		}
+		var paths []string
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			var raw string
+			if err := tx.QueryRow(`SELECT allowed_paths FROM items WHERE item_id=?`, fixer).Scan(&raw); err != nil {
+				return err
+			}
+			return json.Unmarshal([]byte(raw), &paths)
+		})
+		joined := strings.Join(paths, ",")
+		if !strings.Contains(joined, "tests/tillr-roll.test.py") || !strings.Contains(joined, ".tillr.toml") {
+			t.Fatalf("fence not widened: %v", paths)
+		}
+		p := refusalOf(t, f, work.Decision.RunRequest.RunID)
+		if p.Step != RefusalNoOp || !strings.Contains(p.Detail, "tests/tillr-roll.test.py") {
+			t.Fatalf("refusal %+v", p)
+		}
+	})
+	for _, tc := range []struct {
+		name, paths string
+		bad         []string
+	}{
+		{"sentence", "The separately staged pi fork checkout (`.forks/lanes/<fork-lane>/pi/`) and delivery ref (`refs/heads/patch/pi`); publication of `refs/heads/patch/pi-manage-todo-list` to its configured remote.", []string{"The separately staged", "<fork-lane>", "refs/heads/patch/pi-manage-todo-list"}},
+		{"mixed entries", "tests/new_test.py, `.forks/lanes/<fork-lane>/pi/`, refs/heads/patch/pi, /tmp/foo, tools/../foo", []string{".forks/lanes/<fork-lane>/pi/", "refs/heads/patch/pi", "/tmp/foo", "tools/../foo"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, l, work := obstacleFixture(t, &obstacleSteps{}, fixer)
+			// The worker reported a fence obstacle instead of committing a repair.
+			runGit(t, l.laneTarget(work.Decision.LaneID), "reset", "-q", "--hard", work.BaseSHA)
+			fence := func() string {
+				t.Helper()
+				var raw string
+				fixtureWrite(t, f, func(tx *store.Tx) error {
+					return tx.QueryRow(`SELECT allowed_paths FROM items WHERE item_id=?`, fixer).Scan(&raw)
+				})
+				return raw
+			}
+			before := fence()
+			settleReport(t, f, l, work, "OBSTACLE: fence\nPATHS: "+tc.paths+"\nEVIDENCE: these are needed\nRESULT: blocked\n")
+			if got := fence(); got != before {
+				t.Fatalf("fence changed from %s to %s", before, got)
+			}
+			p := refusalOf(t, f, work.Decision.RunRequest.RunID)
+			if p.Step != RefusalNoOp || !strings.Contains(p.Detail, "Provide repository-relative paths") {
+				t.Fatalf("expected a refusal asking for paths: %+v", p)
+			}
+			for _, bad := range tc.bad {
+				if !strings.Contains(p.Detail, bad) {
+					t.Errorf("refusal did not name %q: %s", bad, p.Detail)
+				}
+			}
+		})
+	}
+	t.Run("gate code", func(t *testing.T) {
+		f, l, work := obstacleFixture(t, &obstacleSteps{}, fixer)
+		settleReport(t, f, l, work, "OBSTACLE: fence\nPATHS: tools/fork-check.py\nEVIDENCE: the gate is wrong\nRESULT: blocked\n")
+		c, ok := conflictOf(t, f, fixer)
+		if !ok || c.WaitingOn != "owner" || !strings.Contains(c.Text, "tools/fork-check.py") {
+			t.Fatalf("a gate-code fence request did not reach the owner: %+v", c)
+		}
+	})
 }
 
 // A red the replay confirms on the trunk is aimed at the landing that broke it, found the

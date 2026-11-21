@@ -14,7 +14,7 @@ import (
 )
 
 // requestFace files one request: the words on standard input become an item that runs an
-// existing workflow with no document block.
+// existing workflow inside the fence the --path flags name, with no document block.
 func requestFace(args []string) (record.Envelope, int) {
 	fs := newFlagSet("request")
 	path := fs.String("store", "", "the store to write")
@@ -23,7 +23,7 @@ func requestFace(args []string) (record.Envelope, int) {
 	seat := fs.String("seat", "build", "the item's seat: build or design (any declared seat with --workflow)")
 	workflow := fs.String("workflow", "", "the workflow to run (default planned-build@v1 for build, scouted-design@v1 for design; single-worker@v1 is one run)")
 	var paths, criteria, blockedBy []string
-	fs.Func("path", "deprecated and ignored: items no longer use an allow-list", func(p string) error {
+	fs.Func("path", "a repo-relative prefix the change may touch; repeat for each (required)", func(p string) error {
 		paths = append(paths, p)
 		return nil
 	})
@@ -45,16 +45,12 @@ func requestFace(args []string) (record.Envelope, int) {
 	if err := parseFlags(fs, args); err != nil {
 		return record.Envelope{}, fail(err)
 	}
-	if len(paths) > 0 {
-		fmt.Fprintln(os.Stderr, "notice: --path is deprecated and ignored; items no longer carry a list of allowed paths")
-		paths = nil
-	}
 	dest := item.Destination{To: *to, Before: *before, After: *after}
 	if dest == (item.Destination{}) {
 		dest.To = "last"
 	}
 	if *path == "" || !dest.Valid() || fs.NArg() != 0 {
-		return record.Envelope{}, fail(item.Usagef("request needs --store, --title, and at most one of --to first|last, --before <item>, --after <item>; the words come from standard input"))
+		return record.Envelope{}, fail(item.Usagef("request needs --store, --title, at least one --path, and at most one of --to first|last, --before <item>, --after <item>; the words come from standard input"))
 	}
 	at := time.Now()
 	if *now != "" {
@@ -103,6 +99,9 @@ func requestFace(args []string) (record.Envelope, int) {
 			return rejectionOrFailure(item.Rejectionf("store-busy", "", "the store's writer lock did not become available; no request was filed"), at)
 		}
 		return rejectionOrFailure(err, at)
+	}
+	if notice := item.RequestDesignPathNotice(filing.Seat, filing.Paths); notice != "" {
+		fmt.Fprintln(os.Stderr, notice)
 	}
 	return result, record.ExitOK
 }

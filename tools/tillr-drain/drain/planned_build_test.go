@@ -136,8 +136,7 @@ func TestPlannedBuildProposal(t *testing.T) {
 	}{
 		{name: "accepted"},
 		{name: "unmapped", rule: "proposal-seat-unmapped", detail: "fixture-policy.json", change: func(p []map[string]any) { p[0]["seat"] = "absent" }},
-		{name: "outside-old-fence-accepted", change: func(p []map[string]any) { p[0]["write_scope"] = []string{"outside/"} }},
-		{name: "invalid-scope", rule: "proposal-argument-bounds", change: func(p []map[string]any) { p[0]["write_scope"] = []string{"../outside/"} }},
+		{name: "scope", rule: "proposal-scope-outside-fence", change: func(p []map[string]any) { p[0]["write_scope"] = []string{"outside/"} }},
 		{name: "readonly", rule: "proposal-read-only-seat-writes", change: func(p []map[string]any) { p[0]["seat"] = "scout" }},
 		{name: "verify-writes", rule: "proposal-read-only-seat-writes", detail: "build or edit", change: func(p []map[string]any) { p[0]["seat"] = "verify" }},
 		{name: "review-writes", rule: "proposal-read-only-seat-writes", detail: "build or edit", change: func(p []map[string]any) { p[0]["seat"] = "review" }},
@@ -184,7 +183,7 @@ func TestPlannedBuildProposal(t *testing.T) {
 						t.Fatalf("copy %+v", w.Stages[i+1])
 					}
 				}
-				if !reflect.DeepEqual(w.Stages[1].WriteScope.Paths, pieces[0]["write_scope"]) || w.Stages[1].Outputs["notes"] != "markdown" {
+				if !reflect.DeepEqual(w.Stages[1].WriteScope.Paths, []string{"tools/item-a/"}) || w.Stages[1].Outputs["notes"] != "markdown" {
 					t.Fatalf("scope/outputs %+v", w.Stages[1])
 				}
 				return nil
@@ -300,7 +299,7 @@ func (s *quickWaySteps) Run(ctx context.Context, req run.Request) (run.Record, s
 	if req.NodeID == "plan" {
 		s.firstHead = runGit(s.t, target, "rev-parse", "HEAD")
 		switch s.mode {
-		case "quick", "quick-escape", "quick-outside-old-fence":
+		case "quick", "quick-escape":
 			outDir := nodeOutputsDir(s.f.root, req.RunID)
 			if err := os.MkdirAll(outDir, 0755); err != nil {
 				return run.Record{}, "", err
@@ -308,15 +307,13 @@ func (s *quickWaySteps) Run(ctx context.Context, req run.Request) (run.Record, s
 			writeForkFile(s.t, filepath.Join(outDir, quickWayFile), "do it now\n")
 			rel := "tools/item-a/quick.txt"
 			if s.mode == "quick-escape" {
-				rel = ".tillr/escaped.txt"
-			} else if s.mode == "quick-outside-old-fence" {
 				rel = "outside/escape.txt"
 			}
 			if err := os.MkdirAll(filepath.Dir(filepath.Join(target, rel)), 0755); err != nil {
 				return run.Record{}, "", err
 			}
 			writeForkFile(s.t, filepath.Join(target, rel), "quick\n")
-			runGit(s.t, target, "add", "-f", rel)
+			runGit(s.t, target, "add", ".")
 			runGit(s.t, target, "commit", "-qm", "quick")
 		case "commit-without-choice":
 			if err := os.MkdirAll(filepath.Join(target, "tools/item-a"), 0755); err != nil {
@@ -373,12 +370,9 @@ func (s *quickWaySteps) Run(ctx context.Context, req run.Request) (run.Record, s
 }
 
 func TestPlannedBuildQuickWay(t *testing.T) {
-	for _, mode := range []string{"quick", "quick-outside-old-fence", "normal", "commit-without-choice", "quick-escape"} {
+	for _, mode := range []string{"quick", "normal", "commit-without-choice", "quick-escape"} {
 		t.Run(mode, func(t *testing.T) {
 			f, l, base := plannedFixture(t)
-			if mode == "quick-escape" {
-				commitDenyListFixture(t, f.root)
-			}
 			steps := &quickWaySteps{workflowSteps: base, mode: mode}
 			l.cfg.Steps = steps
 			result := &LoopResult{}
@@ -386,7 +380,7 @@ func TestPlannedBuildQuickWay(t *testing.T) {
 				graphPass(t, l, result)
 			}
 			switch mode {
-			case "quick", "quick-outside-old-fence":
+			case "quick":
 				if !reflect.DeepEqual(steps.runs, []string{"plan"}) {
 					t.Fatalf("runs = %v, want [plan]", steps.runs)
 				}

@@ -93,16 +93,22 @@ func TestTriageBriefOffersThreeResultsAndStoredRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var text string
+	var text, fence string
 	for _, v := range values {
 		if v.placeholder == "TASK" {
 			text = v.text
+		}
+		if v.placeholder == "FENCE_PATHS" {
+			fence = v.text
 		}
 	}
 	for _, want := range []string{"Add the missing request", "docs/request.md#missing", "exactly one", "numbered question", "duplicates a named item", "already done", "prose=\"2\""} {
 		if !strings.Contains(text, want) {
 			t.Errorf("brief missing %q: %s", want, text)
 		}
+	}
+	if fence != "docs/request.md" {
+		t.Fatalf("triage fence %q", fence)
 	}
 	base := runGit(t, f.root, "rev-parse", TrunkRef)
 	if err := s.Stage(context.Background(), StageSpec{ItemID: d.ItemID, RunID: d.RunRequest.RunID, LaneID: d.LaneID, Backend: d.RunRequest.Backend, WorkingDir: WorktreeDir, BaseSHA: base, BlockConflict: d.BlockConflict}); err != nil {

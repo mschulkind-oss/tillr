@@ -53,7 +53,7 @@ func TestRemoteSyncPreGateTreeCheck(t *testing.T) {
 	writeForkFile(t, filepath.Join(wt, "one.txt"), "tampered\n")
 	runGit(t, wt, "add", ".")
 	runGit(t, wt, "commit", "-qm", "tampered")
-	// A legacy list cannot override the mechanical merge invariant.
+	// A stale or overbroad lane fence cannot authorize this change.
 	checkRemoteSyncCandidate(t, p, st, wt, "three.txt\none.txt\n", "one.txt")
 
 	runGit(t, wt, "reset", "--hard", "-q", st.BaseSHA)
@@ -68,15 +68,25 @@ func TestRemoteSyncPreGateTreeCheck(t *testing.T) {
 	runGit(t, wt, "reset", "--hard", "-q", linear)
 	checkRemoteSyncCandidate(t, p, st, wt, "three.txt\n", "")
 
-	// An empty legacy list does not bar the actual conflicting path.
-	fixtureWrite(t, p.f, func(tx *store.Tx) error {
+	// Even an unchanged conflict-marker blob is not allowed outside the current fence.
+	ctx := context.Background()
+	s, err := store.Open(ctx, p.f.storePath, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE items SET allowed_paths='[]' WHERE item_id=?`, st.ItemID)
 		return err
-	})
-	checkRemoteSyncCandidate(t, p, st, wt, "", "")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	unresolved := runGit(t, wt, "commit-tree", remoteSyncMechanicalTree(t, p.f.root, st), "-p", st.BaseSHA, "-m", "unresolved")
+	runGit(t, wt, "reset", "--hard", "-q", unresolved)
+	checkRemoteSyncCandidate(t, p, st, wt, "three.txt\n", "three.txt")
 }
 
-func TestRemoteSyncPreservesMechanicalNonConflictingChanges(t *testing.T) {
+func TestRemoteSyncFenceAllowsMechanicalUnfencedChanges(t *testing.T) {
 	p := newPushFixture(t)
 	root := p.f.root
 	writeForkFile(t, filepath.Join(root, "unrelated.txt"), "keep this change\n")
