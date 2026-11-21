@@ -688,7 +688,20 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			// free one, as a released lane is.
 			laneOut := work.Ready && !work.Done && tick.OutLanes[work.Decision.LaneID]
 			detachedNode := work.Ready && work.LaneReleased
-			if err == nil && (work.LaneReleased || laneOut) && !waiting && !ownerNextNode && decision.Action != ActionHold {
+			// A successor to classification (or a restarted node) may be ready to
+			// run without owning its fork. Check before it can take a free lane,
+			// just as for a fresh dispatch. Running work and settlement still proceed.
+			var fork, forkHolder string
+			if err == nil && p.lands() && isDispatch(decision) &&
+				!(decision.Workflow != nil && classificationNode(decision.Workflow.Stages[decision.NodeIndex])) {
+				fork = item.Delivery.activeFork()
+				self := ""
+				if work.Ready || decision.WorkflowRestart {
+					self = item.ItemID
+				}
+				forkHolder, _ = p.forkHeldBy(fork, self)
+			}
+			if err == nil && (work.LaneReleased || laneOut) && !waiting && !ownerNextNode && decision.Action != ActionHold && forkHolder == "" {
 				if detachedNode {
 					// A released first node has no staged state to resume. Keep the
 					// selected request, but stage it fresh on the newly assigned lane.
@@ -746,6 +759,10 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			if err != nil {
 				return nil, nil, readFailure(err)
 			}
+			if forkHolder != "" && isDispatch(decision) {
+				decision = Decision{ItemID: item.ItemID, Attempt: decision.Attempt, From: "held", Action: ActionHold, Reason: ReasonForkHeld, DeferredBy: forkHolder}
+				identifyDecision(&decision)
+			}
 			if detachedNode && decision.Action == ActionHold {
 				// The recorded lane is historical, not a reservation for the waiting node.
 				decision.LaneID = ""
@@ -758,8 +775,11 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			}
 			// The wait does not cancel or prevent settling work already started, but
 			// it bars another launch and is the mover, even while a run winds down.
-			if waiting && (decision.Action == ActionHold || decision.Action == ActionDispatch || decision.Action == ActionRetry) {
+			if waiting && (decision.Action == ActionHold || isDispatch(decision)) {
 				decision = p.namedWaitDecision(item.ItemID, wait)
+			}
+			if p.captureStart == nil && p.lands() && fork != "" && isDispatch(decision) {
+				p.forks = append(p.forks, plannedFork{itemID: item.ItemID, fork: fork})
 			}
 		} else if ownerOwed {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: ReasonOwnerOnlyOwed, From: "held", Attempt: p.nextAttempt(item.ItemID)}
@@ -1193,7 +1213,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	// One planner-level exclusion survives: two items that deliver one fork's patch branch
 	// cannot run at once, however disjoint their own fences are, because the second would
 	// move a branch the first is still building.
-	heldBy, forkHeld := p.forkHeldBy(item.Delivery.activeFork())
+	heldBy, forkHeld := p.forkHeldBy(item.Delivery.activeFork(), "")
 	// The design document is read before the tick's resources, and before the item's attempt
 	// history: an item whose design still asks something is not dispatchable whatever else
 	// is true, and answering `no-lane` would send an operator looking for a lane to solve a
@@ -1553,15 +1573,14 @@ func fenceAdmitsNothing(fence []string) bool {
 	return false
 }
 
-// forkHeldBy answers the item this tick already dispatched whose fork-series delivery moves
-// the same patch branch, and whether there is one. Only a dispatch that delivers a fork
-// counts, and an item that names no fork is never held behind one.
-func (p *planner) forkHeldBy(fork string) (string, bool) {
+// forkHeldBy finds the live or planned holder. A continuing node may reuse its
+// own claim but may not take a fork held by another item.
+func (p *planner) forkHeldBy(fork, exceptItem string) (string, bool) {
 	if fork == "" {
 		return "", false
 	}
 	for _, planned := range p.forks {
-		if planned.fork == fork {
+		if planned.fork == fork && planned.itemID != exceptItem {
 			return planned.itemID, true
 		}
 	}
