@@ -577,7 +577,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	}
 	// Final accounting must survive every cancellation of the face. readSpend still
 	// applies its own bounded timeout to this detached context.
-	payload.Usage, note = readSpend(context.WithoutCancel(ctx), opts.BackendsDir, req.Command[0], req.Backend, durableDir, logPath, payload.ExitCode)
+	payload.Usage, note = readSpend(context.WithoutCancel(ctx), opts.BackendsDir, req.Command[0], req.Backend, durableDir, logPath, payload.ExitCode, true)
 	payload.SpendNote = note
 	// The extracted report is run evidence, not the reusable lane's latest output.
 	// Keep a pinned artifact for settlement and history, and the conventional copy
@@ -637,7 +637,7 @@ const SpendExtractorTimeout = 60 * time.Second
 // why, and the record says the spend is unknown. The extractor's own non-zero exit is not
 // by itself a failure: exit 4 is "the report is incomplete", and an incomplete report
 // still carries the header and still writes the file.
-func readSpend(ctx context.Context, backendsDir, adapter, backend, laneDir, logPath string, exitCode *int) (*Usage, string) {
+func readSpend(ctx context.Context, backendsDir, adapter, backend, laneDir, logPath string, exitCode *int, final ...bool) (*Usage, string) {
 	if backend == "command" {
 		return nil, ""
 	}
@@ -664,8 +664,16 @@ func readSpend(ctx context.Context, backendsDir, adapter, backend, laneDir, logP
 	}
 	extractCtx, cancel := context.WithTimeout(ctx, SpendExtractorTimeout)
 	defer cancel()
-	out, runErr := exec.CommandContext(extractCtx, extractor,
-		"--backend", backend, "--exit-code", exitText, "--out", reportPath, logPath).CombinedOutput()
+	args := []string{"--backend", backend, "--exit-code", exitText, "--out", reportPath}
+	// Only the final extraction reads the run-local offer; live probes still
+	// determine whether the stream itself has ended.
+	if len(final) != 0 && final[0] {
+		offer := filepath.Join(laneDir, "landing-offer.json")
+		if _, err := os.Stat(offer); err == nil {
+			args = append(args, "--landing-offer", offer)
+		}
+	}
+	out, runErr := exec.CommandContext(extractCtx, extractor, append(args, logPath)...).CombinedOutput()
 	body, readErr := os.ReadFile(reportPath)
 	if readErr != nil {
 		return nil, "the extractor wrote no report at " + reportPath + " (" + strings.TrimSpace(string(out)) + "): the backend's spend is unknown"
