@@ -1465,13 +1465,21 @@ func (l *Loop) trunkAdvancedUntouched(ctx context.Context, r *store.Reader, d De
 	return true, nil
 }
 
+func writesOwnerConflict(d Decision) bool {
+	c := d.BlockConflict
+	return c != nil && c.TriageVersion != "" && c.WaitingOn == "owner"
+}
+
+func persistentHold(d Decision) bool {
+	return writesOwnerConflict(d) || strings.HasPrefix(d.Reason, ReasonTrunkPathDirty+": ") ||
+		strings.HasPrefix(d.Reason, ReasonTrunkRewritten+": ") || strings.HasPrefix(d.Reason, ReasonRedCap+": ")
+}
+
 // holdWriter returns nil for report-only holds. Persistent holds recheck their
 // definition and input version at the write, just as a single hold would.
 func holdWriter(p plannedApplication, at time.Time) func(*store.Tx) error {
 	d := p.decision
-	c := d.BlockConflict
-	ownerConflict := c != nil && c.TriageVersion != "" && c.WaitingOn == "owner"
-	if !ownerConflict && !strings.HasPrefix(d.Reason, ReasonTrunkPathDirty+": ") && !strings.HasPrefix(d.Reason, ReasonTrunkRewritten+": ") && !strings.HasPrefix(d.Reason, ReasonRedCap+": ") {
+	if !persistentHold(d) {
 		return nil
 	}
 	return func(tx *store.Tx) error {
@@ -1483,8 +1491,8 @@ func holdWriter(p plannedApplication, at time.Time) func(*store.Tx) error {
 		if err != nil || version != p.version {
 			return err
 		}
-		if ownerConflict {
-			return item.RecordConflict(tx, *c, at)
+		if writesOwnerConflict(d) {
+			return item.RecordConflict(tx, *d.BlockConflict, at)
 		}
 		return recordDirtyDecision(tx, d, at)
 	}
@@ -2592,6 +2600,12 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	}()
 	var holds []Decision
 	var holdWrites []func(*store.Tx) error
+	if pendingOnly {
+		holdWrites, err = startHoldWrites(l.startView.Load(), at)
+		if err != nil {
+			return "", err
+		}
+	}
 	// Watch currently idle offered lanes. A sibling legitimately started later
 	// is removed from both status comparisons when this run's bracket closes.
 	watched := []string{}
@@ -2752,6 +2766,16 @@ plans:
 	}
 	if l.heavyInFlight() {
 		return l.waitForTrigger(ctx, leases, at, result)
+	}
+	if pendingOnly {
+		idle, allHolds, err := l.startIdle(ctx, l.startView.Load(), holds)
+		if err != nil {
+			return "", err
+		}
+		if !idle {
+			return l.waitForTrigger(ctx, leases, at, result)
+		}
+		holds = allHolds
 	}
 	return l.planNothing(ctx, holds, leases, at, result)
 }

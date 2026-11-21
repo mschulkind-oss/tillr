@@ -913,22 +913,40 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 		result.Stop, result.Detail = StopQueueDrained, "owner question migration finished"
 		return result, nil
 	}
-	// Neither startup nor a pass waits for the advisory snapshot.
 	view := newStartView()
+	if !l.pollOnly {
+		view.storePoll = l.cfg.StorePollInterval
+	}
 	l.startView.Store(view)
 	defer l.startView.Store(nil)
 	defer l.watchStartView(ctx, view, startViewRefreshInterval)()
+	stopStarts := func() {}
+	if !l.pollOnly {
+		stopStarts = l.startBackgroundCoordinator(ctx, view, &result)
+	}
+	err = l.runPasses(ctx, &result, !l.pollOnly, view)
+	// Join staging before copying the result or ending operator-requested runs.
+	stopStarts()
+	if err != nil {
+		return faultResult(result, err)
+	}
+	return result, nil
+}
+
+func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bool, view *startView) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			result.Stop = StopOperatorStop
 			result.Detail = "the loop was asked to stop"
-			return result, nil
+			return nil
 		}
 		l.mu.Lock()
 		dispatched := result.Dispatched
-		l.stageFault = false
+		if !pendingOnly {
+			l.stageFault = false
+		}
 		l.mu.Unlock()
-		done, err := l.pass(ctx, &result)
+		done, err := l.passMode(ctx, result, pendingOnly)
 		if err != nil {
 			// A stop that arrived while the tick was reading the store is still the
 			// operator's stop, not a store failure: the signal is why the write was
@@ -936,13 +954,13 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 			if stoppedByOperator(ctx, err) {
 				result.Stop = StopOperatorStop
 				result.Detail = "the loop was asked to stop"
-				return result, nil
+				return nil
 			}
-			return faultResult(result, err)
+			return err
 		}
 		if done != "" {
 			result.Stop = done
-			return result, nil
+			return nil
 		}
 		// The backoff applies when a tick dispatched nothing and the reason is the loop's
 		// own machinery: the same plan will be attempted again, and asking a broken harness
@@ -952,19 +970,25 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 		// wait at all.
 		l.mu.Lock()
 		backOff := result.Dispatched == dispatched && l.stageFault && l.infraStreak > 0 && len(l.active) == 0
-		if backOff {
+		if backOff && !pendingOnly {
 			l.stageFault = false
 		}
 		l.mu.Unlock()
 		if backOff {
 			waited, err := l.backOff(ctx)
 			if err != nil && ctx.Err() == nil {
-				return faultResult(result, err)
+				return err
 			}
 			if !waited {
 				result.Stop = StopOperatorStop
 				result.Detail = "the loop was asked to stop while waiting out an infrastructure failure"
-				return result, nil
+				return nil
+			}
+			if pendingOnly {
+				l.mu.Lock()
+				l.stageFault = false
+				l.mu.Unlock()
+				view.notifyUpdate()
 			}
 		}
 	}
@@ -1242,7 +1266,7 @@ func (l *Loop) planNothing(ctx context.Context, holds []Decision, leases []LaneL
 			result.Detail = detail
 			return l.waitForTrigger(ctx, leases, at, result)
 		}
-		fmt.Fprintf(l.cfg.Report, "loop: %s\n", detail)
+		l.reportf("loop: %s\n", detail)
 		result.Detail = detail
 		return StopQueueDrained, nil
 	}
@@ -1250,7 +1274,7 @@ func (l *Loop) planNothing(ctx context.Context, holds []Decision, leases []LaneL
 		if lease.LeasedUntil == nil {
 			detail := fmt.Sprintf("a full tick planned nothing dispatchable and %s is held with no expiry: %s; the missing act is `tillr run release %s`, which is the one thing no clock can do",
 				lease.LaneID, held, lease.LaneID)
-			fmt.Fprintf(l.cfg.Report, "loop: %s\n", detail)
+			l.reportf("loop: %s\n", detail)
 			result.Detail = detail
 			return StopLanesLeased, nil
 		}

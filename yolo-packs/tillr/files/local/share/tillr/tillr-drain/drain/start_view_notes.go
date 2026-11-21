@@ -16,6 +16,10 @@ type startNote func(*startSnapshot)
 
 func (v *startView) publishLocked(next *startSnapshot) {
 	v.current.Store(next)
+	v.notifyUpdate()
+}
+
+func (v *startView) notifyUpdate() {
 	select {
 	case v.updated <- struct{}{}:
 	default:
@@ -58,6 +62,18 @@ func (s *startSnapshot) holdItem(id, reason string) {
 		}
 		entry.decision = Decision{ItemID: id, Action: ActionHold, Reason: reason}
 		s.entries = withNote(s.entries, id, entry)
+	}
+}
+
+// Comment availability is external, not a content-bound loop hold. Let the
+// next watcher refresh reconsider it even if the item did not change.
+func (v *startView) noteVantageUnavailable(before *startSnapshot, id string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.current.Load() == before {
+		next := *before
+		next.holdItem(id, ReasonVantageUnavailable)
+		v.publishLocked(&next)
 	}
 }
 

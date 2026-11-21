@@ -44,8 +44,7 @@ func (s startSnapshot) snapshotForClaim(r *store.Reader) (startClaimSnapshot, er
 	return startClaimSnapshot{head, pending, faults.Resolve(byReason)}, nil
 }
 
-// claimFastStart records a proposed dispatch but never stages it. Only tests
-// call it until the coordinator takes over from the pass.
+// claimFastStart records a proposed dispatch but never stages it.
 func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startSnapshot, e startViewEntry, at time.Time) (bool, *pendingWork, string, Decision, error) {
 	d := e.decision
 	if !isDispatch(d) || d.RunRequest == nil || d.LaneID == "" || proposal.pending == nil {

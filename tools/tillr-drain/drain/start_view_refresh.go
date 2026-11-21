@@ -38,8 +38,7 @@ func (l *Loop) watchStartView(ctx context.Context, view *startView, interval tim
 		}
 		return newStartWatcher(paths)
 	}, func(ctx context.Context, change startWatchChange) (startSnapshot, error) {
-		// Lease expiry uses wall time, not the legacy pass's clock hook.
-		next, err := refresh.read(ctx, time.Now(), l.currentPolicy(), tick, root, cmd, index, previous, change)
+		next, err := refresh.read(ctx, l.cfg.Now().UTC(), l.currentPolicy(), tick, root, cmd, index, previous, change)
 		if err == nil {
 			previous = next
 		}

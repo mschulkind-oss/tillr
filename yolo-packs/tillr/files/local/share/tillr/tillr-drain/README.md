@@ -185,13 +185,22 @@ offered in lane-id order. Callers may still supply those fields for a simulation
 `max_dispatches` is an optional simulation cap; reaching it simulates `no-lane`.
 The live loop supplies no cap: lane leases bound dispatches.
 
+The live start coordinator wakes on queue changes and lane releases. It claims
+fresh work in queue order as soon as an eligible lane is free, then stages the
+claimed work asynchronously. The pass and its completion handoff still advance
+unfinished attempts. A settling attempt keeps its lane until release; it does
+not stop another free lane from taking work. Loop shutdown cancels the
+coordinator and joins staging before returning.
+
 An applied pass receives a store-counted **generation**, the ordinal defined by the
 [trigger and generation model](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-drain-successor.md#generations-timing-and-the-trigger-loop).
 An empty pass allocates none. Requests carry that generation as their correlation.
 Timing measurements live in `drain_passes`, with the existing `tick_id` column
-carrying the generation. `claim_ms` is the longest measured start-claim latency
-in the pass, before worktree staging. It stays null when the writer did not
-measure a claim, and preserves a measured zero. `stage_ms` records staging
+carrying the generation. For a coordinator start, `claim_ms` measures from the
+later of observed item readiness and lane availability to completion of the
+claim, before worktree staging. Reranking alone does not reset readiness.
+`claim_ms` stays null when the writer did not measure a claim and preserves a
+measured zero. `stage_ms` records staging
 separately and includes any asynchronous staging reported for that pass.
 On write-open, historical `drain_ticks` rows are copied without replacing new
 measurements or inventing missing historical values. The old

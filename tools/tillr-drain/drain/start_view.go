@@ -126,8 +126,9 @@ func unmovedLanes(watched []string, seen, now map[string]int) []string {
 }
 
 type startView struct {
-	current atomic.Pointer[startSnapshot]
-	updated chan struct{} // Coalesced notification; nothing in dispatch waits on it.
+	current   atomic.Pointer[startSnapshot]
+	updated   chan struct{} // Coalesced notification for the start coordinator.
+	storePoll time.Duration // Used when the filesystem watcher is unavailable.
 
 	mu       sync.Mutex // Serializes publication, never held across a read.
 	syncing  bool
@@ -193,6 +194,22 @@ func (v *startView) runWatcherLoop(ctx context.Context, interval time.Duration, 
 	}
 	safety := time.NewTicker(interval)
 	defer safety.Stop()
+	var poll <-chan time.Time
+	var storePoll *time.Ticker
+	startPolling := func() {
+		if v.storePoll > 0 && storePoll == nil {
+			storePoll = time.NewTicker(v.storePoll)
+			poll = storePoll.C
+		}
+	}
+	if events == nil {
+		startPolling()
+	}
+	defer func() {
+		if storePoll != nil {
+			storePoll.Stop()
+		}
+	}()
 	batch := time.NewTimer(startViewWatchBatch)
 	batch.Stop()
 	defer batch.Stop()
@@ -245,11 +262,15 @@ func (v *startView) runWatcherLoop(ctx context.Context, interval time.Duration, 
 		case <-safety.C:
 			pending |= startWatchExternal // Recheck even when a store wake is pending.
 			refresh()
+		case <-poll:
+			pending |= startWatchStore
+			refresh()
 		case <-batchDue:
 			refresh()
 		case event, ok := <-events:
 			if !ok {
-				events = nil // Keep polling after a watcher failure.
+				events = nil
+				startPolling()
 				continue
 			}
 			pending |= event

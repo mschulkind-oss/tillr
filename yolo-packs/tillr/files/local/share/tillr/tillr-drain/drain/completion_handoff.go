@@ -46,8 +46,9 @@ func (l *Loop) drainCompletions(ctx context.Context, result *LoopResult) (string
 }
 
 // finishRunStep lets a completion advance its own retained reservation. The
-// regular pass still owns new lane offers, reaping, and queue-wide maintenance.
-// Durable decisions and their claim/version checks are identical on both paths.
+// handoff cannot offer a fresh lane: readPassPlans binds it to unfinished work
+// on the same lane. Fresh starts belong to the coordinator; the pass still reaps
+// and does queue-wide maintenance.
 func (l *Loop) finishRunStep(ctx context.Context, c runCompletion, result *LoopResult) (stop string, err error) {
 	if stop, err = l.takeCompletion(c, result); stop != "" || err != nil {
 		return stop, err
