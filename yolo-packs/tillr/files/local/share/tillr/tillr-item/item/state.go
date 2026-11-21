@@ -46,6 +46,9 @@ func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string
 	if err != nil {
 		return record.Envelope{}, err
 	}
+	if receipt.FinishExistingLanding && (d.Name != definition.GitLandingName || state != "landed" || receipt.RequireVerdicts) {
+		return record.Envelope{}, Usagef("--finish-existing-landing requires Git-landing and --state landed, without --require-verdicts")
+	}
 	// A retry of either terminal claim answers the stored item even when the
 	// caller supplies verdict checks or replacement evidence. It writes nothing.
 	if d.Name == definition.GitLandingName && state == payload.State && (state == "landed" || state == "resolved-elsewhere") {
@@ -73,9 +76,8 @@ func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string
 	if err := checkTerminalEvidence(tx.Reader(), d, itemID, payload.State, state, receipt); err != nil {
 		return record.Envelope{}, err
 	}
-	// The two states a landing refuses (item-not-landable) are refused here while a
-	// landing of the item is publishing, as Close refuses closed.
-	if state != payload.State && (state == d.Closed || state == "resolved-elsewhere") {
+	// Do not finish via an operator disposition while another landing is publishing.
+	if state != payload.State && (state == d.Closed || state == "resolved-elsewhere" || receipt.FinishExistingLanding) {
 		if err := refuseClaimedLanding(tx.Reader(), itemID, state); err != nil {
 			return record.Envelope{}, err
 		}
@@ -152,7 +154,11 @@ func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string
 	from := payload.State
 	payload.State = state
 	if from != state && (d.IsFinished(from) || d.IsFinished(state)) {
-		return recordLifecycle(tx, payload, at, "state", receipt.Reason, receipt.By)
+		action := "state"
+		if receipt.FinishExistingLanding {
+			action = FinishExistingLandingAction
+		}
+		return recordLifecycle(tx, payload, at, action, receipt.Reason, receipt.By)
 	}
 	payload.UpdatedAt = at.UTC().Format(time.RFC3339)
 	body, err := json.Marshal(payload)

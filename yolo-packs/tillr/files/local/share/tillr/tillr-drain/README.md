@@ -3010,8 +3010,8 @@ time is available. Retries are included, once per run. The last-twenty median
 uses landed items on the `build` or default seat, plus planned builds; if any
 of those items has an unknown sum the median is unknown. After ten landed
 `planned-build@v1` items, a separate median uses their last twenty (or all if
-fewer than twenty). With no eligible items the median is unknown. The JSON and
-single-item planner faces remain unchanged.
+fewer than twenty). With no eligible items the median is unknown. JSON and
+single-item reports omit the cost summary.
 
 A mover is the question, blocking item, run, lane, or operator action that can
 advance the item. The summary partitions the rows into running items, items the
@@ -3019,6 +3019,11 @@ next pass could advance, and holds counted by reason. Busy lanes include unfinis
 candidate examinations, not just live leases. Capacity is consumed in queue order,
 so an earlier predicted dispatch can leave a later item waiting on a lane.
 Closed and resolved-elsewhere items remain visible with no further work required.
+Landed items are omitted from the queue-wide report. `tillr drain why <item>`
+reports a named landed item as done, with its unreverted landing reference when
+one exists. When an operator [finishes an existing landing](https://github.com/mschulkind-oss/tillr/blob/main/tillr-item/README.md#finish-an-item-that-already-landed),
+the drain stops offering that item lanes, interrupts its own unfinished work,
+and settles the runs without judging or landing another candidate.
 
 Use the loop's policy and lane offers to reproduce its next decision: those inputs
 are not retained in the store. With no policy, readiness is held as `no-policy`,

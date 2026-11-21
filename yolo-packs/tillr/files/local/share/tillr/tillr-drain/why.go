@@ -115,7 +115,7 @@ func whyFace(args []string) int {
 				lanesSource = "store"
 			}
 		}
-		answer, err = drain.Why(r, tick, policy, questions)
+		answer, err = drain.WhyForItem(r, tick, policy, questions, itemID)
 		if err == nil {
 			answer.LanesSource = lanesSource
 		}
@@ -162,7 +162,7 @@ func whyFace(args []string) int {
 				return record.ExitOK
 			}
 		}
-		return fail(drain.Usagef("item %q is absent or already landed; why reports unlanded work", itemID))
+		return fail(drain.Usagef("item %q is not in the drain's report", itemID))
 	}
 	if *asJSON {
 		// The build rides beside the answer, not inside drain.WhyAnswer: it describes the

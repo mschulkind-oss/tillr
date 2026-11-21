@@ -134,7 +134,7 @@ func TestWhyNamesQuestionsAndCapacity(t *testing.T) {
 		t.Fatalf("references: %+v", answer.Rows)
 	}
 	code, out = invoke(t, "why", "missing", "--store", path)
-	if code != 2 || !strings.Contains(string(out), "absent or already landed") {
+	if code != 2 || !strings.Contains(string(out), `item "missing" is not in the drain's report`) {
 		t.Fatalf("missing item: %d %s", code, out)
 	}
 }

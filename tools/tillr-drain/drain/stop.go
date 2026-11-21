@@ -457,6 +457,12 @@ func (l *Loop) endRequestedRuns() error {
 // only re-reads the pending work and appends the interruptions. The start lock is
 // held throughout, so no run face can start between the scan and the record.
 func EndRuns(ctx context.Context, path string) ([]string, error) {
+	return endRuns(ctx, path, nil)
+}
+
+// A non-nil selection restricts the stop to the items the current plan found
+// explicitly finished. Check the disposition again under the start lock.
+func endRuns(ctx context.Context, path string, finishItems map[string]bool) ([]string, error) {
 	var skipped []string
 	err := withRunStartLock(ctx, path, func() error {
 		db, err := store.Open(ctx, path, true)
@@ -482,6 +488,18 @@ func EndRuns(ctx context.Context, path string) ([]string, error) {
 			for _, work := range works {
 				if work.Done || work.Decision.RunRequest == nil {
 					continue
+				}
+				if finishItems != nil {
+					if !finishItems[work.Decision.ItemID] {
+						continue
+					}
+					finished, err := operatorFinishedLanding(r, work.Decision.ItemID)
+					if err != nil {
+						return err
+					}
+					if !finished {
+						continue
+					}
 				}
 				for _, node := range parallelNodes(work.Decision) {
 					rec, err := terminalRecord(r, node.RunRequest.RunID)

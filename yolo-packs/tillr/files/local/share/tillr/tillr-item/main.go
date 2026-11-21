@@ -383,6 +383,7 @@ func stateFace(args []string) (record.Envelope, int) {
 	by := fs.String("by", "", "the actor authorizing a finished-state move")
 	resolvesVia := fs.String("resolves-via", "", "finished-state evidence: item:<id>, commit:<sha>, or doc:<path>")
 	requireVerdicts := fs.Bool("require-verdicts", false, "refuse the move unless every stored criterion has a recorded verdict")
+	finishExistingLanding := fs.Bool("finish-existing-landing", false, "finish as landed using an unreverted landing; requires --reason, --by and --resolves-via item:<id> or commit:<sha>; incompatible with --require-verdicts")
 	now := fs.String("now", "", "the injected clock, RFC 3339")
 	if err := parseFlags(fs, args); err != nil {
 		return record.Envelope{}, fail(err)
@@ -402,7 +403,10 @@ func stateFace(args []string) (record.Envelope, int) {
 		}
 	})
 	return writeStore(*path, at, func(ctx context.Context, tx *store.Tx) (record.Envelope, error) {
-		return item.SetStateWithReceipt(ctx, tx, *id, *state, at.UTC(), item.MoveReceipt{Reason: *reason, By: *by, ResolvesVia: *resolvesVia, Flags: flags, RequireVerdicts: *requireVerdicts}, item.WaitingOn{Waiter: *waiter, Reason: *reason})
+		return item.SetStateWithReceipt(ctx, tx, *id, *state, at.UTC(), item.MoveReceipt{
+			Reason: *reason, By: *by, ResolvesVia: *resolvesVia, Flags: flags,
+			RequireVerdicts: *requireVerdicts, FinishExistingLanding: *finishExistingLanding,
+		}, item.WaitingOn{Waiter: *waiter, Reason: *reason})
 	})
 }
 

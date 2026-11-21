@@ -15,6 +15,9 @@ type MoveReceipt struct {
 	ResolvesVia string
 	// RequireVerdicts checks stored text-bound verdicts in the move transaction.
 	RequireVerdicts bool
+	// FinishExistingLanding records an operator's disposition of the remaining work,
+	// not a judgement of criteria or a new landing.
+	FinishExistingLanding bool
 	// Flags preserves explicit empty CLI arguments for flag-not-stored refusals.
 	Flags []string
 	// conflictRelease permits RecordConflict to return an item to the queue in the same

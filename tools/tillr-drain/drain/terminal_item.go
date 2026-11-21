@@ -37,6 +37,21 @@ func init() {
 	}
 }
 
+// operatorFinishedLanding identifies an explicit finish that still stands. Rank
+// and definition edits can append item events without changing the disposition.
+func operatorFinishedLanding(r *store.Reader, id string) (bool, error) {
+	var finished bool
+	err := r.QueryRow(`SELECT EXISTS (
+		SELECT 1 FROM items WHERE item_id=? AND state='landed' AND ? = (
+			SELECT json_extract(payload,'$.lifecycle_action') FROM events
+			WHERE object_type='item' AND object_id=items.item_id AND kind='item.update'
+			  AND json_extract(payload,'$.lifecycle_action') IS NOT NULL
+			ORDER BY seq DESC LIMIT 1
+		)
+	)`, id, item.FinishExistingLandingAction).Scan(&finished)
+	return finished, err
+}
+
 // itemTerminalSettlement is the settling event's payload. Step names where the terminal
 // state was found: "plan" when the pass planned the settlement, or the judging step that
 // reread it during the examination.

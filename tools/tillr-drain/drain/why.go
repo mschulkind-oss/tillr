@@ -28,22 +28,23 @@ const (
 // lost worker, Why reports the observed hold instead of the planner's run-live
 // assumption. The presentation fields do not decide readiness.
 type WhyRow struct {
-	Place       int            `json:"place,omitempty"`
-	ItemID      string         `json:"item_id"`
-	State       string         `json:"state"`
-	Position    string         `json:"position"`
-	Reason      string         `json:"reason"`
-	Why         string         `json:"why"`
-	Class       string         `json:"class"`
-	Where       string         `json:"where"`
-	Mover       string         `json:"mover"`
-	Since       string         `json:"since"`
-	ClassSource string         `json:"class_source"`
-	WaitingOn   []string       `json:"waiting_on"`
-	Decision    Decision       `json:"decision"`
-	LaneStatus  string         `json:"lane_status,omitempty"`
-	LaneReason  string         `json:"lane_reason,omitempty"`
-	Refusals    map[string]int `json:"refusals,omitempty"`
+	Place       int                    `json:"place,omitempty"`
+	ItemID      string                 `json:"item_id"`
+	State       string                 `json:"state"`
+	Position    string                 `json:"position"`
+	Reason      string                 `json:"reason"`
+	Why         string                 `json:"why"`
+	Class       string                 `json:"class"`
+	Where       string                 `json:"where"`
+	Mover       string                 `json:"mover"`
+	Since       string                 `json:"since"`
+	ClassSource string                 `json:"class_source"`
+	WaitingOn   []string               `json:"waiting_on"`
+	Decision    Decision               `json:"decision"`
+	LaneStatus  string                 `json:"lane_status,omitempty"`
+	LaneReason  string                 `json:"lane_reason,omitempty"`
+	Refusals    map[string]int         `json:"refusals,omitempty"`
+	Landing     *item.LandingReference `json:"landing,omitempty"`
 }
 
 type WhySummary struct {
@@ -105,6 +106,16 @@ func decodePolicy(ref string, raw []byte) (*Policy, error) {
 // Why runs Plan once, in the caller's pinned read transaction. Capacity is consumed
 // in queue order exactly as it would be by the next pass, never independently per row.
 func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (WhyAnswer, error) {
+	return why(r, tick, policy, questions, "")
+}
+
+// WhyForItem includes a named landed item without adding landed history to the
+// queue-wide report. The plan still considers the full queue for lane placement.
+func WhyForItem(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, itemID string) (WhyAnswer, error) {
+	return why(r, tick, policy, questions, itemID)
+}
+
+func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, namedItem string) (WhyAnswer, error) {
 	answer := WhyAnswer{Rows: []WhyRow{}, Summary: WhySummary{Held: map[string]int{}}}
 	head, err := r.EventHeadSeq()
 	if err != nil {
@@ -260,7 +271,7 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 	var liveRuns map[string]bool
 	for i, env := range envs {
 		it := items[i]
-		if (def.Completes == "landing" && it.State == StateLanded) || (def.Completes != "landing" && finishedState(def, it.State)) {
+		if (def.Completes == "landing" && it.State == StateLanded && it.ItemID != namedItem) || (def.Completes != "landing" && finishedState(def, it.State)) {
 			continue
 		}
 		var d Decision
@@ -497,8 +508,14 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		if d.Action == ActionDispatch || d.Action == ActionRetry {
 			assigned[d.LaneID] = d.ItemID
 		}
-		if it.State == "closed" || it.State == "resolved-elsewhere" {
+		if it.State == "closed" || it.State == "resolved-elsewhere" || it.State == StateLanded {
 			row.Class, row.Mover = "done", "no further work: "+it.State
+		}
+		if it.State == StateLanded {
+			row.Landing, err = item.CurrentLanding(r, it.ItemID)
+			if err != nil {
+				return answer, readFailure(err)
+			}
 		}
 		if d.Action == ActionHold && row.Class != "done" {
 			if d.Reason == ReasonQuestionOpen && d.QuestionID != "" {

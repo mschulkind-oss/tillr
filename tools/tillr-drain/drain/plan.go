@@ -637,6 +637,20 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					return nil, nil, readFailure(err)
 				}
 			}
+			if !settled && item.State == StateLanded {
+				finished, err := operatorFinishedLanding(r, item.ItemID)
+				if err != nil {
+					return nil, nil, readFailure(err)
+				}
+				if finished && !work.BoundaryFailed {
+					// Do not resume a worker or offer another node while the drain
+					// is ending the superseded run.
+					decision = work.Decision
+					decision.Action, decision.Reason, decision.From, decision.To = ActionHold, ReasonItemAlreadyTerminal, "held", ""
+					identifyDecision(&decision)
+					settled = true
+				}
+			}
 			if !settled {
 				decision, err = pendingDecisionExcept(r, definitionWork(def, work), at, inputs[item.ItemID], tick.BriefTemplate, policy, shut, tick.GatesInFlight, tick.ownExaminationLane, tick.ownExaminationRunID, waiting)
 			}
