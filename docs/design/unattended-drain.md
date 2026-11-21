@@ -364,7 +364,8 @@ store.
 
 ### 6.8 Rule 8: noticing does not depend on anyone being awake
 
-This rule needs [`tillr-watch.md`](./tillr-watch.md), which waits on five rulings of its own.
+This rule needs [`tillr-watch.md`](./tillr-watch.md). The owner ruled its five questions on
+2026-11-21: alerts go to the foreground agent, and the utility executes no remedy of its own.
 What this design adds is the first rule set and one requirement on delivery.
 
 | Rule | Fires when | Default |
@@ -479,7 +480,8 @@ Until that night has happened, the claim "the drain repairs itself" is not made 
 3. **Rule 3, outside inputs**, with the `pi` rebase delivered through it.
 4. **Rule 1**, on the ruling of [OQ-UD1](#OQ-UD1).
 5. **Rule 7**, on the ruling of [OQ-UD4](#OQ-UD4).
-6. **Rule 8**, on the rulings in [`tillr-watch.md`](./tillr-watch.md) and [OQ-UD3](#OQ-UD3).
+6. **Rule 8**, on the delivery design [`tillr-watch.md`](./tillr-watch.md) still owes and on
+   [OQ-UD3](#OQ-UD3).
 7. **Rule 4**, on the ruling of [OQ-UD2](#OQ-UD2). It is last because it changes the most and
    because rules 5 and 7 remove most of what made lanes scarce.
 8. **The unattended night** of [Section 8](#8-what-done-looks-like).
