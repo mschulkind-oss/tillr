@@ -203,7 +203,7 @@ func (d *startStoreDelta) classify(events []event.Event) bool {
 			known = true
 		}
 		switch e.Kind {
-		case GateVerdictKind, RefusalKind, callOffered, obstacles.HeldKind:
+		case GateVerdictKind, RefusalKind, callOffered, obstacles.HeldKind, item.WaitReleasedKind:
 			d.history, known = true, true
 		}
 		switch e.Kind {
