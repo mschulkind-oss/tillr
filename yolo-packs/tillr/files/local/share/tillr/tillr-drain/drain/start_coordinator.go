@@ -34,9 +34,9 @@ func (l *Loop) runFastStart(ctx context.Context, view *startView, result *LoopRe
 	for ctx.Err() == nil {
 		snapshot := view.current.Load()
 		l.mu.Lock()
-		backingOff := l.stageFault
+		waitingForPass := len(l.stageFaults) > 0 || l.stageBackoff
 		l.mu.Unlock()
-		if snapshot == nil || snapshot == rejected || backingOff {
+		if snapshot == nil || snapshot == rejected || waitingForPass {
 			select {
 			case <-ctx.Done():
 			case <-view.updated:
