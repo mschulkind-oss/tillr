@@ -299,8 +299,8 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 					return err
 				}
 			}
-		case RefusalPlanWrong:
-			// The plan, not a session, is what goes back.
+		case RefusalPlanWrong, RefusalDeliveryOrder:
+			// Return the feedback, not a session working on the wrong plan or target.
 		default:
 			var err error
 			payload.WorkerSession, err = l.captureWorkerSession(ctx, candidate)

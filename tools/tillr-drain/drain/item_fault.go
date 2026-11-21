@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/faults"
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/event"
+	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -73,7 +75,7 @@ func (l *Loop) holdItemFault(ctx context.Context, c Candidate, reason, detail st
 			detail = faultClearDetail(f, l.cfg.Store)
 		}
 		l.reportf("loop: holding %s (%s, run %s, lane %s): %s\n", c.ItemID, reason, c.RunID, c.LaneID, detail)
-		if reason == ReasonStageFailed {
+		if reason == ReasonStageFailed || reason == ReasonSettleFailed {
 			l.reportf("loop: %s mover: %s\n", c.ItemID, f.CompleteMover(holdrules.For(reason).Mover, l.cfg.Store))
 		}
 	}
@@ -255,6 +257,46 @@ func (l *Loop) holdStageFailed(ctx context.Context, d Decision, step string, sta
 		return err
 	}
 	l.clearStageInfraLine(itemID, d.LaneID)
+	return nil
+}
+
+// holdExaminationFailure is the per-item boundary for a claimed examination. The
+// exit code of a candidate step does not decide the fate of the rest of the queue.
+func (l *Loop) holdExaminationFailure(ctx context.Context, d Decision, work *pendingWork, step string, failure error) error {
+	if ctx.Err() != nil || stoppedByOperator(ctx, failure) || errors.Is(failure, errRestartPending) || ExitCode(failure) == record.ExitIncompatible {
+		return failure
+	}
+	if terminal := asItemTerminal(failure); terminal != nil {
+		return l.settleTerminalItem(ctx, work, terminal)
+	}
+	// Read before opening the writer: it must not create a replacement store if
+	// the original disappeared. The hold write rechecks terminal state atomically.
+	if err := l.checkItemTerminal(ctx, d.ItemID, step); err != nil {
+		if terminal := asItemTerminal(err); terminal != nil {
+			return l.settleTerminalItem(ctx, work, terminal)
+		}
+		return fmt.Errorf("%v; reading store: %w", failure, err)
+	}
+	// A missing trunk is a shared fault, not a failure of the candidate's checkout.
+	// Check only on the error path.
+	if !l.nonLanding {
+		if _, err := l.revParse(ctx, l.cfg.Root, TrunkRef+"^{commit}"); err != nil {
+			return fmt.Errorf("%v; reading trunk: %w", failure, err)
+		}
+	}
+	c := Candidate{ItemID: d.ItemID, RunID: d.RunRequest.RunID, LaneID: d.LaneID}
+	reason, detail := ReasonSettleFailed, fmt.Sprintf("%s: %v", step, failure)
+	var collision *decisionCollisionError
+	if errors.As(failure, &collision) {
+		reason = ReasonDecisionCollision
+	}
+	err := l.holdItemFault(ctx, c, reason, detail)
+	if terminal := asItemTerminal(err); terminal != nil {
+		return l.settleTerminalItem(ctx, work, terminal)
+	}
+	if err != nil {
+		return fmt.Errorf("%v; recording item fault: %w", failure, err)
+	}
 	return nil
 }
 

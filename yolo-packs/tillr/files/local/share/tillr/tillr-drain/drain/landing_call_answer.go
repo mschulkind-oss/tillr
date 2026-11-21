@@ -17,6 +17,8 @@ func chooseLandingCallAnswer(outcome string) landingCallChoice {
 		return landingCallChoice{Kind: "refused", Stage: "judge"}
 	case "gate-refused":
 		return landingCallChoice{Kind: "refused", Stage: "gate"}
+	case RefusalDeliveryOrder:
+		return landingCallChoice{Kind: "refused", Stage: RefusalDeliveryOrder}
 	case "conflict", "reverted":
 		return landingCallChoice{Kind: outcome}
 	case "identical-repeat":

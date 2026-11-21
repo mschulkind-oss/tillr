@@ -63,6 +63,7 @@ var returnedCauses = map[string]bool{
 	RefusalNoOp:          true,
 	RefusalFence:         true,
 	RefusalLand:          true,
+	RefusalDeliveryOrder: true,
 	RefusalConflict:      true,
 	RefusalReverted:      true,
 }
@@ -78,6 +79,7 @@ var returnedReasons = map[string]string{
 	ReasonCandidateNoOp:       RefusalNoOp,
 	ReasonBoundaryScopeEscape: RefusalFence,
 	ReasonLandRefused:         RefusalLand,
+	RefusalDeliveryOrder:      RefusalDeliveryOrder,
 	ReasonConflictExhausted:   RefusalConflict,
 	ReasonLandingReverted:     RefusalReverted,
 }
@@ -223,6 +225,8 @@ func returnedBrief(e ReturnedEnding) string {
 		b.WriteString("Its candidate changed paths outside the item's fence, so it was refused before the gate.")
 	case RefusalLand:
 		b.WriteString("The gate passed its candidate, but the landing was refused.")
+	case RefusalDeliveryOrder:
+		b.WriteString("It offered the repository candidate before the fork was delivered.")
 	case RefusalReverted:
 		b.WriteString("It landed, and the full suite then proved that it broke the trunk, so tillr reverted it. Your next gate runs the failing check below, and the item lands again only when it passes.")
 	case RefusalConflict:

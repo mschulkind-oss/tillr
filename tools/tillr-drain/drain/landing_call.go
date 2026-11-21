@@ -575,6 +575,8 @@ func (l *Loop) answerLandingRefusal(tx *store.Tx, candidate Candidate, refusal r
 	switch refusal.Step {
 	case RefusalFence:
 		outcome = "fence-refused"
+	case RefusalDeliveryOrder:
+		outcome = RefusalDeliveryOrder
 	case RefusalGate:
 		outcome = "gate-refused"
 	case RefusalConflict:

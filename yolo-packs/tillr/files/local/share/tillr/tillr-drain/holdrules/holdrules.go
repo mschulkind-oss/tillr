@@ -92,6 +92,7 @@ var Rules = map[string]Rule{
 	"gate-failed":                  {"needs a cause", "gate", "inspect the gate verdict; the item's worker repairs the failing check"},
 	"red-cap":                      {"waits on work", "land", "the heavy runner; prove trunk or file its fixer"},
 	"land-refused":                 {"needs you", "land", "inspect the refused landing and authorize a retry"},
+	"delivery-order":               {"waits on work", "land", "the worker lands the fork before offering the repository candidate"},
 	"no-policy":                    {"needs you", "queue", "the owner"},
 	"capacity":                     {"waits on work", "queue", "the next pass"},
 	"no-lane":                      {"waits on work", "queue", "a free lane"},
