@@ -26,6 +26,13 @@ is right.**
   exactly one backend. When a backend fails or closes, the work holds with its
   cause; find and fix the cause. Never add a second backend to a seat, and never
   move an item to another model to get past an error.
+- **This is not only about models (owner, same day): "That is everything. ...
+  If something fails, you fix it. If it fails loudly, you fix it. You don't hide
+  it with a fallback."** Do not write, keep or approve a fallback path of any
+  kind: a second route on error, a default used when something is missing, a
+  quiet restart in place of a failed resume. A fallback needs a strong written
+  justification and the owner's own agreement before it exists; that is one of
+  the few decisions that goes to the owner.
 - Changing a model is a deliberate policy-file edit, never a per-item retry on
   "another model". The running loop accepts a valid policy file when it changes.
 
