@@ -33,8 +33,18 @@ func repeatedAnsweredObstacle(previous, next item.Conflict, current Obstacle) bo
 		}
 		return c.BlockedCriteria
 	}
-	return slices.Equal(criteria(previous, first), criteria(next, current)) &&
-		(current.Kind != ObstacleOwner || collapseSingleLine(first.Field("QUESTION")) == collapseSingleLine(current.Field("QUESTION")))
+	if !slices.Equal(criteria(previous, first), criteria(next, current)) {
+		return false
+	}
+	switch current.Kind {
+	case ObstacleDefinition:
+		// A criterion can have several gaps; only the evidence identifies the one answered.
+		return collapseSingleLine(first.Field("EVIDENCE")) == collapseSingleLine(current.Field("EVIDENCE"))
+	case ObstacleOwner:
+		return collapseSingleLine(first.Field("QUESTION")) == collapseSingleLine(current.Field("QUESTION"))
+	default:
+		return true
+	}
 }
 
 // The existing conflict journal records the landed answer and its later consumption

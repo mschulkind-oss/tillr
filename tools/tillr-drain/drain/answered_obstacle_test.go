@@ -11,13 +11,14 @@ import (
 )
 
 func TestAnsweredObstacleRepeat(t *testing.T) {
-	for _, tc := range []struct{ kind, first, next, waiter string }{
-		{"definition", "CRITERIA: c1\nEVIDENCE: first count", "CRITERIA: c1\nEVIDENCE: second count", "operator"},
-		{"definition", "CRITERIA: c1\nEVIDENCE: first count", "CRITERIA: c2\nEVIDENCE: second count", "design"},
-		{"owner", "QUESTION: publish the branch?", "QUESTION: publish the branch?", "owner"},
-		{"owner", "QUESTION: publish the branch?", "QUESTION: publish the other branch?", "design"},
+	for _, tc := range []struct{ name, kind, first, next, waiter string }{
+		{"definition/repeated-evidence", "definition", "CRITERIA: c1\nEVIDENCE: first count", "CRITERIA: c1\nEVIDENCE: first\n  count", "operator"},
+		{"definition/tillr-watch-distinct-evidence", "definition", "CRITERIA: c1\nEVIDENCE: the design doesn't say how status distinguishes a killed watcher from an idle one", "CRITERIA: c1\nEVIDENCE: launch examples omit required --store and --rules", "design"},
+		{"definition/different-criteria", "definition", "CRITERIA: c1\nEVIDENCE: first count", "CRITERIA: c2\nEVIDENCE: first count", "design"},
+		{"owner/repeated-question", "owner", "QUESTION: publish the branch?", "QUESTION: publish the branch?", "owner"},
+		{"owner/different-question", "owner", "QUESTION: publish the branch?", "QUESTION: publish the other branch?", "design"},
 	} {
-		t.Run(tc.kind+"/"+tc.waiter, func(t *testing.T) {
+		t.Run(tc.name, func(t *testing.T) {
 			f, l, work := obstacleFixture(t, &obstacleSteps{}, "item-a")
 			ctx := context.Background()
 			report := func(fields string) string { return "OBSTACLE: " + tc.kind + "\n" + fields + "\nRESULT: blocked" }
@@ -47,8 +48,8 @@ func TestAnsweredObstacleRepeat(t *testing.T) {
 			l.cfg.Policy.Seats["design"] = "fixture"
 			next, _ := conflictOf(t, f, "item-a")
 			if tc.waiter == "design" {
-				if next.WaitingOn != "design" {
-					t.Fatalf("new obstacle held: %+v", next)
+				if next.Status != "raised" || next.WaitingOn != "design" || strings.Contains(next.Text, repeatedObstacleMarker) {
+					t.Fatalf("new obstacle not raised for design: %+v", next)
 				}
 			} else if next.Status != "owner" || next.WaitingOn != "owner" || !strings.Contains(next.Text, "Held for the "+tc.waiter) || !strings.Contains(next.Text, report(tc.first)) || !strings.Contains(next.Text, report(tc.next)) {
 				t.Fatalf("repeat not held with both reports: %+v", next)
