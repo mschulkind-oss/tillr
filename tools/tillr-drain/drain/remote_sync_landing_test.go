@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
+	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -30,8 +31,18 @@ func gateFirstRemoteSyncRepair(t *testing.T, p *pushFixture, st remoteSyncState)
 	runGit(t, wt, "checkout", "-q", "--detach", st.BaseSHA)
 	writeForkFile(t, filepath.Join(wt, "two.txt"), "resolved two\n")
 	runGit(t, wt, "add", "two.txt")
-	runGit(t, wt, "commit", "-qm", "resolved two.txt")
-	c := Candidate{ItemID: st.ItemID, LaneID: lane, RunID: "run-sync-replay", Worktree: wt, BaseSHA: st.BaseSHA, HeadSHA: runGit(t, wt, "rev-parse", "HEAD")}
+	tree := runGit(t, wt, "write-tree")
+	cmd := exec.Command("git", "-C", wt, "-c", "i18n.commitEncoding=ISO-8859-1", "commit-tree", tree, "-p", st.BaseSHA)
+	cmd.Stdin = strings.NewReader("caf\xe9: resolved two.txt") // Latin-1, intentionally no final newline
+	cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=Worker", "GIT_AUTHOR_EMAIL=worker@example.invalid",
+		"GIT_COMMITTER_NAME=Worker", "GIT_COMMITTER_EMAIL=worker@example.invalid")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("creating worker commit: %v: %s", err, out)
+	}
+	head := strings.TrimSpace(string(out))
+	runGit(t, wt, "update-ref", "HEAD", head, st.BaseSHA)
+	c := Candidate{ItemID: st.ItemID, LaneID: lane, RunID: "run-sync-replay", Worktree: wt, BaseSHA: st.BaseSHA, HeadSHA: head}
 	gateRemoteSyncRepair(t, p, c)
 	return c
 }
@@ -54,13 +65,63 @@ func landStagedReplay(t *testing.T, p *pushFixture, c Candidate) string {
 	return tip
 }
 
+func rawRepairMessage(t *testing.T, root, commit string) (message, encoding string) {
+	t.Helper()
+	out, err := exec.Command("git", "-C", root, "cat-file", "commit", commit).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	header, message, ok := strings.Cut(string(out), "\n\n")
+	if !ok {
+		t.Fatalf("commit %s has no message boundary", commit)
+	}
+	for _, line := range strings.Split(header, "\n") {
+		if value, found := strings.CutPrefix(line, "encoding "); found {
+			encoding = value
+		}
+	}
+	return message, encoding
+}
+
+func TestRemoteSyncLandingRestampsWorker(t *testing.T) {
+	p, st, c := stagedReplay(t)
+	root := p.f.root
+	tip := landStagedReplay(t, p, c)
+	fixtureRead(t, p.f, func(r *store.Reader) error {
+		repair, err := heavy.RewriteResolve(r, st.ConflictCommit)
+		if err != nil {
+			return err
+		}
+		if repair == c.HeadSHA || runGit(t, root, "merge-base", repair, tip) != repair || runGit(t, root, "merge-base", c.HeadSHA, tip) == c.HeadSHA {
+			t.Fatalf("published replay %s retains worker commit %s instead of a restamped repair (%s)", tip, c.HeadSHA, repair)
+		}
+		if got := runGit(t, root, "show", "-s", "--format=%an <%ae>|%cn <%ce>", repair); got != "tillr <tillr@example.invalid>|tillr <tillr@example.invalid>" {
+			t.Fatalf("repair author and committer = %q", got)
+		}
+		if got, want := runGit(t, root, "show", "-s", "--format=%P|%T|%aI", repair), runGit(t, root, "show", "-s", "--format=%P|%T|%aI", c.HeadSHA); got != want {
+			t.Fatalf("stamping changed the gated repair's parent, tree or author date: %q != %q", got, want)
+		}
+		want, wantEncoding := rawRepairMessage(t, root, c.HeadSHA)
+		if want != "caf\xe9: resolved two.txt" || wantEncoding != "ISO-8859-1" {
+			t.Fatalf("unexpected fixture message: %q (%s)", want, wantEncoding)
+		}
+		if message, encoding := rawRepairMessage(t, root, repair); message != want || encoding != wantEncoding {
+			t.Fatalf("repair changed message: %q (%s), want %q (%s)", message, encoding, want, wantEncoding)
+		}
+		return nil
+	})
+}
+
 func TestRemoteSyncLandCompletesLinearlyAndHoldsGreen(t *testing.T) {
 	p, st, c := stagedReplay(t)
 	root := p.f.root
 	c4 := ownerCommit(t, root, "four.txt")
 	// reset --keep must leave unrelated local edits alone.
 	writeForkFile(t, filepath.Join(root, "base.txt"), "unrelated edit\n")
+	setReplayIdentity(t, root)
 	tip := landStagedReplay(t, p, c)
+	assertReplayIdentity(t, root, p.local[2], tip+"~1")
+	assertReplayIdentity(t, root, c4, tip)
 	if got := runGit(t, root, "rev-parse", "HEAD"); got != tip {
 		t.Fatalf("main checkout = %s, want %s", got, tip)
 	}
@@ -112,10 +173,13 @@ func stagedRemoteSyncWithLaterConflict(t *testing.T) (*pushFixture, remoteSyncSt
 func assertRemoteSyncSecondStage(t *testing.T, p *pushFixture, c Candidate) remoteSyncState {
 	t.Helper()
 	st, found, err := p.l.readRemoteSyncState(context.Background(), c.ItemID)
-	if err != nil || !found || st.BaseSHA != c.HeadSHA || st.ConflictCommit != p.local[2] || !slices.Equal(st.ConflictPaths, []string{"three.txt"}) {
+	if err != nil || !found || st.BaseSHA == c.HeadSHA || st.ConflictCommit != p.local[2] || !slices.Equal(st.ConflictPaths, []string{"three.txt"}) {
 		t.Fatalf("second stage = %+v, %v, %v", st, found, err)
 	}
-	for ref, want := range map[string]string{TrunkRef: p.local[2], GreenRef: p.local[1], remoteSyncPinRef(c.ItemID): c.HeadSHA} {
+	if got, want := runGit(t, p.f.root, "rev-parse", st.BaseSHA+"^{tree}"), runGit(t, p.f.root, "rev-parse", c.HeadSHA+"^{tree}"); got != want {
+		t.Fatalf("second stage base tree = %s, want first gated tree %s", got, want)
+	}
+	for ref, want := range map[string]string{TrunkRef: p.local[2], GreenRef: p.local[1], remoteSyncPinRef(c.ItemID): st.BaseSHA} {
 		if got := runGit(t, p.f.root, "rev-parse", ref); got != want {
 			t.Errorf("%s = %s, want %s", ref, got, want)
 		}
@@ -138,6 +202,7 @@ func TestRemoteSyncLaterConflictAdvancesBase(t *testing.T) {
 	assertRemoteSyncSecondStage(t, p, c)
 
 	wt := c.Worktree
+	runGit(t, wt, "checkout", "--detach", st.BaseSHA)
 	writeForkFile(t, filepath.Join(wt, "three.txt"), "resolved three\n")
 	writeForkFile(t, filepath.Join(wt, "two.txt"), "undo the first resolution\n")
 	runGit(t, wt, "add", "two.txt", "three.txt")
@@ -151,6 +216,66 @@ func TestRemoteSyncLaterConflictAdvancesBase(t *testing.T) {
 	landStagedReplay(t, p, second)
 	if got := runGit(t, p.f.root, "rev-parse", GreenRef); got != st.MergeBase {
 		t.Fatalf("green crossed the first resolution: %s, want %s", got, st.MergeBase)
+	}
+}
+
+func TestRemoteSyncLandingRestampsLegacyStage(t *testing.T) {
+	ctx := context.Background()
+	p, first, worker := stagedRemoteSyncWithLaterConflict(t)
+	root := p.f.root
+	trunk, err := land.OpenTrunk(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The old implementation staged the raw worker commit as the base of
+	// the next conflict instead of stamping it first.
+	_, legacy, err := replayRemoteSyncSuffix(ctx, trunk, root, first, worker.HeadSHA, first.OldTrunk)
+	if err != nil || legacy == nil || legacy.BaseSHA != worker.HeadSHA {
+		t.Fatalf("legacy stage = %+v, %v", legacy, err)
+	}
+	if _, err := p.l.fileOrUpdateRemoteSyncItemLocked(ctx, *legacy, first.BaseSHA); err != nil {
+		t.Fatal(err)
+	}
+	wt := worker.Worktree
+	runGit(t, wt, "checkout", "--detach", legacy.BaseSHA)
+	writeForkFile(t, filepath.Join(wt, "three.txt"), "resolved three\n")
+	runGit(t, wt, "add", "three.txt")
+	runGit(t, wt, "commit", "-qm", "resolved three.txt")
+	second := Candidate{ItemID: legacy.ItemID, RunID: "run-legacy-replay-second", LaneID: worker.LaneID,
+		Worktree: wt, BaseSHA: legacy.BaseSHA, HeadSHA: runGit(t, wt, "rev-parse", "HEAD")}
+	gateRemoteSyncRepair(t, p, second)
+	setReplayIdentity(t, root)
+	tip := landStagedReplay(t, p, second)
+	if got := runGit(t, root, "merge-base", worker.HeadSHA, tip); got == worker.HeadSHA {
+		t.Fatalf("published trunk %s retains legacy worker commit %s", tip, worker.HeadSHA)
+	}
+	fixtureRead(t, p.f, func(r *store.Reader) error {
+		for i, old := range p.local {
+			want := runGit(t, root, "rev-parse", tip+[]string{"~2", "^", ""}[i])
+			got, err := heavy.RewriteResolve(r, old)
+			if err != nil || got != want {
+				t.Fatalf("rewrite of %s = %s, %v; want %s", old, got, err, want)
+			}
+			if i == 0 {
+				assertReplayIdentity(t, root, first.BaseSHA, got)
+				continue
+			}
+			if ident := runGit(t, root, "show", "-s", "--format=%an <%ae>|%cn <%ce>", got); ident != "Replay Lander <replay@example.invalid>|Replay Lander <replay@example.invalid>" {
+				t.Fatalf("repair %s identity = %q", got, ident)
+			}
+			head := []string{"", worker.HeadSHA, second.HeadSHA}[i]
+			if gotMeta, want := runGit(t, root, "show", "-s", "--format=%T|%aI", got), runGit(t, root, "show", "-s", "--format=%T|%aI", head); gotMeta != want {
+				t.Fatalf("restamping changed gated repair tree or author date: %q != %q", gotMeta, want)
+			}
+			want, wantEncoding := rawRepairMessage(t, root, head)
+			if message, encoding := rawRepairMessage(t, root, got); message != want || encoding != wantEncoding {
+				t.Fatalf("restamping changed gated repair message: %q (%s), want %q (%s)", message, encoding, want, wantEncoding)
+			}
+		}
+		return nil
+	})
+	if got := runGit(t, root, "rev-parse", tip+"~3"); got != first.RemoteTip {
+		t.Fatalf("reconstructed prefix changed fetched history: %s != %s", got, first.RemoteTip)
 	}
 }
 
@@ -245,8 +370,8 @@ func testRemoteSyncLandingEvidence(t *testing.T, phase string) {
 		tip = runGit(t, p.f.root, "rev-parse", TrunkRef)
 		fixtureRead(t, p.f, func(r *store.Reader) error {
 			got, err := heavy.RewriteResolve(r, st.ConflictCommit)
-			if err != nil || got != c.HeadSHA {
-				t.Fatalf("interrupted replay did not record the rewrite: %s, %v", got, err)
+			if err != nil || got != runGit(t, p.f.root, "rev-parse", tip+"^") {
+				t.Fatalf("interrupted replay did not record the stamped repair: %s, %v", got, err)
 			}
 			return nil
 		})
@@ -306,7 +431,7 @@ func testRemoteSyncLandingEvidence(t *testing.T, phase string) {
 		if receipts != 1 {
 			t.Errorf("repair recorded %d landing receipts, want one", receipts)
 		}
-		if head != c.HeadSHA || attributed != c.HeadSHA || tree != runGit(t, c.Worktree, "rev-parse", "HEAD^{tree}") || landedTree != tree || verdict != "fixture-verdict" || replayTip != tip {
+		if head != c.HeadSHA || attributed != runGit(t, p.f.root, "rev-parse", tip+"^") || tree != runGit(t, c.Worktree, "rev-parse", "HEAD^{tree}") || landedTree != tree || verdict != "fixture-verdict" || replayTip != tip {
 			t.Errorf("landing evidence = %s %s %s %s %s %s", head, attributed, tree, landedTree, verdict, replayTip)
 		}
 		return nil

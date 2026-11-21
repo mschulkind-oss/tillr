@@ -5640,6 +5640,11 @@ trunk with nothing in the way, and the heavy proof loses minutes of work wheneve
 
 ### Hold landings when a trunk commit has a foreign author
 
+**Superseded by [OQ-RP4](../design/tillr-refused-push.md#OQ-RP4).** This is the historical
+build record, not work to replay. Tillr stamps its own trunk landings and no longer checks
+other trunk commits or carries identity acceptances across rewrites. The repository's own
+identity gate remains separate.
+
 On 2026-11-17 at 08:08 -0500, commit `6f2d9d938` [unlanded] reached `main` as `fork-check test
 <test@example.invalid>` with the message `initial`. A test fixture had run its `git add -A` and
 `git commit` against the real repository and swept an agent's uncommitted drain work onto the

@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
-	"github.com/mschulkind-oss/tillr-land/land"
 )
 
 // exportedReasons returns every exported Reason* string constant of this package,
@@ -45,12 +44,6 @@ func exportedReasons(t *testing.T, dir string) map[string]string {
 					}
 					if len(values.Values) <= i {
 						t.Fatalf("cannot enumerate %s: constant value is implicit", name.Name)
-					}
-					if sel, ok := values.Values[i].(*ast.SelectorExpr); ok {
-						if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "land" && sel.Sel.Name == "ReasonForeignIdentity" {
-							found[name.Name] = land.ReasonForeignIdentity
-							continue
-						}
 					}
 					literal, ok := values.Values[i].(*ast.BasicLit)
 					if !ok || literal.Kind != token.STRING {

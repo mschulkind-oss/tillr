@@ -7,20 +7,11 @@ import (
 	"testing"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
-	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
 const replayMarker = "refs/tillr/landed/run-x"
-
-func markAcceptedReplay(t *testing.T, f refusalLoopFixture, old string) {
-	t.Helper()
-	runGit(t, f.root, "update-ref", replayMarker, old)
-	fixtureWrite(t, f, func(tx *store.Tx) error {
-		return land.AcceptIdentity(tx, old, "owner", "accepted local")
-	})
-}
 
 func assertRecordedReplay(t *testing.T, f refusalLoopFixture, old, replacement string) {
 	t.Helper()
@@ -35,17 +26,13 @@ func assertRecordedReplay(t *testing.T, f refusalLoopFixture, old, replacement s
 		if err != nil || resolved != replacement {
 			t.Fatalf("RewriteResolve(%s) = (%s, %v), want %s", old, resolved, err, replacement)
 		}
-		var by, reason string
-		if err := r.QueryRow(`SELECT accepted_by, reason FROM trunk_identity_acceptances WHERE sha=?`, replacement).Scan(&by, &reason); err != nil || by != "owner" || !strings.Contains(reason, old) {
-			t.Fatalf("carried acceptance = (%q, %q, %v)", by, reason, err)
-		}
 		return nil
 	})
 }
 
-func TestRefusedPushDirectRewritesSupersessionIdentityAndMarkers(t *testing.T) {
+func TestRefusedPushDirectRewritesSupersessionAndMarkers(t *testing.T) {
 	p := newPushFixture(t)
-	markAcceptedReplay(t, p.f, p.local[0])
+	runGit(t, p.f.root, "update-ref", replayMarker, p.local[0])
 	// Upstream applies one.txt along with another file, so the local change is
 	// already present but its patch cannot match the upstream commit's patch.
 	writeForkFile(t, filepath.Join(p.other, "remote.txt"), "upstream only\n")
@@ -77,9 +64,9 @@ func TestRefusedPushShiftedContextChangesPatchID(t *testing.T) {
 	local[8] = "local-edit-9"
 	writeForkFile(t, filepath.Join(f.root, "shared.txt"), strings.Join(local, "\n")+"\n")
 	runGit(t, f.root, "add", "shared.txt")
-	runGit(t, f.root, "commit", "-qm", "local edit line 9", "--author=Accepted Local <accepted@example.net>")
+	runGit(t, f.root, "commit", "-qm", "local edit line 9")
 	old := runGit(t, f.root, "rev-parse", "HEAD")
-	markAcceptedReplay(t, f, old)
+	runGit(t, f.root, "update-ref", replayMarker, old)
 
 	// The upstream edit is inside the diff context of line 9 but does not conflict.
 	lines[6] = "remote-edit-7"
@@ -94,7 +81,4 @@ func TestRefusedPushShiftedContextChangesPatchID(t *testing.T) {
 		t.Fatalf("shifted context did not change the patch ID: %v, %v", patches, err)
 	}
 	assertRecordedReplay(t, f, old, replacement)
-	if held, err := l.identityHeld(ctx); err != nil || held {
-		t.Fatalf("replayed accepted identity held landings: held=%t, err=%v", held, err)
-	}
 }

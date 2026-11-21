@@ -54,7 +54,7 @@ func retainLane(err error) (held, keep bool) {
 	switch {
 	case errors.Is(err, errRepairPending), errors.Is(err, errJudgeBackendHeld):
 		return true, true
-	case errors.Is(err, errGateNoVerdict), errors.Is(err, errGateStallHeld), errors.Is(err, errItemFaultHeld), errors.Is(err, errRepairHeld), errors.Is(err, errDirtyHeld), errors.Is(err, errRedCapHeld), errors.Is(err, errTrunkRewritten), errors.Is(err, errForeignIdentity):
+	case errors.Is(err, errGateNoVerdict), errors.Is(err, errGateStallHeld), errors.Is(err, errItemFaultHeld), errors.Is(err, errRepairHeld), errors.Is(err, errDirtyHeld), errors.Is(err, errRedCapHeld), errors.Is(err, errTrunkRewritten):
 		return true, false
 	default:
 		return false, false

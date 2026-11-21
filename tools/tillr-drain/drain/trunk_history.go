@@ -75,23 +75,13 @@ func (l *Loop) observeTrunk(ctx context.Context, expected string) (trunkHistory,
 
 // observeTrunkWith uses the pairs built by the replay under land.lock only if
 // ordinary rewrite matching cannot explain the lost history.
-func (l *Loop) observeTrunkWith(ctx context.Context, expected string, known *rewriteAbsorption) (_ trunkHistory, resultErr error) {
+func (l *Loop) observeTrunkWith(ctx context.Context, expected string, known *rewriteAbsorption) (trunkHistory, error) {
 	if l.nonLanding {
 		return trunkHistory{}, nil
 	}
 	registerRewriteStore(l.cfg.Root, l.cfg.Store)
 	l.historyMu.Lock()
 	defer l.historyMu.Unlock()
-	if known != nil {
-		// Check identities after recording the carried acceptances and releasing land.lock.
-		defer func() {
-			if resultErr == nil {
-				resultErr = l.observeIdentity(ctx)
-			}
-		}()
-	} else if err := l.observeIdentity(ctx); err != nil {
-		return trunkHistory{}, err
-	}
 	l.mu.Lock()
 	ready := l.historyPinned
 	l.mu.Unlock()

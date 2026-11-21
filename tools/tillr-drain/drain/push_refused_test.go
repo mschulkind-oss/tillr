@@ -56,6 +56,28 @@ func (p *pushFixture) refused(t *testing.T) error {
 	return err
 }
 
+// Use three different identities so a replay cannot accidentally use the
+// original author or the ambient Git committer as its committer.
+func setReplayIdentity(t *testing.T, root string) {
+	t.Helper()
+	config := filepath.Join(filepath.Dir(root), "replay.gitconfig")
+	writeForkFile(t, config, "[user]\n name = Replay Lander\n email = replay@example.invalid\n")
+	t.Setenv("GIT_CONFIG_GLOBAL", config)
+	t.Setenv("GIT_COMMITTER_NAME", "Ambient Committer")
+	t.Setenv("GIT_COMMITTER_EMAIL", "ambient@example.invalid")
+}
+
+func assertReplayIdentity(t *testing.T, root, old, replayed string) {
+	t.Helper()
+	const author = "%an <%ae>|%aI|%B"
+	if got, want := runGit(t, root, "show", "-s", "--format="+author, replayed), runGit(t, root, "show", "-s", "--format="+author, old); got != want {
+		t.Errorf("replay of %s changed author, date or message: %q != %q", old, got, want)
+	}
+	if got := runGit(t, root, "show", "-s", "--format=%cn <%ce>", replayed); got != "Replay Lander <replay@example.invalid>" {
+		t.Errorf("replay of %s has committer %q, want configured identity", old, got)
+	}
+}
+
 // The remote has a commit the trunk lacks: the unpublished commits are replayed on top of
 // it, linear, every one present by patch, green carried by patch, and the next push works.
 func TestRefusedPushRebasesOntoTheMovedRemote(t *testing.T) {
@@ -63,6 +85,7 @@ func TestRefusedPushRebasesOntoTheMovedRemote(t *testing.T) {
 	ctx := context.Background()
 	remoteTip := p.remoteCommit(t, "remote.txt", "remote\n")
 	err := p.refused(t)
+	setReplayIdentity(t, p.f.root)
 	n, herr := p.l.healRefusedPush(ctx, settings.Push{}, err)
 	if herr != nil || n != 3 {
 		t.Fatalf("heal = %d, %v", n, herr)
@@ -73,6 +96,10 @@ func TestRefusedPushRebasesOntoTheMovedRemote(t *testing.T) {
 	}
 	if got := runGit(t, root, "rev-list", "--count", remoteTip+"..HEAD"); got != "3" {
 		t.Fatalf("%s commits on top of the remote", got)
+	}
+	replayed := strings.Fields(runGit(t, root, "rev-list", "--reverse", remoteTip+"..HEAD"))
+	for i, sha := range replayed {
+		assertReplayIdentity(t, root, p.local[i], sha)
 	}
 	if cherry := runGit(t, root, "cherry", "HEAD", p.local[2]); strings.Contains(cherry, "+") {
 		t.Fatalf("a commit has no same-patch commit on the trunk: %s", cherry)
@@ -259,10 +286,7 @@ func TestRefusedGreenPushHealsThroughTheAction(t *testing.T) {
 	}
 }
 
-// A commit another machine pushed under another identity arrives with the rebase. It was
-// published by someone with push access, so it must not hold landings; the commits
-// replayed on top stay under the check, and a foreign commit made here still holds.
-func TestRefusedPushRebaseTrustsTheRemoteIdentity(t *testing.T) {
+func TestRefusedPushPinsFetchedTip(t *testing.T) {
 	p := newPushFixture(t)
 	ctx := context.Background()
 	runGit(t, p.other, "-c", "user.name=Other", "-c", "user.email=other@example.invalid", "commit", "-q", "--allow-empty", "-m", "from another machine")
@@ -271,20 +295,6 @@ func TestRefusedPushRebaseTrustsTheRemoteIdentity(t *testing.T) {
 	err := p.refused(t)
 	if _, herr := p.l.healRefusedPush(ctx, settings.Push{}, err); herr != nil {
 		t.Fatal(herr)
-	}
-	if err := p.l.observeIdentity(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if held, err := p.l.identityHeld(ctx); err != nil || held {
-		t.Fatalf("a commit from the remote held landings: held=%v err=%v", held, err)
-	}
-	// Control: a foreign commit that did not come from the remote still holds.
-	local := foreignCommit(t, p.f.root, "HEAD", false)
-	if err := p.l.observeIdentity(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if held, err := p.l.identityHeld(ctx); err != nil || !held {
-		t.Fatalf("a local foreign commit %s did not hold: held=%v err=%v", local, held, err)
 	}
 	if runGit(t, p.f.root, "rev-parse", "--verify", "refs/tillr/published/origin/"+TrunkRef) != foreign {
 		t.Fatal("the fetched tip was not pinned")

@@ -1151,11 +1151,12 @@ replay, or move any refs. The drain records each accepted fetch even when no pus
 follows or a subsequent push fails. If the fetched tip already contains green, the drain skips
 that push. A successful push records the exact commit pushed. The pointer moves only forward:
 a compare-and-swap keeps a late confirmation from overwriting a newer one. Worker boundary checks
-ignore these pointer updates. The identity check trusts every commit reachable from a pointer
-under that prefix: a commit another machine pushed under its own address does not hold
-landings with `trunk-foreign-identity`. Unpublished replayed commits are not under the pointer;
-an unpublished foreign commit made here still holds until `tillr-drain accept-identity`.
-Once accepted, its acceptance carries to its replacement.
+ignore these pointer updates. The pointer is not consulted for commit identity.
+
+Tillr stamps its own trunk landings with the configured Git identity from a scope a lane
+cannot write. It enforces no identity policy on anyone else's commits, whether made locally
+or fetched from another machine. Repositories that want stricter checks should run them in
+their own gate.
 
 Each `drain.post-landing-action` push event records a `kind` alongside the existing `detail`.
 `push-remote-declined` means the server returned `[remote rejected]`. A failed push that

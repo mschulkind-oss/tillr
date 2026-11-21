@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr/settings"
@@ -14,7 +15,7 @@ import (
 )
 
 // landRemoteSync publishes one gated conflict resolution and the linear suffix
-// on top of it. The ordinary candidate path does not yet call it.
+// on top of it.
 func (l *Loop) landRemoteSync(ctx context.Context, c Candidate, result *LoopResult) (string, bool, error) {
 	root := l.cfg.Root
 	release, err := l.lockTrunkHistory(ctx)
@@ -75,7 +76,23 @@ func (l *Loop) landRemoteSync(ctx context.Context, c Candidate, result *LoopResu
 	} else if !present {
 		return refuse("remote-sync conflicting commit is no longer on main")
 	}
-	known, next, err := replayRemoteSyncSuffix(ctx, root, st, c.HeadSHA, before)
+	trunk, err := land.OpenTrunk(root)
+	if err != nil {
+		return "", false, err
+	}
+	trunk.SetContext(ctx)
+	at := l.cfg.Now()
+	prefix, err := l.stampRemoteSyncPrefix(ctx, trunk, st, at)
+	if err != nil {
+		return "", false, fmt.Errorf("stamping staged remote-sync prefix: %w", err)
+	}
+	// The prefix may have new commit IDs, but its base tree is unchanged.
+	// Keep the original stage for the verdict, receipt, and pin operations.
+	repair, err := trunk.StampRepair(prefix.BaseSHA, c.HeadSHA, tree, at)
+	if err != nil {
+		return "", false, fmt.Errorf("stamping remote-sync repair: %w", err)
+	}
+	known, next, err := replayRemoteSyncSuffix(ctx, trunk, root, prefix, repair, before)
 	if err != nil {
 		return "", false, err
 	}
@@ -109,7 +126,7 @@ func (l *Loop) landRemoteSync(ctx context.Context, c Candidate, result *LoopResu
 	if err != nil {
 		return "", false, err
 	}
-	if behind, err := trunkAncestor(ctx, root, known.GreenOverride, st.BaseSHA); err != nil {
+	if behind, err := trunkAncestor(ctx, root, known.GreenOverride, prefix.BaseSHA); err != nil {
 		return "", false, err
 	} else if !behind {
 		return "", false, Externalf("remote-sync replay cannot hold green behind the repair")
@@ -147,10 +164,13 @@ func (l *Loop) finishRemoteSyncReplayLocked(ctx context.Context, intent *remoteS
 	} else if h.Lost != "" {
 		return Externalf("main changed before the remote-sync replay was recorded")
 	}
-	if err := l.recordRemoteSyncLanding(ctx, c, known.Lost, known.Tip, tree, verdict); err != nil {
+	// This mapping is also durable across recovery and names the actual repair,
+	// not the worker head or the tip after replaying later commits.
+	repair := known.Pairs[intent.Stage.ConflictCommit]
+	if err := l.recordRemoteSyncLanding(ctx, c, known.Lost, known.Tip, repair, tree, verdict); err != nil {
 		return fmt.Errorf("recording remote-sync landing: %w", err)
 	}
-	if err := l.completeRemoteSyncReplayItem(ctx, c); err != nil {
+	if err := l.completeRemoteSyncReplayItem(ctx, c, repair); err != nil {
 		return err
 	}
 	if _, err := rawGit(ctx, root, nil, "update-ref", "-d", remoteSyncPinRef(c.ItemID), c.BaseSHA); err != nil {
@@ -159,7 +179,7 @@ func (l *Loop) finishRemoteSyncReplayLocked(ctx context.Context, intent *remoteS
 	return l.writeRemoteSyncReplay(ctx, nil)
 }
 
-func (l *Loop) completeRemoteSyncReplayItem(ctx context.Context, c Candidate) error {
+func (l *Loop) completeRemoteSyncReplayItem(ctx context.Context, c Candidate, repair string) error {
 	if err := l.checkItemTerminal(ctx, c.ItemID, "settle-remote-sync"); err != nil {
 		if terminal := asItemTerminal(err); terminal != nil && terminal.State == StateLanded {
 			return l.endItemUnfinishedRuns(ctx, c.ItemID, c.RunID)
@@ -168,7 +188,7 @@ func (l *Loop) completeRemoteSyncReplayItem(ctx context.Context, c Candidate) er
 	}
 	if c.Judge != nil {
 		receipt := *c.Judge
-		receipt.Options.Landed = c.HeadSHA
+		receipt.Options.Landed = repair
 		c.Judge = &receipt
 		if err := appendJudgment(ctx, l.cfg.Store, judgeLandedKind, "run", c.RunID, c, l.cfg.Now()); err != nil {
 			return err
@@ -189,7 +209,81 @@ func (l *Loop) afterRemoteSyncReplay(ctx context.Context, replay *remoteSyncRepl
 	}
 }
 
-func replayRemoteSyncSuffix(ctx context.Context, root string, st remoteSyncState, repair, before string) (*rewriteAbsorption, *remoteSyncState, error) {
+// stampRemoteSyncPrefix normalizes only the unpublished replay above RemoteTip.
+// Older stages saved raw worker heads and used ambient committers on clean
+// steps. Earlier stage events identify repairs without judging author metadata
+// on the original commits or rerunning an already-gated merge.
+func (l *Loop) stampRemoteSyncPrefix(ctx context.Context, trunk *land.Trunk, st remoteSyncState, at time.Time) (remoteSyncState, error) {
+	repairs := map[string]bool{}
+	if st.FirstConflictParent != "" {
+		s, err := store.OpenRead(ctx, l.cfg.Store)
+		if err != nil {
+			return st, err
+		}
+		defer s.Close()
+		if err := s.ReadTx(ctx, func(r *store.Reader) error {
+			rows, err := r.Query(`SELECT json_extract(payload,'$.conflict_commit') FROM events WHERE kind=? AND object_id=?`, remoteSyncStagedKind, st.ItemID)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var old string
+				if err := rows.Scan(&old); err != nil {
+					return err
+				}
+				repairs[old] = true
+			}
+			return rows.Err()
+		}); err != nil {
+			return st, err
+		}
+	}
+	identity, err := trunk.LandingIdentity()
+	if err != nil {
+		return st, err
+	}
+	root := l.cfg.Root
+	oldParent, parent := st.RemoteTip, st.RemoteTip
+	pairs := make(map[string]string, len(st.ReplayedPairs))
+	for _, old := range st.ReplayedOrder {
+		saved := st.ReplayedPairs[old]
+		if saved == oldParent {
+			// An empty clean replay points at the preceding commit.
+			pairs[old] = parent
+			continue
+		}
+		meta, err := rawGit(ctx, root, nil, "show", "-s", "--format=%P%x00%T%x00%an%x00%ae%x00%cn%x00%ce", saved)
+		if err != nil {
+			return st, err
+		}
+		fields := strings.Split(strings.TrimSuffix(meta, "\n"), "\x00")
+		if len(fields) != 6 || fields[0] != oldParent {
+			return st, Externalf("staged remote-sync commit %s does not follow %s", shortSHA(saved), shortSHA(oldParent))
+		}
+		isRepair := repairs[old]
+		committerMatches := fields[4] == identity.Name && fields[5] == identity.Email
+		authorMatches := fields[2] == identity.Name && fields[3] == identity.Email
+		if parent == oldParent && committerMatches && (!isRepair || authorMatches) {
+			parent = saved
+		} else if isRepair {
+			parent, err = trunk.StampRepair(parent, saved, fields[1], at)
+		} else {
+			parent, err = commitReplay(ctx, trunk, root, fields[1], parent, saved)
+		}
+		if err != nil {
+			return st, err
+		}
+		oldParent, pairs[old] = saved, parent
+	}
+	if oldParent != st.BaseSHA || len(pairs) != len(st.ReplayedPairs) {
+		return st, Externalf("staged remote-sync mappings do not describe the prefix ending at %s", shortSHA(st.BaseSHA))
+	}
+	st.BaseSHA, st.ReplayedPairs = parent, pairs
+	return st, nil
+}
+
+func replayRemoteSyncSuffix(ctx context.Context, trunk *land.Trunk, root string, st remoteSyncState, repair, before string) (*rewriteAbsorption, *remoteSyncState, error) {
 	known := &rewriteAbsorption{
 		Lost: before, Tip: repair, Pairs: make(map[string]string),
 		Order:    append(append([]string{}, st.ReplayedOrder...), st.ConflictCommit),
@@ -238,7 +332,7 @@ func replayRemoteSyncSuffix(ctx context.Context, root string, st remoteSyncState
 			return nil, nil, err
 		}
 		if tree != strings.TrimSpace(currentTree) {
-			known.Tip, err = commitRemoteSyncSuffix(ctx, root, tree, known.Tip, old)
+			known.Tip, err = commitReplay(ctx, trunk, root, tree, known.Tip, old)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -249,7 +343,13 @@ func replayRemoteSyncSuffix(ctx context.Context, root string, st remoteSyncState
 	return known, nil, nil
 }
 
-func commitRemoteSyncSuffix(ctx context.Context, root, tree, parent, old string) (string, error) {
+// commitReplay keeps the original authorship and message, but Tillr is the
+// committer of the replacement. Use the same protected config as a landing.
+func commitReplay(ctx context.Context, trunk *land.Trunk, root, tree, parent, old string) (string, error) {
+	identity, err := trunk.LandingIdentity()
+	if err != nil {
+		return "", err
+	}
 	meta, err := rawGit(ctx, root, nil, "log", "-1", "--date=raw", "--format=%an%x00%ae%x00%ad", old)
 	if err != nil {
 		return "", err
@@ -263,7 +363,9 @@ func commitRemoteSyncSuffix(ctx context.Context, root, tree, parent, old string)
 		return "", err
 	}
 	ct := exec.CommandContext(ctx, "git", "-C", root, "commit-tree", tree, "-p", parent)
-	ct.Env = append(boundaryGitEnv(), "GIT_AUTHOR_NAME="+author[0], "GIT_AUTHOR_EMAIL="+author[1], "GIT_AUTHOR_DATE="+author[2])
+	ct.Env = append(boundaryGitEnv(),
+		"GIT_AUTHOR_NAME="+author[0], "GIT_AUTHOR_EMAIL="+author[1], "GIT_AUTHOR_DATE="+author[2],
+		"GIT_COMMITTER_NAME="+identity.Name, "GIT_COMMITTER_EMAIL="+identity.Email)
 	ct.Stdin = strings.NewReader(msg)
 	var stderr strings.Builder
 	ct.Stderr = &stderr
@@ -314,14 +416,14 @@ func (l *Loop) publishRemoteSyncReplay(ctx context.Context, itemID string, res h
 	}
 }
 
-func (l *Loop) recordRemoteSyncLanding(ctx context.Context, c Candidate, before, after, tree string, verdict land.Verdict) error {
+func (l *Loop) recordRemoteSyncLanding(ctx context.Context, c Candidate, before, after, repair, tree string, verdict land.Verdict) error {
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
-		_, err := land.RecordReplayLanding(ctx, tx, c.ItemID, c.RunID, before, after, c.HeadSHA, c.BaseSHA, tree, verdict, l.cfg.Now())
+		_, err := land.RecordReplayLanding(ctx, tx, c.ItemID, c.RunID, before, after, c.HeadSHA, repair, c.BaseSHA, tree, verdict, l.cfg.Now())
 		return err
 	})
 }
