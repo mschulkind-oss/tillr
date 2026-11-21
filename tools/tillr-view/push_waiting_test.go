@@ -5,6 +5,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 func pushWaitingRow(t *testing.T, h *serveHarness, payload, tip string) waitingRow {
@@ -102,6 +104,37 @@ func TestWaitingRetriedConflictStillNeedsYou(t *testing.T) {
 				t.Fatalf("want %q in CLI output: %s", want, text.String())
 			}
 		})
+	}
+}
+
+func TestWaitingAndStatusClearReconciledRepair(t *testing.T) {
+	h := newServeHarness(t)
+	pushWaitingRow(t, h, `{"action":"push","what":"tip","kind":"remote-sync-conflict","detail":"sync-remote-a","escalated_mover":"owner","since_ts":"2026-11-21T00:00:00Z"}`, "a")
+	h.exec(`INSERT INTO events(ts,kind,object_type,object_id,payload) VALUES
+ (1700000001000,'drain.post-landing-action','landing','a','{"action":"push","what":"tip","kind":"remote-sync-cleared","detail":""}')`)
+	ctx := context.Background()
+	rows, err := readWaiting(ctx, h.store, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.Observation == "post-landing:push" {
+			t.Errorf("resolved repair left a waiting row: %+v", row)
+		}
+	}
+	s, err := store.OpenRead(ctx, h.store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.ReadTx(ctx, func(r *store.Reader) error {
+		p := readPushSummary(ctx, r, "")
+		if p.What != "tip" || p.StateKind != "" || p.Mover != "" || p.Detail != "" || p.Since != "" || p.text() != "" {
+			t.Errorf("resolved repair leaked into status: %+v", p)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

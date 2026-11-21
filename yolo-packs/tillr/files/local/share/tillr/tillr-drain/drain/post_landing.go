@@ -334,7 +334,14 @@ var errAlreadyPublished = errors.New("remote already holds the green commit")
 
 // recordPush records and logs the outcome of the push turn, after any replay and retry.
 func (l *Loop) recordPush(ctx context.Context, what, tip string, failure error) (PushOutcome, error) {
-	if errors.Is(failure, errAlreadyPublished) {
+	conflict, err := l.activeRemoteSyncConflict(ctx)
+	if err != nil {
+		l.reportf("loop: reading active remote-sync repair after push: %v\n", err)
+		return PushOutcome{}, err
+	}
+	if conflict != nil {
+		failure = conflict
+	} else if errors.Is(failure, errAlreadyPublished) {
 		return l.recordPushState(ctx, what, tip, pushKindOK, nil, nil)
 	}
 	kind, state := pushKindOK, (*pushStateError)(nil)
@@ -347,6 +354,8 @@ func (l *Loop) recordPush(ctx context.Context, what, tip string, failure error) 
 	}
 	if kind == pushKindProving {
 		l.reportf("loop: push of %s %s waits for proof: %s\n", what, shortSHA(tip), failure)
+	} else if kind == pushKindConflict && state != nil && state.escalated == "" {
+		l.reportf("loop: push of %s %s waits for conflict repair: %s\n", what, shortSHA(tip), strings.Join(strings.Fields(failure.Error()), " "))
 	} else if failure != nil {
 		l.reportf("loop: push of %s %s failed as %s (%s; the loop goes on): %s\n", what, shortSHA(tip), kind, retry, strings.Join(strings.Fields(failure.Error()), " "))
 	} else {

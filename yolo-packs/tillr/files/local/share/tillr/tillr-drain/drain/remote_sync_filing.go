@@ -247,7 +247,7 @@ func (l *Loop) fileOrUpdateRemoteSyncItem(ctx context.Context, st remoteSyncStat
 	defer s.Close()
 
 	var created bool
-	var who, reason string
+	var conflict *pushStateError
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
 		previous, found, err := readRemoteSyncState(tx.Reader(), st.ItemID)
 		if err != nil {
@@ -264,10 +264,11 @@ func (l *Loop) fileOrUpdateRemoteSyncItem(ctx context.Context, st remoteSyncStat
 			}
 			created = true
 		}
-		wait, _, err := item.ReadWaitingOn(tx.Reader(), st.ItemID)
-		if wait != nil && wait.Waiter == "owner" {
-			who, reason = wait.Waiter, wait.Reason
+		var state string
+		if err := tx.QueryRow(`SELECT state FROM items WHERE item_id=?`, st.ItemID).Scan(&state); err != nil {
+			return err
 		}
+		conflict, err = readRemoteSyncConflict(tx.Reader(), st, state)
 		return err
 	})
 	if err != nil {
@@ -276,7 +277,7 @@ func (l *Loop) fileOrUpdateRemoteSyncItem(ctx context.Context, st remoteSyncStat
 	if created {
 		l.reportf("loop: filed %s for rebase conflict onto %s on %s\n", st.ItemID, remoteSyncDestination(st), strings.Join(st.ConflictPaths, ", "))
 	}
-	return remoteSyncConflictError(st, who, reason), nil
+	return conflict, nil
 }
 
 func (l *Loop) fileRemoteSyncStep(ctx context.Context, tx *store.Tx, st remoteSyncState) error {

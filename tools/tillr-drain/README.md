@@ -2895,7 +2895,11 @@ item is blocked on the owner. Once dispatched, the repair follows generated-item
 obstacle routing: it can widen its fence over permissible paths, or escalate the
 conflict to the owner or operator. An identical repeated refusal holds the repair
 for the operator to reconcile `main` with the staged remote tip; there is no item
-block to amend. The filer does not move main, green or the main checkout. The live
+block to amend. While the repair is open, push turns report its current mover
+as `remote-sync-conflict`, including failed fetches and already-published green
+commits. If the operator reconciles `main` by hand, the next sweep closes the
+repair and records `remote-sync-cleared` once without publishing or recording a
+landing. The filer does not move main, green or the main checkout. The live
 refused-push path does not yet call the filer.
 
 Set-aside also writes `runs/<run>-set-aside-base`, a pointer to the lane's reset
