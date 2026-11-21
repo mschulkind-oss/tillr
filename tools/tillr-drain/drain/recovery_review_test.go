@@ -20,6 +20,7 @@ func TestExaminePreparesThenJudgesUnrecordedTerminalCandidate(t *testing.T) {
 
 func TestExamineReleasesInvalidatedWorkflowWithoutJudgment(t *testing.T) {
 	f, l, steps := restartGraphFixture(t)
+	l.pollOnly = true // Leave terminal work for a later explicit examination.
 	result := &LoopResult{}
 	for i := 0; i < 5; i++ {
 		graphPass(t, l, result)

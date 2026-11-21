@@ -54,6 +54,11 @@ func (s *dirtyWorkflowContinuationSteps) Run(ctx context.Context, req run.Reques
 
 	idx := len(s.briefs) - 1
 	if idx >= len(s.cases) {
+		// A fresh plan turn that commits must opt into the quick way again;
+		// the interrupted run's marker belongs to its own run directory.
+		if req.Seat == "plan" && len(s.cases) > 0 && s.cases[len(s.cases)-1].quickWay {
+			writeForkFile(s.t, filepath.Join(nodeOutputsDir(s.f.root, req.RunID), quickWayFile), "do-it-now\n")
+		}
 		return s.restartWorkflowSteps.Run(ctx, req)
 	}
 
@@ -222,11 +227,15 @@ func TestRepeatingAndSignaledWorkflowNodesWithDirtyWorktreePreserveAndContinue(t
 
 	t.Run("quick_way_plan_node", func(t *testing.T) {
 		f, l, ws := workflowLoopFixture(t, "")
+		l.pollOnly = true // Inspect preserved work before a successful landing prunes it.
 		writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/scout-then-build@v1.json"), `{"name":"scout-then-build","version":1,"stages":[{"id":"plan","kind":"agent","seat":"plan","access":"read_only"},{"id":"work","kind":"agent","seat":"build","access":"write"}],"edges":[{"from_node":"plan","to_node":"work"}]}`)
 		runGit(t, f.root, "add", ".")
 		runGit(t, f.root, "commit", "-qm", "plan then work")
 		fixtureWrite(t, f, func(tx *store.Tx) error {
-			_, err := tx.Exec(`UPDATE items SET state='closed' WHERE item_id='item-b'`)
+			if _, err := tx.Exec(`UPDATE items SET state='closed' WHERE item_id='item-b'`); err != nil {
+				return err
+			}
+			_, err := tx.Exec(`UPDATE items SET allowed_paths='["tools/item-a/","base.txt"]' WHERE item_id='item-a'`)
 			return err
 		})
 		l.cfg.Policy.Seats["plan"] = "fixture"
