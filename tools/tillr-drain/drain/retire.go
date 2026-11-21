@@ -34,7 +34,13 @@ func (l *Loop) prepareCandidate(ctx context.Context, candidate Candidate, retire
 	}
 	mirrored, err := l.stagePackMirror(ctx, candidate)
 	if err != nil {
-		return candidate, err
+		if ctx.Err() != nil {
+			return candidate, ctx.Err()
+		}
+		if err := l.holdItemFault(ctx, candidate, ReasonPackSyncFailed, err.Error()); err != nil {
+			return candidate, err
+		}
+		return candidate, errItemFaultHeld
 	}
 	var retired bool
 	if retireBlock {

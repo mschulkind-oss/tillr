@@ -47,6 +47,7 @@ var Rules = map[string]Rule{
 	// what it answered, an Externalf from Steps.Gate), and holds recorded before 2026-11-18.
 	"gate-harness-error":          {"needs you", "gate", "diagnose the gate and clear the fault; or tillr drain retry naming the held run, which supersedes its candidate"},
 	"land-harness-error":          {"needs you", "land", "repair what the lander refused and clear the fault; or tillr drain retry naming the held run, which supersedes its candidate"},
+	"pack-sync-failed":            {"needs you", "lane", "fix the mirror regeneration error and clear the fault; or tillr drain retry naming the held run, which supersedes its candidate"},
 	"host-boundary-violation":     {"needs you", "fence", "inspect the recorded violation and clear the fault"},
 	"candidate-record-mismatch":   {"needs you", "lane", "restore the recorded candidate and clear the fault; or tillr drain retry naming the held run, which supersedes its candidate"},
 	"definition-sync-failed":      {"needs you", "queue", "correct the item's block on the trunk as the detail says; the next document sync applies it and ends the hold"},
