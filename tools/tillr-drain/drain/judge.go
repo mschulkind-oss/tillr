@@ -192,15 +192,20 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		if evalStatErr != nil && !evalMissing {
 			return c, false, evalStatErr
 		}
-		if evalMissing && rec != nil && judgeBackendFailure(c, *rec, logTail(rec.ArtifactRefs)) {
-			if err := l.holdJudgeInfrastructure(ctx, c, receipt, *rec, logTail(rec.ArtifactRefs)); err != nil {
+		quotaRefusal := rec != nil && judgeQuotaRefusal(*rec)
+		if evalMissing && rec != nil && (quotaRefusal || judgeBackendFailure(c, *rec, logTail(rec.ArtifactRefs))) {
+			if quotaRefusal {
+				if err := l.recordBackendWindow(ctx, *rec); err != nil {
+					return c, false, err
+				}
+			} else if err := l.holdJudgeInfrastructure(ctx, c, receipt, *rec, logTail(rec.ArtifactRefs)); err != nil {
 				return c, false, err
 			}
-			shut, err := l.judgeQuotaShutBackends(ctx)
+			open, err := l.recordedBackendOpen(ctx, receipt.Request.Backend)
 			if err != nil {
 				return c, false, err
 			}
-			if shut[receipt.Request.Backend] {
+			if !open {
 				return c, false, errJudgeBackendHeld
 			}
 			if err := l.restoreJudgeInputs(c, receipt); err != nil {
@@ -209,7 +214,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			req := receipt.Request
 			req.RunID = markRunID(req.RunID, "restart")
 			req.SessionTurn, req.ResumePrompt = false, ""
-			if receipt.JudgeSession != "" && canResumeInfrastructure(rec, &req) {
+			if !quotaRefusal && receipt.JudgeSession != "" && canResumeInfrastructure(rec, &req) {
 				replacementSession = receipt.JudgeSession
 				req.SessionTurn = true
 				req.ResumePrompt = "The backend has recovered. Continue reviewing the same candidate and write the verdict."
@@ -218,11 +223,11 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			receipt = nil
 		} else if evalMissing && rec != nil && ClassifyAttempt(*rec, logTail(rec.ArtifactRefs)) == AttemptInterrupted {
 			if c.Evaluator == nil {
-				shut, err := l.judgeQuotaShutBackends(ctx)
+				open, err := l.recordedBackendOpen(ctx, receipt.Request.Backend)
 				if err != nil {
 					return c, false, err
 				}
-				if shut[receipt.Request.Backend] {
+				if !open {
 					return c, false, errJudgeBackendHeld
 				}
 			}
@@ -460,11 +465,11 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 					return c, false, errRestartPending
 				}
 				if c.Evaluator == nil {
-					shut, err := l.judgeQuotaShutBackends(ctx)
+					open, err := l.recordedBackendOpen(ctx, receipt.Request.Backend)
 					if err != nil {
 						return c, false, err
 					}
-					if shut[receipt.Request.Backend] {
+					if !open {
 						return c, false, errJudgeBackendHeld
 					}
 				}
@@ -473,6 +478,14 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				replacementRequest = &req
 				receipt = nil
 				continue
+			}
+		}
+		if len(receipt.Raw) == 0 && judgeQuotaRefusal(judgeRec) {
+			if _, err := os.Lstat(outputPath); os.IsNotExist(err) {
+				if err := l.recordBackendWindow(ctx, judgeRec); err != nil {
+					return c, false, err
+				}
+				return c, false, errJudgeBackendHeld
 			}
 		}
 		if len(receipt.Raw) == 0 && judgeRec.RunID != "" && judgeBackendFailure(c, judgeRec, judgeLog) {
@@ -931,19 +944,9 @@ func (l *Loop) judgeEvalOutputPath(laneID, runID string) string {
 	return filepath.Join(run.DurableDir(l.laneDirPath(laneID), runID), "eval.output")
 }
 
-func (l *Loop) judgeQuotaShutBackends(ctx context.Context) (map[string]bool, error) {
-	db, err := store.OpenRead(ctx, l.cfg.Store)
-	if err != nil {
-		return nil, err
-	}
-	defer db.Close()
-	var shut map[string]bool
-	err = db.ReadTx(ctx, func(r *store.Reader) error {
-		var e error
-		shut, e = readQuotaShutBackends(r, l.cfg.Now(), l.currentPolicy())
-		return e
-	})
-	return shut, err
+func judgeQuotaRefusal(rec run.Record) bool {
+	_, _, _, refused := refusedWindow(rec)
+	return rec.Backend != "command" && refused
 }
 
 // An exited workflow evaluator is judged from its verdict file, not its
@@ -953,9 +956,6 @@ func judgeBackendFailure(c Candidate, rec run.Record, log string) bool {
 }
 
 func (l *Loop) holdJudgeInfrastructure(ctx context.Context, c Candidate, receipt *JudgeReceipt, rec run.Record, log string) error {
-	if err := l.recordBackendWindow(ctx, rec); err != nil {
-		return err
-	}
 	d := Decision{ItemID: c.ItemID, LaneID: c.LaneID, Seat: "review", RunRequest: &receipt.Request}
 	_, err := l.recordInfrastructureFailure(ctx, d, rec, log)
 	return err

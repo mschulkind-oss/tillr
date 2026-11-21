@@ -811,16 +811,19 @@ tillr drain probe-backend --store .tillr/store.sqlite3 --backend <name> -- <smok
 ```
 
 A success recorded after the refusal removes its active window so the next pass
-can dispatch held work. A `drain.backend-quota-reopened` event links the refusal
-and the probe. A failed probe leaves the window in place; a new refusal closes
-the backend again. Quota readings and reserve checks still apply.
+can dispatch or resume held work. A `drain.backend-quota-reopened` event links the
+refusal and the probe. Settling that refusal again does not undo the probe. A
+failed probe leaves the window in place; a new refusal closes the backend again.
+Quota readings and reserve checks still apply.
 
 For a single-worker item, a recorded quota refusal stops other live runs on that
 backend through the normal pause request. If the refusing run changed its head or
 left uncommitted paths, it continues under the same run id and attempt in the same
 lane and worktree, without resetting files or spending a retry. Only the completed
 candidate is judged. A first-message refusal that left no work waits for the same
-backend's window and starts a new run, without a continuation message.
+backend's window and starts a new run, without a continuation message. A refused
+conflict-design run or a judge that returned no verdict also starts again only
+on its recorded backend, even if the seat shares work with an open backend.
 
 When the backend is closed, the loop records the paused run in `quota_pauses`, keeps
 its lane and `running` position, and waits rather than exiting. The same backend

@@ -33,7 +33,7 @@ type judgeRouteSteps struct {
 func (s *judgeRouteSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
 	s.runs = append(s.runs, req)
 	target := filepath.Join(s.f.laneRoot, req.LaneID, WorktreeDir)
-	if !strings.HasSuffix(req.RunID, "-judge") && req.NodeID != "evaluate" && !strings.HasSuffix(req.NodeID, "/evaluate") {
+	if req.Node != "judge" && !strings.HasSuffix(req.RunID, "-judge") && req.NodeID != "evaluate" && !strings.HasSuffix(req.NodeID, "/evaluate") {
 		s.order = append(s.order, "worker")
 		if err := os.MkdirAll(filepath.Join(target, "tools/item-a"), 0755); err != nil {
 			return run.Record{}, "", err
@@ -221,6 +221,76 @@ func TestFailedJudgeWaitsAndStartsOnlyOnItsOwnBackend(t *testing.T) {
 		if err := ProbeBackend(ctx, f.storePath, f.root, "reviewer", []string{"/bin/true"}); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+type quotaJudgeSteps struct {
+	*judgeRouteSteps
+	reset   time.Time
+	refused bool
+}
+
+func (s *quotaJudgeSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	if (req.Node != "judge" && req.NodeID != "evaluate") || s.refused {
+		return s.judgeRouteSteps.Run(ctx, req)
+	}
+	s.refused = true
+	s.runs = append(s.runs, req)
+	path := filepath.Join(s.t.TempDir(), "judge.report")
+	writeForkFile(s.t, path, fmt.Sprintf("# run report\nrate limit kind: weekly\nfraction: 1\nstatus: rejected\nreset: %d\n---\n", s.reset.Unix()))
+	rec := run.Record{RunID: req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Backend: req.Backend,
+		State: run.StateExited, ExitCode: countPtr(1), StartedAt: "2026-11-15T00:00:00Z", FinishedAt: "2026-11-15T00:00:00Z",
+		ArtifactRefs: []run.ArtifactRef{{Kind: "report", Ref: path}}}
+	fixtureWrite(s.t, s.f, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
+	return rec, "", nil
+}
+
+func TestQuotaRefusedJudgeWaitsForItsRecordedBackend(t *testing.T) {
+	t.Run("implicit", func(t *testing.T) { checkQuotaRefusedJudge(t, false) })
+	t.Run("evaluator", func(t *testing.T) { checkQuotaRefusedJudge(t, true) })
+}
+
+func checkQuotaRefusedJudge(t *testing.T, evaluator bool) {
+	t.Helper()
+	f, l, steps := judgeRouteFixture(t, "pass")
+	workers, passes := []string{"worker"}, 3
+	if evaluator {
+		writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/scout-then-build@v1.json"), evaluatorWorkflow)
+		runGit(t, f.root, "add", "config/tillr/workflows")
+		runGit(t, f.root, "commit", "-qm", "evaluator workflow")
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			_, err := tx.Exec(`UPDATE items SET workflow='scout-then-build@v1' WHERE item_id='item-a'`)
+			return err
+		})
+		workers, passes = []string{"worker", "worker"}, 8
+	}
+	at := time.Now().UTC()
+	l.cfg.Now = func() time.Time { return at }
+	l.cfg.Steps = &quotaJudgeSteps{judgeRouteSteps: steps, reset: at.Add(time.Hour)}
+	l.cfg.Policy.Backends["alternate"] = l.cfg.Policy.Backends["reviewer"]
+	l.cfg.Policy.SeatLists = map[string][]string{"review": {"reviewer", "alternate"}}
+	l.cfg.Policy.SeatShares = map[string][]float64{"review": {1, 1}}
+	l.cfg.Policy.SeatPicks = map[string]string{"review": "round-robin"}
+	result := &LoopResult{}
+	for i := 0; i < passes; i++ {
+		graphPass(t, l, result)
+	}
+	n := len(workers)
+	if len(steps.runs) != n+1 || steps.runs[n].Backend != "reviewer" || !reflect.DeepEqual(steps.order, workers) {
+		t.Fatalf("quota spent another judge start or discarded the candidate: runs=%+v order=%v", steps.runs, steps.order)
+	}
+	if d := decisionFor(t, l, "item-a").decision; d.Action != ActionHold || d.Reason != ReasonBackendWindow || d.DeferredBy != "reviewer" {
+		t.Fatalf("judge is not waiting for its window: %+v", d)
+	}
+	if err := ProbeBackend(context.Background(), f.storePath, f.root, "reviewer", []string{"/bin/true"}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3 && result.Landed == 0; i++ {
+		graphPass(t, l, result)
+	}
+	if len(steps.runs) != n+2 || steps.runs[n+1].Backend != "reviewer" || steps.runs[n+1].RunID == steps.runs[n].RunID ||
+		!reflect.DeepEqual(steps.order, append(workers, "judge", "gate", "landing")) || result.InfraFailures != 0 {
+		t.Fatalf("judge did not finish on the reopened backend: runs=%+v order=%v infra failures=%d", steps.runs, steps.order, result.InfraFailures)
 	}
 }
 

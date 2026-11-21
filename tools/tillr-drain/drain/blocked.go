@@ -120,6 +120,9 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 
 func (p *planner) failedBackendFor(itemID, runID string) string {
 	if runID != "" {
+		if work := p.designHistory[runID]; work != nil && work.DesignQuotaBackend != "" {
+			return work.DesignQuotaBackend
+		}
 		for _, prior := range p.priors[itemID] {
 			if prior.RunID == runID && prior.BackendFailure {
 				return prior.Backend
@@ -226,6 +229,10 @@ func generatedQuestion(itemID string, o Obstacle) string {
 }
 
 func (l *Loop) saveBlockConflict(ctx context.Context, c item.Conflict) error {
+	return l.saveBlockConflictWithQuota(ctx, c, "")
+}
+
+func (l *Loop) saveBlockConflictWithQuota(ctx context.Context, c item.Conflict, backend string) error {
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return err
@@ -246,6 +253,11 @@ func (l *Loop) saveBlockConflict(ctx context.Context, c item.Conflict) error {
 		}
 		if err := item.RecordConflict(tx, c, l.cfg.Now().UTC()); err != nil {
 			return err
+		}
+		if backend != "" {
+			if err := appendEffect(tx, designQuotaRefusedKind, c.DesignRunID, backend, l.cfg.Now().UTC()); err != nil {
+				return err
+			}
 		}
 		if c.Status == "answered" && isObstacleCallRun(tx.Reader(), c.RunID) {
 			return l.answerLandingRefusal(tx, Candidate{RunID: c.RunID}, refusalPayload{Step: IdenticalRepeatPrefix, Detail: c.Text}, refusalEvidence{}, l.cfg.Now().UTC())

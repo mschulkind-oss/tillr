@@ -34,6 +34,7 @@ const (
 	candidateRetirementKind = "drain.retirement"
 	candidatePreparedKind   = "drain.prepared-candidate"
 	examinationDoneKind     = "drain.examined"
+	designQuotaRefusedKind  = "drain.design-quota-refused"
 	examinationOwnerKind    = "drain.examination.owner"
 	loopOrphanedKind        = "drain.orphaned"
 	// laneReleasedKind records a lane released after its run was examined, for every run,
@@ -44,7 +45,7 @@ const (
 )
 
 func init() {
-	for _, kind := range []string{backendProbeKind, backendOutcomeKind, quotaUpdatedKind, commentReplyStateKind, designerCompactedKind, examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, examinationOwnerKind, loopOrphanedKind, laneReleasedKind, nodeAdvancedKind, graphChangedKind, candidateGatedKind, planQuickWayKind} {
+	for _, kind := range []string{backendProbeKind, backendOutcomeKind, quotaUpdatedKind, commentReplyStateKind, designerCompactedKind, examinationClaimedKind, examinationReleasedKind, dispatchStartedKind, candidateReadyKind, candidateRetirementKind, candidatePreparedKind, examinationDoneKind, designQuotaRefusedKind, examinationOwnerKind, loopOrphanedKind, laneReleasedKind, nodeAdvancedKind, graphChangedKind, candidateGatedKind, planQuickWayKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -78,7 +79,8 @@ type pendingWork struct {
 	NeedsStage     bool           `json:"needs_stage,omitempty"`
 	ReleasePending string         `json:"release_pending,omitempty"`
 
-	ResumeAfterRestart bool `json:"-"`
+	ResumeAfterRestart bool   `json:"-"`
+	DesignQuotaBackend string `json:"-"`
 }
 
 type orphanedRunEffect struct {
@@ -115,6 +117,7 @@ var pendingHistoryKinds = []string{
 	candidateReleaseStartedKind, candidateLaneKind,
 	candidateAssignedKind,
 	candidateStagedKind,
+	designQuotaRefusedKind,
 	examinationDoneKind,
 	candidateDiscardedKind,
 }
@@ -475,6 +478,12 @@ func foldPendingHistory(r *store.Reader, seq int64, s *pendingHistoryState, even
 			if work := byRun[*e.ObjectID]; work != nil {
 				work.NeedsStage = false
 			}
+		case designQuotaRefusedKind:
+			if work := byRun[*e.ObjectID]; work != nil {
+				if err := json.Unmarshal(e.Payload, &work.DesignQuotaBackend); err != nil {
+					return err
+				}
+			}
 		case examinationDoneKind:
 			if work := byRun[*e.ObjectID]; work != nil {
 				work.Done = true
@@ -697,6 +706,17 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 						blocked, open = saved, !shut[saved]
 					}
 				}
+				// A recorded judge request, unlike a fresh draw, waits only for its own backend.
+				var recorded string
+				err := r.QueryRow(`SELECT json_extract(payload,'$.request.backend') FROM events
+					WHERE object_type='run' AND object_id=? AND kind=? ORDER BY seq DESC LIMIT 1`,
+					judgeRunID(work.Candidate.RunID), judgeRequestKind).Scan(&recorded)
+				if err != nil && err != sql.ErrNoRows {
+					return Decision{}, err
+				}
+				if recorded != "" {
+					blocked, open = recorded, !shut[recorded]
+				}
 				failure, err := readRecordedInfrastructureFailure(r, d.ItemID, "$.node", "review:judge")
 				if err != nil {
 					return Decision{}, err
@@ -775,11 +795,13 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 			}
 		}
 		if finished {
-			if evaluatorNode(d) && rec != nil && rec.State == run.StateFailedToStart && shut[d.RunRequest.Backend] {
-				d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
-				d.DeferredBy = d.RunRequest.Backend
-				identifyDecision(&d)
-				return d, nil
+			if evaluatorNode(d) && rec != nil && shut[d.RunRequest.Backend] {
+				if rec.State == run.StateFailedToStart || judgeQuotaRefusal(*rec) {
+					d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
+					d.DeferredBy = d.RunRequest.Backend
+					identifyDecision(&d)
+					return d, nil
+				}
 			}
 			if rec != nil && quotaSingleRun(d) {
 				backend, err := quotaPauseBackend(r, rec.RunID)
