@@ -20,7 +20,7 @@ import { useNow } from "../models/clock";
 import { durationText } from "../models/now";
 import { FALLBACK_POLL_MS } from "../models/queries";
 import type { BoardCounts, BoardFilter, BoardView } from "../models/board";
-import type { ApiEnvelope, LaneView, SnapshotData } from "../models/types";
+import type { ApiEnvelope, LaneView, PushSummary, SnapshotData } from "../models/types";
 import { BackendAlarms } from "./BackendAlarms";
 
 export interface ObservatoryHeaderBarProps {
@@ -107,6 +107,25 @@ export function LoopBand({ drain, now: suppliedNow }: { drain: SnapshotData["dra
     {label}{alive && session ? ` · next pass ${new Date(session.next_pass_at_ms).toLocaleTimeString()}` : null}
     {stop ? <> · stopped since {new Date(stop.at_ms).toISOString()} · {stop.item_id || "no single item (loop-wide)"} · {stop.step} · {stop.sentence} Next: {stop.next}</> : !alive ? <> · {session?.ended_at_ms != null ? `Loop stopped since ${new Date(session.ended_at_ms).toISOString()}` : "Loop unobserved"} · stop explanation not recorded</> : null}
     {repeated ? <> · <strong className="loop-band__repeated">{alive ? "stuck drain (restarted after repeated exits)" : "stuck drain"}: exited {repeated.count} times in a row</strong> ({repeated.reason}{repeated.detail ? `: ${repeated.detail}` : ""}, {new Date(repeated.first_at_ms).toISOString()}..{new Date(repeated.last_at_ms).toISOString()}) · Next: {repeated.next}</> : null}
+  </span>;
+}
+
+/** Keep unpublished work and push holds visible even when the queue is idle. */
+export function PushPill({ push }: { push?: PushSummary }) {
+  if (!push || push.what === "none") return null;
+  const { unpublished_green_count: proven, unpublished_main_count: total, state_kind: state } = push;
+  const hold = state === "push-ok" || state === "remote-sync-cleared" ? undefined : state;
+  if (!hold && !(proven || total)) return null;
+  const counts = `${proven ?? "unknown"} proven of ${total ?? "unknown"} total`;
+  const destination = push.remote && push.ref ? ` to ${push.remote}/${push.ref}` : "";
+  const title = [
+    `${counts} commit(s) unpublished${destination}`,
+    hold ? `state: ${hold}${push.detail ? ` — ${push.detail}` : ""}` : "",
+    hold && push.mover ? `waits on: ${push.mover}` : "",
+    hold && push.since ? `since ${push.since}` : "",
+  ].filter(Boolean).join("\n");
+  return <span className={hold ? "push-pill push-pill--held" : "push-pill"} title={title}>
+    {counts} unpublished{hold ? ` · ${hold}` : ""}
   </span>;
 }
 
@@ -702,6 +721,7 @@ export function ObservatoryHeaderBar({
           <LiveChip live={live} paused={paused} />
           <LoopBand drain={drain} />
           <LanePill lanes={snapshot.data.lanes} />
+          <PushPill push={snapshot.data.push} />
           <PauseControl
             paused={paused}
             onPause={onPause}

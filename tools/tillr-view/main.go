@@ -178,6 +178,9 @@ func statusFaceFormat(args []string, asText *bool) (record.Envelope, int) {
 		err = s.ReadTx(context.Background(), func(r *store.Reader) error {
 			var err error
 			payload.Alarms, err = readAlarms(r, *root, *policy, now)
+			if err == nil && subject == nil {
+				payload.Push = readPushSummary(context.Background(), r, *root)
+			}
 			return err
 		})
 		s.Close()

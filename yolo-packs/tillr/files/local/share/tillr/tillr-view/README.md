@@ -211,6 +211,13 @@ or triage task, not an owner question hidden from Vantage's planning index. Answ
 the saved document and landing that edit releases the question hold on the next sync,
 without a store command.
 
+Store-backed board `status` and `/api/v1/snapshot` include a `push` summary with
+its destination, published SHA, and the newest push hold's kind, detail, mover and
+start time. Counts compare `refs/tillr/green` (proven) and `refs/heads/main`
+(total) with `refs/tillr/published/<remote>/<branch>` in both tip and green mode.
+An unreadable count is null, not zero. `status --text` and the Observatory header
+pill label both counts when a push is held or unpublished commits remain.
+
 `waiting` answers why each unlanded item is not moving, `passes` lists what each planning
 round decided, `lanes` lists every configured lane and its current or last run, and
 `running` answers what is in flight. `status --text` prints a readable summary;

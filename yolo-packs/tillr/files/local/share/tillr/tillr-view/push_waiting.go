@@ -11,6 +11,7 @@ import (
 // before the structured states carry only action, detail and what; Kind is empty for them
 // and they keep the older reading (docs/design/tillr-refused-push.md, Section 7).
 type pushEvent struct {
+	What              string `json:"what"`
 	Kind              string `json:"kind"`
 	Detail            string `json:"detail"`
 	Remote            string `json:"remote"`
