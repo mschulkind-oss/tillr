@@ -276,7 +276,8 @@ func TestAnAgentVerdictOutOfScopeIsRefused(t *testing.T) {
 }
 
 // The independence rule: the actor whose work the criterion judges cannot be the actor
-// issuing the verdict, however good the grant under it is.
+// issuing the verdict, however good the grant under it is
+// (docs/reference/authority-not-approval.md#a-judge-never-judges-its-own-work).
 func TestASelfJudgingVerdictIsRefused(t *testing.T) {
 	db := storedWithCriterion(t, "verdict-self", "open")
 	if code, out := issueGrant(t, db, defaultGrant()); code != 0 {
