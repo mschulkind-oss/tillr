@@ -71,6 +71,7 @@ type startSnapshot struct {
 	hasNodes                          bool
 	attempts, nodeCounts              map[string]int
 	requests, shut, quotaShut         map[string]bool
+	infrastructureClosed              map[string]backendOutcome
 	deskOwners                        map[string]string
 	forks                             []plannedFork
 	nextLeaseExpiry, nextWindowExpiry int64 // Unix milliseconds, zero when none.
@@ -446,11 +447,22 @@ func (s *startSnapshot) refreshLaneFacts(r *store.Reader, at time.Time, leases b
 
 func (s *startSnapshot) refreshBackends(r *store.Reader, at time.Time, policy *Policy) error {
 	var err error
-	if s.shut, err = readQuotaShutBackendsFrom(r, at, policy, s.pending.byRun); err != nil {
+	if s.infrastructureClosed, err = readInfrastructureClosedFrom(r, s.pending.byRun); err != nil {
 		return err
 	}
-	s.quotaShut, err = readQuotaOnlyShut(r, at, policy)
-	return err
+	if s.quotaShut, err = readQuotaOnlyShut(r, at, policy); err != nil {
+		return err
+	}
+	s.shut = withInfrastructureClosed(s.quotaShut, s.infrastructureClosed)
+	return nil
+}
+
+func withInfrastructureClosed(quota map[string]bool, closed map[string]backendOutcome) map[string]bool {
+	shut := maps.Clone(quota)
+	for name := range closed {
+		shut[name] = true
+	}
+	return shut
 }
 
 func (s *startSnapshot) readExpiries(r *store.Reader, at time.Time) error {

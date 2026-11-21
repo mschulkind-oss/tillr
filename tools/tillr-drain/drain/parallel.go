@@ -58,6 +58,10 @@ func (l *Loop) claimParallel(tx *store.Tx, d *Decision) error {
 }
 
 func (l *Loop) claimParallelFrom(tx *store.Tx, d *Decision, byRun map[string]*pendingWork) error {
+	return l.claimParallelWithShut(tx, d, byRun, nil)
+}
+
+func (l *Loop) claimParallelWithShut(tx *store.Tx, d *Decision, byRun map[string]*pendingWork, shut map[string]bool) error {
 	if d.Workflow == nil || evaluatorNode(*d) || d.Workflow.Stages[d.NodeIndex].Access != "read_only" || len(d.Parallel) > 0 {
 		return nil
 	}
@@ -71,9 +75,11 @@ func (l *Loop) claimParallelFrom(tx *store.Tx, d *Decision, byRun map[string]*pe
 	}
 	indices := []int{d.NodeIndex}
 	candidates := []int{}
-	shut, err := readQuotaShutBackendsFrom(tx.Reader(), l.cfg.Now(), l.currentPolicy(), byRun)
-	if err != nil {
-		return err
+	if shut == nil {
+		shut, err = readQuotaShutBackendsFrom(tx.Reader(), l.cfg.Now(), l.currentPolicy(), byRun)
+		if err != nil {
+			return err
+		}
 	}
 	for i, s := range d.Workflow.Stages {
 		if i == d.NodeIndex || s.ID == evaluatorSlot(d.Workflow) || outcomes[s.ID] != "" || s.Access != "read_only" {

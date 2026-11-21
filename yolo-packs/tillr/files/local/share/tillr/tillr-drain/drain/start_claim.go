@@ -44,6 +44,23 @@ func (s startSnapshot) snapshotForClaim(r *store.Reader) (startClaimSnapshot, er
 	return startClaimSnapshot{head, pending, faults.Resolve(byReason)}, nil
 }
 
+func (l *Loop) fastStartBase(ctx context.Context, r *store.Reader, proposal startSnapshot, itemID string, continuing bool) (base string, ready bool, err error) {
+	base = proposal.tip
+	if !l.nonLanding && !IsTrunkFixer(itemID) && proposal.green != "" {
+		// The content version binds these edges and the blockers' states.
+		edges := map[string][]string{itemID: proposal.edges[itemID]}
+		waits, err := unprovedBlockers(ctx, r, l.cfg.Root, proposal.green, proposal.states, edges)
+		if err != nil || waits[itemID] {
+			return "", false, err
+		}
+		if !continuing {
+			base, err = blockBaseAt(ctx, r, l.cfg.Root, proposal.green, proposal.tip, itemID)
+			return base, err == nil, err
+		}
+	}
+	return base, true, nil
+}
+
 // claimFastStart records a proposed dispatch but never stages it.
 func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startSnapshot, e startViewEntry, at time.Time) (bool, *pendingWork, string, Decision, error) {
 	d := e.decision
@@ -64,26 +81,50 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 	prepared := d
 	var designBase string
 	var designErr error
-	err = reader.ReadTx(ctx, func(r *store.Reader) error {
+	closed := proposal.infrastructureClosed
+	gctx, facts := gatheringFor(ctx)
+	err = reader.ReadTx(gctx, func(r *store.Reader) error {
 		var err error
 		snap, err = proposal.snapshotForClaim(r)
 		if err != nil {
 			return err
 		}
-		// The retained-session helper reads adapter files directly. Do it in
-		// the read phase; the write binds the same pending history and item.
-		if d.BlockConflict != nil {
-			designErr = l.prepareDesignContinuation(ctx, r, &prepared, snap.pending.byRun[d.BlockConflict.DesignRunID], &designBase)
-		}
-		if !l.nonLanding || d.Inputs == nil {
-			return nil
-		}
-		row, found, err := readItemByID(r, d.ItemID)
-		if err != nil || !found {
+		changed, err := backendAvailabilityChanged(r, proposal.lastEventSeq)
+		if err != nil {
 			return err
 		}
-		plainInputs, err = currentRunInputs(ctx, r, row, policy, l.cfg.Root, l.build)
-		return err
+		if !changed {
+			changed, err = pendingHistoryChanged(r, proposal.lastEventSeq)
+			if err != nil {
+				return err
+			}
+		}
+		if changed {
+			if closed, err = readInfrastructureClosedFrom(r, snap.pending.byRun); err != nil {
+				return err
+			}
+		}
+		// Populate the I/O keys against the observed tip. The writer still
+		// validates its own rows, and writeGatheredFrom handles any misses.
+		work := snap.pending.works[d.ItemID]
+		_, _, _ = l.fastStartBase(gctx, r, proposal, d.ItemID, work != nil && (work.Ready || d.WorkflowRestart))
+		if d.BlockConflict != nil {
+			designErr = l.prepareDesignContinuation(gctx, r, &prepared, snap.pending.byRun[d.BlockConflict.DesignRunID], &designBase)
+		}
+		if d.Inputs != nil {
+			row, found, err := readItemByID(r, d.ItemID)
+			if err != nil || !found {
+				return err
+			}
+			plainInputs, err = currentRunInputs(gctx, r, row, policy, l.cfg.Root, l.build)
+			if l.nonLanding {
+				return err
+			}
+			if err == nil && *plainInputs != *d.Inputs {
+				_, _ = l.revParse(gctx, l.cfg.Root, TrunkRef)
+			}
+		}
+		return nil
 	})
 	reader.Close()
 	if err != nil {
@@ -102,7 +143,7 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 	var claimed *pendingWork
 	// Any Git/file fact a validation needs is fetched by writeGathered only
 	// after rolling back. The next attempt rechecks the SQLite facts.
-	err = writeGathered(ctx, s, func(ctx context.Context, tx *store.Tx) error {
+	err = writeGatheredFrom(ctx, s, facts, func(ctx context.Context, tx *store.Tx) error {
 		claimed = nil
 		r := tx.Reader()
 		current, err := currentDefinition(r, plannedApplication{definitionSHA: proposal.definitionSHA})
@@ -110,6 +151,10 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 			return err
 		}
 		changed, err := pendingHistoryChanged(r, snap.head)
+		if err != nil || changed {
+			return err
+		}
+		changed, err = backendAvailabilityChanged(r, snap.head)
 		if err != nil || changed {
 			return err
 		}
@@ -234,20 +279,9 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 			}
 		}
 
-		base := proposal.tip
-		if !l.nonLanding && !IsTrunkFixer(d.ItemID) && proposal.green != "" {
-			// The content version binds these edges and the blockers' states.
-			edges := map[string][]string{d.ItemID: proposal.edges[d.ItemID]}
-			waits, err := unprovedBlockers(ctx, r, l.cfg.Root, proposal.green, proposal.states, edges)
-			if err != nil || waits[d.ItemID] {
-				return err
-			}
-			if !continuing {
-				base, err = blockBaseAt(ctx, r, l.cfg.Root, proposal.green, proposal.tip, d.ItemID)
-				if err != nil {
-					return err
-				}
-			}
+		base, ready, err := l.fastStartBase(ctx, r, proposal, d.ItemID, continuing)
+		if err != nil || !ready {
+			return err
 		}
 		if continuing {
 			base = work.BaseSHA
@@ -259,15 +293,20 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 			base = designBase
 		}
 		d := prepared
-		shut, err := readDispatchShutFrom(r, l.cfg.Now(), policy, d, byRun)
+		quota, err := readQuotaOnlyShut(r, l.cfg.Now(), policy)
 		if err != nil {
 			return err
+		}
+		parallelShut := withInfrastructureClosed(quota, closed)
+		shut := parallelShut
+		if d.Action == ActionRetry {
+			shut = quota // An owner-authorized retry may test a closed backend.
 		}
 		open, err := dispatchQuotaOpen(r, d, shut, policy)
 		if err != nil || !open || (d.DesignContinuationFrom != "" && d.RunRequest.SessionTurn && shut[d.RunRequest.Backend]) {
 			return err
 		}
-		claimed, err = l.recordFastStart(ctx, tx, d, base, fork, owner, byRun, policy, shut, at)
+		claimed, err = l.recordFastStart(ctx, tx, d, base, fork, owner, byRun, policy, shut, parallelShut, at)
 		return err
 	})
 	if errors.Is(err, errSeatWindowClosed) {
@@ -287,7 +326,7 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 	return true, claimed, claimed.Decision.PassID, claimed.Decision, nil
 }
 
-func (l *Loop) recordFastStart(ctx context.Context, tx *store.Tx, d Decision, base, fork string, owner *presence.Owner, byRun map[string]*pendingWork, policy *Policy, shut map[string]bool, at time.Time) (*pendingWork, error) {
+func (l *Loop) recordFastStart(ctx context.Context, tx *store.Tx, d Decision, base, fork string, owner *presence.Owner, byRun map[string]*pendingWork, policy *Policy, shut, parallelShut map[string]bool, at time.Time) (*pendingWork, error) {
 	if d.BlockConflict != nil {
 		c := *d.BlockConflict
 		c.Status, c.DesignRunID = "awaiting", d.RunRequest.RunID
@@ -339,7 +378,7 @@ func (l *Loop) recordFastStart(ctx context.Context, tx *store.Tx, d Decision, ba
 	if err := carryRetainedReaders(tx, d); err != nil {
 		return nil, err
 	}
-	if err := l.claimParallelFrom(tx, &d, byRun); err != nil {
+	if err := l.claimParallelWithShut(tx, &d, byRun, parallelShut); err != nil {
 		return nil, err
 	}
 	nodes := parallelNodes(d)

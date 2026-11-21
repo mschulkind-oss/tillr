@@ -2,6 +2,8 @@ package drain
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -24,7 +26,7 @@ func claimFixture(t *testing.T, l *Loop) (*startView, startSnapshot, startViewEn
 }
 
 func TestFastStartHoldBeforeClaimCancelsStart(t *testing.T) {
-	for _, change := range []string{"local hold", "fault", "criterion", "occupied lane", "closed backend"} {
+	for _, change := range []string{"local hold", "fault", "criterion", "occupied lane", "closed backend", "new infrastructure ending", "infrastructure ending after read"} {
 		t.Run(change, func(t *testing.T) {
 			ctx := context.Background()
 			f, l := passFixture(t, "item-a")
@@ -41,6 +43,11 @@ func TestFastStartHoldBeforeClaimCancelsStart(t *testing.T) {
 					_, err := tx.Exec(`UPDATE item_criteria SET text='amended criterion' WHERE item_id='item-a' AND criterion_id='c1'`)
 					return err
 				})
+			case "new infrastructure ending":
+				backendRun(t, f, "broken", "fixture", 2)
+			case "infrastructure ending after read":
+				pendingDeltaFoldHook = func() { backendRun(t, f, "broken", "fixture", 2) }
+				t.Cleanup(func() { pendingDeltaFoldHook = nil })
 			case "closed backend":
 				fixtureWrite(t, f, func(tx *store.Tx) error {
 					_, err := tx.Exec(`INSERT INTO backend_windows VALUES ('fixture','weekly',1,'rejected',?,'refused')`, l.cfg.Now().Add(time.Hour).UnixMilli())
@@ -54,17 +61,55 @@ func TestFastStartHoldBeforeClaimCancelsStart(t *testing.T) {
 			}
 			before := eventCount(t, f.storePath)
 			ok, work, gen, _, err := l.claimFastStart(ctx, v, s, e, l.cfg.Now())
-			if err != nil || ok || work != nil || gen != "" || eventCount(t, f.storePath) != before {
+			if err != nil || ok || work != nil || gen != "" || (change != "infrastructure ending after read" && eventCount(t, f.storePath) != before) {
 				t.Fatalf("declined claim changed the store or returned a claim: ok=%v work=%v gen=%q err=%v", ok, work, gen, err)
+			}
+			if change == "infrastructure ending after read" {
+				fixtureRead(t, f, func(r *store.Reader) error {
+					changed, err := pendingHistoryChanged(r, s.lastEventSeq)
+					if err != nil {
+						return err
+					}
+					if changed {
+						t.Error("race changed pending history; this case must exercise the backend guard")
+					}
+					closed, err := readInfrastructureClosed(r)
+					if err == nil && !closed["fixture"] {
+						t.Error("race did not close the backend")
+					}
+					starts, readErr := r.EventsOfKind(0, dispatchStartedKind)
+					if len(starts) != 0 {
+						t.Errorf("recorded %d dispatches for a closed backend", len(starts))
+					}
+					if err != nil {
+						return err
+					}
+					return readErr
+				})
 			}
 		})
 	}
 }
 
 func TestClaimFastStartReadsNoWholeLogAndFoldsNothingUnderTheWriteLock(t *testing.T) {
-	f, l := passFixture(t, "item-a")
+	f, l := passFixture(t, "item-b")
+	green := runGit(t, f.root, "rev-parse", TrunkRef)
+	runGit(t, f.root, "update-ref", GreenRef, green)
+	brief := "briefs/item-b.md"
+	if err := os.MkdirAll(filepath.Join(f.root, "briefs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(f.root, brief), "Decided request.\n")
+	runGit(t, f.root, "add", brief)
+	runGit(t, f.root, "commit", "-qm", "observed trunk")
+	backendRun(t, f, "answered", "fixture", 0)
 	v, s, e := claimFixture(t, l)
-	runGit(t, f.root, "commit", "--allow-empty", "-qm", "later trunk")
+	if s.green != green || s.tip == green {
+		t.Fatalf("test needs distinct green and tip: green=%q tip=%q", s.green, s.tip)
+	}
+	writeForkFile(t, filepath.Join(f.root, brief), "Newer request.\n")
+	runGit(t, f.root, "add", brief)
+	runGit(t, f.root, "commit", "-qm", "later trunk")
 	workerRecordFlood(t, f, 200)
 	deltas, underWrite := 0, 0
 	pendingDeltaFoldHook = func() {
@@ -75,8 +120,13 @@ func TestClaimFastStartReadsNoWholeLogAndFoldsNothingUnderTheWriteLock(t *testin
 	}
 	t.Cleanup(func() { pendingDeltaFoldHook = nil })
 	wholeBefore, foldsBefore := store.WholeLogReadsUnderWrite(), pendingFolds.Load()
-	ok, work, gen, d, err := l.claimFastStart(context.Background(), v, s, e, l.cfg.Now())
-	if err != nil || !ok || work == nil || gen == "" || d.ItemID != "item-a" || d.LaneID != "lane-1" || work.BaseSHA != s.tip {
+	readsBefore, writesBefore := backendOutcomesReads.Load(), backendOutcomesUnderWrite.Load()
+	var fetches []string
+	writeGatheredHooks.Fetch = func(key string) { fetches = append(fetches, key) }
+	t.Cleanup(func() { writeGatheredHooks.Fetch = nil })
+	ctx := context.Background()
+	ok, work, gen, d, err := l.claimFastStart(ctx, v, s, e, l.cfg.Now())
+	if err != nil || !ok || work == nil || gen == "" || d.ItemID != "item-b" || d.LaneID != "lane-1" || work.BaseSHA != s.tip {
 		t.Fatalf("unexpected claim: ok=%v work=%+v gen=%q d=%+v err=%v", ok, work, gen, d, err)
 	}
 	if n := store.WholeLogReadsUnderWrite() - wholeBefore; n != 0 {
@@ -87,6 +137,44 @@ func TestClaimFastStartReadsNoWholeLogAndFoldsNothingUnderTheWriteLock(t *testin
 	}
 	if deltas == 0 || underWrite != 0 {
 		t.Errorf("observed %d pending delta folds, %d under the write lock; want a read-side fold only", deltas, underWrite)
+	}
+	if reads, writes := backendOutcomesReads.Load()-readsBefore, backendOutcomesUnderWrite.Load()-writesBefore; reads != 0 || writes != 0 {
+		t.Errorf("claim scanned backend outcomes %d times, %d under the write lock", reads, writes)
+	}
+	if len(fetches) != 0 {
+		t.Errorf("claim retried the write to gather %v", fetches)
+	}
+
+	// Positive controls: observe an actual history scan and an actual gather miss.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		reads, writes := backendOutcomesReads.Load(), backendOutcomesUnderWrite.Load()
+		outcomes, err := readBackendOutcomes(tx.Reader())
+		if err == nil && (len(outcomes) == 0 || backendOutcomesReads.Load() != reads+1 || backendOutcomesUnderWrite.Load() != writes+1) {
+			t.Error("backend scan counters did not see the control")
+		}
+		return err
+	})
+	fetches = nil
+	err = writeGathered(ctx, gatheredStore(t), func(ctx context.Context, _ *store.Tx) error {
+		_, err := gather(ctx, "control", func(context.Context) (string, error) { return "ok", nil })
+		return err
+	})
+	if err != nil || len(fetches) != 1 || fetches[0] != "control" {
+		t.Errorf("gather miss control: fetches=%v err=%v", fetches, err)
+	}
+}
+
+func TestClaimFastStartParallelReadersReuseAvailability(t *testing.T) {
+	f, l, _ := parallelFixture(t)
+	unsavedApplicationOutcome(t, f, l)
+	v, s, e := claimFixture(t, l)
+	reads := backendOutcomesReads.Load()
+	ok, work, _, _, err := l.claimFastStart(context.Background(), v, s, e, l.cfg.Now())
+	if err != nil || !ok || work == nil || len(work.Decision.Parallel) == 0 {
+		t.Fatalf("parallel claim: %v %+v %v", ok, work, err)
+	}
+	if n := backendOutcomesReads.Load() - reads; n != 0 {
+		t.Errorf("parallel claim scanned backend outcomes %d times", n)
 	}
 }
 
