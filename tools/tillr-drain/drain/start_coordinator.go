@@ -70,6 +70,12 @@ func (l *Loop) runFastStart(ctx context.Context, view *startView, result *LoopRe
 			}
 		}
 		mechCtx, unlock, err := l.lockRestartMechanical(ctx)
+		if errors.Is(err, errRestartPending) {
+			// A pending request may be refused or become deferred. Do not
+			// shut down starts until the loop itself ends.
+			rejected = snapshot
+			continue
+		}
 		if err != nil {
 			l.reportStartError(ctx, d, err)
 			return

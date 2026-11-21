@@ -512,6 +512,7 @@ type Loop struct {
 	restartMu                   sync.Mutex
 	restartReplaced             bool
 	restartMechanical           sync.RWMutex
+	restartSettlements          atomic.Int32 // admitted gate/landing holds currently blocking exec
 	heavyMu                     sync.Mutex
 	fixerWaitMu                 sync.Mutex
 	heavyWG                     sync.WaitGroup
@@ -2971,16 +2972,16 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	if err != nil {
 		return "", false, err
 	}
+	ctx, unlock, err := l.lockRestartSettlement(ctx)
+	if err != nil {
+		return "", false, err
+	}
+	defer unlock()
 	l.mu.Lock()
 	l.gatesInFlight++
 	l.mu.Unlock()
 	candidate.gateCount = l.gateCount
 	candidate.deferGateJudgment = IsTrunkFixer(candidate.ItemID)
-	ctx, unlock, err := l.lockRestartMechanical(ctx)
-	if err != nil {
-		return "", false, err
-	}
-	defer unlock()
 	gate, err := l.cfg.Steps.Gate(ctx, candidate)
 	l.mu.Lock()
 	stalledGateCount := l.gatesInFlight
@@ -3122,7 +3123,7 @@ func (l *Loop) candidateInItsLane(ctx context.Context, candidate Candidate) erro
 // landCandidate retries a retained, already-gated tree without another run or gate.
 // Land still validates the verdict's tree binding and recomputes the squash.
 func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *LoopResult, timing *PassTiming) (string, bool, error) {
-	ctx, unlock, lockErr := l.lockRestartMechanical(ctx)
+	ctx, unlock, lockErr := l.lockRestartSettlement(ctx)
 	if lockErr != nil {
 		return "", false, lockErr
 	}
