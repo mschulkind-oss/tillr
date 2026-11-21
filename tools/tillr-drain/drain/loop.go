@@ -880,9 +880,21 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	root, questionsCmd := l.cfg.Root, l.cfg.QuestionsCmd
 	var follower startStoreSync
 	defer follower.close() // stop and join the watcher before closing its connection
-	stopView := shadow.watch(ctx, startViewRefreshInterval, func(ctx context.Context) (startSnapshot, error) {
+	stopView := shadow.watch(ctx, startViewRefreshInterval, func(ctx context.Context) startWatcher {
+		paths := startWatchPaths{root: root, store: shadowTick.StorePath, index: QuestionsIndexFile(root)}
+		if root != "" {
+			gitDir, _ := l.git(ctx, root, "rev-parse", "--absolute-git-dir")
+			commonDir, _ := l.git(ctx, root, "rev-parse", "--path-format=absolute", "--git-common-dir")
+			paths.gitDir, paths.commonDir = strings.TrimSpace(gitDir), strings.TrimSpace(commonDir)
+		}
+		return newStartWatcher(paths)
+	}, func(ctx context.Context, change startWatchChange) (startSnapshot, error) {
 		at, policy, previous := time.Now(), l.currentPolicy(), shadow.snapshot()
-		return follower.syncStore(ctx, shadowTick.StorePath, at, policy, previous, func(r *store.Reader, next *startSnapshot, touched map[string]bool) error {
+		cached := previous
+		if change&startWatchExternal != 0 {
+			cached.pending = nil // Reseed on external changes until the split refresh lands.
+		}
+		return follower.syncStore(ctx, shadowTick.StorePath, at, policy, cached, func(r *store.Reader, next *startSnapshot, touched map[string]bool) error {
 			questions := &VantageQuestions{Root: root, Command: questionsCmd, Context: ctx}
 			shadowTick.Now = at.Format(time.RFC3339Nano)
 			return next.repairEntries(ctx, r, at, policy, shadowTick, questions, previous, touched)
