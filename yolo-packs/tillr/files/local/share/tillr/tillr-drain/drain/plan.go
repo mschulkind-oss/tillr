@@ -257,12 +257,19 @@ func Plan(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) 
 }
 
 func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, def definition.Definition) ([]record.Envelope, error) {
-	return planWithAttemptOrdinals(r, tick, policy, questions, def, nil)
+	return planWithDetails(r, tick, policy, questions, def, nil)
 }
 
-// planWithAttemptOrdinals can also return the next dispatch ordinals for read faces.
-// They are derived from the same run evidence as the plan, not from its hold decisions.
-func planWithAttemptOrdinals(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, def definition.Definition, nextOrdinals *map[string]int) ([]record.Envelope, error) {
+// planDetails supplies read faces with facts that are not part of the decisions.
+// A no-lane decision alone does not say whether it is an unspent retry waiting
+// for capacity, a continuation waiting for its own lane, or a dispatch cap.
+type planDetails struct {
+	nextOrdinals  map[string]int
+	retryLaneWait map[string]bool
+	workerLanes   map[string]string
+}
+
+func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, def definition.Definition, details *planDetails) ([]record.Envelope, error) {
 	if err := tick.check(); err != nil {
 		return nil, err
 	}
@@ -505,8 +512,8 @@ func planWithAttemptOrdinals(r *store.Reader, tick Pass, policy *Policy, questio
 			return nil, err
 		}
 	}
-	if nextOrdinals != nil {
-		*nextOrdinals = attempts
+	if details != nil {
+		details.nextOrdinals = attempts
 	}
 	faults, err := ReadItemFaults(r)
 	if err != nil {
@@ -544,6 +551,9 @@ func planWithAttemptOrdinals(r *store.Reader, tick Pass, policy *Policy, questio
 			at: at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items, def), unproved: unproved,
 			designHistory: designHistory, inputs: inputs, inputDecisions: inputDecisions, works: works, attempts: attempts, nodeCounts: nodeCounts, requests: requests,
 		}
+		if details != nil {
+			p.retryLaneWait = make(map[string]bool)
+		}
 		p.reserveWorkerLanes(items, released)
 		decisions, claimed, err := p.planItems(r, items, edges, faults, works, inputs, retries, rewriteOwnerHolds, rewriteHolds, unshared, hasNodes, buildHash, policy, shut, tick, root, def, at)
 		if err != nil {
@@ -557,6 +567,10 @@ func planWithAttemptOrdinals(r *store.Reader, tick Pass, policy *Policy, questio
 			}
 		}
 		if !unused || !p.laneShort {
+			if details != nil {
+				details.retryLaneWait = p.retryLaneWait
+				details.workerLanes = p.workerLanes
+			}
 			return decisions, nil
 		}
 	}
@@ -931,9 +945,10 @@ func plannerDocumentKey(root, doc string) string {
 
 type planner struct {
 	// Shadow evaluation shares routing without consuming lanes, desks or forks.
-	captureStart func(itemRow, Decision) error
-	workerLanes  map[string]string
-	definition   *definition.Definition
+	captureStart  func(itemRow, Decision) error
+	workerLanes   map[string]string
+	retryLaneWait map[string]bool // only populated for why, in the final planning round
+	definition    *definition.Definition
 	// An open review batch holds new build dispatches for its document; workers
 	// already running settle normally, without being interrupted by intake.
 	commentHolds map[string]string
@@ -1203,6 +1218,9 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 			if !ok {
 				decision.Action, decision.Reason = ActionHold, ReasonNoLane
 				decision.LaneID, decision.Returned = ownJudgeLane, returned
+				if retry != nil && p.retryLaneWait != nil {
+					p.retryLaneWait[item.ItemID] = true
+				}
 				break
 			}
 		}
@@ -1236,6 +1254,9 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		}
 		if !ok {
 			decision.Action, decision.Reason = ActionHold, ReasonNoLane
+			if retry != nil && p.retryLaneWait != nil {
+				p.retryLaneWait[item.ItemID] = true
+			}
 			break
 		}
 		p.assignLane(lane)
@@ -2262,6 +2283,7 @@ func readLanes(r *store.Reader, now time.Time) (map[string]bool, error) {
 // from a lane waiting on a person.
 type LaneLease struct {
 	LaneID      string
+	RunID       string
 	LeasedUntil *time.Time
 }
 
@@ -2305,12 +2327,12 @@ func activeLeasesExcept(r *store.Reader, now time.Time, lanes []string, exceptLa
 			if exceptLane != "" && laneID == exceptLane && runID.Valid && runID.String == exceptRunID {
 				continue
 			}
-			leases = append(leases, LaneLease{LaneID: laneID})
+			leases = append(leases, LaneLease{LaneID: laneID, RunID: runID.String})
 			continue
 		}
 		until := time.UnixMilli(leasedUntil.Int64).UTC()
 		if until.After(now) {
-			leases = append(leases, LaneLease{LaneID: laneID, LeasedUntil: &until})
+			leases = append(leases, LaneLease{LaneID: laneID, RunID: runID.String, LeasedUntil: &until})
 		}
 	}
 	if err := rows.Err(); err != nil {

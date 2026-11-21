@@ -45,6 +45,16 @@ type WhyRow struct {
 	LaneReason  string                 `json:"lane_reason,omitempty"`
 	Refusals    map[string]int         `json:"refusals,omitempty"`
 	Landing     *item.LandingReference `json:"landing,omitempty"`
+	tableReason string
+}
+
+// TableReason is the short reason for the human-readable queue table. The
+// machine-readable reason code remains unchanged.
+func (row WhyRow) TableReason() string {
+	if row.tableReason != "" {
+		return row.tableReason
+	}
+	return row.Reason
 }
 
 type WhySummary struct {
@@ -136,8 +146,8 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 	}
 	answer.Definition = declared.Name
 	def := declared.Parsed
-	var nextOrdinals map[string]int
-	envs, err := planWithAttemptOrdinals(r, tick, policy, questions, def, &nextOrdinals)
+	var details planDetails
+	envs, err := planWithDetails(r, tick, policy, questions, def, &details)
 	if err != nil {
 		return answer, err
 	}
@@ -282,9 +292,9 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		// attempt that actually ran instead, including when an independent wait
 		// masks a running replacement's decision. A continuation's persisted
 		// decision and any planned dispatch keep their own attempt and run ID.
-		next := nextOrdinals[it.ItemID]
+		next := details.nextOrdinals[it.ItemID]
 		work := works[it.ItemID]
-		if d.Action == ActionHold && d.RunRequest == nil && next > 1 && d.Attempt == next &&
+		if d.Action == ActionHold && !details.retryLaneWait[it.ItemID] && d.RunRequest == nil && next > 1 && d.Attempt == next &&
 			(work == nil || work.Done || work.Decision.Attempt != d.Attempt) {
 			d.Attempt = next - 1
 			identifyDecision(&d)
@@ -366,6 +376,30 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			row.WaitingOn = append(row.WaitingOn, d.ConflictID)
 			if d.Reason == ReasonConflictOwner && d.DeferredBy != "" {
 				row.WaitingOn = append(row.WaitingOn, "design run "+d.DeferredBy)
+			}
+		case d.Action == ActionRetry && d.RetryID != "" && (work == nil || work.Done):
+			row.Why = "operator retry planned for " + d.LaneID + " (lane is free)"
+			row.tableReason = row.Why
+			row.Mover = "dispatch the authorized retry on " + d.LaneID
+		case d.Reason == ReasonNoLane && details.retryLaneWait[it.ItemID]:
+			lanes, laneLeases := offered, leases
+			if d.LaneID != "" {
+				lanes = []string{d.LaneID} // a retained candidate needs its own lane
+				if !slices.Contains(offered, d.LaneID) {
+					laneLeases, err = activeLeases(r, at, lanes)
+					if err != nil {
+						return answer, err
+					}
+				}
+			}
+			row.Why = "operator retry waiting for a lane"
+			row.tableReason = row.Why
+			row.WaitingOn = retryLaneHolders(lanes, it.Express, busy, works, laneLeases, assigned, details.workerLanes)
+			if len(row.WaitingOn) == 0 {
+				row.Why += ": no eligible lanes offered"
+				row.WaitingOn = append(row.WaitingOn, "offer an eligible lane with --lanes")
+			} else {
+				row.Why += ": " + strings.Join(row.WaitingOn, "; ")
 			}
 		case d.Reason == ReasonNoLane && d.Returned != nil && d.Returned.Cause == ReasonEvalFailed && d.LaneID != "":
 			row.WaitingOn = append(row.WaitingOn, d.LaneID)
@@ -505,8 +539,8 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			}
 			row.Why += fmt.Sprintf("; %d/%d nodes passed", passed, len(d.Workflow.Stages))
 		}
-		if d.Action == ActionDispatch || d.Action == ActionRetry {
-			assigned[d.LaneID] = d.ItemID
+		if planned.Action == ActionDispatch || planned.Action == ActionRetry {
+			assigned[planned.LaneID] = planned.ItemID
 		}
 		if it.State == "closed" || it.State == "resolved-elsewhere" || it.State == StateLanded {
 			row.Class, row.Mover = "done", "no further work: "+it.State
@@ -638,7 +672,7 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				}
 				if d.Reason == ReasonQuestionRemoved {
 					row.Mover = actor + "; " + row.Mover
-				} else {
+				} else if !details.retryLaneWait[it.ItemID] || d.Reason != ReasonNoLane {
 					row.Mover = actor + "; " + nextActorAction(row.Mover)
 				}
 				switch actor {
@@ -666,6 +700,7 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			return answer, readFailure(err)
 		}
 		if declined {
+			row.tableReason = ""
 			row.Reason, row.Class, row.ClassSource = whyDispatchDeclined, "waits on work", "loop"
 			row.Why = "last dispatch on " + decline.LaneID + " declined: " + collapseSingleLine(decline.Reason)
 			row.Since = "last dispatch refusal"
@@ -955,6 +990,58 @@ func LiveLoopLanes(r *store.Reader, storePath string, now time.Time) ([]string, 
 // (`c.DesignRunID != ""`), `authorizeDesignRetry` expects `--run <c.DesignRunID>`
 // with no `--acknowledge`; otherwise `AuthorizeRetry` expects the build retry
 // command for `c.RunID` (including `--acknowledge` when the run was judged or unjudged).
+// retryLaneHolders names the holders in offer order, excluding desks and
+// express lanes an ordinary item cannot take (the same eligibility as freeLane).
+func retryLaneHolders(offered []string, express bool, busy map[string]bool, works map[string]*pendingWork, leases []LaneLease, assigned, reserved map[string]string) []string {
+	var waits []string
+	seen := map[string]bool{}
+	for _, lane := range offered {
+		if seen[lane] || strings.HasPrefix(lane, "desk-") || (!express && isExpressLane(lane)) {
+			continue
+		}
+		seen[lane] = true
+		var holders []string
+		if busy[lane] {
+			for id, work := range works {
+				if work.Done || work.LaneReleased || work.Decision.LaneID != lane {
+					continue
+				}
+				holder := "unfinished work for " + id
+				if req := work.Decision.RunRequest; req != nil && req.RunID != "" {
+					holder += " (run " + req.RunID + ")"
+				}
+				holders = append(holders, holder)
+			}
+			sort.Strings(holders)
+			for _, lease := range leases {
+				if lease.LaneID != lane {
+					continue
+				}
+				// A lease with no expiry can be an examination or an unbounded run.
+				holder := "active lease"
+				if lease.LeasedUntil != nil {
+					holder = "run lease"
+				}
+				if lease.RunID != "" {
+					holder += " for " + lease.RunID
+				}
+				holders = append(holders, holder)
+			}
+		}
+		if id := assigned[lane]; id != "" {
+			holders = append(holders, "earlier planned item "+id)
+		} else if id := reserved[lane]; id != "" {
+			holders = append(holders, "reserved for "+id)
+		}
+		if len(holders) == 0 {
+			waits = append(waits, lane+" is unavailable in this plan")
+		} else {
+			waits = append(waits, lane+" held by "+strings.Join(holders, " and "))
+		}
+	}
+	return waits
+}
+
 func acceptedConflictRetryCommand(r *store.Reader, itemID string, c item.Conflict) string {
 	if c.DesignRunID != "" {
 		return retryCommand(itemID, c.DesignRunID, "")

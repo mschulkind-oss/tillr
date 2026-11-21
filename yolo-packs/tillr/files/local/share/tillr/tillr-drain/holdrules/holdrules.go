@@ -109,7 +109,9 @@ var Rules = map[string]Rule{
 	"command-fault":                {"needs a cause", "lane", "repair the command process and authorize a retry"},
 	// History only: an infrastructure failure now closes the backend, not the item.
 	"run-infra-exhausted": {"waits on work", "backend", "a successful tillr-drain probe-backend or a non-infrastructure run"},
-	"harness-refused":     {"ready", "queue", "the next pass"},
+	// History only: older operator retry decisions used this reason.
+	"harness-refused": {"ready", "queue", "the next pass"},
+	"operator-retry":  {"ready", "queue", "dispatch the authorized retry"},
 	// A worker run's refused ending goes back to the item's worker with its evidence,
 	// uncounted (the owner's ruling of 2026-11-17).
 	"returned-with-evidence": {"ready", "queue", "the next pass"},

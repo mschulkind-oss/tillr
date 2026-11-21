@@ -3024,6 +3024,12 @@ advance the item. The summary partitions the rows into running items, items the
 next pass could advance, and holds counted by reason. Busy lanes include unfinished
 candidate examinations, not just live leases. Capacity is consumed in queue order,
 so an earlier predicted dispatch can leave a later item waiting on a lane.
+An authorized operator retry waiting for a lane lists the eligible offered
+lanes and what holds each one: unfinished work, an active lease, or an item
+that took the lane earlier in the plan. Express retries can use express or
+ordinary lanes; ordinary retries can use only ordinary lanes. If the plan
+can start the retry, the report names the planned lane and says it is free.
+
 Closed and resolved-elsewhere items remain visible with no further work required.
 Landed items are omitted from the queue-wide report. `tillr drain why <item>`
 reports a named landed item as done, with its unreverted landing reference when

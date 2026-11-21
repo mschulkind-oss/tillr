@@ -19,7 +19,7 @@ func TestAllDefinedHoldReasonsAreClassified(t *testing.T) {
 	// Success/settlement reasons share the Reason prefix but never hold work.
 	nonHolds := map[string]bool{
 		"ready": true, "failover": true, "seat-degraded": true,
-		"harness-refused": true, "conflict-answered": true, ReasonReturned: true,
+		ReasonRetry: true, "conflict-answered": true, ReasonReturned: true,
 		"item-already-terminal": true,
 		ReasonRestagedStaleBase: true,
 		// Dispatch reasons of the runs that answer a repeating-call ending.
