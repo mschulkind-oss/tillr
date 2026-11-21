@@ -1,6 +1,7 @@
 package drain
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -354,7 +355,8 @@ func TestExpressReservedLaneQueueOrderAheadOfReturnedSession(t *testing.T) {
 	}
 }
 
-func TestExpressReservedLaneQueueOrderAheadOfDesignContinuation(t *testing.T) {
+func refusedExpressDesign(t *testing.T, lane string) (refusalLoopFixture, *Loop, string) {
+	t.Helper()
 	f, l := designConflictFixture(t)
 	l.cfg.Policy.Seats["build"] = "fixture"
 	doc := filepath.Join(f.root, "briefs", "item-a.md")
@@ -362,7 +364,7 @@ func TestExpressReservedLaneQueueOrderAheadOfDesignContinuation(t *testing.T) {
 	runGit(t, f.root, "add", "briefs/item-a.md")
 	runGit(t, f.root, "commit", "-qm", "item definition")
 	declareWorkerResumeFixture(t, l)
-	l.cfg.Lanes = []string{"express-1"}
+	l.cfg.Lanes = []string{lane}
 	l.cfg.Stage = &LaneStager{Root: f.root, LaneRoot: f.laneRoot, Store: f.storePath, Template: filepath.Join("..", "..", "tillr-run", "backends", "brief-template.md"), Now: l.cfg.Now}
 	if err := l.stageLandingLanes(context.Background()); err != nil {
 		t.Fatal(err)
@@ -373,13 +375,16 @@ func TestExpressReservedLaneQueueOrderAheadOfDesignContinuation(t *testing.T) {
 		return err
 	})
 	firstDesign := mustPlan(t, l)[0]
-	if firstDesign.decision.ItemID != backID || firstDesign.decision.Action != ActionDispatch || firstDesign.decision.LaneID != "express-1" {
-		t.Fatalf("initial design dispatch = %+v, want item-a on express-1", firstDesign.decision)
+	if firstDesign.decision.ItemID != backID || firstDesign.decision.Action != ActionDispatch || firstDesign.decision.LaneID != lane {
+		t.Fatalf("initial design dispatch = %+v, want item-a on %s", firstDesign.decision, lane)
 	}
 	base := runGit(t, f.root, "rev-parse", TrunkRef)
-	writeForkFile(t, filepath.Join(l.laneDirPath("express-1"), SessionIDFile), "22222222-2222-4222-8222-222222222222\n")
-	writeForkFile(t, filepath.Join(l.laneDirPath("express-1"), BaseSHAFile), base+"\n")
-	target := l.laneTarget("express-1")
+	writeForkFile(t, filepath.Join(l.laneDirPath(lane), SessionIDFile), "22222222-2222-4222-8222-222222222222\n")
+	writeForkFile(t, filepath.Join(l.laneDirPath(lane), BaseSHAFile), base+"\n")
+	target := l.laneTarget(lane)
+	if err := os.MkdirAll(filepath.Join(target, "briefs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	writeForkFile(t, filepath.Join(target, "briefs", "item-a.md"), "design draft\n")
 	runGit(t, target, "add", "briefs/item-a.md")
 	runGit(t, target, "commit", "-qm", "design draft")
@@ -388,13 +393,18 @@ func TestExpressReservedLaneQueueOrderAheadOfDesignContinuation(t *testing.T) {
 		t.Fatal(err)
 	}
 	finishRefused(t, f, l, firstDesign, RefusalGate, "fixture refusal", "documents", "invalid heading")
-	if stop := l.abandon(context.Background(), "express-1", firstDesign.decision.RunRequest.RunID, head); stop != "" {
+	if stop := l.abandon(context.Background(), lane, firstDesign.decision.RunRequest.RunID, head); stop != "" {
 		t.Fatal(stop)
 	}
 	if err := l.settleUnansweredDesignRuns(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+	return f, l, base
+}
 
+func TestExpressReservedLaneQueueOrderAheadOfDesignContinuation(t *testing.T) {
+	f, l, base := refusedExpressDesign(t, "express-1")
+	backID := "item-a"
 	l.cfg.Lanes = []string{"lane-1", "express-1", "express-2"}
 	if err := l.stageLandingLanes(context.Background()); err != nil {
 		t.Fatal(err)
@@ -445,6 +455,98 @@ func TestExpressReservedLaneQueueOrderAheadOfDesignContinuation(t *testing.T) {
 	ok, _, err = l.applyPlan(context.Background(), backPlan, base, l.cfg.Now())
 	if err != nil || !ok {
 		t.Fatalf("applyPlan for displaced design continuation on lane-2 = (%v, %v), want (true, nil)", ok, err)
+	}
+}
+
+func TestExpressDispatchPassesDesignWaitingForOrdinaryLane(t *testing.T) {
+	f, l, base := refusedExpressDesign(t, "lane-1")
+	l.cfg.Lanes = []string{"lane-1", "express-1"}
+	if err := l.stageLandingLanes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ordinary := fileFixtureRequestWith(t, f, "Busy ordinary request.\n", "build", item.SingleWorkerWorkflow, []string{"docs/ord.md"}, true)
+	leaseRunningFixtureItem(t, f, l, ordinary, "lane-1")
+	back := fileFixtureRequestWith(t, f, "Express request behind the design wait.\n", "build", item.SingleWorkerWorkflow, []string{"docs/back.md"}, false)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := item.Place(context.Background(), tx, back, item.Destination{To: "last"}, l.cfg.Now(), "owner", "cli")
+		return err
+	})
+	var designHeld bool
+	for _, p := range mustPlan(t, l) {
+		d := p.decision
+		if d.ItemID == "item-a" {
+			if d.Action != ActionHold || d.Reason != ReasonNoLane || d.Seat != "design" {
+				t.Fatalf("design continuation = %+v, want design held for no-lane", d)
+			}
+			designHeld = true
+		}
+		if d.ItemID == back {
+			if !designHeld || d.Action != ActionDispatch || d.LaneID != "express-1" {
+				t.Fatalf("behind design hold = %v, decision = %+v; want express-1 dispatch behind the hold", designHeld, d)
+			}
+			if ok, _, err := l.applyPlan(context.Background(), p, base, l.cfg.Now()); err != nil || !ok {
+				t.Fatalf("apply express dispatch behind design hold = (%v, %v), want (true, nil)", ok, err)
+			}
+			return
+		}
+	}
+	t.Fatal("no plan for the second express item")
+}
+
+func TestExpressDispatchDeclineNamesTheWaitInLogAndWhy(t *testing.T) {
+	ctx := context.Background()
+	f, l := passFixture(t, "item-ordinary")
+	l.cfg.Lanes = []string{"express-1", "express-2"}
+	l.cfg.Policy.Seats = map[string]string{"build": "fixture"}
+	var log bytes.Buffer
+	l.cfg.Report = &log
+	if err := l.stageLandingLanes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	back := fileFixtureRequestWith(t, f, "Later express request.\n", "build", item.SingleWorkerWorkflow, []string{"docs/back.md"}, false)
+	front := fileFixtureRequestWith(t, f, "Earlier express request.\n", "build", item.SingleWorkerWorkflow, []string{"docs/front.md"}, false)
+	var frontPlan, backPlan plannedApplication
+	for _, p := range mustPlan(t, l) {
+		switch p.decision.ItemID {
+		case front:
+			frontPlan = p
+		case back:
+			backPlan = p
+		}
+	}
+	if frontPlan.decision.LaneID != "express-1" || backPlan.decision.LaneID != "express-2" {
+		t.Fatalf("expected ordered offers on express-1 and express-2; got %s and %s", frontPlan.decision.LaneID, backPlan.decision.LaneID)
+	}
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	// Try the second offer before the first has been claimed. Replanning alone
+	// still gives both offers, so Why needs the apply-time observation.
+	if ok, _, err := l.applyPlan(ctx, backPlan, base, l.cfg.Now()); err != nil || ok {
+		t.Fatalf("out-of-order dispatch = (%v, %v), want (false, nil)", ok, err)
+	}
+	line := "loop: declined dispatch of " + back + " on express-2: \"earlier express item " + front + " has not been dispatched or held\"\n"
+	if strings.Count(log.String(), line) != 1 {
+		t.Fatalf("log = %q, want one line %q", log.String(), line)
+	}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		answer, err := Why(r, Pass{Now: l.cfg.Now().Format(time.RFC3339Nano), AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
+		if err != nil {
+			return err
+		}
+		for _, row := range answer.Rows {
+			if row.ItemID == back {
+				if row.Decision.Action != ActionDispatch || row.Decision.LaneID != "express-2" || row.Class != "waits on work" || row.Mover == "the next pass" || len(row.WaitingOn) != 1 || !strings.Contains(row.WaitingOn[0], front) {
+					t.Fatalf("Why = %+v, want planner offer annotated with the wait on %s", row, front)
+				}
+				return nil
+			}
+		}
+		t.Fatal("Why did not show the declined offer")
+		return nil
+	})
+	for _, p := range []plannedApplication{frontPlan, backPlan} {
+		if ok, _, err := l.applyPlan(ctx, p, base, l.cfg.Now()); err != nil || !ok {
+			t.Fatalf("ordered dispatch for %s = (%v, %v), want (true, nil)", p.decision.ItemID, ok, err)
+		}
 	}
 }
 

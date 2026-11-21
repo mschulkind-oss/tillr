@@ -19,7 +19,10 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-const whyRunAwaitsRecovery = "run-awaits-recovery"
+const (
+	whyRunAwaitsRecovery = "run-awaits-recovery"
+	whyDispatchDeclined  = "dispatch-declined"
+)
 
 // WhyRow decorates a planner decision with references a human can follow. For a
 // lost worker, Why reports the observed hold instead of the planner's run-live
@@ -109,6 +112,10 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 	}
 	answer.EventHeadSeq = head
 	refusals, err := readWhyRefusals(r)
+	if err != nil {
+		return answer, readFailure(err)
+	}
+	declines, err := readDispatchDeclines(r)
 	if err != nil {
 		return answer, readFailure(err)
 	}
@@ -618,7 +625,21 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 				row.Mover = obstacles.StripCloseRemedy(row.Mover)
 			}
 		}
-		if d.From == "running" {
+		// Keep the planner's decision for inspection. The loop's observation
+		// describes the last claim of this offer; it does not veto a new claim.
+		decline := declines[it.ItemID]
+		declined, err := decline.appliesTo(r, d)
+		if err != nil {
+			return answer, readFailure(err)
+		}
+		if declined {
+			row.Reason, row.Class, row.ClassSource = whyDispatchDeclined, "waits on work", "loop"
+			row.Why = "last dispatch on " + decline.LaneID + " declined: " + collapseSingleLine(decline.Reason)
+			row.Since = "last dispatch refusal"
+			row.Mover = decline.WaitingOn
+			row.WaitingOn = []string{decline.WaitingOn}
+			answer.Summary.Held[row.Reason]++
+		} else if d.From == "running" {
 			answer.Summary.Running++
 		} else if d.Action != ActionHold {
 			answer.Summary.CouldRun++
