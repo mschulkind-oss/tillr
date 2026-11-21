@@ -62,6 +62,10 @@ func gitKey(form, root string, args []string) string {
 // provedLaneBase returns empty only for the documented bootstrap case or tip
 // policy. A malformed or rewritten pointer is an error, never a silent fallback.
 func provedLaneBase(ctx context.Context, root, mode string) (string, error) {
+	return provedLaneBaseAt(ctx, root, mode, "")
+}
+
+func provedLaneBaseAt(ctx context.Context, root, mode, tip string) (string, error) {
 	if mode == "tip" || root == "" {
 		return "", nil
 	}
@@ -69,9 +73,11 @@ func provedLaneBase(ctx context.Context, root, mode string) (string, error) {
 	if err != nil || green == "" {
 		return green, err
 	}
-	tip, err := heavyGitOutput(ctx, root, "rev-parse", TrunkRef)
-	if err != nil {
-		return "", err
+	if tip == "" {
+		tip, err = heavyGitOutput(ctx, root, "rev-parse", TrunkRef)
+		if err != nil {
+			return "", err
+		}
 	}
 	ok, err := containsCommit(ctx, root, green, tip)
 	if err != nil {
@@ -214,8 +220,15 @@ func blockBase(ctx context.Context, r *store.Reader, root, base, itemID string) 
 		return base, nil
 	}
 	tip, err := heavyGitOutput(ctx, root, "rev-parse", TrunkRef)
-	if err != nil || tip == base {
+	if err != nil {
 		return base, err
+	}
+	return blockBaseAt(ctx, r, root, base, tip, itemID)
+}
+
+func blockBaseAt(ctx context.Context, r *store.Reader, root, base, tip, itemID string) (string, error) {
+	if base == "" || tip == base {
+		return base, nil
 	}
 	var ref string
 	if err := r.QueryRow(`SELECT COALESCE(body_ref, '') FROM items WHERE item_id=?`, itemID).Scan(&ref); err != nil {

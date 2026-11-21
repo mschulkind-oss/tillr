@@ -931,6 +931,29 @@ type plannedApplication struct {
 	definition          *definition.Definition
 	expressAheadChecked bool
 	expressAheadHeld    map[string]heldExpressItem
+	start               *plannedStart
+}
+
+// A fresh lane's base belongs to the decision, not the transaction that claims it.
+type plannedStart struct{ tip, green, base string }
+
+type startRefs struct {
+	tip, green string
+	readGreen  bool
+}
+
+func (s *startRefs) proved(ctx context.Context, root, mode string) (string, error) {
+	if mode == "tip" || root == "" {
+		return "", nil
+	}
+	if !s.readGreen {
+		green, err := provedLaneBaseAt(ctx, root, mode, s.tip)
+		if err != nil {
+			return "", err
+		}
+		s.green, s.readGreen = green, true
+	}
+	return s.green, nil
 }
 
 func (p plannedApplication) checksComments() bool {
@@ -1097,7 +1120,9 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 	}
 	var plans []plannedApplication
 	var leases []LaneLease
-	err = s.ReadTx(ctx, func(r *store.Reader) error {
+	var refs *startRefs
+	hasStart := false
+	readPlans := func(r *store.Reader) error {
 		var err error
 		observed := append([]string(nil), l.cfg.Lanes...)
 		held, err := readLanes(r, at)
@@ -1133,7 +1158,7 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 				loopHolds[id] = reason
 			}
 		}
-		tick := Pass{examineItem: l.ownerMigrationItem, ownerMigration: l.ownerMigrationItem != "", loopHolds: loopHolds, Comments: l.cfg.Comments, WorkflowDefaults: l.cfg.WorkflowDefaults, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available, OutLanes: l.outLanes()}
+		tick := Pass{examineItem: l.ownerMigrationItem, ownerMigration: l.ownerMigrationItem != "", loopHolds: loopHolds, startRefs: refs, Comments: l.cfg.Comments, WorkflowDefaults: l.cfg.WorkflowDefaults, GatesInFlight: l.gateCount(), Build: &l.build, Now: at.Format(time.RFC3339Nano), AvailableLanes: &available, OutLanes: l.outLanes()}
 		if stager, ok := l.cfg.Stage.(*LaneStager); ok {
 			tick.BriefTemplate = &stager.Template
 		}
@@ -1217,15 +1242,48 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 				}
 				heldExpressSoFar[d.ItemID] = heldExpressItem{decision: heldDec, version: heldVer}
 			}
+			var start *plannedStart
+			work := folds.works[d.ItemID]
+			if refs != nil && isDispatch(d) && !d.WorkflowRestart && (work == nil || !work.Ready) {
+				start = &plannedStart{tip: refs.tip, base: refs.tip}
+				hasStart = true
+				if !IsTrunkFixer(d.ItemID) {
+					start.green, err = refs.proved(ctx, l.cfg.Root, l.gatePolicy.LaneBase)
+					if err == nil && start.green != "" {
+						start.base, err = blockBaseAt(ctx, r, l.cfg.Root, start.green, refs.tip, d.ItemID)
+					}
+					if err != nil {
+						return err
+					}
+				}
+			}
 			plans = append(plans, plannedApplication{
-				decision: d, version: version, parentRunID: parent,
+				decision: d, version: version, parentRunID: parent, start: start,
 				definitionSHA: declared.SHA256, definition: &declared.Parsed,
 				expressAheadChecked: aheadChecked, expressAheadHeld: aheadHeld,
 			})
 		}
 		return nil
-	})
-	return plans, leases, err
+	}
+	for {
+		if !l.nonLanding {
+			tip, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+			if err != nil {
+				return nil, nil, err
+			}
+			refs = &startRefs{tip: tip}
+		}
+		if err := s.ReadTx(ctx, readPlans); err != nil || !hasStart {
+			return plans, leases, err
+		}
+		// Planning also reads working-tree inputs. A landing during that read
+		// can mix versions before a start has been decided; retry the snapshot.
+		current, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
+		if err != nil || current == refs.tip {
+			return plans, leases, err
+		}
+		plans, hasStart = nil, false
+	}
 }
 
 func appendEffect(tx *store.Tx, kind, id string, value any, at time.Time) error {
@@ -1533,10 +1591,8 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				break
 			}
 		}
-		if !l.nonLanding && (d.Action == ActionDispatch || d.Action == ActionRetry) {
-			// A concurrent landing can publish an answered conflict or change inputs
-			// after the pass refreshed documents. Refresh the trunk commit only when it
-			// advanced cleanly and left this item's own inputs and fence untouched.
+		if !l.nonLanding && isDispatch(d) && p.start == nil {
+			// Work already in flight retains the existing trunk and input checks.
 			head, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
 			if err != nil {
 				return err
@@ -1560,13 +1616,22 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				return decline("run inputs changed since planning", "replan with the current run inputs")
 			}
 		}
-		if d.Inputs != nil && (d.Action == ActionDispatch || d.Action == ActionRetry) && !l.nonLanding {
-			if hasTargetRow {
-				now, err := currentRunInputs(ctx, tx.Reader(), targetRow, l.cfg.Policy, l.cfg.Root, l.build)
+		if d.Inputs != nil && isDispatch(d) && !l.nonLanding && hasTargetRow {
+			now, err := currentRunInputs(ctx, tx.Reader(), targetRow, l.cfg.Policy, l.cfg.Root, l.build)
+			if err != nil {
+				return err
+			}
+			if *now != *d.Inputs {
+				if p.start == nil {
+					return decline("run inputs changed since planning", "replan with the current run inputs")
+				}
+				// Check the ref after reading the files. An edit at the same tip
+				// is stale input; a later landing belongs to a later decision.
+				head, err := l.revParse(ctx, l.cfg.Root, TrunkRef)
 				if err != nil {
 					return err
 				}
-				if *now != *d.Inputs {
+				if head == p.start.tip {
 					return decline("run inputs changed since planning", "replan with the current run inputs")
 				}
 			}
@@ -1673,10 +1738,18 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				return decline("the item still has unfinished work", "the previous work for "+d.ItemID+" to settle")
 			}
 			base := trunkSHA
+			if p.start != nil {
+				base = p.start.base
+			}
 			if !l.nonLanding && !IsTrunkFixer(d.ItemID) {
-				green, err := provedLaneBase(ctx, l.cfg.Root, l.gatePolicy.LaneBase)
-				if err != nil {
-					return err
+				var green string
+				if p.start != nil {
+					green = p.start.green
+				} else {
+					green, err = provedLaneBase(ctx, l.cfg.Root, l.gatePolicy.LaneBase)
+					if err != nil {
+						return err
+					}
 				}
 				if green != "" {
 					states := map[string]string{}
@@ -1694,20 +1767,17 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 					if waits[d.ItemID] {
 						return decline("the proved lane base does not contain a dependency", "a trunk proof containing the item's dependencies")
 					}
-					base = green
-					// Sync read the item's block at the tip. A proved commit carrying
-					// another version would brief the worker on a block its tree does
-					// not hold, so the lane starts from the oldest trunk commit that
-					// carries it instead of waiting for a proof.
-					if work == nil || !(work.Ready || d.WorkflowRestart) {
-						advanced, err := blockBase(ctx, tx.Reader(), l.cfg.Root, green, d.ItemID)
-						if err != nil {
-							return err
+					if p.start == nil {
+						base = green
+						if work == nil || !(work.Ready || d.WorkflowRestart) {
+							base, err = blockBase(ctx, tx.Reader(), l.cfg.Root, green, d.ItemID)
+							if err != nil {
+								return err
+							}
 						}
-						if advanced != green {
-							l.reportf("loop: %s's block is newer than green %s; cutting its lane from %s\n", d.ItemID, shortSHA(green), shortSHA(advanced))
-						}
-						base = advanced
+					}
+					if base != green {
+						l.reportf("loop: %s's block is newer than green %s; cutting its lane from %s\n", d.ItemID, shortSHA(green), shortSHA(base))
 					}
 				} else if l.gatePolicy.LaneBase != "tip" && !l.laneBootstrapReported {
 					l.reportf("loop: no green pointer yet; cutting lanes from trunk tip\n")
