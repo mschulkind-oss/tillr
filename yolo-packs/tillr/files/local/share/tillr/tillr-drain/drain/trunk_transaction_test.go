@@ -18,7 +18,12 @@ func TestTrunkObservationWriteCallbackContainsOnlyStoreWork(t *testing.T) {
 	callbacks := 0
 	ast.Inspect(source, func(n ast.Node) bool {
 		fn, ok := n.(*ast.FuncDecl)
-		if !ok || fn.Name.Name != "observeTrunk" && fn.Name.Name != "observeTrunkWith" {
+		if !ok {
+			return true
+		}
+		switch fn.Name.Name {
+		case "observeTrunk", "observeTrunkWith", "observeTrunkLocked":
+		default:
 			return true
 		}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
