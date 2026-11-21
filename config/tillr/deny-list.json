@@ -1,0 +1,7 @@
+{
+  "entries": [
+    {"path": ".tillr", "reason": "the store and lane state belong to the loop"},
+    {"path": ".forks", "reason": "fork checkouts and the shared cache are not trunk deliverables"},
+    {"content": "item-declaration", "reason": "item declarations cannot be edited or removed; only idea intake and document triage may add them"}
+  ]
+}

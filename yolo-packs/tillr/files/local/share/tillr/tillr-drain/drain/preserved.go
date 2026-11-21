@@ -464,7 +464,7 @@ func snapshotSummary(stats, prefix string, fence []string) ([]PreservedFile, str
 		if len(cells) != 3 {
 			return nil, "", fmt.Errorf("invalid preservation numstat: %q", line)
 		}
-		file := PreservedFile{Path: cells[2], Added: cells[0], Deleted: cells[1], OutsideFence: !insideFence(prefix+cells[2], fence)}
+		file := PreservedFile{Path: cells[2], Added: cells[0], Deleted: cells[1], OutsideFence: len(fence) > 0 && !insideFence(prefix+cells[2], fence)}
 		files = append(files, file)
 		if file.OutsideFence {
 			outside++

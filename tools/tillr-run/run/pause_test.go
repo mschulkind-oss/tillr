@@ -29,7 +29,7 @@ func TestPauseAndResumeTwiceKeepsOneAttempt(t *testing.T) {
 			// Segment three completes; the earlier two wait inside a tool call, echoing any
 			// probe the test writes so the test can see the harness is still alive. The gap
 			// fixture deliberately ignores its pause file so the straggler bound applies.
-			script := "#!/bin/sh\nif [ -n \"${TILLR_RESUME_PROMPT_FILE:-}\" ]; then cat \"$TILLR_RESUME_PROMPT_FILE\"; fi\nn=0; [ ! -f segments ] || n=$(cat segments)\nn=$((n+1)); echo $n > segments\necho \"${TILLR_SESSION_MODE:-new}\" >> modes\nif [ $n -lt 3 ]; then trap '' TERM; echo ready; while :; do [ ! -f probe ] || cat probe > probe-echo; sleep 0.02; done; else echo completed; fi\n"
+			script := "#!/bin/sh\nif [ -n \"${TILLR_RESUME_PROMPT_FILE:-}\" ]; then cat \"$TILLR_RESUME_PROMPT_FILE\"; fi\nn=0; [ ! -f segments ] || n=$(cat segments)\nn=$((n+1))\nif [ $n -lt 3 ]; then trap '' TERM; fi\necho \"${TILLR_SESSION_MODE:-new}\" >> modes\necho $n > segments\nif [ $n -lt 3 ]; then echo ready; while :; do [ ! -f probe ] || cat probe > probe-echo; sleep 0.02; done; else echo completed; fi\n"
 			os.WriteFile(adapter, []byte(script), 0755)
 			os.WriteFile(filepath.Join(filepath.Dir(adapter), "extract-report"), []byte("#!/bin/sh\nprev=; out=\nfor arg in \"$@\"; do [ \"$prev\" != --out ] || out=$arg; prev=$arg; done\nprintf 'This run report\\n' > \"$out\"\n"), 0755)
 			lane := filepath.Join(dir, "lanes", "lane")

@@ -56,21 +56,13 @@ The item's criteria, quoted verbatim. Every criterion maps to a verification lin
 
 1. {{CRITERION_1}}
 
-## Fence
+## Scope and boundaries
 
-The change may include exactly these paths, and no others:
-
-{{FENCE_PATHS}}
-
-The change must not include:
+Change what the work needs, and nothing the work does not need. Do not change files outside the target worktree or touch denied paths:
 
 {{OUT_OF_FENCE_PATHS}}
 
-**A change outside the fence is an obstacle, not a choice.** When the work needs a path
-outside it, name the `fence` obstacle (see **Report shape**) instead of editing the path.
-Running commands is not touching the fence:
-tests, builds, formatters and linters run freely inside the target, and only the paths
-the resulting *change* includes are fenced.
+Running commands is permitted: tests, builds, formatters and linters run freely inside the target, and only the paths the resulting *change* includes are judged.
 
 Writes land only inside the target named in the header. State outside it — the store,
 git refs, other lanes, and the main checkout whenever it is not the named target — is
@@ -86,7 +78,7 @@ second commit in the same lane is a second candidate the loop did not ask for. I
 main-checkout form, commit nothing at all: the trunk is not a run's to move.
 
 **The pack mirror is part of the change.** The tree under `tools/tillr*` is also delivered
-as a pack copy, and the gate compares the two. When the fence above names a `tools/tillr*`
+as a pack copy, and the gate compares the two. When your change touches a `tools/tillr*`
 path, run `just pack-sync` in the target and commit the mirror in the same commit. It is
 derived, not designed: do not hand-edit the mirror, and do not treat it as a second
 concern. A change that skips it is correct work that fails the gate on `pack-sync` alone —
@@ -199,14 +191,13 @@ the one that holds:
 | `OBSTACLE:` | When | Required lines | What happens next |
 |---|---|---|---|
 | `definition` | The item's own words are wrong or contradict the tree | `CRITERIA:` the criteria affected; `EVIDENCE:` the contradiction, quoted | The design seat amends the item |
-| `fence` | The change needs paths outside the fence | `PATHS:` repository-relative paths separated by commas or newlines (no prose, Git refs, or placeholders); `EVIDENCE:` why each is needed | The design seat widens the fence or splits the item |
 | `trunk` | The base is red, and this change did not cause it | `CHECKS:` the failing gate check ids; `BASE:` the base sha | The loop replays those checks on the base; if they are red there, the item waits on the trunk's repair |
 | `tooling` | A tool or the harness is defective: a hung suite, a broken adapter, a missing binary | `COMMAND:` the command; `EVIDENCE:` its output; `PATHS:` the tool's paths | The loop files a defect item for the tool, and this item waits on it |
 | `seat` | You made the attempt, and it shows the task exceeds what this model can do | `TRIED:` the change you made and what its tests showed; `MISSING:` what you could not do | The item moves to a stronger model, or to the design seat for a plan |
 | `owner` | A decision only the owner can make | `QUESTION:` the question | The design seat answers it from the documents, or asks the owner |
 
 These are not obstacles, and are work to continue: a patch that does not apply cleanly, a
-merge conflict, a test inside the fence that fails, a suite that takes long, and work not
+merge conflict, a test that fails, a suite that takes long, and work not
 yet done. An obstacle the loop cannot confirm (a `trunk` claim the base replay does not
 reproduce, for instance) comes back to this run with what the loop found.
 
@@ -223,9 +214,9 @@ report without a complete obstacle, is a missing output and comes back to this r
 
 For example:
 
-    OBSTACLE: fence
-    PATHS: tools/tillr-view/waiting.go
-    EVIDENCE: the criterion asks the view to show the new hold, and the view is outside the fence
+    OBSTACLE: definition
+    CRITERIA: c1
+    EVIDENCE: the item asks for a flag that was removed
     RESULT: blocked
 
 ## Stop conditions
@@ -236,6 +227,5 @@ situations that used to end a run here are each one of those kinds:
 - a named file is dirty with someone else's work, or, in the main-checkout form, the
   checkout's status moves for reasons that are not yours: `tooling`;
 - a named symbol is gone, or the brief is otherwise wrong about the tree: `definition`;
-- the fix needs a file outside the fence: `fence`;
 - a verification command fails outside this task's scope: `trunk` when the same check is
   red on the base, else `tooling` when the tool itself is broken.

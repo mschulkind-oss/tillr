@@ -69,7 +69,7 @@ A later read-only node carries the checked judgment to the graph's final candida
 it does not start another judge. The
 [evaluator-routing tests](./drain/workflow_evaluator_test.go) cover these guarantees.
 
-After the worker passes its fence check, the review runs in the same lane with
+After the worker passes the common deny-list check, the review runs in the same lane with
 its own run and session identities. Its brief includes the criteria, their hashes,
 the candidate's tree identity, the path to its exact retained diff, and the path
 for its written verdict. Keeping the raw diff outside the brief lets ordinary code
@@ -283,17 +283,12 @@ conflict, and the release of an existing owner conflict.
 
 A writing workflow stage may set `write_scope` to `"inherit"` (also the default
 when omitted) or a nonempty list of repository-relative path prefixes. A list
-narrows the item's allowed paths; it cannot widen them. Both lists receive the
-same expansion to required pack copies and documentation companions. The loader
-refuses invalid values, empty lists, and any scope on a read-only stage under
-separate rules. A scope outside the expanded item fence holds the item as
-`node-scope-outside-fence`, naming the node and path before any node starts.
+limits only that stage; an omitted scope does not inherit the retired item
+list. Explicit scopes expand to required pack copies and documentation companions.
+The loader refuses invalid values, empty lists, and any scope on a read-only stage.
 
-Each node receives its scope in its staged fence and brief. For a planned build
-piece, the planner's path list divides the work but does not restrict the item's
-fence: the piece is staged with the current item paths, and its exit check reads
-them again so an operator can add a path even while it runs. Writing nodes run
-serially in the item's single git target, including a fork checkout; the next
+Each explicitly scoped node receives its scope in its staged metadata and brief. Writing nodes
+run serially in the item's single git target, including a fork checkout; the next
 node starts at the preceding node's final HEAD. At each writing node's exit, the
 drain checks only that node's changed paths, from its starting HEAD to its final
 HEAD. An escape is refused as `boundary-scope-escape`, naming the node and path;
@@ -302,17 +297,13 @@ readable answer is also refused as `boundary-scope-escape`; a writing node ended
 for a repeating call, by a signal, or by a machinery fault preserves its
 uncommitted work under `refs/tillr/preserved/<run>` and restarts on its route
 instead of refusing as an escape. Passing every node
-does not waive the final check of the whole change against the item fence. For
-workflows with planned pieces, that check also reads the current item paths.
+does not waive the final deny-list check of the whole committed change.
 The staged node base and scope are kept separately from the item's original base
-and full fence so the final candidate includes all nodes and lands once.
+so the final candidate includes all nodes and lands once.
 
-A resumed planned piece uses the current item paths. Other resumed nodes keep
-the scope in their saved workflow, checked against the item's current allowed
-paths; reloading an edited workflow cannot broaden their authority. A held
-candidate saves the full item fence when it releases a lane. Restaging it
-restores that snapshot and its original base, replacing metadata left by a later
-item.
+A resumed node keeps the scope in its saved workflow; reloading an edited workflow
+cannot broaden its authority. A held candidate preserves that staging metadata and
+its original base when it releases a lane.
 
 ## Stages that name workflows
 
@@ -383,7 +374,7 @@ planner's report when it proposes nothing, and ends at the verify evaluator. Its
 and up to 12 pieces. The proposal and its graph revision are settled together;
 refusals leave the old graph intact. An unmapped seat records
 `proposal-seat-unmapped`, a writing piece on a policy read-only seat records
-`proposal-read-only-seat-writes`, and a scope outside the item fence records
+`proposal-read-only-seat-writes`, and a scope outside the containing stage's scope records
 `proposal-scope-outside-fence`. The planner's brief includes the owner-editable
 [`config/tillr/plan-guidance.md`](../../config/tillr/plan-guidance.md) when present.
 If a piece needs a design decision, the planner proposes nothing and reports an
@@ -405,8 +396,7 @@ fork checkouts). The `plan` step runs again only when (a) a verifier `not-done`
 reason begins with `plan-wrong:` (any case) because the plan itself was wrong, or
 (b) the builder reports it cannot meet the findings within the plan
 (`RESULT: blocked` with `OBSTACLE: definition` and `EVIDENCE: plan-wrong: <reason>`,
-a narrowed piece `OBSTACLE: fence` whose paths are inside the item's fence, or a
-report line beginning `PLAN-WRONG:`), recorded as `plan-wrong` (see
+or a report line beginning `PLAN-WRONG:`), recorded as `plan-wrong` (see
 [the verify return below](#a-refused-run-goes-back-to-its-worker)).
 Document-declared
 items do not select this workflow unless named on the block or in `[workflows.default]`,
@@ -454,8 +444,7 @@ The triage item is a store-declared item, so the
 ([how](../tillr-item/README.md#filing-a-request)). Unless filed with `--ordinary`, the
 stored item carries `express`, so it is eligible for the [express lanes](#express-lanes),
 preferring a free `express-*` lane and falling back to an ordinary lane. The item names
-an existing workflow
-and a fence, and its words, held in the store's `request_words` table, are its whole
+an existing workflow, and its words, held in the store's `request_words` table, are its whole
 statement. It is a store-declared item, so the
 [document-fed prerequisite](#document-fed-workflow-prerequisite) does not apply, and it
 never has a document block. The drain runs it like any other item, with four additions:
@@ -466,8 +455,6 @@ never has a document block. The drain runs it like any other item, with four add
   saved idea's words take. The adapter's preflight excludes the suffix from its template
   checks, so the words may hold braces or headings. A conflict-fix or design-answer run
   keeps its own task and still carries the words.
-- **Fence.** The fence is the filed paths. A writing node inherits it unless the workflow
-  narrows it.
 - **Candidate check.** Before the gate, the loop compares every Markdown file the
   candidate changes at its base and its head. A candidate that adds, removes or edits an
   item block is refused as a fence refusal whose detail starts `request-item-block:`.
@@ -488,14 +475,13 @@ Completion is the normal gate and landing, plus whatever the workflow's own veri
 judge stage decides. `planned-build@v1`, the default workflow for `build` requests, has a
 `verify` evaluator for `verification-only` criteria. `scouted-design@v1`, the default
 workflow for `design` requests, and `single-worker@v1` have no evaluator of their own. When a filed
-request raises an obstacle for the design seat, its design-answer run is fenced to
-`docs/`, updates the relevant design document without adding an item block (or objects
+request raises an obstacle for the design seat, its design-answer run updates the relevant
+design document without adding an item block (or objects
 with `NEXT-ACTOR`), and returns the request to its workflow once the answer lands.
 
 `write_scope` is either `"inherit"` (also the default) or a nonempty list of
 path prefixes. Every writing node inside a containing stage inherits its scope
-unless it declares a narrower one. A scope outside its container or the item's
-fence is refused before any run. Settlement checks each writing node's own
+unless it declares a narrower one. A scope outside its container is refused before any run. Settlement checks each writing node's own
 change against its resolved scope; it does not judge earlier nodes' changes
 against the last node's scope.
 
@@ -1188,11 +1174,11 @@ commit IDs of the observed range and says attribution is unavailable, including 
 check's needs and tools. The last recorded landing is checked before narrowing the
 search, so an earlier red landing is not blamed when the last one passed. Otherwise the first
 red landing receives a fixer: an item that repairs the broken trunk, containing every
-check attributed to it. Its fence (the paths it may change) combines the
-checks' declared sources and tests with the paths touched by every commit since the last
-green through the current tip, even paths later reverted. Legacy checks obtain their read
-paths from the gate's declaration export, not their recorded output writes. The gate's own
-code is excluded, including directories that would admit it indirectly.
+check attributed to it. Its path hints combine the checks' declared sources and tests
+with the paths touched by every commit since the last green through the current tip, even
+paths later reverted. Legacy checks obtain their read paths from the gate's declaration
+export, not their recorded output writes. The hints exclude the gate's own code. The
+fixer follows the same deny-list as any other worker.
 
 A red that names no landing still gets a mover. When the check is red at the pointer, when
 there is no pointer, or when attribution itself answers no verdict, the runner files one
@@ -1218,12 +1204,7 @@ excerpts when no case was parsed), and the per-check log paths kept with the run
 fixer runs the failing test directly instead of rerunning the whole suite. A blocked fixer reaches the owner only by a complete
 obstacle (see [A worker ends with its commit or a named obstacle](#a-worker-ends-with-its-commit-or-a-named-obstacle)):
 a `definition`, `owner` or `tooling` obstacle goes to the owner with a question the
-loop writes from it, because a generated item has no design block to amend. A trunk
-fixer's `fence` obstacle does not: its fence is the loop's own estimate of where the red
-can be repaired, so the paths it names are added to `allowed_paths` (a
-`drain.fixer-fence-widened` event) and the same worker continues. Only a request that
-names the gate's own code, which no fixer may edit, goes to the owner with the question,
-which names the paths and asks whether the fence may grow. A legacy
+loop writes from it, because a generated item has no design block to amend. A legacy
 `NEXT-ACTOR: owner` line is still read. Any other blocked report is answered back to the
 fixer's own worker, whose brief states this rule; it never reaches the owner by default. `tillr drain why` shows such a
 hold with the loop's question as its reason and the owner as its mover (answer the conflict,
@@ -1543,10 +1524,10 @@ A single-worker build run has two endings: its commit, or `RESULT: blocked` with
 `OBSTACLE: <kind>` and the kind's required fields. The kinds route as follows:
 
 - `definition` (`CRITERIA`, `EVIDENCE`): a design-seat conflict.
-- `fence` (`PATHS`, `EVIDENCE`): a design-seat conflict told to widen the block's paths or
-  split the item.
 - `owner` (`QUESTION`): a design-seat conflict carrying the question. The design seat
   answers from the documents or objects `NEXT-ACTOR: owner`.
+  (`fence` was retired by the owner's ruling on 2026-11-19; an old report naming `fence`
+  is read as a missing output.)
 - `trunk` (`CHECKS`, `BASE`): a replay of the named checks on the run's base, and on the
   trunk tip when the trunk has moved past it. When every one is red there, the trunk
   fixer is filed and the item waits on it, as a red gate's acquittal does. When they are
@@ -1579,17 +1560,17 @@ line (other than a `definition` obstacle routed to a mapped `design` seat), the 
 records `drain.obstacle-hold`
 ([`drain/obstacle_hold.go`](./drain/obstacle_hold.go),
 [`obstacles/read.go`](./obstacles/read.go)) instead of a missing-document conflict:
-only `owner` blocks on `owner` with the `QUESTION` text; `fence` holds for `operator`
-naming `PATHS`; `trunk` holds on `CHECKS` and returns automatically when a green proof
+only `owner` blocks on `owner` with the `QUESTION` text; `trunk` holds on `CHECKS`
+and returns automatically when a green proof
 covers those checks; and `tooling`, `seat` (and `definition` when no `design` seat is
 mapped) hold for `operator` with the evidence line. Both `tillr drain why` and
 `tillr view waiting` display that reason and mover.
 
-A writing node that reports a complete obstacle may leave uncommitted work inside
-its fence. The drain preserves the staged and working changes and points the next
-worker at them in its brief. For a filed request held on `trunk`, that happens after
-a green trunk proof covers the named checks. The fence still applies to both
-committed and uncommitted paths; a completed candidate still needs a clean worktree.
+A writing node that reports a complete obstacle may leave uncommitted work. The drain
+preserves the staged and working changes and points the next worker at them in its brief.
+For a filed request held on `trunk`, that happens after a green trunk proof covers the
+named checks. An explicit node scope still applies to both committed and uncommitted
+paths; a completed candidate needs a clean worktree.
 
 ### A refused run goes back to its worker
 
@@ -1642,8 +1623,7 @@ The `plan` step runs again only in two cases: (a) a verifier's `not-done` reason
 begins with `plan-wrong:` (any case) because the plan itself was wrong, which is
 recorded as a replan return, or (b) the builder reports it cannot meet the findings
 within the plan (`RESULT: blocked` with `OBSTACLE: definition` and
-`EVIDENCE: plan-wrong: <reason>`, a narrowed piece `OBSTACLE: fence` whose paths
-are inside the item's fence, or a report line beginning `PLAN-WRONG:`), recorded
+`EVIDENCE: plan-wrong: <reason>`, or a report line beginning `PLAN-WRONG:`), recorded
 as `plan-wrong`. `verify-not-done` repeat detection hashes each sorted not-done
 criterion ID with the candidate head and normalized finding text: two refusals of
 different candidates or with different findings do not collide, while an identical
@@ -2196,7 +2176,7 @@ lands in one of three outcomes:
 | The main checkout's checked-out branch changing | Observed | Checking out another branch in the main checkout is ordinary owner use. |
 | Changed status of a path in a watched, idle sibling lane worktree | Convicted | That worktree is another item's candidate under the drain's own lane root, where ordinary use of the repository does not write. Siblings that became active are removed from the comparison. |
 | The run's own lane worktree going away | Convicted | The lane is the drain's, and the run was its only assigned user. |
-| Candidate changes outside its fence, or uncommitted work past its candidate | Convicted, by the separate fence check | The deliverable must be the committed change inside the assigned paths. |
+| Candidate changes a deny-list entry, or leaves uncommitted work past its candidate | Refused by the separate pre-gate checks | The deliverable must be a clean, committed change that respects the common protections. |
 | A named store file changing in an adapter-only bracket | Convicted, in the standalone boundary check | The adapter does not own the store. Run brackets omit it because the run face writes its own records. |
 
 Unexpected patch branch observations also hold publication, not the observing run.
@@ -2226,10 +2206,9 @@ retroactively created publication holds.
 
 What this gives up is the stop of a worker whose only escape lies outside the lanes, such
 as a rogue ref or a stray worktree. That escape no longer holds its item, and the
-observation names it for an operator. What still catches an escape that matters is the
-fence check: it judges what lands, and the deliverable must be the committed change inside
-the fence. The gate runs after it, and so does the conviction of any write into another
-lane. A resumed segment is judged by the same run rule.
+observation names it for an operator. The separate deny-list check reads only what the
+worker committed. It does not turn an observation into a refusal, and it runs before the
+gate. A resumed segment is judged by the same run boundary rule.
 
 ## Faults that hold one item
 
@@ -2791,7 +2770,7 @@ repair transcript that only grew: everything written before the stop is still it
 
 Before resetting a settled lane, the loop saves its uncommitted edits at
 `refs/tillr/preserved/<run-id>`. This includes tracked edits and nonignored untracked
-files, both inside and outside the item's fence (the paths the worker may change).
+files, whether or not they are within an explicit node scope.
 When an interrupted run is reset back to its base, `refs/tillr/preserved/<run-id>` also
 preserves commits already made past that base even when the working tree is clean.
 Files outside that fence are marked individually in the `drain.work-preserved`
@@ -2902,13 +2881,11 @@ history; in that case the run pin stays.
 ### Remote-sync conflict repair
 
 The drain records `remote-sync-conflict` and files or reuses one express repair item
-`sync-remote-<short(R)>` per fetched remote tip, fenced to the literal, permitted
-conflict paths. Its lane starts from the pinned replay prefix. Before the gate,
-the drain checks that the repair is one linear commit on that base and that changes
-outside the fence match the mechanical merge. If any path is gate code or cannot be represented in the fence, the
-item is blocked on the owner. Once dispatched, the repair follows generated-item
-obstacle routing: it can widen its fence over permissible paths, or escalate the
-conflict to the owner or operator. An identical repeated refusal holds the repair
+`sync-remote-<short(R)>` per fetched remote tip. Its lane starts from the pinned replay
+prefix. Before the gate, the drain checks that the repair is one linear commit on that
+base and matches the mechanical merge outside the paths Git reported conflicted. A
+conflict involving protected gate code goes to the owner. Once dispatched, the repair
+follows generated-item obstacle routing. An identical repeated refusal holds the repair
 for the operator to reconcile `main` with the staged remote tip; there is no item
 block to amend. While the repair is open, push turns report its current mover
 as `remote-sync-conflict`, including failed fetches and already-published green
@@ -2920,8 +2897,8 @@ after any interrupted landing has been settled.
 
 The drain routes a gated repair to linear replay instead of the ordinary squash.
 Repair landing rechecks the pin and the gate binding. If replay hits
-another conflict, landing advances the pinned base and replaces the fence with
-that step's permitted conflict paths, without moving `main`. A candidate gated
+another conflict, landing advances the pinned base and records that step's conflict paths
+without moving `main`. A candidate gated
 for an earlier step is refused at landing. Once replay is clean, landing records
 a `drain.remote-sync-replay` intent under `land.lock` before using `git reset --keep`
 to install the resolutions and replayed suffix. The next pass or a manual
@@ -2995,8 +2972,8 @@ refused.
 ## Filing fork work
 
 File with `tillr item request`. Name one fork from `bin/pi-forks.list` and describe the
-change in the words on standard input. Supply `--title` and the required
-repository-relative `--path` entries for the repository fence, not a lane checkout path.
+change in the words on standard input and supply `--title`. The ignored `--path`
+flag does not select a fork; do not name a lane checkout path.
 The `plan` step of `planned-build@v1` records the delivery as repository, fork, or
 both. A new `single-worker@v1` item with no recorded target instead uses the
 read-only `classify` seat, which routes to the same backend as `scout` in the
@@ -3047,29 +3024,14 @@ directory passed. The integration case exercises failed build refusal, two overl
 lane boundaries, the main checkout's `bin/pi-forks check` with existing and freshly
 created caches, and two successive fork landings.
 
-## The fence, and the session
+## The deny-list and the session
 
-A run's fence is derived from the item's `allowed_paths`, in one function, and every reader
-of it — staging, the planner, the escape check, a resume — reads that derivation rather than
-repeating a rule. The item names the paths its change is about; the derivation adds the ones
-the change is *obliged* to touch, because a fence that omits them refuses compliant work
-after it is done:
+Per-item path fences no longer control which files a candidate can change. Before the gate,
+the drain checks the candidate's committed change against `config/tillr/deny-list.json`.
+A refusal returns the matched entry and its reason to the worker. The judge receives the
+changed paths and the diff and checks that the request accounts for the change.
 
-- the pack's copy of every tillr module the fence names
-  (`yolo-packs/tillr/files/local/share/tillr/<module>/`), which `just pack-sync` rewrites;
-- for a tillr module, the `tillr-operating` skill and the documentation suite, plus the
-  module's own `README.md` when the fence names a sub-path inside the module rather than its
-  directory;
-- `tools/tillr-loop/` as a whole when the fence reaches that module, whose `test.py` and
-  `README.md` sit beside the program, plus the drain's embedded adapter copy and that
-  file's pack mirror so a later adapter-only change can commit all required copies;
-- `tests/fork-check.test.py` for `tools/fork-check.py`, and
-  `tests/tillr-muse-backend.test.py` for `tools/tillr-run/backends/`.
-
-A fence that names none of those derives nothing: this is a rule about the paths given, not a
-widening of every fence.
-
-For trunk candidates, the drain checks the worker's original commit against that fence,
+For trunk candidates, the drain checks the worker's original commit against the deny-list,
 then uses its embedded `pack-sync` renderer for the shipped modules the candidate changed.
 It does not run the candidate's recipe. A stale mirror is regenerated even if the worker
 committed an earlier copy. The drain records the worker parent and the intended maintenance
@@ -3192,9 +3154,7 @@ lanes and what holds each one: unfinished work, an active lease, or an item
 that took the lane earlier in the plan. Express retries can use express or
 ordinary lanes; ordinary retries can use only ordinary lanes. If the plan
 can start the retry, the report names the planned lane and says it is free.
-For a request held on `obstacle-fence`, the mover names `tillr item add-path`.
-Adding a needed path changes the stored fence, making the same item eligible to
-run again without replacing its earlier attempts.
+Legacy `OBSTACLE: fence` reports are missing outputs. Ordinary work needs no item path list. The drain reads the [common deny-list](../../config/tillr/deny-list.json) from committed trunk and checks the worker’s pinned base-to-head change before the gate. A match returns the entry, path or declaration, and reason to that worker. The judge reviews scope using the diff and changed paths. Independent node scopes and run-boundary evidence are not item path lists.
 
 Closed and resolved-elsewhere items remain visible with no further work required.
 Landed items are omitted from the queue-wide report. `tillr drain why <item>`
@@ -3262,12 +3222,12 @@ commits; an unsuccessful push does not undo the acknowledgment.
 `resume` is one attempt continued and not a second attempt: the run id, the lane and the brief
 are the ones the run already had, the session the lane carries is continued so the provider's
 prefix cache is warm, and the store gains a `run.resume` event on the same run rather than a
-second `runs` row. It re-takes the boundary bracket at the resume and
-re-derives the fence from the item's `allowed_paths`, because the killed segment may have
-committed before it died. It refuses a run the gate judged: continuing judged work is a
+second `runs` row. It re-takes the boundary bracket and restores saved workflow scope.
+The deny-list still checks the committed delta from the original base, because the killed
+segment may have committed before it died. It refuses a run the gate judged: continuing judged work is a
 retry, which a person authorizes.
 
-A normal build exit with no commit and uncommitted fenced work is continued in its own
+A normal build exit with no commit and uncommitted work is continued in its own
 session, uncounted, for as long as each continuation changes that work (the owner's ruling
 of 2026-11-17, audit finding F-09). Each continuation preserves the worktree and asks the
 worker to finish verification and commit, using the same attempt and the existing resume
@@ -3278,7 +3238,7 @@ naming the remaining paths, and goes back to the worker as
 a continuation a stop killed again
 (`TestDirtyExitContinuesForAsLongAsEachContinuationChangesTheWork` and
 `TestDirtyExitContinuesAKilledContinuationAgain` in
-[`drain/commit_continuation_test.go`](./drain/commit_continuation_test.go)). Clean exits, design/comment work and outside-fence-only edits do not trigger it.
+[`drain/commit_continuation_test.go`](./drain/commit_continuation_test.go)). Clean exits and design/comment work do not trigger it.
 Missing brief/session state is named rather than replaced by a cold build. See the
 [build-commit continuation reference](../../docs/reference/tillr-build-commit.md).
 

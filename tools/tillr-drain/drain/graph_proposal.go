@@ -115,6 +115,9 @@ func replaceProposalGraph(w *Workflow, target string, inner *Workflow) (*Workflo
 			return nil, fmt.Errorf("proposal-target: target %s does not exist", target)
 		}
 	}
+	if err := inheritWorkflowScope(inner, original.WriteScope); err != nil {
+		return nil, fmt.Errorf("proposal-scope-outside-fence: %w", err)
+	}
 	ports := map[string]WorkflowPort{}
 	for name, typ := range original.Outputs {
 		port, ok := inner.Exit.Outputs[name]
@@ -561,17 +564,7 @@ func (l *Loop) settleProposal(tx *store.Tx, d *Decision, artifacts []nodeArtifac
 				}
 				refuse(r, err)
 			} else {
-				var fence string
-				if err := tx.QueryRow(`SELECT allowed_paths FROM items WHERE item_id=?`, d.ItemID).Scan(&fence); err != nil {
-					return err
-				}
-				paths, err := decodeFence(fence)
-				if err != nil {
-					return err
-				}
-				// Validate declared scopes now, but leave inherited ones unset. Staging
-				// resolves them against the item's current fence on every dispatch.
-				if err := inner.checkScopes(paths); err != nil {
+				if err := inner.checkScopes(nil); err != nil {
 					refuse("proposal-scope-outside-fence", err)
 				} else {
 					_, _, pinned, err := item.ReadWorkflowSelection(tx.Reader(), d.ItemID)

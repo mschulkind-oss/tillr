@@ -173,7 +173,7 @@ exports, for `pi` and every child it starts:
 
 | Variable | Value |
 | :--- | :--- |
-| `TILLR_TRACE_DIR` | `<root>/.tillr/loop/<run-id>/` — the directory staging keeps this run's brief, fence and base sha in |
+| `TILLR_TRACE_DIR` | `<root>/.tillr/loop/<run-id>/` — the directory staging keeps this run's brief and base sha in |
 | `BASH_ENV` | `tools/tillr-trace/bash-shim.sh`, which appends one `proc.exec` line per shell command to `$TILLR_TRACE_DIR/proc-exec.jsonl` |
 | `TILLR_REPO_ROOT` | the repository root, so a shim row can name a repo-relative cwd |
 

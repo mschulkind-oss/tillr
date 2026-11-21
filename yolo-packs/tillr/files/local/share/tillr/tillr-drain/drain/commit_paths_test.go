@@ -34,13 +34,13 @@ func TestUncommittedPathsIncludesIndexWorktreeAndNestedUntracked(t *testing.T) {
 	}
 }
 
-func TestOutsideFenceDirtyExitDoesNotContinue(t *testing.T) {
+func TestDirtyExitOutsideLegacyItemPathsContinues(t *testing.T) {
 	_, l, original, _ := continuationDispatchFixture(t, "echo work > outside.txt", false)
 	steps := &commitContinuationSteps{continuationSteps: original}
 	l.cfg.Steps = steps
 	var result LoopResult
 	settleContinuation(t, l, &result)
-	if steps.resumed != 0 || result.RefusedSteps[RefusalNoOp] != 1 {
-		t.Fatalf("outside-fence exit resumed: %+v", result)
+	if steps.resumed != 1 {
+		t.Fatalf("uncommitted path was not returned to the worker: %+v", result)
 	}
 }

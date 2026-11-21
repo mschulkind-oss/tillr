@@ -184,9 +184,6 @@ func repeatedEnding(chain []chainEnding, latest chainEnding) (string, bool) {
 // what refused it, in the refusal's own words and the failing checks' own logs, and where
 // the earlier run's work is kept.
 func returnedBrief(e ReturnedEnding) string {
-	if e.Cause == ReasonObstacleFence {
-		return fmt.Sprintf("\n## Answer to the previous fence obstacle\n\nRun %s reported these paths as outside the fence: %s. All are already allowed by the item. Continue the work within the staged fence.\n", e.RunID, e.Detail)
-	}
 	if e.Restart {
 		return restartBrief(e)
 	}
@@ -222,7 +219,7 @@ func returnedBrief(e ReturnedEnding) string {
 	case RefusalNoOp:
 		b.WriteString("It ended without committing anything, so there was no candidate to judge.")
 	case RefusalFence:
-		b.WriteString("Its candidate changed paths outside the item's fence, so it was refused before the gate.")
+		b.WriteString("Its candidate failed a boundary check before the gate. Read the specific refusal below.")
 	case RefusalLand:
 		b.WriteString("The gate passed its candidate, but the landing was refused.")
 	case RefusalDeliveryOrder:

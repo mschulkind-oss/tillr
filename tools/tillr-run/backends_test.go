@@ -25,7 +25,6 @@ var briefValues = map[string]string{
 	"MAIN_STATUS_BEFORE": "unused in the worktree form",
 	"TASK":               "Say the one line the item asks for.",
 	"CRITERION_1":        "the extractor reads a RESULT footer",
-	"FENCE_PATHS":        "- tools/tillr-run/backends/**",
 	"OUT_OF_FENCE_PATHS": "- everything else",
 	"SEAT_LINES":         "- `build` — Build the change.",
 	"SETTLED":            "- a backend is the adapter's name or a `<adapter>-<role>` alias.",

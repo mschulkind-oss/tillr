@@ -30,14 +30,6 @@ func TestNewHoldFormatsEveryObstacleKind(t *testing.T) {
 			wantMoverSub:  "answer the question",
 		},
 		{
-			kind:          "fence",
-			fields:        map[string]string{"PATHS": "tools/tillr-item/item/waiting.go", "EVIDENCE": "checkWaitingOn lives outside allowed_paths"},
-			wantReason:    "obstacle-fence",
-			wantWhySub:    []string{"tools/tillr-item/item/waiting.go", "checkWaitingOn lives outside allowed_paths"},
-			wantMoverPref: "operator; ",
-			wantMoverSub:  "tools/tillr-item/item/waiting.go",
-		},
-		{
 			kind:          "trunk",
 			fields:        map[string]string{"CHECKS": "go-tool/unit, tillr-docs", "BASE": "abc1234"},
 			checks:        []string{"go-tool/unit", "tillr-docs"},
@@ -92,19 +84,7 @@ func TestNewHoldFormatsEveryObstacleKind(t *testing.T) {
 	}
 }
 
-func TestLegacyFenceHoldNamesAddPath(t *testing.T) {
-	h := Hold{
-		ItemID: "item-request-1", RunID: "run-1", Kind: "fence", Mover: "operator",
-		Fields: map[string]string{"PATHS": "already-allowed.txt, new.txt"},
-		Action: "widen allowed_paths (new.txt) or split the request, then retry run run-1",
-	}
-	want := "operator; widen allowed_paths (new.txt) with tillr item add-path --store <store> --item item-request-1 --path <repo-relative-path> --by <who> --why <reason>, or split the request"
-	if got := h.MoverText(); got != want {
-		t.Fatalf("legacy mover = %q, want %q", got, want)
-	}
-}
-
-func TestReadTracksReleaseAcrossOwnerUnblockFenceWidenAndTrunkClear(t *testing.T) {
+func TestReadTracksReleaseAcrossOwnerUnblockAndTrunkClear(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "obstacles.sqlite3")
 	st, err := store.InitFixture(ctx, path)
@@ -145,30 +125,27 @@ func TestReadTracksReleaseAcrossOwnerUnblockFenceWidenAndTrunkClear(t *testing.T
 	}
 
 	ownerHold := NewHold("item-owner", "run-owner-1", "owner", map[string]string{"QUESTION": "Proceed?"}, nil, "aaa", []string{"a/"})
-	fenceHold := NewHold("item-fence", "run-fence-1", "fence", map[string]string{"PATHS": "b/"}, nil, "aaa", []string{"a/"})
 	trunkHold := NewHold("item-trunk", "run-trunk-1", "trunk", map[string]string{"CHECKS": "go-tool/unit"}, []string{"go-tool/unit"}, "aaa", []string{"a/"})
 
 	appendEvt(t, HeldKind, "item", "item-owner", ownerHold, 1)
-	appendEvt(t, HeldKind, "item", "item-fence", fenceHold, 2)
 	appendEvt(t, HeldKind, "item", "item-trunk", trunkHold, 3)
 
-	// Unrelated metadata update on fence item with unchanged allowed_paths keeps hold.
-	appendEvt(t, "item.update", "item", "item-fence", map[string]any{"state": "in-queue", "allowed_paths": []string{"a/"}}, 4)
+	// Unrelated metadata update on the trunk item keeps its hold.
+	appendEvt(t, "item.update", "item", "item-trunk", map[string]any{"state": "in-queue"}, 4)
 
 	readCheck(t, func(r *store.Reader) error {
 		active, released, err := Read(r)
 		if err != nil {
 			return err
 		}
-		if len(active) != 3 || len(released) != 0 {
+		if len(active) != 2 || len(released) != 0 {
 			t.Fatalf("active=%v released=%v", active, released)
 		}
 		return nil
 	})
 
-	// Owner unblock (item.update -> in-queue), fence widen (allowed_paths changed), and trunk clear release all three.
+	// Owner unblock (item.update -> in-queue) and trunk clear release both.
 	appendEvt(t, "item.update", "item", "item-owner", map[string]any{"state": "in-queue", "allowed_paths": []string{"a/"}}, 5)
-	appendEvt(t, "item.update", "item", "item-fence", map[string]any{"state": "in-queue", "allowed_paths": []string{"a/", "b/"}}, 6)
 	appendEvt(t, ClearedKind, "item", "item-trunk", ClearPayload{ItemID: "item-trunk", RunID: "run-trunk-1", Reason: "checks green"}, 7)
 
 	readCheck(t, func(r *store.Reader) error {
@@ -179,14 +156,27 @@ func TestReadTracksReleaseAcrossOwnerUnblockFenceWidenAndTrunkClear(t *testing.T
 		if len(active) != 0 {
 			t.Fatalf("expected all holds cleared, got %v", active)
 		}
-		if released["item-owner"] != "run-owner-1" || released["item-fence"] != "run-fence-1" || released["item-trunk"] != "run-trunk-1" {
+		if released["item-owner"] != "run-owner-1" || released["item-trunk"] != "run-trunk-1" {
 			t.Fatalf("released = %v", released)
 		}
 		return nil
 	})
 
+	// A historical fence hold is released without any operator edit to the item.
+	appendEvt(t, HeldKind, "item", "item-fence", Hold{ItemID: "item-fence", RunID: "run-fence-1", Kind: "fence", Mover: "operator", Action: "widen allowed_paths"}, 8)
+	readCheck(t, func(r *store.Reader) error {
+		active, released, err := Read(r)
+		if err != nil {
+			return err
+		}
+		if _, held := active["item-fence"]; held || released["item-fence"] != "run-fence-1" {
+			t.Fatalf("retired fence hold: active=%v released=%v", active, released)
+		}
+		return nil
+	})
+
 	// Allocating the next run consumes the released marker.
-	appendEvt(t, "run.allocate", "run", "run-trunk-2", map[string]string{"item_id": "item-trunk", "run_id": "run-trunk-2"}, 8)
+	appendEvt(t, "run.allocate", "run", "run-trunk-2", map[string]string{"item_id": "item-trunk", "run_id": "run-trunk-2"}, 9)
 	readCheck(t, func(r *store.Reader) error {
 		_, released, err := Read(r)
 		if err != nil {

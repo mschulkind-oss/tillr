@@ -49,8 +49,8 @@ The selected evaluator needs a mapped seat and can judge only criteria whose sto
 claim class appears in its `judge_classes`. The shipped `verify` and compatibility
 `review` steps list only `verification-only`; `owner-only` stays with the owner.
 The judge's authority is part of the selected workflow, so there is no renewal
-command or timer. The read-only judge runs after the fence check and before the
-gate; only a successful landing records the checked agent verdicts, without the mechanical
+command or timer. The read-only judge runs after the common deny-list check and before the
+gate; the judge reads the diff and changed paths to check scope; only a successful landing records the checked agent verdicts, without the mechanical
 verdict program. A workflow evaluator's `not-done` is a `verify-not-done` refusal (for both
 document items and filed requests): the loop pins the candidate commit the verifier read and
 dispatches the build step (`work` on the `build` seat, inserting `work` before the evaluator
@@ -60,8 +60,7 @@ original lane, or staging a fresh builder on that candidate commit on any availa
 including fork checkouts). The `plan` step runs again only when (a) a verifier's `not-done`
 reason begins with `plan-wrong:` (any case) because the plan itself was wrong, or (b) the
 builder reports it cannot meet the findings within the plan (`RESULT: blocked` with
-`OBSTACLE: definition` and `EVIDENCE: plan-wrong: <reason>`, a narrowed piece
-`OBSTACLE: fence` whose paths are inside the item's fence, or a report line beginning
+`OBSTACLE: definition` and `EVIDENCE: plan-wrong: <reason>`, or a report line beginning
 `PLAN-WRONG:`), recorded as `plan-wrong` (the rule is in
 [`planned-build@v1.json`](../../../../config/tillr/workflows/planned-build@v1.json)'s verify
 prompt). An opted-in item judge instead holds a document item's `not-done` as `eval-failed`,
@@ -259,7 +258,8 @@ writes nothing. `1` names a block with a finding, and every other document was s
 written (`tillr item reconcile` reports tracked documents that still owe queue work).
 
 For work that needs no Markdown block, `tillr item request` files an item straight from
-standard input with a title, path fence, and optional dependencies: it enters the express
+standard input with a title and optional dependencies. The retired `--path` flag is ignored
+with a notice. A request enters the express
 pool by default unless marked ordinary, carries four fixed criteria plus optional additions,
 and refuses any candidate diff that touches item blocks. `tillr item dep` adds or removes
 dependencies on an existing item without rewriting the rest of its record or changing its
@@ -291,8 +291,8 @@ its replies, and closes the item. Delivery waiting on an owner's edit remains in
 for a later pass; repeated delivery retains the same nonce.
 
 To file fork work, use `tillr item request`. Name the fork and the change in the words
-on standard input; supply the required `--title` and repository-relative `--path`
-fence entries, not a lane checkout path. Planning records the delivery target. For
+on standard input and supply `--title`. The ignored `--path` flag does not select a
+fork; do not name a lane checkout path. Planning records the delivery target. For
 mixed delivery, the fork lands before the repository part starts. Staging materializes
 the dispatched lane's checkout from the delivered patch tip. The worker commits there
 only, never runs `bin/pi-forks export`, and never edits the shared cache. The fork gate's `fork-build` check builds a clean copy of that exact head with the pack
@@ -553,11 +553,11 @@ correcting the cause, clear the recorded hold with `tillr drain clear-fault` and
 authorize rework through `tillr drain retry`, still under the same item id.
 Learn each face's required inputs from its `--help`.
 
-A worker run the gate refused, that committed nothing, that escaped its fence or whose
+A worker run the gate refused, that committed nothing, that matched the common deny-list or whose
 landing was refused needs no retry: the next pass sends it back to its worker with the
 refusal's evidence in the brief (`returned-with-evidence`), every time and uncounted. Only
 an identical repeat of an earlier ending (same seat, cause and normalized evidence) goes to
-the design seat instead, with both records. An edit to an item's block, fence or policy
+the design seat instead, with both records. An edit to an item's block or policy
 re-runs nothing.
 
 Retry a failed item under its own id with `tillr drain retry`. Read the failed

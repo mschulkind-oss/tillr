@@ -101,31 +101,26 @@ func parseMergeTreeConflict(stdout string) (paths []string, conflictText string)
 	return paths, strings.Join(messages, "\n")
 }
 
-func remoteSyncSplitFence(all []string) (allowed, gateOnly, unfenceable []string) {
-	for _, p := range all {
-		switch {
-		case p == "":
-			continue
-		case GateCode(p):
-			gateOnly = append(gateOnly, p)
-		case strings.ContainsAny(p, "*?\n") || !utf8.ValidString(p):
-			unfenceable = append(unfenceable, p)
-		default:
-			allowed = append(allowed, p)
+// These conflicts still need the owner: a repair must not change its own gate,
+// and recording a non-UTF-8 name in the store's JSON would lose its identity.
+func remoteSyncProtectedPaths(paths []string) string {
+	var gatePaths, invalidNames []string
+	for _, p := range paths {
+		if GateCode(p) {
+			gatePaths = append(gatePaths, p)
+		}
+		if !utf8.ValidString(p) {
+			invalidNames = append(invalidNames, strings.ToValidUTF8(p, "�"))
 		}
 	}
-	return allowed, gateOnly, unfenceable
-}
-
-func remoteSyncFenceProblem(gateOnly, unfenceable []string) string {
-	var parts []string
-	if len(gateOnly) > 0 {
-		parts = append(parts, "protected gate code paths ("+strings.Join(gateOnly, ", ")+")")
+	var problems []string
+	if len(gatePaths) != 0 {
+		problems = append(problems, "protected gate code paths ("+strings.Join(gatePaths, ", ")+")")
 	}
-	if len(unfenceable) > 0 {
-		parts = append(parts, "literal paths the fence cannot express ("+strings.Join(unfenceable, ", ")+")")
+	if len(invalidNames) != 0 {
+		problems = append(problems, "paths that cannot be recorded losslessly ("+strings.Join(invalidNames, ", ")+")")
 	}
-	return strings.Join(parts, " and ")
+	return strings.Join(problems, " and ")
 }
 
 func (l *Loop) collectRemoteSyncContext(ctx context.Context, mergeBase, remoteTip, conflictCommit string) (remoteMsgs, commitMsg, landingSummary string) {
@@ -337,11 +332,10 @@ func (l *Loop) fileOrUpdateRemoteSyncItemLocked(ctx context.Context, st remoteSy
 }
 
 func (l *Loop) fileRemoteSyncStep(ctx context.Context, tx *store.Tx, st remoteSyncState) error {
-	allowed, gateOnly, unfenceable := remoteSyncSplitFence(st.ConflictPaths)
-	problem := remoteSyncFenceProblem(gateOnly, unfenceable)
+	problem := remoteSyncProtectedPaths(st.ConflictPaths)
 	payload, err := json.Marshal(map[string]any{
 		"item_id": st.ItemID, "title": "resolve rebase conflict onto " + remoteSyncDestination(st), "state": StateInQueue,
-		"allowed_paths": allowed, "rank": TrunkFixerRank, "seat": TrunkFixerSeat, "express": true,
+		"rank": TrunkFixerRank, "seat": TrunkFixerSeat, "express": true,
 		"criteria": []map[string]string{{"criterion_id": RemoteSyncCriterion, "text": remoteSyncCriterionText(st), "state": "not-done"}},
 	})
 	if err != nil {
@@ -371,21 +365,11 @@ func (l *Loop) fileRemoteSyncStep(ctx context.Context, tx *store.Tx, st remoteSy
 }
 
 func (l *Loop) advanceRemoteSyncStep(ctx context.Context, tx *store.Tx, st remoteSyncState, priorBase string) error {
-	allowed, gateOnly, unfenceable := remoteSyncSplitFence(st.ConflictPaths)
-	// A widening belongs only to the prior step. Its resolution is now part of
-	// the base and may not be edited unless it also conflicts in this step.
-	fence, err := json.Marshal(allowed)
-	if err != nil {
-		return err
-	}
-	if _, err := tx.Exec(`UPDATE items SET allowed_paths=? WHERE item_id=?`, string(fence), st.ItemID); err != nil {
-		return err
-	}
 	if _, err := tx.Exec(`UPDATE item_criteria SET text=? WHERE item_id=? AND criterion_id=?`, remoteSyncCriterionText(st), st.ItemID, RemoteSyncCriterion); err != nil {
 		return err
 	}
 	at := l.cfg.Now().UTC()
-	if problem := remoteSyncFenceProblem(gateOnly, unfenceable); problem != "" {
+	if problem := remoteSyncProtectedPaths(st.ConflictPaths); problem != "" {
 		if _, err := item.SetState(ctx, tx, st.ItemID, StateBlocked, at, item.WaitingOn{
 			Waiter: "owner", Reason: "rebase conflict onto " + remoteSyncDestination(st) + " includes " + problem,
 		}); err != nil {
@@ -395,7 +379,7 @@ func (l *Loop) advanceRemoteSyncStep(ctx context.Context, tx *store.Tx, st remot
 	if err := appendEffect(tx, remoteSyncStagedKind, st.ItemID, st, at); err != nil {
 		return err
 	}
-	_, err = rawGit(ctx, l.cfg.Root, nil, "update-ref", "--no-deref", remoteSyncPinRef(st.ItemID), st.BaseSHA, priorBase)
+	_, err := rawGit(ctx, l.cfg.Root, nil, "update-ref", "--no-deref", remoteSyncPinRef(st.ItemID), st.BaseSHA, priorBase)
 	return err
 }
 
