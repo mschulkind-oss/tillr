@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
@@ -27,6 +28,9 @@ type verifyReturnSteps struct {
 	expanded       bool
 	verdict        string // reason of the first verify's not-done finding
 	always         bool   // every verify refuses with that finding
+	varyFinding    bool   // each verifier refusal names a different defect
+	refusedAt      []time.Time
+	now            func() time.Time
 	cannotMeet     string // when set, the first repair run ends with this report
 	pieceObstacle  string // when set, the first ordinary piece-two run blocks
 	pieceRuns      []run.Request
@@ -111,6 +115,11 @@ func (s *verifyReturnSteps) Run(ctx context.Context, req run.Request) (run.Recor
 		if s.verifies == 1 || s.always {
 			verdict, reason = "not-done", s.verdict
 			s.verified, s.verifiedRun = head, req.RunID
+			if s.varyFinding {
+				defects := []string{"missing check", "wrong input", "stale output", "absent receipt", "wrong scope", "missing assertion"}
+				reason = "uncovered: " + defects[(s.verifies-1)%len(defects)]
+				s.refusedAt = append(s.refusedAt, s.now())
+			}
 		}
 		if s.verifies == 1 && s.cannotMeet != "" && s.widenedPath != "" {
 			// The return selects the last writer using the verifier's staged fence.
@@ -143,7 +152,7 @@ func (s *verifyReturnSteps) Run(ctx context.Context, req run.Request) (run.Recor
 		s.repairHead = append(s.repairHead, runGit(s.t, target, "rev-parse", "HEAD"))
 		if s.cannotMeet != "" && len(s.repairs) == 1 {
 			report = s.cannotMeet
-		} else if s.always {
+		} else if s.always && !s.varyFinding {
 			// An identical repeat judges the same candidate: every repair rebuilds the
 			// same commit from the candidate the first verifier read.
 			s.t.Setenv("GIT_AUTHOR_DATE", "2026-11-15T00:00:00Z")
@@ -312,26 +321,118 @@ func TestVerifyNotDoneRepairedByBuildStep(t *testing.T) {
 	}
 }
 
-// The same finding twice is still an identical repeat: it goes to the design seat, and no
-// third run is dispatched to the builder.
-func TestVerifyNotDoneIdenticalRepeatRoutesDesign(t *testing.T) {
+// The first repair changes the candidate. The second rebuilds it identically;
+// triage takes precedence when that repeat is also the third refusal.
+func TestThirdVerifyNotDoneTakesPrecedenceOverIdenticalRepeat(t *testing.T) {
 	l, s, f := verifyReturnFixture(t, false, func(w *workflowSteps) *verifyReturnSteps {
 		return &verifyReturnSteps{workflowSteps: w, verdict: "uncovered: still missing", always: true}
 	})
 	result := &LoopResult{}
-	for i := 0; i < 60 && storeCount(t, f, `SELECT COUNT(*) FROM events WHERE kind='item.conflict' AND object_id='item-a' AND json_extract(payload,'$.waiting_on')='design'`) == 0; i++ {
+	for i := 0; i < 24; i++ {
 		graphPass(t, l, result)
 	}
-	if n := storeCount(t, f, `SELECT COUNT(*) FROM events WHERE kind='item.conflict' AND object_id='item-a' AND json_extract(payload,'$.waiting_on')='design'`); n != 1 {
-		t.Fatalf("design conflicts = %d (plans=%d repairs=%d)", n, s.plans, len(s.repairs))
+	if n := storeCount(t, f, `SELECT COUNT(*) FROM events WHERE kind='item.conflict' AND object_id='item-a'`); n != 0 {
+		t.Fatalf("triage should take precedence over a design conflict; got %d conflicts", n)
 	}
-	if s.plans != 1 || len(s.repairs) != 2 || s.gates != 0 {
-		t.Errorf("plans=%d repairs=%d gates=%d", s.plans, len(s.repairs), s.gates)
+	if s.verifies != 3 || s.plans != 1 || len(s.repairs) != 2 || s.gates != 0 {
+		t.Fatalf("verifies=%d plans=%d repairs=%d gates=%d", s.verifies, s.plans, len(s.repairs), s.gates)
 	}
-	for _, p := range mustPlan(t, l) {
-		if p.decision.ItemID == "item-a" && p.decision.Action == ActionDispatch && p.decision.Seat != "design" {
-			t.Errorf("identical repeat dispatched seat %q reason %q", p.decision.Seat, p.decision.Reason)
+	fixtureRead(t, f, func(r *store.Reader) error {
+		holds, err := ReadItemFaults(r)
+		if err == nil && holds["item-a"].Reason != reasonVerifyTriage {
+			t.Fatalf("third refusal was not held for triage: %+v", holds)
 		}
+		return err
+	})
+}
+
+// Three distinct findings hold the item. One operator retry releases it and starts
+// a new window without dropping the earlier findings.
+func TestVerifyNotDoneHoldsForOperatorRetry(t *testing.T) {
+	l, s, f := verifyReturnFixture(t, false, func(w *workflowSteps) *verifyReturnSteps {
+		return &verifyReturnSteps{workflowSteps: w, always: true, varyFinding: true}
+	})
+	at := l.cfg.Now().UTC().Truncate(time.Second)
+	l.cfg.Now = func() time.Time { return at }
+	s.now = l.cfg.Now
+	result := &LoopResult{}
+	readHold := func() ItemFault {
+		t.Helper()
+		var fault ItemFault
+		fixtureRead(t, f, func(r *store.Reader) error {
+			faults, err := ReadItemFaults(r)
+			fault = faults["item-a"]
+			return err
+		})
+		return fault
+	}
+	pass := func() {
+		before := s.verifies
+		graphPass(t, l, result)
+		if s.verifies != before {
+			at = at.Add(time.Minute)
+		}
+	}
+	for i := 0; i < 30; i++ {
+		pass()
+	}
+	fault := readHold()
+	if fault.Reason != "verify-triage" || s.verifies != 3 || s.plans != 1 || len(s.repairs) != 2 || s.gates != 0 {
+		t.Fatalf("fault=%+v verifies=%d plans=%d repairs=%d gates=%d", fault, s.verifies, s.plans, len(s.repairs), s.gates)
+	}
+	checkFindings := func(fault ItemFault, start int, findings ...string) {
+		t.Helper()
+		var want []string
+		for i, finding := range findings {
+			want = append(want, s.refusedAt[start+i].Format(time.RFC3339)+": c2: uncovered: "+finding)
+		}
+		if !strings.Contains(fault.Detail, strings.Join(want, "; ")) {
+			t.Fatalf("hold text %q does not list ordered findings %v", fault.Detail, want)
+		}
+	}
+	checkFindings(fault, 0, "missing check", "wrong input", "stale output")
+	cmd := retryCommand("item-a", s.verifiedRun, "")
+	if !strings.Contains(fault.Detail, cmd) || !strings.Contains(fault.Detail, "operator") {
+		t.Fatalf("hold does not name the operator and accepted command %q: %+v", cmd, fault)
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if err := AcquitRun(tx, fault.RunID, "reviewed the findings", l.cfg.Now()); err == nil || !strings.Contains(err.Error(), cmd) {
+			t.Errorf("acquit should refuse and name %q, got %v", cmd, err)
+		}
+		return nil
+	})
+	if got := readHold(); got != fault {
+		t.Fatalf("acquit changed the triage hold: got %+v, want %+v", got, fault)
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if err := ClearItemFault(tx, "item-a", fault.Seq, l.cfg.Now()); err == nil || !strings.Contains(err.Error(), cmd) {
+			t.Fatalf("clear-fault should refuse and name %q, got %v", cmd, err)
+		}
+		wrong := RetryRequest{ItemID: "item-a", RunID: s.repairs[0].RunID, By: "operator", Why: "wrong run", At: l.cfg.Now()}
+		if _, err := AuthorizeRetry(context.Background(), tx, wrong); err == nil || !strings.Contains(err.Error(), cmd) {
+			t.Fatalf("retry of earlier run should refuse and name %q, got %v", cmd, err)
+		}
+		_, err := AuthorizeRetry(context.Background(), tx, RetryRequest{
+			ItemID: "item-a", RunID: fault.RunID, By: "operator", Why: "read all three findings", At: l.cfg.Now(),
+		})
+		return err
+	})
+	if f := readHold(); f.Reason != "" {
+		t.Fatalf("operator retry did not release hold: %+v", f)
+	}
+	for i := 0; i < 30; i++ {
+		pass()
+		if f := readHold(); s.verifies < 6 && f.Reason != "" {
+			t.Fatalf("early hold after retry: %+v (verifies=%d)", f, s.verifies)
+		}
+	}
+	if f := readHold(); f.Reason != "verify-triage" || s.verifies != 6 {
+		t.Fatalf("after retry fault=%+v, verifies=%d, want new hold after six total refusals", f, s.verifies)
+	} else {
+		checkFindings(f, 3, "absent receipt", "wrong scope", "missing assertion")
+	}
+	if n := storeCount(t, f, `SELECT COUNT(*) FROM events WHERE kind='drain.refusal' AND json_extract(payload,'$.item_id')='item-a' AND json_extract(payload,'$.step')='verify-not-done'`); n != 6 {
+		t.Fatalf("refusal history has %d events, want 6", n)
 	}
 }
 

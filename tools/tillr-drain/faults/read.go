@@ -11,20 +11,23 @@ import (
 )
 
 const (
-	HeldKind    = "drain.item-fault"
-	ClearedKind = "drain.item-fault-cleared"
+	HeldKind           = "drain.item-fault"
+	ClearedKind        = "drain.item-fault-cleared"
+	VerifyTriageReason = "verify-triage"
 )
 
 // Hold is a durable refusal to advance one item, not a verdict against its code.
 // Clearing permits another examination; it does not spend another model attempt.
 type Hold struct {
-	ItemID string `json:"item_id"`
-	RunID  string `json:"run_id,omitempty"`
-	LaneID string `json:"lane_id,omitempty"`
-	Reason string `json:"reason"`
-	Detail string `json:"detail"`
-	AtMS   int64  `json:"-"`
-	Seq    int64  `json:"-"`
+	ItemID           string `json:"item_id"`
+	RunID            string `json:"run_id,omitempty"`
+	LaneID           string `json:"lane_id,omitempty"`
+	Reason           string `json:"reason"`
+	Detail           string `json:"detail"`
+	RetryAck         string `json:"retry_ack,omitempty"`
+	RepeatConflictID string `json:"repeat_conflict_id,omitempty"`
+	AtMS             int64  `json:"-"`
+	Seq              int64  `json:"-"`
 }
 
 // Read also reads historical boundary convictions. An old store needs no new
@@ -101,6 +104,24 @@ func Read(r *store.Reader) (map[string]Hold, error) {
 // ClearCommand names the store and the precise evidence identity, preventing a
 // stale waiting display from silently clearing a newer conviction.
 func (f Hold) ClearCommand(storePath string) string {
-	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
+	if f.Reason == VerifyTriageReason {
+		return "operator; " + VerifyTriageCommand(storePath, f.ItemID, f.RunID, f.RetryAck)
+	}
 	return fmt.Sprintf("tillr drain clear-fault --store %s --item %s --fault %s", quote(storePath), quote(f.ItemID), strconv.FormatInt(f.Seq, 10))
 }
+
+// VerifyTriageCommand names the held run, not a fault sequence. Only a
+// retry authorization of that run can release the hold.
+func VerifyTriageCommand(storePath, itemID, runID, ack string) string {
+	storeArg := "<path>"
+	if storePath != "" {
+		storeArg = quote(storePath)
+	}
+	cmd := fmt.Sprintf("tillr drain retry --item %s --run %s --by <who> --why <reason>", itemID, runID)
+	if ack != "" {
+		cmd += " --acknowledge " + ack
+	}
+	return cmd + fmt.Sprintf(" --store %s --now \"$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)\"", storeArg)
+}
+
+func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }

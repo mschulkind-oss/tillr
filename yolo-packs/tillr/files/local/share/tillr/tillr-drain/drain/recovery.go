@@ -23,6 +23,7 @@ func init() {
 
 // AcquitRun closes the current attributed fault, retaining both the diagnosis and
 // the operator's explanation. It does not erase gate verdicts or authorize a retry.
+// Verifier triage can only be cleared by authorizing a retry.
 func AcquitRun(tx *store.Tx, runID, why string, at time.Time) error {
 	if strings.TrimSpace(runID) == "" || strings.TrimSpace(why) == "" {
 		return Usagef("acquit needs --run and --why")
@@ -34,6 +35,9 @@ func AcquitRun(tx *store.Tx, runID, why string, at time.Time) error {
 	for itemID, f := range faults {
 		if f.RunID != runID {
 			continue
+		}
+		if f.Reason == reasonVerifyTriage {
+			return Usagef("item %q is held for verifier triage; %s", itemID, f.ClearCommand(""))
 		}
 		body, err := json.Marshal(struct {
 			ItemFault

@@ -131,7 +131,7 @@ func (s *plannedVerifySteps) Run(ctx context.Context, req run.Request) (run.Reco
 	return rec, report, err
 }
 
-func TestPlannedVerifyReturnsAndRepeats(t *testing.T) {
+func TestPlannedVerifyReturnsThenHoldsForTriage(t *testing.T) {
 	f, l, base := plannedFixture(t)
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "config/tillr/plan-guidance.md"))
 	if err != nil {
@@ -162,8 +162,8 @@ func TestPlannedVerifyReturnsAndRepeats(t *testing.T) {
 	if !found {
 		t.Fatalf("no returned build step: %+v", mustPlan(t, l))
 	}
-	// The first repair is a new candidate; the second rebuilds that same commit, so its
-	// verdict repeats the second verifier's and the item goes to design.
+	// The first repair is a new candidate; the second rebuilds that same commit.
+	// The third refusal holds for triage instead of taking the identical-repeat route.
 	for i := 0; i < 40 && steps.verifies < 3; i++ {
 		graphPass(t, l, result)
 	}
@@ -175,14 +175,18 @@ func TestPlannedVerifyReturnsAndRepeats(t *testing.T) {
 		if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind='item.conflict' AND object_id='item-a' AND json_extract(payload,'$.waiting_on')='design'`).Scan(&n); err != nil {
 			return err
 		}
-		if n != 1 {
-			t.Errorf("design conflicts: %d", n)
+		if n != 0 {
+			t.Errorf("design conflicts: %d, want zero", n)
 		}
-		return nil
+		holds, err := ReadItemFaults(r)
+		if err == nil && holds["item-a"].Reason != reasonVerifyTriage {
+			t.Errorf("expected verifier triage hold, got %+v", holds["item-a"])
+		}
+		return err
 	})
 	for _, p := range mustPlan(t, l) {
-		if p.decision.ItemID == "item-a" && p.decision.Action == ActionDispatch && p.decision.Seat != "design" {
-			t.Fatalf("identical repeat dispatched %s again", p.decision.Seat)
+		if p.decision.ItemID == "item-a" && p.decision.Action == ActionDispatch {
+			t.Fatalf("triaged item dispatched %s again", p.decision.Seat)
 		}
 	}
 	if steps.plans != 1 || steps.works != 2 || steps.gates != 0 {
