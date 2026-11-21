@@ -53,12 +53,15 @@ the gate; this design applies it to the fixer), [landing principles](landing-pri
   (the heavy runner of [the gate rework](gate-rework.md#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer)).
 - **Upstream reader** *(coined here)*. A check whose verdict depends on what an upstream
   repository currently publishes, not only on the commit under judgment. In
-  `tools/fork-check.py` these are the checks declared not reusable (`reads_upstream`); `series`
-  and `patch-branch-inv2` are the two that fetch. It is not a check that merely needs the
-  network to install dependencies.
-- **Upstream drift** *(coined here)*. An upstream reader that is red on a candidate, red on the
-  candidate's base with the same answer, and whose watched paths the candidate did not change.
-  It is not a red the candidate caused, and it is not a check that could not run.
+  `tools/fork-check.py` these are the checks the `reads_upstream` predicate matches, which is
+  every fork check declared not reusable. That is the set the proof leaves out and the fixer's
+  gate drops, as built. The set is wider than the checks that fetch: only `patch-branch-inv2`
+  fetches the followed upstream, and only it can be drift. An upstream reader is not a check
+  that merely needs the network to install dependencies.
+- **Upstream drift** *(coined here)*. A `patch-branch-inv2` check that is red on a candidate, red
+  on the candidate's base with the same answer, on a candidate that does not touch that fork.
+  [Which checks can be drift](#which-checks-can-be-drift) defines "same answer" and "touches the
+  fork". It is not a red the candidate caused, and it is not a check that could not run.
 - **Rebase request** *(coined here)*. One generated fork item that names a fork, the upstream
   release its series does not merge, and the failing question. It is not a trunk fixer: the
   trunk commit is not wrong, and the repair is made in the fork's checkout.
@@ -136,7 +139,7 @@ Specified cases:
   ([what "could not judge" does](#the-checks-that-could-not-judge)). A fixer is not landed on a
   check nobody could run.
 - **A named check that is an upstream reader** is not run as a named check. A red upstream
-  reader is drift or a change's own failure, decided by the [drift rule](#upstream-drift-is-a-rebase-request-not-a-refusal),
+  reader is a change's own failure or, for `patch-branch-inv2` alone, drift, decided by the [drift rule](#upstream-drift-is-a-rebase-request-not-a-refusal),
   and no trunk fixer is filed for it from here on. A fixer already open that names one keeps
   its other checks, and that name is dropped when its gate is composed, with a line saying so.
 - **The inherited-failure rule applies to checks the fixer does not name.** The fixer stays
@@ -227,10 +230,11 @@ probe is not built: both kinds are still `TIER_LANDING` in `tools/fork-check.py`
 keeps that decision and says what happens until it is built, for every candidate and not only
 a fixer.
 
-When a gate plans an upstream reader and it is red, the loop replays it on the candidate's base,
-which the replay step already does for every red check. Then:
+When a gate plans a `patch-branch-inv2` check and it is red, the loop replays it on the
+candidate's base, which the replay step already does for every red check.
+[Which checks can be drift](#which-checks-can-be-drift) says why it is that kind alone. Then:
 
-| The check on the base | The candidate's diff and the check's watched paths | Outcome |
+| The check on the base | The candidate's diff and the fork's own paths | Outcome |
 | :--- | :--- | :--- |
 | Passes | Any | The candidate's own failure. Ordinary refusal |
 | Red, same answer | Do not intersect | Drift. The candidate lands with the failure recorded as inherited. One rebase request is filed |
@@ -253,13 +257,86 @@ fork follows, and that is [the next two parts](#a-fork-that-follows-a-branch-hea
   step, by the existing rule that a drain worker never runs `bin/pi-forks rebase`.
 - **It holds nothing but changes to that fork.** It never holds the green pointer, the proof,
   a fixer, or a candidate that does not touch the fork.
-- **A fork pinned to a commit** has no release to follow. Its upstream readers answer for the
-  pin, so a red there is never drift from a release.
+- **A fork pinned to a commit** has no release to follow. Its check answers for the pin, so a
+  red there is never drift from a release.
 - **It closes** when a landing makes the check pass against that release, or when a newer
   request replaces it.
 - **It is filed only for a fork that follows releases.** That is a fork whose pack declaration
   carries no `follow` key and no pin
-  ([the follow modes](../pi/forks.md#roll-forward-on-releases-never-on-a-branch-head)).
+  ([the follow modes](../pi/forks.md#roll-forward-on-releases-never-on-a-branch-head)), which
+  the target line reports as the kind `release`
+  ([which checks can be drift](#which-checks-can-be-drift)).
+
+### Which checks can be drift
+
+Added on 2026-11-21 to answer a build worker's finding; the tree was read at `58d445ea7f`. It is
+the designer's decision, part of `D-FG3`, and the owner may overturn it.
+
+The finding: this design said "`series` and `patch-branch-inv2` are the two that fetch" and
+asked for one request "per fork and release". The `series` check is planned per pack, as
+`yolo pack series check yolo-packs/<pack>`, with no fork selector and no fetch, so it cannot name
+a fork or a release. The `reads_upstream` predicate also matches `patch-branch-inv3`,
+`forks-check`, `build` and `fork-quality`, which answer about the tree or a build, so using it
+to classify drift would call an export mismatch or a compile failure drift. The predicate stays
+what the proof and the fixer's gate use to leave checks out; that is built and unchanged. The earlier wording was the
+designer's error.
+
+**Only `patch-branch-inv2` can be drift.** The build selects it by its kind name, never by
+`reads_upstream`.
+
+| Check kind | Can it be drift | Why |
+| :--- | :--- | :--- |
+| `patch-branch-inv2` | Yes | It is planned once per fork, with `--fetch --fork <name>`, and asks whether that fork's patch branch merges the upstream a launch would build |
+| `series` | No | It is planned per pack and reads a recorded answer without fetching. It is also not planned for a pack whose forks are all patch branches, which is every fork today: `rg -v '^#' bin/pi-forks.list` on 2026-11-21 lists eight forks, each delivered as `patch/<name>` |
+| `patch-branch-inv3`, `forks-check`, `build`, `fork-quality` | No | Each answers about the series, a clean checkout of it, or its build. None reads what an upstream published since |
+
+A red on a kind marked "No" that is also red on the base is handled as it is today, by the
+existing acquittal for a trunk that is already red or by an ordinary refusal. This design adds
+nothing for it. The ordinary gate's plan is unchanged: no check is added, removed or given a new
+argument.
+
+**The fork** is the one the check's own `--fork` argument names.
+
+**The target** is what `bin/pi-forks patch-branch target --fork <name>` prints for that fork
+after the check ran: one line holding the upstream repository, the kind, the ref and the commit.
+The kind decides which rule applies:
+
+| Target kind | Rule |
+| :--- | :--- |
+| `release` | The rebase request below. "Release" in "one per fork and release" is this line's ref |
+| `head` | [A fork that follows a branch head](#a-fork-that-follows-a-branch-head). The record names this line's ref and commit |
+| `pin` or `base` | Never drift. The check answered for a fixed commit, so the red is an ordinary refusal |
+| No line, or a non-zero exit | Not drift. It is [a check that could not judge](#the-checks-that-could-not-judge) |
+
+**"Red, same answer"** means all three of these hold:
+
+1. The check's output on the candidate carries the driver's refusal phrase for this kind,
+   `conflicts with` (`INVARIANT_PHRASES` in `tools/fork-check.py`).
+2. The replay on the base carries the same phrase.
+3. Both name the same target ref.
+
+A red without that phrase, on either side, is the driver failing to answer. It is
+[a check that could not judge](#the-checks-that-could-not-judge). A different ref on the two
+sides means the upstream moved between the two runs; the candidate is gated again and nothing is
+classified.
+
+**"The fork's own paths"** are `yolo-packs/fork-pins/<name>` and, for a fork that still commits
+a series directory, the paths under it. A candidate touches the fork when its diff includes one
+of them. The check's `watches` are not the test: they name the whole pack directory and
+`bin/pi-forks`, and the landing tier plans the check only when the diff matches one of them, so
+by that test every planned check would "intersect" and the acquittal would never apply. A
+candidate that edits another part of the same pack, or the pack's declaration without changing
+this fork's target, does not touch the fork; a declaration edit that changes the target makes
+the two sides name different refs or makes the base pass, and both are covered above.
+
+Rejected, as the designer's decision:
+
+- **Giving `series` a fork and a release.** It would need a fork selector or a fetch added to a
+  check the ordinary gate plans, which changes the ordinary gate, and it would cover no fork
+  that exists today.
+- **Classifying by `reads_upstream`.** It names checks that read no upstream.
+- **Reading the fork and release from the check's printed sentence alone.** The target command
+  prints the same resolution as one machine-readable line, with the kind.
 
 ### A fork that follows a branch head
 
@@ -276,7 +353,7 @@ landing can close, and a candidate held behind it would never be released.
 
 The rule for a fork whose declaration says `follow: "head"`:
 
-| The check on the base | The candidate's diff and the check's watched paths | Outcome |
+| The check on the base | The candidate's diff and the fork's own paths | Outcome |
 | :--- | :--- | :--- |
 | Passes | Any | The candidate's own failure. Ordinary refusal |
 | Red, same answer | Do not intersect | Drift. The candidate lands with the failure recorded as inherited. **No item is filed** |
@@ -330,7 +407,7 @@ and adds no route:
 | An ordinary candidate's gate, with no verdict reached | The candidate is held as `gate-no-verdict` and the next pass gates the same candidate again (`holdGateNoVerdict` in `gate_no_verdict.go`). The mover is the loop |
 | An ordinary candidate's gate, when the gate states an error of its own | The item is held as a gate fault, `gate-harness-error`, with the gate's words as the reason (`gateFault` in `item_fault.go`) |
 | A fixer's named check | The fixer is held as a gate fault, `gate-harness-error`, naming the checks that could not judge (`fixer_gate.go`). Built with `D-FG1` |
-| The replay of a red upstream reader on the candidate's base | The red is not classified as drift. No request is filed and nothing is inherited; the candidate is handled as the gate's own answer says, by the rows above or as an ordinary refusal |
+| The replay of a red `patch-branch-inv2` check on the candidate's base | The red is not classified as drift. No request is filed and nothing is inherited; the candidate is handled as the gate's own answer says, by the rows above or as an ordinary refusal |
 
 - **No gate answer files a tooling-defect item.** That stays the route for a worker's reported
   tooling obstacle and nothing else.
@@ -442,6 +519,6 @@ design. None is an owner ruling, and the owner may overturn each by comment.
 | :--- | :--- | :--- | :--- | :--- |
 | `D-FG1` | A trunk fixer's gate is the ordinary gate over its own diff plus the checks it names, run on its tree. The untiered range since the last green is removed. Structural fix. (Designer's decision.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate) | Built |
 | `D-FG2` | A fixer stays excluded from acquittal only for the checks it names; for any other check it is judged as any candidate is, except that it is never held behind itself or behind a fixer that waits on it: such a check is attached to the fixer and the refusal returns to its worker. No second fixer is filed for the same commit. (Designer's decision; the exception was added on 2026-11-21 to answer a build worker's finding that the ordinary route made a fixer wait on itself.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate), [A fixer never waits on itself](#a-fixer-never-waits-on-itself) | Built |
-| `D-FG3` | An upstream reader red on a candidate and on its base, whose watched paths the candidate did not change, is drift: the candidate lands with the failure inherited and one rebase request per fork and release is filed. No trunk fixer is filed for drift. The request is filed only for a fork that follows releases. For a fork that follows a branch head the candidate still lands with the failure inherited, no item is filed, one loop line is printed, and a candidate that touches that fork is refused as today, because the lander delivers a rewritten patch branch only for a release. Structural fix. (Designer's decision, carrying out `D-GR12` of the gate rework, itself a designer's decision; the head-follower rule was added on 2026-11-21 to answer a build worker's finding that `pi-background-tasks` follows `head`.) | 2026-11-21 | [Upstream drift](#upstream-drift-is-a-rebase-request-not-a-refusal), [A fork that follows a branch head](#a-fork-that-follows-a-branch-head) | — |
+| `D-FG3` | A `patch-branch-inv2` check red on a candidate and on its base with the same refusal against the same target ref, on a candidate whose diff does not include that fork's own paths, is drift: the candidate lands with the failure inherited and one rebase request per fork and release is filed. No trunk fixer is filed for drift. The request is filed only for a fork that follows releases. For a fork that follows a branch head the candidate still lands with the failure inherited, no item is filed, one loop line is printed, and a candidate that touches that fork is refused as today, because the lander delivers a rewritten patch branch only for a release. Structural fix. (Designer's decision, carrying out `D-GR12` of the gate rework, itself a designer's decision; the head-follower rule was added on 2026-11-21 to answer a build worker's finding that `pi-background-tasks` follows `head`. Narrowed on 2026-11-21, as the designer's decision, to answer a build worker's finding that `series` is planned per pack without a fetch and that `reads_upstream` matches checks that read no upstream: only `patch-branch-inv2` can be drift, selected by kind name; the fork is the check's `--fork` argument and the release is the ref `bin/pi-forks patch-branch target` prints; `series`, `patch-branch-inv3`, `forks-check`, `build` and `fork-quality` are never drift; the ordinary gate's plan is unchanged.) | 2026-11-21 | [Upstream drift](#upstream-drift-is-a-rebase-request-not-a-refusal), [Which checks can be drift](#which-checks-can-be-drift), [A fork that follows a branch head](#a-fork-that-follows-a-branch-head) | — |
 | `D-FG4` | A fork check that could not judge is neither drift nor a verdict. It holds only a candidate whose diff reaches it or a fixer that names it, by the holds the tree already has: an ordinary candidate is held as `gate-no-verdict` and gated again, or as a gate fault when the gate states its own error; a fixer's named check is a gate fault. No gate answer files a tooling-defect item. The one thing to build is that "could not judge" on the base is never classified as drift. (Designer's decision; corrected on 2026-11-21 to answer a build worker's finding that the "tooling-defect path" the earlier wording named is entered only by a worker's reported obstacle.) | 2026-11-21 | [The checks that could not judge](#the-checks-that-could-not-judge) | — |
 | `D-FG5` | The queue, the affected candidates and the operator's surfaces are told of drift by the rebase request and one loop line; for a fork that follows a branch head, by the inherited record and one loop line. Nothing owner-facing is built until [OQ-FG1](#OQ-FG1) is ruled. (Designer's decision.) | 2026-11-21 | [Who is told](#who-is-told-when-an-upstream-moves) | — |
