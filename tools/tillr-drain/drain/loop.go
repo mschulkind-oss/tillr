@@ -494,6 +494,8 @@ type LoopResult struct {
 // independent worker. Terminal outcomes are read from the store; completion channels
 // are only this process's wake triggers. Each run retains its own boundary bracket.
 type Loop struct {
+	recoveredRemoteSync *remoteSyncReplay // set only by the standalone push turn
+
 	reportedAlarms                       []string // Previous pass's display, not an availability input.
 	startView                            atomic.Pointer[startView]
 	endingCapabilities                   map[string]string
@@ -3133,6 +3135,14 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 		return "", false, lockErr
 	}
 	defer unlock()
+	if replay, err := l.recoverRemoteSyncReplay(ctx); err != nil {
+		return "", false, err
+	} else if replay != nil {
+		l.afterRemoteSyncReplay(ctx, replay, result)
+		if replay.Candidate.RunID == candidate.RunID {
+			return replay.Rewrite.Tip, true, nil
+		}
+	}
 	if err := l.checkItemTerminal(ctx, candidate.ItemID, "land"); err != nil {
 		return "", false, err
 	}

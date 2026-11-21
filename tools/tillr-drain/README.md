@@ -2899,16 +2899,22 @@ block to amend. While the repair is open, push turns report its current mover
 as `remote-sync-conflict`, including failed fetches and already-published green
 commits. If the operator reconciles `main` by hand, the next sweep closes the
 repair and records `remote-sync-cleared` once without publishing or recording a
-landing. The filer does not move main, green or the main checkout. The live
-refused-push path does not yet call the filer.
+landing. The filer does not move main, green or the main checkout. A newer
+conflicting tip supersedes an open repair for an older tip on the same destination,
+after any interrupted landing has been settled. First-conflict filing is not yet
+wired into the live refused-push path.
 
 The repair landing path rechecks the pin and the gate binding. If replay hits
 another conflict, landing advances the pinned base and replaces the fence with
 that step's permitted conflict paths, without moving `main`. A candidate gated
-for an earlier step is refused at landing. Once replay is clean, landing uses
-`git reset --keep` to install the resolutions and replayed suffix. It records
-the rewrite pairs and a landing receipt. Tip mode pushes the new tip; green
-mode keeps green behind the first resolution and records
+for an earlier step is refused at landing. Once replay is clean, landing records
+a `drain.remote-sync-replay` intent under `land.lock` before using `git reset --keep`
+to install the resolutions and replayed suffix. The next pass or a manual
+`tillr drain push` finishes an interrupted landing if `main` contains the intended
+replay tip, recording the rewrite and landing receipt and settling the item as
+landed. A manual push recovering a repair can file a conflict at a newer remote
+tip without closing the landed repair. Tip mode pushes the new tip; green mode
+keeps green behind the first resolution and records
 `remote-sync-proving` until proof reaches the replayed tip. Ordinary candidate
 landing does not yet call the repair landing path.
 

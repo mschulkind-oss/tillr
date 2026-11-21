@@ -31,6 +31,9 @@ func init() {
 	if err := event.Register(remoteSyncStagedKind, Utility); err != nil {
 		panic(err)
 	}
+	if err := event.Register(remoteSyncReplayKind, Utility); err != nil {
+		panic(err)
+	}
 }
 
 // RemoteSyncItemID names the repair for a fetched remote tip.
@@ -248,12 +251,35 @@ func (l *Loop) fileOrUpdateRemoteSyncItem(ctx context.Context, st remoteSyncStat
 // Only landing may supply priorBase to advance a gated step. Keep the history
 // lock across the original stage check, suffix replay and step publication.
 func (l *Loop) fileOrUpdateRemoteSyncItemLocked(ctx context.Context, st remoteSyncState, priorBase string) (*pushStateError, error) {
+	if _, err := l.recoverRemoteSyncReplayLocked(ctx); err != nil {
+		return nil, err
+	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return nil, Incompatiblef("%v", err)
 	}
 	defer s.Close()
 
+	var superseded []remoteSyncState
+	if priorBase == "" {
+		if err := s.ReadTx(ctx, func(r *store.Reader) error {
+			open, err := openRemoteSyncStages(r)
+			if err != nil {
+				return err
+			}
+			for _, row := range open {
+				old := row.stage
+				if old.Remote == st.Remote && old.Ref == st.Ref && old.RemoteTip != st.RemoteTip {
+					if older, _ := trunkAncestor(ctx, l.cfg.Root, old.RemoteTip, st.RemoteTip); older {
+						superseded = append(superseded, old)
+					}
+				}
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
+	}
 	var created, advanced bool
 	var conflict *pushStateError
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
@@ -286,6 +312,11 @@ func (l *Loop) fileOrUpdateRemoteSyncItemLocked(ctx context.Context, st remoteSy
 		var state string
 		if err := tx.QueryRow(`SELECT state FROM items WHERE item_id=?`, st.ItemID).Scan(&state); err != nil {
 			return err
+		}
+		for _, old := range superseded {
+			if _, err := item.Close(ctx, tx, old.ItemID, "superseded by "+st.ItemID, Utility, l.cfg.Now().UTC()); err != nil {
+				return err
+			}
 		}
 		conflict, err = readRemoteSyncConflict(tx.Reader(), st, state)
 		return err

@@ -22,6 +22,9 @@ func (l *Loop) landRemoteSync(ctx context.Context, c Candidate, result *LoopResu
 		return "", false, err
 	}
 	defer release()
+	if _, err := l.recoverRemoteSyncReplayLocked(ctx); err != nil {
+		return "", false, err
+	}
 	refuse := func(detail string) (string, bool, error) {
 		release()
 		c.RefusalDetail = detail
@@ -120,43 +123,70 @@ func (l *Loop) landRemoteSync(ctx context.Context, c Candidate, result *LoopResu
 	if got, err := l.revParse(ctx, root, "refs/heads/"+TrunkRef); err != nil || got != before {
 		return "", false, Externalf("main moved while preparing the remote-sync replay")
 	}
+	intent := &remoteSyncReplay{Candidate: c, Rewrite: *known, Tree: tree, Verdict: verdict, Stage: st}
+	if err := l.writeRemoteSyncReplay(ctx, intent); err != nil {
+		return "", false, err
+	}
 	if _, err := rawGit(ctx, root, nil, "reset", "--keep", "-q", known.Tip); err != nil {
 		return dirty(fmt.Sprintf("remote-sync-worktree-dirty: the main checkout refused the replay reset: %v", err))
 	}
-	registerRewriteStore(root, l.cfg.Store)
-	if h, err := l.observeTrunkLocked(ctx, before, known); err != nil {
-		return "", false, fmt.Errorf("recording remote-sync rewrite: %w", err)
-	} else if h.Lost != "" || h.Observed != known.Tip {
-		return "", false, Externalf("main changed before the remote-sync replay was recorded")
+	if err := l.finishRemoteSyncReplayLocked(ctx, intent); err != nil {
+		return "", false, err
 	}
-	if err := l.recordRemoteSyncLanding(ctx, c, before, known.Tip, tree, verdict); err != nil {
-		return "", false, fmt.Errorf("recording remote-sync landing: %w", err)
+	release()
+	l.afterRemoteSyncReplay(ctx, intent, result)
+	return known.Tip, true, nil
+}
+
+func (l *Loop) finishRemoteSyncReplayLocked(ctx context.Context, intent *remoteSyncReplay) error {
+	root := l.cfg.Root
+	c, known, tree, verdict := intent.Candidate, &intent.Rewrite, intent.Tree, intent.Verdict
+	registerRewriteStore(root, l.cfg.Store)
+	if h, err := l.observeTrunkLocked(ctx, "", known); err != nil {
+		return fmt.Errorf("recording remote-sync rewrite: %w", err)
+	} else if h.Lost != "" {
+		return Externalf("main changed before the remote-sync replay was recorded")
+	}
+	if err := l.recordRemoteSyncLanding(ctx, c, known.Lost, known.Tip, tree, verdict); err != nil {
+		return fmt.Errorf("recording remote-sync landing: %w", err)
+	}
+	if err := l.completeRemoteSyncReplayItem(ctx, c); err != nil {
+		return err
+	}
+	if _, err := rawGit(ctx, root, nil, "update-ref", "-d", remoteSyncPinRef(c.ItemID), c.BaseSHA); err != nil {
+		return err
+	}
+	return l.writeRemoteSyncReplay(ctx, nil)
+}
+
+func (l *Loop) completeRemoteSyncReplayItem(ctx context.Context, c Candidate) error {
+	if err := l.checkItemTerminal(ctx, c.ItemID, "settle-remote-sync"); err != nil {
+		if terminal := asItemTerminal(err); terminal != nil && terminal.State == StateLanded {
+			return l.endItemUnfinishedRuns(ctx, c.ItemID, c.RunID)
+		}
+		return err
 	}
 	if c.Judge != nil {
 		receipt := *c.Judge
 		receipt.Options.Landed = c.HeadSHA
 		c.Judge = &receipt
 		if err := appendJudgment(ctx, l.cfg.Store, judgeLandedKind, "run", c.RunID, c, l.cfg.Now()); err != nil {
-			return "", false, err
+			return err
 		}
+	} else if l.cfg.Steps == nil {
+		return l.completeRemoteSyncWithoutSteps(ctx, c)
 	}
-	if err := l.completeItem(ctx, c); err != nil {
-		return "", false, err
-	}
-	if _, err := rawGit(ctx, root, nil, "update-ref", "-d", pin, st.BaseSHA); err != nil {
-		return "", false, err
-	}
-	release()
-	// Landing an older stage did not fetch the remote. Only the ordinary push
-	// path may confirm publication; never write the staged tip as a new one.
-	l.publishRemoteSyncReplay(ctx, c.ItemID, healResult{replayed: len(known.Order), remoteTip: st.RemoteTip, base: st.MergeBase, newTip: known.Tip})
+	return l.completeItem(ctx, c)
+}
+
+func (l *Loop) afterRemoteSyncReplay(ctx context.Context, replay *remoteSyncReplay, result *LoopResult) {
+	l.publishRemoteSyncReplay(ctx, replay.Candidate.ItemID, replay.publication())
 	l.mu.Lock()
 	result.Landed++
 	l.mu.Unlock()
 	if err := l.bumpLandings(ctx); err != nil {
-		l.reportf("loop: landed %s but could not record the landing count: %v\n", c.ItemID, err)
+		l.reportf("loop: landed %s but could not record the landing count: %v\n", replay.Candidate.ItemID, err)
 	}
-	return known.Tip, true, nil
 }
 
 func replayRemoteSyncSuffix(ctx context.Context, root string, st remoteSyncState, repair, before string) (*rewriteAbsorption, *remoteSyncState, error) {

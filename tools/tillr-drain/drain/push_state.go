@@ -247,7 +247,7 @@ func (l *Loop) maybeRollAfterRemoteSync(ctx context.Context, res healResult) {
 	if l.cfg.PostLanding.Roll.Command == "" || res.base == "" || res.remoteTip == "" || res.base == res.remoteTip {
 		return
 	}
-	err := l.writeRemoteRoll(ctx, func(tx *store.Tx) error {
+	err := l.writeRemoteSync(ctx, func(tx *store.Tx) error {
 		return appendEffectOn(tx, remoteRollPending, "trunk", res.remoteTip, remoteRollRange{Base: res.base}, l.cfg.Now().UTC())
 	})
 	l.reportRollFailure(res.newTip, "remote sync", err)
@@ -270,7 +270,7 @@ func init() {
 	}
 }
 
-func (l *Loop) writeRemoteRoll(ctx context.Context, write func(*store.Tx) error) error {
+func (l *Loop) writeRemoteSync(ctx context.Context, write func(*store.Tx) error) error {
 	s, err := store.Open(ctx, l.cfg.Store, false)
 	if err != nil {
 		return err
@@ -327,7 +327,7 @@ func (l *Loop) flushPendingRemoteRoll(ctx context.Context, green string) {
 		}
 		// A replacement loop must not claim a range already taken since the read.
 		claimed := false
-		err := l.writeRemoteRoll(ctx, func(tx *store.Tx) error {
+		err := l.writeRemoteSync(ctx, func(tx *store.Tx) error {
 			var seq int64
 			err := tx.QueryRow(`SELECT seq FROM events WHERE kind IN (?, ?) AND object_type='trunk' AND object_id=? ORDER BY seq DESC LIMIT 1`,
 				remoteRollPending, remoteRollClaimed, p.remoteTip).Scan(&seq)
