@@ -197,11 +197,23 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 	if !terminalRunStates[rec.State] {
 		return Retry{}, Usagef("run %q is %q: a retry supersedes a finished run. %s", req.RunID, rec.State, noRetryCommand("the loop moves: the run ends first, and a retry is accepted then"))
 	}
-	if design, err := authorizeDesignRetry(ctx, tx, req, at); err != nil || design != nil {
-		if design == nil {
-			return Retry{}, err
+	faults, err := ReadItemFaults(tx.Reader())
+	if err != nil {
+		return Retry{}, readFailure(err)
+	}
+	triage := faults[req.ItemID]
+	if triage.Reason == reasonVerifyTriage && triage.RunID != req.RunID {
+		return Retry{}, Usagef("item %q needs an operator retry of its held run: %s", req.ItemID, retryCommand(req.ItemID, triage.RunID, triage.RetryAck))
+	}
+	// A recovered verifier hold can name a later design run. The command
+	// answers the triage hold, not that run's design disposition or answer.
+	if triage.Reason != reasonVerifyTriage {
+		if design, err := authorizeDesignRetry(ctx, tx, req, at); err != nil || design != nil {
+			if design == nil {
+				return Retry{}, err
+			}
+			return *design, nil
 		}
-		return *design, nil
 	}
 	// The plan honors a build retry only while the run it names is the item's latest
 	// finished run (retryFor), so an authorization naming an earlier one is recorded and
@@ -294,6 +306,19 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 		}
 	}
 
+	// Bind the triage window to this authorization, not to fault clearance or a
+	// wall-clock comparison. There need not be a hold yet for a retry to reset it.
+	if _, err := tx.Append(event.Event{
+		Kind: verifyTriageResetKind, ObjectType: "item", ObjectID: &req.ItemID, Payload: []byte(`{}`), At: at,
+	}); err != nil {
+		return Retry{}, Internalf("resetting verifier triage for %q: %v", req.ItemID, err)
+	}
+	if triage.Reason == reasonVerifyTriage {
+		if err := clearItemFault(tx, triage, at); err != nil {
+			return Retry{}, Internalf("releasing verifier triage for %q: %v", req.ItemID, err)
+		}
+	}
+
 	// A run that consumed its item — the fence refusal, the candidate-no-op — leaves the
 	// item in the queue now, and a retry changes nothing there. A legacy `in-progress` row
 	// or a blocked item whose finished run this call supersedes returns to the ready state
@@ -312,7 +337,14 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 			return Retry{}, readFailure(err)
 		}
 		if c, ok := conflicts[req.ItemID]; ok {
-			if c.Status != "awaiting" && c.Status != "raised" && c.DesignRunID == "" && c.TriageVersion == "" {
+			if triage.Reason == reasonVerifyTriage && triage.RepeatConflictID == c.ConflictID && legacyVerifyRepeat(c) {
+				// Only retire the old route this hold superseded. An answered
+				// or unrelated conflict is not part of the triage release.
+				c.Status, c.WaitingOn = "closed", "worker"
+				if err := item.RecordConflict(tx, c, at); err != nil {
+					return Retry{}, Internalf("releasing legacy verifier repeat for %q: %v", req.ItemID, err)
+				}
+			} else if triage.Reason != reasonVerifyTriage && c.Status != "awaiting" && c.Status != "raised" && c.DesignRunID == "" && c.TriageVersion == "" {
 				releaseBlocked = true
 				var callID string
 				if err := tx.Reader().QueryRow(`SELECT COALESCE(object_id, '') FROM events WHERE kind=? AND object_type='call' AND json_extract(payload,'$.run_id')=? ORDER BY seq DESC LIMIT 1`, callOffered, c.RunID).Scan(&callID); err == nil && callID != "" {
@@ -321,7 +353,7 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 					}
 				}
 			}
-		} else {
+		} else if triage.Reason != reasonVerifyTriage {
 			releaseBlocked = true
 		}
 	}

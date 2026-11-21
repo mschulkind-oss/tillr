@@ -1559,6 +1559,17 @@ criterion ID with the candidate head and normalized finding text: two refusals o
 different candidates or with different findings do not collide, while an identical
 repeat raises a design-seat conflict (or, for a filed request, an operator hold).
 
+The third `verify-not-done` since filing or the last operator retry takes precedence
+over both the repair return and identical-repeat routing. The drain holds the item
+for operator triage without closing it or changing its queue rank. The hold shows
+all three refusal dates and first findings in order and gives the `tillr drain retry`
+command with the item and held run filled in. A drain upgraded after the third
+refusal checks the recorded refusals before redispatching the item. If an older
+drain already ran the item again, the hold still shows the first three findings
+and names the latest finished run in the retry command. That authorization
+releases the hold and starts the count over without deleting any refusals.
+`clear-fault` does not release a verifier triage hold.
+
 For an opted-in ordinary item judge, `eval-failed` still holds a document item for
 the operator, whereas on a filed request an ordinary judge's `not-done` retains the
 builder's session and returns all `not-done` findings to the builder without an

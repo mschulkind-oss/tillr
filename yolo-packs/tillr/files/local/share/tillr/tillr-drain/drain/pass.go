@@ -1072,6 +1072,9 @@ func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := l.recoverVerifyTriage(ctx, s); err != nil {
+		return nil, nil, err
+	}
 	var plans []plannedApplication
 	var leases []LaneLease
 	err = s.ReadTx(ctx, func(r *store.Reader) error {

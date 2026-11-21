@@ -70,11 +70,15 @@ func (l *Loop) holdItemFault(ctx context.Context, c Candidate, reason, detail st
 }
 
 func (l *Loop) holdItemFaultTx(tx *store.Tx, c Candidate, reason, detail string) error {
-	if err := requireHold(tx.Reader(), reason); err != nil {
+	return l.recordItemFaultTx(tx, ItemFault{ItemID: c.ItemID, RunID: c.RunID, LaneID: c.LaneID, Reason: reason, Detail: detail})
+}
+
+func (l *Loop) recordItemFaultTx(tx *store.Tx, f ItemFault) error {
+	if err := requireHold(tx.Reader(), f.Reason); err != nil {
 		return err
 	}
-	if c.RunID != "" {
-		if err := refuseTerminalItem(tx.Reader(), c.ItemID, reason); err != nil {
+	if f.RunID != "" {
+		if err := refuseTerminalItem(tx.Reader(), f.ItemID, f.Reason); err != nil {
 			return err
 		}
 	}
@@ -82,16 +86,17 @@ func (l *Loop) holdItemFaultTx(tx *store.Tx, c Candidate, reason, detail string)
 	if err != nil {
 		return err
 	}
-	if f, ok := faults[c.ItemID]; ok && f.Reason == reason && f.Detail == detail && f.RunID == c.RunID && f.LaneID == c.LaneID {
-		return nil
+	if prior, ok := faults[f.ItemID]; ok {
+		prior.Seq, prior.AtMS = 0, 0
+		if prior == f || prior.Reason == reasonVerifyTriage && f.Reason == reasonVerifyTriage {
+			return nil
+		}
 	}
-	f := ItemFault{ItemID: c.ItemID, RunID: c.RunID, LaneID: c.LaneID, Reason: reason, Detail: detail}
 	body, err := json.Marshal(f)
 	if err != nil {
 		return err
 	}
-	id := c.ItemID
-	_, err = tx.Append(event.Event{Kind: itemFaultKind, ObjectType: "item", ObjectID: &id, Payload: body, At: l.cfg.Now().UTC()})
+	_, err = tx.Append(event.Event{Kind: itemFaultKind, ObjectType: "item", ObjectID: &f.ItemID, Payload: body, At: l.cfg.Now().UTC()})
 	return err
 }
 
@@ -109,11 +114,18 @@ func ClearItemFault(tx *store.Tx, itemID string, seq int64, at time.Time) error 
 	if f.Seq != seq {
 		return Usagef("item %q has fault %d, not %d; inspect waiting again", itemID, f.Seq, seq)
 	}
+	if f.Reason == reasonVerifyTriage {
+		return Usagef("item %q is held for verifier triage; %s", itemID, f.ClearCommand(""))
+	}
+	return clearItemFault(tx, f, at)
+}
+
+func clearItemFault(tx *store.Tx, f ItemFault, at time.Time) error {
 	body, err := json.Marshal(f)
 	if err != nil {
 		return err
 	}
-	_, err = tx.Append(event.Event{Kind: itemFaultClearedKind, ObjectType: "item", ObjectID: &itemID, Payload: body, At: at})
+	_, err = tx.Append(event.Event{Kind: itemFaultClearedKind, ObjectType: "item", ObjectID: &f.ItemID, Payload: body, At: at})
 	return err
 }
 
