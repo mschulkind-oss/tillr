@@ -41,7 +41,6 @@ replays a fixture stream.
 import io
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -431,7 +430,15 @@ def test_extractors(scratch):
 
 
 def test_policy():
-    policy = json.loads(POLICY.read_text())
+    # The proof and replay check out the commit under judgment at HEAD.
+    commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+
+    def load_policy(path):
+        return json.loads(subprocess.check_output(
+            ["git", "show", f"{commit}:{path.relative_to(ROOT).as_posix()}"], cwd=ROOT,
+        ))
+
+    policy = load_policy(POLICY)
     check("about" in policy, "the policy does not say what it is")
     backends = policy["backends"]
     check(
@@ -444,9 +451,9 @@ def test_policy():
     # role seam (a model swap is a line in this file, never an edit to an item), so the
     # mapping is checked over adapters rather than over names.
     known = {f"tools/tillr-run/backends/{name}/run-{name}" for name in DIALECTS}
-    bedrock = json.loads(BEDROCK_POLICY.read_text())
-    claude = json.loads(CLAUDE_POLICY.read_text())
-    claude_copilot = json.loads(CLAUDE_COPILOT_POLICY.read_text())
+    bedrock = load_policy(BEDROCK_POLICY)
+    claude = load_policy(CLAUDE_POLICY)
+    claude_copilot = load_policy(CLAUDE_COPILOT_POLICY)
     named_anywhere = set()
     for label, document in (("personal", policy), ("bedrock", bedrock), ("claude", claude), ("claude-copilot", claude_copilot)):
         named = {entry["adapter"] for entry in document["backends"].values()}
@@ -481,8 +488,14 @@ def test_policy():
         "adapter refuses --effort",
     )
     # No shipped policy carries preference or unshared multi-backend seats.
-    for path in (ROOT / "config/tillr").glob("backend-policy*.json"):
-        document = json.loads(path.read_text())
+    names = subprocess.check_output(
+        ["git", "ls-tree", "-z", "--name-only", f"{commit}:config/tillr"], cwd=ROOT,
+    )
+    for raw in names.split(b"\0"):
+        path = POLICY.parent / os.fsdecode(raw)
+        if not path.match("backend-policy*.json"):
+            continue
+        document = load_policy(path)
         check("preference" not in document, f"{path.name}: retired preference key")
         check("max_failovers" not in document, f"{path.name}: retired max_failovers key")
         for seat, value in document.get("seats", {}).items():
@@ -507,45 +520,77 @@ def test_policy():
     every = [entry for document in (policy, bedrock, claude, claude_copilot) for entry in document["backends"].values()]
     ids = [entry["model"] for entry in every]
     ids += [m for entry in every for m in entry.get("models", [])]
-    # Tracked files only: the rule is about what the tree says, and an installed dependency
-    # directory in a checkout (tools/tillr-view/web/node_modules) is not the tree. On
-    # 2026-11-15 the walk of every file on disk failed the gate in the main checkout on a
-    # vendored changelog containing the word "opus", while a clean worktree passed.
-    listed = subprocess.run(
-        ["git", "ls-files", "-z", "--", "tools/tillr*"],
-        cwd=ROOT, check=True, capture_output=True,
-    ).stdout.decode("utf-8").split("\0")
-    check_no_model_ids(ROOT, (name for name in listed if name), ids)
+    check_no_model_ids(ROOT, commit, ids)
 
 
-def check_no_model_ids(root, files, ids):
-    patterns = {model_id: re.compile(rf"\b{re.escape(model_id)}\b") for model_id in ids}
-    for name in files:
-        path = root / name
-        if not path.is_file():
-            continue
-        text = path.read_bytes().decode("utf-8", "replace")
-        for model_id, pattern in patterns.items():
-            check(
-                not pattern.search(text),
-                f"{name} names the model id {model_id!r}: the "
-                f"tillr tree must never name a model vendor (D-MM5)",
-            )
+def check_no_model_ids(root, commit, ids):
+    # Git must read blobs from the same commit as the policies: even a tracked
+    # path from ls-files can refer to different bytes on disk or in the index.
+    args = ["git", "grep", "-a", "-z", "-o", "-w", "-F", "--no-textconv",
+            "--no-recurse-submodules", "--no-color", "--no-line-number", "--no-column"]
+    for model_id in sorted(set(ids)):
+        args.extend(("-e", model_id))
+    result = subprocess.run([*args, commit, "--", "tools/tillr*"], cwd=root, stdout=subprocess.PIPE)
+    if result.returncode == 1:  # no match
+        return
+    result.check_returncode()
+    # With -z and -o, the first record is <commit>:<path> NUL <match> LF.
+    location, _, matches = result.stdout.partition(b"\0")
+    name = os.fsdecode(location.split(b":", 1)[1])
+    model_id = matches.split(b"\n", 1)[0].decode("utf-8")
+    check(False, f"{name} names the model id {model_id!r}: the "
+          f"tillr tree must never name a model vendor (D-MM5)")
 
 
 def test_model_id_scan(root):
-    name = "model-scan.txt"
-    path = root / name
+    proof = root / "model-scan-proof"
+    proof.mkdir()
+    # A hook or runner can export Git settings pointing at the repository around us.
+    local_git_vars = subprocess.check_output(["git", "rev-parse", "--local-env-vars"], text=True).split()
+    env = {k: v for k, v in os.environ.items() if k not in local_git_vars}
+    env.update(GIT_CEILING_DIRECTORIES=str(root), GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
+    with patch.dict(os.environ, env, clear=True):
+        assert_detached_model_id_scan(proof)
+
+
+def assert_detached_model_id_scan(proof):
+    def git(*args):
+        return subprocess.check_output(["git", *args], cwd=proof, text=True)
+
+    def commit():
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+            "commit", "--no-gpg-sign", "-qm", "model scan fixture")
+        return git("rev-parse", "HEAD").strip()
+
+    git("init", "-q", "--template=")
+    name = "tools/tillr-fixture/model-scan.txt"
+    path = proof / name
+    path.parent.mkdir(parents=True)
     ids = ["opus", "muse-ember-1.0-contributor"]
-    path.write_text("autopush stopped; muse-ember-1x0-contributor is not a model ID\n")
-    check_no_model_ids(root, [name], ids)
+    clean = "autopush stopped; muse-ember-1x0-contributor is not a model ID\n"
+    path.write_text(clean)
+    git("add", "--", name)
+    clean_commit = commit()
+    git("checkout", "-q", "--detach", clean_commit)
+    stray = path.with_name("stray.txt").relative_to(proof)
+    (proof / stray).write_text("opus\n")
+    check_no_model_ids(proof, clean_commit, ids)
+    git("add", "--", stray)
+    check_no_model_ids(proof, clean_commit, ids)
+    git("reset", "-q", "HEAD", "--", stray)
+    path.write_text("opus\n")
+    check_no_model_ids(proof, clean_commit, ids)
 
     for model_id in ids:
         path.write_text(f'model = "{model_id}"\n')
+        git("add", "--", name)
+        red_commit = commit()
+        path.write_text(clean)
+        check_no_model_ids(proof, clean_commit, ids)
         stderr = io.StringIO()
         with redirect_stderr(stderr):
             try:
-                check_no_model_ids(root, [name], ids)
+                check_no_model_ids(proof, red_commit, ids)
             except SystemExit as exc:
                 rejected = exc.code == 1
             else:
@@ -1234,7 +1279,7 @@ def main():
         test_extractors(root)
         print("ok: every extractor renders both fixtures, and the footerless one is refused")
         test_model_id_scan(root)
-        print("ok: the model ID scan accepts autopush and rejects real model IDs")
+        print("ok: the model ID scan accepts autopush and rejects real IDs only in the named commit")
         test_policy()
         print("ok: the policy names a default backend, its adapters exist, and no id is in the tillr tree")
         workspace = Workspace(root)
