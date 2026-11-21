@@ -220,6 +220,10 @@ type priorRun struct {
 // store and what the store points at, and a log that is gone reads as "no report" rather
 // than as an error.
 func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
+	return readPriorRunsFrom(r, nil)
+}
+
+func readPriorRunsFrom(r *store.Reader, byRun map[string]*pendingWork) (map[string][]priorRun, error) {
 	interrupted, restaged, err := readInterruptedRuns(r)
 	if err != nil {
 		return nil, err
@@ -230,7 +234,7 @@ func readPriorRuns(r *store.Reader) (map[string][]priorRun, error) {
 	}
 	// Once the loop observes an ending, routing and availability share that
 	// saved class; a report edit cannot move the item to a different retry rule.
-	outcomes, err := readBackendOutcomes(r)
+	outcomes, err := readBackendOutcomesFrom(r, byRun)
 	if err != nil {
 		return nil, err
 	}

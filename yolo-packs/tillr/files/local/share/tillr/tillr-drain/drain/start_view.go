@@ -22,8 +22,9 @@ type startQueueRow struct{ id, rank string }
 // A snapshot and its collections are immutable after publication. Its
 // proposals are advisory; the legacy pass alone decides what starts.
 type startSnapshot struct {
-	items    []startQueueRow
-	occupied map[string]bool
+	items      []startQueueRow
+	occupied   map[string]bool
+	storeLanes map[string]bool // raw leases, before overlaying pending work
 
 	entries             map[string]startViewEntry
 	holds, reservations map[string]string
@@ -189,22 +190,11 @@ func (s *startSnapshot) seed(r *store.Reader, at time.Time, policy *Policy) erro
 			s.reverseEdges[blocker] = append(s.reverseEdges[blocker], row.ItemID)
 		}
 	}
-	if s.occupied, err = readLanes(r, at); err != nil {
+	if s.pending, err = readPendingHistoryState(r); err != nil {
 		return err
 	}
-	if s.history, err = readRunHistory(r); err != nil {
+	if err := s.refreshRunFacts(r, true, true); err != nil {
 		return err
-	}
-	if s.priors, err = readPriorRuns(r); err != nil {
-		return err
-	}
-	s.attemptPriors = make(map[string][]priorRun, len(s.priors))
-	for id, runs := range s.priors {
-		for _, prior := range runs {
-			if !acquittedRefusal(s.history.refusals[prior.RunID]) {
-				s.attemptPriors[id] = append(s.attemptPriors[id], prior)
-			}
-		}
 	}
 	if s.retries, err = readRetries(r); err != nil {
 		return err
@@ -226,9 +216,6 @@ func (s *startSnapshot) seed(r *store.Reader, at time.Time, policy *Policy) erro
 	if s.contentVersions, err = readAllItemContentVersions(r, s.versionSchema); err != nil {
 		return err
 	}
-	if s.pending, err = readPendingHistoryState(r); err != nil {
-		return err
-	}
 	s.faultsByItemReason = map[string]map[string]ItemFault{}
 	if err := faults.Fold(r, 0, s.faultsByItemReason, nil); err != nil {
 		return err
@@ -243,30 +230,80 @@ func (s *startSnapshot) seed(r *store.Reader, at time.Time, policy *Policy) erro
 	if s.requests, err = readRequestIDs(r); err != nil {
 		return err
 	}
-	s.attempts, s.nodeCounts = map[string]int{}, map[string]int{}
-	for _, row := range rows {
-		id := row.ItemID
-		s.attempts[id], s.nodeCounts[id], err = readAttemptInputs(r, s.hasNodes, id, s.priors[id])
-		if err != nil {
-			return err
-		}
-	}
-	if s.deskOwners, err = readDeskOwners(r, s.occupied); err != nil {
+	if err := s.refreshAttemptOrdinals(r); err != nil {
 		return err
 	}
-	if s.forks, err = liveForks(r, at, s.pending.works); err != nil {
+	if err := s.refreshLaneFacts(r, at, true); err != nil {
 		return err
 	}
-	if s.shut, err = readQuotaShutBackendsFrom(r, at, policy, s.pending.byRun); err != nil {
-		return err
-	}
-	if s.quotaShut, err = readQuotaOnlyShut(r, at, policy); err != nil {
+	if err := s.refreshBackends(r, at, policy); err != nil {
 		return err
 	}
 	return s.readExpiries(r, at)
 }
 
+func (s *startSnapshot) refreshAttemptOrdinals(r *store.Reader) error {
+	s.attempts, s.nodeCounts = map[string]int{}, map[string]int{}
+	for _, row := range s.items {
+		id := row.id
+		attempt, count, err := readAttemptInputs(r, s.hasNodes, id, s.priors[id])
+		if err != nil {
+			return err
+		}
+		s.attempts[id], s.nodeCounts[id] = attempt, count
+	}
+	return nil
+}
+
+func (s *startSnapshot) refreshRunFacts(r *store.Reader, history, priors bool) error {
+	var err error
+	if history {
+		if s.history, err = readRunHistory(r); err != nil {
+			return err
+		}
+	}
+	if priors {
+		if s.priors, err = readPriorRunsFrom(r, s.pending.byRun); err != nil {
+			return err
+		}
+	}
+	s.attemptPriors = make(map[string][]priorRun, len(s.priors))
+	for id, runs := range s.priors {
+		for _, prior := range runs {
+			if !acquittedRefusal(s.history.refusals[prior.RunID]) {
+				s.attemptPriors[id] = append(s.attemptPriors[id], prior)
+			}
+		}
+	}
+	return nil
+}
+
+func (s *startSnapshot) refreshLaneFacts(r *store.Reader, at time.Time, leases bool) error {
+	var err error
+	if leases {
+		if s.storeLanes, err = readLanes(r, at); err != nil {
+			return err
+		}
+		if s.deskOwners, err = readDeskOwners(r, s.storeLanes); err != nil {
+			return err
+		}
+	}
+	s.occupied = s.storeLanes
+	s.forks, err = liveForks(r, at, s.pending.works)
+	return err
+}
+
+func (s *startSnapshot) refreshBackends(r *store.Reader, at time.Time, policy *Policy) error {
+	var err error
+	if s.shut, err = readQuotaShutBackendsFrom(r, at, policy, s.pending.byRun); err != nil {
+		return err
+	}
+	s.quotaShut, err = readQuotaOnlyShut(r, at, policy)
+	return err
+}
+
 func (s *startSnapshot) readExpiries(r *store.Reader, at time.Time) error {
+	s.nextWindowExpiry = 0
 	// Reuse the window reader's compatibility with stores predating windows.
 	windows, err := readBackendWindows(r, at)
 	if err != nil {

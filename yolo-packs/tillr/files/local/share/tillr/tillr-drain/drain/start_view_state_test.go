@@ -33,6 +33,64 @@ func TestClonePendingHistoryStateKeepsDiscardedRuns(t *testing.T) {
 	}
 }
 
+func TestSyncRefreshesInputDecisionsOnARecordedInput(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	ctx, at := context.Background(), l.cfg.Now()
+	var sync startStoreSync
+	t.Cleanup(sync.close)
+	refresh := func(previous startSnapshot) startSnapshot {
+		t.Helper()
+		next, err := sync.syncStore(ctx, f.storePath, at, l.currentPolicy(), previous, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return next
+	}
+	before := refresh(startSnapshot{})
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return appendEffect(tx, inputRecordedKind, "run-input-1", Decision{ItemID: "item-a", Reason: "recorded-input"}, at)
+	})
+	after := refresh(before)
+	if got := after.inputDecisions["run-input-1"]; got.Reason != "recorded-input" || after.pending != before.pending || before.inputDecisions["run-input-1"].Reason != "" {
+		t.Fatalf("recording inputs did not refresh just the relevant cached inputs: %+v", got)
+	}
+	// An unhandled kind must not mask a change this classifier cannot explain.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`UPDATE items SET rank='m' WHERE item_id='item-a'`); err != nil {
+			return err
+		}
+		_, err := tx.Append(event.Event{Kind: "run.observation-error", At: at, Payload: []byte(`{}`)})
+		return err
+	})
+	if fallback := refresh(after); fallback.pending == after.pending || fallback.itemsByID["item-a"].Rank != "m" {
+		t.Fatal("unhandled change did not reseed the view")
+	}
+}
+
+func TestStartStoreSyncRefreshesLaneAndWindowExpiry(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	ctx, at := context.Background(), l.cfg.Now()
+	until := at.Add(5 * time.Second)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`INSERT INTO lanes (lane_id,state,run_id,leased_until) VALUES ('lane-1','leased','foreign',?)`, until.UnixMilli()); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`INSERT INTO backend_windows VALUES ('fixture','quota',1,'closed',?,'quota-run')`, until.UnixMilli())
+		return err
+	})
+	var sync startStoreSync
+	t.Cleanup(sync.close)
+	before, err := sync.syncStore(ctx, f.storePath, at, l.currentPolicy(), startSnapshot{}, nil)
+	if err != nil || !before.occupied["lane-1"] || !before.shut["fixture"] {
+		t.Fatalf("fixture did not seed live facts: %v / %v / %v", err, before.occupied, before.shut)
+	}
+	after, err := sync.syncStore(ctx, f.storePath, until, l.currentPolicy(), before, nil)
+	if err != nil || after.occupied["lane-1"] || after.shut["fixture"] || after.pending != before.pending ||
+		after.nextLeaseExpiry != 0 || after.nextWindowExpiry != 0 || !before.occupied["lane-1"] || !before.shut["fixture"] {
+		t.Fatalf("expiry did not update only the private lane/window facts: %v / %v / %v", err, after.occupied, after.shut)
+	}
+}
+
 func TestStartViewSeedMatchesStore(t *testing.T) {
 	f, l := passFixture(t, "item-a", "item-b")
 	ctx := context.Background()
