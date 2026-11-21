@@ -490,9 +490,9 @@ type RequiredCheckStep interface {
 }
 
 // judgeRequired runs a returned item's required checks after its fast gate passed, and
-// answers the refusal detail when one fails. A check that answers no verdict is not red:
-// it is reported, and the heavy proof after the landing judges it.
-func (l *Loop) judgeRequired(ctx context.Context, candidate Candidate) (string, error) {
+// attaches the replay evidence and answers the refusal detail when one fails. A check
+// that answers no verdict is not red: the heavy proof after the landing judges it.
+func (l *Loop) judgeRequired(ctx context.Context, candidate *Candidate) (string, error) {
 	ids, selectors, err := l.requiredChecks(ctx, candidate.ItemID)
 	if err != nil || len(ids) == 0 {
 		return "", err
@@ -520,6 +520,13 @@ func (l *Loop) judgeRequired(ctx context.Context, candidate Candidate) (string, 
 			if detail := strings.TrimSpace(check.Detail); detail != "" {
 				text += ":\n" + heavyBrief(detail)
 			}
+			evidence := l.keepRequiredFailure(*candidate, id, check)
+			if evidence.LogRef != "" {
+				text += "\nrequired replay log: " + evidence.LogRef
+			} else {
+				text += "\nrequired replay output could not be retained"
+			}
+			candidate.requiredFailures = append(candidate.requiredFailures, evidence)
 			failed = append(failed, text)
 		default:
 			l.reportf("loop: %s required check %s answered %s, not a verdict: %s\n", candidate.ItemID, id, check.Result, heavyBrief(check.Detail))
@@ -529,6 +536,41 @@ func (l *Loop) judgeRequired(ctx context.Context, candidate Candidate) (string, 
 		return "", nil
 	}
 	return "the gate passed, but this item's landing was reverted for a full-suite check, and its candidate must pass that check before it lands: " + strings.Join(failed, "\n\n"), nil
+}
+
+// keepRequiredFailure keeps the replay's own output beside the run, independent of
+// the rolling proof's logs and the passing fast-gate verdict.
+func (l *Loop) keepRequiredFailure(candidate Candidate, id string, check HeavyCheck) EndingCheck {
+	evidence := EndingCheck{CheckID: id}
+	logDir := filepath.Join(RunDir(l.cfg.Root, candidate.RunID), "logs")
+	name := fmt.Sprintf("required-%02d-%s", len(candidate.requiredFailures), sanitizeLogComponent(id))
+	for _, src := range []string{check.LogRef, check.LogPath} {
+		suffix := ".log"
+		if strings.HasSuffix(src, ".triage.log") {
+			suffix = ".triage.log"
+		}
+		if kept, ok := copyLogWithWhole(candidate.Worktree, src, logDir, name+suffix); ok {
+			evidence.LogRef = kept
+			break
+		}
+	}
+	if evidence.LogRef == "" && check.Detail != "" {
+		path := filepath.Join(logDir, name+".log")
+		if err := os.MkdirAll(logDir, 0o755); err == nil && os.WriteFile(path, []byte(check.Detail), 0o644) == nil {
+			evidence.LogRef = path
+		}
+	}
+	if output, err := os.ReadFile(evidence.LogRef); err == nil {
+		evidence.Digest = evidenceDigest(string(output), candidate.RunID)
+		evidence.Failing = readTriageString(string(output))
+	}
+	// A focused Go replay already has the failing test in its package-qualified ID.
+	if len(evidence.Failing) == 0 && strings.HasPrefix(id, goTestPrefix) {
+		if parts := strings.SplitN(strings.TrimPrefix(id, goTestPrefix), ":", 3); len(parts) == 3 {
+			evidence.Failing = []FailingCheck{{ID: id, Cases: []FailingCase{{Name: parts[2]}}}}
+		}
+	}
+	return evidence
 }
 
 // HeavySelector is a legacy check's kind:label replay selector, when a proof recorded it.

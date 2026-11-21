@@ -3290,6 +3290,10 @@ with tempfile.TemporaryDirectory() as tmp:
         "#!/bin/sh\n"
         'if [ "$1" = "test" ]; then\n'
         '  case "$*" in *"-run ^$"*) exit 0 ;; esac\n'
+        "  echo '--- FAIL: TestFirstReplayFailure (0.00s)'\n"
+        "  echo '    queue_test.go:42: first assertion failed'\n"
+        "  echo '--- FAIL: TestSecondReplayFailure (0.00s)'\n"
+        "  echo '    queue_test.go:54: second assertion failed'\n"
         "  exit 1\n"
         "fi\n"
         "exit 0\n"
@@ -3314,6 +3318,14 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "go-tool-integration" not in result.stdout, result.stdout
     assert "-short unit subset" not in result.stdout, result.stdout
     assert "last_full_audit" not in record(repo), record(repo)
+
+    before_replay = record_log(repo).read_bytes()
+    replay = run(repo, env, "--replay", "--only", "go-tool:tools/tillr-land's whole suite passes")
+    assert replay.returncode == 1, replay.stdout + replay.stderr
+    for name in ("TestFirstReplayFailure", "TestSecondReplayFailure"):
+        assert f"--- FAIL: {name}" in replay.stdout, replay.stdout
+        assert f"case: {name} --" in replay.stdout, replay.stdout
+    assert record_log(repo).read_bytes() == before_replay, "replay rewrote the gate record"
 
 # 29. The rank-order suite runs in the gate. It proves a capacity-queued dispatch follows
 #     the pile's rank -- it imports the production pump and the ordering helper from the

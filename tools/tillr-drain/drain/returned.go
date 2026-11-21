@@ -259,7 +259,10 @@ func (l *Loop) endingEvidence(ctx context.Context, c Candidate, step string) ([]
 	}
 	switch step {
 	case RefusalGate:
-		checks := gateFailingChecks(RunDir(l.cfg.Root, c.RunID), c.RunID)
+		checks := c.requiredFailures
+		if len(checks) == 0 {
+			checks = gateFailingChecks(RunDir(l.cfg.Root, c.RunID), c.RunID)
+		}
 		if c.EvidenceKey != "" {
 			return checks, c.EvidenceKey
 		}

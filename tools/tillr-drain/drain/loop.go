@@ -200,6 +200,8 @@ type Candidate struct {
 	// Runtime-only observation, sampled when the gate records a stall.
 	gateCount     func() int
 	RefusalDetail string `json:"refusal_detail,omitempty"`
+	// Required replays can fail even when the recorded fast gate passed.
+	requiredFailures []EndingCheck
 	// EvidenceKey, when set, is the returned ending's evidence key in place of the one its
 	// step derives: a seat obstacle keys its return by the backend it leaves, so climbing
 	// to the next backend is never read as an identical repeat (seat_escalation.go).
@@ -2912,7 +2914,7 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	case GatePassed, GatePassedInherited:
 		// An item whose landing was reverted must pass the check that proved it broke
 		// the trunk: the fast gate has shown it cannot see that failure.
-		detail, err := l.judgeRequired(ctx, candidate)
+		detail, err := l.judgeRequired(ctx, &candidate)
 		if err != nil {
 			return "", false, err
 		}

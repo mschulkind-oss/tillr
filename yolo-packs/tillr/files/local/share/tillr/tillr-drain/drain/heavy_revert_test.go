@@ -29,6 +29,7 @@ type revertSteps struct {
 	gated       *[]Candidate
 	returned    *[]string
 	required    map[string]string
+	requiredLog string
 }
 
 func (s revertSteps) Gate(_ context.Context, c Candidate) (GateOutcome, error) {
@@ -68,7 +69,7 @@ func (s revertSteps) ReturnLanded(ctx context.Context, itemID, runID, reason str
 	})
 }
 func (s revertSteps) JudgeRequired(_ context.Context, _ string, id, _ string) (HeavyCheck, error) {
-	return HeavyCheck{CheckID: id, Result: s.required[id], Detail: "required output"}, nil
+	return HeavyCheck{CheckID: id, Result: s.required[id], Detail: "required output", LogPath: s.requiredLog}, nil
 }
 
 func writeFixture(path string, fn func(*store.Tx) error) error {
@@ -405,17 +406,81 @@ func TestRevertedItemsGateRunsTheFailingCheck(t *testing.T) {
 	h.proof()
 	h.steps.required = map[string]string{"unit": "fail"}
 	h.loop.cfg.Steps = h.steps
-	detail, err := h.loop.judgeRequired(context.Background(), Candidate{ItemID: "item-broke", Worktree: h.root})
+	// The fast gate passed, but the required replay found two failing cases. Its
+	// source log is temporary; the recorded refusal must keep its own copy.
+	source := filepath.Join(scratchUnderDurable(t), "required-unit.log")
+	output := "fork-check: triage -- 1 failed check(s), diagnosed from this run's own output and never re-run:\n" +
+		"  triage unit: required unit tests\n" +
+		"       case: TestRequiredReplayKeepsFirstFailure -- tests/unit_test.go\n" +
+		"       assertion: first required regression failed\n" +
+		"       case: TestRequiredReplayKeepsSecondFailure -- tests/unit_test.go\n" +
+		"       assertion: second required regression failed\n"
+	if err := os.WriteFile(source, []byte(output), 0600); err != nil {
+		t.Fatal(err)
+	}
+	h.steps.requiredLog = source
+	candidate := Candidate{ItemID: "item-broke", RunID: "run-required-replay", LaneID: "lane-1", Worktree: h.root}
+	runDir := RunDir(h.root, candidate.RunID)
+	if err := os.MkdirAll(runDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, GateVerdictRecord), []byte(`{"payload":{"result":"pass","checks":[]}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	detail, err := h.loop.judgeRequired(context.Background(), &candidate)
 	if err != nil || !strings.Contains(detail, "unit failed") || !strings.Contains(detail, "required output") {
 		t.Fatalf("detail=%q err=%v", detail, err)
 	}
+	candidate.RefusalDetail = detail
+	if err := h.loop.recordRefusal(context.Background(), candidate, RefusalGate); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(source); err != nil {
+		t.Fatal(err)
+	}
+	endings := h.query(`SELECT payload FROM events WHERE kind=? AND object_id=?`, RefusalKind, candidate.RunID)
+	if len(endings) != 1 {
+		t.Fatalf("required replay endings=%v", endings)
+	}
+	var ending refusalPayload
+	if err := json.Unmarshal([]byte(endings[0]), &ending); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"TestRequiredReplayKeepsFirstFailure", "TestRequiredReplayKeepsSecondFailure"} {
+		if !strings.Contains(ending.Detail, name) {
+			t.Errorf("required replay refusal lost failing case %q: %s", name, ending.Detail)
+		}
+	}
+	if strings.Contains(ending.Detail, "the gate produced no usable failure verdict") {
+		t.Errorf("required replay refusal contradicts its passing fast gate: %s", ending.Detail)
+	}
+	if len(ending.Checks) != 1 || ending.Checks[0].CheckID != "unit" {
+		t.Errorf("required replay refusal lost its check: %+v", ending.Checks)
+	} else {
+		check := ending.Checks[0]
+		if len(check.Failing) != 1 || len(check.Failing[0].Cases) != 2 ||
+			check.Failing[0].Cases[0].Name != "TestRequiredReplayKeepsFirstFailure" ||
+			check.Failing[0].Cases[1].Name != "TestRequiredReplayKeepsSecondFailure" {
+			t.Errorf("required replay refusal lost structured failing cases: %+v", check.Failing)
+		}
+		rel, err := filepath.Rel(runDir, check.LogRef)
+		if check.LogRef == "" || err != nil || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			t.Errorf("required replay log is not retained under RunDir %s: %q (%v)", runDir, check.LogRef, err)
+		}
+		if !strings.Contains(ending.Detail, check.LogRef) {
+			t.Errorf("required replay refusal did not name the retained log: %s", ending.Detail)
+		}
+		if body, err := os.ReadFile(check.LogRef); err != nil || string(body) != output {
+			t.Errorf("required replay log did not survive source removal: %q (%v)", body, err)
+		}
+	}
 	h.steps.required = map[string]string{"unit": "pass"}
-	if detail, err := h.loop.judgeRequired(context.Background(), Candidate{ItemID: "item-broke", Worktree: h.root}); err != nil || detail != "" {
+	if detail, err := h.loop.judgeRequired(context.Background(), &Candidate{ItemID: "item-broke", Worktree: h.root}); err != nil || detail != "" {
 		t.Fatalf("a passing required check refused: %q %v", detail, err)
 	}
 	// Unproven is never red: no verdict does not refuse.
 	h.steps.required = map[string]string{"unit": "error"}
-	if detail, err := h.loop.judgeRequired(context.Background(), Candidate{ItemID: "item-broke", Worktree: h.root}); err != nil || detail != "" {
+	if detail, err := h.loop.judgeRequired(context.Background(), &Candidate{ItemID: "item-broke", Worktree: h.root}); err != nil || detail != "" {
 		t.Fatalf("a check with no verdict refused: %q %v", detail, err)
 	}
 	// Once the item lands again the requirement is spent.
