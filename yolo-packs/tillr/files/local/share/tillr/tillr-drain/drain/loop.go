@@ -541,7 +541,9 @@ type Loop struct {
 	stageFault  bool
 	// laneConditions is each lane a lane-owned staging refusal took out of rotation this
 	// session (lane_rotation.go), and laneRefusedNow says the current staging refused its
-	// lane, so the pass offers the item another. Both are the pass goroutine's alone.
+	// lane, so the pass offers the item another. laneMu guards rotation state;
+	// mu guards the staging flags and active-run bookkeeping.
+	laneMu               sync.Mutex
 	laneConditions       map[string]*laneCondition
 	laneConditionsLoaded bool
 	laneRefusedNow       bool
@@ -577,11 +579,12 @@ type Loop struct {
 	// reconstructed from the store by the next pass or a replacement Loop.
 	examinations  sync.WaitGroup
 	active        map[string]bool
-	activeItems   map[string]string // item -> local run or examination, owned by the pass
+	activeItems   map[string]string // item -> local run or examination
 	activeCancels map[string]context.CancelFunc
 	stoppedRuns   map[string]bool
 	completions   chan runCompletion
 	laneChanges   map[string]int
+	stagingLanes  map[string]int
 	// segmentEvidence is each settling run's uncommitted-work evidence as it stood before
 	// its session was last continued (segmentRepeated).
 	segmentEvidence map[string]string
@@ -636,7 +639,32 @@ type Loop struct {
 	syncedSHA        string
 	syncClearSeq     int64
 	questions        QuestionSource
+	ownerAnswerMu    sync.Mutex
 	ownerAnswerBlobs map[string]string
+}
+
+func (l *Loop) isActive(runID string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.active[runID]
+}
+
+func (l *Loop) activeCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.active)
+}
+
+func (l *Loop) dispatched(result *LoopResult) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return result.Dispatched
+}
+
+func (l *Loop) addDispatched(result *LoopResult) {
+	l.mu.Lock()
+	result.Dispatched++
+	l.mu.Unlock()
 }
 
 // heldItem binds a staging refusal to the content the loop held. The clock
@@ -791,8 +819,8 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	}
 	ctx, cancelCause := context.WithCancelCause(ctx)
 	cancel := func() { cancelCause(nil) }
-	l.sessionStop = func() { cancelCause(errStopRequested) }
-	defer func() { l.sessionStop = nil }()
+	l.setSessionStop(func() { cancelCause(errStopRequested) })
+	defer l.setSessionStop(nil)
 	if stopped, err := l.stopRequested(ctx); err != nil {
 		if stoppedByOperator(ctx, err) {
 			result.Stop, result.Detail = StopOperatorStop, "the loop was asked to stop"
@@ -800,7 +828,7 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 		}
 		return faultResult(result, err)
 	} else if stopped {
-		l.sessionStop()
+		l.signalSessionStop()
 		result.Stop, result.Detail = StopOperatorStop, "the loop was asked to stop"
 		return result, nil
 	}
@@ -896,8 +924,10 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 			result.Detail = "the loop was asked to stop"
 			return result, nil
 		}
+		l.mu.Lock()
 		dispatched := result.Dispatched
 		l.stageFault = false
+		l.mu.Unlock()
 		done, err := l.pass(ctx, &result)
 		if err != nil {
 			// A stop that arrived while the tick was reading the store is still the
@@ -920,8 +950,13 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 		// count, because it must never ration work: when a tick dispatched anything, or when
 		// the pile answered "nothing dispatchable", the loop has a real answer and does not
 		// wait at all.
-		if result.Dispatched == dispatched && l.stageFault && l.infrastructureStreak() > 0 && len(l.active) == 0 {
+		l.mu.Lock()
+		backOff := result.Dispatched == dispatched && l.stageFault && l.infraStreak > 0 && len(l.active) == 0
+		if backOff {
 			l.stageFault = false
+		}
+		l.mu.Unlock()
+		if backOff {
 			waited, err := l.backOff(ctx)
 			if err != nil && ctx.Err() == nil {
 				return faultResult(result, err)
@@ -1149,7 +1184,7 @@ func (l *Loop) infrastructureStreak() int {
 func (l *Loop) backOff(ctx context.Context) (bool, error) {
 	streak := l.infrastructureStreak()
 	delay := BackoffDelay(streak, l.cfg.BackoffBase)
-	fmt.Fprintf(l.cfg.Report, "loop: %d consecutive infrastructure failure(s) and nothing dispatched; waiting %s before the next attempt\n",
+	l.reportf("loop: %d consecutive infrastructure failure(s) and nothing dispatched; waiting %s before the next attempt\n",
 		streak, delay)
 	if err := l.beat(ctx, l.cfg.Now().Add(delay)); err != nil {
 		return false, err
@@ -1433,6 +1468,25 @@ func isPerItemStageFailure(spec StageSpec, err error) bool {
 	return false
 }
 
+// stageLane invalidates snapshots on entry and exit, including when staging fails.
+func (l *Loop) stageLane(ctx context.Context, spec StageSpec) error {
+	lane := spec.LaneID
+	l.mu.Lock()
+	if l.stagingLanes == nil {
+		l.stagingLanes = map[string]int{}
+	}
+	l.stagingLanes[lane]++
+	l.bumpLaneEpoch(lane)
+	l.mu.Unlock()
+	defer func() {
+		l.mu.Lock()
+		l.stagingLanes[lane]--
+		l.bumpLaneEpoch(lane)
+		l.mu.Unlock()
+	}()
+	return l.cfg.Stage.Stage(ctx, spec)
+}
+
 func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSHA string, result *LoopResult) ([]Decision, error) {
 	staged := make([]Decision, 0, len(decisions))
 	for _, decision := range decisions {
@@ -1449,7 +1503,9 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 				if err := l.takeLaneOutOfRotation(ctx, refusal); err != nil {
 					return err
 				}
+				l.mu.Lock()
 				l.laneRefusedNow = true
+				l.mu.Unlock()
 				return nil
 			}
 			return l.holdStageFailed(ctx, decision, step, stepErr)
@@ -1714,7 +1770,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 			continue
 		}
-		err := l.cfg.Stage.Stage(ctx, spec)
+		err := l.stageLane(ctx, spec)
 		if finishErr := pipelineFinish(l.cfg.Root, spec.RunID, observation); finishErr != nil && err == nil {
 			if holdErr := failStage("finish stage pipeline", finishErr); holdErr != nil {
 				return nil, holdErr
@@ -1761,7 +1817,9 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			if err := l.takeLaneOutOfRotation(ctx, refusal); err != nil {
 				return nil, err
 			}
+			l.mu.Lock()
 			l.laneRefusedNow = true
+			l.mu.Unlock()
 			continue
 		}
 		if !IsItemContent(err) && isPerItemStageFailure(spec, err) {
@@ -1771,8 +1829,8 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			continue
 		}
 		if !IsItemContent(err) {
-			l.stageFault = true
 			l.mu.Lock()
+			l.stageFault = true
 			result.InfraFailures++
 			l.infraStreak++
 			streak := l.infraStreak
@@ -2575,13 +2633,9 @@ func (l *Loop) runContinuation(ctx context.Context, lane string, request run.Req
 	resumed := request
 	resumed.Resume = true
 	resumed.CorrelationID = tick
-	l.mu.Lock()
-	epochs := map[string]int{}
-	for _, sibling := range watched {
-		epochs[sibling] = l.laneChanges[sibling]
-	}
-	l.mu.Unlock()
-	before, err := l.snapshot(ctx, []string{worktree}, watched)
+	l.noteLaneWrite(lane)
+	epochs := l.idleLaneEpochs()
+	before, err := l.snapshotIdleSiblings(ctx, worktree, watched, epochs)
 	if err != nil {
 		return run.Record{}, "", "", err
 	}

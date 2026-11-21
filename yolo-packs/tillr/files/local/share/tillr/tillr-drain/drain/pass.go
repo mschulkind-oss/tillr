@@ -1205,7 +1205,7 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 	}
 	if onlyItem != "" {
 		work := works[onlyItem]
-		if work == nil || work.Done || work.LaneReleased || l.laneConditions[work.Decision.LaneID] != nil {
+		if work == nil || work.Done || work.LaneReleased || l.hasLaneCondition(work.Decision.LaneID, "") {
 			return nil
 		}
 	}
@@ -1936,7 +1936,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			if err := carryReturnedNodeInputs(tx, d); err != nil {
 				return err
 			}
-			work = &pendingWork{Decision: d, BaseSHA: base, Owner: owner, LoopID: l.sessionID}
+			work = &pendingWork{Decision: d, BaseSHA: base, Owner: owner, LoopID: l.currentSessionID()}
 			nodes = parallelNodes(d)
 			keep := make(map[string]bool, len(nodes))
 			for _, node := range nodes {
@@ -2196,30 +2196,32 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 	return err
 }
 
-func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched []string, result *LoopResult) {
+func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watch *laneWatch, result *LoopResult) {
+	var watched []string
+	var epochs map[string]int
+	if watch != nil {
+		watched, epochs = watch.lanes, watch.epochs
+	}
 	// The run outlives this supervisor. A canceled ctx ends only this goroutine's
 	// wait: ProcessSteps.Run never signals the run face on cancellation, and the
 	// next loop settles the run from its terminal record.
 	id := d.RunRequest.RunID
-	l.markStepActive(d.ItemID, id)
 	runCtx, cancel := context.WithCancel(ctx)
 	l.mu.Lock()
+	l.markStepActive(d.ItemID, id)
 	if l.activeCancels == nil {
 		l.activeCancels = map[string]context.CancelFunc{}
 	}
 	l.activeCancels[id] = cancel
-	l.laneChanges[d.LaneID]++
-	epochs := map[string]int{}
-	for _, lane := range watched {
-		epochs[lane] = l.laneChanges[lane]
-	}
-	l.mu.Unlock()
+	l.bumpLaneEpoch(d.LaneID)
 	result.Dispatched++
+	ticks := result.Ticks
+	l.mu.Unlock()
 	if d.Reason == ReasonFailover {
 		l.reportf("loop: failover %s -> %s on %s\n", d.ItemID, d.RunRequest.Backend, d.LaneID)
 	}
 
-	l.reportf("loop: tick %d dispatch %s -> %s on %s\n", result.Ticks, d.ItemID, d.RunRequest.Backend, d.LaneID)
+	l.reportf("loop: tick %d dispatch %s -> %s on %s\n", ticks, d.ItemID, d.RunRequest.Backend, d.LaneID)
 	handoff := !l.nonLanding && !l.pollOnly && l.ownerMigrationItem == ""
 	go func() {
 		defer cancel()
@@ -2229,7 +2231,7 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 		var evaluatorHold *Candidate
 		var record run.Record
 		var log string
-		before, err := l.snapshot(runCtx, []string{l.lanePath(d.LaneID)}, watched)
+		before, err := l.snapshotIdleSiblings(runCtx, l.lanePath(d.LaneID), watched, epochs)
 		if err != nil {
 			err = fmt.Errorf("run boundary before: %w", err)
 		}
@@ -2286,13 +2288,13 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 	if stopped {
 		delete(l.stoppedRuns, c.id)
 	}
-	l.mu.Unlock()
 	delete(l.active, c.id)
 	if l.activeItems[c.itemID] == c.id {
 		delete(l.activeItems, c.itemID)
 	}
+	l.mu.Unlock()
 	if c.dispatchTiming != nil {
-		countGeneration(result, c.timing.TickID)
+		l.countGeneration(result, c.timing.TickID)
 		if err := l.recordPass(c.timing); err != nil {
 			result.StopItemID, result.StopStep = c.itemID, "record pass"
 			return "", err
@@ -2303,10 +2305,15 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 		return "", nil
 	}
 	if c.result != nil {
+		l.mu.Lock()
 		mergeExamination(result, c.result)
+		l.mu.Unlock()
 		if c.result.Rejected > 0 {
 			l.finalizeRepeatedRefusal(result)
-			if line := RepeatedRefusalLine(*result); line != "" {
+			l.mu.Lock()
+			line := RepeatedRefusalLine(*result)
+			l.mu.Unlock()
+			if line != "" {
 				l.reportf("loop: repeated-refusal: %s\n", line)
 			}
 		}
@@ -2472,7 +2479,8 @@ func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err e
 	}
 	at := l.cfg.Now().UTC()
 	timing := &PassTiming{AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}
-	defer func() { countGeneration(result, timing.TickID) }()
+	defer func() { l.countGeneration(result, timing.TickID) }()
+	epochs := l.idleLaneEpochs()
 	if err := l.retireOrderWork(ctx); err != nil {
 		return "", err
 	}
@@ -2561,7 +2569,7 @@ func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err e
 		// A refused lane may have no worktree here to snapshot, even after a
 		// re-check offers it again or changes the reason before recreating it.
 		// A holding worktree elsewhere is not a sibling this bracket watches.
-		if c := l.laneConditions[lane]; c != nil {
+		if l.hasLaneCondition(lane, "") {
 			if _, err := os.Stat(l.lanePath(lane)); os.IsNotExist(err) {
 				continue
 			}
@@ -2608,7 +2616,7 @@ plans:
 				continue
 			}
 		}
-		cancelled, changed, err := l.applyReadyPlan(ctx, p, &mainSHA, at, timing, watched, result)
+		cancelled, changed, err := l.applyReadyPlan(ctx, p, &mainSHA, at, timing, &laneWatch{watched, epochs}, result)
 		if err != nil {
 			return "", err
 		}
@@ -2619,7 +2627,10 @@ plans:
 			// waited for the lane the cancellation freed. A refusal the lane's own
 			// state caused, or a cancellation with no infrastructure fault behind
 			// it, replans; an infrastructure fault would only repeat and count again.
-			if (l.laneRefusedNow || !l.stageFault) && replans < len(l.cfg.Lanes)+1 {
+			l.mu.Lock()
+			canReplan := l.laneRefusedNow || !l.stageFault
+			l.mu.Unlock()
+			if canReplan && replans < len(l.cfg.Lanes)+1 {
 				replans++
 				// A lane this pass just refused stays out until the next pass: a
 				// re-check now would see its pinned HEAD as retained and offer it again.
@@ -2661,7 +2672,7 @@ plans:
 		l.waitingDetail = ""
 		return "", nil
 	}
-	if len(l.active) > 0 {
+	if l.activeCount() > 0 {
 		l.waitingDetail = ""
 		return l.waitForTrigger(ctx, leases, at, result)
 	}
@@ -2702,7 +2713,7 @@ plans:
 
 // applyReadyPlan is shared by the queue pass and an item-local completion handoff.
 // It leaves cancellation replanning to the queue pass, which owns lane offers.
-func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA *string, at time.Time, timing *PassTiming, watched []string, result *LoopResult) (cancelled, stale bool, err error) {
+func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA *string, at time.Time, timing *PassTiming, watch *laneWatch, result *LoopResult) (cancelled, stale bool, err error) {
 	d := p.decision
 	ok, work, err := l.applyPlanTrunk(ctx, p, mainSHA, at, &timing.TickID)
 	if err != nil {
@@ -2731,7 +2742,9 @@ func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA
 			v.noteStartClaimed(d, work)
 		}
 		start := time.Now()
+		l.mu.Lock()
 		l.laneRefusedNow = false
+		l.mu.Unlock()
 		var staged []Decision
 		var err error
 		owned := ""
@@ -2832,13 +2845,17 @@ func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA
 			}
 			return false, false, err
 		}
-		l.launchRun(ctx, staged[0], at, watched, result)
+		l.launchRun(ctx, staged[0], at, watch, result)
 	case ActionSettle, ActionJudge:
 		if err := l.checkStopRequested(ctx); err != nil {
 			if releaseErr := l.releaseExamination(context.WithoutCancel(ctx), d); releaseErr != nil {
 				return false, false, releaseErr
 			}
 			return false, false, err
+		}
+		var watched []string
+		if watch != nil {
+			watched = unmovedLanes(watch.lanes, watch.epochs, l.idleLaneEpochs())
 		}
 		l.launchExamination(ctx, d, work, at, timing, watched)
 	}
@@ -2848,9 +2865,9 @@ func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA
 // launchExamination runs the claimed settlement or judgment independently;
 // the completion is a wake trigger and measurement, not its durable outcome.
 func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingWork, at time.Time, passTiming *PassTiming, watched []string) {
-	l.markStepActive(d.ItemID, d.RunRequest.RunID)
 	runCtx, cancel := context.WithCancel(ctx)
 	l.mu.Lock()
+	l.markStepActive(d.ItemID, d.RunRequest.RunID)
 	if l.activeCancels == nil {
 		l.activeCancels = map[string]context.CancelFunc{}
 	}
@@ -3121,6 +3138,23 @@ func awaitingForkClaim(work *pendingWork) bool {
 		(work.Ready && d.NodeIndex == 1 && d.NodeBaseSHA == "" && classificationNode(d.Workflow.Stages[0]))
 }
 
+// If staging invalidated a sibling while Git was reading it, retry without that
+// sibling. Failures reading an untouched worktree or the target still surface.
+func (l *Loop) snapshotIdleSiblings(ctx context.Context, target string, watched []string, epochs map[string]int) (*Boundary, error) {
+	watched = unmovedLanes(watched, epochs, l.idleLaneEpochs())
+	for {
+		b, err := l.snapshot(ctx, []string{target}, watched)
+		if err == nil {
+			return b, nil
+		}
+		still := unmovedLanes(watched, epochs, l.idleLaneEpochs())
+		if len(still) == len(watched) {
+			return nil, err
+		}
+		watched = still
+	}
+}
+
 // A sibling started after the bracket opened has its own writer and bracket.
 // Ignore its status in both snapshots rather than convicting that authorized work.
 func (l *Loop) closeAsyncBracket(ctx context.Context, d Decision, at time.Time, before *Boundary, result *LoopResult, watched []string, epochs map[string]int) (string, error) {
@@ -3128,17 +3162,22 @@ func (l *Loop) closeAsyncBracket(ctx context.Context, d Decision, at time.Time, 
 		return "", nil
 	}
 	worktree := l.lanePath(d.LaneID)
-	after, err := l.snapshot(ctx, []string{worktree}, watched)
+	after, err := l.snapshotIdleSiblings(ctx, worktree, watched, epochs)
 	if err != nil {
 		return "", err
 	}
-	l.mu.Lock()
+	now := l.idleLaneEpochs()
 	for _, lane := range watched {
-		if epochs[lane] == l.laneChanges[lane] {
+		epoch, seen := epochs[lane]
+		if current, idle := now[lane]; idle && seen && current == epoch {
 			continue
 		}
 		path := l.lanePath(lane)
+		if canonical, err := canonicalDir(path); err == nil {
+			path = canonical
+		}
 		for _, snapshot := range []*Boundary{before, after} {
+			snapshot.Lanes = slices.DeleteFunc(snapshot.Lanes, func(p string) bool { return p == path })
 			for i := range snapshot.Worktrees {
 				if snapshot.Worktrees[i].Path == path {
 					snapshot.Worktrees[i].Status = nil
@@ -3146,6 +3185,5 @@ func (l *Loop) closeAsyncBracket(ctx context.Context, d Decision, at time.Time, 
 			}
 		}
 	}
-	l.mu.Unlock()
 	return l.finishRunBracket(ctx, worktree, *d.RunRequest, d.RunRequest.CorrelationID, at, before, after, result)
 }

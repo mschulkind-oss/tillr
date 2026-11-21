@@ -25,13 +25,19 @@ func (l *Loop) settleResolvedFixerRuns(ctx context.Context) error {
 	defer s.Close()
 	var needed bool
 	var activeToStop []string
+	l.mu.Lock()
+	active := make([]string, 0, len(l.active))
+	for id := range l.active {
+		active = append(active, id)
+	}
+	l.mu.Unlock()
 	if err := s.ReadTx(ctx, func(r *store.Reader) error {
 		var e error
 		needed, e = hasUnfinishedResolvedFixerRuns(r)
 		if e != nil {
 			return e
 		}
-		if len(l.active) > 0 {
+		if len(active) > 0 {
 			fixers, e := resolvedFixerIDs(r)
 			if e != nil {
 				return e
@@ -49,7 +55,7 @@ func (l *Loop) settleResolvedFixerRuns(ctx context.Context) error {
 				if e != nil {
 					return e
 				}
-				for runID := range l.active {
+				for _, runID := range active {
 					for _, fixerID := range fixers {
 						belongs, e := runBelongsToItem(r, runID, fixerID, hasReadOnly, hasNodes, hasDispatches)
 						if e != nil {

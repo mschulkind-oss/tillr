@@ -114,6 +114,8 @@ func (l *Loop) refuse(ctx context.Context, candidate Candidate, result *LoopResu
 // window it spent, and a loop that landed something never reports a refusal it recovered
 // from.
 func (l *Loop) finalizeRepeatedRefusal(result *LoopResult) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if result.Landed > 0 || len(result.RefusedItems) < RepeatedRefusalThreshold {
 		result.RepeatedRefusal = nil
 		return

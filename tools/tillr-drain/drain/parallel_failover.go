@@ -150,7 +150,7 @@ func (l *Loop) stageParallelReplacement(ctx context.Context, nodes []Decision, i
 		base = stagedBase
 	}
 	spec := StageSpec{Policy: l.currentPolicy(), Continue: true, Isolated: true, Node: &node.Workflow.Stages[node.NodeIndex], InputPaths: paths, LaneID: node.LaneID, ItemID: node.ItemID, RunID: node.RunRequest.RunID, Backend: node.RunRequest.Backend, BaseSHA: base, WorkingDir: node.RunRequest.WorkingDir, TimeoutMS: node.RunRequest.TimeoutMS}
-	if err := l.cfg.Stage.Stage(ctx, spec); err != nil {
+	if err := l.stageLane(ctx, spec); err != nil {
 		return err
 	}
 	node.NodeStartRunID = node.RunRequest.RunID

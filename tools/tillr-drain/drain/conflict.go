@@ -228,7 +228,7 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 		spec.Continue = true
 		spec.SessionID = worker.SessionID
 	}
-	if err := l.cfg.Stage.Stage(ctx, spec); err != nil {
+	if err := l.stageLane(ctx, spec); err != nil {
 		return "", false, l.holdRepair(ctx, basis, err)
 	}
 	if err := l.recordConflict(ctx, candidate, landed, fixRunID, key, false); err != nil {

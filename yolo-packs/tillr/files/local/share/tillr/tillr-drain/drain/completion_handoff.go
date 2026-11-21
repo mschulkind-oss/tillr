@@ -10,7 +10,11 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+// markStepActive requires mu so callers can register cancellation atomically.
 func (l *Loop) markStepActive(itemID, runID string) {
+	if l.active == nil {
+		l.active = map[string]bool{}
+	}
 	l.active[runID] = true
 	if l.activeItems == nil {
 		l.activeItems = map[string]string{}
@@ -19,6 +23,8 @@ func (l *Loop) markStepActive(itemID, runID string) {
 }
 
 func (l *Loop) planStillActive(p plannedApplication) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	d := p.decision
 	// A parallel group can replace its primary run before its shared boundary
 	// closes. Its item remains active even though the current pending ID changed.
@@ -69,6 +75,7 @@ func (l *Loop) finishRunStep(ctx context.Context, c runCompletion, result *LoopR
 	}
 	var plans []plannedApplication
 	var watched []string
+	epochs := l.idleLaneEpochs()
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
 		if err := l.readPassPlans(ctx, r, at, c.itemID, nil, &plans, nil); err != nil || len(plans) == 0 {
 			return err
@@ -90,7 +97,7 @@ func (l *Loop) finishRunStep(ctx context.Context, c runCompletion, result *LoopR
 			if busy[lane] {
 				continue
 			}
-			if l.laneConditions[lane] != nil {
+			if l.hasLaneCondition(lane, "") {
 				if _, err := os.Stat(l.lanePath(lane)); os.IsNotExist(err) {
 					continue
 				}
@@ -119,9 +126,9 @@ func (l *Loop) finishRunStep(ctx context.Context, c runCompletion, result *LoopR
 		return "", err
 	}
 	timing := &PassTiming{AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds(), DecisionCounts: counts}
-	_, _, err = l.applyReadyPlan(ctx, p, &mainSHA, at, timing, watched, result)
+	_, _, err = l.applyReadyPlan(ctx, p, &mainSHA, at, timing, &laneWatch{watched, epochs}, result)
 	if timing.TickID != "" {
-		countGeneration(result, timing.TickID)
+		l.countGeneration(result, timing.TickID)
 		if recordErr := l.observePass(timing, answers); err == nil {
 			err = recordErr
 		}
@@ -131,10 +138,12 @@ func (l *Loop) finishRunStep(ctx context.Context, c runCompletion, result *LoopR
 
 // Item handoffs can allocate a generation inside a pass that already has one.
 // Their observations need not be published in generation order.
-func countGeneration(result *LoopResult, tickID string) {
+func (l *Loop) countGeneration(result *LoopResult, tickID string) {
 	if tickID == "" {
 		return
 	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	result.Ticks++
 	id := strings.TrimPrefix(tickID, "gen-")
 	n, _ := strconv.ParseInt(id, 10, 64)
