@@ -238,8 +238,10 @@ func TestRedTreeRollingProgramKeepsWatermarkAndDeduplicatesFixer(t *testing.T) {
 	steps.RollingProgram = stub(t, "rolling", `printf '%s' '{"check_spans":[{"check_id":"scratch/whole-tree","status":"FAIL","attributes_json":"{\"writes\":[\".\"]}"}]}' > "$TILLR_GATE_SPANS_OUT"
 exit 1
 `)
+	// A red rolling proof can dispatch its fixer on a desk outside the configured lanes.
+	stage := trunkStager{passStager: passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}}, t: t, root: f.root}
 	for i := 0; i < 2; i++ {
-		_, err := f.newLoopWith(t, 1, steps, passStager{laneRoot: f.laneRoot, fence: []string{"candidate.txt"}}, io.Discard).Run(context.Background())
+		_, err := f.newLoopWith(t, 1, steps, stage, io.Discard).Run(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
