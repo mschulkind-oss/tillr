@@ -71,9 +71,10 @@ func TestOwnerCriterionAddedAfterPlanPreventsDispatch(t *testing.T) {
 	}
 	before := eventCount(t, l.cfg.Store)
 	ok, _, err := l.applyPlan(context.Background(), plan, runGit(t, l.cfg.Root, "rev-parse", TrunkRef), l.cfg.Now())
-	if err != nil || ok || eventCount(t, l.cfg.Store) != before {
+	if err != nil || ok {
 		t.Fatalf("stale plan dispatched after owner criterion added: applied=%v err=%v", ok, err)
 	}
+	assertOnlyDispatchDecline(t, l.cfg.Store, before, plan.decision, "item or lane state changed since planning")
 }
 
 func TestOwnerCriterionPreservesTerminalWorkflowSettlement(t *testing.T) {

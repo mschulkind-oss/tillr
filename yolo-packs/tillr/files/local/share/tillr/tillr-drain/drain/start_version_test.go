@@ -259,9 +259,7 @@ func TestStartContentChangeCancelsPlannedStart(t *testing.T) {
 			if err != nil || ok || work != nil {
 				t.Fatalf("held start was not cancelled: ok=%v work=%+v err=%v", ok, work, err)
 			}
-			if got := eventCount(t, f.storePath); got != eventsBefore {
-				t.Fatalf("cancelled start wrote events: got=%d want=%d", got, eventsBefore)
-			}
+			assertOnlyDispatchDecline(t, f.storePath, eventsBefore, p.decision, "item or lane state changed since planning")
 			if got := dispatchCount(t, f.storePath); got != dispatchesBefore {
 				t.Fatalf("cancelled start wrote dispatches: got=%d want=%d", got, dispatchesBefore)
 			}
