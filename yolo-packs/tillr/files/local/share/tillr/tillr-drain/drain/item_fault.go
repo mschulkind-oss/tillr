@@ -228,9 +228,15 @@ func (l *Loop) holdStageFailed(ctx context.Context, d Decision, step string, sta
 		}
 		return err
 	}
-	delete(l.infraLines, itemID+"\x00"+d.LaneID)
+	l.clearStageInfraLine(itemID, d.LaneID)
 	l.reportf("loop: %s mover: %s\n", itemID, holdrules.For(ReasonStageFailed).Mover)
 	return nil
+}
+
+func (l *Loop) clearStageInfraLine(itemID, lane string) {
+	l.mu.Lock()
+	delete(l.infraLines, itemID+"\x00"+lane)
+	l.mu.Unlock()
 }
 
 func (l *Loop) clearUnrunNode(ctx context.Context, runID string) error {

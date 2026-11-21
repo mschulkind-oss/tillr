@@ -1235,7 +1235,13 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 	// The loop's own holds go to the planner, so it holds those items before it offers
 	// lanes rather than having a lane it gave one overridden below and left unused.
 	loopHolds := map[string]string{}
+	l.mu.Lock()
+	heldIDs := make([]string, 0, len(l.held))
 	for id := range l.held {
+		heldIDs = append(heldIDs, id)
+	}
+	l.mu.Unlock()
+	for _, id := range heldIDs {
 		if reason, held := l.heldFor(r, id); held {
 			loopHolds[id] = reason
 		}
@@ -2750,6 +2756,44 @@ plans:
 	return l.planNothing(ctx, holds, leases, at, result)
 }
 
+// prepareClaimedStage stages a fresh lane or checks an already staged parallel
+// restart. A boundary refusal owns its own settlement, not cancelStaging.
+func (l *Loop) prepareClaimedStage(ctx context.Context, d *Decision, base *string, result *LoopResult) ([]Decision, bool, error) {
+	if len(d.Parallel) > 0 && d.WorkflowRestart {
+		owned, err := l.stagedNodeRun(*d)
+		if err != nil {
+			return nil, false, l.holdStageFailed(ctx, *d, "read staged node run", err)
+		}
+		if owned != "" {
+			if d.NodeIndex == 0 && d.NodeStartRunID == "" {
+				raw, err := os.ReadFile(filepath.Join(RunDir(l.cfg.Root, owned), BaseSHAFile))
+				if err != nil {
+					return nil, false, l.holdStageFailed(ctx, *d, "read staged base", err)
+				}
+				d.NodeBaseSHA = strings.TrimSpace(string(raw))
+				d.NodeStartRunID = owned
+			}
+			if stagedBase := l.laneBase(d.LaneID); stagedBase != "" {
+				*base = stagedBase
+			}
+			head, err := l.revParse(ctx, l.laneTarget(d.LaneID), "HEAD")
+			if err != nil {
+				return nil, false, l.holdStageFailed(ctx, *d, "inspect parallel lane", err)
+			}
+			dirty, err := l.git(ctx, l.laneTarget(d.LaneID), "status", "--porcelain", "--untracked-files=all")
+			if err != nil {
+				return nil, false, l.holdStageFailed(ctx, *d, "inspect parallel lane", err)
+			}
+			if head != d.NodeBaseSHA || strings.TrimSpace(dirty) != "" {
+				return nil, true, l.refuseParallelBoundary(ctx, *d, *base, head, result, true)
+			}
+			return []Decision{*d}, false, nil
+		}
+	}
+	staged, err := l.stageDispatches(ctx, []Decision{*d}, *base, result)
+	return staged, false, err
+}
+
 // applyReadyPlan is shared by the queue pass and an item-local completion handoff.
 // It leaves cancellation replanning to the queue pass, which owns lane offers.
 func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA *string, at time.Time, timing *PassTiming, watch *laneWatch, result *LoopResult) (cancelled, stale bool, err error) {
@@ -2784,66 +2828,9 @@ func (l *Loop) applyReadyPlan(ctx context.Context, p plannedApplication, mainSHA
 		l.mu.Lock()
 		l.laneRefusedNow = false
 		l.mu.Unlock()
-		var staged []Decision
-		var err error
-		owned := ""
-		parallelPrecheckFailed := false
-		if len(d.Parallel) > 0 && d.WorkflowRestart {
-			var preErr error
-			owned, preErr = l.stagedNodeRun(d)
-			if preErr != nil {
-				if holdErr := l.holdStageFailed(ctx, d, "read staged node run", preErr); holdErr != nil {
-					err = holdErr
-				} else {
-					parallelPrecheckFailed = true
-				}
-			}
-		}
-		if err == nil && !parallelPrecheckFailed && owned != "" && len(d.Parallel) > 0 && d.WorkflowRestart {
-			if d.NodeIndex == 0 && d.NodeStartRunID == "" {
-				raw, readErr := os.ReadFile(filepath.Join(RunDir(l.cfg.Root, owned), BaseSHAFile))
-				if readErr != nil {
-					if holdErr := l.holdStageFailed(ctx, d, "read staged base", readErr); holdErr != nil {
-						err = holdErr
-					} else {
-						parallelPrecheckFailed = true
-					}
-				} else {
-					d.NodeBaseSHA = strings.TrimSpace(string(raw))
-					d.NodeStartRunID = owned
-				}
-			}
-			if err == nil && !parallelPrecheckFailed {
-				if stagedBase := l.laneBase(d.LaneID); stagedBase != "" {
-					base = stagedBase
-				}
-				head, headErr := l.revParse(ctx, l.laneTarget(d.LaneID), "HEAD")
-				if headErr != nil {
-					if holdErr := l.holdStageFailed(ctx, d, "inspect parallel lane", headErr); holdErr != nil {
-						err = holdErr
-					} else {
-						parallelPrecheckFailed = true
-					}
-				} else {
-					dirty, dirtyErr := l.git(ctx, l.laneTarget(d.LaneID), "status", "--porcelain", "--untracked-files=all")
-					if dirtyErr != nil {
-						if holdErr := l.holdStageFailed(ctx, d, "inspect parallel lane", dirtyErr); holdErr != nil {
-							err = holdErr
-						} else {
-							parallelPrecheckFailed = true
-						}
-					} else if head != d.NodeBaseSHA || strings.TrimSpace(dirty) != "" {
-						if err = l.refuseParallelBoundary(ctx, d, base, head, result, true); err != nil {
-							return false, false, err
-						}
-						return false, false, nil
-					} else {
-						staged = []Decision{d}
-					}
-				}
-			}
-		} else if err == nil && !parallelPrecheckFailed {
-			staged, err = l.stageDispatches(ctx, []Decision{d}, base, result)
+		staged, refused, err := l.prepareClaimedStage(ctx, &d, &base, result)
+		if refused {
+			return false, false, err
 		}
 		if err != nil {
 			if stoppedByOperator(ctx, err) {
