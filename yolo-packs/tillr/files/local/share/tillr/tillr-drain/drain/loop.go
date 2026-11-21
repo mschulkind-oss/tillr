@@ -822,6 +822,10 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	}()
 	defer func() {
 		cancel()
+		// A worker-end handoff registers under mu only while its context is
+		// live. Cross that admission point before joining the examinations.
+		l.mu.Lock()
+		l.mu.Unlock()
 		// Judging workers own short-lived leases, not model lifetimes. Finish
 		// their cancellation cleanup before this process exits.
 		l.examinations.Wait()
