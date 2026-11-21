@@ -77,7 +77,10 @@ moved remote, reset the main checkout, and remap landing SHAs rather than writin
 [`OQ-RP2`](../design/tillr-refused-push.md#OQ-RP2) (dispatch a fenced repair worker on conflict
 with ordinary obstacle escalation and no owner step in the routine case), and
 [`OQ-RP3`](../design/tillr-refused-push.md#OQ-RP3) (trust commit identities already reachable from
-the configured upstream branch). Six designer's decisions remain marked in
+the configured upstream branch), which the later
+[`OQ-RP4`](../design/tillr-refused-push.md#OQ-RP4) replaces: tillr stamps the configured git
+identity on the commits it makes and judges no other commit by identity, so the trunk identity
+check is to be removed. Six designer's decisions remain marked in
 [its ledger](../design/tillr-refused-push.md#decision-ledger), none of it is built, and it is
 placed in [entry 3](#3-roll-onto-new-code-without-ending-runs).
 
