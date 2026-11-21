@@ -16,6 +16,29 @@ def git(path, *args):
 
 
 class PinnedForkTest(unittest.TestCase):
+    def test_only_exact_local_delivery_can_seed_a_repo_only_rebase(self):
+        with tempfile.TemporaryDirectory() as t:
+            root = Path(t)
+            delivery = root / 'delivery'
+            subprocess.run(['git', 'init', '-q', str(delivery)], check=True)
+            git(delivery, '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                'commit', '--allow-empty', '-qm', 'already delivered rebase')
+            oid = git(delivery, 'rev-parse', 'HEAD')
+            tree = root / 'candidate'
+            pins = tree / 'yolo-packs/fork-pins'
+            pins.mkdir(parents=True)
+            (pins / 'example').write_text(f'{oid}\n{root / "unpublished"}\n{oid}\n')
+            env = {**os.environ, 'FORK_INPUT_ROOT': str(tree), 'PI_FORKS_ROOT': str(delivery)}
+            env.pop('FORK_INPUT_CACHE', None)
+            argv = ['python3', str(CHECK), 'patch/example']
+            result = subprocess.run(argv, env=env, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 4, result.stderr)
+            git(delivery, 'branch', 'patch/example', oid)
+            result = subprocess.run(argv, env=env, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            cache = delivery / '.forks/inputs/example'
+            self.assertEqual(git(cache, 'rev-parse', f'refs/fork-inputs/{oid}'), oid)
+
     def test_cached_pin_survives_gc_and_offline_source(self):
         with tempfile.TemporaryDirectory() as t:
             root = Path(t)

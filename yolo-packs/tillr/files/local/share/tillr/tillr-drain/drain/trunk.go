@@ -216,7 +216,8 @@ type ReplayOutcome struct {
 	// Known reports whether the replay actually ran.
 	Known bool
 	// CheckLogs maps a red check id to the output captured during replay.
-	CheckLogs map[string]string
+	CheckLogs     map[string]string
+	forkConflicts map[string]forkObservation
 }
 
 // ReplayStep is the optional capability a Steps implementation may carry: replay a named
@@ -929,6 +930,16 @@ func (l *Loop) promoteVerdictPassInherited(_ context.Context, candidate Candidat
 	for _, c := range redChecks {
 		redSet[c] = true
 	}
+	for _, observation := range candidate.InheritedDrift {
+		redSet[observation.CheckID] = true
+	}
+	// The wrapper record names one failed check for the legacy batch. Its children
+	// are all accounted for by the settlement before this transition.
+	if len(candidate.InheritedDrift) > 0 {
+		for _, check := range gateFailingChecks(RunDir(l.cfg.Root, candidate.RunID), candidate.RunID) {
+			redSet[check.CheckID] = true
+		}
+	}
 	if checksRaw, ok := payload["checks"].([]any); ok {
 		for _, item := range checksRaw {
 			if m, ok := item.(map[string]any); ok {
@@ -946,6 +957,13 @@ func (l *Loop) promoteVerdictPassInherited(_ context.Context, candidate Candidat
 			CheckID: c,
 			TipSHA:  tipSHA,
 			Output:  fmt.Sprintf("%s failed on trunk tip %s", c, shortSHA(tipSHA)),
+		})
+	}
+	for _, observation := range candidate.InheritedDrift {
+		inherited = append(inherited, InheritedFailure{
+			CheckID: observation.CheckID,
+			Output: fmt.Sprintf("fork %s conflicts with %s (%s) on both candidate and base %s",
+				observation.Fork, observation.Ref, observation.Commit, candidate.BaseSHA),
 		})
 	}
 	payload["result"] = GatePassedInherited

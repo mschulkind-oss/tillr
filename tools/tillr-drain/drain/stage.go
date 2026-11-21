@@ -594,7 +594,11 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 		}
 	}
 	if isFork {
-		brief = strings.Replace(brief, "## Method\n", "## Method\n\nCommit the change in the named fork checkout, on its own branch. Do not run `bin/pi-forks export`: the lander alone moves the patch branch after the candidate build gate passes and refreshes the shared cache. Do not edit the shared cache or another lane's checkout.\n", 1)
+		method := "Commit the change in the named fork checkout, on its own branch."
+		if isForkRebaseItem(spec.ItemID) {
+			method = "This fork part is the exception to the brief's one-new-commit rule: rebase `main` in the named fork checkout and leave its exact, linear rebased head for the gate. Do not squash the patch commits into one or add a wrapper commit."
+		}
+		brief = strings.Replace(brief, "## Method\n", "## Method\n\n"+method+" Do not run `bin/pi-forks export`: the lander alone moves the patch branch after the candidate build gate passes and refreshes the shared cache. Do not edit the shared cache or another lane's checkout.\n", 1)
 	}
 	if item.IsCommentItem(spec.ItemID) {
 		brief = strings.Replace(brief, "When the work is done, **commit it in the target worktree**", "For a reply-only answer, the task's no-commit exception overrides the ordinary commit requirement below.\n\nWhen the work is done, **commit it in the target worktree**", 1)
@@ -1398,6 +1402,10 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 	}
 	if IsTrunkFixer(recorded.ItemID) && spec.Conflict == nil {
 		settled = "This is a trunk fixer the loop filed for a red check: its criterion is the whole brief. A `trunk` obstacle is not open to it, since repairing the trunk is its work. " + GeneratedRepairRule
+	}
+	if isForkRebaseItem(recorded.ItemID) && spec.Conflict == nil {
+		task = "Carry out the current fork rebase request's criterion. The lane's delivery target says which piece to perform; this request has no document block."
+		settled = "The gate observed upstream drift. Keep the two delivery pieces separate when a fork piece is required. An unresolved conflict that needs a product decision is an `owner` obstacle."
 	}
 	if IsDefectItem(recorded.ItemID) && spec.Conflict == nil {
 		settled = "This is a tooling-defect item the loop filed for a tool another item's worker could not use: its criterion, with the evidence it quotes, is the whole brief. " + GeneratedRepairRule

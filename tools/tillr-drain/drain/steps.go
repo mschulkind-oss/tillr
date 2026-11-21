@@ -295,6 +295,7 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 	if fork := strings.TrimPrefix(candidate.BaseRef, "refs/heads/patch/"); s.hooks == nil && fork != candidate.BaseRef {
 		program = "python3 " + filepath.Join(s.Root, "tools", "tillr-drain", "fork-gate.py") + " --fork " + fork
 	}
+	env = append(env, "TILLR_FORK_DRIFT=1")
 	code, outStr, span, err := s.programWithEnv(ctx, "gate", candidate.Worktree, program, candidate, env)
 	if err != nil {
 		return GateOutcome{}, err
@@ -334,6 +335,7 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 		outcome.CheckReads = s.gateCheckReads(candidate, outcome.CheckWatches)
 		if s.Root != "" {
 			runDir := RunDir(s.Root, candidate.RunID)
+			outcome.forkConflicts, outcome.unfinished, outcome.unansweredFork = readForkConflicts(filepath.Join(runDir, GateSpansFile))
 			wrapperWholeLog := ""
 			for _, c := range gateFailingChecks(runDir, candidate.RunID) {
 				if c.LogRef == "" {
@@ -377,7 +379,7 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 		Outcome: outcome.Outcome, Program: span.Argv, ExitCode: exitCode(span),
 		DurationMS: outcome.DurationMS,
 	}
-	if candidate.deferGateJudgment && (outcome.Outcome == GatePassed || outcome.Outcome == GatePassedInherited || outcome.Outcome == GateFailed) {
+	if (candidate.deferGateJudgment || len(outcome.forkConflicts) > 0 || outcome.unansweredFork) && (outcome.Outcome == GatePassed || outcome.Outcome == GatePassedInherited || outcome.Outcome == GateFailed) {
 		outcome.finish = func(final GateOutcome) error {
 			judgment.Outcome, judgment.DurationMS = final.Outcome, final.DurationMS
 			switch final.Outcome {
@@ -890,7 +892,7 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 		}
 		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 		cmd.Dir = dir
-		cmd.Env = s.checkProcessEnv(os.Environ())
+		cmd.Env = s.checkProcessEnv(os.Environ(), "TILLR_FORK_DRIFT=1")
 		var stderr stderrTail
 		var combined bytes.Buffer
 		cmd.Stdout = &combined
@@ -907,6 +909,12 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 		case 0:
 		case 1:
 			out.Red = append(out.Red, check)
+			if observation, ok := replayForkConflict(check, combined.String()); ok {
+				if out.forkConflicts == nil {
+					out.forkConflicts = make(map[string]forkObservation)
+				}
+				out.forkConflicts[check] = observation
+			}
 			if s.LaneRoot != "" && rev != "" {
 				if replayLog := writeReplayCheckLog(ctx, dir, rev, check, combined.String(), filepath.Join(s.LaneRoot, ".rolling", "logs", rev)); replayLog != "" {
 					if out.CheckLogs == nil {

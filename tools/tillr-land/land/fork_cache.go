@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 func (t *Trunk) forkCache(ref string) string {
@@ -185,6 +186,39 @@ func (t *Trunk) checkForkCache(ref, tip string, rebase forkRebase, recovering bo
 	return state, nil
 }
 
+// retainForkInput puts the delivered object where a candidate's pin is read, even
+// before the remote serves it. Share the gate reader's lock and immutable ref naming.
+func (t *Trunk) retainForkInput(ref, tip string) error {
+	name := strings.TrimPrefix(ref, patchPrefix)
+	parent := filepath.Join(t.repo, ".forks", "inputs")
+	cache := filepath.Join(parent, name)
+	if err := os.MkdirAll(parent, 0755); err != nil {
+		return Externalf("creating fork input parent: %v", err)
+	}
+	lock, err := os.OpenFile(filepath.Join(parent, "."+name+".lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return Externalf("opening fork input lock: %v", err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return Externalf("locking fork input %s: %v", name, err)
+	}
+	if _, err := os.Stat(filepath.Join(cache, ".git")); os.IsNotExist(err) {
+		if _, err := os.Stat(filepath.Join(cache, "HEAD")); os.IsNotExist(err) {
+			if _, err := t.forkGit(t.repo, "init", "--quiet", cache); err != nil {
+				return err
+			}
+		}
+	}
+	inputRef := "refs/fork-inputs/" + tip
+	if _, err := t.forkGit(cache, "cat-file", "-e", tip+"^{commit}"); err != nil {
+		_, err = t.forkGit(cache, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", t.repo, tip+":"+inputRef)
+		return err
+	}
+	_, err = t.forkGit(cache, "update-ref", "--no-deref", inputRef, tip)
+	return err
+}
+
 // RefreshForkCache repairs both main and the cache's copy of the delivery ref. It runs
 // before the receipt, including crash recovery, so a recorded landing has a usable cache.
 func (t *Trunk) RefreshForkCache(ref, tip string, rebase forkRebase) error {
@@ -232,13 +266,18 @@ func (t *Trunk) RefreshForkCache(ref, tip string, rebase forkRebase) error {
 		if state.patch != tip {
 			_, err = t.forkGit(cache, "update-ref", "--no-deref", ref, tip, state.patch)
 		}
-		return err
+		if err != nil {
+			return err
+		}
+	} else {
+		if _, err := t.forkGit(cache, "-c", "merge.autoStash=false", "merge", "--ff-only", "--no-edit", tip); err != nil {
+			return err
+		}
+		if _, err := t.forkGit(cache, "fetch", "--quiet", "--no-tags", t.repo, "+"+ref+":"+ref); err != nil {
+			return err
+		}
 	}
-	if _, err := t.forkGit(cache, "-c", "merge.autoStash=false", "merge", "--ff-only", "--no-edit", tip); err != nil {
-		return err
-	}
-	_, err = t.forkGit(cache, "fetch", "--quiet", "--no-tags", t.repo, "+"+ref+":"+ref)
-	return err
+	return t.retainForkInput(ref, tip)
 }
 
 func (t *Trunk) finishCacheRefresh(cache string, state forkCacheState, move cacheRefresh) error {

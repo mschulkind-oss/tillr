@@ -52,8 +52,8 @@ func loadDefaultWorkflow(root, seat, ref string, policy *Policy) (*Workflow, err
 }
 
 func selectWorkflow(r *store.Reader, root string, row itemRow, defaults map[string]string, policy *Policy) (*Workflow, string, string, error) {
-	// Repair runs deliberately bypass workflow selection.
-	if IsGeneratedRepair(row.ItemID) {
+	// Generated repairs and rebase requests already specify their work and delivery.
+	if IsGeneratedRepair(row.ItemID) || isForkRebaseItem(row.ItemID) {
 		return nil, singleWorkerWorkflow, "repair", nil
 	}
 	selected, source, graph, err := item.ReadWorkflowSelection(r, row.ItemID)

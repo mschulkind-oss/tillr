@@ -5903,6 +5903,47 @@ def run_checks(checks: list[Check], jobs: int,
     return time.monotonic() - started, peak, halted
 
 
+def observe_fork_conflict(root: Path, check: Check, cancel: Cancellation | None = None) -> dict | None:
+    """Resolve the exact target the driver refused, without a second fetch."""
+    if check.kind != "patch-branch-inv2" or not check.conflict:
+        return None
+    try:
+        name = check.argv[check.argv.index("--fork") + 1]
+        rc, out, _ = run_command(root, [str(root / "bin/pi-forks"), "patch-branch", "target",
+                                        "--fork", name], TARGET_TIMEOUT, series_env(root), cancel=cancel)
+        repo, kind, ref, commit = out.strip().split("\t")
+        catalog = (root / "bin/pi-forks.list").read_text().splitlines()
+        rows = [line.split() for line in catalog if line.split()[:1] == [repo]]
+        _, delivery = rows[0]
+        answers = re.findall(r"^\s*FAILED: .* conflicts with (\S+)(?: \(([a-f0-9]+)\))? \(INV-2\)",
+                             check.output, re.MULTILINE)
+        if (rc == 0 and re.fullmatch(r"[a-zA-Z0-9._-]+", name) and name not in (".", "..")
+                and repo.rsplit("/", 1)[-1] == name and len(rows) == 1
+                and kind in ("release", "head", "pin", "base") and re.fullmatch(r"[a-f0-9]{40}", commit)
+                and len(answers) == 1 and answers[0][0] == ref
+                and (commit.startswith(answers[0][1]) if answers[0][1] else ref == commit)):
+            return {"fork": name, "kind": kind, "ref": ref, "commit": commit, "delivery": delivery}
+    except (IndexError, ValueError, OSError):
+        pass
+    check.output += "\nfork-check: could not judge: could not confirm the exact INV-2 target\n"
+    check.rc = 4
+    return None
+
+
+def capture_fork_conflict(root: Path, check: Check, cancel: Cancellation | None) -> None:
+    # Only the drain classifies inherited drift. Standalone verdicts keep their existing
+    # contract, and proof never needs to resolve an upstream to judge the tree.
+    if os.environ.get("TILLR_FORK_DRIFT") == "1" and (cancel is None or not cancel.cancelled):
+        check.fork_conflict = observe_fork_conflict(root, check, cancel)
+
+
+def stop_after_failure(check: Check) -> bool:
+    # A conflict eligible for inheritance is not grounds to cancel the other
+    # checks: the drain may land the candidate despite this conflict.
+    observation = getattr(check, "fork_conflict", None) or {}
+    return check_blamed(check) and observation.get("kind") not in ("release", "head")
+
+
 def execute_check(check: Check, root: Path, diff_base: str | None,
                   cancel: "Cancellation | None" = None,
                   cache: VerdictCache | None = None,
@@ -5920,6 +5961,7 @@ def execute_check(check: Check, root: Path, diff_base: str | None,
     # check, so two checks that overlapped have two real spans on one axis.
     check.start_ns = time.time_ns()
     execute_attempt(root, check, diff_base, cancel=cancel, cache=cache, runtime=runtime)
+    capture_fork_conflict(root, check, cancel)
     if check.timeout > 0 and check.seconds > check.timeout:
         check.warnings.append(f"ran {clock(check.seconds)}, over target {check.timeout}s; "
                               "the check's own verdict stands")
@@ -6012,7 +6054,7 @@ def run_plan_checks(plan: Plan, root: Path, diff_base: str | None,
             lambda index: execute_check(checks[index], root, diff_base, cancellation,
                                         cache=cache, runtime=runtime),
             on_start=on_start, on_complete=on_complete,
-            cheap_first=True, blame=check_blamed,
+            cheap_first=True, blame=stop_after_failure,
             terminate=cancellation.cancel, on_not_run=on_not_run,
             heavy_jobs=heavy_jobs)
     # A stopped pass leaves its tail unprinted (the prefix waits on a check that will never
@@ -8951,6 +8993,8 @@ def write_gate_spans(path: str, plan: "Plan", root: Path, started_ns: int,
         }
         if check.cause:
             attributes["cause"] = check.cause
+        if observation := getattr(check, "fork_conflict", None):
+            attributes["fork_conflict"] = observation
         if check.fingerprint_dir:
             attributes["fingerprint_dir"] = check.fingerprint_dir
         check_spans.append({
@@ -10076,6 +10120,7 @@ def run_replay(argv: list[str]) -> int:
     with cancellation.on_sigterm():
         for check in copies:
             execute_attempt(root, check, gate.diff_base, cancel=cancellation)
+            capture_fork_conflict(root, check, cancellation)
     unanswered = [check for check in copies if check.unanswered or check.was_cancelled or check.rc == CHECK_STALLED_RC]
     if unanswered:
         for check in unanswered:
@@ -10090,6 +10135,8 @@ def run_replay(argv: list[str]) -> int:
         print(f"fork-check replay: {status} {check.kind}: {check.label} (exit {check.rc})")
         if check.rc != 0:
             failed.append(check)
+            if observation := getattr(check, "fork_conflict", None):
+                print("fork-check replay target: " + json.dumps(observation, sort_keys=True))
             if check.output:
                 print(check.output, end="" if check.output.endswith("\n") else "\n")
     if failed:

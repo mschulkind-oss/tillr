@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Read a tree-pinned fork commit, fetching it only when absent from its cache."""
 import fcntl
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -40,6 +41,16 @@ def ensure(root: Path, name: str, cache: Path) -> str:
         def has_commit():
             return subprocess.run(['git', '-C', str(cache), 'cat-file', '-e', oid + '^{commit}'],
                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+        if not has_commit() and (delivery_root := os.environ.get('PI_FORKS_ROOT')):
+            # A repository-only rebase may refer to a head delivered before the
+            # lander seeded this cache. Only the exact delivered ref can stand in
+            # for the remote; arbitrary local objects are not delivery evidence.
+            delivered = subprocess.run(['git', '-C', delivery_root, 'rev-parse', '--verify',
+                                        f'refs/heads/patch/{name}^{{commit}}'],
+                                       capture_output=True, text=True)
+            if delivered.returncode == 0 and delivered.stdout.strip() == oid:
+                subprocess.run(['git', '-C', str(cache), 'fetch', '--no-tags', delivery_root, oid],
+                               capture_output=True, text=True)
         if not has_commit():
             result = subprocess.run(['git', '-C', str(cache), 'fetch', '--no-tags', remote, oid],
                                     capture_output=True, text=True)
