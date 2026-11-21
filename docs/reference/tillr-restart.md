@@ -423,8 +423,8 @@ recovers linearly without force-pushing:
 3. Replays each unpublished commit onto the fetched tip in order via
    `git merge-tree --write-tree` and `git commit-tree`, keeping original authors
    and messages while stamping the landing committer identity.
-4. Pins `refs/tillr/published/<remote>/<branch>` to the fetched tip so the
-   identity check trusts commits arriving from the remote, moves the main
+4. Pins `refs/tillr/published/<remote>/<branch>` to the fetched tip as the
+   last remote tip this clone accepted, moves the main
    checkout with `git reset --keep` (aborting cleanly without changing files if
    any modified path holds dirty owner edits), and records rewrite absorption
    mappings so `refs/tillr/green` carries across without raising a

@@ -80,7 +80,11 @@ with ordinary obstacle escalation and no owner step in the routine case), and
 the configured upstream branch), which the later
 [`OQ-RP4`](../design/tillr-refused-push.md#OQ-RP4) replaces: tillr stamps the configured git
 identity on the commits it makes and judges no other commit by identity, so the trunk identity
-check is to be removed. Six designer's decisions remain marked in
+check is removed. The owner's words, ruled on 2026-11-20: *"we need to make sure that the Tiller
+machinery and sub-agents are producing commits that follow the identity that the author wants,
+which is what's configured in the Git config, or if we have settings to change this in our Tiller
+config, whatever that is. Apart from that ... The Tiller itself should not be enforcing anything
+about identities."* Six designer's decisions remain marked in
 [its ledger](../design/tillr-refused-push.md#decision-ledger), none of it is built, and it is
 placed in [entry 3](#3-roll-onto-new-code-without-ending-runs).
 
@@ -397,7 +401,7 @@ came first: every restart on 2026-11-15 was a kill, so a fix to tillr itself cos
 flight, and [entry 4](#4-choose-where-each-seat-runs) reuses its stop-and-continue step.
 [Refused autopushes](../design/tillr-refused-push.md), decided on 2026-11-20
 ([`OQ-RP1`](../design/tillr-refused-push.md#OQ-RP1) to
-[`OQ-RP3`](../design/tillr-refused-push.md#OQ-RP3)) and unbuilt, sits here after
+[`OQ-RP4`](../design/tillr-refused-push.md#OQ-RP4)) and unbuilt, sits here after
 [entry 2](#2-keep-the-loop-running) and ahead of [entry 4](#4-choose-where-each-seat-runs)
 because a push from another machine strands every later green publication behind a false wait
 without stopping local runs.
