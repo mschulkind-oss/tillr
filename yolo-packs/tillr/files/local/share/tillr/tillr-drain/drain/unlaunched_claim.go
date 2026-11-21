@@ -139,6 +139,16 @@ func retractClaim(tx *store.Tx, d Decision, at time.Time, markExamined bool) err
 	return err
 }
 
+// clearSupersededNodeClaims removes abandoned claim projections before claiming
+// work for the item again. They can occupy the very node/attempt slot being
+// offered now, or shadow genuine outcomes at a higher, never-launched ordinal.
+// Leave the historical events and every node backed by a run intact.
+func clearSupersededNodeClaims(tx *store.Tx, itemID string) error {
+	_, err := tx.Exec(`DELETE FROM node_runs WHERE item_id=? AND outcome='superseded'
+ AND NOT EXISTS(SELECT 1 FROM runs WHERE run_id=node_runs.run_id)`, itemID)
+	return err
+}
+
 // restorePendingBeforeClaim re-appends the pending work the claim of d continued, when
 // there was one: the latest drain.node-advanced or drain.graph-changed event for d's run
 // written before the claim's own drain.dispatch-started. The replay then reads that work

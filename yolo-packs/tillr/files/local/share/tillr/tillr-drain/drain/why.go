@@ -125,7 +125,8 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 	}
 	answer.Definition = declared.Name
 	def := declared.Parsed
-	envs, err := planDefinition(r, tick, policy, questions, def)
+	var nextOrdinals map[string]int
+	envs, err := planWithAttemptOrdinals(r, tick, policy, questions, def, &nextOrdinals)
 	if err != nil {
 		return answer, err
 	}
@@ -265,6 +266,17 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		var d Decision
 		if err := json.Unmarshal(env.Payload, &d); err != nil {
 			return answer, Internalf("reading planner decision: %v", err)
+		}
+		// Some holds are planned with the next dispatch ordinal. Explain the
+		// attempt that actually ran instead, including when an independent wait
+		// masks a running replacement's decision. A continuation's persisted
+		// decision and any planned dispatch keep their own attempt and run ID.
+		next := nextOrdinals[it.ItemID]
+		work := works[it.ItemID]
+		if d.Action == ActionHold && d.RunRequest == nil && next > 1 && d.Attempt == next &&
+			(work == nil || work.Done || work.Decision.Attempt != d.Attempt) {
+			d.Attempt = next - 1
+			identifyDecision(&d)
 		}
 		if d.Reason == ReasonRunLive && tick.StorePath != "" {
 			lost, err := lostRunAfterSession(r, tick.StorePath, works[it.ItemID], &liveRuns)
