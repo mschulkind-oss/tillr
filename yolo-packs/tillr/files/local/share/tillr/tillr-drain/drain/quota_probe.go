@@ -211,7 +211,7 @@ func (l *Loop) quotaReplacementBackend(ctx context.Context, start, seat string) 
 		if err != nil {
 			return err
 		}
-		name, _, open = policy.availableBackend(start, seat, shut)
+		name, open = policy.availableBackend(start, seat, shut)
 		return nil
 	})
 	return name, open, err
@@ -232,10 +232,8 @@ func readQuotaShutBackendsFrom(r *store.Reader, at time.Time, policy *Policy, by
 	if err != nil {
 		return nil, err
 	}
-	for name, isClosed := range closed {
-		if isClosed {
-			shut[name] = true
-		}
+	for name := range closed {
+		shut[name] = true
 	}
 	return shut, nil
 }

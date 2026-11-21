@@ -72,8 +72,7 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 	case c.BodyRef == "" && !p.requests[row.ItemID]:
 		d.Reason = ReasonConflictOwner
 	default:
-		// Unlike ordinary failover, a single design backend must not spill
-		// onto the build preference. Only this seat's declared backends qualify.
+		// Conflict design uses only its seat's declared backends.
 		backend := ""
 		for _, name := range p.policy.seatList("design") {
 			if !p.shut[name] {
@@ -83,6 +82,9 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 		}
 		if backend == "" {
 			d.Reason = ReasonBackendWindow
+			if p.policy.singleBackendSeat("design") {
+				d.Seat, d.DeferredBy = "design", p.policy.seatList("design")[0]
+			}
 			break
 		}
 		if p.tick.MaxDispatches != nil && p.dispatched >= *p.tick.MaxDispatches {

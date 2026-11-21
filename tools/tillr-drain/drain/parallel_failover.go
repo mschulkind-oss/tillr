@@ -17,12 +17,12 @@ func (l *Loop) parallelFailover(ctx context.Context, node Decision, rec run.Reco
 	result.InfraFailures++
 	l.infraStreak++
 	l.mu.Unlock()
-	request, _, ok, err := l.nextAvailableRequest(ctx, node.ItemID, node.LaneID, markRunID(node.RunRequest.RunID, "failover"), rec.Backend, node.Seat)
+	request, ok, err := l.nextAvailableRequest(ctx, node.ItemID, node.LaneID, markRunID(node.RunRequest.RunID, "failover"), rec.Backend, node.Seat)
 	if err != nil {
 		return node, false, err
 	}
 	if !ok {
-		request, _, _ = l.currentPolicy().NextRequest(node.ItemID, node.LaneID, markRunID(node.RunRequest.RunID, "failover"), rec.Backend, node.Seat)
+		request, _ = l.currentPolicy().NextRequest(node.ItemID, node.LaneID, markRunID(node.RunRequest.RunID, "failover"), rec.Backend, node.Seat)
 		if request == nil {
 			return node, false, Usagef("workflow seat %s has no backend route", node.Seat)
 		}

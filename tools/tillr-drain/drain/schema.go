@@ -5,8 +5,6 @@
 package drain
 
 import (
-	"fmt"
-
 	// The blank imports are the ITEM-PKG precondition made structural. plan writes
 	// nothing, but it reads items, lanes and runs, and a store drain opens must carry
 	// those tables: the substrate composes its migration list from what was registered
@@ -145,14 +143,6 @@ const (
 	// a hold's because the item *is* dispatched — the spend is a re-dispatch, and the
 	// record says so.
 	ReasonFailover = "failover"
-	// ReasonSeatDegraded is a dispatch's reason: the backend the item's seat names failed in
-	// the infrastructure class, and the failover walked to a backend the seat does not name.
-	// A seat is a statement about the work — the design seat's work runs on the design
-	// backend — so leaving it is a model switch, and the reason names both what fell back and
-	// what answered (seatDegradedReason). It is a dispatch rather than a hold because the
-	// ruling's degraded mode is an allowed, stamped run: the floor may produce the document,
-	// and this is the stamp that keeps it from being read as a full seat's work.
-	ReasonSeatDegraded = "seat-degraded"
 	// ReasonInfraExhausted is retained for historical records only. New infrastructure
 	// holds use ReasonBackendClosed and wait for evidence, not a budget.
 	// Previously the preference had no backend
@@ -218,17 +208,6 @@ const (
 	// lane and the mover instead of retrying it on every pass.
 	ReasonStagingFailed = "staging-failed"
 )
-
-// seatDegradedReason spells a seat degradation as the one line a reader of the decision or
-// the loop's report has: the seat that fell back and the backend that actually answered.
-//
-// The reason a reader needs it in one string is that the seat lives on the decision and the
-// backend lives on its run request, and a seal that took both to explain would be invisible
-// in the one place an operator looks first. The stored row carries the same two values in
-// its own columns, so this text is a restatement and not the only record.
-func seatDegradedReason(seat, backend string) string {
-	return ReasonSeatDegraded + fmt.Sprintf(`: seat %q fell back to backend %q`, seat, backend)
-}
 
 // The item states this face reads. They are item's vocabulary, spelled here because
 // drain reads item's rows and must not invent a second spelling for them.

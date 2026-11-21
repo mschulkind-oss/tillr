@@ -70,9 +70,9 @@ func TestAvailableBackendSkipsEveryShutHopWithoutEscapingSeat(t *testing.T) {
 		{map[string]bool{"a": true, "b": true, "c": true}, "", false},
 		{map[string]bool{}, "a", true},
 	} {
-		name, left, ok := p.availableBackend("a", "design", tc.shut)
-		if name != tc.want || ok != tc.ok || left != "" {
-			t.Fatalf("%v: %s %s %v", tc.shut, name, left, ok)
+		name, ok := p.availableBackend("a", "design", tc.shut)
+		if name != tc.want || ok != tc.ok {
+			t.Fatalf("%v: %s %v", tc.shut, name, ok)
 		}
 	}
 }

@@ -103,7 +103,7 @@ func repeatingRoute(policy *Policy, seat string, prior *RepeatedCall, backend st
 	if policy == nil {
 		return repeatRouteHold, "", chain
 	}
-	candidate, _, ok := policy.nextBackend(backend, seat)
+	candidate, ok := policy.nextBackend(backend, seat)
 	if !ok {
 		return repeatRouteHold, "", chain
 	}

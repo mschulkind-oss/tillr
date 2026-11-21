@@ -744,10 +744,8 @@ another restart.
   backend, and the item names the seat and never a model id. A plan whose items ask for a
   seat the policy does not map is refused before it builds a decision, so a seat is never
   defaulted to the pass's backend; the decision and the store's dispatch row record the seat
-  beside the backend that answered. A failover that leaves the backend the item's seat names
-  is a model switch, so it is dispatched with the reason `seat-degraded` and both halves in
-  the text — the seat that fell back and the backend that answered — rather than reading as
-  an ordinary failover.
+  beside the backend that answered. If a seat names just one backend and that route is
+  closed, the item holds rather than switching to the policy's preference.
 - **An adapter's refusal of a brief is the brief's fault, not the backend's.** An adapter
   that refuses before any model runs prints `run-<adapter>: refused: <reason>` and exits 2.
   That run classifies as `refused`, not `infrastructure`: no backend failure is counted, no
@@ -765,11 +763,10 @@ another restart.
 - **A seat may name its own fallback order.** A seat's value is one backend name or an
   ordered list of them, such as `"design": ["claude-designer", "pi-designer"]`. The item
   dispatches to the first open backend unless shares or a selection mode request a split.
-  A failover walks that seat's list forward and
-  stops at its end, so design work falls back to a design backend and never onto the build
-  seat's. A step along the list is an ordinary `failover`, not `seat-degraded`: every
-  backend on it was named for that seat. A seat with one backend, and an item with no seat,
-  walk the policy's `preference` as before. Every name in a list must be one of the policy's
+  A failover walks a multi-backend seat's list forward, wrapping within the list and
+  skipping closed backends. Only an item with no seat walks the policy's `preference`.
+  An explicit item override can still select the first backend, but it does not give a
+  single-backend seat a fallback route. Every name in a list must be one of the policy's
   backends; the check refuses the policy otherwise and names the seat
   ([the claude backend design](../../docs/design/tillr-claude-backend.md#4-falling-back-when-the-window-is-spent)).
 
@@ -1689,13 +1686,16 @@ from the record and the log as they are, and does not save it. Once a class is
 saved it wins over the report.
 This migration does not require an operator to certify an outcome or run a probe.
 
-After a failure, dispatch walks the item's backends in order, wrapping at the end
-and skipping closed backends. A multi-backend seat stays within its own list;
-a single-backend seat keeps its existing fallback to the policy preference.
-When every allowed backend is unavailable, the item waits. An infrastructure hold
-is `backend-closed`, with the closed backend names in `deferred_by` and the mover
-shown by `why` and `waiting`: a successful explicit probe or a later run ending
-outside the infrastructure class. Quota holds remain independent; reopening the
+After a failure, a multi-backend seat stays within its own list and unseated
+work stays within the preference. A single-backend seat holds on its route;
+it does not fail over. When every allowed backend is unavailable, the item waits.
+An infrastructure hold is `backend-closed`. For a single-backend seat, the
+hold names the backend in `deferred_by`, with `backend_hold_cause` and
+`backend_hold_mover` also shown by the loop and `why`. The cause names the failed
+run or the quota fact that closed admission. The mover explains how to reopen it:
+for an infrastructure failure, the operator repairs the backend and records a
+successful explicit probe; a later non-infrastructure ending can also reopen it.
+Quota holds remain independent; reopening the
 harness does not erase an unexpired quota refusal. No automatic probe or timer
 spends work on a closed backend. Legacy `max_failovers` policy keys are accepted
 but ignored; `run-infra-exhausted` is readable only as history.

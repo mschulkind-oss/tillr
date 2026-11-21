@@ -318,7 +318,7 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			row.Mover = "restore " + ref + " under the item's block and land it"
 		case d.Reason == ReasonQuestionOpen && d.QuestionID != "":
 			row.WaitingOn = append(row.WaitingOn, d.QuestionID)
-		case d.Reason == ReasonBackendClosed && d.DeferredBy != "":
+		case (d.Reason == ReasonBackendClosed || d.BackendHoldCause != "") && d.DeferredBy != "":
 			row.WaitingOn = append(row.WaitingOn, d.DeferredBy)
 		case (d.Reason == ReasonDeskCapacity || d.Reason == ReasonDocumentDeskBusy || d.Reason == ReasonForkHeld || d.Reason == ReasonTrunkBroken || d.Reason == "awaits-rewrite" || strings.HasPrefix(d.Reason, ReasonRedCap+": ")) && d.DeferredBy != "":
 			row.WaitingOn = append(row.WaitingOn, d.DeferredBy)
@@ -370,7 +370,7 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		case (d.Reason == ReasonRetryJudged || d.Reason == ReasonRetryUnjudged) && d.SupersedesRunID != "":
 			row.WaitingOn = append(row.WaitingOn, d.SupersedesRunID)
 		}
-		if d.Reason == ReasonBackendWindow && d.ConflictID != "" && policy != nil {
+		if d.Reason == ReasonBackendWindow && d.ConflictID != "" && policy != nil && d.BackendHoldCause == "" {
 			seat := d.Seat
 			for _, name := range policy.seatList(seat) {
 				if reset, shut := windows[name]; shut {
@@ -381,6 +381,10 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		}
 		if len(row.WaitingOn) > 0 && d.Reason != ReasonQuestionRemoved {
 			row.Mover = strings.Join(row.WaitingOn, ", ")
+		}
+		if d.BackendHoldCause != "" {
+			row.Why += ": " + d.DeferredBy + ": " + d.BackendHoldCause
+			row.Mover = d.BackendHoldMover
 		}
 		if len(closedBlockers) > 0 {
 			row.Class = "needs you"

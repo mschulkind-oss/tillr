@@ -376,65 +376,47 @@ func (p Policy) firstBackend(row itemRow) string {
 	return p.DefaultBackend
 }
 
-// nextBackend walks after failed in the item's ordered seat list, wrapping at
-// the end. Multi-backend seats never leave their list. Single-backend seats
-// retain their fallback through the preference, naming any seat the walk leaves.
-// An override outside the order starts at its head. Availability is checked by
-// availableBackend, not by this order-only helper.
-func (p Policy) nextBackend(failed, seat string) (backend, degraded string, ok bool) {
-	if list := p.seatList(seat); seat != "" && len(list) > 1 {
-		for i, name := range list {
-			if name != failed {
-				continue
-			}
-			if i+1 < len(list) {
-				return list[i+1], "", true
-			}
-			return list[0], "", true
-		}
-		return list[0], "", true
-	}
-	seatBackend := ""
-	if seat != "" {
-		seatBackend = p.Seats[seat]
-	}
-	leavesSeat := func(next string) string {
-		if seatBackend != "" && failed == seatBackend && next != seatBackend {
-			return seat
-		}
-		return ""
-	}
-	for i, name := range p.Preference {
-		if name != failed {
-			continue
-		}
-		if i+1 < len(p.Preference) {
-			next := p.Preference[i+1]
-			return next, leavesSeat(next), true
-		}
-		next := p.Preference[0]
-		return next, leavesSeat(next), true
-	}
-	if len(p.Preference) > 0 {
-		next := p.Preference[0]
-		return next, leavesSeat(next), true
-	}
-	return failed, "", failed != ""
+func (p Policy) singleBackendSeat(seat string) bool {
+	return seat != "" && len(p.seatList(seat)) == 1
 }
 
-// NextRequest builds the next request in order without admitting it. The loop
-// uses nextAvailableRequest for dispatch; a waiting workflow uses this request
-// to retain its continuation until the planner finds an open backend.
-func (p Policy) NextRequest(itemID, laneID, runID, failedBackend, seat string) (*run.Request, string, bool) {
-	next, degraded, ok := p.nextBackend(failedBackend, seat)
+// nextBackend walks the declared list (or, for unseated work, the preference),
+// wrapping at the end. A single-backend seat has no failover route. An explicit
+// override still selects the first backend but does not create a failover route.
+func (p Policy) nextBackend(failed, seat string) (string, bool) {
+	order := p.Preference
+	if list := p.seatList(seat); seat != "" && len(list) > 0 {
+		if len(list) == 1 {
+			return "", false
+		}
+		order = list
+	}
+	for i, name := range order {
+		if name == failed {
+			return order[(i+1)%len(order)], true
+		}
+	}
+	if len(order) > 0 {
+		return order[0], true
+	}
+	return failed, failed != ""
+}
+
+// NextRequest builds a continuation without admitting it. When a singleton
+// seat fails, retain its node request on the same backend for planning to hold.
+func (p Policy) NextRequest(itemID, laneID, runID, failedBackend, seat string) (*run.Request, bool) {
+	next, ok := p.nextBackend(failedBackend, seat)
+	if p.singleBackendSeat(seat) {
+		next, ok = failedBackend, failedBackend != ""
+	}
 	if !ok {
-		return nil, "", false
+		return nil, false
 	}
 	req := p.request(itemID, laneID, runID, next)
 	if req != nil {
 		req.Seat = seat
 	}
-	return req, degraded, true
+	return req, true
 }
 
 // request is the complete run.request one dispatch carries, built from the backend the

@@ -1199,6 +1199,16 @@ func (l *Loop) planNothing(ctx context.Context, holds []Decision, leases []LaneL
 	return l.waitForTrigger(ctx, leases, at, result)
 }
 
+func holdText(hold Decision) string {
+	if hold.BackendHoldCause != "" {
+		return fmt.Sprintf("%s (%s: %s: %s; mover: %s)", hold.ItemID, hold.Reason, hold.DeferredBy, hold.BackendHoldCause, hold.BackendHoldMover)
+	}
+	if hold.DeferredBy != "" {
+		return fmt.Sprintf("%s (%s behind %s)", hold.ItemID, hold.Reason, hold.DeferredBy)
+	}
+	return fmt.Sprintf("%s (%s)", hold.ItemID, hold.Reason)
+}
+
 // waitingHolds bounds the idle line to five examples while retaining the total.
 func waitingHolds(holds []Decision) string {
 	var examples []string
@@ -1206,10 +1216,7 @@ func waitingHolds(holds []Decision) string {
 		if i == 5 {
 			break
 		}
-		text := fmt.Sprintf("%s (%s)", hold.ItemID, hold.Reason)
-		if hold.DeferredBy != "" {
-			text = fmt.Sprintf("%s (%s behind %s)", hold.ItemID, hold.Reason, hold.DeferredBy)
-		}
+		text := holdText(hold)
 		examples = append(examples, text)
 	}
 	return fmt.Sprintf("%d held item(s): %s", len(holds), strings.Join(examples, ", "))
@@ -1224,10 +1231,7 @@ func heldDetail(holds []Decision) string {
 	}
 	var held, deferred []string
 	for _, hold := range holds {
-		text := fmt.Sprintf("%s (%s)", hold.ItemID, hold.Reason)
-		if hold.DeferredBy != "" {
-			text = fmt.Sprintf("%s (%s behind %s)", hold.ItemID, hold.Reason, hold.DeferredBy)
-		}
+		text := holdText(hold)
 		if hold.Reason == ReasonNoLane || hold.Reason == ReasonForkHeld {
 			deferred = append(deferred, text)
 		} else {
@@ -2150,7 +2154,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			// transition, not a second run smuggled into the same item application.
 			return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane))}
 		}
-		failover, degraded, ok, err := l.nextAvailableRequest(ctx, request.ItemID, lane, attemptRunID(request.ItemID, decision.Attempt+1), request.Backend, decision.Seat)
+		failover, ok, err := l.nextAvailableRequest(ctx, request.ItemID, lane, attemptRunID(request.ItemID, decision.Attempt+1), request.Backend, decision.Seat)
 		if err != nil {
 			return laneOutcome{err: err}
 		}
@@ -2170,11 +2174,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			if err != nil {
 				return laneOutcome{err: err}
 			}
-			if degraded != "" {
-				l.reportf("loop: %s on %s\n", seatDegradedReason(degraded, failover.Backend), lane)
-			} else {
-				l.reportf("loop: failover %s -> %s on %s\n", request.ItemID, failover.Backend, lane)
-			}
+			l.reportf("loop: failover %s -> %s on %s\n", request.ItemID, failover.Backend, lane)
 			l.mu.Lock()
 			result.Dispatched++
 			l.mu.Unlock()
