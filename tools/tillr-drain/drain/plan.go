@@ -63,8 +63,11 @@ type Pass struct {
 	WorkflowDefaults map[string]string `json:"-"`
 	// BriefTemplate is the loop's actual staging input, not a stored tick field.
 	// A standalone plan with no stager compares the retained template instead.
-	BriefTemplate  *string   `json:"-"`
-	StorePath      string    `json:"-"`
+	BriefTemplate *string `json:"-"`
+	StorePath     string  `json:"-"`
+	// runFaces is a fixed process observation supplied by the live loop.
+	// The planner does not consult the process table, even with StorePath set.
+	runFaces       map[string]bool
 	Now            string    `json:"now"`
 	AvailableLanes *[]string `json:"available_lanes"`
 	// OutLanes are the lanes a staging refusal took out of rotation. A node waiting to
@@ -179,6 +182,8 @@ type Decision struct {
 	Reason     string       `json:"reason"`
 	LaneID     string       `json:"lane_id,omitempty"`
 	RunRequest *run.Request `json:"run_request,omitempty"`
+	// liveContinuation distinguishes a running segment from its previous finish.
+	liveContinuation bool
 	// RetryID names the operator's authorization a `retry` decision spends, and the
 	// SupersedesRunID names the run that authorization supersedes. A hold that refuses the
 	// claim — `retry-judged`, `retry-unjudged` — names the same pair, so an
@@ -275,6 +280,7 @@ type planDetails struct {
 	nextOrdinals  map[string]int
 	retryLaneWait map[string]bool
 	workerLanes   map[string]string
+	maskedWorkers map[string]Decision
 }
 
 func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, def definition.Definition, details *planDetails) ([]record.Envelope, error) {
@@ -533,8 +539,13 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	// can start. Each round releases at least one reservation, so the rounds are bounded by
 	// their number. Staging the lane for someone else preserves what it holds the way any
 	// restaging does (preserved work, and a lane refusal for an unpinned commit).
+	var maskedWorkers map[string]Decision
+	if details != nil {
+		maskedWorkers = details.maskedWorkers
+	}
 	released := map[string]bool{}
 	for {
+		clear(maskedWorkers)
 		owners := make(map[string]string, len(deskOwners))
 		for lane, owner := range deskOwners {
 			owners[lane] = owner
@@ -549,7 +560,7 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 			tick:      tick, policy: policy, held: lanes, deskOwners: owners, itemStates: states, history: history,
 			priors: attemptPriors, retries: retries, classes: classes, latest: latest,
 			obstacleHolds: obstacleHolds, releasedObstacles: releasedObstacles, questions: questions,
-			waits: waits, escalated: escalated,
+			waits: waits, escalated: escalated, maskedWorkers: maskedWorkers,
 			at: at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items, def), unproved: unproved,
 			designHistory: designHistory, inputs: inputs, inputDecisions: inputDecisions, works: works, attempts: attempts, nodeCounts: nodeCounts, requests: requests,
 		}
@@ -670,8 +681,25 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					settled = true
 				}
 			}
+			var liveFirstSegment bool
 			if !settled {
-				decision, err = pendingDecisionExcept(r, definitionWork(def, work), at, inputs[item.ItemID], tick.BriefTemplate, policy, shut, tick.GatesInFlight, tick.ownExaminationLane, tick.ownExaminationRunID, waiting)
+				// The evaluator's retained handoff can be retried if it never
+				// launched. A wait bars the next launch, not the live face;
+				// treating it as an ordinary hold can stop the loop before it
+				// settles the worker's result.
+				if len(tick.runFaces) != 0 && (waiting || evaluatorNode(work.Decision)) {
+					liveFirstSegment, err = liveFirstSegmentWorker(r, work, at, tick.runFaces)
+					if err != nil {
+						return nil, nil, readFailure(err)
+					}
+				}
+				if liveFirstSegment {
+					decision = work.Decision
+					decision.From, decision.To, decision.Action, decision.Reason = "running", "", ActionHold, ReasonRunLive
+					identifyDecision(&decision)
+				} else {
+					decision, err = pendingDecisionExcept(r, definitionWork(def, work), at, inputs[item.ItemID], tick.BriefTemplate, policy, shut, tick.GatesInFlight, tick.ownExaminationLane, tick.ownExaminationRunID, waiting)
+				}
 			}
 			ownerNextNode := ownerOwed && (work.Ready || decision.Action == ActionDispatch || decision.Action == ActionRetry)
 			// A node waiting to start whose decision lane has left the rotation (a refused
@@ -764,9 +792,11 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				}
 				identifyDecision(&decision)
 			}
-			// The wait does not cancel or prevent settling work already started, but
-			// it bars another launch and is the mover, even while a run winds down.
-			if waiting && (decision.Action == ActionHold || isDispatch(decision)) {
+			// Keep a live segment's running decision and report the wait separately.
+			if waiting && !liveFirstSegment && !decision.liveContinuation && (decision.Action == ActionHold || isDispatch(decision)) {
+				if p.maskedWorkers != nil && mayMaskPendingWorker(decision) {
+					p.maskedWorkers[item.ItemID] = decision
+				}
 				decision = p.namedWaitDecision(item.ItemID, wait)
 			}
 			if p.captureStart == nil && p.lands() && fork != "" && isDispatch(decision) {
@@ -974,6 +1004,7 @@ type planner struct {
 	captureStart  func(itemRow, Decision) error
 	workerLanes   map[string]string
 	retryLaneWait map[string]bool // only populated for why, in the final planning round
+	maskedWorkers map[string]Decision
 	definition    *definition.Definition
 	// An open review batch holds new build dispatches for its document; workers
 	// already running settle normally, without being interrupted by intake.
@@ -1047,6 +1078,15 @@ func (p *planner) firstBackend(row itemRow) string {
 type plannedFork struct {
 	itemID string
 	fork   string
+}
+
+// A planned hold can describe the next action rather than the current worker.
+// Preserve these decisions for Why even when an independent wait masks them.
+func mayMaskPendingWorker(d Decision) bool {
+	if d.Reason == ReasonRunLive {
+		return true
+	}
+	return d.Reason == ReasonNoLane && d.From == "running" && d.WorkflowRestart && evaluatorNode(d)
 }
 
 func (p *planner) namedWaitDecision(id string, wait item.WaitingOn) Decision {

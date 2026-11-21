@@ -1,6 +1,7 @@
 package drain
 
 import (
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-drain/presence"
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -148,7 +150,16 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 	}
 	answer.Definition = declared.Name
 	def := declared.Parsed
-	var details planDetails
+	works, err := readPending(r)
+	if err != nil {
+		return answer, err
+	}
+	liveRuns, runFaces, err := observeFirstSegmentFaces(r, tick.StorePath, tick, works)
+	if err != nil {
+		return answer, err
+	}
+	tick.runFaces = runFaces
+	details := planDetails{maskedWorkers: make(map[string]Decision)}
 	envs, err := planWithDetails(r, tick, policy, questions, def, &details)
 	if err != nil {
 		return answer, err
@@ -182,10 +193,6 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		return answer, readFailure(err)
 	}
 	busy, err := readLanes(r, at)
-	if err != nil {
-		return answer, err
-	}
-	works, err := readPending(r)
 	if err != nil {
 		return answer, err
 	}
@@ -280,7 +287,8 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		return answer, readFailure(err)
 	}
 	assigned := map[string]string{}
-	var liveRuns map[string]bool
+	var runningLoop *liveLoopSession
+	var lookedForLoop bool
 	for i, env := range envs {
 		it := items[i]
 		if (def.Completes == "landing" && it.State == StateLanded && it.ItemID != namedItem) || (def.Completes != "landing" && finishedState(def, it.State)) {
@@ -301,12 +309,34 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			d.Attempt = next - 1
 			identifyDecision(&d)
 		}
-		if d.Reason == ReasonRunLive && tick.StorePath != "" {
-			lost, err := lostRunAfterSession(r, tick.StorePath, works[it.ItemID], &liveRuns)
+		var observation workerObservation
+		var liveWorkers []reportedWorker
+		// A wait on the next dispatch, or the evaluator's retained handoff,
+		// can hide a worker that the local process scan cannot inspect.
+		pending, masked := details.maskedWorkers[it.ItemID]
+		if !masked {
+			pending = d
+		}
+		if mayMaskPendingWorker(pending) && tick.StorePath != "" {
+			observation, err = observeWorkers(r, tick.StorePath, work, &liveRuns, &runFaces)
 			if err != nil {
 				return answer, err
 			}
-			if lost {
+			if (masked || pending.Reason != ReasonRunLive) && (observation.foreign || observation.faces != nil) &&
+				!work.Done && !work.LaneReleased && !work.BoundaryFailed && pending.LaneID == work.Decision.LaneID {
+				liveWorkers, err = reportLiveWorkers(r, work, work.Decision, at, observation.faces)
+				if err != nil {
+					return answer, err
+				}
+				if len(liveWorkers) != 0 {
+					d = work.Decision
+					d.From, d.To, d.Action, d.Reason = "running", "", ActionHold, ReasonRunLive
+					identifyDecision(&d)
+				}
+			}
+			if !masked && d.Reason == ReasonRunLive && observation.endedAt.Valid && observation.live != nil && !slices.ContainsFunc(parallelNodes(work.Decision), func(node Decision) bool {
+				return observation.live[node.RunRequest.RunID]
+			}) {
 				d.From, d.Reason = "held", whyRunAwaitsRecovery
 				identifyDecision(&d)
 			}
@@ -352,8 +382,17 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				row.Why += ": " + detail
 			}
 		}
+		if len(liveWorkers) == 0 && d.Reason == ReasonRunLive && d.RunRequest != nil && d.LaneID != "" && work != nil && !work.Examining && !work.Ready {
+			liveWorkers, err = reportLiveWorkers(r, work, d, at, observation.faces)
+			if err != nil {
+				return answer, err
+			}
+		}
+		liveWorker := len(liveWorkers) != 0
 		var closedBlockers []string
 		switch {
+		case liveWorker:
+			// The item's own run is doing the work, not blocking it.
 		case d.Reason == ReasonQuestionRemoved:
 			ref := conflicts[it.ItemID].QuestionRef
 			row.WaitingOn = append(row.WaitingOn, ref)
@@ -453,6 +492,80 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			row.Why += ": " + d.DeferredBy + ": " + d.BackendHoldCause
 			row.Mover = d.BackendHoldMover
 		}
+		if liveWorker {
+			locations, movers := []string{}, []string{}
+			for _, worker := range liveWorkers {
+				location := worker.id + " on " + d.LaneID
+				movers = append(movers, "worker "+location)
+				if worker.resumed {
+					location += " (resumed)"
+				}
+				locations = append(locations, location)
+			}
+			row.Why += ": " + strings.Join(locations, ", ")
+			row.Mover = strings.Join(movers, ", ")
+			if observation.foreign {
+				if len(d.Parallel) != 0 {
+					row.Mover = "reader group on " + d.LaneID + " (individual processes are not observable here)"
+					row.Why = d.Reason + ": unsettled reader claims: " + strings.Join(locations, ", ") + "; individual processes are not observable here"
+				} else {
+					row.Why += "; worker process is not observable here"
+					row.Mover += " (worker process is not observable here)"
+				}
+			}
+			if conflicts[it.ItemID].HasIndependentWait(waiting) {
+				next := "; next dispatch waits on " + waiting.Waiter + ": " + waiting.Reason
+				row.Why += next
+				row.Mover += next // The queue-wide CLI table only shows the mover.
+			}
+			// Unbounded worker and examination leases have the same shape.
+			// Here the pending work identifies the worker as the holder.
+			if examining[d.LaneID] {
+				delete(examining, d.LaneID)
+				answer.Summary.LanesExamining--
+				answer.Summary.LanesWorkers++
+			}
+			if tick.StorePath != "" && work.LoopID != "" {
+				if !lookedForLoop {
+					runningLoop, err = findLiveLoopSession(r, tick.StorePath, at)
+					if err != nil {
+						return answer, err
+					}
+					lookedForLoop = true
+				}
+				var earlierRuns []string
+				for _, worker := range liveWorkers {
+					predates, err := segmentPredatesReplacement(r, runningLoop, work.LoopID, worker.startedAt)
+					if err != nil {
+						return answer, err
+					}
+					if predates {
+						earlierRuns = append(earlierRuns, worker.id)
+					}
+				}
+				if len(earlierRuns) != 0 {
+					timing := "; worker dispatch or resume precedes the current loop: " + strings.Join(earlierRuns, ", ")
+					next := "; drain waits for its recorded finish"
+					if len(earlierRuns) > 1 {
+						next = "; drain acts on recorded worker finishes"
+					}
+					if observation.foreign && len(d.Parallel) != 0 {
+						timing = "; reader allocations precede the current loop"
+						next = "; drain acts on recorded worker finishes"
+					}
+					continuation := "; timing does not establish takeover"
+					if observation.faces != nil {
+						continuation = "; the observed worker continues executing its recorded segment; timing does not establish historical takeover"
+						if confirmedReplacement(work.Owner, observation.endedAt, runningLoop) {
+							continuation = "; the worker continues executing; the replacement loop does not take over that execution"
+						}
+					}
+					why := timing + continuation + next
+					row.Why += why
+					row.Mover += why // The queue-wide CLI table has no separate explanation column.
+				}
+			}
+		}
 		if len(closedBlockers) > 0 {
 			row.Class = "needs you"
 			row.Mover = "remove the dependency or reopen the closed item (" + strings.Join(row.WaitingOn, ", ") + ")"
@@ -497,7 +610,7 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				row.Mover = "triage on the design seat"
 			}
 		}
-		if work := works[it.ItemID]; work != nil && !work.Done && d.Action == ActionHold {
+		if work != nil && !work.Done && d.Action == ActionHold && !liveWorker {
 			row.LaneStatus = "kept"
 			if work.LaneReleased {
 				row.LaneStatus = "released"
@@ -530,7 +643,13 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			}
 		}
 		if d.Workflow != nil {
-			row.Where += " / node " + d.Workflow.Stages[d.NodeIndex].ID
+			if liveWorker && len(d.Parallel) != 0 && observation.faces != nil {
+				if len(liveWorkers) == 1 {
+					row.Where += " / node " + liveWorkers[0].nodeID
+				}
+			} else {
+				row.Where += " / node " + d.Workflow.Stages[d.NodeIndex].ID
+			}
 			outcomes, err := workflowOutcomes(r, d.ItemID, d.Attempt)
 			if err != nil {
 				return answer, err
@@ -583,6 +702,8 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				}
 			} else if d.Reason == ReasonOwnerOnlyOwed || (row.ClassSource == "store" && row.Mover == "owner") {
 				answer.Summary.OwnerWaiting++
+			} else if liveWorker {
+				// The worker has the next move, not drain.
 			} else if (d.Reason == ReasonForkHeld && d.DeferredBy != "") || (row.ClassSource == "store" && row.Class == "waits on work" && row.Mover != "plan" && row.Mover != "design") {
 				// A fork holder or named waiter is the mover, not the drain.
 				// Planning waits still use their existing design-seat action below.
@@ -748,36 +869,40 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 	return answer, nil
 }
 
-// An ended dispatch session can still have live workers. Check the same process
-// markers the reaper uses, once per answer, and do not infer absence in another
-// process domain or while a live session may still be launching the run.
-func lostRunAfterSession(r *store.Reader, path string, work *pendingWork, live *map[string]bool) (bool, error) {
+type workerObservation struct {
+	endedAt sql.NullInt64
+	foreign bool
+	live    map[string]bool
+	faces   map[string]bool
+}
+
+// Check the same process markers as the reaper. Do not infer absence while a
+// session could still be launching, but for shared claims require an actual
+// run face before naming a particular reader as the worker.
+func observeWorkers(r *store.Reader, path string, work *pendingWork, live, faces *map[string]bool) (workerObservation, error) {
+	var obs workerObservation
 	if work == nil || work.Owner == nil || work.Examining || work.Ready || work.LoopID == "" {
-		return false, nil
+		return obs, nil
+	}
+	err := r.QueryRow(`SELECT (SELECT ended_at FROM drain_sessions WHERE session_id = ?)`, work.LoopID).Scan(&obs.endedAt)
+	if err != nil || (!obs.endedAt.Valid && len(work.Decision.Parallel) == 0) {
+		return obs, err
 	}
 	here, err := currentLoopOwner()
 	if err != nil {
-		return false, err
+		return obs, err
 	}
-	if work.Owner.Domain != here.Domain || work.Owner.UID != here.UID {
-		return false, nil
-	}
-	ended, err := dispatchSessionEnded(r, work.LoopID)
-	if err != nil || !ended {
-		return false, err
-	}
-	if *live == nil {
-		*live, err = liveRunIDs(path)
-		if err != nil {
-			return false, err
+	obs.foreign = work.Owner.Domain != here.Domain || work.Owner.UID != here.UID
+	if !obs.foreign {
+		if *live == nil {
+			*live, *faces, err = liveRunProcessIDs(path)
+			if err != nil {
+				return obs, err
+			}
 		}
+		obs.live, obs.faces = *live, *faces
 	}
-	for _, node := range parallelNodes(work.Decision) {
-		if (*live)[node.RunRequest.RunID] {
-			return false, nil
-		}
-	}
-	return true, nil
+	return obs, nil
 }
 
 func whyPresentation(d Decision) (class, where, mover string) {
@@ -929,18 +1054,112 @@ func loopOwnerQuestion(text string) string {
 	return strings.TrimSpace(q)
 }
 
+type reportedWorker struct {
+	id        string
+	nodeID    string
+	startedAt int64
+	resumed   bool
+}
+
+// Report each actual worker without changing the planner's primary request,
+// which identifies the pending group for dispatch and settlement. A sibling
+// can keep the group's lease even if other claimed readers never started.
+func reportLiveWorkers(r *store.Reader, work *pendingWork, d Decision, at time.Time, survivingRuns map[string]bool) ([]reportedWorker, error) {
+	var workers []reportedWorker
+	for _, node := range parallelNodes(d) {
+		req := node.RunRequest
+		if req == nil || (survivingRuns != nil && !survivingRuns[req.RunID]) {
+			continue
+		}
+		segment := work.resumes[req.RunID]
+		continued, err := liveContinuation(r, segment, node, at)
+		if err != nil {
+			return nil, err
+		}
+		if continued {
+			workers = append(workers, reportedWorker{id: req.RunID, nodeID: req.NodeID, resumed: true, startedAt: segment.at.UnixMilli()})
+			continue
+		}
+		leased, err := activeWorkerLease(r, req, node.LaneID, at)
+		if err != nil {
+			return nil, err
+		}
+		if !leased {
+			continue
+		}
+		rec, err := terminalRecord(r, req.RunID)
+		if err != nil {
+			return nil, err
+		}
+		if rec != nil {
+			continue
+		}
+		worker := reportedWorker{id: req.RunID, nodeID: req.NodeID}
+		if work.LoopID != "" {
+			// Each reader has its own allocation, including readers replaced
+			// under a new build while the group keeps the same lane lease.
+			err := r.QueryRow(`SELECT COALESCE((SELECT ts FROM events WHERE kind = ? AND object_type = 'lane' AND object_id = ?
+			 AND json_extract(payload, '$.run_id') = ? ORDER BY seq DESC LIMIT 1), 0)`,
+				run.AllocateKind, node.LaneID, req.RunID).Scan(&worker.startedAt)
+			if err != nil {
+				return nil, err
+			}
+		}
+		workers = append(workers, worker)
+	}
+	return workers, nil
+}
+
+// Session ordering is not evidence of a takeover or a decision not to take
+// over. ended_at is when the old session was observed to end, possibly later.
+func segmentPredatesReplacement(r *store.Reader, current *liveLoopSession, dispatchID string, segmentStartedAt int64) (bool, error) {
+	if current == nil || current.id == dispatchID || segmentStartedAt == 0 || segmentStartedAt >= current.startedAt {
+		return false, nil
+	}
+	var prior bool
+	err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM drain_sessions WHERE session_id = ? AND started_at <= ? AND ended_at IS NOT NULL)`, dispatchID, segmentStartedAt).Scan(&prior)
+	return prior, err
+}
+
+// With a locally observed prior segment, distinct local process identities
+// distinguish its owner from the replacement, even if the replacement recorded
+// the old session's end after starting. For the same process identity, require
+// the closed-before-open session boundary of an in-place exec.
+func confirmedReplacement(segmentOwner *LoopOwner, endedAt sql.NullInt64, current *liveLoopSession) bool {
+	return segmentOwner != nil && current != nil && endedAt.Valid &&
+		segmentOwner.Domain == current.owner.Domain && segmentOwner.UID == current.owner.UID &&
+		(*segmentOwner != current.owner || endedAt.Int64 <= current.startedAt)
+}
+
+type liveLoopSession struct {
+	id        string
+	startedAt int64
+	lanes     []string
+	owner     LoopOwner
+}
+
 // LiveLoopLanes returns the lane set recorded by a currently live loop session for
 // storePath, if any.
 func LiveLoopLanes(r *store.Reader, storePath string, now time.Time) ([]string, bool, error) {
-	rows, err := r.Query(`SELECT loop_owner, next_pass_at, COALESCE(lanes, '') FROM drain_sessions WHERE ended_at IS NULL AND loop_owner IS NOT NULL ORDER BY started_at DESC, rowid DESC`)
+	s, err := findLiveLoopSession(r, storePath, now)
+	if s == nil {
+		return nil, false, err
+	}
+	return s.lanes, true, nil
+}
+
+func findLiveLoopSession(r *store.Reader, storePath string, now time.Time) (*liveLoopSession, error) {
+	rows, err := r.Query(`SELECT session_id, started_at, loop_owner, next_pass_at, COALESCE(lanes, '') FROM drain_sessions WHERE ended_at IS NULL AND loop_owner IS NOT NULL ORDER BY started_at DESC, rowid DESC`)
 	if err != nil {
 		msg := err.Error()
 		if strings.Contains(msg, "no such table") || strings.Contains(msg, "no such column") {
-			return nil, false, nil
+			return nil, nil
 		}
-		return nil, false, readFailure(err)
+		return nil, readFailure(err)
 	}
 	type candidate struct {
+		id         string
+		startedAt  int64
 		ownerRaw   string
 		nextPassAt int64
 		lanesRaw   string
@@ -948,15 +1167,15 @@ func LiveLoopLanes(r *store.Reader, storePath string, now time.Time) ([]string, 
 	var candidates []candidate
 	for rows.Next() {
 		var c candidate
-		if err := rows.Scan(&c.ownerRaw, &c.nextPassAt, &c.lanesRaw); err != nil {
+		if err := rows.Scan(&c.id, &c.startedAt, &c.ownerRaw, &c.nextPassAt, &c.lanesRaw); err != nil {
 			rows.Close()
-			return nil, false, readFailure(err)
+			return nil, readFailure(err)
 		}
 		candidates = append(candidates, c)
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return nil, false, readFailure(err)
+		return nil, readFailure(err)
 	}
 	rows.Close()
 
@@ -974,10 +1193,11 @@ func LiveLoopLanes(r *store.Reader, storePath string, now time.Time) ([]string, 
 		if err := json.Unmarshal([]byte(c.ownerRaw), &owner); err != nil {
 			continue
 		}
+		session := &liveLoopSession{id: c.id, startedAt: c.startedAt, lanes: lanes, owner: owner}
 		if here != nil && owner.Domain == here.Domain && owner.UID == here.UID {
 			dead, err := ownerDead(&owner, here)
 			if err == nil && !dead {
-				return lanes, true, nil
+				return session, nil
 			}
 			continue
 		}
@@ -988,17 +1208,17 @@ func LiveLoopLanes(r *store.Reader, storePath string, now time.Time) ([]string, 
 		if identity != "" {
 			state, err := openForWriting(loopPresencePath(identity, owner))
 			if err == nil && state == streamWritten {
-				return lanes, true, nil
+				return session, nil
 			}
 			if err == nil && state == streamUnwritten {
 				continue
 			}
 		}
 		if now.UnixMilli() <= c.nextPassAt+SessionGrace.Milliseconds() {
-			return lanes, true, nil
+			return session, nil
 		}
 	}
-	return nil, false, nil
+	return nil, nil
 }
 
 // acceptedConflictRetryCommand returns the exact `tillr drain retry` invocation

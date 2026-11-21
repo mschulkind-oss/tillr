@@ -49,6 +49,27 @@ test("Items presets, class and reason persist in the URL on cold mount", () => {
   expect(window.location.hash).toContain("state=landed");
 });
 
+test("Items shows the live resumed worker and its lane with the planner's next mover", () => {
+  route("#/items?state=unlanded");
+  const wait = "a replacement loop does not take over the live run; drain waits for its recorded finish";
+  const location = "run-a-a1 on lane-1";
+  const worker = { ...rows[0], item_id: "item-live", position: "running", class: "moving", where: "lane", class_source: "planner",
+    why: `run-live: ${location} (resumed); ${wait}`, mover: `worker ${location}; ${wait}` };
+  // No snapshot history: the live explanation must come entirely from the planner row.
+  render(<ItemsView waiting={[worker]} />);
+  const row = within(screen.getByRole("row", { name: /item-live/ }));
+  expect(row.getByRole("cell", { name: "moving (running)" })).toBeTruthy();
+  expect(row.getByRole("cell", { name: worker.why })).toBeTruthy();
+  const moverCell = row.getByRole("cell", { name: /^worker / });
+  expect(moverCell.textContent).toBe(worker.mover);
+  const mover = within(moverCell);
+  expect(mover.getByRole("link", { name: "run-a-a1" }).getAttribute("href")).toBe("#/run/run-a-a1");
+  expect(mover.getByRole("link", { name: "lane-1" }).getAttribute("href")).toBe("#/lane/lane-1");
+  expect(row.queryByText(/no-lane/)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "not moving" }));
+  expect(screen.queryByRole("row", { name: /item-live/ })).toBeNull();
+});
+
 test("Items offers waits on the loop, not an unclassified hold", () => {
   route("#/items?state=unlanded");
   const held = { ...rows[0], class: "waits on the loop", why: "not yet planned", mover: "the next pass" };

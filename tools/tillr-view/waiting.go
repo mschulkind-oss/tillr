@@ -44,6 +44,7 @@ type waitingRow struct {
 	// Observation identifies a repository condition, never an item or design document.
 	Observation string `json:"observation,omitempty"`
 	Class       string `json:"class"`
+	Position    string `json:"position,omitempty"`
 	Where       string `json:"where"`
 	Why         string `json:"why"`
 	Mover       string `json:"mover"`
@@ -1039,7 +1040,11 @@ func printWaiting(w io.Writer, rows []waitingRow) error {
 		if row.Observation != "" {
 			identity = row.Observation
 		}
-		cells := []string{place, identity, row.Class, row.Where, why, row.Mover, row.Since}
+		class := row.Class
+		if class == "moving" && row.Position == "running" {
+			class += " (running)"
+		}
+		cells := []string{place, identity, class, row.Where, why, row.Mover, row.Since}
 		for i, cell := range cells {
 			cells[i] = strings.NewReplacer("\t", "\\t", "\n", "\\n", "\r", "\\r").Replace(cell)
 		}

@@ -51,6 +51,11 @@ type rollScenario struct {
 
 func startRoll(t *testing.T, lanes int, pauseKind string, harnessBody ...string) *rollScenario {
 	t.Helper()
+	return startConfiguredRoll(t, lanes, pauseKind, nil, harnessBody...)
+}
+
+func startConfiguredRoll(t *testing.T, lanes int, pauseKind string, configure func(loopFixture), harnessBody ...string) *rollScenario {
+	t.Helper()
 	adapterDir, err := filepath.Abs(filepath.Join("..", "tillr-run", "backends"))
 	if err != nil {
 		t.Fatal(err)
@@ -87,6 +92,9 @@ func startRoll(t *testing.T, lanes int, pauseKind string, harnessBody ...string)
 		records = append(records, fencedItemRecord("item_04"+strconv.Itoa(i), "in-queue", "candidate.txt"))
 	}
 	fixtureAt(t, s.f.store, records...)
+	if configure != nil {
+		configure(s.f)
+	}
 
 	// The loop runs from a copy, so the file on disk can be replaced under it.
 	s.exe = filepath.Join(dir, "tillr-drain")
@@ -185,6 +193,8 @@ func alive(pid int) bool { return syscall.Kill(pid, 0) == nil }
 func TestRestartReplacesTheLoopInPlaceWithoutSignalingARun(t *testing.T) {
 	s := startRoll(t, 1, "")
 	s.inFlight(t, 1)
+	const id = "run-item_041-a1"
+	s.assertLiveWorkerWhy(t, id, false, false)
 	before := buildLines(s.output(t))
 	if len(before) != 1 {
 		t.Fatalf("want one build line before the restart: %v", before)
@@ -206,6 +216,8 @@ func TestRestartReplacesTheLoopInPlaceWithoutSignalingARun(t *testing.T) {
 	if !alive(workerPID) || len(lines(t, s.signal)) != 0 {
 		t.Fatal("replacement signaled or ended the in-flight worker")
 	}
+	s.waitForSuccessorPass(t)
+	s.assertLiveWorkerWhy(t, id, false, true)
 }
 
 func TestRestartRequestFiledOfflineIsAnsweredByTheNextLoop(t *testing.T) {
