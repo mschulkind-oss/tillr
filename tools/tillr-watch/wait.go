@@ -18,6 +18,8 @@ import (
 type waitOptions struct {
 	owner, storePath, rulesPath string
 	timeout                     time.Duration
+	follow                      bool
+	ticks                       <-chan time.Time
 }
 
 func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out io.Writer) (code int, resultErr error) {
@@ -49,8 +51,16 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out io.Write
 		defer timer.Stop()
 		deadline = timer.C
 	}
-	fallback := time.NewTicker(60 * time.Second)
-	defer fallback.Stop()
+	ticks := opts.ticks
+	if ticks == nil {
+		fallback := time.NewTicker(60 * time.Second)
+		defer fallback.Stop()
+		ticks = fallback.C
+	}
+	// Track only what this process has printed. The durable seen cursor remains
+	// the authority for pending notices and is changed solely by confirmation.
+	printed := make(map[int64]bool)
+	tick := false
 	for {
 		if _, err := e.Evaluate(ctx); err != nil {
 			return 1, err
@@ -59,16 +69,37 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out io.Write
 		if err != nil {
 			return 1, err
 		}
+		current := make(map[int64]bool, len(notices))
+		newNotice := false
+		for _, n := range notices {
+			current[n.Seq] = true
+			if !printed[n.Seq] {
+				newNotice = true
+			}
+		}
 		if len(notices) > 0 {
 			through := notices[len(notices)-1].Seq
-			if err := printNotices(out, opts, notices, through); err != nil {
-				return 1, err
+			if !opts.follow || newNotice {
+				// A slow output reader must not hold the store's write lock.
+				// Record only complete output. If a follow-mode confirmation races
+				// this commit, the notice stays pending and the next marker prompts
+				// another confirmation.
+				if err := printNotices(out, opts, notices, through); err != nil {
+					return 1, err
+				}
+				if err := e.Shown(ctx, opts.owner, through); err != nil {
+					return 1, err
+				}
+				if !opts.follow {
+					return 0, nil
+				}
+			} else if tick {
+				if _, err := fmt.Fprintf(out, "TILLR_WATCH_NOTICE %d pending, through_seq %d\n", len(notices), through); err != nil {
+					return 1, err
+				}
 			}
-			if err := e.Shown(ctx, opts.owner, through); err != nil {
-				return 1, err
-			}
-			return 0, nil
 		}
+		printed, tick = current, false
 	sleep:
 		for {
 			select {
@@ -77,7 +108,8 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out io.Write
 			case <-deadline:
 				_, err := fmt.Fprintf(out, "tillr watch: timed out with no pending notices\nre-arm: %s\n", opts.rearm(0))
 				return 2, err
-			case <-fallback.C:
+			case <-ticks:
+				tick = true
 				break sleep
 			case evt, ok := <-w.Events:
 				if !ok {
@@ -138,6 +170,9 @@ func (o waitOptions) rearm(through int64) string {
 	}
 	if o.timeout > 0 {
 		cmd += " --timeout " + o.timeout.String()
+	}
+	if o.follow {
+		cmd += " --follow"
 	}
 	if through > 0 {
 		cmd += " --seen-through " + strconv.FormatInt(through, 10)

@@ -24,7 +24,7 @@ import (
 const help = `Usage:
   tillr watch eval --once --store PATH --rules DIR
   tillr watch status --store PATH --rules DIR
-  tillr watch wait --store PATH --rules DIR [--owner ID] [--timeout DUR] [--seen-through SEQ]
+  tillr watch wait --store PATH --rules DIR [--owner ID] [--timeout DUR | --follow] [--seen-through SEQ]
   tillr watch seen --store PATH --through SEQ [--owner ID]
 
 Watch reports conditions from store events. It never executes guidance or dispatches a run.
@@ -41,6 +41,11 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, out, stderr io.Writer) int {
+	return runWithTicks(ctx, args, out, stderr, nil)
+}
+
+// ticks overrides the fallback clock in tests; production uses a 60-second ticker.
+func runWithTicks(ctx context.Context, args []string, out, stderr io.Writer, ticks <-chan time.Time) int {
 	fail := func(err error) int { fmt.Fprintln(stderr, "tillr watch:", err); return 1 }
 	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
 		fmt.Fprint(out, help)
@@ -53,7 +58,7 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) int {
 	var dir, owner string
 	var timeout time.Duration
 	var cursor int64
-	var once bool
+	var once, follow bool
 	switch face {
 	case "eval", "wait", "status":
 		f.StringVar(&dir, "rules", "", "directory of TOML rules")
@@ -67,6 +72,7 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) int {
 	case "wait":
 		f.StringVar(&owner, "owner", "foreground", "delivery owner")
 		f.DurationVar(&timeout, "timeout", 0, "time to wait for a notice")
+		f.BoolVar(&follow, "follow", false, "remain attached after notices")
 		f.Int64Var(&cursor, "seen-through", -1, "confirm a previously shown cursor before evaluation")
 	case "seen":
 		f.StringVar(&owner, "owner", "foreground", "delivery owner")
@@ -86,6 +92,9 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) int {
 	}
 	if (set["through"] || set["seen-through"]) && cursor < 0 {
 		return fail(fmt.Errorf("seen cursor must be nonnegative"))
+	}
+	if follow && set["timeout"] {
+		return fail(fmt.Errorf("--follow cannot be combined with --timeout"))
 	}
 	if set["timeout"] && timeout <= 0 {
 		return fail(fmt.Errorf("timeout must be positive"))
@@ -153,7 +162,7 @@ func run(ctx context.Context, args []string, out, stderr io.Writer) int {
 			fmt.Fprintf(out, "rule %s skipped=%d\n", id, counts[id])
 		}
 	case "wait":
-		code, err := wait(ctx, e, waitOptions{owner: owner, storePath: *path, rulesPath: dir, timeout: timeout}, out)
+		code, err := wait(ctx, e, waitOptions{owner: owner, storePath: *path, rulesPath: dir, timeout: timeout, follow: follow, ticks: ticks}, out)
 		if err != nil {
 			return fail(err)
 		}
