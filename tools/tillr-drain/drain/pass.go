@@ -74,6 +74,7 @@ type pendingWork struct {
 	Optimistic     bool           `json:"-"` // shadow claim, not folded from the store
 	LaneKeepReason string         `json:"lane_keep_reason,omitempty"`
 	HeldFence      string         `json:"held_fence,omitempty"`
+	HeldStage      *heldLaneStage `json:"held_stage,omitempty"`
 	NeedsStage     bool           `json:"needs_stage,omitempty"`
 	ReleasePending string         `json:"release_pending,omitempty"`
 
@@ -444,7 +445,7 @@ func foldPendingHistory(r *store.Reader, seq int64, s *pendingHistoryState, even
 				}
 				lane.Candidate.Request, lane.Candidate.Seat = work.Decision.RunRequest, work.Decision.Seat
 				work.Candidate = &lane.Candidate
-				work.LaneReleased, work.LaneKeepReason, work.HeldFence = lane.Released, lane.Reason, lane.Fence
+				work.LaneReleased, work.LaneKeepReason, work.HeldFence, work.HeldStage = lane.Released, lane.Reason, lane.Fence, lane.Stage
 				if e.Kind == candidateReleaseStartedKind {
 					work.ReleasePending = lane.ResetSHA
 				} else if lane.Released {

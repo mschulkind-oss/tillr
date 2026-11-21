@@ -2568,11 +2568,12 @@ lane lease is still reported separately as `lanes-leased`, not a drained queue.
 
 ## Held candidate capacity
 
-A held candidate is retained under `refs/tillr/runs/<run>`, independently of its
-lane. Gate stalls, ordinary item faults, held conflict-repair staging, dirty-trunk
-waits, trunk-broken waits for a fixer, and rewritten-trunk waits release an ordinary
-lane only after the drain
-writes that pin and reads it back as the exact candidate commit. It saves the
+A held candidate is pinned independently of its lane. Gate stalls, ordinary item
+faults, held conflict-repair staging, dirty-trunk waits, trunk-broken waits for a
+fixer, and rewritten-trunk waits can release a lane only after the drain reads
+back the exact candidate commit. Ordinary candidates use `refs/tillr/runs/<run>`;
+fork candidates use `refs/tillr/held-forks/`, keyed by run, delivery ref and base.
+The drain saves the
 original fence, preserves uncommitted work, and records
 `drain.candidate-release-started` with the exact reset destination before resetting
 the lane. `drain.candidate-lane` records completed release. A restart finishes an
@@ -2604,13 +2605,22 @@ same assignment and staging protocol, without requiring the released old lane;
 setting aside a released candidate records its pin and does not touch a sibling
 now occupying that lane.
 
+For a workflow candidate, the drain restores the node base and fence separately
+from the item's. Accepted node artifacts and run reports remain in their original run
+directories; reassigning the candidate does not move or rerun the producers. For a
+fork candidate, it resets the old fork checkout to its recorded base without
+moving the delivery ref. Restaging uses the pinned fork commit, upstream refs and
+tags, and binds both fences to the new lane's fork path. A dirty or unverified
+workflow or fork checkout stays in place rather than releasing work that the
+drain cannot restore.
+
 These classes still keep their lanes:
 
 | Class | Why the worktree is needed |
 | :--- | :--- |
 | Conflict repair owning the pending transition | The repair request owns the staged checkout; settlement must finish that request, not release the original candidate's lane. |
-| Fork-delivery candidate | Its lane-specific fork checkout and patch branch are delivery state outside the ordinary repository checkout. |
-| Workflow candidate or unfinished settlement/continuation | Staged node inputs, working files, brief, and session belong to that lane. |
+| Hold before a candidate is recorded | There is no recorded commit to restore; settlement or continuation still needs the original checkout and session. |
+| Live or unsettled workflow member | Release waits for the member to finish and its claim to settle. |
 | Host-boundary violation | The original checkout remains available for operator inspection. |
 | Candidate-record mismatch | The unexpected HEAD must remain available for diagnosis rather than being reset to the recorded commit. |
 | Unverified pin or unsuccessful preservation/reset | Release cannot yet prove the candidate and remaining work survive lane reuse; the recorded error names the remedy. |

@@ -19,18 +19,14 @@ type State struct {
 
 // KeepReason is the shared worktree-dependency policy. A held repair that has
 // already handed off its pending transition is not a candidate to release.
-func KeepReason(hasCandidate bool, baseRef string, workflow, boundary bool, reason string) string {
+func KeepReason(hasCandidate, boundary bool, reason string) string {
 	switch {
-	case !hasCandidate:
-		return "settlement or continuation needs the original worktree and session"
-	case baseRef != "":
-		return "fork delivery needs its lane-specific checkout and patch branch"
-	case workflow:
-		return "workflow progress needs the staged node worktree and inputs"
 	case boundary || reason == "host-boundary-violation":
 		return "boundary violation needs the original checkout for inspection"
 	case reason == "candidate-record-mismatch":
 		return "unrecorded lane HEAD needs inspection"
+	case !hasCandidate:
+		return "no recorded candidate to restore; settlement or continuation needs the original worktree and session"
 	default:
 		return ""
 	}
@@ -40,9 +36,7 @@ func KeepReason(hasCandidate bool, baseRef string, workflow, boundary bool, reas
 // run (whose init registers writable schema in a read-only process).
 var sessionIDShape = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-type candidate struct {
-	BaseRef string `json:"base_ref"`
-}
+type candidate struct{}
 type pending struct {
 	Decision struct {
 		ItemID     string `json:"item_id"`
@@ -51,7 +45,6 @@ type pending struct {
 			RunID   string `json:"run_id"`
 			Backend string `json:"backend"`
 		} `json:"run_request"`
-		Workflow json.RawMessage `json:"workflow"`
 	} `json:"decision"`
 	Candidate      *candidate `json:"candidate"`
 	LaneReleased   bool       `json:"lane_released"`
@@ -209,12 +202,7 @@ func Read(r *store.Reader) (map[string]State, error) {
 		if w.LaneReleased {
 			s.Status, s.Reason = "released", ""
 		} else if s.Reason == "" {
-			baseRef := ""
-			if w.Candidate != nil {
-				baseRef = w.Candidate.BaseRef
-			}
-			workflow := len(w.Decision.Workflow) > 0 && string(w.Decision.Workflow) != "null"
-			s.Reason = KeepReason(w.Candidate != nil, baseRef, workflow, w.BoundaryFailed, holds[id].Reason)
+			s.Reason = KeepReason(w.Candidate != nil, w.BoundaryFailed, holds[id].Reason)
 			if s.Reason == "" {
 				s.Reason = "candidate awaits pin verification and lane release"
 			}

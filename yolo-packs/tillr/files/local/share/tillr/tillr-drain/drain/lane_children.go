@@ -146,6 +146,10 @@ func (l *Loop) recheckLaneChildren(ctx context.Context) error {
 // Resolve symlinks and compare path components, not string prefixes: lane-1-other
 // is not lane-1. Revalidate start time after reading cwd to reject PID reuse.
 func (l *Loop) processInLane(p *runFaceOwner, lane string) (bool, error) {
+	return processInCheckout(p, filepath.Join(l.cfg.LaneRoot, lane))
+}
+
+func processInCheckout(p *runFaceOwner, path string) (bool, error) {
 	cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", p.PID))
 	if processGone(err) {
 		return false, nil
@@ -153,7 +157,7 @@ func (l *Loop) processInLane(p *runFaceOwner, lane string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	root, err := filepath.EvalSymlinks(filepath.Join(l.cfg.LaneRoot, lane))
+	root, err := filepath.EvalSymlinks(path)
 	if os.IsNotExist(err) {
 		return false, nil
 	}
