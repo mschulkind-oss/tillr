@@ -515,7 +515,7 @@ actor kind (`mechanical` / `agent` / `human`). An `apply` carrying a changed
 criterion state with no verdict is refused, and a verdict naming any hash
 but the frozen text's is refused; only a verdict retires an item. Who may
 produce each actor kind's verdict — the composed pipeline for a mechanical
-one, an agent only under a recorded sign-off grant — is ruled in
+one, an agent only as the selected workflow's independent evaluator — is ruled in
 [`work-control-judge-in-tillr.md`](work-control-judge-in-tillr.md)
 ([Retirement in the end state](work-control-judge-in-tillr.md#retirement-in-the-end-state)).
 Repairing a frozen criterion that is itself wrong is a supersession record,
@@ -536,18 +536,19 @@ is refused as `claim-class-weakened`. Omitting an authority-bearing criterion
 is refused too, even before it has a verdict, so removing and recreating it
 cannot weaken its class. Class-only hardening does not rewrite frozen
 criterion text or its verdict state. The actor rules, settled in
-[the judge and lifecycle design](./tillr-judge-and-lifecycle.md#22-when-generic-judging-survives--and-closing-the-mechanical-stamp-hole-d-jl2), are:
+[the judge and lifecycle design](./tillr-judge-and-lifecycle.md#6-the-judge-is-a-step-in-the-flow), are:
 
 | Stored class and meaning | `mechanical` | `agent` | `human` |
 | :--- | :--- | :--- | :--- |
-| `verification-only`: truth settled by a named check on evidence | Allowed with evidence | Allowed with independence and a grant covering this class | Allowed |
-| `red-gate-triage`: judgment about a failing gate | Refused | Allowed with independence and a grant covering this class | Allowed |
-| `direction`: choice between defensible directions | Refused | Allowed with independence and a grant covering this class | Allowed |
+| `verification-only`: truth settled by a named check on evidence | Allowed with evidence | Allowed with independence when listed in `judge_classes` | Allowed |
+| `red-gate-triage`: judgment about a failing gate | Refused | Allowed with independence when listed in `judge_classes`; not listed by the shipped evaluators | Allowed |
+| `direction`: choice between defensible directions | Refused | Allowed with independence when listed in `judge_classes`; not listed by the shipped evaluators | Allowed |
 | `owner-only`: a decision reserved to the owner | Refused | Refused | Allowed; sole writer |
 
 `verdict record` refuses a class differing from the stored one as
 `claim-class-mismatch`, and an incompatible actor as `claim-class-actor`.
-`grant issue` refuses any scope naming `owner-only` as `grant-owner-only`.
+Agent intake checks the persisted evaluator and its class list, and binds the
+verdict to the selected graph, node and exact candidate. No renewal is required.
 A `verification-only` criterion matching `(?i)^owner decision recorded\b`
 is refused by both definition writers as `owner-criterion-untyped`.
 On a migrating store opening, the item utility's registered migration types
@@ -1487,6 +1488,9 @@ described in one paragraph is a cost this design declines to pay
 ([§3.5](#35-the-conclusion)).
 
 ## 14. Decision ledger
+
+`D-UT16` records the original claim authority rule. Its grant terms are
+superseded by [the workflow rulebook](./tillr-judge-and-lifecycle.md#rulebook-and-its-enforcement).
 
 | ID | Decision | Grounds |
 |---|---|---|

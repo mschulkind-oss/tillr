@@ -34,9 +34,9 @@ vantage:
 - **Self-licking queue noise:** Explorer agents refilling the queue endlessly with trivial flag permutations or touching a live repository while `tillr-drain` holds `TakeBoundary`.
 - **False-positive flooding:** Treating *"an agent said it found a bug"* as a bug, filing duplicate crashes from concurrent lanes, or burning expensive build lanes on hallucinated expectations.
 
-**The shape.** A standalone `autoqa` CLI and optional pack (`yolo-packs/autoqa`) with zero reverse dependencies from `tools/tillr*`; dual-store isolation (AutoQA's private `tillr` store + `autoqa.db` dedup/precision ledger vs the SUT's untouched work board); a two-workflow funnel (`qa-probe@v1` for cheap fan-out + mechanical replay, promoting unique hits into `qa-confirm@v1` for minimization + grant-backed W2 `evaluator_slot` triage); surface-saturation refill hysteresis; and a closed-loop precision circuit breaker.
+**The shape.** A standalone `autoqa` CLI and optional pack (`yolo-packs/autoqa`) with zero reverse dependencies from `tools/tillr*`; dual-store isolation (AutoQA's private `tillr` store + `autoqa.db` dedup/precision ledger vs the SUT's untouched work board); a two-workflow funnel (`qa-probe@v1` for cheap fan-out + mechanical replay, promoting unique hits into `qa-confirm@v1` for minimization + triage by the W2 `evaluator_slot` judge); surface-saturation refill hysteresis; and a closed-loop precision circuit breaker.
 
-**Cost.** A second tillr store and a second tool to keep working, and the cleanup of what AutoQA left inside tillr ([§5](#5-disposition-of-existing-autoqa-artifacts)). It adds no state, no graph primitive and no judge or grant rule to tillr itself.
+**Cost.** A second tillr store and a second tool to keep working, and the cleanup of what AutoQA left inside tillr ([§5](#5-disposition-of-existing-autoqa-artifacts)). It adds no state, no graph primitive and no judge rule to tillr itself.
 
 **Needs your ruling:** None while the design is iceboxed. [OQ-AQ2](#OQ-AQ2) is blocked until the owner picks the design up.
 
@@ -44,7 +44,7 @@ vantage:
 
 **Reads with:** [tillr-item-graphs.md](../reference/tillr-item-graphs.md) ([workflows](../reference/tillr-item-graphs.md#workflows-selection-and-expansion), [producer-bound artifacts](../reference/tillr-item-graphs.md#producer-bound-artifacts), and [evaluator routing](../reference/tillr-item-graphs.md#workflow-evaluator), fixed upstream graph and `evaluator_slot` contract), [tillr-judge-and-lifecycle.md](./tillr-judge-and-lifecycle.md) ([§2.1](./tillr-judge-and-lifecycle.md#21-topology-relative-to-gate-and-land-d-jl1) and [§5](./tillr-judge-and-lifecycle.md#5-core-boundary-for-external-autoqa-d-jl7), fixed upstream judge contract and `D-JL7` retirement of `ActorAutoQA`), [board-utilities.md](./board-utilities.md) ([§5](./board-utilities.md#5-independent-use-the-boundary-made-concrete), standalone utility boundaries), [tillr-distribution.md](./tillr-distribution.md) ([§3](./tillr-distribution.md#3-documentation-split-and-the-honesty-rule) and [§5](./tillr-distribution.md#5-the-autoqa-handoff-through-the-pack)), and [tillr-idea-pipeline.md](./tillr-idea-pipeline.md) ([§1](./tillr-idea-pipeline.md#1-item-kinds-states-and-edges)–[§2](./tillr-idea-pipeline.md#2-the-pipeline-and-one-writer-rules), `derived_from` lineage).
 
-**Words.** A **System Under Test (SUT)** is the program AutoQA probes; the first is tillr. **W1** and **W2** are short names for the two designs AutoQA runs on: W1 is [item graphs](../reference/tillr-item-graphs.md), which supplies workflows of read-only nodes, and W2 is [the judge and lifecycle](./tillr-judge-and-lifecycle.md), which supplies the judge and its grants. An **evaluator slot** is the place in a workflow where a judge node sits. [The vocabulary](./tillr-vocabulary.md#5-the-words) defines item, node, judge, gate and lane.
+**Words.** A **System Under Test (SUT)** is the program AutoQA probes; the first is tillr. **W1** and **W2** are short names for the two designs AutoQA runs on: W1 is [item graphs](../reference/tillr-item-graphs.md), which supplies workflows of read-only nodes, and W2 is [the judge and lifecycle](./tillr-judge-and-lifecycle.md), which supplies the judge and its workflow rulebook. An **evaluator slot** is the place in a workflow where a judge node sits. [The vocabulary](./tillr-vocabulary.md#5-the-words) defines item, node, judge, gate and lane.
 
 ---
 
@@ -61,6 +61,10 @@ Read on 2026-11-14 at `6851b49015`; the last row was read again on 2026-11-18.
 | **Fresh-store DDL registration** | [tools/tillr-store/main.go](../../tools/tillr-store/main.go) ([autoqa-tillr-seams.md](./autoqa-tillr-seams.md) [§1.3](./autoqa-tillr-seams.md#13-the-real-coupling-the-stores-schema-is-a-function-of-who-opened-it)) | **Built (`item-def-tables-at-init`).** `tillr-store init` now creates the full schema matching every owner and the loop (`tools/tillr-store/init_schema_test.go`), so read-only faces (`view waiting`, `view status`, `drain why`, `run lanes`) exit `0` on a freshly initialized store without waiting for each owning utility to open it for writing. |
 | **Pre-approved workflows & `evaluator_slot`** | [tillr-item-graphs.md](../reference/tillr-item-graphs.md), [tillr-judge-and-lifecycle.md](./tillr-judge-and-lifecycle.md) | **Built upstream (`stage: CURRENT` / `BUILT`).** W1/W2 contracts supply `no_commit` read-only agent nodes, `command` nodes, typed run artifacts, and grant-backed `evaluator_slot` judging. |
 | **AutoQA runner, idea refill, or bug dedup** | *(none across `tools/`, `yolo-packs/`, `config/`)* | **Absent.** Every `autoqa` match in the tree is prose, a doc comment, or the code and tests that refuse the retired store vocabulary. |
+
+Since that reading, [the workflow rulebook](./tillr-judge-and-lifecycle.md#rulebook-and-its-enforcement)
+has replaced grant-backed evaluator judging. The selected step now defines
+which criterion classes it can judge.
 
 ### 1.2 Why Embedding AutoQA in Tillr Failed
 
@@ -93,7 +97,7 @@ tools/autoqa/                      (own go.mod — ZERO `replace` links into ../
 
 - **Lives by itself ([OQ-AQ1](#decision-ledger)):** `tools/autoqa/go.mod` has no `replace` edge into `tools/tillr*`. Every interaction with `tillr` crosses documented CLI faces (`tillr-store`, `tillr-item`, `tillr-drain`, `tillr-run`, `tillr-view`) and versioned JSON envelopes. Extracting `tools/autoqa/` + `yolo-packs/autoqa/` into a standalone git repository at any point is a zero-code-change `git subtree split`.
 - **Gated by itself:** When incubating in this repository, [tools/fork-check.py](../../tools/fork-check.py) plans `Check("autoqa", ...)` watching only `tools/autoqa/**` and `yolo-packs/autoqa/**`, while `PACK_SYNC_WATCHES` and `TILLR_DOCS_WATCHES` ignore both directories. Inside `tools/autoqa/`, `tillr-gate plan` + `tillr-gate run` over `tools/autoqa/registry.json` gates AutoQA's own changes (`go test ./...`, workflow validation, and `yolo pack lint yolo-packs/autoqa`) with no store required ([OQ-AQA2](./autoqa-tillr-seams.md#OQ-AQA2) settled: `tillr-gate` stays store-free).
-- **No core changes:** AutoQA adds **zero** item states, DAG node kinds, or judge/grant exceptions to `tillr`.
+- **No core changes:** AutoQA adds **zero** item states, DAG node kinds, or judge exceptions to `tillr`.
 
 ### 2.2 Two Stores and Sandboxed SUT Snapshots
 
@@ -101,18 +105,18 @@ AutoQA never shares a SQLite database, lane pool, or working tree with the Syste
 
 | Surface | AutoQA's private runtime (`$XDG_STATE_HOME/autoqa/<campaign>/`) | SUT's live workspace (e.g. `/workspace`) |
 | :--- | :--- | :--- |
-| **Queue & execution store** | `state.db` (`tillr` store holding `qa-probe` and `qa-confirm` items, runs, and local QA judge grants) + `autoqa.db` (dedup signatures, surface saturation, precision ledger) | `/workspace/.tillr/state.db` — untouched during probing; written **only** on confirmed-bug export via `tillr item` |
+| **Queue & execution store** | `state.db` (`tillr` store holding `qa-probe` and `qa-confirm` items, selected workflows, and runs) + `autoqa.db` (dedup signatures, surface saturation, precision ledger) | `/workspace/.tillr/state.db` — untouched during probing; written **only** on confirmed-bug export via `tillr item` |
 | **Working tree & git refs** | Read-only SUT snapshot `<state_dir>/sut/<sut_sha>/` + throwaway per-probe scratch dirs | Live `/workspace` + `refs/heads/main` — **zero** reads/writes by QA lanes; `TakeBoundary` ([boundary.go](../../tools/tillr-drain/drain/boundary.go)) never trips |
 | **Observability** | Separate `tillr view serve --store <state_dir>/state.db` instance showing active probes and confirmations | Owner's main `tillr view serve` remains clean of unconfirmed QA noise |
 
-**Store initialization.** Since `tillr-store init` now registers the full schema matching every owner and the loop (`item-def-tables-at-init`), read-only faces (`show`, `lanes`, `list`) no longer fail on a freshly initialized store; `autoqa init` initializes `<state_dir>/state.db` with `tillr-store init` and `tillr-item grant` (issuing AutoQA's local `verification-only` judge grant), without needing a dummy `tillr-drain once` + `/bin/true` `tillr-run exec` pass solely to create tables.
+**Store initialization.** Since `tillr-store init` now registers the full schema matching every owner and the loop (`item-def-tables-at-init`), read-only faces (`show`, `lanes`, `list`) no longer fail on a freshly initialized store; `autoqa init` initializes `<state_dir>/state.db` with `tillr-store init` without needing a dummy `tillr-drain once` + `/bin/true` `tillr-run exec` pass solely to create tables.
 
 **Dogfooding against `tools/tillr*` safely.** `autoqa target prepare --sut tillr --rev <sut_sha>` exports `<sut_sha>` via `git archive` and compiles all eight `tillr*` binaries once into `<state_dir>/sut-bin/<sut_sha>/` (digest-cached). Every cheap probe receives `PATH=<state_dir>/sut-bin/<sut_sha>:$PATH`, `BOARD_DB=""`, and a fresh empty `XDG_STATE_HOME` inside its probe sandbox, letting agents corrupt scratch SQLite files, kill leases mid-transaction, and fuzz CLI envelopes with zero path to `/workspace` or `/workspace/.tillr/state.db`.
 
 **Crossing into the SUT board.** Per [tillr-judge-and-lifecycle.md](./tillr-judge-and-lifecycle.md) `D-JL7`, AutoQA proposes crossing into the SUT's `tillr` store exclusively through four standard faces (note: in the current tree, sync from landed-document blocks is the only intake for `/workspace/.tillr/state.db`, so filing confirmed bugs via `tillr item apply` vs document blocks is open as [OQ-FQ8](./tillr-separable-parts.md#OQ-FQ8) in [tillr-separable-parts.md](./tillr-separable-parts.md), blocked until AutoQA is picked up):
 - `tillr item apply` (`item.record`) to file a confirmed, deduplicated bug item (proposed here; see [OQ-FQ8](./tillr-separable-parts.md#OQ-FQ8));
 - `tillr item verdict record` (`actor_kind: "mechanical"`, `actor: "autoqa/replay"`, `claim_class: "verification-only"`) when re-running a stored reproducer against a landed fix;
-- `tillr item verdict record` (`actor_kind: "agent"`, `actor: "autoqa/triage"`, `judged_actor: "<producer>"`, `claim_class: "verification-only"`, backed by an unexpired `grant_id` in the SUT's `item_grants`) when delegated QA sign-off is explicitly granted; and
+- `tillr item verdict record` (`actor_kind: "agent"`, `actor: "autoqa/triage"`, `judged_actor: "<producer>"`, `claim_class: "verification-only"`, with evidence and the exact candidate head and tree) only when the SUT item has a selected workflow whose independent evaluator lists `verification-only` in `judge_classes`, with the verdict bound to that graph and node; and
 - `tillr item mail send` to escalate genuine spec contradictions to the owner.
 
 ---
@@ -141,7 +145,11 @@ flowchart LR
 2. **`qa-confirm@v1` (minimization + independent W2 contract judge, `evaluator_slot: "triage_judge"`):**
    - **`minimize` (`agent`, `access: "read_only"`):** Shrinks `repro.sh` and fixture inputs to the smallest failing command sequence while preserving `sig_v1`.
    - **`replay_check` (`command`, `access: "read_only"`):** Verifies the minimized `repro.sh` fails `3/3` times deterministically with scrubbed environment and injected `--now` clock.
-   - **`triage_judge` (`agent`, `seat: "review"`, `access: "read_only"`, `evaluator_slot`):** Fresh session on an independent judge route, backed by `<state_dir>/state.db`'s `verification-only` `item.grant` (`checkIndependence` enforced per [tillr-judge-and-lifecycle.md](./tillr-judge-and-lifecycle.md) [§2.1](./tillr-judge-and-lifecycle.md#21-topology-relative-to-gate-and-land-d-jl1); W1 agent nodes name a `seat` rather than a `role` per [stage kinds](../reference/tillr-item-graphs.md#schema-stage-kinds-and-static-expansion)). Emits `eval.output` (`done` = confirmed contract violation; `defective` = false positive / valid refusal; `blocked` = spec contradiction).
+   - **`triage_judge` (`agent`, `seat: "review"`, `access: "read_only"`, `evaluator_slot`):** Fresh session on an independent judge route, with `judge_classes: ["verification-only"]` declared on the selected `qa-confirm@v1` evaluator step (`checkIndependence` enforced per [tillr-judge-and-lifecycle.md](./tillr-judge-and-lifecycle.md) [§2.1](./tillr-judge-and-lifecycle.md#21-topology-relative-to-gate-and-land-d-jl1); W1 agent nodes name a `seat` rather than a `role` per [stage kinds](../reference/tillr-item-graphs.md#schema-stage-kinds-and-static-expansion)). Emits `eval.output` (`done` = confirmed contract violation; `defective` = false positive / valid refusal; `blocked` = spec contradiction).
+
+The confirmation step above is proposed: the built evaluator route requires a
+workflow that completes on landing, not `no_commit`. This proposal does not
+create an exception to the [workflow rulebook](./tillr-judge-and-lifecycle.md#rulebook-and-its-enforcement).
 
 Notice that both workflows use pure static flattening (`D-IG4`), so AutoQA requires neither cycles nor bounded in-fog proposals ([OQ-IG2](../reference/tillr-item-graphs.md#why-its-this-way)) to ship.
 
@@ -228,6 +236,10 @@ Every accidental AutoQA artifact in this repository gets a ruling (`D-AQ7`). The
 <a id="61-decision-ledger"></a>
 
 ### Decision Ledger
+
+The grant language in the dated `D-AQ2` and `D-AQ5` rows is historical.
+[The workflow rulebook](./tillr-judge-and-lifecycle.md#rulebook-and-its-enforcement)
+now governs the judge in both stores.
 
 **Who decided each row.** The owner has ruled on nothing here: he iceboxed the design before reviewing it. Every row is a designer's decision, and he may overturn any of them. `D-AQ1` to `D-AQ7` are the design as written on 2026-11-14.
 

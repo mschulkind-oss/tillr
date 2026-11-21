@@ -166,7 +166,7 @@ Four things in the judge as built stop it from running on every landing.
 
 | Obstacle | What changes |
 | :--- | :--- |
-| **A grant is needed before the worker starts.** With none, the item is held and no worker runs. No grant has ever been issued | A reviewer needs no grant to mark a `verification-only` criterion met. The store already lets a program with no judgement retire that class when the gate is green; an agent that read the change is the stronger actor. A grant is still required for the classes it was made for, and `owner-only` still cannot be granted. The hold before the worker starts goes for the default review |
+| **The old dispatcher held judged items before the worker started.** No grant had been issued in the [2026-11-18 measurement](#1-the-requirement-and-what-happens-today). | The reviewer judges only the classes listed on its workflow step. The shipped evaluators list `verification-only`; `owner-only` remains human-only. Dispatch does not wait for a renewal. |
 | **One verdict per criterion, and nothing else.** A review of a diff has things to say that are no criterion | The verdict file keeps one entry per criterion and gains a list of findings ([Section 5.2](#52-an-objection)). An item with no criteria has no entries and is reviewed against its text and the diff |
 | **A not-done verdict does not return to the worker's session.** From an ordinary judge it holds the item; from a workflow's evaluator it starts a fresh workflow at its first node | Both take the route a gate refusal takes: a turn in the session that wrote the change ([Section 5.2](#52-an-objection)) |
 | **The judge is a step of the loop, not a node.** It swaps the worker's brief and session in the lane for the length of the review | It stays a step until the graph is built, recorded as a run with its own id. The graph design already has a judge node kind; its rules are owed the amendments in [Section 12](#12-amendments-owed) |
@@ -194,7 +194,7 @@ flowchart LR
 
 **A workflow's evaluator is this review.** `planned-build@v1` ends with a read-only `verify` node that the loop already runs through the judge step. It has never run. Under this design the workflow keeps naming it, and what it names is extra instruction for the one review: for each criterion, say which piece satisfies it. The review runs once, after the gate, like every other.
 
-**An item that asks for a judge** gets the same one review. A grant then decides only whether criteria of the classes that need one are retired by the reviewer. The attribute has no effect on whether a code landing is reviewed.
+**An item that asks for a judge** gets the same one review under this proposal. The selected workflow's `judge_classes` decide which criteria the reviewer may retire, not whether the proposal calls for a review of a code landing.
 
 ## 5. The three outcomes
 
@@ -323,7 +323,7 @@ The categories are the closed list a finding may use. Adding one is a change to 
 | :--- | :--- |
 | `verification-only` on a code landing | The reviewer, as an agent's verdict with its evidence. The mechanical stamp is not written |
 | `verification-only` on a documents-only landing | The mechanical actor, as today |
-| A class that needs a grant | The reviewer when a grant covers it; otherwise as today |
+| `red-gate-triage` or `direction` | A reviewer only if the selected workflow step lists that class; the shipped evaluators do not |
 | `owner-only` | The owner, as today |
 
 **How this answers [OQ-PR2](../tillr/decision-provenance-review.md#OQ-PR2),** if the owner accepts this design. That question asks whether tillr may mark work finished with no person and no reviewing agent looking at it. For an item's code the answer becomes no, which is that question's "Overturn": every such item is reviewed against its criteria before it lands. For a documents-only landing the answer stays yes, by his ruling of 2026-11-18. [OQ-JL1](./tillr-judge-and-lifecycle.md#decision-ledger) is rewritten to say so.
@@ -356,6 +356,10 @@ There is no spend target ([OQ-GP3](./tillr-graph-is-the-path.md#decision-ledger)
 
 ## 9. Alternatives considered
 
+The standing-grant alternative below records the earlier design discussion.
+[The workflow rulebook](./tillr-judge-and-lifecycle.md#rulebook-and-its-enforcement)
+now governs the judge; there is nothing to renew.
+
 | Alternative | Verdict |
 | :--- | :--- |
 | A second reader that is shown only the diff, beside the opted-in judge | Rejected by the owner's clarification: the reviewer considers everything |
@@ -373,17 +377,17 @@ There is no spend target ([OQ-GP3](./tillr-graph-is-the-path.md#decision-ledger)
 - **What the gate runs,** and what may land while the trunk is red.
 - **Per-machine backend-policy edits.** This design fixes `review` as its own named seat set to the `build` backend for now ([Section 3.3](#33-the-review-seat)); changing which model a machine maps to a seat later is a policy edit.
 - **Enforcing read-only.** It stays a check after the fact.
-- **Who may issue a grant, and for how long.** The grant keeps its design; fewer things need one.
+- **Who may judge a class.** The proposal does not widen the [workflow rulebook](./tillr-judge-and-lifecycle.md#rulebook-and-its-enforcement) or let agents judge `owner-only` criteria.
 
 ## 11. Build order
 
 [OQ-DR1](#OQ-DR1) and [OQ-DR2](#OQ-DR2) are answered. Steps 1 to 4 wait on the owner's review of `D-DR3` through `D-DR13` and then build on today's loop. Step 5 waits on the graph; [OQ-DR3](#OQ-DR3) waits until a live review hits a repeated objection and holds nothing here. Every step that changes a tillr source file changes its copy under `yolo-packs/tillr/files/local/share/tillr/` in the same commit, and [the pack sync test](../../tests/pack-sync.test.py) holds that. The files named are where the scout found the behavior; the planner confirms each against the tree.
 
 1. **Review every code landing after its gate run passes.**
-   - *Changes:* the judge step runs for every code landing, after the gate; the documents-only and automatic-revert exemptions; the grant no longer required for a `verification-only` criterion, and the hold before the worker starts removed for it; the brief of [Section 6](#6-the-brief), with the item's text, the gate's passed checks, the worker's report and the two-part diff; findings and read paths in the verdict file and its check; the document paths declared for this repository; the `review` seat pointed at `pi-build` in the backend policies under `config/tillr/` ([Section 3.3](#33-the-review-seat)).
+   - *Changes:* the judge step runs for every code landing, after the gate; the documents-only and automatic-revert exemptions; the selected reviewer limited to its declared `judge_classes`, with no renewal hold before the worker starts; the brief of [Section 6](#6-the-brief), with the item's text, the gate's passed checks, the worker's report and the two-part diff; findings and read paths in the verdict file and its check; the document paths declared for this repository; the `review` seat pointed at `pi-build` in the backend policies under `config/tillr/` ([Section 3.3](#33-the-review-seat)).
    - *Files:* [the judge step](../../tools/tillr-drain/drain/judge.go) and its tests; [the loop](../../tools/tillr-drain/drain/loop.go); [planning](../../tools/tillr-drain/drain/plan.go); [the verdict rules](../../tools/tillr-item/item/verdict.go); the `review` seat mapping and purpose in the policies under `config/tillr/`; [the drain's guide](../../tools/tillr-drain/README.md).
    - *Waits on:* owner review of `D-DR3` through `D-DR13`.
-   - *Done when:* a test candidate with a planted debug line is held from landing with a finding that names the line; one that misses a criterion is held with that criterion's id; a clean one lands with an agent's verdict on each criterion and no grant in the store; a documents-only candidate and an automatic revert land with no review; a second land attempt starts no second review; and one real review has run on the active `review` seat, with its spend recorded in [Section 8](#8-cost).
+   - *Done when:* a test candidate with a planted debug line is held from landing with a finding that names the line; one that misses a criterion is held with that criterion's id; a clean one lands with the workflow reviewer's verdict on each `verification-only` criterion, bound to the selected step and candidate; a documents-only candidate and an automatic revert land with no review; a second land attempt starts no second review; and one real review has run on the active `review` seat, with its spend recorded in [Section 8](#8-cost).
 2. **Return an objection to the session that wrote the change, and stop for the owner on an identical repeat.**
    - *Changes:* the ordinary judge's hold and the evaluator's restart both replaced by the retained-session route; the evidence key; the earlier objection and the worker's answer given to the next review; an identical repeat stopping under "needs you" for the owner with both objections and the worker's reason shown, with no dismissal path ([OQ-DR2](#OQ-DR2)).
    - *Files:* [the return rules](../../tools/tillr-drain/drain/returned.go), [the retained session](../../tools/tillr-drain/drain/worker_session.go), [the evaluator](../../tools/tillr-drain/drain/workflow_evaluator.go) and their tests.
@@ -411,7 +415,7 @@ None of these documents is edited by this one. **Made on 2026-11-18**, by a reco
 - **[Judge and lifecycle](./tillr-judge-and-lifecycle.md):**
   - The [OQ-JL1](./tillr-judge-and-lifecycle.md#decision-ledger) row: overturned for code landings by the owner's requirement; mechanical retirement stays for documents-only landings.
   - `D-JL1`: the judge runs after the gate, not before it.
-  - [Section 2.2](./tillr-judge-and-lifecycle.md#22-when-generic-judging-survives--and-closing-the-mechanical-stamp-hole-d-jl2) and `D-JL2`: the default is a review; a reviewer retires `verification-only` criteria with no grant.
+  - [Section 2.2](./tillr-judge-and-lifecycle.md#22-when-generic-judging-survives--and-closing-the-mechanical-stamp-hole-d-jl2) and `D-JL2`: this proposal makes review the default for code landings; the reviewer retires `verification-only` criteria only under its selected workflow step.
   - `D-JL8`: asking for a judge no longer decides whether a code landing is reviewed.
   - The judge's `not-done`, `defective` and unreadable outcomes take the routes of [Section 5](#5-the-three-outcomes).
 - **[The graph design](./tillr-graph-is-the-path.md):**
@@ -438,6 +442,9 @@ None of these documents is edited by this one. **Made on 2026-11-18**, by a reco
 | The judge step has tests and has never run with a real model | Step 1 is not done until one real review has run |
 
 ## Decision Ledger
+
+`D-DR5` records the original review proposal. Its selective grant exemption
+is superseded by [the workflow rulebook](./tillr-judge-and-lifecycle.md#rulebook-and-its-enforcement).
 
 `D-DR1`, `D-DR2`, [OQ-DR1](#OQ-DR1) and [OQ-DR2](#OQ-DR2) are the owner's rulings. Every other row is a designer's decision of 2026-11-18, made from the scout's evidence and the owner's standing rulings. None of those is the owner's ruling; he may overturn any of them, and all await his review. None is built.
 

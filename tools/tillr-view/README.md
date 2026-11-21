@@ -187,10 +187,12 @@ tillr-view run --store /path/to/.tillr/state.db --run <run-id> [--json]
 ```
 
 An external caller points these at a store snapshot; `status --json` reads the same JSON the loop reads;
-`status` answers where the board stands now, `events` answers what happened in order,
+`status` answers where the board stands now, and `events` answers what happened in order.
+
 For agent reviews, the waiting face recognizes `judge-unreadable`, `eval-failed`,
-`judge-blocked`, and `judge-defective`. Historical grant waiting records remain in
-event history but do not hold an item. A failed or unreadable review includes its recorded
+`judge-blocked`, and `judge-defective`. The judge is a step in the selected workflow;
+neither the header nor the snapshot reports a renewal. Historical grant waiting records
+remain in event history but do not hold an item. A failed or unreadable review includes its recorded
 controlling reason, rather than an unexplained hold. A blocked item names its recorded
 waiter and reason; a defective item is closed and leaves the waiting list. Its historical
 reason still has an explicit classification. The
