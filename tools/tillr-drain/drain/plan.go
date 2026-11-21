@@ -180,10 +180,12 @@ type Decision struct {
 	// dispatch and every other hold leave both empty.
 	RetryID         string `json:"retry_id,omitempty"`
 	SupersedesRunID string `json:"supersedes_run_id,omitempty"`
-	// DeferredBy names the item behind a resource deferral: a live fork owner,
-	// the trunk's fixer, or an open review batch for the requested design document.
-	// It is empty for an item's own hold.
+	// DeferredBy names the resource hold's blocker, such as a fork owner,
+	// the trunk's fixer, or a closed backend.
 	DeferredBy string `json:"deferred_by,omitempty"`
+	// Single-backend seat holds carry the closure evidence and what can reopen it.
+	BackendHoldCause string `json:"backend_hold_cause,omitempty"`
+	BackendHoldMover string `json:"backend_hold_mover,omitempty"`
 	// QuestionID names the question a `question-open` hold is waiting on: the first
 	// unanswered question in the design document's own order, as Vantage's index reports it.
 	// It is empty for every other hold and for every dispatch, so an operator who reads one
@@ -747,7 +749,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				if s.NodeIndex >= 0 && s.NodeIndex < len(s.Workflow.Stages) {
 					stage := s.Workflow.Stages[s.NodeIndex]
 					backend := policy.firstBackend(itemRow{ItemID: item.ItemID, Seat: stage.Seat})
-					backend, _, open := policy.availableBackend(backend, stage.Seat, p.shut)
+					backend, open := policy.availableBackend(backend, stage.Seat, p.shut)
 					if open && workerSessionReason(s, policy.request(item.ItemID, s.LaneID, attemptRunID(item.ItemID, p.nextAttempt(item.ItemID)), backend)) == "resumed-worker" {
 						w, resumeNode, loadErr = s.Workflow, s.NodeIndex, nil
 						retainedGraph = true
@@ -866,7 +868,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			stampDecisionRequest(decision, &request)
 			decision.RunRequest = &request
 		}
-		if err := describeBackendHold(r, &decision, policy); err != nil {
+		if err := describeBackendHold(r, &decision, policy, at, p.shut); err != nil {
 			return nil, nil, err
 		}
 		if def.Completes != "landing" && decision.RunRequest != nil && decision.RunRequest.WorkingDir == WorktreeDir {
@@ -1029,7 +1031,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		// A released acquittal starts fresh, including one whose dispatch had
 		// consumed an owner retry.
 		retry = nil
-		attempt.failover, attempt.degraded = false, ""
+		attempt.failover = false
 		if p.policy != nil {
 			attempt.backend = p.firstBackend(item)
 		}
@@ -1068,7 +1070,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		repeated = priors[len(priors)-1].Repeated
 	}
 	if repeated != nil && repeated.Route != repeatRouteHold {
-		attempt.backend, attempt.degraded = repeated.NextBackend, ""
+		attempt.backend = repeated.NextBackend
 		attempt.failover = repeated.Route == repeatRouteFailover
 	}
 	// An operator's retry of a refused verify still repairs the candidate the verifier
@@ -1084,11 +1086,11 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		// A returned ending is about the candidate, not the machinery: the next run starts
 		// on the item's own backend.
 		attempt.backend = p.firstBackend(item)
-		attempt.failover, attempt.degraded = false, ""
+		attempt.failover = false
 	}
 	if hasConflict && conflict.Status == "answered" && p.policy != nil {
 		attempt.backend = p.firstBackend(item)
-		attempt.failover, attempt.degraded = false, ""
+		attempt.failover = false
 		decision.ConflictID = conflict.ConflictID
 	}
 	windowShut := false
@@ -1103,12 +1105,9 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 			if retry != nil && retry.refusal == "" && !p.quotaShut[attempt.backend] {
 				shut = p.quotaShut
 			}
-			next, degraded, ok := p.policy.availableBackend(attempt.backend, item.Seat, shut)
+			next, ok := p.policy.availableBackend(attempt.backend, item.Seat, shut)
 			windowShut = !ok
 			attempt.backend = next
-			if degraded != "" {
-				attempt.degraded = degraded
-			}
 		}
 	}
 	// The fence is read before the tick's resources because it is the item's own scope, and
@@ -1151,7 +1150,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		// operator is the mover (holdrules "repeating-call").
 		decision.Action, decision.Reason = ActionHold, ReasonRepeatingCall
 		decision.SupersedesRunID = repeated.RunID
-	case retry == nil && !interrupted && repeated == nil && !attempt.failover && returned == nil && p.mayBeARetry(item.ItemID) && decision.ConflictID == "" && holdEnabled(p.rules(), p.retryHoldReason(item.ItemID)):
+	case retry == nil && !interrupted && repeated == nil && !attempt.failover && !attempt.singleBackendFailure && returned == nil && p.mayBeARetry(item.ItemID) && decision.ConflictID == "" && holdEnabled(p.rules(), p.retryHoldReason(item.ItemID)):
 		decision.Action, decision.Reason = ActionHold, p.retryHoldReason(item.ItemID)
 		decision.SupersedesRunID = p.latest[item.ItemID]
 	case holdEnabled(p.rules(), ReasonNoFence) && fenceAdmitsNothing(fence):
@@ -1233,12 +1232,6 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.Reason = ReasonReady
 		if attempt.failover {
 			decision.Reason = ReasonFailover
-		}
-		if attempt.degraded != "" {
-			// The walk left the backend the item's seat names. That is a model switch,
-			// and the reason says which seat fell back and onto which backend rather
-			// than letting it read as an ordinary failover.
-			decision.Reason = seatDegradedReason(attempt.degraded, attempt.backend)
 		}
 		decision.RunRequest = p.request(item.ItemID, lane, attempt.backend)
 		if interrupted {
@@ -1377,8 +1370,12 @@ func identifyDecision(decision *Decision) {
 		// A hold is not a transition. Its reason and the names explaining that reason
 		// distinguish it from other holds at this position. Hash the JSON array so
 		// punctuation in a name cannot make two different payloads share an id.
-		payload, _ := json.Marshal([]string{decision.Reason, decision.DeferredBy, decision.Seat,
-			decision.QuestionID, decision.RetryID, decision.SupersedesRunID})
+		fields := []string{decision.Reason, decision.DeferredBy, decision.Seat,
+			decision.QuestionID, decision.RetryID, decision.SupersedesRunID}
+		if decision.BackendHoldCause != "" {
+			fields = append(fields, decision.BackendHoldCause, decision.BackendHoldMover)
+		}
+		payload, _ := json.Marshal(fields)
 		decision.DecisionID += "-" + fmt.Sprintf("%x", sha256.Sum256(payload))
 	}
 }
@@ -1894,14 +1891,14 @@ func (p *planner) attempt(row itemRow) attempt {
 		a.backend = p.firstBackend(row)
 		return a
 	}
-	next, degraded, ok := p.policy.nextBackend(priors[len(priors)-1].Backend, row.Seat)
+	next, ok := p.policy.nextBackend(priors[len(priors)-1].Backend, row.Seat)
 	if !ok {
-		a.backend = p.policy.firstBackend(row)
+		a.singleBackendFailure = p.policy.singleBackendSeat(row.Seat)
+		a.backend = p.firstBackend(row)
 		return a
 	}
 	a.backend = next
 	a.failover = true
-	a.degraded = degraded
 	return a
 }
 
@@ -1912,10 +1909,8 @@ type attempt struct {
 	// failover says this dispatch re-stages an item whose last run failed in the
 	// infrastructure class, so the decision's reason says so and the spend is visible.
 	failover bool
-	// degraded names the seat whose backend this walk leaves, or "": the failed backend
-	// was the one the item's seat names, so the re-dispatch reaches another model and the
-	// decision says so (seatDegradedReason).
-	degraded string
+	// singleBackendFailure uses backend availability, not a candidate-retry hold.
+	singleBackendFailure bool
 }
 
 // checkOverrides refuses a policy whose override map names an item the store does not

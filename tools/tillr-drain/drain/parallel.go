@@ -103,7 +103,7 @@ func (l *Loop) claimParallelFrom(tx *store.Tx, d *Decision, byRun map[string]*pe
 		}
 		if ready && (!incoming || followed) {
 			if s.Kind == "agent" {
-				_, _, ok := l.cfg.Policy.availableBackend(l.cfg.Policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: s.Seat}), s.Seat, shut)
+				_, ok := l.cfg.Policy.availableBackend(l.cfg.Policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: s.Seat}), s.Seat, shut)
 				if !ok {
 					continue
 				}
@@ -133,11 +133,8 @@ func (l *Loop) claimParallelFrom(tx *store.Tx, d *Decision, byRun map[string]*pe
 			if stage.Kind == "command" {
 				node.RunRequest = stage.commandRequest(d.ItemID, d.LaneID, id)
 			} else {
-				name, degraded, _ := l.cfg.Policy.availableBackend(l.cfg.Policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: stage.Seat}), stage.Seat, shut)
+				name, _ := l.cfg.Policy.availableBackend(l.cfg.Policy.firstBackend(itemRow{ItemID: d.ItemID, Seat: stage.Seat}), stage.Seat, shut)
 				node.RunRequest = l.cfg.Policy.request(d.ItemID, d.LaneID, id, name)
-				if degraded != "" {
-					node.Reason = seatDegradedReason(degraded, name)
-				}
 			}
 		} else {
 			req := *node.RunRequest

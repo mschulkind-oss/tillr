@@ -247,40 +247,26 @@ func TestSelectionFollowsOverrideThenPreference(t *testing.T) {
 	if got := policy.firstBackend(itemRow{ItemID: "item_043"}); got != "first" {
 		t.Fatalf("the un-overridden item's first backend is %q, want the default", got)
 	}
-	if got, degraded, ok := policy.nextBackend("first", ""); !ok || got != "second" || degraded != "" {
-		t.Fatalf("the failover after first is %q / %q / %v, want second with no seat", got, degraded, ok)
+	if got, ok := policy.nextBackend("first", ""); !ok || got != "second" {
+		t.Fatalf("the failover after first is %q / %v, want second with no seat", got, ok)
 	}
-	if got, _, ok := policy.nextBackend("second", ""); !ok || got != "first" {
+	if got, ok := policy.nextBackend("second", ""); !ok || got != "first" {
 		t.Fatalf("the failover after the last backend is %q, want wrapped first", got)
 	}
-	if got, degraded, ok := policy.nextBackend("unlisted", ""); !ok || got != "first" || degraded != "" {
-		t.Fatalf("the failover after an unlisted backend is %q / %q / %v, want the preference head", got, degraded, ok)
+	if got, ok := policy.nextBackend("unlisted", ""); !ok || got != "first" {
+		t.Fatalf("the failover after an unlisted backend is %q / %v, want the preference head", got, ok)
 	}
 }
 
-// A seat is a statement about the work, so a failover that leaves the seat's backend is a
-// model switch and the walk says so: the answer names the seat that fell back. A walk whose
-// failed backend is not the seat's backend (one an override reached) is an ordinary
-// failover and names no seat.
-func TestAFailoverOffTheSeatsBackendNamesTheSeat(t *testing.T) {
+func TestSingleBackendSeatHasNoFailover(t *testing.T) {
 	policy := twoBackends()
 	policy.Seats = map[string]string{"design": "designer", "build": "first"}
-
-	// The seat's backend is not in the preference at all — the shape the design seat has in
-	// the shipped policy (`pi-designer` is a model of the pi adapter, not a preference hop) —
-	// so the walk starts at the head and leaves the seat.
-	if got, degraded, ok := policy.nextBackend("designer", "design"); !ok || got != "first" || degraded != "design" {
-		t.Fatalf("the failover off the design seat is %q / %q / %v, want first / design / true", got, degraded, ok)
-	}
-	// The seat's backend is in the preference and the walk continues along it: still a model
-	// switch, because the seat names exactly one backend.
-	if got, degraded, ok := policy.nextBackend("first", "build"); !ok || got != "second" || degraded != "build" {
-		t.Fatalf("the failover off the build seat is %q / %q / %v, want second / build / true", got, degraded, ok)
-	}
-	// The failed backend is not the seat's backend: the walk is an ordinary failover.
-	policy.Seats = map[string]string{"design": "second"}
-	if got, degraded, ok := policy.nextBackend("first", "design"); !ok || got != "second" || degraded != "" {
-		t.Fatalf("the failover from a non-seat backend is %q / %q / %v, want second / none / true", got, degraded, ok)
+	for _, tc := range []struct{ failed, seat string }{
+		{"designer", "design"}, {"first", "build"}, {"second", "build"},
+	} {
+		if got, ok := policy.nextBackend(tc.failed, tc.seat); ok || got != "" {
+			t.Fatalf("seat %s: failover after %s = %q, %v; want no route", tc.seat, tc.failed, got, ok)
+		}
 	}
 }
 
@@ -303,7 +289,7 @@ func TestLegacyFailoverBudgetIsIgnored(t *testing.T) {
 	if err := policy.Check(); err != nil {
 		t.Fatal(err)
 	}
-	next, _, ok := policy.nextBackend("second", "")
+	next, ok := policy.nextBackend("second", "")
 	if !ok || next != "first" {
 		t.Fatalf("legacy budget changed walk: %s %v", next, ok)
 	}
@@ -420,43 +406,40 @@ func TestASeatDecodesFromAStringOrAList(t *testing.T) {
 	}
 }
 
-// A failover for an item on a listed seat walks that seat's own list forward and stops at
-// its end, and a step along the list is not a degradation: every backend on it was named for
-// that seat. A one-element seat and an item with no seat walk the preference as they always
-// did, including naming the seat a walk leaves.
+// Failover wraps within the declared seat list, or preference for unseated work.
 func TestAFailoverWalksTheItemsSeatBackends(t *testing.T) {
 	policy := seatListPolicy(t)
 	cases := []struct {
 		name, failed, seat string
-		next, degraded     string
+		next               string
 		ok                 bool
 	}{
-		{"the design list's next backend", "designer-a", "design", "designer-b", "", true},
-		{"the end of the design list wraps", "designer-b", "design", "designer-a", "", true},
-		{"the build list's next backend", "builder-a", "build", "builder-b", "", true},
-		{"the end of the build list wraps", "builder-b", "build", "builder-a", "", true},
-		{"a backend off the list starts at its head", "builder-b", "design", "designer-a", "", true},
-		{"a one-element seat walks the preference and names the seat", "builder-a", "review", "builder-b", "review", true},
-		{"no seat walks the preference", "builder-a", "", "builder-b", "", true},
-		{"no seat wraps at the preference's end", "builder-b", "", "builder-a", "", true},
+		{"the design list's next backend", "designer-a", "design", "designer-b", true},
+		{"the end of the design list wraps", "designer-b", "design", "designer-a", true},
+		{"the build list's next backend", "builder-a", "build", "builder-b", true},
+		{"the end of the build list wraps", "builder-b", "build", "builder-a", true},
+		{"a backend off the list starts at its head", "builder-b", "design", "designer-a", true},
+		{"a one-element seat stops", "builder-a", "review", "", false},
+		{"no seat walks the preference", "builder-a", "", "builder-b", true},
+		{"no seat wraps at the preference's end", "builder-b", "", "builder-a", true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			next, degraded, ok := policy.nextBackend(c.failed, c.seat)
-			if next != c.next || degraded != c.degraded || ok != c.ok {
-				t.Fatalf("after %q on seat %q the walk is %q / %q / %v, want %q / %q / %v",
-					c.failed, c.seat, next, degraded, ok, c.next, c.degraded, c.ok)
+			next, ok := policy.nextBackend(c.failed, c.seat)
+			if next != c.next || ok != c.ok {
+				t.Fatalf("after %q on seat %q the walk is %q / %v, want %q / %v",
+					c.failed, c.seat, next, ok, c.next, c.ok)
 			}
 		})
 	}
 
 	// NextRequest is the walk the loop performs inside a tick, so it must follow the same
 	// list and stop at the same end.
-	request, degraded, ok := policy.NextRequest("item_042", "lane-1", "run-2", "designer-a", "design")
-	if !ok || request.Backend != "designer-b" || degraded != "" {
-		t.Fatalf("the loop's failover off designer-a is %+v / %q / %v, want designer-b, not degraded", request, degraded, ok)
+	request, ok := policy.NextRequest("item_042", "lane-1", "run-2", "designer-a", "design")
+	if !ok || request.Backend != "designer-b" {
+		t.Fatalf("the loop's failover off designer-a is %+v / %v, want designer-b", request, ok)
 	}
-	if req, _, ok := policy.NextRequest("item_042", "lane-1", "run-3", "designer-b", "design"); !ok || req.Backend != "designer-a" {
+	if req, ok := policy.NextRequest("item_042", "lane-1", "run-3", "designer-b", "design"); !ok || req.Backend != "designer-a" {
 		t.Fatalf("the loop's failover did not wrap within the design seat's list")
 	}
 }

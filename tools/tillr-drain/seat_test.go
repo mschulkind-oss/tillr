@@ -235,38 +235,18 @@ func TestTheShippedPolicyMapsEverySeat(t *testing.T) {
 	}
 }
 
-// Criterion 2: an unavailable seat backend is not silently degraded onto the policy's first
-// preference. The design item's one attempt ran on pi-designer and failed to start, the
-// failover walks the preference, and the decision names the seat that fell back and the
-// backend that answered — so the model switch is on the record instead of being read as an
-// ordinary failover.
-func TestPlanRecordsASeatDegradedFailover(t *testing.T) {
+func TestPlanHoldsASingleBackendSeatAfterFailure(t *testing.T) {
+	const failedRun = "run-item_042-20261109T000000Z"
 	storePath := fixture(t,
 		itemRecordSeated("item_042", "in-queue", "design"),
-		runRecord("run-item_042-20261109T000000Z", "item_042", "lane-9", "pi-designer", run.StateFailedToStart, nil, ""),
+		runRecord(failedRun, "item_042", "lane-9", "pi-designer", run.StateFailedToStart, nil, ""),
 	)
 	tickPath := tick(t, "2026-11-10T00:00:00Z", []string{"lane-1"}, 1,
 		seatPolicy(t, map[string]string{"design": "pi-designer"}, nil))
 
 	got := decisionFor(t, plan(t, storePath, tickPath), "item_042")
-	if got.Action != drain.ActionDispatch {
-		t.Fatalf("the item was %q / %q, want a dispatch", got.Action, got.Reason)
-	}
-	if got.RunRequest == nil || got.RunRequest.Backend != "fixture" {
-		t.Fatalf("the failover names %+v, want the policy's preference head fixture", got.RunRequest)
-	}
-	if !strings.Contains(got.Reason, drain.ReasonSeatDegraded) {
-		t.Fatalf("the decision's reason %q does not name the degradation", got.Reason)
-	}
-	// The reason names both halves the criterion asks for: the seat that fell back and the
-	// backend that actually ran it.
-	for _, want := range []string{`"design"`, `"fixture"`} {
-		if !strings.Contains(got.Reason, want) {
-			t.Fatalf("the decision's reason %q does not name %s", got.Reason, want)
-		}
-	}
-	if got.Seat != "design" {
-		t.Fatalf("the decision records seat %q, want design", got.Seat)
+	if got.Action != drain.ActionHold || got.Reason != drain.ReasonBackendClosed || got.RunRequest != nil || got.DeferredBy != "pi-designer" {
+		t.Fatalf("want hold on pi-designer with no request, got %+v", got)
 	}
 }
 
@@ -288,12 +268,7 @@ func seatedFencedItemRecord(itemID, state, seat string, paths ...string) string 
 	})
 }
 
-// Criterion 3: the 02h incident, reproduced through the loop. A design item's seat backend
-// refuses before it runs anything — exit 2 in 0s — and the one permitted failover must not
-// reach the floor model unremarked. The report names the seat that fell back and the backend
-// that answered, and the store shows both runs; without the naming this is exactly the
-// unremarked floor run the incident left behind.
-func TestASeatDegradedFailoverIsNamedInTheLoopReport(t *testing.T) {
+func TestLoopHoldsASingleBackendSeatWithoutFailover(t *testing.T) {
 	designer := stub(t, "designer-adapter", counting+`exit 2
 `)
 	floor := stub(t, "floor-adapter", counting+committingAdapterBody+`printf 'RESULT: done\n'`)
@@ -317,21 +292,20 @@ func TestASeatDegradedFailoverIsNamedInTheLoopReport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the loop failed: %v", err)
 	}
-	if result.Landed != 1 {
-		t.Fatalf("the loop landed %d candidate(s), want 1: %s", result.Landed, result.Detail)
+	if result.Landed != 0 || result.Dispatched != 1 {
+		t.Fatalf("want one dispatch and no landing: %+v", result)
 	}
-
 	runs := runsForItem(t, f.store, "item_042")
-	if len(runs) != 2 {
-		t.Fatalf("the store holds %d run(s) for item_042, want 2: %+v", len(runs), runs)
+	if len(runs) != 1 || runs[0].Backend != "pi-designer" {
+		t.Fatalf("want one run on pi-designer, got %+v", runs)
 	}
-	if runs[0].Backend != "pi-designer" || runs[1].Backend != "pi" {
-		t.Fatalf("the runs are %q then %q, want pi-designer then pi", runs[0].Backend, runs[1].Backend)
-	}
-	for _, want := range []string{drain.ReasonSeatDegraded, `"design"`, `"pi"`} {
+	for _, want := range []string{drain.ReasonBackendClosed, "pi-designer", "infrastructure", "operator", runs[0].RunID} {
 		if !strings.Contains(report.String(), want) {
 			t.Fatalf("the loop report does not name %q:\n%s", want, report.String())
 		}
+	}
+	if strings.Contains(report.String(), "seat-degraded") {
+		t.Fatalf("unexpected degradation:\n%s", report.String())
 	}
 }
 

@@ -545,7 +545,7 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 					return Decision{}, err
 				}
 				if rec == nil && !commandStage(node) && node.NodeInfraFailures > 0 {
-					name, _, ok := policy.availableBackend(node.RunRequest.Backend, node.Seat, shut)
+					name, ok := policy.availableBackend(node.RunRequest.Backend, node.Seat, shut)
 					if ok {
 						nodes[i].RunRequest = rerouteNodeRequest(policy, node, name)
 					}
@@ -597,12 +597,15 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 		if d.NodeInfraFailures > 0 {
 			name = d.RunRequest.Backend
 		}
-		name, degraded, ok := policy.availableBackend(name, d.Seat, shut)
+		backend := name
+		name, ok := policy.availableBackend(name, d.Seat, shut)
 		if d.WorkflowRestart && d.NodeInfraFailures == 0 {
-			name, degraded = d.RunRequest.Backend, ""
+			name = d.RunRequest.Backend
+			backend = name
 			ok = !shut[name]
 		}
 		if !ok {
+			d.DeferredBy = backend
 			d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
 		} else {
 			request := policy.request(d.ItemID, d.LaneID, d.RunRequest.RunID, name)
@@ -627,9 +630,6 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 			request.WorkingDir = d.RunRequest.WorkingDir
 			stampDecisionRequest(d, request)
 			d.RunRequest = request
-			if degraded != "" {
-				d.Reason = seatDegradedReason(degraded, name)
-			}
 		}
 		d.Inputs = inputs
 		identifyDecision(&d)
@@ -665,6 +665,9 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 				_, open := firstOpenSeatBackend(*policy, "review", shut)
 				if !open {
 					d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, ReasonBackendWindow
+					if len(seat) == 1 {
+						d.Seat, d.DeferredBy = "review", seat[0]
+					}
 					identifyDecision(&d)
 					return d, nil
 				}
@@ -753,7 +756,7 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 				if backend != "" && (rec.State == run.StatePaused || refused) && (policy == nil || shut[backend]) {
 					open := false
 					if policy != nil {
-						_, _, open = policy.availableBackend(backend, d.Seat, shut)
+						_, open = policy.availableBackend(backend, d.Seat, shut)
 					}
 					if !open {
 						d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
@@ -773,7 +776,7 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 					return d, nil
 				}
 				if failed && policy != nil {
-					if _, _, open := policy.availableBackend(d.RunRequest.Backend, d.Seat, shut); !open {
+					if _, open := policy.availableBackend(d.RunRequest.Backend, d.Seat, shut); !open {
 						d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
 						identifyDecision(&d)
 						return d, nil
@@ -2069,9 +2072,7 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 	if d.Reason == ReasonFailover {
 		l.reportf("loop: failover %s -> %s on %s\n", d.ItemID, d.RunRequest.Backend, d.LaneID)
 	}
-	if len(d.Reason) > len("seat-degraded") && d.Reason[:len("seat-degraded")] == "seat-degraded" {
-		l.reportf("loop: %s on %s\n", d.Reason, d.LaneID)
-	}
+
 	l.reportf("loop: tick %d dispatch %s -> %s on %s\n", result.Ticks, d.ItemID, d.RunRequest.Backend, d.LaneID)
 	go func() {
 		defer cancel()

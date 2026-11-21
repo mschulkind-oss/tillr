@@ -2,6 +2,8 @@ package drain
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os/exec"
 	"strings"
@@ -13,19 +15,24 @@ import (
 
 const backendProbeKind = "drain.backend-probe"
 
-// readInfrastructureClosed projects availability from recorded facts. A run's
-// terminal event and an explicit successful probe share the store's event order;
-// a clock, policy edit, restart, or quota reading cannot reopen infrastructure.
 func readInfrastructureClosed(r *store.Reader) (map[string]bool, error) {
-	return readInfrastructureClosedFrom(r, nil)
+	outcomes, err := readInfrastructureClosedFrom(r, nil)
+	closed := make(map[string]bool, len(outcomes))
+	for name := range outcomes {
+		closed[name] = true
+	}
+	return closed, err
 }
 
-func readInfrastructureClosedFrom(r *store.Reader, byRun map[string]*pendingWork) (map[string]bool, error) {
+// readInfrastructureClosedFrom projects availability from recorded facts. A run's
+// terminal event and an explicit successful probe share the store's event order;
+// a clock, policy edit, restart, or quota reading cannot reopen infrastructure.
+func readInfrastructureClosedFrom(r *store.Reader, byRun map[string]*pendingWork) (map[string]backendOutcome, error) {
 	outcomes, err := readBackendOutcomesFrom(r, byRun)
 	if err != nil {
 		return nil, err
 	}
-	closed := map[string]bool{}
+	closed := map[string]backendOutcome{}
 	sequences := map[string]int64{}
 	for _, o := range outcomes {
 		if o.class == AttemptInterrupted {
@@ -38,7 +45,9 @@ func readInfrastructureClosedFrom(r *store.Reader, byRun map[string]*pendingWork
 		// The latest ending decides. A saved ending keeps its saved fact; an
 		// unsaved one was classified by the read above, which saves nothing.
 		sequences[name] = o.seq
-		closed[name] = o.closes
+		if o.closes {
+			closed[name] = o
+		}
 	}
 	probes, err := r.Query(`SELECT object_id,MAX(seq) FROM events WHERE kind=? AND json_extract(payload,'$.success')=1 GROUP BY object_id`, backendProbeKind)
 	if err != nil {
@@ -94,11 +103,11 @@ func ProbeBackend(ctx context.Context, path, root, backend string, argv []string
 
 // A mixed quota/infrastructure hold names the closed backends on this route and
 // their mover. The walk uses the same seat boundary as dispatch.
-func describeBackendHold(r *store.Reader, d *Decision, policy *Policy) error {
+func describeBackendHold(r *store.Reader, d *Decision, policy *Policy, at time.Time, shut map[string]bool) error {
 	if d.Action != ActionHold || d.Reason != ReasonBackendWindow || policy == nil {
 		return nil
 	}
-	closed, err := readInfrastructureClosed(r)
+	closed, err := readInfrastructureClosedFrom(r, nil)
 	if err != nil {
 		return err
 	}
@@ -110,7 +119,7 @@ func describeBackendHold(r *store.Reader, d *Decision, policy *Policy) error {
 		start = d.DeferredBy
 	} else if len(d.Parallel) > 0 {
 		for _, node := range parallelNodes(*d) {
-			if node.RunRequest == nil || !closed[node.RunRequest.Backend] {
+			if node.RunRequest == nil || !shut[node.RunRequest.Backend] && closed[node.RunRequest.Backend].seq == 0 {
 				continue
 			}
 			rec, err := terminalRecord(r, node.RunRequest.RunID)
@@ -127,20 +136,88 @@ func describeBackendHold(r *store.Reader, d *Decision, policy *Policy) error {
 	seen := map[string]bool{}
 	for name := start; name != "" && !seen[name]; {
 		seen[name] = true
-		if closed[name] {
+		if _, isClosed := closed[name]; isClosed {
 			names = append(names, name)
 		}
-		next, _, ok := policy.nextBackend(name, d.Seat)
+		next, ok := policy.nextBackend(name, d.Seat)
 		if !ok {
 			break
 		}
 		name = next
+	}
+	if policy.singleBackendSeat(d.Seat) {
+		d.DeferredBy = start
+		if outcome, ok := closed[start]; ok {
+			d.Reason = ReasonBackendClosed
+			d.BackendHoldCause = fmt.Sprintf("infrastructure failure: run %s (%s)", outcome.rec.RunID, outcome.rec.State)
+			if outcome.rec.ExitCode != nil {
+				d.BackendHoldCause += fmt.Sprintf(", exit %d", *outcome.rec.ExitCode)
+			}
+			d.BackendHoldMover = "operator: repair the backend and record a successful probe-backend"
+		} else if err := describeQuotaHold(r, d, policy, at); err != nil {
+			return err
+		}
+		identifyDecision(d)
+		return nil
 	}
 	d.DeferredBy = ""
 	if len(names) > 0 {
 		d.Reason = ReasonBackendClosed
 		d.DeferredBy = strings.Join(names, ", ")
 		identifyDecision(d)
+	}
+	return nil
+}
+
+// Describe the same quota facts that admission reads; a missing or stale
+// observation is itself a refusal to admit work, not a provider outage.
+func describeQuotaHold(r *store.Reader, d *Decision, policy *Policy, at time.Time) error {
+	name := d.DeferredBy
+	windows, err := readBackendWindows(r, at)
+	if err != nil {
+		return err
+	}
+	if reset, ok := windows[name]; ok {
+		var kind, runID string
+		if err := r.QueryRow(`SELECT kind, run_id FROM backend_windows WHERE backend=?`, name).Scan(&kind, &runID); err != nil {
+			return err
+		}
+		d.BackendHoldCause = fmt.Sprintf("%s quota refusal recorded by run %s", kind, runID)
+		d.BackendHoldMover = "provider quota resets at " + reset.Format(time.RFC3339)
+		return nil
+	}
+	b := policy.Backends[name]
+	statuses, err := readQuotaStatuses(r)
+	if err != nil {
+		return err
+	}
+	d.BackendHoldCause = "no quota reading recorded"
+	d.BackendHoldMover = "quota probe: record a fresh, successful reading that admits the backend"
+	for _, q := range statuses {
+		if q.Backend != name {
+			continue
+		}
+		command, _ := json.Marshal(b.Quota)
+		switch {
+		case !quotaFresh(q, string(command), at):
+			d.BackendHoldCause = "no current quota reading (last observed " + q.ObservedAt.Format(time.RFC3339) + ")"
+		case q.Error != "":
+			d.BackendHoldCause = q.Error
+			d.BackendHoldMover = "operator: repair the quota probe so it records a successful reading"
+		default:
+			var causes []string
+			for _, w := range q.Windows {
+				if w.Fraction >= 1-b.Reserve {
+					cause := fmt.Sprintf("%s quota usage %g reached the admission limit %g", w.Kind, w.Fraction, 1-b.Reserve)
+					if w.ResetAt != nil {
+						cause += " (reset " + w.ResetAt.Format(time.RFC3339) + ")"
+					}
+					causes = append(causes, cause)
+				}
+			}
+			d.BackendHoldCause = strings.Join(causes, "; ")
+		}
+		break
 	}
 	return nil
 }

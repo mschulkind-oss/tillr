@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,21 +70,41 @@ func TestBackendInfrastructureClosureAndRecordedReopening(t *testing.T) {
 
 func TestBackendWalkWrapsAndKeepsSeat(t *testing.T) {
 	p := Policy{Preference: []string{"a", "b", "c"}, SeatLists: map[string][]string{"design": {"a", "b"}}}
-	name, left, ok := p.availableBackend("c", "", map[string]bool{"c": true})
-	if !ok || name != "a" || left != "" {
-		t.Fatalf("preference did not wrap: %s %s %v", name, left, ok)
+	name, ok := p.availableBackend("c", "", map[string]bool{"c": true})
+	if !ok || name != "a" {
+		t.Fatalf("preference did not wrap: %s %v", name, ok)
 	}
-	name, left, ok = p.availableBackend("b", "design", map[string]bool{"b": true})
-	if !ok || name != "a" || left != "" {
-		t.Fatalf("seat did not wrap: %s %s %v", name, left, ok)
+	name, ok = p.availableBackend("b", "design", map[string]bool{"b": true})
+	if !ok || name != "a" {
+		t.Fatalf("seat did not wrap: %s %v", name, ok)
 	}
-	if _, _, ok := p.availableBackend("b", "design", map[string]bool{"a": true, "b": true}); ok {
+	if _, ok := p.availableBackend("b", "design", map[string]bool{"a": true, "b": true}); ok {
 		t.Fatal("escaped closed seat")
+	}
+}
+
+func TestSingleBackendSeatNamesTheRecordedQuotaWindow(t *testing.T) {
+	f, l, _ := workflowLoopFixture(t, "")
+	b := l.cfg.Policy.Backends["fixture"]
+	l.cfg.Policy.Backends["alternate"] = b
+	l.cfg.Policy.Preference = []string{"fixture", "alternate"}
+	reset := l.cfg.Now().Add(time.Hour).UTC()
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`INSERT INTO backend_windows VALUES('fixture','weekly',1,'rejected',?,'refusing-run')`, reset.UnixMilli())
+		return err
+	})
+	d := planFor(t, l, "item-a")
+	if d.Action != ActionHold || d.Reason != ReasonBackendWindow || d.RunRequest != nil || d.DeferredBy != "fixture" ||
+		d.BackendHoldCause != "weekly quota refusal recorded by run refusing-run" ||
+		d.BackendHoldMover != "provider quota resets at "+reset.Format(time.RFC3339) {
+		t.Fatalf("want the seat's quota hold with cause and mover, got %+v", d)
 	}
 }
 
 func TestWorkflowBackendFailureWaitsAndReopensSameNode(t *testing.T) {
 	f, l, _ := workflowLoopFixture(t, "")
+	l.cfg.Policy.Backends["alternate"] = l.cfg.Policy.Backends["fixture"]
+	l.cfg.Policy.Preference = []string{"fixture", "alternate"}
 	p := mustPlan(t, l)[0]
 	if ok, _, err := l.applyPlan(context.Background(), p, runGit(t, f.root, "rev-parse", TrunkRef), l.cfg.Now()); err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
@@ -94,14 +115,16 @@ func TestWorkflowBackendFailureWaitsAndReopensSameNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	wait := mustPlan(t, l)[0].decision
-	if wait.Action != ActionHold || wait.Reason != ReasonBackendClosed || wait.NodeIndex != d.NodeIndex {
+	if wait.Action != ActionHold || wait.Reason != ReasonBackendClosed || wait.NodeIndex != d.NodeIndex ||
+		wait.DeferredBy != "fixture" || wait.RunRequest.Backend != "fixture" ||
+		!strings.Contains(wait.BackendHoldCause, d.RunRequest.RunID) || !strings.Contains(wait.BackendHoldMover, "operator") {
 		t.Fatalf("node did not wait: %+v", wait)
 	}
 	if err := ProbeBackend(context.Background(), f.storePath, f.root, "fixture", []string{"/bin/true"}); err != nil {
 		t.Fatal(err)
 	}
 	next := mustPlan(t, l)[0].decision
-	if next.Action != ActionDispatch || next.NodeIndex != d.NodeIndex || next.Attempt != d.Attempt {
+	if next.Action != ActionDispatch || next.NodeIndex != d.NodeIndex || next.Attempt != d.Attempt || next.RunRequest.Backend != "fixture" {
 		t.Fatalf("node not resumed: %+v", next)
 	}
 }

@@ -88,18 +88,18 @@ func (l *Loop) recordBackendWindow(ctx context.Context, rec run.Record) error {
 	})
 }
 
-func (l *Loop) nextAvailableRequest(ctx context.Context, itemID, laneID, runID, failed, seat string) (*run.Request, string, bool, error) {
-	if err := l.refreshQuotas(ctx); err != nil {
-		return nil, "", false, err
-	}
+func (l *Loop) nextAvailableRequest(ctx context.Context, itemID, laneID, runID, failed, seat string) (*run.Request, bool, error) {
 	policy := l.currentPolicy()
-	next, degraded, ok := policy.nextBackend(failed, seat)
+	next, ok := policy.nextBackend(failed, seat)
 	if !ok {
-		return nil, "", false, nil
+		return nil, false, nil
+	}
+	if err := l.refreshQuotas(ctx); err != nil {
+		return nil, false, err
 	}
 	s, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
-		return nil, "", false, err
+		return nil, false, err
 	}
 	defer s.Close()
 	var shut map[string]bool
@@ -109,20 +109,17 @@ func (l *Loop) nextAvailableRequest(ctx context.Context, itemID, laneID, runID, 
 		return err
 	})
 	if err != nil {
-		return nil, "", false, err
+		return nil, false, err
 	}
-	next, left, ok := policy.availableBackend(next, seat, shut)
+	next, ok = policy.availableBackend(next, seat, shut)
 	if !ok {
-		return nil, "", false, nil
-	}
-	if left != "" {
-		degraded = left
+		return nil, false, nil
 	}
 	req := policy.request(itemID, laneID, runID, next)
 	if req != nil {
 		req.Seat = seat
 	}
-	return req, degraded, true, nil
+	return req, true, nil
 }
 
 func readShutBackends(r *store.Reader, at time.Time) (map[string]bool, error) {
@@ -156,25 +153,19 @@ func readBackendWindows(r *store.Reader, at time.Time) (map[string]time.Time, er
 	return out, rows.Err()
 }
 
-// Skipping a shut backend walks the same seat order as failover, without starting
-// a run. Cycles cannot make a shut backend
-// eligible when an override falls back to the preference head.
-func (p Policy) availableBackend(name, seat string, shut map[string]bool) (string, string, bool) {
+// Skipping a shut backend walks the same route as failover, without starting a run.
+func (p Policy) availableBackend(name, seat string, shut map[string]bool) (string, bool) {
 	seen := map[string]bool{}
-	degraded := ""
 	for shut[name] {
 		if seen[name] {
-			return "", degraded, false
+			return "", false
 		}
 		seen[name] = true
-		next, left, ok := p.nextBackend(name, seat)
+		next, ok := p.nextBackend(name, seat)
 		if !ok {
-			return "", degraded, false
-		}
-		if left != "" {
-			degraded = left
+			return "", false
 		}
 		name = next
 	}
-	return name, degraded, name != ""
+	return name, name != ""
 }

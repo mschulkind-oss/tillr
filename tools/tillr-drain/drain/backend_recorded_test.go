@@ -114,6 +114,7 @@ func TestParallelBackendHoldNamesWaitingNodeNotFirstSibling(t *testing.T) {
 	second.RunRequest.RunID = "second-ready"
 	second.NodeIndex = 1
 	second.Seat = "review"
+	second.NodeInfraFailures = 1
 	first.Parallel = []Decision{second}
 	l.cfg.Policy.Backends["broken"] = l.cfg.Policy.Backends["fixture"]
 	l.cfg.Policy.Seats["review"] = "broken"
@@ -128,10 +129,11 @@ func TestParallelBackendHoldNamesWaitingNodeNotFirstSibling(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if err := describeBackendHold(tx.Reader(), &hold, l.cfg.Policy); err != nil {
+			if err := describeBackendHold(tx.Reader(), &hold, l.cfg.Policy, l.cfg.Now(), nil); err != nil {
 				return err
 			}
-			if hold.Reason != ReasonBackendClosed || hold.DeferredBy != "broken" {
+			if hold.Action != ActionHold || hold.Reason != ReasonBackendClosed || hold.DeferredBy != "broken" ||
+				hold.BackendHoldCause != "infrastructure failure: run broken-ending (exited), exit 2" || hold.BackendHoldMover == "" {
 				t.Errorf("restart=%v hold names wrong backend: %+v", restart, hold)
 			}
 			return nil

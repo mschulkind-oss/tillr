@@ -30,14 +30,14 @@ func (l *Loop) retryWorkflowNode(ctx context.Context, d Decision, base string, r
 	result.InfraFailures++
 	l.infraStreak++
 	l.mu.Unlock()
-	request, _, ok, err := l.nextAvailableRequest(ctx, d.ItemID, d.LaneID, markRunID(d.RunRequest.RunID, "failover"), rec.Backend, d.Seat)
+	request, ok, err := l.nextAvailableRequest(ctx, d.ItemID, d.LaneID, markRunID(d.RunRequest.RunID, "failover"), rec.Backend, d.Seat)
 	if err != nil {
 		return err
 	}
 	if !ok {
 		// Persist a ready continuation even when the whole route is closed.
 		// Planning holds it until a recorded reopening, retaining this node/base.
-		request, _, _ = l.currentPolicy().NextRequest(d.ItemID, d.LaneID, markRunID(d.RunRequest.RunID, "failover"), rec.Backend, d.Seat)
+		request, _ = l.currentPolicy().NextRequest(d.ItemID, d.LaneID, markRunID(d.RunRequest.RunID, "failover"), rec.Backend, d.Seat)
 		if request == nil {
 			return Usagef("workflow seat %s has no backend route", d.Seat)
 		}
