@@ -231,11 +231,10 @@ choice) are refused as `request-differs`, naming the existing item. The four fix
 
 1. The change does what the words ask, within the fence, and nothing else.
 2. The change is verified the way this repository's rules require: a test for new or
-   changed behavior, `uvx vantage-check` for each changed Markdown document, and every
-   command and its result in the report.
+   changed behavior and `uvx vantage-check` for each changed Markdown document.
 3. No `<!-- tillr: item … -->` comment is added, edited or relied on.
-4. Nothing only the owner can decide is guessed. Such a decision is reported as a
-   question for the owner.
+4. Nothing only the owner can decide is guessed. Leave the decision to the owner,
+   with a question and its options.
 
 The refusals are `words-empty`, `words-not-text`, `words-too-large`, `title-required`,
 `title-braces`, `fence-required`, `fence-wildcard`, `workflow-reference`,

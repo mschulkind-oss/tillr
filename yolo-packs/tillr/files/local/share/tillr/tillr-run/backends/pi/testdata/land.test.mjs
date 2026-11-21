@@ -25,7 +25,7 @@ function landFixture(t) {
   const base = git('rev-parse', 'HEAD');
   put('fence.txt', 'in\nnew\n');
   const forbidden = () => { throw new Error('unexpected wake query'); };
-  const land = (id = 'call', wakes = () => [], answered, transcript, summary = 'summary') => executeLand(id, summary, cwd, dir, base, join(dir, 'fence.txt'), wakes, answered, transcript);
+  const land = (id = 'call', wakes = () => [], answered, transcript) => executeLand(id, cwd, dir, base, join(dir, 'fence.txt'), wakes, answered, transcript);
   const offer = join(dir, 'landing-offer.json');
   const refuses = (attempt, reason) => {
     assert.throws(attempt, reason);
@@ -52,21 +52,16 @@ test('land rejects invalid offers', (t) => {
   refuses(() => land('call', () => { throw new Error('journal unknown'); }), /journal unknown/);
 });
 
-test('land retries a report-only refusal, but not a duplicate report or a content refusal', (t) => {
-  const { land, offer, state, change, refuses } = landFixture(t);
+test('land ignores old report-only refusals but honors content refusals', (t) => {
+  const { land, offer, state, change, refuses, base } = landFixture(t);
   const commit = change();
-  assert.equal(land().park, true);
-  const first = JSON.parse(readFileSync(offer));
-  rmSync(offer);
-  const report = { commit, summary: first.summary, answer: 'Criterion c2 (report): missing results', report_only: true };
-  const content = { commit, summary: 'earlier report', answer: 'Criterion c1 (content): missing test' };
-  const corrected = 'summary\nCheck: passed';
+  const report = { commit, summary: 'old summary', answer: 'Criterion c2 (report): missing results', report_only: true };
+  const content = { commit, answer: 'Criterion c1 (content): missing test' };
   state({ refused: [report, content] });
-  refuses(() => land('next', undefined, undefined, undefined, corrected), /new commit is required[\s\S]*c1 \(content\)/);
+  refuses(() => land('next'), /new commit is required[\s\S]*c1 \(content\)/);
   state({ refused: [report] });
-  refuses(() => land('next'), /same report[\s\S]*c2 \(report\)/);
-  assert.equal(land('next', undefined, undefined, undefined, corrected).park, true);
-  assert.deepEqual(JSON.parse(readFileSync(offer)), { ...first, call_id: 'next', summary: corrected });
+  assert.equal(land('next').park, true);
+  assert.deepEqual(JSON.parse(readFileSync(offer)), { call_id: 'next', commit, base, transcript: '' });
 });
 
 test('killed before the offer exists: replay writes the offer and parks', (t) => {
@@ -74,7 +69,7 @@ test('killed before the offer exists: replay writes the offer and parks', (t) =>
   const head = change();
   put('repo/outside', 'not in fence');
   assert.equal(land().park, true);
-  assert.deepEqual(JSON.parse(readFileSync(offer)), { call_id: 'call', commit: head, base, summary: 'summary', transcript: '' });
+  assert.deepEqual(JSON.parse(readFileSync(offer)), { call_id: 'call', commit: head, base, transcript: '' });
 });
 
 test('session opened with no answer yet: land parks again', (t) => {
@@ -115,11 +110,11 @@ test('registered land and obstacle settle through pi as promises, parking and re
   const tools = {};
   landTool({ on() {}, registerTool: value => { tools.land = value; } });
   obstacleTool({ on() {}, registerTool: value => { tools.obstacle = value; } });
-  let settled = await settle(tools.land.execute('call', { summary: 'summary' }, undefined, undefined, ctx));
+  let settled = await settle(tools.land.execute('call', {}, undefined, undefined, ctx));
   assert.equal(settled.kind, 'failed');
   assert.match(settled.error.message, /no commit/);
   change();
-  settled = await settle(tools.land.execute('call', { summary: 'summary' }, undefined, undefined, ctx));
+  settled = await settle(tools.land.execute('call', {}, undefined, undefined, ctx));
   assert.equal(settled.kind, 'result');
   assert.equal(settled.result.park, true);
   rmSync(offer);
@@ -170,7 +165,7 @@ test('registered land passes the session file and never writes landing-transcrip
   const handlers = {}; let tool;
   landTool({ on: (name, fn) => { handlers[name] = fn; }, registerTool: value => { tool = value; } });
   const ctx = { cwd, sessionManager: { getSessionFile: () => '/actual/session.jsonl', getBranch: () => [] } };
-  await tool.execute('call', { summary: 'summary' }, undefined, undefined, ctx);
+  await tool.execute('call', {},  undefined, undefined, ctx);
   assert.equal(JSON.parse(readFileSync(join(dir, 'landing-offer.json'))).transcript, '/actual/session.jsonl');
   writeFileSync(join(dir, 'landing-answer.json'), '{}');
   if (handlers.session_start) handlers.session_start({}, ctx);

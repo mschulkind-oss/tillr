@@ -70,7 +70,7 @@ func TestKeptCandidateStagesItsItemRangeOnAnotherLane(t *testing.T) {
 			if got := runGit(t, target, "rev-list", "--count", goalBase+"..HEAD"); got != "2" {
 				t.Errorf("offerable range has %s commits, want 2", got)
 			}
-			offer := landingOffer{CallID: "kept-offer", Commit: head, Base: goalBase, Summary: "kept work"}
+			offer := landingOffer{CallID: "kept-offer", Commit: head, Base: goalBase}
 			if _, err := l.validateLandingOffer(ctx, staged[0], run.Record{RunID: d.RunRequest.RunID}, tip, offer); err != nil {
 				t.Errorf("kept candidate offer refused: %v", err)
 			}

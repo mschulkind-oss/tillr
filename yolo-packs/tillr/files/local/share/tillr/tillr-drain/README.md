@@ -648,7 +648,13 @@ call ID does not create a second offer or authorize a second judgment.
 
 The harness publishes `landing-offer.json` in the offering run's durable directory. The
 drain reads it only after the run and its children are gone and treats a valid offer as a
-completed submission of that commit. For an opening that delivers an answer, the drain
+completed submission of that commit. `land` takes no arguments; a footer worker can end
+with just `RESULT: done`. Neither supplies a summary or test inventory. The verifier
+reads the candidate and the item's words and criteria, and runs its own checks. A verdict
+that cites a worker report is returned to the verifier for correction, not used to refuse
+the commit. The named obstacle ending remains available.
+
+For an opening that delivers an answer, the drain
 publishes `landing-answer.json` in the **new** run's durable directory before the harness
 starts. Both files are written whole and renamed into place. Neither belongs in the loop
 record directory.

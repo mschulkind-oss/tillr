@@ -9,7 +9,7 @@
 //   - the goal is met: HEAD moved off the base, the worktree is clean, and the last
 //     message carries a RESULT footer;
 //   - a planned piece needs no change: HEAD is still its staged base, the worktree
-//     is clean, and the worker ends its verification report with `RESULT: done`;
+//     is clean, and the worker ends with `RESULT: done`;
 //   - the worker named a complete obstacle: `RESULT: blocked` (or the legacy
 //     `RESULT: trunk-broken`) with an `OBSTACLE: <kind>` line and every field that kind
 //     requires (the drain's obstacle.go holds the same rule; testdata/obstacle-cases.json
@@ -305,8 +305,8 @@ export default function keepGoing(pi: any) {
 			return { continue: true, entries: [...(event?.entries ?? []), {
 				type: "custom_message", customType: "tillr-goal",
 				content: obstacle ? `Your obstacle is incomplete: ${obstacle}. ${OBSTACLE_CONTRACT}` :
-					"You ended without calling `land` or `obstacle`. Call `land` with a summary when your commit is ready, or call `obstacle` when an obstacle holds." +
-					(allowUnchangedPiece ? " If the piece already holds at its unchanged, clean base, report the verification and end with RESULT: done instead." : ""), display: true,
+					"You ended without calling `land` or `obstacle`. Call `land` when your commit is ready, or call `obstacle` when an obstacle holds." +
+					(allowUnchangedPiece ? " If the piece already holds at its unchanged, clean base, end with RESULT: done instead." : ""), display: true,
 			}] };
 		}
 		const decision = decide({

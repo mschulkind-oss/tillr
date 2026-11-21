@@ -253,10 +253,9 @@ def run(dialect, argv=None):
         else:
             if (isinstance(offer, dict) and offer.get("tool") in (None, "land")
                     and all(isinstance(offer.get(key), str) and offer[key].strip()
-                            for key in ("call_id", "base", "commit", "summary"))):
-                # The call ends the session before the worker can write a footer.
-                # Preserve its summary verbatim, including its verification inventory.
-                text = offer["summary"] + "\n\nRESULT: done\n"
+                            for key in ("call_id", "base", "commit"))):
+                # A commit offer replaces the footer; any old summary is not evidence.
+                text = "RESULT: done\n"
     report, result = render(
         backend=args.backend,
         model=args.model or found.get("model"),
