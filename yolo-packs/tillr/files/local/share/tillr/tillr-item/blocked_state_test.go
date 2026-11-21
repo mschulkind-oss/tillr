@@ -213,6 +213,33 @@ INSERT OR IGNORE INTO lanes (lane_id, state) VALUES ('lane-1', 'idle');
 	return raw
 }
 
+func TestBlockedStateReleasesAfterNamedBlockerLands(t *testing.T) {
+	db := filepath.Join(scratch(t, "blocked-on-landing"), "board.sqlite3")
+	for _, id := range []string{"item_042", "blocker"} {
+		if code, out := apply(t, db, envelope(t, "item.record", "rec-"+id, base(id, id))); code != 0 {
+			t.Fatalf("apply %s: %s", id, out)
+		}
+	}
+	if code, out := blockState(t, db, "item:blocker", "needs blocker to land"); code != 0 {
+		t.Fatalf("block: %d: %s", code, out)
+	}
+	raw := seedBlockedRunTables(t, db)
+	if _, err := raw.Exec(`INSERT INTO runs (run_id, item_id, lane_id, backend, state, exit_code, started_at, finished_at)
+		VALUES ('unanswered', 'item_042', 'lane-1', 'pi', 'exited', 0, 1000, 2000)`); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"state", "--store", db, "--item", "item_042", "--state", "in-queue", "--now", "2026-11-21T01:00:00Z"}
+	if code, out := run(t, args...); code != 1 || decode(t, out).Payload.Rule != "blocked-use-retry" {
+		t.Fatalf("state with an unlanded blocker: %d: %s", code, out)
+	}
+	if _, err := raw.Exec(`UPDATE items SET state='landed' WHERE item_id='blocker'`); err != nil {
+		t.Fatal(err)
+	}
+	if code, out := run(t, args...); code != 0 || stateRow(t, db, "item_042") != "in-queue" {
+		t.Fatalf("state with a landed blocker: %d: %s", code, out)
+	}
+}
+
 func TestBlockedStateRefusesDirectQueueMoveWhenRunIsUnanswered(t *testing.T) {
 	t.Run("unanswered worker run prints exact retry command", func(t *testing.T) {
 		db := filepath.Join(scratch(t, "blocked-unanswered-run"), "board.sqlite3")

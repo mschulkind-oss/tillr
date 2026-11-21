@@ -85,8 +85,18 @@ func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string
 	if err := checkStateReceipt(tx.Reader(), d, itemID, payload.State, state, receipt); err != nil {
 		return record.Envelope{}, err
 	}
-	if err := checkBlockedTransition(tx.Reader(), d, itemID, payload.State, state, receipt.conflictRelease); err != nil {
-		return record.Envelope{}, err
+	var landedBlocker string
+	if d.Completes == "landing" && payload.State == d.Blocked && !receipt.conflictRelease &&
+		(state == d.Ready || (d.Name == definition.GitLandingName && state == "not-started")) {
+		landedBlocker, err = LandedBlocker(tx.Reader(), payload.WaitingOn)
+		if err != nil {
+			return record.Envelope{}, err
+		}
+	}
+	if landedBlocker == "" {
+		if err := checkBlockedTransition(tx.Reader(), d, itemID, payload.State, state, receipt.conflictRelease); err != nil {
+			return record.Envelope{}, err
+		}
 	}
 	if receipt.RequireVerdicts {
 		// A verdict a withdrawal named (WithdrawVerdicts) no longer stands.
@@ -177,6 +187,11 @@ func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string
 	}
 	if _, err := tx.Exec(`UPDATE items SET event_seq = ? WHERE item_id = ?`, seq, itemID); err != nil {
 		return record.Envelope{}, Internalf("recording the event sequence: %v", err)
+	}
+	if landedBlocker != "" {
+		if err := recordWaitRelease(tx, itemID, landedBlocker, at); err != nil {
+			return record.Envelope{}, err
+		}
 	}
 	payload.EventSeq = seq
 	return envelopeOf(RecordKind, "item-"+itemID, at, payload)

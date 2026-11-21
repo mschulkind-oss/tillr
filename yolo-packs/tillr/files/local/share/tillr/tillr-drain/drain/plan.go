@@ -873,7 +873,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			hold := ""
 			_, hasRetry := retries[item.ItemID]
 			obstacleReleased := p.latest[item.ItemID] != "" && p.releasedObstacles[item.ItemID] == p.latest[item.ItemID]
-			if w != nil && hasNodes && !p.finished(item.State) && !hasRetry && !obstacleReleased {
+			if w != nil && hasNodes && !p.finished(item.State) && !hasRetry && !obstacleReleased && !p.waitReleased(item.ItemID) {
 				hold, err = commandNodeHold(r, item.ItemID)
 				if err != nil {
 					return nil, nil, readFailure(err)
@@ -1115,7 +1115,15 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	// policy or the tillr build changed without knowing what the change means (audit
 	// finding F-01). An item moves on an event that names it: the operator's retry, a
 	// design answer for it, or the recovery of a killed run.
-	if acquittedRefusal(p.history.refusals[p.latest[item.ItemID]]) {
+	waitReleased := p.waitReleased(item.ItemID)
+	if waitReleased {
+		// The named blocker landed. Start fresh, not from the run that was held.
+		attempt.failover, attempt.singleBackendFailure = false, false
+		if p.policy != nil {
+			attempt.backend = p.firstBackend(item)
+		}
+		retry = nil
+	} else if acquittedRefusal(p.history.refusals[p.latest[item.ItemID]]) {
 		// A released acquittal starts fresh, including one whose dispatch had
 		// consumed an owner retry.
 		retry = nil
@@ -1140,7 +1148,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		returned = answeredObstacle
 	}
 	interrupted, restaged := false, false
-	if priors := p.priors[item.ItemID]; len(priors) > 0 {
+	if priors := p.priors[item.ItemID]; !waitReleased && len(priors) > 0 {
 		interrupted = priors[len(priors)-1].Class == AttemptInterrupted
 		restaged = priors[len(priors)-1].Restaged
 	}
@@ -1154,7 +1162,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	// session, a failover, or a hold for the operator (repeating_call.go). An operator's
 	// retry outranks it.
 	var repeated *RepeatedCall
-	if priors := p.priors[item.ItemID]; retry == nil && !interrupted && len(priors) > 0 && priors[len(priors)-1].Class == AttemptRepeating {
+	if priors := p.priors[item.ItemID]; !waitReleased && retry == nil && !interrupted && len(priors) > 0 && priors[len(priors)-1].Class == AttemptRepeating {
 		repeated = priors[len(priors)-1].Repeated
 	}
 	if repeated != nil && repeated.Route != repeatRouteHold {
@@ -1596,6 +1604,10 @@ func (p *planner) isBlocked(item itemRow, blockedBy []string) bool {
 	return false
 }
 
+func (p *planner) waitReleased(itemID string) bool {
+	return p.latest[itemID] != "" && p.history.waitReleases[itemID] == p.latest[itemID]
+}
+
 // mayBeARetry answers whether dispatching this item could be a retry rather than a first
 // dispatch. It is the conservative half of the retry rule: an item that may be one holds
 // unless a person authorized the second attempt, so a run nobody asked to repeat never
@@ -1613,7 +1625,7 @@ func (p *planner) isBlocked(item itemRow, blockedBy []string) bool {
 // operator authorized is applied before that too: the person's decision outranks the
 // automatic walk.
 func (p *planner) mayBeARetry(itemID string) bool {
-	if acquittedRefusal(p.history.refusals[p.latest[itemID]]) {
+	if p.waitReleased(itemID) || acquittedRefusal(p.history.refusals[p.latest[itemID]]) {
 		return false
 	}
 	if p.latest[itemID] != "" && p.releasedObstacles[itemID] == p.latest[itemID] {
@@ -2407,6 +2419,8 @@ func activeLeasesExcept(r *store.Reader, now time.Time, lanes []string, exceptLa
 type runHistory struct {
 	known     map[string]bool
 	ranBefore map[string]bool
+	// waitReleases binds the last fulfilled named wait to the run it answered.
+	waitReleases map[string]string
 	// judged is every run the gate answered a `gate.verdict` for. It is the evidence a
 	// retry claim is checked against: a candidate refused at the fence exits 0 and was
 	// judged by nobody, while a candidate the gate judged carries the event whether it
@@ -2435,17 +2449,15 @@ type runHistory struct {
 // readRunHistory reads the item-object events and answers, per item, whether its history
 // is known and whether it has ever been in progress.
 //
-// The events are filtered by object type and by the presence of a state in the payload
-// rather than by kind, so this reader does not carry a second copy of item's kind names:
-// an item state write is an event about an item that says what state the item is in,
-// whatever kind item chose to append.
+// Item-object state writes are recognized by the state in their payload, regardless of
+// kind. Other evidence (including a wait release without a state) is folded by kind.
 func readRunHistory(r *store.Reader) (runHistory, error) {
-	events, err := r.EventsSelected(0, store.EventSelection{Kinds: []string{GateVerdictKind, RefusalKind, callOffered, obstacles.HeldKind}, ObjectTypes: []string{"item"}})
+	events, err := r.EventsSelected(0, store.EventSelection{Kinds: []string{GateVerdictKind, RefusalKind, callOffered, obstacles.HeldKind, item.WaitReleasedKind}, ObjectTypes: []string{"item"}})
 	if err != nil {
 		return runHistory{}, readFailure(err)
 	}
 	history := runHistory{
-		known: map[string]bool{}, ranBefore: map[string]bool{}, judged: map[string]bool{},
+		known: map[string]bool{}, ranBefore: map[string]bool{}, judged: map[string]bool{}, waitReleases: map[string]string{},
 		refusals: map[string]string{}, judgeHolds: map[string]string{}, gateResults: map[string]string{},
 		endings: map[string]refusalPayload{}, obstacleCalls: map[string]*WorkerSession{}, judgeWriters: map[string]string{}, obstacleEndings: map[string]obstacles.Hold{},
 	}
@@ -2513,6 +2525,16 @@ func readRunHistory(r *store.Reader) (runHistory, error) {
 			continue
 		}
 		if e.ObjectType != "item" || e.ObjectID == nil {
+			continue
+		}
+		if e.Kind == item.WaitReleasedKind {
+			var release struct {
+				RunID string `json:"run_id"`
+			}
+			if err := json.Unmarshal(e.Payload, &release); err != nil {
+				return history, readFailure(err)
+			}
+			history.waitReleases[*e.ObjectID] = release.RunID
 			continue
 		}
 		var payload struct {
