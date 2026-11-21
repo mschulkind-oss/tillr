@@ -82,27 +82,30 @@ func optionalCommit(ctx context.Context, root, ref string) string {
 	return strings.TrimSpace(out)
 }
 
-// advancePublished points the published pointer at a commit the remote branch now holds.
+// advancePublished is the only writer of the published pointer. A tip confirmed
+// by a fetch or a successful push may be stale by the time we record it.
 func advancePublished(ctx context.Context, root, remote, ref, sha string) error {
-	if _, err := rawGit(ctx, root, nil, "update-ref", publishedRef(remote, ref), sha); err != nil {
-		return fmt.Errorf("recording %s as the published pointer failed: %w", shortSHA(sha), err)
+	pointer := publishedRef(remote, ref)
+	cur := optionalCommit(ctx, root, pointer)
+	for cur != sha {
+		if cur != "" {
+			if forward, err := trunkAncestor(ctx, root, cur, sha); err != nil || !forward {
+				return err
+			}
+		}
+		// An empty old value requires the pointer not to exist. If another
+		// writer won the swap, check ancestry against its value before retrying.
+		_, err := rawGit(ctx, root, nil, "update-ref", "--no-deref", pointer, sha, cur)
+		if err == nil {
+			return nil
+		}
+		next := optionalCommit(ctx, root, pointer)
+		if next == cur || ctx.Err() != nil {
+			return fmt.Errorf("recording %s as the published pointer failed: %w", shortSHA(sha), err)
+		}
+		cur = next
 	}
 	return nil
-}
-
-// confirmPublished records a known remote tip without replacing a pointer read as
-// already at that tip, ahead of it, or diverged from it.
-func confirmPublished(ctx context.Context, root, remote, ref, sha string) error {
-	cur := optionalCommit(ctx, root, publishedRef(remote, ref))
-	if cur != "" {
-		if ahead, err := trunkAncestor(ctx, root, sha, cur); err != nil || ahead {
-			return err
-		}
-		if behind, err := trunkAncestor(ctx, root, cur, sha); err != nil || !behind {
-			return err
-		}
-	}
-	return advancePublished(ctx, root, remote, ref, sha)
 }
 
 // priorPublished uses the tracking ref until this clone has a published pointer.
@@ -123,6 +126,9 @@ func guardPublished(ctx context.Context, root, remote, ref string) (string, erro
 		return "", err
 	}
 	if err := checkPublishedAncestry(ctx, root, remote, ref, prev, tip); err != nil {
+		return "", err
+	}
+	if err := advancePublished(ctx, root, remote, ref, tip); err != nil {
 		return "", err
 	}
 	return tip, nil

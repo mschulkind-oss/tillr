@@ -9,7 +9,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr/settings"
 )
 
@@ -20,7 +19,8 @@ import (
 // (trunk_rewrite.go) then maps each replaced commit by patch or by the replay's own pairs
 // and carries refs/tillr/green.
 // A conflict, a merge commit among the unpublished commits, a checkout that is not on the
-// trunk or is dirty on a changed path changes nothing and fails with the operator's commands.
+// trunk or is dirty on a changed path leaves the trunk and checkout unchanged and fails
+// with the operator's commands.
 // Never forced, never a merge commit. The conflict-repair work of
 // docs/design/tillr-refused-push.md is not built.
 
@@ -82,7 +82,7 @@ func (l *Loop) healRefusedPushResult(ctx context.Context, p settings.Push, refus
 		return res, err
 	}
 	fail := func(why string, a ...any) (healResult, error) {
-		return res, fmt.Errorf("%s\nmover: operator. The push was refused because the remote moved and the drain could not rebase onto it (%s). Nothing was changed. With the loop stopped, in %s: git fetch %s %s; git rebase FETCH_HEAD; then run the loop, which maps the rebased commits by patch (or tillr-drain accept-rewrite if it holds trunk-rewritten)",
+		return res, fmt.Errorf("%s\nmover: operator. The push was refused because the remote moved and the drain could not rebase onto it (%s). The trunk and checkout were not changed. With the loop stopped, in %s: git fetch %s %s; git rebase FETCH_HEAD; then run the loop, which maps the rebased commits by patch (or tillr-drain accept-rewrite if it holds trunk-rewritten)",
 			refused, fmt.Sprintf(why, a...), root, remote, ref)
 	}
 	prev := priorPublished(ctx, root, remote, ref)
@@ -95,6 +95,11 @@ func (l *Loop) healRefusedPushResult(ctx context.Context, p settings.Push, refus
 	res.remoteTip = remoteTip
 	if err := checkPublishedAncestry(ctx, root, remote, ref, prev, remoteTip); err != nil {
 		return res, err
+	}
+	// Pin the accepted tip even if replay is unnecessary or cannot proceed.
+	// The identity check trusts commits under it, not commits replayed on top.
+	if err := advancePublished(ctx, root, remote, ref, remoteTip); err != nil {
+		return fail("pinning the fetched tip failed: %v", err)
 	}
 	// Record the trunk as it stands, so the replay is seen as a rewrite of this tip.
 	if _, err := l.observeTrunk(ctx, ""); err != nil {
@@ -179,11 +184,6 @@ func (l *Loop) healRefusedPushResult(ctx context.Context, p settings.Push, refus
 	}
 	known.Tip = cur
 	known.Evidence = "replayed onto " + remote + " " + shortSHA(remoteTip) + " under the landing lock; each replacement was determined by a three-way merge"
-	// The fetched tip is published: pin it so the identity check trusts the commits that
-	// arrived with it (design Section 4.3). Commits replayed on top are not under it.
-	if _, err := rawGit(ctx, root, nil, "update-ref", land.PublishedRefPrefix+remote+"/"+strings.TrimPrefix(ref, "refs/heads/"), remoteTip); err != nil {
-		return fail("pinning the fetched tip failed: %v", err)
-	}
 	// Move the trunk, and the checkout with it. `reset --keep` refuses, changing nothing,
 	// when a path the move touches has local changes, and keeps changes elsewhere.
 	head, _ := rawGit(ctx, root, nil, "symbolic-ref", "-q", "HEAD")

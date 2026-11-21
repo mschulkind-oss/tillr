@@ -58,13 +58,12 @@ func TestPushAdvancesPublishedRefAndConfirmsOnAlreadyPublished(t *testing.T) {
 		}
 	}
 
-	if err := pushTrunk(ctx, root, settings.Push{}); err != nil {
-		t.Fatalf("pushTrunk: %v", err)
+	// The remote moved beyond the last confirmation and is ahead of green.
+	if err := advancePublished(ctx, root, "origin", dest, p.local[0]); err != nil {
+		t.Fatal(err)
 	}
-	checkPublished(p.local[2])
-
-	// The remote is ahead of green. Confirm the fetched tip, not the older green.
-	runGit(t, root, "update-ref", pubRef, p.local[0])
+	runGit(t, root, "push", "origin", p.local[2]+":"+dest)
+	// Confirm the fetched tip, not the older green.
 	if green, err := pushGreen(ctx, root, settings.Push{}); !errors.Is(err, errAlreadyPublished) || green != p.local[1] {
 		t.Fatalf("pushGreen = (%s, %v), want (%s, errAlreadyPublished)", green, err, p.local[1])
 	}
@@ -72,7 +71,7 @@ func TestPushAdvancesPublishedRefAndConfirmsOnAlreadyPublished(t *testing.T) {
 
 	next := ownerCommit(t, root, "proved.txt")
 	runGit(t, root, "update-ref", GreenRef, next)
-	ownerCommit(t, root, "unproved.txt")
+	unproved := ownerCommit(t, root, "unproved.txt")
 	if green, err := pushGreen(ctx, root, settings.Push{}); err != nil || green != next {
 		t.Fatalf("pushGreen = (%s, %v), want (%s, nil)", green, err, next)
 	}
@@ -80,6 +79,10 @@ func TestPushAdvancesPublishedRefAndConfirmsOnAlreadyPublished(t *testing.T) {
 	if got := runGit(t, root, "rev-parse", "FETCH_HEAD"); got != p.local[2] {
 		t.Errorf("preflight fetched %s, want %s", got, p.local[2])
 	}
+	if err := pushTrunk(ctx, root, settings.Push{}); err != nil {
+		t.Fatalf("pushTrunk: %v", err)
+	}
+	checkPublished(unproved)
 }
 
 func TestPushStopsOnStraightBackwardRemoteRewrite(t *testing.T) {
@@ -96,13 +99,14 @@ func TestPushStopsOnStraightBackwardRemoteRewrite(t *testing.T) {
 			ctx := context.Background()
 			root := p.f.root
 			ref := "refs/heads/" + TrunkRef
-			if err := pushTrunk(ctx, root, settings.Push{}); err != nil {
-				t.Fatal(err)
+			if tc.pointer {
+				if err := pushTrunk(ctx, root, settings.Push{}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				runGit(t, root, "push", "origin", p.local[2]+":"+ref)
 			}
 			published, rewound := p.local[2], p.local[1]
-			if !tc.pointer {
-				runGit(t, root, "update-ref", "-d", publishedRef("origin", ref))
-			}
 			runGit(t, p.remote, "update-ref", ref, rewound, published)
 			tip := ownerCommit(t, root, "unpublished.txt")
 			runGit(t, root, "update-ref", GreenRef, published)
@@ -144,11 +148,10 @@ func TestRefusedPushStopsOnRemoteForcePush(t *testing.T) {
 			ctx := context.Background()
 			root := p.f.root
 			ref := "refs/heads/" + TrunkRef
-			if err := pushTrunk(ctx, root, settings.Push{}); err != nil {
-				t.Fatal(err)
-			}
 			if baseline == "tracking-only" {
-				runGit(t, root, "update-ref", "-d", publishedRef("origin", ref))
+				runGit(t, root, "push", "origin", p.local[2]+":"+ref)
+			} else if err := pushTrunk(ctx, root, settings.Push{}); err != nil {
+				t.Fatal(err)
 			}
 			published := p.local[2]
 			runGit(t, p.remote, "update-ref", ref, published+"^", published)
