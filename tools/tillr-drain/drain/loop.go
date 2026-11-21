@@ -628,12 +628,13 @@ type Loop struct {
 	ownerAnswerBlobs map[string]string
 }
 
-// heldItem is one item the loop holds, and the clock reading the hold was taken at. The
-// reading is what lets passPlans drop the hold when the item's record is written again: the
-// refusal was about the record as it was, and a record edited since is a different input.
+// heldItem binds a staging refusal to the content the loop held. The clock
+// still orders explicit retries and lane restorations, and is the fallback
+// when the content version could not be read at the time of the refusal.
 type heldItem struct {
-	reason string
-	at     time.Time
+	reason         string
+	at             time.Time
+	contentVersion string
 }
 
 // NewLoop validates a configuration and answers the loop it describes. Everything it
@@ -1245,11 +1246,30 @@ type laneOutcome struct {
 	laneRefusal *LaneRefusalError
 }
 
-// heldFor answers whether the loop still holds an item, and drops the hold when the item's
-// record has been written since the refusal. The refusal was about the record as it was, so
-// a record edited since is a different input: without this, fixing the bad field would leave
-// the item out of the queue for the life of the process. A record that cannot be read keeps
-// the hold, which is the safe direction — the item still cannot be staged.
+// holdLocal captures the item content on a staging refusal, not its place in line.
+func (l *Loop) holdLocal(ctx context.Context, itemID, reason string) {
+	hold := heldItem{reason: reason, at: l.cfg.Now().UTC()}
+	if s, err := store.OpenRead(ctx, l.cfg.Store); err == nil {
+		defer s.Close()
+		_ = s.ReadTx(ctx, func(r *store.Reader) error {
+			version, err := localHoldVersion(r, itemID)
+			hold.contentVersion = version
+			return err
+		})
+	}
+	l.held[itemID] = hold
+}
+
+func localHoldVersion(r *store.Reader, itemID string) (string, error) {
+	schema, err := readVersionSchema(r)
+	if err != nil {
+		return "", err
+	}
+	return readItemContentVersion(r, schema, itemID)
+}
+
+// heldFor drops the hold on a content edit, not a rerank. A record that cannot
+// be read keeps the hold, which is the safe direction.
 func (l *Loop) heldFor(r *store.Reader, itemID string) (string, bool) {
 	hold, held := l.held[itemID]
 	if !held {
@@ -1264,12 +1284,22 @@ func (l *Loop) heldFor(r *store.Reader, itemID string) (string, bool) {
 		delete(l.held, itemID)
 		return "", false
 	}
-	var updatedAt int64
-	if err := r.QueryRow(`SELECT updated_at FROM items WHERE item_id = ?`, itemID).Scan(&updatedAt); err != nil {
-		return hold.reason, true
-	}
-	if updatedAt > hold.at.UnixMilli() {
-		return drop()
+	if hold.contentVersion != "" {
+		version, err := localHoldVersion(r, itemID)
+		if err != nil {
+			return hold.reason, true
+		}
+		if version != hold.contentVersion {
+			return drop()
+		}
+	} else {
+		var updatedAt int64
+		if err := r.QueryRow(`SELECT updated_at FROM items WHERE item_id = ?`, itemID).Scan(&updatedAt); err != nil {
+			return hold.reason, true
+		}
+		if updatedAt > hold.at.UnixMilli() {
+			return drop()
+		}
 	}
 	if strings.HasPrefix(hold.reason, ReasonStagingFailed) {
 		var hasRetries bool
@@ -1726,7 +1756,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			if mover == "" {
 				mover = holdrules.For(reason).Mover
 			}
-			l.held[request.ItemID] = heldItem{reason: reason, at: l.cfg.Now().UTC()}
+			l.holdLocal(ctx, request.ItemID, reason)
 			l.reportf("loop: holding %s on %s (%s): staging failure repeated unchanged; mover: %s: %v\n",
 				request.ItemID, decision.LaneID, reason, mover, err)
 			if err := l.recordItemRefusal(ctx, request.ItemID, reason, err.Error()); err != nil {
@@ -1738,7 +1768,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 		// The record itself refused: hold this item and keep the rest of the pass. The
 		// refusal is recorded before the hold, so a crash between the two still leaves the
 		// event a reader needs.
-		l.held[request.ItemID] = heldItem{reason: ReasonItemUnstagleable, at: l.cfg.Now().UTC()}
+		l.holdLocal(ctx, request.ItemID, ReasonItemUnstagleable)
 		l.reportf("loop: holding %s on %s: its own record cannot be staged (%s): %v\n",
 			request.ItemID, decision.LaneID, ReasonItemUnstagleable, err)
 		if err := l.recordItemRefusal(ctx, request.ItemID, ReasonItemUnstagleable, err.Error()); err != nil {
