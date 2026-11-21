@@ -869,6 +869,13 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 		result.Stop, result.Detail = StopQueueDrained, "owner question migration finished"
 		return result, nil
 	}
+	// The shadow reads the store independently; neither startup nor a pass waits
+	// for a snapshot. Use wall time for lease expiry, not the pass's clock hook.
+	storePath := l.cfg.Store
+	stopView := newStartView().watch(ctx, startViewRefreshInterval, func(ctx context.Context) (startSnapshot, error) {
+		return readStartSnapshot(ctx, storePath, time.Now())
+	})
+	defer stopView()
 	for {
 		if err := ctx.Err(); err != nil {
 			result.Stop = StopOperatorStop

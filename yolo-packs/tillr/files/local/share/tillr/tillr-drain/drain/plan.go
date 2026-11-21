@@ -1956,6 +1956,9 @@ func decisionEnvelope(decision Decision, at time.Time) (record.Envelope, error) 
 // its own class instead of a token at the start of the alphabet: an unranked item sorts
 // after every ranked one whatever its token, and item_id keeps the order total among the
 // unranked. Both halves are the query's because both are comparisons on the rows it reads.
+const queueOrderSQL = `ORDER BY CASE WHEN item_id LIKE 'fixer-main-%' THEN 0 WHEN item_id LIKE 'rewrite-item-%' THEN 1 ELSE 2 END,
+		  COALESCE(rank, '') = '', COALESCE(rank, ''), item_id`
+
 func readItems(r *store.Reader) ([]itemRow, error) {
 	owed, err := ownercriteria.ReadOwnerCriteria(r)
 	if err != nil {
@@ -1996,9 +1999,7 @@ func readItems(r *store.Reader) ([]itemRow, error) {
 	rows, err := r.Query(
 		`SELECT item_id, state, COALESCE(rank, ''), COALESCE(allowed_paths, ''), COALESCE(design_doc, ''),
 		        COALESCE(seat, ''), ` + workflowColumn + `, ` + judgeColumn + `, ` + expressColumn + `, ` + argsColumn + `
-		   FROM items
-		  ORDER BY CASE WHEN item_id LIKE 'fixer-main-%' THEN 0 WHEN item_id LIKE 'rewrite-item-%' THEN 1 ELSE 2 END,
-		  COALESCE(rank, '') = '', COALESCE(rank, ''), item_id`)
+		   FROM items ` + queueOrderSQL)
 	if err != nil {
 		return nil, readFailure(err)
 	}
