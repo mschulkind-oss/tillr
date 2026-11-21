@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -139,6 +140,13 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 		return false, nil, "", Decision{}, err
 	}
 	defer s.Close()
+	if l.cfg.LiveScale && !strings.HasPrefix(d.LaneID, "desk-") {
+		l.laneOfferMu.RLock()
+		defer l.laneOfferMu.RUnlock()
+		if !slices.Contains(l.lanes(), d.LaneID) {
+			return false, nil, "", Decision{}, nil
+		}
+	}
 	works, byRun := snap.pending.works, snap.pending.byRun
 	var claimed *pendingWork
 	// Any Git/file fact a validation needs is fetched by writeGathered only

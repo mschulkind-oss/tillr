@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -38,6 +39,10 @@ func (l *Loop) watchStartView(ctx context.Context, view *startView, interval tim
 		}
 		return newStartWatcher(paths)
 	}, func(ctx context.Context, change startWatchChange) (startSnapshot, error) {
+		if lanes := l.lanes(); !slices.Equal(lanes, *tick.AvailableLanes) {
+			tick.AvailableLanes = &lanes
+			previous = startSnapshot{} // Rebuild entries, including lane-sensitive holds.
+		}
 		next, err := refresh.read(ctx, l.cfg.Now().UTC(), l.currentPolicy(), tick, root, cmd, index, previous, change)
 		if err == nil {
 			previous = next

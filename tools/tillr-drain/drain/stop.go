@@ -69,7 +69,7 @@ func (s *ProcessSteps) startRunFaceContext(ctx context.Context, cmd *exec.Cmd, r
 	if req.Resume {
 		return withRunStartLock(ctx, s.Store, start)
 	}
-	return s.startRun(req.RunID, start)
+	return s.startRunContext(ctx, req.RunID, start)
 }
 
 func withRunStartLock(ctx context.Context, path string, action func() error) error {
@@ -101,7 +101,10 @@ func withRunStartLock(ctx context.Context, path string, action func() error) err
 }
 
 func (s *ProcessSteps) startRun(id string, start func() error) error {
-	ctx := context.Background()
+	return s.startRunContext(context.Background(), id, start)
+}
+
+func (s *ProcessSteps) startRunContext(ctx context.Context, id string, start func() error) error {
 	return withRunStartLock(ctx, s.Store, func() error {
 		db, err := store.OpenRead(ctx, s.Store)
 		if err != nil {
@@ -392,20 +395,8 @@ func stop(ctx context.Context, cfg StopConfig, report *StopReport) error {
 			if dead {
 				break
 			}
-			ended := false
-			if err := db.ReadTx(ctx, func(r *store.Reader) error {
-				var n int
-				if err := r.QueryRow(`SELECT COUNT(*) FROM drain_sessions WHERE session_id = ? AND ended_at IS NOT NULL`, s.id).Scan(&n); err != nil {
-					return err
-				}
-				ended = n != 0
-				return nil
-			}); err != nil {
-				return err
-			}
-			if ended {
-				break
-			}
+			// An ended session is a bookkeeping receipt, not process exit.
+			// The old supervisor may still own its descriptors during teardown.
 			select {
 			case <-ctx.Done():
 				return ctx.Err()

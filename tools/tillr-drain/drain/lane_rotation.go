@@ -118,8 +118,9 @@ type laneCondition struct {
 func (l *Loop) rotationLanes() []string {
 	l.laneMu.Lock()
 	defer l.laneMu.Unlock()
-	lanes := make([]string, 0, len(l.cfg.Lanes))
-	for _, lane := range l.cfg.Lanes {
+	offered := l.lanes()
+	lanes := make([]string, 0, len(offered))
+	for _, lane := range offered {
 		if c := l.laneConditions[lane]; c != nil && c.out {
 			continue
 		}

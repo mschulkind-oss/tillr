@@ -1205,7 +1205,7 @@ func findLiveLoopSession(r *store.Reader, storePath string, now time.Time) (*liv
 			continue
 		}
 		var lanes []string
-		if err := json.Unmarshal([]byte(c.lanesRaw), &lanes); err != nil || len(lanes) == 0 {
+		if err := json.Unmarshal([]byte(c.lanesRaw), &lanes); err != nil || lanes == nil {
 			continue
 		}
 		var owner LoopOwner

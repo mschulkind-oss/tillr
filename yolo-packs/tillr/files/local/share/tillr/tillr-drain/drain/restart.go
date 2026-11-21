@@ -75,7 +75,17 @@ func (l *Loop) adoptRestart(ctx context.Context) error {
 		l.heavyReuseRed = true
 		// This runs before the new image starts any subprocess. Wait only on children
 		// inherited from the old image, never children whose exec.Cmd owns their exit.
-		go reapInherited(ctx, inheritedChildren())
+		reapCtx, cancel := context.WithCancel(ctx)
+		pids := inheritedChildren()
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			reapInherited(reapCtx, pids)
+		}()
+		l.stopInheritedReaper = func() {
+			cancel()
+			<-done // The collector makes one last nonblocking sweep on cancellation.
+		}
 		l.reportf("loop: restarted in place onto build %s\n", l.build)
 	}
 	return nil
@@ -188,17 +198,20 @@ func inheritedChildren() []int {
 // reapInherited collects only the named PIDs, without stealing new exec.Cmd statuses.
 func reapInherited(ctx context.Context, pids []int) {
 	for len(pids) > 0 {
+		stopping := ctx.Err() != nil
 		remaining := pids[:0]
 		for _, pid := range pids {
 			var status syscall.WaitStatus
-			if done, err := syscall.Wait4(pid, &status, syscall.WNOHANG, nil); done == 0 && err == nil {
+			if done, err := syscall.Wait4(pid, &status, syscall.WNOHANG, nil); done == 0 || err == syscall.EINTR {
 				remaining = append(remaining, pid)
 			}
 		}
+		if stopping || len(remaining) == 0 {
+			return
+		}
 		pids = remaining
 		select {
-		case <-ctx.Done():
-			return
+		case <-ctx.Done(): // Sweep the remaining PIDs once more; never wait for a live run.
 		case <-time.After(200 * time.Millisecond):
 		}
 	}

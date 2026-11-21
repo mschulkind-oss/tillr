@@ -32,6 +32,15 @@ func (l *Loop) planStillActive(p plannedApplication) bool {
 		((d.Action == ActionSettle || d.Action == ActionJudge) && l.active[d.RunRequest.RunID])
 }
 
+// The pass may stop consuming notifications before shutdown joins examinations.
+// Their durable outcomes belong to the successor; they must not block this loop's exit.
+func (l *Loop) sendCompletion(ctx context.Context, c runCompletion) {
+	select {
+	case l.completions <- c:
+	case <-ctx.Done():
+	}
+}
+
 func (l *Loop) drainCompletions(ctx context.Context, result *LoopResult) (string, error) {
 	for {
 		select {
@@ -94,7 +103,7 @@ func (l *Loop) finishRunStep(ctx context.Context, c runCompletion, result *LoopR
 				busy[work.Decision.LaneID] = true
 			}
 		}
-		for _, lane := range l.cfg.Lanes {
+		for _, lane := range l.lanes() {
 			if busy[lane] {
 				continue
 			}
