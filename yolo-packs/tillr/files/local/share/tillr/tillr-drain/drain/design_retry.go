@@ -99,6 +99,20 @@ func authorizeDesignRetry(ctx context.Context, tx *store.Tx, req RetryRequest, a
 	case c.Status == "owner" && c.DesignRunID != "":
 		return nil, Usagef("design run %q is not the one item %q's conflict %s now names: that is design run %s. The accepted command: %s", req.RunID, req.ItemID, c.ConflictID, c.DesignRunID, retryCommand(req.ItemID, c.DesignRunID, ""))
 	case c.Status == "awaiting" || c.Status == "raised":
+		wait, _, err := item.ReadWaitingOn(r, req.ItemID)
+		if err != nil {
+			return nil, readFailure(err)
+		}
+		if c.HasIndependentWait(wait) {
+			blocker, err := item.LandedBlocker(r, wait)
+			if err != nil {
+				return nil, readFailure(err)
+			}
+			if blocker != "" {
+				return nil, Usagef("item %q's blocker %s landed. %s", req.ItemID, blocker,
+					noRetryCommand(fmt.Sprintf("the loop releases the wait on its next pass, or use tillr item state --item %s --state in-queue", req.ItemID)))
+			}
+		}
 		waits := "the design seat's next dispatch"
 		if c.Status == "awaiting" {
 			waits = "the settlement of design run " + c.DesignRunID
