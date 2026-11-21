@@ -9,7 +9,7 @@ import (
 )
 
 func TestQuotaRefusalAlsoPausesAnAlreadyResumedLiveRun(t *testing.T) {
-	f, l, steps, d, rec := quotaContinuationFixture(t, false, true)
+	f, l, steps, d, rec := quotaContinuationFixture(t, true)
 	// Like a real resume claim, a live segment has a lease and a run.resume event,
 	// while the runs table still contains the previous segment's terminal record.
 	req := *d.RunRequest

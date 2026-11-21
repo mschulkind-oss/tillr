@@ -3,8 +3,8 @@ package drain
 import (
 	"context"
 	"path/filepath"
-	"strings"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
@@ -13,7 +13,7 @@ import (
 func TestQuotaFirstMessageRefusalHasNoContinuation(t *testing.T) {
 	for _, pending := range []bool{false, true} {
 		t.Run(map[bool]string{false: "direct", true: "pending"}[pending], func(t *testing.T) {
-			_, l, steps, d, rec := quotaContinuationFixture(t, true, false)
+			_, l, steps, d, rec := quotaContinuationFixture(t, false)
 			var result LoopResult
 			if pending {
 				settleContinuation(t, l, &result)
@@ -30,16 +30,21 @@ func TestQuotaFirstMessageRefusalHasNoContinuation(t *testing.T) {
 			if len(steps.requests) != 1 {
 				t.Fatalf("settlement started another run: %+v", steps.requests)
 			}
+			wait := mustPlan(t, l)[0].decision
+			if wait.Action != ActionHold || wait.Reason != ReasonBackendWindow || wait.DeferredBy != "alpha" {
+				t.Fatalf("quota refusal did not wait on alpha: %+v", wait)
+			}
+			steps.at = steps.at.Add(2 * time.Hour)
 			next := mustPlan(t, l)[0].decision
-			if next.RunRequest == nil || next.RunRequest.Backend != "beta" || next.RunRequest.RunID == d.RunRequest.RunID || next.RunRequest.Resume || next.RunRequest.ResumePrompt != "" {
-				t.Fatalf("quota refusal did not plan a new run on beta: %+v", next)
+			if next.RunRequest == nil || next.RunRequest.Backend != "alpha" || next.RunRequest.RunID == d.RunRequest.RunID || next.RunRequest.Resume || next.RunRequest.ResumePrompt != "" {
+				t.Fatalf("quota refusal did not plan a new run on reopened alpha: %+v", next)
 			}
 		})
 	}
 }
 
 func TestQuotaRefusalPausesLivePeersOnceAndContinuesTheirFiles(t *testing.T) {
-	f, l, steps, d, refusal := quotaContinuationFixture(t, true, true)
+	f, l, steps, d, refusal := quotaContinuationFixture(t, true)
 	base := l.laneBase(d.LaneID)
 	dir := l.laneDirPath("lane-2")
 	runGit(t, f.root, "worktree", "add", "-q", "-b", LaneBranch(f.laneRoot, "lane-2"), filepath.Join(dir, WorktreeDir), TrunkRef)
@@ -93,11 +98,22 @@ func TestQuotaRefusalPausesLivePeersOnceAndContinuesTheirFiles(t *testing.T) {
 	if out.err != nil || out.stop != "" {
 		t.Fatalf("settle: %+v", out)
 	}
-	next := steps.requests[len(steps.requests)-1]
-	if next.Backend != "beta" || next.RunID != req.RunID || !next.Resume || !strings.Contains(next.ResumePrompt, "quota") {
-		t.Fatalf("peer resumed as restart: %+v", next)
+	if len(steps.requests) != 1 {
+		t.Fatalf("peer started with a closed backend: %+v", steps.requests)
 	}
-	if steps.gates != 1 {
-		t.Fatalf("peer gates=%d", steps.gates)
+	steps.at = steps.at.Add(2 * time.Hour)
+	settleContinuation(t, l, &result)
+	var peerResumes int
+	for _, next := range steps.requests[1:] {
+		if next.RunID != req.RunID {
+			continue
+		}
+		if next.Backend != "alpha" || !next.Resume || next.FreshSession {
+			t.Fatalf("peer resumed as restart: %+v", next)
+		}
+		peerResumes++
+	}
+	if peerResumes != 1 {
+		t.Fatalf("want one peer resume, got %d: %+v", peerResumes, steps.requests)
 	}
 }

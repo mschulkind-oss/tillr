@@ -670,6 +670,12 @@ Claude Code does it. `landingResultPersisted` reads either backend's session fil
 
 ## Backend policy changes
 
+Each seat names one backend unless it gives explicit shares to every backend
+it lists. A singleton array is still accepted. An unshared multi-backend list
+is refused with the seat's name; keep the intended backend, not a fallback.
+Remove the retired `preference` key. Old files that still carry the key can
+load, but its value no longer affects routing.
+
 The optional `read_only_seats` list and `seat_purposes` map reference seats
 already mapped in `seats`. A purpose describes the seat's job in one sentence.
 When a policy is supplied, workflow loading rejects an `access: write` node
@@ -700,7 +706,7 @@ loop directory:
 .tillr/loop/backend-policy.json
 ```
 
-Inspect the accepted snapshot, including ordered seat backends, all backend
+Inspect the accepted snapshot, including seat mappings and shares, all backend
 models and efforts, and item overrides, without activating disk edits:
 
 ```sh
@@ -744,8 +750,7 @@ another restart.
   backend, and the item names the seat and never a model id. A plan whose items ask for a
   seat the policy does not map is refused before it builds a decision, so a seat is never
   defaulted to the pass's backend; the decision and the store's dispatch row record the seat
-  beside the backend that answered. If a seat names just one backend and that route is
-  closed, the item holds rather than switching to the policy's preference.
+  beside the backend that answered. If the seat's backend is closed, the item waits for it.
 - **An adapter's refusal of a brief is the brief's fault, not the backend's.** An adapter
   that refuses before any model runs prints `run-<adapter>: refused: <reason>` and exits 2.
   That run classifies as `refused`, not `infrastructure`: no backend failure is counted, no
@@ -760,9 +765,8 @@ another restart.
   padded to at least three digits and advancing past 999 without clamping or repeating words.
   A digest bounds the stem (preserving trailing `-judge` and `-cfix` tags) so every run id
   stays strictly under 120 characters. Historical `-failover` ids remain readable.
-- **Seat lists choose the backend for new work.** A seat's value can be one backend name or
-  an ordered list. Every name must be a policy backend. A list, shares, or an override
-  can select a backend at admission; none sends an infrastructure-failed run elsewhere.
+- **Shares choose the backend for new work.** A shared seat can select a backend at
+  admission. Neither shares nor item overrides send an infrastructure-failed run elsewhere.
 
 ## Backend quota admission
 
@@ -771,7 +775,7 @@ quota without starting work, and `reserve`, the fraction of every window kept fo
 the owner (default 0, valid range 0 through 1). A row without `quota` is never
 probed or held by a reading or reserve; a run's refusal still holds it until reset
 or a successful operator probe. With reserve 0.2, a window at 0.8 used closes
-admission; a window at 0.79 remains open. The loop walks the seat's normal fallback order.
+admission; a window at 0.79 remains open. Closing a window does not change which backend runs the work.
 
 ```json
 "quota": ["tools/tillr-run/backends/claude/quota"],
@@ -814,18 +818,14 @@ the backend again. Quota readings and reserve checks still apply.
 For a single-worker item, a recorded quota refusal stops other live runs on that
 backend through the normal pause request. If the refusing run changed its head or
 left uncommitted paths, it continues under the same run id and attempt in the same
-lane and worktree, without resetting files or spending a retry. The next open
-backend in the seat's list receives a fresh session whose first message names the
-quota interruption, earlier transcript, report when present, and uncommitted paths.
-Only the completed candidate is judged. A first-message refusal that left no work
-keeps the existing fresh-dispatch failover, without a continuation message.
+lane and worktree, without resetting files or spending a retry. Only the completed
+candidate is judged. A first-message refusal that left no work waits for the same
+backend's window and starts a new run, without a continuation message.
 
-When no backend is open, the loop records the run in `quota_pauses`, keeps its lane
-and `running` position, and waits rather than exiting. Each pass checks the seat's
-list again, preferring the original backend when it reopens. That backend resumes
-its own session; another backend starts a fresh one. The executor removes the pause
-row in the continuation's claim transaction. Workflow nodes, parallel readers, and
-conflict-design runs retain their existing refusal handling.
+When the backend is closed, the loop records the paused run in `quota_pauses`, keeps
+its lane and `running` position, and waits rather than exiting. The same backend
+resumes the session when it reopens. The executor removes the pause row in the
+continuation's claim transaction.
 
 The [Claude quota command](../tillr-run/backends/claude/quota) uses one authenticated
 HTTP GET, not a Claude model session. Its authentication, live measurement, and
@@ -836,9 +836,9 @@ it reopens, including open backends and explicit failed/stale readings.
 
 ## Seat backend shares and selection
 
-A seat is a workflow role; a backend is the execution service that fills it. Existing
-backend-name strings and ordered lists keep choosing the first open backend. To
-spread fresh dispatches by count, give every entry a positive numeric `share`:
+A seat is a workflow role; a backend is the execution service that fills it. Most
+seats name one backend. To spread fresh dispatches across several backends, give
+every entry a positive numeric `share`:
 
 ```json
 {
@@ -848,7 +848,11 @@ spread fresh dispatches by count, give every entry a positive numeric `share`:
       {"backend": "pi", "share": 1}
     ],
     "review": {
-      "backends": ["claude", "pi", "muse"],
+      "backends": [
+        {"backend": "claude", "share": 1},
+        {"backend": "pi", "share": 1},
+        {"backend": "muse", "share": 1}
+      ],
       "pick": "round-robin"
     }
   }
@@ -863,14 +867,11 @@ that otherwise gives shares.
 
 A seat object has `backends` (the same list syntax) and an optional `pick`:
 
-- **`in-order`**, the default: without shares, choose the first open backend. With
-  shares, choose the backend whose next dispatch is earliest in the proportional
-  count order; ties follow list order.
+- **`in-order`**, the default: choose the backend whose next dispatch is earliest in
+  the proportional count order; ties follow list order.
 - **`round-robin`**: move forward through the list from the seat's last recorded
-  dispatch, skipping closed services. This gives equal turns even if entries name
-  unequal shares.
-- **`random`**: draw once per fresh dispatch among open services, with equal odds
-  without shares and odds proportional to shares otherwise.
+  dispatch. This gives equal turns even if entries name unequal shares.
+- **`random`**: draw once per fresh dispatch with odds proportional to shares.
 
 The choice is made inside the store transaction that claims the dispatch, not by
 redrawing during execution. The dispatch row records `backend`; the complete request
@@ -881,14 +882,11 @@ history. Failed transactions and canceled, never-started staging claims contribu
 count; completed parallel readers keep their history. A read-only `plan` retains
 its ordered capacity preview; its proposed backend is not a committed draw.
 
-Quota and reserve closures remove services from the choice. Their share goes to the
-open services in proportion. Counts are cumulative: when a service reopens, count-based
-selection lets it catch up against the seat's history. Ordered refusal fail-over still
-walks forward from the refused backend through the original seat list; it never makes
-another share or random draw. An item override still wins for a worker's fresh dispatch.
-Interrupted runs retain their backend; workflow restarts retain their request rather
-than selecting again. If every independent review backend is closed, the candidate waits
-for an open service without being refused, discarded, or rebuilt.
+The claim chooses before checking availability. If the choice is closed, the item
+waits for that backend; the choice is saved separately from dispatch counts.
+An item override still wins for a worker's fresh dispatch. Interrupted runs retain
+their backend, and workflow restarts retain their request. A candidate waits for its
+chosen independent review backend without being refused, discarded, or rebuilt.
 Selection is implemented by `selectSeatDispatch`; `selectReviewDispatch` applies the
 same stored history to an agent review outside an explicit workflow.
 

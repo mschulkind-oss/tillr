@@ -152,7 +152,7 @@ func TestQuotaProbeFailureClosesOnlyItsBackend(t *testing.T) {
 	}
 }
 
-func TestQuotaProbeFallsBackOnEitherWindowAndError(t *testing.T) {
+func TestQuotaProbeHoldsDefaultOnEitherWindowAndError(t *testing.T) {
 	for _, body := range []string{`{"windows":[{"kind":"five_hour","fraction":0.1,"reset_at":"2026-11-16T00:00:00Z"},{"kind":"seven_day","fraction":0.8,"reset_at":"2026-11-22T00:00:00Z"}]}`, `bad`} {
 		t.Run(body, func(t *testing.T) {
 			_, l := passFixture(t, "item-a")
@@ -161,9 +161,8 @@ func TestQuotaProbeFallsBackOnEitherWindowAndError(t *testing.T) {
 			first.Reserve = .2
 			l.cfg.Policy.Backends["fixture"] = first
 			l.cfg.Policy.Backends["other"] = Backend{Adapter: "fixture"}
-			l.cfg.Policy.Preference = []string{"fixture", "other"}
-			if got := mustPlan(t, l)[0].decision; got.RunRequest == nil || got.RunRequest.Backend != "other" {
-				t.Fatalf("did not fall back: %+v", got)
+			if got := mustPlan(t, l)[0].decision; got.Action != ActionHold || got.Reason != ReasonBackendWindow || got.DeferredBy != "fixture" {
+				t.Fatalf("did not hold on the default: %+v", got)
 			}
 		})
 	}

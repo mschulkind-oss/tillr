@@ -18,7 +18,6 @@ func designQuotaFixture(t *testing.T) (refusalLoopFixture, *Loop) {
 	t.Helper()
 	f, l := passFixture(t, "item-a")
 	l.cfg.Policy.Seats = map[string]string{"design": "fixture"}
-	l.cfg.Policy.SeatLists = map[string][]string{"design": {"fixture", "designer-b"}}
 	l.cfg.Policy.Backends["designer-b"] = Backend{Adapter: "fixture"}
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		return item.RecordConflict(tx, item.Conflict{ConflictID: "conflict-a", ItemID: "item-a", RunID: "blocked-run", BodyRef: "briefs/item-a.md", Text: "requires design", Status: "raised", WaitingOn: "design", BlockedCriteria: []string{"c1"}}, l.cfg.Now())
@@ -26,69 +25,51 @@ func designQuotaFixture(t *testing.T) (refusalLoopFixture, *Loop) {
 	return f, l
 }
 
-func TestConflictDesignSkipsShutWindows(t *testing.T) {
-	for _, all := range []bool{false, true} {
-		t.Run(strconv.FormatBool(all), func(t *testing.T) {
-			f, l := designQuotaFixture(t)
-			reset := l.cfg.Now().Add(time.Hour)
-			fixtureWrite(t, f, func(tx *store.Tx) error {
-				names := []string{"fixture"}
-				if all {
-					names = append(names, "designer-b")
-				}
-				for _, name := range names {
-					if _, err := tx.Exec(`INSERT INTO backend_windows VALUES (?, 'weekly', 1, 'rejected', ?, 'refused')`, name, reset.UnixMilli()); err != nil {
-						return err
-					}
-				}
-				return nil
-			})
-			d := mustPlan(t, l)[0].decision
-			if !all {
-				if d.Action != ActionDispatch || d.RunRequest == nil || d.RunRequest.Backend != "designer-b" || d.Seat != "design" || d.BlockConflict == nil {
-					t.Fatalf("did not skip shut design backend: %+v", d)
-				}
-				return
-			}
-			if d.Action != ActionHold || d.Reason != ReasonBackendWindow || d.RunRequest != nil {
-				t.Fatalf("all shut: %+v", d)
-			}
-			s := openFixture(t, f.storePath)
-			defer s.Close()
-			if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
-				answer, err := Why(r, Pass{Now: l.cfg.Now().Format(time.RFC3339), AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
-				if err != nil {
-					return err
-				}
-				row := answer.Rows[0]
-				if row.Decision.Seat != "design" || row.Decision.DeferredBy != "fixture" {
-					t.Errorf("hold lost the design seat or selected backend: %+v", row.Decision)
-				}
-				if !strings.Contains(row.Why, "fixture: weekly quota refusal recorded by run refused") ||
-					!strings.Contains(row.Mover, reset.Format(time.RFC3339)) {
-					t.Errorf("hold has the wrong quota evidence or mover: %+v", row)
-				}
-				var n int
-				if err := r.QueryRow(`SELECT COUNT(*) FROM dispatches`).Scan(&n); err != nil {
-					return err
-				}
-				if n != 0 {
-					t.Errorf("held conflict dispatched %d runs", n)
-				}
-				return nil
-			}); err != nil {
-				t.Fatal(err)
-			}
-			l.cfg.Now = func() time.Time { return reset }
-			reopened := mustPlan(t, l)[0].decision
-			if reopened.RunRequest == nil || reopened.RunRequest.Backend != "fixture" {
-				t.Fatalf("window did not reopen: %+v", reopened)
-			}
-		})
+func TestConflictDesignHoldsOnItsShutBackend(t *testing.T) {
+	f, l := designQuotaFixture(t)
+	reset := l.cfg.Now().Add(time.Hour)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`INSERT INTO backend_windows VALUES ('fixture', 'weekly', 1, 'rejected', ?, 'refused')`, reset.UnixMilli())
+		return err
+	})
+	d := mustPlan(t, l)[0].decision
+	if d.Action != ActionHold || d.Reason != ReasonBackendWindow || d.RunRequest != nil {
+		t.Fatalf("shut design seat: %+v", d)
+	}
+	s := openFixture(t, f.storePath)
+	defer s.Close()
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		answer, err := Why(r, Pass{Now: l.cfg.Now().Format(time.RFC3339), AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
+		if err != nil {
+			return err
+		}
+		row := answer.Rows[0]
+		if row.Decision.Seat != "design" || row.Decision.DeferredBy != "fixture" {
+			t.Errorf("hold lost the design seat or selected backend: %+v", row.Decision)
+		}
+		if !strings.Contains(row.Why, "fixture: weekly quota refusal recorded by run refused") ||
+			!strings.Contains(row.Mover, reset.Format(time.RFC3339)) {
+			t.Errorf("hold has the wrong quota evidence or mover: %+v", row)
+		}
+		var n int
+		if err := r.QueryRow(`SELECT COUNT(*) FROM dispatches`).Scan(&n); err != nil {
+			return err
+		}
+		if n != 0 {
+			t.Errorf("held conflict dispatched %d runs", n)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	l.cfg.Now = func() time.Time { return reset }
+	reopened := mustPlan(t, l)[0].decision
+	if reopened.RunRequest == nil || reopened.RunRequest.Backend != "fixture" {
+		t.Fatalf("window did not reopen: %+v", reopened)
 	}
 }
 
-func TestDesignQuotaRefusalRaisesConflictForNextSeat(t *testing.T) {
+func TestDesignQuotaRefusalHoldsConflictOnSameSeat(t *testing.T) {
 	f, l := designQuotaFixture(t)
 	p := mustPlan(t, l)[0]
 	base := runGit(t, f.root, "rev-parse", TrunkRef)
@@ -131,8 +112,8 @@ func TestDesignQuotaRefusalRaisesConflictForNextSeat(t *testing.T) {
 		return nil
 	})
 	next := mustPlan(t, l)[0].decision
-	if next.Action != ActionDispatch || next.RunRequest == nil || next.RunRequest.Backend != "designer-b" {
-		t.Fatalf("next pass did not fail over: %+v", next)
+	if next.Action != ActionHold || next.Reason != ReasonBackendWindow || next.DeferredBy != "fixture" {
+		t.Fatalf("next pass did not hold on fixture: %+v", next)
 	}
 }
 

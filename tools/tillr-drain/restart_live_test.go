@@ -79,7 +79,7 @@ func startRoll(t *testing.T, lanes int, pauseKind string, harnessBody ...string)
 	t.Setenv("STUB_ARGV", filepath.Join(dir, "argv"))
 	adapter := filepath.Join(adapterDir, "pi", "run-pi")
 	s.f = newLoopFixture(t, adapter)
-	s.f.policy.DefaultBackend, s.f.policy.Preference = "pi", []string{"pi"}
+	s.f.policy.DefaultBackend = "pi"
 	delete(s.f.policy.Backends, "fixture")
 	s.f.policy.Backends["pi"] = drain.Backend{Adapter: adapter, Model: "fixture-model", Effort: "low", TimeoutSeconds: 0}
 	records := []string{}

@@ -69,93 +69,87 @@ func TestSeatSharesClaimHonorsReserve(t *testing.T) {
 	plans := mustPlan(t, loop)
 	base := runGit(t, f.root, "rev-parse", TrunkRef)
 	reading(.8)
-	for i, want := range []string{"builder-b", "builder-b", "builder-a"} {
-		if i == 2 {
-			reading(.79)
-		}
-		ok, work, err := loop.applyPlan(context.Background(), plans[i], base, at)
-		if err != nil || !ok {
-			t.Fatalf("claim %d: ok=%v, err=%v", i, ok, err)
-		}
-		if got := work.Decision.RunRequest.Backend; got != want {
-			t.Fatalf("claim %d: got %s, want %s", i, got, want)
-		}
+	ok, work, err := loop.applyPlan(context.Background(), plans[0], base, at)
+	if err != nil || ok || work != nil {
+		t.Fatalf("claim on the drawn, closed backend: ok=%v work=%+v err=%v", ok, work, err)
+	}
+	reading(.79)
+	ok, work, err = loop.applyPlan(context.Background(), plans[0], base, at)
+	if err != nil || !ok || work.Decision.RunRequest.Backend != "builder-a" {
+		t.Fatalf("claim after reopening: ok=%v work=%+v err=%v", ok, work, err)
 	}
 }
 
-func TestSeatSharesRoundRobinQuotaFailoverAndRollback(t *testing.T) {
-	ctx := context.Background()
-	f, _ := passFixture(t, "item-a")
-	s, err := store.Open(ctx, f.storePath, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	p := sharesPolicy(t, `{"backends":["builder-a","builder-b","designer-a"],"pick":"round-robin"}`)
-	choose := func(id string, policy Policy, shut map[string]bool, fresh bool, backend string, rollback bool) string {
-		t.Helper()
-		d := Decision{DecisionID: id, ItemID: id, Seat: "build", LaneID: "lane", Action: ActionDispatch, SelectSeat: fresh, RunRequest: policy.request(id, "lane", id, backend)}
-		err := s.WriteTx(ctx, func(tx *store.Tx) error {
-			ok, err := selectSeatDispatch(tx, &d, &policy, shut, time.Now())
+func TestSeatSharesClosedDrawSurvivesRollbackAndReopen(t *testing.T) {
+	for _, pick := range []string{"in-order", "round-robin", "random"} {
+		t.Run(pick, func(t *testing.T) {
+			ctx := context.Background()
+			f, _ := passFixture(t, "item-a")
+			s, err := store.Open(ctx, f.storePath, true)
 			if err != nil {
-				return err
+				t.Fatal(err)
 			}
-			if !ok {
-				t.Fatal("no backend")
+			defer func() { _ = s.Close() }()
+			p := sharesPolicy(t, fmt.Sprintf(`{"backends":[{"backend":"builder-a","share":1},{"backend":"builder-b","share":1},{"backend":"designer-a","share":1}],"pick":%q}`, pick))
+			if err := p.Check(); err != nil {
+				t.Fatal(err)
 			}
-			if rollback {
-				return errSeatWindowClosed
+			p.seatDraw = func() float64 { return 0 }
+			choose := func(id string, shut map[string]bool, rollback bool) string {
+				t.Helper()
+				d := Decision{DecisionID: id, ItemID: id, Seat: "build", LaneID: "lane", Action: ActionDispatch, SelectSeat: true, RunRequest: p.request(id, "lane", id, "builder-a")}
+				var result string
+				err := s.WriteTx(ctx, func(tx *store.Tx) error {
+					return keepSeatWait(tx, func() error {
+						ok, err := selectSeatDispatch(tx, &d, &p, shut, time.Now())
+						if err != nil || !ok {
+							return err
+						}
+						result = d.RunRequest.Backend
+						if rollback {
+							return errSeatWindowClosed
+						}
+						return recordPassDecision(tx, d, time.Now())
+					})
+				})
+				if err != nil && !(rollback && err == errSeatWindowClosed) {
+					t.Fatal(err)
+				}
+				return result
 			}
-			return recordPassDecision(tx, d, time.Now())
+			if got := choose("rolled-back", nil, true); got != "builder-a" {
+				t.Fatalf("rolled-back draw: %s", got)
+			}
+			shut := map[string]bool{"builder-a": true}
+			if got := choose("waiting", shut, false); got != "" {
+				t.Fatalf("closed draw dispatched on %s", got)
+			}
+			// Change the next selection: a new draw would no longer give A.
+			if got := choose("another", nil, false); got != "builder-a" {
+				t.Fatalf("wait counted as a dispatch: %s", got)
+			}
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := store.Open(ctx, f.storePath, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			s = reopened
+			p.seatDraw = func() float64 { return .99 }
+			if got := choose("waiting", shut, false); got != "" {
+				t.Fatalf("waiting item redrew onto %s", got)
+			}
+			if got := choose("waiting", nil, false); got != "builder-a" {
+				t.Fatalf("reopened draw = %s, want builder-a", got)
+			}
+			if pick == "round-robin" {
+				for i, want := range []string{"builder-b", "designer-a", "builder-a"} {
+					if got := choose(fmt.Sprintf("turn-%d", i), nil, false); got != want {
+						t.Errorf("round-robin turn %d = %s, want %s", i, got, want)
+					}
+				}
+			}
 		})
-		if err != nil && !(rollback && err == errSeatWindowClosed) {
-			t.Fatal(err)
-		}
-		return d.RunRequest.Backend
-	}
-	for i, want := range []string{"builder-a", "builder-b", "designer-a", "builder-a", "builder-b", "designer-a"} {
-		if got := choose(fmt.Sprint(i), p, nil, true, "builder-a", false); got != want {
-			t.Fatalf("round robin %d: %s, want %s", i, got, want)
-		}
-	}
-	if got := choose("rolled-back", p, nil, true, "builder-a", true); got != "builder-a" {
-		t.Fatal(got)
-	}
-	if got := choose("after-rollback", p, map[string]bool{"builder-a": true}, true, "builder-a", false); got != "builder-b" {
-		t.Fatal(got)
-	}
-	// Ordered refusal fail-over stays at the planner-selected successor, never draws again.
-	if got := choose("failover", p, nil, false, "designer-a", false); got != "designer-a" {
-		t.Fatal(got)
-	}
-	legacy := sharesPolicy(t, `["builder-a","builder-b"]`)
-	if got := choose("legacy", legacy, nil, true, "builder-a", false); got != "builder-a" {
-		t.Fatal(got)
-	}
-	weighted := sharesPolicy(t, `[{"backend":"builder-a","share":100},{"backend":"builder-b","share":3},{"backend":"designer-a","share":1}]`)
-	// Counts in a separate seat start at zero; a quota/reserve closure removes its
-	// entire weight. Surviving services receive 3:1, not 100:3:1.
-	weighted.Seats["review"] = weighted.Seats["build"]
-	weighted.SeatLists["review"] = weighted.SeatLists["build"]
-	weighted.SeatShares["review"] = weighted.SeatShares["build"]
-	counts := map[string]int{}
-	for i := 0; i < 40; i++ {
-		d := Decision{DecisionID: fmt.Sprintf("quota-%d", i), ItemID: fmt.Sprintf("quota-%d", i), Seat: "review", Action: ActionDispatch, SelectSeat: true, RunRequest: weighted.request("quota", "lane", fmt.Sprintf("quota-%d", i), "builder-a")}
-		if err := s.WriteTx(ctx, func(tx *store.Tx) error {
-			ok, err := selectSeatDispatch(tx, &d, &weighted, map[string]bool{"builder-a": true}, time.Now())
-			if err != nil {
-				return err
-			}
-			if !ok {
-				t.Fatal("all closed")
-			}
-			return recordPassDecision(tx, d, time.Now())
-		}); err != nil {
-			t.Fatal(err)
-		}
-		counts[d.RunRequest.Backend]++
-	}
-	if counts["builder-a"] != 0 || counts["builder-b"] != 30 || counts["designer-a"] != 10 {
-		t.Fatalf("closed quota redistribution: %v", counts)
 	}
 }

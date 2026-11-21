@@ -37,12 +37,11 @@ func TestPlanHoldsWhenAllSeatWindowsAreShut(t *testing.T) {
 	}
 }
 
-func TestLoopSkipsSpentWindowAcrossRestartAndReopens(t *testing.T) {
+func TestLoopHoldsSpentWindowAcrossRestartAndReopens(t *testing.T) {
 	refused := stub(t, "spent", counting+"exit 1\n")
 	fallback := stub(t, "fallback", committingAdapter)
 	f := newLoopFixture(t, refused)
-	f.policy.Preference = []string{"fixture", "fallback"}
-	f.policy.SeatLists = map[string][]string{"build": {"fixture", "fallback"}}
+	f.policy.Seats = map[string]string{"build": "fixture"}
 	f.policy.Backends["fallback"] = drain.Backend{Adapter: fallback, Model: "floor"}
 	steps := f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0))
 	now := steps.Now()
@@ -61,16 +60,16 @@ func TestLoopSkipsSpentWindowAcrossRestartAndReopens(t *testing.T) {
 	runLoop()
 	first := runsForItem(t, f.store, "item_051")
 	second := runsForItem(t, f.store, "item_052")
-	if len(first) != 2 || first[0].Backend != "fixture" || first[1].Backend != "fallback" {
+	if len(first) != 1 || first[0].Backend != "fixture" {
 		t.Fatalf("first: %+v", first)
 	}
-	if len(second) != 1 || second[0].Backend != "fallback" {
-		t.Fatalf("shut backend was started: %+v", second)
+	if len(second) != 0 {
+		t.Fatalf("work started while its backend was shut: %+v", second)
 	}
 	fixtureAt(t, f.store, itemRecordSeated("item_053", "in-queue", "build"))
 	runLoop() // A new loop instance must read the hold from the same store.
 	third := runsForItem(t, f.store, "item_053")
-	if len(third) != 1 || third[0].Backend != "fallback" {
+	if len(third) != 0 {
 		t.Fatalf("restart lost hold: %+v", third)
 	}
 	now = reset
@@ -81,9 +80,14 @@ func TestLoopSkipsSpentWindowAcrossRestartAndReopens(t *testing.T) {
 	}
 	fixtureAt(t, f.store, itemRecordSeated("item_054", "in-queue", "build"))
 	result := runLoop()
-	fourth := runsForItem(t, f.store, "item_054")
-	if len(fourth) != 1 || fourth[0].Backend != "fixture" || result.Landed != 1 {
-		t.Fatalf("reopened backend did not land the item in one run: %+v / %+v", fourth, result)
+	if result.Landed != 4 {
+		t.Fatalf("reopened backend did not land all four queued items: %+v", result)
+	}
+	for _, id := range []string{"item_052", "item_053", "item_054"} {
+		runs := runsForItem(t, f.store, id)
+		if len(runs) != 1 || runs[0].Backend != "fixture" {
+			t.Errorf("%s: expected one run on the reopened backend, got %+v", id, runs)
+		}
 	}
 }
 
@@ -96,7 +100,6 @@ func TestLoopHoldsInfrastructureFailureWithoutRefusedWindow(t *testing.T) {
 			f.policy.DefaultBackend = "pi"
 			f.policy.Backends["pi"] = f.policy.Backends["fixture"]
 			delete(f.policy.Backends, "fixture")
-			f.policy.Preference = []string{"pi", "fallback"}
 			f.policy.Backends["fallback"] = drain.Backend{Adapter: fallback, Model: "floor"}
 			fixtureAt(t, f.store, itemRecord("item_051", "in-queue"), itemRecord("item_052", "in-queue"))
 			steps := f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0))
@@ -106,14 +109,14 @@ func TestLoopHoldsInfrastructureFailureWithoutRefusedWindow(t *testing.T) {
 				t.Fatalf("loop: %+v / %v", result, err)
 			}
 			// Without a refusal window this is an infrastructure failure. The first
-			// item holds on pi; only new work starts on the open backend.
+			// item holds on pi, and new work assigned to pi also holds.
 			first := runsForItem(t, f.store, "item_051")
 			if len(first) != 1 || first[0].Backend != "pi" || !strings.Contains(result.Detail, "item_051 ("+drain.ReasonBackendClosed+": pi:") {
 				t.Fatalf("first item did not hold on pi: %+v / %s", first, result.Detail)
 			}
 			second := runsForItem(t, f.store, "item_052")
-			if len(second) != 1 || second[0].Backend != "fallback" {
-				t.Fatalf("second item was sent to the closed backend: %+v", second)
+			if len(second) != 0 {
+				t.Fatalf("second item started despite the closure: %+v", second)
 			}
 		})
 	}

@@ -79,7 +79,6 @@ func TestSignalEndingsLeaveBackendAvailabilityUnchangedAndInfraStillCloses(t *te
 	f, l := passFixture(t, "item-a")
 	b := l.cfg.Policy.Backends["fixture"]
 	l.cfg.Policy.Backends["backup"] = b
-	l.cfg.Policy.Preference = []string{"fixture", "backup"}
 
 	signals := []run.Record{
 		{RunID: "sig-1", ItemID: "item-a", LaneID: "lane-1", Backend: "fixture", State: run.StateExited, ExitCode: code(-1), EndCause: run.EndSignal, StartedAt: "2026-11-19T00:00:00Z", FinishedAt: "2026-11-19T00:00:01Z"},
@@ -154,7 +153,6 @@ func TestSingleRunSettleSignalDoesNotIncrementInfraOrFailover(t *testing.T) {
 	f, l := passFixture(t, "item-a")
 	b := l.cfg.Policy.Backends["fixture"]
 	l.cfg.Policy.Backends["backup"] = b
-	l.cfg.Policy.Preference = []string{"fixture", "backup"}
 
 	p := mustPlan(t, l)[0]
 	mainSHA := runGit(t, f.root, "rev-parse", TrunkRef)
@@ -185,7 +183,6 @@ func TestUnsavedEndSignalClassifiedBeforeRecordBackendOutcomes(t *testing.T) {
 	f, l := passFixture(t, "item-a")
 	b := l.cfg.Policy.Backends["fixture"]
 	l.cfg.Policy.Backends["backup"] = b
-	l.cfg.Policy.Preference = []string{"fixture", "backup"}
 
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		return applyTerminal(tx, run.Record{
@@ -247,7 +244,6 @@ func TestSequentialWorkflowNodeInterruptedRestartsSameBackendAndLands(t *testing
 	f, l, ws := workflowLoopFixture(t, "")
 	b := l.cfg.Policy.Backends["fixture"]
 	l.cfg.Policy.Backends["backup"] = b
-	l.cfg.Policy.Preference = []string{"fixture", "backup"}
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE items SET state='closed' WHERE item_id='item-b'`)
 		return err
@@ -375,7 +371,6 @@ func TestParallelReadOnlyNodeInterruptedRestartsOnlyInterruptedReaderSameBackend
 	f, l, ps := parallelFixture(t)
 	b := l.cfg.Policy.Backends["fixture"]
 	l.cfg.Policy.Backends["backup"] = b
-	l.cfg.Policy.Preference = []string{"fixture", "backup"}
 	ps.writerAfter = 5
 	ps.builderSuffix = "-n5"
 	steps := &parallelSignalSteps{

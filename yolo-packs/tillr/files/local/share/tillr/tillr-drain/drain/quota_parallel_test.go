@@ -75,50 +75,49 @@ func TestRetainedParallelQuotaAdmission(t *testing.T) {
 
 func TestParallelQuotaAdmissionChecksSiblingBackends(t *testing.T) {
 	for _, state := range []string{"reserve", "stale", "error"} {
-		for _, fallback := range []bool{false, true} {
+		for _, open := range []bool{false, true} {
 			name := state
-			if fallback {
-				name += "-fallback"
+			if open {
+				name += "-open-seat"
 			}
 			t.Run(name, func(t *testing.T) {
 				f, l, _ := parallelFixture(t)
 				l.cfg.Policy.Backends["blocked"] = Backend{Adapter: "fixture", Quota: fixtureQuotaCommand(), Reserve: .2}
-				l.cfg.Policy.Backends["fallback"] = Backend{Adapter: "fixture"}
-				l.cfg.Policy.Backends["blocked2"] = l.cfg.Policy.Backends["blocked"]
-				l.cfg.Policy.SeatLists = map[string][]string{"secondary": {"blocked", "blocked2"}}
-				if fallback {
-					l.cfg.Policy.SeatLists["secondary"] = []string{"blocked", "fallback"}
+				l.cfg.Policy.Backends["open"] = Backend{Adapter: "fixture"}
+				l.cfg.Policy.Seats["secondary"] = "blocked"
+				if open {
+					l.cfg.Policy.Seats["secondary"] = "open"
 				}
 				d := mustPlan(t, l)[0].decision
 				d.Workflow.Stages[1].Seat = "secondary"
 				fixtureWrite(t, f, func(tx *store.Tx) error {
 					switch state {
 					case "reserve":
-						_, err := tx.Exec(`UPDATE backend_quota SET windows='[{"kind":"five_hour","fraction":0.8,"reset_at":"2099-11-18T00:00:00Z"}]' WHERE backend IN ('blocked','blocked2')`)
+						_, err := tx.Exec(`UPDATE backend_quota SET windows='[{"kind":"five_hour","fraction":0.8,"reset_at":"2099-11-18T00:00:00Z"}]' WHERE backend='blocked'`)
 						return err
 					case "stale":
-						_, err := tx.Exec(`UPDATE backend_quota SET observed_at=? WHERE backend IN ('blocked','blocked2')`, l.cfg.Now().Add(-QuotaProbeInterval-time.Second).UnixMilli())
+						_, err := tx.Exec(`UPDATE backend_quota SET observed_at=? WHERE backend='blocked'`, l.cfg.Now().Add(-QuotaProbeInterval-time.Second).UnixMilli())
 						return err
 					default:
-						_, err := tx.Exec(`UPDATE backend_quota SET windows='[]',error='quota command failed' WHERE backend IN ('blocked','blocked2')`)
+						_, err := tx.Exec(`UPDATE backend_quota SET windows='[]',error='quota command failed' WHERE backend='blocked'`)
 						return err
 					}
 				})
 				fixtureWrite(t, f, func(tx *store.Tx) error { return l.claimParallel(tx, &d) })
 				found := false
 				for _, sibling := range d.Parallel {
-					if sibling.RunRequest.Backend == "blocked" || sibling.RunRequest.Backend == "blocked2" {
+					if sibling.RunRequest.Backend == "blocked" {
 						t.Fatalf("claimed %s sibling on closed backend", state)
 					}
 					if sibling.Workflow.Stages[sibling.NodeIndex].ID == "scout2" {
 						found = true
-						if sibling.RunRequest.Backend != "fallback" {
-							t.Fatalf("wrong fallback: %+v", sibling.RunRequest)
+						if sibling.RunRequest.Backend != "open" {
+							t.Fatalf("wrong explicit backend: %+v", sibling.RunRequest)
 						}
 					}
 				}
-				if found != fallback {
-					t.Fatalf("secondary claimed=%v, fallback=%v", found, fallback)
+				if found != open {
+					t.Fatalf("secondary claimed=%v, open=%v", found, open)
 				}
 			})
 		}

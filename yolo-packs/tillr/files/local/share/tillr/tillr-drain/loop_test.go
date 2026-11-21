@@ -104,7 +104,6 @@ func newLoopFixture(t *testing.T, adapter string) loopFixture {
 		count:    count,
 		policy: &drain.Policy{
 			DefaultBackend: "fixture",
-			Preference:     []string{"fixture"},
 			Backends: map[string]drain.Backend{
 				"fixture": {Adapter: adapter, Model: "fixture-model", TimeoutSeconds: 60},
 			},
@@ -627,7 +626,6 @@ exit 4
 	f := newLoopFixture(t, pi)
 	f.policy = &drain.Policy{
 		DefaultBackend: "pi",
-		Preference:     []string{"pi", "agy"},
 		Backends: map[string]drain.Backend{
 			"pi":  {Adapter: pi, Model: "pi-model", TimeoutSeconds: 60},
 			"agy": {Adapter: agy, Model: "agy-model", TimeoutSeconds: 60},

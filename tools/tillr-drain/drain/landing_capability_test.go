@@ -277,7 +277,6 @@ print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "st
 	})
 	l.cfg.Lanes = []string{"lane-1"}
 	l.cfg.Policy.DefaultBackend = "claude"
-	l.cfg.Policy.Preference = []string{"claude"}
 	l.cfg.Policy.Backends = map[string]Backend{"claude": {Adapter: adapter, Model: "fixture-model", Effort: "medium"}}
 	steps := &claudeLandingCallSteps{&designRepairSteps{
 		returnedLandingSteps: &returnedLandingSteps{

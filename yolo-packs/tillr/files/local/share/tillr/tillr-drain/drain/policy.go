@@ -23,9 +23,8 @@ import (
 type Backend = run.Backend
 
 // Policy is the document `policy_ref` names: the backends a tick may dispatch to, the one
-// it dispatches to by default, the ordered preference a failover walks, the seat map that
-// routes a role to a backend, and the per-item overrides that choose one item's first
-// backend (docs/reference/tillr-muse-backend.md, D-MM8).
+// it dispatches to by default, the seat assignments, and the per-item overrides
+// that choose a backend for individual items (docs/reference/tillr-muse-backend.md, D-MM8).
 //
 // Per-item selection lives here and never on the item: a backend is an execution choice
 // made at dispatch time, so it belongs where changing it is one policy edit rather than a
@@ -43,23 +42,16 @@ type Policy struct {
 	Ref           string            `json:"-"` // Source path, when loaded from a file.
 	Root          string            `json:"-"` // Root repository for relative adapter paths.
 
-	DefaultBackend string   `json:"default_backend"`
-	Preference     []string `json:"preference"`
+	DefaultBackend string `json:"default_backend"`
 	// Seats maps each seat the item model defines (seat.go) to the backend that fills it. It is where a role reaches a model: an item names the seat and never a model
 	// id, so swapping which model designs, or moving the design seat to another backend, is
 	// an edit here and touches no item.
 	//
-	// In the document a seat's value is a backend name or an ordered list of them
-	// (docs/design/tillr-claude-backend.md §4, D-CB3). Seats always holds the seat's first
-	// backend for ordered previews; claims apply shares or pick. SeatLists holds the list for a seat the
-	// document spelled as an array. The two fields exist so that a seat which names one
-	// backend reads, decodes and is written in code exactly as it was before lists existed.
+	// Seats holds the single backend or the head of a shared seat for previews.
+	// Claims use the shares and pick to choose a shared seat's backend.
 	Seats map[string]string `json:"seats,omitempty"`
-	// SeatLists is the ordered list of backends a seat falls back through, for a seat that
-	// names more than one. A failover for an item on that seat walks this list forward
-	// instead of the policy's preference, so design work falls back to a design backend
-	// rather than to whatever the build seat runs. It is filled by UnmarshalJSON from the
-	// `seats` array form and is never a key of its own in the document.
+	// SeatLists retains array entries from the document, including singleton arrays.
+	// It is not a top-level policy key.
 	SeatLists map[string][]string `json:"-"`
 	// SeatShares and SeatPicks are decoded from seat entries, not top-level keys.
 	SeatShares map[string][]float64 `json:"-"`
@@ -135,8 +127,8 @@ func (p *Policy) UnmarshalJSON(raw []byte) error {
 }
 
 // seatValue is one `seats` value as written: a JSON string (one backend, today's form) or
-// a JSON array of strings (an ordered fallback list). Anything else is a decode error,
-// which readPolicy reports as the usage refusal it reports every malformed document as.
+// a list (optionally wrapped in an object specifying the pick). Check requires shares
+// when the list names more than one backend.
 type seatValue struct {
 	names  []string
 	list   bool
@@ -270,22 +262,6 @@ func (p Policy) Check() error {
 	if _, ok := p.Backends[p.DefaultBackend]; !ok {
 		return Usagef("the policy's default_backend %q is not one of its backends: want one of %v", p.DefaultBackend, backendNames(p.Backends))
 	}
-	if len(p.Preference) > 0 && p.Preference[0] != p.DefaultBackend {
-		// A default that is not the preference's head would be read two ways: as what a
-		// tick stamps and as where a failover starts. Refused rather than read twice.
-		return Usagef("the policy's default_backend %q is not the head of its preference %v: a policy is refused rather than read two ways",
-			p.DefaultBackend, p.Preference)
-	}
-	seen := map[string]bool{}
-	for _, name := range p.Preference {
-		if _, ok := p.Backends[name]; !ok {
-			return Usagef("the policy's preference names %q, which is not one of its backends: want one of %v", name, backendNames(p.Backends))
-		}
-		if seen[name] {
-			return Usagef("the policy's preference names %q twice: the walk would visit it twice", name)
-		}
-		seen[name] = true
-	}
 	for _, name := range backendNames(p.Backends) {
 		if err := checkBackend(name, p.Backends[name]); err != nil {
 			return err
@@ -302,6 +278,9 @@ func (p Policy) Check() error {
 			return Usagef(invalidPolicySeatName, seat, p.seatDeclaration())
 		}
 		list := p.seatList(seat)
+		if len(list) > 1 && len(p.SeatShares[seat]) == 0 {
+			return Usagef("seat %q must name one backend or give every backend a share", seat)
+		}
 		if pick := p.SeatPicks[seat]; pick != "" && pick != "in-order" && pick != "round-robin" && pick != "random" {
 			return Usagef("seat %q pick %q must be in-order, round-robin, or random", seat, pick)
 		}
@@ -331,7 +310,7 @@ func (p Policy) Check() error {
 					seat, name, backendNames(p.Backends))
 			}
 			if seen[name] {
-				return Usagef("the policy maps seat %q to backend %q twice: the fallback walk would visit it twice", seat, name)
+				return Usagef("the policy maps seat %q to backend %q twice", seat, name)
 			}
 			seen[name] = true
 		}
@@ -357,8 +336,7 @@ func checkBackend(name string, b Backend) error {
 //
 // The order is the specificity of the statement. An override is one item's own dispatch
 // decision, so it outranks the seat, which is a statement about the kind of work, which in
-// turn outranks the backend an item that asked for nothing gets (design §2's precedence: a
-// statement about the work outranks the preference for the first dispatch).
+// turn outranks the default backend for unseated work.
 //
 // A seat the policy does not map never reaches here: Plan refuses such a plan before it
 // builds a decision (checkSeats), because the alternative is dispatching design work to the
@@ -374,49 +352,6 @@ func (p Policy) firstBackend(row itemRow) string {
 		}
 	}
 	return p.DefaultBackend
-}
-
-func (p Policy) singleBackendSeat(seat string) bool {
-	return seat != "" && len(p.seatList(seat)) == 1
-}
-
-// nextBackend walks the declared list (or, for unseated work, the preference),
-// wrapping at the end. A single-backend seat has no failover route. An explicit
-// override still selects the first backend but does not create a failover route.
-func (p Policy) nextBackend(failed, seat string) (string, bool) {
-	order := p.Preference
-	if list := p.seatList(seat); seat != "" && len(list) > 0 {
-		if len(list) == 1 {
-			return "", false
-		}
-		order = list
-	}
-	for i, name := range order {
-		if name == failed {
-			return order[(i+1)%len(order)], true
-		}
-	}
-	if len(order) > 0 {
-		return order[0], true
-	}
-	return failed, failed != ""
-}
-
-// NextRequest builds a continuation without admitting it. When a singleton
-// seat fails, retain its node request on the same backend for planning to hold.
-func (p Policy) NextRequest(itemID, laneID, runID, failedBackend, seat string) (*run.Request, bool) {
-	next, ok := p.nextBackend(failedBackend, seat)
-	if p.singleBackendSeat(seat) {
-		next, ok = failedBackend, failedBackend != ""
-	}
-	if !ok {
-		return nil, false
-	}
-	req := p.request(itemID, laneID, runID, next)
-	if req != nil {
-		req.Seat = seat
-	}
-	return req, true
 }
 
 // request is the complete run.request one dispatch carries, built from the backend the

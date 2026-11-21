@@ -78,7 +78,7 @@ func TestSeatSharesPersistedDispatches(t *testing.T) {
 	}{
 		{`[{"backend":"builder-a","share":1},{"backend":"builder-b","share":1}]`, 40, 20},
 		{`[{"backend":"builder-a","share":3},{"backend":"builder-b","share":1}]`, 40, 30},
-		{`{"backends":["builder-a","builder-b"],"pick":"random"}`, 300, -1},
+		{`{"backends":[{"backend":"builder-a","share":1},{"backend":"builder-b","share":1}],"pick":"random"}`, 300, -1},
 		{`{"backends":[{"backend":"builder-a","share":3},{"backend":"builder-b","share":1}],"pick":"random"}`, 300, -2},
 	} {
 		t.Run(tc.seat, func(t *testing.T) {

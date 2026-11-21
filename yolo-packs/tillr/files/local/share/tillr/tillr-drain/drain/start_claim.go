@@ -143,7 +143,7 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 	var claimed *pendingWork
 	// Any Git/file fact a validation needs is fetched by writeGathered only
 	// after rolling back. The next attempt rechecks the SQLite facts.
-	err = writeGatheredFrom(ctx, s, facts, func(ctx context.Context, tx *store.Tx) error {
+	err = writeGatheredFrom(ctx, s, facts, seatClaim(policy, func(ctx context.Context, tx *store.Tx) error {
 		claimed = nil
 		r := tx.Reader()
 		current, err := currentDefinition(r, plannedApplication{definitionSHA: proposal.definitionSHA})
@@ -308,7 +308,7 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 		}
 		claimed, err = l.recordFastStart(ctx, tx, d, base, fork, owner, byRun, policy, shut, parallelShut, at)
 		return err
-	})
+	}))
 	if errors.Is(err, errSeatWindowClosed) {
 		return false, nil, "", Decision{}, nil
 	}

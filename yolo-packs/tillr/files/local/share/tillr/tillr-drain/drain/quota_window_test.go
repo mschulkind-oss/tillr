@@ -57,22 +57,3 @@ func TestRefusedWindowAcceptsClaudeRateLimitedFixture(t *testing.T) {
 		t.Fatalf("refusedWindow = (%q, %v, %v, %v), want (five_hour, 1.02, %v, true)", kind, fraction, reset, ok, time.Unix(1795128600, 0).UTC())
 	}
 }
-
-func TestAvailableBackendSkipsEveryShutHopWithoutEscapingSeat(t *testing.T) {
-	p := Policy{SeatLists: map[string][]string{"design": {"a", "b", "c"}}, Preference: []string{"floor"}}
-	for _, tc := range []struct {
-		shut map[string]bool
-		want string
-		ok   bool
-	}{
-		{map[string]bool{"a": true}, "b", true},
-		{map[string]bool{"a": true, "b": true}, "c", true},
-		{map[string]bool{"a": true, "b": true, "c": true}, "", false},
-		{map[string]bool{}, "a", true},
-	} {
-		name, ok := p.availableBackend("a", "design", tc.shut)
-		if name != tc.want || ok != tc.ok {
-			t.Fatalf("%v: %s %v", tc.shut, name, ok)
-		}
-	}
-}

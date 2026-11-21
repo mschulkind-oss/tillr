@@ -68,26 +68,10 @@ func TestBackendInfrastructureClosureAndRecordedReopening(t *testing.T) {
 	}
 }
 
-func TestQuotaWindowWalkWrapsAndKeepsSeat(t *testing.T) {
-	p := Policy{Preference: []string{"a", "b", "c"}, SeatLists: map[string][]string{"design": {"a", "b"}}}
-	name, ok := p.availableBackend("c", "", map[string]bool{"c": true})
-	if !ok || name != "a" {
-		t.Fatalf("preference did not wrap: %s %v", name, ok)
-	}
-	name, ok = p.availableBackend("b", "design", map[string]bool{"b": true})
-	if !ok || name != "a" {
-		t.Fatalf("seat did not wrap: %s %v", name, ok)
-	}
-	if _, ok := p.availableBackend("b", "design", map[string]bool{"a": true, "b": true}); ok {
-		t.Fatal("escaped closed seat")
-	}
-}
-
 func TestSingleBackendSeatNamesTheRecordedQuotaWindow(t *testing.T) {
 	f, l, _ := workflowLoopFixture(t, "")
 	b := l.cfg.Policy.Backends["fixture"]
 	l.cfg.Policy.Backends["alternate"] = b
-	l.cfg.Policy.Preference = []string{"fixture", "alternate"}
 	reset := l.cfg.Now().Add(time.Hour).UTC()
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		_, err := tx.Exec(`INSERT INTO backend_windows VALUES('fixture','weekly',1,'rejected',?,'refusing-run')`, reset.UnixMilli())
@@ -105,7 +89,6 @@ func TestSingleBackendSeatNamesTheRecordedQuotaWindow(t *testing.T) {
 func TestWorkflowBackendFailureWaitsAndReopensSameNode(t *testing.T) {
 	f, l, _ := workflowLoopFixture(t, "")
 	l.cfg.Policy.Backends["alternate"] = l.cfg.Policy.Backends["fixture"]
-	l.cfg.Policy.Preference = []string{"fixture", "alternate"}
 	p := mustPlan(t, l)[0]
 	if ok, _, err := l.applyPlan(context.Background(), p, runGit(t, f.root, "rev-parse", TrunkRef), l.cfg.Now()); err != nil || !ok {
 		t.Fatalf("claim: %v %v", ok, err)
@@ -177,7 +160,6 @@ func TestBackendHoldNamesOnlyTheFailedBackend(t *testing.T) {
 	b := l.cfg.Policy.Backends["fixture"]
 	l.cfg.Policy.Backends["override"] = b
 	l.cfg.Policy.Backends["alternate"] = b
-	l.cfg.Policy.Preference = []string{"fixture", "alternate"}
 	l.cfg.Policy.Overrides = map[string]string{"item-a": "override"}
 	backendRun(t, f, "override-failed", "override", 2)
 	d := mustPlan(t, l)[0].decision

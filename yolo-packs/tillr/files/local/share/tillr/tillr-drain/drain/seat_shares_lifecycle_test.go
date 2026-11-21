@@ -15,6 +15,7 @@ func TestSeatSharesWorkflowRestartKeepsRecordedBackend(t *testing.T) {
 	backend.Model = "other-model"
 	l.cfg.Policy.Backends["other"] = backend
 	l.cfg.Policy.SeatLists = map[string][]string{"build": {"fixture", "other"}}
+	l.cfg.Policy.SeatShares = map[string][]float64{"build": {1, 1}}
 	l.cfg.Policy.SeatPicks = map[string]string{"build": "random"}
 	l.cfg.Policy.seatDraw = func() float64 { return .99 }
 	p := mustPlan(t, l)[0]
@@ -38,6 +39,7 @@ func TestSeatSharesCancelledStagingRetractsAllUnstartedChoices(t *testing.T) {
 	p := twoBackends()
 	p.Seats = map[string]string{"build": "first"}
 	p.SeatLists = map[string][]string{"build": {"first", "second"}}
+	p.SeatShares = map[string][]float64{"build": {1, 1}}
 	p.SeatPicks = map[string]string{"build": "random"}
 	p.seatDraw = func() float64 { return .99 }
 	l.cfg.Policy = &p
@@ -73,6 +75,7 @@ func TestSeatSharesCancelledStagingRetractsAllUnstartedChoices(t *testing.T) {
 		_, err := tx.Exec(`INSERT INTO backend_windows(backend,kind,fraction,status,reset_at,run_id) VALUES('second','quota',1,'rejected',?,'refused')`, l.cfg.Now().Add(time.Hour).UnixMilli())
 		return err
 	})
+	p.seatDraw = func() float64 { return 0 } // The cancelled draw must not be reused.
 	plan = mustPlan(t, l)[0]
 	ok, work, err = l.applyPlan(context.Background(), plan, base, l.cfg.Now())
 	if err != nil || !ok || work.Decision.RunRequest.Backend != "first" {
@@ -84,6 +87,7 @@ func TestSeatSharesParallelRestartWaitsForClosedSibling(t *testing.T) {
 	f, l, steps := parallelFixture(t)
 	l.cfg.Policy.Backends["other"] = l.cfg.Policy.Backends["fixture"]
 	l.cfg.Policy.SeatLists = map[string][]string{"scout": {"fixture", "other"}}
+	l.cfg.Policy.SeatShares = map[string][]float64{"scout": {1, 1}}
 	l.cfg.Policy.SeatPicks = map[string]string{"scout": "round-robin"}
 	steps.interrupt = true
 	steps.writerAfter = 6

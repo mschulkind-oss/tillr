@@ -58,6 +58,11 @@ CREATE TABLE IF NOT EXISTS seat_dispatches (
 );
 CREATE INDEX IF NOT EXISTS seat_dispatches_counts ON seat_dispatches(seat, backend);
 CREATE INDEX IF NOT EXISTS seat_dispatches_order ON seat_dispatches(seat, ordinal);
+CREATE TABLE IF NOT EXISTS seat_waiting_choices (
+  run_id TEXT PRIMARY KEY,
+  seat TEXT NOT NULL,
+  backend TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS workflow_selections (
  item_id TEXT PRIMARY KEY,
  workflow TEXT NOT NULL,

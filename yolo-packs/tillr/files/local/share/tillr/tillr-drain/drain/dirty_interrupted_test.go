@@ -113,7 +113,6 @@ func TestRepeatingAndSignaledWorkflowNodesWithDirtyWorktreePreserveAndContinue(t
 			return err
 		})
 		l.cfg.Policy.Backends["alternate"] = Backend{Adapter: "fixture"}
-		l.cfg.Policy.Preference = []string{"fixture", "alternate"}
 		l.cfg.Policy.SeatLists = map[string][]string{"build": {"fixture", "alternate"}}
 		steps := &dirtyWorkflowContinuationSteps{
 			restartWorkflowSteps: restart,
@@ -174,7 +173,6 @@ func TestRepeatingAndSignaledWorkflowNodesWithDirtyWorktreePreserveAndContinue(t
 			return err
 		})
 		l.cfg.Policy.Backends["alternate"] = Backend{Adapter: "fixture"}
-		l.cfg.Policy.Preference = []string{"fixture", "alternate"}
 		l.cfg.Policy.SeatLists = map[string][]string{"build": {"fixture", "alternate"}}
 		steps := &dirtyWorkflowContinuationSteps{
 			restartWorkflowSteps: restart,
@@ -235,7 +233,6 @@ func TestRepeatingAndSignaledWorkflowNodesWithDirtyWorktreePreserveAndContinue(t
 		})
 		l.cfg.Policy.Seats["plan"] = "fixture"
 		l.cfg.Policy.Backends["alternate"] = Backend{Adapter: "fixture"}
-		l.cfg.Policy.Preference = []string{"fixture", "alternate"}
 		l.cfg.Policy.SeatLists = map[string][]string{"plan": {"fixture", "alternate"}, "build": {"fixture", "alternate"}}
 		steps := &dirtyWorkflowContinuationSteps{
 			restartWorkflowSteps: &restartWorkflowSteps{workflowSteps: ws},
@@ -272,7 +269,6 @@ func TestRepeatingAndSignaledWorkflowNodesWithDirtyWorktreePreserveAndContinue(t
 			return err
 		})
 		l.cfg.Policy.Backends["alternate"] = Backend{Adapter: "fixture"}
-		l.cfg.Policy.Preference = []string{"fixture", "alternate"}
 		l.cfg.Policy.SeatLists = map[string][]string{"build": {"fixture", "alternate"}}
 
 		var briefs []string
@@ -466,7 +462,6 @@ func TestRestartInterruptedNodeAndRetryWorkflowNodePreserveWorkBeforeRestart(t *
 	t.Run("retryWorkflowNode", func(t *testing.T) {
 		f, l, _ := restartGraphFixture(t)
 		l.cfg.Policy.Backends["alternate"] = Backend{Adapter: "fixture"}
-		l.cfg.Policy.Preference = []string{"fixture", "alternate"}
 		l.cfg.Policy.SeatLists = map[string][]string{"build": {"fixture", "alternate"}}
 
 		ctx := context.Background()

@@ -94,12 +94,27 @@ func Once(ctx context.Context, s *store.Store, tick Pass, policy *Policy, questi
 			if err != nil {
 				return err
 			}
-			ok, err := selectSeatDispatch(tx, &decision, policy, shut, at)
-			if err != nil {
+			choose := func() error {
+				ok, err := selectSeatDispatch(tx, &decision, policy, shut, at)
+				var wait *seatWait
+				if errors.As(err, &wait) {
+					decision.Action, decision.Reason, decision.To = ActionHold, ReasonBackendWindow, ""
+					decision.DeferredBy, decision.LaneID, decision.RunRequest = wait.backend, "", nil
+					identifyDecision(&decision)
+					return err
+				}
+				if err == nil && !ok {
+					return errSeatWindowClosed
+				}
 				return err
 			}
-			if !ok {
-				return errSeatWindowClosed
+			if policy != nil && len(policy.SeatShares) > 0 {
+				err = keepSeatWait(tx, choose)
+			} else {
+				err = choose()
+			}
+			if err != nil {
+				return err
 			}
 			decision.PassID = correlation
 			if decision.RunRequest != nil {

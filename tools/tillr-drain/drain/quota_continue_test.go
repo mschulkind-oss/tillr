@@ -36,13 +36,14 @@ func (s *quotaContinuationSteps) Run(ctx context.Context, req run.Request) (run.
 	return rec, logTail(rec.ArtifactRefs), err
 }
 
-func quotaContinuationFixture(t *testing.T, alternative, work bool) (refusalLoopFixture, *Loop, *quotaContinuationSteps, Decision, run.Record) {
+func quotaContinuationFixture(t *testing.T, work bool) (refusalLoopFixture, *Loop, *quotaContinuationSteps, Decision, run.Record) {
 	t.Helper()
 	f, l := passFixture(t, "item-a")
 	l.cfg.Lanes = []string{"lane-1"}
 	backends := t.TempDir()
 	steps := &quotaContinuationSteps{continuationSteps: continuationSteps{t: t, store: f.storePath, laneRoot: f.laneRoot, at: l.cfg.Now()}, backends: backends}
 	l.cfg.Steps = steps
+	l.cfg.Now = func() time.Time { return steps.at }
 	for _, name := range []string{"alpha", "beta"} {
 		dir := filepath.Join(backends, name)
 		if err := os.MkdirAll(dir, 0700); err != nil {
@@ -70,10 +71,6 @@ func quotaContinuationFixture(t *testing.T, alternative, work bool) (refusalLoop
 	}
 	l.cfg.Policy.Backends = map[string]Backend{"alpha": {Adapter: filepath.Join(backends, "alpha", "exec"), Model: "stub"}, "beta": {Adapter: filepath.Join(backends, "beta", "exec"), Model: "stub"}}
 	l.cfg.Policy.DefaultBackend = "alpha"
-	l.cfg.Policy.Preference = []string{"alpha"}
-	if alternative {
-		l.cfg.Policy.Preference = append(l.cfg.Policy.Preference, "beta")
-	}
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE items SET allowed_paths='["one.txt","two.txt"]'`)
 		return err
@@ -98,7 +95,7 @@ func quotaContinuationFixture(t *testing.T, alternative, work bool) (refusalLoop
 func TestQuotaContinuationKeepsFilesAttemptAndJudgesOnce(t *testing.T) {
 	for _, pending := range []bool{false, true} {
 		t.Run(fmt.Sprint(pending), func(t *testing.T) {
-			f, l, steps, d, rec := quotaContinuationFixture(t, true, true)
+			f, l, steps, d, rec := quotaContinuationFixture(t, true)
 			var result LoopResult
 			if pending {
 				settleContinuation(t, l, &result)
@@ -108,26 +105,20 @@ func TestQuotaContinuationKeepsFilesAttemptAndJudgesOnce(t *testing.T) {
 					t.Fatalf("settle: %+v", out)
 				}
 			}
+			if len(steps.requests) != 1 {
+				t.Fatalf("closed backend routed work elsewhere: %+v", steps.requests)
+			}
+			steps.at = steps.at.Add(2 * time.Hour)
+			settleContinuation(t, l, &result)
 			if len(steps.requests) != 2 {
 				t.Fatalf("requests=%+v", steps.requests)
 			}
 			next := steps.requests[1]
-			if next.RunID != d.RunRequest.RunID || next.LaneID != d.LaneID || next.Backend != "beta" || !next.Resume {
-				t.Fatalf("lost attempt: %+v", next)
+			if next.RunID != d.RunRequest.RunID || next.LaneID != d.LaneID || next.Backend != "alpha" || !next.Resume || next.FreshSession {
+				t.Fatalf("lost attempt or session: %+v", next)
 			}
-			raw, _ := json.Marshal(next)
-			if !strings.Contains(string(raw), `"fresh_session":true`) {
-				t.Fatalf("not fresh: %s", raw)
-			}
-			for _, want := range []string{"ran out of quota", "alpha", "one.txt", "two.txt"} {
-				if !strings.Contains(next.ResumePrompt, want) {
-					t.Errorf("missing %s: %s", want, next.ResumePrompt)
-				}
-			}
-			if pending {
-				for i := 0; i < 3; i++ {
-					settleContinuation(t, l, &result)
-				}
+			for i := 0; i < 3; i++ {
+				settleContinuation(t, l, &result)
 			}
 			if steps.gates != 1 || steps.lands != 1 || result.InfraFailures != 0 {
 				t.Fatalf("gates=%d lands=%d result=%+v", steps.gates, steps.lands, result)
@@ -153,7 +144,7 @@ func TestQuotaContinuationKeepsFilesAttemptAndJudgesOnce(t *testing.T) {
 }
 
 func TestQuotaContinuationWaitsAndReopensOriginalBackend(t *testing.T) {
-	f, l, steps, d, _ := quotaContinuationFixture(t, false, true)
+	f, l, steps, d, _ := quotaContinuationFixture(t, true)
 	var result LoopResult
 	settleContinuation(t, l, &result)
 	if w := readContinuationWork(t, f); w.Done || w.LaneReleased {

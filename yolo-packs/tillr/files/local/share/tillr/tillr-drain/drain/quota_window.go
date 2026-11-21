@@ -151,19 +151,16 @@ func readBackendWindows(r *store.Reader, at time.Time) (map[string]time.Time, er
 	return out, rows.Err()
 }
 
-// Skipping a shut backend walks the same route as failover, without starting a run.
-func (p Policy) availableBackend(name, seat string, shut map[string]bool) (string, bool) {
-	seen := map[string]bool{}
-	for shut[name] {
-		if seen[name] {
-			return "", false
+// A preview never changes the named backend. For a fresh shared seat it
+// permits a claim to make the actual choice unless every option is shut.
+func (p Policy) seatMayStart(itemID, seat, name string, shut map[string]bool) bool {
+	if _, override := p.Overrides[itemID]; !override && len(p.SeatShares[seat]) > 0 {
+		for _, candidate := range p.seatList(seat) {
+			if !shut[candidate] {
+				return true
+			}
 		}
-		seen[name] = true
-		next, ok := p.nextBackend(name, seat)
-		if !ok {
-			return "", false
-		}
-		name = next
+		return false
 	}
-	return name, name != ""
+	return name != "" && !shut[name]
 }

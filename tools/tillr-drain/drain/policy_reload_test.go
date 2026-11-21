@@ -163,7 +163,6 @@ func TestRepairPolicyReadDuringReload(t *testing.T) {
 		} else {
 			p.DefaultBackend = "second"
 		}
-		p.Preference = nil
 		raw, err := json.Marshal(p)
 		if err != nil {
 			t.Fatal(err)
