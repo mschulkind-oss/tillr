@@ -920,7 +920,11 @@ func (s *LaneStager) ensureWorktree(ctx context.Context, spec StageSpec, laneDir
 			if err != nil {
 				return err
 			}
-			if strings.TrimSpace(status) != "" {
+			covered, err := s.preservedLaneDirtyCovered(ctx, spec.LaneID, worktree)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(status) != "" && !covered {
 				first := strings.TrimSpace(strings.Split(strings.TrimSpace(status), "\n")[0])
 				return laneRefusalf(spec.LaneID, ReasonLaneUncommittedWork, "commit or remove the files, or reset the lane deliberately", "lane %s holds uncommitted work (%s)", spec.LaneID, first)
 			}
@@ -999,7 +1003,17 @@ func (s *LaneStager) refuseUnlandedCommit(ctx context.Context, spec StageSpec, w
 		seen[sha] = true
 		if worktreeExists {
 			status, statusErr := s.git(ctx, worktree, "--no-optional-locks", "status", "--porcelain", "--untracked-files=all")
-			if statusErr == nil && strings.TrimSpace(status) != "" {
+			if statusErr != nil {
+				return statusErr
+			}
+			covered := false
+			if strings.TrimSpace(status) != "" {
+				covered, err = s.preservedLaneDirtyCovered(ctx, spec.LaneID, worktree)
+				if err != nil {
+					return err
+				}
+			}
+			if strings.TrimSpace(status) != "" && !covered {
 				first := strings.TrimSpace(strings.Split(strings.TrimSpace(status), "\n")[0])
 				return laneRefusalf(spec.LaneID, ReasonLaneUncommittedWork,
 					"commit or remove the files, or reset the lane deliberately",

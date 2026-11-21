@@ -565,6 +565,10 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			if c, ok := conflicts[row.ItemID]; ok && c.Status != "answered" {
 				continue
 			}
+			if lane := p.returnedJudgeLane(row.ItemID, p.returnedEnding(row.ItemID)); lane != "" && !released[lane] && (row.Express || !isExpressLane(lane)) {
+				p.workerLanes[lane] = row.ItemID
+				continue
+			}
 			if e := p.returnedEnding(row.ItemID); e != nil && e.WorkerSession != nil && !isExpressLane(e.WorkerSession.LaneID) && !released[e.WorkerSession.LaneID] && p.retainedLaneFree(e.WorkerSession.LaneID) {
 				// Several reverted landings can name the same recycled lane. Only
 				// the item whose handle remains there can reserve that checkout.
@@ -1168,7 +1172,16 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.Action, decision.Reason = ActionHold, ReasonNoLane
 	default:
 		lane, ok := p.freeLane(item.Express)
-		if returned != nil && returned.WorkerSession != nil && (item.Express || !isExpressLane(returned.WorkerSession.LaneID)) && p.retainedLaneFreeFor(returned.WorkerSession.LaneID, item.ItemID) {
+		ownJudgeLane := p.returnedJudgeLane(item.ItemID, returned)
+		if ownJudgeLane != "" && (item.Express || !isExpressLane(ownJudgeLane)) {
+			lane, ok = ownJudgeLane, p.retainedLaneFreeFor(ownJudgeLane, item.ItemID) && !p.tick.OutLanes[ownJudgeLane]
+			if !ok {
+				decision.Action, decision.Reason = ActionHold, ReasonNoLane
+				decision.LaneID, decision.Returned = ownJudgeLane, returned
+				break
+			}
+		}
+		if ownJudgeLane == "" && returned != nil && returned.WorkerSession != nil && (item.Express || !isExpressLane(returned.WorkerSession.LaneID)) && p.retainedLaneFreeFor(returned.WorkerSession.LaneID, item.ItemID) {
 			lane = returned.WorkerSession.LaneID
 			ok = true
 		}
@@ -1248,6 +1261,9 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 			decision.Reason = ReasonRestagedStaleBase
 		}
 		if returned != nil {
+			if ownJudgeLane != "" {
+				decision.RetryCandidate = p.retryCandidate(item.ItemID, returned.RunID)
+			}
 			decision.Returned = returned
 			decision.Reason = ReasonReturned
 			decision.WorkerSessionReason = workerSessionReason(returned.WorkerSession, decision.RunRequest)
