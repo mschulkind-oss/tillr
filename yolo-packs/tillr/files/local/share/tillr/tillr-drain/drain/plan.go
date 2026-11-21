@@ -315,14 +315,9 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			}
 		}
 	}
-	conflicts, err := item.ReadConflicts(r)
-	if err != nil {
-		return nil, readFailure(err)
-	}
 	trunkWaiters, defectWaiters := map[string]string{}, map[string]string{}
-	independentWaits := map[string]bool{}
 	for _, row := range items {
-		if row.State != def.Blocked {
+		if def.Completes != "landing" || row.State != def.Blocked {
 			continue
 		}
 		waiting, _, err := item.ReadWaitingOn(r, row.ItemID)
@@ -330,9 +325,6 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			return nil, readFailure(err)
 		}
 		if waiting != nil {
-			independentWaits[row.ItemID] = !item.ConflictOwnsWait(conflicts[row.ItemID], *waiting)
-		}
-		if waiting != nil && def.Completes == "landing" {
 			fixer := strings.TrimPrefix(waiting.Waiter, "item:")
 			if strings.HasPrefix(waiting.Waiter, "item:") && IsTrunkFixer(fixer) {
 				trunkWaiters[row.ItemID] = fixer
@@ -452,6 +444,10 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			deskOwners[work.Decision.LaneID] = work.Decision.ItemID
 		}
 	}
+	conflicts, err := item.ReadConflicts(r)
+	if err != nil {
+		return nil, readFailure(err)
+	}
 	if tick.AvailableLanes == nil {
 		rows, err := r.Query(`SELECT lane_id FROM lanes ORDER BY lane_id`)
 		if err != nil {
@@ -553,7 +549,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			tick:      tick, policy: policy, held: lanes, deskOwners: owners, itemStates: states, history: history,
 			priors: attemptPriors, retries: retries, classes: classes, latest: latest,
 			obstacleHolds: obstacleHolds, releasedObstacles: releasedObstacles, questions: questions,
-			trunkWaiters: trunkWaiters, defectWaiters: defectWaiters, independentWaits: independentWaits, escalated: escalated,
+			trunkWaiters: trunkWaiters, defectWaiters: defectWaiters, escalated: escalated,
 			at: at, assigned: map[string]bool{}, fixerOpen: trunkFixerOpen(items, def), unproved: unproved,
 			designHistory: designHistory, inputs: inputs, inputDecisions: inputDecisions, works: works, attempts: attempts, nodeCounts: nodeCounts, requests: requests,
 		}
@@ -582,7 +578,7 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 			}
 		}
 		for _, row := range items {
-			if row.State != p.rules().Blocked || p.independentWaits[row.ItemID] {
+			if row.State != p.rules().Blocked {
 				continue
 			}
 			if origin := designContinuationWork(conflicts[row.ItemID], designHistory[conflicts[row.ItemID].DesignRunID]); origin != nil && !isExpressLane(origin.Decision.LaneID) && !released[origin.Decision.LaneID] {
@@ -618,22 +614,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 		}
 		var decision Decision
 		ownerOwed := item.State == StateInQueue && item.OwnerOwed != nil
-		obsHold, obstacleHeld := p.obstacleHolds[item.ItemID]
-		obstacleApplies := obstacleHeld && !p.finished(item.State) && holdEnabled(def, obsHold.ReasonCode()) && !(item.State == def.Ready && retries[item.ItemID].SupersedesRunID == obsHold.RunID && p.latest[item.ItemID] == obsHold.RunID)
-		// A recorded obstacle already names the action that releases its hold.
-		// Preserve that explanation without letting pending work bypass the wait.
-		if p.independentWaits[item.ItemID] && obstacleApplies {
-			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: obsHold.ReasonCode(), From: "held", Attempt: p.nextAttempt(item.ItemID)}
-			identifyDecision(&decision)
-		} else if p.independentWaits[item.ItemID] {
-			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: ReasonBlocked, From: "held", Attempt: p.nextAttempt(item.ItemID)}
-			if fixer := p.trunkWaiters[item.ItemID]; fixer != "" {
-				decision.Reason, decision.DeferredBy = ReasonTrunkBroken, fixer
-			} else if defect := p.defectWaiters[item.ItemID]; defect != "" {
-				decision.Reason, decision.DeferredBy = ReasonToolingDefect, defect
-			}
-			identifyDecision(&decision)
-		} else if fault, held := faults[item.ItemID]; held && !p.finished(item.State) && holdEnabled(def, fault.Reason) {
+		if fault, held := faults[item.ItemID]; held && !p.finished(item.State) && holdEnabled(def, fault.Reason) {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: fault.Reason, LaneID: fault.LaneID, From: "held"}
 			identifyDecision(&decision)
 		} else if reason := tick.loopHolds[item.ItemID]; reason != "" && (works[item.ItemID] == nil || works[item.ItemID].Done) && holdEnabled(def, reason) {
@@ -720,7 +701,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 		} else if ownerOwed {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: ReasonOwnerOnlyOwed, From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			identifyDecision(&decision)
-		} else if obstacleApplies {
+		} else if obsHold, held := p.obstacleHolds[item.ItemID]; held && !p.finished(item.State) && holdEnabled(def, obsHold.ReasonCode()) && !(item.State == def.Ready && retries[item.ItemID].SupersedesRunID == obsHold.RunID && p.latest[item.ItemID] == obsHold.RunID) {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: obsHold.ReasonCode(), From: "held", Attempt: p.nextAttempt(item.ItemID)}
 			identifyDecision(&decision)
 		} else if rewriteOwnerHolds[item.ItemID] != "" && !p.finished(item.State) {
@@ -967,8 +948,7 @@ type planner struct {
 	fixerOpen string
 	unproved  map[string]bool
 	// A blocked acquittal names its own fixer even after the fixer closed unlanded.
-	independentWaits map[string]bool
-	trunkWaiters     map[string]string
+	trunkWaiters map[string]string
 	// defectWaiters names, per item, the tooling-defect item its tooling obstacle holds it
 	// behind (defect.go).
 	defectWaiters map[string]string
