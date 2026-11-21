@@ -229,7 +229,10 @@ func init() {
 		}
 	}
 	for name, definition := range map[string]string{
-		"ended_at": "INTEGER", "decision_counts": "TEXT", "applied_count": "INTEGER",
+		"claim_ms":          "INTEGER",
+		"ended_at":          "INTEGER",
+		"decision_counts":   "TEXT",
+		"applied_count":     "INTEGER",
 		"gate_count":        "INTEGER",
 		"gate_max_ms":       "INTEGER NOT NULL DEFAULT 0",
 		"runner_gate_count": "INTEGER NOT NULL DEFAULT 0",

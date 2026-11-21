@@ -112,14 +112,14 @@ func TestPassColumnsMigrateWithoutInventingHistoricalMeasurements(t *testing.T) 
 	}
 	defer s.Close()
 	if err := s.ReadTx(ctx, func(r *store.Reader) error {
-		var end, gates sql.NullInt64
+		var claim, end, gates sql.NullInt64
 		var counts, pass sql.NullString
 		var gate int
-		if err := r.QueryRow(`SELECT gate_ms, ended_at, decision_counts, gate_count FROM drain_passes`).Scan(&gate, &end, &counts, &gates); err != nil {
+		if err := r.QueryRow(`SELECT claim_ms, gate_ms, ended_at, decision_counts, gate_count FROM drain_passes`).Scan(&claim, &gate, &end, &counts, &gates); err != nil {
 			return err
 		}
-		if gate != 3 || end.Valid || counts.Valid || gates.Valid {
-			t.Errorf("migration invented or replaced data: %d %v %v %v", gate, end, counts, gates)
+		if gate != 3 || claim.Valid || end.Valid || counts.Valid || gates.Valid {
+			t.Errorf("migration invented or replaced data: claim=%v gate=%d end=%v counts=%v gates=%v", claim, gate, end, counts, gates)
 		}
 		if err := r.QueryRow(`SELECT pass_id FROM dispatches`).Scan(&pass); err != nil {
 			return err
