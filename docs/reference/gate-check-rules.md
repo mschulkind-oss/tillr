@@ -10,7 +10,7 @@ covers:
   - tools/gate-timing-declarations.json
   - tests/fork-check.test.py
 tags: [gate, checks, flake, timing, quarantine, reference]
-summary: "Three standing rules for the gate's checks, each with the code that enforces it today: a failed check is diagnosed from its one run and never re-run to see whether it passes; a check asserts counts, orders and equalities over what the product recorded and never an elapsed duration; and a quarantined case is narrow, carries the item that repairs it, and is counted apart from passes. Four built mechanisms that contradict the owner's rulings of 2026-11-20 are named, not described as rules."
+summary: "Three standing rules for the gate's checks, each with the code that enforces it today: a failed check is diagnosed from its one run and never re-run to see whether it passes; a check asserts counts, orders and equalities over what the product recorded and never an elapsed duration; and a quarantined case is narrow, carries the item that repairs it, applies only to the file content it was declared against, and is counted apart from passes. One built mechanism that contradicts the owner's rulings of 2026-11-20 is named, not described as a rule."
 ---
 
 # Gate check rules
@@ -31,7 +31,7 @@ the dispatch side's subject, in
 | Running a check once, and the triage packet | `tools/fork-check.py` (`execute_attempt`, `triage_packet`) |
 | The timing rule and its scan | `tools/fork-check.py` (`GATE_TIMING_RULE`), `tools/gate/checks/elapsed-time.py` |
 | Recorded exceptions to the timing rule | `tools/gate-timing-declarations.json` |
-| Quarantine declarations and their application | `tools/fork-check.py` (`Quarantine`, `UNANSWERABLE_FORK_QUALITY`, `applied_quarantine`) |
+| Quarantine declarations and their application | `tools/fork-check.py` (`Quarantine`, `QUARANTINED_FORK_QUALITY`, `applied_quarantine`) |
 
 **Reads with:** [Preflight, explained](../preflight-explained.md) (the argument for the timing
 rule, in plain words) and [the fork workflow](../pi/forks.md) (the checks that build and test
@@ -117,20 +117,39 @@ verdict that the cases pass.
   declaration whose item is blank suppresses nothing: the check stays red and the reason is
   printed beside it. The gate checks that an item is named; it cannot check from a checkout
   that the item is still open.
+- **It applies only to the content it was declared against.** A declaration records the git
+  blob id of the test file it names: the identifier git derives from the file's bytes, which
+  `git hash-object <file>` prints. The gate computes that id for the file in the fork's
+  candidate checkout, the clean checkout under `.forks/candidate/` that the check ran in.
+  While the two ids match, the declaration applies. When they differ, or the file cannot be
+  read, it suppresses nothing: a changed file is a new subject that the declaration's
+  evidence does not cover, so the check stays red and the reason is printed beside it with
+  both ids. A declaration has no expiry date, and the gate reads no clock to decide whether
+  one applies. What ends a quarantine is its item's work: the patch that repairs the case
+  changes the file, and the declaration is then deleted.
+- **No count refuses a declaration.** The gate holds no limit on how many declarations exist,
+  per repository or per check. What keeps quarantines from accumulating unseen is the item
+  each one names and the report line below.
+- **A classification says why the case fails, and "could not answer" is not one.** A
+  declaration is classified `upstream` (the failure reproduces on the unpatched upstream),
+  `flaky` (a proven flake) or `unknown`. A quarantined case ran and failed. A check that could
+  not run at all, because a tool or checkout is missing, is reported separately as one that
+  could not answer, and is never a quarantine.
 - **A quarantined case is named and counted in every gate report, apart from passes.** The
-  report prints the check, the cases, the item and the reason, and its summary counts
-  quarantined cases separately and says that a quarantined case is not a passing one. The
+  report prints the check, the cases, the item, the declared blob id, the classification and
+  the reason, and its summary counts quarantined cases separately and says that a quarantined case is not a passing one. The
   run's evidence record carries the same block.
 
 > [!WARNING]
-> **Four things the gate does today contradict the owner's rulings of 2026-11-20 and are not
-> rules to build on.** A quarantine also stops applying on a calendar date written in the
-> declaration; the gate refuses declarations past a fixed count per repository and per check;
-> two checks are declared *exclusive* (run with nothing beside them) because their results
-> change with machine load; and the one live quarantine is labeled "unanswerable" although its
-> cases ran and failed on a timing race. Each is listed with its replacement in
+> **One thing the gate does today contradicts the owner's rulings of 2026-11-20 and is not a
+> rule to build on.** Two checks are declared *exclusive* (run with nothing beside them)
+> because their results change with machine load. It is listed with its replacement in
 > [the retirement record](../design/agent-runtime-retirement.md#the-four-live-rules-to-remove-from-code).
-> Do not add a declaration that relies on any of them.
+> Do not add a declaration that relies on it. The other three entries of that list were
+> removed from the gate on 2026-11-21: a quarantine's calendar expiry, the fixed count of
+> declarations per repository and per check, and the "unanswerable" label on the one live
+> quarantine, which is now classified `upstream`. That quarantine itself remains until the
+> two cases are rewritten in the `pi-subagents` patch series.
 
 ## What enforces each rule today
 
@@ -143,14 +162,16 @@ verdict that the cases pass.
 | A deadline's bound is far past expectation; a missing observable is recorded in the product | Nothing. These are review rules |
 | A quarantine applies only to its declared cases as the run's only failures | `applied_quarantine` and `failing_tests` in `tools/fork-check.py` |
 | A quarantine names its item | `Quarantine.lapse` in `tools/fork-check.py` |
+| A quarantine applies only while its file has the declared blob id | `Quarantine.lapse` and `file_blob_id` in `tools/fork-check.py` |
 | A quarantined case is reported and counted apart from passes | `check_status` and the report in `tools/fork-check.py` |
 
 ## Current values
 
-Verified at `e167325c21f77151e9eeab22df542b3837e0f631`.
+Verified at `e167325c21f77151e9eeab22df542b3837e0f631`, except the quarantine row, which was
+read on 2026-11-21 in the change that removed the expiry and the count.
 
 | Value | Setting | Defined in |
 | :--- | :--- | :--- |
 | Kinds a timing declaration may carry | `liveness`, `backlog` | `tools/gate/checks/elapsed-time.py` (`parse_timing_declarations`) |
 | Runs given to a check ended by an outside signal | `OUTSIDE_SIGNAL_RERUNS` | `tools/fork-check.py` |
-| Live quarantine declarations | one, on the `pi-subagents` unit suite | `tools/fork-check.py` (`UNANSWERABLE_FORK_QUALITY`) |
+| Live quarantine declarations | one, on the `pi-subagents` unit suite, classified `upstream` | `tools/fork-check.py` (`QUARANTINED_FORK_QUALITY`) |

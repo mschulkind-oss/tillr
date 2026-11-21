@@ -69,10 +69,11 @@ WHAT IT RUNS, and when. Only what the change can reach:
      exit 6, separate from content failures and could-not-answer exits. So are
      suite cases whose assertion is a real-time budget this machine meets on an idle run
      and misses beside the gate's other checks: they are QUARANTINED, named with their
-     reason, their pile item and their expiry (`UNANSWERABLE_FORK_QUALITY`), counted apart
-     from the passing checks, and only when EVERY case the run failed is one of them, so
-     any other red in the same suite stays a verdict. An expired or ticketless declaration
-     blocks its case again.
+     reason, their queue item and the content they were declared against
+     (`QUARANTINED_FORK_QUALITY`), counted apart from the passing checks, and only when
+     EVERY case the run failed is one of them, so any other red in the same suite stays a
+     verdict. A declaration with no item, or one whose file no longer has the declared
+     content, blocks its case again.
   7. RETIRED here: rendering changed Markdown is a change declaration under
      tools/gate/checks/. It takes the caller's base and head, not the remembered baseline.
 
@@ -650,7 +651,7 @@ import sys
 import threading
 import time
 import uuid
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
@@ -821,27 +822,36 @@ FORK_QUALITY_WRITES = {
     # isolated temp root its loader creates outside the checkout, so both write nothing.
 }
 # A quarantine is one named case -- or one whole subject, a file or a directory -- that
-# stops blocking a gate while staying in place, named and counted. docs/design/agent-runtime.md section 27 rules on it:
-# a quarantine is never a verdict that the case passes (D6), it carries the pile item that
-# repairs it in the same act (D5), it carries an expiry and the case blocks again when the
-# expiry passes (D7), and the repository holds a hard budget of them (D8). This is the
-# in-tree form of the declaration, where the gate itself is what enforces it: the store's
-# form is the board's `flake_overrides` row, which carries the same policy in a foreign key.
+# stops blocking a gate while staying in place, named and counted. The rules are in
+# docs/reference/gate-check-rules.md ("A quarantined case is narrow, ticketed and
+# counted"): a quarantine is never a verdict that the case passes, it names the queue item
+# that repairs it, and it applies only to the content it was written against. No date and
+# no count decides whether a declaration applies.
 #
-# The classifications a quarantine can carry. `unanswerable` is the environmental row of
-# agent-runtime section 27.2: the check cannot produce a meaningful verdict in this
-# environment, so its named cases are counted as "could not answer here" rather than as
-# passed or failed. The report counts it as a sub-count of quarantined. They are declared
-# before the class so a declaration that suppresses a SKIP rather than a failing case can
-# leave the classification at its default: a skip has no failing case to classify.
-QUARANTINE_UNANSWERABLE = "unanswerable"
+# The classifications a quarantine can carry. They are declared before the class so a
+# declaration that suppresses a SKIP rather than a failing case can leave the
+# classification at its default: a skip has no failing case to classify.
 QUARANTINE_FLAKY = "flaky"
 QUARANTINE_UPSTREAM = "upstream"
 QUARANTINE_UNKNOWN = "unknown"
 
 
+def file_blob_id(path: Path) -> str | None:
+    """The git blob id of a file's bytes on disk, or None when it cannot be read.
+
+    The id git gives the same bytes in a SHA-1 repository: the hash of `blob <size>`, a NUL
+    and the content. It is computed here rather than asked of git so the answer is about
+    the file a suite actually read, whatever the checkout's index or filters say.
+    """
+    try:
+        content = path.read_bytes()
+    except OSError:
+        return None
+    return hashlib.sha1(b"blob %d\0" % len(content) + content).hexdigest()
+
+
 class Quarantine:
-    """One in-tree quarantine declaration, with everything D5, D7 and D8 require of it.
+    """One in-tree quarantine declaration: its subject, its item and its content.
 
     `check` is the label prefix of the gate step it applies to, and `path` the test file
     whose cases it names -- the narrowest granularity this mechanism can express, because
@@ -852,33 +862,51 @@ class Quarantine:
     refuses the next one. A declaration that suppresses a SKIP rather than a failing case
     names a directory as its subject and leaves `classification` at its default.
 
-    `item` is the pile item's identity. It is an external reference rather than a numeric
-    store id on purpose: the board store is per workspace and disposable, so a committed
-    number would name a different item after a store rebuild. `expires` is an ISO date, and
-    the gate refuses the declaration -- leaving the case red -- once it has passed.
+    `item` is the queue item's identity. It is an external reference rather than a numeric
+    store id on purpose: the store is per workspace and disposable, so a committed number
+    would name a different item after a store rebuild.
+
+    `blob` is the git blob id of `path` as it was when the declaration's evidence was
+    gathered. The declaration applies only while the file in the fork's candidate checkout
+    still has that id: a changed file is a new subject the old evidence does not cover, so
+    the case blocks again until the declaration is rewritten against the new content or
+    deleted. Nothing about a declaration reads a clock.
     """
 
     def __init__(self, check: str, path: str, cases: set[str] | None,
-                 item: str, expires: str, reason: str,
+                 item: str, blob: str, reason: str,
                  classification: str = QUARANTINE_UNKNOWN):
         self.check = check
         self.path = path
         self.cases = cases
         self.classification = classification
         self.item = item
-        self.expires = datetime.strptime(expires, "%Y-%m-%d").date()
+        self.blob = blob
         self.reason = reason
 
-    def lapse(self, today: date | None = None) -> str | None:
-        """Why this declaration no longer suppresses its case, or None while it holds."""
-        today = today or datetime.now(timezone.utc).date()
+    def lapse(self, checkout: str) -> str | None:
+        """Why this declaration does not suppress its case in `checkout`, or None while it holds.
+
+        `checkout` is the fork's candidate checkout the step ran in. A file that cannot be
+        read there is not a match: the declaration is about named content, and content
+        nobody can read is not that content.
+        """
         if not self.item.strip():
-            return (f"the quarantine declaration for {self.path} carries no pile item, and no ticket "
-                    f"means no quarantine (agent-runtime section 27.5 D5): the case blocks again")
-        if self.expires < today:
-            return (f"the quarantine declaration for {self.path} expired on {self.expires.isoformat()} "
-                    f"(item {self.item}); the case blocks again until it is restored or renewed with a "
-                    f"fresh triage run (section 27.6 D7)")
+            return (f"the quarantine declaration for {self.path} carries no queue item, and no item "
+                    f"means no quarantine (docs/reference/gate-check-rules.md): the case blocks again")
+        where = Path(checkout) / self.path if checkout else None
+        found = file_blob_id(where) if where is not None else None
+        if found is None:
+            return (f"the quarantine declaration for {self.path} is not applied: the file could not "
+                    f"be read at {where if where is not None else 'the candidate checkout (none recorded)'}, "
+                    f"so its content cannot be matched to the declared blob {self.blob} "
+                    f"(item {self.item}); the case blocks again")
+        if found != self.blob:
+            return (f"the quarantine declaration for {self.path} is not applied: it was written "
+                    f"against blob {self.blob} and the file at {where} is now blob {found}. A "
+                    f"changed file is a new subject the declaration's evidence does not cover, so "
+                    f"the case blocks again until the declaration is rewritten against the new "
+                    f"content or deleted (item {self.item}; docs/reference/gate-check-rules.md)")
         return None
 
     def where(self) -> str:
@@ -892,14 +920,9 @@ class Quarantine:
             return f"{self.path} (every case)"
         return f"{self.path} -- {', '.join(sorted(self.cases))}"
 
-# D8's hard budget, in the gate's own mechanism: 10 active quarantined cases
-# repository-wide, 3 per check. Past it the declaration does not suppress anything and the
-# case blocks, which is the same refusal the board's write path gives a new quarantine.
-QUARANTINE_BUDGET_REPOSITORY = 10
-QUARANTINE_BUDGET_PER_CHECK = 3
-
-# A fork-quality step whose suite carries cases this machine cannot answer, as quarantine
-# declarations. These are a QUARANTINE, not a verdict that the cases pass: pi-subagents'
+# The quarantined cases of fork-quality suites, as declarations. These are a QUARANTINE,
+# not a verdict that the cases pass, and not a claim that the step could not run: the
+# cases ran and failed, on a timing race confirmed in the unpatched upstream. pi-subagents'
 # herdr bridge cases write a configure frame and assert the acknowledgement within 30 ms,
 # while the acknowledgement runs `discoverAgents` synchronously over the checkout. The same
 # two cases pass alone and fail under the suite's own concurrency, and which one loses the
@@ -915,7 +938,7 @@ QUARANTINE_BUDGET_PER_CHECK = 3
 # The skip is taken only when EVERY failing case in the run is quarantined for that step:
 # any other failure -- and any run whose `ℹ fail` count disagrees with its list -- keeps the
 # step a red verdict, so one quarantined case cannot hide a regression beside it.
-UNANSWERABLE_FORK_QUALITY = (
+QUARANTINED_FORK_QUALITY = (
     Quarantine(
         check="fork pi-subagents: npm run test:unit",
         path="test/unit/herdr-native-placement.test.ts",
@@ -928,18 +951,22 @@ UNANSWERABLE_FORK_QUALITY = (
             "leaves the remote operator's APPEND_SYSTEM.md out of the child's prompt",
             "preserves canonical contact_supervisor progress and structured-interview semantics",
         }),
-        classification=QUARANTINE_UNANSWERABLE,
-        # The pile item's external ref. It is not a numeric store id because the store is
+        # The cases ran and failed, and the failure was reproduced on a zero-patch upstream
+        # checkout: an upstream failure, not an absent host, service or device.
+        classification=QUARANTINE_UPSTREAM,
+        # The queue item's external ref. It is not a numeric store id because the store is
         # per workspace and disposable: a committed number would name a different item
-        # after a rebuild. `board item show quarantine/herdr-native-placement` is the read
-        # that answers whether it is still open; the gate enforces presence and expiry,
-        # which are the two halves it can answer from a checkout with no store.
+        # after a rebuild. The gate enforces that an item is named, which is the half it
+        # can answer from a checkout with no store.
         item="quarantine/herdr-native-placement",
-        # 90 days from the declaration: blocked on the named upstream change (the 30 ms
-        # budget in the upstream suite), which is the one term D7 allows that long.
-        expires="2027-01-26",
+        # The file's git blob id at v0.83.0, v0.83.1 and the series tip, which is the
+        # content every run in the evidence record read (2026-11-21: `git hash-object
+        # test/unit/herdr-native-placement.test.ts` in the candidate checkout). The patch
+        # that removes the two sleeps changes this id, and the declaration then stops
+        # applying by itself.
+        blob="f1c4f87058061d3a5e98f327a6b799440743e09f",
         reason=(
-            "QUARANTINED, not answered: its 30 ms budget for the bridge acknowledgement is a "
+            "QUARANTINED, not passed: its 30 ms budget for the bridge acknowledgement is a "
             "real-time assertion this machine meets on an idle run and misses under the suite's "
             "own concurrency, and which of the two cases loses the race changes from run to run "
             "(the gate at 2439a5cd7 failed the APPEND_SYSTEM case, an idle run of the same "
@@ -950,12 +977,12 @@ UNANSWERABLE_FORK_QUALITY = (
             "case failures across 72 runs), while the test file's blob is identical at v0.83.0, "
             "v0.83.1 and the series tip, so no series patch touches it. The runs, commands and failure "
             "transcript are recorded in docs/pi/pi-subagents-quarantine-evidence.md, and this "
-            "reason cites that record as the confirmation the pile item asks for. Until the "
-            "upstream wait polls instead of sleeping, this step cannot answer for the series "
-            "here -- it is not a claim that the cases pass. Restored when five consecutive "
-            "full-suite runs at the series tip are green. Tracked on the pile item above, and "
-            "expiring per the quarantine ruling in docs/design/agent-runtime.md: an expired "
-            "quarantine blocks the step again."
+            "reason cites that record as the confirmation the queue item asks for. The two cases "
+            "ran and failed; this is not a claim that they pass. The repair is the patch in the "
+            "pi-subagents series that awaits the acknowledgement instead of sleeping 30 ms, "
+            "tracked on the queue item above. The declaration applies only while the test file "
+            "still has the content it was written against (docs/reference/gate-check-rules.md): "
+            "once the file changes, the cases block the step again."
         ),
     ),
 )
@@ -4349,7 +4376,7 @@ def evidence_records(root: Path, entry: dict, checks: list[Check],
             detail["quarantine"] = {
                 "item": quarantine.item,
                 "classification": quarantine.classification,
-                "expires": quarantine.expires.isoformat(),
+                "blob": quarantine.blob,
                 "path": quarantine.path,
             }
         records.append({
@@ -4872,10 +4899,10 @@ def write_failure_excerpts(record: Record, entry: dict, checks: list[Check]) -> 
 #     heartbeat's gaps. The difference between a failing run and a passing one is then the
 #     machine it shared, and no amount of re-running the verdict can tell those two apart.
 #   * ITS RECORDED VERDICT HAS DIFFERED BY CONTENTION ALONE -- a red inside the gate and a
-#     green standalone on the same tip. That is the scheduling-declaration condition in
-#     docs/design/agent-runtime.md §27.3 (D9), and serializing without that evidence would
-#     be a disguised disable. The contention is removed from the run rather than re-tested
-#     at the verdict.
+#     green standalone on the same tip. Serializing without that evidence would be a
+#     disguised disable. The contention is removed from the run rather than re-tested at
+#     the verdict. (docs/reference/gate-check-rules.md names this declaration as a
+#     mechanism to remove once the two causes are repaired.)
 #
 # COST IS NOT AN ENTRY CRITERION. A suite that spawns real child processes is expensive but
 # decided by counts, orderings and equalities over what the product recorded, and load only
@@ -5612,12 +5639,12 @@ class Skip:
     all. `planned` is True when the change did give it a reason and this machine or
     invocation could not answer: no `node`, no `yolo`, no working copy under `.forks/`,
     `--no-build`. The third carries a `quarantine`: the step ran, it failed, and a
-    recorded decision with a pile item and an expiry suppressed the failure, so it is
-    neither a pass nor this machine's inability to answer.
+    recorded decision with a queue item suppressed the failure, so it is neither a pass
+    nor this machine's inability to answer.
 
     The report names the step in each entry -- one line for a step that did not run, and
-    a quarantined entry's own block of lines, because its case, item and deadline are
-    what a reader acts on. The headline counts entries, so its number is what a reader
+    a quarantined entry's own block of lines, because its case, item and declared content
+    are what a reader acts on. The headline counts entries, so its number is what a reader
     can count in the report itself.
 
     `owed` is the third state the landing-velocity design adds (invariant I5): the diff
@@ -5641,12 +5668,12 @@ class Skip:
         # The step's kind, for a skip that stands for a step the diff DID select: the
         # plan line names those beside the checks that ran, so a consumer can tell a
         # check that was skipped because nothing it watches changed from one the diff
-        # reached and this run could not answer (`unavailable`, `quarantine`).
+        # reached and this run put no verdict on (`unavailable`, `quarantine`).
         self.kind = kind
         # The quarantine declaration this skip stands for, when it stands for one. A
         # quarantined case is counted and named apart from a skip: it did run, and its
         # failure is suppressed by a recorded decision rather than by this machine's
-        # inability to answer (agent-runtime section 27.6 D6).
+        # inability to answer (docs/reference/gate-check-rules.md).
         self.quarantine = quarantine
 
 
@@ -6341,7 +6368,7 @@ def skip_entry(skip: "Skip") -> dict:
         entry["owed"] = True
     if skip.quarantine is not None:
         entry["quarantine"] = {"item": skip.quarantine.item,
-                              "expires": skip.quarantine.expires.isoformat(),
+                              "blob": skip.quarantine.blob,
                               "classification": skip.quarantine.classification}
     return entry
 
@@ -7654,40 +7681,18 @@ def failing_tests(output: str) -> list[tuple[str, str]] | None:
 
 def declared_quarantine(check: Check) -> Quarantine | None:
     """The quarantine declared for this step, whatever its state, or None."""
-    return next((one for one in UNANSWERABLE_FORK_QUALITY
+    return next((one for one in QUARANTINED_FORK_QUALITY
                  if check.label.startswith(one.check)), None)
-
-
-def quarantine_budget_lapse(declared: Quarantine, today: date | None = None) -> str | None:
-    """Why D8's budget refuses this declaration, or None while it is within it.
-
-    The budget is counted over the declarations that still hold: a lapsed one has stopped
-    suppressing its case, so it is not a slot. Past the budget the declaration is refused
-    whole rather than applied to some of its cases, because a partly-applied quarantine is
-    exactly the ambiguity the budget exists to avoid.
-    """
-    live = [one for one in UNANSWERABLE_FORK_QUALITY if one.lapse(today) is None]
-    on_this_check = [one for one in live if one.check == declared.check]
-    if len(on_this_check) > QUARANTINE_BUDGET_PER_CHECK:
-        return (f"the quarantine on {declared.path} is not applied: check {declared.check!r} holds "
-                f"{len(on_this_check)} active declarations, past the budget of "
-                f"{QUARANTINE_BUDGET_PER_CHECK} per check (agent-runtime section 27.6 D8), so the case "
-                f"blocks until one is restored")
-    if len(live) > QUARANTINE_BUDGET_REPOSITORY:
-        return (f"the quarantine on {declared.path} is not applied: the repository holds {len(live)} "
-                f"active declarations, past the budget of {QUARANTINE_BUDGET_REPOSITORY} "
-                f"(agent-runtime section 27.6 D8), so the case blocks until one is restored")
-    return None
 
 
 def applied_quarantine(check: Check) -> Quarantine | None:
     """The declaration that suppresses this step's failing cases right now, or None.
 
-    Three conditions, and a step that fails any of them is the red it already is: every
-    failing case is one the declaration names (D2's narrowest granularity), the declaration
-    has not lapsed (D5's item, D7's expiry), and it is within the budget (D8). This is the
-    one read the report, the check status and the evidence record share, so they cannot
-    disagree about whether a case is quarantined.
+    Two conditions, and a step that fails either is the red it already is: every failing
+    case is one the declaration names, and the declaration has not lapsed -- it names its
+    item, and the file in the candidate checkout the step ran in still has the content the
+    declaration was written against. This is the one read the report, the check status and
+    the evidence record share, so they cannot disagree about whether a case is quarantined.
     """
     if check.kind != "fork-quality" or check.rc == 0:
         return None
@@ -7700,11 +7705,11 @@ def applied_quarantine(check: Check) -> Quarantine | None:
     # `cases` is a name set, or None for the whole file. The whole-file form exists for a
     # file whose failing case rotates and cannot be named ahead of the run; a declaration
     # that can name its cases does, because that is the narrowest granularity the mechanism
-    # supports (docs/design/agent-runtime.md section 27.3).
+    # supports (docs/reference/gate-check-rules.md).
     if any(file != declared.path or (declared.cases is not None and case not in declared.cases)
            for file, case in failed):
         return None
-    if declared.lapse() is not None or quarantine_budget_lapse(declared) is not None:
+    if declared.lapse(check.fingerprint_dir) is not None:
         return None
     return declared
 
@@ -7712,15 +7717,15 @@ def applied_quarantine(check: Check) -> Quarantine | None:
 def fork_quality_skip(check: Check) -> tuple[str, str] | None:
     """The (label, reason) for a fork-quality step whose every failure is quarantined.
 
-    A step is unanswerable when EVERY case it failed is a name declared for it in
-    UNANSWERABLE_FORK_QUALITY -- a real-time budget the candidate this gate builds cannot
-    meet reliably. A step that passed answers, so it is never a skip; a step that failed
-    any case outside the declaration, or whose transcript does not read as a complete list
-    of its failures, is a verdict and stays red.
+    A step is quarantined when EVERY case it failed is a name declared for it in
+    QUARANTINED_FORK_QUALITY. A step that passed answers, so it is never a skip; a step
+    that failed any case outside the declaration, or whose transcript does not read as a
+    complete list of its failures, is a verdict and stays red.
 
-    A declaration that exists and matches but has lapsed -- no item, past its expiry, or
-    past the budget -- is NOT a skip: the case blocks again, and the reason is recorded on
-    the check's warnings so the red is explained rather than merely reported.
+    A declaration that exists and matches but has lapsed -- no item, or a file whose
+    content is no longer the declared blob -- is NOT a skip: the case blocks again, and the
+    reason is recorded on the check's warnings so the red is explained rather than merely
+    reported.
     """
     declared = applied_quarantine(check)
     if declared is not None:
@@ -7731,7 +7736,7 @@ def fork_quality_skip(check: Check) -> tuple[str, str] | None:
         if failed is not None and all(
                 file == candidate.path and (candidate.cases is None or case in candidate.cases)
                 for file, case in failed):
-            problem = candidate.lapse() or quarantine_budget_lapse(candidate)
+            problem = candidate.lapse(check.fingerprint_dir)
             if problem is not None and problem not in check.warnings:
                 check.warnings.append(problem)
     return None
@@ -8006,14 +8011,14 @@ def report(plan: Plan, record: Record, baseline: dict | None, head: str, changed
         print(f"  {word:<16} {skip.label}")
         print(f"       because: {skip.why}")
     # A quarantined case gets its own lines, never a skip line: it ran and it failed, and
-    # what suppressed the failure is a recorded decision with a ticket and a deadline. The
-    # item and the expiry are printed with it because a quarantine nobody can trace to its
-    # repair and its deadline is a deleted test with extra steps (section 27.6 D6).
+    # what suppressed the failure is a recorded decision with an item. The item and the
+    # declared content are printed with it because a quarantine nobody can trace to its
+    # repair is a deleted test with extra steps (docs/reference/gate-check-rules.md).
     for skip in quarantined:
         one = skip.quarantine
         print(f"  {'quarantined':<16} {skip.label}")
         print(f"       case: {one.where()}")
-        print(f"       item {one.item}, expires {one.expires.isoformat()} ({one.classification})")
+        print(f"       item {one.item}, declared against blob {one.blob} ({one.classification})")
         print(f"       because: {skip.why}")
     print()
 
@@ -8055,12 +8060,9 @@ def report(plan: Plan, record: Record, baseline: dict | None, head: str, changed
         print(f"fork-check: the failing checks' own output is in {excerpt}")
 
     if quarantined:
-        unanswerable = sum(1 for skip in quarantined
-                           if skip.quarantine.classification == QUARANTINE_UNANSWERABLE)
-        print(f"fork-check: {len(quarantined)} case(s) quarantined -- {unanswerable} unanswerable, "
-              f"{len(quarantined) - unanswerable} flaky or upstream -- each named above with its "
-              f"item and expiry; a quarantined case is not a passing one, and an expired "
-              f"declaration blocks its case again.")
+        print(f"fork-check: {len(quarantined)} case(s) quarantined -- each named above with its "
+              f"item and classification; a quarantined case is not a passing one, and a "
+              f"declaration whose file changed blocks its case again.")
     if not_planned:
         print(f"fork-check: {len(not_planned)} gate step(s) were not run at all; each is named "
               "above with the reason, and a step that did not run is not a pass.")
@@ -9632,7 +9634,7 @@ def run_gate(argv: list[str]) -> int:
 # recorded; a deadline's REACTION under a simulated clock; and a wait that fails only on
 # "never happened", with a budget an order of magnitude past expectation. Elapsed time
 # has two legitimate homes, neither a pass/fail check: a benchmark on named hardware, and
-# production telemetry. The full statement is docs/design/agent-runtime.md section 23.3.
+# production telemetry. The full statement is docs/reference/gate-check-rules.md.
 #
 # This constant is not decoration: `tests/fork-check.test.py` asserts it is present and
 # scans the gate and its check corpus for both banned shapes, so deleting the rule or
