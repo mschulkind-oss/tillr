@@ -3059,12 +3059,13 @@ A fence that names none of those derives nothing: this is a rule about the paths
 widening of every fence.
 
 For trunk candidates, the drain checks the worker's original commit against that fence,
-then runs `just pack-sync` for the shipped modules the candidate changed. A stale mirror
-is regenerated even if the worker committed an earlier copy. The drain records the
-worker parent and the intended maintenance tree before committing the generated files
-alongside any document retirement. The gate and lander receive that committed tree, not
-an unstaged copy. If the mirror already matches, there is no mirror diff to commit.
-Patch-branch deliveries are not rewritten.
+then uses its embedded `pack-sync` renderer for the shipped modules the candidate changed.
+It does not run the candidate's recipe. A stale mirror is regenerated even if the worker
+committed an earlier copy. The drain records the worker parent and the intended maintenance
+tree before committing the generated files alongside any document retirement. The gate and
+lander receive that committed tree, not an unstaged copy. If regeneration fails, only that
+item is held, with the renderer's output and no gate verdict. If the mirror already matches,
+there is no mirror diff to commit. Patch-branch deliveries are not rewritten.
 
 **A pool lane is not a session.** Staging mints a fresh harness session id for an ordinary
 dispatch and writes it beside the brief as `session-id`; it never treats that file as the

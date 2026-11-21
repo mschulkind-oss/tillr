@@ -2,24 +2,30 @@ package drain
 
 import (
 	"context"
+	_ "embed"
 	"os/exec"
 	"strings"
 )
 
 const tillrMirrorRoot = "yolo-packs/tillr/files/local/share/tillr/"
 
-// stagePackMirror uses the same renderer as manual changes, but only for shipped modules
-// touched by this candidate. Other repos, fork deliveries and unrelated candidates do not
-// depend on the recipe or pick up pre-existing drift. The worker's fence has already passed.
+// Embed the same renderer that just pack-sync uses. A candidate may predate that recipe
+// or change it; the drain runs its own version against the candidate's source tree.
+//
+//go:embed pack-mirror.py
+var packMirrorRenderer string
+
+// stagePackMirror renders only the shipped modules touched by this candidate, so
+// unrelated candidates do not pick up pre-existing drift. The worker's fence has passed.
 func (l *Loop) stagePackMirror(ctx context.Context, c Candidate) (bool, error) {
 	paths, err := l.git(ctx, c.Worktree, "diff", "--no-renames", "--name-only", "-z", c.BaseSHA+".."+c.HeadSHA, "--", "tools/", tillrMirrorRoot)
 	if err != nil || paths == "" {
 		return false, err
 	}
-	// Match the module set shipped by the pack-sync recipe; tillr-loop, for example,
-	// ships only via the adapter embedded in tillr-drain, not as its own module.
+	// Match SHIPPED in the renderer. tillr-loop ships only via the adapter
+	// embedded in tillr-drain, not as its own module.
 	modules := []string{"tillr", "tillr-cli", "tillr-drain", "tillr-gate", "tillr-item", "tillr-land", "tillr-run", "tillr-store", "tillr-view", "tillr-trace", "tillr-roll"}
-	args := []string{"--justfile", ".justfile", "pack-sync"}
+	args := []string{"-I", "-c", packMirrorRenderer, "--sync", "."}
 	var destinations []string
 	changedPaths := strings.Split(paths, "\x00")
 	for _, module := range modules {
@@ -44,7 +50,7 @@ func (l *Loop) stagePackMirror(ctx context.Context, c Candidate) (bool, error) {
 	} else if out != "" {
 		return false, Externalf("pack-sync requires a clean candidate worktree: %s", strings.TrimSpace(out))
 	}
-	cmd := exec.CommandContext(ctx, "just", args...)
+	cmd := exec.CommandContext(ctx, "python3", args...)
 	cmd.Dir = c.Worktree
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if ctx.Err() != nil {

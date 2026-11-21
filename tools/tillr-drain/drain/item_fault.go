@@ -24,6 +24,8 @@ const (
 	// gate that cannot judge, it is a fault about this candidate's delivery, not a verdict
 	// on its code, and it must not end the loop for every other lane.
 	ReasonLandHarnessError = "land-harness-error"
+	// ReasonPackSyncFailed keeps the unjudged candidate when mirror preparation fails.
+	ReasonPackSyncFailed = "pack-sync-failed"
 	// ReasonDecisionCollision holds an item whose planned decision could not be recorded,
 	// because its id is already recorded with other columns: a drain defect, held on the
 	// one item it names rather than ending the loop.

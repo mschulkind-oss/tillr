@@ -261,74 +261,14 @@ session-liveness *args:
 # yolo-packs/tillr/files/local/share/tillr/<module>. The copy is committed because the
 # pack -- not this checkout -- is what puts `tillr` on PATH in a workspace that has no
 # tools/. `tests/pack-sync.test.py` fails when the copy diverges from its source.
-# With module arguments, render only those modules (used for drain candidates).
+# With module arguments, render only those modules. The drain embeds this same
+# renderer so it can work on candidates with earlier versions of this recipe.
 [positional-arguments]
 pack-sync *modules:
     #!/usr/bin/env bash
     set -euo pipefail
     root="$(cd "$(dirname "{{justfile()}}")" && pwd)"
-
-    # A copied README must not link out of the pack: `../../docs/...` is correct beside
-    # tools/ and dead here, where it resolves to files/local/docs/... and the repo gate
-    # reads that as a broken link. Point the same prose at the repository on GitHub
-    # instead; the source README keeps the relative links that work where it lives.
-    mirror() {
-        local module="$1" dst="$2" rel file parent
-        parent="$(dirname "$dst")"
-        while [ "$parent" != "$root" ]; do
-            if [ -L "$parent" ]; then
-                echo "pack-sync: refusing symlinked destination ancestor: $parent" >&2
-                return 1
-            fi
-            parent="$(dirname "$parent")"
-        done
-        rm -rf "$dst"
-        mkdir -p "$dst"
-        # Every file git would commit -- tracked, plus untracked-but-not-ignored, because
-        # a module can be mid-work and still be the source the launcher builds. An IGNORED
-        # file is a build output (tools/tillr-store/tillr-store), and the pack ships
-        # source, never a compiled artifact.
-        {
-            git -C "$root" ls-files -z "tools/$module"
-            git -C "$root" ls-files -z --others --exclude-standard "tools/$module"
-        } | while IFS= read -r -d '' file; do
-            # A tracked file deleted in the working tree is not part of the source being
-            # mirrored. Copying it would fail, and with `set -e` that leaves every module
-            # after this one half-deleted in a pack the host reads live.
-            [ -e "$root/$file" ] || continue
-            rel="${file#tools/$module/}"
-            mkdir -p "$dst/$(dirname "$rel")"
-            cp -p "$root/$file" "$dst/$rel"
-        done
-        # A link that resolves outside the module points at nothing in the pack, because the
-        # repository's docs/ tree is not there; it is rewritten to the repository on GitHub.
-        # A link that stays inside the module is left alone -- a sed that rewrites every
-        # `../` turns `../brief-template.md`, a sibling in the same pack, into a URL naming a
-        # different file, and a reference that names one file and opens another is worse than
-        # no link at all. The resolver is a program because that distinction needs one.
-        python3 "$root/tools/pack-mirror-links.py" "$dst"
-        echo "pack-sync: mirrored tools/$module -> ${dst#"$root"/}"
-    }
-
-    # Every module that ships, which is not the same set as the modules that ship with a
-    # launcher. Nine Go modules build the eight names on PATH: the shared library `tillr`
-    # is part of the tree because the binaries resolve it through relative `replace`
-    # paths in their go.mod files, `tillr-cli` builds the `tillr` dispatcher, and
-    # `tillr-drain` replaces two sibling modules as well. `tillr-trace` is the tenth and
-    # ships as source only: `tillr-run`'s pi adapter sources its `bash-shim.sh` through
-    # `BASH_ENV`, and nothing on PATH is built from it.
-    # tillr-roll is source-only: the repository's keeper is run by the recipe below.
-    shipped=(tillr tillr-cli tillr-drain tillr-gate tillr-item tillr-land tillr-run tillr-store tillr-view tillr-trace tillr-roll)
-    if [ "$#" -eq 0 ]; then set -- "${shipped[@]}"; fi
-    for module in "$@"; do
-        if [[ ! "$module" =~ ^[a-z-]+$ || " ${shipped[*]} " != *" $module "* ]]; then
-            echo "pack-sync: unknown module: $module" >&2
-            exit 2
-        fi
-    done
-    for module in "$@"; do
-        mirror "$module" "$root/yolo-packs/tillr/files/local/share/tillr/$module"
-    done
+    exec python3 "$root/tools/pack-mirror-links.py" --sync "$root" "$@"
 
 # Build the eight tillr programs from refs/tillr/green (the last trunk commit proved by
 # the heavy runner), never from the newer tip or working tree. The pack's rendered copy
