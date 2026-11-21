@@ -1568,6 +1568,12 @@ covers those checks; and `tooling`, `seat` (and `definition` when no `design` se
 mapped) hold for `operator` with the evidence line. Both `tillr drain why` and
 `tillr view waiting` display that reason and mover.
 
+A writing node that reports a complete obstacle may leave uncommitted work inside
+its fence. The drain preserves the staged and working changes and points the next
+worker at them in its brief. For a filed request held on `trunk`, that happens after
+a green trunk proof covers the named checks. The fence still applies to both
+committed and uncommitted paths; a completed candidate still needs a clean worktree.
+
 ### A refused run goes back to its worker
 
 The owner ruled on 2026-11-17 that a worker run's failure is not counted and does not park

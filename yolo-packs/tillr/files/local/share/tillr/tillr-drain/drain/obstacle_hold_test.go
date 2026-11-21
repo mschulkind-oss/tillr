@@ -307,8 +307,8 @@ func TestRequestObstacleHoldsRecordKindAndFields(t *testing.T) {
 }
 
 // TestTrunkObstacleHoldReturnsByItselfWhenChecksAreGreen verifies that a request held on
-// OBSTACLE: trunk remains held while proofs are older, omit a named check, or exclude the
-// red base, and dispatches automatically onto the repaired trunk once those checks pass.
+// OBSTACLE: trunk with staged, in-fence work remains held on stale or incomplete
+// proofs, then dispatches onto the repaired trunk with the saved work in its brief.
 func TestTrunkObstacleHoldReturnsByItselfWhenChecksAreGreen(t *testing.T) {
 	ctx := context.Background()
 	f, l, _ := workflowLoopFixture(t, "")
@@ -320,24 +320,32 @@ func TestTrunkObstacleHoldReturnsByItselfWhenChecksAreGreen(t *testing.T) {
 	redBase := runGit(t, f.root, "rev-parse", TrunkRef)
 	runGit(t, f.root, "update-ref", GreenRef, redBase)
 
+	const work = "tools/item-a/repaired.txt"
 	trunkBlocked := true
+	var savedRef string
 	steps := &obstacleRequestSteps{
 		t: t, f: f,
 		report: func(req run.Request) (string, *landingOffer) {
-			if trunkBlocked {
-				return wrapExtractedReport(req.RunID, "OBSTACLE: trunk\nCHECKS: go-tool/unit, tillr-docs\nBASE: "+redBase+"\nRESULT: blocked\n"), nil
-			}
 			if req.NodeID == "work" {
-				target := filepath.Join(f.laneRoot, req.LaneID, WorktreeDir)
-				if err := os.MkdirAll(filepath.Join(target, "tools/item-a"), 0o755); err != nil {
+				lane := filepath.Join(f.laneRoot, req.LaneID)
+				target := filepath.Join(lane, WorktreeDir)
+				if err := os.MkdirAll(filepath.Dir(filepath.Join(target, work)), 0o755); err != nil {
 					t.Error(err)
 					return "", nil
 				}
-				if err := os.WriteFile(filepath.Join(target, "tools/item-a/repaired.txt"), []byte("done\n"), 0o644); err != nil {
-					t.Error(err)
-					return "", nil
+				if trunkBlocked {
+					writeForkFile(t, filepath.Join(target, work), "staged work\n")
+					runGit(t, target, "add", "--", work)
+					writeForkFile(t, filepath.Join(target, work), "working copy\n")
+					savedRef = preservedPrefix + req.RunID
+					return wrapExtractedReport(req.RunID, "OBSTACLE: trunk\nCHECKS: go-tool/unit, tillr-docs\nBASE: "+redBase+"\nRESULT: blocked\n"), nil
 				}
-				runGit(t, target, "add", ".")
+				brief, err := os.ReadFile(filepath.Join(lane, BriefFile))
+				if err != nil || !strings.Contains(string(brief), "Earlier work exists at "+savedRef) {
+					t.Errorf("worker brief did not offer preserved work %s (read error: %v)", savedRef, err)
+				}
+				writeForkFile(t, filepath.Join(target, work), "done\n")
+				runGit(t, target, "add", "--", work)
 				runGit(t, target, "commit", "-qm", "complete after trunk green")
 			}
 			return wrapExtractedReport(req.RunID, "RESULT: done\n"), nil
@@ -345,19 +353,23 @@ func TestTrunkObstacleHoldReturnsByItselfWhenChecksAreGreen(t *testing.T) {
 	}
 	l.cfg.Steps = steps
 	result := &LoopResult{}
-	for i := 0; i < 4 && len(steps.runs) == 0; i++ {
+	for i := 0; i < 6 && savedRef == ""; i++ {
 		if _, err := l.pass(ctx, result); err != nil {
 			t.Fatal(err)
 		}
 		drainOwned(t, l, result)
 	}
-	if _, err := l.pass(ctx, result); err != nil {
-		t.Fatal(err)
+	if savedRef == "" {
+		t.Fatalf("writing node did not dispatch: runs=%v", steps.runs)
 	}
-	drainOwned(t, l, result)
-
 	if d := planFor(t, l, id); d.Action != ActionHold || d.Reason != ReasonObstacleTrunk {
 		t.Fatalf("expected trunk obstacle hold, got %+v", d)
+	}
+	if got := runGit(t, f.root, "show", savedRef+":"+work); got != "working copy" {
+		t.Fatalf("preserved worktree: %q", got)
+	}
+	if got := runGit(t, f.root, "show", savedRef+"^2:"+work); got != "staged work" {
+		t.Fatalf("preserved index: %q", got)
 	}
 
 	runGit(t, f.root, "commit", "--allow-empty", "-qm", "trunk fix")
