@@ -1467,9 +1467,7 @@ missing rather than report that the change failed verification.
   delivery commits selected in the thirteenth run. That run could fetch the older advertised
   todo-list commit but got `upload-pack: not our ref` for the repaired one. The older commit
   does not build; fetching it proves connectivity, not that the required input is available.
-  Before retrying the build, the host operator must make these exact inputs fetchable from
-  the pack locator, using the [existing publication procedure](../pi/patch-branches/published.md)
-  (`bin/patch-branches-publish`) if needed:
+  Use these exact inputs and the pack locator:
 
   ```text
   git@github.com:mschulkind-oss/tillr
@@ -1478,12 +1476,8 @@ missing rather than report that the change failed verification.
   patch/pi-subagents         6daa160be67be20ca344c0414b3f79a9585b6df6
   ```
 
-  Verify each by fetching its object ID from that remote into an empty repository. If all
-  three fetches succeed, retry without moving any refs. If one still fails, report the
-  commit and remote as `could not judge` (exit 4) and leave publication to the host operator.
-  The lane must not push, substitute an older tip or a local cache for this proof, or change
-  the locator. Fixture tests cover c2–c4; they do not prove the delivery has been published.
-- **Host action before retry (designer's decision, 2026-11-20; the owner may overturn it):**
+  The lane must not push, substitute an older tip, or change the locator.
+- **Publication history (2026-11-20):**
   On 2026-11-20 the nineteenth run repeated the fifteenth and seventeenth runs' check:
   `git fetch --no-tags <locator> <object-id>` in a separate empty bare repository for each
   of the three rows above. All three fetches returned `upload-pack: not our ref` (Git exit
@@ -1496,16 +1490,17 @@ missing rather than report that the change failed verification.
   results. The twenty-ninth run cited the earlier Git exit 128, not a fresh fetch. The
   thirty-first, thirty-third and thirty-fifth runs asked for host verification.
 
-  **Build hold (designer's answer to the forty-fifth run, 2026-11-21; the owner may overturn it):**
-  The forty-fifth run received no host results and attempted no fetch, publication or build.
-  Its request for the six exit statuses is for the host operator to answer on the retry
-  request, not for the owner to decide or the build worker to repeat. The hold remains in
-  effect: keep all three pins. Their current availability is unknown; neither the earlier
-  Git exit 128 nor the absence of a new result establishes that a pin is missing today.
+  **Build without publication proof (designer's answer to the forty-seventh run, 2026-11-21;
+  the owner may overturn it):** The forty-seventh run had no host results and stopped before
+  implementation. This replaces the earlier build hold: implement c1–c4 with the pins above
+  and test export, cache hits, fetches and refusals against local fixtures. No host results
+  are needed to dispatch that work. Fixture success proves the check's behavior, not that the
+  live remote serves the pins. Their availability is unknown. If a real check needs a pin and
+  its fetch fails, it must name the commit and remote and return `could not judge` (exit 4);
+  do not turn a fixture result into a passing verdict for that delivery.
 
-  The host operator's next action is to run the checks below and attach the results, not to
-  choose a pin. Until then, do not dispatch another build or design run. Once the host evidence
-  satisfies the hold, retry the build with the same pins; no further design ruling is needed.
+  **Host publication proof:** Only the host operator verifies publication, separately from
+  implementation. No lane should publish or repeat the host checks below.
 
   In the host repository checkout, run `git merge-base --is-ancestor <object-id> refs/heads/<branch>`
   for each row above (`<branch>` includes `patch/`). If any check exits nonzero, stop and report
@@ -1513,11 +1508,11 @@ missing rather than report that the change failed verification.
   three pass, fetch each exact ID from the locator into its own new empty bare repository.
   If a pin is unavailable, follow [the host publication step](../pi/patch-branches/published.md#5-the-host-step)
   and repeat the fetches in new empty repositories. The publisher sends branch tips, not
-  individual pins. Attach the locator and one row per pin to the retry request:
+  individual pins. Report the locator and one row per pin:
   `branch | object ID | ancestry exit | empty-repository fetch exit`. Record the actual Git
-  statuses; write `not run` for a skipped fetch, never `0`. Release the hold only when all
+  statuses; write `not run` for a skipped fetch, never `0`. Claim publication only when all
   three rows show `0` for both checks. Neither a successful push, an advertised tip nor a
-  lane retry substitutes for those results.
+  local cache substitutes for those results.
 - **Existing test cases (2026-11-18, answers the sixth run's report of blocked):** The fork export
   tests run the scenario files under [their cases directory](../../tests/pi-forks/), so those
   files, [their shared library](../../tests/pi-forks/lib.sh),
