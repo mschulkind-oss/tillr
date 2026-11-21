@@ -301,6 +301,17 @@ roadmap order, which is the owner's ruling of 2026-11-16, and nothing that retir
 record is among the eight; [an inventory of that record](../reference/tillr-queue-persistence.md#epoch-record-and-store-inventory-tillr-store-inventory)
 is, because the owner ruled that the record is shaped only after it can be seen.
 
+[Why the drain could not run one night alone](../design/unattended-drain.md), written on
+2026-11-21 at the owner's direct order after the night of that date, records 41 incidents, reduces
+them to eight structural gaps and gives each a rule. It asks four questions:
+[`OQ-UD1`](../design/unattended-drain.md#OQ-UD1), whether a change to the drain's own code waits
+for the drain's own tests before it lands; [`OQ-UD2`](../design/unattended-drain.md#OQ-UD2),
+whether the number the owner sets limits running workers and not worktrees;
+[`OQ-UD3`](../design/unattended-drain.md#OQ-UD3), what keeps watching when the shared subscription
+runs out; and [`OQ-UD4`](../design/unattended-drain.md#OQ-UD4), who rules when a worker needs a
+file outside its fence. It sits here because four of its eight rules cannot be planned until he
+answers, and none of it is built. The placement is the designer's and is his to reorder.
+
 Two designs left this list on 2026-11-15. [Item graphs](../reference/tillr-item-graphs.md) is
 decided, built, and graduated into a system reference: one commit per item, all of refinement built, read-only nodes in
 parallel, and lanes outside the cap for work the owner is waiting on. On 2026-11-16 it was cut
