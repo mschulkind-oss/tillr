@@ -32,7 +32,10 @@ landing-tier checks (`TIER_LANDING` in `tools/fork-check.py`). That remainder is
 overturned by the owner on 2026-11-17: automatic revert is on here). Its three former open
 questions ([`OQ-GR1`](#OQ-GR1) to [`OQ-GR3`](#OQ-GR3)) were initially settled the same day by the
 session's designer on recorded principle: [`OQ-GR3`](#OQ-GR3) stands, while the owner overturned
-[`OQ-GR2`](#OQ-GR2) on 2026-11-17 (lanes start on `tip`) and ruled [`OQ-GR1`](#OQ-GR1) out on
+[`OQ-GR2`](#OQ-GR2) on 2026-11-17 (lanes start on `tip`), then ruled on 2026-11-21 that new work
+starts from the last proved trunk commit and only after its blocker's landing is proved
+([`D-GR24`](#decision-ledger); the policy file still says `tip` until that ruling is built), and
+ruled [`OQ-GR1`](#OQ-GR1) out on
 2026-11-18 ([`OQ-GP7`](tillr-graph-is-the-path.md#OQ-GP7); the 20-landing cap stays live until
 that waiting rule is built). On 2026-11-17 the owner ruled on time limits in the gate
 ([`D-GR15`](#decision-ledger)): a budget is a target, nothing is carried at a budget, and only a
@@ -1039,7 +1042,7 @@ One tracked file, `config/tillr/gate-policy.json`, holds the repository's settin
 | `auto_revert` | `true`, `false` | `false` | `true` (since 2026-11-18) |
 | `budget_ms` | milliseconds | 10,000 | 10,000 |
 | `red_cap` | `landings` and `minutes`, each a non-negative integer | 20 landings, 60 minutes | 20 landings; minutes 0, so no time bound (since 2026-11-17) |
-| `lane_base` | `green`, `tip` | `green` | `tip` (since 2026-11-17) |
+| `lane_base` | `green`, `tip` | `green` | `green`, by the owner's ruling of 2026-11-21 ([`D-GR24`](#decision-ledger)). The file still says `tip` (set on 2026-11-17) until that ruling is built |
 
 The absent default is the side that cannot leave a trunk red. An unknown value is refused by
 name and the loop does not start.
@@ -1061,7 +1064,48 @@ cause; its change is squashed onto the tip when it lands. An item blocked by ano
 the green pointer contains the blocker, usually a few minutes. A repository may set `tip`, which
 cuts lanes from the newest trunk commit. With no green pointer yet, lanes are cut from the tip.
 ([OQ-GR2](#decision-ledger).) The owner overturned the `green` default on 2026-11-17: work is
-always built against the latest trunk, and this repository sets `tip` (`1fa2c069c`).
+always built against the latest trunk, and this repository set `tip` (`1fa2c069c`).
+
+**The owner's ruling of 2026-11-21 replaces the 2026-11-17 one for new work**
+([`D-GR24`](#decision-ledger)). His words, verbatim:
+
+> So I think the real rule should be you can only start a new item if the previous item's trunk landing went green because you don't want to start it until the other one has landed on the trunk and it's okay and then you always just base an item on the most recent green on the trunk, and I think that satisfies everything.
+
+> And yes, of course, a trunk fixer is meant to only be based on a red change, so of course it's based on a red one.
+
+This repository therefore sets `lane_base` to `green`. Three things follow, and all three are the
+`green` behavior the drain already has
+([the drain's README](../../tools/tillr-drain/README.md#the-commit-a-new-lane-starts-from)):
+
+- A new lane is cut from the green pointer, the last proved trunk commit.
+- An item whose blocker has landed does not start until the heavy runner has proved a trunk commit
+  that contains that landing. The item is held with the reason `trunk-unproved`, not `blocked`: the
+  blocker's work is finished, and the proof of the trunk is what is pending.
+- A trunk fixer (the item filed to repair a red heavy check) starts from the trunk tip, because the
+  failure it repairs is not in the older proved commit.
+
+The request that carried the ruling reads "the previous item" as the item's blocker, not as
+whichever item the queue started last. That reading is the operator's, not the owner's, and the
+owner may overturn it.
+
+**Where `green` as built differs from the owner's words.** The owner said "always" base an item on
+the most recent green, and that an item starts only once the other one's landing "went green". The
+code read on 2026-11-21 (`tools/tillr-drain/drain/lane_base.go` and the README section above) does
+something else in the five cases below. The designer has changed none of them and decided none of
+them: each is listed for the owner to rule on ([`D-GR25`](#decision-ledger)), and each stays as
+built until he does.
+
+| Case | What `green` does today | How it differs from the owner's words |
+| :--- | :--- | :--- |
+| The item's own block (its definition in a document) is newer than the green pointer | The lane is cut from the oldest trunk commit after green that carries the tip's version of the block, and the claim reports `<item>'s block is newer than green <green>; cutting its lane from <commit>`. The item does not wait for that commit to be proved | The base is an unproved commit, later than the most recent green |
+| The item's design answer (a design seat's commit to a decision ledger) landed after the green pointer | The returned worker's lane is cut from the commit that holds the answer, when that commit is after green | The same: an unproved base |
+| No green pointer exists yet | Lanes are cut from the tip, and no item waits for a proof | Nothing has been proved, so there is no "most recent green" to start from |
+| The blocker is a fork item (its commits are delivered on a `patch/<fork>` branch, not on the trunk) | The dependent item starts once the delivered patch branch retains the blocker's judged landing. The green pointer cannot contain a fork commit | The blocker's landing is not proved by a green trunk commit |
+| The blocker landed, but no landing is recorded for it | The dependent item waits (`trunk-unproved`) | Stricter than the words rather than looser: it waits for a fact the heavy runner alone cannot supply |
+
+The 2026-11-17 overturn had one recorded cause: a lane cut from the green pointer was handed a
+tree older than its own item's definition. The first two rows are how the code avoids that
+today, at the price of an unproved base.
 
 **The runner's own changes.** A change under the gate runner's directories — `tools/tillr-gate/`
 and `tools/gate/`, and `tools/fork-check.py` with `tests/fork-check.test.py` while that program
@@ -1306,7 +1350,7 @@ while [`OQ-GR1`](#OQ-GR1) and [`OQ-GR2`](#OQ-GR2) were later withdrawn/overturne
 ([`OQ-GR1`](#OQ-GR1) ruled out by [`OQ-GP7`](tillr-graph-is-the-path.md#OQ-GP7), with the
 20-landing cap kept live until its replacement waiting rule is built; [`OQ-GR2`](#OQ-GR2)
 overturned in `1fa2c069c` and withdrawn in
-[the graph design Section 12.2](tillr-graph-is-the-path.md#122-decisions-in-other-documents)).
+[the graph design Section 12.2](tillr-graph-is-the-path.md#122-decisions-in-other-documents)). `D-GR24` is the owner's ruling of 2026-11-21 that puts the `green` lane base back for new work, with trunk fixers on the tip; it replaces the 2026-11-17 overturn of [`OQ-GR2`](#OQ-GR2). `D-GR25` is the designer's list of where the built `green` behavior differs from those words; it decides nothing and each case is the owner's to rule on.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
@@ -1332,9 +1376,11 @@ overturned in `1fa2c069c` and withdrawn in
 | `D-GR21` | **Owner ruling (2026-11-21), verbatim:** *"The correct move for a flaky test is disable it, file an item to fix it, and don't let it block anything. It is not considered green, but it also doesn't let you block other things."* It governs a check whose result store holds both a pass and a fail for one fingerprint, and replaces the `flaky` pass of `D-GR8`, the live re-run of [`OQ-ER3`](./tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3) option A, and the red verdict a filed operator request of 2026-11-20 asked for. | 2026-11-21 | [A contradicted check is disabled](#a-contradicted-check-is-disabled) | — |
 | `D-GR22` | **Not the owner's ruling; the owner may overturn it.** The operator's reading of `D-GR21` (2026-11-21): the check is disabled and not run for a verdict, is reported as disabled and never as passed or green, refuses no landing, does not turn the trunk red, gets one deduplicated repair item with both times and both output locations, and is enabled again when the repair lands. The designer's mechanism for it (2026-11-21): a `disabled` result counted apart from passes; `log_ref` on each stored record; a marker per check id, so a new fingerprint does not re-arm an unrepaired check; the drain files `flaky-<check-id>` from the verdict, matching only an unfinished item, so a contradiction found after a landed repair files a new item with the new evidence; the repair's own candidate runs the check, and `tillr-gate enable` then removes the marker and sets the contradicting pair aside. **Rejected:** a red verdict (the filed request; replaced by `D-GR21`); a live re-run whose pass is green ([`OQ-ER3`](./tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3) option A; replaced by `D-GR21`); disabling by fingerprint alone; any retry, count or time window. | 2026-11-21; numbering and repair-item rule amended 2026-11-21 | [A contradicted check is disabled](#a-contradicted-check-is-disabled) | — |
 | `D-GR23` | **Not the owner's ruling; the designer's decision, which the owner may overturn.** Every site that classifies a check result (70, listed by function and consumer) calls one function, `Classify` in a `checkresult` package of the shared `tools/tillr` module, reached from Python and for store reads through one face, `tillr-gate classify`. It has five outcomes: `pass`, `fail`, `unknown`, `unavailable` and `disabled`; a site decides blocking and credit from the outcome alone. A cached result is classified when it is used. A replayed commit supplies the declaration and the command, never the classification. The repair item is filed by a sweep of the marker files, which replaces "from the verdict" in `D-GR22`; a generated repair item needs no document block. **Rejected:** teaching each site the rule as it is found (refused by its verifier eleven times); a classifier per program held together by a shared table; filing from the verdict with a filing step on every exit path; four outcomes with `unavailable` folded into `unknown`. | 2026-11-21 | [One classifier, five outcomes](#one-classifier-five-outcomes) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
+| `D-GR24` | **Owner ruling (2026-11-21), verbatim:** *"So I think the real rule should be you can only start a new item if the previous item's trunk landing went green because you don't want to start it until the other one has landed on the trunk and it's okay and then you always just base an item on the most recent green on the trunk, and I think that satisfies everything."* and *"And yes, of course, a trunk fixer is meant to only be based on a red change, so of course it's based on a red one."* It replaces the owner's 2026-11-17 overturn of [`OQ-GR2`](#OQ-GR2) for new work. From an operator request of the same day, which reads the ruling as the `green` value of `lane_base` and reads "the previous item" as the item's blocker (the operator's reading, which the owner may overturn): a new lane is cut from the green pointer; an item whose blocker has landed is held with the reason `trunk-unproved` until the heavy runner has proved a trunk commit containing that landing; a trunk fixer starts from the tip; this repository sets `lane_base` to `green`. | 2026-11-21 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | — (the behavior is built in `tools/tillr-drain/drain/lane_base.go`; `config/tillr/gate-policy.json` still sets `tip`, and the documents and tests that state this repository's setting still say `tip`) |
+| `D-GR25` | **Not the owner's ruling and not a decision: the designer's list, for the owner to rule on.** The built `green` behavior differs from the words of `D-GR24` in five cases, tabled in Section 6.6: a lane cut from an unproved commit after green when the item's own block is newer than green; the same when the item's design answer landed after green; lanes cut from the tip when no green pointer exists; a fork blocker proved by its delivered patch branch, not by the green pointer; and a landed blocker with no recorded landing, which waits. Each stays as built until the owner rules. **Rejected:** changing any of them to match the words, which the request that carried the ruling forbids. | 2026-11-21 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ as built (`tools/tillr-drain/drain/lane_base.go`); no ruling yet |
 | `D-GR12` | A question about a moving upstream is a drift probe that files an item and never moves or holds the green pointer. **Rejected:** keeping it as a check on a commit. Made visible where it happens. | 2026-11-15 | [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) | — (`series` and `patch-branch-inv2` are `TIER_LANDING` in `tools/fork-check.py`; no probe exists) |
 | OQ-GR1 | The default of a per-repository setting, `red_cap`: landing stops at 20 landings or 60 minutes past the last green commit; a repository may set a different bound, and zero means no cap. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "a mechanism whose cost rises with trunk activity is pointed the wrong way" and the owner's 2026-11-15 ruling that the landing strategy is configurable per repository and red is brief. The owner may overturn it. **Rejected:** no cap, which lets the fixer's range and the deploy lag grow without limit. **Ruled out by the owner on 2026-11-18** ([OQ-GP7](tillr-graph-is-the-path.md#OQ-GP7)): under a red check, work lands only if it does not touch what that check reads, and there is no landing cap. The cap is still live in the tree (20 landings; its time bound was turned off on 2026-11-17, `d53580bfd`) until the graph design's waiting rule is built. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/redcap/cap.go`, `drain/red_cap.go`) |
-| OQ-GR2 | The default of a per-repository setting, `lane_base`: a new lane starts from the last green commit; a repository may choose the trunk tip. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are that a worker does not pay for a failure it did not cause, and the same cost-direction rule. The owner may overturn it. **Rejected:** always cutting from the tip. **Overturned by the owner on 2026-11-17** (`1fa2c069c`): work is always built against the latest trunk, never a past commit; a lane cut from the green pointer was handed a tree older than its own item's definition and produced false conflicts. This repository sets `tip`; the code's default when the key is absent is still `green`. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/drain/lane_base.go`; this repository sets `lane_base` to `tip` in `config/tillr/gate-policy.json`) |
+| OQ-GR2 | The default of a per-repository setting, `lane_base`: a new lane starts from the last green commit; a repository may choose the trunk tip. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are that a worker does not pay for a failure it did not cause, and the same cost-direction rule. The owner may overturn it. **Rejected:** always cutting from the tip. **Overturned by the owner on 2026-11-17** (`1fa2c069c`): work is always built against the latest trunk, never a past commit; a lane cut from the green pointer was handed a tree older than its own item's definition and produced false conflicts. This repository set `tip`; the code's default when the key is absent is still `green`. **Replaced by the owner's ruling of 2026-11-21** (`D-GR24`): new work starts from the last proved trunk commit again, and this repository sets `green`. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/drain/lane_base.go`; `config/tillr/gate-policy.json` still sets `lane_base` to `tip` until `D-GR24` is built) |
 | OQ-GR3 | A change to the gate's own runner lands only after the runner's suite passes, before the merge, under either strategy. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principle is the fence of [escalation ladder Section 5.2](escalation-ladder.md#52-the-fence-what-a-lane-may-not-edit) (gate definitions change only as their own item), for the reason the 2026-11-05 ruling gave: a wrong judge is the one red a revert does not repair. The owner may overturn it. **Rejected:** landing it in ten seconds and re-running every landing's fast checks after a red suite. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/gate/runner-first.test.py`) |
 
 ## 11. Build order
