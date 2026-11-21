@@ -1046,7 +1046,7 @@ func (l *Loop) landingRefusalRepeats(ctx context.Context, c Candidate, refusal r
 	}
 	switch refusal.Step {
 	case RefusalGate, RefusalFence:
-	case RefusalVerifyNotDone, ReasonEvalFailed:
+	case ReasonEvalFailed:
 		if refusal.WorkerSession == nil {
 			return false, nil
 		}

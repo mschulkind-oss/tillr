@@ -197,7 +197,8 @@ type Candidate struct {
 	EvaluatorTask   string            `json:"-"`
 	// VerifyReplan is set on a verify-not-done refusal whose findings say the plan was
 	// wrong (a reason beginning plan-wrong:); the item then returns to the plan step.
-	VerifyReplan bool `json:"-"`
+	VerifyReplan   bool `json:"-"`
+	verifyFeedback *verifyFeedback
 	// Runtime-only observation, sampled when the gate records a stall.
 	gateCount     func() int
 	RefusalDetail string `json:"refusal_detail,omitempty"`

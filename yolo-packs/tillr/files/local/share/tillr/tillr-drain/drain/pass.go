@@ -1296,7 +1296,7 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := l.recoverVerifyTriage(ctx, s); err != nil {
+	if err := l.releaseCountedVerifyHolds(ctx, s); err != nil {
 		return nil, nil, err
 	}
 	var plans []plannedApplication

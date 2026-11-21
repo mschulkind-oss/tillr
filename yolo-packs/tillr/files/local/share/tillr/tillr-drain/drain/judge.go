@@ -2,7 +2,6 @@ package drain
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -595,29 +594,6 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 	}
 }
 
-// verifyFindingDigest is the digest of one not-done finding as a worker would act on it:
-// the candidate it judged and the finding's text. The candidate is hashed beside the
-// normalized text, not inside it, because normalizeEvidence strips full commit hashes.
-// Two refusals that share a criterion id but differ in candidate or finding are not an
-// identical repeat.
-func verifyFindingDigest(head, reason, runID string) string {
-	return fmt.Sprintf("%x", sha256.Sum256([]byte(head+"\n"+normalizeEvidence(reason, runID))))
-}
-
-// verifyNotDoneEvidence is a verify-not-done refusal's detail and evidence key: one line
-// per not-done criterion, and a key of each criterion id with the digest of its candidate
-// and finding text.
-func verifyNotDoneEvidence(head, runID string, findings []item.JudgeEntry) (string, string) {
-	sort.Slice(findings, func(i, j int) bool { return findings[i].CriterionID < findings[j].CriterionID })
-	var lines []string
-	var checks []EndingCheck
-	for _, v := range findings {
-		lines = append(lines, v.CriterionID+": "+v.Reason)
-		checks = append(checks, EndingCheck{CheckID: v.CriterionID, Digest: verifyFindingDigest(head, v.Reason, runID)})
-	}
-	return strings.Join(lines, "\n"), endingKey(RefusalVerifyNotDone, checks, "", runID)
-}
-
 // defectiveCandidateEvidence finds a defective entry backed by the candidate rather
 // than by a citation to the request. Check each entry separately: a premise citation
 // for one criterion cannot justify another criterion's defective verdict.
@@ -678,7 +654,7 @@ func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.J
 				findings = append(findings, v)
 			}
 		}
-		c.RefusalDetail, c.EvidenceKey = verifyNotDoneEvidence(c.HeadSHA, c.RunID, findings)
+		c.verifyFeedback = l.checkedVerifyFeedback(ctx, c, options.Tree, verdicts)
 		for _, v := range findings {
 			// The verifier's words go to the builder as written. Only a reason that begins
 			// plan-wrong: sends the item back to the plan step.
@@ -787,8 +763,8 @@ func writeJudgeReceipt(path string, receipt *JudgeReceipt) error {
 	return os.Rename(path+".new", path)
 }
 
-// judgeRefusalHistory is item-wide, unlike retry-cycle triage. Only refusals
-// backed by a not-done verdict count; gate and verifier infrastructure failures do not.
+// judgeRefusalHistory is item-wide. Only refusals backed by a not-done verdict
+// are included; gate and verifier infrastructure failures are not findings.
 func judgeRefusalHistory(r *store.Reader, itemID string) (string, error) {
 	rows, err := r.Query(`WITH refusals AS (
  SELECT MIN(seq) AS first_seq FROM events
@@ -797,7 +773,8 @@ func judgeRefusalHistory(r *store.Reader, itemID string) (string, error) {
    AND COALESCE(json_extract(payload,'$.detail'),'')<>''
  GROUP BY object_id
 )
-SELECT e.object_id, json_extract(e.payload,'$.detail')
+SELECT e.object_id, COALESCE((SELECT group_concat(json_extract(value,'$.criterion') || ': ' || json_extract(value,'$.reason'), char(10))
+ FROM json_each(e.payload,'$.verify_feedback.findings')), json_extract(e.payload,'$.detail'))
  FROM refusals f JOIN events e ON e.seq=f.first_seq ORDER BY f.first_seq`,
 		RefusalKind, itemID, RefusalVerifyNotDone, ReasonEvalFailed)
 	if err != nil {

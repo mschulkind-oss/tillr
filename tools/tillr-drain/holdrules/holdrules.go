@@ -59,7 +59,7 @@ var Rules = map[string]Rule{
 	"run-processes-live":          {"needs you", "lane", "end the surviving processes the detail lists, then tillr drain clear-fault"},
 	"preserve-failed":             {"needs you", "lane", "correct the preservation failure named in the detail"},
 	"decision-collision":          {"needs a cause", "loop", "fix the drain defect the fault names, then tillr drain clear-fault"},
-	"verify-triage":               {"needs you", "lane", "the operator runs the retry command in the hold detail after reviewing the three findings"},
+	"verify-triage":               {"needs you", "lane", "the operator addresses the repeated finding and runs the retry command in the hold detail"},
 	"adapter-refused":             {"needs you", "lane", "correct what the adapter's words name, then tillr drain clear-fault"},
 	"stage-failed":                {"needs you", "lane", "fix the staging fault the detail names, then tillr drain clear-fault"},
 	"settle-failed":               {"needs a cause", "loop", "fix the drain defect the fault names, then tillr drain clear-fault"},

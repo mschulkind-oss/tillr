@@ -105,8 +105,6 @@ func (s *plannedVerifySteps) Run(ctx context.Context, req run.Request) (run.Reco
 		}
 		head := runGit(s.t, target, "rev-parse", "HEAD")
 		reason := "uncovered: no piece"
-		if s.verifies > 1 {
-		}
 		v := item.JudgeOutput{EvaluatedHead: head, EvaluatedTree: runGit(s.t, target, "rev-parse", head+"^{tree}"), Outcome: "fail", Verdicts: []item.JudgeEntry{
 			{CriterionID: "c1", CriterionHash: item.CriterionHash("the first criterion of item-a"), Verdict: "done", ClaimClass: item.ClaimVerification, Reason: "covered", Evidence: []string{"node:work/piece-one"}},
 			{CriterionID: "c2", CriterionHash: item.CriterionHash("second criterion"), Verdict: "not-done", ClaimClass: item.ClaimVerification, Reason: reason, Evidence: []string{"candidate.diff"}},
@@ -131,7 +129,7 @@ func (s *plannedVerifySteps) Run(ctx context.Context, req run.Request) (run.Reco
 	return rec, report, err
 }
 
-func TestPlannedVerifyReturnsThenHoldsForTriage(t *testing.T) {
+func TestPlannedVerifyReturnsThenHoldsForRepeatedFinding(t *testing.T) {
 	f, l, base := plannedFixture(t)
 	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "config/tillr/plan-guidance.md"))
 	if err != nil {
@@ -163,7 +161,7 @@ func TestPlannedVerifyReturnsThenHoldsForTriage(t *testing.T) {
 		t.Fatalf("no returned build step: %+v", mustPlan(t, l))
 	}
 	// The first repair is a new candidate; the second rebuilds that same commit.
-	// The third refusal holds for triage instead of taking the identical-repeat route.
+	// The unchanged finding on the rebuilt candidate holds for the operator.
 	for i := 0; i < 40 && steps.verifies < 3; i++ {
 		graphPass(t, l, result)
 	}
