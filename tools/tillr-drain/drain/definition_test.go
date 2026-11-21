@@ -244,6 +244,10 @@ func TestLandingHoldsRequireLandingDefinition(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if holdEnabled(d, ReasonNoFence+": detail") {
+		t.Error("default Git definition enables the legacy fence prerequisite")
+	}
+	d.Prerequisites = append(d.Prerequisites, definition.PrerequisiteFence)
 	for reason := range landingHolds {
 		if !holdEnabled(d, reason+": detail") {
 			t.Errorf("Git definition lost %s", reason)

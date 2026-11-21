@@ -267,19 +267,19 @@ func faultOf(t *testing.T, f refusalLoopFixture, itemID string) (ItemFault, bool
 	return got, ok
 }
 
-const siblingDoc = "# Doc\n\n### Build item a\n\n<!-- tillr: item id=\"item-a\" paths=\"tools/item-a/\" -->\n- **c1:** the first criterion\n\n### Build item b\n\n<!-- tillr: item id=\"item-b\" paths=\"%s\" -->\n- **c1:** the b criterion\n"
+const siblingDoc = "# Doc\n\n### Build item a\n\n<!-- tillr: item id=\"item-a\" paths=\"tools/item-a/\" -->\n- **c1:** the first criterion\n\n### Build item b\n\n<!-- tillr: item id=\"item-b\" paths=\"tools/item-b/\" -->\n- **c1:** %s\n"
 
 // A landed answer for item-a is not refused because a sibling block in the same document
 // is frozen: the frozen definition is item-b's alone (item-heavy-revert-time-to-verdict was
 // held on 2026-11-18 for item-gate-stall-watch-without-perf-counter's frozen block).
 func TestALandedAnswerIsNotRefusedForASiblingsFrozenBlock(t *testing.T) {
 	f, l, _, _ := designAnswerFixture(t)
-	syncBriefs(t, f, fmt.Sprintf(siblingDoc, "tools/item-b/"))
+	syncBriefs(t, f, fmt.Sprintf(siblingDoc, "the b criterion"))
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE item_criteria SET state = 'done' WHERE item_id = 'item-b'`)
 		return err
 	})
-	head := commitBriefs(t, f, fmt.Sprintf(siblingDoc, "tools/item-b/,tests/item-b/"))
+	head := commitBriefs(t, f, fmt.Sprintf(siblingDoc, "the revised b criterion"))
 	if err := l.answerBlock(context.Background(), landedAnswer(t, head, "item-a")); err != nil {
 		t.Fatal(err)
 	}
@@ -296,13 +296,13 @@ func TestALandedAnswerIsNotRefusedForASiblingsFrozenBlock(t *testing.T) {
 // the same transaction: the mover is the correction, never a hand clear-fault.
 func TestAHeldLandedAnswerAppliesAtTheNextSyncOnceItsDefinitionIsFree(t *testing.T) {
 	f, l, _, _ := designAnswerFixture(t)
-	doc := "# Doc\n\n### Build item a\n\n<!-- tillr: item id=\"item-a\" paths=\"%s\" -->\n- **c1:** the first criterion\n"
-	syncBriefs(t, f, fmt.Sprintf(doc, "tools/item-a/"))
+	doc := "# Doc\n\n### Build item a\n\n<!-- tillr: item id=\"item-a\" paths=\"tools/item-a/\" -->\n- **c1:** %s\n"
+	syncBriefs(t, f, fmt.Sprintf(doc, "the first criterion"))
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE item_criteria SET state = 'done' WHERE item_id = 'item-a'`)
 		return err
 	})
-	head := commitBriefs(t, f, fmt.Sprintf(doc, "tools/item-a/,tests/item-a/"))
+	head := commitBriefs(t, f, fmt.Sprintf(doc, "the revised first criterion"))
 	answer := landedAnswer(t, head, "item-a")
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		if err := item.RecordConflict(tx, *answer.BlockConflict, l.cfg.Now()); err != nil {

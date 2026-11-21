@@ -511,9 +511,9 @@ func TestRevertedEndingIsReturnedWithItsBrief(t *testing.T) {
 	}
 }
 
-// revertedBlock is item-broke's document block, with its fence.
-func revertedBlock(paths string) item.SyncDocument {
-	return item.SyncDocument{Path: "docs/broke.md", Content: []byte("# Doc\n\n### Break it\n\n<!-- tillr: item id=\"item-broke\" paths=\"" + paths + "\" -->\n\n- **c1:** It works.\n- **c2:** A test covers it.\n")}
+// revertedBlock is item-broke's document block, with the given first criterion.
+func revertedBlock(criterionText string) item.SyncDocument {
+	return item.SyncDocument{Path: "docs/broke.md", Content: []byte("# Doc\n\n### Break it\n\n<!-- tillr: item id=\"item-broke\" paths=\"a\" -->\n\n- **c1:** " + criterionText + "\n- **c2:** A test covers it.\n")}
 }
 
 // syncBlock applies doc to the harness store the way a landed design answer does.
@@ -534,7 +534,7 @@ func (h *revertHarness) syncBlock(doc item.SyncDocument) item.SyncReport {
 // landing leaves it: every criterion done.
 func (h *revertHarness) judgedLanded() {
 	h.t.Helper()
-	h.syncBlock(revertedBlock("a"))
+	h.syncBlock(revertedBlock("It works."))
 	if err := writeFixture(h.path, func(tx *store.Tx) error {
 		if _, err := tx.Exec(`UPDATE item_criteria SET state = 'done' WHERE item_id = 'item-broke'`); err != nil {
 			return err
@@ -548,7 +548,7 @@ func (h *revertHarness) judgedLanded() {
 
 // A revert withdraws what the reverted landing settled: the item's criterion states are
 // cleared with a record naming the landing and the revert, so a design answer that then
-// amends the block (its fence, here) syncs instead of being refused definition-frozen,
+// amends the block (its first criterion, here) syncs instead of being refused definition-frozen,
 // the hold item-gate-stall-watch-without-perf-counter met on 2026-11-18.
 func TestARevertWithdrawsItsLandingsVerdictsAndADesignAnswerAfterItSyncs(t *testing.T) {
 	h := newRevertHarness(t, fileRed("a"))
@@ -567,12 +567,12 @@ func TestARevertWithdrawsItsLandingsVerdictsAndADesignAnswerAfterItSyncs(t *test
 	if len(withdrawn) != 1 || !strings.Contains(withdrawn[0], culprit) || !strings.Contains(withdrawn[0], reverts[0].Revert) || !strings.Contains(withdrawn[0], `"by":"tillr-drain"`) || !strings.Contains(withdrawn[0], `"state":"done"`) {
 		t.Fatalf("withdrawal record: %v", withdrawn)
 	}
-	report := h.syncBlock(revertedBlock("a,tests/a"))
+	report := h.syncBlock(revertedBlock("It works after the repair."))
 	if len(report.Frozen) != 0 || strings.Join(report.Updated, ",") != "item-broke" {
 		t.Fatalf("the design answer after the revert did not sync: updated %v frozen %+v", report.Updated, report.Frozen)
 	}
-	if paths := h.query(`SELECT allowed_paths FROM items WHERE item_id = 'item-broke'`); len(paths) != 1 || paths[0] != `["a","tests/a"]` {
-		t.Fatalf("paths=%v", paths)
+	if texts := h.query(`SELECT text FROM item_criteria WHERE item_id = 'item-broke' AND criterion_id = 'c1'`); len(texts) != 1 || texts[0] != "It works after the repair." {
+		t.Fatalf("criterion text=%v", texts)
 	}
 	// Repeating the rule records nothing more.
 	if err := h.loop.withdrawRevertedVerdicts(context.Background()); err != nil {
@@ -595,7 +595,7 @@ func TestTheNextSyncWithdrawsVerdictsAnEarlierRevertLeftStanding(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.exec(`UPDATE items SET state = ? WHERE item_id = 'item-broke'`, StateInQueue)
-	if report := h.syncBlock(revertedBlock("a,tests/a")); len(report.Frozen) != 1 {
+	if report := h.syncBlock(revertedBlock("It works after the repair.")); len(report.Frozen) != 1 {
 		t.Fatalf("the fixture is not the live state: frozen %+v", report.Frozen)
 	}
 	h.loop.cfg.Steps = syncedRevertSteps{h.steps}
@@ -608,8 +608,11 @@ func TestTheNextSyncWithdrawsVerdictsAnEarlierRevertLeftStanding(t *testing.T) {
 	if !strings.Contains(h.report.String(), "loop: withdrew the verdicts of reverted landings: item-broke (0123456789ab)") {
 		t.Fatalf("the repair is not reported:\n%s", h.report.String())
 	}
-	if report := h.syncBlock(revertedBlock("a,tests/a")); len(report.Frozen) != 0 || len(report.Updated) != 1 {
+	if report := h.syncBlock(revertedBlock("It works after the repair.")); len(report.Frozen) != 0 || len(report.Updated) != 1 {
 		t.Fatalf("after the repair: updated %v frozen %+v", report.Updated, report.Frozen)
+	}
+	if texts := h.query(`SELECT text FROM item_criteria WHERE item_id = 'item-broke' AND criterion_id = 'c1'`); len(texts) != 1 || texts[0] != "It works after the repair." {
+		t.Fatalf("criterion text=%v", texts)
 	}
 	// A verdict recorded after the revert stands.
 	h.exec(`UPDATE item_criteria SET state = 'done' WHERE item_id = 'item-broke'`)
