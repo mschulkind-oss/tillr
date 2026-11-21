@@ -1040,10 +1040,10 @@ func (l *Loop) passPlans(ctx context.Context, at time.Time) ([]plannedApplicatio
 }
 
 func (l *Loop) passPlansGeneration(ctx context.Context, at time.Time, generation *string) ([]plannedApplication, []LaneLease, error) {
-	return l.passPlansMode(ctx, at, generation, false)
+	return l.passPlansMode(ctx, at, generation, false, nil)
 }
 
-func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *string, pendingOnly bool) ([]plannedApplication, []LaneLease, error) {
+func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *string, pendingOnly bool, commentChecks *[]plannedApplication) ([]plannedApplication, []LaneLease, error) {
 	if err := l.refreshQuotas(ctx); err != nil {
 		return nil, nil, err
 	}
@@ -1182,7 +1182,7 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 			refs = &startRefs{tip: tip}
 		}
 		err := s.ReadTx(ctx, func(r *store.Reader) error {
-			return l.readPassPlans(ctx, r, at, "", refs, &plans, &leases, pendingOnly)
+			return l.readPassPlans(ctx, r, at, "", refs, &plans, &leases, pendingOnly, commentChecks)
 		})
 		if err != nil || !slices.ContainsFunc(plans, func(p plannedApplication) bool { return p.start != nil }) {
 			return plans, leases, err
@@ -1199,7 +1199,7 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 
 // readPassPlans binds the planner's decisions to a read snapshot. A completion
 // only plans an existing reservation, never a fresh attempt or another lane.
-func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time, onlyItem string, refs *startRefs, plans *[]plannedApplication, leases *[]LaneLease, pendingOnly bool) error {
+func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time, onlyItem string, refs *startRefs, plans *[]plannedApplication, leases *[]LaneLease, pendingOnly bool, commentChecks *[]plannedApplication) error {
 	var err error
 	observed := append([]string(nil), l.cfg.Lanes...)
 	held, err := readLanes(r, at)
@@ -1278,8 +1278,25 @@ func (l *Loop) readPassPlans(ctx context.Context, r *store.Reader, at time.Time,
 		return err
 	}
 	expressByID := make(map[string]bool, len(planItems))
+	if commentChecks != nil {
+		*commentChecks = (*commentChecks)[:0]
+	}
 	for _, row := range planItems {
 		expressByID[row.ItemID] = row.Express
+		// Pending-only planning omits unseen batches, but those batches may
+		// disappear without ever becoming eligible for a start proposal. Keep
+		// closure checks separate from dispatch and durable hold decisions.
+		if commentChecks == nil || !pendingOnly || !holdEnabled(declared.Parsed, ReasonVantageUnavailable) ||
+			!item.IsCommentItem(row.ItemID) || (row.State != StateInQueue && row.State != StateBlocked) ||
+			tick.plansItem(row.ItemID, folds.works[row.ItemID]) {
+			continue
+		}
+		d := Decision{ItemID: row.ItemID, Action: ActionHold}
+		version, err := inputVersionFrom(r, d, folds)
+		if err != nil {
+			return err
+		}
+		*commentChecks = append(*commentChecks, plannedApplication{decision: d, version: version, definition: &declared.Parsed})
 	}
 	heldExpressSoFar := map[string]heldExpressItem{}
 	for _, env := range envs {
@@ -2532,9 +2549,9 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	if stop, err := l.drainCompletions(ctx, result); stop != "" || err != nil {
 		return stop, err
 	}
-	plan := l.passPlansGeneration
-	if pendingOnly {
-		plan = l.passPendingPlansGeneration
+	var commentChecks []plannedApplication
+	plan := func(ctx context.Context, at time.Time, generation *string) ([]plannedApplication, []LaneLease, error) {
+		return l.passPlansMode(ctx, at, generation, pendingOnly, &commentChecks)
 	}
 	plans, leases, err := plan(ctx, at, &timing.TickID)
 	if err != nil {
@@ -2566,7 +2583,7 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	commentReady := map[string]bool{}
 	for {
 		closedBatch := false
-		for _, p := range plans {
+		for _, p := range slices.Concat(plans, commentChecks) {
 			d := p.decision
 			if !p.checksComments() || !item.IsCommentItem(d.ItemID) || l.planStillActive(p) ||
 				(d.Action != ActionDispatch && d.Action != ActionRetry && d.Action != ActionHold) {
