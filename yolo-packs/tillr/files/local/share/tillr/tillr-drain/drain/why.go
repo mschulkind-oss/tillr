@@ -357,6 +357,7 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			if waiting != nil {
 				row.Class, row.Mover, row.Why = "waits on work", waiting.Waiter, waiting.Reason
 				row.ClassSource = "store"
+				row.WaitingOn = append(row.WaitingOn, waiting.Waiter)
 				if waiting.Waiter == "owner" {
 					row.Class = "needs you"
 				} else if depID, ok := strings.CutPrefix(waiting.Waiter, "item:"); ok && (states[depID] == def.Closed || states[depID] == "closed") {
@@ -474,6 +475,15 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 					answer.Summary.DrainNext++
 				default:
 					row.Class = "needs you"
+					answer.Summary.OperatorNext++
+				}
+			} else if d.Reason == ReasonBlocked && row.ClassSource == "store" {
+				switch {
+				case row.Mover == "owner":
+					answer.Summary.OwnerWaiting++
+				case row.Mover == "design" || row.Mover == "plan":
+					answer.Summary.DesignNext++
+				case row.Class == "needs you":
 					answer.Summary.OperatorNext++
 				}
 			} else if d.Reason == ReasonOwnerOnlyOwed {

@@ -12,6 +12,9 @@ import (
 type WaitingOn struct {
 	Waiter string `json:"waiter"`
 	Reason string `json:"reason"`
+	// New writes identify the source. Neither field is set on legacy rows.
+	ConflictID  string `json:"conflict_id,omitempty"`
+	Independent bool   `json:"independent,omitempty"`
 }
 
 // ReadWaitingOn reads blocked metadata without migrating a legacy store. Missing
