@@ -42,7 +42,7 @@ func awaitRestartTest(t *testing.T, ch <-chan struct{}, what string) {
 }
 
 func TestRestartAnswersWhileUnboundedWorkIsStillInflight(t *testing.T) {
-	for _, kind := range []string{"worker", "rolling", "heavy"} {
+	for _, kind := range []string{"worker", "rolling"} {
 		t.Run(kind, func(t *testing.T) {
 			h := newRestartHarness(t, []byte("next build"), func(context.Context, string) error { return nil }, "")
 			held := &restartHeldSteps{entered: make(chan struct{}, 1), release: make(chan struct{}), finished: make(chan struct{})}
@@ -56,11 +56,6 @@ func TestRestartAnswersWhileUnboundedWorkIsStillInflight(t *testing.T) {
 				go func() { _, _, err := h.l.runRestartable(ctx, run.Request{RunID: "worker"}); returned <- err }()
 			case "rolling":
 				go func() { returned <- h.l.maybeRolling(ctx, tip, true, &LoopResult{}) }()
-			case "heavy":
-				h.l.gatePolicy.LandingStrategy = "after-merge"
-				if err := h.l.startHeavy(ctx, tip); err != nil {
-					t.Fatal(err)
-				}
 			}
 			awaitRestartTest(t, held.entered, "work entry")
 			request := h.request(t, 1)[0]
@@ -97,17 +92,13 @@ func TestRestartAnswersWhileUnboundedWorkIsStillInflight(t *testing.T) {
 			}
 			close(held.release)
 			awaitRestartTest(t, held.finished, "old work cleanup")
-			if kind != "heavy" {
-				select {
-				case err := <-returned:
-					if err != nil && !errors.Is(err, errRestartPending) {
-						t.Fatal(err)
-					}
-				case <-time.After(hangGuard):
-					t.Fatal("work wrapper hung")
+			select {
+			case err := <-returned:
+				if err != nil && !errors.Is(err, errRestartPending) {
+					t.Fatal(err)
 				}
-			} else {
-				h.l.heavyWG.Wait()
+			case <-time.After(hangGuard):
+				t.Fatal("work wrapper hung")
 			}
 		})
 	}

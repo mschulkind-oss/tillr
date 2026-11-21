@@ -997,8 +997,12 @@ the kernel to confirm every descendant has exited before acknowledging cleanup, 
 no cancellation timeout on that acknowledgement. When a declaration check fails or the
 legacy program reports a failure on exit, recovery searches for the culprit and offers a
 revert in `worktree-replay` while the proof continues. Recovery handles one failure at a
-time and files any fixers at the end of the run. The green pointer still moves only on a
-whole green run.
+time and files any fixers at the end of the run. Before each historical replay, recovery
+checks that the red verdict is still for the current tip. If trunk has moved, the runner
+keeps any finished replay verdict and proves the newest tip before searching again.
+A check still red on a descendant tip can reuse its recorded first-red commit while
+its green baseline and declared reads are unchanged and no pass has ended the red
+spell. The green pointer still moves only on a whole green run.
 
 `heavy.cleanup-pending` and `heavy.replay-cleanup-pending` guard the proof and recovery
 respectively and remain beside the result store until confirmation, recording the
@@ -1019,6 +1023,13 @@ passed, saved with the exact tip, which the next loop's first-tick proof reuses
 therefore stalls the proved commit only by the length of the check it keeps interrupting,
 which is why a fault that exits the loop on one item's leftovers (see the surviving
 processes section) is a defect and not a cost of doing business.
+
+An in-place build replacement is not a stop. The loop defers exec while the active
+tip proof and any replay it owns reach a checkpoint. It records the verdict and
+replays before releasing ownership, and a pending replacement prevents it from
+starting another tip. On adoption, the replacement uses the saved green pointer
+or a completed red verdict for the exact tip and baseline, rather than judging that
+tip again. The loop still honors an operator stop during a proof.
 
 Because the supervisor adopts every orphan its command leaves, it also reaps them as
 they exit, on each `SIGCHLD`, rather than only after the command ends. It looks before
@@ -1062,7 +1073,8 @@ order inside the legacy program.
 Completed passing checks are saved with the exact trunk tip under the heavy runner's
 lock, before the next check starts. A replacement loop starts proof at its first tick,
 even without a new landing, and logs `reused checks=` for passes it retains. A different
-tip starts fresh; failed, unavailable, and interrupted checks are not reusable proof.
+tip can retain a pass only when the check's inputs are unchanged. Failed, unavailable,
+and interrupted checks do not count as passes.
 Declarations are judged individually. The default Python legacy gate keeps its own
 planner and scheduler; an embedded observer saves each completed pass atomically.
 A stalled check's successful retry is also saved before the next retry starts, and

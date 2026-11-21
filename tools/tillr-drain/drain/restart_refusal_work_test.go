@@ -39,6 +39,16 @@ func TestRefusedAndCurrentRestartRetainInflightWorkAndItsResult(t *testing.T) {
 				awaitRestartTest(t, held.entered, "held work")
 				request := h.request(t, 1)[0]
 				ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+				if kind == "heavy" {
+					if handled, stop, err := h.l.gateRestart(ctx, result); handled || stop != "" || err != nil {
+						t.Fatalf("restart did not defer at the active proof: %v, %s, %v", handled, stop, err)
+					}
+					close(held.release)
+					h.l.heavyWG.Wait()
+					if handled, stop, err := h.l.gateRestart(ctx, result); !handled || stop != "" || err != nil {
+						t.Fatalf("restart handling after the checkpoint=%v, %s, %v", handled, stop, err)
+					}
+				}
 				a, err := restart.AwaitAnswer(ctx, h.f.storePath, request.ID, time.Millisecond)
 				cancel()
 				if err != nil || a.Answer != answer {
@@ -47,19 +57,18 @@ func TestRefusedAndCurrentRestartRetainInflightWorkAndItsResult(t *testing.T) {
 				if h.execed != nil {
 					t.Fatal("nonreplacement request executed")
 				}
-				select {
-				case <-held.finished:
-					t.Fatal("answer waited for work")
-				default:
-				}
-				close(held.release)
-				awaitRestartTest(t, held.finished, "work completion")
 				if kind == "heavy" {
-					h.l.heavyWG.Wait()
 					if green := heavyGit(t, h.f.root, "rev-parse", GreenRef); green != tip {
 						t.Fatalf("heavy result lost: %s", green)
 					}
 				} else {
+					select {
+					case <-held.finished:
+						t.Fatal("answer waited for work")
+					default:
+					}
+					close(held.release)
+					awaitRestartTest(t, held.finished, "work completion")
 					select {
 					case err := <-returned:
 						if err != nil {

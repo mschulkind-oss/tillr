@@ -47,6 +47,9 @@ type HeavyRunner struct {
 	Progress func(string)
 	// Now observes the run; injected judges can use this same clock for check timings.
 	Now func() time.Time
+	// A pending build replacement takes ownership at the next tip boundary.
+	beforeTip func(context.Context) error
+	reuseRed  bool
 }
 
 // HeavyReplay judges one check on one commit, in the runner's own checkout and under
@@ -130,6 +133,11 @@ func (r HeavyRunner) Run(ctx context.Context) (out HeavyOutcome, err error) {
 		if err = ctx.Err(); err != nil {
 			return out, err
 		}
+		if r.beforeTip != nil {
+			if err = r.beforeTip(ctx); err != nil {
+				return out, err
+			}
+		}
 		tip, e := heavyGitOutput(ctx, r.Root, "rev-parse", r.Trunk+"^{commit}")
 		if e != nil {
 			return out, e
@@ -163,6 +171,19 @@ func (r HeavyRunner) Run(ctx context.Context) (out HeavyOutcome, err error) {
 				return out, Externalf("%s", run.Detail)
 			}
 		}
+		if r.reuseRed {
+			if prior, ok := completedHeavyRed(dir, base, tip); ok {
+				// The previous image already published the verdict and filed its remedy.
+				r.progressf("loop: heavy reused the completed red proof at %s\n", shortSHA(tip))
+				out.Runs = append(out.Runs, prior)
+				switch err := r.requireCurrentTip(ctx, tip); {
+				case errors.Is(err, errHeavyTipMoved):
+					continue
+				default:
+					return out, err
+				}
+			}
+		}
 		progress, e := loadHeavyProgress(ctx, r.Root, dir, tip)
 		if e != nil {
 			return out, e
@@ -172,6 +193,10 @@ func (r HeavyRunner) Run(ctx context.Context) (out HeavyOutcome, err error) {
 		run.ReusedChecks = progress.reused
 		if ctx.Err() != nil {
 			return out, ctx.Err()
+		}
+		if errors.Is(e, errHeavyTipMoved) {
+			r.progressf("loop: heavy tip %s moved; proving the newest tip before further attribution\n", shortSHA(tip))
+			continue
 		}
 		if e == nil && run.Result == "green" {
 			old := base
@@ -326,6 +351,10 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 	if earlyErr := early.wait(); err == nil {
 		err = earlyErr
 	}
+	// A pass breaks this check's red episode even when another check is still red.
+	if observeErr := r.forgetGreenAttributions(ctx, run.Checks); observeErr != nil {
+		return run, observeErr
+	}
 	if err != nil {
 		return run, err
 	}
@@ -397,8 +426,10 @@ func (r HeavyRunner) attribute(ctx context.Context, run HeavyRun, check *HeavyCh
 	// never left holding landings while nobody acts.
 	against = check.FirstRedLanding
 	if check.FirstRedLanding == "" {
-		r.progressf("loop: heavy %s failed at tip %s; searching for the first red commit since green %s\n", check.CheckID, shortSHA(run.TipSHA), shortSHA(run.BaseSHA))
-		red, fault, reason, err := r.firstRed(ctx, run.BaseSHA, run.TipSHA, check.CheckID, check.Reads)
+		red, fault, reason, err := r.findFirstRed(ctx, run, *check)
+		if errors.Is(err, errHeavyTipMoved) {
+			return "", false, err
+		}
 		switch {
 		case err != nil && ctx.Err() == nil && !cleanupLost(err):
 			r.progressf("loop: heavy %s culprit search gave no verdict, because %v; the fixer is filed against the tip\n", check.CheckID, err)
@@ -704,7 +735,13 @@ func (r HeavyRunner) firstRed(ctx context.Context, base, tip, id string, reads [
 	if len(commits) == 0 {
 		return "", true, fmt.Sprintf("no commit in %s..%s touches the check's declared reads", shortSHA(base), shortSHA(tip)), nil
 	}
-	red, err := r.replay(ctx, base, id, "the green base")
+	replay := func(sha, why string) (bool, error) {
+		if err := r.requireCurrentTip(ctx, tip); err != nil {
+			return false, err
+		}
+		return r.replay(ctx, sha, id, why)
+	}
+	red, err := replay(base, "the green base")
 	if err != nil {
 		return "", false, "", err
 	}
@@ -713,7 +750,7 @@ func (r HeavyRunner) firstRed(ctx context.Context, base, tip, id string, reads [
 	}
 	// The search needs a red upper bound. A later green commit means this
 	// range cannot explain the tip, even if an earlier commit was red.
-	red, err = r.replay(ctx, commits[len(commits)-1], id, fmt.Sprintf("the last of %d candidate commits since green", len(commits)))
+	red, err = replay(commits[len(commits)-1], fmt.Sprintf("the last of %d candidate commits since green", len(commits)))
 	if err != nil {
 		return "", false, "", err
 	}
@@ -723,7 +760,7 @@ func (r HeavyRunner) firstRed(ctx context.Context, base, tip, id string, reads [
 	low, high := 0, len(commits)-1
 	for low < high {
 		mid := (low + high) / 2
-		red, err := r.replay(ctx, commits[mid], id, fmt.Sprintf("commit %d of %d, between %d and %d", mid+1, len(commits), low+1, high+1))
+		red, err := replay(commits[mid], fmt.Sprintf("commit %d of %d, between %d and %d", mid+1, len(commits), low+1, high+1))
 		if err != nil {
 			return "", false, "", err
 		}

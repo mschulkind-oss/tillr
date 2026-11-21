@@ -128,6 +128,8 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 				return err
 			}}
 			runner.Progress = func(line string) { l.reportf("%s", line) }
+			runner.reuseRed = l.heavyReuseRed
+			runner.beforeTip = l.heavyTipAdmission
 			if l.gatePolicy.AutoRevert {
 				runner.Revert = l.revertLanding
 			}
@@ -140,8 +142,16 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 				out.Busy = true
 			} else {
 				runner.Lock = hold
-				out, err = restartWork(ctx, l, runner.Run)
-				hold.Close()
+				if l.beginHeavyProof() {
+					out, err = runner.Run(ctx)
+					hold.Close()
+					l.heavyMu.Lock()
+					l.heavyProofActive = false
+					l.heavyMu.Unlock()
+				} else {
+					hold.Close()
+					err = errRestartPending
+				}
 			}
 			// A loop's first heavy pass also offers the pointer to the remote, so a push that
 			// failed or never ran before a restart is not left until the next proof.
@@ -173,6 +183,32 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 	}()
 	return nil
 }
+
+// Admission and exec cannot cross: the writer checks heavyProofActive after
+// excluding this short reader, not after waiting for the running proof.
+func (l *Loop) beginHeavyProof() bool {
+	l.restartMechanical.RLock()
+	defer l.restartMechanical.RUnlock()
+	if l.restartReplaced {
+		return false
+	}
+	l.heavyMu.Lock()
+	l.heavyProofActive = true
+	l.heavyMu.Unlock()
+	return true
+}
+
+func (l *Loop) heavyTipAdmission(ctx context.Context) error {
+	if l.cfg.Restart == nil {
+		return nil
+	}
+	pending, err := l.restarter().Pending(ctx)
+	if err == nil && pending {
+		return errRestartPending
+	}
+	return err
+}
+
 func (l *Loop) heavyInFlight() bool {
 	l.heavyMu.Lock()
 	defer l.heavyMu.Unlock()

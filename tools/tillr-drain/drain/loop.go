@@ -509,6 +509,8 @@ type Loop struct {
 	heavyMu                     sync.Mutex
 	heavyWG                     sync.WaitGroup
 	heavyRunning                bool
+	heavyProofActive            bool // heavyMu; entry is serialized with exec by restartMechanical
+	heavyReuseRed               bool // set at startup after adopting an in-place replacement
 	heavyLandingCounts          []int
 	landLockHolds               []int64
 	landLockUnmeasured          int
