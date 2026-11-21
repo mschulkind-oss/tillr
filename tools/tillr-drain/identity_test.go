@@ -10,25 +10,21 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/drain"
 )
 
-// The same fixed clock drives both loop invocations and every run record. A no-op
-// is not judged, so an operator can authorize another attempt without moving time.
+// The same fixed clock drives both loop invocations and every run record. The
+// operator can authorize a no-op retry or reopen a failed backend without moving it.
 func TestSameSecondRetryPreservesEachDispatch(t *testing.T) {
-	for _, failover := range []bool{false, true} {
-		t.Run(fmt.Sprintf("failover=%t", failover), func(t *testing.T) {
-			f := newLoopFixture(t, stub(t, "adapter", noOpAdapter))
-			if failover {
-				f.policy = &drain.Policy{
-					DefaultBackend: "first", Preference: []string{"first", "second"},
-					Backends: map[string]drain.Backend{
-						"first": {Adapter: stub(t, "first", `if [ ! -e "$ATTEMPT_MARKER" ]; then touch "$ATTEMPT_MARKER"; exit 2; fi
-printf 'RESULT: done\n'
-`), Model: "first-model"},
-						"second": {Adapter: stub(t, "second", noOpAdapter), Model: "second-model"},
-					},
-				}
+	for _, recovery := range []string{"operator-retry", "backend-probe"} {
+		t.Run(recovery, func(t *testing.T) {
+			adapterBody := noOpAdapter
+			item := itemRecord("item_041", "in-queue")
+			if recovery == "backend-probe" {
+				adapterBody = `if [ ! -e "$ATTEMPT_MARKER" ]; then touch "$ATTEMPT_MARKER"; exit 2; fi
+` + committingAdapter
 				t.Setenv("ATTEMPT_MARKER", filepath.Join(scratch(t, "marker"), "started"))
+				item = fencedItemRecord("item_041", "in-queue", "candidate.txt")
 			}
-			fixtureAt(t, f.store, itemRecord("item_041", "in-queue"))
+			f := newLoopFixture(t, stub(t, "adapter", adapterBody))
+			fixtureAt(t, f.store, item)
 			steps := f.steps(t, always(t, "gate", 0), always(t, "land", 0), always(t, "verdict", 0))
 			planned, _ := transitionPlan(t, f.store, steps.Now().Format("2006-01-02T15:04:05Z"), []string{"lane-1"}, 1, f.policy)
 			d := planned[0]
@@ -37,26 +33,34 @@ printf 'RESULT: done\n'
 			if err != nil {
 				t.Fatal(err)
 			}
-			// The no-op goes back to its worker with the evidence, and the second, identical
-			// no-op waits on the owner (the owner's ruling of 2026-11-17; the fixture's policy
-			// names no design seat). A failover run counts once more.
-			if !strings.Contains(first.Detail, "item_041 ("+drain.ReasonConflictOwner+")") {
-				t.Fatalf("first stop: %+v", first)
-			}
 			before := runsForItem(t, f.store, "item_041")
 			wantFirst := 2
-			if failover {
-				wantFirst = 3
-			}
-			if len(before) != wantFirst {
-				t.Fatalf("first runs: %+v", before)
-			}
-			// The owner's recovery: put the item back in the queue, then authorize the retry.
-			itemPath := filepath.Join(scratch(t, "recover"), "item_041.json")
-			writeFile(t, itemPath, itemRecord("item_041", "in-queue"))
-			driveOK(t, sibling(t, "item"), "apply", "--store", f.store, "--input", itemPath, "--now", steps.Now().Format("2006-01-02T15:04:05Z"))
-			if code, out := authorizeRetry(t, f.store, "item_041", before[len(before)-1].RunID, "the owner", "retry the no-op", steps.Now().Format("2006-01-02T15:04:05Z")); code != 0 {
-				t.Fatalf("retry exited %d: %s", code, out)
+			if recovery == "backend-probe" {
+				wantFirst = 1
+				if len(before) != wantFirst || before[0] != (itemRun{RunID: "run-item_041-a1", Backend: "fixture"}) ||
+					!strings.Contains(first.Detail, "item_041 ("+drain.ReasonBackendClosed+": fixture:") {
+					t.Fatalf("expected one run held on fixture, got %+v / %s", before, first.Detail)
+				}
+				if code, out := invoke(t, "probe-backend", "--store", f.store, "--backend", "fixture", "--", "/bin/true"); code != 0 {
+					t.Fatalf("probe exited %d: %s", code, out)
+				}
+			} else {
+				// The no-op goes back to its worker with the evidence, and the second, identical
+				// no-op waits on the owner (the owner's ruling of 2026-11-17; the fixture's policy
+				// names no design seat).
+				if !strings.Contains(first.Detail, "item_041 ("+drain.ReasonConflictOwner+")") {
+					t.Fatalf("first stop: %+v", first)
+				}
+				if len(before) != wantFirst {
+					t.Fatalf("first runs: %+v", before)
+				}
+				// The owner's recovery: put the item back in the queue, then authorize the retry.
+				itemPath := filepath.Join(scratch(t, "recover"), "item_041.json")
+				writeFile(t, itemPath, item)
+				driveOK(t, sibling(t, "item"), "apply", "--store", f.store, "--input", itemPath, "--now", steps.Now().Format("2006-01-02T15:04:05Z"))
+				if code, out := authorizeRetry(t, f.store, "item_041", before[len(before)-1].RunID, "the owner", "retry the no-op", steps.Now().Format("2006-01-02T15:04:05Z")); code != 0 {
+					t.Fatalf("retry exited %d: %s", code, out)
+				}
 			}
 			retryCtx, cancel := context.WithTimeout(context.Background(), hangGuard)
 			defer cancel()
@@ -64,6 +68,9 @@ printf 'RESULT: done\n'
 			runs := runsForItem(t, f.store, "item_041")
 			if len(runs) != wantFirst+1 {
 				t.Fatalf("runs = %+v, want %d distinct attempts", runs, wantFirst+1)
+			}
+			if recovery == "backend-probe" && runs[1].Backend != "fixture" {
+				t.Fatalf("retry changed backend: %+v", runs)
 			}
 			seen := map[string]bool{}
 			for i, rec := range runs {
