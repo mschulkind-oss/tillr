@@ -125,6 +125,11 @@ func (l *Loop) observeTrunkWith(ctx context.Context, expected string, known *rew
 		return trunkHistory{}, err
 	}
 	defer release()
+	return l.observeTrunkLocked(ctx, expected, known)
+}
+
+// observeTrunkLocked persists trunk history while the caller holds land.lock.
+func (l *Loop) observeTrunkLocked(ctx context.Context, expected string, known *rewriteAbsorption) (trunkHistory, error) {
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return trunkHistory{}, err
@@ -173,11 +178,20 @@ func (l *Loop) observeTrunkWith(ctx context.Context, expected string, known *rew
 					return h, err
 				}
 				t.SetContext(ctx)
-				mapped, same, err := t.IdentityRewrite(h.Lost, tip)
-				if err != nil {
-					return h, err
+				var mapped map[string]string
+				var same bool
+				// A repair just published under this lock knows every pair, even
+				// where patch matching could find a different equivalent commit.
+				exactReplay := known != nil && known.GreenOverride != "" && known.Lost == h.Lost && known.Tip == tip
+				if !exactReplay {
+					mapped, same, err = t.IdentityRewrite(h.Lost, tip)
+					if err != nil {
+						return h, err
+					}
 				}
-				if same {
+				if exactReplay {
+					absorb = known
+				} else if same {
 					absorb = &rewriteAbsorption{Lost: h.Lost, Tip: tip, Pairs: map[string]string{}, Evidence: "each replaced commit has the same tree and message; only authorship or dates differ"}
 					for old, now := range mapped {
 						if old != now {
@@ -217,7 +231,11 @@ func (l *Loop) observeTrunkWith(ctx context.Context, expected string, known *rew
 						return h, err
 					}
 					green = strings.TrimSpace(green)
-					if replacement := absorb.Pairs[green]; replacement != "" {
+					replacement := absorb.Pairs[green]
+					if absorb.GreenOverride != "" {
+						replacement = absorb.GreenOverride
+					}
+					if green != "" && replacement != "" && replacement != green {
 						if _, err := l.git(ctx, l.cfg.Root, "update-ref", GreenRef, replacement, green); err != nil {
 							return h, err
 						}
