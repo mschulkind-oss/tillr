@@ -92,6 +92,18 @@ func TestNewHoldFormatsEveryObstacleKind(t *testing.T) {
 	}
 }
 
+func TestLegacyFenceHoldNamesAddPath(t *testing.T) {
+	h := Hold{
+		ItemID: "item-request-1", RunID: "run-1", Kind: "fence", Mover: "operator",
+		Fields: map[string]string{"PATHS": "already-allowed.txt, new.txt"},
+		Action: "widen allowed_paths (new.txt) or split the request, then retry run run-1",
+	}
+	want := "operator; add paths (new.txt) with tillr item add-path --store <store> --item item-request-1 --path <repo-relative-path> --by <who> --why <reason>, or split the request"
+	if got := h.MoverText(); got != want {
+		t.Fatalf("legacy mover = %q, want %q", got, want)
+	}
+}
+
 func TestReadTracksReleaseAcrossOwnerUnblockFenceWidenAndTrunkClear(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "obstacles.sqlite3")

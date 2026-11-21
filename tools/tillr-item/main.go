@@ -64,6 +64,8 @@ func run(args []string) int {
 		env, code = rankFace(rest)
 	case "dep":
 		env, code = depFace(rest)
+	case "add-path":
+		env, code = addPathFace(rest)
 	case "sync":
 		return syncFace(rest)
 	case "reconcile":
@@ -208,6 +210,29 @@ func depFace(args []string) (record.Envelope, int) {
 	}
 	return writeStore(*path, at, func(ctx context.Context, tx *store.Tx) (record.Envelope, error) {
 		return item.SetDeps(ctx, tx, *id, add, remove, at)
+	})
+}
+
+// addPathFace widens an open item's stored fence on an operator's authority.
+func addPathFace(args []string) (record.Envelope, int) {
+	fs := newFlagSet("add-path")
+	db := fs.String("store", "", "the store to write")
+	id := fs.String("item", "", "the open item whose fence grows")
+	path := fs.String("path", "", "one repository-relative path prefix to add")
+	by := fs.String("by", "", "the operator authorizing the addition")
+	why := fs.String("why", "", "why the item needs the path")
+	if err := parseFlags(fs, args); err != nil {
+		return record.Envelope{}, fail(err)
+	}
+	if *db == "" || *id == "" || *path == "" {
+		return record.Envelope{}, fail(item.Usagef("add-path needs --store <path>, --item <id>, and --path <repo-relative-path>"))
+	}
+	at := time.Now().UTC()
+	if os.Getenv("TILLR_RUN_ID") != "" {
+		return rejectionOrFailure(item.Rejectionf("operator-only", *id, "tillr item add-path cannot be called from a worker run"), at)
+	}
+	return writeStore(*db, at, func(_ context.Context, tx *store.Tx) (record.Envelope, error) {
+		return item.AddPath(tx, *id, *path, *by, *why, at)
 	})
 }
 
@@ -808,7 +833,7 @@ func rejectionOrFailure(err error, at time.Time) (record.Envelope, int) {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "apply, rank, dep, sync, reconcile, comments, list, show, state, place, idea, doc-triage, request, close, reopen, decision, mail, grant, verdict or judge"
+const faceList = "apply, rank, dep, add-path, sync, reconcile, comments, list, show, state, place, idea, doc-triage, request, close, reopen, decision, mail, grant, verdict or judge"
 
 // errHelp is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer

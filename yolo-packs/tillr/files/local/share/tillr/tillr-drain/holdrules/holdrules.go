@@ -129,7 +129,7 @@ var Rules = map[string]Rule{
 	"trunk-broken":                   {"waits on work", "trunk", "the trunk fixer to land, or a heavy proof green past its red commit"},
 	"trunk-unproved":                 {"waits on work", "trunk", "the heavy runner; prove the trunk"},
 	"obstacle-owner":                 {"needs you", "queue", "the owner; answer the question with tillr drain retry, or close the item"},
-	"obstacle-fence":                 {"needs you", "queue", "widen the item's allowed_paths or split the request, then retry the run"},
+	"obstacle-fence":                 {"needs you", "queue", "add a path with tillr item add-path or split the request"},
 	"obstacle-trunk":                 {"waits on work", "trunk", "returns when the named checks are green"},
 	"obstacle-tooling":               {"needs you", "queue", "repair the tool or harness and retry the run"},
 	"obstacle-seat":                  {"needs you", "queue", "change seat or split the request, then retry the run"},

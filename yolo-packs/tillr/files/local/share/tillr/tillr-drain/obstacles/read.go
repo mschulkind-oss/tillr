@@ -70,7 +70,7 @@ func NewHold(itemID, runID, kind string, rawFields map[string]string, checks []s
 		if ev != "" {
 			h.Reason += "; " + ev
 		}
-		h.Action = "widen allowed_paths (" + paths + ") or split the request, then retry run " + runID
+		h.Action = FenceAction(itemID, paths)
 	case "trunk":
 		checksText := strings.Join(checks, ", ")
 		if checksText == "" {
@@ -136,12 +136,27 @@ func (h Hold) WhyText() string {
 	return h.ReasonCode() + ": " + h.Reason
 }
 
+// FenceAction names the operator command that can release a fence hold.
+func FenceAction(itemID, paths string) string {
+	return "add paths (" + paths + ") with tillr item add-path --store <store> --item " + itemID + " --path <repo-relative-path> --by <who> --why <reason>, or split the request"
+}
+
 // MoverText answers `<mover>; <action>`.
 func (h Hold) MoverText() string {
-	if h.Action == "" {
+	action := h.Action
+	if h.Kind == "fence" {
+		// Old hold events are immutable. Show the new remedy on those holds too,
+		// keeping the recorded path list (which may have been filtered at write time).
+		if paths, ok := strings.CutPrefix(action, "widen allowed_paths ("); ok {
+			if paths, ok := strings.CutSuffix(paths, ") or split the request, then retry run "+h.RunID); ok {
+				action = FenceAction(h.ItemID, paths)
+			}
+		}
+	}
+	if action == "" {
 		return h.Mover
 	}
-	return h.Mover + "; " + h.Action
+	return h.Mover + "; " + action
 }
 
 // WithoutCloseRemedy returns a copy of h whose action names only remedies that

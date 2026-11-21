@@ -291,6 +291,12 @@ func TestRequestObstacleHoldsRecordKindAndFields(t *testing.T) {
 					if !strings.HasPrefix(row.Mover, tc.wantMoverPref) || !strings.Contains(row.Mover, tc.wantMoverSub) {
 						t.Fatalf("mover = %q, want prefix %q and %q", row.Mover, tc.wantMoverPref, tc.wantMoverSub)
 					}
+					if tc.kind == ObstacleFence {
+						want := "operator; add paths (tools/tillr-item/item/waiting.go) with tillr item add-path --store <store> --item " + id + " --path <repo-relative-path> --by <who> --why <reason>, or split the request"
+						if row.Mover != want {
+							t.Fatalf("fence mover = %q, want %q", row.Mover, want)
+						}
+					}
 					return nil
 				}
 				t.Fatalf("no why row for %s: %+v", id, answer.Rows)

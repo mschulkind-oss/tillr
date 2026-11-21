@@ -88,7 +88,7 @@ func (l *Loop) recordObstacleHold(ctx context.Context, d Decision, obs Obstacle)
 				} else {
 					paths := strings.Join(outside, ", ")
 					hold.Reason = "paths: " + paths
-					hold.Action = "widen allowed_paths (" + paths + ") or split the request, then retry run " + runID
+					hold.Action = obstacles.FenceAction(d.ItemID, paths)
 				}
 			}
 		}
