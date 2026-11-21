@@ -2435,16 +2435,8 @@ func (l *Loop) pass(ctx context.Context, result *LoopResult) (stop string, err e
 	at := l.cfg.Now().UTC()
 	timing := &PassTiming{AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}
 	defer func() { countGeneration(result, timing.TickID) }()
-	landedBeforeRecord := result.Landed
-	if err := l.recordOrder(ctx, mainSHA, result, timing); err != nil {
+	if err := l.retireOrderWork(ctx); err != nil {
 		return "", err
-	}
-	// Recording may have landed a new trunk tip. Item staging must use it.
-	if result.Landed != landedBeforeRecord {
-		mainSHA, err = l.refreshDocuments(ctx, result)
-		if err != nil {
-			return "", err
-		}
 	}
 	// Maintenance may have overlapped a worker or examination finishing.
 	if stop, err := l.drainCompletions(ctx, result); stop != "" || err != nil {

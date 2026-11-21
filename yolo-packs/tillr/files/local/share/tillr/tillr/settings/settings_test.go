@@ -33,7 +33,7 @@ func TestDefaultsAndTOML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := settings.Settings{Roll: settings.Roll{PauseTimeoutSeconds: 120}, Push: settings.Push{What: "none"}, Order: settings.Order{SettleMinutes: 10}}
+	want := settings.Settings{Roll: settings.Roll{PauseTimeoutSeconds: 120}, Push: settings.Push{What: "none"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("defaults = %+v, want %+v", got, want)
 	}
@@ -54,9 +54,8 @@ ref = "refs/heads/main"
 		t.Fatal(err)
 	}
 	want = settings.Settings{
-		Order: settings.Order{SettleMinutes: 10},
-		Roll:  settings.Roll{Paths: []string{"tools/tillr*/", "config/tillr/"}, Command: "just tillr-roll --no-request", PauseTimeoutSeconds: 45},
-		Push:  settings.Push{What: "green", Remote: "origin", Ref: "refs/heads/main"},
+		Roll: settings.Roll{Paths: []string{"tools/tillr*/", "config/tillr/"}, Command: "just tillr-roll --no-request", PauseTimeoutSeconds: 45},
+		Push: settings.Push{What: "green", Remote: "origin", Ref: "refs/heads/main"},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("settings = %+v, want %+v", got, want)
@@ -66,6 +65,7 @@ ref = "refs/heads/main"
 func TestRefusalsNameFileKeyAndExpectation(t *testing.T) {
 	cases := []struct{ body, key, want string }{
 		{"[rol]\n", "rol", "table"},
+		{"[order]\nrecord = 'docs/order.txt'", "order", "known table"},
 		{"[roll]\ncommmand = 'x'", "roll.commmand", "command"},
 		{"[push]\nafter_landng = true", "push.after_landng", "after_landing"},
 		{"after_landing = true", "after_landing", "table"},

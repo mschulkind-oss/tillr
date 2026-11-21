@@ -72,13 +72,13 @@ func previewScopedRanks(plan syncPlan, held []orderedItem, writes []fileWrites, 
 			created[p.ItemID] = fw.created[p.ItemID]
 		}
 	}
-	ordered := func(id string, source bool) []orderedItem {
+	ordered := func(id string) []orderedItem {
 		rest := []orderedItem{}
 		for _, v := range all {
 			if v.id == id {
 				continue
 			}
-			if InOrder(v.state) || (source && v.rank != "") {
+			if InOrder(v.state) || v.rank != "" {
 				rest = append(rest, v)
 			}
 		}
@@ -112,67 +112,11 @@ func previewScopedRanks(plan syncPlan, held []orderedItem, writes []fileWrites, 
 		}
 		return nil
 	}
-	available := map[string]bool{}
-	for id, v := range all {
-		if !created[id] && InOrder(v.state) {
-			available[id] = true
-		}
-	}
-	recorded := map[string]bool{}
-	for i, id := range plan.orderRecord {
-		if !created[id] {
-			continue
-		}
-		if InOrder(all[id].state) {
-			rest := ordered(id, false)
-			index := map[string]int{}
-			for j, v := range rest {
-				if available[v.id] {
-					index[v.id] = j
-				}
-			}
-			pos := len(rest)
-			anchored := false
-			for j := i - 1; j >= 0; j-- {
-				if p, ok := index[plan.orderRecord[j]]; ok {
-					pos = p + 1
-					anchored = true
-					break
-				}
-			}
-			if !anchored {
-				for j := i + 1; j < len(plan.orderRecord); j++ {
-					if p, ok := index[plan.orderRecord[j]]; ok {
-						pos = p
-						break
-					}
-				}
-			}
-			if err := insert(id, rest, pos); err != nil {
-				return err
-			}
-		}
-		recorded[id], available[id] = true, true
-	}
-	if len(plan.orderRecord) > 0 {
-		for _, p := range plan.placements {
-			if created[p.id] && !recorded[p.id] && InOrder(all[p.id].state) {
-				rest := ordered(p.id, false)
-				// Place is a no-op when this item is already last.
-				alreadyLast := len(rest) == 0 || all[p.id].rank > rest[len(rest)-1].rank && rest[len(rest)-1].rank != ""
-				if !alreadyLast {
-					if err := insert(p.id, rest, len(rest)); err != nil {
-						return err
-					}
-				}
-			}
-		}
-	}
 	for _, p := range plan.placements {
-		if !created[p.id] || !InOrder(all[p.id].state) || recorded[p.id] || p.from == "" || p.from == p.id || all[p.from].rank == "" {
+		if !created[p.id] || !InOrder(all[p.id].state) || p.from == "" || p.from == p.id || all[p.from].rank == "" {
 			continue
 		}
-		rest := ordered(p.id, true)
+		rest := ordered(p.id)
 		pos := -1
 		for i, v := range rest {
 			if v.id == p.from {

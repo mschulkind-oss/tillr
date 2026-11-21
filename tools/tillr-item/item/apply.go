@@ -17,10 +17,6 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// OrderRecordID is reserved for the loop's record-only gated landing, never a
-// newly added queue item. Existing legacy items remain editable.
-const OrderRecordID = "order-record"
-
 // frozenStates are the legacy values that stay readable and are never written again.
 // `in-progress` joined them because no transition writes it now; a legacy row stays
 // readable, and it moves out through SetState like any other state.
@@ -153,9 +149,6 @@ func ApplyWithReceipt(ctx context.Context, tx *store.Tx, env record.Envelope, re
 	existing, err := itemExists(ctx, tx.Reader(), payload.ItemID)
 	if err != nil {
 		return record.Envelope{}, err
-	}
-	if !existing && payload.ItemID == OrderRecordID {
-		return record.Envelope{}, Rejectionf("reserved-id", payload.ItemID, "item id %q is reserved for recording the queue's order", payload.ItemID)
 	}
 	from := ""
 	payload.CloseReason, payload.ClosedAt, payload.ClosedBy, payload.ClosedFrom = "", "", "", ""

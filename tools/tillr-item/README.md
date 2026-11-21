@@ -55,35 +55,6 @@ refuses and is never created. An unreadable, empty, refused, or incomplete index
 invalid item block, or path-derived id collision refuses before any report is
 printed. Run `tillr-item reconcile --help` for the optional index-command override.
 
-## Reading an order record
-
-`tillr-item order --store /path/to/state.db` prints a plain text
-[order record](../../docs/reference/observatory-actions.md#the-order-record):
-`# last_hand_move_event_seq: N`, then one item id per line in place order.
-The sequence is the last hand placement event (including a saved idea), or zero
-when none exists. Sync placements do not advance it. Parked and finished items
-are excluded. The command is read-only and does not write a file.
-
-A repository opts in through its settings:
-
-```toml
-[order]
-record = "docs/order.txt"
-settle_minutes = 10
-```
-
-`record` is a clean repository-relative file path and is unset by default;
-`settle_minutes` is a nonnegative integer, default 10, reserved for the loop's
-record landing step. Sync reads no record without the opt-in. A missing file
-means the first record has not landed; other read errors, malformed item ids,
-and duplicate ids refuse sync. Blank lines and comments starting with `#` are ignored.
-
-Sync places only successful new imports using the record. It places named items
-first, in record order: after the nearest item above already in the order, or
-before the nearest below when none is above, or last when neither exists.
-Remaining imports use their `from` mark or append in roadmap order. Unknown record
-ids never create items, and editing the record never moves items the store holds.
-
 ## Moving an item in the order
 
 `place` moves one item first, last, before another item, or after another item.
