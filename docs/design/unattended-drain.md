@@ -484,7 +484,7 @@ Until that night has happened, the claim "the drain repairs itself" is not made 
    fixes cannot be undone.
 5. **Rule 3, outside inputs**, with the `pi` rebase delivered through it.
 6. **The rest of rule 7.**
-7. **Rule 8**, once [`tillr-watch.md`](./tillr-watch.md) has its delivery design.
+7. **Rule 8**, once the delivery designed in [`tillr-watch.md`](./tillr-watch.md#D-TW11) is built.
 8. **Rule 4**, workers limited and worktrees not. It is last because it changes the most and
    because rules 5 and 7 remove most of what made lanes scarce.
 9. **The unattended night** of [Section 8](#8-what-done-looks-like).

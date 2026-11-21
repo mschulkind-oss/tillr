@@ -7,7 +7,7 @@ stage: DESIGN
 stage-since: 2026-11-20
 tags: [tillr, watch, alerting, lint, workflows, charter, foreground]
 summary: "A dedicated tillr-watch utility and shared core watch engine that observes emergent cross-utility behavior, raises deduplicated episode alerts with attached item timelines, supports one-command persistent foreground agent watches with zero-polling wakeups, and lints charters, workflows, and rules before execution."
-next: "Redesign foreground delivery in Section 6.4 on the owner's existing background-watcher machinery (OQ-TW3 ruling), then split the build into core schema, evaluator and CLI, foreground delivery, and lint slices"
+next: "Build in four slices, in order: (1) core schema and watch event kinds in tools/tillr/watch; (2) the rule evaluator and the tillr-watch CLI (status, eval, daemon, ack, silence, resolve, rule); (3) foreground delivery (watch add, list, edit, drop, wait, seen, and the operator procedure of Section 6.4); (4) tillr watch lint and its gate check"
 related:
   - ./landing-principles.md
   - ./run-wall-ruling.md
@@ -22,7 +22,7 @@ vantage:
 
 # Agent Alerting and Process Watchdog (`tillr-watch`)
 
-**Status:** 2026-11-21 — the owner ruled all five questions on 2026-11-21 ([the Decision Ledger](#9-decision-ledger)); nothing is built. One piece of design is owed before a build: foreground delivery on the owner's existing background-watcher machinery ([OQ-TW3](#OQ-TW3)). Ten designer's decisions ([D-TW1](#D-TW1) through [D-TW10](#D-TW10)) await his review; D-TW7 is set aside by the ruling on [OQ-TW4](#OQ-TW4).
+**Status:** 2026-11-21 — the owner ruled all five questions on 2026-11-21 ([the Decision Ledger](#9-decision-ledger)); nothing is built, and no design is owed before a build. Foreground delivery is settled in [Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3) on the owner's existing background-watcher machinery ([OQ-TW3](#OQ-TW3), [D-TW11](#D-TW11)). The next action is the build, in four slices: the core schema and event kinds; the rule evaluator and the CLI; foreground delivery; and lint. Eleven designer's decisions ([D-TW1](#D-TW1) through [D-TW11](#D-TW11)) await his review; D-TW7 is set aside by the ruling on [OQ-TW4](#OQ-TW4).
 
 ---
 
@@ -143,7 +143,7 @@ Four settled repository rulings forbid failing or stopping work on attempt count
 ### 3.3 Relation to One-Breakage Dedup, Steering Timers, and Goal Monitors
 
 - **Generalizes [the retired agent runtime design Section 20 ("One breakage, one investigation")](./agent-runtime-retirement.md#what-happened-to-each-section):** `D-OC1`–`D-OC8` established mechanical signature deduplication, transition-driven invocation, and the `D-OC5` precondition (*never dispatch a second investigation while an open breakage already has a non-terminal attempt*). `tillr-watch` lifts that exact episode discipline from gate check breakages to **all** cross-utility rules (`D-TW5`, `D-TW7`).
-- **Replaces time-polling in [`steering-timer`](../reference/steering-timer.md) when waiting on state:** `steering-timer.ts` ([`handoff-items-and-steering-timer.md` Section 4.2](./handoff-items-and-steering-timer.md#42-the-mechanism-a-pi-extension-owning-a-durable-steering-record)) injects periodic clock-based check-ins (`every N minutes`) so a foreground whale keeps nudging a long goal. When an agent is instead waiting on *specific store/git conditions* ("tell me when `refs/tillr/green` catches up, or when `item-X` reaches `verify`, or if `tillr-roll` fails"), waking every 10 minutes on a timer wastes turns when nothing happened and lags up to 10 minutes when it did. `tillr-watch` provides **event-driven, zero-polling wakeups** using the same durable-record + `pi.sendMessage(..., { deliverAs: "followUp", triggerTurn: true })` harness primitive (`D-TW8`).
+- **Replaces time-polling in [`steering-timer`](../reference/steering-timer.md) when waiting on state:** `steering-timer.ts` ([`handoff-items-and-steering-timer.md` Section 4.2](./handoff-items-and-steering-timer.md#42-the-mechanism-a-pi-extension-owning-a-durable-steering-record)) injects periodic clock-based check-ins (`every N minutes`) so a foreground whale keeps nudging a long goal. When an agent is instead waiting on *specific store/git conditions* ("tell me when `refs/tillr/green` catches up, or when `item-X` reaches `verify`, or if `tillr-roll` fails"), waking every 10 minutes on a timer wastes turns when nothing happened and lags up to 10 minutes when it did. `tillr-watch` provides **event-driven, zero-polling wakeups** from a durable record in the store, delivered by a background watcher the foreground agent runs ([Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3), [D-TW11](#D-TW11)); it adds no Pi extension.
 - **Complements [`tillr-goal-monitor.md`](./tillr-goal-monitor.md):** The iceboxed goal monitor evaluates high-level prose roadmap goals on a scheduled `due_at` cadence via an LLM node. `tillr-watch` is a **0-LLM-token mechanical evaluator** running continuously on event commits, invoking an agent *only* when a declared threshold or agent watch actually fires.
 
 ---
@@ -180,7 +180,8 @@ tillr watch add --when <expr> --note <text> [--owner <id>] [--once | --recurring
 tillr watch list [--owner <id>] [--all]
 tillr watch edit <watch-id> [--when <expr>] [--note <text>]
 tillr watch drop <watch-id>
-tillr watch wait [--owner <id>] [--timeout <dur>]  # blocks at 0% CPU until a watch/alert fires
+tillr watch wait [--owner <id>] [--timeout <dur>] [--seen-through <seq>] [--follow]  # blocks at 0% CPU until a notice is pending
+tillr watch seen --through <seq> [--owner <id>]    # confirm notices were read (Section 6.4)
 
 # 4. External pub/sub & pre-flight configuration verification
 tillr watch subscribe [--since-seq <n>] [--consumer <id>] [--kind alert|watch|all] [--receiver <r>]
@@ -193,7 +194,7 @@ To support both `git-landing` today and arbitrary agent-authored workflows tomor
 
 | Layer | Where it lives | What belongs here (and nowhere else) | What must NOT leak into this layer |
 | :--- | :--- | :--- | :--- |
-| **1. `tillr` Core** | `tools/tillr/watch/`, `tools/tillr/store/`, `tools/tillr/event/`, `config/tillr/watch/core.toml` | - Incremental `events.seq` cursor engine & zero-polling `inotify` wakeup (`watch.wakeup` / WAL).<br>- `alert_episodes`, `agent_watches`, `watch_rule_overrides`, and `watch_consumers` SQLite tables.<br>- Generic predicate primitives (`count_in_window`, `consecutive_count`, `alternating_pair`, `lag_behind`, `duration_without_event`, `predicate_match`).<br>- `TimelineBundle` builder & NDJSON `subscribe` stream.<br>- `tillr watch lint` cross-artifact engine.<br>- **Core infrastructure rules** true of *every* `tillr` store: `< 5s` run crashes, failover suffixes, dead-PID lane leases, `SQLITE_BUSY` lock refusals, empty-reason records, operator holds, high-attempt diagnostics. | No hardcoded stage names (`"plan"`, `"verify"`), no Git ref names (`refs/tillr/green`), and no assumptions about `tillr-roll` or `git push`. |
+| **1. `tillr` Core** | `tools/tillr/watch/`, `tools/tillr/store/`, `tools/tillr/event/`, `config/tillr/watch/core.toml` | - Incremental `events.seq` cursor engine & zero-polling `inotify` wakeup (`watch.wakeup` / WAL).<br>- `alert_episodes`, `agent_watches`, `foreground_delivery`, `watch_rule_overrides`, and `watch_consumers` SQLite tables.<br>- Generic predicate primitives (`count_in_window`, `consecutive_count`, `alternating_pair`, `lag_behind`, `duration_without_event`, `predicate_match`).<br>- `TimelineBundle` builder & NDJSON `subscribe` stream.<br>- `tillr watch lint` cross-artifact engine.<br>- **Core infrastructure rules** true of *every* `tillr` store: `< 5s` run crashes, failover suffixes, dead-PID lane leases, `SQLITE_BUSY` lock refusals, empty-reason records, operator holds, high-attempt diagnostics. | No hardcoded stage names (`"plan"`, `"verify"`), no Git ref names (`refs/tillr/green`), and no assumptions about `tillr-roll` or `git push`. |
 | **2. Workflow Definition** | `config/tillr/workflows/*.json` (plus optional `watch` block per workflow) | - Stage graph topology (`stages`, `edges`, `exit`, `may_replace`, `outputs`/`inputs`, `seat`, `access`, `write_scope`).<br>- Optional declarative **`watch` metadata** on the workflow JSON: expected return pairs (`oscillation_pairs: [["plan", "design"], ["work", "verify"]]`), expected cycle bounds (`max_plan_verify_cycles: 1`), and stage-specific `guidance` hints telling receivers which stage output or fence caused a bounce. | No global trunk/git assumptions and no item state-machine definitions (`in-queue`, `landed`, `confirmed`). |
 | **3. Charter Document** | `tools/tillr/definition/*.json` (e.g. `landing.json`, `recorded-verdict/definition.json`) + charter rule pack (`config/tillr/watch/charters/<name>.toml`) | - Whole-process item lifecycle (`states`, `ready`, `blocked`, `closed`, `finished`, `transitions`, `prerequisites`, `completes`: `"landing"` vs `"hook"`, `hooks`).<br>- **Charter observability bindings** (`observability` block on `Definition`): what event marks real forward throughput (`terminal_progress_kind`: `"land.landing"` vs `"item.verdict"`), plus charter-owned health invariants (`git-landing`: `refs/tillr/green` lag, `tillr-roll` rebuild parity, `git push` liveness, multiple landings on unlanded items; `recorded-verdict`: `complete-item` hook error rate). | No per-workflow stage topology (`planned-build` vs `scout-then-build` vs `doc-triage` can all run under the same charter). |
 
@@ -479,23 +480,114 @@ CREATE TABLE IF NOT EXISTS agent_watches (
     armed_at_seq        INTEGER NOT NULL,             -- events.seq at registration
     last_evaluated_seq  INTEGER NOT NULL,
     last_fired_seq      INTEGER,
-    last_delivered_seq  INTEGER,                      -- cursor acked by foreground delivery
     created_at          INTEGER NOT NULL,
     updated_at          INTEGER NOT NULL
 );
 ```
 
-Because `agent_watches` lives in `.tillr/state.db` with an explicit `last_delivered_seq` cursor rather than in LLM context or `/tmp`:
+Watches are rows in the store, not facts held in a model's context or in a scratch file, so a new foreground session inherits every armed watch for `owner_handle = "foreground"`: they survive a context compaction, a `/handoff`, a crash and a jail relaunch. A `--once` watch (the default, for *"tell me when X happens"*) moves `armed -> fired` the moment `when_expr` evaluates true, so it fires one time; a `--recurring` watch fires once per distinct matching event or episode transition until `tillr watch drop` removes it.
 
-- **Survives compactions, `/handoff`, crashes, and jail relaunches:** A new foreground session inherits all armed watches for `owner_handle = "foreground"` automatically, and any watch whose condition became true *between* sessions (while no foreground session was open) has `last_fired_seq > last_delivered_seq` and delivers immediately as a single coalesced catch-up notification when the next foreground session starts (matching `planStep` catch-up in [`steering-timer.ts`](../../yolo-packs/matt/files/extensions/steering-timer.ts)).
-- **`--once` vs `--recurring`:** A `--once` watch (the default for *"tell me when X happens"*) transitions `armed -> fired` the moment `when_expr` evaluates true so it never nags twice; a `--recurring` watch fires once per distinct matching event/episode transition while armed until dropped via `tillr watch drop`.
+#### How a notice reaches the foreground agent ([D-TW11](#D-TW11), [OQ-TW3](#OQ-TW3))
 
-#### Waking or notifying the foreground session without polling ([D-TW8](#D-TW8), [OQ-TW3](#OQ-TW3))
+The owner ruled on 2026-11-21 that delivery ties into the background-watcher machinery he already runs for a CI watcher, and that no new Pi extension is built: "for Claude, you can easily do a background watcher that pings things. It does have to be restarted every two hours", and for Pi the same "without the two-hour limit". Everything below this paragraph is the designer's decision ([D-TW11](#D-TW11)), which the owner may overturn. It leaves no question open.
 
-Polling `.tillr/state.db` on a short sleep loop wastes CPU and SQLite reads; polling on a slow timer introduces multi-minute latency. `tillr-watch` achieves **sub-second, zero-polling wakeups** across two layers:
+Four terms are used here:
 
-1. **Store-level wakeup signal (`0%` idle CPU):** `event.Append` (and ref-moving helpers in `tillr-land` / `HeavyRunner`) touches a zero-byte wakeup file `.tillr/watch.wakeup` alongside `.tillr/state.db-wal` after commit. `tillr watch wait` and `tillr watch subscribe` register an OS `inotify` (`fsnotify`) watch on `.tillr/watch.wakeup` and `.tillr/state.db-wal` (with a 60-second safety fallback timer only for filesystems that drop `inotify` events), sleeping completely idle until a write occurs and then reading forward from `last_evaluated_seq` on `.tillr/state.db`'s read-only sidecar connection (`?mode=ro`).
-2. **Foreground harness delivery ([OQ-TW3](#OQ-TW3), ruled 2026-11-21; design owed).** The owner ruled that delivery ties into machinery he already runs for a CI watcher, not into a new Pi extension: in Claude Code a background watcher that pings the session, which has to be restarted every two hours, and in Pi a similar watcher without that limit. `tillr watch wait` remains the primitive such a watcher runs: it sleeps until an armed watch or an unacknowledged `foreground` alert fires, prints the notes and each `TimelineBundle`, marks `last_delivered_seq` and exits `0`. Two things are not designed yet and are the designer's to work out, not the owner's to rule: how `tillr watch wait` plugs into that watcher in each harness, and what re-arms the Claude Code watcher at its two-hour limit so a fired watch is not missed. The owner's raw material on the CI watcher is in the repository at `scratch/ci-watcher-handoff.md`, copied untriaged on 2026-11-21. No `tillr-watch-bridge.ts` extension is built.
+| Term | Meaning |
+| :--- | :--- |
+| **Notice** | What the foreground agent is shown for one firing: a fired agent watch (its note) or a `foreground` alert episode that opened or reopened (its guidance), each with its `TimelineBundle`. |
+| **Pending notice** | A notice the owner has not confirmed seeing, whose alert is still `open` or whose watch has not been dropped. An alert that was acknowledged, silenced or resolved in the meantime is no longer pending. |
+| **Seen cursor** | The highest `events.seq` the owner has confirmed seeing, kept per `owner_handle` in the store. It is the only delivery state, and no harness holds a copy. |
+| **Re-arm** | Starting the watcher again after it exits. In both harnesses the agent does this, with the command the watcher printed as its last line. |
+
+**One primitive, `tillr watch wait`.** It is an ordinary foreground process with no knowledge of either harness. On start, and then on every store wakeup, it advances the rule evaluator the way `tillr watch eval --once` does (so delivery works whether or not `tillr watch daemon` is running; two evaluators serialize on the store's write queue and the one-active-episode index of [Section 6.1](#61-one-record-per-condition-never-per-pass-the-alert-episode-state-machine-d-tw5)), then looks for pending notices for its owner. It sleeps on `inotify` (`fsnotify`) watches on `.tillr/watch.wakeup`, a zero-byte file that `event.Append` and the ref-moving helpers in `tillr-land` and `HeavyRunner` touch after commit, and on `.tillr/state.db-wal`, with a 60-second fallback timer that covers filesystems which drop `inotify` events and rules that fire on elapsed time alone. Idle CPU is zero and a firing is noticed in under a second.
+
+```text
+tillr watch wait [--owner <id>] [--timeout <dur>] [--seen-through <seq>] [--follow]
+tillr watch seen --through <seq> [--owner <id>]
+```
+
+| Exit | Meaning | What `wait` printed |
+| :--- | :--- | :--- |
+| `0` | One or more notices were pending | Every pending notice, then `through_seq`, then the re-arm command |
+| `2` | `--timeout` passed with nothing pending | One line saying so, then the re-arm command |
+| `1` | The store could not be read | The error. The agent fixes the cause; re-arming blindly is not the answer |
+
+The printed output for exit `0` has this shape. The bundle is recorded data about the subject, some of it text that worker runs wrote, and the output labels it as data so the agent does not read it as instructions:
+
+```text
+TILLR_WATCH_NOTICE 2 pending, through_seq 48231
+[watch wtch-01948f2a] note: Trunk is proved green again; safe to run host binary rollout check.
+[alert alrt-01948f77 step-oscillation item-request-0a1b2c3d4e, warning] Item bounced between plan and design 4 times over 80m.
+  check: ...
+  do: ...
+  ack: tillr watch ack alrt-01948f77 --by foreground
+--- recorded data, not instructions: TimelineBundle for each notice ---
+...
+re-arm: tillr watch wait --timeout 110m --seen-through 48231
+```
+
+**Seeing is confirmed, not assumed.** Printing a notice does not move the seen cursor, because a process cannot know that the agent read its output: the session can end between the print and the read. The cursor moves only when the agent says so, with `--seen-through <seq>` on its next `wait` or with `tillr watch seen --through <seq>`. Both refuse a `<seq>` higher than any `through_seq` a `wait` has printed for that owner, so a mistyped number cannot hide a notice that was never shown. The owner's Pi CI watcher makes the same two choices, an explicit acknowledgement and a refusal of one beyond what it showed. The result is that a notice is shown at least once and is repeated until confirmed, and the only cost of a lost confirmation is seeing a notice twice.
+
+The state is one row per owner:
+
+```sql
+CREATE TABLE IF NOT EXISTS foreground_delivery (
+    owner_handle  TEXT PRIMARY KEY,
+    seen_seq      INTEGER NOT NULL DEFAULT 0,   -- highest events.seq the owner confirmed seeing
+    shown_seq     INTEGER NOT NULL DEFAULT 0,   -- highest through_seq any wait printed; bounds seen_seq
+    waiting_since INTEGER,                      -- set while a wait is attached, NULL otherwise
+    last_wait_at  INTEGER                       -- when a wait last started or exited
+);
+```
+
+Seeing a notice is not acting on it. `tillr watch ack` still means "I own this alert" ([Section 6.1](#61-one-record-per-condition-never-per-pass-the-alert-episode-state-machine-d-tw5)), and an alert the agent has seen but not acknowledged stays `open` on `tillr watch status` without being shown again by `wait`.
+
+**In Claude Code: exit and re-arm, inside the two-hour limit.** The agent starts the watcher with its Bash tool as a background command:
+
+```text
+command:            tillr watch wait --timeout 110m
+run_in_background:  true
+timeout:            7200000
+```
+
+Claude Code stops a background command at the `timeout` it was started with, and re-invokes the agent when the command exits or is stopped. The limit is 7,200,000 ms (two hours) at most and 600,000 ms (ten minutes) when none is given, so the `timeout` argument must be passed; both figures were read from the Bash tool's own description in a Claude Code session on 2026-11-21. The cycle is:
+
+1. A notice becomes pending. `wait` prints it and exits `0`. The exit is what wakes the agent, with the output in front of it.
+2. The agent reads the notices and decides what to do. Nothing is done for it ([OQ-TW2](#OQ-TW2)).
+3. The agent re-arms with the printed command, which carries `--seen-through`, as a background command again. Re-arming comes before any long piece of work, so that a firing during that work wakes the agent too.
+4. If nothing fires for 110 minutes, `wait` exits `2` by itself, ten minutes inside the harness limit, and the agent re-arms. This is the restart the owner described, and it costs one short turn every 110 minutes.
+
+Nothing depends on the watcher ending cleanly. If the harness stops it at two hours, or anything else ends it, no state is lost, because the watcher holds none: the next `wait` shows whatever is pending. A watch that fires while no watcher is attached (between an exit and the re-arm, or between two sessions) is shown the moment the next `wait` starts.
+
+**In Pi: one watcher for the life of the session.** Pi's `background_task` tool (start, status, logs, stop and watch; [the background-work research](../research/pi-background-work.md)) sets no time limit on a task, so the agent starts `tillr watch wait --follow` once, with no `--timeout`. With `--follow` the process does not exit on a notice. It prints the same output, beginning with the `TILLR_WATCH_NOTICE` line, and keeps running. The agent puts an output watch for that marker on the task; the watch wakes the agent, which reads the notices, sets the output watch again, and then confirms with `tillr watch seen --through <seq>`, in that order. While anything is pending, `--follow` repeats the one-line marker (not the bundles) every 60 seconds, so a notice that arrives between a wake and the next output watch still wakes the agent. That is how the owner's Pi CI watcher uses the same tool. The delivery slice confirms against the installed `pi-background-tasks` that an output watch fires once and must be set again, before relying on it.
+
+A `background_task` ends with its Pi session. The next session starts `tillr watch wait --follow` again and is shown everything pending at once.
+
+**What the foreground agent does, in either harness.** This is procedure, written into the skill a foreground operator loads, and it is three lines:
+
+1. At session start, and after any compaction or handoff, start the watcher. Anything that fired while no session was open is shown immediately.
+2. When woken, read the notices, re-arm, then act. Acknowledge an alert you take on; record with `--note` on `tillr watch ack` or `--reason` on `tillr watch resolve` whether a better path existed ([OQ-TW4](#OQ-TW4)).
+3. Never end a turn of waiting without a watcher attached.
+
+**When the procedure is not followed.** An agent that forgets to re-arm is the one failure the store cannot prevent, since only the harness can wake a session. It is made visible instead. `tillr watch status` prints, per owner, whether a watcher is attached (`waiting_since`), when one last ran (`last_wait_at`) and how many notices are pending; Observatory reads the same row. The timed check-in a foreground operator already runs calls `tillr watch status` first, which bounds the gap at one check-in interval.
+
+| Event | What happens | What is lost |
+| :--- | :--- | :--- |
+| Claude Code stops the watcher at its limit | The agent is re-invoked and re-arms | Nothing |
+| The session ends, compacts or hands off | The next session's first `wait` shows everything pending | Nothing |
+| A watch fires with no watcher attached | It stays pending and is shown by the next `wait` | Time, up to the next re-arm or check-in |
+| The agent is woken but its turn dies before it reads the output | The seen cursor did not move; the next `wait` shows the notice again | Nothing |
+| The agent confirms and re-arms twice | The second confirmation is a no-op | Nothing |
+| `tillr watch daemon` is not running | `wait` evaluates the rules itself | Nothing |
+| The agent never re-arms | `tillr watch status` and the timed check-in show an unattached watcher and the pending count | Time, up to one check-in interval |
+
+**Alternatives set aside, by the designer.**
+
+- **Posting into the session instead of exiting.** A Claude Code background process can send a message into the session that started it through the session's messaging socket (`CLAUDE_CODE_MESSAGING_SOCKET`), and the owner's CI watcher has a mode that does. It is not used here: the process is still stopped at two hours, so the re-arm is needed anyway, and a second delivery path would then need its own failure handling. Exit and re-arm uses only the harness behavior described above.
+- **A Pi extension that injects a turn** (the earlier `tillr-watch-bridge.ts` proposal). Ruled out by the owner on 2026-11-21.
+- **Marking a notice seen when it is printed.** One command fewer, but a notice printed into a session that then dies is lost without trace.
+- **A timer that polls `tillr watch status`.** It wakes the agent when nothing happened and lags when something did, which is the cost [Section 3.3](#33-relation-to-one-breakage-dedup-steering-timers-and-goal-monitors) set out to remove. The timed check-in remains only as the backstop above.
 
 ### 6.5 How other mechanisms subscribe to the same alerts ([D-TW9](#D-TW9))
 
@@ -552,19 +644,19 @@ Integrating `tillr watch lint` alongside `tillr drain workflow check` in [`tools
 
 ## 8. Open Questions
 
-None. The owner ruled all five on 2026-11-21; each is a row in [the Decision Ledger](#9-decision-ledger).
+None. The owner ruled all five on 2026-11-21; each is a row in [the Decision Ledger](#9-decision-ledger). The delivery design that the ruling on [OQ-TW3](#OQ-TW3) left to the designer is settled in [Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3) as [D-TW11](#D-TW11) and leaves no question for the owner.
 
 ---
 
 ## 9. Decision Ledger
 
-The `OQ-TW` rows are the owner's rulings of 2026-11-21, given as Vantage review comments. Every `D-TW` row is a designer's engineering decision made on 2026-11-20; none has been ruled by the owner, and he may overturn any of them. None of either kind is built.
+The `OQ-TW` rows are the owner's rulings of 2026-11-21, given as Vantage review comments. Every `D-TW` row is a designer's engineering decision, made on 2026-11-20 except [D-TW11](#D-TW11) (2026-11-21); none has been ruled by the owner, and he may overturn any of them. None of either kind is built.
 
 | ID | Decision | Provenance & Date | Governing section |
 | :--- | :--- | :--- | :--- |
 | <a id="OQ-TW1"></a>**[OQ-TW1](#OQ-TW1)** | The watchdog and linter ship as a standalone `tillr-watch` binary (`tillr watch ...`) backed by `tools/tillr/watch`, so it keeps working when `tillr-drain` stalls or runs a stale build. | Owner ruling; Vantage `eb108def` (2026-11-21) | [Section 4.1](#41-new-utility-tillr-watch-vs-face-of-an-existing-utility-d-tw1-oq-tw1) |
 | <a id="OQ-TW2"></a>**[OQ-TW2](#OQ-TW2)** | No standing rule executes any remedy. The utility finds issues so they are fixed at the cause; it never covers one. Neither offered option was taken. | Owner ruling; Vantage `6e60dbac` (2026-11-21) | [Section 6.3](#63-mode-a-mechanical-answers-inside-tillr-and-non-wasting-drain-triage-d-tw7-oq-tw2-oq-tw4) |
-| <a id="OQ-TW3"></a>**[OQ-TW3](#OQ-TW3)** | Foreground delivery ties into the owner's existing CI-watcher machinery: a background watcher in Claude Code (restarted every two hours) and its Pi equivalent. How it ties in, and what re-arms it at two hours, is design still owed. No new Pi extension. | Owner ruling; Vantage `342ea999` (2026-11-21) | [Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3) |
+| <a id="OQ-TW3"></a>**[OQ-TW3](#OQ-TW3)** | Foreground delivery ties into the owner's existing CI-watcher machinery, and no new Pi extension is built. The owner's words: "for Claude, you can easily do a background watcher that pings things. It does have to be restarted every two hours", and for Pi the same "without the two-hour limit". How it ties in is the designer's [D-TW11](#D-TW11). | Owner ruling; Vantage `342ea999` (2026-11-21) | [Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3) |
 | <a id="OQ-TW4"></a>**[OQ-TW4](#OQ-TW4)** | Deferred. Every alert goes to the foreground agent, which records each time whether a better path existed. Dispatch to a drain seat is designed after the system is in use. | Owner ruling; Vantage `d1209edf` (2026-11-21) | [Section 6.3](#63-mode-a-mechanical-answers-inside-tillr-and-non-wasting-drain-triage-d-tw7-oq-tw2-oq-tw4) |
 | <a id="OQ-TW5"></a>**[OQ-TW5](#OQ-TW5)** | Live tuning is stored as `watch_rule_overrides` in `.tillr/state.db` over git-tracked `config/tillr/watch/*.toml` baselines, with `tillr watch rule export` to promote settled values. | Owner ruling; Vantage `2e9a4d00` (2026-11-21) | [Section 5.1](#51-declarative-rule-schema-d-tw4-oq-tw5) |
 | <a id="D-TW1"></a>**D-TW1** | Package the core schema, cursor evaluator, timeline bundler, and lint engine in `tools/tillr/watch`, exposed through a standalone `tools/tillr-watch` CLI binary (`tillr watch ...`, registered in `tillr-cli` and `tillr-roll.py` `MODULES`, subject to [OQ-TW1](#OQ-TW1)) so the watchdog stays independent of `tillr-drain` stalls/crashes and headless of `tillr-view`. | Designer's decision; the owner may overturn this (2026-11-20) | [Section 4.1](#41-new-utility-tillr-watch-vs-face-of-an-existing-utility-d-tw1-oq-tw1) |
@@ -574,6 +666,7 @@ The `OQ-TW` rows are the owner's rulings of 2026-11-21, given as Vantage review 
 | <a id="D-TW5"></a>**D-TW5** | Deduplicate standing-rule alerts to at most one non-resolved `alert_episodes` row per `(rule_id, subject_key)` (`open -> acknowledged -> silenced -> resolved`), updating `last_observed_seq` and `observation_count` silently on repeat passes, supporting both `--until <time>` and `--until-change` (`condition_fingerprint`) silences, and resolving automatically when `clear_when` holds. | Designer's decision; the owner may overturn this (2026-11-20) | [Section 6.1](#61-one-record-per-condition-never-per-pass-the-alert-episode-state-machine-d-tw5) |
 | <a id="D-TW6"></a>**D-TW6** | Attach a deterministic `<= 8 KiB` `TimelineBundle` (assembled in one read-only SQLite sidecar query over item metadata, fence, stage moves, last 10 runs + obstacles, verify/gate refusals, landings, and git/roll refs) to every opened alert and fired watch so receivers act immediately without running `tillr view events` or exploratory worker runs. | Designer's decision; the owner may overturn this (2026-11-20) | [Section 6.2](#62-how-the-receiver-gets-the-items-timeline-with-the-alert-d-tw6) |
 | <a id="D-TW7"></a>**D-TW7** | *Set aside on 2026-11-21 by the ruling on [OQ-TW4](#OQ-TW4); kept for when seat dispatch is designed.* Keep `tillr-drain` as the sole run dispatcher (`D-OC4`) and enforce a hard `active_triage_run_id IS NULL` precondition per `(alert_id, condition_fingerprint)` (`D-OC5`) whenever a rule routes to `drain:<seat>` ([OQ-TW4](#OQ-TW4)), guaranteeing at most one triage run per episode fingerprint. | Designer's decision; the owner may overturn this (2026-11-20) | [Section 6.3](#63-mode-a-mechanical-answers-inside-tillr-and-non-wasting-drain-triage-d-tw7-oq-tw2-oq-tw4) |
-| <a id="D-TW8"></a>**D-TW8** | Provide one-command persistent self-registered agent watches (`tillr watch add|list|edit|drop|wait`) stored in `.tillr/state.db` (`agent_watches` with `last_delivered_seq`, `--once` default, and no prescribed workflow) backed by `inotify` wakeups on `.tillr/watch.wakeup` / `.tillr/state.db-wal` so foreground sessions wake at 0% idle CPU and inherit unfired/un-acked watches across compactions, handoffs, and restarts ([OQ-TW3](#OQ-TW3)). | Designer's decision; the owner may overturn this (2026-11-20) | [Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3) |
+| <a id="D-TW8"></a>**D-TW8** | Provide one-command persistent self-registered agent watches (`tillr watch add|list|edit|drop|wait`) stored in `.tillr/state.db` (`agent_watches`, `--once` default, and no prescribed workflow) backed by `inotify` wakeups on `.tillr/watch.wakeup` / `.tillr/state.db-wal` so a waiting process sits at 0% idle CPU and a new foreground session inherits every armed watch across compactions, handoffs, and restarts. Amended 2026-11-21: delivery state moved from a per-watch `last_delivered_seq` column to the per-owner seen cursor of [D-TW11](#D-TW11). | Designer's decision; the owner may overturn this (2026-11-20) | [Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3) |
 | <a id="D-TW9"></a>**D-TW9** | Expose a cursor-resumable NDJSON pub/sub stream (`tillr watch subscribe --since-seq --consumer`) backed by `watch_consumers` checkpoints and `watch.*` store events so Observatory WebSockets, `steering-timer`, webhooks, and external supervisors subscribe uniformly without polling. | Designer's decision; the owner may overturn this (2026-11-20) | [Section 6.5](#65-how-other-mechanisms-subscribe-to-the-same-alerts-d-tw9) |
 | <a id="D-TW10"></a>**D-TW10** | Provide `tillr watch lint` (wired into `tools/gate/checks/workflows.py` alongside `tillr drain workflow check`) to validate the combined `(charter, workflows, backend-policy, watch-rules)` tuple pre-flight, including `completes: "hook"` `describe` contract checks, seat mappings, unguarded oscillation cycles, signal/stage type-checking, non-empty guidance, and static rejection of item-failing remedies. | Designer's decision; the owner may overturn this (2026-11-20) | [Section 7.1](#71-running-the-same-rules-against-a-non-git-workflow-recorded-verdict-autoqa-custom-loops), [Section 7.2](#72-tillr-watch-lint-checking-a-workflows-whole-configuration-before-it-runs-d-tw10) |
+| <a id="D-TW11"></a>**D-TW11** | Deliver notices to the foreground agent with one harness-neutral primitive, `tillr watch wait`, run as a background watcher by the agent itself. In Claude Code it is a background Bash command started with `--timeout 110m` under the harness's two-hour limit, which exits when a notice is pending or the timeout passes; the exit wakes the agent, which re-arms it. In Pi it is one `background_task` running `tillr watch wait --follow` with no limit, waking the agent through an output watch. The only delivery state is a per-owner seen cursor in the store (`foreground_delivery`), moved only by the agent's confirmation (`--seen-through`, `tillr watch seen`), so a notice is repeated until confirmed and a stopped watcher loses nothing. The watcher executes no remedy ([OQ-TW2](#OQ-TW2)); the agent decides. | Designer's decision, made under the owner's ruling on [OQ-TW3](#OQ-TW3); the owner may overturn this (2026-11-21) | [Section 6.4](#64-mode-b-persistent-self-registered-foreground-agent-watches-d-tw8-oq-tw3) |
