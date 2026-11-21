@@ -1,10 +1,9 @@
 // Command tillr-item creates and reads work items in a named tillr store, and the
-// decision, mail-delivery, sign-off-grant and verdict records that attach to them. It is
+// decision, mail-delivery and verdict records that attach to them. It is
 // the item utility of the tillr suite: apply writes one item.record, show answers one,
 // state moves one item's own state (not its criteria's), the decision and mail nouns
-// record and read the two ledgers design §5.1 gives this utility, the grant and verdict
-// nouns record the delegation a verdict is recorded under and the one writer a
-// criterion's state moves on, rank changes only an existing item's priority,
+// record and read the two ledgers design §5.1 gives this utility, the verdict
+// noun records the one writer a criterion's state moves on, rank changes only an existing item's priority,
 // and sync materializes the item blocks of the repository's tracked documents.
 // main keeps the flags, the exit codes and the process lifecycle, and the item package
 // keeps the schema, the kinds and the record→row mapping.
@@ -94,8 +93,6 @@ func run(args []string) int {
 		env, code = decisionFace(rest)
 	case "mail":
 		env, code = mailFace(rest)
-	case "grant":
-		env, code = grantFace(rest)
 	case "verdict":
 		env, code = verdictFace(rest)
 	default:
@@ -661,49 +658,6 @@ func mailAckFace(args []string) (record.Envelope, int) {
 	})
 }
 
-// grantFace dispatches the grant noun's one verb.
-func grantFace(args []string) (record.Envelope, int) {
-	if verbHelp("grant", "issue", args) {
-		return record.Envelope{}, record.ExitOK
-	}
-	if len(args) == 0 {
-		return record.Envelope{}, fail(item.Usagef("grant needs a verb: issue"))
-	}
-	verb, rest := args[0], args[1:]
-	switch verb {
-	case "issue":
-		return grantIssueFace(rest)
-	default:
-		return record.Envelope{}, fail(item.Usagef("unknown grant verb %q: want issue", verb))
-	}
-}
-
-// grantIssueFace records one delegated sign-off grant.
-func grantIssueFace(args []string) (record.Envelope, int) {
-	fs := newFlagSet("grant issue")
-	path := fs.String("store", "", "the store to write")
-	input := fs.String("input", "", "the item.grant to issue")
-	now := fs.String("now", "", "the injected clock, RFC 3339")
-	if err := parseFlags(fs, args); err != nil {
-		return record.Envelope{}, fail(err)
-	}
-	if *path == "" || *input == "" || *now == "" {
-		return record.Envelope{}, fail(item.Usagef("grant issue needs --store <path>, --input <record> and --now <RFC3339>"))
-	}
-	at, err := time.Parse(time.RFC3339, *now)
-	if err != nil {
-		return record.Envelope{}, fail(item.Usagef("--now %q is not an RFC 3339 timestamp: %v", *now, err))
-	}
-	env, err := readInput(*input, item.GrantRecordKind)
-	if err != nil {
-		return record.Envelope{}, fail(err)
-	}
-	env.CreatedAt = at.UTC()
-	return writeStore(*path, at, func(ctx context.Context, tx *store.Tx) (record.Envelope, error) {
-		return item.IssueGrant(ctx, tx, env)
-	})
-}
-
 // verdictFace dispatches the verdict noun's one verb.
 func verdictFace(args []string) (record.Envelope, int) {
 	if verbHelp("verdict", "record", args) {
@@ -727,6 +681,11 @@ func verdictRecordFace(args []string) (record.Envelope, int) {
 	fs := newFlagSet("verdict record")
 	path := fs.String("store", "", "the store to write")
 	input := fs.String("input", "", "the item.verdict to record")
+	head := fs.String("head", "", "the exact candidate commit SHA (agent verdicts only)")
+	workflow := fs.String("workflow", "", "the persisted workflow reference")
+	node := fs.String("evaluator-node", "", "the persisted evaluator node")
+	digest := fs.String("graph-sha256", "", "SHA-256 of the exact persisted expanded graph")
+
 	now := fs.String("now", "", "the injected clock, RFC 3339")
 	if err := parseFlags(fs, args); err != nil {
 		return record.Envelope{}, fail(err)
@@ -742,9 +701,61 @@ func verdictRecordFace(args []string) (record.Envelope, int) {
 	if err != nil {
 		return record.Envelope{}, fail(err)
 	}
+	var payload map[string]any
+	if err := json.Unmarshal(env.Payload, &payload); err != nil {
+		return record.Envelope{}, fail(item.Usagef("reading verdict payload: %v", err))
+	}
+	if payload == nil {
+		return record.Envelope{}, fail(item.Usagef("verdict payload must be a JSON object"))
+	}
+	for key, value := range map[string]string{"workflow": *workflow, "evaluator_node": *node, "graph_sha256": *digest, "evaluated_head": *head} {
+		if value == "" {
+			continue
+		}
+		if prior, ok := payload[key]; ok && prior != "" && prior != value {
+			return rejectionOrFailure(item.Rejectionf("evaluator-binding", fmt.Sprint(payload["item_id"]), "--%s differs from verdict payload", strings.ReplaceAll(key, "_", "-")), at)
+		}
+		payload[key] = value
+	}
+	if *head != "" {
+		tree, err := judgeGitObject(*head + "^{tree}")
+		if err != nil {
+			return record.Envelope{}, fail(err)
+		}
+		if prior, ok := payload["evaluated_tree"]; ok && prior != "" && prior != tree {
+			return rejectionOrFailure(item.Rejectionf("evaluated-tree", fmt.Sprint(payload["item_id"]), "candidate tree differs from verdict payload"), at)
+		}
+		payload["evaluated_tree"] = tree
+	}
+	env.Payload, err = json.Marshal(payload)
+	if err != nil {
+		return record.Envelope{}, fail(item.Internalf("encoding verdict payload: %v", err))
+	}
+
 	env.CreatedAt = at.UTC()
 	return writeStore(*path, at, func(ctx context.Context, tx *store.Tx) (record.Envelope, error) {
-		return item.RecordVerdict(ctx, tx, env)
+		stored, err := item.RecordVerdict(ctx, tx, env)
+		if err != nil {
+			return record.Envelope{}, err
+		}
+		if payload["actor_kind"] == item.ActorAgent {
+			candidate, _ := payload["evaluated_head"].(string)
+			resolved, err := judgeCommit(candidate)
+			if err != nil {
+				return record.Envelope{}, err
+			}
+			if resolved != candidate {
+				return record.Envelope{}, item.Rejectionf("evaluated-head", fmt.Sprint(payload["item_id"]), "verdict head is not the exact candidate commit")
+			}
+			tree, err := judgeGitObject(candidate + "^{tree}")
+			if err != nil {
+				return record.Envelope{}, err
+			}
+			if tree != payload["evaluated_tree"] {
+				return record.Envelope{}, item.Rejectionf("evaluated-tree", fmt.Sprint(payload["item_id"]), "verdict tree differs from the candidate tree")
+			}
+		}
+		return stored, nil
 	})
 }
 
@@ -833,7 +844,7 @@ func rejectionOrFailure(err error, at time.Time) (record.Envelope, int) {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "apply, rank, dep, add-path, sync, reconcile, comments, list, show, state, place, idea, doc-triage, request, close, reopen, decision, mail, grant, verdict or judge"
+const faceList = "apply, rank, dep, add-path, sync, reconcile, comments, list, show, state, place, idea, doc-triage, request, close, reopen, decision, mail, verdict or judge"
 
 // errHelp is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer

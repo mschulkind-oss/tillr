@@ -263,7 +263,7 @@ func TestARequestThatAddsAnItemBlockIsReturnedToItsWorker(t *testing.T) {
 // The judge reads a request's criteria against its words, so its brief ends with the same
 // byte-counted suffix, which the adapter's preflight accepts.
 func TestTheJudgeOfARequestReadsItsWords(t *testing.T) {
-	f, l, s := judgeRouteFixture(t, "pass", true)
+	f, l, s := judgeRouteFixture(t, "pass")
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		_, err := tx.Exec(`INSERT INTO request_words(item_id, words_hash, words, input_hash) VALUES('item-a', 'h', ?, 'i')`, []byte(requestWords))
 		return err
@@ -830,8 +830,7 @@ func testSingleWorkerJudgeReturn(t *testing.T, reportOnly bool, retryBackend str
 		if _, err := tx.Exec(`UPDATE items SET state='closed'`); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`INSERT INTO item_grants(grant_id,claim_classes,grantor,issued_at,expires_at) VALUES('grant-review','verification-only','owner',?,?)`, l.cfg.Now().Add(-time.Hour).UnixMilli(), l.cfg.Now().Add(time.Hour).UnixMilli())
-		return err
+		return nil
 	})
 	id := fileFixtureRequest(t, f, "build", item.SingleWorkerWorkflow, []string{"candidate.txt"})
 	fixtureWrite(t, f, func(tx *store.Tx) error {

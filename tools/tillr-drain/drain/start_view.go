@@ -328,12 +328,6 @@ func (s *startSnapshot) seed(r *store.Reader, at time.Time, policy *Policy) erro
 	s.trunkWaiters, s.defectWaiters = map[string]string{}, map[string]string{}
 	s.waits = map[string]item.WaitingOn{}
 	for _, row := range rows {
-		if row.JudgeMode == "agent" {
-			row.JudgeGrant, err = judgeGrant(r, row.ItemID, at)
-			if err != nil {
-				return err
-			}
-		}
 		s.items = append(s.items, startQueueRow{id: row.ItemID, rank: row.Rank})
 		s.itemsByID[row.ItemID], s.states[row.ItemID] = row, row.State
 		if err := s.refreshWait(r, row.ItemID, row.State); err != nil {

@@ -8,7 +8,9 @@ import (
 
 // SchemaVersion is the schema this package migrates a store to.
 //
-// It is 5 because the item record gained rank — the queue's order, which the drain's
+// Version 6 replaces timed judge grants with persisted evaluator steps.
+//
+// It was 5 because the item record gained rank — the queue's order, which the drain's
 // planner sorts by — on a table that already existed. A store at 4 predates it, and a read
 // face that selected it would answer a SQL error instead of naming the incompatibility;
 // the repair is migrate's addMissingColumns, as below.
@@ -32,7 +34,7 @@ import (
 // first write-open and recorded as 2 by that same transaction; the version tells the
 // faces that never migrate the truth, and the hook is what makes such a store
 // writable.
-const SchemaVersion = 5
+const SchemaVersion = 6
 
 // MetaDDL is the store's own administration: the meta rows a store is described by
 // and the record of which migrations have been applied.
@@ -54,6 +56,7 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 // migration is the one transaction in the store that has to have the write lock before it
 // reads (see that function).
 type migrationsExec interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
@@ -71,8 +74,8 @@ func migrate(ctx context.Context, tx migrationsExec) error {
 	if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE type='table' AND name='schema_migrations'`).Scan(&exists); err != nil {
 		return fmt.Errorf("store: checking schema compatibility: %w", err)
 	}
+	var version int
 	if exists != 0 {
-		var version int
 		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(version),0) FROM schema_migrations`).Scan(&version); err != nil {
 			return fmt.Errorf("store: reading schema compatibility: %w", err)
 		}
@@ -91,6 +94,11 @@ func migrate(ctx context.Context, tx migrationsExec) error {
 	// skipped, which is the registration defect it is.
 	if err := addMissingColumns(ctx, tx); err != nil {
 		return err
+	}
+	if version < 6 {
+		if err := migrateJudgeSteps(ctx, tx); err != nil {
+			return fmt.Errorf("store: migrating judge steps: %w", err)
+		}
 	}
 	if _, err := tx.ExecContext(ctx,
 		`INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (?, unixepoch('subsec') * 1000)`,

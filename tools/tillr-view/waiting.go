@@ -18,7 +18,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/alarms"
 	"github.com/mschulkind-oss/tillr-drain/faults"
 	"github.com/mschulkind-oss/tillr-drain/holdrules"
-	"github.com/mschulkind-oss/tillr-drain/judgegrants"
+
 	"github.com/mschulkind-oss/tillr-drain/obstacles"
 	"github.com/mschulkind-oss/tillr-drain/quota"
 	"github.com/mschulkind-oss/tillr-drain/spend"
@@ -75,7 +75,7 @@ func waitingFace(args []string) (record.Envelope, int) {
 	root := fs.String("root", ".", "the directory a relative design_doc resolves against")
 	questionsCmd := fs.String("questions-cmd", "", questionsCmdHelp)
 	plannerFlag := fs.String("tillr-drain", "", "the tillr-drain whose `why` answers (default: the one beside this executable, then PATH); it must be this program's build")
-	nowFlag := fs.String("now", "", "the clock grant expiry, quota windows, and lease times are measured against, RFC 3339 (default: now)")
+	nowFlag := fs.String("now", "", "the clock quota windows and lease times are measured against, RFC 3339 (default: now)")
 	if code := parseFlags(fs, args); code != record.ExitOK {
 		return record.Envelope{}, code
 	}
@@ -119,11 +119,6 @@ func waitingFace(args []string) (record.Envelope, int) {
 					return e
 				}
 				rows = mergeQuotaWaiting(rows, quotas)
-				grantWarnings, e := waitingGrantWarnings(r, now, *path)
-				if e != nil {
-					return e
-				}
-				rows = append(rows, grantWarnings...)
 				extra, e := waitingCommentIntake(r)
 				if e != nil {
 					return e
@@ -166,7 +161,6 @@ func waitingFace(args []string) (record.Envelope, int) {
 		return record.Envelope{}, exitFor(err)
 	}
 	declared, err := definition.ForStore(ctx, s)
-	var grantViews []judgegrants.View
 	if err == nil {
 		err = s.ReadTx(ctx, func(r *store.Reader) error {
 			var err error
@@ -176,8 +170,7 @@ func waitingFace(args []string) (record.Envelope, int) {
 					return err
 				}
 			}
-			grantViews, err = waitingGrantLines(r, now, *path)
-			return err
+			return nil
 		})
 	}
 	s.Close()
@@ -205,12 +198,6 @@ func waitingFace(args []string) (record.Envelope, int) {
 		}
 		if err == nil {
 			_, err = fmt.Fprintln(os.Stdout, laneCapacityLine(laneRows))
-		}
-		for _, g := range grantViews {
-			if err != nil {
-				break
-			}
-			_, err = fmt.Fprintln(os.Stdout, g.Summary)
 		}
 		if err == nil {
 			err = printWaiting(os.Stdout, rows)
@@ -504,15 +491,6 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 				}
 			}
 		}
-		if found && last.Reason == "judge-grant-absent" {
-			expired, err := judgegrants.ExpiredForItem(r, item.ItemID, now)
-			if err != nil {
-				return nil, err
-			}
-			detail, mover := judgegrants.FormatHold(expired, storePath)
-			row.Why = last.Reason + ": " + detail
-			row.Mover = mover
-		}
 		if found && (last.Reason == "eval-failed" || last.Reason == "judge-unreadable" || last.Reason == "words-missing" || last.Reason == "words-altered" || last.Reason == "idea-no-outcome") {
 			var detail string
 			err := r.QueryRow(`SELECT json_extract(payload,'$.detail') FROM events
@@ -737,10 +715,6 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 		}
 	}
 	windows = append(filtered, quotas...)
-	grantWarnings, err := waitingGrantWarnings(r, now, storePath)
-	if err != nil {
-		return nil, err
-	}
 	extra, err := waitingCommentIntake(r)
 	if err != nil {
 		return nil, err
@@ -754,7 +728,6 @@ func assembleWaitingAt(r *store.Reader, questions vantage.QuestionSource, storeP
 		return nil, err
 	}
 	out = append(out, moves...)
-	out = append(out, grantWarnings...)
 	all, err := appendWaitingDesigns(r, append(append(mergeQuotaWaiting(out, windows), extra...), laneRows...))
 	if err != nil {
 		return nil, err
@@ -859,7 +832,7 @@ func waitingTerminal(state string) bool {
 func waitingDecision(r *store.Reader, itemID, stoppedRun string, stoppedAt int64) (storeDispatch, int64, string, bool, error) {
 	var last storeDispatch
 	var mover string
-	where := ` WHERE item_id = ?`
+	where := ` WHERE item_id = ? AND reason <> 'judge-grant-absent'`
 	args := []any{itemID}
 	if stoppedRun != "" {
 		// A launch tied with (or recorded after) its stop cannot supersede the

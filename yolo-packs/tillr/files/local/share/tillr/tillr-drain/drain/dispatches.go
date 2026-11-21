@@ -62,7 +62,9 @@ CREATE TABLE IF NOT EXISTS workflow_selections (
  item_id TEXT PRIMARY KEY,
  workflow TEXT NOT NULL,
  source TEXT NOT NULL,
- graph TEXT NOT NULL
+ graph TEXT NOT NULL,
+ judge_graph TEXT NOT NULL DEFAULT '',
+ judge_attempt INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS node_runs (
  item_id TEXT NOT NULL,
@@ -214,6 +216,11 @@ func init() {
 	// for.
 	if err := store.RegisterDDL("drain", DispatchDDL+graphRevisionDDL+PassDDL+passSpendDDL+legacyPassMigrationDDL+SessionDDL+RetryDDL+GateSpanDDL+rollingDDL+trunkHistoryDDL+heavy.RewritesDDL+generationDDL+backendWindowDDL+backendQuotaDDL+backendOutcomesDDL); err != nil {
 		panic(err)
+	}
+	for name, decl := range map[string]string{"judge_graph": "TEXT NOT NULL DEFAULT ''", "judge_attempt": "INTEGER NOT NULL DEFAULT 0"} {
+		if err := store.RegisterColumn("drain", "workflow_selections", name, decl); err != nil {
+			panic(err)
+		}
 	}
 	for _, name := range []string{"seat", "model"} {
 		if err := store.RegisterColumn("drain", "node_runs", name, "TEXT"); err != nil {

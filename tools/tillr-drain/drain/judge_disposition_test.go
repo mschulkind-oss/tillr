@@ -16,25 +16,28 @@ func TestJudgeDefectiveRefusals(t *testing.T) {
 	for _, tc := range []struct {
 		name, step, detail string
 		evidence           []string
-		priorLanding       bool
+		landingClaim       bool
 	}{
 		{"diff", "judge-defective-evidence-mismatch", "diff:candidate.diff", []string{"diff:candidate.diff"}, false},
 		{"changed-path", "judge-defective-evidence-mismatch", "file:tools/item-a/result.txt:1", []string{"file:tools/item-a/result.txt:1"}, false},
 		{"bare-path", "judge-defective-evidence-mismatch", "tools/item-a/result.txt:1", []string{"tools/item-a/result.txt:1"}, false},
-		{"close-refused", "judge-defective-close-refused", `item "item-a" has already landed; it cannot be closed`, []string{"criterion:c1", "diff:candidate.diff"}, true},
+		{"close-refused", "judge-defective-close-refused", `item "item-a" is being landed by run concurrent-landing`, []string{"criterion:c1", "diff:candidate.diff"}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			f, l, s := judgeRouteFixture(t, "pass", true)
+			f, l, s := judgeRouteFixture(t, "pass")
 			s.entries = []item.JudgeEntry{{
 				CriterionID: "c1", CriterionHash: item.CriterionHash("the first criterion of item-a"),
 				Verdict: item.VerdictDefective, ClaimClass: item.ClaimVerification,
 				Reason: "the first judge reason", Evidence: tc.evidence,
 			}}
-			if tc.priorLanding {
+			if tc.landingClaim {
+				// A historical landing does not bar a later close; an active claim does.
 				tip := runGit(t, f.root, "rev-parse", "HEAD")
 				s.afterJudge = func() {
 					fixtureWrite(t, f, func(tx *store.Tx) error {
-						return recordFixtureLanding(tx, "item-a", "earlier-run", tip, 1)
+						_, err := tx.Exec(`INSERT INTO landing_claims(run_id,item_id,base_ref,head_sha,commit_sha,trunk_before,claimed_at)
+ VALUES('concurrent-landing','item-a','refs/heads/main',?,?,?,?)`, tip, tip, tip, l.cfg.Now().UnixMilli())
+						return err
 					})
 				}
 			}
@@ -65,7 +68,7 @@ func TestJudgeDefectiveRefusals(t *testing.T) {
 					return err
 				}
 				if !strings.Contains(detail, judge) || !strings.Contains(detail, tc.detail) ||
-					(!tc.priorLanding && !strings.Contains(detail, "not-done")) {
+					(!tc.landingClaim && !strings.Contains(detail, "not-done")) {
 					t.Errorf("refusal detail %q must explain %q and name %s", detail, tc.detail, judge)
 				}
 				answer, err := Why(r, Pass{Now: l.cfg.Now().Format(time.RFC3339), Build: &l.build, BriefTemplate: &l.cfg.Stage.(*LaneStager).Template}, l.cfg.Policy, &VantageQuestions{Root: f.root})
@@ -106,7 +109,7 @@ func TestJudgeFailingDispositions(t *testing.T) {
 				name += "-reversed"
 			}
 			t.Run(name, func(t *testing.T) {
-				f, l, s := judgeRouteFixture(t, "pass", true)
+				f, l, s := judgeRouteFixture(t, "pass")
 				trunk := runGit(t, f.root, "rev-parse", "HEAD")
 				verdicts := append([]string(nil), tc.verdicts...)
 				if reverse {

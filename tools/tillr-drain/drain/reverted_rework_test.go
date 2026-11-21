@@ -103,7 +103,10 @@ func testRevertedItemRework(t *testing.T, path string, wantLand bool) {
 		if _, err := tx.Exec(`INSERT INTO item_criteria(item_id,criterion_id,text,state,claim_class) VALUES('item-broke','c1','the fix works','open','verification-only')`); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`INSERT INTO item_grants(grant_id,claim_classes,grantor,issued_at,expires_at) VALUES('judge-grant','verification-only','owner',?,?)`, now.Add(-time.Hour).UnixMilli(), now.Add(time.Hour).UnixMilli())
+		// This is an external evaluator, not a request for drain to dispatch its
+		// compatibility review. Record the review here before verifying rework.
+		_, err := tx.Exec(`INSERT INTO workflow_selections(item_id,workflow,source,graph)
+VALUES('item-broke','external-review@v1','block',json_remove(?, '$.compatibility_review'))`, store.CompatibilityJudgeGraph("external-review@v1", ""))
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -113,7 +116,11 @@ func testRevertedItemRework(t *testing.T, path string, wantLand bool) {
 		t.Fatal(err)
 	}
 	if err := writeFixture(h.path, func(tx *store.Tx) error {
-		judged, err := item.CheckJudge(ctx, tx.Reader(), output, item.JudgeOptions{ItemID: "item-broke", Head: head, Tree: tree, Actor: "judge-run", JudgedActor: runID, GrantID: "judge-grant", At: now})
+		binding, err := item.ReadEvaluatorBinding(tx.Reader(), "item-broke")
+		if err != nil {
+			return err
+		}
+		judged, err := item.CheckJudge(ctx, tx.Reader(), output, item.JudgeOptions{ItemID: "item-broke", Head: head, Tree: tree, Actor: "judge-run", JudgedActor: runID, EvaluatorBinding: binding, At: now})
 		if err != nil {
 			return err
 		}
@@ -151,7 +158,7 @@ func testRevertedItemRework(t *testing.T, path string, wantLand bool) {
 	}
 	h.loop.cfg.Steps = reworkLandingSteps{recoveryLandingSteps: &recoveryLandingSteps{t: t, ProcessSteps: &ProcessSteps{
 		Root: h.root, Store: h.path, LaneRoot: h.loop.cfg.LaneRoot, Now: h.loop.cfg.Now,
-		ItemBin: filepath.Join(bin, "tillr-item"), LandProgram: "python3 " + adapter + " land --store " + h.path + " --tillr-land " + filepath.Join(bin, "tillr-land"), VerdictProgram: "python3 " + adapter + " verdict",
+		ItemBin: filepath.Join(bin, "tillr-item"), LandProgram: "python3 " + adapter + " land --store " + h.path + " --tillr-land " + filepath.Join(bin, "tillr-land"), VerdictProgram: "python3 " + adapter + " verdict --tillr-item " + filepath.Join(bin, "tillr-item"),
 	}}, judge: fileRed("a")}
 	if _, landed, err := h.loop.Verify(ctx, c, &LoopResult{}, nil); err != nil || landed != wantLand {
 		t.Fatalf("verify landed=%v err=%v\n%s", landed, err, h.report)

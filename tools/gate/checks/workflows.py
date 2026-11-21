@@ -14,7 +14,7 @@ def main(args):
     validate(base, head)
     root = Path.cwd()
     changed = git(root, "diff", "--name-only", "--no-renames", base, head).splitlines()
-    if not any(p.startswith(("config/tillr/workflows/", "tools/tillr-drain/"))
+    if not any(p.startswith(("config/tillr/workflows/", "tools/tillr-drain/", "tools/tillr-item/item/"))
                or p in ("config/tillr/commands.json", "tools/gate/checks/workflows.py")
                for p in changed):
         return 0

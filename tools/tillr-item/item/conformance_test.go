@@ -153,15 +153,9 @@ func seedBundle(t *testing.T, records ...[]byte) []byte {
 	return bundle
 }
 
-// The delegated sign-off grant and the verdict are this package's newest contract pieces:
-// two kinds registered with their owner, the grant table present in the composed
-// migration list, and the criterion-hash spelling a verdict is bound to.
-//
-// The negative control is the registration and the digest: drop either kind from
-// schema.go's registration loop and the lookups below fail, drop the item_grants DDL and
-// the table assertion fails on a store that has no such table, and change
-// CriterionHash's spelling and the known digest of "the first criterion" stops matching.
-func TestTheItemPackageRegistersTheGrantAndVerdictContract(t *testing.T) {
+// Historical grant kind registration remains readable while issuance is retired.
+// The table stays until the coordinated preservation migration.
+func TestTheItemPackageRegistersHistoricalGrantAndVerdictContract(t *testing.T) {
 	for _, kind := range []string{item.VerdictRecordKind, item.GrantRecordKind} {
 		registered, err := event.Lookup(kind)
 		if err != nil {
@@ -180,8 +174,8 @@ func TestTheItemPackageRegistersTheGrantAndVerdictContract(t *testing.T) {
 	if err != nil {
 		t.Fatalf("reading the table counts failed: %v", err)
 	}
-	if _, ok := counts["item_grants"]; !ok {
-		t.Fatalf("the item_grants table is not in the composed migration list: %v", counts)
+	if _, ok := counts["item_grants"]; ok {
+		t.Fatalf("a new store created the retired grant table: %v", counts)
 	}
 	if got := item.CriterionHash("the first criterion"); got != "00cf50717100b32b0e92e665ccbaeb641d0b4e9eec4b4973b01f0430806fa52d" {
 		t.Fatalf("the criterion hash of \"the first criterion\" is %s, want its SHA-256 in lowercase hex", got)

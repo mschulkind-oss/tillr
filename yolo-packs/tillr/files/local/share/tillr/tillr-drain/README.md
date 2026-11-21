@@ -43,20 +43,18 @@ Pack launchers use a separate install: run `yolo host apply --assert` before req
 ## Opted-in judgment before the gate
 
 An item directive with `judge="agent"` asks for an independent, read-only review
-of its committed candidate. Before dispatching the worker, planning requires one
-unexpired grant covering every criterion's claim class; otherwise the item waits
-as `judge-grant-absent`. The policy must map the `review` seat. Items without that
-attribute or a workflow evaluator keep the existing mechanical retirement path
-and start no review run.
+of its committed candidate. For older opt-ins with no evaluator slot, the drain
+persists a fixed `review` evaluator before the worker starts. The policy must map
+the selected evaluator's seat. Items without an opt-in or an evaluator keep the
+mechanical retirement path and start no review run.
 
 A workflow may set `exit.evaluator_slot` to the node that evaluates its candidate.
-That node must be read-only, required by the exit, and ordered after every writing
-node. The loader and workflow check report `workflow-evaluator-access`,
-`workflow-evaluator-required`, or `workflow-evaluator-order` when these guarantees
-are absent. The evaluator uses the same judge step, brief, verdict location, and
-intake as an opted-in item, using the evaluator node's configured route. An item
-that also asks for an agent judge still gets only this one evaluating run.
-Planning requires the same covering grant before the graph's first node starts.
+That node must be a read-only agent, required by the exit, after every writer,
+and declare a nonempty `judge_classes` list. The valid entries are `verification-only`,
+`red-gate-triage`, and `direction`; none may repeat. Both the shipped `verify` node
+and the compatibility `review` node list only `verification-only`. Intake checks
+the stored selection and criterion class, not the workflow file on disk. An item
+that also opts into agent review still gets only the workflow's evaluator.
 The evaluator brief also carries its stage prompt and, for each preceding producer,
 its node id, seat, access, prompt and output directory. The joined candidate diff
 is the retained `candidate.diff`.
@@ -112,12 +110,11 @@ or landing refusal records no judge verdict and keeps that step's own hold reaso
 The checked file and caller-owned provenance travel with a retained gated candidate,
 so a later landing attempt does not start a second review.
 
-If authority expires during the gate, landing waits for a new covering grant. If
-it expires during publication, the drain retains the exact landed commit before
-settlement. A new covering grant then records the checked file and item state
-without repeating the worker, review, gate, or landing. An unfinished review
-handoff is recovered before the worker's recorded-head guard, including restoration
-when a judge committed before its terminal record was lost.
+Judgment does not expire during gating or landing. After publication the drain
+retains the exact landed commit until it records the checked file and item state.
+Recovery does not repeat the worker, review, gate, or landing. An unfinished
+review handoff is recovered before the worker's recorded-head guard, including
+restoration when a judge committed before its terminal record was lost.
 
 The [judge-routing tests](./drain/judge_route_test.go) cover ordering, authority,
 read-only restoration, failure attribution, and mechanical-path compatibility.
@@ -483,9 +480,8 @@ never has a document block. The drain runs it like any other item, with four add
 
 Completion is the normal gate and landing, plus whatever the workflow's own verify or
 judge stage decides. `planned-build@v1`, the default workflow for `build` requests, has a
-`verify` evaluator, so the item waits as `judge-grant-absent` until an unexpired grant
-covers its criteria, which are all `verification-only`. `scouted-design@v1`, the default
-workflow for `design` requests, and `single-worker@v1` need no grant. When a filed
+`verify` evaluator for `verification-only` criteria. `scouted-design@v1`, the default
+workflow for `design` requests, and `single-worker@v1` have no evaluator of their own. When a filed
 request raises an obstacle for the design seat, its design-answer run is fenced to
 `docs/`, updates the relevant design document without adding an item block (or objects
 with `NEXT-ACTOR`), and returns the request to its workflow once the answer lands.

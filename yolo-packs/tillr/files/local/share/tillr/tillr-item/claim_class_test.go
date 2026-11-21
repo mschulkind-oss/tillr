@@ -55,14 +55,12 @@ func TestCriterionClaimActorTable(t *testing.T) {
 				if code, out := applyClass(t, db, class, frozenText); code != 0 {
 					t.Fatalf("apply: %d %s", code, out)
 				}
+				graph := strings.Replace(selectedGraph, `["verification-only"]`, `["`+class+`"]`, 1)
 				if class != "owner-only" {
-					grant := defaultGrant()
-					grant.ClaimClasses = []string{class}
-					if code, out := issueGrant(t, db, grant); code != 0 {
-						t.Fatalf("grant: %d %s", code, out)
-					}
+					selectEvaluator(t, db, graph)
 				}
-				v := agentVerdict()
+				v := agentVerdict(t)
+				v.GraphSHA256 = hashOf(graph)
 				v.ActorKind = actor
 				v.ClaimClass = class
 				code, out := recordVerdict(t, db, v)
@@ -96,16 +94,13 @@ func TestCriterionClaimCannotDropAuthority(t *testing.T) {
 	}
 }
 
-func TestCriterionClaimMismatchAndOwnerGrant(t *testing.T) {
+func TestCriterionClaimMismatch(t *testing.T) {
 	db := storedWithCriterion(t, "class-mismatch", "open")
 	v := mechanicalVerdict()
 	v.ClaimClass = "owner-only"
 	code, out := recordVerdict(t, db, v)
 	assertRefused(t, code, out, "claim-class-mismatch")
-	grant := defaultGrant()
-	grant.ClaimClasses = []string{"verification-only", "owner-only"}
-	code, out = issueGrant(t, db, grant)
-	assertRefused(t, code, out, "grant-owner-only")
+
 }
 
 func TestCriterionClaimOwnerProse(t *testing.T) {

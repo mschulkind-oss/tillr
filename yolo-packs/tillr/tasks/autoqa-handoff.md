@@ -55,8 +55,8 @@ seed, unbuilt event emitters, single-purpose Git landing) have been overtaken:
    alongside `checks`, `run`, and `dualrun`. `tillr-trace` records the commands a run executes.
 4. **Intake, workflows, worker endings, backends, and trunk proof.** Store-declared requests
    (`tillr item request`) and reserved `express` lanes run alongside `tillr item sync` and
-   `tillr item apply`. Build work runs `planned-build@v1` (`plan`, `work`, `verify` with a
-   `verification-only` grant) or single-step `single-worker@v1`. `pi` workers use `land` and
+   `tillr item apply`. Build work runs `planned-build@v1` (`plan`, `work`, and `verify`, whose
+   persisted rulebook allows `verification-only`) or single-step `single-worker@v1`. `pi` workers use `land` and
    `obstacle` suspended tool calls when `pi --features` advertises `parked-tool-calls`
    (reopening promptlessly on refusal, with fallback to `RESULT:` footers), recover from
    `repeating-call` loops on a fresh session and fallback backend, route seats across Copilot,
@@ -93,7 +93,7 @@ Inspect the binaries, module references, and worked example above, then return c
 numbered comments on the five areas that matter now:
 
 1. **Store, events, and read views for your own gates and verdicts.** To drive your own
-   reproduction commands, gates, `complete-item` hooks, or `tillr item verdict`, `grant`, and
+   reproduction commands, gates, `complete-item` hooks, or `tillr item verdict`, `judge`, and
    `decision` flows, what exact records, event kinds, correlation IDs, cursor guarantees, or
    `tillr view` / `tillr store` read outputs do you still need — or find missing, underspecified,
    or awkward when you run them?

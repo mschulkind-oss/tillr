@@ -25,7 +25,7 @@ func TestRefusedAndCurrentRestartKeepTheInflightJudge(t *testing.T) {
 				disk = []byte("broken replacement")
 			}
 			h := newRestartHarness(t, disk, func(context.Context, string) error { return errors.New("cannot check replacement") })
-			f, l, s := judgeRouteFixture(t, "pass", true)
+			f, l, s := judgeRouteFixture(t, "pass")
 			l.cfg.Restart = h.l.cfg.Restart
 			h.f, h.l = f, l
 			held := &heldBuildJudge{judgeRouteSteps: s, entered: make(chan struct{}, 1), release: make(chan struct{}), cleaned: make(chan struct{})}
@@ -62,7 +62,8 @@ func TestRefusedAndCurrentRestartKeepTheInflightJudge(t *testing.T) {
 
 func TestRestartDuringOlderJudgeTerminationDoesNotWaitForTheProcess(t *testing.T) {
 	h := newRestartHarness(t, []byte("next build"), func(context.Context, string) error { return nil })
-	f, l, s := judgeRouteFixture(t, "pass", true)
+	f, l, s := judgeRouteFixture(t, "pass")
+	persistFixtureJudgeSelection(t, f)
 	l.cfg.Restart = h.l.cfg.Restart
 	h.f, h.l = f, l
 	lane := l.laneDirPath("lane-1")
@@ -178,7 +179,8 @@ func TestRetainedJudgeWaitAnswersAnotherRestart(t *testing.T) {
 }
 
 func TestStagedJudgeReceiptWithoutAHandoffCanStartOnTheSameBuild(t *testing.T) {
-	f, l, s := judgeRouteFixture(t, "pass", true)
+	f, l, s := judgeRouteFixture(t, "pass")
+	persistFixtureJudgeSelection(t, f)
 	l.cfg.Restart = &RestartConfig{}
 	lane := l.laneDirPath("lane-1")
 	session, err := NewSessionID()

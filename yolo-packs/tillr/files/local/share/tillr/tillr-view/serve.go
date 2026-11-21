@@ -22,7 +22,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/mschulkind-oss/tillr-drain/alarms"
-	"github.com/mschulkind-oss/tillr-drain/judgegrants"
+
 	"github.com/mschulkind-oss/tillr-drain/preserved"
 	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr-drain/stop"
@@ -794,14 +794,14 @@ type itemView struct {
 // snapshotData is the two-item drain view: every item projected, with its runs and the
 // stage each run reached.
 type snapshotData struct {
-	Alarms     []alarms.Alarm     `json:"alarms,omitempty"`
-	Grants     []judgegrants.View `json:"grants,omitempty"`
-	Sources    sourceStates       `json:"sources"`
-	Counts     boardCounts        `json:"counts"`
-	Drain      drainSummary       `json:"drain_summary"`
-	Lanes      []laneView         `json:"lanes"`
-	Items      []itemView         `json:"items"`
-	RecentRuns []runSummary       `json:"recent_runs"`
+	Alarms []alarms.Alarm `json:"alarms,omitempty"`
+
+	Sources    sourceStates `json:"sources"`
+	Counts     boardCounts  `json:"counts"`
+	Drain      drainSummary `json:"drain_summary"`
+	Lanes      []laneView   `json:"lanes"`
+	Items      []itemView   `json:"items"`
+	RecentRuns []runSummary `json:"recent_runs"`
 }
 
 // boardCounts is the header's numbers: the board's own tallies, computed once here so
@@ -910,11 +910,6 @@ func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiF
 		return nil, unreadable(err)
 	}
 	out.Alarms = alarms
-	grants, err := judgegrants.CurrentViews(r, now, s.storePath)
-	if err != nil {
-		return nil, unreadable(err)
-	}
-	out.Grants = grants
 	ideas, err := ideaIDs(r)
 	if err != nil {
 		return nil, unreadable(err)

@@ -25,6 +25,7 @@ workflow-write-scope-read-only, workflow-input, workflow-output, workflow-outcom
 workflow-unknown-node, workflow-cycle,
 workflow-reference, workflow-missing-reference, workflow-expansion-cycle,
 workflow-exit, workflow-evaluator-access, workflow-evaluator-order, workflow-evaluator-required,
+workflow-evaluator-judge-classes,
 workflow-file, workflow-output-promise, workflow-write-scope,
 workflow-argument-missing, workflow-argument-type, workflow-argument-most,
 workflow-argument-unknown, workflow-repeat, workflow-proposal; command-registry, command-reference, command-flag,
@@ -66,7 +67,13 @@ func workflowFields(raw []byte) []error {
 			stage := "graph"
 			if field == "stages" {
 				json.Unmarshal(obj["id"], &stage)
-				check(obj, "id kind seat access command_ref flags resolved_argv timeout_ms workflow inputs outputs args repeat prompt write_scope may_replace", "stage="+stage)
+				check(obj, "id kind seat access command_ref flags resolved_argv timeout_ms workflow inputs outputs args repeat prompt write_scope may_replace judge_classes", "stage="+stage)
+				if raw, present := obj["judge_classes"]; present {
+					var classes []string
+					if json.Unmarshal(raw, &classes) != nil {
+						findings = append(findings, fmt.Errorf("workflow-evaluator-judge-classes: stage=%s: judge_classes must be a list of strings", stage))
+					}
+				}
 			} else {
 				json.Unmarshal(obj["to_node"], &stage)
 				check(obj, "from_node to_node when_outcome from_output to_input", "stage="+stage)
@@ -399,6 +406,9 @@ func expandWorkflow(root, path string, policy *Policy, stack map[string]bool, ar
 			return nil, fmt.Errorf("workflow-duplicate-id: %s", s.ID)
 		}
 		ids[s.ID] = true
+	}
+	if err := validateEvaluatorJudgeClasses(w); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	if err := validateWorkflowExit(w); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)

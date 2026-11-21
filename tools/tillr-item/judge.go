@@ -21,15 +21,17 @@ func judgeFace(args []string) int {
 	head := fs.String("head", "", "the candidate commit SHA in the current Git repository")
 	actor := fs.String("actor", "", "caller-owned judge identity: node:run_ids:route or run=<id>;session=<id>")
 	judged := fs.String("judged-actor", "", "caller-owned writer identity: run_ids:routes or run=<id>;session=<id>")
-	grant := fs.String("grant", "", "the recorded sign-off grant")
+	workflow := fs.String("workflow", "", "the persisted workflow reference")
+	node := fs.String("evaluator-node", "", "the persisted evaluator node")
+	digest := fs.String("graph-sha256", "", "SHA-256 of the exact persisted expanded graph")
 	landed := fs.String("landed", "", "the landed commit SHA to add to each done verdict's evidence")
 	dry := fs.Bool("dry-run", false, "validate read-only and print outcome; exits: 0 pass, 10 defective, 11 blocked, 12 not-done; refusals 1, usage 2, incompatible store 3, external failure 4, internal error 5")
 	now := fs.String("now", "", "the injected clock, RFC 3339 (default: current UTC time)")
 	if err := parseFlags(fs, args); err != nil {
 		return fail(err)
 	}
-	if *path == "" || *id == "" || *input == "" || *head == "" || *actor == "" || *judged == "" || *grant == "" {
-		return fail(item.Usagef("judge needs --store, --item, --input, --head, --actor, --judged-actor and --grant"))
+	if *path == "" || *id == "" || *input == "" || *head == "" || *actor == "" || *judged == "" || *workflow == "" || *node == "" || *digest == "" {
+		return fail(item.Usagef("judge needs --store, --item, --input, --head, --actor, --judged-actor, --workflow, --evaluator-node and --graph-sha256"))
 	}
 	at := time.Now().UTC()
 	if *now != "" {
@@ -63,7 +65,7 @@ func judgeFace(args []string) int {
 			return fail(item.Usagef("--landed must be a full commit SHA"))
 		}
 	}
-	options := item.JudgeOptions{ItemID: *id, Head: resolved, Tree: tree, Actor: *actor, JudgedActor: *judged, GrantID: *grant, Landed: *landed, At: at}
+	options := item.JudgeOptions{ItemID: *id, Head: resolved, Tree: tree, Actor: *actor, JudgedActor: *judged, EvaluatorBinding: item.EvaluatorBinding{Workflow: *workflow, EvaluatorNode: *node, GraphSHA256: *digest}, Landed: *landed, At: at}
 	ctx := context.Background()
 	var result item.JudgeResult
 	if *dry {

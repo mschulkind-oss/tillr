@@ -520,17 +520,6 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 	d := work.Decision
 	d.From, d.To = "running", ""
 	d.Action, d.Reason = ActionHold, ReasonRunLive
-	if evaluatorNode(d) {
-		grant, err := judgeGrant(r, d.ItemID, at)
-		if err != nil {
-			return Decision{}, err
-		}
-		if grant == "" {
-			d.From, d.Reason = "held", ReasonJudgeGrantAbsent
-			identifyDecision(&d)
-			return d, nil
-		}
-	}
 	if len(d.Parallel) > 0 && work.Orphaned && !work.BoundaryFailed {
 		leases, err := activeLeasesExcept(r, at, []string{d.LaneID}, exceptLane, exceptRunID)
 		if err != nil {
@@ -704,17 +693,6 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 					return d, nil
 				}
 			}
-		}
-	}
-	if work.Candidate != nil && work.Candidate.Judge != nil {
-		grant, err := judgeGrant(r, d.ItemID, at)
-		if err != nil {
-			return Decision{}, err
-		}
-		if grant == "" {
-			d.From, d.To, d.Action, d.Reason = "held", "", ActionHold, ReasonJudgeGrantAbsent
-			identifyDecision(&d)
-			return d, nil
 		}
 	}
 	if work.Candidate != nil && work.Gated && !work.JudgeLanded {
@@ -2292,7 +2270,7 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watch *l
 				if err == nil {
 					var accepted bool
 					_, accepted, err = l.judgeCandidate(runCtx, c, &local)
-					if errors.Is(err, errJudgeGrantHeld) || errors.Is(err, errJudgeBackendHeld) {
+					if errors.Is(err, errJudgeBackendHeld) {
 						err = l.releaseExamination(runCtx, d)
 						completion.result = &local
 					} else if err == nil && !accepted {

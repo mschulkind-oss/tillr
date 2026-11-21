@@ -17,9 +17,8 @@
 
 ## What this module owns
 
-`tillr-item` writes and reads work items, and the four ledgers that attach to them: the
-decisions a board records, the mail deliveries a lane is sent, the sign-off grants a
-delegation runs under, and the verdicts a judge records. `sync` materializes the item
+`tillr-item` writes and reads work items, and the three ledgers that attach to them:
+decisions, mail deliveries, and criterion verdicts. `sync` materializes the item
 blocks of the repository's tracked documents — the only intake from documents.
 The retired `seed` command refuses with a pointer to `tillr item sync`. A fence entry
 under `.forks/lanes/<lane>/<fork>/` names a checkout staging materializes for the
@@ -599,7 +598,7 @@ per criterion in a single transaction. It never moves the item's own state; the 
 routes the outcome. A refused file changes no criterion and appends no verdict event.
 
 ```sh
-tillr item judge --store .tillr/state.db --item item-example --input eval.output --head <full-candidate-sha> --actor 'run=review-run;session=review-session' --judged-actor 'run=writer-run;session=writer-session' --grant <grant-id> --dry-run
+tillr item judge --store .tillr/state.db --item item-example --input eval.output --head <full-candidate-sha> --actor 'run=review-run;session=review-session' --judged-actor 'run=writer-run;session=writer-session' --workflow <selected-workflow> --evaluator-node <node> --graph-sha256 <stored-graph-sha256> --dry-run
 ```
 
 The file is a JSON object, not a record envelope:
@@ -630,7 +629,7 @@ retains that payload in its checked result but does not route it. Unknown fields
 duplicate JSON keys are refused. Any `actor` or `judged_actor` field, including an
 empty or null field anywhere in the file, is refused as `actor-in-output`.
 
-The caller supplies the identities and grant. Run and session identities can be
+The caller supplies identities and the persisted evaluator binding. Run and session identities can be
 written as `run=<id>;session=<id>` (optionally with `;route=<route>`). The compact
 forms `node:run_ids:route` and `run_ids:routes` locate comma-separated run ids by
 position, whatever their spelling. A compact identity can also use
@@ -639,9 +638,20 @@ Use tagged identities for opaque session ids or routes containing colons. Ambigu
 identities are refused as `actor-provenance`. Shared run or session handles are
 refused as `self-judging`; a shared model route is not. The
 candidate head must be a full commit SHA in the current Git repository; intake
-resolves its tree independently and compares both with the file. The recorded grant
-must exist, remain unexpired, and cover every entry's claim class. An agent cannot
-judge an `owner-only` criterion.
+resolves its tree independently and compares both with the file. Intake reads the
+selected graph from `workflow_selections`, checks `workflow`, `evaluator_node`, and
+`graph_sha256` (SHA-256 of its exact stored bytes), and requires the stored criterion
+class in the evaluator's `judge_classes`. An agent cannot judge `owner-only`.
+
+Direct `verdict record` agent payloads require the same binding and full
+`evaluated_head` / `evaluated_tree`; the CLI confirms the pair against Git.
+The optional `--head`, `--workflow`, `--evaluator-node`, and `--graph-sha256` flags
+fill omitted payload fields but cannot contradict them. Human and mechanical
+verdicts keep their existing paths. Grant issuance and `--grant` are retired;
+new verdicts cannot cite `grant_id`. Historical grant and verdict events remain
+readable. The schema writer archives the old grant table before removing it.
+Back up the store and upgrade all tillr binaries together before a writable open;
+mixed-version writers are unsupported.
 
 `outcome` is `pass` only when every entry is `done`; otherwise write `fail`.
 The command prints `pass`, or the first applicable outcome in the order `defective`,

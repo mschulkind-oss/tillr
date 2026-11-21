@@ -15,7 +15,7 @@ func TestBackendAlarmRulesSortFirstAndNameOperator(t *testing.T) {
 			t.Errorf("%s: %+v", reason, r)
 		}
 	}
-	if For("judge-grant-absent").Class == "alarm" {
-		t.Fatal("a missing grant is not a backend alarm")
+	if _, active := Rules["judge-grant-absent"]; active {
+		t.Fatal("the legacy grant refusal must not have an active hold rule")
 	}
 }

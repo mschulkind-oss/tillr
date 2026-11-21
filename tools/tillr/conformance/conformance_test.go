@@ -24,12 +24,10 @@ func TestTheFourContractPiecesArePresent(t *testing.T) {
 		t.Fatalf("the supported record version is %d", record.SupportedVersion)
 	}
 	// The number is pinned so a schema change is announced rather than absorbed: it is
-	// 5 because the item record gained rank — the queue's order, which the drain's planner
-	// sorts by — and a face that cannot migrate decides compatibility from this number
-	// alone. 4 was the run record's spend (usage_tokens and usage_cost_usd, the numbers the
-	// drain loop's ceiling reads), 3 was the item record's allowed_paths, 2 was land's
-	// landing_attempts gaining gated_tree, landed_tree and carried.
-	if store.SchemaVersion != 5 {
+	// 6 because evaluator authority moved into selected workflow graphs and the old
+	// grant table was archived and dropped. A face that cannot migrate decides
+	// compatibility from this number alone.
+	if store.SchemaVersion != 6 {
 		t.Fatalf("the schema version is %d", store.SchemaVersion)
 	}
 	if len(event.Kinds()) == 0 {

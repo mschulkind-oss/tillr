@@ -36,7 +36,7 @@ func testDeliveryClassificationDispatch(t *testing.T, workflow string) {
 	writeForkFile(t, filepath.Join(f.root, "bin/pi-forks.list"), "upstream/pi patch/pi\n")
 	if workflow == "planned-build@v1" {
 		l.cfg.Policy.Seats["verify"] = "fixture"
-		grantForItem(t, f, l, "item-a")
+
 		raw, err := os.ReadFile("../../../config/tillr/workflows/planned-build@v1.json")
 		if err != nil {
 			t.Fatal(err)

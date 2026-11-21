@@ -56,24 +56,25 @@ type WorkflowGroup struct {
 type WorkflowStage struct {
 	// CopiesOf is expansion-owned provenance, persisted in graph snapshots but
 	// refused in tracked files. Only copies of one stage may share an input.
-	CopiesOf   string              `json:"copies_of,omitempty"`
-	MayReplace map[string][]string `json:"may_replace,omitempty"`
-	ID         string              `json:"id"`
-	Parent     string              `json:"parent,omitempty"`
-	Args       map[string]any      `json:"args,omitempty"`
-	Repeat     string              `json:"repeat,omitempty"`
-	Prompt     string              `json:"prompt,omitempty"`
-	WriteScope WorkflowScope       `json:"write_scope,omitempty"`
-	Workflow   string              `json:"workflow,omitempty"`
-	Kind       string              `json:"kind"`
-	Seat       string              `json:"seat"`
-	Access     string              `json:"access"`
-	CommandRef string              `json:"command_ref,omitempty"`
-	Flags      map[string]any      `json:"flags,omitempty"`
-	Command    []string            `json:"resolved_argv,omitempty"`
-	TimeoutMS  int                 `json:"timeout_ms,omitempty"`
-	Inputs     map[string]string   `json:"inputs,omitempty"`
-	Outputs    map[string]string   `json:"outputs,omitempty"`
+	CopiesOf     string              `json:"copies_of,omitempty"`
+	MayReplace   map[string][]string `json:"may_replace,omitempty"`
+	ID           string              `json:"id"`
+	Parent       string              `json:"parent,omitempty"`
+	Args         map[string]any      `json:"args,omitempty"`
+	Repeat       string              `json:"repeat,omitempty"`
+	Prompt       string              `json:"prompt,omitempty"`
+	WriteScope   WorkflowScope       `json:"write_scope,omitempty"`
+	Workflow     string              `json:"workflow,omitempty"`
+	Kind         string              `json:"kind"`
+	Seat         string              `json:"seat"`
+	Access       string              `json:"access"`
+	CommandRef   string              `json:"command_ref,omitempty"`
+	Flags        map[string]any      `json:"flags,omitempty"`
+	Command      []string            `json:"resolved_argv,omitempty"`
+	TimeoutMS    int                 `json:"timeout_ms,omitempty"`
+	Inputs       map[string]string   `json:"inputs,omitempty"`
+	Outputs      map[string]string   `json:"outputs,omitempty"`
+	JudgeClasses []string            `json:"judge_classes,omitempty"`
 }
 type WorkflowEdge struct {
 	From        string `json:"from_node"`
@@ -248,10 +249,39 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 			}
 		}
 	}
+	if err := validateEvaluatorJudgeClasses(&w); err != nil {
+		return nil, err
+	}
 	if err := validateWorkflowExit(&w); err != nil {
 		return nil, err
 	}
 	return &w, nil
+}
+
+func validateEvaluatorJudgeClasses(w *Workflow) error {
+	id := evaluatorSlot(w)
+	for _, stage := range w.Stages {
+		if stage.ID != id {
+			if stage.JudgeClasses != nil {
+				return fmt.Errorf("workflow-evaluator-judge-classes: stage=%s: judge_classes belongs only on the evaluator", stage.ID)
+			}
+			continue
+		}
+		if len(stage.JudgeClasses) == 0 {
+			return fmt.Errorf("workflow-evaluator-judge-classes: stage=%s: judge_classes must be a nonempty list", id)
+		}
+		seen := map[string]bool{}
+		for _, class := range stage.JudgeClasses {
+			if class != item.ClaimVerification && class != item.ClaimRedGateTriage && class != item.ClaimDirection {
+				return fmt.Errorf("workflow-evaluator-judge-classes: stage=%s: class %q is not allowed; expected verification-only, red-gate-triage or direction", id, class)
+			}
+			if seen[class] {
+				return fmt.Errorf("workflow-evaluator-judge-classes: stage=%s: duplicate class %q", id, class)
+			}
+			seen[class] = true
+		}
+	}
+	return nil
 }
 
 func loadWorkflow(root, ref string, policy *Policy) (*Workflow, error) {

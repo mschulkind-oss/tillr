@@ -36,8 +36,7 @@ const (
 	// the transaction that moves a criterion's state: the verdict is the one writer of
 	// that state, so the record and the event that records it are one kind.
 	VerdictRecordKind = "item.verdict"
-	// GrantRecordKind is the record the grant face emits, and the event appended in the
-	// transaction that records a delegated sign-off grant.
+	// GrantRecordKind registers historical grant events for reading only.
 	GrantRecordKind = "item.grant"
 )
 
@@ -140,19 +139,6 @@ CREATE TABLE IF NOT EXISTS decisions (
 );
 
 CREATE INDEX IF NOT EXISTS decisions_status ON decisions (status);
-
--- item_grants is the recorded delegation a verdict is recorded under: the claim classes
--- it covers, its grantor and its expiry (agent-runtime.md §12 "Bounds on a delegated
--- sign-off"). It is a table rather than an event-only record because the intake check
--- reads it at write time, so a grant that no reader could find would be a delegation
--- nothing can honour.
-CREATE TABLE IF NOT EXISTS item_grants (
-  grant_id      TEXT PRIMARY KEY,
-  claim_classes TEXT NOT NULL,
-  grantor       TEXT NOT NULL,
-  issued_at     INTEGER NOT NULL,
-  expires_at    INTEGER NOT NULL
-);
 
 CREATE TABLE IF NOT EXISTS mail_deliveries (
   mail_id      TEXT PRIMARY KEY,

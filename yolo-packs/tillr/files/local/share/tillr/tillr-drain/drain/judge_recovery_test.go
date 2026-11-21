@@ -6,47 +6,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-func TestJudgeGrantMustCoverEveryCriterionNow(t *testing.T) {
-	for _, mode := range []string{"expired", "future", "wrong-class", "partial"} {
-		t.Run(mode, func(t *testing.T) {
-			f, l, s := judgeRouteFixture(t, "pass", true)
-			fixtureWrite(t, f, func(tx *store.Tx) error {
-				var err error
-				switch mode {
-				case "expired":
-					_, err = tx.Exec(`UPDATE item_grants SET expires_at=?`, l.cfg.Now().UnixMilli())
-				case "future":
-					_, err = tx.Exec(`UPDATE item_grants SET issued_at=?`, l.cfg.Now().Add(time.Hour).UnixMilli())
-				case "wrong-class":
-					_, err = tx.Exec(`UPDATE item_grants SET claim_classes='direction'`)
-				case "partial":
-					_, err = tx.Exec(`INSERT INTO item_criteria(item_id,criterion_id,text,state,claim_class) VALUES('item-a','c2','direction needed','','direction')`)
-				}
-				return err
-			})
-			if _, err := l.pass(context.Background(), &LoopResult{}); err != nil {
-				t.Fatal(err)
-			}
-			if len(s.runs) != 0 {
-				t.Fatalf("worker dispatched without authority: %v", s.runs)
-			}
-			for _, p := range mustPlan(t, l) {
-				if p.decision.ItemID == "item-a" && p.decision.Reason != ReasonJudgeGrantAbsent {
-					t.Errorf("hold %s", p.decision.Reason)
-				}
-			}
-		})
-	}
-}
-
 func TestCheckedJudgeSurvivesReplacementWithoutAnotherRun(t *testing.T) {
-	f, l, s := judgeRouteFixture(t, "pass", true)
+	f, l, s := judgeRouteFixture(t, "pass")
+	persistFixtureJudgeSelection(t, f)
 	lane := l.laneDirPath("lane-1")
 	writeForkFile(t, filepath.Join(lane, BriefFile), "worker brief\n")
 	workerSession, err := NewSessionID()

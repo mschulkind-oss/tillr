@@ -131,7 +131,7 @@ func statusFaceFormat(args []string, asText *bool) (record.Envelope, int) {
 	asJSON := fs.Bool("json", false, "print the view.status record (the default)")
 	text := fs.Bool("text", false, "print a human-readable status summary and sync residue counts")
 	questionsCmd := fs.String("questions-cmd", "", questionsCmdHelp)
-	nowFlag := fs.String("now", "", "the clock grant expiry is measured against, RFC 3339 (default: now)")
+	nowFlag := fs.String("now", "", "the observation clock, RFC 3339 (default: now)")
 	if code := parseFlags(fs, args); code != record.ExitOK {
 		return record.Envelope{}, code
 	}
@@ -178,10 +178,6 @@ func statusFaceFormat(args []string, asText *bool) (record.Envelope, int) {
 		err = s.ReadTx(context.Background(), func(r *store.Reader) error {
 			var err error
 			payload.Alarms, err = readAlarms(r, *root, *policy, now)
-			if err != nil || subject != nil {
-				return err
-			}
-			payload.Grants, err = waitingGrantLines(r, now, *src.store)
 			return err
 		})
 		s.Close()

@@ -13,7 +13,7 @@ import (
 func TestJudgeMalformedBlockerDoesNotChangeDisposition(t *testing.T) {
 	for _, payload := range []string{"", "null", `"owner"`, `{}`, `{"waiter":"nobody"}`, `{"waiter":"item:missing"}`} {
 		t.Run(payload, func(t *testing.T) {
-			f, l, s := judgeRouteFixture(t, "pass", true)
+			f, l, s := judgeRouteFixture(t, "pass")
 			s.entries = []item.JudgeEntry{{CriterionID: "c1", CriterionHash: item.CriterionHash("the first criterion of item-a"), Verdict: item.VerdictBlocked, ClaimClass: item.ClaimVerification, Reason: "needs a ruling", Evidence: []string{"diff:candidate.diff"}, WaitingOn: json.RawMessage(payload)}}
 			result := &LoopResult{}
 			for i := 0; i < 4; i++ {

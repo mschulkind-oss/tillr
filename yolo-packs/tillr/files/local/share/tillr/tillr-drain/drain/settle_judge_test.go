@@ -243,7 +243,7 @@ func TestHoldRecordedBeforeGateStartsStopsSamePassGate(t *testing.T) {
 		}
 	})
 
-	t.Run("judge-grant-absent-hold", func(t *testing.T) {
+	t.Run("missing-evaluator-hold", func(t *testing.T) {
 		f, l := passFixture(t, "item-a")
 		steps := &countingJudgeSteps{storePath: f.storePath}
 		l.cfg.Steps = steps
@@ -262,13 +262,22 @@ func TestHoldRecordedBeforeGateStartsStopsSamePassGate(t *testing.T) {
 		drainOwned(t, l, &result)
 
 		if result.Landed != 0 || steps.gates.Load() != 0 {
-			t.Fatalf("judge-grant-absent candidate gated in same pass: result=%+v gates=%d",
+			t.Fatalf("candidate without an evaluator gated in same pass: result=%+v gates=%d",
 				result, steps.gates.Load())
 		}
-		assertCandidateRecordedNotDone(t, f.storePath, "item-a")
+		fixtureRead(t, f, func(r *store.Reader) error {
+			var n int
+			if err := r.QueryRow(`SELECT count(*) FROM events WHERE kind='item.verdict'`).Scan(&n); err != nil {
+				return err
+			}
+			if n != 0 {
+				t.Errorf("missing evaluator recorded %d verdict(s)", n)
+			}
+			return nil
+		})
 		plans := mustPlan(t, l)
-		if plans[0].decision.Action != ActionHold || plans[0].decision.Reason != ReasonJudgeGrantAbsent {
-			t.Fatalf("expected %s hold from planner, got %+v", ReasonJudgeGrantAbsent, plans[0].decision)
+		if plans[0].decision.Action != ActionHold || plans[0].decision.Reason != ReasonJudgeUnreadable {
+			t.Fatalf("expected %s hold from planner, got %+v", ReasonJudgeUnreadable, plans[0].decision)
 		}
 	})
 }

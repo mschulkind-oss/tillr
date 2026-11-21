@@ -147,7 +147,7 @@ func (s *judgeRouteSteps) Verdict(context.Context, Candidate, string) error {
 	return nil
 }
 
-func judgeRouteFixture(t *testing.T, mode string, grant bool) (refusalLoopFixture, *Loop, *judgeRouteSteps) {
+func judgeRouteFixture(t *testing.T, mode string) (refusalLoopFixture, *Loop, *judgeRouteSteps) {
 	f, l, old := workflowLoopFixture(t, "")
 	s := &judgeRouteSteps{workflowSteps: old, mode: mode}
 	l.cfg.Steps = s
@@ -163,12 +163,6 @@ func judgeRouteFixture(t *testing.T, mode string, grant bool) (refusalLoopFixtur
 			judge = ""
 		}
 		_, err = tx.Exec(`UPDATE items SET workflow='',judge_mode=? WHERE item_id='item-a'`, judge)
-		if err != nil {
-			return err
-		}
-		if grant {
-			_, err = tx.Exec(`INSERT INTO item_grants(grant_id,claim_classes,grantor,issued_at,expires_at) VALUES('grant-review','verification-only','owner',?,?)`, l.cfg.Now().Add(-time.Hour).UnixMilli(), l.cfg.Now().Add(time.Hour).UnixMilli())
-		}
 		return err
 	})
 	return f, l, s
@@ -195,7 +189,7 @@ func (s failingJudgeSteps) Run(ctx context.Context, req run.Request) (run.Record
 }
 
 func TestFailedJudgeWaitsAndStartsOnlyOnItsOwnBackend(t *testing.T) {
-	f, l, steps := judgeRouteFixture(t, "missing", true)
+	f, l, steps := judgeRouteFixture(t, "missing")
 	l.cfg.Steps = failingJudgeSteps{steps}
 	l.cfg.Policy.Backends["alternate"] = l.cfg.Policy.Backends["reviewer"]
 	l.cfg.Policy.SeatLists = map[string][]string{"review": {"reviewer", "alternate"}}
@@ -231,9 +225,9 @@ func TestFailedJudgeWaitsAndStartsOnlyOnItsOwnBackend(t *testing.T) {
 }
 
 func TestJudgeRouteBeforeGate(t *testing.T) {
-	for _, mode := range []string{"pass", "preflight", "not-done", "missing", "invalid", "dirty", "commit", "gate-fail", "land-fail", "mechanical", "no-grant"} {
+	for _, mode := range []string{"pass", "preflight", "not-done", "missing", "invalid", "dirty", "commit", "gate-fail", "land-fail", "mechanical"} {
 		t.Run(mode, func(t *testing.T) {
-			f, l, s := judgeRouteFixture(t, mode, mode != "no-grant")
+			f, l, s := judgeRouteFixture(t, mode)
 			result := &LoopResult{}
 			passes := 3
 			if mode == "gate-fail" || mode == "land-fail" {
@@ -259,8 +253,6 @@ func TestJudgeRouteBeforeGate(t *testing.T) {
 				want = append(want, "judge")
 			case "mechanical":
 				want = []string{"worker", "gate", "landing"}
-			case "no-grant":
-				want = nil
 			}
 			if !reflect.DeepEqual(s.order, want) {
 				t.Fatalf("order %v, want %v", s.order, want)
@@ -323,7 +315,7 @@ func TestJudgeRouteBeforeGate(t *testing.T) {
 					t.Errorf("candidate changed %s != %s", head, s.workerHead)
 				}
 			}
-			holds := map[string]string{"not-done": "eval-failed", "missing": "judge-unreadable", "invalid": "judge-unreadable", "dirty": "judge-unreadable", "commit": "judge-unreadable", "no-grant": "judge-grant-absent"}
+			holds := map[string]string{"not-done": "eval-failed", "missing": "judge-unreadable", "invalid": "judge-unreadable", "dirty": "judge-unreadable", "commit": "judge-unreadable"}
 			// gate-fail and land-fail hold nothing: the refusal went back to the worker, whose
 			// returned run the order above shows.
 			if reason := holds[mode]; reason != "" {
@@ -388,7 +380,7 @@ func (s *judgeFormRefusalSteps) Run(ctx context.Context, req run.Request) (run.R
 func TestJudgeFormRefusalResumesSameSessionAndPasses(t *testing.T) {
 	for _, kind := range []string{"standalone", "evaluator"} {
 		t.Run(kind, func(t *testing.T) {
-			f, l, baseSteps := judgeRouteFixture(t, "pass", true)
+			f, l, baseSteps := judgeRouteFixture(t, "pass")
 			steps := &judgeFormRefusalSteps{judgeRouteSteps: baseSteps}
 			l.cfg.Steps = steps
 			if kind == "evaluator" {

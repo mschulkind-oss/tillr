@@ -45,11 +45,10 @@ An item may ask for an independent review with `judge="agent"` in its directive,
 workflow may declare a read-only evaluator node in `exit.evaluator_slot` (such as
 `planned-build@v1`, which runs `plan`, `work`, and `verify` by default on build work;
 naming `single-worker@v1` skips planning and that evaluator when one worker run is enough).
-Both require a covering unexpired grant (`tillr item grant issue`) before dispatch and a
-mapped seat; `tillr view` shows each grant's expiry time and warns from one hour before it
-lapses, and items waiting on an absent or expired grant appear as held (`judge-grant-absent`,
-naming any expired covering grant, when it expired, and `tillr item grant issue`) rather than
-running. The read-only judge runs after the fence check and before the gate; only a
+The selected evaluator needs a mapped seat and can judge only criteria whose stored
+claim class appears in its `judge_classes`. The shipped `verify` and compatibility
+`review` steps list only `verification-only`. The read-only judge runs after the
+fence check and before the gate; only a
 successful landing records the checked agent verdicts, without the mechanical
 verdict program. A workflow evaluator's `not-done` is a `verify-not-done` refusal (for both
 document items and filed requests): the loop pins the candidate commit the verifier read and
@@ -66,7 +65,7 @@ builder reports it cannot meet the findings within the plan (`RESULT: blocked` w
 [`planned-build@v1.json`](../../../../config/tillr/workflows/planned-build@v1.json)'s verify
 prompt). An opted-in item judge instead holds a document item's `not-done` as `eval-failed`,
 whereas on a filed request (`tillr item request`), an ordinary judge's `not-done` returns all
-`not-done` findings to the builder's same session with no operator hold. `judge-grant-absent`, `judge-unreadable`, and `eval-failed`
+`not-done` findings to the builder's same session with no operator hold. `judge-unreadable` and `eval-failed`
 are holds, not criterion verdicts. The
 [opted-in judge contract](../../../../tools/tillr-drain/README.md#opted-in-judgment-before-the-gate)
 explains the retained file, failure reasons, and candidate restoration.
@@ -266,7 +265,7 @@ dependencies on an existing item without rewriting the rest of its record or cha
 place in the queue. `tillr item idea` saves an owner idea,
 `tillr item doc-triage` files a one-document reconciliation run, and `tillr item` also
 provides `apply`, `list`, `show`, `order`, `state`, `close`, `reopen`, `decision`, `mail`,
-`grant`, `verdict`, and `judge`.
+`verdict` and `judge`.
 
 ### Take a review batch by hand
 
