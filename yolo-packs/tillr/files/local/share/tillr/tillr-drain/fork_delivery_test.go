@@ -195,7 +195,13 @@ func testForkDelivery(t *testing.T, fresh bool) {
 	if refs := git(t, f.root, "for-each-ref", "--format=%(refname)", marker); refs != "" {
 		t.Fatal("fork marker remains after sibling boundary compared")
 	}
-	// The main checkout's real driver can compare the cache against delivery.
+	// The driver checks recorded delivery, not the live patch ref. Give it a
+	// fixture pin for the landed commit and use the fixture repo as its remote.
+	pin := filepath.Join(f.root, "yolo-packs/fork-pins/pi")
+	if err := os.MkdirAll(filepath.Dir(pin), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, pin, fmt.Sprintf("%s\n%s\n%s\n", first.HeadSHA, f.root, f.forkBase))
 	driver, err := filepath.Abs("../../bin/pi-forks")
 	if err != nil {
 		t.Fatal(err)
