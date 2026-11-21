@@ -40,7 +40,7 @@ func recoveryFace(face string, args []string) int {
 		template = fs.String("brief-template", "", "the loop's brief template (default <root>/tools/tillr-run/backends/brief-template.md)")
 		questionsCmd = fs.String("questions-cmd", "", questionsCmdHelp)
 		replay = fs.String("replay", drain.DefaultReplayProgram, "the loop's failing-check replay program")
-		fixerGate = fs.String("fixer-gate", drain.DefaultFixerGateProgram, "the loop's full fixer gate program")
+		fixerGate = fs.String("fixer-gate", drain.DefaultFixerGateProgram, "the loop's named-check judge for trunk fixers")
 	}
 	if err := parseFlags(fs, args); err != nil {
 		return fail(err)

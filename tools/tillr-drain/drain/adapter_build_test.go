@@ -51,12 +51,16 @@ func TestStandardStepsKeepTheirBuildAfterAnAdapterLanding(t *testing.T) {
 		}
 	}
 	log := adapterStubs(t)
-	c := Candidate{ItemID: "item-a", LaneID: "lane-1", RunID: "run-1", Worktree: root, BaseSHA: strings.Repeat("1", 40), HeadSHA: strings.Repeat("2", 40)}
+	c := Candidate{ItemID: "item-a", LaneID: "lane-1", RunID: "run-1", Worktree: root, BaseSHA: strings.Repeat("1", 40), HeadSHA: runGit(t, root, "rev-parse", "HEAD")}
 	writeRunRecord(t, filepath.Join(root, ".tillr", "loop", c.RunID), "{}\n")
-	for _, program := range []string{steps.GateProgram, steps.LandProgram, steps.VerdictProgram, steps.fixerGate(c)} {
+	for _, program := range []string{steps.GateProgram, steps.LandProgram, steps.VerdictProgram, steps.FixerGateProgram} {
 		var extra []string
 		if strings.HasSuffix(program, " verdict") {
 			extra = append(extra, steps.verdictArgs("pass")...)
+		}
+		if program == steps.FixerGateProgram {
+			extra = append(extra, "--only", "fixture/check")
+			writeForkFile(t, filepath.Join(root, "tools", "fork-check.py"), "print('named check ran')\n")
 		}
 		code, _, span, err := steps.program(context.Background(), "fixture", root, program, c, extra...)
 		if err != nil || code != 0 {

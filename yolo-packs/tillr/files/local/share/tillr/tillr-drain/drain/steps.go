@@ -77,12 +77,8 @@ type ProcessSteps struct {
 	// `--since <watermark>` (or `--all` on the first run). Empty is a loop with no rolling
 	// tier; the watermark then never advances and no fixer is filed from a rolling red.
 	RollingProgram string
-	// FixerGateProgram is the full, UNTIERED gate a fixer runs instead of GateProgram.
-	// `{green}` is replaced with `--since <last_green_sha>` (or `--all` when no rolling
-	// run has proved a trunk commit yet). The exemption needs the full gate so a fixer
-	// cannot pass while the sibling breakage its range reaches is still red; the landing
-	// tier's deferred kinds are exactly what must run here. Empty leaves a fixer on the
-	// ordinary gate program, which is a loop that has not configured the exemption.
+	// FixerGateProgram judges one named legacy check after GateProgram has accepted
+	// the candidate. The drain supplies --only; empty cannot judge legacy names.
 	FixerGateProgram string
 }
 
@@ -299,9 +295,6 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 	if fork := strings.TrimPrefix(candidate.BaseRef, "refs/heads/patch/"); s.hooks == nil && fork != candidate.BaseRef {
 		program = "python3 " + filepath.Join(s.Root, "tools", "tillr-drain", "fork-gate.py") + " --fork " + fork
 	}
-	if IsTrunkFixer(candidate.ItemID) && s.FixerGateProgram != "" {
-		program = s.fixerGate(candidate)
-	}
 	code, outStr, span, err := s.programWithEnv(ctx, "gate", candidate.Worktree, program, candidate, env)
 	if err != nil {
 		return GateOutcome{}, err
@@ -378,12 +371,26 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 			return GateOutcome{}, err
 		}
 	}
-	if err := s.recordGateJudgment(ctx, candidate, gateStepJudgment{
+	judgment := gateStepJudgment{
 		FirstStallHold: firstStall,
 		TickID:         candidate.TickID, Run: runRef{RunID: candidate.RunID, ItemID: candidate.ItemID, LaneID: candidate.LaneID},
 		Outcome: outcome.Outcome, Program: span.Argv, ExitCode: exitCode(span),
 		DurationMS: outcome.DurationMS,
-	}); err != nil {
+	}
+	if candidate.deferGateJudgment && (outcome.Outcome == GatePassed || outcome.Outcome == GatePassedInherited || outcome.Outcome == GateFailed) {
+		outcome.finish = func(final GateOutcome) error {
+			judgment.Outcome, judgment.DurationMS = final.Outcome, final.DurationMS
+			switch final.Outcome {
+			case GatePassed, GatePassedInherited:
+				judgment.ExitCode = record.ExitOK
+			case GateFailed:
+				judgment.ExitCode = record.ExitNegative
+			case GateErrored:
+				judgment.ExitCode = record.ExitExternal
+			}
+			return s.recordGateJudgment(ctx, candidate, judgment)
+		}
+	} else if err := s.recordGateJudgment(ctx, candidate, judgment); err != nil {
 		return GateOutcome{}, err
 	}
 	outcome.StallHeld = firstStall != nil
@@ -546,18 +553,19 @@ func (s *ProcessSteps) programWithEnv(ctx context.Context, step, dir, program st
 	}
 	argv := s.programArgv(program, candidate, extra...)
 	var cmd *exec.Cmd
+	gateCheck := step == "gate" || step == "fixer-gate"
 	if s.isHookCommand(program) {
 		// The definition selects this exact executable, even at the legacy
 		// adapter path. Only CLI programs opt into the embedded adapter.
 		cmd = exec.CommandContext(ctx, argv[0], argv[1:]...)
 		baseEnv := os.Environ()
-		if step == "gate" {
+		if gateCheck {
 			baseEnv = withoutProcessEnv(baseEnv, "TILLR_SQLITE_TRACE", "PYTHONDONTWRITEBYTECODE")
 		}
 		cmd.Env = append(baseEnv, env...)
 	} else {
 		baseEnv := env
-		if step == "gate" {
+		if gateCheck {
 			// The gate runs candidate checks, not the loop's store: strip
 			// TILLR_SQLITE_TRACE and prior PYTHONDONTWRITEBYTECODE so checks
 			// see the same environment as the trunk proof and write no
@@ -589,7 +597,7 @@ func (s *ProcessSteps) programWithEnv(ctx context.Context, step, dir, program st
 	var stdout bytes.Buffer
 	var err error
 	recordedArgv := append([]string(nil), cmd.Args...)
-	if step == "gate" {
+	if gateCheck {
 		cmd.Stdout = &stdout
 		err = runSupervisedTree(cmd)
 	} else {
@@ -1028,13 +1036,6 @@ func (s *ProcessSteps) replayWorktree(ctx context.Context, rev string) (string, 
 // fixerGate answers the full gate program a fixer runs, with its range since the last
 // green. No watermark yet is the whole tree (`--all`): a first fixer has nothing proved
 // behind it, and a range from an empty base would plan nothing and pass.
-func (s *ProcessSteps) fixerGate(candidate Candidate) string {
-	green := strings.TrimSpace(candidate.FixerBaseSHA)
-	if green == "" {
-		return strings.ReplaceAll(s.FixerGateProgram, "{green}", "--all")
-	}
-	return strings.ReplaceAll(s.FixerGateProgram, "{green}", "--since "+green)
-}
 
 // RollingConfigured reports whether a rolling program is named.
 func (s *ProcessSteps) RollingConfigured() bool {

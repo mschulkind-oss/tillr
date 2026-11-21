@@ -10,7 +10,7 @@ leaves hooks unset; explicit step programs keep their existing behavior.
   tools/tillr-loop/tillr-loop gate    [--registry <check-registry.json>] [--since <sha> | --all] <candidate flags>
   tools/tillr-loop/tillr-loop land    [--observed-trunk <sha>] [--base-ref <ref>] [--message-from <sha>] <candidate flags>
   tools/tillr-loop/tillr-loop verdict --verdict pass <candidate flags>
-  tools/tillr-loop/tillr-loop fixer-gate (--since <sha> | --all) <candidate flags>
+  tools/tillr-loop/tillr-loop fixer-gate --only <check> <candidate flags>
   tools/tillr-loop/tillr-loop replay --only <check>
   tools/tillr-loop/tillr-loop rolling (--since <sha> | --all)
   tools/tillr-loop/tillr-loop describe                       # capabilities, runs nothing
@@ -699,21 +699,15 @@ def parser_for(kind: str) -> argparse.ArgumentParser:
     add_candidate_flags(parser)
     add_common_flags(parser)
     add_binary_flags(parser)
-    if kind in ("gate", "fixer-gate", "self-check"):
+    if kind == "fixer-gate":
+        parser.add_argument("--only", required=True, help="the proof's named check selector")
+    if kind in ("gate", "self-check"):
         parser.add_argument("--registry", default=None,
                             help="the check registry tillr-gate plan reads (default: "
                                  f"${REGISTRY_ENV}, else a registry exported into the run's scratch)")
         parser.add_argument("--gate-program", default=None,
                             help="the program `tillr-gate run --gate` runs (default: "
                                  f"{DEFAULT_GATE_PROGRAM})")
-        # A trunk fixer's full gate: the drain's `--fixer-gate` replaces `{green}` with one of
-        # these. They widen the default program's remaining checks to the untiered range
-        # since the last green trunk, or the whole tree when there is none.
-        full = parser.add_mutually_exclusive_group(required=kind == "fixer-gate")
-        full.add_argument("--since", default=None, metavar="SHA",
-                          help="judge the untiered range since SHA, the fixer's last green trunk")
-        full.add_argument("--all", action="store_true",
-                          help="judge the whole tree untiered: a fixer with no green trunk behind it")
     if kind in ("land", "self-check"):
         parser.add_argument("--base-ref", default=None, help="the branch the base sha is on")
         parser.add_argument("--message-from", default=None,
@@ -740,23 +734,13 @@ def gate_program(args: argparse.Namespace) -> str | None:
     """
     if not hasattr(args, "gate_program"):
         return None
-    full = ["--since", args.since] if args.since else (["--all"] if args.all else [])
     if args.gate_program:
-        if full:
-            # A named program receives none of the adapter's own range words, so accepting
-            # the range would judge a narrower change than the caller asked for.
-            raise Refusal(
-                EXIT_USAGE,
-                f"{full[0]} widens the default gate program, and --gate-program names "
-                "another one: name the range inside that program instead",
-            )
         return args.gate_program
     root = resolve_root(args.root, args.worktree)
     logs = Path(args.work_dir or str(Path(root) / ".tillr" / "loop")) / args.run / "change-logs"
-    program = DEFAULT_GATE_PROGRAM.format(
+    return DEFAULT_GATE_PROGRAM.format(
         base=shlex.quote(args.base), head=shlex.quote(args.head),
         runner=shlex.quote(args.tillr_gate), logs=shlex.quote(str(logs)))
-    return " ".join([program, *(shlex.quote(word) for word in full)])
 
 
 def context(args: argparse.Namespace) -> Ctx:
@@ -840,8 +824,16 @@ def describe() -> int:
 
 def revision_check(kind: str, args: argparse.Namespace) -> int:
     """Run the drain's historical revision check in the supplied cwd and environment."""
-    if kind == "replay":
-        flags = ["--replay", "--only", args.only]
+    if kind in ("replay", "fixer-gate"):
+        flags = ["--replay", "--only=" + args.only] if kind == "fixer-gate" else ["--replay", "--only", args.only]
+        if kind == "fixer-gate":
+            # Unlike historical replay, the named phase runs in a live candidate lane.
+            actual = subprocess.run(["git", "rev-parse", "HEAD"], cwd=args.worktree,
+                                    capture_output=True, text=True)
+            if actual.returncode or actual.stdout.strip() != args.head:
+                raise Refusal(EXIT_EXTERNAL, "named check could not judge: --head is not checked out")
+            os.chdir(args.worktree)
+            flags.append("--fixer")
     else:
         flags = ["--tier", "rolling", *(["--all"] if args.all else ["--since", args.since])]
     try:
@@ -869,13 +861,12 @@ def main(argv: list[str]) -> int:
     if args.check_argv:
         return EXIT_PASS
     try:
-        if kind in ("replay", "rolling"):
+        if kind in ("replay", "rolling", "fixer-gate"):
             return revision_check(kind, args)
         ctx = context(args)
         if kind == "self-check":
             return print_self_check(ctx)
-        face = "gate" if kind == "fixer-gate" else kind
-        return execute(face, COMPOSERS[face](ctx, dry=False))
+        return execute(kind, COMPOSERS[kind](ctx, dry=False))
     except Refusal as refusal:
         print(f"tillr-loop {kind}: {refusal.message}", file=sys.stderr)
         return refusal.code

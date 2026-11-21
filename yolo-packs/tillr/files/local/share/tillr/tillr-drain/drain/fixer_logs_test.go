@@ -316,7 +316,7 @@ exit 1
 	}
 
 	var loopRes LoopResult
-	if err := l.acquitRedWithPaths(context.Background(), cand, gateOut, base, []string{"go-tool/tools-trunk"}, []string{"go-tool/tools-trunk"}, &loopRes); err != nil {
+	if _, err := l.acquitRedWithPaths(context.Background(), &cand, gateOut, base, []string{"go-tool/tools-trunk"}, []string{"go-tool/tools-trunk"}, &loopRes); err != nil {
 		t.Fatalf("acquitRedWithPaths: %v", err)
 	}
 	fixerID := TrunkFixerID(base)

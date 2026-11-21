@@ -27,6 +27,10 @@ func TestTillrLoopDefinitionHookFlagParity(t *testing.T) {
 	f, _ := passFixture(t, "item-a")
 	adapterStubs(t)
 	worktree := filepath.Join(f.laneRoot, "lane-1", WorktreeDir)
+	head := runGit(t, worktree, "rev-parse", "HEAD")
+	if err := os.MkdirAll(filepath.Join(worktree, "tools"), 0755); err != nil {
+		t.Fatal(err)
+	}
 	hooks, _ := hookStub(t, []string{"gate", "land", "verdict", "fixer-gate", "replay", "rolling"}, "")
 	hooks.Argv = []string{"python3", adapter}
 	steps := &ProcessSteps{Root: f.root, Store: f.storePath, LaneRoot: f.laneRoot, Now: time.Now}
@@ -40,7 +44,8 @@ func TestTillrLoopDefinitionHookFlagParity(t *testing.T) {
 			for i, word := range args {
 				word = strings.ReplaceAll(word, "<worktree>", worktree)
 				word = strings.ReplaceAll(word, "<root>", f.root)
-				args[i] = strings.ReplaceAll(word, "<store>", f.storePath)
+				word = strings.ReplaceAll(word, "<store>", f.storePath)
+				args[i] = strings.ReplaceAll(word, "<head>", head)
 			}
 			values := map[string]string{}
 			for i := 0; i < len(args); i++ {
@@ -49,7 +54,7 @@ func TestTillrLoopDefinitionHookFlagParity(t *testing.T) {
 					i++
 				}
 			}
-			c := Candidate{ItemID: values["--item"], LaneID: values["--lane"], RunID: values["--run"], Worktree: values["--worktree"], BaseSHA: values["--base"], HeadSHA: values["--head"], ObservedTrunk: values["--observed-trunk"], BaseRef: values["--base-ref"], WorkerHeadSHA: values["--message-from"], FixerBaseSHA: values["--since"]}
+			c := Candidate{ItemID: values["--item"], LaneID: values["--lane"], RunID: values["--run"], Worktree: values["--worktree"], BaseSHA: values["--base"], HeadSHA: values["--head"], ObservedTrunk: values["--observed-trunk"], BaseRef: values["--base-ref"], WorkerHeadSHA: values["--message-from"]}
 			if tc.Face == "land" || tc.Face == "verdict" {
 				writeRunRecord(t, RunDir(f.root, c.RunID), "{}\n")
 			}
@@ -60,8 +65,10 @@ func TestTillrLoopDefinitionHookFlagParity(t *testing.T) {
 				if err != nil || out.Outcome != GatePassed {
 					t.Fatalf("gate: %+v / %v", out, err)
 				}
-				if IsTrunkFixer(c.ItemID) {
-					face = "fixer-gate"
+			case "fixer-gate":
+				writeForkFile(t, filepath.Join(worktree, "tools", "fork-check.py"), "print('named check ran')\n")
+				if answer, output := steps.fixerCheck(context.Background(), c, values["--only"]); answer != "pass" {
+					t.Fatalf("named check %s: %s", answer, output)
 				}
 			case "land":
 				out, err := steps.Land(context.Background(), c)

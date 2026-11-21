@@ -27,7 +27,7 @@ func hookFlags(name string) []string {
 	case "verdict":
 		return append(candidate, "--store", "--verdict")
 	case "fixer-gate":
-		return append(candidate, "--all", "--since")
+		return append(candidate, "--only")
 	case "replay":
 		return []string{"--only"}
 	case "rolling":
@@ -57,7 +57,7 @@ func (s *ProcessSteps) ConfigureHooks(hooks *definition.Hooks, explicit map[stri
 		suffix  string
 	}{
 		{"gate", &s.GateProgram, ""}, {"land", &s.LandProgram, ""}, {"verdict", &s.VerdictProgram, ""},
-		{"replay", &s.ReplayProgram, " --only {only}"}, {"rolling", &s.RollingProgram, " {since}"}, {"fixer-gate", &s.FixerGateProgram, " {green}"},
+		{"replay", &s.ReplayProgram, " --only {only}"}, {"rolling", &s.RollingProgram, " {since}"}, {"fixer-gate", &s.FixerGateProgram, ""},
 	} {
 		if explicit[step.name] {
 			continue

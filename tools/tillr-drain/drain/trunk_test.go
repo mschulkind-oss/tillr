@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -41,6 +40,9 @@ func TestGateCodePathsAreNeverInAFixerFence(t *testing.T) {
 		"tests/fork-check.test.py",
 		"tools/tillr-gate/run.go",
 		"tools/tillr-loop/tillr-loop",
+		"tools/tillr-drain/drain/tillr-loop.py",
+		"tools/tillr-drain/drain/fixer_gate.go",
+		"yolo-packs/tillr/files/local/share/tillr/tillr-drain/drain/fixer_gate.go",
 		"tools/preflight-declarations.json",
 	} {
 		if !GateCode(path) {
@@ -133,21 +135,5 @@ func TestGateFailureContextReadsTheVerdictAndPlan(t *testing.T) {
 	}
 	if !reflect.DeepEqual(watches["unit"], []string{"src/", "out/"}) {
 		t.Fatalf("the unit check watches %v, want [src/ out/]", watches["unit"])
-	}
-}
-
-// A fixer runs the full, untiered gate over the range since the last green, never the
-// landing tier the ordinary gate uses: the landing tier's deferred kinds are exactly the
-// sibling breakage a fixer must prove green. With no watermark yet the range is the whole
-// tree, because a range from an empty base would plan nothing and pass.
-func TestFixerGateRunsSinceTheLastGreenOrTheWholeTree(t *testing.T) {
-	steps := &ProcessSteps{FixerGateProgram: "python3 tools/fork-check.py {green} --lock-timeout 30"}
-	got := steps.fixerGate(Candidate{ItemID: "fixer-main-deadbeef", FixerBaseSHA: "0123456789abcdef"})
-	if !strings.Contains(got, "--since 0123456789abcdef") {
-		t.Fatalf("the fixer gate is %q, want --since <last green>", got)
-	}
-	got = steps.fixerGate(Candidate{ItemID: "fixer-main-deadbeef"})
-	if !strings.Contains(got, "--all") {
-		t.Fatalf("a first fixer's gate is %q, want --all", got)
 	}
 }

@@ -26,7 +26,7 @@ else:
 `)
 	steps := &ProcessSteps{Root: root, Store: filepath.Join(root, "absent-store"),
 		GateProgram:      "python3 " + program + " gate",
-		FixerGateProgram: "python3 " + program + " gate {green}",
+		FixerGateProgram: "python3 " + program + " fixer-gate",
 		LandProgram:      "python3 " + program + " land", VerdictProgram: "python3 " + program + " verdict"}
 	var warnings bytes.Buffer
 	if err := steps.CheckPrograms(context.Background(), &warnings); err != nil {
@@ -40,8 +40,8 @@ else:
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
-	if len(lines) != 6 {
-		t.Fatalf("want gate, land, two verdicts, two fixer ranges; got %s", raw)
+	if len(lines) != 5 {
+		t.Fatalf("want gate, land, two verdicts and one named fixer check; got %s", raw)
 	}
 	for i, line := range lines {
 		var argv []string
@@ -55,9 +55,7 @@ else:
 		case 2, 3:
 			want = append(want, "--store", "--verdict")
 		case 4:
-			want = append(want, "--all")
-		case 5:
-			want = append(want, "--since")
+			want = append(want, "--only", "fixture/check")
 		}
 		for _, flag := range want {
 			found := false
@@ -84,7 +82,7 @@ func TestStartupChecksTheRealAdapterWithoutCandidateArtifacts(t *testing.T) {
 	root := scratchUnderDurable(t)
 	steps := &ProcessSteps{Root: root, Store: filepath.Join(root, "absent-store"),
 		GateProgram: "python3 " + adapter + " gate", LandProgram: "python3 " + adapter + " land",
-		VerdictProgram: "python3 " + adapter + " verdict", FixerGateProgram: "python3 " + adapter + " gate {green}"}
+		VerdictProgram: "python3 " + adapter + " verdict", FixerGateProgram: "python3 " + adapter + " fixer-gate"}
 	var warnings bytes.Buffer
 	if err := steps.CheckPrograms(context.Background(), &warnings); err != nil {
 		t.Fatal(err)

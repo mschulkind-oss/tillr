@@ -23,6 +23,10 @@ type fixerLandSteps struct {
 	landedSHA string
 }
 
+func (*fixerLandSteps) fixerCheck(context.Context, Candidate, string) (string, string) {
+	return "pass", ""
+}
+
 func (s *fixerLandSteps) Land(ctx context.Context, c Candidate) (LandOutcome, error) {
 	if c.HeadSHA != "" {
 		s.landedSHA = c.HeadSHA

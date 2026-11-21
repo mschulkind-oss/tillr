@@ -78,16 +78,15 @@ func TestTheReplayProgramIsHandedTheSharedForkRoot(t *testing.T) {
 	}
 }
 
-// A fixer's full gate replaces the ordinary gate program, which is tillr-loop and sets the root
-// itself, so nothing else hands the fixer's fork-check one.
+// Named checks run in the candidate lane but can need the shared fork root.
 func TestTheFixerGateProgramIsHandedTheSharedForkRoot(t *testing.T) {
 	f, _ := passFixture(t, "item-a")
 	program, record := forkRootRecorder(t, "0")
 	worktree := t.TempDir()
-	steps := &ProcessSteps{Root: f.root, Store: f.storePath, FixerGateProgram: program + " {green}", Now: time.Now}
-	_, err := steps.Gate(context.Background(), Candidate{ItemID: TrunkFixerID("0123456789abcdef"), RunID: "run-1", Worktree: worktree})
-	if err != nil {
-		t.Fatalf("the fixer gate failed: %v", err)
+	steps := &ProcessSteps{Root: f.root, Store: f.storePath, FixerGateProgram: program, Now: time.Now}
+	answer, output := steps.fixerCheck(context.Background(), Candidate{ItemID: TrunkFixerID("0123456789abcdef"), RunID: "run-1", Worktree: worktree}, "check")
+	if answer != "pass" {
+		t.Fatalf("the fixer check %s: %s", answer, output)
 	}
 	forksRoot, cwd := readRecord(t, record)
 	if forksRoot != f.root {

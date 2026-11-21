@@ -57,9 +57,7 @@ func (s *ProcessSteps) CheckPrograms(ctx context.Context, report io.Writer) erro
 	}
 	if s.FixerGateProgram != "" {
 		c.ItemID = TrunkFixerID(sha)
-		checks = append(checks, programCheck{"fixer gate", s.fixerGate(c), c, nil})
-		c.FixerBaseSHA = sha
-		checks = append(checks, programCheck{"fixer gate", s.fixerGate(c), c, nil})
+		checks = append(checks, programCheck{"fixer gate", s.FixerGateProgram, c, []string{"--only", "fixture/check"}})
 	}
 	if report != nil {
 		for _, check := range []programCheck{checks[0], checks[1], checks[2]} {
@@ -70,7 +68,7 @@ func (s *ProcessSteps) CheckPrograms(ctx context.Context, report io.Writer) erro
 		}
 	}
 	// Support is cached by configured command, not executable: an adapter's faces can
-	// differ. Two fixer range expansions share one negotiated contract.
+	// differ.
 	supported := map[string]bool{}
 	for _, check := range checks {
 		// Empty definition steps retain the runtime empty-step behavior. Their
@@ -79,9 +77,6 @@ func (s *ProcessSteps) CheckPrograms(ctx context.Context, report io.Writer) erro
 			continue
 		}
 		key := check.program
-		if check.name == "fixer gate" {
-			key = s.FixerGateProgram
-		}
 		ok, known := supported[key]
 		if !known {
 			fields := strings.Fields(check.program)

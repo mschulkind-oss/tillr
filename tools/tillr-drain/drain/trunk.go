@@ -38,10 +38,8 @@ import (
 //     first, fenced to what the suspect change and the failing checks can reach, and
 //     forbidden from editing the gate's own code so it cannot pass by weakening the judge.
 //
-// The recursion exemption keeps the fixer from healing itself: a fixer is never acquitted
-// by a base replay (its whole purpose is to be red on the base), it gates the full
-// untiered range since the last green, and it rebases onto the trunk before it gates so
-// the tree that lands is the tree that was judged.
+// A fixer cannot inherit a failure it was filed to repair. It rebases onto the trunk
+// before its ordinary gate, then proves the named repairs on that candidate tree.
 
 const (
 	// TrunkFixerPrefix is the item-id prefix of a fixer item, so a store read can answer
@@ -73,15 +71,9 @@ const (
 // record is append-only, so its compatibility lock flags are ignored and omitted.
 const DefaultRollingProgram = "python3 tools/fork-check.py --tier rolling {since}"
 
-// DefaultFixerGateProgram is the full, untiered gate a trunk fixer runs instead of the
-// ordinary gate. It is the repository's gate adapter, not fork-check itself, for two
-// reasons the drain's own contract imposes: the loop appends the candidate's flags to every
-// gate program, which fork-check refuses as unrecognized arguments, and the land step after
-// it needs the `gate.verdict` record only `tillr-gate` writes. `{green}` becomes `--since
-// <last green>` or `--all`, which the adapter hands to its judge as the untiered range. The
-// path is relative because a gate runs in the candidate's worktree, whose copy of the
-// adapter a fixer cannot edit (GateCodePaths).
-const DefaultFixerGateProgram = "python3 tools/tillr-loop/tillr-loop gate {green}"
+// DefaultFixerGateProgram judges a named check after the ordinary candidate gate passes.
+// The drain supplies the candidate flags and the proof's selector as --only.
+const DefaultFixerGateProgram = "python3 tools/tillr-loop/tillr-loop fixer-gate"
 
 // DefaultReplayProgram re-runs a red gate's failing checks on the base, `{only}` being the
 // comma-separated check ids. It is handed no candidate flags: it judges a revision.
@@ -97,12 +89,15 @@ var GateCodePaths = []string{
 	"tools/tillr-gate/",
 	"tools/gate/",
 	"tools/tillr-loop/",
-	"tools/gate/",
+	"tools/tillr-drain/drain/tillr-loop.py",
+	"tools/tillr-drain/drain/fixer_gate.go",
 	"tests/fast-tree-in-done.test.py",
 	"tools/preflight-declarations.json",
 	"tools/gate-timing-declarations.json",
 	"yolo-packs/tillr/files/local/share/tillr/tillr-gate/",
 	"yolo-packs/tillr/files/local/share/tillr/tillr-loop/",
+	"yolo-packs/tillr/files/local/share/tillr/tillr-drain/drain/tillr-loop.py",
+	"yolo-packs/tillr/files/local/share/tillr/tillr-drain/drain/fixer_gate.go",
 }
 
 // TrunkFixerID answers the item id for one red sha: `fixer-main-<red_sha12>`.
@@ -510,11 +505,25 @@ type trunkReading struct {
 // for a check the trunk had long since repaired. The tip run's recorded passes answer for
 // the tip where they cover a check; only the rest is replayed there.
 //
-// A fixer item is never acquitted here: its whole purpose is to be red on the base, and
-// replaying its own failure would let it heal itself by doing nothing.
+// A fixer cannot inherit any check it was filed to repair. A mixed refusal is
+// returned whole, not split into a new verdict and an inherited failure.
 func (l *Loop) trunkAlreadyRed(ctx context.Context, candidate Candidate, gate GateOutcome) (trunkReading, error) {
 	if IsTrunkFixer(candidate.ItemID) {
-		return trunkReading{}, nil
+		// A worker's trunk obstacle is not an ordinary gate verdict.
+		if gate.Outcome != GateFailed {
+			return trunkReading{}, nil
+		}
+		named, err := l.fixerNamedChecks(ctx, candidate.ItemID)
+		if err != nil {
+			return trunkReading{}, err
+		}
+		for _, failed := range gate.FailingChecks {
+			for _, name := range named {
+				if fixerCheckOverlaps(name, failed, candidate.Worktree) {
+					return trunkReading{Evidence: "the fixer names " + name}, nil
+				}
+			}
+		}
 	}
 	replay, ok := l.cfg.Steps.(ReplayStep)
 	if !ok || len(gate.FailingChecks) == 0 {
@@ -536,6 +545,9 @@ func (l *Loop) trunkAlreadyRed(ctx context.Context, candidate Candidate, gate Ga
 		return reading, err
 	}
 	reading.Red, reading.CheckLogs = out.Red, out.CheckLogs
+	if IsTrunkFixer(candidate.ItemID) {
+		reading.Red = gate.FailingChecks
+	}
 	if !allIn(gate.FailingChecks, out.Red) {
 		return reading, nil
 	}
@@ -562,7 +574,10 @@ func (l *Loop) trunkAlreadyRed(ctx context.Context, candidate Candidate, gate Ga
 	}
 	if allIn(gate.FailingChecks, tipOut.Red) {
 		reading.CheckLogs = joinCheckLogs(out.CheckLogs, tipOut.CheckLogs)
-		reading.RedSHA, reading.Red, reading.Confirmed = tip, tipOut.Red, true
+		reading.RedSHA, reading.Confirmed = tip, true
+		if !IsTrunkFixer(candidate.ItemID) {
+			reading.Red = tipOut.Red
+		}
 		return reading, nil
 	}
 	reading.RepairedAt, reading.CheckLogs = tip, nil
@@ -832,7 +847,8 @@ func (l *Loop) settleTrunkAlreadyRed(ctx context.Context, candidate *Candidate, 
 			gate.CheckLogs[id] = ref
 		}
 	}
-	return "", true, l.acquitRedWithPaths(ctx, *candidate, gate, reading.RedSHA, reading.Red, intersecting, result)
+	held, err := l.acquitRedWithPaths(ctx, candidate, gate, reading.RedSHA, reading.Red, intersecting, result)
+	return "", held, err
 }
 
 // intersectingRedPaths returns the sorted unique candidate paths that intersect any red
@@ -945,10 +961,11 @@ func (l *Loop) promoteVerdictPassInherited(_ context.Context, candidate Candidat
 // acquitRed records a replay's red base against a candidate: the fixer filed or attached,
 // the trunk refusal recorded, and the item held blocked behind the fixer.
 func (l *Loop) acquitRed(ctx context.Context, candidate Candidate, gate GateOutcome, redSHA string, redChecks []string, result *LoopResult) error {
-	return l.acquitRedWithPaths(ctx, candidate, gate, redSHA, redChecks, nil, result)
+	_, err := l.acquitRedWithPaths(ctx, &candidate, gate, redSHA, redChecks, nil, result)
+	return err
 }
 
-func (l *Loop) acquitRedWithPaths(ctx context.Context, candidate Candidate, gate GateOutcome, redSHA string, redChecks []string, intersectingPaths []string, result *LoopResult) error {
+func (l *Loop) acquitRedWithPaths(ctx context.Context, candidate *Candidate, gate GateOutcome, redSHA string, redChecks []string, intersectingPaths []string, result *LoopResult) (bool, error) {
 	// The candidate's diff starts at its red base; it cannot name the earlier
 	// commits that broke that base. Include the whole range since proved green.
 	var green string
@@ -956,12 +973,12 @@ func (l *Loop) acquitRedWithPaths(ctx context.Context, candidate Candidate, gate
 		var err error
 		green, err = heavyGreen(ctx, l.cfg.Root)
 		if err != nil {
-			return err
+			return false, err
 		}
 	} else {
 		state, err := l.loadRollingState(ctx)
 		if err != nil {
-			return err
+			return false, err
 		}
 		green = state.WatermarkSHA
 	}
@@ -973,34 +990,51 @@ func (l *Loop) acquitRedWithPaths(ctx context.Context, candidate Candidate, gate
 		// already names attaches to it, so the search is not repeated per candidate.
 		open, err := l.openFixerFor(ctx, redChecks)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if open == "" {
 			if replay, ok := l.cfg.Steps.(ReplayStep); ok {
-				redSHA, note = l.culpritLanding(ctx, replay, candidate, green, redSHA, redChecks)
+				redSHA, note = l.culpritLanding(ctx, replay, *candidate, green, redSHA, redChecks)
 			}
 		}
 	}
-	fixerID, err := l.fileTrunkFixerNoted(ctx, redSHA, redChecks, gate, note)
-	if err != nil {
-		return err
+	// Check and establish fixer-to-fixer waits serially: simultaneous settlements
+	// must not each see the other fixer as unblocked and create a cycle.
+	if IsTrunkFixer(candidate.ItemID) {
+		l.fixerWaitMu.Lock()
+		defer l.fixerWaitMu.Unlock()
 	}
-	if err := l.recordTrunkRefusal(ctx, candidate, redSHA, redChecks, fixerID); err != nil {
-		return err
+	fixerID, err := l.routeTrunkFixer(ctx, redSHA, redChecks, gate, note, candidate.ItemID)
+	if err != nil {
+		return false, err
+	}
+	if fixerID == candidate.ItemID {
+		detail := fmt.Sprintf("%s already failed on trunk at %s and was added to this fixer because its change touches paths the check reads", strings.Join(redChecks, ", "), shortSHA(redSHA))
+		l.reportf("loop: %s: %s\n", candidate.ItemID, detail)
+		for _, check := range redChecks {
+			if ref := gate.CheckLogs[check]; ref != "" {
+				detail += "\n" + check + " output (" + ref + "): " + heavyBrief(legacyLogTail(ref))
+			}
+		}
+		candidate.RefusalDetail = strings.TrimSpace(candidate.RefusalDetail + " " + detail)
+		return false, nil
+	}
+	if err := l.recordTrunkRefusal(ctx, *candidate, redSHA, redChecks, fixerID); err != nil {
+		return false, err
 	}
 	reason := "trunk-already-red: " + strings.Join(redChecks, ", ")
 	if len(intersectingPaths) > 0 {
 		reason += " (fixer " + fixerID + "; paths: " + strings.Join(intersectingPaths, ", ") + ")"
 	}
 	if err := l.cfg.Steps.ItemState(ctx, candidate.ItemID, candidate.RunID, StateBlocked, item.WaitingOn{Waiter: "item:" + fixerID, Reason: reason}); err != nil {
-		return err
+		return false, err
 	}
 	l.mu.Lock()
 	result.TrunkAcquitted++
 	l.mu.Unlock()
 	l.reportf("loop: %s acquitted as trunk-already-red: replay found %s red on %s, so %s is held blocked by %s\n",
 		candidate.ItemID, strings.Join(redChecks, ", "), shortSHA(redSHA), candidate.ItemID, fixerID)
-	return nil
+	return true, nil
 }
 
 // culpritLanding answers the commit a confirmed trunk red is attributed to, and a note
@@ -1118,6 +1152,10 @@ func (l *Loop) fileTrunkFixer(ctx context.Context, redSHA string, failing []stri
 // (or could not be) attributed, and the failing check's recorded output. A new fixer
 // carries it in its criteria; an attachment keeps the existing brief.
 func (l *Loop) fileTrunkFixerNoted(ctx context.Context, redSHA string, failing []string, gate GateOutcome, note string) (string, error) {
+	return l.routeTrunkFixer(ctx, redSHA, failing, gate, note, "")
+}
+
+func (l *Loop) routeTrunkFixer(ctx context.Context, redSHA string, failing []string, gate GateOutcome, note, waitingCandidate string) (string, error) {
 	fixerID := TrunkFixerID(redSHA)
 	paths, err := l.expandFixerPaths(ctx, redSHA, append(append([]string{}, gate.SuspectPaths...), CheckWatches(gate.CheckWatches, failing)...))
 	if err != nil {
@@ -1222,6 +1260,18 @@ func (l *Loop) fileTrunkFixerNoted(ctx context.Context, redSHA string, failing [
 		rows.Close()
 		if readErr != nil {
 			return readErr
+		}
+		if IsTrunkFixer(waitingCandidate) && attached != "" && attached != waitingCandidate {
+			cycle, err := fixerWaitReaches(tx.Reader(), attached, waitingCandidate)
+			if err != nil {
+				return err
+			}
+			if cycle {
+				attached = waitingCandidate
+				if err := tx.QueryRow(`SELECT i.allowed_paths,c.text FROM items i JOIN item_criteria c USING(item_id) WHERE i.item_id=? AND c.criterion_id='trunk-green'`, attached).Scan(&oldFence, &oldText); err != nil {
+					return err
+				}
+			}
 		}
 		if attached != "" {
 			fixerID = attached
@@ -1679,18 +1729,6 @@ func (l *Loop) preRebaseFixer(ctx context.Context, candidate Candidate) (Candida
 	}
 	if mainSHA == "" || mainSHA == candidate.BaseSHA {
 		return candidate, nil
-	}
-	// The fixer's gate is the full untiered range since the last green. The watermark is
-	// read once here, on the tick's own goroutine, so the gate step never opens a store
-	// read while a sibling lane is writing.
-	if l.gatePolicy.LandingStrategy == "after-merge" {
-		green, err := heavyGreen(ctx, l.cfg.Root)
-		if err != nil {
-			return candidate, err
-		}
-		candidate.FixerBaseSHA = green
-	} else if state, err := l.loadRollingState(ctx); err == nil {
-		candidate.FixerBaseSHA = state.WatermarkSHA
 	}
 	if _, err := l.git(ctx, candidate.Worktree, "rebase", mainSHA); err != nil {
 		return candidate, l.abortFixerRebase(ctx, candidate, mainSHA, err)
