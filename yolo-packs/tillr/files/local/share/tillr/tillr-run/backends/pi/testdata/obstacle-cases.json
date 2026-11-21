@@ -42,6 +42,27 @@
   "kind": "fence"
  },
  {
+  "name": "fence path list with backticks and newlines",
+  "report": "- **OBSTACLE:** fence\n- **PATHS:** `tools/new.go`, `.tillr.toml`\n  - `tests/new/`\n- **EVIDENCE:** needed\nRESULT: blocked",
+  "ending": true,
+  "kind": "fence"
+ },
+ {
+  "name": "fence prose",
+  "report": "OBSTACLE: fence\nPATHS: The separately staged pi fork checkout (`.forks/lanes/<fork-lane>/pi/`) and delivery ref (`refs/heads/patch/pi`); publication of `refs/heads/patch/pi-manage-todo-list` to its configured remote.\nEVIDENCE: needed\nRESULT: blocked",
+  "ending": false
+ },
+ {
+  "name": "fence Git ref and placeholder mixed with a path",
+  "report": "OBSTACLE: fence\nPATHS: tests/new_test.py, `.forks/lanes/<fork-lane>/pi/`, refs/heads/patch/pi\nEVIDENCE: needed\nRESULT: blocked",
+  "ending": false
+ },
+ {
+  "name": "fence glob is not a prefix",
+  "report": "OBSTACLE: fence\nPATHS: tools/*\nEVIDENCE: needed\nRESULT: blocked",
+  "ending": false
+ },
+ {
   "name": "fence absolute path",
   "report": "OBSTACLE: fence\nPATHS: /etc/passwd\nEVIDENCE: needed\nRESULT: blocked",
   "ending": false

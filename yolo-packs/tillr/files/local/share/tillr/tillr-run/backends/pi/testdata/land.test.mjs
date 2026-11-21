@@ -131,6 +131,13 @@ test('registered land and obstacle settle through pi as promises, parking and re
   assert.equal(settled.kind, 'failed');
 });
 
+test('a fence obstacle call refuses invalid entries without writing an offer', (t) => {
+  const { cwd, base, refuses, forbidden } = landFixture(t);
+  const paths = 'tests/new.go, refs/heads/patch/pi, .forks/lanes/<fork-lane>/pi/';
+  refuses(() => executeObstacle('call', { kind: 'fence', paths, evidence: 'needed' }, cwd, join(cwd, '..'), base, forbidden),
+    /refs\/heads\/patch\/pi.*<fork-lane>.*Provide repository-relative paths/);
+});
+
 test('an offer whose call already has a result is stale and does not strand the run', (t) => {
   const { land, offer, change, put } = landFixture(t);
   const head = change();

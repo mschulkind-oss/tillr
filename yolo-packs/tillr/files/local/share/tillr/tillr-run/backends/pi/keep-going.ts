@@ -71,9 +71,34 @@ const FIELDS = new Set(["OBSTACLE", ...Object.values(OBSTACLE_REQUIRED).flat()])
 function fieldLine(line: string): [string, string] | undefined {
 	const at = line.indexOf(":");
 	if (at < 0) return undefined;
-	const name = line.slice(0, at).replace(/^[\s*`-]+|[\s*`-]+$/g, "").toUpperCase();
+	const label = line.slice(0, at).trim();
+	const name = label.replace(/^[\s*`-]+|[\s*`-]+$/g, "").toUpperCase();
 	if (!FIELDS.has(name)) return undefined;
-	return [name, line.slice(at + 1).trim().replace(/^[*`]+|[*`]+$/g, "").trim()];
+	let value = line.slice(at + 1);
+	if (name === "PATHS") {
+		// Close **PATHS:** markup without stripping punctuation from an entry.
+		const bare = label.replace(/^[-*] /, "").trim();
+		const mark = ["**", "*", "`"].find((candidate) => bare.startsWith(candidate));
+		if (mark && !bare.endsWith(mark) && value.startsWith(mark)) value = value.slice(mark.length);
+		return [name, value.trim()];
+	}
+	return [name, value.trim().replace(/^[*`]+|[*`]+$/g, "").trim()];
+}
+
+// Keep this grammar in sync with fenceObstaclePaths in the drain. A new path need not
+// exist yet, but a sentence is one bad entry, never a list of permissions.
+export function fencePathsProblem(value: string): string {
+	const ask = "Provide repository-relative paths separated by commas or newlines, not prose, Git refs, or placeholders";
+	const entries = value.split("\n").flatMap((line) => line.trim().replace(/^[-*] /, "").split(","))
+		.map((entry) => entry.trim()).filter(Boolean);
+	const bad = entries.filter((entry) => {
+		const path = entry.length >= 2 && entry.startsWith("`") && entry.endsWith("`") ? entry.slice(1, -1) : entry;
+		const parts = (path.endsWith("/") ? path.slice(0, -1) : path).split("/");
+		return /[^\p{L}\p{M}\p{N}._+@/\-]/u.test(path) || parts.some((part) => part === "" || part === "." || part === "..") ||
+			parts[0] === "refs" || parts[0] === ".git";
+	});
+	if (bad.length) return `the fence obstacle has invalid \`PATHS:\` entries: ${bad.map((entry) => JSON.stringify(entry)).join(", ")}. ${ask}`;
+	return entries.length ? "" : `the fence obstacle has no \`PATHS:\` entries. ${ask}`;
 }
 
 // obstacleProblem answers what makes a blocked report's obstacle incomplete, or "" when it
@@ -110,7 +135,8 @@ export function obstacleProblem(text: string): string {
 	if (!required) return `\`OBSTACLE: ${kind}\` is not an obstacle kind; the kinds are ${kinds}`;
 	const missing = required.filter((name) => !(fields[name] ?? "").trim()).map((name) => `\`${name}:\``);
 	if (missing.length) return `the ${kind} obstacle is missing ${missing.join(", ")}`;
-	if (kind === "fence" || kind === "tooling") {
+	if (kind === "fence") return fencePathsProblem(fields.PATHS);
+	if (kind === "tooling") {
 		for (const path of fields.PATHS.split(/[\s,]+/).map((p) => p.replace(/^[`*-]+|[`*-]+$/g, "")).filter(Boolean)) {
 			if (path.startsWith("/") || path === ".." || path.startsWith("../")) return `the ${kind} obstacle's \`PATHS:\` must be repository-relative, and ${path} is not`;
 		}

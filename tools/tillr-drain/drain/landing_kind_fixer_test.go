@@ -82,7 +82,7 @@ func TestATrunkFixersFenceObstacleWidensItsFence(t *testing.T) {
 	const fixer = "fixer-main-0123456789ab"
 	t.Run("widened", func(t *testing.T) {
 		f, l, work := obstacleFixture(t, &obstacleSteps{}, fixer)
-		settleReport(t, f, l, work, "OBSTACLE: fence\nPATHS: tests/tillr-roll.test.py, .tillr.toml\nEVIDENCE: the failing test asserts the old key\nRESULT: blocked\n")
+		settleReport(t, f, l, work, "OBSTACLE: fence\nPATHS: `tests/tillr-roll.test.py`,\n- `.tillr.toml`\nEVIDENCE: the failing test asserts the old key\nRESULT: blocked\n")
 		if c, ok := conflictOf(t, f, fixer); ok && c.WaitingOn == "owner" {
 			t.Fatalf("the fence obstacle reached the owner: %+v", c)
 		}
@@ -103,6 +103,41 @@ func TestATrunkFixersFenceObstacleWidensItsFence(t *testing.T) {
 			t.Fatalf("refusal %+v", p)
 		}
 	})
+	for _, tc := range []struct {
+		name, paths string
+		bad         []string
+	}{
+		{"sentence", "The separately staged pi fork checkout (`.forks/lanes/<fork-lane>/pi/`) and delivery ref (`refs/heads/patch/pi`); publication of `refs/heads/patch/pi-manage-todo-list` to its configured remote.", []string{"The separately staged", "<fork-lane>", "refs/heads/patch/pi-manage-todo-list"}},
+		{"mixed entries", "tests/new_test.py, `.forks/lanes/<fork-lane>/pi/`, refs/heads/patch/pi, /tmp/foo, tools/../foo", []string{".forks/lanes/<fork-lane>/pi/", "refs/heads/patch/pi", "/tmp/foo", "tools/../foo"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, l, work := obstacleFixture(t, &obstacleSteps{}, fixer)
+			// The worker reported a fence obstacle instead of committing a repair.
+			runGit(t, l.laneTarget(work.Decision.LaneID), "reset", "-q", "--hard", work.BaseSHA)
+			fence := func() string {
+				t.Helper()
+				var raw string
+				fixtureWrite(t, f, func(tx *store.Tx) error {
+					return tx.QueryRow(`SELECT allowed_paths FROM items WHERE item_id=?`, fixer).Scan(&raw)
+				})
+				return raw
+			}
+			before := fence()
+			settleReport(t, f, l, work, "OBSTACLE: fence\nPATHS: "+tc.paths+"\nEVIDENCE: these are needed\nRESULT: blocked\n")
+			if got := fence(); got != before {
+				t.Fatalf("fence changed from %s to %s", before, got)
+			}
+			p := refusalOf(t, f, work.Decision.RunRequest.RunID)
+			if p.Step != RefusalNoOp || !strings.Contains(p.Detail, "Provide repository-relative paths") {
+				t.Fatalf("expected a refusal asking for paths: %+v", p)
+			}
+			for _, bad := range tc.bad {
+				if !strings.Contains(p.Detail, bad) {
+					t.Errorf("refusal did not name %q: %s", bad, p.Detail)
+				}
+			}
+		})
+	}
 	t.Run("gate code", func(t *testing.T) {
 		f, l, work := obstacleFixture(t, &obstacleSteps{}, fixer)
 		settleReport(t, f, l, work, "OBSTACLE: fence\nPATHS: tools/fork-check.py\nEVIDENCE: the gate is wrong\nRESULT: blocked\n")
