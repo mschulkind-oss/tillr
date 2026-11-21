@@ -1560,8 +1560,10 @@ The third `verify-not-done` since filing or the last operator retry takes preced
 over both the repair return and identical-repeat routing. The drain holds the item
 for operator triage without closing it or changing its queue rank. The hold shows
 all three refusal dates and first findings in order and gives the `tillr drain retry`
-command with the item and held run filled in. A drain upgraded after the third
-refusal checks the recorded refusals before redispatching the item. If an older
+command with the item and held run filled in. Settlement pins the verifier's
+candidate and resets its lane for the next item; the authorized retry stages
+that candidate on an available lane. A drain upgraded after the third refusal
+checks the recorded refusals before redispatching the item. If an older
 drain already ran the item again, the hold still shows the first three findings
 and names the latest finished run in the retry command. That authorization
 releases the hold and starts the count over without deleting any refusals.
@@ -2412,7 +2414,7 @@ build re-offered in the same pass, and the recovery of the old records.
 
 A **lane copy** is our term for a lane commit that is kept somewhere else. Staging resets a
 lane copy rather than refusing the lane. Two things make a commit a lane copy. A run pin
-(`refs/tillr/runs/<run>`, retained until the item finishes or the attempt ages out
+(`refs/tillr/runs/<run>`, retained while the commit is absent from the trunk
 under [ref retention](#ref-lifetimes-and-backlog-cleanup)) may contain it. Or a recorded
 landing may name it as the landed head: a `land.landing` event with result `landed`. A
 squash landing puts the change on the trunk under a different sha, so the trunk's history
@@ -2753,12 +2755,14 @@ briefs do not recommend a removed ref. The existing committed-head pins under
 A **run pin** is the commit pointer for a worker attempt; a **landing marker** is
 the lander's crash-recovery pointer. Both names are defined by the
 [landing contract](../tillr-land/README.md#known-cases-the-marker-does-not-settle).
-Cleanup uses the store's durable landing records and declared terminal item states,
-not candidate ancestry: a squash need not retain the worker commit on the trunk.
+A run pin is eligible for cleanup only if the trunk contains the pinned commit.
+An earlier landing of the same item proves nothing about a reopened attempt's
+head. Even a squash landing can leave the original worker commit outside trunk
+history; in that case the run pin stays.
 
 | Namespace under `refs/tillr/` | Writer and lifetime |
 | :--- | :--- |
-| `runs/<run>` | The loop or lander pins an attempt. Settlement removes every attempt of a landed, closed, resolved-elsewhere or removed item, including conflict repairs, after any live lane for that item releases it and its pending examination settles. For retryable items, all live and unexamined/retained attempts stay; at most eight older examined attempt pins per item stay, ordered by attempt time and run id. There is no age limit on a live or retained candidate. |
+| `runs/<run>` | The loop or lander pins an attempt. Once the trunk contains the pinned commit, settlement can remove the pin if it names that run's recorded landed head or the item is finished or removed. Live lanes and pending examinations still protect their pins. For retryable items, the newest eight examined attempt pins per item are kept, ordered by attempt time and run ID. Unexamined pins and pins outside trunk history are not removed by this limit. |
 | `landed/<run>` | The lander writes before publication. Cleanup requires that run's durable `landed` row and a matching published commit. Ordinary markers leave in settlement; fork-delivery markers wait until no pending examination or leased lane remains, so every overlapping boundary comparison has finished. Missing receipts keep markers for crash recovery. |
 | `preserved/<run>` | The loop saves uncommitted edits. The [saved-edit retention rule](#earlier-uncommitted-work) removes them when the item finishes or is removed; the pruning event remains. |
 | `held/<name>` | An operator writes this by hand. No tillr program writes or deletes it; no age or count bound applies. |
@@ -2768,7 +2772,7 @@ not candidate ancestry: a squash need not retain the worker commit on the trunk.
 
 Set-aside also writes `runs/<run>-set-aside-base`, a pointer to the lane's reset
 destination so an interrupted reset can resume. It follows its owning run's
-retention rule and is removed with the finished item's other pins.
+retention rule; closing the item can remove the reset pointer if the trunk contains it, without removing the candidate's unlanded pin.
 
 A held or recovery pointer naming the same commit does **not** extend a run pin's
 lifetime. The operator's pointer alone retains that commit. Boundary checks still
@@ -2789,7 +2793,7 @@ kept rather than guessed safe. An expired lease is also kept until the drain rea
 and releases it; a live conflict repair may still need an earlier attempt's pin. Held and recovery refs are listed with their item's state when
 known and whether the trunk contains their commit. A removed pin also names any
 operator ref that still holds its commit. Saved edits use the same terminal-state
-retention as the loop. A second sweep removes nothing unless lifecycle state changed.
+retention as the loop. A second sweep removes nothing unless the refs, trunk or lifecycle state changed.
 
 Deletion is guarded by each ref's observed commit and never follows symbolic refs
 to their targets. A short store write transaction

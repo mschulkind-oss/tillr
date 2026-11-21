@@ -138,6 +138,7 @@ func TestATerminalItemsUnpreservableLaneIsDiscardedNotAFault(t *testing.T) {
 	runGit(t, lane, "checkout", "-q", "--", ".")
 	writeForkFile(t, filepath.Join(lane, "base.txt"), "lane edit\n")
 	runGit(t, lane, "commit", "-qam", "lane edit")
+	laneHead := runGit(t, lane, "rev-parse", "HEAD")
 	writeForkFile(t, filepath.Join(f.root, "base.txt"), "trunk edit\n")
 	runGit(t, f.root, "commit", "-qam", "trunk edit")
 	cmd := exec.Command("git", "-C", lane, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "rebase", TrunkRef)
@@ -180,8 +181,8 @@ func TestATerminalItemsUnpreservableLaneIsDiscardedNotAFault(t *testing.T) {
 	if got := runGit(t, lane, "rev-parse", "HEAD"); got != runGit(t, f.root, "rev-parse", TrunkRef) {
 		t.Fatalf("lane not reset to the trunk: %s", got)
 	}
-	if got := runGit(t, f.root, "for-each-ref", "--format=%(refname)", "refs/tillr/runs/"+rec.RunID); got != "" {
-		t.Fatalf("terminal item's run pin remains: %s", got)
+	if got := runGit(t, f.root, "rev-parse", pinRef(rec.RunID)); got != laneHead {
+		t.Fatalf("terminal item's run pin = %s, want unlanded head %s", got, laneHead)
 	}
 	fixtureRead(t, f, func(r *store.Reader) error {
 		var payload string

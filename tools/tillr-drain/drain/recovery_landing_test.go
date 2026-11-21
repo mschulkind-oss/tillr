@@ -90,12 +90,15 @@ func TestExamineLandsRealFixtureWithTheLoopsRecords(t *testing.T) {
 		}
 		refs := strings.Fields(runGit(t, p.f.root, "for-each-ref", "--format=%(refname)", "refs/tillr"))
 		for _, ref := range refs {
-			if ref != GreenRef && ref != "refs/tillr/held/item-a" && ref != "refs/tillr/recovery/operator" && !strings.HasPrefix(ref, "refs/tillr/trunk-history/") {
+			if ref != GreenRef && ref != "refs/tillr/held/item-a" && ref != "refs/tillr/recovery/operator" &&
+				ref != pinRef("earlier-attempt") && ref != pinRef(p.runID) && !strings.HasPrefix(ref, "refs/tillr/trunk-history/") {
 				t.Fatalf("drained queue left an obsolete ref: %s (all: %v)", ref, refs)
 			}
 		}
-		if len(refs) < 4 {
-			t.Fatalf("drain lost retained namespaces: %v", refs)
+		for _, ref := range []string{pinRef("earlier-attempt"), pinRef(p.runID)} {
+			if got := runGit(t, p.f.root, "rev-parse", ref); got != p.head {
+				t.Fatalf("off-trunk pin %s = %s, want %s", ref, got, p.head)
+			}
 		}
 		if got := runGit(t, p.f.root, "rev-parse", "refs/tillr/held/item-a"); got != p.head {
 			t.Fatal("held ref changed")

@@ -73,7 +73,7 @@ os.execv(%q, [%q] + sys.argv[1:])
 	sweepFixture(t, f, false)
 }
 
-func TestRefSweepUsesLandingNotSquashAncestryAndKeepsOperatorRefs(t *testing.T) {
+func TestRefSweepKeepsOffTrunkPinsAfterSquashAndKeepsOperatorRefs(t *testing.T) {
 	f := newRefusalLoopFixture(t, "item-a", "item-b")
 	lane := filepath.Join(f.laneRoot, "lane-1", WorktreeDir)
 	writeForkFile(t, filepath.Join(lane, "base.txt"), "candidate\n")
@@ -109,17 +109,17 @@ func TestRefSweepUsesLandingNotSquashAncestryAndKeepsOperatorRefs(t *testing.T) 
 				t.Fatalf("operator disposition: %+v", ref)
 			}
 		}
-		if ref.Remove && strings.Contains(ref.Ref, "/runs/") && !strings.Contains(ref.Reason, "operator ref still holds commit") {
-			t.Fatalf("missing operator retention explanation: %+v", ref)
+		if strings.Contains(ref.Ref, "/runs/") && (ref.Remove || !strings.Contains(ref.Reason, "trunk does not contain")) {
+			t.Fatalf("off-trunk pin disposition: %+v", ref)
 		}
 	}
-	if removed != 4 || operators != 2 {
+	if removed != 1 || operators != 2 {
 		t.Fatalf("plan: %+v", plan)
 	}
 	sweepFixture(t, f, false)
 	for _, id := range []string{"attempt-one", "conflict-fix", "attempt-two"} {
-		if refExists(t, f, "refs/tillr/runs/"+id) {
-			t.Fatal("pin remains:", id)
+		if got := runGit(t, f.root, "rev-parse", pinRef(id)); got != head {
+			t.Fatalf("off-trunk pin %s = %s, want %s", id, got, head)
 		}
 	}
 	if refExists(t, f, "refs/tillr/landed/attempt-two") {
@@ -139,6 +139,29 @@ func TestRefSweepUsesLandingNotSquashAncestryAndKeepsOperatorRefs(t *testing.T) 
 		if ref.Remove {
 			t.Fatal("second sweep removed a ref:", ref)
 		}
+	}
+}
+
+func TestRefSweepKeepsReopenedItemsUnlandedPin(t *testing.T) {
+	f := newRefusalLoopFixture(t, "item-a")
+	landed := runGit(t, f.root, "rev-parse", TrunkRef)
+	seedRefLanding(t, f, "first", "item-a", landed, landed)
+	finishByHand(t, f, "closed")
+	finishByHand(t, f, "in-queue")
+	lane := filepath.Join(f.laneRoot, "lane-1", WorktreeDir)
+	writeForkFile(t, filepath.Join(lane, "base.txt"), "reopened candidate\n")
+	runGit(t, lane, "commit", "-qam", "reopened candidate")
+	head := runGit(t, lane, "rev-parse", "HEAD")
+	seedRefRun(t, f, "second", "item-a", 2)
+	runGit(t, f.root, "update-ref", pinRef("first"), landed)
+	runGit(t, f.root, "update-ref", pinRef("second"), head)
+	runGit(t, lane, "reset", "--hard", landed)
+	sweepFixture(t, f, false)
+	if refExists(t, f, pinRef("first")) {
+		t.Fatal("landed pin was not swept")
+	}
+	if !refExists(t, f, pinRef("second")) || runGit(t, f.root, "rev-parse", pinRef("second")) != head {
+		t.Fatal("sweep lost the reopened item's unlanded candidate")
 	}
 }
 
@@ -187,8 +210,11 @@ func TestDrainRetiresSetAsideResetBaseAfterClosure(t *testing.T) {
 	if err != nil || result.Stop != StopQueueDrained {
 		t.Fatalf("drain: %+v / %v", result, err)
 	}
-	if refExists(t, p.f, ref) || refExists(t, p.f, ref+"-set-aside-base") {
-		t.Fatal("closed set-aside item's refs remain after drain")
+	if refExists(t, p.f, ref+"-set-aside-base") {
+		t.Fatal("closed set-aside item's reset pointer remains after drain")
+	}
+	if got := runGit(t, p.f.root, "rev-parse", ref); got != p.head {
+		t.Fatalf("unlanded set-aside pin = %s, want %s", got, p.head)
 	}
 }
 

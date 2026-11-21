@@ -346,6 +346,50 @@ func TestThirdVerifyNotDoneTakesPrecedenceOverIdenticalRepeat(t *testing.T) {
 	})
 }
 
+// A real verifier hold releases the only lane, even though the refusal also
+// records a session for the operator's eventual retry.
+func TestVerifyTriageReleasesLaneForNextDispatch(t *testing.T) {
+	l, s, f := verifyReturnFixture(t, true, func(w *workflowSteps) *verifyReturnSteps {
+		return &verifyReturnSteps{workflowSteps: w, always: true, varyFinding: true}
+	})
+	s.now = l.cfg.Now
+	l.cfg.Lanes = []string{"lane-1"}
+	runVerifyReturn(t, f, l, s, func() bool { return s.verifies == 3 })
+	thirdHead, thirdRun := s.verified, s.verifiedRun
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='in-queue', workflow='planned-build@v1' WHERE item_id='item-b'`)
+		return err
+	})
+	result := &LoopResult{}
+	for i := 0; i < 8; i++ {
+		graphPass(t, l, result)
+		var fault ItemFault
+		fixtureRead(t, f, func(r *store.Reader) error {
+			faults, err := ReadItemFaults(r)
+			fault = faults["item-a"]
+			return err
+		})
+		if fault.Reason == reasonVerifyTriage {
+			break
+		}
+		if i == 7 {
+			t.Fatal("third verifier refusal did not hold the item")
+		}
+	}
+	if got := runGit(t, f.root, "rev-parse", pinRef(thirdRun)); got != thirdHead {
+		t.Fatalf("pin = %s, want held head %s", got, thirdHead)
+	}
+	if got, want := runGit(t, l.laneTarget("lane-1"), "rev-parse", "HEAD"), runGit(t, f.root, "rev-parse", TrunkRef); got != want {
+		t.Fatalf("hold left lane at %s, want trunk %s", got, want)
+	}
+	if s.runs[len(s.runs)-1].ItemID != "item-b" {
+		graphPass(t, l, result)
+	}
+	if got := s.runs[len(s.runs)-1]; got.ItemID != "item-b" || got.LaneID != "lane-1" {
+		t.Fatalf("next dispatch = %+v, want item-b on lane-1", got)
+	}
+}
+
 // Three distinct findings hold the item. One operator retry releases it and starts
 // a new window without dropping the earlier findings.
 func TestVerifyNotDoneHoldsForOperatorRetry(t *testing.T) {
@@ -391,6 +435,7 @@ func TestVerifyNotDoneHoldsForOperatorRetry(t *testing.T) {
 		}
 	}
 	checkFindings(fault, 0, "missing check", "wrong input", "stale output")
+	heldHead := s.verified
 	cmd := retryCommand("item-a", s.verifiedRun, "")
 	if !strings.Contains(fault.Detail, cmd) || !strings.Contains(fault.Detail, "operator") {
 		t.Fatalf("hold does not name the operator and accepted command %q: %+v", cmd, fault)
@@ -430,6 +475,9 @@ func TestVerifyNotDoneHoldsForOperatorRetry(t *testing.T) {
 		t.Fatalf("after retry fault=%+v, verifies=%d, want new hold after six total refusals", f, s.verifies)
 	} else {
 		checkFindings(f, 3, "absent receipt", "wrong scope", "missing assertion")
+	}
+	if len(s.repairHead) < 3 || s.repairHead[2] != heldHead {
+		t.Fatalf("operator retry did not restore held head %s: repair heads %v", heldHead, s.repairHead)
 	}
 	if n := storeCount(t, f, `SELECT COUNT(*) FROM events WHERE kind='drain.refusal' AND json_extract(payload,'$.item_id')='item-a' AND json_extract(payload,'$.step')='verify-not-done'`); n != 6 {
 		t.Fatalf("refusal history has %d events, want 6", n)
