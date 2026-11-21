@@ -1128,10 +1128,15 @@ patch first. If upstream context changes a patch or upstream already contains th
 can use the replay's own old-to-new pairs instead. A superseded commit maps to the tip it would have
 followed, without creating an empty commit. The loop records the mapping in `trunk_rewrites`,
 moves matching `refs/tillr/landed/<run_id>` markers and `refs/tillr/green`, and raises no
-`trunk-rewritten` hold. In green mode the new tip is
-proved first and pushed at the next green advance; in tip mode the push runs again at once. A
-conflict, a merge commit among the unpublished commits, a checkout off the trunk or a dirty
-path fails the push with `mover: operator` and the commands to run by hand. Not built: the
+`trunk-rewritten` hold. In green mode a clean replay records `remote-sync-proving` with
+`rebased_tip` and names the heavy runner as mover. While that tip is on `main` but is not
+contained in `refs/tillr/green`, the drain neither publishes the older green commit nor
+records `push-ok` for it. A failed retry records its failure; an already-published retry
+records that outcome in the hold's detail. Neither clears the hold. After proof reaches
+the rebased tip, the next green push can publish and record `push-ok`. In tip mode the
+push runs again at once. A conflict, a merge commit among the unpublished commits, a
+checkout off the trunk or a dirty path fails the push with `mover: operator` and the
+commands to run by hand. Not built: the
 design's conflict-repair run and escalation ([the design](../../docs/design/tillr-refused-push.md)).
 Before a due push and again after a refusal, the drain checks that the fetched remote tip
 contains `refs/tillr/published/<remote>/<branch>` (or the remote-tracking tip if there is no

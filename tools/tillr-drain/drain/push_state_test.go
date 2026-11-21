@@ -28,6 +28,104 @@ func lastPushEvent(t *testing.T, f refusalLoopFixture) map[string]any {
 	return out
 }
 
+func TestAfterGreenRecordsProvingStateOnCleanReplay(t *testing.T) {
+	p := newPushFixture(t)
+	remoteTip := p.remoteCommit(t, "remote.txt", "remote\n")
+	p.l.afterGreen(context.Background(), p.local[1])
+	waitAction(t, func() bool { return !p.l.pushAction.busy() })
+	rebased := runGit(t, p.f.root, "rev-parse", "refs/heads/"+TrunkRef)
+	if rebased == p.local[2] {
+		t.Fatal("main did not move")
+	}
+	if ev := lastPushEvent(t, p.f); ev["kind"] != "remote-sync-proving" || ev["rebased_tip"] != rebased || ev["remote_tip"] != remoteTip {
+		t.Fatalf("clean replay did not record rebased tip %s and remote tip %s: %+v", rebased, remoteTip, ev)
+	}
+}
+
+func TestStartupGreenPushKeepsProofHoldAcrossRetries(t *testing.T) {
+	p := newPushFixture(t)
+	ctx := context.Background()
+	root := p.f.root
+	remoteTip := p.remoteCommit(t, "remote.txt", "remote\n")
+	p.l.afterGreen(ctx, p.local[1])
+	waitAction(t, func() bool { return !p.l.pushAction.busy() })
+	rebased := runGit(t, root, "rev-parse", "refs/heads/"+TrunkRef)
+	green := runGit(t, root, "rev-parse", GreenRef)
+	if green == rebased || rebased == p.local[2] {
+		t.Fatalf("fixture needs a replayed tip ahead of green: %s, %s", rebased, green)
+	}
+
+	// Restart with just the persisted events and refs, not the old action's memory.
+	var report strings.Builder
+	cfg := p.l.cfg
+	cfg.Report = &report
+	loop := &Loop{cfg: cfg}
+	attempt := func(trigger string) map[string]any {
+		t.Helper()
+		report.Reset()
+		loop.afterGreen(ctx, trigger)
+		waitAction(t, func() bool { return !loop.pushAction.busy() })
+		return lastPushEvent(t, p.f)
+	}
+	published := func() string {
+		return runGit(t, root, "--git-dir="+p.remote, "rev-parse", "refs/heads/"+TrunkRef)
+	}
+	if ev := attempt("start"); ev["kind"] == pushKindOK || published() != remoteTip {
+		t.Fatalf("startup published or recorded push-ok before proof: %+v, remote %s", ev, published())
+	}
+
+	// Another publisher puts the old green on the remote. Our guard then fails
+	// once, and the next attempt sees that old green was already published.
+	runGit(t, root, "push", p.remote, green+":refs/heads/"+TrunkRef)
+	runGit(t, root, "remote", "set-url", "origin", filepath.Join(filepath.Dir(p.remote), "missing.git"))
+	if ev := attempt(green); ev["kind"] != pushKindFailed || !strings.Contains(ev["detail"].(string), "fetching origin") {
+		t.Fatalf("guard failure was not recorded: %+v", ev)
+	}
+	runGit(t, root, "remote", "set-url", "origin", p.remote)
+	if ev := attempt(green); ev["kind"] != "remote-sync-proving" || ev["rebased_tip"] != rebased ||
+		!strings.Contains(ev["detail"].(string), "already holds the green commit") ||
+		!strings.Contains(report.String(), "mover: the heavy runner") || published() != green {
+		t.Fatalf("already-published retry lost the hold: %+v, report %q, remote %s", ev, report.String(), published())
+	}
+
+	runGit(t, root, "update-ref", GreenRef, rebased)
+	if ev := attempt(rebased); ev["kind"] != pushKindOK || published() != rebased {
+		t.Fatalf("proof did not release the hold: %+v, remote %s", ev, published())
+	}
+}
+
+func TestGreenProofHoldReadsRefsAndReplayFacts(t *testing.T) {
+	p := newPushFixture(t)
+	ctx := context.Background()
+	root := p.f.root
+	p.remoteCommit(t, "remote.txt", "remote\n")
+	p.l.afterGreen(ctx, p.local[1])
+	waitAction(t, func() bool { return !p.l.pushAction.busy() })
+	rebased := runGit(t, root, "rev-parse", "refs/heads/"+TrunkRef)
+	green := runGit(t, root, "rev-parse", GreenRef)
+	ref := "refs/heads/" + TrunkRef
+	checkHold := func(want string) {
+		t.Helper()
+		if got, err := p.l.greenProofHold(ctx, "origin", ref, green); err != nil || got != want {
+			t.Fatalf("hold at green %s = %q, %v; want %q", green, got, err, want)
+		}
+	}
+
+	// A newer replay fact off main and a newer success event cannot mask a
+	// recorded replay that is still on main and ahead of green.
+	offMain := &pushStateError{kind: pushKindProving, rebasedTip: p.local[2]}
+	p.l.recordPushState(ctx, settings.PushGreen, green, pushKindProving, offMain, offMain)
+	p.l.recordPushState(ctx, settings.PushGreen, green, pushKindOK, nil, nil)
+	checkHold(rebased)
+
+	// Green can prove the rebased tip without catching up to main. The
+	// off-main tip is still unproved but does not hold publication.
+	ownerCommit(t, root, "later.txt")
+	green = rebased
+	runGit(t, root, "update-ref", GreenRef, green)
+	checkHold("")
+}
+
 func TestBoundaryExcusesPublishedRefs(t *testing.T) {
 	ref := land.PublishedRefPrefix + "origin/main"
 	before := &Boundary{Refs: map[string]string{ref: strings.Repeat("a", 40)}}
