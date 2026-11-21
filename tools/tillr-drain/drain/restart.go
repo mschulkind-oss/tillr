@@ -54,6 +54,7 @@ func (l *Loop) adoptRestart(ctx context.Context) error {
 		return err
 	}
 	if adopted {
+		l.heavyReuseRed = true
 		// This runs before the new image starts any subprocess. Wait only on children
 		// inherited from the old image, never children whose exec.Cmd owns their exit.
 		go reapInherited(ctx, inheritedChildren())
@@ -62,10 +63,13 @@ func (l *Loop) adoptRestart(ctx context.Context) error {
 	return nil
 }
 
-// restartDeferred keeps the queue working while a post-landing action still owns
-// follow-up work that exec would drop. Use the same rule at worker handoff.
+// restartDeferred keeps the queue working while a tip proof or a post-landing
+// action still owns work that exec would drop. Use the same rule at worker handoff.
 func (l *Loop) restartDeferred() bool {
-	return l.rollAction.busy() || l.piRollAction.busy() || l.extRollAction.busy() || l.pushAction.busy()
+	l.heavyMu.Lock()
+	proofActive := l.heavyProofActive
+	l.heavyMu.Unlock()
+	return proofActive || l.rollAction.busy() || l.piRollAction.busy() || l.extRollAction.busy() || l.pushAction.busy()
 }
 
 // gateRestart is the first action of a pass and is also called by unbounded waits.
@@ -102,6 +106,7 @@ func (l *Loop) gateRestart(ctx context.Context, result *LoopResult) (bool, strin
 	defer l.restartMechanical.Unlock()
 	// A landing can finish while the replacement binary is being checked.
 	// Its action has already been queued when it releases the mechanical lock.
+	// A proof can similarly take ownership while the binary is checked.
 	if l.restartDeferred() {
 		return false, "", nil
 	}
