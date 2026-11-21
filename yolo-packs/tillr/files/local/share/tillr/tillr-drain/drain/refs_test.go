@@ -459,6 +459,106 @@ func TestSavedEditCleanupDoesNotDeleteAnOperatorRefThroughAnAlias(t *testing.T) 
 	}
 }
 
+func TestRefSweepPassSurvivesVanishedRefAndRetriesFailures(t *testing.T) {
+	for _, mode := range []string{"vanished", "git failure"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx := context.Background()
+			f := newRefusalLoopFixture(t, "item-a")
+			l := f.loop(t, &recordingSteps{}, &itemContentStager{})
+			var report strings.Builder
+			l.cfg.Report = &report
+			seedRefRun(t, f, "saved", "item-a", 1)
+			writeForkFile(t, filepath.Join(l.lanePath("lane-1"), "base.txt"), "saved bytes\n")
+			if stop := l.abandon(ctx, "lane-1", "saved", l.headOf(ctx, "lane-1")); stop != "" {
+				t.Fatal(stop)
+			}
+			finishByHand(t, f, "closed")
+			ref := preservedPrefix + "saved"
+			pin := "refs/tillr/runs/saved"
+			runGit(t, f.root, "update-ref", pin, runGit(t, f.root, "rev-parse", TrunkRef))
+			realGit, err := exec.LookPath("git")
+			if err != nil {
+				t.Fatal(err)
+			}
+			bin := scratchUnderDurable(t)
+			flag := filepath.Join(bin, "injected")
+			inject := fmt.Sprintf("%q -C %q show-ref --verify --quiet %q || exit 92\n %q -C %q update-ref -d %q || exit $?", realGit, f.root, ref, realGit, f.root, ref)
+			if mode == "git failure" {
+				inject = "echo 'injected sweep failure' >&2; exit 91"
+			}
+			script := fmt.Sprintf(`#!/bin/sh
+if test "$3 $4" = "update-ref --stdin" && ! test -f %q; then
+ : > %q
+ %s
+fi
+exec %q "$@"
+`, flag, flag, inject, realGit)
+			if err := writeForkSafe(filepath.Join(bin, "git"), []byte(script), 0755); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			if stop, err := l.passMode(ctx, &LoopResult{}, true); stop != StopQueueDrained || err != nil {
+				t.Fatalf("pass stopped: %q, %v", stop, err)
+			}
+			if _, err := os.Stat(flag); err != nil {
+				t.Fatal("sweep did not reach injected race/failure:", err)
+			}
+			if mode == "git failure" {
+				if !strings.Contains(report.String(), "injected sweep failure") || !refExists(t, f, ref) || !refExists(t, f, pin) {
+					t.Fatalf("failed sweep was not reported or deleted refs: %s", &report)
+				}
+				if stop, err := l.passMode(ctx, &LoopResult{}, true); stop != StopQueueDrained || err != nil {
+					t.Fatalf("next pass stopped: %q, %v", stop, err)
+				}
+			}
+			if refExists(t, f, ref) || refExists(t, f, pin) {
+				t.Fatal("settled refs remain")
+			}
+			fixtureRead(t, f, func(r *store.Reader) error {
+				saved, err := ReadPreservedWork(r)
+				if err == nil && (len(saved) != 1 || !saved[0].Pruned) {
+					t.Fatalf("missing pruning event: %+v", saved)
+				}
+				return err
+			})
+		})
+	}
+}
+
+func TestRefSweepSettlesSavesInSeparateRepository(t *testing.T) {
+	f := newRefusalLoopFixture(t, "item-a")
+	l := f.loop(t, &recordingSteps{}, &itemContentStager{})
+	repo := scratchUnderDurable(t)
+	// A separate target need not have the main repository's trunk branch.
+	runGit(t, repo, "init", "-qb", "foreign")
+	runGit(t, repo, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--allow-empty", "-qm", "fixture")
+	head := runGit(t, repo, "rev-parse", "HEAD")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		for _, id := range []string{"already-gone", "still-present"} {
+			p := PreservedWork{RunID: id, ItemID: "item-a", Repository: repo, Ref: preservedPrefix + id}
+			if err := appendEffect(tx, workPreservedKind, id, p, l.cfg.Now()); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	runGit(t, repo, "update-ref", preservedPrefix+"still-present", head)
+	finishByHand(t, f, "closed")
+	if err := l.pruneRunRefs(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := runGit(t, repo, "for-each-ref", preservedPrefix); got != "" {
+		t.Fatal("settled saved edits remain:", got)
+	}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		saved, err := ReadPreservedWork(r)
+		if err == nil && (len(saved) != 2 || !saved[0].Pruned || !saved[1].Pruned) {
+			t.Fatalf("missing prune receipts: %+v", saved)
+		}
+		return err
+	})
+}
+
 func TestRefSweepSavedEditsUseExistingRetention(t *testing.T) {
 	f := newRefusalLoopFixture(t, "item-a")
 	l := f.loop(t, &recordingSteps{}, &itemContentStager{})

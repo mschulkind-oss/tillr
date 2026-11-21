@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -507,14 +508,19 @@ func (l *Loop) snapshotCovered(ctx context.Context, target, ref, tree string, fi
 	return nil
 }
 
-// prunePreservedWork is pass-time retention, including owner-closed or removed
-// items. No Git command runs inside the read or write transaction.
 func (l *Loop) prunePreservedWork(ctx context.Context) error {
+	return l.prunePreservedRepositories(ctx, "")
+}
+
+// Discovery only selects repositories. The sweep rechecks each ref under the
+// repository lock and store writer, just as it does for the main repository.
+func (l *Loop) prunePreservedRepositories(ctx context.Context, skip string) error {
 	s, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		return err
 	}
-	var drop []PreservedWork
+	repos := map[string]bool{}
+	var due []string
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
 		saved, err := ReadPreservedWork(r)
 		if err != nil {
@@ -525,7 +531,8 @@ func (l *Loop) prunePreservedWork(ctx context.Context) error {
 			return err
 		}
 		for _, p := range saved {
-			if p.Pruned {
+			repo := filepath.Clean(p.Repository)
+			if p.Pruned || repo == skip || repos[repo] {
 				continue
 			}
 			var state string
@@ -534,7 +541,8 @@ func (l *Loop) prunePreservedWork(ctx context.Context) error {
 				return err
 			}
 			if err == sql.ErrNoRows || finishedState(declared.Parsed, state) {
-				drop = append(drop, p)
+				repos[repo] = true
+				due = append(due, repo)
 			}
 		}
 		return nil
@@ -543,15 +551,16 @@ func (l *Loop) prunePreservedWork(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for _, p := range drop {
-		if _, err := l.git(ctx, p.Repository, "update-ref", "--no-deref", "-d", p.Ref); err != nil {
-			return err
+	var sweepErr error
+	for _, repo := range due {
+		refs, err := sweepRefs(ctx, RefSweepRequest{Root: repo, Store: l.cfg.Store, At: l.cfg.Now()}, true)
+		if err != nil {
+			sweepErr = errors.Join(sweepErr, fmt.Errorf("%s: %w", repo, err))
+			continue
 		}
-		if err := appendJudgment(ctx, l.cfg.Store, workPrunedKind, "run", p.RunID, p, l.cfg.Now().UTC()); err != nil {
-			return err
-		}
+		l.reportPrunedRefs(refs)
 	}
-	return nil
+	return sweepErr
 }
 
 func preservedFacts(ctx context.Context, storePath string, spec StageSpec) (string, error) {
