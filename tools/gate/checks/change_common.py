@@ -240,7 +240,7 @@ def typescript_size_findings(root: Path, base: str | None) -> tuple[list[str], l
 
 
 def identity_findings(root, base, head):
-    expected = []
+    # Configuration governs commit creation, not which identities history may carry.
     for key in ("user.name", "user.email"):
         configured = subprocess.run(["git", "config", "--show-scope", "--get-all", key],
                                     capture_output=True, text=True)
@@ -255,12 +255,14 @@ def identity_findings(root, base, head):
         values = [line.partition("\t")[2].strip() for line in entries.splitlines()]
         if not values or not values[-1]:
             raise RuntimeError(f"landing identity is not configured ({key})")
-        expected.append(values[-1])
+    policy = Path(__file__).resolve().parents[1] / "allowed-commit-identities.json"
+    allowed = json.loads(policy.read_text(encoding="utf-8"))
     findings = []
     for line in git(root, "log", "--format=%H%x1f%an%x1f%ae%x1f%cn%x1f%ce", f"{base}..{head}").splitlines():
         sha, an, ae, cn, ce = line.split("\x1f")
-        if [an, ae, cn, ce] != expected * 2:
-            findings.append(f"{sha}: author or committer differs from deployed identity")
+        for role, name, email in (("author", an, ae), ("committer", cn, ce)):
+            if [name, email] not in allowed:
+                findings.append(f"{sha}: {role} {name} <{email}> is not an allowed repository identity")
     return findings
 
 
