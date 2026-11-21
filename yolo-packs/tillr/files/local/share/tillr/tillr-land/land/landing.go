@@ -47,9 +47,8 @@ const (
 	// stands, and the landing is attempted again once `git status` in that worktree is
 	// clean.
 	ReasonTrunkUncommitted = "trunk-worktree-uncommitted"
-	// ReasonPatchRewind is a fork-series landing whose head does not descend from the
-	// patch branch's current tip. A patch branch is the delivery rather than a derived
-	// export, so moving it back would drop commits another writer published.
+	// ReasonPatchRewind is a non-fast-forward fork delivery without a verified release
+	// rebase from the current patch tip.
 	ReasonPatchRewind = "patch-rewind"
 	// ReasonPatchAtHead is a fork-series landing whose patch branch already points at the
 	// head. The run's own export delivered it, which is the successful case; a second move
@@ -275,31 +274,49 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (an
 		return Landing{}, err
 	}
 
+	baseRef := req.BaseRef
+	if ref := PatchRef(baseRef); ref != "" {
+		baseRef = ref // publication receipts name the canonical delivery ref
+	}
 	landing := Landing{
 		ItemID:    req.ItemID,
 		RunID:     req.RunID,
 		VerdictID: req.Verdict.VerdictID,
-		BaseRef:   req.BaseRef,
+		BaseRef:   baseRef,
 		BaseSHA:   req.BaseSHA,
 		HeadSHA:   req.HeadSHA,
 		GatedTree: tree,
 	}
 	landing.Result, landing.Reason = decide(req, tree)
-	// A patch branch is a delivery, not a trunk a squash can move forward. When the run
-	// already exported the head, the branch is at the head and a second move would deliver
-	// the same change twice; when the branch has moved somewhere the head does not descend
-	// from, moving it back would drop the commits between. Both are refusals, and neither
-	// writes a ref.
-	if landing.Result == ResultLanded && PatchRef(req.BaseRef) != "" {
-		trunkHead, err := t.Head(req.BaseRef)
+	// A fork publishes the exact gated head. Resolve a possible release rebase
+	// without the lock; this read can never authorize a move over a changed tip.
+	var rebase forkRebase
+	if landing.Landed() && PatchRef(req.BaseRef) != "" {
+		if err := checkRunRef(req.RunID); err != nil {
+			return Landing{}, err
+		}
+		tip, err := t.Head(req.BaseRef)
 		if err != nil {
 			return Landing{}, err
 		}
 		switch {
-		case trunkHead == req.HeadSHA:
+		case tip == req.HeadSHA:
 			landing.Result, landing.Reason = ResultRefused, ReasonPatchAtHead
-		case !t.IsAncestor(trunkHead, req.HeadSHA):
+		case !t.IsAncestor(tip, req.HeadSHA) || (tip != req.BaseSHA && !t.IsAncestor(req.BaseSHA, req.HeadSHA)):
 			landing.Result, landing.Reason = ResultRefused, ReasonPatchRewind
+			if tip == req.BaseSHA {
+				if !t.hasRebaseVerdict(req) {
+					landing.Reason = ReasonVerdictMismatch
+					break
+				}
+				rebase, err = t.releaseRebase(req)
+				if err != nil {
+					return Landing{}, err
+				}
+				if rebase.verified() {
+					landing.Result, landing.Reason = ResultLanded, ""
+				}
+			}
 		}
 	}
 
@@ -336,7 +353,7 @@ func Land(ctx context.Context, s *store.Store, t *Trunk, req LandingRequest) (an
 	// install does instead of repeating.
 	changedAt := ""
 	for {
-		prepared, err := prepareLanding(ctx, s, t, decided, req)
+		prepared, err := prepareLanding(ctx, s, t, decided, req, rebase)
 		if err != nil {
 			t.dropRecovery(prepared.plan)
 			return Landing{}, err
@@ -482,6 +499,7 @@ type preparedLanding struct {
 	// recovered is a landing this run already published and the store never recorded:
 	// the row is written for that commit and the trunk is not moved again.
 	recovered bool
+	rebase    forkRebase
 	// plan is the prediction for the trunk's checkout, read before the write transaction.
 	plan *OwnerPlan
 	// stored is the receipt this run already recorded for this head at its marker: the
@@ -503,8 +521,8 @@ func landingRecorded(r rowQueryer, commit string) (bool, error) {
 
 // storedLanding answers the landed row this item's run already recorded for this head at
 // commit, if there is one: the receipt a retry of a recorded landing is answered with.
-func storedLanding(r rowQueryer, req LandingRequest, commit string) (*Landing, error) {
-	l := Landing{BaseRef: req.BaseRef}
+func storedLanding(r rowQueryer, req LandingRequest, commit, baseRef string) (*Landing, error) {
+	l := Landing{BaseRef: baseRef}
 	var conflicts string
 	err := r.QueryRow(`SELECT landing_id, item_id, run_id, verdict_id, result, reason, base_sha, head_sha,
 		       trunk_before, trunk_after, gated_tree, landed_tree, conflict_paths, gate_skipped_reason
@@ -544,8 +562,8 @@ func itemNotLandable(r rowQueryer, id string) (bool, error) {
 }
 
 // prepareLanding holds land.lock but no SQLite transaction across Git or disk work.
-func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landing, req LandingRequest) (preparedLanding, error) {
-	p := preparedLanding{landing: landing}
+func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landing, req LandingRequest, rebase forkRebase) (preparedLanding, error) {
+	p := preparedLanding{landing: landing, rebase: rebase}
 	// A verdict that passes is the only request whose run may already have landed; the
 	// patch-branch refusals Land decided are what a recovered landing looks like from the
 	// branch's side, so they do not hide one.
@@ -558,17 +576,26 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 		}
 	}
 	notLandable, markerRecorded := false, false
+	var claimedBefore string
 	err := s.ReadTx(ctx, func(r *store.Reader) error {
 		var err error
 		if notLandable, err = itemNotLandable(r, req.ItemID); err != nil {
 			return err
 		}
 		if hasMarker {
-			if p.stored, err = storedLanding(r, req, marker); err != nil || p.stored != nil {
+			if p.stored, err = storedLanding(r, req, marker, landing.BaseRef); err != nil || p.stored != nil {
 				return err
 			}
 			if markerRecorded, err = landingRecorded(r, marker); err != nil {
 				return err
+			}
+			if !markerRecorded && PatchRef(req.BaseRef) != "" {
+				err := r.QueryRow(`SELECT trunk_before FROM landing_claims
+					WHERE run_id = ? AND item_id = ? AND base_ref IN (?, ?) AND head_sha = ? AND commit_sha = ?`,
+					req.RunID, req.ItemID, req.BaseRef, landing.BaseRef, req.HeadSHA, marker).Scan(&claimedBefore)
+				if err != nil && err != sql.ErrNoRows {
+					return Internalf("reading the fork publication claim for %s: %v", req.RunID, err)
+				}
 			}
 		}
 		if req.ObservedTrunk != "" {
@@ -596,9 +623,25 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 	p.tip = trunkBefore
 	p.landing.TrunkBefore, p.landing.TrunkAfter = trunkBefore, trunkBefore
 	if hasMarker && !markerRecorded {
-		parent, ok, err := t.RecoveredLanding(req.BaseSHA, req.HeadSHA, marker, trunkBefore)
-		if PatchRef(req.BaseRef) != "" {
-			parent, ok, err = req.BaseSHA, marker == req.HeadSHA && t.IsAncestor(marker, trunkBefore), nil
+		var parent string
+		var ok bool
+		if ref := PatchRef(req.BaseRef); ref != "" {
+			parent, ok = req.BaseSHA, marker == req.HeadSHA && t.IsAncestor(marker, trunkBefore)
+			if ok && !t.IsAncestor(parent, marker) {
+				// The marker and scoped pin were created with the CAS. Do not rerun
+				// release selection on retry: the followed release may have advanced.
+				pin, _ := t.Head(patchHistoryRef(ref, parent))
+				ok = pin == parent && t.hasRebaseVerdict(req)
+				if ok {
+					p.rebase = forkRebase{old: parent, new: marker}
+				}
+			} else if ok {
+				// A marker can precede the actual move. Only a claim records the
+				// actual previous delivery tip; an absent one proves no edge.
+				parent = claimedBefore
+			}
+		} else {
+			parent, ok, err = t.RecoveredLanding(req.BaseSHA, req.HeadSHA, marker, trunkBefore)
 		}
 		if err != nil {
 			return p, err
@@ -678,6 +721,10 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 			switch {
 			case p.tip == req.HeadSHA:
 				p.landing.Result, p.landing.Reason = ResultRefused, ReasonPatchAtHead
+			case p.rebase.verified():
+				if p.tip != p.rebase.old {
+					p.landing.Result, p.landing.Reason = ResultRefused, ReasonPatchRewind
+				}
 			case !t.IsAncestor(p.tip, req.HeadSHA):
 				p.landing.Result, p.landing.Reason = ResultRefused, ReasonPatchRewind
 			}
@@ -690,7 +737,7 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 			if p.recovered {
 				cacheTip = p.tip
 			}
-			if err := t.prepareForkCache(req.BaseRef, cacheTip); err != nil {
+			if err := t.prepareForkCache(req.BaseRef, cacheTip, p.rebase, p.recovered); err != nil {
 				return p, err
 			}
 		}
@@ -704,7 +751,7 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 	} else if p.landing.Landed() {
 		if PatchRef(req.BaseRef) != "" {
 			// Fork commits are the delivery, not a diff to squash. Publish exactly the
-			// built head; ancestry and the guarded move still refuse a rewind.
+			// built head, either by fast-forward or by the verified release CAS.
 			p.squash = Squash{Commit: req.HeadSHA, Tree: p.landing.GatedTree}
 		} else {
 			req.observation.note("squash")
@@ -732,8 +779,11 @@ func prepareLanding(ctx context.Context, s *store.Store, t *Trunk, landing Landi
 				p.landing.ConflictPaths = held
 			} else if err := t.PreserveRange(req.RunID, req.BaseSHA, req.HeadSHA, req.RunDir); err != nil {
 				return p, err
-			} else if err := t.MarkLanded(req.RunID, p.squash.Commit); err != nil {
-				return p, err
+			} else if !p.rebase.verified() {
+				// Release rebases write their marker inside the delivery transaction.
+				if err := t.MarkLanded(req.RunID, p.squash.Commit); err != nil {
+					return p, err
+				}
 			}
 		}
 	}
@@ -795,7 +845,13 @@ func publishLanding(ctx context.Context, s *store.Store, t *Trunk, p preparedLan
 		// so the history keeps the tip read under land.lock.
 		if !p.recovered {
 			req.observation.note("trunk-move")
-			install, err := t.MoveOwner(p.plan, req.BaseRef, p.squash.Commit, p.tip)
+			var install *OwnerInstall
+			var err error
+			if p.rebase.verified() {
+				err = t.moveForkRebase(req.BaseRef, req.RunID, p.rebase)
+			} else {
+				install, err = t.MoveOwner(p.plan, req.BaseRef, p.squash.Commit, p.tip)
+			}
 			if err != nil {
 				if cleanupErr := t.abandonClaim(ctx, s, p, req, landing); cleanupErr != nil {
 					return Landing{}, errors.Join(err, cleanupErr)
@@ -815,7 +871,7 @@ func publishLanding(ctx context.Context, s *store.Store, t *Trunk, p preparedLan
 			}
 			// The delivery moved; a cache that could not follow it leaves the claim for the
 			// retry, which recovers the move and refreshes the cache before its receipt.
-			if err := t.RefreshForkCache(req.BaseRef, cacheTip); err != nil {
+			if err := t.RefreshForkCache(req.BaseRef, cacheTip, p.rebase); err != nil {
 				return Landing{}, err
 			}
 		}
@@ -904,16 +960,16 @@ func claimLanding(ctx context.Context, s *store.Store, p preparedLanding, req La
 				return Externalf("trunk history changed during landing preparation; no move made")
 			}
 		}
-		commit := p.squash.Commit
+		commit, before := p.squash.Commit, p.tip
 		if p.recovered {
-			commit = landing.TrunkAfter
+			commit, before = landing.TrunkAfter, landing.TrunkBefore
 		}
 		if _, err := tx.Exec(`INSERT INTO landing_claims (run_id, item_id, base_ref, head_sha, commit_sha, trunk_before, claimed_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(run_id) DO UPDATE SET item_id = excluded.item_id, base_ref = excluded.base_ref,
 			  head_sha = excluded.head_sha, commit_sha = excluded.commit_sha,
 			  trunk_before = excluded.trunk_before, claimed_at = excluded.claimed_at`,
-			req.RunID, req.ItemID, req.BaseRef, req.HeadSHA, commit, p.tip, req.At.UnixMilli()); err != nil {
+			req.RunID, req.ItemID, req.BaseRef, req.HeadSHA, commit, before, req.At.UnixMilli()); err != nil {
 			return Internalf("claiming the landing of run %s: %v", req.RunID, err)
 		}
 		claimed = true

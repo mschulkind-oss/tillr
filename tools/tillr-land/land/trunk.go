@@ -662,12 +662,11 @@ func gitEnvWith(extra []string) []string {
 }
 
 // PatchRef answers the patch branch a candidate's base_ref names, or "" when the ref is
-// not a patch branch. A patch branch is a branch under refs/heads/patch/: it is the
-// delivery a fork-series item moves, and it is a source of truth, so a landing that would
-// rewind it is refused rather than carried.
+// not a patch branch. These refs are the fork delivery: land moves them to an
+// exact gated head, never to a squash.
 func PatchRef(baseRef string) string {
 	ref := normalizeRef(baseRef)
-	if strings.HasPrefix(ref, "refs/heads/patch/") && len(ref) > len("refs/heads/patch/") {
+	if strings.HasPrefix(ref, patchPrefix) && len(ref) > len(patchPrefix) {
 		return ref
 	}
 	return ""

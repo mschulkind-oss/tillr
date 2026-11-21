@@ -1,13 +1,15 @@
 package land
 
 import (
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
 
 func (t *Trunk) forkCache(ref string) string {
-	return filepath.Join(t.repo, ".forks", strings.TrimPrefix(PatchRef(ref), "refs/heads/patch/"))
+	return filepath.Join(t.repo, ".forks", strings.TrimPrefix(PatchRef(ref), patchPrefix))
 }
 
 // ensureForkCache publishes a complete cache atomically. Its source is the exact gated
@@ -83,47 +85,202 @@ func (t *Trunk) ensureForkCache(req LandingRequest, delivered string) error {
 
 // prepareForkCache checks that delivery can refresh the shared cache without dropping
 // work. Importing objects does not move main or the delivery branch.
-func (t *Trunk) prepareForkCache(ref, tip string) error {
+func (t *Trunk) prepareForkCache(ref, tip string, rebase forkRebase, recovering bool) error {
+	_, err := t.checkForkCache(ref, tip, rebase, recovering)
+	return err
+}
+
+const cacheRefreshPrefix = "refs/tillr/cache-refresh/"
+
+// A journal ref names the verified transition and detached source, and points at
+// the intended main. It pins both command boundaries of an interrupted refresh.
+type cacheRefresh struct {
+	ref, source, target string
+}
+
+type forkCacheState struct {
+	main, patch string
+	detached    bool
+	refresh     cacheRefresh
+}
+
+// checkForkCache also captures the exact local tips refresh may replace.
+func (t *Trunk) checkForkCache(ref, tip string, rebase forkRebase, recovering bool) (forkCacheState, error) {
+	var state forkCacheState
+	ref = PatchRef(ref)
 	cache := t.forkCache(ref)
-	branch, err := t.forkGit(cache, "symbolic-ref", "--short", "HEAD")
-	if err != nil || strings.TrimSpace(branch) != "main" {
-		return Externalf("fork cache %s must have main checked out before delivery", cache)
-	}
-	paths, err := t.UncommittedPaths(cache)
-	if err != nil {
-		return err
-	}
-	if len(paths) != 0 {
-		return Externalf("fork cache %s has uncommitted work; delivery will not overwrite it", cache)
-	}
 	if _, err := t.forkGit(cache, "fetch", "--quiet", "--no-tags", t.repo, tip); err != nil {
-		return err
+		return state, err
 	}
-	if _, err := t.forkGit(cache, "merge-base", "--is-ancestor", "HEAD", tip); err != nil {
-		return Externalf("fork cache %s has unlanded or divergent commits; delivery will not reset it", cache)
+	branch, stderr, err := t.runGitIn(cache, nil, "symbolic-ref", "--quiet", "HEAD")
+	var exit *exec.ExitError
+	state.detached = errors.As(err, &exit) && exit.ExitCode() == 1 && strings.TrimSpace(stderr) == ""
+	inDeliveredRange := func(commit string) bool {
+		return recovering && t.IsAncestor(rebase.new, commit) && t.IsAncestor(commit, tip)
 	}
-	return nil
+	acceptMain := func(commit string) bool { return commit == rebase.old || inDeliveredRange(commit) }
+	if !state.detached && (err != nil || strings.TrimSpace(branch) != "refs/heads/main") {
+		return state, Externalf("fork cache %s must have main checked out before delivery", cache)
+	}
+	journal, err := t.forkGit(cache, "for-each-ref", "--format=%(refname) %(objectname)", cacheRefreshPrefix)
+	if err != nil {
+		return state, err
+	}
+	if fields := strings.Fields(journal); len(fields) != 0 {
+		prefix := cacheRefreshPrefix + rebase.new + "/"
+		if len(fields) != 2 || !rebase.verified() || !recovering || !strings.HasPrefix(fields[0], prefix) {
+			return state, Externalf("fork cache %s has another unfinished cache refresh", cache)
+		}
+		state.refresh = cacheRefresh{fields[0], strings.TrimPrefix(fields[0], prefix), fields[1]}
+		if !acceptMain(state.refresh.source) || !inDeliveredRange(state.refresh.target) {
+			return state, Externalf("fork cache %s has an invalid cache refresh journal", cache)
+		}
+	} else if state.detached {
+		return state, Externalf("fork cache %s must have main checked out before delivery", cache)
+	}
+	status, err := t.forkGit(cache, "status", "--porcelain", "--untracked-files=all")
+	if err != nil {
+		return state, err
+	}
+	if strings.TrimSpace(status) != "" {
+		return state, Externalf("fork cache %s has uncommitted work; delivery will not overwrite it", cache)
+	}
+	if !rebase.verified() {
+		if _, err := t.forkGit(cache, "merge-base", "--is-ancestor", "HEAD", tip); err != nil {
+			return state, Externalf("fork cache %s has unlanded or divergent commits; delivery will not reset it", cache)
+		}
+		return state, nil
+	}
+	out, err := t.forkGit(cache, "rev-parse", "refs/heads/main")
+	if err != nil {
+		return state, err
+	}
+	state.main = strings.TrimSpace(out)
+	if !acceptMain(state.main) {
+		return state, Externalf("fork cache %s has unlanded or divergent commits; delivery will not reset it", cache)
+	}
+	if move := state.refresh; move.ref != "" {
+		if state.main != move.source && state.main != move.target && (state.detached || state.main != tip) {
+			return state, Externalf("fork cache %s main moved independently during cache refresh", cache)
+		}
+		if state.detached {
+			head, err := t.forkGit(cache, "rev-parse", "HEAD")
+			if err != nil || strings.TrimSpace(head) != move.source {
+				return state, Externalf("fork cache %s detached HEAD does not match the cache refresh source", cache)
+			}
+		}
+	}
+	out, stderr, err = t.runGitIn(cache, nil, "rev-parse", "--verify", "--quiet", ref)
+	if err != nil {
+		if !errors.As(err, &exit) || exit.ExitCode() != 1 || strings.TrimSpace(stderr) != "" {
+			return state, Externalf("reading cache delivery ref %s: %s", ref, failureText(stderr, err))
+		}
+		state.patch = strings.Repeat("0", len(tip))
+		return state, nil
+	}
+	state.patch = strings.TrimSpace(out)
+	if state.patch != rebase.old && !t.IsAncestor(state.patch, rebase.old) && !inDeliveredRange(state.patch) {
+		return state, Externalf("fork cache %s has an independent %s at %s; delivery will not reset it", cache, ref, state.patch)
+	}
+	return state, nil
 }
 
 // RefreshForkCache repairs both main and the cache's copy of the delivery ref. It runs
 // before the receipt, including crash recovery, so a recorded landing has a usable cache.
-func (t *Trunk) RefreshForkCache(ref, tip string) error {
+func (t *Trunk) RefreshForkCache(ref, tip string, rebase forkRebase) error {
 	ref = PatchRef(ref)
 	cache := t.forkCache(ref)
-	actual, err := t.Head(ref)
+	checkDelivery := func() error {
+		actual, err := t.Head(ref)
+		if err == nil && actual != tip {
+			err = Externalf("fork delivery %s moved during cache refresh: expected %s, got %s", ref, tip, actual)
+		}
+		return err
+	}
+	if err := checkDelivery(); err != nil {
+		return err
+	}
+	state, err := t.checkForkCache(ref, tip, rebase, true)
 	if err != nil {
 		return err
 	}
-	if actual != tip {
-		return Externalf("fork delivery %s moved during cache refresh: expected %s, got %s", ref, tip, actual)
-	}
-	if err := t.prepareForkCache(ref, tip); err != nil {
+	if rebase.verified() {
+		if err := checkDelivery(); err != nil {
+			return err
+		}
+		if move := state.refresh; move.ref != "" {
+			if !state.detached && state.main == tip {
+				if err := t.clearCacheRefresh(cache, move); err != nil {
+					return err
+				}
+			} else if err := t.finishCacheRefresh(cache, state, move); err != nil {
+				return err
+			}
+			// A later delivery can exist when we recover a receipt. Recheck the
+			// now-attached checkout before starting another refresh toward that tip.
+			return t.RefreshForkCache(ref, tip, rebase)
+		}
+		if state.main != tip {
+			move := cacheRefresh{cacheRefreshPrefix + rebase.new + "/" + state.main, state.main, tip}
+			if _, err := t.forkGit(cache, "update-ref", "--no-deref", move.ref, tip, strings.Repeat("0", len(tip))); err != nil {
+				return err
+			}
+			if err := t.finishCacheRefresh(cache, state, move); err != nil {
+				return err
+			}
+		}
+		if state.patch != tip {
+			_, err = t.forkGit(cache, "update-ref", "--no-deref", ref, tip, state.patch)
+		}
 		return err
 	}
 	if _, err := t.forkGit(cache, "-c", "merge.autoStash=false", "merge", "--ff-only", "--no-edit", tip); err != nil {
 		return err
 	}
 	_, err = t.forkGit(cache, "fetch", "--quiet", "--no-tags", t.repo, "+"+ref+":"+ref)
+	return err
+}
+
+func (t *Trunk) finishCacheRefresh(cache string, state forkCacheState, move cacheRefresh) error {
+	if state.main != move.target && !state.detached {
+		// Detach without changing the checkout. The journal already identifies
+		// this source if the process stops before main can be moved.
+		if _, err := t.forkGit(cache, "checkout", "--quiet", "--detach"); err != nil {
+			return err
+		}
+		head, err := t.forkGit(cache, "rev-parse", "HEAD")
+		if err != nil || strings.TrimSpace(head) != move.source {
+			return Externalf("fork cache %s HEAD moved before detaching for cache refresh", cache)
+		}
+		state.detached = true
+	}
+	if state.main != move.target {
+		if _, err := t.forkGit(cache, "update-ref", "refs/heads/main", move.target, move.source); err != nil {
+			// Reattach only if Git can do so without overwriting work.
+			_, _ = t.forkGit(cache, "checkout", "--quiet", "--no-overwrite-ignore", "main")
+			return err
+		}
+	}
+	if state.detached {
+		// Checkout protects changes made since preflight, including ignored files.
+		if _, err := t.forkGit(cache, "checkout", "--quiet", "--no-overwrite-ignore", "main"); err != nil {
+			// Roll back only our own update. If interrupted, the journal also
+			// recognizes either side of the compare-and-swap on the next retry.
+			if _, rollback := t.forkGit(cache, "update-ref", "refs/heads/main", move.source, move.target); rollback == nil {
+				_, _ = t.forkGit(cache, "checkout", "--quiet", "main")
+			}
+			return err
+		}
+	}
+	main, err := t.forkGit(cache, "rev-parse", "refs/heads/main")
+	if err != nil || strings.TrimSpace(main) != move.target {
+		return Externalf("fork cache %s main moved during cache refresh", cache)
+	}
+	return t.clearCacheRefresh(cache, move)
+}
+
+func (t *Trunk) clearCacheRefresh(cache string, move cacheRefresh) error {
+	_, err := t.forkGit(cache, "update-ref", "--no-deref", "-d", move.ref, move.target)
 	return err
 }
 

@@ -501,6 +501,15 @@ movements that pause landings until the owner confirms them, use
 `tillr drain accept-rewrite`, `tillr drain accept-identity`, or
 `tillr drain acknowledge-patch-move`; `tillr drain sweep-refs` prunes retired run refs.
 
+Acknowledging a patch move clears the hold, not the publication check. A fork rebase
+can replace the remote tip only when it matches this clone's last-published OID and
+successful landings for that fork connect it to the exact outgoing OID. The host
+publisher uses an explicit lease on the observed remote tip. A direct push checks the
+same proof, but refuses even a verified rewrite: run `bin/patch-branches-publish --remote
+<remote>` instead so the publisher can record the confirmed result, then retry the push.
+A force flag or explicit refspec does not waive proof. If the remote tip or receipts do
+not match, inspect both before proceeding; leave the remote tip alone.
+
 Use `tillr drain examine` to judge one retained candidate through the loop's own
 gate, landing and verdict steps. Supply the same step programs and backend policy
 as the loop. It refuses a lane that is held: stop its loop first, then examine the

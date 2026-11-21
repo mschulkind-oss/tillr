@@ -135,19 +135,32 @@ since green with both bounds disabled.
 A fork item delivers to `refs/heads/patch/<fork>`, not the repository's trunk. Its
 passing verdict must bind the candidate's base and tree and carry a passing
 `fork-build` check, which runs the pack's build command on that exact head. The
-lander fast-forwards the patch branch to the built commit without squashing or
-rewriting fork history, and writes its landed marker before the move. The marker
-names that same head, so sibling run boundaries recognize the delivery. The shared
-cache's `main` and copy of the patch ref are refreshed before the receipt is written.
-A missing cache is first prepared privately from the gated fork's upstream metadata
-and published only when complete, at the current delivery tip. A retry after a crash
-between move and receipt completes the refresh without a second delivery; if a later
-fork item already delivered, recovery records the earlier head while keeping the
-cache at that later tip. Ancestry is rechecked against the tip read under the landing
-lock, so an external patch advance while the request waits cannot be overwritten.
-Dirty or divergent cache work is never reset. A passing verdict
-without the build check is `verdict-mismatch`, not permission to deliver. The
-regressions are in [fork_safety_test.go](fork_safety_test.go).
+lander publishes the built commit without squashing. An ordinary delivery
+fast-forwards and writes its landed marker before the move. The marker names that
+same head, so sibling run boundaries recognize the delivery.
+
+A non-fast-forward release rebase is allowed only from the staged delivery tip,
+with the retained verdict, change record and fork registry for that run. The head
+must be linear above the new release selected by `pi-forks patch-branch target`,
+not just above an arbitrary tag. Under the landing lock the lander compares and
+swaps the patch ref to the exact built head and, in the same Git transaction,
+writes the landed marker and pins the old tip at
+`refs/tillr/patch-history/<fork>/<old>`. A concurrent delivery or conflicting pin
+prevents the transaction. The successful `land.landing` event names the delivery
+ref and both tips; the pin alone is not proof of a successful landing.
+
+The shared cache must be clean and on `main`; before a release rebase it must be
+at the staged tip. A missing cache is prepared privately from the gated fork's
+upstream metadata and published only when complete, at the current delivery tip.
+The lander refreshes both cache `main` and its copy of the patch ref before the
+receipt. A cache-local refresh ref records the source and target before the lander
+detaches `HEAD`. On retry, only that clean, journaled checkout can reattach; an
+unrelated detached checkout still refuses. Recovery finishes the cache refresh
+without a second delivery, retaining a later delivered descendant when present.
+A passing verdict without the build check is `verdict-mismatch`, not permission
+to deliver. See
+[fork_safety_test.go](fork_safety_test.go) and
+[fork_rebase_test.go](fork_rebase_test.go).
 
 ## Known cases the marker does not settle
 
@@ -225,8 +238,9 @@ by hand produces the same row as an unattended one.
   cleanly is not a refusal.
 - **A repository that states no landing identity, or states one a lane can write** — the
   identity a commit carries is not a value a lane may choose.
-- **A patch branch that is already at the head, or that the head does not descend from** — a
-  patch branch is a delivery, and moving it back would drop commits another writer published.
+- **A patch branch that is already at the head, or an unverified rewrite** — a
+  non-fast-forward delivery requires the [verified release rebase](#fork-delivery)
+  protocol.
 
 ## The owner's working tree
 
