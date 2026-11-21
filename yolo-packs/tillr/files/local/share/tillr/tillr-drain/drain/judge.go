@@ -545,7 +545,10 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			}
 			var err error
 			checked, err = item.CheckJudge(ctx, r, receipt.Raw, options)
-			return err
+			if err != nil {
+				return err
+			}
+			return l.checkJudgeScope(c, checked.Output.Verdicts)
 		})
 		db.Close()
 		if err == nil {
@@ -827,9 +830,9 @@ Write your JSON verdict to %s. The object has evaluated_head=%q, evaluated_tree=
 outcome (pass or fail), and verdicts covering every criterion below. Each entry has
 criterion_id, criterion_hash, verdict (done, not-done, blocked, defective), claim_class,
 reason, and evidence (non-empty single-token locator strings with no spaces, e.g.
-commit:<sha>, diff:candidate.diff, node:<id>, or for a command that was run,
-file:path/to/changed.go:42, cmd:go-test-tillr-run or test:TestExecRecordsQuickOutChoice;
-put full command lines, arguments, and results in reason).
+commit:<sha>, diff:candidate.diff, file:path/to/changed.go:42, node:<id>, or for your own
+checks, cmd:go-test-tillr-run or test:TestExecRecordsQuickOutChoice; put full command
+lines, arguments, and results in reason).
 
 A verdict of defective means the request itself is wrong or impossible; it closes the item.
 Example: the request requires incompatible outcomes for the same input.
@@ -838,17 +841,15 @@ Quote the faulty words in reason and cite request:words (saved request) or crite
 A fault in the candidate is not-done, not defective.
 Example: the request is valid but the candidate drops input on error.
 
-For a not-done finding fixable solely by correcting
-what the producer reported (without editing the diff), begin reason with %q. Do not use
-that prefix for content findings, including missing tests or other changes to the diff.
-The same commit may be offered with a corrected report only if every finding is report-only.
 A blocked entry also needs waiting_on
 with waiter (owner, design, plan, or item:<id> for a stored item). Its reason explains
 why that waiter must act. Do not include actor or judged_actor.
 Pass requires every criterion done. Return RESULT: done after writing the file.
 
 ## Fence
-No worktree writes. Only the verdict file named above may be written.
+Do not modify the worktree, store, or refs. If a check writes files, run it in a temporary
+copy of the exact candidate tree outside the worktree (for example, extract evaluated_head
+with git archive). The verdict file above is your only deliverable.
 
 ## Seats
 These are seats tillr runs as nodes; a worker cannot start one.
@@ -863,30 +864,32 @@ Read the exact candidate diff from this retained artifact:
 %s
 
 ## Method
-Review the diff and candidate tree against every criterion.
+Judge the candidate commit against only the item's words and criteria. Use the diff and
+candidate tree. Do not read or judge a worker's summary, report, or account of tests.
+A finding must concern the change or the item, not the worker's account of either.
+If an older standard criterion asks for a test inventory in a worker report, verify
+that criterion's checks directly; do not assess the inventory.
+
+## Criteria
+%s
 
 ## Verification commands
-%s
+Run the checks you need yourself against the candidate. For each check you use as
+evidence, record your own command and result in the verdict.
 
 ## Report shape
 Write the verdict file, then report RESULT: done.
 
 ## Stop conditions
 Never change the worker's candidate.
-`, c.ItemID, receipt.Request.RunID, c.Worktree, output, receipt.Options.Head, receipt.Options.Tree, reportFindingPrefix, seatLines(l.currentPolicy()), diffPath, criteria.String())
-	reportPath := filepath.Join(RunDir(l.cfg.Root, c.RunID), "node-report.md")
-	if _, err := os.Stat(reportPath); err == nil {
-		brief += fmt.Sprintf("\nCandidate worker report: %s\n", reportPath)
-	} else if !os.IsNotExist(err) {
-		return err
-	}
+`, c.ItemID, receipt.Request.RunID, c.Worktree, output, receipt.Options.Head, receipt.Options.Tree, seatLines(l.currentPolicy()), diffPath, criteria.String())
 	if len(receipt.Writers) == 0 {
 		for _, producer := range receipt.Producers {
-			brief += fmt.Sprintf("\nRead-only producer %s: run=%s; session=%s; backend=%s; route=%s\n", producer.NodeID, producer.RunID, producer.SessionID, producer.Backend, producer.Route)
+			brief += fmt.Sprintf("\nRead-only producer: node:%s\n", producer.NodeID)
 		}
 	}
 	for _, writer := range receipt.Writers {
-		brief += fmt.Sprintf("\nWriting node %s: run=%s; session=%s; backend=%s; route=%s\n", writer.NodeID, writer.RunID, writer.SessionID, writer.Backend, writer.Route)
+		brief += fmt.Sprintf("\nWriting node: node:%s\n", writer.NodeID)
 	}
 	for _, name := range sortedNames(receipt.Inputs) {
 		brief += fmt.Sprintf("\nInput %s: %s\n", name, receipt.Inputs[name])
@@ -1038,13 +1041,51 @@ func (l *Loop) recordLandedJudge(ctx context.Context, c Candidate) error {
 	})
 }
 
+// Reject the old report-only finding protocol and report citations as verifier-form
+// errors. Recheck the same candidate, rather than treating an unchecked criterion
+// as passed or sending the worker back to edit prose.
+func (l *Loop) checkJudgeScope(c Candidate, entries []item.JudgeEntry) error {
+	artifacts := map[string]bool{}
+	runIDs := []string{c.RunID}
+	if c.Judge != nil {
+		for _, writer := range c.Judge.Writers {
+			runIDs = append(runIDs, writer.RunID)
+		}
+		for _, producer := range c.Judge.Producers {
+			runIDs = append(runIDs, producer.RunID)
+		}
+	}
+	for _, runID := range runIDs {
+		artifacts[filepath.Join(RunDir(l.cfg.Root, runID), "node-report.md")] = true
+		scratch := run.DurableDir(l.laneDirPath(c.LaneID), runID)
+		artifacts[filepath.Join(scratch, "report.md")] = true
+		artifacts[filepath.Join(scratch, landingOfferFile)] = true
+	}
+	for _, entry := range entries {
+		outside := strings.HasPrefix(strings.ToLower(strings.TrimSpace(entry.Reason)), "report-only:")
+		for _, evidence := range entry.Evidence {
+			ref := strings.TrimPrefix(strings.TrimPrefix(evidence, "file:"), "path:")
+			path, _, _ := strings.Cut(ref, ":")
+			path, _, _ = strings.Cut(path, "#")
+			path = filepath.Clean(path)
+			outside = outside || strings.HasPrefix(ref, "report:") || artifacts[path] ||
+				(!filepath.IsAbs(path) && artifacts[filepath.Join(c.Worktree, path)])
+		}
+		if outside {
+			return item.Rejectionf("judge-scope", c.ItemID, "criterion %s uses a worker summary or report outside the scope of judgment; verify the change against the item yourself", entry.CriterionID)
+		}
+	}
+	return nil
+}
+
 func isJudgeFormRejection(err error) bool {
 	rej, ok := item.RejectionOf(err)
 	if !ok {
 		return false
 	}
 	switch rej.Rule {
-	case "judge-output",
+	case "judge-scope",
+		"judge-output",
 		"actor-in-output",
 		"evaluated-head",
 		"evaluated-tree",

@@ -80,7 +80,7 @@ func TestRestartOffersAlreadyCommittedWork(t *testing.T) {
 				if ending == "hold" || gotBase == gotHead {
 					return "OBSTACLE: tooling\nCOMMAND: validate\nEVIDENCE: validator failed to start\nPATHS: validator\nRESULT: blocked\n", nil
 				}
-				return "RESULT: done\n", &landingOffer{CallID: "restart-offer", Commit: gotHead, Base: gotBase, Summary: "candidate before restart"}
+				return "RESULT: done\n", &landingOffer{CallID: "restart-offer", Commit: gotHead, Base: gotBase}
 			}}
 			next := replaceGraphLoop(t, f, l, steps)
 			for i := 0; i < 3; i++ {

@@ -10,7 +10,8 @@ import (
 
 func TestFinalReportFromCommitOffer(t *testing.T) {
 	for _, tc := range []struct{ name, offer, want string }{
-		{"commit", `{"call_id":"call","base":"base","commit":"head","summary":"Changed behavior.\n\nVerification: targeted test passed."}`, "complete: yes\nresult: done\n\n---\nChanged behavior.\n\nVerification: targeted test passed.\n\nRESULT: done\n"},
+		{"commit", `{"call_id":"call","base":"base","commit":"head"}`, "complete: yes\nresult: done\n\n---\nRESULT: done\n"},
+		{"legacy commit", `{"call_id":"call","base":"base","commit":"head","summary":"Changed behavior.\n\nVerification: targeted test passed."}`, "complete: yes\nresult: done\n\n---\nRESULT: done\n"},
 		{"no offer", "", "complete: no\nresult: missing\n"},
 		{"obstacle", `{"call_id":"call","base":"base","tool":"obstacle","obstacle":{"kind":"owner"}}`, "complete: no\nresult: missing\n"},
 	} {
@@ -33,6 +34,9 @@ func TestFinalReportFromCommitOffer(t *testing.T) {
 			report, err := os.ReadFile(filepath.Join(dir, "report.md"))
 			if err != nil || !strings.Contains(string(report), tc.want) {
 				t.Fatalf("report = %s\nerror = %v; extraction note: %s", report, err, note)
+			}
+			if strings.Contains(string(report), "Changed behavior.") || strings.Contains(string(report), "Verification: targeted test passed.") {
+				t.Fatalf("receipt included the legacy worker summary: %s", report)
 			}
 		})
 	}

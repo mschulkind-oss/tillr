@@ -400,11 +400,11 @@ with that header yields `session: unknown` rather than a guess.
 
 ## Silent-failure signatures
 
-- **Exit 0 with nothing written.** `diff.names` empty while the report claims changes is
-  a false-green report; the driver's check catches it because every element of that check
-  is produced from the tree afterwards.
-- **A report with no `RESULT:` footer**, whatever the exit code. The extractor refuses it
-  with exit 4 and the report says `complete: no`.
+- **Exit 0 with no candidate.** An exit code is not proof of work; the driver checks the
+  committed tree afterwards.
+- **A footer run with no `RESULT:` line**, whatever the exit code. The extractor exits 4
+  and the report says `complete: no`. A valid commit offer from `land` replaces the
+  footer on a call-suspends run.
 - **A session pi ended for a repeating call.** Pi emits `loop_detected` with `action:
   "recovered"` when it backs up, compacts, and resumes in-run, which is not an ending;
   when it ends the session (`action: "ended"`, or no `action` field on an older pi), the
@@ -441,10 +441,9 @@ with that header yields `session: unknown` rather than a guess.
    for, and `route: unknown` when staging named none.
 6. **Check from the tree, not from the report:** `boundary.after` diffs empty against
    `boundary.before`; `git -C <target> diff <base_sha> > diff.patch` and every name in it
-   is inside `fence.txt`; every path the report claims is in the diff and every path in
-   the diff is claimed or explained; and the brief's verification commands are re-run by
-   the driver, never read off the report. On Pi this step is the *only* boundary there
-   is.
+   is inside `fence.txt`; the verifier compares the candidate with the item and runs the
+   checks it needs itself. A worker's account is not evidence. On Pi this step is the
+   *only* boundary there is.
 7. **Land through the gate** (`just done`) after the attempt result is assigned.
 
 ## The canary a live run owes
