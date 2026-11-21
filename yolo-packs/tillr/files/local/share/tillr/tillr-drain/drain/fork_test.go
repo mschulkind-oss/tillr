@@ -9,75 +9,11 @@ import (
 	"testing"
 )
 
-// A fork-series item's fence names the checkout under .forks/lanes/<lane>/<fork>. The
-// target it answers is the checkout, and the ref it answers is the patch branch that
-// checkout is exported to — not the lane worktree, which is still cut from the trunk.
-func TestForkTargetReadsTheCheckoutAndItsPatchRef(t *testing.T) {
-	root := filepath.FromSlash("/repo")
-	target, ok, err := forkTarget(root, "lane-1", []string{
-		"tools/tillr-drain/",
-		".forks/lanes/lane-1/pi/",
-	})
-	if err != nil {
-		t.Fatalf("reading the fork target failed: %v", err)
-	}
-	if !ok {
-		t.Fatalf("the fence names .forks/lanes/lane-1/pi, but no fork target was read")
-	}
-	if want := filepath.Join(root, ".forks", "lanes", "lane-1", "pi"); target.Checkout != want {
-		t.Fatalf("the checkout is %q, want %q", target.Checkout, want)
-	}
-	if target.Ref != "refs/heads/patch/pi" {
-		t.Fatalf("the ref is %q, want refs/heads/patch/pi", target.Ref)
-	}
-	if target.Path != ".forks/lanes/lane-1/pi" {
-		t.Fatalf("the path is %q, want the repo-relative checkout", target.Path)
-	}
-	if target.Fork != "pi" {
-		t.Fatalf("the fork is %q, want pi", target.Fork)
-	}
-}
-
-// A fence may name a subdirectory of the checkout, and may name the checkout more than
-// once; the checkout is the fork root either way, and one fork is one target.
-func TestForkTargetReadsTheCheckoutRootForASubdirectory(t *testing.T) {
-	target, ok, err := forkTarget("/repo", "lane-1", []string{
-		".forks/lanes/lane-1/pi/src/",
-		".forks/lanes/lane-1/pi",
-	})
-	if err != nil || !ok {
-		t.Fatalf("a fence naming a checkout and a subdirectory answered ok=%v err=%v", ok, err)
-	}
-	if want := filepath.FromSlash("/repo/.forks/lanes/lane-1/pi"); target.Checkout != want {
-		t.Fatalf("the checkout is %q, want the fork root %q", target.Checkout, want)
-	}
-	if target.Path != ".forks/lanes/lane-1/pi" {
-		t.Fatalf("the path is %q, want the fork root", target.Path)
-	}
-}
-
-// A filed lane id is a placeholder, not a reservation of that writer's checkout.
-func TestForkTargetUsesTheDispatchedLane(t *testing.T) {
-	target, ok, err := forkTarget("/repo", "lane-3", []string{".forks/lanes/lane-1/pi/src/"})
-	if err != nil || !ok || target.Path != ".forks/lanes/lane-3/pi" || target.Ref != "refs/heads/patch/pi" {
-		t.Fatalf("dispatch to lane-3 answered target=%+v ok=%v err=%v", target, ok, err)
-	}
-}
-
-// One item is one fork. Two checkouts would make the candidate's base ambiguous, so the
-// second is refused by name rather than silently picking the first.
-func TestForkTargetRefusesTwoCheckouts(t *testing.T) {
-	_, _, err := forkTarget("/repo", "lane-1", []string{
-		".forks/lanes/lane-1/pi",
-		".forks/lanes/lane-1/pi-subagents",
-	})
-	if err == nil {
-		t.Fatalf("a fence naming two fork checkouts was accepted")
-	}
-	for _, want := range []string{"lane-1/pi", "lane-1/pi-subagents"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("the refusal does not name %q: %v", want, err)
-		}
+func TestForkFenceNarrowsOnlyTheRecordedTarget(t *testing.T) {
+	target := checkoutForDelivery(t.TempDir(), "lane-3", deliveryDecision{Kind: "fork", Fork: "pi"})
+	fence := itemDeliveryFence(target, []string{".forks/lanes/lane-1/pi-subagents/", ".forks/lanes/lane-1/pi/src/"})
+	if len(fence) != 1 || fence[0] != ".forks/lanes/lane-3/pi/src/" {
+		t.Fatalf("fence = %v", fence)
 	}
 }
 

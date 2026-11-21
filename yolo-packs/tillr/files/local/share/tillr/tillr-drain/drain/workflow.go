@@ -549,7 +549,14 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	next.RepeatedCall = nil
 	next.WorkerSessionReason = ""
 	next.ConflictID = ""
-	index, err := l.nextWorkflowNode(ctx, d)
+	if classificationNode(d.Workflow.Stages[d.NodeIndex]) {
+		delivery, err := l.recordedDelivery(ctx, d.ItemID)
+		if err != nil {
+			return err
+		}
+		next.Workflow = workflowForDelivery(d.Workflow, delivery)
+	}
+	index, err := l.nextWorkflowNode(ctx, next)
 	if err != nil {
 		return err
 	}
@@ -558,7 +565,9 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	}
 	next.NodeIndex = index
 	next.PreviousReport = report
-	if !l.nonLanding {
+	if classificationNode(d.Workflow.Stages[d.NodeIndex]) {
+		next.NodeBaseSHA = ""
+	} else if !l.nonLanding {
 		head, err := l.revParse(ctx, l.laneTarget(d.LaneID), "HEAD")
 		if err != nil {
 			return err
@@ -610,7 +619,7 @@ const (
 )
 
 func planAllowsQuickWay(stage WorkflowStage) bool {
-	return (stage.Kind == "" || stage.Kind == "agent") && stage.Seat == "plan" && stage.Access == "read_only"
+	return (stage.Kind == "" || stage.Kind == "agent") && stage.Seat == "plan" && stage.Access == "read_only" && !(stage.ID == "classify" && classificationNode(stage))
 }
 
 func planTookQuickWay(root string, d Decision) (bool, error) {
@@ -876,6 +885,10 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		return true, l.markExamined(ctx, d)
 	}
 	artifacts, outputErr := checkNodeOutputs(l.cfg.Root, d)
+	var delivery *deliveryDecision
+	if outputErr == nil && classificationNode(stage) {
+		delivery, outputErr = classifyDelivery(l.cfg.Root, artifacts, quickWay)
+	}
 	if outputErr == nil && quickWay {
 		for _, a := range artifacts {
 			if a.Type == "graph.proposal" {
@@ -897,7 +910,7 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		}
 		return true, l.markExamined(ctx, d)
 	}
-	if err := l.acceptNodeSettlement(ctx, &d, artifacts); err != nil {
+	if err := l.acceptNodeSettlementWithDelivery(ctx, &d, artifacts, delivery); err != nil {
 		return true, err
 	}
 	if !l.nonLanding && effectiveAccess == "write" && head != "" && head != nodeBase {

@@ -172,10 +172,8 @@ func tillrModule(p string) (string, bool) {
 	return module, true
 }
 
-// ForkTarget is the checkout a fork-series item's fence names and the ref its delivery
-// moves. A fork item is one whose allowed_paths names `.forks/lanes/<lane>/<fork>`: the
-// checkout is a fork's own git repository under the workspace's `.forks/`, so a run's
-// commit lives there and is exported to the patch branch rather than landed on the trunk.
+// ForkTarget is a checkout selected by the recorded delivery decision and the
+// patch ref the lander publishes.
 type ForkTarget struct {
 	// Checkout is the absolute path of the fork's own checkout.
 	Checkout string
@@ -185,45 +183,6 @@ type ForkTarget struct {
 	Path string
 	// Fork is the fork's name.
 	Fork string
-}
-
-// forkTarget answers the fork checkout an item's fence names for this lane, or ok=false
-// when it names none. It refuses more than one: an item is one fork, and two checkouts in
-// one fence would make the candidate's base sha ambiguous.
-func forkTarget(root, laneID string, allowed []string) (ForkTarget, bool, error) {
-	prefix := ".forks/lanes/" + laneID + "/"
-	found := make([]ForkTarget, 0, 1)
-	seen := make(map[string]bool, 1)
-	for _, raw := range allowed {
-		_, fork, _, declared := item.ForkCheckoutPath(raw)
-		if !declared {
-			continue
-		}
-		// A fence may name a subdirectory of the checkout; the checkout is always the
-		// fork root, because that is where the fork's HEAD and its patch branch live.
-		checkout := prefix + fork
-		if seen[checkout] {
-			continue
-		}
-		seen[checkout] = true
-		found = append(found, ForkTarget{
-			Checkout: filepath.Join(root, filepath.FromSlash(checkout)),
-			Ref:      "refs/heads/patch/" + fork,
-			Path:     checkout,
-			Fork:     fork,
-		})
-	}
-	if len(found) > 1 {
-		names := make([]string, len(found))
-		for i, target := range found {
-			names[i] = target.Path
-		}
-		return ForkTarget{}, false, Usagef("the item's fence names %d fork checkouts (%s): one item is one fork, so name one", len(found), strings.Join(names, ", "))
-	}
-	if len(found) == 0 {
-		return ForkTarget{}, false, nil
-	}
-	return found[0], true, nil
 }
 
 // OutOfFence is the fixed half of the brief's fence section: the state outside the fence
@@ -384,18 +343,16 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	if spec.BlockConflict != nil {
 		recorded.AllowedPaths = blockConflictPaths(recorded, *spec.BlockConflict)
 	}
-	fork, isFork, err := forkTarget(s.Root, spec.LaneID, recorded.AllowedPaths)
-	if err != nil {
-		return err
+	delivery := recorded.Delivery
+	if spec.BlockConflict != nil || (spec.Node != nil && classificationNode(*spec.Node)) {
+		delivery = deliveryDecision{}
 	}
+	fork := checkoutForDelivery(s.Root, spec.LaneID, delivery)
+	isFork := fork.Fork != ""
 	target, targetKind := worktree, "lane worktree"
 	baseSHA := spec.BaseSHA
 	if isFork {
-		for i, raw := range recorded.AllowedPaths {
-			if _, name, suffix, ok := item.ForkCheckoutPath(raw); ok {
-				recorded.AllowedPaths[i] = ".forks/lanes/" + spec.LaneID + "/" + name + suffix
-			}
-		}
+		recorded.AllowedPaths = itemDeliveryFence(fork, recorded.AllowedPaths)
 		if err := s.ensureForkCheckout(ctx, spec, fork); err != nil {
 			return err
 		}
@@ -469,14 +426,13 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 			}
 			baseSHA = strings.TrimSpace(head)
 		}
-		scope, err := spec.Node.scopePaths(itemAllowed)
+		node := *spec.Node
+		if isFork {
+			node.WriteScope = WorkflowScope{Paths: forkFence(fork, node.WriteScope.Paths)}
+		}
+		scope, err := node.scopePaths(itemAllowed)
 		if err != nil {
 			return err
-		}
-		for i, raw := range scope {
-			if _, name, suffix, ok := item.ForkCheckoutPath(raw); ok {
-				scope[i] = ".forks/lanes/" + spec.LaneID + "/" + name + suffix
-			}
 		}
 		if spec.nodeFenceWidened && !scopeWithin(scope, fencePaths(itemAllowed)) {
 			return Externalf("%s: widened scope for %s is no longer inside the item's fence", ReasonNodeScopeOutsideFence, spec.Node.ID)
@@ -544,6 +500,13 @@ func (s *LaneStager) Stage(ctx context.Context, spec StageSpec) error {
 	earlier, err := preservedFacts(ctx, s.Store, spec)
 	if err != nil {
 		return err
+	}
+	if delivery.Kind == "both" {
+		if delivery.ForkLanded != "" {
+			earlier += fmt.Sprintf("\n\nMixed delivery: the lander published fork %s at %s. Work only on the repository part now; do not repeat the fork work.", delivery.Fork, delivery.ForkLanded)
+		} else {
+			earlier += "\n\nMixed delivery: work only on the fork part now. The repository part waits for the lander to publish this fork."
+		}
 	}
 	fixerFacts, fixerCopies, err := s.prepareTrunkFixerFacts(ctx, recorded, spec)
 	if err != nil {
@@ -758,13 +721,14 @@ func checkRunID(runID string) error {
 // the item record's own JSON, read through the item package's show face so the columns and
 // their meanings stay in one place.
 type stagedItem struct {
-	ItemID       string   `json:"item_id"`
-	Title        string   `json:"title"`
-	BodyRef      string   `json:"body_ref"`
-	DesignDoc    string   `json:"design_doc"`
-	Seat         string   `json:"seat"`
-	Workflow     string   `json:"workflow"`
-	AllowedPaths []string `json:"allowed_paths"`
+	Delivery     deliveryDecision `json:"-"`
+	ItemID       string           `json:"item_id"`
+	Title        string           `json:"title"`
+	BodyRef      string           `json:"body_ref"`
+	DesignDoc    string           `json:"design_doc"`
+	Seat         string           `json:"seat"`
+	Workflow     string           `json:"workflow"`
+	AllowedPaths []string         `json:"allowed_paths"`
 	Criteria     []struct {
 		CriterionID string `json:"criterion_id"`
 		Text        string `json:"text"`
@@ -828,9 +792,14 @@ func readStagedItem(ctx context.Context, storePath, root, itemID string) (staged
 	}
 	defer r.Close()
 	var env record.Envelope
+	var delivery deliveryDecision
 	if err := r.ReadTx(ctx, func(reader *store.Reader) error {
 		found, err := item.ReadStored(reader, itemID, root)
+		if err != nil {
+			return err
+		}
 		env = found
+		delivery, err = readDelivery(reader, itemID)
 		return err
 	}); err != nil {
 		return stagedItem{}, Externalf("reading item %s: %v", itemID, err)
@@ -839,6 +808,7 @@ func readStagedItem(ctx context.Context, storePath, root, itemID string) (staged
 	if err := json.Unmarshal(env.Payload, &recorded); err != nil {
 		return stagedItem{}, Internalf("reading item %s's payload: %v", itemID, err)
 	}
+	recorded.Delivery = delivery
 	return recorded, nil
 }
 

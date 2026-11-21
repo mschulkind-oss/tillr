@@ -443,6 +443,10 @@ func (l *Loop) acceptNodeOutputs(ctx context.Context, d Decision, artifacts []no
 }
 
 func (l *Loop) acceptNodeSettlement(ctx context.Context, decision *Decision, artifacts []nodeArtifact) error {
+	return l.acceptNodeSettlementWithDelivery(ctx, decision, artifacts, nil)
+}
+
+func (l *Loop) acceptNodeSettlementWithDelivery(ctx context.Context, decision *Decision, artifacts []nodeArtifact, delivery *deliveryDecision) error {
 	d := *decision
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
@@ -465,6 +469,19 @@ func (l *Loop) acceptNodeSettlement(ctx context.Context, decision *Decision, art
 		}
 		if err := l.settleProposal(tx, &d, artifacts); err != nil {
 			return err
+		}
+		if delivery != nil {
+			old, err := readDelivery(tx.Reader(), d.ItemID)
+			if err != nil {
+				return err
+			}
+			if old.Kind != "" {
+				if old != *delivery {
+					return fmt.Errorf("delivery for %s is already recorded", d.ItemID)
+				}
+			} else if err := appendEffectOn(tx, deliveryDecisionKind, "item", d.ItemID, *delivery, l.cfg.Now().UTC()); err != nil {
+				return err
+			}
 		}
 		_, err := tx.Exec(`UPDATE node_runs SET outcome='passed' WHERE run_id=?`, d.RunRequest.RunID)
 		if err == nil {

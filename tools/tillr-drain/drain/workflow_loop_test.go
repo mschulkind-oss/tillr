@@ -228,8 +228,7 @@ func TestWorkflowForkContinuationKeepsItsOwnReservation(t *testing.T) {
 	runGit(t, f.root, "add", ".gitignore")
 	runGit(t, f.root, "commit", "-qm", "ignore fork checkout")
 	fixtureWrite(t, f, func(tx *store.Tx) error {
-		_, err := tx.Exec(`UPDATE items SET allowed_paths='[".forks/lanes/lane-1/pi"]'`)
-		return err
+		return recordFixtureFork(tx, "item-a", "item-b")
 	})
 	steps.fork = fork
 	base := runGit(t, fork, "rev-parse", "HEAD")

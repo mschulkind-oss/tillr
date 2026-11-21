@@ -678,14 +678,14 @@ def case_cache_safe_working_loop_documented():
 
 
 def case_fork_filing_documented():
-    for path in (ROOT / "tools/tillr-drain/README.md", SKILL):
-        text = text_of(path)
-        for required in (".forks/lanes/lane-1/pi/", "placeholder", "worker", "commits",
-                         "bin/pi-forks export", "lander", "fork-build", "fork-quality",
-                         "shared cache"):
+    for path in (ROOT / "AGENTS.md", ROOT / "docs/pi/forks.md",
+                 ROOT / "tools/tillr-drain/README.md", SKILL):
+        text = " ".join(text_of(path).split())
+        for required in ("tillr item request", "standard input", "--title", "--path",
+                         "lane checkout path", "bin/pi-forks export", "lander", "fork-build"):
             if required not in text:
                 fail(f"{path.relative_to(ROOT)} omits fork filing guidance: {required}")
-    ok("fork filing names the rebound fence, worker commit and lander-owned delivery")
+    ok("fork filing names the accepted request form and lander-owned delivery")
 
 
 def case_run_environment_documented():

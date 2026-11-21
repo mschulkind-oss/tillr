@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -223,7 +222,8 @@ type itemRow struct {
 	State        string
 	Rank         string
 	// Allowed is the item's allowed_paths, the source of the fence its run is held to.
-	Allowed []string
+	Allowed  []string
+	Delivery deliveryDecision
 	// DesignDoc is the design document the item names, relative to the repository or
 	// absolute. It is empty for an item that names none, and such an item has no question
 	// state to read: an item with no document is not an item whose document is missing.
@@ -602,7 +602,10 @@ func (p *planner) reserveWorkerLanes(items []itemRow, released map[string]bool) 
 // decisions and, for each lane a dispatch or retry took, the item that took it.
 func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][]string, faults map[string]ItemFault, works map[string]*pendingWork, inputs map[string]*RunInputs, retries map[string]retryRow, rewriteOwnerHolds, rewriteHolds map[string]string, unshared map[string]bool, hasNodes bool, buildHash string, policy *Policy, shut map[string]bool, tick Pass, root string, def definition.Definition, at time.Time) ([]record.Envelope, map[string]string, error) {
 	claimed := map[string]string{}
-	var err error
+	known, err := deliveryCatalog(root)
+	if err != nil {
+		return nil, nil, err
+	}
 	decisions := make([]record.Envelope, 0, len(items))
 	for _, item := range items {
 		if tick.examineItem != "" && item.ItemID != tick.examineItem {
@@ -740,6 +743,9 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			}
 		} else {
 			w, selected, source, loadErr := selectWorkflow(r, root, item, tick.WorkflowDefaults, policy)
+			if loadErr == nil && def.Completes == "landing" {
+				w = planDelivery(w, selected, item, known)
+			}
 			if loadErr == nil && def.Completes != "landing" && evaluatorSlot(w) != "" {
 				loadErr = fmt.Errorf("workflow-evaluator-requires-landing: evaluator_slot judges a Git candidate; use an ordinary agent node and the definition's completion hook instead")
 			}
@@ -1141,7 +1147,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	// One planner-level exclusion survives: two items that deliver one fork's patch branch
 	// cannot run at once, however disjoint their own fences are, because the second would
 	// move a branch the first is still building.
-	heldBy, forkHeld := p.forkHeldBy(item.Allowed)
+	heldBy, forkHeld := p.forkHeldBy(item.Delivery.activeFork())
 	// The design document is read before the tick's resources, and before the item's attempt
 	// history: an item whose design still asks something is not dispatchable whatever else
 	// is true, and answering `no-lane` would send an operator looking for a lane to solve a
@@ -1174,7 +1180,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		// operator is the mover (holdrules "repeating-call").
 		decision.Action, decision.Reason = ActionHold, ReasonRepeatingCall
 		decision.SupersedesRunID = repeated.RunID
-	case retry == nil && !interrupted && repeated == nil && !attempt.failover && !attempt.singleBackendFailure && returned == nil && p.mayBeARetry(item.ItemID) && decision.ConflictID == "" && holdEnabled(p.rules(), p.retryHoldReason(item.ItemID)):
+	case retry == nil && !interrupted && repeated == nil && !attempt.failover && !attempt.singleBackendFailure && returned == nil && p.mayBeARetry(item.ItemID) && decision.ConflictID == "" && !(item.Delivery.ForkRun != "" && item.Delivery.ForkRun == p.latest[item.ItemID]) && holdEnabled(p.rules(), p.retryHoldReason(item.ItemID)):
 		decision.Action, decision.Reason = ActionHold, p.retryHoldReason(item.ItemID)
 		decision.SupersedesRunID = p.latest[item.ItemID]
 	case holdEnabled(p.rules(), ReasonNoFence) && fenceAdmitsNothing(fence):
@@ -1234,7 +1240,7 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		}
 		p.assignLane(lane)
 		if p.captureStart == nil {
-			p.forks = append(p.forks, plannedFork{itemID: item.ItemID, fork: forkOf(item.Allowed)})
+			p.forks = append(p.forks, plannedFork{itemID: item.ItemID, fork: item.Delivery.activeFork()})
 		}
 		decision.LaneID = lane
 		decision.Inputs = p.inputs[item.ItemID]
@@ -1495,36 +1501,10 @@ func fenceAdmitsNothing(fence []string) bool {
 	return false
 }
 
-// forkOf answers the fork an item delivers: the path component under
-// `.forks/lanes/<lane>/`, or "" when the item names no fork checkout. The fork is the
-// whole of the patch branch's identity — `.forks/lanes/lane-1/pi` and
-// `.forks/lanes/lane-2/pi` both deliver `refs/heads/patch/pi` — so two items naming one
-// fork cannot run at once whatever lanes they were staged on.
-func forkOf(allowed []string) string {
-	for _, raw := range allowed {
-		cleaned := path.Clean(filepath.ToSlash(raw))
-		rest, ok := strings.CutPrefix(cleaned, ".forks/lanes/")
-		if !ok {
-			continue
-		}
-		_, after, ok := strings.Cut(rest, "/")
-		if !ok {
-			continue
-		}
-		fork, _, _ := strings.Cut(after, "/")
-		if fork == "" || fork == "." || fork == ".." {
-			continue
-		}
-		return fork
-	}
-	return ""
-}
-
 // forkHeldBy answers the item this tick already dispatched whose fork-series delivery moves
 // the same patch branch, and whether there is one. Only a dispatch that delivers a fork
 // counts, and an item that names no fork is never held behind one.
-func (p *planner) forkHeldBy(allowed []string) (string, bool) {
-	fork := forkOf(allowed)
+func (p *planner) forkHeldBy(fork string) (string, bool) {
 	if fork == "" {
 		return "", false
 	}
@@ -2105,6 +2085,10 @@ func scanItemRow(scanner interface{ Scan(...any) error }) (itemRow, error) {
 }
 
 func readItems(r *store.Reader) ([]itemRow, error) {
+	deliveries, err := readDeliveries(r)
+	if err != nil {
+		return nil, readFailure(err)
+	}
 	owed, err := ownercriteria.ReadOwnerCriteria(r)
 	if err != nil {
 		return nil, readFailure(err)
@@ -2125,6 +2109,7 @@ func readItems(r *store.Reader) ([]itemRow, error) {
 			return nil, err
 		}
 		row.OwnerOwed = owed[row.ItemID]
+		row.Delivery = deliveries[row.ItemID]
 		items = append(items, row)
 	}
 	if err := rows.Err(); err != nil {

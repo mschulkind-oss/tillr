@@ -100,8 +100,7 @@ func TestParallelReadersRecoverForkBaseFromStagingArchive(t *testing.T) {
 	base := runGit(t, fork, "rev-parse", "HEAD")
 	runGit(t, f.root, "fetch", "--no-tags", fork, "refs/heads/main:refs/heads/patch/pi")
 	fixtureWrite(t, f, func(tx *store.Tx) error {
-		_, err := tx.Exec(`UPDATE items SET allowed_paths='[".forks/lanes/lane-1/pi"]' WHERE item_id='item-a'`)
-		return err
+		return recordFixtureFork(tx, "item-a")
 	})
 	deadOwnerClaim(t, f, l, mustPlan(t, l)[0])
 	work := pendingForTest(t, f, "item-a")

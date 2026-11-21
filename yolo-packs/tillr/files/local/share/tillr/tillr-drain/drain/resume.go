@@ -343,6 +343,9 @@ func rederiveFence(ctx context.Context, cfg ResumeConfig, row resumeRun, laneDir
 		}
 		if work := works[runID]; work != nil && work.Decision.ItemID == row.ItemID {
 			d := work.Decision
+			if d.BlockConflict != nil {
+				recorded.Delivery = deliveryDecision{}
+			}
 			if c := d.BlockConflict; c != nil && c.TriageVersion != "" {
 				recorded.AllowedPaths = []string{triageDocument(c.BodyRef)}
 			} else if c != nil {
@@ -364,6 +367,12 @@ func rederiveFence(ctx context.Context, cfg ResumeConfig, row resumeRun, laneDir
 	r.Close()
 	if err != nil {
 		return nil, err
+	}
+	if fork := checkoutForDelivery(cfg.Root, row.LaneID, recorded.Delivery); fork.Fork != "" && (node == nil || !classificationNode(*node)) {
+		recorded.AllowedPaths = itemDeliveryFence(fork, recorded.AllowedPaths)
+		if node != nil {
+			node.WriteScope = WorkflowScope{Paths: forkFence(fork, node.WriteScope.Paths)}
+		}
 	}
 	if len(recorded.AllowedPaths) == 0 {
 		return nil, Externalf("item %s names no allowed_paths: a resume refuses to continue under a fence that admits nothing", recorded.ItemID)

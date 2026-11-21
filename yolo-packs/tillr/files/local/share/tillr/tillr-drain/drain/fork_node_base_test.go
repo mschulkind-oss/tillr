@@ -24,8 +24,10 @@ func forkNodeBaseFixture(t *testing.T) (refusalLoopFixture, *Loop, string, strin
 	runGit(t, fork, "commit", "--allow-empty", "-qm", "fork base")
 	runGit(t, f.root, "fetch", "--no-tags", fork, "refs/heads/main:refs/heads/patch/pi")
 	fixtureWrite(t, f, func(tx *store.Tx) error {
-		_, err := tx.Exec(`UPDATE items SET state='in-queue',allowed_paths='[".forks/lanes/lane-1/pi"]' WHERE item_id='item-a'`)
-		return err
+		if _, err := tx.Exec(`UPDATE items SET state='in-queue' WHERE item_id='item-a'`); err != nil {
+			return err
+		}
+		return recordFixtureFork(tx, "item-a")
 	})
 	return f, l, fork, runGit(t, f.root, "rev-parse", "HEAD"), runGit(t, fork, "rev-parse", "HEAD")
 }

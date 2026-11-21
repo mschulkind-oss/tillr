@@ -1530,6 +1530,11 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			if !revertedSession {
 				spec.Continue = spec.Continue || (decision.NodeIndex > 0 && !freshRetry && !freshVerifyReturn && decision.RetryCandidate == nil) || decision.WorkflowRestart
 			}
+			if decision.NodeIndex == 1 && classificationNode(decision.Workflow.Stages[0]) && l.laneForkTarget(decision.LaneID) == "" && spec.KeptHeadSHA == "" {
+				// The classifier had only a repository checkout. Start the fork
+				// worker (if selected) from its own independently pinned base.
+				spec.Continue = false
+			}
 			if spec.Continue {
 				spec.PreviousRunID = decision.NodeStartRunID
 				if decision.RepeatedCall != nil && decision.RepeatedCall.RunID != "" {
@@ -3016,6 +3021,9 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	if err := l.checkLandingJudgeGrant(ctx, candidate); err != nil {
 		return "", false, err
 	}
+	if err := l.checkDeliveryOrder(ctx, candidate); err != nil {
+		return "", false, err
+	}
 	// Retrying a durable verdict skips the gate, not the recorded-head guard.
 	if err := l.candidateInItsLane(ctx, candidate); err != nil {
 		return "", false, err
@@ -3111,6 +3119,9 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 			return "", false, err
 		}
 		return "", false, nil
+	}
+	if partial, err := l.settlePartialDelivery(ctx, candidate, landed.TrunkAfter); err != nil || partial {
+		return "", partial, err
 	}
 	if err := l.recordLandingCallLanded(ctx, judgeWriterRun(candidate), landed.TrunkAfter); err != nil {
 		return "", false, err

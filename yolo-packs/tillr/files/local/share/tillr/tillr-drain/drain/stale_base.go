@@ -136,21 +136,17 @@ func runBaseLacks(ctx context.Context, r *store.Reader, root, runID, trunk strin
 		}
 	}
 	for _, blocker := range blockers {
-		var landed string
-		err := r.QueryRow(`SELECT trunk_after FROM landings WHERE item_id=? AND result='landed' AND event_seq<? ORDER BY event_seq DESC LIMIT 1`, blocker, d.seq).Scan(&landed)
+		var landed, ref string
+		err := r.QueryRow(`SELECT l.trunk_after, COALESCE(json_extract(e.payload, '$.base_ref'), '')
+			FROM landings l LEFT JOIN events e ON e.seq=l.event_seq AND e.kind='land.landing'
+			WHERE l.item_id=? AND l.result='landed' AND l.event_seq<? ORDER BY l.event_seq DESC LIMIT 1`, blocker, d.seq).Scan(&landed, &ref)
 		if errors.Is(err, sql.ErrNoRows) || (err != nil && strings.Contains(err.Error(), "no such table")) {
 			continue
 		}
 		if err != nil {
 			return out, err
 		}
-		var fence string
-		if err := r.QueryRow(`SELECT COALESCE(allowed_paths, '') FROM items WHERE item_id=?`, blocker).Scan(&fence); err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return out, err
-		}
-		if allowed, err := decodeFence(fence); err != nil {
-			return out, err
-		} else if forkOf(allowed) != "" {
+		if strings.HasPrefix(ref, "refs/heads/patch/") {
 			// A fork landing is delivered to its patch branch, which a trunk base never holds.
 			continue
 		}

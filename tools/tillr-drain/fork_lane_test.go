@@ -12,6 +12,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/drain"
 	"github.com/mschulkind-oss/tillr-drain/patchmoves"
+	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -29,9 +30,28 @@ type forkLaneFixture struct {
 // is initialized separately rather than as a worktree of the trunk: a real fork checkout is
 // its own repository under .forks/, so the boundary must not see its HEAD as a worktree
 // moving.
+func newForkStageFixture(t *testing.T) stageFixture {
+	t.Helper()
+	id := "item_041"
+	f := newStageFixture(t, fencedItemRecord(id, "in-queue", "base.txt"))
+	ctx := context.Background()
+	db, err := store.Open(ctx, f.store, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := tx.Append(event.Event{Kind: "drain.delivery-decision", ObjectType: "item", ObjectID: &id, At: time.Now(), Payload: json.RawMessage(`{"kind":"fork","fork":"pi"}`)})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
 func newForkLaneFixture(t *testing.T) forkLaneFixture {
 	t.Helper()
-	f := newStageFixture(t, fencedItemRecord("item_041", "in-queue", ".forks/lanes/lane-1/pi"))
+	f := newForkStageFixture(t)
 	fork := filepath.Join(f.root, ".forks", "lanes", "lane-1", "pi")
 	if err := os.MkdirAll(fork, 0o755); err != nil {
 		t.Fatalf("creating the fork checkout failed: %v", err)
@@ -61,7 +81,7 @@ func (f forkLaneFixture) snapshot(t *testing.T, name string) string {
 	return out
 }
 
-// A fork-series item is stageable when its fence names the checkout under
+// A classified fork item stages its checkout under
 // .forks/lanes/<lane>/<fork>: staging writes the checkout as the target, the patch branch
 // as the delivery, and the fork's own HEAD as the base. The lane worktree is still cut from
 // the trunk, because it is the worktree the boundary watches.
@@ -105,10 +125,10 @@ func TestAForkLaneStagesTheCheckoutItNames(t *testing.T) {
 }
 
 // A fork checkout that is not there is refused by the stage with the command that
-// materializes it, not with a bare "no such directory": the lane's fence named a checkout
+// materializes it, not with a bare "no such directory": the delivery names a checkout
 // the loop cannot reach, and the operator needs the next step.
 func TestAForkLaneRefusesAMissingCheckoutByName(t *testing.T) {
-	f := newStageFixture(t, fencedItemRecord("item_041", "in-queue", ".forks/lanes/lane-1/pi"))
+	f := newForkStageFixture(t)
 	err := f.stager().Stage(context.Background(), f.spec("lane-1"))
 	if err == nil {
 		t.Fatalf("staging a fork item with no checkout succeeded")

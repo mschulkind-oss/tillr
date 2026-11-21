@@ -38,8 +38,7 @@ func TestWorkflowExpansionForkScopeFollowsSelectedLane(t *testing.T) {
 		if _, err := tx.Exec(`UPDATE items SET state='landed' WHERE item_id='item-b'`); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`UPDATE items SET allowed_paths='[".forks/lanes/lane-1/pi/"]' WHERE item_id='item-a'`)
-		return err
+		return appendEffectOn(tx, deliveryDecisionKind, "item", "item-a", deliveryDecision{Kind: "fork", Fork: "pi"}, l.cfg.Now())
 	})
 	old.fork = fork
 	l.cfg.Steps = &crossLaneWorkflowSteps{old}
