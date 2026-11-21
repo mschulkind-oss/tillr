@@ -317,6 +317,7 @@ func TestAReplacementLoopHonorsTheStoredBoundaryRefusal(t *testing.T) {
 
 func TestAReplacementLoopSettlesTheStoredOutcomeWithoutRedispatch(t *testing.T) {
 	f, l := passFixture(t, "item-a")
+	l.pollOnly = true // Model losing the live handoff but retaining the worker's finish.
 	steps := &persistentSteps{store: f.storePath, started: make(chan struct{}), release: make(chan struct{})}
 	l.cfg.Steps = steps
 	l.cfg.Lanes = []string{"lane-1"}

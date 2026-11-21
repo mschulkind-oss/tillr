@@ -1017,6 +1017,8 @@ type runCompletion struct {
 	detail  string
 	result  *LoopResult
 	timing  *PassTiming
+	// A worker-end examination has its own generation, separate from dispatch.
+	dispatchTiming *PassTiming
 	// laneRefusal is a pinned candidate's staging refused by its assigned lane's own
 	// state; the pass takes that lane out of rotation (lane_rotation.go).
 	laneRefusal *LaneRefusalError
@@ -2134,7 +2136,7 @@ func (l *Loop) markExamined(ctx context.Context, d Decision) error {
 	}); err != nil {
 		return err
 	}
-	if routed != nil && (l.cfg.Policy == nil || len(l.cfg.Policy.seatList("design")) == 0) {
+	if policy := l.currentPolicy(); routed != nil && (policy == nil || len(policy.seatList("design")) == 0) {
 		routed.noDesignSeat = true
 	}
 	if routed != nil && routed.WorkerSession != nil {
@@ -2200,12 +2202,15 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 	}
 
 	l.reportf("loop: tick %d dispatch %s -> %s on %s\n", result.Ticks, d.ItemID, d.RunRequest.Backend, d.LaneID)
+	handoff := !l.nonLanding && !l.pollOnly && l.ownerMigrationItem == ""
 	go func() {
 		defer cancel()
 		start := time.Now()
 		completion := runCompletion{id: id, itemID: d.ItemID, step: "run", timing: &PassTiming{TickID: d.RunRequest.CorrelationID, AtMS: at.UnixMilli(), GateBudgetMS: l.gateBudget.Milliseconds()}}
 		local := LoopResult{}
 		var evaluatorHold *Candidate
+		var record run.Record
+		var log string
 		before, err := l.snapshot(runCtx, []string{l.lanePath(d.LaneID)}, watched)
 		if err != nil {
 			err = fmt.Errorf("run boundary before: %w", err)
@@ -2230,7 +2235,7 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 			} else {
 				req := *d.RunRequest
 				stampDecisionRequest(d, &req)
-				_, _, err = l.runRestartable(runCtx, req)
+				record, log, err = l.runRestartable(runCtx, req)
 			}
 			if err == nil {
 				completion.outcome.stop, err = l.closeAsyncBracket(context.WithoutCancel(ctx), d, at, before, &local, watched, epochs)
@@ -2248,6 +2253,10 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watched 
 			completion.step = local.StopStep
 		}
 		completion.timing.DispatchMS = time.Since(start).Milliseconds()
+		answered := record.State == run.StateExited && ClassifyAttempt(record, log) == AttemptAnswered
+		if handoff && err == nil && completion.outcome.stop == "" && (len(d.Parallel) > 0 || answered) {
+			l.examineWorkerEnd(runCtx, d, watched, &completion)
+		}
 		l.completions <- completion
 	}()
 }
@@ -2263,6 +2272,14 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 	delete(l.active, c.id)
 	if l.activeItems[c.itemID] == c.id {
 		delete(l.activeItems, c.itemID)
+	}
+	if c.dispatchTiming != nil {
+		countGeneration(result, c.timing.TickID)
+		if err := l.recordPass(c.timing); err != nil {
+			result.StopItemID, result.StopStep = c.itemID, "record pass"
+			return "", err
+		}
+		c.timing = c.dispatchTiming
 	}
 	if stopped || errors.Is(c.outcome.err, errRestartPending) {
 		return "", nil
@@ -2823,145 +2840,147 @@ func (l *Loop) launchExamination(ctx context.Context, d Decision, work *pendingW
 	go func() {
 		defer cancel()
 		defer l.examinations.Done()
-		local := &LoopResult{}
-		completion := runCompletion{id: d.RunRequest.RunID, itemID: d.ItemID, step: d.Action, result: local, timing: &timing}
-		stepCtx, unlock, lockErr := l.lockRestartMechanical(runCtx)
-		if lockErr != nil {
-			completion.outcome.err = lockErr
-			l.completions <- completion
-			return
-		}
-		ctx = stepCtx
-		defer unlock()
-		if work.NeedsStage {
-			if err := l.stagePinnedCandidate(ctx, work); err != nil {
-				if refusal := asLaneRefusal(err); refusal != nil {
-					// The lane's own state refused the pinned candidate: the lane leaves
-					// rotation and the candidate, still pinned, is released to be offered
-					// another lane. One lane's condition never stops the loop.
-					completion.laneRefusal = refusal
-					err = l.releaseRefusedAssignment(ctx, work)
-				}
-				completion.outcome.err = err
-			}
-		}
-		if completion.outcome.err != nil || completion.laneRefusal != nil {
-			// The claimed lane remains pending so a replacement retries staging.
-		} else if out, held := l.checkSurvivingRunProcesses(ctx, d.ItemID, d.LaneID, examinationRunIDs(work)...); held {
-			completion.outcome = out
-			completion.laneRefusal = out.laneRefusal
-		} else if d.Reason == ReasonItemAlreadyTerminal {
-			// The plan read the terminal state and the claim's version check rebound it;
-			// the settling write rereads it for the record.
-			completion.outcome.err = l.settleTerminalItem(ctx, work, &itemTerminalError{ItemID: d.ItemID, Step: "plan"})
-		} else if d.WorkflowRelease {
-			owned, err := l.stagedNodeRun(work.Decision)
-			if err == nil && (owned != "" || work.Decision.NodeIndex > 0) {
-				// The run pin is the release's retained head. A crash after
-				// reset but before markExamined must never replace it with
-				// the reset trunk head on replay.
-				pinned, pinErr := l.git(ctx, l.cfg.Root, "for-each-ref", "--format=%(objectname)", "refs/tillr/runs/"+d.RunRequest.RunID)
-				err = pinErr
-				if err == nil && strings.TrimSpace(pinned) == "" {
-					head, headErr := l.revParse(ctx, l.laneTarget(d.LaneID), "HEAD")
-					err = headErr
-					if err == nil {
-						err = l.pin(ctx, d.RunRequest.RunID, head)
-					}
-				}
-				if err == nil {
-					base := d.NodeBaseSHA
-					if base == "" {
-						base = work.BaseSHA
-					}
-					err = l.preserveWorkFromBase(ctx, d.LaneID, d.RunRequest.RunID, base, "orphaned workflow released")
-					if err == nil {
-						err = l.resetLane(ctx, d.LaneID)
-					}
-				}
-			}
-			if err == nil {
-				err = l.markExamined(ctx, work.Decision)
+		l.completions <- l.examineClaimed(runCtx, d, work, at, &timing, watched)
+	}()
+}
+
+func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork, at time.Time, timing *PassTiming, watched []string) runCompletion {
+	local := &LoopResult{}
+	completion := runCompletion{id: d.RunRequest.RunID, itemID: d.ItemID, step: d.Action, result: local, timing: timing}
+	ctx, unlock, lockErr := l.lockRestartMechanical(ctx)
+	if lockErr != nil {
+		completion.outcome.err = lockErr
+		return completion
+	}
+	defer unlock()
+	if work.NeedsStage {
+		if err := l.stagePinnedCandidate(ctx, work); err != nil {
+			if refusal := asLaneRefusal(err); refusal != nil {
+				// The lane's own state refused the pinned candidate: the lane leaves
+				// rotation and the candidate, still pinned, is released to be offered
+				// another lane. One lane's condition never stops the loop.
+				completion.laneRefusal = refusal
+				err = l.releaseRefusedAssignment(ctx, work)
 			}
 			completion.outcome.err = err
-		} else if d.Action == ActionSettle && len(work.Decision.Parallel) > 0 {
-			completion.outcome = l.settleParallel(ctx, work, local, &timing, watched)
+		}
+	}
+	if completion.outcome.err != nil || completion.laneRefusal != nil {
+		// The claimed lane remains pending so a replacement retries staging.
+	} else if out, held := l.checkSurvivingRunProcesses(ctx, d.ItemID, d.LaneID, examinationRunIDs(work)...); held {
+		completion.outcome = out
+		completion.laneRefusal = out.laneRefusal
+	} else if d.Reason == ReasonItemAlreadyTerminal {
+		// The plan read the terminal state and the claim's version check rebound it;
+		// the settling write rereads it for the record.
+		completion.outcome.err = l.settleTerminalItem(ctx, work, &itemTerminalError{ItemID: d.ItemID, Step: "plan"})
+	} else if d.WorkflowRelease {
+		owned, err := l.stagedNodeRun(work.Decision)
+		if err == nil && (owned != "" || work.Decision.NodeIndex > 0) {
+			// The run pin is the release's retained head. A crash after
+			// reset but before markExamined must never replace it with
+			// the reset trunk head on replay.
+			pinned, pinErr := l.git(ctx, l.cfg.Root, "for-each-ref", "--format=%(objectname)", "refs/tillr/runs/"+d.RunRequest.RunID)
+			err = pinErr
+			if err == nil && strings.TrimSpace(pinned) == "" {
+				head, headErr := l.revParse(ctx, l.laneTarget(d.LaneID), "HEAD")
+				err = headErr
+				if err == nil {
+					err = l.pin(ctx, d.RunRequest.RunID, head)
+				}
+			}
+			if err == nil {
+				base := d.NodeBaseSHA
+				if base == "" {
+					base = work.BaseSHA
+				}
+				err = l.preserveWorkFromBase(ctx, d.LaneID, d.RunRequest.RunID, base, "orphaned workflow released")
+				if err == nil {
+					err = l.resetLane(ctx, d.LaneID)
+				}
+			}
+		}
+		if err == nil {
+			err = l.markExamined(ctx, work.Decision)
+		}
+		completion.outcome.err = err
+	} else if d.Action == ActionSettle && len(work.Decision.Parallel) > 0 {
+		completion.outcome = l.settleParallel(ctx, work, local, timing, watched)
+		if completion.outcome.err == nil && completion.outcome.stop == "" {
+			completion.outcome, completion.step = l.judgeSettledCandidate(ctx, d, local, timing)
+		}
+	} else if d.Action == ActionSettle {
+		s, err := store.OpenRead(ctx, l.cfg.Store)
+		var rec *run.Record
+		if err == nil {
+			err = s.ReadTx(ctx, func(r *store.Reader) error {
+				var err error
+				rec, err = terminalRecord(r, d.RunRequest.RunID)
+				return err
+			})
+			s.Close()
+		}
+		if err == nil && rec == nil {
+			err = fmt.Errorf("run %s lost its terminal record", d.RunRequest.RunID)
+		}
+		if err == nil {
+			err = l.recordSettlementSpend(ctx, timing.TickID, work.LoopID, *rec)
+		}
+		if err == nil {
+			l.countSettledSpend(local, *rec, work.LoopID)
+			log := logTail(rec.ArtifactRefs)
+			quotaPaused := false
+			if quotaSingleRun(d) {
+				quotaPaused, err = l.quotaInterrupted(ctx, rec.RunID)
+				if err != nil {
+					completion.outcome.err = err
+				}
+			}
+			if (rec.State == run.StatePaused || work.ResumeAfterRestart) && !quotaPaused && completion.outcome.err == nil {
+				reason := ""
+				if work.ResumeAfterRestart {
+					reason = "the previous loop lost its run face, but the staged session and worktree are intact"
+				}
+				resumed, resumedLog, stop, resumeErr := l.runContinuation(ctx, d.LaneID, *d.RunRequest, l.lanePath(d.LaneID), *rec, d.RunRequest.CorrelationID, at, local, watched, reason)
+				if resumeErr != nil || stop != "" {
+					completion.outcome = laneOutcome{stop: stop, err: resumeErr}
+				} else if resumed.RunID == "" {
+					completion.outcome.err = Externalf("interrupted run %s cannot continue: its lane needs the staged brief and session-id", rec.RunID)
+				} else {
+					rec, log = &resumed, resumedLog
+				}
+			}
 			if completion.outcome.err == nil && completion.outcome.stop == "" {
-				completion.outcome, completion.step = l.judgeSettledCandidate(ctx, d, local, &timing)
+				completion.outcome.err = l.recordSettlementSpend(ctx, timing.TickID, work.LoopID, *rec)
 			}
-		} else if d.Action == ActionSettle {
-			s, err := store.OpenRead(ctx, l.cfg.Store)
-			var rec *run.Record
-			if err == nil {
-				err = s.ReadTx(ctx, func(r *store.Reader) error {
-					var err error
-					rec, err = terminalRecord(r, d.RunRequest.RunID)
-					return err
-				})
-				s.Close()
+			if completion.outcome.err == nil && completion.outcome.stop == "" {
+				completion.outcome = l.settle(ctx, work.Decision, *rec, log, work.BaseSHA, d.RunRequest.CorrelationID, at, local, timing, watched, true)
+				if completion.outcome.laneRefusal != nil {
+					completion.laneRefusal = completion.outcome.laneRefusal
+				}
 			}
-			if err == nil && rec == nil {
-				err = fmt.Errorf("run %s lost its terminal record", d.RunRequest.RunID)
-			}
-			if err == nil {
-				err = l.recordSettlementSpend(ctx, timing.TickID, work.LoopID, *rec)
-			}
-			if err == nil {
-				l.countSettledSpend(local, *rec, work.LoopID)
-				log := logTail(rec.ArtifactRefs)
-				quotaPaused := false
-				if quotaSingleRun(d) {
-					quotaPaused, err = l.quotaInterrupted(ctx, rec.RunID)
-					if err != nil {
-						completion.outcome.err = err
-					}
-				}
-				if (rec.State == run.StatePaused || work.ResumeAfterRestart) && !quotaPaused && completion.outcome.err == nil {
-					reason := ""
-					if work.ResumeAfterRestart {
-						reason = "the previous loop lost its run face, but the staged session and worktree are intact"
-					}
-					resumed, resumedLog, stop, resumeErr := l.runContinuation(ctx, d.LaneID, *d.RunRequest, l.lanePath(d.LaneID), *rec, d.RunRequest.CorrelationID, at, local, watched, reason)
-					if resumeErr != nil || stop != "" {
-						completion.outcome = laneOutcome{stop: stop, err: resumeErr}
-					} else if resumed.RunID == "" {
-						completion.outcome.err = Externalf("interrupted run %s cannot continue: its lane needs the staged brief and session-id", rec.RunID)
-					} else {
-						rec, log = &resumed, resumedLog
-					}
-				}
-				if completion.outcome.err == nil && completion.outcome.stop == "" {
-					completion.outcome.err = l.recordSettlementSpend(ctx, timing.TickID, work.LoopID, *rec)
-				}
-				if completion.outcome.err == nil && completion.outcome.stop == "" {
-					completion.outcome = l.settle(ctx, work.Decision, *rec, log, work.BaseSHA, d.RunRequest.CorrelationID, at, local, &timing, watched, true)
-					if completion.outcome.laneRefusal != nil {
-						completion.laneRefusal = completion.outcome.laneRefusal
-					}
-				}
-				if terminal := asItemTerminal(completion.outcome.err); terminal != nil {
-					completion.outcome = laneOutcome{err: l.settleTerminalItem(ctx, work, terminal)}
-				}
-			} else {
-				completion.outcome.err = err
-			}
-			if completion.outcome.err == nil && completion.outcome.stop == "" && completion.laneRefusal == nil {
-				completion.outcome, completion.step = l.judgeSettledCandidate(ctx, d, local, &timing)
+			if terminal := asItemTerminal(completion.outcome.err); terminal != nil {
+				completion.outcome = laneOutcome{err: l.settleTerminalItem(ctx, work, terminal)}
 			}
 		} else {
-			completion.outcome = l.runCandidateExamination(ctx, work, local, &timing)
+			completion.outcome.err = err
 		}
-		completion.outcome = retainedOutcome(completion.outcome)
-		// A retained lane keeps its lease: releasing it would let the next staging clear the
-		// work that could not be preserved.
-		if completion.outcome.stop != stopLaneRetained {
-			if err := l.releaseExamination(context.WithoutCancel(ctx), d); err != nil && completion.outcome.err == nil {
-				completion.outcome.err = err
-			}
+		if completion.outcome.err == nil && completion.outcome.stop == "" && completion.laneRefusal == nil {
+			completion.outcome, completion.step = l.judgeSettledCandidate(ctx, d, local, timing)
 		}
-		completion.detail = local.Detail
-		l.completions <- completion
-	}()
+	} else {
+		completion.outcome = l.runCandidateExamination(ctx, work, local, timing)
+	}
+	completion.outcome = retainedOutcome(completion.outcome)
+	// A retained lane keeps its lease: releasing it would let the next staging clear the
+	// work that could not be preserved.
+	if completion.outcome.stop != stopLaneRetained {
+		if err := l.releaseExamination(context.WithoutCancel(ctx), d); err != nil && completion.outcome.err == nil {
+			completion.outcome.err = err
+		}
+	}
+	completion.detail = local.Detail
+	return completion
 }
 
 // Results cross the completion channel only after the worker stops writing them.

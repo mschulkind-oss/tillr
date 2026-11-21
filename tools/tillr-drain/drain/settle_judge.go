@@ -149,18 +149,33 @@ func (l *Loop) claimSettledCandidateJudge(ctx context.Context, d Decision, timin
 		if err != nil {
 			return readFailure(err)
 		}
-		questions := &VantageQuestions{Root: l.cfg.Root, Command: l.cfg.QuestionsCmd, Context: ctx}
-		envs, err := planDefinition(r, tick, l.currentPolicy(), questions, declared.Parsed)
-		if err != nil {
-			return err
-		}
 		items, err := readItems(r)
 		if err != nil {
 			return err
 		}
-		byItem := make(map[string]itemRow, len(items))
+		// Only plan the retained candidate unless we need lane offers to decide
+		// whether an interactive request should take priority. Do not run every
+		// queued item's readiness checks on the way to this gate.
+		tick.examineItem = d.ItemID
+		byItem := make(map[string]itemRow)
 		for _, row := range items {
-			byItem[row.ItemID] = row
+			if row.ItemID != d.ItemID && (row.Express || item.IsCommentItem(row.ItemID)) {
+				pending := folds.works[row.ItemID]
+				// Retained work on another lane cannot be waiting for this
+				// lane, regardless of what the planner answers for it.
+				if pending != nil && !pending.Done && !pending.LaneReleased && pending.Decision.LaneID != d.LaneID {
+					continue
+				}
+				byItem[row.ItemID] = row
+				if !finishedState(declared.Parsed, row.State) || (pending != nil && !pending.Done) {
+					tick.examineItem = ""
+				}
+			}
+		}
+		questions := &VantageQuestions{Root: l.cfg.Root, Command: l.cfg.QuestionsCmd, Context: ctx}
+		envs, err := planDefinition(r, tick, l.currentPolicy(), questions, declared.Parsed)
+		if err != nil {
+			return err
 		}
 		foundJudge := false
 		for _, env := range envs {
