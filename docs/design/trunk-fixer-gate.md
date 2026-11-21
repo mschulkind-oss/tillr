@@ -138,11 +138,78 @@ Specified cases:
   its other checks, and that name is dropped when its gate is composed, with a line saying so.
 - **The inherited-failure rule applies to checks the fixer does not name.** The fixer stays
   excluded from acquittal for the checks it names, which is the whole reason for the
-  exclusion. For any other check it is judged as any candidate is.
+  exclusion. For any other check it is judged as any candidate is, with the two exceptions in
+  [a fixer never waits on itself](#a-fixer-never-waits-on-itself).
+- **A refusal that mixes named and unnamed checks is a verdict.** When any check the fixer
+  names is among the failing checks, nothing is acquitted and the whole refusal goes back to
+  the fixer's worker. The inherited-failure rule is tried only when every failing check is one
+  the fixer does not name.
 - **Order and concurrency.** One gate run per candidate, as today. The named checks run after
   the ordinary gate passes; when the ordinary gate refuses, they do not run.
 - **Forbidden.** The gate's own code stays outside a fixer's fence. Nothing here lets a fixer
   choose, narrow or rename the checks it is judged on: the list comes from the fixer's record.
+
+### A fixer never waits on itself
+
+Added on 2026-11-21 to answer a build worker's finding; the tree was read at `80d7ceb14a`. It is
+the designer's decision, part of `D-FG2`, and the owner may overturn it.
+
+The ordinary inherited-failure rule has two outcomes for a check that is red on the candidate's
+base and on the tip (`settleTrunkAlreadyRed` in `tools/tillr-drain/drain/trunk.go`). When the
+candidate's diff changes no path the check reads, the candidate lands with the failure recorded
+as inherited. When it does change such a path, the red is attributed to a commit, the fixer for
+that commit is filed or attached to, and the candidate is held behind that fixer.
+
+Applied to a fixer without change, the second outcome can name the fixer itself. There is one
+fixer per red commit (`fileTrunkFixerNoted` in the same file), so when the unnamed check is
+attributed to the commit the fixer was filed for, the check attaches to that same fixer and the
+fixer is then held with itself as its waiter. Nothing ever releases that hold. The build worker
+reproduced it on 2026-11-21 with a test that passed by showing the fault:
+`go test ./drain -run '^TestOrdinaryInheritedFailureRouteMakesFixerWaitOnItself$'` in
+`tools/tillr-drain` recorded the fixer as blocked with its own item id as its waiter. That test
+was the worker's scratch and is not in the tree.
+
+The rule for a fixer whose gate fails only on checks it does not name, all red on its base and
+on the tip:
+
+| The fixer's diff and the check's read paths | The fixer the ordinary rule would hold it behind | Outcome |
+| :--- | :--- | :--- |
+| Do not intersect | Not asked | The fixer lands with the failure recorded as inherited, as any candidate does |
+| Intersect | A different fixer, which does not wait on this one | The fixer is held behind that fixer, as any candidate is |
+| Intersect | This fixer itself | The check is attached to this fixer and the refusal goes back to its worker. No hold is recorded |
+| Intersect | A different fixer that already waits on this one, directly or through other fixers | The same as the row above: attached to this fixer, returned to its worker, no hold |
+
+**Attached means what it means today.** The fixer's record gains the check's id in its list of
+red checks and the check's watched paths in its fence, with the gate's own code removed, and the
+attachment is recorded as an event. This is the existing attachment, not a new one.
+
+**The check is then a named check.** From the fixer's next gate it runs on the fixer's tree, the
+fixer is not acquitted of it, and the fixer is resolved only when it passes. This follows from
+[the fixer's gate](#the-fixers-gate) and needs no further rule.
+
+**The refusal the worker reads** names the check, says it was already red on the trunk at the
+named commit, says it has been added to this fixer because the fixer's change touches paths the
+check reads, and carries the check's recorded output. It is a refusal that returns work, so the
+existing limits on returned refusals apply to it unchanged.
+
+**No second fixer is filed for the same commit.** One fixer per red commit stays the rule.
+
+**The fourth row leaves one check named by two open fixers.** That is allowed here and only
+here. Whichever lands a repair, the proof resolves both when the check passes. Later
+observations of that check attach to one of them by the existing order.
+
+**Why the fixer takes the check instead of waiting.** Its change already touches what the check
+reads, so its tree is where the check's answer is being changed, and it is the only item filed
+for that commit. A hold would need a second mover, and for the same commit there is none.
+
+Rejected, as the designer's decision:
+
+- **A distinct second fixer for the same commit.** Two workers would repair one commit in
+  overlapping paths, and the first would still wait on the second for a red its own diff reaches.
+- **Landing the fixer with the failure inherited even though its diff intersects.** The
+  intersection is the one case where nobody can say the fixer left the check as it found it.
+- **Exempting a fixer from the inherited-failure rule in whole,** which is today's behavior and
+  what `D-FG2` removes.
 
 Done looks like this: with the trunk red on one test and an upstream release that conflicts with
 a patch branch, a fixer whose diff touches only that test's files passes its gate and lands, and
@@ -214,7 +281,9 @@ it is ruled, no owner-facing row or hold is built for drift; the rows above do n
 ## What this does not change
 
 - The proof, the green pointer, automatic revert and the way a fixer is filed, attached and
-  resolved.
+  resolved. [A fixer never waits on itself](#a-fixer-never-waits-on-itself) uses the existing
+  attachment and changes only what happens to the fixer after it: returned to its worker, not
+  held.
 - The ordinary gate, for any candidate.
 - The drift probe's design. It remains the gate rework's unit and is still the right discoverer;
   until it is built, drift is seen only when a change touches a series or a pack declaration.
@@ -238,6 +307,7 @@ it is ruled, no owner-facing row or hold is built for drift; the rows above do n
 | A second red in the range is found one proof later than today | The proof names it and files its fixer, as for any red; the first fixer has already landed, so the range is shorter |
 | Drift goes unseen while no change touches a fork | Stated above; the probe closes it. A launch on the host still holds the last good build |
 | A named check's selector is missing from the fixer's record | The gate answers "could not judge" naming the check; it never passes by omission |
+| A fixer's named list grows while it works, because unnamed reds its diff reaches attach to it | Only a check whose read paths the fixer's own diff changes can attach this way, and only when no other fixer can be waited on. The existing limits on returned refusals bound the loop |
 
 ## Open Questions
 
@@ -274,7 +344,7 @@ design. None is an owner ruling, and the owner may overturn each by comment.
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
 | `D-FG1` | A trunk fixer's gate is the ordinary gate over its own diff plus the checks it names, run on its tree. The untiered range since the last green is removed. Structural fix. (Designer's decision.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate) | — |
-| `D-FG2` | A fixer stays excluded from acquittal only for the checks it names; for any other check it is judged as any candidate is. (Designer's decision.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate) | — |
+| `D-FG2` | A fixer stays excluded from acquittal only for the checks it names; for any other check it is judged as any candidate is, except that it is never held behind itself or behind a fixer that waits on it: such a check is attached to the fixer and the refusal returns to its worker. No second fixer is filed for the same commit. (Designer's decision; the exception was added on 2026-11-21 to answer a build worker's finding that the ordinary route made a fixer wait on itself.) | 2026-11-21 | [The fixer's gate](#the-fixers-gate), [A fixer never waits on itself](#a-fixer-never-waits-on-itself) | — |
 | `D-FG3` | An upstream reader red on a candidate and on its base, whose watched paths the candidate did not change, is drift: the candidate lands with the failure inherited and one rebase request per fork and release is filed. No trunk fixer is filed for drift. Structural fix. (Designer's decision, carrying out `D-GR12` of the gate rework, itself a designer's decision.) | 2026-11-21 | [Upstream drift](#upstream-drift-is-a-rebase-request-not-a-refusal) | — |
 | `D-FG4` | A fork check that could not judge is neither drift nor a verdict. It holds only a candidate whose diff reaches it or a fixer that names it, by the existing tooling-defect path. (Designer's decision.) | 2026-11-21 | [Upstream drift](#upstream-drift-is-a-rebase-request-not-a-refusal) | — |
 | `D-FG5` | The queue, the affected candidates and the operator's surfaces are told of drift by the rebase request and one loop line. Nothing owner-facing is built until [OQ-FG1](#OQ-FG1) is ruled. (Designer's decision.) | 2026-11-21 | [Who is told](#who-is-told-when-an-upstream-moves) | — |
