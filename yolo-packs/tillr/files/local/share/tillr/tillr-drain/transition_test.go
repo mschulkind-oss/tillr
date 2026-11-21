@@ -111,8 +111,8 @@ func TestPlanTransitionIdentityDoesNotReadTheClock(t *testing.T) {
 }
 
 // Every decision carries its attempt and source, while only dispatches and retries
-// carry a destination. Terminal infrastructure runs count separately, including the
-// failover run whose id is derived from the original run rather than the clock.
+// carry a destination. Each terminal run counts, even when the recorded backend
+// is still closed and the next attempt is held rather than dispatched.
 func TestPlanTransitionPayloadCountsTerminalRuns(t *testing.T) {
 	const retryRun = "run-retry-first"
 	storePath := fixture(t,
@@ -137,7 +137,7 @@ func TestPlanTransitionPayloadCountsTerminalRuns(t *testing.T) {
 	}{
 		"item_dispatch":  {drain.ActionDispatch, "queued", "running", 1},
 		"item_exhausted": {drain.ActionDispatch, "queued", "running", 3},
-		"item_failover":  {drain.ActionDispatch, "queued", "running", 2},
+		"item_failover":  {drain.ActionHold, "held", "", 2},
 		"item_hold":      {drain.ActionHold, "held", "", 1},
 		"item_landed":    {drain.ActionHold, "landed", "", 2},
 		"item_retry":     {drain.ActionRetry, "queued", "running", 2},
@@ -154,6 +154,9 @@ func TestPlanTransitionPayloadCountsTerminalRuns(t *testing.T) {
 		if got.Action != w.action || got.From != w.from || got.To != w.to || got.Attempt != w.attempt {
 			t.Errorf("item %s: action/from/to/attempt = %s/%s/%s/%d, want %s/%s/%s/%d",
 				got.ItemID, got.Action, got.From, got.To, got.Attempt, w.action, w.from, w.to, w.attempt)
+		}
+		if got.ItemID == "item_failover" && (got.Reason != drain.ReasonBackendClosed || got.DeferredBy != "first" || got.RunRequest != nil) {
+			t.Errorf("failed run did not hold on its recorded backend: %+v", got)
 		}
 		if got.TransitionID == "" || identities[got.TransitionID] {
 			t.Errorf("item %s has an empty or duplicate transition id %q", got.ItemID, got.TransitionID)
