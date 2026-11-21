@@ -36,6 +36,10 @@ func (s *startStoreSync) close() {
 }
 
 func (s *startStoreSync) syncStore(ctx context.Context, path string, at time.Time, policy *Policy, prev startSnapshot, rebuild func(*store.Reader, *startSnapshot, map[string]bool) error) (startSnapshot, error) {
+	return s.syncStoreWithRefresh(ctx, path, at, policy, prev, false, rebuild)
+}
+
+func (s *startStoreSync) syncStoreWithRefresh(ctx context.Context, path string, at time.Time, policy *Policy, prev startSnapshot, inspectExternal bool, rebuild func(*store.Reader, *startSnapshot, map[string]bool) error) (startSnapshot, error) {
 	fresh := s.reader == nil
 	if fresh {
 		var err error
@@ -148,7 +152,7 @@ func (s *startStoreSync) syncStore(ctx context.Context, path string, at time.Tim
 		if full {
 			lastFull, owed, touched = at, false, nil
 		}
-		if rebuild != nil && (full || lanesChanged || len(touched) > 0) {
+		if rebuild != nil && (inspectExternal || full || lanesChanged || len(touched) > 0) {
 			return rebuild(r, &next, touched)
 		}
 		if rebuild != nil {

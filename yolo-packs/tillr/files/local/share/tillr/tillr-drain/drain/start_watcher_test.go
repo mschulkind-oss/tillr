@@ -93,7 +93,7 @@ func TestStartViewWatcherTimerOnly(t *testing.T) {
 	view := newStartView()
 	reads := 0
 	defer view.watch(context.Background(), time.Millisecond, func(context.Context) startWatcher { return nil }, func(_ context.Context, change startWatchChange) (startSnapshot, error) {
-		if change != 0 {
+		if (reads == 0 && change != 0) || (reads != 0 && change != startWatchExternal) {
 			return startSnapshot{}, context.Canceled
 		}
 		reads++
@@ -136,7 +136,7 @@ func TestStartViewWatcherBatchesAndFallsBackOnClosure(t *testing.T) {
 		}
 		time.Sleep(safety - startViewWatchBatch)
 		synctest.Wait()
-		if len(reads) != 3 || reads[2] != 0 {
+		if len(reads) != 3 || reads[2] != startWatchExternal {
 			t.Fatalf("safety timer stopped after the filesystem source closed: %v", reads)
 		}
 	})

@@ -117,7 +117,11 @@ func SaveQuestionsIndex(root, trunkSHA string, command []string, raw []byte) err
 	if err != nil {
 		return err
 	}
-	dir := LoopDir(root)
+	return writeQuestionsIndexAtomic(QuestionsIndexFile(root), payload)
+}
+
+func writeQuestionsIndexAtomic(path string, payload []byte) error {
+	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -143,7 +147,7 @@ func SaveQuestionsIndex(root, trunkSHA string, command []string, raw []byte) err
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpPath, QuestionsIndexFile(root)); err != nil {
+	if err := os.Rename(tmpPath, path); err != nil {
 		return err
 	}
 	cleanup = false

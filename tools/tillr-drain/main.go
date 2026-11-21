@@ -848,6 +848,7 @@ func loopFace(args []string) int {
 	fixerGate := fs.String("fixer-gate", drain.DefaultFixerGateProgram, "the FULL untiered gate a fixer item runs instead of --gate; it is handed the candidate's flags like --gate, and its verdict record is what the land program reads; {green} is `--since <last_green_sha>` or `--all`. Empty leaves a fixer on --gate, which cannot prove the sibling breakage its range reaches")
 	now := fs.String("now", "", "the injected clock, RFC 3339 (default: the wall clock, once per tick)")
 	questionsCmd := fs.String("questions-cmd", "", questionsCmdHelp)
+	questionsIndex := fs.String("questions-index", "", "saved Vantage index JSON for the advisory start view (default <store>.questions-index.json on landing loops)")
 	if err := parseFlags(fs, args); err != nil {
 		if err.Error() == "flag provided but not defined: -stay" {
 			return fail(drain.Usagef("--stay was removed: the loop is a daemon by default; use --exit-when-drained to exit instead of waiting"))
@@ -934,7 +935,7 @@ func loopFace(args []string) int {
 	loop, err := drain.NewLoop(drain.LoopConfig{
 		Root: *root, Store: *path, LaneRoot: *laneRoot, MigrateOwnerQuestions: *migrateOwner,
 		Lanes: append(laneIDs(*laneCount), expressLaneIDs(repositorySettings.Lanes.Express)...), BackoffBase: *backoffBase, ExitWhenDrained: *exitWhenDrained,
-		Policy: policy, PolicyRef: *policyPath, QuestionsCmd: commandFields(*questionsCmd),
+		Policy: policy, PolicyRef: *policyPath, QuestionsCmd: commandFields(*questionsCmd), QuestionsIndex: *questionsIndex,
 		Steps: steps, Stage: stager, Now: at, Report: os.Stderr,
 		Comments: repositorySettings.Comments, WorkflowDefaults: repositorySettings.WorkflowDefaults,
 		Restart: restartConfig(), PostLanding: repositorySettings,

@@ -102,6 +102,10 @@ func (s *startSnapshot) rebuildEntries(ctx context.Context, r *store.Reader, at 
 }
 
 func (s *startSnapshot) repairEntries(ctx context.Context, r *store.Reader, at time.Time, policy *Policy, tick Pass, questions *VantageQuestions, previous startSnapshot, touched map[string]bool) error {
+	return s.repairEntriesAt(ctx, r, at, policy, tick, questions, previous, touched, nil)
+}
+
+func (s *startSnapshot) repairEntriesAt(ctx context.Context, r *store.Reader, at time.Time, policy *Policy, tick Pass, questions *VantageQuestions, previous startSnapshot, touched map[string]bool, bases *startBases) error {
 	if err := shadowRotation(r, &tick); err != nil {
 		return err
 	}
@@ -119,20 +123,16 @@ func (s *startSnapshot) repairEntries(ctx context.Context, r *store.Reader, at t
 		}
 	}
 	if s.def.Completes == "landing" && root != "" {
-		var err error
-		s.tip, err = heavyGitOutput(ctx, root, "rev-parse", TrunkRef)
-		if err != nil {
-			return err
+		if bases == nil {
+			read, err := refreshTrunk(ctx, root, s.def)
+			if err != nil {
+				return err
+			}
+			bases = &read
 		}
-		gatePolicy, _, err := ReadGatePolicy(root)
-		if err != nil {
-			return err
-		}
-		s.green, err = provedLaneBaseAt(ctx, root, gatePolicy.LaneBase, s.tip)
-		if err != nil {
-			return err
-		}
+		s.tip, s.green = bases.tip, bases.green
 		if (docInputsChanged || s.tip != previous.tip) && hasPrerequisite(s.def, definition.PrerequisiteDesignDocument) {
+			var err error
 			unshared, rewriteHolds, rewriteOwnerHolds, err = documentPrerequisites(r, root)
 			if err != nil {
 				return err
