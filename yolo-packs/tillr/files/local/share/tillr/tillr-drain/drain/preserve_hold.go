@@ -12,7 +12,7 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// ReasonPreserveFailed holds an item whose settled run left uncommitted work in its lane
+// ReasonPreserveFailed holds an item whose settled run left work in its lane
 // that the loop could not preserve. The lane is retained as it stands — not reset, and not
 // released for the next staging to clear — and the item waits for the operator, who
 // repairs the cause and clears the fault so the next pass settles the run again.
@@ -40,7 +40,7 @@ const stopLaneRetained = "lane-retained"
 // retained, and its item could not be held: item fixer-main-5ca0b0ff82bc is already
 // closed"), over a lane a failed fixer rebase had left with unmerged paths.
 func (l *Loop) retainUnpreserved(ctx context.Context, lane, runID, headSHA string, cause error) string {
-	l.reportf("loop: lane %s retained: could not preserve uncommitted work: %v\n", lane, cause)
+	l.reportf("loop: lane %s retained: could not preserve its work: %v\n", lane, cause)
 	itemID, err := l.runItem(ctx, runID)
 	if err == nil && itemID == "" {
 		err = errors.New("no item to hold for the retained lane")
@@ -56,6 +56,11 @@ func (l *Loop) retainUnpreserved(ctx context.Context, lane, runID, headSHA strin
 		return StopFault
 	}
 	return stopLaneRetained
+}
+
+// The sequence comes from the event itself; don't persist a second copy in its detail.
+func preserveFaultDetail(f ItemFault, storePath string) string {
+	return f.Detail + "; after correcting the cause, run " + f.ClearCommand(storePath)
 }
 
 // runItem answers the item a run belongs to, or "" for no run.

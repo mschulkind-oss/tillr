@@ -2735,13 +2735,17 @@ The saved commit is recovery evidence only: it is never put on a candidate ref,
 gated or landed. If saving the commit or its event fails, the loop retains the
 lane instead of resetting away its work. A restart recovers the event from the
 saved commit's message if the process stopped between creating the ref and
-recording the event. Before resetting on a replay, it checks that every current
-dirty path is covered by the saved working or staged version. Newer uncovered
+recording the event. Git reads the record on standard input, so the file list is
+not limited by command-line argument size. Before resetting on a replay, the loop
+checks that every current dirty path is covered by the saved working or staged version. Newer uncovered
 edits retain the lane; the loop does not overwrite the older evidence or discard
 the newer work. A recorded pruning prevents replay from recreating the ref.
 
 A retained lane is that lane's condition, not the loop's: its item is held
-(`preserve-failed`) and every other lane goes on. When the item is already terminal
+(`preserve-failed`) and every other lane goes on. The hold names the actual failure;
+a failed snapshot commit reports the ref and file counts, not the file list. After
+correcting the cause, run the `tillr drain clear-fault` command in the hold detail,
+which includes the fault's sequence. When the item is already terminal
 (landed, closed or resolved elsewhere), there is nothing to retain the lane for. The
 loop records the lane's `git status --porcelain` in a `drain.lane-discarded` event,
 aborts any rebase, merge or cherry-pick left in progress, pins the head, and resets
@@ -2771,7 +2775,8 @@ renames it, so such a lock has no writer left. That happens when a killed git le
 lock behind (lane-18 on 2026-11-18). Preservation and every lane reset remove a stale
 lock first and record a `drain.stale-index-lock-removed` event (`index_lock.go`). The
 age of the lock is never read. A lock that a live process holds stays, and the
-`preserve-failed` detail names that PID, which is the hold's mover.
+`preserve-failed` detail names that PID. The holder must release that lock before
+clearing this fault.
 
 > [!WARNING]
 > **Landing remains blocked.** A dirty tracked ignore file can hide work from the

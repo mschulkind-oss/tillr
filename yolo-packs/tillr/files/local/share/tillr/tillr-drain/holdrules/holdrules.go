@@ -56,7 +56,7 @@ var Rules = map[string]Rule{
 	"lane-holds-uncommitted-work": {"needs you", "lane", "commit or remove the files, or reset the lane deliberately"},
 	"lane-run-children-live":      {"waits on work", "lane", "wait for the named processes to exit, or end them with the recorded kill command"},
 	"run-processes-live":          {"needs you", "lane", "end the surviving processes the detail lists, then tillr drain clear-fault"},
-	"preserve-failed":             {"needs you", "lane", "the process or cause the detail names (a live index.lock holder exits or is ended); then tillr drain clear-fault"},
+	"preserve-failed":             {"needs you", "lane", "correct the preservation failure named in the detail"},
 	"decision-collision":          {"needs a cause", "loop", "fix the drain defect the fault names, then tillr drain clear-fault"},
 	"verify-triage":               {"needs you", "lane", "the operator runs the retry command in the hold detail after reviewing the three findings"},
 	"adapter-refused":             {"needs you", "lane", "correct what the adapter's words name, then tillr drain clear-fault"},
