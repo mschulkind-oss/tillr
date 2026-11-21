@@ -10,7 +10,7 @@ covers:
   - tools/gate-timing-declarations.json
   - tests/fork-check.test.py
 tags: [gate, checks, flake, timing, quarantine, reference]
-summary: "Three standing rules for the gate's checks, each with the code that enforces it today: a failed check is diagnosed from its one run and never re-run to see whether it passes; a check asserts counts, orders and equalities over what the product recorded and never an elapsed duration; and a quarantined case is narrow, carries the item that repairs it, applies only to the file content it was declared against, and is counted apart from passes. One built mechanism that contradicts the owner's rulings of 2026-11-20 is named, not described as a rule."
+summary: "Three standing rules for the gate's checks, each with the code that enforces it today: a failed check is diagnosed from its one run and never re-run to see whether it passes; a check asserts counts, orders and equalities over what the product recorded and never an elapsed duration; and a quarantined case is narrow, carries the item that repairs it, applies only to the file content it was declared against, and is counted apart from passes."
 ---
 
 # Gate check rules
@@ -140,16 +140,9 @@ verdict that the cases pass.
   the reason, and its summary counts quarantined cases separately and says that a quarantined case is not a passing one. The
   run's evidence record carries the same block.
 
-> [!WARNING]
-> **One thing the gate does today contradicts the owner's rulings of 2026-11-20 and is not a
-> rule to build on.** Two checks are declared *exclusive* (run with nothing beside them)
-> because their results change with machine load. It is listed with its replacement in
-> [the retirement record](../design/agent-runtime-retirement.md#the-four-live-rules-to-remove-from-code).
-> Do not add a declaration that relies on it. The other three entries of that list were
-> removed from the gate on 2026-11-21: a quarantine's calendar expiry, the fixed count of
-> declarations per repository and per check, and the "unanswerable" label on the one live
-> quarantine, which is now classified `upstream`. That quarantine itself remains until the
-> two cases are rewritten in the `pi-subagents` patch series.
+The gate's run-alone slot was removed on 2026-11-21. A check whose result depends on what
+runs beside it is repaired at its cause, not isolated. The `pi-subagents` quarantine
+declaration was also removed; there are no live quarantine declarations.
 
 ## What enforces each rule today
 
@@ -167,11 +160,12 @@ verdict that the cases pass.
 
 ## Current values
 
-Verified at `e167325c21f77151e9eeab22df542b3837e0f631`, except the quarantine row, which was
-read on 2026-11-21 in the change that removed the expiry and the count.
+Verified at `e167325c21f77151e9eeab22df542b3837e0f631`, except the quarantine row. On
+2026-11-21, `rg 'QUARANTINED_FORK_QUALITY: tuple' tools/fork-check.py` showed the
+quarantine declarations tuple is empty.
 
 | Value | Setting | Defined in |
 | :--- | :--- | :--- |
 | Kinds a timing declaration may carry | `liveness`, `backlog` | `tools/gate/checks/elapsed-time.py` (`parse_timing_declarations`) |
 | Runs given to a check ended by an outside signal | `OUTSIDE_SIGNAL_RERUNS` | `tools/fork-check.py` |
-| Live quarantine declarations | one, on the `pi-subagents` unit suite, classified `upstream` | `tools/fork-check.py` (`QUARANTINED_FORK_QUALITY`) |
+| Live quarantine declarations | none | `tools/fork-check.py` (`QUARANTINED_FORK_QUALITY`) |

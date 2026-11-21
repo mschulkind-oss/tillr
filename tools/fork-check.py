@@ -446,20 +446,6 @@ rather than with a request to run the gate again. A debugger may run that single
 `--test-name-pattern` on it, as many times as it needs to settle determinism -- and may
 not run the gate or the whole suite, which is the cost the retry existed to avoid.
 
-A CHECK WHOSE VERDICT IS DECIDED BY REAL TIME IS DECLARED EXCLUSIVE IN THE PLAN.
-The one failure a packet cannot settle by itself is a step whose assertions are about real
-time, because what differs between the failing run and a passing one is the machine it
-shared. Such a step is declared exclusive where it is planned (`EXCLUSIVE_CHECKS`), and
-the runner starts it only when nothing else is running, so the contention is removed from
-the run instead of being re-tested at the verdict; the report prints it beside the check.
-The test of whether a step belongs there is its assertion, not its cost: a suite that
-spawns real children is slow but decided by what the product recorded, and load only makes
-it slower. A suite whose heartbeat is a count of recorded yields and whose
-freezes are asserted across a directly driven pulse is decided by what the product
-recorded, not by a clock. Real-process files that spawn real children
-still run one at a time inside their own batch, which is a scheduling choice about that batch, not a claim
-that a clock decides them.
-
 THE RECORD lives in the repository's common Git directory
 (`yolo-fork-check/record.jsonl`): the verified commit and tree per branch, the newest
 one of those in a shared entry, the upstream fingerprints verified with it, the installed
@@ -666,7 +652,7 @@ PLAN_BASE_ENV = "FORK_CHECK_PLAN_BASE"
 # The landing path's per-check reuse list. A batch replayed onto a moved tip is re-gated,
 # and a check whose watches the landed paths cannot reach is a result the caller already
 # holds: this names those checks, comma-separated, in the `kind` or `kind:label`
-# vocabulary `EXCLUSIVE_CHECKS` and the preflight's `--only` use. The gate does not run
+# vocabulary the preflight's `--only` uses. The gate does not run
 # them and reports them in the plan line's `reused` field, so the caller can merge the
 # result it holds with the ones this run bought. The integrity set is never reused: it is
 # a property of the tree, and the tree is what moved. A gate that does not read this
@@ -920,72 +906,10 @@ class Quarantine:
             return f"{self.path} (every case)"
         return f"{self.path} -- {', '.join(sorted(self.cases))}"
 
-# The quarantined cases of fork-quality suites, as declarations. These are a QUARANTINE,
-# not a verdict that the cases pass, and not a claim that the step could not run: the
-# cases ran and failed, on a timing race confirmed in the unpatched upstream. pi-subagents'
-# herdr bridge cases write a configure frame and assert the acknowledgement within 30 ms,
-# while the acknowledgement runs `discoverAgents` synchronously over the checkout. The same
-# two cases pass alone and fail under the suite's own concurrency, and which one loses the
-# 30 ms race changes from run to run (2026-10-27: the gate at 2439a5cd7 failed the
-# APPEND_SYSTEM case, an idle `npm run test:unit` in the same candidate failed neither, and a
-# run beside one other suite failed the contact_supervisor case instead). The file is
-# byte-identical at v0.83.0, v0.83.1 and the series tip, and both cases were confirmed on a
-# zero-patch v0.83.0 checkout (2026-10-29): 46/46 alone, the contact_supervisor case inside
-# the full suite, and both cases under 24 concurrent copies of the file.
-# `docs/pi/pi-subagents-quarantine-evidence.md` holds the commands and transcripts, and the
-# declaration's reason cites it.
-#
-# The skip is taken only when EVERY failing case in the run is quarantined for that step:
-# any other failure -- and any run whose `ℹ fail` count disagrees with its list -- keeps the
-# step a red verdict, so one quarantined case cannot hide a regression beside it.
-QUARANTINED_FORK_QUALITY = (
-    Quarantine(
-        check="fork pi-subagents: npm run test:unit",
-        path="test/unit/herdr-native-placement.test.ts",
-        # The two cases that carry the 30 ms acknowledgement wait -- and no others. These
-        # are the only two fixed waits around the configure reply in this file (2026-10-29,
-        # `git grep -n 'setTimeout(resolve, 30)'`), so a third case failing here is a
-        # verdict rather than another turn of a rotation. A case in this file that is not
-        # named below blocks the step, as does any failure in another file.
-        cases=frozenset({
-            "leaves the remote operator's APPEND_SYSTEM.md out of the child's prompt",
-            "preserves canonical contact_supervisor progress and structured-interview semantics",
-        }),
-        # The cases ran and failed, and the failure was reproduced on a zero-patch upstream
-        # checkout: an upstream failure, not an absent host, service or device.
-        classification=QUARANTINE_UPSTREAM,
-        # The queue item's external ref. It is not a numeric store id because the store is
-        # per workspace and disposable: a committed number would name a different item
-        # after a rebuild. The gate enforces that an item is named, which is the half it
-        # can answer from a checkout with no store.
-        item="quarantine/herdr-native-placement",
-        # The file's git blob id at v0.83.0, v0.83.1 and the series tip, which is the
-        # content every run in the evidence record read (2026-11-21: `git hash-object
-        # test/unit/herdr-native-placement.test.ts` in the candidate checkout). The patch
-        # that removes the two sleeps changes this id, and the declaration then stops
-        # applying by itself.
-        blob="f1c4f87058061d3a5e98f327a6b799440743e09f",
-        reason=(
-            "QUARANTINED, not passed: its 30 ms budget for the bridge acknowledgement is a "
-            "real-time assertion this machine meets on an idle run and misses under the suite's "
-            "own concurrency, and which of the two cases loses the race changes from run to run "
-            "(the gate at 2439a5cd7 failed the APPEND_SYSTEM case, an idle run of the same "
-            "candidate failed neither, and a run beside one other suite failed the "
-            "contact_supervisor case instead). Confirmed as upstream's on 2026-10-29 against a "
-            "zero-patch v0.83.0 checkout: the file passes 46/46 alone, the full suite fails the "
-            "contact_supervisor case, and 24 concurrent copies of the file fail both cases (42 "
-            "case failures across 72 runs), while the test file's blob is identical at v0.83.0, "
-            "v0.83.1 and the series tip, so no series patch touches it. The runs, commands and failure "
-            "transcript are recorded in docs/pi/pi-subagents-quarantine-evidence.md, and this "
-            "reason cites that record as the confirmation the queue item asks for. The two cases "
-            "ran and failed; this is not a claim that they pass. The repair is the patch in the "
-            "pi-subagents series that awaits the acknowledgement instead of sleeping 30 ms, "
-            "tracked on the queue item above. The declaration applies only while the test file "
-            "still has the content it was written against (docs/reference/gate-check-rules.md): "
-            "once the file changes, the cases block the step again."
-        ),
-    ),
-)
+# Fork-quality quarantines are declarations, not passing verdicts. There are none active.
+# A declaration can suppress a red verdict only when every failing case is covered and
+# the reported failure count matches the list of failures.
+QUARANTINED_FORK_QUALITY: tuple[Quarantine, ...] = ()
 DOCUMENTS_TIMEOUT = 300
 STORYBOOK_TIMEOUT = 900
 # The tree-wide warning threshold; change-only refusals live in tools/gate/checks.
@@ -1661,8 +1585,7 @@ MECHANISM = (
 # The gate's own SELECTION AND REPORTING code: which checks are planned, how a verdict
 # is worded, what a pass records. A change here cannot change how a series is
 # materialized or judged, so it plans the self-suite and carries no fork (board item
-# 412). The self-suite is the guard for this class: it is the gate's own audit, and it
-# is `exclusive` because it spawns real gates.
+# 412). The self-suite, the gate's own audit, is the guard for this class.
 GATE_CODE = (
     "tools/fork-check.py",
     "tests/fork-check.test.py",
@@ -4177,10 +4100,9 @@ def append_timings(record: Record, entry: dict, checks: list[Check], check_wall:
             "output_bytes": len(check.output or ""),
             "command": check.command_line(),
             # Why this check started when it did, split by the rule that held it. The
-            # three causes the latency work names are `pool`, `writes` and `cheap`, and
-            # they are disjoint. `exclusive` is a SUB-COUNT of `pool` (an exclusive check
-            # waits for the pool to be empty), so a consumer summing the fields must not
-            # add it again. A check that started immediately has zeros here, which is a
+            # four disjoint causes are `pool`, `writes`, `cheap` and `after`. `heavy`
+            # is a sub-count of `pool`, so a consumer summing the fields must not add it
+            # again. A check that started immediately has zeros here, which is a
             # measurement rather than a missing field.
             "waited": {cause: round(seconds, 2) for cause, seconds in check.waited.items()},
         }
@@ -4356,8 +4278,8 @@ def evidence_records(root: Path, entry: dict, checks: list[Check],
                   "warnings": list(check.warnings),
                   # The wait split travels with the shared record too, so a consumer that
                   # reads only the evidence file can attribute a start delay without the
-                  # machine-local timings timeline. `exclusive` is a sub-count of `pool`,
-                  # not a fourth addend.
+                  # machine-local timings timeline. `heavy` is a sub-count of `pool`,
+                  # not an extra addend.
                   "waited": {cause: round(seconds, 3)
                              for cause, seconds in check.waited.items()}}
         if check.cached:
@@ -4564,12 +4486,10 @@ def s1_floor(checks: list[Check]) -> float:
         starts, so the cheap phase costs the longest cheap check (they run together);
       * a declared write conflict -- two checks that write one path never overlap, so
         each connected group of writers costs the sum of its members' durations. This is
-        what makes a fork's `patch-branch merge-check` and its two npm scripts one chain;
-      * an `exclusive` check -- it runs alone, so its duration is additive to everything
-        else rather than competing for a slot.
+        what makes a fork's `patch-branch merge-check` and its two npm scripts one chain.
 
-    Everything else is parallel, so the floor is the cheap phase plus the exclusive
-    checks plus the longest writer chain. A check that did not run contributes nothing;
+    Everything else is parallel, so the floor is the cheap phase plus the longest chain
+    (an independent check is its own chain). A check that did not run contributes nothing;
     a cached check contributes its probe time, because that is the duration this run
     actually paid. The floor is a floor under MEASURED durations, not a law: the
     durations themselves were measured under contention and may shrink in isolation.
@@ -4578,11 +4498,8 @@ def s1_floor(checks: list[Check]) -> float:
     cheap = [check for check in live if check.cost < CHEAP_CHECK_SECONDS]
     heavy = [check for check in live if check.cost >= CHEAP_CHECK_SECONDS]
     cheap_phase = max((check.seconds for check in cheap), default=0.0)
-    exclusive = [check for check in heavy if check.exclusive]
-    exclusive_seconds = sum(check.seconds for check in exclusive)
-    rest = [check for check in heavy if not check.exclusive]
 
-    parent = list(range(len(rest)))
+    parent = list(range(len(heavy)))
 
     def find(index: int) -> int:
         while parent[index] != index:
@@ -4595,15 +4512,15 @@ def s1_floor(checks: list[Check]) -> float:
         if left_root != right_root:
             parent[right_root] = left_root
 
-    for left in range(len(rest)):
-        for right in range(left + 1, len(rest)):
-            if write_conflict(rest[left].writes, rest[right].writes) is not None:
+    for left in range(len(heavy)):
+        for right in range(left + 1, len(heavy)):
+            if write_conflict(heavy[left].writes, heavy[right].writes) is not None:
                 union(left, right)
     chains: dict[int, float] = {}
-    for index, check in enumerate(rest):
+    for index, check in enumerate(heavy):
         root = find(index)
         chains[root] = chains.get(root, 0.0) + check.seconds
-    return cheap_phase + exclusive_seconds + max(chains.values(), default=0.0)
+    return cheap_phase + max(chains.values(), default=0.0)
 
 
 def efficiency_figures(wall: float, floor: float) -> tuple[float, float | None]:
@@ -4664,19 +4581,14 @@ def print_timings(checks: list[Check], total: float, check_wall: float, jobs: in
           f"{clock(overhead)} planning and reporting")
     # The other half of the same question: not only how long each check ran, but why it
     # started when it did. A run whose checks all started at once has no wait to report.
-    # `exclusive` and `heavy` are sub-counts of `pool`, so they are printed in
-    # parentheses rather than added to the four disjoint causes.
+    # `heavy` is a sub-count of `pool`, so it is printed in parentheses rather than
+    # added to the four disjoint causes.
     waits = {cause: sum(check.waited.get(cause, 0.0) for check in checks)
-             for cause in ("pool", "writes", "cheap", "after", "exclusive", "heavy")}
+             for cause in ("pool", "writes", "cheap", "after", "heavy")}
     if any(waits.values()):
         pool = f"{clock(waits['pool'])} pool"
-        named = []
-        if waits["exclusive"]:
-            named.append(f"{clock(waits['exclusive'])} exclusive")
         if waits["heavy"]:
-            named.append(f"{clock(waits['heavy'])} heavy")
-        if named:
-            pool += f" ({', '.join(named)})"
+            pool += f" ({clock(waits['heavy'])} heavy)"
         print(f"fork-check: waits -- {pool}, {clock(waits['writes'])} writes, "
               f"{clock(waits['cheap'])} cheap_first, {clock(waits['after'])} after")
     for check in shown:
@@ -4891,50 +4803,6 @@ def write_failure_excerpts(record: Record, entry: dict, checks: list[Check]) -> 
 # ── the plan ────────────────────────────────────────────────────────────────────
 
 
-# Checks that must run with nothing else of the gate beside them, keyed by kind, with the
-# reason the report prints. A step is declared here for one of two recorded reasons, and the
-# distinction is kept because they fail differently:
-#
-#   * ITS VERDICT IS DECIDED BY REAL TIME -- a freeze window measured in milliseconds, a
-#     heartbeat's gaps. The difference between a failing run and a passing one is then the
-#     machine it shared, and no amount of re-running the verdict can tell those two apart.
-#   * ITS RECORDED VERDICT HAS DIFFERED BY CONTENTION ALONE -- a red inside the gate and a
-#     green standalone on the same tip. Serializing without that evidence would be a
-#     disguised disable. The contention is removed from the run rather than re-tested at
-#     the verdict. (docs/reference/gate-check-rules.md names this declaration as a
-#     mechanism to remove once the two causes are repaired.)
-#
-# COST IS NOT AN ENTRY CRITERION. A suite that spawns real child processes is expensive but
-# decided by counts, orderings and equalities over what the product recorded, and load only
-# makes it slower -- so it belongs in the pool. A suite whose heartbeat is a count of
-# recorded yields and whose freezes are asserted across a directly driven pulse is decided
-# by what the product recorded, not by elapsed time. A step whose assertions are about behaviour alone
-# and whose runs agree belongs in the pool: serializing it would spend the run's concurrency
-# for nothing.
-EXCLUSIVE_CHECKS = {
-    # A key may be a kind, or `kind:label-prefix` to name one check of a shared kind.
-    # The prefix names the UNIT SUITE, not the whole fork: the reason below is about that
-    # suite's real-time case, and a fork's prepare step and typecheck have no such
-    # assertion, so they belong in the pool (board item 405).
-    "fork-quality:fork pi-subagents: npm run test:unit": (
-        "its unit suite holds a real ~30 s timing case -- 'queued same-worktree creates "
-        "start their timeout when the predecessor becomes active' passes alone in 28.3 s "
-        "and times out beside the gate's other checks -- so it runs alone rather than "
-        "being re-tested at the verdict"),
-    # The gate's own audit suite spawns real gates in fixtures, so on 2026-10-29 it errored
-    # with exit 2 (NOT VERIFIED, not a verdict) 6m52s into a landing pass while other gate
-    # work was in flight, and passed standalone on the same tip -- leaving item 258's
-    # candidate stranded with `gate-unverified` and no clock (board item 315). Its assertions
-    # are about the gate's routing rather than elapsed time, so this is the second ground
-    # above, not the first: the runs disagreed by contention alone.
-    "self-suite": (
-        "it spawns real gates in fixtures and on 2026-10-29 errored with exit 2 inside a "
-        "landing pass while other gate work was in flight while passing standalone on the "
-        "same tip, so it runs alone rather than stranding a candidate with gate-unverified "
-        "(board item 315)"),
-}
-
-
 # The INTEGRITY SET: the checks that are a property of the tree rather than of the diff,
 # so every run plans them whatever changed. A run is otherwise selective -- a step runs
 # only when a path it watches changed -- and that selection is what makes a routine
@@ -4953,21 +4821,6 @@ INTEGRITY_CHECKS = ("file-size",)
 # and every step did not. The payload is one JSON object on one line; `print_selection`
 # is the only writer and the board's `readGateSelection` is the reader.
 SELECTION_PREFIX = "fork-check: selection "
-
-
-def exclusive_declaration(kind: str, label: str = "") -> tuple[bool, str]:
-    """Whether a check is declared exclusive, and the reason to print.
-
-    A declaration names either the whole kind or one check of it, `kind:label-prefix`,
-    because a shared kind can hold one real-timing suite and several fast ones.
-    """
-    for key, reason in EXCLUSIVE_CHECKS.items():
-        if key == kind:
-            return (True, reason)
-        head, _, prefix = key.partition(":")
-        if head == kind and prefix and label.startswith(prefix):
-            return (True, reason)
-    return (False, "")
 
 
 # ── what a check's non-zero exit means ──────────────────────────────────────────
@@ -5479,12 +5332,9 @@ class Check:
         # on a write conflict (`writes`), and on an unfinished prerequisite (`after`).
         # `run_checks` fills it as the scheduler decides; a check that never went through
         # the scheduler (a preflight cell) keeps the zeros. The four are disjoint and sum
-        # to the total wait. `exclusive` and `heavy` are SUB-COUNTS of `pool`, not fifth
-        # and sixth addends: an exclusive check waits for the pool to be empty, and a heavy
-        # check waits for the heavy admission budget, and both are thread-pool waits. The
-        # sub-counts name the mechanism so a reader can tell a declared barrier or the
-        # tuned cap from saturation.
-        self.waited = {"pool": 0.0, "cheap": 0.0, "exclusive": 0.0, "heavy": 0.0,
+        # to the total wait. `heavy` is a sub-count of `pool`, not a fifth addend: it
+        # distinguishes a wait for the heavy admission budget from pool saturation.
+        self.waited = {"pool": 0.0, "cheap": 0.0, "heavy": 0.0,
                        "writes": 0.0, "after": 0.0}
         # The inputs this check's own transcript declared elsewhere (a series whose
         # patch-branch stamp is the host's). A check may both pass and declare: the
@@ -5496,7 +5346,6 @@ class Check:
         # with, so the plan removes the contention instead of re-testing the verdict. The
         # reason is printed beside the check, so a reader sees why a slow step held the
         # whole run rather than reading it as a scheduling accident.
-        self.exclusive, self.exclusive_reason = exclusive_declaration(kind, label)
 
     def command_line(self) -> str:
         """The command this check ran, in a spelling a reader can re-run.
@@ -5799,7 +5648,6 @@ def run_checks(checks: list[Check], jobs: int,
                run_one: Callable[[int], None],
                on_start: Callable[[int], None] | None = None,
                on_complete: Callable[[int], None] | None = None,
-               honor_exclusive: bool = True,
                cheap_first: bool = False,
                blame: Callable[[int], bool] | None = None,
                terminate: Callable[[], None] | None = None,
@@ -5840,15 +5688,6 @@ def run_checks(checks: list[Check], jobs: int,
       * a HEAVY check may start only when fewer than `heavy_jobs` heavy checks are
         running, even when the pool has room. The heavy budget is a pool bound, so its
         wait is charged to `pool` and named by the `heavy` sub-count;
-      * a check the plan DECLARED EXCLUSIVE (`check.exclusive`) starts only with nothing
-        else running, and nothing else starts until it finishes: its assertions are about
-        real time, so sharing the machine is the failure mode, and the plan removes it
-        instead of leaving the verdict to be re-tested afterwards. `honor_exclusive` is
-        the preflight's override: it runs a check beside everything on purpose, because
-        whether the check survives that is the question a preflight asks -- a check that
-        cannot must DECLARE it (PREFLIGHT_DECLARATIONS) rather than have the contention
-        removed for it; the write-set rule below is not overridable, because two writers
-        of one path is a corrupted fixture rather than a condition;
       * the cheap phase is considered in plan order, and the heavy phase is considered
         longest-first by each check's most recent measured duration (`check.history`),
         falling back to its declared `cost` when the timeline has no measurement. A long
@@ -5869,11 +5708,9 @@ def run_checks(checks: list[Check], jobs: int,
 
     Every check's wait is recorded on the check itself (`check.waited`), split by the rule
     that held it: the thread pool, the cheap_first barrier, a write conflict, and an
-    unfinished prerequisite (`after`). The four are disjoint and sum to the total wait. An
-    exclusive check waits for the pool to be EMPTY, and a heavy check waits for the heavy
-    admission budget; both are thread-pool waits, so both are charged to `pool`, and
-    `exclusive` and `heavy` are sub-counts of `pool` that name the mechanism, never extra
-    addends. The split is the
+    unfinished prerequisite (`after`). The four are disjoint and sum to the total wait.
+    A wait for the heavy admission budget is charged to `pool`; `heavy` is a sub-count
+    that names the mechanism, not an extra addend. The split is the
     scheduler's own decision, not a guess: between two completions the rule in force is
     the one that was in force when the interval began, and a check that starts is charged
     up to the moment it was submitted. A check that never starts (the run stopped on a
@@ -5913,7 +5750,7 @@ def run_checks(checks: list[Check], jobs: int,
     # The wait each pending check has accumulated, by the rule that held it, and the rule
     # in force at the last decision. `last_seen` is when that decision was made, so the
     # interval to the next one is charged to the rule that was in force across it.
-    wait = {index: {"pool": 0.0, "cheap": 0.0, "exclusive": 0.0, "heavy": 0.0,
+    wait = {index: {"pool": 0.0, "cheap": 0.0, "heavy": 0.0,
                     "writes": 0.0, "after": 0.0}
             for index in pending}
     blocked_by: dict[int, str | None] = {index: None for index in pending}
@@ -5961,17 +5798,10 @@ def run_checks(checks: list[Check], jobs: int,
                 reason = blocked_by[index]
                 if reason is not None:
                     elapsed = now - last_seen[index]
-                    # An exclusive check waits for the pool to be EMPTY, and a heavy
-                    # check waits for the heavy admission budget; both are thread-pool
-                    # waits like saturation is, so both are charged to `pool`, and
-                    # `exclusive` and `heavy` are sub-counts that name the mechanism. The
-                    # four causes the latency work names -- pool, writes, cheap, after --
-                    # stay disjoint and sum to the total wait; the sub-counts are subsets
-                    # of `pool`, never extra addends.
-                    wait[index]["pool" if reason in ("exclusive", "heavy") else reason] += elapsed
-                    if reason == "exclusive":
-                        wait[index]["exclusive"] += elapsed
-                    elif reason == "heavy":
+                    # A wait for the heavy budget is part of the pool wait, not an
+                    # extra addend to the disjoint causes (pool, writes, cheap, after).
+                    wait[index]["pool" if reason == "heavy" else reason] += elapsed
+                    if reason == "heavy":
                         wait[index]["heavy"] += elapsed
                 last_seen[index] = now
             # Start what may start, in `start_priority` order: the cheap phase in plan
@@ -5983,16 +5813,6 @@ def run_checks(checks: list[Check], jobs: int,
                     if index not in pending:
                         continue
                     check = checks[index]
-                    # The binding constraint, not the code's evaluation order: an
-                    # exclusive sibling or the cheap_first barrier stops a check even when
-                    # the pool has room, so it is the reason the check is not running.
-                    if honor_exclusive and (check.exclusive and running or any(
-                            checks[other].exclusive for other in running.values())):
-                        # Nothing else may be in flight, and nothing else may start beside
-                        # it: the run's whole point here is to remove the contention.
-                        blocked_by[index] = "exclusive"
-                        decided.add(index)
-                        continue
                     if cheap_first and index not in cheap and cheap_left():
                         # The cheap phase is not finished: no suite or fork check starts
                         # until it is, so a cheap failure can kill it before it begins.
@@ -6019,23 +5839,13 @@ def run_checks(checks: list[Check], jobs: int,
                         continue
                     if len(running) >= jobs:
                         # The pool is full. Every check this scan has not already decided
-                        # waits on it, unless a stronger rule holds it: an exclusive check
-                        # (or a check beside a running exclusive one) waits for the pool to
-                        # be empty, and a non-cheap check waits for the cheap barrier. The
-                        # binding constraint is the reason, not the full pool.
+                        # waits on it unless the cheap barrier or heavy budget holds it.
                         barrier = cheap_first and cheap_left()
-                        exclusive_running = honor_exclusive and any(
-                            checks[other].exclusive for other in running.values())
                         heavy_full = heavy_running() >= heavy_jobs
                         for rest in pending:
                             if rest in decided:
                                 continue
-                            rest_check = checks[rest]
-                            if honor_exclusive and (
-                                    exclusive_running
-                                    or (rest_check.exclusive and running)):
-                                blocked_by[rest] = "exclusive"
-                            elif barrier and rest not in cheap:
+                            if barrier and rest not in cheap:
                                 blocked_by[rest] = "cheap"
                             elif rest in heavy and heavy_full:
                                 blocked_by[rest] = "heavy"
@@ -6490,7 +6300,7 @@ def plan_integrity(plan: Plan) -> None:
 def reuse_selectors() -> list[str]:
     """The checks a caller says it already holds a result for, from `REUSE_ENV`.
 
-    The vocabulary is the one `EXCLUSIVE_CHECKS` and the preflight's `--only` use: a
+    The vocabulary is the one the preflight's `--only` uses: a
     kind, or `kind:label` to name one check of a shared kind. An empty answer means the
     caller asked for no reuse, which is every ordinary run.
     """
@@ -7948,19 +7758,13 @@ def report(plan: Plan, record: Record, baseline: dict | None, head: str, changed
             print(f"       cached: {check.cache_key} -- recorded {hit.get('at', 'unknown')} "
                   f"at {str(hit.get('commit', 'unknown'))[:12]}")
         # Why it started when it did, when it waited at all. The four causes the latency
-        # work names are printed first; an exclusive wait and the heavy admission cap are
-        # sub-counts of the pool wait, named in parentheses so a declared barrier or the
-        # tuned cap is distinguishable from saturation without being counted twice.
+        # work names are printed first; the heavy admission cap is a sub-count of the
+        # pool wait, named in parentheses to distinguish it from saturation.
         waited = check.waited
         if any(waited.values()):
             pool = f"{clock(waited['pool'])} pool"
-            named = []
-            if waited["exclusive"]:
-                named.append(f"{clock(waited['exclusive'])} exclusive")
             if waited["heavy"]:
-                named.append(f"{clock(waited['heavy'])} heavy")
-            if named:
-                pool += f" ({', '.join(named)})"
+                pool += f" ({clock(waited['heavy'])} heavy)"
             print(f"       waited: {pool}, {clock(waited['writes'])} writes, "
                   f"{clock(waited['cheap'])} cheap_first, {clock(waited['after'])} after")
         # Why a fork-quality step executed, in the design's cause vocabulary. A cached
@@ -7983,11 +7787,6 @@ def report(plan: Plan, record: Record, baseline: dict | None, head: str, changed
         # slot instead of taking that on trust.
         if check.writes:
             print(f"       writes: {', '.join(check.writes)}")
-        # A step the plan declared exclusive says so, and why: it held the whole run while
-        # it ran, and that is a decision about its assertions rather than a scheduling
-        # accident a reader has to guess at.
-        if check.exclusive:
-            print(f"       exclusive: runs alone -- {check.exclusive_reason}")
         # A warning is news without being a verdict, so it prints beside a passing check
         # too: a file the tree already carries over the budget must be visible on the
         # run that did not add it.
@@ -8915,8 +8714,6 @@ def declaration_of(check: "Check", index: int, root: Path, changed: list[str]) -
         "drop": list(check.drop),
         "needs": list(check.needs),
         "tier": CHECK_TIER.get(check.kind, ""),
-        "exclusive": check.exclusive,
-        "exclusive_reason": check.exclusive_reason,
     }
     decl.update(CHANGE_DEPENDENT_DECLARATIONS.get((check.kind, index), {}))
     return decl
@@ -8940,7 +8737,7 @@ def declaration_mismatch(decl: dict, check: "Check", changed: list[str], root: P
     """The first field in which a declaration fails to reproduce the check the gate plans.
 
     Every field is compared, not only the argv and the watches: `env`, `drop`, `needs`,
-    `tier`, exclusivity, `writes`, `after`, `timeout_ms`, `forced`, `id` and `label` are
+    `tier`, `writes`, `after`, `timeout_ms`, `forced`, `id` and `label` are
     what a runner needs to reproduce the gate, so a difference in any of them is a refusal
     rather than a divergence a planner would discover by running the wrong checks. The two
     per-run values are compared in the normalised form the export writes.
@@ -8969,8 +8766,6 @@ def declaration_mismatch(decl: dict, check: "Check", changed: list[str], root: P
         "drop": list(check.drop),
         "needs": list(check.needs),
         "tier": CHECK_TIER.get(check.kind, ""),
-        "exclusive": check.exclusive,
-        "exclusive_reason": check.exclusive_reason,
         "after": list(check.after),
         "writes": [pid.sub("run-<pid>", path) for path in check.writes],
         "env": {key: pid.sub("run-<pid>", value) for key, value in check.env.items()},
@@ -8999,7 +8794,7 @@ def registry_json(root: Path) -> int:
     instead of this file, so it must name every check this gate plans. It is a set of check
     *declarations*, not one plan instance: each names the patterns that select it, the
     command and watches it computes from the selected paths, and the fields a plan instance
-    carries but a command list cannot (`env`, `drop`, `needs`, `tier`, exclusivity). A
+    carries but a command list cannot (`env`, `drop`, `needs`, `tier`). A
     planner given a change computes its own instance from these; replaying the instance this
     export built would run the `documents` check over every tracked document whatever the
     change, and would select nothing for a file added after the export.
@@ -9149,7 +8944,6 @@ def write_gate_spans(path: str, plan: "Plan", root: Path, started_ns: int,
             "target_seconds": check.timeout,
             "over_target_seconds": max(0, check.seconds - check.timeout) if check.timeout > 0 else 0,
             "cached": check.cached,
-            "exclusive": check.exclusive,
             "command": check.command_line(),
             "selected_by": list(check.selected_by) if check.selected_by is not None else [],
             "writes": list(check.writes),
@@ -9303,8 +9097,6 @@ def run_gate(argv: list[str]) -> int:
                 print(f"       watches: {', '.join(watched_spelling(check.watches))}")
             if check.writes:
                 print(f"       writes: {', '.join(check.writes)}")
-            if check.exclusive:
-                print(f"       exclusive: runs alone -- {check.exclusive_reason}")
         for skip in plan.skips:
             # `would owe` is the third state: the diff selected the step and this tier
             # defers it to the other one, which is neither a skip this machine could not
@@ -9381,9 +9173,6 @@ def run_gate(argv: list[str]) -> int:
     # gate the sum of its parts (640s measured on a 12-core host, four of the checks
     # accounting for 527s of it). The bound is the machine's core count unless --jobs says
     # otherwise, and a check that writes a path another writes waits for it.
-    #
-    # A check the plan declared exclusive runs alone (see EXCLUSIVE_CHECKS), so its
-    # real-timing assertions are not measured against a machine its siblings are using.
     #
     # Each check reads its own output in its own worker (execute_check), so a series whose
     # patch-branch stamp is the host's is declared elsewhere rather than failed or skipped:
@@ -9544,7 +9333,6 @@ def run_gate(argv: list[str]) -> int:
         "owed": sum(1 for skip in plan.skips if skip.owed),
         "could_not_answer": sum(1 for skip in plan.skips if skip.planned),
         "declared": [declared.entry() for declared in plan.declared],
-        "exclusive": [check.kind for check in plan.checks if check.exclusive],
         # The pass's change class, the target the design sets for it, the S1 floor under
         # this run's own per-check durations, and the efficiency ratio. Recorded on every
         # run, so the instrument survives in the timeline rather than only in a terminal.
@@ -9710,8 +9498,7 @@ class Declaration:
 def preflight_names(name: str, kind: str, label: str) -> bool:
     """Whether `name` selects this check: a kind, or `kind:label-prefix`.
 
-    The same vocabulary EXCLUSIVE_CHECKS uses, because both answer "which check is this
-    about" and a second spelling would be a second thing to get wrong.
+    Preflight's `--only` uses this vocabulary to name checks.
     """
     head, _, prefix = name.partition(":")
     if head != kind:
@@ -10085,8 +9872,7 @@ def run_preflight(argv: list[str]) -> int:
             run_checks(
                 copies, 1,
                 lambda index: execute_attempt(root, copies[index], gate.diff_base,
-                                              additions, drop),
-                honor_exclusive=False)
+                                              additions, drop))
             for check, run in zip(runnable, copies):
                 declaration = next((one for one in declarations
                                     if one.covers(check.kind, check.label, cell.name)), None)
