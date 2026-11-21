@@ -214,7 +214,7 @@ func readLaneRows(ctx context.Context, path, loop, lanes string, now time.Time) 
 		if !schemaSupported(version) {
 			return schemaMismatch{version: version}
 		}
-		rows, err = assembleLanes(r, loop, lanes, now)
+		rows, err = assembleLanesCounted(r, path, loop, lanes, now, nil)
 		return err
 	})
 	return rows, err
@@ -223,7 +223,7 @@ func readLaneRows(ctx context.Context, path, loop, lanes string, now time.Time) 
 func (s *server) lanesPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
 	stats := &laneReadStats{}
 	start := time.Now()
-	rows, err := assembleLanesCounted(r, s.obs.loopDir, s.obs.laneRoot, time.Now(), stats)
+	rows, err := assembleLanesCounted(r, s.storePath, s.obs.loopDir, s.obs.laneRoot, time.Now(), stats)
 	phase(req.Context(), "lane_logs", map[string]any{"ms": msSince(time.Now, start), "files": stats.files, "bytes": stats.bytes})
 	if err != nil {
 		return nil, failure(codeStoreUnreadable, "lanes could not read the store: %v", err)
@@ -247,10 +247,6 @@ func (s *server) lanesPayload(r *store.Reader, req *http.Request) (any, *apiFail
 	return rows, nil
 }
 
-func assembleLanes(r *store.Reader, loop, lanes string, now time.Time) ([]laneRow, error) {
-	return assembleLanesCounted(r, loop, lanes, now, nil)
-}
-
 // laneReadStats is what one lanes answer read from the lane directories: the performance
 // log's `lane_logs` phase. A nil one counts nothing.
 type laneReadStats struct {
@@ -265,7 +261,7 @@ func (s *laneReadStats) add(n int) {
 	}
 }
 
-func assembleLanesCounted(r *store.Reader, loop, lanes string, now time.Time, stats *laneReadStats) ([]laneRow, error) {
+func assembleLanesCounted(r *store.Reader, storePath, loop, lanes string, now time.Time, stats *laneReadStats) ([]laneRow, error) {
 	d, err := readStoreDomainIn(r, loop)
 	if err != nil {
 		return nil, err
@@ -361,7 +357,7 @@ func assembleLanesCounted(r *store.Reader, loop, lanes string, now time.Time, st
 	for i := range rows {
 		f, ok := itemFaults[rows[i].ItemID]
 		if ok && f.Reason == "adapter-refused" && f.RunID == rows[i].RunID {
-			rows[i].Hold = &laneHold{Reason: f.Reason, Detail: f.Detail, Mover: holdrules.For(f.Reason).Mover, AtMS: f.AtMS}
+			rows[i].Hold = &laneHold{Reason: f.Reason, Detail: f.Detail, Mover: f.CompleteMover(holdrules.For(f.Reason).Mover, storePath), AtMS: f.AtMS}
 		}
 	}
 	return rows, nil

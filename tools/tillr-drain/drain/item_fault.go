@@ -71,6 +71,9 @@ func (l *Loop) holdItemFault(ctx context.Context, c Candidate, reason, detail st
 			detail = faultClearDetail(f, l.cfg.Store)
 		}
 		l.reportf("loop: holding %s (%s, run %s, lane %s): %s\n", c.ItemID, reason, c.RunID, c.LaneID, detail)
+		if reason == ReasonStageFailed {
+			l.reportf("loop: %s mover: %s\n", c.ItemID, f.CompleteMover(holdrules.For(reason).Mover, l.cfg.Store))
+		}
 	}
 	return err
 }
@@ -250,7 +253,6 @@ func (l *Loop) holdStageFailed(ctx context.Context, d Decision, step string, sta
 		return err
 	}
 	l.clearStageInfraLine(itemID, d.LaneID)
-	l.reportf("loop: %s mover: %s\n", itemID, holdrules.For(ReasonStageFailed).Mover)
 	return nil
 }
 

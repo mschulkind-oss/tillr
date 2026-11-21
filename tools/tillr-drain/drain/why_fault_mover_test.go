@@ -2,6 +2,7 @@ package drain
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -44,6 +45,48 @@ func TestAFaultHoldShowsItsRecordedMoverAndDetail(t *testing.T) {
 						t.Errorf("why %q does not carry the fault's detail %q", row.Why, tc.detail)
 					}
 					return nil
+				}
+				t.Fatal("item-a has no row")
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestFaultMoverNamesTheActiveFaultSequence(t *testing.T) {
+	for _, reason := range []string{ReasonStageFailed, ReasonAdapterRefused, ReasonSettleFailed, ReasonDecisionCollision, ReasonRunProcessesLive, ReasonPreserveFailed} {
+		t.Run(reason, func(t *testing.T) {
+			f, l := passFixture(t, "item-a")
+			ctx := context.Background()
+			for _, detail := range []string{"superseded evidence", "current evidence"} {
+				if err := l.holdItemFault(ctx, Candidate{ItemID: "item-a"}, reason, detail); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := openFixture(t, f.storePath)
+			defer s.Close()
+			if err := s.ReadTx(ctx, func(r *store.Reader) error {
+				events, err := r.EventsOfKind(0, itemFaultKind)
+				if err != nil {
+					return err
+				}
+				if len(events) != 2 || events[1].Seq <= events[0].Seq {
+					t.Fatalf("expected two ordered fault events, got %+v", events)
+				}
+				want := fmt.Sprintf("tillr drain clear-fault --store '%s' --item 'item-a' --fault %d", f.storePath, events[1].Seq)
+				answer, err := Why(r, Pass{StorePath: f.storePath, Now: l.cfg.Now().Format("2006-01-02T15:04:05Z07:00"), AvailableLanes: &l.cfg.Lanes}, l.cfg.Policy, nil)
+				if err != nil {
+					return err
+				}
+				for _, row := range answer.Rows {
+					if row.ItemID == "item-a" {
+						if row.Reason != reason || !strings.HasSuffix(row.Mover, want) || strings.Count(row.Mover, "clear-fault") != 1 || !strings.Contains(row.Why, "current evidence") {
+							t.Fatalf("held row = %+v, want current %s detail and mover ending in %q", row, reason, want)
+						}
+						return nil
+					}
 				}
 				t.Fatal("item-a has no row")
 				return nil

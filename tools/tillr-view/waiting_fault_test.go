@@ -1,10 +1,54 @@
 package main
 
 import (
+	"database/sql"
+	"encoding/json"
 	"fmt"
+	"os/exec"
 	"strings"
 	"testing"
 )
+
+func TestWaitingDefaultShowsTheStageFaultClearCommand(t *testing.T) {
+	viewBin, drainBin := buildPair(t)
+	dir, path := whyFixture(t, drainBin)
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	event, err := db.Exec(`INSERT INTO events(ts,kind,object_type,object_id,payload) VALUES(3000,'drain.item-fault','item','a','{"item_id":"a","reason":"stage-failed","detail":"fixture staging fault"}')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seq, err := event.LastInsertId()
+	if err != nil || seq <= 0 {
+		t.Fatalf("fault sequence: %d, %v", seq, err)
+	}
+	want := fmt.Sprintf("tillr drain clear-fault --store '%s' --item 'a' --fault %d", path, seq)
+	args := []string{"waiting", "--store", path, "--root", dir, "--tillr-drain", drainBin}
+	out, err := exec.Command(viewBin, args...).CombinedOutput()
+	if err != nil || !strings.Contains(string(out), want) {
+		t.Fatalf("waiting table missing %q: %v\n%s", want, err, out)
+	}
+	out, err = exec.Command(viewBin, append(args, "--json")...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("waiting JSON: %v\n%s", err, out)
+	}
+	var rows []waitingRow
+	if err := json.Unmarshal(out, &rows); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range rows {
+		if row.ItemID == "a" {
+			if !strings.HasSuffix(row.Mover, want) || !strings.Contains(row.Why, "fixture staging fault") {
+				t.Fatalf("waiting row = %+v, want fault detail and mover ending in %q", row, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("waiting JSON has no held row for a: %s", out)
+}
 
 func TestWaitingFaultHasEvidenceAndOneClearCommand(t *testing.T) {
 	for _, reason := range []string{"gate-stalled", "gate-harness-error", "host-boundary-violation", "candidate-record-mismatch", "definition-sync-failed"} {

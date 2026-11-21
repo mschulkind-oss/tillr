@@ -117,27 +117,41 @@ func Resolve(byItem map[string]map[string]Hold) map[string]Hold {
 	return holds
 }
 
+const clearFault = "tillr drain clear-fault"
+
+// CompleteMover binds a rule's trailing clear-fault instruction to this hold,
+// preserving the repair instruction and leaving other movers alone.
+func (f Hold) CompleteMover(mover, storePath string) string {
+	if repair, ok := strings.CutSuffix(mover, clearFault); ok {
+		return repair + f.ClearCommand(storePath)
+	}
+	return mover
+}
+
 // ClearCommand names the store and the precise evidence identity, preventing a
 // stale waiting display from silently clearing a newer conviction.
 func (f Hold) ClearCommand(storePath string) string {
 	if f.Reason == VerifyTriageReason {
 		return "operator; " + VerifyTriageCommand(storePath, f.ItemID, f.RunID, f.RetryAck)
 	}
-	return fmt.Sprintf("tillr drain clear-fault --store %s --item %s --fault %s", quote(storePath), quote(f.ItemID), strconv.FormatInt(f.Seq, 10))
+	return fmt.Sprintf("%s --store %s --item %s --fault %s", clearFault, storeArgument(storePath), quote(f.ItemID), strconv.FormatInt(f.Seq, 10))
 }
 
 // VerifyTriageCommand names the held run, not a fault sequence. Only a
 // retry authorization of that run can release the hold.
 func VerifyTriageCommand(storePath, itemID, runID, ack string) string {
-	storeArg := "<path>"
-	if storePath != "" {
-		storeArg = quote(storePath)
-	}
 	cmd := fmt.Sprintf("tillr drain retry --item %s --run %s --by <who> --why <reason>", itemID, runID)
 	if ack != "" {
 		cmd += " --acknowledge " + ack
 	}
-	return cmd + fmt.Sprintf(" --store %s --now \"$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)\"", storeArg)
+	return cmd + fmt.Sprintf(" --store %s --now \"$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)\"", storeArgument(storePath))
+}
+
+func storeArgument(path string) string {
+	if path == "" {
+		return "<path>"
+	}
+	return quote(path)
 }
 
 func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }

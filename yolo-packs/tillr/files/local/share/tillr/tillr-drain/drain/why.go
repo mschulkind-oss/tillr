@@ -356,16 +356,21 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		}
 		class, where, mover := whyPresentation(d)
 		row := WhyRow{Place: places[it.ItemID], ItemID: it.ItemID, State: it.State, Position: d.Position, Reason: d.Reason, Why: d.Reason, Class: class, Where: where, Mover: mover, Since: "current plan", ClassSource: "planner", WaitingOn: []string{}, Decision: planned}
-		// A fault hold says what is wrong in its recorded detail.
-		if fault, held := itemFaults[it.ItemID]; held && d.Action == ActionHold && d.Reason == fault.Reason && fault.Detail != "" {
+		// Use the recorded fault for both its detail and its sequence-bound mover.
+		if fault, held := itemFaults[it.ItemID]; held && d.Action == ActionHold && d.Reason == fault.Reason {
 			if fault.Reason == ReasonPreserveFailed && tick.StorePath != "" {
-				row.Why += ": " + faultClearDetail(fault, tick.StorePath)
 				row.Mover += "; then " + fault.ClearCommand(tick.StorePath)
 			} else if fault.Reason == ReasonDecisionCollision && tick.StorePath != "" {
-				row.Why += ": " + faultClearDetail(fault, tick.StorePath)
 				row.Mover = "operator; fix the drain defect, then " + fault.ClearCommand(tick.StorePath)
 			} else {
-				row.Why += ": " + fault.Detail
+				row.Mover = fault.CompleteMover(row.Mover, tick.StorePath)
+			}
+			if fault.Detail != "" {
+				detail := fault.Detail
+				if (fault.Reason == ReasonPreserveFailed || fault.Reason == ReasonDecisionCollision) && tick.StorePath != "" {
+					detail = faultClearDetail(fault, tick.StorePath)
+				}
+				row.Why += ": " + detail
 			}
 		}
 		if obsHold, held := obstacleHolds[it.ItemID]; held && d.Action == ActionHold && d.Reason == obsHold.ReasonCode() {
@@ -999,8 +1004,6 @@ func whyPresentation(d Decision) (class, where, mover string) {
 		return "needs you", where, "the owner"
 	case ReasonConflictDesign:
 		return "waits on work", where, "design"
-	case ReasonDecisionCollision, ReasonSettleFailed:
-		return "needs a cause", "loop", "fix the drain defect the fault names, then tillr drain clear-fault"
 	default:
 		// A reason with a recorded rule and no case above is shown by that rule. Only a
 		// reason with no rule at all is a run to diagnose.
