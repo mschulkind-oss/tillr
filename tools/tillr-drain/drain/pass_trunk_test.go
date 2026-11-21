@@ -13,11 +13,8 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-const trunkMovedDecline = "trunk moved and the planned inputs or fence are not known to be unchanged"
-
-// A design landing can answer the conflict between document refresh and planning.
-// The store's item/run/lease version can then be current while the pass's base is old.
-func TestDispatchDefersWhenTrunkMovesAfterDocumentRefresh(t *testing.T) {
+// A new plan sees a landing after document refresh, but an existing plan keeps its tip.
+func TestDispatchStartsWhenTrunkMovesAfterDocumentRefresh(t *testing.T) {
 	for _, movement := range []string{"before-plan", "after-plan"} {
 		t.Run(movement, func(t *testing.T) {
 			f, l := passFixture(t, "item-a")
@@ -37,26 +34,14 @@ func TestDispatchDefersWhenTrunkMovesAfterDocumentRefresh(t *testing.T) {
 			if movement == "after-plan" {
 				move()
 			}
-			before := eventCount(t, f.storePath)
+			want := base
+			if movement == "before-plan" {
+				want = runGit(t, f.root, "rev-parse", TrunkRef)
+			}
 			generation := ""
 			ok, work, err := l.applyPlanGeneration(ctx, plan, base, l.cfg.Now(), &generation)
-			if err != nil || ok || work != nil {
-				t.Fatalf("dispatch used stale refreshed trunk %s: applied=%v work=%+v error=%v", base, ok, work, err)
-			}
-			if generation != "" {
-				t.Fatalf("stale dispatch allocated generation %q", generation)
-			}
-			assertOnlyDispatchDecline(t, f.storePath, before, plan.decision, trunkMovedDecline)
-			fresh, err := l.refreshDocuments(ctx, &result)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if fresh == base {
-				t.Fatal("refresh did not observe the landing")
-			}
-			ok, work, err = l.applyPlan(ctx, mustPlan(t, l)[0], fresh, l.cfg.Now())
-			if err != nil || !ok || work == nil || work.BaseSHA != fresh {
-				t.Fatalf("refreshed dispatch: applied=%v work=%+v error=%v", ok, work, err)
+			if err != nil || !ok || work == nil || work.BaseSHA != want || generation == "" {
+				t.Fatalf("dispatch at decided tip %s: applied=%v work=%+v generation=%q error=%v", want, ok, work, generation, err)
 			}
 		})
 	}
@@ -109,7 +94,7 @@ func (s *midPassLandingSteps) Run(ctx context.Context, req run.Request) (run.Rec
 	return s.recordingSteps.Run(ctx, req)
 }
 
-func TestMidPassSiblingLandingStartsUnrelatedItemOnNewTrunk(t *testing.T) {
+func TestMidPassSiblingLandingStartsUnrelatedItemOnDecidedTrunk(t *testing.T) {
 	f, l := passFixture(t, "item-a", "item-b")
 	ctx := context.Background()
 	writeRepoFile(t, f.root, "briefs/item-a.md", "# item-a\n\ndo item-a\n")
@@ -201,19 +186,19 @@ func TestMidPassSiblingLandingStartsUnrelatedItemOnNewTrunk(t *testing.T) {
 	if got := stager.staged["item-a"]; got != initialTrunk {
 		t.Fatalf("item-a staged at %s, want initial trunk %s", got, initialTrunk)
 	}
-	if got := stager.staged["item-b"]; got != siblingTrunk {
-		t.Fatalf("item-b staged at %s, want new trunk %s", got, siblingTrunk)
+	if got := stager.staged["item-b"]; got != initialTrunk {
+		t.Fatalf("item-b staged at %s, want decided trunk %s", got, initialTrunk)
 	}
-	if head := runGit(t, l.laneTarget("lane-2"), "rev-parse", "HEAD"); head != siblingTrunk {
-		t.Fatalf("lane-2 worktree HEAD=%s, want new trunk %s", head, siblingTrunk)
+	if head := runGit(t, l.laneTarget("lane-2"), "rev-parse", "HEAD"); head != initialTrunk {
+		t.Fatalf("lane-2 worktree HEAD=%s, want decided trunk %s", head, initialTrunk)
 	}
 	raw, err := os.ReadFile(filepath.Join(l.laneDirPath("lane-2"), BaseSHAFile))
-	if err != nil || strings.TrimSpace(string(raw)) != siblingTrunk {
-		t.Fatalf("lane-2 base_sha=%q err=%v, want %s", string(raw), err, siblingTrunk)
+	if err != nil || strings.TrimSpace(string(raw)) != initialTrunk {
+		t.Fatalf("lane-2 base_sha=%q err=%v, want %s", string(raw), err, initialTrunk)
 	}
 }
 
-func TestMidPassLandingTouchingInputsOrFenceCancelsStart(t *testing.T) {
+func TestMidPassLandingTouchingInputsOrFenceKeepsDecidedStart(t *testing.T) {
 	cases := []struct {
 		name  string
 		setup func(t *testing.T, f refusalLoopFixture)
@@ -324,25 +309,66 @@ func TestMidPassLandingTouchingInputsOrFenceCancelsStart(t *testing.T) {
 			runGit(t, f.root, "add", ".")
 			runGit(t, f.root, "commit", "-qm", "concurrent landing touching item")
 
-			before := eventCount(t, f.storePath)
 			generation := ""
 			trunk := base
 			ok, work, err := l.applyPlanTrunk(ctx, plan, &trunk, l.cfg.Now(), &generation)
-			if err != nil || ok || work != nil {
-				t.Fatalf("touched dispatch applied: ok=%v work=%+v err=%v", ok, work, err)
+			if err != nil || !ok || work == nil || work.BaseSHA != base || trunk != base || generation == "" {
+				t.Fatalf("dispatch at decided tip %s: ok=%v work=%+v trunk=%s generation=%q err=%v", base, ok, work, trunk, generation, err)
 			}
-			if trunk != base {
-				t.Fatalf("cancelled dispatch mutated pass trunk: got %s, want %s", trunk, base)
-			}
-			if generation != "" {
-				t.Fatalf("cancelled dispatch allocated generation %q", generation)
-			}
-			assertOnlyDispatchDecline(t, f.storePath, before, plan.decision, trunkMovedDecline)
 		})
 	}
 }
 
-func TestMidPassTrunkRewriteCancelsStart(t *testing.T) {
+func TestDecidedStartKeepsBlockBaseAcrossTrunkAndGreenAdvance(t *testing.T) {
+	f, l := passFixture(t, "item-a", "item-b")
+	ctx := context.Background()
+	l.gatePolicy.LaneBase = "green"
+	commit := func(body string) string {
+		writeRepoFile(t, f.root, "briefs/item-a.md", "# item-a\n\n"+body+"\n")
+		runGit(t, f.root, "add", "briefs/item-a.md")
+		runGit(t, f.root, "commit", "-qm", body)
+		return runGit(t, f.root, "rev-parse", TrunkRef)
+	}
+	green := commit("old block")
+	runGit(t, f.root, "update-ref", GreenRef, green)
+	carrier := commit("decided block")
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "unrelated landing")
+	observed := runGit(t, f.root, "rev-parse", TrunkRef)
+	plan := mustPlan(t, l)[0]
+
+	latest := commit("later block")
+	runGit(t, f.root, "update-ref", GreenRef, latest)
+	ok, work, err := l.applyPlan(ctx, plan, observed, l.cfg.Now())
+	if err != nil || !ok || work == nil || work.BaseSHA != carrier {
+		t.Fatalf("start must keep its block carrier %s: ok=%v work=%+v err=%v", carrier, ok, work, err)
+	}
+	for _, fresh := range mustPlan(t, l) {
+		if fresh.decision.ItemID != "item-b" || fresh.decision.Action != ActionDispatch {
+			continue
+		}
+		ok, work, err = l.applyPlan(ctx, fresh, observed, l.cfg.Now())
+		if err != nil || !ok || work == nil || work.BaseSHA != latest {
+			t.Fatalf("new start must use new green %s: ok=%v work=%+v err=%v", latest, ok, work, err)
+		}
+		return
+	}
+	t.Fatal("item-b was not offered a start")
+}
+
+func TestUncommittedBodyEditStillCancelsStart(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	plan := mustPlan(t, l)[0]
+	writeRepoFile(t, f.root, "briefs/item-a.md", "# item-a\n\nedited after planning\n")
+	before := eventCount(t, f.storePath)
+	ok, work, err := l.applyPlan(context.Background(), plan, base, l.cfg.Now())
+	if err != nil || ok || work != nil {
+		t.Fatalf("start with edited body was claimed: ok=%v work=%+v err=%v", ok, work, err)
+	}
+	assertOnlyDispatchDecline(t, f.storePath, before, plan.decision, "run inputs changed since planning")
+}
+
+func TestMidPassTrunkRewriteDoesNotCancelStart(t *testing.T) {
 	f, l := passFixture(t, "item-a")
 	writeRepoFile(t, f.root, "briefs/item-a.md", "# item-a\n\nbody\n")
 	writeRepoFile(t, f.root, "unrelated.txt", "one\n")
@@ -362,14 +388,9 @@ func TestMidPassTrunkRewriteCancelsStart(t *testing.T) {
 	runGit(t, f.root, "add", "unrelated.txt")
 	runGit(t, f.root, "commit", "--amend", "-qm", "rewritten")
 
-	before := eventCount(t, f.storePath)
 	generation := ""
 	ok, work, err := l.applyPlanGeneration(ctx, plan, base, l.cfg.Now(), &generation)
-	if err != nil || ok || work != nil {
-		t.Fatalf("dispatch applied across non-fast-forward trunk rewrite: ok=%v work=%+v err=%v", ok, work, err)
+	if err != nil || !ok || work == nil || work.BaseSHA != base || generation == "" {
+		t.Fatalf("dispatch at decided tip %s across rewrite: ok=%v work=%+v generation=%q err=%v", base, ok, work, generation, err)
 	}
-	if generation != "" {
-		t.Fatalf("cancelled dispatch allocated generation %q", generation)
-	}
-	assertOnlyDispatchDecline(t, f.storePath, before, plan.decision, trunkMovedDecline)
 }

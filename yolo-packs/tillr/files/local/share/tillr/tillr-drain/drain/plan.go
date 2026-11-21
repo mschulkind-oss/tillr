@@ -44,6 +44,9 @@ type Pass struct {
 	// the reason. The planner holds these items before it offers any lane, so a lane is
 	// never given to an item the loop will not stage and kept from the next item in order.
 	loopHolds map[string]string
+	// The legacy loop shares one ref observation between dependency planning and
+	// base selection for new starts. Standalone and settlement plans need no snapshot.
+	startRefs *startRefs
 	// ownExaminationLane and ownExaminationRunID let an in-flight settle examination
 	// ask what the planner would decide once its own lease ends, without clearing
 	// that lease before the gate claim commits.
@@ -375,11 +378,14 @@ func planDefinition(r *store.Reader, tick Pass, policy *Policy, questions Questi
 		if e != nil {
 			return nil, e
 		}
-		// This read-only face needs Git only to prove a landed dependency.
-		// The dispatch claim still validates the selected lane base before staging,
-		// and advances it to carry the item's own block (blockBase).
+		// The planner needs green to prove landed dependencies. The loop can
+		// reuse that observation to select fresh starts' bases.
 		if hasLandedBlocker(states, edges) {
-			green, err = provedLaneBase(context.Background(), root, gatePolicy.LaneBase)
+			if tick.startRefs != nil {
+				green, err = tick.startRefs.proved(context.Background(), root, gatePolicy.LaneBase)
+			} else {
+				green, err = provedLaneBase(context.Background(), root, gatePolicy.LaneBase)
+			}
 			if err != nil {
 				return nil, err
 			}

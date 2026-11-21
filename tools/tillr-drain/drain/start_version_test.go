@@ -142,6 +142,15 @@ func TestRerankViaPlaceDoesNotCancelPlannedStart(t *testing.T) {
 }
 
 func TestStartContentChangeCancelsPlannedStart(t *testing.T) {
+	testHoldBeforeClaim(t, false)
+}
+
+func TestHoldBeforeClaimCancelsStart(t *testing.T) {
+	testHoldBeforeClaim(t, true)
+}
+
+func testHoldBeforeClaim(t *testing.T, moveTrunk bool) {
+	t.Helper()
 	cases := []struct {
 		name  string
 		setup func(t *testing.T, f refusalLoopFixture, l *Loop)
@@ -250,11 +259,14 @@ func TestStartContentChangeCancelsPlannedStart(t *testing.T) {
 				t.Fatalf("item-a not planned for dispatch: %+v", plans)
 			}
 
+			base := runGit(t, f.root, "rev-parse", TrunkRef)
+			if moveTrunk {
+				runGit(t, f.root, "commit", "--allow-empty", "-qm", "trunk moved")
+			}
 			tc.hold(t, f, l)
 
 			eventsBefore := eventCount(t, f.storePath)
 			dispatchesBefore := dispatchCount(t, f.storePath)
-			base := runGit(t, f.root, "rev-parse", TrunkRef)
 			ok, work, err := l.applyPlan(ctx, p, base, l.cfg.Now().Add(2*time.Second))
 			if err != nil || ok || work != nil {
 				t.Fatalf("held start was not cancelled: ok=%v work=%+v err=%v", ok, work, err)
