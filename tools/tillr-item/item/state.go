@@ -104,6 +104,9 @@ func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string
 		if len(waiting) > 0 {
 			next = waiting[0]
 		}
+		if next.Source == "" {
+			next.Source = "state"
+		}
 		if err := checkWaitingOn(tx.Reader(), itemID, next); err != nil {
 			return record.Envelope{}, err
 		}

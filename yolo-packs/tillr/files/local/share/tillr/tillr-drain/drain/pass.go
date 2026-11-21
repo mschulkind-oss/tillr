@@ -448,10 +448,10 @@ func terminalRecord(r *store.Reader, id string) (*run.Record, error) {
 }
 
 func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *RunInputs, template *string, policy *Policy, shut map[string]bool, gates int) (Decision, error) {
-	return pendingDecisionExcept(r, work, at, inputs, template, policy, shut, gates, "", "")
+	return pendingDecisionExcept(r, work, at, inputs, template, policy, shut, gates, "", "", false)
 }
 
-func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inputs *RunInputs, template *string, policy *Policy, shut map[string]bool, gates int, exceptLane, exceptRunID string) (Decision, error) {
+func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inputs *RunInputs, template *string, policy *Policy, shut map[string]bool, gates int, exceptLane, exceptRunID string, waiting bool) (Decision, error) {
 	d := work.Decision
 	d.From, d.To = "running", ""
 	d.Action, d.Reason = ActionHold, ReasonRunLive
@@ -479,7 +479,7 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 			if changed {
 				copy := *work
 				copy.Decision, copy.Ready, copy.Orphaned = restarted, true, false
-				return pendingDecisionExcept(r, &copy, at, inputs, template, policy, shut, gates, exceptLane, exceptRunID)
+				return pendingDecisionExcept(r, &copy, at, inputs, template, policy, shut, gates, exceptLane, exceptRunID, waiting)
 			}
 		}
 	}
@@ -503,7 +503,7 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 			d.RunRequest = &request
 			d.WorkflowRestart = true
 			workCopy.Decision, workCopy.Ready, workCopy.Orphaned = d, true, false
-			return pendingDecisionExcept(r, &workCopy, at, inputs, template, policy, shut, gates, exceptLane, exceptRunID)
+			return pendingDecisionExcept(r, &workCopy, at, inputs, template, policy, shut, gates, exceptLane, exceptRunID, waiting)
 		}
 	}
 	if work.Ready {
@@ -740,6 +740,11 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 				if err != nil {
 					return Decision{}, err
 				}
+				if failed && waiting {
+					// Settling a failed resume launches a replacement session. Leave the
+					// old run pending so the replacement can be planned after release.
+					return d, nil
+				}
 				if failed && policy != nil {
 					if _, _, open := policy.availableBackend(d.RunRequest.Backend, d.Seat, shut); !open {
 						d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
@@ -810,7 +815,7 @@ func inputVersion(r *store.Reader, d Decision) (string, error) {
 // faults from folds, which must have been read in the same transaction as r.
 func inputVersionFrom(r *store.Reader, d Decision, folds versionFolds) (string, error) {
 	var itemState, rank, allowed, design, seat sql.NullString
-	var updated int64
+	var updated, itemSeq int64
 	var express bool
 	var hasExpress bool
 	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name='express')`).Scan(&hasExpress); err != nil {
@@ -821,8 +826,8 @@ func inputVersionFrom(r *store.Reader, d Decision, folds versionFolds) (string, 
 			return "", err
 		}
 	}
-	if err := r.QueryRow(`SELECT state, rank, allowed_paths, design_doc, seat, updated_at FROM items WHERE item_id = ?`, d.ItemID).
-		Scan(&itemState, &rank, &allowed, &design, &seat, &updated); err != nil {
+	if err := r.QueryRow(`SELECT state, rank, allowed_paths, design_doc, seat, updated_at, event_seq FROM items WHERE item_id = ?`, d.ItemID).
+		Scan(&itemState, &rank, &allowed, &design, &seat, &updated, &itemSeq); err != nil {
 		return "", err
 	}
 	var latest, laneState, laneRun sql.NullString
@@ -856,7 +861,7 @@ func inputVersionFrom(r *store.Reader, d Decision, folds versionFolds) (string, 
 			return "", err
 		}
 	}
-	raw, err := json.Marshal([]any{itemState, rank, allowed, design, seat, express, updated, latest, seq, laneState, laneRun, until, work, work != nil && work.Done, faults[d.ItemID], faults[d.ItemID].Seq, triageVersion, ownerOwed})
+	raw, err := json.Marshal([]any{itemState, rank, allowed, design, seat, express, updated, itemSeq, latest, seq, laneState, laneRun, until, work, work != nil && work.Done, faults[d.ItemID], faults[d.ItemID].Seq, triageVersion, ownerOwed})
 	return string(raw), err
 }
 
@@ -1550,7 +1555,13 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 					}
 					c := conflicts[row.ItemID]
 					if origin := designContinuationWork(c, designHistory[c.DesignRunID]); origin != nil && !isExpressLane(d.LaneID) && origin.Decision.LaneID == d.LaneID {
-						return nil
+						waiting, _, err := item.ReadWaitingOn(tx.Reader(), row.ItemID)
+						if err != nil {
+							return err
+						}
+						if !c.HasIndependentWait(waiting) {
+							return nil
+						}
 					}
 				}
 			}

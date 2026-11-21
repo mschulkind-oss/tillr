@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -99,6 +100,138 @@ func TestALandedAnswerForATerminalItemIsItsTerminalSettlement(t *testing.T) {
 	if asItemTerminal(err) == nil {
 		t.Fatalf("a terminal item's landed answer is not its terminal settlement: %v", err)
 	}
+}
+
+func TestIndependentWaitHoldsThroughDesignAnswer(t *testing.T) {
+	for _, waiter := range []string{"owner", "item:item-b"} {
+		t.Run(waiter, func(t *testing.T) {
+			f, l := passFixture(t, "item-b")
+			l.cfg.Policy.Seats = map[string]string{"build": "fixture", "design": "fixture"}
+			ctx := context.Background()
+			id := fileFixtureRequestWith(t, f, "Repair the index", "build", item.SingleWorkerWorkflow, requestFence, true)
+			base := runGit(t, f.root, "rev-parse", TrunkRef)
+			c := item.Conflict{ConflictID: "conflict-a", ItemID: id, RunID: "blocked-run", Text: "requires design", Status: "raised", WaitingOn: "design"}
+			fixtureWrite(t, f, func(tx *store.Tx) error { return item.RecordConflict(tx, c, l.cfg.Now()) })
+			stalePlan := decisionFor(t, l, id)
+			if stalePlan.decision.Action != ActionDispatch || stalePlan.decision.BlockConflict == nil {
+				t.Fatalf("fixture did not offer a design run: %+v", stalePlan.decision)
+			}
+			// Use even the same waiter and reason as a conflict-owned owner hold.
+			// Writing it explicitly still makes it an independent wait.
+			if waiter == "owner" {
+				c.Status, c.WaitingOn = "owner", "owner"
+			}
+			reason, _, _ := strings.Cut(c.Text, "\n")
+			fixtureWrite(t, f, func(tx *store.Tx) error {
+				if err := item.RecordConflict(tx, c, l.cfg.Now()); err != nil {
+					return err
+				}
+				_, err := item.SetState(ctx, tx, id, StateBlocked, l.cfg.Now(), item.WaitingOn{Waiter: waiter, Reason: strings.TrimSpace(reason)})
+				return err
+			})
+			c.Status, c.WaitingOn = "raised", "design"
+			c.Text += "\nDesign conflict raised again."
+			fixtureWrite(t, f, func(tx *store.Tx) error { return item.RecordConflict(tx, c, l.cfg.Now()) })
+			if applied, _, err := l.applyPlan(ctx, stalePlan, base, l.cfg.Now()); err != nil || applied {
+				t.Fatalf("stale design plan: applied=%v err=%v", applied, err)
+			}
+
+			assertHeld := func() {
+				t.Helper()
+				if d := decisionFor(t, l, id).decision; d.Action != ActionHold || d.Reason != ReasonBlocked || d.From != "held" || d.RunRequest != nil {
+					t.Fatalf("named wait did not hold dispatch: %+v", d)
+				}
+				s := openFixture(t, f.storePath)
+				defer s.Close()
+				if err := s.ReadTx(ctx, func(r *store.Reader) error {
+					a, err := Why(r, Pass{}, l.cfg.Policy, nil)
+					if err != nil {
+						return err
+					}
+					for _, row := range a.Rows {
+						if row.ItemID != id {
+							continue
+						}
+						if row.State != StateBlocked || row.Reason != ReasonBlocked || row.Mover != waiter || !strings.Contains(row.Why, strings.TrimSpace(reason)) {
+							t.Fatalf("why did not show the named wait: %+v", row)
+						}
+						return nil
+					}
+					return fmt.Errorf("why omitted %s", id)
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			assertHeld()
+			if err := l.recordBlockAnswer(ctx, Candidate{ItemID: id, RunID: "run-design-1", BaseSHA: base, HeadSHA: base, BlockConflict: &c}); err != nil {
+				t.Fatal(err)
+			}
+			if answered, _ := conflictOf(t, f, id); answered.Status != "answered" {
+				t.Fatalf("conflict was not answered: %+v", answered)
+			}
+			assertHeld()
+			fixtureWrite(t, f, func(tx *store.Tx) error {
+				_, err := item.SetState(ctx, tx, id, StateInQueue, l.cfg.Now())
+				return err
+			})
+			if d := decisionFor(t, l, id).decision; d.Action != ActionDispatch || d.Reason != ReasonConflictAnswered {
+				t.Fatalf("answer did not dispatch after release: %+v", d)
+			}
+		})
+	}
+}
+
+func TestIndependentWaitIsShownInsteadOfRunLive(t *testing.T) {
+	const id = "item-a"
+	f, l := passFixture(t, id)
+	ctx := context.Background()
+	p := decisionFor(t, l, id)
+	if applied, _, err := l.applyPlan(ctx, p, runGit(t, f.root, "rev-parse", TrunkRef), l.cfg.Now()); err != nil || !applied {
+		t.Fatalf("build claim: applied=%v err=%v", applied, err)
+	}
+	if d := decisionFor(t, l, id).decision; d.Reason != ReasonRunLive {
+		t.Fatalf("fixture did not leave live work: %+v", d)
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := item.SetState(ctx, tx, id, StateBlocked, l.cfg.Now(), item.WaitingOn{Waiter: "owner", Reason: "await approval"})
+		return err
+	})
+	// A failed session resume has an immediate replacement path outside normal
+	// planning. The same wait must suppress that replacement, too.
+	before := eventCount(t, f.storePath)
+	res := &LoopResult{}
+	outcome := l.replaceFailedDesigner(ctx, p.decision, run.Record{RunID: p.decision.RunRequest.RunID}, "", "", l.cfg.Now(), res, nil, nil, false)
+	if outcome.err != nil || res.Dispatched != 0 || eventCount(t, f.storePath) != before {
+		t.Fatalf("replacement advanced a held item: %+v, dispatched=%d", outcome, res.Dispatched)
+	}
+	assertWhyHeld := func(action string) {
+		t.Helper()
+		s := openFixture(t, f.storePath)
+		defer s.Close()
+		if err := s.ReadTx(ctx, func(r *store.Reader) error {
+			a, err := Why(r, Pass{Now: l.cfg.Now().Format(time.RFC3339Nano)}, l.cfg.Policy, nil)
+			if err != nil {
+				return err
+			}
+			if len(a.Rows) != 1 || a.Rows[0].Reason != ReasonBlocked || a.Rows[0].Mover != "owner" || a.Summary.Running != 0 || a.Rows[0].Decision.Action != action {
+				t.Fatalf("why did not show the wait while planning %s: %+v", action, a)
+			}
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertWhyHeld(ActionHold)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		req := p.decision.RunRequest
+		at := l.cfg.Now().Format(time.RFC3339)
+		if err := applyTerminal(tx, run.Record{RunID: req.RunID, ItemID: id, LaneID: req.LaneID, Backend: req.Backend, State: run.StateExited, ExitCode: countPtr(0), StartedAt: at, FinishedAt: at, EndCause: run.EndNormalExit, ArtifactRefs: []run.ArtifactRef{}}); err != nil {
+			return err
+		}
+		_, err := tx.Exec(`UPDATE lanes SET leased_until=1 WHERE lane_id=?`, req.LaneID)
+		return err
+	})
+	assertWhyHeld(ActionSettle)
 }
 
 // commitBriefs replaces briefs/item-a.md on the trunk.

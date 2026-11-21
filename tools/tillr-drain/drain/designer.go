@@ -278,6 +278,25 @@ func (l *Loop) retireDesigners(ctx context.Context) error {
 const designerCompactedKind = "drain.designer-compacted"
 
 func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.Record, mainSHA, tick string, at time.Time, result *LoopResult, timing *PassTiming, watched []string, deferJudge bool) laneOutcome {
+	var held bool
+	checkWait := func(r *store.Reader) error {
+		var state string
+		if err := r.QueryRow(`SELECT state FROM items WHERE item_id=?`, old.ItemID).Scan(&state); err != nil || state != StateBlocked {
+			return err
+		}
+		wait, _, err := item.ReadWaitingOn(r, old.ItemID)
+		if err != nil || wait == nil || wait.Waiter == "" {
+			return err
+		}
+		conflicts, err := item.ReadConflicts(r)
+		if err == nil {
+			held = conflicts[old.ItemID].HasIndependentWait(wait)
+		}
+		return err
+	}
+	if err := l.readStore(ctx, checkWait); err != nil || held {
+		return laneOutcome{err: err}
+	}
 	backend, open, err := l.quotaReplacementBackend(ctx, old.RunRequest.Backend, old.Seat)
 	if err != nil {
 		return laneOutcome{err: err}
@@ -354,6 +373,10 @@ func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.
 		return laneOutcome{err: err}
 	}
 	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		// A block written during staging must also win over the replacement claim.
+		if err := checkWait(tx.Reader()); err != nil || held {
+			return err
+		}
 		if _, err := tx.Exec("UPDATE comment_runs SET outcome='resume-failed' WHERE run_id=?", rec.RunID); err != nil {
 			return err
 		}
@@ -387,7 +410,7 @@ func (l *Loop) replaceFailedDesigner(ctx context.Context, old Decision, rec run.
 		return appendEffect(tx, dispatchStartedKind, req.RunID, &pendingWork{Decision: next, BaseSHA: spec.BaseSHA, Owner: owner, ParentRunID: rec.RunID, LoopID: l.sessionID}, l.cfg.Now().UTC())
 	})
 	s.Close()
-	if err != nil {
+	if err != nil || held {
 		return laneOutcome{err: err}
 	}
 	before, err := l.snapshot(ctx, []string{l.lanePath(next.LaneID)}, watched)

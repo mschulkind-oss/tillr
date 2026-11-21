@@ -269,8 +269,21 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 				identifyDecision(&d)
 			}
 		}
+		planned := d
+		var waiting *item.WaitingOn
+		if it.State == def.Blocked {
+			waiting, _, err = item.ReadWaitingOn(r, it.ItemID)
+			if err != nil {
+				return answer, err
+			}
+			// Settling a run that already started does not make the item dispatchable.
+			// Keep the actual decision, but show what holds its next dispatch.
+			if d.Action != ActionHold && conflicts[it.ItemID].HasIndependentWait(waiting) {
+				d = namedWaitHold(def, obstacleHolds[it.ItemID], it.ItemID, *waiting, d.Attempt)
+			}
+		}
 		class, where, mover := whyPresentation(d)
-		row := WhyRow{Place: places[it.ItemID], ItemID: it.ItemID, State: it.State, Position: d.Position, Reason: d.Reason, Why: d.Reason, Class: class, Where: where, Mover: mover, Since: "current plan", ClassSource: "planner", WaitingOn: []string{}, Decision: d}
+		row := WhyRow{Place: places[it.ItemID], ItemID: it.ItemID, State: it.State, Position: d.Position, Reason: d.Reason, Why: d.Reason, Class: class, Where: where, Mover: mover, Since: "current plan", ClassSource: "planner", WaitingOn: []string{}, Decision: planned}
 		// A fault hold says what is wrong in its recorded detail; a mover such as "the
 		// process the detail names" is read from it.
 		if fault, held := itemFaults[it.ItemID]; held && d.Action == ActionHold && d.Reason == fault.Reason && fault.Detail != "" {
@@ -366,14 +379,13 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 			row.Class = "needs you"
 			row.Mover = "remove the dependency or reopen the closed item (" + strings.Join(row.WaitingOn, ", ") + ")"
 		}
-		if it.State == StateBlocked && d.Reason == ReasonBlocked {
-			waiting, _, err := item.ReadWaitingOn(r, it.ItemID)
-			if err != nil {
-				return answer, err
-			}
-			if waiting != nil {
+		if d.Reason == ReasonBlocked || d.Reason == ReasonToolingDefect {
+			if waiting != nil && waiting.Waiter != "" {
 				row.Class, row.Mover, row.Why = "waits on work", waiting.Waiter, waiting.Reason
 				row.ClassSource = "store"
+				if !slices.Contains(row.WaitingOn, waiting.Waiter) {
+					row.WaitingOn = append(row.WaitingOn, waiting.Waiter)
+				}
 				if waiting.Waiter == "owner" {
 					row.Class = "needs you"
 				} else if depID, ok := strings.CutPrefix(waiting.Waiter, "item:"); ok && (states[depID] == def.Closed || states[depID] == "closed") {
@@ -384,9 +396,7 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 					}
 					row.Mover = "remove the dependency or reopen the closed item (" + depID + ")"
 				} else if len(closedBlockers) > 0 {
-					row.Class = "needs you"
 					row.Why += "; " + strings.Join(closedBlockers, ", ") + " closed without landing"
-					row.Mover = "remove the dependency or reopen the closed item (" + strings.Join(closedBlockers, ", ") + ")"
 				}
 			}
 		}
@@ -493,8 +503,11 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 					row.Class = "needs you"
 					answer.Summary.OperatorNext++
 				}
-			} else if d.Reason == ReasonOwnerOnlyOwed {
+			} else if d.Reason == ReasonOwnerOnlyOwed || (row.ClassSource == "store" && row.Mover == "owner") {
 				answer.Summary.OwnerWaiting++
+			} else if row.ClassSource == "store" && row.Class == "waits on work" && row.Mover != "plan" && row.Mover != "design" {
+				// A named waiter is the mover, not the drain. Planning waits still
+				// use their existing design-seat action below.
 			} else {
 				actor := "drain"
 				if d.Reason == ReasonConflictDesign || d.Reason == ReasonDeskCapacity || d.Reason == ReasonDocumentDeskBusy {
