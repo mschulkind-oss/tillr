@@ -14,13 +14,11 @@ func TestFaultRecordedAfterPlanningPreventsApplication(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := eventCount(t, l.cfg.Store)
-	ok, _, err := l.applyPlan(context.Background(), plan, runGit(t, l.cfg.Root, "rev-parse", TrunkRef), l.cfg.Now())
-	if err != nil || ok {
-		t.Fatalf("stale plan advanced a held item: %v/%v", ok, err)
+	ok, work, err := l.applyPlan(context.Background(), plan, runGit(t, l.cfg.Root, "rev-parse", TrunkRef), l.cfg.Now())
+	if err != nil || ok || work != nil {
+		t.Fatalf("stale plan advanced a held item: applied=%v work=%+v err=%v", ok, work, err)
 	}
-	if got := eventCount(t, l.cfg.Store); got != before {
-		t.Fatalf("stale fault plan wrote %d events", got-before)
-	}
+	assertOnlyDispatchDecline(t, l.cfg.Store, before, plan.decision, "item or lane state changed since planning")
 }
 
 func TestClearingOneKindOfFaultDoesNotReleaseAnother(t *testing.T) {

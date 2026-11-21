@@ -123,8 +123,8 @@ var pendingFolds atomic.Int64
 // pendingHistoryFoldHook lets contention tests pause the expensive history fold.
 var pendingHistoryFoldHook func()
 
-// pendingHistoryHead checks only the kinds the fold consumes. Worker-session
-// traffic cannot invalidate a claim; each per-kind maximum is an indexed lookup.
+// pendingHistoryHead marks the event sequence covered by a read-phase fold.
+// Each per-kind maximum is an indexed lookup.
 func pendingHistoryHead(r *store.Reader) (int64, error) {
 	queries := make([]string, len(pendingHistoryKinds))
 	args := make([]any, len(pendingHistoryKinds))
@@ -135,6 +135,23 @@ func pendingHistoryHead(r *store.Reader) (int64, error) {
 	var head int64
 	err := r.QueryRow("SELECT COALESCE(MAX(head),0) FROM ("+strings.Join(queries, " UNION ALL ")+")", args...).Scan(&head)
 	return head, err
+}
+
+// pendingHistoryChanged checks only the delta since the read-phase fold. A clean
+// boundary check is an observation: the fold changes state only for a failed check.
+// Other folded events may change ownership, so a claim cannot proceed on stale history.
+func pendingHistoryChanged(r *store.Reader, after int64) (bool, error) {
+	args := make([]any, 0, len(pendingHistoryKinds)+2)
+	args = append(args, after)
+	for _, kind := range pendingHistoryKinds {
+		args = append(args, kind)
+	}
+	args = append(args, BoundaryCheckKind)
+	kinds := strings.TrimSuffix(strings.Repeat("?,", len(pendingHistoryKinds)), ",")
+	var changed bool
+	err := r.QueryRow(`SELECT EXISTS (SELECT 1 FROM events WHERE seq>? AND kind IN (`+kinds+`)
+		AND CASE WHEN kind=? THEN json_type(payload, '$.clean') IS NOT 'true' ELSE 1 END)`, args...).Scan(&changed)
+	return changed, err
 }
 
 // Keep every attempt's effective examination state, including superseded dispatches.
@@ -1466,11 +1483,11 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 		if !current {
 			return decline("the store definition changed", "replan under the current store definition")
 		}
-		currentHead, err := pendingHistoryHead(tx.Reader())
+		historyChanged, err := pendingHistoryChanged(tx.Reader(), historyHead)
 		if err != nil {
 			return err
 		}
-		if currentHead != historyHead {
+		if historyChanged {
 			return decline("pending work changed during the claim", "replan with the current pending work")
 		}
 		faults, err := ReadItemFaults(tx.Reader())

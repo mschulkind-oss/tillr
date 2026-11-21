@@ -1,12 +1,15 @@
 package drain
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -90,6 +93,22 @@ func writeRepoFile(t *testing.T, root, rel, body string) {
 	writeForkFile(t, full, body)
 }
 
+type midPassLandingSteps struct {
+	recordingSteps
+	finishFirst <-chan struct{}
+}
+
+func (s *midPassLandingSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	if req.ItemID == "item-a" {
+		select {
+		case <-s.finishFirst:
+		case <-ctx.Done():
+			return run.Record{}, "", ctx.Err()
+		}
+	}
+	return s.recordingSteps.Run(ctx, req)
+}
+
 func TestMidPassSiblingLandingStartsUnrelatedItemOnNewTrunk(t *testing.T) {
 	f, l := passFixture(t, "item-a", "item-b")
 	ctx := context.Background()
@@ -99,8 +118,18 @@ func TestMidPassSiblingLandingStartsUnrelatedItemOnNewTrunk(t *testing.T) {
 	runGit(t, f.root, "commit", "-qm", "seed briefs")
 	initialTrunk := runGit(t, f.root, "rev-parse", TrunkRef)
 
-	steps := &recordingSteps{}
+	finishFirst := make(chan struct{})
+	defer func() {
+		select {
+		case <-finishFirst:
+		default:
+			close(finishFirst)
+		}
+	}()
+	steps := &midPassLandingSteps{finishFirst: finishFirst}
 	l.cfg.Steps = steps
+	var report bytes.Buffer
+	l.cfg.Report = &report
 	var siblingTrunk string
 	stager := &midPassLandingStager{
 		inner: &LaneStager{
@@ -122,6 +151,36 @@ func TestMidPassSiblingLandingStartsUnrelatedItemOnNewTrunk(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Finish item-a's run bracket while item-b's claim has released the writer
+	// to gather Git inputs, after it has already folded pending history.
+	finishedDuringClaim := false
+	writeGatheredHooks.Fetch = func(string) {
+		if siblingTrunk == "" || finishedDuringClaim {
+			return
+		}
+		close(finishFirst)
+		select {
+		case c := <-l.completions:
+			l.completions <- c
+			if c.itemID != "item-a" || c.outcome.err != nil || c.outcome.stop != "" {
+				t.Fatalf("unexpected item-a completion: %+v", c)
+			}
+			fixtureRead(t, f, func(r *store.Reader) error {
+				var clean bool
+				err := r.QueryRow(`SELECT json_extract(payload, '$.clean') FROM events
+					WHERE kind=? AND json_extract(payload, '$.runs[0].run_id')=?`, BoundaryCheckKind, c.id).Scan(&clean)
+				if err != nil || !clean {
+					t.Fatalf("item-a did not record a clean boundary check: clean=%v err=%v", clean, err)
+				}
+				return nil
+			})
+			finishedDuringClaim = true
+		case <-time.After(hangGuard):
+			t.Fatal("item-a did not finish while item-b gathered its claim")
+		}
+	}
+	t.Cleanup(func() { writeGatheredHooks.Fetch = nil })
+
 	var result LoopResult
 	stop, err := l.pass(ctx, &result)
 	if err != nil || stop != "" {
@@ -130,10 +189,14 @@ func TestMidPassSiblingLandingStartsUnrelatedItemOnNewTrunk(t *testing.T) {
 	if siblingTrunk == "" || siblingTrunk == initialTrunk {
 		t.Fatalf("sibling landing did not advance trunk: initial=%s sibling=%s", initialTrunk, siblingTrunk)
 	}
+	writeGatheredHooks.Fetch = nil
 	drainOwned(t, l, &result)
+	if !finishedDuringClaim {
+		t.Fatal("item-a's bracket did not finish during item-b's claim")
+	}
 
 	if !steps.ran("item-a") || !steps.ran("item-b") {
-		t.Fatalf("unrelated start cancelled mid-pass: ran item-a=%v item-b=%v", steps.ran("item-a"), steps.ran("item-b"))
+		t.Fatalf("unrelated start cancelled mid-pass: ran item-a=%v item-b=%v\n%s", steps.ran("item-a"), steps.ran("item-b"), report.String())
 	}
 	if got := stager.staged["item-a"]; got != initialTrunk {
 		t.Fatalf("item-a staged at %s, want initial trunk %s", got, initialTrunk)

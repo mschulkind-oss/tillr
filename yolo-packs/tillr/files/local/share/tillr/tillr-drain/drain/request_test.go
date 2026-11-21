@@ -884,7 +884,6 @@ type requestVerifySuspendsSteps struct {
 	*workflowSteps
 	transcript string
 	sessionID  string
-	t0         string
 	h1         string
 	h2         string
 	plans      int
@@ -936,6 +935,13 @@ func (s *requestVerifySuspendsSteps) Run(ctx context.Context, req run.Request) (
 			return run.Record{}, "", err
 		}
 		s.laneBases = append(s.laneBases, strings.TrimSpace(string(baseRaw)))
+		// Like run-pi's TILLR_GOAL_BASE, the offer uses the archived staged base,
+		// not the HEAD at which this turn resumed.
+		goalBaseRaw, err := os.ReadFile(filepath.Join(RunDir(s.f.root, req.RunID), BaseSHAFile))
+		if err != nil {
+			return run.Record{}, "", err
+		}
+		goalBase := strings.TrimSpace(string(goalBaseRaw))
 		itemBaseRaw, err := os.ReadFile(filepath.Join(lane, ItemBaseSHAFile))
 		if err != nil {
 			return run.Record{}, "", err
@@ -963,13 +969,16 @@ func (s *requestVerifySuspendsSteps) Run(ctx context.Context, req run.Request) (
 				CallID:     "call-1",
 				Tool:       "land",
 				Commit:     s.h1,
-				Base:       s.t0,
+				Base:       goalBase,
 				Summary:    "work 1 offer",
 				Transcript: s.transcript,
 			})
 			writeForkFile(s.t, filepath.Join(scr, landingOfferFile), string(offer))
 			report = ""
 		} else {
+			if head := runGit(s.t, target, "rev-parse", "HEAD"); head != s.h1 {
+				return run.Record{}, "", fmt.Errorf("resumed checkout HEAD=%s, want kept candidate %s", head, s.h1)
+			}
 			ansRaw, err := os.ReadFile(filepath.Join(scr, landingAnswerFile))
 			if err != nil {
 				return run.Record{}, "", err
@@ -1012,7 +1021,7 @@ func (s *requestVerifySuspendsSteps) Run(ctx context.Context, req run.Request) (
 				CallID:     "call-2",
 				Tool:       "land",
 				Commit:     s.h2,
-				Base:       s.h1,
+				Base:       goalBase,
 				Summary:    "work 2 offer",
 				Transcript: s.transcript,
 			})
@@ -1107,7 +1116,6 @@ func TestRequestPlannedVerifyCallSuspendsEndToEnd(t *testing.T) {
 	steps := &requestVerifySuspendsSteps{
 		workflowSteps: base,
 		transcript:    transcript,
-		t0:            t0,
 	}
 	l.cfg.Steps = steps
 	result := &LoopResult{}
@@ -1155,8 +1163,8 @@ func TestRequestPlannedVerifyCallSuspendsEndToEnd(t *testing.T) {
 	if steps.laneCaps[1] != run.EndingCallSuspends {
 		t.Errorf("attempt 2 lane/ending-capability = %q, want %q", steps.laneCaps[1], run.EndingCallSuspends)
 	}
-	if steps.laneBases[1] != steps.h1 {
-		t.Errorf("attempt 2 lane/base_sha = %q, want H1=%q", steps.laneBases[1], steps.h1)
+	if steps.laneBases[1] != t0 {
+		t.Errorf("attempt 2 lane/base_sha = %q, want T0=%q for the kept candidate", steps.laneBases[1], t0)
 	}
 	if steps.itemBases[1] != t0 {
 		t.Errorf("attempt 2 lane/item_base_sha = %q, want T0=%q", steps.itemBases[1], t0)
