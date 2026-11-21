@@ -7,6 +7,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -145,13 +146,14 @@ class ForkQualityGateTests(unittest.TestCase):
 
     def write_npx_stub(self, script):
         npx = self.bin_dir / 'npx'
-        npx.write_text('#!/bin/sh\nset -eu\n' + script)
+        npx.write_text('#!/bin/sh\nset -eu\n' +
+                       f'NPX_LOG={shlex.quote(str(self.npx_log))}\n' + script)
         npx.chmod(0o755)
 
-    def run_fork_gate(self, fork_name, run_id, head):
+    def run_fork_gate(self, fork_name, run_id, head, *, extra_env=None):
         env = os.environ.copy()
         env['PATH'] = f'{self.bin_dir}:{env.get("PATH", "")}'
-        env['NPX_LOG'] = str(self.npx_log)
+        env.update(extra_env or {})
         return subprocess.run(
             [
                 'python3', str(FORK_GATE),
@@ -279,6 +281,45 @@ class ForkQualityGateTests(unittest.TestCase):
         self.assertEqual(len(log_lines), 2)
         self.assertTrue(log_lines[0].endswith(':tsc --noEmit'))
         self.assertTrue(log_lines[1].endswith('/packages/pkg-a:vitest --run --reporter=dot'))
+
+    def test_quality_checks_do_not_see_caller_home_or_credentials(self):
+        caller_home = self.tmp / 'caller home'
+        auth_file = caller_home / '.pi' / 'agent' / 'auth.json'
+        auth_file.parent.mkdir(parents=True)
+        auth_file.write_text(json.dumps({'openai': {'type': 'api_key', 'key': 'fixture-only'}}))
+        self.write_pack('pi', build_cmd='test -s "$HOME/.pi/agent/auth.json"')
+        self.write_npx_stub(
+            'test -d "$HOME" && test -w "$HOME"\n'
+            'test ! -e "$HOME/.pi/agent/auth.json" || { echo "caller auth file visible" >&2; exit 1; }\n'
+            'echo "root ran with isolated home"\n'
+        )
+        self.add_tui_test(
+            'assert.equal(existsSync(join(homedir(), ".pi/agent/auth.json")), false);'
+            'for (const name of ["OPENAI_API_KEY", "GITHUB_TOKEN", "AWS_SHARED_CREDENTIALS_FILE", '
+            '"XDG_CONFIG_HOME", "PI_CODING_AGENT_DIR"]) '
+            'assert.equal(Object.hasOwn(process.env, name), false, name);'
+        )
+        test = self.fork / 'packages' / 'tui' / 'test' / 'fixture.test.ts'
+        test.write_text('import { existsSync } from "node:fs";\n'
+                        'import { homedir } from "node:os";\n'
+                        'import { join } from "node:path";\n' + test.read_text())
+        self.git(self.fork, 'add', '.')
+        self.git(self.fork, 'commit', '-m', 'test quality environment')
+        head = self.git(self.fork, 'rev-parse', 'HEAD')
+
+        res = self.run_fork_gate('pi', 'run-isolated-quality', head, extra_env={
+            'HOME': str(caller_home),
+            'OPENAI_API_KEY': 'fixture-only',
+            'GITHUB_TOKEN': 'fixture-only',
+            'AWS_SHARED_CREDENTIALS_FILE': str(auth_file),
+            'XDG_CONFIG_HOME': str(caller_home / '.config'),
+            'PI_CODING_AGENT_DIR': str(auth_file.parent),
+        })
+        run_dir = self.root / '.tillr' / 'loop' / 'run-isolated-quality'
+        log = self.quality_log(run_dir)
+        self.assertEqual(res.returncode, 0, res.stdout + res.stderr + log)
+        self.assertIn('root ran with isolated home', log)
+        self.assertIn('tui fixture ran in package', log)
 
     def test_failing_build_skips_quality_execution(self):
         self.write_pack('pi', build_cmd='exit 1')
