@@ -25,7 +25,7 @@ function landFixture(t) {
   const base = git('rev-parse', 'HEAD');
   put('fence.txt', 'in\nnew\n');
   const forbidden = () => { throw new Error('unexpected wake query'); };
-  const land = (id = 'call', wakes = () => [], answered, transcript) => executeLand(id, 'summary', cwd, dir, base, join(dir, 'fence.txt'), wakes, answered, transcript);
+  const land = (id = 'call', wakes = () => [], answered, transcript, summary = 'summary') => executeLand(id, summary, cwd, dir, base, join(dir, 'fence.txt'), wakes, answered, transcript);
   const offer = join(dir, 'landing-offer.json');
   const refuses = (attempt, reason) => {
     assert.throws(attempt, reason);
@@ -50,6 +50,23 @@ test('land rejects invalid offers', (t) => {
   state({});
   refuses(() => land('call', () => ['task-1']), /task-1/);
   refuses(() => land('call', () => { throw new Error('journal unknown'); }), /journal unknown/);
+});
+
+test('land retries a report-only refusal, but not a duplicate report or a content refusal', (t) => {
+  const { land, offer, state, change, refuses } = landFixture(t);
+  const commit = change();
+  assert.equal(land().park, true);
+  const first = JSON.parse(readFileSync(offer));
+  rmSync(offer);
+  const report = { commit, summary: first.summary, answer: 'Criterion c2 (report): missing results', report_only: true };
+  const content = { commit, summary: 'earlier report', answer: 'Criterion c1 (content): missing test' };
+  const corrected = 'summary\nCheck: passed';
+  state({ refused: [report, content] });
+  refuses(() => land('next', undefined, undefined, undefined, corrected), /new commit is required[\s\S]*c1 \(content\)/);
+  state({ refused: [report] });
+  refuses(() => land('next'), /same report[\s\S]*c2 \(report\)/);
+  assert.equal(land('next', undefined, undefined, undefined, corrected).park, true);
+  assert.deepEqual(JSON.parse(readFileSync(offer)), { ...first, call_id: 'next', summary: corrected });
 });
 
 test('killed before the offer exists: replay writes the offer and parks', (t) => {

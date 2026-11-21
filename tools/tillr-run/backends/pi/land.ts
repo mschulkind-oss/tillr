@@ -52,8 +52,12 @@ export function executeLand(
 	]);
 	const dirty = [...changed].filter((name) => name && fence.some((prefix) => name === prefix || name.startsWith(`${prefix}/`)));
 	if (dirty.length) throw new Error(`Commit or remove these uncommitted paths inside the fence:\n${dirty.join("\n")}`);
-	const refused = state?.refused?.find((entry: { commit: string }) => entry.commit === commit);
-	if (refused) throw new Error(`This commit was already refused. A new commit is required.\n${refused.answer}`);
+	const refusals = state?.refused?.filter((entry: { commit: string }) => entry.commit === commit) ?? [];
+	const content = refusals.find((entry: { report_only?: boolean; summary?: string }) =>
+		entry.report_only !== true || typeof entry.summary !== "string");
+	if (content) throw new Error(`This commit was already refused. A new commit is required.\n${content.answer}`);
+	const duplicate = refusals.find((entry: { summary: string }) => entry.summary === summary);
+	if (duplicate) throw new Error(`This commit was already refused with the same report. Correct the report and offer this commit again.\n${duplicate.answer}`);
 	const wakes = owedWakes();
 	if (wakes.length) throw new Error(`Wait for these background task wakes before calling land: ${wakes.join(", ")}.`);
 

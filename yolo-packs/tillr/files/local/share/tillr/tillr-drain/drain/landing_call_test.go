@@ -129,13 +129,13 @@ func TestLandingStateIncludesPriorRefusalsAndOpenCalls(t *testing.T) {
 		}
 		return appendLandingCallEvent(tx, callDelivered, "old", landingCallDelivery{Form: "tool-result", RunID: "previous"}, l.cfg.Now())
 	})
-	state, err := l.landingState(context.Background(), "item-a", "session", nil)
+	state, err := l.landingState(context.Background(), "item-a", "session")
 	if err != nil {
 		t.Fatal(err)
 	}
 	open := state["open"].([]landingOffer)
-	refused := state["refused"].([]map[string]string)
-	if len(open) != 1 || open[0].CallID != "open" || len(refused) != 1 || refused[0]["commit"] != "old-head" || refused[0]["answer"] != "gate evidence" {
+	refused := state["refused"].([]landingRefusal)
+	if len(open) != 1 || open[0].CallID != "open" || len(refused) != 1 || refused[0] != (landingRefusal{Commit: "old-head", Answer: "gate evidence"}) {
 		t.Fatalf("wrong state: %+v", state)
 	}
 }
@@ -312,7 +312,7 @@ with path.open('a') as out:
 				})
 				l.cfg.Steps = &judgeRouteSteps{workflowSteps: &workflowSteps{t: t, f: f}, mode: "not-done", workerHead: head}
 				evidence = []string{"commit:" + head}
-				detail = []string{"Criterion c1: the first judge reason"}
+				detail = []string{"Criterion c1 (content): the first judge reason"}
 			case "fence":
 				detail = []string{"outside.txt is outside allowed_paths"}
 			}
@@ -863,7 +863,7 @@ func TestLandingCallAnswersJudgeAndRevertFromTheirDurableRecords(t *testing.T) {
 			})
 			switch outcome {
 			case "judge":
-				c := Candidate{RunID: "different-candidate", ItemID: "item-a", Judge: &JudgeReceipt{Writers: []JudgeWriter{{RunID: "writer"}}, Raw: json.RawMessage(`{"verdicts":[{"criterion_id":"c1","verdict":"not-done","reason":"check failed","evidence":["commit:head"]}]}`)}}
+				c := Candidate{RunID: "different-candidate", ItemID: "item-a", Judge: &JudgeReceipt{Writers: []JudgeWriter{{RunID: "writer"}}, Raw: json.RawMessage(`{"verdicts":[{"criterion_id":"c1","verdict":"not-done","reason":"check failed","evidence":["commit:head"]},{"criterion_id":"c2","verdict":"not-done","reason":"report-only: missing results","evidence":["node:work"]}]}`)}}
 				if err := l.holdJudge(ctx, c, "judge", ReasonEvalFailed, "check failed", &LoopResult{}); err != nil {
 					t.Fatal(err)
 				}
@@ -883,7 +883,10 @@ func TestLandingCallAnswersJudgeAndRevertFromTheirDurableRecords(t *testing.T) {
 					return err
 				}
 				if outcome == "judge" {
-					if answer.Kind != "refused" || answer.Stage != "judge" || !strings.Contains(answer.Text, "Criterion c1: check failed") || !reflect.DeepEqual(answer.Evidence, []string{"commit:head"}) {
+					want := []landingFinding{{CriterionID: "c1", Scope: "content"}, {CriterionID: "c2", Scope: "report"}}
+					if answer.Kind != "refused" || answer.Stage != "judge" || answer.reportOnly() || !reflect.DeepEqual(answer.Findings, want) ||
+						!strings.Contains(answer.Text, "Criterion c1 (content): check failed") || !strings.Contains(answer.Text, "Criterion c2 (report): missing results") ||
+						!reflect.DeepEqual(answer.Evidence, []string{"commit:head", "node:work"}) {
 						t.Fatalf("judge answer: %+v", answer)
 					}
 				} else {

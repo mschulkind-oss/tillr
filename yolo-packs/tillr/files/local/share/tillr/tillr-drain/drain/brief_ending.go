@@ -49,8 +49,9 @@ arrives, it is one of these, and none is counted against the item:
                  and it was taken back out. The result carries that check's output.
   design-answer  the design seat changed the item on this branch. Continue from there.
 
-Every result states the branch head. Check it before you change anything, fix what the
-result names, commit, and call ` + "`" + `land` + "`" + ` again.
+Every result states the branch head. Check it before you change anything. If every
+finding is marked report, correct the summary and call ` + "`" + `land` + "`" + ` again without changing
+the commit. Otherwise, fix what the result names, commit, and call ` + "`" + `land` + "`" + ` again.
 
 If a fact you cannot change stops you, call ` + "`" + `obstacle` + "`" + ` instead, with ` + "`" + `kind` + "`" + ` and its required fields.
 `
