@@ -22,6 +22,9 @@ SHARDED = ('tools/tillr-store', 'tools/tillr-item', 'tools/tillr-run', 'tools/ti
            'tools/tillr-view', 'tools/tillr-land', 'tools/tillr-drain')
 # The commit most recently installed, beside the bin directory.
 ROLLED = 'tillr-roll.commit'
+SCHEMA_CHECK = 'tillr-drain: schema migration required'
+SCHEMA_STAGE = '.tillr-schema-roll-'
+EXIT_INCOMPATIBLE = 3  # tillr/record.ExitIncompatible
 MODULES = ('cli', 'drain', 'gate', 'item', 'land', 'run', 'store', 'view')
 TRACE_PREFIXES = ('tillr-sqlite ', 'tillr-sqlite-stack ', 'tillr-git ')
 SHARD_FAILURE_RE = re.compile(r'^(?:go-test-shards:\s+)?\S+ shard \d+ (?:failed|timed out|cannot start|missing completion)\b')
@@ -143,19 +146,34 @@ class RollFailed(RuntimeError):
 def stepped(step, call, *args, **kwargs):
     try:
         return call(*args, **kwargs)
-    except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
+    except (OSError, RuntimeError, sqlite3.Error, subprocess.CalledProcessError) as exc:
+        if (step == 'loop check' and isinstance(exc, subprocess.CalledProcessError)
+                and exc.returncode == EXIT_INCOMPATIBLE):
+            step = 'store check'
         raise RollFailed(step, exc) from exc
 
 
 def record_failure(store, commit, step, detail):
     """Append the failed roll to the store, best effort: the exit status already says it failed."""
-    payload = json.dumps({'commit': commit, 'step': step, 'detail': ' '.join(str(detail).split())})
+    fact = {'commit': commit, 'step': step, 'detail': ' '.join(str(detail).split())}
+    at = int(time.time() * 1000)
+    if step == 'store check':
+        fact['mover'] = 'operator'
+    payload = json.dumps(fact)
     try:
-        with closing(sqlite3.connect(store, timeout=30)) as db, db:
+        with closing(sqlite3.connect(store.as_uri() + '?mode=rw', uri=True, timeout=30)) as db, db:
             db.execute('INSERT INTO events(ts, kind, object_type, object_id, payload) VALUES (?, ?, ?, ?, ?)',
-                       (int(time.time() * 1000), 'drain.roll-failed', 'commit', commit, payload))
+                       (at, 'drain.roll-failed', 'commit', commit, payload))
     except sqlite3.Error as exc:
         print(f'tillr-roll: could not record the failed roll of {commit[:12]}: {exc}', file=sys.stderr)
+        if step == 'store check':
+            try:
+                with tempfile.TemporaryDirectory(prefix='.roll-alarm-', dir=store.parent) as tmp:
+                    alarm = Path(tmp) / 'alarm.json'
+                    alarm.write_text(json.dumps({**fact, 'ts': at}))
+                    os.replace(alarm, store.with_name(store.name + '.roll-alarm.json'))
+            except OSError as err:
+                print(f'tillr-roll: could not save the store roll alarm: {err}; mover: operator', file=sys.stderr)
 
 
 def evidence(root, tip):
@@ -236,9 +254,24 @@ def test_commit(root, source, work, tip, store, old, build_env):
                         cwd=module, env=build_env)
 
 
+def stage_schema_roll(stage, live, tip, store):
+    # Only the replacement loop is exposed before exec. A new sibling opening
+    # the store for a write could otherwise migrate it out from under the old
+    # loop (which still owns passes, work starts, and any in-flight proof).
+    drain = stage / 'tillr-drain'
+    pending = live / (SCHEMA_STAGE + digest(drain))
+    (stage / 'roll.json').write_text(json.dumps({'commit': tip, 'store': str(store.resolve())}))
+    if not pending.exists():
+        os.rename(stage, pending)
+        os.replace(pending / drain.name, live / drain.name)
+    else:
+        # A retry of the identical build can reuse the prepared siblings.
+        os.replace(drain, live / drain.name)
+
+
 def roll_commit(root, live, tip, no_request, store):
     """Build, smoke and install `tip` from a clean checkout of that commit alone."""
-    old = builds(store)
+    old = stepped('store check', builds, store)
     # An automatic after-merge roll does not duplicate the repository's proof.
     # A manual roll, including a build without restart, still tests by default.
     after_merge = no_request and os.environ.get('TILLR_ROLL_VERIFICATION') == 'after-merge'
@@ -268,13 +301,18 @@ def roll_commit(root, live, tip, no_request, store):
         check = [stage / 'tillr-drain', 'loop', '--check', '--root', source, '--store', store]
         for face in ('gate', 'land', 'verdict'):
             check.extend([f'--{face}', shlex.join(['python3', str(adapter), face])])
-        stepped('loop check', run, *check, cwd=source, env={**base_env, 'PATH': f'{stage}:{os.environ["PATH"]}'})
+        checked = stepped('loop check', run, *check, cwd=source,
+                          env={**base_env, 'PATH': f'{stage}:{os.environ["PATH"]}'})
+        schema_roll = checked is not None and SCHEMA_CHECK in checked.stdout.splitlines()
         # Smoke can take time; report the build that was running at the handoff.
-        old = builds(store)
+        old = stepped('store check', builds, store)
         live.mkdir(exist_ok=True)
-        for program in programs:
-            stepped('install', os.replace, program, live / program.name)
-        (live.parent / ROLLED).write_text(tip + '\n')
+        if schema_roll:
+            stepped('stage schema roll', stage_schema_roll, stage, live, tip, store)
+        else:
+            for program in programs:
+                stepped('install', os.replace, program, live / program.name)
+            (live.parent / ROLLED).write_text(tip + '\n')
     roles = ('drain', 'view')
     if no_request:
         return report(old, old, dict.fromkeys(roles, 'not-requested'), live)
@@ -289,8 +327,13 @@ def roll_commit(root, live, tip, no_request, store):
                 return answer
         return 'error'
 
-    with ThreadPoolExecutor(max_workers=2) as workers:
-        answers = dict(zip(roles, workers.map(request, roles)))
+    if schema_roll:
+        drain_answer = request('drain')
+        answers = {'drain': drain_answer,
+                   'view': request('view') if drain_answer == 'restarted' else 'not-requested'}
+    else:
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            answers = dict(zip(roles, workers.map(request, roles)))
     # The view acknowledges adoption just before publishing its new build fact.
     deadline = time.monotonic() + 5
     while True:

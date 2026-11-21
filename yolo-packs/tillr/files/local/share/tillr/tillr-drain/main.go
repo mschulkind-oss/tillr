@@ -827,7 +827,7 @@ func printHelp(fs *flag.FlagSet) {
 // the steps and the stopping conditions — never a step's judgment.
 func loopFace(args []string) int {
 	fs := newFlagSet("loop")
-	check := fs.Bool("check", false, "validate flags, settings, policies, the existing store and step-program arguments, then exit without starting a pass or migrating the store")
+	check := fs.Bool("check", false, "validate flags, settings, policies, step programs and any required store migration without committing it or starting a pass")
 	migrateOwner := fs.Bool("migrate-owner-questions", false, "convert existing owner decision reports into gated document questions, print each conversion or skipped report, then exit")
 	exitWhenDrained := fs.Bool("exit-when-drained", false, "exit with queue-drained when nothing is dispatchable and no run is in flight; the loop is a daemon by default")
 	root := fs.String("root", "", "the repository the loop stages lanes from and lands onto")
@@ -869,19 +869,29 @@ func loopFace(args []string) int {
 		}
 		return failLoopStartup(*root, time.Now(), err)
 	}
+	// A missing store must not mask invalid repository settings, including
+	// when --check is run before the first loop startup.
+	repositorySettings, err := settings.Read(*root)
+	if err != nil {
+		return failStartup(drain.Usagef("%v", err))
+	}
 	if *path == "" {
 		*path = filepath.Join(*root, ".tillr", "state.db")
 	}
-	hooks, err := storeHooks(context.Background(), *path, *check)
+	var checkVersion int
+	if *check {
+		var err error
+		checkVersion, err = loopCheckVersion(context.Background(), *path)
+		if err != nil {
+			return fail(err)
+		}
+	}
+	hooks, err := storeHooks(context.Background(), *path)
 	if err != nil {
 		return failStartup(err)
 	}
 	if hooks == nil && (*gate == "" || *land == "" || *verdict == "") {
 		return failStartup(drain.Usagef("loop needs --gate, --land and --verdict: the three programs that judge a candidate, and the loop judges nothing itself"))
-	}
-	repositorySettings, err := settings.Read(*root)
-	if err != nil {
-		return failStartup(drain.Usagef("%v", err))
 	}
 	gatePolicy, absent, err := drain.ReadGatePolicy(*root)
 	if err != nil {
@@ -892,9 +902,6 @@ func loopFace(args []string) int {
 	if !*check {
 		fmt.Fprintln(os.Stderr, repositorySettings.StartupLine())
 		fmt.Fprintln(os.Stderr, gatePolicy.StartupLine(absent))
-	}
-	if *path == "" {
-		*path = filepath.Join(*root, ".tillr", "state.db")
 	}
 	if *laneRoot == "" {
 		*laneRoot = filepath.Join(*root, ".tillr", "lanes")
@@ -943,30 +950,19 @@ func loopFace(args []string) int {
 	if err != nil {
 		return failStartup(err)
 	}
+	if err := checkLoopPrograms(steps, loop.StagedSchemaPrograms()); err != nil {
+		return failStartup(err)
+	}
 	if *check {
-		s, err := store.OpenRead(context.Background(), *path)
-		if err != nil {
-			return fail(openFailure(err))
-		}
-		version, schemaErr := s.SchemaVersion()
-		closeErr := s.Close()
-		if schemaErr != nil {
-			return fail(drain.Incompatiblef("the store %s: %v", *path, schemaErr))
-		}
-		if closeErr != nil {
-			return fail(openFailure(closeErr))
-		}
-		if version != store.SchemaVersion {
-			return fail(drain.Incompatiblef("the store %s: schema version %d; expected %d", *path, version, store.SchemaVersion))
-		}
-		if err := steps.CheckPrograms(context.Background(), os.Stderr); err != nil {
-			return failStartup(err)
+		if checkVersion < store.SchemaVersion {
+			if err := store.CheckMigration(context.Background(), *path); err != nil {
+				return fail(drain.Incompatiblef("the store %s: checking migration from schema %d to %d: %v", *path, checkVersion, store.SchemaVersion, err))
+			}
+			// The roller keeps the other binaries staged until this drain activates them.
+			fmt.Fprintln(os.Stdout, drain.SchemaRollCheckLine)
 		}
 		fmt.Fprintln(os.Stderr, repositorySettings.StartupLine())
 		return record.ExitOK
-	}
-	if err := steps.CheckPrograms(context.Background(), os.Stderr); err != nil {
-		return failStartup(err)
 	}
 	// Signals stop supervision only. Detached run faces retain their own lifetime;
 	// the explicit stop --end-runs request is the only drain path that ends them.
@@ -1000,9 +996,45 @@ func loopFace(args []string) int {
 	return drain.StopExitCode(result.Stop)
 }
 
+// Check the staged tools with the successor's CLI. They are not on the old
+// loop's live PATH yet, including when its pre-exec check launches this image.
+func checkLoopPrograms(steps *drain.ProcessSteps, staged string) error {
+	if info, err := os.Stat(staged); err == nil && info.IsDir() {
+		path, set := os.LookupEnv("PATH")
+		if err := os.Setenv("PATH", staged+string(os.PathListSeparator)+path); err != nil {
+			return err
+		}
+		defer func() {
+			if set {
+				os.Setenv("PATH", path)
+			} else {
+				os.Unsetenv("PATH")
+			}
+		}()
+	}
+	return steps.CheckPrograms(context.Background(), os.Stderr)
+}
+
+// loopCheckVersion rejects unknown or newer schemas before checking store hooks.
+func loopCheckVersion(ctx context.Context, path string) (int, error) {
+	s, err := store.OpenRead(ctx, path)
+	if err != nil {
+		return 0, openFailure(err)
+	}
+	defer s.Close()
+	version, err := s.SchemaVersion()
+	if err != nil {
+		return 0, drain.Incompatiblef("the store %s: %v", path, err)
+	}
+	if version < 1 || version > store.SchemaVersion {
+		return 0, drain.Incompatiblef("the store %s: schema version %d; expected %d", path, version, store.SchemaVersion)
+	}
+	return version, nil
+}
+
 // storeHooks reads the declaration without migrating or creating a store. The
 // reader and its transaction are closed before any hook process is started.
-func storeHooks(ctx context.Context, path string, check bool) (*definition.Hooks, error) {
+func storeHooks(ctx context.Context, path string) (*definition.Hooks, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, nil // An absent store uses the embedded, hook-free definition.
 	} else if err != nil {
@@ -1013,17 +1045,6 @@ func storeHooks(ctx context.Context, path string, check bool) (*definition.Hooks
 		return nil, openFailure(err)
 	}
 	defer s.Close()
-	// Preserve --check's schema refusal before querying metadata in a store
-	// whose tables may be incompatible or absent.
-	if check {
-		version, err := s.SchemaVersion()
-		if err != nil {
-			return nil, drain.Incompatiblef("the store %s: %v", path, err)
-		}
-		if version != store.SchemaVersion {
-			return nil, drain.Incompatiblef("the store %s: schema version %d; expected %d", path, version, store.SchemaVersion)
-		}
-	}
 	declaration, err := definition.ForStore(ctx, s)
 	if err != nil {
 		return nil, drain.Usagef("store definition: %v", err)
@@ -1138,9 +1159,14 @@ func checkBinary(args []string) func(context.Context, string) error {
 		if err == nil {
 			return nil
 		}
-		if strings.TrimSpace(string(out)) == "" {
+		detail := strings.TrimSpace(string(out))
+		if detail == "" {
 			return err
 		}
-		return errors.New(strings.TrimSpace(string(out)))
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == record.ExitIncompatible {
+			return drain.Incompatiblef("%s", detail)
+		}
+		return errors.New(detail)
 	}
 }

@@ -21,7 +21,8 @@ func alarmPolicy(p *Policy, since time.Time) *alarms.Policy {
 }
 
 // Observing alarms never decides whether a pass runs or succeeds. Keep the last
-// observed set only to report transitions; the store is always the source.
+// observed set only to report transitions. A store that cannot append a roll
+// failure leaves its alarm beside the database instead.
 func (l *Loop) reportAlarms(ctx context.Context, at time.Time) {
 	if ctx.Err() != nil {
 		return
@@ -38,9 +39,21 @@ func (l *Loop) reportAlarms(ctx context.Context, at time.Time) {
 	}
 	if err != nil {
 		l.reportf("loop: could not read alarms: %v\n", err)
-		return
 	}
-	l.reportAlarmChanges(active)
+	if fallback, fileErr := alarms.ReadStoreRollFallback(l.cfg.Store); fileErr != nil {
+		l.reportf("loop: could not read store roll alarm: %v\n", fileErr)
+	} else if fallback != nil {
+		found := false
+		for _, a := range active {
+			found = found || a.Key() == fallback.Key()
+		}
+		if !found {
+			active = append(active, *fallback)
+		}
+	}
+	if err == nil || len(active) > 0 {
+		l.reportAlarmChanges(active)
+	}
 }
 
 func (l *Loop) reportAlarmChanges(active []alarms.Alarm) {
