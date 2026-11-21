@@ -2307,11 +2307,14 @@ held: no writer has started, so other items can use the lane and the writer can
 claim a free lane after clearance.
 `decision-collision` holds an item whose planned decision could not be
 recorded, because its decision id is already recorded with other columns.
-`settle-failed` holds an item whose claimed examination could not settle or judge
-its candidate, naming the step and the error. This includes an error regenerating
-the pack mirror. The operator fixes the cause and clears the fault; other items
-continue. An unreadable trunk or a store that cannot record the hold still ends the
-loop. A run whose face could not start can also be held as `settle-failed`.
+`settle-failed` holds an item whose claimed examination hit an item-local error
+while settling or judging its candidate, naming the step and the error. A mirror
+regeneration failure has its own `pack-sync-failed` hold. The operator fixes the
+cause and clears the fault; other items continue. Configuration errors, failures
+to record a gate judgment, an unreadable trunk, or a store that cannot record the
+hold still end the loop. If a completed workflow's final state move fails after
+its completion was recorded, the next loop replays settlement without running
+its nodes again. A run whose face could not start can also be held as `settle-failed`.
 A repository candidate offered before the fork part of a mixed delivery is a
 `delivery-order` refusal instead: the worker gets the required order in the next
 brief. A closed item's pending run is cleaned up without judging or delivering its

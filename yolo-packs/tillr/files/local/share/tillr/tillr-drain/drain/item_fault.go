@@ -75,7 +75,7 @@ func (l *Loop) holdItemFault(ctx context.Context, c Candidate, reason, detail st
 			detail = faultClearDetail(f, l.cfg.Store)
 		}
 		l.reportf("loop: holding %s (%s, run %s, lane %s): %s\n", c.ItemID, reason, c.RunID, c.LaneID, detail)
-		if reason == ReasonStageFailed || reason == ReasonSettleFailed {
+		if reason == ReasonStageFailed || reason == ReasonSettleFailed || reason == ReasonPackSyncFailed {
 			l.reportf("loop: %s mover: %s\n", c.ItemID, f.CompleteMover(holdrules.For(reason).Mover, l.cfg.Store))
 		}
 	}
@@ -261,21 +261,41 @@ func (l *Loop) holdStageFailed(ctx context.Context, d Decision, step string, sta
 }
 
 // holdExaminationFailure is the per-item boundary for a claimed examination. The
-// exit code of a candidate step does not decide the fate of the rest of the queue.
+// loop still stops for interruptions and errors in its own machinery.
 func (l *Loop) holdExaminationFailure(ctx context.Context, d Decision, work *pendingWork, step string, failure error) error {
-	if ctx.Err() != nil || stoppedByOperator(ctx, failure) || errors.Is(failure, errRestartPending) || ExitCode(failure) == record.ExitIncompatible {
+	code := ExitCode(failure)
+	if ctx.Err() != nil || stoppedByOperator(ctx, failure) || errors.Is(failure, context.Canceled) ||
+		errors.Is(failure, errRestartPending) || code == record.ExitUsage || code == record.ExitIncompatible {
 		return failure
 	}
 	if terminal := asItemTerminal(failure); terminal != nil {
 		return l.settleTerminalItem(ctx, work, terminal)
 	}
+	var judgmentErr *gateJudgmentRecordError
+	if errors.As(failure, &judgmentErr) {
+		return failure
+	}
 	// Read before opening the writer: it must not create a replacement store if
 	// the original disappeared. The hold write rechecks terminal state atomically.
-	if err := l.checkItemTerminal(ctx, d.ItemID, step); err != nil {
+	var graphCompleted bool
+	if err := l.readStore(ctx, func(r *store.Reader) error {
+		if err := refuseTerminalItem(r, d.ItemID, step); err != nil {
+			return err
+		}
+		if step != ActionSettle || d.Workflow == nil {
+			return nil
+		}
+		return r.QueryRow(`SELECT EXISTS(SELECT 1 FROM events WHERE kind='drain.graph-completed' AND object_type='run' AND object_id=?)`, d.RunRequest.RunID).Scan(&graphCompleted)
+	}); err != nil {
 		if terminal := asItemTerminal(err); terminal != nil {
 			return l.settleTerminalItem(ctx, work, terminal)
 		}
 		return fmt.Errorf("%v; reading store: %w", failure, err)
+	}
+	// The graph has already published its completion evidence. Leave it pending
+	// so the next loop can finish the item state move without running nodes again.
+	if graphCompleted {
+		return failure
 	}
 	// A missing trunk is a shared fault, not a failure of the candidate's checkout.
 	// Check only on the error path.
