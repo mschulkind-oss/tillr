@@ -10,8 +10,8 @@ tags:
   - safety
   - shims
   - design
-summary: "Replaces post-hoc boundary crashes and advisory brief rules with preventative per-run command shims (PATH wrappers chained ahead of yolo-jail's block directory plus a BASH_ENV kill-builtin wrapper) injected by tillr-run, backed optionally by a per-run Linux PID and mount namespace where the container allows it."
-next: "The owner answers OQ-LS1 through OQ-LS4 on exemption grants, whole-module Go test enforcement, kernel PID/mount namespace backup, and where shim refusals surface."
+summary: "Replaces post-hoc boundary crashes and advisory brief rules with preventative per-run command shims (PATH wrappers chained ahead of yolo-jail's block directory plus a BASH_ENV kill-builtin wrapper) injected by tillr-run, backed by per-run PID and mount isolation wherever the kernel permits it."
+next: "The bypass, Go refusal, isolation and reporting policies are decided but unbuilt. The remaining question is how the landing judge weighs a recorded bypass."
 depends-on:
   - ../tillr/decision-provenance-review.md
   - ./tillr-vocabulary.md
@@ -20,21 +20,21 @@ depends-on:
 
 # Preventative shell shims and run boundaries for tillr lane workers
 
-**Status:** 2026-11-20. A proposal started from the owner's request of 2026-11-20; nothing here is built. Codebase and container measurements taken on 2026-11-20 at `833097ca4`.
+**Status:** 2026-11-20. The owner settled the four lane-shim policies. Nothing here is built; only the effect of a bypass on the landing judgment remains open. Codebase and container measurements taken on 2026-11-20 at `833097ca4`.
 
-> **In short.** Today a tillr lane worker runs as the same user (`uid=0` inside the jail) in the same process and filesystem namespace as the drain loop, the landing gate, the after-merge proof, and every sibling lane, restrained mainly by prose in its brief and a post-hoc snapshot check that stops the loop *after* shared state has already changed. Injecting a per-run shim directory first on `PATH` and a `BASH_ENV` builtin wrapper from [`tools/tillr-run/run/exec.go`](../../tools/tillr-run/run/exec.go) blocks cross-run kills, shared `refs/tillr/` updates, writes to `/workspace/.git/tillr-gate/` and `.tillr/state.db`, cross-lane `rm`/`mv`, and root build recipes *before* they execute — printing the exact remedy and logging each refusal to the run's trace directory — while an optional per-run Linux PID and mount namespace stops direct system calls and `/bin/*` bypasses at the kernel boundary.
+> **In short.** Today a tillr lane worker runs as the same user (`uid=0` inside the jail) in the same process and filesystem namespace as the drain loop, the landing gate, the after-merge proof, and every sibling lane, restrained mainly by prose in its brief and a post-hoc snapshot check that stops the loop *after* shared state has already changed. Injecting a per-run shim directory first on `PATH` and a `BASH_ENV` builtin wrapper from [`tools/tillr-run/run/exec.go`](../../tools/tillr-run/run/exec.go) blocks cross-run kills, shared `refs/tillr/` updates, writes to `/workspace/.git/tillr-gate/` and `.tillr/state.db`, cross-lane `rm`/`mv`, and root build recipes *before* they execute — printing the exact remedy and logging each refusal to the run's trace directory — while per-run Linux PID and mount isolation, where supported, stops direct system calls and `/bin/*` bypasses at the kernel boundary.
 
 **Why it matters.** Between 2026-11-14 and 2026-11-20, lane workers killed `go-test-shards` processes outside their run (turning the after-merge proof red with exit `-15` for eight hours), moved `refs/tillr/green` four times and wrote under `/workspace/.git/tillr-gate/` from a mis-rooted test, mutated `refs/tillr/stranded/*` inside the drain's boundary bracket, and saturated shared cores with unsharded `go test ./...` and eight-binary `just tillr-build` runs ([Section 1](#1-three-live-failures-that-words-did-not-stop)).
 
-**The shape.** `tillr-run exec` materializes a read-only shim directory per run ahead of `PATH` (chaining to `yolo-jail`'s `/home/agent/.yolo/bin/block/` rather than replacing it) and prepends a `kill` builtin wrapper to `BASH_ENV` ahead of [`tools/tillr-trace/bash-shim.sh`](../../tools/tillr-trace/bash-shim.sh) ([Section 3](#3-which-commands-get-a-shim-and-what-each-refuses), [Section 4](#4-where-the-shims-live-and-how-every-backend-and-child-process-gets-them)). Where the kernel allows `CLONE_NEWPID | CLONE_NEWNS` (verified working inside the live jail on 2026-11-20), `tillr-run` can also isolate the run's `/proc` view and bind-mount shared refs, `.git/tillr-gate/`, `.tillr/state.db`, and sibling lanes read-only ([Section 5](#5-what-shims-cannot-stop-and-what-backs-them-up)).
+**The shape.** `tillr-run exec` materializes a read-only shim directory per run ahead of `PATH` (chaining to `yolo-jail`'s `/home/agent/.yolo/bin/block/` rather than replacing it) and prepends a `kill` builtin wrapper to `BASH_ENV` ahead of [`tools/tillr-trace/bash-shim.sh`](../../tools/tillr-trace/bash-shim.sh) ([Section 3](#3-which-commands-get-a-shim-and-what-each-refuses), [Section 4](#4-where-the-shims-live-and-how-every-backend-and-child-process-gets-them)). Where the kernel allows `CLONE_NEWPID | CLONE_NEWNS` (verified working inside the live jail on 2026-11-20), `tillr-run` will also isolate the run's `/proc` view and bind-mount shared refs, `.git/tillr-gate/`, `.tillr/state.db`, and sibling lanes read-only ([Section 5](#5-what-shims-cannot-stop-and-what-backs-them-up)).
 
 **Cost.** Zero model tokens and under 2 ms of startup per run; shell invocations that pass through add one POSIX shell exec (~1–2 ms) only on the nine shimmed command names.
 
 **Start at [Section 3](#3-which-commands-get-a-shim-and-what-each-refuses)** for the command matrix, [Section 4](#4-where-the-shims-live-and-how-every-backend-and-child-process-gets-them) for how `pi`, `claude -p`, `just`, `go test`, and `python3` inherit the boundary, and [Section 5](#5-what-shims-cannot-stop-and-what-backs-them-up) for what bypasses a shell shim and what stops it at the kernel level.
 
-**Needs your ruling:** [OQ-LS1](#OQ-LS1), [OQ-LS2](#OQ-LS2), [OQ-LS3](#OQ-LS3), [OQ-LS4](#OQ-LS4).
+**Needs your ruling:** [OQ-LS5](#OQ-LS5) — how should the landing judge weigh a bypass after reading its reason?
 
-**Reads with:** [the decision provenance review](../tillr/decision-provenance-review.md) ([OQ-PR21](../tillr/decision-provenance-review.md#OQ-PR21) and [OQ-PR22](../tillr/decision-provenance-review.md#OQ-PR22) on owner rulings versus engineering detail), [the vocabulary](./tillr-vocabulary.md) ([OQ-VO5](./tillr-vocabulary.md#OQ-VO5) and [OQ-VO6](./tillr-vocabulary.md#OQ-VO6) on the `git-landing` charter and green proof), [session recording](./session-recording.md) (the `BASH_ENV` trace seam and the no-derived-index ruling), and [the 2026-11-19 unproved-trunk incident](../tillr/unproved-trunk-2026-11-19.md). No implementation plan is seeded while the questions are open.
+**Reads with:** [the decision provenance review](../tillr/decision-provenance-review.md) ([OQ-PR21](../tillr/decision-provenance-review.md#OQ-PR21) and [OQ-PR22](../tillr/decision-provenance-review.md#OQ-PR22) on owner rulings versus engineering detail), [the vocabulary](./tillr-vocabulary.md) ([OQ-VO5](./tillr-vocabulary.md#OQ-VO5) and [OQ-VO6](./tillr-vocabulary.md#OQ-VO6) on the `git-landing` charter and green proof), [session recording](./session-recording.md) (the `BASH_ENV` trace seam and the no-derived-index ruling), and [the 2026-11-19 unproved-trunk incident](../tillr/unproved-trunk-2026-11-19.md). No implementation plan is seeded yet.
 
 ---
 
@@ -66,7 +66,7 @@ Modeled directly on that pattern, a **lane shim** *(coined here: a preventative 
 | **Who sees it** | Every process in the container, interactive or unattended | Only child processes of `tillr-run exec` — never `tillr-drain`, `tillr-gate`, the heavy proof, `tillr-roll`, or interactive shells |
 | **Pass-through target** | Hardcodes `exec /bin/<tool> "$@"` because nothing sits between `block/` and `/bin` | **Must chain down `PATH`** after removing its own shim directory (`D-LS2`); calling `/bin/rm` directly would bypass `yolo`'s `/home/agent/.yolo/bin/block/rm` guard on `/workspace/.yolo` |
 | **Shell builtins & `.bashrc`** | Only external binaries (`find`, `grep`, `rm`, `mv`, `git`) are guarded | `kill` is a shell builtin in both `bash` and `/bin/sh` (`bash -c 'type -a kill'` and `/bin/sh -c 'type kill'` on 2026-11-20 both report `kill is a shell builtin` ahead of `/bin/kill`), and `/home/agent/.bashrc` resets `PATH` unconditionally on `bash -ic`/`-lc` |
-| **Self-service bypass** | Prints `(YOLO_BYPASS_SHIMS=1 bypasses this shim.)` for an interactive session | An unattended worker that sees or discovers a bypass env var can defeat the guard on the next turn ([OQ-LS1](#OQ-LS1)) |
+| **Self-service bypass** | Prints `(YOLO_BYPASS_SHIMS=1 bypasses this shim.)` for an interactive session | After a denial, the worker may bypass the named shim, not the whole set; each use and its reason are logged ([OQ-LS1](#OQ-LS1)) |
 
 ---
 
@@ -135,7 +135,7 @@ Probing `/proc/self/status` and Linux `unshare(2)` / `mount(2)` via Python `ctyp
 1. **Capabilities are already present.** Every jail session runs with `Uid: 0`, `CapEff: 00000000882c35fb` (including `CAP_SYS_ADMIN` and `CAP_KILL`), `NoNewPrivs: 0`, and `Seccomp: 2`, and `unshare(CLONE_NEWPID | CLONE_NEWNS)` succeeds (`rc=0`) with no `yolo-jail` container changes.
 2. **Per-run PID namespace + private `/proc` completely isolates signals.** After `unshare(CLONE_NEWPID | CLONE_NEWNS)`, `mount("none", "/", NULL, MS_REC | MS_PRIVATE, NULL)`, fork, and `mount("proc", "/proc", "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC, NULL)` (`rc=0`), `os.listdir("/proc")` sees **only** PIDs inside that child namespace (`['1']`). Inside that namespace, `/bin/pkill`, `/bin/sh -c 'kill -9 -1'`, and Go's `syscall.Kill` cannot see or signal `tillr-drain`, the after-merge proof, `tillr-gate`, or any sibling lane (`ESRCH`). *(Measured pitfall: adding `CLONE_NEWUSER` causes `mount("proc", "/proc", ...)` to fail with `EPERM`; when `euid == 0`, `CLONE_NEWPID | CLONE_NEWNS` must be called without `CLONE_NEWUSER`.)*
 3. **Read-only bind-remounts inside `CLONE_NEWNS` block direct file and ref writes with `EROFS`.** Bind-mounting a path onto itself (`MS_BIND | MS_REC`) and remounting read-only while preserving filesystem flags (`MS_BIND | MS_REMOUNT | MS_RDONLY | statvfs.f_flag`) returned `errno=30 (Read-only file system)` on direct Python/Go file opens against protected files while leaving sibling directories writable. Tested on a linked git worktree on 2026-11-20: mounting `.git/refs/tillr` and `.git/tillr-gate` read-only allowed `git commit` on the worktree branch (`rc=0`) while blocking both `git update-ref refs/tillr/green HEAD` (`rc=128`, `Unable to create '.../green.lock': Read-only file system`) and `git update-ref -d refs/tillr/green` against packed refs (`rc=1`). Mounting `.tillr/state.db` (and `-wal`/`-shm`, or masking `.tillr/` while re-binding `$TILLR_TARGET_DIR`, `$TILLR_SCRATCH_DIR`, and `$TILLR_TRACE_DIR` read-write) likewise blocks direct SQLite opens and sibling-lane `os.RemoveAll` calls at the kernel level.
-4. **What a mount guard still leaves to the `git` shim.** Normal `git commit` in a linked worktree needs `.git/objects` and `.git/packed-refs` writable, and loose branches under `.git/refs/heads/` share a parent directory (though `.git/refs/heads/main` and `.git/refs/heads/patch` can be mounted read-only when `TARGET_KIND` is a lane worktree). On macOS or unprivileged Linux hosts without `CAP_SYS_ADMIN`, `unshare` returns `EPERM`. The two layers therefore complement each other: shims give clear remedies everywhere and guard loose refs, `go test`, and `just`, while namespaces stop syscalls and `/bin/*` inside Linux jails. Whether to ship both together or shims first is [OQ-LS3](#OQ-LS3).
+4. **What a mount guard still leaves to the `git` shim.** Normal `git commit` in a linked worktree needs `.git/objects` and `.git/packed-refs` writable, and loose branches under `.git/refs/heads/` share a parent directory (though `.git/refs/heads/main` and `.git/refs/heads/patch` can be mounted read-only when `TARGET_KIND` is a lane worktree). On macOS or unprivileged Linux hosts without `CAP_SYS_ADMIN`, `unshare` returns `EPERM`. The two layers therefore complement each other: shims give clear remedies everywhere and guard loose refs, `go test`, and `just`, while namespaces stop syscalls and `/bin/*` inside Linux jails. Ship both layers together wherever the kernel permits per-run PID and mount isolation. Elsewhere, keep the shims without requiring namespace support ([OQ-LS3](#OQ-LS3)).
 
 ### Authority-side protection for the proof and shared refs (`D-LS8`)
 
@@ -147,6 +147,8 @@ Independently of [OQ-LS3](#OQ-LS3), two small authority-side hardening steps bac
 ---
 
 ## 6. Refusal messages that name the next step
+
+For unsharded whole-module `go test`, refuse rather than rewriting the command. Print the exact targeted `-run` and `go-test-shards.py` commands ([OQ-LS2](#OQ-LS2)). Printing the sharded command does not grant permission to run the suite; [the whole-suite grant ruling](./tillr-evidence-registry-and-suite-guardrail.md#OQ-ER2) still applies.
 
 Modeled on `/home/agent/.yolo/bin/block/rm` and `/home/agent/.yolo/bin/block/grep`, every refusal writes two lines to `stderr` (`D-LS9`): **what was refused and why**, followed by **`Remedy:` naming the exact command or action to take instead** — with no bypass variable advertised:
 
@@ -167,7 +169,7 @@ tillr-shim (just): refused in lane worker (lane-13, run-item-example-a1-n2): `ju
   Remedy: compile or test only the module you changed (`cd tools/<module> && go build ./...` or `go test ./<pkg> -run '^TestName$'`).
 
 tillr-shim (go): refused in lane worker (lane-13, run-item-example-a1-n2): unsharded `go test ./...` in `tools/tillr-drain` bypasses the machine-wide test slot pool.
-  Remedy: for fast feedback while editing, run `cd tools/tillr-drain && go test ./drain -run '^TestName$'`; before committing, run `python3 tools/go-test-shards.py tools/tillr-drain -k 6` from the worktree root.
+  Remedy: run `cd tools/tillr-drain && go test ./drain -run '^TestName$'`. For an explicitly granted whole-suite run, use `python3 tools/go-test-shards.py tools/tillr-drain -k 6` from the worktree root.
 ```
 
 ---
@@ -181,7 +183,7 @@ Under the owner's 2026-11-18 ruling in [`docs/design/session-recording.md`](./se
 ```
 
 - **Fail-closed on the guard, fail-open on the log write.** Unlike [`tools/tillr-trace/bash-shim.sh`](../../tools/tillr-trace/bash-shim.sh) (which lets the traced command run if trace writing fails), a shim refusal **always exits `1`** even if `$TILLR_TRACE_DIR` is missing or unwritable.
-- **How the operator reads it.** [`tools/tillr-trace/tillr_trace.py`](../../tools/tillr-trace/tillr_trace.py) gains a `refusals` subcommand (`tillr-trace refusals [--runs 100] [--json]`) that scans `.tillr/loop/run-*/shim-refusals.jsonl` on demand — matching `audit` and `summary`, which scan 100 runs in milliseconds — and prints which lanes and items hit which `(tool, rule)` and how many times, plus a `Shim refusals` block in `tillr-trace run <run-id>` and on that run's Observatory detail page. Whether `tillr view status` and the Observatory Home page should also carry a live refusal counter is [OQ-LS4](#OQ-LS4).
+- **How the operator reads it.** [`tools/tillr-trace/tillr_trace.py`](../../tools/tillr-trace/tillr_trace.py) gains a `refusals` subcommand (`tillr-trace refusals [--runs 100] [--json]`) that scans `.tillr/loop/run-*/shim-refusals.jsonl` on demand — matching `audit` and `summary`, which scan 100 runs in milliseconds — and prints which lanes and items hit which `(tool, rule)` and how many times, plus a `Shim refusals` block in `tillr-trace run <run-id>` and on that run's Observatory detail page. Keep refusals on these trace and per-run surfaces; do not add a counter to `tillr view status` or Observatory Home ([OQ-LS4](#OQ-LS4)).
 
 ---
 
@@ -205,7 +207,11 @@ Most legitimate needs require **no special override** because `tillr-run exec` d
 - **Fork checkout runs (`.forks/lanes/<lane>/<fork>`):** `TILLR_TARGET_DIR` includes the lane's fork checkout while `$TILLR_REPO_COMMON_DIR` still protects `/workspace/.git` (`patch/<fork>` in `/workspace/.git` is moved by `tillr-land` after `fork-build`, never by the worker).
 - **Non-`git-landing` charters:** When `tillr-run` executes a workflow for an external charter that sets no `git-landing` repository boundary ([`tillr-separable-parts.md`](./tillr-separable-parts.md)), repo-specific `git`/`just`/`go` rules stay off while `pkill`/`killall`/`kill` process-tree scoping remains active.
 
-How an extraordinary item inside `git-landing` obtains permission when it genuinely needs a blocked operation — versus having no worker-level override — is [OQ-LS1](#OQ-LS1).
+After seeing a denial, the worker may use one setting to bypass one named shim for the issue it encountered. There is no setting to disable all lane shims. Log every use with its reason. At landing the judge reads which bypasses the worker used and why ([OQ-LS1](#OQ-LS1)); how that evidence affects the judgment is [OQ-LS5](#OQ-LS5).
+
+The owner's words in Vantage comment `79552d49` (2026-11-20):
+
+> I think we should still let agents bypass things. But having them having seen the denial... I think is good. We don't want them to then apply a setting that disables all things like bypass shims. We want them to have to pick and choose a single setting that bypasses a single issue they're having so that they can't just willy nilly reuse them. And then we should, but we should also be logging in a clear way every time this is used so we can go back and look at why it was used. And I suppose the judge at the end of landing this thing should also probably be looking at this in some way. Okay.
 
 ---
 
@@ -229,6 +235,10 @@ This design inherits the owner's settled rulings in [the decision provenance rev
 
 | ID | Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
+| <a id="OQ-LS1"></a>[`OQ-LS1`](#OQ-LS1) | After denial the worker may bypass one named shim per setting, never all shims. Log every use and reason for the landing judge to read. | 2026-11-20 | Owner, Vantage `79552d49` (quoted [above](#granting-a-legitimate-need-rather-than-working-around-it)) | — |
+| <a id="OQ-LS2"></a>[`OQ-LS2`](#OQ-LS2) | A: Refuse unsharded whole-module `go test` and print the exact `-run` and `go-test-shards.py` remedies. | 2026-11-20 | Owner selection, Vantage `ea0c2c04` | — |
+| <a id="OQ-LS3"></a>[`OQ-LS3`](#OQ-LS3) | A: Ship shims with per-run PID and mount isolation where supported; fall back to shims elsewhere. | 2026-11-20 | Owner selection, Vantage `afcafe72` | — |
+| <a id="OQ-LS4"></a>[`OQ-LS4`](#OQ-LS4) | A: Report refusals through `tillr-trace refusals` and each run’s Observatory detail page, not status or Home counters. | 2026-11-20 | Owner selection, Vantage `7e917941` | — |
 | `D-LS1` | **Designer's decision; the owner may overturn this.** Inject both `<run-scratch>/shims/bin` (first on `PATH`, mode `0555`, reading a runner-written read-only `config.env`) and `lane-bash-env.sh` (`BASH_ENV` chaining to `tools/tillr-trace/bash-shim.sh`) centrally in `tools/tillr-run/run/exec.go`. **Evidence:** `kill` is a builtin in `bash` (`type -a kill`), `.bashrc` resets `PATH` on interactive subshells, `just`/`go test`/`python3` read `PATH` without `BASH_ENV`, and per-backend setup in `run-pi`/`run-claude` misses `command` nodes. **Rejected:** `PATH`-only shims (miss `bash` builtin `kill`); `BASH_ENV`-only functions (miss `just`, `go test`, and `python3`); duplicating setup per backend script; reading boundary paths from worker-mutable env vars. | 2026-11-20, designer | [Section 4](#4-where-the-shims-live-and-how-every-backend-and-child-process-gets-them) | — |
 | `D-LS2` | **Designer's decision; the owner may overturn this.** Every lane shim forwards allowed calls by stripping only `$TILLR_SHIM_BIN` from `PATH` and resolving the next executable, never hardcoding `/bin/<tool>`. **Evidence:** `/home/agent/.yolo/bin/block/{rm,mv,git}` sits on `PATH` ahead of `/bin` and protects `/workspace/.yolo`; `exec /bin/rm` would bypass `yolo`'s guard. **Rejected:** hardcoding `/bin/<tool>`. | 2026-11-20, designer | [Section 2](#2-how-yolo-jail-shims-work-and-where-a-lane-differs) | — |
 | `D-LS3` | **Designer's decision; the owner may overturn this.** Return exit code `1` (not `127`) on every lane shim refusal. **Evidence:** POSIX shells and `COULD_NOT_ANSWER_CODES` in `tools/fork-check.py` treat `127` as "command not installed," nudging agents toward alternative binaries; `yolo`'s `rm`/`mv`/`git` guards use `1`. **Rejected:** exit `127` or `126`. | 2026-11-20, designer | [Section 3](#3-which-commands-get-a-shim-and-what-each-refuses) | — |
@@ -245,64 +255,8 @@ This design inherits the owner's settled rulings in [the decision provenance rev
 
 ## Open Questions
 
-1. 💬 **OQ-LS1: How should a rare item that genuinely needs a shimmed action get permission?**
+1. 💬 **OQ-LS5: How should the landing judge weigh a recorded bypass?**
 
-   Interactive `yolo-jail` shims print `YOLO_BYPASS_SHIMS=1` for false positives. In an unattended queue, any worker can find a bypass variable in the codebase and export it on its next turn. Standard target modes (main checkout, fork checkouts, temp test repos) already pass without overrides.
+   <!-- vantage: question id=OQ-LS5 -->
 
-   - **A — Operator grant on the item; no bypass variable.** You approve a one-item exemption before dispatch; otherwise a blocked worker stops with an obstacle.
-   - **B — Unadvertised bypass variable in code.** Quick for scripts, though a worker reading source can export it unattended.
-   - **C — No lane exemptions at all.** You run any blocked maintenance task yourself outside the drain.
-
-   <!-- vantage: question id=OQ-LS1 leaning="A — operator grant on the item with no worker-settable bypass variable: workers can read the shim source in this repository, so an environment-variable bypass is discoverable unattended, whereas runner-derived target paths cover normal modes and an explicit item grant keeps rare exceptions visible to you." -->
-
-   _Leaning:_ A — operator grant on the item with no worker-settable bypass variable: workers can read the shim source in this repository, so an environment-variable bypass is discoverable unattended, whereas runner-derived target paths cover normal modes and an explicit item grant keeps rare exceptions visible to you.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
-
-2. 💬 **OQ-LS2: What should happen when a lane worker runs unsharded whole-module `go test` in a large tillr module?**
-
-   Workers run raw `go test ./...` in large modules like `tillr-drain` (171s) alongside `just tillr-build`, bypassing the machine-wide test slot pool and driving load past 60. Targeted `-run` tests and temp fixtures pass through; root lifecycle `just` recipes are refused.
-
-   - **A — Refuse and print the `-run` and `go-test-shards.py` commands.** Preserves pre-commit sharded runs while blocking pool bypasses.
-   - **B — Silently rewrite `go test ./...` into `go-test-shards.py`.** Saves a turn, though what ran differs from what the worker typed.
-   - **C — Refuse both raw `go test ./...` and `go-test-shards.py` in lanes.** Leaves full suites to the gate and proof, ending slot contention but catching cross-test breaks later.
-
-   <!-- vantage: question id=OQ-LS2 leaning="A — refuse unsharded whole-module go test and print the exact -run and go-test-shards.py remedies: matches yolo-jail's explicit teach-don't-rewrite rule and catches intra-module regressions before spending a landing and auto-revert cycle." -->
-
-   _Leaning:_ A — refuse unsharded whole-module `go test` and print the exact `-run` and `go-test-shards.py` remedies: matches `yolo-jail`'s explicit teach-don't-rewrite rule and catches intra-module regressions before spending a landing and auto-revert cycle.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
-
-3. 💬 **OQ-LS3: Should `tillr-run` back up the shell shims with a per-run Linux PID and mount namespace?**
-
-   Shell shims cannot stop a compiled Go test or Python script from writing `.git/tillr-gate/` directly (the 2026-11-20 `refs/tillr/green` bug), opening `.tillr/state.db`, or calling `/bin/pkill`. Live tests on 2026-11-20 confirmed per-run PID and read-only mount namespaces work in this jail today without config changes.
-
-   - **A — Ship shims plus per-run PID and read-only mount namespaces where supported.** Shims still print remedies first; direct syscalls and `/bin/*` fail at the kernel (`ESRCH` / `EROFS`), falling back cleanly elsewhere.
-   - **B — Ship `PATH` and `BASH_ENV` shims first; add namespaces only after a live bypass.** Smaller change, leaving direct Go/Python writes and `/bin/pkill` unblocked by the kernel.
-
-   <!-- vantage: question id=OQ-LS3 leaning="A — ship shims plus per-run PID and mount isolation where the kernel permits (falling back cleanly elsewhere): the 2026-11-20 refs/tillr/green incident came from a compiled Go test whose direct file writes to .git/tillr-gate/ no shell shim can intercept, and the container already grants the needed capabilities." -->
-
-   _Leaning:_ A — ship shims plus per-run PID and mount isolation where the kernel permits (falling back cleanly elsewhere): the 2026-11-20 `refs/tillr/green` incident came from a compiled Go test whose direct file writes to `.git/tillr-gate/` no shell shim can intercept, and the container already grants the needed capabilities.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
-
-4. 💬 **OQ-LS4: Where should shim refusals appear beyond `tillr-trace` and each run's detail page?**
-
-   Every refusal logs to that run's trace folder, giving a cross-run `tillr-trace refusals` table of which lanes hit which shim plus badges on the Observatory's Run Detail page. Most refusals will be quiet self-corrections, though a sudden cross-lane spike points to a bad prompt or broken tool.
-
-   - **A — Keep refusals on `tillr-trace refusals` and the Run Detail page only.** Keeps `tillr view status` and Observatory Home focused on blocked work when lanes self-correct.
-   - **B — Also show a 24-hour shim-refusal count on `tillr view status` and Observatory Home.** Surfaces cross-lane spikes on the main dashboard without running a trace command, adding one permanent summary line.
-
-   <!-- vantage: question id=OQ-LS4 leaning="A — keep refusals on tillr-trace refusals and each run's Observatory detail page: a refusal that the worker immediately corrects did its job quietly like find -> fd in yolo-jail, while one command answers which lanes hit which shim whenever you look." -->
-
-   _Leaning:_ A — keep refusals on `tillr-trace refusals` and each run's Observatory detail page: a refusal that the worker immediately corrects did its job quietly like `find` -> `fd` in `yolo-jail`, while one command answers which lanes hit which shim whenever you look.
-
-   **Answer:**
-
-   > _(empty — fill in when decided)_
+   Reading each use and its reason is settled. Should the judge weigh that evidence case by case, or should a bypass require a specific finding before the change can land?
