@@ -165,6 +165,19 @@ AutoQA leaves the [Icebox](#icebox).
    local `PATH` launcher. Next because the pack copy is a cost on every landing that stops nothing,
    and none of Git delivery or the source launcher is built.
 
+9. [Every fallback in the drain, the run adapters and the gate](../design/tillr-fallback-inventory.md)
+   ([`OQ-FB1`](../design/tillr-fallback-inventory.md#OQ-FB1),
+   [`OQ-FB2`](../design/tillr-fallback-inventory.md#OQ-FB2),
+   [`OQ-FB3`](../design/tillr-fallback-inventory.md#OQ-FB3),
+   [`OQ-FB4`](../design/tillr-fallback-inventory.md#OQ-FB4),
+   [`OQ-FB5`](../design/tillr-fallback-inventory.md#OQ-FB5),
+   [`OQ-FB6`](../design/tillr-fallback-inventory.md#OQ-FB6),
+   [`OQ-FB7`](../design/tillr-fallback-inventory.md#OQ-FB7),
+   [`OQ-FB8`](../design/tillr-fallback-inventory.md#OQ-FB8)): filed after the owner's ruling of
+   2026-11-20 that a fallback needs his acceptance. The inventory holds 168 paths; 39 of them are
+   kept only if he accepts the justification each question states, and none of the 107 removals is
+   built. It stops nothing today, so it follows the eight above.
+
 [Owner review comments](../design/tillr-review-comments.md#7-decision-ledger) left this list on
 2026-11-20. The owner answered all four questions; the fast track is not built.
 
