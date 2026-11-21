@@ -294,6 +294,9 @@ only, never runs `bin/pi-forks export`, and never edits the shared cache. The fo
 command, and `fork-quality` runs after a passing `fork-build` in the same clean clone
 for forks in `FORK_QUALITY`; only then does the lander move `refs/heads/patch/pi` to the
 built head, write its landed marker, and refresh the shared cache's `main`. Items for the same fork are serialized.
+An unsuccessful fork run's pins and preserved edits live inside its lane fork checkout.
+Before releasing that checkout, the drain saves the work, clears any rebase, and restores
+`main` to the delivered tip. Do not reset the checkout yourself to recover a run's edits.
 
 ## 3. Run — execute a candidate in an isolated lane
 `tillr run exec`
@@ -315,6 +318,8 @@ resume: it calls `mcp__tillr__land` or `mcp__tillr__obstacle`, the session ends 
 call open, and the gate's answer, with the same text pi receives, comes back as that call's
 result on a promptless `--resume`. An older `claude`, or one run with
 `CLAUDE_CODE_DISABLE_DEFERRED_TOOL_RESUME` set, ends with the `RESULT:` footer.
+A Pi turn with no text or tool call supplies no report, even after exit zero. The drain
+preserves the work and restarts the workflow node through its missing-report route.
 
 When `pi` recovers from a loop in-run (`loop_detected` with `action: "recovered"`), the
 runner records `loop_recovery` (count, shape, tokens before and after) on the run and

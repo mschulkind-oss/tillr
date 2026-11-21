@@ -23,16 +23,20 @@ func candidatePinRef(c Candidate) string {
 }
 
 func (l *Loop) heldForkTarget(c Candidate, lane string) (ForkTarget, error) {
-	name, ok := strings.CutPrefix(c.BaseRef, forkPatchPrefix)
+	return forkTargetAtLane(l.cfg.Root, c.BaseRef, lane)
+}
+
+func forkTargetAtLane(root, ref, lane string) (ForkTarget, error) {
+	name, ok := strings.CutPrefix(ref, forkPatchPrefix)
 	if !ok || name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\") {
-		return ForkTarget{}, Externalf("invalid held fork delivery ref %q", c.BaseRef)
+		return ForkTarget{}, Externalf("invalid fork delivery ref %q", ref)
 	}
 	if lane == "" || lane == "." || lane == ".." || strings.ContainsAny(lane, "/\\") {
 		return ForkTarget{}, Externalf("invalid held fork lane %q", lane)
 	}
 	path := ".forks/lanes/" + lane + "/" + name
-	checkout, err := filepath.Abs(filepath.Join(l.cfg.Root, filepath.FromSlash(path)))
-	return ForkTarget{Fork: name, Ref: c.BaseRef, Path: path, Checkout: checkout}, err
+	checkout, err := filepath.Abs(filepath.Join(root, filepath.FromSlash(path)))
+	return ForkTarget{Fork: name, Ref: ref, Path: path, Checkout: checkout}, err
 }
 
 func (l *Loop) pinHeldFork(ctx context.Context, c Candidate) error {
@@ -58,9 +62,9 @@ func (l *Loop) pinHeldFork(ctx context.Context, c Candidate) error {
 	return err
 }
 
-// checkHeldForkCheckout protects against git walking to a parent repo, a
-// symlink aliasing another lane, or moving a branch in a shared git directory.
-func (l *Loop) checkHeldForkCheckout(ctx context.Context, path string) error {
+// checkForkRepository protects against Git walking to a parent repo, a
+// symlink aliasing another lane, or moving a branch in a shared Git directory.
+func (l *Loop) checkForkRepository(ctx context.Context, path string) error {
 	gitDir := filepath.Join(path, ".git")
 	real, err := filepath.EvalSymlinks(gitDir)
 	if info, statErr := os.Stat(gitDir); err != nil || real != gitDir || statErr != nil || !info.IsDir() {
@@ -71,13 +75,22 @@ func (l *Loop) checkHeldForkCheckout(ctx context.Context, path string) error {
 		want string
 	}{
 		{[]string{"rev-parse", "--show-toplevel"}, path},
-		{[]string{"rev-parse", "--path-format=absolute", "--git-common-dir"}, filepath.Join(path, ".git")},
-		{[]string{"symbolic-ref", "HEAD"}, "refs/heads/main"},
+		{[]string{"rev-parse", "--path-format=absolute", "--git-common-dir"}, gitDir},
 	} {
 		out, err := l.git(ctx, path, check.args...)
 		if err != nil || strings.TrimSpace(out) != check.want {
-			return fmt.Errorf("fork checkout %s is not an isolated checkout on main", path)
+			return fmt.Errorf("fork checkout %s is not an isolated checkout", path)
 		}
+	}
+	return nil
+}
+
+func (l *Loop) checkHeldForkCheckout(ctx context.Context, path string) error {
+	if err := l.checkForkRepository(ctx, path); err != nil {
+		return err
+	}
+	if out, err := l.git(ctx, path, "symbolic-ref", "HEAD"); err != nil || strings.TrimSpace(out) != "refs/heads/main" {
+		return fmt.Errorf("fork checkout %s is not on main", path)
 	}
 	return nil
 }

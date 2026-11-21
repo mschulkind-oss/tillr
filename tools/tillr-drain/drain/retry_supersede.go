@@ -164,20 +164,38 @@ func (l *Loop) supersedeRetriedCandidates(ctx context.Context) error {
 func (l *Loop) supersedeCandidate(ctx context.Context, s supersession) error {
 	c := *s.work.Candidate
 	runID := s.fault.RunID
-	record := candidateSuperseded{Candidate: c, RetryID: s.retry.RetryID, Fault: s.fault, PinRef: "refs/tillr/runs/" + runID}
-	pinned, err := l.git(ctx, l.cfg.Root, "for-each-ref", "--format=%(objectname)", record.PinRef)
+	record := candidateSuperseded{Candidate: c, RetryID: s.retry.RetryID, Fault: s.fault, PinRef: pinRef(runID)}
+	repo := l.cfg.Root
+	if c.BaseRef != "" {
+		repo = c.Worktree
+		if s.work.LaneReleased {
+			// A released held fork may no longer have its original checkout.
+			// The separate held-candidate pin is portable across lanes.
+			if err := l.pinnedCandidate(ctx, c); err == nil {
+				repo, record.PinRef = l.cfg.Root, candidatePinRef(c)
+			}
+		}
+	}
+	pinned, err := l.git(ctx, repo, "for-each-ref", "--format=%(objectname)", record.PinRef)
+	if repo != l.cfg.Root && (err != nil || strings.TrimSpace(pinned) == "") {
+		// Older runs imported their fork pin into root. Read that pin if it
+		// still exists (even if the original checkout is gone), never write it.
+		if legacy, lookupErr := l.git(ctx, l.cfg.Root, "for-each-ref", "--format=%(objectname)", record.PinRef); lookupErr == nil && strings.TrimSpace(legacy) != "" {
+			pinned, err = legacy, nil
+		}
+	}
 	if err != nil {
 		return err
 	}
 	record.PinSHA = strings.TrimSpace(pinned)
 	if record.PinSHA == "" {
-		if _, err := l.git(ctx, l.cfg.Root, "cat-file", "-e", c.HeadSHA+"^{commit}"); err != nil {
+		if _, err := l.git(ctx, repo, "cat-file", "-e", c.HeadSHA+"^{commit}"); err != nil {
 			// Nothing may be superseded that is not kept: the candidate stays held, and the
 			// report says what is missing.
 			l.reportf("loop: retry %s cannot supersede %s: candidate head %s is not in this repository and no pin holds it\n", s.retry.RetryID, runID, c.HeadSHA)
 			return nil
 		}
-		if err := l.pin(ctx, runID, c.HeadSHA); err != nil {
+		if err := writeRunPin(ctx, l.git, repo, runID, c.HeadSHA, false); err != nil {
 			// This retry starts from an existing item fault. Keep that hold and
 			// its mover; neither supersede the only copy nor stop other work.
 			l.reportf("loop: retry %s cannot supersede %s: %v\n", s.retry.RetryID, runID, err)

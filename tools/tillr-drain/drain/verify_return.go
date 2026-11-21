@@ -246,8 +246,9 @@ func (l *Loop) builderPlanWrong(d Decision, stage WorkflowStage, footer, log str
 
 // pinCandidateHead uses the recorded checkout, not the lane's current assignment.
 func (l *Loop) pinCandidateHead(ctx context.Context, c Candidate) error {
-	if filepath.Clean(c.Worktree) == filepath.Clean(l.lanePath(c.LaneID)) {
-		return l.pin(ctx, c.RunID, c.HeadSHA)
+	repo := l.cfg.Root
+	if c.Worktree != "" && filepath.Clean(c.Worktree) != filepath.Clean(l.lanePath(c.LaneID)) {
+		repo = c.Worktree
 	}
-	return l.pinFrom(ctx, c.Worktree, c.RunID, c.HeadSHA)
+	return writeRunPin(ctx, l.git, repo, c.RunID, c.HeadSHA, false)
 }

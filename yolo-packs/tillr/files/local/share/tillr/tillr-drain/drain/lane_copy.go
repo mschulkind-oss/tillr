@@ -45,8 +45,8 @@ type laneCopyCleared struct {
 // released only after its pin is read back, and a run pin is never pruned, so a lane commit
 // one of them contains is a copy and not the only copy of anyone's work. Preserved-work refs
 // (refs/tillr/preserved/) do not count: retention prunes them.
-func (s *LaneStager) retainingRunPins(ctx context.Context, sha string) ([]string, error) {
-	out, err := s.git(ctx, s.Root, "for-each-ref", "--contains", sha, "--format=%(refname)", "refs/tillr/runs/", "refs/tillr/runs-long/")
+func (s *LaneStager) retainingRunPins(ctx context.Context, repo, sha string) ([]string, error) {
+	out, err := s.git(ctx, repo, "for-each-ref", "--contains", sha, "--format=%(refname)", "refs/tillr/runs/", "refs/tillr/runs-long/")
 	if err != nil {
 		return nil, err
 	}
@@ -69,19 +69,13 @@ func (s *LaneStager) retainingRunPins(ctx context.Context, sha string) ([]string
 // A stager given no store can read no landing, so only a pin clears; it records nothing,
 // because the pin is the retention and the event only the account of it.
 func (s *LaneStager) clearableLaneCopy(ctx context.Context, lane, itemID, sha, checkout string) (bool, error) {
-	// A fork-only object cannot be contained by any root pin. Do not fetch
-	// it until the store has established that this item owns the commit.
-	var rootObjectErr error
+	repo := s.Root
 	if checkout != "" {
-		_, rootObjectErr = s.git(ctx, s.Root, "cat-file", "-e", sha+"^{commit}")
+		repo = checkout
 	}
-	var refs []string
-	var err error
-	if rootObjectErr == nil {
-		refs, err = s.retainingRunPins(ctx, sha)
-		if err != nil {
-			return false, err
-		}
+	refs, err := s.retainingRunPins(ctx, repo, sha)
+	if err != nil {
+		return false, err
 	}
 	if s.Store == "" {
 		return len(refs) > 0, nil
@@ -257,7 +251,7 @@ func (s *LaneStager) clearableLaneCopy(ctx context.Context, lane, itemID, sha, c
 		return false, nil
 	}
 	if ownRunID != "" {
-		if err := writeRunPin(ctx, s.git, s.Root, checkout, ownRunID, sha, true); err != nil {
+		if err := writeRunPin(ctx, s.git, repo, ownRunID, sha, true); err != nil {
 			return false, err
 		}
 		refs = append(refs, pinRef(ownRunID))

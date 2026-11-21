@@ -53,6 +53,7 @@ def _blocks_text(message):
 def dialect(stream_text, live_probe=False):
     records, unparseable = report.records(stream_text)
     deltas, snapshots, settled = [], {}, []
+    last_assistant = None
     ended = None
     tokens, cost, saw_tokens, saw_cost = 0, 0.0, False, False
     session, first_at, last_at = None, None, None
@@ -109,9 +110,13 @@ def dialect(stream_text, live_probe=False):
         if record.get("type") == "agent_end":
             for message in record.get("messages") or []:
                 if isinstance(message, dict) and message.get("role") == "assistant":
+                    last_assistant = message
                     settled.append(_blocks_text(message))
         message = record.get("message")
         if isinstance(message, dict) and message.get("role") == "assistant":
+            # A streaming snapshot may still receive text or a tool call.
+            # Only a completed message can prove an empty turn.
+            last_assistant = message if record.get("type") in ("message", "message_end", "turn_end") else None
             key = message.get("id") or f"snapshot-{len(snapshots)}"
             snapshots[key] = _blocks_text(message)
     if deltas:
@@ -120,6 +125,14 @@ def dialect(stream_text, live_probe=False):
         text = "".join(settled)
     else:
         text = "".join(snapshots.values())
+    # A reasoning-only ending is not a report. In particular, neither prior
+    # streaming deltas nor an earlier settled footer can finish this turn.
+    if last_assistant is not None:
+        content = last_assistant.get("content")
+        if isinstance(content, list) and not _blocks_text(last_assistant).strip() and not any(
+            isinstance(block, dict) and block.get("type") == "toolCall" for block in content
+        ):
+            text = "[Pi's last assistant turn had no text or tool call.]\n"
     # The runner's idle watcher probes a live stream with an unknown exit code.
     # A stale agent_settled and a footer from an earlier turn do not authorize it
     # to end a parked call, even when the parked batch has emitted agent_end.

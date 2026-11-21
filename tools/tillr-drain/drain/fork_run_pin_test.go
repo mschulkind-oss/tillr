@@ -29,11 +29,11 @@ func TestRestageForkAtKeptHeadPinsCandidateBeforeReset(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(c.Worktree, "candidate.txt")); !os.IsNotExist(err) {
 		t.Fatalf("candidate file survived the reset: %v", err)
 	}
-	if got := runGit(t, f.root, "rev-parse", pinRef(c.RunID)+"^{commit}"); got != c.HeadSHA {
-		t.Fatalf("root run pin = %s, want retained candidate %s", got, c.HeadSHA)
+	if got := runGit(t, c.Worktree, "rev-parse", pinRef(c.RunID)+"^{commit}"); got != c.HeadSHA {
+		t.Fatalf("fork run pin = %s, want retained candidate %s", got, c.HeadSHA)
 	}
-	if got := runGit(t, f.root, "show", pinRef(c.RunID)+":candidate.txt"); got != "fork-only candidate" {
-		t.Fatalf("root pin lost the fork candidate contents: %q", got)
+	if _, err := l.revParse(ctx, f.root, pinRef(c.RunID)+"^{commit}"); err == nil {
+		t.Fatal("fork run was pinned in the root repository")
 	}
 	if got := runGit(t, f.root, "rev-parse", c.BaseRef); got != c.BaseSHA {
 		t.Fatalf("delivery ref moved to %s, want %s", got, c.BaseSHA)
@@ -43,7 +43,7 @@ func TestRestageForkAtKeptHeadPinsCandidateBeforeReset(t *testing.T) {
 func TestForkCleanupPinFailureHoldsStageWithoutReset(t *testing.T) {
 	f, l, c := heldForkFixture(t)
 	ctx := context.Background()
-	lockRunPin(t, f.root, c.RunID)
+	lockRunPin(t, c.Worktree, c.RunID)
 	stager := &LaneStager{Root: f.root, Store: f.storePath, LaneRoot: l.cfg.LaneRoot, Now: l.cfg.Now}
 	l.cfg.Stage = stagerFunc(func(ctx context.Context, spec StageSpec) error {
 		spec.KeptHeadSHA = c.BaseSHA
@@ -72,7 +72,7 @@ func TestForkCleanupPinFailureHoldsStageWithoutReset(t *testing.T) {
 	}
 }
 
-func TestPinLaneImportsForkCandidateIntoRoot(t *testing.T) {
+func TestPinLaneKeepsForkCandidateInFork(t *testing.T) {
 	f, l, c := heldForkFixture(t)
 	ctx := context.Background()
 	head := l.headOf(ctx, c.LaneID)
@@ -82,11 +82,11 @@ func TestPinLaneImportsForkCandidateIntoRoot(t *testing.T) {
 	if err := l.pinLane(ctx, c.LaneID, c.RunID, head); err != nil {
 		t.Fatalf("pinning a candidate absent from root: %v", err)
 	}
-	if got := runGit(t, f.root, "rev-parse", pinRef(c.RunID)+"^{commit}"); got != c.HeadSHA {
-		t.Fatalf("root run pin = %s, want imported candidate %s", got, c.HeadSHA)
+	if got := runGit(t, c.Worktree, "rev-parse", pinRef(c.RunID)+"^{commit}"); got != c.HeadSHA {
+		t.Fatalf("fork run pin = %s, want %s", got, c.HeadSHA)
 	}
-	if got := runGit(t, f.root, "show", pinRef(c.RunID)+":candidate.txt"); got != "fork-only candidate" {
-		t.Fatalf("imported candidate contents = %q", got)
+	if _, err := l.revParse(ctx, f.root, c.HeadSHA+"^{commit}"); err == nil {
+		t.Fatal("pinning imported the fork-only commit into the root repository")
 	}
 	if got := runGit(t, c.Worktree, "rev-parse", "HEAD"); got != c.HeadSHA {
 		t.Fatalf("pinning changed fork HEAD to %s", got)
@@ -113,7 +113,7 @@ func lockRunPin(t *testing.T, root, runID string) {
 func TestForkRunPinFailureHoldsItemWithoutStoppingLoop(t *testing.T) {
 	f, l, c := heldForkFixture(t)
 	ctx := context.Background()
-	lockRunPin(t, f.root, c.RunID)
+	lockRunPin(t, c.Worktree, c.RunID)
 	pinErr := l.pinLane(ctx, c.LaneID, c.RunID, c.HeadSHA)
 	if pinErr == nil || !strings.Contains(pinErr.Error(), "lock") || !strings.Contains(pinErr.Error(), pinRef(c.RunID)) {
 		t.Fatalf("pin error = %v, want this run's ref-lock failure", pinErr)
