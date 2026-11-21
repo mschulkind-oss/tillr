@@ -1693,6 +1693,8 @@ func (p *planner) retryHoldReason(itemID string) string {
 		return ReasonLandingReverted
 	case RefusalLand:
 		return ReasonLandRefused
+	case RefusalDeliveryOrder:
+		return RefusalDeliveryOrder
 	case RefusalConflict:
 		// The latest run hit a squash conflict that no conflict-fix run answered. Since the
 		// owner's ruling of 2026-11-17 it goes back to the worker on the latest trunk

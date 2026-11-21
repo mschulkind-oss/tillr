@@ -22,6 +22,7 @@ type terminalSteps struct {
 	recordingSteps
 	gates, lands, verdicts, states int
 	gateOutcome                    string
+	gateErr                        error
 	landOutcome                    LandOutcome
 	duringGate, duringLand         func()
 }
@@ -35,7 +36,7 @@ func (s *terminalSteps) Gate(context.Context, Candidate) (GateOutcome, error) {
 	if outcome == "" {
 		outcome = GatePassed
 	}
-	return GateOutcome{Outcome: outcome}, nil
+	return GateOutcome{Outcome: outcome}, s.gateErr
 }
 
 func (s *terminalSteps) Land(context.Context, Candidate) (LandOutcome, error) {
@@ -296,6 +297,21 @@ func TestARunWhoseItemIsAlreadyTerminalIsSettledWithoutJudging(t *testing.T) {
 			})
 		}
 	}
+}
+
+func TestClosingItemDuringCandidateFaultSettlesRunUnjudged(t *testing.T) {
+	p := newPendingTerminalFixture(t, true, "")
+	steps := &terminalSteps{
+		duringGate: func() { finishByHand(t, p.f, "closed") },
+		gateErr:    Internalf("could not bind the candidate"),
+	}
+	l := p.replacement(t, steps)
+	before := snapshotStore(t, p.f.storePath)
+	result := runOnePass(t, l)
+	if steps.gates != 1 || steps.lands != 0 || steps.verdicts != 0 || steps.states != 0 {
+		t.Fatalf("closed candidate was judged or retried: %+v", steps)
+	}
+	assertSettledUnjudged(t, p, l, result, before, "closed")
 }
 
 // The item lands by hand while its run is being examined. Each step that would record

@@ -2131,6 +2131,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	if out, held := l.checkSurvivingRunProcesses(ctx, decision.ItemID, lane, record.RunID); held {
 		return out
 	}
+	if err := l.checkItemTerminal(ctx, decision.ItemID, "settle"); err != nil {
+		return laneOutcome{err: err}
+	}
 	worktree := l.lanePath(lane)
 	request := *decision.RunRequest
 	failedResume, err := failedDesignerResume(decision, record)
@@ -2780,6 +2783,9 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	l.mu.Lock()
 	result.Candidates++
 	l.mu.Unlock()
+	if refused, err := l.refuseOutOfOrderDelivery(ctx, candidate, result); refused || err != nil {
+		return "", false, err
+	}
 	// A fixer is rebased onto the current trunk before anything judges it, so the tree the
 	// gate sees is the tree the land would ship. The exemption's third rule depends on this
 	// running before the fence: a rebase moves the candidate's head, and the fence must be
@@ -3145,7 +3151,7 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	if published, err := l.recoverJudgePublication(ctx, candidate, result); published || err != nil {
 		return "", published && err == nil, err
 	}
-	if err := l.checkDeliveryOrder(ctx, candidate); err != nil {
+	if refused, err := l.refuseOutOfOrderDelivery(ctx, candidate, result); refused || err != nil {
 		return "", false, err
 	}
 	// Retrying a durable verdict skips the gate, not the recorded-head guard.

@@ -28,6 +28,7 @@ var landingHolds = map[string]string{
 	ReasonBoundaryScopeEscape: "",
 	ReasonGateFailed:          "",
 	ReasonLandRefused:         "",
+	RefusalDeliveryOrder:      "",
 	ReasonNoFence:             definition.PrerequisiteFence,
 	ReasonForkHeld:            "",
 	ReasonTrunkBroken:         "",

@@ -7,6 +7,7 @@ func TestLandingCallAnswerChoice(t *testing.T) {
 		{"fence-refused", "refused", "fence", ""},
 		{"judge-refused", "refused", "judge", ""},
 		{"gate-refused", "refused", "gate", ""},
+		{RefusalDeliveryOrder, "refused", RefusalDeliveryOrder, ""},
 		{"conflict", "conflict", "", ""},
 		{"reverted", "reverted", "", ""},
 		{"identical-repeat", "design-answer", "", ""},

@@ -253,6 +253,24 @@ type deliveryDecision struct {
 	ForkRun    string `json:"fork_run,omitempty"`
 }
 
+type repositoryBeforeFork struct{ fork string }
+
+func (e *repositoryBeforeFork) Error() string {
+	return fmt.Sprintf("land fork %s first, then offer the repository candidate", e.fork)
+}
+
+// A repository offer before the fork receipt is worker feedback. Any other
+// target mismatch is an examination fault, not instructions to change targets.
+func (l *Loop) refuseOutOfOrderDelivery(ctx context.Context, c Candidate, result *LoopResult) (bool, error) {
+	err := l.checkDeliveryOrder(ctx, c)
+	var early *repositoryBeforeFork
+	if !errors.As(err, &early) {
+		return false, err
+	}
+	c.RefusalDetail = early.Error()
+	return true, l.refuse(ctx, c, result, RefusalDeliveryOrder)
+}
+
 func (l *Loop) checkDeliveryOrder(ctx context.Context, c Candidate) error {
 	d, err := l.recordedDelivery(ctx, c.ItemID)
 	if err != nil {
@@ -262,6 +280,9 @@ func (l *Loop) checkDeliveryOrder(ctx context.Context, c Candidate) error {
 		return nil
 	}
 	patchRef := "refs/heads/patch/" + d.Fork
+	if d.ForkLanded == "" && c.BaseRef == "" {
+		return &repositoryBeforeFork{fork: d.Fork}
+	}
 	if d.ForkLanded == "" && c.BaseRef == patchRef ||
 		d.ForkLanded != "" && (c.BaseRef == "" || c.BaseRef == patchRef && c.RunID == d.ForkRun) {
 		return nil

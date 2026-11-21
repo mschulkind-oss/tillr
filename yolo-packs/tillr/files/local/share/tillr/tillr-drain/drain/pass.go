@@ -2552,13 +2552,8 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 	return c.outcome.stop, c.outcome.err
 }
 
-// holdSettleFailure holds one run's item when settling that run failed on a condition of
-// that item alone, including a run pin that Git refused to write. The hold names
-// the step and the underlying error, and the operator can repair and clear it.
-//
-// Other settle errors keep their recorded rules and still end the loop: a step's usage
-// refusal is a configuration fault every item shares, and a judgment the loop cannot record
-// fails the step. A store that refuses the hold itself is not one item's condition either.
+// holdSettleFailure handles specific run-completion errors outside the per-item
+// examination boundary in examineClaimed. The operator can repair and clear the fault.
 func (l *Loop) holdSettleFailure(c runCompletion) bool {
 	var collision *decisionCollisionError
 	var started *runStartError
@@ -3254,6 +3249,10 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 		completion.outcome = l.runCandidateExamination(ctx, work, local, timing)
 	}
 	completion.outcome = retainedOutcome(completion.outcome)
+	if completion.outcome.stop == "" && completion.outcome.err != nil {
+		completion.outcome.err = l.holdExaminationFailure(ctx, d, work, completion.step, completion.outcome.err)
+		completion.outcome = retainedOutcome(completion.outcome)
+	}
 	// A retained lane keeps its lease: releasing it would let the next staging clear the
 	// work that could not be preserved.
 	if completion.outcome.stop != stopLaneRetained {

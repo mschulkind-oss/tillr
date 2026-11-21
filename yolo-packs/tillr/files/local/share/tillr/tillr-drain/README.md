@@ -2307,13 +2307,15 @@ held: no writer has started, so other items can use the lane and the writer can
 claim a free lane after clearance.
 `decision-collision` holds an item whose planned decision could not be
 recorded, because its decision id is already recorded with other columns.
-`settle-failed` holds an item whose run could not be settled because of such a
-collision, naming the step and the error. It also holds the item of a run whose face
-could not start (`run exec` answered with no record, for example exit 5 when its lane
-claim met `SQLITE_BUSY`): the hold names the run and the face's words, and the loop goes
-on. Other settle errors keep their own rules: a
-step's usage refusal is a configuration fault and ends the loop, a judgment the loop
-cannot record fails the step, and a store that refuses the hold itself ends the loop.
+`settle-failed` holds an item whose claimed examination could not settle or judge
+its candidate, naming the step and the error. This includes an error regenerating
+the pack mirror. The operator fixes the cause and clears the fault; other items
+continue. An unreadable trunk or a store that cannot record the hold still ends the
+loop. A run whose face could not start can also be held as `settle-failed`.
+A repository candidate offered before the fork part of a mixed delivery is a
+`delivery-order` refusal instead: the worker gets the required order in the next
+brief. A closed item's pending run is cleaned up without judging or delivering its
+candidate.
 When the loop does end on an error, it appends a `drain.loop-ended` event (session,
 stop, detail, exit code) to the store before it writes its result file; a clean stop
 appends none.
