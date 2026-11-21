@@ -21,8 +21,8 @@ func (l *Loop) retryWorkflowNode(ctx context.Context, d Decision, base string, r
 				return retainedAfter(d.LaneID, stop)
 			}
 		}
-		if head != "" {
-			l.pinQuietly(ctx, rec.RunID, head)
+		if err := l.pinLane(ctx, d.LaneID, rec.RunID, head); err != nil {
+			return err
 		}
 	}
 	if err := l.recordBackendWindow(ctx, rec); err != nil {
@@ -107,8 +107,8 @@ func (l *Loop) recordWorkflowRestart(ctx context.Context, d Decision, base strin
 				return retainedAfter(d.LaneID, stop)
 			}
 		}
-		if head != "" {
-			l.pinQuietly(ctx, rec.RunID, head)
+		if err := l.pinLane(ctx, d.LaneID, rec.RunID, head); err != nil {
+			return err
 		}
 	}
 	policy := l.currentPolicy()

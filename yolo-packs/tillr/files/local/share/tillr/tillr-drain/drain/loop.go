@@ -1433,6 +1433,11 @@ func (l *Loop) prepareContinuedLane(ctx context.Context, decision Decision, item
 			"commit or remove the files, or reset the lane deliberately",
 			"lane %s holds uncommitted work (%s)", decision.LaneID, first)
 	}
+	if target != l.lanePath(decision.LaneID) {
+		stager := &LaneStager{Root: l.cfg.Root, Store: l.cfg.Store, LaneRoot: l.cfg.LaneRoot, Now: l.cfg.Now}
+		err := stager.restageForkAtKeptHead(ctx, StageSpec{LaneID: decision.LaneID, ItemID: itemID, KeptHeadSHA: expectedHead}, ForkTarget{Checkout: target, Ref: l.lanePatchRef(decision.LaneID)})
+		return err == nil, err
+	}
 	contained, err := containsCommit(ctx, l.cfg.Root, head, expectedHead)
 	if err != nil {
 		return false, err
@@ -1445,7 +1450,7 @@ func (l *Loop) prepareContinuedLane(ctx context.Context, decision Decision, item
 	}
 	if !contained {
 		stager := &LaneStager{Root: l.cfg.Root, Store: l.cfg.Store, LaneRoot: l.cfg.LaneRoot, Now: l.cfg.Now}
-		clearable, err := stager.clearableLaneCopy(ctx, decision.LaneID, itemID, head)
+		clearable, err := stager.clearableLaneCopy(ctx, decision.LaneID, itemID, head, "")
 		if err != nil {
 			return false, err
 		}
@@ -1855,7 +1860,8 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			l.mu.Unlock()
 			continue
 		}
-		if !IsItemContent(err) && isPerItemStageFailure(spec, err) {
+		var pinErr *runPinError
+		if errors.As(err, &pinErr) || (!IsItemContent(err) && isPerItemStageFailure(spec, err)) {
 			if holdErr := failStage("stage", err); holdErr != nil {
 				return nil, holdErr
 			}
@@ -2583,7 +2589,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 	if stop != "" {
 		// A stop is still a non-landing outcome: the head is pinned before this lane lets
 		// go, so an operator can inspect what the gate or the harness saw.
-		l.pinQuietly(ctx, request.RunID, candidate.HeadSHA)
+		if err := l.pinLane(ctx, lane, request.RunID, candidate.HeadSHA); err != nil {
+			return laneOutcome{err: err}
+		}
 		return laneOutcome{stop: stop}
 	}
 	if landed {
@@ -2930,7 +2938,9 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			// never to the owner (the owner's ruling of 2026-11-17).
 			// An identical repeat (the same conflict, given the same block) goes to the owner
 			// instead (design_repeat.go).
-			l.pinQuietly(ctx, candidate.RunID, candidate.HeadSHA)
+			if err := l.pinLane(ctx, candidate.LaneID, candidate.RunID, candidate.HeadSHA); err != nil {
+				return "", false, err
+			}
 			return "", false, l.settleDesignStatement(ctx, *candidate.BlockConflict, candidate.RunID, designCauseBlockRemoved, "removed its item block", func(c *item.Conflict) {
 				c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
 				c.Text += "\n\nDesign run " + candidate.RunID + " removed or renamed its item block " + ref + " in commit " + shortSHA(candidate.HeadSHA) + " (pinned at refs/tillr/runs/" + candidate.RunID + "). An answer keeps the block's directive and item id; the design seat is dispatched again."
@@ -3283,49 +3293,28 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	return "", true, nil
 }
 
-// headOf answers the lane's current HEAD, or "" when it cannot be read: a pin that cannot
-// name a head is skipped rather than failing the lane's bookkeeping.
+// headOf reads the worker checkout, not the boundary worktree of a fork lane.
+// A pin that cannot name a head is skipped rather than failing bookkeeping.
 func (l *Loop) headOf(ctx context.Context, lane string) string {
-	head, err := l.revParse(ctx, l.lanePath(lane), "HEAD")
+	head, err := l.revParse(ctx, l.laneTarget(lane), "HEAD")
 	if err != nil {
 		return ""
 	}
 	return head
 }
 
-// pin answers refs/tillr/runs/<run_id> at sha, so a head a non-landing inspected survives
-// the lane reset and any garbage collection before a conflict-fixer or a person reads it.
+// pin keeps a root commit reachable after lane reset and garbage collection.
 func (l *Loop) pin(ctx context.Context, runID, sha string) error {
-	if runID == "" || sha == "" {
-		return nil
-	}
-	// A pin is the one write that keeps a candidate reachable once its lane is reset, so a
-	// stop's cancellation does not cut it off: a stop that arrives mid-pin finishes the pin.
-	// The timeout bounds a wedged git rather than the stop.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), pinTimeout)
-	defer cancel()
-	ref := pinRef(runID)
-	if _, err := l.git(ctx, l.cfg.Root, "update-ref", ref, sha); err != nil {
-		return Externalf("pinning %s at %s: %v", ref, sha, err)
-	}
-	return nil
+	return l.pinFrom(ctx, "", runID, sha)
 }
 
-// pinLane pins a lane's commit. A fork-series lane's candidate lives in an isolated fork
-// checkout (laneTarget), whose objects are not in the repository root, and a fork change
-// delivers as a patch series, so there is nothing in the root to keep reachable: that one
-// case is skipped. A commit the root does hold, or a lane that is not a fork checkout, is
-// pinned, and any other `git update-ref` failure is returned.
+func (l *Loop) pinFrom(ctx context.Context, checkout, runID, sha string) error {
+	return writeRunPin(ctx, l.git, l.cfg.Root, checkout, runID, sha, false)
+}
+
+// pinLane also handles fork lanes, whose candidates live in a separate repository.
 func (l *Loop) pinLane(ctx context.Context, lane, runID, sha string) error {
-	if runID == "" || sha == "" {
-		return nil
-	}
-	if l.laneTarget(lane) != l.lanePath(lane) {
-		if _, err := l.git(ctx, l.cfg.Root, "cat-file", "-e", sha+"^{commit}"); err != nil {
-			return nil
-		}
-	}
-	return l.pin(ctx, runID, sha)
+	return l.pinFrom(ctx, l.laneForkTarget(lane), runID, sha)
 }
 
 // maxRefComponent is the longest one path component of a ref name the file system stores:
@@ -3345,16 +3334,8 @@ func pinRef(runID string) string {
 	return fmt.Sprintf("refs/tillr/runs-long/%x", sha256.Sum256([]byte(runID)))
 }
 
-// pinTimeout bounds one pin's `git update-ref`, which survives the loop's stop.
+// pinTimeout bounds the fetch and ref write that survive the loop's stop.
 const pinTimeout = 30 * time.Second
-
-// pinQuietly pins a head and reports a failure without failing the lane: the pin is
-// bookkeeping, and a lane that cannot be pinned is reported rather than left unreleased.
-func (l *Loop) pinQuietly(ctx context.Context, runID, sha string) {
-	if err := l.pin(ctx, runID, sha); err != nil {
-		l.reportf("loop: could not pin %s at %s: %v\n", runID, sha, err)
-	}
-}
 
 func (l *Loop) pendingItemBase(ctx context.Context, itemID string) (string, error) {
 	r, err := store.OpenRead(ctx, l.cfg.Store)
@@ -3562,8 +3543,8 @@ func (l *Loop) abandonFromBase(ctx context.Context, lane, runID, headSHA, base s
 	if err := l.preserveWorkFromBase(ctx, lane, runID, base, reason); err != nil {
 		return l.retainUnpreserved(ctx, lane, runID, headSHA, err)
 	}
-	if headSHA != "" {
-		l.pinQuietly(ctx, runID, headSHA)
+	if err := l.pinLane(ctx, lane, runID, headSHA); err != nil {
+		return l.retainUnpreserved(ctx, lane, runID, headSHA, err)
 	}
 	if runID != "" {
 		retained, err := l.retainedWorkerSession(ctx, runID)

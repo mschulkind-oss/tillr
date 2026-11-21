@@ -123,8 +123,12 @@ func (l *Loop) discardTerminalLane(ctx context.Context, lane, runID, headSHA str
 	if l.abortInProgress(ctx, target) || headSHA == "" {
 		headSHA, _ = l.revParse(ctx, target, "HEAD")
 	}
-	if headSHA != "" {
-		l.pinQuietly(ctx, runID, headSHA)
+	if err := l.pinLane(ctx, lane, runID, headSHA); err != nil {
+		if holdErr := l.holdItemFault(ctx, Candidate{ItemID: terminal.ItemID, LaneID: lane}, ReasonSettleFailed, err.Error()); holdErr != nil {
+			l.reportf("loop: lane %s retained, and its pin failure could not be recorded: %v\n", lane, holdErr)
+			return StopFault
+		}
+		return stopLaneRetained
 	}
 	body := laneDiscarded{RunID: runID, ItemID: terminal.ItemID, ItemState: terminal.State, LaneID: lane, HeadSHA: headSHA, Status: lines, Cause: cause.Error()}
 	if err := appendJudgment(ctx, l.cfg.Store, laneDiscardedKind, "run", runID, body, l.cfg.Now().UTC()); err != nil {

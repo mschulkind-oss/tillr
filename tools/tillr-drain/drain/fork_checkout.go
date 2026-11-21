@@ -64,7 +64,7 @@ func (s *LaneStager) restageForkAtKeptHead(ctx context.Context, spec StageSpec, 
 			return err
 		}
 		if _, err := s.git(ctx, fork.Checkout, "merge-base", "--is-ancestor", head, strings.TrimSpace(tip)); err != nil {
-			clearable, cerr := s.clearableLaneCopy(ctx, spec.LaneID, spec.ItemID, head)
+			clearable, cerr := s.clearableLaneCopy(ctx, spec.LaneID, spec.ItemID, head, fork.Checkout)
 			if cerr != nil {
 				return cerr
 			}

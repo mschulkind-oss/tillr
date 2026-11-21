@@ -103,7 +103,7 @@ func (l *Loop) conflictCycleOf(ctx context.Context, itemID string) (conflictCycl
 // landing call), and releases the dirty and repair holds recorded for the run. The planner
 // then dispatches the item's workflow from its first stage (returnedEnding).
 func (l *Loop) restartConflicted(ctx context.Context, candidate Candidate, landed LandOutcome, key, mainSHA string) error {
-	if err := l.pin(ctx, candidate.RunID, candidate.HeadSHA); err != nil {
+	if err := l.pinCandidateHead(ctx, candidate); err != nil {
 		return err
 	}
 	if err := l.preserveWork(ctx, candidate.LaneID, candidate.RunID, "candidate conflicted twice during landing"); err != nil {

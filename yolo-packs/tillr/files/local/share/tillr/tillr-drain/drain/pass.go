@@ -1126,8 +1126,11 @@ func (l *Loop) passPlansMode(ctx context.Context, at time.Time, generation *stri
 				l.retainUnpreserved(ctx, d.LaneID, id, l.headOf(ctx, d.LaneID), err)
 				continue
 			}
-			if head := l.headOf(ctx, d.LaneID); head != "" {
-				l.pinQuietly(ctx, id, head)
+			if err := l.pinLane(ctx, d.LaneID, id, l.headOf(ctx, d.LaneID)); err != nil {
+				if holdErr := l.holdItemFault(ctx, Candidate{ItemID: d.ItemID, RunID: id, LaneID: d.LaneID}, ReasonSettleFailed, err.Error()); holdErr != nil && asItemTerminal(holdErr) == nil {
+					return nil, nil, holdErr
+				}
+				continue
 			}
 			if err := l.resetLane(ctx, d.LaneID); err != nil {
 				return nil, nil, err
@@ -2385,10 +2388,8 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 }
 
 // holdSettleFailure holds one run's item when settling that run failed on a condition of
-// that item alone, and answers whether it did (the owner's ruling: the loop never stops on
-// one item's condition). The class is a decision collision: a decision id the store already
-// holds with other columns names one item's history, and the same plan would refuse it at
-// every start. The item is held with ReasonSettleFailed naming the step and the error.
+// that item alone, including a run pin that Git refused to write. The hold names
+// the step and the underlying error, and the operator can repair and clear it.
 //
 // Other settle errors keep their recorded rules and still end the loop: a step's usage
 // refusal is a configuration fault every item shares, and a judgment the loop cannot record
@@ -2396,7 +2397,8 @@ func (l *Loop) takeCompletion(c runCompletion, result *LoopResult) (string, erro
 func (l *Loop) holdSettleFailure(c runCompletion) bool {
 	var collision *decisionCollisionError
 	var started *runStartError
-	if c.itemID == "" || !(errors.As(c.outcome.err, &collision) || (c.step == "run" && errors.As(c.outcome.err, &started))) {
+	var pinErr *runPinError
+	if c.itemID == "" || !(errors.As(c.outcome.err, &pinErr) || errors.As(c.outcome.err, &collision) || (c.step == "run" && errors.As(c.outcome.err, &started))) {
 		return false
 	}
 	detail := c.step + ": " + c.outcome.err.Error()
@@ -2968,13 +2970,13 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 			// The run pin is the release's retained head. A crash after
 			// reset but before markExamined must never replace it with
 			// the reset trunk head on replay.
-			pinned, pinErr := l.git(ctx, l.cfg.Root, "for-each-ref", "--format=%(objectname)", "refs/tillr/runs/"+d.RunRequest.RunID)
+			pinned, pinErr := l.git(ctx, l.cfg.Root, "for-each-ref", "--format=%(objectname)", pinRef(d.RunRequest.RunID))
 			err = pinErr
 			if err == nil && strings.TrimSpace(pinned) == "" {
 				head, headErr := l.revParse(ctx, l.laneTarget(d.LaneID), "HEAD")
 				err = headErr
 				if err == nil {
-					err = l.pin(ctx, d.RunRequest.RunID, head)
+					err = l.pinLane(ctx, d.LaneID, d.RunRequest.RunID, head)
 				}
 			}
 			if err == nil {

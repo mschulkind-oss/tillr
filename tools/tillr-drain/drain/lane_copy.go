@@ -46,7 +46,7 @@ type laneCopyCleared struct {
 // one of them contains is a copy and not the only copy of anyone's work. Preserved-work refs
 // (refs/tillr/preserved/) do not count: retention prunes them.
 func (s *LaneStager) retainingRunPins(ctx context.Context, sha string) ([]string, error) {
-	out, err := s.git(ctx, s.Root, "for-each-ref", "--contains", sha, "--format=%(refname)", "refs/tillr/runs/")
+	out, err := s.git(ctx, s.Root, "for-each-ref", "--contains", sha, "--format=%(refname)", "refs/tillr/runs/", "refs/tillr/runs-long/")
 	if err != nil {
 		return nil, err
 	}
@@ -68,10 +68,20 @@ func (s *LaneStager) retainingRunPins(ctx context.Context, sha string) ([]string
 //
 // A stager given no store can read no landing, so only a pin clears; it records nothing,
 // because the pin is the retention and the event only the account of it.
-func (s *LaneStager) clearableLaneCopy(ctx context.Context, lane, itemID, sha string) (bool, error) {
-	refs, err := s.retainingRunPins(ctx, sha)
-	if err != nil {
-		return false, err
+func (s *LaneStager) clearableLaneCopy(ctx context.Context, lane, itemID, sha, checkout string) (bool, error) {
+	// A fork-only object cannot be contained by any root pin. Do not fetch
+	// it until the store has established that this item owns the commit.
+	var rootObjectErr error
+	if checkout != "" {
+		_, rootObjectErr = s.git(ctx, s.Root, "cat-file", "-e", sha+"^{commit}")
+	}
+	var refs []string
+	var err error
+	if rootObjectErr == nil {
+		refs, err = s.retainingRunPins(ctx, sha)
+		if err != nil {
+			return false, err
+		}
 	}
 	if s.Store == "" {
 		return len(refs) > 0, nil
@@ -105,7 +115,9 @@ func (s *LaneStager) clearableLaneCopy(ctx context.Context, lane, itemID, sha st
 		}
 		runs := []string{}
 		for _, ref := range refs {
-			runs = append(runs, strings.TrimPrefix(ref, "refs/tillr/runs/"))
+			if runID, ok := strings.CutPrefix(ref, "refs/tillr/runs/"); ok {
+				runs = append(runs, runID)
+			}
 		}
 		var runID string
 		err = reader.QueryRow(`SELECT json_extract(payload, '$.run_id') FROM events WHERE kind = 'land.landing' AND json_extract(payload, '$.result') = 'landed' AND json_extract(payload, '$.head_sha') = ? ORDER BY seq DESC LIMIT 1`, sha).Scan(&runID)
@@ -245,13 +257,10 @@ func (s *LaneStager) clearableLaneCopy(ctx context.Context, lane, itemID, sha st
 		return false, nil
 	}
 	if ownRunID != "" {
-		ref := "refs/tillr/runs/" + ownRunID
-		if _, verifyErr := s.git(ctx, s.Root, "rev-parse", "--verify", "--quiet", ref); verifyErr != nil {
-			if _, pinErr := s.git(ctx, s.Root, "update-ref", ref, sha); pinErr != nil {
-				return false, Externalf("pinning %s at %s: %v", ref, sha, pinErr)
-			}
+		if err := writeRunPin(ctx, s.git, s.Root, checkout, ownRunID, sha, true); err != nil {
+			return false, err
 		}
-		refs = append(refs, ref)
+		refs = append(refs, pinRef(ownRunID))
 		payload.Refs = refs
 		if payload.RunID == "" {
 			payload.RunID = ownRunID
