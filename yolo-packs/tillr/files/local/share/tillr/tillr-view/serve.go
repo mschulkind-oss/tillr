@@ -794,6 +794,7 @@ type itemView struct {
 // snapshotData is the two-item drain view: every item projected, with its runs and the
 // stage each run reached.
 type snapshotData struct {
+	Push   *pushSummary   `json:"push,omitempty"`
 	Alarms []alarms.Alarm `json:"alarms,omitempty"`
 
 	Sources    sourceStates `json:"sources"`
@@ -1108,6 +1109,7 @@ func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiF
 			buildNote = ""
 		}
 	}
+	out.Push = readPushSummary(req.Context(), r, s.root)
 	out.Drain = drainSummary{
 		UnreportedRuns:      unreported,
 		CostUnreportedRuns:  costUnreported,

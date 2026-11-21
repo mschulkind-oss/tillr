@@ -410,7 +410,22 @@ export interface QuestionsData {
   note?: string;
 }
 
+/** Green is the proven count and main is the total in every mode; null means unreadable. */
+export interface PushSummary {
+  what: string;
+  remote?: string;
+  ref?: string;
+  published_sha?: string;
+  unpublished_green_count?: number | null;
+  unpublished_main_count?: number | null;
+  state_kind?: string;
+  detail?: string;
+  mover?: string;
+  since?: string;
+}
+
 export interface SnapshotData {
+  push?: PushSummary;
   alarms?: BackendAlarm[];
   sources: SourceStates;
   /** The server's own counts, when the build that answered has them. */
