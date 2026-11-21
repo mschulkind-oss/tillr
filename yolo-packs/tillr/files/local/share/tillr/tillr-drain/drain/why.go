@@ -19,8 +19,11 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// WhyRow decorates a planner decision with references a human can follow. Decision
-// retains the full planner record; the presentation fields do not decide readiness.
+const whyRunAwaitsRecovery = "run-awaits-recovery"
+
+// WhyRow decorates a planner decision with references a human can follow. For a
+// lost worker, Why reports the observed hold instead of the planner's run-live
+// assumption. The presentation fields do not decide readiness.
 type WhyRow struct {
 	Place       int            `json:"place,omitempty"`
 	ItemID      string         `json:"item_id"`
@@ -246,6 +249,7 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		return answer, readFailure(err)
 	}
 	assigned := map[string]string{}
+	var liveRuns map[string]bool
 	for i, env := range envs {
 		it := items[i]
 		if (def.Completes == "landing" && it.State == StateLanded) || (def.Completes != "landing" && finishedState(def, it.State)) {
@@ -254,6 +258,16 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 		var d Decision
 		if err := json.Unmarshal(env.Payload, &d); err != nil {
 			return answer, Internalf("reading planner decision: %v", err)
+		}
+		if d.Reason == ReasonRunLive && tick.StorePath != "" {
+			lost, err := lostRunAfterSession(r, tick.StorePath, works[it.ItemID], &liveRuns)
+			if err != nil {
+				return answer, err
+			}
+			if lost {
+				d.From, d.Reason = "held", whyRunAwaitsRecovery
+				identifyDecision(&d)
+			}
 		}
 		class, where, mover := whyPresentation(d)
 		row := WhyRow{Place: places[it.ItemID], ItemID: it.ItemID, State: it.State, Position: d.Position, Reason: d.Reason, Why: d.Reason, Class: class, Where: where, Mover: mover, Since: "current plan", ClassSource: "planner", WaitingOn: []string{}, Decision: d}
@@ -618,7 +632,42 @@ func Why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource) (
 	return answer, nil
 }
 
+// An ended dispatch session can still have live workers. Check the same process
+// markers the reaper uses, once per answer, and do not infer absence in another
+// process domain or while a live session may still be launching the run.
+func lostRunAfterSession(r *store.Reader, path string, work *pendingWork, live *map[string]bool) (bool, error) {
+	if work == nil || work.Owner == nil || work.Examining || work.Ready || work.LoopID == "" {
+		return false, nil
+	}
+	here, err := currentLoopOwner()
+	if err != nil {
+		return false, err
+	}
+	if work.Owner.Domain != here.Domain || work.Owner.UID != here.UID {
+		return false, nil
+	}
+	ended, err := dispatchSessionEnded(r, work.LoopID)
+	if err != nil || !ended {
+		return false, err
+	}
+	if *live == nil {
+		*live, err = liveRunIDs(path)
+		if err != nil {
+			return false, err
+		}
+	}
+	for _, node := range parallelNodes(work.Decision) {
+		if (*live)[node.RunRequest.RunID] {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 func whyPresentation(d Decision) (class, where, mover string) {
+	if d.Reason == whyRunAwaitsRecovery {
+		return "waits on work", "lane", "reconcile the ended session's run with no surviving process"
+	}
 	if strings.HasPrefix(d.Reason, "prose-criteria-count: ") {
 		return "needs you", "queue", "the owner; reconcile the original criteria"
 	}
