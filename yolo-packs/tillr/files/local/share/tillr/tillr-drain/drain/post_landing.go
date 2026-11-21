@@ -87,10 +87,7 @@ func (l *Loop) afterLanding(ctx context.Context, tip string) {
 func (l *Loop) afterLandingCandidate(ctx context.Context, candidate Candidate, tip string) {
 	if candidate.BaseRef == "" {
 		if p := l.cfg.PostLanding.Push; p.What == settings.PushTip {
-			l.pushAction.submit(tip, func(tip string) {
-				_, err := l.pushTipOnce(ctx, p)
-				l.recordPush(ctx, settings.PushTip, tip, err)
-			})
+			l.submitTipPush(ctx, p, tip)
 		}
 	}
 	r := l.cfg.PostLanding.Roll
@@ -154,6 +151,13 @@ func (l *Loop) rollChanged(ctx context.Context, r settings.Roll, changed, tip st
 	if matchesExtensionRollPaths(changed) {
 		l.submitExtensionRoll(ctx, r.Command, tip)
 	}
+}
+
+func (l *Loop) submitTipPush(ctx context.Context, p settings.Push, tip string) {
+	l.pushAction.submit(tip, func(tip string) {
+		_, err := l.pushTipOnce(ctx, p)
+		l.recordPush(ctx, settings.PushTip, tip, err)
+	})
 }
 
 func (l *Loop) submitPiRoll(ctx context.Context, command, tip string) {

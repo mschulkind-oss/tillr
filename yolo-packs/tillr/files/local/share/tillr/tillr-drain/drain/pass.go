@@ -2513,6 +2513,9 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	if err := l.checkStopRequested(ctx); err != nil {
 		return "", err
 	}
+	if !l.nonLanding {
+		l.maybeRecoverClearedPushHold(ctx)
+	}
 	if err := l.maybeRolling(ctx, mainSHA, false, result); err != nil {
 		return "", err
 	}

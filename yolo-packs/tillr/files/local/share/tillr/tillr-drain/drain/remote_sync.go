@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/mschulkind-oss/tillr/settings"
@@ -71,6 +72,54 @@ func (l *Loop) pushGreenOnce(ctx context.Context, p settings.Push) (string, erro
 		return green, err
 	}
 	return green, err
+}
+
+func onMain(ctx context.Context, root string) bool {
+	head, err := rawGit(ctx, root, nil, "symbolic-ref", "-q", "HEAD")
+	return err == nil && strings.TrimSpace(head) == "refs/heads/"+TrunkRef
+}
+
+// Only a previously blocked push can be woken by a pass. Checking for clearance
+// uses local state; the actual push turn fetches and revalidates under the usual replay rules.
+func (l *Loop) maybeRecoverClearedPushHold(ctx context.Context) {
+	p, root := l.cfg.PostLanding.Push, l.cfg.Root
+	if (p.What != settings.PushGreen && p.What != settings.PushTip) || l.pushAction.busy() || l.cfg.Store == "" {
+		return
+	}
+	last := l.lastPushRecord(ctx)
+	switch last.Kind {
+	case pushKindPatchMoveHeld:
+		if l.patchMoveHeld(ctx) {
+			return
+		}
+	case pushKindWorktreeDirty:
+		if !onMain(ctx, root) || last.ResetTarget == "" || optionalCommit(ctx, root, "MERGE_HEAD") != "" {
+			return
+		}
+		// Test the two-tree checkout that reset --keep would do, without writing
+		// the index or worktree. Unrelated local changes don't block the move.
+		if _, err := rawGit(ctx, root, nil, "read-tree", "--dry-run", "-m", "-u", "HEAD", last.ResetTarget); err != nil {
+			return
+		}
+	default:
+		return
+	}
+	l.triggerPushNow(context.WithoutCancel(ctx))
+}
+
+func (l *Loop) triggerPushNow(ctx context.Context) {
+	p := l.cfg.PostLanding.Push
+	if !HasUnpublishedCommits(ctx, l.cfg.Root, p) {
+		return
+	}
+	switch p.What {
+	case settings.PushGreen:
+		l.afterGreen(ctx, "hold-cleared")
+	case settings.PushTip:
+		if tip := optionalCommit(ctx, l.cfg.Root, "refs/heads/"+TrunkRef); tip != "" {
+			l.submitTipPush(ctx, p, tip)
+		}
+	}
 }
 
 // HasUnpublishedCommits reports whether the configured publication tip is ahead of the known remote tip.
