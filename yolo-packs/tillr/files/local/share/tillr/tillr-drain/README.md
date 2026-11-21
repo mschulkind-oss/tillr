@@ -1147,10 +1147,10 @@ push runs again at once. A checkout off `main` or a refused replay reset records
 `remote-sync-worktree-dirty` and names the operator as mover. The loop retries once
 `main` is checked out and the reset no longer clashes, or once a `push-patch-move-held`
 hold clears, and only if commits remain unpublished in the configured push mode.
-Unrelated edits do not have to be removed. A replay conflict or a merge commit among
-the unpublished commits fails the push with `mover: operator` and commands to run by
-hand. The [design's conflict-repair run and escalation](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md)
-are not built yet.
+Unrelated edits do not have to be removed. A merge commit among the unpublished commits
+still requires operator reconciliation. When the replay instead stops at a conflict,
+the drain leaves `main`, green and the checkout unchanged and files a
+[fenced repair](#remote-sync-conflict-repair). The drain never forces a push.
 Before a due push and again after a refusal, the drain checks that the fetched remote tip
 contains `refs/tillr/published/<remote>/<branch>` (or the remote-tracking tip if there is no
 published pointer yet). Without either ref, a due push skips the guard fetch. A rewind or
@@ -2888,9 +2888,13 @@ history; in that case the run pin stays.
 | `green` | The proof process advances this one pointer to proved trunk history. Cleanup never deletes it. |
 | `trunk-history/observed`, `trunk-history/lost`, `trunk-history/accepted/<lost-tip>` | The loop tracks the observed trunk and retains unresolved lost history. Accepting a rewrite removes `lost` and keeps its accepted-history pointer indefinitely. This cleanup deletes none of them. |
 
-Remote-sync filing describes a `remote-sync-conflict` as one express repair item
-per remote tip, with a fence containing only the literal, permitted conflict
-paths. If any path is gate code or cannot be represented in the fence, the
+### Remote-sync conflict repair
+
+The drain records `remote-sync-conflict` and files or reuses one express repair item
+`sync-remote-<short(R)>` per fetched remote tip, fenced to the literal, permitted
+conflict paths. Its lane starts from the pinned replay prefix. Before the gate,
+the drain checks that the repair is one linear commit on that base and that changes
+outside the fence match the mechanical merge. If any path is gate code or cannot be represented in the fence, the
 item is blocked on the owner. Once dispatched, the repair follows generated-item
 obstacle routing: it can widen its fence over permissible paths, or escalate the
 conflict to the owner or operator. An identical repeated refusal holds the repair
@@ -2901,10 +2905,10 @@ commits. If the operator reconciles `main` by hand, the next sweep closes the
 repair and records `remote-sync-cleared` once without publishing or recording a
 landing. The filer does not move main, green or the main checkout. A newer
 conflicting tip supersedes an open repair for an older tip on the same destination,
-after any interrupted landing has been settled. First-conflict filing is not yet
-wired into the live refused-push path.
+after any interrupted landing has been settled.
 
-The repair landing path rechecks the pin and the gate binding. If replay hits
+The drain routes a gated repair to linear replay instead of the ordinary squash.
+Repair landing rechecks the pin and the gate binding. If replay hits
 another conflict, landing advances the pinned base and replaces the fence with
 that step's permitted conflict paths, without moving `main`. A candidate gated
 for an earlier step is refused at landing. Once replay is clean, landing records
@@ -2915,8 +2919,11 @@ replay tip, recording the rewrite and landing receipt and settling the item as
 landed. A manual push recovering a repair can file a conflict at a newer remote
 tip without closing the landed repair. Tip mode pushes the new tip; green mode
 keeps green behind the first resolution and records
-`remote-sync-proving` until proof reaches the replayed tip. Ordinary candidate
-landing does not yet call the repair landing path.
+`remote-sync-proving` until proof reaches the replayed tip. The
+[refused-push design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/tillr-refused-push.md) explains the replay
+and its recovery guarantees.
+
+### Set-aside and recovery pointers
 
 Set-aside also writes `runs/<run>-set-aside-base`, a pointer to the lane's reset
 destination so an interrupted reset can resume. It follows its owning run's

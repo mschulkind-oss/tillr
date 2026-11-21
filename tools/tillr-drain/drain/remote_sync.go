@@ -58,11 +58,11 @@ func PushOnce(ctx context.Context, root, storePath string) (PushOutcome, error) 
 		return PushOutcome{}, err
 	}
 	l := &Loop{cfg: LoopConfig{Root: root, Store: storePath, Now: time.Now, Report: io.Discard, PostLanding: cfg}}
-	l.recoveredRemoteSync, err = l.recoverRemoteSyncReplay(ctx)
+	replay, err := l.recoverRemoteSyncReplay(ctx)
 	if err != nil {
 		return PushOutcome{}, err
 	}
-	if replay := l.recoveredRemoteSync; replay != nil {
+	if replay != nil {
 		if cfg.Push.What == settings.PushGreen {
 			l.publishRemoteSyncReplay(ctx, replay.Candidate.ItemID, replay.publication())
 		} else {

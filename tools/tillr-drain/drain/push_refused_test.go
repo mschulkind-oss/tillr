@@ -2,7 +2,9 @@ package drain
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -93,19 +95,108 @@ func TestRefusedPushRebasesOntoTheMovedRemote(t *testing.T) {
 	}
 }
 
-// A conflicting remote commit changes nothing and the failure names the mover and commands.
-func TestRefusedPushConflictChangesNothing(t *testing.T) {
-	p := newPushFixture(t)
-	p.remoteCommit(t, "two.txt", "remote version\n")
-	err := p.refused(t)
-	before := runGit(t, p.f.root, "rev-parse", "HEAD")
-	green := runGit(t, p.f.root, "rev-parse", GreenRef)
-	_, herr := p.l.healRefusedPush(context.Background(), settings.Push{}, err)
-	if herr == nil || !strings.Contains(herr.Error(), "mover: operator") || !strings.Contains(herr.Error(), "git rebase FETCH_HEAD") {
-		t.Fatalf("failure = %v", herr)
-	}
-	if runGit(t, p.f.root, "rev-parse", "HEAD") != before || runGit(t, p.f.root, "rev-parse", GreenRef) != green || runGit(t, p.f.root, "status", "--porcelain") != "" {
-		t.Fatal("a conflict changed the trunk, green or the checkout")
+// A refused push files work without touching main; a gated repair makes it publishable.
+func TestRefusedPushConflictRepairsAndPublishes(t *testing.T) {
+	for _, mode := range []string{settings.PushGreen, settings.PushTip} {
+		t.Run(mode, func(t *testing.T) {
+			p := newPushFixture(t)
+			ctx := context.Background()
+			root := p.f.root
+			p.l.cfg.PostLanding.Push.What = mode
+			remoteTip := p.remoteCommit(t, "two.txt", "remote version\n")
+			runGit(t, p.remote, "config", "receive.denyNonFastForwards", "true")
+			trace := filepath.Join(t.TempDir(), "git-trace")
+			t.Setenv("GIT_TRACE", trace)
+			before := runGit(t, root, "rev-parse", "HEAD")
+			green := runGit(t, root, "rev-parse", GreenRef)
+			p.l.triggerPushNow(ctx)
+			waitAction(t, func() bool { return !p.l.pushAction.busy() })
+			id := RemoteSyncItemID(remoteTip)
+			if ev := lastPushEvent(t, p.f); ev["kind"] != pushKindConflict || !strings.Contains(fmt.Sprint(ev["detail"]), "mover: "+id) {
+				t.Fatalf("refusal did not file repair work: %+v", ev)
+			}
+			if runGit(t, root, "rev-parse", "HEAD") != before || runGit(t, root, "rev-parse", GreenRef) != green || runGit(t, root, "status", "--porcelain") != "" {
+				t.Fatal("a conflict changed the trunk, green or the checkout")
+			}
+			st, ok, err := p.l.readRemoteSyncState(ctx, id)
+			if err != nil || !ok {
+				t.Fatalf("missing staged conflict: %+v, %v", st, err)
+			}
+			lane := p.l.cfg.Lanes[0]
+			wt := p.l.laneTarget(lane)
+			runGit(t, wt, "checkout", "-q", "--detach", remoteSyncPinRef(id))
+			worker := exec.CommandContext(ctx, "sh", "-ec", `
+				printf 'resolved two\n' > two.txt
+				git add two.txt
+				git commit -qm 'resolve two.txt'
+			`)
+			worker.Dir = wt
+			if out, err := worker.CombinedOutput(); err != nil {
+				t.Fatalf("repair worker: %v: %s", err, out)
+			}
+			c := Candidate{ItemID: id, LaneID: lane, RunID: "run-sync-repair", Worktree: wt, BaseSHA: st.BaseSHA, HeadSHA: runGit(t, wt, "rev-parse", "HEAD")}
+			gateRemoteSyncRepair(t, p, c)
+			p.l.cfg.Steps = nil // settle the generated item in-process
+			var result LoopResult
+			tip, landed, err := p.l.landCandidate(ctx, c, &result, nil)
+			if err != nil || !landed || tip == "" || result.Landed != 1 {
+				t.Fatalf("repair landing = %q, %v, %v; landed %d", tip, landed, err, result.Landed)
+			}
+			waitAction(t, func() bool { return !p.l.pushAction.busy() })
+			if mode == settings.PushGreen {
+				if ev := lastPushEvent(t, p.f); ev["kind"] != pushKindProving || ev["rebased_tip"] != tip {
+					t.Fatalf("repair did not wait for proof: %+v", ev)
+				}
+				if got := runGit(t, p.remote, "rev-parse", TrunkRef); got != remoteTip {
+					t.Fatalf("remote published before proof: %s", got)
+				}
+				p.l.gatePolicy.LandingStrategy = "after-merge"
+				p.l.cfg.Steps = heavyTestSteps{judge: func(context.Context, string, string) ([]HeavyCheck, error) {
+					return []HeavyCheck{{CheckID: "fixture", Result: "pass"}}, nil
+				}}
+				if err := p.l.maybeRolling(ctx, tip, false, &result); err != nil {
+					t.Fatal(err)
+				}
+				p.l.heavyWG.Wait()
+				waitAction(t, func() bool { return !p.l.pushAction.busy() })
+				if got := runGit(t, root, "rev-parse", GreenRef); got != tip {
+					t.Fatalf("proof advanced green to %s, want %s", got, tip)
+				}
+			}
+			if ev := lastPushEvent(t, p.f); ev["kind"] != pushKindOK || ev["remote_tip"] != tip {
+				t.Fatalf("publication did not clear the push waiting state: %+v", ev)
+			}
+			if got := runGit(t, p.remote, "rev-parse", TrunkRef); got != tip {
+				t.Fatalf("remote tip = %s, want repaired tip %s", got, tip)
+			}
+			if runGit(t, root, "merge-base", remoteTip, TrunkRef) != remoteTip || runGit(t, root, "rev-list", "--merges", "--count", TrunkRef) != "0" {
+				t.Fatal("main was not replayed linearly atop the remote")
+			}
+			if got := runGit(t, root, "show", tip+":two.txt"); got != "resolved two" {
+				t.Fatalf("published repair content = %q", got)
+			}
+			if got := runGit(t, root, "rev-list", "--count", remoteTip+".."+tip); got != "3" {
+				t.Fatalf("published %s commits beyond the remote tip, want the repair and both clean commits", got)
+			}
+			log, err := os.ReadFile(trace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pushes := 0
+			for _, line := range strings.Split(string(log), "\n") {
+				if _, args, ok := strings.Cut(line, "built-in: git push "); ok {
+					pushes++
+					for _, arg := range strings.Fields(args) {
+						if strings.HasPrefix(arg, "--force") || strings.HasPrefix(arg, "+") || arg == "-f" {
+							t.Fatalf("forced push: %s", line)
+						}
+					}
+				}
+			}
+			if pushes < 2 {
+				t.Fatalf("trace shows %d pushes; want the refusal and publication", pushes)
+			}
+		})
 	}
 }
 

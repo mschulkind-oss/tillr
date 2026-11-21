@@ -787,7 +787,24 @@ def case_workflow_judge_documented():
     ok("operator and consumer docs describe judgment as a workflow step")
 
 
+def case_refused_push_documented():
+    required = {
+        ROOT / "tools/tillr-drain/README.md": (
+            "tillr drain push", "push-remote-declined", "push-patch-move-held", "remote-sync-conflict",
+        ),
+        ROOT / "tools/tillr-land/README.md": ("gated remote-sync repairs", "trunk_after", "replay_tip"),
+        ROOT / "tools/tillr-view/README.md": ("remote-sync-conflict", "push-remote-declined", "push-failed"),
+        SKILL: ("tillr drain push", "push-remote-declined", "remote-sync-conflict"),
+    }
+    for path, phrases in required.items():
+        for phrase in phrases:
+            if phrase not in text_of(path):
+                fail(f"{path.relative_to(ROOT)} omits the refused-push term {phrase!r}")
+    ok("the refused-push states, repair landing and push face are documented")
+
+
 def main():
+    case_refused_push_documented()
     case_workflow_judge_documented()
     case_run_timing_and_schedule_documented()
     case_seed_retirement_documented()

@@ -78,10 +78,11 @@ since green with both bounds disabled.
   [`queue-persistence-ruling.md`](../../docs/design/queue-persistence-ruling.md#3-landing-receipts-without-commit-trailers)), and
   `Trunk.Move` fast-forwards the trunk onto it. The landed tree is the tree the verdict
   judged unless the trunk moved, and the row records both so a reader can tell.
-  A single-step remote-sync replay uses the same landing row and event, with
-  `trunk_after` identifying the gated repair and `replay_tip` identifying the
-  tip after the suffix was replayed. The ordinary landing command does not
-  invoke that repair path.
+  The drain routes gated remote-sync repairs around the ordinary squash. It
+  records a completed linear replay with the same landing row and event:
+  `trunk_after` identifies the gated repair, and `replay_tip` identifies `main`
+  after replaying the remaining commits. The standalone landing command does not
+  run this repair path.
 - **No store write is open while git runs or a file is touched.** Under `land.lock`,
   ancestry, squash, clash checks and range preservation happen outside SQLite
   transactions. The publication is then three steps: a short write that rechecks

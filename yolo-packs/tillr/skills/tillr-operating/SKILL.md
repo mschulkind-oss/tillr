@@ -528,6 +528,18 @@ same proof, but refuses even a verified rewrite: run `bin/patch-branches-publish
 A force flag or explicit refspec does not waive proof. If the remote tip or receipts do
 not match, inspect both before proceeding; leave the remote tip alone.
 
+For a refused trunk push, use `tillr view waiting` to identify the mover. A
+`remote-sync-conflict` normally waits on the generated `sync-remote-<short(R)>`
+repair item, not on a document block. Let the worker finish unless the row names
+an owner or operator escalation. `remote-sync-proving` waits on heavy proof in
+green mode; tip mode publishes the completed replay at once. If the row names
+you, clear the reported cause first: reconcile `remote-rewritten` without forcing
+publication, check out `main` or deal with clashing edits for
+`remote-sync-worktree-dirty`, acknowledge a verified `push-patch-move-held`, or
+inspect the server's reason for `push-remote-declined` and the failure detail for
+`push-failed`. Run `tillr drain push` for one synchronous push-or-heal turn against
+the configured destination.
+
 Use `tillr drain examine` to judge one retained candidate through the loop's own
 gate, landing and verdict steps. Supply the same step programs and backend policy
 as the loop. It refuses a lane that is held: stop its loop first, then examine the

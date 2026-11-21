@@ -2624,6 +2624,8 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	if err := l.refreshPolicy(); err != nil {
 		return "", err
 	}
+	// Settle an interrupted repair before trunk observation or the stale-stage sweep
+	// can mistake its replay for a manual reconciliation.
 	if replay, err := l.recoverRemoteSyncReplay(ctx); err != nil {
 		return "", err
 	} else if replay != nil {
