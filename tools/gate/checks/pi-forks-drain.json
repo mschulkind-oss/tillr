@@ -1,0 +1,11 @@
+{
+  "id": "pi-forks-drain",
+  "label": "Fork driver integration with drain delivery and successive lane bases",
+  "command": ["python3", "tools/gate/checks/pi-forks-drain.py"],
+  "scope": "change",
+  "tier": "heavy",
+  "timeout_ms": 120000,
+  "reads": ["bin/pi-forks", "tools/fork-check.py", "tools/gate/checks/pi-forks-drain.json", "tools/gate/checks/pi-forks-drain.py"],
+  "tools": ["bash", "git", "go", "python3"],
+  "remember": false
+}

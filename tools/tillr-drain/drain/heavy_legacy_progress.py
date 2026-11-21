@@ -20,7 +20,7 @@ spec.loader.exec_module(gate)
 original = gate.execute_check
 identity = gate.declaration_id
 status = gate.check_status
-state = {"tip_sha": tip, "checks": {}, "reused": []}
+state = {"tip_sha": tip, "checks": {}, "reused": [], "go_failures": {}}
 
 
 def changed_between(old, new):
@@ -104,7 +104,15 @@ def observe(check, root, diff_base, *args, **kwargs):
             publish()
             return
     original(check, root, diff_base, *args, **kwargs)
-    if status(check) in ("PASS", "ok", "CACHED"):
+    verdict = status(check)
+    if check.kind == "go-tool" and verdict == "FAIL":
+        # Reports keep only the tail of a failed check. Preserve every shard
+        # header before that truncation, including any failure without a case.
+        headers = [line for line in check.output.splitlines() if line.startswith("go-test-shards: ")]
+        with lock:
+            state["go_failures"][key] = headers
+            publish()
+    if verdict in ("PASS", "ok", "CACHED"):
         with lock:
             state["checks"][key] = {"seconds": check.seconds, "proved_at": check.ended,
                                     "watches": list(getattr(check, "watches", ()) or ()),

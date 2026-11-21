@@ -360,9 +360,8 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 	}
 	byLanding := map[string][]HeavyCheck{}
 	order := []string{}
-	// bisected names the landings the bisection itself found: only those may be
-	// reverted. A judge's own FirstRedLanding (a second stall names the tip) is a place
-	// to start a fixer, not an attribution.
+	// Only checks with a single attributed, recorded culprit can authorize a
+	// revert. Even checks sharing a landing must keep that decision separate.
 	bisected := map[string]bool{}
 	for i := range run.Checks {
 		check := &run.Checks[i]
@@ -387,7 +386,7 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 			case a.offered && a.stillRed && against != run.TipSHA:
 				against = run.TipSHA
 			case !a.offered && a.bisected:
-				bisected[against] = true
+				bisected[check.CheckID] = true
 			}
 		} else {
 			var found bool
@@ -397,7 +396,7 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 				return run, err
 			}
 			if found {
-				bisected[against] = true
+				bisected[check.CheckID] = true
 			}
 		}
 		if len(byLanding[against]) == 0 {
@@ -460,6 +459,26 @@ func (r HeavyRunner) attribute(ctx context.Context, run HeavyRun, check *HeavyCh
 		if against == "" {
 			against = run.TipSHA
 		} else if !fault {
+			if strings.HasPrefix(check.CheckID, goTestPrefix) {
+				others, err := r.additionalGoCulprits(ctx, run, *check, red)
+				if errors.Is(err, errHeavyTipMoved) || cleanupLost(err) {
+					return "", false, err
+				}
+				if currentErr := r.requireCurrentTip(ctx, run.TipSHA); currentErr != nil {
+					return "", false, currentErr
+				}
+				if len(others) > 0 {
+					culprits := append([]string{red}, others...)
+					check.Detail = joinDetail(check.Detail, "multiple first-red commits for this test: "+strings.Join(culprits, ", "))
+				}
+				if err != nil {
+					check.Detail = joinDetail(check.Detail, "additional attribution gave no verdict: "+err.Error())
+				}
+				if len(others) > 0 || err != nil {
+					check.Detail = joinDetail(check.Detail, "not reverting a single landing; fixer filed against the tip")
+					return run.TipSHA, false, nil
+				}
+			}
 			recorded, err := r.hasLandingRecord(ctx, red)
 			if err != nil {
 				return "", false, err
@@ -497,30 +516,40 @@ func (r HeavyRunner) revert(ctx context.Context, run *HeavyRun, order []string, 
 	remaining := []string{}
 	moved := []HeavyCheck{}
 	for _, sha := range order {
-		if !bisected[sha] {
-			remaining = append(remaining, sha)
-			continue
-		}
-		out := RevertOutcome{Reverted: reverted[sha]}
-		if out.Reverted == "" {
-			var err error
-			if out, err = r.offerRevert(ctx, run.TipSHA, sha, byLanding[sha]); err != nil {
-				return nil, err
+		var eligible, keep []HeavyCheck
+		for _, check := range byLanding[sha] {
+			if bisected[check.CheckID] {
+				eligible = append(eligible, check)
+			} else {
+				keep = append(keep, check)
 			}
 		}
-		for i := range byLanding[sha] {
-			byLanding[sha][i].RevertedBy, byLanding[sha][i].RevertRefused = out.Reverted, out.Refused
-		}
-		for i := range run.Checks {
-			if run.Checks[i].Result == "fail" && run.Checks[i].FirstRedLanding == sha {
-				run.Checks[i].RevertedBy, run.Checks[i].RevertRefused = out.Reverted, out.Refused
+		if len(eligible) > 0 {
+			out := RevertOutcome{Reverted: reverted[sha]}
+			if out.Reverted == "" {
+				var err error
+				if out, err = r.offerRevert(ctx, run.TipSHA, sha, eligible); err != nil {
+					return nil, err
+				}
+			}
+			for _, check := range eligible {
+				check.RevertedBy, check.RevertRefused = out.Reverted, out.Refused
+				for i := range run.Checks {
+					if run.Checks[i].CheckID == check.CheckID {
+						run.Checks[i] = check
+					}
+				}
+				switch {
+				case out.Reverted != "":
+				case out.StillRed && sha != run.TipSHA:
+					moved = append(moved, check)
+				default:
+					keep = append(keep, check)
+				}
 			}
 		}
-		switch {
-		case out.Reverted != "":
-		case out.StillRed && sha != run.TipSHA:
-			moved = append(moved, byLanding[sha]...)
-		default:
+		byLanding[sha] = keep
+		if len(keep) > 0 {
 			remaining = append(remaining, sha)
 		}
 	}
@@ -553,13 +582,33 @@ func (r HeavyRunner) one(ctx context.Context, sha, id string) (bool, error) {
 	return red, err
 }
 
+// A counterfactual replay must not overwrite logs for the unmodified commit.
+type heavyInverseKey struct{}
+
 // oneLogged is one that also answers the file holding the replayed check's output when
 // it was red and the judge kept one.
-func (r HeavyRunner) oneLogged(ctx context.Context, sha, id string) (bool, string, error) {
+func (r HeavyRunner) oneLogged(ctx context.Context, sha, id string, removed ...string) (bool, string, error) {
 	ctx = context.WithValue(ctx, heavyProgressKey{}, (*heavyProgress)(nil))
 	var red bool
 	var logPath string
 	err := r.inTree(ctx, sha, func(dir string) error {
+		for i := len(removed) - 1; i >= 0; i-- {
+			commit := removed[i]
+			parents, err := heavyGitOutput(ctx, dir, "rev-list", "--parents", "-n", "1", commit)
+			if err != nil {
+				return err
+			}
+			args := []string{"revert", "--no-commit"}
+			if len(strings.Fields(parents)) > 2 {
+				args = append(args, "-m", "1")
+			}
+			if _, err := heavyGitOutput(ctx, dir, append(args, commit)...); err != nil {
+				return err
+			}
+		}
+		if len(removed) > 0 {
+			ctx = context.WithValue(ctx, heavyInverseKey{}, true)
+		}
 		checks, err := r.Judge(ctx, dir, id)
 		if err != nil {
 			return err
@@ -715,6 +764,15 @@ func (r HeavyRunner) replay(ctx context.Context, sha, id, why string) (bool, err
 }
 
 func (r HeavyRunner) firstRed(ctx context.Context, base, tip, id string, reads []string) (string, bool, string, error) {
+	return r.searchFirstRed(ctx, base, tip, reads, func(sha, why string) (bool, error) {
+		if err := r.requireCurrentTip(ctx, tip); err != nil {
+			return false, err
+		}
+		return r.replay(ctx, sha, id, why)
+	})
+}
+
+func (r HeavyRunner) searchFirstRed(ctx context.Context, base, tip string, reads []string, replay func(sha, why string) (bool, error)) (string, bool, string, error) {
 	if base == "" {
 		return "", true, "no proved baseline", nil
 	} // no proved baseline: never accuse a commit without one
@@ -734,12 +792,6 @@ func (r HeavyRunner) firstRed(ctx context.Context, base, tip, id string, reads [
 	}
 	if len(commits) == 0 {
 		return "", true, fmt.Sprintf("no commit in %s..%s touches the check's declared reads", shortSHA(base), shortSHA(tip)), nil
-	}
-	replay := func(sha, why string) (bool, error) {
-		if err := r.requireCurrentTip(ctx, tip); err != nil {
-			return false, err
-		}
-		return r.replay(ctx, sha, id, why)
 	}
 	red, err := replay(base, "the green base")
 	if err != nil {

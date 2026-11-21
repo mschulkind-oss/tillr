@@ -3,6 +3,7 @@ package drain
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -55,7 +56,8 @@ func (r HeavyRunner) startEarly(ctx context.Context, run HeavyRun) *heavyEarly {
 }
 
 func (e *heavyEarly) offer(check HeavyCheck) {
-	if check.Result != "fail" || check.FirstRedLanding != "" {
+	// Attribute all failed tests in a suite before any of them can move the tip.
+	if check.Result != "fail" || check.FirstRedLanding != "" || strings.HasPrefix(check.CheckID, goTestPrefix) {
 		return
 	}
 	e.mu.Lock()

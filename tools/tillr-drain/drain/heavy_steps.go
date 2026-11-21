@@ -23,6 +23,9 @@ type HeavyStep interface {
 // JudgeHeavy judges declaration-file heavy checks plus the legacy rolling checks
 // that have not yet migrated to declarations. Attribution runs exactly one named check.
 func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]HeavyCheck, error) {
+	if strings.HasPrefix(only, goTestPrefix) {
+		return s.judgeHeavyGo(ctx, dir, only)
+	}
 	checksDir := filepath.Join(dir, "tools", "gate", "checks")
 	entries, err := os.ReadDir(checksDir)
 	if err != nil {
@@ -292,11 +295,6 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 		return nil, Externalf("legacy heavy program did not start: %v: %s", runErr, stderr.String())
 	}
 	code := cmd.ProcessState.ExitCode()
-	if only == "" {
-		if err := readLegacyReuse(ctx); err != nil {
-			return nil, err
-		}
-	}
 	if only != "" {
 		verdict := "error"
 		switch code {
@@ -310,6 +308,10 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 			heavyProgressReport(ctx, "loop: heavy DEFECT: the replay of legacy check %s failed and left no output\n", only)
 		}
 		return []HeavyCheck{{CheckID: only, Result: verdict, Detail: stderr.String(), LogPath: kept}}, nil
+	}
+	goFailures, err := readLegacyEvidence(ctx)
+	if err != nil {
+		return nil, err
 	}
 	raw, err := os.ReadFile(spans)
 	if err != nil {
@@ -376,7 +378,12 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 				logRef = kept
 			}
 		}
-		result = append(result, HeavyCheck{CheckID: span.CheckID, Result: verdict, DurationMS: (span.EndNS - span.StartNS) / 1000000, Reads: reads, LogPath: kept, LogRef: logRef})
+		check := HeavyCheck{CheckID: span.CheckID, Result: verdict, DurationMS: (span.EndNS - span.StartNS) / 1000000, Reads: reads, LogPath: kept, LogRef: logRef}
+		if span.Kind == "go-tool" && verdict == "fail" {
+			result = append(result, goSuiteFailures(span.Label, goFailures[span.CheckID], check)...)
+			continue
+		}
+		result = append(result, check)
 	}
 	for _, skip := range file.SkippedChecks {
 		if skip.Owed || skip.CheckID == "" {
