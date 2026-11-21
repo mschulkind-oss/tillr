@@ -185,6 +185,16 @@ AutoQA leaves the [Icebox](#icebox).
    kept only if he accepts the justification each question states, and none of the 107 removals is
    built. It stops nothing today, so it follows the eight above.
 
+10. [An oversized item lands in parts](../design/tillr-item-split.md)
+    ([`OQ-SP1`](../design/tillr-item-split.md#OQ-SP1)): written on 2026-11-21 to the owner's words
+    of that day, after one item's verifier refused it twelve times in an afternoon while its
+    candidate grew from 34 to 64 files and nothing landed. It adds one question to the count above:
+    whether part of a change may land while a named case of the request is still queued. Placed
+    last by the designer (and the owner's to reorder) because it stops nothing that runs today; its
+    answer decides whether the split could have landed anything in the case that prompted it.
+    Its twelve designer's decisions await his review in
+    [its ledger](../design/tillr-item-split.md#decision-ledger), and none of it is built.
+
 [Owner review comments](../design/tillr-review-comments.md#7-decision-ledger) left this list on
 2026-11-20. The owner answered all four questions; the fast track is not built.
 

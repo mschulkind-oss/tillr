@@ -2,6 +2,8 @@
 
 **Design proposal, 2026-11-20.** Before sending a refused candidate back for another repair, the drain should be able to show what has changed across repairs and ask the design seat whether this is still one landable item. Keep **one commit per item**, not one item per design. The owner said on 2026-11-20 at about 5:40 PM ET: “Split it up. That's always a good way to go.” The detection rules, routing and recording method below are the designer's proposals; the owner may overturn them. They are not implemented by this document.
 
+**Absorbed on 2026-11-21.** [An oversized item lands in parts](../design/tillr-item-split.md) is the design for splitting, written to the owner's words of that day. It keeps this page's three comparisons and its rule that the old candidate is a donor; it replaces the hand-filed landing list and the "replaced by" record below, and answers the two questions at the end as designer's decisions the owner may overturn ([what is kept](../design/tillr-item-split.md#106-the-proposal-of-2026-11-20)).
+
 The filing reports eleven real attempts in two days on the instant-start change, with seven verify refusals naming different defects. The operator had to read the history to discover that pattern. The [measured candidate](instant-start-slices.md#what-is-being-ported) changed 39 files under `tools/`: 26 source files, 11 tests and two READMEs, or 78 files with the pack mirror. That is evidence about one candidate, not a measurement that it grew at every attempt. The [slice list](instant-start-slices.md#items-to-file) shows a useful cut: maintain a view without letting it start work; change who may start work in a later item.
 
 ## What to measure before dispatching another repair
