@@ -95,6 +95,16 @@ func wrapExtractedReport(runID, body string) string {
 	return "# run report\n\n- run: `" + runID + "`\n- backend: `pi`\n\n---\n\n" + body
 }
 
+func putTrunkObstacleChecks(t *testing.T, root string) {
+	t.Helper()
+	checks := filepath.Join(root, "tools", "gate", "checks")
+	if err := os.MkdirAll(checks, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(checks, "gate-budget-test.json"), `{"id":"gate-budget-test","scope":"tree","tier":"heavy"}`)
+	writeForkFile(t, filepath.Join(root, "tools", "fork-check.py"), `print('{"declarations": [{"id":"go-tool/unit","tier":"rolling"},{"id":"tillr-docs","tier":"landing"}]}')`)
+}
+
 // TestRequestObstacleHoldsRecordKindAndFields covers every obstacle kind on a filed
 // request whose extracted report begins with `# run report`: only `owner` sets waiter
 // `owner` (with the QUESTION text), `fence` names PATHS with mover `operator`, `trunk`
@@ -138,11 +148,11 @@ func TestRequestObstacleHoldsRecordKindAndFields(t *testing.T) {
 		{
 			kind:          ObstacleTrunk,
 			workflow:      "scout-then-build@v1",
-			body:          "OBSTACLE: trunk\nCHECKS: go-tool/unit, tillr-docs\nBASE: 0123456\nRESULT: blocked\n",
+			body:          "OBSTACLE: trunk\nCHECKS: go-tool/unit, gate-budget-test\nBASE: 0123456\nRESULT: blocked\n",
 			wantReason:    ReasonObstacleTrunk,
-			wantWhySub:    []string{"go-tool/unit, tillr-docs"},
+			wantWhySub:    []string{"go-tool/unit, gate-budget-test"},
 			wantMoverPref: "drain; ",
-			wantMoverSub:  "go-tool/unit, tillr-docs",
+			wantMoverSub:  "go-tool/unit, gate-budget-test",
 			wantClass:     "waits on work",
 			wantWherePref: "trunk",
 			wantState:     StateInQueue,
@@ -192,6 +202,9 @@ func TestRequestObstacleHoldsRecordKindAndFields(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.kind, func(t *testing.T) {
 			f, l, _ := workflowLoopFixture(t, "")
+			if tc.kind == ObstacleTrunk {
+				putTrunkObstacleChecks(t, f.root)
+			}
 			if tc.kind != ObstacleDefinition {
 				l.cfg.Policy.Seats["design"] = "fixture"
 			}
@@ -286,6 +299,68 @@ func TestRequestObstacleHoldsRecordKindAndFields(t *testing.T) {
 	}
 }
 
+func TestTrunkObstacleChecksMustAllBeListed(t *testing.T) {
+	root := t.TempDir()
+	putTrunkObstacleChecks(t, root)
+	l := &Loop{cfg: LoopConfig{Root: root}}
+	for _, tc := range []struct {
+		field string
+		want  bool
+	}{
+		{"`go-tool/unit`,\n`gate-budget-test`", true},
+		{"go-tool/unit, test/integration/workflow-auto-resume.test.ts", false},
+		{"tillr-docs", false}, // Listed by the gate, but never run in a trunk proof.
+		{"go-tool/unit gate-budget-test", false},
+		{"go-tool/unit passes now, gate-budget-test", false},
+	} {
+		o := Obstacle{Fields: map[string]string{"CHECKS": tc.field}}
+		if got, err := l.trunkProofLists(context.Background(), o.trunkChecks()); err != nil || got != tc.want {
+			t.Errorf("CHECKS %q: listed = %v, error = %v, want %v", tc.field, got, err, tc.want)
+		}
+	}
+}
+
+func TestTrunkObstacleProseReturnsToWorker(t *testing.T) {
+	ctx := context.Background()
+	f, l, _ := workflowLoopFixture(t, "")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='closed'`)
+		return err
+	})
+	id := fileFixtureRequestWith(t, f, "Repair the fork test\n", "build", "scout-then-build@v1", requestFence, false)
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	const claim = "test/integration/workflow-auto-resume.test.ts — “resumes a run whose Pi exited once” fails with session start claimed the run on both the base and the candidate."
+	var reported bool
+	steps := &obstacleRequestSteps{t: t, f: f, report: func(req run.Request) (string, *landingOffer) {
+		if req.NodeID == "work" {
+			reported = true
+			return wrapExtractedReport(req.RunID, "OBSTACLE: trunk\nCHECKS: "+claim+"\nBASE: "+base+"\nRESULT: blocked\n"), nil
+		}
+		return wrapExtractedReport(req.RunID, "RESULT: done\n"), nil
+	}}
+	l.cfg.Steps = steps
+	result := &LoopResult{}
+	for i := 0; i < 6 && !reported; i++ {
+		if _, err := l.pass(ctx, result); err != nil {
+			t.Fatal(err)
+		}
+		drainOwned(t, l, result)
+	}
+	if !reported {
+		t.Fatalf("writing node did not dispatch: runs=%v", steps.runs)
+	}
+	d := planFor(t, l, id)
+	if d.Action != ActionDispatch || d.Reason != ReasonReturned || d.Returned == nil {
+		t.Fatalf("expected worker continuation, got %+v", d)
+	}
+	brief := returnedBrief(*d.Returned)
+	for _, want := range []string{claim, "did not name only trunk check IDs", "fork checkout", "Continue the work"} {
+		if !strings.Contains(brief, want) {
+			t.Errorf("returned brief lacks %q: %s", want, brief)
+		}
+	}
+}
+
 // TestTrunkObstacleHoldReturnsByItselfWhenChecksAreGreen verifies that a request held on
 // OBSTACLE: trunk with staged, in-fence work remains held on stale or incomplete
 // proofs, then dispatches onto the repaired trunk with the saved work in its brief.
@@ -296,6 +371,7 @@ func TestTrunkObstacleHoldReturnsByItselfWhenChecksAreGreen(t *testing.T) {
 		_, err := tx.Exec(`UPDATE items SET state='closed'`)
 		return err
 	})
+	putTrunkObstacleChecks(t, f.root)
 	id := fileFixtureRequestWith(t, f, "Build after trunk is green\n", "build", "scout-then-build@v1", requestFence, false)
 	redBase := runGit(t, f.root, "rev-parse", TrunkRef)
 	runGit(t, f.root, "update-ref", GreenRef, redBase)
@@ -318,7 +394,7 @@ func TestTrunkObstacleHoldReturnsByItselfWhenChecksAreGreen(t *testing.T) {
 					runGit(t, target, "add", "--", work)
 					writeForkFile(t, filepath.Join(target, work), "working copy\n")
 					savedRef = preservedPrefix + req.RunID
-					return wrapExtractedReport(req.RunID, "OBSTACLE: trunk\nCHECKS: go-tool/unit, tillr-docs\nBASE: "+redBase+"\nRESULT: blocked\n"), nil
+					return wrapExtractedReport(req.RunID, "OBSTACLE: trunk\nCHECKS: go-tool/unit, gate-budget-test\nBASE: "+redBase+"\nRESULT: blocked\n"), nil
 				}
 				brief, err := os.ReadFile(filepath.Join(lane, BriefFile))
 				if err != nil || !strings.Contains(string(brief), "Earlier work exists at "+savedRef) {
@@ -357,7 +433,7 @@ func TestTrunkObstacleHoldReturnsByItselfWhenChecksAreGreen(t *testing.T) {
 	later := l.cfg.Now().UTC().Add(time.Minute)
 
 	// Older proof does not release.
-	writeGreenProof(t, l, repaired, l.cfg.Now().UTC().Add(-time.Minute), []string{"go-tool/unit", "tillr-docs/face"})
+	writeGreenProof(t, l, repaired, l.cfg.Now().UTC().Add(-time.Minute), []string{"go-tool/unit", "gate-budget-test"})
 	if err := l.releaseTrunkAcquittals(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +441,7 @@ func TestTrunkObstacleHoldReturnsByItselfWhenChecksAreGreen(t *testing.T) {
 		t.Fatalf("stale proof released trunk hold: %+v", d)
 	}
 
-	// Partial check list missing tillr-docs does not release.
+	// Partial check list missing gate-budget-test does not release.
 	writeGreenProof(t, l, repaired, later, []string{"go-tool/unit"})
 	if err := l.releaseTrunkAcquittals(ctx); err != nil {
 		t.Fatal(err)
@@ -377,7 +453,7 @@ func TestTrunkObstacleHoldReturnsByItselfWhenChecksAreGreen(t *testing.T) {
 	// Green proof covering both named checks releases the item without operator retry,
 	// and the workflow runs from node 0 to landing.
 	trunkBlocked = false
-	writeGreenProof(t, l, repaired, later, []string{"go-tool/unit", "tillr-docs/every-face"})
+	writeGreenProof(t, l, repaired, later, []string{"go-tool/unit", "gate-budget-test"})
 	for i := 0; i < 12 && result.Landed == 0; i++ {
 		if _, err := l.pass(ctx, result); err != nil {
 			t.Fatal(err)

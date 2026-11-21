@@ -64,9 +64,12 @@ func (l *Loop) routeObstacle(ctx context.Context, d Decision, req run.Request, l
 		if IsRemoteSyncItem(req.ItemID) {
 			return returnToWorker(missingOutputDetail("this item is the remote-sync conflict repair, so `trunk` is not an obstacle open to it"), ""), true
 		}
+		checks := o.trunkChecks()
+		if len(checks) == 0 {
+			return returnToWorker(invalidTrunkObstacleDetail(o), ""), true
+		}
 		// The replay runs in a scratch worktree of its own and holds no store transaction;
 		// it holds this lane only because a refuted claim continues this lane's session.
-		checks := o.List("CHECKS")
 		gate := GateOutcome{FailingChecks: checks}
 		reading, err := l.trunkAlreadyRed(ctx, candidate, gate)
 		red := reading.Red
@@ -113,7 +116,7 @@ func (l *Loop) routeObstacle(ctx context.Context, d Decision, req run.Request, l
 			note = fmt.Sprintf(" The report named base %s; this run's base is %s, which is the one replayed.", claimed, shortSHA(base))
 		}
 		l.reportf("loop: %s named a trunk obstacle the base replay did not confirm (%s): returned to its worker\n", req.ItemID, saw)
-		return returnToWorker(fmt.Sprintf("The run's trunk obstacle named checks %s. Replayed on this run's base %s, the loop found %s, so the failure is not the trunk's: it is this change's to repair, or the ids are not gate check ids the replay knows.%s Continue the work and commit. %s", strings.Join(checks, ", "), shortSHA(base), saw, note, ObstacleContract), ""), true
+		return returnToWorker(fmt.Sprintf("The run's trunk obstacle named checks %s. Replayed on this run's base %s, the loop found %s, so the failure is not the trunk's: it is this change's to repair, or the ids are not gate check ids the replay knows.%s A failing test within your own fence, including in a fork checkout, is work to continue. Continue the work and commit. %s", strings.Join(checks, ", "), shortSHA(base), saw, note, ObstacleContract), ""), true
 	case ObstacleTooling:
 		if IsGeneratedRepair(req.ItemID) {
 			return laneOutcome{}, false

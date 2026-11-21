@@ -22,16 +22,14 @@ type legacyDeclaration struct {
 	ID         string        `json:"id"`
 	Kind       string        `json:"kind"`
 	Label      string        `json:"label"`
+	Tier       string        `json:"tier"`
 	SelectedBy []string      `json:"selected_by"`
 	Selects    []legacyWatch `json:"selects"`
 	Watches    []legacyWatch `json:"watches"`
 }
 
-// legacyCheckWatches reads the legacy gate's declaration export, not its output
-// writes. The export runs no checks and takes no landing lock. Custom judges without
-// that gate supply reads/watches in their spans instead; an existing gate that cannot
-// export its declarations is an error, never permission to guess a narrower fence.
-func legacyCheckWatches(ctx context.Context, dir string) (map[string][]string, error) {
+// legacyCheckDeclarations reads the gate registry without running a check or taking the landing lock.
+func legacyCheckDeclarations(ctx context.Context, dir string) ([]legacyDeclaration, error) {
 	path := filepath.Join(dir, "tools", "fork-check.py")
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, nil
@@ -40,6 +38,7 @@ func legacyCheckWatches(ctx context.Context, dir string) (map[string][]string, e
 	}
 	cmd := exec.CommandContext(ctx, "python3", path, "--registry-json")
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "PYTHONDONTWRITEBYTECODE=1")
 	raw, err := cmd.Output()
 	if err != nil {
 		return nil, Externalf("reading legacy check watches: %v", err)
@@ -54,6 +53,16 @@ func legacyCheckWatches(ctx context.Context, dir string) (map[string][]string, e
 	if registry.Declarations == nil {
 		return nil, Externalf("legacy registry has no declarations")
 	}
+	return append(registry.Declarations, registry.InProcess...), nil
+}
+
+// legacyCheckWatches expands the declared watches, not the checks' output writes.
+// Custom judges without a registry supply reads/watches in their spans instead.
+func legacyCheckWatches(ctx context.Context, dir string) (map[string][]string, error) {
+	checks, err := legacyCheckDeclarations(ctx, dir)
+	if err != nil || checks == nil {
+		return nil, err
+	}
 	// The registry is not a plan instance: dynamic watches have no selected_by
 	// paths yet. Expand their selection patterns over the whole tracked tree so
 	// untouched inputs are repairable too. Never use regexes as fence permissions.
@@ -63,7 +72,7 @@ func legacyCheckWatches(ctx context.Context, dir string) (map[string][]string, e
 	}
 	tracked := strings.Split(string(files), "\x00")
 	out := map[string][]string{}
-	for _, check := range append(registry.Declarations, registry.InProcess...) {
+	for _, check := range checks {
 		out[check.ID] = []string{}
 		for _, watch := range check.Watches {
 			if watch.Paths {
