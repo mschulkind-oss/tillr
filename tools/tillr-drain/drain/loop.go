@@ -1321,7 +1321,9 @@ func (l *Loop) holdLocal(ctx context.Context, itemID, reason string) {
 			return err
 		})
 	}
+	l.mu.Lock()
 	l.held[itemID] = hold
+	l.mu.Unlock()
 	if v := l.startView.Load(); v != nil {
 		v.noteItemHold(itemID, hold)
 	}
@@ -1338,6 +1340,8 @@ func localHoldVersion(r *store.Reader, itemID string) (string, error) {
 // heldFor drops the hold on a content edit, not a rerank. A record that cannot
 // be read keeps the hold, which is the safe direction.
 func (l *Loop) heldFor(r *store.Reader, itemID string) (string, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	hold, held := l.held[itemID]
 	if !held {
 		return "", false
@@ -1468,9 +1472,9 @@ func isPerItemStageFailure(spec StageSpec, err error) bool {
 	return false
 }
 
-// stageLane invalidates snapshots on entry and exit, including when staging fails.
-func (l *Loop) stageLane(ctx context.Context, spec StageSpec) error {
-	lane := spec.LaneID
+// beginLaneStaging excludes a writer from sibling snapshots and invalidates
+// observations taken before or during staging, even when it fails.
+func (l *Loop) beginLaneStaging(lane string) func() {
 	l.mu.Lock()
 	if l.stagingLanes == nil {
 		l.stagingLanes = map[string]int{}
@@ -1478,12 +1482,17 @@ func (l *Loop) stageLane(ctx context.Context, spec StageSpec) error {
 	l.stagingLanes[lane]++
 	l.bumpLaneEpoch(lane)
 	l.mu.Unlock()
-	defer func() {
+	return func() {
 		l.mu.Lock()
 		l.stagingLanes[lane]--
 		l.bumpLaneEpoch(lane)
 		l.mu.Unlock()
-	}()
+	}
+}
+
+func (l *Loop) stageLane(ctx context.Context, spec StageSpec) error {
+	end := l.beginLaneStaging(spec.LaneID)
+	defer end()
 	return l.cfg.Stage.Stage(ctx, spec)
 }
 
@@ -1790,7 +1799,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 				}
 				continue
 			}
-			delete(l.infraLines, request.ItemID+"\x00"+decision.LaneID)
+			l.clearStageInfraLine(request.ItemID, decision.LaneID)
 			if decision.Workflow != nil {
 				if decision.NodeBaseSHA == "" || (decision.NodeIndex == 0 && !request.SessionTurn && !resumeCommitted) || revertedSession {
 					decision.NodeBaseSHA = l.laneBase(decision.LaneID)
@@ -1834,10 +1843,11 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			result.InfraFailures++
 			l.infraStreak++
 			streak := l.infraStreak
-			l.mu.Unlock()
 			key := request.ItemID + "\x00" + decision.LaneID
-			if l.infraLines[key] != err.Error() {
-				l.infraLines[key] = err.Error()
+			repeated := l.infraLines[key] == err.Error()
+			l.infraLines[key] = err.Error()
+			l.mu.Unlock()
+			if !repeated {
 				l.reportf("loop: staging %s on %s failed in the infrastructure class (%d consecutive): %v\n",
 					request.ItemID, decision.LaneID, streak, err)
 				continue
@@ -1858,7 +1868,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			}
 			continue
 		}
-		delete(l.infraLines, request.ItemID+"\x00"+decision.LaneID)
+		l.clearStageInfraLine(request.ItemID, decision.LaneID)
 		// The record itself refused: hold this item and keep the rest of the pass. The
 		// refusal is recorded before the hold, so a crash between the two still leaves the
 		// event a reader needs.
