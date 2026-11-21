@@ -17,9 +17,8 @@ import (
 
 // passPendingPlansGeneration leaves fresh starts to a separate dispatcher. It
 // uses the same authoritative store snapshot and housekeeping as the full pass.
-// The production pass does not opt into this mode yet.
 func (l *Loop) passPendingPlansGeneration(ctx context.Context, at time.Time, generation *string) ([]plannedApplication, []LaneLease, error) {
-	return l.passPlansMode(ctx, at, generation, true)
+	return l.passPlansMode(ctx, at, generation, true, nil)
 }
 
 const (

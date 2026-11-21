@@ -220,23 +220,32 @@ func TestCommentOutageCreatesNoBatch(t *testing.T) {
 }
 
 func TestCommentsClosedBeforeDispatch(t *testing.T) {
-	for _, resolved := range []bool{false, true} {
-		t.Run(map[bool]string{true: "resolved", false: "deleted"}[resolved], func(t *testing.T) {
-			f, l, steps := commentFixture(t, "")
+	for _, tc := range []struct {
+		name              string
+		blocked, resolved bool
+	}{
+		{name: "deleted"},
+		{name: "resolved", blocked: true, resolved: true},
+		{name: "deleted-while-blocked", blocked: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, l, _ := commentFixture(t, "")
 			comments := []item.ReviewComment{{ID: "a", Comment: "Why?", CreatedAt: 1}}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				json.NewEncoder(w).Encode(map[string]any{"comments": comments})
 			}))
 			defer server.Close()
 			id := takeFixtureComment(t, f, server.URL)
-			if resolved {
+			if tc.resolved {
 				comments[0].Resolved = true
+			} else {
+				comments = nil
+			}
+			if tc.blocked {
 				fixtureWrite(t, f, func(tx *store.Tx) error {
 					_, err := tx.Exec("UPDATE items SET state='blocked' WHERE item_id=?", id)
 					return err
 				})
-			} else {
-				comments = nil
 			}
 			l.cfg.VantageURL = server.URL
 			l.cfg.VantageRepo = "fixture"
@@ -247,7 +256,6 @@ func TestCommentsClosedBeforeDispatch(t *testing.T) {
 			if result.Dispatched != 0 {
 				t.Fatalf("dispatched dead batch: %+v", result)
 			}
-			_ = steps
 			fixtureRead(t, f, func(r *store.Reader) error {
 				var state, reason string
 				err := r.QueryRow("SELECT state,close_reason FROM items WHERE item_id=?", id).Scan(&state, &reason)
