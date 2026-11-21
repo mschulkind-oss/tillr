@@ -289,9 +289,6 @@ func pushGreen(ctx context.Context, root string, p settings.Push) (string, error
 		if contains, err := trunkAncestor(ctx, root, green, remoteTip); err != nil {
 			return green, err
 		} else if contains {
-			if err := confirmPublished(ctx, root, remote, ref, remoteTip); err != nil {
-				return green, err
-			}
 			return green, errAlreadyPublished
 		}
 	}

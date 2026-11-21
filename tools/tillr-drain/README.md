@@ -1123,24 +1123,24 @@ replay. If the remote passed the ancestry check, the drain replays the unpublish
 commits one by one onto the fetched tip under the landing lock: linear, no merge commit,
 never a forced push, authors and messages kept. It then moves the
 main checkout with `git reset --keep`, so a path the move changes that holds owner content
-stops it with nothing changed. The loop tries to match replaced commits by patch first. If
-upstream context changes a patch or upstream already contains the change, the loop can use the
-replay's own old-to-new pairs instead. A superseded commit maps to the tip it would have
+stops it without changing the trunk or checkout. The loop tries to match replaced commits by
+patch first. If upstream context changes a patch or upstream already contains the change, the loop
+can use the replay's own old-to-new pairs instead. A superseded commit maps to the tip it would have
 followed, without creating an empty commit. The loop records the mapping in `trunk_rewrites`,
 moves matching `refs/tillr/landed/<run_id>` markers and `refs/tillr/green`, and raises no
 `trunk-rewritten` hold. In green mode the new tip is
 proved first and pushed at the next green advance; in tip mode the push runs again at once. A
 conflict, a merge commit among the unpublished commits, a checkout off the trunk or a dirty
 path fails the push with `mover: operator` and the commands to run by hand. Not built: the
-design's conflict-repair run and escalation and the rest of the published-ref bookkeeping
-([the design](../../docs/design/tillr-refused-push.md)).
-The drain pins the fetched replay base at `refs/tillr/published/<remote>/<branch>` and
-updates that pointer to the exact commit it successfully pushes in tip or green mode. Before a
-due push and again after a refusal, the drain checks that the fetched remote tip contains the
-published pointer (or the remote-tracking tip if there is no pointer yet). Without either ref,
-a due push skips the guard fetch. A rewind or divergent rewrite records `remote-rewritten`
-with `mover: operator`; the drain does not push, replay, or move any refs. If the fetched tip
-already contains green, the drain confirms that tip without pushing. Worker boundary checks
+design's conflict-repair run and escalation ([the design](../../docs/design/tillr-refused-push.md)).
+Before a due push and again after a refusal, the drain checks that the fetched remote tip
+contains `refs/tillr/published/<remote>/<branch>` (or the remote-tracking tip if there is no
+published pointer yet). Without either ref, a due push skips the guard fetch. A rewind or
+divergent rewrite records `remote-rewritten` with `mover: operator`; the drain does not push,
+replay, or move any refs. The drain records each accepted fetch even when no push or replay
+follows or a subsequent push fails. If the fetched tip already contains green, the drain skips
+that push. A successful push records the exact commit pushed. The pointer moves only forward:
+a compare-and-swap keeps a late confirmation from overwriting a newer one. Worker boundary checks
 ignore these pointer updates. The identity check trusts every commit reachable from a pointer
 under that prefix: a commit another machine pushed under its own address does not hold
 landings with `trunk-foreign-identity`. Unpublished replayed commits are not under the pointer;
