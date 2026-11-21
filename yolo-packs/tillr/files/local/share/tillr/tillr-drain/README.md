@@ -2269,6 +2269,11 @@ lane or run directory (`ENAMETOOLONG`, `RunDir` or per-run staging preparation
 failures, or `stageParallel`), retracting its unlaunched claim, freeing the lane,
 counting zero infrastructure failures, and naming the operator mover
 (`fix the staging fault the detail names, then tillr drain clear-fault --item <item>`).
+Fresh fork staging can move a clean lane checkout's `main` back to the delivered tip
+when a run pin or preserved-work ref in that checkout still reaches its old tip.
+If no such ref keeps the undelivered tip, staging leaves it in place and records a
+`stage-failed` hold. The operator saves the commits on a branch, resets the lane's
+fork checkout to the delivered tip, and clears the fault.
 `decision-collision` holds an item whose planned decision could not be
 recorded, because its decision id is already recorded with other columns.
 `settle-failed` holds an item whose run could not be settled because of such a

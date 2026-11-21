@@ -1493,7 +1493,7 @@ func (l *Loop) prepareContinuedLane(ctx context.Context, decision Decision, item
 // stageDispatches stages the pass's claimed dispatches and returns those that may run.
 // Each lane is staged before its own run starts; siblings need not wait for it.
 //
-// The two kinds of failure are held apart, because they are different facts and they earn
+// Staging failures are held apart, because they are different facts and they earn
 // different answers:
 //
 //   - The item's own record is what refused (`IsItemContent`: an empty title, an absent
@@ -1501,6 +1501,8 @@ func (l *Loop) prepareContinuedLane(ctx context.Context, decision Decision, item
 //     record again fails the same way, so retrying is not a repair and waiting cannot fix
 //     it. The loop records a per-item refusal and holds that one item; the rest of the
 //     pass still runs, so one bad record does not stall the queue.
+//   - A repairable staging fault (such as unretained commits in a fork checkout) holds
+//     the item with an operator mover instead of retrying unchanged inputs.
 //   - Anything else (a template that will not render, a git that will not answer) is the
 //     machinery's fault. Nothing about the item was learned, so it is infrastructure-class:
 //     it feeds the backoff and leaves the item in the plan for the next tick.
@@ -1508,7 +1510,8 @@ func isPerItemStageFailure(spec StageSpec, err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, syscall.ENAMETOOLONG) {
+	var forkErr *forkCheckoutUnretainedError
+	if errors.As(err, &forkErr) || errors.Is(err, syscall.ENAMETOOLONG) {
 		return true
 	}
 	msg := err.Error()

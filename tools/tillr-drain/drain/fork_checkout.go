@@ -2,19 +2,50 @@ package drain
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/mschulkind-oss/tillr-drain/preserved"
 )
 
-// refreshForkCheckout makes a reused writer start at the delivered tip. It never
-// resets unlanded commits or dirty work; either would destroy another candidate.
+// forkCheckoutUnretainedError is a staging fault the operator can repair, not
+// an infrastructure failure that another attempt could resolve.
+type forkCheckoutUnretainedError struct {
+	checkout, head, tip string
+}
+
+func (e *forkCheckoutUnretainedError) Error() string {
+	return fmt.Sprintf("fork checkout %s has unretained commits at %s; staging will not reset it to %s. Preserve the commits on a branch and reset the checkout to the delivered tip", e.checkout, e.head, e.tip)
+}
+
+// refreshForkCheckout makes a reused writer start at the delivered tip. It can
+// move a clean lane's main away from an earlier attempt only if the fork keeps it.
 func (s *LaneStager) refreshForkCheckout(ctx context.Context, fork ForkTarget) error {
 	tip, err := s.git(ctx, s.Root, "rev-parse", "--verify", fork.Ref+"^{commit}")
 	if err != nil {
 		return err
 	}
 	tip = strings.TrimSpace(tip)
+	// Refuse Git's parent-repo discovery and shared Git directories before
+	// fetching or moving any refs. This operation is for the lane clone only.
+	checkout, err := filepath.Abs(fork.Checkout)
+	if err != nil {
+		return err
+	}
+	gitDir := filepath.Join(checkout, ".git")
+	real, err := filepath.EvalSymlinks(gitDir)
+	if err != nil || real != gitDir {
+		return Externalf("fork checkout %s is missing its own Git directory or aliases another checkout", fork.Checkout)
+	}
+	layout, err := s.git(ctx, fork.Checkout, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(layout) != checkout+"\n"+gitDir {
+		return Externalf("fork checkout %s is not an isolated checkout", fork.Checkout)
+	}
 	status, err := s.git(ctx, fork.Checkout, "status", "--porcelain")
 	if err != nil {
 		return err
@@ -26,16 +57,40 @@ func (s *LaneStager) refreshForkCheckout(ctx context.Context, fork ForkTarget) e
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(head) == tip {
+	head = strings.TrimSpace(head)
+	if head == tip {
 		return nil
 	}
 	if _, err := s.git(ctx, fork.Checkout, "fetch", "--quiet", "--no-tags", s.Root, tip); err != nil {
 		return err
 	}
-	if _, err := s.git(ctx, fork.Checkout, "merge-base", "--is-ancestor", "HEAD", tip); err != nil {
-		return Externalf("fork checkout %s has unlanded or divergent commits; staging will not reset it to %s", fork.Checkout, tip)
+	undelivered, err := s.git(ctx, fork.Checkout, "rev-list", "--max-count=1", tip+".."+head)
+	if err != nil {
+		return err
 	}
-	_, err = s.git(ctx, fork.Checkout, "-c", "merge.autoStash=false", "merge", "--ff-only", "--no-edit", tip)
+	if strings.TrimSpace(undelivered) == "" {
+		_, err := s.git(ctx, fork.Checkout, "-c", "merge.autoStash=false", "merge", "--ff-only", "--no-edit", tip)
+		return err
+	}
+	// A ref in this checkout that contains HEAD keeps its entire history. A
+	// pin for just an ancestor is not enough, nor is a pin in another repo.
+	refs, err := s.git(ctx, fork.Checkout, "for-each-ref", "--contains", head, "--count=1", "--format=%(refname)",
+		"refs/tillr/runs/", "refs/tillr/runs-long/", preserved.Prefix)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(refs) == "" {
+		return &forkCheckoutUnretainedError{checkout: fork.Checkout, head: head, tip: tip}
+	}
+	// Do not replace a main we did not inspect (e.g. a detached rebase HEAD).
+	branch, err := s.git(ctx, fork.Checkout, "symbolic-ref", "--quiet", "HEAD")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(branch) != "refs/heads/main" {
+		return Externalf("fork checkout %s is on %s, not main; staging will not reset it", fork.Checkout, strings.TrimSpace(branch))
+	}
+	_, err = s.git(ctx, fork.Checkout, "switch", "--quiet", "--no-overwrite-ignore", "-C", "main", tip)
 	return err
 }
 
