@@ -4,7 +4,6 @@ package drain
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -17,7 +16,6 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/restart"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/settings"
-	"github.com/mschulkind-oss/tillr/store"
 )
 
 const postLandingKind = "drain.post-landing-action"
@@ -287,24 +285,26 @@ func pushGreen(ctx context.Context, root string, p settings.Push) (string, error
 // errAlreadyPublished marks the push that was not needed; it is a success, not a failure.
 var errAlreadyPublished = errors.New("remote already holds the green commit")
 
-// recordPush records and logs a push outcome. A failure names the retry; the next trigger
-// recomputes the condition, so nothing is counted and nothing is held.
+// recordPush records and logs the outcome of the push turn, after any replay and retry.
 func (l *Loop) recordPush(ctx context.Context, what, tip string, failure error) {
 	if errors.Is(failure, errAlreadyPublished) {
-		failure = nil // recorded as success so an earlier failure's warning clears
-		l.recordActionWhat(ctx, "push", what, tip, nil)
+		l.recordPushState(ctx, what, tip, pushKindOK, nil, nil)
 		return
+	}
+	kind, state := pushKindOK, (*pushStateError)(nil)
+	if failure != nil {
+		kind, state = l.classifyPushFailure(ctx, failure)
 	}
 	retry := "retried at the next landing"
 	if what == settings.PushGreen {
 		retry = "retried at the next green advance"
 	}
 	if failure != nil {
-		l.reportf("loop: push of %s %s failed (%s; the loop goes on): %s\n", what, shortSHA(tip), retry, strings.Join(strings.Fields(failure.Error()), " "))
+		l.reportf("loop: push of %s %s failed as %s (%s; the loop goes on): %s\n", what, shortSHA(tip), kind, retry, strings.Join(strings.Fields(failure.Error()), " "))
 	} else {
 		l.reportf("loop: pushed %s %s\n", what, shortSHA(tip))
 	}
-	l.recordActionWhat(ctx, "push", what, tip, failure)
+	l.recordPushState(ctx, what, tip, kind, state, failure)
 }
 
 func actionCommand(ctx context.Context, root, program string, args ...string) (string, error) {
@@ -465,19 +465,5 @@ func (l *Loop) recordActionWhat(ctx context.Context, action, what, tip string, f
 	if failure != nil {
 		detail = failure.Error()
 	}
-	s, err := store.Open(ctx, l.cfg.Store, false)
-	if err == nil {
-		defer s.Close()
-		err = s.WriteTx(ctx, func(tx *store.Tx) error {
-			body, err := json.Marshal(map[string]string{"action": action, "detail": detail, "what": what})
-			if err != nil {
-				return err
-			}
-			_, err = tx.Append(event.Event{Kind: postLandingKind, ObjectType: "landing", ObjectID: &tip, Payload: body, At: time.Now().UTC()})
-			return err
-		})
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "post-landing %s at %s: recording outcome: %v (action failure: %v)\n", action, tip, err, failure)
-	}
+	l.appendPostLanding(ctx, action, tip, map[string]any{"action": action, "detail": detail, "what": what}, failure)
 }

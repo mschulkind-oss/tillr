@@ -3,7 +3,6 @@ package drain
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -32,8 +31,8 @@ func (e *refusedPushError) Error() string { return e.detail }
 var refusedLine = regexp.MustCompile(`(?m)^!\t[^\t]*\t\[rejected\] \((fetch first|non-fast-forward|stale info)\)`)
 
 // pushCommand runs `git push --porcelain` and answers a *refusedPushError when the porcelain
-// status for the ref says the remote moved. A server-side decline ("[remote rejected]"), a
-// hook failure and a transport failure stay ordinary errors.
+// status for the ref says the remote moved. Server declines, hook failures and
+// transport failures do not trigger replay.
 func pushCommand(ctx context.Context, root string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"push", "--porcelain"}, args...)...)
 	cmd.Dir = root
@@ -49,10 +48,14 @@ func pushCommand(ctx context.Context, root string, args ...string) error {
 		lines = lines[len(lines)-20:]
 	}
 	detail := fmt.Sprintf("git: %v: %s", err, strings.Join(lines, "\n"))
-	if refusedLine.MatchString(stdout.String()) {
+	switch {
+	case refusedLine.MatchString(stdout.String()):
 		return &refusedPushError{detail: detail}
+	case remoteRejectedLine.MatchString(stdout.String()):
+		return &pushStateError{kind: pushKindRemoteDeclined, detail: detail, escalated: "operator"}
+	default:
+		return &pushStateError{kind: pushKindFailed, detail: detail, noRefLine: !porcelainRefLine.MatchString(stdout.String())}
 	}
-	return errors.New(detail)
 }
 
 // healRefusedPush replays the unpublished trunk commits onto the remote's tip. It answers
