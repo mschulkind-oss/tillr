@@ -58,9 +58,7 @@ func judgeFixture(t *testing.T) (string, map[string]any) {
 	if code, out := apply(t, db, envelope(t, "item.record", "judge-item", p)); code != 0 {
 		t.Fatalf("apply: %d %s", code, out)
 	}
-	if code, out := issueGrant(t, db, defaultGrant()); code != 0 {
-		t.Fatalf("grant: %d %s", code, out)
-	}
+	selectEvaluator(t, db, selectedGraph)
 	entries := []any{}
 	for _, c := range p.Criteria {
 		entries = append(entries, map[string]any{"criterion_id": c.CriterionID, "criterion_hash": hashOf(c.Text), "claim_class": "verification-only", "verdict": "done", "reason": "tests pass", "evidence": []string{"commit:" + judgeGit(t, "HEAD")}})
@@ -74,7 +72,7 @@ func judgeRun(t *testing.T, db string, file map[string]any, extra ...string) (in
 	if err != nil {
 		t.Fatal(err)
 	}
-	args := []string{"judge", "--store", db, "--item", "item_042", "--input", input(t, string(raw)), "--head", judgeGit(t, "HEAD"), "--actor", "review:run-judge:session-judge:route", "--judged-actor", "write:run-writer:session-writer:route", "--grant", "grant_1", "--now", issuedAt}
+	args := []string{"judge", "--store", db, "--item", "item_042", "--input", input(t, string(raw)), "--head", judgeGit(t, "HEAD"), "--actor", "review:run-judge:session-judge:route", "--judged-actor", "write:run-writer:session-writer:route", "--workflow", "review@v1", "--evaluator-node", "verify", "--graph-sha256", hashOf(selectedGraph), "--now", issuedAt}
 	return run(t, append(args, extra...)...)
 }
 
@@ -100,7 +98,7 @@ func TestJudgeIntakeRefusalsAreAtomic(t *testing.T) {
 		{"entry-actor", "actor-in-output", func(f map[string]any) { f["verdicts"].([]any)[1].(map[string]any)["actor"] = "writer" }, nil},
 		{"same-run", "self-judging", nil, []string{"--actor", "review:run-writer:session-other:route"}},
 		{"same-session", "self-judging", nil, []string{"--actor", "review:run-other:session-writer:route"}},
-		{"grant", "grant-absent", nil, []string{"--grant", "absent"}},
+		{"binding", "evaluator-binding", nil, []string{"--evaluator-node", "absent"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

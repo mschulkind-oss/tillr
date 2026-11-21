@@ -9,13 +9,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
 func prepareJudgeCandidate(t *testing.T, mode string) (refusalLoopFixture, *Loop, *judgeRouteSteps, Candidate) {
 	t.Helper()
-	f, l, s := judgeRouteFixture(t, mode, true)
+	f, l, s := judgeRouteFixture(t, mode)
+	persistFixtureJudgeSelection(t, f)
 	lane := l.laneDirPath("lane-1")
 	writeForkFile(t, filepath.Join(lane, BriefFile), "worker brief\n")
 	session, err := NewSessionID()
@@ -88,61 +90,127 @@ func TestReplacementRestoresJudgeCommitBeforeHeadGuard(t *testing.T) {
 	}
 }
 
-func TestExpiredPostLandGrantResumesSettlementOnly(t *testing.T) {
+func TestLegacyCheckedJudgeRecoversPublicationOnce(t *testing.T) {
 	f, l, s, c := prepareJudgeCandidate(t, "pass")
-	at := l.cfg.Now()
-	s.afterLand = func() { l.cfg.Now = func() time.Time { return at.Add(2 * time.Hour) } }
-	_, landed, err := l.Verify(context.Background(), c, &LoopResult{}, nil)
-	if err == nil || landed {
-		t.Fatalf("expired grant must retain pending settlement: %v %v", landed, err)
+	ctx := context.Background()
+	checked, accepted, err := l.judgeCandidate(ctx, c, &LoopResult{})
+	if err != nil || !accepted {
+		t.Fatalf("judge: accepted=%t err=%v", accepted, err)
 	}
-	landedSHA := runGit(t, f.root, "rev-parse", "HEAD")
-	fixtureRead(t, f, func(r *store.Reader) error {
-		var n int
-		err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind='item.verdict'`).Scan(&n)
-		if n != 0 {
-			t.Errorf("verdict without current authority")
-		}
-		return err
-	})
+	receiptPath := filepath.Join(RunDir(f.root, c.RunID), judgeReceiptFile)
+	var legacy map[string]json.RawMessage
+	encoded, err := json.Marshal(checked.Judge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(encoded, &legacy); err != nil {
+		t.Fatal(err)
+	}
+	options, err := json.Marshal(struct {
+		ItemID, Head, Tree, Actor, JudgedActor, GrantID string
+	}{c.ItemID, c.HeadSHA, checked.Judge.Options.Tree, checked.Judge.Options.Actor, checked.Judge.Options.JudgedActor, "retired-id"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy["options"] = options
+	encoded, err = json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, receiptPath, string(encoded))
+	s.afterLand = func() {
+		fixtureWrite(t, f, func(tx *store.Tx) error {
+			_, err := tx.Exec(`CREATE TRIGGER test_refuse_verdict BEFORE INSERT ON events WHEN NEW.kind='item.verdict'
+BEGIN SELECT RAISE(ABORT,'test failure before settlement'); END;`)
+			return err
+		})
+	}
+	if _, landed, err := l.Verify(ctx, c, &LoopResult{}, nil); err == nil || landed {
+		t.Fatalf("expected failed retirement after publication: landed=%t err=%v", landed, err)
+	}
+	landedHead := runGit(t, f.root, "rev-parse", "HEAD")
 	fixtureWrite(t, f, func(tx *store.Tx) error {
-		_, err := tx.Exec(`INSERT INTO item_grants(grant_id,claim_classes,grantor,issued_at,expires_at) VALUES('grant-new','verification-only','owner',?,?)`, l.cfg.Now().Add(-time.Minute).UnixMilli(), l.cfg.Now().Add(time.Hour).UnixMilli())
+		_, err := tx.Exec(`DROP TRIGGER test_refuse_verdict`)
 		return err
 	})
 	replacement := f.loop(t, s, l.cfg.Stage)
 	replacement.cfg.Policy = l.cfg.Policy
-	replacement.cfg.Now = l.cfg.Now
-	_, landed, err = replacement.Verify(context.Background(), c, &LoopResult{}, nil)
-	if err != nil || !landed {
-		t.Fatalf("new covering grant must settle published work: %v %v", landed, err)
+	if _, landed, err := replacement.Verify(ctx, c, &LoopResult{}, nil); err != nil || !landed {
+		t.Fatalf("recover publication: landed=%t err=%v", landed, err)
 	}
-	if !reflect.DeepEqual(s.order, []string{"worker", "judge", "gate", "landing"}) {
-		t.Errorf("repeated work: %v", s.order)
-	}
-	if head := runGit(t, f.root, "rev-parse", "HEAD"); head != landedSHA {
-		t.Errorf("landing repeated %s", head)
+	_, _, _ = replacement.Verify(ctx, c, &LoopResult{}, nil)
+	if want := []string{"worker", "judge", "gate", "landing"}; !reflect.DeepEqual(s.order, want) {
+		t.Fatalf("repeated work: got %v, want %v", s.order, want)
 	}
 	fixtureRead(t, f, func(r *store.Reader) error {
-		var payload string
-		if err := r.QueryRow(`SELECT payload FROM events WHERE kind='item.verdict'`).Scan(&payload); err != nil {
-			return err
+		var count int
+		err := r.QueryRow(`SELECT count(*) FROM events WHERE kind='item.verdict' AND json_extract(payload,'$.evaluated_head')=? AND json_extract(payload,'$.landed[0]')=? AND json_type(payload,'$.grant_id') IS NULL`, c.HeadSHA, landedHead).Scan(&count)
+		if err == nil && count != 1 {
+			t.Errorf("expected one verdict on %s landing %s, got %d", c.HeadSHA, landedHead, count)
 		}
-		var v map[string]any
-		if err := json.Unmarshal([]byte(payload), &v); err != nil {
-			return err
-		}
-		if v["grant_id"] != "grant-new" || v["landed"].([]any)[0] != landedSHA {
-			t.Errorf("wrong authority or landed binding %s", payload)
-		}
-		return nil
+		return err
 	})
+}
+
+func TestStandaloneJudgeCannotSubstituteForAnExplicitEvaluator(t *testing.T) {
+	f, l, s, c := prepareJudgeCandidate(t, "pass")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE workflow_selections SET workflow='explicit@v1', graph=? WHERE item_id=?`,
+			`{"stages":[{"id":"verify","kind":"agent","access":"read_only","judge_classes":["verification-only"]}],"exit":{"evaluator_slot":"verify","requires_nodes":["verify"]}}`, c.ItemID)
+		return err
+	})
+	result := &LoopResult{}
+	_, accepted, err := l.judgeCandidate(context.Background(), c, result)
+	if err != nil || accepted || result.RefusedSteps[ReasonJudgeUnreadable] != 1 {
+		t.Fatalf("expected evaluator binding hold: accepted=%t result=%+v err=%v", accepted, result, err)
+	}
+	if want := []string{"worker"}; !reflect.DeepEqual(s.order, want) {
+		t.Fatalf("unexpected standalone judge: got %v, want %v", s.order, want)
+	}
+}
+
+func TestGatedLegacyJudgeResumesOnlyWithMatchingEvaluator(t *testing.T) {
+	for _, tc := range []struct {
+		name, node string
+		land       bool
+	}{
+		{"legacy compatibility transport", "", true},
+		{"inconsistent node", "wrong-node", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, l, s, c := prepareJudgeCandidate(t, "pass")
+			ctx := context.Background()
+			checked, accepted, err := l.judgeCandidate(ctx, c, &LoopResult{})
+			if err != nil || !accepted {
+				t.Fatalf("judge: accepted=%t err=%v", accepted, err)
+			}
+			// Resume directly from a gate verdict with an old receipt.
+			checked.Judge.Options.EvaluatorBinding = item.EvaluatorBinding{}
+			checked.Judge.legacy = true
+			checked.Judge.Request.NodeID = tc.node
+			result := &LoopResult{}
+			_, landed, err := l.landCandidate(ctx, checked, result, nil)
+			if err != nil || landed != tc.land {
+				t.Fatalf("landed=%t, want %t; err=%v", landed, tc.land, err)
+			}
+			want := []string{"worker", "judge"}
+			if tc.land {
+				want = append(want, "landing")
+			} else if result.RefusedSteps[ReasonJudgeUnreadable] != 1 {
+				t.Fatalf("expected evaluator binding hold: %+v", result)
+			}
+			if !reflect.DeepEqual(s.order, want) {
+				t.Fatalf("unexpected steps: got %v, want %v", s.order, want)
+			}
+		})
+	}
 }
 
 // An unreadable judge file is the review run's, not the worker's: the item is held as
 // `judge-unreadable` in the queue, and since the owner's ruling of 2026-11-17 a changed
 // backend policy re-dispatches nothing.
 func TestAnUnreadableJudgeIsNotChargedToTheWorker(t *testing.T) {
-	f, l, s := judgeRouteFixture(t, "missing", true)
+	f, l, s := judgeRouteFixture(t, "missing")
 	result := &LoopResult{}
 	for attempt := 0; attempt < 2; attempt++ {
 		for i := 0; i < 4; i++ {
@@ -173,10 +241,10 @@ func TestAnUnreadableJudgeIsNotChargedToTheWorker(t *testing.T) {
 	}
 }
 
-func TestJudgeGrantExpiryRetainsLoopSettlement(t *testing.T) {
+func TestJudgeLandingDoesNotDependOnAClock(t *testing.T) {
 	for _, phase := range []string{"gate", "landing"} {
 		t.Run(phase, func(t *testing.T) {
-			f, l, s := judgeRouteFixture(t, "pass", true)
+			f, l, s := judgeRouteFixture(t, "pass")
 			at := l.cfg.Now()
 			expire := func() { l.cfg.Now = func() time.Time { return at.Add(2 * time.Hour) } }
 			if phase == "gate" {
@@ -186,24 +254,6 @@ func TestJudgeGrantExpiryRetainsLoopSettlement(t *testing.T) {
 			}
 			result := &LoopResult{}
 			for i := 0; i < 4; i++ {
-				if _, err := l.pass(context.Background(), result); err != nil {
-					t.Fatal(err)
-				}
-				drainOwned(t, l, result)
-			}
-			for _, p := range mustPlan(t, l) {
-				if p.decision.ItemID == "item-a" && p.decision.Reason != ReasonJudgeGrantAbsent {
-					t.Errorf("grant expiry hold %s", p.decision.Reason)
-				}
-			}
-			if result.Landed != 0 {
-				t.Errorf("item counted settled before authority %d", result.Landed)
-			}
-			fixtureWrite(t, f, func(tx *store.Tx) error {
-				_, err := tx.Exec(`INSERT INTO item_grants(grant_id,claim_classes,grantor,issued_at,expires_at) VALUES('replacement-grant','verification-only','owner',?,?)`, l.cfg.Now().Add(-time.Minute).UnixMilli(), l.cfg.Now().Add(time.Hour).UnixMilli())
-				return err
-			})
-			for i := 0; i < 2; i++ {
 				if _, err := l.pass(context.Background(), result); err != nil {
 					t.Fatal(err)
 				}

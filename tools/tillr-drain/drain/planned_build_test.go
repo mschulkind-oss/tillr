@@ -46,8 +46,7 @@ func plannedFixture(t *testing.T) (refusalLoopFixture, *Loop, *workflowSteps) {
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(`INSERT INTO item_grants(grant_id,claim_classes,grantor,issued_at,expires_at) VALUES('grant-review','verification-only','owner',?,?)`, l.cfg.Now().Add(-time.Hour).UnixMilli(), l.cfg.Now().Add(time.Hour).UnixMilli())
-		return err
+		return nil
 	})
 	return f, l, steps
 }
@@ -686,7 +685,7 @@ func TestPlannedWritePieceAlreadySatisfied(t *testing.T) {
 				return err
 			})
 			id := fileFixtureRequestWith(t, f, "Implement tools/item-a/built.go.\n", "build", "planned-build@v1", []string{"tools/item-a/"}, false)
-			grantForItem(t, f, l, id)
+
 			req := l.cfg.Policy.request(id, "lane-1", "probe", l.cfg.Policy.firstBackend(itemRow{ItemID: id, Seat: "build"}))
 			l.endingCapabilities = map[string]string{req.Command[0]: tc.capability}
 			steps := &noSplitReportSteps{
@@ -740,7 +739,7 @@ func TestPlannedBuildNoSplitWorkBriefContainsPlannerReport(t *testing.T) {
 			return err
 		})
 		id := fileFixtureRequestWith(t, f, "Implement tools/item-a/built.go.\n", "build", "planned-build@v1", []string{"tools/item-a/"}, false)
-		grantForItem(t, f, l, id)
+
 		req := l.cfg.Policy.request(id, "lane-1", "probe", l.cfg.Policy.firstBackend(itemRow{ItemID: id, Seat: "build"}))
 		if req != nil && len(req.Command) > 0 {
 			l.endingCapabilities = map[string]string{req.Command[0]: run.EndingCallSuspends}
@@ -774,7 +773,6 @@ func TestPlannedBuildNoSplitWorkBriefContainsPlannerReport(t *testing.T) {
 			return err
 		})
 		id := fileFixtureRequestWith(t, f, "Implement tools/item-a/built.go on retry.\n", "build", "planned-build@v1", []string{"tools/item-a/"}, false)
-		grantForItem(t, f, l, id)
 
 		steps := &noSplitReportSteps{workflowSteps: base, planReport: planReport, failWorks: 2}
 		l.cfg.Steps = steps
@@ -881,8 +879,7 @@ func TestPlannedBuildNoSplitWorkBriefContainsPlannerReport(t *testing.T) {
 			_, err := tx.Exec(`UPDATE items SET state = 'closed' WHERE item_id = 'item-a'`)
 			return err
 		})
-		id := fileFixtureRequestWith(t, f, "Split tools/item-a/built.go.\n", "build", "planned-build@v1", []string{"tools/item-a/"}, false)
-		grantForItem(t, f, l, id)
+		fileFixtureRequestWith(t, f, "Split tools/item-a/built.go.\n", "build", "planned-build@v1", []string{"tools/item-a/"}, false)
 
 		pieces := []map[string]any{piece("a", "build", "write"), piece("b", "scout", "read_only")}
 		steps := &noSplitReportSteps{workflowSteps: base, planReport: planReport, proposal: pieceProposal(pieces)}

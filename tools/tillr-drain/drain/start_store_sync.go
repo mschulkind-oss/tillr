@@ -215,7 +215,7 @@ func (d *startStoreDelta) classify(events []event.Event) bool {
 		switch e.Kind {
 		case run.AllocateKind, run.FinishKind, run.ReleaseKind:
 			d.lanes, known = true, true
-		case item.AddKind, item.RecordKind, item.UpdateKind, item.ConflictKind, item.VerdictRecordKind, item.GrantRecordKind, item.VerdictsWithdrawnKind:
+		case item.AddKind, item.RecordKind, item.UpdateKind, item.ConflictKind, item.VerdictRecordKind, item.VerdictsWithdrawnKind:
 			if e.ObjectType != "item" || e.ObjectID == nil {
 				return false
 			}

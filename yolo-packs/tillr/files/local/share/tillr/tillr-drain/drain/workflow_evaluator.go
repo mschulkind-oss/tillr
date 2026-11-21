@@ -58,7 +58,7 @@ func validateEvaluator(w *Workflow) error {
 	for _, node := range w.Stages {
 		if node.ID == id {
 			found = true
-			if node.Access != "read_only" {
+			if node.Kind != "agent" || node.Access != "read_only" {
 				return fmt.Errorf("workflow-evaluator-access: exit: %s must be read-only", id)
 			}
 		}
@@ -184,7 +184,7 @@ func (l *Loop) settleEvaluator(ctx context.Context, d Decision, rec run.Record, 
 		return true, e
 	}
 	// A checked refusal is durable before cleanup and examination. Replaying it
-	// must not recheck a grant or the lane after cleanup has started.
+	// must not recheck the lane after cleanup has started.
 	if outcome == "evaluated-fail" || refused {
 		return true, l.finishEvaluatorHold(ctx, d, Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: d.RunRequest.RunID, HeadSHA: d.NodeBaseSHA})
 	}
@@ -193,7 +193,7 @@ func (l *Loop) settleEvaluator(ctx context.Context, d Decision, rec run.Record, 
 		return true, err
 	}
 	c, accepted, err := l.judgeCandidate(ctx, c, result)
-	if errors.Is(err, errJudgeGrantHeld) || errors.Is(err, errJudgeBackendHeld) {
+	if errors.Is(err, errJudgeBackendHeld) {
 		return true, nil
 	}
 	if err != nil {

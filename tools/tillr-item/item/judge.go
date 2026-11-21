@@ -15,8 +15,9 @@ import (
 // JudgeOptions is caller-owned provenance. Head and Tree must be resolved from the
 // candidate in Git, never copied from the output being checked.
 type JudgeOptions struct {
-	ItemID, Head, Tree, Actor, JudgedActor, GrantID, Landed string
-	At                                                      time.Time
+	EvaluatorBinding
+	ItemID, Head, Tree, Actor, JudgedActor, Landed string
+	At                                             time.Time
 }
 
 // JudgeOutput is the written verdict file defined by tillr-judge-and-lifecycle.md
@@ -142,7 +143,7 @@ func CheckJudge(ctx context.Context, r *store.Reader, raw []byte, o JudgeOptions
 				result.Outcome = VerdictNotDone
 			}
 		}
-		v := verdictPayload{ItemID: o.ItemID, CriterionID: entry.CriterionID, CriterionHash: entry.CriterionHash, Verdict: entry.Verdict, ClaimClass: entry.ClaimClass, Reason: entry.Reason, Evidence: append([]string(nil), entry.Evidence...), EvaluatedHead: o.Head, ActorKind: ActorAgent, Actor: o.Actor, JudgedActor: o.JudgedActor, GrantID: o.GrantID}
+		v := verdictPayload{ItemID: o.ItemID, CriterionID: entry.CriterionID, CriterionHash: entry.CriterionHash, Verdict: entry.Verdict, ClaimClass: entry.ClaimClass, Reason: entry.Reason, Evidence: append([]string(nil), entry.Evidence...), EvaluatedHead: o.Head, ActorKind: ActorAgent, Actor: o.Actor, JudgedActor: o.JudgedActor, EvaluatedTree: o.Tree, EvaluatorBinding: o.EvaluatorBinding}
 		if entry.Verdict == VerdictDone && o.Landed != "" {
 			v.Landed = []string{o.Landed}
 			v.Evidence = append(v.Evidence, "commit:"+o.Landed)
@@ -160,7 +161,7 @@ func CheckJudge(ctx context.Context, r *store.Reader, raw []byte, o JudgeOptions
 		if err := checkIndependence(v); err != nil {
 			return JudgeResult{}, err
 		}
-		if err := checkDelegation(ctx, r, v, o.At); err != nil {
+		if err := checkEvaluator(ctx, r, v); err != nil {
 			return JudgeResult{}, err
 		}
 		result.Records = append(result.Records, env)

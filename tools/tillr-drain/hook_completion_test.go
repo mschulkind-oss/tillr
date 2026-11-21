@@ -143,6 +143,9 @@ func TestHookCompletionCommandWorkflowDirectoryAndEnvironment(t *testing.T) {
 			writeFile(t, filepath.Join(f.root, "config/tillr/commands.json"), fmt.Sprintf(`{"probe":{"argv":[%q],"flags":{}}}`, program("command")))
 			command := `{"id":"probe","kind":"command","command_ref":"probe","access":"read_only"}`
 			agent := `{"id":"investigate","kind":"agent","seat":"build","access":"read_only","prompt":"Investigate the reproduction"}`
+			if tc.evaluator {
+				agent = strings.Replace(agent, `"access":"read_only"`, `"access":"read_only","judge_classes":["verification-only"]`, 1)
+			}
 			first, second, from, to := command, agent, "probe", "investigate"
 			if !commandFirst {
 				first, second, from, to = agent, command, to, from

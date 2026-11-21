@@ -303,11 +303,10 @@ with path.open('a') as out:
 			case "judge":
 				l.cfg.Policy.Seats = map[string]string{"review": "reviewer"}
 				l.cfg.Policy.Backends["reviewer"] = Backend{Adapter: "fixture", Model: "review-model"}
+				// This fixture selects review after staging the worker. Model the
+				// selection migration rather than relying on a late mode toggle.
 				fixtureWrite(t, f, func(tx *store.Tx) error {
-					if _, err := tx.Exec(`UPDATE items SET judge_mode='agent' WHERE item_id='item-a'`); err != nil {
-						return err
-					}
-					_, err := tx.Exec(`INSERT INTO item_grants(grant_id,claim_classes,grantor,issued_at,expires_at) VALUES('grant-review','verification-only','owner',?,?)`, l.cfg.Now().Add(-time.Hour).UnixMilli(), l.cfg.Now().Add(time.Hour).UnixMilli())
+					_, err := tx.Exec(`UPDATE workflow_selections SET graph=? WHERE item_id='item-a'`, store.CompatibilityJudgeGraph(singleWorkerWorkflow, ""))
 					return err
 				})
 				l.cfg.Steps = &judgeRouteSteps{workflowSteps: &workflowSteps{t: t, f: f}, mode: "not-done", workerHead: head}

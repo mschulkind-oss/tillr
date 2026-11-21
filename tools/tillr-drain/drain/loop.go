@@ -3130,9 +3130,6 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	if published, err := l.recoverJudgePublication(ctx, candidate, result); published || err != nil {
 		return "", published && err == nil, err
 	}
-	if err := l.checkLandingJudgeGrant(ctx, candidate); err != nil {
-		return "", false, err
-	}
 	if err := l.checkDeliveryOrder(ctx, candidate); err != nil {
 		return "", false, err
 	}
@@ -3146,6 +3143,16 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	}
 	if head != candidate.HeadSHA {
 		return "", false, l.candidateFault(ctx, candidate, fmt.Sprintf("lane HEAD %s differs from recorded candidate %s", head, candidate.HeadSHA))
+	}
+	if candidate.Judge != nil {
+		checked, err := l.checkJudgeForLanding(ctx, candidate)
+		if err != nil {
+			if item.ExitCode(err) == record.ExitNegative {
+				return "", false, l.holdJudge(ctx, candidate, candidate.Judge.Request.RunID, ReasonJudgeUnreadable, err.Error(), result)
+			}
+			return "", false, err
+		}
+		candidate.Judge = checked
 	}
 	h, err := l.observeTrunk(ctx, "")
 	if err != nil {

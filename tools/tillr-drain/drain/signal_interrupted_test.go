@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
@@ -129,8 +128,10 @@ func TestSignalEndingsLeaveBackendAvailabilityUnchangedAndInfraStillCloses(t *te
 		return nil
 	})
 	d = mustPlan(t, l)[0].decision
-	if d.Action != ActionDispatch || d.RunRequest.Backend != "backup" {
-		t.Fatalf("expected failover to backup after real infra close, got %+v", d)
+	// An interrupted run resumes on its recorded backend, even when a fresh
+	// dispatch could use the backup. Its same-backend continuation must wait.
+	if d.Action != ActionHold || d.Reason != ReasonBackendClosed || d.DeferredBy != "fixture" {
+		t.Fatalf("expected the interrupted fixture continuation to wait, got %+v", d)
 	}
 
 	// (a3) Crash signal ExitCode=-1 without EndSignal still closes backup too.
@@ -140,10 +141,13 @@ func TestSignalEndingsLeaveBackendAvailabilityUnchangedAndInfraStillCloses(t *te
 	if err := RecordBackendOutcomes(context.Background(), f.storePath); err != nil {
 		t.Fatal(err)
 	}
-	d = mustPlan(t, l)[0].decision
-	if d.Action != ActionHold || d.Reason != ReasonBackendClosed {
-		t.Fatalf("crash signal did not close backup: %+v", d)
-	}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		closed, err := readInfrastructureClosed(r)
+		if err == nil && !closed["backup"] {
+			t.Error("crash signal did not close backup")
+		}
+		return err
+	})
 }
 
 func TestSingleRunSettleSignalDoesNotIncrementInfraOrFailover(t *testing.T) {
@@ -498,8 +502,7 @@ func TestAgentJudgeAndWorkflowEvaluatorInterruptedRestartSameBackendAndLand(t *t
 			if _, err := tx.Exec(`UPDATE items SET workflow='',judge_mode='agent' WHERE item_id='item-a'`); err != nil {
 				return err
 			}
-			_, err := tx.Exec(`INSERT INTO item_grants(grant_id,claim_classes,grantor,issued_at,expires_at) VALUES('grant-review','verification-only','owner',?,?)`, l.cfg.Now().Add(-time.Hour).UnixMilli(), l.cfg.Now().Add(time.Hour).UnixMilli())
-			return err
+			return nil
 		})
 		steps := &judgeSignalSteps{workflowSteps: ws}
 		l.cfg.Steps = steps
@@ -536,7 +539,7 @@ func TestAgentJudgeAndWorkflowEvaluatorInterruptedRestartSameBackendAndLand(t *t
 		l.cfg.Policy.Backends["reviewer-backup"] = Backend{Adapter: "fixture", Model: "review-backup"}
 		l.cfg.Policy.Seats["review"] = "reviewer"
 		l.cfg.Policy.SeatLists = map[string][]string{"review": {"reviewer", "reviewer-backup"}}
-		raw := `{"name":"eval-signal","version":1,"stages":[{"id":"build","kind":"agent","seat":"build","access":"write","prompt":"build"},{"id":"verify","kind":"agent","seat":"review","access":"read_only","prompt":"verify"}],"edges":[{"from_node":"build","to_node":"verify","when_outcome":"pass"}],"exit":{"evaluator_slot":"verify","requires_nodes":["build","verify"]}}`
+		raw := `{"name":"eval-signal","version":1,"stages":[{"id":"build","kind":"agent","seat":"build","access":"write","prompt":"build"},{"id":"verify","kind":"agent","seat":"review","access":"read_only","judge_classes":["verification-only"],"prompt":"verify"}],"edges":[{"from_node":"build","to_node":"verify","when_outcome":"pass"}],"exit":{"evaluator_slot":"verify","requires_nodes":["build","verify"]}}`
 		writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/eval-signal@v1.json"), raw)
 		runGit(t, f.root, "add", ".")
 		runGit(t, f.root, "commit", "-qm", "eval-signal workflow")
@@ -548,8 +551,7 @@ func TestAgentJudgeAndWorkflowEvaluatorInterruptedRestartSameBackendAndLand(t *t
 			if _, err := tx.Exec(`UPDATE items SET workflow='eval-signal@v1' WHERE item_id='item-a'`); err != nil {
 				return err
 			}
-			_, err := tx.Exec(`INSERT INTO item_grants(grant_id,claim_classes,grantor,issued_at,expires_at) VALUES('grant-review','verification-only','owner',?,?)`, l.cfg.Now().Add(-time.Hour).UnixMilli(), l.cfg.Now().Add(time.Hour).UnixMilli())
-			return err
+			return nil
 		})
 		steps := &judgeSignalSteps{workflowSteps: ws}
 		l.cfg.Steps = steps

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,7 +16,7 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-const evaluatorWorkflow = `{"name":"scout-then-build","version":1,"stages":[{"id":"work","kind":"agent","seat":"build","access":"write"},{"id":"second","kind":"agent","seat":"build","access":"write"},{"id":"evaluate","kind":"agent","seat":"review","access":"read_only"}],"edges":[{"from_node":"work","to_node":"second"},{"from_node":"second","to_node":"evaluate"}],"exit":{"requires_nodes":["work","second","evaluate"],"evaluator_slot":"evaluate"}}`
+const evaluatorWorkflow = `{"name":"scout-then-build","version":1,"stages":[{"id":"work","kind":"agent","seat":"build","access":"write"},{"id":"second","kind":"agent","seat":"build","access":"write"},{"id":"evaluate","kind":"agent","seat":"review","access":"read_only","judge_classes":["verification-only"]}],"edges":[{"from_node":"work","to_node":"second"},{"from_node":"second","to_node":"evaluate"}],"exit":{"requires_nodes":["work","second","evaluate"],"evaluator_slot":"evaluate"}}`
 
 func TestWorkflowEvaluatorValidation(t *testing.T) {
 	for _, tc := range []struct{ name, old, replacement, rule string }{
@@ -51,7 +50,7 @@ func TestWorkflowEvaluatorValidation(t *testing.T) {
 }
 
 func TestWorkflowEvaluatorFailedStartHoldsItsBackend(t *testing.T) {
-	f, l, s := judgeRouteFixture(t, "pass", true)
+	f, l, s := judgeRouteFixture(t, "pass")
 	l.cfg.Steps = failingJudgeSteps{s}
 	l.cfg.Policy.Backends["alternate"] = l.cfg.Policy.Backends["reviewer"]
 	l.cfg.Policy.SeatLists = map[string][]string{"review": {"reviewer", "alternate"}}
@@ -81,10 +80,65 @@ func TestWorkflowEvaluatorFailedStartHoldsItsBackend(t *testing.T) {
 	}
 }
 
+func TestWorkflowEvaluatorJudgeClassesValidation(t *testing.T) {
+	const declaration = `,"judge_classes":["verification-only"]`
+	for _, tc := range []struct {
+		name, replacement string
+		want              []string
+	}{
+		{"absent", "", nil},
+		{"null", `,"judge_classes":null`, nil},
+		{"empty", `,"judge_classes":[]`, nil},
+		{"string", `,"judge_classes":"verification-only"`, nil},
+		{"number", `,"judge_classes":1`, nil},
+		{"boolean", `,"judge_classes":true`, nil},
+		{"object", `,"judge_classes":{}`, nil},
+		{"non-string-entry", `,"judge_classes":["verification-only",1]`, nil},
+		{"null-entry", `,"judge_classes":[null]`, nil},
+		{"duplicate", `,"judge_classes":["verification-only","verification-only"]`, nil},
+		{"owner-only", `,"judge_classes":["owner-only"]`, nil},
+		{"owner-with-verification", `,"judge_classes":["verification-only","owner-only"]`, nil},
+		{"unknown", `,"judge_classes":["unknown"]`, nil},
+		{"empty-entry", `,"judge_classes":[""]`, nil},
+		{"verification-only", declaration, []string{"verification-only"}},
+		{"red-gate-triage", `,"judge_classes":["red-gate-triage"]`, []string{"red-gate-triage"}},
+		{"direction", `,"judge_classes":["direction"]`, []string{"direction"}},
+		{"all-classes", `,"judge_classes":["direction","verification-only","red-gate-triage"]`, []string{"direction", "verification-only", "red-gate-triage"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, l, _ := workflowLoopFixture(t, "")
+			l.cfg.Policy.Seats["review"] = "reviewer"
+			l.cfg.Policy.Backends["reviewer"] = Backend{Adapter: "fixture"}
+			raw := strings.Replace(evaluatorWorkflow, declaration, tc.replacement, 1)
+			path := filepath.Join(f.root, "config/tillr/workflows/scout-then-build@v1.json")
+			writeForkFile(t, path, raw)
+			_, decodeErr := decodeWorkflow([]byte(raw), "scout-then-build@v1")
+			w, err := loadWorkflow(f.root, "scout-then-build@v1", l.cfg.Policy)
+			var out bytes.Buffer
+			ok := CheckWorkflows(f.root, path, &out)
+			if tc.want == nil {
+				const rule = "workflow-evaluator-judge-classes"
+				if decodeErr == nil || !strings.Contains(decodeErr.Error(), rule) || err == nil || !strings.Contains(err.Error(), rule) || ok || !strings.Contains(out.String(), rule) {
+					t.Fatalf("decode %v; loader %v; check %s; want %s", decodeErr, err, out.String(), rule)
+				}
+				return
+			}
+			if decodeErr != nil || err != nil || !ok {
+				t.Fatalf("decode %v; loader %v; check %s", decodeErr, err, out.String())
+			}
+			for _, stage := range w.Stages {
+				if stage.ID == "evaluate" && !reflect.DeepEqual(stage.JudgeClasses, tc.want) {
+					t.Fatalf("classes %v, want %v", stage.JudgeClasses, tc.want)
+				}
+			}
+		})
+	}
+}
+
 func TestWorkflowEvaluatorJudgeRoute(t *testing.T) {
-	for _, mode := range []string{"pass", "mechanical", "not-done", "defective-mismatch", "no-grant"} {
+	for _, mode := range []string{"pass", "mechanical", "not-done", "defective-mismatch"} {
 		t.Run(mode, func(t *testing.T) {
-			f, l, s := judgeRouteFixture(t, mode, mode != "no-grant")
+			f, l, s := judgeRouteFixture(t, mode)
 			if mode == "defective-mismatch" {
 				s.entries = []item.JudgeEntry{{
 					CriterionID: "c1", CriterionHash: item.CriterionHash("the first criterion of item-a"),
@@ -123,13 +177,10 @@ func TestWorkflowEvaluatorJudgeRoute(t *testing.T) {
 			if mode == "pass" || mode == "mechanical" {
 				want = append(want, "gate", "landing")
 			}
-			if mode == "no-grant" {
-				want = nil
-			}
 			if !reflect.DeepEqual(s.order, want) {
 				t.Fatalf("order %v, want %v", s.order, want)
 			}
-			if mode != "no-grant" {
+			{
 				raw, err := os.ReadFile(filepath.Join(RunDir(f.root, s.runs[2].RunID), judgeReceiptFile))
 				if err != nil {
 					t.Fatal(err)
@@ -181,7 +232,7 @@ func TestWorkflowEvaluatorJudgeRoute(t *testing.T) {
 			if mode == "defective-mismatch" && result.RefusedSteps[ReasonJudgeDefectiveMismatch] != 1 {
 				t.Errorf("verifier refusals: %v", result.RefusedSteps)
 			}
-			reason := map[string]string{"not-done": ReasonReturned, "no-grant": ReasonJudgeGrantAbsent, "defective-mismatch": ReasonJudgeDefectiveMismatch}[mode]
+			reason := map[string]string{"not-done": ReasonReturned, "defective-mismatch": ReasonJudgeDefectiveMismatch}[mode]
 			if reason != "" {
 				found := false
 				for _, p := range mustPlan(t, l) {
@@ -203,8 +254,13 @@ func TestWorkflowEvaluatorJudgeRoute(t *testing.T) {
 func TestWorkflowEvaluatorRefusesWriterRun(t *testing.T) {
 	f, l, s, c := prepareJudgeCandidate(t, "pass")
 	req := l.cfg.Policy.request(c.ItemID, c.LaneID, c.RunID, "reviewer")
-	req.NodeID = "evaluate"
+	c.Workflow = "scout-then-build@v1"
+	req.NodeID, req.Workflow = "evaluate", c.Workflow
 	c.Evaluator = req
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE workflow_selections SET workflow=?,graph=? WHERE item_id=?`, c.Workflow, evaluatorWorkflow, c.ItemID)
+		return err
+	})
 	c.Writers = []JudgeWriter{{NodeID: "work", RunID: c.RunID, SessionID: "writer-session", Backend: "fixture", Route: "fixture"}}
 	_, ok, err := l.judgeCandidate(context.Background(), c, &LoopResult{})
 	if err != nil || ok {
@@ -225,7 +281,7 @@ func TestWorkflowEvaluatorRefusesWriterRun(t *testing.T) {
 func TestWorkflowEvaluatorBranchesAndAuthority(t *testing.T) {
 	for _, mode := range []string{"skipped", "expired", "writerless", "later-reader", "nested"} {
 		t.Run(mode, func(t *testing.T) {
-			f, l, s := judgeRouteFixture(t, "mechanical", true)
+			f, l, s := judgeRouteFixture(t, "mechanical")
 			raw := evaluatorWorkflow
 			switch mode {
 			case "skipped":
@@ -262,26 +318,6 @@ func TestWorkflowEvaluatorBranchesAndAuthority(t *testing.T) {
 					t.Fatal(err)
 				}
 				drainOwned(t, l, result)
-			}
-			if mode == "expired" {
-				for _, p := range mustPlan(t, l) {
-					if p.decision.ItemID == "item-a" && p.decision.Reason != ReasonJudgeGrantAbsent {
-						t.Errorf("hold %s", p.decision.Reason)
-					}
-				}
-				if s.gates != 0 {
-					t.Fatal("expired grant reached gate")
-				}
-				fixtureWrite(t, f, func(tx *store.Tx) error {
-					_, err := tx.Exec(`UPDATE item_grants SET expires_at=?`, l.cfg.Now().Add(time.Hour).UnixMilli())
-					return err
-				})
-				for i := 0; i < 6; i++ {
-					if _, err := l.pass(context.Background(), result); err != nil {
-						t.Fatal(err)
-					}
-					drainOwned(t, l, result)
-				}
 			}
 			expectedRuns := 3
 			if mode == "skipped" {
@@ -328,10 +364,64 @@ func TestWorkflowEvaluatorProposalKeepsSlot(t *testing.T) {
 	if err := validateEvaluator(next); err != nil {
 		t.Fatal(err)
 	}
+	for _, stage := range next.Stages {
+		if stage.ID == evaluatorSlot(next) && !reflect.DeepEqual(stage.JudgeClasses, []string{item.ClaimVerification}) {
+			t.Fatalf("replacement evaluator lost its classes: %+v", stage)
+		}
+	}
+
+	// Replacing a writer in a graph that already has an evaluator cannot widen
+	// or remove that evaluator's reviewed classes.
+	outer, err := decodeWorkflow([]byte(evaluatorWorkflow), "scout-then-build@v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	outer.Stages[2].JudgeClasses = []string{item.ClaimVerification, item.ClaimDirection}
+	replacement := &Workflow{Stages: []WorkflowStage{{ID: "writer", Kind: "agent", Access: "write"}}}
+	revised, err := replaceProposalGraph(outer, "second", replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := evaluatorSlot(revised); got != "evaluate" {
+		t.Fatalf("replacement changed the outer evaluator to %q", got)
+	}
+	for _, stage := range revised.Stages {
+		if stage.ID == "evaluate" && !reflect.DeepEqual(stage.JudgeClasses, outer.Stages[2].JudgeClasses) {
+			t.Fatalf("replacement changed outer classes: %+v", stage)
+		}
+	}
+
+	f, _, _ := judgeRouteFixture(t, "mechanical")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		const ref = "scout-then-build@v1"
+		d := Decision{ItemID: "item-a", SelectedWorkflow: ref, WorkflowSource: "block", Workflow: w, Attempt: 1}
+		if err := recordWorkflowSelection(tx, d); err != nil {
+			return err
+		}
+		d.Workflow, d.Attempt = next, 2
+		if err := recordWorkflowSelection(tx, d); err != nil {
+			return err
+		}
+		binding, err := item.ReadEvaluatorBinding(tx.Reader(), d.ItemID)
+		if err != nil {
+			return err
+		}
+		if binding.EvaluatorNode != "target/evaluate" {
+			t.Fatalf("wrong selected evaluator after replacement: %+v", binding)
+		}
+		d.Workflow, d.Attempt = w, 3
+		if err := recordWorkflowSelection(tx, d); err != nil {
+			return err
+		}
+		if _, err := item.ReadEvaluatorBinding(tx.Reader(), d.ItemID); err == nil {
+			t.Fatal("an earlier attempt's replacement widened the pinned selection")
+		}
+		return nil
+	})
 }
 
 func TestWorkflowEvaluatorHoldCleanupReplay(t *testing.T) {
-	f, l, s := judgeRouteFixture(t, "not-done", true)
+	f, l, s := judgeRouteFixture(t, "not-done")
 	writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/scout-then-build@v1.json"), evaluatorWorkflow)
 	runGit(t, f.root, "add", "config/tillr/workflows")
 	runGit(t, f.root, "commit", "-qm", "evaluator workflow")
@@ -383,8 +473,8 @@ func TestWorkflowEvaluatorHoldCleanupReplay(t *testing.T) {
 	}
 }
 
-func TestWorkflowEvaluatorRefusalReplayAfterGrantExpires(t *testing.T) {
-	f, l, s := judgeRouteFixture(t, "not-done", true)
+func TestWorkflowEvaluatorRefusalReplayAfterClockAdvance(t *testing.T) {
+	f, l, s := judgeRouteFixture(t, "not-done")
 	writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/scout-then-build@v1.json"), evaluatorWorkflow)
 	runGit(t, f.root, "add", "config/tillr/workflows")
 	runGit(t, f.root, "commit", "-qm", "evaluator workflow")
@@ -411,9 +501,6 @@ func TestWorkflowEvaluatorRefusalReplayAfterGrantExpires(t *testing.T) {
 		if _, err := tx.Exec(`UPDATE node_runs SET outcome='running' WHERE run_id=?`, d.RunRequest.RunID); err != nil {
 			return err
 		}
-		if _, err := tx.Exec(`UPDATE item_grants SET expires_at=?`, l.cfg.Now().UnixMilli()); err != nil {
-			return err
-		}
 		return appendEffect(tx, dispatchStartedKind, d.RunRequest.RunID, work, l.cfg.Now())
 	})
 	handled, err := l.settleEvaluator(context.Background(), d, run.Record{RunID: d.RunRequest.RunID}, "", result)
@@ -429,7 +516,7 @@ func TestWorkflowEvaluatorRefusalReplayAfterGrantExpires(t *testing.T) {
 			return err
 		}
 		if outcome != "evaluated-fail" {
-			t.Errorf("refusal not settled after grant expiry: %s", outcome)
+			t.Errorf("refusal not settled after clock advance: %s", outcome)
 		}
 		var n int
 		if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind=? AND object_id=? AND json_extract(payload,'$.step')=?`, RefusalKind, d.RunRequest.RunID, RefusalVerifyNotDone).Scan(&n); err != nil {
@@ -440,47 +527,6 @@ func TestWorkflowEvaluatorRefusalReplayAfterGrantExpires(t *testing.T) {
 		}
 		return nil
 	})
-}
-
-func TestWorkflowEvaluatorGrantRenewalDoesNotMaskFailure(t *testing.T) {
-	f, l, s, c := prepareJudgeCandidate(t, "not-done")
-	writer := c.RunID
-	c.RunID += "-evaluate"
-	c.Evaluator = l.cfg.Policy.request(c.ItemID, c.LaneID, c.RunID, "reviewer")
-	c.Evaluator.NodeID = "evaluate"
-	c.Writers = []JudgeWriter{{NodeID: "work", RunID: writer, SessionID: "writer-session", Backend: "fixture", Route: "fixture"}}
-	fixtureWrite(t, f, func(tx *store.Tx) error {
-		_, err := tx.Exec(`UPDATE item_grants SET expires_at=?`, l.cfg.Now().UnixMilli())
-		return err
-	})
-	_, ok, err := l.judgeCandidate(context.Background(), c, &LoopResult{})
-	if ok || !errors.Is(err, errJudgeGrantHeld) {
-		t.Fatalf("grant hold %v %v", ok, err)
-	}
-	if len(s.runs) != 1 {
-		t.Fatal("evaluator started without grant")
-	}
-	fixtureWrite(t, f, func(tx *store.Tx) error {
-		_, err := tx.Exec(`UPDATE item_grants SET expires_at=?`, l.cfg.Now().Add(time.Hour).UnixMilli())
-		return err
-	})
-	_, ok, err = l.judgeCandidate(context.Background(), c, &LoopResult{})
-	if ok || err != nil {
-		t.Fatalf("failing evaluator %v %v", ok, err)
-	}
-	fixtureRead(t, f, func(r *store.Reader) error {
-		history, err := readRunHistory(r)
-		if err != nil {
-			return err
-		}
-		if reason := history.refusals[c.RunID]; reason != RefusalVerifyNotDone {
-			t.Errorf("hold %s, want %s", reason, RefusalVerifyNotDone)
-		}
-		return nil
-	})
-	if len(s.runs) != 2 {
-		t.Fatalf("run count %d", len(s.runs))
-	}
 }
 
 func TestWorkflowEvaluatorSingleVerdictReader(t *testing.T) {

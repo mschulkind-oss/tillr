@@ -84,7 +84,6 @@ var Rules = map[string]Rule{
 	"complete-item-fault":          {"needs a cause", "lane", "repair the fault the detail names, then authorize a retry"},
 	"criteria-unjudged":            {"needs a cause", "lane", "the judge seat; inspect the judge run and authorize a retry"},
 	"run-unjudged":                 {"needs a cause", "lane", "authorize a retry acknowledging the unjudged run: `tillr drain retry --item <item> --run <the held run>`"},
-	"judge-grant-absent":           {"needs you", "queue", "issue a grant covering the item's criteria: tillr item grant issue --store <path> --input <record> --now <RFC3339>"},
 	"judge-unreadable":             {"needs a cause", "judge", "inspect the judge run"},
 	"eval-failed":                  {"waits on work", "judge", "amend the candidate against the judge's reason"},
 	"judge-blocked":                {"waits on work", "judge", "the recorded waiter; answer the judge's blocker"},

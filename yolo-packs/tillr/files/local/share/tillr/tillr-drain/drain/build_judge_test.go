@@ -36,7 +36,7 @@ func (s *heldBuildJudge) Run(ctx context.Context, req run.Request) (run.Record, 
 
 func TestRestartAnswersDuringAgentJudgeAndReplacementJudgesCandidateOnce(t *testing.T) {
 	h := newRestartHarness(t, []byte("next build"), func(context.Context, string) error { return nil })
-	f, l, steps := judgeRouteFixture(t, "pass", true)
+	f, l, steps := judgeRouteFixture(t, "pass")
 	l.cfg.Restart = h.l.cfg.Restart
 	h.f, h.l = f, l
 	held := &heldBuildJudge{judgeRouteSteps: steps, entered: make(chan struct{}, 1), release: make(chan struct{}), cleaned: make(chan struct{})}

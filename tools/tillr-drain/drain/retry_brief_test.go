@@ -210,7 +210,6 @@ func TestOwnerQuestionAndRecordedAnswerAppearTogetherInNextRunsBrief(t *testing.
 			return err
 		})
 		id := fileFixtureRequestWith(t, f, "Add eviction policy to tools/item-a/cache.go.\n", "build", "planned-build@v1", []string{"tools/item-a/"}, false)
-		grantForItem(t, f, l, id)
 
 		question := "Should cache entries expire on read or only on write?"
 		answer := "Expire only on write; reads must stay O(1) with []entry{{ID: 1}} unchanged."
@@ -508,29 +507,6 @@ func (s *identicalRepeatRequestSteps) Run(ctx context.Context, req run.Request) 
 	return rec, report, err
 }
 
-func grantForItem(t *testing.T, f refusalLoopFixture, l *Loop, id string) {
-	t.Helper()
-	fixtureWrite(t, f, func(tx *store.Tx) error {
-		rows, err := tx.Query(`SELECT DISTINCT claim_class FROM item_criteria WHERE item_id = ?`, id)
-		if err != nil {
-			return err
-		}
-		var classes []string
-		for rows.Next() {
-			var c string
-			if err := rows.Scan(&c); err != nil {
-				rows.Close()
-				return err
-			}
-			classes = append(classes, c)
-		}
-		rows.Close()
-		_, err = tx.Exec(`INSERT INTO item_grants(grant_id,claim_classes,grantor,issued_at,expires_at) VALUES(?,?,?,?,?)`,
-			"grant-"+id, strings.Join(classes, ","), "owner", l.cfg.Now().Add(-time.Hour).UnixMilli(), l.cfg.Now().Add(time.Hour).UnixMilli())
-		return err
-	})
-}
-
 func TestIdenticalRepeatHoldNamesWorkingCommandForFiledRequest(t *testing.T) {
 	f, l, base := plannedFixture(t)
 	writeForkFile(t, filepath.Join(f.root, "config/tillr/plan-guidance.md"), "cheap models")
@@ -539,7 +515,6 @@ func TestIdenticalRepeatHoldNamesWorkingCommandForFiledRequest(t *testing.T) {
 		return err
 	})
 	id := fileFixtureRequestWith(t, f, "Update cache in tools/item-a/cache.go.\n", "build", "planned-build@v1", []string{"tools/item-a/"}, false)
-	grantForItem(t, f, l, id)
 
 	steps := &identicalRepeatRequestSteps{workflowSteps: base}
 	l.cfg.Steps = steps
@@ -620,7 +595,6 @@ func TestLandedRowItemWithLaterHeldRunNamesWorkingRetry(t *testing.T) {
 			return err
 		})
 		id := fileFixtureRequestWith(t, f, "Update cache in tools/item-a/cache.go.\n", "build", "planned-build@v1", []string{"tools/item-a/"}, false)
-		grantForItem(t, f, l, id)
 
 		// Seed an earlier landed row on the same item, matching an item whose earlier
 		// part landed through the drain before a later run ended in a hold.
@@ -726,7 +700,7 @@ func TestLandedRowItemWithLaterHeldRunNamesWorkingRetry(t *testing.T) {
 			return err
 		})
 		id := fileFixtureRequestWith(t, f, "Add eviction policy to tools/item-a/cache.go.\n", "build", "planned-build@v1", []string{"tools/item-a/"}, false)
-		grantForItem(t, f, l, id)
+
 		fixtureWrite(t, f, func(tx *store.Tx) error {
 			return recordFixtureLanding(tx, id, "run-"+id+"-a0", "f6f45afdb", 1)
 		})

@@ -188,12 +188,9 @@ tillr-view run --store /path/to/.tillr/state.db --run <run-id> [--json]
 
 An external caller points these at a store snapshot; `status --json` reads the same JSON the loop reads;
 `status` answers where the board stands now, `events` answers what happened in order,
-For opted-in agent reviews, the waiting face recognizes `judge-grant-absent`,
-`judge-unreadable`, `eval-failed`, `judge-blocked`, and `judge-defective`. `status`,
-`waiting`, `running`, and `serve` show each current sign-off grant's expiry time and warn
-from one hour before it lapses. Items waiting as `judge-grant-absent` are listed as held,
-never running, and when a covering grant has expired the hold names that grant, when it
-expired, and `tillr item grant issue`. A failed or unreadable review includes its recorded
+For agent reviews, the waiting face recognizes `judge-unreadable`, `eval-failed`,
+`judge-blocked`, and `judge-defective`. Historical grant waiting records remain in
+event history but do not hold an item. A failed or unreadable review includes its recorded
 controlling reason, rather than an unexplained hold. A blocked item names its recorded
 waiter and reason; a defective item is closed and leaves the waiting list. Its historical
 reason still has an explicit classification. The

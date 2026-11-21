@@ -337,6 +337,9 @@ func replaceProposalGraph(w *Workflow, target string, inner *Workflow) (*Workflo
 		g.Outputs = out
 		next.Groups[target+"/"+id] = g
 	}
+	if existing := evaluatorSlot(w); existing != "" && inGraphGroup(existing, target) {
+		return nil, fmt.Errorf("proposal-exit: cannot replace the selected evaluator %s", existing)
+	}
 	if next.Exit == nil {
 		next.Exit = &WorkflowExit{RequiresNodes: requiredWorkflowNodes(w), RequiresCandidate: workflowCandidatePolicy(w)}
 	}
@@ -382,6 +385,9 @@ func replaceProposalGraph(w *Workflow, target string, inner *Workflow) (*Workflo
 		next.Sources[ref] = digest
 	}
 	next.Revision++
+	if err := validateEvaluatorJudgeClasses(&next); err != nil {
+		return nil, fmt.Errorf("proposal-exit: %w", err)
+	}
 	if err := validateWorkflowExit(&next); err != nil {
 		return nil, fmt.Errorf("proposal-exit: %w", err)
 	}
@@ -568,8 +574,13 @@ func (l *Loop) settleProposal(tx *store.Tx, d *Decision, artifacts []nodeArtifac
 				if err := inner.checkScopes(paths); err != nil {
 					refuse("proposal-scope-outside-fence", err)
 				} else {
-					next, err = replaceProposalGraph(d.Workflow, p.Target, inner)
+					_, _, pinned, err := item.ReadWorkflowSelection(tx.Reader(), d.ItemID)
 					if err != nil {
+						return err
+					}
+					if compatibilityReviewSlot(pinned) != "" && evaluatorSlot(inner) != "" {
+						refuse("proposal-exit", fmt.Errorf("cannot replace the selected compatibility evaluator"))
+					} else if next, err = replaceProposalGraph(d.Workflow, p.Target, inner); err != nil {
 						r := strings.SplitN(err.Error(), ":", 2)[0]
 						refuse(r, err)
 					}
@@ -591,6 +602,19 @@ func (l *Loop) settleProposal(tx *store.Tx, d *Decision, artifacts []nodeArtifac
 	}
 	if rule != "" {
 		return nil
+	}
+	// Compatibility review is removed only from the execution graph. Keep that
+	// authority in the persisted revision, and do not let an inner graph replace it.
+	_, _, pinned, err := item.ReadWorkflowSelection(tx.Reader(), d.ItemID)
+	if err != nil {
+		return err
+	}
+	judgeGraph := string(after)
+	if compatibilityReviewSlot(pinned) != "" {
+		judgeGraph = store.CompatibilityJudgeGraph(d.SelectedWorkflow, judgeGraph)
+	}
+	if _, err := tx.Exec(`UPDATE workflow_selections SET judge_graph=?, judge_attempt=? WHERE item_id=?`, judgeGraph, d.Attempt, d.ItemID); err != nil {
+		return err
 	}
 	d.Workflow = next
 	if work != nil {

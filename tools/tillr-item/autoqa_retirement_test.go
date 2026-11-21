@@ -14,7 +14,7 @@ import (
 )
 
 func TestRetiredAutoQAVocabularyRefusedOnNewWrites(t *testing.T) {
-	for _, kind := range []string{"actor", "verdict-class", "grant-class", "decision", "successor"} {
+	for _, kind := range []string{"actor", "verdict-class", "decision", "successor"} {
 		t.Run(kind, func(t *testing.T) {
 			db := storedWithCriterion(t, "retired-autoqa", "open")
 			var code int
@@ -25,17 +25,12 @@ func TestRetiredAutoQAVocabularyRefusedOnNewWrites(t *testing.T) {
 				v := mechanicalVerdict()
 				if kind == "actor" {
 					v.ActorKind = "autoqa"
-					replacements = []string{"mechanical", "agent", "grant", "actor"}
+					replacements = []string{"mechanical", "agent", "workflow", "actor"}
 				} else {
 					v.ClaimClass = "qa-verification"
 					replacements = []string{"verification-only"}
 				}
 				code, out = recordVerdict(t, db, v)
-			case "grant-class":
-				g := defaultGrant()
-				g.ClaimClasses = []string{"qa-verification"}
-				code, out = issueGrant(t, db, g)
-				replacements = []string{"verification-only"}
 			case "decision", "successor":
 				d := decision("dec-2", "an automated ruling")
 				d.DecidedBy = "autoqa"
@@ -86,28 +81,24 @@ func TestRetiredAutoQAVocabularyRefusedOnNewWrites(t *testing.T) {
 }
 
 func TestAutoQAUsesOrdinaryVerdictKinds(t *testing.T) {
-	for _, mode := range []string{"mechanical", "agent-granted", "agent-ungranted", "agent-self"} {
+	for _, mode := range []string{"mechanical", "agent-selected", "agent-unselected", "agent-self"} {
 		t.Run(mode, func(t *testing.T) {
 			db := storedWithCriterion(t, "ordinary-autoqa", "open")
 			v := mechanicalVerdict()
 			v.Actor = "autoqa/runner"
 			if mode != "mechanical" {
-				v = agentVerdict()
+				v = agentVerdict(t)
 				v.Actor = "autoqa/reviewer"
-				if mode != "agent-ungranted" {
-					if c, o := issueGrant(t, db, defaultGrant()); c != 0 {
-						t.Fatalf("grant: %d %s", c, o)
-					}
-				} else {
-					v.GrantID = ""
+				if mode != "agent-unselected" {
+					selectEvaluator(t, db, selectedGraph)
 				}
 				if mode == "agent-self" {
 					v.JudgedActor = v.Actor
 				}
 			}
 			code, out := recordVerdict(t, db, v)
-			if mode == "agent-ungranted" {
-				assertRefused(t, code, out, "grant-absent")
+			if mode == "agent-unselected" {
+				assertRefused(t, code, out, "evaluator-selection")
 				return
 			}
 			if mode == "agent-self" {
@@ -157,8 +148,7 @@ func legacySnapshot(t *testing.T, db string) []string {
 	defer raw.Close()
 	var snapshot []string
 	for _, query := range []string{
-		`SELECT json_array(seq,ts,kind,actor,seat,session_id,object_type,object_id,revision,payload) FROM events ORDER BY seq`,
-		`SELECT json_array(grant_id,claim_classes,grantor,issued_at,expires_at) FROM item_grants`,
+		`SELECT json_array(seq,ts,kind,actor,seat,session_id,object_type,object_id,revision,payload) FROM events WHERE kind <> 'store.judge-grants-archived' ORDER BY seq`,
 		`SELECT json_array(decision_id,text,scope_kind,scope_ref,decided_by,decided_at,status,supersedes,session_id) FROM decisions`,
 		`SELECT sql FROM sqlite_master WHERE name = 'decisions'`,
 	} {
@@ -210,6 +200,13 @@ func TestLegacyAutoQARecordsRemainReadableAndUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var archived string
+	if err := raw.QueryRow(`SELECT json_extract(payload,'$.rows[0].claim_classes') FROM events WHERE kind='store.judge-grants-archived'`).Scan(&archived); err != nil {
+		t.Fatal(err)
+	}
+	if archived != "qa-verification" {
+		t.Fatalf("historical grant class changed: %q", archived)
+	}
 	var event string
 	if err := raw.QueryRow(`SELECT payload FROM events WHERE kind = 'item.verdict'`).Scan(&event); err != nil {
 		t.Fatal(err)
@@ -223,15 +220,12 @@ func TestLegacyAutoQARecordsRemainReadableAndUnchanged(t *testing.T) {
 		t.Fatalf("fixture no longer legacy: %+v", v)
 	}
 	for _, now := range []string{issuedAt, "2026-11-11T00:00:00Z"} {
-		code, out := recordVerdictAt(t, db, agentVerdict(), now)
-		rule := "grant-scope"
-		if now != issuedAt {
-			rule = "grant-expired"
-		}
+		code, out := recordVerdictAt(t, db, agentVerdict(t), now)
+		rule := "evaluator-selection"
 		assertRefused(t, code, out, rule)
 	}
 	if after := legacySnapshot(t, db); !reflect.DeepEqual(before, after) {
-		t.Fatal("grant refusal changed legacy records")
+		t.Fatal("evaluator refusal changed legacy records")
 	}
 }
 

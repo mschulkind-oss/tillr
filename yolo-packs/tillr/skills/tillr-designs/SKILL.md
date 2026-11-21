@@ -65,10 +65,10 @@ handoff are gone:
   `planned-build@v1`: a read-only `plan` node reads the item and either keeps one piece or fans
   out up to twelve seat-routed pieces (`build-pieces@v1`), a `work` node implements or joins
   them, and a read-only `verify` evaluator node checks the candidate diff against the criteria
-  before `tillr-gate` (requiring an unexpired `verification-only` grant from `tillr item grant`).
+  before `tillr-gate`. The persisted evaluator's `judge_classes` allows only `verification-only`.
   Design items default to `scouted-design@v1` (`open`, optional parallel scouts, `write`).
-  Naming `single-worker@v1` skips planning and the pre-gate LLM evaluator, sending one worker
-  straight to the mechanical gate with no judge grant needed.
+  Naming `single-worker@v1` skips planning and ordinarily goes straight to the mechanical gate.
+  A legacy `judge="agent"` opt-in instead retains a read-only compatibility review.
 - **Trunk proof, automatic revert, and work under a red check.** Under `after-merge` landing,
   `tillr-gate` runs fast change and whole-tree checks before `tillr-land` squashes onto `main`,
   while a background heavy runner proves the full suites asynchronously on trunk, advances

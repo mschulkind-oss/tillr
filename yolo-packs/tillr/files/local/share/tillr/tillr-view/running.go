@@ -30,7 +30,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/mschulkind-oss/tillr-drain/judgegrants"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -44,13 +43,12 @@ const runningFinishedLimit = 5
 // the last few finished runs. Every field is named for the block it belongs to, so a
 // reader can tell a live run from a finished one without reading a state word.
 type runningPayload struct {
-	Grants      []judgegrants.View `json:"grants,omitempty"`
-	GeneratedAt time.Time          `json:"generated_at"`
-	Snapshot    snapshot           `json:"snapshot"`
-	Lanes       runningLanes       `json:"lanes"`
-	Loop        runningLoop        `json:"loop"`
-	Active      []runningRun       `json:"active"`
-	Finished    []finishedRun      `json:"finished"`
+	GeneratedAt time.Time     `json:"generated_at"`
+	Snapshot    snapshot      `json:"snapshot"`
+	Lanes       runningLanes  `json:"lanes"`
+	Loop        runningLoop   `json:"loop"`
+	Active      []runningRun  `json:"active"`
+	Finished    []finishedRun `json:"finished"`
 }
 
 // runningLanes is the header's lane arithmetic: how many lanes hold a lease, out of how
@@ -304,10 +302,6 @@ func readRunning(ctx context.Context, storePath, loopDir, laneRoot string, now t
 			EventHeadSeq:  head,
 			Source:        sourceStore,
 		}, domain, verdicts, stop, staleSeq, laneRoot)
-		out.Grants, err = waitingGrantLines(r, now, storePath)
-		if err != nil {
-			return err
-		}
 		session, active, note, err := readLoopSession(r, now)
 		if err != nil {
 			return err
@@ -621,9 +615,6 @@ func readGateVerdicts(r *store.Reader) (map[string]gateVerdict, error) {
 // longer the newest record is the failure this view exists to make visible.
 func renderRunning(w io.Writer, p runningPayload) {
 	fmt.Fprintf(w, "lanes leased: %d/%d · %s\n", p.Lanes.Leased, p.Lanes.Total, loopLine(p))
-	for _, g := range p.Grants {
-		fmt.Fprintf(w, "%s\n", g.Summary)
-	}
 	if p.Loop.Stale {
 		fmt.Fprintf(w, "%s\n", p.Loop.StaleNote)
 	}

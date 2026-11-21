@@ -413,7 +413,6 @@ var tableDescriptions = map[string]string{
 	"item_edges":        "Item dependencies; shows the number of recorded ordering constraints.",
 	"item_requests":     "Item requests; shows the number of recorded requests for work.",
 	"decisions":         "Item decisions; shows the number of recorded rulings on work.",
-	"item_grants":       "Item permissions; shows the number of recorded grants for work.",
 	"mail_deliveries":   "Message deliveries; shows the number of recorded deliveries to workers.",
 	"lanes":             "Execution lanes; shows the number of registered worker slots.",
 	"runs":              "Execution runs; shows the number of worker attempts recorded in the store.",

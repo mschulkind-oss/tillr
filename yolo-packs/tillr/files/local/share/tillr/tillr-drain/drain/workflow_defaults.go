@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 
 	"github.com/mschulkind-oss/tillr-item/item"
@@ -67,6 +68,17 @@ func selectWorkflow(r *store.Reader, root string, row itemRow, defaults map[stri
 		if err := json.Unmarshal([]byte(graph), &w); err != nil {
 			return nil, selected, source, fmt.Errorf("stored workflow graph: %w", err)
 		}
+		// The compatibility step uses the existing post-worker review transport;
+		// the graph runner must not dispatch it a second time.
+		if review := compatibilityReviewSlot(graph); review != "" && evaluatorSlot(&w) == review {
+			w.Stages = slices.DeleteFunc(w.Stages, func(s WorkflowStage) bool { return s.ID == review })
+			w.Edges = slices.DeleteFunc(w.Edges, func(e WorkflowEdge) bool { return e.To == review })
+			w.Exit.RequiresNodes = slices.DeleteFunc(w.Exit.RequiresNodes, func(s string) bool { return s == review })
+			w.Exit.EvaluatorSlot = ""
+			if len(w.Stages) == 0 && selected == singleWorkerWorkflow {
+				return nil, selected, source, nil
+			}
+		}
 		return &w, selected, source, nil
 	}
 	selected, source = row.Workflow, "block"
@@ -88,6 +100,16 @@ func selectWorkflow(r *store.Reader, root string, row itemRow, defaults map[stri
 	return w, selected, source, err
 }
 
+func compatibilityReviewSlot(graph string) string {
+	var marker struct {
+		Review string `json:"compatibility_review"`
+	}
+	if json.Unmarshal([]byte(graph), &marker) != nil {
+		return ""
+	}
+	return marker.Review
+}
+
 func recordWorkflowSelection(tx *store.Tx, d Decision) error {
 	if d.WorkflowSource == "" {
 		return nil
@@ -100,6 +122,20 @@ func recordWorkflowSelection(tx *store.Tx, d Decision) error {
 		}
 		graph = string(raw)
 	}
-	_, err := tx.Exec(`INSERT INTO workflow_selections(item_id,workflow,source,graph) VALUES(?,?,?,?) ON CONFLICT(item_id) DO NOTHING`, d.ItemID, d.SelectedWorkflow, d.WorkflowSource, graph)
+	var mode string
+	if err := tx.QueryRow(`SELECT judge_mode FROM items WHERE item_id=?`, d.ItemID).Scan(&mode); err != nil {
+		return err
+	}
+	if mode == "agent" {
+		graph = store.CompatibilityJudgeGraph(d.SelectedWorkflow, graph)
+	}
+	revised := ""
+	if d.Workflow != nil && d.Workflow.Revision > 0 {
+		revised = graph
+	}
+	_, err := tx.Exec(`INSERT INTO workflow_selections(item_id,workflow,source,graph,judge_graph,judge_attempt) VALUES(?,?,?,?,?,?)
+ON CONFLICT(item_id) DO UPDATE SET judge_graph=excluded.judge_graph,judge_attempt=excluded.judge_attempt
+WHERE workflow_selections.judge_attempt <> excluded.judge_attempt AND (workflow_selections.judge_graph <> '' OR excluded.judge_graph <> '')`,
+		d.ItemID, d.SelectedWorkflow, d.WorkflowSource, graph, revised, d.Attempt)
 	return err
 }

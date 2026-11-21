@@ -182,7 +182,7 @@ func TestDispatchStampsWorkflowAndSingleWorkerRunRecords(t *testing.T) {
     {"id": "scout-a", "kind": "agent", "seat": "scout", "access": "read_only", "prompt": "Scout A"},
     {"id": "scout-b", "kind": "agent", "seat": "scout", "access": "read_only", "prompt": "Scout B"},
     {"id": "work", "kind": "agent", "seat": "build", "access": "write", "prompt": "Build"},
-    {"id": "evaluate", "kind": "agent", "seat": "review", "access": "read_only", "prompt": "Review"}
+    {"id": "evaluate", "kind": "agent", "seat": "review", "access": "read_only", "judge_classes": ["verification-only"], "prompt": "Review"}
   ],
   "edges": [
     {"from_node": "plan", "to_node": "scout-a"},
@@ -227,9 +227,7 @@ func TestDispatchStampsWorkflowAndSingleWorkerRunRecords(t *testing.T) {
 			if _, err := tx.Exec(`UPDATE items SET workflow='review-build@v1' WHERE item_id='item-a'`); err != nil {
 				return err
 			}
-			_, err := tx.Exec(`INSERT INTO item_grants(grant_id,claim_classes,grantor,issued_at,expires_at) VALUES('grant-1','verification-only','owner',?,?)`,
-				l.cfg.Now().Add(-time.Hour).UnixMilli(), l.cfg.Now().Add(time.Hour).UnixMilli())
-			return err
+			return nil
 		}); err != nil {
 			t.Fatal(err)
 		}

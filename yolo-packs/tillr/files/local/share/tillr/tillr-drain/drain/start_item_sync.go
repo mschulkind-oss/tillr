@@ -88,11 +88,6 @@ func (d startStoreDelta) refreshItems(r *store.Reader, s *startSnapshot, at time
 					s.requests[id] = true
 				}
 			}
-			if row.JudgeMode == "agent" {
-				if row.JudgeGrant, err = judgeGrant(r, id, at); err != nil {
-					return err
-				}
-			}
 			s.itemsByID[id], s.states[id] = row, row.State
 			s.edges[id] = nil
 			err = readContentRows(r, `SELECT blocked_by FROM item_edges WHERE item_id=? ORDER BY blocked_by`, []any{id}, func(rows *sql.Rows) error {

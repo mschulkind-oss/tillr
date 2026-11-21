@@ -10,16 +10,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
-	"github.com/mschulkind-oss/tillr-drain/judgegrants"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
 const (
-	ReasonJudgeGrantAbsent       = "judge-grant-absent"
 	ReasonJudgeUnreadable        = "judge-unreadable"
 	ReasonEvalFailed             = "eval-failed"
 	ReasonJudgeBlocked           = "judge-blocked"
@@ -31,7 +28,6 @@ const (
 	judgeLandedKind              = "drain.judge.landed"
 )
 
-var errJudgeGrantHeld = errors.New("judge settlement waits for a covering grant")
 var errJudgeBackendHeld = errors.New("judge settlement waits for an open review backend")
 
 // JudgeReceipt retains the caller-owned identities and the exact checked bytes.
@@ -48,28 +44,56 @@ type JudgeReceipt struct {
 	Producers     []JudgeWriter     `json:"producers,omitempty"`
 	Inputs        map[string]string `json:"inputs,omitempty"`
 	EvaluatorTask string            `json:"evaluator_task,omitempty"`
+	legacy        bool
 }
 
-// judgeGrant selects one unexpired grant covering every stored criterion class.
-// Separate grants cannot be combined: the intake takes one grant identity.
-func judgeGrant(r *store.Reader, id string, at time.Time) (string, error) {
-	rows, err := r.Query(`SELECT g.grant_id FROM item_grants g WHERE g.expires_at > ? AND g.issued_at <= ?
- AND EXISTS(SELECT 1 FROM item_criteria c WHERE c.item_id=?)
- AND NOT EXISTS(SELECT 1 FROM item_criteria c WHERE c.item_id=? AND
- (c.claim_class='owner-only' OR instr(',' || g.claim_classes || ',', ',' || c.claim_class || ',')=0))
- ORDER BY g.expires_at DESC,g.grant_id`, at.UnixMilli(), at.UnixMilli(), id, id)
+// The retired field distinguishes pre-upgrade receipts from incomplete new
+// receipts. Its value is never used as authority or written back.
+func (r *JudgeReceipt) UnmarshalJSON(raw []byte) error {
+	type receipt JudgeReceipt
+	var decoded receipt
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		return err
+	}
+	var old struct {
+		Options struct{ GrantID json.RawMessage } `json:"options"`
+	}
+	if err := json.Unmarshal(raw, &old); err != nil {
+		return err
+	}
+	*r = JudgeReceipt(decoded)
+	r.legacy = old.Options.GrantID != nil
+	return nil
+}
+
+func bindSavedJudge(r *store.Reader, c Candidate, receipt *JudgeReceipt, options *item.JudgeOptions) error {
+	head := c.HeadSHA
+	if c.WorkerHeadSHA != "" {
+		head = c.WorkerHeadSHA
+	}
+	if options.ItemID != c.ItemID || options.Head != head || receipt.Request.ItemID != c.ItemID {
+		return item.Rejectionf("evaluator-binding", c.ItemID, "saved judgment belongs to a different item or candidate")
+	}
+	if options.EvaluatorBinding != (item.EvaluatorBinding{}) || !receipt.legacy {
+		return nil // Intake checks the supplied binding against the persisted graph.
+	}
+	binding, err := item.ReadEvaluatorBinding(r, c.ItemID)
 	if err != nil {
-		return "", readFailure(err)
+		return err
 	}
-	defer rows.Close()
-	if rows.Next() {
-		var grant string
-		if err := rows.Scan(&grant); err != nil {
-			return "", err
+	node := receipt.Request.NodeID
+	if node == "" {
+		_, _, graph, err := item.ReadWorkflowSelection(r, c.ItemID)
+		if err != nil {
+			return err
 		}
-		return grant, nil
+		node = compatibilityReviewSlot(graph)
 	}
-	return "", rows.Err()
+	if node != binding.EvaluatorNode {
+		return item.Rejectionf("evaluator-binding", c.ItemID, "legacy receipt does not match workflow %q evaluator %q", binding.Workflow, binding.EvaluatorNode)
+	}
+	options.EvaluatorBinding = binding
+	return nil
 }
 
 func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResult) (Candidate, bool, error) {
@@ -79,12 +103,11 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		}
 		return c, false, errRestartPending
 	}
-	var mode, grant string
+	var mode, compatibilityNode string
 	db, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		return c, false, err
 	}
-	var expiredGrant *judgegrants.Grant
 	err = db.ReadTx(ctx, func(r *store.Reader) error {
 		rows, err := readItems(r)
 		if err != nil {
@@ -96,12 +119,10 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				break
 			}
 		}
-		if mode == "agent" || c.Evaluator != nil {
-			now := l.cfg.Now()
-			grant, err = judgeGrant(r, c.ItemID, now)
-			if err == nil && grant == "" {
-				expiredGrant, err = judgegrants.ExpiredForItem(r, c.ItemID, now)
-			}
+		_, _, graph, err := item.ReadWorkflowSelection(r, c.ItemID)
+		compatibilityNode = compatibilityReviewSlot(graph)
+		if compatibilityNode != "" {
+			mode = "agent"
 		}
 		return err
 	})
@@ -128,6 +149,21 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		} else if !os.IsNotExist(readErr) {
 			return c, false, readErr
 		}
+	}
+	var binding item.EvaluatorBinding
+	if err := l.readStore(ctx, func(r *store.Reader) error {
+		var err error
+		binding, err = item.ReadEvaluatorBinding(r, c.ItemID)
+		return err
+	}); err != nil {
+		return c, false, l.holdJudge(ctx, c, judgeRunID(c.RunID), ReasonJudgeUnreadable, err.Error(), result)
+	}
+	if c.Evaluator != nil && (c.Evaluator.NodeID != binding.EvaluatorNode || c.Workflow != binding.Workflow) {
+		return c, false, l.holdJudge(ctx, c, c.Evaluator.RunID, ReasonJudgeUnreadable, "workflow evaluator does not match its persisted selection", result)
+	}
+	if receipt == nil && c.Evaluator == nil && compatibilityNode != binding.EvaluatorNode {
+		detail := fmt.Sprintf("workflow %q must dispatch its evaluator %q; no compatibility review is selected", binding.Workflow, binding.EvaluatorNode)
+		return c, false, l.holdJudge(ctx, c, judgeRunID(c.RunID), ReasonJudgeUnreadable, detail, result)
 	}
 	buildHash, err := l.build.Hash()
 	if err != nil {
@@ -257,15 +293,6 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			judgeRec, judgeLog = rec, log
 			l.countSpend(result, rec)
 		} else if receipt == nil {
-			if grant == "" {
-				if c.Evaluator != nil {
-					// The pending node retains its run id across regrant. A transient
-					// grant hold must not consume that run's terminal refusal record.
-					return c, false, errJudgeGrantHeld
-				}
-				detail, _ := judgegrants.FormatHold(expiredGrant, l.cfg.Store)
-				return c, false, l.holdJudge(ctx, c, judgeRunID(c.RunID), ReasonJudgeGrantAbsent, detail, result)
-			}
 			req := c.Evaluator
 			fromReplacement := replacementRequest != nil
 			if fromReplacement {
@@ -273,25 +300,33 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				replacementRequest = nil
 			}
 			if req == nil {
-				seat := l.cfg.Policy.seatList("review")
+				policy := l.currentPolicy()
+				if policy == nil {
+					return c, false, Usagef("agent judge requires the review seat")
+				}
+				seat := policy.seatList("review")
 				if len(seat) == 0 {
 					return c, false, Usagef("agent judge requires the review seat")
 				}
-				req = l.cfg.Policy.request(c.ItemID, c.LaneID, judgeRunID(c.RunID), seat[0])
+				req = policy.request(c.ItemID, c.LaneID, judgeRunID(c.RunID), seat[0])
 				if req != nil {
 					req.Seat = "review"
-					req.Workflow = c.Workflow
-					if req.Workflow == "" && c.Request != nil {
-						req.Workflow = c.Request.Workflow
-					}
-					if req.Workflow == "" {
-						req.Workflow = singleWorkerWorkflow
-					}
+					req.Workflow = binding.Workflow
+					req.NodeID = binding.EvaluatorNode
 					req.Node = "judge"
 				}
 			}
 			if req == nil {
 				return c, false, Usagef("cannot build review request")
+			}
+			// Legacy compatibility requests did not stamp a graph node on the
+			// transport. Do not similarly adopt a different explicit evaluator.
+			if req.NodeID == "" && compatibilityNode == binding.EvaluatorNode {
+				req.NodeID, req.Workflow = binding.EvaluatorNode, binding.Workflow
+			}
+			if req.NodeID != binding.EvaluatorNode || req.Workflow != binding.Workflow {
+				detail := fmt.Sprintf("review request does not match workflow %q evaluator %q", binding.Workflow, binding.EvaluatorNode)
+				return c, false, l.holdJudge(ctx, c, req.RunID, ReasonJudgeUnreadable, detail, result)
 			}
 			lane := l.laneDirPath(c.LaneID)
 			brief, err := os.ReadFile(filepath.Join(lane, BriefFile))
@@ -328,7 +363,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				}
 				req = &selected
 			}
-			receipt = &JudgeReceipt{Build: buildHash, Request: *req, JudgeSession: judgeSession, WorkerBrief: brief, WorkerSession: session, Options: item.JudgeOptions{ItemID: c.ItemID, Head: head, Tree: tree, Actor: "run=" + req.RunID + ";session=" + judgeSession + ";route=" + req.Route(), JudgedActor: "run=" + c.RunID + ";session=" + strings.TrimSpace(string(session)), GrantID: grant, At: l.cfg.Now()}}
+			receipt = &JudgeReceipt{Build: buildHash, Request: *req, JudgeSession: judgeSession, WorkerBrief: brief, WorkerSession: session, Options: item.JudgeOptions{ItemID: c.ItemID, Head: head, Tree: tree, Actor: "run=" + req.RunID + ";session=" + judgeSession + ";route=" + req.Route(), JudgedActor: "run=" + c.RunID + ";session=" + strings.TrimSpace(string(session)), EvaluatorBinding: binding, At: l.cfg.Now()}}
 			receipt.Writers, receipt.Inputs, receipt.Producers = c.Writers, c.EvaluatorInputs, c.Producers
 			receipt.EvaluatorTask = c.EvaluatorTask
 			judged := c.Writers
@@ -459,6 +494,13 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		if receipt.Options.Head != workerHead || receipt.Options.ItemID != c.ItemID {
 			return c, false, l.holdJudge(ctx, c, receipt.Request.RunID, ReasonJudgeUnreadable, "saved judgment belongs to a different candidate", result)
 		}
+		workerTree, err := l.revParse(ctx, c.Worktree, workerHead+"^{tree}")
+		if err != nil {
+			return c, false, err
+		}
+		if receipt.Options.Tree != workerTree {
+			return c, false, l.holdJudge(ctx, c, receipt.Request.RunID, ReasonJudgeUnreadable, "saved judgment belongs to a different candidate tree", result)
+		}
 		if len(receipt.Raw) == 0 {
 			receipt.Raw, err = os.ReadFile(outputPath)
 			if err != nil {
@@ -485,22 +527,16 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		options := receipt.Options
 		options.At = l.cfg.Now()
 		err = db.ReadTx(ctx, func(r *store.Reader) error {
-			grant, e := judgeGrant(r, c.ItemID, options.At)
-			if e != nil {
-				return e
+			if err := bindSavedJudge(r, c, receipt, &options); err != nil {
+				return err
 			}
-			if grant == "" {
-				return errJudgeGrantHeld
-			}
-			options.GrantID, receipt.Options.GrantID = grant, grant
-			checked, e = item.CheckJudge(ctx, r, receipt.Raw, options)
-			return e
+			var err error
+			checked, err = item.CheckJudge(ctx, r, receipt.Raw, options)
+			return err
 		})
 		db.Close()
-		if errors.Is(err, errJudgeGrantHeld) {
-			return c, false, err
-		}
 		if err == nil {
+			receipt.Options.EvaluatorBinding = options.EvaluatorBinding
 			if err := writeJudgeReceipt(receiptPath, receipt); err != nil {
 				return c, false, err
 			}
@@ -989,14 +1025,9 @@ func (l *Loop) recordLandedJudge(ctx context.Context, c Candidate) error {
 	options := receipt.Options
 	options.At = l.cfg.Now()
 	return db.WriteTx(ctx, func(tx *store.Tx) error {
-		grant, err := judgeGrant(tx.Reader(), c.ItemID, options.At)
-		if err != nil {
+		if err := bindSavedJudge(tx.Reader(), c, receipt, &options); err != nil {
 			return err
 		}
-		if grant == "" {
-			return errJudgeGrantHeld
-		}
-		options.GrantID = grant
 		if _, err := item.RecordJudge(ctx, tx, receipt.Raw, options); err != nil {
 			return err
 		}

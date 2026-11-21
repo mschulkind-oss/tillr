@@ -2,22 +2,17 @@ package main_test
 
 import (
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"path/filepath"
+	"os/exec"
 	"strings"
 	"testing"
 )
 
-// The verdict and grant cases: a criterion's state moves only on an item.verdict, a
-// mechanical verdict needs no grant because its evidence carries it, an agent's verdict
-// counts only under a grant that is present, unexpired and in scope, and no verdict from
-// the actor whose work is judged is recorded at all. The rules are board-utilities.md
-// §5.3's writer contract, D-UT16's retirement split and agent-runtime.md §12's bounds on
-// a delegated sign-off; these cases pin the store side of them.
-
-// issuedAt is the clock every case issues and records at, so an expiry is a fact of the
-// record rather than of when the suite happened to run.
+// Agent intake is bound to the persisted evaluator; human and mechanical paths
+// retain their existing authority. Historical grants do not license new verdicts.
+// issuedAt is the injected record clock, not an authority lifetime.
 const issuedAt = "2026-11-10T00:00:00Z"
 
 // frozenText is the criterion text the helper item freezes, which is what a verdict
@@ -40,16 +35,21 @@ type verdictInput struct {
 	Actor         string   `json:"actor,omitempty"`
 	JudgedActor   string   `json:"judged_actor,omitempty"`
 	GrantID       string   `json:"grant_id,omitempty"`
+	EvaluatedTree string   `json:"evaluated_tree,omitempty"`
+	Workflow      string   `json:"workflow,omitempty"`
+	EvaluatorNode string   `json:"evaluator_node,omitempty"`
+	GraphSHA256   string   `json:"graph_sha256,omitempty"`
 }
 
 // agentVerdict is the delegated record every agent case starts from: lane-7 ruling on
-// lane-3's work, under grant_1, against the frozen criterion's hash.
-func agentVerdict() verdictInput {
+// lane-3's work at the selected evaluator, against the frozen criterion's hash.
+func agentVerdict(t *testing.T) verdictInput {
 	return verdictInput{
 		ItemID: "item_042", CriterionID: "c1", CriterionHash: hashOf(frozenText),
 		Verdict: "done", ClaimClass: "verification-only", Reason: "the committed path exists and the check is green",
-		Evidence: []string{"commit:0f1e2d", "gate-verdict-7"}, EvaluatedHead: "0f1e2d",
-		ActorKind: "agent", Actor: "lane-7", JudgedActor: "lane-3", GrantID: "grant_1",
+		Evidence: []string{"commit:0f1e2d", "gate-verdict-7"}, EvaluatedHead: judgeGit(t, "HEAD"), EvaluatedTree: judgeGit(t, "HEAD^{tree}"),
+		Workflow: "review@v1", EvaluatorNode: "verify", GraphSHA256: hashOf(selectedGraph),
+		ActorKind: "agent", Actor: "lane-7", JudgedActor: "lane-3",
 	}
 }
 
@@ -61,24 +61,6 @@ func mechanicalVerdict() verdictInput {
 		Verdict: "done", ClaimClass: "verification-only", Reason: "the candidate landed on its gate verdict",
 		Landed: []string{"commit:0f1e2d"}, Evidence: []string{"land-attempt-3", "gate-verdict-7"},
 		EvaluatedHead: "0f1e2d", ActorKind: "mechanical",
-	}
-}
-
-// grantInput is the item.grant payload: the scope as claim classes, the grantor and the
-// expiry agent-runtime.md §12 settles.
-type grantInput struct {
-	GrantID      string   `json:"grant_id"`
-	ClaimClasses []string `json:"claim_classes"`
-	Grantor      string   `json:"grantor"`
-	ExpiresAt    string   `json:"expires_at"`
-}
-
-// defaultGrant is the grant §12 keeps in force until the owner rules: verification-only
-// claims, 24 hours from issue.
-func defaultGrant() grantInput {
-	return grantInput{
-		GrantID: "grant_1", ClaimClasses: []string{"verification-only"},
-		Grantor: "owner", ExpiresAt: "2026-11-11T00:00:00Z",
 	}
 }
 
@@ -117,21 +99,13 @@ func decodeIssued(t *testing.T, out []byte) issuedVerdict {
 	return got
 }
 
-// issueGrant records one grant at the case clock.
-func issueGrant(t *testing.T, db string, grant grantInput) (int, []byte) {
-	t.Helper()
-	return run(t, "grant", "issue", "--store", db, "--input",
-		input(t, envelope(t, "item.grant", "grant-rec", grant)), "--now", issuedAt)
-}
-
 // recordVerdict records one verdict at the case clock.
 func recordVerdict(t *testing.T, db string, v verdictInput) (int, []byte) {
 	t.Helper()
 	return recordVerdictAt(t, db, v, issuedAt)
 }
 
-// recordVerdictAt records one verdict at the case's own clock, which is how an expiry is
-// exercised: the grant does not change, the clock does.
+// recordVerdictAt records a verdict at an injected clock. Workflow authority has no expiry.
 func recordVerdictAt(t *testing.T, db string, v verdictInput, now string) (int, []byte) {
 	t.Helper()
 	return run(t, "verdict", "record", "--store", db, "--input",
@@ -187,108 +161,84 @@ func TestAMechanicalVerdictLandsWithNoGrant(t *testing.T) {
 	}
 }
 
-// A delegated verdict under the default grant lands: the positive control every refusal
-// below is a narrow exception to. Without it a blanket refusal would pass every other
-// case in this file.
-func TestAnAgentVerdictUnderAGrantLands(t *testing.T) {
-	db := storedWithCriterion(t, "verdict-agent", "open")
-	if code, out := issueGrant(t, db, defaultGrant()); code != 0 {
-		t.Fatalf("issuing the grant exited %d: %s", code, out)
+const selectedGraph = `{"name":"review","version":1,"stages":[{"id":"verify","kind":"agent","access":"read_only","judge_classes":["verification-only"]}],"exit":{"evaluator_slot":"verify","requires_nodes":["verify"]}}`
+
+func selectEvaluator(t *testing.T, db, graph string) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", db)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if n := eventsOfKind(t, db, "item.grant"); n != 1 {
-		t.Fatalf("issuing a grant appended %d item.grant events, want 1", n)
+	defer raw.Close()
+	if _, err = raw.Exec(`CREATE TABLE IF NOT EXISTS workflow_selections(item_id TEXT PRIMARY KEY,workflow TEXT,source TEXT,graph TEXT); INSERT OR REPLACE INTO workflow_selections VALUES('item_042','review@v1','block',?)`, graph); err != nil {
+		t.Fatal(err)
 	}
-	code, out := recordVerdict(t, db, agentVerdict())
-	if code != 0 {
-		t.Fatalf("the agent verdict exited %d: %s", code, out)
+}
+func TestAgentVerdictPersistedEvaluator(t *testing.T) {
+	for _, tc := range []struct {
+		name, rule string
+		change     func(*verdictInput)
+	}{
+		{"valid", "", nil},
+		{"workflow", "evaluator-binding", func(v *verdictInput) { v.Workflow = "forged@v1" }},
+		{"node", "evaluator-binding", func(v *verdictInput) { v.EvaluatorNode = "writer" }},
+		{"digest", "evaluator-binding", func(v *verdictInput) { v.GraphSHA256 = hashOf(selectedGraph + " ") }},
+		{"head", "evaluated-head", func(v *verdictInput) { v.EvaluatedHead = "short" }},
+		{"tree", "evaluated-tree", func(v *verdictInput) { v.EvaluatedTree = "" }},
+		{"self", "self-judging", func(v *verdictInput) { v.JudgedActor = v.Actor }},
+		{"grant", "grant-retired", func(v *verdictInput) { v.GrantID = "old-grant" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := storedWithCriterion(t, "persisted-evaluator", "open")
+			selectEvaluator(t, db, selectedGraph)
+			v := agentVerdict(t)
+			if tc.change != nil {
+				tc.change(&v)
+			}
+			code, out := recordVerdict(t, db, v)
+			if tc.rule == "" {
+				if code != 0 {
+					t.Fatalf("valid: %d %s", code, out)
+				}
+				return
+			}
+			assertRefused(t, code, out, tc.rule)
+			if eventsOfKind(t, db, "item.verdict") != 0 || criterionOf(t, showItem(t, db, "item_042"), "c1").State != "open" {
+				t.Fatal("refusal mutated item")
+			}
+		})
 	}
-	got := decodeIssued(t, out)
-	if got.Payload.GrantID != "grant_1" {
-		t.Fatalf("the verdict echoed grant %q, want the one it was recorded under", got.Payload.GrantID)
-	}
-	if stored := criterionOf(t, showItem(t, db, "item_042"), "c1"); stored.State != "done" {
-		t.Fatalf("the store holds the criterion as %+v, want the verdict's state", stored)
+}
+func TestVerdictRecordRejectsNullPayloadWithEvaluatorFlags(t *testing.T) {
+	db := storedWithCriterion(t, "verdict-null", "open")
+	cmd := exec.Command(bin, "verdict", "record", "--store", db, "--input",
+		input(t, envelope(t, "item.verdict", "verdict-rec", nil)), "--now", issuedAt, "--workflow", "review@v1")
+	out, err := cmd.CombinedOutput()
+	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 2 || !strings.Contains(string(out), "verdict payload must be a JSON object") {
+		t.Fatalf("null verdict payload: want usage error, got %v: %s", err, out)
 	}
 }
 
-// An agent verdict citing no grant is refused by name, and the refusal is a genuine
-// refusal: the criterion keeps the state it had and nothing reaches the log.
-func TestAnAgentVerdictWithNoGrantIsRefused(t *testing.T) {
-	db := storedWithCriterion(t, "verdict-no-grant", "open")
-	v := agentVerdict()
-	v.GrantID = ""
-	code, out := recordVerdict(t, db, v)
-	got := assertRefused(t, code, out, "grant-absent")
-	if !strings.Contains(got.Payload.Reason, "grant") {
-		t.Fatalf("the refusal does not name the grant it needs: %q", got.Payload.Reason)
-	}
-	if stored := criterionOf(t, showItem(t, db, "item_042"), "c1"); stored.State != "open" {
-		t.Fatalf("a refused verdict left the criterion as %+v, want it unchanged", stored)
-	}
+func TestAgentVerdictNeedsSelectedEvaluator(t *testing.T) {
+	db := storedWithCriterion(t, "no-evaluator", "open")
+	code, out := recordVerdict(t, db, agentVerdict(t))
+	assertRefused(t, code, out, "evaluator-selection")
 }
-
-// A grant id the store does not hold is the same absence from the verdict's side: naming
-// a grant is only a grant if a reader can find it.
-func TestAnAgentVerdictCitingAGrantTheStoreDoesNotHoldIsRefused(t *testing.T) {
-	db := storedWithCriterion(t, "verdict-unknown-grant", "open")
-	code, out := recordVerdict(t, db, agentVerdict())
-	got := assertRefused(t, code, out, "grant-absent")
-	if !strings.Contains(got.Payload.Reason, "grant_1") {
-		t.Fatalf("the refusal does not name the grant it could not find: %q", got.Payload.Reason)
+func TestAgentVerdictStoredStepClasses(t *testing.T) {
+	db := storedWithCriterion(t, "step-classes", "open")
+	if c, o := applyClass(t, db, "direction", frozenText); c != 0 {
+		t.Fatalf("class: %d %s", c, o)
 	}
-}
-
-// An expired grant stops being a delegation: the same verdict that lands at the issue
-// clock is refused at the expiry, because the evidence it cites has a shelf life the
-// grant has outlived.
-func TestAnAgentVerdictUnderAnExpiredGrantIsRefused(t *testing.T) {
-	db := storedWithCriterion(t, "verdict-expired", "open")
-	if code, out := issueGrant(t, db, defaultGrant()); code != 0 {
-		t.Fatalf("issuing the grant exited %d: %s", code, out)
-	}
-	code, out := recordVerdictAt(t, db, agentVerdict(), "2026-11-11T00:00:00Z")
-	got := assertRefused(t, code, out, "grant-expired")
-	if !strings.Contains(got.Payload.Reason, "2026-11-11T00:00:00Z") {
-		t.Fatalf("the refusal does not name the expiry it crossed: %q", got.Payload.Reason)
-	}
-	if stored := criterionOf(t, showItem(t, db, "item_042"), "c1"); stored.State != "open" {
-		t.Fatalf("a refused verdict left the criterion as %+v, want it unchanged", stored)
-	}
-}
-
-// A grant's scope is the claim classes it names. A verdict claiming a class the grant
-// does not cover is out of scope, which is an escalation and not a sign-off.
-func TestAnAgentVerdictOutOfScopeIsRefused(t *testing.T) {
-	db := storedWithCriterion(t, "verdict-scope", "open")
-	if code, out := applyClass(t, db, "red-gate-triage", frozenText); code != 0 {
-		t.Fatalf("hardening the stored criterion exited %d: %s", code, out)
-	}
-	if code, out := issueGrant(t, db, defaultGrant()); code != 0 {
-		t.Fatalf("issuing the grant exited %d: %s", code, out)
-	}
-	v := agentVerdict()
-	v.ClaimClass = "red-gate-triage"
-	code, out := recordVerdict(t, db, v)
-	got := assertRefused(t, code, out, "grant-scope")
-	if !strings.Contains(got.Payload.Reason, "verification-only") || !strings.Contains(got.Payload.Reason, "red-gate-triage") {
-		t.Fatalf("the refusal does not name both scopes: %q", got.Payload.Reason)
-	}
-}
-
-// The independence rule: the actor whose work the criterion judges cannot be the actor
-// issuing the verdict, however good the grant under it is
-// (docs/reference/authority-not-approval.md#a-judge-never-judges-its-own-work).
-func TestASelfJudgingVerdictIsRefused(t *testing.T) {
-	db := storedWithCriterion(t, "verdict-self", "open")
-	if code, out := issueGrant(t, db, defaultGrant()); code != 0 {
-		t.Fatalf("issuing the grant exited %d: %s", code, out)
-	}
-	v := agentVerdict()
-	v.JudgedActor = v.Actor
-	code, out := recordVerdict(t, db, v)
-	got := assertRefused(t, code, out, "self-judging")
-	if !strings.Contains(got.Payload.Reason, "lane-7") {
-		t.Fatalf("the refusal does not name the actor that judged itself: %q", got.Payload.Reason)
+	selectEvaluator(t, db, selectedGraph)
+	v := agentVerdict(t)
+	v.ClaimClass = "direction"
+	c, o := recordVerdict(t, db, v)
+	assertRefused(t, c, o, "evaluator-class")
+	graph := strings.Replace(selectedGraph, `["verification-only"]`, `["verification-only","direction"]`, 1)
+	selectEvaluator(t, db, graph)
+	v.GraphSHA256 = hashOf(graph)
+	if c, o = recordVerdict(t, db, v); c != 0 {
+		t.Fatalf("reviewed widening: %d %s", c, o)
 	}
 }
 
@@ -322,22 +272,6 @@ func TestAVerdictNamingNoEvidenceIsRefused(t *testing.T) {
 	}
 }
 
-// The unbounded grant is refused where it would be written: a grant that names every
-// claim rather than a class delegates everything, which §12 rules is not a decision.
-func TestAGrantNamingEveryClaimIsRefusedAsUnbounded(t *testing.T) {
-	db := filepath.Join(scratch(t, "grant-unbounded"), "board.sqlite3")
-	grant := defaultGrant()
-	grant.ClaimClasses = []string{"all"}
-	code, out := issueGrant(t, db, grant)
-	got := assertRefused(t, code, out, "grant-unbounded")
-	if !strings.Contains(got.Payload.Reason, "\"all\"") {
-		t.Fatalf("the refusal does not name the unbounded scope it read: %q", got.Payload.Reason)
-	}
-	if n := eventsOfKind(t, db, "item.grant"); n != 0 {
-		t.Fatalf("a refused grant appended %d item.grant events", n)
-	}
-}
-
 // A person's verdict stands without a grant: the grant bounds a delegation, and the
 // owner signing off is the authority the delegation was borrowed from. The record still
 // carries its actor kind and its evidence, which is what makes it auditable.
@@ -356,5 +290,79 @@ func TestAHumanVerdictLandsWithNoGrant(t *testing.T) {
 	}
 	if stored := criterionOf(t, showItem(t, db, "item_042"), "c1"); stored.State != "done" {
 		t.Fatalf("the store holds the criterion as %+v, want the verdict's state", stored)
+	}
+}
+
+func TestVerdictRecordFlagsUsePersistedBinding(t *testing.T) {
+	db := storedWithCriterion(t, "verdict-flags", "open")
+	selectEvaluator(t, db, selectedGraph)
+	v := agentVerdict(t)
+	v.Workflow = ""
+	v.EvaluatorNode = ""
+	v.GraphSHA256 = ""
+	v.EvaluatedHead = ""
+	v.EvaluatedTree = ""
+	c, o := run(t, "verdict", "record", "--store", db, "--input", input(t, envelope(t, "item.verdict", "flags", v)), "--now", issuedAt, "--workflow", "review@v1", "--evaluator-node", "verify", "--graph-sha256", hashOf(selectedGraph), "--head", judgeGit(t, "HEAD"))
+	if c != 0 {
+		t.Fatalf("flags: %d %s", c, o)
+	}
+}
+func TestDirectVerdictCandidateTreeIsConfirmedAndAtomic(t *testing.T) {
+	db := storedWithCriterion(t, "verdict-tree", "open")
+	selectEvaluator(t, db, selectedGraph)
+	v := agentVerdict(t)
+	v.EvaluatedTree = strings.Repeat("c", 40)
+	c, o := recordVerdict(t, db, v)
+	assertRefused(t, c, o, "evaluated-tree")
+	if eventsOfKind(t, db, "item.verdict") != 0 || criterionOf(t, showItem(t, db, "item_042"), "c1").State != "open" {
+		t.Fatal("Git refusal mutated item")
+	}
+}
+func TestGrantIssueCommandAndJudgeFlagAreRetired(t *testing.T) {
+	for _, args := range [][]string{{"grant", "issue"}, {"judge", "--grant", "old"}} {
+		c, _ := run(t, args...)
+		if c != 2 {
+			t.Fatalf("%v: exit %d want usage refusal", args, c)
+		}
+	}
+}
+
+func TestPersistedEvaluatorDefinitionFaults(t *testing.T) {
+	for _, graph := range []string{
+		`{}`,
+		strings.Replace(selectedGraph, `"read_only"`, `"write"`, 1),
+		strings.Replace(selectedGraph, `"requires_nodes":["verify"]`, `"requires_nodes":[]`, 1),
+		strings.Replace(selectedGraph, `["verification-only"]`, `[]`, 1),
+		strings.Replace(selectedGraph, `["verification-only"]`, `["owner-only"]`, 1),
+		strings.Replace(selectedGraph, `["verification-only"]`, `["unknown"]`, 1),
+		strings.Replace(selectedGraph, `["verification-only"]`, `["verification-only","verification-only"]`, 1),
+	} {
+		db := storedWithCriterion(t, "evaluator-definition", "open")
+		selectEvaluator(t, db, graph)
+		v := agentVerdict(t)
+		v.GraphSHA256 = hashOf(graph)
+		c, o := recordVerdict(t, db, v)
+		assertRefused(t, c, o, "evaluator-selection")
+		if eventsOfKind(t, db, "item.verdict") != 0 {
+			t.Fatal("definition fault wrote verdict")
+		}
+	}
+}
+
+func TestEvaluatorAuthorityDoesNotExpire(t *testing.T) {
+	db := storedWithCriterion(t, "no-expiry", "open")
+	selectEvaluator(t, db, selectedGraph)
+	for _, at := range []string{issuedAt, "2036-11-11T00:00:00Z"} {
+		c, o := recordVerdictAt(t, db, agentVerdict(t), at)
+		if c != 0 {
+			t.Fatalf("at %s: %d %s", at, c, o)
+		}
+		payload := lifecyclePayload(t, o)
+		if _, exists := payload["grant_id"]; exists {
+			t.Fatal("new verdict retained a grant")
+		}
+		if payload["workflow"] != "review@v1" || payload["evaluator_node"] != "verify" || payload["graph_sha256"] != hashOf(selectedGraph) || payload["evaluated_tree"] != judgeGit(t, "HEAD^{tree}") {
+			t.Fatalf("missing provenance: %v", payload)
+		}
 	}
 }

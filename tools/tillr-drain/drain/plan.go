@@ -214,11 +214,10 @@ type Decision struct {
 type itemRow struct {
 	OwnerOwed *ownercriteria.OwnerCriterion
 	// Express is read from the stored definition before workflow seat routing.
-	Express    bool
-	JudgeMode  string
-	JudgeGrant string
-	Designer   *lastDesigner
-	Workflow   string
+	Express   bool
+	JudgeMode string
+	Designer  *lastDesigner
+	Workflow  string
 	// WorkflowArgs binds the item's own workflow's top-level args (item's workflow_args):
 	// nil for an item that supplies none, which is every document-declared item.
 	WorkflowArgs map[string]any
@@ -305,12 +304,6 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	for i := range items {
 		if !tick.plansItem(items[i].ItemID, works[items[i].ItemID]) {
 			continue
-		}
-		if items[i].JudgeMode == "agent" {
-			items[i].JudgeGrant, err = judgeGrant(r, items[i].ItemID, at)
-			if err != nil {
-				return nil, err
-			}
 		}
 		if doc := deskDocument(items[i], tick.Comments); doc != "" {
 			items[i].Designer, err = readDesigner(r, doc)
@@ -680,10 +673,6 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			if !settled {
 				decision, err = pendingDecisionExcept(r, definitionWork(def, work), at, inputs[item.ItemID], tick.BriefTemplate, policy, shut, tick.GatesInFlight, tick.ownExaminationLane, tick.ownExaminationRunID, waiting)
 			}
-			if err == nil && !settled && decision.Action == ActionJudge && item.JudgeMode == "agent" && item.JudgeGrant == "" {
-				decision.From, decision.Action, decision.Reason, decision.To = "held", ActionHold, ReasonJudgeGrantAbsent, ""
-				identifyDecision(&decision)
-			}
 			ownerNextNode := ownerOwed && (work.Ready || decision.Action == ActionDispatch || decision.Action == ActionRetry)
 			// A node waiting to start whose decision lane has left the rotation (a refused
 			// claim took it out) cannot be offered that lane again: it is planned onto a
@@ -859,13 +848,6 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			}
 			if w != nil {
 				if loadErr == nil {
-					if evaluatorSlot(w) != "" {
-						routed.JudgeMode = "agent"
-						routed.JudgeGrant, err = judgeGrant(r, item.ItemID, at)
-						if err != nil {
-							return nil, nil, readFailure(err)
-						}
-					}
 					routed.Seat = w.Stages[resumeNode].Seat
 					if w.Stages[resumeNode].Kind == "command" {
 						routed.Command = &w.Stages[resumeNode]
@@ -1228,8 +1210,6 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.Action, decision.Reason = ActionHold, ReasonTrunkUnproved
 	case item.State != p.rules().Ready:
 		decision.Action, decision.Reason = ActionHold, ReasonNotReady
-	case item.JudgeMode == "agent" && item.JudgeGrant == "":
-		decision.Action, decision.Reason = ActionHold, ReasonJudgeGrantAbsent
 	case hasPrerequisite(p.rules(), definition.PrerequisiteDesignQuestions) && !itemIsComment(item.ItemID) && p.commentHolds[plannerDocumentKey(p.documentRoot, item.DesignDoc)] != "":
 		decision.Action, decision.Reason = ActionHold, ReasonDesignUnderComment
 		decision.DeferredBy = p.commentHolds[plannerDocumentKey(p.documentRoot, item.DesignDoc)]
@@ -1650,7 +1630,7 @@ func (p *planner) retryHoldReason(itemID string) string {
 		return reason
 	}
 	switch p.history.refusals[latest] {
-	case ReasonEvalFailed, ReasonJudgeUnreadable, ReasonJudgeGrantAbsent, ReasonJudgeDefectiveMismatch, ReasonJudgeCloseRefused,
+	case ReasonEvalFailed, ReasonJudgeUnreadable, ReasonJudgeDefectiveMismatch, ReasonJudgeCloseRefused,
 		RefusalWordsMissing, RefusalWordsAltered, RefusalIdeaNoOutcome:
 		return p.history.refusals[latest]
 	case RefusalVerifyNotDone:
@@ -2248,9 +2228,6 @@ func checkSeats(policy *Policy, items []itemRow) error {
 		return nil
 	}
 	for _, it := range items {
-		if it.JudgeMode == "agent" && it.JudgeGrant != "" && len(policy.seatList("review")) == 0 {
-			return Usagef("item %q asks for an agent judge, but the policy does not map the review seat; %s", it.ItemID, policy.seatDeclaration())
-		}
 		if it.Seat == "" {
 			continue
 		}
@@ -2513,7 +2490,7 @@ func readRunHistory(r *store.Reader) (runHistory, error) {
 				refusalPayload
 				WriterRunID string `json:"writer_run_id"`
 			}
-			if err := json.Unmarshal(e.Payload, &payload); err == nil && payload.Step != "" {
+			if err := json.Unmarshal(e.Payload, &payload); err == nil && payload.Step != "" && payload.Step != "judge-grant-absent" {
 				history.refusals[*e.ObjectID] = payload.Step
 				history.endings[*e.ObjectID] = payload.refusalPayload
 				if payload.WriterRunID != "" {

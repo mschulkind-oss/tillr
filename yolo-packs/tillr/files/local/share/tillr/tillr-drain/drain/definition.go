@@ -75,7 +75,7 @@ var generalHolds = map[string]string{
 	ReasonPreserveFailed: "", ReasonRunProcessesLive: "",
 	StopHostBoundaryViolation: "",
 	ReasonWorkflowInvalid:     "", ReasonNodeFailed: "", ReasonNodeAnswerUnread: "", ReasonNodeOutputMissing: "",
-	ReasonJudgeGrantAbsent: "", ReasonJudgeUnreadable: "", ReasonEvalFailed: "",
+	ReasonJudgeUnreadable: "", ReasonEvalFailed: "",
 	ReasonJudgeBlocked: "", ReasonJudgeDefective: "",
 	ReasonJudgeDefectiveMismatch: "", ReasonJudgeCloseRefused: "",
 	ReasonPiExtensionsBuildFailed: "",
