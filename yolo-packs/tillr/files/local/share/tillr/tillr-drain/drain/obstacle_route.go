@@ -96,7 +96,7 @@ func (l *Loop) routeObstacle(ctx context.Context, d Decision, req run.Request, l
 			}
 			if err = l.acquitRed(ctx, candidate, gate, reading.RedSHA, red, result); err == nil {
 				l.reportf("loop: %s named a trunk obstacle the replay confirmed on %s: held behind the trunk repair\n", req.ItemID, shortSHA(reading.RedSHA))
-				return laneOutcome{stop: l.abandon(ctx, lane, req.RunID, head, "trunk obstacle confirmed on the base")}, true
+				return laneOutcome{stop: l.abandonFromBase(ctx, lane, req.RunID, head, candidate.BaseSHA, "trunk obstacle confirmed on the base")}, true
 			}
 		}
 		if err == nil && reading.RepairedAt != "" {
@@ -141,7 +141,7 @@ func (l *Loop) routeObstacle(ctx context.Context, d Decision, req run.Request, l
 			return laneOutcome{err: err}, true
 		}
 		l.reportf("loop: %s named a tooling obstacle: held behind %s\n", req.ItemID, defect)
-		return laneOutcome{stop: l.abandon(ctx, lane, req.RunID, head, "tooling obstacle: waits on "+defect)}, true
+		return laneOutcome{stop: l.abandonFromBase(ctx, lane, req.RunID, head, candidate.BaseSHA, "tooling obstacle: waits on "+defect)}, true
 	case ObstacleSeat:
 		next, err := l.escalateSeat(ctx, req.ItemID, req.RunID, d.Seat, req.Backend)
 		if err != nil {

@@ -59,15 +59,16 @@ func TestWorkflowRestartTwiceBeforeRestagingKeepsOwnership(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(target, "tools/item-a"), 0755); err != nil {
 		t.Fatal(err)
 	}
-	writeForkFile(t, filepath.Join(target, "tools/item-a/unfinished.txt"), "discard\n")
+	writeForkFile(t, filepath.Join(target, "tools/item-a/unfinished.txt"), "retain\n")
 	runGit(t, target, "add", ".")
 	runGit(t, target, "commit", "-qm", "unfinished")
+	head := runGit(t, target, "rev-parse", "HEAD")
 	next := replaceGraphLoop(t, f, l, steps)
 	p = mustPlan(t, next)[0]
 	deadOwnerClaim(t, f, next, p)
 	again := replaceGraphLoop(t, f, next, steps)
 	graphPass(t, again, result)
-	if len(steps.runs) != 1 || steps.runs[0].RunID != "run-item-a-a1-n1-002-restart" || strings.Contains(runGit(t, target, "ls-files"), "unfinished.txt") {
+	if len(steps.runs) != 1 || steps.runs[0].RunID != "run-item-a-a1-n1-002-restart" || steps.heads[0] != head {
 		t.Fatalf("staging ownership lost across repeated restart: %+v %+v", steps.runs, result)
 	}
 }

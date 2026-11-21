@@ -324,6 +324,48 @@ func (w *Workflow) checkScopes(allowed []string) error {
 
 const nodeAdvancedKind = "drain.node-advanced"
 
+// Only a loop restart continues a writer's existing candidate. Failover and
+// other node retries still restart at the node boundary.
+func restartWriter(d Decision) bool {
+	if !d.WorkflowRestart || d.Workflow == nil {
+		return false
+	}
+	_, _, cause := splitRunID(d.RunRequest.RunID)
+	node := d.effectiveNode()
+	return cause == "restart" && node.Kind == "agent" && node.Access == "write"
+}
+
+func (l *Loop) committedRestartBases(ctx context.Context, lane, nodeBase string) (itemBase, scopeBase string, err error) {
+	// Prefer the live item boundary: a successful rebase updates the lane's
+	// metadata, not the original run's archive.
+	base := l.laneBase(lane)
+	target := l.laneTarget(lane)
+	head, err := l.revParse(ctx, target, "HEAD")
+	if err != nil || base == "" || base == head {
+		return "", nodeBase, err
+	}
+	ok, err := containsCommit(ctx, target, base, head)
+	if err != nil || !ok {
+		return "", nodeBase, err
+	}
+	if base != nodeBase {
+		// A node that started from the old trunk must not count the new
+		// trunk's changes against its own fence after a rebase.
+		onTrunk, err := containsCommit(ctx, target, nodeBase, base)
+		if err != nil {
+			return "", nodeBase, err
+		}
+		if onTrunk {
+			return base, base, nil
+		}
+		ok, err := containsCommit(ctx, target, nodeBase, head)
+		if err != nil || !ok {
+			return "", nodeBase, err
+		}
+	}
+	return base, nodeBase, nil
+}
+
 // stagedNodeRun retains proof of staging across repeated restart dispatches.
 // Archives cover a crash after staging but before recordStagedNode; an unstaged
 // first claim owns no preexisting lane contents.
@@ -797,7 +839,7 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 			if err := l.nodeOutcome(ctx, d, "blocked"); err != nil {
 				return true, err
 			}
-			if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, "workflow node ended with "+footer); stop != "" {
+			if stop := l.abandonFromBase(ctx, d.LaneID, rec.RunID, head, l.settleBase(d.LaneID, base), "workflow node ended with "+footer); stop != "" {
 				return true, retainedAfter(d.LaneID, stop)
 			}
 			return true, l.markExamined(ctx, d)

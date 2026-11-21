@@ -124,6 +124,7 @@ func TestWorkflowRestartReplaysOnlyUnfinishedNode(t *testing.T) {
 				if committed {
 					runGit(t, target, "add", ".")
 					runGit(t, target, "commit", "-qm", "unfinished")
+					head = runGit(t, target, "rev-parse", "HEAD")
 				}
 				writeForkFile(t, filepath.Join(target, "tools/item-a/untracked.txt"), "discard\n")
 				next := replaceGraphLoop(t, f, l, steps)
@@ -137,8 +138,8 @@ func TestWorkflowRestartReplaysOnlyUnfinishedNode(t *testing.T) {
 				}
 				names := runGit(t, target, "ls-files", "--others", "--exclude-standard")
 				tracked := runGit(t, target, "ls-files")
-				if strings.Contains(names, "untracked.txt") || strings.Contains(tracked, "unfinished.txt") {
-					t.Fatalf("unfinished work retained: %s %s", names, tracked)
+				if strings.Contains(names, "untracked.txt") || strings.Contains(tracked, "unfinished.txt") != committed {
+					t.Fatalf("restart did not keep exactly the committed work: untracked=%s tracked=%s", names, tracked)
 				}
 				if w := pendingForTest(t, f, "item-a"); w.Decision.Attempt != 1 || w.Decision.NodeIndex != index {
 					t.Fatalf("attempt/node changed: %+v", w)
