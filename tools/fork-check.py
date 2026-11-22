@@ -5020,6 +5020,7 @@ CHECK_KIND_GROUP = {
     "gate-runner": KIND_VERDICT,
     "go-affected": KIND_VERDICT,
     "go-affected-suite": KIND_VERDICT,
+    "go-test-shards-suite": KIND_VERDICT,
     # The seat-profile encoding's own tests: a suite that fails is a verdict about the
     # change, like every other assertion above. It arrived from a lane that could not
     # see this table -- it planned the step and left the kind unclassified, and the audit
@@ -5105,6 +5106,7 @@ CHECK_TIER = {
     "go-tool": TIER_ROLLING,
     "go-affected": TIER_LANDING,
     "go-affected-suite": TIER_LANDING,
+    "go-test-shards-suite": TIER_LANDING,
     # Series and fork invariants: a patch series that does not apply breaks the next host
     # launch the moment it lands, on every host that selects the pack. Rule 1.
     "series": TIER_LANDING,
@@ -5265,6 +5267,7 @@ CHECK_COST_ESTIMATE = {
                    if directory not in GO_LANDING_SUITE_DIRS),
     "go-affected": GO_TOOL_COST_ESTIMATE["tools/tillr-drain"],
     "go-affected-suite": 5.0,
+    "go-test-shards-suite": 20.0,
     "gate-runner": GO_TOOL_COST_ESTIMATE["tools/tillr-gate"],
     "go-substrate": max(GO_TOOL_COST_ESTIMATE[directory]
                         for directory in GO_LANDING_SUITE_DIRS),
@@ -6587,6 +6590,11 @@ def apply_tier(plan: Plan, tier: str | None, changed: list[str] | None = None) -
                              "the rolling tier runs whole Go module suites fresh",
                              kind=check.kind, read_disjoint=False)
             continue
+        if check.kind == "go-test-shards-suite" and tier == TIER_ROLLING:
+            plan.not_planned(check.label,
+                             "the heavy tree declaration go-test-shards-test judges this suite",
+                             kind=check.kind, read_disjoint=False)
+            continue
         if check_tier(check.kind) == tier:
             if (tier == TIER_LANDING and changed is not None and check.watches
                     and not changed_set.intersection(check.selected_by or ())
@@ -7139,6 +7147,29 @@ def build_plan(
     else:
         plan.not_planned("go-affected-suite (tests/go-affected.test.py)",
                          "go_affected.py, go-test-edges.json, and tests/go-affected.test.py are unchanged")
+
+    # The sharded Go test runner's own regression suite (6-40s). `tools/gate/checks/go-test-shards-test.json`
+    # is `scope: "tree", tier: "heavy"` (so it also covers Go module test-name parity in JudgeHeavy),
+    # which `tillr-gate checks --fast-tree --scope-to-change` omits before landing; declare the runner
+    # and its suite here at the landing tier so changing either runs `tests/go-test-shards.test.py`
+    # before merge without adding it to unrelated candidates.
+    go_test_shards_watches = (
+        "tools/go-test-shards.py",
+        "tests/go-test-shards.test.py",
+    )
+    go_test_shards_suite = [path for path in changed if watched_path(path, set(go_test_shards_watches))]
+    if go_test_shards_suite:
+        plan.checks.append(
+            Check("go-test-shards-suite",
+                  "sharded Go test runner regression suite passes",
+                  [sys.executable, "tests/go-test-shards.test.py"],
+                  "go-test-shards.py or tests/go-test-shards.test.py changed",
+                  300, watches=go_test_shards_watches,
+                  cost=CHECK_COST_ESTIMATE["go-test-shards-suite"])
+        )
+    else:
+        plan.not_planned("go-test-shards-suite (tests/go-test-shards.test.py)",
+                         "go-test-shards.py and tests/go-test-shards.test.py are unchanged")
 
     # The shared pipeline-evidence format. The gate is the producer that still ships here,
     # and the suite feeds the velocity report synthetic records written to the format, so no

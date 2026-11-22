@@ -8502,6 +8502,119 @@ with tempfile.TemporaryDirectory() as tmp:
     assert red_replay.returncode == 1, red_replay.stdout + red_replay.stderr
     assert "FAIL waybar" in red_replay.stdout, red_replay.stdout
 
+# 60b. THE SHARD RUNNER'S OWN REGRESSION SUITE LANDS WHEN THE RUNNER OR ITS SUITE CHANGES.
+#      At 7:13 AM ET on 2026-11-22 a commit touching only `tests/go-test-shards.test.py`
+#      (df41a37b07) passed the landing gate in 2s with `ran=1 notrun=55 ... checks=file-size
+#      ... owed=-` because `tools/gate/checks/go-test-shards-test.json` is `scope: "tree"`,
+#      `tier: "heavy"` (excluded from `tillr-gate checks --fast-tree --scope-to-change`) and
+#      no check in `tools/fork-check.py` watched `tests/go-test-shards.test.py` or ran that
+#      suite when `tools/go-test-shards.py` changed (9ac76b74e1). Touching either file must
+#      select and execute `tests/go-test-shards.test.py` at the landing tier, and touching
+#      neither file must leave it unplanned.
+with tempfile.TemporaryDirectory() as tmp:
+    base = Path(tmp)
+    repo, _, _ = build_repo(base)
+    env = build_stubs(base)
+    go_stub = base / "go-stub"
+    go_stub.mkdir()
+    (go_stub / "go").write_text("#!/bin/sh\nexit 0\n")
+    (go_stub / "go").chmod(0o755)
+    env = {**env, "PATH": f"{go_stub}:{env['PATH']}"}
+    spec = importlib.util.spec_from_file_location("fork_check_shards_suite", SCRIPT)
+    shards_mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(shards_mod)
+    assert shards_mod.CHECK_KIND_GROUP.get("go-test-shards-suite") == shards_mod.KIND_VERDICT
+    assert shards_mod.CHECK_TIER.get("go-test-shards-suite") == shards_mod.TIER_LANDING
+    assert "go-test-shards-suite" in shards_mod.CHECK_COST_ESTIMATE
+
+    (repo / "tools").mkdir(exist_ok=True)
+    (repo / "tools" / "go-test-shards.py").write_text("#!/usr/bin/env python3\n")
+    (repo / "tools" / "go-test-durations.json").write_text("{}\n")
+    # Editing tools/go-test-shards.py also selects gate-runner at the landing tier, so
+    # give the synthetic repo gate-runner's two companion test stubs.
+    (repo / "tools" / "gate").mkdir(parents=True, exist_ok=True)
+    (repo / "tools" / "gate" / "change-gate.test.py").write_text("")
+    (repo / "tools" / "gate" / "runner-first.test.py").write_text("")
+    (repo / "tests").mkdir(exist_ok=True)
+    suite_calls = base / "go-test-shards-suite-calls"
+    (repo / "tests" / "go-test-shards.test.py").write_text(
+        "from pathlib import Path\n"
+        f"Path({str(suite_calls)!r}).open('a').write('ran\\n')\n"
+    )
+    commit(repo, "seed go-test-shards runner and suite")
+
+    for trigger in ("tests/go-test-shards.test.py", "tools/go-test-shards.py"):
+        planned = shards_mod.build_plan(
+            repo, [], shards_mod.Record(base / "shards-suite-state.json"),
+            [trigger], None, True, tier=shards_mod.TIER_LANDING,
+        )
+        matched = [c for c in planned.checks if c.kind == "go-test-shards-suite"]
+        assert len(matched) == 1, (trigger, [(c.kind, c.label) for c in planned.checks])
+        assert matched[0].argv == [sys.executable, "tests/go-test-shards.test.py"], matched[0].argv
+        assert set(matched[0].watches) == {
+            "tools/go-test-shards.py",
+            "tests/go-test-shards.test.py",
+        }, matched[0].watches
+
+        # The heavy tree declaration go-test-shards-test already runs in JudgeHeavy, so
+        # the rolling tier does not duplicate the suite.
+        rolling_planned = shards_mod.build_plan(
+            repo, [], shards_mod.Record(base / "shards-suite-rolling.json"),
+            [trigger], None, True, tier=shards_mod.TIER_ROLLING,
+        )
+        assert not any(c.kind == "go-test-shards-suite" for c in rolling_planned.checks), (
+            trigger, [c.kind for c in rolling_planned.checks]
+        )
+
+    for unrelated in ("README.md", "tools/tillr-land/main.go", "tools/go-test-durations.json"):
+        planned = shards_mod.build_plan(
+            repo, [], shards_mod.Record(base / "shards-suite-unrelated.json"),
+            [unrelated], None, True, tier=shards_mod.TIER_LANDING,
+        )
+        assert not any(c.kind == "go-test-shards-suite" for c in planned.checks), (
+            unrelated, [c.kind for c in planned.checks]
+        )
+        assert not any(s.kind == "go-test-shards-suite" and s.owed for s in planned.skips), (
+            unrelated, planned.skips
+        )
+
+    # End-to-end landing runs: each watched file executes the suite, an unrelated edit does
+    # not, and a failing suite fails the landing gate.
+    for path, content in (
+        ("tests/go-test-shards.test.py",
+         "from pathlib import Path\n"
+         f"Path({str(suite_calls)!r}).open('a').write('suite-edit\\n')\n"),
+        ("tools/go-test-shards.py", "#!/usr/bin/env python3\n# runner edit\n"),
+    ):
+        suite_calls.unlink(missing_ok=True)
+        prev = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
+        (repo / path).write_text(content)
+        commit(repo, f"edit {path}")
+        res = run(repo, env, "--tier", "landing", "--since", prev)
+        assert res.returncode == 0, res.stdout + res.stderr
+        assert "go-test-shards-suite" in res.stdout, res.stdout
+        assert suite_calls.exists() and suite_calls.read_text().strip(), path
+
+    suite_calls.unlink(missing_ok=True)
+    prev = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
+    (repo / "README.md").write_text("# Unrelated docs edit\n")
+    commit(repo, "unrelated docs edit")
+    unrelated_res = run(repo, env, "--tier", "landing", "--since", prev)
+    assert unrelated_res.returncode == 0, unrelated_res.stdout + unrelated_res.stderr
+    assert not suite_calls.exists(), suite_calls.read_text()
+    fields = dict(field.split("=", 1) for field in
+                  [line for line in unrelated_res.stdout.splitlines() if line.strip()][-1].split()[2:])
+    assert "go-test-shards-suite" not in fields["checks"].split(","), fields
+
+    prev = sh(repo, "git", "rev-parse", "HEAD").stdout.strip()
+    (repo / "tests" / "go-test-shards.test.py").write_text("import sys\nsys.exit(1)\n")
+    commit(repo, "break go-test-shards suite")
+    red_res = run(repo, env, "--tier", "landing", "--since", prev)
+    assert red_res.returncode == 1, red_res.stdout + red_res.stderr
+    assert "FAIL go-test-shards-suite" in (red_res.stdout + red_res.stderr), (
+        red_res.stdout + red_res.stderr
+    )
+
 _shard_boundary("watchdog-and-subsuites", 31)
 
 # 66. Wrapper targets never kill progress; only complete silent samples stall.
