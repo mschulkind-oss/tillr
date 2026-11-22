@@ -1,0 +1,22 @@
+# On 2026-11-21 at 7:50 PM ET, a decision-collision fault went unnoticed
+# for six minutes. Read drain.item-fault events from the last hour.
+[[rule]]
+id = "drain-item-fault"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.item-fault"]
+
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+window = "1h"
+
+[rule.guidance]
+summary = "The drain recorded a fault for {{subject}}."
+check = ["Run tillr drain why {{subject}} to see why the item is held."]
+do = ["Read the fault detail to understand what stopped the drain from advancing the item."]
+
+[rule.delivery]
+receiver = "foreground"
