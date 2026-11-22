@@ -113,6 +113,9 @@ func commandNodeHold(r *store.Reader, id string) (string, error) {
 	if err != nil && err != sql.ErrNoRows {
 		return "", err
 	}
+	if step == RefusalPlanOutput {
+		return "", nil
+	}
 	if step == RefusalNodeOutput {
 		return RefusalNodeOutput, nil
 	}

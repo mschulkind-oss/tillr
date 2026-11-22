@@ -947,6 +947,10 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 					}
 					request := *decision.RunRequest
 					request.RunID += "-n" + strconv.Itoa(resumeNode+1)
+					if request.SessionTurn && decision.Returned != nil && decision.Returned.Cause == RefusalPlanOutput && p.documentRoot != "" {
+						outPath := filepath.Join(nodeOutputsDir(p.documentRoot, request.RunID), deliveryOutput)
+						request.ResumePrompt += "\nWrite the corrected `" + deliveryOutput + "` file at: " + outPath + " (any other outputs from your previous turn, such as `" + quickWayFile + "` or `proposal`, and any commit on this lane are already preserved). End with RESULT: done.\n"
+					}
 					decision.RunRequest = &request
 					if routed.Command != nil {
 						decision.RunRequest = routed.Command.commandRequest(item.ItemID, decision.LaneID, request.RunID)
@@ -1672,6 +1676,8 @@ func (p *planner) retryHoldReason(itemID string) string {
 		return RefusalVerifyNoVerdict
 	case RefusalPlanWrong:
 		return RefusalPlanWrong
+	case RefusalPlanOutput:
+		return RefusalPlanOutput
 	case RefusalNodeOutput:
 		return ReasonNodeOutputMissing
 	case RefusalFence:

@@ -372,7 +372,11 @@ func checkNodeOutputs(root string, d Decision) ([]nodeArtifact, error) {
 		}
 		if stage.Outputs[name] == "json" {
 			if err := uniqueJSON(raw); err != nil {
-				return nil, fmt.Errorf("node-output-missing: %s.%s: invalid json: %w", stage.ID, name, err)
+				err = fmt.Errorf("node-output-missing: %s.%s: invalid json: %w", stage.ID, name, err)
+				if name == deliveryOutput && classificationNode(stage) {
+					return nil, deliveryParseError{err}
+				}
+				return nil, err
 			}
 		}
 		artifacts = append(artifacts, nodeArtifact{Name: name, Type: stage.Outputs[name], SHA256: fmt.Sprintf("%x", sha256.Sum256(raw)), Location: path})

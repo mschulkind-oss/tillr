@@ -28,7 +28,14 @@ func init() {
 	}
 }
 
-const deliveryPrompt = `Classify delivery from the item's words and repository. Write the required delivery JSON output with kind "repo", "fork", or "both". For fork or both, name exactly one fork using the "fork" field and bin/pi-forks.list. A both decision delivers the fork first. Never infer the target from fence entries. For fork or both, do not use do-it-now and do not propose repository pieces before fork delivery.`
+const deliveryShape = `{"kind": "repo"}, {"kind": "fork", "fork": "<name>"}, or {"kind": "both", "fork": "<name>"}`
+
+const deliveryPrompt = `Classify delivery from the item's words and repository. Write the required delivery JSON output as a JSON object (not a bare string): ` + deliveryShape + `. For fork or both, name exactly one fork from bin/pi-forks.list in the "fork" field (omit "fork" for "repo"). A both decision delivers the fork first. Never infer the target from fence entries. For fork or both, do not use do-it-now and do not propose repository pieces before fork delivery.`
+
+type deliveryParseError struct{ err error }
+
+func (e deliveryParseError) Error() string { return e.err.Error() }
+func (e deliveryParseError) Unwrap() error { return e.err }
 
 func classificationNode(stage WorkflowStage) bool {
 	// Planned-build planners and previously recorded single-worker graphs
@@ -49,7 +56,7 @@ func classifyDelivery(root string, artifacts []nodeArtifact, quickWay bool) (*de
 		dec := json.NewDecoder(strings.NewReader(string(raw)))
 		dec.DisallowUnknownFields()
 		if err := dec.Decode(&d); err != nil {
-			return nil, err
+			return nil, deliveryParseError{err}
 		}
 		if d.ForkLanded != "" || d.ForkRun != "" {
 			return nil, fmt.Errorf("classification cannot claim publication")
@@ -59,7 +66,7 @@ func classifyDelivery(root string, artifacts []nodeArtifact, quickWay bool) (*de
 			return nil, err
 		}
 		if _, err := d.pieces(known); err != nil {
-			return nil, err
+			return nil, deliveryParseError{err}
 		}
 		if d.activeFork() != "" {
 			if quickWay {

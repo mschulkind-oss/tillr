@@ -60,6 +60,7 @@ var returnedCauses = map[string]bool{
 	RefusalGate:          true,
 	RefusalVerifyNotDone: true,
 	RefusalPlanWrong:     true,
+	RefusalPlanOutput:    true,
 	RefusalNoOp:          true,
 	RefusalFence:         true,
 	RefusalLand:          true,
@@ -76,6 +77,7 @@ var returnedReasons = map[string]string{
 	RefusalVerifyNotDone:      RefusalVerifyNotDone,
 	RefusalVerifyNoVerdict:    RefusalVerifyNoVerdict,
 	RefusalPlanWrong:          RefusalPlanWrong,
+	RefusalPlanOutput:         RefusalPlanOutput,
 	ReasonCandidateNoOp:       RefusalNoOp,
 	ReasonBoundaryScopeEscape: RefusalFence,
 	ReasonLandRefused:         RefusalLand,
@@ -216,6 +218,8 @@ func returnedBrief(e ReturnedEnding) string {
 		b.WriteString("The judge refused its candidate.")
 	case RefusalPlanWrong:
 		b.WriteString("The build step reported that it cannot meet the verifier's findings within the plan; revise the plan so the work can be built.")
+	case RefusalPlanOutput:
+		b.WriteString("Its `delivery` output did not parse. Write the `delivery` output again as a JSON object (not a bare string) matching one of: " + deliveryShape + ` (omit "fork" for "repo").`)
 	case RefusalNoOp:
 		b.WriteString("It ended without committing anything, so there was no candidate to judge.")
 	case RefusalFence:
