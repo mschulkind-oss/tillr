@@ -205,7 +205,15 @@ def go_failure_logs(module, lines, output, sharded):
     named = (failed - parents) | timeouts.keys()
     for package, name in sorted(named):
         panic, text = timeouts.get((package, name), ("", ""))
-        body = f"go-test:{module}:{package}:{name}\n" + (text or "".join(messages.get((package, name), ())))
+        text = text or "".join(messages.get((package, name), ()))
+        # In a shard the runtime can detect a deadlock and end the test
+        # before the testing package's timeout fires. A focused run may hang
+        # instead. Only use the exact runtime line in this case's own output.
+        deadlock = "fatal error: all goroutines are asleep - deadlock!"
+        if not panic and deadlock in text.splitlines():
+            panic = deadlock
+        body = f"go-test:{module}:{package}:{name}\n" + text
+        # Keep the existing progress-file field for both kinds of hang.
         cases.append({"package": package, "name": name, "log": keep_output(body), "timeout_panic": panic})
     unscoped |= bool(package_failures - {package for package, _ in named})
     return {"cases": cases, "log": keep_output(output) if unscoped or not cases else ""}

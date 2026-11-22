@@ -30,7 +30,7 @@ type legacyGoCase struct {
 	Package      string `json:"package"`
 	Name         string `json:"name"`
 	Log          string `json:"log"`
-	TimeoutPanic string `json:"timeout_panic"`
+	TimeoutPanic string `json:"timeout_panic"` // First proof's timeout panic or runtime deadlock line.
 }
 
 type legacyFailure struct {
