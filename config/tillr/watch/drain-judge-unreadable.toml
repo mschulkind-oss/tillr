@@ -1,0 +1,29 @@
+# At about 1:25 PM ET on 2026-11-22, the drain held an item for the operator
+# with "judge-unreadable: saved judgment belongs to a different candidate" and
+# no alert opened until a timed check-in 8 minutes later. Read drain.refusal
+# events where step is "judge-unreadable", grouped by item_id.
+[[rule]]
+id = "drain-judge-unreadable"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.refusal"]
+
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+match = 'event.step == "judge-unreadable"'
+window = "1h"
+
+[rule.guidance]
+summary = "The drain held {{subject}} as judge-unreadable: {{event.detail}}."
+check = [
+  "Run tillr drain why {{subject}} --store <path> and inspect judge run {{event.object_id}} and refusal detail: {{event.detail}}."
+]
+do = [
+  "Establish why the saved judgment could not be used, then authorize a retry with tillr drain retry --item {{subject}} --run <held-run> --by <who> --why <cause> --store <path> --now <RFC3339 timestamp>."
+]
+
+[rule.delivery]
+receiver = "foreground"
