@@ -110,23 +110,12 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 				}
 				paths := l.rangePaths(ctx, green, tip)
 				detail := []string{}
-				logs := map[string]string{}
 				for _, check := range checks {
 					if check.FirstRedLanding == "" {
 						detail = append(detail, check.Detail)
 					}
-					logRef := check.LogRef
-					if logRef == "" {
-						logRef = check.LogPath
-					}
-					if logRef == "" {
-						logRef = l.heavyLog(tip, check.CheckID)
-					}
-					if logRef != "" {
-						logs[check.CheckID] = logRef
-					}
 				}
-				_, err = l.fileTrunkFixerNoted(ctx, sha, ids, GateOutcome{SuspectPaths: paths, CheckWatches: watches, RepairDetail: strings.Join(detail, "; "), CheckLogs: logs}, strings.Join(notes, ". "))
+				_, err = l.fileTrunkFixerNoted(ctx, sha, ids, GateOutcome{SuspectPaths: paths, CheckWatches: watches, RepairDetail: strings.Join(detail, "; "), CheckLogs: l.heavyCheckLogs(tip, checks)}, strings.Join(notes, ". "))
 				return err
 			}}
 			runner.Progress = func(line string) { l.reportf("%s", line) }
@@ -225,6 +214,54 @@ func heavyIDs(checks []HeavyCheck) []string {
 		ids = append(ids, check.CheckID)
 	}
 	return ids
+}
+
+// heavyCheckLogs binds the proof's evidence to the same IDs used for recovery.
+// Some judges return output inline instead of writing a log file.
+func (l *Loop) heavyCheckLogs(tip string, checks []HeavyCheck) map[string]string {
+	logs := map[string]string{}
+	for _, check := range checks {
+		for _, ref := range []string{check.LogRef, check.LogPath} {
+			if ref != "" && !filepath.IsAbs(ref) && legacyKeptLog(ref, "fail") == "" {
+				ref = filepath.Join(l.cfg.Root, ref)
+			}
+			if legacyKeptLog(ref, "fail") != "" {
+				logs[check.CheckID] = ref
+				break
+			}
+		}
+		if logs[check.CheckID] != "" {
+			continue
+		}
+		if ref := l.heavyLog(tip, check.CheckID); ref != "" {
+			logs[check.CheckID] = ref
+			continue
+		}
+		if l.cfg.LaneRoot == "" || strings.TrimSpace(check.Detail) == "" {
+			continue
+		}
+		dir := filepath.Join(l.cfg.LaneRoot, ".rolling", "logs", tip)
+		err := os.MkdirAll(dir, 0755)
+		if err == nil {
+			var file *os.File
+			file, err = os.CreateTemp(dir, "detail-*.log")
+			if err == nil {
+				_, err = file.WriteString(check.Detail)
+				if closeErr := file.Close(); err == nil {
+					err = closeErr
+				}
+				if err == nil {
+					logs[check.CheckID] = file.Name()
+				} else {
+					_ = os.Remove(file.Name())
+				}
+			}
+		}
+		if err != nil {
+			l.reportf("loop: could not keep heavy output for %s: %v\n", check.CheckID, err)
+		}
+	}
+	return logs
 }
 
 // heavyBrief keeps a recorded detail readable in one criteria line: whitespace folded,

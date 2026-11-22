@@ -4,14 +4,16 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
+import shlex
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 
-source, destination, tip, retry_proof = sys.argv[1:5]
-path = Path(destination)
+source, destination, tip, retry_proof, logs_dir = sys.argv[1:6]
+path, logs = Path(destination), Path(logs_dir)
 spec = importlib.util.spec_from_file_location("tillr_heavy_legacy_gate", source)
 gate = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = gate
@@ -20,7 +22,7 @@ spec.loader.exec_module(gate)
 original = gate.execute_check
 identity = gate.declaration_id
 status = gate.check_status
-state = {"tip_sha": tip, "checks": {}, "reused": [], "go_failures": {}}
+state = {"tip_sha": tip, "checks": {}, "reused": [], "failures": {}}
 
 
 def changed_between(old, new):
@@ -88,6 +90,94 @@ def publish():
             os.unlink(temporary)
 
 
+def keep_output(output):
+    if not output.strip():
+        return ""
+    logs.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", prefix="observed-",
+                                     suffix=".log", dir=logs, delete=False) as log:
+        log.write(output)
+        return log.name
+
+
+def execute_with_events(check, root, diff_base, *args, **kwargs):
+    # Instrument only the known Go suite commands, leaving the legacy gate in
+    # charge of selection, execution and status. Older gates without this command
+    # surface still contribute the observed whole check output.
+    module = check.label.removesuffix("'s whole suite passes")
+    command = getattr(gate, "go_tool_command", None)
+    if (check.kind != "go-tool" or module == check.label or module not in getattr(gate, "GO_TOOL_DIRS", ())
+            or command is None or getattr(check, "argv", None) != ["sh", "-c", command(module)]):
+        original(check, root, diff_base, *args, **kwargs)
+        return None
+    argv = check.argv
+    logs.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=logs, prefix=".heavy-events-") as temporary:
+        events = Path(temporary) / "go-events.jsonl"
+        sharded = module in gate.GO_SHARD_DIRS
+        if sharded:
+            script = argv[2] + " --events " + shlex.quote(str(events.resolve()))
+        else:
+            script = argv[2].replace(" go test ", " go test -json ", 1)
+        check.argv = argv[:2] + [script]
+        try:
+            original(check, root, diff_base, *args, **kwargs)
+        finally:
+            check.argv = argv
+        if status(check) != "FAIL":
+            return None
+        if sharded:
+            if not events.exists():
+                return None
+            lines = events.read_text(encoding="utf-8").splitlines()
+        else:
+            lines = check.output.splitlines()
+        return go_failure_logs(module, lines, check.output, sharded)
+
+
+def go_failure_logs(module, lines, output, sharded):
+    messages = {}
+    failed, package_failures = set(), set()
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue  # Native Go may also report non-JSON build diagnostics.
+        action, package, name = event.get("Action"), event.get("Package"), event.get("Test")
+        if package and name:
+            key = (package, name)
+            if action == "output":
+                messages.setdefault(key, []).append(event["Output"])
+            elif action == "fail":
+                failed.add(key)
+        elif action in ("fail", "build-fail"):
+            package_failures.add(package)
+
+    # A failing subtest also marks each enclosing test failed. Name the leaf,
+    # and only keep output attributed by test2json to that same package and test.
+    parents = set()
+    for package, name in failed:
+        while "/" in name:
+            name = name.rsplit("/", 1)[0]
+            parents.add((package, name))
+    cases = []
+    for package, name in sorted(failed - parents):
+        body = f"go-test:{module}:{package}:{name}\n" + "".join(messages.get((package, name), ()))
+        cases.append({"package": package, "name": name, "log": keep_output(body)})
+
+    # Do not erase a timeout, crash or build failure elsewhere in a suite just
+    # because one shard did report a failing case. Headers classify shard-level
+    # faults only; names and assertions come exclusively from the event stream.
+    unscoped = bool(package_failures - {package for package, _ in failed})
+    if sharded:
+        unscoped |= any(
+            line.startswith("go-test-shards: ") and "waiting for a test slot" not in line
+            and not re.match(r"^go-test-shards: \S+ shard \d+ failed \(exit 1\): .+$", line)
+            for line in output.splitlines()
+        )
+    return {"cases": cases, "log": keep_output(output) if unscoped or not cases else ""}
+
+
 def observe(check, root, diff_base, *args, **kwargs):
     key = identity(check.kind, check.label, root)
     with lock:
@@ -103,14 +193,13 @@ def observe(check, root, diff_base, *args, **kwargs):
             state["reused"].append(key)
             publish()
             return
-    original(check, root, diff_base, *args, **kwargs)
+    failure = execute_with_events(check, root, diff_base, *args, **kwargs)
     verdict = status(check)
-    if check.kind == "go-tool" and verdict == "FAIL":
-        # Reports keep only the tail of a failed check. Preserve every shard
-        # header before that truncation, including any failure without a case.
-        headers = [line for line in check.output.splitlines() if line.startswith("go-test-shards: ")]
+    if verdict == "FAIL":
+        if failure is None:
+            failure = {"log": keep_output(check.output)}
         with lock:
-            state["go_failures"][key] = headers
+            state["failures"][key] = failure
             publish()
     if verdict in ("PASS", "ok", "CACHED"):
         with lock:
@@ -123,4 +212,4 @@ def observe(check, root, diff_base, *args, **kwargs):
 with lock:
     publish()
 gate.execute_check = observe
-sys.exit(gate.main(sys.argv[5:]))
+sys.exit(gate.main(sys.argv[6:]))

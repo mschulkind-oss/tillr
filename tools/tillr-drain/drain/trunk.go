@@ -1229,7 +1229,7 @@ func (l *Loop) routeTrunkFixer(ctx context.Context, redSHA string, failing []str
 		CreatedAt:     l.cfg.Now().UTC(),
 		Payload:       payload,
 	}
-	checkLogs := l.snapshotFixerLogs(fixerID, filterCheckLogs(gate.CheckLogs, failing))
+	checkLogs := l.snapshotCheckLogs(filepath.Join(".fixers", fixerID), filterCheckLogs(gate.CheckLogs, failing))
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return "", Incompatiblef("%v", err)
@@ -1383,14 +1383,14 @@ func init() {
 	}
 }
 
-func (l *Loop) snapshotFixerLogs(observationID string, checkLogs map[string]string) map[string]string {
+func (l *Loop) snapshotCheckLogs(location string, checkLogs map[string]string) map[string]string {
 	if len(checkLogs) == 0 {
 		return nil
 	}
 	if l.cfg.LaneRoot == "" {
 		return checkLogs
 	}
-	dstDir := filepath.Join(l.cfg.LaneRoot, ".fixers", observationID)
+	dstDir := filepath.Join(l.cfg.LaneRoot, location)
 	ids := make([]string, 0, len(checkLogs))
 	for id := range checkLogs {
 		ids = append(ids, id)

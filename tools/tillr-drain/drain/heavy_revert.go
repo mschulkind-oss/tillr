@@ -59,11 +59,12 @@ func IsRevertItem(itemID string) bool { return strings.HasPrefix(itemID, RevertI
 
 // revertPayload is the drain.revert event: what was reverted, why, and what became of it.
 type revertPayload struct {
-	Landing string   `json:"landing"`
-	ItemID  string   `json:"item_id,omitempty"`
-	RunID   string   `json:"run_id,omitempty"`
-	Tip     string   `json:"tip"`
-	Checks  []string `json:"checks"`
+	Landing   string            `json:"landing"`
+	ItemID    string            `json:"item_id,omitempty"`
+	RunID     string            `json:"run_id,omitempty"`
+	Tip       string            `json:"tip"`
+	Checks    []string          `json:"checks"`
+	CheckLogs map[string]string `json:"check_logs,omitempty"`
 	// Result is "reverted" or "not-possible".
 	Result   string `json:"result"`
 	Revert   string `json:"revert,omitempty"`
@@ -78,7 +79,8 @@ type landingOf struct{ itemID, runID string }
 // tip, and lands it only when every condition of the ruling holds.
 func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []HeavyCheck, replay HeavyReplay) (out RevertOutcome, err error) {
 	ids := heavyIDs(checks)
-	record := revertPayload{Landing: landing, Tip: tip, Checks: ids}
+	logs := l.snapshotCheckLogs(filepath.Join(".revert", "logs", tip, landing), l.heavyCheckLogs(tip, checks))
+	record := revertPayload{Landing: landing, Tip: tip, Checks: ids, CheckLogs: logs}
 	refuse := func(reason string) (RevertOutcome, error) {
 		record.Result, record.Reason, record.StillRed = "not-possible", reason, out.StillRed
 		next := "filing a fixer"
@@ -191,7 +193,7 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 		}
 	}
 	record.Result, record.Revert = "reverted", after
-	ending := l.revertEnding(landing, of, tip, checks, after)
+	ending := l.revertEnding(landing, of, tip, checks, after, logs)
 	ending.WorkerSession = workerSession
 	if err := l.appendRevert(ctx, record, &ending); err != nil {
 		return RevertOutcome{}, err
@@ -312,7 +314,7 @@ func (l *Loop) readStore(ctx context.Context, fn func(*store.Reader) error) erro
 
 // revertEnding is the reverted run's ending: what its worker is told, and which checks
 // its next gate must include.
-func (l *Loop) revertEnding(landing string, of landingOf, tip string, checks []HeavyCheck, revert string) refusalPayload {
+func (l *Loop) revertEnding(landing string, of landingOf, tip string, checks []HeavyCheck, revert string, logs map[string]string) refusalPayload {
 	ids := heavyIDs(checks)
 	var detail strings.Builder
 	fmt.Fprintf(&detail, "Your landing %s was reverted by %s: the full suite proved it broke the trunk. ", shortSHA(landing), shortSHA(revert))
@@ -322,14 +324,7 @@ func (l *Loop) revertEnding(landing string, of landingOf, tip string, checks []H
 		if text := strings.TrimSpace(check.Detail); text != "" {
 			fmt.Fprintf(&detail, "\n\n%s output:\n%s", check.CheckID, heavyBrief(text))
 		}
-		logRef := check.LogRef
-		if logRef == "" {
-			logRef = check.LogPath
-		}
-		if logRef == "" {
-			logRef = l.heavyLog(tip, check.CheckID)
-		}
-		c := EndingCheck{CheckID: check.CheckID, LogRef: logRef}
+		c := EndingCheck{CheckID: check.CheckID, LogRef: logs[check.CheckID]}
 		if c.LogRef != "" {
 			if body, err := os.ReadFile(c.LogRef); err == nil {
 				c.Digest = evidenceDigest(string(body), of.runID)
