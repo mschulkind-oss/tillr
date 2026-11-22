@@ -838,7 +838,7 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 			}
 		}
 		if ClassifyAttempt(rec, log) == AttemptRefused {
-			stop, err := l.holdAdapterRefusal(ctx, d.LaneID, *d.RunRequest, log)
+			stop, err := l.holdAdapterRefusal(ctx, d.LaneID, *d.RunRequest, rec, log)
 			if err != nil {
 				return true, err
 			}

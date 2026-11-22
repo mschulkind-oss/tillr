@@ -260,3 +260,156 @@ func TestExistingEmptyVerifyOutputIsNotMissing(t *testing.T) {
 		return nil
 	})
 }
+
+// A real adapter preflight refusal writes `run-<adapter>: refused: <reason>` to the raw
+// stream log (`log`) before any JSON event starts; `extract-report` still writes a
+// header-only `report.md` (`report`) with an empty body. Two passes over the item must
+// dispatch verify once, log its refusal sentence rather than "spent unreported tokens",
+// hold the item with the refusal text visible in `tillr drain why`, and dispatch no
+// second attempt until `tillr drain retry` sends it back.
+func TestVerifyPreflightRefusalInRawLogHoldsAcrossPasses(t *testing.T) {
+	const refusalSentence = "the brief carries a literal '{{' that is not a template placeholder"
+	l, base, f := verifyReturnFixture(t, false, func(w *workflowSteps) *verifyReturnSteps {
+		return &verifyReturnSteps{workflowSteps: w}
+	})
+	var loopOut strings.Builder
+	l.cfg.Report = &loopOut
+
+	type rawLogRefusalSteps struct {
+		*verifyReturnSteps
+		refuseVerify bool
+		refusedRun   string
+	}
+	s := &rawLogRefusalSteps{verifyReturnSteps: base, refuseVerify: true}
+	var runFunc func(ctx context.Context, req run.Request) (run.Record, string, error)
+	runFunc = func(ctx context.Context, req run.Request) (run.Record, string, error) {
+		if req.NodeID != "verify" || !s.refuseVerify {
+			return s.verifyReturnSteps.Run(ctx, req)
+		}
+		s.runs = append(s.runs, req)
+		s.verifies++
+		s.refusedRun = req.RunID
+		dir := run.DurableDir(filepath.Join(s.f.laneRoot, req.LaneID), req.RunID)
+		rawLogPath := filepath.Join(dir, "run.log")
+		reportPath := filepath.Join(dir, "report.md")
+		writeForkFile(s.t, rawLogPath, "run-pi: refused: "+refusalSentence+"\n")
+		// Header-only extracted report, matching `extract-report` when no JSON events exist.
+		headerOnly := "backend: pi-verify\nexit code: 2\nevents: 0\nunparseable lines: 1\ntokens: unknown\ncost usd: unknown\ncomplete: no\nresult: incomplete\n"
+		writeForkFile(s.t, reportPath, headerOnly)
+		rec := run.Record{
+			RunID: req.RunID, ItemID: req.ItemID, LaneID: req.LaneID, Backend: req.Backend,
+			State: run.StateExited, ExitCode: countPtr(2),
+			StartedAt: "2026-11-22T01:58:00Z", FinishedAt: "2026-11-22T01:58:00Z",
+			ArtifactRefs: []run.ArtifactRef{
+				{Kind: "log", Ref: rawLogPath},
+				{Kind: "report", Ref: reportPath},
+			},
+		}
+		st, err := store.Open(ctx, s.f.storePath, true)
+		if err != nil {
+			return rec, headerOnly, err
+		}
+		defer st.Close()
+		err = st.WriteTx(ctx, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
+		return rec, headerOnly, err
+	}
+	l.cfg.Steps = &funcSteps{Steps: base, run: runFunc}
+
+	result := &LoopResult{}
+	// Advance through plan + build + first verify refusal.
+	for i := 0; i < 30 && s.refusedRun == ""; i++ {
+		graphPass(t, l, result)
+	}
+	if s.refusedRun == "" {
+		t.Fatal("verify did not run")
+	}
+	if s.verifies != 1 {
+		t.Fatalf("verifies after first refusal = %d, want 1", s.verifies)
+	}
+
+	// Run two more loop passes: must not dispatch a second verify attempt.
+	dispatchedBefore := len(s.runs)
+	graphPass(t, l, result)
+	graphPass(t, l, result)
+	if len(s.runs) != dispatchedBefore || s.verifies != 1 {
+		t.Fatalf("second attempt dispatched while held: runs=%d (was %d), verifies=%d", len(s.runs), dispatchedBefore, s.verifies)
+	}
+
+	// The loop's ending line for the refused run must carry the refusal sentence, not
+	// "spent unreported tokens".
+	out := loopOut.String()
+	if !strings.Contains(out, s.refusedRun+" on ") || !strings.Contains(out, refusalSentence) {
+		t.Errorf("loop output does not carry the refusal sentence for %s:\n%s", s.refusedRun, out)
+	}
+	if strings.Contains(out, s.refusedRun+" on pi spent unreported tokens") {
+		t.Errorf("loop output hid the refusal behind 'spent unreported tokens':\n%s", out)
+	}
+
+	// Hold must be recorded with the adapter's refusal sentence as its reason.
+	var fault ItemFault
+	fixtureRead(t, f, func(r *store.Reader) error {
+		faults, err := ReadItemFaults(r)
+		if err != nil {
+			return err
+		}
+		var ok bool
+		fault, ok = faults["item-a"]
+		if !ok {
+			t.Fatalf("item-a is not held; faults=%+v", faults)
+		}
+		if fault.Reason != ReasonAdapterRefused || !strings.Contains(fault.Detail, refusalSentence) {
+			t.Fatalf("item-a hold = %+v, want %s carrying %q", fault, ReasonAdapterRefused, refusalSentence)
+		}
+		// tillr drain why must show the held item with the adapter's refusal sentence.
+		answer, err := Why(r, Pass{
+			StorePath:      f.storePath,
+			Now:            l.cfg.Now().Format("2006-01-02T15:04:05Z07:00"),
+			AvailableLanes: &l.cfg.Lanes,
+		}, l.cfg.Policy, nil)
+		if err != nil {
+			return err
+		}
+		found := false
+		for _, row := range answer.Rows {
+			if row.ItemID != "item-a" {
+				continue
+			}
+			found = true
+			if row.Reason != ReasonAdapterRefused || !strings.Contains(row.Why, refusalSentence) {
+				t.Errorf("why row = %+v, want %s with %q", row, ReasonAdapterRefused, refusalSentence)
+			}
+		}
+		if !found {
+			t.Fatalf("item-a missing from why rows: %+v", answer.Rows)
+		}
+		return nil
+	})
+
+	// Sending the item back with `tillr drain retry` releases the hold and allows dispatch.
+	s.refuseVerify = false
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := AuthorizeRetry(context.Background(), tx, RetryRequest{
+			ItemID: "item-a",
+			RunID:  s.refusedRun,
+			By:     "owner",
+			Why:    "fixed brief",
+			At:     l.cfg.Now(),
+		})
+		return err
+	})
+	for i := 0; i < 30 && s.verifies < 2; i++ {
+		graphPass(t, l, result)
+	}
+	if s.verifies != 2 {
+		t.Fatalf("verifies after retry = %d, want 2", s.verifies)
+	}
+}
+
+type funcSteps struct {
+	Steps
+	run func(ctx context.Context, req run.Request) (run.Record, string, error)
+}
+
+func (f *funcSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	return f.run(ctx, req)
+}

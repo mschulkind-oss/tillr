@@ -2152,6 +2152,12 @@ func (l *Loop) countSpend(result *LoopResult, rec run.Record) {
 	result.spendRecords[rec.RunID] = rec
 	result.recountSpend()
 	l.mu.Unlock()
+	if rec.State == run.StateExited && rec.ExitCode != nil && *rec.ExitCode == adapterRefusedExit {
+		if words, ok := RecordAdapterRefusal(rec, logTail(rec.ArtifactRefs)); ok {
+			l.reportf("loop: %s refused: %s\n", who, words)
+			return
+		}
+	}
 	l.reportf("loop: %s spent %s\n", who, spendWords(rec.Usage))
 }
 
@@ -2368,7 +2374,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		// An adapter refused the brief before any model ran. The refusal is not a backend
 		// failure: no streak, no closed backend, no failover. The item is held for the
 		// operator with the adapter's words.
-		stop, err := l.holdAdapterRefusal(ctx, lane, request, log)
+		stop, err := l.holdAdapterRefusal(ctx, lane, request, record, log)
 		return laneOutcome{stop: stop, err: err}
 	}
 	if class == AttemptInfrastructure {

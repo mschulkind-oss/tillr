@@ -313,9 +313,9 @@ func AuthorizeRetry(ctx context.Context, tx *store.Tx, req RetryRequest) (Retry,
 	}); err != nil {
 		return Retry{}, Internalf("resetting verifier triage for %q: %v", req.ItemID, err)
 	}
-	if triage.Reason == reasonVerifyTriage {
+	if triage.Reason == reasonVerifyTriage || triage.Reason == ReasonAdapterRefused {
 		if err := clearItemFault(tx, triage, at); err != nil {
-			return Retry{}, Internalf("releasing verifier triage for %q: %v", req.ItemID, err)
+			return Retry{}, Internalf("releasing %s hold for %q: %v", triage.Reason, req.ItemID, err)
 		}
 	}
 
