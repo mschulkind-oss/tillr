@@ -125,6 +125,8 @@ of the command:
     none -- so the suite that describes the front end cannot rot unrun again;
 """
 
+import ast
+import concurrent.futures
 import contextlib
 import hashlib
 import importlib.util
@@ -145,6 +147,16 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "fork-check.py"
+
+_SELF_SUITE_SHARD = None
+_SELF_SUITE_JOBS = None
+if sys.argv[1:2] == ["--self-suite-shard"] and len(sys.argv) == 3:
+    _SELF_SUITE_SHARD = int(sys.argv[2])
+elif sys.argv[1:2] == ["--self-suite-jobs"] and len(sys.argv) == 3:
+    _SELF_SUITE_JOBS = int(sys.argv[2])
+elif os.environ.get("FORK_CHECK_SELF_SUITE_JOBS"):
+    _SELF_SUITE_JOBS = int(os.environ["FORK_CHECK_SELF_SUITE_JOBS"])
+_RUN_PREAMBLE_TESTS = _SELF_SUITE_SHARD is None
 
 
 def load_tool(name):
@@ -272,8 +284,9 @@ def test_landing_measurements_require_change_gate_handoff():
             assert gate.run_gate(args) == 2
 
 
-test_landing_go_measurements()
-test_landing_measurements_require_change_gate_handoff()
+if _RUN_PREAMBLE_TESTS:
+    test_landing_go_measurements()
+    test_landing_measurements_require_change_gate_handoff()
 
 
 def test_sigterm_ends_checks(mode):
@@ -344,10 +357,11 @@ else:
     print(f"fork-check SIGTERM ({mode}): detached checks and descendants ended, exit 143")
 
 
-for sigterm_mode in (sys.argv[2:] or ["plan", "replay", "repeated"]):
-    test_sigterm_ends_checks(sigterm_mode)
-if sys.argv[1:2] == ["--sigterm-only"]:
-    sys.exit(0)
+if _RUN_PREAMBLE_TESTS:
+    for sigterm_mode in (sys.argv[2:] or ["plan", "replay", "repeated"]):
+        test_sigterm_ends_checks(sigterm_mode)
+    if sys.argv[1:2] == ["--sigterm-only"]:
+        sys.exit(0)
 
 # Hermetic by construction. `just done` in a lane worktree exports PI_FORKS_ROOT, and the
 # gate's own audit step runs THIS file inside that run, so an inherited value would point
@@ -859,22 +873,23 @@ def run_parallel_gates(lanes, env):
 # A concurrent fixture gate must be able to finish even when its output is collected
 # after another gate's. Check the file descriptors in the children rather than trying
 # to recreate a deadlock using a timeout or assuming a particular kernel pipe capacity.
-with tempfile.TemporaryDirectory() as tmp:
-    lanes = {}
-    for name in ("a", "b"):
-        lane = lanes[name] = Path(tmp) / name
-        (lane / "tools").mkdir(parents=True)
-        (lane / "tools/fork-check.py").write_text(
-            "import os, stat, sys\n"
-            "assert all(stat.S_ISREG(os.fstat(fd).st_mode) for fd in (1, 2)), 'output can back up in a pipe'\n"
-            f"print({name!r} * (1024 * 1024))\n"
-            f"print({name.upper()!r} * (1024 * 1024), file=sys.stderr)\n"
-        )
-    for name, (code, out, err) in run_parallel_gates(lanes, os.environ).items():
-        assert code == 0, err
-        assert out == name * (1024 * 1024) + "\n", name
-        assert err == name.upper() * (1024 * 1024) + "\n", name
-    print("fork-check fixture output: both concurrent gates can finish before capture is read")
+if _RUN_PREAMBLE_TESTS:
+    with tempfile.TemporaryDirectory() as tmp:
+        lanes = {}
+        for name in ("a", "b"):
+            lane = lanes[name] = Path(tmp) / name
+            (lane / "tools").mkdir(parents=True)
+            (lane / "tools/fork-check.py").write_text(
+                "import os, stat, sys\n"
+                "assert all(stat.S_ISREG(os.fstat(fd).st_mode) for fd in (1, 2)), 'output can back up in a pipe'\n"
+                f"print({name!r} * (1024 * 1024))\n"
+                f"print({name.upper()!r} * (1024 * 1024), file=sys.stderr)\n"
+            )
+        for name, (code, out, err) in run_parallel_gates(lanes, os.environ).items():
+            assert code == 0, err
+            assert out == name * (1024 * 1024) + "\n", name
+            assert err == name.upper() * (1024 * 1024) + "\n", name
+        print("fork-check fixture output: both concurrent gates can finish before capture is read")
 
 
 def waybar_fixture(repo):
@@ -926,42 +941,141 @@ def write_record(repo: Path, state: dict) -> None:
 # repository and committed its dirty working tree as `fork-check test`. The fixture helpers
 # must neither touch an enclosing repository nor accept a fixture that is not its own
 # repository. The outer repository here has a dirty tracked file and the variables aimed at it.
-with tempfile.TemporaryDirectory() as tmp:
-    outer = Path(tmp) / "outer"
-    outer.mkdir()
-    git_init(outer, "--initial-branch=main")
-    (outer / "tracked.txt").write_text("one\n")
-    commit(outer, "outer")
-    (outer / "tracked.txt").write_text("dirty\n")
-    outer_head = sh(outer, "git", "rev-parse", "HEAD").stdout
-    outer_index = sh(outer, "git", "ls-files", "-s").stdout
-    saved = {k: os.environ.get(k) for k in ("GIT_DIR", "GIT_WORK_TREE")}
-    os.environ["GIT_DIR"] = str(outer / ".git")
-    os.environ["GIT_WORK_TREE"] = str(outer)
-    (outer / "fixtures").mkdir()
-    try:
-        inner = upstream(outer / "fixtures", "fixture")
-    finally:
-        for k, v in saved.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
-    assert sh(outer, "git", "rev-parse", "HEAD").stdout == outer_head, "fixture moved the outer HEAD"
-    assert sh(outer, "git", "ls-files", "-s").stdout == outer_index, "fixture changed the outer index"
-    assert sh(outer, "git", "log", "-1", "--format=%s").stdout.strip() == "outer"
-    assert sh(inner, "git", "rev-parse", "--show-toplevel").stdout.strip() == str(inner.resolve())
-    # A directory that is not itself a repository is refused before any add or commit.
-    (outer / "not-a-repo").mkdir()
-    refused = False
-    try:
-        require_own_repo(outer / "not-a-repo")
-    except AssertionError:
-        refused = True
-    assert refused, "a directory that is not itself a repository must be refused"
-print("fork-check fixture isolation: a throwaway repository cannot commit to the repository around it")
+if _RUN_PREAMBLE_TESTS:
+    with tempfile.TemporaryDirectory() as tmp:
+        outer = Path(tmp) / "outer"
+        outer.mkdir()
+        git_init(outer, "--initial-branch=main")
+        (outer / "tracked.txt").write_text("one\n")
+        commit(outer, "outer")
+        (outer / "tracked.txt").write_text("dirty\n")
+        outer_head = sh(outer, "git", "rev-parse", "HEAD").stdout
+        outer_index = sh(outer, "git", "ls-files", "-s").stdout
+        saved = {k: os.environ.get(k) for k in ("GIT_DIR", "GIT_WORK_TREE")}
+        os.environ["GIT_DIR"] = str(outer / ".git")
+        os.environ["GIT_WORK_TREE"] = str(outer)
+        (outer / "fixtures").mkdir()
+        try:
+            inner = upstream(outer / "fixtures", "fixture")
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        assert sh(outer, "git", "rev-parse", "HEAD").stdout == outer_head, "fixture moved the outer HEAD"
+        assert sh(outer, "git", "ls-files", "-s").stdout == outer_index, "fixture changed the outer index"
+        assert sh(outer, "git", "log", "-1", "--format=%s").stdout.strip() == "outer"
+        assert sh(inner, "git", "rev-parse", "--show-toplevel").stdout.strip() == str(inner.resolve())
+        # A directory that is not itself a repository is refused before any add or commit.
+        (outer / "not-a-repo").mkdir()
+        refused = False
+        try:
+            require_own_repo(outer / "not-a-repo")
+        except AssertionError:
+            refused = True
+        assert refused, "a directory that is not itself a repository must be refused"
+    print("fork-check fixture isolation: a throwaway repository cannot commit to the repository around it")
 
 PACK_CHECK = "pack series check yolo-packs/matt"
+
+
+def _shard_boundary(_name: str, _weight: int = 10) -> None:
+    """Marker separating independent top-level case groups for parallel shard runs."""
+
+
+def _collect_shards(path: Path) -> list[tuple[str, int, list[ast.stmt]]]:
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    shards: list[tuple[str, int, list[ast.stmt]]] = []
+    cur_name = None
+    cur_weight = 10
+    cur_stmts: list[ast.stmt] = []
+    for node in tree.body:
+        if (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name)
+                and node.value.func.id == "_shard_boundary"):
+            if cur_name is not None:
+                shards.append((cur_name, cur_weight, cur_stmts))
+            cur_name = ast.literal_eval(node.value.args[0])
+            cur_weight = ast.literal_eval(node.value.args[1]) if len(node.value.args) > 1 else 10
+            cur_stmts = []
+        elif cur_name is not None:
+            cur_stmts.append(node)
+    if cur_name is not None:
+        shards.append((cur_name, cur_weight, cur_stmts))
+    return shards
+
+
+def _dispatch_shards() -> None:
+    path = Path(__file__).resolve()
+    shards = _collect_shards(path)
+    if _SELF_SUITE_SHARD is not None:
+        _name, _weight, stmts = shards[_SELF_SUITE_SHARD]
+        code = compile(ast.Module(body=stmts, type_ignores=[]), str(path), "exec")
+        exec(code, globals())
+        sys.exit(0)
+    jobs = _SELF_SUITE_JOBS if _SELF_SUITE_JOBS is not None else min(8, os.cpu_count() or 1)
+    if jobs <= 1 or len(shards) <= 1:
+        return
+    # Run the heaviest shards first so the critical path starts immediately.
+    order = sorted(range(len(shards)), key=lambda i: (-shards[i][1], i))
+    active: list[subprocess.Popen] = []
+    active_lock = threading.Lock()
+    stop = threading.Event()
+    outputs: dict[int, tuple[int, str, str]] = {}
+
+    def run_one(index: int) -> tuple[int, int, str, str]:
+        if stop.is_set():
+            return index, 0, "", ""
+        proc = subprocess.Popen(
+            [sys.executable, str(path), "--self-suite-shard", str(index)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        with active_lock:
+            if stop.is_set():
+                proc.terminate()
+            active.append(proc)
+        out, err = proc.communicate()
+        with active_lock:
+            if proc in active:
+                active.remove(proc)
+        return index, proc.returncode, out, err
+
+    failed = None
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(jobs, len(shards))) as pool:
+        futures = [pool.submit(run_one, idx) for idx in order]
+        for fut in concurrent.futures.as_completed(futures):
+            idx, rc, out, err = fut.result()
+            outputs[idx] = (rc, out, err)
+            if rc != 0 and failed is None:
+                failed = (idx, rc, out, err)
+                stop.set()
+                with active_lock:
+                    for proc in list(active):
+                        proc.terminate()
+    if failed is not None:
+        _idx, rc, out, err = failed
+        if out:
+            sys.stdout.write(out)
+            sys.stdout.flush()
+        if err:
+            sys.stderr.write(err)
+            sys.stderr.flush()
+        sys.exit(rc)
+    for idx in range(len(shards)):
+        _rc, out, err = outputs[idx]
+        if out:
+            sys.stdout.write(out)
+        if err:
+            sys.stderr.write(err)
+    sys.stdout.flush()
+    sys.stderr.flush()
+    sys.exit(0)
+
+
+_dispatch_shards()
+
+_shard_boundary("core-routing", 30)
 
 with tempfile.TemporaryDirectory() as tmp:
     base = Path(tmp)
@@ -1736,6 +1850,8 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "run  matt-render" in result.stdout, result.stdout
     assert "fork-check: VERIFIED" in result.stdout, result.stdout
 
+_shard_boundary("targeted-range", 15)
+
 # A targeted committed range never inherits an audit's accumulated failures or
 # unrelated upstream drift, and never records a repository-wide verified baseline.
 with tempfile.TemporaryDirectory() as tmp:
@@ -2140,6 +2256,8 @@ with tempfile.TemporaryDirectory() as tmp:
 # A SOURCE-ONLY fork's own source is checked too, and its steps install the toolchain they
 # need. pi-subagents declares no `build` script (its pi entry point is TypeScript loaded
 # through jiti), so `candidate --build` installs nothing and a typecheck or unit suite
+_shard_boundary("quarantine-and-dirty-race", 16)
+
 # would run against no node_modules at all. That is the hole item 190 was filed for: a
 # broken build or a failing case in the fork this session's own `subagent` tool runs on
 # reached the owner and never the gate. The steps ask for `--deps`, and a failing one is red.
@@ -2270,7 +2388,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert "did not run because the verdict was already red" in result.stdout, result.stdout
     assert record(repo)["baseline"]["commit"] == approved, record(repo)["baseline"]
 
-assert "@python3 tools/fork-check.py {{args}}" in recipe
+assert "@python3 tools/fork-check.py {{args}}" in (ROOT / ".justfile").read_text()
 
 # A long run is observable WHILE it runs. The report is printed once, at the end, so
 # without this a healthy run of many minutes is indistinguishable from a wedged tool
@@ -2443,6 +2561,8 @@ with tempfile.TemporaryDirectory() as tmp:
 #     wrong twice over: the record is shared through the common Git directory, so a run on
 #     another machine (a jail, whose `yolo` is its own build) planned them on every run for
 #     a build nothing here had changed; and a rebuild at the same commit forced the same
+_shard_boundary("advisory-yolo", 11)
+
 #     replan. So the identity is still recorded and a different one is still reported, but
 #     those five steps run only when a path they watch changes. The identity compared is
 #     the build's COMMIT, so a same-commit rebuild never even reads as a change.
@@ -2671,6 +2791,8 @@ with tempfile.TemporaryDirectory() as tmp:
 #     trees -- none at all when their content matches -- so `documents` and `scratch` were
 #     never planned while the headline read VERIFIED. Refusing that diff made the vacuous
 #     plan unplannable, but it also let one worktree's verified run stop another worktree's
+_shard_boundary("per-branch-baselines", 18)
+
 #     run. So each branch keeps its own entry, every entry is a candidate, and only one this
 #     history contains is ever diffed against: two worktrees cannot invalidate each other,
 #     and a candidate that never landed is skipped rather than refused.
@@ -3063,6 +3185,8 @@ with tempfile.TemporaryDirectory() as tmp:
 
 # Board item 412: a change to the gate's own selection or reporting code plans the
 # self-suite and no fork check, while a change to the code that materializes or judges a
+_shard_boundary("gate-code-and-suites", 17)
+
 # series still forces every fork check. The two sets are pinned here, so a later edit
 # cannot quietly move a path from one to the other, and the demonstration runs a real
 # gate pass over a gate-only change while a fork's patch branch is behind its upstream.
@@ -3995,6 +4119,8 @@ print("fork-check tillr-loop: a tools/tillr-loop change plans the loop adapter's
 #     checkout built from this tree's pi series, and the harness run against that checkout
 #     through PI_FORK. The shared `.forks/pi` is only a construction substrate -- the candidate
 #     is cloned from it by ref -- so a managed worktree without one refuses the run with the
+_shard_boundary("liveness-and-worktrees", 19)
+
 #     setup command, never runs either step, and never reads the harness's exit 127 as a
 #     pass. A failing spec is the verdict the harness exists to make, and exit 127 at run
 #     time is an inability to answer rather than a verdict.
@@ -4537,6 +4663,8 @@ with tempfile.TemporaryDirectory() as tmp:
         print(f"  at={entry['at']} commit={entry['commit'][:12]} outcome={entry['outcome']} "
               f"checks={len(entry.get('checks', []))}")
 
+_shard_boundary("explain-and-triage", 11)
+
 # 36. `--explain` is a read-only diagnostic: it writes no record and no lock. There is no
 #     record lock left to take, so the case now pins the stronger property -- a planning
 #     pass leaves the record directory exactly as it found it.
@@ -4940,6 +5068,8 @@ with tempfile.TemporaryDirectory() as tmp:
 #     on a lane worktree it aborted under `set -e` after 80 passing cases, because the
 #     driver's linked-worktree refusal fired on the sourced call that reads the real
 #     manifest. The step is planned by a change to the driver, its manifest, the suite, a
+_shard_boundary("pi-forks-and-scheduler", 39)
+
 #     series directory or a pack's declaration, and by nothing else; it runs from the
 #     checkout, and a failing case is a verdict about the change rather than an inability
 #     to answer it.
@@ -5542,6 +5672,8 @@ with tempfile.TemporaryDirectory() as tmp:
 # 46b. A SEEDED FAILURE IN EACH QUALITY SCRIPT IS THE SAME VERDICT CONCURRENTLY AS
 #      SERIALLY. The split runs a fork's two quality scripts at the same time when their
 #      writes are disjoint, so the property that matters is that concurrency changes no
+_shard_boundary("concurrent-quality-and-hooks", 19)
+
 #      verdict: the same tree, judged at --jobs 1 and at --jobs 4, must blame the same
 #      check. Each script is seeded in turn, so neither can hide behind the other, and the
 #      sibling is asserted NOT blamed (board item 405).
@@ -6046,6 +6178,7 @@ with tempfile.TemporaryDirectory() as tmp:
     # named condition is imposed by a cell) and the declarations file. There is no cell
     # that adds CPU load: the burner cell was deleted on 2026-10-31, and case 53 below
     # fails the gate if one comes back.
+    scheduler = load_tool("fork_check_preflight")
     matrix = {cell.name: cell for cell in scheduler.PREFLIGHT_CELLS}
     assert list(matrix) == ["baseline", "gate-serial"], list(matrix)
     scratch = Path("/w/durable/hostile-preflight/run-1")
@@ -6134,6 +6267,8 @@ with tempfile.TemporaryDirectory() as tmp:
 #     it reported -- the pack's copy of the board CLI missing the two files its source had
 #     just gained -- was printed `ERR` and exited 2 for a tree the gate had judged, so the
 #     landing queue had no check name and keyed the flake on `exit:2` (board item 284).
+_shard_boundary("verdict-table-and-pins", 15)
+
 #     Every kind the planner's own source names is classified; a verdict kind's failure is a
 #     verdict -- `FAIL`, exit 1 -- and a kind nobody declared fails closed rather than
 #     silently reaching no verdict.
@@ -6812,6 +6947,8 @@ print("fork-check pin drift: a pinned fork never follows its upstream, and the d
 #         starts, so a cheap red never pays for the suites;
 #       * a check that fails while a slow suite runs stops the pass, terminates the suite,
 #         and names every check that did not run -- it does not wait the slow one out;
+_shard_boundary("fastfail-timing-and-cache", 13)
+
 #       * a green plan runs exactly the checks it planned, once each.
 #     The slow check is a real child process, so termination is observed by its process
 #     disappearing and its "finished" marker never being written, not by a wall clock.
@@ -6822,6 +6959,7 @@ spec.loader.exec_module(fastfail)
 # Every planned kind has a declared price, the same rule CHECK_KIND_GROUP follows: a new
 # suite that nobody priced would otherwise be read as cheap and start before the cheap
 # checks it should wait behind.
+planned_kinds = set(re.findall(r'Check\(\s*"([a-z0-9-]+)"', SCRIPT.read_text()))
 unpriced = sorted(planned_kinds - set(fastfail.CHECK_COST_ESTIMATE))
 assert not unpriced, (
     f"these planned check kinds are not in CHECK_COST_ESTIMATE, so their phase is a "
@@ -7518,6 +7656,8 @@ with tempfile.TemporaryDirectory() as tmp:
 # ── 56. THE PASS'S OWN EFFICIENCY: class, floor, ratio and cause ────────────────
 # Board item 407, the gate-latency design's F-12. Every pass reports its change class,
 # its wall time, the S1 floor computed from that same run's per-check durations, the
+_shard_boundary("efficiency-and-tiers", 12)
+
 # efficiency ratio, and the cause of every fork-quality execution. The functions are
 # pinned directly, and a real docs-only fixture pass proves the line reaches the report
 # and the record rather than only existing in a helper.
@@ -8316,6 +8456,8 @@ with tempfile.TemporaryDirectory() as tmp:
     red_replay = run(repo, env, "--replay", "--only", "waybar")
     assert red_replay.returncode == 1, red_replay.stdout + red_replay.stderr
     assert "FAIL waybar" in red_replay.stdout, red_replay.stdout
+
+_shard_boundary("watchdog-and-subsuites", 31)
 
 # 66. Wrapper targets never kill progress; only complete silent samples stall.
 # The fake child supplies observations, not elapsed-time assertions.

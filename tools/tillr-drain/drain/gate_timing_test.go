@@ -527,3 +527,74 @@ func TestGateTimingReadsFastChecksPreservedUnderAStall(t *testing.T) {
 		t.Fatalf("stall without wall_ms should name the check without a measurement: %+v", checks)
 	}
 }
+
+func TestGateTimingSingleGatePython3PathNamesSlowestCheck(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	c := Candidate{ItemID: "item-python3", RunID: "run-python3", Worktree: root, deferGateJudgment: true}
+	dir := RunDir(root, c.RunID)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	s := ProcessSteps{Root: root, Store: gateTimingStore(t, root), GateProgram: executable(t, `
+set -eu
+cat > "`+filepath.Join(dir, GateVerdictRecord)+`" <<'EOF'
+{"record_version":1,"kind":"gate.verdict","payload":{"result":"pass","checks":[{"check_id":"gate:python3","result":"pass","duration_ms":236206}]}}
+EOF
+cat > "$TILLR_FAST_VERDICT_OUT" <<'EOF'
+{"record_version":1,"kind":"gate.verdict","payload":{"result":"pass","checks":[
+  {"check_id":"go-build","result":"pass","duration_ms":739,"start_unix_nano":1700000000000000000,"end_unix_nano":1700000000739000000},
+  {"check_id":"docs","result":"remembered","memory":"remembered","duration_ms":500},
+  {"check_id":"gate-budget","result":"skipped: no changed path is read","duration_ms":0}
+]}}
+EOF
+cat > "$TILLR_GATE_SPANS_OUT" <<'EOF'
+{"plan_span":{"check_id":"plan"},"check_spans":[
+  {"check_id":"self-suite/the-gate-s-own-audit-suite-still-passes","status":"ok","start_ns":1700000001000000000,"end_ns":1700000236000000000,"attributes_json":"{\"cached\":false,\"rc\":0,\"seconds\":235.0}"},
+  {"check_id":"file-size/warn","status":"ok","start_ns":1700000000800000000,"end_ns":1700000000813000000,"attributes_json":"{\"cached\":false,\"rc\":0,\"seconds\":0.013}"},
+  {"check_id":"unfinished/copied-end","status":"ERR","start_ns":1700000000900000000,"end_ns":1700000000900000000,"attributes_json":"{\"cached\":false}"},
+  {"check_id":"null/explicit","status":"ERR","start_ns":1700000000900000000,"end_ns":1700000000950000000,"attributes_json":"{\"execution\":\"ran\",\"wall_ms\":null}"}
+]}
+EOF
+`)}
+	outcome, err := s.Gate(ctx, c)
+	if err != nil || outcome.Outcome != GatePassed {
+		t.Fatalf("Gate = %+v, %v", outcome, err)
+	}
+	var attempt struct {
+		Checks map[string]gateCheckMeasurement `json:"checks"`
+	}
+	body, err := os.ReadFile(filepath.Join(dir, gateTimingFile))
+	if err != nil || json.Unmarshal(body, &attempt) != nil {
+		t.Fatalf("missing or invalid timing record: %s, %v", body, err)
+	}
+	for _, want := range []struct {
+		id, exec string
+		ms       int64
+	}{
+		{"go-build", "ran", 739},
+		{"docs", "reused", -1},
+		{"gate-budget", "not-run", -1},
+		{"self-suite/the-gate-s-own-audit-suite-still-passes", "ran", 235000},
+		{"file-size/warn", "ran", 13},
+		{"unfinished/copied-end", "ran", -1},
+		{"null/explicit", "ran", -1},
+	} {
+		got, ok := attempt.Checks[want.id]
+		if !ok || got.Execution != want.exec || (want.ms < 0 && got.WallMS != nil) ||
+			(want.ms >= 0 && (got.WallMS == nil || *got.WallMS != want.ms)) {
+			t.Fatalf("%s: got %+v, want exec=%s ms=%d (record=%s)", want.id, got, want.exec, want.ms, body)
+		}
+	}
+	if _, leaked := attempt.Checks["gate:python3"]; leaked {
+		t.Fatalf("wrapper gate:python3 leaked into per-check timing: %s", body)
+	}
+	events := readTimingEvents(t, s.Store)
+	if len(events) != 1 {
+		t.Fatalf("want 1 timing event, got %+v", events)
+	}
+	if e := events[0]; e.SlowestCheck != "self-suite/the-gate-s-own-audit-suite-still-passes" ||
+		e.SlowestCheckMS == nil || *e.SlowestCheckMS != 235000 {
+		t.Fatalf("timing event should name the slowest check from the gate:python3 path: %+v", e)
+	}
+}
