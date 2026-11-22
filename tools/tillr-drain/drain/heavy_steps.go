@@ -291,6 +291,14 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 	if legacyNonce != "" {
 		extraEnv = append(extraEnv, "TILLR_HEAVY_LEGACY_NONCE="+legacyNonce)
 	}
+	var replayProgressPath string
+	if only != "" && hasHeavyStoreProgress(ctx) {
+		replayProgressPath = filepath.Join(s.LaneRoot, ".rolling", "heavy-replay-progress.json")
+		if err := os.Remove(replayProgressPath); err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+		extraEnv = append(extraEnv, "TILLR_GO_SHARDS_PROGRESS_OUT="+replayProgressPath)
+	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = s.checkProcessEnv(os.Environ(), extraEnv...)
@@ -309,8 +317,13 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 		}
 	}
 	stopWatch := startHeavyLegacyProgressWatcher(ctx, legacyProgressPath, legacyTipSHA, legacyNonce)
+	stopReplayWatch := startHeavyReplayProgressWatcher(ctx, replayProgressPath, only)
 	runErr := runOwnedHeavy(ctx, cmd, "legacy")
 	stopWatch()
+	stopReplayWatch()
+	if replayProgressPath != "" {
+		_ = os.Remove(replayProgressPath)
+	}
 	if cleanupLost(runErr) {
 		return nil, runErr
 	}

@@ -381,3 +381,314 @@ func TestHeavyProgressEventsCloseBracketOnCancelFaultAndIgnoreStoreErrors(t *tes
 		t.Fatal("want progress log diagnostic when store open fails")
 	}
 }
+
+func TestHeavyProgressEventsEmitRunningForShardedGoChecksAndStallReplay(t *testing.T) {
+	root, base := heavyRepo(t)
+	heavyGit(t, root, "update-ref", GreenRef, base)
+	storePath := newHeavyProgressStore(t)
+	work := scratchUnderDurable(t)
+
+	enteredRolling := filepath.Join(work, "entered-rolling")
+	releaseRolling := filepath.Join(work, "release-rolling")
+	enteredReplay := filepath.Join(work, "entered-replay")
+	releaseReplay := filepath.Join(work, "release-replay")
+
+	if err := os.MkdirAll(filepath.Join(root, "tools", "gate", "checks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(root, "tools", "gate", "checks", ".keep"), "")
+	transport, err := os.ReadFile(filepath.Join("..", "..", "gate", "classify.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(root, "tools", "gate", "classify.py"), string(transport))
+
+	// Fake tools/go-test-shards.py that writes monotonic progress snapshots and
+	// waits for release files so the test can observe live store events.
+	writeForkFile(t, filepath.Join(root, "tools", "go-test-shards.py"), `import argparse
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+parser = argparse.ArgumentParser()
+parser.add_argument("module")
+parser.add_argument("-k", type=int, default=6)
+parser.add_argument("--slot-class", default="default")
+parser.add_argument("--timeout", type=int, default=0)
+parser.add_argument("--events", type=Path, default=None)
+parser.add_argument("--progress-file", type=Path, default=None)
+args = parser.parse_args()
+
+progress_path = args.progress_file or (Path(os.environ["TILLR_GO_SHARDS_PROGRESS_OUT"]) if os.environ.get("TILLR_GO_SHARDS_PROGRESS_OUT") else None)
+mode = os.environ.get("FAKE_SHARD_MODE", "rolling")
+if mode == "rolling":
+    if progress_path is not None:
+        progress_path.write_text(json.dumps({"seq": 1, "completed_units": 3}))
+    Path(`+jsonString(enteredRolling)+`).touch()
+    while not Path(`+jsonString(releaseRolling)+`).exists():
+        time.sleep(0.02)
+    # Repeat same completed_units with higher seq, and same seq with higher units:
+    # neither should emit an extra running event.
+    if progress_path is not None:
+        progress_path.write_text(json.dumps({"seq": 2, "completed_units": 3}))
+        time.sleep(0.05)
+        progress_path.write_text(json.dumps({"seq": 1, "completed_units": 4}))
+        time.sleep(0.05)
+    sys.exit(0)
+if mode == "stall":
+    # Emit no snapshot on stalled first run.
+    sys.exit(0)
+if progress_path is not None:
+    progress_path.write_text(json.dumps({"seq": 1, "completed_units": 7}))
+Path(`+jsonString(enteredReplay)+`).touch()
+while not Path(`+jsonString(releaseReplay)+`).exists():
+    time.sleep(0.02)
+sys.exit(0)
+`)
+
+	source, err := os.ReadFile(filepath.Join("..", "..", "fork-check.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source = []byte(strings.Replace(string(source), "if __name__ == \"__main__\":\n    sys.exit(main(sys.argv[1:]))", "", 1))
+	source = append(source, []byte(`
+def main(argv):
+    import os
+    module = "tools/tillr-drain"
+    check_id = declaration_id("go-tool", module + "'s whole suite passes", Path(__file__).resolve().parents[1])
+    if "--registry-json" in argv:
+        print(json.dumps({"declarations": [{"id": check_id, "kind": "go-tool", "label": module + "'s whole suite passes", "watches": [{"path": "value"}]}]}))
+        return 0
+    if "--only" in argv:
+        cmd = go_tool_command(module)
+        env = dict(os.environ, FAKE_SHARD_MODE="replay")
+        rc = subprocess.run(["sh", "-c", cmd], env=env).returncode
+        return rc
+    root = Path(__file__).resolve().parents[1]
+    plan = Plan()
+    c = Check("go-tool", module + "'s whole suite passes", ["sh", "-c", go_tool_command(module)], "go-tool", 0)
+    plan.checks = [c]
+    run_plan_checks(plan, root, None, 1)
+    raw = {"check_spans": [{"check_id": check_id, "kind": c.kind, "label": c.label, "status": check_status(c), "attributes_json": "{}"}], "skipped_checks": []}
+    Path(os.environ["TILLR_GATE_SPANS_OUT"]).write_text(json.dumps(raw))
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
+`)...)
+	writeForkFile(t, filepath.Join(root, "tools", "fork-check.py"), string(source))
+	tip := heavyCommit(t, root, "sharded-go-live")
+
+	// Verify wholeStepCount() ignores "running" and counts only completed whole checks.
+	spCtx, sp := (HeavyRunner{Store: storePath}).startStoreProgress(context.Background(), tip)
+	heavyStoreStepProgress(spCtx, "go-tool/tools-tillr-drain-s-whole-suite-passes", "running")
+	if got := sp.wholeStepCount(); got != 0 {
+		t.Fatalf("wholeStepCount after running = %d, want 0", got)
+	}
+	heavyStoreWholeStepProgress(spCtx, "go-tool/tools-tillr-drain-s-whole-suite-passes", "pass")
+	if got := sp.wholeStepCount(); got != 1 {
+		t.Fatalf("wholeStepCount after whole pass = %d, want 1", got)
+	}
+	// Reset store for the live runner tests.
+	storePath = newHeavyProgressStore(t)
+
+	steps := &ProcessSteps{
+		Root:           root,
+		LaneRoot:       work,
+		RollingProgram: "python3 tools/fork-check.py {since} --tier rolling",
+		ReplayProgram:  "python3 tools/fork-check.py --only {only}",
+	}
+	runner := heavyFixture(t, root, steps.JudgeHeavy)
+	runner.Store = storePath
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := runner.Run(context.Background())
+		done <- err
+	}()
+	defer func() {
+		_ = os.WriteFile(releaseRolling, nil, 0o644)
+	}()
+
+	checkID := "go-tool/tools-tillr-drain-s-whole-suite-passes"
+	deadline := time.After(20 * time.Second)
+	for {
+		if _, err := os.Stat(enteredRolling); err == nil {
+			events := readHeavyProgressEvents(t, storePath)
+			sawRunning := false
+			for _, ev := range events {
+				if ev.Fact.Phase == "ended" {
+					t.Fatalf("saw premature ended while sharded check is still running: %+v", events)
+				}
+				if ev.Fact == (HeavyProgressFact{TipSHA: tip, Phase: "progress", CheckID: checkID, Outcome: "running"}) {
+					sawRunning = true
+				}
+			}
+			if sawRunning {
+				break
+			}
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("heavy exited before rolling check was released: %v", err)
+		case <-deadline:
+			t.Fatalf("timed out waiting for live running progress event; events=%+v", readHeavyProgressEvents(t, storePath))
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+
+	if err := os.WriteFile(releaseRolling, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("sharded rolling Run: %v", err)
+	}
+
+	events := readHeavyProgressEvents(t, storePath)
+	want := []HeavyProgressFact{
+		{TipSHA: tip, Phase: "started"},
+		{TipSHA: tip, Phase: "progress", CheckID: checkID, Outcome: "running"},
+		{TipSHA: tip, Phase: "progress", CheckID: checkID, Outcome: "pass"},
+		{TipSHA: tip, Phase: "ended", Outcome: "green"},
+	}
+	if len(events) != len(want) {
+		t.Fatalf("rolling sharded events = %+v, want %+v", events, want)
+	}
+	for i := range want {
+		if events[i].Fact != want[i] {
+			t.Fatalf("rolling sharded event[%d] = %+v, want %+v", i, events[i].Fact, want[i])
+		}
+	}
+
+	// Now test ReplayProgram (only != "") via stall retry on a new tip.
+	tip2 := heavyCommit(t, root, "sharded-go-replay")
+	replayStore := newHeavyProgressStore(t)
+	stalledOnce := false
+	replayRunner := heavyFixture(t, root, func(ctx context.Context, dir, only string) ([]HeavyCheck, error) {
+		if only == "" && !stalledOnce {
+			stalledOnce = true
+			return []HeavyCheck{{CheckID: checkID, Result: "stalled"}}, nil
+		}
+		return steps.JudgeHeavy(ctx, dir, only)
+	})
+	replayRunner.Store = replayStore
+
+	doneReplay := make(chan error, 1)
+	go func() {
+		_, err := replayRunner.Run(context.Background())
+		doneReplay <- err
+	}()
+	defer func() {
+		_ = os.WriteFile(releaseReplay, nil, 0o644)
+	}()
+
+	deadline = time.After(20 * time.Second)
+	for {
+		if _, err := os.Stat(enteredReplay); err == nil {
+			evList := readHeavyProgressEvents(t, replayStore)
+			sawRunning := false
+			for _, ev := range evList {
+				if ev.Fact.Phase == "ended" {
+					t.Fatalf("saw premature ended during replay: %+v", evList)
+				}
+				if ev.Fact == (HeavyProgressFact{TipSHA: tip2, Phase: "progress", CheckID: checkID, Outcome: "running"}) {
+					sawRunning = true
+				}
+			}
+			if sawRunning {
+				break
+			}
+		}
+		select {
+		case err := <-doneReplay:
+			t.Fatalf("replay exited before release: %v", err)
+		case <-deadline:
+			t.Fatalf("timed out waiting for live replay running event; events=%+v", readHeavyProgressEvents(t, replayStore))
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+
+	if err := os.WriteFile(releaseReplay, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-doneReplay; err != nil {
+		t.Fatalf("replay Run: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(work, ".rolling", "heavy-replay-progress.json")); !os.IsNotExist(err) {
+		t.Fatalf("expected replay progress file to be unlinked, stat err = %v", err)
+	}
+
+	replayEvents := readHeavyProgressEvents(t, replayStore)
+	wantReplay := []HeavyProgressFact{
+		{TipSHA: tip2, Phase: "started"},
+		{TipSHA: tip2, Phase: "progress", CheckID: checkID, Outcome: "stalled"},
+		{TipSHA: tip2, Phase: "progress", CheckID: checkID, Outcome: "running"},
+		{TipSHA: tip2, Phase: "progress", CheckID: checkID, Outcome: "pass"},
+		{TipSHA: tip2, Phase: "ended", Outcome: "green"},
+	}
+	if len(replayEvents) != len(wantReplay) {
+		t.Fatalf("replay events = %+v, want %+v", replayEvents, wantReplay)
+	}
+	for i := range wantReplay {
+		if replayEvents[i].Fact != wantReplay[i] {
+			t.Fatalf("replay event[%d] = %+v, want %+v", i, replayEvents[i].Fact, wantReplay[i])
+		}
+	}
+}
+
+func TestHeavyProgressEventsSilentWhenUnitsDoNotAdvance(t *testing.T) {
+	storePath := newHeavyProgressStore(t)
+	work := scratchUnderDurable(t)
+	progressPath := filepath.Join(work, "replay-progress.json")
+
+	// Start with invalid/boolean and stalled snapshots; none should emit "running".
+	if err := os.WriteFile(progressPath, []byte(`{"seq": true, "completed_units": 5}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ctx, sp := (HeavyRunner{Store: storePath}).startStoreProgress(context.Background(), "tip-hang")
+	stop := startHeavyReplayProgressWatcher(ctx, progressPath, "go-tool/tools-tillr-drain-s-whole-suite-passes")
+	time.Sleep(80 * time.Millisecond)
+
+	// Valid snapshot emits once.
+	if err := os.WriteFile(progressPath, []byte(`{"seq": 1, "completed_units": 5}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(80 * time.Millisecond)
+
+	// Repeating same (seq, completed_units) or advancing only one of the two emits nothing more.
+	for _, payload := range []string{
+		`{"seq": 1, "completed_units": 5}`,
+		`{"seq": 2, "completed_units": 5}`,
+		`{"seq": 1, "completed_units": 6}`,
+	} {
+		if err := os.WriteFile(progressPath, []byte(payload), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(60 * time.Millisecond)
+	}
+	stop()
+	sp.finish("green")
+
+	events := readHeavyProgressEvents(t, storePath)
+	want := []HeavyProgressFact{
+		{TipSHA: "tip-hang", Phase: "started"},
+		{TipSHA: "tip-hang", Phase: "progress", CheckID: "go-tool/tools-tillr-drain-s-whole-suite-passes", Outcome: "running"},
+		{TipSHA: "tip-hang", Phase: "ended", Outcome: "green"},
+	}
+	if len(events) != len(want) {
+		t.Fatalf("events = %+v, want %+v", events, want)
+	}
+	for i := range want {
+		if events[i].Fact != want[i] {
+			t.Fatalf("event[%d] = %+v, want %+v", i, events[i].Fact, want[i])
+		}
+	}
+}
+
+func jsonString(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}

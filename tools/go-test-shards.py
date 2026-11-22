@@ -21,6 +21,8 @@ import time
 DEFAULT_DURATIONS = Path(__file__).with_name('go-test-durations.json')
 # Bound a stalled test or TestMain without timing out a shard that keeps completing tests.
 DEFAULT_SHARD_TIMEOUT = 480.0
+PROGRESS_OUT_ENV = 'TILLR_GO_SHARDS_PROGRESS_OUT'
+DEFAULT_PROGRESS_INTERVAL = 60.0
 
 
 # A shard runs under a guard process: the guard is the session and group leader, starts the
@@ -75,9 +77,85 @@ def install_signal_handlers():
 class ShardError(RuntimeError):
     """A named shard failed or did not prove completion of its assigned tests."""
 
-    def __init__(self, message, events=()):
+    def __init__(self, message, events=(), timed_out=False):
         super().__init__(message)
         self.events = list(events)
+        self.timed_out = timed_out
+
+
+class _ProgressTracker:
+    """Thread-safe monotonic completion counter with rate-limited atomic JSON snapshots."""
+
+    def __init__(self, progress_file, progress_interval):
+        self._path = Path(progress_file)
+        self.interval = float(progress_interval)
+        self._lock = threading.Lock()
+        run_started = time.monotonic()
+        self._next_publish_at = run_started + self.interval
+        self._last_published_units = 0
+        self._seq = 0
+        self._completed_packages = 0
+        self._completed_tests = 0
+        self._completed_shards = 0
+        self._completed_units = 0
+        self._last_detail = ''
+
+    def record_package(self, detail):
+        with self._lock:
+            self._completed_packages += 1
+            self._completed_units = self._completed_packages + self._completed_tests + self._completed_shards
+            self._last_detail = detail
+            self._maybe_publish_locked()
+
+    def record_test(self, detail):
+        with self._lock:
+            self._completed_tests += 1
+            self._completed_units = self._completed_packages + self._completed_tests + self._completed_shards
+            self._last_detail = detail
+            self._maybe_publish_locked()
+
+    def record_shard(self, detail):
+        with self._lock:
+            self._completed_shards += 1
+            self._completed_units = self._completed_packages + self._completed_tests + self._completed_shards
+            self._last_detail = detail
+            self._maybe_publish_locked()
+
+    def maybe_publish(self):
+        with self._lock:
+            self._maybe_publish_locked()
+
+    def _maybe_publish_locked(self):
+        now = time.monotonic()
+        if now < self._next_publish_at or self._completed_units <= self._last_published_units:
+            return
+        self._seq += 1
+        self._last_published_units = self._completed_units
+        self._next_publish_at = now + self.interval
+        payload = json.dumps({
+            'seq': self._seq,
+            'completed_units': self._completed_units,
+            'completed_packages': self._completed_packages,
+            'completed_tests': self._completed_tests,
+            'completed_shards': self._completed_shards,
+            'last_detail': self._last_detail,
+        }) + '\n'
+        tmp_path = None
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_name = tempfile.mkstemp(prefix='.go-progress-', dir=str(self._path.parent))
+            tmp_path = Path(tmp_name)
+            try:
+                os.write(fd, payload.encode('utf-8'))
+            finally:
+                os.close(fd)
+            os.replace(tmp_path, self._path)
+            tmp_path = None
+        except OSError as error:
+            if tmp_path is not None:
+                with contextlib.suppress(OSError):
+                    tmp_path.unlink()
+            print(f'go-test-shards: cannot write progress file: {error}', file=sys.stderr)
 
 
 def assign(names, durations, count):
@@ -580,7 +658,7 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
 def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=None,
               wall_timeout=DEFAULT_SHARD_TIMEOUT, lock_dir=None, shard_limit=None,
               slot_class=None, proof_limit=None, gate_limit=None, max_slots=None,
-              gate_reserved_limit=None, holder=None):
+              gate_reserved_limit=None, holder=None, progress=None):
     label = f'{package} shard {index}'
     env = private_environment(label, scratch, git_values)
     if not binary.is_file() or not os.access(binary, os.X_OK):
@@ -631,6 +709,7 @@ def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=N
             deadline = time.monotonic() + wall_timeout
             pending = b''
             seen_progress = set()
+            seen_completed = set()
             assigned = set(names)
             timed_out = False
             while True:
@@ -648,6 +727,14 @@ def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=N
                     if key[0] in assigned and key[1] in ('run', 'pass', 'skip', 'fail') and key not in seen_progress:
                         seen_progress.add(key)
                         deadline = time.monotonic() + wall_timeout
+                    if (key[0] in assigned and '/' not in key[0]
+                            and key[1] in ('pass', 'skip', 'fail')
+                            and key[0] not in seen_completed):
+                        seen_completed.add(key[0])
+                        if progress is not None:
+                            progress.record_test(f'{package} {key[0]} {key[1]}')
+                if progress is not None:
+                    progress.maybe_publish()
                 if process.poll() is not None:
                     break
                 remaining = deadline - time.monotonic()
@@ -657,8 +744,11 @@ def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=N
                     process.wait()
                     timed_out = True
                     break
+                wait_timeout = min(1.0, remaining)
+                if progress is not None:
+                    wait_timeout = min(wait_timeout, progress.interval)
                 try:
-                    process.wait(timeout=min(1.0, remaining))
+                    process.wait(timeout=max(0.0, wait_timeout))
                 except subprocess.TimeoutExpired:
                     pass
             reader.seek(0)
@@ -689,7 +779,7 @@ def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=N
         detail = ', '.join(sorted(active)) or 'none reported'
         remaining = ', '.join(sorted(pending)) or 'none'
         raise ShardError(f'{label} timed out after {wall_timeout:g}s without top-level test progress; running: {detail}; '
-                         f'not completed: {remaining}\n{stderr}', events)
+                         f'not completed: {remaining}\n{stderr}', events, timed_out=True)
     if process.returncode or any(e.get('Action') == 'fail' for e in events):
         raw_failed = list(dict.fromkeys(
             e['Test'] for e in events if e.get('Action') == 'fail' and e.get('Test')
@@ -738,7 +828,12 @@ def load_durations(path):
 
 def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHARD_TIMEOUT,
         lock_dir=None, slot_class=None, proof_limit=None, gate_limit=None,
-        max_slots=None, gate_reserved_limit=None, holder=None, evidence_out=None):
+        max_slots=None, gate_reserved_limit=None, holder=None, evidence_out=None,
+        progress_file=None, progress_interval=DEFAULT_PROGRESS_INTERVAL):
+    if progress_file is not None and (not math.isfinite(progress_interval) or progress_interval <= 0):
+        raise ValueError('progress interval must be a positive finite number of seconds')
+    progress = (_ProgressTracker(progress_file, progress_interval)
+                if progress_file is not None else None)
     discovery_error = None
     try:
         stream = subprocess.check_output(['go', 'list', '-json', './...'], cwd=module, text=True)
@@ -792,6 +887,8 @@ def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHA
                                          cwd=package['Dir'], env=discovery_env, text=True)
         names = [line for line in listed.splitlines()
                  if re.match(r'^(Test|Example|Fuzz)\w*$', line)]
+        if progress is not None:
+            progress.record_package(f"discovered {package['ImportPath']}")
         for index, group in enumerate(assign(names, durations.get(package['ImportPath'], {}), count)):
             # A package with only benchmarks can still fail in TestMain. Run it
             # once even with no runnable names, as the native Go driver does.
@@ -800,7 +897,7 @@ def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHA
                              index, scratch / f'package-{number}-shard-{index}', timeout, git_values,
                              shard_timeout, lock_dir, shard_limit, resolved_class,
                              proof_limit, gate_limit, max_slots, gate_reserved_limit,
-                             resolved_holder))
+                             resolved_holder, progress))
     events = []
     shard_errors = []
     # Each package has at most K jobs. Run packages side by side, just as go test
@@ -813,6 +910,13 @@ def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHA
             except ShardError as exc:
                 events.extend(exc.events)
                 shard_errors.append((futures[future], str(exc)))
+                if progress is not None and not exc.timed_out:
+                    job = jobs[futures[future]]
+                    progress.record_shard(f'{job[0]} shard {job[4]}')
+            else:
+                if progress is not None:
+                    job = jobs[futures[future]]
+                    progress.record_shard(f'{job[0]} shard {job[4]}')
     if shard_errors:
         shard_errors.sort(key=lambda item: item[0])
         raise ShardError('\ngo-test-shards: '.join(text for _, text in shard_errors), events)
@@ -847,6 +951,10 @@ def main():
     parser.add_argument('--timeout', default='0', help='explicit Go test timeout; default disables Go\'s own deadline')
     parser.add_argument('--shard-timeout', type=float, default=None, metavar='SECONDS',
                         help=f'maximum seconds without top-level test progress per shard (default {DEFAULT_SHARD_TIMEOUT:g})')
+    parser.add_argument('--progress-file', type=Path, default=None,
+                        help=f'write throttled completion progress snapshots as JSON (or ${PROGRESS_OUT_ENV})')
+    parser.add_argument('--progress-interval', type=float, default=DEFAULT_PROGRESS_INTERVAL, metavar='SECONDS',
+                        help=f'minimum seconds between completion progress snapshots (default {DEFAULT_PROGRESS_INTERVAL:g})')
     args = parser.parse_args()
     if args.shards < 1:
         parser.error('shards must be positive')
@@ -854,6 +962,8 @@ def main():
         parser.error('max slots must be positive')
     if args.shard_timeout is not None and (not math.isfinite(args.shard_timeout) or args.shard_timeout <= 0):
         parser.error('shard timeout must be a positive finite number of seconds')
+    if not math.isfinite(args.progress_interval) or args.progress_interval <= 0:
+        parser.error('progress interval must be a positive finite number of seconds')
     try:
         durations = load_durations(args.durations)
         parent = args.scratch or os.environ.get('TMPDIR') or os.environ.get('YOLO_DURABLE_DIR')
@@ -874,6 +984,16 @@ def main():
             # Consume this invocation's handoff, rather than exposing it to test binaries.
             if evidence_out := os.environ.pop('TILLR_GO_SHARDS_EVIDENCE_OUT', None):
                 options['evidence_out'] = evidence_out
+            env_progress_out = os.environ.pop(PROGRESS_OUT_ENV, None)
+            progress_file = (
+                args.progress_file.resolve() if args.progress_file is not None
+                else (Path(env_progress_out.strip()).resolve()
+                      if env_progress_out and env_progress_out.strip() else None)
+            )
+            if progress_file is not None:
+                options['progress_file'] = progress_file
+            if progress_file is not None or args.progress_interval != DEFAULT_PROGRESS_INTERVAL:
+                options['progress_interval'] = args.progress_interval
             events = run(args.module.resolve(), args.shards, durations, Path(temporary), args.timeout, **options)
         if args.events:
             args.events.write_text(''.join(json.dumps(e) + '\n' for e in events))

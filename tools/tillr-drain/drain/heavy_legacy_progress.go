@@ -64,7 +64,60 @@ func startHeavyLegacyProgressWatcher(ctx context.Context, progressPath, tipSHA, 
 		}
 		for ; seen < len(saved.Completed); seen++ {
 			item := saved.Completed[seen]
+			if item.Outcome == "running" {
+				heavyStoreStepProgress(ctx, item.CheckID, item.Outcome)
+				continue
+			}
 			heavyStoreWholeStepProgress(ctx, item.CheckID, item.Outcome)
+		}
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(25 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				pollOnce()
+			}
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
+		if ctx.Err() == nil {
+			pollOnce()
+		}
+	}
+}
+
+func startHeavyReplayProgressWatcher(ctx context.Context, progressPath, checkID string) func() {
+	if progressPath == "" || checkID == "" || !hasHeavyStoreProgress(ctx) {
+		return func() {}
+	}
+	var lastSeq, lastUnits int
+	pollOnce := func() {
+		raw, err := os.ReadFile(progressPath)
+		if err != nil {
+			return
+		}
+		var snap struct {
+			Seq            int `json:"seq"`
+			CompletedUnits int `json:"completed_units"`
+		}
+		if err := json.Unmarshal(raw, &snap); err != nil {
+			return
+		}
+		if snap.Seq > lastSeq && snap.CompletedUnits > lastUnits {
+			lastSeq = snap.Seq
+			lastUnits = snap.CompletedUnits
+			heavyStoreStepProgress(ctx, checkID, "running")
 		}
 	}
 	stop := make(chan struct{})
