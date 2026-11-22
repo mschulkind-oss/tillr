@@ -2313,6 +2313,27 @@ func readEdges(r *store.Reader) (map[string][]string, error) {
 	return edges, nil
 }
 
+// readItemEdges answers the blocked_by edges for one item.
+func readItemEdges(r *store.Reader, itemID string) ([]string, error) {
+	rows, err := r.Query(`SELECT blocked_by FROM item_edges WHERE item_id = ? ORDER BY blocked_by`, itemID)
+	if err != nil {
+		return nil, readFailure(err)
+	}
+	defer rows.Close()
+	var blockers []string
+	for rows.Next() {
+		var blockedBy string
+		if err := rows.Scan(&blockedBy); err != nil {
+			return nil, readFailure(err)
+		}
+		blockers = append(blockers, blockedBy)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, readFailure(err)
+	}
+	return blockers, nil
+}
+
 // readLanes answers the lanes the store holds under a live lease, keyed by lane id, at
 // the tick's clock. A lane the store does not hold has no lease, which is why the map is
 // read rather than required to be complete.
