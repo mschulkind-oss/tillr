@@ -189,7 +189,7 @@ How each caller uses them:
 
 ### 7.1 The split statement
 
-The design seat answers a call with one of two things.
+The design seat answers a call with one of two things. A third answer, which keeps the item and defers named cases to requests of their own, is proposed in [the request amendment design](./tillr-request-amendment.md#62-deferring-a-case) and is not built.
 
 **No split**, with the reason: the invariant the pieces share, or why no part could land alone. The item returns to where it was: to the plan step, or to the build step with the verifier's findings. Signals already answered are not raised again; a later call needs evidence the answer did not see.
 
