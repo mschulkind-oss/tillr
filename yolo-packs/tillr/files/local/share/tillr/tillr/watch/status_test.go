@@ -110,7 +110,7 @@ func TestWatchStatusReportsStoredAlertsAndLatestNotices(t *testing.T) {
 	if len(got.Alerts) != 4 || got.Alerts[0].ID != "a" || got.Alerts[0].By == nil || *got.Alerts[0].By != "operator" || got.Alerts[1].Subject != "will-reopen" || got.Alerts[2].ID != "b" || got.Alerts[2].Until != "change" || got.Alerts[3].ID != "d" || got.Alerts[3].Until != "1970-01-01T00:00:02Z" {
 		t.Fatalf("unresolved episodes: %+v", got.Alerts)
 	}
-	if len(got.Owners) != 2 || got.Owners[0].Owner != "foreground" || got.Owners[0].Attached || got.Owners[0].Since != nil || got.Owners[0].LastWait == nil || *got.Owners[0].LastWait != "1970-01-01T00:00:02Z" || got.Owners[0].Pending != 1 || got.Owners[1].Owner != "other" || !got.Owners[1].Attached || got.Owners[1].Since != nil || got.Owners[1].Pending != 0 {
+	if len(got.Owners) != 2 || got.Owners[0].Owner != "foreground" || got.Owners[0].Attached || got.Owners[0].Since != nil || got.Owners[0].LastWait == nil || *got.Owners[0].LastWait != "1970-01-01T00:00:02Z" || got.Owners[0].Pending != 1 || got.Owners[1].Owner != "other" || !got.Owners[1].Attached || got.Owners[1].Since != nil || got.Owners[1].Pending != 1 {
 		t.Fatalf("owner status: %+v", got.Owners)
 	}
 	if notices, err := e.Pending(ctx, "foreground"); err != nil || len(notices) != 1 || notices[0].Bundle.Subject != "will-reopen" {
@@ -119,7 +119,7 @@ func TestWatchStatusReportsStoredAlertsAndLatestNotices(t *testing.T) {
 	// The effective receiver changes delivery without dropping any stored alert rows.
 	seedLiveOverride(t, s, rules[0].ID, strings.Replace(doc, `receiver = "foreground"`, `receiver = "subscribers"`, 1))
 	got, err = e.ReadStatus(ctx, func(string) (bool, error) { return false, nil })
-	if err != nil || len(got.Alerts) != 4 || len(got.Owners) != 2 || got.Owners[0].Pending != 0 {
+	if err != nil || len(got.Alerts) != 4 || len(got.Owners) != 2 || got.Owners[0].Pending != 0 || got.Owners[1].Pending != 0 {
 		t.Fatalf("status with receiver override: %+v, %v", got, err)
 	}
 	if notices, err := e.Pending(ctx, "foreground"); err != nil || len(notices) != 0 {

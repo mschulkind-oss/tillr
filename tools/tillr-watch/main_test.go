@@ -308,3 +308,105 @@ func TestWatchWritableFacesRequireExistingStore(t *testing.T) {
 		}
 	}
 }
+
+func TestWatchWaitExitsForNamedOwnerOnTrunkCoreWorktreeAlert(t *testing.T) {
+	if err := event.Register("drain.trunk-core-worktree", "drain"); err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	s, err := store.Open(context.Background(), filepath.Join(dir, "state.db"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	rules := filepath.Join(dir, "rules")
+	if err := os.MkdirAll(rules, 0700); err != nil {
+		t.Fatal(err)
+	}
+	const ruleDoc = `[[rule]]
+id = "drain-trunk-core-worktree"
+scope = "core"
+severity = "warning"
+[rule.reads]
+events = ["drain.trunk-core-worktree"]
+[rule.when]
+group_by = "config"
+pattern = "predicate_match"
+window = "1h"
+[rule.guidance]
+summary = "core.worktree appeared in {{subject}}"
+check = ["inspect {{subject}}"]
+do = ["remove core.worktree"]
+[rule.delivery]
+receiver = "foreground"
+`
+	if err := os.WriteFile(filepath.Join(rules, "drain-trunk-core-worktree.toml"), []byte(ruleDoc), 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	type result struct {
+		code     int
+		out, err string
+	}
+	done := make(chan result, 1)
+	go func() {
+		var out, stderr bytes.Buffer
+		code := run(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--owner", "operator-session"}, &out, &stderr)
+		done <- result{code, out.String(), stderr.String()}
+	}()
+	deadline := time.After(3 * time.Second)
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for attached := false; !attached; {
+		select {
+		case r := <-done:
+			t.Fatalf("wait exited while quiet: %+v", r)
+		case <-deadline:
+			t.Fatal("wait did not attach")
+		case <-ticker.C:
+			err := s.ReadTx(context.Background(), func(rd *store.Reader) error {
+				return rd.QueryRow(`SELECT EXISTS(SELECT 1 FROM foreground_delivery WHERE owner_handle='operator-session' AND waiting_since IS NOT NULL)`).Scan(&attached)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+		_, err := tx.Append(event.Event{At: time.Now(), Kind: "drain.trunk-core-worktree", Payload: []byte(`{"config":"/workspace/.git/config"}`)})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var through int64
+	select {
+	case r := <-done:
+		if r.code != 0 || r.err != "" || !strings.Contains(r.out, "drain-trunk-core-worktree /workspace/.git/config") || !strings.Contains(r.out, "core.worktree appeared in /workspace/.git/config") || !strings.Contains(r.out, "--owner 'operator-session'") {
+			t.Fatalf("wait output: %+v", r)
+		}
+		if _, err := fmt.Sscanf(r.out, "TILLR_WATCH_NOTICE 1 pending, through_seq %d", &through); err != nil {
+			t.Fatalf("notice header %q: %v", r.out, err)
+		}
+	case <-time.After(3 * time.Second):
+		cancel()
+		t.Fatal("wait did not exit when drain.trunk-core-worktree alert opened")
+	}
+	var statusOut, statusErr bytes.Buffer
+	if code := run(ctx, []string{"status", "--store", s.Path(), "--rules", rules}, &statusOut, &statusErr); code != 0 || statusErr.Len() != 0 || !strings.Contains(statusOut.String(), "owner operator-session watcher=unattached") || !strings.Contains(statusOut.String(), "pending=1") {
+		t.Fatalf("status before seen: code=%d out=%q err=%q", code, statusOut.String(), statusErr.String())
+	}
+	var seenErr bytes.Buffer
+	if code := run(ctx, []string{"seen", "--store", s.Path(), "--owner", "operator-session", "--through", fmt.Sprint(through)}, io.Discard, &seenErr); code != 0 || seenErr.Len() != 0 {
+		t.Fatalf("seen: code=%d err=%q", code, seenErr.String())
+	}
+	statusOut.Reset()
+	statusErr.Reset()
+	if code := run(ctx, []string{"status", "--store", s.Path(), "--rules", rules}, &statusOut, &statusErr); code != 0 || statusErr.Len() != 0 || !strings.Contains(statusOut.String(), "owner operator-session watcher=unattached") || !strings.Contains(statusOut.String(), "pending=0") {
+		t.Fatalf("status after seen: code=%d out=%q err=%q", code, statusOut.String(), statusErr.String())
+	}
+	var quietOut, quietErr bytes.Buffer
+	if code := run(ctx, []string{"wait", "--store", s.Path(), "--rules", rules, "--owner", "operator-session", "--timeout", "30ms"}, &quietOut, &quietErr); code != 2 || strings.Contains(quietOut.String(), "TILLR_WATCH_NOTICE") {
+		t.Fatalf("confirmed wait: code=%d out=%q err=%q", code, quietOut.String(), quietErr.String())
+	}
+}
