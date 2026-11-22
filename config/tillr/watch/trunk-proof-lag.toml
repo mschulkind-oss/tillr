@@ -1,0 +1,26 @@
+# On 2026-11-21 the trunk went about an hour without proof three times
+# while the heavy runner was stuck in a deadlocked test. Landings and reverts
+# are recorded as land.landing and drain.revert; this rule reads Git refs, not events.
+[[rule]]
+id = "trunk-proof-lag"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["land.landing", "drain.revert"]
+projections = ["git_refs:refs/heads/main,refs/tillr/green"]
+
+[rule.when]
+group_by = "global"
+pattern = "lag_behind"
+leader = "refs/heads/main"
+follower = "refs/tillr/green"
+threshold_commits = 3
+
+[rule.guidance]
+summary = "The trunk is {{count}} commits ahead of the last green proof."
+check = ["Look at the heavy runner's current proof run and the last test it reported."]
+do = ["Check whether the heavy runner is still making progress or is stuck on a test."]
+
+[rule.delivery]
+receiver = "foreground"
