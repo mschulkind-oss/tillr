@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -18,12 +19,17 @@ import (
 type policyRunSteps struct {
 	recordingSteps
 	requests chan run.Request
+	release  chan struct{}
 }
 
 func (s *policyRunSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
 	s.requests <- req
-	<-ctx.Done()
-	return run.Record{}, "", ctx.Err()
+	select {
+	case <-s.release:
+		return run.Record{}, "", errors.New("test worker released")
+	case <-ctx.Done():
+		return run.Record{}, "", ctx.Err()
+	}
 }
 
 func TestPolicyReloadAtPassBoundaryKeepsLiveRequest(t *testing.T) {
@@ -47,15 +53,18 @@ func TestPolicyReloadAtPassBoundaryKeepsLiveRequest(t *testing.T) {
 	l.cfg.Policy, l.cfg.PolicyRef = loaded, ref
 	var report bytes.Buffer
 	l.cfg.Report = &report
-	steps := &policyRunSteps{requests: make(chan run.Request, 2)}
+	steps := &policyRunSteps{requests: make(chan run.Request, 2), release: make(chan struct{})}
 	l.cfg.Steps = steps
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE items SET seat = 'build', state = CASE WHEN item_id = 'item-b' THEN 'blocked' ELSE state END`)
 		return err
 	})
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	defer func() {
-		cancel()
+		// Keep the context live until all workers report: sendCompletion can
+		// drop notifications after cancellation.
+		close(steps.release)
 		for len(l.active) > 0 {
 			c := <-l.completions
 			delete(l.active, c.id)
