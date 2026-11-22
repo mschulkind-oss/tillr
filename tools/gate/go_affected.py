@@ -5,20 +5,30 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import contextlib
+import ctypes
+import fcntl
 import hashlib
 import importlib.util
 import json
 import os
 from pathlib import Path
 import re
+import shutil
+import signal
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 
 EXCLUDED_PACK_MIRROR_PREFIX = "yolo-packs/tillr/files/local/share/tillr/"
 SHARD_THRESHOLD = 100
 MIN_SHARDS = 6
 MAX_SHARDS = 12
+INVOCATION_GUARD_FLAG = "--invocation-guard"
+PR_SET_CHILD_SUBREAPER = 36
+_live_guards: dict[int, int] = {}
+_live_guards_lock = threading.Lock()
 TOP_LEVEL_TEST_RE = re.compile(
     r"^func\s+(Test(?:[^a-z]\w*)?)\s*\(\s*\w+\s+\*testing\.T\b",
     re.MULTILINE,
@@ -645,6 +655,261 @@ def write_evidence_atomic(ev_path: str, evidence: dict) -> None:
         print(f"go-affected: could not write evidence: {error}", file=sys.stderr)
 
 
+def _set_child_subreaper() -> None:
+    if not sys.platform.startswith("linux"):
+        return
+    try:
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        libc.prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0)
+    except OSError:
+        pass
+
+
+def _proc_children_and_pgrp(root_pid: int) -> tuple[set[int], set[int]]:
+    """Return (all descendant/pgrp PIDs of root_pid, live non-zombie PIDs to kill)."""
+    children: dict[int, list[int]] = {}
+    states: dict[int, str] = {}
+    same_pgrp: set[int] = set()
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return set(), set()
+    for entry in proc.iterdir():
+        name = entry.name
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        if pid == root_pid:
+            continue
+        try:
+            raw = (entry / "stat").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        rparen = raw.rfind(")")
+        if rparen < 0:
+            continue
+        fields = raw[rparen + 2:].split()
+        if len(fields) < 3:
+            continue
+        state = fields[0]
+        try:
+            ppid = int(fields[1])
+            pgrp = int(fields[2])
+        except ValueError:
+            continue
+        states[pid] = state
+        children.setdefault(ppid, []).append(pid)
+        if pgrp == root_pid:
+            same_pgrp.add(pid)
+    descendants: set[int] = set()
+    stack = list(children.get(root_pid, ()))
+    while stack:
+        cur = stack.pop()
+        if cur in descendants:
+            continue
+        descendants.add(cur)
+        stack.extend(children.get(cur, ()))
+    all_targets = descendants | same_pgrp
+    live = {p for p in all_targets if states.get(p) != "Z"}
+    return all_targets, live
+
+
+def _reap_nonblocking() -> bool:
+    """Reap exited direct children without blocking. Return True when ECHILD."""
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return True
+        except OSError:
+            return True
+        if pid == 0:
+            return False
+
+
+def _kill_and_reap_descendants(root_pid: int, max_wait: float = 5.0) -> None:
+    deadline = time.monotonic() + max_wait
+    while True:
+        all_targets, live = _proc_children_and_pgrp(root_pid)
+        for pid in live:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(pid, signal.SIGKILL)
+        no_children = _reap_nonblocking()
+        if not live and not all_targets and no_children:
+            return
+        if time.monotonic() >= deadline:
+            return
+        time.sleep(0.01)
+
+
+def _invocation_guard_main(lifeline_fd: int, command: list[str]) -> int:
+    """Run command as a Linux subreaper and kill/reap every descendant on exit."""
+    _set_child_subreaper()
+    me = os.getpid()
+    cleanup_lock = threading.Lock()
+
+    def cleanup_all() -> None:
+        with cleanup_lock:
+            _kill_and_reap_descendants(me)
+
+    def watch_lifeline() -> None:
+        try:
+            while os.read(lifeline_fd, 4096):
+                pass
+        except OSError:
+            pass
+        cleanup_all()
+        os._exit(1)
+
+    def on_signal(signum: int, _frame) -> None:
+        cleanup_all()
+        os._exit(128 + signum)
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, on_signal)
+
+    threading.Thread(target=watch_lifeline, daemon=True).start()
+    child = subprocess.Popen(command)
+    try:
+        code = child.wait()
+    finally:
+        cleanup_all()
+    return 128 - code if code < 0 else code
+
+
+def _stop_live_guards() -> None:
+    with _live_guards_lock:
+        items = list(_live_guards.items())
+    for pid, _fd in items:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.kill(pid, signal.SIGTERM)
+
+
+def _end_with_runner(signum: int, _frame) -> None:
+    _stop_live_guards()
+    raise SystemExit(128 + signum)
+
+
+def _install_signal_handlers() -> None:
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(sig, _end_with_runner)
+
+
+def _clear_directory_contents(path: Path) -> None:
+    if not path.is_dir():
+        return
+    for child in list(path.iterdir()):
+        with contextlib.suppress(OSError):
+            if child.is_dir() and not child.is_symlink():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
+
+
+@contextlib.contextmanager
+def acquire_invocation_scratch(durable: str | None, scratch_key: str):
+    """Acquire an exclusive per-invocation scratch directory without losing cache hits.
+
+    Each package/shard key owns a locked pool of numbered slots (`slot-0`, `slot-1`, ...).
+    Non-concurrent runs always acquire `slot-0` (stable path -> Go test cache hits);
+    concurrent runs acquire distinct slots (`slot-0`, `slot-1`, ...) so they never share
+    a scratch directory.
+    """
+    if not durable:
+        with tempfile.TemporaryDirectory(prefix="go-affected-scratch-") as tmp:
+            p = Path(tmp)
+            yield p, p
+        return
+    slug = hashlib.sha256(scratch_key.encode("utf-8")).hexdigest()[:12]
+    pool_dir = Path(durable) / ".go-affected-scratch" / slug
+    pool_dir.mkdir(parents=True, exist_ok=True)
+    slot = 0
+    fd = None
+    while True:
+        lock_path = pool_dir / f"slot-{slot}.lock"
+        cand = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o666)
+        try:
+            fcntl.flock(cand, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            fd = cand
+            break
+        except BlockingIOError:
+            os.close(cand)
+            slot += 1
+        except BaseException:
+            os.close(cand)
+            raise
+    scratch_dir = pool_dir / f"slot-{slot}"
+    try:
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+        _clear_directory_contents(scratch_dir)
+        yield scratch_dir, pool_dir
+    finally:
+        _clear_directory_contents(scratch_dir)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+
+def _write_private_gitconfig(scratch_dir: Path, git_values: list[tuple[str, str]]) -> Path:
+    config = scratch_dir / "gitconfig"
+    config.write_text("", encoding="utf-8")
+    for key, value in git_values:
+        subprocess.run(
+            ["git", "config", "--file", str(config), "--add", key, value],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    return config
+
+
+def _run_guarded_command(
+    cmd: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    out_dir: Path,
+) -> tuple[int, str]:
+    """Run cmd under the subreaper guard with file-backed output so no child can hang or outlive it."""
+    script = str(Path(__file__).resolve())
+    with tempfile.NamedTemporaryFile(dir=out_dir, prefix="go-affected-out-") as out_file, \
+            open(out_file.name, "rb") as reader:
+        lifeline_read, lifeline_write = os.pipe()
+        proc = None
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, script, INVOCATION_GUARD_FLAG, str(lifeline_read), "--", *cmd],
+                cwd=cwd,
+                env=env,
+                stdout=out_file,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                pass_fds=(lifeline_read,),
+            )
+        except BaseException:
+            os.close(lifeline_write)
+            raise
+        finally:
+            os.close(lifeline_read)
+        with _live_guards_lock:
+            _live_guards[proc.pid] = lifeline_write
+        try:
+            rc = proc.wait()
+        finally:
+            with _live_guards_lock:
+                _live_guards.pop(proc.pid, None)
+            with contextlib.suppress(OSError):
+                os.close(lifeline_write)
+            if proc.poll() is None:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.kill(proc.pid, signal.SIGTERM)
+                proc.wait()
+        reader.seek(0)
+        size = os.fstat(out_file.fileno()).st_size
+        stdout = reader.read(size).decode("utf-8", errors="replace")
+    return rc, stdout
+
+
 def run_selected_tests(root: Path, selection: dict, *, ev_path: str = "") -> tuple[int, str, dict]:
     selected = selection["selected"]
     initial_evidence = {
@@ -669,20 +934,21 @@ def run_selected_tests(root: Path, selection: dict, *, ev_path: str = "") -> tup
     shards_mod = _load_shards_module(root)
     durations = _load_durations(root)
     base_env = build_env()
-    holder = (
-        shards_mod.resolve_holder_run(None, shards_mod.SLOT_CLASS_PROOF)
+    slot_class = (
+        shards_mod.resolve_slot_class(os.environ.get("GO_TEST_SHARDS_CLASS") or shards_mod.SLOT_CLASS_PROOF)
         if shards_mod is not None
         else None
     )
-
-    def invocation_scratch_dir(scratch_key: str) -> str | None:
-        durable = base_env.get("YOLO_DURABLE_DIR") or base_env.get("TMPDIR")
-        if not durable:
-            return None
-        slug = hashlib.sha256(scratch_key.encode("utf-8")).hexdigest()[:12]
-        target = Path(durable) / ".go-affected-scratch" / slug
-        target.mkdir(parents=True, exist_ok=True)
-        return str(target)
+    holder = (
+        shards_mod.resolve_holder_run(None, slot_class)
+        if shards_mod is not None
+        else None
+    )
+    git_values: list[tuple[str, str]] = []
+    if shards_mod is not None and hasattr(shards_mod, "global_git_config"):
+        with contextlib.suppress(OSError, subprocess.CalledProcessError):
+            git_values = shards_mod.global_git_config()
+    durable = base_env.get("YOLO_DURABLE_DIR") or base_env.get("TMPDIR")
 
     # Group small non-edge packages by module; edge or large packages run with their own invocations.
     # Each invocation is (module, items, digest, run_regex_or_None, scratch_key).
@@ -741,49 +1007,38 @@ def run_selected_tests(root: Path, selection: dict, *, ev_path: str = "") -> tup
 
     def run_one(inv: tuple[str, list[dict], str | None, str | None, str]) -> tuple[int, str, int, dict[str, dict]]:
         mod, items, digest, run_pattern, scratch_key = inv
-        env = dict(base_env)
-        scratch_dir = invocation_scratch_dir(scratch_key)
-        if scratch_dir is not None:
-            env["YOLO_DURABLE_DIR"] = scratch_dir
-        if digest is not None:
-            env["TILLR_GATE_EDGE_INPUTS"] = digest
-        else:
-            env.pop("TILLR_GATE_EDGE_INPUTS", None)
-        cmd = ["go", "test", "-json", "-timeout", "0"]
+        cmd = ["go", "test", "-json", "-timeout", "0", "-parallel", "1"]
         if run_pattern is not None:
             cmd.extend(["-run", run_pattern])
         cmd.extend(item["import_path"] for item in items)
 
         wait_ms = 0
-        if shards_mod is not None:
-            wait_start = time.monotonic()
-            with shards_mod.acquire_shard_slot(
-                shards_mod.default_lock_dir(),
-                shards_mod.default_shard_limit(),
-                slot_class=shards_mod.SLOT_CLASS_PROOF,
-                holder=holder,
-                label=f"go-affected:{mod}",
-            ):
-                wait_ms = int(round((time.monotonic() - wait_start) * 1000))
-                res = subprocess.run(
-                    cmd,
-                    cwd=root / mod,
-                    env=env,
-                    text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                )
-        else:
-            res = subprocess.run(
-                cmd,
-                cwd=root / mod,
-                env=env,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-            )
-        parsed, readable = parse_go_test_json(res.stdout)
-        return res.returncode, readable, wait_ms, parsed
+        with acquire_invocation_scratch(durable, scratch_key) as (scratch_dir, out_dir):
+            env = dict(base_env)
+            env["YOLO_DURABLE_DIR"] = str(scratch_dir)
+            with contextlib.suppress(OSError, subprocess.CalledProcessError):
+                gitconfig = _write_private_gitconfig(scratch_dir, git_values)
+                env["GIT_CONFIG_GLOBAL"] = str(gitconfig)
+            if digest is not None:
+                env["TILLR_GATE_EDGE_INPUTS"] = digest
+            else:
+                env.pop("TILLR_GATE_EDGE_INPUTS", None)
+
+            if shards_mod is not None:
+                wait_start = time.monotonic()
+                with shards_mod.acquire_shard_slot(
+                    shards_mod.default_lock_dir(),
+                    shards_mod.default_shard_limit(),
+                    slot_class=slot_class,
+                    holder=holder,
+                    label=f"go-affected:{mod}",
+                ):
+                    wait_ms = int(round((time.monotonic() - wait_start) * 1000))
+                    rc, stdout = _run_guarded_command(cmd, cwd=root / mod, env=env, out_dir=out_dir)
+            else:
+                rc, stdout = _run_guarded_command(cmd, cwd=root / mod, env=env, out_dir=out_dir)
+        parsed, readable = parse_go_test_json(stdout)
+        return rc, readable, wait_ms, parsed
 
     with ThreadPoolExecutor(max_workers=min(16, len(invocations))) as pool:
         for inv, (rc, readable_out, wait_ms, parsed) in zip(invocations, pool.map(run_one, invocations)):
@@ -845,6 +1100,10 @@ def git_changed_paths(root: Path, base: str, head: str) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    raw_argv = sys.argv[1:] if argv is None else argv
+    if raw_argv[:1] == [INVOCATION_GUARD_FLAG]:
+        return _invocation_guard_main(int(raw_argv[1]), raw_argv[3:])
+    _install_signal_handlers()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", default=".", help="Repository root")
     parser.add_argument("--base", help="Base commit")

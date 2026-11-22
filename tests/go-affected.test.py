@@ -690,6 +690,210 @@ def test_failure_refusal_names_packages_and_tests_far_above_tail() -> None:
         assert expected in triage_text, (expected, triage_text)
 
 
+def test_concurrent_runs_do_not_share_scratch_and_preserve_cache() -> None:
+    """Two concurrent go-affected runs get distinct scratch dirs; sequential runs still hit Go cache."""
+    with tempfile.TemporaryDirectory(prefix="go-affected-concurrent-", dir=scratch_root()) as tmp:
+        tmp_path = Path(tmp)
+        repo = tmp_path / "repo"
+        (repo / "tools" / "tillr-conc").mkdir(parents=True)
+        (repo / "tools" / "gate").mkdir(parents=True)
+        (repo / "tools" / "gate" / "go-test-edges.json").write_text("{}\n")
+        (repo / "tools" / "tillr-conc" / "go.mod").write_text(
+            "module github.com/mschulkind-oss/tillr-conc\n\ngo 1.22\n"
+        )
+        (repo / "tools" / "tillr-conc" / "conc_test.go").write_text(
+            'package main\n'
+            'import (\n'
+            '  "encoding/json"\n'
+            '  "os"\n'
+            '  "path/filepath"\n'
+            '  "testing"\n'
+            '  "time"\n'
+            ')\n'
+            'func TestScratchIsolation(t *testing.T) {\n'
+            '  rec := map[string]string{\n'
+            '    "durable": os.Getenv("YOLO_DURABLE_DIR"),\n'
+            '    "tmpdir": os.Getenv("TMPDIR"),\n'
+            '    "gitconfig": os.Getenv("GIT_CONFIG_GLOBAL"),\n'
+            '  }\n'
+            '  if outPath := os.Getenv("CONC_OUT_FILE"); outPath != "" {\n'
+            '    raw, _ := json.Marshal(rec)\n'
+            '    if err := os.WriteFile(outPath, raw, 0o644); err != nil { t.Fatal(err) }\n'
+            '  }\n'
+            '  marker := filepath.Join(rec["durable"], "marker")\n'
+            '  if _, err := os.Stat(marker); err == nil {\n'
+            '    t.Fatal("scratch directory already had marker from another run")\n'
+            '  }\n'
+            '  if err := os.WriteFile(marker, []byte("mine"), 0o644); err != nil {\n'
+            '    t.Fatal(err)\n'
+            '  }\n'
+            '  if ready := os.Getenv("CONC_READY_FILE"); ready != "" {\n'
+            '    if err := os.WriteFile(ready, []byte("ok"), 0o644); err != nil { t.Fatal(err) }\n'
+            '  }\n'
+            '  if peer := os.Getenv("CONC_PEER_READY_FILE"); peer != "" {\n'
+            '    deadline := time.Now().Add(30 * time.Second)\n'
+            '    for time.Now().Before(deadline) {\n'
+            '      if _, err := os.Stat(peer); err == nil { break }\n'
+            '      time.Sleep(20 * time.Millisecond)\n'
+            '    }\n'
+            '    if _, err := os.Stat(peer); err != nil {\n'
+            '      t.Fatalf("peer run never reached barrier %s", peer)\n'
+            '    }\n'
+            '  }\n'
+            '}\n'
+        )
+
+        shared_durable = tmp_path / "shared-durable"
+        shared_durable.mkdir()
+        lock_dir = tmp_path / "locks"
+        gocache = tmp_path / "gocache"
+        out1, out2 = tmp_path / "out1.json", tmp_path / "out2.json"
+        ready1, ready2 = tmp_path / "ready1", tmp_path / "ready2"
+
+        base = {
+            **os.environ,
+            "YOLO_DURABLE_DIR": str(shared_durable),
+            "GO_TEST_SHARDS_LOCK_DIR": str(lock_dir),
+            "GO_TEST_SHARDS_CLASS": "ordinary",
+            "GOCACHE": str(gocache),
+        }
+        cmd = [
+            sys.executable,
+            str(ROOT / "tools" / "gate" / "go_affected.py"),
+            "--root", str(repo),
+            "--changed", "tools/tillr-conc/conc_test.go",
+        ]
+        p1 = subprocess.Popen(
+            cmd,
+            env={**base, "CONC_OUT_FILE": str(out1), "CONC_READY_FILE": str(ready1), "CONC_PEER_READY_FILE": str(ready2)},
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        p2 = subprocess.Popen(
+            cmd,
+            env={**base, "CONC_OUT_FILE": str(out2), "CONC_READY_FILE": str(ready2), "CONC_PEER_READY_FILE": str(ready1)},
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        o1, _ = p1.communicate(timeout=60)
+        o2, _ = p2.communicate(timeout=60)
+        assert p1.returncode == 0, o1
+        assert p2.returncode == 0, o2
+
+        r1 = json.loads(out1.read_text(encoding="utf-8"))
+        r2 = json.loads(out2.read_text(encoding="utf-8"))
+        assert r1["durable"] and r2["durable"] and r1["durable"] != r2["durable"], (r1, r2)
+        assert r1["gitconfig"] and r2["gitconfig"] and r1["gitconfig"] != r2["gitconfig"], (r1, r2)
+
+        # Sequential runs after both finish reuse slot-0 and hit Go's test result cache.
+        ev_file = tmp_path / "seq-ev.json"
+        seq_env = {**base, "CONC_OUT_FILE": "", "CONC_READY_FILE": "", "CONC_PEER_READY_FILE": ""}
+        res1 = subprocess.run(
+            [*cmd, "--evidence-out", str(ev_file)],
+            env=seq_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60,
+        )
+        assert res1.returncode == 0, res1.stdout
+        res2 = subprocess.run(
+            [*cmd, "--evidence-out", str(ev_file)],
+            env=seq_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60,
+        )
+        assert res2.returncode == 0, res2.stdout
+        ev2 = json.loads(ev_file.read_text(encoding="utf-8"))
+        assert ev2["packages"][0]["cached"] is True, ev2
+
+
+def test_no_leftover_processes_after_check_finishes() -> None:
+    """After go-affected finishes, no descendant survives — including setsid orphans and drain's stub pi/stop-at-gap/tillr-run."""
+    with tempfile.TemporaryDirectory(prefix="go-affected-reap-", dir=scratch_root()) as tmp:
+        tmp_path = Path(tmp)
+        repo = tmp_path / "repo"
+        (repo / "tools" / "tillr-orphan").mkdir(parents=True)
+        (repo / "tools" / "gate").mkdir(parents=True)
+        (repo / "tools" / "gate" / "go-test-edges.json").write_text("{}\n")
+        (repo / "tools" / "tillr-orphan" / "go.mod").write_text(
+            "module github.com/mschulkind-oss/tillr-orphan\n\ngo 1.22\n"
+        )
+        pids_file = tmp_path / "orphan-pids.txt"
+        (repo / "tools" / "tillr-orphan" / "orphan_test.go").write_text(
+            'package main\n'
+            'import (\n'
+            '  "os"\n'
+            '  "os/exec"\n'
+            '  "syscall"\n'
+            '  "testing"\n'
+            '  "time"\n'
+            ')\n'
+            'func TestSpawnsDetachedOrphan(t *testing.T) {\n'
+            '  pidsFile := os.Getenv("ORPHAN_PIDS_FILE")\n'
+            '  cmd := exec.Command("/bin/sh", "-c", "sleep 600 & child=$!; printf \'%d\\n%d\\n\' $$ $child > \\"$1\\"; wait $child", "sh", pidsFile)\n'
+            '  cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}\n'
+            '  if err := cmd.Start(); err != nil { t.Fatal(err) }\n'
+            '  deadline := time.Now().Add(10 * time.Second)\n'
+            '  for time.Now().Before(deadline) {\n'
+            '    if raw, err := os.ReadFile(pidsFile); err == nil && len(raw) > 0 { break }\n'
+            '    time.Sleep(20 * time.Millisecond)\n'
+            '  }\n'
+            '}\n'
+        )
+        durable = tmp_path / "durable"
+        durable.mkdir()
+        res = subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "tools" / "gate" / "go_affected.py"),
+                "--root", str(repo),
+                "--changed", "tools/tillr-orphan/orphan_test.go",
+            ],
+            env={
+                **os.environ,
+                "YOLO_DURABLE_DIR": str(durable),
+                "GO_TEST_SHARDS_LOCK_DIR": str(tmp_path / "locks"),
+                "GO_TEST_SHARDS_CLASS": "ordinary",
+                "GOCACHE": str(tmp_path / "gocache"),
+                "ORPHAN_PIDS_FILE": str(pids_file),
+            },
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=60,
+        )
+        assert res.returncode == 0, res.stdout
+        recorded = [int(line) for line in pids_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+        assert len(recorded) == 2, recorded
+        for pid in recorded:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                continue
+            raise AssertionError(f"detached orphan pid {pid} survived after go_affected.py finished")
+
+        # Real drain package check: TestRestartReplacesTheLoopInPlaceWithoutSignalingARun spawns
+        # tillr-run exec (setsid) -> stop-at-gap -> stub pi -> sleep 600 and leaves them behind
+        # without a subreaper guard. Prove none remain after go_affected's guarded invocation exits.
+        drain_durable = tmp_path / "drain-durable"
+        drain_durable.mkdir()
+        with go_affected.acquire_invocation_scratch(str(drain_durable), "drain-reap-test") as (sdir, out_dir):
+            env = go_affected.build_env()
+            env["YOLO_DURABLE_DIR"] = str(sdir)
+            env["TMPDIR"] = str(sdir)
+            rc, stdout = go_affected._run_guarded_command(
+                [
+                    "go", "test", "-count=1", "-json", "-timeout", "0", "-parallel", "1",
+                    "-run", "^TestRestartReplacesTheLoopInPlaceWithoutSignalingARun$",
+                    "github.com/mschulkind-oss/tillr-drain",
+                ],
+                cwd=ROOT / "tools" / "tillr-drain",
+                env=env,
+                out_dir=out_dir,
+            )
+            assert rc == 0, stdout
+        ps_out = subprocess.check_output(["ps", "-eo", "pid,ppid,args"], text=True)
+        me = str(os.getpid())
+        leftovers = [
+            line for line in ps_out.splitlines()[1:]
+            if str(drain_durable) in line and line.strip().split(None, 1)[0] != me
+        ]
+        assert not leftovers, f"leftover drain processes survived: {leftovers}"
+
+
 def main() -> int:
     root_graph = go_affected.load_tillr_graph(ROOT)
     test_discover_modules()
@@ -701,6 +905,8 @@ def main() -> int:
     test_failure_refusal_names_packages_and_tests_far_above_tail()
     test_fork_check_integration(root_graph)
     test_heavy_failures_replay(root_graph)
+    test_concurrent_runs_do_not_share_scratch_and_preserve_cache()
+    test_no_leftover_processes_after_check_finishes()
     print("PASS: all go-affected tests passed")
     return 0
 
