@@ -1,11 +1,11 @@
 ---
 title: "An oversized item lands in parts: what is accepted lands, and what is objected to goes back alone"
-status: in-review
-stage: DESIGN
+status: accepted
+stage: DECIDED
 updated: 2026-11-21
 tags: [tillr, drain, verify, landing, split, design]
-summary: "The owner ruled on 2026-11-21 that a change too big to land whole must be broken up so the accepted parts land without the part objected to, that several seats may say so, and that each needs clear guidance. This design settles who calls a split and on which observable signals, what a split produces (part items under a parent that stays open), how the built candidate is carved without rebuilding it, and what a verifier must state so that can happen. Everything but the quoted words is the designer's decision, and one question waits on the owner."
-next: "The owner rules OQ-SP1: whether a part may land while a named case of the request is still unmet. The split's first use on the case that prompted it depends on the answer. Nothing is built."
+summary: "The owner ruled on 2026-11-21 that a change too big to land whole must be broken up so the accepted parts land without the part objected to, that several seats may say so, and that each needs clear guidance. This design settles who calls a split and on which observable signals, what a split produces (part items under a parent that stays open), how the built candidate is carved without rebuilding it, and what a verifier must state so that can happen. He ruled the same day that part of a change may land while a named case of the request is still unmet, because the smallest functional change is the healthier landing. Everything but his quoted words is the designer's decision. No question is open, and nothing is built."
+next: "Build slice 1 of Section 14: every refused candidate's size is measured and shown on its item page beside the size limits, with no routing. The eleven slices that follow each land alone, in the order Section 14 gives. Nothing is built."
 depends-on:
   - landing-principles.md
   - tillr-judge-and-lifecycle.md
@@ -16,7 +16,7 @@ vantage:
 
 # An oversized item lands in parts
 
-**Status:** 2026-11-21. Nothing here is built: `rg -n -i 'carve|donor|parent_item|child_item' tools/tillr-item tools/tillr-drain tools/tillr-land` on 2026-11-21 finds nothing. The measurements in [§2](#2-the-case-measured) were read from the store and the repository that evening. The owner's words in [§1](#1-the-ruling) are the only ruling; every other decision is the designer's and is marked so in the [Decision Ledger](#decision-ledger).
+**Status:** 2026-11-21 — decided; the next action is the build, in the slices of [§14](#14-the-build-in-slices-that-each-land-alone). Nothing here is built: `rg -n -i 'carve|donor|parent_item|child_item' tools/tillr-item tools/tillr-drain tools/tillr-land` on 2026-11-21 finds nothing. The measurements in [§2](#2-the-case-measured) were read from the store and the repository that evening. The owner's two statements quoted in [§1](#1-the-ruling) are the only rulings; every other decision is the designer's and is marked so in the [Decision Ledger](#decision-ledger).
 
 > **In short.** An item that is too big is split into **parts**, each an ordinary item with its own words, verifier, gate and single squashed commit, under a **parent** that keeps the owner's words and stays open until every part has landed. The work already built is taken from the refused candidate and not rebuilt, and what decides whether a part may land is whether it makes the trunk worse, not whether the whole request is finished.
 
@@ -28,9 +28,9 @@ vantage:
 
 **Start at** [§4](#4-the-rules-a-split-keeps), the six rules, then [§8](#8-how-a-verdict-accepts-part-of-a-candidate).
 
-**Needs your ruling:** [OQ-SP1](#OQ-SP1).
+**Needs your ruling:** None. The owner ruled [OQ-SP1](#OQ-SP1) on 2026-11-21: part of a change may land.
 
-**Awaits your review:** the designer's decisions `D-SP1` to `D-SP12` in the [Decision Ledger](#decision-ledger).
+**Awaits your review:** the designer's decisions `D-SP1` to `D-SP13` in the [Decision Ledger](#decision-ledger).
 
 **Reads with:** [landing principles](./landing-principles.md) (the rules a split must not break), [the judge and lifecycle design](./tillr-judge-and-lifecycle.md) (verdicts, and the rule that no count of attempts routes work), [item graphs](../reference/tillr-item-graphs.md) (pieces inside one item, which a split does not replace), and [when each repair finds a different defect](../tillr/nonconverging-items.md) (the proposal of 2026-11-20 that this design absorbs; [§10.6](#106-the-proposal-of-2026-11-20) says what is kept).
 
@@ -60,7 +60,16 @@ What I take as ruled, because the words state it without doubt:
 3. The accepted parts of a change land without the part that is objected to.
 4. Whoever may say "split" has clear guidance.
 
-What the words leave open, because he says so ("I don't know if", "I'm not really sure", "Maybe"): which seats say it and when, what the threshold is, and whether a split is several landings of one item or something else. Those are settled below as the designer's decisions, and he may overturn any of them.
+Later the same day he was asked whether part of a change may land while a named case of the request is still unmet, and said, verbatim, with his spelling kept:
+
+> "part of desgins can absoutely land. this is generally MORE healthy. Remember, we're trying to mirror humans here. Humans desire to land the smallest functional change possible to make reviewing, testing, velocity, all this stuff easier, and it will also make it easier for us."
+
+What I take as ruled by those words:
+
+5. Part of a change may land while a named case of the request is still unmet. The case follows as its own part.
+6. The smaller landing is the healthier one. The aim is the smallest functional change, as a human engineer would land it, because it makes reviewing, testing and velocity easier. [The landing principles](./landing-principles.md#15-land-the-smallest-functional-change) record this as a general principle.
+
+What the first statement leaves open, because he says so ("I don't know if", "I'm not really sure", "Maybe"): which seats say it and when, what the threshold is, and whether a split is several landings of one item or something else. Those are settled below as the designer's decisions, and he may overturn any of them.
 
 One earlier statement bears on it. On 2026-11-20, of an item whose repairs kept finding new defects, [the proposal of that date](../tillr/nonconverging-items.md) records him saying: "Split it up. That's always a good way to go."
 
@@ -129,7 +138,7 @@ No item has a parent, and no record says one item was replaced by several. An it
 - **P3. One seat writes the division.** Four callers may call a split. The design seat alone decides whether and how, because dividing criteria is writing the bar, and neither the worker that is held to a bar nor the judge that applies it may write it ([criterion repair](./criterion-repair.md#decision-ledger) rules the same for a frozen criterion).
 - **P4. A signal calls a split; nothing here stops work.** No signal counts attempts or refusals. A call never holds the item on the owner.
 - **P5. Built work is taken, not rebuilt, and no verdict is inherited.** A part takes its share from the donor candidate. It is then verified and gated on the tree that will land, like any item.
-- **P6. On a part, a gap is filed and a regression is refused.** A part is refused for making the trunk worse, for changing what nobody asked for, for lacking its tests, or for not delivering the share it claims. A case of the parent's request that the part does not yet handle is recorded against the parent and built by another part. This rule waits on [OQ-SP1](#OQ-SP1).
+- **P6. On a part, a gap is filed and a regression is refused.** A part is refused for making the trunk worse, for changing what nobody asked for, for lacking its tests, or for not delivering the share it claims. A case of the parent's request that the part does not yet handle is recorded against the parent and built by another part. The owner ruled this on 2026-11-21: "part of desgins can absoutely land. this is generally MORE healthy."
 
 ## 5. Who calls a split, and when
 
@@ -285,7 +294,7 @@ A verdict binds one criterion text to one exact tree. A part has different words
 
 What keeps the part's own verification from repeating the parent's twelve refusals is P6. The part's verifier is given the cases its words leave to siblings. When it finds another case of the parent's request that the part does not handle, and that case is a gap, the finding is recorded against the parent and added to the sibling part that owns the remaining cases. The part is not refused for it. The part is refused for a regression, an unasked change, a missing test, or a failure of the share it claims.
 
-That is a real change in what may be on the trunk: a behavior can land while named cases of the request are still queued. [OQ-SP1](#OQ-SP1) asks the owner whether he accepts it.
+So a behavior can be on the trunk while named cases of the request are still queued. The owner ruled on 2026-11-21 that this is the healthier outcome ([§1](#1-the-ruling)): the working part is a small functional change that can be reviewed and tested by itself, and each queued case follows as its own part. The parent stays open and visible until those cases land ([§7.5](#75-when-the-parent-is-finished)).
 
 ## 9. What the queue and the status surfaces show
 
@@ -357,6 +366,7 @@ The split signals follow that. None reads a tally. S2 compares the evidence of t
 | Split when a count of refusals is reached | Rejected: the owner ruled out counts on 2026-11-17 ([§10.5](#105-no-count-of-attempts-stops-work)) |
 | Refuse oversized requests at filing | Rejected as the only defense by the owner's own words: "ones will slip through" |
 | Carry the verifier's acceptance to the part as a verdict | Rejected: a verdict binds a text and a tree, and the part has neither in common with the parent ([§8.3](#83-why-nothing-is-inherited-and-why-a-part-still-lands)) |
+| Only complete behaviors land: a part must meet every word of the request about its behavior | Rejected by the owner on 2026-11-21 ([`OQ-SP1`](#OQ-SP1)). In the measured case nothing would have landed, because every finding was a case of one behavior |
 | Bring back a path list for each part | Rejected: the owner retired the per-item fence on 2026-11-19 |
 
 ## 13. Risks
@@ -364,40 +374,48 @@ The split signals follow that. None reads a tally. S2 compares the evidence of t
 | Risk | Mitigation |
 | :--- | :--- |
 | A defect hides in the seam between two parts | The closing check judges the parent's criteria on the trunk; a criterion that needs end-to-end proof is owned by the last part or by that check |
-| The trunk carries a behavior with queued cases, and they are never built | The parent stays open and visible with its count of parts; only the owner drops a part |
+| The trunk carries a behavior with queued cases, and they are never built | The owner accepted a part landing before its cases ([§1](#1-the-ruling)). The parent stays open and visible with its count of parts; only the owner drops a part |
 | A finding is called a gap when it is a regression | The verifier must show the base behaves the same; an unclassifiable finding is a regression; the part's gate still runs every check |
 | Splits happen where none is needed, and each costs a design run and extra gates | A candidate accepted whole is never split; the design seat may answer "no split"; thresholds are shown against every refusal so they can be tuned |
 | The design seat becomes the queue's narrow point | A call releases the lane; unrelated work continues; how long calls wait is visible in the queue's reasons |
 | A carving run rebuilds instead of taking | Its brief names the donor and the paths, and its verifier sees both the donor and the part's diff |
 | The thresholds are wrong | Each is marked measured or first guess in [§6](#6-the-signals); the numbers are tracked settings, and every refusal shows what they would have done |
 
-## 14. What I would build, in order
+## 14. The build, in slices that each land alone
 
-First the verifier's four statements and the measurements on the item page, with no routing: this alone shows what the signals would have done on real items and lets the thresholds be tuned before they move anything. Second the call from a verdict, the design seat's statement, the filing of parts and the blocked parent, which is the path the measured case needed. Third the closing check. Last the calls at the plan step and at filing, which prevent the case and do not rescue one already in trouble.
+The build follows the design's own rule. Each slice below is filed as its own request and lands as its own commit. Each one is useful on the trunk if no later slice ever lands, and none makes the trunk worse while the later ones are queued. A slice that trips a signal of [§6](#6-the-signals) when it is built is split again.
+
+The slices and their order are the designer's decision (`D-SP13`), and the owner may overturn them. The order puts what only shows facts first, so the thresholds can be tuned on real items before they move anything. Next comes a split made by a person, which already replaces filing parts by hand. Then comes each caller, starting with the verifier's call, which is the path the measured case needed.
+
+| Slice | What lands | Why it is useful alone | Follows |
+| ---: | :--- | :--- | :--- |
+| 1 | Every refused candidate's size (files and added lines, without the pack copy) is measured and shown on its item page beside S1's limits. The limits are tracked settings with the defaults of [§6](#6-the-signals). Nothing is routed | An operator sees an oversized candidate at its first refusal, and the limits can be tuned from what they would have done | — |
+| 2 | A not-done verdict states each finding's kind (gap, regression, unasked change) and place, and the item page shows them | A reader of a refusal sees whether the trunk would be worse or only unfinished, and where | — |
+| 3 | A not-done verdict states each earlier finding's fate and what was examined. The item page shows the comparison with the previous verdict and the growth of the candidate (the facts behind S2, S3 and S4). Nothing is routed | The owner's question "Are the refusals changing?" is answered on the page for every item | 2 |
+| 4 | A split statement written by the design seat is checked and filed in one transaction: the parts as items, their order, and the parent blocked on its required parts. Every part takes nothing from a donor. A malformed statement is refused whole. Until slice 7 lands, a parent whose required parts have all landed names the operator as its mover, who checks its criteria by hand | A split made by a person files correctly and at once, in place of one request per part filed by hand | — |
+| 5 | The queue's reasons and the item page show a parent as one row with its count of parts, and a part with its parent, its share and what it leaves to which sibling ([§9](#9-what-the-queue-and-the-status-surfaces-show)) | A split is readable as one request on every surface | 4 |
+| 6 | A part's verifier is given the cases the part's words leave to siblings. A gap it finds in another case of the parent's request is recorded against the parent and added to the sibling that owns the remaining cases, and the part is not refused for it (P6) | Part of a change lands while a named case is still queued, which is the owner's ruling of 2026-11-21 | 2, 4 |
+| 7 | The closing check: when the last required part lands, a read-only verifier judges the parent's criteria against the trunk. A pass finishes the parent, and a finding adds a part | A parent finishes without a person, and a defect in a seam between parts is found | 4 |
+| 8 | The verifier's call: at a not-done verdict the drain records a split call when a signal holds, pins the candidate as the donor, releases the lane and sends the item to the design seat, which answers with a statement or with "no split". A pending call and a "no split" answer are shown | An item like the measured one leaves the repair loop at its first changed finding. Its parts are built from nothing until slice 9 lands | 1, 3, 4 |
+| 9 | Carving: a part takes the donor whole, or takes named work in a carving run ([§7.4](#74-carving-the-donor)) | Work already built is taken and not rebuilt | 8 |
+| 10 | The planner's call: the plan step may end with a split call in place of a piece list, on S5, S6 and S7, with its grouping attached | An oversized item is split before anything is built | 4 |
+| 11 | The operator's call at filing, on S6, S8, S9 and S10: the item goes to the design seat before any plan or build run | An oversized request is split before any run starts | 4 |
+| 12 | The owner drops a required part: his dated words are recorded on the part, the part is closed, and the coverage table shows the clauses he released. A required part closed any other way shows as needing the owner | A parent can finish without a part the owner no longer wants | 7 |
+
+Two slices where neither follows the other may be built at once in separate lanes. Slices 1, 2 and 4 follow nothing.
 
 ## Open Questions
 
-1. 💬 **OQ-SP1: May part of a change land while a named case of the request is still unmet?**
-
-   A worker builds the owner's request, "disable a flaky check and don't let it block anything". The verifier runs and finds that after a proof is resumed from an old checkpoint, the check still blocks, exactly as it does on the trunk today. Everything else works. Today the whole candidate is refused, the worker repairs that case, and the verifier finds another; on 2026-11-21 that happened twelve times and nothing landed. The choice is whether the working part may go to the trunk while such cases are queued.
-
-   - **A — It lands, and the case follows.** You see the change on the trunk that afternoon, and the item reads "1 of 2 required parts landed; the remaining part covers: resumed proofs". The flaky check stops blocking in the ordinary paths and still blocks in the queued ones until that part lands. A part is refused only for making something worse than today.
-   - **B — Only complete behaviors land.** A part must meet every word of the request about its behavior. A split can separate two behaviors, but one behavior with unmet cases is refused as it is today. In the case above nothing would have landed, because every finding was a case of one behavior.
-
-   <!-- vantage: question id=OQ-SP1 leaning="A (It lands, and the case follows) — the measured case had no other cut, and the parent stays open until the cases land." -->
-
-   _Leaning:_ A (It lands, and the case follows) — the measured case had no other cut, and the parent stays open until the cases land.
-
-   **Answer:**
-   > _(empty — fill in when decided)_
+None. [OQ-SP1](#OQ-SP1) was ruled by the owner on 2026-11-21 and is compacted into the [Decision Ledger](#decision-ledger).
 
 ## Decision Ledger
 
-**Who decided each row.** A row marked "owner" quotes the owner. Every other row is the designer's decision of 2026-11-21, made without him, and he may overturn it. Nothing is built, so the last column is empty throughout.
+**Who decided each row.** A row marked "owner" quotes the owner, and there are two: `R-SP1` and [`OQ-SP1`](#OQ-SP1). Every other row is the designer's decision of 2026-11-21, made without him, and he may overturn it. Nothing is built, so the last column is empty throughout.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
 | R-SP1 | **Owner ruling.** Oversized changes are broken up past some threshold; the accepted parts land without the part objected to; several seats may say "split"; each has clear guidance. His words are quoted in full in [§1](#1-the-ruling) | 2026-11-21, owner | [§1](#1-the-ruling) | — |
+| <a id="OQ-SP1"></a>[`OQ-SP1`](#OQ-SP1) | **Owner ruling.** Part of a change may land while a named case of the request is still unmet; the case follows as its own part (option A, "It lands, and the case follows"). A part is refused for making the trunk worse, for an unasked change, for a missing test or for not delivering its share, and not for a case its words leave to a sibling. Asked whether part of a change may land while a named case of the request is still unmet, the owner said, verbatim: "part of desgins can absoutely land. this is generally MORE healthy. Remember, we're trying to mirror humans here. Humans desire to land the smallest functional change possible to make reviewing, testing, velocity, all this stuff easier, and it will also make it easier for us." **Rejected:** only complete behaviors land (option B) | 2026-11-21, owner | [§1](#1-the-ruling), [§4](#4-the-rules-a-split-keeps) (P6), [§8.3](#83-why-nothing-is-inherited-and-why-a-part-still-lands) | — |
 | D-SP1 | **Designer's decision; the owner may overturn it.** A split produces part items under a parent that stays open, not several landings of one item. **Rejected:** several landings on one item, which would amend his one-squash ruling | 2026-11-21, designer | [§7.2](#72-parts-and-the-parent), [§10.3](#103-one-squash-per-item) | — |
 | D-SP2 | **Designer's decision; the owner may overturn it.** Four callers call a split: the operator at filing, the design seat, the planner at the plan step, and the verifier at a not-done verdict. The design seat alone writes the division, and may answer "no split" | 2026-11-21, designer | [§5](#5-who-calls-a-split-and-when), [§7.1](#71-the-split-statement) | — |
 | D-SP3 | **Designer's decision; the owner may overturn it.** The ten signals of [§6](#6-the-signals), and their thresholds. The size limits (27 files, 1,200 added lines) and the area limit (4) rest on the measured distribution of landed commits; the rest are first guesses, marked in the table | 2026-11-21, designer | [§6](#6-the-signals) | — |
@@ -410,3 +428,4 @@ First the verifier's four statements and the measurements on the item page, with
 | D-SP10 | **Designer's decision; the owner may overturn it.** The queue shows a parent as one row with its count of parts until the closing check passes, and shows every measurement before any signal holds | 2026-11-21, designer | [§9](#9-what-the-queue-and-the-status-surfaces-show) | — |
 | D-SP11 | **Designer's decision; the owner may overturn it.** No count of verifier refusals pauses an item for review. Answers the first question of [the proposal of 2026-11-20](../tillr/nonconverging-items.md#questions-for-the-owner-before-building-policy), consistent with the owner's ruling `D-JL10` | 2026-11-21, designer | [§10.5](#105-no-count-of-attempts-stops-work) | — |
 | D-SP12 | **Designer's decision; the owner may overturn it.** The owner is not asked to approve or acknowledge a split. He sees it on the surfaces, and is asked only when a required part would be dropped. Answers the second question of the same proposal | 2026-11-21, designer | [§9](#9-what-the-queue-and-the-status-surfaces-show), [§11](#11-what-this-does-not-do) | — |
+| D-SP13 | **Designer's decision; the owner may overturn it.** The build is twelve slices that each land alone, in the order of [§14](#14-the-build-in-slices-that-each-land-alone): what only shows facts first, then a split made by a person, then each caller | 2026-11-21, designer | [§14](#14-the-build-in-slices-that-each-land-alone) | — |

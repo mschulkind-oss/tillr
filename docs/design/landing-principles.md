@@ -10,7 +10,7 @@ covers:
   - docs/pi/landing-replay-ruling-2026-11-02.md
   - docs/pi/stranded-candidates-2026-11-02.md
 tags: [board, landing, principles, rulings, library]
-summary: "Fourteen principles distilled from the landing rulings of 2026-10-28 to 2026-11-17, each with the measurement that produced it, the thing that enforces it today, and the one lander it binds. Principles 5 and 6's per-attempt budgets are superseded by the 2026-11-17 owner ruling D-JL10 (worker endings are never counted; identical repeats diagnose at design). A principle whose enforcement column says 'nothing' is a claim, not a rule, and is listed as such rather than assumed; a principle that is not lander-scoped says so and names the dispatch program it binds instead."
+summary: "Fifteen principles distilled from the landing rulings of 2026-10-28 to 2026-11-21, each with the measurement that produced it, the thing that enforces it today, and the one lander it binds. Principles 5 and 6's per-attempt budgets are superseded by the 2026-11-17 owner ruling D-JL10 (worker endings are never counted; identical repeats diagnose at design). A principle whose enforcement column says 'nothing' is a claim, not a rule, and is listed as such rather than assumed; a principle that is not lander-scoped says so and names the dispatch program it binds instead."
 ---
 
 # Landing principles
@@ -538,6 +538,44 @@ ref or a stray worktree is named for an operator, and nothing acts on it.
 
 *Scope:* **not lander-scoped.** The bracket is the dispatch side's, in `tillr-drain`. The lander
 holds landings on trunk movement through its own checks, and it never convicts a run.
+
+## 15. Land the smallest functional change
+
+A change lands as the smallest functional change possible, as a human engineer would land it. Part
+of a design or a request may land by itself, and that is the healthier outcome, not a compromise:
+a small change is easier to review and to test, and the work moves faster. The owner ruled on
+2026-11-21, verbatim, with his spelling kept: "part of desgins can absoutely land. this is
+generally MORE healthy. Remember, we're trying to mirror humans here. Humans desire to land the
+smallest functional change possible to make reviewing, testing, velocity, all this stuff easier,
+and it will also make it easier for us."
+
+Two consequences follow from his words. A change is not held back because a named case of its
+request is still unmet: the case follows as its own change. And "functional" is the limit on
+"smallest": what lands works alone and leaves the trunk no worse than it was.
+
+*Measured 2026-11-21:* one item's verifier refused it twelve times in two and a half hours, each
+time on a different case, while its candidate grew from 34 to 64 files, and nothing landed. Across
+the 1,049 landings the store records, the median landing changes 2 files and adds 75 lines. Of 95
+landed `planned-build@v1` items, the 19 above the 95th percentile in size averaged 3.3 verifier
+refusals and the other 76 averaged 1.1. The figures and how they were read are in
+[the split design](./tillr-item-split.md#2-the-case-measured).
+
+*Enforced by:* nothing. [The split design](./tillr-item-split.md) is the only mechanism that
+applies it: it lets the accepted part of an oversized item land while the rest follows, and its
+[build order](./tillr-item-split.md#14-the-build-in-slices-that-each-land-alone) is itself written
+as slices that each land alone. That design is decided and unbuilt:
+`rg -n -i 'carve|donor|parent_item|child_item' tools/tillr-item tools/tillr-drain tools/tillr-land`
+found nothing on 2026-11-21. *Not enforced:* nothing reads the size of a request, a plan or a
+candidate, and the planner's guidance says nothing about it
+(`rg -n -i 'split|size|independent|large|small' config/tillr/plan-guidance.md` found nothing on
+2026-11-21). A verifier still refuses a whole candidate for one unmet case. Until the split design
+is built, this entry is a stated intent that binds whoever files a request, writes a design or
+plans a build.
+
+*Scope:* **not lander-scoped.** It binds where the size of a change is chosen: filing, the design
+seat, the planner and the verifier, which run under `tillr-drain` and `tillr-loop`. The lander
+lands one squashed commit per item whatever its size, so it cannot break this principle and is not
+bound by it.
 
 ---
 
