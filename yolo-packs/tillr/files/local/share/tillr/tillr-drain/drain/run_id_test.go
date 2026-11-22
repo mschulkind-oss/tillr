@@ -193,3 +193,32 @@ func TestAdapterRefusalWordsClassifyAnExit2AsRefusedNotInfrastructure(t *testing
 		t.Fatalf("prose containing the marker classified %q", got)
 	}
 }
+
+func TestAdapterRefusalInRawLogOverridesEmptyExtractedReport(t *testing.T) {
+	dir := t.TempDir()
+	rawLogPath := filepath.Join(dir, "run.log")
+	reportPath := filepath.Join(dir, "report.md")
+	const want = "the brief carries a literal '{{' that is not a template placeholder"
+	if err := os.WriteFile(rawLogPath, []byte("run-pi: refused: "+want+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	headerOnly := "backend: pi-verify\nexit code: 2\nevents: 0\nunparseable lines: 1\ncomplete: no\nresult: incomplete\n"
+	if err := os.WriteFile(reportPath, []byte(headerOnly), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code := 2
+	rec := run.Record{
+		State:    run.StateExited,
+		ExitCode: &code,
+		ArtifactRefs: []run.ArtifactRef{
+			{Kind: "log", Ref: rawLogPath},
+			{Kind: "report", Ref: reportPath},
+		},
+	}
+	if got := ClassifyAttempt(rec, logTail(rec.ArtifactRefs)); got != AttemptRefused {
+		t.Fatalf("ClassifyAttempt = %q, want %q", got, AttemptRefused)
+	}
+	if words, ok := RecordAdapterRefusal(rec, logTail(rec.ArtifactRefs)); !ok || words != want {
+		t.Fatalf("RecordAdapterRefusal = (%q, %v), want (%q, true)", words, ok, want)
+	}
+}

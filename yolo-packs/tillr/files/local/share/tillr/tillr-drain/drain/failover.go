@@ -117,7 +117,7 @@ func ClassifyAttempt(rec run.Record, log string) AttemptClass {
 		case code == adapterRefusedExit:
 			// The adapter's preflight refusal: nothing ran, nothing was spent. One that
 			// states its words is about the brief or the environment, and is the operator's.
-			if _, ok := AdapterRefusal(log); ok {
+			if _, ok := RecordAdapterRefusal(rec, log); ok {
 				return AttemptRefused
 			}
 			return AttemptInfrastructure
@@ -135,6 +135,21 @@ func ClassifyAttempt(rec run.Record, log string) AttemptClass {
 	// it as infrastructure would re-dispatch on a guess. Answered is the direction that
 	// spends nothing.
 	return AttemptAnswered
+}
+
+// RecordAdapterRefusal answers the adapter's preflight refusal words for rec, checking
+// log first (usually the extracted report) and falling back to the raw stream log
+// artifact when present. A preflight refusal prints `run-<adapter>: refused: <reason>`
+// to stderr before any harness JSON stream starts, so the dialect's extracted report.md
+// has an empty body while the raw log carries the refusal line.
+func RecordAdapterRefusal(rec run.Record, log string) (string, bool) {
+	if words, ok := AdapterRefusal(log); ok {
+		return words, true
+	}
+	if raw := rawLogTail(rec.ArtifactRefs); raw != "" {
+		return AdapterRefusal(raw)
+	}
+	return "", false
 }
 
 // AdapterRefusal answers the adapter's own refusal words from a run's log: the text after
@@ -470,6 +485,19 @@ func logTail(refs []run.ArtifactRef) string {
 	if path == "" {
 		return ""
 	}
+	return readFileTail(path)
+}
+
+func rawLogTail(refs []run.ArtifactRef) string {
+	for _, ref := range refs {
+		if ref.Kind == "log" {
+			return readFileTail(ref.Ref)
+		}
+	}
+	return ""
+}
+
+func readFileTail(path string) string {
 	file, err := os.Open(path)
 	if err != nil {
 		return ""

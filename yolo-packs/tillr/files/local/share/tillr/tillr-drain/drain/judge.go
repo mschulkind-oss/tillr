@@ -529,11 +529,20 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 					detail := fmt.Sprintf("verify run %s exited with code %d and wrote no verdict", receipt.Request.RunID, *judgeRec.ExitCode)
 					preflight := ClassifyAttempt(judgeRec, judgeLog) == AttemptRefused
 					if preflight {
-						words, _ := AdapterRefusal(judgeLog)
+						words, _ := RecordAdapterRefusal(judgeRec, judgeLog)
 						detail += ": " + words
 					}
 					c.RefusalDetail = detail
 					return c, false, l.recordMissingVerify(ctx, c, receipt.Request.RunID, preflight)
+				}
+				if os.IsNotExist(err) && os.IsNotExist(entryErr) && ClassifyAttempt(judgeRec, judgeLog) == AttemptRefused {
+					words, _ := RecordAdapterRefusal(judgeRec, judgeLog)
+					faultCandidate := c
+					faultCandidate.RunID = receipt.Request.RunID
+					if err := l.holdItemFault(ctx, faultCandidate, ReasonAdapterRefused, words); err != nil {
+						return c, false, err
+					}
+					return c, false, nil
 				}
 				return c, false, l.holdJudge(ctx, c, receipt.Request.RunID, ReasonJudgeUnreadable, err.Error(), result)
 			}

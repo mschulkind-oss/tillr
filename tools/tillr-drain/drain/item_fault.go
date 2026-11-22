@@ -213,8 +213,8 @@ func syncClearVersion(r *store.Reader) (int64, error) {
 
 // holdAdapterRefusal holds the item whose run an adapter refused before any model ran, with
 // the adapter's own words as the reason, and settles the lane. It counts no backend failure.
-func (l *Loop) holdAdapterRefusal(ctx context.Context, lane string, request run.Request, log string) (string, error) {
-	words, _ := AdapterRefusal(log)
+func (l *Loop) holdAdapterRefusal(ctx context.Context, lane string, request run.Request, rec run.Record, log string) (string, error) {
+	words, _ := RecordAdapterRefusal(rec, log)
 	c := Candidate{ItemID: request.ItemID, LaneID: lane, RunID: request.RunID}
 	if err := l.holdItemFault(ctx, c, ReasonAdapterRefused, words); err != nil {
 		return "", err

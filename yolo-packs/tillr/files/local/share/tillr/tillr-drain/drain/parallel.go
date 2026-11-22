@@ -623,7 +623,7 @@ func (l *Loop) settleParallelReader(ctx context.Context, work *pendingWork, node
 			}
 			outcome = "fault"
 		case class == AttemptRefused:
-			stop, e := l.holdAdapterRefusal(ctx, node.LaneID, *node.RunRequest, log)
+			stop, e := l.holdAdapterRefusal(ctx, node.LaneID, *node.RunRequest, rec, log)
 			if e == nil && stop == "" {
 				e = l.markExamined(ctx, d)
 			}
