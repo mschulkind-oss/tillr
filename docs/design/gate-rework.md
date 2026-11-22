@@ -9,7 +9,7 @@ tags:
   - landing
   - design
 summary: "Measures all 42 check kinds in tools/fork-check.py, then replaces the gate's remembered baseline with a base the caller supplies and results remembered by a fingerprint of the files each check reads. A ten-second landing budget becomes a failing test, heavy checks run after the merge in this repository, tillr deploys only from the last green trunk commit, and a new check is one new file."
-next: "Two units of Section 11 are written with no item directive and become items once the owner rules on how documents declare work: the single check-result classifier of D-GR23 and D-GR41, in thirteen slices (slices 1a and 1e landed), and the drift probe of D-GR12, after item-gate-pinned-fork-inputs."
+next: "Three units of Section 11 are written with no item directive and become items once the owner rules on how documents declare work: the single check-result classifier of D-GR23 and D-GR41, in thirteen slices (slices 1a and 1e landed), non-blocking landing gates and bounded drain affected-test runtime of D-GR43, in five slices, and the drift probe of D-GR12, after item-gate-pinned-fork-inputs."
 depends-on:
   - landing-principles.md
   - landing-velocity.md
@@ -45,9 +45,10 @@ adding a timeout, retry, or longer wait, and a test run started by a worker must
 command that started it. On 2026-11-21 the owner ruled that ten seconds was aspirational and
 accepted about 40 seconds for the tests a drain change selects, with performance monitoring
 ([`D-GR38`](#decision-ledger)); the check that runs those tests before the merge is the
-designer's ([`D-GR39`](#decision-ledger),
+designer's ([`D-GR39`](#decision-ledger), amended by [`D-GR40`](#decision-ledger) and
+[`D-GR43`](#decision-ledger),
 [Section 6.12](#612-a-change-to-a-tillr-go-module-runs-its-affected-test-packages-before-it-lands))
-and is not built.
+and is not built, with [its five-slice build order in Section 11](#run-affected-go-tests-without-holding-sibling-landings).
 
 > **In short.** The gate is slow and brittle for one reason: it decides what to run from a commit
 > it remembers, on a machine that may not be the one that remembered it. Give every run its base
@@ -3092,6 +3093,220 @@ refuse the landing because a run took longer than 40 seconds.
 | `-count=1` for every package | Rejected by the request. It gives up the reuse the owner's 40 seconds assumes. |
 | A build system (Bazel, Pants) or per-test coverage maps as the selector | Rejected for now, on the [research](../research/build-tools.md)'s recommendation: the cost is high and each still needs declared subprocess edges. |
 
+#### Keeping affected drain tests before landing without holding other landings
+
+What follows is the designer's decision of 2026-11-22 (`D-GR43`), written from an operator
+request of that morning. None of it is the owner's ruling, and the owner may overturn any part
+of it. It keeps the owner's rulings intact: affected Go tests run before the merge with
+performance monitoring (`D-GR38`), lanes and landings do not serialize on one another (`D-GR2`),
+no time limit kills or carries a working check (`D-GR15`), and no test shard outlives its
+runner (`D-GR17`). It amends `D-GR39` and `D-GR40` on how `go-affected` executes, how
+`tillr-drain` admits sibling gates across a pending restart, how `tools/go-test-shards.py`
+allocates slots to landing gates, and how `tools/tillr-drain`'s test packages are bounded so
+both invariants hold together.
+
+**Two measurements from 2026-11-22, 3:32 to 3:38 AM Eastern.**
+
+1. **`go-affected` took 272.0 seconds (`drain` alone 217.7 seconds) inside a 302.5-second fast
+   gate.** On candidate `724d39051e9e` `[unlanded]` (the candidate building `go-affected`
+   itself), `ProcessSteps.Gate` ran from `03:32:35.271` to `03:37:37.736` Eastern
+   (`wall_ms = 302465`), tripping `fast-gate-run-slow` (`event.wall_ms > 60000` in
+   [`config/tillr/watch/fast-gate-slow.toml`](../../config/tillr/watch/fast-gate-slow.toml),
+   `D-TW52`) against the ~40 seconds accepted in `D-GR38`. Inside `tools/fork-check.py`,
+   `go-affected` waited `19.9` seconds behind `cheap_first` ordering and ran for `252.1`
+   seconds (`272.0` seconds total, exiting `1`), while its process storm inflated co-running
+   `self-suite` (`tests/fork-check.test.py`) from `36.1` seconds (measured on an uncontended
+   fast gate the same hour) to `208.0` seconds and `tillr-docs` from `6.6` seconds to `59.0`
+   seconds. Two causes combined:
+   - **Growth and monolithicity of `tools/tillr-drain`.** On 2026-11-17
+     ([the shard report](../pi/tillr-go-shards-2026-11-17.md)), `tools/tillr-drain` had `1,166`
+     passing test names (`171.24` seconds native, `40.31` seconds under
+     `tools/go-test-shards.py tools/tillr-drain -k 6`). Measured on 2026-11-22 at `4ca1a67aabaf`
+     (`go list -json ./ ./drain` and `go test -list . ./...` in `tools/tillr-drain`), the module
+     holds **`1,877` top-level `Test*` functions across `18` packages**, concentrated in two
+     packages: **`1,503`** in `github.com/mschulkind-oss/tillr-drain/drain` (`238` Go files,
+     `438` test files) and **`356`** in root `github.com/mschulkind-oss/tillr-drain` (`10` CLI
+     Go files, `108` test files, `106` of them in `package main_test` importing `drain` and
+     running `go build` in `TestMain`), leaving `18` tests across the `16` extracted leaf
+     packages. Zero tests in `tools/tillr-drain` call `t.Parallel()`
+     (`rg 't\.Parallel\(' tools/tillr-drain/` at `4ca1a67aabaf` returns nothing), and
+     `newRefusalLoopFixtureWithLanes` in `tools/tillr-drain/drain/stage_refusal_test.go`
+     (reached from `128` test files in `drain`, `passFixture` included) spawns `3 + laneCount`
+     `git` commands (`init`, `add`, `commit`, `worktree add`) plus `store.InitFixture` per
+     test. Because Go's import graph and result cache operate per package, any edit in
+     `tools/tillr-drain/drain` invalidates the cache for all `1,859` tests across `drain` and
+     root `tillr-drain`. Even under the isolated sharded runner
+     (`tools/go-test-shards.py tools/tillr-drain -k 6 --slot-class proof`), the whole
+     `tools/tillr-drain` suite measured **`269` seconds (`4m29s`)** at `f67d0d6654ff` and
+     **`283` seconds (`4m43s`)** at `5882536557c7` on 2026-11-22 (`~1,500` serial test-seconds).
+   - **Execution defects in the unlanded `go-affected` candidate (`724d39051e9e` `[unlanded]`).**
+     It launched `6` raw `go test` shards of `tillr-drain` and `6` of `tillr-drain/drain`
+     concurrently without pre-warming `GOCACHE` (`12` simultaneous cold compilations and links), passed `-parallel 48` without `go-test-shards.py`'s isolated
+     environment, process-group guard (`D-GR17`), or scrubbing of dynamic gate variables
+     (`TILLR_RUN_ID`, `TILLR_LOOP_STORE`, `TILLR_TRACE_DIR`, causing `TestHookCompletion*`,
+     `TestNonLandingLoopStartsWithoutGit`, and `TestRecordedVerdictExampleREADME` to fail on
+     leaked environment), and sliced tests by modulo index (`idx % 6`, placing `217.7` seconds
+     into one `drain` shard) against a `tools/go-test-durations.json` that at `4ca1a67aabaf`
+     lists `382` of `drain`'s `1,503` tests (missing `1,121`) and `275` of root `tillr-drain`'s
+     `356` tests (missing `81`).
+2. **A `5.2`-second documentation gate waited `158.2` seconds (`~150` seconds idle on `lane-4`)
+   behind the `302.5`-second gate.** Steady-state landing gates do **not** share a global gate
+   lock: while `lane-3` ran its `302.5`-second gate (`03:32:35`–`03:37:37` Eastern), `lane-5`
+   entered examination at `03:34:12.5`, ran its own `44.9`-second fast gate concurrently
+   (`03:34:48`–`03:35:33.3`), and landed `5882536557c7` at `03:35:33`. Instead, two concrete
+   couplings serialize a fast landing behind a slow one:
+   - **Coupling 1 — Pending drain-restart settlement freeze (`tools/tillr-drain/drain/`).**
+     Commit `5882536557c7` edited `tools/tillr-drain/drain/`, so its post-landing roll filed
+     `drain.restart-request` (`role = "drain"`) at `03:36:02.635` Eastern. Candidate
+     `55b8d6f67b` (`docs/design/tillr-watch.md`, authored `03:35:19`) finished its worker on
+     `lane-4` at `03:35:44.341` and settled its candidate at `03:36:17.690` (`25.4` seconds
+     under CPU contention). At `03:36:17.217`, `claimSettledCandidateJudge` in
+     [`settle_judge.go`](../../tools/tillr-drain/drain/settle_judge.go) checked
+     `l.buildRestartPending(ctx)`, saw `true`, and declined inline `ActionJudge`. Subsequent
+     passes (`03:36:18`, `03:37:18`) could neither `syscall.Exec` (`gateRestart` in
+     [`restart.go`](../../tools/tillr-drain/drain/restart.go) failed
+     `l.restartMechanical.TryLock()` because `lane-3`'s `verify` in
+     [`loop.go`](../../tools/tillr-drain/drain/loop.go) held `lockRestartSettlement` /
+     `restartMechanical.RLock()` across the whole `302.5`-second `Steps.Gate`) nor admit
+     `lane-4`'s `5.2`-second gate (`lockRestartStep` in
+     [`restart_work.go`](../../tools/tillr-drain/drain/restart_work.go) returns
+     `errRestartPending` whenever `settling == true` and `buildRestartPending` is true, even
+     when `restartDefersToSettlement()` is already true). Only after `lane-3` released
+     `restartMechanical.RLock()` at `03:37:44.653` did `tillr-drain` `exec` (`03:37:47.213`),
+     run startup maintenance (`28.6` seconds), and gate + land `55b8d6f67b` in `5.2 + 0.35`
+     seconds (`03:38:16.8`–`03:38:22.5` Eastern, `158.2` seconds after `run.finish`). Because
+     `tools/tillr-drain/` changes land frequently, every slow gate turns the next post-landing
+     roll into a multi-minute admission freeze for all other landings.
+   - **Coupling 2 — Shared `proof` test-slot pool (`tools/go-test-shards.py`).** On this
+     32-core machine, `default_shard_limit()` is `16` `ordinary` slots and
+     `default_proof_shard_limit()` is `6` `proof` slots (`22` total, `TESTS_PER_SLOT = 1`).
+     Both the background after-merge `trunk-proof` and pre-landing gates request
+     `--slot-class proof`. When `trunk-proof` (`tillr-drain -k 6` + `tillr-view -k 6`) or one
+     wide `go-affected` gate occupies all `6` `proof-*` slots alongside busy `ordinary` slots,
+     a second landing gate that needs Go test slots queues behind multi-minute suites.
+
+**Why no single lever suffices.** Dropping `go-affected` violates `D-GR38` and reopens the
+pre-merge Go test misses of [Section 6.10](#610-what-passed-the-fast-gate-and-failed-the-heavy-run).
+Sharding alone (`~110–140` seconds at `8` clean slots for `1,859` serial tests) still holds
+sibling landings past `60` seconds during a pending restart and keeps firing
+`fast-gate-run-slow`. Concurrent gates alone stop one gate from blocking another, while leaving
+every `drain` edit's own gate at `2–4` minutes and `~1,500` CPU-seconds. All three mechanisms
+below are therefore decided together (`D-GR43`, the designer's, subject to owner overturn):
+
+1. **Decouple landing gates from `tillr-drain` restart quiescence and `proof` slot contention
+   (holds sibling gate delay well under 60 seconds — `< 10–15` seconds target).**
+   - **Detached, reattachable `ProcessSteps.Gate` across `syscall.Exec`:** `ProcessSteps.Gate`
+     starts the gate wrapper in its own detached session/process group writing a durable
+     gate-face metadata and completion record alongside `gate.verdict.json`, `gate.spans.jsonl`
+     and `gate.timing.jsonl` in `RunDir(s.Root, candidate.RunID)`, analogous to detached worker
+     runs (`ProcessSteps.Run` in `steps.go` and `awaitJudgeRecord` in `restart_judge.go`). While
+     awaiting a detached gate subprocess, `verify` releases `restartMechanical` via
+     `restartWork` (keeping `lockRestartSettlement` only around the sub-second pre-gate claim,
+     post-gate judgment recording, and `Steps.Land`, and keeping `lockRestartSettlement` across
+     `Gate` only for in-process test `Steps` stubs that spawn no OS process, preserving
+     `TestPendingRestartLetsWorkerStartWhileSettlementDrains` in `restart_test.go`).
+     `releaseRestartExaminations` in `restart_examination.go` keeps the candidate's lane leased
+     while its detached gate face is live, and the replacement loop reclaims the examination and
+     awaits the existing gate subprocess rather than re-running it. In addition, whenever
+     `restartDefersToSettlement()` is already true (an in-flight mechanical settlement is
+     already holding `restartMechanical`), neither `claimSettledCandidateJudge` nor
+     `lockRestartSettlement` refuses a ready non-Go or fast gate that does not lengthen
+     quiescence. Result: a pending `drain.restart-request` replaces `tillr-drain` in seconds
+     without waiting for a multi-minute gate, and a `5`-second documentation gate starts and
+     lands with **`0` seconds** of behind-gate restart freeze.
+   - **Dedicated `gate` slot class (`gate > proof > ordinary`) and per-gate slot cap in
+     `tools/go-test-shards.py`:** Add `SLOT_CLASS_GATE = "gate"` above `proof` and `ordinary`,
+     keeping the same `22`-slot machine ceiling on 32 cores (`D-GR20`) partitioned as `12`
+     `ordinary` (`slot-0..11`), `4` `proof` (`proof-0..3`), and `6` `gate` (`gate-0..5`) slots.
+     Waiting `gate` callers hold `gate-waiting.lock` and preempt freed `slot-*` (and `proof-*`)
+     slots ahead of both `proof` and `ordinary`; `proof` preempts `ordinary` only when no `gate`
+     caller is waiting. Any single landing gate (`go-affected` or `gate-runner`) caps its total
+     concurrent slots at `8` across all packages in that gate and holds at most `4` of the `6`
+     reserved `gate-*` slots whenever another `gate` caller is waiting (or unconditionally caps
+     its reserved `gate-*` share at `4`), leaving at least `2` `gate-*` slots free for a second
+     concurrent Go landing gate. Because `TESTS_PER_SLOT = 1` and single Go tests finish in a
+     median of `< 1` second (`~5–8` seconds p99), a sibling non-Go gate waits **`0` seconds**
+     for slots and a sibling Go gate acquires at least `2` slots immediately (`0` seconds) and
+     additional freed slots within **`~1–10` seconds** — never waiting behind `trunk-proof` or a
+     whole `drain` suite.
+2. **Shard uncached `go-affected` packages with one warm compile, cache-preserving isolation,
+   and LPT duration balance (amending `D-GR39` and `D-GR40`).**
+   - **Warm compilation once, keep `go test` result caching on:** Before launching shards for a
+     package with more than one shard's worth of tests, run one `go test -trimpath -run '^$'`
+     warm-up under the exact shard environment (leaving packages already warm or single-shard to
+     one invocation). Unlike `go test -c` (which never consults or writes Go's result cache),
+     shard invocations run `go test -trimpath -json -parallel 1 -timeout 0 -run <regex>` with
+     no `-count=1` (`D-GR40`), hitting the warmed `GOCACHE` build once instead of compiling a
+     `676`-file package `K` times concurrently.
+   - **Cross-worktree Go test-result cache (`D-GR40`) verified by measurement:** Measured on
+     2026-11-22 at `4ca1a67aabaf` across two separate copies of `tools/tillr-cli` and its local
+     `replace` modules: Go's `internal/testlog` records every `os.Getenv` value read by the test
+     process (including `TMPDIR` inside `t.TempDir()` and `GIT_CONFIG_GLOBAL` inside
+     `t.Setenv("GIT_CONFIG_GLOBAL", ...)`). Per-shard random temporary paths in those variables
+     therefore defeat 100 percent of Go's result cache across runs, whereas `-trimpath` plus a
+     deterministic shared directory under `shared_cache_dir()` (never `/tmp`, which the
+     repository forbids for test scratch) for `TMPDIR` and the durable scratch variable (where
+     `t.TempDir()` and `os.MkdirTemp` allocate unique per-test subdirectories), a content-hashed
+     read-only (`0444`) global Git config snapshot `<shared-cache>/go-affected-env/gitconfig-<sha256>`,
+     and scrubbing per-run gate variables (`TILLR_RUN_ID`, `TILLR_LOOP_STORE`, `TILLR_TRACE_DIR`,
+     `TILLR_GATE_SPANS_OUT`, `TILLR_FAST_VERDICT_OUT`, `TILLR_ORDINARY_GATE_TIMING`,
+     `TILLR_FORK_DRIFT`) produced an immediate `(cached)` hit in the second worktree. This
+     resolves Section 6.12's previously unverified cross-worktree cache question. Every shard
+     runs under `go-test-shards.py`'s process-group lifeline guard (`D-GR17`) and `--slot-class
+     gate`.
+   - **LPT balance over refreshed durations:** Refresh `tools/go-test-durations.json` across all
+     `1,877` `tillr-drain` tests and partition uncached large packages (> `15` seconds estimated
+     serial cost and >= `8` tests; single-call `go test` first checks whether the whole package
+     is already `(cached)` when its inputs match, or shards directly via deterministic LPT regex
+     buckets whose individual shard results Go caches identically across lanes).
+3. **Split `tools/tillr-drain` root `main_test` and extract cohesive domain subpackages +
+   snapshot fixtures so a `drain` edit's own gate drops into `~20–40` seconds.**
+   - **Slim root `package main_test` (`356` tests -> `~15–25` CLI face tests):** Keep only CLI
+     flag, subcommand wiring, and exit-code contract tests in root `tools/tillr-drain`; move
+     subsystem integration tests (`106` external test files today) beside the packages they
+     exercise so an internal `drain` edit stops rebuilding the `tillr-drain` binary in
+     `TestMain` and running `356` subprocess tests.
+   - **Template snapshot in `newRefusalLoopFixtureWithLanes`:** Build the base Git repository,
+     initial commit, lane worktree template, and migrated SQLite `board.sqlite3` once per test
+     process (`sync.Once`) and materialize each test's fixture by fast file/tree copy rather
+     than spawning `4+` `git` subprocesses and full DDL migration `1,500` times.
+   - **Extract bounded domain subpackages out of `tools/tillr-drain/drain`:** Following the
+     existing leaf packages (`alarms`, `holdrules`, `lanestate`, `obstacles`, `presence`,
+     `redcap`, `restart`, `spend`), extract self-contained subsystems and their tests into
+     subpackages of `tools/tillr-drain`: `heavy` / proof orchestration and attribution (`15`
+     production and `38` test files today), `workflow` graph/proposal validation and expansion
+     (`9` production and `20` test files), `fixer` and trunk acquittal (`14` production and `19`
+     test files), and `remotesync` / `fork` drift and rebase (`9` production and `14` test
+     files), leaving `drain` as the thin pass/settlement coordinator. Go's package import graph
+     and result cache then keep a change in an extracted package (`workflow`, `heavy`, `fixer`,
+     `remotesync`) to that package (`~40–200` tests, `~3–15` seconds sharded) plus the slimmed
+     `drain` coordinator (`~250–350` tests, `~15–25` seconds across `8` slots with templated
+     fixtures), while the after-merge heavy proof continues running the entire
+     `tools/tillr-drain/...` suite fresh.
+
+**Measured cost of the choice (and interim behavior across slices).**
+
+| Stage | Sibling non-Go gate wait behind a `drain` gate | Sibling Go gate slot wait behind a `drain` gate + `trunk-proof` | Uncached `drain`-change `go-affected` wall time (`8` `gate` slots) | Co-running `self-suite` / `tillr-docs` inflation | Meets `< 60s` sibling hold? | Meets `~40s` `D-GR38` / `< 60s` `fast-gate-run-slow` on `drain` edits? |
+| :--- | ---: | ---: | ---: | :--- | :--- | :--- |
+| Incident baseline (`724d39051e9e` `[unlanded]`, 2026-11-22) | `158.2s` (`lane-4` frozen on pending restart) | Unbounded behind shared `proof` pool | `272.0s` (`drain` `217.7s`; `302.5s` whole gate) | `5.8x–8.9x` (`208.0s` / `59.0s`) | No (`158.2s > 60s`) | No (`302.5s > 60s`) |
+| Sharding + env fix alone (Slice C without Slices A–B) | Still up to `110–170s` whenever a `drain` roll is pending | Queues behind `269–283s` `trunk-proof` on `proof` slots | `~110–140s` (`~1,000–1,100s` clean serial / `8` + `~8s` warm build) | Eliminated (`TESTS_PER_SLOT = 1`, `~36s` / `~7s`) | No | No |
+| After Slices A + B + C (before `drain` package split) | **`0s`** behind sibling gate (detached gate across `exec`) | **`0s`** for first `2` `gate` slots; **`~1–10s`** for more (`<< 60s`) | `~110–140s` uncached; `< 3s` on warm cross-lane cache hit | Eliminated | **Yes (`< 10–15s`)** | Interim no (`fast-gate-run-slow` continues reporting `drain` runs > `60s`, as `D-GR38` monitoring requires) |
+| Full design (Slices A–E landed) | **`0s`** | **`0s`–`5s`** | **`~20–40s`** (`~3–15s` changed subpackage + `~15–25s` slimmed `drain` + cached unaffected subpackages) | Eliminated | **Yes (`< 10s`)** | **Yes (`~20–40s`, below `40s` target and `60s` alert)** |
+
+Neither the `60`-second `fast-gate-run-slow` threshold (`D-TW52`) nor the `90`-second
+`fast-gate-median-slow` threshold (`D-TW43`) is raised during the interim between Slice C and
+Slices D–E: `D-GR38` conditioned pre-merge Go tests on visible performance monitoring, and under
+`D-GR15` an overrun alerts without refusing the candidate. Only the owner may waive pre-merge Go
+tests or move those monitoring lines; nothing here assumes either.
+
+| Alternative | Verdict |
+| :--- | :--- |
+| Drop `go-affected` or defer `drain` tests back to after-merge heavy proof | Rejected. Violates `D-GR38` and restores the `13` heavy misses (`9` Go, `4` in `drain` and `3` in `view`) measured in [Section 6.10](#610-what-passed-the-fast-gate-and-failed-the-heavy-run). |
+| Sharding `go-affected` alone (`-k 6` or `-k 12`) without decoupling restart admission or splitting `drain` | Rejected. Even cleanly isolated, `1,859` serial tests take `269–283s` at `-k 6` and `~110–140s` at `8` slots, still freezing sibling gates across every pending `tillr-drain` restart and firing `fast-gate-run-slow` on every `drain` edit. |
+| Concurrent gates alone without splitting `drain` or isolating shards | Rejected. Stops sibling blocking, leaves every `drain` landing burning `~1,500` CPU-seconds over `2–5` minutes and starving test slots. |
+| Add `t.Parallel()` across existing `drain` tests instead of splitting packages | Rejected. `128` test files mutate process-wide `GIT_CONFIG_GLOBAL` via `t.Setenv` (which Go panics on alongside `t.Parallel()`), and intra-process parallelism bypasses the machine-wide `TESTS_PER_SLOT = 1` slot bound (`D-GR20`). |
+| Raise `fast-gate-run-slow` above `60` seconds or add a `60`-second kill/carry timeout on `go-affected` | Rejected. Raising the alert hides the exact signal `D-GR38` asked for; killing or carrying a progressing check violates `D-GR15`. |
+
 ## 7. Checked against the landing principles
 
 | Principle | How this design meets it |
@@ -3212,7 +3427,11 @@ decision of 2026-11-22, answering a build worker's report on the operator reques
 (`D17` to `D33` in `tools/tillr-drain`); it removes `L3` and `tools/tillr-land` from rows `1d`
 and `2c`, pairs the file-level Go unmoved lists with a function-keyed `go/ast` drain scan test
 for the five files shared with slice 1c, names the protocols and direct vs downstream sites of
-`D17` to `D33` so no outcome changes, and is the owner's to overturn.
+`D17` to `D33` so no outcome changes, and is the owner's to overturn. `D-GR43` is the designer's
+decision of 2026-11-22, from the operator request on the 272-second `go-affected` run and the
+158-second sibling-gate wait; it keeps `D-GR38`, `D-GR2`, `D-GR15` and `D-GR17` intact, amends
+`D-GR39` and `D-GR40`, specifies five unfiled build slices in Section 11, and is the owner's to
+overturn.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
@@ -3261,6 +3480,7 @@ for the five files shared with slice 1c, names the protocols and direct vs downs
 | `D-GR40` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** It amends `D-GR39` to match the operator request of 2026-11-21, whose words are "runs go test on the selected packages with Go's test cache left on (no -count=1)". The one exception `D-GR39` made is withdrawn: no package the affected-packages check selects is run with `-count=1`, whatever the reason it was selected. The stale pass that exception guarded against is stopped another way. The check passes each test package that has an entry in the edges file a digest of that entry's inputs in an environment variable, the package's tests read the variable, and Go's result cache then reruns the package when the digest changes and answers from the cache when it does not. The timing record no longer holds a `-count=1` field. Every other part of `D-GR39` stands. **Rejected:** `-count=1` for packages selected only through a declared edge (`D-GR39`'s exception; the request excludes it); the cache on for those packages with their inputs left invisible to it (a pass from before the change); the drain's symlink alias copied into every module with an edge (it covers Go sources only, and a second copy of it per module). | 2026-11-22 | [The result cache stays on for every affected package](#the-result-cache-stays-on-for-every-affected-package) | — (not built) |
 | `D-GR41` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** Answers a build worker's report on the operator request for "Slice 2 of the flaky-check rule" at `0450fedb34`, where only slices 1a (`020cf29eca`) and 1e (`0bcc3275a2`) have landed. Records the owner's second 2026-11-21 statement in `D-GR21`. Reconciles "at that observation ... before any other work" with `D-GR23`: `tillr-gate` atomically writes the `disabled/` marker and copies both logs at the contradicting observation before printing or returning, and `tillr-drain`'s marker sweep (slice 2b) files `flaky-<check-id>` at pass start and immediately when every gate, replay, rolling or heavy step returns, before attribution, pending reverts or dispatch. Splits live `disabled` emission in `tillr-gate run` / `tillr-gate checks` (`G2`, `G3`, `G4`, `G7`) and the Python store-backed adapters (`P4` to `P6`) into slice 2d (after 1b, a proved trunk commit holding 2a, 2b, 2c and 3a), so live runs never emit `disabled` before consumers accept it and the sweep can file its repair item. Under [`OQ-SP1`](./tillr-item-split.md#OQ-SP1) and `D-GR5`, narrows this request's landing to slice 2a: rules 1 to 3 in `tools/tillr/checkresult`; store-backed `--repo` / `--store` / `--prove-disabled` on `tillr-gate classify` (exact `<id>`, `<id>:<label>` and `<id>/<slug(label)>` selector resolution, committed-declaration fingerprinting, optional per-unit `fingerprint`, pre-run query, marker + log-copy write, while plain `tillr-gate classify` stays pure); `tillr-gate enable` with episode matching, `enabled/` fence and `resolved/` archive; `log_ref` on stored records; tests and `just pack-sync` mirror; taking only those store mechanics from `refs/tillr/runs/run-item-request-c1a6f8e4e5-a14-n5` `[unlanded]`. Slices 1b–1d, 1f, 1g, 2b–2d, 3a and 3b are named unmet cases listed in the candidate's commit message, and a verifier does not refuse slice 2a for them. **Rejected:** building all remaining slices in one commit; emitting `disabled` from live runner faces before 2b, 2c and 3a; opening the SQLite queue in `tillr-gate`; touching the repo or store on plain `tillr-gate classify` with no flag; taking `TILLR_DISABLED_OBSERVATIONS` or raw string checks from the donor ref. | 2026-11-22 | [The second flaky-check request lands the rule in the classifier and its gate faces](#the-second-flaky-check-request-lands-the-rule-in-the-classifier-and-its-gate-faces) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
 | `D-GR42` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** Answers a build worker's report (`55b8d6f67b`) on the operator request for slice 1d ("route the tillr-drain sites D17 to D33 through the shared classify function"). Removes `L3` and `tools/tillr-land` (added in error by `d9a021ee61`) from rows `1d` and `2c`: `L3` is `compose_verdict` in `tools/tillr-loop` (already in slice 1e and excluded from `Classify` by `D-GR23` as a settlement), and the 70-site inventory defines no `tools/tillr-land` site. Removes slice 1d's 11 unshared drain files from `UNMOVED_GO` (`tools/gate/classification-scan.test.py`) and `unmovedGoFiles` (`tools/tillr-gate/classification_scan_test.go`), and adds function-keyed `tools/tillr-drain/drain/classification_scan_test.go` so all `D17`–`D33` functions (including those in the 5 files shared with unlanded slice 1c) are in `scannedDrainSites` and absent from `unmovedDrainSites`. Applies `D-GR28` by adding `BinaryProgram`, `LegacySpan`, `TriageSpan`, `FocusedGoTest`, `HeavyCheckWord` and `HeavyOrder` in `tools/tillr/checkresult`, and distinguishes the 12 direct per-check sites in `D17`–`D33` from the downstream settle/run-cache/telemetry functions (`D18`, `readRollingCoverage`, `readGateSpans`, `D25`, `D29`, `D32`, `D33`) that hold no raw check-result comparison in Group 1 and gain `disabled` behavior in slices `2c` and `3a`. Slice 1d writes only `tools/tillr/checkresult/`, `tools/tillr-drain/`, the Go scan tables in `tools/gate/classification-scan.test.py` and `tools/tillr-gate/classification_scan_test.go`, and their `just pack-sync` mirrors under `yolo-packs/tillr/`. **Rejected:** keeping `L3` or `tools/tillr-land` in slice 1d; relying on file-level Go unmoved lists alone across the 5 shared 1c/1d files; forcing `D19`, `D21`, `D22` and `D23` onto `JudgingProgram` / `ResultWord` with outcome changes; adding dummy `Classify` calls on booleans, telemetry rows or run-level settlements. | 2026-11-22 | [Slice 1d routes the drain's rolling, heavy and proof classifiers, with a function-keyed Go scan test](#slice-1d-routes-the-drains-rolling-heavy-and-proof-classifiers-with-a-function-keyed-go-scan-test) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
+| `D-GR43` | **Not the owner's ruling; the designer's decision, from an operator request of 2026-11-22, which the owner may overturn.** Reconciles pre-merge affected Go tests (`D-GR38`, `D-GR39`, `D-GR40`) with independent non-blocking lane landings (`D-GR2`) after two 2026-11-22 measurements: `go-affected` took `272.0s` (`drain` `217.7s`, whole gate `302.5s`) on `724d39051e9e` `[unlanded]` across `1,859` serial tests in `drain` (`1,503`) and root `tillr-drain` (`356`), and `55b8d6f67b`'s `5.2s` docs gate waited `158.2s` (`~150s` idle on `lane-4`) because `claimSettledCandidateJudge` and `lockRestartSettlement` froze new gate admissions behind a pending `drain.restart-request` while `lane-3`'s `Steps.Gate` held `restartMechanical.RLock()`. Decides three coordinated mechanisms in five unfiled slices (Slices A–E): (1) run `ProcessSteps.Gate` as a detached, reattachable subprocess across `syscall.Exec` (`restartWork` + durable gate record in `RunDir` + lane-lease preservation in `releaseRestartExaminations`, plus non-blocking sibling gate admission when `restartDefersToSettlement()` already holds) and split `--slot-class gate` (`gate > proof > ordinary`, `6` `gate` + `4` `proof` + `12` `ordinary` = `22` slots on 32 cores, per-gate cap `8` and max `4` reserved `gate-*` per gate so >= `2` `gate-*` slots stay free), cutting sibling gate hold from `158.2s` to **`0s`** (non-Go) and **`0–10s`** (Go, `<< 60s`); (2) pre-warm compilation once (`go test -trimpath -run '^$'`), keep Go's result cache active across worktrees via deterministic shared scratch under `shared_cache_dir()` (never `/tmp`), content-hashed `0444` `GIT_CONFIG_GLOBAL` and scrubbed dynamic `TILLR_*` env (verified 2026-11-22), and balance shards by LPT over refreshed `tools/go-test-durations.json` (`272s -> ~110–140s` uncached whole-`drain`, co-running check inflation eliminated); (3) slim `tools/tillr-drain` root `package main_test`, snapshot-copy base Git + SQLite fixtures in `newRefusalLoopFixtureWithLanes`, and extract bounded `drain` subpackages (`heavy`, `workflow`, `fixer`, `remotesync`) so an ordinary `drain` change gates in **`~20–40s`** (`< 40s` `D-GR38` target and `< 60s` `fast-gate-run-slow` alert). **Rejected:** dropping `go-affected`; sharding alone; concurrent gates alone; `t.Parallel()` across `t.Setenv` fixtures; raising `fast-gate-run-slow` or adding a kill/carry timeout. | 2026-11-22 | [Keeping affected drain tests before landing without holding other landings](#keeping-affected-drain-tests-before-landing-without-holding-other-landings) | — (not built; [build order](#run-affected-go-tests-without-holding-sibling-landings)) |
 
 ### The result cache stays on for every affected package
 
@@ -3351,8 +3571,9 @@ every slice below has landed.
 Three more slices were filed on 2026-11-17 from the owner's ruling
 [`D-GR15`](#decision-ledger) and the measurements beside it in
 [Section 6.5](#65-ten-seconds-is-a-failing-test); they are the last three filed slices below.
-Two units after them are written and not filed: the single check-result classifier
-(`D-GR23`, 2026-11-21) and the drift probe.
+Three units after them are written and not filed: the single check-result classifier
+(`D-GR23`, 2026-11-21), non-blocking landing gates and bounded `drain` affected-test runtime
+(`D-GR43`, 2026-11-22), and the drift probe.
 
 ### The runner reads one file per check
 
@@ -3759,3 +3980,50 @@ same files.
   release the series does not merge, and check that both tiers stay green and the probe goes
   red. Add drain tests that use a stub probe and check the filing, the deduplication, the
   untouched green pointer and the two run times. Run `go test ./...` in `tools/tillr-drain`.
+
+### Run affected Go tests without holding sibling landings
+
+The mechanism of [`D-GR43`](#decision-ledger)
+([Section 6.12](#keeping-affected-drain-tests-before-landing-without-holding-other-landings), the
+designer's decision of 2026-11-22, which the owner may overturn) is built in five small slices
+under [`OQ-SP1`](./tillr-item-split.md#OQ-SP1). Slices A and B decouple landing gates from
+`tillr-drain` restarts and `proof` slot exhaustion so no item's landing gate is held behind
+another gate for more than 60 seconds (`0` seconds for non-Go gates; `< 10–15` seconds for
+concurrent Go gates). Slice C repairs and lands `go-affected` with single-build warm-up,
+cross-worktree cache-preserving isolation, and LPT duration balance. Slices D and E shrink the
+affected Go test packages for an ordinary `tools/tillr-drain` edit from `1,859` serial tests
+(`~110–140` seconds uncached at `8` slots) into `~20–40` seconds, inside both the ~40-second
+figure of `D-GR38` and the 60-second `fast-gate-run-slow` alert line.
+
+**Not yet filed.** On the owner's ruling of 2026-11-18, no document gains a new item directive,
+and this design files nothing itself. Slices A, B and D have no prerequisite among the five and
+may start in parallel. Slice C needs Slice B proved green on the trunk (`D-GR24`, `D-GR5`) if it
+passes `--slot-class gate` unconditionally, or falls back to `proof` only when invoked against an
+older runner in tests; landing Slice A and Slice B before Slice C ensures `go-affected` enters
+production only after sibling landing gates are already non-blocking. Slice E follows Slice D so
+extracted subpackages adopt the slimmed root `main_test` boundary and snapshot fixture helper.
+Every slice whose paths touch `tools/tillr*` runs `just pack-sync` and commits the regenerated
+`yolo-packs/tillr/` mirror in the same commit.
+
+| Slice | What it builds | Prerequisites | Paths and what it needs | Verified alone by |
+| :--- | :--- | :--- | :--- | :--- |
+| A | **Decouple `ProcessSteps.Gate` from `tillr-drain` restart quiescence.** Run `ProcessSteps.Gate` in a detached, guarded child session writing durable live-face and completion metadata alongside `gate.verdict.json`, `gate.spans.jsonl` and `gate.timing.jsonl` in `RunDir(s.Root, candidate.RunID)`; release `restartMechanical` via `restartWork` while awaiting a detached gate (keeping `lockRestartSettlement` for pre-gate claim, post-gate store judgment, `Steps.Land`, and non-detached in-process test `Steps`); keep the candidate's lane leased in `releaseRestartExaminations` while its detached gate face is live and reattach in the successor loop without re-running the gate; allow sibling fast-gate admission in `claimSettledCandidateJudge` and `lockRestartSettlement` when `restartDefersToSettlement()` already holds | none | `tools/tillr-drain/drain/{steps.go,loop.go,restart_work.go,restart.go,restart_examination.go,settle_judge.go}`, `docs/reference/tillr-restart.md`, and `yolo-packs/tillr/` via `just pack-sync` | Targeted tests in `tools/tillr-drain/drain`: (1) while lane-1 blocks in a detached `ProcessSteps.Gate` and a `drain.restart-request` is filed, `gateRestart` replaces the loop, the detached gate survives `exec`, and the successor loop settles its verdict and lands without re-running the gate; (2) a ready `5s` sibling candidate on lane-2 gates and lands without waiting behind lane-1's blocked gate or a pending restart; (3) existing `TestPendingRestartLetsWorkerStartWhileSettlementDrains` passes unchanged |
+| B | **Add `--slot-class gate` (`gate > proof > ordinary`) and per-gate slot bounds.** Partition the 22-slot ceiling on 32 cores (`D-GR20`) into `12` `ordinary` (`slot-*`), `4` `proof` (`proof-*`) and `6` `gate` (`gate-*`) locks; add `gate-waiting.lock` so waiting `gate` callers preempt freed slots ahead of `proof` and `ordinary`; cap any single gate invocation's simultaneous slots (`--max-slots`, default `8`) and its simultaneous reserved `gate-*` locks (`4`), leaving at least `2` `gate-*` slots immediately available for a second concurrent Go landing gate; move landing-tier `gate-runner` in `tools/fork-check.py` from `--slot-class proof` to `--slot-class gate` | none | `tools/go-test-shards.py`, `tests/go-test-shards.test.py`, `tools/fork-check.py`, `tests/fork-check.test.py` | Unit tests in `tests/go-test-shards.test.py` and `tests/fork-check.test.py`: when all `ordinary` and `proof` slots are held by `trunk-proof` and workers and one `gate` run holds its cap (`4` `gate-*` + `4` `slot-*`), a second `gate` run immediately acquires `2` free `gate-*` slots without entering the wait loop and preempts the next freed `slot-*` ahead of waiting `proof` and `ordinary` callers; queue wait stays excluded from watchdog stall time; no test asserts wall-clock elapsed time |
+| C | **Land cache-preserving, isolated, LPT-sharded `go-affected` (`D-GR39`, `D-GR40`, `D-GR43`).** Implement `go-affected` in `tools/gate/go_affected.py` and `tools/fork-check.py` with `tools/gate/go-test-edges.json` and `TILLR_GATE_EDGE_INPUTS` reads in edge-package `TestMain`s; refresh `tools/go-test-durations.json` across all `1,877` `tillr-drain` tests; warm each uncached multi-shard package once (`go test -trimpath -run '^$'`), then run LPT-balanced shard regexes via `go test -trimpath -json -parallel 1 -timeout 0` (no `-count=1`) under `--slot-class gate` (cap `8`), process-group lifeline guard (`D-GR17`), deterministic shared scratch under `shared_cache_dir()` (never `/tmp`), content-hashed `0444` `GIT_CONFIG_GLOBAL`, and scrubbed dynamic `TILLR_*` gate env; record selection time, slot wait, per-package reason, elapsed time and cached flag (`D-GR30`, `D-GR40`) | Slices A and B proved green on the trunk (`D-GR24`) so `go-affected` lands with non-blocking sibling gates and `--slot-class gate` active | `tools/gate/go_affected.py`, `tools/gate/go-test-edges.json`, `tools/fork-check.py`, `tools/go-test-durations.json`, `tests/go-affected.test.py`, `tests/fork-check.test.py`, `TestMain` / `edge_inputs_test.go` in edge-listed `tools/tillr-*` packages, and `yolo-packs/tillr/` via `just pack-sync` | `python3 tests/go-affected.test.py`: (1) import-graph, `builds`/`reads` edge-digest, and floor selection; (2) edges scan test and `TILLR_GATE_EDGE_INPUTS` invalidation + repeat `(cached)` hit; (3) cross-worktree `(cached)` reuse across two worktree paths under `-trimpath` and deterministic env; (4) scrubbed `TILLR_*` env and single compile warm-up; commit body records measured `drain` and sibling gate wall times |
+| D | **Slim `tools/tillr-drain` root `package main_test` and snapshot-copy `drain` fixtures.** Move non-CLI subsystem integration tests out of root `tools/tillr-drain` (`106` external test files, `356` tests) into the packages they test, keeping only CLI flag, subcommand wiring and exit-code face tests (`~15–25` tests, `< 5s`) in root `main_test`; build a `sync.Once` template of the base Git repo, initial commit, lane worktree skeleton and `store.InitFixture` SQLite database in `newRefusalLoopFixtureWithLanes` (`tools/tillr-drain/drain/stage_refusal_test.go`) and clone per test by file copy | none | `tools/tillr-drain/*.go`, `tools/tillr-drain/drain/*_test.go` (and existing subpackages where moved tests belong), `tools/go-test-durations.json`, and `yolo-packs/tillr/` via `just pack-sync` | Targeted runs of moved tests and CLI face tests in `tools/tillr-drain`, plus a parity check that the union of `go test -list . ./...` test names in `tools/tillr-drain` drops zero tests; commit body records before/after serial and 8-slot wall time on root `tillr-drain` and `drain` |
+| E | **Extract bounded domain subpackages from `tools/tillr-drain/drain`.** Move cohesive `drain` subsystems and their tests into Go subpackages under `tools/tillr-drain/` — `heavy` proof orchestration and culprit attribution, `workflow` graph/proposal validation and expansion, `fixer` and trunk acquittal, and `remotesync` / fork rebase — leaving `drain` as the pass/settlement coordinator so Go's import graph and test cache narrow an ordinary subpackage or coordinator edit to `< 40` seconds (`< 60` seconds `fast-gate-run-slow` threshold) | Slice D (may land as one subpackage per commit under [`OQ-SP1`](./tillr-item-split.md#OQ-SP1) in the order `workflow`, `remotesync`, `fixer`, `heavy`) | `tools/tillr-drain/{drain,heavy,workflow,fixer,remotesync}/`, `tools/gate/go-test-edges.json` if any sibling `go build` test moves, `tools/go-test-durations.json`, and `yolo-packs/tillr/` via `just pack-sync` | Targeted subpackage and `drain` tests per extraction, `go test -list . ./...` name-preservation check across `tools/tillr-drain`, and recorded `go-affected` timing showing an edit in each extracted package and an edit in `drain` each complete under `40` seconds on `8` `gate` slots while `trunk-proof` still runs all `tools/tillr-drain/...` packages |
+
+**Outcomes:**
+
+- Run affected Go test packages before landing (`D-GR38`, `D-GR39`, `D-GR40`) without holding
+  any other item's landing gate behind a `drain` gate for more than 60 seconds (`0s` restart
+  freeze; `0–10s` `gate` slot wait).
+- Preserve Go's test-result cache across lane worktrees while isolating Git config, scratch and
+  gate environment variables and compiling each uncached package once.
+- Shrink an ordinary `tools/tillr-drain` change's own pre-merge affected test run from `272`
+  seconds (`1,859` monolithic serial tests) into `~20–40` seconds, inside both the ~40-second
+  target of `D-GR38` and the 60-second `fast-gate-run-slow` alert threshold.
+- **Forbidden in every slice:** adding `-count=1` to `go-affected` (`D-GR40`); adding a kill or
+  carry deadline to `go-affected` (`D-GR15`); raising `fast-gate-run-slow` (`60s`) or
+  `fast-gate-median-slow` (`90s`) to silence slow runs; writing test scratch under `/tmp`;
+  leaving detached gate or test-shard processes unguarded on crash or stop (`D-GR17`).
