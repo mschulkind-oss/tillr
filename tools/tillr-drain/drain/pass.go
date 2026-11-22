@@ -1673,13 +1673,18 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 	var reason, waitingOn string
 	if isDispatch(p.decision) {
 		defer func() {
-			if ok {
+			if ok || (applyErr == nil && reason == "") {
 				return
 			}
 			if applyErr != nil {
-				l.logDispatchDecline(p.decision, applyErr.Error())
-			} else if reason != "" {
-				applyErr = l.recordDispatchDecline(ctx, p.decision, at, reason, waitingOn)
+				reason, waitingOn = applyErr.Error(), ""
+			}
+			if err := l.recordDispatchDecline(ctx, p.decision, at, reason, waitingOn); err != nil {
+				if applyErr == nil {
+					applyErr = err
+				} else {
+					applyErr = errors.Join(applyErr, fmt.Errorf("recording dispatch decline: %w", err))
+				}
 			}
 		}()
 	}

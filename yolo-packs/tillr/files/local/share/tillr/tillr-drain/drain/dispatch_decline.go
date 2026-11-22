@@ -2,7 +2,6 @@ package drain
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"time"
 
@@ -29,41 +28,25 @@ type dispatchDecline struct {
 
 func isDispatch(d Decision) bool { return d.Action == ActionDispatch || d.Action == ActionRetry }
 
-func (l *Loop) logDispatchDecline(d Decision, reason string) {
-	l.reportf("loop: declined dispatch of %s on %s: %q\n", d.ItemID, d.LaneID, reason)
-}
-
-// A decline is an observation, not a hold or a dispatch: it spends no attempt,
+// Each decline is an observation, not a hold or a dispatch: it spends no attempt,
 // claims no lane, and does not affect what the next pass is allowed to try.
 func (l *Loop) recordDispatchDecline(ctx context.Context, d Decision, at time.Time, reason, waitingOn string) error {
-	l.logDispatchDecline(d, reason)
-	if d.RunRequest == nil {
-		return nil
-	}
+	l.reportf("loop: declined dispatch of %s on %s: %q\n", d.ItemID, d.LaneID, reason)
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return err
 	}
 	defer s.Close()
-	observation := dispatchDecline{DecisionID: d.DecisionID, LaneID: d.LaneID, RunID: d.RunRequest.RunID, Reason: reason, WaitingOn: waitingOn}
+	observation := dispatchDecline{DecisionID: d.DecisionID, LaneID: d.LaneID, Reason: reason, WaitingOn: waitingOn}
+	if d.RunRequest != nil {
+		observation.RunID = d.RunRequest.RunID
+	}
 	raw, err := json.Marshal(observation)
 	if err != nil {
 		return err
 	}
 	return s.WriteTx(ctx, func(tx *store.Tx) error {
-		var last string
-		var seq int64
-		err := tx.QueryRow(`SELECT payload, seq FROM events WHERE object_id=? AND kind=? ORDER BY seq DESC LIMIT 1`, d.ItemID, dispatchDeclinedKind).Scan(&last, &seq)
-		if err != nil && err != sql.ErrNoRows {
-			return err
-		}
-		if last == string(raw) {
-			started, err := dispatchStartedAfter(tx.Reader(), observation.RunID, seq)
-			if err != nil || !started {
-				return err
-			}
-		}
-		_, err = tx.Append(event.Event{Kind: dispatchDeclinedKind, ObjectType: "item", ObjectID: &d.ItemID, At: at, Payload: raw})
+		_, err := tx.Append(event.Event{Kind: dispatchDeclinedKind, ObjectType: "item", ObjectID: &d.ItemID, At: at, Payload: raw})
 		return err
 	})
 }
@@ -75,8 +58,9 @@ func dispatchStartedAfter(r *store.Reader, runID string, seq int64) (bool, error
 }
 
 func readDispatchDeclines(r *store.Reader) (map[string]dispatchDecline, error) {
+	// Why describes claim waits, not application errors (which have no mover).
 	rows, err := r.Query(`SELECT object_id, payload, seq FROM events WHERE seq IN
-		(SELECT MAX(seq) FROM events WHERE kind=? GROUP BY object_id)`, dispatchDeclinedKind)
+		(SELECT MAX(seq) FROM events WHERE kind=? AND json_extract(payload,'$.waiting_on')<>'' GROUP BY object_id)`, dispatchDeclinedKind)
 	if err != nil {
 		return nil, err
 	}
