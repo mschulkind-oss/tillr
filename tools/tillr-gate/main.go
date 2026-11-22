@@ -29,12 +29,13 @@ func main() {
 // faces is the dispatch table. A face is one verb and one function, so adding one is a
 // line here rather than a branch in `run`.
 var faces = map[string]func([]string) int{
-	"checks":  checksFace,
-	"change":  changeFace,
-	"plan":    planFace,
-	"run":     runFace,
-	"dualrun": dualRunFace,
-	"shadow":  shadowFace,
+	"checks":   checksFace,
+	"change":   changeFace,
+	"classify": classifyFace,
+	"plan":     planFace,
+	"run":      runFace,
+	"dualrun":  dualRunFace,
+	"shadow":   shadowFace,
 }
 
 // run dispatches one invocation and answers with its exit code. An unknown verb is a
@@ -58,7 +59,7 @@ func run(args []string) int {
 
 // faceNames lists the faces in a fixed order, so the usage line is stable.
 func faceNames() string {
-	return "change, checks, dualrun, plan, run, shadow"
+	return "change, checks, classify, dualrun, plan, run, shadow"
 }
 
 // parseFlags parses one face's flags and reports whether it has already answered the
