@@ -3428,7 +3428,11 @@ SPEC_AT = re.compile(r"^\s*test at (?P<file>[^\s]+):(?P<line>\d+):\d+\s*$")
 UNITTEST_FAIL = re.compile(r"^(?:FAIL|ERROR):\s+(?P<name>\S+)\s+\((?P<where>[^)]+)\)\s*$")
 PYTEST_FAIL = re.compile(r"^FAILED\s+(?P<file>[^\s:]+)(?:::(?P<name>\S+))?\s*(?:-\s*(?P<text>.*))?$")
 GO_FAIL = re.compile(r"^\s*--- FAIL: (?P<name>\S+)")
+GO_PKG_FAIL = re.compile(r"^FAIL\t(?P<pkg>\S+)")
+GO_PKG_OK = re.compile(r"^ok\s+\t\S+")
 GO_POSITION = re.compile(r"^\s*(?P<file>[^\s:]+\.go):(?P<line>\d+):\s*(?P<text>.*)$")
+GO_AFFECTED_SUMMARY_HEADER = "go-affected: failing packages and tests:"
+GO_AFFECTED_SUMMARY_LINE = re.compile(r"^  (?P<pkg>\S+):\s+(?P<tests>.+)$")
 TRACEBACK_FILE = re.compile(r'^\s*File "(?P<file>[^"]+)", line (?P<line>\d+), in (?P<func>\S+)')
 EXCEPTION_LINE = re.compile(r"^(?P<kind>[A-Za-z_][\w.]*(?:Error|Exception|Failure|Exit))\b:?\s*(?P<text>.*)$")
 # A path an assertion names. Repo-relative or absolute, with a file extension: a token
@@ -3463,8 +3467,11 @@ def _relative(root: Path, path: str) -> str:
 
 
 def _case(name: str, file: str = "", line: int | None = None,
-          assertion: str = "") -> dict:
-    return {"name": name.strip(), "file": file, "line": line, "assertion": assertion.strip()}
+          assertion: str = "", package: str = "") -> dict:
+    case = {"name": name.strip(), "file": file, "line": line, "assertion": assertion.strip()}
+    if package:
+        case["package"] = package.strip()
+    return case
 
 
 def _node_cases(lines: list[str]) -> list[tuple[int, dict]]:
@@ -3591,7 +3598,18 @@ def _pytest_cases(lines: list[str]) -> list[tuple[int, dict]]:
 
 def _go_cases(lines: list[str]) -> list[tuple[int, dict]]:
     found: list[tuple[int, dict]] = []
+    pending: list[dict] = []
     for index, line in enumerate(lines):
+        pkg_fail = GO_PKG_FAIL.match(line)
+        if pkg_fail:
+            pkg = pkg_fail.group("pkg")
+            for case in pending:
+                case["package"] = pkg
+            pending.clear()
+            continue
+        if GO_PKG_OK.match(line):
+            pending.clear()
+            continue
         named = GO_FAIL.match(line)
         if not named:
             continue
@@ -3606,6 +3624,36 @@ def _go_cases(lines: list[str]) -> list[tuple[int, dict]]:
                 case["assertion"] = where.group("text").strip()
                 break
         found.append((index, case))
+        pending.append(case)
+
+    in_summary = False
+    for index, line in enumerate(lines):
+        if line.strip() == GO_AFFECTED_SUMMARY_HEADER:
+            in_summary = True
+            continue
+        if not in_summary:
+            continue
+        entry = GO_AFFECTED_SUMMARY_LINE.match(line)
+        if not entry:
+            in_summary = False
+            continue
+        pkg = entry.group("pkg")
+        tests_str = entry.group("tests").strip()
+        if tests_str == "(no failing test named)":
+            if not any(c.get("package") == pkg for _, c in found):
+                found.append((index, _case("(package failed)", package=pkg)))
+            continue
+        for test_name in (t.strip() for t in tests_str.split(",") if t.strip()):
+            matched = [
+                c for _, c in found
+                if c["name"] == test_name and (c.get("package") == pkg or not c.get("package"))
+            ]
+            if matched:
+                for c in matched:
+                    if not c.get("package"):
+                        c["package"] = pkg
+            else:
+                found.append((index, _case(test_name, package=pkg)))
     return found
 
 
@@ -3686,20 +3734,26 @@ def failure_cases(output: str) -> list[dict]:
         merged.extend(scanner(lines))
     merged.sort(key=lambda pair: pair[0])
     cases: list[dict] = []
-    by_name: dict[str, dict] = {}
+    by_name: dict[tuple[str, str], dict] = {}
     for _, case in merged:
         if not case["name"]:
             continue
-        existing = by_name.get(case["name"])
+        pkg = case.get("package", "")
+        key = (pkg, case["name"])
+        existing = by_name.get(key)
+        if existing is None and pkg:
+            existing = by_name.get(("", case["name"]))
         if existing is not None and (not existing["file"] or not case["file"]
                                      or existing["file"] == case["file"]):
             # One case is often named twice: the run's own summary and the failing-tests
             # block. The mentions are one case, and the richer mention fills the holes.
-            for field in ("file", "line", "assertion"):
+            for field in ("file", "line", "assertion", "package"):
                 if not existing.get(field) and case.get(field):
                     existing[field] = case[field]
+            if existing.get("package"):
+                by_name[(existing["package"], existing["name"])] = existing
             continue
-        by_name[case["name"]] = case
+        by_name[key] = case
         cases.append(case)
     return cases
 
@@ -3889,7 +3943,14 @@ def record_triage(record: Record, entry: dict, packets: list[dict]) -> None:
             # The candidate the packet is about, so a later run can tell an earlier
             # candidate's failure from this one's (board item 194).
             "candidate": packet.get("candidate"),
-            "cases": [{"name": case["name"], "file": case["file"]} for case in packet["cases"]],
+            "cases": [
+                {
+                    "name": case["name"],
+                    "file": case["file"],
+                    **({"package": case["package"]} if case.get("package") else {}),
+                }
+                for case in packet["cases"]
+            ],
             "dropped": packet["dropped"],
             "reproduce": packet["reproduce"],
             "single_case": packet["single_case"],
@@ -3957,6 +4018,8 @@ def triage_lines(packet: dict) -> list[str]:
         where = case["file"] or "(no file named)"
         if case.get("line"):
             where += f":{case['line']}"
+        if case.get("package"):
+            where = f"{case['package']} ({where})" if case["file"] else case["package"]
         lines.append(f"case: {case['name']} -- {where}")
         if case["assertion"]:
             first = case["assertion"].splitlines()[0]
