@@ -135,8 +135,23 @@ def execute_with_events(check, root, diff_base, *args, **kwargs):
         return go_failure_logs(module, lines, check.output, sharded)
 
 
+def record_timeouts(timeouts, package, output):
+    # The testing package names running tests before the stacks; a hung test
+    # need not emit a case-level fail event at all.
+    panic = re.search(
+        r"^(panic: test timed out after \S+)\nrunning tests:\n((?:\t[^\n]+\n)+)",
+        output, re.MULTILINE,
+    )
+    if not panic:
+        return False
+    names = re.findall(r"^\t((?:Test|Example|Fuzz)\S*) \(\S+\)$", panic[2], re.MULTILINE)
+    for name in names:
+        timeouts[package, name] = (panic[1], output[panic.start():])
+    return bool(names)
+
+
 def go_failure_logs(module, lines, output, sharded):
-    messages = {}
+    messages, package_output = {}, {}
     failed, package_failures = set(), set()
     for line in lines:
         try:
@@ -144,6 +159,8 @@ def go_failure_logs(module, lines, output, sharded):
         except ValueError:
             continue  # Native Go may also report non-JSON build diagnostics.
         action, package, name = event.get("Action"), event.get("Package"), event.get("Test")
+        if not sharded and package and action == "output":
+            package_output.setdefault(package, []).append(event["Output"])
         if package and name:
             key = (package, name)
             if action == "output":
@@ -160,21 +177,33 @@ def go_failure_logs(module, lines, output, sharded):
         while "/" in name:
             name = name.rsplit("/", 1)[0]
             parents.add((package, name))
-    cases = []
-    for package, name in sorted(failed - parents):
-        body = f"go-test:{module}:{package}:{name}\n" + "".join(messages.get((package, name), ()))
-        cases.append({"package": package, "name": name, "log": keep_output(body)})
-
-    # Do not erase a timeout, crash or build failure elsewhere in a suite just
-    # because one shard did report a failing case. Headers classify shard-level
-    # faults only; names and assertions come exclusively from the event stream.
-    unscoped = bool(package_failures - {package for package, _ in failed})
+    timeouts = {}
+    unscoped = False
     if sharded:
-        unscoped |= any(
-            line.startswith("go-test-shards: ") and "waiting for a test slot" not in line
-            and not re.match(r"^go-test-shards: \S+ shard \d+ failed \(exit 1\): .+$", line)
-            for line in output.splitlines()
-        )
+        # Classify each shard separately so a timeout does not hide a crash in
+        # another shard (even one in the same package). Ordinary case names and
+        # assertion output still come exclusively from Go events.
+        shards = re.split(r"^go-test-shards: ", output, flags=re.MULTILINE)[1:]
+        for shard in shards:
+            header, _, body = shard.partition("\n")
+            if "waiting for a test slot" in header:
+                continue
+            match = re.fullmatch(r"(\S+) shard \d+ failed \(exit (\d+)\)(?:: (.+))?", header)
+            if match and record_timeouts(timeouts, match[1], body):
+                continue
+            if not (match and match[2] == "1" and match[3]):
+                unscoped = True
+    else:
+        for package in package_failures:
+            record_timeouts(timeouts, package, "".join(package_output.get(package, ())))
+
+    cases = []
+    named = (failed - parents) | timeouts.keys()
+    for package, name in sorted(named):
+        panic, text = timeouts.get((package, name), ("", ""))
+        body = f"go-test:{module}:{package}:{name}\n" + (text or "".join(messages.get((package, name), ())))
+        cases.append({"package": package, "name": name, "log": keep_output(body), "timeout_panic": panic})
+    unscoped |= bool(package_failures - {package for package, _ in named})
     return {"cases": cases, "log": keep_output(output) if unscoped or not cases else ""}
 
 

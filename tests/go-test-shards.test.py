@@ -165,6 +165,21 @@ class RunnerTests(unittest.TestCase):
         binary = self.fake("print('=== RUN   TestFail'); print('--- FAIL: TestFail (0.00s)'); print('FAIL'); raise SystemExit(1)\n")
         self.assert_shard_exit(binary, ['TestFail'], 'failed')
 
+    def test_failure_retains_go_timeout_stack_after_an_ordinary_failure(self):
+        binary = self.fake(
+            "print('\\x16=== RUN   TestFail'); print('\\x16--- FAIL: TestFail (0.00s)')\n"
+            "print('\\x16=== RUN   TestHung')\n"
+            "print('panic: test timed out after 10m0s\\nrunning tests:\\n\\tTestHung (10m0s)\\n\\n'\n"
+            "      'goroutine 1 [running]:')\n"
+            "print('\\x16=== NAME  ')\n"  # Package exit, without a test-level FAIL for TestHung.
+            "raise SystemExit(2)\n")
+        with self.assertRaises(shards.ShardError) as caught:
+            shards.run_shard('fixture', self.root, binary, ['TestFail', 'TestHung'], 0,
+                             self.root / 'scratch', '0')
+        self.assertIn('failed (exit 1): TestFail', str(caught.exception))
+        self.assertIn('panic: test timed out after 10m0s\nrunning tests:\n\tTestHung (10m0s)\n\n'
+                      'goroutine 1 [running]:', str(caught.exception))
+
     def test_cannot_start_names_shard(self):
         self.assert_shard_exit(self.root / 'missing', ['TestMissing'], 'cannot start')
 

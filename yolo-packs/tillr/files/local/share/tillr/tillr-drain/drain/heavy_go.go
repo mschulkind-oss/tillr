@@ -44,6 +44,7 @@ func goSuiteFailures(label string, evidence legacyFailure, suite HeavyCheck) []H
 		return []HeavyCheck{suite}
 	}
 	var checks []HeavyCheck
+	timedOut := false
 	unscoped := evidence.Log != ""
 	for _, test := range evidence.Cases {
 		if !goImport.MatchString(test.Package) || !goTestName.MatchString(test.Name) || test.Log == "" {
@@ -56,11 +57,21 @@ func goSuiteFailures(label string, evidence legacyFailure, suite HeavyCheck) []H
 		// No declared read set exists at individual test granularity.
 		check.Reads = nil
 		check.LogPath, check.LogRef = test.Log, test.Log
+		if test.TimeoutPanic != "" {
+			check.GoTimedOut = true
+			check.Detail = test.TimeoutPanic + "; not replayed; fixer filed against the tip"
+			timedOut = true
+		}
 		checks = append(checks, check)
 	}
 	// Unnamed failures (e.g. build errors, crashes and timeouts) still
 	// belong to the suite. They must not erase any named cases it reported.
 	if unscoped || len(checks) == 0 {
+		if timedOut {
+			// Replaying the suite would also rerun its named timed-out test.
+			suite.GoTimedOut = true
+			suite.Detail = "unnamed failure; not replaying a suite with a named Go timeout"
+		}
 		checks = append(checks, suite)
 	}
 	return checks

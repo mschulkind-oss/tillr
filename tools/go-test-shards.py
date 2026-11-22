@@ -576,7 +576,10 @@ def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=N
             name for name in raw_failed
             if not any(other != name and other.startswith(name + '/') for other in raw_failed)
         ]
-        if raw_failed:
+        output = ''.join(e.get('Output', '') for e in events)
+        # A timed-out test may never emit a case-level FAIL. Keep its panic and
+        # stacks even when an unrelated test in the shard did emit one.
+        if raw_failed and not re.search(r'^panic: test timed out after ', output, re.MULTILINE):
             def belongs_to_failure(test_name):
                 if not test_name:
                     return True
@@ -585,8 +588,6 @@ def run_shard(package, cwd, binary, names, index, scratch, timeout, git_values=N
                     for failed in raw_failed
                 )
             output = ''.join(e.get('Output', '') for e in events if belongs_to_failure(e.get('Test')))
-        else:
-            output = ''.join(e.get('Output', '') for e in events)
         headline = f'{label} failed (exit {process.returncode})'
         if failed_tests:
             headline += f": {', '.join(failed_tests)}"
