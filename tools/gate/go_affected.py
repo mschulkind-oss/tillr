@@ -531,24 +531,48 @@ def scan_package_tests(root: Path, item: dict) -> list[str]:
     return seen
 
 
+def _leaf_failed_tests(names: list[str]) -> list[str]:
+    """Drop parent test names when a subtest of that parent also failed."""
+    deduped = list(dict.fromkeys(names))
+    return [
+        name for name in deduped
+        if not any(other != name and other.startswith(name + "/") for other in deduped)
+    ]
+
+
+def format_failure_summary(failed_packages: list[tuple[str, list[str]]]) -> str:
+    """Render the failing packages and tests block appended to failed check output."""
+    if not failed_packages:
+        return ""
+    lines = ["go-affected: failing packages and tests:\n"]
+    for pkg_name, tests in failed_packages:
+        if tests:
+            lines.append(f"  {pkg_name}: {', '.join(tests)}\n")
+        else:
+            lines.append(f"  {pkg_name}: (no failing test named)\n")
+    return "".join(lines)
+
+
 def parse_go_test_json(stdout: str) -> tuple[dict[str, dict], str]:
-    """Return (per-package {elapsed_ms, cached, passed}, plain `go test` failure text)."""
+    """Return (per-package {elapsed_ms, cached, passed, failed_tests}, plain `go test` failure text)."""
     results: dict[str, dict] = {}
-    text_chunks: list[str] = []
+    non_pkg_chunks: list[str] = []
+    pkg_chunks: dict[str, list[str]] = {}
+    raw_failed: dict[str, list[str]] = {}
     test_headers: dict[tuple[str, str], str] = {}
     test_bodies: dict[tuple[str, str], list[str]] = {}
     for line in stdout.splitlines(keepends=True):
         stripped = line.lstrip()
         if not stripped.startswith("{"):
-            text_chunks.append(line)
+            non_pkg_chunks.append(line)
             continue
         try:
             ev = json.loads(stripped)
         except ValueError:
-            text_chunks.append(line)
+            non_pkg_chunks.append(line)
             continue
         if not isinstance(ev, dict):
-            text_chunks.append(line)
+            non_pkg_chunks.append(line)
             continue
         out_chunk = ev.get("Output")
         pkg = ev.get("Package")
@@ -556,9 +580,12 @@ def parse_go_test_json(stdout: str) -> tuple[dict[str, dict], str]:
         action = ev.get("Action")
         if not isinstance(pkg, str) or not pkg:
             if isinstance(out_chunk, str):
-                text_chunks.append(out_chunk)
+                non_pkg_chunks.append(out_chunk)
             continue
-        rec = results.setdefault(pkg, {"elapsed_ms": 0, "cached": False, "passed": None})
+        rec = results.setdefault(
+            pkg, {"elapsed_ms": 0, "cached": False, "passed": None, "failed_tests": []}
+        )
+        chunks = pkg_chunks.setdefault(pkg, [])
         if isinstance(test_name, str) and test_name:
             key = (pkg, test_name)
             if action == "output" and isinstance(out_chunk, str):
@@ -568,11 +595,12 @@ def parse_go_test_json(stdout: str) -> tuple[dict[str, dict], str]:
                 elif not s.startswith(("=== RUN", "=== PAUSE", "=== CONT", "--- PASS:", "--- SKIP:")):
                     test_bodies.setdefault(key, []).append(out_chunk)
             elif action == "fail":
+                raw_failed.setdefault(pkg, []).append(test_name)
                 elapsed = ev.get("Elapsed")
                 dur = f"{elapsed:.2f}s" if isinstance(elapsed, (int, float)) else "0.00s"
                 header = test_headers.pop(key, f"--- FAIL: {test_name} ({dur})\n")
-                text_chunks.append(header)
-                text_chunks.extend(test_bodies.pop(key, ()))
+                chunks.append(header)
+                chunks.extend(test_bodies.pop(key, ()))
             elif action in ("pass", "skip"):
                 test_headers.pop(key, None)
                 test_bodies.pop(key, None)
@@ -580,12 +608,28 @@ def parse_go_test_json(stdout: str) -> tuple[dict[str, dict], str]:
             if action == "output" and isinstance(out_chunk, str):
                 if "(cached)" in out_chunk:
                     rec["cached"] = True
-                text_chunks.append(out_chunk)
+                chunks.append(out_chunk)
             elif action in ("pass", "fail", "skip"):
                 elapsed = ev.get("Elapsed")
                 if isinstance(elapsed, (int, float)):
                     rec["elapsed_ms"] = int(round(elapsed * 1000))
                 rec["passed"] = action != "fail"
+
+    for pkg, rec in results.items():
+        rec["failed_tests"] = _leaf_failed_tests(raw_failed.get(pkg, []))
+        if rec["passed"] is False:
+            chunks = pkg_chunks.setdefault(pkg, [])
+            for key in [k for k in list(test_headers) + list(test_bodies) if k[0] == pkg]:
+                header = test_headers.pop(key, None)
+                body = test_bodies.pop(key, ())
+                if header:
+                    chunks.append(header)
+                if body:
+                    chunks.extend(body)
+
+    text_chunks = list(non_pkg_chunks)
+    for pkg in results:
+        text_chunks.extend(pkg_chunks.get(pkg, ()))
     return results, "".join(text_chunks)
 
 
@@ -680,8 +724,20 @@ def run_selected_tests(root: Path, selection: dict, *, ev_path: str = "") -> tup
 
     outputs: list[str] = []
     pkg_shards: dict[str, list[dict]] = {}
+    pkg_failed_tests: dict[str, list[str]] = {}
+    failed_pkgs_order: list[str] = []
+    failed_pkgs_set: set[str] = set()
     max_slot_wait_ms = 0
     rc_all = 0
+
+    def record_failed_pkg(pkg_name: str, tests: list[str]) -> None:
+        if pkg_name not in failed_pkgs_set:
+            failed_pkgs_set.add(pkg_name)
+            failed_pkgs_order.append(pkg_name)
+        bucket = pkg_failed_tests.setdefault(pkg_name, [])
+        for name in tests:
+            if name not in bucket:
+                bucket.append(name)
 
     def run_one(inv: tuple[str, list[dict], str | None, str | None, str]) -> tuple[int, str, int, dict[str, dict]]:
         mod, items, digest, run_pattern, scratch_key = inv
@@ -730,14 +786,24 @@ def run_selected_tests(root: Path, selection: dict, *, ev_path: str = "") -> tup
         return res.returncode, readable, wait_ms, parsed
 
     with ThreadPoolExecutor(max_workers=min(16, len(invocations))) as pool:
-        for rc, readable_out, wait_ms, parsed in pool.map(run_one, invocations):
+        for inv, (rc, readable_out, wait_ms, parsed) in zip(invocations, pool.map(run_one, invocations)):
+            mod, items, _digest, _run_pattern, _scratch_key = inv
             if wait_ms > max_slot_wait_ms:
                 max_slot_wait_ms = wait_ms
+            inv_recorded_failure = False
             for pkg_name, rec in parsed.items():
                 pkg_shards.setdefault(pkg_name, []).append(rec)
+                failed_tests = rec.get("failed_tests") or []
+                if rec.get("passed") is False or failed_tests:
+                    record_failed_pkg(pkg_name, failed_tests)
+                    inv_recorded_failure = True
             if rc != 0:
                 rc_all = rc
                 outputs.append(readable_out)
+                if not inv_recorded_failure:
+                    for item in items:
+                        pkg_label = mod if item["import_path"] == "./..." else item["import_path"]
+                        record_failed_pkg(pkg_label, [])
 
     packages_evidence: list[dict] = []
     for item in selected:
@@ -763,7 +829,12 @@ def run_selected_tests(root: Path, selection: dict, *, ev_path: str = "") -> tup
         f"({sum(1 for p in packages_evidence if p['cached'])} cached, "
         f"selection {selection['selection_ms']}ms, slot_wait {max_slot_wait_ms}ms)\n"
     )
-    return rc_all, summary + "".join(outputs), evidence
+    failure_summary = (
+        format_failure_summary([(p, pkg_failed_tests.get(p, [])) for p in failed_pkgs_order])
+        if rc_all != 0
+        else ""
+    )
+    return rc_all, summary + "".join(outputs) + failure_summary, evidence
 
 
 def git_changed_paths(root: Path, base: str, head: str) -> list[str]:

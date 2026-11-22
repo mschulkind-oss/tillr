@@ -339,7 +339,12 @@ def test_edge_cache_invalidation() -> None:
         written_ev = json.loads(ev_file.read_text(encoding="utf-8"))
         assert written_ev == ev, written_ev
         cases = fork_check.failure_cases(out)
-        assert any(c["name"] == "TestBuildsEdge" and c["file"] == "consumer_test.go" for c in cases), (out, cases)
+        assert any(
+            c["name"] == "TestBuildsEdge"
+            and c["file"] == "consumer_test.go"
+            and c.get("package") == "github.com/mschulkind-oss/tillr-consumer"
+            for c in cases
+        ), (out, cases)
 
         # 4. Restore sibling main -> passes, uncached first, then cached!
         sib_main.write_text('package main\nimport "fmt"\nfunc main() { fmt.Println("ok") }\n')
@@ -354,7 +359,12 @@ def test_edge_cache_invalidation() -> None:
         assert rc != 0, ev
         assert ev["packages"][0]["cached"] is False, ev
         cases = fork_check.failure_cases(out)
-        assert any(c["name"] == "TestReadsEdge" and c["file"] == "consumer_test.go" for c in cases), (out, cases)
+        assert any(
+            c["name"] == "TestReadsEdge"
+            and c["file"] == "consumer_test.go"
+            and c.get("package") == "github.com/mschulkind-oss/tillr-consumer"
+            for c in cases
+        ), (out, cases)
 
 
 def test_failed_module_floor_fallback() -> None:
@@ -556,6 +566,130 @@ def test_heavy_failures_replay(root_graph: dict) -> None:
     assert go_hits == 9, go_hits
 
 
+def test_failure_refusal_names_packages_and_tests_far_above_tail() -> None:
+    """Failures far above the 60-line tail still name every failing package and test in the gate refusal."""
+    pkg_main = "github.com/mschulkind-oss/tillr-drain"
+    pkg_drain = "github.com/mschulkind-oss/tillr-drain/drain"
+    pkg_broken = "github.com/mschulkind-oss/tillr-broken"
+
+    events = [
+        {"Action": "run", "Package": pkg_main, "Test": "TestEarlyMainFailure"},
+        {"Action": "output", "Package": pkg_main, "Test": "TestEarlyMainFailure",
+         "Output": "=== RUN   TestEarlyMainFailure\n"},
+        {"Action": "output", "Package": pkg_main, "Test": "TestEarlyMainFailure",
+         "Output": "    hook_test.go:42: expected directory match\n"},
+        {"Action": "output", "Package": pkg_main, "Test": "TestEarlyMainFailure",
+         "Output": "--- FAIL: TestEarlyMainFailure (0.12s)\n"},
+        {"Action": "fail", "Package": pkg_main, "Test": "TestEarlyMainFailure", "Elapsed": 0.12},
+        {"Action": "run", "Package": pkg_main, "Test": "TestEdgeInputs"},
+        {"Action": "output", "Package": pkg_main, "Test": "TestEdgeInputs",
+         "Output": "    edge_inputs_test.go:10: main edge mismatch\n"},
+        {"Action": "output", "Package": pkg_main, "Test": "TestEdgeInputs",
+         "Output": "--- FAIL: TestEdgeInputs (0.01s)\n"},
+        {"Action": "fail", "Package": pkg_main, "Test": "TestEdgeInputs", "Elapsed": 0.01},
+        # Interleaved second package failing far above the tail.
+        {"Action": "run", "Package": pkg_drain, "Test": "TestEarlyDrainFailure"},
+        {"Action": "output", "Package": pkg_drain, "Test": "TestEarlyDrainFailure",
+         "Output": "    fixer_test.go:99: expected named check\n"},
+        {"Action": "output", "Package": pkg_drain, "Test": "TestEarlyDrainFailure",
+         "Output": "--- FAIL: TestEarlyDrainFailure (0.25s)\n"},
+        {"Action": "fail", "Package": pkg_drain, "Test": "TestEarlyDrainFailure", "Elapsed": 0.25},
+        {"Action": "run", "Package": pkg_drain, "Test": "TestEdgeInputs"},
+        {"Action": "output", "Package": pkg_drain, "Test": "TestEdgeInputs",
+         "Output": "    edge_inputs_test.go:10: drain edge mismatch\n"},
+        {"Action": "output", "Package": pkg_drain, "Test": "TestEdgeInputs",
+         "Output": "--- FAIL: TestEdgeInputs (0.01s)\n"},
+        {"Action": "fail", "Package": pkg_drain, "Test": "TestEdgeInputs", "Elapsed": 0.01},
+        # Subtest failure: parent + child both emit fail, leaf stays in failed_tests.
+        {"Action": "run", "Package": pkg_drain, "Test": "TestSubParent"},
+        {"Action": "run", "Package": pkg_drain, "Test": "TestSubParent/leaf"},
+        {"Action": "output", "Package": pkg_drain, "Test": "TestSubParent/leaf",
+         "Output": "        sub_test.go:15: leaf failed\n"},
+        {"Action": "output", "Package": pkg_drain, "Test": "TestSubParent/leaf",
+         "Output": "    --- FAIL: TestSubParent/leaf (0.01s)\n"},
+        {"Action": "fail", "Package": pkg_drain, "Test": "TestSubParent/leaf", "Elapsed": 0.01},
+        {"Action": "output", "Package": pkg_drain, "Test": "TestSubParent",
+         "Output": "--- FAIL: TestSubParent (0.02s)\n"},
+        {"Action": "fail", "Package": pkg_drain, "Test": "TestSubParent", "Elapsed": 0.02},
+    ]
+    # Push all failures far above the 60-line tail excerpt with 200+ trailing output lines.
+    for i in range(120):
+        events.append({
+            "Action": "output",
+            "Package": pkg_main,
+            "Output": f"main trailing log line {i}\n",
+        })
+        events.append({
+            "Action": "output",
+            "Package": pkg_drain,
+            "Output": f"drain trailing log line {i}\n",
+        })
+    events.extend([
+        {"Action": "output", "Package": pkg_main, "Output": f"FAIL\t{pkg_main}\t1.23s\n"},
+        {"Action": "fail", "Package": pkg_main, "Elapsed": 1.23},
+        {"Action": "output", "Package": pkg_drain, "Output": f"FAIL\t{pkg_drain}\t2.34s\n"},
+        {"Action": "fail", "Package": pkg_drain, "Elapsed": 2.34},
+        # A third package that failed with no test-level fail event (e.g. TestMain exit).
+        {"Action": "output", "Package": pkg_broken, "Output": f"FAIL\t{pkg_broken} [setup failed]\n"},
+        {"Action": "fail", "Package": pkg_broken, "Elapsed": 0.01},
+    ])
+    raw_stream = "".join(json.dumps(ev) + "\n" for ev in events)
+    parsed, readable = go_affected.parse_go_test_json(raw_stream)
+
+    assert parsed[pkg_main]["failed_tests"] == ["TestEarlyMainFailure", "TestEdgeInputs"], parsed[pkg_main]
+    assert parsed[pkg_drain]["failed_tests"] == [
+        "TestEarlyDrainFailure", "TestEdgeInputs", "TestSubParent/leaf"
+    ], parsed[pkg_drain]
+    assert parsed[pkg_broken]["failed_tests"] == [] and parsed[pkg_broken]["passed"] is False, parsed[pkg_broken]
+
+    summary = go_affected.format_failure_summary([
+        (pkg_main, parsed[pkg_main]["failed_tests"]),
+        (pkg_drain, parsed[pkg_drain]["failed_tests"]),
+        (pkg_broken, parsed[pkg_broken]["failed_tests"]),
+    ])
+    full_output = "go-affected: 3 package(s) (0 cached, selection 10ms, slot_wait 0ms)\n" + readable + summary
+    all_lines = full_output.splitlines()
+    assert len(all_lines) > fork_check.EXCERPT_LINES * 3, len(all_lines)
+    # Confirm the actual --- FAIL: lines are far above the tail.
+    early_idx = next(i for i, ln in enumerate(all_lines) if "TestEarlyMainFailure" in ln)
+    assert len(all_lines) - early_idx > fork_check.EXCERPT_LINES * 2, (early_idx, len(all_lines))
+
+    # Even the 60-line tail excerpt carries the failing packages and tests summary.
+    tail_excerpt = "\n".join(all_lines[-fork_check.EXCERPT_LINES:])
+    for needle in (
+        "go-affected: failing packages and tests:",
+        f"  {pkg_main}: TestEarlyMainFailure, TestEdgeInputs",
+        f"  {pkg_drain}: TestEarlyDrainFailure, TestEdgeInputs, TestSubParent/leaf",
+        f"  {pkg_broken}: (no failing test named)",
+    ):
+        assert needle in tail_excerpt, (needle, tail_excerpt)
+
+    # Gate refusal (triage_packet + triage_lines) names every failing package and test.
+    check = fork_check.Check(
+        "go-affected",
+        "affected tillr Go test packages pass",
+        [sys.executable, "tools/gate/go_affected.py", "--changed", "tools/tillr-drain/drain/loop.go"],
+        "tillr Go module changed",
+        600,
+    )
+    check.rc = 1
+    check.output = full_output
+    packet = fork_check.triage_packet(check, ROOT)
+    triage_text = "\n".join(fork_check.triage_lines(packet))
+    assert "no case named in the output" not in triage_text, triage_text
+
+    # Every failing package and test appears in the refusal, including duplicate test names across packages.
+    for expected in (
+        f"case: TestEarlyMainFailure -- {pkg_main} (hook_test.go:42)",
+        f"case: TestEdgeInputs -- {pkg_main} (edge_inputs_test.go:10)",
+        f"case: TestEarlyDrainFailure -- {pkg_drain} (fixer_test.go:99)",
+        f"case: TestEdgeInputs -- {pkg_drain} (edge_inputs_test.go:10)",
+        f"case: TestSubParent/leaf -- {pkg_drain} (sub_test.go:15)",
+        f"case: (package failed) -- {pkg_broken}",
+    ):
+        assert expected in triage_text, (expected, triage_text)
+
+
 def main() -> int:
     root_graph = go_affected.load_tillr_graph(ROOT)
     test_discover_modules()
@@ -564,6 +698,7 @@ def main() -> int:
     test_edges_file_honest_and_env_read()
     test_edge_cache_invalidation()
     test_failed_module_floor_fallback()
+    test_failure_refusal_names_packages_and_tests_far_above_tail()
     test_fork_check_integration(root_graph)
     test_heavy_failures_replay(root_graph)
     print("PASS: all go-affected tests passed")
