@@ -376,6 +376,17 @@ which seat takes the judgments the operator made
 on none of them. It sits here because it fills in the seventh rule of the unattended-drain design
 above, and none of it is built.
 
+[A design with no open questions moves straight to planning, and owner review comments end in open questions or planning](../design/tillr-design-to-planning-transition.md),
+written on 2026-11-22 to the owner's words of that day after two of six lanes sat idle behind
+hand-filed slices and zero-question review holds, turns the seventh kind above into an automatic
+transition: a zero-question design stamps `DECIDED`, dispatches its `plan` run, and files its
+slices on landing, while review comments on `desk-<doc>` settle into either open questions naming
+who is asked or an immediate move to planning. It asks what happens to in-flight slice runs when a
+review comment arrives ([`OQ-DT1`](../design/tillr-design-to-planning-transition.md#OQ-DT1)) and how
+rollout treats the existing zero-question backlog
+([`OQ-DT2`](../design/tillr-design-to-planning-transition.md#OQ-DT2)). Its first five slices wait on
+neither, and none of it is built.
+
 [Alert triage happens in a seat inside tillr, and only what it cannot settle reaches the operating session](../design/tillr-alert-triage-seat.md),
 written on 2026-11-22 to the owner's words of 2026-11-21, layers a remedy-free alert triage consumer
 above [the general agent watch design](../design/general-agent-watch.md) and its landed Slice 1 so
