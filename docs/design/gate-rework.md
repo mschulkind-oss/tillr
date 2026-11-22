@@ -956,12 +956,24 @@ with an exit code to reach a result word is classification and is done only in t
 The kind table and the phrase lists are declarations, like a check's declaration file, so a
 replayed commit supplies its own, as it supplies its own command.
 
+Five additional protocols cover the drain's rolling, heavy and proof sites (`D17` to `D33`,
+[`D-GR42`](#slice-1d-routes-the-drains-rolling-heavy-and-proof-classifiers-with-a-function-keyed-go-scan-test)):
+
+| Protocol | Sites | The site hands over | Rule, in order |
+| :--- | :--- | :--- | :--- |
+| a binary check program (`binary-program`) | D21 (`runHeavyLegacy` single-replay and whole-program exits; also usable by D12) | The program's exit code and whether starting or waiting failed | Exit 0 without process error is `pass`. Exit 1 without process error is `fail`. Every other exit (including 6 and 77), or no exit, is `unknown`, `error` |
+| a legacy span status (`legacy-span`) | D17 (`readSpansWithWatches`), D21 (`runHeavyLegacy` spans) | `span.Status` verbatim (exact case) | `PASS` or `ok` is `pass`; `CACHED` is `pass`, `cached`; `skip` is `unavailable`, `skipped`; `QUARANTINED` is `unavailable`, `quarantined`; `FAIL` is `fail`; `STALLED` is `unknown`, `stalled`; any other word is `unknown`, `error` (gaining `DISABLED` -> `disabled` in slice 3b) |
+| a triage span status (`triage-span`) | D19 (`readFailingSpanMeta`) | `s.Status` | Case-insensitively: `FAIL` is `fail`; `STALLED` is `unknown`, `stalled`; `ERROR` is `unknown`, `error`; `PASS`, `OK`, `CACHED` is `pass`; `SKIP`, `QUARANTINED` is `unavailable`, `skipped`; any other word (including `ERR`, `STALE`, `not-run`, empty) is `unknown`, `not-retained` |
+| a heavy check word (`heavy-check-word`) | D20, D23, D26, D27, D28, D30 | `HeavyCheck.Result` verbatim (exact case) | `pass` is `pass`; `fail` is `fail`; `unavailable` is `unavailable`; `stalled` is `unknown`, `stalled`; `error` is `unknown`, `error`; any other word is `unknown`, `unrecognized` (gaining `disabled` -> `disabled` in slice 2c) |
+| a focused Go test (`focused-go-test`) | D22 (`judgeHeavyGo`) | Exit code, wait/pipe error on exit 0 or missing state, and Go test facts (`PackageAbsent`, `Passed`, `Failed`, `Skipped`) | `PackageAbsent` is `pass`, `package not present at this commit`; exit 0 with no process error and `!Failed` is `pass` (`passed` when `Passed`, `test or enclosing test skipped at this commit` when `Skipped`, else `test not present at this commit`); exit 1 with `Failed` is `fail`; anything else is `unknown`, `error` |
+
 **The aggregate orders.** Each is listed highest first; the first that any check matches is the
 run's result.
 
 | Order | Site | Precedence | Run result and exit code |
 | :--- | :--- | :--- | :--- |
 | the runner | G4 | `unknown` with detail `error`; `unknown` with detail `stalled`; `fail`; `pass` | `error` (4), `stalled` (6), `fail` (1), `pass` (0) |
+| the heavy proof (`heavy`) | D23 (`judgeTip`) | Any `unknown`; `fail`; `pass` | `unknown` (4), `red` (1), `green` (0) |
 | the shadow run | G10 | `unknown` with detail `error`; `fail`; `pass`. A stalled check and a check that did not run do not count | `error`, `fail`, `pass` |
 | the legacy gate | F6 | `unknown` with detail `stalled`; `fail`; any other `unknown` except `not-run`; `pass`. A check that did not run does not count | `stalled` (6), `failed` (1), `unproven` (2), `verified` (0) |
 | the legacy replay | F9 | Any `unknown`, a sentinel skip or a cancelled check; `fail`; `pass` | 2, 1, 0 |
@@ -1560,7 +1572,7 @@ while `tillr-drain` would misread it as an error or drop its repair item.
 | :--- | :--- | :--- |
 | Remaining slice-1 callers (`G1`–`G12`, `D1`–`D34`, `--aggregate`, `F6`/`F9`) | Slices 1b, 1c, 1d, 1f, 1g | Prerequisite single-classifier routing (`D-GR23`, `D-GR28`, `D-GR33`) |
 | Filing `flaky-<check-id>` (and `-2`, `-3`, ...) to re-enable the check, before attribution, pending reverts or dispatch | Slice 2b | Lives in `tillr-drain`, which owns the SQLite queue (`D-GR23`) |
-| Drain and lander sites (`D1`–`D34`, `L3`) treating `disabled` as non-green, non-error and non-blocking, dropping cached `disabled` proofs, and passing `--prove-disabled` for the repair item | Slices 2c and 3a | Must land in `tillr-drain` / `tools/tillr-land` before live gate runs emit `disabled` |
+| Drain sites (`D1`–`D34`) treating `disabled` as non-green, non-error and non-blocking, dropping cached `disabled` proofs, and passing `--prove-disabled` for the repair item (amended by `D-GR42` to omit `L3` and `tools/tillr-land`) | Slices 2c and 3a | Must land in `tillr-drain` before live gate runs emit `disabled` |
 | Live `tillr-gate run` / `tillr-gate checks` (`G2`, `G3`, `G4`, `G7`) and Python store-backed adapters (`P4` to `P6`) emitting `disabled` and `--prove-disabled` | Slice 2d | Waits on a proved trunk commit holding 2a (`D-GR5`) and on slices 1b, 2b, 2c and 3a so consumers and the sweep are live first |
 | Committed declaration bytes (`P1`), retained output logs (`P3`), legacy gate/replay `DISABLED` handling (`tools/fork-check.py`), replaying older commits through current classification, and resolving labelled fixer selectors (`D16`, `D31`) through the installed face | Slice 3b | Waits on slices 1g and 2d |
 
@@ -1593,6 +1605,172 @@ the table above, which the candidate's commit message lists.
 - **Carry `TILLR_DISABLED_OBSERVATIONS` or scattered `== "disabled"` checks from
   `refs/tillr/runs/run-item-request-c1a6f8e4e5-a14-n5` `[unlanded]`.** Rejected in `D-GR23`: that
   side-channel architecture was refused eleven times for missing sites.
+
+#### Slice 1d routes the drain's rolling, heavy and proof classifiers, with a function-keyed Go scan test
+
+What follows is the designer's decision of 2026-11-22 (`D-GR42`), made to answer a build worker's
+report against the operator request of 2026-11-22 for slice 1d ("route the tillr-drain sites D17
+to D33 through the shared classify function", read at `55b8d6f67b`). None of it is the owner's
+ruling, and the owner may overturn any part of it. It amends row `1d` (and row `2c`) of
+[the classifier build order](#classify-every-check-result-in-one-place), reconciles the Go
+scan-test lists when slices 1c and 1d share files, and applies `D-GR28` to the raw-result
+protocols and aggregate order of `D17` to `D33`.
+
+**The report was right on all three points.** Measured at `55b8d6f67b`:
+
+1. **Row `1d` gained `L3` and `tools/tillr-land` in error (`d9a021ee61`).** The filed operator
+   request asks only to "route the tillr-drain sites D17 to D33 through the shared classify
+   function". Commit `d9a021ee61` rewrote row `1d` to `D17 to D33, L3` and added `tools/tillr-land`
+   to its verification. `L3` is `compose_verdict` in `tools/tillr-loop/tillr-loop` (already placed
+   in slice 1e), and `D-GR23` explicitly excludes `L3` from `Classify` because `pass-inherited` is
+   a settlement rather than a check result (`D1, D9, G7, L3`). The 70-site inventory defines no
+   classification site in `tools/tillr-land` (`rg -n 'checkresult' tools/tillr-drain/
+   tools/tillr-land/` at `55b8d6f67b` returns no matches).
+2. **Five drain Go files span slices 1c and 1d, so file-level Go unmoved lists alone cannot
+   express slice 1d landing before slice 1c.** At `55b8d6f67b`,
+   `tools/gate/classification-scan.test.py` (`0bcc3275a2`) held only Python `SITES` and
+   `UNMOVED_PYTHON = ("tools/fork-check.py",)`; slice 1b adds file-level `UNMOVED_GO` (in
+   `tools/gate/classification-scan.test.py`) and `unmovedGoFiles` (in
+   `tools/tillr-gate/classification_scan_test.go`) listing the 28 drain Go files. Eleven of those
+   drain files belong solely to slice 1d (`fixer_resolve.go`, `heavy.go`, `heavy_attribution.go`,
+   `heavy_early.go`, `heavy_go.go`, `heavy_loop.go`, `heavy_progress.go`, `heavy_steps.go`,
+   `obstacle_hold.go` and `trunk_release.go` under `tools/tillr-drain/drain/`, plus
+   `tools/tillr-drain/heavy/status.go`), while five are shared between unlanded slice 1c (`D1` to
+   `D16`, `D34`) and slice 1d (`D17` to `D33`): `fork_check_triage.go`, `gate_spans.go`,
+   `heavy_revert.go`, `steps.go` and `trunk.go` under `tools/tillr-drain/drain/`.
+3. **Several rows in `D17` to `D33` consume already-classified structs, run-level settlements or
+   telemetry rather than raw check results in Group 1, and four direct sites differ from the
+   base raw-result table.** Without naming which functions classify a check result directly in
+   slice 1d and which protocols preserve today's exact decisions (`D-GR28`), forcing every row of
+   `D17` to `D33` through the base `JudgingProgram` or `ResultWord` table changes outcomes in
+   `D19`, `D21`, `D22` and `D23` or invents artificial calls on booleans and run-level strings.
+
+**What is decided.**
+
+- **Scope and allowed write paths of slice 1d.** Row `1d` covers `D17` to `D33` only; `L3` and
+  `tools/tillr-land` are removed from rows `1d` and `2c`. Slice 1d's plan and build write only:
+  - `tools/tillr/checkresult/` (adding `BinaryProgram`, `LegacySpan`, `TriageSpan`,
+    `FocusedGoTest`, `HeavyCheckWord` and `HeavyOrder` from
+    [the protocols section](#each-site-keeps-its-raw-result-protocol-and-aggregate-order) and
+    their table tests in `classify_test.go`, linked in-process by `tools/tillr-drain` via its
+    local `go.mod` `replace` directive);
+  - `tools/tillr-drain/` (routing the direct Go sites of `D17` to `D33` in `drain/` and
+    `heavy/status.go`, adding per-site tests, and adding the function-keyed drain scan test
+    `tools/tillr-drain/drain/classification_scan_test.go`);
+  - `tools/gate/classification-scan.test.py` and (when present on the slice's base)
+    `tools/tillr-gate/classification_scan_test.go`, solely to remove slice 1d's 11 unshared drain
+    files from `UNMOVED_GO` / `unmovedGoFiles` and register slice 1d's moved functions in
+    `GO_SITES` / `movedRunnerSites` (or a `movedDrainSites` map checked the same way);
+  - `yolo-packs/tillr/` mirrors of `tools/tillr/`, `tools/tillr-drain/` and `tools/tillr-gate/`
+    regenerated by `just pack-sync` and never edited by hand.
+  Slice 1d does not edit `tools/tillr-land/`, `tools/tillr-loop/`, or the embedded legacy
+  observer `tools/tillr-drain/drain/heavy_legacy_progress.py` (not one of the Go functions named
+  in `D17` to `D33`), and edits no existing test's assertions.
+- **How the scan tests track slice 1d when slice 1c has not yet landed.**
+  - In `tools/gate/classification-scan.test.py` and `tools/tillr-gate/classification_scan_test.go`
+    (when present on the slice's base), the 11 drain files belonging solely to slice 1d
+    (`fixer_resolve.go`, `heavy.go`, `heavy_attribution.go`, `heavy_early.go`, `heavy_go.go`,
+    `heavy_loop.go`, `heavy_progress.go`, `heavy_steps.go`, `obstacle_hold.go` and
+    `trunk_release.go` under `tools/tillr-drain/drain/`, plus `tools/tillr-drain/heavy/status.go`)
+    are removed from `UNMOVED_GO` and `unmovedGoFiles` and pass those scanners cleanly. While
+    slice 1c is unlanded, the 5 shared files (`fork_check_triage.go`, `gate_spans.go`,
+    `heavy_revert.go`, `steps.go`, `trunk.go`) stay in the file-level `UNMOVED_GO` /
+    `unmovedGoFiles` lists only because slice 1c's unmoved functions still reside in them.
+  - Inside `tools/tillr-drain`, `tools/tillr-drain/drain/classification_scan_test.go` parses
+    `drain/` and `heavy/` (excluding `*_test.go`) with `go/ast` at **function/method
+    granularity** (`scannedDrainSites` and `unmovedDrainSites`, keyed by `(file, symbol)`). Slice
+    1d places **every** Go function and method of `D17` to `D33` — including those inside the 5
+    shared files (`Rolling` in `steps.go`, `D18` in `trunk.go`, `readSpansWithWatches`,
+    `readRollingCoverage` and `readGateSpans` in `gate_spans.go`, `readFailingSpanMeta` in
+    `fork_check_triage.go`, and `revertLanding` in `heavy_revert.go`) plus `legacyKeptLog` in
+    `heavy_steps.go` — into `scannedDrainSites`, and asserts that **no** function of `D17` to `D33`
+    appears in `unmovedDrainSites`. While slice 1c is unlanded, `unmovedDrainSites` holds only
+    slice 1c's unmoved classification functions (`D1` to `D16`, `D34`); when both 1c and 1d have
+    landed, `unmovedDrainSites`, `UNMOVED_GO` and `unmovedGoFiles` hold no drain entry.
+  - Every function in `scannedDrainSites` must exist and make no raw check-result comparison
+    outside `checkresult`: no comparison of a per-check result value (`HeavyCheck.Result`,
+    `VerdictCheck.Result`, `verdictCheck.Result`, `fastCheckSpan.Status` or a local check verdict
+    variable) or check span status (`gateSpan.Status`, `forkCheckSpanMeta.Status`) against check
+    outcome/status literals, and no comparison of a check or judging command's `ExitCode()`
+    against integer literals outside constructing `checkresult.Observation`. Positive controls in
+    `classification_scan_test.go` feed synthetic Go AST snippets to the scanner and prove each
+    forbidden pattern is caught. Run-level summary and settlement words (`"green"`, `"red"`,
+    `"red-unfiled"`, `"unknown"`, `"stalled"` on `RollingOutcome` / `rolling_runs` /
+    `HeavyRun.Result`, `"pass-inherited"` on `GateOutcome`, `"landed"` on `LandOutcome`),
+    `readGateSpans`'s empty-string default (`status == ""`) for raw telemetry rows, `runTillr`
+    step framing, and Git plumbing exit checks (`git show-ref`, `git rev-parse`, `git merge-base`)
+    are not check results and are not flagged.
+- **How each site in `D17` to `D33` is satisfied in slice 1d, with zero outcome change.** The 17
+  rows divide into 12 rows with direct per-check classification in Group 1 and 5 downstream
+  settle/run-cache rows whose functions inspect no raw check result in Group 1 (receiving their
+  check-level answers exclusively from `Classify` through upstream rows until slices `2c` and
+  `3a` add `disabled` behavior):
+
+| Site | Direct `checkresult` call in slice 1d | Functions in the row with no raw check result in Group 1 |
+| :--- | :--- | :--- |
+| `D17` | `(*ProcessSteps) Rolling` (`drain/steps.go`) classifies the rolling program exit via `JudgingProgram` (`0` green, `1` red spans, `6` stalled spans, anything else or unstarted `Known: false`) and `readSpansWithWatches` (`drain/gate_spans.go`) classifies `gate.spans.json` `span.Status` via `LegacySpan` (`FAIL` -> `Fail`; `STALLED` -> `Unknown`, detail `"stalled"`) | none |
+| `D18` | none directly in Group 1 (downstream of `D17`) | `maybeRolling`, `recordRollingRun`, `repeatedRollingStalls`, `rollingUnknownStreak` (`drain/trunk.go`) read `D17`'s `RollingOutcome` booleans (`Green`, `Stalled`, `Known`) and run-level `rolling_runs` / `rolling_state` strings (`"green"`, `"red"`, `"red-unfiled"`, `"stalled"`, `"unknown"`); `disabled` fixer suppression lands in slice `2c` |
+| `D19` | `readFailingSpanMeta` (`drain/fork_check_triage.go`) classifies `s.Status` via `TriageSpan`, retaining spans whose classification is `Fail` or `Unknown` with detail `"error"` or `"stalled"` (exact match on case-insensitive `FAIL`, `ERROR`, `STALLED`, excluding `ERR`, `STALE`, `not-run`) | `readRollingCoverage` (`drain/gate_spans.go`) reads only `SkippedChecks` and `attributes.Cached` (`bool`); `readGateSpans` (`drain/gate_spans.go`) stores raw measurement `span.Status` strings verbatim (`""` -> `"unknown"`) in the `gate_spans` telemetry table |
+| `D20` | `(*ProcessSteps) JudgeHeavy`, `decodeHeavyVerdict` and `legacyKeptLog` (`drain/heavy_steps.go`) classify `HeavyCheck.Result` / `verdict` via `HeavyCheckWord` (`JudgeHeavy` logs `Fail`; `decodeHeavyVerdict` resolves `LogPath` on `Fail` or `Unknown` with detail `"error"` or `"stalled"`; `legacyKeptLog` skips `Pass`) | none |
+| `D21` | `(*ProcessSteps) runHeavyLegacy` (`drain/heavy_steps.go`) classifies single-replay exit (`only != ""`) and whole-program exit (`only == ""`) via `BinaryProgram` (`0` -> `Pass`, `1` -> `Fail`, every other exit including `6` and `77` -> `Unknown`, detail `"error"`), and whole-program `span.Status` via `LegacySpan` (`PASS`/`ok`/`CACHED` -> `"pass"`, `skip`/`QUARANTINED` -> `"unavailable"`, `FAIL` -> `"fail"`, `STALLED` -> `"stalled"`, anything else -> `"error"`) | none |
+| `D22` | `(*ProcessSteps) judgeHeavyGo` (`drain/heavy_go.go`) classifies missing-package and `go test -json` (`passed`, `failed`, `skipped`, exit code, exit-0 wait/pipe error) via `FocusedGoTest` | none |
+| `D23` | `(HeavyRunner) run` and `judgeTip` (`drain/heavy.go`) classify each `HeavyCheck.Result` (and stall-retry `retry[0].Result`) via `HeavyCheckWord`, and `judgeTip` computes `run.Result` (`"green"`, `"red"`, `"unknown"`) via `Aggregate` with `HeavyOrder` | none |
+| `D24` | `loadHeavyProgress`, `reuseHeavyCheck` and `saveHeavyCheck` (`drain/heavy_progress.go`) classify `check.Result` via `CachedRecord` (`Outcome == Pass` iff `"pass"`) | none |
+| `D25` | none directly in Group 1 (downstream of `D23`; cached `run.Checks` re-classification at use is slice `3a`) | `completedHeavyRed` (`drain/heavy_attribution.go`) reads `D23`'s run-level `HeavyRun.Result == "red"` in `heavy.json` |
+| `D26` | `(HeavyRunner) oneLogged` (`drain/heavy.go`) classifies `checks[0].Result` via `HeavyCheckWord` (`Pass` green, `Fail` red, anything else error); `readHeavyReplay` (`drain/heavy_progress.go`) / `replay` (`drain/heavy.go`) classifies saved `heavy-replays.json` entries via `CachedRecord` (`true` -> `"fail"` -> `Fail`, `false` -> `"pass"` -> `Pass`) | none |
+| `D27` | `(HeavyRunner) findFirstRed` (`drain/heavy_attribution.go`) classifies `check.Result` via `HeavyCheckWord` and saved `heavy-attributions.json` entries via `CachedRecord`; `(*heavyEarly) offer` (`drain/heavy_early.go`) classifies `check.Result` via `HeavyCheckWord` | `searchFirstRed`, `attribute` (`drain/heavy.go`) and `(*heavyEarly) recover` (`drain/heavy_early.go`) consume booleans and attributions from `D26` and `findFirstRed` |
+| `D28` | `(HeavyRunner) forgetGreenAttributions` (`drain/heavy_attribution.go`) classifies `check.Result` via `HeavyCheckWord` (`Outcome == Pass`) | `retainRedRepairs` (`drain/heavy_attribution.go`) consumes the boolean answer of `r.replay` (`D26`) |
+| `D29` | none directly in Group 1 (downstream of `D1` and `D26`) | `revert`, `offerRevert`, `resolveRevert` (`drain/heavy.go`) and `(*Loop) revertLanding` (`drain/heavy_revert.go`) consume `D26`'s boolean `replay` and `D1`'s `GateOutcome` (whose `GatePassedInherited` is a settlement excluded from `Classify` by `D-GR23`); grouped-revert `disabled` handling lands in slice `2c` |
+| `D30` | `(*Loop) startHeavy` (`drain/heavy_loop.go`) and `ReadStatus` (`heavy/status.go`) classify `check.Result` via `HeavyCheckWord` (`Fail` and `Unavailable`) | `heavyStatusLine` (`drain/heavy_loop.go`) formats the slices already partitioned by `ReadStatus` |
+| `D31` | `readCheckProofs` and `readProgressCheckProof` (`drain/fixer_resolve.go`) classify `green.Passed` ids, `heavy-progress.json` `check.Result`, and `heavy-legacy-progress.json` `ProvedAt` entries via `CachedRecord` (`Outcome == Pass`) | `readGreenProof` and `readGreenProofFile` deserialize the `GreenProof` JSON for `readCheckProofs`; `(checkProof) passed` queries the `checkProof.at` map already populated from `Classify` |
+| `D32` | none directly in Group 1 (downstream of `D31`) | `(*Loop) resolveProvedFixers` (`drain/fixer_resolve.go`) consumes `D31`'s `checkProof`; `disabled` fixer settlement lands in slice `2c` |
+| `D33` | none directly in Group 1 (downstream of `D31` and `D32`) | `obstacleProofPassed`, `releaseTrunkObstacleHolds` (`drain/obstacle_hold.go`), `repairedTrunkWaiter` and `releaseTrunkAcquittals` (`drain/trunk_release.go`) consume `D31`'s `checkProof` and `D32`'s `drain.fixer-proved` events; releasing holds on `disabled` checks lands in slice `2c` |
+
+**What a verifier of slice 1d judges.**
+
+- **Scope (`c1`):** only `tools/tillr/checkresult/`, `tools/tillr-drain/`, the Go unmoved/moved
+  tables in `tools/gate/classification-scan.test.py` and (when present)
+  `tools/tillr-gate/classification_scan_test.go`, and the `yolo-packs/tillr/` mirrors from `just
+  pack-sync` are modified; `tools/tillr-land/` and `tools/tillr-loop/` are untouched, and no
+  existing test's assertions are edited.
+- **Per-site routing, tests and scan lists (`c5`):** every direct site in the table (`D17`,
+  `D19`'s `readFailingSpanMeta`, `D20`, `D21`, `D22`, `D23`, `D24`, `D26`, `D27`'s `findFirstRed`
+  and `(*heavyEarly) offer`, `D28`'s `forgetGreenAttributions`, `D30`'s `startHeavy` and
+  `ReadStatus`, and `D31`'s `readCheckProofs` and `readProgressCheckProof`) calls
+  `checkresult.Classify` (and `judgeTip` calls `checkresult.Aggregate` with `HeavyOrder`), with a
+  Go test exercising each site's classification path and table tests in
+  `tools/tillr/checkresult/classify_test.go` covering every new protocol and `HeavyOrder`. The 11
+  unshared slice-1d drain files are removed from `UNMOVED_GO` and `unmovedGoFiles`, every
+  function of `D17` to `D33` (including in the 5 shared 1c/1d files) is in `scannedDrainSites` of
+  `tools/tillr-drain/drain/classification_scan_test.go` and absent from `unmovedDrainSites`, and
+  existing and per-site drain tests cover the downstream rows (`D18`, `D25`, `D29`, `D32`, `D33`)
+  through their classified upstream inputs. A verifier does not refuse slice 1d because the
+  downstream/telemetry functions in the right-hand column make no artificial direct `Classify`
+  call on booleans, raw telemetry rows or run-level settlement words before slices `2c` and `3a`,
+  or because the 5 shared files remain in `UNMOVED_GO` / `unmovedGoFiles` (and slice `1c`'s
+  functions remain in `unmovedDrainSites`) until slice 1c lands.
+- **No outcome change (`c6`):** `go test ./...` in `tools/tillr`, `tools/tillr-drain` (and
+  `tools/tillr-gate` when its scan list is updated) and `python3
+  tools/gate/classification-scan.test.py` pass with no existing test assertion edited, and every
+  input to `D17` to `D33` produces the same result as at `55b8d6f67b`.
+
+**Alternatives, each rejected by the designer:**
+
+- **Keep `L3` and `tools/tillr-land` in slice 1d.** Contradicts the filed operator request,
+  duplicates `L3` from slice 1e (`0bcc3275a2`), and contradicts `D-GR23`'s exclusion of the
+  `pass-inherited` settlement.
+- **Rely on file-level Go unmoved lists alone, with no function-keyed drain scan test.** Either
+  leaves `D17` to `D19` and `D29` unscanned in the 5 shared files until slice 1c lands, or fails
+  on slice 1c's unmoved functions when slice 1d lands first.
+- **Force `D21`, `D22`, `D23` and `D19`'s `readFailingSpanMeta` onto `JudgingProgram` and
+  `ResultWord`.** Changes outcomes (`D21` single-replay exit `6`/`77` would turn `"error"` into
+  `"stalled"`/`"unavailable"`; `D19` would retain logs for `ERR`, `STALE` and `not-run`; `D23`
+  would accept `"disabled"` or uppercase words before slice `2c`), violating the request's
+  "with no change in any outcome".
+- **Add dummy `Classify` calls in `D18`, `readGateSpans`, `D25`, `D29`, `D32` and `D33`.** Their
+  Group 1 inputs are already-classified booleans, raw telemetry columns asserted verbatim by
+  existing tests, or run-level settlement strings (`"green"`, `"red"`, `"red-unfiled"`,
+  `"pass-inherited"`), which `D-GR23` excludes from `Classify`.
 
 ### 6.3 A missing machine resource is named, not failed
 
@@ -3029,7 +3207,12 @@ keeping Go's result cache on for every selected package; it amends `D-GR39` and 
 overturn. `D-GR41` is the designer's decision of 2026-11-22, from the operator request for
 "Slice 2 of the flaky-check rule" and made to answer a build worker's report against it; it
 splits live `disabled` emission into slice 2d after the drain's sweep and consumer slices, narrows
-this request's landing to slice 2a, and is the owner's to overturn.
+this request's landing to slice 2a, and is the owner's to overturn. `D-GR42` is the designer's
+decision of 2026-11-22, answering a build worker's report on the operator request for slice 1d
+(`D17` to `D33` in `tools/tillr-drain`); it removes `L3` and `tools/tillr-land` from rows `1d`
+and `2c`, pairs the file-level Go unmoved lists with a function-keyed `go/ast` drain scan test
+for the five files shared with slice 1c, names the protocols and direct vs downstream sites of
+`D17` to `D33` so no outcome changes, and is the owner's to overturn.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
@@ -3077,6 +3260,7 @@ this request's landing to slice 2a, and is the owner's to overturn.
 | OQ-GR3 | A change to the gate's own runner lands only after the runner's suite passes, before the merge, under either strategy. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principle is the fence of [escalation ladder Section 5.2](escalation-ladder.md#52-the-fence-what-a-lane-may-not-edit) (gate definitions change only as their own item), for the reason the 2026-11-05 ruling gave: a wrong judge is the one red a revert does not repair. The owner may overturn it. **Rejected:** landing it in ten seconds and re-running every landing's fast checks after a red suite. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/gate/runner-first.test.py`) |
 | `D-GR40` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** It amends `D-GR39` to match the operator request of 2026-11-21, whose words are "runs go test on the selected packages with Go's test cache left on (no -count=1)". The one exception `D-GR39` made is withdrawn: no package the affected-packages check selects is run with `-count=1`, whatever the reason it was selected. The stale pass that exception guarded against is stopped another way. The check passes each test package that has an entry in the edges file a digest of that entry's inputs in an environment variable, the package's tests read the variable, and Go's result cache then reruns the package when the digest changes and answers from the cache when it does not. The timing record no longer holds a `-count=1` field. Every other part of `D-GR39` stands. **Rejected:** `-count=1` for packages selected only through a declared edge (`D-GR39`'s exception; the request excludes it); the cache on for those packages with their inputs left invisible to it (a pass from before the change); the drain's symlink alias copied into every module with an edge (it covers Go sources only, and a second copy of it per module). | 2026-11-22 | [The result cache stays on for every affected package](#the-result-cache-stays-on-for-every-affected-package) | — (not built) |
 | `D-GR41` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** Answers a build worker's report on the operator request for "Slice 2 of the flaky-check rule" at `0450fedb34`, where only slices 1a (`020cf29eca`) and 1e (`0bcc3275a2`) have landed. Records the owner's second 2026-11-21 statement in `D-GR21`. Reconciles "at that observation ... before any other work" with `D-GR23`: `tillr-gate` atomically writes the `disabled/` marker and copies both logs at the contradicting observation before printing or returning, and `tillr-drain`'s marker sweep (slice 2b) files `flaky-<check-id>` at pass start and immediately when every gate, replay, rolling or heavy step returns, before attribution, pending reverts or dispatch. Splits live `disabled` emission in `tillr-gate run` / `tillr-gate checks` (`G2`, `G3`, `G4`, `G7`) and the Python store-backed adapters (`P4` to `P6`) into slice 2d (after 1b, a proved trunk commit holding 2a, 2b, 2c and 3a), so live runs never emit `disabled` before consumers accept it and the sweep can file its repair item. Under [`OQ-SP1`](./tillr-item-split.md#OQ-SP1) and `D-GR5`, narrows this request's landing to slice 2a: rules 1 to 3 in `tools/tillr/checkresult`; store-backed `--repo` / `--store` / `--prove-disabled` on `tillr-gate classify` (exact `<id>`, `<id>:<label>` and `<id>/<slug(label)>` selector resolution, committed-declaration fingerprinting, optional per-unit `fingerprint`, pre-run query, marker + log-copy write, while plain `tillr-gate classify` stays pure); `tillr-gate enable` with episode matching, `enabled/` fence and `resolved/` archive; `log_ref` on stored records; tests and `just pack-sync` mirror; taking only those store mechanics from `refs/tillr/runs/run-item-request-c1a6f8e4e5-a14-n5` `[unlanded]`. Slices 1b–1d, 1f, 1g, 2b–2d, 3a and 3b are named unmet cases listed in the candidate's commit message, and a verifier does not refuse slice 2a for them. **Rejected:** building all remaining slices in one commit; emitting `disabled` from live runner faces before 2b, 2c and 3a; opening the SQLite queue in `tillr-gate`; touching the repo or store on plain `tillr-gate classify` with no flag; taking `TILLR_DISABLED_OBSERVATIONS` or raw string checks from the donor ref. | 2026-11-22 | [The second flaky-check request lands the rule in the classifier and its gate faces](#the-second-flaky-check-request-lands-the-rule-in-the-classifier-and-its-gate-faces) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
+| `D-GR42` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** Answers a build worker's report (`55b8d6f67b`) on the operator request for slice 1d ("route the tillr-drain sites D17 to D33 through the shared classify function"). Removes `L3` and `tools/tillr-land` (added in error by `d9a021ee61`) from rows `1d` and `2c`: `L3` is `compose_verdict` in `tools/tillr-loop` (already in slice 1e and excluded from `Classify` by `D-GR23` as a settlement), and the 70-site inventory defines no `tools/tillr-land` site. Removes slice 1d's 11 unshared drain files from `UNMOVED_GO` (`tools/gate/classification-scan.test.py`) and `unmovedGoFiles` (`tools/tillr-gate/classification_scan_test.go`), and adds function-keyed `tools/tillr-drain/drain/classification_scan_test.go` so all `D17`–`D33` functions (including those in the 5 files shared with unlanded slice 1c) are in `scannedDrainSites` and absent from `unmovedDrainSites`. Applies `D-GR28` by adding `BinaryProgram`, `LegacySpan`, `TriageSpan`, `FocusedGoTest`, `HeavyCheckWord` and `HeavyOrder` in `tools/tillr/checkresult`, and distinguishes the 12 direct per-check sites in `D17`–`D33` from the downstream settle/run-cache/telemetry functions (`D18`, `readRollingCoverage`, `readGateSpans`, `D25`, `D29`, `D32`, `D33`) that hold no raw check-result comparison in Group 1 and gain `disabled` behavior in slices `2c` and `3a`. Slice 1d writes only `tools/tillr/checkresult/`, `tools/tillr-drain/`, the Go scan tables in `tools/gate/classification-scan.test.py` and `tools/tillr-gate/classification_scan_test.go`, and their `just pack-sync` mirrors under `yolo-packs/tillr/`. **Rejected:** keeping `L3` or `tools/tillr-land` in slice 1d; relying on file-level Go unmoved lists alone across the 5 shared 1c/1d files; forcing `D19`, `D21`, `D22` and `D23` onto `JudgingProgram` / `ResultWord` with outcome changes; adding dummy `Classify` calls on booleans, telemetry rows or run-level settlements. | 2026-11-22 | [Slice 1d routes the drain's rolling, heavy and proof classifiers, with a function-keyed Go scan test](#slice-1d-routes-the-drains-rolling-heavy-and-proof-classifiers-with-a-function-keyed-go-scan-test) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
 
 ### The result cache stays on for every affected package
 
@@ -3445,25 +3629,28 @@ alone, leaves the gate and the drain working, and is verified by the tests named
 without any later slice. A slice in the first group is a refactor: its proof is that the module's
 existing tests pass unchanged, plus the scan test below.
 
-The **scan test** *(coined here)* is one test, added by the first of slices 1b to 1e to land
-(`D-GR32`; landed in `0bcc3275a2`), that reads the source
-of the four programs and fails when a file outside `checkresult` compares a result word, a span
-status or a judging program's exit code. It carries a list of files not yet moved; each slice of
-the first group removes its files from that list, and the list is empty when the group is done.
-It is what keeps a site added later from classifying on its own.
+The **scan test** *(coined here)* is one check (`D-GR32`, landed in `0bcc3275a2` and refined by
+[`D-GR42`](#slice-1d-routes-the-drains-rolling-heavy-and-proof-classifiers-with-a-function-keyed-go-scan-test))
+that reads the source of the programs and fails when a moved site outside `checkresult` compares a
+check result word, a check span status or a check/judging program's exit code. `UNMOVED_PYTHON`
+and `UNMOVED_GO` in `tools/gate/classification-scan.test.py` (with `unmovedGoFiles` in
+`tools/tillr-gate/classification_scan_test.go`) track unmoved files, while
+`tools/tillr-drain/drain/classification_scan_test.go` scans moved functions inside the five drain
+files shared between slices 1c and 1d until both drain slices have landed and every unmoved list
+is empty.
 
 | Slice | What it changes | Sites | Verified alone by |
 | :--- | :--- | :--- | :--- |
 | 1a | Add `checkresult` with `Classify` and `Aggregate` holding rule 4's table and [every protocol and aggregate order](#each-site-keeps-its-raw-result-protocol-and-aggregate-order) only, and the `tillr-gate classify` face. Nothing calls them. [This slice is the whole landing of the first filed request](#the-first-classifier-landing-is-the-function-and-its-face-with-no-caller) (**built in `020cf29eca`**) | none | Table tests in the package: one case per row of the raw-result table, per row and step of each protocol, and per pair of each aggregate order. A face test: observations in, outcomes out in the same order, and no check command started |
 | 1b | Route the runner's sites through the function | G1 to G12 | `go test ./...` in `tools/tillr-gate` passes with no test edited; the scan list loses the runner's files |
-| 1c | Route the drain's landing-gate and light-attribution sites | D1 to D16, D34 | `go test ./...` in `tools/tillr-drain` passes with no test edited; the scan list loses those files |
-| 1d | Route the drain's rolling, heavy and proof sites, and the lander site | D17 to D33, L3 | `go test ./...` in `tools/tillr-drain` and `tools/tillr-land` passes with no test edited; the scan list loses the rest of the drain and lander |
-| 1e | Route the Python sites that classify one check through the installed face: `check_status` takes its words from it under the legacy-check protocol, `go-build.py` and the documents check under theirs, and the adapters stop pairing exit codes with words themselves. `verdict_of` and `run_replay` are not touched ([`D-GR33`](#the-face-aggregates-a-run-in-its-own-landing-before-the-legacy-aggregates-call-it); **built in `0bcc3275a2`**) | P1 to P7, F1 to F5, F7, F8, F10 to F13, L1 to L4 | `python3 tests/fork-check.test.py` and the tests under `tools/gate` pass with no assertion edited; a fixture's setup changes only as [`D-GR34`](#a-stand-in-for-the-installed-program-is-fixture-setup-and-it-answers-classify) allows, in whichever test file holds the fixture, Go tests included ([`D-GR36`](#a-fixture-that-copies-a-moved-adapter-is-in-the-movers-change-in-any-language)), and a plan's write paths list the four fixtures measured ([`D-GR37`](#a-fixture-that-copies-the-legacy-gate-is-reached-too-and-the-plan-lists-the-fixtures-measured)); the scan list holds only `tools/fork-check.py`. The two copies of `tillr-loop` stay byte-identical |
+| 1c | Route the drain's landing-gate and light-attribution sites | D1 to D16, D34 | `go test ./...` in `tools/tillr-drain` passes with no test edited; the scan lists lose those files and `unmovedDrainSites` loses `D1` to `D16` and `D34` |
+| 1d | Route the drain's rolling, heavy and proof sites through `checkresult`, adding the five raw-result protocols and `HeavyOrder` of [`D-GR42`](#slice-1d-routes-the-drains-rolling-heavy-and-proof-classifiers-with-a-function-keyed-go-scan-test) in `tools/tillr/checkresult` | D17 to D33 | `go test ./...` in `tools/tillr` and `tools/tillr-drain` and `python3 tools/gate/classification-scan.test.py` pass with no existing test assertion edited; the 11 unshared 1d files leave `UNMOVED_GO` / `unmovedGoFiles`, and `tools/tillr-drain/drain/classification_scan_test.go` scans all functions of `D17` to `D33` with none in `unmovedDrainSites` (`D-GR42`) |
+| 1e | Route the Python sites that classify one check through the installed face: `check_status` takes its words from it under the legacy-check protocol, `go-build.py` and the documents check under theirs, and the adapters stop pairing exit codes with words themselves. `verdict_of` and `run_replay` are not touched ([`D-GR33`](#the-face-aggregates-a-run-in-its-own-landing-before-the-legacy-aggregates-call-it); **built in `0bcc3275a2`**) | P1 to P7, F1 to F5, F7, F8, F10 to F13, L1 to L4 | `python3 tests/fork-check.test.py` and the tests under `tools/gate` pass with no assertion edited; a fixture's setup changes only as [`D-GR34`](#a-stand-in-for-the-installed-program-is-fixture-setup-and-it-answers-classify) allows, in whichever test file holds the fixture, Go tests included ([`D-GR36`](#a-fixture-that-copies-a-moved-adapter-is-in-the-movers-change-in-any-language)), and a plan's write paths list the four fixtures measured ([`D-GR37`](#a-fixture-that-copies-the-legacy-gate-is-reached-too-and-the-plan-lists-the-fixtures-measured)); `UNMOVED_PYTHON` holds only `tools/fork-check.py`. The two copies of `tillr-loop` stay byte-identical |
 | 1f | The face gains `--aggregate <order>`: observations in, the classifications and the run's result out. Nothing calls it | none | A face test per order: the `run` object equals `Aggregate` on the same classifications, `checks` equals the plain form's output, an unknown order is exit 2 with no output, and the plain form's output is unchanged |
-| 1g | `verdict_of` takes the run's result from the face under the legacy gate's order and `run_replay` under the legacy replay's | F6, F9 | `python3 tests/fork-check.test.py` passes with no assertion edited (`D-GR34`); the scan list is empty |
+| 1g | `verdict_of` takes the run's result from the face under the legacy gate's order and `run_replay` under the legacy replay's | F6, F9 | `python3 tests/fork-check.test.py` passes with no assertion edited (`D-GR34`); `UNMOVED_PYTHON` is empty |
 | 2a | Add rules 1 to 3 in `checkresult`, store-backed `--repo` / `--store` / `--prove-disabled` on `tillr-gate classify` (exact `<id>`, `<id>:<label>` and `<id>/<slug(label)>` selector resolution, committed-declaration fingerprinting, optional per-unit `fingerprint`, pre-run query, and atomic marker + log-copy creation on a single contradiction, while plain `tillr-gate classify` stays pure), `tillr-gate enable` (episode match, `enabled/` fence and `resolved/` archive), and `log_ref` on stored records, while keeping live `tillr-gate run` and `tillr-gate checks` output unchanged until `2d`. [This slice is the whole landing of the flaky-check slice-2 request](#the-second-flaky-check-request-lands-the-rule-in-the-classifier-and-its-gate-faces) (`D-GR41`) | none (faces only) | Package and face tests in `tools/tillr/checkresult` and `tools/tillr-gate`: stored pass + fresh fail and stored fail + fresh pass each give `disabled` with marker and copied logs; a marker disables a new fingerprint; `--prove-disabled` evaluates rule 4; `enable` removes only the episode it names and records `enabled/` + `resolved/`; plain `tillr-gate classify` with no flags stays pure |
 | 2b | The drain's marker sweep files the repair item (asking to fix the flaky check and re-enable it correctly, `D-GR21`) at pass start and on every gate, replay, rolling or heavy step return before attribution, pending reverts or dispatch, and runs `enable` after the repair lands. A generated repair item needs no document block | a new step; no listed site changes | Drain tests with a marker file written by the test and no gate run: one item per episode; none while one is unfinished; a new item after a landed repair and a new episode; a sweep after a cancelled step and after a step that errored still files before pending reverts or dispatch |
-| 2c | Every drain and lander consumer handles `disabled` as the classifier section lists, and the drain passes `--prove-disabled <check-id>` when gating a `flaky-*` repair item's candidate | D2, D3, D7, D8, D10, D13, D16, D18, D23, D29, D30, D32 to D34, L3 | Drain and lander tests, one per bullet of that list, each with a stub gate that returns `disabled`: no refusal, no red trunk, no fixer, the held item released, the notice silent, the grouped revert still judging its other members, and `--prove-disabled` passed for `flaky-*` |
+| 2c | Every drain consumer handles `disabled` as the classifier section lists, and the drain passes `--prove-disabled <check-id>` when gating a `flaky-*` repair item's candidate | D2, D3, D7, D8, D10, D13, D16, D18, D23, D29, D30, D32 to D34 | Drain tests, one per bullet of that list, each with a stub gate that returns `disabled`: no refusal, no red trunk, no fixer, the held item released, the notice silent, the grouped revert still judging its other members, and `--prove-disabled` passed for `flaky-*` |
 | 3a | Cached evidence is classified at use | D11, D24 to D28, D31, F2 | Drain tests that write a proof, a checkpoint, a replay answer and an attribution record as the code before slice 2a wrote them, add a marker, and find none of them credited or reused |
 | 2d | Turn on live `disabled` classification, pre-run skip, marker + log-copy creation and `--prove-disabled` in `tillr-gate run` and `tillr-gate checks`, and pass `--repo` from the Python store-backed checks (`P4` to `P6`) to the installed `tillr-gate classify` (`D-GR41`) | G2, G3, G4, G7, P4 to P6 | Runner and adapter tests: `TestMemoryFailRetriesAndFlakyPass` and `TestMemoryOppositeWritersNeverErase` are rewritten to `disabled`, exit 0, marker + copied logs; end-to-end `flaky-*` proving and re-enabling on land passes |
 | 3b | The installed runner judges store-backed declarations on a replayed commit; the fast tree adapter passes the committed declaration bytes and keeps its logs; the legacy status words gain `DISABLED`; labelled selectors resolve through the face | P1, P3, F1, F4, F7, L2, D12, D16, D17, D21 | A test that replays a commit whose own `tools/fork-check.py` and `tools/gate/tree-check.py` predate slice 1e, with a marker present: the replay reports the check disabled, the rolling run is not `unknown`, and the fingerprint equals the landing gate's for the same declaration. A proof under a declaration's id satisfies a fixer that names its labelled selector |
@@ -3489,15 +3676,19 @@ wherever it is, Go tests included (`D-GR36`). A fixture that copies `tools/fork-
 of those, and a plan for the landing lists the four copying fixtures measured among its write
 paths (`D-GR37`). A third operator request ("Slice 2 of the flaky-check rule") lands slice 2a
 alone (`D-GR41`), with slices 1b to 1d, 1f, 1g, 2b, 2c, 3a, 2d and 3b as the cases it leaves
-unmet.
+unmet. A fourth operator request ("Slice 1d: route the tillr-drain sites D17 to D33 through the
+shared classify function") lands slice 1d as specified in `D-GR42` (`tools/tillr/checkresult/`,
+`tools/tillr-drain/` including `classification_scan_test.go`, the Go scan tables in
+`tools/gate/classification-scan.test.py` and `tools/tillr-gate/classification_scan_test.go`, and
+their `just pack-sync` mirrors).
 
 **Agent Details:**
 
 - **Paths:** `tools/tillr/checkresult/` (new), `tools/tillr-gate/`, `tools/tillr-drain/`,
-  `tools/tillr-land/`, `tools/tillr-loop/`, `tools/gate/`, `tools/fork-check.py`,
+  `tools/tillr-loop/`, `tools/gate/`, `tools/fork-check.py`,
   `tools/go-test-shards.py`, their pack mirrors, and this document. Run `just pack-sync` after
   the last source edit of a slice and commit the regenerated mirror.
-- **Ref:** `D-GR21` to `D-GR23`, `D-GR28`, `D-GR32` to `D-GR34`, `D-GR36`, `D-GR37` and `D-GR41` in the [Decision Ledger](#decision-ledger).
+- **Ref:** `D-GR21` to `D-GR23`, `D-GR28`, `D-GR32` to `D-GR34`, `D-GR36`, `D-GR37`, `D-GR41` and `D-GR42` in the [Decision Ledger](#decision-ledger).
 - **Order:** 1a first, alone, and proved green so that the installed `tillr-gate` has the face
   (`D-GR32`; landed in `020cf29eca`). 1b to 1f need only 1a and may land in any order (1e landed
   in `0bcc3275a2` and added the scan test). 1g needs 1e, and 1f proved green so that the
