@@ -464,3 +464,101 @@ func TestDeniedCounterUsesProcessAccounting(t *testing.T) {
 		t.Fatal("fallback CPU source hidden from the live log")
 	}
 }
+
+func TestProcessAccountingFollowsDetachedDescendants(t *testing.T) {
+	root := scratch(t, "proc-detached")
+	log, err := os.CreateTemp(root, "output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	proc := func(pid, ppid, pgrp, start string, ns uint64) {
+		dir := filepath.Join(root, pid, "task", pid)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		fields := strings.Fields("S 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0")
+		fields[1], fields[2], fields[19] = ppid, pgrp, start
+		if err := os.WriteFile(filepath.Join(root, pid, "stat"), []byte(pid+" (proc) "+strings.Join(fields, " ")), 0644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "schedstat"), []byte(fmt.Sprintf("%d 0 0", ns)), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	proc("123", "1", "123", "1", 1000)   // idle check leader
+	proc("200", "123", "200", "2", 500)  // guard in a new session (pgrp 200 != 123)
+	proc("201", "200", "200", "3", 2000) // worker child under guard
+	proc("202", "201", "202", "4", 3000) // nested setsid grandchild
+	proc("999", "1", "999", "5", 900000) // unrelated process outside the tree
+	sampler := processSampler(root, 123, errors.New("counter denied"))
+	read := func() watchSample {
+		s, err := sampler(123, log)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	first := read()
+	if first.CPUTimeNS != 6500 {
+		t.Fatalf("initial total should include detached descendants only: got %+v", first)
+	}
+	// Only the unrelated process grows: must not look like progress.
+	proc("999", "1", "999", "5", 999999999)
+	if s := read(); s.CPUChanged || s.CPUTimeNS != 6500 {
+		t.Fatalf("unrelated process counted as progress: %+v", s)
+	}
+	// Worker child under the new-session guard burns CPU while leader stays idle.
+	proc("201", "200", "200", "3", 52000)
+	if s := read(); !s.CPUChanged || s.CPUTimeNS != 56500 {
+		t.Fatalf("detached worker CPU missed: %+v", s)
+	}
+	// Nested setsid grandchild burns CPU while leader and guard stay idle.
+	proc("202", "201", "202", "4", 103000)
+	if s := read(); !s.CPUChanged || s.CPUTimeNS != 156500 {
+		t.Fatalf("nested setsid grandchild CPU missed: %+v", s)
+	}
+}
+
+func TestProcessAccountingGuardedSessionProgress(t *testing.T) {
+	log, err := os.CreateTemp(scratch(t, "guarded-session"), "output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	// Mimic go_affected.py: the check leader blocks silently in wait() while a
+	// child started with start_new_session=True runs a CPU-burning grandchild.
+	code := `import subprocess, sys
+worker = "import time\nend = time.monotonic() + 1.4\nwhile time.monotonic() < end: pass\n"
+guard = "import subprocess, sys\nsys.exit(subprocess.call([sys.executable, '-c', sys.argv[1]]))\n"
+p = subprocess.Popen([sys.executable, "-c", guard, worker], start_new_session=True)
+sys.exit(p.wait())
+`
+	cmd := exec.Command("python3", "-c", code)
+	cmd.Stdout, cmd.Stderr = log, log
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	sampler, closer, err := startWithTaskClock(cmd, func(int) (*os.File, error) { return nil, errors.New("counter denied") })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closer != nil {
+		defer closer.Close()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	sources := &watchSources{Context: ctx, Sample: sampler, Ticks: func() (<-chan time.Time, func()) {
+		ticker := time.NewTicker(10 * time.Millisecond)
+		return ticker.C, ticker.Stop
+	}}
+	err, state := watchCommand(cmd, log, sources)
+	if state.Unavailable != "" {
+		t.Fatalf("fallback unavailable: %+v, %v", state, err)
+	}
+	if err != nil || state.SilentSamples >= WatchdogSilentSamples {
+		body, _ := os.ReadFile(log.Name())
+		t.Fatalf("active guarded-session check judged stalled: %+v, %v; %s", state, err, body)
+	}
+	if state.previous.CPUTimeMS == 0 {
+		t.Fatal("CPU from guarded session child was lost")
+	}
+}

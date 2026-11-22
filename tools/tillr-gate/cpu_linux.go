@@ -150,13 +150,20 @@ func readProcessGroupWithRead(root string, group int, readFile func(string) ([]b
 		pid    string
 		fields []string
 	}
-	var snapshots []memberStat
+	byPID := map[int]memberStat{}
+	childrenOf := map[int][]int{}
+	var queue []int
+	seen := map[int]bool{}
 	// Capture all reaped-child times before reading any live thread runtime.
 	// Otherwise a child read before its parent can be counted twice if reaped
 	// between those reads. Missing later runtime is progress, not a total.
+	// Follow descendants across session/process-group boundaries (e.g. subreaper
+	// guards started with setsid) so process accounting matches the inherited
+	// kernel task clock.
 	for _, entry := range entries {
 		pid := entry.Name()
-		if _, err := strconv.Atoi(pid); err != nil {
+		pidNum, err := strconv.Atoi(pid)
+		if err != nil {
 			continue
 		}
 		body, err := readFile(filepath.Join(root, pid, "stat"))
@@ -175,14 +182,32 @@ func readProcessGroupWithRead(root string, group int, readFile func(string) ([]b
 		if len(fields) < 20 {
 			return nil, 0, false, fmt.Errorf("short process stat for %s", pid)
 		}
+		ppid, err := strconv.Atoi(fields[1])
+		if err != nil {
+			return nil, 0, false, err
+		}
 		pg, err := strconv.Atoi(fields[2])
 		if err != nil {
 			return nil, 0, false, err
 		}
-		if pg != group {
-			continue
+		byPID[pidNum] = memberStat{pid, fields}
+		childrenOf[ppid] = append(childrenOf[ppid], pidNum)
+		if pg == group || pidNum == group {
+			seen[pidNum] = true
+			queue = append(queue, pidNum)
 		}
-		snapshots = append(snapshots, memberStat{pid, fields})
+	}
+	var snapshots []memberStat
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		snapshots = append(snapshots, byPID[cur])
+		for _, child := range childrenOf[cur] {
+			if !seen[child] {
+				seen[child] = true
+				queue = append(queue, child)
+			}
+		}
 	}
 	for _, snapshot := range snapshots {
 		pid, fields := snapshot.pid, snapshot.fields
