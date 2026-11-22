@@ -19,10 +19,11 @@ func (l *Loop) holdFailedParallelNode(ctx context.Context, node Decision, rec ru
 	if held, err := l.recordInfrastructureFailure(ctx, node, rec, log); held || err != nil {
 		return node, false, err
 	}
-	request := l.currentPolicy().request(node.ItemID, node.LaneID, markRunID(node.RunRequest.RunID, "restart"), rec.Backend)
-	if request == nil {
-		return node, false, Usagef("workflow seat %s has no backend %s", node.Seat, rec.Backend)
+	policy := l.currentPolicy()
+	if policy == nil {
+		return node, false, Usagef("workflow seat %s has no backend route", node.Seat)
 	}
+	request := restartBackendRequest(policy, node, markRunID(node.RunRequest.RunID, "restart"), rec.Backend)
 	request.ReadOnlyGroup = node.RunRequest.ReadOnlyGroup
 	request.NodeID = node.Workflow.Stages[node.NodeIndex].ID
 	request.WorkingDir = node.RunRequest.WorkingDir
@@ -41,10 +42,7 @@ func (l *Loop) parallelInterrupted(node Decision, rec run.Record) (Decision, boo
 	if policy == nil {
 		return node, false, Usagef("workflow seat %s has no backend route", node.Seat)
 	}
-	request := policy.request(node.ItemID, node.LaneID, markRunID(node.RunRequest.RunID, "interrupted"), rec.Backend)
-	if request == nil {
-		return node, false, Usagef("workflow seat %s has no backend %s", node.Seat, rec.Backend)
-	}
+	request := restartBackendRequest(policy, node, markRunID(node.RunRequest.RunID, "interrupted"), rec.Backend)
 	request.ReadOnlyGroup = node.RunRequest.ReadOnlyGroup
 	request.NodeID = node.Workflow.Stages[node.NodeIndex].ID
 	request.WorkingDir = node.RunRequest.WorkingDir
