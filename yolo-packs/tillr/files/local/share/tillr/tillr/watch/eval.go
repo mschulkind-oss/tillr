@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -264,13 +265,28 @@ func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult,
 		if err != nil {
 			return nil, err
 		}
+		lookup := newSourceItemTerminal(ctx, e.Source)
+		ruleByID := make(map[string]*Rule, len(e.Rules)+len(rules))
+		for i := range e.Rules {
+			r := e.Rules[i]
+			ruleByID[r.ID] = &r
+		}
+		for i := range rules {
+			r := rules[i]
+			ruleByID[r.ID] = &r
+		}
+		reconciled := make(map[string]bool, len(rules))
 		for i, subjects := range derived {
 			if subjects == nil {
 				continue
 			}
-			if err := e.mem.reconcileRule(rules[i], subjects, startHead, now); err != nil {
+			reconciled[rules[i].ID] = true
+			if err := e.mem.reconcileRule(rules[i], subjects, startHead, now, lookup); err != nil {
 				return nil, fmt.Errorf("rule %s: %w", rules[i].ID, err)
 			}
+		}
+		if err := e.mem.resolveTerminalRemaining(ruleByID, reconciled, startHead, now, lookup); err != nil {
+			return nil, err
 		}
 		return results, nil
 	}
@@ -318,6 +334,24 @@ func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult,
 			if err != nil {
 				return nil, err
 			}
+			lookup, err := newStoreItemTerminal(rd)
+			if err != nil {
+				return nil, err
+			}
+			snapHead, err := rd.EventHeadSeq()
+			if err != nil {
+				return nil, err
+			}
+			ruleByID := make(map[string]*Rule, len(e.Rules)+len(rules))
+			for i := range e.Rules {
+				r := e.Rules[i]
+				ruleByID[r.ID] = &r
+			}
+			for i := range rules {
+				r := rules[i]
+				ruleByID[r.ID] = &r
+			}
+			reconciled := make(map[string]bool, len(rules))
 			var changes episodeChanges
 			for i, subjects := range derived {
 				rule := rules[i]
@@ -328,9 +362,13 @@ func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult,
 					// A disabled override no longer fires for any subject.
 					subjects = make(map[string]*condition)
 				}
-				if err := changes.reconcile(rd, rule, subjects, startHead, now); err != nil {
+				reconciled[rule.ID] = true
+				if err := changes.reconcile(rd, rule, subjects, startHead, snapHead, now, lookup); err != nil {
 					return nil, fmt.Errorf("rule %s: %w", rule.ID, err)
 				}
+			}
+			if err := changes.resolveTerminalRemaining(rd, ruleByID, reconciled, snapHead, now, lookup); err != nil {
+				return nil, err
 			}
 			if len(changes) == 0 {
 				return nil, nil
@@ -475,10 +513,10 @@ func (e Evaluator) deriveSourceRules(ctx context.Context, src ObservationSource,
 }
 
 type episode struct {
-	id, state    string
-	opened, last int64
-	silenceUntil sql.NullInt64
-	silenceOn    sql.NullString
+	id, state, severity string
+	opened, last        int64
+	silenceUntil        sql.NullInt64
+	silenceOn           sql.NullString
 }
 
 func (ep episode) reopenCause(now time.Time, fingerprint string) string {
@@ -494,7 +532,7 @@ func (ep episode) reopenCause(now time.Time, fingerprint string) string {
 }
 
 func active(rd *store.Reader, ruleID string) (map[string]episode, error) {
-	rows, err := rd.Query(`SELECT subject_key,alert_id,opened_seq,last_observed_seq,state,silence_until_ms,silence_on_fingerprint FROM alert_episodes WHERE rule_id=? AND state!='resolved'`, ruleID)
+	rows, err := rd.Query(`SELECT subject_key,alert_id,severity,opened_seq,last_observed_seq,state,silence_until_ms,silence_on_fingerprint FROM alert_episodes WHERE rule_id=? AND state!='resolved'`, ruleID)
 	if err != nil {
 		return nil, err
 	}
@@ -503,12 +541,47 @@ func active(rd *store.Reader, ruleID string) (map[string]episode, error) {
 	for rows.Next() {
 		var key string
 		var ep episode
-		if err := rows.Scan(&key, &ep.id, &ep.opened, &ep.last, &ep.state, &ep.silenceUntil, &ep.silenceOn); err != nil {
+		if err := rows.Scan(&key, &ep.id, &ep.severity, &ep.opened, &ep.last, &ep.state, &ep.silenceUntil, &ep.silenceOn); err != nil {
 			return nil, err
 		}
 		episodes[key] = ep
 	}
 	return episodes, rows.Err()
+}
+
+func newStoreItemTerminal(rd *store.Reader) (itemTerminalChecker, error) {
+	hasItems, err := tableExists(rd, "items")
+	if err != nil || !hasItems {
+		return itemTerminalChecker{}, err
+	}
+	rec, err := definition.ForReader(rd)
+	if err != nil {
+		return itemTerminalChecker{}, nil
+	}
+	d := rec.Parsed
+	cache := map[string]sql.NullString{}
+	return itemTerminalChecker{
+		ready: true,
+		stateOf: func(itemID string) (string, bool, error) {
+			if cached, ok := cache[itemID]; ok {
+				return cached.String, cached.Valid && cached.String != "", nil
+			}
+			var st sql.NullString
+			err := rd.QueryRow(`SELECT state FROM items WHERE item_id = ?`, itemID).Scan(&st)
+			if errors.Is(err, sql.ErrNoRows) {
+				cache[itemID] = sql.NullString{}
+				return "", false, nil
+			}
+			if err != nil {
+				return "", false, err
+			}
+			cache[itemID] = st
+			return st.String, st.Valid && st.String != "", nil
+		},
+		isTerminal: func(state string) bool {
+			return state != "" && (state == d.Closed || slices.Contains(d.Finished, state))
+		},
+	}, nil
 }
 
 // episodeChanges holds only the mutations a read-only evaluation found necessary.
@@ -524,7 +597,7 @@ func (changes episodeChanges) apply(tx *store.Tx) error {
 	return nil
 }
 
-func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[string]*condition, startHead int64, now time.Time) error {
+func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[string]*condition, startHead, snapHead int64, now time.Time, lookup itemTerminalChecker) error {
 	episodes, err := active(rd, r.ID)
 	if err != nil {
 		return err
@@ -545,6 +618,22 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 			c = &condition{}
 		}
 		ep, exists := episodes[key]
+		termReason, err := lookup.reason(&r, key)
+		if err != nil {
+			return err
+		}
+		if termReason != "" {
+			if exists {
+				rMeta := r
+				if ep.severity != "" {
+					rMeta.Severity = ep.severity
+				}
+				if err := changes.resolveWithReason(rMeta, key, ep.id, snapHead, now, termReason); err != nil {
+					return err
+				}
+			}
+			continue
+		}
 		firing := r.Enabled && c.fires(r.When)
 		firstClear := sort.Search(len(c.clears), func(i int) bool { return c.clears[i] > ep.opened })
 		if exists && (!firing || firstClear < len(c.clears)) {
@@ -585,6 +674,69 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 	return nil
 }
 
+func (changes *episodeChanges) resolveTerminalRemaining(rd *store.Reader, ruleByID map[string]*Rule, reconciled map[string]bool, startHead int64, now time.Time, lookup itemTerminalChecker) error {
+	if !lookup.ready {
+		return nil
+	}
+	type remEpisode struct {
+		id, ruleID, subject, severity string
+	}
+	rows, err := rd.Query(`SELECT alert_id, rule_id, subject_key, severity FROM alert_episodes WHERE state != 'resolved' ORDER BY episode_num`)
+	if err != nil {
+		return err
+	}
+	var rem []remEpisode
+	for rows.Next() {
+		var m remEpisode
+		if err := rows.Scan(&m.id, &m.ruleID, &m.subject, &m.severity); err != nil {
+			rows.Close()
+			return err
+		}
+		if !reconciled[m.ruleID] {
+			rem = append(rem, m)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, m := range rem {
+		rPtr := ruleByID[m.ruleID]
+		termReason, err := lookup.reason(rPtr, m.subject)
+		if err != nil {
+			return err
+		}
+		if termReason == "" {
+			continue
+		}
+		receiver := ""
+		if rPtr != nil {
+			receiver = rPtr.Delivery.Receiver
+		}
+		if receiver == "" {
+			_ = rd.QueryRow(
+				`SELECT COALESCE(json_extract(payload, '$.receiver'), '') FROM events WHERE kind = ? AND object_id = ? ORDER BY seq DESC LIMIT 1`,
+				openedKind, m.id,
+			).Scan(&receiver)
+			if receiver == "" {
+				receiver = "foreground"
+			}
+		}
+		rMeta := Rule{
+			ID:       m.ruleID,
+			Severity: m.severity,
+			Delivery: Delivery{Receiver: receiver},
+		}
+		if err := changes.resolveWithReason(rMeta, m.subject, m.id, startHead, now, termReason); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (changes *episodeChanges) open(rd *store.Reader, r Rule, key string, c *condition, newest observation, now time.Time) error {
 	var previous int64
 	var reason sql.NullString
@@ -593,7 +745,7 @@ func (changes *episodeChanges) open(rd *store.Reader, r Rule, key string, c *con
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	if reason.String == "manual" && newest.Seq <= resolvedSeq.Int64 {
+	if isSuppressiveResolutionReason(reason.String) && newest.Seq <= resolvedSeq.Int64 {
 		return nil
 	}
 	var randomID [16]byte
@@ -623,8 +775,12 @@ func (changes *episodeChanges) reopen(r Rule, key, id string, c *condition, fing
 }
 
 func (changes *episodeChanges) resolve(r Rule, key, id string, seq int64, now time.Time) error {
-	return changes.transition(r, key, id, resolvedKind, now, map[string]any{"resolved_seq": seq, "reason": "condition-cleared"}, func(tx *store.Tx) error {
-		_, err := tx.Exec(`UPDATE alert_episodes SET state='resolved',resolved_seq=?,resolved_at=?,resolved_reason='condition-cleared' WHERE alert_id=?`, seq, now.UnixMilli(), id)
+	return changes.resolveWithReason(r, key, id, seq, now, "condition-cleared")
+}
+
+func (changes *episodeChanges) resolveWithReason(r Rule, key, id string, seq int64, now time.Time, reason string) error {
+	return changes.transition(r, key, id, resolvedKind, now, map[string]any{"resolved_seq": seq, "reason": reason}, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE alert_episodes SET state='resolved',resolved_seq=?,resolved_at=?,resolved_reason=? WHERE alert_id=?`, seq, now.UnixMilli(), reason, id)
 		return err
 	})
 }
