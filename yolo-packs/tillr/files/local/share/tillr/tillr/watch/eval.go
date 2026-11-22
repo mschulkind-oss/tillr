@@ -3,6 +3,7 @@ package watch
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -24,7 +25,7 @@ func init() {
 	if err := store.RegisterDDL("watch", schema); err != nil {
 		panic(err)
 	}
-	for _, kind := range []string{openedKind, resolvedKind} {
+	for _, kind := range []string{openedKind, resolvedKind, acknowledgedKind, silencedKind, reopenedKind} {
 		if err := event.Register(kind, "watch"); err != nil {
 			panic(err)
 		}
@@ -334,12 +335,26 @@ func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, 
 }
 
 type episode struct {
-	id           string
+	id, state    string
 	opened, last int64
+	silenceUntil sql.NullInt64
+	silenceOn    sql.NullString
+}
+
+func (ep episode) reopenCause(now time.Time, fingerprint string) string {
+	if ep.state == "silenced" {
+		if ep.silenceUntil.Valid && !now.Before(time.UnixMilli(ep.silenceUntil.Int64)) {
+			return "silence-expired"
+		}
+		if ep.silenceOn.Valid && ep.silenceOn.String != fingerprint {
+			return "fingerprint-changed"
+		}
+	}
+	return ""
 }
 
 func active(rd *store.Reader, ruleID string) (map[string]episode, error) {
-	rows, err := rd.Query(`SELECT subject_key,alert_id,opened_seq,last_observed_seq FROM alert_episodes WHERE rule_id=? AND state!='resolved'`, ruleID)
+	rows, err := rd.Query(`SELECT subject_key,alert_id,opened_seq,last_observed_seq,state,silence_until_ms,silence_on_fingerprint FROM alert_episodes WHERE rule_id=? AND state!='resolved'`, ruleID)
 	if err != nil {
 		return nil, err
 	}
@@ -348,7 +363,7 @@ func active(rd *store.Reader, ruleID string) (map[string]episode, error) {
 	for rows.Next() {
 		var key string
 		var ep episode
-		if err := rows.Scan(&key, &ep.id, &ep.opened, &ep.last); err != nil {
+		if err := rows.Scan(&key, &ep.id, &ep.opened, &ep.last, &ep.state, &ep.silenceUntil, &ep.silenceOn); err != nil {
 			return nil, err
 		}
 		episodes[key] = ep
@@ -417,9 +432,14 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 		}
 		if r.When.Pattern != LagBehind && newest.Seq > ep.last {
 			*changes = append(*changes, func(tx *store.Tx) error {
-				_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1 WHERE alert_id=?`, newest.Seq, now.UnixMilli(), ep.id)
+				_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, ep.id)
 				return err
 			})
+		}
+		if cause := ep.reopenCause(now, newest.fingerprint); cause != "" {
+			if err := changes.reopen(r, key, ep.id, c, newest.fingerprint, cause, now); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -427,10 +447,15 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 
 func (changes *episodeChanges) open(rd *store.Reader, r Rule, key string, c *condition, newest observation, now time.Time) error {
 	var previous int64
-	if err := rd.QueryRow(`SELECT COALESCE(MAX(episode_num),0) FROM alert_episodes WHERE rule_id=? AND subject_key=?`, r.ID, key).Scan(&previous); err != nil {
+	var reason sql.NullString
+	var resolvedSeq sql.NullInt64
+	err := rd.QueryRow(`SELECT episode_num,resolved_reason,resolved_seq FROM alert_episodes WHERE rule_id=? AND subject_key=? ORDER BY episode_num DESC LIMIT 1`, r.ID, key).Scan(&previous, &reason, &resolvedSeq)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-
+	if reason.String == "manual" && newest.Seq <= resolvedSeq.Int64 {
+		return nil
+	}
 	var randomID [16]byte
 	rand.Read(randomID[:])
 	id := "alrt-" + hex.EncodeToString(randomID[:])
@@ -440,7 +465,19 @@ func (changes *episodeChanges) open(rd *store.Reader, r Rule, key string, c *con
 	}
 	return changes.transition(r, key, id, openedKind, now, map[string]any{"opened_seq": newest.Seq}, func(tx *store.Tx) error {
 		_, err := tx.Exec(`INSERT INTO alert_episodes (alert_id,rule_id,subject_key,episode_num,state,severity,condition_fingerprint,opened_seq,opened_at,last_observed_seq,last_observed_at,bundle_json)
- VALUES (?,?,?,?,'open',?,?,?,?,?,?,?)`, id, r.ID, key, previous+1, r.Severity, "", newest.Seq, now.UnixMilli(), newest.Seq, now.UnixMilli(), string(bundle))
+ VALUES (?,?,?,?,'open',?,?,?,?,?,?,?)`, id, r.ID, key, previous+1, r.Severity, newest.fingerprint, newest.Seq, now.UnixMilli(), newest.Seq, now.UnixMilli(), string(bundle))
+		return err
+	})
+}
+
+func (changes *episodeChanges) reopen(r Rule, key, id string, c *condition, fingerprint, cause string, now time.Time) error {
+	bundle, err := makeBundle(r, key, id, c)
+	if err != nil {
+		return err
+	}
+	return changes.transition(r, key, id, reopenedKind, now, map[string]any{"cause": cause}, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE alert_episodes SET state='open',silence_until_ms=NULL,silence_on_fingerprint=NULL,
+ acked_by=NULL,acked_note=NULL,acked_at=NULL,condition_fingerprint=?,bundle_json=? WHERE alert_id=?`, fingerprint, string(bundle), id)
 		return err
 	})
 }

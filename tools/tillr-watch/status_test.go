@@ -171,7 +171,7 @@ func TestWatchStatusCountsLatestOpeningNotice(t *testing.T) {
 		}
 	}
 	checkPending(0)
-	// Reopen writers are outside this slice. Seed their event rows directly;
+	// Seed multiple reopenings to test status independently of evaluation;
 	// the episode is already open and its original notice was confirmed.
 	write(func(tx *store.Tx) error {
 		for i := 0; i < 2; i++ {
@@ -185,7 +185,7 @@ func TestWatchStatusCountsLatestOpeningNotice(t *testing.T) {
 	})
 	checkPending(1) // Multiple unconfirmed opening events still count once.
 	seedStatusOverride(t, s, "refusals", strings.Replace(testRule, `receiver="foreground"`, `receiver="subscribers"`, 1))
-	checkPending(0) // Unlike wait's existing delivery, status reads effective receivers.
+	checkPending(0) // The effective receiver no longer routes the reopening to foreground.
 	seedStatusOverride(t, s, "refusals", testRule)
 	write(func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE foreground_delivery SET (shown_seq, seen_seq) =

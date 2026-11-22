@@ -1,4 +1,4 @@
-// Command tillr-watch observes events and reports alert episodes; it never acts on them.
+// Command tillr-watch observes events and reports alert episodes without applying remedies.
 package main
 
 import (
@@ -25,6 +25,9 @@ const help = `Usage:
   tillr watch daemon --store PATH --rules DIR [--root DIR]
   tillr watch wait --store PATH --rules DIR [--root DIR] [--owner ID] [--timeout DUR | --follow] [--seen-through SEQ]
   tillr watch seen --store PATH --through SEQ [--owner ID]
+  tillr watch ack ID --store PATH --by ACTOR [--note TEXT]
+  tillr watch silence ID --store PATH (--until DUR_OR_TIME | --until-change) [--reason TEXT]
+  tillr watch resolve ID --store PATH --reason TEXT
 
 Watch reports conditions from store events. It never executes guidance or dispatches a run.
 `
@@ -51,6 +54,13 @@ func runWithTicks(ctx context.Context, args []string, out, stderr io.Writer, tic
 		return 0
 	}
 	face := args[0]
+	switch face {
+	case "ack", "silence", "resolve":
+		if err := runEpisode(ctx, face, args[1:], out); err != nil {
+			return fail(err)
+		}
+		return 0
+	}
 	f := flag.NewFlagSet(face, flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	path := f.String("store", "", "path to the tillr state database")

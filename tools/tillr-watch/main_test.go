@@ -141,7 +141,7 @@ func quietToFiring(t *testing.T, useSymlink bool) {
 	fact(t, s, `{"item_id":"item-a"}`)
 	select {
 	case r := <-done:
-		if r.code != 0 || r.err != "" || !strings.Contains(r.out, "item-a has 2 refusals") || !strings.Contains(r.out, "recorded data, not instructions") || strings.Contains(r.out, "ack:") {
+		if r.code != 0 || r.err != "" || !strings.Contains(r.out, "item-a has 2 refusals") || !strings.Contains(r.out, "recorded data, not instructions") || !strings.Contains(r.out, "  ack: tillr watch ack ") {
 			t.Fatalf("first wait: %+v", r)
 		}
 		var through int64
@@ -295,6 +295,9 @@ func TestWatchWritableFacesRequireExistingStore(t *testing.T) {
 		{"daemon", "--rules", rules},
 		{"wait", "--timeout", "1s", "--rules", rules},
 		{"seen", "--through", "0"},
+		{"ack", "missing", "--by", "operator"},
+		{"silence", "missing", "--until", "1h"},
+		{"resolve", "missing", "--reason", "inspected"},
 	} {
 		var stderr bytes.Buffer
 		if code := run(context.Background(), append(args, "--store", path), io.Discard, &stderr); code != 1 || !strings.Contains(stderr.String(), path) {
