@@ -1,6 +1,10 @@
 package checkresult
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestClassifyRawResults(t *testing.T) {
 	exit := func(code int) *int { return &code }
@@ -303,5 +307,332 @@ func TestAggregatePrecedence(t *testing.T) {
 	}
 	if got := Aggregate("unrecognized", nil); got != (RunResult{Unknown, "error", 4}) {
 		t.Fatalf("unrecognized order: %+v", got)
+	}
+}
+
+func TestClassifyRulesOneToFour(t *testing.T) {
+	exit := func(code int) *int { return &code }
+	const (
+		fp     = "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899"
+		tPass  = "2026-11-22T10:00:00.123456789Z"
+		tFail  = "2026-11-22T10:05:00.987654321Z"
+		tEn    = "2026-11-22T10:10:00Z"
+		tAfter = "2026-11-22T10:15:00Z"
+		tFinal = "2026-11-22T10:20:00Z"
+	)
+	ep := FormatEpisode(fp, tPass, tFail)
+	marker := &DisabledMarker{
+		CheckID:     "go-build",
+		Episode:     ep,
+		Fingerprint: fp,
+		PassAt:      tPass,
+		PassLogRef:  "/store/disabled/pass.log",
+		FailAt:      tFail,
+		FailLogRef:  "",
+		RepairItem:  "flaky-go-build",
+	}
+
+	// Rule 1: proving skips rules 2 and 3.
+	assertResult(t, Classify(Observation{
+		CheckID:     "go-build",
+		Proving:     true,
+		Fingerprint: fp,
+		Marker:      marker,
+		StoredPass:  &StoredRecord{At: tPass, LogRef: "/logs/pass"},
+		StoredFail:  &StoredRecord{At: tFail, LogRef: "/logs/fail"},
+		Source:      CheckCommand,
+		ExitCode:    exit(1),
+	}), Result{Outcome: Fail, Detail: DetailFailed, CheckID: "go-build"})
+
+	assertResult(t, Classify(Observation{
+		CheckID:     "go-build",
+		Proving:     true,
+		Fingerprint: fp,
+		Marker:      marker,
+		Source:      CheckCommand,
+		ExitCode:    exit(0),
+	}), Result{Outcome: Pass, Detail: DetailPassed, CheckID: "go-build"})
+
+	assertResult(t, Classify(Observation{
+		CheckID: "go-build",
+		Proving: true,
+		Marker:  marker,
+	}), Result{Outcome: Unknown, Detail: DetailUnobserved, CheckID: "go-build"})
+
+	// Rule 2: active marker disables with marker evidence regardless of raw result or fingerprint.
+	wantMarker := Result{
+		Outcome:     Disabled,
+		Detail:      DetailDisabled,
+		CheckID:     "go-build",
+		Episode:     ep,
+		Fingerprint: fp,
+		PassAt:      tPass,
+		PassLogRef:  "/store/disabled/pass.log",
+		FailAt:      tFail,
+		FailLogRef:  "",
+		RepairItem:  "flaky-go-build",
+	}
+	assertResult(t, Classify(Observation{
+		Check:       "go-build:compile",
+		Fingerprint: "different-fingerprint",
+		Marker:      marker,
+	}), wantMarker)
+
+	wantMarkerPass := wantMarker
+	wantMarkerPass.RawDetail = "ok\n"
+	assertResult(t, Classify(Observation{
+		CheckID:     "go-build",
+		Fingerprint: "different-fingerprint",
+		Marker:      marker,
+		Source:      CheckCommand,
+		ExitCode:    exit(0),
+		Detail:      "ok\n",
+	}), wantMarkerPass)
+
+	// Rule 3: stored pass + stored fail (pre-run query, unrecorded fail log).
+	assertResult(t, Classify(Observation{
+		CheckID:     "go-build",
+		Fingerprint: fp,
+		StoredPass:  &StoredRecord{At: tPass, LogRef: "/logs/p.log"},
+		StoredFail:  &StoredRecord{At: tFail},
+	}), Result{
+		Outcome:     Disabled,
+		Detail:      DetailDisabled,
+		CheckID:     "go-build",
+		Episode:     ep,
+		Fingerprint: fp,
+		PassAt:      tPass,
+		PassLogRef:  "/logs/p.log",
+		FailAt:      tFail,
+		FailLogRef:  "",
+	})
+
+	// Rule 3: stored pass + fresh fail observation.
+	assertResult(t, Classify(Observation{
+		CheckID:     "go-build",
+		Fingerprint: fp,
+		ObservedAt:  tFail,
+		LogRef:      "/logs/fresh-fail.log",
+		StoredPass:  &StoredRecord{At: tPass},
+		Source:      CheckCommand,
+		ExitCode:    exit(1),
+	}), Result{
+		Outcome:     Disabled,
+		Detail:      DetailDisabled,
+		CheckID:     "go-build",
+		Episode:     ep,
+		Fingerprint: fp,
+		PassAt:      tPass,
+		PassLogRef:  "",
+		FailAt:      tFail,
+		FailLogRef:  "/logs/fresh-fail.log",
+	})
+
+	// Rule 3: stored fail + fresh pass observation.
+	assertResult(t, Classify(Observation{
+		CheckID:     "go-build",
+		Fingerprint: fp,
+		ObservedAt:  tPass,
+		LogRef:      "/logs/fresh-pass.log",
+		StoredFail:  &StoredRecord{At: tFail, LogRef: "/logs/stored-fail.log"},
+		Source:      CheckCommand,
+		ExitCode:    exit(0),
+	}), Result{
+		Outcome:     Disabled,
+		Detail:      DetailDisabled,
+		CheckID:     "go-build",
+		Episode:     ep,
+		Fingerprint: fp,
+		PassAt:      tPass,
+		PassLogRef:  "/logs/fresh-pass.log",
+		FailAt:      tFail,
+		FailLogRef:  "/logs/stored-fail.log",
+	})
+
+	// Non-verdict (exit 4 -> unknown/error) against stored pass does not contradict.
+	assertResult(t, Classify(Observation{
+		CheckID:     "go-build",
+		Fingerprint: fp,
+		ObservedAt:  tFail,
+		StoredPass:  &StoredRecord{At: tPass},
+		Source:      CheckCommand,
+		ExitCode:    exit(4),
+	}), Result{Outcome: Unknown, Detail: DetailError, CheckID: "go-build"})
+
+	// Resolved episode in enabled/ does not re-disable on the resolved pair or on a stale cached proof.
+	assertResult(t, Classify(Observation{
+		CheckID:          "go-build",
+		Fingerprint:      fp,
+		StoredPass:       &StoredRecord{At: tPass},
+		StoredFail:       &StoredRecord{At: tFail},
+		ResolvedEpisodes: []string{ep},
+		EnabledAt:        tEn,
+	}), Result{Outcome: Unknown, Detail: DetailUnobserved, CheckID: "go-build"})
+
+	assertResult(t, Classify(Observation{
+		CheckID:          "go-build",
+		Fingerprint:      fp,
+		StoredFail:       &StoredRecord{At: tAfter, LogRef: "/logs/post-fail.log"},
+		ResolvedEpisodes: []string{ep},
+		EnabledAt:        tEn,
+		Source:           CachedRecord,
+		Word:             "pass",
+	}), Result{Outcome: Pass, Detail: DetailCached, RawWord: "pass", CheckID: "go-build"})
+
+	// A brand-new fresh contradiction after repair DOES disable with a new episode.
+	newEp := FormatEpisode(fp, tAfter, tFinal)
+	assertResult(t, Classify(Observation{
+		CheckID:          "go-build",
+		Fingerprint:      fp,
+		ObservedAt:       tFinal,
+		LogRef:           "/logs/new-fail.log",
+		StoredPass:       &StoredRecord{At: tAfter, LogRef: "/logs/new-pass.log"},
+		ResolvedEpisodes: []string{ep},
+		EnabledAt:        tEn,
+		Source:           CheckCommand,
+		ExitCode:         exit(1),
+	}), Result{
+		Outcome:     Disabled,
+		Detail:      DetailDisabled,
+		CheckID:     "go-build",
+		Episode:     newEp,
+		Fingerprint: fp,
+		PassAt:      tAfter,
+		PassLogRef:  "/logs/new-pass.log",
+		FailAt:      tFinal,
+		FailLogRef:  "/logs/new-fail.log",
+	})
+
+	// Rule 4: pre-run query on an enabled check with no raw result.
+	assertResult(t, Classify(Observation{
+		Check:       "go-build",
+		CheckID:     "go-build",
+		Fingerprint: fp,
+		StoredPass:  &StoredRecord{At: tPass},
+	}), Result{Outcome: Unknown, Detail: DetailUnobserved, CheckID: "go-build"})
+}
+
+func TestParseEpisode(t *testing.T) {
+	fp, p, f, err := ParseEpisode("fp-1|2026-11-22T10:00:00Z|2026-11-22T10:01:02.123456789Z")
+	if err != nil || fp != "fp-1" || p != "2026-11-22T10:00:00Z" || f != "2026-11-22T10:01:02.123456789Z" {
+		t.Fatalf("ParseEpisode valid: (%q, %q, %q, %v)", fp, p, f, err)
+	}
+	for _, bad := range []string{
+		"",
+		"fp-1|2026-11-22T10:00:00Z",
+		"fp-1|2026-11-22T10:00:00Z|2026-11-22T10:01:00Z|extra",
+		"|2026-11-22T10:00:00Z|2026-11-22T10:01:00Z",
+		"fp/1|2026-11-22T10:00:00Z|2026-11-22T10:01:00Z",
+		" fp-1|2026-11-22T10:00:00Z|2026-11-22T10:01:00Z",
+		"fp-1|2026-11-22T05:00:00-05:00|2026-11-22T10:01:00Z",
+		"fp-1|2026-11-22T10:00:00Z|2026-11-22T10:01:00+00:00",
+		"fp-1|not-a-time|2026-11-22T10:01:00Z",
+		"fp-1|2026-11-22T10:00:00Z|not-a-time",
+	} {
+		if _, _, _, err := ParseEpisode(bad); err == nil {
+			t.Errorf("ParseEpisode(%q) succeeded; want error", bad)
+		}
+	}
+}
+
+func TestDisabledResultJSONAndWorktreeUnmarshal(t *testing.T) {
+	disabled := Result{
+		Outcome:     Disabled,
+		Detail:      DetailDisabled,
+		CheckID:     "go-build",
+		Episode:     "fp|2026-11-22T10:00:00Z|2026-11-22T10:01:00Z",
+		Fingerprint: "fp",
+		PassAt:      "2026-11-22T10:00:00Z",
+		PassLogRef:  "",
+		FailAt:      "2026-11-22T10:01:00Z",
+		FailLogRef:  "",
+	}
+	raw, err := json.Marshal(disabled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := string(raw)
+	for _, want := range []string{`"pass_log_ref":""`, `"fail_log_ref":""`, `"episode":"fp|2026-11-22T10:00:00Z|2026-11-22T10:01:00Z"`} {
+		if !strings.Contains(encoded, want) {
+			t.Fatalf("disabled JSON %s missing %s", encoded, want)
+		}
+	}
+	plainRaw, err := json.Marshal(Result{Outcome: Disabled, Detail: DetailDisabled, RawWord: "disabled"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(plainRaw) != `{"outcome":"disabled","detail":"disabled","raw_word":"disabled"}` {
+		t.Fatalf("plain disabled JSON = %s", plainRaw)
+	}
+
+	for input, want := range map[string]bool{
+		`{"worktree":true}`:  true,
+		`{"worktree":"."}`:   true,
+		`{"worktree":false}`: false,
+		`{"worktree":""}`:    false,
+		`{}`:                 false,
+	} {
+		var obs Observation
+		if err := json.Unmarshal([]byte(input), &obs); err != nil {
+			t.Fatalf("unmarshal %s: %v", input, err)
+		}
+		if obs.WorktreeEnabled() != want {
+			t.Fatalf("%s: WorktreeEnabled() = %v, want %v", input, obs.WorktreeEnabled(), want)
+		}
+	}
+	var bad Observation
+	if err := json.Unmarshal([]byte(`{"worktree":123}`), &bad); err == nil {
+		t.Fatal("expected numeric worktree to fail unmarshal")
+	}
+}
+
+func TestAggregateDisabledExclusion(t *testing.T) {
+	disabledOne := Result{
+		Outcome:     Disabled,
+		Detail:      DetailDisabled,
+		CheckID:     "flaky-a",
+		Episode:     "fp1|2026-11-22T10:00:00Z|2026-11-22T10:01:00Z",
+		Fingerprint: "fp1",
+		PassAt:      "2026-11-22T10:00:00Z",
+		FailAt:      "2026-11-22T10:01:00Z",
+	}
+	disabledTwo := Result{Outcome: Disabled, Detail: DetailDisabled, CheckID: "flaky-b"}
+	pass := Result{Outcome: Pass, Detail: DetailPassed}
+	fail := Result{Outcome: Fail, Detail: DetailFailed}
+	stalled := Result{Outcome: Unknown, Detail: DetailStalled}
+	errored := Result{Outcome: Unknown, Detail: DetailError}
+
+	for _, tc := range []struct {
+		order    AggregateOrder
+		wantPass RunResult
+	}{
+		{RunnerOrder, RunResult{Pass, "pass", 0}},
+		{ShadowOrder, RunResult{Pass, "pass", 0}},
+		{LegacyGateOrder, RunResult{Pass, "verified", 0}},
+		{LegacyReplayOrder, RunResult{Pass, "pass", 0}},
+		{HeavyOrder, RunResult{Pass, "green", 0}},
+	} {
+		t.Run(string(tc.order), func(t *testing.T) {
+			// All-disabled runs (0 passed, 1+ disabled) pass in every order.
+			if got := Aggregate(tc.order, []Result{disabledOne}); got != tc.wantPass {
+				t.Fatalf("1 disabled: got %+v, want %+v", got, tc.wantPass)
+			}
+			if got := Aggregate(tc.order, []Result{disabledOne, disabledTwo}); got != tc.wantPass {
+				t.Fatalf("2 disabled: got %+v, want %+v", got, tc.wantPass)
+			}
+			for _, base := range [][]Result{
+				{pass},
+				{fail},
+				{stalled},
+				{errored},
+				{pass, fail},
+			} {
+				want := Aggregate(tc.order, base)
+				withDisabled := append(append([]Result{disabledOne}, base...), disabledTwo)
+				if got := Aggregate(tc.order, withDisabled); got != want {
+					t.Fatalf("with disabled around %+v: got %+v, want %+v", base, got, want)
+				}
+			}
+		})
 	}
 }

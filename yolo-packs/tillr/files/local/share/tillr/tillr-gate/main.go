@@ -34,9 +34,10 @@ var faces = map[string]func([]string) int{
 	"checks":   checksFace,
 	"change":   changeFace,
 	"classify": classifyFace,
+	"dualrun":  dualRunFace,
+	"enable":   enableFace,
 	"plan":     planFace,
 	"run":      runFace,
-	"dualrun":  dualRunFace,
 	"shadow":   shadowFace,
 }
 
@@ -61,7 +62,7 @@ func run(args []string) int {
 
 // faceNames lists the faces in a fixed order, so the usage line is stable.
 func faceNames() string {
-	return "change, checks, classify, dualrun, plan, run, shadow"
+	return "change, checks, classify, dualrun, enable, plan, run, shadow"
 }
 
 // parseFlags parses one face's flags and reports whether it has already answered the

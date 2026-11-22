@@ -256,6 +256,25 @@ tillr-gate checks --heavy-tree --base <tip> --head <tip> --worktree <detached-ch
 tillr-gate checks --heavy-tree --only <check-id> --base <tip> --head <tip> --worktree <detached-checkout> --logs <logs>
 ```
 
+## Classifying observations and re-enabling checks
+
+`classify` reads check observations as JSON from standard input and prints their classified
+outcomes (and an optional run-level aggregate) on standard output, as specified in
+[the classifier design](https://github.com/mschulkind-oss/tillr/blob/main/docs/design/gate-rework.md#one-classifier-five-outcomes).
+Without a repository or result store it is pure and touches no disk state; when backed by a
+repository or result store it resolves declaration selectors, computes committed
+declaration fingerprints, and writes a marker with copied logs under `disabled/` when a
+fingerprint contradicts itself.
+
+```sh
+tillr-gate classify
+tillr-gate enable
+```
+
+`enable` records a repaired disabling episode under `enabled/`, moves that episode's
+contradicting records and copied logs into `resolved/`, and removes the active marker when
+it still holds the named episode.
+
 ## What it refuses
 
 - **A plan with no registry** — a gate with no registry would pass everything.
