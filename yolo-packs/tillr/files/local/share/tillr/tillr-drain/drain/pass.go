@@ -2701,6 +2701,9 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 		return stop, err
 	}
 	if !l.nonLanding {
+		if err := l.reclaimEndedItemLanes(ctx); err != nil {
+			l.reportf("loop: ended-item lane cleanup failed: %v\n", err)
+		}
 		l.reportRefSweepFailure(l.pruneRunRefs(ctx))
 	}
 	if err := l.intakeComments(ctx); err != nil {
@@ -3266,7 +3269,17 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 				if base == "" {
 					base = work.BaseSHA
 				}
-				err = l.preserveWorkFromBase(ctx, d.LaneID, d.RunRequest.RunID, base, "orphaned workflow released")
+				if state, ended, stateErr := l.terminalItemState(ctx, d.ItemID); stateErr != nil {
+					err = stateErr
+				} else if ended {
+					saveRunID := d.RunRequest.RunID
+					if owned == "" && work.ParentRunID != "" {
+						saveRunID = work.ParentRunID
+					}
+					_, err = l.saveEndedItemWork(ctx, d.LaneID, saveRunID, d.ItemID, state, "workflow released after item ended ("+state+")")
+				} else {
+					err = l.preserveWorkFromBase(ctx, d.LaneID, d.RunRequest.RunID, base, "orphaned workflow released")
+				}
 				if err == nil {
 					err = l.restoreForkDelivery(ctx, d.LaneID, d.RunRequest.RunID)
 				}
