@@ -81,3 +81,22 @@ func TestPassRecordsSharedCoreWorktreeWithoutChangingConfig(t *testing.T) {
 		t.Fatalf("want an observation of the empty value in %q; got %+v (pass error: %v)", config, seen, passErr)
 	}
 }
+
+func TestObserveTrunkCoreWorktreeSkipsNonLanding(t *testing.T) {
+	f, l := passFixture(t)
+	l.nonLanding = true
+	calls := filepath.Join(t.TempDir(), "git-calls")
+	binDir := t.TempDir()
+	stub := filepath.Join(binDir, "git")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\necho \"$*\" >> '"+calls+"'\nexit 99\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+	if err := l.observeTrunkCoreWorktree(context.Background()); err != nil {
+		t.Fatalf("non-landing observeTrunkCoreWorktree: %v", err)
+	}
+	if raw, err := os.ReadFile(calls); !os.IsNotExist(err) {
+		t.Fatalf("git ran in non-landing mode: %s (%v)", raw, err)
+	}
+	_ = f
+}
