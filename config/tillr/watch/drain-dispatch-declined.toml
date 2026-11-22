@@ -1,0 +1,24 @@
+# On 2026-11-21, repeated declined dispatches went without an alert.
+# Count drain.dispatch-declined events per item from the last ten minutes
+# and warn at three or more.
+[[rule]]
+id = "drain-dispatch-declined"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.dispatch-declined"]
+
+[rule.when]
+group_by = "object_id"
+pattern = "count_in_window"
+threshold = 3
+window = "10m"
+
+[rule.guidance]
+summary = "The drain declined dispatch of {{subject}} {{count}} times in the last ten minutes."
+check = ["Run tillr drain why {{subject}} and read the decline reason."]
+do = ["Understand what stopped the drain from claiming the dispatch before the next pass."]
+
+[rule.delivery]
+receiver = "foreground"
