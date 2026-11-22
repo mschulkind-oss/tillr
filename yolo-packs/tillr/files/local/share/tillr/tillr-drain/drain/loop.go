@@ -622,6 +622,7 @@ type Loop struct {
 	previousAnswers string
 
 	sessionInitialized bool
+	lastLoopPassAt     time.Time
 	// keepWAL and walKeeper are the store's checkpoint owner, lastCheckpoint is the clock
 	// reading of its last checkpoint, and restartPending is whether that cycle left the log
 	// unrestarted, so the next heartbeat tries again (see openWALKeeper); sessionMu guards
@@ -982,6 +983,7 @@ func (l *Loop) runPasses(ctx context.Context, result *LoopResult, pendingOnly bo
 			result.Detail = "the loop was asked to stop"
 			return nil
 		}
+		l.recordLoopPass(ctx)
 		l.mu.Lock()
 		dispatched := result.Dispatched
 		if !pendingOnly {
