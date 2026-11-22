@@ -470,6 +470,7 @@ func (l *Loop) settleParallel(ctx context.Context, work *pendingWork, result *Lo
 		return laneOutcome{err: l.refuseParallelBoundary(ctx, d, work.BaseSHA, head, result, false)}
 	}
 	failed, retry, infraRetry := false, false, false
+	var missingChecks []int
 	for i, node := range nodes {
 		var outcome string
 		if err := l.readStore(ctx, func(r *store.Reader) error {
@@ -483,6 +484,9 @@ func (l *Loop) settleParallel(ctx context.Context, work *pendingWork, result *Lo
 				return settled
 			}
 			nodes[i], recs[i], logs[i], outcome = updated, rec, log, ending
+		}
+		if outcome == missingCandidateOutcome {
+			missingChecks = append(missingChecks, i)
 		}
 		retry = retry || strings.HasPrefix(outcome, "workflow-node-")
 		infraRetry = infraRetry || outcome == "workflow-node-restart"
@@ -511,6 +515,29 @@ func (l *Loop) settleParallel(ctx context.Context, work *pendingWork, result *Lo
 			reason = "workflow-node-restart"
 		}
 		return laneOutcome{err: l.advanceParallelRetry(ctx, work, nodes, reason)}
+	}
+	for _, i := range missingChecks {
+		node := nodes[i]
+		writer, finding := missingCandidateFinding(node, work.BaseSHA, head, dirty, logs[i])
+		if writer >= 0 {
+			ready, err := l.canReturnMissingCandidate(ctx, d, writer)
+			if err != nil {
+				return laneOutcome{err: err}
+			}
+			if ready {
+				return laneOutcome{err: l.returnMissingCandidate(ctx, d, writer, work.BaseSHA, finding)}
+			}
+		}
+		if err := l.reportedBlock(ctx, node, logs[i]); err != nil {
+			return laneOutcome{err: err}
+		}
+		if err := l.nodeOutcome(ctx, node, "blocked"); err != nil {
+			return laneOutcome{err: err}
+		}
+		if stop := l.abandon(ctx, d.LaneID, d.RunRequest.RunID, head, "read-only nodes failed"); stop != "" {
+			return laneOutcome{stop: stop}
+		}
+		return laneOutcome{err: l.markExamined(ctx, d)}
 	}
 	next, err := l.nextWorkflowNode(ctx, d)
 	if err != nil {
@@ -611,7 +638,9 @@ func (l *Loop) settleParallelReader(ctx context.Context, work *pendingWork, node
 		case reportFooter(log) != "done":
 			outcome = "blocked"
 			if reportFooter(log) == "blocked" {
-				if err = l.reportedBlock(ctx, node, log); err != nil {
+				if writer, _ := missingCandidateFinding(node, work.BaseSHA, head, "", log); writer >= 0 {
+					outcome = missingCandidateOutcome
+				} else if err = l.reportedBlock(ctx, node, log); err != nil {
 					return node, rec, log, "", laneOutcome{err: err}
 				}
 			}
