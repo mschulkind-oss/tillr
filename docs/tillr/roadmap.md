@@ -350,6 +350,17 @@ the fence question is withdrawn because he retired the fence on 2026-11-19
 decisions await his review in [its ledger](../design/unattended-drain.md#14-decision-ledger), and
 none of it is built.
 
+[What the operator settled without the owner is settled inside tillr](../design/operator-decisions-inside-tillr.md),
+written on 2026-11-21 to the owner's words of that day, sorts what the operator did by hand without
+him into seven kinds and names who inside tillr takes each: the drain, the design seat or a filed
+defect item. It asks three questions: whether a tillr program may repair its own stuck state when
+it starts ([`OQ-OD1`](../design/operator-decisions-inside-tillr.md#OQ-OD1)), what tillr does when
+no work he ordered remains ([`OQ-OD2`](../design/operator-decisions-inside-tillr.md#OQ-OD2)), and
+which seat takes the judgments the operator made
+([`OQ-OD3`](../design/operator-decisions-inside-tillr.md#OQ-OD3)). Ten of its thirteen slices wait
+on none of them. It sits here because it fills in the seventh rule of the unattended-drain design
+above, and none of it is built.
+
 Two designs left this list on 2026-11-15. [Item graphs](../reference/tillr-item-graphs.md) is
 decided, built, and graduated into a system reference: one commit per item, all of refinement built, read-only nodes in
 parallel, and lanes outside the cap for work the owner is waiting on. On 2026-11-16 it was cut
