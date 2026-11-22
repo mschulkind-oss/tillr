@@ -87,10 +87,6 @@ backend is a Gemini model on GitHub Copilot through the pi adapter.
   clean it and file the root cause"). When a lane is out of rotation, save its
   work under the night directory, clean the lane by hand, and file the cause.
   Never propose or build an automatic clearer.
-- Until the fix for "a run staged again after a policy change keeps its old
-  command" has landed, the session policy names `pi-judge` (Carbon) for plan,
-  review and verify, so those stale runs can close only the unused name `pi`.
-  Point the three seats back at `pi` once the fix has landed.
 - Changing a model is a deliberate policy-file edit, never a per-item retry on
   "another model". The running loop accepts a valid policy file when it changes.
 - The operating agent's own helpers: a cheap model for well-specified analysis,
@@ -265,6 +261,19 @@ Two faults seen on 2026-11-21, kept here until their fixes land:
   process only: it prints its goroutine stacks into the keeper's log and exits,
   and the keeper starts a new loop after 60 seconds. Workers are not ended.
   Save the stacks beside the rulings file and file what they show.
+
+- **Loop down with "trunk checkout unsafe".** The loop refuses to run while
+  `/workspace/.git/config` sets `core.worktree`, and `git status` then shows
+  hundreds of false changes. Save a copy of the config beside the rulings file,
+  run `git config --local --unset core.worktree`, and confirm `git status` is
+  clean. The path names the run that wrote it: a reviewer that exported
+  `GIT_DIR` and `GIT_WORK_TREE` over a scratch copy and ran tests that call
+  `git init`. The keeper doubles its wait after each quick exit, so stop it
+  (`tillr-keep --stop`) and start it again instead of waiting.
+- **Do not rely on the watcher alone.** On 2026-11-22 a waiting watcher did not
+  exit when an alert opened. Until that is fixed, read
+  `tillr watch status --store $S --rules config/tillr/watch --root /workspace`
+  at each check-in for alerts opened since the last one.
 
 ## What the operator settles belongs inside tillr
 
