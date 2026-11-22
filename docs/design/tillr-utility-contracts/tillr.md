@@ -2,16 +2,16 @@
 title: "Contract: tillr (the library)"
 status: in-review
 stage: DESIGN
-updated: 2026-11-21
+updated: 2026-11-22
 tags: [tillr, contract, library]
-summary: "What the tillr library provides to every other tillr utility and what it expects, read from the code at dab5a2da0e: the record envelope, the six exit codes, the event log, the store opener and its three registries, the board definition, settings, the Vantage index reader and the watch rules. It expects nothing from another utility by design, and reads four of their tables today."
+summary: "What the tillr library provides to every other tillr utility and what it expects, initially read at dab5a2da0e and updated through dc42dbc335 and D-TW63–D-TW67: the record envelope, the six exit codes, the event log, the store opener and its three registries, the board definition, settings, the Vantage index reader and the watch rules. It expects nothing from another utility by design, and reads four of their tables today."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
 
 # Contract: tillr (the library)
 
-**Status:** 2026-11-21. Read at `dab5a2da0e`; nothing here is built. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
+**Status:** 2026-11-22. Initially read at `dab5a2da0e` (when nothing in the contract check was built) and updated on 2026-11-22 for the watch package's second-build, item-subject closure, per-rule load baselines, and item-tracking event kinds, tables, and read-only SQL expectations ([`../tillr-watch.md`](../tillr-watch.md), `D-TW27`–`D-TW35`, `D-TW63`, `D-TW65`–`D-TW67`). This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private, and the post-`dab5a2da0e` watch amendments referenced here, are from operator requests and designer decisions that the owner has not ruled on and may overturn.
 
 **What it is.** A Go library at `tools/tillr` with no program of its own. Every Go utility links it. It has seven packages others can import (`record`, `event`, `store`, `definition`, `settings`, `vantage`, `watch`) and one that holds only tests (`conformance`).
 
@@ -43,11 +43,17 @@ The envelope has nine fields: `record_version`, `kind`, `id`, `producer` (`syste
 | `store.definition.set` | `store` | `old_sha256 new_sha256` |
 | `store.judge-grants-archived` | `store` | the archived rows |
 | `watch.alert.opened` | `watch` | `alert_id rule_id subject_key severity receiver opened_seq` |
-| `watch.alert.resolved` | `watch` | the same, with `resolved_seq` and `reason` |
+| `watch.alert.acknowledged` | `watch` | `alert_id rule_id subject_key severity by note` (plus optional `item_id` when `--item` is given; [`../tillr-watch.md` Section 6.10](../tillr-watch.md#610-tracking-an-alert-cause-with-an-open-queue-item-d-tw67)) |
+| `watch.alert.tracked` | `watch` | `alert_id rule_id subject_key severity item_id by note` ([`../tillr-watch.md` Section 6.10](../tillr-watch.md#610-tracking-an-alert-cause-with-an-open-queue-item-d-tw67)) |
+| `watch.alert.silenced` | `watch` | `alert_id rule_id subject_key severity reason`, plus `until` or `until_change` |
+| `watch.alert.reopened` | `watch` | `alert_id rule_id subject_key severity receiver cause` (plus `item_id item_state` on `tracked-item-landed` and `tracked-item-closed`) |
+| `watch.alert.resolved` | `watch` | `alert_id rule_id subject_key severity resolved_seq reason` (including `reason: "item-<state>"` under [`D-TW63`](../tillr-watch.md#D-TW63), plus optional `receiver`, `note`, and `item_id` under [`D-TW67`](../tillr-watch.md#D-TW67)) |
+| `watch.rule.set` | `watch` | `rule_id by` |
+| `watch.rule.reset` | `watch` | `rule_id by` |
 
 ### 1.4 Tables
 
-`events`, with its append-only triggers and two indexes; `meta`; `schema_migrations`; and for the watch rules `alert_episodes` and `foreground_delivery`. `events` is read with raw SQL by the drain, the view, the item utility and land. The two watch tables have no reader outside the library and `tillr-watch` (`rg -n 'alert_episodes|foreground_delivery' tools -g '*.go' -g '*.py' -g '!tools/tillr/watch/**' -g '!tools/tillr-watch/**'` returns nothing).
+`events`, with its append-only triggers and two indexes; `meta`; `schema_migrations`; and for the watch rules `alert_episodes` (including `tracking_item_id` and `tracked_lag_pair` under [`D-TW67`](../tillr-watch.md#D-TW67)), `foreground_delivery`, `watch_rule_overrides` and `watch_rule_baselines` ([`D-TW66`](../tillr-watch.md#D-TW66)). `events` is read with raw SQL by the drain, the view, the item utility and land. The four watch tables have no reader outside the library and `tillr-watch` (`rg -n 'alert_episodes|foreground_delivery|watch_rule_overrides|watch_rule_baselines' tools -g '*.go' -g '*.py' -g '!tools/tillr/watch/**' -g '!tools/tillr-watch/**'` returns nothing).
 
 ### 1.5 Files and environment
 
@@ -73,7 +79,8 @@ The library is the bottom of the build: its `go.mod` requires no other tillr mod
 
 | Expectation | Provider | Through | Where it is read |
 | :--- | :--- | :--- | :--- |
-| Rows of `items` (`item_id`, `state`), to refuse a definition that drops a state items hold | [tillr-item](./tillr-item.md) | SQL | `definition/store.go` |
+| Rows of `items` (`item_id`, `state`, `seat`, `waiting_on`), to refuse a definition that drops a state items hold, evaluate the `items` watch projection, auto-close terminal item-subject episodes (`D-TW63`), and validate/reconcile item-tracked alerts (`D-TW67`) | [tillr-item](./tillr-item.md) | SQL | `definition/store.go`, `watch/tillr_source.go`, `watch/lifecycle.go`, `watch/eval.go` |
+| Rows of `workflow_selections` (`item_id`, `workflow`), to evaluate `workflow:<name>` watch rule scopes (`D-TW31`) | [tillr-drain](./tillr-drain.md) | SQL | `watch/tillr_source.go` |
 | `workflow_selections`, `graph_revisions`, `node_runs`, rewritten when a store moves to schema version 6 | [tillr-drain](./tillr-drain.md) | SQL | `store/judge_migration.go` |
 | `item_grants`, a retired table, archived and dropped by the same migration | [tillr-item](./tillr-item.md) | SQL | `store/judge_migration.go` |
 | The owners' registrations, made when their packages load: the library composes the schema from whatever the running program linked | every utility that owns a table or a kind | Go, at load | `store/registry.go` |
@@ -97,7 +104,7 @@ The library is the bottom of the build: its `go.mod` requires no other tillr mod
 - Every error sentence, the recovery remedy included. A consumer branches on `NeedsRecovery`.
 - The trace format, and the guard counters the drain's tests read (`WholeLogReads`, `EventLogReads`, `OpenWriteTransactions`). These stay exported for tests and are not listed.
 - `CompatibilityJudgeGraph`, which rewrites a drain workflow from inside the library.
-- `alert_episodes` and `foreground_delivery`.
+- `alert_episodes`, `foreground_delivery`, `watch_rule_overrides` and `watch_rule_baselines`.
 
 `Reader.Query` and `Tx.Exec` stay, because every owner reads its own tables through them. What changes is that a query naming a table the caller does not own must match a table entry in the owner's contract.
 

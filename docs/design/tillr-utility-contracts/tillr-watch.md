@@ -2,16 +2,16 @@
 title: "Contract: tillr-watch"
 status: in-review
 stage: DESIGN
-updated: 2026-11-21
+updated: 2026-11-22
 tags: [tillr, contract, watch]
-summary: "What tillr-watch provides and expects, read from the code at dab5a2da0e: four faces that evaluate watch rules over the event log and wait on them, a notice format read by agents, and three exit codes that differ from every other utility's. It expects the drain package to register every event kind a rule may name, and each rule expects payload fields of the kind's owner."
+summary: "What tillr-watch provides and expects, initially read at dab5a2da0e and updated through the second build (dc42dbc335) and D-TW55–D-TW67: evaluation, status, wait/seen, episode lifecycle faces (ack, track, silence, resolve), live rule overrides (rule), and pre-flight lint, with agent-readable notice and status formats and three exit codes that differ from every other utility's."
 depends-on:
   - ../tillr-utility-contracts.md
 ---
 
 # Contract: tillr-watch
 
-**Status:** 2026-11-21. Read at `dab5a2da0e`; nothing here is built. This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private is the designer's decision, and the owner may overturn it.
+**Status:** 2026-11-22. Initially read at `dab5a2da0e` (when nothing in the contract check was built) and updated on 2026-11-22 to reflect the landed second build (`50cfbf21c3`..`dc42dbc335`), `tillr watch lint` (`3c5cd80bbe`), and the operator-request / designer specifications in [`../tillr-watch.md`](../tillr-watch.md) (`D-TW27`–`D-TW38`, `D-TW55`–`D-TW61`, `D-TW63`, `D-TW65`–`D-TW67`, under owner ruling `D-TW64`). This is one of the thirteen files of [every tillr utility has a written contract](../tillr-utility-contracts.md), which defines entry, expectation, contract example, reach-in and part, and holds the rules, the one open question and the build order. Which parts are contract and which are private, and the non-ruling post-`dab5a2da0e` watch amendments referenced here (`D-TW27`–`D-TW38`, `D-TW55`–`D-TW61`, `D-TW63`, `D-TW65`–`D-TW67`), are from operator requests and designer decisions that the owner has not ruled on and may overturn.
 
 **What it is.** One Go program at `tools/tillr-watch`. The rule engine is the `watch` package of [the library](./tillr.md); this program gives it faces. A **watch rule** is a TOML table that names event kinds and a condition over them; when the condition holds, the rule opens an alert.
 
@@ -21,10 +21,17 @@ depends-on:
 
 | Face | Flags | What it does |
 | :--- | :--- | :--- |
-| `eval` | `--once --store --rules DIR` | Evaluates every rule once and records alerts |
-| `status` | `--store --rules DIR` | Prints `rule <id> skipped=<n>` per rule; opens the store read-only |
-| `wait` | `--store --rules DIR`, and `--owner`, `--timeout` or `--follow`, `--seen-through SEQ` | Waits until a notice is pending, prints it, and prints the command that waits again |
+| `eval` | `--once --store --rules DIR [--root DIR]` | Evaluates every rule once and records alerts |
+| `daemon` | `--store --rules DIR [--root DIR]` | Evaluates at start and on wakeups with no foreground delivery |
+| `status` | `--store --rules DIR [--root DIR] [--json]` | Prints rule lines (`skipped`, `unreadable`, `out-of-scope`), unresolved `alert` lines (including optional `by=`, `until=`, and `item=`; JSON `by`, `until`, `item_id` from `tracking_item_id`), and `owner` attachment lines; opens the store read-only and writes nothing ([`../tillr-watch.md` Section 6.7](../tillr-watch.md#67-the-second-build-the-remaining-patterns-projections-and-the-alert-commands-d-tw27), [Section 6.9](../tillr-watch.md#69-rule-load-baselines-judging-only-events-from-a-rules-first-load-onward-d-tw66), [Section 6.10](../tillr-watch.md#610-tracking-an-alert-cause-with-an-open-queue-item-d-tw67)) |
+| `wait` | `--store --rules DIR [--root DIR]`, and `--owner`, `--timeout` or `--follow`, `--seen-through SEQ` | Holds the owner's attachment lock, waits until a notice is pending, prints it (with `ack:` and `track:` hints), and prints the command that waits again |
 | `seen` | `--store --through SEQ`, and `--owner` | Records that notices up to a sequence number were seen |
+| `ack` | `<alert-id> --by ACTOR [--note TEXT] [--item ITEM-ID] --store` | Claims an `open` episode (`acknowledged`), optionally attaching an open tracking item (`tracking_item_id`; [`../tillr-watch.md` Section 6.10](../tillr-watch.md#610-tracking-an-alert-cause-with-an-open-queue-item-d-tw67)) |
+| `track` | `<alert-id> --item ITEM-ID [--by ACTOR] [--note TEXT] --store` | Attaches or updates an open tracking item (`tracking_item_id`) on an unresolved episode (`open`, `acknowledged`, or `silenced`), suppressing repeat wakeups while the item is open and waking once if the condition persists when the item lands or closes ([`../tillr-watch.md` Section 6.10](../tillr-watch.md#610-tracking-an-alert-cause-with-an-open-queue-item-d-tw67)) |
+| `silence` | `<alert-id> (--until DUR\|TS \| --until-change) [--reason TEXT] --store` | Silences an untracked episode by time or condition fingerprint (refused when item-tracked; count-based silencing does not exist) |
+| `resolve` | `<alert-id> --reason TEXT --store` | Manually resolves an unresolved episode |
+| `rule` | `list \| show <id> \| add <file> --by ACTOR \| tune <id> --set K=V... --by ACTOR \| reset <id> --by ACTOR \| export` (`--store --rules DIR`) | Lists, inspects, overrides, resets, or exports live rules |
+| `lint` | `[<repo-or-dir>] [--charter PATH] [--workflows PATH] [--policy PATH]... [--rules PATH]` | Static pre-flight validation of charter, workflows, backend policy, and watch rules ([`../tillr-watch.md` Section 7.2](../tillr-watch.md#72-tillr-watch-lint-checking-a-workflows-whole-configuration-before-it-runs-d-tw10)) |
 
 | Exit | Meaning |
 | :--- | :--- |
@@ -36,15 +43,15 @@ These are not the library's exit codes, and no face prints a record envelope.
 
 ### 1.2 What `wait` prints
 
-On standard output, in this order: the line `TILLR_WATCH_NOTICE <n> pending, through_seq <seq>`; per notice a line `[alert <alert> <rule> <subject>, <severity>] <summary>` with indented `check:` and `do:` lines; a separator line; one JSON line per notice with `rule_id subject severity guidance events omitted`; and a line starting `re-arm:` holding the command to run next.
+On standard output, in this order: the line `TILLR_WATCH_NOTICE <n> pending, through_seq <seq>`; per notice a line `[alert <alert> <rule> <subject>, <severity>] <summary>` (prefixed with `"tracked fix <item_id> landed|closed[ (<state>)] and the condition persists: "` when reopened after a tracked item lands or closes; [`../tillr-watch.md` Section 6.10](../tillr-watch.md#610-tracking-an-alert-cause-with-an-open-queue-item-d-tw67)) with indented `check:`, `do:`, optional `omitted:`, `ack:`, and `track:` lines; a separator line; one JSON line per notice with `rule_id subject severity guidance events omitted`; and a line starting `re-arm:` holding the command to run next.
 
 ### 1.3 Go packages, records, events, tables
 
-None of its own. The alert kinds and the two alert tables are the library's.
+None of its own. The alert and rule event kinds and the four watch tables (`alert_episodes`, `foreground_delivery`, `watch_rule_overrides`, `watch_rule_baselines`) are the library's ([`./tillr.md`](./tillr.md)).
 
 ### 1.4 Files
 
-It reads the rule files under `--rules`, and watches the store's write-ahead log to know when to evaluate again.
+It reads the rule files under `--rules`, reads Git refs under `--root` when a rule declares `git_refs:` (and static tuple files in `lint`), holds a shared POSIX record lock on `<store>.watch-attached/<sha256(owner)>.lock` during `wait` (queried read-only by `status`), and watches the store's write-ahead log to know when to evaluate again.
 
 ### 1.5 Names others match on
 
@@ -63,7 +70,7 @@ Two things it cannot have today. The gate's kinds are registered in a `main` pac
 
 ## 3. Contract and private
 
-**Contract:** the four faces and their flags; the three marker words of [§1.5](#15-names-others-match-on); the JSON line's six fields; that `status` writes nothing.
+**Contract:** the faces and their flags in [§1.1](#11-faces); the `status` `--json` keys (`rules`, `alerts` including optional `by`, `until` and `item_id`, and `owners`); the three marker words of [§1.5](#15-names-others-match-on); the JSON bundle line's six fields; that `status` and `lint` write nothing; and that refused episode mutations (`ack`, `track`, `silence`, `resolve`) leave the store untouched.
 
 **Private:** the notice's wording, the separator line, and everything on standard error.
 
