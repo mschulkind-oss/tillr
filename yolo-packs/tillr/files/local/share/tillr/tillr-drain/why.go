@@ -55,6 +55,10 @@ func whyFace(args []string) int {
 	if *path == "" {
 		return fail(drain.Usagef("why needs --store <path>"))
 	}
+	ctx := context.Background()
+	if err := drain.CheckTrunkWorktree(ctx, *root); err != nil {
+		return fail(err)
+	}
 	policy, err := drain.EffectivePolicy(*root, *policyRef)
 	if err != nil {
 		return fail(err)
@@ -72,7 +76,6 @@ func whyFace(args []string) int {
 		tick.AvailableLanes = whyLanes(*lanesArg, repositorySettings.Lanes.Express)
 		lanesSource = "flag"
 	}
-	ctx := context.Background()
 	s, err := store.OpenRead(ctx, *path)
 	if err != nil {
 		return fail(openFailure(err))

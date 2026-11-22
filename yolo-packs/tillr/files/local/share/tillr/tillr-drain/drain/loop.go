@@ -807,6 +807,9 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	defer l.recordResult(&result)
 	defer l.closeWALKeeper()
 	defer l.endSession()
+	if err := CheckTrunkWorktree(ctx, l.cfg.Root); err != nil {
+		return faultResult(result, err)
+	}
 	l.keepWALWhileRunning()
 	if err := l.activateSchemaRoll(ctx); err != nil {
 		return faultResult(result, err)
@@ -4048,6 +4051,11 @@ func (l *Loop) revParse(ctx context.Context, dir, rev string) (string, error) {
 // answer is a read.
 func (l *Loop) git(ctx context.Context, dir string, args ...string) (string, error) {
 	return gather(ctx, gitKey("stdout", dir, args), func(ctx context.Context) (string, error) {
+		if dir == l.cfg.Root {
+			if err := CheckTrunkWorktree(ctx, dir); err != nil {
+				return "", err
+			}
+		}
 		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
 		var stderr strings.Builder
 		cmd.Stderr = &stderr
