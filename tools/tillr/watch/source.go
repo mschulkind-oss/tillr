@@ -441,11 +441,164 @@ func (m *memoryState) readStatusInto(s *Status, rules []Rule) {
 	}
 }
 
-func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, startHead int64, now time.Time) error {
+func isSuppressiveResolutionReason(reason string) bool {
+	return reason == "manual" || strings.HasPrefix(reason, "item-")
+}
+
+type itemTerminalChecker struct {
+	ready      bool
+	stateOf    func(itemID string) (string, bool, error)
+	isTerminal func(state string) bool
+}
+
+func (c itemTerminalChecker) reason(rule *Rule, subject string) (string, error) {
+	if !c.ready || subject == "" || subject == "global" {
+		return "", nil
+	}
+	if rule != nil {
+		var candidate string
+		if len(rule.When.GroupByList) >= 2 {
+			tuple, ok := decodeCompositeSubject(subject, len(rule.When.GroupByList))
+			if !ok || tuple[0] == "" || tuple[0] == "global" {
+				return "", nil
+			}
+			candidate = tuple[0]
+		} else {
+			if rule.When.GroupBy == "global" {
+				return "", nil
+			}
+			candidate = subject
+		}
+		state, exists, err := c.stateOf(candidate)
+		if err != nil || !exists || !c.isTerminal(state) {
+			return "", err
+		}
+		return "item-" + state, nil
+	}
+	state, exists, err := c.stateOf(subject)
+	if err != nil {
+		return "", err
+	}
+	if exists {
+		if c.isTerminal(state) {
+			return "item-" + state, nil
+		}
+		return "", nil
+	}
+	if strings.Contains(subject, "/") {
+		seg, _, _ := strings.Cut(subject, "/")
+		if u, ok := unescapeSubjectPart(seg); ok && u != "" && u != "global" {
+			state, exists, err := c.stateOf(u)
+			if err != nil || !exists || !c.isTerminal(state) {
+				return "", err
+			}
+			return "item-" + state, nil
+		}
+	}
+	return "", nil
+}
+
+func newSourceItemTerminal(ctx context.Context, src ObservationSource) itemTerminalChecker {
+	if src == nil {
+		return itemTerminalChecker{}
+	}
+	projected, err := src.Project(ctx, []string{"charter", "items"})
+	if err != nil || projected == nil {
+		return itemTerminalChecker{}
+	}
+	closed, _ := projected["charter.closed"].(string)
+	rawFinished := projected["charter.finished"]
+	if cm, ok := projected["charter"].(map[string]any); ok {
+		if closed == "" {
+			closed, _ = cm["closed"].(string)
+		}
+		if rawFinished == nil {
+			rawFinished = cm["finished"]
+		}
+	}
+	if closed == "" {
+		return itemTerminalChecker{}
+	}
+	rawItems, ok := projected["items"]
+	if !ok || rawItems == nil {
+		return itemTerminalChecker{}
+	}
+	itemStates := map[string]string{}
+	switch items := rawItems.(type) {
+	case map[string]map[string]any:
+		for id, entry := range items {
+			if s, ok := entry["item.state"].(string); ok && s != "" {
+				itemStates[id] = s
+			} else if s, ok := entry["state"].(string); ok && s != "" {
+				itemStates[id] = s
+			}
+		}
+	case map[string]any:
+		for id, v := range items {
+			switch entry := v.(type) {
+			case string:
+				if entry != "" {
+					itemStates[id] = entry
+				}
+			case map[string]any:
+				if s, ok := entry["item.state"].(string); ok && s != "" {
+					itemStates[id] = s
+				} else if s, ok := entry["state"].(string); ok && s != "" {
+					itemStates[id] = s
+				}
+			}
+		}
+	default:
+		return itemTerminalChecker{}
+	}
+	terminal := map[string]bool{closed: true}
+	switch list := rawFinished.(type) {
+	case []any:
+		for _, elem := range list {
+			if s, ok := elem.(string); ok && s != "" {
+				terminal[s] = true
+			}
+		}
+	case []string:
+		for _, s := range list {
+			if s != "" {
+				terminal[s] = true
+			}
+		}
+	}
+	return itemTerminalChecker{
+		ready: true,
+		stateOf: func(itemID string) (string, bool, error) {
+			s, ok := itemStates[itemID]
+			return s, ok, nil
+		},
+		isTerminal: func(state string) bool {
+			return state != "" && terminal[state]
+		},
+	}
+}
+
+func (m *memoryState) resolveEpisodeLocked(memEp *memEpisode, ruleID, subjectKey, severity, receiver string, seq int64, now time.Time, reason string) error {
+	memEp.state = "resolved"
+	memEp.resolvedSeq = sql.NullInt64{Int64: seq, Valid: true}
+	memEp.resolvedAt = sql.NullInt64{Int64: now.UnixMilli(), Valid: true}
+	memEp.resolvedReason = sql.NullString{String: reason, Valid: true}
+	return m.appendEventLocked(resolvedKind, memEp.alertID, now, map[string]any{
+		"alert_id": memEp.alertID, "rule_id": ruleID, "subject_key": subjectKey,
+		"severity": severity, "receiver": receiver,
+		"resolved_seq": seq, "reason": reason,
+	})
+}
+
+func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, startHead int64, now time.Time, lookup itemTerminalChecker) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if startHead > m.lastSourceSeq {
 		m.lastSourceSeq = startHead
+	}
+	headSeq := startHead
+	if headSeq == 0 {
+		headSeq = m.lastSourceSeq
 	}
 	episodes := m.activeLocked(r.ID)
 	keys := make([]string, 0, len(subjects)+len(episodes))
@@ -464,6 +617,19 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 			c = &condition{}
 		}
 		ep, exists := episodes[key]
+		termReason, err := lookup.reason(&r, key)
+		if err != nil {
+			return err
+		}
+		if termReason != "" {
+			if exists {
+				memEp := m.findAlertLocked(ep.id)
+				if err := m.resolveEpisodeLocked(memEp, r.ID, key, memEp.severity, r.Delivery.Receiver, headSeq, now, termReason); err != nil {
+					return err
+				}
+			}
+			continue
+		}
 		firing := r.Enabled && c.fires(r.When)
 		firstClear := sort.Search(len(c.clears), func(i int) bool { return c.clears[i] > ep.opened })
 		if exists && (!firing || firstClear < len(c.clears)) {
@@ -472,15 +638,7 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 				seq = c.clears[firstClear]
 			}
 			memEp := m.findAlertLocked(ep.id)
-			memEp.state = "resolved"
-			memEp.resolvedSeq = sql.NullInt64{Int64: seq, Valid: true}
-			memEp.resolvedAt = sql.NullInt64{Int64: now.UnixMilli(), Valid: true}
-			memEp.resolvedReason = sql.NullString{String: "condition-cleared", Valid: true}
-			if err := m.appendEventLocked(resolvedKind, ep.id, now, map[string]any{
-				"alert_id": ep.id, "rule_id": r.ID, "subject_key": key,
-				"severity": r.Severity, "receiver": r.Delivery.Receiver,
-				"resolved_seq": seq, "reason": "condition-cleared",
-			}); err != nil {
+			if err := m.resolveEpisodeLocked(memEp, r.ID, key, r.Severity, r.Delivery.Receiver, seq, now, "condition-cleared"); err != nil {
 				return err
 			}
 			exists = false
@@ -494,7 +652,7 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 		}
 		if !exists {
 			previous, reason, resolvedSeq := m.lastEpisodeLocked(r.ID, key)
-			if reason == "manual" && newest.Seq <= resolvedSeq {
+			if isSuppressiveResolutionReason(reason) && newest.Seq <= resolvedSeq {
 				continue
 			}
 			var randomID [16]byte
@@ -555,6 +713,59 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 			}); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+func (m *memoryState) resolveTerminalRemaining(ruleByID map[string]*Rule, reconciled map[string]bool, startHead int64, now time.Time, lookup itemTerminalChecker) error {
+	if m == nil || !lookup.ready {
+		return nil
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if startHead > m.lastSourceSeq {
+		m.lastSourceSeq = startHead
+	}
+	headSeq := startHead
+	if headSeq == 0 {
+		headSeq = m.lastSourceSeq
+	}
+	for _, ep := range m.episodes {
+		if ep.state == "resolved" || reconciled[ep.ruleID] {
+			continue
+		}
+		rPtr := ruleByID[ep.ruleID]
+		termReason, err := lookup.reason(rPtr, ep.subjectKey)
+		if err != nil {
+			return err
+		}
+		if termReason == "" {
+			continue
+		}
+		receiver := ""
+		if rPtr != nil {
+			receiver = rPtr.Delivery.Receiver
+		}
+		if receiver == "" {
+			for i := len(m.events) - 1; i >= 0; i-- {
+				ev := m.events[i]
+				if ev.objectID == ep.alertID && ev.kind == openedKind {
+					var body struct {
+						Receiver string `json:"receiver"`
+					}
+					if json.Unmarshal(ev.payload, &body) == nil && body.Receiver != "" {
+						receiver = body.Receiver
+					}
+					break
+				}
+			}
+			if receiver == "" {
+				receiver = "foreground"
+			}
+		}
+		if err := m.resolveEpisodeLocked(ep, ep.ruleID, ep.subjectKey, ep.severity, receiver, headSeq, now, termReason); err != nil {
+			return err
 		}
 	}
 	return nil

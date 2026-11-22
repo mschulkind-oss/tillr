@@ -220,14 +220,20 @@ func TestDrainRepeatedItemConflictsRule(t *testing.T) {
 	var blockedState, blockedReason string
 	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
 		return rd.QueryRow(`SELECT state, resolved_reason FROM alert_episodes WHERE alert_id = ?`, both[1].AlertID).Scan(&blockedState, &blockedReason)
-	}); err != nil || blockedState != "resolved" || blockedReason != "condition-cleared" {
-		t.Fatalf("want item-blocked episode resolved/condition-cleared, got state=%q reason=%q err=%v", blockedState, blockedReason, err)
+	}); err != nil || blockedState != "resolved" || blockedReason != "item-closed" {
+		t.Fatalf("want item-blocked episode resolved/item-closed, got state=%q reason=%q err=%v", blockedState, blockedReason, err)
 	}
 
 	now = now.Add(time.Minute)
 	setItemState(s, "item-open", "landed")
 	if afterLand := pending(); len(afterLand) != 0 {
 		t.Fatalf("landing item-open should resolve its alert, got %+v", afterLand)
+	}
+	var landedState, landedReason string
+	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
+		return rd.QueryRow(`SELECT state, resolved_reason FROM alert_episodes WHERE alert_id = ?`, notices[0].AlertID).Scan(&landedState, &landedReason)
+	}); err != nil || landedState != "resolved" || landedReason != "item-landed" {
+		t.Fatalf("want item-open episode resolved/item-landed, got state=%q reason=%q err=%v", landedState, landedReason, err)
 	}
 
 	// An open item whose raised conflicts age past 24h also resolves once fewer than
@@ -237,12 +243,19 @@ func TestDrainRepeatedItemConflictsRule(t *testing.T) {
 	conflict("item-aging", "conflict-aging-1", "raised", tAging)
 	now = tAging.Add(30 * time.Minute)
 	conflict("item-aging", "conflict-aging-2", "raised", now)
-	if agingOpen := pending(); len(agingOpen) != 1 || agingOpen[0].Bundle.Subject != "item-aging" {
+	agingOpen := pending()
+	if len(agingOpen) != 1 || agingOpen[0].Bundle.Subject != "item-aging" {
 		t.Fatalf("want one notice for open item-aging, got %+v", agingOpen)
 	}
 	now = tAging.Add(24*time.Hour + time.Minute)
 	if aged := pending(); len(aged) != 0 {
 		t.Fatalf("alert should resolve once fewer than two raised item.conflict events remain in 24h, got %+v", aged)
+	}
+	var agingReason string
+	if err := s.ReadTx(ctx, func(rd *store.Reader) error {
+		return rd.QueryRow(`SELECT resolved_reason FROM alert_episodes WHERE alert_id = ?`, agingOpen[0].AlertID).Scan(&agingReason)
+	}); err != nil || agingReason != "condition-cleared" {
+		t.Fatalf("want open item-aging window expiry resolved/condition-cleared, got %q (err=%v)", agingReason, err)
 	}
 
 	// On a charter where charter.closed is outside charter.finished (such as recorded-verdict),
