@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +26,10 @@ import (
 // WorkerNiceness is the target niceness for a run's process group. The heavy
 // proof keeps the drain's niceness.
 const WorkerNiceness = 10
+
+// StderrTailBytes bounds how much of a worker's standard error (stream.err) a
+// non-zero terminal run record preserves.
+const StderrTailBytes = 4096
 
 // Backend is the adapter program that produces this run, named by staging: it is what
 // lets a reader answer "which backend ran this" from the record instead of guessing it
@@ -448,6 +453,11 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		runCtx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutMS)*time.Millisecond)
 	}
 	defer cancel()
+	errPath := streamErrPath(artifactDir, workDir, req.Command)
+	if err := os.Remove(errPath); err != nil && !os.IsNotExist(err) {
+		logFile.Close()
+		return record.Envelope{}, Internalf("clearing prior stream.err: %v", err)
+	}
 	adapterPath := resolveExecAdapter(opts.BackendsDir, req.Backend, req.Command[0])
 	cmd := exec.CommandContext(runCtx, adapterPath, req.Command[1:]...)
 	cmd.Dir = workDir
@@ -477,7 +487,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	}
 	var note string
 	startedAt := time.Now().UTC()
-	monitor := &settledMonitor{log: logPath, stderr: filepath.Join(artifactDir, "stream.err"), backendDir: opts.BackendsDir, adapter: req.Command[0], backend: req.Backend, durable: durableDir, after: opts.SettledAfter}
+	monitor := &settledMonitor{log: logPath, stderr: errPath, backendDir: opts.BackendsDir, adapter: req.Command[0], backend: req.Backend, durable: durableDir, after: opts.SettledAfter}
 	if monitor.after == nil {
 		monitor.after = time.After
 	}
@@ -572,6 +582,9 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	}
 	if monitor.loopRecovery != nil {
 		payload.LoopRecovery = monitor.loopRecovery
+	}
+	if payload.ExitCode != nil && *payload.ExitCode != 0 {
+		payload.StderrTail = readStderrTail(errPath)
 	}
 	payload.StartedAt = startedAt.Format(time.RFC3339)
 	payload.FinishedAt = finishedAt.Format(time.RFC3339)
@@ -947,4 +960,59 @@ func writeTerminal(ctx context.Context, s *store.Store, payload Record, at time.
 		return record.Envelope{}, err
 	}
 	return stored, nil
+}
+
+// streamErrPath answers where the adapter writes its harness's stderr (`stream.err`
+// beside the brief). When the command passes `--brief`, that brief's directory owns
+// `stream.err`; otherwise it sits in artifactDir.
+func streamErrPath(artifactDir, workDir string, command []string) string {
+	for i := 1; i < len(command); i++ {
+		arg := command[i]
+		var brief string
+		switch {
+		case arg == "--brief" && i+1 < len(command):
+			brief = command[i+1]
+		case strings.HasPrefix(arg, "--brief="):
+			brief = strings.TrimPrefix(arg, "--brief=")
+		}
+		if brief != "" {
+			if !filepath.IsAbs(brief) {
+				brief = filepath.Join(workDir, brief)
+			}
+			return filepath.Join(filepath.Dir(brief), "stream.err")
+		}
+	}
+	return filepath.Join(artifactDir, "stream.err")
+}
+
+// readStderrTail returns the last StderrTailBytes of path, trimmed to whole lines when
+// truncated. A missing or empty file answers "".
+func readStderrTail(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.Size() == 0 {
+		return ""
+	}
+	truncated := false
+	if offset := info.Size() - StderrTailBytes; offset > 0 {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
+			return ""
+		}
+		truncated = true
+	}
+	body, err := io.ReadAll(f)
+	if err != nil {
+		return ""
+	}
+	text := strings.ToValidUTF8(string(body), "")
+	if truncated {
+		if i := strings.IndexByte(text, '\n'); i >= 0 && i+1 < len(text) {
+			text = text[i+1:]
+		}
+	}
+	return strings.TrimSpace(text)
 }

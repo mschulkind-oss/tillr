@@ -106,7 +106,8 @@ func infrastructure(r *store.Reader) ([]Alarm, error) {
    coalesce('exit ' || json_extract(payload,'$.exit_code'), 'no exit code'),
    coalesce((SELECT json_extract(o.payload,'$.cause') FROM events o
      WHERE o.kind='drain.backend-outcome' AND o.object_id=endings.backend
-     AND json_extract(o.payload,'$.terminal_seq')=endings.seq), '')
+     AND json_extract(o.payload,'$.terminal_seq')=endings.seq), ''),
+   coalesce(json_extract(payload,'$.stderr_tail'), '')
  FROM endings WHERE newest=1 AND closes=1 AND backend NOT IN ('', 'command')
  AND NOT EXISTS (SELECT 1 FROM events p WHERE p.kind='drain.backend-probe' AND p.object_id=backend
   AND p.seq>endings.seq AND json_extract(p.payload,'$.success')=1)
@@ -121,13 +122,16 @@ func infrastructure(r *store.Reader) ([]Alarm, error) {
 	defer rows.Close()
 	var out []Alarm
 	for rows.Next() {
-		var name, runID, state, exit, cause string
+		var name, runID, state, exit, cause, stderrTail string
 		var since int64
-		if err := rows.Scan(&name, &since, &runID, &state, &exit, &cause); err != nil {
+		if err := rows.Scan(&name, &since, &runID, &state, &exit, &cause, &stderrTail); err != nil {
 			return nil, err
 		}
 		if cause == "" {
 			cause = fmt.Sprintf("infrastructure failure: run %s (%s, %s)", runID, state, exit)
+			if tail := strings.TrimSpace(stderrTail); tail != "" {
+				cause += ": " + strings.ReplaceAll(tail, "\n", " | ")
+			}
 		}
 		out = append(out, Alarm{Kind: Closed, Backend: name, Since: easternTime(time.UnixMilli(since)),
 			Cause:   cause,

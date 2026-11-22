@@ -34,18 +34,65 @@ func infrastructureDetail(rec run.Record, log string) string {
 	if rec.ExitCode != nil {
 		cause += fmt.Sprintf(", exit %d", *rec.ExitCode)
 	}
-	if words := infrastructureWords(log); words != "" {
+	if words := infrastructureWords(rec, log); words != "" {
 		cause += ": " + words
 	}
 	return cause
 }
 
-func infrastructureWords(log string) string {
+func infrastructureWords(rec run.Record, log string) string {
+	if words := stderrSummary(rec.StderrTail); words != "" {
+		return words
+	}
 	log = strings.TrimSpace(log)
 	if i := strings.LastIndexByte(log, '\n'); i >= 0 {
 		log = strings.TrimSpace(log[i+1:])
 	}
 	return log
+}
+
+func stderrSummary(tail string) string {
+	const (
+		maxLines = 5
+		maxBytes = 500
+	)
+	var lines []string
+	for _, raw := range strings.Split(tail, "\n") {
+		if line := strings.TrimSpace(raw); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	if len(lines) > maxLines {
+		lines = lines[len(lines)-maxLines:]
+	}
+	const sep = " | "
+	chosen := make([]string, 0, len(lines))
+	total := 0
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := lines[i]
+		add := len(line)
+		if len(chosen) > 0 {
+			add += len(sep)
+		}
+		if len(chosen) > 0 && total+add > maxBytes {
+			break
+		}
+		if len(chosen) == 0 && len(line) > maxBytes {
+			line = strings.ToValidUTF8(line[len(line)-maxBytes:], "")
+		}
+		chosen = append(chosen, line)
+		total += len(line)
+		if len(chosen) > 1 {
+			total += len(sep)
+		}
+	}
+	for i, j := 0, len(chosen)-1; i < j; i, j = i+1, j-1 {
+		chosen[i], chosen[j] = chosen[j], chosen[i]
+	}
+	return strings.Join(chosen, sep)
 }
 
 // Resume only a recorded session on the same lane and route when its adapter
@@ -143,7 +190,7 @@ func (l *Loop) recordInfrastructureFailure(ctx context.Context, d Decision, rec 
 	defer s.Close()
 	failure := infrastructureFailure{
 		RunID: rec.RunID, Backend: rec.Backend, Node: d.Seat,
-		Cause: rec.State + ":" + rec.EndCause, Words: normalizeEvidence(infrastructureWords(log), rec.RunID),
+		Cause: rec.State + ":" + rec.EndCause, Words: normalizeEvidence(infrastructureWords(rec, log), rec.RunID),
 		Detail: infrastructureDetail(rec, log),
 	}
 	if d.RunRequest != nil {

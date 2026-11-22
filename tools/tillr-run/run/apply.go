@@ -130,6 +130,9 @@ type Record struct {
 	// an external SIGTERM or SIGINT; any other signal (a crash signal, SIGKILL) stays a
 	// `normal-exit` that counts against the backend.
 	Signal string `json:"signal,omitempty"`
+	// StderrTail carries the last lines of the worker's standard error (stream.err) when
+	// the process ended with a non-zero exit code, bounded to StderrTailBytes.
+	StderrTail string `json:"stderr_tail,omitempty"`
 	// Only settled-idle carries these observations. The finish event preserves
 	// them, and status reads that same event rather than inferring timestamps.
 	SettledAt      string `json:"settled_at,omitempty"`
