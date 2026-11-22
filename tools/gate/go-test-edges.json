@@ -1,29 +1,9 @@
 {
   "github.com/mschulkind-oss/tillr-drain": {
-    "builds": [
-      "github.com/mschulkind-oss/tillr-cli",
-      "github.com/mschulkind-oss/tillr-gate",
-      "github.com/mschulkind-oss/tillr-item",
-      "github.com/mschulkind-oss/tillr-land",
-      "github.com/mschulkind-oss/tillr-run",
-      "github.com/mschulkind-oss/tillr-store",
-      "github.com/mschulkind-oss/tillr-view"
-    ],
+    "builds": [],
     "reads": [
-      "bin/pi-forks",
-      "config/tillr/",
-      "tools/fork-check.py",
-      "tools/tillr/examples/",
-      "tools/tillr-loop/tillr-loop",
-      "tools/tillr-roll/tillr-roll.py",
-      "tools/tillr-run/backends/",
-      "yolo-packs/tillr/programs/"
-    ],
-    "read_tests": {
-      "tools/fork-check.py": [
-        "TestTheComposedPipelineRunsEndToEndOnAFixture"
-      ]
-    }
+      "config/tillr/"
+    ]
   },
   "github.com/mschulkind-oss/tillr-drain/drain": {
     "builds": [
@@ -37,12 +17,14 @@
       "github.com/mschulkind-oss/tillr-view"
     ],
     "reads": [
+      "bin/pi-forks",
       "config/tillr/",
       "tools/fork-check.py",
       "tools/gate/change-gate.py",
       "tools/gate/classify.py",
       "tools/go-test-shards.py",
       "tools/pack-mirror-links.py",
+      "tools/tillr/examples/",
       "tools/tillr-loop/drain-argv.json",
       "tools/tillr-loop/tillr-loop",
       "tools/tillr-roll/tillr-roll.py",
@@ -52,6 +34,7 @@
     ],
     "read_tests": {
       "tools/fork-check.py": [
+        "TestTheComposedPipelineRunsEndToEndOnAFixture",
         "TestFixerGateJudgesOwnDiffThenNamedChecksAndLands",
         "TestJudgeAutomaticRevertDoesNotOptIntoFastTiming",
         "TestGateTimingDoesNotRecordNestedGateSpans",

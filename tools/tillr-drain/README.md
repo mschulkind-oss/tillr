@@ -1987,7 +1987,7 @@ settling, or has already raised, is refused as the loop's. The
 [design retry tests](./drain/design_retry_test.go) cover the re-raise and both refusals.
 Every `tillr drain retry` refusal names the exact command the face would accept, or says
 that none exists and who moves instead (`TestEveryRetryRefusalNamesTheAcceptedCommandOrTheMover`
-in [`main_test.go`](./main_test.go)). A triage conflict keeps its own rule, one triage run per
+in [`drain/main_cli_test.go`](./drain/main_cli_test.go)). A triage conflict keeps its own rule, one triage run per
 request version. The [unanswered-design tests](./drain/design_unanswered_test.go) cover
 rules 2, 3 and 5 and the two migrations; the [objection tests](./drain/design_objection_test.go)
 cover rule 4 and the removed block; `TestADesignCommitThatLeavesTheBlockUnchangedIsGatedAsTheAnswer`
@@ -2467,7 +2467,7 @@ refusal, but an item needs no allowed paths for plain staging.
 For Git landing, staging still requires `working_dir` to be `worktree` and uses the
 existing Git brief template and boundary files. This rule belongs to staging, not
 to `tillr run exec`: the runner continues to accept relative working directories
-and refuse absolute ones. The [plain-staging tests](./plain_stage_test.go) cover
+and refuse absolute ones. The [plain-staging tests](./drain/plain_stage_test.go) cover
 the directory, planned request, rendered values, and Git-staging refusal.
 
 ## Lanes that staging refuses
@@ -2829,14 +2829,14 @@ is kept under the pin but never gated; this is the cost of an end that spends no
 attempt.
 
 Measured 2026-11-16 with the
-[repair-staging regression](./conflict_hold_test.go): before containment, a staging
+[repair-staging regression](./drain/conflict_hold_test.go): before containment, a staging
 error propagated through examination completion to the loop's deferred cancellation,
 interrupting two active siblings. The stored candidate lacked a completed-examination
 event, so a replacement loop selected the same candidate for judgment again. The
 regression now requires both siblings to land, two unchanged restarts to stage nothing,
 and a corrected policy input to recover the original repair. The original failure event
 and candidate commit remain available. The
-[interrupted-recovery regression](./conflict_recovery_restart_test.go) also stops the
+[interrupted-recovery regression](./drain/conflict_recovery_restart_test.go) also stops the
 loop after a recovered worker commits, leaves that worker running until it is released,
 then requires an unchanged restart to land that commit with zero new dispatches and a
 repair transcript that only grew: everything written before the stop is still its prefix.
@@ -2914,7 +2914,7 @@ clearing this fault.
 > workflow cleanup deletes the hidden work. Cleanup must run after preservation
 > but before resetting the ignore rules, with a regression for that sequence.
 > The independent review reproduced this on 2026-11-17. The separate
-> [operator-stop regression](./document_wait_test.go) also fails on base
+> [operator-stop regression](./drain/document_wait_test.go) also fails on base
 > `f4bbfaf26949fd3770110467a9f47bb6c01e4428` with `GOMAXPROCS=1`: queued SQLite
 > stderr can follow the final explanation and break the combined-output suffix
 > assertion. This run stopped under its out-of-scope-failure rule; neither blocker
@@ -3391,7 +3391,7 @@ test checks it against the tests' child-build calls and rejects each omitted pro
 The [cache regression check](cache_test.py) uses an isolated clone, warms the result with
 `go test ./...`, confirms an unchanged tree reports `(cached)`, then inserts an immediate
 exit into each sibling's main function and requires a noncached failure. It also checks
-that both packages with child builds rerun and that a restored tree caches again.
+that the `drain` package with child builds reruns while root stays `(cached)` and that a restored tree caches again.
 
 ```bash
 python3 tools/tillr-drain/cache_test.py  # from the repository root; uses YOLO_DURABLE_DIR

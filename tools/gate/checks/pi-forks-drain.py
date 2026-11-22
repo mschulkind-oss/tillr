@@ -25,7 +25,7 @@ def main(base, head):
     for test, needs in TEST_NEEDS.items():
         if changed.isdisjoint(needs):
             continue
-        result = subprocess.run(["go", "test", "-count=1", ".", "-run", f"^{test}$"],
+        result = subprocess.run(["go", "test", "-count=1", "./drain", "-run", f"^{test}$"],
                                 cwd=root / "tools/tillr-drain", env={**os.environ, "CGO_ENABLED": "0"})
         if result.returncode:
             return 1 if result.returncode == 1 else 4

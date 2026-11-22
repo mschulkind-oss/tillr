@@ -459,7 +459,7 @@ does not replay it.
   c5 adds a header line to `tillr drain why` and to the waiting face, so a test that asserts the
   exact text or the line count of those two outputs is updated for that one line and nothing else.
   The stopped run met two: `TestWhyEmptyStoreAndMissingStore` in
-  [why_test.go](../../tools/tillr-drain/why_test.go) and `TestWaitingCLIAndAPI` in
+  [why_cli_test.go](../../tools/tillr-drain/drain/why_cli_test.go) and `TestWaitingCLIAndAPI` in
   [waiting_internal_test.go](../../tools/tillr-view/waiting_internal_test.go). Do not hide the
   header to keep an old assertion. The before-and-after test in c4 compares the rows, not the
   header.

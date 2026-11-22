@@ -70,7 +70,7 @@ owner of the pile deciding to stop, which is the only authority the principle re
    (`TestTheLoopCommandRefusesTheDeletedBudgets` in
    [`tools/tillr-drain/spend_line_test.go`](../../tools/tillr-drain/spend_line_test.go);
    `TestTheLoopHasNoTickBudget` in
-   [`tools/tillr-drain/loop_test.go`](../../tools/tillr-drain/loop_test.go)).
+   [`tools/tillr-drain/loop_test.go`](../../tools/tillr-drain/drain/loop_test.go)).
 2. By default the loop stays alive waiting when nothing is dispatchable (`Run` in
    [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go)); `--exit-when-drained`
    opts into exiting with `queue-drained` when nothing is dispatchable and no lane is held. The
@@ -79,7 +79,7 @@ owner of the pile deciding to stop, which is the only authority the principle re
    `tillr run release` is required (`StopLanesLeased` in
    [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go);
    `TestALaneHeldWithNoExpiryStopsTheLoopAsLanesLeased` in
-   [`tools/tillr-drain/loop_test.go`](../../tools/tillr-drain/loop_test.go)), and `fault` when a
+   [`tools/tillr-drain/loop_test.go`](../../tools/tillr-drain/drain/loop_test.go)), and `fault` when a
    loop step cannot proceed.
 3. The infrastructure circuit breaker is a backoff with reporting, not an exit (`BackoffDelay` in
    [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go);
@@ -91,7 +91,7 @@ owner of the pile deciding to stop, which is the only authority the principle re
    [`tools/tillr-drain/main.go`](../../tools/tillr-drain/main.go), boundary scoping in
    [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go), and
    `TestTwoLanesRunConcurrentlyInOneBatch` in
-   [`tools/tillr-drain/loop_test.go`](../../tools/tillr-drain/loop_test.go)): a service that ran one
+   [`tools/tillr-drain/loop_test.go`](../../tools/tillr-drain/drain/loop_test.go)): a service that ran one
    item at a time would not be "as fast as possible" no matter how long it ran.
 5. Spend is still **measured and reported** — per run and in total (`spendLine` in
    [`tools/tillr-drain/main.go`](../../tools/tillr-drain/main.go);
@@ -111,10 +111,10 @@ owner of the pile deciding to stop, which is the only authority the principle re
   identical repeat, which escalates to the `design` seat (or blocks on the owner when no design
   seat is configured; `TestAFailedCandidateGoesBackToItsWorkerUntilItRepeats` and
   `TestADrainThatRefusedEveryCandidateNamesItAsARepeatedRefusal` in
-  [`tools/tillr-drain/loop_test.go`](../../tools/tillr-drain/loop_test.go)). The principle is about
+  [`tools/tillr-drain/loop_test.go`](../../tools/tillr-drain/drain/loop_test.go)). The principle is about
   the service's appetite for work, not about pretending bad work is good.
 - The boundary check still catches a write outside the lane, loudly holding the offending item as
   `host-boundary-violation` without gating its candidate (`StopHostBoundaryViolation` in
   [`tools/tillr-drain/drain/loop.go`](../../tools/tillr-drain/drain/loop.go);
   `TestAWriteToALaneOutsideTheRunIsCaught` in
-  [`tools/tillr-drain/loop_test.go`](../../tools/tillr-drain/loop_test.go)).
+  [`tools/tillr-drain/loop_test.go`](../../tools/tillr-drain/drain/loop_test.go)).

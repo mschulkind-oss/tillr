@@ -209,7 +209,7 @@ refused run, a run with no commit, a fence escape, a refused landing, and a squa
 to the worker with their evidence every time and uncounted
 ([`tools/tillr-drain/README.md`](../../tools/tillr-drain/README.md#a-refused-run-goes-back-to-its-worker);
 `TestAFailedCandidateGoesBackToItsWorkerUntilItRepeats` in
-[`tools/tillr-drain/loop_test.go`](../../tools/tillr-drain/loop_test.go)), while an infrastructure
+[`tools/tillr-drain/loop_test.go`](../../tools/tillr-drain/drain/loop_test.go)), while an infrastructure
 failure closes that backend and walks to the next open backend (`backend-closed` when none is open;
 [`tools/tillr-drain/README.md`](../../tools/tillr-drain/README.md#recorded-backend-availability)).
 
@@ -241,7 +241,7 @@ worker reports a named obstacle; either routes to the `design` seat, and reaches
 design run's `NEXT-ACTOR: owner` objection or a repeated non-gate design ending (`designRepeatOf` in
 [`tools/tillr-drain/drain/design_repeat.go`](../../tools/tillr-drain/drain/design_repeat.go);
 `TestBlockedReportRoutesOnceToDesignThenOwner` in
-[`tools/tillr-drain/blocked_route_test.go`](../../tools/tillr-drain/blocked_route_test.go)). No
+[`tools/tillr-drain/blocked_route_test.go`](../../tools/tillr-drain/drain/blocked_route_test.go)). No
 standing authority below the owner may grant an exception or answer an owner question.
 
 *Scope:* **not lander-scoped.** Conflict and repeat routing are dispatch-side (`tillr-drain`). The
@@ -488,7 +488,7 @@ gate refusal, and two of them over a committed design answer the settlement had 
   [`design_retry.go`](../../tools/tillr-drain/drain/design_retry.go), commit `c95791410`; pinned
   in [`design_retry_test.go`](../../tools/tillr-drain/drain/design_retry_test.go) and by
   `TestEveryRetryRefusalNamesTheAcceptedCommandOrTheMover` in
-  [`main_test.go`](../../tools/tillr-drain/main_test.go)).
+  [`main_cli_test.go`](../../tools/tillr-drain/drain/main_cli_test.go)).
 
 What is not enforced yet: the gate's trunk-already-red replay cannot judge a fast-gate check id
 such as `documents`, so it never acquits a refusal the trunk caused. A design run refused for the
