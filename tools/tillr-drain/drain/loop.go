@@ -1605,6 +1605,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 		}
 		failStage := func(step string, stepErr error) error {
 			if refusal := asLaneRefusal(stepErr); refusal != nil {
+				refusal.ExcludedRunID = request.RunID
 				if err := l.takeLaneOutOfRotation(ctx, refusal); err != nil {
 					return err
 				}
@@ -1974,6 +1975,7 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			// The lane's own state refused, not the item and not the machinery: the lane
 			// leaves rotation and the item is offered another lane. No infrastructure
 			// streak is counted, since nothing will change by waiting.
+			refusal.ExcludedRunID = request.RunID
 			if err := l.takeLaneOutOfRotation(ctx, refusal); err != nil {
 				return nil, err
 			}

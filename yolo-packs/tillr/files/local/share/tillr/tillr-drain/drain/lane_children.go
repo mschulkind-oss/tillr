@@ -27,11 +27,11 @@ func (l *Loop) recheckLaneChildren(ctx context.Context) error {
 		return err
 	}
 	ended := map[string]string{}
+	endedAt := map[string]int64{}
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
 		// endedAt is the seq of the latest record that ended each run: its runs row's
 		// finish event, or a release. A run.resume after it is a continuation of the same
 		// run that has not ended yet (tillr-run claimLane), so that run is live again.
-		endedAt := map[string]int64{}
 		rows, err := r.Query(`SELECT run_id, lane_id, event_seq FROM runs UNION SELECT run_id, lane_id, 0 FROM read_only_runs WHERE settled=1`)
 		if err != nil {
 			return err
@@ -116,6 +116,9 @@ func (l *Loop) recheckLaneChildren(ctx context.Context) error {
 		return err
 	}
 	pids := map[string][]int{}
+	bestRun := map[string]string{}
+	bestSeq := map[string]int64{}
+	hasBest := map[string]bool{}
 	for _, p := range marked {
 		lane, ok := ended[p.runID]
 		if !ok {
@@ -127,11 +130,18 @@ func (l *Loop) recheckLaneChildren(ctx context.Context) error {
 		}
 		if inside {
 			pids[lane] = append(pids[lane], p.PID)
+			seq := endedAt[p.runID]
+			if !hasBest[lane] || seq > bestSeq[lane] || (seq == bestSeq[lane] && p.runID > bestRun[lane]) {
+				bestRun[lane] = p.runID
+				bestSeq[lane] = seq
+				hasBest[lane] = true
+			}
 		}
 	}
 	for _, lane := range l.lanes() {
 		if len(pids[lane]) > 0 {
-			if err := l.holdLaneChildren(ctx, lane, pids[lane]); err != nil {
+			leftBy := l.resolveRunLeftBy(ctx, lane, bestRun[lane])
+			if err := l.holdLaneChildren(ctx, lane, pids[lane], leftBy); err != nil {
 				return err
 			}
 		} else if l.hasLaneCondition(lane, ReasonLaneChildren) {
@@ -184,17 +194,19 @@ func processInCheckout(p *runFaceOwner, path string) (bool, error) {
 	return start == p.Start && start != "" && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)), nil
 }
 
-func holdLaneChildrenRefusal(lane string, pids []int) *LaneRefusalError {
+func holdLaneChildrenRefusal(lane string, pids []int, leftBy string) *LaneRefusalError {
 	sort.Ints(pids)
 	ids := make([]string, len(pids))
 	for i, pid := range pids {
 		ids[i] = strconv.Itoa(pid)
 	}
-	return asLaneRefusal(laneRefusalf(lane, ReasonLaneChildren,
+	refusal := asLaneRefusal(laneRefusalf(lane, ReasonLaneChildren,
 		"wait for these processes to exit, or end them with `kill "+strings.Join(ids, " ")+"`; the next pass rechecks the lane",
 		"ended runs still have live marked processes in lane %s: PIDs %s", lane, strings.Join(ids, ", ")))
+	refusal.LeftBy = leftBy
+	return refusal
 }
 
-func (l *Loop) holdLaneChildren(ctx context.Context, lane string, pids []int) error {
-	return l.takeLaneOutOfRotation(ctx, holdLaneChildrenRefusal(lane, pids))
+func (l *Loop) holdLaneChildren(ctx context.Context, lane string, pids []int, leftBy string) error {
+	return l.takeLaneOutOfRotation(ctx, holdLaneChildrenRefusal(lane, pids, leftBy))
 }

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/mschulkind-oss/tillr/event"
@@ -292,7 +293,11 @@ func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, 
 	derived := make([]map[string]*condition, len(rules))
 	for i, r := range rules {
 		result := &results[i]
-		*result = RuleResult{ID: r.ID, GroupBy: r.When.GroupBy, Disabled: !r.Enabled, Unsupported: r.evaluatorReason()}
+		groupBy := r.When.GroupBy
+		if len(r.When.GroupByList) >= 2 {
+			groupBy = strings.Join(r.When.GroupByList, ", ")
+		}
+		*result = RuleResult{ID: r.ID, GroupBy: groupBy, Disabled: !r.Enabled, Unsupported: r.evaluatorReason()}
 		if result.Disabled || result.Unsupported != "" {
 			continue
 		}
@@ -317,7 +322,7 @@ func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, 
 		var subjects map[string]*condition
 		var n int
 		if cache != nil {
-			subjects, n, err = deriveCached(r, now, rf, cache)
+			subjects, n, err = deriveCached(rd, r, now, rf, cache)
 		} else {
 			subjects, n, err = derive(rd, r, now, rf)
 		}
