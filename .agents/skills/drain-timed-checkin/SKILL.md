@@ -209,8 +209,12 @@ green; `alarms` lists standing alarms; each row has `item_id`, `state`,
      `drain.refusal` events. When each refusal names a new finding unrelated to
      the last, the item is too big; split it as described below. Do not send it
      round again.
-   - **A landing conflict more than once:** look at what keeps moving the files
-     it changes, and file that cause.
+   - **`conflict` in an item's refusals** counts `item.conflict` events. Each
+     is a worker's *definition obstacle*: the request's words conflict with the
+     code or with a design, so the design seat answers, usually with a design
+     record that lands. It is not a merge conflict. Read the obstacle text in
+     the event; when the request's own words caused it, that is a filing
+     mistake to stop repeating.
    - **One step running a long time:** check that its processes are using CPU
      before doing anything. A working step is left alone.
    - **Finished elsewhere:** when an item's fix has already landed from another
@@ -254,6 +258,11 @@ Use `tillr item request` with the words on standard input and `--title`.
   that commit only what this part needs". Move items that waited on the closed
   one with `tillr item dep --add` and `--remove`. Closing an item ends its
   current run, so do it knowingly.
+- **Do not write a request that a build worker cannot satisfy alone.** Do not
+  tell it to edit a design document or mark a design slice built; that is the
+  design seat's. Do not make a criterion of stating a cause the worker cannot
+  establish from the code; give the evidence and ask for the fix. Each of
+  these sends the item to the design seat as a definition obstacle.
 - **No retry counts, attempt limits or time limits** in any fix (owner). A
   failure gets its root cause. A test that fails under load is broken.
 - No agent adds or edits a `<!-- tillr: item` tag.
