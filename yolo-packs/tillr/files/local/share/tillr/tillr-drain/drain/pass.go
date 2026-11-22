@@ -17,6 +17,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
@@ -249,9 +250,18 @@ func foldPendingHistory(r *store.Reader, seq int64, s *pendingHistoryState, even
 					if err := json.Unmarshal(e.Payload, &verdict); err != nil {
 						return err
 					}
-					if verdict.Result == GateStalled {
+					runRes := classifyCheck(checkresult.Observation{
+						Source: checkresult.ResultWord,
+						Word:   verdict.Result,
+					})
+					if runRes.Outcome == checkresult.Unknown && runRes.Detail == checkresult.DetailStalled {
 						for _, check := range verdict.Checks {
-							if check.Result == GateStalled {
+							res := classifyCheck(checkresult.Observation{
+								Check:  check.CheckID,
+								Source: checkresult.ResultWord,
+								Word:   check.Result,
+							})
+							if res.Outcome == checkresult.Unknown && res.Detail == checkresult.DetailStalled {
 								work.GateStall.SecondObservations = append(work.GateStall.SecondObservations, check)
 							}
 						}

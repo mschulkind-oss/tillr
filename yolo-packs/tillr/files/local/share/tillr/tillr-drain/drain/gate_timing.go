@@ -11,11 +11,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
 const gateTimingFile = "gate.timing.jsonl"
+
+const (
+	gateExecutionRan    = "ran"
+	gateExecutionReused = "reused"
+	gateExecutionNotRun = "not-run"
+)
 
 // This is an observation of the invocation, not a correctness verdict. In
 // particular, a reused check's historic command duration is not its wall time here.
@@ -141,7 +148,7 @@ func readGateTimingChecks(dir string) map[string]gateCheckMeasurement {
 		prev, seen := checks[id]
 		// A skip in one phase must not mask execution or reuse in the other.
 		if !seen || (prev.Execution == "" && m.Execution != "") ||
-			(prev.Execution == "not-run" && (m.Execution == "ran" || m.Execution == "reused")) {
+			(prev.Execution == gateExecutionNotRun && (m.Execution == gateExecutionRan || m.Execution == gateExecutionReused)) {
 			checks[id] = m
 		} else if prev.Execution == m.Execution {
 			if prev.WallMS == nil {
@@ -178,14 +185,25 @@ func readGateTimingChecks(dir string) map[string]gateCheckMeasurement {
 				for _, c := range group {
 					m := c.gateCheckMeasurement
 					if m.Execution == "" {
+						memRes := classifyCheck(checkresult.Observation{
+							Check:  c.ID,
+							Source: checkresult.ResultWord,
+							Word:   c.Memory,
+						})
+						res := classifyCheck(checkresult.Observation{
+							Check:  c.ID,
+							Source: checkresult.ResultWord,
+							Word:   c.Result,
+						})
 						switch {
-						case c.Memory == "remembered" || c.Result == "remembered":
-							m.Execution = "reused"
-						case strings.HasPrefix(c.Result, "skipped:"):
-							m.Execution = "not-run"
-						case (c.Result == "pass" || c.Result == "fail") &&
+						case (memRes.Outcome == checkresult.Pass && memRes.Detail == checkresult.DetailRemembered) ||
+							(res.Outcome == checkresult.Pass && res.Detail == checkresult.DetailRemembered):
+							m.Execution = gateExecutionReused
+						case res.Outcome == checkresult.Unavailable && res.Detail == checkresult.DetailSkipped:
+							m.Execution = gateExecutionNotRun
+						case ((res.Outcome == checkresult.Pass && res.Detail == checkresult.DetailPassed) || res.Outcome == checkresult.Fail) &&
 							c.StartUnixNano > 0 && c.EndUnixNano >= c.StartUnixNano:
-							m.Execution = "ran"
+							m.Execution = gateExecutionRan
 							if m.WallMS == nil && c.DurationMS != nil && *c.DurationMS >= 0 {
 								ms := *c.DurationMS
 								m.WallMS = &ms
@@ -218,20 +236,25 @@ func readGateTimingChecks(dir string) map[string]gateCheckMeasurement {
 			}
 		}
 		if attrs.Execution == "" {
+			res := classifyCheck(checkresult.Observation{
+				Check:  span.CheckID,
+				Source: checkresult.CheckSpan,
+				Word:   span.Status,
+			})
 			switch {
-			case attrs.Cached || span.Status == "CACHED":
-				attrs.Execution = "reused"
-			case span.Status == "not-run":
-				attrs.Execution = "not-run"
+			case attrs.Cached || (res.Outcome == checkresult.Pass && res.Detail == checkresult.DetailCached):
+				attrs.Execution = gateExecutionReused
+			case res.Outcome == checkresult.Unknown && res.Detail == checkresult.DetailNotRun:
+				attrs.Execution = gateExecutionNotRun
 			case span.StartNS > 0:
-				attrs.Execution = "ran"
+				attrs.Execution = gateExecutionRan
 			}
 		}
 		// Only fall back to span timestamps when wall_ms was not emitted at all
 		// (for example, an older candidate or direct fork-check run) and the
 		// span actually advanced past its start; an unfinished span can have its
 		// end copied from its start, which is not a measured zero.
-		if attrs.WallMS == nil && !hasWallMS && attrs.Execution == "ran" &&
+		if attrs.WallMS == nil && !hasWallMS && attrs.Execution == gateExecutionRan &&
 			span.StartNS > 0 && span.EndNS > span.StartNS {
 			ms := (span.EndNS - span.StartNS) / int64(time.Millisecond)
 			attrs.WallMS = &ms

@@ -25,6 +25,12 @@ func TestClassifyRawResults(t *testing.T) {
 		{"gate drops", Observation{Source: JudgingProgram, ExitCode: exit(77)}, Unavailable, "dropped"},
 		{"gate other exit", Observation{Source: JudgingProgram, ExitCode: exit(8)}, Unknown, "error"},
 		{"gate did not start", Observation{Source: JudgingProgram}, Unknown, "error"},
+		{"binary program pass", Observation{Source: BinaryProgram, ExitCode: exit(0)}, Pass, "passed"},
+		{"binary program fail", Observation{Source: BinaryProgram, ExitCode: exit(1)}, Fail, "failed"},
+		{"binary program exit six is error", Observation{Source: BinaryProgram, ExitCode: exit(6)}, Unknown, "error"},
+		{"binary program exit 77 is error", Observation{Source: BinaryProgram, ExitCode: exit(77)}, Unknown, "error"},
+		{"binary program process error", Observation{Source: BinaryProgram, ExitCode: exit(0), ProcessError: true}, Unknown, "error"},
+		{"binary program no exit", Observation{Source: BinaryProgram}, Unknown, "error"},
 		{"go build exit zero", Observation{Source: GoModuleBuild, ExitCode: exit(0)}, Pass, "passed"},
 		{"go build exit four is failure (P6)", Observation{Source: GoModuleBuild, ExitCode: exit(4)}, Fail, "failed"},
 		{"go build negative exit is failure", Observation{Source: GoModuleBuild, ExitCode: exit(-9)}, Fail, "failed"},
@@ -52,6 +58,7 @@ func TestClassifyRawResults(t *testing.T) {
 		{"stalled", Unknown, "stalled"}, {"STALLED", Unknown, "stalled"},
 		{"unavailable", Unavailable, "unavailable"}, {"skip", Unavailable, "skipped"},
 		{"QUARANTINED", Unavailable, "quarantined"}, {"skipped: no changed path is read", Unavailable, "skipped"},
+		{"skipped: custom reason", Unavailable, "skipped"},
 		{"dropped", Unavailable, "dropped"}, {"absent", Unavailable, "absent"},
 		{"disabled", Disabled, "disabled"},
 		{"error", Unknown, "error"}, {"ERR", Unknown, "error"}, {"ERROR", Unknown, "error"},
@@ -68,6 +75,59 @@ func TestClassifyRawResults(t *testing.T) {
 	for _, tc := range words {
 		t.Run("word/"+tc.raw, func(t *testing.T) {
 			assertResult(t, Classify(Observation{Source: ResultWord, Word: tc.raw}), Result{Outcome: tc.outcome, Detail: tc.detail, RawWord: tc.raw})
+		})
+	}
+	for _, tc := range []struct {
+		source  Source
+		raw     string
+		outcome Outcome
+		detail  string
+	}{
+		{HeavyCheckWord, "pass", Pass, "passed"},
+		{HeavyCheckWord, "fail", Fail, "failed"},
+		{HeavyCheckWord, "unavailable", Unavailable, "unavailable"},
+		{HeavyCheckWord, "stalled", Unknown, "stalled"},
+		{HeavyCheckWord, "error", Unknown, "error"},
+		{HeavyCheckWord, "PASS", Unknown, "unrecognized"},
+		{HeavyCheckWord, "ok", Unknown, "unrecognized"},
+		{HeavyCheckWord, "disabled", Unknown, "unrecognized"},
+		{HeavyCheckWord, "", Unknown, "unrecognized"},
+		{FixerCheckWord, "pass", Pass, "passed"},
+		{FixerCheckWord, "fail", Fail, "failed"},
+		{FixerCheckWord, "dropped", Unavailable, "dropped"},
+		{FixerCheckWord, "absent", Unavailable, "absent"},
+		{FixerCheckWord, "error", Unknown, "error"},
+		{FixerCheckWord, "stalled", Unknown, "error"},
+		{FixerCheckWord, "unavailable", Unknown, "error"},
+		{FixerCheckWord, "PASS", Unknown, "error"},
+		{FixerCheckWord, "", Unknown, "error"},
+		{LegacySpan, "PASS", Pass, "passed"},
+		{LegacySpan, "ok", Pass, "passed"},
+		{LegacySpan, "CACHED", Pass, "cached"},
+		{LegacySpan, "skip", Unavailable, "skipped"},
+		{LegacySpan, "QUARANTINED", Unavailable, "quarantined"},
+		{LegacySpan, "FAIL", Fail, "failed"},
+		{LegacySpan, "STALLED", Unknown, "stalled"},
+		{LegacySpan, "ERR", Unknown, "error"},
+		{LegacySpan, "STALE", Unknown, "error"},
+		{LegacySpan, "not-run", Unknown, "error"},
+		{LegacySpan, "pass", Unknown, "error"},
+		{LegacySpan, "", Unknown, "error"},
+		{CheckSpan, "PASS", Pass, "passed"},
+		{CheckSpan, "ok", Pass, "passed"},
+		{CheckSpan, "CACHED", Pass, "cached"},
+		{CheckSpan, "skip", Unavailable, "skipped"},
+		{CheckSpan, "QUARANTINED", Unavailable, "quarantined"},
+		{CheckSpan, "FAIL", Fail, "failed"},
+		{CheckSpan, "STALLED", Unknown, "stalled"},
+		{CheckSpan, "not-run", Unknown, "not-run"},
+		{CheckSpan, "STALE", Unknown, "stale"},
+		{CheckSpan, "ERR", Unknown, "error"},
+		{CheckSpan, "ERROR", Unknown, "unrecognized"},
+		{CheckSpan, "", Unknown, "unrecognized"},
+	} {
+		t.Run(string(tc.source)+"/"+tc.raw, func(t *testing.T) {
+			assertResult(t, Classify(Observation{Source: tc.source, Word: tc.raw}), Result{Outcome: tc.outcome, Detail: tc.detail, RawWord: tc.raw})
 		})
 	}
 }

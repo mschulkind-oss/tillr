@@ -19,6 +19,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/redcap"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
@@ -699,12 +700,18 @@ func (s *ProcessSteps) finishDetachedGate(ctx context.Context, candidate Candida
 	}
 
 	code := done.ExitCode
+	classified := classifyCheck(checkresult.Observation{
+		Commit:   candidate.HeadSHA,
+		Worktree: candidate.Worktree,
+		Source:   checkresult.JudgingProgram,
+		ExitCode: &code,
+	})
 	outcome := GateOutcome{
 		Outcome:    GateErrored,
 		DurationMS: span.FinishedAtMS - span.StartedAtMS,
 	}
-	switch code {
-	case record.ExitOK:
+	switch {
+	case classified.Outcome == checkresult.Pass:
 		outcome.Outcome = GatePassed
 		if s.Root != "" {
 			if payload, ok := readRecordPayload(filepath.Join(RunDir(s.Root, candidate.RunID), GateVerdictRecord)); ok {
@@ -718,14 +725,14 @@ func (s *ProcessSteps) finishDetachedGate(ctx context.Context, candidate Candida
 				}
 			}
 		}
-	case GateStallExit:
+	case classified.Outcome == checkresult.Unknown && classified.Detail == checkresult.DetailStalled:
 		outcome.Outcome = GateStalled
 		var err error
 		outcome.StalledChecks, err = s.gateStallContext(candidate)
 		if err != nil {
 			return GateOutcome{}, err
 		}
-	case record.ExitNegative:
+	case classified.Outcome == checkresult.Fail:
 		outcome.Outcome = GateFailed
 		// A red gate carries the facts the trunk replay and the fixer need. Reading them
 		// here, from the records the gate just wrote, keeps the loop from re-parsing a
@@ -1323,7 +1330,16 @@ func (s *ProcessSteps) gateFailureContext(candidate Candidate) ([]string, []stri
 			}
 			if err := json.Unmarshal(payload, &verdict); err == nil {
 				for _, check := range verdict.Checks {
-					if check.Result == "fail" && check.CheckID != "" {
+					if check.CheckID == "" {
+						continue
+					}
+					if classifyCheck(checkresult.Observation{
+						Check:    check.CheckID,
+						Commit:   candidate.HeadSHA,
+						Worktree: candidate.Worktree,
+						Source:   checkresult.ResultWord,
+						Word:     check.Result,
+					}).Outcome == checkresult.Fail {
 						checks = append(checks, check.CheckID)
 					}
 				}
@@ -1352,7 +1368,16 @@ func (s *ProcessSteps) gateFailureContext(candidate Candidate) ([]string, []stri
 		actual := []string{}
 		if state == GateSpansRead {
 			for _, check := range fast {
-				if check.Status == "fail" {
+				if check.CheckID == "" {
+					continue
+				}
+				if classifyCheck(checkresult.Observation{
+					Check:    check.CheckID,
+					Commit:   candidate.HeadSHA,
+					Worktree: candidate.Worktree,
+					Source:   checkresult.ResultWord,
+					Word:     check.Status,
+				}).Outcome == checkresult.Fail {
 					actual = append(actual, check.CheckID)
 				}
 			}
@@ -1500,9 +1525,17 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 			return ReplayOutcome{Rev: rev, Known: false}, Externalf("replaying %s on %s: %v: %s",
 				check, shortSHA(rev), runErr, stderr.String())
 		}
-		switch cmd.ProcessState.ExitCode() {
-		case 0:
-		case 1:
+		code := cmd.ProcessState.ExitCode()
+		classified := classifyCheck(checkresult.Observation{
+			Check:    check,
+			Commit:   rev,
+			Worktree: dir,
+			Source:   checkresult.BinaryProgram,
+			ExitCode: &code,
+		})
+		switch classified.Outcome {
+		case checkresult.Pass:
+		case checkresult.Fail:
 			out.Red = append(out.Red, check)
 			if observation, ok := replayForkConflict(check, combined.String()); ok {
 				if out.forkConflicts == nil {

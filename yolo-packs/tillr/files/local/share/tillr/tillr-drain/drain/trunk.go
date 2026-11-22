@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
@@ -634,12 +635,26 @@ func (l *Loop) judgeTrunkChecks(ctx context.Context, replay ReplayStep, candidat
 			passed := map[string]bool{}
 			if green, err := readGreenProofFile(dir, rev); err == nil && !green.ProvedAt.IsZero() {
 				for _, id := range green.Passed {
-					passed[id] = true
+					if classifyCheck(checkresult.Observation{
+						Check:  id,
+						Commit: rev,
+						Source: checkresult.CachedRecord,
+						Word:   string(checkresult.Pass),
+					}).Outcome == checkresult.Pass {
+						passed[id] = true
+					}
 				}
 			}
 			if progress, err := readProgressCheckProof(dir, rev); err == nil {
 				for id := range progress.at {
-					passed[id] = true
+					if classifyCheck(checkresult.Observation{
+						Check:  id,
+						Commit: rev,
+						Source: checkresult.CachedRecord,
+						Word:   string(checkresult.Pass),
+					}).Outcome == checkresult.Pass {
+						passed[id] = true
+					}
 				}
 			}
 			rest = nil
@@ -923,7 +938,13 @@ func (l *Loop) promoteVerdictPassInherited(_ context.Context, candidate Candidat
 	if err := json.Unmarshal(env.Payload, &payload); err != nil {
 		return err
 	}
-	if res, _ := payload["result"].(string); res != GateFailed {
+	res, _ := payload["result"].(string)
+	if res == "" || res == GatePassedInherited || classifyCheck(checkresult.Observation{
+		Commit:   candidate.HeadSHA,
+		Worktree: candidate.Worktree,
+		Source:   checkresult.ResultWord,
+		Word:     res,
+	}).Outcome != checkresult.Fail {
 		return nil
 	}
 	redSet := map[string]bool{}
@@ -944,7 +965,14 @@ func (l *Loop) promoteVerdictPassInherited(_ context.Context, candidate Candidat
 		for _, item := range checksRaw {
 			if m, ok := item.(map[string]any); ok {
 				if id, _ := m["check_id"].(string); redSet[id] {
-					if r, _ := m["result"].(string); r == GateFailed {
+					r, _ := m["result"].(string)
+					if r != "" && r != "inherited" && classifyCheck(checkresult.Observation{
+						Check:    id,
+						Commit:   candidate.HeadSHA,
+						Worktree: candidate.Worktree,
+						Source:   checkresult.ResultWord,
+						Word:     r,
+					}).Outcome == checkresult.Fail {
 						m["result"] = "inherited"
 					}
 				}

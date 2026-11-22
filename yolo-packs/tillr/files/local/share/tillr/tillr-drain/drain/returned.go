@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/mschulkind-oss/tillr/checkresult"
 )
 
 // The owner ruled on 2026-11-17 that a worker run's failure is not counted and does not
@@ -303,7 +305,11 @@ func gateFailingChecks(runDir, runID string) []EndingCheck {
 			continue
 		}
 		for _, check := range file.Payload.Checks {
-			if check.Result != "fail" || check.CheckID == "" {
+			if check.CheckID == "" || classifyCheck(checkresult.Observation{
+				Check:  check.CheckID,
+				Source: checkresult.ResultWord,
+				Word:   check.Result,
+			}).Outcome != checkresult.Fail {
 				continue
 			}
 			if _, seen := byID[check.CheckID]; seen {
