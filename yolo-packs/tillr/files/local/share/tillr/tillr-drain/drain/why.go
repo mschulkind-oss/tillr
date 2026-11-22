@@ -609,7 +609,13 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			row.Mover = "remove the dependency or reopen the closed item (" + strings.Join(row.WaitingOn, ", ") + ")"
 		}
 		if d.Reason == ReasonBlocked || d.Reason == ReasonToolingDefect {
-			if waiting != nil && waiting.Waiter != "" {
+			if waiting != nil && waiting.Source == item.SplitWaitSource {
+				required, err := item.SplitRequiredParts(r, it.ItemID)
+				if err != nil {
+					return WhyAnswer{}, readFailure(err)
+				}
+				splitWait(&row, required, states, def)
+			} else if waiting != nil && waiting.Waiter != "" {
 				row.Class, row.Mover, row.Why = "waits on work", waiting.Waiter, waiting.Reason
 				row.ClassSource = "store"
 				if !slices.Contains(row.WaitingOn, waiting.Waiter) {

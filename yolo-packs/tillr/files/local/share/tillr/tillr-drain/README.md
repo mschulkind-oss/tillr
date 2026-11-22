@@ -495,6 +495,42 @@ remain symbolic: their unknown scope is constrained by enclosing stages rather
 than rejected against an invented path. Each real invocation validates its
 concrete paths and reports its actual expansion.
 
+### Filing a design-seat split
+
+Submit the design seat's statement with `tillr drain split --item <parent-id> < split.json`.
+The parent is an existing queued or blocked request with no attempt in flight.
+Filing does not waive an existing owner approval hold, an outstanding owner
+ruling, or a named prerequisite or plan hold. Settle the existing hold before
+filing. For example, if the parent's only custom criterion is `c5`, the
+statement can read:
+
+```json
+{
+  "parts": [
+    {"label":"core", "title":"Build the core", "share":"Implement the core behavior", "leaves":{"cases":"Add the edge cases"}, "criteria":["The core cases pass"], "required":true},
+    {"label":"cases", "title":"Cover the edge cases", "share":"Add the edge cases", "follows":["core"], "criteria":["The edge cases pass"], "required":true}
+  ],
+  "coverage": {"c5":[{"part":"cases"}]}
+}
+```
+
+`leaves` maps sibling labels to work left to them, and `follows` lists sibling
+labels that must finish first. A coverage entry without `clause` assigns the
+whole criterion. To divide a criterion, list its verbatim clauses in text order,
+each with its `part`; include all the text except whitespace between clauses.
+End each nonfinal quote at terminal punctuation followed by whitespace, at a
+line break, or at a semicolon or non-ASCII sentence terminator such as `。`
+without requiring a space. JSON field names are case-sensitive.
+Use `{"closing_check":true}` instead of `part` for an end-to-end criterion left
+to the final check. Do not assign the four standard request criteria or supply
+donor instructions: all parts start from scratch.
+
+The command returns the part IDs by label. Replaying the same statement changes
+nothing; a refused statement files nothing. Once all required parts have landed,
+the parent stays blocked and `tillr drain why` names the operator to check its
+criteria by hand. A required part that was resolved elsewhere still blocks the
+parent.
+
 ## Parallel read-only nodes
 
 Ready read-only [nodes](https://github.com/mschulkind-oss/tillr/blob/main/docs/reference/tillr-item-graphs.md#the-words)

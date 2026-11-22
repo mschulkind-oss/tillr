@@ -162,6 +162,9 @@ func ApplyWithReceipt(ctx context.Context, tx *store.Tx, env record.Envelope, re
 			payload.Rank = stored.Rank
 		}
 		from = stored.State
+		if err := checkSplitMove(d, payload.ItemID, stored.WaitingOn, payload.State); err != nil {
+			return record.Envelope{}, err
+		}
 		payload.CloseReason, payload.ClosedAt, payload.ClosedBy, payload.ClosedFrom = stored.CloseReason, stored.ClosedAt, stored.ClosedBy, stored.ClosedFrom
 		payload.LifecycleReason, payload.LifecycleBy, payload.ResolvesVia = stored.LifecycleReason, stored.LifecycleBy, stored.ResolvesVia
 		// carryCriteria runs first so its existing refusals keep their names,

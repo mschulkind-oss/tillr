@@ -194,6 +194,12 @@ func FileRequest(ctx context.Context, tx *store.Tx, f RequestFiling) (record.Env
 	if id == "" {
 		return record.Envelope{}, Internalf("no unique request id for hash %s", hash)
 	}
+	return insertRequest(ctx, tx, f, id, hash, input)
+}
+
+// insertRequest writes a validated filing. Split parts have their own identity namespace;
+// their request words and criteria otherwise use the ordinary request path.
+func insertRequest(ctx context.Context, tx *store.Tx, f RequestFiling, id, hash, input string) (record.Envelope, error) {
 	criteria := []criterion{}
 	for i, text := range append(append([]string{}, requestCriteria...), f.Criteria...) {
 		criteria = append(criteria, criterion{CriterionID: fmt.Sprintf("c%d", i+1), Text: text})
