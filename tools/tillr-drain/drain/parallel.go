@@ -192,6 +192,13 @@ func (l *Loop) stageParallel(ctx context.Context, d Decision, base string) (Deci
 				return d, err
 			}
 		}
+		if body, err := os.ReadFile(filepath.Join(lane, braceLiteralsFile)); err == nil {
+			if err = os.WriteFile(filepath.Join(dir, braceLiteralsFile), body, 0644); err != nil {
+				return d, err
+			}
+		} else if !os.IsNotExist(err) {
+			return d, err
+		}
 	}
 	nodes := parallelNodes(d)
 	for i, node := range nodes {

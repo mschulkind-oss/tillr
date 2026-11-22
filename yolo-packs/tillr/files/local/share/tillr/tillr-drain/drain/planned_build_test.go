@@ -915,3 +915,109 @@ func TestPlannedBuildNoSplitWorkBriefContainsPlannerReport(t *testing.T) {
 		}
 	})
 }
+
+func TestPlannedBuildVerifyBriefWithPlanPieceBraces(t *testing.T) {
+	f, l, base := plannedFixture(t)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state = 'closed' WHERE item_id = 'item-a'`)
+		return err
+	})
+	fileFixtureRequestWith(t, f, "Add the watch rule for lane-refused alerts.\n", "build", "planned-build@v1", []string{"tools/item-a/"}, false)
+
+	rulePiece := piece("a", "build", "write")
+	rulePiece["prompt"] = "Write the watch rule with double-brace guidance placeholders {{event.NAME}} and {{event.LANE}}."
+	mirrorPiece := piece("mirror", "build", "write")
+	mirrorPiece["prompt"] = "Keep the mirror clean with no placeholders."
+	pieces := []map[string]any{rulePiece, mirrorPiece}
+
+	var (
+		verifyChecked   bool
+		verifyBrief     string
+		verifyLaneCount string
+		verifyRunCount  string
+		verifyPreflight error
+		unfilledErr     error
+	)
+	steps := &verifyPreflightSteps{
+		noSplitReportSteps: &noSplitReportSteps{
+			workflowSteps: base,
+			planReport:    "Plan complete.\nRESULT: done\n",
+			proposal:      pieceProposal(pieces),
+		},
+		onRun: func(ctx context.Context, req run.Request) error {
+			if req.NodeID != "verify" {
+				return nil
+			}
+			verifyChecked = true
+			lane := filepath.Join(f.laneRoot, req.LaneID)
+			briefPath := filepath.Join(lane, BriefFile)
+			for i, arg := range req.Command {
+				if arg == "--brief" && i+1 < len(req.Command) {
+					briefPath = req.Command[i+1]
+				}
+			}
+			raw, err := os.ReadFile(briefPath)
+			if err != nil {
+				return err
+			}
+			verifyBrief = string(raw)
+			if b, err := os.ReadFile(filepath.Join(lane, braceLiteralsFile)); err == nil {
+				verifyLaneCount = strings.TrimSpace(string(b))
+			}
+			if b, err := os.ReadFile(filepath.Join(run.DurableDir(lane, req.RunID), braceLiteralsFile)); err == nil {
+				verifyRunCount = strings.TrimSpace(string(b))
+			}
+			verifyPreflight = probePreflight(t, briefPath)
+
+			// An unfilled template placeholder beyond the staged count must still be refused.
+			tmpDir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(tmpDir, braceLiteralsFile), []byte(verifyLaneCount+"\n"), 0o644); err != nil {
+				return err
+			}
+			tampered := filepath.Join(tmpDir, BriefFile)
+			if err := os.WriteFile(tampered, []byte(strings.Replace(verifyBrief, "## Task", "## Task\n{{UNFILLED_PLACEHOLDER}}", 1)), 0o644); err != nil {
+				return err
+			}
+			unfilledErr = probePreflight(t, tampered)
+			return nil
+		},
+	}
+	l.cfg.Steps = steps
+
+	result := &LoopResult{}
+	for i := 0; i < 12 && result.Landed == 0; i++ {
+		graphPass(t, l, result)
+	}
+	if result.Landed != 1 || !verifyChecked {
+		t.Fatalf("landed=%d verifyChecked=%v", result.Landed, verifyChecked)
+	}
+	for _, want := range []string{"{{event.NAME}}", "{{event.LANE}}"} {
+		if !strings.Contains(verifyBrief, want) {
+			t.Fatalf("verify brief missing plan piece placeholder %q:\n%s", want, verifyBrief)
+		}
+	}
+	if verifyPreflight != nil {
+		t.Fatalf("preflight_brief refused verify brief with plan piece double braces: %v", verifyPreflight)
+	}
+	wantCount := fmt.Sprintf("%d", braceLiteralCount(verifyBrief))
+	if verifyLaneCount != wantCount || verifyRunCount != wantCount {
+		t.Fatalf("verify brace-literals lane=%q durable=%q, want %q", verifyLaneCount, verifyRunCount, wantCount)
+	}
+	if unfilledErr == nil || !strings.Contains(unfilledErr.Error(), "unfilled template placeholder") {
+		t.Fatalf("preflight_brief on brief with unfilled placeholder = %v, want unfilled template placeholder refusal", unfilledErr)
+	}
+}
+
+type verifyPreflightSteps struct {
+	*noSplitReportSteps
+	onRun func(context.Context, run.Request) error
+}
+
+func (s *verifyPreflightSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	if s.onRun != nil {
+		if err := s.onRun(ctx, req); err != nil {
+			return run.Record{}, "", err
+		}
+	}
+	return s.noSplitReportSteps.Run(ctx, req)
+}
