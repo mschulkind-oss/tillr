@@ -1,0 +1,47 @@
+# The 2026-11-21 request called for notice when the drain undoes a landing.
+# Read drain.revert events from the last hour, grouped by landing commit.
+[[rule]]
+id = "drain-landing-reverted"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.revert"]
+
+[rule.when]
+group_by = "landing"
+pattern = "predicate_match"
+match = 'event.result == "reverted"'
+window = "1h"
+
+[rule.guidance]
+summary = "The drain reverted landing {{subject}}."
+check = ["Read the revert event for the commit that undid the landing, then check the trunk test record for the failing checks and their logs."]
+do = ["Identify which part of the landing caused the checks to fail before attempting it again."]
+
+[rule.delivery]
+receiver = "foreground"
+
+# The same request called for a separate notice when the drain cannot undo a landing.
+# Read drain.revert events from the last hour, grouped by landing commit.
+[[rule]]
+id = "drain-revert-not-possible"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.revert"]
+
+[rule.when]
+group_by = "landing"
+pattern = "predicate_match"
+match = 'event.result == "not-possible"'
+window = "1h"
+
+[rule.guidance]
+summary = "The drain could not revert landing {{subject}}."
+check = ["Read the reason in the revert event, then check the trunk test record for the failing checks and their logs."]
+do = ["Determine why the revert could not go ahead and what still needs to be fixed on the trunk."]
+
+[rule.delivery]
+receiver = "foreground"
