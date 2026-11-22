@@ -26,6 +26,7 @@ type AlertStatus struct {
 	Observed int64   `json:"observed"`
 	By       *string `json:"by,omitempty"`
 	Until    string  `json:"until,omitempty"`
+	ItemID   *string `json:"item_id,omitempty"`
 }
 
 type OwnerStatus struct {
@@ -119,9 +120,22 @@ func requireRoot(root string, rules []Rule) error {
 
 func statusTime(ms int64) string { return time.UnixMilli(ms).UTC().Format(time.RFC3339Nano) }
 
+func alertEpisodesHasColumn(rd *store.Reader, name string) (bool, error) {
+	var ok bool
+	err := rd.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('alert_episodes') WHERE name = ?)`, name).Scan(&ok)
+	return ok, err
+}
+
 func (s *Status) readAlerts(rd *store.Reader) error {
-	rows, err := rd.Query(`SELECT alert_id, rule_id, subject_key, state, severity, opened_at, observation_count, acked_by, silence_until_ms
- FROM alert_episodes WHERE state<>'resolved' ORDER BY opened_seq, alert_id`)
+	hasTracking, err := alertEpisodesHasColumn(rd, "tracking_item_id")
+	if err != nil {
+		return err
+	}
+	query := `SELECT alert_id, rule_id, subject_key, state, severity, opened_at, observation_count, acked_by, silence_until_ms FROM alert_episodes WHERE state<>'resolved' ORDER BY opened_seq, alert_id`
+	if hasTracking {
+		query = `SELECT alert_id, rule_id, subject_key, state, severity, opened_at, observation_count, acked_by, silence_until_ms, tracking_item_id FROM alert_episodes WHERE state<>'resolved' ORDER BY opened_seq, alert_id`
+	}
+	rows, err := rd.Query(query)
 	if err != nil {
 		return err
 	}
@@ -130,9 +144,15 @@ func (s *Status) readAlerts(rd *store.Reader) error {
 		var alert AlertStatus
 		var opened int64
 		var until sql.NullInt64
-		var by *string
-		if err := rows.Scan(&alert.ID, &alert.RuleID, &alert.Subject, &alert.State, &alert.Severity, &opened, &alert.Observed, &by, &until); err != nil {
-			return err
+		var by, itemID *string
+		var scanErr error
+		if hasTracking {
+			scanErr = rows.Scan(&alert.ID, &alert.RuleID, &alert.Subject, &alert.State, &alert.Severity, &opened, &alert.Observed, &by, &until, &itemID)
+		} else {
+			scanErr = rows.Scan(&alert.ID, &alert.RuleID, &alert.Subject, &alert.State, &alert.Severity, &opened, &alert.Observed, &by, &until)
+		}
+		if scanErr != nil {
+			return scanErr
 		}
 		alert.Opened = statusTime(opened)
 		switch alert.State {
@@ -143,6 +163,9 @@ func (s *Status) readAlerts(rd *store.Reader) error {
 			if until.Valid {
 				alert.Until = statusTime(until.Int64)
 			}
+		}
+		if itemID != nil {
+			alert.ItemID = itemID
 		}
 		s.Alerts = append(s.Alerts, alert)
 	}

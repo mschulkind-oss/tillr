@@ -27,7 +27,12 @@ func init() {
 	if err := store.RegisterDDL("watch", schema); err != nil {
 		panic(err)
 	}
-	for _, kind := range []string{openedKind, resolvedKind, acknowledgedKind, silencedKind, reopenedKind, ruleSetKind, ruleResetKind} {
+	for _, col := range []string{"tracking_item_id", "tracked_lag_pair"} {
+		if err := store.RegisterColumn("watch", "alert_episodes", col, "TEXT"); err != nil {
+			panic(err)
+		}
+	}
+	for _, kind := range []string{openedKind, resolvedKind, acknowledgedKind, trackedKind, silencedKind, reopenedKind, ruleSetKind, ruleResetKind} {
 		if err := event.Register(kind, "watch"); err != nil {
 			panic(err)
 		}
@@ -54,6 +59,8 @@ CREATE TABLE IF NOT EXISTS alert_episodes (
  silence_until_ms INTEGER,
  silence_on_fingerprint TEXT,
  active_triage_run_id TEXT,
+ tracking_item_id TEXT,
+ tracked_lag_pair TEXT,
  resolved_seq INTEGER,
  resolved_at INTEGER,
  resolved_reason TEXT,
@@ -517,6 +524,8 @@ type episode struct {
 	opened, last        int64
 	silenceUntil        sql.NullInt64
 	silenceOn           sql.NullString
+	trackingItem        sql.NullString
+	trackedLagPair      sql.NullString
 }
 
 func (ep episode) reopenCause(now time.Time, fingerprint string) string {
@@ -532,7 +541,21 @@ func (ep episode) reopenCause(now time.Time, fingerprint string) string {
 }
 
 func active(rd *store.Reader, ruleID string) (map[string]episode, error) {
-	rows, err := rd.Query(`SELECT subject_key,alert_id,severity,opened_seq,last_observed_seq,state,silence_until_ms,silence_on_fingerprint FROM alert_episodes WHERE rule_id=? AND state!='resolved'`, ruleID)
+	hasTracking, err := alertEpisodesHasColumn(rd, "tracking_item_id")
+	if err != nil {
+		return nil, err
+	}
+	hasLagPair, err := alertEpisodesHasColumn(rd, "tracked_lag_pair")
+	if err != nil {
+		return nil, err
+	}
+	query := `SELECT subject_key,alert_id,severity,opened_seq,last_observed_seq,state,silence_until_ms,silence_on_fingerprint FROM alert_episodes WHERE rule_id=? AND state!='resolved'`
+	if hasTracking && hasLagPair {
+		query = `SELECT subject_key,alert_id,severity,opened_seq,last_observed_seq,state,silence_until_ms,silence_on_fingerprint,tracking_item_id,tracked_lag_pair FROM alert_episodes WHERE rule_id=? AND state!='resolved'`
+	} else if hasTracking {
+		query = `SELECT subject_key,alert_id,severity,opened_seq,last_observed_seq,state,silence_until_ms,silence_on_fingerprint,tracking_item_id FROM alert_episodes WHERE rule_id=? AND state!='resolved'`
+	}
+	rows, err := rd.Query(query, ruleID)
 	if err != nil {
 		return nil, err
 	}
@@ -541,8 +564,16 @@ func active(rd *store.Reader, ruleID string) (map[string]episode, error) {
 	for rows.Next() {
 		var key string
 		var ep episode
-		if err := rows.Scan(&key, &ep.id, &ep.severity, &ep.opened, &ep.last, &ep.state, &ep.silenceUntil, &ep.silenceOn); err != nil {
-			return nil, err
+		var scanErr error
+		if hasTracking && hasLagPair {
+			scanErr = rows.Scan(&key, &ep.id, &ep.severity, &ep.opened, &ep.last, &ep.state, &ep.silenceUntil, &ep.silenceOn, &ep.trackingItem, &ep.trackedLagPair)
+		} else if hasTracking {
+			scanErr = rows.Scan(&key, &ep.id, &ep.severity, &ep.opened, &ep.last, &ep.state, &ep.silenceUntil, &ep.silenceOn, &ep.trackingItem)
+		} else {
+			scanErr = rows.Scan(&key, &ep.id, &ep.severity, &ep.opened, &ep.last, &ep.state, &ep.silenceUntil, &ep.silenceOn)
+		}
+		if scanErr != nil {
+			return nil, scanErr
 		}
 		episodes[key] = ep
 	}
@@ -561,7 +592,8 @@ func newStoreItemTerminal(rd *store.Reader) (itemTerminalChecker, error) {
 	d := rec.Parsed
 	cache := map[string]sql.NullString{}
 	return itemTerminalChecker{
-		ready: true,
+		ready:       true,
+		closedState: d.Closed,
 		stateOf: func(itemID string) (string, bool, error) {
 			if cached, ok := cache[itemID]; ok {
 				return cached.String, cached.Valid && cached.String != "", nil
@@ -628,20 +660,102 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 				if ep.severity != "" {
 					rMeta.Severity = ep.severity
 				}
-				if err := changes.resolveWithReason(rMeta, key, ep.id, snapHead, now, termReason); err != nil {
+				if err := changes.resolveWithReason(rMeta, key, ep.id, ep.trackingItem, snapHead, now, termReason); err != nil {
 					return err
 				}
 			}
 			continue
 		}
 		firing := r.Enabled && c.fires(r.When)
-		firstClear := sort.Search(len(c.clears), func(i int) bool { return c.clears[i] > ep.opened })
+		if exists && ep.trackingItem.Valid && ep.trackingItem.String != "" {
+			if !lookup.ready {
+				continue
+			}
+			trackedID := ep.trackingItem.String
+			itemState, itemExists, err := lookup.stateOf(trackedID)
+			if err != nil {
+				continue
+			}
+			if itemExists && !lookup.isTerminal(itemState) {
+				if !firing {
+					if r.When.Pattern == LagBehind && (!ep.trackedLagPair.Valid || ep.trackedLagPair.String != "") {
+						*changes = append(*changes, func(tx *store.Tx) error {
+							_, err := tx.Exec(`UPDATE alert_episodes SET tracked_lag_pair='' WHERE alert_id=?`, ep.id)
+							return err
+						})
+					}
+					continue
+				}
+				if r.When.Pattern == LagBehind {
+					pair := c.lag.leaderOID + ":" + c.lag.followerOID
+					if !ep.trackedLagPair.Valid {
+						*changes = append(*changes, func(tx *store.Tx) error {
+							_, err := tx.Exec(`UPDATE alert_episodes SET tracked_lag_pair=? WHERE alert_id=?`, pair, ep.id)
+							return err
+						})
+					} else if ep.trackedLagPair.String != pair {
+						nextSeq := max(ep.last, startHead)
+						*changes = append(*changes, func(tx *store.Tx) error {
+							_, err := tx.Exec(`UPDATE alert_episodes SET tracked_lag_pair=?,last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1 WHERE alert_id=?`, pair, nextSeq, now.UnixMilli(), ep.id)
+							return err
+						})
+					}
+				} else {
+					newest := c.events[len(c.events)-1]
+					if newest.Seq > ep.last {
+						*changes = append(*changes, func(tx *store.Tx) error {
+							_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1,condition_fingerprint=? WHERE alert_id=?`, newest.Seq, now.UnixMilli(), newest.fingerprint, ep.id)
+							return err
+						})
+					}
+				}
+				continue
+			}
+			if !firing {
+				firstClear := sort.Search(len(c.clears), func(i int) bool { return c.clears[i] > ep.last })
+				seq := startHead
+				if firstClear < len(c.clears) {
+					seq = c.clears[firstClear]
+				}
+				if err := changes.resolve(r, key, ep.id, ep.trackingItem, seq, now); err != nil {
+					return err
+				}
+				continue
+			}
+			newest := observation{Seq: startHead}
+			var lagPair any
+			if r.When.Pattern == LagBehind {
+				pair := c.lag.leaderOID + ":" + c.lag.followerOID
+				lagPair = pair
+				if ep.trackedLagPair.Valid && ep.trackedLagPair.String != pair {
+					nextSeq := max(ep.last, startHead)
+					*changes = append(*changes, func(tx *store.Tx) error {
+						_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1 WHERE alert_id=?`, nextSeq, now.UnixMilli(), ep.id)
+						return err
+					})
+				}
+			} else {
+				newest = c.events[len(c.events)-1]
+				if newest.Seq > ep.last {
+					*changes = append(*changes, func(tx *store.Tx) error {
+						_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1 WHERE alert_id=?`, newest.Seq, now.UnixMilli(), ep.id)
+						return err
+					})
+				}
+			}
+			cause, recordedState := lookup.reopenCause(itemState, itemExists)
+			if err := changes.reopenTracked(r, key, ep.id, c, newest.fingerprint, lagPair, cause, trackedID, recordedState, now); err != nil {
+				return err
+			}
+			continue
+		}
+		firstClear := sort.Search(len(c.clears), func(i int) bool { return c.clears[i] > ep.last })
 		if exists && (!firing || firstClear < len(c.clears)) {
 			seq := startHead
 			if firstClear < len(c.clears) {
 				seq = c.clears[firstClear]
 			}
-			if err := changes.resolve(r, key, ep.id, seq, now); err != nil {
+			if err := changes.resolve(r, key, ep.id, ep.trackingItem, seq, now); err != nil {
 				return err
 			}
 			exists = false
@@ -658,6 +772,15 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 				return err
 			}
 			continue
+		}
+		if r.When.Pattern == LagBehind {
+			pair := c.lag.leaderOID + ":" + c.lag.followerOID
+			if !ep.trackedLagPair.Valid || ep.trackedLagPair.String != pair {
+				*changes = append(*changes, func(tx *store.Tx) error {
+					_, err := tx.Exec(`UPDATE alert_episodes SET tracked_lag_pair=? WHERE alert_id=?`, pair, ep.id)
+					return err
+				})
+			}
 		}
 		if r.When.Pattern != LagBehind && newest.Seq > ep.last {
 			*changes = append(*changes, func(tx *store.Tx) error {
@@ -678,19 +801,34 @@ func (changes *episodeChanges) resolveTerminalRemaining(rd *store.Reader, ruleBy
 	if !lookup.ready {
 		return nil
 	}
+	hasTracking, err := alertEpisodesHasColumn(rd, "tracking_item_id")
+	if err != nil {
+		return err
+	}
 	type remEpisode struct {
 		id, ruleID, subject, severity string
+		trackingItem                  sql.NullString
 	}
-	rows, err := rd.Query(`SELECT alert_id, rule_id, subject_key, severity FROM alert_episodes WHERE state != 'resolved' ORDER BY episode_num`)
+	remQuery := `SELECT alert_id, rule_id, subject_key, severity FROM alert_episodes WHERE state != 'resolved' ORDER BY episode_num`
+	if hasTracking {
+		remQuery = `SELECT alert_id, rule_id, subject_key, severity, tracking_item_id FROM alert_episodes WHERE state != 'resolved' ORDER BY episode_num`
+	}
+	rows, err := rd.Query(remQuery)
 	if err != nil {
 		return err
 	}
 	var rem []remEpisode
 	for rows.Next() {
 		var m remEpisode
-		if err := rows.Scan(&m.id, &m.ruleID, &m.subject, &m.severity); err != nil {
+		var scanErr error
+		if hasTracking {
+			scanErr = rows.Scan(&m.id, &m.ruleID, &m.subject, &m.severity, &m.trackingItem)
+		} else {
+			scanErr = rows.Scan(&m.id, &m.ruleID, &m.subject, &m.severity)
+		}
+		if scanErr != nil {
 			rows.Close()
-			return err
+			return scanErr
 		}
 		if !reconciled[m.ruleID] {
 			rem = append(rem, m)
@@ -730,7 +868,7 @@ func (changes *episodeChanges) resolveTerminalRemaining(rd *store.Reader, ruleBy
 			Severity: m.severity,
 			Delivery: Delivery{Receiver: receiver},
 		}
-		if err := changes.resolveWithReason(rMeta, m.subject, m.id, startHead, now, termReason); err != nil {
+		if err := changes.resolveWithReason(rMeta, m.subject, m.id, m.trackingItem, startHead, now, termReason); err != nil {
 			return err
 		}
 	}
@@ -755,8 +893,21 @@ func (changes *episodeChanges) open(rd *store.Reader, r Rule, key string, c *con
 	if err != nil {
 		return err
 	}
+	var lagPair any
+	if r.When.Pattern == LagBehind {
+		lagPair = c.lag.leaderOID + ":" + c.lag.followerOID
+	}
 	return changes.transition(r, key, id, openedKind, now, map[string]any{"opened_seq": newest.Seq}, func(tx *store.Tx) error {
-		_, err := tx.Exec(`INSERT INTO alert_episodes (alert_id,rule_id,subject_key,episode_num,state,severity,condition_fingerprint,opened_seq,opened_at,last_observed_seq,last_observed_at,bundle_json)
+		hasLagCol, err := alertEpisodesHasColumn(tx.Reader(), "tracked_lag_pair")
+		if err != nil {
+			return err
+		}
+		if hasLagCol {
+			_, err = tx.Exec(`INSERT INTO alert_episodes (alert_id,rule_id,subject_key,episode_num,state,severity,condition_fingerprint,opened_seq,opened_at,last_observed_seq,last_observed_at,tracked_lag_pair,bundle_json)
+ VALUES (?,?,?,?,'open',?,?,?,?,?,?,?,?)`, id, r.ID, key, previous+1, r.Severity, newest.fingerprint, newest.Seq, now.UnixMilli(), newest.Seq, now.UnixMilli(), lagPair, string(bundle))
+			return err
+		}
+		_, err = tx.Exec(`INSERT INTO alert_episodes (alert_id,rule_id,subject_key,episode_num,state,severity,condition_fingerprint,opened_seq,opened_at,last_observed_seq,last_observed_at,bundle_json)
  VALUES (?,?,?,?,'open',?,?,?,?,?,?,?)`, id, r.ID, key, previous+1, r.Severity, newest.fingerprint, newest.Seq, now.UnixMilli(), newest.Seq, now.UnixMilli(), string(bundle))
 		return err
 	})
@@ -774,12 +925,34 @@ func (changes *episodeChanges) reopen(r Rule, key, id string, c *condition, fing
 	})
 }
 
-func (changes *episodeChanges) resolve(r Rule, key, id string, seq int64, now time.Time) error {
-	return changes.resolveWithReason(r, key, id, seq, now, "condition-cleared")
+func (changes *episodeChanges) reopenTracked(r Rule, key, id string, c *condition, fingerprint string, lagPair any, cause, itemID, itemState string, now time.Time) error {
+	bundle, err := makeBundleWithPrefix(r, key, id, c, trackedPersistPrefix(itemID, itemState))
+	if err != nil {
+		return err
+	}
+	body := map[string]any{
+		"cause":      cause,
+		"item_id":    itemID,
+		"item_state": itemState,
+	}
+	return changes.transition(r, key, id, reopenedKind, now, body, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE alert_episodes SET state='open',tracking_item_id=NULL,tracked_lag_pair=?,silence_until_ms=NULL,silence_on_fingerprint=NULL,
+ acked_by=NULL,acked_note=NULL,acked_at=NULL,condition_fingerprint=?,bundle_json=? WHERE alert_id=?`,
+			lagPair, fingerprint, string(bundle), id)
+		return err
+	})
 }
 
-func (changes *episodeChanges) resolveWithReason(r Rule, key, id string, seq int64, now time.Time, reason string) error {
-	return changes.transition(r, key, id, resolvedKind, now, map[string]any{"resolved_seq": seq, "reason": reason}, func(tx *store.Tx) error {
+func (changes *episodeChanges) resolve(r Rule, key, id string, trackingItem sql.NullString, seq int64, now time.Time) error {
+	return changes.resolveWithReason(r, key, id, trackingItem, seq, now, "condition-cleared")
+}
+
+func (changes *episodeChanges) resolveWithReason(r Rule, key, id string, trackingItem sql.NullString, seq int64, now time.Time, reason string) error {
+	body := map[string]any{"resolved_seq": seq, "reason": reason}
+	if trackingItem.Valid && trackingItem.String != "" {
+		body["item_id"] = trackingItem.String
+	}
+	return changes.transition(r, key, id, resolvedKind, now, body, func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE alert_episodes SET state='resolved',resolved_seq=?,resolved_at=?,resolved_reason=? WHERE alert_id=?`, seq, now.UnixMilli(), reason, id)
 		return err
 	})
