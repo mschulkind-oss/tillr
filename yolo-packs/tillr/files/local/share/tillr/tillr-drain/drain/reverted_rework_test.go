@@ -149,8 +149,6 @@ VALUES('item-broke','external-review@v1','block',json_remove(?, '$.compatibility
 	config := filepath.Join(bin, "gitconfig")
 	writeForkFile(t, config, "[user]\n name = Fixture\n email = fixture@example.invalid\n")
 	t.Setenv("GIT_CONFIG_GLOBAL", config)
-	heavyGit(t, h.root, "config", "--local", "--unset", "user.name")
-	heavyGit(t, h.root, "config", "--local", "--unset", "user.email")
 	declareSiblingInputs(t)
 	for _, module := range []string{"tillr-land", "tillr-item"} {
 		cmd := exec.Command("go", "build", "-o", filepath.Join(bin, module), ".")
