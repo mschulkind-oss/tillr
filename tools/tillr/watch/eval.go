@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS foreground_delivery (
  waiting_since INTEGER,
  last_wait_at INTEGER
 );
-`
+` + ruleOverridesDDL
 
 // Evaluator derives rule conditions from a single store snapshot per pass.
 // Only the watch episode transitions and their corresponding events are written.
@@ -76,7 +76,7 @@ type Evaluator struct {
 	Root  string
 	Clock func() time.Time
 
-	// Test seam: a concurrent event can commit after Git and before WriteTx.
+	// Test seam: a concurrent event or rule can commit after Git and before WriteTx.
 	afterGit func()
 }
 
@@ -89,10 +89,11 @@ func (e Evaluator) now() time.Time {
 
 // RuleResult describes an evaluated rule and any runtime unreadability.
 type RuleResult struct {
-	ID                      string
+	ID, GroupBy             string
 	Disabled                bool
 	Skipped                 int
 	Unsupported, Unreadable string
+	OutOfScope              string
 }
 
 func (r RuleResult) Diagnostic() string {
@@ -101,6 +102,8 @@ func (r RuleResult) Diagnostic() string {
 		return r.Unsupported
 	case r.Unreadable != "":
 		return r.Unreadable
+	case r.OutOfScope != "":
+		return "the store's charter is " + r.OutOfScope
 	default:
 		return ""
 	}
@@ -128,7 +131,7 @@ func (e Evaluator) Skipped(ctx context.Context) (map[string]int, error) {
 // Use EvaluateRules to opt into the extended evaluator.
 func (e Evaluator) Evaluate(ctx context.Context) (map[string]int, error) {
 	e.Rules = commandRules(e.Rules)
-	results, err := e.EvaluateRules(ctx)
+	results, err := e.evaluateRules(ctx, false)
 	return skippedCounts(results), err
 }
 
@@ -144,57 +147,121 @@ func commandRules(rules []Rule) []Rule {
 
 // RuleResults derives conditions without changing episodes.
 func (e Evaluator) RuleResults(ctx context.Context) ([]RuleResult, error) {
-	now := e.now()
-	git, err := readGit(ctx, e.Root, e.Rules)
-	if err != nil {
-		return nil, err
-	}
 	var results []RuleResult
-	err = e.Store.ReadTx(ctx, func(rd *store.Reader) error {
-		var err error
-		results, _, err = e.deriveRules(rd, e.Rules, git, now)
-		return err
+	err := e.readEvaluation(ctx, e.Rules, func(_ *store.Reader, rows []RuleResult) error {
+		results = rows
+		return nil
 	})
 	return results, err
 }
 
-// EvaluateRules reports unreadable projections while leaving their episodes untouched.
-func (e Evaluator) EvaluateRules(ctx context.Context) ([]RuleResult, error) {
+// readEvaluation reads Git before the store snapshot. The caller provides one
+// fixed set of rules for both reads and may inspect other rows in that snapshot.
+func (e Evaluator) readEvaluation(ctx context.Context, rules []Rule, visit func(*store.Reader, []RuleResult) error) error {
 	now := e.now()
-	var startHead int64
-	if err := e.Store.ReadTx(ctx, func(rd *store.Reader) error {
-		var err error
-		startHead, err = rd.EventHeadSeq()
-		return err
-	}); err != nil {
-		return nil, err
-	}
-	git, err := readGit(ctx, e.Root, e.Rules)
+	git, err := readGit(ctx, e.Root, rules)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if e.afterGit != nil {
-		e.afterGit()
-	}
-	var results []RuleResult
-	err = e.Store.WriteTx(ctx, func(tx *store.Tx) error {
-		var derived []map[string]*condition
-		var err error
-		results, derived, err = e.deriveRules(tx.Reader(), e.Rules, git, now)
+	return e.Store.ReadTx(ctx, func(rd *store.Reader) error {
+		results, _, err := e.deriveRules(rd, rules, git, now)
 		if err != nil {
 			return err
 		}
-		for i, subjects := range derived {
-			if subjects == nil {
-				continue
-			}
-			if err := reconcile(tx, e.Rules[i], subjects, startHead, now); err != nil {
-				return fmt.Errorf("rule %s: %w", e.Rules[i].ID, err)
-			}
-		}
-		return nil
+		return visit(rd, results)
 	})
-	return results, err
+}
+
+// CheckRules validates effective rules before wait records any delivery state.
+// The actual evaluation checks again against the rules of that pass.
+func (e Evaluator) CheckRules(ctx context.Context) error {
+	return e.Store.ReadTx(ctx, func(rd *store.Reader) error {
+		_, _, err := e.effective(rd)
+		return err
+	})
+}
+
+func (e Evaluator) effective(rd *store.Reader) ([]Rule, map[string]bool, error) {
+	rules, disabledOverrides, err := readEffectiveRules(rd, e.Rules)
+	if err == nil {
+		err = requireRoot(e.Root, rules)
+	}
+	return rules, disabledOverrides, err
+}
+
+var errNewGitFact = errors.New("effective rules need another Git fact")
+
+// EvaluateRules uses live overrides and leaves episodes with unreadable projections untouched.
+func (e Evaluator) EvaluateRules(ctx context.Context) ([]RuleResult, error) {
+	return e.evaluateRules(ctx, true)
+}
+
+func (e Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult, error) {
+	readRules := e.effective
+	if !live {
+		// The legacy event-only API evaluates the caller's fixed rules.
+		readRules = func(*store.Reader) ([]Rule, map[string]bool, error) { return e.Rules, nil, nil }
+	}
+	for {
+		now := e.now()
+		var startHead int64
+		var rules []Rule
+		if err := e.Store.ReadTx(ctx, func(rd *store.Reader) error {
+			var err error
+			startHead, err = rd.EventHeadSeq()
+			if err == nil {
+				rules, _, err = readRules(rd)
+			}
+			return err
+		}); err != nil {
+			return nil, err
+		}
+		git, err := readGit(ctx, e.Root, rules)
+		if err != nil {
+			return nil, err
+		}
+		if e.afterGit != nil {
+			e.afterGit()
+		}
+		var results []RuleResult
+		err = e.Store.WriteTx(ctx, func(tx *store.Tx) error {
+			rd := tx.Reader()
+			rules, disabledOverrides, err := readRules(rd)
+			if err != nil {
+				return err
+			}
+			if !git.covers(rules) {
+				return errNewGitFact
+			}
+			var derived []map[string]*condition
+			results, derived, err = e.deriveRules(rd, rules, git, now)
+			if err != nil {
+				return err
+			}
+			for i, subjects := range derived {
+				rule := rules[i]
+				if subjects == nil {
+					if !disabledOverrides[rule.ID] {
+						continue
+					}
+					// A disabled override no longer fires for any subject.
+					subjects = make(map[string]*condition)
+				}
+				if err := reconcile(tx, rule, subjects, startHead, now); err != nil {
+					return fmt.Errorf("rule %s: %w", rule.ID, err)
+				}
+			}
+			return nil
+		})
+		if errors.Is(err, errNewGitFact) {
+			// No writes have occurred. Take a fresh event head and Git snapshot.
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		return results, nil
+	}
 }
 
 func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, now time.Time) ([]RuleResult, []map[string]*condition, error) {
@@ -203,13 +270,17 @@ func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, 
 	derived := make([]map[string]*condition, len(rules))
 	for i, r := range rules {
 		result := &results[i]
-		*result = RuleResult{ID: r.ID, Disabled: !r.Enabled, Unsupported: r.evaluatorReason()}
+		*result = RuleResult{ID: r.ID, GroupBy: r.When.GroupBy, Disabled: !r.Enabled, Unsupported: r.evaluatorReason()}
 		if result.Disabled || result.Unsupported != "" {
 			continue
 		}
-		rf, err := facts.forRule(r, git)
+		rf, outOfScope, err := facts.forRule(r, git)
 		if err != nil {
 			result.Unreadable = err.Error()
+			continue
+		}
+		if outOfScope != "" {
+			result.OutOfScope = outOfScope
 			continue
 		}
 		if r.When.Pattern == LagBehind {

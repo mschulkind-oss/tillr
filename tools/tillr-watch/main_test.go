@@ -211,8 +211,7 @@ func TestWatchStatusReadOnly(t *testing.T) {
 func TestWatchDisabledRuleDiagnostics(t *testing.T) {
 	s, rules := fixture(t, false)
 	disabled := strings.Replace(testRule, `id="refusals"`, "id=\"refusals\"\nenabled=false", 1)
-	unsupported := strings.ReplaceAll(disabled, `"refusals"`, `"named-scope"`)
-	unsupported = strings.Replace(unsupported, `scope="core"`, `scope="workflow:example"`, 1)
+	unsupported := strings.NewReplacer(`id="refusals"`, `id="unsupported"`, "[rule.when]", "projections=['work_nodes']\n[rule.when]").Replace(testRule)
 	if err := os.WriteFile(filepath.Join(rules, "nested", "refusals.toml"), []byte(disabled+unsupported), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -228,13 +227,63 @@ func TestWatchDisabledRuleDiagnostics(t *testing.T) {
 			args := append(tc.args, "--store", s.Path(), "--rules", rules)
 			var out, stderr bytes.Buffer
 			code := run(context.Background(), args, &out, &stderr)
-			if code != tc.code || !strings.HasPrefix(stderr.String(), "tillr watch: rule named-scope not evaluated: ") || !strings.Contains(stderr.String(), "named scope") || strings.Count(stderr.String(), "\n") != 1 {
+			if tc.args[0] == "status" && out.Len() != 0 {
+				t.Fatalf("status counted unevaluated rules: stdout %q", &out)
+			}
+			if code != tc.code || stderr.String() != "tillr watch: rule unsupported not evaluated: unsupported projection \"work_nodes\"\n" {
 				t.Fatalf("exit %d, stderr %q", code, &stderr)
 			}
-			if tc.args[0] == "status" && out.Len() != 0 {
-				t.Fatalf("status counted disabled rules: %q", &out)
+		})
+	}
+}
+
+func TestWatchEvalAndWaitUseEffectiveRules(t *testing.T) {
+	s, rules := fixture(t, false)
+	seedStatusOverride(t, s, "refusals", strings.Replace(testRule, "[rule.when]", "projections=['git_refs:refs/heads/missing']\n[rule.when]", 1))
+	root := t.TempDir() // Not a repository: the supplied root makes this unreadable, not a refusal.
+	common := []string{"--store", s.Path(), "--rules", rules}
+	var out, stderr bytes.Buffer
+	if code := run(t.Context(), append([]string{"eval"}, common...), &out, &stderr); code != 1 || !strings.Contains(stderr.String(), "invalid arguments") {
+		t.Fatalf("eval without --once: exit %d, stderr %q", code, &stderr)
+	}
+	for _, tc := range []struct {
+		args []string
+		code int
+	}{
+		{[]string{"eval", "--once"}, 0},
+		{[]string{"wait", "--timeout", "20ms"}, 2},
+	} {
+		t.Run(tc.args[0], func(t *testing.T) {
+			args := append(tc.args, common...)
+			out.Reset()
+			stderr.Reset()
+			if code := run(t.Context(), args, &out, &stderr); code != 1 || out.Len() != 0 || !strings.Contains(stderr.String(), "rule refusals requires --root") {
+				t.Fatalf("no root: exit %d, stdout %q, stderr %q", code, &out, &stderr)
+			}
+			stderr.Reset()
+			if code := run(t.Context(), append(args, "--root", root), &out, &stderr); code != tc.code || !strings.HasPrefix(stderr.String(), "tillr watch: rule refusals not evaluated: git ref refs/heads/missing:") || strings.Count(stderr.String(), "\n") != 1 {
+				t.Fatalf("with root: exit %d, stdout %q, stderr %q", code, &out, &stderr)
+			}
+			if tc.args[0] == "wait" && !strings.Contains(out.String(), " --root '"+root+"'") {
+				t.Fatalf("re-arm lost root: %q", &out)
 			}
 		})
+	}
+}
+
+func TestWatchWaitKeepsFileReceiverForNotices(t *testing.T) {
+	s, rules := fixture(t, false)
+	fact(t, s, `{"item_id":"item-a"}`)
+	fact(t, s, `{"item_id":"item-a"}`)
+	common := []string{"--store", s.Path(), "--rules", rules}
+	var out, stderr bytes.Buffer
+	if code := run(t.Context(), append([]string{"eval", "--once"}, common...), io.Discard, &stderr); code != 0 || stderr.Len() != 0 {
+		t.Fatalf("eval: %d, stderr %q", code, &stderr)
+	}
+	seedStatusOverride(t, s, "refusals", strings.Replace(testRule, `receiver="foreground"`, `receiver="subscribers"`, 1))
+	args := append([]string{"wait", "--timeout", "100ms"}, common...)
+	if code := run(t.Context(), args, &out, &stderr); code != 0 || !strings.Contains(out.String(), "TILLR_WATCH_NOTICE 1 pending") || !strings.Contains(out.String(), "item-a has 2 refusals") || stderr.Len() != 0 {
+		t.Fatalf("wait: %d, stdout %q, stderr %q", code, &out, &stderr)
 	}
 }
 
@@ -243,6 +292,7 @@ func TestWatchWritableFacesRequireExistingStore(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing.db")
 	for _, args := range [][]string{
 		{"eval", "--once", "--rules", rules},
+		{"daemon", "--rules", rules},
 		{"wait", "--timeout", "1s", "--rules", rules},
 		{"seen", "--through", "0"},
 	} {

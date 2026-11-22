@@ -56,11 +56,34 @@ func TestWatchLegacyEligibilityAndCounts(t *testing.T) {
 	if notices, err := e.Pending(ctx, "foreground"); err != nil || len(notices) != 0 {
 		t.Fatalf("legacy eval opened episodes: %+v: %v", notices, err)
 	}
-	if got, err := e.EvaluateRules(ctx); err != nil || len(got) != 3 || got[0].Unreadable == "" || got[1].Diagnostic() != "" || got[2].Diagnostic() != "" {
+	e.Root = t.TempDir() // An explicit non-repository root makes the Git fact unreadable.
+	if got, err := e.EvaluateRules(ctx); err != nil || len(got) != 3 || got[0].ID != "duration" || got[0].Diagnostic() != "" || got[1].ID != "git" || got[1].Unreadable == "" || got[2].ID != "not-in" || got[2].Diagnostic() != "" {
 		t.Fatalf("evaluator results = %+v, err = %v", got, err)
 	}
 	if notices, err := e.Pending(ctx, "foreground"); err != nil || len(notices) != 2 {
 		t.Fatalf("extended eval did not open episodes: %+v: %v", notices, err)
+	}
+}
+
+func TestWatchNamedWorkflowFiltersByCurrentMembership(t *testing.T) {
+	s := watchStore(t)
+	now := time.Unix(1700000000, 0)
+	for _, subject := range []string{"selected", "other", "unassigned"} {
+		watchFact(t, s, now.Add(-time.Minute), fmt.Sprintf(`{"detail":{"item-id":%q}}`, subject))
+	}
+	watchFact(t, s, now.Add(-time.Minute), `{}`)
+	// Membership recorded after the events still determines their scope.
+	watchSQL(t, s, `CREATE TABLE workflow_selections(item_id TEXT PRIMARY KEY, workflow TEXT NOT NULL);
+		INSERT INTO workflow_selections VALUES ('selected','build@v1'),('other','build@v2')`)
+	rule := strings.NewReplacer(`"test.watch"`, `"watch-test.fact"`, `scope = "workflow:*"`, `scope = "workflow:build@v1"`).Replace(validRule)
+	e := Evaluator{Store: s, Rules: watchRules(t, rule), Clock: func() time.Time { return now }}
+	results, err := e.EvaluateRules(t.Context())
+	if err != nil || len(results) != 1 || results[0].Diagnostic() != "" || results[0].Skipped != 1 {
+		t.Fatalf("evaluation: %+v, %v", results, err)
+	}
+	notices, err := e.Pending(t.Context(), "foreground")
+	if err != nil || len(notices) != 1 || notices[0].Bundle.Subject != "selected" {
+		t.Fatalf("workflow notices: %+v, %v", notices, err)
 	}
 }
 

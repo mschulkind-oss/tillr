@@ -85,7 +85,7 @@ func TestWatchGitRefOperandAndRootIsolation(t *testing.T) {
 	}
 	e.Root = ""
 	got, err = e.EvaluateRules(ctx)
-	if err != nil || len(got) != 1 || !strings.Contains(got[0].Unreadable, "root") {
+	if err == nil || !strings.Contains(err.Error(), "requires --root") || got != nil {
 		t.Fatalf("missing root: %+v: %v", got, err)
 	}
 	if notices, err := e.Pending(ctx, "foreground"); err != nil || len(notices) != 1 {

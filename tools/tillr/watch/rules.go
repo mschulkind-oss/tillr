@@ -92,9 +92,6 @@ func (r Rule) expressions() [4]*Expression {
 }
 
 func (r Rule) evaluatorReason() string {
-	if reason := r.scopeReason(); reason != "" {
-		return reason
-	}
 	for _, projection := range r.Reads.Projections {
 		if projection != "items" && projection != "charter" && !strings.HasPrefix(projection, "git_refs:") {
 			return fmt.Sprintf("unsupported projection %q", projection)
@@ -372,6 +369,9 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 		}
 	}
 	r.When = loadWhen(when, pattern, refs)
+	if namedScope(r.Scope, "workflow:") != "" && r.When.GroupBy == "global" {
+		when.reject("group_by", "named workflow scope requires a subject")
+	}
 
 	checkProjectionOperands(when, r, refs)
 	g := root.table("guidance")
