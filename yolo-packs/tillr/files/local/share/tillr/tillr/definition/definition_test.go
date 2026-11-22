@@ -75,6 +75,21 @@ func TestReadRefusals(t *testing.T) {
 		{"no hook names", `"names":["complete-item"]`, `"names":[]`, "hooks"},
 		{"blank hook name", `"names":["complete-item"]`, `"names":[""]`, "hooks"},
 		{"unknown hook key", `"names":["complete-item"]`, `"names":["complete-item"],"shell":true`, "shell"},
+		{"observability unknown key", `"version":1`, `"version":1,"observability":{"extra":true}`, "extra"},
+		{"observability duplicate key", `"version":1`, `"version":1,"observability":{"progress_event":"a","progress_event":"b"}`, "progress_event"},
+		{"observability null progress_event", `"version":1`, `"version":1,"observability":{"progress_event":null}`, "progress_event"},
+		{"observability null rule_pack", `"version":1`, `"version":1,"observability":{"rule_pack":null}`, "rule_pack"},
+		{"observability empty progress_event", `"version":1`, `"version":1,"observability":{"progress_event":""}`, "progress_event"},
+		{"observability blank progress_event", `"version":1`, `"version":1,"observability":{"progress_event":"  "}`, "progress_event"},
+		{"observability untrimmed progress_event", `"version":1`, `"version":1,"observability":{"progress_event":" land.landing "}`, "progress_event"},
+		{"observability empty rule_pack", `"version":1`, `"version":1,"observability":{"rule_pack":""}`, "rule_pack"},
+		{"observability leading slash rule_pack", `"version":1`, `"version":1,"observability":{"rule_pack":"/charters/a.toml"}`, "rule_pack"},
+		{"observability parent segment rule_pack", `"version":1`, `"version":1,"observability":{"rule_pack":"../a.toml"}`, "rule_pack"},
+		{"observability dot segment rule_pack", `"version":1`, `"version":1,"observability":{"rule_pack":"./a.toml"}`, "rule_pack"},
+		{"observability empty segment rule_pack", `"version":1`, `"version":1,"observability":{"rule_pack":"charters//a.toml"}`, "rule_pack"},
+		{"observability backslash rule_pack", `"version":1`, `"version":1,"observability":{"rule_pack":"charters\\a.toml"}`, "rule_pack"},
+		{"observability non-toml rule_pack", `"version":1`, `"version":1,"observability":{"rule_pack":"charters/a.json"}`, "rule_pack"},
+		{"observability bare toml rule_pack", `"version":1`, `"version":1,"observability":{"rule_pack":".toml"}`, "rule_pack"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Read(strings.NewReader(strings.Replace(sample, tc.old, tc.replacement, 1)))
@@ -170,6 +185,42 @@ func TestGitLandingLiteralValues(t *testing.T) {
 	}
 }
 
+func TestObservability(t *testing.T) {
+	base := `{"definition":"minimal","version":1,"states":["ready"],"ready":"ready","blocked":"ready","closed":"ready","completes":"landing"`
+	for _, tc := range []struct {
+		name string
+		raw  string
+		want *Observability
+	}{
+		{"omitted", base + `}`, nil},
+		{"null", base + `,"observability":null}`, nil},
+		{"empty object", base + `,"observability":{}}`, &Observability{}},
+		{"valid both", base + `,"observability":{"progress_event":"land.landing","rule_pack":"charters/default.toml"}}`, &Observability{ProgressEvent: "land.landing", RulePack: "charters/default.toml"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, err := Read(strings.NewReader(tc.raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(d.Observability, tc.want) {
+				t.Fatalf("got %+v, want %+v", d.Observability, tc.want)
+			}
+		})
+	}
+	d, err := Read(strings.NewReader(base + `}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Observability = &Observability{ProgressEvent: " "}
+	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "observability.progress_event") {
+		t.Fatalf("Validate blank progress_event: %v", err)
+	}
+	d.Observability = &Observability{RulePack: "../bad.toml"}
+	if err := d.Validate(); err == nil || !strings.Contains(err.Error(), "observability.rule_pack") {
+		t.Fatalf("Validate invalid rule_pack: %v", err)
+	}
+}
+
 func TestNameOnlyInOneConstantAndOnlyLifecycleConsumers(t *testing.T) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
@@ -201,8 +252,8 @@ func TestNameOnlyInOneConstantAndOnlyLifecycleConsumers(t *testing.T) {
 			for _, imp := range parsed.Imports {
 				value, _ := strconv.Unquote(imp.Path.Value)
 				if value == "github.com/mschulkind-oss/tillr/definition" &&
-					filepath.Base(module) != "tillr-store" && filepath.Base(module) != "tillr-item" && filepath.Base(module) != "tillr-drain" && filepath.Base(module) != "tillr-view" && filepath.Dir(path) != filepath.Dir(file) && filepath.Clean(path) != filepath.Join(filepath.Dir(file), "..", "watch", "projection.go") {
-					t.Errorf("utility other than store, item, drain or view imports definition: %s", path)
+					filepath.Base(module) != "tillr-store" && filepath.Base(module) != "tillr-item" && filepath.Base(module) != "tillr-drain" && filepath.Base(module) != "tillr-view" && filepath.Base(module) != "tillr-watch" && filepath.Dir(path) != filepath.Dir(file) && filepath.Clean(filepath.Dir(path)) != filepath.Join(filepath.Dir(file), "..", "watch") {
+					t.Errorf("utility other than store, item, drain, view or watch imports definition: %s", path)
 				}
 			}
 			if n == 0 {

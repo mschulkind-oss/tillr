@@ -37,6 +37,28 @@ type Workflow struct {
 	ExpansionDepth int                         `json:"expansion_depth,omitempty"`
 	Revision       int                         `json:"revision,omitempty"`
 	Groups         map[string]WorkflowGroup    `json:"groups,omitempty"`
+	Watch          *WorkflowWatch              `json:"watch,omitempty"`
+}
+
+// WorkflowWatch declares optional per-workflow cycle and oscillation bounds.
+type WorkflowWatch struct {
+	CycleAnchor      *WorkflowCycleAnchor      `json:"cycle_anchor,omitempty"`
+	OscillationPairs []WorkflowOscillationPair `json:"oscillation_pairs,omitempty"`
+}
+
+// WorkflowCycleAnchor bounds an expected return path between two stages.
+type WorkflowCycleAnchor struct {
+	From      string `json:"from"`
+	To        string `json:"to"`
+	MaxCycles int    `json:"max_cycles"`
+}
+
+// WorkflowOscillationPair bounds back-and-forth transitions between two stages.
+type WorkflowOscillationPair struct {
+	A         string `json:"a"`
+	B         string `json:"b"`
+	Threshold int    `json:"threshold,omitempty"`
+	Hint      string `json:"hint,omitempty"`
 }
 
 // WorkflowExit names the stages required to pass; omission requires every stage.
@@ -197,6 +219,49 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 	if err := validateTemplateWiring(&w); err != nil {
 		return nil, err
 	}
+	hasNestedWorkflow := false
+	seats := map[string]bool{}
+	for _, s := range w.Stages {
+		if s.Kind == "workflow" {
+			hasNestedWorkflow = true
+		}
+		if s.Seat != "" {
+			seats[s.Seat] = true
+		}
+	}
+	if w.Watch != nil {
+		if ca := w.Watch.CycleAnchor; ca != nil {
+			if ca.From == "" || ca.To == "" {
+				return nil, fmt.Errorf("workflow-watch: watch.cycle_anchor: from and to must be non-empty")
+			}
+			if ca.From == ca.To {
+				return nil, fmt.Errorf("workflow-watch: watch.cycle_anchor: from and to must differ")
+			}
+			if ca.MaxCycles < 1 {
+				return nil, fmt.Errorf("workflow-watch: watch.cycle_anchor.max_cycles: must be >= 1")
+			}
+		}
+		for i := range w.Watch.OscillationPairs {
+			pair := &w.Watch.OscillationPairs[i]
+			if pair.A == "" || pair.B == "" {
+				return nil, fmt.Errorf("workflow-watch: watch.oscillation_pairs[%d]: a and b must be non-empty", i)
+			}
+			if pair.A == pair.B {
+				return nil, fmt.Errorf("workflow-watch: watch.oscillation_pairs[%d]: a and b must differ", i)
+			}
+			if pair.Threshold == 0 {
+				pair.Threshold = 4
+			}
+			if pair.Threshold < 2 {
+				return nil, fmt.Errorf("workflow-watch: watch.oscillation_pairs[%d].threshold: must be >= 2", i)
+			}
+		}
+		if !hasNestedWorkflow {
+			if err := validateWorkflowWatchRefs(&w, ids, seats); err != nil {
+				return nil, err
+			}
+		}
+	}
 	if w.Exit != nil {
 		if w.Exit.RequiresCandidate != "" && w.Exit.RequiresCandidate != "commit_required" && w.Exit.RequiresCandidate != "commit_optional" && w.Exit.RequiresCandidate != "no_commit" {
 			return nil, fmt.Errorf("workflow-exit: exit: requires_candidate must be commit_required, commit_optional or no_commit")
@@ -256,6 +321,36 @@ func decodeWorkflow(raw []byte, ref string) (*Workflow, error) {
 		return nil, err
 	}
 	return &w, nil
+}
+
+func validateWorkflowWatchRefs(w *Workflow, stageIDs, seats map[string]bool) error {
+	if w.Watch == nil {
+		return nil
+	}
+	allowedCA := make(map[string]bool, len(stageIDs)+len(seats))
+	for id := range stageIDs {
+		allowedCA[id] = true
+	}
+	for seat := range seats {
+		allowedCA[seat] = true
+	}
+	if ca := w.Watch.CycleAnchor; ca != nil {
+		if !allowedCA[ca.From] {
+			return fmt.Errorf("workflow-watch: watch.cycle_anchor.from: unknown stage %q", ca.From)
+		}
+		if !allowedCA[ca.To] {
+			return fmt.Errorf("workflow-watch: watch.cycle_anchor.to: unknown stage %q", ca.To)
+		}
+	}
+	for i, pair := range w.Watch.OscillationPairs {
+		if !allowedCA[pair.A] && pair.A != "design" {
+			return fmt.Errorf("workflow-watch: watch.oscillation_pairs[%d].a: unknown stage %q", i, pair.A)
+		}
+		if !allowedCA[pair.B] && pair.B != "design" {
+			return fmt.Errorf("workflow-watch: watch.oscillation_pairs[%d].b: unknown stage %q", i, pair.B)
+		}
+	}
+	return nil
 }
 
 func validateEvaluatorJudgeClasses(w *Workflow) error {

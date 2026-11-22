@@ -84,6 +84,7 @@ judgments the core cannot make. These terms come from
 | `retention` | String | `keep` | Only `keep` is supported; retained store events and run artifacts. No cleanup is implemented. |
 | `brief_template` | String | Empty string | Template for staging's lane brief; empty means no template is supplied. This package does not resolve a file or render it. |
 | `hooks` | Object or null | Null (no program) | Hook dispatch. An object has required `argv` and `names` arrays of strings, with no defaults. `argv` is one program's argument vector, starting with a nonblank executable; `names` is a nonempty list of nonblank hook names it answers. |
+| `observability` | Object or null | Null (no bindings) | Optional charter watch bindings. Allowed keys are `progress_event` (nonblank trimmed string naming the forward-throughput event kind) and `rule_pack` (clean relative `.toml` path under the watch rules directory). |
 
 A hook's argument vector goes directly to a process, not a shell. Arguments after
 the executable may be empty strings. Hook names are declarations, not a closed

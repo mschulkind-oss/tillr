@@ -14,12 +14,27 @@ import (
 // Expression is a parsed boolean predicate. Unsupported forms are parsed for
 // validity, but are not evaluated.
 type Expression struct {
-	source      string
-	root        operand
-	unsupported bool
-	usesAge     bool
-	usesNotIn   bool
-	projections []projectionOperand
+	source           string
+	root             operand
+	unsupported      bool
+	usesAge          bool
+	usesNotIn        bool
+	projections      []projectionOperand
+	eventComparisons []eventComparison
+}
+
+type eventComparison struct {
+	field  string
+	op     string
+	values []string
+}
+
+type termMeta struct {
+	kind       string
+	eventField string
+	strVal     string
+	hasStr     bool
+	strList    []string
 }
 
 // A projection reference is kept separate from event lookups; an event's
@@ -67,7 +82,7 @@ func ParseExpression(text string) (*Expression, error) {
 	if p.err != nil {
 		return nil, p.err
 	}
-	return &Expression{source: text, root: root, unsupported: p.unsupported, usesAge: p.usesAge, usesNotIn: p.usesNotIn, projections: p.projections}, nil
+	return &Expression{source: text, root: root, unsupported: p.unsupported, usesAge: p.usesAge, usesNotIn: p.usesNotIn, projections: p.projections, eventComparisons: p.eventComparisons}, nil
 }
 
 type token struct {
@@ -76,14 +91,15 @@ type token struct {
 }
 
 type parser struct {
-	text        string
-	off         int
-	tok         token
-	err         error
-	unsupported bool
-	usesAge     bool
-	usesNotIn   bool
-	projections []projectionOperand
+	text             string
+	off              int
+	tok              token
+	err              error
+	unsupported      bool
+	usesAge          bool
+	usesNotIn        bool
+	projections      []projectionOperand
+	eventComparisons []eventComparison
 }
 
 func (p *parser) fail(format string, args ...any) {
@@ -186,29 +202,37 @@ func (p *parser) not() operand {
 	return p.comparison()
 }
 
-func (p *parser) term() operand {
+func (p *parser) term() (operand, termMeta) {
 	if p.take("(") {
 		arg := p.or()
 		p.expect(")")
-		return arg
+		return arg, termMeta{}
 	}
-	arg, _ := p.value()
-	return arg
+	return p.value()
 }
 
 func (p *parser) comparison() operand {
-	left := p.term()
+	left, leftMeta := p.term()
 	op := p.tok.text
 	switch op {
 	case "in", "not":
 		p.next()
+		cmpOp := "in"
 		if op == "not" {
 			p.expect("in")
 			p.usesNotIn = true
+			cmpOp = "not in"
 		}
-		right, kind := p.value()
-		if kind != "list" && kind != "bare" && kind != "call" {
+		right, rightMeta := p.value()
+		if rightMeta.kind != "list" && rightMeta.kind != "bare" && rightMeta.kind != "call" {
 			p.fail("expected list, bare name or call after in")
+		}
+		if leftMeta.eventField != "" && len(rightMeta.strList) > 0 {
+			p.eventComparisons = append(p.eventComparisons, eventComparison{
+				field:  leftMeta.eventField,
+				op:     cmpOp,
+				values: rightMeta.strList,
+			})
 		}
 		return func(v expressionValues) any {
 			value := left(v)
@@ -245,7 +269,20 @@ func (p *parser) comparison() operand {
 		}
 	case "==", "!=", "<", "<=", ">", ">=", "contains":
 		p.next()
-		right := p.term()
+		right, rightMeta := p.term()
+		if (op == "==" || op == "!=") && leftMeta.eventField != "" && rightMeta.hasStr {
+			p.eventComparisons = append(p.eventComparisons, eventComparison{
+				field:  leftMeta.eventField,
+				op:     op,
+				values: []string{rightMeta.strVal},
+			})
+		} else if (op == "==" || op == "!=") && rightMeta.eventField != "" && leftMeta.hasStr {
+			p.eventComparisons = append(p.eventComparisons, eventComparison{
+				field:  rightMeta.eventField,
+				op:     op,
+				values: []string{leftMeta.strVal},
+			})
+		}
 		return func(v expressionValues) any { return compare(op, left(v), right(v)) }
 	default:
 		return left
@@ -263,7 +300,7 @@ func (p *parser) stringValue() string {
 
 // value parses an operand, not a comparison or connective. The syntactic
 // category is also needed for the right side of membership.
-func (p *parser) value() (operand, string) {
+func (p *parser) value() (operand, termMeta) {
 	t := p.tok
 	switch t.kind {
 	case "integer":
@@ -272,27 +309,28 @@ func (p *parser) value() (operand, string) {
 			p.fail("invalid integer: %v", err)
 		}
 		p.next()
-		return literal(n), "integer"
+		return literal(n), termMeta{kind: "integer"}
 	case "string":
-		return literal(p.stringValue()), "string"
+		s := p.stringValue()
+		return literal(s), termMeta{kind: "string", strVal: s, hasStr: true}
 	case "[":
 		p.next()
-		args := p.values("]")
+		args, strList := p.valuesWithStrings("]")
 		return func(v expressionValues) any {
 			list := make([]any, len(args))
 			for i, arg := range args {
 				list[i] = arg(v)
 			}
 			return list
-		}, "list"
+		}, termMeta{kind: "list", strList: strList}
 	case "name":
 		p.next()
 		switch t.text {
 		case "true", "false":
-			return literal(t.text == "true"), "bool"
+			return literal(t.text == "true"), termMeta{kind: "bool"}
 		case "not", "and", "or", "in", "matches", "contains":
 			p.fail("expected operand, found operator %q", t.text)
-			return nil, ""
+			return nil, termMeta{}
 		}
 		name := t.text + p.dotted()
 		if p.take("(") {
@@ -302,15 +340,15 @@ func (p *parser) value() (operand, string) {
 			if name == "git.ref" {
 				if first.kind != "string" || len(args) != 1 || suffix != "" {
 					p.fail("git.ref requires one quoted ref name")
-					return nil, ""
+					return nil, termMeta{}
 				}
 				ref, _ := strconv.Unquote(first.text) // checked by values
-				return p.project(projectionOperand{name: name, ref: ref}), "call"
+				return p.project(projectionOperand{name: name, ref: ref}), termMeta{kind: "call"}
 			}
 			if name == "age" && suffix == "" {
 				if len(args) != 1 {
 					p.fail("age requires one operand")
-					return nil, ""
+					return nil, termMeta{}
 				}
 				p.usesAge = true
 				return func(v expressionValues) any {
@@ -324,29 +362,29 @@ func (p *parser) value() (operand, string) {
 						return -int64((uint64(ts) - uint64(v.nowMillis)) / 1000)
 					}
 					return int64((uint64(v.nowMillis) - uint64(ts)) / 1000)
-				}, "call"
+				}, termMeta{kind: "call"}
 			}
 			if name == "empty" && suffix == "" {
 				if len(args) != 1 {
 					p.fail("empty requires one operand")
-					return nil, ""
+					return nil, termMeta{}
 				}
-				return func(v expressionValues) any { return empty(args[0](v)) }, "call"
+				return func(v expressionValues) any { return empty(args[0](v)) }, termMeta{kind: "call"}
 			}
 			p.unsupported = true
-			return literal(nil), "call"
+			return literal(nil), termMeta{kind: "call"}
 		}
 		if field, ok := strings.CutPrefix(name, "event."); ok {
-			return func(v expressionValues) any { return v.event(field) }, "event"
+			return func(v expressionValues) any { return v.event(field) }, termMeta{kind: "event", eventField: field}
 		}
 		if strings.HasPrefix(name, "item.") || strings.HasPrefix(name, "charter.") {
-			return p.project(projectionOperand{name: name}), "bare"
+			return p.project(projectionOperand{name: name}), termMeta{kind: "bare"}
 		}
 		p.unsupported = true
-		return literal(nil), "bare"
+		return literal(nil), termMeta{kind: "bare"}
 	default:
 		p.fail("expected an operand")
-		return nil, ""
+		return nil, termMeta{}
 	}
 }
 
@@ -370,19 +408,28 @@ func (p *parser) dotted() string {
 }
 
 func (p *parser) values(end string) []operand {
+	args, _ := p.valuesWithStrings(end)
+	return args
+}
+
+func (p *parser) valuesWithStrings(end string) ([]operand, []string) {
 	if p.take(end) {
-		return nil
+		return nil, nil
 	}
 	var args []operand
+	var strs []string
 	for p.err == nil {
-		arg, _ := p.value()
+		arg, meta := p.value()
 		args = append(args, arg)
+		if meta.hasStr {
+			strs = append(strs, meta.strVal)
+		}
 		if p.take(end) {
 			break
 		}
 		p.expect(",")
 	}
-	return args
+	return args, strs
 }
 
 func integer(v any) (int64, bool) {
