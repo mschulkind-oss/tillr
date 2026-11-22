@@ -56,54 +56,14 @@ func loadCheckDirectory(dir string) (*Registry, error) {
 		if err != nil {
 			return nil, externalf("reading check declaration %s: %v", path, err)
 		}
-		var file checkFile
-		decoder := json.NewDecoder(bytes.NewReader(raw))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&file); err != nil {
-			return nil, externalf("check declaration %s: %v", path, err)
+		decl, err := parseCheckDeclaration(path, raw)
+		if err != nil {
+			return nil, err
 		}
-		if err := decoder.Decode(new(any)); err != io.EOF {
-			return nil, externalf("check declaration %s: expected exactly one JSON object", path)
+		if previous, ok := seen[decl.ID]; ok {
+			return nil, externalf("check declaration %s: id %q is already declared in %s", path, decl.ID, previous)
 		}
-		if err := file.validate(); err != nil {
-			return nil, externalf("check declaration %s: %v", path, err)
-		}
-		if previous, ok := seen[file.ID]; ok {
-			return nil, externalf("check declaration %s: id %q is already declared in %s", path, file.ID, previous)
-		}
-		seen[file.ID] = path
-		declarationHash := sha256.Sum256(raw)
-		decl := Declaration{
-			DeclarationDigest: hex.EncodeToString(declarationHash[:]),
-
-			ID: file.ID, Kind: file.ID, Label: file.Label, Command: file.Command,
-			Scope: file.Scope, Tier: file.Tier, Tools: file.Tools, Needs: file.Needs,
-			Remember: file.Remember, Writes: file.Writes, Exclusive: file.Exclusive,
-		}
-		if decl.Remember == nil {
-			remember := true
-			decl.Remember = &remember
-		}
-		if file.BudgetMS != nil {
-			decl.BudgetMS = *file.BudgetMS
-		}
-		if file.TimeoutMS != nil {
-			decl.TimeoutMS = *file.TimeoutMS
-		}
-		if len(file.Reads) == 0 {
-			decl.undeclaredReads = true
-			file.Reads = []string{"."}
-		}
-		for _, path := range file.Reads {
-			decl.Watches = append(decl.Watches, Pattern{Path: path})
-			decl.Selects = append(decl.Selects, Pattern{Path: path})
-			if path == "." {
-				decl.Forced = "whole-tree"
-			}
-		}
-		if file.Scope == "change" {
-			decl.Forced = "change"
-		}
+		seen[decl.ID] = path
 		reg.Declarations = append(reg.Declarations, decl)
 		// The digest binds the filenames and bytes without depending on the absolute
 		// directory, so copies of the same declarations plan identically.
@@ -115,6 +75,54 @@ func loadCheckDirectory(dir string) (*Registry, error) {
 	}
 	reg.Digest = hex.EncodeToString(hash.Sum(nil))
 	return reg, nil
+}
+
+func parseCheckDeclaration(path string, raw []byte) (Declaration, error) {
+	var file checkFile
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&file); err != nil {
+		return Declaration{}, externalf("check declaration %s: %v", path, err)
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return Declaration{}, externalf("check declaration %s: expected exactly one JSON object", path)
+	}
+	if err := file.validate(); err != nil {
+		return Declaration{}, externalf("check declaration %s: %v", path, err)
+	}
+	declarationHash := sha256.Sum256(raw)
+	decl := Declaration{
+		DeclarationDigest: hex.EncodeToString(declarationHash[:]),
+
+		ID: file.ID, Kind: file.ID, Label: file.Label, Command: file.Command,
+		Scope: file.Scope, Tier: file.Tier, Tools: file.Tools, Needs: file.Needs,
+		Remember: file.Remember, Writes: file.Writes, Exclusive: file.Exclusive,
+	}
+	if decl.Remember == nil {
+		remember := true
+		decl.Remember = &remember
+	}
+	if file.BudgetMS != nil {
+		decl.BudgetMS = *file.BudgetMS
+	}
+	if file.TimeoutMS != nil {
+		decl.TimeoutMS = *file.TimeoutMS
+	}
+	if len(file.Reads) == 0 {
+		decl.undeclaredReads = true
+		file.Reads = []string{"."}
+	}
+	for _, readPath := range file.Reads {
+		decl.Watches = append(decl.Watches, Pattern{Path: readPath})
+		decl.Selects = append(decl.Selects, Pattern{Path: readPath})
+		if readPath == "." {
+			decl.Forced = "whole-tree"
+		}
+	}
+	if file.Scope == "change" {
+		decl.Forced = "change"
+	}
+	return decl, nil
 }
 
 func (file checkFile) validate() error {

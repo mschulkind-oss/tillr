@@ -183,8 +183,22 @@ type storedResult struct {
 	Result     string `json:"result"`
 	DurationMS int64  `json:"duration_ms"`
 	Time       string `json:"time"`
+	RecordedAt string `json:"recorded_at,omitempty"`
 	Tree       string `json:"tree"`
+	LogRef     string `json:"log_ref,omitempty"`
 }
+
+func canonicalUTCTime(value string) (string, error) {
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return "", err
+	}
+	if strings.HasSuffix(value, "Z") {
+		return value, nil
+	}
+	return parsed.UTC().Format(time.RFC3339Nano), nil
+}
+
 type resultStore struct{ dir string }
 
 func openResultStore(root string) (resultStore, error) {
@@ -208,6 +222,10 @@ func (store resultStore) read(key string) (*storedResult, *storedResult, error) 
 		if err := json.Unmarshal(raw, &result); err != nil {
 			return nil, fmt.Errorf("reading %s: %w", path, err)
 		}
+		if result.Time == "" {
+			result.Time = result.RecordedAt
+		}
+		result.RecordedAt = ""
 		if result.CheckID == "" || result.Tree == "" || result.Time == "" {
 			return nil, fmt.Errorf("invalid result file %s", path)
 		}
@@ -220,9 +238,11 @@ func (store resultStore) read(key string) (*storedResult, *storedResult, error) 
 		if classified.Outcome != want {
 			return nil, fmt.Errorf("invalid result file %s", path)
 		}
-		if _, err := time.Parse(time.RFC3339Nano, result.Time); err != nil {
+		canonical, err := canonicalUTCTime(result.Time)
+		if err != nil {
 			return nil, fmt.Errorf("invalid time in %s: %w", path, err)
 		}
+		result.Time = canonical
 		return &result, nil
 	}
 	pass, err := read(ResultPass, checkresult.Pass)
@@ -471,7 +491,14 @@ func (memory *treeMemory) run(check PlanCheck, root, logs string, index int) (Ve
 		outcome.UnboundPath = "needed ref or tool identity"
 		return outcome, nil
 	}
-	result := storedResult{CheckID: check.CheckID, Result: outcome.Result, DurationMS: outcome.DurationMS, Time: time.Now().UTC().Format(time.RFC3339Nano), Tree: memory.tree}
+	result := storedResult{
+		CheckID:    check.CheckID,
+		Result:     outcome.Result,
+		DurationMS: outcome.DurationMS,
+		Time:       time.Now().UTC().Format(time.RFC3339Nano),
+		Tree:       memory.tree,
+		LogRef:     outcome.LogRef,
+	}
 	if err := memory.store.publish(key, result); err != nil {
 		return outcome, err
 	}
