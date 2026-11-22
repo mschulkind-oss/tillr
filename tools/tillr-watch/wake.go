@@ -65,7 +65,17 @@ func (s *wakeSource) next(ctx context.Context, deadline <-chan time.Time) (wakeR
 				return walWake, fmt.Errorf("WAL watcher closed")
 			}
 			if filepath.Clean(evt.Name) == s.wal {
-				return walWake, nil
+				// Coalesce already-queued notifications; the next pass reads the latest snapshot.
+				for {
+					select {
+					case _, ok := <-s.watcher.Events:
+						if !ok {
+							return walWake, fmt.Errorf("WAL watcher closed")
+						}
+					default:
+						return walWake, nil
+					}
+				}
 			}
 		case err, ok := <-s.watcher.Errors:
 			if !ok {
