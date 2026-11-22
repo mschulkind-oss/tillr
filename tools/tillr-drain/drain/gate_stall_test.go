@@ -13,11 +13,17 @@ import (
 
 type stallSteps struct {
 	dirtyPathSteps
-	twice bool
+	twice  bool
+	onGate func(Candidate) (GateOutcome, bool)
 }
 
-func (s *stallSteps) Gate(context.Context, Candidate) (GateOutcome, error) {
+func (s *stallSteps) Gate(_ context.Context, c Candidate) (GateOutcome, error) {
 	s.gates++
+	if s.onGate != nil {
+		if out, ok := s.onGate(c); ok {
+			return out, nil
+		}
+	}
 	if s.gates == 1 || s.twice {
 		return GateOutcome{Outcome: GateStalled, StalledChecks: []StallObservation{{CheckID: "documents", LastOutputLine: "heartbeat", CPUTimeMS: int64(s.gates), SilentSamples: 60, DurationMS: 60000}}}, nil
 	}
@@ -201,4 +207,144 @@ func TestSecondStallUsesHeadTreeRatherThanCommitIdentity(t *testing.T) {
 		}
 		return err
 	})
+}
+
+func TestGateStalledRetrySupersedesAndRebuildsOnCurrentTrunk(t *testing.T) {
+	ctx := context.Background()
+	f, l, steps, c := stalledFixture(t, true)
+	var gatedTrees []string
+	var sawTrunkFix bool
+	steps.onGate = func(cand Candidate) (GateOutcome, bool) {
+		tree := runGit(t, cand.Worktree, "rev-parse", cand.HeadSHA+"^{tree}")
+		gatedTrees = append(gatedTrees, tree)
+		listed := runGit(t, cand.Worktree, "ls-tree", "--name-only", cand.HeadSHA)
+		if strings.Contains(listed, "trunk-fix.txt") {
+			sawTrunkFix = true
+			return GateOutcome{Outcome: GatePassed}, true
+		}
+		return GateOutcome{
+			Outcome: GateStalled,
+			StalledChecks: []StallObservation{{
+				CheckID:        "documents",
+				LastOutputLine: "heartbeat",
+				CPUTimeMS:      int64(steps.gates),
+				SilentSamples:  60,
+				DurationMS:     60000,
+			}},
+		}, true
+	}
+
+	// Two stalls on the old base hold the item as gate-stalled, with gate.verdict recorded
+	// (as ProcessSteps.Gate does in production).
+	oldTree := runGit(t, c.Worktree, "rev-parse", c.HeadSHA+"^{tree}")
+	var result LoopResult
+	if _, _, err := l.Verify(ctx, c, &result, nil); !errors.Is(err, errGateStallHeld) {
+		t.Fatalf("first stall: %v", err)
+	}
+	if _, _, err := l.Verify(ctx, c, &result, nil); !errors.Is(err, errItemFaultHeld) {
+		t.Fatalf("second stall: %v", err)
+	}
+	stalledVerdict := map[string]any{
+		"result":   GateStalled,
+		"tree_sha": oldTree,
+		"checks":   []StallObservation{{CheckID: "documents", Result: GateStalled, CPUTimeMS: 1, SilentSamples: 60}},
+	}
+	if err := appendJudgment(ctx, f.storePath, GateVerdictKind, "run", c.RunID, stalledVerdict, l.cfg.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Trunk advances with a newer file (simulating a gate script fix landed after dispatch).
+	writeForkFile(t, filepath.Join(f.root, "trunk-fix.txt"), "gate script fix\n")
+	runGit(t, f.root, "add", "trunk-fix.txt")
+	runGit(t, f.root, "commit", "-qm", "fix: repair gate script")
+	newTrunk := runGit(t, f.root, "rev-parse", TrunkRef)
+
+	// One designed act, recorded with who and why, acknowledges the stalled verdict and
+	// authorizes superseding the stall-faulted candidate.
+	var retry Retry
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		var err error
+		retry, err = AuthorizeRetry(ctx, tx, RetryRequest{
+			ItemID:      c.ItemID,
+			RunID:       c.RunID,
+			By:          "operator",
+			Why:         "rebuild on trunk after gate script fix",
+			At:          l.cfg.Now(),
+			Acknowledge: RetryAckGateFailed,
+		})
+		return err
+	})
+	fixtureRead(t, f, func(r *store.Reader) error {
+		var by, why string
+		if err := r.QueryRow(`SELECT requested_by, reason FROM retries WHERE retry_id=?`, retry.RetryID).Scan(&by, &why); err != nil {
+			return err
+		}
+		if by != "operator" || why != "rebuild on trunk after gate script fix" {
+			t.Errorf("retry attribution = (%q, %q)", by, why)
+		}
+		return nil
+	})
+
+	// On the next pass, supersedeRetriedCandidates pins the stalled candidate, resets the
+	// lane to the current trunk, clears gate-stalled, and dispatches attempt 2 on newTrunk.
+	replacement := f.loop(t, steps, &itemContentStager{})
+	replacement.cfg.Lanes = l.cfg.Lanes
+	if err := replacement.supersedeRetriedCandidates(ctx); err != nil {
+		t.Fatalf("supersede: %v", err)
+	}
+	if got := refSHA(t, f.root, "refs/tillr/runs/"+c.RunID); got != c.HeadSHA {
+		t.Fatalf("superseded candidate pin = %q, want %s", got, c.HeadSHA)
+	}
+	if got := runGit(t, c.Worktree, "rev-parse", "HEAD"); got != newTrunk {
+		t.Fatalf("lane HEAD = %s, want current trunk %s", got, newTrunk)
+	}
+	p := mustPlan(t, replacement)[0]
+	if p.decision.Action != ActionRetry || p.decision.Attempt != 2 || p.decision.RetryID != retry.RetryID || p.decision.SupersedesRunID != c.RunID {
+		t.Fatalf("plan after supersession = %+v, want ActionRetry attempt 2", p.decision)
+	}
+	if ok, _, err := replacement.applyPlan(ctx, p, newTrunk, replacement.cfg.Now()); err != nil || !ok {
+		t.Fatalf("dispatch retry: %v %v", ok, err)
+	}
+
+	// Attempt 2 builds on newTrunk (so its tree contains trunk-fix.txt).
+	lane := replacement.lanePath("lane-1")
+	writeForkFile(t, filepath.Join(replacement.laneDirPath("lane-1"), FenceFile), "base.txt\n")
+	writeForkFile(t, filepath.Join(lane, "base.txt"), "rebuilt candidate\n")
+	runGit(t, lane, "add", "base.txt")
+	runGit(t, lane, "commit", "-qm", "rebuilt candidate")
+	rebuilt := Candidate{
+		ItemID:   c.ItemID,
+		RunID:    p.decision.RunRequest.RunID,
+		LaneID:   "lane-1",
+		Worktree: lane,
+		BaseSHA:  newTrunk,
+		HeadSHA:  runGit(t, lane, "rev-parse", "HEAD"),
+		Request:  p.decision.RunRequest,
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return applyTerminal(tx, run.Record{
+			RunID:        rebuilt.RunID,
+			ItemID:       rebuilt.ItemID,
+			LaneID:       rebuilt.LaneID,
+			Backend:      "fixture",
+			State:        run.StateExited,
+			ExitCode:     countPtr(0),
+			StartedAt:    replacement.cfg.Now().Format("2006-01-02T15:04:05Z07:00"),
+			FinishedAt:   replacement.cfg.Now().Format("2006-01-02T15:04:05Z07:00"),
+			ArtifactRefs: []run.ArtifactRef{},
+		})
+	})
+	if err := appendJudgment(ctx, f.storePath, candidateReadyKind, "run", rebuilt.RunID, rebuilt, replacement.cfg.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := replacement.Verify(ctx, rebuilt, &result, nil); err != nil {
+		t.Fatalf("verify rebuilt candidate: %v", err)
+	}
+	if !sawTrunkFix {
+		t.Fatalf("next gate did not run on a tree containing trunk-fix.txt; gated trees=%v", gatedTrees)
+	}
+	if steps.gates != 3 || steps.lands != 1 {
+		t.Fatalf("gates=%d lands=%d, want 3 gates (2 stalled + 1 pass) and 1 land", steps.gates, steps.lands)
+	}
 }

@@ -39,7 +39,7 @@ var Rules = map[string]Rule{
 	// settlement writes it now; the retry keeps every read-only node that passed.
 	"node-answer-unread": {"needs you", "lane", "authorize a retry: `tillr drain retry --item <item> --run <its latest finished run>`; read-only nodes that passed are kept"},
 	"gate-stall-rerun":   {"waits on work", "gate", "same candidate reruns when fewer gates are in flight or none other are"},
-	"gate-stalled":       {"needs you", "gate", "diagnose the stalled check and clear the fault"},
+	"gate-stalled":       {"needs you", "gate", "diagnose the stalled check and clear the fault; or tillr drain retry naming the held run, which supersedes its candidate"},
 	// A gate that ran and reached no verdict judged nothing: the next pass gates the same
 	// candidate again, uncounted, with no operator.
 	"gate-no-verdict": {"waits on the loop", "gate", "the loop gates the same candidate again when a lane is available"},

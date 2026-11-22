@@ -33,10 +33,16 @@ func init() {
 // own: clearing the fault re-examines the same recorded candidate, which answers the same
 // fault again. On 2026-11-18 item-gate-pinned-fork-inputs re-gated a retained retirement
 // candidate whose tree pinned a stale fork commit (gate-harness-error), and item-ig-view-nodes
-// re-raised candidate-record-mismatch at once because the mismatch was in the record. An
-// operator's retry of the run is the release such a hold names.
+// re-raised candidate-record-mismatch at once because the mismatch was in the record. On
+// 2026-11-22 two finished fixes (4b533cbda5 and 5e6c7d8ca5) stalled on a gate script that a
+// later trunk landing fixed: clear-fault cleared work.GateStall while keeping work.Candidate
+// and re-gated the same head tree, and a recorded `tillr drain retry --acknowledge gate-failed`
+// was accepted by AuthorizeRetry (runJudged saw the stalled gate.verdict) but skipped here
+// because ReasonGateStalled was absent, so plan kept routing to the retained candidate before
+// consulting retryFor. An operator's retry of the run is the release such a hold names.
 var supersededByRetry = map[string]bool{
 	StopGateHarnessError:    true,
+	ReasonGateStalled:       true,
 	ReasonCandidateMismatch: true,
 	ReasonLandHarnessError:  true,
 }

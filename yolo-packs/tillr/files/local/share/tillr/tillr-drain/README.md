@@ -2267,8 +2267,16 @@ A gate stall is not a candidate failure. The first `stalled` answer (gate exit 6
 retains the head with `gate-stall-rerun`, naming the check and how many gates were
 in flight. The next planning pass with fewer gates, or no other gate, gates that
 same candidate: no worker run, charged attempt or failing verdict. A second stall
-on the same head tree holds the item as `gate-stalled`, with both observations;
-diagnose the check and use `tillr drain clear-fault`. Its retained evidence and
+on the same head tree holds the item as `gate-stalled`, with both observations.
+`tillr drain clear-fault` appends `drain.item-fault.cleared` (`ClearItemFault`),
+which clears `work.GateStall` in `readPendingHistoryState` while keeping
+`work.Candidate` and `work.Done == false` and advances `gateJudgmentEpoch`
+([`drain/events.go`](./drain/events.go)), so `plan` emits `ActionJudge` on the retained candidate and
+re-gates the exact same head tree. When a trunk fix (such as `4d5d9b2280` on
+2026-11-22) resolves a stall in a script the gate reads from the lane's worktree,
+re-gating the same tree cannot pick up that fix; instead, supersede the held run
+with `tillr drain retry --item <id> --run <run> --by <who> --why <reason> --acknowledge gate-failed`
+so the candidate is rebuilt on the current trunk. Its retained evidence and
 rerun state survive restarts: the first-stall transition and observations commit
 with its judgment and measurements. Each gate starts with fresh measurement
 artifacts, so a fast-tier stall cannot import remaining checks from a prior run.
@@ -2403,10 +2411,19 @@ that is still broken is held again rather than run from stale store content.
 
 Clearing a fault re-examines the same recorded candidate, so it cannot help when the
 candidate itself is what fails: a retained retirement candidate whose tree pins a stale fork
-commit answers `gate-harness-error` again, and a candidate record that names a checkout no
-lane has re-raises `candidate-record-mismatch` at once (both on 2026-11-18). The release for
-those is an operator's retry naming the held run, `tillr drain retry --item <id> --run
-<run>`. Before each plan, a candidate held by `gate-harness-error`,
+commit answers `gate-harness-error` again, a candidate record that names a checkout no
+lane has re-raises `candidate-record-mismatch` at once (both on 2026-11-18), and a
+`gate-stalled` candidate whose stall was fixed on the trunk after dispatch re-gates the
+same tree and stalls again (2026-11-22, after `4d5d9b2280`). On 2026-11-22 a recorded
+`tillr drain retry --acknowledge gate-failed` was accepted by `AuthorizeRetry` (because
+`runJudged` saw the stalled `gate.verdict` event), but was not acted on: `ReasonGateStalled`
+was absent from `supersededByRetry` in [`drain/retry_supersede.go`](./drain/retry_supersede.go),
+so `supersedeRetriedCandidates` skipped the run and `plan` kept routing to the active fault
+hold (or, after `clear-fault`, to the retained `work.Candidate` where `work != nil && !work.Done`)
+before consulting `retryFor`. The release for those is an operator's retry naming the held run,
+`tillr drain retry --item <id> --run <run> --by <who> --why <reason>` (with
+`--acknowledge gate-failed` when a `gate.verdict` was recorded, including `gate-stalled`).
+Before each plan, a candidate held by `gate-harness-error`, `gate-stalled`,
 `candidate-record-mismatch` or `land-harness-error` for its own run, whose item's latest
 retry names that run and still speaks (the run is the item's latest and the acknowledgment
 matches, as the plan requires), is superseded
