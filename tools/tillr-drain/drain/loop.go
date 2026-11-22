@@ -229,11 +229,12 @@ type Candidate struct {
 	// WorkerHeadSHA and RetirementTreeSHA bind loop-owned maintenance to the
 	// worker commit and the exact staged tree. The intent is persisted before committing,
 	// so a restarted loop can recover HEAD without exempting any worker change from its fence.
-	WorkerHeadSHA     string            `json:"worker_head_sha,omitempty"`
-	RetirementTreeSHA string            `json:"retirement_tree_sha,omitempty"`
-	WorkerSession     *WorkerSession    `json:"worker_session,omitempty"`
-	InheritedDrift    []forkObservation `json:"inherited_drift,omitempty"`
-	deferGateJudgment bool              // an ordinary phase's result may not be the final gate verdict
+	WorkerHeadSHA      string            `json:"worker_head_sha,omitempty"`
+	RetirementTreeSHA  string            `json:"retirement_tree_sha,omitempty"`
+	WorkerSession      *WorkerSession    `json:"worker_session,omitempty"`
+	InheritedDrift     []forkObservation `json:"inherited_drift,omitempty"`
+	deferGateJudgment  bool              // an ordinary phase's result may not be the final gate verdict
+	skipFastGateTiming bool              // relandings are outside ordinary fast-gate timing
 	// Request is the run.request that produced this candidate. It is held so a
 	// conflict-fix run can be built from the same backend, command and timeout instead of
 	// inventing a second request. It is not persisted: the candidate is a value a step
@@ -3002,6 +3003,11 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		return "", false, err
 	}
 	defer unlock()
+	// Use the same returned-item evidence as the required check path, but do
+	// not change when that path reads it or how its errors affect judgment.
+	// If we cannot establish ordinary eligibility, omit the observation.
+	required, _, timingErr := l.requiredChecks(ctx, candidate.ItemID)
+	candidate.skipFastGateTiming = timingErr != nil || len(required) != 0
 	l.mu.Lock()
 	l.gatesInFlight++
 	l.mu.Unlock()

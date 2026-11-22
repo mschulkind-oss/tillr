@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -74,6 +75,11 @@ type VerdictCheck struct {
 	CheckID     string `json:"check_id"`
 	Result      string `json:"result"`
 	DurationMS  int64  `json:"duration_ms"`
+	Execution   string `json:"execution,omitempty"`
+	// WallMS measures this invocation's check step, including the lookup on a
+	// reuse. DurationMS remains the command/watchdog duration used by budgets.
+	WallMS  *int64          `json:"wall_ms,omitempty"`
+	GoBuild []GoBuildModule `json:"go_build,omitempty"`
 	// Targets are measurements, never kill deadlines.
 	BudgetMS            int    `json:"budget_ms,omitempty"`
 	OverBudgetMS        int64  `json:"over_budget_ms,omitempty"`
@@ -97,8 +103,9 @@ const TreeOverrunKeep = "keep"
 
 // RunOptions supplies observation sources. Nil uses the real clock and CPU sampler.
 type RunOptions struct {
-	watchdog *watchSources
-	Context  context.Context
+	watchdog       *watchSources
+	measureLanding bool
+	Context        context.Context
 }
 
 // Carrying at a budget would drop a working check's judgment. Refuse it explicitly.
@@ -109,7 +116,26 @@ func treeOverrunFlag(value string) (RunOptions, error) {
 	return RunOptions{}, usagef("--tree-overrun must be %q; stopping at a budget is not supported", TreeOverrunKeep)
 }
 
-// VerdictPayload is the `gate.verdict` payload: design §5.7's field list, verbatim.
+const (
+	executionRan    = "ran"
+	executionReused = "reused"
+	executionNotRun = "not-run"
+)
+
+func notRunCheck(id, result string, measure bool) VerdictCheck {
+	out := VerdictCheck{CheckID: id, Result: result}
+	if measure {
+		out.Execution = executionNotRun
+	}
+	return out
+}
+
+func wallMS(started time.Time) *int64 {
+	ms := time.Since(started).Milliseconds()
+	return &ms
+}
+
+// VerdictPayload is the `gate.verdict` payload.
 //
 // It binds the plan it ran (`plan_id`), the registry that produced the plan
 // (`registry_digest`), and the tree it examined (`base_sha`, `tree_sha`). Those four are
@@ -123,6 +149,7 @@ type VerdictPayload struct {
 	TreeSHA           string             `json:"tree_sha"`
 	Result            string             `json:"result"`
 	Checks            []VerdictCheck     `json:"checks"`
+	WallMS            *int64             `json:"wall_ms,omitempty"`
 	InheritedFailures []InheritedFailure `json:"inherited_failures,omitempty"`
 }
 
@@ -196,6 +223,7 @@ func Run(planRecord record.Envelope, worktree, logDir string) (record.Envelope, 
 
 // RunWith is Run with the caller's options.
 func RunWith(planRecord record.Envelope, worktree, logDir string, options RunOptions) (record.Envelope, error) {
+	started := time.Now()
 	plan, root, logs, err := prepareRun(planRecord, worktree, logDir)
 	if err != nil {
 		return record.Envelope{}, err
@@ -208,9 +236,12 @@ func RunWith(planRecord record.Envelope, worktree, logDir string, options RunOpt
 		// recorded as `error` -- it could not be run -- so the verdict names what it
 		// owes rather than reporting an empty plan.
 		for _, check := range plan.Checks {
-			verdict.Checks = append(verdict.Checks, VerdictCheck{CheckID: check.CheckID, Result: ResultError})
+			verdict.Checks = append(verdict.Checks, notRunCheck(check.CheckID, ResultError, options.measureLanding))
 		}
 		verdict.Result = ResultError
+		if options.measureLanding {
+			verdict.WallMS = wallMS(started)
+		}
 		envelope, err := encodeVerdict(verdict, planRecord)
 		if err != nil {
 			return record.Envelope{}, err
@@ -264,6 +295,9 @@ func RunWith(planRecord record.Envelope, worktree, logDir string, options RunOpt
 					err: fmt.Errorf("the check %q failed; its log is %s", check.CheckID, outcome.LogRef)}
 			}
 		}
+	}
+	if options.measureLanding {
+		verdict.WallMS = wallMS(started)
 	}
 	envelope, err := encodeVerdict(verdict, planRecord)
 	if err != nil {
@@ -329,7 +363,7 @@ func runPlanChecks(checks []PlanCheck, memory *treeMemory, root, logs string, op
 		if options.Context != nil && options.Context.Err() != nil {
 			for i := 0; i < n; i++ {
 				if !completed[i] && !running[i] {
-					outcomes[i] = VerdictCheck{CheckID: checks[i].CheckID, Result: ResultError}
+					outcomes[i] = notRunCheck(checks[i].CheckID, ResultError, options.measureLanding)
 					errs[i] = options.Context.Err()
 					completed[i] = true
 					doneCount++
@@ -348,6 +382,7 @@ func runPlanChecks(checks []PlanCheck, memory *treeMemory, root, logs string, op
 			go func(index int, check PlanCheck) {
 				defer wg.Done()
 				check.watchdog = options.watchdog
+				check.measureLanding = options.measureLanding
 				if options.Context != nil {
 					sources := realWatchSources()
 					if check.watchdog != nil {
@@ -358,11 +393,20 @@ func runPlanChecks(checks []PlanCheck, memory *treeMemory, root, logs string, op
 				}
 				var outcome VerdictCheck
 				var memoryErr error
+				started := time.Now()
 				if options.Context != nil && options.Context.Err() != nil {
 					outcome = VerdictCheck{CheckID: check.CheckID, Result: ResultError}
 					memoryErr = options.Context.Err()
 				} else {
 					outcome, memoryErr = memory.run(check, root, logs, index)
+				}
+				if options.measureLanding {
+					if outcome.Execution == "" {
+						outcome.Execution = executionNotRun
+					}
+					if outcome.Execution != executionNotRun {
+						outcome.WallMS = wallMS(started)
+					}
 				}
 				mu.Lock()
 				outcomes[index] = outcome
@@ -447,7 +491,7 @@ func newVerdict(plan PlanPayload) VerdictPayload {
 // binary that is not on the path -- is `error`, never `fail`: the candidate was not
 // judged, and reading that as a red would isolate a candidate for a missing tool.
 func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
-	outcome := VerdictCheck{CheckID: check.CheckID, Result: ResultError}
+	outcome := notRunCheck(check.CheckID, ResultError, check.measureLanding)
 	if len(check.Command) == 0 {
 		return outcome
 	}
@@ -475,6 +519,17 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 	cmd := sources.Command(check.Command)
 	cmd.Dir = root
 	cmd.Env = checkEnv(check)
+	var evidencePath string
+	if check.measureLanding && check.CheckID == "go-build" {
+		// The optional sidecar is private to this execution, never a cache input.
+		cmd.Env = slices.DeleteFunc(cmd.Env, func(entry string) bool {
+			return strings.HasPrefix(entry, goBuildEvidenceEnv+"=")
+		})
+		if evidencePath = goBuildEvidencePath(logDir); evidencePath != "" {
+			defer os.Remove(evidencePath)
+			cmd.Env = append(cmd.Env, goBuildEvidenceEnv+"="+evidencePath)
+		}
+	}
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -497,6 +552,9 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 		fmt.Fprintf(logFile, "check %q could not start: %v\n", check.CheckID, err)
 		return outcome
 	}
+	if check.measureLanding {
+		outcome.Execution = executionRan
+	}
 	waitErr, state := watchCommand(cmd, logFile, sources)
 	if cleanupErr := endCheckGroup(cmd.Process.Pid); cleanupErr != nil {
 		fmt.Fprintf(logFile, "check process group cleanup failed: %v\n", cleanupErr)
@@ -510,6 +568,9 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 	outcome.LastOutputLine = state.previous.LastLine
 	outcome.SilentSamples = state.SilentSamples
 	outcome.WatchdogUnavailable = state.Unavailable
+	if evidencePath != "" {
+		outcome.GoBuild = readGoBuildEvidence(evidencePath)
+	}
 	switch {
 	case state.SilentSamples >= WatchdogSilentSamples:
 		outcome.Result = ResultStalled
@@ -573,11 +634,18 @@ func budgetNotes(verdict VerdictPayload) []string {
 	return notes
 }
 
-// checkEnv is the environment a check runs with: this process's, minus the names the plan
-// drops (and TILLR_SQLITE_TRACE, which belongs to the caller's own store tracing, not
-// the test process), plus the names it sets. A check that inherited a variable the plan
-// drops would run under a different environment than the gate it replaces, and its verdict
-// would attest to a run that did not happen.
+// privateCheckEnv names invocation state, not check inputs. A command that
+// starts its own gate must not inherit the parent's timing or output paths.
+func privateCheckEnv(name string) bool {
+	switch name {
+	case "TILLR_ORDINARY_GATE_TIMING", "TILLR_FAST_TREE_TIMING", "TILLR_GATE_SPANS_OUT", "TILLR_FAST_VERDICT_OUT":
+		return true
+	}
+	return false
+}
+
+// checkEnv is the environment a check runs with: this process's, minus private
+// variables and the names the plan drops, plus the non-private names it sets.
 func checkEnv(check PlanCheck) []string {
 	dropped := make(map[string]bool, len(check.Drop)+1)
 	dropped["TILLR_SQLITE_TRACE"] = true
@@ -587,7 +655,7 @@ func checkEnv(check PlanCheck) []string {
 	env := make([]string, 0, len(os.Environ())+len(check.Env))
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if dropped[name] {
+		if dropped[name] || privateCheckEnv(name) {
 			continue
 		}
 		if _, overridden := check.Env[name]; overridden {
@@ -597,7 +665,9 @@ func checkEnv(check PlanCheck) []string {
 	}
 	names := make([]string, 0, len(check.Env))
 	for name := range check.Env {
-		names = append(names, name)
+		if !privateCheckEnv(name) {
+			names = append(names, name)
+		}
 	}
 	sort.Strings(names)
 	for _, name := range names {

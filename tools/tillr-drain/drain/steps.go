@@ -292,11 +292,24 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 			"TILLR_FAST_VERDICT_OUT="+filepath.Join(RunDir(s.Root, candidate.RunID), GateFastVerdictFile))
 	}
 	program := s.GateProgram
-	if fork := strings.TrimPrefix(candidate.BaseRef, "refs/heads/patch/"); s.hooks == nil && fork != candidate.BaseRef {
+	fork := strings.TrimPrefix(candidate.BaseRef, "refs/heads/patch/")
+	if s.hooks == nil && fork != candidate.BaseRef {
 		program = "python3 " + filepath.Join(s.Root, "tools", "tillr-drain", "fork-gate.py") + " --fork " + fork
 	}
-	env = append(env, "TILLR_FORK_DRIFT=1")
+	// The usual correctness handoffs also serve automatic reverts. Only an
+	// ordinary invocation opts into timing, regardless of the parent's environment.
+	measureTiming := s.Root != "" && fork == candidate.BaseRef && !IsRevertItem(candidate.ItemID) && !candidate.skipFastGateTiming
+	timing := ""
+	if measureTiming {
+		timing = "1"
+	}
+	env = append(env, "TILLR_FORK_DRIFT=1", "TILLR_ORDINARY_GATE_TIMING="+timing)
 	code, outStr, span, err := s.programWithEnv(ctx, "gate", candidate.Worktree, program, candidate, env)
+	// Consume this invocation's files now, even if it could not judge or its
+	// judgment is deferred. The next attempt clears the producer handoffs.
+	if measureTiming {
+		s.recordGateTiming(candidate, span)
+	}
 	if err != nil {
 		return GateOutcome{}, err
 	}

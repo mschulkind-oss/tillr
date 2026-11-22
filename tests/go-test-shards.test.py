@@ -40,6 +40,45 @@ class RunnerTests(unittest.TestCase):
         pool.start()
         self.addCleanup(pool.stop)
 
+    def test_package_evidence_distinguishes_shards_from_go_result_cache(self):
+        target = self.root / 'packages.json'
+        packages = [{'ImportPath': 'demo/test', 'TestGoFiles': ['x_test.go']},
+                    {'ImportPath': 'demo/library'}]
+        with patch.object(shards.subprocess, 'check_output', return_value='\n'.join(map(json.dumps, packages))), \
+             patch.object(shards, 'global_git_config', return_value={}), \
+             patch.object(shards, 'default_lock_dir', return_value=self.root), \
+             patch.object(shards.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'go')):
+            with self.assertRaises(subprocess.CalledProcessError):
+                shards.run(self.root, 1, {}, self.root, '0', evidence_out=target)
+        self.assertEqual(json.loads(target.read_text()), [
+            {'import_path': 'demo/test', 'test_cache': 'bypassed'},
+            {'import_path': 'demo/library', 'test_cache': 'not-applicable'},
+        ])
+
+    def test_failed_package_list_keeps_complete_records_without_building(self):
+        target = self.root / 'packages.json'
+        listed = [{'ImportPath': 'demo/good', 'TestGoFiles': ['x_test.go']},
+                  {'ImportPath': 'demo/broken'}]
+        error = subprocess.CalledProcessError(1, ['go', 'list', '-json', './...'],
+                                             output='\n'.join(map(json.dumps, listed)) + '\n{')
+        with patch.object(shards.subprocess, 'check_output', side_effect=error) as discover, \
+             patch.object(shards.subprocess, 'run') as compile_package:
+            with self.assertRaises(subprocess.CalledProcessError) as refusal:
+                shards.run(self.root, 1, {}, self.root, '0', evidence_out=target)
+        self.assertIs(refusal.exception, error)
+        discover.assert_called_once_with(['go', 'list', '-json', './...'], cwd=self.root, text=True)
+        compile_package.assert_not_called()
+        self.assertEqual(json.loads(target.read_text()), {'discovery': 'partial', 'packages': [
+            {'import_path': package['ImportPath'], 'test_cache': 'not-started'} for package in listed
+        ]})
+
+    def test_package_evidence_write_error_does_not_fail_run(self):
+        stderr = io.StringIO()
+        with patch.object(shards.subprocess, 'check_output', return_value='{"ImportPath":"demo/library"}'), \
+             patch.object(shards, 'global_git_config', return_value={}), redirect_stderr(stderr):
+            self.assertEqual(shards.run(self.root, 1, {}, self.root, '0', evidence_out=self.root), [])
+        self.assertIn('cannot write package evidence', stderr.getvalue())
+
     def test_named_environment_pool_replaces_the_machine_wide_one(self):
         self.assertEqual(shards.default_lock_dir(), (self.root / 'default-locks').resolve())
         with patch.dict(os.environ, {shards.LOCK_DIR_ENV: ''}):

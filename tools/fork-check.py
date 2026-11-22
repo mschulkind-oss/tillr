@@ -634,6 +634,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -1817,6 +1818,49 @@ def go_tool_command(directory: str) -> str:
             f"-timeout {GO_TEST_TIMEOUT} ./...")
 
 
+def native_go_packages(output: str) -> list[dict]:
+    """Go's own package summary is evidence; lack of a hit is not a miss."""
+    packages = {}
+    for line in output.splitlines():
+        package_field = None
+        if line.startswith("{"):
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict) or not isinstance(event.get("Package"), str) or event.get("Test"):
+                continue
+            package_field = event["Package"]
+            if not package_field:
+                continue
+            if event.get("Action") == "start":
+                packages.setdefault(package_field, "unknown")
+                continue
+            if event.get("Action") != "output" or not isinstance(event.get("Output"), str):
+                continue
+            line = event["Output"]
+        match = re.fullmatch(
+            r"(ok|\?|FAIL)\s+(\S+)\s+(\(cached\)|\d+(?:\.\d+)?s|\[no test files\]|\[(?:build|setup) failed\])"
+            r"(?:\s+coverage: (?:\d+(?:\.\d+)?% of statements|\[no statements\]))?"
+            r"(?:\s+\[no tests to run\])?", line.strip())
+        if not match:
+            # With -cover, a package without tests may have no status prefix.
+            covered = re.fullmatch(r"(\S+)\t+coverage: (?:0(?:\.0+)?% of statements|\[no statements\])", line.strip())
+            if covered and package_field in (None, covered[1]):
+                packages[covered[1]] = "not-applicable"
+            continue
+        status, package, detail = match.groups()
+        if package_field is not None and package != package_field:
+            continue
+        cache = {"(cached)": "hit", "[no test files]": "not-applicable",
+                 "[build failed]": "unknown", "[setup failed]": "unknown"}.get(detail, "miss")
+        # Only Go's positive package markers can establish a hit.
+        if cache == "hit" and status != "ok":
+            cache = "unknown"
+        packages[package] = cache
+    return [{"import_path": pkg, "test_cache": cache} for pkg, cache in sorted(packages.items())]
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -1898,7 +1942,10 @@ def git(root: Path, *args: str, check: bool = True) -> str:
 # `fork-check test` that way.
 # `TILLR_SQLITE_TRACE` belongs to the caller's own store tracing, not the checks it runs.
 GATE_ENV_DROP = ("LAND_BATCH_LIMIT", "TILLR_SQLITE_TRACE", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
-                 "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES")
+                 "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                 # A nested gate must not measure or publish to its parent's destinations.
+                 "TILLR_ORDINARY_GATE_TIMING", "TILLR_FAST_TREE_TIMING",
+                 "TILLR_GATE_SPANS_OUT", "TILLR_FAST_VERDICT_OUT")
 
 
 def environ(env: dict[str, str] | None = None,
@@ -5181,7 +5228,11 @@ class Check:
                  cache_provenance: dict | None = None,
                  selected_by: tuple[str, ...] | None = None, forced: str = "",
                  history: float | None = None, cause: str = "", fork: str = "",
-                 reusable: bool = True):
+                 reusable: bool = True, go_module: str = ""):
+        self.go_module = go_module
+        self.go_build: list[dict] = []
+        self.wall_ms: int | None = None
+        self.reused_wall_ms: int | None = None
         self.kind = kind
         self.label = label
         self.argv = argv
@@ -5531,6 +5582,7 @@ class Skip:
         # failure is suppressed by a recorded decision rather than by this machine's
         # inability to answer (docs/reference/gate-check-rules.md).
         self.quarantine = quarantine
+        self.executed_check: Check | None = None
 
 
 class Declared:
@@ -5598,6 +5650,7 @@ class Plan:
         # line, the selection line and the report all read one value rather than each
         # being handed it separately.
         self.tier: str | None = None
+        self.measure_landing = False
 
     def not_planned(self, label: str, why: str, kind: str = "", *, read_disjoint: bool = True) -> None:
         """A step the selected change gave no reason to run, or which does not apply."""
@@ -5954,7 +6007,8 @@ def stop_after_failure(check: Check) -> bool:
 def execute_check(check: Check, root: Path, diff_base: str | None,
                   cancel: "Cancellation | None" = None,
                   cache: VerdictCache | None = None,
-                  runtime: RuntimeFingerprint | None = None) -> None:
+                  runtime: RuntimeFingerprint | None = None, *,
+                  measure_landing: bool = False) -> None:
     """Run one planned check in place: its one run, its transcript and its end.
 
     The run goes through `execute_attempt`, and it happens exactly once: a failure is
@@ -5967,7 +6021,9 @@ def execute_check(check: Check, root: Path, diff_base: str | None,
     # finishes rather than from the report's rounded `seconds`. A worker stamps its own
     # check, so two checks that overlapped have two real spans on one axis.
     check.start_ns = time.time_ns()
-    execute_attempt(root, check, diff_base, cancel=cancel, cache=cache, runtime=runtime)
+    started = time.monotonic_ns() if measure_landing else None
+    execute_attempt(root, check, diff_base, cancel=cancel, cache=cache, runtime=runtime,
+                    measure_landing=measure_landing)
     capture_fork_conflict(root, check, cancel)
     if check.timeout > 0 and check.seconds > check.timeout:
         check.warnings.append(f"ran {clock(check.seconds)}, over target {check.timeout}s; "
@@ -5989,6 +6045,8 @@ def execute_check(check: Check, root: Path, diff_base: str | None,
     # at the same millisecond boundary the record names.
     check.ended = now_iso()
     check.end_ns = time.time_ns()
+    if started is not None:
+        check.wall_ms = (time.monotonic_ns() - started) // 1_000_000
 
 
 def run_plan_checks(plan: Plan, root: Path, diff_base: str | None,
@@ -6059,7 +6117,8 @@ def run_plan_checks(plan: Plan, root: Path, diff_base: str | None,
         check_wall, peak, halted = run_checks(
             checks, jobs,
             lambda index: execute_check(checks[index], root, diff_base, cancellation,
-                                        cache=cache, runtime=runtime),
+                                        cache=cache, runtime=runtime,
+                                        measure_landing=getattr(plan, "measure_landing", False)),
             on_start=on_start, on_complete=on_complete,
             cheap_first=True, blame=stop_after_failure,
             terminate=cancellation.cancel, on_not_run=on_not_run,
@@ -6395,7 +6454,10 @@ def apply_reuse(plan: Plan, selectors: list[str]) -> None:
             # be invisible. It is re-run.
             kept.append(check)
             continue
+        started = time.monotonic_ns() if plan.measure_landing else None
         if any(reuse_names(name, check.kind, check.label) for name in selectors):
+            if started is not None:
+                check.reused_wall_ms = (time.monotonic_ns() - started) // 1_000_000
             plan.reused.append(check)
             continue
         kept.append(check)
@@ -6933,7 +6995,7 @@ def build_plan(
                       ("the gate runner or its suite inputs changed" if runner else
                        f"a suite input for {directory}/ changed"), GO_TOOL_TIMEOUT,
                       watches=watches, selected_by=tuple(go_tool),
-                      cost=GO_TOOL_COST_ESTIMATE[directory],
+                      cost=GO_TOOL_COST_ESTIMATE[directory], go_module=directory,
                       drop=("LAND_BATCH_LIMIT",))
             )
         elif go_tool:
@@ -8278,12 +8340,56 @@ def record_verdict(root: Path, check: Check, cache: VerdictCache,
     cache.record(key, provenance)
 
 
+GO_SHARDS_EVIDENCE_ENV = "TILLR_GO_SHARDS_EVIDENCE_OUT"
+
+
+def run_landing_go_check(root: Path, check: Check, env: dict, drop: tuple,
+                         cancel: Cancellation | None) -> tuple[int, str, float]:
+    sharded = check.kind == "gate-runner" and check.go_module in GO_SHARD_DIRS
+    observation = {"module": check.go_module, "execution": "ran", "selector": "./...",
+                   "mode": "compiled-shards" if sharded else "go-test"}
+    path = None
+    try:
+        if sharded:
+            try:
+                fd, path = tempfile.mkstemp(prefix="gate-go-shards-")
+                os.close(fd)
+                env = {**env, GO_SHARDS_EVIDENCE_ENV: path}
+            except OSError as error:
+                print(f"fork-check: cannot prepare Go shard package evidence: {error}", file=sys.stderr)
+                drop += (GO_SHARDS_EVIDENCE_ENV,)
+        else:
+            drop += (GO_SHARDS_EVIDENCE_ENV,)
+        rc, output, elapsed = run_command(root, check.argv, check.timeout, env, drop, cancel)
+        if path is not None:
+            try:
+                data = Path(path).read_text()
+                # A check can fail before reaching Go discovery, leaving the file empty.
+                if data:
+                    inventory = json.loads(data)
+                    if isinstance(inventory, list):
+                        observation["packages"] = inventory
+                    elif isinstance(inventory, dict) and isinstance(inventory.get("packages"), list):
+                        observation.update(discovery=inventory.get("discovery"), packages=inventory["packages"])
+            except (OSError, ValueError) as error:
+                print(f"fork-check: cannot read Go shard package evidence: {error}", file=sys.stderr)
+        elif not sharded:
+            observation["packages"] = native_go_packages(output)
+        check.go_build.append(observation)
+        return rc, output, elapsed
+    finally:
+        if path is not None:
+            with contextlib.suppress(OSError):
+                Path(path).unlink(missing_ok=True)
+
+
 def execute_attempt(root: Path, check: Check, diff_base: str,
                     env: dict[str, str] | None = None,
                     drop: tuple[str, ...] = (),
                     cancel: "Cancellation | None" = None,
                     cache: VerdictCache | None = None,
-                    runtime: RuntimeFingerprint | None = None) -> None:
+                    runtime: RuntimeFingerprint | None = None, *,
+                    measure_landing: bool = False) -> None:
     """Run a check once and record what that one run said.
 
     One execution of the check's command, or one pass of an in-process guard: `check.rc`,
@@ -8342,9 +8448,23 @@ def execute_attempt(root: Path, check: Check, diff_base: str,
         seconds = time.monotonic() - pass_started
     else:
         seconds = 0.0
+        command_env = {**check.env, **(env or {})}
+        if check.go_module in GO_SHARD_DIRS:
+            # Keep the shard runner's existing slot-holder label without exposing
+            # the writable span destination to the suite or any of its children.
+            spans = os.environ.get("TILLR_GATE_SPANS_OUT", "").strip()
+            if spans and not any(command_env.get(name, os.environ.get(name, "")).strip()
+                                 for name in ("GO_TEST_SHARDS_HOLDER", "TILLR_RUN_ID") if name not in drop):
+                parent = Path(spans).parent.name
+                if parent:
+                    command_env["GO_TEST_SHARDS_HOLDER"] = "trunk-proof" if parent == ".rolling" else f"gate:{parent}"
+        collect_go = measure_landing and check.go_module and check.kind in ("gate-runner", "go-substrate")
         for attempt in range(OUTSIDE_SIGNAL_RERUNS + 1):
-            check.rc, check.output, ran = run_command(
-                root, check.argv, check.timeout, {**check.env, **(env or {})}, drop, cancel)
+            if collect_go:
+                check.rc, check.output, ran = run_landing_go_check(root, check, command_env, drop, cancel)
+            else:
+                check.rc, check.output, ran = run_command(
+                    root, check.argv, check.timeout, command_env, (*drop, GO_SHARDS_EVIDENCE_ENV), cancel)
             seconds += ran
             signal_number = outside_signal(check.rc)
             if signal_number is None or (cancel is not None and cancel.cancelled):
@@ -8582,6 +8702,7 @@ def plan_gate(root: Path, options) -> GatePlan:
                           # diagnostic of the full gate, so an absent attribute is the
                           # full gate rather than an error.
                           tier=getattr(options, "tier", None))
+    plan.measure_landing = getattr(options, "measure_landing", False)
     # A re-gate on a moved tip is told which checks the caller already holds a result
     # for. They are removed before anything runs, so the run buys only what the landed
     # paths can reach, and the plan line names them in `reused`.
@@ -8998,6 +9119,12 @@ def write_gate_spans(path: str, plan: "Plan", root: Path, started_ns: int,
             "writes": list(check.writes),
             "after": list(check.after),
         }
+        if plan.measure_landing:
+            attributes["execution"] = ("reused" if check.cached else
+                                       "not-run" if check.preflight_refused else "ran")
+            attributes["wall_ms"] = check.wall_ms
+            if check.go_build:
+                attributes["go_build"] = check.go_build
         if check.cause:
             attributes["cause"] = check.cause
         if observation := getattr(check, "fork_conflict", None):
@@ -9021,6 +9148,10 @@ def write_gate_spans(path: str, plan: "Plan", root: Path, started_ns: int,
         "reason": skip.why,
         "planned": skip.planned,
         "owed": skip.owed,
+        **({"executed_check": {
+            "check_id": declaration_id(skip.executed_check.kind, skip.executed_check.label, root),
+            "execution": "ran", "wall_ms": skip.executed_check.wall_ms,
+        }} if plan.measure_landing and skip.executed_check is not None else {}),
     } for skip in plan.skips]
     ended_ns = time.time_ns()
     payload = {
@@ -9048,13 +9179,18 @@ def write_gate_spans(path: str, plan: "Plan", root: Path, started_ns: int,
             "wall_seconds": round(wall, 3),
         },
     }
+    if plan.measure_landing:
+        # A reused or unstarted check has no executed span. Keep both in the
+        # invocation's account without inventing a span or reusing historic time.
+        reused = {declaration_id(check.kind, check.label, root): check.reused_wall_ms
+                  for check in plan.reused}
+        payload.update(reused_checks=list(reused), reused_wall_ms=reused,
+                       not_run_checks=[declaration_id(check.kind, check.label, root)
+                                       for check in plan.checks if not check.start_ns])
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    # One temp name per writer. A fixed `<name>.tmp` lets two runs aimed at one path -- a
-    # nested gate inheriting TILLR_GATE_SPANS_OUT from the drain, or two shells given the
-    # same -- interleave so that the first `os.replace` consumes the file the second was
-    # about to rename, and the loser dies with FileNotFoundError on a span file it did not
-    # need to share. The rename stays atomic; only the name is made unique.
+    # One temp name per writer. Two callers can still explicitly request the same
+    # path; a fixed `<name>.tmp` would let one rename consume the other's temp file.
     temporary = target.with_name(
         f"{target.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
     temporary.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -9105,6 +9241,10 @@ def run_gate(argv: list[str]) -> int:
     # gate call, and a flag it did not declare would be refused before fork-check saw it.
     # The explicit flag wins, and the environment is only the fallback the drain uses.
     spans_out = options.spans_out or os.environ.get("TILLR_GATE_SPANS_OUT", "")
+    # The span and stall handoffs do not imply timing (e.g. automatic reverts).
+    options.measure_landing = bool(os.environ.get("TILLR_ORDINARY_GATE_TIMING") == "1"
+                                   and options.tier == TIER_LANDING and options.since and not options.all
+                                   and spans_out and os.environ.get("TILLR_FAST_VERDICT_OUT"))
     if options.jobs < 0:
         print(f"fork-check: --jobs must be at least 1, not {options.jobs}", file=sys.stderr)
         return 2
@@ -9264,6 +9404,8 @@ def run_gate(argv: list[str]) -> int:
         skip = sentinel_skip(check)
         if skip is not None:
             plan.unavailable(*skip, kind=check.kind)
+            if plan.measure_landing:
+                plan.skips[-1].executed_check = check
             plan.checks.remove(check)
 
     # A fork-quality step whose only failing case is a real-time budget this machine's
@@ -9276,6 +9418,8 @@ def run_gate(argv: list[str]) -> int:
             # A fork-quality skip is always a quarantine: the step ran, and only a
             # declaration suppresses it (fork_quality_skip).
             plan.quarantine(*skip, applied_quarantine(check), check.kind)
+            if plan.measure_landing:
+                plan.skips[-1].executed_check = check
             plan.checks.remove(check)
 
     # Every input a check's own transcript declared elsewhere joins the plan's list, so

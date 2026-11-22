@@ -53,6 +53,7 @@ func readsChanged(check Declaration, paths []string, root string) bool {
 // The adapter can include fast tree declarations in the same verdict; heavy tree
 // checks remain the responsibility of the heavy runner.
 func checksFace(args []string) int {
+	started := time.Now()
 	flags := flag.NewFlagSet("checks", flag.ContinueOnError)
 	flags.SetOutput(os.Stderr)
 	base := flags.String("base", "", "base commit (required)")
@@ -73,6 +74,7 @@ func checksFace(args []string) int {
 		fmt.Fprintln(os.Stderr, "tillr-gate checks:", err)
 		return record.ExitUsage
 	}
+	options.measureLanding = *fastTree && os.Getenv("TILLR_FAST_TREE_TIMING") == "1"
 	for _, arg := range []struct{ name, value string }{{"--base", *base}, {"--head", *head}, {"--logs", *logs}} {
 		if arg.value == "" {
 			fmt.Fprintf(os.Stderr, "tillr-gate checks: could not judge: missing %s argument\n", arg.name)
@@ -170,9 +172,12 @@ func checksFace(args []string) int {
 			fmt.Fprintln(os.Stderr, internalf("decoding the verdict payload: %v", err))
 			return record.ExitInternal
 		}
-		if len(skipped) != 0 {
+		if len(skipped) != 0 || options.measureLanding {
 			for _, id := range skipped {
-				payload.Checks = append(payload.Checks, VerdictCheck{CheckID: id, Result: ResultSkipped})
+				payload.Checks = append(payload.Checks, notRunCheck(id, ResultSkipped, options.measureLanding))
+			}
+			if options.measureLanding {
+				payload.WallMS = wallMS(started)
 			}
 			encoded, err := json.Marshal(payload)
 			if err != nil {

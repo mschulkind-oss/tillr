@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Build the Go tools and compile their tests concurrently without running cases."""
 from concurrent.futures import ThreadPoolExecutor
+import copy
 import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
+from threading import Lock
 import time
 from change_common import git, tree_entries, tracked_changes, result_store, stored_result, store_result
 
@@ -35,14 +38,53 @@ def build_env():
     return env
 
 
-def build_module(module, scratch):
+def test_cache_evidence(stdout):
+    """Read positive evidence about Go's result cache, not its compilation cache."""
+    cache = {}
+    for line in stdout.splitlines():
+        package_field = None
+        if line.startswith("{"):
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if (not isinstance(event, dict) or event.get("Action") != "output" or event.get("Test")
+                    or not isinstance(event.get("Package"), str) or not isinstance(event.get("Output"), str)):
+                continue
+            package_field, line = event["Package"], event["Output"].rstrip("\n")
+        match = re.fullmatch(r"(ok|\?)\s+(\S+)\s+(\(cached\)|[\d.]+s|\[no test files\])(?:\s.*)?", line)
+        if match:
+            status, package, detail = match.groups()
+            if package_field is not None and package != package_field:
+                continue
+            if status == "?" and detail == "[no test files]":
+                cache[package] = "not-applicable"
+            elif status == "ok" and detail != "[no test files]":
+                cache[package] = "hit" if detail == "(cached)" else "miss"
+        else:
+            covered = re.fullmatch(r"(\S+)\t+coverage: (?:0(?:\.0+)?% of statements|\[no statements\])", line.strip())
+            if covered and package_field in (None, covered[1]):
+                cache[covered[1]] = "not-applicable"
+    return cache
+
+
+def build_module(module, scratch, evidence=None, publish=None):
     env = build_env()
     with tempfile.TemporaryDirectory(dir=scratch, prefix="gate-go-build-") as output:
-        listed = subprocess.run(["go", "list", "-f", '{{if eq .Name "main"}}M{{end}}', "./..."],
+        listed = subprocess.run(["go", "list", "-f", '{{if eq .Name "main"}}M{{end}}\t{{.ImportPath}}', "./..."],
                                 cwd=module, env=env, text=True, capture_output=True)
+        # On failure only newline-terminated records are known to be complete.
+        complete = listed.stdout.rpartition("\n")[0] if listed.returncode else listed.stdout
+        rows = [line.partition("\t") for line in complete.splitlines()]
+        if evidence is not None:
+            evidence.update(mode="compile-only", discovery="partial" if listed.returncode else "complete",
+                            packages=[{"import_path": package, "test_cache": "not-started"}
+                                      for _, _, package in rows if package])
+            if publish:
+                publish(evidence)
         if listed.returncode:
             return listed.returncode, listed.stdout + listed.stderr
-        if "M" in listed.stdout:
+        if any(marker == "M" for marker, _, _ in rows):
             built = subprocess.run(["go", "build", "-o", output, "./..."], cwd=module,
                                    env=env, text=True, capture_output=True)
             if built.returncode:
@@ -50,9 +92,32 @@ def build_module(module, scratch):
         # -run filters cases, not TestMain: several tools' TestMain builds another
         # binary even when no case runs. -exec compiles/links every test package but
         # replaces execution with true, so this check never runs test setup.
+        if evidence is not None:
+            for package in evidence["packages"]:
+                package["test_cache"] = "unknown"
+            if publish:
+                publish(evidence)
         compiled = subprocess.run(["go", "test", "-exec", "true", "./..."], cwd=module,
                                   env=env, text=True, capture_output=True)
+        if evidence is not None:
+            cache = test_cache_evidence(compiled.stdout)
+            for package in evidence["packages"]:
+                package["test_cache"] = cache.get(package["import_path"], "unknown")
         return compiled.returncode, compiled.stdout + compiled.stderr
+
+
+def write_evidence(path, modules):
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=Path(path).parent, encoding="utf-8", delete=False) as snapshot:
+            try:
+                snapshot.write(json.dumps(modules) + "\n")
+                snapshot.close()
+                os.replace(snapshot.name, path)
+            finally:
+                Path(snapshot.name).unlink(missing_ok=True)
+    except OSError as error:
+        # An observation failure is not a build verdict.
+        print(f"go-build: could not record package evidence: {error}", file=sys.stderr)
 
 
 def module_keys(root, modules):
@@ -138,14 +203,33 @@ def main(memory_store=None):
         keys = module_keys(root, modules) if inside else {}
         store = Path(memory_store) if memory_store else result_store(root)
         tree = git(root, "rev-parse", "HEAD^{tree}").strip() if inside else ""
+        evidence_path = os.environ.get("TILLR_GO_BUILD_EVIDENCE_OUT")
+        snapshots = {}
+        evidence_lock = Lock()
+
+        def publish(observed):
+            # Workers only mutate their local evidence. Serialize each snapshot and
+            # its publication together so a later write cannot lose another module.
+            with evidence_lock:
+                snapshots[observed["module"]] = copy.deepcopy(observed)
+                write_evidence(evidence_path, [snapshots[m.as_posix()] for m in modules
+                                               if m.as_posix() in snapshots])
+
         def judge(module):
             key, bound = keys.get(module, ("", False))
             if bound and stored_result(store, key, "pass") and not stored_result(store, key, "fail"):
+                if evidence_path:
+                    publish({"module": module.as_posix(), "execution": "reused"})
                 return 0, "", True, 0
             if not bound:
                 print(f"go-build: {module}: inputs not bound to the committed tree; not remembered", file=sys.stderr)
             started = time.monotonic()
-            code, output = build_module(module, scratch)
+            if evidence_path:
+                observed = {"module": module.as_posix(), "execution": "ran"}
+                code, output = build_module(module, scratch, observed, publish)
+                publish(observed)
+            else:
+                code, output = build_module(module, scratch)
             return code, output, False, int((time.monotonic() - started) * 1000)
         with ThreadPoolExecutor(max_workers=len(modules)) as pool:
             results = list(pool.map(judge, modules))

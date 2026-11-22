@@ -377,6 +377,9 @@ func (memory *treeMemory) run(check PlanCheck, root, logs string, index int) (Ve
 	}
 	if pass != nil {
 		outcome.Result = ResultPass
+		if check.measureLanding {
+			outcome.Execution = executionReused
+		}
 		annotateMemory(&outcome, pass, fail, true)
 		return outcome, nil
 	}

@@ -7,16 +7,23 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 
 # Budgets are targets. Working checks keep their own verdict; only a sampled stall
 # ends one early. Carrying at a budget would discard its judgment.
 TREE_OVERRUN = "keep"
+GATE_HANDOFFS = ("TILLR_ORDINARY_GATE_TIMING", "TILLR_FAST_TREE_TIMING",
+                 "TILLR_GATE_SPANS_OUT", "TILLR_FAST_VERDICT_OUT")
+
+
+def check_environment():
+    return {name: value for name, value in os.environ.items() if name not in GATE_HANDOFFS}
 
 
 def supports_change_scope(runner):
     # The adapter is read from the candidate; the runner on PATH is from trunk.
     # Inspect its help, without trying the judge and retrying a possible real verdict.
-    help_result = subprocess.run([runner, "checks", "--help"], capture_output=True)
+    help_result = subprocess.run([runner, "checks", "--help"], capture_output=True, env=check_environment())
     return bool(re.search(rb"(?m)^[ \t]*--?scope-to-change(?:[ \t]|$)",
                           help_result.stdout + b"\n" + (help_result.stderr or b"")))
 
@@ -61,7 +68,8 @@ def warm_trimmed_go_cache():
         return
     print(f"change-gate: warming the trimmed Go build cache for {version}, once, outside the fast tier's ceilings",
           file=sys.stderr)
-    warmed = subprocess.run([sys.executable, "tools/gate/checks/go-build.py"], stdout=sys.stderr)
+    warmed = subprocess.run([sys.executable, "tools/gate/checks/go-build.py"],
+                            stdout=sys.stderr, env=check_environment())
     if warmed.returncode in (0, 1):
         try:
             marker.parent.mkdir(parents=True, exist_ok=True)
@@ -69,6 +77,32 @@ def warm_trimmed_go_cache():
         except OSError as error:
             print(f"change-gate: could not record the warm cache ({error}); the next gate warms again",
                   file=sys.stderr)
+
+
+def preserve_fast_timing(path, first):
+    # The remaining judge owns the stall evidence at this path. Preserve its
+    # top-level checks, with the earlier declarations run as an observation.
+    try:
+        fast = json.loads(first)["payload"]
+        remaining = json.loads(Path(path).read_bytes())
+        if (remaining["payload"].get("result") != "stalled" or not isinstance(fast.get("wall_ms"), int)
+                or not isinstance(fast.get("checks"), list)):
+            return
+        remaining["payload"]["fast_timing"] = {key: fast[key] for key in ("wall_ms", "checks")}
+        # Never truncate a valid stall handoff if writing its timing fails.
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=Path(path).parent,
+                                         prefix=".fast-timing-", delete=False) as temporary:
+            target = Path(temporary.name)
+            try:
+                json.dump(remaining, temporary)
+                temporary.write("\n")
+                temporary.close()
+                target.replace(path)
+            finally:
+                target.unlink(missing_ok=True)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        # An observation failure must not replace the remaining judge's exit.
+        print(f"change-gate: could not preserve fast timings: {error}", file=sys.stderr)
 
 
 def main():
@@ -92,13 +126,19 @@ def main():
         checks_cmd = [args.runner, "checks", "--fast-tree"]
         if scoped:
             checks_cmd.append("--scope-to-change")
+        path = os.environ.get("TILLR_FAST_VERDICT_OUT")
+        # The stall and span handoffs are also used without timing. Only the
+        # drain's explicit ordinary-invocation opt-in enables this observation.
+        measure_landing = bool(os.environ.get("TILLR_ORDINARY_GATE_TIMING") == "1"
+                               and path and os.environ.get("TILLR_GATE_SPANS_OUT"))
+        checks_env = dict(check_environment(), TILLR_FAST_TREE_TIMING="1" if measure_landing else "")
         checked = subprocess.run([*checks_cmd, "--base", args.base, "--head", args.head,
                                   "--tree-overrun", TREE_OVERRUN,
                                   "--worktree", ".", "--checks", "tools/gate/checks", "--logs", args.logs],
-                                 stdout=subprocess.PIPE)
+                                 stdout=subprocess.PIPE, env=checks_env)
         # Preserve per-check timings and stall evidence beside the wrapper verdict.
         # The drain hands over this path; the outer gate supplies one for direct runs.
-        if path := os.environ.get("TILLR_FAST_VERDICT_OUT"):
+        if path:
             Path(path).write_bytes(checked.stdout)
         sys.stdout.buffer.write(checked.stdout)
         sys.stdout.buffer.flush()
@@ -106,6 +146,8 @@ def main():
             return checked.returncode
         remaining = subprocess.run([sys.executable, "tools/fork-check.py",
                                     "--since", args.base, "--tier", "landing"])
+        if measure_landing and remaining.returncode == 6 and checked.stdout.strip():
+            preserve_fast_timing(path, checked.stdout)
         # The old program's usage/no-verdict exit is 2; RunGate reads 4 as
         # could-not-judge. A missing judgment must never become a rejected change.
         return remaining.returncode if remaining.returncode in (0, 1, 6) else 4

@@ -69,7 +69,8 @@ type PlanCheck struct {
 	Forced          string            `json:"forced"`
 
 	// Observation sources are supplied by the runner, never serialized in a plan.
-	watchdog *watchSources
+	watchdog       *watchSources
+	measureLanding bool
 }
 
 // PlanInProcess is one in-process check the plan owes: a check the gate runs as its own
