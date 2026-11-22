@@ -968,7 +968,8 @@ func loopFace(args []string) int {
 		Policy: policy, PolicyRef: *policyPath, QuestionsCmd: commandFields(*questionsCmd), QuestionsIndex: *questionsIndex,
 		Steps: steps, Stage: stager, Now: at, Report: os.Stderr,
 		Comments: repositorySettings.Comments, WorkflowDefaults: repositorySettings.WorkflowDefaults,
-		Restart: restartConfig(), PostLanding: repositorySettings,
+		CandidateSizeLimits: &repositorySettings.CandidateSize,
+		Restart:             restartConfig(), PostLanding: repositorySettings,
 	})
 	if err != nil {
 		return failStartup(err)

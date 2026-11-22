@@ -569,6 +569,12 @@ export interface VerifyRefusalView {
   attempt: number | null;
   detail: string;
   replan: boolean;
+  candidate_size?: {
+    files: number;
+    added_lines: number;
+    file_limit: number;
+    added_line_limit: number;
+  };
   next_run_id: string | null;
   next_attempt: number | null;
   next_step: string | null;

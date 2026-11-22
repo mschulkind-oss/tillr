@@ -35,6 +35,7 @@ type Settings struct {
 	Prose    Prose
 	// WorkflowDefaults maps seats to workflow references; the drain validates files.
 	WorkflowDefaults map[string]string
+	CandidateSize    CandidateSizeLimits
 }
 
 // Sync selects the roadmaps and their direct links read at each loop sync.
@@ -43,6 +44,17 @@ type Sync struct{ Roadmaps []string }
 
 // Prose enables automatic rewrite items; its zero value leaves findings advisory.
 type Prose struct{ Rewrite bool }
+
+// CandidateSizeLimits are the advisory thresholds shown with a refused candidate.
+type CandidateSizeLimits struct {
+	FileLimit      int64
+	AddedLineLimit int64
+}
+
+// DefaultCandidateSizeLimits returns the thresholds used without overrides.
+func DefaultCandidateSizeLimits() CandidateSizeLimits {
+	return CandidateSizeLimits{FileLimit: 27, AddedLineLimit: 1200}
+}
 
 // Lanes configures lanes reserved for owner-facing work, outside the ordinary cap.
 type Lanes struct{ Express int64 }
@@ -97,7 +109,7 @@ func ReadWithoutLanding(root, definitionName string) (Settings, error) {
 }
 
 func read(root, nonLandingDefinition string) (Settings, error) {
-	s := Settings{Roll: Roll{PauseTimeoutSeconds: 120}, Push: Push{What: PushNone}}
+	s := Settings{Roll: Roll{PauseTimeoutSeconds: 120}, Push: Push{What: PushNone}, CandidateSize: DefaultCandidateSizeLimits()}
 	path := filepath.Join(root, ".tillr.toml")
 	raw, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
@@ -127,8 +139,8 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 	var legacyPush *bool
 	whatSet := false
 	for _, table := range keys(tables) {
-		if table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" && table != "lanes" && table != "sync" {
-			return Settings{}, refuse(table, "a known table (roll, push, comments, workflows, prose, intake, lanes or sync)")
+		if table != "roll" && table != "push" && table != "comments" && table != "workflows" && table != "prose" && table != "intake" && table != "lanes" && table != "sync" && table != "candidate_size" {
+			return Settings{}, refuse(table, "a known table (roll, push, comments, workflows, prose, intake, lanes, sync or candidate_size)")
 		}
 		values, ok := tables[table].(map[string]any)
 		if !ok {
@@ -147,6 +159,16 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 					return Settings{}, refuse(full, "a nonnegative integer")
 				}
 				s.Lanes.Express = n
+			case "candidate_size.file_limit", "candidate_size.added_line_limit":
+				n, ok := value.(int64)
+				if !ok || n < 0 {
+					return Settings{}, refuse(full, "a nonnegative integer")
+				}
+				if key == "file_limit" {
+					s.CandidateSize.FileLimit = n
+				} else {
+					s.CandidateSize.AddedLineLimit = n
+				}
 			case "workflows.default":
 				defaults, ok := value.(map[string]any)
 				if !ok {
@@ -249,6 +271,9 @@ func read(root, nonLandingDefinition string) (Settings, error) {
 				whatSet = true
 			default:
 				expected := "a known push key (what, remote or ref; after_landing is the legacy spelling of what = \"tip\")"
+				if table == "candidate_size" {
+					expected = "a known candidate_size key (file_limit or added_line_limit)"
+				}
 				if table == "sync" {
 					expected = "a known sync key (roadmaps)"
 				}

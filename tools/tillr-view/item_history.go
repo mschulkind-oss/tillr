@@ -175,6 +175,14 @@ func readStateMoves(r *store.Reader, itemID string) ([]stateMoveView, error) {
 	return out, rows.Err()
 }
 
+// candidateSizeView mirrors the counts and effective limits stored on drain.refusal.
+type candidateSizeView struct {
+	Files          int64 `json:"files"`
+	AddedLines     int64 `json:"added_lines"`
+	FileLimit      int64 `json:"file_limit"`
+	AddedLineLimit int64 `json:"added_line_limit"`
+}
+
 // verifyRefusalView is one verify-not-done refusal and the step that ran after it. NextStep is
 // the workflow node (`work`, `plan`, `work/piece-one`) of the next run the drain started for
 // the item, or that run's seat when it ran outside a workflow node. The Next fields are null
@@ -193,11 +201,13 @@ type verifyRefusalView struct {
 	NextSeat     *string `json:"next_seat"`
 	NextEventSeq *int64  `json:"next_event_seq"`
 	NextAtMS     *int64  `json:"next_at_ms"`
+	// Nil means no reading was recorded, not that the candidate was empty.
+	CandidateSize *candidateSizeView `json:"candidate_size,omitempty"`
 }
 
 func readVerifyRefusals(r *store.Reader, itemID string) ([]verifyRefusalView, error) {
 	out := []verifyRefusalView{}
-	rows, err := r.Query(`SELECT seq, ts, COALESCE(object_id, ''), COALESCE(json_extract(payload, '$.detail'), ''), COALESCE(json_extract(payload, '$.replan'), 0)
+	rows, err := r.Query(`SELECT seq, ts, COALESCE(object_id, ''), COALESCE(json_extract(payload, '$.detail'), ''), COALESCE(json_extract(payload, '$.replan'), 0), json_extract(payload, '$.candidate_size')
  FROM events WHERE kind = 'drain.refusal' AND object_type = 'run' AND json_valid(payload)
  AND json_extract(payload, '$.item_id') = ? AND json_extract(payload, '$.step') = 'verify-not-done' ORDER BY seq`, itemID)
 	if err != nil {
@@ -207,9 +217,16 @@ func readVerifyRefusals(r *store.Reader, itemID string) ([]verifyRefusalView, er
 	for rows.Next() {
 		var x verifyRefusalView
 		var replan int
-		if err := rows.Scan(&x.EventSeq, &x.AtMS, &x.RunID, &x.Detail, &replan); err != nil {
+		var size []byte
+		if err := rows.Scan(&x.EventSeq, &x.AtMS, &x.RunID, &x.Detail, &replan, &size); err != nil {
 			rows.Close()
 			return nil, err
+		}
+		if size != nil {
+			if err := json.Unmarshal(size, &x.CandidateSize); err != nil {
+				rows.Close()
+				return nil, err
+			}
 		}
 		x.Replan = replan != 0
 		refusals = append(refusals, x)

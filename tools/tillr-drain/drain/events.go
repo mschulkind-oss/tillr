@@ -257,6 +257,9 @@ type refusalPayload struct {
 	// item returns to the plan step instead of the build step, and no worker session is kept.
 	Replan         bool            `json:"replan,omitempty"`
 	VerifyFeedback *verifyFeedback `json:"verify_feedback,omitempty"`
+	// The size is advisory. A missing observation with an error is distinct from zero.
+	CandidateSize      *candidateSize `json:"candidate_size,omitempty"`
+	CandidateSizeError string         `json:"candidate_size_error,omitempty"`
 	// Selectors are a reverted landing's legacy replay selectors (kind:label) by check
 	// id, kept so the item's next gate can run a check a loop restart forgot.
 	Selectors map[string]string `json:"selectors,omitempty"`
@@ -336,6 +339,14 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 	}
 	if !repeated {
 		payload.BaseSHA, payload.HeadSHA = candidate.BaseSHA, candidate.HeadSHA
+	}
+	if step == RefusalVerifyNotDone {
+		size, err := l.measureCandidateSize(ctx, candidate)
+		if err != nil {
+			payload.CandidateSizeError = err.Error()
+		} else {
+			payload.CandidateSize = &size
+		}
 	}
 	at := l.cfg.Now().UTC()
 	evidence := l.readRefusalEvidence(candidate.RunID, payload)
