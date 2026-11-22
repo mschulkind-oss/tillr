@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"time"
 
 	"github.com/mschulkind-oss/tillr/event"
 )
@@ -20,6 +21,15 @@ type Tx struct {
 	events *eventCache
 }
 
+type writeObserverKey struct{}
+
+// ObserveWrites observes each WriteTx made with this context, including time
+// spent waiting for admission. The observer is called after releasing the writer
+// and must be safe for concurrent calls when the context is shared.
+func ObserveWrites(ctx context.Context, observe func(start, end time.Time)) context.Context {
+	return context.WithValue(ctx, writeObserverKey{}, observe)
+}
+
 // WriteTx runs fn inside one write transaction and commits it. An error from fn rolls
 // the whole transaction back, so a refused transition leaves no row and no event: the
 // two are one transaction, not two writes a caller must remember to pair.
@@ -29,6 +39,10 @@ type Tx struct {
 // instead of being answered SQLITE_BUSY at its first write, and a second writer waits
 // here rather than failing.
 func (s *Store) WriteTx(ctx context.Context, fn func(*Tx) error) error {
+	if observe, ok := ctx.Value(writeObserverKey{}).(func(time.Time, time.Time)); ok {
+		start := time.Now()
+		defer func() { observe(start, time.Now()) }()
+	}
 	operation := ""
 	if os.Getenv("TILLR_SQLITE_TRACE") == "1" {
 		if pc, _, _, ok := runtime.Caller(1); ok {

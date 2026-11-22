@@ -733,6 +733,11 @@ def sink_case() -> None:
         shutil.rmtree(base, ignore_errors=True)
 
 
+def handoff_case() -> None:
+    result = run([sys.executable, str(EVIDENCE_DIR / "handoff_test.py")], ROOT)
+    assert result.returncode == 0, result.stderr
+
+
 def main() -> int:
     case("the schema accepts a canonical record and refuses every broken shape", schema_case)
     case("a consumer refuses a record version it does not know", version_case)
@@ -747,6 +752,7 @@ def main() -> int:
     case("the counts that explain velocity", counts_case)
     case("two windows diff as changed numbers", diff_case)
     case("the sink is gone and the report says so", sink_case)
+    case("current Tillr handoffs join finish, examination and allocation", handoff_case)
     for name in SKIPPED:
         print(f"skip: {name}")
     print(f"\npipeline-evidence: {PASSED} passed, {FAILED} failed, {len(SKIPPED)} skipped")

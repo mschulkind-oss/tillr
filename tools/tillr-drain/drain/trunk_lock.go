@@ -19,6 +19,12 @@ import (
 // the lander can wait with cancellation rather than taking over our descriptor.
 // Importing the landing package would also register its schema in the drain.
 func (l *Loop) lockTrunkHistory(ctx context.Context) (func(), error) {
+	return l.acquireTrunkHistory(ctx, true)
+}
+
+// Without wait, a nil release and nil error means another holder won. The lock
+// protocol and mutual exclusion are identical when acquisition succeeds.
+func (l *Loop) acquireTrunkHistory(ctx context.Context, wait bool) (func(), error) {
 	raw, err := l.git(ctx, l.cfg.Root, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
 		return nil, err
@@ -44,6 +50,9 @@ func (l *Loop) lockTrunkHistory(ctx context.Context) (func(), error) {
 			if !lockContended(guardErr) {
 				return nil, Externalf("locking trunk history guard: %v", guardErr)
 			}
+		}
+		if !wait {
+			return nil, nil
 		}
 		if !waitFor(ctx, 20*time.Millisecond) {
 			return nil, Externalf("waiting for trunk history lock: %v", ctx.Err())

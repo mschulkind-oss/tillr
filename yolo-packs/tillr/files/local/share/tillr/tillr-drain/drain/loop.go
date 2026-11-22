@@ -2070,6 +2070,7 @@ func spendWords(usage *run.Usage) string {
 // convicts only what a run may not do, and the event that records either answer. It answers
 // the stop a violation is.
 func (l *Loop) closeRunBracket(ctx context.Context, worktree string, request run.Request, tick string, at time.Time, before *Boundary, result *LoopResult, watched []string) (string, error) {
+	defer timeHandoffPhase(ctx, "boundary")()
 	after, err := l.snapshot(ctx, []string{worktree}, watched, before)
 	if err != nil {
 		return "", err
@@ -3004,7 +3005,9 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	l.mu.Unlock()
 	candidate.gateCount = l.gateCount
 	candidate.deferGateJudgment = IsTrunkFixer(candidate.ItemID)
+	endGate := timeHandoffPhase(ctx, "candidate_gate")
 	gate, err := l.cfg.Steps.Gate(ctx, candidate)
+	endGate()
 	l.mu.Lock()
 	stalledGateCount := l.gatesInFlight
 	l.gatesInFlight--
@@ -3234,7 +3237,9 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 		return l.landRemoteSync(ctx, candidate, result)
 	}
 	landStart := time.Now()
+	endLand := timeHandoffPhase(ctx, "land")
 	landed, err := l.landWithActions(ctx, candidate)
+	endLand()
 	if err == nil {
 		l.mu.Lock()
 		if hold, ok := landed.LockObservation.holdNS(); ok {

@@ -2451,7 +2451,9 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watch *l
 				record, log, err = l.runRestartable(runCtx, req)
 			}
 			if err == nil {
-				completion.outcome.stop, err = l.closeAsyncBracket(context.WithoutCancel(ctx), d, at, before, &local, watched, epochs)
+				boundaryCtx, recordTiming := l.timeHandoff(context.WithoutCancel(ctx), d, "boundary")
+				completion.outcome.stop, err = l.closeAsyncBracket(boundaryCtx, d, at, before, &local, watched, epochs)
+				recordTiming()
 				if err != nil {
 					err = fmt.Errorf("run boundary after: %w", err)
 				}
@@ -2609,7 +2611,7 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	}
 	// Settle an interrupted repair before trunk observation or the stale-stage sweep
 	// can mistake its replay for a manual reconciliation.
-	if replay, err := l.recoverRemoteSyncReplay(ctx); err != nil {
+	if replay, err := l.recoverPendingRemoteSyncReplay(ctx); err != nil {
 		return "", err
 	} else if replay != nil {
 		l.afterRemoteSyncReplay(ctx, replay, result)
@@ -3114,6 +3116,8 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 		completion.outcome.err = lockErr
 		return completion
 	}
+	ctx, recordTiming := l.timeHandoff(ctx, work.Decision, "examination")
+	defer recordTiming()
 	defer unlock()
 	if work.NeedsStage {
 		if err := l.stagePinnedCandidate(ctx, work); err != nil {
