@@ -8,11 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/mschulkind-oss/tillr/store"
 )
 
 type refPair struct{ leader, follower string }
@@ -178,15 +177,17 @@ func (c *gitCache) readRefOID(ref string) (string, bool) {
 	return oid, ok
 }
 
-func (c *gitCache) commit(ctx context.Context, root, ref string, onExec func([]string)) (string, error) {
-	if err := store.CheckIO("watch Git projection"); err != nil {
-		return "", err
+func (c *gitCache) commit(ctx context.Context, root, ref string, checkIO func(string) error, onExec func([]string)) (string, error) {
+	if checkIO != nil {
+		if err := checkIO("watch Git projection"); err != nil {
+			return "", err
+		}
 	}
 	if rawOID, ok := c.readRefOID(ref); ok {
 		if peeled, found := c.peeled[rawOID]; found {
 			return peeled, nil
 		}
-		raw, err := gitOutputWith(ctx, root, onExec, "rev-parse", "--verify", "--end-of-options", rawOID+"^{commit}")
+		raw, err := gitOutputWith(ctx, root, checkIO, onExec, "rev-parse", "--verify", "--end-of-options", rawOID+"^{commit}")
 		if err != nil {
 			return "", fmt.Errorf("git ref %s: %w", ref, err)
 		}
@@ -194,10 +195,10 @@ func (c *gitCache) commit(ctx context.Context, root, ref string, onExec func([]s
 		c.peeled[rawOID] = peeled
 		return peeled, nil
 	}
-	return gitCommitWith(ctx, root, ref, onExec)
+	return gitCommitWith(ctx, root, ref, checkIO, onExec)
 }
 
-func (c *gitCache) lag(ctx context.Context, root, leader, follower string, onExec func([]string)) (lagFact, error) {
+func (c *gitCache) lag(ctx context.Context, root, leader, follower string, checkIO func(string) error, onExec func([]string)) (lagFact, error) {
 	if leader == follower {
 		return lagFact{}, nil
 	}
@@ -205,7 +206,7 @@ func (c *gitCache) lag(ctx context.Context, root, leader, follower string, onExe
 	if fact, ok := c.lags[key]; ok {
 		return fact, nil
 	}
-	fact, err := gitLagWith(ctx, root, leader, follower, onExec)
+	fact, err := gitLagWith(ctx, root, leader, follower, checkIO, onExec)
 	if err == nil {
 		c.lags[key] = fact
 	}
@@ -224,9 +225,31 @@ type gitSnapshot struct {
 
 func (r Rule) refs() []string {
 	var refs []string
+	bareGitRefs := false
 	for _, entry := range r.Reads.Projections {
-		if names, ok := strings.CutPrefix(entry, "git_refs:"); ok {
+		if entry == "git_refs" {
+			bareGitRefs = true
+		} else if names, ok := strings.CutPrefix(entry, "git_refs:"); ok {
 			refs = append(refs, strings.Split(names, ",")...)
+		}
+	}
+	if bareGitRefs {
+		for _, expr := range r.expressions() {
+			if expr == nil {
+				continue
+			}
+			for _, op := range expr.projections {
+				if op.name == "git.ref" && op.ref != "" && !slices.Contains(refs, op.ref) {
+					refs = append(refs, op.ref)
+				}
+			}
+		}
+	}
+	if r.When.Pattern == LagBehind {
+		for _, ref := range []string{r.When.Leader, r.When.Follower} {
+			if ref != "" && !slices.Contains(refs, ref) {
+				refs = append(refs, ref)
+			}
 		}
 	}
 	return refs
@@ -262,7 +285,7 @@ func (g gitSnapshot) covers(rules []Rule) bool {
 	return true
 }
 
-func readGit(ctx context.Context, root string, rules []Rule, cache *gitCache, onExec func([]string)) (gitSnapshot, error) {
+func readGit(ctx context.Context, root string, rules []Rule, cache *gitCache, checkIO func(string) error, onExec func([]string)) (gitSnapshot, error) {
 	g := gitSnapshot{refs: map[string]projectionFact[string]{}, pairs: map[refPair]projectionFact[lagFact]{}}
 	refs, pairs := gitRequirements(rules)
 	if cache != nil && (len(refs) > 0 || len(pairs) > 0) && (cache.root != root || cache.peeled == nil) {
@@ -275,9 +298,9 @@ func readGit(ctx context.Context, root string, rules []Rule, cache *gitCache, on
 		var oid string
 		var err error
 		if cache != nil {
-			oid, err = cache.commit(ctx, root, ref, onExec)
+			oid, err = cache.commit(ctx, root, ref, checkIO, onExec)
 		} else {
-			oid, err = gitCommitWith(ctx, root, ref, onExec)
+			oid, err = gitCommitWith(ctx, root, ref, checkIO, onExec)
 		}
 		g.refs[ref] = projectionFact[string]{oid, err}
 	}
@@ -297,9 +320,9 @@ func readGit(ctx context.Context, root string, rules []Rule, cache *gitCache, on
 		var lag lagFact
 		var err error
 		if cache != nil {
-			lag, err = cache.lag(ctx, root, leader.value, follower.value, onExec)
+			lag, err = cache.lag(ctx, root, leader.value, follower.value, checkIO, onExec)
 		} else {
-			lag, err = gitLagWith(ctx, root, leader.value, follower.value, onExec)
+			lag, err = gitLagWith(ctx, root, leader.value, follower.value, checkIO, onExec)
 		}
 		if err != nil {
 			err = fmt.Errorf("git lag %s behind %s: %w", pair.follower, pair.leader, err)
@@ -310,12 +333,14 @@ func readGit(ctx context.Context, root string, rules []Rule, cache *gitCache, on
 }
 
 func gitOutput(ctx context.Context, root string, args ...string) ([]byte, error) {
-	return gitOutputWith(ctx, root, nil, args...)
+	return gitOutputWith(ctx, root, nil, nil, args...)
 }
 
-func gitOutputWith(ctx context.Context, root string, onExec func([]string), args ...string) ([]byte, error) {
-	if err := store.CheckIO("watch Git projection"); err != nil {
-		return nil, err
+func gitOutputWith(ctx context.Context, root string, checkIO func(string) error, onExec func([]string), args ...string) ([]byte, error) {
+	if checkIO != nil {
+		if err := checkIO("watch Git projection"); err != nil {
+			return nil, err
+		}
 	}
 	if root == "" {
 		return nil, fmt.Errorf("repository root is required")
@@ -363,15 +388,15 @@ func gitProjectionEnv(env []string) []string {
 }
 
 func gitCommit(ctx context.Context, root, ref string) (string, error) {
-	return gitCommitWith(ctx, root, ref, nil)
+	return gitCommitWith(ctx, root, ref, nil, nil)
 }
 
-func gitCommitWith(ctx context.Context, root, ref string, onExec func([]string)) (string, error) {
+func gitCommitWith(ctx context.Context, root, ref string, checkIO func(string) error, onExec func([]string)) (string, error) {
 	// Resolve an exact ref, not Git's extended revision syntax. Peel by OID so
 	// any concurrent move cannot change this fact part way through the read.
-	raw, err := gitOutputWith(ctx, root, onExec, "show-ref", "--hash", "--verify", "--", ref)
+	raw, err := gitOutputWith(ctx, root, checkIO, onExec, "show-ref", "--hash", "--verify", "--", ref)
 	if err == nil {
-		raw, err = gitOutputWith(ctx, root, onExec, "rev-parse", "--verify", "--end-of-options", strings.TrimSpace(string(raw))+"^{commit}")
+		raw, err = gitOutputWith(ctx, root, checkIO, onExec, "rev-parse", "--verify", "--end-of-options", strings.TrimSpace(string(raw))+"^{commit}")
 	}
 	if err != nil {
 		return "", fmt.Errorf("git ref %s: %w", ref, err)
@@ -379,11 +404,11 @@ func gitCommitWith(ctx context.Context, root, ref string, onExec func([]string))
 	return strings.TrimSpace(string(raw)), nil
 }
 
-func gitLagWith(ctx context.Context, root, leader, follower string, onExec func([]string)) (lagFact, error) {
+func gitLagWith(ctx context.Context, root, leader, follower string, checkIO func(string) error, onExec func([]string)) (lagFact, error) {
 	if leader == follower {
 		return lagFact{}, nil
 	}
-	raw, err := gitOutputWith(ctx, root, onExec, "rev-list", "--timestamp", follower+".."+leader, "--")
+	raw, err := gitOutputWith(ctx, root, checkIO, onExec, "rev-list", "--timestamp", follower+".."+leader, "--")
 	if err != nil {
 		return lagFact{}, err
 	}

@@ -73,8 +73,9 @@ CREATE TABLE IF NOT EXISTS foreground_delivery (
 // Evaluator derives rule conditions from a single store snapshot per pass.
 // Only the watch episode transitions and their corresponding events are written.
 type Evaluator struct {
-	Store *store.Store
-	Rules []Rule // validated file rules
+	Store  *store.Store
+	Source ObservationSource
+	Rules  []Rule // validated file rules
 	// Root is the repository whose Git refs projections read. It must be explicit.
 	Root  string
 	Clock func() time.Time
@@ -86,6 +87,21 @@ type Evaluator struct {
 	onGitExec           func(args []string)
 
 	cache *evalCache
+	mem   *memoryState
+}
+
+func (e Evaluator) storeSource() *TillrStoreSource {
+	return &TillrStoreSource{Store: e.Store, Clock: e.Clock}
+}
+
+func (e Evaluator) gitCheckIO() func(string) error {
+	if e.Store != nil {
+		return e.storeSource().checkIO
+	}
+	if ts, ok := e.Source.(*TillrStoreSource); ok && ts != nil {
+		return ts.checkIO
+	}
+	return nil
 }
 
 func (e Evaluator) now() time.Time {
@@ -154,6 +170,18 @@ func commandRules(rules []Rule) []Rule {
 
 // RuleResults derives conditions without changing episodes.
 func (e Evaluator) RuleResults(ctx context.Context) ([]RuleResult, error) {
+	if e.Store == nil {
+		if e.Source == nil {
+			return nil, fmt.Errorf("watch: Evaluator requires Store or Source")
+		}
+		now := e.now()
+		git, err := readGit(ctx, e.Root, e.Rules, nil, e.gitCheckIO(), e.onGitExec)
+		if err != nil {
+			return nil, err
+		}
+		results, _, _, err := e.deriveSourceRules(ctx, e.Source, e.Rules, git, now)
+		return results, err
+	}
 	var results []RuleResult
 	err := e.readEvaluation(ctx, e.Rules, func(_ *store.Reader, rows []RuleResult) error {
 		results = rows
@@ -166,7 +194,7 @@ func (e Evaluator) RuleResults(ctx context.Context) ([]RuleResult, error) {
 // fixed set of rules for both reads and may inspect other rows in that snapshot.
 func (e Evaluator) readEvaluation(ctx context.Context, rules []Rule, visit func(*store.Reader, []RuleResult) error) error {
 	now := e.now()
-	git, err := readGit(ctx, e.Root, rules, nil, e.onGitExec)
+	git, err := readGit(ctx, e.Root, rules, nil, e.gitCheckIO(), e.onGitExec)
 	if err != nil {
 		return err
 	}
@@ -182,6 +210,12 @@ func (e Evaluator) readEvaluation(ctx context.Context, rules []Rule, visit func(
 // CheckRules validates effective rules before wait records any delivery state.
 // The actual evaluation checks again against the rules of that pass.
 func (e Evaluator) CheckRules(ctx context.Context) error {
+	if e.Store == nil {
+		if e.Source == nil {
+			return fmt.Errorf("watch: Evaluator requires Store or Source")
+		}
+		return requireRoot(e.Root, e.Rules)
+	}
 	return e.Store.ReadTx(ctx, func(rd *store.Reader) error {
 		_, _, err := e.effective(rd)
 		return err
@@ -204,7 +238,43 @@ func (e *Evaluator) EvaluateRules(ctx context.Context) ([]RuleResult, error) {
 }
 
 func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult, error) {
-	if e.cache == nil || e.cache.store != e.Store {
+	if e.Store == nil {
+		if e.Source == nil {
+			return nil, fmt.Errorf("watch: Evaluator requires Store or Source")
+		}
+		rules := e.Rules
+		if !live {
+			rules = commandRules(e.Rules)
+		}
+		if err := requireRoot(e.Root, rules); err != nil {
+			return nil, err
+		}
+		if e.mem == nil {
+			e.mem = newMemoryState()
+		}
+		now := e.now()
+		git, err := readGit(ctx, e.Root, rules, &e.mem.git, e.gitCheckIO(), e.onGitExec)
+		if err != nil {
+			return nil, err
+		}
+		if e.afterGit != nil {
+			e.afterGit()
+		}
+		results, derived, startHead, err := e.deriveSourceRules(ctx, e.Source, rules, git, now)
+		if err != nil {
+			return nil, err
+		}
+		for i, subjects := range derived {
+			if subjects == nil {
+				continue
+			}
+			if err := e.mem.reconcileRule(rules[i], subjects, startHead, now); err != nil {
+				return nil, fmt.Errorf("rule %s: %w", rules[i].ID, err)
+			}
+		}
+		return results, nil
+	}
+	if e.cache == nil || e.cache.sourceKey != e.Store {
 		e.cache = newEvalCache(e.Store)
 	}
 	readRules := e.effective
@@ -227,7 +297,7 @@ func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult,
 		}); err != nil {
 			return nil, err
 		}
-		git, err := readGit(ctx, e.Root, rules, &e.cache.git, e.onGitExec)
+		git, err := readGit(ctx, e.Root, rules, &e.cache.git, e.gitCheckIO(), e.onGitExec)
 		if err != nil {
 			return nil, err
 		}
@@ -283,12 +353,16 @@ func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult,
 }
 
 func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, now time.Time, cache *evalCache) ([]RuleResult, []map[string]*condition, error) {
+	ts := e.storeSource()
 	if cache != nil {
-		if err := cache.syncKinds(rd, rules, now, e.onEventQuery); err != nil {
+		if err := ts.syncKinds(rd, cache, rules, now, e.onEventQuery); err != nil {
 			return nil, nil, err
 		}
 	}
-	facts := readStoreFacts(rd)
+	facts := ts.readFacts(rd)
+	activeSubjects := func(ruleID string, n int) (map[string][]string, []string, error) {
+		return ts.activeCompositeSubjects(rd, ruleID, n)
+	}
 	results := make([]RuleResult, len(rules))
 	derived := make([]map[string]*condition, len(rules))
 	for i, r := range rules {
@@ -299,6 +373,10 @@ func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, 
 		}
 		*result = RuleResult{ID: r.ID, GroupBy: groupBy, Disabled: !r.Enabled, Unsupported: r.evaluatorReason()}
 		if result.Disabled || result.Unsupported != "" {
+			continue
+		}
+		if r.Scope != "" && r.Scope != "*" && !isTillrScope(r.Scope) {
+			result.Unsupported = fmt.Sprintf("unsupported scope %q", r.Scope)
 			continue
 		}
 		rf, outOfScope, err := facts.forRule(r, git)
@@ -322,9 +400,9 @@ func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, 
 		var subjects map[string]*condition
 		var n int
 		if cache != nil {
-			subjects, n, err = deriveCached(rd, r, now, rf, cache)
+			subjects, n, err = deriveCached(r, now, rf, cache, activeSubjects)
 		} else {
-			subjects, n, err = derive(rd, r, now, rf)
+			subjects, n, err = ts.deriveRule(rd, r, now, rf)
 		}
 		var unreadable unreadableProjection
 		if errors.As(err, &unreadable) {
@@ -337,6 +415,63 @@ func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, 
 		result.Skipped, derived[i] = n, subjects
 	}
 	return results, derived, nil
+}
+
+func (e Evaluator) deriveSourceRules(ctx context.Context, src ObservationSource, rules []Rule, git gitSnapshot, now time.Time) ([]RuleResult, []map[string]*condition, int64, error) {
+	var activeSubjects activeCompositeFunc
+	if e.mem != nil {
+		activeSubjects = e.mem.activeCompositeSubjects
+	}
+	results := make([]RuleResult, len(rules))
+	derived := make([]map[string]*condition, len(rules))
+	var maxHead int64
+	for i, r := range rules {
+		result := &results[i]
+		groupBy := r.When.GroupBy
+		if len(r.When.GroupByList) >= 2 {
+			groupBy = strings.Join(r.When.GroupByList, ", ")
+		}
+		*result = RuleResult{ID: r.ID, GroupBy: groupBy, Disabled: !r.Enabled, Unsupported: r.evaluatorReason()}
+		if result.Disabled || result.Unsupported != "" {
+			continue
+		}
+		rf, outOfScope, unsupported, err := prepareSourceRule(ctx, src, r, git)
+		if err != nil {
+			result.Unreadable = err.Error()
+			continue
+		}
+		if unsupported != "" {
+			result.Unsupported = unsupported
+			continue
+		}
+		if outOfScope != "" {
+			result.OutOfScope = outOfScope
+			continue
+		}
+		if r.When.Pattern == LagBehind {
+			lag, err := deriveLag(r, git, now)
+			if err != nil {
+				result.Unreadable = err.Error()
+				continue
+			}
+			derived[i] = map[string]*condition{"global": lag}
+			continue
+		}
+		subjects, n, headSeq, err := deriveFromSource(ctx, src, r, now, rf, activeSubjects)
+		var unreadable unreadableProjection
+		if errors.As(err, &unreadable) {
+			result.Unreadable = unreadable.Error()
+			continue
+		}
+		if err != nil {
+			return nil, nil, 0, fmt.Errorf("rule %s: %w", r.ID, err)
+		}
+		if headSeq > maxHead {
+			maxHead = headSeq
+		}
+		result.Skipped, derived[i] = n, subjects
+	}
+	return results, derived, maxHead, nil
 }
 
 type episode struct {

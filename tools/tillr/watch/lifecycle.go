@@ -39,6 +39,28 @@ func (a episodeAction) refuse(id string) error {
 
 // Ack records an actor's claim on an open episode. It does not evaluate rules.
 func (e Evaluator) Ack(ctx context.Context, id, by string, note *string) error {
+	if e.Store == nil {
+		if e.Source == nil {
+			return fmt.Errorf("watch: Evaluator requires Store or Source")
+		}
+		now := e.now()
+		return e.mem.act(id, acknowledgedKind, now, func(ep *memEpisode, a episodeAction) error {
+			if by == "" {
+				return fmt.Errorf("%w: --by is required and must not be empty", a.refuse(id))
+			}
+			if a.state != "open" {
+				return a.refuse(id)
+			}
+			a.payload["by"], a.payload["note"] = by, note
+			ep.state = "acknowledged"
+			ep.ackedBy = sql.NullString{String: by, Valid: true}
+			if note != nil {
+				ep.ackedNote = sql.NullString{String: *note, Valid: true}
+			}
+			ep.ackedAt = sql.NullInt64{Int64: now.UnixMilli(), Valid: true}
+			return nil
+		})
+	}
 	return e.act(ctx, id, acknowledgedKind, func(tx *store.Tx, a episodeAction, now time.Time) error {
 		if by == "" {
 			return fmt.Errorf("%w: --by is required and must not be empty", a.refuse(id))
@@ -55,6 +77,43 @@ func (e Evaluator) Ack(ctx context.Context, id, by string, note *string) error {
 // Silence records new silence terms, retaining any acknowledgement. A nil
 // until means to silence until the fingerprint changes.
 func (e Evaluator) Silence(ctx context.Context, id string, until, reason *string) error {
+	if e.Store == nil {
+		if e.Source == nil {
+			return fmt.Errorf("watch: Evaluator requires Store or Source")
+		}
+		now := e.now()
+		return e.mem.act(id, silencedKind, now, func(ep *memEpisode, a episodeAction) error {
+			var deadline sql.NullInt64
+			var fp sql.NullString
+			a.payload["reason"] = reason
+			if until != nil {
+				expires, err := silenceTime(*until, now)
+				if err != nil {
+					return fmt.Errorf("%s: %w", a.refuse(id), err)
+				}
+				ms := expires.UnixMilli()
+				if expires.After(time.UnixMilli(ms)) {
+					ms++
+				}
+				deadline = sql.NullInt64{Int64: ms, Valid: true}
+				a.payload["until"] = expires.UTC().Format(time.RFC3339Nano)
+			}
+			if a.state == "resolved" {
+				return a.refuse(id)
+			}
+			if until == nil {
+				if a.fingerprint == "" {
+					return fmt.Errorf("%w and has no fingerprint; use --until", a.refuse(id))
+				}
+				fp = sql.NullString{String: a.fingerprint, Valid: true}
+				a.payload["until_change"] = true
+			}
+			ep.state = "silenced"
+			ep.silenceUntilMS = deadline
+			ep.silenceOnFingerprint = fp
+			return nil
+		})
+	}
 	return e.act(ctx, id, silencedKind, func(tx *store.Tx, a episodeAction, now time.Time) error {
 		var deadline, fingerprint any
 		a.payload["reason"] = reason
@@ -106,6 +165,27 @@ func silenceTime(input string, now time.Time) (time.Time, error) {
 // Resolve records a manual resolution through the store head at the time of
 // the action, excluding the resolution event itself.
 func (e Evaluator) Resolve(ctx context.Context, id, note string) error {
+	if e.Store == nil {
+		if e.Source == nil {
+			return fmt.Errorf("watch: Evaluator requires Store or Source")
+		}
+		now := e.now()
+		return e.mem.act(id, resolvedKind, now, func(ep *memEpisode, a episodeAction) error {
+			if note == "" {
+				return fmt.Errorf("%w: --reason is required and must not be empty", a.refuse(id))
+			}
+			if a.state == "resolved" {
+				return a.refuse(id)
+			}
+			seq := max(e.mem.lastSourceSeq, ep.lastObservedSeq)
+			a.payload["resolved_seq"], a.payload["reason"], a.payload["note"] = seq, "manual", note
+			ep.state = "resolved"
+			ep.resolvedSeq = sql.NullInt64{Int64: seq, Valid: true}
+			ep.resolvedAt = sql.NullInt64{Int64: now.UnixMilli(), Valid: true}
+			ep.resolvedReason = sql.NullString{String: "manual", Valid: true}
+			return nil
+		})
+	}
 	return e.act(ctx, id, resolvedKind, func(tx *store.Tx, a episodeAction, now time.Time) error {
 		if note == "" {
 			return fmt.Errorf("%w: --reason is required and must not be empty", a.refuse(id))
@@ -126,6 +206,12 @@ func (e Evaluator) Resolve(ctx context.Context, id, note string) error {
 // RefuseEpisode reports an invalid command option alongside the episode state
 // without editing the store.
 func (e Evaluator) RefuseEpisode(ctx context.Context, id string, reason error) error {
+	if e.Store == nil {
+		if e.Source == nil {
+			return fmt.Errorf("watch: Evaluator requires Store or Source")
+		}
+		return e.mem.refuseEpisode(id, reason)
+	}
 	return e.Store.ReadTx(ctx, func(rd *store.Reader) error {
 		a, err := readEpisodeAction(rd, id)
 		if err != nil {

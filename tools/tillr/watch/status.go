@@ -39,6 +39,31 @@ type OwnerStatus struct {
 // ReadStatus reads existing watch rows without migrating the store or writing
 // attachment files. attached queries the kernel for each stored owner.
 func (e Evaluator) ReadStatus(ctx context.Context, attached func(string) (bool, error)) (Status, error) {
+	if e.Store == nil {
+		if e.Source == nil {
+			return Status{}, fmt.Errorf("watch: Evaluator requires Store or Source")
+		}
+		if err := requireRoot(e.Root, e.Rules); err != nil {
+			return Status{}, err
+		}
+		results, err := e.RuleResults(ctx)
+		if err != nil {
+			return Status{}, err
+		}
+		s := Status{Rules: results, Alerts: []AlertStatus{}, Owners: []OwnerStatus{}}
+		e.mem.readStatusInto(&s, e.Rules)
+		for i := range s.Owners {
+			owner := &s.Owners[i]
+			owner.Attached, err = attached(owner.Owner)
+			if err != nil {
+				return Status{}, err
+			}
+			if !owner.Attached {
+				owner.Since = nil
+			}
+		}
+		return s, nil
+	}
 	var rules []Rule
 	if err := e.Store.ReadTx(ctx, func(rd *store.Reader) error {
 		var err error

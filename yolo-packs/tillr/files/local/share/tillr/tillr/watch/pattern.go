@@ -1,20 +1,15 @@
 package watch
 
 import (
-	"bytes"
+	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
-	"maps"
 	"math"
 	"reflect"
 	"slices"
 	"strings"
 	"time"
-
-	"github.com/mschulkind-oss/tillr/store"
 )
 
 type observation struct {
@@ -152,74 +147,14 @@ func sharedPair(pairs [][2]string, v any, previous observation, hasPrevious bool
 	return [2]string{}, false
 }
 
-type cachedEvent struct {
-	obs     observation
-	seat    sql.NullString
-	typ     sql.NullString
-	id      sql.NullString
-	rev     sql.NullInt64
-	payload any
-}
-
-func scanCachedEvent(rows *sql.Rows) (cachedEvent, error) {
-	var ev cachedEvent
-	var raw []byte
-	if err := rows.Scan(&ev.obs.Seq, &ev.obs.TS, &ev.obs.Kind, &ev.seat, &ev.typ, &ev.id, &ev.rev, &raw); err != nil {
-		return cachedEvent{}, err
-	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.UseNumber()
-	if err := decoder.Decode(&ev.payload); err != nil {
-		return cachedEvent{}, err
-	}
-	return ev, nil
-}
-
-func (ev *cachedEvent) lookup(name string) any {
-	switch name {
-	case "seq":
-		return ev.obs.Seq
-	case "ts":
-		return ev.obs.TS
-	case "kind":
-		return ev.obs.Kind
-	case "seat":
-		if ev.seat.Valid {
-			return ev.seat.String
-		}
-		return nil
-	case "object_type":
-		if ev.typ.Valid {
-			return ev.typ.String
-		}
-		return nil
-	case "object_id":
-		if ev.id.Valid {
-			return ev.id.String
-		}
-		return nil
-	case "revision":
-		if ev.rev.Valid {
-			return ev.rev.Int64
-		}
-		return nil
-	}
-	v := ev.payload
-	for _, key := range strings.Split(name, ".") {
-		m, _ := v.(map[string]any)
-		v = m[key]
-	}
-	return v
-}
-
-// kindCache holds every event of one kind with seq <= lastSeq and ts >= loadedFromTS,
-// in strictly increasing seq order. Because events is append-only, later passes read
-// only the tail after lastSeq.
+// kindCache holds every observation of one kind with seq <= lastSeq and ts >= loadedFromTS,
+// in strictly increasing seq order. Because streams are append-only within an epoch,
+// later passes read only the tail after lastSeq.
 type kindCache struct {
 	loadedFromTS int64
 	lastSeq      int64
 	gen          uint64
-	events       []cachedEvent
+	events       []Observation
 }
 
 type ruleCacheEntry struct {
@@ -235,17 +170,17 @@ type ruleCacheEntry struct {
 }
 
 type evalCache struct {
-	store *store.Store
-	kinds map[string]*kindCache
-	rules map[string]*ruleCacheEntry
-	git   gitCache
+	sourceKey any
+	kinds     map[string]*kindCache
+	rules     map[string]*ruleCacheEntry
+	git       gitCache
 }
 
-func newEvalCache(s *store.Store) *evalCache {
+func newEvalCache(sourceKey any) *evalCache {
 	return &evalCache{
-		store: s,
-		kinds: map[string]*kindCache{},
-		rules: map[string]*ruleCacheEntry{},
+		sourceKey: sourceKey,
+		kinds:     map[string]*kindCache{},
+		rules:     map[string]*ruleCacheEntry{},
 	}
 }
 
@@ -254,119 +189,6 @@ func windowStartMillis(w When, now time.Time) int64 {
 		return math.MinInt64
 	}
 	return now.Add(-w.Window).UnixMilli()
-}
-
-func (c *evalCache) syncKinds(rd *store.Reader, rules []Rule, now time.Time, onQuery func(kind string, sinceSeq int64, rows int)) error {
-	kindWindowStart := map[string]int64{}
-	for _, r := range rules {
-		if !r.Enabled || r.evaluatorReason() != "" || r.When.Pattern == LagBehind {
-			continue
-		}
-		ws := windowStartMillis(r.When, now)
-		for _, k := range r.Reads.Events {
-			if prev, ok := kindWindowStart[k]; !ok || ws < prev {
-				kindWindowStart[k] = ws
-			}
-		}
-	}
-	if len(kindWindowStart) == 0 {
-		return nil
-	}
-	snapHead, err := rd.EventHeadSeq()
-	if err != nil {
-		return err
-	}
-	for _, kind := range slices.Sorted(maps.Keys(kindWindowStart)) {
-		windowStart := kindWindowStart[kind]
-		kc := c.kinds[kind]
-		if kc != nil && snapHead >= kc.lastSeq && windowStart >= kc.loadedFromTS {
-			if snapHead > kc.lastSeq {
-				since := kc.lastSeq
-				rows, err := rd.Query(`SELECT seq,ts,kind,seat,object_type,object_id,revision,payload FROM events
- WHERE kind = ? AND seq > ? AND seq <= ? ORDER BY seq`, kind, since, snapHead)
-				if err != nil {
-					return err
-				}
-				scanned := 0
-				added := false
-				for rows.Next() {
-					scanned++
-					ev, err := scanCachedEvent(rows)
-					if err != nil {
-						rows.Close()
-						return err
-					}
-					if ev.obs.TS >= windowStart {
-						kc.events = append(kc.events, ev)
-						added = true
-					}
-				}
-				err = rows.Err()
-				rows.Close()
-				if err != nil {
-					return err
-				}
-				if onQuery != nil {
-					onQuery(kind, since, scanned)
-				}
-				kc.lastSeq = snapHead
-				if added {
-					kc.gen++
-				}
-			}
-			if windowStart > kc.loadedFromTS {
-				if len(kc.events) > 0 {
-					kept := kc.events[:0]
-					for _, ev := range kc.events {
-						if ev.obs.TS >= windowStart {
-							kept = append(kept, ev)
-						}
-					}
-					clear(kc.events[len(kept):])
-					kc.events = kept
-				}
-				kc.loadedFromTS = windowStart
-			}
-			continue
-		}
-		var nextGen uint64 = 1
-		if kc != nil {
-			nextGen = kc.gen + 1
-		}
-		if snapHead == 0 {
-			c.kinds[kind] = &kindCache{loadedFromTS: windowStart, lastSeq: 0, gen: nextGen}
-			continue
-		}
-		rows, err := rd.Query(`SELECT seq,ts,kind,seat,object_type,object_id,revision,payload FROM events
- WHERE kind = ? AND seq <= ? AND ts >= ? ORDER BY seq`, kind, snapHead, windowStart)
-		if err != nil {
-			return err
-		}
-		var events []cachedEvent
-		for rows.Next() {
-			ev, err := scanCachedEvent(rows)
-			if err != nil {
-				rows.Close()
-				return err
-			}
-			events = append(events, ev)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return err
-		}
-		if onQuery != nil {
-			onQuery(kind, 0, len(events))
-		}
-		c.kinds[kind] = &kindCache{
-			loadedFromTS: windowStart,
-			lastSeq:      snapHead,
-			gen:          nextGen,
-			events:       events,
-		}
-	}
-	return nil
 }
 
 func ruleCacheable(r Rule) bool {
@@ -434,20 +256,20 @@ func (c *evalCache) gensMatch(want []uint64, kinds []string) bool {
 	return true
 }
 
-func (c *evalCache) forEachEvent(kinds []string, visit func(*cachedEvent) error) error {
+func (c *evalCache) forEachEvent(kinds []string, visit func(Observation) error) error {
 	if len(kinds) == 1 {
 		kc := c.kinds[kinds[0]]
 		if kc == nil {
 			return nil
 		}
-		for i := range kc.events {
-			if err := visit(&kc.events[i]); err != nil {
+		for _, ev := range kc.events {
+			if err := visit(ev); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	slicesList := make([][]cachedEvent, len(kinds))
+	slicesList := make([][]Observation, len(kinds))
 	indices := make([]int, len(kinds))
 	for i, k := range kinds {
 		if kc := c.kinds[k]; kc != nil {
@@ -461,7 +283,7 @@ func (c *evalCache) forEachEvent(kinds []string, visit func(*cachedEvent) error)
 			if indices[i] >= len(evs) {
 				continue
 			}
-			seq := evs[indices[i]].obs.Seq
+			seq := evs[indices[i]].Seq
 			if best == -1 || seq < bestSeq {
 				best, bestSeq = i, seq
 			}
@@ -469,7 +291,7 @@ func (c *evalCache) forEachEvent(kinds []string, visit func(*cachedEvent) error)
 		if best == -1 {
 			return nil
 		}
-		ev := &slicesList[best][indices[best]]
+		ev := slicesList[best][indices[best]]
 		indices[best]++
 		if err := visit(ev); err != nil {
 			return err
@@ -541,40 +363,24 @@ func decodeCompositeSubject(key string, n int) ([]string, bool) {
 	return out, true
 }
 
-func activeCompositeSubjects(rd *store.Reader, ruleID string, n int) (map[string][]string, []string, error) {
-	exists, err := tableExists(rd, "alert_episodes")
-	if err != nil || !exists {
-		return nil, nil, err
+type activeCompositeFunc func(ruleID string, n int) (map[string][]string, []string, error)
+
+func toBundleObs(rec Observation, fpNames []string) observation {
+	lookup := rec.Lookup
+	return observation{
+		Seq:         rec.Seq,
+		TS:          rec.TS,
+		Kind:        rec.Kind,
+		fingerprint: fingerprint(fpNames, lookup),
+		lookup:      lookup,
 	}
-	rows, err := rd.Query(`SELECT subject_key FROM alert_episodes WHERE rule_id=? AND state!='resolved'`, ruleID)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer rows.Close()
-	tuples := map[string][]string{}
-	var keys []string
-	for rows.Next() {
-		var key string
-		if err := rows.Scan(&key); err != nil {
-			return nil, nil, err
-		}
-		if tuple, ok := decodeCompositeSubject(key, n); ok {
-			tuples[key] = tuple
-			keys = append(keys, key)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, err
-	}
-	slices.Sort(keys)
-	return tuples, keys, nil
 }
 
-func observeCompositeEvent(
+func observeCompositeRecord(
 	r Rule,
 	names []string,
-	ev cachedEvent,
-	facts ruleFacts,
+	rec Observation,
+	facts subjectFacts,
 	nowMillis int64,
 	subjects map[string]*condition,
 	subjectTuples map[string][]string,
@@ -584,8 +390,9 @@ func observeCompositeEvent(
 	tuple := make([]string, 0, n)
 	seenNonString := false
 	prefixValid := true
+	lookup := rec.Lookup
 	for _, name := range names {
-		v := ev.lookup(name)
+		v := lookup(name)
 		if !seenNonString {
 			if s, ok := v.(string); ok {
 				tuple = append(tuple, s)
@@ -612,10 +419,8 @@ func observeCompositeEvent(
 			c = &condition{}
 			subjects[subject] = c
 		}
-		obs := ev.obs
-		obs.fingerprint = fingerprint(r.When.Fingerprint, ev.lookup)
-		obs.lookup = ev.lookup
-		c.observe(r.When, obs, expressionValues{event: ev.lookup, projection: projection, nowMillis: nowMillis})
+		obs := toBundleObs(rec, r.When.Fingerprint)
+		c.observe(r.When, obs, expressionValues{event: lookup, projection: projection, nowMillis: nowMillis})
 		return nil
 	}
 	if prefixValid && len(tuple) >= 1 && len(tuple) < n && r.When.ClearWhen != nil {
@@ -623,13 +428,13 @@ func observeCompositeEvent(
 		if err != nil {
 			return err
 		}
-		if r.When.ClearWhen.eval(expressionValues{event: ev.lookup, projection: projection, nowMillis: nowMillis}) {
+		if r.When.ClearWhen.eval(expressionValues{event: lookup, projection: projection, nowMillis: nowMillis}) {
 			for subject, subTuple := range subjectTuples {
 				if len(subTuple) == n && slices.Equal(subTuple[:len(tuple)], tuple) {
 					c := subjects[subject]
 					c.events = c.events[:0]
 					c.hadPrevious = false
-					c.clears = append(c.clears, ev.obs.Seq)
+					c.clears = append(c.clears, rec.Seq)
 				}
 			}
 			return nil
@@ -639,7 +444,47 @@ func observeCompositeEvent(
 	return nil
 }
 
-func deriveCached(rd *store.Reader, r Rule, now time.Time, facts ruleFacts, cache *evalCache) (map[string]*condition, int, error) {
+func observeRecord(
+	r Rule,
+	names []string,
+	rec Observation,
+	facts subjectFacts,
+	nowMillis int64,
+	subjects map[string]*condition,
+	subjectTuples map[string][]string,
+	skipped *int,
+) error {
+	if len(names) >= 2 {
+		return observeCompositeRecord(r, names, rec, facts, nowMillis, subjects, subjectTuples, skipped)
+	}
+	lookup := rec.Lookup
+	subject := "global"
+	if r.When.GroupBy != "global" {
+		var ok bool
+		subject, ok = lookup(r.When.GroupBy).(string)
+		if !ok {
+			*skipped++
+			return nil
+		}
+	}
+	projection, inScope, err := facts.forSubject(subject)
+	if err != nil {
+		return err
+	}
+	if !inScope {
+		return nil
+	}
+	c := subjects[subject]
+	if c == nil {
+		c = &condition{}
+		subjects[subject] = c
+	}
+	obs := toBundleObs(rec, r.When.Fingerprint)
+	c.observe(r.When, obs, expressionValues{event: lookup, projection: projection, nowMillis: nowMillis})
+	return nil
+}
+
+func deriveCached(r Rule, now time.Time, facts subjectFacts, cache *evalCache, activeSubjects activeCompositeFunc) (map[string]*condition, int, error) {
 	kinds := r.Reads.Events
 	if len(kinds) == 0 {
 		return nil, 0, nil
@@ -649,9 +494,9 @@ func deriveCached(rd *store.Reader, r Rule, now time.Time, facts ruleFacts, cach
 		seededTuples map[string][]string
 		activeKeys   []string
 	)
-	if len(names) >= 2 {
+	if len(names) >= 2 && activeSubjects != nil {
 		var err error
-		seededTuples, activeKeys, err = activeCompositeSubjects(rd, r.ID, len(names))
+		seededTuples, activeKeys, err = activeSubjects(r.ID, len(names))
 		if err != nil {
 			return nil, 0, err
 		}
@@ -683,55 +528,26 @@ func deriveCached(rd *store.Reader, r Rule, now time.Time, facts ruleFacts, cach
 		maxExcludedOldTS int64 = math.MinInt64
 		minFutureTS      int64 = math.MaxInt64
 	)
-	err := cache.forEachEvent(kinds, func(ev *cachedEvent) error {
-		if ev.obs.TS < winLo {
-			if ev.obs.TS > maxExcludedOldTS {
-				maxExcludedOldTS = ev.obs.TS
+	err := cache.forEachEvent(kinds, func(rec Observation) error {
+		if rec.TS < winLo {
+			if rec.TS > maxExcludedOldTS {
+				maxExcludedOldTS = rec.TS
 			}
 			return nil
 		}
-		if ev.obs.TS > winHi {
-			if ev.obs.TS < minFutureTS {
-				minFutureTS = ev.obs.TS
+		if rec.TS > winHi {
+			if rec.TS < minFutureTS {
+				minFutureTS = rec.TS
 			}
 			return nil
 		}
-		if ev.obs.TS < minIncludedTS {
-			minIncludedTS = ev.obs.TS
+		if rec.TS < minIncludedTS {
+			minIncludedTS = rec.TS
 		}
-		if ev.obs.TS > maxIncludedTS {
-			maxIncludedTS = ev.obs.TS
+		if rec.TS > maxIncludedTS {
+			maxIncludedTS = rec.TS
 		}
-		evCopy := *ev
-		if len(names) >= 2 {
-			return observeCompositeEvent(r, names, evCopy, facts, winHi, subjects, subjectTuples, &skipped)
-		}
-		subject := "global"
-		if r.When.GroupBy != "global" {
-			var ok bool
-			subject, ok = evCopy.lookup(r.When.GroupBy).(string)
-			if !ok {
-				skipped++
-				return nil
-			}
-		}
-		projection, inScope, err := facts.forSubject(subject)
-		if err != nil {
-			return err
-		}
-		if !inScope {
-			return nil
-		}
-		c := subjects[subject]
-		if c == nil {
-			c = &condition{}
-			subjects[subject] = c
-		}
-		obs := evCopy.obs
-		obs.fingerprint = fingerprint(r.When.Fingerprint, evCopy.lookup)
-		obs.lookup = evCopy.lookup
-		c.observe(r.When, obs, expressionValues{event: evCopy.lookup, projection: projection, nowMillis: winHi})
-		return nil
+		return observeRecord(r, names, rec, facts, winHi, subjects, subjectTuples, &skipped)
 	})
 	if err != nil {
 		return nil, 0, err
@@ -752,71 +568,48 @@ func deriveCached(rd *store.Reader, r Rule, now time.Time, facts ruleFacts, cach
 	return subjects, skipped, nil
 }
 
-func derive(rd *store.Reader, r Rule, now time.Time, facts ruleFacts) (map[string]*condition, int, error) {
+func deriveFromSource(
+	ctx context.Context,
+	src ObservationSource,
+	r Rule,
+	now time.Time,
+	facts subjectFacts,
+	activeSubjects activeCompositeFunc,
+) (map[string]*condition, int, int64, error) {
 	kinds := r.Reads.Events
-	if len(kinds) == 0 {
-		return nil, 0, nil
+	if len(kinds) == 0 || src == nil {
+		return nil, 0, 0, nil
 	}
 	names := r.When.groupByNames()
 	subjects := map[string]*condition{}
 	subjectTuples := map[string][]string{}
-	if len(names) >= 2 {
-		seededTuples, _, err := activeCompositeSubjects(rd, r.ID, len(names))
+	if len(names) >= 2 && activeSubjects != nil {
+		seededTuples, _, err := activeSubjects(r.ID, len(names))
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, 0, err
 		}
 		for key, tuple := range seededTuples {
 			subjects[key] = &condition{}
 			subjectTuples[key] = tuple
 		}
 	}
-	args := []any{windowStartMillis(r.When, now), now.UnixMilli()}
-	for _, k := range kinds {
-		args = append(args, k)
-	}
-	rows, err := rd.Query(`SELECT seq,ts,kind,seat,object_type,object_id,revision,payload FROM events
- WHERE ts >= ? AND ts <= ? AND kind IN (?`+strings.Repeat(",?", len(kinds)-1)+`) ORDER BY seq`, args...)
+	winLo := windowStartMillis(r.When, now)
+	winHi := now.UnixMilli()
+	records, cursor, skippedLines, err := src.ReadWindow(ctx, winLo, kinds)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
-	defer rows.Close()
-	skipped := 0
-	nowMillis := now.UnixMilli()
-	for rows.Next() {
-		ev, err := scanCachedEvent(rows)
-		if err != nil {
-			return nil, 0, err
-		}
-		if len(names) >= 2 {
-			if err := observeCompositeEvent(r, names, ev, facts, nowMillis, subjects, subjectTuples, &skipped); err != nil {
-				return nil, 0, err
-			}
+	skipped := skippedLines
+	for _, rec := range records {
+		if rec.TS < winLo || rec.TS > winHi {
 			continue
 		}
-		subject := "global"
-		if r.When.GroupBy != "global" {
-			var ok bool
-			subject, ok = ev.lookup(r.When.GroupBy).(string)
-			if !ok {
-				skipped++
-				continue
-			}
-		}
-		projection, inScope, err := facts.forSubject(subject)
-		if err != nil {
-			return nil, 0, err
-		}
-		if !inScope {
+		if !slices.Contains(kinds, rec.Kind) {
 			continue
 		}
-		c := subjects[subject]
-		if c == nil {
-			c = &condition{}
-			subjects[subject] = c
+		if err := observeRecord(r, names, rec, facts, winHi, subjects, subjectTuples, &skipped); err != nil {
+			return nil, 0, 0, err
 		}
-		ev.obs.fingerprint = fingerprint(r.When.Fingerprint, ev.lookup)
-		ev.obs.lookup = ev.lookup
-		c.observe(r.When, ev.obs, expressionValues{event: ev.lookup, projection: projection, nowMillis: nowMillis})
 	}
-	return subjects, skipped, rows.Err()
+	return subjects, skipped, cursor.Seq, nil
 }

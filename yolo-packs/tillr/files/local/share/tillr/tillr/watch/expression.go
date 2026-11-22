@@ -434,6 +434,8 @@ func (p *parser) valuesWithStrings(end string) ([]operand, []string) {
 
 func integer(v any) (int64, bool) {
 	switch n := v.(type) {
+	case int:
+		return int64(n), true
 	case int64:
 		return n, true
 	case json.Number:
@@ -507,9 +509,11 @@ func compare(op string, a, b any) bool {
 	}
 }
 
-// numberText exposes the two numeric representations the evaluator uses.
+// numberText exposes the numeric representations the evaluator uses.
 func numberText(v any) string {
 	switch n := v.(type) {
+	case int:
+		return strconv.FormatInt(int64(n), 10)
 	case int64:
 		return strconv.FormatInt(n, 10)
 	case json.Number:
@@ -555,7 +559,7 @@ func equal(a, b any) (same, compatible bool) {
 		}
 	}
 	switch x := a.(type) {
-	case int64, json.Number:
+	case int, int64, json.Number:
 		y := numberText(b)
 		if y == "" {
 			return false, false
