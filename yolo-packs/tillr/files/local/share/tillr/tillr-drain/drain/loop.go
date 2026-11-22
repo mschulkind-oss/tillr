@@ -2493,7 +2493,7 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		return laneOutcome{err: err}
 	}
 	noNewCommit := headSHA == baseSHA || headSHA == decision.DesignContinuationHead
-	if decision.Returned != nil && decision.Returned.WorkerSession != nil && !verifyNoVerdictReturn(decision.Returned) {
+	if decision.Returned != nil && decision.Returned.WorkerSession != nil && !verifyNoVerdictReturn(decision.Returned) && decision.Returned.Cause != RefusalPlanOutput {
 		previous := decision.Returned.WorkerSession.HeadSHA
 		// An evaluator can ask for evidence without asking for a code change.
 		// Keep the real base guard above, but let that retained commit be judged again.

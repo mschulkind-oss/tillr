@@ -66,6 +66,15 @@ func workerSessionReason(s *WorkerSession, req *run.Request) string {
 
 // captureWorkerSession snapshots a worker while its lane still belongs to the run.
 func (l *Loop) captureWorkerSession(ctx context.Context, c Candidate) (*WorkerSession, error) {
+	return l.captureSession(ctx, c, false)
+}
+
+// capturePlanSession snapshots a planner or classifier session while its lane still belongs to the run.
+func (l *Loop) capturePlanSession(ctx context.Context, c Candidate) (*WorkerSession, error) {
+	return l.captureSession(ctx, c, true)
+}
+
+func (l *Loop) captureSession(ctx context.Context, c Candidate, allowClassification bool) (*WorkerSession, error) {
 	writerID := c.RunID
 	if c.Evaluator != nil || len(c.Writers) > 0 {
 		writerID = judgeWriterRun(c)
@@ -89,8 +98,13 @@ func (l *Loop) captureWorkerSession(ctx context.Context, c Candidate) (*WorkerSe
 		if err := json.Unmarshal(raw, &w); err != nil {
 			return err
 		}
-		writingNode := w.Decision.Workflow != nil && w.Decision.NodeIndex >= 0 && w.Decision.NodeIndex < len(w.Decision.Workflow.Stages) && w.Decision.Workflow.Stages[w.Decision.NodeIndex].Access == "write"
-		eligible := w.Decision.Seat == "" || w.Decision.Seat == "build" || (writingNode && w.Decision.BlockConflict == nil && w.Decision.DeskDocument == "")
+		var writingNode, planNode bool
+		if w.Decision.Workflow != nil && w.Decision.NodeIndex >= 0 && w.Decision.NodeIndex < len(w.Decision.Workflow.Stages) {
+			stage := w.Decision.Workflow.Stages[w.Decision.NodeIndex]
+			writingNode = stage.Access == "write"
+			planNode = allowClassification && classificationNode(stage)
+		}
+		eligible := w.Decision.Seat == "" || w.Decision.Seat == "build" || ((writingNode || planNode) && w.Decision.BlockConflict == nil && w.Decision.DeskDocument == "")
 		if w.Decision.RunRequest != nil && w.Decision.RunRequest.RunID == writerID && eligible {
 			req = w.Decision.RunRequest
 			decision = w.Decision
@@ -385,5 +399,53 @@ func (l *Loop) stageWorkerSession(d *Decision, spec *StageSpec) error {
 		}
 	}
 	spec.SessionID = s.SessionID
+	if d.Returned.Cause == RefusalPlanOutput && d.Returned.RunID != "" && d.RunRequest != nil {
+		if err := copyPreservedPlanOutputs(nodeOutputsDir(l.cfg.Root, d.Returned.RunID), nodeOutputsDir(l.cfg.Root, d.RunRequest.RunID)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// copyPreservedPlanOutputs carries regular non-delivery files (such as do-it-now or
+// proposal) into a resumed planner turn's output directory so finished work is kept.
+func copyPreservedPlanOutputs(srcDir, dstDir string) error {
+	entries, err := os.ReadDir(srcDir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == deliveryOutput {
+			continue
+		}
+		src := filepath.Join(srcDir, name)
+		info, err := os.Lstat(src)
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		dst := filepath.Join(dstDir, name)
+		if _, err := os.Lstat(dst); err == nil {
+			continue
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		raw, err := os.ReadFile(src)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(dstDir, 0755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(dst, raw, 0644); err != nil {
+			return err
+		}
+	}
 	return nil
 }

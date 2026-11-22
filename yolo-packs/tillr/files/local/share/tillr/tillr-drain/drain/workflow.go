@@ -1069,8 +1069,13 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		if err := l.nodeOutcome(ctx, d, "failed"); err != nil {
 			return true, err
 		}
+		refusalStep := RefusalNodeOutput
+		var parseErr deliveryParseError
+		if errors.As(outputErr, &parseErr) && classificationNode(stage) {
+			refusalStep = RefusalPlanOutput
+		}
 		c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: base, HeadSHA: head, RefusalDetail: outputErr.Error()}
-		if err := l.refuse(ctx, c, result, RefusalNodeOutput); err != nil {
+		if err := l.refuse(ctx, c, result, refusalStep); err != nil {
 			return true, err
 		}
 		if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, outputErr.Error()); stop != "" {

@@ -310,6 +310,12 @@ func (l *Loop) recordRefusal(ctx context.Context, candidate Candidate, step stri
 					return err
 				}
 			}
+		case RefusalPlanOutput:
+			var err error
+			payload.WorkerSession, err = l.capturePlanSession(ctx, candidate)
+			if err != nil {
+				return err
+			}
 		case RefusalPlanWrong, RefusalDeliveryOrder:
 			// Return the feedback, not a session working on the wrong plan or target.
 		default:
