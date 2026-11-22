@@ -1,0 +1,23 @@
+# The 2026-11-21 request called for notice when a heavy runner attempt faults
+# before producing a verdict. Read drain.heavy-fault events from the last hour,
+# grouped by tip commit.
+[[rule]]
+id = "drain-heavy-fault"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.heavy-fault"]
+
+[rule.when]
+group_by = "tip_sha"
+pattern = "predicate_match"
+window = "1h"
+
+[rule.guidance]
+summary = "The heavy runner faulted on tip commit {{subject}}."
+check = ["Read the fault text in the event's detail field and check the proof worktree under .tillr/lanes/.rolling."]
+do = ["Identify what stopped the heavy runner from completing a proof run on {{subject}}."]
+
+[rule.delivery]
+receiver = "foreground"
