@@ -1271,11 +1271,11 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 		decision.DeferredBy = heldBy
 	case p.policy == nil:
 		decision.Action, decision.Reason = ActionHold, ReasonNoPolicy
+	case item.Command == nil && attempt.backend != "" && !policyHasBackend(p.policy, attempt.backend):
+		decision.Action, decision.Reason, decision.DeferredBy = ActionHold, backendMissingReason(item.Seat, attempt.backend), attempt.backend
 	case windowShut:
 		decision.Action, decision.Reason = ActionHold, ReasonBackendWindow
 		decision.DeferredBy = backendWaitStart
-	case attempt.infrastructureFailure && !attempt.quotaRoute && !policyHasBackend(p.policy, attempt.backend):
-		decision.Action, decision.Reason, decision.DeferredBy = ActionHold, ReasonNoPolicy, attempt.backend
 	case p.tick.MaxDispatches != nil && p.dispatched >= *p.tick.MaxDispatches:
 		decision.Action, decision.Reason = ActionHold, ReasonNoLane
 	default:
@@ -2065,6 +2065,13 @@ type attempt struct {
 func policyHasBackend(policy *Policy, backend string) bool {
 	_, ok := policy.Backends[backend]
 	return ok
+}
+
+func backendMissingReason(seat, backend string) string {
+	if seat == "" {
+		return fmt.Sprintf("%s: backend %s is not in the policy", ReasonBackendMissing, backend)
+	}
+	return fmt.Sprintf("%s: seat %s needs backend %s, which is not in the policy", ReasonBackendMissing, seat, backend)
 }
 
 // checkOverrides refuses a policy whose override map names an item the store does not

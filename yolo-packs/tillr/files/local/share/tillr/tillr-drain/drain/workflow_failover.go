@@ -69,9 +69,15 @@ func (l *Loop) recordWorkflowRestart(ctx context.Context, d Decision, base strin
 	if policy == nil {
 		return Usagef("workflow seat %s has no backend route", d.Seat)
 	}
-	request := policy.request(d.ItemID, d.LaneID, markRunID(d.RunRequest.RunID, reason), rec.Backend)
-	if request == nil {
-		return Usagef("workflow seat %s has no backend %s", d.Seat, rec.Backend)
+	runID := markRunID(d.RunRequest.RunID, reason)
+	var request *run.Request
+	if policyHasBackend(policy, rec.Backend) {
+		request = policy.request(d.ItemID, d.LaneID, runID, rec.Backend)
+	} else {
+		retained := *d.RunRequest
+		retained.RunID = runID
+		retained.Backend = rec.Backend
+		request = &retained
 	}
 	request.NodeID = d.Workflow.Stages[d.NodeIndex].ID
 	request.WorkingDir = d.RunRequest.WorkingDir

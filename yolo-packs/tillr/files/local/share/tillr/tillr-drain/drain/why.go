@@ -413,7 +413,7 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			row.Mover = "restore " + ref + " under the item's block and land it"
 		case d.Reason == ReasonQuestionOpen && d.QuestionID != "":
 			row.WaitingOn = append(row.WaitingOn, d.QuestionID)
-		case (d.Reason == ReasonBackendClosed || d.BackendHoldCause != "") && d.DeferredBy != "":
+		case (d.Reason == ReasonBackendClosed || strings.HasPrefix(d.Reason, ReasonBackendMissing) || d.BackendHoldCause != "") && d.DeferredBy != "":
 			row.WaitingOn = append(row.WaitingOn, d.DeferredBy)
 		case (d.Reason == ReasonDeskCapacity || d.Reason == ReasonDocumentDeskBusy || d.Reason == ReasonForkHeld || d.Reason == ReasonTrunkBroken || d.Reason == "awaits-rewrite" || strings.HasPrefix(d.Reason, ReasonRedCap+": ")) && d.DeferredBy != "":
 			row.WaitingOn = append(row.WaitingOn, d.DeferredBy)
@@ -970,7 +970,7 @@ func whyPresentation(d Decision) (class, where, mover string) {
 	if strings.HasPrefix(d.Reason, ReasonRedCap+": ") {
 		return "waits on work", "land", "the heavy runner; prove trunk or file its fixer"
 	}
-	if d.Action == ActionHold && (d.Reason == ReasonBackendClosed || d.Reason == ReasonBackendWindow) {
+	if d.Action == ActionHold && (d.Reason == ReasonBackendClosed || d.Reason == ReasonBackendWindow || strings.HasPrefix(d.Reason, ReasonBackendMissing)) {
 		rule := holdrules.For(d.Reason)
 		return rule.Class, rule.Where, rule.Mover
 	}
