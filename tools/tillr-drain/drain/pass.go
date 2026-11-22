@@ -1659,7 +1659,7 @@ func (l *Loop) writeHolds(ctx context.Context, writes []func(*store.Tx) error) e
 		return err
 	}
 	defer s.Close()
-	return s.WriteTx(ctx, func(tx *store.Tx) error {
+	return l.writeTx(ctx, s, func(tx *store.Tx) error {
 		for _, write := range writes {
 			if err := write(tx); err != nil {
 				return err
@@ -1670,6 +1670,7 @@ func (l *Loop) writeHolds(ctx context.Context, writes []func(*store.Tx) error) e
 }
 
 func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, mainSHA *string, at time.Time, generation *string) (ok bool, result *pendingWork, applyErr error) {
+	start := time.Now()
 	var reason, waitingOn string
 	if isDispatch(p.decision) {
 		defer func() {
@@ -1690,6 +1691,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			// A busy dispatch made no claim. Its decline was recorded or the
 			// loss was reported, so continue without failing the pass.
 			if store.IsBusy(applyErr) && ctx.Err() == nil {
+				l.recordBusyWrite("dispatch-claim", time.Since(start), l.cfg.Now())
 				applyErr = nil
 			}
 		}()

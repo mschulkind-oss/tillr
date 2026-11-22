@@ -546,6 +546,10 @@ type Loop struct {
 	// reportMu serializes the loop's report writes, so a caller's io.Writer need not be
 	// safe for concurrent use.
 	reportMu sync.Mutex
+	// busyWritesMu guards pendingBusyWrites, which holds writes refused as SQLITE_BUSY
+	// until the next successful store write commits them as StoreBusyKind events.
+	busyWritesMu      sync.Mutex
+	pendingBusyWrites []StoreBusyFact
 	// infraStreak is the run of consecutive infrastructure-class attempts. A candidate
 	// attempt — pass or fail — resets it. It is the exponent of the backoff the loop waits
 	// between attempts when it cannot dispatch anything, and it is not a stop condition:
