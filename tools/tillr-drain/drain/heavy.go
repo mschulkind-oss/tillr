@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -227,7 +228,7 @@ func (r HeavyRunner) run(ctx context.Context, requested string) (out heavyAttemp
 			// a refused compare-and-swap cannot replace the old pointer's time.
 			passed := []string{}
 			for _, check := range run.Checks {
-				if check.Result == "pass" {
+				if classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.HeavyCheckWord, Word: check.Result}).Outcome == checkresult.Pass {
 					passed = append(passed, check.CheckID)
 				}
 			}
@@ -400,13 +401,15 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 			}
 		}
 		run.Checks = checks
-		run.Result = "green"
+		run.Result = checkresult.Aggregate(checkresult.HeavyOrder, nil).Detail
+		classifiedChecks := make([]checkresult.Result, 0, len(run.Checks))
 		for i := range run.Checks {
 			check := &run.Checks[i]
 			if check.BudgetMS > 0 && check.DurationMS > check.BudgetMS {
 				check.OverBudgetMS = check.DurationMS - check.BudgetMS
 			}
-			if check.Result == "stalled" {
+			classified := classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.HeavyCheckWord, Word: check.Result})
+			if classified.Outcome == checkresult.Unknown && classified.Detail == checkresult.DetailStalled {
 				check.Stalls = 1
 				retry, err := r.Judge(ctx, dir, check.CheckID)
 				if err != nil {
@@ -416,10 +419,12 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 					return Externalf("stall retry for %s gave no verdict", check.CheckID)
 				}
 				heavyStoreStepProgress(ctx, retry[0].CheckID, retry[0].Result)
-				if retry[0].Result == "stalled" {
+				retryClassified := classifyCheck(checkresult.Observation{Check: retry[0].CheckID, Source: checkresult.HeavyCheckWord, Word: retry[0].Result})
+				if retryClassified.Outcome == checkresult.Unknown && retryClassified.Detail == checkresult.DetailStalled {
 					check.Stalls = 2
 					check.Result = "fail"
 					check.Detail = "second stall on the same tip"
+					classified = classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.HeavyCheckWord, Word: check.Result})
 				} else {
 					// A green retry does not erase the first stall, but it is not a failing verdict.
 					original := *check
@@ -427,6 +432,7 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 					check.Stalls = 1
 					check.Detail = "first stall; retry: " + check.Result
 					check.DurationMS += original.DurationMS
+					classified = retryClassified
 				}
 			}
 			// A completed retry is proof too. Persist it before another retry
@@ -437,15 +443,8 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 			if check.BudgetMS > 0 && check.DurationMS > check.BudgetMS {
 				check.OverBudgetMS = check.DurationMS - check.BudgetMS
 			}
-			switch check.Result {
-			case "fail":
-				if run.Result != "unknown" {
-					run.Result = "red"
-				}
-			case "pass", "unavailable":
-			default:
-				run.Result = "unknown"
-			}
+			classifiedChecks = append(classifiedChecks, classified)
+			run.Result = checkresult.Aggregate(checkresult.HeavyOrder, classifiedChecks).Detail
 		}
 		return nil
 	})
@@ -467,7 +466,7 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 	bisected := map[string]bool{}
 	for i := range run.Checks {
 		check := &run.Checks[i]
-		if check.Result != "fail" {
+		if classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.HeavyCheckWord, Word: check.Result}).Outcome != checkresult.Fail {
 			continue
 		}
 		against := ""
@@ -785,9 +784,10 @@ func (r HeavyRunner) oneLogged(ctx context.Context, sha, id string, removed ...s
 		if len(checks) != 1 || checks[0].CheckID != id {
 			return Externalf("attribution for %s at %s gave no verdict", id, sha)
 		}
-		switch checks[0].Result {
-		case "pass":
-		case "fail":
+		classified := classifyCheck(checkresult.Observation{Check: checks[0].CheckID, Source: checkresult.HeavyCheckWord, Word: checks[0].Result})
+		switch classified.Outcome {
+		case checkresult.Pass:
+		case checkresult.Fail:
 			red = true
 			logPath = checks[0].LogPath
 			if logPath == "" {

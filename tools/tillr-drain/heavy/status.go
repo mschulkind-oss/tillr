@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/store"
 	"os"
 	"os/exec"
@@ -15,6 +16,8 @@ import (
 
 // GreenRef is the single proof pointer. No rolling_state row is consulted.
 const GreenRef = "refs/tillr/green"
+
+var classifyCheck = checkresult.Classify
 
 // HeavyCheck carries a check's verdict and attribution, not just the program's exit.
 // A budget is a reported target; only a failing verdict or repeated stall is red.
@@ -243,10 +246,11 @@ func ReadStatus(ctx context.Context, root, storePath string) (HeavyStatus, error
 		status.Detail = run.Detail
 	}
 	for _, check := range run.Checks {
-		if check.Result == "fail" {
+		classified := classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.HeavyCheckWord, Word: check.Result})
+		if classified.Outcome == checkresult.Fail {
 			status.FailingChecks = append(status.FailingChecks, check)
 		}
-		if check.Result == "unavailable" {
+		if classified.Outcome == checkresult.Unavailable {
 			status.UnavailableChecks = append(status.UnavailableChecks, check)
 		}
 		if check.OverBudgetMS > 0 {

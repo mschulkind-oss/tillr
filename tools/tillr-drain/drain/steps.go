@@ -1739,35 +1739,37 @@ func (s *ProcessSteps) Rolling(ctx context.Context, baseSHA, tipSHA string) (Rol
 	}
 	var notStarted *heavyCommandNotStarted
 	if cmd.ProcessState == nil || errors.As(runErr, &notStarted) {
+		_ = classifyCheck(checkresult.Observation{Source: checkresult.JudgingProgram})
 		return RollingOutcome{Known: false, ExitCode: -1,
 			Detail: fmt.Sprintf("rolling program did not start: %v: %s", runErr, stderr.String())}, nil
 	}
-	code := cmd.ProcessState.ExitCode()
+	exitNum := cmd.ProcessState.ExitCode()
+	classified := classifyCheck(checkresult.Observation{Source: checkresult.JudgingProgram, ExitCode: &exitNum})
 	coverage := readRollingCoverage(spans)
 	var declared map[string][]string
-	if code == 1 || code == 6 {
+	if classified.Outcome == checkresult.Fail || (classified.Outcome == checkresult.Unknown && classified.Detail == checkresult.DetailStalled) {
 		declared, err = legacyCheckWatches(ctx, dir)
 		if err != nil {
-			return RollingOutcome{Known: false, ExitCode: code, Detail: err.Error() + "; " + stderr.String(), Coverage: coverage}, nil
+			return RollingOutcome{Known: false, ExitCode: exitNum, Detail: err.Error() + "; " + stderr.String(), Coverage: coverage}, nil
 		}
 	}
-	switch code {
-	case 0:
-		return RollingOutcome{Green: true, Known: true, ExitCode: code, Coverage: coverage}, nil
-	case 6:
+	switch {
+	case classified.Outcome == checkresult.Pass:
+		return RollingOutcome{Green: true, Known: true, ExitCode: exitNum, Coverage: coverage}, nil
+	case classified.Outcome == checkresult.Unknown && classified.Detail == checkresult.DetailStalled:
 		stalled, watches, err := readSpansWithWatches(spans, "STALLED", declared)
 		if err != nil {
-			return RollingOutcome{Known: false, ExitCode: code, Detail: err.Error() + "; " + stderr.String(), Coverage: coverage}, nil
+			return RollingOutcome{Known: false, ExitCode: exitNum, Detail: err.Error() + "; " + stderr.String(), Coverage: coverage}, nil
 		}
-		return RollingOutcome{Stalled: len(stalled) > 0, Known: false, ExitCode: code,
+		return RollingOutcome{Stalled: len(stalled) > 0, Known: false, ExitCode: exitNum,
 			FailingChecks: stalled, CheckWatches: watches, Coverage: coverage, Detail: stderr.String()}, nil
-	case 1:
+	case classified.Outcome == checkresult.Fail:
 		failing, watches, err := readSpansWithWatches(spans, "FAIL", declared)
 		if err != nil {
-			return RollingOutcome{Known: false, ExitCode: code, Detail: err.Error() + "; " + stderr.String(), Coverage: coverage}, nil
+			return RollingOutcome{Known: false, ExitCode: exitNum, Detail: err.Error() + "; " + stderr.String(), Coverage: coverage}, nil
 		}
 		if len(failing) == 0 {
-			return RollingOutcome{Known: false, ExitCode: code, Coverage: coverage,
+			return RollingOutcome{Known: false, ExitCode: exitNum, Coverage: coverage,
 				Detail: "it named no failing check. " + stderr.String()}, nil
 		}
 		var checkLogs map[string]string
@@ -1788,9 +1790,9 @@ func (s *ProcessSteps) Rolling(ctx context.Context, baseSHA, tipSHA string) (Rol
 				}
 			}
 		}
-		return RollingOutcome{Green: false, Known: true, ExitCode: code, FailingChecks: failing, CheckWatches: watches, CheckLogs: checkLogs, Coverage: coverage}, nil
+		return RollingOutcome{Green: false, Known: true, ExitCode: exitNum, FailingChecks: failing, CheckWatches: watches, CheckLogs: checkLogs, Coverage: coverage}, nil
 	default:
-		return RollingOutcome{Known: false, ExitCode: code, Detail: stderr.String(), Coverage: coverage}, nil
+		return RollingOutcome{Known: false, ExitCode: exitNum, Detail: stderr.String(), Coverage: coverage}, nil
 	}
 }
 

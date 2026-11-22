@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/mschulkind-oss/tillr/checkresult"
 )
 
 // HeavyStep supplies the judge used by the one asynchronous trunk runner.
@@ -101,7 +103,7 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 				logs := []string{}
 				silent := []string{}
 				for _, check := range legacy {
-					if check.Result == "fail" {
+					if classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.HeavyCheckWord, Word: check.Result}).Outcome == checkresult.Fail {
 						failed = append(failed, check.CheckID)
 						if check.LogPath == "" {
 							silent = append(silent, check.CheckID)
@@ -333,17 +335,18 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 	if cmd.ProcessState == nil {
 		return nil, Externalf("legacy heavy program did not start: %v: %s", runErr, stderr.String())
 	}
-	code := cmd.ProcessState.ExitCode()
+	exitNum := cmd.ProcessState.ExitCode()
+	exitClassified := classifyCheck(checkresult.Observation{Check: only, Source: checkresult.BinaryProgram, ExitCode: &exitNum})
 	if only != "" {
 		verdict := "error"
-		switch code {
-		case 0:
+		switch exitClassified.Outcome {
+		case checkresult.Pass:
 			verdict = "pass"
-		case 1:
+		case checkresult.Fail:
 			verdict = "fail"
 		}
 		kept := legacyKeptLog(logPath, verdict)
-		if verdict == "fail" && kept == "" {
+		if exitClassified.Outcome == checkresult.Fail && kept == "" {
 			heavyProgressReport(ctx, "loop: heavy DEFECT: the replay of legacy check %s failed and left no output\n", only)
 		}
 		return []HeavyCheck{{CheckID: only, Result: verdict, Detail: stderr.String(), LogPath: kept}}, nil
@@ -354,7 +357,7 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 	}
 	raw, err := os.ReadFile(spans)
 	if err != nil {
-		return nil, Externalf("legacy heavy program gave no check evidence (exit %d): %v: %s", code, err, stderr.String())
+		return nil, Externalf("legacy heavy program gave no check evidence (exit %d): %v: %s", exitNum, err, stderr.String())
 	}
 	var file gateSpansFile
 	if err := json.Unmarshal(raw, &file); err != nil {
@@ -373,16 +376,19 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 		if span.CheckID == "" {
 			continue
 		}
+		spanClassified := classifyCheck(checkresult.Observation{Check: span.CheckID, Source: checkresult.LegacySpan, Word: span.Status})
 		verdict := "error"
-		switch span.Status {
-		case "PASS", "ok", "CACHED":
+		switch spanClassified.Outcome {
+		case checkresult.Pass:
 			verdict = "pass"
-		case "skip", "QUARANTINED":
+		case checkresult.Unavailable:
 			verdict = "unavailable"
-		case "FAIL":
+		case checkresult.Fail:
 			verdict = "fail"
-		case "STALLED":
-			verdict = "stalled"
+		case checkresult.Unknown:
+			if spanClassified.Detail == checkresult.DetailStalled {
+				verdict = "stalled"
+			}
 		}
 		var attrs struct {
 			Reads   []string `json:"reads"`
@@ -408,7 +414,7 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 		}
 		failure := failures[span.CheckID]
 		kept, logRef := "", ""
-		if verdict == "fail" || verdict == "error" || verdict == "stalled" {
+		if spanClassified.Outcome == checkresult.Fail || spanClassified.Outcome == checkresult.Unknown {
 			kept, logRef = failure.Log, failure.Log
 			if logRef == "" {
 				// Custom legacy programs need not use the observation adapter.
@@ -423,7 +429,7 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 			}
 		}
 		check := HeavyCheck{CheckID: span.CheckID, Result: verdict, DurationMS: (span.EndNS - span.StartNS) / 1000000, Reads: reads, LogPath: kept, LogRef: logRef}
-		if span.Kind == "go-tool" && verdict == "fail" {
+		if span.Kind == "go-tool" && spanClassified.Outcome == checkresult.Fail {
 			result = append(result, goSuiteFailures(span.Label, failure, check)...)
 			continue
 		}
@@ -435,8 +441,8 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 		}
 		result = append(result, HeavyCheck{CheckID: skip.CheckID, Result: "unavailable", Detail: skip.Reason})
 	}
-	if code != 0 && code != 1 {
-		result = append(result, HeavyCheck{CheckID: "legacy-runner", Result: "error", Detail: fmt.Sprintf("exit %d: %s", code, stderr.String()), LogPath: legacyKeptLog(logPath, "error")})
+	if exitClassified.Outcome != checkresult.Pass && exitClassified.Outcome != checkresult.Fail {
+		result = append(result, HeavyCheck{CheckID: "legacy-runner", Result: "error", Detail: fmt.Sprintf("exit %d: %s", exitNum, stderr.String()), LogPath: legacyKeptLog(logPath, "error")})
 	}
 	if only == "" && !adaptedLegacy {
 		for _, check := range result {
@@ -474,7 +480,7 @@ func legacyLogPath(ctx context.Context, laneRoot, dir, only string) string {
 // legacyKeptLog answers the log path for a failing verdict, or "" when the file is
 // missing or empty: a path to nothing would send the fixer to read nothing.
 func legacyKeptLog(path, verdict string) string {
-	if path == "" || verdict == "pass" {
+	if path == "" || classifyCheck(checkresult.Observation{Source: checkresult.HeavyCheckWord, Word: verdict}).Outcome == checkresult.Pass {
 		return ""
 	}
 	if info, err := os.Stat(path); err != nil || info.Size() == 0 {
@@ -517,7 +523,8 @@ func decodeHeavyVerdict(raw []byte) ([]HeavyCheck, error) {
 	}
 	for i := range env.Payload.Checks {
 		c := &env.Payload.Checks[i]
-		if (c.Result == "fail" || c.Result == "error" || c.Result == "stalled") && c.LogPath == "" && c.LogRef != "" {
+		classified := classifyCheck(checkresult.Observation{Check: c.CheckID, Source: checkresult.HeavyCheckWord, Word: c.Result})
+		if (classified.Outcome == checkresult.Fail || (classified.Outcome == checkresult.Unknown && (classified.Detail == checkresult.DetailError || classified.Detail == checkresult.DetailStalled))) && c.LogPath == "" && c.LogRef != "" {
 			whole := strings.TrimSuffix(c.LogRef, ".triage.log")
 			if whole != c.LogRef {
 				if kept := legacyKeptLog(whole+".log", c.Result); kept != "" {

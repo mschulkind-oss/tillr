@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/mschulkind-oss/tillr/checkresult"
 )
 
 const heavyReplayGuard = "heavy.replay-cleanup-pending"
@@ -56,7 +58,7 @@ func (r HeavyRunner) startEarly(ctx context.Context, run HeavyRun) *heavyEarly {
 
 func (e *heavyEarly) offer(check HeavyCheck) {
 	// Attribute all failed tests in a suite before any of them can move the tip.
-	if check.Result != "fail" || check.Stalls >= 2 || check.FirstRedLanding != "" || strings.HasPrefix(check.CheckID, goTestPrefix) {
+	if classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.HeavyCheckWord, Word: check.Result}).Outcome != checkresult.Fail || check.Stalls >= 2 || check.FirstRedLanding != "" || strings.HasPrefix(check.CheckID, goTestPrefix) {
 		return
 	}
 	e.mu.Lock()

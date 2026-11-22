@@ -10,6 +10,7 @@ const (
 	ShadowOrder       AggregateOrder = "shadow"
 	LegacyGateOrder   AggregateOrder = "legacy-gate"
 	LegacyReplayOrder AggregateOrder = "legacy-replay"
+	HeavyOrder        AggregateOrder = "heavy"
 )
 
 // RunResult carries the prevailing outcome and the consumer's run-level word.
@@ -58,6 +59,11 @@ var aggregateRules = map[AggregateOrder][]aggregateRule{
 		}, RunResult{Unknown, "error", 2}},
 		{hasOutcome(Fail), RunResult{Fail, "fail", 1}},
 		{nil, RunResult{Pass, "pass", 0}},
+	},
+	HeavyOrder: {
+		{hasOutcome(Unknown), RunResult{Unknown, "unknown", 4}},
+		{hasOutcome(Fail), RunResult{Fail, "red", 1}},
+		{nil, RunResult{Pass, "green", 0}},
 	},
 }
 

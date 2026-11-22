@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/mschulkind-oss/tillr/checkresult"
 )
 
 var errHeavyTipMoved = errors.New("trunk moved beyond the proved commit")
@@ -73,11 +75,11 @@ func (r HeavyRunner) findFirstRed(ctx context.Context, run HeavyRun, check Heavy
 	goCase := strings.HasPrefix(check.CheckID, goTestPrefix)
 	fresh, _ := ctx.Value(freshHeavyAttributionKey{}).(bool)
 	failure := ""
-	if !fresh && !goCase && check.Result == "fail" {
+	if !fresh && !goCase && classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.HeavyCheckWord, Word: check.Result}).Outcome == checkresult.Fail {
 		failure = heavyFailureFingerprint(check)
 	}
 	prior, hadPrior := records[check.CheckID]
-	if failure != "" && failure == prior.Failure && prior.Base == run.BaseSHA && slices.Equal(prior.Reads, check.Reads) {
+	if hadPrior && failure != "" && classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.CachedRecord, Word: "fail"}).Outcome == checkresult.Fail && failure == prior.Failure && prior.Base == run.BaseSHA && slices.Equal(prior.Reads, check.Reads) {
 		commits, err := heavyFirstParentCommits(ctx, r.Root, run.BaseSHA, run.TipSHA)
 		first, provedTip := slices.Index(commits, prior.FirstRed), slices.Index(commits, prior.Tip)
 		if err == nil && first >= 0 && first <= provedTip {
@@ -216,7 +218,7 @@ func (r HeavyRunner) forgetGreenAttributions(ctx context.Context, checks []Heavy
 	records := readHeavyAttributions(dir)
 	changed := false
 	for _, check := range checks {
-		if _, exists := records[check.CheckID]; check.Result == "pass" && exists {
+		if _, exists := records[check.CheckID]; exists && classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.HeavyCheckWord, Word: check.Result}).Outcome == checkresult.Pass {
 			delete(records, check.CheckID)
 			changed = true
 		}

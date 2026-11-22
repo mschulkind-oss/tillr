@@ -23,45 +23,37 @@ var movedRunnerSites = map[string][]string{
 	"tools/tillr-gate/watchdog.go":                   {"readFastVerdict"},
 	"tools/tillr-drain/drain/events.go":              {"gateRefusalDetail"},
 	"tools/tillr-drain/drain/fixer_gate.go":          {"fixerCheckOverlaps", "fixerCheck", "settleFixerGate", "pendingFixerVerdict"},
+	"tools/tillr-drain/drain/fixer_resolve.go":       {"readGreenProof", "readGreenProofFile", "readCheckProofs", "readProgressCheckProof", "passed", "resolveProvedFixers"},
 	"tools/tillr-drain/drain/fixer_wait.go":          {"fixerChecks"},
-	"tools/tillr-drain/drain/fork_check_triage.go":   {"forkCheckDeclID"},
+	"tools/tillr-drain/drain/fork_check_triage.go":   {"forkCheckDeclID", "readFailingSpanMeta"},
 	"tools/tillr-drain/drain/fork_drift.go":          {"readForkConflicts", "settleGateFailure", "markForkGateUnanswered"},
-	"tools/tillr-drain/drain/gate_spans.go":          {"readFastGateSpans", "readFailingSpans", "readSpansWithStatus", "readSpansWithWatches"},
+	"tools/tillr-drain/drain/gate_spans.go":          {"readFastGateSpans", "readFailingSpans", "readSpansWithStatus", "readSpansWithWatches", "readRollingCoverage", "readGateSpans"},
 	"tools/tillr-drain/drain/gate_stall.go":          {"gateStallContext"},
 	"tools/tillr-drain/drain/gate_timing.go":         {"readGateTimingChecks"},
-	"tools/tillr-drain/drain/heavy_revert.go":        {"judgeRequired", "JudgeRequired"},
+	"tools/tillr-drain/drain/heavy.go":               {"Run", "run", "judgeTip", "oneLogged", "replay", "searchFirstRed", "attribute", "revert", "offerRevert", "resolveRevert"},
+	"tools/tillr-drain/drain/heavy_attribution.go":   {"completedHeavyRed", "findFirstRed", "retainRedRepairs", "forgetGreenAttributions"},
+	"tools/tillr-drain/drain/heavy_early.go":         {"offer", "recover"},
+	"tools/tillr-drain/drain/heavy_go.go":            {"judgeHeavyGo"},
+	"tools/tillr-drain/drain/heavy_loop.go":          {"startHeavy", "heavyStatusLine"},
+	"tools/tillr-drain/drain/heavy_progress.go":      {"loadHeavyProgress", "reuseHeavyCheck", "saveHeavyCheck", "readHeavyReplay"},
+	"tools/tillr-drain/drain/heavy_revert.go":        {"judgeRequired", "JudgeRequired", "revertLanding"},
+	"tools/tillr-drain/drain/heavy_steps.go":         {"JudgeHeavy", "decodeHeavyVerdict", "legacyKeptLog", "runHeavyLegacy"},
 	"tools/tillr-drain/drain/loop.go":                {"verify"},
+	"tools/tillr-drain/drain/obstacle_hold.go":       {"obstacleProofPassed", "releaseTrunkObstacleHolds"},
 	"tools/tillr-drain/drain/obstacle_route.go":      {"routeObstacle"},
 	"tools/tillr-drain/drain/pass.go":                {"foldPendingHistory"},
 	"tools/tillr-drain/drain/plan.go":                {"readRunHistory", "retryHoldReason"},
 	"tools/tillr-drain/drain/remote_sync_landing.go": {"landRemoteSync"},
 	"tools/tillr-drain/drain/returned.go":            {"gateFailingChecks"},
-	"tools/tillr-drain/drain/steps.go":               {"Gate", "finishDetachedGate", "gateFailureContext", "Replay"},
-	"tools/tillr-drain/drain/trunk.go":               {"judgeTrunkChecks", "openTrunkRedNotice", "trunkAlreadyRed", "redOnTip", "settleTrunkAlreadyRed", "promoteVerdictPassInherited", "intersectingRedPaths", "acquitRedWithPaths", "culpritLanding", "openFixerFor", "routeTrunkFixer"},
+	"tools/tillr-drain/drain/steps.go":               {"Gate", "finishDetachedGate", "gateFailureContext", "Replay", "Rolling"},
+	"tools/tillr-drain/drain/trunk.go":               {"judgeTrunkChecks", "openTrunkRedNotice", "trunkAlreadyRed", "redOnTip", "settleTrunkAlreadyRed", "promoteVerdictPassInherited", "intersectingRedPaths", "acquitRedWithPaths", "culpritLanding", "openFixerFor", "routeTrunkFixer", "maybeRolling", "recordRollingRun", "repeatedRollingStalls", "rollingUnknownStreak"},
+	"tools/tillr-drain/drain/trunk_release.go":       {"repairedTrunkWaiter", "releaseTrunkAcquittals"},
+	"tools/tillr-drain/heavy/status.go":              {"ReadStatus"},
 }
 
-// Drain site files from D17-D33 (plus the 5 files shared with D1-D16/D34) remain
-// on the file-level unmoved list until slice 1d lands; function-level scanning of
-// D1-D16 and D34 inside the shared files runs in tools/tillr-drain/drain/classification_scan_test.go.
+// All drain sites are moved (slice 1c and slice 1d).
 // No file under tools/tillr-gate/ may appear here.
-var unmovedGoFiles = []string{
-	"tools/tillr-drain/drain/fixer_resolve.go",
-	"tools/tillr-drain/drain/fork_check_triage.go",
-	"tools/tillr-drain/drain/gate_spans.go",
-	"tools/tillr-drain/drain/heavy.go",
-	"tools/tillr-drain/drain/heavy_attribution.go",
-	"tools/tillr-drain/drain/heavy_early.go",
-	"tools/tillr-drain/drain/heavy_go.go",
-	"tools/tillr-drain/drain/heavy_loop.go",
-	"tools/tillr-drain/drain/heavy_progress.go",
-	"tools/tillr-drain/drain/heavy_revert.go",
-	"tools/tillr-drain/drain/heavy_steps.go",
-	"tools/tillr-drain/drain/obstacle_hold.go",
-	"tools/tillr-drain/drain/steps.go",
-	"tools/tillr-drain/drain/trunk.go",
-	"tools/tillr-drain/drain/trunk_release.go",
-	"tools/tillr-drain/heavy/status.go",
-}
+var unmovedGoFiles = []string{}
 
 var forbiddenResultWords = map[string]bool{
 	"pass":                             true,

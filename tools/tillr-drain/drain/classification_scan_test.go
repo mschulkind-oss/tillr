@@ -81,11 +81,10 @@ var slice1cDrainSites = []drainSiteRef{
 	{"drain/gate_timing.go", "readGateTimingChecks"},
 }
 
-var scannedDrainSites = append([]drainSiteRef(nil), slice1cDrainSites...)
+var scannedDrainSites = append([]drainSiteRef(nil), append(slice1cDrainSites, slice1dDrainSites...)...)
 
-// Slice 1d sites (D17-D33) remain here until slice 1d lands.
-// No function of D1-D16 or D34 may appear in unmovedDrainSites.
-var unmovedDrainSites = []drainSiteRef{
+// Slice 1d moved sites (D17-D33).
+var slice1dDrainSites = []drainSiteRef{
 	// D17
 	{"drain/steps.go", "Rolling"},
 	// D18
@@ -152,6 +151,9 @@ var unmovedDrainSites = []drainSiteRef{
 	{"drain/trunk_release.go", "releaseTrunkAcquittals"},
 }
 
+// No drain site remains unmoved after slice 1c and 1d.
+var unmovedDrainSites = []drainSiteRef{}
+
 var drainForbiddenResultWords = map[string]bool{
 	"pass":                             true,
 	"PASS":                             true,
@@ -209,13 +211,15 @@ var drainUnambiguousSpanLiterals = map[string]bool{
 }
 
 var drainAllowedSettlementConsts = map[string]bool{
-	"GatePassed":           true,
-	"GatePassedInherited":  true,
-	"GateFailed":           true,
-	"GateStalled":          true,
-	"GateErrored":          true,
-	"VerdictPassInherited": true,
-	"VerdictNone":          true,
+	"GatePassed":            true,
+	"GatePassedInherited":   true,
+	"GateFailed":            true,
+	"GateStalled":           true,
+	"GateErrored":           true,
+	"VerdictPassInherited":  true,
+	"VerdictNone":           true,
+	"LandLanded":            true,
+	"rollingOutcomeStalled": true,
 }
 
 func drainStringLit(expr ast.Expr) (string, bool) {
@@ -312,8 +316,58 @@ func isAllowedUsageExitComparison(left, right ast.Expr) bool {
 	return (isDrainExitSubject(left) && isUsage(right)) || (isDrainExitSubject(right) && isUsage(left))
 }
 
+func isDrainRunResultSelector(expr ast.Expr) bool {
+	sel, ok := expr.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Result" {
+		return false
+	}
+	id, ok := sel.X.(*ast.Ident)
+	return ok && id.Name == "run"
+}
+
+func isDrainRunSummaryWord(expr ast.Expr) bool {
+	s, ok := drainStringLit(expr)
+	if !ok {
+		return false
+	}
+	switch s {
+	case "green", "red", "red-unfiled", "unknown":
+		return true
+	}
+	return false
+}
+
+func isDrainGoTestEventAction(expr ast.Expr) bool {
+	sel, ok := expr.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Action" {
+		return false
+	}
+	id, ok := sel.X.(*ast.Ident)
+	return ok && id.Name == "event"
+}
+
+func isDrainGoTestActionWord(expr ast.Expr) bool {
+	s, ok := drainStringLit(expr)
+	if !ok {
+		return false
+	}
+	switch s {
+	case "pass", "fail", "skip":
+		return true
+	}
+	return false
+}
+
 func isForbiddenDrainComparison(left, right ast.Expr, strictSite bool) bool {
 	if (isDrainOutcomeField(left) && isDrainSettlementExpr(right)) || (isDrainOutcomeField(right) && isDrainSettlementExpr(left)) {
+		return false
+	}
+	if ((isDrainOutcomeField(left) || isDrainRunResultSelector(left)) && isDrainRunSummaryWord(right)) ||
+		((isDrainOutcomeField(right) || isDrainRunResultSelector(right)) && isDrainRunSummaryWord(left)) {
+		return false
+	}
+	if (isDrainGoTestEventAction(left) && isDrainGoTestActionWord(right)) ||
+		(isDrainGoTestEventAction(right) && isDrainGoTestActionWord(left)) {
 		return false
 	}
 	if strictSite {
@@ -396,9 +450,17 @@ func TestClassificationScanDrainSites(t *testing.T) {
 		}
 		unmoved[ref] = true
 	}
+	if len(unmovedDrainSites) != 0 {
+		t.Fatalf("unmovedDrainSites must be empty, got %v", unmovedDrainSites)
+	}
 	for _, ref := range slice1cDrainSites {
 		if unmoved[ref] {
 			t.Fatalf("slice 1c site %v must not remain in unmovedDrainSites", ref)
+		}
+	}
+	for _, ref := range slice1dDrainSites {
+		if unmoved[ref] {
+			t.Fatalf("slice 1d site %v must not remain in unmovedDrainSites", ref)
 		}
 	}
 

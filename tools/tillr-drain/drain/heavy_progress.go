@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/mschulkind-oss/tillr/checkresult"
 )
 
 // One tip's successful checks survive process replacement. The heavy lock owns
@@ -65,7 +67,7 @@ func loadHeavyProgress(ctx context.Context, root, dir, tip string) (*heavyProgre
 	}
 	carried := false
 	for id, check := range prior.Checks {
-		if check.Result != "pass" {
+		if classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.CachedRecord, Word: check.Result}).Outcome != checkresult.Pass {
 			continue
 		}
 		if len(changed) == 0 || len(check.Reads) > 0 && !heavyReadsChanged(check.Reads, changed) {
@@ -92,7 +94,7 @@ func reuseHeavyCheck(ctx context.Context, id string) (HeavyCheck, bool) {
 		return HeavyCheck{}, false
 	}
 	check, ok := p.Checks[id]
-	if !ok || check.Result != "pass" {
+	if !ok || classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.CachedRecord, Word: check.Result}).Outcome != checkresult.Pass {
 		return HeavyCheck{}, false
 	}
 	p.reused = append(p.reused, id)
@@ -100,7 +102,7 @@ func reuseHeavyCheck(ctx context.Context, id string) (HeavyCheck, bool) {
 }
 func saveHeavyCheck(ctx context.Context, check HeavyCheck) error {
 	p, _ := ctx.Value(heavyProgressKey{}).(*heavyProgress)
-	if p == nil || check.Result != "pass" {
+	if p == nil || classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.CachedRecord, Word: check.Result}).Outcome != checkresult.Pass {
 		return nil
 	}
 	p.Checks[check.CheckID] = check
@@ -149,8 +151,22 @@ func readHeavyReplay(dir, sha, id string) (red, ok bool) {
 	if json.Unmarshal(raw, &saved) != nil {
 		return false, false
 	}
-	red, ok = saved[sha+" "+id]
-	return red, ok
+	recorded, ok := saved[sha+" "+id]
+	if !ok {
+		return false, false
+	}
+	word := "pass"
+	if recorded {
+		word = "fail"
+	}
+	switch classifyCheck(checkresult.Observation{Check: id, Source: checkresult.CachedRecord, Word: word}).Outcome {
+	case checkresult.Fail:
+		return true, true
+	case checkresult.Pass:
+		return false, true
+	default:
+		return false, false
+	}
 }
 
 // saveHeavyReplay records one completed replay verdict, keeping the earlier ones.
