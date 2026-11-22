@@ -289,3 +289,147 @@ func TestTrunkProofStalledFiresAtTenMinutesWithoutProgressAndResolves(t *testing
 		})
 	}
 }
+
+func TestTrunkProofStalledStaysQuietDuring28e0b8a725TenMinuteShardedCheck(t *testing.T) {
+	f := newTrunkProofFixture(t)
+	// 2026-11-22 04:00:00 AM ET = 2026-11-22T09:00:00Z
+	t0 := time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC)
+	const shardedCheck = "go-tool/tools-tillr-drain-s-whole-suite-passes"
+
+	tip := f.landAt(t0)
+	f.appendProgress(t0, drain.HeavyProgressFact{TipSHA: tip, Phase: "started"})
+
+	// 04:03:47 AM ET: self-suite finishes.
+	f.appendProgress(t0.Add(3*time.Minute+47*time.Second), drain.HeavyProgressFact{
+		TipSHA:  tip,
+		Phase:   "progress",
+		CheckID: "self-suite",
+		Outcome: "pass",
+	})
+
+	// 04:04:47 through 04:12:47 AM ET (9 snapshots, 1m apart): throttled in-check completion progress.
+	for m := 4; m <= 12; m++ {
+		f.appendProgress(t0.Add(time.Duration(m)*time.Minute+47*time.Second), drain.HeavyProgressFact{
+			TipSHA:  tip,
+			Phase:   "progress",
+			CheckID: shardedCheck,
+			Outcome: "running",
+		})
+	}
+
+	// 04:13:47 AM ET (10m 00s after self-suite, when the false alert fired on 2026-11-22): stays quiet.
+	if notices := f.pendingAt(t0.Add(13*time.Minute + 47*time.Second)); len(notices) != 0 {
+		t.Fatalf("expected silence at 04:13:47 AM ET during active sharded check, got %+v", notices)
+	}
+
+	// 04:13:48 AM ET (10m 01s check duration): terminal check completion.
+	f.appendProgress(t0.Add(13*time.Minute+48*time.Second), drain.HeavyProgressFact{
+		TipSHA:  tip,
+		Phase:   "progress",
+		CheckID: shardedCheck,
+		Outcome: "pass",
+	})
+
+	// 04:13:53 AM ET: proof finishes green.
+	endAt := t0.Add(13*time.Minute + 53*time.Second)
+	f.now = endAt
+	f.markGreen(tip)
+	f.appendProgress(endAt, drain.HeavyProgressFact{
+		TipSHA:  tip,
+		Phase:   "ended",
+		Outcome: "green",
+	})
+	if notices := f.pendingAt(endAt); len(notices) != 0 {
+		t.Fatalf("expected silence when proof ends at 04:13:53 AM ET, got %+v", notices)
+	}
+
+	// 04:30:00 AM ET: stays quiet while idle after ended.
+	if notices := f.pendingAt(t0.Add(30 * time.Minute)); len(notices) != 0 {
+		t.Fatalf("expected silence while idle after ended at 04:30:00 AM ET, got %+v", notices)
+	}
+}
+
+func TestTrunkProofStalledFiresWhenCheckReportsNothingForTenMinuteWindow(t *testing.T) {
+	const shardedCheck = "go-tool/tools-tillr-drain-s-whole-suite-passes"
+
+	t.Run("hang_from_check_start", func(t *testing.T) {
+		f := newTrunkProofFixture(t)
+		t0 := time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC)
+
+		tip := f.landAt(t0)
+		f.appendProgress(t0, drain.HeavyProgressFact{TipSHA: tip, Phase: "started"})
+		f.appendProgress(t0.Add(3*time.Minute+47*time.Second), drain.HeavyProgressFact{
+			TipSHA:  tip,
+			Phase:   "progress",
+			CheckID: "self-suite",
+			Outcome: "pass",
+		})
+
+		// 04:12:47 AM ET (9m after self-suite): stays quiet.
+		if notices := f.pendingAt(t0.Add(12*time.Minute + 47*time.Second)); len(notices) != 0 {
+			t.Fatalf("expected silence at 04:12:47 AM ET (9m), got %+v", notices)
+		}
+
+		// 04:13:47 AM ET (10m 00s after self-suite): trunk-proof-stalled opens naming tip.
+		notices := f.pendingAt(t0.Add(13*time.Minute + 47*time.Second))
+		if len(notices) != 1 || notices[0].Bundle.RuleID != "trunk-proof-stalled" {
+			t.Fatalf("want one trunk-proof-stalled notice at 04:13:47 AM ET, got %+v", notices)
+		}
+		if !strings.Contains(notices[0].Bundle.Guidance.Summary, tip) {
+			t.Fatalf("want tip SHA %s in summary, got %q", tip, notices[0].Bundle.Guidance.Summary)
+		}
+
+		// Fresh progress resolves the stall.
+		resolveAt := t0.Add(14*time.Minute + 47*time.Second)
+		f.appendProgress(resolveAt, drain.HeavyProgressFact{
+			TipSHA:  tip,
+			Phase:   "progress",
+			CheckID: shardedCheck,
+			Outcome: "running",
+		})
+		if after := f.pendingAt(resolveAt); len(after) != 0 {
+			t.Fatalf("expected fresh progress to resolve trunk-proof-stalled, got %+v", after)
+		}
+	})
+
+	t.Run("mid_check_hang_after_running_progress", func(t *testing.T) {
+		f := newTrunkProofFixture(t)
+		t0 := time.Date(2026, 11, 22, 9, 0, 0, 0, time.UTC)
+
+		tip := f.landAt(t0)
+		f.appendProgress(t0, drain.HeavyProgressFact{TipSHA: tip, Phase: "started"})
+		f.appendProgress(t0.Add(3*time.Minute+47*time.Second), drain.HeavyProgressFact{
+			TipSHA:  tip,
+			Phase:   "progress",
+			CheckID: "self-suite",
+			Outcome: "pass",
+		})
+
+		// 04:04:47, 04:05:47, 04:06:47 AM ET: 1m running progress events, then hang.
+		for m := 4; m <= 6; m++ {
+			f.appendProgress(t0.Add(time.Duration(m)*time.Minute+47*time.Second), drain.HeavyProgressFact{
+				TipSHA:  tip,
+				Phase:   "progress",
+				CheckID: shardedCheck,
+				Outcome: "running",
+			})
+		}
+
+		// 04:13:47 AM ET and 04:15:47 AM ET (9m after last running event): stays quiet.
+		if notices := f.pendingAt(t0.Add(13*time.Minute + 47*time.Second)); len(notices) != 0 {
+			t.Fatalf("expected silence at 04:13:47 AM ET, got %+v", notices)
+		}
+		if notices := f.pendingAt(t0.Add(15*time.Minute + 47*time.Second)); len(notices) != 0 {
+			t.Fatalf("expected silence at 04:15:47 AM ET (9m after last running event), got %+v", notices)
+		}
+
+		// 04:16:47 AM ET (10m after last running event): trunk-proof-stalled opens naming tip.
+		notices := f.pendingAt(t0.Add(16*time.Minute + 47*time.Second))
+		if len(notices) != 1 || notices[0].Bundle.RuleID != "trunk-proof-stalled" {
+			t.Fatalf("want one trunk-proof-stalled notice at 04:16:47 AM ET, got %+v", notices)
+		}
+		if !strings.Contains(notices[0].Bundle.Guidance.Summary, tip) {
+			t.Fatalf("want tip SHA %s in summary, got %q", tip, notices[0].Bundle.Guidance.Summary)
+		}
+	})
+}

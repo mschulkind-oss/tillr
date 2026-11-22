@@ -107,7 +107,7 @@ def keep_output(output):
         return log.name
 
 
-def execute_with_events(check, root, diff_base, *args, **kwargs):
+def execute_with_events(check, root, diff_base, *args, key=None, **kwargs):
     # Instrument only the known Go suite commands, leaving the legacy gate in
     # charge of selection, execution and status. Older gates without this command
     # surface still contribute the observed whole check output.
@@ -117,20 +117,69 @@ def execute_with_events(check, root, diff_base, *args, **kwargs):
             or command is None or getattr(check, "argv", None) != ["sh", "-c", command(module)]):
         original(check, root, diff_base, *args, **kwargs)
         return None
+    key = key or identity(check.kind, check.label, root)
     argv = check.argv
     logs.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=logs, prefix=".heavy-events-") as temporary:
         events = Path(temporary) / "go-events.jsonl"
         sharded = module in gate.GO_SHARD_DIRS
+        progress_path = None
         if sharded:
-            script = argv[2] + " --events " + shlex.quote(str(events.resolve()))
+            progress_path = Path(temporary) / "go-progress.json"
+            script = (
+                argv[2]
+                + " --events " + shlex.quote(str(events.resolve()))
+                + " --progress-file " + shlex.quote(str(progress_path.resolve()))
+            )
         else:
             script = argv[2].replace(" go test ", " go test -json ", 1)
         check.argv = argv[:2] + [script]
+        last_seq = 0
+        last_units = 0
+
+        def poll_progress():
+            nonlocal last_seq, last_units
+            if progress_path is None:
+                return
+            try:
+                raw = progress_path.read_text(encoding="utf-8")
+            except OSError:
+                return
+            try:
+                snap = json.loads(raw)
+            except ValueError:
+                return
+            if not isinstance(snap, dict):
+                return
+            seq = snap.get("seq")
+            units = snap.get("completed_units")
+            if (isinstance(seq, bool) or not isinstance(seq, int)
+                    or isinstance(units, bool) or not isinstance(units, int)):
+                return
+            if seq > last_seq and units > last_units:
+                last_seq = seq
+                last_units = units
+                with lock:
+                    state["completed"].append({"check_id": key, "outcome": "running"})
+                    publish()
+
+        stop_event = threading.Event()
+        watcher = None
+        if sharded:
+            def watch_progress():
+                while not stop_event.wait(0.025):
+                    poll_progress()
+
+            watcher = threading.Thread(target=watch_progress, daemon=True)
+            watcher.start()
         try:
             original(check, root, diff_base, *args, **kwargs)
         finally:
             check.argv = argv
+            if watcher is not None:
+                stop_event.set()
+                watcher.join()
+                poll_progress()
         if status(check) != "FAIL":
             return None
         if sharded:
@@ -253,7 +302,7 @@ def observe(check, root, diff_base, *args, **kwargs):
             state["reused"].append(key)
             publish()
             return
-    failure = execute_with_events(check, root, diff_base, *args, **kwargs)
+    failure = execute_with_events(check, root, diff_base, *args, key=key, **kwargs)
     verdict = status(check)
     if verdict == "FAIL" and failure is None:
         failure = {"log": keep_output(check.output)}

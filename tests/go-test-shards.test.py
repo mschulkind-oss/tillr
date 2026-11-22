@@ -1093,6 +1093,273 @@ func TestM3(t *testing.T) {{ holdBrief(t) }}
         )
         self.assertNotEqual(bad.returncode, 0)
 
+    def test_progress_interval_validation_rejects_non_positive_and_non_finite(self):
+        record = self.root / 'durations.json'
+        record.write_text('{}')
+        for bad in ('0', '-1', '-0.5', 'nan', 'inf', '-inf'):
+            with self.subTest(interval=bad):
+                stderr = io.StringIO()
+                with patch.object(shards.sys, 'argv', [
+                        'runner', str(self.root), '--durations', str(record),
+                        f'--progress-interval={bad}']), redirect_stderr(stderr):
+                    with self.assertRaises(SystemExit) as caught:
+                        shards.main()
+                self.assertEqual(caught.exception.code, 2)
+                self.assertIn('progress interval', stderr.getvalue())
+
+    def test_progress_env_one_hop_and_flag_precedence(self):
+        record = self.root / 'durations.json'
+        record.write_text('{}')
+        env_target = self.root / 'env-progress.json'
+        flag_target = self.root / 'flag-progress.json'
+
+        # 1. TILLR_GO_SHARDS_PROGRESS_OUT is popped before run() and used when --progress-file is absent.
+        seen_env_during_run = []
+
+        def fake_run(*args, **kwargs):
+            seen_env_during_run.append(os.environ.get(shards.PROGRESS_OUT_ENV))
+            return []
+
+        with patch.dict(os.environ, {shards.PROGRESS_OUT_ENV: str(env_target)}), \
+                patch.object(shards, 'run', side_effect=fake_run) as mocked_run, \
+                patch.object(shards.sys, 'argv', ['runner', str(self.root), '--durations', str(record)]):
+            self.assertEqual(shards.main(), 0)
+        self.assertEqual(seen_env_during_run, [None])
+        self.assertNotIn(shards.PROGRESS_OUT_ENV, os.environ)
+        self.assertEqual(mocked_run.call_args.kwargs['progress_file'], env_target.resolve())
+        self.assertEqual(mocked_run.call_args.kwargs['progress_interval'], shards.DEFAULT_PROGRESS_INTERVAL)
+
+        # 2. --progress-file takes precedence over TILLR_GO_SHARDS_PROGRESS_OUT, which is still popped.
+        seen_env_during_run.clear()
+        with patch.dict(os.environ, {shards.PROGRESS_OUT_ENV: str(env_target)}), \
+                patch.object(shards, 'run', side_effect=fake_run) as mocked_run, \
+                patch.object(shards.sys, 'argv', [
+                    'runner', str(self.root), '--durations', str(record),
+                    '--progress-file', str(flag_target), '--progress-interval', '15']):
+            self.assertEqual(shards.main(), 0)
+        self.assertEqual(seen_env_during_run, [None])
+        self.assertNotIn(shards.PROGRESS_OUT_ENV, os.environ)
+        self.assertEqual(mocked_run.call_args.kwargs['progress_file'], flag_target.resolve())
+        self.assertEqual(mocked_run.call_args.kwargs['progress_interval'], 15.0)
+
+        # 3. Child test binaries never inherit TILLR_GO_SHARDS_PROGRESS_OUT.
+        mod = self.root / 'envmod'
+        mod.mkdir()
+        (mod / 'go.mod').write_text('module envmod\n\ngo 1.23\n')
+        (mod / 'env_test.go').write_text('''package envmod
+import ("os"; "testing")
+func TestEnvPopped(t *testing.T) {
+    if v, ok := os.LookupEnv("TILLR_GO_SHARDS_PROGRESS_OUT"); ok {
+        t.Fatalf("child inherited TILLR_GO_SHARDS_PROGRESS_OUT=%q", v)
+    }
+}
+''')
+        completed = subprocess.run(
+            ['python3', str(RUNNER), str(mod), '--durations', str(record),
+             '--lock-dir', str(self.root / 'env-locks')],
+            env=dict(os.environ, TILLR_GO_SHARDS_PROGRESS_OUT=str(env_target)),
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
+    def test_progress_snapshots_advance_on_package_test_and_shard_completions(self):
+        mod = self.root / 'progmod'
+        mod.mkdir()
+        (mod / 'go.mod').write_text('module progmod\n\ngo 1.23\n')
+        (mod / 'prog_test.go').write_text('''package progmod
+import ("testing"; "time")
+func TestFirst(t *testing.T) {
+    t.Run("sub1", func(t *testing.T) { time.Sleep(40 * time.Millisecond) })
+    t.Run("sub2", func(t *testing.T) { time.Sleep(40 * time.Millisecond) })
+}
+func TestSecond(t *testing.T) {
+    time.Sleep(80 * time.Millisecond)
+}
+''')
+        progress_file = self.root / 'nested' / 'progress.json'
+        snapshots = []
+        real_replace = os.replace
+
+        def capture_replace(src, dst):
+            real_replace(src, dst)
+            if Path(dst) == progress_file.resolve():
+                snapshots.append(json.loads(Path(dst).read_text()))
+
+        with patch.object(shards.os, 'replace', side_effect=capture_replace):
+            events = shards.run(
+                mod, 1, {}, self.root / 'scratch', '0',
+                lock_dir=self.root / 'prog-locks',
+                progress_file=progress_file.resolve(),
+                progress_interval=0.05,
+            )
+        self.assertEqual(len([e for e in events if e.get('Action') == 'pass' and e.get('Test') in ('TestFirst', 'TestSecond')]), 2)
+        self.assertGreaterEqual(len(snapshots), 2, snapshots)
+        for index, snap in enumerate(snapshots, start=1):
+            self.assertEqual(snap['seq'], index)
+            self.assertEqual(
+                snap['completed_units'],
+                snap['completed_packages'] + snap['completed_tests'] + snap['completed_shards'],
+            )
+            self.assertIsInstance(snap['last_detail'], str)
+            self.assertTrue(snap['last_detail'])
+        for prev, curr in zip(snapshots, snapshots[1:]):
+            self.assertGreater(curr['completed_units'], prev['completed_units'])
+        # Subtests never count toward completed_tests (at most 2 top-level tests).
+        self.assertLessEqual(snapshots[-1]['completed_tests'], 2)
+        self.assertEqual(snapshots[-1]['completed_packages'], 1)
+
+    def _fake_compile(self, binary):
+        def compile_pkg(cmd, *args, **kwargs):
+            out = Path(cmd[cmd.index('-o') + 1])
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(binary.read_bytes())
+            out.chmod(0o755)
+        return compile_pkg
+
+    def test_progress_writes_zero_snapshots_when_faster_than_interval(self):
+        packages = [{'ImportPath': 'fastpkg', 'Dir': str(self.root), 'TestGoFiles': ['x_test.go']}]
+        binary = self.fake(
+            "print('=== RUN   TestFast', flush=True)\n"
+            "print('--- PASS: TestFast (0.00s)', flush=True)\n"
+            "print('PASS', flush=True)\n"
+        )
+        progress_file = self.root / 'fast-progress.json'
+        with patch.object(shards.subprocess, 'check_output', side_effect=[
+                json.dumps(packages[0]), 'TestFast\n']), \
+                patch.object(shards.subprocess, 'run', side_effect=self._fake_compile(binary)), \
+                patch.object(shards, 'global_git_config', return_value=[]):
+            events = shards.run(
+                self.root, 1, {}, self.root / 'scratch', '0',
+                lock_dir=self.root / 'fast-locks',
+                progress_file=progress_file,
+                progress_interval=60.0,
+            )
+        self.assertTrue(any(e.get('Test') == 'TestFast' and e.get('Action') == 'pass' for e in events))
+        self.assertFalse(progress_file.exists())
+
+    def test_progress_writes_zero_snapshots_when_stalled_in_slot_wait_or_running_test(self):
+        # 1. Slot wait never increments completed_units or publishes a snapshot.
+        lock_dir = self.root / 'stall-locks'
+        slot_held = threading.Event()
+        release_slot = threading.Event()
+
+        def hold_slot():
+            with shards.acquire_shard_slot(lock_dir, 1, holder='blocker'):
+                slot_held.set()
+                assert release_slot.wait(30)
+
+        holder = threading.Thread(target=hold_slot)
+        holder.start()
+        self.assertTrue(slot_held.wait(30))
+
+        binary_fast = self.fake(
+            "print('=== RUN   TestAfterWait', flush=True)\n"
+            "print('--- PASS: TestAfterWait (0.00s)', flush=True)\n"
+            "print('PASS', flush=True)\n"
+        )
+        wait_progress = self.root / 'wait-progress.json'
+        tracker = shards._ProgressTracker(wait_progress, 0.04)
+        wait_errors = []
+
+        def run_waiter():
+            try:
+                shards.run_shard(
+                    'waitpkg', self.root, binary_fast, ['TestAfterWait'], 0,
+                    self.root / 'wait-scratch', '0', [], lock_dir=lock_dir,
+                    shard_limit=1, progress=tracker,
+                )
+            except BaseException as exc:
+                wait_errors.append(exc)
+
+        waiter = threading.Thread(target=run_waiter)
+        waiter.start()
+        try:
+            time.sleep(0.15)
+            self.assertTrue(waiter.is_alive())
+            self.assertFalse(wait_progress.exists())
+        finally:
+            release_slot.set()
+            waiter.join(30)
+            holder.join(30)
+        self.assertEqual(wait_errors, [])
+
+        # 2. Action == 'run' hang writes zero snapshots; mid-run hang stops advancing seq.
+        hang_progress = self.root / 'hang-progress.json'
+        binary_hang = self.fake(
+            "import time\n"
+            "print('=== RUN   TestPassFirst', flush=True)\n"
+            "print('--- PASS: TestPassFirst (0.00s)', flush=True)\n"
+            "time.sleep(0.08)\n"
+            "print('=== RUN   TestHangForever', flush=True)\n"
+            "time.sleep(10)\n"
+        )
+        hang_tracker = shards._ProgressTracker(hang_progress, 0.04)
+        with self.assertRaises(shards.ShardError) as caught:
+            shards.run_shard(
+                'hangpkg', self.root, binary_hang, ['TestPassFirst', 'TestHangForever'], 0,
+                self.root / 'hang-scratch', '0', [], wall_timeout=0.25,
+                lock_dir=self.root / 'hang-locks', shard_limit=1, progress=hang_tracker,
+            )
+        self.assertTrue(caught.exception.timed_out)
+        self.assertTrue(hang_progress.exists())
+        snap = json.loads(hang_progress.read_text())
+        self.assertEqual(snap['seq'], 1)
+        self.assertEqual(snap['completed_tests'], 1)
+
+        # Pure Action == 'run' hang from start writes zero snapshots and does not count as shard completion.
+        pure_hang_progress = self.root / 'pure-hang-progress.json'
+        binary_pure_hang = self.fake(
+            "import time\n"
+            "print('=== RUN   TestHangOnly', flush=True)\n"
+            "time.sleep(10)\n"
+        )
+        packages = [{'ImportPath': 'purehang', 'Dir': str(self.root), 'TestGoFiles': ['x_test.go']}]
+        with patch.object(shards.subprocess, 'check_output', side_effect=[
+                json.dumps(packages[0]), 'TestHangOnly\n']), \
+                patch.object(shards.subprocess, 'run', side_effect=self._fake_compile(binary_pure_hang)), \
+                patch.object(shards, 'global_git_config', return_value=[]):
+            with self.assertRaises(shards.ShardError) as pure_caught:
+                shards.run(
+                    self.root, 1, {}, self.root / 'pure-scratch', '0',
+                    shard_timeout=0.2,
+                    lock_dir=self.root / 'pure-locks',
+                    progress_file=pure_hang_progress,
+                    progress_interval=0.04,
+                )
+        self.assertIn('timed out', str(pure_caught.exception))
+        # Package discovery happened at t~0 before progress_interval=0.04s, then nothing completed.
+        # Even if discovery happened after 0.04s, completed_tests and completed_shards must remain 0.
+        if pure_hang_progress.exists():
+            pure_snap = json.loads(pure_hang_progress.read_text())
+            self.assertEqual(pure_snap['completed_tests'], 0)
+            self.assertEqual(pure_snap['completed_shards'], 0)
+
+    def test_progress_write_error_warns_without_failing_run(self):
+        packages = [{'ImportPath': 'warnpkg', 'Dir': str(self.root), 'TestGoFiles': ['x_test.go']}]
+        binary = self.fake(
+            "import time\n"
+            "print('=== RUN   TestSlow', flush=True)\n"
+            "time.sleep(0.08)\n"
+            "print('--- PASS: TestSlow (0.08s)', flush=True)\n"
+            "print('PASS', flush=True)\n"
+        )
+        stderr = io.StringIO()
+        # Passing self.root (an existing directory) as progress_file triggers OSError on os.replace.
+        with patch.object(shards.subprocess, 'check_output', side_effect=[
+                json.dumps(packages[0]), 'TestSlow\n']), \
+                patch.object(shards.subprocess, 'run', side_effect=self._fake_compile(binary)), \
+                patch.object(shards, 'global_git_config', return_value=[]), \
+                redirect_stderr(stderr):
+            events = shards.run(
+                self.root, 1, {}, self.root / 'warn-scratch', '0',
+                lock_dir=self.root / 'warn-locks',
+                progress_file=self.root,
+                progress_interval=0.02,
+            )
+        self.assertTrue(any(e.get('Test') == 'TestSlow' and e.get('Action') == 'pass' for e in events))
+        self.assertIn('cannot write progress file', stderr.getvalue())
+        self.assertEqual(list(self.root.parent.glob('.go-progress-*')), [])
+
 
 if __name__ == '__main__':
     unittest.main()
