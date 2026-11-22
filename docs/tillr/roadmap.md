@@ -216,6 +216,21 @@ Its thirteen designer's decisions await his review in
     eight slices of the build do not wait on it. Its twelve designer's decisions await his review
     in [its ledger](../design/tillr-request-amendment.md#decision-ledger), and none of it is built.
 
+13. [Any agent can wait on structured conditions and wake on deduplicated episodes without tillr](../design/general-agent-watch.md)
+    ([`OQ-GW1`](../design/general-agent-watch.md#OQ-GW1),
+    [`OQ-GW2`](../design/general-agent-watch.md#OQ-GW2),
+    [`OQ-GW3`](../design/general-agent-watch.md#OQ-GW3)): written on 2026-11-22 to the owner's
+    words of 2026-11-21 asking, at lower priority, that `tillr-watch` be usable by any agent for
+    any purpose with or without the rest of tillr. It separates an observation-source seam and a
+    standalone SQLite watch state file from `.tillr/state.db` so rules and one-command watches read
+    appended JSONL files, plain-text logs, Git refs or local processes while existing tillr rules
+    keep their meaning. It adds three questions to the count above: the standalone command and pack
+    boundary, whether a rule may poll a probe command, and whether tillr mode moves episodes to a
+    sidecar watch file. Placed last at the owner's instruction that it is lower priority than the
+    drain's own work, and the first seven slices do not wait on those rulings. Its twelve
+    designer's decisions await his review in
+    [its ledger](../design/general-agent-watch.md#decision-ledger), and none of it is built.
+
 [Owner review comments](../design/tillr-review-comments.md#7-decision-ledger) left this list on
 2026-11-20. The owner answered all four questions; the fast track is not built.
 
