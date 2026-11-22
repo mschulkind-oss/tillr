@@ -114,21 +114,35 @@ func TestDrainRepeatedItemConflictsRule(t *testing.T) {
 		t.Fatalf("one item.conflict event in the window should stay quiet, got %+v", notices)
 	}
 
-	// After conflict-a-0 ages past 24h, one new item.conflict event on item-a and
-	// one on item-b still stay quiet.
+	// After conflict-a-0 ages past 24h, one new raised conflict on item-a and
+	// one on item-b stay quiet, even after item-a's conflict transitions to
+	// awaiting (and later answered and closed) when given to a designer.
 	now = t0.Add(25 * time.Hour)
 	conflict("item-a", "conflict-a-1", "raised", now)
 	conflict("item-b", "conflict-b-1", "raised", now)
 	if notices := pending(); len(notices) != 0 {
-		t.Fatalf("one in-window item.conflict event per item should stay quiet, got %+v", notices)
+		t.Fatalf("one in-window raised item.conflict event per item should stay quiet, got %+v", notices)
 	}
 
-	// A second item.conflict event in the window for item-a opens one foreground notice.
-	now = now.Add(time.Minute)
+	now = t0.Add(25*time.Hour + time.Minute)
 	conflict("item-a", "conflict-a-1", "awaiting", now)
+	if notices := pending(); len(notices) != 0 {
+		t.Fatalf("one conflict going raised then awaiting should stay quiet, got %+v", notices)
+	}
+
+	now = t0.Add(25*time.Hour + 2*time.Minute)
+	conflict("item-a", "conflict-a-1", "answered", now)
+	conflict("item-a", "conflict-a-1", "closed", now)
+	if notices := pending(); len(notices) != 0 {
+		t.Fatalf("status updates on a single conflict should stay quiet, got %+v", notices)
+	}
+
+	// A second raised conflict in the window for item-a opens one foreground notice.
+	now = t0.Add(25*time.Hour + 3*time.Minute)
+	conflict("item-a", "conflict-a-2", "raised", now)
 	notices := pending()
 	if len(notices) != 1 || notices[0].Bundle.RuleID != ruleID || notices[0].Bundle.Subject != "item-a" {
-		t.Fatalf("want one notice for item-a at two item.conflict events, got %+v", notices)
+		t.Fatalf("want one notice for item-a at two raised item.conflict events, got %+v", notices)
 	}
 	guidance := notices[0].Bundle.Guidance
 	checkText := strings.Join(guidance.Check, " ")
@@ -144,16 +158,16 @@ func TestDrainRepeatedItemConflictsRule(t *testing.T) {
 		t.Fatalf("notice lacks subject, count, or request-words guidance: %+v", guidance)
 	}
 
-	// A third item.conflict event in the window keeps the single open alert episode.
-	now = now.Add(time.Hour)
-	conflict("item-a", "conflict-a-2", "raised", now)
+	// A third raised item.conflict event in the window keeps the single open alert episode.
+	now = t0.Add(26*time.Hour + 3*time.Minute)
+	conflict("item-a", "conflict-a-3", "raised", now)
 	if again := pending(); len(again) != 1 || again[0].AlertID != notices[0].AlertID {
-		t.Fatalf("third item.conflict event should keep the same alert open, got %+v", again)
+		t.Fatalf("third raised item.conflict event should keep the same alert open, got %+v", again)
 	}
 
-	// Once fewer than two item.conflict events remain inside the 24h window, the alert resolves.
-	now = now.Add(23*time.Hour + 30*time.Minute)
+	// Once fewer than two raised item.conflict events remain inside the 24h window, the alert resolves.
+	now = t0.Add(49*time.Hour + 30*time.Minute)
 	if aged := pending(); len(aged) != 0 {
-		t.Fatalf("alert should resolve once fewer than two item.conflict events remain in 24h, got %+v", aged)
+		t.Fatalf("alert should resolve once fewer than two raised item.conflict events remain in 24h, got %+v", aged)
 	}
 }

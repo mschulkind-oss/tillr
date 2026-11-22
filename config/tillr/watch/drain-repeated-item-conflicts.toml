@@ -1,8 +1,8 @@
 # On 2026-11-21, several items each went to the design seat two or three times
-# when the request's words conflicted with the code or with a design. Count
-# item.conflict events per item and warn at two or more in 24 hours; note that
-# item.conflict appends status transitions (raised, awaiting, answered, closed),
-# so a single obstacle can record multiple events.
+# when the request's words conflicted with the code or with a design; on
+# 2026-11-22, counting unfiltered item.conflict status transitions woke the
+# operator on single conflicts going raised -> awaiting. Count only raised
+# item.conflict events per item and warn at two or more in 24 hours.
 [[rule]]
 id = "drain-repeated-item-conflicts"
 scope = "core"
@@ -14,11 +14,12 @@ events = ["item.conflict"]
 [rule.when]
 group_by = "item_id"
 pattern = "count_in_window"
+match = 'event.status == "raised"'
 threshold = 2
 window = "24h"
 
 [rule.guidance]
-summary = "Item {{subject}} recorded {{count}} item.conflict events in the last 24 hours."
+summary = "Item {{subject}} raised {{count}} item.conflict events in the last 24 hours."
 check = ["Read the obstacle text for {{subject}} (for instance with tillr drain why {{subject}})."]
 do = ["Check whether the request's own words are the cause (for example a request that tells a build worker to edit a design document, or to state a cause it cannot establish)."]
 
