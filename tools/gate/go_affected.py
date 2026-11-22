@@ -643,6 +643,31 @@ def parse_go_test_json(stdout: str) -> tuple[dict[str, dict], str]:
     return results, "".join(text_chunks)
 
 
+def format_progress_event(line: str) -> str | None:
+    """Return a short progress line for a completed test or package JSON event, else None."""
+    stripped = line.lstrip()
+    if not stripped.startswith("{"):
+        return None
+    try:
+        ev = json.loads(stripped)
+    except ValueError:
+        return None
+    if not isinstance(ev, dict):
+        return None
+    action = ev.get("Action")
+    if action not in ("pass", "fail", "skip"):
+        return None
+    pkg = ev.get("Package")
+    if not isinstance(pkg, str) or not pkg:
+        return None
+    test_name = ev.get("Test")
+    elapsed = ev.get("Elapsed")
+    dur = f" ({elapsed:.2f}s)" if isinstance(elapsed, (int, float)) else ""
+    if isinstance(test_name, str) and test_name:
+        return f"go-affected: {action} {pkg} {test_name}{dur}\n"
+    return f"go-affected: {action} {pkg}{dur}\n"
+
+
 def write_evidence_atomic(ev_path: str, evidence: dict) -> None:
     if not ev_path:
         return
@@ -868,49 +893,61 @@ def _run_guarded_command(
     *,
     cwd: Path,
     env: dict[str, str],
-    out_dir: Path,
+    out_dir: Path | None = None,
+    on_line=None,
 ) -> tuple[int, str]:
-    """Run cmd under the subreaper guard with file-backed output so no child can hang or outlive it."""
+    """Run cmd under the subreaper guard, streaming stdout lines while it runs."""
     script = str(Path(__file__).resolve())
-    with tempfile.NamedTemporaryFile(dir=out_dir, prefix="go-affected-out-") as out_file, \
-            open(out_file.name, "rb") as reader:
-        lifeline_read, lifeline_write = os.pipe()
-        proc = None
+    lifeline_read, lifeline_write = os.pipe()
+    proc = None
+    chunks: list[str] = []
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, script, INVOCATION_GUARD_FLAG, str(lifeline_read), "--", *cmd],
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            pass_fds=(lifeline_read,),
+        )
+    except BaseException:
+        os.close(lifeline_write)
+        raise
+    finally:
+        os.close(lifeline_read)
+    with _live_guards_lock:
+        _live_guards[proc.pid] = lifeline_write
+    try:
+        assert proc.stdout is not None
         try:
-            proc = subprocess.Popen(
-                [sys.executable, script, INVOCATION_GUARD_FLAG, str(lifeline_read), "--", *cmd],
-                cwd=cwd,
-                env=env,
-                stdout=out_file,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-                pass_fds=(lifeline_read,),
-            )
-        except BaseException:
-            os.close(lifeline_write)
-            raise
+            for raw_line in proc.stdout:
+                line = raw_line.decode("utf-8", errors="replace")
+                chunks.append(line)
+                if on_line is not None:
+                    on_line(line)
         finally:
-            os.close(lifeline_read)
+            proc.stdout.close()
+        rc = proc.wait()
+    finally:
         with _live_guards_lock:
-            _live_guards[proc.pid] = lifeline_write
-        try:
-            rc = proc.wait()
-        finally:
-            with _live_guards_lock:
-                _live_guards.pop(proc.pid, None)
-            with contextlib.suppress(OSError):
-                os.close(lifeline_write)
-            if proc.poll() is None:
-                with contextlib.suppress(ProcessLookupError, PermissionError):
-                    os.kill(proc.pid, signal.SIGTERM)
-                proc.wait()
-        reader.seek(0)
-        size = os.fstat(out_file.fileno()).st_size
-        stdout = reader.read(size).decode("utf-8", errors="replace")
-    return rc, stdout
+            _live_guards.pop(proc.pid, None)
+        with contextlib.suppress(OSError):
+            os.close(lifeline_write)
+        if proc.poll() is None:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(proc.pid, signal.SIGTERM)
+            proc.wait()
+    return rc, "".join(chunks)
 
 
-def run_selected_tests(root: Path, selection: dict, *, ev_path: str = "") -> tuple[int, str, dict]:
+def run_selected_tests(
+    root: Path,
+    selection: dict,
+    *,
+    ev_path: str = "",
+    progress_stream=None,
+) -> tuple[int, str, dict]:
     selected = selection["selected"]
     initial_evidence = {
         "mode": "go-affected",
@@ -995,6 +1032,16 @@ def run_selected_tests(root: Path, selection: dict, *, ev_path: str = "") -> tup
     failed_pkgs_set: set[str] = set()
     max_slot_wait_ms = 0
     rc_all = 0
+    stream = sys.stdout if progress_stream is None else progress_stream
+    stream_lock = threading.Lock()
+
+    def emit_progress(line: str) -> None:
+        progress = format_progress_event(line)
+        if progress is None or stream is False:
+            return
+        with stream_lock:
+            stream.write(progress)
+            stream.flush()
 
     def record_failed_pkg(pkg_name: str, tests: list[str]) -> None:
         if pkg_name not in failed_pkgs_set:
@@ -1034,9 +1081,13 @@ def run_selected_tests(root: Path, selection: dict, *, ev_path: str = "") -> tup
                     label=f"go-affected:{mod}",
                 ):
                     wait_ms = int(round((time.monotonic() - wait_start) * 1000))
-                    rc, stdout = _run_guarded_command(cmd, cwd=root / mod, env=env, out_dir=out_dir)
+                    rc, stdout = _run_guarded_command(
+                        cmd, cwd=root / mod, env=env, out_dir=out_dir, on_line=emit_progress
+                    )
             else:
-                rc, stdout = _run_guarded_command(cmd, cwd=root / mod, env=env, out_dir=out_dir)
+                rc, stdout = _run_guarded_command(
+                    cmd, cwd=root / mod, env=env, out_dir=out_dir, on_line=emit_progress
+                )
         parsed, readable = parse_go_test_json(stdout)
         return rc, readable, wait_ms, parsed
 
@@ -1130,6 +1181,7 @@ def main(argv: list[str] | None = None) -> int:
     ev_path = args.evidence_out or os.environ.get("TILLR_GO_AFFECTED_EVIDENCE_OUT", "")
     rc, output, _evidence = run_selected_tests(root, selection, ev_path=ev_path)
     sys.stdout.write(output)
+    sys.stdout.flush()
     return rc
 
 

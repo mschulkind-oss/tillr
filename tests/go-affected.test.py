@@ -7,10 +7,12 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -976,6 +978,205 @@ def test_no_leftover_processes_after_check_finishes() -> None:
         assert not leftovers, f"leftover drain processes survived: {leftovers}"
 
 
+def test_streams_progress_lines_before_run_ends() -> None:
+    """go_affected.py prints one line per completed test or package while go test is still running."""
+    pkg = "github.com/mschulkind-oss/tillr-stream"
+    assert go_affected.format_progress_event("not json\n") is None
+    assert go_affected.format_progress_event(json.dumps({"Action": "start", "Package": pkg})) is None
+    assert go_affected.format_progress_event(json.dumps({"Action": "run", "Package": pkg, "Test": "TestA"})) is None
+    assert go_affected.format_progress_event(json.dumps({"Action": "output", "Package": pkg, "Output": "hi\n"})) is None
+    assert go_affected.format_progress_event(
+        json.dumps({"Action": "pass", "Package": pkg, "Test": "TestA", "Elapsed": 0.12})
+    ) == f"go-affected: pass {pkg} TestA (0.12s)\n"
+    assert go_affected.format_progress_event(
+        json.dumps({"Action": "fail", "Package": pkg, "Test": "TestB", "Elapsed": 1.5})
+    ) == f"go-affected: fail {pkg} TestB (1.50s)\n"
+    assert go_affected.format_progress_event(
+        json.dumps({"Action": "skip", "Package": pkg, "Test": "TestC", "Elapsed": 0.0})
+    ) == f"go-affected: skip {pkg} TestC (0.00s)\n"
+    assert go_affected.format_progress_event(
+        json.dumps({"Action": "pass", "Package": pkg, "Elapsed": 2.34})
+    ) == f"go-affected: pass {pkg} (2.34s)\n"
+
+    with tempfile.TemporaryDirectory(prefix="go-affected-stream-", dir=scratch_root()) as tmp:
+        tmp_path = Path(tmp)
+        repo = tmp_path / "repo"
+        (repo / "tools" / "tillr-stream").mkdir(parents=True)
+        (repo / "tools" / "gate").mkdir(parents=True)
+        (repo / "tools" / "gate" / "go-test-edges.json").write_text("{}\n")
+        (repo / "tools" / "tillr-stream" / "go.mod").write_text(
+            f"module {pkg}\n\ngo 1.22\n"
+        )
+        release_file = tmp_path / "release"
+        (repo / "tools" / "tillr-stream" / "stream_test.go").write_text(
+            'package main\n'
+            'import (\n'
+            '  "os"\n'
+            '  "testing"\n'
+            '  "time"\n'
+            ')\n'
+            'func TestFirst(t *testing.T) {}\n'
+            'func TestSecond(t *testing.T) {\n'
+            '  release := os.Getenv("STREAM_RELEASE_FILE")\n'
+            '  deadline := time.Now().Add(30 * time.Second)\n'
+            '  for time.Now().Before(deadline) {\n'
+            '    if _, err := os.Stat(release); err == nil { return }\n'
+            '    time.Sleep(20 * time.Millisecond)\n'
+            '  }\n'
+            '  t.Fatalf("release file %s never appeared", release)\n'
+            '}\n'
+        )
+        durable = tmp_path / "durable"
+        durable.mkdir()
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                str(ROOT / "tools" / "gate" / "go_affected.py"),
+                "--root", str(repo),
+                "--changed", "tools/tillr-stream/stream_test.go",
+            ],
+            env={
+                **os.environ,
+                "YOLO_DURABLE_DIR": str(durable),
+                "GO_TEST_SHARDS_LOCK_DIR": str(tmp_path / "locks"),
+                "GO_TEST_SHARDS_CLASS": "ordinary",
+                "GOCACHE": str(tmp_path / "gocache"),
+                "STREAM_RELEASE_FILE": str(release_file),
+            },
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        seen_lines: list[str] = []
+        saw_first_while_running = False
+        try:
+            assert proc.stdout is not None
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline:
+                remaining = max(0.0, deadline - time.monotonic())
+                ready, _, _ = select.select([proc.stdout], [], [], remaining)
+                if not ready:
+                    break
+                raw = proc.stdout.readline()
+                if not raw:
+                    break
+                line = raw.decode("utf-8", errors="replace")
+                seen_lines.append(line)
+                if f"go-affected: pass {pkg} TestFirst " in line:
+                    assert proc.poll() is None, f"process already exited before streaming TestFirst: {seen_lines}"
+                    assert not release_file.exists(), "TestSecond was already released"
+                    saw_first_while_running = True
+                    release_file.write_text("go\n", encoding="utf-8")
+                    break
+            assert saw_first_while_running, f"did not receive TestFirst progress line while running: {seen_lines}"
+            for raw in proc.stdout:
+                seen_lines.append(raw.decode("utf-8", errors="replace"))
+            rc = proc.wait(timeout=30)
+        finally:
+            if not release_file.exists():
+                release_file.write_text("cleanup\n", encoding="utf-8")
+            if proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=10)
+        assert rc == 0, "".join(seen_lines)
+        assert any(f"go-affected: pass {pkg} TestSecond " in ln for ln in seen_lines), seen_lines
+        assert any(ln.startswith(f"go-affected: pass {pkg} (") for ln in seen_lines), seen_lines
+        assert any(ln.startswith("go-affected: 1 package(s)") for ln in seen_lines), seen_lines
+
+
+def test_stalled_run_prints_nothing_without_test_events() -> None:
+    """A stalled go test prints no heartbeat/timer lines and burns no wrapper CPU while blocked."""
+    pkg = "github.com/mschulkind-oss/tillr-stall"
+
+    def proc_cpu_ticks(pid: int) -> int:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        fields = raw[raw.rfind(")") + 2:].split()
+        # utime (field 14, index 11 after state) + stime (field 15, index 12 after state).
+        return int(fields[11]) + int(fields[12])
+
+    with tempfile.TemporaryDirectory(prefix="go-affected-stall-", dir=scratch_root()) as tmp:
+        tmp_path = Path(tmp)
+        repo = tmp_path / "repo"
+        (repo / "tools" / "tillr-stall").mkdir(parents=True)
+        (repo / "tools" / "gate").mkdir(parents=True)
+        (repo / "tools" / "gate" / "go-test-edges.json").write_text("{}\n")
+        (repo / "tools" / "tillr-stall" / "go.mod").write_text(
+            f"module {pkg}\n\ngo 1.22\n"
+        )
+        started_file = tmp_path / "started"
+        release_file = tmp_path / "release"
+        (repo / "tools" / "tillr-stall" / "stall_test.go").write_text(
+            'package main\n'
+            'import (\n'
+            '  "os"\n'
+            '  "testing"\n'
+            '  "time"\n'
+            ')\n'
+            'func TestStalls(t *testing.T) {\n'
+            '  if err := os.WriteFile(os.Getenv("STALL_STARTED_FILE"), []byte("1"), 0o644); err != nil {\n'
+            '    t.Fatal(err)\n'
+            '  }\n'
+            '  release := os.Getenv("STALL_RELEASE_FILE")\n'
+            '  deadline := time.Now().Add(30 * time.Second)\n'
+            '  for time.Now().Before(deadline) {\n'
+            '    if _, err := os.Stat(release); err == nil { return }\n'
+            '    time.Sleep(20 * time.Millisecond)\n'
+            '  }\n'
+            '  t.Fatalf("release file %s never appeared", release)\n'
+            '}\n'
+        )
+        durable = tmp_path / "durable"
+        durable.mkdir()
+        proc = subprocess.Popen(
+            [
+                sys.executable,
+                str(ROOT / "tools" / "gate" / "go_affected.py"),
+                "--root", str(repo),
+                "--changed", "tools/tillr-stall/stall_test.go",
+            ],
+            env={
+                **os.environ,
+                "YOLO_DURABLE_DIR": str(durable),
+                "GO_TEST_SHARDS_LOCK_DIR": str(tmp_path / "locks"),
+                "GO_TEST_SHARDS_CLASS": "ordinary",
+                "GOCACHE": str(tmp_path / "gocache"),
+                "STALL_STARTED_FILE": str(started_file),
+                "STALL_RELEASE_FILE": str(release_file),
+            },
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        try:
+            assert proc.stdout is not None
+            deadline = time.monotonic() + 30.0
+            while not started_file.exists() and time.monotonic() < deadline:
+                assert proc.poll() is None, f"go_affected exited prematurely: {proc.stdout.read()!r}"
+                time.sleep(0.02)
+            assert started_file.exists(), "TestStalls never started"
+            # Allow go_affected.py to finish consuming the start/run events and block on the pipe.
+            time.sleep(0.2)
+            cpu_before = proc_cpu_ticks(proc.pid) if Path(f"/proc/{proc.pid}/stat").is_file() else None
+            ready, _, _ = select.select([proc.stdout], [], [], 2.0)
+            assert not ready, f"stalled run unexpectedly produced output: {proc.stdout.readline()!r}"
+            assert proc.poll() is None, "process exited during stall window"
+            if cpu_before is not None:
+                cpu_after = proc_cpu_ticks(proc.pid)
+                assert cpu_after == cpu_before, (
+                    f"wrapper consumed CPU while test stalled: before={cpu_before} after={cpu_after}"
+                )
+            release_file.write_text("go\n", encoding="utf-8")
+            tail = proc.stdout.read().decode("utf-8", errors="replace")
+            rc = proc.wait(timeout=30)
+        finally:
+            if not release_file.exists():
+                release_file.write_text("cleanup\n", encoding="utf-8")
+            if proc.poll() is None:
+                proc.terminate()
+                proc.wait(timeout=10)
+        assert rc == 0, tail
+        assert f"go-affected: pass {pkg} TestStalls " in tail, tail
+        assert f"go-affected: pass {pkg} (" in tail, tail
+
+
 def main() -> int:
     root_graph = go_affected.load_tillr_graph(ROOT)
     test_discover_modules()
@@ -989,6 +1190,8 @@ def main() -> int:
     test_heavy_failures_replay(root_graph)
     test_concurrent_runs_do_not_share_scratch_and_preserve_cache()
     test_no_leftover_processes_after_check_finishes()
+    test_streams_progress_lines_before_run_ends()
+    test_stalled_run_prints_nothing_without_test_events()
     print("PASS: all go-affected tests passed")
     return 0
 
