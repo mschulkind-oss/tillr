@@ -449,3 +449,21 @@ test('obstacle accepts all six kinds, rejects missing required fields, and repla
   assert.deepEqual(registered.parameters.required, ['kind']);
   assert.deepEqual(registered.parameters.properties.kind.enum, ['definition', 'owner', 'seat', 'tooling', 'trunk']);
 });
+
+test('land refuses committed unformatted Go files with their names until formatted', (t) => {
+  const { cwd, git, land, offer, refuses } = landFixture(t);
+  const repoRoot = fileURLToPath(new URL('../../../../../', import.meta.url));
+  writeFileSync(join(cwd, '.justfile'), readFileSync(join(repoRoot, '.justfile')));
+  mkdirSync(join(cwd, 'tools/gate/checks'), { recursive: true });
+  writeFileSync(join(cwd, 'tools/gate/checks/format.json'), readFileSync(join(repoRoot, 'tools/gate/checks/format.json')));
+  mkdirSync(join(cwd, 'tools/example'), { recursive: true });
+  writeFileSync(join(cwd, 'tools/example/unformatted.go'), 'package example\nfunc bad(){println(1)}\n');
+  git('add', '.justfile', 'tools/gate/checks/format.json', 'tools/example/unformatted.go');
+  git('-c', 'user.name=Test', '-c', 'user.email=test@example.org', 'commit', '-qm', 'unformatted');
+  refuses(() => land(), /tools\/example\/unformatted\.go/);
+  execFileSync('just', ['format'], { cwd });
+  git('add', 'tools/example/unformatted.go');
+  git('-c', 'user.name=Test', '-c', 'user.email=test@example.org', 'commit', '-q', '--amend', '--no-edit');
+  assert.equal(land().park, true);
+  assert.equal(existsSync(offer), true);
+});

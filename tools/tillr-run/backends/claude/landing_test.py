@@ -96,6 +96,24 @@ class PreToolUse(Fixture):
         sh(self.repo, "git", "reset", "-q", "--hard", "HEAD")
         self.assertFalse((self.durable / "landing-offer.json").exists())
 
+    def test_unformatted_go_files_are_denied_with_file_names_until_formatted(self):
+        repo_root = Path(__file__).resolve().parents[4]
+        (self.repo / ".justfile").write_bytes((repo_root / ".justfile").read_bytes())
+        (self.repo / "tools/gate/checks").mkdir(parents=True, exist_ok=True)
+        (self.repo / "tools/gate/checks/format.json").write_bytes((repo_root / "tools/gate/checks/format.json").read_bytes())
+        (self.repo / "tools/example").mkdir(parents=True, exist_ok=True)
+        (self.repo / "tools/example/unformatted.go").write_text("package example\nfunc bad(){println(1)}\n")
+        sh(self.repo, "git", "add", ".justfile", "tools/gate/checks/format.json", "tools/example/unformatted.go")
+        sh(self.repo, "git", "commit", "-qm", "unformatted")
+        decision, reason = self.pre()
+        self.assertEqual(decision, "deny")
+        self.assertIn("tools/example/unformatted.go", reason)
+        self.assertFalse((self.durable / "landing-offer.json").exists())
+        sh(self.repo, "just", "format")
+        sh(self.repo, "git", "add", "tools/example/unformatted.go")
+        sh(self.repo, "git", "commit", "-q", "--amend", "--no-edit")
+        self.assertEqual(self.pre(), ("defer", None))
+
     def test_a_commit_already_refused_is_denied_with_the_stored_answer(self):
         head = self.commit()
         (self.durable / "landing-state.json").write_text(json.dumps({"refused": [{"commit": head, "answer": "ANSWER: gate said no"}]}))

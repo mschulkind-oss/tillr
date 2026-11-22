@@ -2323,7 +2323,22 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 			}
 			return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, l.headOf(ctx, lane), "workflow node was cut short and remains unjudged")}
 		}
-		handled, nodeErr := l.settleNode(ctx, decision, record, log, mainSHA, result, offered)
+		var formatPrompt string
+		handled, nodeErr := l.settleNodeFormat(ctx, decision, record, log, mainSHA, result, offered, &formatPrompt)
+		if nodeErr == nil && formatPrompt != "" {
+			req := request
+			req.ResumePrompt = formatPrompt
+			resumed, resumedLog, stop, err := l.resumeAfterWall(ctx, lane, req, worktree, record, tick, at, result, watched)
+			if err != nil || stop != "" {
+				return laneOutcome{err: err, stop: stop}
+			}
+			if resumed.RunID != "" {
+				prepared = deferJudge
+				return l.settle(ctx, decision, resumed, resumedLog, mainSHA, tick, at, result, timing, watched, deferJudge)
+			}
+			record.Resumed = true
+			handled, nodeErr = l.settleNode(ctx, decision, record, log, mainSHA, result, offered)
+		}
 		if handled {
 			prepared = nodeErr == nil
 			return laneOutcome{err: nodeErr}
@@ -2609,6 +2624,48 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		c.DesignRunID = request.RunID
 		c.Text += "\n\nTriage run " + request.RunID + ":\n" + strings.TrimSpace(log)
 		decision.BlockConflict = &c
+	}
+	if decision.Workflow == nil && baseRef == "" && !item.IsCommentItem(request.ItemID) && decision.BlockConflict == nil && decision.DeskDocument == "" {
+		dirty, err := l.git(ctx, target, "status", "--porcelain", "--untracked-files=all")
+		if err != nil {
+			return laneOutcome{err: err}
+		}
+		if strings.TrimSpace(dirty) == "" {
+			unformatted, err := unformattedRepoFiles(ctx, target)
+			if err != nil {
+				return laneOutcome{err: err}
+			}
+			if len(unformatted) > 0 {
+				if !record.Resumed {
+					record.Resumed, err = l.continuationStarted(ctx, request)
+					if err != nil {
+						return laneOutcome{err: err}
+					}
+				}
+				if !offered && !record.Resumed && eligibleFormatContinuation(record) {
+					req := request
+					req.ResumePrompt = unformattedContinuationPrompt(unformatted)
+					resumed, resumedLog, stop, err := l.resumeAfterWall(ctx, lane, req, worktree, record, tick, at, result, watched)
+					if err != nil || stop != "" {
+						return laneOutcome{err: err, stop: stop}
+					}
+					if resumed.RunID != "" {
+						prepared = deferJudge
+						return l.settle(ctx, decision, resumed, resumedLog, mainSHA, tick, at, result, timing, watched, deferJudge)
+					}
+				}
+				detail := unformattedRefusalDetail(unformatted)
+				candidate := Candidate{
+					ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, TickID: tick,
+					Worktree: target, BaseRef: baseRef, BaseSHA: baseSHA, HeadSHA: headSHA,
+					Request: &request, Seat: decision.Seat, RefusalDetail: detail,
+				}
+				if err := l.refuse(ctx, candidate, result, RefusalFence); err != nil {
+					return laneOutcome{err: err}
+				}
+				return laneOutcome{stop: l.abandon(ctx, lane, request.RunID, candidate.HeadSHA, detail)}
+			}
+		}
 	}
 	candidate := Candidate{
 		ItemID: request.ItemID, LaneID: lane, RunID: request.RunID, TickID: tick,
