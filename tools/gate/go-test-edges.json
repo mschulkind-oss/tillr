@@ -1,0 +1,129 @@
+{
+  "github.com/mschulkind-oss/tillr-drain": {
+    "builds": [
+      "github.com/mschulkind-oss/tillr-cli",
+      "github.com/mschulkind-oss/tillr-gate",
+      "github.com/mschulkind-oss/tillr-item",
+      "github.com/mschulkind-oss/tillr-land",
+      "github.com/mschulkind-oss/tillr-run",
+      "github.com/mschulkind-oss/tillr-store",
+      "github.com/mschulkind-oss/tillr-view"
+    ],
+    "reads": [
+      "bin/pi-forks",
+      "config/tillr/",
+      "tools/fork-check.py",
+      "tools/tillr/examples/",
+      "tools/tillr-loop/tillr-loop",
+      "tools/tillr-roll/tillr-roll.py",
+      "tools/tillr-run/backends/",
+      "yolo-packs/tillr/programs/"
+    ]
+  },
+  "github.com/mschulkind-oss/tillr-drain/drain": {
+    "builds": [
+      "github.com/mschulkind-oss/tillr-cli",
+      "github.com/mschulkind-oss/tillr-drain",
+      "github.com/mschulkind-oss/tillr-gate",
+      "github.com/mschulkind-oss/tillr-item",
+      "github.com/mschulkind-oss/tillr-land",
+      "github.com/mschulkind-oss/tillr-run",
+      "github.com/mschulkind-oss/tillr-store",
+      "github.com/mschulkind-oss/tillr-view"
+    ],
+    "reads": [
+      "config/tillr/",
+      "tools/fork-check.py",
+      "tools/gate/change-gate.py",
+      "tools/gate/classify.py",
+      "tools/go-test-shards.py",
+      "tools/pack-mirror-links.py",
+      "tools/tillr-loop/drain-argv.json",
+      "tools/tillr-loop/tillr-loop",
+      "tools/tillr-roll/tillr-roll.py",
+      "tools/tillr-run/backends/",
+      "yolo-packs/tillr/pack.json",
+      "yolo-packs/tillr/programs/"
+    ]
+  },
+  "github.com/mschulkind-oss/tillr-gate": {
+    "builds": [],
+    "reads": [
+      "tests/pi-patch-series.test.sh",
+      "tools/fork-check.py",
+      "tools/gate/checks/",
+      "tools/tillr-loop/tillr-loop",
+      "yolo-packs/fork-pins/"
+    ]
+  },
+  "github.com/mschulkind-oss/tillr-item": {
+    "builds": [
+      "github.com/mschulkind-oss/tillr-store"
+    ],
+    "reads": [
+      "config/tillr/workflows/"
+    ]
+  },
+  "github.com/mschulkind-oss/tillr-item/item": {
+    "builds": [],
+    "reads": [
+      "config/tillr/workflows/"
+    ]
+  },
+  "github.com/mschulkind-oss/tillr-land": {
+    "builds": [
+      "github.com/mschulkind-oss/tillr-gate",
+      "github.com/mschulkind-oss/tillr-item"
+    ],
+    "reads": [
+      "tools/go-test-shards.py",
+      "tools/tillr-land/shards_test.py"
+    ]
+  },
+  "github.com/mschulkind-oss/tillr-run": {
+    "builds": [],
+    "reads": [
+      "tools/tillr-run/backends/"
+    ]
+  },
+  "github.com/mschulkind-oss/tillr-run/run": {
+    "builds": [],
+    "reads": [
+      "tools/tillr-run/backends/"
+    ]
+  },
+  "github.com/mschulkind-oss/tillr-store": {
+    "builds": [
+      "github.com/mschulkind-oss/tillr-drain",
+      "github.com/mschulkind-oss/tillr-item",
+      "github.com/mschulkind-oss/tillr-land",
+      "github.com/mschulkind-oss/tillr-run",
+      "github.com/mschulkind-oss/tillr-view"
+    ],
+    "reads": [
+      "tools/tillr/store/testdata/crash_writer.py"
+    ]
+  },
+  "github.com/mschulkind-oss/tillr-view": {
+    "builds": [
+      "github.com/mschulkind-oss/tillr-drain",
+      "github.com/mschulkind-oss/tillr-item",
+      "github.com/mschulkind-oss/tillr-run"
+    ],
+    "reads": [
+      "tools/tillr-trace/",
+      "tools/tillr/store/testdata/crash_writer.py",
+      "yolo-packs/tillr/programs/"
+    ]
+  },
+  "github.com/mschulkind-oss/tillr-watch": {
+    "builds": [
+      "github.com/mschulkind-oss/tillr-store"
+    ],
+    "reads": [
+      "config/tillr/watch/",
+      "tools/tillr/examples/",
+      "tools/tillr/watch/testdata/"
+    ]
+  }
+}
