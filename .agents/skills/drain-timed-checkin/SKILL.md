@@ -300,20 +300,30 @@ use this to find the issues and fix them").
 
 ## Lane steps
 
-The owner sets the target lane count. The operating agent steps toward it one
-lane at a time, and only when all four hold over the last 30 minutes:
+The owner sets the lane count, and may set it directly. What limits it is
+wasted work, not idle time. Owner, 2026-11-21: "the reason why we have fewer
+lanes is because we're wasting a lot of work by having Lots of conflicts,
+rework, red trunks, all that stuff ... the amount of time waiting was sort of a
+proxy for that, but not the primary thing I care about."
 
-1. No ordinary lane was idle more than 10% of samples while work waited only
-   for a lane.
-2. Every idle stretch over 2 minutes with work waiting has a root cause that is
-   filed.
-3. The trunk proof was green and the loop did not exit.
-4. At least one item was waiting only for a lane.
+At each check-in, read over the last 30 minutes:
 
-A window that contains a red trunk, a stuck heavy runner, an operator restart or
-a sampler fault starts again from when that ended. Step with
+1. **Wasted work** — the deciding figure: candidates refused and redone
+   (refusal counts that grew), landings that could not be applied onto the
+   trunk, landings that turned the trunk proof red, and items closed with their
+   work thrown away.
+2. Whether the trunk proof was green and the loop did not exit.
+3. Idle time with work waiting, from the lane report — reported, and every
+   stretch over 2 minutes still gets a root cause filed, but it does not gate
+   the lane count.
+
+When the owner has left the count to the operating agent, step up one lane when
+wasted work is not rising and the trunk stayed green, and hold when it is
+rising: file the cause instead of adding lanes. Never lower a count the owner
+set; report the waste and its cause. Change the count with
 `tillr drain scale --lanes <count>` on the running loop; no restart is needed.
-Record each step and its evidence in the rulings file.
+Record each change and its evidence in the rulings file. The owner expects the
+limit to stop being needed, so do not build machinery for it.
 
 ## Reporting to the owner
 
