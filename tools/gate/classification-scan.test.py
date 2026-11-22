@@ -11,8 +11,16 @@ SITES = {
     "tools/gate/change-gate.py": ("main", "warm_trimmed_go_cache", "preserve_fast_timing"),
     "tools/gate/checks/change_common.py": ("stored_result", "judge_document_set"),
     "tools/gate/checks/go-build.py": ("main",),
+    "tools/fork-check.py": (
+        "classified_skip",
+        "settle_check_skips",
+        "check_status",
+        "verdict_of",
+        "write_gate_spans",
+        "run_replay",
+    ),
 }
-UNMOVED_PYTHON = ("tools/fork-check.py",)
+UNMOVED_PYTHON = ()
 GO_SITES = {
     "tools/tillr-gate/checks.go": ("checksFace",),
     "tools/tillr-gate/dualrun.go": ("pythonVerdict", "verdictResult", "compare"),
@@ -161,17 +169,22 @@ def raw_go_comparisons(source, *, full_runner_scan=True):
     return sorted(found)
 
 
+def _dict_key(node):
+    if isinstance(node, ast.Subscript):
+        return node.slice
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get" and node.args):
+        return node.args[0]
+    return None
+
+
 def raw_word_operand(node):
     if isinstance(node, ast.Name):
         return node.id in {"result", "word", "raw_word"}
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        return node.func.id == "check_status"
     # Stored records and runner payloads expose their raw word as `result`.
-    if isinstance(node, ast.Subscript):
-        key = node.slice
-    elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-          and node.func.attr == "get" and node.args):
-        key = node.args[0]
-    else:
-        return False
+    key = _dict_key(node)
     return isinstance(key, ast.Constant) and key.value == "result"
 
 
@@ -180,7 +193,12 @@ def raw_operand(node):
         return any(raw_operand(element) for element in node.elts)
     if isinstance(node, ast.Name) and node.id in {"code", "exit_code", "rc"}:
         return True
-    if isinstance(node, ast.Attribute) and node.attr == "returncode":
+    if isinstance(node, ast.Attribute) and node.attr in {
+        "returncode", "rc", "failed", "conflict", "unanswered", "verdict",
+    }:
+        return True
+    key = _dict_key(node)
+    if isinstance(key, ast.Constant) and key.value in {"exit_code", "rc"}:
         return True
     return raw_word_operand(node)
 
@@ -249,7 +267,7 @@ class ClassificationScanTest(unittest.TestCase):
         self.assertEqual(loop_gate_comparisons(execute), [])
         self.assertEqual((ROOT / "tools/tillr-loop/tillr-loop").read_bytes(),
                          (ROOT / "tools/tillr-drain/drain/tillr-loop.py").read_bytes())
-        self.assertEqual(UNMOVED_PYTHON, ("tools/fork-check.py",))
+        self.assertEqual(UNMOVED_PYTHON, ())
         self.assertEqual([p for p in UNMOVED_GO if p.startswith("tools/tillr-gate/")], [])
         for path, names in GO_SITES.items():
             source = (ROOT / path).read_text()
@@ -330,6 +348,23 @@ def main():
                 source = ast.parse(f'def stored_result():\n    return {expression}\n')
                 self.assertEqual(raw_exit_comparisons(source.body), [2])
         source = ast.parse('def stored_result():\n    return answer["outcome"] == verdict\n')
+        self.assertEqual(raw_exit_comparisons(source.body), [])
+
+    def test_legacy_gate_and_replay_pairings_are_caught(self):
+        for expression in (
+            'check.rc == 0',
+            'check.unanswered',
+            'check.conflict',
+            'check_status(check) == "FAIL"',
+            'run["exit_code"] == 0',
+        ):
+            with self.subTest(expression=expression):
+                source = ast.parse(f'def site(check, run):\n    if {expression}:\n        return 1\n')
+                self.assertEqual(raw_exit_comparisons(source.body), [2])
+        source = ast.parse('''\
+def verdict_of(run):
+    return run["detail"], run["exit_code"]
+''')
         self.assertEqual(raw_exit_comparisons(source.body), [])
 
 
