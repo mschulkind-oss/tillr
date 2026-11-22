@@ -28,6 +28,7 @@ Run: python3 tests/tillr-docs.test.py
 """
 
 import ast
+from concurrent.futures import ThreadPoolExecutor
 import copy
 import importlib.util
 import os
@@ -246,23 +247,48 @@ def invocations(path):
     return found
 
 
-def build(directory):
-    """Build the eight binaries into one directory, which is what `PATH` will hold."""
-    for module, binary in sorted(BINARY.items(), key=lambda item: item[1]):
-        built = subprocess.run(
-            ["go", "build", "-o", str(directory / binary), "."],
-            cwd=ROOT / "tools" / module,
-            capture_output=True,
+def go_build_env():
+    """Match the fast gate's `go-build` flags so compiled packages come from GOCACHE."""
+    env = dict(os.environ, CGO_ENABLED="0")
+    env.pop("LAND_BATCH_LIMIT", None)
+    env["GOFLAGS"] = " ".join(filter(None, [os.environ.get("GOFLAGS", ""), "-trimpath"]))
+    return env
+
+
+def build_module(module, binary, directory, root=ROOT):
+    return subprocess.run(
+        ["go", "build", "-o", str(directory / binary), "."],
+        cwd=root / "tools" / module,
+        env=go_build_env(),
+        capture_output=True,
+        timeout=BUILD_TIMEOUT,
+    )
+
+
+def build_binaries_error(directory, root=ROOT):
+    items = sorted(BINARY.items(), key=lambda item: item[1])
+    with ThreadPoolExecutor(max_workers=len(items)) as pool:
+        results = list(
+            pool.map(lambda item: (*item, build_module(item[0], item[1], directory, root)), items)
         )
+    for module, binary, built in results:
         if built.returncode != 0:
-            fail(
+            return (
                 f"building {binary} from tools/{module} failed:\n"
                 + built.stderr.decode(errors="replace")
             )
+    return None
 
 
-def case_faces_answer_help(directory):
-    """Case 3: every documented face answers `--help` with exit 0 and its own flag set."""
+def build(directory, root=ROOT):
+    """Build the eight binaries into one directory, which is what `PATH` will hold."""
+    error = build_binaries_error(directory, root)
+    if error is not None:
+        fail(error)
+
+
+def faces_help_error(directory, documents=DOCUMENTS, root=ROOT):
+    """Run `--help` concurrently across every documented invocation in document order."""
     environment = dict(os.environ)
     environment["PATH"] = str(directory) + os.pathsep + environment.get("PATH", "")
     # Nothing here reads a store, but a face that derived one anyway must not reach the
@@ -270,36 +296,121 @@ def case_faces_answer_help(directory):
     environment["BOARD_DB"] = ""
     environment["XDG_STATE_HOME"] = str(directory / "state")
 
-    seen, checked = set(), 0
-    for path in DOCUMENTS:
-        relative = path.relative_to(ROOT)
+    ordered, seen = [], set()
+    for path in documents:
+        relative = path.relative_to(root)
         for argv in invocations(path):
             if argv in seen:
                 continue
             seen.add(argv)
-            command = [str(directory / argv[0]), *argv[1:], "--help"]
-            ran = subprocess.run(
-                command, cwd=directory, env=environment, capture_output=True, timeout=HELP_TIMEOUT
-            )
-            face = argv[-1]
-            if ran.returncode != 0:
-                fail(
-                    f"{relative} documents `{' '.join(argv)}`, which does not answer its "
-                    f"`--help`: exit {ran.returncode}\n"
-                    f"stderr: {ran.stderr.decode(errors='replace').strip()}\n"
-                    "A face a document names is a face the binary must have."
-                )
-            if face not in ran.stdout.decode(errors="replace"):
-                fail(
-                    f"{relative} documents `{' '.join(argv)}`, whose `--help` does not name "
-                    f"the face:\n{ran.stdout.decode(errors='replace').strip()}"
-                )
-            checked += 1
-    if not checked:
-        fail(
+            ordered.append((relative, argv))
+    if not ordered:
+        return (
             "no documented invocation was found in any module README or in the "
-            "tillr-operating skill, so this suite asserted nothing"
+            "tillr-operating skill, so this suite asserted nothing",
+            0,
         )
+
+    def run_one(entry):
+        relative, argv = entry
+        command = [str(directory / argv[0]), *argv[1:], "--help"]
+        ran = subprocess.run(
+            command, cwd=directory, env=environment, capture_output=True, timeout=HELP_TIMEOUT
+        )
+        return relative, argv, ran
+
+    with ThreadPoolExecutor(max_workers=min(16, len(ordered))) as pool:
+        results = list(pool.map(run_one, ordered))
+
+    for relative, argv, ran in results:
+        face = argv[-1]
+        if ran.returncode != 0:
+            return (
+                f"{relative} documents `{' '.join(argv)}`, which does not answer its "
+                f"`--help`: exit {ran.returncode}\n"
+                f"stderr: {ran.stderr.decode(errors='replace').strip()}\n"
+                "A face a document names is a face the binary must have.",
+                len(ordered),
+            )
+        if face not in ran.stdout.decode(errors="replace"):
+            return (
+                f"{relative} documents `{' '.join(argv)}`, whose `--help` does not name "
+                f"the face:\n{ran.stdout.decode(errors='replace').strip()}",
+                len(ordered),
+            )
+    return None, len(ordered)
+
+
+def faces_help_fixture_error(scratch):
+    """Verify `faces_help_error` on a tree with one face's `--help` broken and on silent help."""
+    broken_tree = scratch / "broken-tree"
+    (broken_tree / "tools").mkdir(parents=True)
+    (broken_tree / "tools" / "tillr").symlink_to(ROOT / "tools" / "tillr")
+    shutil.copytree(ROOT / "tools" / "tillr-gate", broken_tree / "tools" / "tillr-gate")
+    gate_main = broken_tree / "tools" / "tillr-gate" / "main.go"
+    source = gate_main.read_text()
+    target = '\t"shadow":   shadowFace,\n'
+    if target not in source:
+        return "tillr-gate main.go no longer registers the shadow face expected by the fixture"
+    gate_main.write_text(source.replace(target, "", 1))
+
+    broken_bin = scratch / "broken-bin"
+    broken_bin.mkdir()
+    for binary in BINARY.values():
+        if binary != "tillr-gate":
+            (broken_bin / binary).symlink_to(scratch / binary)
+    built = build_module("tillr-gate", "tillr-gate", broken_bin, root=broken_tree)
+    if built.returncode != 0:
+        return (
+            "building broken tillr-gate fixture failed:\n"
+            + built.stderr.decode(errors="replace")
+        )
+    error, _ = faces_help_error(broken_bin)
+    expected_prefix = (
+        "tools/tillr-gate/README.md documents `tillr-gate shadow`, which does not answer its "
+        "`--help`: exit 2\n"
+        'stderr: tillr-gate: "shadow" is not a face;'
+    )
+    expected_suffix = "\nA face a document names is a face the binary must have."
+    if error is None or not error.startswith(expected_prefix) or not error.endswith(expected_suffix):
+        return f"broken-face fixture reported unexpected finding: {error!r}"
+
+    # Also verify a face whose `--help` exits 0 without naming the face, and that concurrent
+    # execution still reports the earlier document's failure when a later face also fails.
+    silent_bin = scratch / "silent-bin"
+    silent_bin.mkdir()
+    for binary in BINARY.values():
+        if binary not in ("tillr-land", "tillr-view"):
+            (silent_bin / binary).symlink_to(scratch / binary)
+    land_shim = silent_bin / "tillr-land"
+    land_shim.write_text(
+        "#!/bin/sh\n"
+        'if [ "${1:-}" = "one" ]; then printf "Usage: tillr-land <face>\\n"; exit 0; fi\n'
+        f'exec "{scratch / "tillr-land"}" "$@"\n'
+    )
+    land_shim.chmod(0o755)
+    view_shim = silent_bin / "tillr-view"
+    view_shim.write_text(
+        "#!/bin/sh\n"
+        'if [ "${1:-}" = "perf-log" ]; then printf "broken perf-log\\n" >&2; exit 2; fi\n'
+        f'exec "{scratch / "tillr-view"}" "$@"\n'
+    )
+    view_shim.chmod(0o755)
+    silent_error, _ = faces_help_error(silent_bin)
+    expected_silent = (
+        "tools/tillr-land/README.md documents `tillr-land one`, whose `--help` does not name "
+        "the face:\nUsage: tillr-land <face>"
+    )
+    if silent_error != expected_silent:
+        return f"silent-help fixture reported {silent_error!r}, want {expected_silent!r}"
+    return None
+
+
+def case_faces_answer_help(directory):
+    """Case 3: every documented face answers `--help` with exit 0 and its own flag set."""
+    error, checked = faces_help_error(directory)
+    if error is not None:
+        fail(error)
     ok(f"every documented face answers `--help` with its own flag set "
        f"({checked} invocations over {len(DOCUMENTS)} documents)")
 
@@ -366,12 +477,19 @@ def python_command_blobs(text):
             value = self.value(node.value)
             for target in node.targets:
                 if isinstance(target, ast.Name):
-                    self.values[target.id] = value
+                    if value is None:
+                        self.values.pop(target.id, None)
+                    else:
+                        self.values[target.id] = value
 
         def visit_AnnAssign(self, node):
             self.generic_visit(node)
             if isinstance(node.target, ast.Name):
-                self.values[node.target.id] = self.value(node.value)
+                value = self.value(node.value) if node.value is not None else None
+                if value is None:
+                    self.values.pop(node.target.id, None)
+                else:
+                    self.values[node.target.id] = value
 
         def visit_AugAssign(self, node):
             self.generic_visit(node)
@@ -450,6 +568,16 @@ def python_command_blobs(text):
     return blobs
 
 
+STRIP_SHELL_QUOTES = str.maketrans("", "", "'\"\\")
+
+
+def _might_name_rolling(text):
+    return "--rolling" in text or (
+        ("'" in text or '"' in text or "\\" in text)
+        and "--rolling" in text.translate(STRIP_SHELL_QUOTES)
+    )
+
+
 def rolling_disabled(text, markdown=False, python_script=False):
     """Return disabling loop commands, not mentions of the flag or quoted fixtures."""
     hits = []
@@ -457,8 +585,13 @@ def rolling_disabled(text, markdown=False, python_script=False):
     if not markdown and (python_script or re.match(r"^#![^\n]*python", text)):
         blobs.extend(python_command_blobs(text))
     for blob in blobs:
+        if not _might_name_rolling(blob):
+            continue
         # Shell continuations belong to the same command, including in recipes.
-        for line in re.sub(r"\\\r?\n", " ", blob).splitlines():
+        joined = re.sub(r"\\\r?\n", " ", blob) if "\\" in blob else blob
+        for line in joined.splitlines():
+            if not _might_name_rolling(line):
+                continue
             try:
                 lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|()")
                 lexer.whitespace_split = True
@@ -518,6 +651,8 @@ def case_rolling_guard_fixtures():
         'exec /opt/bin/tillr-drain loop --rolling=""',
         'tillr-drain loop \\\n  --rolling ""',
         "tillr drain loop --rolling=",
+        "tillr-drain loop '--rol'\"ling\" ''",
+        r'tillr-drain loop -\-rolling=""',
         '#!/usr/bin/env python3\ndef loop_command():\n    return ["tillr-drain", "loop", "--rolling", ""]',
         '#!/usr/bin/env python3\ncommand = ["tillr-drain", "loop"]\ncommand.extend(["--rolling", ""])\nsubprocess.run(command)',
         '#!/usr/bin/env python3\nsubprocess.run("tillr-drain loop --rolling \'\'", shell=True)',
@@ -803,41 +938,82 @@ def case_refused_push_documented():
     ok("the refused-push states, repair landing and push face are documented")
 
 
-def main():
-    case_refused_push_documented()
-    case_workflow_judge_documented()
-    case_run_timing_and_schedule_documented()
-    case_seed_retirement_documented()
-    green_build_tests = subprocess.run(
-        [sys.executable, str(ROOT / "tests/tillr-build.test.py")],
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-    )
-    if green_build_tests.returncode:
-        fail("the green-tree deployment regression tests failed")
-    case_run_environment_documented()
-    case_worker_refusal_session_documented()
-    case_cache_safe_working_loop_documented()
-    case_fork_filing_documented()
-    cleanup_tests = subprocess.run(
-        [sys.executable, str(ROOT / "tests/tillr-scratch.test.py")],
-        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-    )
-    if cleanup_tests.returncode:
-        fail("the TestMain scratch cleanup regression tests failed")
-    case_document_fed_prerequisite_documented()
-    case_designer_session_selection_documented()
-    case_comment_intake_documented()
-    case_recovery()
-    case_rolling_guard_fixtures()
-    case_rolling_enabled()
-    case_callout()
-    case_no_flag_table()
+def _run_faces_lane():
     scratch = Path(tempfile.mkdtemp(dir=os.environ.get("YOLO_DURABLE_DIR")))
     try:
-        build(scratch)
-        case_faces_answer_help(scratch)
+        build_error = build_binaries_error(scratch)
+        if build_error is not None:
+            return build_error, 0, None
+        help_error, checked = faces_help_error(scratch)
+        if help_error is not None:
+            return help_error, checked, None
+        return None, checked, faces_help_fixture_error(scratch)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _flush_subprocess_output(completed):
+    if completed.stdout:
+        sys.stdout.buffer.write(completed.stdout)
+        sys.stdout.buffer.flush()
+    if completed.stderr:
+        sys.stderr.buffer.write(completed.stderr)
+        sys.stderr.buffer.flush()
+
+
+def main():
+    child_env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        green_future = pool.submit(
+            subprocess.run,
+            [sys.executable, str(ROOT / "tests/tillr-build.test.py")],
+            env=child_env,
+            capture_output=True,
+        )
+        cleanup_future = pool.submit(
+            subprocess.run,
+            [sys.executable, str(ROOT / "tests/tillr-scratch.test.py")],
+            env=child_env,
+            capture_output=True,
+        )
+        faces_future = pool.submit(_run_faces_lane)
+
+        case_refused_push_documented()
+        case_workflow_judge_documented()
+        case_run_timing_and_schedule_documented()
+        case_seed_retirement_documented()
+        case_run_environment_documented()
+        case_worker_refusal_session_documented()
+        case_cache_safe_working_loop_documented()
+        case_fork_filing_documented()
+        case_document_fed_prerequisite_documented()
+        case_designer_session_selection_documented()
+        case_comment_intake_documented()
+        case_recovery()
+        case_rolling_guard_fixtures()
+        case_rolling_enabled()
+        case_callout()
+        case_no_flag_table()
+
+        green_build_tests = green_future.result()
+        _flush_subprocess_output(green_build_tests)
+        if green_build_tests.returncode:
+            fail("the green-tree deployment regression tests failed")
+
+        cleanup_tests = cleanup_future.result()
+        _flush_subprocess_output(cleanup_tests)
+        if cleanup_tests.returncode:
+            fail("the TestMain scratch cleanup regression tests failed")
+
+        help_error, checked, fixture_error = faces_future.result()
+        if help_error is not None:
+            fail(help_error)
+        if fixture_error is not None:
+            fail(fixture_error)
+        ok(f"every documented face answers `--help` with its own flag set "
+           f"({checked} invocations over {len(DOCUMENTS)} documents)")
+        ok("broken or silent face `--help` fails with the documented face's finding")
+
     print("the eight module READMEs state their judgment, and every face they name exists")
     return 0
 

@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Build all eight programs from a frozen green tree, never the newer checkout."""
+from concurrent.futures import ThreadPoolExecutor
+import io
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -21,7 +24,9 @@ class GreenBuild(unittest.TestCase):
         self.root = Path(self.scratch.name) / 'repo'
         self.root.mkdir()
         self.out = Path(self.scratch.name) / 'output'
-        self.env = dict(os.environ, YOLO_DURABLE_DIR=str(self.out))
+        self.env = dict(os.environ, YOLO_DURABLE_DIR=str(self.out), CGO_ENABLED='0')
+        self.env.pop('LAND_BATCH_LIMIT', None)
+        self.env['GOFLAGS'] = ' '.join(filter(None, [os.environ.get('GOFLAGS', ''), '-trimpath']))
         (self.root / '.justfile').write_text((ROOT / '.justfile').read_text())
         self.git('init', '-q', '-b', 'main')
         for module in MODULES:
@@ -208,5 +213,33 @@ class GreenBuild(unittest.TestCase):
         self.assertEqual(proof['green_commit'], self.green)
 
 
+def run_suite_concurrent(case_cls, stream=None):
+    target = sys.stderr if stream is None else stream
+    names = unittest.defaultTestLoader.getTestCaseNames(case_cls)
+
+    def run_one(name):
+        buf = io.StringIO()
+        result = unittest.TextTestRunner(stream=buf, verbosity=2).run(
+            unittest.TestSuite([case_cls(name)])
+        )
+        return result.wasSuccessful(), buf.getvalue()
+
+    with ThreadPoolExecutor(max_workers=max(1, len(names))) as pool:
+        outcomes = list(pool.map(run_one, names))
+    failed = False
+    for passed, output in outcomes:
+        if passed:
+            first = output.splitlines()[0] if output else ''
+            if first:
+                print(first, file=target)
+        else:
+            failed = True
+            target.write(output)
+    print(f'\nRan {len(outcomes)} tests\n\n{"FAILED" if failed else "OK"}', file=target)
+    return 1 if failed else 0
+
+
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    if len(sys.argv) > 1:
+        unittest.main(verbosity=2)
+    raise SystemExit(run_suite_concurrent(GreenBuild))
