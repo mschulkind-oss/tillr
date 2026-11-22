@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Permanent runner regression tests; parity lists and plans the real drain suite without running it."""
-from contextlib import redirect_stderr
+from contextlib import ExitStack, redirect_stderr
 import importlib.util
 import io
 import json
@@ -951,78 +951,64 @@ func hold(t *testing.T) {{
             "print('--- PASS: TestFast (0.00s)', flush=True)\n"
             "print('PASS', flush=True)\n"
         )
-        ordinary_held = threading.Event()
-        gate_held = threading.Event()
-        release_blockers = threading.Event()
+        # Acquire ordinary before gate synchronously on this thread: gate prefers slot-* over
+        # gate-*, so starting both concurrently lets gate claim slot-0 and deadlock ordinary.
+        # Advance the runner's monotonic clock past wall_timeout while the waiter is queued
+        # instead of racing a tight real-time deadline against subprocess startup under load.
+        real_monotonic = time.monotonic
+        clock_offset = [0.0]
 
-        blocker_errors = []
+        def shifted_monotonic():
+            return real_monotonic() + clock_offset[0]
 
-        def hold(slot_class, holder_name, held_evt):
+        with patch.dict(os.environ, {'TILLR_TRACE_DIR': str(trace_dir)}), \
+                patch.object(shards.time, 'monotonic', side_effect=shifted_monotonic):
+            blockers = ExitStack()
             try:
-                with shards.acquire_shard_slot(
-                    lock_dir, 1, slot_class=slot_class, proof_limit=0, gate_limit=1,
-                    gate_reserved_limit=1, holder=holder_name,
-                ):
-                    held_evt.set()
-                    assert release_blockers.wait(30)
-            except BaseException as exc:
-                blocker_errors.append(exc)
-                held_evt.set()
-                raise
+                blockers.enter_context(shards.acquire_shard_slot(
+                    lock_dir, 1, slot_class='ordinary', proof_limit=0, gate_limit=1,
+                    gate_reserved_limit=1, holder='run-worker',
+                ))
+                blockers.enter_context(shards.acquire_shard_slot(
+                    lock_dir, 1, slot_class='gate', proof_limit=0, gate_limit=1,
+                    gate_reserved_limit=1, holder='gate:blocker',
+                ))
 
-        trace_ctx = patch.dict(os.environ, {'TILLR_TRACE_DIR': str(trace_dir)})
-        trace_ctx.start()
-        blocker_threads = [
-            threading.Thread(target=hold, args=('ordinary', 'run-worker', ordinary_held)),
-            threading.Thread(target=hold, args=('gate', 'gate:blocker', gate_held)),
-        ]
-        for thread in blocker_threads:
-            thread.start()
-        try:
-            self.assertTrue(ordinary_held.wait(30))
-            self.assertTrue(gate_held.wait(30))
-            if blocker_errors:
-                raise blocker_errors[0]
+                result_holder = []
+                error_holder = []
 
-            result_holder = []
-            error_holder = []
+                def run_waiting_gate_shard():
+                    try:
+                        result_holder.append(shards.run_shard(
+                            'fixture', self.root, binary, ['TestFast'], 0,
+                            self.root / 'gate-scratch', '0', [], wall_timeout=60.0,
+                            lock_dir=lock_dir, shard_limit=1, proof_limit=0, gate_limit=1,
+                            gate_reserved_limit=1, slot_class='gate', holder='gate:waiter',
+                        ))
+                    except BaseException as exc:
+                        error_holder.append(exc)
 
-            def run_waiting_gate_shard():
-                try:
-                    result_holder.append(shards.run_shard(
-                        'fixture', self.root, binary, ['TestFast'], 0,
-                        self.root / 'gate-scratch', '0', [], wall_timeout=0.35,
-                        lock_dir=lock_dir, shard_limit=1, proof_limit=0, gate_limit=1,
-                        gate_reserved_limit=1, slot_class='gate', holder='gate:waiter',
-                    ))
-                except BaseException as exc:
-                    error_holder.append(exc)
-
-            waiter = threading.Thread(target=run_waiting_gate_shard)
-            waiter.start()
-            while not shards.gate_caller_waiting(lock_dir):
-                self.assertTrue(waiter.is_alive(), f'waiter exited early: {error_holder}')
-                time.sleep(0.01)
-            # Hold past wall_timeout (0.35s) while queued; watchdog must not fire during queue wait.
-            time.sleep(0.6)
-            self.assertTrue(waiter.is_alive(), f'watchdog fired during slot wait: {error_holder}')
-            release_blockers.set()
-            waiter.join(30)
-            self.assertFalse(waiter.is_alive())
-            self.assertEqual(error_holder, [])
-            self.assertTrue(any(e.get('Test') == 'TestFast' and e.get('Action') == 'pass'
-                                for e in result_holder[0]))
-            rows = [json.loads(line)
-                    for line in (trace_dir / 'slot-waits.jsonl').read_text().splitlines()
-                    if line.strip()]
-            span = next(row for row in rows if row['run'] == 'gate:waiter')
-            self.assertEqual(span['class'], 'gate')
-            self.assertGreater(span['waited_ms'], 0)
-        finally:
-            release_blockers.set()
-            for thread in blocker_threads:
-                thread.join(30)
-            trace_ctx.stop()
+                waiter = threading.Thread(target=run_waiting_gate_shard)
+                waiter.start()
+                while not shards.gate_caller_waiting(lock_dir):
+                    self.assertTrue(waiter.is_alive(), f'waiter exited early: {error_holder}')
+                    time.sleep(0.01)
+                # Advance past wall_timeout (60s) while queued; watchdog must not fire during wait.
+                clock_offset[0] = 120.0
+                self.assertTrue(waiter.is_alive(), f'watchdog fired during slot wait: {error_holder}')
+                blockers.close()
+                waiter.join()
+                self.assertEqual(error_holder, [])
+                self.assertTrue(any(e.get('Test') == 'TestFast' and e.get('Action') == 'pass'
+                                    for e in result_holder[0]))
+                rows = [json.loads(line)
+                        for line in (trace_dir / 'slot-waits.jsonl').read_text().splitlines()
+                        if line.strip()]
+                span = next(row for row in rows if row['run'] == 'gate:waiter')
+                self.assertEqual(span['class'], 'gate')
+                self.assertGreaterEqual(span['waited_ms'], 120000)
+            finally:
+                blockers.close()
 
         # 2. CLI --slot-class gate --max-slots 2 bounds simultaneous tests across shards.
         mod = self.root / 'maxslotsmod'
