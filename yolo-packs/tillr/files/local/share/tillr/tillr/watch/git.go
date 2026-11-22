@@ -17,6 +17,201 @@ import (
 
 type refPair struct{ leader, follower string }
 
+type oidPair struct{ leader, follower string }
+
+type fileStamp struct {
+	exists  bool
+	modTime time.Time
+	size    int64
+}
+
+type gitCache struct {
+	root        string
+	commonDir   string
+	commonDirOK bool
+	peeled      map[string]string
+	lags        map[oidPair]lagFact
+	packedStat  fileStamp
+	packedRefs  map[string]string
+}
+
+func (c *gitCache) reset(root string) {
+	c.root = root
+	c.commonDir, c.commonDirOK = resolveCommonDir(root)
+	c.peeled = map[string]string{}
+	c.lags = map[oidPair]lagFact{}
+	c.packedStat = fileStamp{}
+	c.packedRefs = nil
+}
+
+func resolveCommonDir(root string) (string, bool) {
+	if root == "" {
+		return "", false
+	}
+	dotGit := filepath.Join(root, ".git")
+	var gitDir string
+	fi, err := os.Lstat(dotGit)
+	switch {
+	case err == nil && fi.IsDir():
+		gitDir = dotGit
+	case err == nil && fi.Mode().IsRegular():
+		data, err := os.ReadFile(dotGit)
+		if err != nil {
+			return "", false
+		}
+		target, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir:")
+		if !ok {
+			return "", false
+		}
+		target = strings.TrimSpace(target)
+		if !filepath.IsAbs(target) {
+			target = filepath.Join(root, target)
+		}
+		gitDir = filepath.Clean(target)
+	case os.IsNotExist(err):
+		if headInfo, err := os.Lstat(filepath.Join(root, "HEAD")); err == nil && headInfo.Mode().IsRegular() {
+			gitDir = root
+		} else {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+	if _, err := os.Lstat(filepath.Join(gitDir, "reftable")); err == nil {
+		return "", false
+	}
+	commonDir := gitDir
+	if data, err := os.ReadFile(filepath.Join(gitDir, "commondir")); err == nil {
+		target := strings.TrimSpace(string(data))
+		if target != "" {
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(gitDir, target)
+			}
+			commonDir = filepath.Clean(target)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(commonDir, "reftable")); err == nil {
+		return "", false
+	}
+	return commonDir, true
+}
+
+func isHexOID(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
+func isSharedRef(ref string) bool {
+	if !strings.HasPrefix(ref, "refs/") || strings.Contains(ref, "..") || strings.Contains(ref, "\\") {
+		return false
+	}
+	for _, prefix := range []string{"refs/bisect/", "refs/worktree/", "refs/rewritten/"} {
+		if strings.HasPrefix(ref, prefix) {
+			return false
+		}
+	}
+	return true
+}
+
+func parsePackedRefs(data []byte) map[string]string {
+	refs := map[string]string{}
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" || line[0] == '#' || line[0] == '^' {
+			continue
+		}
+		oid, ref, ok := strings.Cut(line, " ")
+		if ok && isHexOID(oid) && ref != "" {
+			refs[ref] = oid
+		}
+	}
+	return refs
+}
+
+func (c *gitCache) readRefOID(ref string) (string, bool) {
+	if !c.commonDirOK || !isSharedRef(ref) {
+		return "", false
+	}
+	data, err := os.ReadFile(filepath.Join(c.commonDir, filepath.FromSlash(ref)))
+	if err == nil {
+		oid := strings.TrimSpace(string(data))
+		if isHexOID(oid) {
+			return oid, true
+		}
+		return "", false
+	}
+	if !os.IsNotExist(err) {
+		return "", false
+	}
+	packedPath := filepath.Join(c.commonDir, "packed-refs")
+	st, err := os.Stat(packedPath)
+	var stamp fileStamp
+	if err == nil {
+		stamp = fileStamp{exists: true, modTime: st.ModTime(), size: st.Size()}
+	} else if !os.IsNotExist(err) {
+		return "", false
+	}
+	if stamp != c.packedStat {
+		c.packedStat = stamp
+		if stamp.exists {
+			raw, err := os.ReadFile(packedPath)
+			if err != nil {
+				c.packedStat = fileStamp{}
+				c.packedRefs = nil
+				return "", false
+			}
+			c.packedRefs = parsePackedRefs(raw)
+		} else {
+			c.packedRefs = nil
+		}
+	}
+	oid, ok := c.packedRefs[ref]
+	return oid, ok
+}
+
+func (c *gitCache) commit(ctx context.Context, root, ref string, onExec func([]string)) (string, error) {
+	if err := store.CheckIO("watch Git projection"); err != nil {
+		return "", err
+	}
+	if rawOID, ok := c.readRefOID(ref); ok {
+		if peeled, found := c.peeled[rawOID]; found {
+			return peeled, nil
+		}
+		raw, err := gitOutputWith(ctx, root, onExec, "rev-parse", "--verify", "--end-of-options", rawOID+"^{commit}")
+		if err != nil {
+			return "", fmt.Errorf("git ref %s: %w", ref, err)
+		}
+		peeled := strings.TrimSpace(string(raw))
+		c.peeled[rawOID] = peeled
+		return peeled, nil
+	}
+	return gitCommitWith(ctx, root, ref, onExec)
+}
+
+func (c *gitCache) lag(ctx context.Context, root, leader, follower string, onExec func([]string)) (lagFact, error) {
+	if leader == follower {
+		return lagFact{}, nil
+	}
+	key := oidPair{leader, follower}
+	if fact, ok := c.lags[key]; ok {
+		return fact, nil
+	}
+	fact, err := gitLagWith(ctx, root, leader, follower, onExec)
+	if err == nil {
+		c.lags[key] = fact
+	}
+	return fact, err
+}
+
 type lagFact struct {
 	count  int64
 	oldest time.Time
@@ -67,14 +262,23 @@ func (g gitSnapshot) covers(rules []Rule) bool {
 	return true
 }
 
-func readGit(ctx context.Context, root string, rules []Rule) (gitSnapshot, error) {
+func readGit(ctx context.Context, root string, rules []Rule, cache *gitCache, onExec func([]string)) (gitSnapshot, error) {
 	g := gitSnapshot{refs: map[string]projectionFact[string]{}, pairs: map[refPair]projectionFact[lagFact]{}}
 	refs, pairs := gitRequirements(rules)
+	if cache != nil && (len(refs) > 0 || len(pairs) > 0) && (cache.root != root || cache.peeled == nil) {
+		cache.reset(root)
+	}
 	for _, ref := range refs {
 		if _, ok := g.refs[ref]; ok {
 			continue
 		}
-		oid, err := gitCommit(ctx, root, ref)
+		var oid string
+		var err error
+		if cache != nil {
+			oid, err = cache.commit(ctx, root, ref, onExec)
+		} else {
+			oid, err = gitCommitWith(ctx, root, ref, onExec)
+		}
 		g.refs[ref] = projectionFact[string]{oid, err}
 	}
 	for _, pair := range pairs {
@@ -90,7 +294,13 @@ func readGit(ctx context.Context, root string, rules []Rule) (gitSnapshot, error
 			g.pairs[pair] = projectionFact[lagFact]{err: follower.err}
 			continue
 		}
-		lag, err := gitLag(ctx, root, leader.value, follower.value)
+		var lag lagFact
+		var err error
+		if cache != nil {
+			lag, err = cache.lag(ctx, root, leader.value, follower.value, onExec)
+		} else {
+			lag, err = gitLagWith(ctx, root, leader.value, follower.value, onExec)
+		}
 		if err != nil {
 			err = fmt.Errorf("git lag %s behind %s: %w", pair.follower, pair.leader, err)
 		}
@@ -100,6 +310,10 @@ func readGit(ctx context.Context, root string, rules []Rule) (gitSnapshot, error
 }
 
 func gitOutput(ctx context.Context, root string, args ...string) ([]byte, error) {
+	return gitOutputWith(ctx, root, nil, args...)
+}
+
+func gitOutputWith(ctx context.Context, root string, onExec func([]string), args ...string) ([]byte, error) {
 	if err := store.CheckIO("watch Git projection"); err != nil {
 		return nil, err
 	}
@@ -114,6 +328,9 @@ func gitOutput(ctx context.Context, root string, args ...string) ([]byte, error)
 		gitDir = "." // A bare repository stores its metadata at the root.
 	} else if err != nil {
 		return nil, err
+	}
+	if onExec != nil {
+		onExec(args)
 	}
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", root, "--git-dir=" + gitDir}, args...)...)
 	cmd.Env = gitProjectionEnv(cmd.Environ())
@@ -146,11 +363,15 @@ func gitProjectionEnv(env []string) []string {
 }
 
 func gitCommit(ctx context.Context, root, ref string) (string, error) {
+	return gitCommitWith(ctx, root, ref, nil)
+}
+
+func gitCommitWith(ctx context.Context, root, ref string, onExec func([]string)) (string, error) {
 	// Resolve an exact ref, not Git's extended revision syntax. Peel by OID so
 	// any concurrent move cannot change this fact part way through the read.
-	raw, err := gitOutput(ctx, root, "show-ref", "--hash", "--verify", "--", ref)
+	raw, err := gitOutputWith(ctx, root, onExec, "show-ref", "--hash", "--verify", "--", ref)
 	if err == nil {
-		raw, err = gitOutput(ctx, root, "rev-parse", "--verify", "--end-of-options", strings.TrimSpace(string(raw))+"^{commit}")
+		raw, err = gitOutputWith(ctx, root, onExec, "rev-parse", "--verify", "--end-of-options", strings.TrimSpace(string(raw))+"^{commit}")
 	}
 	if err != nil {
 		return "", fmt.Errorf("git ref %s: %w", ref, err)
@@ -158,11 +379,11 @@ func gitCommit(ctx context.Context, root, ref string) (string, error) {
 	return strings.TrimSpace(string(raw)), nil
 }
 
-func gitLag(ctx context.Context, root, leader, follower string) (lagFact, error) {
+func gitLagWith(ctx context.Context, root, leader, follower string, onExec func([]string)) (lagFact, error) {
 	if leader == follower {
 		return lagFact{}, nil
 	}
-	raw, err := gitOutput(ctx, root, "rev-list", "--timestamp", follower+".."+leader, "--")
+	raw, err := gitOutputWith(ctx, root, onExec, "rev-list", "--timestamp", follower+".."+leader, "--")
 	if err != nil {
 		return lagFact{}, err
 	}

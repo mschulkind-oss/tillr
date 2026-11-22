@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"slices"
 	"sort"
 	"time"
@@ -78,8 +77,13 @@ type Evaluator struct {
 	Root  string
 	Clock func() time.Time
 
-	// Test seams for concurrent commits before and during planning.
+	// Test seams for concurrent commits before and during planning, and for
+	// observing event queries and Git subprocesses without timing.
 	afterGit, afterPlan func()
+	onEventQuery        func(kind string, sinceSeq int64, rows int)
+	onGitExec           func(args []string)
+
+	cache *evalCache
 }
 
 func (e Evaluator) now() time.Time {
@@ -131,8 +135,7 @@ func (e Evaluator) Skipped(ctx context.Context) (map[string]int, error) {
 
 // Evaluate reconciles episodes for rules supported by the legacy command.
 // Use EvaluateRules to opt into the extended evaluator.
-func (e Evaluator) Evaluate(ctx context.Context) (map[string]int, error) {
-	e.Rules = commandRules(e.Rules)
+func (e *Evaluator) Evaluate(ctx context.Context) (map[string]int, error) {
 	results, err := e.evaluateRules(ctx, false)
 	return skippedCounts(results), err
 }
@@ -161,12 +164,12 @@ func (e Evaluator) RuleResults(ctx context.Context) ([]RuleResult, error) {
 // fixed set of rules for both reads and may inspect other rows in that snapshot.
 func (e Evaluator) readEvaluation(ctx context.Context, rules []Rule, visit func(*store.Reader, []RuleResult) error) error {
 	now := e.now()
-	git, err := readGit(ctx, e.Root, rules)
+	git, err := readGit(ctx, e.Root, rules, nil, e.onGitExec)
 	if err != nil {
 		return err
 	}
 	return e.Store.ReadTx(ctx, func(rd *store.Reader) error {
-		results, _, err := e.deriveRules(rd, rules, git, now)
+		results, _, err := e.deriveRules(rd, rules, git, now, nil)
 		if err != nil {
 			return err
 		}
@@ -194,15 +197,19 @@ func (e Evaluator) effective(rd *store.Reader) ([]Rule, map[string]bool, error) 
 var errNewGitFact = errors.New("effective rules need another Git fact")
 
 // EvaluateRules uses live overrides and leaves episodes with unreadable projections untouched.
-func (e Evaluator) EvaluateRules(ctx context.Context) ([]RuleResult, error) {
+func (e *Evaluator) EvaluateRules(ctx context.Context) ([]RuleResult, error) {
 	return e.evaluateRules(ctx, true)
 }
 
-func (e Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult, error) {
+func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult, error) {
+	if e.cache == nil || e.cache.store != e.Store {
+		e.cache = newEvalCache(e.Store)
+	}
 	readRules := e.effective
 	if !live {
+		eligible := commandRules(e.Rules)
 		// The legacy event-only API evaluates the caller's fixed rules.
-		readRules = func(*store.Reader) ([]Rule, map[string]bool, error) { return e.Rules, nil, nil }
+		readRules = func(*store.Reader) ([]Rule, map[string]bool, error) { return eligible, nil, nil }
 	}
 	for {
 		now := e.now()
@@ -218,7 +225,7 @@ func (e Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult, 
 		}); err != nil {
 			return nil, err
 		}
-		git, err := readGit(ctx, e.Root, rules)
+		git, err := readGit(ctx, e.Root, rules, &e.cache.git, e.onGitExec)
 		if err != nil {
 			return nil, err
 		}
@@ -235,7 +242,7 @@ func (e Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult, 
 				return nil, errNewGitFact
 			}
 			var derived []map[string]*condition
-			results, derived, err = e.deriveRules(rd, rules, git, now)
+			results, derived, err = e.deriveRules(rd, rules, git, now, e.cache)
 			if err != nil {
 				return nil, err
 			}
@@ -273,7 +280,12 @@ func (e Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult, 
 	}
 }
 
-func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, now time.Time) ([]RuleResult, []map[string]*condition, error) {
+func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, now time.Time, cache *evalCache) ([]RuleResult, []map[string]*condition, error) {
+	if cache != nil {
+		if err := cache.syncKinds(rd, rules, now, e.onEventQuery); err != nil {
+			return nil, nil, err
+		}
+	}
 	facts := readStoreFacts(rd)
 	results := make([]RuleResult, len(rules))
 	derived := make([]map[string]*condition, len(rules))
@@ -301,7 +313,13 @@ func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, 
 			derived[i] = map[string]*condition{"global": lag}
 			continue
 		}
-		subjects, n, err := derive(rd, r, now, rf)
+		var subjects map[string]*condition
+		var n int
+		if cache != nil {
+			subjects, n, err = deriveCached(r, now, rf, cache)
+		} else {
+			subjects, n, err = derive(rd, r, now, rf)
+		}
 		var unreadable unreadableProjection
 		if errors.As(err, &unreadable) {
 			result.Unreadable = unreadable.Error()
@@ -356,13 +374,21 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 	if err != nil {
 		return err
 	}
+	keys := make([]string, 0, len(subjects)+len(episodes))
+	for key := range subjects {
+		keys = append(keys, key)
+	}
 	for key := range episodes {
-		if subjects[key] == nil {
-			subjects[key] = &condition{}
+		if _, ok := subjects[key]; !ok {
+			keys = append(keys, key)
 		}
 	}
-	for _, key := range slices.Sorted(maps.Keys(subjects)) {
+	slices.Sort(keys)
+	for _, key := range keys {
 		c := subjects[key]
+		if c == nil {
+			c = &condition{}
+		}
 		ep, exists := episodes[key]
 		firing := r.Enabled && c.fires(r.When)
 		firstClear := sort.Search(len(c.clears), func(i int) bool { return c.clears[i] > ep.opened })

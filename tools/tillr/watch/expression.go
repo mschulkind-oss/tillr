@@ -14,6 +14,7 @@ import (
 // Expression is a parsed boolean predicate. Unsupported forms are parsed for
 // validity, but are not evaluated.
 type Expression struct {
+	source      string
 	root        operand
 	unsupported bool
 	usesAge     bool
@@ -66,7 +67,7 @@ func ParseExpression(text string) (*Expression, error) {
 	if p.err != nil {
 		return nil, p.err
 	}
-	return &Expression{root: root, unsupported: p.unsupported, usesAge: p.usesAge, usesNotIn: p.usesNotIn, projections: p.projections}, nil
+	return &Expression{source: text, root: root, unsupported: p.unsupported, usesAge: p.usesAge, usesNotIn: p.usesNotIn, projections: p.projections}, nil
 }
 
 type token struct {
