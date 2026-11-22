@@ -40,13 +40,14 @@ fi
 `
 
 type rollScenario struct {
-	f      loopFixture
-	exe    string
-	out    string
-	cmd    *exec.Cmd
-	pids   string
-	signal string
-	lanes  int
+	f            loopFixture
+	exe          string
+	out          string
+	cmd          *exec.Cmd
+	pids         string
+	signal       string
+	lanes        int
+	wantRestarts int
 }
 
 func startRoll(t *testing.T, lanes int, pauseKind string, harnessBody ...string) *rollScenario {
@@ -170,9 +171,13 @@ func (s *rollScenario) inFlight(t *testing.T, n int) {
 
 func (s *rollScenario) restart(t *testing.T) string {
 	t.Helper()
+	before := strings.Count(s.output(t), restartedInPlaceMarker)
 	raw, err := exec.Command(s.exe, "restart", "--root", s.f.root, "--store", s.f.store, "--wait").CombinedOutput()
 	if err != nil {
 		t.Fatalf("restart --wait: %v: %s\n%s", err, raw, s.output(t))
+	}
+	if strings.Contains(string(raw), "restarted") {
+		s.wantRestarts = before + 1
 	}
 	return string(raw)
 }
