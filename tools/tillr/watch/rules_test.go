@@ -63,8 +63,18 @@ func TestWatchLoadRecursive(t *testing.T) {
 	if len(rules) != 2 || rules[0].Enabled || rules[0].UnevaluatedReason() != "" || !rules[1].Enabled || rules[1].ID != "case" || rules[1].When.Window != 90*time.Second || rules[1].When.Threshold != 1 || rules[1].UnevaluatedReason() != "" {
 		t.Fatalf("unexpected rules: %+v", rules)
 	}
-	put(t, dir, "a.toml", validRule)
-	if rules, err := LoadRules(dir); rules != nil || !hasError(err, path, `"case"`, "id", "duplicate") {
+	first := put(t, dir, "a.toml", validRule)
+	if rules, err := LoadRules(dir); rules != nil || !hasError(err, path, `"case"`, "id", "duplicate rule ID (first in "+first+")") {
+		t.Fatalf("duplicate: rules=%+v err=%v", rules, err)
+	}
+}
+
+func TestWatchLoadDuplicateInOneFile(t *testing.T) {
+	register(t, "test.watch")
+	dir := t.TempDir()
+	// The later invalid table must not mask the earlier duplicate.
+	path := put(t, dir, "duplicate.toml", validRule+validRule+"[[rule]]\nid = 'invalid'\n")
+	if rules, err := LoadRules(dir); rules != nil || !hasError(err, path, `"case"`, "id", "duplicate rule ID (first in "+path+")") {
 		t.Fatalf("duplicate: rules=%+v err=%v", rules, err)
 	}
 }
@@ -136,10 +146,8 @@ func TestWatchDocumentedRules(t *testing.T) {
 	if len(rules) != 2 || rules[0].ID != "step-oscillation" || rules[0].Reads.Events[0] != "drain.node-advanced" || rules[0].When.Threshold != 4 || rules[1].ID != "unproved-trunk-lag" {
 		t.Fatalf("unexpected examples: %+v", rules)
 	}
-	for _, rule := range rules {
-		if rule.UnevaluatedReason() == "" {
-			t.Errorf("%s must load but not evaluate", rule.ID)
-		}
+	if rules[0].UnevaluatedReason() == "" || rules[1].UnevaluatedReason() != "named scope is not evaluated by this build" {
+		t.Fatalf("example eligibility: %q, %q", rules[0].UnevaluatedReason(), rules[1].UnevaluatedReason())
 	}
 }
 
@@ -184,6 +192,7 @@ func TestWatchRuleRefusals(t *testing.T) {
 		{"bad-unsupported-clear", `pattern = "count_in_window"`, "pattern = 'duration_without_event'\nclear_when = 'event.'", "when.clear_when"},
 		{"missing-field", `pattern = "count_in_window"`, "pattern = 'alternating_pair'\npairs = [['a', 'b']]", "when.field"},
 		{"missing-pairs", `pattern = "count_in_window"`, "pattern = 'alternating_pair'\nfield = 'seat'", "when.pairs"},
+		{"undeclared-item", `window = "90s"`, "window = '90s'\nmatch = 'item.state == \"ready\"'", "when.match"},
 		{"pair-identical", `pattern = "count_in_window"`, "pattern = 'alternating_pair'\nfield = 'seat'\npairs = [['a', 'a']]", "when.pairs"},
 		{"empty-check", `["look"]`, `[]`, "guidance.check"},
 		{"empty-do-member", `["consider"]`, `[""]`, "guidance.do"},
@@ -208,12 +217,11 @@ func TestWatchRuleRefusals(t *testing.T) {
 func TestWatchRuleEligibility(t *testing.T) {
 	register(t, "test.watch")
 	for _, tt := range []struct{ when, projections, reason string }{
-		{"pattern = 'duration_without_event'", "", "duration_without_event"},
-		{"pattern = 'lag_behind'\nleader = [false, 1]\nthreshold = {opaque=0}", "", "lag_behind"},
+		{"pattern = 'duration_without_event'\nafter = 'event.pass == false'\nthreshold_duration = '1m'\nwindow = '2m'", "", ""},
 		{"pattern = 'predicate_match'\nwindow = '1m'", "[]", ""},
-		{"pattern = 'predicate_match'\nwindow = '1m'", "['']", "projection"},
-		{"pattern = 'predicate_match'\nwindow = '1m'\nmatch = 'age(event.ts) > 1'", "", "expression"},
-		{"pattern = 'predicate_match'\nwindow = '1m'\nclear_when = 'event.seat not in [\"a\"]'", "", "expression"},
+		{"pattern = 'predicate_match'\nwindow = '1m'", "['heavy_lock_state']", "unsupported projection \"heavy_lock_state\""},
+		{"pattern = 'predicate_match'\nwindow = '1m'\nmatch = 'age(event.ts) > 1'", "", ""},
+		{"pattern = 'predicate_match'\nwindow = '1m'\nclear_when = 'event.seat not in [\"a\"]'", "", ""},
 		{"pattern = 'consecutive_count'\nthreshold = 2\nwindow = '1s'\nmatch = 'event.pass == false'\nreset = 'event.pass == true'", "", ""},
 		{"pattern = 'alternating_pair'\nfield = 'seat'\npairs = [['a','b']]\nthreshold = 1\nwindow = '1h'", "", ""},
 	} {
@@ -227,7 +235,7 @@ func TestWatchRuleEligibility(t *testing.T) {
 		if err != nil || len(rules) != 1 {
 			t.Fatalf("%s: %v", tt.when, err)
 		}
-		reason := rules[0].UnevaluatedReason()
+		reason := rules[0].evaluatorReason()
 		if tt.reason == "" && reason != "" || !strings.Contains(reason, tt.reason) {
 			t.Errorf("%s: reason %q, want %q", tt.when, reason, tt.reason)
 		}

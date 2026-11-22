@@ -12,25 +12,48 @@ import (
 )
 
 // Expression is a parsed boolean predicate. Unsupported forms are parsed for
-// validity, but cannot be evaluated by the event-only evaluator.
+// validity, but are not evaluated.
 type Expression struct {
 	root        operand
 	unsupported bool
+	usesAge     bool
+	usesNotIn   bool
+	projections []projectionOperand
 }
 
-type operand func(lookup func(string) any) any
+// A projection reference is kept separate from event lookups; an event's
+// payload cannot supply it, even when the payload has a similarly named key.
+type projectionOperand struct {
+	name string
+	ref  string // only for git.ref
+}
 
-func (e *Expression) Supported() bool { return !e.unsupported }
+type expressionValues struct {
+	event      func(string) any
+	projection func(projectionOperand) any
+	nowMillis  int64
+}
+
+type operand func(expressionValues) any
+
+// Supported reports whether the event-only Eval helper can run the expression.
+func (e *Expression) Supported() bool {
+	return !e.unsupported && !e.usesAge && len(e.projections) == 0
+}
 
 // Eval looks up event names (without the "event." prefix). A nil lookup result
 // means absent or null. Use int64 for integer columns and json.Decoder.UseNumber
 // for payloads so integers are not rounded. Unsupported expressions never match.
 func (e *Expression) Eval(lookup func(string) any) bool {
-	return e.Supported() && truth(e.root(lookup))
+	return e.Supported() && e.eval(expressionValues{event: lookup})
+}
+
+func (e *Expression) eval(values expressionValues) bool {
+	return !e.unsupported && truth(e.root(values))
 }
 
 func truth(v any) bool      { b, _ := v.(bool); return b }
-func literal(v any) operand { return func(func(string) any) any { return v } }
+func literal(v any) operand { return func(expressionValues) any { return v } }
 
 // ParseExpression checks the full predicate syntax and compiles RE2 patterns.
 func ParseExpression(text string) (*Expression, error) {
@@ -43,7 +66,7 @@ func ParseExpression(text string) (*Expression, error) {
 	if p.err != nil {
 		return nil, p.err
 	}
-	return &Expression{root: root, unsupported: p.unsupported}, nil
+	return &Expression{root: root, unsupported: p.unsupported, usesAge: p.usesAge, usesNotIn: p.usesNotIn, projections: p.projections}, nil
 }
 
 type token struct {
@@ -57,6 +80,9 @@ type parser struct {
 	tok         token
 	err         error
 	unsupported bool
+	usesAge     bool
+	usesNotIn   bool
+	projections []projectionOperand
 }
 
 func (p *parser) fail(format string, args ...any) {
@@ -137,7 +163,7 @@ func (p *parser) or() operand {
 	left := p.and()
 	for p.take("or") {
 		a, b := left, p.and()
-		left = func(lookup func(string) any) any { return truth(a(lookup)) || truth(b(lookup)) }
+		left = func(v expressionValues) any { return truth(a(v)) || truth(b(v)) }
 	}
 	return left
 }
@@ -146,7 +172,7 @@ func (p *parser) and() operand {
 	left := p.not()
 	for p.take("and") {
 		a, b := left, p.not()
-		left = func(lookup func(string) any) any { return truth(a(lookup)) && truth(b(lookup)) }
+		left = func(v expressionValues) any { return truth(a(v)) && truth(b(v)) }
 	}
 	return left
 }
@@ -154,7 +180,7 @@ func (p *parser) and() operand {
 func (p *parser) not() operand {
 	if p.take("not") {
 		arg := p.not()
-		return func(lookup func(string) any) any { return !truth(arg(lookup)) }
+		return func(v expressionValues) any { return !truth(arg(v)) }
 	}
 	return p.comparison()
 }
@@ -177,16 +203,28 @@ func (p *parser) comparison() operand {
 		p.next()
 		if op == "not" {
 			p.expect("in")
-			p.unsupported = true
+			p.usesNotIn = true
 		}
 		right, kind := p.value()
 		if kind != "list" && kind != "bare" && kind != "call" {
 			p.fail("expected list, bare name or call after in")
 		}
-		return func(lookup func(string) any) any {
-			list, _ := right(lookup).([]any)
-			found := containValue(list, left(lookup))
-			return found != (op == "not")
+		return func(v expressionValues) any {
+			value := left(v)
+			list, ok := right(v).([]any)
+			if value == nil || !ok {
+				return false
+			}
+			if op == "in" {
+				return containValue(list, value)
+			}
+			// A failed type check is not evidence of nonmembership.
+			for _, member := range list {
+				if same, compatible := equal(value, member); same || !compatible {
+					return false
+				}
+			}
+			return true
 		}
 	case "matches":
 		p.next()
@@ -200,14 +238,14 @@ func (p *parser) comparison() operand {
 			p.fail("invalid RE2 regular expression: %v", err)
 			return nil
 		}
-		return func(lookup func(string) any) any {
-			s, ok := left(lookup).(string)
+		return func(v expressionValues) any {
+			s, ok := left(v).(string)
 			return ok && re.MatchString(s)
 		}
 	case "==", "!=", "<", "<=", ">", ">=", "contains":
 		p.next()
 		right := p.term()
-		return func(lookup func(string) any) any { return compare(op, left(lookup), right(lookup)) }
+		return func(v expressionValues) any { return compare(op, left(v), right(v)) }
 	default:
 		return left
 	}
@@ -239,10 +277,10 @@ func (p *parser) value() (operand, string) {
 	case "[":
 		p.next()
 		args := p.values("]")
-		return func(lookup func(string) any) any {
+		return func(v expressionValues) any {
 			list := make([]any, len(args))
 			for i, arg := range args {
-				list[i] = arg(lookup)
+				list[i] = arg(v)
 			}
 			return list
 		}, "list"
@@ -257,20 +295,51 @@ func (p *parser) value() (operand, string) {
 		}
 		name := t.text + p.dotted()
 		if p.take("(") {
+			first := p.tok
 			args := p.values(")")
 			suffix := p.dotted()
+			if name == "git.ref" {
+				if first.kind != "string" || len(args) != 1 || suffix != "" {
+					p.fail("git.ref requires one quoted ref name")
+					return nil, ""
+				}
+				ref, _ := strconv.Unquote(first.text) // checked by values
+				return p.project(projectionOperand{name: name, ref: ref}), "call"
+			}
+			if name == "age" && suffix == "" {
+				if len(args) != 1 {
+					p.fail("age requires one operand")
+					return nil, ""
+				}
+				p.usesAge = true
+				return func(v expressionValues) any {
+					ts, ok := integer(args[0](v))
+					if !ok {
+						return nil
+					}
+					// Subtract before truncating, without signed overflow even for
+					// the extremes of the allowed millisecond integers.
+					if v.nowMillis < ts {
+						return -int64((uint64(ts) - uint64(v.nowMillis)) / 1000)
+					}
+					return int64((uint64(v.nowMillis) - uint64(ts)) / 1000)
+				}, "call"
+			}
 			if name == "empty" && suffix == "" {
 				if len(args) != 1 {
 					p.fail("empty requires one operand")
 					return nil, ""
 				}
-				return func(lookup func(string) any) any { return empty(args[0](lookup)) }, "call"
+				return func(v expressionValues) any { return empty(args[0](v)) }, "call"
 			}
 			p.unsupported = true
 			return literal(nil), "call"
 		}
 		if field, ok := strings.CutPrefix(name, "event."); ok {
-			return func(lookup func(string) any) any { return lookup(field) }, "event"
+			return func(v expressionValues) any { return v.event(field) }, "event"
+		}
+		if strings.HasPrefix(name, "item.") || strings.HasPrefix(name, "charter.") {
+			return p.project(projectionOperand{name: name}), "bare"
 		}
 		p.unsupported = true
 		return literal(nil), "bare"
@@ -278,6 +347,11 @@ func (p *parser) value() (operand, string) {
 		p.fail("expected an operand")
 		return nil, ""
 	}
+}
+
+func (p *parser) project(ref projectionOperand) operand {
+	p.projections = append(p.projections, ref)
+	return func(v expressionValues) any { return v.projection(ref) }
 }
 
 func (p *parser) dotted() string {

@@ -39,11 +39,12 @@ type Reads struct {
 }
 
 type When struct {
-	GroupBy, Pattern, Field string
-	Pairs                   [][2]string
-	Threshold               int64
-	Window                  time.Duration
-	Match, Reset, ClearWhen *Expression
+	GroupBy, Pattern, Field        string
+	Pairs                          [][2]string
+	Threshold, ThresholdCommits    int64
+	Window, ThresholdDuration      time.Duration
+	Leader, Follower, Mode         string
+	Match, Reset, ClearWhen, After *Expression
 }
 
 type Guidance struct {
@@ -56,13 +57,11 @@ type Delivery struct {
 	AlsoNotify []string
 }
 
-// UnevaluatedReason reports a first-build capability gap, not an invalid
-// rule. Callers separately honor Enabled, which is an operator choice.
+// UnevaluatedReason reports eligibility for the legacy command-facing
+// Evaluate and Skipped methods. Enabled is an independent operator choice.
 func (r Rule) UnevaluatedReason() string {
-	switch r.Scope {
-	case "core", "workflow:*", "charter:*":
-	default:
-		return "named scope is not evaluated by this build"
+	if reason := r.scopeReason(); reason != "" {
+		return reason
 	}
 	switch r.When.Pattern {
 	case LagBehind, DurationWithoutEvent:
@@ -71,8 +70,38 @@ func (r Rule) UnevaluatedReason() string {
 	if len(r.Reads.Projections) != 0 {
 		return "reads projections"
 	}
-	for _, e := range []*Expression{r.When.Match, r.When.Reset, r.When.ClearWhen} {
-		if e != nil && !e.Supported() {
+	for _, e := range r.expressions() {
+		if e != nil && (!e.Supported() || e.usesNotIn) {
+			return "uses an unsupported expression form"
+		}
+	}
+	return ""
+}
+
+func (r Rule) scopeReason() string {
+	switch r.Scope {
+	case "core", "workflow:*", "charter:*":
+		return ""
+	default:
+		return "named scope is not evaluated by this build"
+	}
+}
+
+func (r Rule) expressions() [4]*Expression {
+	return [4]*Expression{r.When.Match, r.When.Reset, r.When.ClearWhen, r.When.After}
+}
+
+func (r Rule) evaluatorReason() string {
+	if reason := r.scopeReason(); reason != "" {
+		return reason
+	}
+	for _, projection := range r.Reads.Projections {
+		if projection != "items" && projection != "charter" && !strings.HasPrefix(projection, "git_refs:") {
+			return fmt.Sprintf("unsupported projection %q", projection)
+		}
+	}
+	for _, e := range r.expressions() {
+		if e != nil && e.unsupported {
 			return "uses an unsupported expression form"
 		}
 	}
@@ -88,10 +117,7 @@ func LoadRules(dir string) ([]Rule, error) {
 	if err != nil {
 		return nil, err
 	}
-	kinds := make(map[string]bool)
-	for _, kind := range event.Kinds() {
-		kinds[kind.Name] = true
-	}
+	kinds := registeredRuleKinds()
 	var rules []Rule
 	seen := make(map[string]string)
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
@@ -108,44 +134,67 @@ func LoadRules(dir string) ([]Rule, error) {
 		if err != nil {
 			return err
 		}
-		var doc map[string]any
-		if err := toml.Unmarshal(data, &doc); err != nil {
-			return fmt.Errorf("%s: %w", path, err)
+		loaded, err := loadRuleDocument(path, data, kinds, seen)
+		if err != nil {
+			return err
 		}
-		for _, key := range slices.Sorted(maps.Keys(doc)) {
-			if key != "rule" {
-				return fmt.Errorf("%s: %s: unknown top-level key", path, key)
-			}
-		}
-		raw, present := doc["rule"]
-		if !present {
-			return nil
-		}
-		tables, ok := raw.([]any)
-		if !ok {
-			return fmt.Errorf("%s: rule: expected [[rule]] entries", path)
-		}
-		for i, raw := range tables {
-			table, ok := raw.(map[string]any)
-			if !ok {
-				return fmt.Errorf("%s: rule[%d]: expected a rule table", path, i)
-			}
-			id, _ := table["id"].(string)
-			c := &ruleCheck{path: path, id: id, index: i}
-			rule, err := c.load(table, kinds)
-			if err != nil {
-				return err
-			}
-			if previous, ok := seen[id]; ok {
-				return c.refusal("id", "duplicate rule ID (first in %s)", previous)
-			}
-			seen[id] = path
-			rules = append(rules, rule)
-		}
+		rules = append(rules, loaded...)
 		return nil
 	})
 	if err != nil {
 		return nil, err
+	}
+	return rules, nil
+}
+
+// LoadRuleDocument validates a complete document, using source in diagnostics.
+func LoadRuleDocument(source string, data []byte) ([]Rule, error) {
+	return loadRuleDocument(source, data, registeredRuleKinds(), make(map[string]string))
+}
+
+func registeredRuleKinds() map[string]bool {
+	kinds := make(map[string]bool)
+	for _, kind := range event.Kinds() {
+		kinds[kind.Name] = true
+	}
+	return kinds
+}
+
+func loadRuleDocument(source string, data []byte, kinds map[string]bool, seen map[string]string) ([]Rule, error) {
+	var doc map[string]any
+	if err := toml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("%s: %w", source, err)
+	}
+	for _, key := range slices.Sorted(maps.Keys(doc)) {
+		if key != "rule" {
+			return nil, fmt.Errorf("%s: %s: unknown top-level key", source, key)
+		}
+	}
+	raw, present := doc["rule"]
+	if !present {
+		return nil, nil
+	}
+	tables, ok := raw.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: rule: expected [[rule]] entries", source)
+	}
+	var rules []Rule
+	for i, raw := range tables {
+		table, ok := raw.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("%s: rule[%d]: expected a rule table", source, i)
+		}
+		id, _ := table["id"].(string)
+		c := &ruleCheck{path: source, id: id, index: i}
+		rule, err := c.load(table, kinds)
+		if err != nil {
+			return nil, err
+		}
+		if previous, ok := seen[id]; ok {
+			return nil, c.refusal("id", "duplicate rule ID (first in %s)", previous)
+		}
+		seen[id] = source
+		rules = append(rules, rule)
 	}
 	return rules, nil
 }
@@ -237,14 +286,20 @@ func (k keys) text(key string) string {
 
 func (k keys) eventPath(key string) string {
 	s := k.text(key)
-	// A quoted TOML value names JSON keys, not expression identifiers.
-	for part := range strings.SplitSeq(s, ".") {
-		if part == "" {
-			k.reject(key, "expected an event column or a dotted JSON key path with no empty segments")
-			break
-		}
+	if !validEventPath(s) {
+		k.reject(key, "expected an event column or a dotted JSON key path with no empty segments")
 	}
 	return s
+}
+
+// Quoted TOML values name JSON keys, not expression identifiers.
+func validEventPath(s string) bool {
+	for part := range strings.SplitSeq(s, ".") {
+		if part == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func (k keys) strings(key string, required bool) []string {
@@ -297,13 +352,28 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 	}
 	reads := root.table("reads")
 	reads.only("events", "projections")
-	r.Reads = Reads{Events: reads.strings("events", true), Projections: reads.strings("projections", false)}
+	when := root.table("when")
+	pattern := when.text("pattern")
+	r.Reads = Reads{Events: reads.strings("events", pattern != LagBehind), Projections: reads.strings("projections", false)}
 	for _, kind := range r.Reads.Events {
 		if !kinds[kind] {
 			reads.reject("events", "unregistered event kind %q", kind)
 		}
 	}
-	r.When = loadWhen(root.table("when"))
+	refs := make(map[string]bool)
+	for _, projection := range r.Reads.Projections {
+		if list, ok := strings.CutPrefix(projection, "git_refs:"); ok {
+			for ref := range strings.SplitSeq(list, ",") {
+				if !validRef(ref) {
+					reads.reject("projections", "invalid Git ref %q in %q", ref, projection)
+				}
+				refs[ref] = true
+			}
+		}
+	}
+	r.When = loadWhen(when, pattern, refs)
+
+	checkProjectionOperands(when, r, refs)
 	g := root.table("guidance")
 	g.only("summary", "check", "do")
 	r.Guidance = Guidance{Summary: g.text("summary"), Check: g.strings("check", true), Do: g.strings("do", true)}
@@ -322,13 +392,20 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 	return r, c.err
 }
 
-func loadWhen(k keys) When {
-	w := When{GroupBy: k.eventPath("group_by"), Pattern: k.text("pattern"), ClearWhen: k.expression("clear_when", false)}
+func loadWhen(k keys, pattern string, refs map[string]bool) When {
+	w := When{GroupBy: k.eventPath("group_by"), Pattern: pattern}
+	if pattern == LagBehind {
+		return loadLag(k, w, refs)
+	}
+	w.ClearWhen = k.expression("clear_when", false)
+
 	allowed := []string{"group_by", "pattern", "clear_when", "window"}
 	switch w.Pattern {
-	case LagBehind, DurationWithoutEvent:
-		// Other pattern keys have no contract yet. Do not interpret them.
-		return w
+	case DurationWithoutEvent:
+		k.only(append(allowed, "after", "match", "threshold_duration")...)
+		w.After = k.expression("after", true)
+		w.Match = k.expression("match", false)
+		w.ThresholdDuration = k.duration("threshold_duration")
 	case PredicateMatch:
 		k.only(append(allowed, "match")...)
 		w.Threshold = 1
@@ -348,18 +425,30 @@ func loadWhen(k keys) When {
 		k.reject("pattern", "unknown pattern %q", w.Pattern)
 		return w
 	}
-	if w.Pattern != PredicateMatch {
-		w.Threshold = requiredValue[int64](k, "threshold", "an integer of at least 1")
-		if w.Threshold < 1 {
-			k.reject("threshold", "expected an integer of at least 1")
-		}
+	if w.Pattern != PredicateMatch && w.Pattern != DurationWithoutEvent {
+		w.Threshold = k.positiveInteger("threshold")
 	}
-	window := k.text("window")
-	w.Window = parseWindow(window)
-	if w.Window <= 0 {
-		k.reject("window", "expected a positive whole-number duration in s, m or h")
+	w.Window = k.duration("window")
+	if w.Pattern == DurationWithoutEvent && w.Window <= w.ThresholdDuration {
+		k.reject("window", "must be longer than threshold_duration")
 	}
 	return w
+}
+
+func (k keys) positiveInteger(key string) int64 {
+	n := requiredValue[int64](k, key, "an integer of at least 1")
+	if n < 1 {
+		k.reject(key, "expected an integer of at least 1")
+	}
+	return n
+}
+
+func (k keys) duration(key string) time.Duration {
+	d := parseWindow(k.text(key))
+	if d <= 0 {
+		k.reject(key, "expected a positive whole-number duration in s, m or h")
+	}
+	return d
 }
 
 func parseWindow(s string) time.Duration {

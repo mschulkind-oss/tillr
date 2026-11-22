@@ -24,17 +24,43 @@ type condition struct {
 	pair        [2]string
 	previous    observation
 	hadPrevious bool
+	waitAge     time.Duration
+	lag         *lagCondition
 }
 
-func (c *condition) observe(r When, e observation, lookup func(string) any) {
-	if r.ClearWhen != nil && r.ClearWhen.Eval(lookup) {
+func (c *condition) fires(w When) bool {
+	switch w.Pattern {
+	case DurationWithoutEvent:
+		return len(c.events) != 0 && c.waitAge >= w.ThresholdDuration
+	case LagBehind:
+		return c.lag != nil && c.lag.fires(w)
+	default:
+		return int64(len(c.events)) >= w.Threshold
+	}
+}
+
+func (c *condition) observe(r When, e observation, values expressionValues) {
+	clear := r.ClearWhen != nil && r.ClearWhen.eval(values)
+	if r.Pattern == DurationWithoutEvent {
+		if !clear && r.After.eval(values) {
+			c.events = append(c.events[:0], e)
+			c.waitAge = time.UnixMilli(values.nowMillis).Sub(time.UnixMilli(e.TS))
+		} else if clear || r.Match != nil && r.Match.eval(values) {
+			c.events = c.events[:0]
+		} else {
+			return
+		}
+		c.clears = append(c.clears, e.Seq)
+		return
+	}
+	if clear {
 		c.events = c.events[:0]
 		c.hadPrevious = false
 		c.clears = append(c.clears, e.Seq)
 		return
 	}
 	if r.Pattern == AlternatingPair {
-		value := lookup(r.Field)
+		value := values.event(r.Field)
 		if value == nil {
 			return // Missing and null names have no value to observe.
 		}
@@ -63,8 +89,8 @@ func (c *condition) observe(r When, e observation, lookup func(string) any) {
 		c.previous, c.hadPrevious = e, true
 		return
 	}
-	match := r.Match == nil || r.Match.Eval(lookup)
-	if r.Pattern == ConsecutiveCount && ((r.Reset == nil && !match) || (r.Reset != nil && r.Reset.Eval(lookup))) {
+	match := r.Match == nil || r.Match.eval(values)
+	if r.Pattern == ConsecutiveCount && ((r.Reset == nil && !match) || (r.Reset != nil && r.Reset.eval(values))) {
 		c.events = c.events[:0]
 		c.clears = append(c.clears, e.Seq)
 	} else if match {
@@ -98,7 +124,7 @@ func sharedPair(pairs [][2]string, v any, previous observation, hasPrevious bool
 	return [2]string{}, false
 }
 
-func derive(rd *store.Reader, r Rule, now time.Time) (map[string]*condition, int, error) {
+func derive(rd *store.Reader, r Rule, now time.Time, facts ruleFacts) (map[string]*condition, int, error) {
 	kinds := r.Reads.Events
 	args := []any{now.Add(-r.When.Window).UnixMilli(), now.UnixMilli()}
 	for _, k := range kinds {
@@ -174,12 +200,19 @@ func derive(rd *store.Reader, r Rule, now time.Time) (map[string]*condition, int
 				continue
 			}
 		}
+		projection, inScope, err := facts.forSubject(subject)
+		if err != nil {
+			return nil, 0, err
+		}
+		if !inScope {
+			continue
+		}
 		c := subjects[subject]
 		if c == nil {
 			c = &condition{}
 			subjects[subject] = c
 		}
-		c.observe(r.When, e, lookup)
+		c.observe(r.When, e, expressionValues{event: lookup, projection: projection, nowMillis: now.UnixMilli()})
 	}
 	return subjects, skipped, rows.Err()
 }

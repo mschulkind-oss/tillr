@@ -27,6 +27,8 @@ func TestWatchExpressionValues(t *testing.T) {
 		{`event.detail.step-name in ["work", "plan", 3]`, true},
 		{`event.seq in [event.count]`, true},
 		{`event.seq in []`, false},
+		{`event.seq not in [1, 2]`, true},
+		{`event.seq not in [1, 2, 3]`, false},
 		{`[event.count] == [3]`, true},
 		{`[event.count] != [3]`, false},
 		{`event.tags contains 3`, true},
@@ -63,6 +65,36 @@ func TestWatchExpressionValues(t *testing.T) {
 	}
 }
 
+func TestWatchExpressionProjectionValues(t *testing.T) {
+	values := expressionValues{
+		event: func(field string) any {
+			return map[string]any{"ts": int64(1050), "future": int64(4130), "badtime": "1050", "item.state": "fake"}[field]
+		},
+		projection: func(ref projectionOperand) any {
+			return map[projectionOperand]any{
+				{name: "item.state"}: "closed", {name: "item.waiting_on"}: nil,
+				{name: "charter.finished"}:                []any{"closed", "failed"},
+				{name: "git.ref", ref: "refs/heads/main"}: "abc",
+			}[ref]
+		},
+		nowMillis: 3000,
+	}
+	missing, err := ParseExpression(`item.waiting_on not in ["owner"]`)
+	if err != nil || missing.eval(values) {
+		t.Fatalf("missing value must not satisfy not in: %v", err)
+	}
+	for _, text := range []string{
+		`age(event.ts) == 1 and age(event.future) == -1 and empty(age(event.badtime))`,
+		`item.state in charter.finished and empty(item.waiting_on) and not item.waiting_on != "none"`,
+		`git.ref("refs/heads/main") == "abc" and item.state != event.item.state`,
+	} {
+		e, err := ParseExpression(text)
+		if err != nil || e.Supported() || e.Eval(values.event) || !truth(e.root(values)) {
+			t.Fatalf("want compiled, true with projections, and gated in event-only eval: %q (%v)", text, err)
+		}
+	}
+}
+
 func TestWatchExpressionSyntax(t *testing.T) {
 	for _, text := range []string{
 		`seat not in pair or item.state in charter.finished`,
@@ -70,7 +102,6 @@ func TestWatchExpressionSyntax(t *testing.T) {
 		`git.ref("refs/heads/main") != git.ref("refs/tillr/green")`,
 		`item("item-1").state == "done"`,
 		`age(event.ts) > 1`,
-		`event.seat not in ["plan"]`,
 		`empty(foo(event.ts, 1, ["x"])).state`,
 		`event.seat in allowed()`,
 	} {

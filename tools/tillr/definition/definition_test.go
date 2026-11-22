@@ -201,7 +201,7 @@ func TestNameOnlyInOneConstantAndOnlyLifecycleConsumers(t *testing.T) {
 			for _, imp := range parsed.Imports {
 				value, _ := strconv.Unquote(imp.Path.Value)
 				if value == "github.com/mschulkind-oss/tillr/definition" &&
-					filepath.Base(module) != "tillr-store" && filepath.Base(module) != "tillr-item" && filepath.Base(module) != "tillr-drain" && filepath.Base(module) != "tillr-view" && filepath.Dir(path) != filepath.Dir(file) {
+					filepath.Base(module) != "tillr-store" && filepath.Base(module) != "tillr-item" && filepath.Base(module) != "tillr-drain" && filepath.Base(module) != "tillr-view" && filepath.Dir(path) != filepath.Dir(file) && filepath.Clean(path) != filepath.Join(filepath.Dir(file), "..", "watch", "projection.go") {
 					t.Errorf("utility other than store, item, drain or view imports definition: %s", path)
 				}
 			}
