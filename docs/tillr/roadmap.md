@@ -400,6 +400,20 @@ and whether non-liveness alerts wait for a stopped drain loop or promote after a
 them, its ten designer's decisions await his review in
 [its ledger](../design/tillr-alert-triage-seat.md#decision-ledger), and none of it is built.
 
+[Every alert gets an investigation and one recorded outcome, and silences bind a rule and variable](../design/tillr-watch-alert-workflow.md),
+written on 2026-11-22 to the owner's words of that day after ten alerts sat open twelve hours past
+item completion and three rule faults were described without being filed, pairs with the triage-seat
+design above so every episode records why it fired and settles only through a variable-scoped
+`silence`, a verified `fix-rule` item, or a verified `fix-fault` item while counting repeats on open
+tracking items and keeping unsettled alerts loud across `wait`, `status`, `tillr drain why`, and
+Observatory. It asks three questions: whether variable silences require an expiry bound or allow
+standing `--until-lifted` silences ([`OQ-AW1`](../design/tillr-watch-alert-workflow.md#OQ-AW1)),
+whether auto-resolved episodes still require settlement
+([`OQ-AW2`](../design/tillr-watch-alert-workflow.md#OQ-AW2)), and whether zero-variable `global`
+rules may take bounded silences ([`OQ-AW3`](../design/tillr-watch-alert-workflow.md#OQ-AW3)). Its
+first three slices wait on none of them, its ten designer's decisions await his review in
+[its ledger](../design/tillr-watch-alert-workflow.md#decision-ledger), and none of it is built.
+
 Two designs left this list on 2026-11-15. [Item graphs](../reference/tillr-item-graphs.md) is
 decided, built, and graduated into a system reference: one commit per item, all of refinement built, read-only nodes in
 parallel, and lanes outside the cap for work the owner is waiting on. On 2026-11-16 it was cut
