@@ -986,6 +986,11 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 		}
 	}
 	if work.Candidate != nil {
+		if work.LaneReleased && (work.Examining || work.Examiner != nil) {
+			d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, ReasonRunLive
+			identifyDecision(&d)
+			return d, nil
+		}
 		d.From, d.To, d.Action, d.Reason = "candidate", "landed", ActionJudge, ActionJudge
 	} else {
 		rec, err := terminalRecord(r, d.RunRequest.RunID)
@@ -2454,7 +2459,13 @@ func (l *Loop) releaseExamination(ctx context.Context, d Decision) error {
 		n, rowsErr := res.RowsAffected()
 		releasedLane = rowsErr == nil && n > 0
 		if d.Workflow != nil {
-			return appendEffect(tx, examinationReleasedKind, d.RunRequest.RunID, struct{}{}, l.cfg.Now().UTC())
+			if err := appendEffect(tx, examinationReleasedKind, d.RunRequest.RunID, struct{}{}, l.cfg.Now().UTC()); err != nil {
+				return err
+			}
+			if w := byRun[d.RunRequest.RunID]; w != nil && !w.Done && w.Examiner != nil {
+				return appendEffect(tx, examinationOwnerKind, d.RunRequest.RunID, (*LoopOwner)(nil), l.cfg.Now().UTC())
+			}
+			return nil
 		}
 		if w := byRun[d.RunRequest.RunID]; w != nil && !w.Done && w.Examiner != nil {
 			if err := appendEffect(tx, examinationOwnerKind, d.RunRequest.RunID, (*LoopOwner)(nil), l.cfg.Now().UTC()); err != nil {

@@ -244,8 +244,9 @@ func TestAGateFailureRedOnTheBaseAcquitsTheItem(t *testing.T) {
 
 // A gate failure red on the candidate's base but green on the trunk tip names a repair that
 // already happened: the trunk moved past the base while the candidate waited. No fixer is
-// filed for either commit, the lane is brought onto the tip, and the ordinary refusal goes
-// back to the worker saying the trunk is repaired there (the owner's ruling of 2026-11-18:
+// filed for either commit, the lane is released before replay so waiting work does not idle
+// behind it, and the ordinary refusal goes back to the worker saying the trunk is repaired
+// there and the next run starts from the latest trunk (the owner's ruling of 2026-11-18:
 // work is always built against the latest trunk).
 func TestAGateFailureRedOnlyOnAnOldBaseFilesNoFixer(t *testing.T) {
 	f := newLoopFixture(t, stub(t, "adapter", committingAdapter)).withSeats()
@@ -282,7 +283,7 @@ func TestAGateFailureRedOnlyOnAnOldBaseFilesNoFixer(t *testing.T) {
 		t.Fatalf("no gate refusal was recorded: %v", kinds(eventsOf(t, f.store)))
 	}
 	detail, _ := refusal["detail"].(string)
-	if !strings.Contains(detail, "repaired at "+tip[:12]) || !strings.Contains(detail, "rebased this lane") {
+	if !strings.Contains(detail, "repaired at "+tip[:12]) || !strings.Contains(detail, "starts from the latest trunk") {
 		t.Fatalf("the refusal does not send the worker to the tip: %q\n%s", detail, report.String())
 	}
 	session, _ := refusal["worker_session"].(map[string]any)

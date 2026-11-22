@@ -75,6 +75,9 @@ func (l *Loop) capturePlanSession(ctx context.Context, c Candidate) (*WorkerSess
 }
 
 func (l *Loop) captureSession(ctx context.Context, c Candidate, allowClassification bool) (*WorkerSession, error) {
+	if c.laneReleasedForReplay() {
+		return nil, nil
+	}
 	writerID := c.RunID
 	if c.Evaluator != nil || len(c.Writers) > 0 {
 		writerID = judgeWriterRun(c)
