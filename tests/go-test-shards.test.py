@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """Permanent runner regression tests; parity lists and plans the real drain suite without running it."""
-from contextlib import ExitStack, redirect_stderr
+from contextlib import ExitStack, contextmanager, redirect_stderr
 import importlib.util
 import io
 import json
 import os
 import re
 from pathlib import Path
+import shlex
 import subprocess
 import tempfile
 import threading
 import time
+import types
 import unittest
 from unittest.mock import patch
 
@@ -1224,99 +1226,234 @@ func TestSecond(t *testing.T) {
         self.assertFalse(progress_file.exists())
 
     def test_progress_writes_zero_snapshots_when_stalled_in_slot_wait_or_running_test(self):
-        # 1. Slot wait never increments completed_units or publishes a snapshot.
-        lock_dir = self.root / 'stall-locks'
-        slot_held = threading.Event()
-        release_slot = threading.Event()
+        fake_now = [1000.0]
+        clock_lock = threading.Lock()
 
-        def hold_slot():
-            with shards.acquire_shard_slot(lock_dir, 1, holder='blocker'):
-                slot_held.set()
-                assert release_slot.wait(30)
+        def fake_monotonic():
+            with clock_lock:
+                return fake_now[0]
 
-        holder = threading.Thread(target=hold_slot)
-        holder.start()
-        self.assertTrue(slot_held.wait(30))
+        def advance_clock(seconds):
+            with clock_lock:
+                fake_now[0] += seconds
 
-        binary_fast = self.fake(
-            "print('=== RUN   TestAfterWait', flush=True)\n"
-            "print('--- PASS: TestAfterWait (0.00s)', flush=True)\n"
-            "print('PASS', flush=True)\n"
+        fake_time = types.SimpleNamespace(
+            monotonic=fake_monotonic,
+            time=time.time,
+            sleep=time.sleep,
         )
-        wait_progress = self.root / 'wait-progress.json'
-        tracker = shards._ProgressTracker(wait_progress, 0.04)
-        wait_errors = []
 
-        def run_waiter():
-            try:
-                shards.run_shard(
-                    'waitpkg', self.root, binary_fast, ['TestAfterWait'], 0,
-                    self.root / 'wait-scratch', '0', [], lock_dir=lock_dir,
-                    shard_limit=1, progress=tracker,
-                )
-            except BaseException as exc:
-                wait_errors.append(exc)
+        def sh_script(name, body):
+            script = self.root / name
+            script.write_text('#!/bin/sh\n' + body)
+            script.chmod(0o755)
+            return script
 
-        waiter = threading.Thread(target=run_waiter)
-        waiter.start()
-        try:
-            time.sleep(0.15)
-            self.assertTrue(waiter.is_alive())
-            self.assertFalse(wait_progress.exists())
-        finally:
-            release_slot.set()
-            waiter.join(30)
-            holder.join(30)
-        self.assertEqual(wait_errors, [])
+        def make_fifo(name):
+            fifo = self.root / name
+            os.mkfifo(fifo)
+            fd = os.open(fifo, os.O_RDWR)
+            self.addCleanup(os.close, fd)
+            return fifo
 
-        # 2. Action == 'run' hang writes zero snapshots; mid-run hang stops advancing seq.
-        hang_progress = self.root / 'hang-progress.json'
-        binary_hang = self.fake(
-            "import time\n"
-            "print('=== RUN   TestPassFirst', flush=True)\n"
-            "print('--- PASS: TestPassFirst (0.00s)', flush=True)\n"
-            "time.sleep(0.08)\n"
-            "print('=== RUN   TestHangForever', flush=True)\n"
-            "time.sleep(10)\n"
-        )
-        hang_tracker = shards._ProgressTracker(hang_progress, 0.04)
-        with self.assertRaises(shards.ShardError) as caught:
-            shards.run_shard(
-                'hangpkg', self.root, binary_hang, ['TestPassFirst', 'TestHangForever'], 0,
-                self.root / 'hang-scratch', '0', [], wall_timeout=0.25,
-                lock_dir=self.root / 'hang-locks', shard_limit=1, progress=hang_tracker,
+        def scratch_has_event(scratch_dir, test_name, action):
+            if not scratch_dir.is_dir():
+                return False
+            for path in scratch_dir.rglob('*'):
+                if not path.is_file():
+                    continue
+                try:
+                    raw = path.read_bytes()
+                except OSError:
+                    continue
+                for line in raw.splitlines(keepends=True):
+                    if not line.endswith(b'\n'):
+                        continue
+                    try:
+                        obj = json.loads(line)
+                    except ValueError:
+                        continue
+                    if obj.get('Test') == test_name and obj.get('Action') == action:
+                        return True
+            return False
+
+        real_maybe_publish = shards._ProgressTracker.maybe_publish
+
+        @contextmanager
+        def drive_stalled_shard(scratch_dir, stalled_test, *, expected_units, interval, timeout):
+            stage = [0]
+            liveness_deadline = time.monotonic() + 60.0
+
+            def stepped_maybe_publish(tracker):
+                if time.monotonic() > liveness_deadline:
+                    self.fail(f'liveness guard expired waiting for {stalled_test} in {scratch_dir}')
+                if stage[0] == 0:
+                    real_maybe_publish(tracker)
+                    if (tracker._completed_units >= expected_units
+                            and scratch_has_event(scratch_dir, stalled_test, 'run')):
+                        self.assertFalse(tracker._path.exists())
+                        advance_clock(interval * 2.0)
+                        real_maybe_publish(tracker)
+                        self.assertEqual(tracker._path.exists(), expected_units > 0)
+                        if expected_units > 0:
+                            self.assertEqual(json.loads(tracker._path.read_text())['seq'], 1)
+                        stage[0] = 1
+                elif stage[0] == 1:
+                    advance_clock(interval * 3.0)
+                    real_maybe_publish(tracker)
+                    self.assertEqual(tracker._path.exists(), expected_units > 0)
+                    if expected_units > 0:
+                        self.assertEqual(json.loads(tracker._path.read_text())['seq'], 1)
+                    advance_clock(timeout * 2.0)
+                    stage[0] = 2
+                else:
+                    real_maybe_publish(tracker)
+
+            with patch.object(shards._ProgressTracker, 'maybe_publish', stepped_maybe_publish):
+                yield
+            self.assertEqual(stage[0], 2)
+
+        with patch.object(shards, 'time', fake_time):
+            # 1. Slot wait never increments completed_units or publishes a snapshot.
+            lock_dir = self.root / 'stall-locks'
+            binary_fast = sh_script(
+                'fast.sh',
+                'printf "=== RUN   TestAfterWait\\n--- PASS: TestAfterWait (0.00s)\\nPASS\\n"\n',
             )
-        self.assertTrue(caught.exception.timed_out)
-        self.assertTrue(hang_progress.exists())
-        snap = json.loads(hang_progress.read_text())
-        self.assertEqual(snap['seq'], 1)
-        self.assertEqual(snap['completed_tests'], 1)
+            wait_progress = self.root / 'wait-progress.json'
+            tracker = shards._ProgressTracker(wait_progress, 60.0)
+            entered_slot_wait = threading.Event()
+            post_advance_poll = threading.Event()
+            notice_count = [0]
+            real_acquire = shards.acquire_shard_slot
 
-        # Pure Action == 'run' hang from start writes zero snapshots and does not count as shard completion.
-        pure_hang_progress = self.root / 'pure-hang-progress.json'
-        binary_pure_hang = self.fake(
-            "import time\n"
-            "print('=== RUN   TestHangOnly', flush=True)\n"
-            "time.sleep(10)\n"
-        )
-        packages = [{'ImportPath': 'purehang', 'Dir': str(self.root), 'TestGoFiles': ['x_test.go']}]
-        with patch.object(shards.subprocess, 'check_output', side_effect=[
-                json.dumps(packages[0]), 'TestHangOnly\n']), \
-                patch.object(shards.subprocess, 'run', side_effect=self._fake_compile(binary_pure_hang)), \
-                patch.object(shards, 'global_git_config', return_value=[]):
-            with self.assertRaises(shards.ShardError) as pure_caught:
-                shards.run(
-                    self.root, 1, {}, self.root / 'pure-scratch', '0',
-                    shard_timeout=0.2,
-                    lock_dir=self.root / 'pure-locks',
-                    progress_file=pure_hang_progress,
-                    progress_interval=0.04,
-                )
-        self.assertIn('timed out', str(pure_caught.exception))
-        # Package discovery happened at t~0 before progress_interval=0.04s, then nothing completed.
-        # Even if discovery happened after 0.04s, completed_tests and completed_shards must remain 0.
-        if pure_hang_progress.exists():
+            def observe_acquire(*args, **kwargs):
+                orig_notify = args[2] if len(args) > 2 else kwargs.get('notify')
+
+                def wrapped_notify(msg):
+                    if orig_notify is not None:
+                        orig_notify(msg)
+                    notice_count[0] += 1
+                    if notice_count[0] == 1:
+                        entered_slot_wait.set()
+                    else:
+                        post_advance_poll.set()
+
+                if len(args) > 2:
+                    args = (*args[:2], wrapped_notify, *args[3:])
+                else:
+                    kwargs = dict(kwargs, notify=wrapped_notify)
+                return real_acquire(*args, **kwargs)
+
+            wait_errors = []
+            with ExitStack() as blocker:
+                blocker.enter_context(real_acquire(lock_dir, 1, holder='blocker'))
+                with patch.object(shards, 'acquire_shard_slot', side_effect=observe_acquire):
+                    def run_waiter():
+                        try:
+                            shards.run_shard(
+                                'waitpkg', self.root, binary_fast, ['TestAfterWait'], 0,
+                                self.root / 'wait-scratch', '0', [], wall_timeout=600.0,
+                                lock_dir=lock_dir, shard_limit=1, progress=tracker,
+                            )
+                        except BaseException as exc:
+                            wait_errors.append(exc)
+
+                    waiter = threading.Thread(target=run_waiter)
+                    waiter.start()
+                    try:
+                        self.assertTrue(entered_slot_wait.wait(30))
+                        advance_clock(180.0)
+                        self.assertTrue(post_advance_poll.wait(30))
+                        tracker.maybe_publish()
+                        self.assertTrue(waiter.is_alive())
+                        self.assertEqual(tracker._completed_units, 0)
+                        self.assertFalse(wait_progress.exists())
+                    finally:
+                        blocker.close()
+                        waiter.join(30)
+            self.assertFalse(waiter.is_alive())
+            self.assertEqual(wait_errors, [])
+            self.assertTrue(wait_progress.exists())
+            wait_snap = json.loads(wait_progress.read_text())
+            self.assertEqual(wait_snap['seq'], 1)
+            self.assertEqual(wait_snap['completed_tests'], 1)
+
+            # 2. Action == 'run' hang writes zero snapshots; mid-run hang stops advancing seq.
+            poll_interval = 0.005
+            watchdog_timeout = 0.25
+            hang_fifo = make_fifo('hang.fifo')
+            binary_hang = sh_script(
+                'hang.sh',
+                'printf "=== RUN   TestPassFirst\\n--- PASS: TestPassFirst (0.00s)\\n'
+                '=== RUN   TestHangForever\\n"\n'
+                f'read _ < {shlex.quote(str(hang_fifo))}\n',
+            )
+            hang_progress = self.root / 'hang-progress.json'
+            hang_scratch = self.root / 'hang-scratch'
+            hang_tracker = shards._ProgressTracker(hang_progress, poll_interval)
+            with drive_stalled_shard(hang_scratch, 'TestHangForever', expected_units=1,
+                                     interval=poll_interval, timeout=watchdog_timeout):
+                with self.assertRaises(shards.ShardError) as caught:
+                    shards.run_shard(
+                        'hangpkg', self.root, binary_hang,
+                        ['TestPassFirst', 'TestHangForever'], 0,
+                        hang_scratch, '0', [], wall_timeout=watchdog_timeout,
+                        lock_dir=self.root / 'hang-locks', shard_limit=1,
+                        progress=hang_tracker,
+                    )
+            self.assertTrue(caught.exception.timed_out)
+            self.assertIn('running: TestHangForever', str(caught.exception))
+            self.assertTrue(hang_progress.exists())
+            snap = json.loads(hang_progress.read_text())
+            self.assertEqual(snap['seq'], 1)
+            self.assertEqual(snap['completed_tests'], 1)
+
+            # Pure Action == 'run' hang from start writes zero snapshots and does not count as shard completion.
+            pure_fifo = make_fifo('pure.fifo')
+            binary_pure_hang = sh_script(
+                'pure-hang.sh',
+                'printf "=== RUN   TestHangOnly\\n"\n'
+                f'read _ < {shlex.quote(str(pure_fifo))}\n',
+            )
+            pure_shard_progress = self.root / 'pure-shard-progress.json'
+            pure_shard_scratch = self.root / 'pure-shard-scratch'
+            pure_shard_tracker = shards._ProgressTracker(pure_shard_progress, poll_interval)
+            with drive_stalled_shard(pure_shard_scratch, 'TestHangOnly', expected_units=0,
+                                     interval=poll_interval, timeout=watchdog_timeout):
+                with self.assertRaises(shards.ShardError) as pure_shard_caught:
+                    shards.run_shard(
+                        'purehang', self.root, binary_pure_hang, ['TestHangOnly'], 0,
+                        pure_shard_scratch, '0', [], wall_timeout=watchdog_timeout,
+                        lock_dir=self.root / 'pure-shard-locks', shard_limit=1,
+                        progress=pure_shard_tracker,
+                    )
+            self.assertTrue(pure_shard_caught.exception.timed_out)
+            self.assertIn('running: TestHangOnly', str(pure_shard_caught.exception))
+            self.assertFalse(pure_shard_progress.exists())
+
+            pure_hang_progress = self.root / 'pure-hang-progress.json'
+            pure_scratch = self.root / 'pure-scratch'
+            packages = [{'ImportPath': 'purehang', 'Dir': str(self.root), 'TestGoFiles': ['x_test.go']}]
+            with patch.object(shards.subprocess, 'check_output', side_effect=[
+                    json.dumps(packages[0]), 'TestHangOnly\n']), \
+                    patch.object(shards.subprocess, 'run', side_effect=self._fake_compile(binary_pure_hang)), \
+                    patch.object(shards, 'global_git_config', return_value=[]), \
+                    drive_stalled_shard(pure_scratch, 'TestHangOnly', expected_units=1,
+                                        interval=poll_interval, timeout=watchdog_timeout):
+                with self.assertRaises(shards.ShardError) as pure_caught:
+                    shards.run(
+                        self.root, 1, {}, pure_scratch, '0',
+                        shard_timeout=watchdog_timeout,
+                        lock_dir=self.root / 'pure-locks',
+                        progress_file=pure_hang_progress,
+                        progress_interval=poll_interval,
+                    )
+            self.assertIn('running: TestHangOnly', str(pure_caught.exception))
+            self.assertTrue(pure_hang_progress.exists())
             pure_snap = json.loads(pure_hang_progress.read_text())
+            self.assertEqual(pure_snap['seq'], 1)
+            self.assertEqual(pure_snap['completed_packages'], 1)
             self.assertEqual(pure_snap['completed_tests'], 0)
             self.assertEqual(pure_snap['completed_shards'], 0)
 
