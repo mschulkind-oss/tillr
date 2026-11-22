@@ -424,9 +424,9 @@ func (r HeavyRunner) attribute(ctx context.Context, run HeavyRun, check *HeavyCh
 	// names one, otherwise the tip. A red with no named landing still gets a mover
 	// (graph design, Section 8.2: the mechanic for an unattributed red); it is
 	// never left holding landings while nobody acts.
-	if check.Stalls >= 2 {
+	if check.Stalls >= 2 || check.GoTimedOut {
 		check.FirstRedLanding = ""
-		return run.TipSHA, false, nil // A stall is not a proved pass-to-fail transition.
+		return run.TipSHA, false, nil // Keep the known failure without replaying it to name a culprit.
 	}
 	against = check.FirstRedLanding
 	if check.FirstRedLanding == "" {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -201,6 +202,152 @@ if __name__ == "__main__":
 		if check.CheckID != "native-suite" && strings.Contains(string(body), "broken.go") {
 			t.Fatalf("named case got unscoped output: %q", body)
 		}
+	}
+}
+
+func TestHeavyGoTimeoutUsesFirstProofWithoutReplay(t *testing.T) {
+	for _, mode := range []string{"sharded", "native", "sharded-with-crash"} {
+		t.Run(mode, func(t *testing.T) { testHeavyGoTimeout(t, mode) })
+	}
+}
+
+func testHeavyGoTimeout(t *testing.T, mode string) {
+	t.Helper()
+	const timedOut = "go-test:tools/example:example.com/suite:TestHung"
+	const ordinary = "go-test:tools/example:example.com/suite:TestFailed"
+	const panicLine = "panic: test timed out after 10m0s"
+	root, base := heavyRepo(t)
+	heavyGit(t, root, "update-ref", GreenRef, base)
+	if err := os.MkdirAll(filepath.Join(root, "tools/gate/checks"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(root, "tools/gate/checks/.keep"), "")
+	writeForkFile(t, filepath.Join(root, "tools/fork-check.py"), fmt.Sprintf(`
+import json, os, shlex, sys
+from pathlib import Path
+from types import SimpleNamespace
+
+GO_TOOL_DIRS = ("tools/example",)
+mode = %q
+GO_SHARD_DIRS = GO_TOOL_DIRS if mode.startswith("sharded") else ()
+def go_tool_command(module):
+    if GO_SHARD_DIRS:
+        return "python3 tools/go-test-shards.py " + module
+    return "cd " + module + " && CGO_ENABLED=0 go test ./..."
+def declaration_id(kind, label, root): return "suite"
+def check_status(check): return "FAIL"
+def execute_check(check, *_):
+    args = shlex.split(check.argv[2])
+    pkg = "example.com/suite"
+    panic = ["panic: test timed out after 10m0s\n", "running tests:\n", "\tTestHung (10m0s)\n",
+             "\n", "goroutine 1 [running]:\n"]
+    events = [dict(Action="output", Package=pkg, Test="TestFailed", Output="ordinary assertion\n"),
+              dict(Action="fail", Package=pkg, Test="TestFailed"),
+              dict(Action="run", Package=pkg, Test="TestHung")]
+    events += [dict(Action="output", Package=pkg, Test="TestHung", Output=line) for line in panic]
+    events.append(dict(Action="fail", Package=pkg))
+    report = "\n".join(map(json.dumps, events))
+    if GO_SHARD_DIRS:
+        Path(args[args.index("--events") + 1]).write_text(report)
+        check.output = ("go-test-shards: example.com/suite shard 0 failed (exit 2): TestFailed\n"
+                        "ordinary assertion\n" + "".join(panic))
+        if mode == "sharded-with-crash":
+            check.output += "go-test-shards: example.com/suite shard 1 failed (exit 2)\nunscoped crash\n"
+    else:
+        assert "go test -json " in check.argv[2]
+        check.output = report
+
+def main(argv):
+    check = SimpleNamespace(kind="go-tool", label="tools/example's whole suite passes",
+                            argv=["sh", "-c", go_tool_command("tools/example")])
+    if "--registry-json" in argv:
+        print(json.dumps({"declarations": [{"id": "suite", "kind": check.kind, "label": check.label}]}))
+        return 0
+    execute_check(check, Path.cwd(), None)
+    # The panic header is outside the displayed tail.
+    print("\n".join(check.output.splitlines()[-2:]))
+    Path(os.environ["TILLR_GATE_SPANS_OUT"]).write_text(json.dumps({"check_spans": [{
+        "check_id": "suite", "kind": check.kind, "label": check.label,
+        "status": "FAIL", "attributes_json": "{}",
+    }]}))
+    return 1
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
+`, mode))
+	tip := heavyCommit(t, root, "failed suite")
+	steps := &ProcessSteps{Root: root, LaneRoot: scratchUnderDurable(t), RollingProgram: "python3 tools/fork-check.py {since} --tier rolling"}
+	var replayed []string
+	r := heavyFixture(t, root, func(ctx context.Context, dir, only string) ([]HeavyCheck, error) {
+		if only == "" {
+			return steps.JudgeHeavy(ctx, dir, only)
+		}
+		replayed = append(replayed, only)
+		result := "pass"
+		if heavyGit(t, dir, "rev-parse", "HEAD") == tip {
+			result = "fail"
+		}
+		return []HeavyCheck{{CheckID: only, Result: result}}, nil
+	})
+	var fixed []string
+	r.Fix = func(_ context.Context, sha string, checks []HeavyCheck) error {
+		if sha != tip {
+			t.Errorf("fixer filed against %s, want %s", sha, tip)
+		}
+		fixed = append(fixed, heavyIDs(checks)...)
+		return nil
+	}
+	out, err := r.Run(context.Background())
+	wantChecks := 2
+	if mode == "sharded-with-crash" {
+		wantChecks++
+	}
+	if err != nil || len(out.Runs) != 1 || out.Runs[0].Result != "red" || len(out.Runs[0].Checks) != wantChecks {
+		t.Fatalf("want %d red verdicts, got %+v / %v (replayed %v)", wantChecks, out, err, replayed)
+	}
+	var timeoutCheck HeavyCheck
+	for _, check := range out.Runs[0].Checks {
+		switch check.CheckID {
+		case timedOut:
+			timeoutCheck = check
+			if check.Result != "fail" || check.FirstRedLanding != "" || !strings.Contains(check.Detail, panicLine) {
+				t.Errorf("timeout lost its first proof evidence or blamed a landing: %+v", check)
+			}
+			if raw, err := os.ReadFile(check.LogRef); err != nil || !strings.Contains(string(raw), "goroutine 1 [running]:") {
+				t.Errorf("first proof log not retained: %q / %v", raw, err)
+			}
+		case ordinary:
+			if check.Result != "fail" || check.FirstRedLanding != tip {
+				t.Errorf("ordinary failure lost attribution: %+v", check)
+			}
+			if raw, err := os.ReadFile(check.LogRef); err != nil || !strings.Contains(string(raw), "ordinary assertion") || strings.Contains(string(raw), panicLine) {
+				t.Errorf("ordinary failure lost its separate evidence: %q / %v", raw, err)
+			}
+		case "suite":
+			raw, err := os.ReadFile(check.LogRef)
+			if mode != "sharded-with-crash" || check.Result != "fail" || !check.GoTimedOut || err != nil || !strings.Contains(string(raw), "unscoped crash") {
+				t.Errorf("unscoped crash should stay visible without replaying the suite: %+v / %v", check, err)
+			}
+		default:
+			t.Errorf("unexpected check: %+v", check)
+		}
+	}
+	if !slices.Contains(fixed, timedOut) {
+		t.Errorf("timeout did not get a fixer: %v", fixed)
+	}
+	if len(replayed) == 0 || slices.ContainsFunc(replayed, func(id string) bool { return id != ordinary }) {
+		t.Errorf("only the ordinary failure should be replayed: %v", replayed)
+	}
+	if timeoutCheck.CheckID == "" {
+		t.Fatal("missing named timeout")
+	}
+	// An advanced trunk must not trigger a focused supersession replay either.
+	heavyCommit(t, root, "landed during proof")
+	groups := map[string][]HeavyCheck{tip: {timeoutCheck}}
+	replayed = nil
+	order, err := r.retainRedRepairs(context.Background(), &out.Runs[0], []string{tip}, groups)
+	if err != nil || !slices.Equal(order, []string{tip}) || len(replayed) != 0 {
+		t.Errorf("advanced trunk should keep the timeout repair without replay: %v / %v (replayed %v)", order, err, replayed)
 	}
 }
 

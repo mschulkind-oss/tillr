@@ -27,9 +27,10 @@ func heavyLegacyArgv(ctx context.Context, argv []string, laneRoot string) ([]str
 }
 
 type legacyGoCase struct {
-	Package string `json:"package"`
-	Name    string `json:"name"`
-	Log     string `json:"log"`
+	Package      string `json:"package"`
+	Name         string `json:"name"`
+	Log          string `json:"log"`
+	TimeoutPanic string `json:"timeout_panic"`
 }
 
 type legacyFailure struct {

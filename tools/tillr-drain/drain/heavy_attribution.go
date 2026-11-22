@@ -151,7 +151,8 @@ func (r HeavyRunner) retainRedRepairs(ctx context.Context, run *HeavyRun, order 
 			switch {
 			case !ancestor:
 				reason = "trunk was rewritten"
-			case len(paths) == 0:
+			case len(paths) == 0 || check.GoTimedOut:
+				// The next whole proof can supersede a timeout without a focused replay.
 			case len(check.Reads) != 0:
 				for _, path := range paths {
 					if readsCoverPath(check.Reads, path) {
