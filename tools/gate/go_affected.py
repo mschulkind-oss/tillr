@@ -10,6 +10,7 @@ import fcntl
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -25,6 +26,7 @@ EXCLUDED_PACK_MIRROR_PREFIX = "yolo-packs/tillr/files/local/share/tillr/"
 SHARD_THRESHOLD = 100
 MIN_SHARDS = 6
 MAX_SHARDS = 12
+NARROWED_SHARD_DURATION_THRESHOLD = 25.0
 INVOCATION_GUARD_FLAG = "--invocation-guard"
 PR_SET_CHILD_SUBREAPER = 36
 _live_guards: dict[int, int] = {}
@@ -96,6 +98,24 @@ def load_edges(root: Path) -> dict[str, dict]:
             val = entry.get(key, [])
             if not isinstance(val, list) or not all(isinstance(x, str) for x in val):
                 raise ValueError(f"{path}: {pkg}.{key} must be a list of strings")
+        if "read_tests" in entry:
+            read_tests = entry["read_tests"]
+            if not isinstance(read_tests, dict):
+                raise ValueError(f"{path}: {pkg}.read_tests must be an object")
+            reads_set = set(entry.get("reads", []))
+            for rule, names in read_tests.items():
+                if not isinstance(rule, str) or rule not in reads_set:
+                    raise ValueError(
+                        f"{path}: {pkg}.read_tests key {rule!r} must appear in {pkg}.reads"
+                    )
+                if (
+                    not isinstance(names, list)
+                    or not names
+                    or not all(isinstance(t, str) and bool(t.strip()) and t == t.strip() for t in names)
+                ):
+                    raise ValueError(
+                        f"{path}: {pkg}.read_tests[{rule!r}] must be a non-empty list of test names"
+                    )
     return data
 
 
@@ -185,18 +205,18 @@ def path_matches_read(path: str, rule: str) -> bool:
     return path == rule or path.startswith(rule + "/")
 
 
-def compute_edge_digest(
+def _resolve_edge_builds(
     root: Path,
     edge: dict,
     pkg_info: dict[str, dict],
-) -> str:
-    hasher = hashlib.sha256()
+) -> tuple[list[str], list[str]]:
     files: set[str] = set()
     mods: set[str] = set()
+    missing: list[str] = []
     for target in edge.get("builds", []):
         info = pkg_info.get(target)
         if not info:
-            hasher.update(f"missing-build:{target}\n".encode("utf-8"))
+            missing.append(target)
             continue
         closure = {target} | info["deps"]
         for dep in closure:
@@ -214,7 +234,31 @@ def compute_edge_digest(
             mp = root / mod / mf
             if mp.is_file():
                 files.add(f"{mod}/{mf}")
+    return sorted(files), missing
+
+
+def compute_edge_digest(
+    root: Path,
+    edge: dict,
+    pkg_info: dict[str, dict],
+    *,
+    active_tests: set[str] | list[str] | tuple[str, ...] | None = None,
+    resolved_builds: tuple[list[str], list[str]] | None = None,
+) -> str:
+    hasher = hashlib.sha256()
+    if resolved_builds is None:
+        build_files, missing_builds = _resolve_edge_builds(root, edge, pkg_info)
+    else:
+        build_files, missing_builds = resolved_builds
+    for target in missing_builds:
+        hasher.update(f"missing-build:{target}\n".encode("utf-8"))
+    files: set[str] = set(build_files)
+    read_tests = edge.get("read_tests", {})
+    active_set = set(active_tests) if active_tests is not None else None
     for rule in edge.get("reads", []):
+        if active_set is not None and rule in read_tests:
+            if not (set(read_tests[rule]) & active_set):
+                continue
         rp = root / rule.rstrip("/")
         if rp.is_file():
             files.add(rp.relative_to(root).as_posix())
@@ -364,6 +408,8 @@ def select_affected_packages(
 
     changed_pkgs: set[str] = set()
     floor_triggers: set[str] = set()
+    whole_pkg_selected: set[str] = set()
+    matched_scoped_reads: dict[str, list[str]] = {}
 
     # Step 1: Changed paths -> packages or floor triggers.
     for path in relevant:
@@ -400,6 +446,7 @@ def select_affected_packages(
             changed_pkgs.add(placed)
             if pkg_info[placed]["has_tests"]:
                 mark(placed, "changed")
+                whole_pkg_selected.add(placed)
 
     # Step 2: Importers (reverse import graph across all tillr modules).
     if changed_pkgs:
@@ -408,28 +455,34 @@ def select_affected_packages(
                 continue
             if test_deps.get(ip, set()) & changed_pkgs:
                 mark(ip, "import")
+                whole_pkg_selected.add(ip)
 
     # Step 3: Declared edges (builds + reads).
     for test_pkg, edge in edges.items():
         info = pkg_info.get(test_pkg)
         if not info or not info["has_tests"]:
             continue
-        hit = False
+        builds_hit = False
         for target in edge.get("builds", []):
             if target in changed_pkgs:
-                hit = True
+                builds_hit = True
                 break
             tinfo = pkg_info.get(target)
             if tinfo and (tinfo["deps"] & changed_pkgs):
-                hit = True
+                builds_hit = True
                 break
-        if not hit:
-            for rule in edge.get("reads", []):
-                if any(path_matches_read(p, rule) for p in norm_changed):
-                    hit = True
-                    break
-        if hit:
+        matched_reads = [
+            rule
+            for rule in edge.get("reads", [])
+            if any(path_matches_read(p, rule) for p in norm_changed)
+        ]
+        if builds_hit or matched_reads:
             mark(test_pkg, "edge")
+            read_tests_map = edge.get("read_tests", {})
+            if builds_hit or not matched_reads or any(r not in read_tests_map for r in matched_reads):
+                whole_pkg_selected.add(test_pkg)
+            else:
+                matched_scoped_reads[test_pkg] = matched_reads
 
     # Step 4: Floor (unplaceable changes -> module + modules replacing it).
     floor_modules: list[str] = []
@@ -447,6 +500,7 @@ def select_affected_packages(
                 continue
             for ip in module_test_pkgs.get(mod, []):
                 mark(ip, "floor")
+                whole_pkg_selected.add(ip)
 
     selected: list[dict] = []
     for ip in sorted(reasons):
@@ -454,16 +508,53 @@ def select_affected_packages(
         if info["module"] in drop_set:
             continue
         has_edge = ip in edges
-        digest = compute_edge_digest(root, edges[ip], pkg_info) if has_edge else None
-        selected.append({
+        selected_tests: list[str] | None = None
+        if ip not in whole_pkg_selected and ip in matched_scoped_reads:
+            read_tests_map = edges[ip].get("read_tests", {})
+            wanted_list: list[str] = []
+            wanted_set: set[str] = set()
+            for rule in matched_scoped_reads[ip]:
+                for tname in read_tests_map.get(rule, ()):
+                    if tname != "TestEdgeInputs" and tname not in wanted_set:
+                        wanted_set.add(tname)
+                        wanted_list.append(tname)
+            pkg_tests = scan_package_tests(root, {
+                "import_path": ip,
+                "module": info["module"],
+                "dir_rel": info["dir_rel"],
+                "test_files": info["test_files"],
+            })
+            ordered = [t for t in pkg_tests if t in wanted_set]
+            ordered_set = set(ordered)
+            for t in wanted_list:
+                if t not in ordered_set:
+                    ordered.append(t)
+            selected_tests = ordered
+        resolved_builds = _resolve_edge_builds(root, edges[ip], pkg_info) if has_edge else None
+        digest = (
+            compute_edge_digest(
+                root,
+                edges[ip],
+                pkg_info,
+                active_tests=selected_tests,
+                resolved_builds=resolved_builds,
+            )
+            if has_edge
+            else None
+        )
+        entry_item = {
             "import_path": ip,
             "module": info["module"],
             "dir_rel": info["dir_rel"],
             "test_files": info["test_files"],
             "reason": reasons[ip],
+            "selected_tests": selected_tests,
             "has_edge": has_edge,
             "edge_digest": digest,
-        })
+        }
+        if resolved_builds is not None:
+            entry_item["_resolved_builds"] = resolved_builds
+        selected.append(entry_item)
     for mod in failed_floor_mods:
         selected.append({
             "import_path": "./...",
@@ -471,6 +562,7 @@ def select_affected_packages(
             "dir_rel": mod,
             "test_files": [],
             "reason": "floor",
+            "selected_tests": None,
             "has_edge": False,
             "edge_digest": None,
         })
@@ -941,6 +1033,19 @@ def _run_guarded_command(
     return rc, "".join(chunks)
 
 
+def _format_evidence_package(item: dict, *, elapsed_ms: int = 0, cached: bool = False) -> dict:
+    rec = {
+        "import_path": item["import_path"],
+        "module": item["module"],
+        "reason": item["reason"],
+        "elapsed_ms": elapsed_ms,
+        "cached": cached,
+    }
+    if item.get("selected_tests") is not None:
+        rec["tests"] = list(item["selected_tests"])
+    return rec
+
+
 def run_selected_tests(
     root: Path,
     selection: dict,
@@ -948,21 +1053,13 @@ def run_selected_tests(
     ev_path: str = "",
     progress_stream=None,
 ) -> tuple[int, str, dict]:
+    root = root.resolve()
     selected = selection["selected"]
     initial_evidence = {
         "mode": "go-affected",
         "selection_ms": selection["selection_ms"],
         "slot_wait_ms": 0,
-        "packages": [
-            {
-                "import_path": item["import_path"],
-                "module": item["module"],
-                "reason": item["reason"],
-                "elapsed_ms": 0,
-                "cached": False,
-            }
-            for item in selected
-        ],
+        "packages": [_format_evidence_package(item) for item in selected],
     }
     write_evidence_atomic(ev_path, initial_evidence)
     if not selected:
@@ -970,6 +1067,28 @@ def run_selected_tests(
 
     shards_mod = _load_shards_module(root)
     durations = _load_durations(root)
+    edges = load_edges(root)
+    fallback_graph: dict | None = None
+
+    def invocation_digest(item: dict, active_tests: list[str] | None) -> str | None:
+        if not item.get("has_edge"):
+            return None
+        edge = edges.get(item["import_path"])
+        if edge is None:
+            return item.get("edge_digest")
+        resolved = item.get("_resolved_builds")
+        if resolved is None:
+            if edge.get("builds"):
+                nonlocal fallback_graph
+                if fallback_graph is None:
+                    fallback_graph = load_tillr_graph(root)
+                resolved = _resolve_edge_builds(root, edge, fallback_graph["pkg_info"])
+            else:
+                resolved = ([], [])
+        return compute_edge_digest(
+            root, edge, {}, active_tests=active_tests, resolved_builds=resolved
+        )
+
     base_env = build_env()
     slot_class = (
         shards_mod.resolve_slot_class(os.environ.get("GO_TEST_SHARDS_CLASS") or shards_mod.SLOT_CLASS_PROOF)
@@ -987,14 +1106,59 @@ def run_selected_tests(
             git_values = shards_mod.global_git_config()
     durable = base_env.get("YOLO_DURABLE_DIR") or base_env.get("TMPDIR")
 
-    # Group small non-edge packages by module; edge or large packages run with their own invocations.
+    # Group small non-edge packages by module; narrowed, edge, or large packages run with their own invocations.
     # Each invocation is (module, items, digest, run_regex_or_None, scratch_key).
     invocations: list[tuple[str, list[dict], str | None, str | None, str]] = []
     by_mod: dict[str, list[dict]] = {}
     for item in selected:
         tests = scan_package_tests(root, item)
-        if len(tests) >= SHARD_THRESHOLD:
-            has_edge_test = "TestEdgeInputs" in tests
+        has_edge_test = "TestEdgeInputs" in tests
+        narrowed = item.get("selected_tests")
+        if narrowed is not None:
+            reader_tests = [t for t in narrowed if t != "TestEdgeInputs"]
+            pkg_durations = durations.get(item["import_path"], {})
+            subset_durations = {t: float(pkg_durations.get(t, 1.0)) for t in reader_tests}
+            est_total = sum(subset_durations.values())
+            subset_sig = hashlib.sha256("\0".join(reader_tests).encode("utf-8")).hexdigest()[:12]
+            if len(reader_tests) >= 2 and est_total >= NARROWED_SHARD_DURATION_THRESHOLD:
+                shard_count = min(
+                    MAX_SHARDS,
+                    max(2, math.ceil(est_total / NARROWED_SHARD_DURATION_THRESHOLD)),
+                )
+                if shards_mod is not None and hasattr(shards_mod, "assign"):
+                    buckets = shards_mod.assign(reader_tests, subset_durations, shard_count)
+                else:
+                    buckets = [[] for _ in range(shard_count)]
+                    for idx, name in enumerate(reader_tests):
+                        buckets[idx % shard_count].append(name)
+                for shard_idx, bucket in enumerate(buckets):
+                    if not bucket:
+                        continue
+                    shard_names = list(bucket)
+                    if has_edge_test:
+                        shard_names.append("TestEdgeInputs")
+                    pattern = "^(" + "|".join(re.escape(t) for t in shard_names) + ")$"
+                    bucket_sig = hashlib.sha256("\0".join(bucket).encode("utf-8")).hexdigest()[:12]
+                    invocations.append((
+                        item["module"],
+                        [item],
+                        invocation_digest(item, bucket),
+                        pattern,
+                        f"{item['import_path']}#tests-{subset_sig}-shard-{shard_idx}-{bucket_sig}",
+                    ))
+            else:
+                run_names = list(reader_tests)
+                if has_edge_test:
+                    run_names.append("TestEdgeInputs")
+                pattern = "^(" + "|".join(re.escape(t) for t in run_names) + ")$"
+                invocations.append((
+                    item["module"],
+                    [item],
+                    invocation_digest(item, reader_tests),
+                    pattern,
+                    f"{item['import_path']}#tests-{subset_sig}",
+                ))
+        elif len(tests) >= SHARD_THRESHOLD:
             non_edge = [t for t in tests if t != "TestEdgeInputs"]
             shard_count = min(MAX_SHARDS, max(MIN_SHARDS, len(non_edge) // 125))
             pkg_durations = durations.get(item["import_path"], {})
@@ -1014,7 +1178,7 @@ def run_selected_tests(
                 invocations.append((
                     item["module"],
                     [item],
-                    item["edge_digest"] if item["has_edge"] else None,
+                    invocation_digest(item, bucket),
                     pattern,
                     f"{item['import_path']}#shard-{shard_idx}",
                 ))
@@ -1115,13 +1279,13 @@ def run_selected_tests(
     for item in selected:
         ip = item["import_path"]
         shards_list = pkg_shards.get(ip, [])
-        packages_evidence.append({
-            "import_path": ip,
-            "module": item["module"],
-            "reason": item["reason"],
-            "elapsed_ms": max((s.get("elapsed_ms", 0) for s in shards_list), default=0),
-            "cached": bool(shards_list) and all(bool(s.get("cached", False)) for s in shards_list),
-        })
+        packages_evidence.append(
+            _format_evidence_package(
+                item,
+                elapsed_ms=max((s.get("elapsed_ms", 0) for s in shards_list), default=0),
+                cached=bool(shards_list) and all(bool(s.get("cached", False)) for s in shards_list),
+            )
+        )
 
     evidence = {
         "mode": "go-affected",
@@ -1175,7 +1339,14 @@ def main(argv: list[str] | None = None) -> int:
 
     selection = select_affected_packages(root, changed, drop_modules=set(args.drop_module))
     if args.select_only:
-        print(json.dumps(selection, indent=2, sort_keys=True))
+        printable = {
+            **selection,
+            "selected": [
+                {k: v for k, v in item.items() if not k.startswith("_")}
+                for item in selection["selected"]
+            ],
+        }
+        print(json.dumps(printable, indent=2, sort_keys=True))
         return 0
 
     ev_path = args.evidence_out or os.environ.get("TILLR_GO_AFFECTED_EVIDENCE_OUT", "")

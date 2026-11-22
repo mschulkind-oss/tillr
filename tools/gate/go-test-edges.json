@@ -18,7 +18,12 @@
       "tools/tillr-roll/tillr-roll.py",
       "tools/tillr-run/backends/",
       "yolo-packs/tillr/programs/"
-    ]
+    ],
+    "read_tests": {
+      "tools/fork-check.py": [
+        "TestTheComposedPipelineRunsEndToEndOnAFixture"
+      ]
+    }
   },
   "github.com/mschulkind-oss/tillr-drain/drain": {
     "builds": [
@@ -44,7 +49,22 @@
       "tools/tillr-run/backends/",
       "yolo-packs/tillr/pack.json",
       "yolo-packs/tillr/programs/"
-    ]
+    ],
+    "read_tests": {
+      "tools/fork-check.py": [
+        "TestFixerGateJudgesOwnDiffThenNamedChecksAndLands",
+        "TestJudgeAutomaticRevertDoesNotOptIntoFastTiming",
+        "TestGateTimingDoesNotRecordNestedGateSpans",
+        "TestGateTimingKeepsExecutedWaybarSkip",
+        "TestHeavyLegacyRestartPreservesPlannerSchedulerAndCompletedProof",
+        "TestHeavyLegacyRestartCarriesPassAcrossAnUnchangedTipAdvance",
+        "TestHeavyLegacyRestartReusesSuccessfulStallRetry",
+        "TestHeavyLegacyAttributionUsesTheRealReplaySelectorVocabulary",
+        "TestHeavyKilledOwnerReapsJudgesBeforeCheckoutRecovery",
+        "TestHeavyProgressEventsEmitLiveLegacyChecksDuringRun",
+        "TestHeavyProgressEventsEmitRunningForShardedGoChecksAndStallReplay"
+      ]
+    }
   },
   "github.com/mschulkind-oss/tillr-gate": {
     "builds": [],
@@ -54,7 +74,20 @@
       "tools/gate/checks/",
       "tools/tillr-loop/tillr-loop",
       "yolo-packs/fork-pins/"
-    ]
+    ],
+    "read_tests": {
+      "tools/fork-check.py": [
+        "TestPlanCarriesTheFieldsACommandListCannot",
+        "TestTheRegistryDeclaresEveryCommandCheckTheGatePlans",
+        "TestADeclarationIDCarriesNoCountAndNoAbsolutePath",
+        "TestPlanSelectsTheGoToolSteps",
+        "TestTheRegistryNamesTheChecksItCannotCommand",
+        "TestEveryDeclarationIsSelectedBySomething",
+        "TestTheRegistryDigestBindsTheInProcessChecks",
+        "TestTheRegistryDigestIsReproducibleAcrossExports",
+        "TestAForkStepIsSelectedByItsSeriesAndNotItsPack"
+      ]
+    }
   },
   "github.com/mschulkind-oss/tillr-item": {
     "builds": [

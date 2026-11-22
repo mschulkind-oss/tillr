@@ -184,6 +184,228 @@ def test_selection_rules(root_graph: dict) -> None:
         sel = go_affected.select_affected_packages(ROOT, [changed_path], graph=root_graph)
         pkgs = {item["import_path"] for item in sel["selected"]}
         assert expected_pkgs <= pkgs, f"{changed_path}: missing {expected_pkgs - pkgs} in {pkgs}"
+        for item in sel["selected"]:
+            assert item["selected_tests"] is None, f"unscoped read {changed_path} narrowed {item}"
+
+    # 10. Scoped read_tests on tools/fork-check.py (alone or with tests/fork-check.test.py)
+    # selects only the three reading packages and narrows each to its reader tests.
+    expected_fc_pkgs = {
+        "github.com/mschulkind-oss/tillr-drain",
+        "github.com/mschulkind-oss/tillr-drain/drain",
+        "github.com/mschulkind-oss/tillr-gate",
+    }
+    for fc_changed in (
+        ["tools/fork-check.py"],
+        ["tools/fork-check.py", "tests/fork-check.test.py"],
+    ):
+        sel = go_affected.select_affected_packages(ROOT, fc_changed, graph=root_graph)
+        by_pkg = {item["import_path"]: item for item in sel["selected"]}
+        assert set(by_pkg) == expected_fc_pkgs, (fc_changed, set(by_pkg))
+        for ip in expected_fc_pkgs:
+            assert by_pkg[ip]["reason"] == "edge", by_pkg[ip]
+            assert isinstance(by_pkg[ip]["selected_tests"], list) and by_pkg[ip]["selected_tests"], by_pkg[ip]
+            assert "TestEdgeInputs" not in by_pkg[ip]["selected_tests"], by_pkg[ip]
+        assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["selected_tests"] == [
+            "TestTheComposedPipelineRunsEndToEndOnAFixture"
+        ], by_pkg["github.com/mschulkind-oss/tillr-drain"]
+        assert len(by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]["selected_tests"]) == 11, (
+            by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]
+        )
+        assert len(by_pkg["github.com/mschulkind-oss/tillr-gate"]["selected_tests"]) == 9, (
+            by_pkg["github.com/mschulkind-oss/tillr-gate"]
+        )
+
+    # 11. Pairing tools/fork-check.py with a Go package edit, a builds-edge edit, an unscoped
+    # reads edit, or a module floor trigger widens affected packages back to whole-package
+    # execution (selected_tests=None) while unaffected reading packages stay narrowed.
+    sel_go = go_affected.select_affected_packages(
+        ROOT, ["tools/fork-check.py", "tools/tillr-drain/drain/loop.go"], graph=root_graph
+    )
+    by_pkg = {item["import_path"]: item for item in sel_go["selected"]}
+    assert by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]["reason"] == "changed", by_pkg
+    assert by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]["selected_tests"] is None, by_pkg
+    assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["reason"] == "import", by_pkg
+    assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["selected_tests"] is None, by_pkg
+    assert len(by_pkg["github.com/mschulkind-oss/tillr-gate"]["selected_tests"]) == 9, by_pkg
+
+    sel_builds = go_affected.select_affected_packages(
+        ROOT, ["tools/fork-check.py", "tools/tillr-cli/main.go"], graph=root_graph
+    )
+    by_pkg = {item["import_path"]: item for item in sel_builds["selected"]}
+    assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["selected_tests"] is None, by_pkg
+    assert by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]["selected_tests"] is None, by_pkg
+    assert len(by_pkg["github.com/mschulkind-oss/tillr-gate"]["selected_tests"]) == 9, by_pkg
+
+    sel_unscoped = go_affected.select_affected_packages(
+        ROOT, ["tools/fork-check.py", "config/tillr/policy.json"], graph=root_graph
+    )
+    by_pkg = {item["import_path"]: item for item in sel_unscoped["selected"]}
+    assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["selected_tests"] is None, by_pkg
+    assert by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]["selected_tests"] is None, by_pkg
+    assert len(by_pkg["github.com/mschulkind-oss/tillr-gate"]["selected_tests"]) == 9, by_pkg
+
+    sel_floor = go_affected.select_affected_packages(
+        ROOT, ["tools/fork-check.py", "tools/tillr-drain/go.mod"], graph=root_graph
+    )
+    by_pkg = {item["import_path"]: item for item in sel_floor["selected"]}
+    assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["selected_tests"] is None, by_pkg
+    assert by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]["selected_tests"] is None, by_pkg
+
+
+def _strip_go_comments(src: str) -> str:
+    out: list[str] = []
+    i, n = 0, len(src)
+    while i < n:
+        c = src[i]
+        if c == "/" and i + 1 < n and src[i + 1] == "/":
+            j = src.find("\n", i + 2)
+            if j < 0:
+                break
+            out.append("\n")
+            i = j + 1
+        elif c == "/" and i + 1 < n and src[i + 1] == "*":
+            j = src.find("*/", i + 2)
+            if j < 0:
+                break
+            out.append(" " * (j + 2 - i))
+            i = j + 2
+        elif c == "`":
+            j = src.find("`", i + 1)
+            if j < 0:
+                out.append(src[i:])
+                break
+            out.append(src[i:j + 1])
+            i = j + 1
+        elif c in ('"', "'"):
+            quote = c
+            j = i + 1
+            while j < n:
+                if src[j] == "\\":
+                    j += 2
+                    continue
+                if src[j] == quote:
+                    j += 1
+                    break
+                j += 1
+            out.append(src[i:j])
+            i = j
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def _parse_go_funcs(src: str) -> dict[str, str]:
+    clean = _strip_go_comments(src)
+    funcs: dict[str, str] = {}
+    for m in re.finditer(r"^func\s+(?:\([^)]*\)\s*)?(\w+)\s*\(", clean, re.MULTILINE):
+        name = m.group(1)
+        brace = clean.find("{", m.end())
+        if brace < 0:
+            continue
+        depth = 0
+        i = brace
+        n = len(clean)
+        while i < n:
+            c = clean[i]
+            if c == "`":
+                j = clean.find("`", i + 1)
+                i = n if j < 0 else j + 1
+                continue
+            if c in ('"', "'"):
+                q = c
+                i += 1
+                while i < n:
+                    if clean[i] == "\\":
+                        i += 2
+                        continue
+                    if clean[i] == q:
+                        i += 1
+                        break
+                    i += 1
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    funcs[name] = funcs.get(name, "") + "\n" + clean[brace:i + 1]
+                    break
+            i += 1
+    return funcs
+
+
+def _scan_fork_check_reader_tests(root: Path, modules: list[str]) -> dict[str, list[str]]:
+    """Return {pkg_import: [Test* names]} for every Go test reading/executing checkout tools/fork-check.py."""
+    readers_by_pkg: dict[str, list[str]] = {}
+    for mod in modules:
+        mod_name = mod.split("/", 1)[1]
+        mod_root = root / mod
+        by_pkg: dict[str, list[Path]] = {}
+        for tf in sorted(mod_root.rglob("*_test.go")):
+            rel = tf.parent.relative_to(mod_root).as_posix()
+            pkg = (
+                f"github.com/mschulkind-oss/{mod_name}"
+                if rel == "."
+                else f"github.com/mschulkind-oss/{mod_name}/{rel}"
+            )
+            by_pkg.setdefault(pkg, []).append(tf)
+        for pkg, files in sorted(by_pkg.items()):
+            funcs: dict[str, str] = {}
+            top_tests: list[str] = []
+            for tf in files:
+                raw = tf.read_text(encoding="utf-8")
+                for tname in go_affected.TOP_LEVEL_TEST_RE.findall(raw):
+                    if tname not in top_tests:
+                        top_tests.append(tname)
+                for fname, fbody in _parse_go_funcs(raw).items():
+                    funcs[fname] = funcs.get(fname, "") + "\n" + fbody
+
+            direct: set[str] = set()
+            clones_repo: set[str] = set()
+            execs_fc: set[str] = set()
+            for fn, fb in funcs.items():
+                if "repoRoot(" in fb and '"clone"' in fb:
+                    clones_repo.add(fn)
+                if (
+                    '"tools/fork-check.py"' in fb
+                    and ("exec.Command" in fb or '"--gate-arg"' in fb)
+                    and "writeForkFile" not in fb
+                    and "os.WriteFile" not in fb
+                ):
+                    execs_fc.add(fn)
+                if "fork-check.py" not in fb:
+                    continue
+                if (
+                    re.search(r'repositoryFile\([^)]*"tools/fork-check\.py"', fb)
+                    or re.search(r'filepath\.Join\([^)]*"\.\."[^)]*"fork-check\.py"', fb)
+                    or (
+                        ("repositoryFile(" in fb or "repoRoot(" in fb)
+                        and "os.ReadFile(" in fb
+                        and '"tools/fork-check.py"' in fb
+                    )
+                    or re.search(r'(?:os\.ReadFile|exec\.Command)\([^;\n]*"\.\./[^"\n]*fork-check\.py"', fb)
+                ):
+                    direct.add(fn)
+
+            def callers_of(seed: set[str]) -> set[str]:
+                reach = set(seed)
+                progressed = True
+                while progressed:
+                    progressed = False
+                    for fn, fb in funcs.items():
+                        if fn in reach:
+                            continue
+                        if any(re.search(rf"\b{re.escape(cal)}\s*\(", fb) for cal in reach):
+                            reach.add(fn)
+                            progressed = True
+                return reach
+
+            readers = callers_of(direct) | (callers_of(clones_repo) & callers_of(execs_fc))
+            found = [t for t in top_tests if t in readers]
+            if found:
+                readers_by_pkg[pkg] = found
+    return readers_by_pkg
 
 
 def test_edges_file_honest_and_env_read() -> None:
@@ -253,6 +475,70 @@ def test_edges_file_honest_and_env_read() -> None:
         assert any("TILLR_GATE_EDGE_INPUTS" in tf.read_text(encoding="utf-8") for tf in test_files), (
             f"{pkg_import}: no *_test.go reads TILLR_GATE_EDGE_INPUTS"
         )
+        # Validate read_tests keys and test names against scan_package_tests.
+        read_rules = set(edges[pkg_import].get("reads", []))
+        read_tests = edges[pkg_import].get("read_tests", {})
+        assert isinstance(read_tests, dict), f"{pkg_import}: read_tests must be a dict"
+        pkg_test_names = set(go_affected.scan_package_tests(ROOT, {
+            "import_path": pkg_import,
+            "module": f"tools/{rel.split('/', 1)[0]}",
+            "dir_rel": f"tools/{rel}",
+        }))
+        for rule, names in read_tests.items():
+            assert rule in read_rules, f"{pkg_import}: read_tests key {rule!r} missing from reads"
+            assert isinstance(names, list) and names, f"{pkg_import}: read_tests[{rule!r}] must be non-empty"
+            assert "TestEdgeInputs" not in names, (
+                f"{pkg_import}: omit TestEdgeInputs from read_tests[{rule!r}]; go_affected appends it"
+            )
+            missing_tests = [n for n in names if n not in pkg_test_names]
+            assert not missing_tests, (
+                f"{pkg_import}: read_tests[{rule!r}] names tests absent from package: {missing_tests}"
+            )
+
+    # Every Go test across all tillr modules that reads or executes the checkout's
+    # tools/fork-check.py must be covered by reads and read_tests["tools/fork-check.py"].
+    actual_fc_readers = _scan_fork_check_reader_tests(ROOT, modules)
+    assert set(actual_fc_readers) == {
+        "github.com/mschulkind-oss/tillr-drain",
+        "github.com/mschulkind-oss/tillr-drain/drain",
+        "github.com/mschulkind-oss/tillr-gate",
+    }, actual_fc_readers
+    for pkg_import, actual_tests in actual_fc_readers.items():
+        assert pkg_import in edges, f"{pkg_import} missing from go-test-edges.json"
+        assert "tools/fork-check.py" in edges[pkg_import].get("reads", []), (
+            f"{pkg_import}: tools/fork-check.py missing from reads"
+        )
+        declared_rt = edges[pkg_import].get("read_tests", {}).get("tools/fork-check.py")
+        assert declared_rt is not None, (
+            f"{pkg_import}: tools/fork-check.py missing from read_tests"
+        )
+        missing_readers = set(actual_tests) - set(declared_rt)
+        extra_readers = set(declared_rt) - set(actual_tests)
+        assert not missing_readers, (
+            f"{pkg_import}: read_tests['tools/fork-check.py'] missing reader tests {sorted(missing_readers)}"
+        )
+        assert not extra_readers, (
+            f"{pkg_import}: read_tests['tools/fork-check.py'] lists non-reader tests {sorted(extra_readers)}"
+        )
+
+    # load_edges refuses invalid read_tests declarations.
+    with tempfile.TemporaryDirectory(prefix="go-affected-edges-val-", dir=scratch_root()) as tmp:
+        bad_repo = Path(tmp)
+        (bad_repo / "tools" / "gate").mkdir(parents=True)
+        for bad_edges in (
+            {"github.com/mschulkind-oss/tillr-gate": {"reads": ["a.py"], "read_tests": ["bad"]}},
+            {"github.com/mschulkind-oss/tillr-gate": {"reads": ["a.py"], "read_tests": {"other.py": ["TestX"]}}},
+            {"github.com/mschulkind-oss/tillr-gate": {"reads": ["a.py"], "read_tests": {"a.py": []}}},
+            {"github.com/mschulkind-oss/tillr-gate": {"reads": ["a.py"], "read_tests": {"a.py": [123]}}},
+            {"github.com/mschulkind-oss/tillr-gate": {"reads": ["a.py"], "read_tests": {"a.py": [""]}}},
+        ):
+            (bad_repo / "tools" / "gate" / "go-test-edges.json").write_text(json.dumps(bad_edges))
+            try:
+                go_affected.load_edges(bad_repo)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"load_edges accepted invalid read_tests: {bad_edges}")
 
 
 def test_edge_cache_invalidation() -> None:
@@ -1177,6 +1463,194 @@ def test_stalled_run_prints_nothing_without_test_events() -> None:
         assert f"go-affected: pass {pkg} (" in tail, tail
 
 
+def test_scoped_read_tests_execution_cache_and_sharding() -> None:
+    """Prove read_tests narrows -run, LPT-shards >=25s reader subsets, scopes digests, and hits Go's cache."""
+    pkg = "github.com/mschulkind-oss/tillr-scoped"
+    sib_pkg = "github.com/mschulkind-oss/tillr-sib"
+    with tempfile.TemporaryDirectory(prefix="go-affected-scoped-", dir=scratch_root()) as tmp:
+        tmp_path = Path(tmp)
+        repo = tmp_path / "repo"
+        (repo / "tools" / "tillr-sib").mkdir(parents=True)
+        (repo / "tools" / "tillr-scoped").mkdir(parents=True)
+        (repo / "tools" / "gate").mkdir(parents=True)
+        (repo / "config").mkdir(parents=True)
+        shutil.copy2(ROOT / "tools" / "gate" / "go_affected.py", repo / "tools" / "gate" / "go_affected.py")
+        shutil.copy2(ROOT / "tools" / "go-test-shards.py", repo / "tools" / "go-test-shards.py")
+
+        (repo / "tools" / "tillr-sib" / "go.mod").write_text(
+            f"module {sib_pkg}\n\ngo 1.22\n"
+        )
+        sib_main = repo / "tools" / "tillr-sib" / "main.go"
+        sib_main.write_text('package main\nfunc main() {}\n')
+
+        planner_file = repo / "tools" / "fork-check.py"
+        planner_file.write_text("PLANNER_V = 'v1'\n")
+        config_file = repo / "config" / "app.txt"
+        config_file.write_text("cfg-ok\n")
+        pids_dir = tmp_path / "pids"
+        pids_dir.mkdir()
+
+        (repo / "tools" / "tillr-scoped" / "go.mod").write_text(
+            f"module {pkg}\n\ngo 1.22\n"
+        )
+        (repo / "tools" / "tillr-scoped" / "scoped_test.go").write_text(
+            'package main\n'
+            'import (\n'
+            '  "fmt"\n'
+            '  "os"\n'
+            '  "path/filepath"\n'
+            '  "strings"\n'
+            '  "testing"\n'
+            ')\n'
+            'func TestEdgeInputs(t *testing.T) {\n'
+            '  if os.Getenv("TILLR_GATE_EDGE_INPUTS") == "" {\n'
+            '    t.Fatal("missing TILLR_GATE_EDGE_INPUTS")\n'
+            '  }\n'
+            '}\n'
+            'func recordPID(t *testing.T, name string) {\n'
+            '  if dir := os.Getenv("SCOPED_PIDS_DIR"); dir != "" {\n'
+            '    _ = os.WriteFile(filepath.Join(dir, name), []byte(fmt.Sprintf("%d", os.Getpid())), 0o644)\n'
+            '  }\n'
+            '}\n'
+            'func TestReadsPlannerA(t *testing.T) {\n'
+            '  recordPID(t, "A")\n'
+            '  raw, err := os.ReadFile("../../tools/fork-check.py")\n'
+            '  if err != nil { t.Fatal(err) }\n'
+            '  if !strings.Contains(string(raw), "PLANNER_V") { t.Fatalf("bad planner: %q", raw) }\n'
+            '}\n'
+            'func TestReadsPlannerB(t *testing.T) {\n'
+            '  recordPID(t, "B")\n'
+            '  raw, err := os.ReadFile("../../tools/fork-check.py")\n'
+            '  if err != nil { t.Fatal(err) }\n'
+            '  if strings.Contains(string(raw), "BROKEN_B") { t.Fatalf("planner broke B: %q", raw) }\n'
+            '}\n'
+            'func TestReadsConfig(t *testing.T) {\n'
+            '  recordPID(t, "CFG")\n'
+            '  raw, err := os.ReadFile("../../config/app.txt")\n'
+            '  if err != nil { t.Fatal(err) }\n'
+            '  if strings.TrimSpace(string(raw)) != "cfg-ok" { t.Fatalf("bad cfg: %q", raw) }\n'
+            '}\n'
+            'func TestUnrelatedMustNotRunWhenNarrowed(t *testing.T) {\n'
+            '  recordPID(t, "UNREL")\n'
+            '  if os.Getenv("ALLOW_UNRELATED") != "1" {\n'
+            '    t.Fatal("unrelated test ran during narrowed reads execution")\n'
+            '  }\n'
+            '}\n'
+        )
+        edges_data = {
+            pkg: {
+                "builds": [sib_pkg],
+                "reads": ["config/app.txt", "tools/fork-check.py"],
+                "read_tests": {
+                    "tools/fork-check.py": ["TestReadsPlannerA", "TestReadsPlannerB"],
+                },
+            }
+        }
+        (repo / "tools" / "gate" / "go-test-edges.json").write_text(json.dumps(edges_data))
+        # Estimated total = 20.0 + 15.0 = 35.0s >= 25.0s across 2 reader tests -> 2 LPT shards.
+        (repo / "tools" / "go-test-durations.json").write_text(json.dumps({
+            pkg: {
+                "TestReadsPlannerA": 20.0,
+                "TestReadsPlannerB": 15.0,
+            }
+        }))
+
+        ev_file = tmp_path / "ev.json"
+        durable = tmp_path / "durable"
+        durable.mkdir()
+        lock_dir = tmp_path / "locks"
+        gocache = tmp_path / "gocache"
+
+        def run_scoped(changed: list[str], extra_env: dict[str, str] | None = None) -> tuple[int, str, dict]:
+            env_patch = {
+                "GOCACHE": str(gocache),
+                "YOLO_DURABLE_DIR": str(durable),
+                "GO_TEST_SHARDS_LOCK_DIR": str(lock_dir),
+                "GO_TEST_SHARDS_CLASS": "ordinary",
+                "SCOPED_PIDS_DIR": str(pids_dir),
+                **(extra_env or {}),
+            }
+            with patch.dict(os.environ, env_patch):
+                sel = go_affected.select_affected_packages(repo, changed)
+                rc, out, ev = go_affected.run_selected_tests(repo, sel, ev_path=str(ev_file))
+                return rc, out, ev
+
+        # 1. Scoped change runs only TestReadsPlannerA + TestReadsPlannerB (+ TestEdgeInputs),
+        # splits into 2 LPT shard processes, and records "tests" in evidence.
+        rc, out, ev = run_scoped(["tools/fork-check.py", "tests/fork-check.test.py"])
+        assert rc == 0, out
+        assert (pids_dir / "A").is_file() and (pids_dir / "B").is_file()
+        assert not (pids_dir / "CFG").exists() and not (pids_dir / "UNREL").exists()
+        pid_a = (pids_dir / "A").read_text(encoding="utf-8")
+        pid_b = (pids_dir / "B").read_text(encoding="utf-8")
+        assert pid_a != pid_b, f"expected 2 LPT shards for 35s reader subset, got same pid {pid_a}"
+        assert len(ev["packages"]) == 1, ev
+        assert ev["packages"][0]["cached"] is False, ev
+        assert ev["packages"][0]["tests"] == ["TestReadsPlannerA", "TestReadsPlannerB"], ev
+        assert set(ev["packages"][0]) == {
+            "import_path", "module", "reason", "elapsed_ms", "cached", "tests"
+        }, ev
+
+        # 2. Second run with unchanged inputs hits Go's result cache across both shards
+        # without re-executing either test binary.
+        (pids_dir / "A").unlink()
+        (pids_dir / "B").unlink()
+        rc, out, ev = run_scoped(["tools/fork-check.py"])
+        assert rc == 0, out
+        assert ev["packages"][0]["cached"] is True, ev
+        assert not (pids_dir / "A").exists() and not (pids_dir / "B").exists()
+        assert ev["packages"][0]["tests"] == ["TestReadsPlannerA", "TestReadsPlannerB"], ev
+
+        # 3. Editing tools/fork-check.py invalidates the digest and catches TestReadsPlannerB's failure.
+        planner_file.write_text("PLANNER_V = 'v2'\nBROKEN_B = True\n")
+        rc, out, ev = run_scoped(["tools/fork-check.py"])
+        assert rc != 0, out
+        assert ev["packages"][0]["cached"] is False, ev
+        assert "TestReadsPlannerB" in out, out
+
+        # 4. Per-invocation active_tests digest scoping: non-reader shard digests ignore
+        # tools/fork-check.py edits while still tracking builds and unscoped reads.
+        graph = go_affected.load_tillr_graph(repo)
+        edge_entry = edges_data[pkg]
+        d_unrel_before = go_affected.compute_edge_digest(
+            repo, edge_entry, graph["pkg_info"], active_tests=["TestUnrelatedMustNotRunWhenNarrowed"]
+        )
+        d_reader_before = go_affected.compute_edge_digest(
+            repo, edge_entry, graph["pkg_info"], active_tests=["TestReadsPlannerA"]
+        )
+        planner_file.write_text("PLANNER_V = 'v3'\n")
+        d_unrel_after_fc = go_affected.compute_edge_digest(
+            repo, edge_entry, graph["pkg_info"], active_tests=["TestUnrelatedMustNotRunWhenNarrowed"]
+        )
+        d_reader_after_fc = go_affected.compute_edge_digest(
+            repo, edge_entry, graph["pkg_info"], active_tests=["TestReadsPlannerA"]
+        )
+        assert d_unrel_after_fc == d_unrel_before, "non-reader shard digest changed on scoped read edit"
+        assert d_reader_after_fc != d_reader_before, "reader shard digest did not change on scoped read edit"
+
+        config_file.write_text("cfg-ok-2\n")
+        d_unrel_after_cfg = go_affected.compute_edge_digest(
+            repo, edge_entry, graph["pkg_info"], active_tests=["TestUnrelatedMustNotRunWhenNarrowed"]
+        )
+        assert d_unrel_after_cfg != d_unrel_after_fc, "non-reader shard digest missed unscoped read edit"
+        config_file.write_text("cfg-ok\n")
+
+        sib_main.write_text('package main\nfunc main() { println("v2") }\n')
+        d_unrel_after_sib = go_affected.compute_edge_digest(
+            repo, edge_entry, graph["pkg_info"], active_tests=["TestUnrelatedMustNotRunWhenNarrowed"]
+        )
+        assert d_unrel_after_sib != d_unrel_after_fc, "non-reader shard digest missed builds edit"
+
+        # 5. Pairing with an unscoped reads change widens back to whole-package (5-field evidence).
+        rc, out, ev = run_scoped(
+            ["tools/fork-check.py", "config/app.txt"],
+            {"ALLOW_UNRELATED": "1", "SCOPED_PIDS_DIR": str(pids_dir)},
+        )
+        assert rc == 0, out
+        assert (pids_dir / "CFG").is_file() and (pids_dir / "UNREL").is_file()
+        assert set(ev["packages"][0]) == {"import_path", "module", "reason", "elapsed_ms", "cached"}, ev
+
+
 def main() -> int:
     root_graph = go_affected.load_tillr_graph(ROOT)
     test_discover_modules()
@@ -1184,6 +1658,7 @@ def main() -> int:
     test_selection_rules(root_graph)
     test_edges_file_honest_and_env_read()
     test_edge_cache_invalidation()
+    test_scoped_read_tests_execution_cache_and_sharding()
     test_failed_module_floor_fallback()
     test_failure_refusal_names_packages_and_tests_far_above_tail()
     test_fork_check_integration(root_graph)
