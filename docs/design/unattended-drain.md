@@ -39,7 +39,7 @@ minutes, not the ten seconds every other change gets. Lanes stop being a fixed c
 
 **Start at [Section 5](#5-the-eight-gaps)**: the diagnosis. The rules fall out of it.
 
-**Needs your ruling:** nothing. The nine designer's decisions in [the ledger](#14-decision-ledger)
+**Needs your ruling:** nothing. The ten designer's decisions in [the ledger](#14-decision-ledger)
 are yours to overturn.
 
 **Reads with:** [`landing-principles.md`](./landing-principles.md) (the settled rulings these
@@ -381,6 +381,7 @@ store.
 | Three verifier refusals | Operator | The item's designer step reads them and rewrites the item or splits it |
 | A verdict about the worker's report, not the candidate | A whole new build attempt | The verifier corrects its verdict against the same candidate; the worker has nothing to amend |
 | Blocker has landed | Operator | The drain (built: `5709b4fc2`) |
+| Blocker's landing was rewritten to a patch-identical trunk commit | Operator, with no command named | The drain, by matching `git patch-id --stable` into `trunk_rewrites` ([Rewritten blocker landings](#rewritten-blocker-landings)) |
 | Blocker was closed and filed again | Operator repoints | The new item records what it replaces, and waiters follow |
 | Worker stopped for a red trunk | Operator | The drain, when the named check is green |
 | A landed design with decisions ready to build | Operator files items | [`tillr-queue-mirrors-designs.md`](./tillr-queue-mirrors-designs.md), ruled and not built |
@@ -391,6 +392,27 @@ store.
   fails otherwise. This extends
   [principle 13](./landing-principles.md#13-a-held-state-names-a-mover-that-can-still-act).
 - **Evidence.** The count of items held on the operator for longer than one check-in.
+
+#### Rewritten blocker landings
+
+*(`D-UD11`, the designer's decision, following an operator request; the owner may overturn it.)*
+
+Commit `4652d0a6fb` [unlanded] replaced a misleading `trunk-unproved` hold with `blocker-landing-not-on-trunk: <blocker> at <sha>` when a landed trunk blocker's recorded `landings.trunk_after` (resolved through `trunk_rewrites`) is an ancestor of neither `refs/tillr/green` nor `refs/heads/main`, and gave it the mover `"the operator; restore the named landing's trunk ancestry or repair its recorded rewrite mapping"`. Before `2323ec3153` taught `tillr drain accept-rewrite` to populate `trunk_rewrites`, three trunk rewrites had already been accepted under `refs/tillr/trunk-history/accepted/` (`b15d48ce6aa4` [unlanded] on 2026-11-17, `d6927d19ab3a` [unlanded] on 2026-11-20 after commit-identity normalization, and `9843836c0974` [unlanded] on 2026-11-20), leaving `trunk_rewrites` empty (`0` rows).
+
+**Count of affected items and landings (measured 2026-11-21 against `.tillr/state.db` and `refs/heads/main`).** Zero other open items are held the same way: the pi totals-reader item, waiting on `9a3b977aff` [unlanded] (rewritten in `d6927d19ab3a` [unlanded] to `b14b8c9dea` with the same subject, diffstat, and `git patch-id --stable`), is the only open item held by `blocker-landing-not-on-trunk`. Two closed items still carry `blocker-landing-not-on-trunk` in planner history from the same `d6927d19ab3a` [unlanded] rewrite (both pointing to `eb7cb5d9c648` [unlanded], with `mover: "no further work: closed"`). Across the store as a whole, `149` trunk `landings.trunk_after` rows from those three pre-`2323ec3153` rewrites remain unmapped (`35` in `d6927d19ab3a` [unlanded], `42` in `b15d48ce6aa4` [unlanded], and `72` in `9843836c0974` [unlanded], excluding `refs/heads/patch/*` fork landings and four older fork landings that share no merge base with `refs/heads/main`), and all `149` match a unique commit on `refs/heads/main` by `git patch-id --stable` (`0` ambiguous, `0` unmatched).
+
+**Operator-free mapping when the patch matches (`D-UD11`).** When both commits carry the same patch, no human judgment is owed. At pass start in `tillr-drain` (alongside trunk observation and acquittal release, opening the store writer only when at least one pair is matched and caching checked `(old_sha, main_tip)` pairs in memory so an unmatchable commit does not re-scan `git log -p` on unchanged tips), the drain checks every trunk `landings` row (`result = 'landed'`, `$.base_ref` not under `refs/heads/patch/*`) whose resolved `trunk_after` (`old_sha`) is not an ancestor of `refs/heads/main`:
+
+1. If `old_sha` exists in Git and `git merge-base <old_sha> refs/heads/main` exits `0` at merge base $B$ (exit `1` skips unrelated fork histories without error), compute `git patch-id --stable` for `old_sha` and for $B..\text{refs/heads/main}$ (batching `git log --no-merges -p` from the oldest merge base across the pass's candidates).
+2. When `old_sha` has a non-empty patch ID that matches a unique commit `new_sha` in $B..\text{refs/heads/main}$ one-to-one, write `(old_sha, new_sha, recorded_at, evidence)` into `trunk_rewrites`, update any `refs/tillr/landed/<run_id>` marker pointing at `old_sha` to `new_sha`, and append a `drain.trunk-rewrite-absorbed` event naming the `git patch-id --stable` evidence.
+3. Reconciling all unmapped trunk `landings` rows repairs all `149` pre-`2323ec3153` rows on the first pass so future dependents and read-only `tillr drain why` and `tillr drain plan` calls see the mapping immediately. Proof admission stays unchanged: if `new_sha` is in `refs/tillr/green`, the dependent item is ready; if `new_sha` is on `refs/heads/main` ahead of `refs/tillr/green`, it waits on `trunk-unproved` (`the heavy runner; prove the trunk`).
+
+**Named command and owner mover when no unique patch match exists (`D-UD11`).** `blocker-landing-not-on-trunk` remains reachable only when `old_sha` has no unique patch-identical replacement on `refs/heads/main` (an empty commit, a rewrite that altered the diff, an ambiguous duplicate patch, or a commit dropped from `main`). Substituting a non-patch-identical commit for a landed blocker, or restoring dropped trunk history, changes what counts as landed rather than acting on a mechanical fact, so the hold names the owner and the exact command ([principle 13](./landing-principles.md#13-a-held-state-names-a-mover-that-can-still-act)):
+
+- When no unaccepted trunk-tip rewrite is active (`trunk_history.lost_tip == ""` and `refs/heads/main` contains `observed_tip`), `tillr drain accept-rewrite` (`AcceptRewrite` in `tools/tillr-drain/drain/trunk_rewrite_accept.go`) also accepts an unmapped `landings.trunk_after` commit (`result = 'landed'`, resolved SHA not on `refs/heads/main`) replaced by an ancestor commit on `refs/heads/main`, pinning `refs/tillr/trunk-history/accepted/<lost>`, writing `(lost, current)` into `trunk_rewrites` (`evidence = "accept-rewrite:landing"`), and appending `drain.trunk-rewrite-accepted` — while continuing to refuse with `"no rewrite is recorded"` once mapped or when the lost commit is neither an active lost trunk tip nor an unmapped landing, and keeping existing `accept-rewrite` flags and `--help` text intact.
+- The hold rule for `blocker-landing-not-on-trunk` in `tools/tillr-drain/holdrules/holdrules.go` (and `tools/tillr-drain/README.md`) replaces `"the operator; restore the named landing's trunk ancestry or repair its recorded rewrite mapping"` with `"the owner; restore the named landing to main, or map its replacement with tillr drain accept-rewrite"`.
+
+*(Conflict note for the returned build: the first build attempt ended on `OBSTACLE: definition` because its lane base `7243353ec6` equaled `refs/tillr/green` and lacked `4652d0a6fb` [unlanded] on `refs/heads/main`. Landing this design update squashes onto `refs/heads/main` past `4652d0a6fb` [unlanded] and advances the returned request's staged base through `designAnswerLanded` in `tools/tillr-drain/drain/lane_base.go`, so `ReasonBlockerLandingNotOnTrunk` and its `holdrules.go` entry are present on the returned worker's base tree. Authorized build scope spans `tools/tillr-drain/` and `yolo-packs/tillr/files/local/share/tillr/tillr-drain/`, committing `just pack-sync` inside the writing commit rather than as a separate trailing piece.)*
 
 ### 6.8 Rule 8: noticing does not depend on anyone being awake
 
@@ -540,3 +562,4 @@ The `OQ-UD` rows are the owner's rulings of 2026-11-21, given as Vantage review 
 | D-UD7 | A hold reason whose mover is the operator declares the decision it reserves, and a test reads the table | 2026-11-21 | [Rule 7](#67-rule-7-a-hold-names-the-operator-only-for-a-decision-the-rulebook-reserves) | — |
 | D-UD9 | A refusal about the report amends the report and does not rebuild the candidate | 2026-11-21 | [Rule 7](#67-rule-7-a-hold-names-the-operator-only-for-a-decision-the-rulebook-reserves) | — |
 | D-UD10 | The first alert rules and their defaults | 2026-11-21 | [Rule 8](#68-rule-8-noticing-does-not-depend-on-anyone-being-awake) | — |
+| D-UD11 | **Designer's decision, following an operator request; the owner may overturn this.** Reconcile unmapped trunk `landings.trunk_after` commits at pass start by unique `git patch-id --stable` on `merge-base(old_sha, main)..main` into `trunk_rewrites` (skipping `refs/heads/patch/*` and unrelated-root commits with no merge base on `main`, and keeping `refs/tillr/green` proof admission intact); when no unique patch match exists, hold `blocker-landing-not-on-trunk` on the owner (`"the owner; restore the named landing to main, or map its replacement with tillr drain accept-rewrite"`) and let `tillr drain accept-rewrite` map an individual unmapped `landings.trunk_after` commit onto an ancestor of `refs/heads/main` when no trunk-tip rewrite is pending | 2026-11-21 | [Rule 7](#67-rule-7-a-hold-names-the-operator-only-for-a-decision-the-rulebook-reserves), [Rewritten blocker landings](#rewritten-blocker-landings) | — |
