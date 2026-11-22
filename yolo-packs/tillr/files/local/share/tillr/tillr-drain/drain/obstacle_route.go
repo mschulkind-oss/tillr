@@ -82,7 +82,13 @@ func (l *Loop) routeObstacle(ctx context.Context, d Decision, req run.Request, l
 					gate.CheckLogs[id] = ref
 				}
 			}
-			if err = l.acquitRed(ctx, candidate, gate, reading.RedSHA, red, result); err == nil {
+			var held bool
+			if held, err = l.acquitRedWithPaths(ctx, &candidate, gate, reading.RedSHA, red, nil, result); err == nil {
+				if !held {
+					head = candidate.HeadSHA
+					l.reportf("loop: %s named a trunk obstacle whose culprit landing was reverted; returned to its worker\n", req.ItemID)
+					return returnToWorker(candidate.RefusalDetail+" "+ObstacleContract, ""), true
+				}
 				l.reportf("loop: %s named a trunk obstacle the replay confirmed on %s: held behind the trunk repair\n", req.ItemID, shortSHA(reading.RedSHA))
 				return laneOutcome{stop: l.abandonFromBase(ctx, lane, req.RunID, head, candidate.BaseSHA, "trunk obstacle confirmed on the base")}, true
 			}

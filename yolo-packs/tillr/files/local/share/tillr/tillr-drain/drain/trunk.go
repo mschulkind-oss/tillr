@@ -1038,6 +1038,7 @@ func (l *Loop) acquitRedWithPaths(ctx context.Context, candidate *Candidate, gat
 		green = state.WatermarkSHA
 	}
 	gate.SuspectPaths = append(gate.SuspectPaths, l.rangePaths(ctx, green, redSHA)...)
+	tipSHA := redSHA
 	note := ""
 	if l.gatePolicy.LandingStrategy == "after-merge" {
 		// Aim the fixer the way the proof does (HeavyRunner.firstRed): the first recorded
@@ -1049,7 +1050,40 @@ func (l *Loop) acquitRedWithPaths(ctx context.Context, candidate *Candidate, gat
 		}
 		if open == "" {
 			if replay, ok := l.cfg.Steps.(ReplayStep); ok {
-				redSHA, note = l.culpritLanding(ctx, replay, *candidate, green, redSHA, redChecks)
+				culprit, attrNote, bisected := l.culpritLandingAttribution(ctx, replay, *candidate, green, redSHA, redChecks)
+				redSHA, note = culprit, attrNote
+				if bisected && l.gatePolicy.AutoRevert && candidate.BaseRef == "" {
+					out, err := l.revertFromGateReplay(ctx, *candidate, replay, tipSHA, culprit, redChecks, gate)
+					if err != nil {
+						return false, err
+					}
+					if out.Reverted != "" {
+						if recErr := recordTrunkRepair(ctx, l.cfg.Root, out.Reverted, "reverted "+shortSHA(culprit)); recErr != nil {
+							l.reportf("loop: %s trunk repair at %s not recorded: %v\n", candidate.ItemID, shortSHA(out.Reverted), recErr)
+						}
+						from := candidate.WorkerHeadSHA
+						if from == "" {
+							from = candidate.HeadSHA
+						}
+						moved, err := l.moveLaneOntoTip(ctx, candidate.LaneID, from, out.Reverted)
+						if err != nil {
+							return false, err
+						}
+						oldBase := candidate.BaseSHA
+						detail := repairedAtTipDetail(redChecks, oldBase, out.Reverted, moved)
+						if moved != "" {
+							candidate.BaseSHA, candidate.HeadSHA, candidate.WorkerHeadSHA = out.Reverted, moved, moved
+						}
+						candidate.RefusalDetail = strings.TrimSpace(candidate.RefusalDetail + " " + detail)
+						l.reportf("loop: %s's gate failure was from landing %s, reverted as %s; no fixer is filed\n",
+							candidate.ItemID, shortSHA(culprit), shortSHA(out.Reverted))
+						return false, nil
+					}
+					note = joinDetail(note, "Automatic revert of "+shortSHA(culprit)+" for "+strings.Join(redChecks, ", ")+" was not possible: "+heavyBrief(out.Refused))
+					if out.StillRed {
+						redSHA = tipSHA
+					}
+				}
 			}
 		}
 	}
@@ -1101,8 +1135,13 @@ func (l *Loop) acquitRedWithPaths(ctx context.Context, candidate *Candidate, gat
 // lander is not one), a green last landing, or a replay with no verdict names no landing,
 // and the red stays on the commit it was observed on.
 func (l *Loop) culpritLanding(ctx context.Context, replay ReplayStep, candidate Candidate, green, red string, checks []string) (string, string) {
+	sha, note, _ := l.culpritLandingAttribution(ctx, replay, candidate, green, red, checks)
+	return sha, note
+}
+
+func (l *Loop) culpritLandingAttribution(ctx context.Context, replay ReplayStep, candidate Candidate, green, red string, checks []string) (string, string, bool) {
 	if green == "" || green == red {
-		return red, ""
+		return red, "", false
 	}
 	isRed := func(sha string) (bool, bool) {
 		out, err := replay.Replay(ctx, candidate, sha, checks)
@@ -1111,9 +1150,9 @@ func (l *Loop) culpritLanding(ctx context.Context, replay ReplayStep, candidate 
 		}
 		return len(out.Red) > 0, true
 	}
-	unattributed := func(why string) (string, string) {
+	unattributed := func(why string) (string, string, bool) {
 		l.reportf("loop: %s red at %s names no landing: %s\n", strings.Join(checks, ", "), shortSHA(red), why)
-		return red, "No single landing is named because " + why
+		return red, "No single landing is named because " + why, false
 	}
 	if redAtGreen, known := isRed(green); !known {
 		return unattributed("the replay at the green pointer " + shortSHA(green) + " gave no verdict")
@@ -1144,7 +1183,7 @@ func (l *Loop) culpritLanding(ctx context.Context, replay ReplayStep, candidate 
 		}
 	}
 	l.reportf("loop: %s red at %s; first red landing %s\n", strings.Join(checks, ", "), shortSHA(red), shortSHA(commits[low]))
-	return commits[low], ""
+	return commits[low], "", true
 }
 
 // openFixerFor answers an unresolved trunk fixer that already names every one of checks.

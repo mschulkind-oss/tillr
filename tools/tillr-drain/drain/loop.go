@@ -532,6 +532,7 @@ type Loop struct {
 	heavyMu                     sync.Mutex
 	fixerWaitMu                 sync.Mutex
 	forkRebaseMu                sync.Mutex
+	revertMu                    sync.Mutex
 	heavyWG                     sync.WaitGroup
 	heavyRunning                bool
 	heavyProofActive            bool // heavyMu; entry is serialized with exec by restartMechanical
