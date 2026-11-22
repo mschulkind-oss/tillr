@@ -195,6 +195,16 @@ action is its build, as
 Its thirteen designer's decisions await his review in
 [its ledger](../design/tillr-item-split.md#decision-ledger), and none of it is built.
 
+11. [Every tillr utility has a written contract](../design/tillr-utility-contracts.md)
+    ([`OQ-UC1`](../design/tillr-utility-contracts.md#OQ-UC1)): written on 2026-11-21 to the owner's
+    words of that day, after three landings in two days broke a neighbor utility's test suite and
+    were found only by the full check on the trunk. It adds one question to the count above: whether
+    a Go package may be part of a utility's contract, or only records, exit codes and files may.
+    Placed last by the designer (and the owner's to reorder) because it stops nothing that runs
+    today; its answer decides how five utilities stop linking each other's code, and the first five
+    slices of the build do not wait on it. Its fifteen designer's decisions await his review in
+    [its ledger](../design/tillr-utility-contracts.md#decision-ledger), and none of it is built.
+
 [Owner review comments](../design/tillr-review-comments.md#7-decision-ledger) left this list on
 2026-11-20. The owner answered all four questions; the fast track is not built.
 
