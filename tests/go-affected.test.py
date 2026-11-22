@@ -2,7 +2,9 @@
 """Tests for tools/gate/go_affected.py, go-test-edges.json, and fork-check integration."""
 from __future__ import annotations
 
+import atexit
 import fcntl
+import functools
 import importlib.util
 import json
 import os
@@ -1231,6 +1233,26 @@ def test_concurrent_runs_do_not_share_scratch_and_preserve_cache() -> None:
         assert ev2["packages"][0]["cached"] is True, ev2
 
 
+@functools.lru_cache(maxsize=1)
+def _shared_gocache() -> Path:
+    """Per-process GOCACHE so stdlib is compiled once instead of cold-building on every test."""
+    tmp = tempfile.TemporaryDirectory(prefix="go-affected-gocache-", dir=scratch_root())
+    atexit.register(tmp.cleanup)
+    return Path(tmp.name)
+
+
+def _precompile_go_test(pkg_dir: Path, gocache: Path) -> None:
+    """Warm GOCACHE with the compiled test binary so startup deadlines measure execution, not cold stdlib builds."""
+    subprocess.run(
+        ["go", "test", "-c", "-o", os.devnull, "."],
+        cwd=pkg_dir,
+        env={**os.environ, "GOCACHE": str(gocache)},
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def test_no_leftover_processes_after_check_finishes() -> None:
     """After go-affected finishes, no descendant survives — including setsid orphans and drain's stub pi/stop-at-gap/tillr-run."""
     with tempfile.TemporaryDirectory(prefix="go-affected-reap-", dir=scratch_root()) as tmp:
@@ -1266,6 +1288,8 @@ def test_no_leftover_processes_after_check_finishes() -> None:
         )
         durable = tmp_path / "durable"
         durable.mkdir()
+        gocache = _shared_gocache()
+        _precompile_go_test(repo / "tools" / "tillr-orphan", gocache)
         res = subprocess.run(
             [
                 sys.executable,
@@ -1278,7 +1302,7 @@ def test_no_leftover_processes_after_check_finishes() -> None:
                 "YOLO_DURABLE_DIR": str(durable),
                 "GO_TEST_SHARDS_LOCK_DIR": str(tmp_path / "locks"),
                 "GO_TEST_SHARDS_CLASS": "ordinary",
-                "GOCACHE": str(tmp_path / "gocache"),
+                "GOCACHE": str(gocache),
                 "ORPHAN_PIDS_FILE": str(pids_file),
             },
             stdout=subprocess.PIPE,
@@ -1375,6 +1399,8 @@ def test_streams_progress_lines_before_run_ends() -> None:
         )
         durable = tmp_path / "durable"
         durable.mkdir()
+        gocache = _shared_gocache()
+        _precompile_go_test(repo / "tools" / "tillr-stream", gocache)
         proc = subprocess.Popen(
             [
                 sys.executable,
@@ -1387,7 +1413,7 @@ def test_streams_progress_lines_before_run_ends() -> None:
                 "YOLO_DURABLE_DIR": str(durable),
                 "GO_TEST_SHARDS_LOCK_DIR": str(tmp_path / "locks"),
                 "GO_TEST_SHARDS_CLASS": "ordinary",
-                "GOCACHE": str(tmp_path / "gocache"),
+                "GOCACHE": str(gocache),
                 "STREAM_RELEASE_FILE": str(release_file),
             },
             stdout=subprocess.PIPE,
@@ -1473,6 +1499,8 @@ def test_stalled_run_prints_nothing_without_test_events() -> None:
         )
         durable = tmp_path / "durable"
         durable.mkdir()
+        gocache = _shared_gocache()
+        _precompile_go_test(repo / "tools" / "tillr-stall", gocache)
         proc = subprocess.Popen(
             [
                 sys.executable,
@@ -1485,7 +1513,7 @@ def test_stalled_run_prints_nothing_without_test_events() -> None:
                 "YOLO_DURABLE_DIR": str(durable),
                 "GO_TEST_SHARDS_LOCK_DIR": str(tmp_path / "locks"),
                 "GO_TEST_SHARDS_CLASS": "ordinary",
-                "GOCACHE": str(tmp_path / "gocache"),
+                "GOCACHE": str(gocache),
                 "STALL_STARTED_FILE": str(started_file),
                 "STALL_RELEASE_FILE": str(release_file),
             },
@@ -1756,7 +1784,8 @@ def test_go_affected_slot_wait_order_and_trunk_repair_priority() -> None:
         release_dir.mkdir()
         durable = tmp_path / "durable"
         durable.mkdir()
-        gocache = tmp_path / "gocache"
+        gocache = _shared_gocache()
+        _precompile_go_test(mod, gocache)
 
         ordinary_limit = shards.default_shard_limit()
         gate_limit = shards.default_gate_shard_limit(ordinary_limit)
