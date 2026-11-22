@@ -339,20 +339,6 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		}
 	}
 
-	// A wall is a bound on total run duration, and it exists only when the request names
-	// one: 0 is an unbounded run, whose lane lease carries no expiry either
-	// (`leased_until = NULL`, design D-RW1). The context is still cancellable, because a
-	// stop has to reach the process group whether or not a clock would have.
-	runCtx, cancel := ctx, context.CancelFunc(func() {})
-	if req.TimeoutMS > 0 {
-		runCtx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutMS)*time.Millisecond)
-	}
-	defer cancel()
-	adapterPath := resolveExecAdapter(opts.BackendsDir, req.Backend, req.Command[0])
-	cmd := exec.CommandContext(runCtx, adapterPath, req.Command[1:]...)
-	cmd.Dir = workDir
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
 	// The run's identity and its scratch travel in the adapter's environment, because the
 	// adapter is what names the run's record directory for the shells and git calls it
 	// spawns (design §4.2). `env_refs` is the store-resolved spelling of the same
@@ -363,7 +349,11 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 	// Replace inherited identities, including an optional node absent from this request:
 	// a nested run must never claim its parent's item or node. Scratch is isolated by
 	// default, but an explicit opt-out preserves the caller's assignment (or absence).
-	cmd.Env = os.Environ()
+	//
+	// Build the child environment and complete pre-launch setup (including git-guard
+	// discovery and worker record initialization) before starting the wall clock, so
+	// setup latency does not consume a short TimeoutMS before cmd.Start().
+	env := os.Environ()
 	piBuildsDir, hasPiBuilds := os.LookupEnv("TILLR_PI_BUILDS_DIR")
 	if !hasPiBuilds {
 		if callerDurable := os.Getenv("YOLO_DURABLE_DIR"); callerDurable != "" {
@@ -377,13 +367,13 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		return record.Envelope{}, err
 	}
 	for _, key := range []string{"TILLR_RUN_ID", "TILLR_ITEM_ID", "TILLR_NODE_ID", "TILLR_LANE_ID", "TILLR_SESSION_MODE", "TILLR_RESUME_PROMPT_FILE", "TILLR_PAUSE_REQUEST", "TILLR_PROGRESS_FILE", "TILLR_CHILD_SESSIONS_ROOT", "TILLR_CHILD_SESSIONS_MARKER", "TILLR_READ_ONLY_GROUP", "TILLR_PI_BUILDS_DIR", "TILLR_HARNESS_RECORD_FILE", "TILLR_RUN_EXEC_ID"} {
-		cmd.Env = withoutEnv(cmd.Env, key)
+		env = withoutEnv(env, key)
 	}
 	if req.ScratchEnv == nil || *req.ScratchEnv {
-		cmd.Env = append(withoutEnv(cmd.Env, "YOLO_DURABLE_DIR"), "YOLO_DURABLE_DIR="+durableDir)
+		env = append(withoutEnv(env, "YOLO_DURABLE_DIR"), "YOLO_DURABLE_DIR="+durableDir)
 	}
 	if hasPiBuilds {
-		cmd.Env = append(cmd.Env, "TILLR_PI_BUILDS_DIR="+piBuildsDir)
+		env = append(env, "TILLR_PI_BUILDS_DIR="+piBuildsDir)
 	}
 	agentDirsDir, hasAgentDirsDir := os.LookupEnv("TILLR_PI_AGENT_DIRS_DIR")
 	if !hasAgentDirsDir {
@@ -397,20 +387,20 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		logFile.Close()
 		return record.Envelope{}, Internalf("clearing prior extension-set record: %v", err)
 	}
-	cmd.Env = withoutEnv(cmd.Env, "TILLR_PI_AGENT_DIRS_DIR")
+	env = withoutEnv(env, "TILLR_PI_AGENT_DIRS_DIR")
 	if hasAgentDirsDir {
-		cmd.Env = append(cmd.Env, "TILLR_PI_AGENT_DIRS_DIR="+agentDirsDir)
+		env = append(env, "TILLR_PI_AGENT_DIRS_DIR="+agentDirsDir)
 	}
-	cmd.Env = append(withoutEnv(cmd.Env, "TILLR_EXTENSION_SET_RECORD_FILE"), "TILLR_EXTENSION_SET_RECORD_FILE="+extSetPath)
+	env = append(withoutEnv(env, "TILLR_EXTENSION_SET_RECORD_FILE"), "TILLR_EXTENSION_SET_RECORD_FILE="+extSetPath)
 	if req.NodeID != "" {
-		cmd.Env = append(cmd.Env, "TILLR_NODE_ID="+req.NodeID)
+		env = append(env, "TILLR_NODE_ID="+req.NodeID)
 	}
 	// A read-only node is told it is one, so an adapter that keeps a writer going until it
 	// has committed (backends/pi/keep-going.ts) leaves a reader to end when it is done.
 	if req.ReadOnlyGroup != "" {
-		cmd.Env = append(cmd.Env, "TILLR_READ_ONLY_GROUP="+req.ReadOnlyGroup)
+		env = append(env, "TILLR_READ_ONLY_GROUP="+req.ReadOnlyGroup)
 	}
-	cmd.Env = append(cmd.Env,
+	env = append(env,
 		"TILLR_SESSION_MODE="+mode,
 		"TILLR_RESUME_PROMPT_FILE="+prompt,
 		"TILLR_PAUSE_REQUEST="+pausePath,
@@ -423,14 +413,11 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		"TILLR_LANE_ID="+laneID,
 		"TILLR_RUN_EXEC_ID="+execID,
 	)
-	cmd.Env, err = installGitGuard(workDir, durableDir, cmd.Env)
+	env, err = installGitGuard(workDir, durableDir, env)
 	if err != nil {
 		logFile.Close()
 		return record.Envelope{}, err
 	}
-	// The child leads its own process group, and the bound kills the group plus any
-	// detached sessions carrying this execution's marker.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	mark := newExecMark(execID, req.RunID)
 	// The terminal write is the record a stop must not lose: the caller's context is
 	// canceled exactly when the run is being stopped, so the write is detached from it. A
@@ -450,6 +437,25 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		logFile.Close()
 		return record.Envelope{}, recordsErr
 	}
+
+	// A wall is a bound on total run duration, and it exists only when the request names
+	// one: 0 is an unbounded run, whose lane lease carries no expiry either
+	// (`leased_until = NULL`, design D-RW1). The context is still cancellable, because a
+	// stop has to reach the process group whether or not a clock would have.
+	runCtx, cancel := ctx, context.CancelFunc(func() {})
+	if req.TimeoutMS > 0 {
+		runCtx, cancel = context.WithTimeout(ctx, time.Duration(req.TimeoutMS)*time.Millisecond)
+	}
+	defer cancel()
+	adapterPath := resolveExecAdapter(opts.BackendsDir, req.Backend, req.Command[0])
+	cmd := exec.CommandContext(runCtx, adapterPath, req.Command[1:]...)
+	cmd.Dir = workDir
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.Env = env
+	// The child leads its own process group, and the bound kills the group plus any
+	// detached sessions carrying this execution's marker.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
 		// There was no process, so the injected clock is the only clock there is.
