@@ -437,6 +437,7 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		logFile.Close()
 		return record.Envelope{}, recordsErr
 	}
+	workerRecords.timeoutOffset = streamOffset
 
 	// A wall is a bound on total run duration, and it exists only when the request names
 	// one: 0 is an unbounded run, whose lane lease carries no expiry either

@@ -19,15 +19,17 @@ import (
 
 // Worker claims are observations of the worker, never criterion verdicts.
 type workerRecords struct {
-	s         *store.Store
-	req       Request
-	dir, log  string
-	line      int
-	logOffset int64
-	recorded  bool
-	children  map[string]string
-	sessions  map[string]*sessionObservation
-	lastError string
+	s             *store.Store
+	req           Request
+	dir, log      string
+	line          int
+	logOffset     int64
+	timeoutOffset int64
+	modelTimeouts int
+	recorded      bool
+	children      map[string]string
+	sessions      map[string]*sessionObservation
+	lastError     string
 }
 
 type sessionObservation struct {
@@ -145,7 +147,7 @@ func mergeChild(old, c childSession) childSession {
 func newWorkerRecords(ctx context.Context, s *store.Store, req Request, dir, log string) (*workerRecords, error) {
 	w := &workerRecords{s: s, req: req, dir: dir, log: log, children: map[string]string{}, sessions: map[string]*sessionObservation{}}
 	err := s.ReadTx(ctx, func(r *store.Reader) error {
-		rows, err := r.Query(`SELECT kind,payload FROM events WHERE object_type='run' AND object_id=? AND kind IN ('run.progress','run.child-session','run.children-recorded') ORDER BY seq`, req.RunID)
+		rows, err := r.Query(`SELECT kind,payload FROM events WHERE object_type='run' AND object_id=? AND kind IN ('run.progress','run.child-session','run.children-recorded','run.model-timeout') ORDER BY seq`, req.RunID)
 		if err != nil {
 			return err
 		}
@@ -174,6 +176,16 @@ func newWorkerRecords(ctx context.Context, s *store.Store, req Request, dir, log
 					return err
 				}
 				w.children[c.Transcript] = body
+			case ModelTimeoutKind:
+				var mt struct {
+					Count int `json:"count"`
+				}
+				if err := json.Unmarshal([]byte(body), &mt); err != nil {
+					return err
+				}
+				if mt.Count > w.modelTimeouts {
+					w.modelTimeouts = mt.Count
+				}
 			}
 		}
 		return rows.Err()
@@ -229,6 +241,9 @@ func (w *workerRecords) observe(ctx context.Context, final bool) error {
 			}
 		}
 		w.line = i + 1
+	}
+	if err := w.observeModelTimeouts(ctx); err != nil {
+		return err
 	}
 	marker, err := os.ReadFile(filepath.Join(w.dir, "child-sessions-recorded"))
 	if os.IsNotExist(err) {
@@ -410,6 +425,82 @@ func (w *workerRecords) discover(ctx context.Context, v any) error {
 				}
 			}
 		}
+	}
+	return nil
+}
+
+func isModelTimeoutError(msg string) bool {
+	lower := strings.ToLower(msg)
+	return strings.Contains(lower, "request timed out") ||
+		strings.Contains(lower, "request timeout") ||
+		strings.Contains(lower, "body timeout") ||
+		strings.Contains(lower, "und_err_body_timeout")
+}
+
+// observeModelTimeouts scans complete JSONL stream lines appended to w.log since
+// w.timeoutOffset and records one run.model-timeout event per assistant message_end
+// whose error is a request timeout or body timeout.
+func (w *workerRecords) observeModelTimeouts(ctx context.Context) error {
+	if w.log == "" {
+		return nil
+	}
+	f, err := os.Open(w.log)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err = f.Seek(w.timeoutOffset, io.SeekStart); err != nil {
+		return err
+	}
+	reader := bufio.NewReader(f)
+	for {
+		raw, err := reader.ReadBytes('\n')
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		var entry struct {
+			Type    string `json:"type"`
+			Message struct {
+				Role         string `json:"role"`
+				StopReason   string `json:"stopReason"`
+				ErrorMessage string `json:"errorMessage"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(raw, &entry) == nil &&
+			entry.Type == "message_end" &&
+			entry.Message.Role == "assistant" &&
+			entry.Message.StopReason == "error" &&
+			isModelTimeoutError(entry.Message.ErrorMessage) {
+			count := w.modelTimeouts + 1
+			payload := map[string]any{
+				"run_id": w.req.RunID,
+				"error":  strings.TrimSpace(entry.Message.ErrorMessage),
+				"count":  count,
+			}
+			if w.req.ItemID != "" {
+				payload["item_id"] = w.req.ItemID
+			}
+			if w.req.LaneID != "" {
+				payload["lane_id"] = w.req.LaneID
+			}
+			if w.req.Backend != "" {
+				payload["backend"] = w.req.Backend
+			}
+			if w.req.Node != "" {
+				payload["node"] = w.req.Node
+			}
+			if err := w.append(ctx, ModelTimeoutKind, payload); err != nil {
+				return err
+			}
+			w.modelTimeouts = count
+		}
+		w.timeoutOffset += int64(len(raw))
 	}
 	return nil
 }
