@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -216,8 +217,18 @@ func (l *Loop) recheckLanes(ctx context.Context) error {
 	now := l.cfg.Now().UTC()
 	l.laneMu.Lock()
 	restored := false
+	var cleanLanes []string
 	for lane, c := range l.laneConditions {
-		if !c.out || c.reason == ReasonLaneChildren {
+		if c.reason == ReasonLaneChildren {
+			continue
+		}
+		if c.reason == ReasonLaneUncommittedWork && !strings.HasPrefix(c.detail, "fork checkout ") {
+			if l.laneWorktreeClean(ctx, lane) {
+				cleanLanes = append(cleanLanes, lane)
+			}
+			continue
+		}
+		if !c.out {
 			continue
 		}
 		retained := l.laneHeadRetained(ctx, lane, c)
@@ -233,10 +244,32 @@ func (l *Loop) recheckLanes(ctx context.Context) error {
 		}
 	}
 	l.laneMu.Unlock()
+	slices.Sort(cleanLanes)
+	for _, lane := range cleanLanes {
+		if err := l.restoreLane(ctx, lane); err != nil {
+			return err
+		}
+	}
 	if restored {
 		l.reconcileStartLanes(ctx, l.rotationLanes(), now)
 	}
 	return nil
+}
+
+// laneWorktreeClean answers whether lane's worktree exists and has empty git status.
+// It reads with optional locks off, so it never writes the index.
+func (l *Loop) laneWorktreeClean(ctx context.Context, lane string) bool {
+	if l.cfg.LaneRoot == "" {
+		return false
+	}
+	worktree := l.lanePath(lane)
+	if _, err := os.Stat(worktree); err != nil {
+		return false
+	}
+	cmd := exec.CommandContext(ctx, "git", "-C", worktree, "status", "--porcelain", "--untracked-files=all")
+	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
+	out, err := cmd.Output()
+	return err == nil && strings.TrimSpace(string(out)) == ""
 }
 
 // LaneProber is a Stager that can answer whether a lane's own state still refuses staging,
