@@ -889,6 +889,17 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 	if err != nil {
 		return answer, readFailure(err)
 	}
+	if tick.StorePath != "" {
+		if !lookedForLoop {
+			runningLoop, err = findLiveLoopSession(r, tick.StorePath, at)
+			if err != nil {
+				return answer, err
+			}
+		}
+		if alarm := staleLoopBuildAlarm(runningLoop); alarm != nil {
+			answer.Alarms = append(answer.Alarms, *alarm)
+		}
+	}
 	answer.Summary.Alarms = answer.Alarms
 	return answer, nil
 }
@@ -1155,6 +1166,38 @@ type liveLoopSession struct {
 	startedAt int64
 	lanes     []string
 	owner     LoopOwner
+}
+
+// staleLoopBuildAlarm compares the loop session's start with the mtime of the
+// executable serving why. This is the installed build the operator invoked;
+// resolving it again through the launcher could itself build a different one.
+func staleLoopBuildAlarm(loop *liveLoopSession) *alarms.Alarm {
+	if loop == nil {
+		return nil
+	}
+	here, err := currentLoopOwner()
+	if err != nil || loop.owner.Domain != here.Domain || loop.owner.UID != here.UID {
+		return nil // The recorded PID does not identify a process we can inspect here.
+	}
+	started := time.UnixMilli(loop.startedAt).UTC()
+	installed, err := os.Stat("/proc/self/exe")
+	if err != nil || !installed.ModTime().After(started) {
+		return nil
+	}
+	image, err := os.Stat(fmt.Sprintf("/proc/%d/exe", loop.owner.PID))
+	if err != nil || os.SameFile(image, installed) {
+		return nil // A changed timestamp alone does not make the running build stale.
+	}
+	if dead, err := ownerDead(&loop.owner, here); err != nil || dead {
+		return nil // Recheck identity after reading the process's executable.
+	}
+	builtAt := installed.ModTime().UTC().Format(time.RFC3339Nano)
+	return &alarms.Alarm{
+		Kind: "stale-loop-build", Backend: "drain", Since: builtAt,
+		Cause:   fmt.Sprintf("loop started at %s; installed tillr-drain was built at %s", started.Format(time.RFC3339Nano), builtAt),
+		Clears:  "the running loop uses the installed build",
+		Command: "no automatic restart",
+	}
 }
 
 // LiveLoopLanes returns the lane set recorded by a currently live loop session for
