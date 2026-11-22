@@ -82,6 +82,15 @@ backend is a Gemini model on GitHub Copilot through the pi adapter.
   it with a fallback."** Do not write, keep or approve a fallback path of any
   kind. A fallback needs a strong written justification and the owner's own
   agreement before it exists.
+- **Leftover work in a lane is an alert, not a sweep** (owner, 2026-11-21: "this
+  should just be an alert that there's work left over. You can like then manually
+  clean it and file the root cause"). When a lane is out of rotation, save its
+  work under the night directory, clean the lane by hand, and file the cause.
+  Never propose or build an automatic clearer.
+- Until the fix for "a run staged again after a policy change keeps its old
+  command" has landed, the session policy names `pi-judge` (Carbon) for plan,
+  review and verify, so those stale runs can close only the unused name `pi`.
+  Point the three seats back at `pi` once the fix has landed.
 - Changing a model is a deliberate policy-file edit, never a per-item retry on
   "another model". The running loop accepts a valid policy file when it changes.
 - The operating agent's own helpers: a cheap model for well-specified analysis,
