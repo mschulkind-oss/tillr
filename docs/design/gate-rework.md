@@ -1141,6 +1141,60 @@ relying on a single manual heartbeat tick that `beat` drops when SQLite is busy)
 `tools/go-test-shards.py`, and `tests/` (`tests/go-test-shards.test.py` and
 `tests/tillr-testmain_test.go`).
 
+**Completions lost after cancel in drain tests (`D-GR29`).** This is the designer's decision of
+2026-11-21 on an operator request, not the owner's ruling, and the owner may overturn it. The
+request reports that a heavy run of the trunk stalled on 2026-11-21 in
+`TestPolicyReloadAtPassBoundaryKeepsLiveRequest`, and asks for the repair of commit `4790d2ad43`
+in four test files of `tools/tillr-drain/drain`, saying all four cancel the context and then
+receive from the loop's completions channel. Read at `86e2549392`, one of the four does:
+
+| Test file | What waits on the completions channel | Context at that point | Can lose the completion |
+| :--- | :--- | :--- | :--- |
+| `policy_reload_test.go` | the deferred cleanup of `TestPolicyReloadAtPassBoundaryKeepsLiveRequest`, after it calls `cancel()` | canceled | yes |
+| `fixer_intermittent_test.go` | `runPassAndDrain` | `context.Background()` in every caller | no |
+| `pass_measurement_test.go` | `TestDispatchWithoutAGateRecordsAPassAndDecision` | `context.Background()` | no |
+| `lane_dirty_test.go` | the receive after `launchExamination` | `context.Background()` | no |
+
+The cause is in `sendCompletion` (`tools/tillr-drain/drain/completion_handoff.go`): a worker
+sends its completion or, when its context is done, returns without sending. Once the context is
+canceled both branches are ready and Go picks one at random, so a test that cancels and then
+waits for one completion per active run can wait forever. A context that is never canceled has
+only the send branch, so the three other files cannot lose a completion this way, and the
+request's words about them do not match the tree. The decision:
+
+- **Only `policy_reload_test.go` is repaired.** Its cleanup must not receive from the
+  completions channel after the context is canceled. The worker in that test (`policyRunSteps.Run`)
+  returns only when its context is done, so moving `cancel()` after the receive is not enough: the
+  worker gets another way to be released (a channel the cleanup closes, as `triggerSteps.release`
+  is in `trigger_test.go`), the cleanup releases the workers and receives every active run's
+  completion while the context is live, and `cancel()` runs last. `drainOwned` in `pass_test.go`
+  is the helper to use if the released worker's completion passes through `takeCompletion` without
+  a stop or an error in this fixture; otherwise the cleanup keeps its present receive-and-delete
+  loop, moved before the cancel. What the test asserts does not change.
+- **The three other files are not changed.** A build criterion that names all four files is met
+  by the one repair together with a commit body that names the three and gives the reason above.
+  Adding a time limit to their receives is not the repair
+  ([`D-GR17`](#decision-ledger): a hang is fixed at its cause).
+- **The mirror is regenerated**, not edited: `just pack-sync` copies the file to
+  `yolo-packs/tillr/files/local/share/tillr/tillr-drain/drain/`, in the same commit.
+- **The commit body answers whether the real loop can lose a completion after cancel.** The
+  designer's reading at `86e2549392`, for the builder to confirm and state: yes, by design, and
+  the loop does not wait on what it drops. `Loop.Run` cancels on its way out and then joins the
+  examinations and the heavy runs without receiving from the channel; the comment above
+  `sendCompletion` says a run's durable outcome belongs to the successor loop, which reads it
+  from the store. One place does receive without a guard: `Loop.Examine` in `recovery.go` receives
+  one completion after `launchExamination` with the caller's context, so a caller that cancels
+  between the launch and the send could leave it waiting. That is named in the commit body and is
+  not repaired in this change.
+- **Verification** is the one test, repeated, never the suite:
+  `cd tools/tillr-drain && go test ./drain -run '^TestPolicyReloadAtPassBoundaryKeepsLiveRequest$' -count=50`.
+  The loss is random, so the same command on the base may or may not hang; the commit body says
+  which it did.
+
+**Rejected:** rewriting the three other files to match the request's words, since they have no
+cancel to reorder; a time limit on the receive as the repair; changing `sendCompletion` so tests
+may cancel first, since dropping the notification after cancel is what lets the real loop exit.
+
 **The proposed fast tier**, with budgets set from [Section 3.2](#32-every-check):
 
 | Fast check | Scope | Measured (s) | `budget_ms` |
@@ -1630,7 +1684,7 @@ while [`OQ-GR1`](#OQ-GR1) and [`OQ-GR2`](#OQ-GR2) were later withdrawn/overturne
 ([`OQ-GR1`](#OQ-GR1) ruled out by [`OQ-GP7`](tillr-graph-is-the-path.md#OQ-GP7), with the
 20-landing cap kept live until its replacement waiting rule is built; [`OQ-GR2`](#OQ-GR2)
 overturned in `1fa2c069c` and withdrawn in
-[the graph design Section 12.2](tillr-graph-is-the-path.md#122-decisions-in-other-documents)). `D-GR24` is the owner's ruling of 2026-11-21 that puts the `green` lane base back for new work, with trunk fixers on the tip; it replaces the 2026-11-17 overturn of [`OQ-GR2`](#OQ-GR2). `D-GR25` is the designer's list of where the built `green` behavior differs from those words; it decides nothing and each case is the owner's to rule on. `D-GR26` is the designer's decision on an operator request of 2026-11-21 that carries a question the owner asked that day, quoted verbatim; the owner may overturn it. `D-GR27` is the designer's proposal from the evidence `D-GR26` produced; it decides nothing, is not built, and is the owner's to rule on. `D-GR28` is the designer's decision of 2026-11-21, made to answer a build worker's report against an operator request; it amends `D-GR23` and is the owner's to overturn.
+[the graph design Section 12.2](tillr-graph-is-the-path.md#122-decisions-in-other-documents)). `D-GR24` is the owner's ruling of 2026-11-21 that puts the `green` lane base back for new work, with trunk fixers on the tip; it replaces the 2026-11-17 overturn of [`OQ-GR2`](#OQ-GR2). `D-GR25` is the designer's list of where the built `green` behavior differs from those words; it decides nothing and each case is the owner's to rule on. `D-GR26` is the designer's decision on an operator request of 2026-11-21 that carries a question the owner asked that day, quoted verbatim; the owner may overturn it. `D-GR27` is the designer's proposal from the evidence `D-GR26` produced; it decides nothing, is not built, and is the owner's to rule on. `D-GR28` is the designer's decision of 2026-11-21, made to answer a build worker's report against an operator request; it amends `D-GR23` and is the owner's to overturn. `D-GR29` is the designer's decision of 2026-11-21 on an operator request to repair four drain test files that wait on completions; it narrows the request to the one file the tree shows at fault and is the owner's to overturn.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
@@ -1661,6 +1715,7 @@ overturned in `1fa2c069c` and withdrawn in
 | `D-GR26` | **Not the owner's ruling; the designer's decision on an operator request, which the owner may overturn.** The owner asked on 2026-11-21, verbatim: *"Can we tell from our records when an item passed the light gate and then failed the heavy gate? Because that's evidence we're going to want to look at and decide something. Probably just making the light tests better if possible."* The request answers with a read-only report, the `tillr view heavy-misses` face (the name is the designer's), listing each landing that passed its fast gate and was later named by a heavy failure, with its commit, item, time, failing checks, revert or fixer outcome and changed paths, summarized by check and by changed module; and with Section 6.10, which reads that report from 2026-11-19 3:55 PM to 2026-11-21 6:35 PM Eastern and belongs to this document, so its designer writes it. Each failing check carries an attribution (`confirmed`, `offered`, `disproved` or `named`), and only the first two are counted as evidence. The request forbids changing the fast tier's selection. **Rejected:** counting every landing a fixer record names, which counts landings that only arrived on a red trunk (33 of the 47 listed). | 2026-11-21 | [Section 6.10](#610-what-passed-the-fast-gate-and-failed-the-heavy-run) | Evidence written 2026-11-21; the face is not on the trunk |
 | `D-GR27` | **Not the owner's ruling and not a decision: the designer's proposal, for the owner to rule on.** A candidate that changes a tillr Go module also runs, before the merge, the sharded suites of the changed modules and of the modules whose `go.mod` requires them; every other candidate is gated as today. Over the period it would have refused 9 of the 13 attributed landings, at the drain suite's time (40.31 seconds on a quiet machine, 455.28 seconds in a heavy run beside the lanes) on about half of all landings, against the ten seconds of `D-GR1`. The designer recommends against building it now (keep the fast tier, shorten the drain suite and the time to a revert first); the owner's quoted leaning is toward better fast tests. Nothing is built or changed until the owner rules. | 2026-11-21 | [Section 6.10](#610-what-passed-the-fast-gate-and-failed-the-heavy-run) | — (proposal; no ruling yet) |
 | `D-GR28` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request for the first classifier slice says "No outcome changes for any input". The single raw-result table and single aggregate order of `D-GR23` changed five measured outcomes at three sites (P6, F3, F6), so `D-GR23` is amended: `Classify` holds a named protocol per kind of raw result and `Aggregate` a named order per aggregate site, each reproducing the tree, and a site passes the name and compares nothing. A Go module build is `fail` on every non-zero exit; a legacy check follows `check_status` and `Check.conflict` (exit 4 of an ordinary kind is `fail`, exit 124 is `unknown`); the legacy gate's order is stalled, then failed, then unproven. The Python side hands over yes-or-no facts about a check's output and decides nothing from them. A difference a later slice finds is added the same way by its builder, with a test and a row in the section, and is not a definition obstacle. **Rejected:** allowing the outcome changes by name; sending pass and fail words from Python; merging the orders into the runner's in this group. | 2026-11-21 | [Each site keeps its raw-result protocol and aggregate order](#each-site-keeps-its-raw-result-protocol-and-aggregate-order) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
+| `D-GR29` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request of 2026-11-21 asks for the repair of commit `4790d2ad43` (receive a test's completions before canceling) in `policy_reload_test.go`, `fixer_intermittent_test.go`, `pass_measurement_test.go` and `lane_dirty_test.go`, saying all four cancel and then receive. At `86e2549392` only `policy_reload_test.go` does; the other three receive under `context.Background()`, where `sendCompletion` cannot drop a completion. So only `policy_reload_test.go` is repaired: its workers are released by a channel and their completions received while the context is live, with `cancel()` last. The three others are unchanged and named with the reason in the commit body, which also states whether the real loop can lose a completion after cancel. The mirror comes from `just pack-sync`. **Rejected:** editing the three files that have no cancel; a time limit on the receive; changing `sendCompletion`. | 2026-11-21 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | — (not built) |
 | `D-GR12` | A question about a moving upstream is a drift probe that files an item and never moves or holds the green pointer. **Rejected:** keeping it as a check on a commit. Made visible where it happens. | 2026-11-15 | [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) | — (`series` and `patch-branch-inv2` are `TIER_LANDING` in `tools/fork-check.py`; no probe exists) |
 | OQ-GR1 | The default of a per-repository setting, `red_cap`: landing stops at 20 landings or 60 minutes past the last green commit; a repository may set a different bound, and zero means no cap. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "a mechanism whose cost rises with trunk activity is pointed the wrong way" and the owner's 2026-11-15 ruling that the landing strategy is configurable per repository and red is brief. The owner may overturn it. **Rejected:** no cap, which lets the fixer's range and the deploy lag grow without limit. **Ruled out by the owner on 2026-11-18** ([OQ-GP7](tillr-graph-is-the-path.md#OQ-GP7)): under a red check, work lands only if it does not touch what that check reads, and there is no landing cap. The cap is still live in the tree (20 landings; its time bound was turned off on 2026-11-17, `d53580bfd`) until the graph design's waiting rule is built. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/redcap/cap.go`, `drain/red_cap.go`) |
 | OQ-GR2 | The default of a per-repository setting, `lane_base`: a new lane starts from the last green commit; a repository may choose the trunk tip. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are that a worker does not pay for a failure it did not cause, and the same cost-direction rule. The owner may overturn it. **Rejected:** always cutting from the tip. **Overturned by the owner on 2026-11-17** (`1fa2c069c`): work is always built against the latest trunk, never a past commit; a lane cut from the green pointer was handed a tree older than its own item's definition and produced false conflicts. This repository set `tip`; the code's default when the key is absent is still `green`. **Replaced by the owner's ruling of 2026-11-21** (`D-GR24`): new work starts from the last proved trunk commit again, and this repository sets `green`. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/drain/lane_base.go`; the repository setting follows `D-GR24`) |
