@@ -56,6 +56,31 @@ func OpenMigrated(ctx context.Context, path string, options ...OpenOption) (*Sto
 	return open(ctx, path, false, true, options...)
 }
 
+// EditExisting runs one transactional edit on an existing store without migrating it or
+// switching its journal mode. edit must return the result of its transaction: on refusal
+// we close without running checkpoint maintenance, which would itself change the store.
+func EditExisting(ctx context.Context, path string, edit func(*Store) error) (err error) {
+	s, err := open(ctx, path, false, false, func(c *openConfig) error {
+		c.preserveJournalMode = true
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	accepted := false
+	defer func() {
+		if !accepted || s.sidecar == nil {
+			s.release(nil)
+			return
+		}
+		s.lock, _ = openOwnerLock(path)
+		s.Close()
+	}()
+	err = edit(s)
+	accepted = err == nil
+	return err
+}
+
 // CheckMigration tries the migration on the existing WAL store under its writer
 // lock and rolls it back, even on success. A replacement can check a lower schema
 // without publishing a version that the still-running loop cannot write.
@@ -121,18 +146,25 @@ func open(ctx context.Context, path string, create, migrate bool, options ...Ope
 		return nil, fmt.Errorf("store: opening %s: %w", path, err)
 	}
 	var mode string
-	trace.record("wal.begin", nil)
-	walErr := db.QueryRowContext(ctx, `PRAGMA journal_mode=WAL`).Scan(&mode)
-	trace.record("wal.end", walErr)
-	if err := walErr; err != nil {
-		s.release(nil)
-		return nil, fmt.Errorf("store: selecting WAL for %s: %w", path, err)
+	if cfg.preserveJournalMode {
+		if err := db.QueryRowContext(ctx, `PRAGMA journal_mode`).Scan(&mode); err != nil {
+			s.release(nil)
+			return nil, fmt.Errorf("store: reading journal mode for %s: %w", path, err)
+		}
+	} else {
+		trace.record("wal.begin", nil)
+		walErr := db.QueryRowContext(ctx, `PRAGMA journal_mode=WAL`).Scan(&mode)
+		trace.record("wal.end", walErr)
+		if walErr != nil {
+			s.release(nil)
+			return nil, fmt.Errorf("store: selecting WAL for %s: %w", path, walErr)
+		}
+		if mode != "wal" {
+			s.release(nil)
+			return nil, fmt.Errorf("store: selecting WAL for %s: SQLite answered %q", path, mode)
+		}
 	}
-	if mode != "wal" {
-		s.release(nil)
-		return nil, fmt.Errorf("store: selecting WAL for %s: SQLite answered %q", path, mode)
-	}
-	if !attached && !s.attachSidecar(ctx, trace) {
+	if !attached && (mode != "wal" || !s.attachSidecar(ctx, trace)) {
 		// Without a sidecar the handle runs on: its commits still never checkpoint
 		// (wal_autocheckpoint=0, dsn) and its close skips the cycle (checkpointIfDue,
 		// reason=no-sidecar). What it cannot prevent is SQLite's own last close: when no
@@ -147,10 +179,12 @@ func open(ctx context.Context, path string, create, migrate bool, options ...Ope
 	}
 	// A lock file this process cannot open or create means no owner can be seen: the
 	// handle's close then checkpoints past CheckpointFrames, as it would with no loop.
-	lock, lockErr := openOwnerLock(path)
-	s.lock = lock
-	if lockErr != nil {
-		trace.record("owner-lock.unavailable", lockErr)
+	if !cfg.preserveJournalMode {
+		lock, lockErr := openOwnerLock(path)
+		s.lock = lock
+		if lockErr != nil {
+			trace.record("owner-lock.unavailable", lockErr)
+		}
 	}
 	if migrate {
 		// Reading whether the schema is current takes no write lock; only a store that

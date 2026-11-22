@@ -2,7 +2,10 @@ package watch
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"maps"
 	"math"
@@ -19,6 +22,27 @@ type observation struct {
 	TS    int64  `json:"ts"`
 	Kind  string `json:"kind"`
 	Value *any   `json:"value,omitempty"`
+
+	fingerprint string // internal cause facts; not part of the timeline bundle
+}
+
+func fingerprint(names []string, lookup func(string) any) string {
+	if len(names) == 0 {
+		return ""
+	}
+	h := sha256.New()
+	for _, name := range names {
+		if s, ok := lookup(name).(string); ok {
+			var header [9]byte
+			header[0] = 1
+			binary.BigEndian.PutUint64(header[1:], uint64(len(s)))
+			h.Write(header[:])
+			h.Write([]byte(s))
+		} else {
+			h.Write([]byte{0})
+		}
+	}
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 type condition struct {
@@ -364,6 +388,7 @@ func ruleEqual(a, b Rule) bool {
 		a.Enabled == b.Enabled &&
 		slices.Equal(a.Reads.Events, b.Reads.Events) &&
 		slices.Equal(a.Reads.Projections, b.Reads.Projections) &&
+		slices.Equal(a.When.Fingerprint, b.When.Fingerprint) &&
 		a.When.GroupBy == b.When.GroupBy &&
 		a.When.Pattern == b.When.Pattern &&
 		a.When.Field == b.When.Field &&
@@ -509,7 +534,9 @@ func deriveCached(r Rule, now time.Time, facts ruleFacts, cache *evalCache) (map
 			c = &condition{}
 			subjects[subject] = c
 		}
-		c.observe(r.When, ev.obs, expressionValues{event: ev.lookup, projection: projection, nowMillis: winHi})
+		obs := ev.obs
+		obs.fingerprint = fingerprint(r.When.Fingerprint, ev.lookup)
+		c.observe(r.When, obs, expressionValues{event: ev.lookup, projection: projection, nowMillis: winHi})
 		return nil
 	})
 	if err != nil {
@@ -573,6 +600,7 @@ func derive(rd *store.Reader, r Rule, now time.Time, facts ruleFacts) (map[strin
 			c = &condition{}
 			subjects[subject] = c
 		}
+		ev.obs.fingerprint = fingerprint(r.When.Fingerprint, ev.lookup)
 		c.observe(r.When, ev.obs, expressionValues{event: ev.lookup, projection: projection, nowMillis: now.UnixMilli()})
 	}
 	return subjects, skipped, rows.Err()

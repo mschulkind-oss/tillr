@@ -10,7 +10,7 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-// Notice's Seq refers to the alert's opening event, not the fact that caused it.
+// Notice's Seq refers to the latest opening or reopening, not the fact that caused it.
 type Notice struct {
 	Seq     int64
 	AlertID string
@@ -22,29 +22,39 @@ func (e Evaluator) Pending(ctx context.Context, owner string) ([]Notice, error) 
 	if owner != "foreground" {
 		return nil, nil
 	}
-	// A rule's evaluation eligibility does not withdraw its open notices.
-	foreground := map[string]bool{}
-	for _, r := range e.Rules {
-		if r.Delivery.Receiver == "foreground" {
-			foreground[r.ID] = true
-		}
-	}
+	// Preserve file-rule routing for initial openings. Reopenings are new
+	// notices routed by the effective rules, independent of eligibility.
+	fileForeground := foregroundRules(e.Rules)
 	var notices []Notice
 	err := e.Store.ReadTx(ctx, func(rd *store.Reader) error {
-		rows, err := rd.Query(`SELECT v.seq,a.alert_id,a.rule_id,a.bundle_json
-   FROM alert_episodes a JOIN events v ON v.object_id=a.alert_id AND v.kind=?
+		rows, err := rd.Query(`SELECT v.seq,v.kind,a.alert_id,a.rule_id,a.bundle_json
+   FROM alert_episodes a JOIN events v ON v.seq=(
+      SELECT MAX(n.seq) FROM events n WHERE n.object_id=a.alert_id AND n.kind IN (?,?)
+   )
    WHERE a.state='open' AND v.seq>COALESCE((SELECT seen_seq FROM foreground_delivery WHERE owner_handle=?),0)
-   ORDER BY v.seq`, openedKind, owner)
+   ORDER BY v.seq`, openedKind, reopenedKind, owner)
 		if err != nil {
 			return err
 		}
 		defer rows.Close()
+		var effectiveForeground map[string]bool
 		for rows.Next() {
 			var n Notice
-			var id string
+			var kind, id string
 			var bundle []byte
-			if err := rows.Scan(&n.Seq, &n.AlertID, &id, &bundle); err != nil {
+			if err := rows.Scan(&n.Seq, &kind, &n.AlertID, &id, &bundle); err != nil {
 				return err
+			}
+			foreground := fileForeground
+			if kind == reopenedKind {
+				if effectiveForeground == nil {
+					rules, err := ReadEffectiveRules(rd, e.Rules)
+					if err != nil {
+						return err
+					}
+					effectiveForeground = foregroundRules(rules)
+				}
+				foreground = effectiveForeground
 			}
 			if !foreground[id] {
 				continue
@@ -57,6 +67,16 @@ func (e Evaluator) Pending(ctx context.Context, owner string) ([]Notice, error) 
 		return rows.Err()
 	})
 	return notices, err
+}
+
+func foregroundRules(rules []Rule) map[string]bool {
+	foreground := map[string]bool{}
+	for _, r := range rules {
+		if r.Delivery.Receiver == "foreground" {
+			foreground[r.ID] = true
+		}
+	}
+	return foreground
 }
 
 // Seen confirms a printed cursor without changing alert state.

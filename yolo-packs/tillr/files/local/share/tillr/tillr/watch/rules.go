@@ -39,6 +39,7 @@ type Reads struct {
 }
 
 type When struct {
+	Fingerprint                    []string
 	GroupBy, Pattern, Field        string
 	Pairs                          [][2]string
 	Threshold, ThresholdCommits    int64
@@ -398,8 +399,15 @@ func loadWhen(k keys, pattern string, refs map[string]bool) When {
 		return loadLag(k, w, refs)
 	}
 	w.ClearWhen = k.expression("clear_when", false)
-
-	allowed := []string{"group_by", "pattern", "clear_when", "window"}
+	if _, present := k.values["fingerprint"]; present {
+		w.Fingerprint = k.strings("fingerprint", true)
+		for _, name := range w.Fingerprint {
+			if !validEventPath(name) || strings.HasPrefix(name, "event.") {
+				k.reject("fingerprint", "expected an event name without the event. prefix, got %q", name)
+			}
+		}
+	}
+	allowed := []string{"group_by", "pattern", "clear_when", "window", "fingerprint"}
 	switch w.Pattern {
 	case DurationWithoutEvent:
 		k.only(append(allowed, "after", "match", "threshold_duration")...)

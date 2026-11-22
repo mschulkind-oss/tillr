@@ -166,14 +166,13 @@ func (owner *OwnerStatus) readPending(rd *store.Reader, rules []Rule) error {
 			foreground[r.ID] = true
 		}
 	}
-	// Status counts stored opening and reopening notices without changing
-	// legacy Pending delivery. EXISTS counts each open episode once, even
-	// when several of its opening events are newer than seen_seq.
+	// EXISTS counts each open episode once, even when several of its
+	// opening events are newer than seen_seq.
 	rows, err := rd.Query(`SELECT a.rule_id FROM alert_episodes a
 		WHERE a.state='open' AND EXISTS (
 			SELECT 1 FROM events v WHERE v.object_id=a.alert_id AND v.kind IN (?, ?)
 			AND v.seq>(SELECT seen_seq FROM foreground_delivery WHERE owner_handle=?)
-		)`, openedKind, "watch.alert.reopened", owner.Owner)
+		)`, openedKind, reopenedKind, owner.Owner)
 	if err != nil {
 		return err
 	}

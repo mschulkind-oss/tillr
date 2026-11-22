@@ -57,8 +57,8 @@ func TestWatchStatusReportsStoredAlertsAndLatestNotices(t *testing.T) {
 	ctx := t.Context()
 	now := time.Unix(1700000000, 0)
 	doc := strings.ReplaceAll(validRule, `"test.watch"`, `"watch-test.fact"`)
-	rules := watchRules(t, doc)
 	watchFact(t, s, now, `{"detail":{"item-id":"will-reopen"}}`)
+	rules := watchRules(t, doc)
 	e := Evaluator{Store: s, Rules: rules, Clock: func() time.Time { return now }}
 	if _, err := e.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
@@ -81,17 +81,13 @@ func TestWatchStatusReportsStoredAlertsAndLatestNotices(t *testing.T) {
 			('c','removed','three',1,'resolved','warning','f',1,0,1,0,'{}',NULL,NULL),
 			('a','removed','one',1,'acknowledged','warning','f',1,0,1,0,'{}','operator',NULL),
 			('d','removed','four',1,'silenced','warning','f',2,0,2,0,'{}',NULL,2000);`)
-	const kind = "watch.alert.reopened" // Seed lifecycle events without implementing lifecycle commands.
-	if err := event.Register(kind, "watch"); err != nil {
-		t.Fatal(err)
-	}
 	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
 		var id string
 		if err := tx.QueryRow(`SELECT alert_id FROM alert_episodes WHERE subject_key='will-reopen'`).Scan(&id); err != nil {
 			return err
 		}
 		for range 2 {
-			if _, err := tx.Append(event.Event{Kind: kind, At: now, ObjectID: &id, Payload: []byte(`{}`)}); err != nil {
+			if _, err := tx.Append(event.Event{Kind: reopenedKind, At: now, ObjectID: &id, Payload: []byte(`{}`)}); err != nil {
 				return err
 			}
 		}
@@ -117,13 +113,22 @@ func TestWatchStatusReportsStoredAlertsAndLatestNotices(t *testing.T) {
 	if len(got.Owners) != 2 || got.Owners[0].Owner != "foreground" || got.Owners[0].Attached || got.Owners[0].Since != nil || got.Owners[0].LastWait == nil || *got.Owners[0].LastWait != "1970-01-01T00:00:02Z" || got.Owners[0].Pending != 1 || got.Owners[1].Owner != "other" || !got.Owners[1].Attached || got.Owners[1].Since != nil || got.Owners[1].Pending != 0 {
 		t.Fatalf("owner status: %+v", got.Owners)
 	}
-	// Status uses the effective receiver, without dropping any stored alert rows.
+	if notices, err := e.Pending(ctx, "foreground"); err != nil || len(notices) != 1 || notices[0].Bundle.Subject != "will-reopen" {
+		t.Fatalf("expected one foreground reopening: %+v, %v", notices, err)
+	}
+	// The effective receiver changes delivery without dropping any stored alert rows.
 	seedLiveOverride(t, s, rules[0].ID, strings.Replace(doc, `receiver = "foreground"`, `receiver = "subscribers"`, 1))
 	got, err = e.ReadStatus(ctx, func(string) (bool, error) { return false, nil })
 	if err != nil || len(got.Alerts) != 4 || len(got.Owners) != 2 || got.Owners[0].Pending != 0 {
 		t.Fatalf("status with receiver override: %+v, %v", got, err)
 	}
-	if notices, err := (Evaluator{Store: s, Rules: rules}).Pending(ctx, "foreground"); err != nil || len(notices) != 0 {
-		t.Fatalf("legacy delivery changed: %+v, %v", notices, err)
+	if notices, err := e.Pending(ctx, "foreground"); err != nil || len(notices) != 0 {
+		t.Fatalf("subscribers override must keep the reopening out of foreground delivery: %+v, %v", notices, err)
+	}
+	// An override can route a reopening into foreground delivery as well.
+	seedLiveOverride(t, s, rules[0].ID, doc)
+	e.Rules = watchRules(t, strings.Replace(doc, `receiver = "foreground"`, `receiver = "subscribers"`, 1))
+	if notices, err := e.Pending(ctx, "foreground"); err != nil || len(notices) != 1 || notices[0].Bundle.Subject != "will-reopen" {
+		t.Fatalf("foreground override should deliver the reopening: %+v, %v", notices, err)
 	}
 }

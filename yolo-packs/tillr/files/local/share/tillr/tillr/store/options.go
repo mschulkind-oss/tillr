@@ -8,7 +8,10 @@ import (
 // DefaultBusyTimeout is how long SQLite waits for another connection's lock.
 const DefaultBusyTimeout = 5 * time.Second
 
-type openConfig struct{ busyTimeout time.Duration }
+type openConfig struct {
+	busyTimeout         time.Duration
+	preserveJournalMode bool
+}
 
 // OpenOption configures one store handle, including its read-only sidecar.
 type OpenOption func(*openConfig) error

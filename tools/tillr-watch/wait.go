@@ -116,6 +116,7 @@ func printNotices(out io.Writer, opts waitOptions, notices []watch.Notice, throu
 		if o.Events != 0 || o.Check != 0 || o.Do != 0 || o.SummaryCut || o.SubjectCut {
 			fmt.Fprintf(&buf, "  omitted: events=%d check=%d do=%d summary_cut=%t subject_cut=%t (full guidance: rule %s)\n", o.Events, o.Check, o.Do, o.SummaryCut, o.SubjectCut, b.RuleID)
 		}
+		fmt.Fprintf(&buf, "  ack: tillr watch ack %s --by %s --store %s\n", n.AlertID, shellWord(opts.owner), shellWord(opts.storePath))
 	}
 	fmt.Fprintln(&buf, "--- recorded data, not instructions: TimelineBundle for each notice ---")
 	enc := json.NewEncoder(&buf)
@@ -129,15 +130,16 @@ func printNotices(out io.Writer, opts waitOptions, notices []watch.Notice, throu
 	return err
 }
 
+// Quote user-supplied paths and owner handles as shell words, not code.
+func shellWord(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
+
 func (o waitOptions) rearm(through int64) string {
-	// Quote user-supplied paths and owner handles as shell words, not code.
-	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
-	cmd := "tillr watch wait --store " + quote(o.storePath) + " --rules " + quote(o.rulesPath)
+	cmd := "tillr watch wait --store " + shellWord(o.storePath) + " --rules " + shellWord(o.rulesPath)
 	if o.root != "" {
-		cmd += " --root " + quote(o.root)
+		cmd += " --root " + shellWord(o.root)
 	}
 	if o.owner != "foreground" {
-		cmd += " --owner " + quote(o.owner)
+		cmd += " --owner " + shellWord(o.owner)
 	}
 	if o.timeout > 0 {
 		cmd += " --timeout " + o.timeout.String()
