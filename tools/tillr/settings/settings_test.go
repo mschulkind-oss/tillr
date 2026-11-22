@@ -33,7 +33,10 @@ func TestDefaultsAndTOML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := settings.Settings{Roll: settings.Roll{PauseTimeoutSeconds: 120}, Push: settings.Push{What: "none"}}
+	want := settings.Settings{
+		Roll: settings.Roll{PauseTimeoutSeconds: 120}, Push: settings.Push{What: "none"},
+		CandidateSize: settings.CandidateSizeLimits{FileLimit: 27, AddedLineLimit: 1200},
+	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("defaults = %+v, want %+v", got, want)
 	}
@@ -45,6 +48,9 @@ pause_timeout_seconds = 45
 what = "green"
 remote = "origin"
 ref = "refs/heads/main"
+[candidate_size]
+file_limit = 42
+added_line_limit = 900
 `
 	if err := os.WriteFile(filepath.Join(dir, ".tillr.toml"), []byte(specimen), 0644); err != nil {
 		t.Fatal(err)
@@ -54,11 +60,19 @@ ref = "refs/heads/main"
 		t.Fatal(err)
 	}
 	want = settings.Settings{
-		Roll: settings.Roll{Paths: []string{"tools/tillr*/", "config/tillr/"}, Command: "just tillr-roll --no-request", PauseTimeoutSeconds: 45},
-		Push: settings.Push{What: "green", Remote: "origin", Ref: "refs/heads/main"},
+		Roll:          settings.Roll{Paths: []string{"tools/tillr*/", "config/tillr/"}, Command: "just tillr-roll --no-request", PauseTimeoutSeconds: 45},
+		Push:          settings.Push{What: "green", Remote: "origin", Ref: "refs/heads/main"},
+		CandidateSize: settings.CandidateSizeLimits{FileLimit: 42, AddedLineLimit: 900},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("settings = %+v, want %+v", got, want)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".tillr.toml"), []byte("[candidate_size]\nfile_limit = 0\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got, err = settings.Read(dir)
+	if want := (settings.CandidateSizeLimits{FileLimit: 0, AddedLineLimit: 1200}); err != nil || got.CandidateSize != want {
+		t.Fatalf("partial override = %+v, %v; want %+v", got.CandidateSize, err, want)
 	}
 }
 
@@ -85,6 +99,8 @@ func TestRefusalsNameFileKeyAndExpectation(t *testing.T) {
 		{"[roll]\ncommand = 'run'", "roll.command", "roll.paths"},
 		{"[roll]\ncommand = 'run'\npaths = []", "roll.command", "roll.paths"},
 		{"[roll.extra]\nx = 1", "roll.extra", "command"},
+		{"[candidate_size]\nfile_limit = -1", "candidate_size.file_limit", "nonnegative integer"},
+		{"[candidate_size]\nadded_line_limit = '1200'", "candidate_size.added_line_limit", "nonnegative integer"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.key+tc.body, func(t *testing.T) {

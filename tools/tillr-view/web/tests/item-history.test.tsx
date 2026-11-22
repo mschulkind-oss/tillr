@@ -82,6 +82,21 @@ test("the item page shows each verify refusal, its findings and which step ran n
   expect(within(rows[1]).getByRole("link", { name: "plan-3" })).toBeTruthy();
 });
 
+test("verify refusals show recorded counts beside their limits, but not for older refusals", () => {
+  render(<VerifyRefusals refusals={[
+    { ...refusals[0], candidate_size: { files: 3, added_lines: 71, file_limit: 8, added_line_limit: 100 } },
+    { ...refusals[1], candidate_size: { files: 9, added_lines: 80, file_limit: 9, added_line_limit: 80 } },
+    { ...refusals[2], candidate_size: { files: 0, added_lines: 0, file_limit: 27, added_line_limit: 1200 } },
+    { ...refusals[2], event_seq: 8, detail: "older findings" },
+  ]} />);
+  const rows = within(screen.getByRole("region", { name: "Verify refusals" })).getAllByRole("listitem");
+  expect(rows[0].textContent).toContain("3 files (limit 8) · 71 added lines (limit 100)");
+  expect(rows[1].textContent).toContain("9 files (limit 9) · 80 added lines (limit 80)");
+  expect(rows[2].textContent).toContain("0 files (limit 27) · 0 added lines (limit 1200)");
+  expect(rows[3].textContent).toContain("older findings");
+  expect(rows[3].textContent).not.toMatch(/Candidate size|limit|added lines/);
+});
+
 test("no verify refusals renders no section", () => {
   render(<VerifyRefusals refusals={[]} />);
   expect(screen.queryByRole("region", { name: "Verify refusals" })).toBeNull();

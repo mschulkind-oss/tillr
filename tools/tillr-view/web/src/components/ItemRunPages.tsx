@@ -35,6 +35,7 @@ export function VerifyRefusals({ refusals }: { refusals: VerifyRefusalView[] }) 
     {refusals.map(r => <li key={r.event_seq}>
       Verify run <EntityLink kind="run" id={r.run_id} />{r.attempt !== null ? ` · attempt ${r.attempt}` : ""} · <time>{new Date(r.at_ms).toISOString()}</time> · <NextStep refusal={r} />
       {r.replan ? <> · replan: the findings said the plan was wrong</> : null}
+      {r.candidate_size ? <div>Candidate size: {r.candidate_size.files} files (limit {r.candidate_size.file_limit}) · {r.candidate_size.added_lines} added lines (limit {r.candidate_size.added_line_limit})</div> : null}
       <pre className="refusal-detail">{r.detail}</pre>
     </li>)}
   </ol></section>;

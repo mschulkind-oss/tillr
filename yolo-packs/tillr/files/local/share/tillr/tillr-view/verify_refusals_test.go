@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"reflect"
 	"testing"
 )
 
@@ -91,6 +92,46 @@ func TestVerifyRefusalsNextStepOutsideAWorkflowIsTheSeat(t *testing.T) {
 	got := rows[0].(map[string]any)
 	if len(rows) != 1 || got["next_step"] != "design" || got["next_attempt"] != nil {
 		t.Fatalf("want the design seat as the next step: %v", rows)
+	}
+}
+
+func TestVerifyRefusalsReportRecordedCandidateSize(t *testing.T) {
+	h := newServeHarness(t)
+	cases := []struct {
+		name, extra string
+		want        map[string]any
+	}{
+		{"below limit", `,"candidate_size":{"files":3,"added_lines":71,"file_limit":8,"added_line_limit":100}`,
+			map[string]any{"files": float64(3), "added_lines": float64(71), "file_limit": float64(8), "added_line_limit": float64(100)}},
+		{"at limit", `,"candidate_size":{"files":9,"added_lines":80,"file_limit":9,"added_line_limit":80}`,
+			map[string]any{"files": float64(9), "added_lines": float64(80), "file_limit": float64(9), "added_line_limit": float64(80)}},
+		{"zero", `,"candidate_size":{"files":0,"added_lines":0,"file_limit":27,"added_line_limit":1200}`,
+			map[string]any{"files": float64(0), "added_lines": float64(0), "file_limit": float64(27), "added_line_limit": float64(1200)}},
+		{"older refusal", "", nil},
+		{"measurement failed", `,"candidate_size_error":"missing candidate base"`, nil},
+	}
+	for i, tc := range cases {
+		h.exec(`INSERT INTO events (ts,kind,object_type,object_id,payload) VALUES (?,'drain.refusal','run',?,?)`,
+			2000+i, fmt.Sprintf("verify-%d", i), `{"item_id":"item-seed-06","step":"verify-not-done","detail":"c1: not done"`+tc.extra+`}`)
+	}
+	rows := verifyRefusalsFor(t, h, "item-seed-06")
+	if len(rows) != len(cases) {
+		t.Fatalf("want %d verify refusals, got %v", len(cases), rows)
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			row := rows[i].(map[string]any)
+			if row["detail"] != "c1: not done" {
+				t.Errorf("refusal detail lost: %v", row)
+			}
+			if got := row["candidate_size"]; tc.want == nil {
+				if got != nil {
+					t.Errorf("unmeasured refusal has candidate_size: %v", got)
+				}
+			} else if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("candidate_size = %v; want %v", got, tc.want)
+			}
+		})
 	}
 }
 

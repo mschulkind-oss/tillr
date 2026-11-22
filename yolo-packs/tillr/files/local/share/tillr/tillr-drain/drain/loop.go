@@ -343,6 +343,8 @@ type LoopConfig struct {
 	// LiveScale lets an operator override the startup ordinary lane pool in the store.
 	LiveScale   bool
 	PostLanding settings.Settings
+	// CandidateSizeLimits comes from repository settings; nil uses the built-in defaults.
+	CandidateSizeLimits *settings.CandidateSizeLimits
 	// MigrateOwnerQuestions converts only existing owner decisions, through ordinary
 	// command runs and the design gate, then exits without dispatching other work.
 	MigrateOwnerQuestions bool
