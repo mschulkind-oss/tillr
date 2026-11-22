@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mschulkind-oss/tillr/checkresult"
 )
 
 // treeInput is a Git entry at the judged tree, not the worktree's current bytes.
@@ -193,8 +195,8 @@ func openResultStore(root string) (resultStore, error) {
 	return resultStore{dir: filepath.Join(strings.TrimSpace(string(common)), "tillr-gate", "results")}, nil
 }
 func (store resultStore) read(key string) (*storedResult, *storedResult, error) {
-	read := func(verdict string) (*storedResult, error) {
-		path := filepath.Join(store.dir, key+"."+verdict+".json")
+	read := func(suffix string, want checkresult.Outcome) (*storedResult, error) {
+		path := filepath.Join(store.dir, key+"."+suffix+".json")
 		raw, err := os.ReadFile(path)
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -206,7 +208,16 @@ func (store resultStore) read(key string) (*storedResult, *storedResult, error) 
 		if err := json.Unmarshal(raw, &result); err != nil {
 			return nil, fmt.Errorf("reading %s: %w", path, err)
 		}
-		if result.Result != verdict || result.CheckID == "" || result.Tree == "" || result.Time == "" {
+		if result.CheckID == "" || result.Tree == "" || result.Time == "" {
+			return nil, fmt.Errorf("invalid result file %s", path)
+		}
+		classified := classifyCheck(checkresult.Observation{
+			Check:  result.CheckID,
+			Commit: result.Tree,
+			Source: checkresult.CachedRecord,
+			Word:   result.Result,
+		})
+		if classified.Outcome != want {
 			return nil, fmt.Errorf("invalid result file %s", path)
 		}
 		if _, err := time.Parse(time.RFC3339Nano, result.Time); err != nil {
@@ -214,15 +225,27 @@ func (store resultStore) read(key string) (*storedResult, *storedResult, error) 
 		}
 		return &result, nil
 	}
-	pass, err := read(ResultPass)
+	pass, err := read(ResultPass, checkresult.Pass)
 	if err != nil {
 		return nil, nil, err
 	}
-	fail, err := read(ResultFail)
+	fail, err := read(ResultFail, checkresult.Fail)
 	return pass, fail, err
 }
 func (store resultStore) publish(key string, result storedResult) error {
-	if result.Result != ResultPass && result.Result != ResultFail {
+	classified := classifyCheck(checkresult.Observation{
+		Check:  result.CheckID,
+		Commit: result.Tree,
+		Source: checkresult.CachedRecord,
+		Word:   result.Result,
+	})
+	var suffix string
+	switch classified.Outcome {
+	case checkresult.Pass:
+		suffix = ResultPass
+	case checkresult.Fail:
+		suffix = ResultFail
+	default:
 		return fmt.Errorf("cannot store result %q", result.Result)
 	}
 	if err := os.MkdirAll(store.dir, 0755); err != nil {
@@ -248,7 +271,7 @@ func (store resultStore) publish(key string, result storedResult) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(file.Name(), filepath.Join(store.dir, key+"."+result.Result+".json"))
+	return os.Rename(file.Name(), filepath.Join(store.dir, key+"."+suffix+".json"))
 }
 
 type treeMemory struct {
@@ -309,35 +332,57 @@ func prepareTreeMemory(plan PlanPayload, root string) (*treeMemory, error) {
 }
 
 func annotateMemory(outcome *VerdictCheck, pass, fail *storedResult, remembered bool) {
+	hasPass := false
 	if pass != nil {
 		outcome.PassTime = pass.Time
+		hasPass = classifyCheck(checkresult.Observation{
+			Check:  pass.CheckID,
+			Commit: pass.Tree,
+			Source: checkresult.CachedRecord,
+			Word:   pass.Result,
+		}).Outcome == checkresult.Pass
 	}
+	hasFail := false
 	if fail != nil {
 		outcome.FailTime = fail.Time
+		hasFail = classifyCheck(checkresult.Observation{
+			Check:  fail.CheckID,
+			Commit: fail.Tree,
+			Source: checkresult.CachedRecord,
+			Word:   fail.Result,
+		}).Outcome == checkresult.Fail
 	}
+	res := classifyCheck(checkresult.Observation{
+		Check:  outcome.CheckID,
+		Source: checkresult.ResultWord,
+		Word:   outcome.Result,
+	})
 	switch {
-	case outcome.Result == ResultPass && pass != nil && fail != nil:
+	case res.Outcome == checkresult.Pass && hasPass && hasFail:
 		outcome.Memory = "flaky"
 	case remembered:
 		outcome.Memory = "remembered"
-	case outcome.Result == ResultPass:
+	case res.Outcome == checkresult.Pass:
 		outcome.Memory = "passed"
-	case outcome.Result == ResultFail:
+	case res.Outcome == checkresult.Fail:
 		outcome.Memory = "failed"
 	}
 }
 func (memory *treeMemory) run(check PlanCheck, root, logs string, index int) (VerdictCheck, error) {
 	_, missing, err := resolveRefNeeds(check, root)
 	if err != nil {
-		return VerdictCheck{CheckID: check.CheckID, Result: ResultError}, err
+		failed := classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.CheckCommand, ProcessError: true})
+		return VerdictCheck{CheckID: check.CheckID, Result: verdictWord(failed)}, err
 	}
 	if len(missing) > 0 {
-		return VerdictCheck{CheckID: check.CheckID, Result: ResultUnavailable, MissingNeeds: missing}, nil
+		unavail := classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.ResultWord, Word: ResultUnavailable})
+		return VerdictCheck{CheckID: check.CheckID, Result: verdictWord(unavail), MissingNeeds: missing}, nil
 	}
 	if check.CheckID == "go-build" && memory != nil {
 		_, reason, err := goBuildIdentity(check, root, memory.inputs)
 		if err != nil {
-			return VerdictCheck{CheckID: check.CheckID, Result: ResultError}, err
+			failed := classifyCheck(checkresult.Observation{Check: check.CheckID, Commit: memory.tree, Source: checkresult.CheckCommand, ProcessError: true})
+			return VerdictCheck{CheckID: check.CheckID, Result: verdictWord(failed)}, err
 		}
 		if reason != "" {
 			outcome := runCheck(check, root, logs, index)
@@ -376,12 +421,24 @@ func (memory *treeMemory) run(check PlanCheck, root, logs string, index int) (Ve
 		return outcome, err
 	}
 	if pass != nil {
-		outcome.Result = ResultPass
-		if check.measureLanding {
-			outcome.Execution = executionReused
+		cached := classifyCheck(checkresult.Observation{
+			Check:  check.CheckID,
+			Commit: memory.tree,
+			Source: checkresult.CachedRecord,
+			Word:   pass.Result,
+		})
+		if cached.Outcome == checkresult.Pass {
+			outcome.Result = verdictWord(cached)
+			if check.measureLanding {
+				outcome.Execution = executionReused
+			}
+			annotateMemory(&outcome, pass, fail, true)
+			return outcome, nil
 		}
-		annotateMemory(&outcome, pass, fail, true)
-		return outcome, nil
+		if cached.Outcome == checkresult.Disabled || cached.Outcome == checkresult.Unavailable {
+			outcome.Result = verdictWord(cached)
+			return outcome, nil
+		}
 	}
 	outcome = runCheck(check, root, logs, index)
 	outcome.Fingerprint = key
@@ -394,7 +451,13 @@ func (memory *treeMemory) run(check PlanCheck, root, logs string, index int) (Ve
 		outcome.UnboundPath = path
 		return outcome, nil
 	}
-	if outcome.Result != ResultPass && outcome.Result != ResultFail {
+	fresh := classifyCheck(checkresult.Observation{
+		Check:  check.CheckID,
+		Commit: memory.tree,
+		Source: checkresult.ResultWord,
+		Word:   outcome.Result,
+	})
+	if fresh.Outcome != checkresult.Pass && fresh.Outcome != checkresult.Fail {
 		return outcome, nil
 	}
 	// A ref moving during execution means the command's inputs are no longer

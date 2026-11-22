@@ -29,6 +29,7 @@ import (
 	"encoding/json"
 	"os"
 
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
 )
@@ -224,19 +225,18 @@ func Shadow(planRecord record.Envelope, worktree, logDir string) (record.Envelop
 // the same reason it does in `run`: a check that was not run judged nothing, and a red
 // from a run with a hole in it is not the run's verdict.
 func shadowResult(checks []ShadowCheck) string {
-	result := ResultPass
+	classified := make([]checkresult.Result, 0, len(checks))
 	for _, check := range checks {
 		if !check.Ran {
 			continue
 		}
-		switch check.Result {
-		case ResultError:
-			return ResultError
-		case ResultFail:
-			result = ResultFail
-		}
+		classified = append(classified, classifyCheck(checkresult.Observation{
+			Check:  check.CheckID,
+			Source: checkresult.ResultWord,
+			Word:   check.Result,
+		}))
 	}
-	return result
+	return aggregateChecks(checkresult.ShadowOrder, classified).Detail
 }
 
 // encodeShadow writes the shadow record as the bytes the face emits.

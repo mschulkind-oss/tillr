@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/record"
 )
 
@@ -174,7 +175,13 @@ func checksFace(args []string) int {
 		}
 		if len(skipped) != 0 || options.measureLanding {
 			for _, id := range skipped {
-				payload.Checks = append(payload.Checks, notRunCheck(id, ResultSkipped, options.measureLanding))
+				skipRes := classifyCheck(checkresult.Observation{
+					Check:  id,
+					Commit: payload.TreeSHA,
+					Source: checkresult.ResultWord,
+					Word:   ResultSkipped,
+				})
+				payload.Checks = append(payload.Checks, notRunCheck(id, verdictWord(skipRes), options.measureLanding))
 			}
 			if options.measureLanding {
 				payload.WallMS = wallMS(started)

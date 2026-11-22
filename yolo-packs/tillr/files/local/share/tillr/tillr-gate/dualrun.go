@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/record"
 )
 
@@ -257,13 +258,13 @@ func observeGo(cfg DualRunConfig, dir, changePath string) (GateObservation, []st
 	observation := GateObservation{Gate: GateGo, Verdict: VerdictNone}
 	planPath := filepath.Join(dir, "plan.json")
 	verdictPath := filepath.Join(dir, "verdict.json")
-	code, out, err := execGate(cfg, "plan", "--registry", cfg.Registry, "--input", changePath,
+	planExit, out, err := execGate(cfg, "plan", "--registry", cfg.Registry, "--input", changePath,
 		"--root", cfg.Root, "--output", planPath)
 	if err != nil {
 		return observation, nil, err
 	}
-	observation.PlanExit = code
-	if code != 0 {
+	observation.PlanExit = planExit
+	if planExit != record.ExitOK {
 		observation.Note = firstLine(out)
 		return observation, nil, nil
 	}
@@ -288,12 +289,12 @@ func observeGo(cfg DualRunConfig, dir, changePath string) (GateObservation, []st
 		inProcess = append(inProcess, check.Kind)
 	}
 	sort.Strings(inProcess)
-	code, out, err = execGate(cfg, "run", "--input", planPath, "--worktree", cfg.Root,
+	runExit, out, err := execGate(cfg, "run", "--input", planPath, "--worktree", cfg.Root,
 		"--output", verdictPath, "--logs", filepath.Join(dir, "logs"))
 	if err != nil {
 		return observation, nil, err
 	}
-	observation.VerdictExit = code
+	observation.VerdictExit = runExit
 	observation.Verdict = verdictResult(verdictPath)
 	if observation.Verdict == VerdictNone {
 		observation.Note = firstLine(out)
@@ -312,11 +313,11 @@ func observeGo(cfg DualRunConfig, dir, changePath string) (GateObservation, []st
 // observation, a wait is a stall.
 func observePython(cfg DualRunConfig, candidate Candidate) (GateObservation, error) {
 	observation := GateObservation{Gate: GatePython, Verdict: VerdictNone}
-	code, out, err := execPython(cfg, "--explain", "--since", candidate.Base, "--no-wait")
+	planExit, out, err := execPython(cfg, "--explain", "--since", candidate.Base, "--no-wait")
 	if err != nil {
 		return observation, err
 	}
-	observation.PlanExit = code
+	observation.PlanExit = planExit
 	kinds, err := selectionKinds(out)
 	if err != nil {
 		observation.Note = firstLine(out)
@@ -324,19 +325,20 @@ func observePython(cfg DualRunConfig, candidate Candidate) (GateObservation, err
 	}
 	observation.PlanKinds = kinds
 	observation.PlanOrder = kinds
-	code, out, err = execPython(cfg, "--since", candidate.Base, "--no-wait")
+	runExit, out, err := execPython(cfg, "--since", candidate.Base, "--no-wait")
 	if err != nil {
 		return observation, err
 	}
-	observation.VerdictExit = code
-	observation.Verdict = pythonVerdict(code)
+	observation.VerdictExit = runExit
+	verdictWord, classified := classifyPythonExit(runExit)
+	observation.Verdict = verdictWord
 	if ran, err := planLineKinds(out); err == nil && len(ran) > 0 {
 		// The run's own plan line is what actually ran, which is the stronger claim: a
 		// plan face and a run face that disagreed with each other would be a finding
 		// about the Python gate, and the report keeps the run's answer.
 		observation.PlanKinds = ran
 	}
-	if observation.Verdict == VerdictError {
+	if classified.Outcome != checkresult.Pass && classified.Outcome != checkresult.Fail {
 		observation.Note = firstLine(out)
 	}
 	return observation, nil
@@ -345,7 +347,7 @@ func observePython(cfg DualRunConfig, candidate Candidate) (GateObservation, err
 // compare classifies one candidate's two observations.
 func compare(comparison Comparison) []Disagreement {
 	disagreements := make([]Disagreement, 0, 4)
-	if comparison.Go.PlanExit != 0 || comparison.Python.PlanExit != 0 {
+	if comparison.Go.PlanExit != record.ExitOK || comparison.Python.PlanExit != record.ExitOK {
 		disagreements = append(disagreements, Disagreement{
 			Kind:   DisagreePlanExit,
 			Go:     fmt.Sprintf("exit %d", comparison.Go.PlanExit),
@@ -380,7 +382,7 @@ func compare(comparison Comparison) []Disagreement {
 			Python: "runs it as its own code",
 		})
 	}
-	if comparison.Go.Verdict != comparison.Python.Verdict {
+	if verdictComparisonKey(GateGo, comparison.Go.Verdict) != verdictComparisonKey(GatePython, comparison.Python.Verdict) {
 		disagreements = append(disagreements, Disagreement{
 			Kind:   DisagreeVerdict,
 			Go:     fmt.Sprintf("%s (exit %d)", comparison.Go.Verdict, comparison.Go.VerdictExit),
@@ -488,18 +490,49 @@ func planLineKinds(out string) ([]string, error) {
 
 // pythonVerdict maps the Python gate's exit code onto the three verdict words. Its
 // documented contract is 0 verified, 1 a check failed, 2 nothing could be verified.
-func pythonVerdict(code int) string {
-	switch code {
-	case 0:
-		return VerdictPass
-	case 1:
-		return VerdictFail
+func classifyPythonExit(exitVal int) (string, checkresult.Result) {
+	res := classifyCheck(checkresult.Observation{
+		Check:    GatePython,
+		Source:   checkresult.JudgingProgram,
+		ExitCode: &exitVal,
+	})
+	switch res.Outcome {
+	case checkresult.Pass:
+		return VerdictPass, res
+	case checkresult.Fail:
+		return VerdictFail, res
 	default:
-		return VerdictError
+		return VerdictError, res
 	}
 }
 
-// verdictOf reads the result out of a verdict record, or `none` when the face wrote none.
+func pythonVerdict(exitVal int) string {
+	word, _ := classifyPythonExit(exitVal)
+	return word
+}
+
+type verdictKey struct {
+	settlement string
+	outcome    checkresult.Outcome
+	detail     string
+}
+
+func verdictComparisonKey(gate, word string) verdictKey {
+	if word == "" || word == VerdictNone {
+		return verdictKey{settlement: VerdictNone}
+	}
+	if word == VerdictPassInherited {
+		return verdictKey{settlement: VerdictPassInherited}
+	}
+	res := classifyCheck(checkresult.Observation{
+		Check:  gate,
+		Source: checkresult.ResultWord,
+		Word:   word,
+	})
+	return verdictKey{outcome: res.Outcome, detail: res.Detail}
+}
+
+// verdictResult reads the result out of a verdict record, or `none` when the face wrote none.
 func verdictResult(path string) string {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -516,7 +549,16 @@ func verdictResult(path string) string {
 	if payload.Result == "" {
 		return VerdictNone
 	}
-	return payload.Result
+	if payload.Result == VerdictPassInherited {
+		return VerdictPassInherited
+	}
+	res := classifyCheck(checkresult.Observation{
+		Check:  GateGo,
+		Commit: payload.TreeSHA,
+		Source: checkresult.ResultWord,
+		Word:   payload.Result,
+	})
+	return verdictWord(res)
 }
 
 // kindsOf is the sorted, de-duplicated kind set of a plan's checks.

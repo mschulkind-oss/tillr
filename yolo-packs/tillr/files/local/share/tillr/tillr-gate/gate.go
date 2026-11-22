@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/record"
 )
 
@@ -29,10 +30,28 @@ type GateProgram struct {
 // VERIFIED, and 1 a verdict -- at least one check ran and failed. Its 2 is not a verdict
 // (the run refused to judge, or a check reached no verdict), and 2 is named in
 // `gateResult`'s default rather than here, because nothing about it is a verdict.
-const (
-	gateExitVerified = 0
-	gateExitFailed   = 1
-)
+func classifyGateExit(checkID string, exitVal int) checkresult.Result {
+	return classifyCheck(checkresult.Observation{
+		Check:    checkID,
+		Source:   checkresult.JudgingProgram,
+		ExitCode: &exitVal,
+	})
+}
+
+func gateVerdictWord(res checkresult.Result) string {
+	switch {
+	case res.Outcome == checkresult.Pass:
+		return ResultPass
+	case res.Outcome == checkresult.Fail:
+		return ResultFail
+	case res.Outcome == checkresult.Unknown && res.Detail == checkresult.DetailStalled:
+		return ResultStalled
+	default:
+		// 2 is the gate's own "not a verdict" -- a refusal, or a check that reached no
+		// verdict -- and it lands here with every other code that is not 0, 1 or 6.
+		return ResultError
+	}
+}
 
 // gateResult maps the gate program's exit onto the verdict's result.
 //
@@ -40,19 +59,8 @@ const (
 // "the code is bad", and collapsing the two is how a red gate stops being believed. Every
 // other code except the reserved stall exit 6 is `error`: a program that exited 3
 // or was killed by a signal judged nothing.
-func gateResult(exit int) string {
-	switch exit {
-	case gateExitVerified:
-		return ResultPass
-	case gateExitFailed:
-		return ResultFail
-	case ExitStalled:
-		return ResultStalled
-	default:
-		// 2 is the gate's own "not a verdict" -- a refusal, or a check that reached no
-		// verdict -- and it lands here with every other code that is not 0 or 1.
-		return ResultError
-	}
+func gateResult(exitVal int) string {
+	return gateVerdictWord(classifyGateExit("gate", exitVal))
 }
 
 // RunGate runs the named gate program once in the worktree and returns the verdict record
@@ -174,24 +182,34 @@ func runGateProgram(program GateProgram, root, logDir string) gateRun {
 	out.check.SilentSamples = state.SilentSamples
 	out.check.WatchdogUnavailable = state.Unavailable
 	triage.flush()
-	// A process that exited normally carries its code; one killed by a signal answers -1.
+	// A process that exited normally carries its code; one killed by a signal did not exit.
 	// Stall observations are checked first, because our own SIGKILL ended it.
-	exit := cmd.ProcessState.ExitCode()
-	how := fmt.Sprintf("exit %d", exit)
+	exitVal := cmd.ProcessState.ExitCode()
+	exited := cmd.ProcessState.Exited()
+	how := fmt.Sprintf("exit %d", exitVal)
+	execClass := classifyCheck(checkresult.Observation{
+		Check:         checkID,
+		Source:        checkresult.CheckCommand,
+		ExitCode:      &exitVal,
+		ProcessError:  !exited,
+		SilentSamples: state.SilentSamples,
+	})
 	switch {
-	case state.SilentSamples >= WatchdogSilentSamples:
-		out.check.Result = ResultStalled
+	case execClass.Outcome == checkresult.Unknown && execClass.Detail == checkresult.DetailStalled:
+		out.check.Result = verdictWord(execClass)
 		how = stallNote(out.check)
 		out.failure = &exitError{code: ExitStalled, err: fmt.Errorf("%s; triage %s", how, triagePath)}
-	case exit < 0:
-		out.check.Result = ResultError
+	case !exited:
+		out.check.Result = verdictWord(execClass)
 		how = fmt.Sprintf("no exit: killed by a signal (%v)", waitErr)
 		out.failure = externalf("the gate program was killed by a signal rather than answering (%v); "+
 			"nothing was judged: %s", waitErr, triagePath)
 	default:
-		out.check.Result = gateResult(exit)
-		switch out.check.Result {
-		case ResultStalled:
+		judged := classifyGateExit(checkID, exitVal)
+		out.check.Result = gateVerdictWord(judged)
+		switch {
+		case judged.Outcome == checkresult.Pass:
+		case judged.Outcome == checkresult.Unknown && judged.Detail == checkresult.DetailStalled:
 			fast, err := readFastVerdict(fastPath)
 			if err != nil {
 				out.check.Result = ResultError
@@ -202,12 +220,12 @@ func runGateProgram(program GateProgram, root, logDir string) gateRun {
 				// The wrapper itself did not stall; the named check did.
 				out.check.Result = ResultUnavailable
 			}
-		case ResultFail:
+		case judged.Outcome == checkresult.Fail:
 			out.failure = &exitError{code: record.ExitNegative,
-				err: fmt.Errorf("the gate program failed (exit %d); its triage is %s", exit, triagePath)}
-		case ResultError:
+				err: fmt.Errorf("the gate program failed (exit %d); its triage is %s", exitVal, triagePath)}
+		default:
 			out.failure = externalf("the gate program exited %d, which is not a verdict: it refused "+
-				"to judge, so the tree was neither passed nor failed: %s", exit, triagePath)
+				"to judge, so the tree was neither passed nor failed: %s", exitVal, triagePath)
 		}
 	}
 	header := []string{gateHeader(program, root, how, elapsed, triage.seen, wholePath)}

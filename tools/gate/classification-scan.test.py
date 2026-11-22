@@ -2,6 +2,7 @@
 """Guard moved judgment sites against reintroducing raw result comparisons."""
 import ast
 from pathlib import Path
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -12,6 +13,152 @@ SITES = {
     "tools/gate/checks/go-build.py": ("main",),
 }
 UNMOVED_PYTHON = ("tools/fork-check.py",)
+GO_SITES = {
+    "tools/tillr-gate/checks.go": ("checksFace",),
+    "tools/tillr-gate/dualrun.go": ("pythonVerdict", "verdictResult", "compare"),
+    "tools/tillr-gate/gate.go": ("gateResult", "runGateProgram", "RunGate"),
+    "tools/tillr-gate/main.go": ("runFace", "writeRunSummary"),
+    "tools/tillr-gate/memory.go": ("read", "publish", "annotateMemory", "run"),
+    "tools/tillr-gate/run.go": ("runCheck", "RunWith", "runPlanChecks", "ApplyInheritedFailures", "budgetNotes"),
+    "tools/tillr-gate/shadow.go": ("Shadow", "shadowResult"),
+    "tools/tillr-gate/watchdog.go": ("readFastVerdict",),
+}
+UNMOVED_GO = (
+    "tools/tillr-drain/drain/events.go",
+    "tools/tillr-drain/drain/fixer_gate.go",
+    "tools/tillr-drain/drain/fixer_resolve.go",
+    "tools/tillr-drain/drain/fixer_wait.go",
+    "tools/tillr-drain/drain/fork_check_triage.go",
+    "tools/tillr-drain/drain/fork_drift.go",
+    "tools/tillr-drain/drain/gate_spans.go",
+    "tools/tillr-drain/drain/gate_stall.go",
+    "tools/tillr-drain/drain/gate_timing.go",
+    "tools/tillr-drain/drain/heavy.go",
+    "tools/tillr-drain/drain/heavy_attribution.go",
+    "tools/tillr-drain/drain/heavy_early.go",
+    "tools/tillr-drain/drain/heavy_go.go",
+    "tools/tillr-drain/drain/heavy_loop.go",
+    "tools/tillr-drain/drain/heavy_progress.go",
+    "tools/tillr-drain/drain/heavy_revert.go",
+    "tools/tillr-drain/drain/heavy_steps.go",
+    "tools/tillr-drain/drain/loop.go",
+    "tools/tillr-drain/drain/obstacle_hold.go",
+    "tools/tillr-drain/drain/obstacle_route.go",
+    "tools/tillr-drain/drain/pass.go",
+    "tools/tillr-drain/drain/plan.go",
+    "tools/tillr-drain/drain/remote_sync_landing.go",
+    "tools/tillr-drain/drain/returned.go",
+    "tools/tillr-drain/drain/steps.go",
+    "tools/tillr-drain/drain/trunk.go",
+    "tools/tillr-drain/drain/trunk_release.go",
+    "tools/tillr-drain/heavy/status.go",
+)
+
+GO_RESULT_WORDS = (
+    "pass", "PASS", "ok", "CACHED", "remembered", "fail", "FAIL", "error", "ERR", "ERROR",
+    "STALE", "stalled", "STALLED", "not-run", "over-budget", "unavailable", "skip",
+    "skipped: no changed path is read", "QUARANTINED", "dropped", "absent", "disabled",
+)
+GO_RESULT_CONSTS = (
+    "ResultPass", "ResultFail", "ResultError", "ResultStalled", "ResultUnavailable",
+    "ResultSkipped", "ResultOverBudget", "ResultDisabled", "VerdictPass", "VerdictFail",
+    "VerdictError", "ExitStalled", "gateExitVerified", "gateExitFailed",
+)
+GO_ALLOWED_SETTLEMENT_RHS = {
+    '""', '"none"', '"inherited"', '"pass-inherited"',
+    "ResultInherited", "ResultPassInherited", "VerdictPassInherited", "VerdictNone",
+}
+
+
+def strip_go_comments(source):
+    """Blank Go line and block comments while keeping line numbers intact."""
+    out = []
+    i, n = 0, len(source)
+    while i < n:
+        ch = source[i]
+        if ch == "/" and i + 1 < n and source[i + 1] == "/":
+            end = source.find("\n", i)
+            if end == -1:
+                break
+            i = end
+            continue
+        if ch == "/" and i + 1 < n and source[i + 1] == "*":
+            end = source.find("*/", i + 2)
+            segment = source[i:] if end == -1 else source[i:end + 2]
+            out.append("\n" * segment.count("\n"))
+            if end == -1:
+                break
+            i = end + 2
+            continue
+        if ch == '"':
+            j = i + 1
+            while j < n:
+                if source[j] == "\\":
+                    j += 2
+                    continue
+                if source[j] == '"':
+                    j += 1
+                    break
+                j += 1
+            out.append(source[i:j])
+            i = j
+            continue
+        if ch == "`":
+            end = source.find("`", i + 1)
+            if end == -1:
+                out.append(source[i:])
+                break
+            out.append(source[i:end + 1])
+            i = end + 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def raw_go_comparisons(source, *, full_runner_scan=True):
+    cleaned = strip_go_comments(source)
+    words_alt = "|".join(re.escape(f'"{w}"') for w in GO_RESULT_WORDS)
+    consts_alt = "|".join(GO_RESULT_CONSTS)
+    found = set()
+    in_value_switch = False
+    brace_depth = 0
+    switch_depth = None
+    for lineno, line in enumerate(cleaned.splitlines(), 1):
+        stripped = line.strip()
+        if re.match(r"^switch\s+[^{]+\{", stripped):
+            in_value_switch = True
+            switch_depth = brace_depth
+            if full_runner_scan and re.search(r"^switch\s+(?:[\w.]+\.(?:Result|RawWord|Verdict|ExitCode\(\))|(?:exit|exitCode|exitVal|runExit|rc))\s*\{", stripped):
+                found.add(lineno)
+        brace_depth += line.count("{") - line.count("}")
+        if in_value_switch and brace_depth <= switch_depth:
+            in_value_switch = False
+            switch_depth = None
+
+        if full_runner_scan:
+            if re.search(rf"(?:==|!=)\s*(?:{words_alt}|\b(?:{consts_alt})\b)|(?:{words_alt}|\b(?:{consts_alt})\b)\s*(?:==|!=)", line):
+                found.add(lineno)
+            if in_value_switch and re.search(rf"^\s*case\s+.*(?:{words_alt}|\b(?:{consts_alt})\b)", line):
+                found.add(lineno)
+            for match in re.finditer(r"([\w.()]+)\s*(==|!=|<=|>=|<|>)\s*(\"[^\"]*\"|[\w.()]+)", line):
+                lhs, _, rhs = match.groups()
+                for side, other in ((lhs, rhs), (rhs, lhs)):
+                    if side.endswith((".Result", ".Verdict")):
+                        if other not in GO_ALLOWED_SETTLEMENT_RHS:
+                            found.add(lineno)
+                    elif side.endswith((".RawWord", ".ExitCode()")) or side in {"exit", "exitCode", "exitVal", "runExit", "rc"}:
+                        found.add(lineno)
+        else:
+            span_words = ("CACHED", "FAIL", "ERR", "STALE", "stalled", "STALLED", "not-run",
+                          "over-budget", "unavailable", "skipped: no changed path is read",
+                          "QUARANTINED", "disabled")
+            span_alt = "|".join(re.escape(f'"{w}"') for w in span_words)
+            if re.search(rf"(?:==|!=)\s*(?:{span_alt}|\b(?:{consts_alt})\b)|(?:{span_alt}|\b(?:{consts_alt})\b)\s*(?:==|!=)", line):
+                found.add(lineno)
+            if re.search(rf"\.(?:Result|RawWord)\s*(?:==|!=)\s*(?:{words_alt})", line):
+                found.add(lineno)
+    return sorted(found)
 
 
 def raw_word_operand(node):
@@ -103,6 +250,33 @@ class ClassificationScanTest(unittest.TestCase):
         self.assertEqual((ROOT / "tools/tillr-loop/tillr-loop").read_bytes(),
                          (ROOT / "tools/tillr-drain/drain/tillr-loop.py").read_bytes())
         self.assertEqual(UNMOVED_PYTHON, ("tools/fork-check.py",))
+        self.assertEqual([p for p in UNMOVED_GO if p.startswith("tools/tillr-gate/")], [])
+        for path, names in GO_SITES.items():
+            source = (ROOT / path).read_text()
+            for fn in names:
+                self.assertRegex(source, rf"(?m)^func\s+(?:\([^)]+\)\s+)?{re.escape(fn)}\s*\(", path)
+        unmoved_go = set(UNMOVED_GO)
+        for root_dir in ("tools/tillr-gate", "tools/tillr-drain"):
+            for go_file in sorted((ROOT / root_dir).rglob("*.go")):
+                if go_file.name.endswith("_test.go"):
+                    continue
+                rel = go_file.relative_to(ROOT).as_posix()
+                if rel in unmoved_go:
+                    continue
+                self.assertEqual(
+                    raw_go_comparisons(go_file.read_text(), full_runner_scan=rel.startswith("tools/tillr-gate/")),
+                    [],
+                    rel,
+                )
+
+    def test_go_scan_positive_control(self):
+        self.assertEqual(raw_go_comparisons('package p\nfunc f(c Check) bool {\n\treturn c.Result == ResultFail\n}\n'), [3])
+        self.assertEqual(raw_go_comparisons('package p\nfunc f(w string) bool {\n\treturn w == "pass"\n}\n'), [3])
+        self.assertEqual(raw_go_comparisons('package p\nfunc f(exit int) string {\n\tswitch exit {\n\tcase 0:\n\t\treturn "pass"\n\t}\n}\n'), [3])
+        self.assertEqual(
+            raw_go_comparisons('package p\nfunc f(c Check, r Res) bool {\n\tif c.Result == "" || c.Result == ResultInherited || c.Result == ResultPassInherited {\n\t\treturn false\n\t}\n\treturn r.Outcome == Pass && r.Detail == DetailStalled\n}\n'),
+            [],
+        )
 
     def test_scan_positive_control(self):
         source = ast.parse('def judge(code):\n    return "pass" if code == 0 else "fail"\n')

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/mschulkind-oss/tillr/checkresult"
 )
 
 // These are the single definitions of the sampling cadence and stall threshold.
@@ -213,7 +215,16 @@ func readFastVerdict(path string) (VerdictPayload, error) {
 		return VerdictPayload{}, err
 	}
 	for _, check := range record.Payload.Checks {
-		if check.Result == ResultStalled && check.CheckID != "" && check.SilentSamples == WatchdogSilentSamples {
+		if check.CheckID == "" || check.SilentSamples != WatchdogSilentSamples {
+			continue
+		}
+		res := classifyCheck(checkresult.Observation{
+			Check:  check.CheckID,
+			Commit: record.Payload.TreeSHA,
+			Source: checkresult.ResultWord,
+			Word:   check.Result,
+		})
+		if res.Outcome == checkresult.Unknown && res.Detail == checkresult.DetailStalled {
 			return record.Payload, nil
 		}
 	}
