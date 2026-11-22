@@ -271,12 +271,12 @@ func TestOneAppliedPassSharesItsGenerationAcrossRequests(t *testing.T) {
 	steps := &triggerSteps{started: make(chan string, 2), requests: make(chan run.Request, 2), release: make(chan struct{}), store: f.storePath}
 	l.cfg.Steps = steps
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	defer func() {
-		cancel()
+		// Cancellation lets sendCompletion discard notifications. Drain the
+		// workers while their context is still live.
 		close(steps.release)
-		for len(l.active) > 0 {
-			l.takeCompletion(<-l.completions, &LoopResult{})
-		}
+		drainOwned(t, l, &LoopResult{})
 	}()
 	var result LoopResult
 	if stop, err := l.pass(ctx, &result); err != nil || stop != "" {
