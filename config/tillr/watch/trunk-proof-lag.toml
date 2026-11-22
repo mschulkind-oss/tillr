@@ -1,6 +1,8 @@
 # On 2026-11-21 the trunk went about an hour without proof three times
 # while the heavy runner was stuck in a deadlocked test. Landings and reverts
-# are recorded as land.landing and drain.revert; this rule reads Git refs, not events.
+# are recorded as land.landing and drain.revert; lag_behind reads Git refs so
+# normal ~15m proofs with steady landings stay quiet until the oldest unproved
+# commit reaches 30m, while trunk-proof-stalled catches a hung proof in 10m.
 [[rule]]
 id = "trunk-proof-lag"
 scope = "core"
@@ -15,12 +17,37 @@ group_by = "global"
 pattern = "lag_behind"
 leader = "refs/heads/main"
 follower = "refs/tillr/green"
-threshold_commits = 3
+threshold_duration = "30m"
 
 [rule.guidance]
-summary = "The trunk is {{count}} commits ahead of the last green proof."
-check = ["Look at the heavy runner's current proof run and the last test it reported."]
-do = ["Check whether the heavy runner is still making progress or is stuck on a test."]
+summary = "The trunk has been unproved for {{elapsed}} ({{count}} commits ahead of the last green proof, {{follower_short}}..{{leader_short}})."
+check = ["Look at refs/heads/main, refs/tillr/green, and the heavy runner's latest proof run and logs."]
+do = ["Check whether the heavy runner is stalled, failing, or stopped, and clear the blocker so the green proof catches up."]
+
+[rule.delivery]
+receiver = "foreground"
+
+[[rule]]
+id = "trunk-proof-stalled"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.heavy-progress", "drain.heavy-fault", "drain.loop-ended", "drain.build-started"]
+
+[rule.when]
+group_by = "global"
+pattern = "duration_without_event"
+after = 'event.kind == "drain.heavy-progress" and event.phase in ["started", "progress"]'
+match = 'event.kind == "drain.heavy-progress" and event.phase == "ended"'
+clear_when = 'event.kind == "drain.heavy-fault" or event.kind == "drain.loop-ended" or (event.kind == "drain.build-started" and event.role == "drain")'
+threshold_duration = "10m"
+window = "24h"
+
+[rule.guidance]
+summary = "The running trunk proof for {{event.tip_sha}} has reported no progress for {{elapsed}}."
+check = ["Inspect the active heavy runner, its proof directory, and any running check subprocesses for a hung command."]
+do = ["Diagnose the hung check or proof step so the heavy runner resumes making progress or ends cleanly."]
 
 [rule.delivery]
 receiver = "foreground"

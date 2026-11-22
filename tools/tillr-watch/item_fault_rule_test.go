@@ -215,9 +215,18 @@ func TestTrunkProofLagRule(t *testing.T) {
 	head := git("base", "commit-tree", tree)
 	git("", "update-ref", "refs/heads/main", head)
 	git("", "update-ref", "refs/tillr/green", head)
-	advance := func() {
+	advanceAt := func(at time.Time) {
 		t.Helper()
-		head = git("advance", "commit-tree", tree, "-p", head)
+		stamp := at.UTC().Format("2006-01-02T15:04:05+0000")
+		commitEnv := append(slices.Clone(env), "GIT_AUTHOR_DATE="+stamp, "GIT_COMMITTER_DATE="+stamp)
+		cmd := exec.CommandContext(ctx, "git", "-C", root, "--git-dir="+filepath.Join(root, ".git"), "commit-tree", tree, "-p", head)
+		cmd.Env = commitEnv
+		cmd.Stdin = strings.NewReader("advance")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("fixture git commit-tree: %v: %s", err, out)
+		}
+		head = strings.TrimSpace(string(out))
 		git("", "update-ref", "refs/heads/main", head)
 	}
 
@@ -243,22 +252,33 @@ func TestTrunkProofLagRule(t *testing.T) {
 		return notices
 	}
 
-	advance()
-	advance()
-	if notices := pending(); len(notices) != 0 {
-		t.Fatalf("two commits ahead opened notices: %+v", notices)
+	// Six commits landing ~3m apart over 18m (< 30m) open no notice regardless of commit count.
+	t0 := now
+	for i := 0; i < 6; i++ {
+		advanceAt(t0.Add(time.Duration(i*3) * time.Minute))
 	}
-	advance()
+	now = t0.Add(29 * time.Minute)
+	if notices := pending(); len(notices) != 0 {
+		t.Fatalf("six commits ahead for 29m (< 30m) opened notices: %+v", notices)
+	}
+
+	// At 30m since the oldest unproved commit, one foreground notice opens and stays stable.
+	now = t0.Add(30 * time.Minute)
 	first := pending()
 	if len(first) != 1 {
-		t.Fatalf("want one foreground notice at three commits ahead, got %+v", first)
+		t.Fatalf("want one foreground notice at 30m unproved age, got %+v", first)
 	}
 	if advice := strings.Join(first[0].Bundle.Guidance.Do, " "); !strings.Contains(strings.ToLower(advice), "heavy runner") {
 		t.Fatalf("notice advice does not mention the heavy runner: %+v", first[0].Bundle.Guidance)
 	}
-	advance()
+	advanceAt(now)
+	now = t0.Add(35 * time.Minute)
 	if notices := pending(); len(notices) != 1 || notices[0].AlertID != first[0].AlertID {
 		t.Fatalf("repeat evaluation must retain the single alert ID: first %+v, now %+v", first, notices)
+	}
+	git("", "update-ref", "refs/tillr/green", head)
+	if notices := pending(); len(notices) != 0 {
+		t.Fatalf("catching up refs/tillr/green should resolve trunk-proof-lag, got %+v", notices)
 	}
 }
 

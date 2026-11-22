@@ -207,10 +207,15 @@ func (r HeavyRunner) run(ctx context.Context, requested string) (out heavyAttemp
 		if e != nil {
 			return out, e
 		}
+		if err = ctx.Err(); err != nil {
+			return out, err
+		}
 		started := r.Now()
-		run, e = r.judgeTip(context.WithValue(ctx, heavyProgressKey{}, progress), run)
+		attemptCtx, storeProgress := r.startStoreProgress(ctx, tip)
+		run, e = r.judgeTip(context.WithValue(attemptCtx, heavyProgressKey{}, progress), run)
 		run.ReusedChecks = progress.reused
 		if ctx.Err() != nil {
+			storeProgress.finish("cancelled")
 			return out, ctx.Err()
 		}
 		if e == nil && run.Result == "green" {
@@ -240,6 +245,7 @@ func (r HeavyRunner) run(ctx context.Context, requested string) (out heavyAttemp
 			run.Detail = e.Error()
 		}
 		if pe := publishHeavy(dir, run); pe != nil {
+			storeProgress.finish(heavyEndedOutcome(ctx, run.Result, pe))
 			return out, pe
 		}
 		out.Runs = append(out.Runs, run)
@@ -249,6 +255,7 @@ func (r HeavyRunner) run(ctx context.Context, requested string) (out heavyAttemp
 		if r.Report != nil {
 			r.Report(run)
 		}
+		storeProgress.finish(heavyEndedOutcome(ctx, run.Result, e))
 		if e != nil {
 			return out, e
 		}
@@ -370,6 +377,8 @@ func (r HeavyRunner) unlockProofWorktree(ctx context.Context, work string) error
 func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, error) {
 	early := r.startEarly(ctx, run)
 	err := r.inTree(ctx, run.TipSHA, func(dir string) error {
+		storeProgress, _ := ctx.Value(heavyStoreProgressKey{}).(*heavyStoreProgress)
+		wholeBefore := storeProgress.wholeStepCount()
 		checks, err := r.Judge(context.WithValue(ctx, heavyCheckEndedKey{}, early.offer), dir, "")
 		if err != nil {
 			return err
@@ -378,6 +387,17 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 			// An empty declaration proves nothing: calling it green would move the pointer over
 			// every landing it never judged.
 			return Externalf("heavy proof judged no checks: the gate program is empty, so there is nothing to prove; %s stays", GreenRef)
+		}
+		if storeProgress.wholeStepCount() == wholeBefore {
+			var reused []string
+			if p, _ := ctx.Value(heavyProgressKey{}).(*heavyProgress); p != nil {
+				reused = p.reused
+			}
+			for _, check := range checks {
+				if !slices.Contains(reused, check.CheckID) {
+					storeProgress.step(ctx, check.CheckID, check.Result, true)
+				}
+			}
 		}
 		run.Checks = checks
 		run.Result = "green"
@@ -395,6 +415,7 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 				if len(retry) != 1 || retry[0].CheckID != check.CheckID {
 					return Externalf("stall retry for %s gave no verdict", check.CheckID)
 				}
+				heavyStoreStepProgress(ctx, retry[0].CheckID, retry[0].Result)
 				if retry[0].Result == "stalled" {
 					check.Stalls = 2
 					check.Result = "fail"
@@ -774,6 +795,15 @@ func (r HeavyRunner) oneLogged(ctx context.Context, sha, id string, removed ...s
 		}
 		return nil
 	})
+	if err == nil {
+		outcome := "pass"
+		if red {
+			outcome = "fail"
+		}
+		heavyStoreStepProgress(ctx, id, outcome)
+	} else if ctx.Err() == nil && !cleanupLost(err) {
+		heavyStoreStepProgress(ctx, id, "error")
+	}
 	return red, logPath, err
 }
 func (r HeavyRunner) progressf(format string, args ...any) {

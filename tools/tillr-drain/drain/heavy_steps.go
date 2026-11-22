@@ -151,6 +151,7 @@ func (s *ProcessSteps) JudgeHeavy(ctx context.Context, dir, only string) ([]Heav
 				return nil, err
 			}
 			heavyProgressReport(ctx, "loop: heavy %s %s in %s\n", id, checks[0].Result, (time.Duration(checks[0].DurationMS) * time.Millisecond).Round(time.Second))
+			heavyStoreWholeStepProgress(ctx, checks[0].CheckID, checks[0].Result)
 			heavyCheckEnded(ctx, checks[0])
 			result = append(result, checks...)
 		}
@@ -258,11 +259,20 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 	for i := range argv {
 		argv[i] = strings.ReplaceAll(argv[i], "{only}", selector)
 	}
+	var (
+		legacyProgressPath string
+		legacyTipSHA       string
+		legacyNonce        string
+		adaptedLegacy      bool
+	)
 	if only == "" {
 		var err error
-		argv, err = heavyLegacyArgv(ctx, argv, s.LaneRoot)
+		argv, legacyProgressPath, legacyTipSHA, adaptedLegacy, err = heavyLegacyArgv(ctx, argv, s.LaneRoot)
 		if err != nil {
 			return nil, err
+		}
+		if adaptedLegacy {
+			legacyNonce = nextHeavyLegacyNonce()
 		}
 	}
 	spans := filepath.Join(s.LaneRoot, ".rolling", "heavy.spans.json")
@@ -277,9 +287,13 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 	if err := os.Remove(spans); err != nil && !os.IsNotExist(err) {
 		return nil, err
 	}
+	extraEnv := []string{"TILLR_GATE_SPANS_OUT=" + spans}
+	if legacyNonce != "" {
+		extraEnv = append(extraEnv, "TILLR_HEAVY_LEGACY_NONCE="+legacyNonce)
+	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
-	cmd.Env = s.checkProcessEnv(os.Environ(), "TILLR_GATE_SPANS_OUT="+spans)
+	cmd.Env = s.checkProcessEnv(os.Environ(), extraEnv...)
 	var stderr stderrTail
 	cmd.Stderr = &stderr
 	// The program's whole output goes to a file under the proof's log directory for
@@ -294,7 +308,9 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 			logPath = ""
 		}
 	}
+	stopWatch := startHeavyLegacyProgressWatcher(ctx, legacyProgressPath, legacyTipSHA, legacyNonce)
 	runErr := runOwnedHeavy(ctx, cmd, "legacy")
+	stopWatch()
 	if cleanupLost(runErr) {
 		return nil, runErr
 	}
@@ -408,6 +424,11 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 	}
 	if code != 0 && code != 1 {
 		result = append(result, HeavyCheck{CheckID: "legacy-runner", Result: "error", Detail: fmt.Sprintf("exit %d: %s", code, stderr.String()), LogPath: legacyKeptLog(logPath, "error")})
+	}
+	if only == "" && !adaptedLegacy {
+		for _, check := range result {
+			heavyStoreWholeStepProgress(ctx, check.CheckID, check.Result)
+		}
 	}
 	return result, nil
 }

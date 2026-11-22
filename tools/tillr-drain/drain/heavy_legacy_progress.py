@@ -22,7 +22,14 @@ spec.loader.exec_module(gate)
 original = gate.execute_check
 identity = gate.declaration_id
 status = gate.check_status
-state = {"tip_sha": tip, "checks": {}, "reused": [], "failures": {}}
+state = {
+    "tip_sha": tip,
+    "run_nonce": os.environ.get("TILLR_HEAVY_LEGACY_NONCE", ""),
+    "checks": {},
+    "reused": [],
+    "failures": {},
+    "completed": [],
+}
 
 
 def changed_between(old, new):
@@ -219,6 +226,18 @@ def go_failure_logs(module, lines, output, sharded):
     return {"cases": cases, "log": keep_output(output) if unscoped or not cases else ""}
 
 
+def legacy_outcome(verdict):
+    if verdict in ("PASS", "ok", "CACHED", "pass"):
+        return "pass"
+    if verdict in ("skip", "QUARANTINED", "unavailable"):
+        return "unavailable"
+    if verdict in ("FAIL", "fail"):
+        return "fail"
+    if verdict in ("STALLED", "stalled"):
+        return "stalled"
+    return "error"
+
+
 def observe(check, root, diff_base, *args, **kwargs):
     key = identity(check.kind, check.label, root)
     with lock:
@@ -236,18 +255,17 @@ def observe(check, root, diff_base, *args, **kwargs):
             return
     failure = execute_with_events(check, root, diff_base, *args, **kwargs)
     verdict = status(check)
-    if verdict == "FAIL":
-        if failure is None:
-            failure = {"log": keep_output(check.output)}
-        with lock:
+    if verdict == "FAIL" and failure is None:
+        failure = {"log": keep_output(check.output)}
+    with lock:
+        if verdict == "FAIL":
             state["failures"][key] = failure
-            publish()
-    if verdict in ("PASS", "ok", "CACHED"):
-        with lock:
+        if verdict in ("PASS", "ok", "CACHED"):
             state["checks"][key] = {"seconds": check.seconds, "proved_at": check.ended,
                                     "watches": list(getattr(check, "watches", ()) or ()),
                                     "reusable": bool(getattr(check, "reusable", True))}
-            publish()
+        state["completed"].append({"check_id": key, "outcome": legacy_outcome(verdict)})
+        publish()
 
 
 with lock:

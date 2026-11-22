@@ -4,26 +4,93 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
+	"time"
 )
 
 //go:embed heavy_legacy_progress.py
 var heavyLegacyProgressProgram string
 
+var heavyLegacyNonceSeq atomic.Uint64
+
 // Keep the legacy program's own planning, scheduling, skip and verdict behavior.
 // Its Python adapter observes completed checks, not a guessed registry subset.
-func heavyLegacyArgv(ctx context.Context, argv []string, laneRoot string) ([]string, error) {
+func heavyLegacyArgv(ctx context.Context, argv []string, laneRoot string) ([]string, string, string, bool, error) {
 	p, _ := ctx.Value(heavyProgressKey{}).(*heavyProgress)
 	if p == nil || len(argv) < 2 || !strings.HasPrefix(filepath.Base(argv[0]), "python") || filepath.Base(argv[1]) != "fork-check.py" {
-		return argv, nil
+		return argv, "", "", false, nil
 	}
 	logs, err := filepath.Abs(filepath.Join(laneRoot, ".rolling", "logs", p.TipSHA))
 	if err != nil {
-		return nil, err
+		return nil, "", "", false, err
 	}
-	return append([]string{argv[0], "-c", heavyLegacyProgressProgram, argv[1], filepath.Join(p.dir, "heavy-legacy-progress.json"), p.TipSHA, filepath.Join(p.dir, "heavy-progress.json"), logs}, argv[2:]...), nil
+	progressPath := filepath.Join(p.dir, "heavy-legacy-progress.json")
+	return append([]string{argv[0], "-c", heavyLegacyProgressProgram, argv[1], progressPath, p.TipSHA, filepath.Join(p.dir, "heavy-progress.json"), logs}, argv[2:]...), progressPath, p.TipSHA, true, nil
+}
+
+func nextHeavyLegacyNonce() string {
+	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), heavyLegacyNonceSeq.Add(1))
+}
+
+type legacyCompletedStep struct {
+	CheckID string `json:"check_id"`
+	Outcome string `json:"outcome"`
+}
+
+func startHeavyLegacyProgressWatcher(ctx context.Context, progressPath, tipSHA, nonce string) func() {
+	if progressPath == "" || !hasHeavyStoreProgress(ctx) {
+		return func() {}
+	}
+	seen := 0
+	pollOnce := func() {
+		raw, err := os.ReadFile(progressPath)
+		if err != nil {
+			return
+		}
+		var saved struct {
+			TipSHA    string                `json:"tip_sha"`
+			RunNonce  string                `json:"run_nonce"`
+			Completed []legacyCompletedStep `json:"completed"`
+		}
+		if err := json.Unmarshal(raw, &saved); err != nil {
+			return
+		}
+		if saved.TipSHA != tipSHA || saved.RunNonce != nonce {
+			return
+		}
+		for ; seen < len(saved.Completed); seen++ {
+			item := saved.Completed[seen]
+			heavyStoreWholeStepProgress(ctx, item.CheckID, item.Outcome)
+		}
+	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(25 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				pollOnce()
+			}
+		}
+	}()
+	return func() {
+		close(stop)
+		<-done
+		if ctx.Err() == nil {
+			pollOnce()
+		}
+	}
 }
 
 type legacyGoCase struct {
