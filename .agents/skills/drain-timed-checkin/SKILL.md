@@ -119,7 +119,7 @@ TILLR_BUILD_UNPROVED=HEAD just tillr-build         # only when the loop is down
   in the rulings file with the evidence.
 - **The watcher** is started as a background task of the operating session, so
   that its exit wakes the session:
-  `tillr watch wait --store .tillr/state.db --rules config/tillr/watch --owner operator-session`.
+  `tillr watch wait --store .tillr/state.db --root /workspace --rules config/tillr/watch --owner operator-session`.
   Do not pass `--follow`: that form never exits and so never wakes anyone.
   When it exits with an alert, act on the alert and start it again. Restart it
   whenever a new rule file lands in `config/tillr/watch`, so it loads the file.
