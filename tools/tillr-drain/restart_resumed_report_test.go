@@ -162,18 +162,46 @@ func (s *rollScenario) assertAcrossReplacements(t *testing.T, id string, resumed
 	}
 }
 
+const restartedInPlaceMarker = "loop: restarted in place onto build"
+
 func (s *rollScenario) waitForSuccessorPass(t *testing.T) {
 	t.Helper()
+	want := max(1, s.wantRestarts)
 	s.waitFor(t, "successor to complete a planning pass", func() bool {
-		out := s.output(t)
-		start := strings.LastIndex(out, "loop: restarted in place onto build")
-		if start < 0 {
-			return false
-		}
-		// The second planning transaction can start only after the first pass
-		// has had the opportunity to dispatch any duplicate.
-		return completedPlanningTransactions(out[start:]) >= 2
+		return successorPassCompleted(s.output(t), want)
 	})
+}
+
+func successorPassCompleted(out string, wantRestarts int) bool {
+	if strings.Count(out, restartedInPlaceMarker) < wantRestarts {
+		return false
+	}
+	start := strings.LastIndex(out, restartedInPlaceMarker)
+	if start < 0 {
+		return false
+	}
+	// The second planning transaction can start only after the first pass
+	// has had the opportunity to dispatch any duplicate.
+	return completedPlanningTransactions(out[start:]) >= 2
+}
+
+func TestSuccessorPassCompletedRequiresNewRestart(t *testing.T) {
+	const planEnd = `tillr-sqlite operation="(*Loop).passPlansMode.func1" phase=end`
+	first := restartedInPlaceMarker + " build-1\n" + planEnd + "\n" + planEnd + "\n"
+	if !successorPassCompleted(first, 1) {
+		t.Fatal("want first restart with two planning transactions to satisfy wantRestarts=1")
+	}
+	if successorPassCompleted(first, 2) {
+		t.Fatal("stale first restart must not satisfy wantRestarts=2 before the second restart prints")
+	}
+	secondPartial := first + restartedInPlaceMarker + " build-2\n" + planEnd + "\n"
+	if successorPassCompleted(secondPartial, 2) {
+		t.Fatal("second restart with only one planning transaction must not satisfy wantRestarts=2")
+	}
+	secondDone := secondPartial + planEnd + "\n"
+	if !successorPassCompleted(secondDone, 2) {
+		t.Fatal("want second restart with two planning transactions to satisfy wantRestarts=2")
+	}
 }
 
 func completedPlanningTransactions(out string) int {
