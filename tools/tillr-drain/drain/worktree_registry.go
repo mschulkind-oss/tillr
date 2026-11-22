@@ -2,8 +2,10 @@ package drain
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mschulkind-oss/tillr-land/land"
 )
@@ -53,4 +55,76 @@ func acquireRegistryLock(ctx context.Context, path string) (func(), error) {
 		return nil, Externalf("waiting for worktree registry coordination: %v", err)
 	}
 	return lock.Release, nil
+}
+
+// unlockRegisteredWorktree runs under the worktree registry lock. Git can still
+// hold a locked registration (for example an `initializing` lock left when a
+// previous `git worktree add` was killed mid-checkout) even when the checkout's
+// directory or `.git` file is gone, so find it by the administrative directory's
+// backpointer rather than through the checkout.
+func unlockRegisteredWorktree(ctx context.Context, repo, common, work string) (string, time.Time, bool, error) {
+	if common == "" {
+		resolved, err := boundaryGit(ctx, repo, "rev-parse", "--path-format=absolute", "--git-common-dir")
+		if err != nil {
+			return "", time.Time{}, false, err
+		}
+		common = strings.TrimSpace(resolved)
+	}
+	absWork, err := filepath.Abs(work)
+	if err != nil {
+		return "", time.Time{}, false, err
+	}
+	registry := filepath.Join(common, "worktrees")
+	entries, err := os.ReadDir(registry)
+	if os.IsNotExist(err) {
+		return "", time.Time{}, false, nil
+	}
+	if err != nil {
+		return "", time.Time{}, false, err
+	}
+	target := filepath.Join(absWork, ".git")
+	canonical := target
+	if parent, err := filepath.EvalSymlinks(filepath.Dir(absWork)); err == nil {
+		canonical = filepath.Join(parent, filepath.Base(absWork), ".git")
+	} else if !os.IsNotExist(err) {
+		return "", time.Time{}, false, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		admin := filepath.Join(registry, entry.Name())
+		lock := filepath.Join(admin, "locked")
+		info, statErr := os.Stat(lock)
+		if os.IsNotExist(statErr) {
+			continue
+		}
+		backpointer, readErr := os.ReadFile(filepath.Join(admin, "gitdir"))
+		if os.IsNotExist(readErr) {
+			continue // An incomplete registration without a path cannot name this checkout.
+		}
+		if readErr != nil {
+			return "", time.Time{}, false, readErr
+		}
+		gitfile := strings.TrimSuffix(string(backpointer), "\n")
+		if !filepath.IsAbs(gitfile) {
+			gitfile = filepath.Join(admin, gitfile)
+		}
+		path := filepath.Clean(gitfile)
+		if path != canonical && path != target {
+			continue
+		}
+		if statErr != nil {
+			return "", time.Time{}, false, statErr
+		}
+		reason, err := os.ReadFile(lock)
+		if err != nil {
+			return "", time.Time{}, false, err
+		}
+		if _, err := heavyGitOutput(ctx, repo, "worktree", "unlock", filepath.Dir(path)); err != nil {
+			return "", time.Time{}, false, err
+		}
+		return strings.TrimSpace(string(reason)), info.ModTime(), true, nil
+	}
+	return "", time.Time{}, false, nil
 }

@@ -320,58 +320,12 @@ func (r HeavyRunner) inTree(ctx context.Context, tip string, fn func(string) err
 // registration when the checkout's .git file is gone, so find it by the
 // administrative directory's backpointer rather than through the checkout.
 func (r HeavyRunner) unlockProofWorktree(ctx context.Context, work string) error {
-	registry := filepath.Join(r.Lock.common, "worktrees")
-	entries, err := os.ReadDir(registry)
-	if os.IsNotExist(err) {
-		return nil
-	}
-	if err != nil {
+	reason, lockedAt, unlocked, err := unlockRegisteredWorktree(ctx, r.Root, r.Lock.common, work)
+	if err != nil || !unlocked {
 		return err
 	}
-	parent, err := filepath.EvalSymlinks(filepath.Dir(work))
-	if err != nil {
-		return err
-	}
-	target := filepath.Join(work, ".git")
-	canonical := filepath.Join(parent, filepath.Base(work), ".git")
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		admin := filepath.Join(registry, entry.Name())
-		lock := filepath.Join(admin, "locked")
-		info, statErr := os.Stat(lock)
-		if os.IsNotExist(statErr) {
-			continue
-		}
-		backpointer, readErr := os.ReadFile(filepath.Join(admin, "gitdir"))
-		if os.IsNotExist(readErr) {
-			continue // An incomplete registration without a path cannot name this checkout.
-		}
-		if readErr != nil {
-			return readErr
-		}
-		gitfile := strings.TrimSuffix(string(backpointer), "\n")
-		if !filepath.IsAbs(gitfile) {
-			gitfile = filepath.Join(admin, gitfile)
-		}
-		if path := filepath.Clean(gitfile); path != canonical && path != target {
-			continue
-		}
-		if statErr != nil {
-			return statErr
-		}
-		reason, err := os.ReadFile(lock)
-		if err != nil {
-			return err
-		}
-		if _, err := heavyGitOutput(ctx, r.Root, "worktree", "unlock", work); err != nil {
-			return err
-		}
-		r.progressf("loop: heavy unlocked proof worktree %q (reason %q, lock mtime %s)\n",
-			work, strings.TrimSpace(string(reason)), info.ModTime().UTC().Format(time.RFC3339Nano))
-		return nil
-	}
+	r.progressf("loop: heavy unlocked proof worktree %q (reason %q, lock mtime %s)\n",
+		work, reason, lockedAt.UTC().Format(time.RFC3339Nano))
 	return nil
 }
 
