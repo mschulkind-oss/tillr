@@ -309,9 +309,10 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 	env = append(env, "TILLR_FORK_DRIFT=1", "TILLR_ORDINARY_GATE_TIMING="+timing)
 	code, outStr, span, err := s.programWithEnv(ctx, "gate", candidate.Worktree, program, candidate, env)
 	// Consume this invocation's files now, even if it could not judge or its
-	// judgment is deferred. The next attempt clears the producer handoffs.
+	// judgment is deferred. A canceled attempt can still have an exit and timing.
+	// The next attempt clears the producer handoffs.
 	if measureTiming {
-		s.recordGateTiming(candidate, span)
+		s.recordGateTiming(context.WithoutCancel(ctx), candidate, span)
 	}
 	if err != nil {
 		return GateOutcome{}, err

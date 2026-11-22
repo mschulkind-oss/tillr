@@ -7,7 +7,65 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"github.com/mschulkind-oss/tillr/event"
+	"github.com/mschulkind-oss/tillr/store"
 )
+
+const fastGateTimingTestKind = "drain.fast-gate-timing"
+
+type observedTimingEvent struct {
+	ItemID         string `json:"item_id"`
+	RunID          string `json:"run_id"`
+	WallMS         int64  `json:"wall_ms"`
+	ExitCode       int    `json:"exit_code"`
+	SlowestCheck   string `json:"slowest_check"`
+	SlowestCheckMS *int64 `json:"slowest_check_ms"`
+	Median20WallMS *int64 `json:"median20_wall_ms"`
+}
+
+func gateTimingStore(t *testing.T, root string) string {
+	t.Helper()
+	path := filepath.Join(root, "timing.db")
+	s, err := store.Open(context.Background(), path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func readTimingEvents(t *testing.T, path string) []observedTimingEvent {
+	t.Helper()
+	s := openFixture(t, path)
+	defer s.Close()
+	var events []observedTimingEvent
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		rows, err := r.Query(`SELECT payload FROM events WHERE kind = ? ORDER BY seq`, fastGateTimingTestKind)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var raw []byte
+			if err := rows.Scan(&raw); err != nil {
+				return err
+			}
+			var e observedTimingEvent
+			if err := json.Unmarshal(raw, &e); err != nil {
+				return err
+			}
+			events = append(events, e)
+		}
+		return rows.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return events
+}
 
 func TestGateTimingKeepsFreshAttemptsBeforeJudgment(t *testing.T) {
 	root := t.TempDir()
@@ -16,11 +74,11 @@ func TestGateTimingKeepsFreshAttemptsBeforeJudgment(t *testing.T) {
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	s := ProcessSteps{Root: root, GateProgram: executable(t, `
+	s := ProcessSteps{Root: root, Store: gateTimingStore(t, root), GateProgram: executable(t, `
 set -eu
 sleep 0.05
 cat > "$TILLR_FAST_VERDICT_OUT" <<'EOF'
-{"record_version":1,"kind":"gate.verdict","producer":{"system":"tillr","utility":"tillr-gate"},"payload":{"checks":[{"check_id":"go-build","execution":"ran","wall_ms":17,"go_build":[{"module":"tools/build","packages":[{"import_path":"example/build"}]}]},{"check_id":"docs","execution":"reused","wall_ms":0},{"check_id":"go-tool/drain","execution":"not-run"},{"check_id":"gate:python3","execution":"ran"}]}}
+{"record_version":1,"kind":"gate.verdict","producer":{"system":"tillr","utility":"tillr-gate"},"payload":{"checks":[{"check_id":"go-build","execution":"ran","wall_ms":23,"go_build":[{"module":"tools/build","packages":[{"import_path":"example/build"}]}]},{"check_id":"docs","execution":"reused","wall_ms":500},{"check_id":"lint/optional","execution":"not-run","wall_ms":400},{"check_id":"go-tool/drain","execution":"not-run"},{"check_id":"gate:python3","execution":"ran","wall_ms":600}]}}
 EOF
 cat > "$TILLR_GATE_SPANS_OUT" <<'EOF'
 {"plan_span":{"check_id":"plan"},"check_spans":[{"check_id":"go-tool/drain","status":"OK","attributes_json":"{\"execution\":\"ran\",\"wall_ms\":23,\"go_build\":[{\"module\":\"tools/drain\",\"packages\":[{\"import_path\":\"example/drain\"}]}]}"}],"skipped_checks":[{"check_id":"go-build"},{"check_id":"lint/optional"}],"reused_checks":["go-tool/land"],"reused_wall_ms":{"go-tool/land":2},"not_run_checks":["go-tool/run"]}
@@ -78,9 +136,9 @@ EOF
 		id, execution, pkg string
 		ms                 int64
 	}{
-		{"go-build", "ran", "example/build", 17}, {"go-tool/drain", "ran", "example/drain", 23},
-		{"docs", "reused", "", 0}, {"go-tool/land", "reused", "", 2},
-		{"lint/optional", "not-run", "", -1}, {"go-tool/run", "not-run", "", -1},
+		{"go-build", "ran", "example/build", 23}, {"go-tool/drain", "ran", "example/drain", 23},
+		{"docs", "reused", "", 500}, {"go-tool/land", "reused", "", 2},
+		{"lint/optional", "not-run", "", 400}, {"go-tool/run", "not-run", "", -1},
 	} {
 		got := first.Checks[want.id]
 		if got.Execution != want.execution || (want.ms == -1 && got.WallMS != nil) ||
@@ -90,6 +148,13 @@ EOF
 		if want.pkg != "" && (len(got.GoBuild) != 1 || len(got.GoBuild[0].Packages) != 1 || got.GoBuild[0].Packages[0].ImportPath != want.pkg) {
 			t.Fatalf("%s: missing selected package %s in %s", want.id, want.pkg, lines[0])
 		}
+	}
+
+	if got := readTimingEvents(t, s.Store); len(got) != 1 {
+		t.Fatalf("want one event before deferred judgment, got %+v", got)
+	}
+	if _, err := event.Lookup(fastGateTimingTestKind); err != nil {
+		t.Fatal(err)
 	}
 
 	// An invocation that refuses to judge can leave only partial evidence. It must
@@ -120,6 +185,93 @@ exit 2
 	}
 	if got := read(); len(got) != 2 {
 		t.Fatalf("recorded an invocation that never started: %q", got)
+	}
+	got := readTimingEvents(t, s.Store)
+	if len(got) != 2 {
+		t.Fatalf("want exactly two events for two file observations, got %+v", got)
+	}
+	for i, a := range []attempt{first, second} {
+		e := got[i]
+		if e.ItemID != c.ItemID || e.RunID != a.RunID || e.WallMS != *a.WallMS || e.ExitCode != a.ExitCode || e.Median20WallMS != nil {
+			t.Errorf("event %d does not match the observation: %+v", i, e)
+		}
+	}
+	if e := got[0]; e.SlowestCheck != "go-build" || e.SlowestCheckMS == nil || *e.SlowestCheckMS != 23 {
+		t.Errorf("event must name the lexically first tied check that ran: %+v", e)
+	}
+	if e := got[1]; e.SlowestCheck != "unmeasured" || e.SlowestCheckMS != nil {
+		t.Errorf("event must leave duration absent when no check is timed: %+v", e)
+	}
+}
+
+func TestGateTimingEventMedianUsesLastTwentyObservations(t *testing.T) {
+	root := t.TempDir()
+	s := ProcessSteps{Root: root, Store: gateTimingStore(t, root)}
+	c := Candidate{ItemID: "item-median", RunID: "run-median"}
+	exit := 0
+	// The first 20 durations are a permutation of 0, 3, ..., 57; the last
+	// window drops the 0 and adds 60. Timestamps move backwards by days so the
+	// most recent measurements by wall clock are the earliest by sequence.
+	wallMS := func(i int) int64 {
+		if i == 20 {
+			return 60
+		}
+		return int64(3 * ((7 * i) % 20))
+	}
+	ctx := context.Background()
+	for i := 0; i < 21; i++ {
+		if i == 19 {
+			// An intervening judgment must not count as a timing observation.
+			if err := appendJudgment(ctx, s.Store, GateVerdictKind, "run", c.RunID, nil, time.Unix(0, 0)); err != nil {
+				t.Fatal(err)
+			}
+		}
+		start := int64(22-i) * 86_400_000
+		exit = i % 3
+		s.recordGateTiming(ctx, c, StepSpan{StartedAtMS: start, FinishedAtMS: start + wallMS(i), ExitCode: &exit})
+	}
+	got := readTimingEvents(t, s.Store)
+	if len(got) != 21 {
+		t.Fatalf("want 21 timing events, got %d", len(got))
+	}
+	for i, e := range got {
+		if e.WallMS != wallMS(i) || e.ExitCode != i%3 {
+			t.Errorf("event %d: wrong duration or exit code: %+v", i, e)
+		}
+		switch i {
+		case 19, 20:
+			want := int64(28 + 3*(i-19))
+			if e.Median20WallMS == nil || *e.Median20WallMS != want {
+				t.Errorf("event %d: want median %d, got %v", i, want, e.Median20WallMS)
+			}
+		default:
+			if e.Median20WallMS != nil {
+				t.Errorf("event %d: median present before 20 observations", i)
+			}
+		}
+	}
+}
+
+func TestGateTimingEventRequiresAppendedMeasuredLine(t *testing.T) {
+	root := t.TempDir()
+	s := ProcessSteps{Root: root, Store: gateTimingStore(t, root)}
+	c := Candidate{ItemID: "item-missing", RunID: "run-missing"}
+	path := filepath.Join(RunDir(root, c.RunID), gateTimingFile)
+	exit := 0
+	s.recordGateTiming(context.Background(), c, StepSpan{StartedAtMS: 2, FinishedAtMS: 1, ExitCode: &exit})
+	body, err := os.ReadFile(path)
+	if err != nil || !json.Valid(body) || bytes.Contains(body, []byte(`"wall_ms"`)) {
+		t.Fatalf("expected the unmeasured file observation to remain: %s, %v", body, err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0755); err != nil {
+		t.Fatal(err)
+	}
+	s.recordGateTiming(context.Background(), c, StepSpan{StartedAtMS: 1, FinishedAtMS: 2, ExitCode: &exit})
+	if got := readTimingEvents(t, s.Store); len(got) != 0 {
+		t.Errorf("unmeasured or unappended observations produced events: %+v", got)
 	}
 }
 
@@ -185,7 +337,7 @@ PY
 			if err := os.MkdirAll(dir, 0755); err != nil {
 				t.Fatal(err)
 			}
-			s := ProcessSteps{Root: root, GateProgram: program}
+			s := ProcessSteps{Root: root, Store: gateTimingStore(t, root), GateProgram: program}
 			if outcome, err := s.Gate(context.Background(), c); err != nil || outcome.Outcome != GatePassed {
 				steps, _ := os.ReadFile(filepath.Join(dir, StepsFile))
 				t.Fatalf("Gate = %+v, %v; steps: %s", outcome, err, steps)
@@ -214,6 +366,9 @@ PY
 				}
 			} else if !os.IsNotExist(err) {
 				t.Fatalf("revert should not leave a timing record: %s, %v", body, err)
+			}
+			if got := readTimingEvents(t, s.Store); (len(got) == 1) != tc.measure || len(got) > 1 {
+				t.Errorf("timing event should follow the ordinary gate opt-in: got %+v, measure=%t", got, tc.measure)
 			}
 		})
 	}

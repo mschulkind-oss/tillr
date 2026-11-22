@@ -45,6 +45,8 @@ const (
 	FixerAttachedKind = "drain.fixer-attached"
 	// HeavyFaultKind records an attempt that faulted before the tip had a verdict.
 	HeavyFaultKind = "drain.heavy-fault"
+	// FastGateTimingKind records one measured ordinary fast-gate invocation.
+	FastGateTimingKind = "drain.fast-gate-timing"
 )
 
 // The two scopes a boundary bracket covers, as `boundary.check`'s payload names them. A
@@ -89,7 +91,7 @@ const (
 // one binary would therefore be refused at init, which is the honest answer — the two
 // spellings of one judgment would have to be reconciled first.
 func init() {
-	for _, kind := range []string{BoundaryCheckKind, GatePlanKind, GateVerdictKind, RefusalKind, judgeRequestKind, judgeLandedKind, RetryAckKind, DesignRetryKind, verifyTriageResetKind, "drain.graph-completed", FixerAttachedKind, RevertKind, callOffered, callAnswered, callLanded, callDelivered, callClosed, endingCapabilitiesKind, piFeaturesKind, HeavyFaultKind} {
+	for _, kind := range []string{BoundaryCheckKind, GatePlanKind, GateVerdictKind, RefusalKind, judgeRequestKind, judgeLandedKind, RetryAckKind, DesignRetryKind, verifyTriageResetKind, "drain.graph-completed", FixerAttachedKind, RevertKind, callOffered, callAnswered, callLanded, callDelivered, callClosed, endingCapabilitiesKind, piFeaturesKind, HeavyFaultKind, FastGateTimingKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
