@@ -13,6 +13,7 @@ import (
 )
 
 func TestTrackEventRepeatsAcrossDipsAndReopensWhenItemLands(t *testing.T) {
+	register(t, "watch-test.fact")
 	ctx := context.Background()
 	now := time.Date(2026, 11, 22, 10, 0, 0, 0, time.UTC)
 	s := watchStore(t)
@@ -60,6 +61,9 @@ receiver = "foreground"
 `
 	rules := watchRules(t, doc)
 	e := Evaluator{Store: s, Rules: rules, Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
 
 	// Open initial alerts for both rules.
 	watchFact(t, s, now, `{"slowest_check":"go-affected","wall_ms":150000}`)
@@ -429,6 +433,7 @@ func TestTrackPrecedenceDamagedStoreAndObservationSourceParity(t *testing.T) {
 	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
 
 	t.Run("item_subject_precedence_and_damaged_items_table", func(t *testing.T) {
+		register(t, "watch-test.fact")
 		s := watchStore(t)
 		seedWatchItemsTable(t, s)
 		setWatchItemState(t, s, "item-subject", "in-queue")
@@ -453,6 +458,9 @@ do = ["do"]
 receiver = "foreground"
 `
 		e := Evaluator{Store: s, Rules: watchRules(t, doc), Clock: func() time.Time { return now }}
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
 		watchFact(t, s, now, `{"item_id":"item-subject"}`)
 		watchFact(t, s, now, `{"item_id":"non-item-check"}`)
 		if _, err := e.EvaluateRules(ctx); err != nil {
@@ -514,6 +522,9 @@ receiver = "foreground"
 		}
 		curNow := now
 		e := Evaluator{Source: src, Rules: []Rule{rule}, Clock: func() time.Time { return curNow }}
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
 		src.append("gate.done", curNow, map[string]any{"check": "lint"})
 		if _, err := e.EvaluateRules(ctx); err != nil {
 			t.Fatal(err)

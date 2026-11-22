@@ -49,6 +49,11 @@ func TestWatchTrackAndAckWithItemWaitEndToEnd(t *testing.T) {
 		return code, out.String(), stderr.String()
 	}
 
+	// Establish rule baselines before seeding facts.
+	if code, evalOut, evalErr := invoke("eval", "--once", "--rules", dir); code != 0 || evalErr != "" {
+		t.Fatalf("init eval: code=%d out=%q err=%q", code, evalOut, evalErr)
+	}
+
 	// Open an alert for subject "go-affected".
 	fact(t, s, `{"item_id":"go-affected"}`)
 	fact(t, s, `{"item_id":"go-affected"}`)
@@ -193,6 +198,9 @@ func TestWatchTrackRefusalsAndPreMigrationStorePreservation(t *testing.T) {
 			"item-closed": "closed",
 			"item-else":   "resolved-elsewhere",
 		})
+		if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", dir}, io.Discard, io.Discard); code != 0 {
+			t.Fatal("init eval failed")
+		}
 		fact(t, s, `{"item_id":"one"}`)
 		fact(t, s, `{"item_id":"one"}`)
 		if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", dir}, io.Discard, io.Discard); code != 0 {

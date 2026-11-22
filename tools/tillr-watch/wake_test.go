@@ -44,6 +44,10 @@ func walPrecedesIndexPublish(t *testing.T, useSymlink bool) {
 	} else {
 		t.Chdir(filepath.Dir(s.Path()))
 	}
+	var initOut, initErr bytes.Buffer
+	if code := run(t.Context(), []string{"eval", "--once", "--store", storeArg, "--rules", rules}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+		t.Fatalf("init eval: code=%d out=%q err=%q", code, &initOut, &initErr)
+	}
 	fact(t, s, `{"item_id":"item-a"}`)
 
 	entered := installWaitForWriterHook(t)
@@ -89,6 +93,10 @@ func TestWatchDaemonWakesWhenWALPrecedesIndexPublish(t *testing.T) {
 	alias := filepath.Join(t.TempDir(), "alias.db")
 	if err := os.Symlink(s.Path(), alias); err != nil {
 		t.Fatal(err)
+	}
+	var initOut, initErr bytes.Buffer
+	if code := run(t.Context(), []string{"eval", "--once", "--store", alias, "--rules", rules}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+		t.Fatalf("init eval: code=%d out=%q err=%q", code, &initOut, &initErr)
 	}
 	fact(t, s, `{"item_id":"item-a"}`)
 
