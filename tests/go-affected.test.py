@@ -427,12 +427,62 @@ def test_fork_check_integration(root_graph: dict) -> None:
         )
         assert any(c.kind == "go-affected" for c in landing.checks), [c.kind for c in landing.checks]
 
-        # Rolling tier drops go-affected.
-        rolling = fork_check.build_plan(
-            ROOT, [], fork_check.Record(state), ["tools/tillr-drain/drain/loop.go"], None, True,
-            tier=fork_check.TIER_ROLLING,
-        )
-        assert not any(c.kind == "go-affected" for c in rolling.checks), [c.kind for c in rolling.checks]
+        # Rolling tier (trunk proof) drops go-affected and states plainly that it does not
+        # apply there without stamping a check_id into skipped_checks (which runHeavyLegacy
+        # turns into unavailable), while leaving fork patch-branch entries untouched.
+        trunk_changed = subprocess.check_output(
+            ["git", "ls-files"], cwd=ROOT, text=True
+        ).splitlines()
+        for via_build_plan in (True, False):
+            rolling = fork_check.build_plan(
+                ROOT, fork_check.read_series(ROOT), fork_check.Record(state),
+                trunk_changed, "--all", True, audit_upstreams=False,
+                tier=fork_check.TIER_ROLLING if via_build_plan else None,
+            )
+            if not via_build_plan:
+                fork_check.apply_tier(rolling, fork_check.TIER_ROLLING)
+            assert not any(c.kind == "go-affected" for c in rolling.checks), [c.kind for c in rolling.checks]
+            rolling_spans_path = Path(tmp) / f"rolling-spans-{via_build_plan}.json"
+            fork_check.write_gate_spans(
+                str(rolling_spans_path), rolling, ROOT, 1, "PASS",
+                "0" * 40, "1" * 40, trunk_changed, 1, 1, 0.1,
+            )
+            rolling_spans = json.loads(rolling_spans_path.read_text(encoding="utf-8"))
+            heavy_unavailable = [
+                skip["check_id"] for skip in rolling_spans["skipped_checks"]
+                if not skip["owed"] and skip["check_id"]
+            ]
+            assert "go-affected/affected-tillr-go-test-packages-pass" not in heavy_unavailable, (
+                heavy_unavailable
+            )
+            assert any(cid.startswith("patch-branch-inv2/") for cid in heavy_unavailable), heavy_unavailable
+            assert any(cid.startswith("patch-branch-inv3/") for cid in heavy_unavailable), heavy_unavailable
+            go_affected_skips = [
+                skip for skip in rolling_spans["skipped_checks"]
+                if "go-affected" in skip["label"]
+            ]
+            assert len(go_affected_skips) == 1, rolling_spans["skipped_checks"]
+            assert go_affected_skips[0]["check_id"] == "", go_affected_skips[0]
+            assert go_affected_skips[0]["planned"] is False and go_affected_skips[0]["owed"] is False, (
+                go_affected_skips[0]
+            )
+            assert "does not apply" in go_affected_skips[0]["reason"], go_affected_skips[0]
+            assert "whole Go module suites" in go_affected_skips[0]["reason"], go_affected_skips[0]
+
+        # Even if `go` is absent on the host, the rolling tier still records go-affected as
+        # not applicable rather than unavailable.
+        orig_which = fork_check.shutil.which
+        try:
+            fork_check.shutil.which = lambda name: None if name == "go" else orig_which(name)
+            rolling_no_go = fork_check.build_plan(
+                ROOT, [], fork_check.Record(state), ["tools/tillr-drain/drain/loop.go"],
+                "--all", True, audit_upstreams=False, tier=fork_check.TIER_ROLLING,
+            )
+        finally:
+            fork_check.shutil.which = orig_which
+        assert not any(s.kind == "go-affected" for s in rolling_no_go.skips), [
+            (s.kind, s.label, s.planned) for s in rolling_no_go.skips
+        ]
 
         # Substrate change passes --drop-module tools/tillr to go-affected under landing tier.
         sub = fork_check.build_plan(
@@ -466,6 +516,9 @@ def test_fork_check_integration(root_graph: dict) -> None:
             "module github.com/mschulkind-oss/tillr-watch\n\ngo 1.22\n"
         )
         (repo / "tools" / "tillr-watch" / "main.go").write_text("package main\nfunc main() {}\n")
+        (repo / "tools" / "tillr-watch" / "main_test.go").write_text(
+            'package main\n\nimport "testing"\n\nfunc TestWatch(t *testing.T) {}\n'
+        )
         git_env = {
             **os.environ,
             "GIT_AUTHOR_NAME": "Fixture",
@@ -489,6 +542,25 @@ def test_fork_check_integration(root_graph: dict) -> None:
         )
         assert explain_full.returncode == 0, explain_full.stderr
         assert "would run  go-affected " not in explain_full.stdout, explain_full.stdout
+        assert "would not run          go-affected (affected tillr Go test packages pass)" in explain_full.stdout, (
+            explain_full.stdout
+        )
+        explain_rolling = subprocess.run(
+            [sys.executable, "tools/fork-check.py", "--explain", "--all", "--tier", "rolling"],
+            cwd=repo,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        assert explain_rolling.returncode == 0, explain_rolling.stderr
+        assert "would run  go-affected " not in explain_rolling.stdout, explain_rolling.stdout
+        assert "would skip" not in explain_rolling.stdout, explain_rolling.stdout
+        assert "would not run          go-affected (affected tillr Go test packages pass)" in explain_rolling.stdout, (
+            explain_rolling.stdout
+        )
+        assert "does not apply on the rolling tier because whole Go module suites run fresh" in explain_rolling.stdout, (
+            explain_rolling.stdout
+        )
         explain_landing = subprocess.run(
             [sys.executable, "tools/fork-check.py", "--explain", "--tier", "landing", "--since", "HEAD~1"],
             cwd=repo,
@@ -498,6 +570,16 @@ def test_fork_check_integration(root_graph: dict) -> None:
         )
         assert explain_landing.returncode == 0, explain_landing.stderr
         assert "would run  go-affected " in explain_landing.stdout, explain_landing.stdout
+        landing_repo = fork_check.build_plan(
+            repo, [], fork_check.Record(state), ["tools/tillr-watch/main.go"], None, True,
+            tier=fork_check.TIER_LANDING,
+        )
+        landing_ga = next(c for c in landing_repo.checks if c.kind == "go-affected")
+        rc, out, _ = fork_check.run_landing_go_check(
+            repo, landing_ga, dict(os.environ), landing_ga.drop, None
+        )
+        assert rc == 0, out
+        assert "go-affected: 1 package(s)" in out, out
 
     # registry-json exports go-affected cleanly.
     reg_res = subprocess.run(
