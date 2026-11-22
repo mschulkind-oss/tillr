@@ -176,16 +176,19 @@ func TestPiSettledOwedWorkReadsTheBackgroundTaskJournal(t *testing.T) {
 g = runpy.run_path(sys.argv[1])
 owed, journal_path = g["owed_work"], g["journal_path"]
 schema = sys.argv[2]
-def journal(rows, pid=4242, started=1000, disabled=None):
+def journal(rows, pid=4242, started=1000, disabled=None, prior_rows=()):
     path = tempfile.mktemp(dir=sys.argv[3], suffix=".sqlite")
     db = sqlite3.connect(path); db.executescript(schema)
     db.execute("INSERT INTO instances VALUES ('i', ?, ?, ?, 'session')", (started, pid, disabled))
-    for key, policy, ended, wake, events in rows:
-        db.execute("INSERT INTO tasks VALUES (?, 'i', ?, 'x', ?)", (key, policy, ended))
-        if wake is not None:
-            db.execute("INSERT INTO deliveries VALUES (?, ?, ?)", ("d" + key, key, wake))
-            for e in events:
-                db.execute("INSERT INTO delivery_events (delivery_key, event) VALUES (?, ?)", ("d" + key, e))
+    if prior_rows:
+        db.execute("INSERT INTO instances VALUES ('prev', ?, ?, NULL, 'session')", (100, 9999))
+    for inst, batch in (('i', rows), ('prev', prior_rows)):
+        for key, policy, ended, wake, events in batch:
+            db.execute("INSERT INTO tasks VALUES (?, ?, ?, 'x', ?)", (key, inst, policy, ended))
+            if wake is not None:
+                db.execute("INSERT INTO deliveries VALUES (?, ?, ?)", ("d" + key, key, wake))
+                for e in events:
+                    db.execute("INSERT INTO delivery_events (delivery_key, event) VALUES (?, ?)", ("d" + key, e))
     db.commit(); db.close(); return path
 cases = [
     ("leaked fallback hold", journal([("a", "wake", 5, 1, ["fallback-injected", "observed"])]), False),
@@ -194,6 +197,9 @@ cases = [
     ("running notify task holds nothing", journal([("a", "notify", None, None, [])]), False),
     ("ended wake, completion not yet decided", journal([("a", "wake", 5, None, [])]), True),
     ("ended wake, completion enqueued not observed", journal([("a", "wake", 5, 1, ["enqueued"])]), True),
+    ("ended wake in earlier process, never observed", journal([], prior_rows=[("p", "wake", 5, None, [])]), False),
+    ("ended wake in earlier process, enqueued not observed", journal([], prior_rows=[("p", "wake", 5, 1, ["enqueued"])]), False),
+    ("running wake in earlier process still holds", journal([], prior_rows=[("p", "wake", None, None, [])]), True),
     ("stopped wake task", journal([("a", "wake", 5, 0, [])]), False),
     ("enqueue failed", journal([("a", "wake", 5, 1, ["enqueue-failed"])]), False),
     ("another process", journal([], pid=1), None),

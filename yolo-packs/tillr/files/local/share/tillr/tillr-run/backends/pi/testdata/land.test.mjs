@@ -317,6 +317,76 @@ with sqlite3.connect(sys.argv[1]) as db:
   assert.equal(wakes('124'), null);
 });
 
+test('resumed session is not held by a finished wake task from a dead process, but still held by running or live-process wakes', async (t) => {
+  const { cwd, base, change, offer } = landFixture(t);
+  const dir = join(cwd, '..');
+  const old = { ...process.env };
+  t.after(() => { process.env = old; });
+  change();
+  const journal = join(dir, 'journal.sqlite');
+  const now = Date.now();
+  const priorStart = now - 60_000;
+  const runSql = (sql, ...args) => execFileSync('python3', ['-c', `import sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as db:
+    db.execute(sys.argv[2], sys.argv[3:])`, journal, sql, ...args]);
+  execFileSync('python3', ['-c', `import sqlite3, sys
+with sqlite3.connect(sys.argv[1]) as db:
+    db.executescript('''
+        CREATE TABLE instances(instance_id, process_id, started_at, disabled_at, pi_session_id);
+        CREATE TABLE tasks(task_key, started_by_instance, completion_policy, ended_at);
+        CREATE TABLE deliveries(delivery_key, task_key, wake_requested);
+        CREATE TABLE delivery_events(delivery_key, event);
+    ''')
+    db.execute("INSERT INTO instances VALUES ('previous', ?, ?, NULL, 'session')", (int(sys.argv[2]), int(sys.argv[3])))
+    db.execute("INSERT INTO instances VALUES ('current', ?, ?, NULL, 'session')", (int(sys.argv[4]), int(sys.argv[5])))
+    # Earlier process died after these wake tasks finished, before observing completion.
+    db.execute("INSERT INTO tasks VALUES ('prior-ended-no-delivery', 'previous', 'wake', ?)", (int(sys.argv[3]) + 500,))
+    db.execute("INSERT INTO tasks VALUES ('prior-ended-enqueued', 'previous', 'wake', ?)", (int(sys.argv[3]) + 600,))
+    db.execute("INSERT INTO deliveries VALUES ('d-prior', 'prior-ended-enqueued', 1)")
+    db.execute("INSERT INTO delivery_events VALUES ('d-prior', 'enqueued')")
+`, journal, String(process.pid + 1), String(priorStart), String(process.pid), String(now)]);
+
+  Object.assign(process.env, {
+    YOLO_DURABLE_DIR: dir,
+    TILLR_GOAL_BASE: base,
+    PI_BACKGROUND_TASK_JOURNAL: journal,
+  });
+  const ctx = { cwd, sessionManager: { getSessionFile: () => '', getBranch: () => [] } };
+  const tools = {};
+  landTool({ on() {}, registerTool: value => { tools.land = value; } });
+  obstacleTool({ on() {}, registerTool: value => { tools.obstacle = value; } });
+
+  // Criterion 5: land and obstacle are no longer refused for the dead process's finished tasks.
+  let settled = await settle(tools.land.execute('call-land', {}, undefined, undefined, ctx));
+  assert.equal(settled.kind, 'result', settled.error?.message);
+  assert.equal(settled.result.park, true);
+  rmSync(offer);
+
+  settled = await settle(tools.obstacle.execute('call-obstacle', { kind: 'owner', question: 'which?' }, undefined, undefined, ctx));
+  assert.equal(settled.kind, 'result', settled.error?.message);
+  assert.equal(settled.result.park, true);
+  rmSync(offer);
+
+  // Criterion 6a: a wake task that finished in the live process without being observed still holds the session.
+  runSql("INSERT INTO tasks VALUES ('live-ended-unobserved', 'current', 'wake', ?)", String(now + 1));
+  settled = await settle(tools.land.execute('call-land-2', {}, undefined, undefined, ctx));
+  assert.equal(settled.kind, 'failed');
+  assert.match(settled.error.message, /live-ended-unobserved/);
+  settled = await settle(tools.obstacle.execute('call-obstacle-2', { kind: 'owner', question: 'which?' }, undefined, undefined, ctx));
+  assert.equal(settled.kind, 'failed');
+  assert.match(settled.error.message, /live-ended-unobserved/);
+  runSql("DELETE FROM tasks WHERE task_key = 'live-ended-unobserved'");
+
+  // Criterion 6b: a wake task still running (even from the earlier process) still holds the session.
+  runSql("INSERT INTO tasks VALUES ('prior-still-running', 'previous', 'wake', NULL)");
+  settled = await settle(tools.land.execute('call-land-3', {}, undefined, undefined, ctx));
+  assert.equal(settled.kind, 'failed');
+  assert.match(settled.error.message, /prior-still-running/);
+  settled = await settle(tools.obstacle.execute('call-obstacle-3', { kind: 'owner', question: 'which?' }, undefined, undefined, ctx));
+  assert.equal(settled.kind, 'failed');
+  assert.match(settled.error.message, /prior-still-running/);
+});
+
 test('obstacle accepts all six kinds, rejects missing required fields, and replays answers', (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'obstacle-'));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
