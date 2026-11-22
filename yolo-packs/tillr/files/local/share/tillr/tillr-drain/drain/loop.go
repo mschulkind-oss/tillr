@@ -2694,7 +2694,7 @@ func (l *Loop) runContinuation(ctx context.Context, lane string, request run.Req
 		return run.Record{}, "", "", nil
 	}
 	resumed := request
-	if fresh, ok := refreshRestartRequest(l.currentPolicy(), Decision{}, &request); ok {
+	if fresh, ok := refreshRestartRequest(l.currentPolicy(), Decision{}, &request); ok && fresh.Route() != request.Route() {
 		resumed.Command = fresh.Command
 		resumed.TimeoutMS = fresh.TimeoutMS
 	}
