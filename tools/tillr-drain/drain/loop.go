@@ -808,6 +808,10 @@ func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	defer l.closeWALKeeper()
 	defer l.endSession()
 	if err := CheckTrunkWorktree(ctx, l.cfg.Root); err != nil {
+		if stoppedByOperator(ctx, err) {
+			result.Stop, result.Detail = StopOperatorStop, "the loop was asked to stop"
+			return result, nil
+		}
 		return faultResult(result, err)
 	}
 	l.keepWALWhileRunning()
