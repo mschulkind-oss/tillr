@@ -11,12 +11,35 @@ import (
 	"github.com/mschulkind-oss/tillr/record"
 )
 
+type classifyRunOutput struct {
+	Outcome  checkresult.Outcome `json:"outcome"`
+	Detail   string              `json:"detail"`
+	ExitCode int                 `json:"exit_code"`
+}
+
+type classifyAggregateOutput struct {
+	Checks []checkresult.Result `json:"checks"`
+	Run    classifyRunOutput    `json:"run"`
+}
+
+func parseAggregateOrder(raw string) (checkresult.AggregateOrder, bool) {
+	switch checkresult.AggregateOrder(raw) {
+	case checkresult.RunnerOrder, checkresult.ShadowOrder, checkresult.LegacyGateOrder, checkresult.LegacyReplayOrder:
+		return checkresult.AggregateOrder(raw), true
+	default:
+		return "", false
+	}
+}
+
 // classifyFace reports raw-result classifications, not a gate verdict. It
 // takes only observations; it does not load or run the judged tree's checks.
 func classifyFace(args []string) int {
 	flags := flag.NewFlagSet("classify", flag.ContinueOnError)
+	flags.SetOutput(os.Stderr)
+	aggregate := flags.String("aggregate", "", "aggregate classified checks under `order`: runner, shadow, legacy-gate, or legacy-replay")
 	flags.Usage = func() {
-		fmt.Fprintln(flags.Output(), "Usage: tillr-gate classify\nRead a JSON array of check observations from stdin and write their classifications to stdout, in order.")
+		fmt.Fprintln(flags.Output(), "Usage: tillr-gate classify [--aggregate <order>]\nRead a JSON array of check observations from stdin and write their classifications to stdout, in order.")
+		flags.PrintDefaults()
 	}
 	if code, answered := parseFlags(flags, args); answered {
 		return code
@@ -24,6 +47,21 @@ func classifyFace(args []string) int {
 	if flags.NArg() != 0 {
 		flags.Usage()
 		return record.ExitUsage
+	}
+	aggregateSet := false
+	flags.Visit(func(f *flag.Flag) {
+		if f.Name == "aggregate" {
+			aggregateSet = true
+		}
+	})
+	var order checkresult.AggregateOrder
+	if aggregateSet {
+		var ok bool
+		order, ok = parseAggregateOrder(*aggregate)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "tillr-gate classify: %q is not an aggregate order; name one of: runner, shadow, legacy-gate, legacy-replay\n", *aggregate)
+			return record.ExitUsage
+		}
 	}
 	decoder := json.NewDecoder(os.Stdin)
 	decoder.DisallowUnknownFields()
@@ -44,7 +82,19 @@ func classifyFace(args []string) int {
 		}
 		answers[i] = checkresult.Classify(*observation)
 	}
-	if err := json.NewEncoder(os.Stdout).Encode(answers); err != nil {
+	var output any = answers
+	if aggregateSet {
+		runResult := checkresult.Aggregate(order, answers)
+		output = classifyAggregateOutput{
+			Checks: answers,
+			Run: classifyRunOutput{
+				Outcome:  runResult.Outcome,
+				Detail:   runResult.Detail,
+				ExitCode: runResult.ExitCode,
+			},
+		}
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(output); err != nil {
 		fmt.Fprintf(os.Stderr, "tillr-gate classify: writing classifications: %v\n", err)
 		return record.ExitInternal
 	}
