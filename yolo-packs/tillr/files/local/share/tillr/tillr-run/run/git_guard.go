@@ -1,10 +1,8 @@
 package run
 
 import (
-	"bytes"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -38,7 +36,7 @@ func installGitGuard(workDir, durableDir string, env []string) ([]string, error)
 	if realGit == "" {
 		return env, nil
 	}
-	commonDir := discoverGitCommonDir(realGit, workDir, env)
+	commonDir := discoverGitCommonDir(workDir, env)
 	if commonDir == "" {
 		return env, nil
 	}
@@ -102,21 +100,80 @@ func findRealGit(pathVal, excludePath string) string {
 	return ""
 }
 
-func discoverGitCommonDir(realGit, workDir string, cleanEnv []string) string {
-	cmd := exec.Command(realGit, "-C", workDir, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	cmd.Env = cleanEnv
-	out, err := cmd.Output()
+func parseCeilingDirs(env []string) map[string]bool {
+	raw := lookupEnvValue(env, "GIT_CEILING_DIRECTORIES")
+	if raw == "" {
+		return nil
+	}
+	ceilings := make(map[string]bool)
+	for _, entry := range filepath.SplitList(raw) {
+		if entry == "" {
+			continue
+		}
+		clean := filepath.Clean(entry)
+		ceilings[clean] = true
+		if resolved, err := filepath.EvalSymlinks(clean); err == nil {
+			ceilings[filepath.Clean(resolved)] = true
+		}
+	}
+	return ceilings
+}
+
+func discoverGitCommonDir(workDir string, cleanEnv []string) string {
+	absWork, err := filepath.Abs(workDir)
 	if err != nil {
 		return ""
 	}
-	dir := strings.TrimSpace(string(bytes.TrimSpace(out)))
-	if dir == "" {
-		return ""
+	ceilings := parseCeilingDirs(cleanEnv)
+	cur := filepath.Clean(absWork)
+	for {
+		dotGit := filepath.Join(cur, ".git")
+		if info, err := os.Stat(dotGit); err == nil {
+			var gitDir string
+			if info.IsDir() {
+				gitDir = dotGit
+			} else if info.Mode().IsRegular() {
+				if raw, err := os.ReadFile(dotGit); err == nil {
+					line := strings.TrimSpace(string(raw))
+					if strings.HasPrefix(line, "gitdir:") {
+						target := strings.TrimSpace(strings.TrimPrefix(line, "gitdir:"))
+						if target != "" {
+							if !filepath.IsAbs(target) {
+								target = filepath.Join(cur, target)
+							}
+							gitDir = filepath.Clean(target)
+						}
+					}
+				}
+			}
+			if gitDir != "" {
+				if _, err := os.Stat(filepath.Join(gitDir, "HEAD")); err == nil {
+					commonDir := gitDir
+					if raw, err := os.ReadFile(filepath.Join(gitDir, "commondir")); err == nil {
+						if rel := strings.TrimSpace(string(raw)); rel != "" {
+							if !filepath.IsAbs(rel) {
+								rel = filepath.Join(gitDir, rel)
+							}
+							commonDir = filepath.Clean(rel)
+						}
+					}
+					if resolved, err := filepath.EvalSymlinks(commonDir); err == nil {
+						return filepath.Clean(resolved)
+					}
+					return filepath.Clean(commonDir)
+				}
+			}
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur || ceilings[parent] {
+			break
+		}
+		if resolved, err := filepath.EvalSymlinks(parent); err == nil && ceilings[filepath.Clean(resolved)] {
+			break
+		}
+		cur = parent
 	}
-	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
-		return filepath.Clean(resolved)
-	}
-	return filepath.Clean(dir)
+	return ""
 }
 
 func shSingleQuote(s string) string {

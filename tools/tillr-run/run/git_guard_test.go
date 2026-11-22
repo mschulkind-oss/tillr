@@ -231,3 +231,85 @@ git -C "$YOLO_DURABLE_DIR/unrelated" config user.name test
 		t.Fatalf("trunk .git/config changed:\nbefore:\n%s\nafter:\n%s", beforeConfig, afterConfig)
 	}
 }
+
+func TestExecGitGuardDoesNotInvokeGitDuringSetup(t *testing.T) {
+	ctx := context.Background()
+	dir, _, laneRoot, _, _, _ := initTrunkAndLaneFixture(t)
+	s, err := store.InitFixture(ctx, filepath.Join(dir, "fixture.sqlite3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	sentinelDir := filepath.Join(dir, "sentinel")
+	if err := os.MkdirAll(sentinelDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	calls := filepath.Join(dir, "git-called")
+	sentinelScript := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + `"` + calls + `"` + "\nexit 99\n"
+	if err := os.WriteFile(filepath.Join(sentinelDir, "git"), []byte(sentinelScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", sentinelDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	// Case 1: Git worktree — git-guard is installed without calling git.
+	req := run.Request{
+		RunID:      "run-no-git-worktree",
+		ItemID:     "item-no-git",
+		LaneID:     "lane-1",
+		Backend:    "command",
+		WorkingDir: "worktree",
+		Command:    []string{"/bin/sh", "-c", "command -v git"},
+	}
+	env, err := run.Exec(ctx, s, req, run.ExecOptions{LaneRoot: laneRoot, Now: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rec run.Record
+	if err := json.Unmarshal(env.Payload, &rec); err != nil {
+		t.Fatal(err)
+	}
+	if rec.ExitCode == nil || *rec.ExitCode != 0 {
+		t.Fatalf("worktree run failed: exit=%v", rec.ExitCode)
+	}
+	logBytes, err := os.ReadFile(filepath.Join(laneRoot, req.LaneID, req.RunID+".log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(logBytes), filepath.Join("git-guard", "git")) {
+		t.Fatalf("expected git-guard/git in PATH, got:\n%s", logBytes)
+	}
+	if raw, err := os.ReadFile(calls); !os.IsNotExist(err) {
+		t.Fatalf("git was invoked during worktree setup: %s (%v)", raw, err)
+	}
+
+	// Case 2: Plain directory bounded by GIT_CEILING_DIRECTORIES — no git-guard, no git call.
+	plainLaneRoot := filepath.Join(dir, "plain-lanes")
+	plainWork := filepath.Join(plainLaneRoot, "lane-1", "work")
+	if err := os.MkdirAll(plainWork, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CEILING_DIRECTORIES", dir)
+	plainReq := run.Request{
+		RunID:      "run-no-git-plain",
+		ItemID:     "item-no-git",
+		LaneID:     "lane-1",
+		Backend:    "command",
+		WorkingDir: "work",
+		Command:    []string{"/bin/sh", "-c", "true"},
+	}
+	plainEnv, err := run.Exec(ctx, s, plainReq, run.ExecOptions{LaneRoot: plainLaneRoot, Now: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plainRec run.Record
+	if err := json.Unmarshal(plainEnv.Payload, &plainRec); err != nil {
+		t.Fatal(err)
+	}
+	if plainRec.ExitCode == nil || *plainRec.ExitCode != 0 {
+		t.Fatalf("plain run failed: exit=%v", plainRec.ExitCode)
+	}
+	if raw, err := os.ReadFile(calls); !os.IsNotExist(err) {
+		t.Fatalf("git was invoked during plain setup: %s (%v)", raw, err)
+	}
+}
