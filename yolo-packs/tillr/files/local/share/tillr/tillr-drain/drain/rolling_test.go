@@ -56,6 +56,71 @@ func TestARollingRunJudgesADetachedWorktreeOfTheTip(t *testing.T) {
 	}
 }
 
+// A loop stop can kill `git worktree add` mid-checkout, leaving `.rolling/worktree`
+// registered with an `initializing` lock (with or without its directory on disk). The next
+// rolling run unlocks that path's stale registration under the registry lock and checks out
+// the requested tip cleanly.
+func TestRollingRecoversAnInitializingLockedDetachedWorktree(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		missing, relative bool
+	}{
+		{name: "directory-present"},
+		{name: "directory-missing", missing: true},
+		{name: "directory-missing-relative", missing: true, relative: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := scratchUnderDurable(t)
+			runGit(t, root, "init", "-q", "-b", "main")
+			writeForkFile(t, filepath.Join(root, "README.md"), "base\n")
+			runGit(t, root, "add", ".")
+			runGit(t, root, "commit", "-qm", "base")
+			base := runGit(t, root, "rev-parse", "HEAD")
+			writeForkFile(t, filepath.Join(root, "README.md"), "tip\n")
+			runGit(t, root, "add", ".")
+			runGit(t, root, "commit", "-qm", "tip")
+			tip := runGit(t, root, "rev-parse", "HEAD")
+
+			laneRoot := filepath.Join(root, ".tillr", "lanes")
+			rolling := filepath.Join(laneRoot, ".rolling", "worktree")
+			if err := os.MkdirAll(filepath.Dir(rolling), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			add := []string{"worktree", "add", "--detach"}
+			if tc.relative {
+				add = append(add, "--relative-paths")
+			}
+			runGit(t, root, append(add, rolling, base)...)
+			runGit(t, root, "worktree", "lock", "--reason", "initializing", rolling)
+			if tc.missing {
+				if err := os.RemoveAll(rolling); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			record := filepath.Join(scratchUnderDurable(t), "head")
+			steps := &ProcessSteps{
+				Root: root, LaneRoot: laneRoot,
+				RollingProgram: executable(t, "git rev-parse HEAD > "+record),
+			}
+			out, err := steps.Rolling(context.Background(), "", tip)
+			if err != nil {
+				t.Fatalf("recover initializing lock: %v", err)
+			}
+			if !out.Known || !out.Green {
+				t.Fatalf("rolling answered %+v, want known green", out)
+			}
+			raw, err := os.ReadFile(record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.TrimSpace(string(raw)); got != tip {
+				t.Fatalf("rolling HEAD=%s, want %s", got, tip)
+			}
+		})
+	}
+}
+
 // The gate record is append-only: callers must not pass an ignored lock flag. A
 // rolling run uses the rolling tier without pretending to wait for a record lock.
 func TestTheDefaultRollingProgramOmitsIgnoredLockTimeout(t *testing.T) {

@@ -1633,12 +1633,15 @@ func (s *ProcessSteps) detachedWorktree(ctx context.Context, dir, rev string) (s
 	// registration would refuse the add, and a reused directory is not provably the
 	// revision this run was asked to judge.
 	err := withWorktreeRegistryLock(ctx, s.Root, func() error {
-		_ = exec.Command("git", "-C", s.Root, "worktree", "remove", "--force", dir).Run()
-		_ = os.RemoveAll(dir)
-		_ = exec.Command("git", "-C", s.Root, "worktree", "prune").Run()
 		if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 			return Externalf("creating the worktree directory %s: %v", filepath.Dir(dir), err)
 		}
+		if _, _, _, err := unlockRegisteredWorktree(ctx, s.Root, "", dir); err != nil {
+			return Externalf("unlocking stale worktree %s: %v", dir, err)
+		}
+		_ = exec.Command("git", "-C", s.Root, "worktree", "remove", "--force", dir).Run()
+		_ = os.RemoveAll(dir)
+		_ = exec.Command("git", "-C", s.Root, "worktree", "prune").Run()
 		cmd := exec.CommandContext(ctx, "git", "-C", s.Root, "worktree", "add", "--detach", "--force", dir, rev)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return Externalf("checking out %s: %v: %s", shortSHA(rev), err, strings.TrimSpace(string(out)))
