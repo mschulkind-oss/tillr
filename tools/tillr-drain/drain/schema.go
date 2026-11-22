@@ -78,6 +78,10 @@ const (
 	ReasonBackendWindow = "backend-window"
 	// ReasonBackendClosed waits for recorded evidence that the backend works again.
 	ReasonBackendClosed = "backend-closed"
+	// ReasonBackendMissing holds an item whose next step needs a backend the policy in
+	// force no longer defines. The reason appends the seat and missing backend name, and
+	// DeferredBy carries the backend name.
+	ReasonBackendMissing = "backend-missing"
 	// ReasonCommandFault is a command process failure, not an agent backend route.
 	ReasonCommandFault = "command-fault"
 	// ReasonReady is a dispatch's reason: the item is queued, unblocked, and a lane and
