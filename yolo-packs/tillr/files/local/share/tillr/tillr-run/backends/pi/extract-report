@@ -50,10 +50,47 @@ def _blocks_text(message):
     )
 
 
+def _is_reasoning_only(message):
+    if message is None:
+        return False
+    content = message.get("content")
+    return (
+        isinstance(content, list)
+        and not _blocks_text(message).strip()
+        and not any(isinstance(block, dict) and block.get("type") == "toolCall" for block in content)
+    )
+
+
+def _current_text(deltas, settled, snapshots):
+    if deltas:
+        return "".join(deltas)
+    if settled:
+        return "".join(settled)
+    return "".join(snapshots.values())
+
+
+def _is_prompt_message(message):
+    if not isinstance(message, dict):
+        return False
+    role = message.get("role")
+    if role == "user":
+        return True
+    if role == "custom":
+        return message.get("customType") != "memory-context"
+    return False
+
+
 def dialect(stream_text, live_probe=False):
     records, unparseable = report.records(stream_text)
     deltas, snapshots, settled = [], {}, []
     last_assistant = None
+    # After an agent_end that already carried a RESULT footer, pi's post-run threshold
+    # compaction runs session_compact while isStreaming is still true. Extensions such as
+    # @pify/memory call sendMessage({customType: "memory-context"}) without triggerTurn: false,
+    # which steers the agent and starts an unprompted turn. Preserve the settled answer unless
+    # a real prompt (or an overflow/retry compaction or parked call) supersedes it.
+    last_result_ending = None
+    post_compaction_candidate = None
     ended = None
     tokens, cost, saw_tokens, saw_cost = 0, 0.0, False, False
     session, first_at, last_at = None, None, None
@@ -103,36 +140,54 @@ def dialect(stream_text, live_probe=False):
                      "detail": f"pi ended the session because the model repeated one identical call "
                                f"{record.get('streak')} times in a row: {tool} {args}"}
 
+        record_type = record.get("type")
+        if record_type == "compaction_start":
+            if record.get("reason") != "overflow" and last_result_ending is not None and post_compaction_candidate is None:
+                post_compaction_candidate = last_result_ending
+        elif record_type == "compaction_end":
+            if record.get("willRetry") is True or record.get("reason") == "overflow":
+                post_compaction_candidate = None
+            elif last_result_ending is not None and post_compaction_candidate is None:
+                post_compaction_candidate = last_result_ending
+        elif record_type == "parked":
+            post_compaction_candidate = None
+
+        if post_compaction_candidate is not None:
+            if record_type in ("message", "message_start", "message_end", "turn_end") and _is_prompt_message(record.get("message")):
+                post_compaction_candidate = None
+            elif record_type == "agent_end" and any(_is_prompt_message(m) for m in (record.get("messages") or [])):
+                post_compaction_candidate = None
+
         update = record.get("assistantMessageEvent")
         if isinstance(update, dict) and update.get("type") == "text_delta":
             if isinstance(update.get("delta"), str):
                 deltas.append(update["delta"])
-        if record.get("type") == "agent_end":
+        if record_type == "agent_end":
             for message in record.get("messages") or []:
                 if isinstance(message, dict) and message.get("role") == "assistant":
                     last_assistant = message
                     settled.append(_blocks_text(message))
+            if post_compaction_candidate is None:
+                ending_text = _current_text(deltas, settled, snapshots)
+                if not _is_reasoning_only(last_assistant) and report.footer_result(ending_text) is not None:
+                    last_result_ending = (ending_text, last_assistant)
+                else:
+                    last_result_ending = None
         message = record.get("message")
         if isinstance(message, dict) and message.get("role") == "assistant":
             # A streaming snapshot may still receive text or a tool call.
             # Only a completed message can prove an empty turn.
-            last_assistant = message if record.get("type") in ("message", "message_end", "turn_end") else None
+            last_assistant = message if record_type in ("message", "message_end", "turn_end") else None
             key = message.get("id") or f"snapshot-{len(snapshots)}"
             snapshots[key] = _blocks_text(message)
-    if deltas:
-        text = "".join(deltas)
-    elif settled:
-        text = "".join(settled)
+    if post_compaction_candidate is not None:
+        text, last_assistant = post_compaction_candidate
     else:
-        text = "".join(snapshots.values())
+        text = _current_text(deltas, settled, snapshots)
     # A reasoning-only ending is not a report. In particular, neither prior
     # streaming deltas nor an earlier settled footer can finish this turn.
-    if last_assistant is not None:
-        content = last_assistant.get("content")
-        if isinstance(content, list) and not _blocks_text(last_assistant).strip() and not any(
-            isinstance(block, dict) and block.get("type") == "toolCall" for block in content
-        ):
-            text = "[Pi's last assistant turn had no text or tool call.]\n"
+    if _is_reasoning_only(last_assistant):
+        text = "[Pi's last assistant turn had no text or tool call.]\n"
     # The runner's idle watcher probes a live stream with an unknown exit code.
     # A stale agent_settled and a footer from an earlier turn do not authorize it
     # to end a parked call, even when the parked batch has emitted agent_end.
