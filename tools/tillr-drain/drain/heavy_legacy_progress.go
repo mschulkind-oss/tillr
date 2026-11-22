@@ -14,14 +14,30 @@ var heavyLegacyProgressProgram string
 
 // Keep the legacy program's own planning, scheduling, skip and verdict behavior.
 // Its Python adapter observes completed checks, not a guessed registry subset.
-func heavyLegacyArgv(ctx context.Context, argv []string) ([]string, error) {
+func heavyLegacyArgv(ctx context.Context, argv []string, laneRoot string) ([]string, error) {
 	p, _ := ctx.Value(heavyProgressKey{}).(*heavyProgress)
 	if p == nil || len(argv) < 2 || !strings.HasPrefix(filepath.Base(argv[0]), "python") || filepath.Base(argv[1]) != "fork-check.py" {
 		return argv, nil
 	}
-	return append([]string{argv[0], "-c", heavyLegacyProgressProgram, argv[1], filepath.Join(p.dir, "heavy-legacy-progress.json"), p.TipSHA, filepath.Join(p.dir, "heavy-progress.json")}, argv[2:]...), nil
+	logs, err := filepath.Abs(filepath.Join(laneRoot, ".rolling", "logs", p.TipSHA))
+	if err != nil {
+		return nil, err
+	}
+	return append([]string{argv[0], "-c", heavyLegacyProgressProgram, argv[1], filepath.Join(p.dir, "heavy-legacy-progress.json"), p.TipSHA, filepath.Join(p.dir, "heavy-progress.json"), logs}, argv[2:]...), nil
 }
-func readLegacyEvidence(ctx context.Context) (map[string][]string, error) {
+
+type legacyGoCase struct {
+	Package string `json:"package"`
+	Name    string `json:"name"`
+	Log     string `json:"log"`
+}
+
+type legacyFailure struct {
+	Log   string         `json:"log"`
+	Cases []legacyGoCase `json:"cases"`
+}
+
+func readLegacyEvidence(ctx context.Context) (map[string]legacyFailure, error) {
 	p, _ := ctx.Value(heavyProgressKey{}).(*heavyProgress)
 	if p == nil {
 		return nil, nil
@@ -34,9 +50,9 @@ func readLegacyEvidence(ctx context.Context) (map[string][]string, error) {
 		return nil, err
 	}
 	var saved struct {
-		TipSHA     string              `json:"tip_sha"`
-		Reused     []string            `json:"reused"`
-		GoFailures map[string][]string `json:"go_failures"`
+		TipSHA   string                   `json:"tip_sha"`
+		Reused   []string                 `json:"reused"`
+		Failures map[string]legacyFailure `json:"failures"`
 	}
 	if err := json.Unmarshal(raw, &saved); err != nil {
 		return nil, err
@@ -45,5 +61,5 @@ func readLegacyEvidence(ctx context.Context) (map[string][]string, error) {
 		return nil, nil
 	}
 	p.reused = append(p.reused, saved.Reused...)
-	return saved.GoFailures, nil
+	return saved.Failures, nil
 }

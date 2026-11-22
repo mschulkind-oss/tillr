@@ -59,7 +59,10 @@ func TestHeavyFilesNamedTestRepairsWhileTrunkKeepsMoving(t *testing.T) {
 	first := commit("input-a", "red")
 	const suiteID = "go-tool/tools-example-s-whole-suite-passes"
 	suite := HeavyCheck{CheckID: suiteID, Result: "fail"}
-	failures := goSuiteFailures("tools/example's whole suite passes", []string{"go-test-shards: example/pkg shard 1 failed (exit 1): TestA, TestB"}, suite)
+	failures := goSuiteFailures("tools/example's whole suite passes", legacyFailure{Cases: []legacyGoCase{
+		{Package: "example/pkg", Name: "TestA", Log: "test-a.log"},
+		{Package: "example/pkg", Name: "TestB", Log: "test-b.log"},
+	}}, suite)
 	if len(failures) != 2 {
 		t.Fatalf("expected two package-qualified failures, got %+v", failures)
 	}

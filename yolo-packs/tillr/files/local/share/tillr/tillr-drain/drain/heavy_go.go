@@ -17,9 +17,6 @@ const (
 	goTestSkipped = "test or enclosing test skipped at this commit"
 )
 
-// The shard runner reports package-qualified leaf failures. Use its shard headers,
-// not --- FAIL lines (which repeat a failing subtest's parents and omit the package).
-var goShardFailure = regexp.MustCompile(`^([^ ]+) shard [0-9]+ failed \(exit 1\): (.+)$`)
 var goTestName = regexp.MustCompile(`^(Test|Example|Fuzz)[\pL\pN_]*(/[^[:space:]]*)*$`)
 var goToolModule = regexp.MustCompile(`^tools/[a-z0-9-]+$`)
 var goImport = regexp.MustCompile(`^[a-zA-Z0-9._~-]+(/[a-zA-Z0-9._~-]+)*$`)
@@ -41,42 +38,30 @@ func goSuiteProofID(id string) string {
 	return "go-tool/" + slug + "-s-whole-suite-passes"
 }
 
-func goSuiteFailures(label string, headers []string, suite HeavyCheck) []HeavyCheck {
+func goSuiteFailures(label string, evidence legacyFailure, suite HeavyCheck) []HeavyCheck {
 	module, ok := strings.CutSuffix(label, "'s whole suite passes")
 	if !ok || !goToolModule.MatchString(module) {
 		return []HeavyCheck{suite}
 	}
 	var checks []HeavyCheck
-	seen := map[string]bool{}
-	for _, line := range headers {
-		header, ok := strings.CutPrefix(line, "go-test-shards: ")
-		if !ok || strings.Contains(header, "waiting for a test slot") {
+	unscoped := evidence.Log != ""
+	for _, test := range evidence.Cases {
+		if !goImport.MatchString(test.Package) || !goTestName.MatchString(test.Name) || test.Log == "" {
+			unscoped = true
 			continue
 		}
-		match := goShardFailure.FindStringSubmatch(header)
-		if match == nil || !goImport.MatchString(match[1]) {
-			// A timeout, build error or crash without named failures is not
-			// evidence about an individual test. Keep the whole check's verdict.
-			return []HeavyCheck{suite}
-		}
-		for _, name := range strings.Split(match[2], ", ") {
-			if !goTestName.MatchString(name) {
-				return []HeavyCheck{suite}
-			}
-			id := goTestPrefix + module + ":" + match[1] + ":" + name
-			if !seen[id] {
-				seen[id] = true
-				check := suite
-				check.CheckID = id
-				// A fixture may read outside its module (such as bin/pi-forks).
-				// No declared read set exists at individual test granularity.
-				check.Reads = nil
-				checks = append(checks, check)
-			}
-		}
+		check := suite
+		check.CheckID = goTestPrefix + module + ":" + test.Package + ":" + test.Name
+		// A fixture may read outside its module (such as bin/pi-forks).
+		// No declared read set exists at individual test granularity.
+		check.Reads = nil
+		check.LogPath, check.LogRef = test.Log, test.Log
+		checks = append(checks, check)
 	}
-	if len(checks) == 0 {
-		return []HeavyCheck{suite}
+	// Unnamed failures (e.g. build errors, crashes and timeouts) still
+	// belong to the suite. They must not erase any named cases it reported.
+	if unscoped || len(checks) == 0 {
+		checks = append(checks, suite)
 	}
 	return checks
 }

@@ -260,7 +260,7 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 	}
 	if only == "" {
 		var err error
-		argv, err = heavyLegacyArgv(ctx, argv)
+		argv, err = heavyLegacyArgv(ctx, argv, s.LaneRoot)
 		if err != nil {
 			return nil, err
 		}
@@ -319,7 +319,7 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 		}
 		return []HeavyCheck{{CheckID: only, Result: verdict, Detail: stderr.String(), LogPath: kept}}, nil
 	}
-	goFailures, err := readLegacyEvidence(ctx)
+	failures, err := readLegacyEvidence(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -377,20 +377,25 @@ func (s *ProcessSteps) runHeavyLegacy(ctx context.Context, dir, only string) ([]
 		if span.Kind != "" && span.Label != "" {
 			s.heavyReplaySelectors.Store(span.CheckID, span.Kind+":"+span.Label)
 		}
+		failure := failures[span.CheckID]
 		kept, logRef := "", ""
 		if verdict == "fail" || verdict == "error" || verdict == "stalled" {
-			kept = legacyKeptLog(logPath, verdict)
-			logRef = perCheckLogs[span.CheckID]
-			if kept == "" && logRef != "" {
-				kept = logRef
-			}
-			if logRef == "" && kept != "" {
-				logRef = kept
+			kept, logRef = failure.Log, failure.Log
+			if logRef == "" {
+				// Custom legacy programs need not use the observation adapter.
+				logRef = perCheckLogs[span.CheckID]
+				kept = legacyKeptLog(logPath, verdict)
+				if logRef == "" {
+					logRef = kept
+				}
+				if kept == "" {
+					kept = logRef
+				}
 			}
 		}
 		check := HeavyCheck{CheckID: span.CheckID, Result: verdict, DurationMS: (span.EndNS - span.StartNS) / 1000000, Reads: reads, LogPath: kept, LogRef: logRef}
 		if span.Kind == "go-tool" && verdict == "fail" {
-			result = append(result, goSuiteFailures(span.Label, goFailures[span.CheckID], check)...)
+			result = append(result, goSuiteFailures(span.Label, failure, check)...)
 			continue
 		}
 		result = append(result, check)
