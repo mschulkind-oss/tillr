@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -71,11 +72,24 @@ func (s *ProcessSteps) gateStallContext(c Candidate) ([]StallObservation, error)
 	}
 	observations := []StallObservation{}
 	for _, check := range rec.Payload.Checks {
-		if check.Result == GateStalled {
+		res := classifyCheck(checkresult.Observation{
+			Check:    check.CheckID,
+			Commit:   c.HeadSHA,
+			Worktree: c.Worktree,
+			Source:   checkresult.ResultWord,
+			Word:     check.Result,
+		})
+		if res.Outcome == checkresult.Unknown && res.Detail == checkresult.DetailStalled {
 			observations = append(observations, check)
 		}
 	}
-	if rec.Payload.Result != GateStalled || len(observations) == 0 {
+	runRes := classifyCheck(checkresult.Observation{
+		Commit:   c.HeadSHA,
+		Worktree: c.Worktree,
+		Source:   checkresult.ResultWord,
+		Word:     rec.Payload.Result,
+	})
+	if runRes.Outcome != checkresult.Unknown || runRes.Detail != checkresult.DetailStalled || len(observations) == 0 {
 		return nil, Externalf("gate exited 6 without a stalled check observation")
 	}
 	return observations, nil

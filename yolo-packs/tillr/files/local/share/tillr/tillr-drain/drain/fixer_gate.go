@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -93,16 +94,24 @@ func (s *ProcessSteps) fixerCheck(ctx context.Context, c Candidate, id string) (
 	if err != nil {
 		return "error", strings.TrimSpace(output + "\n" + err.Error())
 	}
-	switch code {
-	case record.ExitOK:
-		return "pass", output
-	case record.ExitNegative:
-		return "fail", output
-	case fixerUpstreamDropped:
-		return "dropped", output
-	default:
-		return "error", fmt.Sprintf("exit %d: %s", code, output)
+	classified := classifyCheck(checkresult.Observation{
+		Check:    id,
+		Commit:   c.HeadSHA,
+		Worktree: c.Worktree,
+		Source:   checkresult.JudgingProgram,
+		ExitCode: &code,
+	})
+	switch classified.Outcome {
+	case checkresult.Pass:
+		return string(checkresult.Pass), output
+	case checkresult.Fail:
+		return string(checkresult.Fail), output
+	case checkresult.Unavailable:
+		if classified.Detail == checkresult.DetailDropped {
+			return checkresult.DetailDropped, output
+		}
 	}
+	return checkresult.DetailError, fmt.Sprintf("exit %d: %s", code, output)
 }
 
 func fixerHeavyDeclaration(dir, id string) bool {
@@ -162,9 +171,16 @@ func (l *Loop) settleFixerGate(ctx context.Context, c *Candidate, gate *GateOutc
 		if ctx.Err() != nil {
 			return false, ctx.Err()
 		}
-		if answer == "dropped" || answer == "absent" {
+		classified := classifyCheck(checkresult.Observation{
+			Check:    id,
+			Commit:   c.HeadSHA,
+			Worktree: c.Worktree,
+			Source:   checkresult.FixerCheckWord,
+			Word:     answer,
+		})
+		if classified.Outcome == checkresult.Unavailable {
 			reason := "reads upstream"
-			if answer == "absent" {
+			if classified.Detail == checkresult.DetailAbsent {
 				reason, output = output, ""
 			}
 			if _, err := fmt.Fprintf(log, "fixer named check %s: dropped (%s)\n%s\n", id, reason, output); err != nil {
@@ -172,24 +188,29 @@ func (l *Loop) settleFixerGate(ctx context.Context, c *Candidate, gate *GateOutc
 			}
 			continue
 		}
-		label := answer
-		if answer != "pass" && answer != "fail" {
-			answer, label = "error", "could not judge"
+		verdictWord, label := string(checkresult.Pass), string(checkresult.Pass)
+		switch classified.Outcome {
+		case checkresult.Pass:
+		case checkresult.Fail:
+			verdictWord, label = string(checkresult.Fail), string(checkresult.Fail)
+		default:
+			verdictWord, label = checkresult.DetailError, "could not judge"
 		}
 		line := fmt.Sprintf("fixer named check %s: %s\n%s\n", id, label, output)
 		if _, err := io.WriteString(log, line); err != nil {
 			return false, err
 		}
-		entry := map[string]string{"check_id": id, "result": answer}
-		switch answer {
-		case "fail":
+		entry := map[string]string{"check_id": id, "result": verdictWord}
+		switch classified.Outcome {
+		case checkresult.Fail:
 			failed = append(failed, id)
 			checkLog := filepath.Join(logDir, fmt.Sprintf("fixer-named-%02d.log", i))
 			if err := os.WriteFile(checkLog, []byte(line), 0644); err != nil {
 				return false, err
 			}
 			entry["log_ref"] = checkLog
-		case "error":
+		case checkresult.Pass:
+		default:
 			unknown = append(unknown, id+": "+heavyBrief(output))
 		}
 		checks = append(checks, entry)

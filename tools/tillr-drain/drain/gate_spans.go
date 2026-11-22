@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/mschulkind-oss/tillr/checkresult"
 )
 
 // GateSpansFile is the gate's per-check span file inside a run's record directory. It is
@@ -159,7 +161,8 @@ func gateParentSpanID(verdictID string) string {
 // the caller treats no named check as unknown, because a failure with no failing span is a
 // run that could not say what was red rather than a run whose failure list is empty.
 func readFailingSpans(path string) ([]string, map[string][]string) {
-	return readSpansWithStatus(path, "FAIL")
+	checks, watches, _ := readMatchingSpans(path, checkresult.Fail, "", nil)
+	return checks, watches
 }
 
 func readSpansWithStatus(path, status string) ([]string, map[string][]string) {
@@ -168,6 +171,11 @@ func readSpansWithStatus(path, status string) ([]string, map[string][]string) {
 }
 
 func readSpansWithWatches(path, status string, declared map[string][]string) ([]string, map[string][]string, error) {
+	want := checkresult.Classify(checkresult.Observation{Source: checkresult.LegacySpan, Word: status})
+	return readMatchingSpans(path, want.Outcome, want.Detail, declared)
+}
+
+func readMatchingSpans(path string, wantOutcome checkresult.Outcome, wantDetail string, declared map[string][]string) ([]string, map[string][]string, error) {
 	body, err := os.ReadFile(path)
 	if err != nil {
 		return nil, nil, err
@@ -179,10 +187,17 @@ func readSpansWithWatches(path, status string, declared map[string][]string) ([]
 	checks := make([]string, 0, len(file.CheckSpans))
 	watches := map[string][]string{}
 	for _, span := range file.CheckSpans {
-		// `FAIL` is the gate's own spelling for a check that ran and failed its tree; the
-		// `ERR`, `STALE` and `not-run` statuses reach no verdict and exit the run 2, which
-		// the caller reads as unknown before it ever looks for failing checks.
-		if span.Status != status || span.CheckID == "" {
+		if span.CheckID == "" {
+			continue
+		}
+		// Legacy spans record `FAIL` for a check that ran and failed its tree; `ERR`,
+		// `STALE` and `not-run` reach no verdict and classify as `unknown` with detail `error`.
+		got := classifyCheck(checkresult.Observation{
+			Check:  span.CheckID,
+			Source: checkresult.LegacySpan,
+			Word:   span.Status,
+		})
+		if got.Outcome != wantOutcome || (wantDetail != "" && got.Detail != wantDetail) {
 			continue
 		}
 		checks = append(checks, span.CheckID)

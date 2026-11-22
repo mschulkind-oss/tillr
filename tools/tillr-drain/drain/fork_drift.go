@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
@@ -79,12 +80,21 @@ func readForkConflicts(path string) (observations map[string]forkObservation, un
 		unansweredFork = unansweredFork || (skip.Kind == forkDriftCheck && skip.Planned && skip.Owed)
 	}
 	for _, check := range file.CheckSpans {
-		switch check.Status {
-		case "not-run", "ERR", "STALE":
-			unfinished = true
-			unansweredFork = unansweredFork || (check.Kind == forkDriftCheck && check.Status != "not-run")
+		res := classifyCheck(checkresult.Observation{
+			Check:  check.CheckID,
+			Source: checkresult.CheckSpan,
+			Word:   check.Status,
+		})
+		if res.Outcome == checkresult.Unknown {
+			switch res.Detail {
+			case checkresult.DetailNotRun:
+				unfinished = true
+			case checkresult.DetailError, checkresult.DetailStale:
+				unfinished = true
+				unansweredFork = unansweredFork || check.Kind == forkDriftCheck
+			}
 		}
-		if check.Kind != forkDriftCheck || check.Status != "FAIL" {
+		if check.Kind != forkDriftCheck || res.Outcome != checkresult.Fail {
 			continue
 		}
 		var payload struct {

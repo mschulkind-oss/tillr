@@ -2,6 +2,8 @@
 // checkout, starting a command, or settling a verdict.
 package checkresult
 
+import "strings"
+
 // Source identifies the protocol that produced the raw result. Equal values
 // from different protocols do not necessarily have the same meaning.
 type Source string
@@ -9,7 +11,12 @@ type Source string
 const (
 	CheckCommand   Source = "check-command"
 	JudgingProgram Source = "judging-program"
+	BinaryProgram  Source = "binary-program"
 	ResultWord     Source = "result-word"
+	HeavyCheckWord Source = "heavy-check-word"
+	FixerCheckWord Source = "fixer-check-word"
+	LegacySpan     Source = "legacy-span"
+	CheckSpan      Source = "check-span"
 	CachedRecord   Source = "cached-record"
 	BudgetNote     Source = "budget-note"
 	GoModuleBuild  Source = "go-module-build"
@@ -81,19 +88,22 @@ const (
 )
 
 const (
-	DetailPassed      = "passed"
-	DetailCached      = "cached"
-	DetailRemembered  = "remembered"
-	DetailFailed      = "failed"
-	DetailError       = "error"
-	DetailStalled     = "stalled"
-	DetailUnavailable = "unavailable"
-	DetailSkipped     = "skipped"
-	DetailDropped     = "dropped"
-	DetailAbsent      = "absent"
-	DetailQuarantined = "quarantined"
-	DetailDisabled    = "disabled"
-	DetailOverBudget  = "over-budget"
+	DetailPassed       = "passed"
+	DetailCached       = "cached"
+	DetailRemembered   = "remembered"
+	DetailFailed       = "failed"
+	DetailError        = "error"
+	DetailStalled      = "stalled"
+	DetailUnavailable  = "unavailable"
+	DetailSkipped      = "skipped"
+	DetailDropped      = "dropped"
+	DetailAbsent       = "absent"
+	DetailQuarantined  = "quarantined"
+	DetailDisabled     = "disabled"
+	DetailOverBudget   = "over-budget"
+	DetailNotRun       = "not-run"
+	DetailStale        = "stale"
+	DetailUnrecognized = "unrecognized"
 )
 
 type Result struct {
@@ -137,6 +147,15 @@ func classifyRaw(o Observation) (Outcome, string) {
 				return Unavailable, "dropped"
 			}
 		}
+	case BinaryProgram:
+		if !o.ProcessError && o.ExitCode != nil {
+			switch *o.ExitCode {
+			case 0:
+				return Pass, DetailPassed
+			case 1:
+				return Fail, DetailFailed
+			}
+		}
 	case CachedRecord:
 		switch o.Word {
 		case "pass":
@@ -146,6 +165,14 @@ func classifyRaw(o Observation) (Outcome, string) {
 		}
 	case ResultWord:
 		return classifyWord(o.Word)
+	case HeavyCheckWord:
+		return classifyHeavyCheckWord(o.Word)
+	case FixerCheckWord:
+		return classifyFixerCheckWord(o.Word)
+	case LegacySpan:
+		return classifyLegacySpan(o.Word)
+	case CheckSpan:
+		return classifyCheckSpan(o.Word)
 	case BudgetNote:
 		if o.Word == DetailOverBudget {
 			return Unknown, DetailOverBudget
@@ -248,6 +275,85 @@ func classifyWord(word string) (Outcome, string) {
 	case "disabled":
 		return Disabled, "disabled"
 	default:
+		if strings.HasPrefix(word, "skipped:") {
+			return Unavailable, DetailSkipped
+		}
 		return Unknown, "error"
+	}
+}
+
+func classifyHeavyCheckWord(word string) (Outcome, string) {
+	switch word {
+	case "pass":
+		return Pass, DetailPassed
+	case "fail":
+		return Fail, DetailFailed
+	case "unavailable":
+		return Unavailable, DetailUnavailable
+	case "stalled":
+		return Unknown, DetailStalled
+	case "error":
+		return Unknown, DetailError
+	default:
+		return Unknown, DetailUnrecognized
+	}
+}
+
+func classifyFixerCheckWord(word string) (Outcome, string) {
+	switch word {
+	case "pass":
+		return Pass, DetailPassed
+	case "fail":
+		return Fail, DetailFailed
+	case "dropped":
+		return Unavailable, DetailDropped
+	case "absent":
+		return Unavailable, DetailAbsent
+	default:
+		return Unknown, DetailError
+	}
+}
+
+func classifyLegacySpan(word string) (Outcome, string) {
+	switch word {
+	case "PASS", "ok":
+		return Pass, DetailPassed
+	case "CACHED":
+		return Pass, DetailCached
+	case "skip":
+		return Unavailable, DetailSkipped
+	case "QUARANTINED":
+		return Unavailable, DetailQuarantined
+	case "FAIL":
+		return Fail, DetailFailed
+	case "STALLED":
+		return Unknown, DetailStalled
+	default:
+		return Unknown, DetailError
+	}
+}
+
+func classifyCheckSpan(word string) (Outcome, string) {
+	switch word {
+	case "PASS", "ok":
+		return Pass, DetailPassed
+	case "CACHED":
+		return Pass, DetailCached
+	case "skip":
+		return Unavailable, DetailSkipped
+	case "QUARANTINED":
+		return Unavailable, DetailQuarantined
+	case "FAIL":
+		return Fail, DetailFailed
+	case "STALLED":
+		return Unknown, DetailStalled
+	case "not-run":
+		return Unknown, DetailNotRun
+	case "STALE":
+		return Unknown, DetailStale
+	case "ERR":
+		return Unknown, DetailError
+	default:
+		return Unknown, DetailUnrecognized
 	}
 }

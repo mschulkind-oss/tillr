@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-land/land"
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -59,7 +60,12 @@ func (l *Loop) landRemoteSync(ctx context.Context, c Candidate, result *LoopResu
 	if err != nil {
 		return "", false, err
 	}
-	if verdict.BaseSHA != st.BaseSHA || verdict.TreeSHA != tree || (verdict.Result != land.VerdictPass && verdict.Result != land.VerdictPassInherited) {
+	verdictOK := verdict.Result == land.VerdictPassInherited || classifyCheck(checkresult.Observation{
+		Commit: c.HeadSHA,
+		Source: checkresult.ResultWord,
+		Word:   verdict.Result,
+	}).Outcome == checkresult.Pass
+	if verdict.BaseSHA != st.BaseSHA || verdict.TreeSHA != tree || !verdictOK {
 		return refuse("remote-sync needs a passing gate verdict bound to the staged base and candidate tree")
 	}
 	before, err := l.revParse(ctx, root, "refs/heads/"+TrunkRef)

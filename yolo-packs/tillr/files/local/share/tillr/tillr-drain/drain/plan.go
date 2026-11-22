@@ -17,6 +17,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/ownercriteria"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/settings"
@@ -1702,7 +1703,10 @@ func (p *planner) retryHoldReason(itemID string) string {
 	// committed, and a committed candidate is judged before its wall status (design
 	// D-RW2): once `gate.verdict` exists for the run, `gate-failed` is the hold, because
 	// that is the action a person takes.
-	if p.history.gateResults[latest] == GateFailed {
+	if raw := p.history.gateResults[latest]; raw != "" && classifyCheck(checkresult.Observation{
+		Source: checkresult.ResultWord,
+		Word:   raw,
+	}).Outcome == checkresult.Fail {
 		return ReasonGateFailed
 	}
 	if p.classes[latest] == AttemptUnjudged {

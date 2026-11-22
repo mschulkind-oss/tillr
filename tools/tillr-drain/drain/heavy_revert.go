@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -521,10 +522,17 @@ func (l *Loop) judgeRequired(ctx context.Context, candidate *Candidate) (string,
 			l.reportf("loop: %s required check %s gave no verdict: %v\n", candidate.ItemID, id, err)
 			continue
 		}
-		switch check.Result {
-		case "pass":
+		classified := classifyCheck(checkresult.Observation{
+			Check:    id,
+			Commit:   candidate.HeadSHA,
+			Worktree: candidate.Worktree,
+			Source:   checkresult.HeavyCheckWord,
+			Word:     check.Result,
+		})
+		switch classified.Outcome {
+		case checkresult.Pass:
 			l.reportf("loop: %s required check %s passes\n", candidate.ItemID, id)
-		case "fail":
+		case checkresult.Fail:
 			text := id + " failed"
 			if detail := strings.TrimSpace(check.Detail); detail != "" {
 				text += ":\n" + heavyBrief(detail)
