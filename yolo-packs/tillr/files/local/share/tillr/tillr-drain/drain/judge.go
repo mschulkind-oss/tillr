@@ -694,6 +694,7 @@ func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.J
 			c.RefusalDetail = detail
 			c.EvidenceKey = endingKey(ReasonEvalFailed, checks, "", writer)
 		}
+		c.verifyFeedback = judgeRefusalFindings(findings)
 		return l.holdJudge(ctx, c, c.Judge.Request.RunID, ReasonEvalFailed, detail, result)
 	}
 	if entry.Verdict == item.VerdictBlocked || entry.Verdict == item.VerdictDefective {
@@ -746,7 +747,27 @@ func (l *Loop) settleJudgeFailure(ctx context.Context, c Candidate, entry item.J
 			return err
 		}
 	}
+	if reason == ReasonJudgeBlocked {
+		c.verifyFeedback = judgeRefusalFindings(verdicts)
+	}
 	return l.holdJudge(ctx, c, c.Judge.Request.RunID, reason, entry.Reason, result)
+}
+
+// Compatibility and blocked refusals carry classifications for display only.
+// They do not participate in planned verify feedback, snapshots, or repeat detection.
+// Defective dispositions record their findings via RecordJudge instead.
+func judgeRefusalFindings(verdicts []item.JudgeEntry) *verifyFeedback {
+	var records []verifyFindingRecord
+	for _, v := range verdicts {
+		if v.Verdict == item.VerdictNotDone && len(v.Findings) != 0 {
+			records = append(records, verifyFindingRecord{Criterion: v.CriterionID, Reason: v.Reason, Findings: v.Findings})
+		}
+	}
+	if len(records) == 0 {
+		return nil
+	}
+	sort.Slice(records, func(i, j int) bool { return records[i].Criterion < records[j].Criterion })
+	return &verifyFeedback{Findings: records}
 }
 
 func writeJudgeReceipt(path string, receipt *JudgeReceipt) error {
@@ -774,9 +795,9 @@ func judgeRefusalHistory(r *store.Reader, itemID string) (string, error) {
  GROUP BY object_id
 )
 SELECT e.object_id, COALESCE((SELECT group_concat(json_extract(value,'$.criterion') || ': ' || json_extract(value,'$.reason'), char(10))
- FROM json_each(e.payload,'$.verify_feedback.findings')), json_extract(e.payload,'$.detail'))
+ FROM json_each(e.payload,'$.verify_feedback.findings') WHERE json_extract(e.payload,'$.step')=?), json_extract(e.payload,'$.detail'))
  FROM refusals f JOIN events e ON e.seq=f.first_seq ORDER BY f.first_seq`,
-		RefusalKind, itemID, RefusalVerifyNotDone, ReasonEvalFailed)
+		RefusalKind, itemID, RefusalVerifyNotDone, ReasonEvalFailed, RefusalVerifyNotDone)
 	if err != nil {
 		return "", err
 	}
@@ -887,6 +908,18 @@ Quote the faulty words in reason and cite request:words (saved request) or crite
 (the criterion judged). Candidate evidence alone cannot justify closing the item.
 A fault in the candidate is not-done, not defective.
 Example: the request is valid but the candidate drops input on error.
+
+Each not-done entry must include a non-empty findings array, with one object for each
+finding: kind (gap, regression, or unasked-change), case (one sentence), and paths
+(file:<repo-relative-path> or file:<repo-relative-path>:<line> locators) identifying
+the files that implement the case.
+A gap means the named case behaves as on the base, without meeting the request and
+without becoming worse. A regression means the named case behaves worse than on the
+base, or something that passes on the base fails. An unasked-change changes something
+no criterion needs.
+Give evidence for each classification in reason and evidence; for a gap, compare the
+named case with the base and show it behaves the same. If a finding cannot be classified,
+report it as a regression.
 
 A blocked entry also needs waiting_on
 with waiter (owner, design, plan, or item:<id> for a stored item). Its reason explains
@@ -1039,6 +1072,9 @@ func (l *Loop) holdJudge(ctx context.Context, c Candidate, judgeID, reason, deta
 		refusalPayload
 		WriterRunID string `json:"writer_run_id"`
 	}{refusalPayload: refusalPayload{ItemID: c.ItemID, LaneID: c.LaneID, TickID: c.TickID, Step: reason, Detail: detail, Evidence: c.EvidenceKey, BaseSHA: c.BaseSHA, HeadSHA: c.HeadSHA}, WriterRunID: writer}
+	if reason == ReasonEvalFailed || reason == ReasonJudgeBlocked {
+		payload.VerifyFeedback = c.verifyFeedback
+	}
 	if reason == ReasonEvalFailed {
 		var err error
 		if c.EvidenceKey != "" {

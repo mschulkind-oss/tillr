@@ -1352,14 +1352,22 @@ type itemData struct {
 
 // verdictView preserves each recorded judgment, not just the criterion's current state.
 type verdictView struct {
-	CriterionID string   `json:"criterion_id"`
-	Verdict     string   `json:"verdict"`
-	Actor       string   `json:"actor"`
-	ActorKind   string   `json:"actor_kind"`
-	ClaimClass  string   `json:"claim_class"`
-	RecordedAt  string   `json:"recorded_at"`
-	Reason      string   `json:"reason"`
-	Evidence    []string `json:"evidence"`
+	CriterionID string               `json:"criterion_id"`
+	Verdict     string               `json:"verdict"`
+	Actor       string               `json:"actor"`
+	ActorKind   string               `json:"actor_kind"`
+	ClaimClass  string               `json:"claim_class"`
+	RecordedAt  string               `json:"recorded_at"`
+	Reason      string               `json:"reason"`
+	Evidence    []string             `json:"evidence"`
+	Findings    []verdictFindingView `json:"findings,omitempty"`
+}
+
+// verdictFindingView mirrors the finding recorded in an item.verdict event.
+type verdictFindingView struct {
+	Kind  string   `json:"kind"`
+	Case  string   `json:"case"`
+	Paths []string `json:"paths"`
 }
 
 type itemDetail struct {

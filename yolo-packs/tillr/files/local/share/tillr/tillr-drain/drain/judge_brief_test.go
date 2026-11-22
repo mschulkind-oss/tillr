@@ -58,7 +58,15 @@ func TestJudgeBriefScopeAndRefusalHistory(t *testing.T) {
 	record := func(id, itemID, step, detail string) {
 		t.Helper()
 		fixtureWrite(t, f, func(tx *store.Tx) error {
-			return appendEffect(tx, RefusalKind, id, refusalPayload{ItemID: itemID, Step: step, Detail: detail}, l.cfg.Now())
+			payload := refusalPayload{ItemID: itemID, Step: step, Detail: detail}
+			if step == ReasonEvalFailed {
+				// Only one of this refusal's criteria had classifications. History must
+				// keep the complete detail, not just the classified subset.
+				payload.VerifyFeedback = &verifyFeedback{Findings: []verifyFindingRecord{{Criterion: "c2", Reason: "another compatibility finding", Findings: item.VerdictFindings{
+					{Kind: "gap", Case: "The case is missing.", Paths: []string{"file:candidate.txt"}},
+				}}}}
+			}
+			return appendEffect(tx, RefusalKind, id, payload, l.cfg.Now())
 		})
 	}
 	first := `c1: first finding\nc2: preserves \u007b\u007bLITERAL}}`
@@ -89,10 +97,10 @@ func TestJudgeBriefScopeAndRefusalHistory(t *testing.T) {
 	fixtureWrite(t, f, func(tx *store.Tx) error {
 		return appendEffectOn(tx, verifyTriageResetKind, "item", c.ItemID, struct{}{}, l.cfg.Now())
 	})
-	record("second", c.ItemID, ReasonEvalFailed, "c1: compatibility judge finding")
+	record("second", c.ItemID, ReasonEvalFailed, "c1: compatibility judge finding\nc2: another compatibility finding")
 	brief = stage()
 	for _, want := range []string{
-		heading, first, "c1: compatibility judge finding",
+		heading, first, `c1: compatibility judge finding\nc2: another compatibility finding`,
 		"State all remaining in-scope findings at once in this verdict, including multiple findings under the same criterion.",
 	} {
 		if !strings.Contains(strings.Join(strings.Fields(brief), " "), want) {

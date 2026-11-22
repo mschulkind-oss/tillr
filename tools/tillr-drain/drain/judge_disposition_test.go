@@ -125,6 +125,7 @@ func TestJudgeFailingDispositions(t *testing.T) {
 					return nil
 				})
 				controlling := ""
+				var checkedFindings []verifyFindingRecord
 				for i, verdict := range verdicts {
 					id, text := "c1", "the first criterion of item-a"
 					if i == 1 {
@@ -135,7 +136,12 @@ func TestJudgeFailingDispositions(t *testing.T) {
 					if verdict == item.VerdictDefective {
 						evidence = []string{"criterion:" + id}
 					}
-					s.entries = append(s.entries, item.JudgeEntry{CriterionID: id, CriterionHash: item.CriterionHash(text), Verdict: verdict, ClaimClass: item.ClaimVerification, Reason: reason, Evidence: evidence, WaitingOn: json.RawMessage(`{"waiter":"plan","reason":"nested reason does not override the entry"}`)})
+					entry := item.JudgeEntry{CriterionID: id, CriterionHash: item.CriterionHash(text), Verdict: verdict, ClaimClass: item.ClaimVerification, Reason: reason, Evidence: evidence, WaitingOn: json.RawMessage(`{"waiter":"plan","reason":"nested reason does not override the entry"}`)}
+					if verdict == item.VerdictNotDone {
+						entry.Findings = item.VerdictFindings{{Kind: "regression", Case: "The tested behavior previously passed.", Paths: []string{"file:tools/item-a/result.txt"}}}
+						checkedFindings = append(checkedFindings, verifyFindingRecord{Criterion: id, Reason: reason, Findings: entry.Findings})
+					}
+					s.entries = append(s.entries, entry)
 					if verdict == tc.outcome {
 						controlling = id
 					}
@@ -162,7 +168,18 @@ func TestJudgeFailingDispositions(t *testing.T) {
 					if err := r.QueryRow(`SELECT COUNT(*) FROM events WHERE kind='item.verdict'`).Scan(&n); err != nil {
 						return err
 					}
+					var raw []byte
+					if err := r.QueryRow(`SELECT payload FROM events WHERE kind='drain.refusal' AND object_id=?`, s.runs[1].RunID).Scan(&raw); err != nil {
+						return err
+					}
+					var refusal refusalPayload
+					if err := json.Unmarshal(raw, &refusal); err != nil {
+						return err
+					}
 					if tc.outcome == item.VerdictDefective {
+						if refusal.VerifyFeedback != nil {
+							t.Errorf("already recorded findings duplicated in refusal: %s", raw)
+						}
 						if state != "closed" || reason != "defective: "+controlling+": "+controlling+" judge reason" || !strings.Contains(by, "-judge;") {
 							t.Errorf("closure %s / %s / %s", state, reason, by)
 						}
@@ -183,8 +200,24 @@ func TestJudgeFailingDispositions(t *testing.T) {
 							if !strings.Contains(payload, `"actor_kind":"agent"`) || !strings.Contains(payload, s.workerHead) {
 								t.Errorf("unbound intake %s", payload)
 							}
+							var recorded struct {
+								Findings item.VerdictFindings `json:"findings"`
+							}
+							if err := json.Unmarshal([]byte(payload), &recorded); err != nil {
+								return err
+							}
+							if !reflect.DeepEqual(recorded.Findings, entry.Findings) {
+								t.Errorf("wrong findings in recorded verdict: %s", payload)
+							}
 						}
 					} else {
+						var want *verifyFeedback
+						if len(checkedFindings) > 0 {
+							want = &verifyFeedback{Findings: checkedFindings}
+						}
+						if refusal.Step != ReasonJudgeBlocked || refusal.Detail != controlling+" judge reason" || refusal.Evidence != "" || !reflect.DeepEqual(refusal.VerifyFeedback, want) {
+							t.Errorf("blocked refusal lost disposition or findings: %s", raw)
+						}
 						var got item.WaitingOn
 						if err := json.Unmarshal([]byte(waiting), &got); err != nil {
 							t.Fatal(err)

@@ -58,6 +58,36 @@ test("item history interleaves every run, verdict, owner ruling and state move o
   expect(within(history).getByRole("link", { name: "run-a" }).getAttribute("href")).toContain("run-a");
 });
 
+test("item history attaches classified findings only to the verdict that recorded them", () => {
+  const legacy = { criterion_id: "ac-1", verdict: "not-done", actor: "reviewer", actor_kind: "agent",
+    claim_class: "verification-only", recorded_at: "2026-11-21T00:00:00Z", reason: "older refusal", evidence: [] };
+  const item = { ...itemData, runs: [], owner_decisions: [], state_moves: [], verdicts: [legacy, {
+    ...legacy, recorded_at: "2026-11-22T00:00:00Z", reason: "current refusal", evidence: ["run:current"],
+    findings: [
+      { kind: "gap" as const, case: "Empty input is unchecked", paths: ["file:parse.go:24", "file:parse_test.go"] },
+      { kind: "regression" as const, case: "Old inputs fail", paths: ["file:parse.go:48"] },
+      { kind: "unasked-change" as const, case: "Help changed", paths: ["file:help.go"] },
+    ],
+  }] };
+  render(<ItemTimeline item={item} />);
+  const history = screen.getByRole("region", { name: "Item history" });
+  const [older, current] = within(history).getAllByRole("list")[0].children;
+  expect(older.textContent).toContain("older refusal");
+  expect(within(older as HTMLElement).queryByRole("list")).toBeNull();
+  expect(older.textContent).not.toMatch(/Gap|Regression|Unasked change|file:/);
+  expect(current.textContent).toContain("current refusal");
+  expect(current.textContent).toContain("run:current");
+  const findings = within(current as HTMLElement).getAllByRole("listitem");
+  expect(findings).toHaveLength(3);
+  for (const [index, texts] of [
+    ["Gap", "Empty input is unchecked", "file:parse.go:24", "file:parse_test.go"],
+    ["Regression", "Old inputs fail", "file:parse.go:48"],
+    ["Unasked change", "Help changed", "file:help.go"],
+  ].entries()) {
+    for (const text of texts) expect(within(findings[index]).getByText(text)).toBeTruthy();
+  }
+});
+
 const none = { next_run_id: null, next_attempt: null, next_step: null, next_seat: null, next_event_seq: null, next_at_ms: null };
 const refusals = [
   { event_seq: 2, at_ms: 2000, run_id: "verify-1", attempt: 1, detail: "c1: missing test\nc2: wrong file", replan: false, next_run_id: "work-2", next_attempt: 1, next_step: "work", next_seat: "build", next_event_seq: 3, next_at_ms: 3000 },

@@ -3,11 +3,13 @@ package main_test
 import (
 	"context"
 	"encoding/json"
-	"github.com/mschulkind-oss/tillr/store"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/mschulkind-oss/tillr/store"
 )
 
 func sqlStrings(t *testing.T, db, query string) []string {
@@ -146,6 +148,106 @@ func TestJudgeIntakeRecordsAllAndLandedEvidence(t *testing.T) {
 		if v.Actor != "review:run-judge:session-judge:route" || v.JudgedActor != "write:run-writer:session-writer:route" || v.EvaluatedHead != judgeGit(t, "HEAD") || len(v.Landed) != 1 || v.Landed[0] != judgeGit(t, "HEAD") || len(v.Evidence) != 2 || !strings.Contains(strings.Join(v.Evidence, " "), "commit:"+judgeGit(t, "HEAD")) {
 			t.Fatalf("bad provenance: %+v", v)
 		}
+	}
+}
+
+func TestJudgeRecordsFindings(t *testing.T) {
+	db, file := judgeFixture(t)
+	file["outcome"] = "fail"
+	entry := file["verdicts"].([]any)[1].(map[string]any)
+	entry["verdict"] = "not-done"
+	entry["reason"] = "The base also skips empty input; only the candidate breaks retries and changes the default port."
+	entry["evidence"] = []string{"check:base", "check:candidate"}
+	type finding struct {
+		Kind  string   `json:"kind"`
+		Case  string   `json:"case"`
+		Paths []string `json:"paths"`
+	}
+	want := []finding{
+		{"gap", "Empty input still skips validation.", []string{"file:input.go:42", "file:input_test.go"}},
+		{"regression", "A retry now drops the second request.", []string{"file:retry.go:88"}},
+		{"unasked-change", "The default port changed.", []string{"file:config.go:9"}},
+	}
+	entry["findings"] = want
+	code, out := judgeRun(t, db, file)
+	if code != 12 || strings.TrimSpace(string(out)) != "not-done" {
+		t.Fatalf("judge: %d %s", code, out)
+	}
+	bodies := sqlStrings(t, db, `SELECT payload FROM events WHERE kind='item.verdict' AND json_extract(payload, '$.criterion_id')='c2'`)
+	if len(bodies) != 1 {
+		t.Fatalf("want one verdict for c2, got %v", bodies)
+	}
+	var stored struct {
+		Findings []finding `json:"findings"`
+		Reason   string    `json:"reason"`
+		Evidence []string  `json:"evidence"`
+	}
+	if err := json.Unmarshal([]byte(bodies[0]), &stored); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(stored.Findings, want) || stored.Reason != entry["reason"] || !reflect.DeepEqual(stored.Evidence, entry["evidence"]) {
+		t.Fatalf("stored verdict lost finding or justification: %+v", stored)
+	}
+}
+
+func TestJudgeRefusesMalformedFindings(t *testing.T) {
+	for _, tc := range []struct{ name, raw string }{
+		{"null", `null`},
+		{"empty-array", `[]`},
+		{"not-array", `{}`},
+		{"null-entry", `[null]`},
+		{"unknown-field", `[{"kind":"gap","case":"Still absent.","paths":["file:code.go"],"detail":"extra"}]`},
+		{"unknown-kind", `[{"kind":"bug","case":"Still absent.","paths":["file:code.go"]}]`},
+		{"missing-case", `[{"kind":"gap","paths":["file:code.go"]}]`},
+		{"blank-case", `[{"kind":"gap","case":"  ","paths":["file:code.go"]}]`},
+		{"missing-paths", `[{"kind":"gap","case":"Still absent."}]`},
+		{"empty-paths", `[{"kind":"gap","case":"Still absent.","paths":[]}]`},
+		{"wrong-locator", `[{"kind":"gap","case":"Still absent.","paths":["commit:abc"]}]`},
+		{"absolute-path", `[{"kind":"gap","case":"Still absent.","paths":["file:/code.go"]}]`},
+		{"escaping-path", `[{"kind":"gap","case":"Still absent.","paths":["file:../code.go"]}]`},
+		{"invalid-line", `[{"kind":"gap","case":"Still absent.","paths":["file:code.go:zero"]}]`},
+		{"invalid-second-locator", `[{"kind":"gap","case":"Still absent.","paths":["file:code.go","file:"]}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db, file := judgeFixture(t)
+			file["outcome"] = "fail"
+			entry := file["verdicts"].([]any)[1].(map[string]any)
+			entry["verdict"] = "not-done"
+			entry["findings"] = json.RawMessage(tc.raw)
+			code, out := judgeRun(t, db, file)
+			assertRefused(t, code, out, "judge-output")
+			if n := eventsOfKind(t, db, "item.verdict"); n != 0 {
+				t.Fatalf("refusal wrote %d verdicts", n)
+			}
+		})
+	}
+}
+
+func TestJudgeAcceptsSavedVerdictWithoutFindings(t *testing.T) {
+	db, file := judgeFixture(t)
+	// A saved verdict file from before findings were recorded still checks and
+	// writes, and the resulting event retains its historical shape.
+	file["outcome"] = "fail"
+	file["verdicts"].([]any)[1].(map[string]any)["verdict"] = "not-done"
+	code, out := judgeRun(t, db, file)
+	if code != 12 || strings.TrimSpace(string(out)) != "not-done" {
+		t.Fatalf("judge: %d %s", code, out)
+	}
+	bodies := sqlStrings(t, db, `SELECT payload FROM events WHERE kind='item.verdict' ORDER BY seq`)
+	if len(bodies) != 2 {
+		t.Fatalf("want two verdicts, got %v", bodies)
+	}
+	for _, body := range bodies {
+		var stored map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(body), &stored); err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := stored["findings"]; exists {
+			t.Fatalf("invented findings: %s", body)
+		}
+	}
+	if state := showItem(t, db, "item_042").Payload.Criteria[1].State; state != "not-done" {
+		t.Fatalf("historical not-done verdict read as %q", state)
 	}
 }
 

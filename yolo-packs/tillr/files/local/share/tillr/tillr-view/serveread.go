@@ -363,7 +363,7 @@ func readCriteria(r *store.Reader, itemID string) ([]storeCriterion, error) {
 	return out, rows.Err()
 }
 
-// readItemVerdicts reads the event log, where the verdict writer stores authorship.
+// readItemVerdicts reads recorded authorship and findings from each verdict event.
 // Sequence order retains repeated judgments of the same criterion.
 func readItemVerdicts(r *store.Reader, itemID string) ([]verdictView, error) {
 	rows, err := r.Query(`SELECT payload, ts FROM events

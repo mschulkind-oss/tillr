@@ -401,9 +401,10 @@ func TestJudgeRouteBeforeGate(t *testing.T) {
 
 type judgeFormRefusalSteps struct {
 	*judgeRouteSteps
-	judgeCalls    int
-	judgeSessions []string
-	judgeRequests []run.Request
+	invalidFindings bool
+	judgeCalls      int
+	judgeSessions   []string
+	judgeRequests   []run.Request
 }
 
 func (s *judgeFormRefusalSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
@@ -427,13 +428,17 @@ func (s *judgeFormRefusalSteps) Run(ctx context.Context, req run.Request) (run.R
 			Reason:        "all tests pass",
 			Evidence:      []string{"cmd:cd tools/tillr-run && go test ./run -run TestExecRecordsQuickOutChoice (pass)"},
 		}}
+		if s.invalidFindings {
+			s.entries[0].Verdict = item.VerdictNotDone
+			s.entries[0].Reason = "The case is not covered."
+			s.entries[0].Evidence = []string{"cmd:example"}
+		}
 	} else {
 		s.entries = nil
 	}
 	rec, log, err := s.judgeRouteSteps.Run(ctx, req)
 	if s.judgeCalls == 1 {
-		// judgeRouteSteps sets Outcome="fail" whenever s.entries != nil; rewrite with Outcome="pass"
-		// to match the reported case where the judge wrote a full pass with prose in evidence.
+		// Rebuild the first response to identify the intended form error on the wire.
 		target := filepath.Join(s.f.laneRoot, req.LaneID, WorktreeDir)
 		output := item.JudgeOutput{
 			EvaluatedHead: s.workerHead,
@@ -441,17 +446,34 @@ func (s *judgeFormRefusalSteps) Run(ctx context.Context, req run.Request) (run.R
 			Outcome:       "pass",
 			Verdicts:      s.entries,
 		}
+		if s.invalidFindings {
+			output.Outcome = "fail"
+		}
 		raw, _ := json.Marshal(output)
-		writeForkFile(s.t, filepath.Join(run.DurableDir(filepath.Join(s.f.laneRoot, req.LaneID), req.RunID), "eval.output"), string(raw))
+		text := string(raw)
+		if s.invalidFindings {
+			// JudgeEntry omits empty findings when marshaled. Simulate an explicit empty array on the wire.
+			text = strings.Replace(text, `"evidence":`, `"findings":[],"evidence":`, 1)
+		}
+		writeForkFile(s.t, filepath.Join(run.DurableDir(filepath.Join(s.f.laneRoot, req.LaneID), req.RunID), "eval.output"), text)
 	}
 	return rec, log, err
 }
 
 func TestJudgeFormRefusalResumesSameSessionAndPasses(t *testing.T) {
+	testJudgeFormRefusalResumes(t, false, "evidence must contain non-empty locators, not prose, for c1")
+}
+
+func TestJudgeFindingsFormRefusalResumesSameSessionAndPasses(t *testing.T) {
+	testJudgeFormRefusalResumes(t, true, "supplied findings must be a non-empty array")
+}
+
+func testJudgeFormRefusalResumes(t *testing.T, invalidFindings bool, validatorMessage string) {
+	t.Helper()
 	for _, kind := range []string{"standalone", "evaluator"} {
 		t.Run(kind, func(t *testing.T) {
 			f, l, baseSteps := judgeRouteFixture(t, "pass")
-			steps := &judgeFormRefusalSteps{judgeRouteSteps: baseSteps}
+			steps := &judgeFormRefusalSteps{judgeRouteSteps: baseSteps, invalidFindings: invalidFindings}
 			l.cfg.Steps = steps
 			if kind == "evaluator" {
 				writeForkFile(t, filepath.Join(f.root, "config/tillr/workflows/scout-then-build@v1.json"), evaluatorWorkflow)
@@ -491,7 +513,7 @@ func TestJudgeFormRefusalResumesSameSessionAndPasses(t *testing.T) {
 			if steps.judgeSessions[0] == "" || steps.judgeSessions[1] != steps.judgeSessions[0] {
 				t.Fatalf("judge sessions = %v, want same non-empty session", steps.judgeSessions)
 			}
-			if !strings.Contains(steps.judgeRequests[1].ResumePrompt, "evidence must contain non-empty locators, not prose, for c1") {
+			if !strings.Contains(steps.judgeRequests[1].ResumePrompt, validatorMessage) {
 				t.Fatalf("resume prompt missing validator message: %s", steps.judgeRequests[1].ResumePrompt)
 			}
 			if result.Rejected != 0 || len(result.RefusedSteps) != 0 {

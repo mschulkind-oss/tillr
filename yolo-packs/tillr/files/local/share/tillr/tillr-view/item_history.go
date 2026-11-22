@@ -183,7 +183,13 @@ type candidateSizeView struct {
 	AddedLineLimit int64 `json:"added_line_limit"`
 }
 
-// verifyRefusalView is one verify-not-done refusal and the step that ran after it. NextStep is
+type refusalFindingView struct {
+	Criterion string `json:"criterion"`
+	verdictFindingView
+}
+
+// verifyRefusalView is one planned verify refusal or other classified review refusal
+// and the step that ran after it. NextStep is
 // the workflow node (`work`, `plan`, `work/piece-one`) of the next run the drain started for
 // the item, or that run's seat when it ran outside a workflow node. The Next fields are null
 // until a later step has started: nothing ran next yet is not an empty step name. Replan is
@@ -202,14 +208,17 @@ type verifyRefusalView struct {
 	NextEventSeq *int64  `json:"next_event_seq"`
 	NextAtMS     *int64  `json:"next_at_ms"`
 	// Nil means no reading was recorded, not that the candidate was empty.
-	CandidateSize *candidateSizeView `json:"candidate_size,omitempty"`
+	CandidateSize *candidateSizeView   `json:"candidate_size,omitempty"`
+	Findings      []refusalFindingView `json:"findings,omitempty"`
 }
 
 func readVerifyRefusals(r *store.Reader, itemID string) ([]verifyRefusalView, error) {
 	out := []verifyRefusalView{}
-	rows, err := r.Query(`SELECT seq, ts, COALESCE(object_id, ''), COALESCE(json_extract(payload, '$.detail'), ''), COALESCE(json_extract(payload, '$.replan'), 0), json_extract(payload, '$.candidate_size')
+	rows, err := r.Query(`SELECT seq, ts, COALESCE(object_id, ''), COALESCE(json_extract(payload, '$.detail'), ''), COALESCE(json_extract(payload, '$.replan'), 0), json_extract(payload, '$.candidate_size'), json_extract(payload, '$.step'), json_extract(payload, '$.verify_feedback.findings')
  FROM events WHERE kind = 'drain.refusal' AND object_type = 'run' AND json_valid(payload)
- AND json_extract(payload, '$.item_id') = ? AND json_extract(payload, '$.step') = 'verify-not-done' ORDER BY seq`, itemID)
+ AND json_extract(payload, '$.item_id') = ?
+ AND json_extract(payload, '$.step') IN ('verify-not-done', 'eval-failed', 'judge-blocked')
+ ORDER BY seq`, itemID)
 	if err != nil {
 		return nil, err
 	}
@@ -217,8 +226,9 @@ func readVerifyRefusals(r *store.Reader, itemID string) ([]verifyRefusalView, er
 	for rows.Next() {
 		var x verifyRefusalView
 		var replan int
-		var size []byte
-		if err := rows.Scan(&x.EventSeq, &x.AtMS, &x.RunID, &x.Detail, &replan, &size); err != nil {
+		var step string
+		var size, findings []byte
+		if err := rows.Scan(&x.EventSeq, &x.AtMS, &x.RunID, &x.Detail, &replan, &size, &step, &findings); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -227,6 +237,24 @@ func readVerifyRefusals(r *store.Reader, itemID string) ([]verifyRefusalView, er
 				rows.Close()
 				return nil, err
 			}
+		}
+		if findings != nil {
+			var entries []struct {
+				Criterion string               `json:"criterion"`
+				Findings  []verdictFindingView `json:"findings"`
+			}
+			if err := json.Unmarshal(findings, &entries); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			for _, entry := range entries {
+				for _, finding := range entry.Findings {
+					x.Findings = append(x.Findings, refusalFindingView{Criterion: entry.Criterion, verdictFindingView: finding})
+				}
+			}
+		}
+		if step != "verify-not-done" && len(x.Findings) == 0 {
+			continue
 		}
 		x.Replan = replan != 0
 		refusals = append(refusals, x)
