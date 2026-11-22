@@ -2,7 +2,13 @@
   "github.com/mschulkind-oss/tillr-drain": {
     "builds": [],
     "reads": [
-      "config/tillr/"
+      "config/tillr/backend-policy.bedrock.json",
+      "config/tillr/backend-policy.claude-copilot.json",
+      "config/tillr/backend-policy.claude.json",
+      "config/tillr/backend-policy.copilot.json",
+      "config/tillr/backend-policy.gemini.json",
+      "config/tillr/backend-policy.json",
+      "config/tillr/backend-policy.mixed.json"
     ]
   },
   "github.com/mschulkind-oss/tillr-drain/drain": {
@@ -18,7 +24,18 @@
     ],
     "reads": [
       "bin/pi-forks",
-      "config/tillr/",
+      "config/tillr/backend-policy.bedrock.json",
+      "config/tillr/backend-policy.claude-copilot.json",
+      "config/tillr/backend-policy.claude.json",
+      "config/tillr/backend-policy.copilot.json",
+      "config/tillr/backend-policy.gemini.json",
+      "config/tillr/backend-policy.json",
+      "config/tillr/backend-policy.mixed.json",
+      "config/tillr/commands.json",
+      "config/tillr/deny-list.json",
+      "config/tillr/gate-policy.json",
+      "config/tillr/plan-guidance.md",
+      "config/tillr/workflows/",
       "tools/fork-check.py",
       "tools/gate/change-gate.py",
       "tools/gate/classify.py",

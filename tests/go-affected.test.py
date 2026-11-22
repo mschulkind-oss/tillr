@@ -164,7 +164,10 @@ def test_selection_rules(root_graph: dict) -> None:
             "github.com/mschulkind-oss/tillr-land",
             "github.com/mschulkind-oss/tillr-drain/drain",
         }),
-        ("config/tillr/policy.json", {"github.com/mschulkind-oss/tillr-drain"}),
+        ("config/tillr/backend-policy.json", {
+            "github.com/mschulkind-oss/tillr-drain",
+            "github.com/mschulkind-oss/tillr-drain/drain",
+        }),
         ("bin/pi-forks", {"github.com/mschulkind-oss/tillr-drain/drain"}),
         ("tools/gate/change-gate.py", {"github.com/mschulkind-oss/tillr-drain/drain"}),
         ("tools/gate/classify.py", {"github.com/mschulkind-oss/tillr-drain/drain"}),
@@ -236,7 +239,7 @@ def test_selection_rules(root_graph: dict) -> None:
     assert len(by_pkg["github.com/mschulkind-oss/tillr-gate"]["selected_tests"]) == 9, by_pkg
 
     sel_unscoped = go_affected.select_affected_packages(
-        ROOT, ["tools/fork-check.py", "config/tillr/policy.json"], graph=root_graph
+        ROOT, ["tools/fork-check.py", "config/tillr/backend-policy.json"], graph=root_graph
     )
     by_pkg = {item["import_path"]: item for item in sel_unscoped["selected"]}
     assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["selected_tests"] is None, by_pkg
@@ -249,6 +252,56 @@ def test_selection_rules(root_graph: dict) -> None:
     by_pkg = {item["import_path"]: item for item in sel_floor["selected"]}
     assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["selected_tests"] is None, by_pkg
     assert by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]["selected_tests"] is None, by_pkg
+
+    # 12. Alert rule changes under config/tillr/watch/ (alone or with tools/tillr-watch/)
+    # select tillr-watch and no tillr-drain package, while every config/tillr/ path read by
+    # tillr-drain tests still selects that package.
+    for watch_changed in (
+        ["config/tillr/watch/fast-gate-slow.toml", "tools/tillr-watch/main_test.go"],
+        ["config/tillr/watch/new-alert-rule.toml", "tools/tillr-watch/new_alert_rule_test.go"],
+        ["config/tillr/watch/fast-gate-slow.toml"],
+    ):
+        sel_watch = go_affected.select_affected_packages(ROOT, watch_changed, graph=root_graph)
+        watch_pkgs = {item["import_path"] for item in sel_watch["selected"]}
+        assert "github.com/mschulkind-oss/tillr-watch" in watch_pkgs, (watch_changed, watch_pkgs)
+        drain_pkgs = {
+            p for p in watch_pkgs
+            if p == "github.com/mschulkind-oss/tillr-drain"
+            or p.startswith("github.com/mschulkind-oss/tillr-drain/")
+        }
+        assert not drain_pkgs, f"{watch_changed} selected tillr-drain packages: {sorted(drain_pkgs)}"
+        assert "tools/tillr-drain" not in sel_watch["floor_modules"], sel_watch
+
+    policy_files = sorted(
+        p.relative_to(ROOT).as_posix()
+        for p in (ROOT / "config" / "tillr").glob("backend-policy*.json")
+    )
+    assert policy_files, "expected config/tillr/backend-policy*.json files"
+    for policy_path in policy_files:
+        sel_policy = go_affected.select_affected_packages(ROOT, [policy_path], graph=root_graph)
+        pkgs = {item["import_path"] for item in sel_policy["selected"]}
+        expected_policy_pkgs = {
+            "github.com/mschulkind-oss/tillr-drain",
+            "github.com/mschulkind-oss/tillr-drain/drain",
+        }
+        assert expected_policy_pkgs <= pkgs, f"{policy_path}: missing {expected_policy_pkgs - pkgs} in {pkgs}"
+
+    workflow_files = sorted(
+        p.relative_to(ROOT).as_posix()
+        for p in (ROOT / "config" / "tillr" / "workflows").glob("*.json")
+    )
+    assert workflow_files, "expected config/tillr/workflows/*.json files"
+    for drain_read_path in [
+        *workflow_files,
+        "config/tillr/workflows/new-workflow@v1.json",
+        "config/tillr/commands.json",
+        "config/tillr/deny-list.json",
+        "config/tillr/gate-policy.json",
+        "config/tillr/plan-guidance.md",
+    ]:
+        sel_drain_cfg = go_affected.select_affected_packages(ROOT, [drain_read_path], graph=root_graph)
+        pkgs = {item["import_path"] for item in sel_drain_cfg["selected"]}
+        assert "github.com/mschulkind-oss/tillr-drain/drain" in pkgs, f"{drain_read_path}: {pkgs}"
 
 
 def _strip_go_comments(src: str) -> str:
@@ -474,8 +527,17 @@ def test_edges_file_honest_and_env_read() -> None:
         assert any("TILLR_GATE_EDGE_INPUTS" in tf.read_text(encoding="utf-8") for tf in test_files), (
             f"{pkg_import}: no *_test.go reads TILLR_GATE_EDGE_INPUTS"
         )
-        # Validate read_tests keys and test names against scan_package_tests.
+        # Validate reads rules resolve on disk and read_tests keys/names match scan_package_tests.
         read_rules = set(edges[pkg_import].get("reads", []))
+        for rule in sorted(read_rules):
+            if rule.endswith("/"):
+                assert (ROOT / rule.rstrip("/")).is_dir(), (
+                    f"{pkg_import}: directory reads rule {rule!r} missing on disk"
+                )
+            else:
+                assert (ROOT / rule).is_file(), (
+                    f"{pkg_import}: file reads rule {rule!r} missing on disk"
+                )
         read_tests = edges[pkg_import].get("read_tests", {})
         assert isinstance(read_tests, dict), f"{pkg_import}: read_tests must be a dict"
         pkg_test_names = set(go_affected.scan_package_tests(ROOT, {
