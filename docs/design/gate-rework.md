@@ -2883,6 +2883,81 @@ that runs the affected Go test packages before the merge; it is the owner's to o
 | OQ-GR1 | The default of a per-repository setting, `red_cap`: landing stops at 20 landings or 60 minutes past the last green commit; a repository may set a different bound, and zero means no cap. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "a mechanism whose cost rises with trunk activity is pointed the wrong way" and the owner's 2026-11-15 ruling that the landing strategy is configurable per repository and red is brief. The owner may overturn it. **Rejected:** no cap, which lets the fixer's range and the deploy lag grow without limit. **Ruled out by the owner on 2026-11-18** ([OQ-GP7](tillr-graph-is-the-path.md#OQ-GP7)): under a red check, work lands only if it does not touch what that check reads, and there is no landing cap. The cap is still live in the tree (20 landings; its time bound was turned off on 2026-11-17, `d53580bfd`) until the graph design's waiting rule is built. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/redcap/cap.go`, `drain/red_cap.go`) |
 | OQ-GR2 | The default of a per-repository setting, `lane_base`: a new lane starts from the last green commit; a repository may choose the trunk tip. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are that a worker does not pay for a failure it did not cause, and the same cost-direction rule. The owner may overturn it. **Rejected:** always cutting from the tip. **Overturned by the owner on 2026-11-17** (`1fa2c069c`): work is always built against the latest trunk, never a past commit; a lane cut from the green pointer was handed a tree older than its own item's definition and produced false conflicts. This repository set `tip`; the code's default when the key is absent is still `green`. **Replaced by the owner's ruling of 2026-11-21** (`D-GR24`): new work starts from the last proved trunk commit again, and this repository sets `green`. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/drain/lane_base.go`; the repository setting follows `D-GR24`) |
 | OQ-GR3 | A change to the gate's own runner lands only after the runner's suite passes, before the merge, under either strategy. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principle is the fence of [escalation ladder Section 5.2](escalation-ladder.md#52-the-fence-what-a-lane-may-not-edit) (gate definitions change only as their own item), for the reason the 2026-11-05 ruling gave: a wrong judge is the one red a revert does not repair. The owner may overturn it. **Rejected:** landing it in ten seconds and re-running every landing's fast checks after a red suite. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/gate/runner-first.test.py`) |
+| `D-GR40` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** It amends `D-GR39` to match the operator request of 2026-11-21, whose words are "runs go test on the selected packages with Go's test cache left on (no -count=1)". The one exception `D-GR39` made is withdrawn: no package the affected-packages check selects is run with `-count=1`, whatever the reason it was selected. The stale pass that exception guarded against is stopped another way. The check passes each test package that has an entry in the edges file a digest of that entry's inputs in an environment variable, the package's tests read the variable, and Go's result cache then reruns the package when the digest changes and answers from the cache when it does not. The timing record no longer holds a `-count=1` field. Every other part of `D-GR39` stands. **Rejected:** `-count=1` for packages selected only through a declared edge (`D-GR39`'s exception; the request excludes it); the cache on for those packages with their inputs left invisible to it (a pass from before the change); the drain's symlink alias copied into every module with an edge (it covers Go sources only, and a second copy of it per module). | 2026-11-22 | [The result cache stays on for every affected package](#the-result-cache-stays-on-for-every-affected-package) | — (not built) |
+
+### The result cache stays on for every affected package
+
+What follows is the designer's decision of 2026-11-22 (`D-GR40`), made to answer a build worker's
+report against the operator request of 2026-11-21 for the check that runs the affected Go test
+packages before the merge. None of it is the owner's ruling, and the owner may overturn any part
+of it. It amends `D-GR39` and the part of this document that `D-GR39` settles, the section
+numbered 6.12 and titled "A change to a tillr Go module runs its affected test packages before
+it lands". Where that section and this one differ, this one is the decision. The terms used here
+(affected test package, declared edge, the edges file and its `builds` and `reads` fields, the
+`go-affected` check) are defined in that section.
+
+**The report was right.** The request's words are: "runs go test on the selected packages with
+Go's test cache left on (no -count=1)". `D-GR39` kept the cache on and then made one exception,
+the designer's own: a package selected only through a declared edge, in a module whose tests do
+not declare the edge's inputs to Go's result cache, was to run with `-count=1`. A builder cannot
+follow both. The request is the later and the more specific statement, and the exception was
+never the owner's, so the exception goes.
+
+**What is decided.**
+
+- `go-affected` never passes `-count=1` to `go test`, for any package, whatever the reason the
+  package was selected. A package Go answers from its result cache counts as passed, as before.
+- The fault the exception guarded against is real and is stopped another way. A test that builds
+  or runs a sibling program does so in a child process, and Go's cache does not see what a child
+  reads. Go's cache also ignores a file the test itself opens outside its own module (stated in
+  `tools/tillr-drain/internal/testinputs/inputs.go`). So a cached pass for such a package could
+  date from before the change that selected it. The remedy is to make the inputs visible to the
+  cache, not to turn the cache off.
+- **The edge digest** *(the term and the variable name below are the designer's)* is one hash
+  over the contents, in the candidate's tree, of everything a test package's entry in the edges
+  file names: for each program under `builds`, the files of that program's package and of every
+  package it imports inside the tillr modules, with those modules' `go.mod` and `go.sum`; for
+  each path under `reads`, the file, or every file under the directory prefix. The package list
+  comes from the import graph the selection already read.
+- The check runs each selected package that has an entry in the edges file with the environment
+  variable `TILLR_GATE_EDGE_INPUTS` set to that package's edge digest. Such a package is run in
+  its own `go test` call, so that it sees its own digest and no other package's.
+- Each test package with an entry in the edges file reads that variable once, in its `TestMain`.
+  Go's result cache records the environment variables a test reads and their values. A changed
+  digest therefore reruns the package, and an unchanged one is answered from the cache. Adding
+  that read to the packages listed in the edges file is part of the request's build.
+- The drain's own declaration (`testinputs.Track`) is left as it is. It serves runs outside the
+  gate, where the variable is unset.
+- Outside the gate the variable is unset, so its value is the same on every run and a cached
+  pass there can be stale, as it can today. This decision does not change that. The heavy tier
+  still runs each whole suite fresh after the merge.
+
+**What keeps it true.** Two tests, both part of the request's build:
+
+- The test that scans the modules' `_test.go` files against the edges file also fails when a
+  package with an entry there does not read `TILLR_GATE_EDGE_INPUTS`.
+- A test in the shape of `tools/tillr-drain/cache_test.py` proves the mechanism on one package
+  with a `builds` edge and one with a `reads` edge: a second run with the same digest is
+  answered from the cache, and a run after a change to an edge input is not.
+
+If that second test cannot be made to pass, the mechanism is wrong and the builder reports it as
+a fault in this decision. The builder does not fall back to `-count=1`.
+
+**What is recorded.** The timing record's per-package fields are the reason the package was
+selected, its elapsed time and whether Go answered it from the cache. The field `D-GR39` listed
+for whether a package was run with `-count=1` is not recorded, because no package is.
+
+**What a verifier of the request's landing judges, restated.** Everything `D-GR39`'s paragraph
+lists, with one change: the check's `go test` commands carry no `-count=1`, and the two tests
+above exist. A verifier does not refuse the landing because a package selected through a
+declared edge was answered from the cache.
+
+| Alternative | Verdict |
+| :--- | :--- |
+| `-count=1` for a package selected only through a declared edge (`D-GR39`'s exception) | Rejected. The request says "no -count=1", and the exception was the designer's own. |
+| The cache on for those packages with nothing added | Rejected. The pass could be one from before the change, which is the miss this check exists to stop. |
+| Copy the drain's `testinputs.Track` into every module that has an edge | Rejected. It needs a symlink alias kept in each module, it declares Go sources only, and it would be a second and third copy of the same code. |
+| Have the check delete the cached result of an edge package before running it | Rejected. It is `-count=1` by another name: the package would run fresh on every gate, changed or not. |
 
 ## 11. Build order
 
