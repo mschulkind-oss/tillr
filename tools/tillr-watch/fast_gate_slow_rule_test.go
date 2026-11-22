@@ -85,29 +85,30 @@ func TestFastGateSlowRules(t *testing.T) {
 
 	t.Run("run", func(t *testing.T) {
 		appendTiming, pending, now := fixture(t, runRule)
-		appendTiming(now.Add(-2*time.Hour), map[string]any{"wall_ms": 150001, "slowest_check": "old-check"})
-		appendTiming(now, map[string]any{"wall_ms": 150000, "slowest_check": "boundary-check"})
+		appendTiming(now.Add(-2*time.Hour), map[string]any{"wall_ms": 61000, "slowest_check": "old-check"})
+		appendTiming(now, map[string]any{"wall_ms": 59000, "slowest_check": "quiet-check"})
+		appendTiming(now, map[string]any{"wall_ms": 60000, "slowest_check": "boundary-check"})
 		if notices := pending(); len(notices) != 0 {
-			t.Fatalf("boundary and out-of-window runs should not alert: %+v", notices)
+			t.Fatalf("59s, 60s boundary, and out-of-window runs should not alert: %+v", notices)
 		}
-		appendTiming(now, map[string]any{"wall_ms": 150001, "slowest_check": "go-test:example"})
+		appendTiming(now, map[string]any{"wall_ms": 61000, "slowest_check": "go-test:example"})
 		notices := pending()
 		if len(notices) != 1 || notices[0].Bundle.Subject != "go-test:example" {
 			t.Fatalf("expected named slowest check: %+v", notices)
 		}
 		guidance := notices[0].Bundle.Guidance
-		if !strings.Contains(guidance.Summary, "go-test:example") || !strings.Contains(guidance.Summary, "150") ||
+		if !strings.Contains(guidance.Summary, "go-test:example") || !strings.Contains(guidance.Summary, "longer than 60 seconds") ||
 			!strings.Contains(strings.Join(guidance.Check, " "), "gate.timing.jsonl") ||
 			!strings.Contains(strings.Join(guidance.Check, " "), "unmeasured") {
 			t.Fatalf("missing rendered check or investigation guidance: %+v", guidance)
 		}
 		firstID := notices[0].AlertID
-		appendTiming(now, map[string]any{"wall_ms": 150002, "slowest_check": "go-test:example"})
-		appendTiming(now, map[string]any{"wall_ms": 149999, "slowest_check": "go-test:example"})
+		appendTiming(now, map[string]any{"wall_ms": 60001, "slowest_check": "go-test:example"})
+		appendTiming(now, map[string]any{"wall_ms": 59000, "slowest_check": "go-test:example"})
 		if again := pending(); len(again) != 1 || again[0].AlertID != firstID {
 			t.Fatalf("repeat slow run or faster run should retain the episode: %+v", again)
 		}
-		appendTiming(now, map[string]any{"wall_ms": 151000, "slowest_check": "unmeasured"})
+		appendTiming(now, map[string]any{"wall_ms": 60001, "slowest_check": "unmeasured"})
 		notices = pending()
 		idx := slices.IndexFunc(notices, func(n watch.Notice) bool { return n.Bundle.Subject == "unmeasured" })
 		if len(notices) != 2 || idx < 0 {

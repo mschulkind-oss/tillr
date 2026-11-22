@@ -1,5 +1,5 @@
-# D-TW43, docs/design/tillr-watch.md Section 5.5: 150 seconds starts above
-# the slowest run, 123.3 seconds, in the 2026-11-21 ten-run baseline.
+# D-TW52, docs/design/tillr-watch.md Section 5.5: 60 seconds sits above the
+# ~40-second fast gate accepted in D-GR38 (2026-11-22 operator request).
 [[rule]]
 id = "fast-gate-run-slow"
 scope = "core"
@@ -11,11 +11,11 @@ events = ["drain.fast-gate-timing"]
 [rule.when]
 group_by = "slowest_check"
 pattern = "predicate_match"
-match = 'event.wall_ms > 150000'
+match = 'event.wall_ms > 60000'
 window = "1h"
 
 [rule.guidance]
-summary = "The fast gate took longer than 150 seconds in {{count}} runs in the last hour; the slowest check was {{subject}}."
+summary = "The fast gate took longer than 60 seconds in {{count}} runs in the last hour; the slowest check was {{subject}}."
 check = ["Read gate.timing.jsonl in the run's directory. If the subject is unmeasured, the record gives no check's time."]
 do = ["Establish which check grew and what change made it grow."]
 
