@@ -1816,11 +1816,11 @@ def go_tool_watches(directory: str, root: Path) -> tuple[str, ...]:
     return watches + (GO_SHARD_INPUTS if directory in GO_SHARD_DIRS else ())
 
 
-def go_tool_command(directory: str) -> str:
+def go_tool_command(directory: str, slot_class: str = "proof") -> str:
     """Complete suite: shards run fresh; native commands retain Go result caching."""
     if directory in GO_SHARD_DIRS:
         return (f"CGO_ENABLED=0 python3 tools/go-test-shards.py {shlex.quote(directory)} "
-                f"-k 6 --slot-class proof --timeout {GO_TEST_TIMEOUT}")
+                f"-k 6 --slot-class {slot_class} --timeout {GO_TEST_TIMEOUT}")
     return (f"cd {directory} && CGO_ENABLED=0 go test -parallel {GO_TOOL_PARALLEL} "
             f"-timeout {GO_TEST_TIMEOUT} ./...")
 
@@ -6526,6 +6526,11 @@ def apply_tier(plan: Plan, tier: str | None, changed: list[str] | None = None) -
                       f"({check.kind} is a rolling kind)", kind=check.kind)
         elif not reads_upstream(check):
             # The proof judges the landing kinds too: see the docstring.
+            if tier == TIER_ROLLING and check.kind == "gate-runner" and check.go_module in GO_SHARD_DIRS:
+                check.argv = [
+                    part.replace("--slot-class gate", "--slot-class proof")
+                    for part in check.argv
+                ]
             kept.append(check)
         else:
             plan.not_planned(check.label,
@@ -6978,12 +6983,13 @@ def build_plan(
         runner = directory == "tools/tillr-gate"
         suite_kind = ("gate-runner" if runner else
                       "go-substrate" if directory in GO_LANDING_SUITE_DIRS else "go-tool")
+        slot_class = "gate" if (runner and tier != TIER_ROLLING) else "proof"
         watches = go_tool_watches(directory, root)
         go_tool = [path for path in changed if watched_path(path, set(watches))]
         if go_tool and shutil.which("go"):
             plan.checks.append(
                 Check(suite_kind, f"{directory}'s whole suite passes",
-                      ["sh", "-c", go_tool_command(directory) + (
+                      ["sh", "-c", go_tool_command(directory, slot_class=slot_class) + (
                           (("" if directory in GO_SHARD_DIRS else " && cd ../..")
                            + " && python3 tools/gate/change-gate.test.py"
                            " && python3 tools/gate/runner-first.test.py") if runner else "")],
