@@ -145,3 +145,67 @@ test("read-only step may stop without a commit while a writing step still may no
 	assert.equal(writeResult.continue, true);
 	assert.match(writeResult.entries.at(-1).content, /there is no commit/);
 });
+
+test("committed step with unformatted Go files is refused back to the builder with the file names until formatted", async (t) => {
+	const { copyFileSync, mkdirSync } = await import("node:fs");
+	const { spawnSync } = await import("node:child_process");
+	const { fileURLToPath } = await import("node:url");
+	const repoRoot = fileURLToPath(new URL("../../../../../", import.meta.url));
+	const dir = mkdtempSync(join(tmpdir(), "keep-going-format-"));
+	const prevCwd = process.cwd();
+	const oldEnv = { ...process.env };
+	t.after(() => {
+		process.chdir(prevCwd);
+		for (const k of Object.keys(process.env)) if (!(k in oldEnv)) delete process.env[k];
+		Object.assign(process.env, oldEnv);
+		rmSync(dir, { recursive: true, force: true });
+	});
+
+	const sh = (script) => {
+		const r = spawnSync("sh", ["-c", script], {
+			cwd: dir,
+			encoding: "utf8",
+			env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" },
+		});
+		assert.equal(r.status, 0, r.stderr || r.stdout);
+		return r.stdout.trim();
+	};
+	sh("git init -q");
+	copyFileSync(join(repoRoot, ".justfile"), join(dir, ".justfile"));
+	mkdirSync(join(dir, "tools/gate/checks"), { recursive: true });
+	copyFileSync(join(repoRoot, "tools/gate/checks/format.json"), join(dir, "tools/gate/checks/format.json"));
+	sh("git add .justfile tools/gate/checks/format.json && git commit -qm base");
+	const base = sh("git rev-parse HEAD");
+
+	mkdirSync(join(dir, "tools/example"), { recursive: true });
+	writeFileSync(join(dir, "tools/example/new_file.go"), "package example\nfunc bad(){println(1)}\n");
+	sh("git add tools/example/new_file.go && git commit -qm unformatted");
+
+	process.chdir(dir);
+	delete process.env.TILLR_CALL_SUSPENDS;
+	delete process.env.TILLR_READ_ONLY_GROUP;
+	delete process.env.BOARD_DRAIN_BRIEF;
+	process.env.TILLR_GOAL_BASE = base;
+
+	const handlers = {};
+	keepGoing({
+		on(name, fn) { handlers[name] = fn; },
+		async exec(cmd, args) {
+			const r = spawnSync(cmd, args, { cwd: dir, encoding: "utf8" });
+			return { code: r.status, stdout: r.stdout, stderr: r.stderr };
+		},
+	});
+	const end = async (text) => {
+		handlers.agent_end({ messages: [{ role: "assistant", content: text, stopReason: "stop" }] });
+		return handlers.agent_before_settle({ entries: [], outcome: "completed" });
+	};
+
+	const refused = await end("RESULT: done");
+	assert.equal(refused.continue, true);
+	assert.match(refused.entries.at(-1).content, /tools\/example\/new_file\.go/);
+
+	sh("just format && git add tools/example/new_file.go && git commit -q --amend --no-edit");
+	const settled = await end("RESULT: done");
+	assert.equal(settled.continue, undefined);
+	assert.equal(settled.entries.at(-1).data.action, "settle");
+});

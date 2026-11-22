@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -11,6 +11,21 @@ function readRecord(path: string) {
 		if (error.code !== "ENOENT") throw error;
 		return undefined;
 	}
+}
+
+function unformattedPaths(cwd: string): string[] {
+	const decl = readRecord(join(cwd, "tools/gate/checks/format.json"));
+	if (!Array.isArray(decl?.command) || decl.command.length === 0 || !decl.command.every((arg: unknown) => typeof arg === "string" && arg.length > 0)) {
+		return [];
+	}
+	const cmd = decl.command as string[];
+	const result = spawnSync(cmd[0], cmd.slice(1), { cwd, encoding: "utf8" });
+	if (!result.error && result.status === 0) return [];
+	const outLines = String(result.stdout ?? "").split("\n").map((line) => line.trim()).filter(Boolean);
+	if (outLines.length > 0) return outLines;
+	const errLines = String(result.stderr ?? "").split("\n").map((line) => line.trim()).filter(Boolean);
+	if (errLines.length > 0) return errLines;
+	return [result.error ? result.error.message : `${cmd.join(" ")} exited ${result.status ?? "non-zero"}`];
 }
 
 const park = { content: [], details: {}, park: true };
@@ -48,6 +63,10 @@ export function executeLand(
 	]);
 	const dirty = [...changed].filter((name) => name);
 	if (dirty.length) throw new Error(`Commit or remove these uncommitted paths:\n${dirty.join("\n")}`);
+	const unformatted = unformattedPaths(cwd);
+	if (unformatted.length) {
+		throw new Error(`Format these files (and run \`just pack-sync\` if \`tools/tillr*\` changed), then amend the commit before calling land:\n${unformatted.join("\n")}`);
+	}
 	const refusal = state?.refused?.find((entry: { commit: string; report_only?: boolean }) =>
 		entry.commit === commit && entry.report_only !== true);
 	if (refusal) throw new Error(`This commit was already refused. A new commit is required.\n${refusal.answer}`);

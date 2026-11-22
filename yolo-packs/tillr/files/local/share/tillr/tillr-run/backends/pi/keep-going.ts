@@ -28,6 +28,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 export type Footer = "done" | "blocked" | "failed" | "trunk-broken";
 
@@ -35,6 +36,7 @@ export interface Tree {
 	head: string;
 	status: string;
 	content: string;
+	unformatted?: string[];
 }
 
 export interface GoalInput {
@@ -168,15 +170,16 @@ export function decide(input: GoalInput): GoalDecision {
 	const footer = footerOf(input.text);
 	const committed = input.tree.head !== "" && input.tree.head !== input.base;
 	const clean = input.tree.status.trim() === "";
+	const unformatted = input.tree.unformatted ?? [];
 	const obstacle = goalObstacleProblem(input.text, footer, committed, clean);
 	if (obstacle === "") return { action: "settle", reason: `the worker named a complete obstacle (RESULT: ${footer})` };
-	if (committed && clean && footer) return { action: "settle", reason: "the goal is met: a commit, a clean worktree and a report" };
+	if (committed && clean && unformatted.length === 0 && footer) return { action: "settle", reason: "the goal is met: a commit, a clean worktree and a report" };
 	if (input.readOnly && clean && footer === "done") return { action: "settle", reason: "the goal is met: a read-only step with a clean worktree and a report" };
 	if (unchangedPieceDone(input.allowUnchangedPiece, footer, input.tree, input.base)) {
 		return { action: "settle", reason: "the goal is met: an unchanged piece with a clean worktree and a report" };
 	}
 	const fingerprint = createHash("sha256")
-		.update([input.tree.head, input.tree.status, input.tree.content, input.text.trim().replace(/\s+/g, " ")].join("\0"))
+		.update([input.tree.head, input.tree.status, input.tree.content, unformatted.join("\n"), input.text.trim().replace(/\s+/g, " ")].join("\0"))
 		.digest("hex");
 	if (fingerprint === input.previous) {
 		return { action: "settle", reason: "identical repeat: the tree and the report are unchanged since the last nudge" };
@@ -188,6 +191,10 @@ export function decide(input: GoalInput): GoalDecision {
 		const paths = input.tree.status.trim().split("\n");
 		const shown = paths.slice(0, 20).join("\n");
 		missing.push(`these paths are uncommitted:\n${shown}${paths.length > 20 ? `\n(and ${paths.length - 20} more)` : ""}`);
+	}
+	if (committed && clean && unformatted.length > 0) {
+		const shown = unformatted.slice(0, 20).join("\n");
+		missing.push(`these files need formatting (run \`just format\`, plus \`just pack-sync\` if \`tools/tillr*\` changed, and amend the commit):\n${shown}${unformatted.length > 20 ? `\n(and ${unformatted.length - 20} more)` : ""}`);
 	}
 	if (!footer) missing.push("your last message has no RESULT footer");
 	else if (footer === "done" && !committed && needsCommit) missing.push("it says RESULT: done, but nothing is committed");
@@ -248,7 +255,30 @@ function textOf(message: any): string {
 	return content.filter((c: any) => c?.type === "text").map((c: any) => c.text ?? "").join("");
 }
 
-async function readTree(pi: any): Promise<Tree> {
+function formatCheckCommand(cwd = process.cwd()): string[] | undefined {
+	const path = join(cwd, "tools/gate/checks/format.json");
+	if (!existsSync(path)) return undefined;
+	try {
+		const decl = JSON.parse(readFileSync(path, "utf8"));
+		if (Array.isArray(decl?.command) && decl.command.length > 0 && decl.command.every((arg: unknown) => typeof arg === "string" && arg.length > 0)) {
+			return decl.command;
+		}
+	} catch {
+		return undefined;
+	}
+	return undefined;
+}
+
+function parseFormatFindings(cmd: string[], code: number | null | undefined, stdout: string, stderr: string): string[] {
+	if (code === 0) return [];
+	const outLines = stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+	if (outLines.length > 0) return outLines;
+	const errLines = stderr.split("\n").map((line) => line.trim()).filter(Boolean);
+	if (errLines.length > 0) return errLines;
+	return [`${cmd.join(" ")} exited ${code ?? "non-zero"}`];
+}
+
+async function readTree(pi: any, base?: string): Promise<Tree> {
 	const run = async (script: string, failure = "") => {
 		const r = await pi.exec("sh", ["-c", script]);
 		return r.code === 0 ? String(r.stdout ?? "") : failure;
@@ -258,7 +288,15 @@ async function readTree(pi: any): Promise<Tree> {
 	// The content key: tracked changes and every untracked file's blob id, so a repeat is
 	// a tree that did not change at all, not one whose path list happens to match.
 	const content = await run("{ git diff HEAD --binary; git ls-files -o --exclude-standard -z | xargs -0 -r git hash-object --; } | git hash-object --stdin");
-	return { head, status, content: content.trim() };
+	let unformatted: string[] | undefined;
+	if (base && head !== "" && head !== base && status.trim() === "") {
+		const cmd = formatCheckCommand();
+		if (cmd) {
+			const r = await pi.exec(cmd[0], cmd.slice(1));
+			unformatted = parseFormatFindings(cmd, r?.code, String(r?.stdout ?? ""), String(r?.stderr ?? ""));
+		}
+	}
+	return { head, status, content: content.trim(), unformatted };
 }
 
 export default function keepGoing(pi: any) {
@@ -277,10 +315,10 @@ export default function keepGoing(pi: any) {
 				(event?.outcome !== undefined && event.outcome !== "completed")) return;
 			const text = textOf(last);
 			const footer = footerOf(text);
-			if (allowUnchangedPiece && footer === "done" && unchangedPieceDone(true, footer, await readTree(pi), base)) return;
+			if (allowUnchangedPiece && footer === "done" && unchangedPieceDone(true, footer, await readTree(pi, base), base)) return;
 			let obstacle: string | undefined;
 			if (footer === "blocked" || footer === "trunk-broken") {
-				const tree = await readTree(pi);
+				const tree = await readTree(pi, base);
 				obstacle = goalObstacleProblem(text, footer, tree.head !== "" && tree.head !== base, tree.status.trim() === "");
 				if (obstacle === "") return;
 			}
@@ -298,7 +336,7 @@ export default function keepGoing(pi: any) {
 			outcome: event?.outcome,
 			stopReason: last?.stopReason,
 			text: textOf(last),
-			tree: await readTree(pi),
+			tree: await readTree(pi, base),
 			previous,
 			paused: !!pause && existsSync(pause),
 			readOnly: isReadOnlyStep(),

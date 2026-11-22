@@ -873,6 +873,10 @@ func (l *Loop) settleQuickWay(ctx context.Context, d Decision) error {
 }
 
 func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, base string, result *LoopResult, offered bool) (bool, error) {
+	return l.settleNodeFormat(ctx, d, rec, log, base, result, offered, nil)
+}
+
+func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record, log, base string, result *LoopResult, offered bool, formatResumePrompt *string) (bool, error) {
 	if evaluatorNode(d) {
 		return l.settleEvaluator(ctx, d, rec, base, result)
 	}
@@ -1133,6 +1137,36 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 			return true, retainedAfter(d.LaneID, stop)
 		}
 		return true, l.markExamined(ctx, d)
+	}
+	if !l.nonLanding && effectiveAccess == "write" && l.lanePatchRef(d.LaneID) == "" && head != "" && head != nodeBase && strings.TrimSpace(dirty) == "" {
+		unformatted, err := unformattedRepoFiles(ctx, target)
+		if err != nil {
+			return true, err
+		}
+		if len(unformatted) > 0 {
+			if !rec.Resumed && d.RunRequest != nil {
+				rec.Resumed, err = l.continuationStarted(ctx, *d.RunRequest)
+				if err != nil {
+					return true, err
+				}
+			}
+			if formatResumePrompt != nil && !offered && stage.Kind == "agent" && !rec.Resumed && eligibleFormatContinuation(rec) {
+				*formatResumePrompt = unformattedContinuationPrompt(unformatted)
+				return true, nil
+			}
+			detail := "node " + stage.ID + ": " + unformattedRefusalDetail(unformatted)
+			c := Candidate{ItemID: d.ItemID, LaneID: d.LaneID, RunID: rec.RunID, Worktree: target, BaseSHA: base, HeadSHA: head, RefusalDetail: detail}
+			if err := l.nodeOutcome(ctx, d, "refused"); err != nil {
+				return true, err
+			}
+			if err := l.refuse(ctx, c, result, RefusalFence); err != nil {
+				return true, err
+			}
+			if stop := l.abandon(ctx, d.LaneID, rec.RunID, head, detail); stop != "" {
+				return true, retainedAfter(d.LaneID, stop)
+			}
+			return true, l.markExamined(ctx, d)
+		}
 	}
 	if err := l.acceptNodeSettlementWithDelivery(ctx, &d, artifacts, delivery); err != nil {
 		return true, err

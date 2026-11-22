@@ -84,6 +84,11 @@ derived, not designed: do not hand-edit the mirror, and do not treat it as a sec
 concern. A change that skips it is correct work that fails the gate on `pack-sync` alone —
 measured on 2026-11-14, on the first item a real drain ever dispatched.
 
+**Format before committing.** When the target has a `just format` recipe, run `just format`
+after staging new files and before `git commit` (then run `just pack-sync` if `tools/tillr*`
+changed): `just format` reads tracked and staged paths, so running it before `git add` skips
+brand-new Go files.
+
 ## Seats
 
 These are seats tillr runs as nodes; a worker cannot start one.
