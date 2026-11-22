@@ -1,0 +1,48 @@
+# D-TW43, docs/design/tillr-watch.md Section 5.5: 150 seconds starts above
+# the slowest run, 123.3 seconds, in the 2026-11-21 ten-run baseline.
+[[rule]]
+id = "fast-gate-run-slow"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.fast-gate-timing"]
+
+[rule.when]
+group_by = "slowest_check"
+pattern = "predicate_match"
+match = 'event.wall_ms > 150000'
+window = "1h"
+
+[rule.guidance]
+summary = "The fast gate took longer than 150 seconds in {{count}} runs in the last hour; the slowest check was {{subject}}."
+check = ["Read gate.timing.jsonl in the run's directory. If the subject is unmeasured, the record gives no check's time."]
+do = ["Establish which check grew and what change made it grow."]
+
+[rule.delivery]
+receiver = "foreground"
+
+# D-TW43, docs/design/tillr-watch.md Section 5.5: 90 seconds starts above
+# the median, 65.4 seconds, in the 2026-11-21 ten-run baseline.
+[[rule]]
+id = "fast-gate-median-slow"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.fast-gate-timing"]
+
+[rule.when]
+group_by = "global"
+pattern = "predicate_match"
+match = 'event.median20_wall_ms > 90000'
+clear_when = 'event.median20_wall_ms <= 90000'
+window = "24h"
+
+[rule.guidance]
+summary = "The median fast-gate time over the last twenty runs exceeded 90 seconds."
+check = ["Read the newest drain.fast-gate-timing events and the per-run alerts for the slowest checks, then check gate.timing.jsonl in the runs' directories."]
+do = ["Establish which checks grew and what changes made them grow."]
+
+[rule.delivery]
+receiver = "foreground"
