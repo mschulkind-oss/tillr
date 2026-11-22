@@ -127,6 +127,12 @@ TILLR_BUILD_UNPROVED=HEAD just tillr-build         # only when the loop is down
   `tillr drain why` raises a `stale-loop-build` alarm while the running loop is
   older than the installed binary. Do not restart the loop by hand for a new
   build.
+- **No alarm is "expected"** (owner, 2026-11-22: "why is there an "expected"
+  alarm? that is never good for "boy who cried wolf""). When an alarm stands,
+  find what it is waiting on each time: for `stale-loop-build`, which gate or
+  proof defers the restart and whether that work began before or after the new
+  build was installed. A restart that waits behind work begun after the build
+  is being starved; that is a fault to report and file, not a normal wait.
 - **When the loop must be stopped by hand:** ask the keeper to stop
   (`python3 tools/tillr-roll/tillr-keep --stop`), then `tillr drain stop`, then
   wait for the loop process to exit. Never signal a `tillr-run` process and
@@ -270,11 +276,6 @@ Two faults seen on 2026-11-21, kept here until their fixes land:
   `GIT_DIR` and `GIT_WORK_TREE` over a scratch copy and ran tests that call
   `git init`. The keeper doubles its wait after each quick exit, so stop it
   (`tillr-keep --stop`) and start it again instead of waiting.
-- **Do not rely on the watcher alone.** On 2026-11-22 a waiting watcher did not
-  exit when an alert opened. Until that is fixed, read
-  `tillr watch status --store $S --rules config/tillr/watch --root /workspace`
-  at each check-in for alerts opened since the last one.
-
 ## What the operator settles belongs inside tillr
 
 Owner, 2026-11-21: "if you ever feel that you as the whale could solve some
@@ -403,3 +404,19 @@ limit to stop being needed, so do not build machinery for it.
 Create one recurring session timer at a 15-minute period whose prompt says:
 "Load the `drain-timed-checkin` skill and run one check-in." Replace an older
 timer rather than adding a second.
+
+A second, hourly timer runs a *deep dive* (owner, 2026-11-22: "should we add a
+less frequent wake up timer for you taht does a deeper dive?"). It is not
+another check-in. It looks across the hour for what one check-in misses:
+
+- the hour's wasted work in numbers: gate minutes per landing, candidates
+  gated more than once and why, squash conflicts, minutes the trunk was red,
+  minutes with no trunk proof running, idle lane minutes with work waiting;
+- every item the operator filed in the last three hours: landed, moving, or
+  closed for a wrong premise, and each "believed, not confirmed" statement in
+  the rulings file checked against the code or the log;
+- anything that repeated the same step three or more times, and any alarm or
+  alert standing for over an hour, each with its cause established;
+- the hour's spend and its costliest runs.
+
+File what it finds in the same turn and report in under fifteen lines.
