@@ -32,8 +32,10 @@ func isDispatch(d Decision) bool { return d.Action == ActionDispatch || d.Action
 // claims no lane, and does not affect what the next pass is allowed to try.
 func (l *Loop) recordDispatchDecline(ctx context.Context, d Decision, at time.Time, reason, waitingOn string) (err error) {
 	l.reportf("loop: declined dispatch of %s on %s: %q\n", d.ItemID, d.LaneID, reason)
+	start := time.Now()
 	defer func() {
 		if store.IsBusy(err) && ctx.Err() == nil {
+			l.recordBusyWrite("dispatch-decline", time.Since(start), l.cfg.Now())
 			l.reportf("loop: dispatch decline for %s on %s was not recorded, the store was busy: %v\n", d.ItemID, d.LaneID, err)
 			err = nil
 		}
@@ -51,7 +53,7 @@ func (l *Loop) recordDispatchDecline(ctx context.Context, d Decision, at time.Ti
 	if err != nil {
 		return err
 	}
-	return s.WriteTx(ctx, func(tx *store.Tx) error {
+	return l.writeTx(ctx, s, func(tx *store.Tx) error {
 		_, err := tx.Append(event.Event{Kind: dispatchDeclinedKind, ObjectType: "item", ObjectID: &d.ItemID, At: at, Payload: raw})
 		return err
 	})

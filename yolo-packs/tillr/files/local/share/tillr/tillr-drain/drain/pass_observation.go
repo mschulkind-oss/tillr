@@ -92,7 +92,7 @@ func (l *Loop) refreshSession(ctx context.Context, next time.Time) error {
 		return err
 	}
 	stopFlag := 0
-	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+	err = l.writeTx(ctx, s, func(tx *store.Tx) error {
 		if _, err := tx.Exec(`INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at, loop_owner, lanes)
    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET
    refreshed_at = excluded.refreshed_at, next_pass_at = excluded.next_pass_at, lanes = excluded.lanes`,
@@ -215,8 +215,10 @@ func (l *Loop) beat(ctx context.Context, next time.Time) error {
 	if err := claimGateFor(l.cfg.Store).wait(ctx); err != nil && ctx.Err() != nil {
 		return err
 	}
+	start := time.Now()
 	err := l.refreshSession(ctx, next)
 	if err != nil && store.IsBusy(err) && ctx.Err() == nil {
+		l.recordBusyWrite("session-heartbeat", time.Since(start), l.cfg.Now())
 		l.reportf("loop: the session heartbeat was not recorded, the store was busy: %v\n", err)
 		return nil
 	}
