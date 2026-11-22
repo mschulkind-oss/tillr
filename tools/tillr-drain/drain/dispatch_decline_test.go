@@ -73,6 +73,44 @@ func TestDispatchApplicationErrorLogsAndRecordsADeclineAndReturnsTheError(t *tes
 	}
 }
 
+func TestBusyDispatchDeclineDoesNotFailThePass(t *testing.T) {
+	f, l := passFixture(t, "item-a")
+	var report bytes.Buffer
+	l.cfg.Report = &report
+	plan := mustPlan(t, l)[0]
+	if !isDispatch(plan.decision) || plan.decision.RunRequest == nil {
+		t.Fatalf("fixture did not plan a dispatch: %+v", plan.decision)
+	}
+	ctx := context.Background()
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	at := l.cfg.Now()
+	timing := &PassTiming{}
+	result := &LoopResult{}
+	before := eventCount(t, f.storePath)
+
+	// Hold the writer on a separate connection across both the claim and its
+	// decline write. Nested writes bypass the in-process queue, so both see
+	// the same SQLite lock contention the loop sees from another process.
+	fixtureWrite(t, f, func(*store.Tx) error {
+		cancelled, stale, err := l.applyReadyPlan(ctx, plan, &base, at, timing, nil, result)
+		if err != nil || cancelled || !stale {
+			t.Fatalf("busy decline escaped the pass as cancelled=%v, stale=%v, error=%v; report:\n%s", cancelled, stale, err, &report)
+		}
+		return nil
+	})
+	log := report.String()
+	if !strings.Contains(log, "declined dispatch of "+plan.decision.ItemID+" on "+plan.decision.LaneID+": \"store: beginning the write transaction:") ||
+		!strings.Contains(log, "dispatch decline for "+plan.decision.ItemID+" on "+plan.decision.LaneID+" was not recorded, the store was busy:") {
+		t.Fatalf("expected both the busy dispatch refusal and the lost observation in the report, got:\n%s", log)
+	}
+	if after := eventCount(t, f.storePath); after != before || timing.TickID != "" || timing.Applied != 0 || result.StopStep != "" {
+		t.Fatalf("busy decline changed the store or the pass: events %d -> %d, timing %+v, result %+v", before, after, timing, result)
+	}
+	if ok, _, err := l.applyPlan(ctx, mustPlan(t, l)[0], base, at); !ok || err != nil {
+		t.Fatalf("the next plan could not claim the dispatch after the writer released its lock: applied=%v, error=%v", ok, err)
+	}
+}
+
 func TestWatchRuleDocumentAcceptsDispatchDeclined(t *testing.T) {
 	const document = `[[rule]]
 id = "fixture-dispatch-declined"

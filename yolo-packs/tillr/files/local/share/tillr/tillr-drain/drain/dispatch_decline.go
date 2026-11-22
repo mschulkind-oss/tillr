@@ -30,8 +30,14 @@ func isDispatch(d Decision) bool { return d.Action == ActionDispatch || d.Action
 
 // Each decline is an observation, not a hold or a dispatch: it spends no attempt,
 // claims no lane, and does not affect what the next pass is allowed to try.
-func (l *Loop) recordDispatchDecline(ctx context.Context, d Decision, at time.Time, reason, waitingOn string) error {
+func (l *Loop) recordDispatchDecline(ctx context.Context, d Decision, at time.Time, reason, waitingOn string) (err error) {
 	l.reportf("loop: declined dispatch of %s on %s: %q\n", d.ItemID, d.LaneID, reason)
+	defer func() {
+		if store.IsBusy(err) && ctx.Err() == nil {
+			l.reportf("loop: dispatch decline for %s on %s was not recorded, the store was busy: %v\n", d.ItemID, d.LaneID, err)
+			err = nil
+		}
+	}()
 	s, err := store.Open(ctx, l.cfg.Store, true)
 	if err != nil {
 		return err
