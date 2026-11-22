@@ -2,6 +2,8 @@ package watch
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -76,8 +78,8 @@ type Evaluator struct {
 	Root  string
 	Clock func() time.Time
 
-	// Test seam: a concurrent event or rule can commit after Git and before WriteTx.
-	afterGit func()
+	// Test seams for concurrent commits before and during planning.
+	afterGit, afterPlan func()
 }
 
 func (e Evaluator) now() time.Time {
@@ -224,20 +226,20 @@ func (e Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult, 
 			e.afterGit()
 		}
 		var results []RuleResult
-		err = e.Store.WriteTx(ctx, func(tx *store.Tx) error {
-			rd := tx.Reader()
+		err = e.Store.ApplyPlan(ctx, func(rd *store.Reader) (func(*store.Tx) error, error) {
 			rules, disabledOverrides, err := readRules(rd)
 			if err != nil {
-				return err
+				return nil, err
 			}
 			if !git.covers(rules) {
-				return errNewGitFact
+				return nil, errNewGitFact
 			}
 			var derived []map[string]*condition
 			results, derived, err = e.deriveRules(rd, rules, git, now)
 			if err != nil {
-				return err
+				return nil, err
 			}
+			var changes episodeChanges
 			for i, subjects := range derived {
 				rule := rules[i]
 				if subjects == nil {
@@ -247,14 +249,21 @@ func (e Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult, 
 					// A disabled override no longer fires for any subject.
 					subjects = make(map[string]*condition)
 				}
-				if err := reconcile(tx, rule, subjects, startHead, now); err != nil {
-					return fmt.Errorf("rule %s: %w", rule.ID, err)
+				if err := changes.reconcile(rd, rule, subjects, startHead, now); err != nil {
+					return nil, fmt.Errorf("rule %s: %w", rule.ID, err)
 				}
 			}
-			return nil
+			if len(changes) == 0 {
+				return nil, nil
+			}
+			if e.afterPlan != nil {
+				e.afterPlan()
+			}
+			return changes.apply, nil
 		})
-		if errors.Is(err, errNewGitFact) {
-			// No writes have occurred. Take a fresh event head and Git snapshot.
+		if errors.Is(err, errNewGitFact) || errors.Is(err, store.ErrStalePlan) {
+			// No mutation was made. Re-derive from current facts, not from the
+			// invalidated snapshot. SQLite lock errors are not retried here.
 			continue
 		}
 		if err != nil {
@@ -311,8 +320,8 @@ type episode struct {
 	opened, last int64
 }
 
-func active(tx *store.Tx, ruleID string) (map[string]episode, error) {
-	rows, err := tx.Query(`SELECT subject_key,alert_id,opened_seq,last_observed_seq FROM alert_episodes WHERE rule_id=? AND state!='resolved'`, ruleID)
+func active(rd *store.Reader, ruleID string) (map[string]episode, error) {
+	rows, err := rd.Query(`SELECT subject_key,alert_id,opened_seq,last_observed_seq FROM alert_episodes WHERE rule_id=? AND state!='resolved'`, ruleID)
 	if err != nil {
 		return nil, err
 	}
@@ -329,8 +338,21 @@ func active(tx *store.Tx, ruleID string) (map[string]episode, error) {
 	return episodes, rows.Err()
 }
 
-func reconcile(tx *store.Tx, r Rule, subjects map[string]*condition, startHead int64, now time.Time) error {
-	episodes, err := active(tx, r.ID)
+// episodeChanges holds only the mutations a read-only evaluation found necessary.
+// Bundles and transition payloads are prepared before the writer is acquired.
+type episodeChanges []func(*store.Tx) error
+
+func (changes episodeChanges) apply(tx *store.Tx) error {
+	for _, change := range changes {
+		if err := change(tx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[string]*condition, startHead int64, now time.Time) error {
+	episodes, err := active(rd, r.ID)
 	if err != nil {
 		return err
 	}
@@ -349,7 +371,7 @@ func reconcile(tx *store.Tx, r Rule, subjects map[string]*condition, startHead i
 			if firstClear < len(c.clears) {
 				seq = c.clears[firstClear]
 			}
-			if err := resolve(tx, r, key, ep.id, seq, now); err != nil {
+			if err := changes.resolve(r, key, ep.id, seq, now); err != nil {
 				return err
 			}
 			exists = false
@@ -362,55 +384,61 @@ func reconcile(tx *store.Tx, r Rule, subjects map[string]*condition, startHead i
 			newest = c.events[len(c.events)-1]
 		}
 		if !exists {
-			if err := openEpisode(tx, r, key, c, newest, now); err != nil {
+			if err := changes.open(rd, r, key, c, newest, now); err != nil {
 				return err
 			}
 			continue
 		}
 		if r.When.Pattern != LagBehind && newest.Seq > ep.last {
-			if _, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1 WHERE alert_id=?`, newest.Seq, now.UnixMilli(), ep.id); err != nil {
+			*changes = append(*changes, func(tx *store.Tx) error {
+				_, err := tx.Exec(`UPDATE alert_episodes SET last_observed_seq=?,last_observed_at=?,observation_count=observation_count+1 WHERE alert_id=?`, newest.Seq, now.UnixMilli(), ep.id)
 				return err
-			}
+			})
 		}
 	}
 	return nil
 }
 
-func openEpisode(tx *store.Tx, r Rule, key string, c *condition, newest observation, now time.Time) error {
+func (changes *episodeChanges) open(rd *store.Reader, r Rule, key string, c *condition, newest observation, now time.Time) error {
 	var previous int64
-	if err := tx.QueryRow(`SELECT COALESCE(MAX(episode_num),0) FROM alert_episodes WHERE rule_id=? AND subject_key=?`, r.ID, key).Scan(&previous); err != nil {
+	if err := rd.QueryRow(`SELECT COALESCE(MAX(episode_num),0) FROM alert_episodes WHERE rule_id=? AND subject_key=?`, r.ID, key).Scan(&previous); err != nil {
 		return err
 	}
 
-	var id string
-	if err := tx.QueryRow(`SELECT 'alrt-' || lower(hex(randomblob(16)))`).Scan(&id); err != nil {
-		return err
-	}
+	var randomID [16]byte
+	rand.Read(randomID[:])
+	id := "alrt-" + hex.EncodeToString(randomID[:])
 	bundle, err := makeBundle(r, key, id, c)
 	if err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`INSERT INTO alert_episodes (alert_id,rule_id,subject_key,episode_num,state,severity,condition_fingerprint,opened_seq,opened_at,last_observed_seq,last_observed_at,bundle_json)
- VALUES (?,?,?,?,'open',?,?,?,?,?,?,?)`, id, r.ID, key, previous+1, r.Severity, "", newest.Seq, now.UnixMilli(), newest.Seq, now.UnixMilli(), string(bundle)); err != nil {
+	return changes.transition(r, key, id, openedKind, now, map[string]any{"opened_seq": newest.Seq}, func(tx *store.Tx) error {
+		_, err := tx.Exec(`INSERT INTO alert_episodes (alert_id,rule_id,subject_key,episode_num,state,severity,condition_fingerprint,opened_seq,opened_at,last_observed_seq,last_observed_at,bundle_json)
+ VALUES (?,?,?,?,'open',?,?,?,?,?,?,?)`, id, r.ID, key, previous+1, r.Severity, "", newest.Seq, now.UnixMilli(), newest.Seq, now.UnixMilli(), string(bundle))
 		return err
-	}
-	return appendTransition(tx, r, key, id, openedKind, now, map[string]any{"opened_seq": newest.Seq})
+	})
 }
 
-func resolve(tx *store.Tx, r Rule, key, id string, seq int64, now time.Time) error {
-	if _, err := tx.Exec(`UPDATE alert_episodes SET state='resolved',resolved_seq=?,resolved_at=?,resolved_reason='condition-cleared' WHERE alert_id=?`, seq, now.UnixMilli(), id); err != nil {
+func (changes *episodeChanges) resolve(r Rule, key, id string, seq int64, now time.Time) error {
+	return changes.transition(r, key, id, resolvedKind, now, map[string]any{"resolved_seq": seq, "reason": "condition-cleared"}, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE alert_episodes SET state='resolved',resolved_seq=?,resolved_at=?,resolved_reason='condition-cleared' WHERE alert_id=?`, seq, now.UnixMilli(), id)
 		return err
-	}
-	return appendTransition(tx, r, key, id, resolvedKind, now, map[string]any{"resolved_seq": seq, "reason": "condition-cleared"})
+	})
 }
 
-func appendTransition(tx *store.Tx, r Rule, key, id, kind string, now time.Time, body map[string]any) error {
+func (changes *episodeChanges) transition(r Rule, key, id, kind string, now time.Time, body map[string]any, update func(*store.Tx) error) error {
 	body["alert_id"], body["rule_id"], body["subject_key"] = id, r.ID, key
 	body["severity"], body["receiver"] = r.Severity, r.Delivery.Receiver
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
-	_, err = tx.Append(event.Event{Kind: kind, At: now, ObjectType: "alert", ObjectID: &id, Payload: payload})
-	return err
+	*changes = append(*changes, func(tx *store.Tx) error {
+		if err := update(tx); err != nil {
+			return err
+		}
+		_, err := tx.Append(event.Event{Kind: kind, At: now, ObjectType: "alert", ObjectID: &id, Payload: payload})
+		return err
+	})
+	return nil
 }
