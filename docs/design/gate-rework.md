@@ -9,7 +9,7 @@ tags:
   - landing
   - design
 summary: "Measures all 42 check kinds in tools/fork-check.py, then replaces the gate's remembered baseline with a base the caller supplies and results remembered by a fingerprint of the files each check reads. A ten-second landing budget becomes a failing test, heavy checks run after the merge in this repository, tillr deploys only from the last green trunk commit, and a new check is one new file."
-next: "Two units of Section 11 are written with no item directive and become items once the owner rules on how documents declare work: the single check-result classifier of D-GR23, in ten slices, and the drift probe of D-GR12, after item-gate-pinned-fork-inputs."
+next: "Two units of Section 11 are written with no item directive and become items once the owner rules on how documents declare work: the single check-result classifier of D-GR23, in twelve slices, and the drift probe of D-GR12, after item-gate-pinned-fork-inputs."
 depends-on:
   - landing-principles.md
   - landing-velocity.md
@@ -961,7 +961,8 @@ in the first group is change an outcome to fit the table, or leave the decision 
 
 **What this changes in the slices.** Slice 1a builds the protocols and orders listed here with
 the two functions, and its table tests have one case per row and step of this section too.
-Slices 1b to 1e pass each site's protocol or order by name. Slices 2a to 3b are unchanged:
+Slices 1b to 1e pass each site's protocol or order by name (the two legacy aggregate sites
+pass theirs in slice 1g, by `D-GR33`). Slices 2a to 3b are unchanged:
 rules 1 to 3 run before any protocol, a legacy check kind has no store facts and so is never
 `disabled`, and `disabled` does not count in any order.
 
@@ -1055,6 +1056,113 @@ to 1e to land adds it, with the files not yet moved on its list.
   replayed checkout would classify with its own code, which `D-GR23` forbids.
 - **Hold the face until its first caller is ready.** It keeps the first landing large, against
   the owner's quoted words on the smallest functional change.
+
+#### The face aggregates a run in its own landing, before the legacy aggregates call it
+
+What follows is the designer's decision of 2026-11-21 (`D-GR33`), made to answer a build
+worker's report against an operator request. None of it is the owner's ruling, and the owner may
+overturn any part of it. It amends `D-GR28` and `D-GR32` in one respect: slice 1e no longer
+moves the two legacy aggregate sites, which wait for a face that can aggregate.
+
+The operator request that follows the first landing says, in part: "once the installed
+tillr-gate has classify, change the gate adapters the classification-sites design names so they
+call that installed face." `D-GR28` puts each aggregate site's precedence in `Aggregate` and
+has the site pass the order's name, and the Python sites reach the package only through the
+installed face (`D-GR32`). The face that landed in `020cf29eca` classifies each observation and
+aggregates nothing. Measured on 2026-11-21 against the installed program:
+
+| Command | Result |
+| :--- | :--- |
+| `echo '[]' \| tillr-gate classify` | Prints `[]`, exit 0: the face is installed |
+| `echo '[]' \| tillr-gate classify --aggregate legacy-gate` | `flag provided but not defined: -aggregate`, exit 2 |
+| `rg -n 'Aggregate' tools/tillr-gate/classify.go` | No line: the face never calls `Aggregate` |
+
+So `verdict_of` (F6) and `run_replay` (F9) of `tools/fork-check.py` have no installed program
+to hand their order's name to. A worker that moved them would have to keep the precedence in
+Python, which `D-GR28` forbids, or call a `tillr-gate` built from the judged checkout, which
+`D-GR32` rejected. The worker's report is right about the tree, and the fix is the one `D-GR32`
+already used for the face itself: the missing part of the face lands first, alone, and is proved
+green before anything calls it.
+
+**The face's aggregate form.** `tillr-gate classify --aggregate <order>` reads the same JSON
+array of observations on standard input as the plain form. It classifies each one and then
+calls `Aggregate` with the named order on those classifications. It prints one JSON object with
+two fields:
+
+- `checks`: the array the plain form prints for the same input, in the same order;
+- `run`: the run's result, with the fields `outcome`, `detail` and `exit_code`, as the
+  [aggregate orders table](#each-site-keeps-its-raw-result-protocol-and-aggregate-order) lists
+  them for that order.
+
+The order is one of the four names the package holds: `runner`, `shadow`, `legacy-gate` and
+`legacy-replay`. Any other name is a usage error: exit 2, a message on standard error that
+lists the four names, and nothing on standard output. An empty array is legal and gives the
+order's result for a run with no checks. Without the flag the face's output is unchanged, byte
+for byte. The face's own exit code reports whether it answered (0) and never carries the run's
+result; a caller reads `run.exit_code`. The flag name, the field names and the exit codes here
+are the designer's choice.
+
+The aggregate form takes observations and not classifications. A site that needs each check's
+answer while the run is going (the legacy gate prints a status as each check finishes) asks the
+plain form then, keeps the observations it sent, and sends all of them again with the flag when
+the run ends. Until slice 2a the function is pure, so the two answers for one observation
+agree; from slice 2a on, the answer of the aggregate call is the one the run's result uses.
+
+**The slices.** Slice 1e is narrowed, and two slices follow it:
+
+| Slice | What it holds | Needs |
+| :--- | :--- | :--- |
+| 1e | The Python sites that classify one check call the installed face: the fast tree adapter, the change gate, the Go build and documents checks, `check_status` and the functions it reads in the legacy check program, and the two copies of `tillr-loop`. `verdict_of` and `run_replay` keep the code they have and change no outcome | The installed face of slice 1a, which is installed today |
+| 1f | The face gains `--aggregate`, with its tests and the pack mirror. Nothing calls it | Slice 1a |
+| 1g | `verdict_of` calls the face with `legacy-gate` and `run_replay` with `legacy-replay`, and neither compares an exit code or a result word afterward | A proved trunk commit that holds slice 1f, so that the installed `tillr-gate` has the flag; slice 1e |
+
+Slice 1f touches only `tools/tillr-gate`, so it may land before, after or beside slice 1e.
+
+**What the request's landing is.** It is slice 1e as narrowed here. The request's own
+precondition ("confirm `tillr-gate classify` exists on PATH") holds, by the first row of the
+measurement above. Under the owner's ruling [`OQ-SP1`](./tillr-item-split.md#OQ-SP1), quoted in
+[the section above](#the-first-classifier-landing-is-the-function-and-its-face-with-no-caller),
+the builder may land a smaller part of slice 1e that works alone (one adapter with its test,
+for instance) and name the rest as unmet. Applying that ruling here is the designer's reading,
+not the owner's words about this request.
+
+**The cases this landing leaves unmet, by name.** The candidate's commit message lists them:
+
+| Unmet case of the request | Where it is built |
+| :--- | :--- |
+| The legacy gate's aggregate (F6) and the legacy replay's aggregate (F9) take their run result from the installed face | Slice 1f, then slice 1g after 1f is proved green |
+| A replay's run result is decided by current code. Until slice 1g, `run_replay` in the replayed checkout still orders the classified checks itself | Slice 1g; slice 3b for a replayed commit older than slice 1g |
+| Any adapter of slice 1e that the builder leaves for a later part | Named in the candidate's commit message |
+
+This document files nothing. Slices 1f and 1g become requests or items the way the other
+slices do.
+
+**What a verifier of this landing judges.** Each adapter the candidate moves sends its
+observation to the `tillr-gate` on PATH and uses the answer, with a test of that call; the
+tests that existed before pass unedited; and no outcome changes. `verdict_of` and `run_replay`
+still holding their precedence is the first unmet case of the table. It is not grounds to
+refuse the landing and it is not a definition obstacle for its builder. A candidate that edits
+either function's precedence, or that reaches `checkresult` from Python by any route other
+than the installed face, is refused.
+
+**What this changes elsewhere in the build order.** The scan test's list keeps
+`tools/fork-check.py` after slice 1e and is empty after slice 1g. Slice 3b needs slice 1g.
+Slices 2a to 2c and 3a are unchanged: a legacy check kind has no store facts, and `disabled`
+counts in no order.
+
+**Alternatives, each rejected by the designer:**
+
+- **Hold every adapter until the face can aggregate.** The per-check sites need nothing the
+  installed face lacks, and holding them makes one large landing out of two small ones.
+- **Give the request both the flag and its callers.** The callers cannot be tested against an
+  installed program without the flag. This is the first alternative `D-GR32` rejected.
+- **Have `verdict_of` and `run_replay` order the face's per-check answers themselves.** Their
+  precedence would then be compared in Python, in the copy a replayed checkout runs, which is
+  what `D-GR28` put in `Aggregate` to end.
+- **An aggregate form that takes classifications.** A site could then send words it reached on
+  its own. `D-GR28` rejected sending words from Python for the same reason.
+- **A second face, `tillr-gate aggregate`.** One more program surface for one more function
+  call; the flag keeps the observations and the run result in one answer.
 
 ### 6.3 A missing machine resource is named, not failed
 
@@ -1991,7 +2099,9 @@ overturned in `1fa2c069c` and withdrawn in
 fast-gate timing, made to answer a build worker's report; the owner may overturn it. `D-GR32` is
 the designer's decision of 2026-11-21, from an operator's answer to a build worker's report on
 the first classifier slice; it quotes the owner's ruling [`OQ-SP1`](./tillr-item-split.md#OQ-SP1)
-and applies it, and the application is the owner's to overturn. A draft of that row was numbered `D-GR31` before the trunk gave that number to the culprit-search row, so a run record that cites `D-GR31` for the first classifier landing means `D-GR32`.
+and applies it, and the application is the owner's to overturn. A draft of that row was numbered `D-GR31` before the trunk gave that number to the culprit-search row, so a run record that cites `D-GR31` for the first classifier landing means `D-GR32`. `D-GR33` is
+the designer's decision of 2026-11-21, made to answer a build worker's report against the operator
+request that follows that landing; it amends `D-GR28` and `D-GR32` and is the owner's to overturn.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
@@ -2026,6 +2136,7 @@ and applies it, and the application is the owner's to overturn. A draft of that 
 | `D-GR30` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** Each run of the fast gate that judges a candidate before it lands, on its ordinary path, leaves a durable record of its wall time, each check's elapsed time and whether it ran, was reused or was not run, and the Go packages each Go check selected. The packages come from `go-build`'s own `go list`, from `go-substrate`'s `go test` output, and for `gate-runner`, which runs sharded and prints no package lines, from `tools/go-test-shards.py` writing its `go list` result to the file named by `TILLR_GO_SHARDS_EVIDENCE_OUT`, before compiling, and only when that variable is set. The Go package piece may therefore edit `tools/go-test-shards.py` and `tests/go-test-shards.test.py` for that producer and its fixture tests only. The heavy trunk proof, the legacy tree-check bridge, relanding, the automatic revert candidate, named replays and the heavy-failure count are out of scope and listed in the candidate's commit message. **Rejected:** leaving `gate-runner` out; reading the `--events` file; a second `go list` in `tools/fork-check.py`; running the suite unsharded. | 2026-11-21 | [Section 6.11](#611-the-fast-gate-before-a-landing-records-its-time-and-its-go-packages) | — (not built) |
 | `D-GR31` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request of 2026-11-21 reports the heavy runner still replaying a deadlocked Go test alone after `5c78981400`, and asks to find the path and stop it there with no time limit. The path is `HeavyRunner.attribute` to `findFirstRed` to `judgeHeavyGo` in `declaration` mode, for a named case whose first proof recorded Go's runtime deadlock error (`fatal error: all goroutines are asleep - deadlock!`) and no timeout panic; `5c78981400` skips the replay only for the timeout panic. The rule is widened: a named Go test whose first-proof output holds either line is not replayed, at the same three places as the timeout case (`attribute`, `retainRedRepairs`, and the suite check beside an unnamed failure), and one fixer is filed against the tip. This amends the request's sixth criterion, which names only the test-timeout panic, to cover the deadlock line the first proof actually recorded. **Rejected:** skipping the replay for every Go `fatal error:`; a time limit on a focused replay; never replaying a named Go test. | 2026-11-21 | [A Go test that did not finish is not replayed](#a-go-test-that-did-not-finish-is-not-replayed) | — (not built; the timeout half is `5c78981400`, `tools/tillr-drain/drain/heavy_go.go`) |
 | `D-GR32` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request for the first classifier slice names every site and adds that classification on replay runs from current code and that a test per site shows the call. The operator answered a build worker's report on 2026-11-21: "the installed tillr-gate cannot have the classify face until a change containing it lands and is proved green, so split here. Offer as this item's landing only the classify face in tillr-gate with its tests, and nothing that calls the installed face." The request's landing is therefore slice 1a alone: `checkresult` with `Classify` and `Aggregate`, the `tillr-gate classify` face, their tests and the pack mirror, with no caller and no existing test edited. The unmet cases are named in the candidate's commit message and follow as later changes: every site calling the function with a test per site (slices 1b to 1e), the adapters calling the installed face (slice 1e), and replay classified from current code (slices 1e and 3b). A verifier does not refuse this landing for them. The scan test moves from slice 1a to the first of slices 1b to 1e to land. The ruling this rests on is the owner's [`OQ-SP1`](./tillr-item-split.md#OQ-SP1) of 2026-11-21, verbatim: *"part of desgins can absoutely land. this is generally MORE healthy. Remember, we're trying to mirror humans here. Humans desire to land the smallest functional change possible to make reviewing, testing, velocity, all this stuff easier, and it will also make it easier for us."* **Rejected:** one change holding the face and its callers; Python sites calling a `tillr-gate` built from the candidate's tree; holding the face until a caller is ready. | 2026-11-21 | [The first classifier landing is the function and its face, with no caller](#the-first-classifier-landing-is-the-function-and-its-face-with-no-caller) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
+| `D-GR33` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request that follows the first classifier landing asks that the gate adapters call the installed `tillr-gate classify`. The installed face classifies each observation and aggregates nothing (measured 2026-11-21: `--aggregate legacy-gate` is refused as an undefined flag, exit 2), so the legacy gate's and the legacy replay's aggregates (F6, F9) cannot hand over their order's name as `D-GR28` requires. The face gains `--aggregate <order>`: the same observations in, one object out with `checks` (the plain form's array) and `run` (`outcome`, `detail`, `exit_code`), for the orders `runner`, `shadow`, `legacy-gate` and `legacy-replay`; another name is exit 2 with no output, and the plain form is unchanged. Slice 1e is narrowed to the Python sites that classify one check and is the request's landing; slice 1f adds the flag with no caller; slice 1g moves `verdict_of` and `run_replay` onto it after a proved trunk commit holds 1f. Until then the two functions keep their code and change no outcome, and a verifier does not refuse the request's landing for them. Landing a part while a named case is unmet rests on the owner's [`OQ-SP1`](./tillr-item-split.md#OQ-SP1), quoted in `D-GR32`; applying it here is the designer's reading. **Rejected:** holding every adapter until the face aggregates; one change holding the flag and its callers; ordering the face's per-check answers in Python; an aggregate form that takes classifications; a second `aggregate` face. | 2026-11-21 | [The face aggregates a run in its own landing, before the legacy aggregates call it](#the-face-aggregates-a-run-in-its-own-landing-before-the-legacy-aggregates-call-it) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
 | `D-GR12` | A question about a moving upstream is a drift probe that files an item and never moves or holds the green pointer. **Rejected:** keeping it as a check on a commit. Made visible where it happens. | 2026-11-15 | [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) | — (`series` and `patch-branch-inv2` are `TIER_LANDING` in `tools/fork-check.py`; no probe exists) |
 | OQ-GR1 | The default of a per-repository setting, `red_cap`: landing stops at 20 landings or 60 minutes past the last green commit; a repository may set a different bound, and zero means no cap. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "a mechanism whose cost rises with trunk activity is pointed the wrong way" and the owner's 2026-11-15 ruling that the landing strategy is configurable per repository and red is brief. The owner may overturn it. **Rejected:** no cap, which lets the fixer's range and the deploy lag grow without limit. **Ruled out by the owner on 2026-11-18** ([OQ-GP7](tillr-graph-is-the-path.md#OQ-GP7)): under a red check, work lands only if it does not touch what that check reads, and there is no landing cap. The cap is still live in the tree (20 landings; its time bound was turned off on 2026-11-17, `d53580bfd`) until the graph design's waiting rule is built. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/redcap/cap.go`, `drain/red_cap.go`) |
 | OQ-GR2 | The default of a per-repository setting, `lane_base`: a new lane starts from the last green commit; a repository may choose the trunk tip. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are that a worker does not pay for a failure it did not cause, and the same cost-direction rule. The owner may overturn it. **Rejected:** always cutting from the tip. **Overturned by the owner on 2026-11-17** (`1fa2c069c`): work is always built against the latest trunk, never a past commit; a lane cut from the green pointer was handed a tree older than its own item's definition and produced false conflicts. This repository set `tip`; the code's default when the key is absent is still `green`. **Replaced by the owner's ruling of 2026-11-21** (`D-GR24`): new work starts from the last proved trunk commit again, and this repository sets `green`. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/drain/lane_base.go`; the repository setting follows `D-GR24`) |
@@ -2314,7 +2425,7 @@ milliseconds. This item finds what each check spends its time on and removes the
 
 ### Classify every check result in one place
 
-The disabled-check rule (`D-GR21`, `D-GR22`) is built as ten slices, in three groups, in the
+The disabled-check rule (`D-GR21`, `D-GR22`) is built as twelve slices, in three groups, in the
 order the table gives. The first group moves every
 [classification site](#every-place-a-check-result-is-classified) onto
 [the one function](#one-classifier-five-outcomes) and changes no behavior. The second adds the
@@ -2337,7 +2448,9 @@ It is what keeps a site added later from classifying on its own.
 | 1b | Route the runner's sites through the function | G1 to G12 | `go test ./...` in `tools/tillr-gate` passes with no test edited; the scan list loses the runner's files |
 | 1c | Route the drain's landing-gate and light-attribution sites | D1 to D16, D34 | `go test ./...` in `tools/tillr-drain` passes with no test edited; the scan list loses those files |
 | 1d | Route the drain's rolling, heavy and proof sites | D17 to D33 | The same command; the scan list loses the rest of the drain |
-| 1e | Route the Python sites through the face: `check_status` and `verdict_of` take their words from it under the legacy-check protocol and the legacy gate's order, `go-build.py` and the documents check under theirs, and the adapters stop pairing exit codes with words themselves | P1 to P7, F1 to F13, L1 to L4 | `python3 tests/fork-check.test.py` and the tests under `tools/gate` pass with no test edited; the scan list is empty. The two copies of `tillr-loop` stay byte-identical |
+| 1e | Route the Python sites that classify one check through the installed face: `check_status` takes its words from it under the legacy-check protocol, `go-build.py` and the documents check under theirs, and the adapters stop pairing exit codes with words themselves. `verdict_of` and `run_replay` are not touched ([`D-GR33`](#the-face-aggregates-a-run-in-its-own-landing-before-the-legacy-aggregates-call-it)) | P1 to P7, F1 to F5, F7, F8, F10 to F13, L1 to L4 | `python3 tests/fork-check.test.py` and the tests under `tools/gate` pass with no test edited; the scan list holds only `tools/fork-check.py`. The two copies of `tillr-loop` stay byte-identical |
+| 1f | The face gains `--aggregate <order>`: observations in, the classifications and the run's result out. Nothing calls it | none | A face test per order: the `run` object equals `Aggregate` on the same classifications, `checks` equals the plain form's output, an unknown order is exit 2 with no output, and the plain form's output is unchanged |
+| 1g | `verdict_of` takes the run's result from the face under the legacy gate's order and `run_replay` under the legacy replay's | F6, F9 | `python3 tests/fork-check.test.py` passes with no test edited; the scan list is empty |
 | 2a | Add rules 1 to 3 to the function. The runner reports `disabled`, counts it apart, writes the marker and the log copies, records `log_ref`, and gains `--prove-disabled` and `enable` | G2, G3, G4, G7, P4 to P6 | Runner tests alone: a stored pass with a fresh fail, and a stored fail with a fresh pass, each give `disabled`, exit 0, a marker and both logs beside it; a marker disables a new fingerprint; a proving run fails on a fail; `enable` removes only the episode it names. `TestMemoryFailRetriesAndFlakyPass` and `TestMemoryOppositeWritersNeverErase` are rewritten to these expectations |
 | 2b | The drain's marker sweep files the repair item and runs `enable` after the repair lands. A generated repair item needs no document block | a new step; no listed site changes | Drain tests with a marker file written by the test and no gate run: one item per episode; none while one is unfinished; a new item after a landed repair and a new episode; a sweep after a cancelled step and after a step that errored still files |
 | 2c | Every drain consumer handles `disabled` as the classifier section lists | D2, D3, D7, D8, D10, D13, D16, D18, D23, D29, D30, D32 to D34 | Drain tests, one per bullet of that list, each with a stub gate that returns `disabled`: no refusal, no red trunk, no fixer, the held item released, the notice silent, the grouped revert still judging its other members |
@@ -2356,7 +2469,9 @@ however that ruling lands. The candidate that was refused eleven times is eviden
 table and is not a base for these slices: slice 1a starts from the trunk.
 
 An operator filed the first group as one request on 2026-11-21, outside any document. Its
-landing is slice 1a alone (`D-GR32`); slices 1b to 1e are the cases it leaves unmet.
+landing is slice 1a alone (`D-GR32`); slices 1b to 1g are the cases it leaves unmet. A second
+operator request of 2026-11-21 asks for the adapters' calls to the installed face; its landing
+is slice 1e, with slices 1f and 1g as the cases it leaves unmet (`D-GR33`).
 
 **Agent Details:**
 
@@ -2364,11 +2479,12 @@ landing is slice 1a alone (`D-GR32`); slices 1b to 1e are the cases it leaves un
   `tools/tillr-loop/`, `tools/gate/`, `tools/fork-check.py`, `tools/go-test-shards.py`, their
   pack mirrors, and this document. Run `just pack-sync` after the last source edit of a slice
   and commit the regenerated mirror.
-- **Ref:** `D-GR21` to `D-GR23`, `D-GR28` and `D-GR32` in the [Decision Ledger](#decision-ledger).
+- **Ref:** `D-GR21` to `D-GR23`, `D-GR28`, `D-GR32` and `D-GR33` in the [Decision Ledger](#decision-ledger).
 - **Order:** 1a first, alone, and proved green so that the installed `tillr-gate` has the face
-  (`D-GR32`). 1b to 1e need only 1a and may land in any order; the first of them adds the scan
-  test. 2a needs 1b and 1e. 2b
-  and 2c need 2a and the drain's two routing slices. 3a and 3b need 2c.
+  (`D-GR32`). 1b to 1f need only 1a and may land in any order; the first of 1b to 1e adds the
+  scan test. 1g needs 1e, and 1f proved green so that the installed `tillr-gate` has the flag
+  (`D-GR33`). 2a needs 1b and 1e. 2b
+  and 2c need 2a and the drain's two routing slices. 3a needs 2c. 3b needs 2c and 1g.
 - **Forbidden in every slice:** a result word compared outside `checkresult`; a second
   implementation of the rule; a retry or a rerun added to make a contradicted check agree with
   itself.
