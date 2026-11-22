@@ -28,6 +28,12 @@ const help = `Usage:
   tillr watch ack ID --store PATH --by ACTOR [--note TEXT]
   tillr watch silence ID --store PATH (--until DUR_OR_TIME | --until-change) [--reason TEXT]
   tillr watch resolve ID --store PATH --reason TEXT
+  tillr watch rule list --store PATH --rules DIR
+  tillr watch rule show ID --store PATH --rules DIR
+  tillr watch rule add FILE --store PATH --rules DIR --by ACTOR
+  tillr watch rule tune ID --store PATH --rules DIR --by ACTOR --set KEY=TOML [--set KEY=TOML ...]
+  tillr watch rule reset ID --store PATH --rules DIR --by ACTOR
+  tillr watch rule export --store PATH --rules DIR
 
 Watch reports conditions from store events. It never executes guidance or dispatches a run.
 `
@@ -57,6 +63,11 @@ func runWithTicks(ctx context.Context, args []string, out, stderr io.Writer, tic
 	switch face {
 	case "ack", "silence", "resolve":
 		if err := runEpisode(ctx, face, args[1:], out); err != nil {
+			return fail(err)
+		}
+		return 0
+	case "rule":
+		if err := runRule(ctx, args[1:], out); err != nil {
 			return fail(err)
 		}
 		return 0

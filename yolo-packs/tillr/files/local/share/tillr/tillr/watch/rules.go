@@ -32,6 +32,10 @@ type Rule struct {
 	When                When
 	Guidance            Guidance
 	Delivery            Delivery
+
+	// Keep the validated table, including omitted vs. explicit optional keys,
+	// for whole-rule encoding and tuning without reconstituting TOML from defaults.
+	table map[string]any
 }
 
 type Reads struct {
@@ -150,6 +154,21 @@ func LoadRules(dir string) ([]Rule, error) {
 // LoadRuleDocument validates a complete document, using source in diagnostics.
 func LoadRuleDocument(source string, data []byte) ([]Rule, error) {
 	return loadRuleDocument(source, data, registeredRuleKinds(), make(map[string]string))
+}
+
+// EncodeRules writes the validated tables of loaded rules in the supplied order.
+func EncodeRules(rules []Rule) ([]byte, error) {
+	if len(rules) == 0 {
+		return nil, nil
+	}
+	tables := make([]map[string]any, 0, len(rules))
+	for _, rule := range rules {
+		if rule.table == nil {
+			return nil, fmt.Errorf("rule %q was not loaded from TOML", rule.ID)
+		}
+		tables = append(tables, rule.table)
+	}
+	return toml.Marshal(map[string]any{"rule": tables})
 }
 
 func registeredRuleKinds() map[string]bool {
@@ -336,7 +355,7 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 	c.noRemedy(table, "")
 	root := keys{c, "", table}
 	root.only("id", "enabled", "scope", "severity", "reads", "when", "guidance", "delivery")
-	r := Rule{ID: root.text("id"), Enabled: true, Scope: root.text("scope"), Severity: root.text("severity")}
+	r := Rule{ID: root.text("id"), Enabled: true, Scope: root.text("scope"), Severity: root.text("severity"), table: cloneTable(table)}
 	if len(r.ID) > 128 {
 		root.reject("id", "must be at most 128 bytes")
 	}

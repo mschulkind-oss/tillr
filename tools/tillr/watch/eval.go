@@ -26,7 +26,7 @@ func init() {
 	if err := store.RegisterDDL("watch", schema); err != nil {
 		panic(err)
 	}
-	for _, kind := range []string{openedKind, resolvedKind, acknowledgedKind, silencedKind, reopenedKind} {
+	for _, kind := range []string{openedKind, resolvedKind, acknowledgedKind, silencedKind, reopenedKind, ruleSetKind, ruleResetKind} {
 		if err := event.Register(kind, "watch"); err != nil {
 			panic(err)
 		}
