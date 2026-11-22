@@ -2196,7 +2196,7 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 					l.laneBootstrapReported = true
 				}
 			}
-			if work != nil && (work.Ready || d.WorkflowRestart) {
+			if work != nil && (work.Ready || d.WorkflowRestart) && work.BaseSHA != "" {
 				base = work.BaseSHA
 			}
 			if d.BlockConflict != nil {

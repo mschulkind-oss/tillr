@@ -18,6 +18,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -715,6 +716,7 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	next.NodeInfraFailures = 0
 	next.InfrastructureFrom = ""
 	next.WorkflowRelease = false
+	next.FreshNodeStage = false
 	// The kept readers were recorded at the attempt's claim; a later node continues the
 	// lane, so it is no fresh retry start.
 	next.ReusedNodes, next.ReusedAttempt = nil, 0
@@ -745,9 +747,58 @@ func (l *Loop) advanceNode(ctx context.Context, d Decision, base, report string)
 	if err != nil {
 		return err
 	}
-	return s.WriteTx(ctx, func(tx *store.Tx) error {
-		return appendEffect(tx, nodeAdvancedKind, next.RunRequest.RunID, pendingWork{Decision: next, BaseSHA: base, Ready: true, ParentRunID: d.RunRequest.RunID, Owner: owner, Examining: true}, l.cfg.Now().UTC())
+	var released bool
+	at := l.cfg.Now().UTC()
+	err = s.WriteTx(ctx, func(tx *store.Tx) error {
+		blocked, err := itemDependencyBlocked(tx.Reader(), d.ItemID)
+		if err != nil {
+			return err
+		}
+		nextBase := base
+		finishedStage := d.Workflow.Stages[d.NodeIndex]
+		if blocked && (l.nonLanding || (finishedStage.Access == "read_only" && (classificationNode(finishedStage) || next.NodeBaseSHA == base))) {
+			// Free the lane while waiting for the dependency so the dependency itself
+			// can run on this lane. When no write stage has committed yet, clear the
+			// recorded base so the next step starts from the trunk after the dependency lands.
+			released = true
+			if classificationNode(finishedStage) || (d.NodeIndex == 0 && finishedStage.Access == "read_only") {
+				nextBase = ""
+				next.NodeBaseSHA = ""
+				next.FreshNodeStage = true
+			}
+		}
+		return appendEffect(tx, nodeAdvancedKind, next.RunRequest.RunID, pendingWork{Decision: next, BaseSHA: nextBase, Ready: true, LaneReleased: released, ParentRunID: d.RunRequest.RunID, Owner: owner, Examining: true}, at)
 	})
+	if err == nil && released {
+		l.notifyStartLaneReleased(d.LaneID, d.RunRequest.RunID, true, at)
+	}
+	return err
+}
+
+func itemDependencyBlocked(r *store.Reader, itemID string) (bool, error) {
+	hasEdges, err := tableExists(r, "item_edges")
+	if err != nil || !hasEdges {
+		return false, err
+	}
+	declared, err := definition.ForReader(r)
+	if err != nil {
+		return false, err
+	}
+	rows, err := r.Query(`SELECT COALESCE(i.state, '') FROM item_edges e LEFT JOIN items i ON i.item_id = e.blocked_by WHERE e.item_id = ?`, itemID)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var state string
+		if err := rows.Scan(&state); err != nil {
+			return false, err
+		}
+		if state == "" || !blockerSatisfied(declared.Parsed, state) {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 const (

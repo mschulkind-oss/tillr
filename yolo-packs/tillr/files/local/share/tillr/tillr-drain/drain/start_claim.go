@@ -291,7 +291,7 @@ func (l *Loop) claimFastStart(ctx context.Context, v *startView, proposal startS
 		if err != nil || !ready {
 			return err
 		}
-		if continuing {
+		if continuing && work.BaseSHA != "" {
 			base = work.BaseSHA
 		}
 		if designErr != nil {

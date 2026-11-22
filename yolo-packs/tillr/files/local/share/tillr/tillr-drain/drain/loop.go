@@ -1724,11 +1724,13 @@ func (l *Loop) stageDispatches(ctx context.Context, decisions []Decision, mainSH
 			if !revertedSession {
 				spec.Continue = spec.Continue || (decision.NodeIndex > 0 && !freshRetry && !freshVerifyReturn && decision.RetryCandidate == nil) || decision.WorkflowRestart
 			}
-			if decision.NodeIndex == 1 && classificationNode(decision.Workflow.Stages[0]) && spec.KeptHeadSHA == "" &&
-				(l.laneForkTarget(decision.LaneID) == "" || (decision.Reason == "workflow-next-node" && decision.NodeStartRunID == "")) {
+			if decision.NodeIndex == 1 && spec.KeptHeadSHA == "" &&
+				((classificationNode(decision.Workflow.Stages[0]) &&
+					(l.laneForkTarget(decision.LaneID) == "" || (decision.Reason == "workflow-next-node" && decision.NodeStartRunID == ""))) ||
+					(decision.FreshNodeStage && decision.Reason == "workflow-next-node" && decision.NodeStartRunID == "")) {
 				// A fresh successor may have reclaimed a different lane. The
-				// classifier's repository base and a prior item's target marker
-				// do not establish the new fork writer's base.
+				// classifier's or released read-only first stage's repository base
+				// and a prior item's target marker do not establish the next writer's base.
 				spec.Continue = false
 			}
 			if spec.Continue {
