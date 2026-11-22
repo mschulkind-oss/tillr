@@ -542,14 +542,14 @@ Each site has one kind:
 | P3 | fresh | `warm_trimmed_go_cache`, `change-gate.py` | The exit code of `go-build.py`, run outside the runner | Exit 0 or 1 counts as warmed | The warm stamp under the common Git directory |
 | P4 | cached | `stored_result`, `store_result`, `tools/gate/checks/change_common.py` | Result store files, read and written directly, not through the runner | A record or none; writes `pass` or `fail` | P5, P6 |
 | P5 | cached | `judge_document_set`, `change_common.py` | Per-document pass and fail records; the renderer's exit code and report | A pass with no fail record is remembered; a document with both runs again; exit 0 or 1 is the verdict and anything else is "could not judge" | P7 |
-| P6 | cached | `judge` inside `main`, `tools/gate/checks/go-build.py` | Per-module pass and fail records; `go` exit codes | The same rule as P5 | G1; P3 |
+| P6 | cached | `judge` inside `main`, `tools/gate/checks/go-build.py` | Per-module pass and fail records; `go` exit codes | A pass with no fail record is remembered, as in P5. A module that runs is a pass on exit 0 and a fail on every other exit, exit 4 included, which differs from P5; the script exits 1 when any module failed, and 4 only when the script itself raised an error | G1; P3 |
 | P7 | fresh | `run`, `change_common.py`, and the `main` of each script in `tools/gate/checks/` | Findings | Exit 0, 1 or 4. This is the raw result G1 reads, not a classification of one | G1 |
 | F1 | fresh | `execute_attempt`, `tools/fork-check.py` | A check command's exit code; `tree-check.py`'s exit code | For a fast tree check, 6 is stalled and any exit other than 0, 1 or 6 is "refused"; a stale candidate is exit 2; a cancelled check is given exit 0 and marked not run | F3, F4 |
 | F2 | cached | `cached_verdict`, `VerdictCache.lookup` | A verdict cache entry | An entry with `rc` 0 is `CACHED` and the check does not run; only passes are cached | F4 |
 | F3 | fresh | `Check.conflict`, `Check.failed`, `Check.unanswered`, `Check.verdict`, `candidate_stale` | Exit code, check kind and output | A verdict against the tree, or not a verdict, by the kind's group | F4, F6, F9 |
 | F4 | relay | `check_status` | F1 to F3 and F5 | One status word: `ok`, `FAIL`, `ERR`, `skip`, `STALE`, `STALLED`, `CACHED`, `QUARANTINED` or `not-run` | F6 to F8; the run record; the printed report |
 | F5 | settle | `sentinel_skip`, `fork_quality_skip`, `applied_quarantine` | A red `fork-quality` or `waybar` check | A declared quarantine or a skip; the check is removed before the run's verdict | `run_gate` |
-| F6 | aggregate | `verdict_of`, `run_gate` | F3 | `verified` (exit 0), `failed` (1), `unproven` (2) or `stalled` (6); `dirty` and `refused` are exit 2 | P2, D17, D21 |
+| F6 | aggregate | `verdict_of`, `run_gate` | F3 | `verified` (exit 0), `failed` (1), `unproven` (2) or `stalled` (6), in the order stalled, then failed, then unproven; `dirty` and `refused` are exit 2 | P2, D17, D21 |
 | F7 | relay | `write_gate_spans` | F4; stall observations | The spans file, and a `stalled` verdict file; both are written once, when the run ends | D2, D5, D17, D19, D21 |
 | F8 | relay | `evidence_records` | F4 | `ok`, `failed`, `aborted` or `skipped` | The evidence file |
 | F9 | aggregate | `run_replay` | F3 on the replayed checks | Exit 0 green, 1 red, 2 could not judge, 77 dropped | D8, D12, D21 |
@@ -651,7 +651,9 @@ An **observation** *(coined here)* is what a site hands the function about one c
 - the check, by the selector the site holds;
 - the raw result and its source, one of: the exit code of the check's own command; the exit
   code of a judging program (the runner, the gate program, the legacy gate, the replay program);
-  a result word or span status another program wrote; a cached record;
+  a result word or span status another program wrote; a cached record. A site whose rule today
+  differs from these four names its own **protocol** instead, as
+  [the protocols section](#each-site-keeps-its-raw-result-protocol-and-aggregate-order) lists;
 - whether this run is **proving** the check: the gate run for the candidate of the check's own
   repair item, which `--prove-disabled` names;
 - the store's facts for the check, when it is store-backed: whether a marker exists for its id,
@@ -691,7 +693,9 @@ The function applies these rules in order and stops at the first that answers:
    check's fingerprint on the judged tree, the outcome is `disabled`. This includes the pair that
    the observation itself completes: a fresh fail against a stored pass, or a fresh pass against
    a stored fail.
-4. **Otherwise the raw result decides**, by one table:
+4. **Otherwise the raw result decides**, by the protocol the observation names. This table holds
+   the general protocols; the ones that differ are in
+   [the protocols section](#each-site-keeps-its-raw-result-protocol-and-aggregate-order):
 
 | Source | Raw result | Outcome and detail |
 | :--- | :--- | :--- |
@@ -715,9 +719,11 @@ The function applies these rules in order and stops at the first that answers:
 | A cached record | A red in the replay cache, the attribution cache or a finished red run | `fail` |
 | A cached record | A record that cannot be read | `unknown`, `error` |
 
-The table is today's behavior written once: every row is a decision some site in the inventory
-already makes. The two source kinds are kept apart because they differ today. A check command
-that exits 6 has failed (G1); a judging program that exits 6 has reported a stall (G5, L1).
+Every row is a decision some site in the inventory already makes, and the two exit-code sources
+are kept apart because they differ today: a check command that exits 6 has failed (G1), and a
+judging program that exits 6 has reported a stall (G5, L1). The table is not the whole of
+today's behavior. This section first said it was, and a build of the first slice measured three
+sites that decide differently (`D-GR28`, below).
 
 **A cached result is a raw result, and it is classified when it is used, not when it was
 stored.** A pass in a proof record, a checkpoint, the replay cache or the attribution cache goes
@@ -732,11 +738,14 @@ and `pass-inherited` are written by the drain after attribution (D14, G9): they 
 `fail` was acquitted, and they stay what they are. The sites that read them (D1, D9, G7, L3)
 read a decision, not a result.
 
-**One aggregate.** `Aggregate`, in the same package, computes a run's outcome from its checks'
-outcomes: `unknown` over `fail` over `pass`, where an `unknown` with detail `error` wins over
-one with detail `stalled`. `unavailable` and `disabled` checks do not contribute, and a run with
-no other checks passes. That is G4's order today, with `disabled` added to the checks that do
-not count. A run's summary counts the five outcomes apart.
+**One aggregate function, with a named order.** `Aggregate`, in the same package, computes a
+run's outcome from its checks' outcomes and details, in the order the aggregate site names. The
+runner's order (G4) is `unknown` over `fail` over `pass`, where an `unknown` with detail `error`
+wins over one with detail `stalled`. The other aggregate sites do not use that order today, and
+each keeps its own
+([the protocols section](#each-site-keeps-its-raw-result-protocol-and-aggregate-order)). In
+every order, `unavailable` and `disabled` checks do not contribute, and a run with no other
+checks passes. A run's summary counts the five outcomes apart.
 
 **The face.** `tillr-gate classify` takes a list of observations as JSON on standard input, each
 naming a check, a commit (or the worktree), the raw result and its source, and prints one answer
@@ -848,6 +857,125 @@ why: the marker, or the two records.
 - **Only four outcomes, with `unavailable` as a detail of `unknown`.** A site would then need
   the detail to know whether the check blocks, which is the comparison of words this design
   removes.
+
+#### Each site keeps its raw-result protocol and aggregate order
+
+What follows is the designer's decision of 2026-11-21 (`D-GR28`), made to answer a build
+worker's report on the first slice. None of it is the owner's ruling, and the owner may overturn
+any part of it. It amends `D-GR23` in one respect: the function is still the only place a raw
+result is classified, but it holds more than one rule for raw results, each named.
+
+The operator request that files the first slice says: "No outcome changes for any input:
+existing tests pass unchanged." The classifier section above gave one raw-result table and one
+aggregate order and called them today's behavior. The worker's build of that table, measured on
+2026-11-21 against the trunk's own functions, changed five outcomes at three sites:
+
+| Site | Input | The tree decides | The single table decided |
+| :--- | :--- | :--- | :--- |
+| P6 | One module's `go` command exits 4 | `fail`: `main` in `tools/gate/checks/go-build.py` stores a fail record for every non-zero module exit and exits 1 | `unknown`, `error` |
+| F3 | A legacy check of an ordinary kind exits 4 | `FAIL`: `Check.conflict` in `tools/fork-check.py` reads any non-zero exit of a verdict kind as a verdict | `unknown`, `error` |
+| F3 | The same check exits 124 | `ERR`: 124 is one of `COULD_NOT_ANSWER_CODES` | `fail` |
+| F6 | One red check and one check with no answer | `failed`, exit 1 (`verdict_of`) | `unknown`, `error` |
+| F6 | The same, and one stalled check | `stalled`, exit 6 | `unknown`, `error` |
+
+The request governs: the first group of slices changes no outcome. So the function is told
+which rule to apply.
+
+A **protocol** *(coined here)* is one named rule, inside `Classify`, that turns one kind of raw
+result into an outcome and a detail. An **aggregate order** *(coined here)* is one named
+precedence, inside `Aggregate`, among the outcomes of a run's checks. An observation names its
+protocol and an aggregate call names its order. The site chooses the name, which is a constant
+for that site; it compares no exit code and no result word.
+
+**The protocols.** The four sources of the classifier section are the general protocols and
+keep the rows of its table. Three sites have their own:
+
+| Protocol | Sites | The site hands over | Rule, in order |
+| :--- | :--- | :--- | :--- |
+| the check's own command | G1 | The exit code, the wait error, the silent-sample count | The first four rows of the classifier section's table |
+| a judging program | G5, G11, L1, P1, P2, D1, D8, D12, D17, D21 | The program's exit code | The next five rows |
+| a word or status; a cached record | The relay, cached and settle sites | The word, or the record | The remaining rows |
+| a Go build of one module | P6 | The `go` command's exit code for the module | Exit 0 is `pass`. Every other exit is `fail` |
+| a document render | P5 | The renderer's exit code; whether a report was read; whether it holds a finding | Exit 0 with a report is `pass`. Exit 1 with at least one finding is `fail`. Anything else is `unknown`, `error` |
+| a legacy check | F1, F3, F4 | The exit code and the facts listed below | The eight steps below |
+
+The legacy-check protocol is `check_status` and `Check.conflict` of `tools/fork-check.py`, read
+on 2026-11-21, moved into the function. It stops at the first step that answers:
+
+1. The run stopped before the check finished or started: `unknown`, `not-run`.
+2. The result came from the verdict cache: `pass`, `cached`.
+3. A declared quarantine applies: `unavailable`, `quarantined`.
+4. The check's own result names a case this machine cannot answer (the sentinel skip):
+   `unavailable`, `skipped`.
+5. The candidate is stale: `unknown`, `stale`.
+6. The gate stopped the check as stalled: `unknown`, `stalled`.
+7. Exit 0: `pass`.
+8. Any other exit is `fail` when it is a verdict and `unknown`, `error` when it is not. It is
+   not a verdict when any of these holds, and otherwise the kind's group decides:
+   - the exit code is 124, 125, 126, 127 or 137, or the process was ended by a signal the gate
+     did not send;
+   - the exit code is 4 and the kind is one that reserves 4 for "could not answer"
+     (`patch-branch-inv2`, `patch-branch-inv3`, `forks-check`, `build`, and `fork-quality`
+     without `--prepared`);
+   - the check is a fast tree check, or a kind of the `unable` group, that refused before
+     running its command;
+   - the check is the fork driver's candidate preparation and its output holds the driver's
+     own refusal to run from a linked worktree;
+   - the kind's group is `named` and the output names no failing case;
+   - the kind's group is `invariant` and the output names none of the kind's invariants.
+
+   A kind of the `verdict` group, a kind of the `unable` group that ran, and a kind the group
+   table does not list are verdicts on any exit this list does not exclude. That is why exit 4
+   from an ordinary kind is a `fail` here and an `unknown` from the runner's own command.
+
+The Python side still reads the check's output, because only it has the output and the kind
+table. It hands over **facts** and decides nothing from them: the kind's group, whether the
+kind reserves exit 4, whether the output names a failing case, an invariant or the stale
+marker, whether the check refused before running, and whether a quarantine, a sentinel skip or
+a cache entry applies. Each fact is a yes or no about the output or the plan. Pairing a fact
+with an exit code to reach a result word is classification and is done only in the function.
+The kind table and the phrase lists are declarations, like a check's declaration file, so a
+replayed commit supplies its own, as it supplies its own command.
+
+**The aggregate orders.** Each is listed highest first; the first that any check matches is the
+run's result.
+
+| Order | Site | Precedence | Run result and exit code |
+| :--- | :--- | :--- | :--- |
+| the runner | G4 | `unknown` with detail `error`; `unknown` with detail `stalled`; `fail`; `pass` | `error` (4), `stalled` (6), `fail` (1), `pass` (0) |
+| the shadow run | G10 | `unknown` with detail `error`; `fail`; `pass`. A stalled check and a check that did not run do not count | `error`, `fail`, `pass` |
+| the legacy gate | F6 | `unknown` with detail `stalled`; `fail`; any other `unknown` except `not-run`; `pass`. A check that did not run does not count | `stalled` (6), `failed` (1), `unproven` (2), `verified` (0) |
+| the legacy replay | F9 | Any `unknown`, a sentinel skip or a cancelled check; `fail`; `pass` | 2, 1, 0 |
+
+The legacy gate's order puts a red above a missing answer, and the runner's puts a missing
+answer above a red. Both stand. Which of the two is right is a question this decision does not
+take up, because answering it changes an outcome.
+
+**A difference found later is handled the same way, by the builder.** The inventory has 70
+sites and this section measured the ones the worker reported. When a slice of the first group
+finds a site whose decision for some input matches no protocol or order listed here, the tree
+at the slice's base is the specification for that input. The builder adds a protocol, an order
+or a row that reproduces it, with a table test, and adds the row to this section in the same
+commit. That is not a definition obstacle and needs no design run. What the builder may not do
+in the first group is change an outcome to fit the table, or leave the decision in the site.
+
+**What this changes in the slices.** Slice 1a builds the protocols and orders listed here with
+the two functions, and its table tests have one case per row and step of this section too.
+Slices 1b to 1e pass each site's protocol or order by name. Slices 2a to 3b are unchanged:
+rules 1 to 3 run before any protocol, a legacy check kind has no store facts and so is never
+`disabled`, and `disabled` does not count in any order.
+
+**Alternatives, each rejected by the designer:**
+
+- **Keep the single table and allow the five outcome changes by name.** The request's words
+  forbid any outcome change in this slice, and the second and fifth rows would turn a red
+  landing gate into a "could not judge".
+- **Have the Python sites turn their exit codes into `pass` and `fail` words and send the
+  words.** The disputed decisions (exit 4, exit 124) would then be made in
+  `tools/fork-check.py` and `go-build.py`, outside the function, in the copy a replayed
+  checkout runs.
+- **Merge the orders into the runner's now.** It is the simpler end state, and it is an outcome
+  change for the legacy gate. It can be decided on its own after the first group lands.
 
 ### 6.3 A missing machine resource is named, not failed
 
@@ -1502,7 +1630,7 @@ while [`OQ-GR1`](#OQ-GR1) and [`OQ-GR2`](#OQ-GR2) were later withdrawn/overturne
 ([`OQ-GR1`](#OQ-GR1) ruled out by [`OQ-GP7`](tillr-graph-is-the-path.md#OQ-GP7), with the
 20-landing cap kept live until its replacement waiting rule is built; [`OQ-GR2`](#OQ-GR2)
 overturned in `1fa2c069c` and withdrawn in
-[the graph design Section 12.2](tillr-graph-is-the-path.md#122-decisions-in-other-documents)). `D-GR24` is the owner's ruling of 2026-11-21 that puts the `green` lane base back for new work, with trunk fixers on the tip; it replaces the 2026-11-17 overturn of [`OQ-GR2`](#OQ-GR2). `D-GR25` is the designer's list of where the built `green` behavior differs from those words; it decides nothing and each case is the owner's to rule on. `D-GR26` is the designer's decision on an operator request of 2026-11-21 that carries a question the owner asked that day, quoted verbatim; the owner may overturn it. `D-GR27` is the designer's proposal from the evidence `D-GR26` produced; it decides nothing, is not built, and is the owner's to rule on.
+[the graph design Section 12.2](tillr-graph-is-the-path.md#122-decisions-in-other-documents)). `D-GR24` is the owner's ruling of 2026-11-21 that puts the `green` lane base back for new work, with trunk fixers on the tip; it replaces the 2026-11-17 overturn of [`OQ-GR2`](#OQ-GR2). `D-GR25` is the designer's list of where the built `green` behavior differs from those words; it decides nothing and each case is the owner's to rule on. `D-GR26` is the designer's decision on an operator request of 2026-11-21 that carries a question the owner asked that day, quoted verbatim; the owner may overturn it. `D-GR27` is the designer's proposal from the evidence `D-GR26` produced; it decides nothing, is not built, and is the owner's to rule on. `D-GR28` is the designer's decision of 2026-11-21, made to answer a build worker's report against an operator request; it amends `D-GR23` and is the owner's to overturn.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
@@ -1532,6 +1660,7 @@ overturned in `1fa2c069c` and withdrawn in
 | `D-GR25` | **Not the owner's ruling and not a decision: the designer's list, for the owner to rule on.** The built `green` behavior differs from the words of `D-GR24` in five cases, tabled in Section 6.6: a lane cut from an unproved commit after green when the item's own block is newer than green; the same when the item's design answer landed after green; lanes cut from the tip when no green pointer exists; a fork blocker proved by its delivered patch branch, not by the green pointer; and a landed blocker with no recorded landing, which waits. Each stays as built until the owner rules. **Rejected:** changing any of them to match the words, which the request that carried the ruling forbids. | 2026-11-21 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ as built (`tools/tillr-drain/drain/lane_base.go`); no ruling yet |
 | `D-GR26` | **Not the owner's ruling; the designer's decision on an operator request, which the owner may overturn.** The owner asked on 2026-11-21, verbatim: *"Can we tell from our records when an item passed the light gate and then failed the heavy gate? Because that's evidence we're going to want to look at and decide something. Probably just making the light tests better if possible."* The request answers with a read-only report, the `tillr view heavy-misses` face (the name is the designer's), listing each landing that passed its fast gate and was later named by a heavy failure, with its commit, item, time, failing checks, revert or fixer outcome and changed paths, summarized by check and by changed module; and with Section 6.10, which reads that report from 2026-11-19 3:55 PM to 2026-11-21 6:35 PM Eastern and belongs to this document, so its designer writes it. Each failing check carries an attribution (`confirmed`, `offered`, `disproved` or `named`), and only the first two are counted as evidence. The request forbids changing the fast tier's selection. **Rejected:** counting every landing a fixer record names, which counts landings that only arrived on a red trunk (33 of the 47 listed). | 2026-11-21 | [Section 6.10](#610-what-passed-the-fast-gate-and-failed-the-heavy-run) | Evidence written 2026-11-21; the face is not on the trunk |
 | `D-GR27` | **Not the owner's ruling and not a decision: the designer's proposal, for the owner to rule on.** A candidate that changes a tillr Go module also runs, before the merge, the sharded suites of the changed modules and of the modules whose `go.mod` requires them; every other candidate is gated as today. Over the period it would have refused 9 of the 13 attributed landings, at the drain suite's time (40.31 seconds on a quiet machine, 455.28 seconds in a heavy run beside the lanes) on about half of all landings, against the ten seconds of `D-GR1`. The designer recommends against building it now (keep the fast tier, shorten the drain suite and the time to a revert first); the owner's quoted leaning is toward better fast tests. Nothing is built or changed until the owner rules. | 2026-11-21 | [Section 6.10](#610-what-passed-the-fast-gate-and-failed-the-heavy-run) | — (proposal; no ruling yet) |
+| `D-GR28` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request for the first classifier slice says "No outcome changes for any input". The single raw-result table and single aggregate order of `D-GR23` changed five measured outcomes at three sites (P6, F3, F6), so `D-GR23` is amended: `Classify` holds a named protocol per kind of raw result and `Aggregate` a named order per aggregate site, each reproducing the tree, and a site passes the name and compares nothing. A Go module build is `fail` on every non-zero exit; a legacy check follows `check_status` and `Check.conflict` (exit 4 of an ordinary kind is `fail`, exit 124 is `unknown`); the legacy gate's order is stalled, then failed, then unproven. The Python side hands over yes-or-no facts about a check's output and decides nothing from them. A difference a later slice finds is added the same way by its builder, with a test and a row in the section, and is not a definition obstacle. **Rejected:** allowing the outcome changes by name; sending pass and fail words from Python; merging the orders into the runner's in this group. | 2026-11-21 | [Each site keeps its raw-result protocol and aggregate order](#each-site-keeps-its-raw-result-protocol-and-aggregate-order) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
 | `D-GR12` | A question about a moving upstream is a drift probe that files an item and never moves or holds the green pointer. **Rejected:** keeping it as a check on a commit. Made visible where it happens. | 2026-11-15 | [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) | — (`series` and `patch-branch-inv2` are `TIER_LANDING` in `tools/fork-check.py`; no probe exists) |
 | OQ-GR1 | The default of a per-repository setting, `red_cap`: landing stops at 20 landings or 60 minutes past the last green commit; a repository may set a different bound, and zero means no cap. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "a mechanism whose cost rises with trunk activity is pointed the wrong way" and the owner's 2026-11-15 ruling that the landing strategy is configurable per repository and red is brief. The owner may overturn it. **Rejected:** no cap, which lets the fixer's range and the deploy lag grow without limit. **Ruled out by the owner on 2026-11-18** ([OQ-GP7](tillr-graph-is-the-path.md#OQ-GP7)): under a red check, work lands only if it does not touch what that check reads, and there is no landing cap. The cap is still live in the tree (20 landings; its time bound was turned off on 2026-11-17, `d53580bfd`) until the graph design's waiting rule is built. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/redcap/cap.go`, `drain/red_cap.go`) |
 | OQ-GR2 | The default of a per-repository setting, `lane_base`: a new lane starts from the last green commit; a repository may choose the trunk tip. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are that a worker does not pay for a failure it did not cause, and the same cost-direction rule. The owner may overturn it. **Rejected:** always cutting from the tip. **Overturned by the owner on 2026-11-17** (`1fa2c069c`): work is always built against the latest trunk, never a past commit; a lane cut from the green pointer was handed a tree older than its own item's definition and produced false conflicts. This repository set `tip`; the code's default when the key is absent is still `green`. **Replaced by the owner's ruling of 2026-11-21** (`D-GR24`): new work starts from the last proved trunk commit again, and this repository sets `green`. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/drain/lane_base.go`; the repository setting follows `D-GR24`) |
@@ -1838,11 +1967,11 @@ It is what keeps a site added later from classifying on its own.
 
 | Slice | What it changes | Sites | Verified alone by |
 | :--- | :--- | :--- | :--- |
-| 1a | Add `checkresult` with `Classify` and `Aggregate` holding rule 4's table only, and the `tillr-gate classify` face. Nothing calls them. Add the scan test with every listed file exempt | none | Table tests in the package: one case per row of the raw-result table and per pair of the aggregate order. A face test: observations in, outcomes out in the same order, and no check command started |
+| 1a | Add `checkresult` with `Classify` and `Aggregate` holding rule 4's table and [every protocol and aggregate order](#each-site-keeps-its-raw-result-protocol-and-aggregate-order) only, and the `tillr-gate classify` face. Nothing calls them. Add the scan test with every listed file exempt | none | Table tests in the package: one case per row of the raw-result table, per row and step of each protocol, and per pair of each aggregate order. A face test: observations in, outcomes out in the same order, and no check command started |
 | 1b | Route the runner's sites through the function | G1 to G12 | `go test ./...` in `tools/tillr-gate` passes with no test edited; the scan list loses the runner's files |
 | 1c | Route the drain's landing-gate and light-attribution sites | D1 to D16, D34 | `go test ./...` in `tools/tillr-drain` passes with no test edited; the scan list loses those files |
 | 1d | Route the drain's rolling, heavy and proof sites | D17 to D33 | The same command; the scan list loses the rest of the drain |
-| 1e | Route the Python sites through the face: `check_status` and `verdict_of` take their words from it, and the adapters stop pairing exit codes with words themselves | P1 to P7, F1 to F13, L1 to L4 | `python3 tests/fork-check.test.py` and the tests under `tools/gate` pass with no test edited; the scan list is empty. The two copies of `tillr-loop` stay byte-identical |
+| 1e | Route the Python sites through the face: `check_status` and `verdict_of` take their words from it under the legacy-check protocol and the legacy gate's order, `go-build.py` and the documents check under theirs, and the adapters stop pairing exit codes with words themselves | P1 to P7, F1 to F13, L1 to L4 | `python3 tests/fork-check.test.py` and the tests under `tools/gate` pass with no test edited; the scan list is empty. The two copies of `tillr-loop` stay byte-identical |
 | 2a | Add rules 1 to 3 to the function. The runner reports `disabled`, counts it apart, writes the marker and the log copies, records `log_ref`, and gains `--prove-disabled` and `enable` | G2, G3, G4, G7, P4 to P6 | Runner tests alone: a stored pass with a fresh fail, and a stored fail with a fresh pass, each give `disabled`, exit 0, a marker and both logs beside it; a marker disables a new fingerprint; a proving run fails on a fail; `enable` removes only the episode it names. `TestMemoryFailRetriesAndFlakyPass` and `TestMemoryOppositeWritersNeverErase` are rewritten to these expectations |
 | 2b | The drain's marker sweep files the repair item and runs `enable` after the repair lands. A generated repair item needs no document block | a new step; no listed site changes | Drain tests with a marker file written by the test and no gate run: one item per episode; none while one is unfinished; a new item after a landed repair and a new episode; a sweep after a cancelled step and after a step that errored still files |
 | 2c | Every drain consumer handles `disabled` as the classifier section lists | D2, D3, D7, D8, D10, D13, D16, D18, D23, D29, D30, D32 to D34 | Drain tests, one per bullet of that list, each with a stub gate that returns `disabled`: no refusal, no red trunk, no fixer, the held item released, the notice silent, the grouped revert still judging its other members |
@@ -1866,7 +1995,7 @@ table and is not a base for these slices: slice 1a starts from the trunk.
   `tools/tillr-loop/`, `tools/gate/`, `tools/fork-check.py`, `tools/go-test-shards.py`, their
   pack mirrors, and this document. Run `just pack-sync` after the last source edit of a slice
   and commit the regenerated mirror.
-- **Ref:** `D-GR21` to `D-GR23` in the [Decision Ledger](#decision-ledger).
+- **Ref:** `D-GR21` to `D-GR23` and `D-GR28` in the [Decision Ledger](#decision-ledger).
 - **Order:** 1a first. 1b to 1e need only 1a and may land in any order. 2a needs 1b and 1e. 2b
   and 2c need 2a and the drain's two routing slices. 3a and 3b need 2c.
 - **Forbidden in every slice:** a result word compared outside `checkresult`; a second
