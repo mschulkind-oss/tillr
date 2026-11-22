@@ -229,6 +229,23 @@ green; `alarms` lists standing alarms; each row has `item_id`, `state`,
    operator decision labelled as one, what was filed, and the lane step
    evidence.
 
+## When the loop's writes are refused or the loop goes silent
+
+Two faults seen on 2026-11-21, kept here until their fixes land:
+
+- **Store busy.** Lines in the loop's log ending `database is locked (5)
+  (SQLITE_BUSY)` mean another process held the store's write lock. Find the
+  holder by reading `/proc/locks` for a `WRITE` lock on the inode of
+  `.tillr/state.db-shm` (byte 120 is SQLite's write lock) a few times a second,
+  and name its process. That evening it was the session's own
+  `tillr watch wait`, and stopping it ended the failures. Do not run the watcher
+  on a build where it takes that lock; say in the report that alerts are off.
+- **Silent loop.** A loop whose log has not moved for minutes while the process
+  uses a full processor is in its exit path, not working. `kill -QUIT` the loop
+  process only: it prints its goroutine stacks into the keeper's log and exits,
+  and the keeper starts a new loop after 60 seconds. Workers are not ended.
+  Save the stacks beside the rulings file and file what they show.
+
 ## What the operator settles belongs inside tillr
 
 Owner, 2026-11-21: "if you ever feel that you as the whale could solve some
