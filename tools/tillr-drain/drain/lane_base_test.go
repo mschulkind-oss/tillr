@@ -304,3 +304,94 @@ func TestLaneBaseWaitsForBlockerLandingToBeProved(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyPlannedChecksOnlyDispatchedItemsBlockers(t *testing.T) {
+	f, l := passFixture(t, "unrelated-blocker-1", "unrelated-blocker-2", "unrelated-dependent", "target-blocker", "target")
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "unrelated blocker 1")
+	unrelatedSHA1 := runGit(t, f.root, "rev-parse", TrunkRef)
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "unrelated blocker 2")
+	unrelatedSHA2 := runGit(t, f.root, "rev-parse", TrunkRef)
+	runGit(t, f.root, "update-ref", GreenRef, unrelatedSHA2)
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "target blocker")
+	targetBlockerSHA := runGit(t, f.root, "rev-parse", TrunkRef)
+
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		for _, q := range []string{
+			`UPDATE items SET state='landed' WHERE item_id IN ('unrelated-blocker-1', 'unrelated-blocker-2')`,
+			`INSERT INTO item_edges(item_id,blocked_by) VALUES('unrelated-dependent','unrelated-blocker-1')`,
+			`INSERT INTO item_edges(item_id,blocked_by) VALUES('unrelated-dependent','unrelated-blocker-2')`,
+		} {
+			if _, err := tx.Exec(q); err != nil {
+				return err
+			}
+		}
+		if err := recordFixtureLanding(tx, "unrelated-blocker-1", "fixture-run-1", unrelatedSHA1, 1); err != nil {
+			return err
+		}
+		return recordFixtureLanding(tx, "unrelated-blocker-2", "fixture-run-2", unrelatedSHA2, 2)
+	})
+
+	var targetPlan plannedApplication
+	found := false
+	for _, p := range mustPlan(t, l) {
+		if p.decision.ItemID == "target" {
+			targetPlan = p
+			found = true
+			break
+		}
+	}
+	if !found || targetPlan.decision.Action != ActionDispatch {
+		t.Fatalf("expected dispatch plan for target: found=%v plan=%+v", found, targetPlan.decision)
+	}
+
+	var fetches []string
+	writeGatheredHooks.Fetch = func(key string) { fetches = append(fetches, key) }
+	t.Cleanup(func() { writeGatheredHooks.Fetch = nil })
+
+	tip := targetBlockerSHA
+	generation := ""
+	ok, work, err := l.applyPlanRecorded(context.Background(), targetPlan, &tip, l.cfg.Now(), &generation)
+	writeGatheredHooks.Fetch = nil
+	if err != nil || !ok || work == nil {
+		t.Fatalf("applyPlanRecorded failed: ok=%v work=%+v err=%v", ok, work, err)
+	}
+	for _, key := range fetches {
+		if strings.Contains(key, unrelatedSHA1) || strings.Contains(key, unrelatedSHA2) {
+			t.Fatalf("applyPlanned gathered unrelated blocker ancestry %q (all fetches: %v)", key, fetches)
+		}
+	}
+
+	// Verify target's own unproved blocker is still enforced on a fresh fixture.
+	f2, l2 := passFixture(t, "target-blocker", "target")
+	base2 := runGit(t, f2.root, "rev-parse", TrunkRef)
+	runGit(t, f2.root, "update-ref", GreenRef, base2)
+	runGit(t, f2.root, "commit", "--allow-empty", "-qm", "target blocker landed after green")
+	unprovedSHA := runGit(t, f2.root, "rev-parse", TrunkRef)
+	var targetPlan2 plannedApplication
+	for _, p := range mustPlan(t, l2) {
+		if p.decision.ItemID == "target" {
+			targetPlan2 = p
+			break
+		}
+	}
+	if targetPlan2.decision.Action != ActionDispatch {
+		t.Fatalf("expected dispatch plan before blocker edge: %+v", targetPlan2.decision)
+	}
+	fixtureWrite(t, f2, func(tx *store.Tx) error {
+		for _, q := range []string{
+			`UPDATE items SET state='landed' WHERE item_id='target-blocker'`,
+			`INSERT INTO item_edges(item_id,blocked_by) VALUES('target','target-blocker')`,
+		} {
+			if _, err := tx.Exec(q); err != nil {
+				return err
+			}
+		}
+		return recordFixtureLanding(tx, "target-blocker", "fixture-run-tb", unprovedSHA, 1)
+	})
+	tip2 := unprovedSHA
+	generation2 := ""
+	ok2, work2, err2 := l2.applyPlanRecorded(context.Background(), targetPlan2, &tip2, l2.cfg.Now(), &generation2)
+	if err2 != nil || ok2 || work2 != nil {
+		t.Fatalf("expected unproved own blocker to decline dispatch: ok=%v work=%+v err=%v", ok2, work2, err2)
+	}
+}

@@ -2106,20 +2106,22 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 					}
 				}
 				if green != "" {
-					states := map[string]string{}
-					for _, row := range items {
-						states[row.ItemID] = row.State
-					}
-					edges, err := readEdges(tx.Reader())
+					itemEdges, err := readItemEdges(tx.Reader(), d.ItemID)
 					if err != nil {
 						return err
 					}
-					waits, err := unprovedBlockers(ctx, tx.Reader(), l.cfg.Root, green, "", states, edges)
-					if err != nil {
-						return err
-					}
-					if waits[d.ItemID] != "" {
-						return decline("the proved lane base does not contain a dependency", "a trunk proof containing the item's dependencies")
+					if len(itemEdges) > 0 {
+						states := map[string]string{}
+						for _, row := range items {
+							states[row.ItemID] = row.State
+						}
+						waits, err := unprovedBlockers(ctx, tx.Reader(), l.cfg.Root, green, "", states, map[string][]string{d.ItemID: itemEdges})
+						if err != nil {
+							return err
+						}
+						if waits[d.ItemID] != "" {
+							return decline("the proved lane base does not contain a dependency", "a trunk proof containing the item's dependencies")
+						}
 					}
 					if p.start == nil {
 						base = green
