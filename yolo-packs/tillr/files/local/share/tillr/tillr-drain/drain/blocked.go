@@ -416,6 +416,19 @@ func (l *Loop) reportedBlock(ctx context.Context, d Decision, log string) error 
 	} else if instruction := obstacleDesignInstruction(obstacle); obstacle.Problem == "" && instruction != "" {
 		c.Text += "\n\n" + instruction
 	}
+	// Legacy conflict holds use the first line as their reason. For an
+	// extracted report, lead with the finding, not the adapter's heading.
+	if strings.HasPrefix(c.Text, "# run report\n") {
+		if _, body, wrapped := strings.Cut(c.Text, "\n---\n"); wrapped {
+			c.Text = strings.TrimSpace(body)
+			for _, field := range []string{"QUESTION", "EVIDENCE", "MISSING", "CHECKS"} {
+				if finding := obstacle.Field(field); finding != "" {
+					c.Text = finding + "\n\n" + c.Text
+					break
+				}
+			}
+		}
+	}
 	l.reportf("loop: %s conflict %s waits on %s: %s\n", c.ItemID, c.ConflictID, c.WaitingOn, c.Text)
 	if err := l.saveBlockConflict(ctx, c); err != nil {
 		return err

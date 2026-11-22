@@ -902,6 +902,18 @@ func (l *Loop) settleNode(ctx context.Context, d Decision, rec run.Record, log, 
 		}
 		if footer != "done" && footer != "failed" {
 			if footer == "blocked" {
+				if writer, finding := missingCandidateFinding(d, base, head, dirty, log); writer >= 0 {
+					ready, err := l.canReturnMissingCandidate(ctx, d, writer)
+					if err != nil {
+						return true, err
+					}
+					if ready {
+						if err := l.nodeOutcome(ctx, d, missingCandidateOutcome); err != nil {
+							return true, err
+						}
+						return true, l.returnMissingCandidate(ctx, d, writer, base, finding)
+					}
+				}
 				if err := l.reportedBlock(ctx, d, log); err != nil {
 					return true, err
 				}
