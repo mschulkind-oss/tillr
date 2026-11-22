@@ -1685,6 +1685,12 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 				} else {
 					applyErr = errors.Join(applyErr, fmt.Errorf("recording dispatch decline: %w", err))
 				}
+				return
+			}
+			// A busy dispatch made no claim. Its decline was recorded or the
+			// loss was reported, so continue without failing the pass.
+			if store.IsBusy(applyErr) && ctx.Err() == nil {
+				applyErr = nil
 			}
 		}()
 	}
