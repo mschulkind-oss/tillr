@@ -7747,7 +7747,7 @@ def legacy_facts(check: Check, *, settled: bool) -> dict:
         "stale": candidate_stale(check) if settled or group == KIND_UNABLE else False,
     }
     if settled:
-        not_run = check.not_run_reason is not None
+        not_run = check.not_run_reason is not None or check.was_cancelled
         quarantine = applied_quarantine(check) is not None
         if check.kind == "fork-quality":
             # Avoid emitting lapse warnings for checks whose higher-priority
@@ -7762,11 +7762,17 @@ def legacy_facts(check: Check, *, settled: bool) -> dict:
     return facts
 
 
+def legacy_observation(check: Check, facts: dict | None = None, *, settled: bool = True) -> dict:
+    if facts is None:
+        facts = legacy_facts(check, settled=settled)
+    return {"check": check.label, "source": "legacy-check", "exit_code": check.rc, "legacy": facts}
+
+
 def legacy_result(check: Check, facts: dict) -> dict:
-    observation = {"check": check.label, "source": "legacy-check", "exit_code": check.rc, "legacy": facts}
+    observation = legacy_observation(check, facts)
     key = json.dumps(observation, sort_keys=True)
     state = (check.rc, check.output, check.kind, tuple(check.argv), check.label,
-             check.not_run_reason, check.cached, check.preflight_refused,
+             check.not_run_reason, check.was_cancelled, check.cached, check.preflight_refused,
              getattr(check, "fast_tree", False))
     cached_state, previous_settlement, results = getattr(check, "_classifications", (None, None, {}))
     settlement = (tuple(facts.get(name) for name in ("not_run", "cached", "quarantined", "sentinel_skip"))
@@ -8578,14 +8584,9 @@ def execute_attempt(root: Path, check: Check, diff_base: str,
 
 def verdict_of(checks: list[Check]) -> tuple[str, int]:
     """Classify tree checks: content conflict, unavailable judgment, or verified."""
-    failed = [check for check in checks if check.failed]
-    if any(check.rc == CHECK_STALLED_RC for check in failed):
-        return "stalled", EXIT_STALLED
-    if any(check.conflict for check in failed):
-        return "failed", 1
-    if failed:
-        return "unproven", 2
-    return "verified", 0
+    observations = [legacy_observation(check, settled=True) for check in checks]
+    run = _classify_transport.classify_aggregate("legacy-gate", observations)["run"]
+    return run["detail"], run["exit_code"]
 
 
 class PlanningRefusal(Exception):
@@ -10328,32 +10329,37 @@ def run_replay(argv: list[str]) -> int:
         for check in copies:
             execute_attempt(root, check, gate.diff_base, cancel=cancellation)
             capture_fork_conflict(root, check, cancellation)
-    unanswered = [check for check in copies if check.unanswered or check.was_cancelled or check.rc == CHECK_STALLED_RC]
-    if unanswered:
-        for check in unanswered:
-            print(f"fork-check replay: {check.kind}: {check.label} could not judge (exit {check.rc})",
-                  file=sys.stderr)
-            if check.output:
-                print(check.output, file=sys.stderr)
-        return 2
-    failed = []
-    for check in copies:
-        status = "PASS" if check.rc == 0 else "FAIL"
-        print(f"fork-check replay: {status} {check.kind}: {check.label} (exit {check.rc})")
-        if check.rc != 0:
-            failed.append(check)
-            if observation := getattr(check, "fork_conflict", None):
-                print("fork-check replay target: " + json.dumps(observation, sort_keys=True))
-            if check.output:
-                print(check.output, end="" if check.output.endswith("\n") else "\n")
-    if failed:
-        print_current_triage([triage_packet(check, root) for check in failed])
-        labels = ", ".join(f"{check.kind}: {check.label}" for check in failed)
-        print(f"fork-check replay: {len(failed)} of {len(copies)} check(s) red on "
-              f"{gate.head[:12]}: {labels}", file=sys.stderr)
-        return 1
-    print(f"fork-check replay: all {len(copies)} named check(s) green on {gate.head[:12]}")
-    return 0
+    observations = [legacy_observation(check, settled=True) for check in copies]
+    answered = _classify_transport.classify_aggregate("legacy-replay", observations)
+    run_outcome = answered["run"]["outcome"]
+    if run_outcome == "unknown":
+        for check, classified in zip(copies, answered["checks"]):
+            if classified["outcome"] == "unknown" or classified["detail"] == "skipped":
+                print(f"fork-check replay: {check.kind}: {check.label} could not judge (exit {check.rc})",
+                      file=sys.stderr)
+                if check.output:
+                    print(check.output, file=sys.stderr)
+    else:
+        failed = []
+        for check, classified in zip(copies, answered["checks"]):
+            red = classified["outcome"] == "fail"
+            banner = "FAIL" if red else "PASS"
+            print(f"fork-check replay: {banner} {check.kind}: {check.label} (exit {check.rc})")
+            if red:
+                failed.append(check)
+                if observation := getattr(check, "fork_conflict", None):
+                    print("fork-check replay target: " + json.dumps(observation, sort_keys=True))
+                if check.output:
+                    print(check.output, end="" if check.output.endswith("\n") else "\n")
+        if run_outcome == "fail":
+            if failed:
+                print_current_triage([triage_packet(check, root) for check in failed])
+            labels = ", ".join(f"{check.kind}: {check.label}" for check in failed)
+            print(f"fork-check replay: {len(failed)} of {len(copies)} check(s) red on "
+                  f"{gate.head[:12]}: {labels}", file=sys.stderr)
+        else:
+            print(f"fork-check replay: all {len(copies)} named check(s) green on {gate.head[:12]}")
+    return answered["run"]["exit_code"]
 
 
 # ── pin drift: upstream ahead of a pinned fork ──────────────────────────────────

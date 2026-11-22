@@ -22,13 +22,15 @@ class AdapterClassificationTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.log = self.root / "observations"
+        self.argv_log = self.root / "argv"
         installed = shutil.which("tillr-gate")
         self.assertIsNotNone(installed)
         standin = self.root / "tillr-gate"
         standin.write_text(f'''#!{sys.executable}
-import subprocess, sys
+import json, subprocess, sys
 raw = sys.stdin.buffer.read()
 with open({str(self.log)!r}, "ab") as out: out.write(raw + b"\\n")
+with open({str(self.argv_log)!r}, "a", encoding="utf-8") as out: out.write(json.dumps(sys.argv[1:]) + "\\n")
 raise SystemExit(subprocess.run([{installed!r}, *sys.argv[1:]], input=raw).returncode)
 ''')
         standin.chmod(0o755)
@@ -38,6 +40,9 @@ raise SystemExit(subprocess.run([{installed!r}, *sys.argv[1:]], input=raw).retur
 
     def observations(self):
         return [json.loads(line) for line in self.log.read_text().splitlines()]
+
+    def invocations(self):
+        return [json.loads(line) for line in self.argv_log.read_text().splitlines()]
 
     def test_legacy_raw_facts_and_outcome(self):
         gate = runpy.run_path(str(ROOT / "tools/fork-check.py"))
@@ -397,6 +402,176 @@ raise SystemExit(subprocess.run([{installed!r}, *sys.argv[1:]], input=raw).retur
                 self.assertEqual(execute("gate", [step]), 1)
             with patch.object(subprocess, "run", side_effect=OSError("offline")):
                 self.assertEqual(execute("gate", [step]), 4)
+
+    def test_verdict_of_uses_legacy_gate_aggregate(self):
+        gate = runpy.run_path(str(ROOT / "tools/fork-check.py"))
+        verdict_of = gate["verdict_of"]
+        transport = verdict_of.__globals__["_classify_transport"]
+
+        def make_check(kind="rank-order", rc=0, *, not_run=None, cached=False):
+            check = gate["Check"](kind, f"{kind}-{rc}", ["true"], "why", 1)
+            check.rc = rc
+            check.not_run_reason = not_run
+            check.cached = cached
+            return check
+
+        self.assertEqual(verdict_of([]), ("verified", 0))
+        self.assertEqual(self.invocations()[-1], ["classify", "--aggregate", "legacy-gate"])
+        self.assertEqual(self.observations()[-1], [])
+
+        green = make_check(rc=0)
+        red = make_check(rc=1)
+        unanswered = make_check(rc=124)
+        stalled = make_check(rc=gate["CHECK_STALLED_RC"])
+        skipped_not_run = make_check(rc=0, not_run="cancelled")
+        cached = make_check("fork-quality", rc=0, cached=True)
+
+        self.assertEqual(verdict_of([green, skipped_not_run, cached]), ("verified", 0))
+        self.assertEqual(self.invocations()[-1], ["classify", "--aggregate", "legacy-gate"])
+        self.assertEqual(len(self.observations()[-1]), 3)
+        self.assertEqual(verdict_of([red, skipped_not_run]), ("failed", 1))
+        self.assertEqual(verdict_of([unanswered]), ("unproven", 2))
+        self.assertEqual(verdict_of([stalled, red, unanswered]), ("stalled", 6))
+
+        actual = transport.classify_aggregate
+
+        def substituted(order, observations):
+            self.assertEqual(order, "legacy-gate")
+            real = actual(order, observations)
+            self.assertEqual(real["run"], {"outcome": "pass", "detail": "verified", "exit_code": 0})
+            return {
+                "checks": real["checks"],
+                "run": {"outcome": "unknown", "detail": "stalled", "exit_code": 6},
+            }
+
+        with patch.object(transport, "classify_aggregate", side_effect=substituted):
+            self.assertEqual(verdict_of([green]), ("stalled", 6))
+
+        with patch.dict(os.environ, PATH=str(self.root / "missing-bin")):
+            with self.assertRaisesRegex(transport.ClassificationError, "tillr-gate classify"):
+                verdict_of([green])
+
+    def test_run_replay_uses_legacy_replay_aggregate(self):
+        from contextlib import redirect_stdout
+        import types
+
+        gate = runpy.run_path(str(ROOT / "tools/fork-check.py"))
+        run_replay = gate["run_replay"]
+        main = gate["main"]
+        transport = run_replay.__globals__["_classify_transport"]
+
+        def run_case(kind="rank-order", *, effect, extra_args=(), call_main=False):
+            planned = gate["Check"](kind, "one", ["true"], "why", 1)
+            fake_gate = types.SimpleNamespace(
+                plan=types.SimpleNamespace(checks=[planned], skips=[]),
+                missing=[],
+                diff_base=None,
+                head="4ca1a67aabaf3488d6535d3f451a67113cdeafcc",
+            )
+            stdout, stderr = io.StringIO(), io.StringIO()
+            argv = ["--replay", "--only", kind, *extra_args]
+            with patch.dict(run_replay.__globals__, {
+                "plan_gate": lambda root, options: fake_gate,
+                "execute_attempt": lambda root, check, diff_base, cancel=None: effect(check),
+                "capture_fork_conflict": lambda root, check, cancel: None,
+            }), redirect_stdout(stdout), redirect_stderr(stderr):
+                code = main(argv) if call_main else run_replay(argv)
+            return code, stdout.getvalue(), stderr.getvalue()
+
+        code, out, err = run_case(effect=lambda check: setattr(check, "rc", 0))
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.invocations()[-1], ["classify", "--aggregate", "legacy-replay"])
+        self.assertIn("PASS rank-order: one (exit 0)", out)
+        self.assertIn("all 1 named check(s) green on 4ca1a67aabaf", out)
+
+        code, out, err = run_case(effect=lambda check: (setattr(check, "rc", 1), setattr(check, "output", "boom\n")))
+        self.assertEqual(code, 1)
+        self.assertIn("FAIL rank-order: one (exit 1)", out)
+        self.assertIn("boom", out)
+        self.assertIn("1 of 1 check(s) red on 4ca1a67aabaf: rank-order: one", err)
+
+        for kind, mutator in (
+            ("rank-order", lambda check: (setattr(check, "rc", 124), setattr(check, "output", "timed out"))),
+            ("waybar", lambda check: setattr(check, "rc", 77)),
+            ("rank-order", lambda check: (setattr(check, "rc", 0), setattr(check, "was_cancelled", True))),
+            ("rank-order", lambda check: setattr(check, "rc", gate["CHECK_STALLED_RC"])),
+        ):
+            with self.subTest(kind=kind):
+                code, out, err = run_case(kind=kind, effect=mutator)
+                self.assertEqual(code, 2, out + err)
+                self.assertIn("could not judge", err)
+
+        actual = transport.classify_aggregate
+
+        def as_fail(order, observations):
+            self.assertEqual(order, "legacy-replay")
+            real = actual(order, observations)
+            self.assertEqual(real["run"], {"outcome": "pass", "detail": "pass", "exit_code": 0})
+            return {
+                "checks": [{"outcome": "fail", "detail": "failed"}],
+                "run": {"outcome": "fail", "detail": "fail", "exit_code": 1},
+            }
+
+        def as_unknown(order, observations):
+            self.assertEqual(order, "legacy-replay")
+            real = actual(order, observations)
+            self.assertEqual(real["run"], {"outcome": "pass", "detail": "pass", "exit_code": 0})
+            return {
+                "checks": [{"outcome": "unknown", "detail": "error"}],
+                "run": {"outcome": "unknown", "detail": "error", "exit_code": 2},
+            }
+
+        with patch.object(transport, "classify_aggregate", side_effect=as_fail):
+            code, out, err = run_case(effect=lambda check: setattr(check, "rc", 0))
+            self.assertEqual(code, 1)
+            self.assertIn("FAIL rank-order: one (exit 0)", out)
+            self.assertIn("1 of 1 check(s) red", err)
+
+        with patch.object(transport, "classify_aggregate", side_effect=as_unknown):
+            code, out, err = run_case(effect=lambda check: setattr(check, "rc", 0))
+            self.assertEqual(code, 2)
+            self.assertIn("could not judge (exit 0)", err)
+
+        with patch.dict(os.environ, PATH=str(self.root / "missing-bin")):
+            code, _, err = run_case(effect=lambda check: setattr(check, "rc", 0), call_main=True)
+            self.assertEqual(code, 2)
+            self.assertIn("fork-check: could not judge: tillr-gate classify", err)
+            code, _, err = run_case(effect=lambda check: setattr(check, "rc", 0), extra_args=("--fixer",), call_main=True)
+            self.assertEqual(code, 2)
+            self.assertIn("fork-check replay: could not judge: tillr-gate classify", err)
+
+    def test_classify_aggregate_validates_wire_shape(self):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("gate_classify_test", ROOT / "tools/gate/classify.py")
+        classify = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(classify)
+
+        observations = [{"source": "result-word", "word": "pass"}]
+        answered = classify.classify_aggregate("legacy-gate", observations)
+        self.assertEqual(answered["run"], {"outcome": "pass", "detail": "verified", "exit_code": 0})
+        self.assertEqual(answered["checks"][0]["outcome"], "pass")
+
+        with self.assertRaisesRegex(classify.ClassificationError, "aggregate order"):
+            classify.classify_aggregate("", observations)
+
+        for code, stdout in (
+            (2, "{}"),
+            (0, "not json"),
+            (0, "[]"),
+            (0, '{"checks": []}'),
+            (0, '{"checks": [], "run": {"outcome": "pass", "detail": "verified", "exit_code": 0}}'),
+            (0, '{"checks": [{"outcome": "pass", "detail": "passed", "raw_word": "pass"}], "run": {}}'),
+            (0, '{"checks": [{"outcome": "pass", "detail": "passed", "raw_word": "pass"}],'
+                ' "run": {"outcome": "pass", "detail": "verified", "exit_code": true}}'),
+            (0, '{"checks": [{"outcome": "pass", "detail": "passed", "raw_word": "fail"}],'
+                ' "run": {"outcome": "pass", "detail": "verified", "exit_code": 0}}'),
+        ):
+            with self.subTest(code=code, stdout=stdout), patch.object(
+                classify, "run_command", return_value=subprocess.CompletedProcess([], code, stdout=stdout, stderr="")
+            ):
+                with self.assertRaisesRegex(classify.ClassificationError, "tillr-gate classify"):
+                    classify.classify_aggregate("legacy-gate", observations)
 
 
 if __name__ == "__main__":
