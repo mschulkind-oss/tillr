@@ -25,6 +25,9 @@ func init() {
 // global, or command-line setting. Override the work tree for this read so the
 // setting being inspected cannot redirect Git or make it chdir into a stale path.
 func (l *Loop) observeTrunkCoreWorktree(ctx context.Context) error {
+	if l.nonLanding {
+		return nil
+	}
 	root, err := filepath.Abs(l.cfg.Root)
 	if err != nil {
 		return err
