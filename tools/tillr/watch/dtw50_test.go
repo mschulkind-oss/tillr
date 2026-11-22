@@ -383,12 +383,15 @@ receiver = "foreground"
 	if err != nil {
 		t.Fatalf("RuleResults on unmigrated store failed: %v", err)
 	}
-	if len(results) != 1 || results[0].GroupBy != "lane_id, reason" || results[0].Skipped != 1 {
+	if len(results) != 1 || results[0].GroupBy != "lane_id, reason" || results[0].Skipped != 0 {
 		t.Fatalf("unexpected unmigrated RuleResults: %+v", results)
 	}
 
 	// Fresh migrated store for full episode lifecycle + incremental cache + prefix clear.
 	s2 := watchStore(t)
+	if _, err := (&Evaluator{Store: s2, Rules: rules, Clock: func() time.Time { return now }}).EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
 	seq1 := appendKindEvent(t, s2, "watch-test.refused", now.Add(-72*time.Hour), `{"lane_id":"a/b","reason":"c%d","left_by":"run-1"}`)
 	seq2 := appendKindEvent(t, s2, "watch-test.refused", now.Add(-71*time.Hour), `{"lane_id":"a/b","reason":"other-reason","left_by":"run-2"}`)
 	seq3 := appendKindEvent(t, s2, "watch-test.refused", now.Add(-70*time.Hour), `{"lane_id":"lane-2","reason":"lane-branch-held"}`)
@@ -488,8 +491,11 @@ receiver = "foreground"
 
 	// Verify pre-seeding works even in a fresh uncached Evaluator when a pre-existing episode is resolved.
 	s3 := watchStore(t)
-	appendKindEvent(t, s3, "watch-test.refused", now.Add(-time.Hour), `{"lane_id":"x/y","reason":"r%1"}`)
 	e3a := Evaluator{Store: s3, Rules: rules, Clock: func() time.Time { return now }}
+	if _, err := e3a.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	appendKindEvent(t, s3, "watch-test.refused", now.Add(-time.Hour), `{"lane_id":"x/y","reason":"r%1"}`)
 	if _, err := e3a.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -515,18 +521,6 @@ func TestDTW50EventPlaceholdersInGuidanceAndReopen(t *testing.T) {
 	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
 	s := watchStore(t)
 
-	appendKindEvent(t, s, "watch-test.fact", now.Add(-time.Minute), `{
-		"lane_id": "lane-1",
-		"detail": {"check": "dirty"},
-		"count": 42,
-		"flag": true,
-		"empty": "",
-		"nullv": null,
-		"floatv": 3.14,
-		"listv": ["a"],
-		"objv": {"k": 1}
-	}`)
-
 	r := Rule{
 		ID:       "ev-guidance",
 		Scope:    "core",
@@ -551,6 +545,22 @@ func TestDTW50EventPlaceholdersInGuidanceAndReopen(t *testing.T) {
 	}
 
 	eval := Evaluator{Store: s, Rules: []Rule{r}, Clock: func() time.Time { return now }}
+	if _, err := eval.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	appendKindEvent(t, s, "watch-test.fact", now.Add(-time.Minute), `{
+		"lane_id": "lane-1",
+		"detail": {"check": "dirty"},
+		"count": 42,
+		"flag": true,
+		"empty": "",
+		"nullv": null,
+		"floatv": 3.14,
+		"listv": ["a"],
+		"objv": {"k": 1}
+	}`)
+
 	if _, err := eval.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
 	}

@@ -43,6 +43,7 @@ func TestWatchTuneDisableResolvesEpisode(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	invoke("eval", "--once")
 	for range 2 {
 		fact(t, s, `{"item_id":"candidate"}`)
 	}
@@ -131,7 +132,7 @@ func TestWatchRuleCommands(t *testing.T) {
 	// Guard every non-override/non-event table: rule commands never mutate episodes,
 	// delivery cursors, items, runs or repairs.
 	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
-		rows, err := tx.Query(`SELECT name FROM sqlite_schema WHERE type='table' AND name NOT IN ('watch_rule_overrides', 'events', 'sqlite_sequence')`)
+		rows, err := tx.Query(`SELECT name FROM sqlite_schema WHERE type='table' AND name NOT IN ('watch_rule_overrides', 'watch_rule_baselines', 'events', 'sqlite_sequence')`)
 		if err != nil {
 			return err
 		}

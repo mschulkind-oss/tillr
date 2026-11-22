@@ -52,9 +52,6 @@ func TestWatchStatusScopeDiagnostics(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	fact(t, s, `{"item_id":7}`)
-	fact(t, s, `{"item_id":"selected"}`)
-	fact(t, s, `{"item_id":"not-selected"}`)
 	var stdout, stderr bytes.Buffer
 	args := []string{"status", "--store", s.Path(), "--rules", rules}
 	if code := run(t.Context(), append(args, "--json"), &stdout, &stderr); code != 0 {
@@ -82,6 +79,12 @@ func TestWatchStatusScopeDiagnostics(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if code := run(t.Context(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, io.Discard, &stderr); code != 0 {
+		t.Fatalf("init eval: %d %s", code, &stderr)
+	}
+	fact(t, s, `{"item_id":7}`)
+	fact(t, s, `{"item_id":"selected"}`)
+	fact(t, s, `{"item_id":"not-selected"}`)
 	stdout.Reset()
 	stderr.Reset()
 	if code := run(t.Context(), args, &stdout, &stderr); code != 0 || stdout.String() != fmt.Sprintf("rule charter out-of-scope=%q\nrule refusals skipped=1\n", charter) {
@@ -136,9 +139,12 @@ func TestWatchStatusCountsLatestOpeningNotice(t *testing.T) {
 	s, rules := fixture(t, false)
 	ctx := t.Context()
 	common := []string{"--store", s.Path(), "--rules", rules}
-	fact(t, s, `{"item_id":"item-a"}`)
-	fact(t, s, `{"item_id":"item-a"}`)
 	var stderr bytes.Buffer
+	if code := run(ctx, append([]string{"eval", "--once"}, common...), io.Discard, &stderr); code != 0 || stderr.Len() != 0 {
+		t.Fatalf("init eval: %d, stderr %q", code, &stderr)
+	}
+	fact(t, s, `{"item_id":"item-a"}`)
+	fact(t, s, `{"item_id":"item-a"}`)
 	if code := run(ctx, append([]string{"eval", "--once"}, common...), io.Discard, &stderr); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("eval: %d, stderr %q", code, &stderr)
 	}
@@ -201,12 +207,15 @@ func TestWatchStatusSortedStoredRows(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(rules, "a.toml"), []byte(strings.Replace(testRule, `id="refusals"`, `id="aaa"`, 1)), 0600); err != nil {
 		t.Fatal(err)
 	}
+	var stderr bytes.Buffer
+	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, io.Discard, &stderr); code != 0 {
+		t.Fatalf("init eval = %d: %s", code, &stderr)
+	}
 	for _, subject := range []string{"bob", "alice", "charlie", "done"} {
 		for i := 0; i < 2; i++ {
 			fact(t, s, `{"item_id":"`+subject+`"}`)
 		}
 	}
-	var stderr bytes.Buffer
 	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, io.Discard, &stderr); code != 0 {
 		t.Fatalf("eval = %d: %s", code, &stderr)
 	}

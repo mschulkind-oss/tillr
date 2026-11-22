@@ -49,13 +49,13 @@ func forkedRepo(t *testing.T, now time.Time) (root, leader, follower string) {
 }
 
 func TestWatchGitRefOperandAndRootIsolation(t *testing.T) {
+	register(t, "watch-test.fact")
 	ctx := context.Background()
 	now := time.Unix(1700000000, 0)
 	root, leader, follower := forkedRepo(t, now)
 	foreign, _, _ := forkedRepo(t, now.Add(time.Hour))
 	t.Setenv("GIT_DIR", foreign+"/.git")
 	s := watchStore(t)
-	watchFact(t, s, now, `{"detail":{"item-id":"one"}}`)
 	text := strings.NewReplacer(`"test.watch"`, `"watch-test.fact"`, "[rule.when]", "projections=['git_refs:"+leaderRef+"']\n[rule.when]", `window = "90s"`, "window = '90s'\n"+fmt.Sprintf(`match = 'git.ref("%s") == "%s"'`, leaderRef, leader)).Replace(validRule)
 	child := filepath.Join(root, "ordinary-child")
 	if err := os.Mkdir(child, 0o755); err != nil {
@@ -70,6 +70,10 @@ func TestWatchGitRefOperandAndRootIsolation(t *testing.T) {
 		t.Fatalf("non-repository root opened an episode: %+v: %v", notices, err)
 	}
 	e.Root = root
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	watchFact(t, s, now, `{"detail":{"item-id":"one"}}`)
 	e.afterGit = func() {
 		if _, err := gitOutput(ctx, root, "update-ref", leaderRef, follower); err != nil {
 			t.Fatal(err)

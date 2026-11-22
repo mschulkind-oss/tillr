@@ -152,6 +152,9 @@ type memoryState struct {
 	git           gitCache
 	nextSeq       int64
 	lastSourceSeq int64
+	hasEpoch      bool
+	epoch         int64
+	baselines     map[string]ruleBaseline
 	episodes      []*memEpisode
 	events        []memAlertEvent
 	owners        map[string]*memDeliveryCursor
@@ -159,7 +162,93 @@ type memoryState struct {
 
 func newMemoryState() *memoryState {
 	return &memoryState{
-		owners: map[string]*memDeliveryCursor{},
+		baselines: map[string]ruleBaseline{},
+		owners:    map[string]*memDeliveryCursor{},
+	}
+}
+
+func (m *memoryState) resolveFirstLoadedSeq(ruleID string, cursor SourceCursor) int64 {
+	if m == nil {
+		return cursor.Seq
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.hasEpoch || m.epoch != cursor.Epoch {
+		return cursor.Seq
+	}
+	if b, ok := m.baselines[ruleID]; ok {
+		return b.firstLoadedSeq
+	}
+	return cursor.Seq
+}
+
+func (m *memoryState) prepareEpoch(hasCursor bool, epoch int64) map[string]ruleBaseline {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if hasCursor {
+		if m.hasEpoch && m.epoch != epoch {
+			m.baselines = map[string]ruleBaseline{}
+		}
+		m.hasEpoch = true
+		m.epoch = epoch
+	}
+	snap := make(map[string]ruleBaseline, len(m.baselines))
+	maps.Copy(snap, m.baselines)
+	return snap
+}
+
+func (m *memoryState) updateBaselines(rules []Rule, results []RuleResult, fullRules []Rule, live bool, startHead int64, now time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	nowMS := now.UnixMilli()
+	seen := make(map[string]bool, len(rules))
+	for i, r := range rules {
+		seen[r.ID] = true
+		res := results[i]
+		if !res.Disabled && res.Diagnostic() == "" {
+			hash := definitionHash(r)
+			row, exists := m.baselines[r.ID]
+			if !exists {
+				m.baselines[r.ID] = ruleBaseline{
+					ruleID:         r.ID,
+					definitionHash: hash,
+					enabled:        true,
+					firstLoadedSeq: startHead,
+					firstLoadedAt:  nowMS,
+					loadedSeq:      startHead,
+					loadedAt:       nowMS,
+				}
+			} else if !row.enabled || row.definitionHash != hash {
+				row.definitionHash = hash
+				row.enabled = true
+				row.loadedSeq = startHead
+				row.loadedAt = nowMS
+				m.baselines[r.ID] = row
+			}
+		} else if !r.Enabled {
+			if row, exists := m.baselines[r.ID]; exists && row.enabled {
+				row.enabled = false
+				m.baselines[r.ID] = row
+			}
+		}
+	}
+	if !live {
+		for _, r := range fullRules {
+			if seen[r.ID] || r.Enabled {
+				continue
+			}
+			if row, exists := m.baselines[r.ID]; exists && row.enabled {
+				row.enabled = false
+				m.baselines[r.ID] = row
+			}
+		}
+		return
+	}
+	for id, row := range m.baselines {
+		if !seen[id] && row.enabled {
+			row.enabled = false
+			m.baselines[id] = row
+		}
 	}
 }
 
@@ -633,7 +722,7 @@ func (m *memoryState) resolveEpisodeLocked(memEp *memEpisode, ruleID, subjectKey
 	return m.appendEventLocked(resolvedKind, memEp.alertID, now, body)
 }
 
-func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, startHead int64, now time.Time, lookup itemTerminalChecker) error {
+func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, startHead, loadedSeq int64, now time.Time, lookup itemTerminalChecker) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if startHead > m.lastSourceSeq {
@@ -785,6 +874,9 @@ func (m *memoryState) reconcileRule(r Rule, subjects map[string]*condition, star
 			newest = c.events[len(c.events)-1]
 		}
 		if !exists {
+			if r.When.Pattern != LagBehind && newest.Seq <= loadedSeq {
+				continue
+			}
 			previous, reason, resolvedSeq := m.lastEpisodeLocked(r.ID, key)
 			if isSuppressiveResolutionReason(reason) && newest.Seq <= resolvedSeq {
 				continue

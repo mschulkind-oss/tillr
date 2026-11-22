@@ -60,23 +60,31 @@ func TestWatchLegacyEligibilityAndCounts(t *testing.T) {
 	if got, err := e.EvaluateRules(ctx); err != nil || len(got) != 3 || got[0].ID != "duration" || got[0].Diagnostic() != "" || got[1].ID != "git" || got[1].Unreadable == "" || got[2].ID != "not-in" || got[2].Diagnostic() != "" {
 		t.Fatalf("evaluator results = %+v, err = %v", got, err)
 	}
+	watchFact(t, s, now.Add(-time.Minute), `{"detail":{"item-id":"one"}}`)
+	if got, err := e.EvaluateRules(ctx); err != nil || len(got) != 3 || got[0].ID != "duration" || got[0].Diagnostic() != "" || got[1].ID != "git" || got[1].Unreadable == "" || got[2].ID != "not-in" || got[2].Diagnostic() != "" {
+		t.Fatalf("evaluator results = %+v, err = %v", got, err)
+	}
 	if notices, err := e.Pending(ctx, "foreground"); err != nil || len(notices) != 2 {
 		t.Fatalf("extended eval did not open episodes: %+v: %v", notices, err)
 	}
 }
 
 func TestWatchNamedWorkflowFiltersByCurrentMembership(t *testing.T) {
+	register(t, "watch-test.fact")
 	s := watchStore(t)
 	now := time.Unix(1700000000, 0)
+	watchSQL(t, s, `CREATE TABLE workflow_selections(item_id TEXT PRIMARY KEY, workflow TEXT NOT NULL)`)
+	rule := strings.NewReplacer(`"test.watch"`, `"watch-test.fact"`, `scope = "workflow:*"`, `scope = "workflow:build@v1"`).Replace(validRule)
+	e := Evaluator{Store: s, Rules: watchRules(t, rule), Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	for _, subject := range []string{"selected", "other", "unassigned"} {
 		watchFact(t, s, now.Add(-time.Minute), fmt.Sprintf(`{"detail":{"item-id":%q}}`, subject))
 	}
 	watchFact(t, s, now.Add(-time.Minute), `{}`)
 	// Membership recorded after the events still determines their scope.
-	watchSQL(t, s, `CREATE TABLE workflow_selections(item_id TEXT PRIMARY KEY, workflow TEXT NOT NULL);
-		INSERT INTO workflow_selections VALUES ('selected','build@v1'),('other','build@v2')`)
-	rule := strings.NewReplacer(`"test.watch"`, `"watch-test.fact"`, `scope = "workflow:*"`, `scope = "workflow:build@v1"`).Replace(validRule)
-	e := Evaluator{Store: s, Rules: watchRules(t, rule), Clock: func() time.Time { return now }}
+	watchSQL(t, s, `INSERT INTO workflow_selections VALUES ('selected','build@v1'),('other','build@v2')`)
 	results, err := e.EvaluateRules(t.Context())
 	if err != nil || len(results) != 1 || results[0].Diagnostic() != "" || results[0].Skipped != 1 {
 		t.Fatalf("evaluation: %+v, %v", results, err)
@@ -92,8 +100,6 @@ func TestWatchDurationEvaluation(t *testing.T) {
 	s := watchStore(t)
 	start := time.Unix(1700000000, 0)
 	now := start.Add(20*time.Second - time.Millisecond)
-	initial := watchFact(t, s, start, `{"item":"a","start":true,"end":true}`)
-	watchFact(t, s, start, `{"item":"no-start","end":true}`)
 	expr := func(text string) *Expression {
 		t.Helper()
 		e, err := ParseExpression(text)
@@ -106,6 +112,11 @@ func TestWatchDurationEvaluation(t *testing.T) {
 		Pattern: DurationWithoutEvent, GroupBy: "item", After: expr(`event.start == true`), Match: expr(`event.end == true`), ClearWhen: expr(`event.clear == true`), ThresholdDuration: 20 * time.Second, Window: 90 * time.Second,
 	}, Guidance: Guidance{Summary: "{{subject}} {{count}} {{elapsed}}"}, Delivery: Delivery{Receiver: "foreground"}}
 	e := Evaluator{Store: s, Rules: []Rule{r}, Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	initial := watchFact(t, s, start, `{"item":"a","start":true,"end":true}`)
+	watchFact(t, s, start, `{"item":"no-start","end":true}`)
 	check := func(opened, resolved int64, summary string) {
 		t.Helper()
 		if _, err := e.EvaluateRules(ctx); err != nil {
@@ -157,6 +168,7 @@ func TestWatchDurationEvaluation(t *testing.T) {
 	check(0, end, "")
 
 	e.Rules[0].When.Match = nil
+	check(0, end, "")
 	waiting = watchFact(t, s, now.Add(-20*time.Second), `{"item":"a","start":true}`)
 	watchFact(t, s, now, `{"item":"a","end":true}`) // not an end without match
 	check(waiting, end, "a 1 20s")
@@ -174,12 +186,16 @@ func watchRules(t *testing.T, text string) []Rule {
 }
 
 func TestWatchCanonicalCharterProjection(t *testing.T) {
+	register(t, "watch-test.fact")
 	ctx := context.Background()
 	s := watchStore(t)
 	now := time.Unix(1700000000, 0)
-	watchFact(t, s, now, `{"detail":{"item-id":"one"}}`)
 	rule := strings.NewReplacer(`"test.watch"`, `"watch-test.fact"`, "[rule.when]", "projections=['charter']\n[rule.when]", `window = "90s"`, "window = '90s'\n"+`match = 'charter.ready == "in-queue" and charter.blocked == "blocked" and charter.closed == "closed" and charter.closed in charter.finished and charter.ready in charter.states'`).Replace(validRule)
 	e := Evaluator{Store: s, Rules: watchRules(t, rule), Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	watchFact(t, s, now, `{"detail":{"item-id":"one"}}`)
 	check := func(wantOpen int, unreadable bool) {
 		t.Helper()
 		got, err := e.EvaluateRules(ctx)
@@ -201,6 +217,8 @@ func TestWatchCanonicalCharterProjection(t *testing.T) {
 	watchSQL(t, s, `INSERT INTO meta(key,value) VALUES('store.definition',?)`, string(record))
 	check(0, false) // recorded charter changes the comparison
 	e.Rules = watchRules(t, strings.Replace(rule, `charter.ready == "in-queue"`, `charter.name == "custom" and charter.ready == "ready"`, 1))
+	check(0, false) // changed rule does not open on pre-change event
+	watchFact(t, s, now, `{"detail":{"item-id":"one"}}`)
 	check(1, false)
 	watchSQL(t, s, `UPDATE meta SET value='not-json' WHERE key='store.definition'`)
 	check(1, true) // corruption is not a default and does not resolve the episode
@@ -233,13 +251,17 @@ func TestWatchProjectionSnapshotCache(t *testing.T) {
 }
 
 func TestWatchAgeInEvaluation(t *testing.T) {
+	register(t, "watch-test.fact")
 	ctx := context.Background()
 	s := watchStore(t)
 	now := time.Unix(1700000000, 0)
-	watchFact(t, s, now.Add(-20*time.Second), `{"detail":{"item-id":"old"}}`)
-	watchFact(t, s, now.Add(-20*time.Second+time.Millisecond), `{"detail":{"item-id":"new"}}`)
 	text := strings.NewReplacer(`"test.watch"`, `"watch-test.fact"`, `window = "90s"`, "window = '90s'\n"+`match = 'age(event.ts) >= 20'`).Replace(validRule)
 	e := Evaluator{Store: s, Rules: watchRules(t, text), Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	watchFact(t, s, now.Add(-20*time.Second), `{"detail":{"item-id":"old"}}`)
+	watchFact(t, s, now.Add(-20*time.Second+time.Millisecond), `{"detail":{"item-id":"new"}}`)
 	if _, err := e.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -249,6 +271,7 @@ func TestWatchAgeInEvaluation(t *testing.T) {
 }
 
 func TestWatchItemNegatedMembershipTypes(t *testing.T) {
+	register(t, "watch-test.fact")
 	for _, tc := range []struct {
 		name, list string
 		want       int
@@ -262,11 +285,14 @@ func TestWatchItemNegatedMembershipTypes(t *testing.T) {
 			ctx := context.Background()
 			s := watchStore(t)
 			now := time.Unix(1700000000, 0)
-			watchFact(t, s, now, `{"detail":{"item-id":"one"}}`)
 			watchSQL(t, s, `CREATE TABLE items(item_id TEXT PRIMARY KEY,state TEXT,seat TEXT,waiting_on TEXT)`)
 			watchSQL(t, s, `INSERT INTO items VALUES ('one','ready',NULL,NULL)`)
 			text := strings.NewReplacer(`"test.watch"`, `"watch-test.fact"`, "[rule.when]", "projections=['items']\n[rule.when]", `window = "90s"`, "window = '90s'\n"+`match = 'item.state not in `+tc.list+`'`).Replace(validRule)
 			e := Evaluator{Store: s, Rules: watchRules(t, text), Clock: func() time.Time { return now }}
+			if _, err := e.EvaluateRules(ctx); err != nil {
+				t.Fatal(err)
+			}
+			watchFact(t, s, now, `{"detail":{"item-id":"one"}}`)
 			if got, err := e.EvaluateRules(ctx); err != nil || len(got) != 1 || got[0].Diagnostic() != "" {
 				t.Fatalf("results %+v: %v", got, err)
 			}
@@ -278,15 +304,19 @@ func TestWatchItemNegatedMembershipTypes(t *testing.T) {
 }
 
 func TestWatchItemAbsentVersusUnreadable(t *testing.T) {
+	register(t, "watch-test.fact")
 	ctx := context.Background()
 	s := watchStore(t)
 	now := time.Unix(1700000000, 0)
-	watchFact(t, s, now, `{"detail":{"item-id":"absent"}}`)
-	watchFact(t, s, now, `{"detail":{"item-id":"present"}}`)
 	watchSQL(t, s, `CREATE TABLE items(item_id TEXT PRIMARY KEY,state TEXT,seat TEXT,waiting_on TEXT)`)
 	watchSQL(t, s, `INSERT INTO items VALUES ('present','ready',NULL,'owner')`)
 	rules := watchRules(t, strings.NewReplacer(`"test.watch"`, `"watch-test.fact"`, "[rule.when]", "projections=['items']\n[rule.when]", `window = "90s"`, "window = '90s'\n"+`match = 'item.state not in ["closed"] and item.waiting_on == "owner" and empty(item.seat)'`).Replace(validRule))
 	e := Evaluator{Store: s, Rules: rules, Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	watchFact(t, s, now, `{"detail":{"item-id":"absent"}}`)
+	watchFact(t, s, now, `{"detail":{"item-id":"present"}}`)
 	if _, err := e.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
 	}

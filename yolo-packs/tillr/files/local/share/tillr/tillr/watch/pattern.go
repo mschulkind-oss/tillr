@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"math"
 	"reflect"
 	"slices"
@@ -147,18 +148,118 @@ func sharedPair(pairs [][2]string, v any, previous observation, hasPrevious bool
 	return [2]string{}, false
 }
 
-// kindCache holds every observation of one kind with seq <= lastSeq and ts >= loadedFromTS,
-// in strictly increasing seq order. Because streams are append-only within an epoch,
-// later passes read only the tail after lastSeq.
+type ruleBaseline struct {
+	ruleID         string
+	definitionHash string
+	enabled        bool
+	firstLoadedSeq int64
+	firstLoadedAt  int64
+	loadedSeq      int64
+	loadedAt       int64
+}
+
+type ruleDefinitionDigestInput struct {
+	Scope             string      `json:"scope"`
+	Events            []string    `json:"events"`
+	Projections       []string    `json:"projections"`
+	GroupBy           string      `json:"group_by"`
+	GroupByList       []string    `json:"group_by_list"`
+	Pattern           string      `json:"pattern"`
+	Field             string      `json:"field"`
+	Pairs             [][2]string `json:"pairs"`
+	Threshold         int64       `json:"threshold"`
+	ThresholdCommits  int64       `json:"threshold_commits"`
+	Window            int64       `json:"window"`
+	ThresholdDuration int64       `json:"threshold_duration"`
+	Leader            string      `json:"leader"`
+	Follower          string      `json:"follower"`
+	Mode              string      `json:"mode"`
+	Match             string      `json:"match"`
+	Reset             string      `json:"reset"`
+	ClearWhen         string      `json:"clear_when"`
+	After             string      `json:"after"`
+}
+
+func normalizeStrings(s []string) []string {
+	if len(s) == 0 {
+		return nil
+	}
+	return s
+}
+
+func normalizePairs(p [][2]string) [][2]string {
+	if len(p) == 0 {
+		return nil
+	}
+	return p
+}
+
+func exprSource(e *Expression) string {
+	if e == nil {
+		return ""
+	}
+	return e.source
+}
+
+func definitionHash(r Rule) string {
+	in := ruleDefinitionDigestInput{
+		Scope:             r.Scope,
+		Events:            normalizeStrings(r.Reads.Events),
+		Projections:       normalizeStrings(r.Reads.Projections),
+		GroupBy:           r.When.GroupBy,
+		GroupByList:       normalizeStrings(r.When.GroupByList),
+		Pattern:           r.When.Pattern,
+		Field:             r.When.Field,
+		Pairs:             normalizePairs(r.When.Pairs),
+		Threshold:         r.When.Threshold,
+		ThresholdCommits:  r.When.ThresholdCommits,
+		Window:            int64(r.When.Window),
+		ThresholdDuration: int64(r.When.ThresholdDuration),
+		Leader:            r.When.Leader,
+		Follower:          r.When.Follower,
+		Mode:              r.When.Mode,
+		Match:             exprSource(r.When.Match),
+		Reset:             exprSource(r.When.Reset),
+		ClearWhen:         exprSource(r.When.ClearWhen),
+		After:             exprSource(r.When.After),
+	}
+	raw, err := json.Marshal(in)
+	if err != nil {
+		panic(err)
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func effectiveFirstLoadedSeq(r Rule, baselines map[string]ruleBaseline, defaultHead int64) int64 {
+	if b, ok := baselines[r.ID]; ok {
+		return b.firstLoadedSeq
+	}
+	return defaultHead
+}
+
+func effectiveLoadedSeq(r Rule, baselines map[string]ruleBaseline, defaultHead int64) int64 {
+	if b, ok := baselines[r.ID]; ok && b.enabled && b.definitionHash == definitionHash(r) {
+		return b.loadedSeq
+	}
+	return defaultHead
+}
+
+// kindCache holds every observation of one kind with seq > loadedFromSeq,
+// seq <= lastSeq, and ts >= loadedFromTS, in strictly increasing seq order.
+// Because streams are append-only within an epoch, later passes read only the
+// tail after lastSeq.
 type kindCache struct {
-	loadedFromTS int64
-	lastSeq      int64
-	gen          uint64
-	events       []Observation
+	loadedFromTS  int64
+	loadedFromSeq int64
+	lastSeq       int64
+	gen           uint64
+	events        []Observation
 }
 
 type ruleCacheEntry struct {
 	rule             Rule
+	firstLoadedSeq   int64
 	kindGens         []uint64
 	activeKeys       []string
 	minIncludedTS    int64
@@ -484,7 +585,7 @@ func observeRecord(
 	return nil
 }
 
-func deriveCached(r Rule, now time.Time, facts subjectFacts, cache *evalCache, activeSubjects activeCompositeFunc) (map[string]*condition, int, error) {
+func deriveCached(r Rule, now time.Time, facts subjectFacts, cache *evalCache, firstLoadedSeq int64, activeSubjects activeCompositeFunc) (map[string]*condition, int, error) {
 	kinds := r.Reads.Events
 	if len(kinds) == 0 {
 		return nil, 0, nil
@@ -506,6 +607,7 @@ func deriveCached(r Rule, now time.Time, facts subjectFacts, cache *evalCache, a
 	cacheable := ruleCacheable(r)
 	if cacheable {
 		if entry := cache.rules[r.ID]; entry != nil &&
+			entry.firstLoadedSeq == firstLoadedSeq &&
 			ruleEqual(entry.rule, r) &&
 			cache.gensMatch(entry.kindGens, kinds) &&
 			slices.Equal(entry.activeKeys, activeKeys) &&
@@ -529,6 +631,9 @@ func deriveCached(r Rule, now time.Time, facts subjectFacts, cache *evalCache, a
 		minFutureTS      int64 = math.MaxInt64
 	)
 	err := cache.forEachEvent(kinds, func(rec Observation) error {
+		if rec.Seq <= firstLoadedSeq {
+			return nil
+		}
 		if rec.TS < winLo {
 			if rec.TS > maxExcludedOldTS {
 				maxExcludedOldTS = rec.TS
@@ -555,6 +660,7 @@ func deriveCached(r Rule, now time.Time, facts subjectFacts, cache *evalCache, a
 	if cacheable {
 		cache.rules[r.ID] = &ruleCacheEntry{
 			rule:             r,
+			firstLoadedSeq:   firstLoadedSeq,
 			kindGens:         cache.kindGens(kinds),
 			activeKeys:       activeKeys,
 			minIncludedTS:    minIncludedTS,
@@ -574,11 +680,12 @@ func deriveFromSource(
 	r Rule,
 	now time.Time,
 	facts subjectFacts,
+	resolveBaseline func(ruleID string, cursor SourceCursor) int64,
 	activeSubjects activeCompositeFunc,
-) (map[string]*condition, int, int64, error) {
+) (map[string]*condition, int, SourceCursor, error) {
 	kinds := r.Reads.Events
 	if len(kinds) == 0 || src == nil {
-		return nil, 0, 0, nil
+		return nil, 0, SourceCursor{}, nil
 	}
 	names := r.When.groupByNames()
 	subjects := map[string]*condition{}
@@ -586,7 +693,7 @@ func deriveFromSource(
 	if len(names) >= 2 && activeSubjects != nil {
 		seededTuples, _, err := activeSubjects(r.ID, len(names))
 		if err != nil {
-			return nil, 0, 0, err
+			return nil, 0, SourceCursor{}, err
 		}
 		for key, tuple := range seededTuples {
 			subjects[key] = &condition{}
@@ -597,10 +704,17 @@ func deriveFromSource(
 	winHi := now.UnixMilli()
 	records, cursor, skippedLines, err := src.ReadWindow(ctx, winLo, kinds)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, SourceCursor{}, err
+	}
+	firstLoadedSeq := cursor.Seq
+	if resolveBaseline != nil {
+		firstLoadedSeq = resolveBaseline(r.ID, cursor)
 	}
 	skipped := skippedLines
 	for _, rec := range records {
+		if rec.Seq <= firstLoadedSeq {
+			continue
+		}
 		if rec.TS < winLo || rec.TS > winHi {
 			continue
 		}
@@ -608,8 +722,8 @@ func deriveFromSource(
 			continue
 		}
 		if err := observeRecord(r, names, rec, facts, winHi, subjects, subjectTuples, &skipped); err != nil {
-			return nil, 0, 0, err
+			return nil, 0, SourceCursor{}, err
 		}
 	}
-	return subjects, skipped, cursor.Seq, nil
+	return subjects, skipped, cursor, nil
 }

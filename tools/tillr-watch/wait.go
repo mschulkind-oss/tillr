@@ -26,6 +26,11 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 		return 1, err
 	}
 	defer wake.close()
+	// Record rule load baselines before advertising waiting_since so events
+	// appended as soon as attachment is visible are judged as post-load.
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		return 1, err
+	}
 	start, err := e.BeginWait(ctx, opts.owner)
 	if err != nil {
 		return 1, err

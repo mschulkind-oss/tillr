@@ -462,16 +462,21 @@ func scanTillrObservation(rows *sql.Rows) (Observation, error) {
 	return obs, nil
 }
 
-func (s *TillrStoreSource) syncKinds(rd *store.Reader, c *evalCache, rules []Rule, now time.Time, onQuery func(kind string, sinceSeq int64, rows int)) error {
+func (s *TillrStoreSource) syncKinds(rd *store.Reader, c *evalCache, rules []Rule, now time.Time, baselines map[string]ruleBaseline, defaultHead int64, onQuery func(kind string, sinceSeq int64, rows int)) error {
 	kindWindowStart := map[string]int64{}
+	kindMinSeq := map[string]int64{}
 	for _, r := range rules {
 		if !r.Enabled || r.evaluatorReason() != "" || r.When.Pattern == LagBehind {
 			continue
 		}
 		ws := windowStartMillis(r.When, now)
+		fls := effectiveFirstLoadedSeq(r, baselines, defaultHead)
 		for _, k := range r.Reads.Events {
 			if prev, ok := kindWindowStart[k]; !ok || ws < prev {
 				kindWindowStart[k] = ws
+			}
+			if prev, ok := kindMinSeq[k]; !ok || fls < prev {
+				kindMinSeq[k] = fls
 			}
 		}
 	}
@@ -484,47 +489,50 @@ func (s *TillrStoreSource) syncKinds(rd *store.Reader, c *evalCache, rules []Rul
 	}
 	for _, kind := range slices.Sorted(maps.Keys(kindWindowStart)) {
 		windowStart := kindWindowStart[kind]
+		minSeq := kindMinSeq[kind]
 		kc := c.kinds[kind]
-		if kc != nil && snapHead >= kc.lastSeq && windowStart >= kc.loadedFromTS {
+		if kc != nil && snapHead >= kc.lastSeq && windowStart >= kc.loadedFromTS && minSeq >= kc.loadedFromSeq {
 			if snapHead > kc.lastSeq {
-				since := kc.lastSeq
-				rows, err := rd.Query(`SELECT seq,ts,kind,seat,object_type,object_id,revision,payload FROM events
- WHERE kind = ? AND seq > ? AND seq <= ? ORDER BY seq`, kind, since, snapHead)
-				if err != nil {
-					return err
-				}
-				scanned := 0
+				since := max(kc.lastSeq, minSeq)
 				added := false
-				for rows.Next() {
-					scanned++
-					ev, err := scanTillrObservation(rows)
+				if snapHead > since {
+					rows, err := rd.Query(`SELECT seq,ts,kind,seat,object_type,object_id,revision,payload FROM events
+ WHERE kind = ? AND seq > ? AND seq <= ? ORDER BY seq`, kind, since, snapHead)
 					if err != nil {
-						rows.Close()
 						return err
 					}
-					if ev.TS >= windowStart {
-						kc.events = append(kc.events, ev)
-						added = true
+					scanned := 0
+					for rows.Next() {
+						scanned++
+						ev, err := scanTillrObservation(rows)
+						if err != nil {
+							rows.Close()
+							return err
+						}
+						if ev.TS >= windowStart && ev.Seq > minSeq {
+							kc.events = append(kc.events, ev)
+							added = true
+						}
 					}
-				}
-				err = rows.Err()
-				rows.Close()
-				if err != nil {
-					return err
-				}
-				if onQuery != nil {
-					onQuery(kind, since, scanned)
+					err = rows.Err()
+					rows.Close()
+					if err != nil {
+						return err
+					}
+					if onQuery != nil {
+						onQuery(kind, since, scanned)
+					}
 				}
 				kc.lastSeq = snapHead
 				if added {
 					kc.gen++
 				}
 			}
-			if windowStart > kc.loadedFromTS {
+			if windowStart > kc.loadedFromTS || minSeq > kc.loadedFromSeq {
 				if len(kc.events) > 0 {
 					kept := kc.events[:0]
 					for _, ev := range kc.events {
-						if ev.TS >= windowStart {
+						if ev.TS >= windowStart && ev.Seq > minSeq {
 							kept = append(kept, ev)
 						}
 					}
@@ -532,6 +540,7 @@ func (s *TillrStoreSource) syncKinds(rd *store.Reader, c *evalCache, rules []Rul
 					kc.events = kept
 				}
 				kc.loadedFromTS = windowStart
+				kc.loadedFromSeq = minSeq
 			}
 			continue
 		}
@@ -540,11 +549,11 @@ func (s *TillrStoreSource) syncKinds(rd *store.Reader, c *evalCache, rules []Rul
 			nextGen = kc.gen + 1
 		}
 		if snapHead == 0 {
-			c.kinds[kind] = &kindCache{loadedFromTS: windowStart, lastSeq: 0, gen: nextGen}
+			c.kinds[kind] = &kindCache{loadedFromTS: windowStart, loadedFromSeq: minSeq, lastSeq: 0, gen: nextGen}
 			continue
 		}
 		rows, err := rd.Query(`SELECT seq,ts,kind,seat,object_type,object_id,revision,payload FROM events
- WHERE kind = ? AND seq <= ? AND ts >= ? ORDER BY seq`, kind, snapHead, windowStart)
+ WHERE kind = ? AND seq > ? AND seq <= ? AND ts >= ? ORDER BY seq`, kind, minSeq, snapHead, windowStart)
 		if err != nil {
 			return err
 		}
@@ -563,13 +572,14 @@ func (s *TillrStoreSource) syncKinds(rd *store.Reader, c *evalCache, rules []Rul
 			return err
 		}
 		if onQuery != nil {
-			onQuery(kind, 0, len(events))
+			onQuery(kind, minSeq, len(events))
 		}
 		c.kinds[kind] = &kindCache{
-			loadedFromTS: windowStart,
-			lastSeq:      snapHead,
-			gen:          nextGen,
-			events:       events,
+			loadedFromTS:  windowStart,
+			loadedFromSeq: minSeq,
+			lastSeq:       snapHead,
+			gen:           nextGen,
+			events:        events,
 		}
 	}
 	return nil
@@ -604,7 +614,7 @@ func (s *TillrStoreSource) activeCompositeSubjects(rd *store.Reader, ruleID stri
 	return tuples, keys, nil
 }
 
-func (s *TillrStoreSource) deriveRule(rd *store.Reader, r Rule, now time.Time, facts subjectFacts) (map[string]*condition, int, error) {
+func (s *TillrStoreSource) deriveRule(rd *store.Reader, r Rule, now time.Time, facts subjectFacts, firstLoadedSeq int64) (map[string]*condition, int, error) {
 	kinds := r.Reads.Events
 	if len(kinds) == 0 {
 		return nil, 0, nil
@@ -622,12 +632,12 @@ func (s *TillrStoreSource) deriveRule(rd *store.Reader, r Rule, now time.Time, f
 			subjectTuples[key] = tuple
 		}
 	}
-	args := []any{windowStartMillis(r.When, now), now.UnixMilli()}
+	args := []any{firstLoadedSeq, windowStartMillis(r.When, now), now.UnixMilli()}
 	for _, k := range kinds {
 		args = append(args, k)
 	}
 	rows, err := rd.Query(`SELECT seq,ts,kind,seat,object_type,object_id,revision,payload FROM events
- WHERE ts >= ? AND ts <= ? AND kind IN (?`+strings.Repeat(",?", len(kinds)-1)+`) ORDER BY seq`, args...)
+ WHERE seq > ? AND ts >= ? AND ts <= ? AND kind IN (?`+strings.Repeat(",?", len(kinds)-1)+`) ORDER BY seq`, args...)
 	if err != nil {
 		return nil, 0, err
 	}

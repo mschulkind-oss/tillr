@@ -29,6 +29,10 @@ func TestWatchDaemonWALAndSignals(t *testing.T) {
 				t.Helper()
 				return daemonCount(t, s, query)
 			}
+			var initOut, initErr bytes.Buffer
+			if code := run(t.Context(), []string{"eval", "--once", "--store", alias, "--rules", rules}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+				t.Fatalf("init eval: code=%d stdout=%q stderr=%q", code, &initOut, &initErr)
+			}
 			fact(t, s, `{"item_id":7}`)
 			for i := 0; i < 2; i++ {
 				fact(t, s, `{"item_id":"initial"}`)
@@ -48,6 +52,9 @@ func TestWatchDaemonWALAndSignals(t *testing.T) {
 			// The stored override is different from both the original and changed file.
 			override := strings.Replace(testRule, "threshold=2", "threshold=1", 1)
 			seedStatusOverride(t, s, "refusals", override)
+			eventually(t, func() bool {
+				return count(`SELECT COUNT(*) FROM watch_rule_baselines WHERE rule_id='refusals' AND loaded_seq > 0`) == 1
+			})
 			fact(t, s, `{"item_id":"override"}`)
 			eventually(t, func() bool { return count(`SELECT COUNT(*) FROM alert_episodes WHERE state='open'`) == 3 })
 			if err := child.cmd.Process.Signal(sig); err != nil {
@@ -101,6 +108,10 @@ func TestWatchDaemonRejectsLiveRule(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, rules := fixture(t, false)
+			var initOut, initErr bytes.Buffer
+			if code := run(t.Context(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, &initOut, &initErr); code != 0 || initErr.Len() != 0 {
+				t.Fatalf("init eval: code=%d stdout=%q stderr=%q", code, &initOut, &initErr)
+			}
 			fact(t, s, `{"item_id":"initial"}`)
 			fact(t, s, `{"item_id":"initial"}`)
 			child := startCLIChild(t, "daemon", "--store", s.Path(), "--rules", rules)

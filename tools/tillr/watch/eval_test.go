@@ -42,6 +42,11 @@ func TestWatchWindowAndSkipped(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now()
 	s := watchStore(t)
+	r := Rule{ID: "bounce", Scope: "core", Severity: "warning", Enabled: true, Reads: Reads{Events: []string{"watch-test.fact"}}, When: When{Pattern: AlternatingPair, GroupBy: "item", Field: "step", Pairs: [][2]string{{"plan", "design"}}, Threshold: 2, Window: time.Hour}, Guidance: Guidance{Summary: "{{subject}} {{count}} {{elapsed}} {{pair_a}}/{{pair_b}}"}, Delivery: Delivery{Receiver: "foreground"}}
+	e := Evaluator{Store: s, Rules: []Rule{r}, Clock: func() time.Time { return now }}
+	if _, err := e.Evaluate(ctx); err != nil {
+		t.Fatal(err)
+	}
 	for _, f := range []struct {
 		age  time.Duration
 		json string
@@ -54,8 +59,6 @@ func TestWatchWindowAndSkipped(t *testing.T) {
 	} {
 		watchFact(t, s, now.Add(-f.age), f.json)
 	}
-	r := Rule{ID: "bounce", Scope: "core", Severity: "warning", Enabled: true, Reads: Reads{Events: []string{"watch-test.fact"}}, When: When{Pattern: AlternatingPair, GroupBy: "item", Field: "step", Pairs: [][2]string{{"plan", "design"}}, Threshold: 2, Window: time.Hour}, Guidance: Guidance{Summary: "{{subject}} {{count}} {{elapsed}} {{pair_a}}/{{pair_b}}"}, Delivery: Delivery{Receiver: "foreground"}}
-	e := Evaluator{Store: s, Rules: []Rule{r}, Clock: func() time.Time { return now }}
 	counts, err := e.Skipped(ctx)
 	if err != nil || counts[r.ID] != 2 {
 		t.Fatalf("skipped: %v %v", counts, err)
@@ -76,16 +79,10 @@ func TestWatchWindowAndSkipped(t *testing.T) {
 }
 
 func TestWatchQuotedJSONPaths(t *testing.T) {
+	register(t, "watch-test.fact")
 	ctx := context.Background()
 	now := time.Now()
 	s := watchStore(t)
-	for _, body := range []string{
-		`{"details":{"item name":"a","step name":"plan"}}`,
-		`{"details":{"item name":"b","step name":"design"}}`,
-		`{"details":{"item name":"a","step name":"design"}}`,
-	} {
-		watchFact(t, s, now, body)
-	}
 	dir := t.TempDir()
 	text := strings.NewReplacer(
 		`"test.watch"`, `"watch-test.fact"`,
@@ -99,6 +96,16 @@ func TestWatchQuotedJSONPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := Evaluator{Store: s, Rules: rules, Clock: func() time.Time { return now }}
+	if _, err := e.Evaluate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{
+		`{"details":{"item name":"a","step name":"plan"}}`,
+		`{"details":{"item name":"b","step name":"design"}}`,
+		`{"details":{"item name":"a","step name":"design"}}`,
+	} {
+		watchFact(t, s, now, body)
+	}
 	counts, err := e.Evaluate(ctx)
 	if err != nil || counts["case"] != 0 {
 		t.Fatalf("skipped: %v %v", counts, err)
@@ -115,6 +122,9 @@ func TestWatchAlternatingPairFiresOnFourthObservation(t *testing.T) {
 	s := watchStore(t)
 	r := Rule{ID: "bounce", Scope: "core", Severity: "warning", Enabled: true, Reads: Reads{Events: []string{"watch-test.fact"}}, When: When{Pattern: AlternatingPair, GroupBy: "global", Field: "step", Pairs: [][2]string{{"plan", "design"}}, Threshold: 4, Window: time.Hour}, Guidance: Guidance{Summary: "{{count}} observations"}, Delivery: Delivery{Receiver: "foreground"}}
 	e := Evaluator{Store: s, Rules: []Rule{r}, Clock: func() time.Time { return now }}
+	if _, err := e.Evaluate(ctx); err != nil {
+		t.Fatal(err)
+	}
 	for i, step := range []string{"plan", "design", "design", "plan", "design"} {
 		watchFact(t, s, now, fmt.Sprintf(`{"step":%q}`, step))
 		if _, err := e.Evaluate(ctx); err != nil {
@@ -153,10 +163,13 @@ func TestWatchAlternationIgnoresMissingOrNullField(t *testing.T) {
 				t.Fatal(err)
 			}
 			r := Rule{ID: "bounce", Scope: "core", Severity: "warning", Enabled: true, Reads: Reads{Events: []string{"watch-test.fact"}}, When: When{Pattern: AlternatingPair, GroupBy: "global", Field: "step", Pairs: [][2]string{{"plan", "design"}}, Threshold: 2, Window: time.Hour, ClearWhen: clear}, Delivery: Delivery{Receiver: "foreground"}}
+			e := Evaluator{Store: s, Rules: []Rule{r}, Clock: func() time.Time { return now }}
+			if _, err := e.Evaluate(ctx); err != nil {
+				t.Fatal(err)
+			}
 			for _, body := range []string{`{"step":"plan"}`, tc.middle, `{"step":"design"}`} {
 				watchFact(t, s, now, body)
 			}
-			e := Evaluator{Store: s, Rules: []Rule{r}, Clock: func() time.Time { return now }}
 			if _, err := e.Evaluate(ctx); err != nil {
 				t.Fatal(err)
 			}
@@ -189,6 +202,7 @@ func TestWatchEpisodesResolveAndReopen(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	eval()
 	appendFailures(2)
 	eval()
 	eval()

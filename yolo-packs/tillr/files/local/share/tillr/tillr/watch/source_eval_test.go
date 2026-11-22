@@ -129,6 +129,9 @@ func TestInMemorySourceAllSixPatternsClearingSkipsGitRefsAndTruncation(t *testin
 			Delivery: Delivery{Receiver: "foreground"},
 		}
 		e := Evaluator{Source: src, Rules: []Rule{rule}, Clock: func() time.Time { return now }}
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
 
 		src.append("test.failed", now.Add(-time.Minute), map[string]any{"pkg": "watch", "line": "boom-1"})
 		if _, err := e.EvaluateRules(ctx); err != nil {
@@ -194,6 +197,9 @@ func TestInMemorySourceAllSixPatternsClearingSkipsGitRefsAndTruncation(t *testin
 			Delivery: Delivery{Receiver: "foreground"},
 		}
 		compEval := Evaluator{Source: compSrc, Rules: []Rule{compRule}, Clock: func() time.Time { return now }}
+		if _, err := compEval.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
 		compSrc.append("step.fail", now.Add(-time.Minute), map[string]any{"job": "ci", "step": "lint"})
 		if _, err := compEval.EvaluateRules(ctx); err != nil {
 			t.Fatal(err)
@@ -214,18 +220,6 @@ func TestInMemorySourceAllSixPatternsClearingSkipsGitRefsAndTruncation(t *testin
 	t.Run("count_in_window_and_group_by_skip_counts", func(t *testing.T) {
 		now := baseNow
 		src := &memoryObservationSource{skippedLines: 2}
-		// Expired record outside 10m window:
-		src.append("pkg.fail", now.Add(-15*time.Minute), map[string]any{"pkg": "alpha"})
-		// Skipped group_by records (missing, null, integer):
-		src.append("pkg.fail", now.Add(-5*time.Minute), map[string]any{"other": "x"})
-		src.append("pkg.fail", now.Add(-4*time.Minute), map[string]any{"pkg": nil})
-		src.append("pkg.fail", now.Add(-3*time.Minute), map[string]any{"pkg": 42})
-		// Future record (> now) ignored:
-		src.append("pkg.fail", now.Add(time.Minute), map[string]any{"pkg": "alpha"})
-		// Two in-window records for alpha (below threshold 3):
-		src.append("pkg.fail", now.Add(-2*time.Minute), map[string]any{"pkg": "alpha"})
-		src.append("pkg.fail", now.Add(-time.Minute), map[string]any{"pkg": "alpha"})
-
 		rule := Rule{
 			ID:       "count-win",
 			Scope:    "*",
@@ -244,6 +238,20 @@ func TestInMemorySourceAllSixPatternsClearingSkipsGitRefsAndTruncation(t *testin
 			Delivery: Delivery{Receiver: "foreground"},
 		}
 		e := Evaluator{Source: src, Rules: []Rule{rule}, Clock: func() time.Time { return now }}
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
+		// Expired record outside 10m window:
+		src.append("pkg.fail", now.Add(-15*time.Minute), map[string]any{"pkg": "alpha"})
+		// Skipped group_by records (missing, null, integer):
+		src.append("pkg.fail", now.Add(-5*time.Minute), map[string]any{"other": "x"})
+		src.append("pkg.fail", now.Add(-4*time.Minute), map[string]any{"pkg": nil})
+		src.append("pkg.fail", now.Add(-3*time.Minute), map[string]any{"pkg": 42})
+		// Future record (> now) ignored:
+		src.append("pkg.fail", now.Add(time.Minute), map[string]any{"pkg": "alpha"})
+		// Two in-window records for alpha (below threshold 3):
+		src.append("pkg.fail", now.Add(-2*time.Minute), map[string]any{"pkg": "alpha"})
+		src.append("pkg.fail", now.Add(-time.Minute), map[string]any{"pkg": "alpha"})
 
 		// 2 skipped lines from source + 3 non-string group_by records = 5 skipped.
 		skipped, err := e.Skipped(ctx)
@@ -290,6 +298,9 @@ func TestInMemorySourceAllSixPatternsClearingSkipsGitRefsAndTruncation(t *testin
 			Delivery: Delivery{Receiver: "foreground"},
 		}
 		e := Evaluator{Source: src, Rules: []Rule{rule}, Clock: func() time.Time { return now }}
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
 
 		src.append("step.done", now.Add(-4*time.Minute), map[string]any{"job": "build", "status": "fail"})
 		src.append("step.done", now.Add(-3*time.Minute), map[string]any{"job": "build", "status": "ok"})
@@ -333,6 +344,9 @@ func TestInMemorySourceAllSixPatternsClearingSkipsGitRefsAndTruncation(t *testin
 			Delivery: Delivery{Receiver: "foreground"},
 		}
 		e := Evaluator{Source: src, Rules: []Rule{rule}, Clock: func() time.Time { return now }}
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
 
 		for i, stage := range []any{"plan", "design", "design", nil, "plan", "design"} {
 			fields := map[string]any{}
@@ -372,6 +386,9 @@ func TestInMemorySourceAllSixPatternsClearingSkipsGitRefsAndTruncation(t *testin
 			Delivery: Delivery{Receiver: "foreground"},
 		}
 		e := Evaluator{Source: src, Rules: []Rule{rule}, Clock: func() time.Time { return now }}
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
 
 		src.append("build.phase", now.Add(-20*time.Second), map[string]any{"job": "compile", "phase": "started"})
 		src.append("build.phase", now.Add(-40*time.Second), map[string]any{"job": "done-job", "phase": "started"})
@@ -405,7 +422,6 @@ func TestInMemorySourceAllSixPatternsClearingSkipsGitRefsAndTruncation(t *testin
 		now := baseNow
 		root, leaderOID, _ := forkedRepo(t, now)
 		src := &memoryObservationSource{}
-		src.append("ref.check", now.Add(-time.Minute), map[string]any{"branch": "main"})
 
 		refMatchRule := Rule{
 			ID:       "git-ref-match",
@@ -445,6 +461,10 @@ func TestInMemorySourceAllSixPatternsClearingSkipsGitRefsAndTruncation(t *testin
 		}
 
 		e := Evaluator{Source: src, Root: root, Rules: []Rule{refMatchRule, lagRule}, Clock: func() time.Time { return now }}
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
+		src.append("ref.check", now.Add(-time.Minute), map[string]any{"branch": "main"})
 		results, err := e.EvaluateRules(ctx)
 		if err != nil {
 			t.Fatal(err)
@@ -473,12 +493,6 @@ func TestInMemorySourceAllSixPatternsClearingSkipsGitRefsAndTruncation(t *testin
 	t.Run("bundle_8kib_truncation_without_tillr_store", func(t *testing.T) {
 		now := baseNow
 		src := &memoryObservationSource{}
-		for i := 0; i < 60; i++ {
-			src.append("log.error", now.Add(-time.Duration(60-i)*time.Second), map[string]any{
-				"service": "api",
-				"msg":     strings.Repeat("x", 200),
-			})
-		}
 		rule := Rule{
 			ID:       "oversized-bundle",
 			Scope:    "*",
@@ -499,6 +513,15 @@ func TestInMemorySourceAllSixPatternsClearingSkipsGitRefsAndTruncation(t *testin
 			Delivery: Delivery{Receiver: "foreground"},
 		}
 		e := Evaluator{Source: src, Rules: []Rule{rule}, Clock: func() time.Time { return now }}
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 60; i++ {
+			src.append("log.error", now.Add(-time.Duration(60-i)*time.Second), map[string]any{
+				"service": "api",
+				"msg":     strings.Repeat("x", 200),
+			})
+		}
 		if _, err := e.EvaluateRules(ctx); err != nil {
 			t.Fatal(err)
 		}
@@ -669,6 +692,26 @@ func TestTillrStoreSourceAdapterContract(t *testing.T) {
 	results, err := e.EvaluateRules(ctx)
 	if err != nil || len(results) != 1 || results[0].Diagnostic() != "" {
 		t.Fatalf("EvaluateRules via TillrStoreSource: %+v, %v", results, err)
+	}
+	// Pre-load event does not fire; append one post-load event and re-evaluate.
+	if notices, err := e.Pending(ctx, "foreground"); err != nil || len(notices) != 0 {
+		t.Fatalf("pre-load event should not open notice via TillrStoreSource: %+v, %v", notices, err)
+	}
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := tx.Append(event.Event{
+			Kind:       "watch-test.source",
+			ObjectType: "item",
+			ObjectID:   &objID,
+			Revision:   &rev,
+			At:         now,
+			Payload:    []byte(`{"seat":"verify","detail":{"step":"check"}}`),
+		})
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
 	}
 	notices, err := e.Pending(ctx, "foreground")
 	if err != nil || len(notices) != 1 || notices[0].Bundle.Subject != "item-env" {

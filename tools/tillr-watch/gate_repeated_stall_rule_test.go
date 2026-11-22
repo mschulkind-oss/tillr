@@ -42,6 +42,9 @@ func TestGateRepeatedStallRule(t *testing.T) {
 
 	now := time.Date(2026, 11, 22, 14, 5, 0, 0, time.UTC)
 	e := watch.Evaluator{Store: s, Rules: []watch.Rule{rule}, Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
 	recordVerdict := func(runID, treeSHA, result string, at time.Time) {
 		t.Helper()
 		body, err := json.Marshal(map[string]any{
@@ -134,6 +137,10 @@ func TestGateRepeatedStallRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { allStore.Close() })
+	allEval := watch.Evaluator{Store: allStore, Rules: rules, Clock: func() time.Time { return now }}
+	if _, err := allEval.Evaluate(ctx); err != nil {
+		t.Fatal(err)
+	}
 	const treeC = "cccccccccccccccccccccccccccccccccccccccc"
 	for i := 1; i <= 3; i++ {
 		at := now.Add(-time.Duration(4-i) * time.Minute)
@@ -153,7 +160,6 @@ func TestGateRepeatedStallRule(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	allEval := watch.Evaluator{Store: allStore, Rules: rules, Clock: func() time.Time { return now }}
 	skipped, err := allEval.Evaluate(ctx)
 	if err != nil {
 		t.Fatal(err)

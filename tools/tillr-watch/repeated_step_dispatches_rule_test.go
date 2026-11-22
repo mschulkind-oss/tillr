@@ -43,6 +43,9 @@ func TestDrainRepeatedStepDispatchesRule(t *testing.T) {
 
 	now := time.Date(2026, 11, 22, 7, 5, 0, 0, time.UTC)
 	e := watch.Evaluator{Store: s, Rules: []watch.Rule{rule}, Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
 	allocate := func(runID, itemID, node, laneID string, at time.Time) {
 		t.Helper()
 		payload := map[string]any{
@@ -160,6 +163,10 @@ func TestDrainRepeatedStepDispatchesRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { allStore.Close() })
+	allEval := watch.Evaluator{Store: allStore, Rules: rules, Clock: func() time.Time { return now }}
+	if _, err := allEval.Evaluate(ctx); err != nil {
+		t.Fatal(err)
+	}
 	for i := 1; i <= 5; i++ {
 		at := now.Add(-time.Duration(5-i) * time.Minute)
 		body, err := json.Marshal(map[string]any{
@@ -183,7 +190,6 @@ func TestDrainRepeatedStepDispatchesRule(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	allEval := watch.Evaluator{Store: allStore, Rules: rules, Clock: func() time.Time { return now }}
 	skipped, err := allEval.Evaluate(ctx)
 	if err != nil {
 		t.Fatal(err)
