@@ -19,9 +19,6 @@ type Notice struct {
 
 // Pending returns open foreground alerts in notice sequence order.
 func (e Evaluator) Pending(ctx context.Context, owner string) ([]Notice, error) {
-	if owner != "foreground" {
-		return nil, nil
-	}
 	// Preserve file-rule routing for initial openings. Reopenings are new
 	// notices routed by the effective rules, independent of eligibility.
 	fileForeground := foregroundRules(e.Rules)

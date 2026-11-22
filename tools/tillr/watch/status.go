@@ -130,7 +130,6 @@ func (s *Status) readOwners(rd *store.Reader, rules []Rule, hasAlerts bool) erro
 		return err
 	}
 	defer rows.Close()
-	foreground := -1
 	for rows.Next() {
 		var owner OwnerStatus
 		var since, last sql.NullInt64
@@ -145,16 +144,17 @@ func (s *Status) readOwners(rd *store.Reader, rules []Rule, hasAlerts bool) erro
 			v := statusTime(last.Int64)
 			owner.LastWait = &v
 		}
-		if owner.Owner == "foreground" {
-			foreground = len(s.Owners)
-		}
 		s.Owners = append(s.Owners, owner)
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if hasAlerts && foreground >= 0 {
-		return s.Owners[foreground].readPending(rd, rules)
+	if hasAlerts {
+		for i := range s.Owners {
+			if err := s.Owners[i].readPending(rd, rules); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
