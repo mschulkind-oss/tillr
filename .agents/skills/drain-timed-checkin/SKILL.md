@@ -170,6 +170,11 @@ green; `alarms` lists standing alarms; each row has `item_id`, `state`,
    worker is live. A test binary under a run's directory can also be named
    `tillr-run` or `tillr-drain`; count only the processes whose `--input` names
    a request under the lanes directory.
+   A row that says "lane released" with a position of candidate or held must
+   have either a gate process or a refusal event after its last
+   `gate.verdict`. On 2026-11-22 two candidates whose gates failed sat for 25
+   minutes with neither, one of them still reported as "run-live"; file that
+   as a fault the moment it is seen.
 3. **The trunk proof.** When the trunk is unproved for more than a few minutes,
    look at what the heavy runner is doing, not at the summary:
 
