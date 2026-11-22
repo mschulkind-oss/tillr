@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/mschulkind-oss/tillr-item/item"
@@ -1020,11 +1021,18 @@ Never change the worker's candidate.
 	if words != nil {
 		brief += requestWordsSuffix(words)
 	}
+	braceCount := strconv.Itoa(braceLiteralCount(brief)) + "\n"
 	if err := os.WriteFile(filepath.Join(dir, BriefFile), []byte(brief), 0644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, braceLiteralsFile), []byte(braceCount), 0644); err != nil {
 		return err
 	}
 	lane := l.laneDirPath(c.LaneID)
 	if err := os.WriteFile(filepath.Join(lane, BriefFile), []byte(brief), 0644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(lane, braceLiteralsFile), []byte(braceCount), 0644); err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(lane, endingCapabilityFile), []byte(run.EndingFooter+"\n"), 0644); err != nil {
@@ -1035,6 +1043,9 @@ Never change the worker's candidate.
 func (l *Loop) restoreJudgeInputs(c Candidate, r *JudgeReceipt) error {
 	lane := l.laneDirPath(c.LaneID)
 	if err := os.WriteFile(filepath.Join(lane, BriefFile), r.WorkerBrief, 0644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(lane, braceLiteralsFile), []byte(strconv.Itoa(braceLiteralCount(string(r.WorkerBrief)))+"\n"), 0644); err != nil {
 		return err
 	}
 	// An evaluator run's own staging says footer; the writer's capability is the one
