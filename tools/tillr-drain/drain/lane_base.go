@@ -287,8 +287,16 @@ func designAnswerLanded(ctx context.Context, r *store.Reader, root, tip, itemID 
 	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='landings')`).Scan(&exists); err != nil || !exists {
 		return "", err
 	}
+	// AnswerHead records the candidate that actually answered the conflict, even when
+	// a conflict-fix run landed it. DesignRunID still names the original dispatch.
+	// For an owner answer, keep looking up the design run that landed the question:
+	// AnswerHead in that case is the owner's commit, not a candidate head.
 	var after string
-	err = r.QueryRow(`SELECT COALESCE(trunk_after,'') FROM landings WHERE run_id=? AND result='landed' ORDER BY event_seq DESC LIMIT 1`, c.DesignRunID).Scan(&after)
+	if c.QuestionRef != "" {
+		err = r.QueryRow(`SELECT trunk_after FROM landings WHERE item_id=? AND run_id=? AND result='landed' ORDER BY event_seq DESC LIMIT 1`, itemID, c.DesignRunID).Scan(&after)
+	} else {
+		err = r.QueryRow(`SELECT trunk_after FROM landings WHERE item_id=? AND head_sha=? AND result='landed' ORDER BY event_seq DESC LIMIT 1`, itemID, c.AnswerHead).Scan(&after)
+	}
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
