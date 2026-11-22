@@ -10,7 +10,7 @@ covers:
   - docs/pi/landing-replay-ruling-2026-11-02.md
   - docs/pi/stranded-candidates-2026-11-02.md
 tags: [board, landing, principles, rulings, library]
-summary: "Fifteen principles distilled from the landing rulings of 2026-10-28 to 2026-11-21, each with the measurement that produced it, the thing that enforces it today, and the one lander it binds. Principles 5 and 6's per-attempt budgets are superseded by the 2026-11-17 owner ruling D-JL10 (worker endings are never counted; identical repeats diagnose at design). A principle whose enforcement column says 'nothing' is a claim, not a rule, and is listed as such rather than assumed; a principle that is not lander-scoped says so and names the dispatch program it binds instead."
+summary: "Sixteen principles distilled from the landing rulings of 2026-10-28 to 2026-11-21, each with the measurement that produced it, the thing that enforces it today, and the one lander it binds. Principles 5 and 6's per-attempt budgets are superseded by the 2026-11-17 owner ruling D-JL10 (worker endings are never counted; identical repeats diagnose at design). A principle whose enforcement column says 'nothing' is a claim, not a rule, and is listed as such rather than assumed; a principle that is not lander-scoped says so and names the dispatch program it binds instead."
 ---
 
 # Landing principles
@@ -576,6 +576,43 @@ plans a build.
 seat, the planner and the verifier, which run under `tillr-drain` and `tillr-loop`. The lander
 lands one squashed commit per item whatever its size, so it cannot break this principle and is not
 bound by it.
+
+## 16. What the operator can settle is settled inside tillr
+
+A problem the operating agent could solve without the owner does not go to the operating agent. It
+goes to a similarly responsible agent, process or item inside tillr, which is given the evidence
+the operating agent would have had to go and read. The owner ruled on 2026-11-21, verbatim: "I
+guess a working principle should be that if you ever feel that you as the whale could solve some
+problem, and it wouldn't need to be escalated to me, then that problem should escalate to... a
+similarly responsible agent, process, ticket, whatever, within Tiller, rather than popping up to
+you." ("The whale" is his name for the operating agent, the foreground session that watches the
+drain and acts as operator.)
+
+Two consequences follow from his words. The operator is not a mover for any hold: a hold that only
+the operator can end waits for a check-in, and by [Section 13](#13-a-held-state-names-a-mover-that-can-still-act)
+that is a mover that cannot act when the session is gone. And the test for reaching the owner is
+whether the decision is his, never whether a seat inside tillr failed or took long.
+
+*Measured 2026-11-21:* from 12:00 AM to 10:58 PM ET the store records 29 items closed and 5 set to
+landed by the operator, 29 holds addressed to the operator on 21 items, 32 paths added to items by
+the operator, and 2 design retries the operator requested. Four of the 34 carry words of the
+owner's about that item; the other 30 were settled without him. One of the five hand finishes was wrong: an
+item was set to landed as a duplicate of work that did not deliver it. The command, the event
+kinds read and how the closes were sorted are in
+[the design that applies this principle](./operator-decisions-inside-tillr.md#2-the-day-measured).
+
+*Enforced by:* nothing. [The design](./operator-decisions-inside-tillr.md) names, for each of seven
+kinds of hand action, the seat or process inside tillr that takes it, and none of it is built. Two
+parts exist already: the drain releases a wait when its blocker lands, and it releases a trunk
+obstacle when the named checks are green. *Not enforced:* `tooling` and `seat` obstacles on a filed
+request still name the operator as mover (`rg -n 'Mover = "operator"' tools/tillr-drain/obstacles/read.go`
+found three assignments on 2026-11-21), no fault reason declares what ends it, and an item is
+closed or set to landed on a reason typed by hand. Until the design is built, this entry is a
+stated intent that binds the operator: each hand action of this kind is a missing rule to file.
+
+*Scope:* **not lander-scoped.** It binds the dispatch side, `tillr-drain` and `tillr-loop`, where
+holds, faults and the queue's order live. The lander holds no item and asks no one, so it cannot
+break this principle and is not bound by it.
 
 ---
 
