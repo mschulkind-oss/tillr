@@ -46,6 +46,9 @@ func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string
 	if err != nil {
 		return record.Envelope{}, err
 	}
+	if err := checkSplitMove(d, itemID, payload.WaitingOn, state); err != nil {
+		return record.Envelope{}, err
+	}
 	if receipt.FinishExistingLanding && (d.Name != definition.GitLandingName || state != "landed" || receipt.RequireVerdicts) {
 		return record.Envelope{}, Usagef("--finish-existing-landing requires Git-landing and --state landed, without --require-verdicts")
 	}
@@ -115,6 +118,9 @@ func SetStateWithReceipt(ctx context.Context, tx *store.Tx, itemID, state string
 		var next WaitingOn
 		if len(waiting) > 0 {
 			next = waiting[0]
+		}
+		if previousWaiting != nil && previousWaiting.Source == SplitWaitSource && next != *previousWaiting {
+			return record.Envelope{}, Rejectionf("split-parent-held", itemID, "split parent %q cannot change its split wait", itemID)
 		}
 		if next.Source == "" {
 			next.Source = "state"
