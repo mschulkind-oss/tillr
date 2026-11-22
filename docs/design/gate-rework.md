@@ -1440,6 +1440,77 @@ as a `revert` row. An unattributed red is never reverted.
 A check that reaches its timeout is "no verdict": the pointer does not move, nothing is
 attributed, and the line says which check and how long it ran.
 
+#### A Go test that did not finish is not replayed
+
+What follows is the designer's decision of 2026-11-21 (`D-GR31`), made on an operator request
+and to answer a build obstacle; it is not the owner's ruling, and the owner may overturn it.
+
+A **focused replay** *(coined here)* is the culprit search running one named Go test alone, as
+`go test -json -count=1 -run '^<name>$' <package>`, on a landing between the pointer and the
+tip. It is worth its time only when the test can end. A test that hung in the whole proof hangs
+again alone, and each replay then lasts until Go's own ten-minute test limit.
+
+The fix of 2026-11-21 7:46 PM Eastern (`5c78981400`) skips the focused replay for a test the
+first proof names in Go's test-timeout panic (`panic: test timed out after`, followed by the
+`running tests:` list). It did not stop the replays the operator request reports, and the
+retained output of the two proofs before them says why (read on 2026-11-21 with
+`rg -n 'panic: test timed out after|fatal error: all goroutines are asleep'` over the proofs'
+retained case logs):
+
+| Proof ended (Eastern) | What its case log for `TestPolicyReloadAtPassBoundaryKeepsLiveRequest` holds | Focused replay |
+| :--- | :--- | :--- |
+| 8:20 PM | `fatal error: all goroutines are asleep - deadlock!`; no timeout panic | Seen running at 8:26 PM |
+| 8:48 PM | The same line; no timeout panic | Started about 8:48 PM; 503 seconds old at 0% CPU at 8:57 PM |
+
+Both proofs ran the suite as `tools/go-test-shards.py tools/tillr-drain -k 6 --slot-class proof
+--timeout 0`, and the shard line named the test (`drain shard 1 failed (exit 1):
+TestPolicyReloadAtPassBoundaryKeepsLiveRequest`). In the whole shard the Go runtime saw every
+goroutine blocked and ended the process at once with its deadlock error, so no timeout panic
+was ever printed. The case therefore reached the runner as an ordinary named failure with an
+empty `timeout_panic`, `GoTimedOut` stayed false, and `HeavyRunner.attribute` took the ordinary
+path: `findFirstRed`, then `judgeHeavyGo` through the supervisor in `declaration` mode. Run
+alone, the test was not ended by the runtime: the operator saw the replay idle at 0% CPU.
+
+**The rule.** A named Go test is not replayed when the first proof's output for it holds
+either of the two lines by which Go reports that a test did not finish:
+
+| Line in the first proof's output for the case | Before `D-GR31` | With `D-GR31` |
+| :--- | :--- | :--- |
+| `panic: test timed out after`, with the test in the `running tests:` list | Not replayed (`5c78981400`) | Not replayed |
+| `fatal error: all goroutines are asleep - deadlock!` | Replayed alone on each landing searched | Not replayed |
+| Any other failure output | Replayed | Replayed, unchanged |
+
+A case marked this way is handled exactly as the timeout case already is, at the same three
+places and no others:
+
+1. `HeavyRunner.attribute` names no landing and starts no culprit search; one fixer is filed
+   against the tip, and the check's detail quotes the line and says it was not replayed.
+2. `retainRedRepairs` starts no focused replay to decide whether that repair is kept; the next
+   whole proof supersedes it.
+3. When the same suite also has an unnamed failure, the suite check is not replayed either,
+   because replaying the suite reruns the test.
+
+Because no landing is named, no revert is offered, as for every unattributed red. The parser
+that reads the proof's output (`heavy_legacy_progress.py`) recognizes the second line beside
+the first and hands the runner the same yes-or-no fact; whether the existing `timeout_panic`
+and `GoTimedOut` fields carry both lines or are renamed is the builder's choice. The build
+names this path in its commit body and carries a test that drives a first proof whose named
+case holds the deadlock line through `attribute` and asserts that no replay starts.
+
+**No time limit is added**, to the proof, the replay or the supervisor: the operator request
+forbids one, and under `D-GR15` exceeding a budget is never by itself a failure. The test's own
+deadlock is not repaired by this decision; the fixer filed against the tip carries it.
+
+**Rejected** (the designer's, with the rule):
+
+- **Skipping the replay for every Go `fatal error:`.** Other runtime errors (a concurrent map
+  write, an exhausted stack) end the process and can be replayed to a verdict; only the
+  deadlock line says the test could not end.
+- **A time limit on a focused replay.** Forbidden by the request, and a limit would report a
+  hang as a slow pass-or-fail question it cannot answer.
+- **Never replaying a named Go test.** It would give up the first red landing, and so the
+  revert, for every ordinary assertion failure.
+
 **Time to a revert (measured 2026-11-18).** The heavy runner starts searching for the
 culprit and can offer a revert when a failed check ends, while the proof continues. Over the
 recorded heavy runs read on 2026-11-18, `go-test-shards-test` alone took a median of 14.4
@@ -1817,7 +1888,9 @@ decision carrying `D-GR15` out, and is the owner's to overturn. `D-GR17` records
 with a pass and a fail on one fingerprint, quoted verbatim; `D-GR22` is the operator's reading of
 it together with this design's mechanism, neither of which is the owner's ruling, and both are
 the owner's to overturn. `D-GR23` is the designer's decision of 2026-11-21 on where that
-mechanism lives, and is also the owner's to overturn. The rows `D-GR21` and `D-GR22` were first numbered `D-GR18` and `D-GR19`, which the
+mechanism lives, and is also the owner's to overturn. `D-GR31` is the designer's decision of
+2026-11-21, from an operator request, on which Go tests the culprit search does not replay, and
+is the owner's to overturn. The rows `D-GR21` and `D-GR22` were first numbered `D-GR18` and `D-GR19`, which the
 identity rows of 2026-11-20 already held; they were renumbered on 2026-11-21, so a record
 written that day that cites `D-GR18` for a disabled check means `D-GR21`. The three rows of this
 document's former open questions ([`OQ-GR1`](#OQ-GR1) to [`OQ-GR3`](#OQ-GR3)) were initially
@@ -1860,6 +1933,7 @@ fast-gate timing, made to answer a build worker's report; the owner may overturn
 | `D-GR28` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request for the first classifier slice says "No outcome changes for any input". The single raw-result table and single aggregate order of `D-GR23` changed five measured outcomes at three sites (P6, F3, F6), so `D-GR23` is amended: `Classify` holds a named protocol per kind of raw result and `Aggregate` a named order per aggregate site, each reproducing the tree, and a site passes the name and compares nothing. A Go module build is `fail` on every non-zero exit; a legacy check follows `check_status` and `Check.conflict` (exit 4 of an ordinary kind is `fail`, exit 124 is `unknown`); the legacy gate's order is stalled, then failed, then unproven. The Python side hands over yes-or-no facts about a check's output and decides nothing from them. A difference a later slice finds is added the same way by its builder, with a test and a row in the section, and is not a definition obstacle. **Rejected:** allowing the outcome changes by name; sending pass and fail words from Python; merging the orders into the runner's in this group. | 2026-11-21 | [Each site keeps its raw-result protocol and aggregate order](#each-site-keeps-its-raw-result-protocol-and-aggregate-order) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
 | `D-GR29` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request of 2026-11-21 asks for the repair of commit `4790d2ad43` (receive a test's completions before canceling) in `policy_reload_test.go`, `fixer_intermittent_test.go`, `pass_measurement_test.go` and `lane_dirty_test.go`, saying all four cancel and then receive. At `86e2549392` only `policy_reload_test.go` does; the other three receive under `context.Background()`, where `sendCompletion` cannot drop a completion. So only `policy_reload_test.go` is repaired: its workers are released by a channel and their completions received while the context is live, with `cancel()` last; the repaired receive waits under the `hangGuard` deadlock detector and a released worker returns an error. The three others are unchanged and named with the reason in the commit body, which also states whether the real loop can lose a completion after cancel. The mirror comes from `just pack-sync`. **Rejected:** editing the three files that have no cancel; a time limit on the receive in place of the repair; a `hangGuard` on the three receives that have no fault (a second, unlanded draft of this decision proposed it); repairing `Loop.Examine` in `recovery.go` in the same change, which needs its own request; changing `sendCompletion`. **Recorded 2026-11-21 by the designer:** a third unlanded draft reached the same answer and is not adopted as a separate text; the built cleanup's receive is a bare receive on a live context, not one under `hangGuard`, and is accepted as built. **Recorded 2026-11-22 by the designer:** a fourth unlanded draft, written against the same worker report, reached the same answer and is not adopted; that report is answered by this row, the repair is built, and no build work remains under the request. The rule kept from it: no test cleanup makes a blocking receive from the loop's completions channel after it cancels the context its workers send under. | 2026-11-21 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (commit `c6a01f6e84`: [`policy_reload_test.go`](../../tools/tillr-drain/drain/policy_reload_test.go) and its mirror) |
 | `D-GR30` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** Each run of the fast gate that judges a candidate before it lands, on its ordinary path, leaves a durable record of its wall time, each check's elapsed time and whether it ran, was reused or was not run, and the Go packages each Go check selected. The packages come from `go-build`'s own `go list`, from `go-substrate`'s `go test` output, and for `gate-runner`, which runs sharded and prints no package lines, from `tools/go-test-shards.py` writing its `go list` result to the file named by `TILLR_GO_SHARDS_EVIDENCE_OUT`, before compiling, and only when that variable is set. The Go package piece may therefore edit `tools/go-test-shards.py` and `tests/go-test-shards.test.py` for that producer and its fixture tests only. The heavy trunk proof, the legacy tree-check bridge, relanding, the automatic revert candidate, named replays and the heavy-failure count are out of scope and listed in the candidate's commit message. **Rejected:** leaving `gate-runner` out; reading the `--events` file; a second `go list` in `tools/fork-check.py`; running the suite unsharded. | 2026-11-21 | [Section 6.11](#611-the-fast-gate-before-a-landing-records-its-time-and-its-go-packages) | — (not built) |
+| `D-GR31` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request of 2026-11-21 reports the heavy runner still replaying a deadlocked Go test alone after `5c78981400`, and asks to find the path and stop it there with no time limit. The path is `HeavyRunner.attribute` to `findFirstRed` to `judgeHeavyGo` in `declaration` mode, for a named case whose first proof recorded Go's runtime deadlock error (`fatal error: all goroutines are asleep - deadlock!`) and no timeout panic; `5c78981400` skips the replay only for the timeout panic. The rule is widened: a named Go test whose first-proof output holds either line is not replayed, at the same three places as the timeout case (`attribute`, `retainRedRepairs`, and the suite check beside an unnamed failure), and one fixer is filed against the tip. This amends the request's sixth criterion, which names only the test-timeout panic, to cover the deadlock line the first proof actually recorded. **Rejected:** skipping the replay for every Go `fatal error:`; a time limit on a focused replay; never replaying a named Go test. | 2026-11-21 | [A Go test that did not finish is not replayed](#a-go-test-that-did-not-finish-is-not-replayed) | — (not built; the timeout half is `5c78981400`, `tools/tillr-drain/drain/heavy_go.go`) |
 | `D-GR12` | A question about a moving upstream is a drift probe that files an item and never moves or holds the green pointer. **Rejected:** keeping it as a check on a commit. Made visible where it happens. | 2026-11-15 | [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) | — (`series` and `patch-branch-inv2` are `TIER_LANDING` in `tools/fork-check.py`; no probe exists) |
 | OQ-GR1 | The default of a per-repository setting, `red_cap`: landing stops at 20 landings or 60 minutes past the last green commit; a repository may set a different bound, and zero means no cap. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "a mechanism whose cost rises with trunk activity is pointed the wrong way" and the owner's 2026-11-15 ruling that the landing strategy is configurable per repository and red is brief. The owner may overturn it. **Rejected:** no cap, which lets the fixer's range and the deploy lag grow without limit. **Ruled out by the owner on 2026-11-18** ([OQ-GP7](tillr-graph-is-the-path.md#OQ-GP7)): under a red check, work lands only if it does not touch what that check reads, and there is no landing cap. The cap is still live in the tree (20 landings; its time bound was turned off on 2026-11-17, `d53580bfd`) until the graph design's waiting rule is built. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/redcap/cap.go`, `drain/red_cap.go`) |
 | OQ-GR2 | The default of a per-repository setting, `lane_base`: a new lane starts from the last green commit; a repository may choose the trunk tip. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are that a worker does not pay for a failure it did not cause, and the same cost-direction rule. The owner may overturn it. **Rejected:** always cutting from the tip. **Overturned by the owner on 2026-11-17** (`1fa2c069c`): work is always built against the latest trunk, never a past commit; a lane cut from the green pointer was handed a tree older than its own item's definition and produced false conflicts. This repository set `tip`; the code's default when the key is absent is still `green`. **Replaced by the owner's ruling of 2026-11-21** (`D-GR24`): new work starts from the last proved trunk commit again, and this repository sets `green`. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/drain/lane_base.go`; the repository setting follows `D-GR24`) |
