@@ -8,6 +8,10 @@ import subprocess
 import sys
 import tempfile
 
+if str(_GATE_DIR := Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(_GATE_DIR))
+from classify import classify
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -42,18 +46,29 @@ def main():
                                   capture_output=True, text=True)
             sys.stdout.write(done.stdout)
             sys.stderr.write(done.stderr)
-            if done.returncode not in (0, 1, 6):
-                return 4
             checks = json.loads(done.stdout)["payload"]["checks"]
-            if len(checks) != 1 or checks[0]["check_id"] != args.only:
+            if (not isinstance(checks, list) or len(checks) != 1
+                    or not isinstance(checks[0], dict) or checks[0].get("check_id") != args.only):
                 raise ValueError("runner did not judge the requested check")
             result = checks[0]["result"]
-            if (done.returncode, result) not in ((0, "pass"), (1, "fail"), (6, "stalled")):
-                raise ValueError(f"runner exit {done.returncode} does not match {result}")
+            if not isinstance(result, str):
+                raise ValueError("runner did not report a result word")
+            context = {"check": args.only, "commit": args.head}
+            exit_answer, word_answer = classify([
+                dict(context, source="judging-program", exit_code=done.returncode),
+                dict(context, source="result-word", word=result),
+            ])
+            exit_kind = (exit_answer["outcome"], exit_answer["detail"])
+            word_kind = (word_answer["outcome"], word_answer["detail"])
+            verdict = {("pass", "passed"): 0, ("fail", "failed"): 1, ("unknown", "stalled"): 6}.get(exit_kind)
+            # The runner's wire uses these exact words, even though the general
+            # result-word protocol also accepts synonyms from other producers.
+            if result not in ("pass", "fail", "stalled") or exit_kind != word_kind or verdict is None:
+                raise ValueError(f"runner exit {done.returncode} does not match {result} as a verdict")
             print(f"fast-tree: {args.only}: {result}")
             if checks[0].get("log_ref") and Path(checks[0]["log_ref"]).is_file():
                 print(Path(checks[0]["log_ref"]).read_text())
-            return done.returncode
+            return verdict
     except (OSError, ValueError, KeyError, TypeError, subprocess.CalledProcessError) as error:
         print(f"fast-tree: {args.only}: could not judge: {error}", file=sys.stderr)
         return 4

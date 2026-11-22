@@ -32,6 +32,11 @@ func testHeavyLegacyRestart(t *testing.T, stalled, advance bool) {
 		t.Fatal(err)
 	}
 	writeForkFile(t, filepath.Join(root, "tools", "gate", "checks", ".keep"), "")
+	transport, err := os.ReadFile(filepath.Join("..", "..", "gate", "classify.py"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeForkFile(t, filepath.Join(root, "tools", "gate", "classify.py"), string(transport))
 	source, err := os.ReadFile(filepath.Join("..", "..", "fork-check.py"))
 	if err != nil {
 		t.Fatal(err)

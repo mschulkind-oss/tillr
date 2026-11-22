@@ -35,6 +35,16 @@ STUBS = {
     # the `--gate`/`--gate-arg` program on exactly as the adapter spelled it, so a test can
     # read the argv the real face would execute rather than the flags that spell it.
     "tillr-gate": """#!/bin/sh
+if [ "$1" = classify ]; then
+  own=$(cd "$(dirname "$0")" && pwd -P)
+  oldifs=$IFS; IFS=:
+  for dir in $PATH; do
+    IFS=$oldifs
+    [ "$(cd "$dir" 2>/dev/null && pwd -P)" = "$own" ] && continue
+    [ -x "$dir/tillr-gate" ] && exec "$dir/tillr-gate" "$@"
+  done
+  exit 127
+fi
 log() { printf '%s\n' "$*" >> "$STUB_LOG"; }
 log "$@"
 case "$1" in

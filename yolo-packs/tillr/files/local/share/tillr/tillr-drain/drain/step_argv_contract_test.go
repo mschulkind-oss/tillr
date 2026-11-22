@@ -60,7 +60,21 @@ func adapterStubs(t *testing.T) (log string) {
 	show := filepath.Join(dir, "item-show.json")
 	writeForkFile(t, show, `{"record_version":1,"kind":"item.record","id":"item-a","producer":{"system":"tillr","utility":"tillr-item","version":"0.1.0"},"created_at":"2026-01-01T00:00:00Z","payload":{"item_id":"item-a","criteria":[{"criterion_id":"c1","text":"the criterion","state":"pending","claim_class":"verification-only"}]}}`)
 	for _, name := range []string{"tillr-gate", "tillr-land", "tillr-item"} {
-		body := "#!/bin/sh\nprintf '%s\\n' \"" + name + " $*\" >> " + log + "\n"
+		body := "#!/bin/sh\n"
+		if name == "tillr-gate" {
+			body += `if [ "$1" = classify ]; then
+  own=$(cd "$(dirname "$0")" && pwd -P)
+  oldifs=$IFS; IFS=:
+  for dir in $PATH; do
+    IFS=$oldifs
+    [ "$(cd "$dir" 2>/dev/null && pwd -P)" = "$own" ] && continue
+    [ -x "$dir/tillr-gate" ] && exec "$dir/tillr-gate" "$@"
+  done
+  exit 127
+fi
+`
+		}
+		body += "printf '%s\\n' \"" + name + " $*\" >> " + log + "\n"
 		if name == "tillr-item" {
 			body += "[ \"$1\" = show ] && cat " + show + "\n"
 		}

@@ -57,6 +57,7 @@ class FastTreeTests(unittest.TestCase):
             (root / "tools/gate/checks").mkdir(parents=True)
             shutil.copy(ROOT / "tools/fork-check.py", root / "tools/fork-check.py")
             shutil.copy(ROOT / "tools/gate/tree-check.py", root / "tools/gate/tree-check.py")
+            shutil.copy(ROOT / "tools/gate/classify.py", root / "tools/gate/classify.py")
             recipe = (ROOT / ".justfile").read_text().split("done *args:\n", 1)[1].split("\n\n", 1)[0]
             (root / ".justfile").write_text("done *args:\n" + recipe + "\n")
             decl = {"id": "fixture-tree", "label": "fixture tree", "scope": "tree", "tier": "fast",
@@ -64,8 +65,13 @@ class FastTreeTests(unittest.TestCase):
             (root / "tools/gate/checks/fixture.json").write_text(json.dumps(decl))
             runner = root / "tillr-gate"
             runner.write_text("#!/usr/bin/env python3\n" +
-                "import json,os,sys\nfrom pathlib import Path\n" +
-                "args=sys.argv; assert args[1:3]==['checks','--fast-tree']\n" +
+                "import json,os,shutil,sys\nfrom pathlib import Path\n" +
+                "args=sys.argv\n" +
+                "if args[1:2]==['classify']:\n" +
+                "    installed=shutil.which('tillr-gate', path=os.environ['PATH'].partition(os.pathsep)[2])\n" +
+                "    if installed: os.execv(installed, [installed, *args[1:]])\n" +
+                "    sys.exit(127)\n" +
+                "assert args[1:3]==['checks','--fast-tree']\n" +
                 "checks=Path(args[args.index('--checks')+1]); ds=[json.loads(p.read_text()) for p in checks.glob('*.json')]\n" +
                 "assert len(ds)==1 and ds[0]['id']=='fixture-tree'\n" +
                 "rc=int(os.environ.get('TREE_RC','1')); result={0:'pass',1:'fail',6:'stalled'}.get(rc,'error')\n" +

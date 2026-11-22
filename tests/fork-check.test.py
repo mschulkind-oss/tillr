@@ -534,6 +534,8 @@ def build_repo(base: Path, *, quarantine=False):
             + entry_point,
         )
     (repo / "tools" / "fork-check.py").write_text(gate_source)
+    (repo / "tools" / "gate").mkdir(exist_ok=True)
+    shutil.copy(ROOT / "tools/gate/classify.py", repo / "tools/gate/classify.py")
     shutil.copymode(SCRIPT, repo / "tools" / "fork-check.py")
 
     (repo / "yolo-packs" / "matt" / "pack.json").write_text(json.dumps({
@@ -6672,6 +6674,8 @@ def build_pinned_repo(base: Path):
     (repo / "tests").mkdir()
     (repo / "tools").mkdir()
     shutil.copy(SCRIPT, repo / "tools" / "fork-check.py")
+    (repo / "tools" / "gate").mkdir(exist_ok=True)
+    shutil.copy(ROOT / "tools/gate/classify.py", repo / "tools/gate/classify.py")
     (repo / "yolo-packs" / "matt" / "pack.json").write_text(json.dumps({
         "name": "matt",
         "contributes": [

@@ -136,7 +136,7 @@ func TestFixerGateJudgesOwnDiffThenNamedChecksAndLands(t *testing.T) {
 				}
 				writeForkFile(t, path, text)
 			}
-			for _, name := range []string{"tools/fork-check.py", "tools/gate/change-gate.py"} {
+			for _, name := range []string{"tools/fork-check.py", "tools/gate/change-gate.py", "tools/gate/classify.py"} {
 				raw, err := os.ReadFile(filepath.Join(repo, name))
 				if err != nil {
 					t.Fatal(err)

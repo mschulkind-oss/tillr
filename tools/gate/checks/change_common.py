@@ -13,6 +13,9 @@ import time
 from urllib.parse import unquote
 import roadmap_sections
 
+# The checks are executable scripts in a subdirectory of the gate adapters.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 HEAD = "HEAD"
 TS_SIZE_WARN_LINES = 2000
 TS_SIZE_REFUSE_LINES = 3000
@@ -324,7 +327,8 @@ def identity_findings(root, base, head):
 
 DOCUMENT_MEMORY_FORMAT = "documents-1"
 DOCUMENT_CHECK_FILES = ("tools/gate/checks/documents.json", "tools/gate/checks/documents.py",
-                        "tools/gate/checks/change_common.py", "tools/gate/checks/roadmap_sections.py")
+                        "tools/gate/checks/change_common.py", "tools/gate/checks/roadmap_sections.py",
+                        "tools/gate/classify.py")
 DOCUMENT_CONFIG_NAMES = (".vantage.toml", ".vantageignore")
 LINK_DESTINATIONS = (
     re.compile(r"\]\(\s*<([^>\n]*)>"),
@@ -443,14 +447,27 @@ def result_store(root):
     return Path(common) / "tillr-gate" / "results"
 
 
-def stored_result(store, key, verdict):
+def stored_result(store, key, verdict, check_id=None):
     try:
         data = json.loads((store / f"{key}.{verdict}.json").read_text())
     except (OSError, ValueError):
         return None
-    if not isinstance(data, dict) or data.get("result") != verdict or not data.get("time"):
+    if not isinstance(data, dict) or not isinstance(data.get("result"), str) or not data.get("time"):
         return None
-    return data
+    word = data["result"]
+    try:
+        # JSON can contain escaped lone surrogates. The Go decoder substitutes
+        # replacement characters, so such a record cannot make a wire round trip.
+        word.encode("utf-8")
+    except UnicodeEncodeError:
+        return None
+    from classify import classify
+
+    recorded_id = data.get("check_id")
+    selected_id = check_id or (recorded_id if isinstance(recorded_id, str) and recorded_id else "documents")
+    answer, = classify([{"check": selected_id, "source": "cached-record", "word": word}])
+    # A record under this key's pass/fail suffix must actually have that verdict.
+    return data if answer["outcome"] == verdict else None
 
 
 def store_result(store, key, verdict, duration_ms, tree, tool, check_id="documents"):
@@ -524,8 +541,7 @@ def judge_documents(root, documents):
 def judge_document_set(root, documents, keys, unsettled, locations):
     """Judge the changed documents in one renderer run, skipping remembered passes.
 
-    The run's exit is the check's, as it was before memory: 0 passes, 1 with a finding
-    fails, anything else -- or a report that cannot be read -- could not judge. Memory only
+    The installed classifier judges the raw renderer exit and report facts. Memory only
     narrows which documents the run is given. From a passing run every document is
     remembered as a pass; from a failing one whose every error finding names a document it
     was given, a document with an error finding is remembered as a fail and one with no
@@ -547,7 +563,6 @@ def judge_document_set(root, documents, keys, unsettled, locations):
         # A run that produced no report could not judge, whatever is remembered.
         stale = [path for path, passed in remembered.items() if version and passed.get("tool") != version]
     else:
-        code, report, duration_ms = 0, None, 0
         version = renderer_version()
         stale = [path for path, passed in remembered.items() if passed.get("tool") != version]
     if stale:
@@ -569,20 +584,26 @@ def judge_document_set(root, documents, keys, unsettled, locations):
               f"{len(documents) - len(pending)} remembered", file=sys.stderr)
     if not pending:
         return 0
+    from classify import classify
+
     findings = report.get("findings", []) if report else []
-    if report is None or code not in (0, 1) or code == 1 and not findings:
+    answer, = classify([{"check": "documents", "source": "document-render", "exit_code": code,
+                         "report_read": report is not None, "has_finding": bool(findings)}])
+    outcome = answer["outcome"]
+    if outcome not in ("pass", "fail"):
         raise RuntimeError(f"uvx vantage-check exited {code} without a document finding")
+    verdict = 1 if outcome == "fail" else 0
     if not version:
-        return code
+        return verdict
     unchecked = {reported(root, failure.get("file")) for failure in report.get("failures") or []
                  if isinstance(failure, dict)}
     flagged = {reported(root, finding.get("file")) for finding in findings if isinstance(finding, dict)}
     errors = {reported(root, finding.get("file")) for finding in findings
               if isinstance(finding, dict) and finding.get("severity") == "error"}
-    if code == 1 and (not errors or not errors <= set(pending)):
+    if outcome == "fail" and (not errors or not errors <= set(pending)):
         print("documents: the run failed on findings it does not attribute to a document it was given; "
               "nothing is remembered from it", file=sys.stderr)
-        return code
+        return verdict
     for path in pending:
         if path in unchecked:
             continue
@@ -595,7 +616,7 @@ def judge_document_set(root, documents, keys, unsettled, locations):
                   f"{', '.join(unsettled[path])}", file=sys.stderr)
         else:
             store_result(store, keys[path], "pass", duration_ms, tree, version)
-    return code
+    return verdict
 
 
 def reported(root, name):
