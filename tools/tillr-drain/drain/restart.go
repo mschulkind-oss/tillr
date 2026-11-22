@@ -101,10 +101,21 @@ func (l *Loop) restartDeferred() bool {
 	return proofActive || l.rollAction.busy() || l.piRollAction.busy() || l.extRollAction.busy() || l.pushAction.busy()
 }
 
+func (l *Loop) isRestartReplaced() bool {
+	l.restartMu.Lock()
+	defer l.restartMu.Unlock()
+	return l.restartReplaced
+}
+
 // gateRestart is the first action of a pass and is also called by unbounded waits.
 // A refused or current-build request leaves their work running. Only accepted exec
 // relinquishes examination ownership, after bounded mechanical steps finish.
-func (l *Loop) gateRestart(ctx context.Context, result *LoopResult) (bool, string, error) {
+func (l *Loop) gateRestart(ctx context.Context, result *LoopResult) (handled bool, stop string, err error) {
+	defer func() {
+		if err == nil && stop == "" && !l.nonLanding && !l.isRestartReplaced() {
+			err = l.reclaimDetachedGateExaminations(ctx)
+		}
+	}()
 	if l.cfg.Restart == nil {
 		return false, "", nil
 	}

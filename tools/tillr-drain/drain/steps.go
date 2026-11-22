@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -20,7 +21,23 @@ import (
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/record"
+	"github.com/mschulkind-oss/tillr/store"
 )
+
+const (
+	GateFaceFile = "gate.face.json"
+	GateDoneFile = "gate.done.json"
+	gateSpecFile = "gate.spec.json"
+)
+
+func init() {
+	if len(os.Args) > 1 && os.Args[1] == "--tillr-gate-supervisor" {
+		defer store.FlushSQLiteTraceAtExit()
+		code := superviseDetachedGate(os.Args[2:])
+		store.FlushSQLiteTraceAtExit()
+		os.Exit(code)
+	}
+}
 
 // ProcessSteps is the loop's real steps: each one a program the supervisor starts, which is
 // the design's boundary (§5.9) rather than a convenience. `tillr run exec` is the run; the
@@ -275,20 +292,172 @@ func decodeRunRecord(out []byte) (run.Record, string, error) {
 // hole the event log exists to close. An append that fails fails the step — the loop then
 // stops with the gate's judgment unrecorded rather than carrying on as if it were.
 func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutcome, error) {
-	if err := CheckTrunkWorktree(ctx, s.Root); err != nil {
+	handle, err := s.startOrAttachDetachedGate(ctx, candidate)
+	if err != nil {
 		return GateOutcome{}, err
 	}
-	// The spans path is the run's own record, and it travels in the environment rather
-	// than on the command line: the gate program the caller names is a wrapper (the
-	// documented one is `tillr-loop gate`) that composes the real gate call, and a flag it
-	// did not declare would be refused before the gate ever saw it. `fork-check.py` reads
-	// `TILLR_GATE_SPANS_OUT` when it is given no `--spans-out`, so the flag stays the
-	// gate's own explicit spelling and the environment is the drain's hand-off.
+	done, err := s.awaitDetachedGate(ctx, nil, handle)
+	if err != nil {
+		return GateOutcome{}, err
+	}
+	return s.finishDetachedGate(ctx, candidate, handle, done)
+}
+
+func detachedGateDir(root, storePath, worktree, runID string) string {
+	if root != "" {
+		return RunDir(root, runID)
+	}
+	if storePath != "" {
+		return filepath.Join(filepath.Dir(storePath), "gate-runs", runID)
+	}
+	return filepath.Join(worktree, ".git", "tillr-gate", runID)
+}
+
+func (s *ProcessSteps) gateRunDir(candidate Candidate) string {
+	return detachedGateDir(s.Root, s.Store, candidate.Worktree, candidate.RunID)
+}
+
+type detachedGateFace struct {
+	PID                 int    `json:"pid"`
+	StartTicks          string `json:"start_ticks"`
+	OwnerPID            int    `json:"owner_pid"`
+	OwnerStartTicks     string `json:"owner_start_ticks"`
+	Store               string `json:"store,omitempty"`
+	RunID               string `json:"run_id"`
+	ItemID              string `json:"item_id"`
+	LaneID              string `json:"lane_id"`
+	BaseSHA             string `json:"base_sha"`
+	HeadSHA             string `json:"head_sha"`
+	StartedAtMS         int64  `json:"started_at_ms"`
+	PipelineStartedAtMS int64  `json:"pipeline_started_at_ms,omitempty"`
+	MeasureTiming       bool   `json:"measure_timing"`
+}
+
+type detachedGateDone struct {
+	RunID               string   `json:"run_id"`
+	BaseSHA             string   `json:"base_sha"`
+	HeadSHA             string   `json:"head_sha"`
+	Argv                []string `json:"argv"`
+	Cwd                 string   `json:"cwd"`
+	StartedAtMS         int64    `json:"started_at_ms"`
+	FinishedAtMS        int64    `json:"finished_at_ms"`
+	PipelineStartedAtMS int64    `json:"pipeline_started_at_ms,omitempty"`
+	MeasureTiming       bool     `json:"measure_timing"`
+	ExitCode            int      `json:"exit_code"`
+	NotStarted          bool     `json:"not_started,omitempty"`
+	StartError          string   `json:"start_error,omitempty"`
+	Interrupted         bool     `json:"interrupted,omitempty"`
+	StdoutFile          string   `json:"stdout_file"`
+	StderrTail          string   `json:"stderr_tail"`
+}
+
+type detachedGateSpec struct {
+	RunID               string   `json:"run_id"`
+	ItemID              string   `json:"item_id"`
+	LaneID              string   `json:"lane_id"`
+	BaseSHA             string   `json:"base_sha"`
+	HeadSHA             string   `json:"head_sha"`
+	Store               string   `json:"store,omitempty"`
+	Argv                []string `json:"argv"`
+	Env                 []string `json:"env"`
+	Cwd                 string   `json:"cwd"`
+	StdinFile           string   `json:"stdin_file,omitempty"`
+	StdoutFile          string   `json:"stdout_file"`
+	StderrFile          string   `json:"stderr_file"`
+	FaceFile            string   `json:"face_file"`
+	DoneFile            string   `json:"done_file"`
+	OwnerPID            int      `json:"owner_pid"`
+	OwnerStartTicks     string   `json:"owner_start_ticks"`
+	PipelineStartedAtMS int64    `json:"pipeline_started_at_ms,omitempty"`
+	MeasureTiming       bool     `json:"measure_timing"`
+}
+
+type detachedGateHandle struct {
+	dir     string
+	face    detachedGateFace
+	preDone *detachedGateDone
+}
+
+func readDetachedGateFace(dir string) (detachedGateFace, bool) {
+	raw, err := os.ReadFile(filepath.Join(dir, GateFaceFile))
+	if err != nil {
+		return detachedGateFace{}, false
+	}
+	var face detachedGateFace
+	if json.Unmarshal(raw, &face) != nil || face.PID <= 0 || face.StartTicks == "" {
+		return detachedGateFace{}, false
+	}
+	return face, true
+}
+
+func readDetachedGateDone(dir string) (detachedGateDone, bool) {
+	raw, err := os.ReadFile(filepath.Join(dir, GateDoneFile))
+	if err != nil {
+		return detachedGateDone{}, false
+	}
+	var done detachedGateDone
+	if json.Unmarshal(raw, &done) != nil || done.RunID == "" {
+		return detachedGateDone{}, false
+	}
+	return done, true
+}
+
+func hasDetachedGateInDir(dir string, candidate Candidate, matchSHA bool) (live bool, done bool) {
+	if d, ok := readDetachedGateDone(dir); ok {
+		if !d.Interrupted && d.RunID == candidate.RunID && (!matchSHA || (d.BaseSHA == candidate.BaseSHA && d.HeadSHA == candidate.HeadSHA)) {
+			done = true
+		}
+	}
+	if f, ok := readDetachedGateFace(dir); ok {
+		if f.RunID == candidate.RunID && (!matchSHA || (f.BaseSHA == candidate.BaseSHA && f.HeadSHA == candidate.HeadSHA)) {
+			if running, err := heavySupervisorRunning(f.PID, f.StartTicks); err == nil && running {
+				live = true
+			}
+		}
+	}
+	return live, done
+}
+
+func (s *ProcessSteps) hasDetachedGate(candidate Candidate) (live bool, done bool) {
+	return hasDetachedGateInDir(s.gateRunDir(candidate), candidate, true)
+}
+
+func writeJSONAtomic(path string, v any) error {
+	body, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, body, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+func (s *ProcessSteps) startOrAttachDetachedGate(ctx context.Context, candidate Candidate) (detachedGateHandle, error) {
+	if err := CheckTrunkWorktree(ctx, s.Root); err != nil {
+		return detachedGateHandle{}, err
+	}
+	gateDir := s.gateRunDir(candidate)
+	if d, ok := readDetachedGateDone(gateDir); ok {
+		if !d.Interrupted && d.RunID == candidate.RunID && d.BaseSHA == candidate.BaseSHA && d.HeadSHA == candidate.HeadSHA {
+			face, _ := readDetachedGateFace(gateDir)
+			return detachedGateHandle{dir: gateDir, face: face, preDone: &d}, nil
+		}
+	}
+	if f, ok := readDetachedGateFace(gateDir); ok {
+		if f.RunID == candidate.RunID && f.BaseSHA == candidate.BaseSHA && f.HeadSHA == candidate.HeadSHA {
+			if running, err := heavySupervisorRunning(f.PID, f.StartTicks); err == nil && running {
+				return detachedGateHandle{dir: gateDir, face: f}, nil
+			}
+		}
+	}
+
 	env := append(s.forkRootEnv(), "PYTHONDONTWRITEBYTECODE=1")
 	if s.Root != "" {
 		for _, name := range []string{GateSpansFile, GateFastVerdictFile} {
 			if err := os.Remove(filepath.Join(RunDir(s.Root, candidate.RunID), name)); err != nil && !os.IsNotExist(err) {
-				return GateOutcome{}, Externalf("clearing preceding gate measurements: %v", err)
+				return detachedGateHandle{}, Externalf("clearing preceding gate measurements: %v", err)
 			}
 		}
 		env = append(env, "TILLR_GATE_SPANS_OUT="+filepath.Join(RunDir(s.Root, candidate.RunID), GateSpansFile),
@@ -299,24 +468,237 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 	if s.hooks == nil && fork != candidate.BaseRef {
 		program = "python3 " + filepath.Join(s.Root, "tools", "tillr-drain", "fork-gate.py") + " --fork " + fork
 	}
-	// The usual correctness handoffs also serve automatic reverts. Only an
-	// ordinary invocation opts into timing, regardless of the parent's environment.
+	if program == "" {
+		return detachedGateHandle{}, Usagef("the loop was given no program for this step: it cannot judge a candidate without one")
+	}
 	measureTiming := s.Root != "" && fork == candidate.BaseRef && !IsRevertItem(candidate.ItemID) && !candidate.skipFastGateTiming
 	timing := ""
 	if measureTiming {
 		timing = "1"
 	}
 	env = append(env, "TILLR_FORK_DRIFT=1", "TILLR_ORDINARY_GATE_TIMING="+timing)
-	code, outStr, span, err := s.programWithEnv(ctx, "gate", candidate.Worktree, program, candidate, env)
-	// Consume this invocation's files now, even if it could not judge or its
-	// judgment is deferred. A canceled attempt can still have an exit and timing.
-	// The next attempt clears the producer handoffs.
-	if measureTiming {
-		s.recordGateTiming(context.WithoutCancel(ctx), candidate, span)
+
+	if err := os.MkdirAll(gateDir, 0o755); err != nil {
+		return detachedGateHandle{}, Externalf("creating gate directory %s: %v", gateDir, err)
 	}
+	for _, name := range []string{GateFaceFile, GateDoneFile, gateSpecFile, "gate.stdout", "gate.stderr", "gate.stdin"} {
+		if err := os.Remove(filepath.Join(gateDir, name)); err != nil && !os.IsNotExist(err) {
+			return detachedGateHandle{}, Externalf("clearing stale gate state %s: %v", name, err)
+		}
+	}
+
+	argv := s.programArgv(program, candidate)
+	var childArgv []string
+	var childEnv []string
+	var stdinFile string
+	if s.isHookCommand(program) {
+		childArgv = append([]string(nil), argv...)
+		baseEnv := withoutProcessEnv(os.Environ(), "TILLR_SQLITE_TRACE", "PYTHONDONTWRITEBYTECODE")
+		childEnv = append(baseEnv, env...)
+	} else {
+		probeCmd := s.stepCommand(ctx, argv, nil)
+		childArgv = append([]string(nil), probeCmd.Args...)
+		childEnv = append(withoutProcessEnv(probeCmd.Env, "TILLR_SQLITE_TRACE", "PYTHONDONTWRITEBYTECODE"), env...)
+		if s.standardAdapterArg(argv) >= 0 {
+			stdinFile = filepath.Join(gateDir, "gate.stdin")
+			if err := os.WriteFile(stdinFile, []byte(builtAdapter), 0o600); err != nil {
+				return detachedGateHandle{}, Externalf("writing gate adapter stdin: %v", err)
+			}
+		}
+	}
+
+	ownerPID, ownerStartTicks, err := heavySupervisorIdentity()
 	if err != nil {
+		return detachedGateHandle{}, Externalf("reading loop process identity: %v", err)
+	}
+	observation, err := pipelineStart(s.Root, candidate.RunID, "gate")
+	if err != nil {
+		return detachedGateHandle{}, err
+	}
+
+	specPath := filepath.Join(gateDir, gateSpecFile)
+	spec := detachedGateSpec{
+		RunID:               candidate.RunID,
+		ItemID:              candidate.ItemID,
+		LaneID:              candidate.LaneID,
+		BaseSHA:             candidate.BaseSHA,
+		HeadSHA:             candidate.HeadSHA,
+		Store:               s.Store,
+		Argv:                childArgv,
+		Env:                 childEnv,
+		Cwd:                 candidate.Worktree,
+		StdinFile:           stdinFile,
+		StdoutFile:          filepath.Join(gateDir, "gate.stdout"),
+		StderrFile:          filepath.Join(gateDir, "gate.stderr"),
+		FaceFile:            filepath.Join(gateDir, GateFaceFile),
+		DoneFile:            filepath.Join(gateDir, GateDoneFile),
+		OwnerPID:            ownerPID,
+		OwnerStartTicks:     ownerStartTicks,
+		PipelineStartedAtMS: observation.StartedAtMS,
+		MeasureTiming:       measureTiming,
+	}
+	if err := writeJSONAtomic(specPath, spec); err != nil {
+		return detachedGateHandle{}, Externalf("writing gate supervisor spec: %v", err)
+	}
+
+	self, err := os.Executable()
+	if err != nil {
+		return detachedGateHandle{}, Externalf("locating executable for gate supervisor: %v", err)
+	}
+	readyR, readyW, err := os.Pipe()
+	if err != nil {
+		return detachedGateHandle{}, Externalf("creating gate supervisor readiness pipe: %v", err)
+	}
+	cmd := exec.Command(self, "--tillr-gate-supervisor", specPath)
+	cmd.Dir = candidate.Worktree
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	cmd.ExtraFiles = []*os.File{readyW}
+	if err := cmd.Start(); err != nil {
+		_ = readyW.Close()
+		_ = readyR.Close()
+		return detachedGateHandle{}, Externalf("starting gate supervisor: %v", err)
+	}
+	_ = readyW.Close()
+	go func() { _ = cmd.Wait() }()
+
+	var buf [1]byte
+	_, _ = readyR.Read(buf[:])
+	_ = readyR.Close()
+
+	face, ok := readDetachedGateFace(gateDir)
+	if !ok {
+		if d, doneOK := readDetachedGateDone(gateDir); doneOK {
+			return detachedGateHandle{dir: gateDir, preDone: &d}, nil
+		}
+		return detachedGateHandle{}, Externalf("gate supervisor exited before publishing live face for %s", candidate.RunID)
+	}
+	return detachedGateHandle{dir: gateDir, face: face}, nil
+}
+
+func (s *ProcessSteps) awaitDetachedGate(waitCtx context.Context, loop *Loop, handle detachedGateHandle) (detachedGateDone, error) {
+	if handle.preDone != nil {
+		if waitCtx.Err() != nil {
+			if loop != nil && loop.isRestartReplaced() {
+				return detachedGateDone{}, waitCtx.Err()
+			}
+			s.stopDetachedGate(handle)
+			return detachedGateDone{}, waitCtx.Err()
+		}
+		return *handle.preDone, nil
+	}
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if d, ok := readDetachedGateDone(handle.dir); ok {
+			return d, nil
+		}
+		if handle.face.PID > 0 {
+			running, err := heavySupervisorRunning(handle.face.PID, handle.face.StartTicks)
+			if err == nil && !running {
+				if d, ok := readDetachedGateDone(handle.dir); ok {
+					return d, nil
+				}
+				return detachedGateDone{}, Externalf("gate supervisor %d exited without writing %s", handle.face.PID, GateDoneFile)
+			}
+		}
+		select {
+		case <-waitCtx.Done():
+			if loop != nil && loop.isRestartReplaced() {
+				return detachedGateDone{}, waitCtx.Err()
+			}
+			s.stopDetachedGate(handle)
+			return detachedGateDone{}, waitCtx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *ProcessSteps) stopDetachedGate(handle detachedGateHandle) {
+	if handle.face.PID > 0 && handle.face.StartTicks != "" {
+		if running, err := heavySupervisorRunning(handle.face.PID, handle.face.StartTicks); err == nil && running {
+			_ = syscall.Kill(handle.face.PID, syscall.SIGTERM)
+		}
+		for {
+			running, err := heavySupervisorRunning(handle.face.PID, handle.face.StartTicks)
+			if err != nil || !running {
+				break
+			}
+			time.Sleep(15 * time.Millisecond)
+		}
+	}
+	for _, name := range []string{GateFaceFile, GateDoneFile, gateSpecFile, "gate.stdin"} {
+		_ = os.Remove(filepath.Join(handle.dir, name))
+	}
+}
+
+func (s *ProcessSteps) finishDetachedGate(ctx context.Context, candidate Candidate, handle detachedGateHandle, done detachedGateDone) (GateOutcome, error) {
+	for _, name := range []string{GateFaceFile, GateDoneFile, gateSpecFile, "gate.stdin"} {
+		_ = os.Remove(filepath.Join(handle.dir, name))
+	}
+	if s.Root != "" && done.PipelineStartedAtMS > 0 {
+		obs := pipelineObservation{Step: "gate", StartedAtMS: done.PipelineStartedAtMS}
+		if err := pipelineFinish(s.Root, candidate.RunID, obs); err != nil {
+			return GateOutcome{}, err
+		}
+	}
+	argv0 := ""
+	if len(done.Argv) > 0 {
+		argv0 = done.Argv[0]
+	}
+	if done.NotStarted {
+		span := stepSpan("gate", done.Argv, &exec.Cmd{Dir: done.Cwd}, done.StartedAtMS, done.StderrTail)
+		span.FinishedAtMS = done.FinishedAtMS
+		if err := s.recordStep(candidate.RunID, span); err != nil {
+			return GateOutcome{}, err
+		}
+		if done.MeasureTiming {
+			s.recordGateTiming(context.WithoutCancel(ctx), candidate, span)
+		}
+		return GateOutcome{}, Externalf("running %q in %s: %s: %s", argv0, candidate.Worktree, done.StartError, done.StderrTail)
+	}
+	var exitCodePtr *int
+	if done.ExitCode >= 0 {
+		code := done.ExitCode
+		exitCodePtr = &code
+	}
+	span := StepSpan{
+		Step:         "gate",
+		Argv:         done.Argv,
+		Cwd:          done.Cwd,
+		StartedAtMS:  done.StartedAtMS,
+		FinishedAtMS: done.FinishedAtMS,
+		ExitCode:     exitCodePtr,
+		StderrTail:   done.StderrTail,
+	}
+	if err := s.recordStep(candidate.RunID, span); err != nil {
 		return GateOutcome{}, err
 	}
+	if done.MeasureTiming {
+		s.recordGateTiming(context.WithoutCancel(ctx), candidate, span)
+	}
+	if ctx.Err() != nil {
+		return GateOutcome{}, ctx.Err()
+	}
+	if done.Interrupted {
+		return GateOutcome{}, Externalf("running %q in %s: gate supervisor interrupted: %s", argv0, candidate.Worktree, done.StderrTail)
+	}
+	if done.ExitCode < 0 {
+		return GateOutcome{}, Externalf("running %q in %s: exit %d: %s", argv0, candidate.Worktree, done.ExitCode, done.StderrTail)
+	}
+	var outBytes []byte
+	if done.StdoutFile != "" {
+		if raw, err := os.ReadFile(done.StdoutFile); err == nil {
+			outBytes = raw
+		} else if !os.IsNotExist(err) {
+			return GateOutcome{}, Externalf("reading gate stdout: %v", err)
+		}
+	}
+	outStr := string(outBytes)
+	if done.ExitCode == record.ExitUsage {
+		return GateOutcome{}, Usagef("configuration fault: %s program %q refused its arguments for %s%s", "gate", s.GateProgram, candidate.ItemID, stderrReason(span))
+	}
+
+	code := done.ExitCode
 	outcome := GateOutcome{
 		Outcome:    GateErrored,
 		DurationMS: span.FinishedAtMS - span.StartedAtMS,
@@ -338,6 +720,7 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 		}
 	case GateStallExit:
 		outcome.Outcome = GateStalled
+		var err error
 		outcome.StalledChecks, err = s.gateStallContext(candidate)
 		if err != nil {
 			return GateOutcome{}, err
@@ -385,6 +768,7 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 	}
 	var firstStall *gateStallHold
 	if outcome.Outcome == GateStalled {
+		var err error
 		firstStall, err = s.firstStallHold(ctx, candidate, outcome.StalledChecks)
 		if err != nil {
 			return GateOutcome{}, err
@@ -414,6 +798,197 @@ func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutco
 	}
 	outcome.StallHeld = firstStall != nil
 	return outcome, nil
+}
+
+func readStderrTailFile(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var tail stderrTail
+	_, _ = tail.Write(raw)
+	return tail.String()
+}
+
+func superviseDetachedGate(args []string) int {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "gate supervisor needs a spec path")
+		return 2
+	}
+	ready := os.NewFile(3, "gate ready pipe")
+	raw, err := os.ReadFile(args[0])
+	if err != nil {
+		_ = ready.Close()
+		fmt.Fprintln(os.Stderr, "gate supervisor reading spec:", err)
+		return 4
+	}
+	var spec detachedGateSpec
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		_ = ready.Close()
+		fmt.Fprintln(os.Stderr, "gate supervisor decoding spec:", err)
+		return 4
+	}
+	if err := prepareHeavyTree(); err != nil {
+		_ = ready.Close()
+		fmt.Fprintln(os.Stderr, "gate supervisor subreaper:", err)
+		return 4
+	}
+	pid, startTicks, err := heavySupervisorIdentity()
+	if err != nil {
+		_ = ready.Close()
+		fmt.Fprintln(os.Stderr, "gate supervisor identity:", err)
+		return 4
+	}
+	startedAt := time.Now().UnixMilli()
+	face := detachedGateFace{
+		PID:                 pid,
+		StartTicks:          startTicks,
+		OwnerPID:            spec.OwnerPID,
+		OwnerStartTicks:     spec.OwnerStartTicks,
+		Store:               spec.Store,
+		RunID:               spec.RunID,
+		ItemID:              spec.ItemID,
+		LaneID:              spec.LaneID,
+		BaseSHA:             spec.BaseSHA,
+		HeadSHA:             spec.HeadSHA,
+		StartedAtMS:         startedAt,
+		PipelineStartedAtMS: spec.PipelineStartedAtMS,
+		MeasureTiming:       spec.MeasureTiming,
+	}
+	if err := writeJSONAtomic(spec.FaceFile, face); err != nil {
+		_ = ready.Close()
+		fmt.Fprintln(os.Stderr, "gate supervisor writing face:", err)
+		return 4
+	}
+	_ = ready.Close()
+
+	done := detachedGateDone{
+		RunID:               spec.RunID,
+		BaseSHA:             spec.BaseSHA,
+		HeadSHA:             spec.HeadSHA,
+		Argv:                spec.Argv,
+		Cwd:                 spec.Cwd,
+		StartedAtMS:         startedAt,
+		PipelineStartedAtMS: spec.PipelineStartedAtMS,
+		MeasureTiming:       spec.MeasureTiming,
+		ExitCode:            -1,
+		StdoutFile:          spec.StdoutFile,
+	}
+	if len(spec.Argv) == 0 {
+		done.NotStarted = true
+		done.StartError = "empty gate argv"
+		done.FinishedAtMS = time.Now().UnixMilli()
+		_ = writeJSONAtomic(spec.DoneFile, done)
+		return 0
+	}
+	stdoutFile, err := os.Create(spec.StdoutFile)
+	if err != nil {
+		done.NotStarted = true
+		done.StartError = err.Error()
+		done.FinishedAtMS = time.Now().UnixMilli()
+		_ = writeJSONAtomic(spec.DoneFile, done)
+		return 0
+	}
+	stderrFile, err := os.Create(spec.StderrFile)
+	if err != nil {
+		_ = stdoutFile.Close()
+		done.NotStarted = true
+		done.StartError = err.Error()
+		done.FinishedAtMS = time.Now().UnixMilli()
+		_ = writeJSONAtomic(spec.DoneFile, done)
+		return 0
+	}
+	var stdinFile *os.File
+	if spec.StdinFile != "" {
+		stdinFile, err = os.Open(spec.StdinFile)
+		if err != nil {
+			_ = stdoutFile.Close()
+			_ = stderrFile.Close()
+			done.NotStarted = true
+			done.StartError = err.Error()
+			done.FinishedAtMS = time.Now().UnixMilli()
+			_ = writeJSONAtomic(spec.DoneFile, done)
+			return 0
+		}
+	}
+
+	child := exec.Command(spec.Argv[0], spec.Argv[1:]...)
+	child.Dir = spec.Cwd
+	child.Env = spec.Env
+	child.Stdout = stdoutFile
+	child.Stderr = stderrFile
+	if stdinFile != nil {
+		child.Stdin = stdinFile
+	}
+	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	startedCh := make(chan int, 1)
+	stopReaping := reapWhileSupervising(startedCh)
+	startErr := child.Start()
+	if startErr != nil {
+		stopReaping()
+		_ = stdoutFile.Close()
+		_ = stderrFile.Close()
+		if stdinFile != nil {
+			_ = stdinFile.Close()
+		}
+		_ = finishHeavyTree()
+		done.NotStarted = true
+		done.StartError = startErr.Error()
+		done.FinishedAtMS = time.Now().UnixMilli()
+		done.StderrTail = readStderrTailFile(spec.StderrFile)
+		_ = writeJSONAtomic(spec.DoneFile, done)
+		return 0
+	}
+	startedCh <- child.Process.Pid
+
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- child.Wait() }()
+
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	ticker := time.NewTicker(50 * time.Millisecond)
+
+waitLoop:
+	for {
+		select {
+		case <-waitDone:
+			break waitLoop
+		case <-sigCh:
+			done.Interrupted = true
+		case <-ticker.C:
+			if spec.OwnerPID > 0 && spec.OwnerStartTicks != "" {
+				if running, err := heavySupervisorRunning(spec.OwnerPID, spec.OwnerStartTicks); err == nil && !running {
+					done.Interrupted = true
+				}
+			}
+		}
+		if done.Interrupted {
+			if pgid := child.Process.Pid; pgid > 0 {
+				_ = syscall.Kill(-pgid, syscall.SIGKILL)
+			}
+			<-waitDone
+			break waitLoop
+		}
+	}
+	ticker.Stop()
+	signal.Stop(sigCh)
+	stopReaping()
+
+	_ = stdoutFile.Close()
+	_ = stderrFile.Close()
+	if stdinFile != nil {
+		_ = stdinFile.Close()
+	}
+	_ = finishHeavyTree()
+
+	done.FinishedAtMS = time.Now().UnixMilli()
+	if child.ProcessState != nil {
+		done.ExitCode = child.ProcessState.ExitCode()
+	}
+	done.StderrTail = readStderrTailFile(spec.StderrFile)
+	_ = writeJSONAtomic(spec.DoneFile, done)
+	return 0
 }
 
 // LandOutcome is what the land program answered: the result the lander recorded, the
