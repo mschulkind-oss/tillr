@@ -173,6 +173,9 @@ func (l *Loop) resolveStaleFixer(ctx context.Context, fixer, tip string, checks 
 		return appendEffect(tx, FixerProvedKind, fixer, fixerProof{FixerItem: fixer, Green: tip, ProvedAt: at.Format("2006-01-02T15:04:05.000Z"), Checks: checks}, at)
 	})
 	if err == nil {
+		if recErr := recordTrunkRepair(ctx, l.cfg.Root, tip, "trunk fixer "+fixer+" resolved at "+shortSHA(tip)); recErr != nil {
+			l.reportf("loop: %s trunk repair at %s not recorded: %v\n", fixer, shortSHA(tip), recErr)
+		}
 		l.reportf("loop: %s resolved: %s\n", fixer, reason)
 	}
 	return err

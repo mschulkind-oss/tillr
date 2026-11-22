@@ -90,6 +90,9 @@ func (l *Loop) routeObstacle(ctx context.Context, d Decision, req run.Request, l
 		if err == nil && reading.RepairedAt != "" {
 			// The checks are red only on the base this run started from: the trunk is
 			// repaired at its tip. The same session continues, on the tip.
+			if recErr := recordTrunkRepair(ctx, l.cfg.Root, reading.RepairedAt, "trunk repaired at "+shortSHA(reading.RepairedAt)); recErr != nil {
+				l.reportf("loop: %s trunk repair at %s not recorded: %v\n", req.ItemID, shortSHA(reading.RepairedAt), recErr)
+			}
 			oldBase := candidate.BaseSHA
 			moved, moveErr := l.moveLaneOntoTip(ctx, lane, head, reading.RepairedAt)
 			if moveErr != nil {

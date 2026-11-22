@@ -181,6 +181,11 @@ func (r HeavyRunner) retainRedRepairs(ctx context.Context, run *HeavyRun, order 
 			}
 			note := "repair deferred to proof of " + shortSHA(tip) + ": " + reason
 			r.progressf("loop: heavy %s at %s: %s\n", check.CheckID, shortSHA(run.TipSHA), note)
+			if ancestor {
+				if recErr := recordTrunkRepair(ctx, r.Root, tip, note); recErr != nil {
+					r.progressf("loop: heavy %s trunk repair at %s not recorded: %v\n", check.CheckID, shortSHA(tip), recErr)
+				}
+			}
 			for i := range run.Checks {
 				if run.Checks[i].CheckID == check.CheckID {
 					run.Checks[i].Detail = joinDetail(check.Detail, note)

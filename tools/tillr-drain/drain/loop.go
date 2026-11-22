@@ -2883,6 +2883,16 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			} else {
 				candidate = rebased
 			}
+			if rebased, err := l.preRebaseRepairedTrunk(ctx, candidate); err != nil {
+				if conflict := asCandidateRebaseConflict(err); conflict != nil {
+					l.reportf("loop: %s does not rebase onto %s before gate (%s); the rebase is aborted\n",
+						candidate.ItemID, shortSHA(conflict.Tip), strings.Join(conflictPaths(conflict.Reports), ", "))
+					return l.conflictFix(ctx, candidate, LandOutcome{Result: LandSquashConflict, ConflictPaths: conflict.Reports}, result, timing)
+				}
+				return "", false, err
+			} else {
+				candidate = rebased
+			}
 		}
 		if retitled, err := l.retitleIntermittentFixer(ctx, candidate); err != nil {
 			return "", false, err
@@ -3447,6 +3457,17 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	}
 	if err := l.completeItem(ctx, candidate); err != nil {
 		return "", false, err
+	}
+	if IsTrunkFixer(candidate.ItemID) && l.cfg.Root != "" {
+		repaired := landed.TrunkAfter
+		if repaired == "" {
+			repaired, _ = l.revParse(ctx, l.cfg.Root, TrunkRef)
+		}
+		if repaired != "" {
+			if recErr := recordTrunkRepair(ctx, l.cfg.Root, repaired, "trunk fixer "+candidate.ItemID+" landed"); recErr != nil {
+				l.reportf("loop: landed %s but could not record trunk repair at %s: %v\n", candidate.ItemID, shortSHA(repaired), recErr)
+			}
+		}
 	}
 	l.mu.Lock()
 	result.Landed++

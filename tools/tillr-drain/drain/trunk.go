@@ -813,6 +813,9 @@ func (l *Loop) settleTrunkAlreadyRed(ctx context.Context, candidate *Candidate, 
 		return "", false, err
 	}
 	if reading.RepairedAt != "" {
+		if recErr := recordTrunkRepair(ctx, l.cfg.Root, reading.RepairedAt, "trunk repaired at "+shortSHA(reading.RepairedAt)); recErr != nil {
+			l.reportf("loop: %s trunk repair at %s not recorded: %v\n", candidate.ItemID, shortSHA(reading.RepairedAt), recErr)
+		}
 		from := candidate.WorkerHeadSHA
 		if from == "" {
 			from = candidate.HeadSHA

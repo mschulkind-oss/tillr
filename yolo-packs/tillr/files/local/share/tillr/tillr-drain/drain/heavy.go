@@ -508,6 +508,13 @@ func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, erro
 	if err != nil {
 		return run, err
 	}
+	for _, check := range run.Checks {
+		if check.RevertedBy != "" {
+			if recErr := recordTrunkRepair(ctx, r.Root, check.RevertedBy, "reverted "+shortSHA(check.FirstRedLanding)); recErr != nil {
+				r.progressf("loop: heavy %s trunk repair at %s not recorded: %v\n", check.CheckID, shortSHA(check.RevertedBy), recErr)
+			}
+		}
+	}
 	if r.Fix != nil {
 		order, err = r.retainRedRepairs(ctx, &run, order, byLanding)
 		if err != nil {
