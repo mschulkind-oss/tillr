@@ -34,6 +34,7 @@ const help = `Usage:
   tillr watch rule tune ID --store PATH --rules DIR --by ACTOR --set KEY=TOML [--set KEY=TOML ...]
   tillr watch rule reset ID --store PATH --rules DIR --by ACTOR
   tillr watch rule export --store PATH --rules DIR
+  tillr watch lint [<repo-or-dir>] [--charter <path>] [--workflows <path>] [--policy <path>]... [--rules <path>]
 
 Watch reports conditions from store events. It never executes guidance or dispatches a run.
 `
@@ -71,6 +72,8 @@ func runWithTicks(ctx context.Context, args []string, out, stderr io.Writer, tic
 			return fail(err)
 		}
 		return 0
+	case "lint":
+		return runLint(ctx, args[1:], out, stderr)
 	}
 	f := flag.NewFlagSet(face, flag.ContinueOnError)
 	f.SetOutput(io.Discard)

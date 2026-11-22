@@ -1,0 +1,845 @@
+package watch
+
+import (
+	"fmt"
+	"io/fs"
+	"maps"
+	"os"
+	"path/filepath"
+	"slices"
+	"sort"
+	"strings"
+	"unicode"
+
+	"github.com/pelletier/go-toml/v2"
+)
+
+type lintedRule struct {
+	source string
+	rule   Rule
+}
+
+func resolveRulesDir(absRoot, rulesPath string) (string, bool) {
+	if rulesPath != "" {
+		info, err := os.Stat(rulesPath)
+		if err == nil && info.IsDir() {
+			return rulesPath, true
+		}
+		return "", false
+	}
+	defaultDir := filepath.Join(absRoot, "config", "tillr", "watch")
+	info, err := os.Stat(defaultDir)
+	if err == nil && info.IsDir() {
+		return defaultDir, true
+	}
+	return "", false
+}
+
+func discoverAndLoadRules(absRoot, rulesPath string, kinds map[string]bool, fc *findingCollector) []lintedRule {
+	var paths []string
+	if rulesPath != "" {
+		linfo, err := os.Lstat(rulesPath)
+		if err != nil {
+			fc.add(rulesPath, CodeWatchLintInput, fmt.Sprintf("rules %q: %v", rulesPath, err))
+			return nil
+		}
+		if linfo.Mode()&fs.ModeSymlink != 0 {
+			fc.add(rulesPath, CodeWatchLintRuleSchema, "rule file must not be a symlink")
+			return nil
+		}
+		if linfo.IsDir() {
+			paths = walkRuleFiles(rulesPath, fc)
+		} else {
+			paths = []string{rulesPath}
+		}
+	} else {
+		defaultDir := filepath.Join(absRoot, "config", "tillr", "watch")
+		linfo, err := os.Lstat(defaultDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			fc.add(defaultDir, CodeWatchLintInput, fmt.Sprintf("rules %q: %v", defaultDir, err))
+			return nil
+		}
+		if !linfo.IsDir() {
+			fc.add(defaultDir, CodeWatchLintInput, fmt.Sprintf("rules %q must be a directory", defaultDir))
+			return nil
+		}
+		paths = walkRuleFiles(defaultDir, fc)
+	}
+
+	seenIDs := make(map[string]string)
+	var out []lintedRule
+	for _, p := range paths {
+		out = append(out, lintRuleFile(p, kinds, seenIDs, fc)...)
+	}
+	return out
+}
+
+func walkRuleFiles(dir string, fc *findingCollector) []string {
+	var files []string
+	_ = filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			fc.add(path, CodeWatchLintInput, err.Error())
+			return nil
+		}
+		if entry.Type()&fs.ModeSymlink != 0 {
+			if filepath.Ext(path) == ".toml" || entry.IsDir() {
+				fc.add(path, CodeWatchLintRuleSchema, "rule file must not be a symlink")
+			}
+			return nil
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".toml" {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	})
+	sort.Strings(files)
+	return files
+}
+
+func lintRuleFile(path string, kinds map[string]bool, seenIDs map[string]string, fc *findingCollector) []lintedRule {
+	linfo, err := os.Lstat(path)
+	if err != nil {
+		fc.add(path, CodeWatchLintInput, fmt.Sprintf("rules %q: %v", path, err))
+		return nil
+	}
+	if linfo.Mode()&fs.ModeSymlink != 0 {
+		fc.add(path, CodeWatchLintRuleSchema, "rule file must not be a symlink")
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fc.add(path, CodeWatchLintInput, fmt.Sprintf("reading %q: %v", path, err))
+		return nil
+	}
+	var doc map[string]any
+	if err := toml.Unmarshal(data, &doc); err != nil {
+		fc.add(path, CodeWatchLintRuleSchema, fmt.Sprintf("TOML syntax: %v", err))
+		return nil
+	}
+	for _, k := range slices.Sorted(maps.Keys(doc)) {
+		if k != "rule" {
+			fc.add(path, CodeWatchLintRuleSchema, fmt.Sprintf("unknown top-level key %q", k))
+		}
+	}
+	raw, present := doc["rule"]
+	if !present {
+		return nil
+	}
+	tables, ok := raw.([]any)
+	if !ok {
+		fc.add(path, CodeWatchLintRuleSchema, "rule: expected [[rule]] entries")
+		return nil
+	}
+	var out []lintedRule
+	for i, elem := range tables {
+		table, ok := elem.(map[string]any)
+		if !ok {
+			fc.add(path, CodeWatchLintRuleSchema, fmt.Sprintf("rule[%d]: expected a rule table", i))
+			continue
+		}
+		rule := lintOneRuleTable(path, i, table, kinds, seenIDs, fc)
+		out = append(out, lintedRule{source: path, rule: rule})
+	}
+	return out
+}
+
+func lintOneRuleTable(path string, index int, table map[string]any, kinds map[string]bool, seenIDs map[string]string, fc *findingCollector) Rule {
+	id, _ := table["id"].(string)
+	label := fmt.Sprintf("rule[%d]", index)
+	if id != "" {
+		label = fmt.Sprintf("rule %q", id)
+	}
+	emit := func(code, msg string) {
+		fc.add(path, code, fmt.Sprintf("%s: %s", label, msg))
+	}
+
+	// Check for any "remedy" key recursively first.
+	checkNoRemedy(table, "", func(keyPath string) {
+		emit(CodeWatchLintForbiddenRemedy, fmt.Sprintf("%s: remedies are not allowed", keyPath))
+	})
+
+	for _, k := range slices.Sorted(maps.Keys(table)) {
+		switch k {
+		case "id", "enabled", "scope", "severity", "reads", "when", "guidance", "delivery", "remedy":
+		default:
+			emit(CodeWatchLintRuleSchema, fmt.Sprintf("%s: unknown key", k))
+		}
+	}
+
+	var r Rule
+	r.Enabled = true
+	if rawID, ok := table["id"].(string); !ok || rawID == "" {
+		emit(CodeWatchLintRuleSchema, "id: expected a non-empty string")
+	} else {
+		r.ID = rawID
+		if len(rawID) > 128 {
+			emit(CodeWatchLintRuleSchema, "id: must be at most 128 bytes")
+		}
+		if prev, dup := seenIDs[rawID]; dup {
+			emit(CodeWatchLintRuleSchema, fmt.Sprintf("id: duplicate rule ID (first in %s)", fc.formatSource(prev)))
+		} else {
+			seenIDs[rawID] = path
+		}
+	}
+
+	if rawEnabled, present := table["enabled"]; present {
+		b, ok := rawEnabled.(bool)
+		if !ok {
+			emit(CodeWatchLintRuleSchema, "enabled: expected a boolean")
+		} else {
+			r.Enabled = b
+		}
+	}
+
+	if scope, ok := table["scope"].(string); !ok || scope == "" {
+		emit(CodeWatchLintUnknownStage, "scope: expected core, charter:<name> or workflow:<name>")
+	} else {
+		r.Scope = scope
+		prefix, name, _ := strings.Cut(scope, ":")
+		if scope != "core" && !((prefix == "charter" || prefix == "workflow") && name != "") {
+			emit(CodeWatchLintUnknownStage, fmt.Sprintf("scope: invalid scope %q (expected core, charter:<name> or workflow:<name>)", scope))
+		}
+	}
+
+	if sev, ok := table["severity"].(string); !ok || !slices.Contains([]string{"info", "warning", "high"}, sev) {
+		emit(CodeWatchLintRuleSchema, "severity: expected info, warning or high")
+	} else {
+		r.Severity = sev
+	}
+
+	// Determine pattern early for reads validation.
+	whenMap, whenOK := table["when"].(map[string]any)
+	pattern, _ := "", false
+	if whenOK {
+		pattern, _ = whenMap["pattern"].(string)
+	}
+
+	// [rule.reads]
+	refs := make(map[string]bool)
+	readsMap, readsOK := table["reads"].(map[string]any)
+	if !readsOK {
+		emit(CodeWatchLintUnknownSignal, "reads: expected a table")
+	} else {
+		for _, k := range slices.Sorted(maps.Keys(readsMap)) {
+			if k != "events" && k != "projections" {
+				emit(CodeWatchLintUnknownSignal, fmt.Sprintf("reads.%s: unknown key", k))
+			}
+		}
+		if rawEv, present := readsMap["events"]; present {
+			evList, ok := tomlStringList(rawEv)
+			if !ok {
+				emit(CodeWatchLintUnknownSignal, "reads.events: expected a list of strings")
+			} else {
+				r.Reads.Events = evList
+				for _, ev := range evList {
+					if ev == "" {
+						emit(CodeWatchLintUnknownSignal, "reads.events: empty event kind")
+					} else if !kinds[ev] {
+						emit(CodeWatchLintUnknownSignal, fmt.Sprintf("reads.events: unregistered event kind %q", ev))
+					}
+				}
+			}
+		}
+		if rawProj, present := readsMap["projections"]; present {
+			projList, ok := tomlStringList(rawProj)
+			if !ok {
+				emit(CodeWatchLintUnknownSignal, "reads.projections: expected a list of strings")
+			} else {
+				r.Reads.Projections = projList
+				for _, proj := range projList {
+					switch {
+					case proj == "items" || proj == "charter":
+					case strings.HasPrefix(proj, "git_refs:"):
+						list := strings.TrimPrefix(proj, "git_refs:")
+						if list == "" {
+							emit(CodeWatchLintUnknownSignal, fmt.Sprintf("reads.projections: empty git_refs list in %q", proj))
+						} else {
+							for ref := range strings.SplitSeq(list, ",") {
+								if !validRef(ref) {
+									emit(CodeWatchLintUnknownSignal, fmt.Sprintf("reads.projections: invalid Git ref %q in %q", ref, proj))
+								} else {
+									refs[ref] = true
+								}
+							}
+						}
+					default:
+						emit(CodeWatchLintUnknownSignal, fmt.Sprintf("reads.projections: unknown projection %q", proj))
+					}
+				}
+			}
+		}
+		if pattern != LagBehind && len(r.Reads.Events) == 0 {
+			emit(CodeWatchLintUnknownSignal, "reads.events: expected a non-empty list of event kinds")
+		}
+		if pattern == LagBehind && len(r.Reads.Events) == 0 && len(r.Reads.Projections) == 0 {
+			emit(CodeWatchLintUnknownSignal, "reads: lag_behind requires events or projections")
+		}
+	}
+
+	// [rule.when]
+	if !whenOK {
+		emit(CodeWatchLintRuleSchema, "when: expected a table")
+	} else {
+		r.When = lintRuleWhen(whenMap, r.Scope, r.Reads, refs, kinds, emit)
+	}
+
+	// [rule.guidance]
+	guidanceMap, gOK := table["guidance"].(map[string]any)
+	if !gOK {
+		emit(CodeWatchLintEmptyGuidance, "guidance: expected a table")
+	} else {
+		r.Guidance = lintRuleGuidance(guidanceMap, r.When.Pattern, emit)
+	}
+
+	// [rule.delivery]
+	deliveryMap, dOK := table["delivery"].(map[string]any)
+	if !dOK {
+		emit(CodeWatchLintForbiddenRemedy, "delivery: expected a table")
+	} else {
+		r.Delivery = lintRuleDelivery(deliveryMap, emit)
+	}
+
+	return r
+}
+
+func checkNoRemedy(raw any, path string, onRemedy func(string)) {
+	switch node := raw.(type) {
+	case map[string]any:
+		for _, k := range slices.Sorted(maps.Keys(node)) {
+			key := path + k
+			if k == "remedy" {
+				onRemedy(key)
+				continue
+			}
+			checkNoRemedy(node[k], key+".", onRemedy)
+		}
+	case []any:
+		for i, elem := range node {
+			checkNoRemedy(elem, fmt.Sprintf("%s[%d].", strings.TrimSuffix(path, "."), i), onRemedy)
+		}
+	}
+}
+
+func tomlStringList(raw any) ([]string, bool) {
+	arr, ok := raw.([]any)
+	if !ok {
+		return nil, false
+	}
+	out := make([]string, len(arr))
+	for i, v := range arr {
+		s, ok := v.(string)
+		if !ok {
+			return nil, false
+		}
+		out[i] = s
+	}
+	return out, true
+}
+
+func lintRuleWhen(whenMap map[string]any, scope string, reads Reads, refs map[string]bool, kinds map[string]bool, emit func(string, string)) When {
+	var w When
+	pattern, ok := whenMap["pattern"].(string)
+	if !ok || pattern == "" {
+		emit(CodeWatchLintRuleSchema, "when.pattern: expected a non-empty string")
+		return w
+	}
+	w.Pattern = pattern
+
+	// group_by
+	if rawGB, present := whenMap["group_by"]; !present {
+		emit(CodeWatchLintRuleSchema, "when.group_by: expected a non-empty string or list of strings")
+	} else {
+		switch gb := rawGB.(type) {
+		case string:
+			if gb == "" || !validEventPath(gb) {
+				emit(CodeWatchLintRuleSchema, "when.group_by: expected a non-empty valid event path")
+			} else if isForbiddenGroupByColumn(gb) {
+				emit(CodeWatchLintForbiddenRemedy, fmt.Sprintf("when.group_by: integer column %q cannot be used as group_by", gb))
+			} else {
+				w.GroupBy = gb
+			}
+		case []any:
+			list, ok := tomlStringList(gb)
+			if !ok || len(list) == 0 {
+				emit(CodeWatchLintRuleSchema, "when.group_by: expected a non-empty list of strings")
+			} else {
+				seen := make(map[string]bool)
+				for _, col := range list {
+					if col == "" || col == "global" || !validEventPath(col) {
+						emit(CodeWatchLintRuleSchema, fmt.Sprintf("when.group_by: invalid entry %q", col))
+					} else if isForbiddenGroupByColumn(col) {
+						emit(CodeWatchLintForbiddenRemedy, fmt.Sprintf("when.group_by: integer column %q cannot be used as group_by", col))
+					}
+					if seen[col] {
+						emit(CodeWatchLintRuleSchema, fmt.Sprintf("when.group_by: duplicate entry %q", col))
+					}
+					seen[col] = true
+				}
+				if len(list) == 1 {
+					w.GroupBy = list[0]
+				} else {
+					w.GroupBy = strings.Join(list, ", ")
+					w.GroupByList = list
+				}
+			}
+		default:
+			emit(CodeWatchLintRuleSchema, "when.group_by: expected a non-empty string or list of strings")
+		}
+	}
+
+	if namedScope(scope, "workflow:") != "" {
+		if w.GroupBy == "global" || len(w.GroupByList) >= 2 {
+			emit(CodeWatchLintRuleSchema, "when.group_by: named workflow scope requires a single non-global subject")
+		}
+	}
+
+	if pattern == LagBehind {
+		allowed := []string{"group_by", "pattern", "leader", "follower", "threshold_commits", "threshold_duration", "mode"}
+		for _, k := range slices.Sorted(maps.Keys(whenMap)) {
+			if k != "remedy" && !slices.Contains(allowed, k) {
+				emit(CodeWatchLintRuleSchema, fmt.Sprintf("when.%s: unknown key", k))
+			}
+		}
+		if len(w.GroupByList) >= 2 || (w.GroupBy != "" && w.GroupBy != "global") {
+			emit(CodeWatchLintRuleSchema, "when.group_by: lag_behind requires global")
+		}
+		leader, _ := whenMap["leader"].(string)
+		follower, _ := whenMap["follower"].(string)
+		if !validRef(leader) || !refs[leader] {
+			emit(CodeWatchLintRuleSchema, "when.leader: expected a full ref name listed in reads.projections")
+		}
+		if !validRef(follower) || !refs[follower] {
+			emit(CodeWatchLintRuleSchema, "when.follower: expected a full ref name listed in reads.projections")
+		}
+		if leader != "" && leader == follower {
+			emit(CodeWatchLintRuleSchema, "when.follower: must differ from leader")
+		}
+		w.Leader, w.Follower = leader, follower
+
+		_, hasCommits := whenMap["threshold_commits"]
+		_, hasDur := whenMap["threshold_duration"]
+		if !hasCommits && !hasDur {
+			emit(CodeWatchLintRuleSchema, "when.threshold_commits: threshold_commits or threshold_duration is required")
+		}
+		if hasCommits {
+			n, ok := whenMap["threshold_commits"].(int64)
+			if !ok || n < 1 {
+				emit(CodeWatchLintForbiddenRemedy, "when.threshold_commits: expected a positive integer >= 1")
+			} else {
+				w.ThresholdCommits = n
+			}
+		}
+		if hasDur {
+			s, ok := whenMap["threshold_duration"].(string)
+			d := parseWindow(s)
+			if !ok || d <= 0 {
+				emit(CodeWatchLintForbiddenRemedy, "when.threshold_duration: expected a positive whole-number duration in s, m or h")
+			} else {
+				w.ThresholdDuration = d
+			}
+		}
+		if rawMode, present := whenMap["mode"]; present {
+			m, ok := rawMode.(string)
+			if !hasCommits || !hasDur {
+				emit(CodeWatchLintRuleSchema, "when.mode: requires both threshold_commits and threshold_duration")
+			}
+			if !ok || (m != "any" && m != "all") {
+				emit(CodeWatchLintRuleSchema, "when.mode: expected any or all")
+			}
+			w.Mode = m
+		}
+		return w
+	}
+
+	if rawFP, present := whenMap["fingerprint"]; present {
+		fp, ok := tomlStringList(rawFP)
+		if !ok || len(fp) == 0 {
+			emit(CodeWatchLintRuleSchema, "when.fingerprint: expected a non-empty list of strings")
+		} else {
+			for _, name := range fp {
+				if name == "" || !validEventPath(name) || strings.HasPrefix(name, "event.") {
+					emit(CodeWatchLintRuleSchema, fmt.Sprintf("when.fingerprint: invalid event path %q", name))
+				}
+			}
+			w.Fingerprint = fp
+		}
+	}
+
+	allowed := []string{"group_by", "pattern", "clear_when", "window", "fingerprint"}
+	switch pattern {
+	case DurationWithoutEvent:
+		allowed = append(allowed, "after", "match", "threshold_duration")
+		w.After = lintRuleExpr(whenMap, "after", true, w.GroupBy, reads, refs, kinds, emit)
+		w.Match = lintRuleExpr(whenMap, "match", false, w.GroupBy, reads, refs, kinds, emit)
+		s, ok := whenMap["threshold_duration"].(string)
+		d := parseWindow(s)
+		if !ok || d <= 0 {
+			emit(CodeWatchLintForbiddenRemedy, "when.threshold_duration: expected a positive whole-number duration in s, m or h")
+		} else {
+			w.ThresholdDuration = d
+		}
+	case PredicateMatch:
+		allowed = append(allowed, "match")
+		w.Threshold = 1
+		w.Match = lintRuleExpr(whenMap, "match", false, w.GroupBy, reads, refs, kinds, emit)
+	case CountInWindow:
+		allowed = append(allowed, "match", "threshold")
+		w.Match = lintRuleExpr(whenMap, "match", false, w.GroupBy, reads, refs, kinds, emit)
+	case ConsecutiveCount:
+		allowed = append(allowed, "match", "reset", "threshold")
+		w.Match = lintRuleExpr(whenMap, "match", true, w.GroupBy, reads, refs, kinds, emit)
+		w.Reset = lintRuleExpr(whenMap, "reset", false, w.GroupBy, reads, refs, kinds, emit)
+	case AlternatingPair:
+		allowed = append(allowed, "field", "pairs", "threshold")
+		field, ok := whenMap["field"].(string)
+		if !ok || field == "" || !validEventPath(field) {
+			emit(CodeWatchLintRuleSchema, "when.field: expected a non-empty event path")
+		} else {
+			w.Field = field
+		}
+		if rawPairs, present := whenMap["pairs"]; !present {
+			emit(CodeWatchLintRuleSchema, "when.pairs: expected at least one pair")
+		} else if arr, ok := rawPairs.([]any); !ok || len(arr) == 0 {
+			emit(CodeWatchLintRuleSchema, "when.pairs: expected at least one pair")
+		} else {
+			for idx, elem := range arr {
+				pair, ok := elem.([]any)
+				if !ok || len(pair) != 2 {
+					emit(CodeWatchLintRuleSchema, fmt.Sprintf("when.pairs[%d]: must be a list of two different strings", idx))
+					continue
+				}
+				a, aOK := pair[0].(string)
+				b, bOK := pair[1].(string)
+				if !aOK || !bOK || a == "" || b == "" || a == b {
+					emit(CodeWatchLintRuleSchema, fmt.Sprintf("when.pairs[%d]: must be a list of two different non-empty strings", idx))
+					continue
+				}
+				w.Pairs = append(w.Pairs, [2]string{a, b})
+			}
+		}
+	default:
+		emit(CodeWatchLintRuleSchema, fmt.Sprintf("when.pattern: unknown pattern %q", pattern))
+		return w
+	}
+
+	w.ClearWhen = lintRuleExpr(whenMap, "clear_when", false, w.GroupBy, reads, refs, kinds, emit)
+
+	for _, k := range slices.Sorted(maps.Keys(whenMap)) {
+		if k != "remedy" && !slices.Contains(allowed, k) {
+			emit(CodeWatchLintRuleSchema, fmt.Sprintf("when.%s: unknown key", k))
+		}
+	}
+
+	if pattern != PredicateMatch && pattern != DurationWithoutEvent {
+		n, ok := whenMap["threshold"].(int64)
+		if !ok || n < 1 {
+			emit(CodeWatchLintForbiddenRemedy, "when.threshold: expected a positive integer >= 1")
+		} else {
+			w.Threshold = n
+		}
+	}
+
+	_, hasWindow := whenMap["window"]
+	if pattern == PredicateMatch && w.ClearWhen != nil && !hasWindow {
+		w.Window = 0
+	} else {
+		s, ok := whenMap["window"].(string)
+		d := parseWindow(s)
+		if !ok || d <= 0 {
+			emit(CodeWatchLintForbiddenRemedy, "when.window: expected a positive whole-number duration in s, m or h")
+		} else {
+			w.Window = d
+		}
+	}
+	if pattern == DurationWithoutEvent && w.Window > 0 && w.ThresholdDuration > 0 && w.Window <= w.ThresholdDuration {
+		emit(CodeWatchLintForbiddenRemedy, "when.window: must be longer than threshold_duration")
+	}
+
+	return w
+}
+
+func isForbiddenGroupByColumn(col string) bool {
+	return col == "seq" || col == "ts" || col == "revision"
+}
+
+func lintRuleExpr(whenMap map[string]any, key string, required bool, groupBy string, reads Reads, refs map[string]bool, kinds map[string]bool, emit func(string, string)) *Expression {
+	raw, present := whenMap[key]
+	if !present {
+		if required {
+			emit(CodeWatchLintUnknownSignal, fmt.Sprintf("when.%s: expected a non-empty expression string", key))
+		}
+		return nil
+	}
+	src, ok := raw.(string)
+	if !ok || strings.TrimSpace(src) == "" {
+		emit(CodeWatchLintUnknownSignal, fmt.Sprintf("when.%s: expected a non-empty expression string", key))
+		return nil
+	}
+	exp, err := ParseExpression(src)
+	if err != nil {
+		emit(CodeWatchLintUnknownSignal, fmt.Sprintf("when.%s: %v", key, err))
+		return nil
+	}
+	if exp.unsupported {
+		emit(CodeWatchLintUnknownSignal, fmt.Sprintf("when.%s: uses an unsupported expression operand or call", key))
+	}
+	for _, op := range exp.projections {
+		switch {
+		case op.name == "git.ref":
+			if !refs[op.ref] {
+				emit(CodeWatchLintUnknownSignal, fmt.Sprintf("when.%s: git.ref(%q) requires a listed ref in reads.projections", key, op.ref))
+			}
+		case strings.HasPrefix(op.name, "item."):
+			switch op.name {
+			case "item.state", "item.seat", "item.waiting_on":
+				if groupBy == "global" || !slices.Contains(reads.Projections, "items") {
+					emit(CodeWatchLintUnknownSignal, fmt.Sprintf("when.%s: %s requires an items projection and a non-global subject", key, op.name))
+				}
+			default:
+				emit(CodeWatchLintUnknownSignal, fmt.Sprintf("when.%s: unknown items operand %s", key, op.name))
+			}
+		case strings.HasPrefix(op.name, "charter."):
+			switch op.name {
+			case "charter.name", "charter.ready", "charter.blocked", "charter.closed", "charter.states", "charter.finished":
+				if !slices.Contains(reads.Projections, "charter") {
+					emit(CodeWatchLintUnknownSignal, fmt.Sprintf("when.%s: %s requires a charter projection", key, op.name))
+				}
+			default:
+				emit(CodeWatchLintUnknownSignal, fmt.Sprintf("when.%s: unknown charter operand %s", key, op.name))
+			}
+		}
+	}
+	for _, cmp := range exp.eventComparisons {
+		if cmp.field == "kind" && (cmp.op == "==" || cmp.op == "in") {
+			for _, lit := range cmp.values {
+				if !kinds[lit] {
+					emit(CodeWatchLintUnknownSignal, fmt.Sprintf("when.%s: unregistered event.kind %q", key, lit))
+				} else if len(reads.Events) > 0 && !slices.Contains(reads.Events, lit) {
+					emit(CodeWatchLintUnknownSignal, fmt.Sprintf("when.%s: event.kind %q is not listed in reads.events", key, lit))
+				}
+			}
+		}
+	}
+	return exp
+}
+
+func lintRuleGuidance(gMap map[string]any, pattern string, emit func(string, string)) Guidance {
+	for _, k := range slices.Sorted(maps.Keys(gMap)) {
+		if k != "summary" && k != "check" && k != "do" {
+			emit(CodeWatchLintEmptyGuidance, fmt.Sprintf("guidance.%s: unknown key", k))
+		}
+	}
+	var g Guidance
+	if summary, ok := gMap["summary"].(string); !ok || strings.TrimSpace(summary) == "" {
+		emit(CodeWatchLintEmptyGuidance, "guidance.summary: expected a non-blank string")
+	} else {
+		g.Summary = summary
+		checkGuidanceText("guidance.summary", summary, pattern, emit)
+	}
+
+	for _, field := range []struct {
+		name string
+		dst  *[]string
+	}{{"check", &g.Check}, {"do", &g.Do}} {
+		list, ok := tomlStringList(gMap[field.name])
+		if !ok || len(list) == 0 {
+			emit(CodeWatchLintEmptyGuidance, fmt.Sprintf("guidance.%s: expected a non-empty list of non-blank strings", field.name))
+			continue
+		}
+		*field.dst = list
+		for i, line := range list {
+			if strings.TrimSpace(line) == "" {
+				emit(CodeWatchLintEmptyGuidance, fmt.Sprintf("guidance.%s[%d]: expected a non-blank string", field.name, i))
+				continue
+			}
+			checkGuidanceText(fmt.Sprintf("guidance.%s[%d]", field.name, i), line, pattern, emit)
+		}
+	}
+	return g
+}
+
+func checkGuidanceText(field, text, pattern string, emit func(string, string)) {
+	tokens, err := extractGuidancePlaceholders(text)
+	if err != nil {
+		emit(CodeWatchLintEmptyGuidance, fmt.Sprintf("%s: %v", field, err))
+		return
+	}
+	for _, tok := range tokens {
+		if !validGuidancePlaceholder(tok, pattern) {
+			emit(CodeWatchLintEmptyGuidance, fmt.Sprintf("%s: invalid or unsupported placeholder {{%s}} for pattern %q", field, tok, pattern))
+		}
+	}
+}
+
+func extractGuidancePlaceholders(line string) ([]string, error) {
+	var tokens []string
+	pos := 0
+	for pos < len(line) {
+		openIdx := strings.Index(line[pos:], "{{")
+		closeIdx := strings.Index(line[pos:], "}}")
+		if closeIdx >= 0 && (openIdx < 0 || closeIdx < openIdx) {
+			return nil, fmt.Errorf("unmatched closing delimiter }}")
+		}
+		if openIdx < 0 {
+			break
+		}
+		start := pos + openIdx + 2
+		endRel := strings.Index(line[start:], "}}")
+		if endRel < 0 {
+			return nil, fmt.Errorf("unclosed placeholder {{")
+		}
+		tok := line[start : start+endRel]
+		if strings.ContainsAny(tok, "{}") {
+			return nil, fmt.Errorf("nested brace inside placeholder {{%s}}", tok)
+		}
+		tokens = append(tokens, tok)
+		pos = start + endRel + 2
+	}
+	return tokens, nil
+}
+
+func validGuidancePlaceholder(tok, pattern string) bool {
+	switch tok {
+	case "subject", "rule_id", "alert_id", "count", "elapsed":
+		return true
+	case "leader", "follower", "leader_short", "follower_short":
+		return pattern == LagBehind
+	case "pair_a", "pair_b":
+		return pattern == AlternatingPair
+	}
+	if name, ok := strings.CutPrefix(tok, "event."); ok {
+		if pattern == LagBehind {
+			return false
+		}
+		if name == "" || strings.HasPrefix(name, "event.") || strings.IndexFunc(name, unicode.IsSpace) >= 0 {
+			return false
+		}
+		return validEventPath(name)
+	}
+	return false
+}
+
+func lintRuleDelivery(dMap map[string]any, emit func(string, string)) Delivery {
+	for _, k := range slices.Sorted(maps.Keys(dMap)) {
+		if k != "receiver" && k != "also_notify" {
+			emit(CodeWatchLintForbiddenRemedy, fmt.Sprintf("delivery.%s: unknown key", k))
+		}
+	}
+	var d Delivery
+	if rec, ok := dMap["receiver"].(string); !ok || (rec != "foreground" && rec != "subscribers") {
+		emit(CodeWatchLintForbiddenRemedy, fmt.Sprintf("delivery.receiver: expected foreground or subscribers, got %v", dMap["receiver"]))
+	} else {
+		d.Receiver = rec
+	}
+	if rawAlso, present := dMap["also_notify"]; present {
+		list, ok := tomlStringList(rawAlso)
+		if !ok {
+			emit(CodeWatchLintForbiddenRemedy, "delivery.also_notify: expected a list of strings")
+		} else {
+			d.AlsoNotify = list
+			for _, v := range list {
+				if v != "foreground" && v != "subscribers" {
+					emit(CodeWatchLintForbiddenRemedy, fmt.Sprintf("delivery.also_notify: receiver %q is not foreground or subscribers", v))
+				}
+			}
+		}
+	}
+	return d
+}
+
+func lintRulesWithContext(rules []lintedRule, charter charterData, workflows []loadedWorkflow, fc *findingCollector) {
+	for _, lr := range rules {
+		r := lr.rule
+		if charter.valid && charter.def.Completes != "landing" {
+			if r.Scope == "core" || r.Scope == "charter:"+charter.def.Name {
+				for _, proj := range r.Reads.Projections {
+					if strings.HasPrefix(proj, "git_refs:") {
+						fc.add(lr.source, CodeWatchLintUnknownSignal, fmt.Sprintf("rule %q: git_refs projection %q is incompatible with charter %q (completes=%q)", r.ID, proj, charter.def.Name, charter.def.Completes))
+					}
+				}
+			}
+		}
+
+		wfRef, isWF := strings.CutPrefix(r.Scope, "workflow:")
+		if !isWF || wfRef == "*" {
+			continue
+		}
+		var matched []loadedWorkflow
+		for _, lw := range workflows {
+			if strings.Contains(wfRef, "@v") {
+				if lw.ref == wfRef {
+					matched = append(matched, lw)
+				}
+			} else if lw.wf.Name == wfRef {
+				matched = append(matched, lw)
+			}
+		}
+		if len(matched) == 0 {
+			fc.add(lr.source, CodeWatchLintUnknownStage, fmt.Sprintf("rule %q: workflow scope %q matches no loaded workflow", r.ID, r.Scope))
+			continue
+		}
+
+		allStages := make(map[string]bool)
+		allSeats := map[string]bool{"design": true}
+		for _, lw := range matched {
+			for id := range lw.stageIDs {
+				allStages[id] = true
+			}
+			for seat := range lw.seats {
+				allSeats[seat] = true
+			}
+		}
+
+		if r.When.Pattern == AlternatingPair {
+			switch r.When.Field {
+			case "seat":
+				for _, p := range r.When.Pairs {
+					if !allSeats[p[0]] {
+						fc.add(lr.source, CodeWatchLintUnknownStage, fmt.Sprintf("rule %q: alternating_pair seat %q not found in %s", r.ID, p[0], r.Scope))
+					}
+					if !allSeats[p[1]] {
+						fc.add(lr.source, CodeWatchLintUnknownStage, fmt.Sprintf("rule %q: alternating_pair seat %q not found in %s", r.ID, p[1], r.Scope))
+					}
+				}
+			case "stage", "stage_id", "node", "node_id":
+				for _, p := range r.When.Pairs {
+					if !allStages[p[0]] {
+						fc.add(lr.source, CodeWatchLintUnknownStage, fmt.Sprintf("rule %q: alternating_pair stage %q not found in %s", r.ID, p[0], r.Scope))
+					}
+					if !allStages[p[1]] {
+						fc.add(lr.source, CodeWatchLintUnknownStage, fmt.Sprintf("rule %q: alternating_pair stage %q not found in %s", r.ID, p[1], r.Scope))
+					}
+				}
+			}
+		}
+
+		for _, exp := range r.expressions() {
+			if exp == nil {
+				continue
+			}
+			for _, cmp := range exp.eventComparisons {
+				if cmp.op != "==" && cmp.op != "!=" && cmp.op != "in" {
+					continue
+				}
+				switch cmp.field {
+				case "seat":
+					for _, val := range cmp.values {
+						if !allSeats[val] {
+							fc.add(lr.source, CodeWatchLintUnknownStage, fmt.Sprintf("rule %q: event.seat %q not found in %s", r.ID, val, r.Scope))
+						}
+					}
+				case "stage", "stage_id", "node", "node_id":
+					for _, val := range cmp.values {
+						if !allStages[val] {
+							fc.add(lr.source, CodeWatchLintUnknownStage, fmt.Sprintf("rule %q: event.%s %q not found in %s", r.ID, cmp.field, val, r.Scope))
+						}
+					}
+				}
+			}
+		}
+	}
+}

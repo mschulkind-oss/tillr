@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"reflect"
 	"slices"
 	"strings"
@@ -30,19 +31,20 @@ const (
 // Definition is the version 1 JSON contract. Optional fields retain their Go
 // zero values, except retention, which Read defaults to keep.
 type Definition struct {
-	Name          string       `json:"definition"`
-	Version       int          `json:"version"`
-	States        []string     `json:"states"`
-	Ready         string       `json:"ready"`
-	Blocked       string       `json:"blocked"`
-	Closed        string       `json:"closed"`
-	Finished      []string     `json:"finished"`
-	Transitions   []Transition `json:"transitions"`
-	Prerequisites []string     `json:"prerequisites"`
-	Completes     string       `json:"completes"`
-	Retention     string       `json:"retention"`
-	BriefTemplate string       `json:"brief_template"`
-	Hooks         *Hooks       `json:"hooks"`
+	Name          string         `json:"definition"`
+	Version       int            `json:"version"`
+	States        []string       `json:"states"`
+	Ready         string         `json:"ready"`
+	Blocked       string         `json:"blocked"`
+	Closed        string         `json:"closed"`
+	Finished      []string       `json:"finished"`
+	Transitions   []Transition   `json:"transitions"`
+	Prerequisites []string       `json:"prerequisites"`
+	Completes     string         `json:"completes"`
+	Retention     string         `json:"retention"`
+	BriefTemplate string         `json:"brief_template"`
+	Hooks         *Hooks         `json:"hooks"`
+	Observability *Observability `json:"observability,omitempty"`
 }
 
 // HasState reports whether the definition declares the state.
@@ -67,6 +69,12 @@ type Transition struct {
 type Hooks struct {
 	Argv  []string `json:"argv"`
 	Names []string `json:"names"`
+}
+
+// Observability names optional charter-level watch bindings.
+type Observability struct {
+	ProgressEvent string `json:"progress_event,omitempty"`
+	RulePack      string `json:"rule_pack,omitempty"`
 }
 
 //go:embed landing.json
@@ -116,6 +124,23 @@ func Read(r io.Reader) (Definition, error) {
 	if err := decoder.Decode(&d); err != nil {
 		return Definition{}, fmt.Errorf("definition: %w", err)
 	}
+	var rawObs struct {
+		Observability *struct {
+			ProgressEvent *string `json:"progress_event"`
+			RulePack      *string `json:"rule_pack"`
+		} `json:"observability"`
+	}
+	if err := json.Unmarshal(raw, &rawObs); err != nil {
+		return Definition{}, fmt.Errorf("definition: %w", err)
+	}
+	if rawObs.Observability != nil {
+		if rawObs.Observability.ProgressEvent != nil && strings.TrimSpace(*rawObs.Observability.ProgressEvent) == "" {
+			return Definition{}, fmt.Errorf("observability.progress_event: must be non-blank")
+		}
+		if rawObs.Observability.RulePack != nil && strings.TrimSpace(*rawObs.Observability.RulePack) == "" {
+			return Definition{}, fmt.Errorf("observability.rule_pack: must be a clean relative .toml path")
+		}
+	}
 	if err := d.Validate(); err != nil {
 		return Definition{}, err
 	}
@@ -145,7 +170,11 @@ func checkJSONKeys(raw json.RawMessage, shape reflect.Type, key string) error {
 		fields := make(map[string]reflect.Type, shape.NumField())
 		for i := 0; i < shape.NumField(); i++ {
 			field := shape.Field(i)
-			fields[field.Tag.Get("json")] = field.Type
+			name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+			if name == "" || name == "-" {
+				continue
+			}
+			fields[name] = field.Type
 		}
 		seen := make(map[string]bool, shape.NumField())
 		for decoder.More() {
@@ -240,6 +269,18 @@ func (d Definition) Validate() error {
 	if d.Retention != "keep" {
 		return fmt.Errorf("retention: only keep is supported, got %q", d.Retention)
 	}
+	if d.Observability != nil {
+		if d.Observability.ProgressEvent != "" {
+			if strings.TrimSpace(d.Observability.ProgressEvent) == "" || strings.TrimSpace(d.Observability.ProgressEvent) != d.Observability.ProgressEvent {
+				return fmt.Errorf("observability.progress_event: must be non-blank and trimmed")
+			}
+		}
+		if d.Observability.RulePack != "" {
+			if !validRulePackPath(d.Observability.RulePack) {
+				return fmt.Errorf("observability.rule_pack: must be a clean relative .toml path, got %q", d.Observability.RulePack)
+			}
+		}
+	}
 	if d.Hooks == nil {
 		if d.Completes == "hook" {
 			return fmt.Errorf("hooks: hook completion requires a program")
@@ -258,4 +299,22 @@ func (d Definition) Validate() error {
 		}
 	}
 	return nil
+}
+
+func validRulePackPath(rp string) bool {
+	if rp == "" || rp == ".toml" || strings.TrimSpace(rp) != rp {
+		return false
+	}
+	if !strings.HasSuffix(rp, ".toml") || strings.HasPrefix(rp, "/") || strings.Contains(rp, "\\") {
+		return false
+	}
+	if path.Clean(rp) != rp {
+		return false
+	}
+	for _, seg := range strings.Split(rp, "/") {
+		if seg == "" || seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
 }

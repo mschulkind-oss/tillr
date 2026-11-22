@@ -4,12 +4,16 @@ import (
 	"bytes"
 	"database/sql"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -255,4 +259,73 @@ func watchStoreRows(t *testing.T, path string) map[string][]string {
 		contents[table] = records
 	}
 	return contents
+}
+
+func TestBoundaries(t *testing.T) {
+	watchPkgDir := filepath.Clean(filepath.Join("..", "tillr", "watch"))
+	fset := token.NewFileSet()
+
+	checkDir := func(dir string, allowCommandContext map[string]bool, checkSiblingImports bool) {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("readdir %s: %v", dir, err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+				continue
+			}
+			name := entry.Name()
+			path := filepath.Join(dir, name)
+			parsed, err := parser.ParseFile(fset, path, nil, 0)
+			if err != nil {
+				t.Fatalf("parse %s: %v", path, err)
+			}
+			execAliases := map[string]bool{}
+			for _, imp := range parsed.Imports {
+				impPath, err := strconv.Unquote(imp.Path.Value)
+				if err != nil {
+					t.Fatalf("unquote import in %s: %v", path, err)
+				}
+				if checkSiblingImports && strings.HasPrefix(impPath, "github.com/mschulkind-oss/tillr-") {
+					if imp.Name == nil || imp.Name.Name != "_" {
+						t.Errorf("%s imports sibling %s without blank identifier _", path, impPath)
+					}
+				}
+				if impPath == "os/exec" {
+					alias := "exec"
+					if imp.Name != nil {
+						alias = imp.Name.Name
+					}
+					if alias != "_" && alias != "." {
+						execAliases[alias] = true
+					}
+				}
+			}
+			if len(execAliases) == 0 {
+				continue
+			}
+			ast.Inspect(parsed, func(n ast.Node) bool {
+				sel, ok := n.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				id, ok := sel.X.(*ast.Ident)
+				if !ok || !execAliases[id.Name] {
+					return true
+				}
+				switch sel.Sel.Name {
+				case "Command":
+					t.Errorf("%s uses forbidden os/exec.Command", path)
+				case "CommandContext":
+					if !allowCommandContext[name] {
+						t.Errorf("%s uses forbidden os/exec.CommandContext", path)
+					}
+				}
+				return true
+			})
+		}
+	}
+
+	checkDir(".", nil, true)
+	checkDir(watchPkgDir, map[string]bool{"git.go": true, "lint_charter.go": true}, false)
 }
