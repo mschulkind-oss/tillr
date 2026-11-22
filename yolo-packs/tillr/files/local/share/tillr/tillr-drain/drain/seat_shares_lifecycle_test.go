@@ -24,13 +24,15 @@ func TestSeatSharesWorkflowRestartKeepsRecordedBackend(t *testing.T) {
 	if original.Backend != "other" {
 		t.Fatalf("original draw %s", original.Backend)
 	}
-	// A restart continues the recorded request even after the model policy changes.
+	// A restart keeps the recorded backend (never re-drawing from seat shares),
+	// while building its command from the policy model now in force.
 	backend.Model = "changed-model"
 	l.cfg.Policy.Backends["other"] = backend
+	l.cfg.Policy.seatDraw = func() float64 { return 0 }
 	next := replaceGraphLoop(t, f, l, steps)
 	restart := mustPlan(t, next)[0].decision
-	if !restart.WorkflowRestart || restart.RunRequest.Backend != original.Backend || !reflect.DeepEqual(restart.RunRequest.Command, original.Command) {
-		t.Fatalf("restart changed backend or command: %+v, original %+v", restart.RunRequest, original)
+	if !restart.WorkflowRestart || restart.RunRequest.Backend != original.Backend || restart.RunRequest.Route() != "changed-model" {
+		t.Fatalf("restart backend/route mismatch: %+v, original %+v", restart.RunRequest, original)
 	}
 }
 

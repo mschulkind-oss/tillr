@@ -2694,6 +2694,10 @@ func (l *Loop) runContinuation(ctx context.Context, lane string, request run.Req
 		return run.Record{}, "", "", nil
 	}
 	resumed := request
+	if fresh, ok := refreshRestartRequest(l.currentPolicy(), Decision{}, &request); ok {
+		resumed.Command = fresh.Command
+		resumed.TimeoutMS = fresh.TimeoutMS
+	}
 	resumed.Resume = true
 	resumed.CorrelationID = tick
 	l.noteLaneWrite(lane)
