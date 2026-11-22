@@ -423,6 +423,11 @@ func Exec(ctx context.Context, s *store.Store, req Request, opts ExecOptions) (r
 		"TILLR_LANE_ID="+laneID,
 		"TILLR_RUN_EXEC_ID="+execID,
 	)
+	cmd.Env, err = installGitGuard(workDir, durableDir, cmd.Env)
+	if err != nil {
+		logFile.Close()
+		return record.Envelope{}, err
+	}
 	// The child leads its own process group, and the bound kills the group plus any
 	// detached sessions carrying this execution's marker.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

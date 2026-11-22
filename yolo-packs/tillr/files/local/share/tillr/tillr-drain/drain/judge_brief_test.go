@@ -82,7 +82,11 @@ func TestJudgeBriefScopeAndRefusalHistory(t *testing.T) {
 	if !strings.Contains(brief, "Changed paths ("+c.BaseSHA+".."+c.HeadSHA+"):\ncandidate.txt\n") {
 		t.Fatalf("judge did not receive the pinned changed paths:\n%s", brief)
 	}
+	candDir := filepath.Join(run.DurableDir(l.laneDirPath(c.LaneID), receipt.Request.RunID), "cand")
+	wantCloneCmd := `git clone --shared --no-checkout . "` + candDir + `" && git -C "` + candDir + `" checkout --detach ` + c.HeadSHA
 	for _, want := range []string{
+		wantCloneCmd,
+		"Do not export GIT_DIR or GIT_WORK_TREE",
 		"Name any changed path that the item's words do not account for.",
 		"A refusal must rest on the item's words or criteria or a regression this change introduces in existing behavior.",
 		"Report defects outside that scope as proposed follow-ups, not refusals.",
@@ -91,6 +95,18 @@ func TestJudgeBriefScopeAndRefusalHistory(t *testing.T) {
 		if !strings.Contains(strings.Join(strings.Fields(brief), " "), want) {
 			t.Errorf("judge brief lacks %q", want)
 		}
+	}
+	cloneCmd := exec.Command("sh", "-c", wantCloneCmd)
+	cloneCmd.Dir = c.Worktree
+	if out, err := cloneCmd.CombinedOutput(); err != nil {
+		t.Fatalf("recommended candidate clone command failed: %v\n%s", err, out)
+	}
+	gotHead, err := exec.Command("git", "-C", candDir, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("git rev-parse HEAD in cloned candidate: %v", err)
+	}
+	if strings.TrimSpace(string(gotHead)) != c.HeadSHA {
+		t.Fatalf("cloned candidate HEAD = %q, want %q", strings.TrimSpace(string(gotHead)), c.HeadSHA)
 	}
 
 	// History is item-wide, even when an operator retry begins a new triage cycle.
