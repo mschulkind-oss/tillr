@@ -4955,6 +4955,8 @@ CHECK_KIND_GROUP = {
     "go-tool": KIND_VERDICT,
     "go-substrate": KIND_VERDICT,
     "gate-runner": KIND_VERDICT,
+    "go-affected": KIND_VERDICT,
+    "go-affected-suite": KIND_VERDICT,
     # The seat-profile encoding's own tests: a suite that fails is a verdict about the
     # change, like every other assertion above. It arrived from a lane that could not
     # see this table -- it planned the step and left the kind unclassified, and the audit
@@ -5038,6 +5040,8 @@ CHECK_TIER = {
     # The drain suite exceeds 30s alone and with three concurrent suites (measurements
     # beside GO_TOOL_DIRS). It rolls under section 4.3 rule 3, not a retired tool's cost.
     "go-tool": TIER_ROLLING,
+    "go-affected": TIER_LANDING,
+    "go-affected-suite": TIER_LANDING,
     # Series and fork invariants: a patch series that does not apply breaks the next host
     # launch the moment it lands, on every host that selects the pack. Rule 1.
     "series": TIER_LANDING,
@@ -5196,6 +5200,8 @@ CHECK_COST_ESTIMATE = {
     # declared member rather than inheriting a deleted monolith's price.
     "go-tool": max(cost for directory, cost in GO_TOOL_COST_ESTIMATE.items()
                    if directory not in GO_LANDING_SUITE_DIRS),
+    "go-affected": GO_TOOL_COST_ESTIMATE["tools/tillr-drain"],
+    "go-affected-suite": 5.0,
     "gate-runner": GO_TOOL_COST_ESTIMATE["tools/tillr-gate"],
     "go-substrate": max(GO_TOOL_COST_ESTIMATE[directory]
                         for directory in GO_LANDING_SUITE_DIRS),
@@ -6513,6 +6519,11 @@ def apply_tier(plan: Plan, tier: str | None, changed: list[str] | None = None) -
                 skip.why = CHANGE_READ_SKIP
     kept: list[Check] = []
     for check in plan.checks:
+        if check.kind == "go-affected" and tier != TIER_LANDING:
+            plan.not_planned(check.label,
+                             "the rolling tier runs whole Go module suites fresh",
+                             kind=check.kind, read_disjoint=False)
+            continue
         if check_tier(check.kind) == tier:
             if (tier == TIER_LANDING and changed is not None and check.watches
                     and not changed_set.intersection(check.selected_by or ())
@@ -6539,6 +6550,16 @@ def apply_tier(plan: Plan, tier: str | None, changed: list[str] | None = None) -
                              f"a landing kind)",
                              kind=check.kind, read_disjoint=False)
     plan.checks = kept
+    if tier == TIER_LANDING:
+        has_substrate = any(c.kind == "go-substrate" for c in plan.checks)
+        has_gate_runner = any(c.kind == "gate-runner" for c in plan.checks)
+        if has_substrate or has_gate_runner:
+            for c in plan.checks:
+                if c.kind == "go-affected":
+                    if has_substrate and "tools/tillr" not in c.argv:
+                        c.argv.extend(["--drop-module", "tools/tillr"])
+                    if has_gate_runner and "tools/tillr-gate" not in c.argv:
+                        c.argv.extend(["--drop-module", "tools/tillr-gate"])
     # A skip the diff selected for a kind this tier does not plan is the same news as a
     # check it would have run: under `landing` it is owed. Under `rolling` every kind is
     # planned, so a selected skip stays the planned skip it is: a check the proof could not
@@ -7003,6 +7024,58 @@ def build_plan(
             plan.unavailable(f"{suite_kind} ({directory})", "go is unavailable here", kind=suite_kind)
         else:
             plan.not_planned(f"{suite_kind} ({directory})", f"no path under {directory}/ changed")
+
+    # Affected Go test packages across all tillr modules (landing-tier only; rolling/full
+    # run whole module suites).
+    tillr_mods: list[str] = []
+    if (root / "tools" / "tillr" / "go.mod").is_file():
+        tillr_mods.append("tools/tillr")
+    if (root / "tools").is_dir():
+        tillr_mods.extend(f"tools/{p.parent.name}" for p in sorted((root / "tools").glob("tillr-*/go.mod")))
+    edges_reads: list[str] = []
+    edges_file = root / "tools" / "gate" / "go-test-edges.json"
+    if edges_file.is_file():
+        try:
+            for entry in json.loads(edges_file.read_text(encoding="utf-8")).values():
+                edges_reads.extend(entry.get("reads", ()))
+        except (OSError, ValueError):
+            pass
+    affected_watches = tuple(dict.fromkeys((*(m + "/" for m in tillr_mods), *edges_reads)))
+    affected_changed = [path for path in changed if watched_path(path, set(affected_watches))]
+    if affected_changed and (root / "tools" / "gate" / "go_affected.py").is_file():
+        if shutil.which("go"):
+            argv = [sys.executable, "tools/gate/go_affected.py", "--changed", *affected_changed]
+            plan.checks.append(
+                Check("go-affected", "affected tillr Go test packages pass",
+                      argv, f"{len(affected_changed)} tillr Go or declared-edge input(s) changed",
+                      GO_TOOL_TIMEOUT, watches=affected_watches,
+                      cost=CHECK_COST_ESTIMATE["go-affected"],
+                      drop=("LAND_BATCH_LIMIT", "TILLR_FORK_DRIFT", "PI_FORKS_ROOT",
+                            "PI_FORKS_SERIES_ROOT", "TILLR_LOOP_REGISTRY", "TILLR_LOOP_ADAPTER_BUILD"))
+            )
+        else:
+            plan.unavailable("go-affected", "go is unavailable here", kind="go-affected")
+    else:
+        plan.not_planned("go-affected", "no tillr Go module or declared edge input changed")
+
+    go_affected_watches = (
+        "tools/gate/go_affected.py",
+        "tools/gate/go-test-edges.json",
+        "tests/go-affected.test.py",
+    )
+    go_affected_suite = [path for path in changed if watched_path(path, set(go_affected_watches))]
+    if go_affected_suite:
+        plan.checks.append(
+            Check("go-affected-suite",
+                  "go-affected selection, edges, and cache invalidation suite passes",
+                  [sys.executable, "tests/go-affected.test.py"],
+                  "go_affected.py, go-test-edges.json, or tests/go-affected.test.py changed",
+                  300, watches=go_affected_watches,
+                  cost=CHECK_COST_ESTIMATE["go-affected-suite"])
+        )
+    else:
+        plan.not_planned("go-affected-suite (tests/go-affected.test.py)",
+                         "go_affected.py, go-test-edges.json, and tests/go-affected.test.py are unchanged")
 
     # The shared pipeline-evidence format. The gate is the producer that still ships here,
     # and the suite feeds the velocity report synthetic records written to the format, so no
@@ -8426,10 +8499,37 @@ def record_verdict(root: Path, check: Check, cache: VerdictCache,
 
 
 GO_SHARDS_EVIDENCE_ENV = "TILLR_GO_SHARDS_EVIDENCE_OUT"
+GO_AFFECTED_EVIDENCE_ENV = "TILLR_GO_AFFECTED_EVIDENCE_OUT"
 
 
 def run_landing_go_check(root: Path, check: Check, env: dict, drop: tuple,
                          cancel: Cancellation | None) -> tuple[int, str, float]:
+    if check.kind == "go-affected":
+        path = None
+        try:
+            try:
+                fd, path = tempfile.mkstemp(prefix="gate-go-affected-")
+                os.close(fd)
+                env = {**env, GO_AFFECTED_EVIDENCE_ENV: path}
+            except OSError as error:
+                print(f"fork-check: cannot prepare go-affected evidence: {error}", file=sys.stderr)
+                drop += (GO_AFFECTED_EVIDENCE_ENV,)
+            rc, output, elapsed = run_command(
+                root, check.argv, check.timeout, env, (*drop, GO_SHARDS_EVIDENCE_ENV), cancel)
+            if path is not None:
+                try:
+                    data = Path(path).read_text()
+                    if data:
+                        check.go_build.append(json.loads(data))
+                except (OSError, ValueError) as error:
+                    print(f"fork-check: cannot read go-affected evidence: {error}", file=sys.stderr)
+            return rc, output, elapsed
+        finally:
+            if path is not None:
+                with contextlib.suppress(OSError):
+                    Path(path).unlink(missing_ok=True)
+
+    drop += (GO_AFFECTED_EVIDENCE_ENV,)
     sharded = check.kind == "gate-runner" and check.go_module in GO_SHARD_DIRS
     observation = {"module": check.go_module, "execution": "ran", "selector": "./...",
                    "mode": "compiled-shards" if sharded else "go-test"}
@@ -8534,7 +8634,7 @@ def execute_attempt(root: Path, check: Check, diff_base: str,
     else:
         seconds = 0.0
         command_env = {**check.env, **(env or {})}
-        if check.go_module in GO_SHARD_DIRS:
+        if check.go_module in GO_SHARD_DIRS or check.kind == "go-affected":
             # Keep the shard runner's existing slot-holder label without exposing
             # the writable span destination to the suite or any of its children.
             spans = os.environ.get("TILLR_GATE_SPANS_OUT", "").strip()
@@ -8543,13 +8643,17 @@ def execute_attempt(root: Path, check: Check, diff_base: str,
                 parent = Path(spans).parent.name
                 if parent:
                     command_env["GO_TEST_SHARDS_HOLDER"] = "trunk-proof" if parent == ".rolling" else f"gate:{parent}"
-        collect_go = measure_landing and check.go_module and check.kind in ("gate-runner", "go-substrate")
+        collect_go = measure_landing and (
+            (check.go_module and check.kind in ("gate-runner", "go-substrate"))
+            or check.kind == "go-affected"
+        )
         for attempt in range(OUTSIDE_SIGNAL_RERUNS + 1):
             if collect_go:
                 check.rc, check.output, ran = run_landing_go_check(root, check, command_env, drop, cancel)
             else:
                 check.rc, check.output, ran = run_command(
-                    root, check.argv, check.timeout, command_env, (*drop, GO_SHARDS_EVIDENCE_ENV), cancel)
+                    root, check.argv, check.timeout, command_env,
+                    (*drop, GO_SHARDS_EVIDENCE_ENV, GO_AFFECTED_EVIDENCE_ENV), cancel)
             seconds += ran
             signal_number = outside_signal(check.rc)
             if signal_number is None or (cancel is not None and cancel.cancelled):
@@ -8853,6 +8957,9 @@ CHANGE_DEPENDENT_DECLARATIONS = {
         "label": "regenerate the pi-archimedes footer storybook",
         "selects": [{"regex": pattern.pattern} for pattern in FOOTER_STORYBOOK_INPUT],
         "watches": [{"paths": True}],
+    },
+    ("go-affected", 0): {
+        "command": [sys.executable, "tools/gate/go_affected.py", "--changed", "{paths}"],
     },
 }
 
@@ -9355,6 +9462,15 @@ def run_gate(argv: list[str]) -> int:
     head, tree, dirty = gate.head, gate.tree, gate.dirty
     series, changed, diff_base, since = gate.series, gate.changed, gate.diff_base, gate.since
     plan = gate.plan
+    if options.tier is None:
+        kept_checks: list[Check] = []
+        for check in plan.checks:
+            if check.kind == "go-affected":
+                plan.not_planned(check.label, "the full gate runs whole Go module suites fresh",
+                                 kind=check.kind, read_disjoint=False)
+            else:
+                kept_checks.append(check)
+        plan.checks = kept_checks
     watched = gate.watched
     changed_while_planning = gate.changed_while_planning
     blocking, ignored, missing = gate.blocking, gate.ignored, gate.missing
