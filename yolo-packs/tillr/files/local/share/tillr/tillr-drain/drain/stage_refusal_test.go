@@ -636,7 +636,8 @@ func getRefusalTemplate(t *testing.T) string {
 		}
 		RegisterTestCleanup(func() { _ = os.RemoveAll(dir) })
 		cfg := filepath.Join(dir, "gitconfig")
-		if err := os.WriteFile(cfg, []byte("[user]\n name = tillr\n email = tillr@example.invalid\n"), 0o600); err != nil {
+		const tplGitConfig = "[user]\n name = tillr\n email = tillr@example.invalid\n[maintenance]\n auto = false\n autoDetach = false\n[gc]\n auto = 0\n autoDetach = false\n"
+		if err := os.WriteFile(cfg, []byte(tplGitConfig), 0o600); err != nil {
 			refusalTemplateErr = err
 			return
 		}
@@ -702,6 +703,38 @@ func getRefusalTemplate(t *testing.T) string {
 		t.Fatalf("initializing refusal fixture template: %v", refusalTemplateErr)
 	}
 	return refusalTemplateDir
+}
+
+func TestRefusalTemplateDisablesBackgroundMaintenanceAndAutoGC(t *testing.T) {
+	tpl := getRefusalTemplate(t)
+	tplRepo := filepath.Join(tpl, "repo")
+	tplGitCfg := filepath.Join(tpl, "gitconfig")
+	raw, err := os.ReadFile(tplGitCfg)
+	if err != nil {
+		t.Fatalf("reading refusal template gitconfig failed: %v", err)
+	}
+	for _, want := range []struct {
+		key  string
+		want string
+	}{
+		{"maintenance.auto", "false"},
+		{"maintenance.autoDetach", "false"},
+		{"gc.auto", "0"},
+		{"gc.autoDetach", "false"},
+	} {
+		cmd := exec.Command("git", "-C", tplRepo, "config", "--get", want.key)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+tplGitCfg)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git config --get %s failed: %v (%s)\ngitconfig:\n%s", want.key, err, out, raw)
+		}
+		if got := strings.TrimSpace(string(out)); got != want.want {
+			t.Fatalf("%s = %q, want %q\ngitconfig:\n%s", want.key, got, want.want, raw)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(tplRepo, ".git", "objects", "maintenance.lock")); !os.IsNotExist(err) {
+		t.Fatalf("refusal template repo has unexpected maintenance.lock state: %v", err)
+	}
 }
 
 func copyTemplateDir(src, dst string) error {
