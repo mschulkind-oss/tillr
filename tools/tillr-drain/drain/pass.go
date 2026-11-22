@@ -626,6 +626,45 @@ func observeFirstSegmentFaces(r *store.Reader, path string, tick Pass, works map
 	return nil, nil, nil
 }
 
+// refreshRestartRequest rebuilds a restarted run's request from the policy in
+// force for its recorded backend so a policy model/provider change takes effect
+// instead of replaying a retired model and closing the backend. Session-resume
+// flags are kept only while the route is unchanged.
+func refreshRestartRequest(policy *Policy, d Decision, prev *run.Request) (*run.Request, bool) {
+	if policy == nil || prev == nil || !policyHasBackend(policy, prev.Backend) {
+		return nil, false
+	}
+	fresh := policy.request(prev.ItemID, prev.LaneID, prev.RunID, prev.Backend)
+	fresh.ReadOnlyGroup = prev.ReadOnlyGroup
+	if prev.WorkingDir != "" {
+		fresh.WorkingDir = prev.WorkingDir
+	}
+	if d.Workflow != nil && d.NodeIndex >= 0 && d.NodeIndex < len(d.Workflow.Stages) {
+		stage := d.Workflow.Stages[d.NodeIndex]
+		fresh.NodeID = stage.ID
+		if stage.TimeoutMS > 0 {
+			fresh.TimeoutMS = stage.TimeoutMS
+		}
+	} else if prev.NodeID != "" {
+		fresh.NodeID = prev.NodeID
+	}
+	fresh.ScratchEnv = prev.ScratchEnv
+	if fresh.Route() == prev.Route() {
+		fresh.Resume = prev.Resume
+		fresh.SessionTurn = prev.SessionTurn
+		fresh.ResumePrompt = prev.ResumePrompt
+		fresh.FreshSession = prev.FreshSession
+	}
+	if d.Workflow != nil {
+		stampDecisionRequest(d, fresh)
+	} else {
+		fresh.Seat = prev.Seat
+		fresh.Workflow = prev.Workflow
+		fresh.Node = prev.Node
+	}
+	return fresh, true
+}
+
 func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *RunInputs, template *string, policy *Policy, shut map[string]bool, gates int) (Decision, error) {
 	return pendingDecisionExcept(r, work, at, inputs, template, policy, shut, gates, "", "", false)
 }
@@ -680,17 +719,31 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 		d.ConflictID = ""
 		if len(d.Parallel) > 0 && d.WorkflowRestart {
 			nodes := parallelNodes(d)
-			for _, node := range nodes {
+			for i, node := range nodes {
 				rec, err := terminalRecord(r, node.RunRequest.RunID)
 				if err != nil {
 					return Decision{}, err
 				}
-				if rec == nil && !commandStage(node) && shut[node.RunRequest.Backend] {
+				if rec != nil || commandStage(node) {
+					continue
+				}
+				if shut[node.RunRequest.Backend] {
 					d.Seat = node.Seat
 					d.DeferredBy = node.RunRequest.Backend
 					d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
 					identifyDecision(&d)
 					return d, nil
+				}
+				if policy == nil || !policyHasBackend(policy, node.RunRequest.Backend) {
+					d.Seat = node.Seat
+					d.DeferredBy = node.RunRequest.Backend
+					d.Action, d.Reason, d.To = ActionHold, ReasonNoPolicy, ""
+					identifyDecision(&d)
+					return d, nil
+				}
+				if fresh, ok := refreshRestartRequest(policy, node, node.RunRequest); ok {
+					node.RunRequest = fresh
+					nodes[i] = node
 				}
 			}
 			d = nodes[0]
@@ -732,6 +785,13 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 		if d.WorkflowRestart {
 			backend = d.RunRequest.Backend
 		}
+		if d.WorkflowRestart && !policyHasBackend(policy, backend) {
+			d.DeferredBy = backend
+			d.Action, d.Reason, d.To = ActionHold, ReasonNoPolicy, ""
+			d.Inputs = inputs
+			identifyDecision(&d)
+			return d, nil
+		}
 		ok := !shut[backend]
 		if !d.WorkflowRestart {
 			ok = policy.seatMayStart(d.ItemID, d.Seat, backend, shut)
@@ -749,24 +809,27 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 			d.DeferredBy = backend
 			d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
 		} else {
-			request := policy.request(d.ItemID, d.LaneID, d.RunRequest.RunID, backend)
+			var request *run.Request
 			if d.WorkflowRestart {
-				retained := *d.RunRequest
-				request = &retained
+				request, _ = refreshRestartRequest(policy, d, d.RunRequest)
+			} else {
+				request = policy.request(d.ItemID, d.LaneID, d.RunRequest.RunID, backend)
+				if request != nil {
+					if d.Workflow.Stages[d.NodeIndex].TimeoutMS > 0 {
+						request.TimeoutMS = d.Workflow.Stages[d.NodeIndex].TimeoutMS
+					}
+					if len(d.Parallel) > 0 {
+						request.ReadOnlyGroup = d.RunRequest.ReadOnlyGroup
+						request.NodeID = d.RunRequest.NodeID
+					}
+					request.NodeID = d.Workflow.Stages[d.NodeIndex].ID
+					request.WorkingDir = d.RunRequest.WorkingDir
+					stampDecisionRequest(d, request)
+				}
 			}
 			if request == nil {
 				return Decision{}, Usagef("workflow seat %s cannot build a request", d.Seat)
 			}
-			if !d.WorkflowRestart && d.Workflow.Stages[d.NodeIndex].TimeoutMS > 0 {
-				request.TimeoutMS = d.Workflow.Stages[d.NodeIndex].TimeoutMS
-			}
-			if len(d.Parallel) > 0 {
-				request.ReadOnlyGroup = d.RunRequest.ReadOnlyGroup
-				request.NodeID = d.RunRequest.NodeID
-			}
-			request.NodeID = d.Workflow.Stages[d.NodeIndex].ID
-			request.WorkingDir = d.RunRequest.WorkingDir
-			stampDecisionRequest(d, request)
 			d.RunRequest = request
 		}
 		d.Inputs = inputs
@@ -946,6 +1009,16 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 			d.To, d.Action, d.Reason = "candidate", ActionSettle, ActionSettle
 		} else if evaluatorNode(d) && rec == nil {
 			// Retry the judge's retained handoff, never allocate another evaluator id.
+			if policy != nil {
+				if fresh, ok := refreshRestartRequest(policy, d, d.RunRequest); ok {
+					d.RunRequest = fresh
+				} else if d.RunRequest != nil && !commandStage(d) {
+					d.DeferredBy = d.RunRequest.Backend
+					d.Action, d.Reason, d.To = ActionHold, ReasonNoPolicy, ""
+					identifyDecision(&d)
+					return d, nil
+				}
+			}
 			d.To, d.Action, d.Reason, d.WorkflowRestart = "running", ActionDispatch, "workflow-next-node", true
 		}
 	}

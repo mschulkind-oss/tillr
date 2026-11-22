@@ -212,6 +212,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			}
 			req := receipt.Request
 			req.RunID = markRunID(req.RunID, "restart")
+			req = l.refreshJudgeRequest(req)
 			req.SessionTurn, req.ResumePrompt = false, ""
 			if !quotaRefusal && receipt.JudgeSession != "" && canResumeInfrastructure(rec, &req) {
 				replacementSession = receipt.JudgeSession
@@ -235,6 +236,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			}
 			req := receipt.Request
 			req.RunID = markRunID(req.RunID, "interrupted")
+			req = l.refreshJudgeRequest(req)
 			replacementRequest = &req
 			receipt = nil
 		} else if l.cfg.Restart != nil {
@@ -270,6 +272,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				if !missing {
 					req.RunID = markRunID(req.RunID, "restart")
 				}
+				req = l.refreshJudgeRequest(req)
 				replacementRequest = &req
 				receipt = nil
 			}
@@ -477,6 +480,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				}
 				req := receipt.Request
 				req.RunID = markRunID(req.RunID, "interrupted")
+				req = l.refreshJudgeRequest(req)
 				replacementRequest = &req
 				receipt = nil
 				continue
@@ -1203,6 +1207,13 @@ func isJudgeFormRejection(err error) bool {
 	default:
 		return false
 	}
+}
+
+func (l *Loop) refreshJudgeRequest(req run.Request) run.Request {
+	if fresh, ok := refreshRestartRequest(l.currentPolicy(), Decision{}, &req); ok {
+		return *fresh
+	}
+	return req
 }
 
 func judgeSessionFromActor(actor string) string {
