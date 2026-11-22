@@ -13,19 +13,83 @@ import (
 	"github.com/mschulkind-oss/tillr/store"
 )
 
-func TestHeavyDoesNotLandARevertCheckedBeforeTrunkAdvanced(t *testing.T) {
+func TestHeavyRevertsOntoAdvancedTrunkWhenClean(t *testing.T) {
 	h := newRevertHarness(t, fileRed("a"))
-	red := h.land("item-broke", "a", "broken")
-	var newest string
-	out, err := h.loop.revertLanding(context.Background(), red, red, []HeavyCheck{{CheckID: "unit"}}, func(context.Context, string, string) (bool, error) {
-		newest = h.land("item-next", "a", "fixed while checking the revert")
-		return false, nil
-	})
-	if err != nil || out.Reverted != "" || !strings.Contains(out.Refused, "trunk advanced") {
-		t.Fatalf("unexpected revert outcome: %+v, %v", out, err)
+	culprit := h.land("item-broke", "a", "broken\n")
+	var other string
+	h.steps.onGate = func(Candidate) {
+		if other == "" {
+			other = h.land("item-next", "c", "unrelated landing while checking the revert\n")
+		}
 	}
-	if newest == "" || heavyGit(t, h.root, "rev-parse", TrunkRef) != newest {
-		t.Fatal("the checked revert displaced the newer landing")
+	h.proof()
+	if other == "" {
+		t.Fatal("the concurrent landing never ran during the revert gate")
+	}
+	reverts := h.reverts()
+	if len(reverts) != 1 || reverts[0].Result != "reverted" || reverts[0].Landing != culprit || reverts[0].Tip != culprit {
+		t.Fatalf("reverts=%+v", reverts)
+	}
+	trunk := heavyGit(t, h.root, "rev-parse", TrunkRef)
+	if reverts[0].Revert != trunk {
+		t.Fatalf("revert=%s, trunk=%s", reverts[0].Revert, trunk)
+	}
+	if parent := heavyGit(t, h.root, "rev-parse", trunk+"^"); parent != other {
+		t.Fatalf("revert parent=%s, want new trunk tip %s", parent, other)
+	}
+	if files := heavyGit(t, h.root, "ls-tree", "--name-only", trunk); strings.Contains(files, "a\n") || !strings.Contains(files, "c") {
+		t.Fatalf("squashed revert tree did not preserve concurrent landing and remove culprit: %q", files)
+	}
+	rows := h.query(`SELECT base_sha || '|' || trunk_before || '|' || trunk_after || '|' || gated_tree || '|' || landed_tree FROM landings WHERE item_id=? AND result='landed'`, RevertItemID(culprit))
+	if len(rows) != 1 {
+		t.Fatalf("revert landing rows=%v", rows)
+	}
+	parts := strings.Split(rows[0], "|")
+	if len(parts) != 5 || parts[0] != culprit || parts[1] != other || parts[2] != trunk || parts[3] == "" || parts[4] == "" || parts[3] == parts[4] {
+		t.Fatalf("revert landing row did not record squash onto moved trunk: %q", rows[0])
+	}
+	if f := h.fixers(); len(f) != 0 {
+		t.Fatalf("a landed revert filed fixers %v", f)
+	}
+	if green := heavyGit(t, h.root, "rev-parse", GreenRef); green != trunk {
+		t.Fatalf("green pointer=%s, want %s", green, trunk)
+	}
+}
+
+func TestHeavyRevertConflictOnAdvancedTrunkFilesTheFixer(t *testing.T) {
+	h := newRevertHarness(t, fileRed("a"))
+	if err := os.WriteFile(filepath.Join(h.root, "shared"), []byte("from culprit\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	culprit := h.land("item-broke", "a", "broken\n")
+	var other string
+	h.steps.onGate = func(Candidate) {
+		if other == "" {
+			other = h.land("item-next", "shared", "modified while checking the revert\n")
+		}
+	}
+	h.proof()
+	if other == "" {
+		t.Fatal("the concurrent landing never ran during the revert gate")
+	}
+	if trunk := heavyGit(t, h.root, "rev-parse", TrunkRef); trunk != other {
+		t.Fatalf("a conflicting revert displaced the newer landing: trunk=%s, want %s", trunk, other)
+	}
+	reverts := h.reverts()
+	if len(reverts) == 0 || reverts[0].Result != "not-possible" || reverts[0].Landing != culprit ||
+		!strings.Contains(reverts[0].Reason, LandSquashConflict) || !strings.Contains(reverts[0].Reason, "shared") ||
+		strings.Contains(reverts[0].Reason, "trunk advanced") {
+		t.Fatalf("reverts=%+v, want not-possible from squash-conflict on shared", reverts)
+	}
+	fixers := h.fixers()
+	if len(fixers) != 1 || fixers[0] != TrunkFixerID(culprit) {
+		t.Fatalf("fixers=%v, want one against %s", fixers, shortSHA(culprit))
+	}
+	if text := h.fixerText(fixers[0]); !strings.Contains(text, "Automatic revert of "+shortSHA(culprit)+" for unit was not possible") || !strings.Contains(text, LandSquashConflict) {
+		t.Fatalf("fixer brief lacks the squash-conflict reason: %s", text)
+	}
+	if len(*h.steps.returned) != 0 {
+		t.Fatalf("a refused revert returned %v", *h.steps.returned)
 	}
 }
 

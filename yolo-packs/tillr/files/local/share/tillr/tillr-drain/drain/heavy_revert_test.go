@@ -13,6 +13,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/redcap"
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -25,6 +26,7 @@ type revertSteps struct {
 	heavyTestSteps
 	root, store string
 	gate        string
+	onGate      func(Candidate)
 	mu          *sync.Mutex
 	gated       *[]Candidate
 	returned    *[]string
@@ -36,28 +38,37 @@ func (s revertSteps) Gate(_ context.Context, c Candidate) (GateOutcome, error) {
 	s.mu.Lock()
 	*s.gated = append(*s.gated, c)
 	s.mu.Unlock()
+	if s.onGate != nil {
+		s.onGate(c)
+	}
 	if s.gate != "" {
 		return GateOutcome{Outcome: s.gate, FailingChecks: []string{"fast"}}, nil
 	}
 	return GateOutcome{Outcome: GatePassed}, nil
 }
 func (s revertSteps) Land(ctx context.Context, c Candidate) (LandOutcome, error) {
-	tip, err := heavyGitOutput(ctx, s.root, "rev-parse", TrunkRef)
+	trunk, err := land.OpenTrunk(s.root)
 	if err != nil {
 		return LandOutcome{}, err
 	}
-	if tip != c.BaseSHA {
-		return LandOutcome{Result: LandSquashConflict}, nil
-	}
-	if _, err := heavyGitOutput(ctx, s.root, "update-ref", "refs/heads/"+TrunkRef, c.HeadSHA, tip); err != nil {
+	tree, err := heavyGitOutput(ctx, s.root, "rev-parse", c.HeadSHA+"^{tree}")
+	if err != nil {
 		return LandOutcome{}, err
 	}
-	if err := writeFixture(s.store, func(tx *store.Tx) error {
-		return recordFixtureLanding(tx, c.ItemID, c.RunID, c.HeadSHA, 100)
-	}); err != nil {
+	db, err := store.Open(ctx, s.store, true)
+	if err != nil {
 		return LandOutcome{}, err
 	}
-	return LandOutcome{Result: LandLanded, TrunkAfter: c.HeadSHA}, nil
+	defer db.Close()
+	out, err := land.Land(ctx, db, trunk, land.LandingRequest{
+		ItemID: c.ItemID, RunID: c.RunID, BaseRef: TrunkRef, BaseSHA: c.BaseSHA, HeadSHA: c.HeadSHA,
+		ObservedTrunk: c.ObservedTrunk, At: time.Now().UTC(),
+		Verdict: land.Verdict{VerdictID: c.RunID + "-gate", BaseSHA: c.BaseSHA, TreeSHA: tree, Result: land.VerdictPass},
+	})
+	if err != nil {
+		return LandOutcome{}, err
+	}
+	return LandOutcome{Result: out.Result, Reason: out.Reason, TrunkAfter: out.TrunkAfter, ConflictPaths: out.ConflictPaths}, nil
 }
 func (s revertSteps) ReturnLanded(ctx context.Context, itemID, runID, reason string) error {
 	s.mu.Lock()
@@ -107,9 +118,10 @@ func fileRed(names ...string) func(context.Context, string, string) ([]HeavyChec
 
 func newRevertHarness(t *testing.T, judge func(context.Context, string, string) ([]HeavyCheck, error)) *revertHarness {
 	t.Helper()
+	config := filepath.Join(scratchUnderDurable(t), "gitconfig")
+	writeForkFile(t, config, "[user]\n\tname = Fixture\n\temail = fixture@example.invalid\n")
+	t.Setenv("GIT_CONFIG_GLOBAL", config)
 	root, base := heavyRepo(t)
-	heavyGit(t, root, "config", "user.name", "Fixture")
-	heavyGit(t, root, "config", "user.email", "fixture@example.invalid")
 	heavyGit(t, root, "update-ref", GreenRef, base)
 	s, err := store.InitFixture(context.Background(), filepath.Join(scratchUnderDurable(t), "store.db"))
 	if err != nil {
