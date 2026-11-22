@@ -425,6 +425,9 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				receipt.JudgeSession = id
 			}
 		}
+		if err := CheckTrunkWorktree(ctx, l.cfg.Root); err != nil {
+			return c, false, err
+		}
 		if err := l.restoreJudgeInputs(c, receipt); err != nil {
 			return c, false, err
 		}

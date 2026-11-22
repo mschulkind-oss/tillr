@@ -158,6 +158,9 @@ func TakeBoundary(ctx context.Context, spec BoundarySpec) (*Boundary, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := CheckTrunkWorktree(ctx, repo); err != nil {
+		return nil, err
+	}
 	worktrees, err := listWorktrees(ctx, repo)
 	if err != nil {
 		return nil, err

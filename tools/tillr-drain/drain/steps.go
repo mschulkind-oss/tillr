@@ -275,6 +275,9 @@ func decodeRunRecord(out []byte) (run.Record, string, error) {
 // hole the event log exists to close. An append that fails fails the step — the loop then
 // stops with the gate's judgment unrecorded rather than carrying on as if it were.
 func (s *ProcessSteps) Gate(ctx context.Context, candidate Candidate) (GateOutcome, error) {
+	if err := CheckTrunkWorktree(ctx, s.Root); err != nil {
+		return GateOutcome{}, err
+	}
 	// The spans path is the run's own record, and it travels in the environment rather
 	// than on the command line: the gate program the caller names is a wrapper (the
 	// documented one is `tillr-loop gate`) that composes the real gate call, and a flag it
@@ -435,6 +438,9 @@ type LandOutcome struct {
 // refusal and carries the conflict paths; a land program that printed no record falls back
 // to its exit code, which is what a stub is.
 func (s *ProcessSteps) Land(ctx context.Context, candidate Candidate) (LandOutcome, error) {
+	if err := CheckTrunkWorktree(ctx, s.Root); err != nil {
+		return LandOutcome{}, err
+	}
 	extra := landArgs(candidate)
 	code, out, span, err := s.programWithEnv(ctx, "land", ".", s.LandProgram, candidate, []string{"TILLR_LAND_OBSERVE=1"}, extra...)
 	if err != nil {
