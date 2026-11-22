@@ -87,7 +87,7 @@ func (r Rule) UnevaluatedReason() string {
 
 func (r Rule) scopeReason() string {
 	switch r.Scope {
-	case "core", "workflow:*", "charter:*":
+	case "", "*", "core", "workflow:*", "charter:*":
 		return ""
 	default:
 		return "named scope is not evaluated by this build"
@@ -100,7 +100,7 @@ func (r Rule) expressions() [4]*Expression {
 
 func (r Rule) evaluatorReason() string {
 	for _, projection := range r.Reads.Projections {
-		if projection != "items" && projection != "charter" && !strings.HasPrefix(projection, "git_refs:") {
+		if projection != "items" && projection != "charter" && projection != "git_refs" && !strings.HasPrefix(projection, "git_refs:") {
 			return fmt.Sprintf("unsupported projection %q", projection)
 		}
 	}

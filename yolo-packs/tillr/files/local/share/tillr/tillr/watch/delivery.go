@@ -19,6 +19,12 @@ type Notice struct {
 
 // Pending returns open foreground alerts in notice sequence order.
 func (e Evaluator) Pending(ctx context.Context, owner string) ([]Notice, error) {
+	if e.Store == nil {
+		if e.Source == nil {
+			return nil, fmt.Errorf("watch: Evaluator requires Store or Source")
+		}
+		return e.mem.pending(owner, e.Rules)
+	}
 	// Preserve file-rule routing for initial openings. Reopenings are new
 	// notices routed by the effective rules, independent of eligibility.
 	fileForeground := foregroundRules(e.Rules)
@@ -78,6 +84,12 @@ func foregroundRules(rules []Rule) map[string]bool {
 
 // Seen confirms a printed cursor without changing alert state.
 func (e Evaluator) Seen(ctx context.Context, owner string, seq int64) error {
+	if e.Store == nil {
+		if e.Source == nil {
+			return fmt.Errorf("watch: Evaluator requires Store or Source")
+		}
+		return e.mem.seen(owner, seq)
+	}
 	return e.Store.WriteTx(ctx, func(tx *store.Tx) error {
 		var shown, seen int64
 		err := tx.QueryRow(`SELECT shown_seq,seen_seq FROM foreground_delivery WHERE owner_handle=?`, owner).Scan(&shown, &seen)
@@ -100,6 +112,12 @@ func (e Evaluator) Seen(ctx context.Context, owner string, seq int64) error {
 
 // Shown records successful printing, never confirmation.
 func (e Evaluator) Shown(ctx context.Context, owner string, seq int64) error {
+	if e.Store == nil {
+		if e.Source == nil {
+			return fmt.Errorf("watch: Evaluator requires Store or Source")
+		}
+		return e.mem.shown(owner, seq)
+	}
 	return e.Store.WriteTx(ctx, func(tx *store.Tx) error {
 		_, err := tx.Exec(`INSERT INTO foreground_delivery(owner_handle,shown_seq) VALUES (?,?)
    ON CONFLICT(owner_handle) DO UPDATE SET shown_seq=MAX(shown_seq,excluded.shown_seq) WHERE shown_seq<excluded.shown_seq`, owner, seq)
@@ -108,6 +126,12 @@ func (e Evaluator) Shown(ctx context.Context, owner string, seq int64) error {
 }
 
 func (e Evaluator) BeginWait(ctx context.Context, owner string) (time.Time, error) {
+	if e.Store == nil {
+		if e.Source == nil {
+			return time.Time{}, fmt.Errorf("watch: Evaluator requires Store or Source")
+		}
+		return e.mem.beginWait(owner, e.now()), nil
+	}
 	now := e.now()
 	err := e.Store.WriteTx(ctx, func(tx *store.Tx) error {
 		_, err := tx.Exec(`INSERT INTO foreground_delivery(owner_handle,waiting_since,last_wait_at) VALUES (?,?,?)
@@ -118,6 +142,13 @@ func (e Evaluator) BeginWait(ctx context.Context, owner string) (time.Time, erro
 }
 
 func (e Evaluator) EndWait(ctx context.Context, owner string, start time.Time) error {
+	if e.Store == nil {
+		if e.Source == nil {
+			return fmt.Errorf("watch: Evaluator requires Store or Source")
+		}
+		e.mem.endWait(owner, start, e.now())
+		return nil
+	}
 	return e.Store.WriteTx(ctx, func(tx *store.Tx) error {
 		_, err := tx.Exec(`UPDATE foreground_delivery SET waiting_since=NULL,last_wait_at=? WHERE owner_handle=? AND waiting_since=?`, e.now().UnixMilli(), owner, start.UnixMilli())
 		return err
