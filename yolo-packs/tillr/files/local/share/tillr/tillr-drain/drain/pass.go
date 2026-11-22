@@ -130,7 +130,7 @@ var pendingHistoryKinds = []string{
 	candidateDiscardedKind,
 }
 
-// pendingFolds counts readPendingHistory's folds in this process: observation
+// pendingFolds counts full pending-history folds in this process: observation
 // for tests that keep an application's fold in its read phase.
 var pendingFolds atomic.Int64
 
@@ -174,10 +174,6 @@ func pendingHistoryChanged(r *store.Reader, after int64) (bool, error) {
 // Keep every attempt's effective examination state, including superseded dispatches.
 // Second-failure routing needs the same continuation semantics as current planning.
 func readPendingHistory(r *store.Reader) (map[string]*pendingWork, map[string]*pendingWork, error) {
-	pendingFolds.Add(1)
-	if pendingHistoryFoldHook != nil {
-		pendingHistoryFoldHook()
-	}
 	state, err := readPendingHistoryState(r)
 	if err != nil {
 		return nil, nil, err
@@ -198,6 +194,10 @@ func newPendingHistoryState() *pendingHistoryState {
 }
 
 func readPendingHistoryState(r *store.Reader) (*pendingHistoryState, error) {
+	pendingFolds.Add(1)
+	if pendingHistoryFoldHook != nil {
+		pendingHistoryFoldHook()
+	}
 	state := newPendingHistoryState()
 	if err := foldPendingHistory(r, 0, state, nil); err != nil {
 		return nil, err
@@ -1742,26 +1742,33 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			return false, nil, err
 		}
 	}
-	// Fold once in a read snapshot, never while another writer is excluded. A
-	// relevant append makes this application stale; skip it instead of folding
-	// again under the lock (or retrying for the lock).
+	// Fold once in a read snapshot, never while another writer is excluded.
+	// Subsequent reads extend this application's private fold by the delta only.
 	reader, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		return false, nil, err
 	}
-	var works, designHistory map[string]*pendingWork
+	defer reader.Close()
+	var pending *pendingHistoryState
 	var historyHead int64
-	err = reader.ReadTx(ctx, func(r *store.Reader) error {
-		var err error
-		historyHead, err = pendingHistoryHead(r)
-		if err != nil {
+	refreshHistory := func(ctx context.Context) error {
+		return reader.ReadTx(ctx, func(r *store.Reader) error {
+			head, err := pendingHistoryHead(r)
+			if err != nil {
+				return err
+			}
+			if pending == nil {
+				pending, err = readPendingHistoryState(r)
+			} else {
+				err = foldPendingHistory(r, historyHead, pending, nil)
+			}
+			if err == nil {
+				historyHead = head
+			}
 			return err
-		}
-		works, designHistory, err = readPendingHistory(r)
-		return err
-	})
-	reader.Close()
-	if err != nil {
+		})
+	}
+	if err := refreshHistory(ctx); err != nil {
 		return false, nil, err
 	}
 	s, err := store.Open(ctx, l.cfg.Store, true)
@@ -1791,8 +1798,18 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 			return err
 		}
 		if historyChanged {
-			return decline("pending work changed during the claim", "replan with the current pending work")
+			if !isDispatch(p.decision) {
+				return decline("pending work changed during the claim", "replan with the current pending work")
+			}
+			// A sibling can append while this claim gathers Git/file facts. Refresh
+			// outside the writer, then let the normal version and capacity checks
+			// decide whether the new history actually invalidates this dispatch.
+			_, err := gather(ctx, fmt.Sprintf("pending history after %d", historyHead), func(ctx context.Context) (string, error) {
+				return "", refreshHistory(ctx)
+			})
+			return err
 		}
+		works, designHistory := pending.works, pending.byRun
 		faults, err := ReadItemFaults(tx.Reader())
 		if err != nil {
 			return err
