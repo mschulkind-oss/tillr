@@ -126,6 +126,7 @@ type Decision struct {
 	WorkflowRestart   bool           `json:"workflow_restart,omitempty"`
 	NodeInfraFailures int            `json:"node_infra_failures,omitempty"`
 	WorkflowRelease   bool           `json:"workflow_release,omitempty"`
+	FreshNodeStage    bool           `json:"fresh_node_stage,omitempty"`
 	Workflow          *Workflow      `json:"workflow,omitempty"`
 	SelectedWorkflow  string         `json:"selected_workflow,omitempty"`
 	WorkflowSource    string         `json:"workflow_source,omitempty"`
@@ -707,6 +708,11 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				}
 			}
 			ownerNextNode := ownerOwed && (work.Ready || decision.Action == ActionDispatch || decision.Action == ActionRetry)
+			// A dependency added while a step is running blocks after that step:
+			// the running or finished step still settles, and only a next dispatch
+			// or candidate judgment waits on the dependency.
+			depBlocked := item.State == def.Ready && p.dependencyBlocked(edges[item.ItemID])
+			depHold := depBlocked && (work.Ready || isDispatch(decision) || decision.Action == ActionJudge)
 			// A node waiting to start whose decision lane has left the rotation (a refused
 			// claim took it out) cannot be offered that lane again: it is planned onto a
 			// free one, as a released lane is.
@@ -716,7 +722,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			// run without owning its fork. Check before it can take a free lane,
 			// just as for a fresh dispatch. Running work and settlement still proceed.
 			var fork, forkHolder string
-			if err == nil && p.lands() && isDispatch(decision) &&
+			if err == nil && !depHold && p.lands() && isDispatch(decision) &&
 				!(decision.Workflow != nil && classificationNode(decision.Workflow.Stages[decision.NodeIndex])) {
 				fork = item.Delivery.activeFork()
 				self := ""
@@ -725,7 +731,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 				}
 				forkHolder, _ = p.forkHeldBy(fork, self)
 			}
-			if err == nil && (work.LaneReleased || laneOut) && !waiting && !ownerNextNode && decision.Action != ActionHold && forkHolder == "" {
+			if err == nil && (work.LaneReleased || laneOut) && !waiting && !ownerNextNode && !depHold && decision.Action != ActionHold && forkHolder == "" {
 				if detachedNode {
 					// A released first node has no staged state to resume. Keep the
 					// selected request, but stage it fresh on the newly assigned lane.
@@ -747,8 +753,9 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			}
 			if err == nil && work.Decision.Workflow != nil && !work.BoundaryFailed {
 				// Settle a completed node before holding the next one: its result is
-				// already work done, not a new dispatch.
-				invalid := ownerNextNode || item.State != def.Ready || p.isBlocked(item, edges[item.ItemID]) || p.questionState(item).reason != ""
+				// already work done, not a new dispatch. An unmet dependency holds the
+				// next step below instead of discarding the settled workflow.
+				invalid := ownerNextNode || item.State != def.Ready || p.questionState(item).reason != ""
 				// The persisted graph, including source digests, owns this attempt.
 				// Editing its source does not invalidate or replace an in-flight node, and
 				// neither does an edit to the item's block or fence: the owner ruled on
@@ -782,6 +789,10 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			}
 			if err != nil {
 				return nil, nil, readFailure(err)
+			}
+			if depHold && !decision.WorkflowRelease {
+				decision = Decision{ItemID: item.ItemID, Attempt: decision.Attempt, From: "held", Action: ActionHold, Reason: ReasonBlocked}
+				identifyDecision(&decision)
 			}
 			if forkHolder != "" && isDispatch(decision) {
 				decision = Decision{ItemID: item.ItemID, Attempt: decision.Attempt, From: "held", Action: ActionHold, Reason: ReasonForkHeld, DeferredBy: forkHolder}
@@ -1608,14 +1619,10 @@ func (p *planner) forkHeldBy(fork, exceptItem string) (string, bool) {
 	return "", false
 }
 
-// isBlocked answers whether the item is held by a blocker: its own state says so, or
-// something it is blocked by has not landed or been resolved elsewhere. A blocker the
-// store does not hold or one closed without landing blocks, which is the safe direction:
-// neither is evidence that the dependency's change landed.
-func (p *planner) isBlocked(item itemRow, blockedBy []string) bool {
-	if item.State == p.rules().Blocked {
-		return true
-	}
+// dependencyBlocked answers whether any blocked_by edge on the item is not yet satisfied.
+// A blocker the store does not hold or one closed without landing blocks, which is the safe
+// direction: neither is evidence that the dependency's change landed.
+func (p *planner) dependencyBlocked(blockedBy []string) bool {
 	for _, blocker := range blockedBy {
 		state, found := p.itemStates[blocker]
 		if !found || !blockerSatisfied(p.rules(), state) {
@@ -1623,6 +1630,12 @@ func (p *planner) isBlocked(item itemRow, blockedBy []string) bool {
 		}
 	}
 	return false
+}
+
+// isBlocked answers whether the item is held by a blocker: its own state says so, or
+// something it is blocked by has not landed or been resolved elsewhere.
+func (p *planner) isBlocked(item itemRow, blockedBy []string) bool {
+	return item.State == p.rules().Blocked || p.dependencyBlocked(blockedBy)
 }
 
 func (p *planner) waitReleased(itemID string) bool {
