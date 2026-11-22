@@ -36,15 +36,21 @@ func (s *startStoreSync) close() {
 }
 
 func (s *startStoreSync) syncStore(ctx context.Context, path string, at time.Time, policy *Policy, prev startSnapshot, rebuild func(*store.Reader, *startSnapshot, map[string]bool) error) (startSnapshot, error) {
-	return s.syncStoreWithRefresh(ctx, path, at, policy, prev, false, rebuild)
+	return s.syncStoreWithRefresh(ctx, path, at, policy, prev, false, nil, rebuild)
 }
 
-func (s *startStoreSync) syncStoreWithRefresh(ctx context.Context, path string, at time.Time, policy *Policy, prev startSnapshot, inspectExternal bool, rebuild func(*store.Reader, *startSnapshot, map[string]bool) error) (startSnapshot, error) {
+func (s *startStoreSync) syncStoreWithRefresh(ctx context.Context, path string, at time.Time, policy *Policy, prev startSnapshot, inspectExternal bool, prepare func(*store.Store) error, rebuild func(*store.Reader, *startSnapshot, map[string]bool) error) (startSnapshot, error) {
 	fresh := s.reader == nil
 	if fresh {
 		var err error
 		s.reader, err = store.OpenRead(ctx, path)
 		if err != nil {
+			return prev, err
+		}
+	}
+	if prepare != nil {
+		if err := prepare(s.reader); err != nil {
+			s.close()
 			return prev, err
 		}
 	}

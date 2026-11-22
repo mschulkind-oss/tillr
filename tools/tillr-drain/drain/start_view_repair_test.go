@@ -374,7 +374,7 @@ func TestNextStartDoesNotWaitOnASyncInItsRead(t *testing.T) {
 		if change == 0 {
 			return seed, nil
 		}
-		return follower.syncStoreWithRefresh(ctx, f.storePath, at, policy, view.snapshot(), true, func(r *store.Reader, next *startSnapshot, touched map[string]bool) error {
+		return follower.syncStoreWithRefresh(ctx, f.storePath, at, policy, view.snapshot(), true, nil, func(r *store.Reader, next *startSnapshot, touched map[string]bool) error {
 			close(insideRead)
 			select {
 			case <-ctx.Done():

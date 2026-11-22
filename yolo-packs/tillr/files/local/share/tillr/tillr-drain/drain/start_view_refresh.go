@@ -3,6 +3,7 @@ package drain
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"io/fs"
 	"maps"
 	"os"
@@ -69,27 +70,41 @@ func (s *startRefresh) read(ctx context.Context, at time.Time, policy *Policy, t
 	inspect := change&startWatchExternal != 0
 	docs, bases := s.docs, startBases{tip: prev.tip, green: prev.green}
 	docsChanged := false
-	// Ordinary external refreshes need not pin a SQLite read transaction
-	// across a Git probe, directory walk or Vantage subprocess.
 	if inspect && prev.pending != nil {
 		var err error
 		bases, err = refreshTrunk(ctx, root, prev.def)
 		if err != nil {
 			return prev, err
 		}
-		docsChanged = docs.refreshDocuments(ctx, root, cmd, index, prev.itemsByID)
+	}
+	var documents map[string]itemRow
+	prepare := func(reader *store.Store) error {
+		// Read only the document references here. In particular, the initial
+		// index and the first index after a document is filed must not hold a
+		// WAL snapshot across the indexer's filesystem walk or subprocess.
+		var err error
+		documents, err = readStartDesignDocs(ctx, reader)
+		if err != nil {
+			return err
+		}
+		if inspect || docs.questions == nil || designDocsChanged(documents, prev.itemsByID) {
+			docsChanged = docs.refreshDocuments(ctx, root, cmd, index, documents)
+		}
+		return nil
 	}
 	tick.Now = at.Format(time.RFC3339Nano)
-	next, err := s.store.syncStoreWithRefresh(ctx, tick.StorePath, at, policy, prev, inspect, func(r *store.Reader, next *startSnapshot, touched map[string]bool) error {
+	next, err := s.store.syncStoreWithRefresh(ctx, tick.StorePath, at, policy, prev, inspect, prepare, func(r *store.Reader, next *startSnapshot, touched map[string]bool) error {
+		if designDocsChanged(documents, next.itemsByID) {
+			// A concurrent filing changed the input to the indexer. Leave the
+			// published proposals alone until the watcher's next ordinary wake.
+			return errors.New("design document references changed during start-view refresh")
+		}
 		if prev.pending == nil || next.definitionSHA != prev.definitionSHA {
 			var err error
 			bases, err = refreshTrunk(ctx, root, next.def)
 			if err != nil {
 				return err
 			}
-		}
-		if docs.questions == nil || designDocsChanged(prev.itemsByID, next.itemsByID, touched) {
-			docsChanged = docs.refreshDocuments(ctx, root, cmd, index, next.itemsByID) || docsChanged
 		}
 		if docsChanged || bases.tip != prev.tip || bases.green != prev.green {
 			touched = nil
@@ -120,23 +135,35 @@ func refreshTrunk(ctx context.Context, root string, def definition.Definition) (
 	return startBases{tip: tip, green: green}, err
 }
 
-func designDocsChanged(prev, next map[string]itemRow, touched map[string]bool) bool {
-	changed := func(id string) bool { return prev[id].DesignDoc != next[id].DesignDoc }
-	if touched != nil {
-		for id := range touched {
-			if changed(id) {
-				return true
-			}
+func readStartDesignDocs(ctx context.Context, reader *store.Store) (map[string]itemRow, error) {
+	docs := map[string]itemRow{}
+	err := reader.ReadTx(ctx, func(r *store.Reader) error {
+		rows, err := r.Query(`SELECT item_id, design_doc FROM items WHERE design_doc <> ''`)
+		if err != nil {
+			return err
 		}
-		return false
-	}
-	for id := range prev {
-		if changed(id) {
+		defer rows.Close()
+		for rows.Next() {
+			var id, doc string
+			if err := rows.Scan(&id, &doc); err != nil {
+				return err
+			}
+			docs[id] = itemRow{DesignDoc: doc}
+		}
+		return rows.Err()
+	})
+	return docs, err
+}
+
+// docs contains only rows with nonempty design documents.
+func designDocsChanged(docs, items map[string]itemRow) bool {
+	for id, row := range docs {
+		if items[id].DesignDoc != row.DesignDoc {
 			return true
 		}
 	}
-	for id := range next {
-		if changed(id) {
+	for id, row := range items {
+		if docs[id].DesignDoc != row.DesignDoc {
 			return true
 		}
 	}
