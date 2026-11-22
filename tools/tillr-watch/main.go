@@ -25,7 +25,9 @@ const help = `Usage:
   tillr watch daemon --store PATH --rules DIR [--root DIR]
   tillr watch wait --store PATH --rules DIR [--root DIR] [--owner ID] [--timeout DUR | --follow] [--seen-through SEQ]
   tillr watch seen --store PATH --through SEQ [--owner ID]
-  tillr watch ack ID --store PATH --by ACTOR [--note TEXT]
+  tillr watch ack ID --store PATH --by ACTOR [--note TEXT] [--item ITEM_ID]
+  tillr watch track ID --store PATH --item ITEM_ID [--by ACTOR] [--note TEXT] [--item ITEM_ID]
+  tillr watch track ID --store PATH --item ITEM_ID [--by ACTOR] [--note TEXT]
   tillr watch silence ID --store PATH (--until DUR_OR_TIME | --until-change) [--reason TEXT]
   tillr watch resolve ID --store PATH --reason TEXT
   tillr watch rule list --store PATH --rules DIR
@@ -62,7 +64,7 @@ func runWithTicks(ctx context.Context, args []string, out, stderr io.Writer, tic
 	}
 	face := args[0]
 	switch face {
-	case "ack", "silence", "resolve":
+	case "ack", "track", "silence", "resolve":
 		if err := runEpisode(ctx, face, args[1:], out); err != nil {
 			return fail(err)
 		}

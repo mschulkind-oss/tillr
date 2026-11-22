@@ -33,7 +33,22 @@ type Bundle struct {
 	Omitted  omission       `json:"omitted"`
 }
 
+func trackedPersistPrefix(itemID, itemState string) string {
+	switch itemState {
+	case "landed":
+		return "tracked fix " + itemID + " landed and the condition persists: "
+	case "closed", "missing":
+		return "tracked fix " + itemID + " closed and the condition persists: "
+	default:
+		return "tracked fix " + itemID + " closed (" + itemState + ") and the condition persists: "
+	}
+}
+
 func makeBundle(r Rule, key, id string, c *condition) ([]byte, error) {
+	return makeBundleWithPrefix(r, key, id, c, "")
+}
+
+func makeBundleWithPrefix(r Rule, key, id string, c *condition, summaryPrefix string) ([]byte, error) {
 	events := slices.Clone(c.events)
 	slices.Reverse(events)
 	count := int64(len(events))
@@ -85,7 +100,7 @@ func makeBundle(r Rule, key, id string, c *condition) ([]byte, error) {
 		}
 		return out
 	}
-	b := Bundle{RuleID: r.ID, Subject: key, Severity: r.Severity, Events: events, Guidance: bundleGuidance{Summary: renderGuidanceLine(r.Guidance.Summary, base, newestLookup), Check: render(r.Guidance.Check), Do: render(r.Guidance.Do)}}
+	b := Bundle{RuleID: r.ID, Subject: key, Severity: r.Severity, Events: events, Guidance: bundleGuidance{Summary: summaryPrefix + renderGuidanceLine(r.Guidance.Summary, base, newestLookup), Check: render(r.Guidance.Check), Do: render(r.Guidance.Do)}}
 	return b.encode()
 }
 

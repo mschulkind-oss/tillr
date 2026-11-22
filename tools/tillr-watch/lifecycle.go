@@ -12,16 +12,23 @@ import (
 	"github.com/mschulkind-oss/tillr/watch"
 )
 
+var errNeedTrackingMigration = errors.New("tracking migration needed")
+
 func runEpisode(ctx context.Context, face string, args []string, out io.Writer) error {
 	f := flag.NewFlagSet(face, flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	path := f.String("store", "", "path to the tillr state database")
-	var by, note, until, reason string
+	var by, note, item, until, reason string
 	var untilChange bool
 	switch face {
 	case "ack":
 		f.StringVar(&by, "by", "", "actor acknowledging the alert")
 		f.StringVar(&note, "note", "", "acknowledgement note")
+		f.StringVar(&item, "item", "", "open queue item tracking the alert's cause")
+	case "track":
+		f.StringVar(&item, "item", "", "open queue item tracking the alert's cause")
+		f.StringVar(&by, "by", "", "actor recording the tracking item")
+		f.StringVar(&note, "note", "", "tracking note")
 	case "silence":
 		f.StringVar(&until, "until", "", "duration or RFC 3339 time")
 		f.BoolVar(&untilChange, "until-change", false, "silence until the fingerprint changes")
@@ -56,21 +63,66 @@ func runEpisode(ctx context.Context, face string, args []string, out io.Writer) 
 		}
 		return nil
 	}
+	apply := func(e watch.Evaluator) (string, error) {
+		switch face {
+		case "ack":
+			if set["item"] {
+				return "acknowledged", e.AckWithItem(ctx, id, by, optional("note", &note), &item)
+			}
+			return "acknowledged", e.Ack(ctx, id, by, optional("note", &note))
+		case "track":
+			return "tracked by " + item, e.Track(ctx, id, item, optional("by", &by), optional("note", &note))
+		case "silence":
+			return "silenced", e.Silence(ctx, id, optional("until", &until), optional("reason", &reason))
+		default: // resolve
+			return "resolved", e.Resolve(ctx, id, reason)
+		}
+	}
 	var state string
 	err = store.EditExisting(ctx, *path, func(s *store.Store) error {
 		e := watch.Evaluator{Store: s}
-		switch face {
-		case "ack":
-			state = "acknowledged"
-			return e.Ack(ctx, id, by, optional("note", &note))
-		case "silence":
-			state = "silenced"
-			return e.Silence(ctx, id, optional("until", &until), optional("reason", &reason))
-		default: // resolve
-			state = "resolved"
-			return e.Resolve(ctx, id, reason)
+		switch {
+		case face == "track":
+			if !set["item"] || item == "" {
+				return e.RefuseEpisode(ctx, id, errors.New("--item is required and must not be empty"))
+			}
+			if set["by"] && by == "" {
+				return e.RefuseEpisode(ctx, id, errors.New("--by must not be empty"))
+			}
+			needMigrate, err := e.NeedsTrackingMigration(ctx, true, id, item, optional("by", &by))
+			if err != nil {
+				return err
+			}
+			if needMigrate {
+				return errNeedTrackingMigration
+			}
+		case face == "ack" && set["item"]:
+			if item == "" {
+				return e.RefuseEpisode(ctx, id, errors.New("--item must not be empty"))
+			}
+			needMigrate, err := e.NeedsTrackingMigration(ctx, false, id, item, &by)
+			if err != nil {
+				return err
+			}
+			if needMigrate {
+				return errNeedTrackingMigration
+			}
 		}
+		var applyErr error
+		state, applyErr = apply(e)
+		return applyErr
 	})
+	if errors.Is(err, errNeedTrackingMigration) {
+		ms, openErr := store.OpenMigrated(ctx, *path)
+		if openErr != nil {
+			err = openErr
+		} else {
+			state, err = apply(watch.Evaluator{Store: ms})
+			if closeErr := ms.Close(); err == nil {
+				err = closeErr
+			}
+		}
+	}
 	if err != nil {
 		return err
 	}
