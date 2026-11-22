@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -167,6 +169,96 @@ func TestDrainRepeatedVerifierRefusalsRule(t *testing.T) {
 	refuse("item-a", drain.RefusalVerifyNotDone, now)
 	if again := pending(); len(again) != 1 || again[0].AlertID != notices[0].AlertID {
 		t.Fatalf("sixth refusal should keep the same alert open, got %+v", again)
+	}
+}
+
+func TestTrunkProofLagRule(t *testing.T) {
+	const ruleID = "trunk-proof-lag"
+	rules, err := watch.LoadRules("../../config/tillr/watch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := slices.IndexFunc(rules, func(rule watch.Rule) bool { return rule.ID == ruleID })
+	if idx < 0 {
+		t.Fatalf("missing %s rule", ruleID)
+	}
+	rule := rules[idx]
+	ctx := context.Background()
+	root := t.TempDir()
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	// Do not let the parent lane's Git context redirect fixture writes.
+	var env []string
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "GIT_") {
+			env = append(env, entry)
+		}
+	}
+	env = append(env,
+		"GIT_AUTHOR_NAME=Watch Fixture", "GIT_AUTHOR_EMAIL=watch@example.invalid",
+		"GIT_COMMITTER_NAME=Watch Fixture", "GIT_COMMITTER_EMAIL=watch@example.invalid",
+		"GIT_AUTHOR_DATE=2026-01-01T12:00:00+0000", "GIT_COMMITTER_DATE=2026-01-01T12:00:00+0000",
+	)
+	git := func(input string, args ...string) string {
+		t.Helper()
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", root, "--git-dir=" + filepath.Join(root, ".git")}, args...)...)
+		cmd.Env = env
+		cmd.Stdin = strings.NewReader(input)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("fixture git %v: %v: %s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("", "init", "--quiet", "--initial-branch=main")
+	tree := git("", "mktree")
+	head := git("base", "commit-tree", tree)
+	git("", "update-ref", "refs/heads/main", head)
+	git("", "update-ref", "refs/tillr/green", head)
+	advance := func() {
+		t.Helper()
+		head = git("advance", "commit-tree", tree, "-p", head)
+		git("", "update-ref", "refs/heads/main", head)
+	}
+
+	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	e := watch.Evaluator{Store: s, Root: root, Rules: []watch.Rule{rule}, Clock: func() time.Time { return now }}
+	pending := func() []watch.Notice {
+		t.Helper()
+		results, err := e.EvaluateRules(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(results) != 1 || results[0].ID != rule.ID || results[0].Diagnostic() != "" {
+			t.Fatalf("want readable trunk-proof-lag evaluation, got %+v", results)
+		}
+		notices, err := e.Pending(ctx, "foreground")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return notices
+	}
+
+	advance()
+	advance()
+	if notices := pending(); len(notices) != 0 {
+		t.Fatalf("two commits ahead opened notices: %+v", notices)
+	}
+	advance()
+	first := pending()
+	if len(first) != 1 {
+		t.Fatalf("want one foreground notice at three commits ahead, got %+v", first)
+	}
+	if advice := strings.Join(first[0].Bundle.Guidance.Do, " "); !strings.Contains(strings.ToLower(advice), "heavy runner") {
+		t.Fatalf("notice advice does not mention the heavy runner: %+v", first[0].Bundle.Guidance)
+	}
+	advance()
+	if notices := pending(); len(notices) != 1 || notices[0].AlertID != first[0].AlertID {
+		t.Fatalf("repeat evaluation must retain the single alert ID: first %+v, now %+v", first, notices)
 	}
 }
 
