@@ -26,24 +26,26 @@ func TestWatchFingerprintEncodingAndSource(t *testing.T) {
 		t.Run(pattern, func(t *testing.T) {
 			s := watchStore(t)
 			now := time.Unix(1700000000, 0)
-			watchFact(t, s, now.Add(-time.Minute), `{"step":"a"}`)
-			watchFact(t, s, now.Add(-time.Second), `{"step":"b","detail":{"check":"λ"},"empty":"","number":42,"bool":true,"list":[],"obj":{},"null":null}`)
 			w := When{Pattern: pattern, GroupBy: "global", Field: "step", Pairs: [][2]string{{"a", "b"}}, Threshold: 1, Window: time.Hour, ThresholdDuration: time.Second, Fingerprint: []string{"missing", "detail.check", "step", "empty", "number", "bool", "list", "obj", "null"}}
 			w.After, _ = ParseExpression(`event.step == "b"`)
+			if pattern != DurationWithoutEvent && pattern != AlternatingPair {
+				w.Match = w.After
+				w.Reset, _ = ParseExpression(`event.step == "reset"`)
+			}
+			r := Rule{ID: "rule", Scope: "core", Enabled: true, Severity: "warning", Reads: Reads{Events: []string{"watch-test.fact"}}, When: w}
+			e := Evaluator{Store: s, Rules: []Rule{r}, Clock: func() time.Time { return now }}
+			evaluateLifecycle(t, &e)
+			watchFact(t, s, now.Add(-time.Minute), `{"step":"a"}`)
+			watchFact(t, s, now.Add(-time.Second), `{"step":"b","detail":{"check":"λ"},"empty":"","number":42,"bool":true,"list":[],"obj":{},"null":null}`)
 			if pattern != DurationWithoutEvent {
 				// An equal observation is not counted for alternation; event patterns that
 				// use match must likewise take the most recent *counted* fact.
 				body := `{"step":"noise"}`
 				if pattern == AlternatingPair {
 					body = `{"step":"b","detail":{"check":"other"}}`
-				} else {
-					w.Match = w.After
-					w.Reset, _ = ParseExpression(`event.step == "reset"`)
 				}
 				watchFact(t, s, now, body)
 			}
-			r := Rule{ID: "rule", Scope: "core", Enabled: true, Severity: "warning", Reads: Reads{Events: []string{"watch-test.fact"}}, When: w}
-			e := Evaluator{Store: s, Rules: []Rule{r}, Clock: func() time.Time { return now }}
 			evaluateLifecycle(t, &e)
 			// 0 for missing; tagged two-byte UTF-8 string, one-byte string, empty
 			// string; then one zero for each of the five remaining nonstrings.
@@ -77,13 +79,14 @@ func TestWatchEpisodeTimeSilenceAndClearing(t *testing.T) {
 			ctx := context.Background()
 			now := time.Unix(1700000000, 0)
 			s := watchStore(t)
-			watchFact(t, s, now, `{"step":"build"}`)
 			clear, err := ParseExpression(`event.step == "clear"`)
 			if err != nil {
 				t.Fatal(err)
 			}
 			r := Rule{ID: "rule", Scope: "core", Enabled: true, Severity: "warning", Reads: Reads{Events: []string{"watch-test.fact"}}, When: When{Pattern: PredicateMatch, GroupBy: "global", Threshold: 1, Window: time.Hour, ClearWhen: clear, Fingerprint: []string{"step"}}, Delivery: Delivery{Receiver: "foreground"}}
 			e := Evaluator{Store: s, Rules: []Rule{r}, Clock: func() time.Time { return now }}
+			evaluateLifecycle(t, &e)
+			watchFact(t, s, now, `{"step":"build"}`)
 			pending := func() []Notice {
 				t.Helper()
 				n, err := e.Pending(ctx, "foreground")
@@ -151,9 +154,10 @@ func TestWatchEpisodeFractionalSilenceDeadline(t *testing.T) {
 	ctx := t.Context()
 	now := time.Unix(1700000000, 0).UTC()
 	s := watchStore(t)
-	watchFact(t, s, now, `{}`)
 	r := Rule{ID: "rule", Scope: "core", Enabled: true, Severity: "warning", Reads: Reads{Events: []string{"watch-test.fact"}}, When: When{Pattern: PredicateMatch, GroupBy: "global", Threshold: 1, Window: time.Hour}, Delivery: Delivery{Receiver: "foreground"}}
 	e := Evaluator{Store: s, Rules: []Rule{r}, Clock: func() time.Time { return now }}
+	evaluateLifecycle(t, &e)
+	watchFact(t, s, now, `{}`)
 	evaluateLifecycle(t, &e)
 	var id string
 	lifecycleRead(t, s, `SELECT alert_id FROM alert_episodes`, &id)
@@ -188,7 +192,6 @@ func TestWatchEpisodeManualResolveSequence(t *testing.T) {
 			ctx := context.Background()
 			now := time.Unix(1700000000, 0)
 			s := watchStore(t)
-			watchFact(t, s, now, `{}`)
 			r := Rule{ID: "rule", Scope: "core", Enabled: true, Severity: "warning", Reads: Reads{Events: []string{"watch-test.fact"}}, When: When{Pattern: PredicateMatch, GroupBy: "global", Threshold: 1, Window: time.Hour}, Delivery: Delivery{Receiver: "foreground"}}
 			e := Evaluator{Store: s, Rules: []Rule{r}, Clock: func() time.Time { return now }}
 			if lag {
@@ -196,7 +199,10 @@ func TestWatchEpisodeManualResolveSequence(t *testing.T) {
 				e.Root = root
 				e.Rules[0].Reads = Reads{Projections: []string{"git_refs:" + leaderRef + "," + followerRef}}
 				e.Rules[0].When = When{Pattern: LagBehind, GroupBy: "global", Leader: leaderRef, Follower: followerRef, ThresholdCommits: 1}
+			} else {
+				evaluateLifecycle(t, &e)
 			}
+			watchFact(t, s, now, `{}`)
 			evaluateLifecycle(t, &e)
 			notices, err := e.Pending(ctx, "foreground")
 			if err != nil || len(notices) != 1 {
@@ -234,9 +240,9 @@ func TestWatchEpisodeManualResolveSequence(t *testing.T) {
 }
 
 func TestWatchFingerprintIncrementalCacheAndSharedKind(t *testing.T) {
+	register(t, "watch-test.fact")
 	now := time.Unix(1700000000, 0)
 	s := watchStore(t)
-	watchFact(t, s, now, `{"step":"build","detail":{"check":"lint"}}`)
 	doc := `[[rule]]
 id = "by-step"
 scope = "core"
@@ -284,6 +290,10 @@ receiver = "foreground"
 	}
 	writes := 0
 	ctx := store.ObserveWrites(t.Context(), func(_, _ time.Time) { writes++ })
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	watchFact(t, s, now, `{"step":"build","detail":{"check":"lint"}}`)
 	if _, err := e.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
 	}

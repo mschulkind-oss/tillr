@@ -92,6 +92,12 @@ do = ["do"]
 [rule.delivery]
 receiver = "foreground"
 `
+	rules := watchRules(t, doc)
+	e := Evaluator{Store: s, Rules: rules, Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+
 	for _, itemID := range []string{"item-open", "item-ack", "item-silenced", "item/slash", "non-item-sha"} {
 		watchFact(t, s, now.Add(-2*time.Minute), fmt.Sprintf(`{"item_id":%q,"step":"verify"}`, itemID))
 		watchFact(t, s, now.Add(-time.Minute), fmt.Sprintf(`{"item_id":%q,"step":"verify"}`, itemID))
@@ -101,9 +107,6 @@ receiver = "foreground"
 		watchFact(t, s, now.Add(-time.Minute), `{"item_id":"lane-1","node":"dirty"}`)
 	}
 	watchFact(t, s, now.Add(-time.Minute), `{"global_hit":true}`)
-
-	rules := watchRules(t, doc)
-	e := Evaluator{Store: s, Rules: rules, Clock: func() time.Time { return now }}
 
 	if _, err := e.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
@@ -311,12 +314,14 @@ do = ["d"]
 [rule.delivery]
 receiver = "foreground"
 `
+	rules := watchRules(t, doc)
+	e := Evaluator{Store: s, Rules: rules, Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
 	watchFact(t, s, now.Add(-time.Minute), `{"item_id":"item-unloaded"}`)
 	watchFact(t, s, now.Add(-time.Minute), `{"item_id":"item%slash","node":"verify"}`)
 	watchFact(t, s, now.Add(-time.Minute), `{"item_id":"item-disabled"}`)
-	rules := watchRules(t, doc)
-
-	e := Evaluator{Store: s, Rules: rules, Clock: func() time.Time { return now }}
 	if _, err := e.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -361,10 +366,13 @@ func TestItemTerminalEventOnlyStoreAndCorruptCharterAreSafeNoOps(t *testing.T) {
 
 	// 1. Bare event-only store with no items table: rules evaluate normally with no Unreadable diagnostic.
 	bare := watchStore(t)
-	watchFact(t, bare, now.Add(-time.Minute), `{"item_id":"item-bare"}`)
 	rule := watchRules(t, strings.Replace(validRule, `"test.watch"`, `"watch-test.fact"`, 1))[0]
 	rule.When.GroupBy = "item_id"
 	eBare := Evaluator{Store: bare, Rules: []Rule{rule}, Clock: func() time.Time { return now }}
+	if _, err := eBare.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	watchFact(t, bare, now.Add(-time.Minute), `{"item_id":"item-bare"}`)
 	results, err := eBare.EvaluateRules(ctx)
 	if err != nil || len(results) != 1 || results[0].Diagnostic() != "" {
 		t.Fatalf("event-only store results=%+v err=%v", results, err)
@@ -377,8 +385,11 @@ func TestItemTerminalEventOnlyStoreAndCorruptCharterAreSafeNoOps(t *testing.T) {
 	corrupt := watchStore(t)
 	seedWatchItemsTable(t, corrupt)
 	setWatchItemState(t, corrupt, "item-c", "in-queue")
-	watchFact(t, corrupt, now.Add(-time.Minute), `{"item_id":"item-c"}`)
 	eCorrupt := Evaluator{Store: corrupt, Rules: []Rule{rule}, Clock: func() time.Time { return now }}
+	if _, err := eCorrupt.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	watchFact(t, corrupt, now.Add(-time.Minute), `{"item_id":"item-c"}`)
 	if _, err := eCorrupt.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -409,9 +420,6 @@ func TestItemTerminalInMemorySourceUnloadedAndComposite(t *testing.T) {
 			"items": items,
 		},
 	}
-	src.append("run.allocate", now.Add(-time.Minute), map[string]any{"item_id": "item-a", "node": "verify"})
-	src.append("drain.refusal", now.Add(-time.Minute), map[string]any{"item_id": "item-b"})
-
 	rules := []Rule{
 		{
 			ID:       "comp-src",
@@ -444,8 +452,12 @@ func TestItemTerminalInMemorySourceUnloadedAndComposite(t *testing.T) {
 			Delivery: Delivery{Receiver: "foreground"},
 		},
 	}
-
 	e := Evaluator{Source: src, Rules: rules, Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	src.append("run.allocate", now.Add(-time.Minute), map[string]any{"item_id": "item-a", "node": "verify"})
+	src.append("drain.refusal", now.Add(-time.Minute), map[string]any{"item_id": "item-b"})
 	if _, err := e.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -473,14 +485,16 @@ func TestItemTerminalViaTillrStoreSource(t *testing.T) {
 	s := watchStore(t)
 	seedWatchItemsTable(t, s)
 	setWatchItemState(t, s, "item-src", "in-queue")
-	watchFact(t, s, now.Add(-time.Minute), `{"item_id":"item-src"}`)
-
 	src := NewTillrStoreSource(s)
 	src.Clock = func() time.Time { return now }
 	rule := watchRules(t, strings.Replace(validRule, `"test.watch"`, `"watch-test.fact"`, 1))[0]
 	rule.When.GroupBy = "item_id"
 	e := Evaluator{Source: src, Rules: []Rule{rule}, Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
 
+	watchFact(t, s, now.Add(-time.Minute), `{"item_id":"item-src"}`)
 	if _, err := e.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
 	}

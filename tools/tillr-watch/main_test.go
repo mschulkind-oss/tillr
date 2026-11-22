@@ -100,7 +100,6 @@ func quietToFiring(t *testing.T, useSymlink bool) {
 	} else {
 		t.Chdir(filepath.Dir(s.Path()))
 	}
-	fact(t, s, `{"item_id":"item-a"}`)
 	args := []string{"wait", "--store", storePath, "--rules", rules}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -114,6 +113,10 @@ func quietToFiring(t *testing.T, useSymlink bool) {
 		return result{code, out.String(), stderr.String()}
 	}
 	invoke := func(args ...string) result { return invokeWith(ctx, args...) }
+	if initEval := invoke("eval", "--once", "--store", storePath, "--rules", rules); initEval.code != 0 || initEval.err != "" {
+		t.Fatalf("init eval: %+v", initEval)
+	}
+	fact(t, s, `{"item_id":"item-a"}`)
 	if quiet := invoke(append(append([]string(nil), args...), "--timeout", "30ms")...); quiet.code != 2 || quiet.err != "" || strings.Contains(quiet.out, "TILLR_WATCH_NOTICE") {
 		t.Fatalf("one fact should not fire: %+v", quiet)
 	}
@@ -179,7 +182,7 @@ func TestWatchStatusReadOnly(t *testing.T) {
 		t.Helper()
 		var got int
 		err := s.ReadTx(context.Background(), func(rd *store.Reader) error {
-			return rd.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name IN ('alert_episodes', 'foreground_delivery')`).Scan(&got)
+			return rd.QueryRow(`SELECT count(*) FROM sqlite_master WHERE name IN ('alert_episodes', 'foreground_delivery', 'watch_rule_baselines')`).Scan(&got)
 		})
 		if err != nil || got != want {
 			t.Fatalf("watch tables: got %d (%v), want %d", got, err, want)
@@ -190,20 +193,38 @@ func TestWatchStatusReadOnly(t *testing.T) {
 	fact(t, s, `{"item_id":"item-a"}`)
 	fact(t, s, `{"item_id":"item-a"}`)
 	var out, stderr bytes.Buffer
-	if code := run(context.Background(), []string{"status", "--store", s.Path(), "--rules", rules}, &out, &stderr); code != 0 || out.String() != "rule refusals skipped=1\n" || stderr.Len() != 0 {
-		t.Fatalf("status: %d %q %q", code, &out, &stderr)
+	if code := run(context.Background(), []string{"status", "--store", s.Path(), "--rules", rules}, &out, &stderr); code != 0 || out.String() != "rule refusals skipped=0\n" || stderr.Len() != 0 {
+		t.Fatalf("status before load: %d %q %q", code, &out, &stderr)
 	}
-	// The rule would fire, so running eval instead of the read-only status
-	// path would have added a watch.alert.opened event.
+	// The rule is not loaded yet, so status reports skipped=0 and creates no tables.
 	if n, err := s.EventHeadSeq(); err != nil || n != 3 {
 		t.Fatalf("event head %d: %v", n, err)
 	}
 	checkTables(0)
+	if code := run(context.Background(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, io.Discard, &stderr); code != 0 || stderr.Len() != 0 {
+		t.Fatalf("first eval: %d %q", code, &stderr)
+	}
+	checkTables(3)
+	if n, err := s.EventHeadSeq(); err != nil || n != 3 {
+		t.Fatalf("first eval should record baseline at seq 3 with 0 alerts: event head %d: %v", n, err)
+	}
+	fact(t, s, `{"item_id":7}`)
+	fact(t, s, `{"item_id":"item-a"}`)
+	fact(t, s, `{"item_id":"item-a"}`)
+	out.Reset()
+	stderr.Reset()
+	if code := run(context.Background(), []string{"status", "--store", s.Path(), "--rules", rules}, &out, &stderr); code != 0 || out.String() != "rule refusals skipped=1\n" || stderr.Len() != 0 {
+		t.Fatalf("status after load: %d %q %q", code, &out, &stderr)
+	}
+	// The rule would fire on post-load facts, so running eval instead of the
+	// read-only status path would have added a watch.alert.opened event.
+	if n, err := s.EventHeadSeq(); err != nil || n != 6 {
+		t.Fatalf("event head %d: %v", n, err)
+	}
 	if code := run(context.Background(), []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, io.Discard, &stderr); code != 0 || stderr.String() != "tillr watch: rule refusals skipped 1 events: group_by item_id missing or not a string\n" {
 		t.Fatalf("eval: %d %q", code, &stderr)
 	}
-	checkTables(2)
-	if n, err := s.EventHeadSeq(); err != nil || n != 4 {
+	if n, err := s.EventHeadSeq(); err != nil || n != 7 {
 		t.Fatalf("eval should open one episode: event head %d: %v", n, err)
 	}
 }
@@ -273,10 +294,13 @@ func TestWatchEvalAndWaitUseEffectiveRules(t *testing.T) {
 
 func TestWatchWaitKeepsFileReceiverForNotices(t *testing.T) {
 	s, rules := fixture(t, false)
-	fact(t, s, `{"item_id":"item-a"}`)
-	fact(t, s, `{"item_id":"item-a"}`)
 	common := []string{"--store", s.Path(), "--rules", rules}
 	var out, stderr bytes.Buffer
+	if code := run(t.Context(), append([]string{"eval", "--once"}, common...), io.Discard, &stderr); code != 0 || stderr.Len() != 0 {
+		t.Fatalf("init eval: %d, stderr %q", code, &stderr)
+	}
+	fact(t, s, `{"item_id":"item-a"}`)
+	fact(t, s, `{"item_id":"item-a"}`)
 	if code := run(t.Context(), append([]string{"eval", "--once"}, common...), io.Discard, &stderr); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("eval: %d, stderr %q", code, &stderr)
 	}

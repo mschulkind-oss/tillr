@@ -38,6 +38,9 @@ func TestDrainItemFaultRule(t *testing.T) {
 	t.Cleanup(func() { s.Close() })
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	e := watch.Evaluator{Store: s, Rules: rules, Clock: func() time.Time { return now }}
+	if _, err := e.Evaluate(ctx); err != nil {
+		t.Fatal(err)
+	}
 	appendEvent := func(kind, item string, payload any) {
 		t.Helper()
 		body, err := json.Marshal(payload)
@@ -116,6 +119,9 @@ func TestDrainRepeatedVerifierRefusalsRule(t *testing.T) {
 	t.Cleanup(func() { s.Close() })
 	now := time.Date(2026, 11, 21, 22, 0, 0, 0, time.UTC)
 	e := watch.Evaluator{Store: s, Rules: rules[idx : idx+1], Clock: func() time.Time { return now }}
+	if _, err := e.Evaluate(ctx); err != nil {
+		t.Fatal(err)
+	}
 	n := 0
 	refuse := func(item, step string, at time.Time) {
 		t.Helper()
@@ -312,13 +318,16 @@ func TestDrainRevertRules(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			e := watch.Evaluator{Store: s, Rules: rules, Clock: func() time.Time { return now }}
+			if _, err := e.Evaluate(ctx); err != nil {
+				t.Fatal(err)
+			}
 			if err := s.WriteTx(ctx, func(tx *store.Tx) error {
 				_, err := tx.Append(event.Event{Kind: drain.RevertKind, ObjectType: "landing", ObjectID: &landing, At: now, Payload: body})
 				return err
 			}); err != nil {
 				t.Fatal(err)
 			}
-			e := watch.Evaluator{Store: s, Rules: rules, Clock: func() time.Time { return now }}
 			if _, err := e.Evaluate(ctx); err != nil {
 				t.Fatal(err)
 			}

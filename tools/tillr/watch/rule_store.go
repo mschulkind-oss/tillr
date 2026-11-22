@@ -180,7 +180,14 @@ func (s RuleStore) Reset(ctx context.Context, id, by string) error {
 		if _, err := tx.Exec(`DELETE FROM watch_rule_overrides WHERE rule_id=?`, id); err != nil {
 			return err
 		}
-		return appendRuleChange(tx, ruleResetKind, id, by, now)
+		changeSeq, err := appendRuleChange(tx, ruleResetKind, id, by, now)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ruleBaselinesDDL); err != nil {
+			return err
+		}
+		return updateBaselineOnReset(tx, id, s.FileRules, changeSeq, now.UnixMilli())
 	})
 }
 
@@ -206,6 +213,9 @@ func setRules(tx *store.Tx, rules []Rule, by string, now time.Time) error {
 	if _, err := tx.Exec(ruleOverridesDDL); err != nil {
 		return err
 	}
+	if _, err := tx.Exec(ruleBaselinesDDL); err != nil {
+		return err
+	}
 	for _, r := range rules {
 		text, err := EncodeRules([]Rule{r})
 		if err != nil {
@@ -216,20 +226,23 @@ VALUES (?,?,?,?) ON CONFLICT(rule_id) DO UPDATE SET
 rule_toml=excluded.rule_toml, set_by=excluded.set_by, set_at=excluded.set_at`, r.ID, string(text), by, now.UnixMilli()); err != nil {
 			return err
 		}
-		if err := appendRuleChange(tx, ruleSetKind, r.ID, by, now); err != nil {
+		changeSeq, err := appendRuleChange(tx, ruleSetKind, r.ID, by, now)
+		if err != nil {
+			return err
+		}
+		if err := updateBaselineForRule(tx, r, changeSeq, now.UnixMilli()); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func appendRuleChange(tx *store.Tx, kind, id, by string, now time.Time) error {
+func appendRuleChange(tx *store.Tx, kind, id, by string, now time.Time) (int64, error) {
 	payload, err := json.Marshal(map[string]string{"rule_id": id, "by": by})
 	if err != nil {
-		return err
+		return 0, err
 	}
-	_, err = tx.Append(event.Event{Kind: kind, ObjectType: "rule", ObjectID: &id, Payload: payload, At: now})
-	return err
+	return tx.Append(event.Event{Kind: kind, ObjectType: "rule", ObjectID: &id, Payload: payload, At: now})
 }
 
 func setRuleKey(table map[string]any, set string) error {

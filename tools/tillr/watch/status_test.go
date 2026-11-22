@@ -14,7 +14,7 @@ import (
 
 func TestWatchStatusBeforeWatchMigration(t *testing.T) {
 	s := watchStore(t)
-	watchSQL(t, s, `DROP TABLE foreground_delivery; DROP TABLE alert_episodes; DROP TABLE watch_rule_overrides;`)
+	watchSQL(t, s, `DROP TABLE foreground_delivery; DROP TABLE alert_episodes; DROP TABLE watch_rule_overrides; DROP TABLE watch_rule_baselines;`)
 	ro, err := store.OpenRead(t.Context(), s.Path())
 	if err != nil {
 		t.Fatal(err)
@@ -53,13 +53,17 @@ func TestWatchStatusReportsNamedScopes(t *testing.T) {
 }
 
 func TestWatchStatusReportsStoredAlertsAndLatestNotices(t *testing.T) {
+	register(t, "watch-test.fact")
 	s := watchStore(t)
 	ctx := t.Context()
 	now := time.Unix(1700000000, 0)
 	doc := strings.ReplaceAll(validRule, `"test.watch"`, `"watch-test.fact"`)
-	watchFact(t, s, now, `{"detail":{"item-id":"will-reopen"}}`)
 	rules := watchRules(t, doc)
 	e := Evaluator{Store: s, Rules: rules, Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	watchFact(t, s, now, `{"detail":{"item-id":"will-reopen"}}`)
 	if _, err := e.EvaluateRules(ctx); err != nil {
 		t.Fatal(err)
 	}

@@ -31,6 +31,9 @@ func TestDrainTrunkCoreWorktreeRule(t *testing.T) {
 	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
 	config := "/repo/.git/config"
 	e := watch.Evaluator{Store: s, Rules: rules[i : i+1], Clock: func() time.Time { return now }}
+	if _, err := e.Evaluate(ctx); err != nil {
+		t.Fatal(err)
+	}
 	var alertID string
 	for range 2 {
 		if err := s.WriteTx(ctx, func(tx *store.Tx) error {

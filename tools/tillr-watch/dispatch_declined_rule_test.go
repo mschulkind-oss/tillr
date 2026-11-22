@@ -38,6 +38,9 @@ func TestDrainDispatchDeclinedRule(t *testing.T) {
 	t.Cleanup(func() { s.Close() })
 	now := time.Date(2026, 11, 21, 22, 30, 0, 0, time.UTC)
 	e := watch.Evaluator{Store: s, Rules: []watch.Rule{rule}, Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
 	n := 0
 	decline := func(item, reason string, at time.Time) {
 		t.Helper()

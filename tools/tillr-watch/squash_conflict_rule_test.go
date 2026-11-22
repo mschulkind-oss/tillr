@@ -42,6 +42,9 @@ func TestLandSquashConflictRule(t *testing.T) {
 
 	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
 	e := watch.Evaluator{Store: s, Rules: []watch.Rule{rule}, Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
 
 	seqNum := 0
 	appendLanding := func(itemID, result, reason string, conflicts []string, at time.Time) {
@@ -186,6 +189,10 @@ func TestLandSquashConflictRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { allStore.Close() })
+	allEval := watch.Evaluator{Store: allStore, Rules: rules, Clock: func() time.Time { return now }}
+	if _, err := allEval.Evaluate(ctx); err != nil {
+		t.Fatal(err)
+	}
 	itemC := "item-c"
 	body, err := json.Marshal(land.Landing{
 		LandingID:     "landing_item-c_1",
@@ -204,7 +211,6 @@ func TestLandSquashConflictRule(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	allEval := watch.Evaluator{Store: allStore, Rules: rules, Clock: func() time.Time { return now }}
 	skipped, err := allEval.Evaluate(ctx)
 	if err != nil {
 		t.Fatal(err)

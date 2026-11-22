@@ -26,20 +26,10 @@ func watchEventOfKind(t *testing.T, s *store.Store, kind string, at time.Time, b
 }
 
 func TestWatchEvaluationContinuesFromLastEventWithoutRereadingHistory(t *testing.T) {
+	register(t, "watch-test.fact")
 	ctx := t.Context()
 	now := time.Unix(1700000000, 0)
 	s := watchStore(t)
-
-	// Seed historical events: 10 outside the 1h window, 8 inside for other
-	// subjects, and 2 inside for "item-a" (below threshold 3).
-	for i := 0; i < 10; i++ {
-		watchFact(t, s, now.Add(-2*time.Hour), fmt.Sprintf(`{"detail":{"item-id":"old-%d"}}`, i))
-	}
-	for i := 0; i < 8; i++ {
-		watchFact(t, s, now.Add(-30*time.Minute), fmt.Sprintf(`{"detail":{"item-id":"other-%d"}}`, i))
-	}
-	watchFact(t, s, now.Add(-20*time.Minute), `{"detail":{"item-id":"item-a"}}`)
-	headAfterSeed := watchFact(t, s, now.Add(-5*time.Minute), `{"detail":{"item-id":"item-a"}}`)
 
 	doc := `[[rule]]
 id = "count-1h"
@@ -77,6 +67,21 @@ do = ["do"]
 [rule.delivery]
 receiver = "foreground"
 `
+	rules := watchRules(t, doc)
+	if _, err := (&Evaluator{Store: s, Rules: rules, Clock: func() time.Time { return now }}).EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed historical events: 10 outside the 1h window, 8 inside for other
+	// subjects, and 2 inside for "item-a" (below threshold 3).
+	for i := 0; i < 10; i++ {
+		watchFact(t, s, now.Add(-2*time.Hour), fmt.Sprintf(`{"detail":{"item-id":"old-%d"}}`, i))
+	}
+	for i := 0; i < 8; i++ {
+		watchFact(t, s, now.Add(-30*time.Minute), fmt.Sprintf(`{"detail":{"item-id":"other-%d"}}`, i))
+	}
+	watchFact(t, s, now.Add(-20*time.Minute), `{"detail":{"item-id":"item-a"}}`)
+	headAfterSeed := watchFact(t, s, now.Add(-5*time.Minute), `{"detail":{"item-id":"item-a"}}`)
 
 	type eventQuery struct {
 		kind     string
@@ -86,7 +91,7 @@ receiver = "foreground"
 	var queries []eventQuery
 	e := Evaluator{
 		Store: s,
-		Rules: watchRules(t, doc),
+		Rules: rules,
 		Clock: func() time.Time { return now },
 		onEventQuery: func(kind string, sinceSeq int64, rows int) {
 			queries = append(queries, eventQuery{kind: kind, sinceSeq: sinceSeq, rows: rows})
@@ -200,9 +205,22 @@ receiver = "foreground"
 	if len(queries) != 0 {
 		t.Fatalf("override pass with no new events re-read events: %+v", queries)
 	}
+	// Under D-TW66, lowering threshold does not open an alert on pre-change events.
+	notices, err = e.Pending(ctx, "foreground")
+	if err != nil || len(notices) != 0 {
+		t.Fatalf("pending after override on pre-change event: %+v, %v", notices, err)
+	}
+	watchFact(t, s, now, `{"detail":{"item-id":"item-b"}}`)
+	queries = nil
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(queries) != 1 || queries[0].rows != 1 {
+		t.Fatalf("post-override event pass queries = %+v, want 1 tail query reading 1 row", queries)
+	}
 	notices, err = e.Pending(ctx, "foreground")
 	if err != nil || len(notices) != 1 || notices[0].Bundle.Subject != "item-b" {
-		t.Fatalf("pending after override: %+v, %v", notices, err)
+		t.Fatalf("pending after post-override event: %+v, %v", notices, err)
 	}
 }
 

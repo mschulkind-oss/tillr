@@ -81,6 +81,9 @@ func newTrunkProofFixture(t *testing.T) *trunkProofFixture {
 		Rules: selected,
 		Clock: func() time.Time { return f.now },
 	}
+	if _, err := f.e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
 	return f
 }
 

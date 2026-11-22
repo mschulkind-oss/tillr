@@ -72,9 +72,12 @@ func TestWatchStatusCheckpointedWALLeavesStoreUntouched(t *testing.T) {
 	t.Setenv("TILLR_SQLITE_TRACE", "0")
 	s, rules := fixture(t, false)
 	seed := s.Path()
-	fact(t, s, `{"item_id":"item-a"}`)
-	fact(t, s, `{"item_id":"item-a"}`)
 	var stderr bytes.Buffer
+	if code := run(t.Context(), []string{"eval", "--once", "--store", seed, "--rules", rules}, &bytes.Buffer{}, &stderr); code != 0 {
+		t.Fatalf("init eval: exit %d: %s", code, &stderr)
+	}
+	fact(t, s, `{"item_id":"item-a"}`)
+	fact(t, s, `{"item_id":"item-a"}`)
 	if code := run(t.Context(), []string{"eval", "--once", "--store", seed, "--rules", rules}, &bytes.Buffer{}, &stderr); code != 0 {
 		t.Fatalf("seed eval: exit %d: %s", code, &stderr)
 	}
@@ -157,11 +160,14 @@ func TestWatchStatusReadsCommittedLiveWAL(t *testing.T) {
 		}
 		return b
 	}
+	var stdout, stderr bytes.Buffer
+	common := []string{"--store", path, "--rules", rules}
+	if code := run(t.Context(), append([]string{"eval", "--once"}, common...), &stdout, &stderr); code != 0 || stderr.Len() != 0 {
+		t.Fatalf("init eval: exit %d, stdout=%s stderr=%s", code, &stdout, &stderr)
+	}
 	mainBefore := read(path)
 	fact(t, s, `{"item_id":"item-a"}`)
 	fact(t, s, `{"item_id":"item-a"}`)
-	var stdout, stderr bytes.Buffer
-	common := []string{"--store", path, "--rules", rules}
 	if code := run(t.Context(), append([]string{"eval", "--once"}, common...), &stdout, &stderr); code != 0 || stderr.Len() != 0 {
 		t.Fatalf("eval: exit %d, stdout=%s stderr=%s", code, &stdout, &stderr)
 	}

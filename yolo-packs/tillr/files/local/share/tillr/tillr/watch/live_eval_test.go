@@ -37,6 +37,7 @@ func TestWatchEvaluationOnlyWritesChangedEpisodes(t *testing.T) {
 			t.Errorf("evaluation took %d writer transactions, want %d", writes, want)
 		}
 	}
+	pass(1) // Initial baseline registration.
 	pass(0) // Quiet.
 	watchFact(t, s, now, `{"detail":{"item-id":"one"}}`)
 	pass(1) // Open.
@@ -50,22 +51,30 @@ func TestWatchEvaluationOnlyWritesChangedEpisodes(t *testing.T) {
 }
 
 func TestWatchEvaluationDiscardsStaleEpisodePlan(t *testing.T) {
+	register(t, "watch-test.fact")
 	now := time.Unix(1700000000, 0)
 	s := watchStore(t)
-	head := watchFact(t, s, now, `{"detail":{"item-id":"one"}}`)
 	doc := strings.ReplaceAll(validRule, `"test.watch"`, `"watch-test.fact"`)
 	e := Evaluator{Store: s, Rules: watchRules(t, doc), Clock: func() time.Time { return now }}
-	planned := false
+	if _, err := e.EvaluateRules(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	head := watchFact(t, s, now, `{"detail":{"item-id":"one"}}`)
+	plans := 0
 	e.afterPlan = func() {
-		if planned || store.HoldsWrite() {
-			t.Fatal("opening must be planned once and without a writer")
+		if store.HoldsWrite() {
+			t.Fatal("plan must run without a writer")
 		}
-		planned = true
-		seedLiveOverride(t, s, e.Rules[0].ID, strings.Replace(doc, "[rule.reads]", "enabled=false\n[rule.reads]", 1))
+		plans++
+		if plans == 1 {
+			seedLiveOverride(t, s, e.Rules[0].ID, strings.Replace(doc, "[rule.reads]", "enabled=false\n[rule.reads]", 1))
+		} else if plans > 2 {
+			t.Fatalf("unexpected plan retry %d", plans)
+		}
 	}
 	got, err := e.EvaluateRules(t.Context())
-	if !planned || err != nil || len(got) != 1 || !got[0].Disabled {
-		t.Fatalf("did not discard stale opening: planned=%t results=%+v err=%v", planned, got, err)
+	if plans < 1 || err != nil || len(got) != 1 || !got[0].Disabled {
+		t.Fatalf("did not discard stale opening: plans=%d results=%+v err=%v", plans, got, err)
 	}
 	if after, err := s.EventHeadSeq(); after != head || err != nil {
 		t.Fatalf("stale opening appended a transition: before=%d after=%d err=%v", head, after, err)
@@ -152,11 +161,15 @@ receiver = "foreground"
 }
 
 func TestWatchEvaluationAppliesDisabledOverrideFromSecondRead(t *testing.T) {
+	register(t, "watch-test.fact")
 	now := time.Unix(1700000000, 0)
 	s := watchStore(t)
-	watchFact(t, s, now, `{"detail":{"item-id":"one"}}`)
 	doc := strings.ReplaceAll(validRule, `"test.watch"`, `"watch-test.fact"`)
 	e := Evaluator{Store: s, Rules: watchRules(t, doc), Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	watchFact(t, s, now, `{"detail":{"item-id":"one"}}`)
 	if _, err := e.EvaluateRules(t.Context()); err != nil {
 		t.Fatal(err)
 	}

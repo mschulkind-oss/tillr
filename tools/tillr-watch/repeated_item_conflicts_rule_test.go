@@ -40,6 +40,9 @@ func TestDrainRepeatedItemConflictsRule(t *testing.T) {
 	t0 := time.Date(2026, 11, 21, 10, 0, 0, 0, time.UTC)
 	now := t0
 	e := watch.Evaluator{Store: s, Rules: []watch.Rule{rule}, Clock: func() time.Time { return now }}
+	if _, err := e.EvaluateRules(ctx); err != nil {
+		t.Fatal(err)
+	}
 
 	setItemState := func(st *store.Store, itemID, state string) {
 		t.Helper()
@@ -289,11 +292,14 @@ func TestDrainRepeatedItemConflictsRule(t *testing.T) {
 	setItemState(verdictStore, "rv-open", "in-queue")
 	setItemState(verdictStore, "rv-closed", "closed")
 	setItemState(verdictStore, "rv-confirmed", "confirmed")
+	verdictEval := watch.Evaluator{Store: verdictStore, Rules: []watch.Rule{rule}, Clock: func() time.Time { return now }}
+	if results, err := verdictEval.EvaluateRules(ctx); err != nil || len(results) != 1 || results[0].Diagnostic() != "" {
+		t.Fatalf("recorded-verdict evaluation results: %+v, err=%v", results, err)
+	}
 	for _, subject := range []string{"rv-open", "rv-closed", "rv-confirmed"} {
 		conflictIn(verdictStore, subject, "c-"+subject+"-1", "raised", now.Add(-time.Minute))
 		conflictIn(verdictStore, subject, "c-"+subject+"-2", "raised", now)
 	}
-	verdictEval := watch.Evaluator{Store: verdictStore, Rules: []watch.Rule{rule}, Clock: func() time.Time { return now }}
 	if results, err := verdictEval.EvaluateRules(ctx); err != nil || len(results) != 1 || results[0].Diagnostic() != "" {
 		t.Fatalf("recorded-verdict evaluation results: %+v, err=%v", results, err)
 	}

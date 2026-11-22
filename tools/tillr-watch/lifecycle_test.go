@@ -71,6 +71,7 @@ func TestWatchEpisodeFaces(t *testing.T) {
 			t.Fatalf("%s: code=%d out=%q stderr=%q, want %q", face, code, out, diag, want)
 		}
 	}
+	success("", "eval", "--once", "--rules", dir)
 	for range 2 {
 		fact(t, s, `{"item_id":"one"}`)
 	}
@@ -288,6 +289,7 @@ func TestWatchEpisodeFingerprintSilenceAndWait(t *testing.T) {
 		}
 	}
 	add := func(item, step string) { fact(t, s, fmt.Sprintf(`{"item_id":%q,"step":%q}`, item, step)) }
+	command(io.Discard, "eval", "--rules", dir, "--once")
 	add("a", "build")
 	add("a", "build")
 	wait := func() string {

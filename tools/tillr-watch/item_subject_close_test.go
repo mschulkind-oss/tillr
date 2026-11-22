@@ -107,6 +107,7 @@ func TestWatchItemSubjectAlertClosesWhenItemLandsOrCloses(t *testing.T) {
 	setItem(itemLand, "in-queue")
 	setItem(itemComp, "in-queue")
 	setItem(itemOpen, "in-queue")
+	invoke("eval", "--once")
 
 	appendRefusals(itemClose, 5)
 	appendRefusals(itemLand, 5)

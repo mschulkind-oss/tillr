@@ -230,6 +230,11 @@ func (w noticeWriterFunc) Write(p []byte) (int, error) { return w(p) }
 
 func TestFailedPublicationDoesNotAdvanceShown(t *testing.T) {
 	s, rules := fixture(t, false)
+	ctx := context.Background()
+	var initStderr bytes.Buffer
+	if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, io.Discard, &initStderr); code != 0 || initStderr.Len() != 0 {
+		t.Fatalf("init eval: %d %q", code, initStderr.String())
+	}
 	fact(t, s, `{"item_id":"item-a"}`)
 	fact(t, s, `{"item_id":"item-a"}`)
 	var seq int64
@@ -237,7 +242,6 @@ func TestFailedPublicationDoesNotAdvanceShown(t *testing.T) {
 		seq = cursor(t, string(p))
 		return 0, fmt.Errorf("output failed")
 	})
-	ctx := context.Background()
 	var stderr bytes.Buffer
 	if code := run(ctx, []string{"wait", "--store", s.Path(), "--rules", rules}, out, &stderr); code != 1 || !strings.Contains(stderr.String(), "output failed") {
 		t.Fatalf("failed output: %d %q", code, stderr.String())
@@ -257,9 +261,13 @@ func TestNoticeOutputDoesNotHoldStoreWriteLock(t *testing.T) {
 	for _, name := range []string{"ordinary", "follow"} {
 		t.Run(name, func(t *testing.T) {
 			s, rules := fixture(t, false)
-			fact(t, s, `{"item_id":"item-a"}`)
-			fact(t, s, `{"item_id":"item-a"}`)
 			ctx, cancel := context.WithCancel(context.Background())
+			var initStderr bytes.Buffer
+			if code := run(ctx, []string{"eval", "--once", "--store", s.Path(), "--rules", rules}, io.Discard, &initStderr); code != 0 || initStderr.Len() != 0 {
+				t.Fatalf("init eval: %d %q", code, initStderr.String())
+			}
+			fact(t, s, `{"item_id":"item-a"}`)
+			fact(t, s, `{"item_id":"item-a"}`)
 			entered, release, done := make(chan string, 1), make(chan struct{}), make(chan int, 1)
 			args := []string{"wait", "--store", s.Path(), "--rules", rules}
 			if name == "follow" {

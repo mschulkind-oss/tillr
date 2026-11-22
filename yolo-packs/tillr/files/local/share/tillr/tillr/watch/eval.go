@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS foreground_delivery (
  waiting_since INTEGER,
  last_wait_at INTEGER
 );
-` + ruleOverridesDDL
+` + ruleOverridesDDL + ruleBaselinesDDL
 
 // Evaluator derives rule conditions from a single store snapshot per pass.
 // Only the watch episode transitions and their corresponding events are written.
@@ -187,7 +187,7 @@ func (e Evaluator) RuleResults(ctx context.Context) ([]RuleResult, error) {
 		if err != nil {
 			return nil, err
 		}
-		results, _, _, err := e.deriveSourceRules(ctx, e.Source, e.Rules, git, now)
+		results, _, _, _, _, err := e.deriveSourceRules(ctx, e.Source, e.Rules, git, now)
 		return results, err
 	}
 	var results []RuleResult
@@ -207,7 +207,15 @@ func (e Evaluator) readEvaluation(ctx context.Context, rules []Rule, visit func(
 		return err
 	}
 	return e.Store.ReadTx(ctx, func(rd *store.Reader) error {
-		results, _, err := e.deriveRules(rd, rules, git, now, nil)
+		head, err := rd.EventHeadSeq()
+		if err != nil {
+			return err
+		}
+		baselines, err := readRuleBaselines(rd)
+		if err != nil {
+			return err
+		}
+		results, _, err := e.deriveRules(rd, rules, git, now, nil, baselines, head)
 		if err != nil {
 			return err
 		}
@@ -268,7 +276,7 @@ func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult,
 		if e.afterGit != nil {
 			e.afterGit()
 		}
-		results, derived, startHead, err := e.deriveSourceRules(ctx, e.Source, rules, git, now)
+		results, derived, startHead, passEpoch, hasCursor, err := e.deriveSourceRules(ctx, e.Source, rules, git, now)
 		if err != nil {
 			return nil, err
 		}
@@ -283,18 +291,25 @@ func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult,
 			ruleByID[r.ID] = &r
 		}
 		reconciled := make(map[string]bool, len(rules))
+		baselines := e.mem.prepareEpoch(hasCursor, passEpoch)
 		for i, subjects := range derived {
 			if subjects == nil {
 				continue
 			}
 			reconciled[rules[i].ID] = true
-			if err := e.mem.reconcileRule(rules[i], subjects, startHead, now, lookup); err != nil {
+			loadedSeq := effectiveLoadedSeq(rules[i], baselines, startHead)
+			if err := e.mem.reconcileRule(rules[i], subjects, startHead, loadedSeq, now, lookup); err != nil {
 				return nil, fmt.Errorf("rule %s: %w", rules[i].ID, err)
 			}
 		}
 		if err := e.mem.resolveTerminalRemaining(ruleByID, reconciled, startHead, now, lookup); err != nil {
 			return nil, err
 		}
+		fullRules := rules
+		if !live {
+			fullRules = e.Rules
+		}
+		e.mem.updateBaselines(rules, results, fullRules, live, startHead, now)
 		return results, nil
 	}
 	if e.cache == nil || e.cache.sourceKey != e.Store {
@@ -336,8 +351,12 @@ func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult,
 			if !git.covers(rules) {
 				return nil, errNewGitFact
 			}
+			baselines, err := readRuleBaselines(rd)
+			if err != nil {
+				return nil, err
+			}
 			var derived []map[string]*condition
-			results, derived, err = e.deriveRules(rd, rules, git, now, e.cache)
+			results, derived, err = e.deriveRules(rd, rules, git, now, e.cache, baselines, startHead)
 			if err != nil {
 				return nil, err
 			}
@@ -370,13 +389,19 @@ func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult,
 					subjects = make(map[string]*condition)
 				}
 				reconciled[rule.ID] = true
-				if err := changes.reconcile(rd, rule, subjects, startHead, snapHead, now, lookup); err != nil {
+				loadedSeq := effectiveLoadedSeq(rule, baselines, startHead)
+				if err := changes.reconcile(rd, rule, subjects, startHead, snapHead, loadedSeq, now, lookup); err != nil {
 					return nil, fmt.Errorf("rule %s: %w", rule.ID, err)
 				}
 			}
 			if err := changes.resolveTerminalRemaining(rd, ruleByID, reconciled, snapHead, now, lookup); err != nil {
 				return nil, err
 			}
+			fullRules := rules
+			if !live {
+				fullRules = e.Rules
+			}
+			changes.planBaselines(rules, results, fullRules, live, baselines, startHead, now)
 			if len(changes) == 0 {
 				return nil, nil
 			}
@@ -397,10 +422,10 @@ func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult,
 	}
 }
 
-func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, now time.Time, cache *evalCache) ([]RuleResult, []map[string]*condition, error) {
+func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, now time.Time, cache *evalCache, baselines map[string]ruleBaseline, defaultHead int64) ([]RuleResult, []map[string]*condition, error) {
 	ts := e.storeSource()
 	if cache != nil {
-		if err := ts.syncKinds(rd, cache, rules, now, e.onEventQuery); err != nil {
+		if err := ts.syncKinds(rd, cache, rules, now, baselines, defaultHead, e.onEventQuery); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -442,12 +467,13 @@ func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, 
 			derived[i] = map[string]*condition{"global": lag}
 			continue
 		}
+		firstLoadedSeq := effectiveFirstLoadedSeq(r, baselines, defaultHead)
 		var subjects map[string]*condition
 		var n int
 		if cache != nil {
-			subjects, n, err = deriveCached(r, now, rf, cache, activeSubjects)
+			subjects, n, err = deriveCached(r, now, rf, cache, firstLoadedSeq, activeSubjects)
 		} else {
-			subjects, n, err = ts.deriveRule(rd, r, now, rf)
+			subjects, n, err = ts.deriveRule(rd, r, now, rf, firstLoadedSeq)
 		}
 		var unreadable unreadableProjection
 		if errors.As(err, &unreadable) {
@@ -462,14 +488,18 @@ func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, 
 	return results, derived, nil
 }
 
-func (e Evaluator) deriveSourceRules(ctx context.Context, src ObservationSource, rules []Rule, git gitSnapshot, now time.Time) ([]RuleResult, []map[string]*condition, int64, error) {
+func (e Evaluator) deriveSourceRules(ctx context.Context, src ObservationSource, rules []Rule, git gitSnapshot, now time.Time) ([]RuleResult, []map[string]*condition, int64, int64, bool, error) {
 	var activeSubjects activeCompositeFunc
 	if e.mem != nil {
 		activeSubjects = e.mem.activeCompositeSubjects
 	}
 	results := make([]RuleResult, len(rules))
 	derived := make([]map[string]*condition, len(rules))
-	var maxHead int64
+	var (
+		maxHead   int64
+		passEpoch int64
+		hasCursor bool
+	)
 	for i, r := range rules {
 		result := &results[i]
 		groupBy := r.When.GroupBy
@@ -502,21 +532,25 @@ func (e Evaluator) deriveSourceRules(ctx context.Context, src ObservationSource,
 			derived[i] = map[string]*condition{"global": lag}
 			continue
 		}
-		subjects, n, headSeq, err := deriveFromSource(ctx, src, r, now, rf, activeSubjects)
+		subjects, n, cursor, err := deriveFromSource(ctx, src, r, now, rf, e.mem.resolveFirstLoadedSeq, activeSubjects)
 		var unreadable unreadableProjection
 		if errors.As(err, &unreadable) {
 			result.Unreadable = unreadable.Error()
 			continue
 		}
 		if err != nil {
-			return nil, nil, 0, fmt.Errorf("rule %s: %w", r.ID, err)
+			return nil, nil, 0, 0, false, fmt.Errorf("rule %s: %w", r.ID, err)
 		}
-		if headSeq > maxHead {
-			maxHead = headSeq
+		if !hasCursor {
+			hasCursor = true
+			passEpoch = cursor.Epoch
+		}
+		if cursor.Seq > maxHead {
+			maxHead = cursor.Seq
 		}
 		result.Skipped, derived[i] = n, subjects
 	}
-	return results, derived, maxHead, nil
+	return results, derived, maxHead, passEpoch, hasCursor, nil
 }
 
 type episode struct {
@@ -629,7 +663,7 @@ func (changes episodeChanges) apply(tx *store.Tx) error {
 	return nil
 }
 
-func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[string]*condition, startHead, snapHead int64, now time.Time, lookup itemTerminalChecker) error {
+func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[string]*condition, startHead, snapHead, loadedSeq int64, now time.Time, lookup itemTerminalChecker) error {
 	episodes, err := active(rd, r.ID)
 	if err != nil {
 		return err
@@ -768,6 +802,9 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 			newest = c.events[len(c.events)-1]
 		}
 		if !exists {
+			if r.When.Pattern != LagBehind && newest.Seq <= loadedSeq {
+				continue
+			}
 			if err := changes.open(rd, r, key, c, newest, now); err != nil {
 				return err
 			}
