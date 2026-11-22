@@ -404,10 +404,11 @@ func TestMain(m *testing.M) {
         self.assertEqual(set(planned), native)
 
     def test_default_shard_limit_scales_with_cores(self):
-        for cores, expected in [(32, 16), (4, 2), (2, 1), (1, 1), (None, 1)]:
+        for cores, expected in [(32, 12), (16, 6), (8, 3), (4, 1), (2, 1), (1, 1), (None, 1)]:
             with patch.object(os, 'cpu_count', return_value=cores):
                 self.assertEqual(shards.default_shard_limit(), expected)
-                slots = expected + shards.default_proof_shard_limit()
+                slots = (expected + shards.default_proof_shard_limit()
+                         + shards.default_gate_shard_limit())
                 self.assertLessEqual(slots * shards.TESTS_PER_SLOT, cores or 1)
 
     def test_default_pool_bounds_test_parallelism_on_32_cores(self):
@@ -421,8 +422,11 @@ func TestMain(m *testing.M) {
         with patch.object(os, 'cpu_count', return_value=32):
             ordinary = shards.default_shard_limit()
             proof = shards.default_proof_shard_limit()
-            self.assertEqual((ordinary, proof), (16, 6))
-            self.assertEqual((ordinary + proof) * shards.TESTS_PER_SLOT, 22)
+            gate = shards.default_gate_shard_limit()
+            self.assertEqual(shards.SLOT_CLASS_GATE, 'gate')
+            self.assertEqual(shards.SLOT_CLASSES, ('ordinary', 'proof', 'gate'))
+            self.assertEqual((ordinary, proof, gate), (12, 4, 6))
+            self.assertEqual((ordinary + proof + gate) * shards.TESTS_PER_SLOT, 22)
             shards.run_shard('fake', self.root, binary, ['TestWorks'], 0,
                              self.root / 'scratch', '0', [])
 
@@ -727,6 +731,367 @@ func hold(t *testing.T) {{
         with patch.dict(os.environ, {'TILLR_TRACE_DIR': str(blocked_dir)}):
             with shards.acquire_shard_slot(lock_dir, 1, holder='run-eisdir'):
                 pass
+
+    def test_sibling_gate_gets_free_reserved_slots_and_preempts_proof_and_ordinary(self):
+        lock_dir = self.root / 'gate-pool'
+        trace_dir = self.root / 'gate-trace'
+        trace_dir.mkdir()
+        errors = []
+        threads = []
+
+        def start_holder(slot_class, holder_name, acquired_evt, release_evt, *, label=None,
+                         notify=None):
+            def body():
+                try:
+                    with shards.acquire_shard_slot(
+                        lock_dir, 12, notify=notify, slot_class=slot_class,
+                        proof_limit=4, gate_limit=6, holder=holder_name, label=label,
+                    ):
+                        acquired_evt.set()
+                        assert release_evt.wait(60)
+                except BaseException as exc:
+                    errors.append(exc)
+                    acquired_evt.set()
+                    raise
+
+            thread = threading.Thread(target=body)
+            thread.start()
+            threads.append(thread)
+            return thread
+
+        worker_releases = ()
+        proof_releases = ()
+        gate1_release = None
+        gate2_release = None
+        ord_wait_release = None
+        prf_wait_release = None
+        env_ctx = patch.dict(os.environ, {'TILLR_TRACE_DIR': str(trace_dir)})
+        cpu_ctx = patch.object(os, 'cpu_count', return_value=32)
+        env_ctx.start()
+        cpu_ctx.start()
+        try:
+            # 1. Occupy all 12 ordinary slots with workers, then all 4 proof slots with trunk-proof.
+            worker_releases = [threading.Event() for _ in range(12)]
+            worker_acquired = [threading.Event() for _ in range(12)]
+            for idx in range(12):
+                start_holder('ordinary', f'run-worker-{idx}', worker_acquired[idx], worker_releases[idx])
+            for evt in worker_acquired:
+                self.assertTrue(evt.wait(30))
+
+            proof_releases = [threading.Event() for _ in range(4)]
+            proof_acquired = [threading.Event() for _ in range(4)]
+            for idx in range(4):
+                start_holder('proof', 'trunk-proof', proof_acquired[idx], proof_releases[idx])
+            for evt in proof_acquired:
+                self.assertTrue(evt.wait(30))
+
+            # Release 4 ordinary workers so gate-1 acquires 4 slot-* plus 4 gate-* (its 8-slot cap),
+            # leaving all 12 ordinary and 4 proof slots held and 2 gate-* slots free.
+            for idx in range(8, 12):
+                worker_releases[idx].set()
+            for idx in range(8, 12):
+                threads[idx].join(30)
+
+            gate1_release = threading.Event()
+            gate1_acquired = [threading.Event() for _ in range(8)]
+            for idx in range(8):
+                start_holder('gate', 'gate:run-1', gate1_acquired[idx], gate1_release)
+            for evt in gate1_acquired:
+                self.assertTrue(evt.wait(30))
+
+            # Verify a 9th simultaneous request from gate:run-1 hits its 8-slot cap without
+            # consuming the remaining 2 gate-* slots or asserting gate-waiting.lock.
+            class _CapReached(BaseException):
+                pass
+
+            cap_notices = []
+
+            def on_cap_wait(msg):
+                cap_notices.append(msg)
+                self.assertFalse(shards.gate_caller_waiting(lock_dir))
+                raise _CapReached()
+
+            with self.assertRaises(_CapReached):
+                with shards.acquire_shard_slot(
+                    lock_dir, 12, notify=on_cap_wait, slot_class='gate',
+                    proof_limit=4, gate_limit=6, holder='gate:run-1',
+                ):
+                    pass
+            self.assertEqual(len(cap_notices), 1)
+
+            holders = shards.read_slot_holders(lock_dir)
+            gate1_slots = [h['slot'] for h in holders if h.get('run') == 'gate:run-1']
+            self.assertEqual(len(gate1_slots), 8)
+            self.assertEqual(sum(s.startswith('slot-') for s in gate1_slots), 4)
+            self.assertEqual(sum(s.startswith('gate-') for s in gate1_slots), 4)
+            self.assertEqual(sum(h['slot'].startswith('slot-') for h in holders), 12)
+            self.assertEqual(sum(h['slot'].startswith('proof-') for h in holders), 4)
+            self.assertEqual(sum(h['slot'].startswith('gate-') for h in holders), 4)
+
+            # 2. Start waiting proof and ordinary callers before gate:run-2 arrives.
+            ord_wait_started = threading.Event()
+            ord_wait_acquired = threading.Event()
+            ord_wait_release = threading.Event()
+            start_holder(
+                'ordinary', 'run-worker-waiter', ord_wait_acquired, ord_wait_release,
+                notify=lambda _m: ord_wait_started.set(),
+            )
+            self.assertTrue(ord_wait_started.wait(30))
+
+            prf_wait_started = threading.Event()
+            prf_wait_acquired = threading.Event()
+            prf_wait_release = threading.Event()
+            start_holder(
+                'proof', 'trunk-proof-waiter', prf_wait_acquired, prf_wait_release,
+                notify=lambda _m: prf_wait_started.set(),
+            )
+            self.assertTrue(prf_wait_started.wait(30))
+            self.assertTrue(shards.proof_caller_waiting(lock_dir))
+            self.assertFalse(ord_wait_acquired.is_set())
+            self.assertFalse(prf_wait_acquired.is_set())
+
+            # 3. Second gate run immediately acquires the 2 free gate-* slots without waiting.
+            gate2_imm_notices = []
+            gate2_release = threading.Event()
+            gate2_imm_acquired = [threading.Event() for _ in range(2)]
+            for idx in range(2):
+                start_holder(
+                    'gate', 'gate:run-2', gate2_imm_acquired[idx], gate2_release,
+                    label=f'gate2-imm-{idx}', notify=gate2_imm_notices.append,
+                )
+            for evt in gate2_imm_acquired:
+                self.assertTrue(evt.wait(30))
+            self.assertEqual(gate2_imm_notices, [])
+
+            # 4. A 3rd shard of gate:run-2 waits on gate-waiting.lock and preempts the next freed
+            #    slot-* ahead of both waiting proof and waiting ordinary callers.
+            gate2_wait_started = threading.Event()
+            gate2_wait_acquired = threading.Event()
+            start_holder(
+                'gate', 'gate:run-2', gate2_wait_acquired, gate2_release,
+                label='gate2-preempt-slot', notify=lambda _m: gate2_wait_started.set(),
+            )
+            self.assertTrue(gate2_wait_started.wait(30))
+            self.assertTrue(shards.gate_caller_waiting(lock_dir))
+            self.assertFalse(gate2_wait_acquired.is_set())
+
+            worker_releases[0].set()
+            threads[0].join(30)
+            self.assertTrue(gate2_wait_acquired.wait(30))
+            self.assertFalse(prf_wait_acquired.is_set())
+            self.assertFalse(ord_wait_acquired.is_set())
+
+            # 4b. A 4th shard of gate:run-2 also preempts a freed proof-* slot ahead of waiting
+            #     proof and ordinary callers.
+            gate2_proof_wait_started = threading.Event()
+            gate2_proof_wait_acquired = threading.Event()
+            start_holder(
+                'gate', 'gate:run-2', gate2_proof_wait_acquired, gate2_release,
+                label='gate2-preempt-proof', notify=lambda _m: gate2_proof_wait_started.set(),
+            )
+            self.assertTrue(gate2_proof_wait_started.wait(30))
+            self.assertTrue(shards.gate_caller_waiting(lock_dir))
+            proof_releases[0].set()
+            threads[12].join(30)
+            self.assertTrue(gate2_proof_wait_acquired.wait(30))
+            self.assertFalse(prf_wait_acquired.is_set())
+            self.assertFalse(ord_wait_acquired.is_set())
+
+            # 5. Once no gate caller is waiting, the next freed slot-* goes to proof ahead of ordinary,
+            #    and the third freed slot-* goes to ordinary.
+            self.assertFalse(shards.gate_caller_waiting(lock_dir))
+            worker_releases[1].set()
+            threads[1].join(30)
+            self.assertTrue(prf_wait_acquired.wait(30))
+            self.assertFalse(ord_wait_acquired.is_set())
+            prf_wait_release.set()
+
+            worker_releases[2].set()
+            threads[2].join(30)
+            self.assertTrue(ord_wait_acquired.wait(30))
+            ord_wait_release.set()
+
+            rows = [json.loads(line)
+                    for line in (trace_dir / 'slot-waits.jsonl').read_text().splitlines()
+                    if line.strip()]
+            by_label = {row['label']: row for row in rows if 'label' in row}
+            for idx in range(2):
+                imm_row = by_label[f'gate2-imm-{idx}']
+                self.assertEqual(imm_row['class'], 'gate')
+                self.assertEqual(imm_row['waited_ms'], 0)
+                self.assertTrue(imm_row['slot'].startswith('gate-'), imm_row)
+            preempt_row = by_label['gate2-preempt-slot']
+            self.assertEqual(preempt_row['class'], 'gate')
+            self.assertGreater(preempt_row['waited_ms'], 0)
+            self.assertTrue(preempt_row['slot'].startswith('slot-'), preempt_row)
+            preempt_proof_row = by_label['gate2-preempt-proof']
+            self.assertEqual(preempt_proof_row['class'], 'gate')
+            self.assertGreater(preempt_proof_row['waited_ms'], 0)
+            self.assertTrue(preempt_proof_row['slot'].startswith('proof-'), preempt_proof_row)
+            if errors:
+                raise errors[0]
+        finally:
+            for evt in (*worker_releases, *proof_releases, gate1_release, gate2_release,
+                        ord_wait_release, prf_wait_release):
+                if evt is not None:
+                    evt.set()
+            for thread in threads:
+                thread.join(30)
+            cpu_ctx.stop()
+            env_ctx.stop()
+
+    def test_gate_queue_wait_is_excluded_from_watchdog_and_cli_max_slots_caps_concurrency(self):
+        # 1. Queue wait while all ordinary/proof/gate slots are held does not count toward
+        #    run_shard's no-progress watchdog deadline.
+        lock_dir = self.root / 'watchdog-locks'
+        trace_dir = self.root / 'watchdog-trace'
+        trace_dir.mkdir()
+        binary = self.fake(
+            "print('=== RUN   TestFast', flush=True)\n"
+            "print('--- PASS: TestFast (0.00s)', flush=True)\n"
+            "print('PASS', flush=True)\n"
+        )
+        ordinary_held = threading.Event()
+        gate_held = threading.Event()
+        release_blockers = threading.Event()
+
+        blocker_errors = []
+
+        def hold(slot_class, holder_name, held_evt):
+            try:
+                with shards.acquire_shard_slot(
+                    lock_dir, 1, slot_class=slot_class, proof_limit=0, gate_limit=1,
+                    gate_reserved_limit=1, holder=holder_name,
+                ):
+                    held_evt.set()
+                    assert release_blockers.wait(30)
+            except BaseException as exc:
+                blocker_errors.append(exc)
+                held_evt.set()
+                raise
+
+        trace_ctx = patch.dict(os.environ, {'TILLR_TRACE_DIR': str(trace_dir)})
+        trace_ctx.start()
+        blocker_threads = [
+            threading.Thread(target=hold, args=('ordinary', 'run-worker', ordinary_held)),
+            threading.Thread(target=hold, args=('gate', 'gate:blocker', gate_held)),
+        ]
+        for thread in blocker_threads:
+            thread.start()
+        try:
+            self.assertTrue(ordinary_held.wait(30))
+            self.assertTrue(gate_held.wait(30))
+            if blocker_errors:
+                raise blocker_errors[0]
+
+            result_holder = []
+            error_holder = []
+
+            def run_waiting_gate_shard():
+                try:
+                    result_holder.append(shards.run_shard(
+                        'fixture', self.root, binary, ['TestFast'], 0,
+                        self.root / 'gate-scratch', '0', [], wall_timeout=0.35,
+                        lock_dir=lock_dir, shard_limit=1, proof_limit=0, gate_limit=1,
+                        gate_reserved_limit=1, slot_class='gate', holder='gate:waiter',
+                    ))
+                except BaseException as exc:
+                    error_holder.append(exc)
+
+            waiter = threading.Thread(target=run_waiting_gate_shard)
+            waiter.start()
+            while not shards.gate_caller_waiting(lock_dir):
+                self.assertTrue(waiter.is_alive(), f'waiter exited early: {error_holder}')
+                time.sleep(0.01)
+            # Hold past wall_timeout (0.35s) while queued; watchdog must not fire during queue wait.
+            time.sleep(0.6)
+            self.assertTrue(waiter.is_alive(), f'watchdog fired during slot wait: {error_holder}')
+            release_blockers.set()
+            waiter.join(30)
+            self.assertFalse(waiter.is_alive())
+            self.assertEqual(error_holder, [])
+            self.assertTrue(any(e.get('Test') == 'TestFast' and e.get('Action') == 'pass'
+                                for e in result_holder[0]))
+            rows = [json.loads(line)
+                    for line in (trace_dir / 'slot-waits.jsonl').read_text().splitlines()
+                    if line.strip()]
+            span = next(row for row in rows if row['run'] == 'gate:waiter')
+            self.assertEqual(span['class'], 'gate')
+            self.assertGreater(span['waited_ms'], 0)
+        finally:
+            release_blockers.set()
+            for thread in blocker_threads:
+                thread.join(30)
+            trace_ctx.stop()
+
+        # 2. CLI --slot-class gate --max-slots 2 bounds simultaneous tests across shards.
+        mod = self.root / 'maxslotsmod'
+        mod.mkdir()
+        (mod / 'go.mod').write_text('module maxslotsmod\n\ngo 1.23\n')
+        active_file = self.root / 'ms-active.txt'
+        max_file = self.root / 'ms-max.txt'
+        lock_file = self.root / 'ms-state.lock'
+        active_file.write_text('0')
+        max_file.write_text('0')
+        (mod / 'fixture_test.go').write_text(f'''package maxslotsmod
+import (
+    "os"
+    "strconv"
+    "strings"
+    "syscall"
+    "testing"
+    "time"
+)
+
+func step(t *testing.T, delta int) {{
+    t.Helper()
+    fd, err := syscall.Open({json.dumps(str(lock_file))}, syscall.O_CREAT|syscall.O_RDWR, 0666)
+    if err != nil {{ t.Fatal(err) }}
+    defer syscall.Close(fd)
+    if err := syscall.Flock(fd, syscall.LOCK_EX); err != nil {{ t.Fatal(err) }}
+    defer syscall.Flock(fd, syscall.LOCK_UN)
+    raw, err := os.ReadFile({json.dumps(str(active_file))})
+    if err != nil {{ t.Fatal(err) }}
+    cur, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+    if err != nil {{ t.Fatal(err) }}
+    cur += delta
+    if err := os.WriteFile({json.dumps(str(active_file))}, []byte(strconv.Itoa(cur)), 0600); err != nil {{ t.Fatal(err) }}
+    mraw, err := os.ReadFile({json.dumps(str(max_file))})
+    if err != nil {{ t.Fatal(err) }}
+    m, err := strconv.Atoi(strings.TrimSpace(string(mraw)))
+    if err != nil {{ t.Fatal(err) }}
+    if cur > m {{
+        if err := os.WriteFile({json.dumps(str(max_file))}, []byte(strconv.Itoa(cur)), 0600); err != nil {{ t.Fatal(err) }}
+    }}
+}}
+
+func holdBrief(t *testing.T) {{
+    step(t, 1)
+    time.Sleep(80 * time.Millisecond)
+    step(t, -1)
+}}
+
+func TestM0(t *testing.T) {{ holdBrief(t) }}
+func TestM1(t *testing.T) {{ holdBrief(t) }}
+func TestM2(t *testing.T) {{ holdBrief(t) }}
+func TestM3(t *testing.T) {{ holdBrief(t) }}
+''')
+        durations = self.root / 'ms-durations.json'
+        durations.write_text('{}')
+        completed = subprocess.run(
+            ['python3', str(RUNNER), str(mod), '-k', '4', '--slot-class', 'gate',
+             '--max-slots', '2', '--durations', str(durations),
+             '--lock-dir', str(self.root / 'ms-locks')],
+            capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+        self.assertLessEqual(int(max_file.read_text().strip()), 2)
+
+        bad = subprocess.run(
+            ['python3', str(RUNNER), str(mod), '--slot-class', 'gate', '--max-slots', '0'],
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertNotEqual(bad.returncode, 0)
 
 
 if __name__ == '__main__':

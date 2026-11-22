@@ -284,9 +284,51 @@ def test_landing_measurements_require_change_gate_handoff():
             assert gate.run_gate(args) == 2
 
 
+def test_gate_runner_uses_gate_slot_class_in_landing_and_proof_in_rolling():
+    gate = load_tool("fork_check_gate_runner_slot_class")
+    scratch_parent = os.environ.get("TMPDIR") or os.environ.get("YOLO_DURABLE_DIR")
+    with tempfile.TemporaryDirectory(dir=scratch_parent) as directory:
+        base = Path(directory)
+        changed = ["tools/tillr-gate/main.go", "tools/tillr-drain/main.go"]
+
+        # Landing-tier gate-runner uses --slot-class gate; go-tool is owed to rolling.
+        landing = gate.build_plan(
+            ROOT, [], gate.Record(base / "landing-state.json"),
+            changed, None, True, tier=gate.TIER_LANDING,
+        )
+        landing_runner = next(c for c in landing.checks if c.kind == "gate-runner")
+        assert "--slot-class gate" in landing_runner.argv[-1], landing_runner.argv
+        assert "--slot-class proof" not in landing_runner.argv[-1], landing_runner.argv
+
+        #Untiered + apply_tier(TIER_LANDING) also keeps --slot-class gate.
+        untiered = gate.build_plan(
+            ROOT, [], gate.Record(base / "untiered-state.json"), changed, None, True,
+        )
+        gate.apply_tier(untiered, gate.TIER_LANDING)
+        untiered_runner = next(c for c in untiered.checks if c.kind == "gate-runner")
+        assert "--slot-class gate" in untiered_runner.argv[-1], untiered_runner.argv
+
+        # Rolling proof runs both gate-runner and go-tool under --slot-class proof,
+        # whether tier=TIER_ROLLING is passed to build_plan or applied afterward.
+        for via_build_plan in (True, False):
+            rolling = gate.build_plan(
+                ROOT, [], gate.Record(base / f"rolling-{via_build_plan}.json"),
+                changed, None, True,
+                tier=gate.TIER_ROLLING if via_build_plan else None,
+            )
+            if not via_build_plan:
+                gate.apply_tier(rolling, gate.TIER_ROLLING)
+            rolling_runner = next(c for c in rolling.checks if c.kind == "gate-runner")
+            rolling_drain = next(c for c in rolling.checks if c.kind == "go-tool")
+            assert "--slot-class proof" in rolling_runner.argv[-1], rolling_runner.argv
+            assert "--slot-class gate" not in rolling_runner.argv[-1], rolling_runner.argv
+            assert "--slot-class proof" in rolling_drain.argv[-1], rolling_drain.argv
+
+
 if _RUN_PREAMBLE_TESTS:
     test_landing_go_measurements()
     test_landing_measurements_require_change_gate_handoff()
+    test_gate_runner_uses_gate_slot_class_in_landing_and_proof_in_rolling()
 
 
 def test_sigterm_ends_checks(mode):
@@ -3348,6 +3390,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert shard_suites == {f"{directory}'s whole suite passes" for directory in module.GO_SHARD_DIRS}, shard_suites
     gate_suite = next(check for check in shard_planned.checks if check.kind == 'gate-runner')
     assert '&& cd ../..' not in gate_suite.argv[-1], gate_suite.argv
+    assert '--slot-class gate' in gate_suite.argv[-1], gate_suite.argv
     assert set(module.GATE_RUNNER_WATCHES) <= set(gate_suite.watches), gate_suite.watches
     assert 'python3 tools/gate/runner-first.test.py' in gate_suite.argv[-1], gate_suite.argv
     assert module.CHECK_COST_ESTIMATE["go-substrate"] == max(
@@ -3429,7 +3472,9 @@ with tempfile.TemporaryDirectory() as tmp:
             # The suite step is the WHOLE suite: `-short` would skip the
             # integration cases, which is the blind spot item 570 closed. The build is
             # the other step's job, so this command does not repeat it.
-            command = module.go_tool_command(directory)
+            command = module.go_tool_command(
+                directory, slot_class="gate" if directory == "tools/tillr-gate" else "proof"
+            )
             if directory == "tools/tillr-gate":
                 command += (("" if directory in module.GO_SHARD_DIRS else " && cd ../..")
                             + " && python3 tools/gate/change-gate.test.py"
