@@ -229,6 +229,20 @@ green; `alarms` lists standing alarms; each row has `item_id`, `state`,
    operator decision labelled as one, what was filed, and the lane step
    evidence.
 
+## What the operator settles belongs inside tillr
+
+Owner, 2026-11-21: "if you ever feel that you as the whale could solve some
+problem, and it wouldn't need to be escalated to me, then that problem should
+escalate to... a similarly responsible agent, process, ticket, whatever, within
+Tiller, rather than popping up to you." (*The whale* is the operating agent.)
+
+So each time the operator settles something without the owner — answers a
+hold, splits an item, clears a stuck state, closes an item finished elsewhere —
+do it, and in the same check-in file the item that gives that kind of decision
+to a responsible seat or process inside tillr. Check first whether an open
+design already covers it, and add the case to that design's item instead of
+filing a duplicate.
+
 ## Filing work
 
 Use `tillr item request` with the words on standard input and `--title`.
