@@ -673,7 +673,12 @@ func (l *Loop) judgeTrunkChecks(ctx context.Context, replay ReplayStep, candidat
 			}
 		}
 	}
-	out, err := replay.Replay(ctx, candidate, rev, rest)
+	if err := candidate.releaseLaneBeforeReplay(ctx); err != nil {
+		return ReplayOutcome{}, source, err
+	}
+	out, err := restartWork(ctx, l, func(child context.Context) (ReplayOutcome, error) {
+		return replay.Replay(child, candidate, rev, rest)
+	})
 	if err != nil || !out.Known || out.Rev != "" && out.Rev != rev {
 		return ReplayOutcome{}, source, err
 	}
@@ -743,6 +748,10 @@ func repairedAtTipDetail(checks []string, base, tip, moved string) string {
 		return detail + fmt.Sprintf(" The loop rebased this lane's commits onto %s, so the lane's base is now %s.", shortSHA(tip), shortSHA(tip))
 	}
 	return detail + fmt.Sprintf(" The loop could not rebase this lane onto %s without a conflict, so the lane stays on %s.", shortSHA(tip), shortSHA(base))
+}
+
+func repairedAtTipReleasedDetail(checks []string, base, tip string) string {
+	return fmt.Sprintf("Checks %s are red on this run's base %s but pass on the trunk tip %s: the trunk is repaired at %s. Take in the latest trunk and continue. The lane was released while checking the trunk, so the next run starts from the latest trunk.", strings.Join(checks, ", "), shortSHA(base), shortSHA(tip), shortSHA(tip))
 }
 
 // openTrunkRedNotice returns a brief notice naming any open trunk fixers and their
@@ -818,18 +827,24 @@ func (l *Loop) settleTrunkAlreadyRed(ctx context.Context, candidate *Candidate, 
 		if recErr := recordTrunkRepair(ctx, l.cfg.Root, reading.RepairedAt, "trunk repaired at "+shortSHA(reading.RepairedAt)); recErr != nil {
 			l.reportf("loop: %s trunk repair at %s not recorded: %v\n", candidate.ItemID, shortSHA(reading.RepairedAt), recErr)
 		}
-		from := candidate.WorkerHeadSHA
-		if from == "" {
-			from = candidate.HeadSHA
-		}
-		moved, err := l.moveLaneOntoTip(ctx, candidate.LaneID, from, reading.RepairedAt)
-		if err != nil {
-			return "", false, err
-		}
 		oldBase := candidate.BaseSHA
-		detail := repairedAtTipDetail(gate.FailingChecks, oldBase, reading.RepairedAt, moved)
-		if moved != "" {
-			candidate.BaseSHA, candidate.HeadSHA, candidate.WorkerHeadSHA = reading.RepairedAt, moved, moved
+		var moved string
+		var detail string
+		if candidate.laneReleasedForReplay() {
+			detail = repairedAtTipReleasedDetail(gate.FailingChecks, oldBase, reading.RepairedAt)
+		} else {
+			from := candidate.WorkerHeadSHA
+			if from == "" {
+				from = candidate.HeadSHA
+			}
+			moved, err = l.moveLaneOntoTip(ctx, candidate.LaneID, from, reading.RepairedAt)
+			if err != nil {
+				return "", false, err
+			}
+			detail = repairedAtTipDetail(gate.FailingChecks, oldBase, reading.RepairedAt, moved)
+			if moved != "" {
+				candidate.BaseSHA, candidate.HeadSHA, candidate.WorkerHeadSHA = reading.RepairedAt, moved, moved
+			}
 		}
 		candidate.RefusalDetail = strings.TrimSpace(candidate.RefusalDetail + " " + detail)
 		l.reportf("loop: %s's gate failure is red only on its base %s; the trunk is repaired at %s, so no fixer is filed\n", candidate.ItemID, shortSHA(oldBase), shortSHA(reading.RepairedAt))
@@ -1144,7 +1159,9 @@ func (l *Loop) culpritLandingAttribution(ctx context.Context, replay ReplayStep,
 		return red, "", false
 	}
 	isRed := func(sha string) (bool, bool) {
-		out, err := replay.Replay(ctx, candidate, sha, checks)
+		out, err := restartWork(ctx, l, func(child context.Context) (ReplayOutcome, error) {
+			return replay.Replay(child, candidate, sha, checks)
+		})
 		if err != nil || !out.Known || out.Rev != "" && out.Rev != sha {
 			return false, false
 		}

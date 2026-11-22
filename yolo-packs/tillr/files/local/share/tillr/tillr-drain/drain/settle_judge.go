@@ -19,6 +19,20 @@ import (
 func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, local *LoopResult, timing *PassTiming) laneOutcome {
 	c := *work.Candidate
 	c.TickID = timing.TickID
+	c.replayRelease = &replayLaneRelease{
+		release: func(rctx context.Context, cur Candidate) (bool, error) {
+			if IsTrunkFixer(cur.ItemID) {
+				return false, nil
+			}
+			cp := *work
+			cp.Candidate = &cur
+			released, err := l.releaseCandidateForReplay(rctx, &cp)
+			if released {
+				work.LaneReleased = true
+			}
+			return released, err
+		},
+	}
 	var stop string
 	var landed bool
 	var err error
@@ -36,9 +50,11 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 		return laneOutcome{err: l.settleTerminalItem(ctx, work, terminal)}
 	}
 	if errors.Is(err, errRestartPending) || (l.isRestartReplaced() && errors.Is(err, context.Canceled)) {
-		dir := detachedGateDir(l.cfg.Root, l.cfg.Store, c.Worktree, c.RunID)
-		if live, done := hasDetachedGateInDir(dir, c, true); live || done {
-			return laneOutcome{stop: stopLaneRetained, err: errRestartPending}
+		if !c.laneReleasedForReplay() {
+			dir := detachedGateDir(l.cfg.Root, l.cfg.Store, c.Worktree, c.RunID)
+			if live, done := hasDetachedGateInDir(dir, c, true); live || done {
+				return laneOutcome{stop: stopLaneRetained, err: errRestartPending}
+			}
 		}
 	}
 	held, keep := retainLane(err)
@@ -63,7 +79,7 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 		}
 	}
 	var pinErr *runPinError
-	if (err != nil || stop != "") && !errors.As(err, &pinErr) {
+	if (err != nil || stop != "") && !errors.As(err, &pinErr) && !c.laneReleasedForReplay() {
 		if pinErr := l.pinCandidateHead(ctx, c); pinErr != nil {
 			if err == nil {
 				return laneOutcome{err: pinErr}
@@ -73,7 +89,11 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 		}
 	}
 	if err == nil && stop == "" && !held {
-		if landed {
+		if c.laneReleasedForReplay() {
+			if landed {
+				l.reportRefSweepFailure(l.prunePreservedWork(ctx))
+			}
+		} else if landed {
 			stop = l.abandon(ctx, c.LaneID, "", "")
 			l.reportRefSweepFailure(l.prunePreservedWork(ctx))
 		} else {

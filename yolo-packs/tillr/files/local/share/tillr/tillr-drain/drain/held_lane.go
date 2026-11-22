@@ -48,13 +48,15 @@ func init() {
 	}
 }
 
+var errCandidateLaneReleased = errors.New("candidate lane released during gate-failure replay")
+
 // retainLane enumerates examination outcomes that hold a pending candidate. Only
 // the repair handoff owns worktree-dependent progress; the others wait on inputs.
 func retainLane(err error) (held, keep bool) {
 	switch {
 	case errors.Is(err, errRepairPending), errors.Is(err, errJudgeBackendHeld):
 		return true, true
-	case errors.Is(err, errGateNoVerdict), errors.Is(err, errGateStallHeld), errors.Is(err, errItemFaultHeld), errors.Is(err, errRepairHeld), errors.Is(err, errDirtyHeld), errors.Is(err, errRedCapHeld), errors.Is(err, errTrunkRewritten):
+	case errors.Is(err, errGateNoVerdict), errors.Is(err, errGateStallHeld), errors.Is(err, errItemFaultHeld), errors.Is(err, errRepairHeld), errors.Is(err, errDirtyHeld), errors.Is(err, errRedCapHeld), errors.Is(err, errTrunkRewritten), errors.Is(err, errCandidateLaneReleased):
 		return true, false
 	default:
 		return false, false
@@ -122,7 +124,7 @@ func (l *Loop) claimCandidateRelease(ctx context.Context, work *pendingWork, rea
 			return err
 		}
 		if examining {
-			if state != run.LaneStateLeased || runID == nil || *runID != c.RunID || until != nil || current.Examiner == nil || *current.Examiner != *owner {
+			if state != run.LaneStateLeased || runID == nil || *runID != c.RunID || until != nil || !examinationOwnedBy(current, owner) {
 				return nil
 			}
 		} else {
@@ -145,13 +147,23 @@ func (l *Loop) claimCandidateRelease(ctx context.Context, work *pendingWork, rea
 	return owner, claimed && err == nil, err
 }
 
+func examinationOwnedBy(w *pendingWork, owner *LoopOwner) bool {
+	if w == nil || owner == nil {
+		return false
+	}
+	if w.Examiner != nil && *w.Examiner == *owner {
+		return true
+	}
+	return w.Examining && w.Owner != nil && *w.Owner == *owner
+}
+
 func candidateReleaseOwned(r *store.Reader, c Candidate, owner *LoopOwner) (bool, error) {
 	works, err := readPending(r)
 	if err != nil {
 		return false, err
 	}
 	w := works[c.ItemID]
-	if w == nil || w.Done || w.Decision.LaneID != c.LaneID || w.Examiner == nil || *w.Examiner != *owner {
+	if w == nil || w.Done || w.Decision.LaneID != c.LaneID || !examinationOwnedBy(w, owner) {
 		return false, nil
 	}
 	var n int
@@ -260,6 +272,17 @@ func (l *Loop) releaseHeldCandidate(ctx context.Context, work *pendingWork, reas
 }
 
 func (l *Loop) releaseCandidate(ctx context.Context, work *pendingWork, reason string, examining bool) (released bool, err error) {
+	return l.releaseCandidateMode(ctx, work, reason, examining, false)
+}
+
+// releaseCandidateForReplay pins and releases the candidate's lane before a long
+// gate-failure trunk replay while keeping examination ownership in this goroutine,
+// so waiting items can claim the lane immediately without racing this examination.
+func (l *Loop) releaseCandidateForReplay(ctx context.Context, work *pendingWork) (bool, error) {
+	return l.releaseCandidateMode(ctx, work, "", true, true)
+}
+
+func (l *Loop) releaseCandidateMode(ctx context.Context, work *pendingWork, reason string, examining, keepExaminer bool) (released bool, err error) {
 	if work.LaneReleased || work.Done || candidateKeepReason(work, reason) != "" {
 		return false, nil
 	}
@@ -358,6 +381,9 @@ func (l *Loop) releaseCandidate(ctx context.Context, work *pendingWork, reason s
 		}
 	}
 	released = kept == ""
+	if keepExaminer && !released {
+		return false, nil
+	}
 	if !released && kept == work.LaneKeepReason && fence == work.HeldFence {
 		return false, nil
 	}
@@ -382,6 +408,9 @@ func (l *Loop) releaseCandidate(ctx context.Context, work *pendingWork, reason s
 					}
 				}
 				released = kept == ""
+			}
+			if keepExaminer && !released {
+				return nil
 			}
 			if released {
 				// Commit the reset intent separately so Git changes can be recovered
@@ -435,7 +464,11 @@ func (l *Loop) releaseCandidate(ctx context.Context, work *pendingWork, reason s
 						return err
 					}
 				}
-				if released || !examining {
+				if released && keepExaminer {
+					if _, err := tx.Exec(`UPDATE lanes SET state=?,run_id=NULL,leased_until=NULL WHERE lane_id=? AND run_id=? AND leased_until IS NULL`, run.LaneStateIdle, c.LaneID, c.RunID); err != nil {
+						return err
+					}
+				} else if released || !examining {
 					if err := clearCandidateRelease(tx, c, l.cfg.Now()); err != nil {
 						return err
 					}

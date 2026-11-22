@@ -246,8 +246,32 @@ type Candidate struct {
 	Request *run.Request `json:"-"`
 	// Seat is the seat the item asked for, carried so the conflict-fix run's decision
 	// names the same seat the original dispatch did.
-	Seat     string `json:"-"`
-	Workflow string `json:"workflow,omitempty"`
+	Seat          string             `json:"-"`
+	Workflow      string             `json:"workflow,omitempty"`
+	replayRelease *replayLaneRelease // runtime-only: release the lane before a slow gate-failure replay
+}
+
+type replayLaneRelease struct {
+	released bool
+	release  func(context.Context, Candidate) (bool, error)
+}
+
+func (c Candidate) releaseLaneBeforeReplay(ctx context.Context) error {
+	if c.replayRelease == nil || c.replayRelease.released || c.replayRelease.release == nil {
+		return nil
+	}
+	released, err := c.replayRelease.release(ctx, c)
+	if err != nil {
+		return err
+	}
+	if released {
+		c.replayRelease.released = true
+	}
+	return nil
+}
+
+func (c Candidate) laneReleasedForReplay() bool {
+	return c.replayRelease != nil && c.replayRelease.released
 }
 
 // GateOutcome is what the gate step answers: the verdict the gate reached and the gate
@@ -3225,6 +3249,12 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			return "", false, nil
 		}
 	case GateFailed:
+		// Capture candidate changed paths before any replay releases the lane worktree.
+		if len(gate.CandidateChangedPaths) == 0 && len(gate.SuspectPaths) == 0 && candidate.BaseSHA != "" && candidate.Worktree != "" {
+			if ps, ok := l.cfg.Steps.(*ProcessSteps); ok {
+				gate.CandidateChangedPaths = ps.changedPaths(candidate)
+			}
+		}
 		// A red gate is a suspect, not a conviction. Judge the failing checks on the base
 		// and trunk tip, reusing exact recorded passes before replaying:
 		// - If repaired on tip, send back to worker on tip.
@@ -3303,6 +3333,12 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	}
 	if err := appendJudgment(ctx, l.cfg.Store, candidateGatedKind, "run", candidate.RunID, candidate, l.cfg.Now()); err != nil {
 		return "", false, err
+	}
+	if candidate.laneReleasedForReplay() {
+		// The lane was released to waiting work while trunk replay ran. With
+		// candidateGatedKind recorded, the next pass assigns this pinned
+		// candidate to a free lane and lands it directly without re-gating.
+		return "", false, errCandidateLaneReleased
 	}
 	return l.landCandidate(ctx, candidate, result, timing)
 }

@@ -66,7 +66,7 @@ func (l *Loop) releaseRestartExaminations(ctx context.Context) error {
 				return err
 			}
 			keepLease := false
-			if w.Candidate != nil {
+			if w.Candidate != nil && !w.LaneReleased {
 				dir := detachedGateDir(l.cfg.Root, l.cfg.Store, w.Candidate.Worktree, id)
 				liveGate, doneGate := hasDetachedGateInDir(dir, *w.Candidate, false)
 				keepLease = liveGate || doneGate
