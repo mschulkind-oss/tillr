@@ -191,8 +191,12 @@ func (l *Loop) preRebaseRepairedTrunk(ctx context.Context, candidate Candidate) 
 		return candidate, err
 	}
 	oldBase := candidate.BaseSHA
+	oldHead := candidate.HeadSHA
 	candidate.BaseSHA = mainSHA
 	candidate.HeadSHA = head
+	if candidate.RebasedFromHead == "" && oldHead != "" && oldHead != head {
+		candidate.RebasedFromHead = oldHead
+	}
 	if candidate.LaneID != "" && l.cfg.LaneRoot != "" {
 		laneDir := l.laneDirPath(candidate.LaneID)
 		for _, name := range []string{BaseSHAFile, ItemBaseSHAFile} {
