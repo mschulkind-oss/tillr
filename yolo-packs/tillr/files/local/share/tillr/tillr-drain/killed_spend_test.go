@@ -78,7 +78,7 @@ func TestStoppedLoopLeavesSpendToFinishingWorkerAndReplacementCarry(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.StartedSpend.CostUSD != 0 || result.CarriedSpend.CostUSD != .03 || result.RecordedSpend.CostUSD != .03 || result.Dispatched != 0 {
+	if result.StartedSpend.CostUSD != 0 || result.CarriedSpend.CostUSD != .03 || result.Dispatched != 0 {
 		t.Fatalf("inherited spend attributed to new work: %+v", result)
 	}
 	s, err := store.OpenRead(context.Background(), f.store)
@@ -105,6 +105,9 @@ func TestStoppedLoopLeavesSpendToFinishingWorkerAndReplacementCarry(t *testing.T
 	if payload["spend_carried_over"].(map[string]any)["cost_usd"] != .03 || payload["spend_started_in_loop"].(map[string]any)["cost_usd"] != float64(0) {
 		t.Fatalf("record lost spend origin: %v", payload)
 	}
+	if _, ok := payload["spend_all_recorded_runs"]; ok {
+		t.Fatalf("exit record included a historical spend total: %v", payload)
+	}
 }
 
 func TestTwoExplicitEndsRemainInNextLoopSpend(t *testing.T) {
@@ -123,9 +126,12 @@ func TestTwoExplicitEndsRemainInNextLoopSpend(t *testing.T) {
 	cmd, out := startStopFixture(t, f, 1)
 	waitForFile(t, filepath.Join(markers, "run-item_a-a3.ready"), hangGuard)
 	stopFixture(t, f, cmd, out, false)
-	if !strings.Contains(out.String(), "spend all recorded runs: $0.060000, 3000 tokens") ||
-		!strings.Contains(out.String(), "loop: spend, last 24h: $0.06 over 2 runs") {
-		t.Fatalf("next loop hides ended runs: %s", out.String())
+	if !strings.Contains(out.String(), "loop: spend, last 24h: $0.06 over 2 runs") {
+		t.Fatalf("startup spend hides ended runs: %s", out.String())
+	}
+	if !strings.Contains(out.String(), "loop: spend carried over from earlier loops:") ||
+		strings.Contains(out.String(), "spend all recorded runs:") {
+		t.Fatalf("expected a loop-only exit spend report: %s", out.String())
 	}
 	writeFile(t, filepath.Join(markers, "release"), "finish")
 	waitForSpendRuns(t, f, 3)

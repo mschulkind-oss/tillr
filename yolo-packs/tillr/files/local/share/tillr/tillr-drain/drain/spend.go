@@ -1,12 +1,10 @@
 package drain
 
 import (
-	"context"
 	"fmt"
 	"sort"
 
 	"github.com/mschulkind-oss/tillr-run/run"
-	"github.com/mschulkind-oss/tillr/store"
 )
 
 // SpendTotals is a sum of reported measurements, never an estimate of missing
@@ -53,52 +51,6 @@ func (s SpendTotals) String() string {
 		qualifier = "lower bound: "
 	}
 	return fmt.Sprintf("%s$%f, %d tokens; %d unreported run(s); %d token-unreported, %d cost-unreported", qualifier, s.CostUSD, s.Tokens, s.Unreported, s.TokensUnreported, s.CostUnreported)
-}
-
-// snapshotSpend counts terminal rows irrespective of exit state. It neither waits
-// for a worker nor signals one. The final snapshot includes explicit ends that
-// have recorded by then; later terminal records appear in the next loop's history.
-func (l *Loop) snapshotSpend(result *LoopResult) error {
-	ctx := context.Background()
-	s, err := store.OpenRead(ctx, l.cfg.Store)
-	if err != nil {
-		return err
-	}
-	defer s.Close()
-	return s.ReadTx(ctx, func(r *store.Reader) error {
-		read := func(where string, args ...any) (SpendTotals, error) {
-			var sum SpendTotals
-			err := r.QueryRow(`SELECT COALESCE(SUM(usage_cost_usd),0), COALESCE(SUM(usage_tokens),0), COUNT(*),
-    COALESCE(SUM(usage_cost_usd IS NULL AND usage_tokens IS NULL),0),
-    COALESCE(SUM(usage_tokens IS NULL),0),COALESCE(SUM(usage_cost_usd IS NULL),0)
-    FROM runs `+where, args...).Scan(&sum.CostUSD, &sum.Tokens, &sum.Runs, &sum.Unreported, &sum.TokensUnreported, &sum.CostUnreported)
-			return sum, err
-		}
-		result.RecordedSpend, err = read("")
-		if err != nil {
-			return err
-		}
-		if l.sessionID != "" {
-			result.StartedSpend, err = read(`WHERE EXISTS (
-    SELECT 1 FROM events e WHERE e.kind=? AND json_extract(e.payload,'$.loop_id')=?
-    AND (e.object_id=runs.run_id OR EXISTS (
-      SELECT 1 FROM json_each(e.payload,'$.decision.parallel') sibling
-      WHERE json_extract(sibling.value,'$.run_request.run_id')=runs.run_id
-    )))`, dispatchStartedKind, l.sessionID)
-			if err != nil {
-				return err
-			}
-			result.CarriedSpend, err = read(`WHERE EXISTS (SELECT 1 FROM drain_pass_spend p WHERE p.run_id=runs.run_id AND p.settled_loop=? AND p.carried_over=1)`, l.sessionID)
-			if err != nil {
-				return err
-			}
-			result.SpendUSD = result.StartedSpend.CostUSD + result.CarriedSpend.CostUSD
-			result.Tokens = result.StartedSpend.Tokens + result.CarriedSpend.Tokens
-			result.SpendUnknown = result.StartedSpend.TokensUnreported + result.CarriedSpend.TokensUnreported
-			result.CostUnknown = result.StartedSpend.CostUnreported + result.CarriedSpend.CostUnreported
-		}
-		return nil
-	})
 }
 
 // Rebuild from each run's latest cumulative measurement, not each terminal segment.

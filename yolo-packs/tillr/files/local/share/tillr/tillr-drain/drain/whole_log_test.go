@@ -414,18 +414,17 @@ func TestAnApplicationSkipsStalePendingHistory(t *testing.T) {
 // visits every event whose object is that run, and a run's events are mostly its worker
 // records: on 2026-11-19 readPriorRuns's two such subqueries cost about 2 seconds a plan
 // against the live store, a plan the loop makes at least once a pass. The planner reads the
-// kinds it correlates by kind (EventsOfKind) and joins them to the runs in memory. The loop's
-// end-of-run spend snapshot keeps its correlation: it runs once per loop, not per pass.
+// kinds it correlates by kind (EventsOfKind) and joins them to the runs in memory.
+// Do not exempt shutdown spend: even one such query per loop can delay exit for minutes.
 func TestNoPassQueryCorrelatesTheEventsWithEachRun(t *testing.T) {
 	correlated := regexp.MustCompile(`object_id\s*=\s*runs\.run_id`)
-	allowed := map[string]string{"spend.go": "snapshotSpend runs once, when the loop ends"}
 	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
 		name := entry.Name()
-		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") || allowed[name] != "" {
+		if !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
 		raw, err := os.ReadFile(name)
