@@ -1,0 +1,69 @@
+{
+  "about": "The tillr backend policy named gemini: every seat on a Gemini model on GitHub Copilot, through the pi adapter. A drain names this file with --policy. Owner, 2026-11-21: \"I want you to switch your stack entirely to Co-Pilot on Pi. So I want you to use Flash for your Scout. Hydrogen for... you're implementing neon for your tricky stuff and carbon for your designer\" and \"also save this as our \\\"gemini\\\" profile\". So scout, classify and test-run run Flash 3.8 (pi-scout); build, edit, test-write and docs run Hydrogen 4 (pi-build); tricky runs Neon 4 (pi-tricky); design runs Carbon 4 (pi-designer). He named those four. The plan, review and verify seats run Carbon 4 (pi) because they are judgement seats; that choice is the operator's, not his, and it is the same choice backend-policy.copilot.json beside this file records. One backend per seat and no fallback (owner, 2026-11-20: \"We need deliberate choices, not fallbacks. We need to fix what's wrong.\"); a closed backend holds the work with its cause. Like the other policy files this is the stopgap docs/design/tillr-convergence.md OQ-TC2 records.",
+  "default_backend": "pi-build",
+  "seats": {
+    "design": "pi-designer",
+    "build": "pi-build",
+    "review": "pi",
+    "scout": "pi-scout",
+    "classify": "pi-scout",
+    "plan": "pi",
+    "edit": "pi-build",
+    "test-write": "pi-build",
+    "test-run": "pi-scout",
+    "docs": "pi-build",
+    "verify": "pi",
+    "tricky": "pi-tricky"
+  },
+  "read_only_seats": [
+    "scout",
+    "classify",
+    "test-run"
+  ],
+  "seat_purposes": {
+    "design": "Settle design decisions and specify the intended change.",
+    "build": "Implement the change described by the item or plan.",
+    "review": "Review the candidate against the criteria.",
+    "scout": "Search the tree and report findings without writing.",
+    "classify": "Decide whether delivery is to the repository, a fork, or both without editing either.",
+    "plan": "Read the item and tree and write the piece list.",
+    "edit": "Apply a settled edit named in the plan.",
+    "test-write": "Write tests from the criteria.",
+    "test-run": "Run a named check and report its result without fixing it.",
+    "docs": "Write documentation and README changes.",
+    "verify": "Join the pieces and verify the combined result.",
+    "tricky": "Implement a change the ordinary build seat has failed at or that is too intricate for it."
+  },
+  "escalate": {
+    "build": [
+      "pi-tricky"
+    ]
+  },
+  "backends": {
+    "pi": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "github-copilot/gemini-4-carbon",
+      "effort": "medium"
+    },
+    "pi-designer": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "github-copilot/gemini-4-carbon",
+      "effort": "medium"
+    },
+    "pi-build": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "github-copilot/gemini-4-hydrogen",
+      "effort": "medium"
+    },
+    "pi-scout": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "github-copilot/gemini-3.8-flash",
+      "effort": "medium"
+    },
+    "pi-tricky": {
+      "adapter": "tools/tillr-run/backends/pi/run-pi",
+      "model": "github-copilot/gemini-4-neon",
+      "effort": "medium"
+    }
+  }
+}

@@ -52,15 +52,26 @@ R=/workspace/.yolo/durable/drain-recovery/ratchet
 Read the tail of the rulings file first in a new session: its newest entries say
 what lane count the loop last ran, what was decided, and what was owed.
 
-## Model policy (owner, 2026-11-20)
+## Model policy (owner, 2026-11-21)
+
+Owner, 2026-11-21: "I want you to switch your stack entirely to Co-Pilot on Pi.
+So I want you to use Flash for your Scout. Hydrogen for... you're implementing
+neon for your tricky stuff and carbon for your designer". It is saved as the
+*gemini* profile,
+[`config/tillr/backend-policy.gemini.json`](../../../config/tillr/backend-policy.gemini.json);
+the session's policy file is that file with absolute adapter paths. Every
+backend is a Gemini model on GitHub Copilot through the pi adapter.
 
 | Seats | Backend | Model |
 |---|---|---|
-| design, plan, review | `claude-designer` | Fable 5.2, run through `claude -p` |
-| build, tricky, verify | `pi` | Sol 6.2 on Bedrock |
-| edit, test-write, docs, scout, test-run | `pi-build`, `pi-scout` | Terra 6.1 on Bedrock |
+| design | `pi-designer` | Carbon 4 |
+| plan, review, verify | `pi` | Carbon 4 (the operating agent's choice: judgement seats) |
+| build, edit, test-write, docs | `pi-build` | Hydrogen 4 |
+| tricky | `pi-tricky` | Neon 4 |
+| scout, classify, test-run | `pi-scout` | Flash 3.8 |
 
-- Every designer is Fable 5.2 through `claude -p`. A designer never implements.
+- A designer never implements. The model policy changes when the owner says
+  so; read the newest entry in the rulings file before trusting this table.
 - **No fallbacks (owner, 2026-11-20): "We need deliberate choices, not fallbacks.
   We need to fix what's wrong."** Every seat list in the policy file names
   exactly one backend. When a backend fails or closes, the work holds with its
@@ -94,7 +105,7 @@ for all of them first and start what is missing.
 
 ```bash
 ps -eo pid,etimes,args | rg 'tillr-drain loop --root /workspace --gate|tillr-keep|loop-watch.py|ratchet/sample.py|tillr-view serve|tillr-watch wait' | rg -v 'rg '
-printf 'say ok' | claude -p --model fable          # the designer backend answers
+printf 'say ok' | pi --print --model github-copilot/gemini-4-carbon   # the designer backend answers
 TILLR_BUILD_UNPROVED=HEAD just tillr-build         # only when the loop is down
 ```
 
