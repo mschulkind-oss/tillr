@@ -120,3 +120,90 @@ func TestAcceptRewriteFaceRebase(t *testing.T) {
 		t.Fatalf("rebase output still claims same tree or one-for-one replacement: %q", got)
 	}
 }
+
+// When no trunk-tip rewrite is active, accept-rewrite maps an unmapped interior trunk
+// landing to its patch-identical replacement on main, refuses mismatched patch ids, and
+// why names `tillr drain accept-rewrite` as the mover on the hold before acceptance.
+func TestAcceptRewriteFaceInteriorLanding(t *testing.T) {
+	repo := scratch(t, "repo")
+	orig := []string{"GIT_AUTHOR_NAME=old", "GIT_AUTHOR_EMAIL=old@example.invalid", "GIT_COMMITTER_NAME=old", "GIT_COMMITTER_EMAIL=old@example.invalid"}
+	owner := []string{"GIT_AUTHOR_NAME=owner", "GIT_AUTHOR_EMAIL=owner@example.invalid", "GIT_COMMITTER_NAME=owner", "GIT_COMMITTER_EMAIL=owner@example.invalid"}
+	commitFile := func(env []string, name, body string) string {
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		acceptGit(t, repo, nil, "add", name)
+		acceptGit(t, repo, env, "commit", "-qm", name)
+		return acceptGit(t, repo, nil, "rev-parse", "HEAD")
+	}
+	acceptGit(t, repo, nil, "init", "-q", "-b", "main")
+	base := commitFile(orig, "base.txt", "base\n")
+	lost := commitFile(orig, "blocker.txt", "blocker\n")
+	acceptGit(t, repo, nil, "reset", "-q", "--hard", base)
+	replacement := commitFile(owner, "blocker.txt", "blocker\n")
+	tip := commitFile(owner, "later.txt", "later\n")
+	acceptGit(t, repo, nil, "update-ref", "refs/tillr/green", tip)
+
+	path := fixture(t, itemRecordRanked("blocker", "landed", "a"), itemRecordRanked("dependent", "in-queue", "b"))
+	s, err := store.Open(context.Background(), path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.WriteTx(context.Background(), func(tx *store.Tx) error {
+		for _, q := range []string{
+			`INSERT INTO item_edges(item_id,blocked_by) VALUES('dependent','blocker')`,
+			`INSERT INTO landings(landing_id,item_id,run_id,verdict_id,result,base_sha,head_sha,trunk_before,trunk_after,event_seq) VALUES('land-1','blocker','run-blocker','verdict-1','landed','` + base + `','` + lost + `','` + base + `','` + lost + `',1)`,
+			`INSERT INTO trunk_history(id,observed_tip,lost_tip) VALUES(1,'` + tip + `','')`,
+		} {
+			if _, err := tx.Exec(q); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+
+	ref := policy(t, "true")
+	whyArgs := []string{"why", "--store", path, "--root", repo, "--policy", ref, "--lanes", "lane-1", "--now", "2026-11-22T00:00:00Z"}
+	code, whyOut := invoke(t, whyArgs...)
+	if code != 0 {
+		t.Fatalf("why before accept: %d %s", code, whyOut)
+	}
+	whyText := string(whyOut)
+	if !strings.Contains(whyText, "blocker-landing-not-on-trunk: blocker at "+lost) {
+		t.Fatalf("why before accept missing hold reason:\n%s", whyText)
+	}
+	if !strings.Contains(whyText, "tillr drain accept-rewrite") {
+		t.Fatalf("why before accept does not name tillr drain accept-rewrite:\n%s", whyText)
+	}
+	if strings.Contains(whyText, "restore the named landing's trunk ancestry") || strings.Contains(whyText, "repair its recorded rewrite mapping") {
+		t.Fatalf("why before accept still has old vague mover:\n%s", whyText)
+	}
+
+	// Mismatched stable patch id is refused.
+	badArgs := []string{"accept-rewrite", "--root", repo, "--store", path, "--lost", lost, "--current", tip, "--by", "owner", "--why", "wrong commit", "--now", "2026-11-22T00:00:00Z"}
+	if code, out := invoke(t, badArgs...); code == 0 || !strings.Contains(string(out), "the stable patch ids differ") {
+		t.Fatalf("mismatched patch id: %d %s", code, out)
+	}
+
+	// Matching stable patch id succeeds and clears the hold in why.
+	tree := acceptGit(t, repo, nil, "rev-parse", replacement+"^{tree}")
+	args := []string{"accept-rewrite", "--root", repo, "--store", path, "--lost", lost, "--current", replacement, "--by", "owner", "--why", "re-authored landing", "--now", "2026-11-22T00:00:00Z"}
+	want := "accepted the landing rewrite " + lost + " -> " + replacement + ": same stable patch id, current tree " + tree + "; lost landing pinned at refs/tillr/trunk-history/accepted/" + lost + "\n"
+	if code, out := driveRecord(t, bin, args...); code != 0 || string(out) != want {
+		t.Fatalf("accept interior landing: %d %q, want %q", code, out, want)
+	}
+	if code, out := invoke(t, args...); code == 0 || !strings.Contains(string(out), "no rewrite is recorded") {
+		t.Fatalf("second acceptance: %d %s", code, out)
+	}
+
+	code, whyAfter := invoke(t, whyArgs...)
+	if code != 0 {
+		t.Fatalf("why after accept: %d %s", code, whyAfter)
+	}
+	if strings.Contains(string(whyAfter), "blocker-landing-not-on-trunk") {
+		t.Fatalf("why after accept still holds dependent:\n%s", whyAfter)
+	}
+}

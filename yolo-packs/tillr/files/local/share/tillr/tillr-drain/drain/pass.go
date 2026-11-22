@@ -2728,6 +2728,9 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	if _, err := l.observeTrunk(ctx, ""); err != nil {
 		return "", err
 	}
+	if err := l.reconcileRewrittenLandings(ctx); err != nil {
+		return "", err
+	}
 	// After-merge proof starts before document sync and landing reconciliation, so a fault
 	// in either on every start cannot keep a restarting loop from ever proving the tip.
 	if !l.nonLanding && l.gatePolicy.LandingStrategy == "after-merge" {

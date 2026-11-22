@@ -42,7 +42,10 @@ type RewriteAcceptance struct {
 	Commits int    `json:"commits"`
 	// Rebased says the rewrite was a rebase onto a moved base: the trees differ, and each
 	// of Commits lost commits has a commit with the same patch on the trunk.
-	Rebased bool   `json:"rebased,omitempty"`
+	Rebased bool `json:"rebased,omitempty"`
+	// Landing says an individual unmapped trunk landing commit (not the trunk tip) was
+	// mapped to its patch-identical replacement on the trunk.
+	Landing bool   `json:"landing,omitempty"`
 	Pin     string `json:"pin"`
 	// GreenFrom and GreenTo name the proof pointer's move, when the rewrite carried it.
 	GreenFrom string `json:"green_from,omitempty"`
@@ -96,10 +99,6 @@ func AcceptRewrite(ctx context.Context, req AcceptRewriteRequest) (RewriteAccept
 	if err != nil {
 		return a, err
 	}
-	oneForOnePairs, rebasedPairs, err := acceptedRewritePairs(ctx, req.Root, lost, current)
-	if err != nil {
-		return a, err
-	}
 	s, err := store.Open(ctx, req.Store, true)
 	if err != nil {
 		return a, err
@@ -125,7 +124,66 @@ func AcceptRewrite(ctx context.Context, req AcceptRewriteRequest) (RewriteAccept
 			}
 		}
 		if recorded == "" {
-			return Usagef("no rewrite is recorded: the trunk %s contains the observed tip %q, so there is nothing to accept", tip, h.Observed)
+			unmapped, err := isUnmappedTrunkLanding(ctx, tx.Reader(), req.Root, lost, tip)
+			if err != nil {
+				return err
+			}
+			if !unmapped {
+				return Usagef("no rewrite is recorded: the trunk %s contains the observed tip %q, so there is nothing to accept", tip, h.Observed)
+			}
+			if on, err := trunkAncestor(ctx, req.Root, current, tip); err != nil {
+				return err
+			} else if !on {
+				return Usagef("--current %s is not on the trunk: the trunk %s does not contain it", current, tip)
+			}
+			lostPatchID, err := singleCommitPatchID(ctx, req.Root, lost)
+			if err != nil {
+				return err
+			}
+			if lostPatchID == "" {
+				return Usagef("cannot verify patch identity: lost landing %s has no stable patch id (empty or merge commit)", lost)
+			}
+			currentPatchID, err := singleCommitPatchID(ctx, req.Root, current)
+			if err != nil {
+				return err
+			}
+			if currentPatchID == "" {
+				return Usagef("cannot verify patch identity: --current %s has no stable patch id (empty or merge commit)", current)
+			}
+			if lostPatchID != currentPatchID {
+				return Usagef("the stable patch ids differ: lost landing %s has patch id %s, --current %s has patch id %s", lost, lostPatchID, current, currentPatchID)
+			}
+			currentTree, err := git("rev-parse", current+"^{tree}")
+			if err != nil {
+				return err
+			}
+			a = RewriteAcceptance{
+				Lost: lost, Current: current, Tree: currentTree, Commits: 1,
+				Landing: true, Pin: acceptedTrunkPrefix + lost, By: req.By, Why: req.Why,
+			}
+			if _, err := git("update-ref", a.Pin, lost); err != nil {
+				return err
+			}
+			if err := updateLandedMarkers(ctx, req.Root, map[string]string{lost: current}); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(heavy.RewritesDDL); err != nil {
+				return err
+			}
+			at := req.At.Format(time.RFC3339)
+			if _, err := tx.Exec(`INSERT INTO trunk_rewrites(old_sha,new_sha,recorded_at,evidence) VALUES(?,?,?,?) ON CONFLICT(old_sha) DO UPDATE SET new_sha=excluded.new_sha,recorded_at=excluded.recorded_at,evidence=excluded.evidence`, lost, current, at, "accept-rewrite:landing"); err != nil {
+				return err
+			}
+			body, err := json.Marshal(a)
+			if err != nil {
+				return err
+			}
+			_, err = tx.Append(event.Event{Kind: rewriteAcceptedKind, ObjectType: "trunk", ObjectID: &lost, Payload: body, At: req.At.UTC()})
+			return err
+		}
+		oneForOnePairs, rebasedPairs, err := acceptedRewritePairs(ctx, req.Root, lost, current)
+		if err != nil {
+			return err
 		}
 		if recorded != lost {
 			return Usagef("the recorded lost tip is %s, not %s: name the tip the hold reports (trunk-rewritten: <lost> -> <current>)", recorded, lost)
@@ -257,6 +315,56 @@ func AcceptRewrite(ctx context.Context, req AcceptRewriteRequest) (RewriteAccept
 		registerRewriteStore(req.Root, req.Store)
 	}
 	return a, err
+}
+
+// isUnmappedTrunkLanding reports whether lost is the resolved trunk_after of a landed
+// non-fork landing that is not an ancestor of tip.
+func isUnmappedTrunkLanding(ctx context.Context, r *store.Reader, root, lost, tip string) (bool, error) {
+	var exists bool
+	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='landings')`).Scan(&exists); err != nil {
+		return false, err
+	}
+	if !exists {
+		return false, nil
+	}
+	rows, err := r.Query(`SELECT DISTINCT l.trunk_after
+		FROM landings l LEFT JOIN events e ON e.seq=l.event_seq AND e.kind='land.landing'
+		WHERE l.result='landed' AND l.trunk_after != ''
+		  AND COALESCE(json_extract(e.payload, '$.base_ref'), '') NOT LIKE 'refs/heads/patch/%'`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	var shas []string
+	for rows.Next() {
+		var sha string
+		if err := rows.Scan(&sha); err != nil {
+			return false, err
+		}
+		shas = append(shas, sha)
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	matched := false
+	for _, sha := range shas {
+		resolved, err := heavy.RewriteResolve(r, sha)
+		if err != nil {
+			return false, err
+		}
+		if resolved == lost {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return false, nil
+	}
+	onTrunk, err := trunkAncestor(ctx, root, lost, tip)
+	if err != nil {
+		return false, err
+	}
+	return !onTrunk, nil
 }
 
 // acceptedRewritePairs computes both candidate old->new commit mappings before the store
