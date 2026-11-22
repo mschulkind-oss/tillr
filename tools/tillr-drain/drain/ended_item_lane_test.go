@@ -98,8 +98,13 @@ func TestClosingItemAfterTestWriteUncommittedWorkRestoresLane(t *testing.T) {
 	}
 	// Let the test-write completion settle.
 	var r LoopResult
-	if stop, err := l.pass(ctx, &r); err != nil || (stop != "" && stop != "queue-drained") {
-		t.Fatalf("settle test-write: stop=%q err=%v", stop, err)
+	for i := 0; i < 6 && (i == 0 || l.activeCount() > 0); i++ {
+		if stop, err := l.pass(ctx, &r); err != nil || (stop != "" && stop != "queue-drained") {
+			t.Fatalf("settle test-write %d: stop=%q err=%v", i, stop, err)
+		}
+	}
+	if l.activeCount() > 0 {
+		t.Fatalf("test-write examination still active after settle passes")
 	}
 	laneWT := l.lanePath("lane-1")
 	if status := runGit(t, laneWT, "status", "--porcelain", "--untracked-files=all"); !strings.Contains(status, "failing_test.go") {
@@ -255,8 +260,13 @@ func TestAllTerminalEndingsSaveUncommittedWorkAndRestoreLane(t *testing.T) {
 				}
 			}
 			var r LoopResult
-			if stop, err := l.pass(ctx, &r); err != nil || (stop != "" && stop != "queue-drained") {
-				t.Fatalf("settle: stop=%q err=%v", stop, err)
+			for i := 0; i < 6 && (i == 0 || l.activeCount() > 0); i++ {
+				if stop, err := l.pass(ctx, &r); err != nil || (stop != "" && stop != "queue-drained") {
+					t.Fatalf("settle %d: stop=%q err=%v", i, stop, err)
+				}
+			}
+			if l.activeCount() > 0 {
+				t.Fatalf("examination still active after settle passes")
 			}
 
 			tc.finish(t, f, l)

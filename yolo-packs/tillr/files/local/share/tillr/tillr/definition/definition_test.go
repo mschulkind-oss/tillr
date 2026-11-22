@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -222,11 +221,11 @@ func TestObservability(t *testing.T) {
 }
 
 func TestNameOnlyInOneConstantAndOnlyLifecycleConsumers(t *testing.T) {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("locating source")
+	defDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("locating source: %v", err)
 	}
-	modules, err := filepath.Glob(filepath.Join(filepath.Dir(file), "..", "..", "tillr*"))
+	modules, err := filepath.Glob(filepath.Join(defDir, "..", "..", "tillr*"))
 	if err != nil || len(modules) == 0 {
 		t.Fatalf("locating modules: %v", err)
 	}
@@ -252,7 +251,7 @@ func TestNameOnlyInOneConstantAndOnlyLifecycleConsumers(t *testing.T) {
 			for _, imp := range parsed.Imports {
 				value, _ := strconv.Unquote(imp.Path.Value)
 				if value == "github.com/mschulkind-oss/tillr/definition" &&
-					filepath.Base(module) != "tillr-store" && filepath.Base(module) != "tillr-item" && filepath.Base(module) != "tillr-drain" && filepath.Base(module) != "tillr-view" && filepath.Base(module) != "tillr-watch" && filepath.Dir(path) != filepath.Dir(file) && filepath.Clean(filepath.Dir(path)) != filepath.Join(filepath.Dir(file), "..", "watch") {
+					filepath.Base(module) != "tillr-store" && filepath.Base(module) != "tillr-item" && filepath.Base(module) != "tillr-drain" && filepath.Base(module) != "tillr-view" && filepath.Base(module) != "tillr-watch" && filepath.Dir(path) != defDir && filepath.Clean(filepath.Dir(path)) != filepath.Join(defDir, "..", "watch") {
 					t.Errorf("utility other than store, item, drain, view or watch imports definition: %s", path)
 				}
 			}
@@ -275,7 +274,7 @@ func TestNameOnlyInOneConstantAndOnlyLifecycleConsumers(t *testing.T) {
 						continue
 					}
 					value, _ := strconv.Unquote(lit.Value)
-					found = value == GitLandingName && filepath.Clean(path) == filepath.Join(filepath.Dir(file), "definition.go")
+					found = value == GitLandingName && filepath.Clean(path) == filepath.Join(defDir, "definition.go")
 				}
 			}
 			if !found || n != 1 {

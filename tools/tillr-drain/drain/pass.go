@@ -2969,8 +2969,12 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	// pass, so it is offered the next free lane; each re-plan removes a lane, so this is
 	// bounded by the lane count.
 	replans := 0
-	if stop, err := l.drainCompletions(ctx, result); stop != "" || err != nil {
+	drained, stop, err := l.drainCompletionsCount(ctx, result)
+	if stop != "" || err != nil {
 		return stop, err
+	}
+	if drained > 0 {
+		stale = true
 	}
 plans:
 	for i := 0; i < len(plans); i++ {

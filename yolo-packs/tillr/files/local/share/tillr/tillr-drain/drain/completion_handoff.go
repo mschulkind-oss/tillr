@@ -42,14 +42,21 @@ func (l *Loop) sendCompletion(ctx context.Context, c runCompletion) {
 }
 
 func (l *Loop) drainCompletions(ctx context.Context, result *LoopResult) (string, error) {
+	_, stop, err := l.drainCompletionsCount(ctx, result)
+	return stop, err
+}
+
+func (l *Loop) drainCompletionsCount(ctx context.Context, result *LoopResult) (int, string, error) {
+	drained := 0
 	for {
 		select {
 		case c := <-l.completions:
+			drained++
 			if stop, err := l.finishRunStep(ctx, c, result); stop != "" || err != nil {
-				return stop, err
+				return drained, stop, err
 			}
 		default:
-			return "", nil
+			return drained, "", nil
 		}
 	}
 }
