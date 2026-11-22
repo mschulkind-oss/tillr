@@ -10,6 +10,11 @@ import (
 // The loop process reads its store with the committed-event cache on (loopFace), so this
 // package's tests do too: every read the suite makes goes through the cache the loop uses.
 func TestMain(m *testing.M) {
+	os.Exit(runDrainTests(m))
+}
+
+func runDrainTests(m *testing.M) int {
 	store.CacheCommittedEvents()
-	os.Exit(m.Run())
+	defer runTestCleanups()
+	return m.Run()
 }

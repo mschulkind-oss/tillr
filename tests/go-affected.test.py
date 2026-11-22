@@ -165,7 +165,7 @@ def test_selection_rules(root_graph: dict) -> None:
             "github.com/mschulkind-oss/tillr-drain/drain",
         }),
         ("config/tillr/policy.json", {"github.com/mschulkind-oss/tillr-drain"}),
-        ("bin/pi-forks", {"github.com/mschulkind-oss/tillr-drain"}),
+        ("bin/pi-forks", {"github.com/mschulkind-oss/tillr-drain/drain"}),
         ("tools/gate/change-gate.py", {"github.com/mschulkind-oss/tillr-drain/drain"}),
         ("tools/gate/classify.py", {"github.com/mschulkind-oss/tillr-drain/drain"}),
         ("tools/tillr-loop/drain-argv.json", {"github.com/mschulkind-oss/tillr-drain/drain"}),
@@ -175,7 +175,7 @@ def test_selection_rules(root_graph: dict) -> None:
             "github.com/mschulkind-oss/tillr-view",
         }),
         ("tools/tillr/examples/recorded-verdict/definition.json", {
-            "github.com/mschulkind-oss/tillr-drain",
+            "github.com/mschulkind-oss/tillr-drain/drain",
             "github.com/mschulkind-oss/tillr-watch",
         }),
         ("tests/pi-patch-series.test.sh", {"github.com/mschulkind-oss/tillr-gate"}),
@@ -188,9 +188,8 @@ def test_selection_rules(root_graph: dict) -> None:
             assert item["selected_tests"] is None, f"unscoped read {changed_path} narrowed {item}"
 
     # 10. Scoped read_tests on tools/fork-check.py (alone or with tests/fork-check.test.py)
-    # selects only the three reading packages and narrows each to its reader tests.
+    # selects only the reading packages and narrows each to its reader tests.
     expected_fc_pkgs = {
-        "github.com/mschulkind-oss/tillr-drain",
         "github.com/mschulkind-oss/tillr-drain/drain",
         "github.com/mschulkind-oss/tillr-gate",
     }
@@ -205,10 +204,10 @@ def test_selection_rules(root_graph: dict) -> None:
             assert by_pkg[ip]["reason"] == "edge", by_pkg[ip]
             assert isinstance(by_pkg[ip]["selected_tests"], list) and by_pkg[ip]["selected_tests"], by_pkg[ip]
             assert "TestEdgeInputs" not in by_pkg[ip]["selected_tests"], by_pkg[ip]
-        assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["selected_tests"] == [
-            "TestTheComposedPipelineRunsEndToEndOnAFixture"
-        ], by_pkg["github.com/mschulkind-oss/tillr-drain"]
-        assert len(by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]["selected_tests"]) == 11, (
+        assert "TestTheComposedPipelineRunsEndToEndOnAFixture" in by_pkg[
+            "github.com/mschulkind-oss/tillr-drain/drain"
+        ]["selected_tests"], by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]
+        assert len(by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]["selected_tests"]) == 12, (
             by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]
         )
         assert len(by_pkg["github.com/mschulkind-oss/tillr-gate"]["selected_tests"]) == 9, (
@@ -232,7 +231,7 @@ def test_selection_rules(root_graph: dict) -> None:
         ROOT, ["tools/fork-check.py", "tools/tillr-cli/main.go"], graph=root_graph
     )
     by_pkg = {item["import_path"]: item for item in sel_builds["selected"]}
-    assert by_pkg["github.com/mschulkind-oss/tillr-drain"]["selected_tests"] is None, by_pkg
+    assert "github.com/mschulkind-oss/tillr-drain" not in by_pkg, by_pkg
     assert by_pkg["github.com/mschulkind-oss/tillr-drain/drain"]["selected_tests"] is None, by_pkg
     assert len(by_pkg["github.com/mschulkind-oss/tillr-gate"]["selected_tests"]) == 9, by_pkg
 
@@ -414,10 +413,10 @@ def test_edges_file_honest_and_env_read() -> None:
 
     # Scan *_test.go for sibling go build / go run invocations outside the test's own package.
     modules = go_affected.discover_tillr_modules(ROOT)
-    sibling_dir_re = re.compile(r'"\.\./(tillr-[a-z]+)"')
+    sibling_dir_re = re.compile(r'"(?:\.\./)+(tillr-[a-z]+)"')
     sibling_pkg_re = re.compile(r'"github\.com/mschulkind-oss/(tillr-[a-z]+)"')
     parent_build_re = re.compile(r'exec\.Command\("go",\s*"build"[^)]*"\.\."\)')
-    helper_join_re = re.compile(r'filepath\.Join\("\.\.",\s*"tillr-"\s*\+')
+    helper_join_re = re.compile(r'filepath\.Join\((?:"\.\.",\s*)+"tillr-"\s*\+')
 
     for mod in modules:
         mod_name = mod.split("/", 1)[1]
@@ -499,7 +498,6 @@ def test_edges_file_honest_and_env_read() -> None:
     # tools/fork-check.py must be covered by reads and read_tests["tools/fork-check.py"].
     actual_fc_readers = _scan_fork_check_reader_tests(ROOT, modules)
     assert set(actual_fc_readers) == {
-        "github.com/mschulkind-oss/tillr-drain",
         "github.com/mschulkind-oss/tillr-drain/drain",
         "github.com/mschulkind-oss/tillr-gate",
     }, actual_fc_readers
@@ -1248,7 +1246,7 @@ def test_no_leftover_processes_after_check_finishes() -> None:
                 [
                     "go", "test", "-count=1", "-json", "-timeout", "0", "-parallel", "1",
                     "-run", "^TestRestartReplacesTheLoopInPlaceWithoutSignalingARun$",
-                    "github.com/mschulkind-oss/tillr-drain",
+                    "github.com/mschulkind-oss/tillr-drain/drain",
                 ],
                 cwd=ROOT / "tools" / "tillr-drain",
                 env=env,

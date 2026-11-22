@@ -2,6 +2,7 @@ package drain
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -532,39 +533,204 @@ func newRefusalLoopFixtureWithLanes(t *testing.T, laneCount int, ids ...string) 
 	t.Helper()
 	// Fixture commits and the deployed identity check must agree, without
 	// writing the owner's shared Git configuration.
-	config := filepath.Join(scratchUnderDurable(t), "gitconfig")
+	baseDir := scratchUnderDurable(t)
+	if !filepath.IsAbs(baseDir) {
+		abs, err := filepath.Abs(baseDir)
+		if err != nil {
+			t.Fatalf("resolving fixture scratch path failed: %v", err)
+		}
+		baseDir = abs
+	}
+	config := filepath.Join(baseDir, "gitconfig")
 	writeForkFile(t, config, "[user]\n name = tillr\n email = tillr@example.invalid\n")
 	t.Setenv("GIT_CONFIG_GLOBAL", config)
-	root := filepath.Join(scratchUnderDurable(t), "repo")
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		t.Fatalf("creating the fixture repository failed: %v", err)
+	tpl := getRefusalTemplate(t)
+	root := filepath.Join(baseDir, "repo")
+	if err := copyTemplateDir(filepath.Join(tpl, "repo"), root); err != nil {
+		t.Fatalf("copying the fixture repository failed: %v", err)
 	}
-	runGit(t, root, "init", "-q", "-b", TrunkRef)
-	writeForkFile(t, filepath.Join(root, "base.txt"), "base\n")
-	runGit(t, root, "add", ".")
-	runGit(t, root, "commit", "-qm", "base")
-	laneRoot := filepath.Join(scratchUnderDurable(t), "lanes")
+	mainSHABytes, err := os.ReadFile(filepath.Join(root, ".git", "refs", "heads", TrunkRef))
+	if err != nil {
+		t.Fatalf("reading template trunk ref failed: %v", err)
+	}
+	mainSHA := strings.TrimSpace(string(mainSHABytes))
+	laneRoot := filepath.Join(baseDir, "lanes")
 	for i := 0; i < laneCount; i++ {
 		lane := fmt.Sprintf("lane-%d", i+1)
-		path := filepath.Join(laneRoot, lane, WorktreeDir)
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		wtPath := filepath.Join(laneRoot, lane, WorktreeDir)
+		if err := os.MkdirAll(wtPath, 0o755); err != nil {
 			t.Fatalf("creating the fixture lane failed: %v", err)
 		}
-		runGit(t, root, "worktree", "add", "-q", "-b", LaneBranch(laneRoot, lane), path, TrunkRef)
+		if err := copyTemplateFile(filepath.Join(root, "base.txt"), filepath.Join(wtPath, "base.txt"), 0o644); err != nil {
+			t.Fatalf("copying worktree base.txt failed: %v", err)
+		}
+		wtName := lane + "-" + WorktreeDir
+		wtMeta := filepath.Join(root, ".git", "worktrees", wtName)
+		if err := os.MkdirAll(wtMeta, 0o755); err != nil {
+			t.Fatalf("creating worktree metadata failed: %v", err)
+		}
+		wtGit := filepath.Join(wtPath, ".git")
+		writeForkFile(t, wtGit, "gitdir: "+wtMeta+"\n")
+		writeForkFile(t, filepath.Join(wtMeta, "gitdir"), wtGit+"\n")
+		writeForkFile(t, filepath.Join(wtMeta, "commondir"), "../..\n")
+		branch := LaneBranch(laneRoot, lane)
+		writeForkFile(t, filepath.Join(wtMeta, "HEAD"), "ref: refs/heads/"+branch+"\n")
+		if err := copyTemplateFile(filepath.Join(root, ".git", "index"), filepath.Join(wtMeta, "index"), 0o644); err != nil {
+			t.Fatalf("copying worktree index failed: %v", err)
+		}
+		refPath := filepath.Join(root, ".git", "refs", "heads", filepath.FromSlash(branch))
+		if err := os.MkdirAll(filepath.Dir(refPath), 0o755); err != nil {
+			t.Fatalf("creating lane branch ref dir failed: %v", err)
+		}
+		writeForkFile(t, refPath, mainSHA+"\n")
 	}
 	f := refusalLoopFixture{
 		root: root, laneRoot: laneRoot, items: ids,
-		storePath: filepath.Join(scratchUnderDurable(t), "board.sqlite3"),
+		storePath: filepath.Join(baseDir, "board.sqlite3"),
 	}
-	s, err := store.InitFixture(context.Background(), f.storePath)
-	if err != nil {
-		t.Fatalf("creating the fixture store failed: %v", err)
+	if err := copyTemplateFile(filepath.Join(tpl, "board.sqlite3"), f.storePath, 0o644); err != nil {
+		t.Fatalf("copying the fixture store failed: %v", err)
 	}
-	defer s.Close()
-	for _, id := range ids {
-		seedRefusalItem(t, s, id)
+	if len(ids) > 0 {
+		s, err := store.Open(context.Background(), f.storePath, true)
+		if err != nil {
+			t.Fatalf("opening the fixture store failed: %v", err)
+		}
+		defer s.Close()
+		for _, id := range ids {
+			seedRefusalItem(t, s, id)
+		}
 	}
 	return f
+}
+
+var (
+	refusalTemplateOnce sync.Once
+	refusalTemplateDir  string
+	refusalTemplateErr  error
+)
+
+func getRefusalTemplate(t *testing.T) string {
+	t.Helper()
+	refusalTemplateOnce.Do(func() {
+		durable := os.Getenv("YOLO_DURABLE_DIR")
+		if durable == "" {
+			durable = filepath.Join("..", "..", "..", ".yolo", "durable")
+		}
+		if err := os.MkdirAll(durable, 0o755); err != nil {
+			refusalTemplateErr = err
+			return
+		}
+		if !filepath.IsAbs(durable) {
+			abs, err := filepath.Abs(durable)
+			if err != nil {
+				refusalTemplateErr = err
+				return
+			}
+			durable = abs
+		}
+		dir, err := os.MkdirTemp(durable, "tillr-drain-refusal-tpl-")
+		if err != nil {
+			refusalTemplateErr = err
+			return
+		}
+		RegisterTestCleanup(func() { _ = os.RemoveAll(dir) })
+		cfg := filepath.Join(dir, "gitconfig")
+		if err := os.WriteFile(cfg, []byte("[user]\n name = tillr\n email = tillr@example.invalid\n"), 0o600); err != nil {
+			refusalTemplateErr = err
+			return
+		}
+		repo := filepath.Join(dir, "repo")
+		if err := os.MkdirAll(repo, 0o755); err != nil {
+			refusalTemplateErr = err
+			return
+		}
+		runGitTpl := func(args ...string) error {
+			cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+			cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+cfg)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("git %v: %v: %s", args, err, out)
+			}
+			return nil
+		}
+		if err := runGitTpl("init", "-q", "-b", TrunkRef); err != nil {
+			refusalTemplateErr = err
+			return
+		}
+		if err := os.WriteFile(filepath.Join(repo, "base.txt"), []byte("base\n"), 0o644); err != nil {
+			refusalTemplateErr = err
+			return
+		}
+		if err := runGitTpl("add", "."); err != nil {
+			refusalTemplateErr = err
+			return
+		}
+		if err := runGitTpl("commit", "-qm", "base"); err != nil {
+			refusalTemplateErr = err
+			return
+		}
+		tplDB := filepath.Join(dir, "board.sqlite3")
+		s, err := store.InitFixture(context.Background(), tplDB)
+		if err != nil {
+			refusalTemplateErr = err
+			return
+		}
+		if err := s.Close(); err != nil {
+			refusalTemplateErr = err
+			return
+		}
+		// Checkpoint WAL into the main database file so zero-item callers copying only
+		// board.sqlite3 receive the full migrated schema on disk.
+		db, err := sql.Open("sqlite", "file:"+tplDB)
+		if err != nil {
+			refusalTemplateErr = err
+			return
+		}
+		_, ckptErr := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)")
+		closeErr := db.Close()
+		if ckptErr != nil {
+			refusalTemplateErr = ckptErr
+			return
+		}
+		if closeErr != nil {
+			refusalTemplateErr = closeErr
+			return
+		}
+		refusalTemplateDir = dir
+	})
+	if refusalTemplateErr != nil {
+		t.Fatalf("initializing refusal fixture template: %v", refusalTemplateErr)
+	}
+	return refusalTemplateDir
+}
+
+func copyTemplateDir(src, dst string) error {
+	return filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		return copyTemplateFile(path, target, info.Mode())
+	})
+}
+
+func copyTemplateFile(src, dst string, mode os.FileMode) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, mode)
 }
 
 // decisions is the tick's batch: one dispatch per item on its own lane, which is what the

@@ -13,7 +13,7 @@ import (
 
 // scratch answers a directory under $YOLO_DURABLE_DIR, never /tmp: a suite that writes
 // to /tmp loses its evidence when the box is cleaned, and the owner refuses it.
-func scratch(t *testing.T) string {
+func conformanceScratch(t *testing.T) string {
 	t.Helper()
 	root := os.Getenv("YOLO_DURABLE_DIR")
 	if root == "" {
@@ -44,7 +44,7 @@ func scratch(t *testing.T) string {
 // record kinds is an appendable event kind, and registering one would make that claim
 // false while every other test stayed green.
 func TestTheDrainUtilityComposesItsNeighboursAndRegistersNoEventKind(t *testing.T) {
-	s, err := store.InitFixture(context.Background(), filepath.Join(scratch(t), "board.sqlite3"))
+	s, err := store.InitFixture(context.Background(), filepath.Join(conformanceScratch(t), "board.sqlite3"))
 	if err != nil {
 		t.Fatalf("creating a fixture store failed: %v", err)
 	}

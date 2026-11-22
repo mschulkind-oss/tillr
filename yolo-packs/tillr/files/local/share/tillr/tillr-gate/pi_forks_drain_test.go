@@ -75,7 +75,7 @@ func TestForkDriverInputsSelectDrainIntegrationAtLanding(t *testing.T) {
 				t.Fatalf("test failure did not fail the landing gate: %v: %s", err, out)
 			}
 			argv, err := os.ReadFile(log)
-			if err != nil || strings.TrimSpace(string(argv)) != "test -count=1 . -run ^TestForkBuildDeliveryAndSuccessiveLaneBases$" {
+			if err != nil || strings.TrimSpace(string(argv)) != "test -count=1 ./drain -run ^TestForkBuildDeliveryAndSuccessiveLaneBases$" {
 				t.Fatalf("wrong targeted command: %v: %s", err, argv)
 			}
 		})
