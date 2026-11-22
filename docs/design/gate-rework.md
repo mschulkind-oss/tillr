@@ -1654,6 +1654,94 @@ landings were let through and all but two were repaired without a person, while 
 up the ten-second landing for half of all landings. The owner's leaning quoted above is toward
 better fast tests, so this is the designer's reading of the numbers and the owner's to overturn.
 
+### 6.11 The fast gate before a landing records its time and its Go packages
+
+This section is the designer's, written on 2026-11-21 from an operator request and to answer a
+build worker's report against it. None of it is the owner's ruling, and the owner may overturn
+any of it. The request says the owner accepted about 40 seconds for the fast gate on drain
+changes on condition of "perf monitoring all over it"; those quoted words are the request's
+account of the owner, and no dated owner statement is on file here.
+
+**What is recorded.** Each run of the fast gate that judges a candidate before it lands, on its
+ordinary path, leaves one durable record holding:
+
+- the wall time of the whole gate run, measured once around the run, not summed from its checks
+  and not including time spent waiting to start;
+- for each check, its elapsed time in this run and whether it ran, was reused from a remembered
+  pass, or was not run;
+- for each Go check on that path, the Go packages it selected, by import path.
+
+A run that does not pass leaves the same record, and a later attempt does not replace an
+earlier one's. Nothing here changes which checks run, how a result is classified, a budget, the
+stall rule or what lands (`D-GR1`, `D-GR7`, `D-GR8`, `D-GR15`, `D-GR16`).
+
+**Scope, from the request.** Only that ordinary path is covered:
+`ProcessSteps.Gate` in the drain, then `tools/gate/change-gate.py`, which runs
+`tillr-gate checks --fast-tree` and `tools/fork-check.py --tier landing`. Six paths are left
+unmeasured by this work, each to be its own request: the heavy trunk proof, the legacy
+tree-check bridge, a relanding candidate, the automatic revert candidate, named replays, and
+counting fast-passed landings later named by a heavy failure. The candidate's commit message
+lists them. An earlier request asked for timing on every gate run and was closed after eight
+verifier refusals, each on a different path; its last candidate is kept at
+`refs/keep/fast-gate-timing`, and this work takes from it only the hunks the ordinary path
+needs.
+
+**Three Go checks are on that path, and each has its own source of packages.** Read at
+`86e2549392`:
+
+| Check | When it runs | Command | Where its packages come from |
+| :--- | :--- | :--- | :--- |
+| `go-build` | every fast gate, as a fast tree check | `tools/gate/checks/go-build.py` | the `go list` the check already runs, written to the file named by `TILLR_GO_BUILD_EVIDENCE_OUT`; a module reused from memory lists no packages |
+| `go-substrate` | a suite input of `tools/tillr` changed | `go test ./...` in `tools/tillr` | the package lines `go test` prints, read from the check's own output |
+| `gate-runner` | the gate runner or its suite inputs changed | `tools/go-test-shards.py tools/tillr-gate -k 6 --slot-class proof` | the shard runner's own package list, as decided below |
+
+**The report this section answers.** The build worker given the Go package piece could write
+`tools/gate/checks/go-build.py`, `tools/fork-check.py` and their tests, and stopped on
+`gate-runner`. Its evidence holds at `86e2549392`: `go_tool_command` in `tools/fork-check.py`
+gives `tools/tillr-gate` the sharded command, because that directory is in `GO_SHARD_DIRS`; the
+shard runner prints no `go test` package lines; `run` in `tools/go-test-shards.py` keeps its
+`go list -json ./...` result to itself; and the `--events` file holds only test events, so it
+omits a package with no tests, and `main` writes it only after `run` returns, so a failed
+compile leaves none. No reading of the check's output can therefore name `gate-runner`'s
+packages.
+
+**Decision (`D-GR30`): the shard runner writes its package list when asked.** `run` in
+`tools/go-test-shards.py` writes the packages its `go list -json ./...` returned to the file
+named by the environment variable `TILLR_GO_SHARDS_EVIDENCE_OUT`. The rules:
+
+- With the variable unset the runner behaves exactly as it does today. It gains no command-line
+  flag and prints nothing new.
+- The file is written before any package is compiled, so a compile failure or a failed shard
+  still leaves the full list.
+- When `go list` itself fails, the file holds the complete package records that preceded the
+  failure, marked `"discovery": "partial"`, and the runner then fails as it does today without
+  building anything.
+- Each entry names the package by `import_path`. The kept candidate's `test_cache` value may
+  stay as it is written there; nothing further about caches or compilers is added.
+- A failure to write the file is printed to standard error and does not change the runner's
+  exit code.
+- `tools/fork-check.py` sets the variable to a fresh temporary file only for a landing-tier
+  check whose module is in `GO_SHARD_DIRS`, which on the ordinary path is `gate-runner` alone,
+  reads the file after the command ends, puts the packages on that check's record and removes
+  the file. The heavy proof, the rolling `go-tool` suites, lanes and named replays do not set it.
+
+The producer and its two fixture tests exist in the kept candidate
+(`git diff 86e2549392...refs/keep/fast-gate-timing -- tools/go-test-shards.py tests/go-test-shards.test.py`,
+65 added lines); the tests replace `go list` and the compile step with fixtures and run no
+suite. So the Go package piece's write scope gains `tools/go-test-shards.py` and
+`tests/go-test-shards.test.py`, for that producer and those tests only. The shard runner's
+slot pool, shard lifetime, timeouts and event output are not this work's to change (`D-GR17`,
+`D-GR20`). `tools/go-test-shards.py` is a suite input of every sharded module
+(`GO_SHARD_INPUTS`), so the candidate's own fast gate runs `gate-runner`; that is the
+runner-first rule of [`OQ-GR3`](#OQ-GR3) working as intended.
+
+| Alternative | Verdict |
+| :--- | :--- |
+| Leave `gate-runner` out of this work and give its packages to a later request | Rejected. The request's title names selected Go packages for the fast gate, `gate-runner` is on its ordinary path, and it runs exactly when the gate's own runner changed, the landings where a missing record costs most. |
+| Read the packages from the `--events` file | Rejected. It omits packages without tests and is absent after a failed compile, as the report shows. |
+| Have `tools/fork-check.py` run its own `go list` in `tools/tillr-gate` | Rejected. It is a second discovery that can differ from what the runner selected, and it adds a `go list` to a gate that targets ten seconds. |
+| Run `tools/tillr-gate` unsharded at landing so `go test` prints package lines | Rejected. It changes how a check runs, which this work may not do. |
+
 ## 7. Checked against the landing principles
 
 | Principle | How this design meets it |
@@ -1738,7 +1826,8 @@ while [`OQ-GR1`](#OQ-GR1) and [`OQ-GR2`](#OQ-GR2) were later withdrawn/overturne
 ([`OQ-GR1`](#OQ-GR1) ruled out by [`OQ-GP7`](tillr-graph-is-the-path.md#OQ-GP7), with the
 20-landing cap kept live until its replacement waiting rule is built; [`OQ-GR2`](#OQ-GR2)
 overturned in `1fa2c069c` and withdrawn in
-[the graph design Section 12.2](tillr-graph-is-the-path.md#122-decisions-in-other-documents)). `D-GR24` is the owner's ruling of 2026-11-21 that puts the `green` lane base back for new work, with trunk fixers on the tip; it replaces the 2026-11-17 overturn of [`OQ-GR2`](#OQ-GR2). `D-GR25` is the designer's list of where the built `green` behavior differs from those words; it decides nothing and each case is the owner's to rule on. `D-GR26` is the designer's decision on an operator request of 2026-11-21 that carries a question the owner asked that day, quoted verbatim; the owner may overturn it. `D-GR27` is the designer's proposal from the evidence `D-GR26` produced; it decides nothing, is not built, and is the owner's to rule on. `D-GR28` is the designer's decision of 2026-11-21, made to answer a build worker's report against an operator request; it amends `D-GR23` and is the owner's to overturn. `D-GR29` is the designer's decision of 2026-11-21 on an operator request to repair four drain test files that wait on completions; it narrows the request to the one file the tree shows at fault and is the owner's to overturn.
+[the graph design Section 12.2](tillr-graph-is-the-path.md#122-decisions-in-other-documents)). `D-GR24` is the owner's ruling of 2026-11-21 that puts the `green` lane base back for new work, with trunk fixers on the tip; it replaces the 2026-11-17 overturn of [`OQ-GR2`](#OQ-GR2). `D-GR25` is the designer's list of where the built `green` behavior differs from those words; it decides nothing and each case is the owner's to rule on. `D-GR26` is the designer's decision on an operator request of 2026-11-21 that carries a question the owner asked that day, quoted verbatim; the owner may overturn it. `D-GR27` is the designer's proposal from the evidence `D-GR26` produced; it decides nothing, is not built, and is the owner's to rule on. `D-GR28` is the designer's decision of 2026-11-21, made to answer a build worker's report against an operator request; it amends `D-GR23` and is the owner's to overturn. `D-GR29` is the designer's decision of 2026-11-21 on an operator request to repair four drain test files that wait on completions; it narrows the request to the one file the tree shows at fault and is the owner's to overturn. `D-GR30` is the designer's decision of 2026-11-21 on an operator request for
+fast-gate timing, made to answer a build worker's report; the owner may overturn it.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
@@ -1770,6 +1859,7 @@ overturned in `1fa2c069c` and withdrawn in
 | `D-GR27` | **Not the owner's ruling and not a decision: the designer's proposal, for the owner to rule on.** A candidate that changes a tillr Go module also runs, before the merge, the sharded suites of the changed modules and of the modules whose `go.mod` requires them; every other candidate is gated as today. Over the period it would have refused 9 of the 13 attributed landings, at the drain suite's time (40.31 seconds on a quiet machine, 455.28 seconds in a heavy run beside the lanes) on about half of all landings, against the ten seconds of `D-GR1`. The designer recommends against building it now (keep the fast tier, shorten the drain suite and the time to a revert first); the owner's quoted leaning is toward better fast tests. Nothing is built or changed until the owner rules. | 2026-11-21 | [Section 6.10](#610-what-passed-the-fast-gate-and-failed-the-heavy-run) | — (proposal; no ruling yet) |
 | `D-GR28` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request for the first classifier slice says "No outcome changes for any input". The single raw-result table and single aggregate order of `D-GR23` changed five measured outcomes at three sites (P6, F3, F6), so `D-GR23` is amended: `Classify` holds a named protocol per kind of raw result and `Aggregate` a named order per aggregate site, each reproducing the tree, and a site passes the name and compares nothing. A Go module build is `fail` on every non-zero exit; a legacy check follows `check_status` and `Check.conflict` (exit 4 of an ordinary kind is `fail`, exit 124 is `unknown`); the legacy gate's order is stalled, then failed, then unproven. The Python side hands over yes-or-no facts about a check's output and decides nothing from them. A difference a later slice finds is added the same way by its builder, with a test and a row in the section, and is not a definition obstacle. **Rejected:** allowing the outcome changes by name; sending pass and fail words from Python; merging the orders into the runner's in this group. | 2026-11-21 | [Each site keeps its raw-result protocol and aggregate order](#each-site-keeps-its-raw-result-protocol-and-aggregate-order) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
 | `D-GR29` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request of 2026-11-21 asks for the repair of commit `4790d2ad43` (receive a test's completions before canceling) in `policy_reload_test.go`, `fixer_intermittent_test.go`, `pass_measurement_test.go` and `lane_dirty_test.go`, saying all four cancel and then receive. At `86e2549392` only `policy_reload_test.go` does; the other three receive under `context.Background()`, where `sendCompletion` cannot drop a completion. So only `policy_reload_test.go` is repaired: its workers are released by a channel and their completions received while the context is live, with `cancel()` last; the repaired receive waits under the `hangGuard` deadlock detector and a released worker returns an error. The three others are unchanged and named with the reason in the commit body, which also states whether the real loop can lose a completion after cancel. The mirror comes from `just pack-sync`. **Rejected:** editing the three files that have no cancel; a time limit on the receive in place of the repair; a `hangGuard` on the three receives that have no fault (a second, unlanded draft of this decision proposed it); repairing `Loop.Examine` in `recovery.go` in the same change, which needs its own request; changing `sendCompletion`. **Recorded 2026-11-21 by the designer:** a third unlanded draft reached the same answer and is not adopted as a separate text; the built cleanup's receive is a bare receive on a live context, not one under `hangGuard`, and is accepted as built. **Recorded 2026-11-22 by the designer:** a fourth unlanded draft, written against the same worker report, reached the same answer and is not adopted; that report is answered by this row, the repair is built, and no build work remains under the request. The rule kept from it: no test cleanup makes a blocking receive from the loop's completions channel after it cancels the context its workers send under. | 2026-11-21 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (commit `c6a01f6e84`: [`policy_reload_test.go`](../../tools/tillr-drain/drain/policy_reload_test.go) and its mirror) |
+| `D-GR30` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** Each run of the fast gate that judges a candidate before it lands, on its ordinary path, leaves a durable record of its wall time, each check's elapsed time and whether it ran, was reused or was not run, and the Go packages each Go check selected. The packages come from `go-build`'s own `go list`, from `go-substrate`'s `go test` output, and for `gate-runner`, which runs sharded and prints no package lines, from `tools/go-test-shards.py` writing its `go list` result to the file named by `TILLR_GO_SHARDS_EVIDENCE_OUT`, before compiling, and only when that variable is set. The Go package piece may therefore edit `tools/go-test-shards.py` and `tests/go-test-shards.test.py` for that producer and its fixture tests only. The heavy trunk proof, the legacy tree-check bridge, relanding, the automatic revert candidate, named replays and the heavy-failure count are out of scope and listed in the candidate's commit message. **Rejected:** leaving `gate-runner` out; reading the `--events` file; a second `go list` in `tools/fork-check.py`; running the suite unsharded. | 2026-11-21 | [Section 6.11](#611-the-fast-gate-before-a-landing-records-its-time-and-its-go-packages) | — (not built) |
 | `D-GR12` | A question about a moving upstream is a drift probe that files an item and never moves or holds the green pointer. **Rejected:** keeping it as a check on a commit. Made visible where it happens. | 2026-11-15 | [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) | — (`series` and `patch-branch-inv2` are `TIER_LANDING` in `tools/fork-check.py`; no probe exists) |
 | OQ-GR1 | The default of a per-repository setting, `red_cap`: landing stops at 20 landings or 60 minutes past the last green commit; a repository may set a different bound, and zero means no cap. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "a mechanism whose cost rises with trunk activity is pointed the wrong way" and the owner's 2026-11-15 ruling that the landing strategy is configurable per repository and red is brief. The owner may overturn it. **Rejected:** no cap, which lets the fixer's range and the deploy lag grow without limit. **Ruled out by the owner on 2026-11-18** ([OQ-GP7](tillr-graph-is-the-path.md#OQ-GP7)): under a red check, work lands only if it does not touch what that check reads, and there is no landing cap. The cap is still live in the tree (20 landings; its time bound was turned off on 2026-11-17, `d53580bfd`) until the graph design's waiting rule is built. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/redcap/cap.go`, `drain/red_cap.go`) |
 | OQ-GR2 | The default of a per-repository setting, `lane_base`: a new lane starts from the last green commit; a repository may choose the trunk tip. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are that a worker does not pay for a failure it did not cause, and the same cost-direction rule. The owner may overturn it. **Rejected:** always cutting from the tip. **Overturned by the owner on 2026-11-17** (`1fa2c069c`): work is always built against the latest trunk, never a past commit; a lane cut from the green pointer was handed a tree older than its own item's definition and produced false conflicts. This repository set `tip`; the code's default when the key is absent is still `green`. **Replaced by the owner's ruling of 2026-11-21** (`D-GR24`): new work starts from the last proved trunk commit again, and this repository sets `green`. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/drain/lane_base.go`; the repository setting follows `D-GR24`) |
