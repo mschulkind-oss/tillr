@@ -727,26 +727,17 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 				if rec != nil || commandStage(node) {
 					continue
 				}
-				if policy == nil {
-					d.Seat = node.Seat
-					d.DeferredBy = node.RunRequest.Backend
-					d.Action, d.Reason, d.From, d.To = ActionHold, ReasonNoPolicy, "running", ""
-					d.RunRequest = nil
-					identifyDecision(&d)
-					return d, nil
-				}
-				if !policyHasBackend(policy, node.RunRequest.Backend) {
-					d.Seat = node.Seat
-					d.DeferredBy = node.RunRequest.Backend
-					d.Action, d.Reason, d.From, d.To = ActionHold, backendMissingReason(node.Seat, node.RunRequest.Backend), "running", ""
-					d.RunRequest = nil
-					identifyDecision(&d)
-					return d, nil
-				}
 				if shut[node.RunRequest.Backend] {
 					d.Seat = node.Seat
 					d.DeferredBy = node.RunRequest.Backend
 					d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
+					identifyDecision(&d)
+					return d, nil
+				}
+				if policy == nil || !policyHasBackend(policy, node.RunRequest.Backend) {
+					d.Seat = node.Seat
+					d.DeferredBy = node.RunRequest.Backend
+					d.Action, d.Reason, d.To = ActionHold, ReasonNoPolicy, ""
 					identifyDecision(&d)
 					return d, nil
 				}
@@ -759,25 +750,6 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 			d.Parallel = nodes[1:]
 		}
 		if len(d.Parallel) > 0 {
-			if policy != nil {
-				for _, node := range parallelNodes(d) {
-					if node.RunRequest == nil || commandStage(node) {
-						continue
-					}
-					rec, err := terminalRecord(r, node.RunRequest.RunID)
-					if err != nil {
-						return Decision{}, err
-					}
-					if rec == nil && !policyHasBackend(policy, node.RunRequest.Backend) {
-						d.Seat = node.Seat
-						d.DeferredBy = node.RunRequest.Backend
-						d.Action, d.Reason, d.From, d.To = ActionHold, backendMissingReason(node.Seat, node.RunRequest.Backend), "running", ""
-						d.RunRequest = nil
-						identifyDecision(&d)
-						return d, nil
-					}
-				}
-			}
 			open, err := dispatchQuotaOpen(r, d, shut, policy)
 			if err != nil {
 				return Decision{}, err
@@ -813,10 +785,9 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 		if d.WorkflowRestart {
 			backend = d.RunRequest.Backend
 		}
-		if backend != "" && !policyHasBackend(policy, backend) {
+		if d.WorkflowRestart && !policyHasBackend(policy, backend) {
 			d.DeferredBy = backend
-			d.Action, d.Reason, d.From, d.To = ActionHold, backendMissingReason(d.Seat, backend), "running", ""
-			d.RunRequest = nil
+			d.Action, d.Reason, d.To = ActionHold, ReasonNoPolicy, ""
 			d.Inputs = inputs
 			identifyDecision(&d)
 			return d, nil
@@ -921,13 +892,6 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 				if stem, _, _ := splitRunID(failure.RunID); stem == judgeRunID(work.Candidate.RunID) {
 					blocked, open = failure.Backend, !shut[failure.Backend]
 				}
-				if blocked != "" && !policyHasBackend(policy, blocked) {
-					d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, backendMissingReason("review", blocked)
-					d.Seat, d.DeferredBy = "review", blocked
-					d.RunRequest = nil
-					identifyDecision(&d)
-					return d, nil
-				}
 				if !open {
 					d.From, d.To, d.Action, d.Reason = "candidate", "", ActionHold, ReasonBackendWindow
 					d.Seat, d.DeferredBy = "review", blocked
@@ -1005,21 +969,12 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 			}
 		}
 		if finished {
-			if evaluatorNode(d) && rec != nil {
+			if evaluatorNode(d) && rec != nil && shut[d.RunRequest.Backend] {
 				if rec.State == run.StateFailedToStart || judgeQuotaRefusal(*rec) {
-					if policy != nil && !policyHasBackend(policy, d.RunRequest.Backend) {
-						d.Action, d.Reason, d.From, d.To = ActionHold, backendMissingReason(d.Seat, d.RunRequest.Backend), "running", ""
-						d.DeferredBy = d.RunRequest.Backend
-						d.RunRequest = nil
-						identifyDecision(&d)
-						return d, nil
-					}
-					if shut[d.RunRequest.Backend] {
-						d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
-						d.DeferredBy = d.RunRequest.Backend
-						identifyDecision(&d)
-						return d, nil
-					}
+					d.Action, d.Reason, d.To = ActionHold, ReasonBackendWindow, ""
+					d.DeferredBy = d.RunRequest.Backend
+					identifyDecision(&d)
+					return d, nil
 				}
 			}
 			if rec != nil && quotaSingleRun(d) {
@@ -1059,8 +1014,7 @@ func pendingDecisionExcept(r *store.Reader, work *pendingWork, at time.Time, inp
 					d.RunRequest = fresh
 				} else if d.RunRequest != nil && !commandStage(d) {
 					d.DeferredBy = d.RunRequest.Backend
-					d.Action, d.Reason, d.From, d.To = ActionHold, backendMissingReason(d.Seat, d.RunRequest.Backend), "running", ""
-					d.RunRequest = nil
+					d.Action, d.Reason, d.To = ActionHold, ReasonNoPolicy, ""
 					identifyDecision(&d)
 					return d, nil
 				}

@@ -79,14 +79,13 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 			backend = p.policy.seatList("design")[0]
 			open = p.policy.seatMayStart(row.ItemID, "design", backend, p.shut)
 		}
-		if !policyHasBackend(p.policy, backend) {
-			d.Seat = "design"
-			d.Reason, d.DeferredBy = backendMissingReason(d.Seat, backend), backend
-			break
-		}
 		if !open {
 			d.Reason = ReasonBackendWindow
 			d.Seat, d.DeferredBy = "design", backend
+			break
+		}
+		if !policyHasBackend(p.policy, backend) {
+			d.Reason, d.DeferredBy = ReasonNoPolicy, backend
 			break
 		}
 		origin := designContinuationWork(c, p.designHistory[c.DesignRunID])

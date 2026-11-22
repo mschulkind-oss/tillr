@@ -107,7 +107,6 @@ var Rules = map[string]Rule{
 	"seat-degraded":                {"ready", "queue", "the next pass"},
 	"infrastructure-repeat":        {"needs you", "backend", "the operator: repair the repeated fault, then acknowledge the item fault"},
 	"backend-closed":               {"alarm", "backend", "operator; record a successful tillr-drain probe-backend or a non-infrastructure run"},
-	"backend-missing":              {"needs you", "backend", "operator; restore the missing backend to the policy or authorize a retry with `tillr drain retry`"},
 	"judge-backend-unavailable":    {"alarm", "judge", "operator; clear the review backend alarm"},
 	"command-fault":                {"needs a cause", "lane", "repair the command process and authorize a retry"},
 
@@ -170,7 +169,7 @@ func For(reason string) Rule {
 	if strings.HasPrefix(reason, "workflow-invalid: ") {
 		return Rules["workflow-invalid"]
 	}
-	for _, named := range []string{"node-failed", "run-link-missing", "node-answer-unread", "node-scope-outside-fence", "boundary-scope-escape", "prose-criteria-count", "backend-missing"} {
+	for _, named := range []string{"node-failed", "run-link-missing", "node-answer-unread", "node-scope-outside-fence", "boundary-scope-escape", "prose-criteria-count"} {
 		if strings.HasPrefix(reason, named+": ") {
 			return Rules[named]
 		}
