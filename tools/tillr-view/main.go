@@ -71,6 +71,8 @@ func run(args []string) int {
 		}
 	case "events":
 		env, code = eventsFace(rest)
+	case "heavy-misses":
+		env, code = heavyMissesFace(rest)
 	case "passes":
 		env, code = passesFace(rest)
 	case "waiting":
@@ -345,7 +347,7 @@ func newID() string {
 
 // faceList is this binary's faces, in the order the usage lines print them. One home,
 // so the refusal, the unknown-face line and `--help` cannot disagree.
-const faceList = "status, events, waiting, alarms, passes, lanes, running, run, trace, serve, restart or perf-log"
+const faceList = "status, events, heavy-misses, waiting, alarms, passes, lanes, running, run, trace, serve, restart or perf-log"
 
 // helpExit is what parseFlags answers for a `--help`. A face's flags are the layer-1
 // surface (docs/design/tillr-distribution.md Section 3), so a help request is an answer
