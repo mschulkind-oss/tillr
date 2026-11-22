@@ -169,3 +169,54 @@ func TestDrainRepeatedVerifierRefusalsRule(t *testing.T) {
 		t.Fatalf("sixth refusal should keep the same alert open, got %+v", again)
 	}
 }
+
+func TestDrainRevertRules(t *testing.T) {
+	rules, err := watch.LoadRules("../../config/tillr/watch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ result, rule string }{
+		{"reverted", "drain-landing-reverted"},
+		{"not-possible", "drain-revert-not-possible"},
+	} {
+		t.Run(tc.result, func(t *testing.T) {
+			ctx := context.Background()
+			s, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { s.Close() })
+			now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+			landing := "abc123"
+			// A refusal may have no item_id when the drain cannot find a landing record.
+			payload := map[string]any{"landing": landing, "tip": "def456", "checks": []string{"test"}, "result": tc.result}
+			if tc.result == "reverted" {
+				payload["item_id"] = "item-a"
+				payload["revert"] = "fed321"
+			} else {
+				payload["reason"] = "no landing record names commit " + landing
+			}
+			body, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+				_, err := tx.Append(event.Event{Kind: drain.RevertKind, ObjectType: "landing", ObjectID: &landing, At: now, Payload: body})
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			e := watch.Evaluator{Store: s, Rules: rules, Clock: func() time.Time { return now }}
+			if _, err := e.Evaluate(ctx); err != nil {
+				t.Fatal(err)
+			}
+			notices, err := e.Pending(ctx, "foreground")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(notices) != 1 || notices[0].Bundle.RuleID != tc.rule || notices[0].Bundle.Subject != landing {
+				t.Fatalf("want only %s for landing %s, got %+v", tc.rule, landing, notices)
+			}
+		})
+	}
+}
