@@ -9,6 +9,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -290,6 +292,10 @@ func (s *Store) attachSidecar(ctx context.Context, trace *sqliteTraceSpan) bool 
 // OpenRead opens an existing store read-only. It never migrates: the read-only face
 // is safe to point at a store a writer is using.
 func OpenRead(ctx context.Context, path string, options ...OpenOption) (*Store, error) {
+	return openRead(ctx, path, "", options...)
+}
+
+func openRead(ctx context.Context, path, params string, options ...OpenOption) (*Store, error) {
 	cfg, err := storeOpenConfig(options)
 	if err != nil {
 		return nil, err
@@ -303,7 +309,13 @@ func OpenRead(ctx context.Context, path string, options ...OpenOption) (*Store, 
 	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("store: %w", err)
 	}
-	db, err := sql.Open("sqlite", dsn(path, true, cfg.busyTimeout))
+	dbPath := path
+	if params != "" {
+		// Keep the status-only read policy separate from the pathname.
+		uriPath := url.URL{Path: path}
+		dbPath = uriPath.EscapedPath()
+	}
+	db, err := sql.Open("sqlite", dsn(dbPath, true, cfg.busyTimeout)+params)
 	if err != nil {
 		return nil, fmt.Errorf("store: opening %s read-only: %w", path, err)
 	}
@@ -313,6 +325,132 @@ func OpenRead(ctx context.Context, path string, options ...OpenOption) (*Store, 
 		return nil, readOpenError(path, err)
 	}
 	return &Store{db: db, path: path, busyTimeout: cfg.busyTimeout, events: eventCacheFor(path)}, nil
+}
+
+// ReadWithoutCreating reads an existing store without establishing SQLite's WAL
+// sidecars beside it. It reads a private copy if the WAL index needs to be rebuilt.
+// Use it for read-only reports, and publish their output only on success.
+func ReadWithoutCreating(ctx context.Context, path string, read func(*Store) error) error {
+	before, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("store: %w", err)
+	}
+	wal, err := optionalFileInfo(path + "-wal")
+	if err != nil {
+		return err
+	}
+	shm, err := optionalFileInfo(path + "-shm")
+	if err != nil {
+		return err
+	}
+	readWith := func(params string) (err error) {
+		s, err := openRead(ctx, path, params)
+		if err != nil {
+			return err
+		}
+		defer func() { err = errors.Join(err, s.Close()) }()
+		return read(s)
+	}
+	if wal != nil && shm != nil {
+		// A live tillr store retains these files (see checkpoint.go).
+		// Participate in SQLite's read locking without updating the index.
+		return readWith("&readonly_shm=1")
+	}
+	if wal != nil && wal.Size() != 0 {
+		return readUnindexedWAL(ctx, path, before, wal, read)
+	}
+	if journal, err := optionalFileInfo(path + "-journal"); err != nil {
+		return err
+	} else if journal != nil {
+		return fmt.Errorf("store: cannot read %s as checkpointed with a rollback journal present", path)
+	}
+	// Even a checkpointed main file can have a WAL-mode header. Immutable
+	// avoids creating sidecars. Reject the report if a writer invalidated
+	// the checkpoint-only assumption while we read.
+	if err := readWith("&immutable=1"); err != nil {
+		return err
+	}
+	after, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	currentWAL, err := optionalFileInfo(path + "-wal")
+	if err != nil {
+		return err
+	}
+	currentJournal, err := optionalFileInfo(path + "-journal")
+	if err != nil {
+		return err
+	}
+	if !sameFileVersion(before, after) || !sameFileVersion(wal, currentWAL) || currentJournal != nil {
+		return fmt.Errorf("store: %s changed during checkpointed read; retry status", path)
+	}
+	return nil
+}
+
+// Let SQLite recover and validate the committed WAL on a private copy, never
+// next to the input. Without an index we cannot share a WAL read lock while
+// copying, so require both input files to remain unchanged across both copies.
+func readUnindexedWAL(ctx context.Context, path string, main, wal os.FileInfo, read func(*Store) error) (err error) {
+	dir, err := os.MkdirTemp("", "tillr-status-")
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, os.RemoveAll(dir)) }()
+	copyPath := filepath.Join(dir, "state.db")
+	for _, suffix := range []string{"", "-wal"} {
+		if err := copyStatusFile(path+suffix, copyPath+suffix); err != nil {
+			return err
+		}
+	}
+	for _, file := range []struct {
+		path   string
+		before os.FileInfo
+	}{{path, main}, {path + "-wal", wal}} {
+		after, err := os.Stat(file.path)
+		if err != nil {
+			return err
+		}
+		if !sameFileVersion(file.before, after) {
+			return fmt.Errorf("store: %s changed while copying for a read; retry status", file.path)
+		}
+	}
+	s, err := openRead(ctx, copyPath, "&readonly_shm=0")
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, s.Close()) }()
+	return read(s)
+}
+
+func copyStatusFile(src, dst string) (err error) {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, out.Close()) }()
+	_, err = io.Copy(out, in)
+	return err
+}
+
+func optionalFileInfo(path string) (os.FileInfo, error) {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return info, err
+}
+
+func sameFileVersion(a, b os.FileInfo) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return os.SameFile(a, b) && a.Size() == b.Size() && a.ModTime().Equal(b.ModTime())
 }
 
 // Close closes the store. A writable handle first checkpoints the log if it is due

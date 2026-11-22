@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/mschulkind-oss/tillr/definition"
@@ -26,13 +27,15 @@ type projectionFact[T any] struct {
 // storeFacts live for one snapshot, including negative lookups. A rule never
 // sees different values for the same subject, even across event kinds.
 type storeFacts struct {
-	rd         *store.Reader
-	charter    func() (CharterFacts, error)
-	checkItems func() error
-	items      map[string]projectionFact[itemFacts]
+	rd                         *store.Reader
+	charter                    func() (CharterFacts, error)
+	checkItems, checkWorkflows func() error
+	items                      map[string]projectionFact[itemFacts]
+	workflows                  map[string]projectionFact[sql.NullString]
 }
 
 const itemColumns = `SELECT state,seat,waiting_on FROM items`
+const workflowColumn = `SELECT workflow FROM workflow_selections`
 
 type itemFacts struct{ state, seat, waitingOn sql.NullString }
 
@@ -57,8 +60,8 @@ func readStoreFacts(rd *store.Reader) *storeFacts {
 	})
 	return &storeFacts{
 		rd: rd, charter: charter,
-		checkItems: probe(itemColumns),
-		items:      map[string]projectionFact[itemFacts]{},
+		checkItems: probe(itemColumns), checkWorkflows: probe(workflowColumn),
+		items: map[string]projectionFact[itemFacts]{}, workflows: map[string]projectionFact[sql.NullString]{},
 	}
 }
 
@@ -74,6 +77,18 @@ func (p *storeFacts) item(subject string) (itemFacts, error) {
 	return fact.value, fact.err
 }
 
+func (p *storeFacts) workflow(subject string) (sql.NullString, error) {
+	fact, ok := p.workflows[subject]
+	if !ok {
+		fact.err = p.rd.QueryRow(workflowColumn+` WHERE item_id=?`, subject).Scan(&fact.value)
+		if errors.Is(fact.err, sql.ErrNoRows) {
+			fact = projectionFact[sql.NullString]{}
+		}
+		p.workflows[subject] = fact
+	}
+	return fact.value, fact.err
+}
+
 type unreadableProjection struct {
 	name string
 	err  error
@@ -82,19 +97,34 @@ type unreadableProjection struct {
 func (e unreadableProjection) Error() string { return fmt.Sprintf("%s: %v", e.name, e.err) }
 
 type ruleFacts struct {
-	store   *storeFacts
-	git     gitSnapshot
-	charter map[string]any
-	items   bool
+	store    *storeFacts
+	git      gitSnapshot
+	charter  map[string]any
+	workflow string // empty for scopes that don't filter by item workflow
+	items    bool
 }
 
-func (p *storeFacts) forRule(r Rule, g gitSnapshot) (facts ruleFacts, err error) {
-	facts = ruleFacts{store: p, git: g, items: slices.Contains(r.Reads.Projections, "items")}
+func namedScope(scope, prefix string) string {
+	name, ok := strings.CutPrefix(scope, prefix)
+	if !ok || name == "*" {
+		return ""
+	}
+	return name
+}
+
+// forRule checks the charter scope first. An out-of-scope rule does not read
+// store projections. Git was acquired outside the store transaction.
+func (p *storeFacts) forRule(r Rule, g gitSnapshot) (facts ruleFacts, outOfScope string, err error) {
+	facts = ruleFacts{store: p, git: g, workflow: namedScope(r.Scope, "workflow:"), items: slices.Contains(r.Reads.Projections, "items")}
+	name := namedScope(r.Scope, "charter:")
 	readsCharter := slices.Contains(r.Reads.Projections, "charter")
-	if readsCharter {
+	if name != "" || readsCharter {
 		d, err := p.charter()
 		if err != nil {
-			return facts, unreadableProjection{"charter", err}
+			return facts, "", unreadableProjection{"charter", err}
+		}
+		if name != "" && name != d.Name {
+			return facts, d.Name, nil
 		}
 		if readsCharter {
 			facts.charter = map[string]any{
@@ -104,15 +134,19 @@ func (p *storeFacts) forRule(r Rule, g gitSnapshot) (facts ruleFacts, err error)
 		}
 	}
 	if err := g.ruleError(r); err != nil {
-		return facts, err
+		return facts, "", err
 	}
 	if facts.items {
 		if err := p.checkItems(); err != nil {
-			return facts, unreadableProjection{"items", err}
+			return facts, "", unreadableProjection{"items", err}
 		}
 	}
-
-	return facts, nil
+	if facts.workflow != "" {
+		if err := p.checkWorkflows(); err != nil {
+			return facts, "", unreadableProjection{"workflow_selections", err}
+		}
+	}
+	return facts, "", nil
 }
 
 func textList(v []string) []any {
@@ -124,7 +158,15 @@ func textList(v []string) []any {
 }
 
 func (p ruleFacts) forSubject(subject string) (lookup func(projectionOperand) any, inScope bool, err error) {
-
+	if p.workflow != "" {
+		workflow, err := p.store.workflow(subject)
+		if err != nil {
+			return nil, false, unreadableProjection{"workflow_selections", err}
+		}
+		if !workflow.Valid || workflow.String != p.workflow {
+			return nil, false, nil
+		}
+	}
 	var item itemFacts
 	if p.items {
 		item, err = p.store.item(subject)

@@ -50,6 +50,23 @@ func gitRequirements(rules []Rule) (refs []string, pairs []refPair) {
 	return refs, pairs
 }
 
+// covers checks presence, not readability: a failed Git read is still a fact
+// for this pass and must not cause another evaluation attempt.
+func (g gitSnapshot) covers(rules []Rule) bool {
+	refs, pairs := gitRequirements(rules)
+	for _, ref := range refs {
+		if _, ok := g.refs[ref]; !ok {
+			return false
+		}
+	}
+	for _, pair := range pairs {
+		if _, ok := g.pairs[pair]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func readGit(ctx context.Context, root string, rules []Rule) (gitSnapshot, error) {
 	g := gitSnapshot{refs: map[string]projectionFact[string]{}, pairs: map[refPair]projectionFact[lagFact]{}}
 	refs, pairs := gitRequirements(rules)

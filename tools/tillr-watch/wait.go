@@ -6,34 +6,26 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/mschulkind-oss/tillr/watch"
 )
 
 type waitOptions struct {
-	owner, storePath, rulesPath string
-	timeout                     time.Duration
-	follow                      bool
-	ticks                       <-chan time.Time
+	owner, storePath, rulesPath, root string
+	timeout                           time.Duration
+	follow                            bool
+	ticks                             <-chan time.Time
 }
 
-func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out io.Writer) (code int, resultErr error) {
-	// Watch the parent directory, not the WAL inode: SQLite may unlink and
-	// recreate the file. Install the watch before consulting the first snapshot.
-	wal := filepath.Clean(e.Store.Path() + "-wal")
-	w, err := fsnotify.NewWatcher()
+func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr io.Writer) (code int, resultErr error) {
+	wake, err := watchWAL(e.Store.Path(), opts.ticks)
 	if err != nil {
 		return 1, err
 	}
-	defer w.Close()
-	if err := w.Add(filepath.Dir(wal)); err != nil {
-		return 1, err
-	}
+	defer wake.close()
 	start, err := e.BeginWait(ctx, opts.owner)
 	if err != nil {
 		return 1, err
@@ -51,20 +43,17 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out io.Write
 		defer timer.Stop()
 		deadline = timer.C
 	}
-	ticks := opts.ticks
-	if ticks == nil {
-		fallback := time.NewTicker(60 * time.Second)
-		defer fallback.Stop()
-		ticks = fallback.C
-	}
 	// Track only what this process has printed. The durable seen cursor remains
 	// the authority for pending notices and is changed solely by confirmation.
 	printed := make(map[int64]bool)
 	tick := false
+	var diagnostics ruleDiagnostics
 	for {
-		if _, err := e.Evaluate(ctx); err != nil {
+		results, err := e.EvaluateRules(ctx)
+		if err != nil {
 			return 1, err
 		}
+		diagnostics.report(stderr, results)
 		notices, err := e.Pending(ctx, opts.owner)
 		if err != nil {
 			return 1, err
@@ -99,36 +88,15 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out io.Write
 				}
 			}
 		}
-		printed, tick = current, false
-	sleep:
-		for {
-			select {
-			case <-ctx.Done():
-				return 1, ctx.Err()
-			case <-deadline:
-				_, err := fmt.Fprintf(out, "tillr watch: timed out with no pending notices\nre-arm: %s\n", opts.rearm(0))
-				return 2, err
-			case <-ticks:
-				tick = true
-				break sleep
-			case evt, ok := <-w.Events:
-				if !ok {
-					return 1, fmt.Errorf("WAL watcher closed")
-				}
-				if filepath.Clean(evt.Name) == wal {
-					break sleep
-				}
-			case err, ok := <-w.Errors:
-				if !ok {
-					return 1, fmt.Errorf("WAL watcher closed")
-				}
-				if err != fsnotify.ErrEventOverflow {
-					return 1, err
-				}
-				// A dropped change could have fired a rule; read a fresh snapshot.
-				break sleep
-			}
+		reason, err := wake.next(ctx, deadline)
+		if err != nil {
+			return 1, err
 		}
+		if reason == deadlineWake {
+			_, err := fmt.Fprintf(out, "tillr watch: timed out with no pending notices\nre-arm: %s\n", opts.rearm(0))
+			return 2, err
+		}
+		printed, tick = current, reason == timerWake
 	}
 }
 
@@ -165,6 +133,9 @@ func (o waitOptions) rearm(through int64) string {
 	// Quote user-supplied paths and owner handles as shell words, not code.
 	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
 	cmd := "tillr watch wait --store " + quote(o.storePath) + " --rules " + quote(o.rulesPath)
+	if o.root != "" {
+		cmd += " --root " + quote(o.root)
+	}
 	if o.owner != "foreground" {
 		cmd += " --owner " + quote(o.owner)
 	}

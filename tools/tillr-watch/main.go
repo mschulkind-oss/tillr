@@ -6,11 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"maps"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"slices"
 	"syscall"
 	"time"
 
@@ -22,9 +20,10 @@ import (
 )
 
 const help = `Usage:
-  tillr watch eval --once --store PATH --rules DIR
-  tillr watch status --store PATH --rules DIR
-  tillr watch wait --store PATH --rules DIR [--owner ID] [--timeout DUR | --follow] [--seen-through SEQ]
+  tillr watch eval --once --store PATH --rules DIR [--root DIR]
+  tillr watch status --store PATH --rules DIR [--root DIR] [--json]
+  tillr watch daemon --store PATH --rules DIR [--root DIR]
+  tillr watch wait --store PATH --rules DIR [--root DIR] [--owner ID] [--timeout DUR | --follow] [--seen-through SEQ]
   tillr watch seen --store PATH --through SEQ [--owner ID]
 
 Watch reports conditions from store events. It never executes guidance or dispatches a run.
@@ -55,13 +54,14 @@ func runWithTicks(ctx context.Context, args []string, out, stderr io.Writer, tic
 	f := flag.NewFlagSet(face, flag.ContinueOnError)
 	f.SetOutput(io.Discard)
 	path := f.String("store", "", "path to the tillr state database")
-	var dir, owner string
+	var dir, owner, root string
 	var timeout time.Duration
 	var cursor int64
-	var once, follow bool
+	var once, follow, asJSON bool
 	switch face {
-	case "eval", "wait", "status":
+	case "eval", "wait", "status", "daemon":
 		f.StringVar(&dir, "rules", "", "directory of TOML rules")
+		f.StringVar(&root, "root", "", "repository for Git projections")
 	case "seen":
 	default:
 		return fail(fmt.Errorf("unknown face %q", face))
@@ -69,6 +69,8 @@ func runWithTicks(ctx context.Context, args []string, out, stderr io.Writer, tic
 	switch face {
 	case "eval":
 		f.BoolVar(&once, "once", false, "evaluate once")
+	case "status":
+		f.BoolVar(&asJSON, "json", false, "print the status report as JSON")
 	case "wait":
 		f.StringVar(&owner, "owner", "foreground", "delivery owner")
 		f.DurationVar(&timeout, "timeout", 0, "time to wait for a notice")
@@ -110,59 +112,65 @@ func runWithTicks(ctx context.Context, args []string, out, stderr io.Writer, tic
 			return fail(err)
 		}
 	}
-	var s *store.Store
-	var err error
-	if face == "status" {
-		s, err = store.OpenRead(ctx, *path)
-	} else {
-		storePath := *path
-		if face == "wait" {
-			// SQLite writes beside the underlying database, not beside a link.
-			// Open and watch the same target; preserve the argument for re-arm.
-			storePath, err = filepath.EvalSymlinks(storePath)
-			if err != nil {
-				return fail(err)
-			}
-		}
-		s, err = store.OpenMigrated(ctx, storePath)
+	if face == "daemon" && ctx.Err() != nil {
+		return 0
 	}
+	var err error
+	storePath := *path
+	if face == "wait" || face == "status" || face == "daemon" {
+		// Use the underlying store for WAL wakeups and attachment evidence,
+		// even if one command uses a symlink. Keep the argument for re-arm.
+		storePath, err = filepath.EvalSymlinks(storePath)
+		if err != nil {
+			return fail(err)
+		}
+	}
+	if face == "status" {
+		if err := printStatus(ctx, watch.Evaluator{Rules: rules, Root: root}, storePath, asJSON, out, stderr); err != nil {
+			return fail(err)
+		}
+		return 0
+	}
+	s, err := store.OpenMigrated(ctx, storePath)
 	if err != nil {
+		if face == "daemon" && ctx.Err() != nil {
+			return 0
+		}
 		return fail(err)
 	}
 	defer s.Close()
-	e := watch.Evaluator{Store: s, Rules: rules}
+	e := watch.Evaluator{Store: s, Rules: rules, Root: root}
+	if face == "wait" {
+		if err := e.CheckRules(ctx); err != nil {
+			return fail(err)
+		}
+		attachment, err := attach(storePath, owner)
+		if err != nil {
+			return fail(err)
+		}
+		defer attachment.Close()
+	}
 	// Confirm before evaluating or printing any rule diagnostics.
 	if set["through"] || set["seen-through"] {
 		if err := e.Seen(ctx, owner, cursor); err != nil {
 			return fail(err)
 		}
 	}
-	for _, r := range rules {
-		if reason := r.UnevaluatedReason(); reason != "" {
-			fmt.Fprintf(stderr, "tillr watch: rule %s not evaluated: %s\n", r.ID, reason)
-		}
-	}
 	switch face {
 	case "eval":
-		counts, err := e.Evaluate(ctx)
+		results, err := e.EvaluateRules(ctx)
 		if err != nil {
 			return fail(err)
 		}
-		for _, r := range rules {
-			if n := counts[r.ID]; n > 0 {
-				fmt.Fprintf(stderr, "tillr watch: rule %s skipped %d events: group_by %s missing or not a string\n", r.ID, n, r.When.GroupBy)
-			}
-		}
-	case "status":
-		counts, err := e.Skipped(ctx)
-		if err != nil {
+		var diagnostics ruleDiagnostics
+		diagnostics.report(stderr, results)
+		reportSkipped(stderr, results, nil)
+	case "daemon":
+		if err := daemon(ctx, e, stderr, ticks); err != nil {
 			return fail(err)
-		}
-		for _, id := range slices.Sorted(maps.Keys(counts)) {
-			fmt.Fprintf(out, "rule %s skipped=%d\n", id, counts[id])
 		}
 	case "wait":
-		code, err := wait(ctx, e, waitOptions{owner: owner, storePath: *path, rulesPath: dir, timeout: timeout, follow: follow, ticks: ticks}, out)
+		code, err := wait(ctx, e, waitOptions{owner: owner, storePath: *path, rulesPath: dir, root: root, timeout: timeout, follow: follow, ticks: ticks}, out, stderr)
 		if err != nil {
 			return fail(err)
 		}
