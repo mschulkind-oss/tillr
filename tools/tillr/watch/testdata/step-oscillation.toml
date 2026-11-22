@@ -6,7 +6,7 @@ severity = "warning"                            # "info" | "warning" | "high"
 
 [rule.reads]
 events = ["drain.node-advanced", "drain.refusal", "boundary.check"]   # registered event kinds only; drain.decision is a stored record, read as a projection
-projections = ["items", "work_nodes"]
+projections = ["items", "charter"]
 
 [rule.when]
 group_by = "item_id"                            # one episode per item

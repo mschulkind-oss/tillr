@@ -36,17 +36,31 @@ type Bundle struct {
 func makeBundle(r Rule, key, id string, c *condition) ([]byte, error) {
 	events := slices.Clone(c.events)
 	slices.Reverse(events)
-	oldest, newest := events[0].TS, events[0].TS
-	for _, event := range events[1:] {
-		oldest = min(oldest, event.TS)
-		newest = max(newest, event.TS)
+	count := int64(len(events))
+	var elapsed int64
+	switch {
+	case c.lag != nil:
+		events = []observation{}
+		count, elapsed = c.lag.count, c.lag.elapsed.Milliseconds()
+	case r.When.Pattern == DurationWithoutEvent:
+		elapsed = c.waitAge.Milliseconds()
+	case len(events) > 0:
+		oldest, newest := events[0].TS, events[0].TS
+		for _, event := range events[1:] {
+			oldest = min(oldest, event.TS)
+			newest = max(newest, event.TS)
+		}
+		elapsed = newest - oldest
 	}
-	elapsed := newest - oldest
 	elapsedText := strconv.FormatInt(elapsed/1000, 10) + "s"
 	if elapsed >= 60_000 {
 		elapsedText = strconv.FormatInt(elapsed/60_000, 10) + "m"
 	}
-	substitutions := []string{"{{subject}}", key, "{{rule_id}}", r.ID, "{{alert_id}}", id, "{{count}}", strconv.Itoa(len(events)), "{{elapsed}}", elapsedText}
+	substitutions := []string{"{{subject}}", key, "{{rule_id}}", r.ID, "{{alert_id}}", id, "{{count}}", strconv.FormatInt(count, 10), "{{elapsed}}", elapsedText}
+	if c.lag != nil {
+		short := func(oid string) string { return oid[:min(12, len(oid))] }
+		substitutions = append(substitutions, "{{leader}}", r.When.Leader, "{{follower}}", r.When.Follower, "{{leader_short}}", short(c.lag.leaderOID), "{{follower_short}}", short(c.lag.followerOID))
+	}
 	if r.When.Pattern == AlternatingPair {
 		substitutions = append(substitutions, "{{pair_a}}", c.pair[0], "{{pair_b}}", c.pair[1])
 	}
