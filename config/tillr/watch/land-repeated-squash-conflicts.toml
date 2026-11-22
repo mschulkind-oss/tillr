@@ -1,0 +1,27 @@
+# 2026-11-22 incident: item-request-a386b7eb1b hit four squash conflicts in a
+# row in docs/design/tillr-watch.md over 55 minutes while land-squash-conflict
+# opened once and then only counted. Events read: land.landing.
+
+[[rule]]
+id = "land-repeated-squash-conflicts"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["land.landing"]
+
+[rule.when]
+group_by = "item_id"
+pattern = "consecutive_count"
+match = 'event.result == "squash-conflict"'
+reset = 'event.result == "landed"'
+threshold = 3
+window = "24h"
+
+[rule.guidance]
+summary = "Item {{subject}} hit {{count}} squash conflicts in a row at landing (latest conflicting paths: {{event.conflict_paths}})."
+check = ["Read the land.landing events for {{subject}} (conflict_paths {{event.conflict_paths}}, base_sha, head_sha, and trunk_before) and run tillr drain why {{subject}} to see what shared file keeps moving on main while repairs run."]
+do = ["Inspect the competing trunk commits touching {{event.conflict_paths}} and decide whether to hold, re-scope, or sequence the contending items by hand; this alert changes nothing about landing order."]
+
+[rule.delivery]
+receiver = "foreground"
