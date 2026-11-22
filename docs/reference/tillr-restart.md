@@ -91,7 +91,9 @@ dedicated SQLite tables:
 - **`drain.build-started`** (`BuildKind`, written by `PublishBuild` and read by
   `ReadBuild`): records `BuildFact` (`role`, `revision`, `time`, `modified`,
   `digest`, `executable`, `pid`, `at`) whenever a loop or observatory server
-  starts or completes a restart.
+  starts or completes a restart. For a drain that replaces its running program
+  to fulfill a restart request, `restart_request` holds the request ID. Other
+  starts omit that field.
 
 ### Resolving and comparing the candidate binary
 

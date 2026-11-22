@@ -1,0 +1,23 @@
+# On 2026-11-21 the keeper relaunched the loop twice after store-busy exits.
+# Read drain.build-started events for loop starts that carry no restart request.
+[[rule]]
+id = "drain-unrequested-start"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.build-started"]
+
+[rule.when]
+group_by = "global"
+pattern = "predicate_match"
+match = 'event.role == "drain" and empty(event.restart_request)'
+window = "1h"
+
+[rule.guidance]
+summary = "The drain loop started without a recorded restart request."
+check = ["Check the keeper's output and the last lines of the loop's log. A first keeper launch, a manual start, or a start through just tillr-restart is expected and also produces this alert."]
+do = ["Determine whether a previous loop exited unexpectedly and, if so, why it exited."]
+
+[rule.delivery]
+receiver = "foreground"

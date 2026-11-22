@@ -587,6 +587,8 @@ type BuildFact struct {
 	Executable string    `json:"executable"`
 	PID        int       `json:"pid"`
 	At         time.Time `json:"at"`
+	// RestartRequest is the ID carried across an in-place drain restart.
+	RestartRequest string `json:"restart_request,omitempty"`
 }
 
 // PublishBuild records the running build of one role.

@@ -61,6 +61,7 @@ func (l *Loop) adoptRestart(ctx context.Context) error {
 		Role: restart.RoleDrain, Revision: l.build.Revision, Time: l.build.Time,
 		Modified: l.build.Modified, Digest: l.build.Digest, Executable: l.build.Executable,
 		PID: os.Getpid(), At: l.cfg.Now().UTC(),
+		RestartRequest: os.Getenv(restart.RequestEnv),
 	}); err != nil {
 		return err
 	}
