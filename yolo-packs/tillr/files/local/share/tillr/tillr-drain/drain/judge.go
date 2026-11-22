@@ -171,6 +171,61 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 	}
 	var replacementRequest *run.Request
 	var replacementSession string
+	workerHead := c.HeadSHA
+	if c.WorkerHeadSHA != "" {
+		workerHead = c.WorkerHeadSHA
+	}
+	if receipt != nil && c.RebasedFromHead != "" && receipt.Options.ItemID == c.ItemID && receipt.Options.Head == c.RebasedFromHead && receipt.Options.Head != workerHead {
+		var diskReceipt *JudgeReceipt
+		if c.Judge != nil {
+			if raw, readErr := os.ReadFile(receiptPath); readErr == nil {
+				var decoded JudgeReceipt
+				if err := json.Unmarshal(raw, &decoded); err != nil {
+					return c, false, err
+				}
+				if decoded.Options.ItemID == c.ItemID && decoded.Options.Head == workerHead {
+					diskReceipt = &decoded
+				}
+			} else if !os.IsNotExist(readErr) {
+				return c, false, readErr
+			}
+		}
+		if diskReceipt != nil {
+			receipt = diskReceipt
+			c.Judge = diskReceipt
+		} else {
+			if c.Evaluator == nil {
+				open, err := l.recordedBackendOpen(ctx, receipt.Request.Backend)
+				if err != nil {
+					return c, false, err
+				}
+				if !open {
+					return c, false, errJudgeBackendHeld
+				}
+			}
+			if len(c.Writers) == 0 {
+				c.Writers = receipt.Writers
+			}
+			if len(c.Producers) == 0 {
+				c.Producers = receipt.Producers
+			}
+			if len(c.EvaluatorInputs) == 0 {
+				c.EvaluatorInputs = receipt.Inputs
+			}
+			if c.EvaluatorTask == "" {
+				c.EvaluatorTask = receipt.EvaluatorTask
+			}
+			req := receipt.Request
+			req.RunID = markRunID(req.RunID, "fresh")
+			req = l.refreshJudgeRequest(req)
+			req.SessionTurn, req.ResumePrompt = false, ""
+			replacementRequest = &req
+			receipt = nil
+			c.Judge = nil
+			l.reportf("loop: re-judging %s after pre-gate rebase onto %s (previous judgment was for %s)\n",
+				c.ItemID, shortSHA(c.BaseSHA), shortSHA(c.RebasedFromHead))
+		}
+	}
 	if receipt != nil && len(receipt.Raw) == 0 {
 		var rec *run.Record
 		db, err := store.OpenRead(ctx, l.cfg.Store)
@@ -583,6 +638,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				return c, false, Internalf("checked judge outcome %q has no matching entry", checked.Outcome)
 			}
 			c.Judge = receipt
+			c.RebasedFromHead = ""
 			return c, true, nil
 		}
 		if !isJudgeFormRejection(err) || seenErrors[err.Error()] {

@@ -222,6 +222,10 @@ type Candidate struct {
 	// BaseRef is the ref a fork-series candidate's delivery moves, refs/heads/patch/<fork>.
 	// It is empty for an ordinary item, whose landing moves the trunk the land step reads.
 	BaseRef string `json:"base_ref,omitempty"`
+	// RebasedFromHead records the candidate's head before a drain-owned pre-gate rebase
+	// onto a repaired trunk, so a judgment saved for that head is re-run on the rebased
+	// candidate rather than held as belonging to a different candidate.
+	RebasedFromHead string `json:"rebased_from_head,omitempty"`
 	// ObservedTrunk is the last observed trunk tip, checked under the land lock.
 	ObservedTrunk string `json:"observed_trunk,omitempty"`
 	BaseSHA       string `json:"base_sha"`
