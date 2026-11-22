@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-item/item"
+	"github.com/mschulkind-oss/tillr-land/land"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -235,14 +236,16 @@ func TestPlannedBlockedRoutesDesign(t *testing.T) {
 
 type plannedRequestDesignSteps struct {
 	*workflowSteps
-	reqID      string
-	words      string
-	addBlock   bool
-	order      []string
-	plans      int
-	designs    int
-	workNodeID string
-	designRun  string
+	reqID         string
+	words         string
+	addBlock      bool
+	order         []string
+	plans         int
+	designs       int
+	workNodeID    string
+	designRun     string
+	conflictMoves int
+	answerAfter   string
 }
 
 func (s *plannedRequestDesignSteps) Gate(_ context.Context, _ Candidate) (GateOutcome, error) {
@@ -250,7 +253,37 @@ func (s *plannedRequestDesignSteps) Gate(_ context.Context, _ Candidate) (GateOu
 	return GateOutcome{Outcome: GatePassed}, nil
 }
 
-func (s *plannedRequestDesignSteps) Land(_ context.Context, c Candidate) (LandOutcome, error) {
+func (s *plannedRequestDesignSteps) Land(ctx context.Context, c Candidate) (LandOutcome, error) {
+	if s.conflictMoves > 0 && c.BlockConflict != nil {
+		if s.designs <= s.conflictMoves {
+			path := "docs/design/example.md"
+			doc := runGit(s.t, s.f.root, "show", "HEAD:"+path)
+			before, after := fmt.Sprintf("is %d |", 9+s.designs), fmt.Sprintf("is %d |", 10+s.designs)
+			writeForkFile(s.t, filepath.Join(s.f.root, path), strings.Replace(doc, before, after, 1)+"\n")
+			runGit(s.t, s.f.root, "add", path)
+			runGit(s.t, s.f.root, "commit", "-qm", "concurrent decision edit")
+		}
+		trunk, err := land.OpenTrunk(s.f.root)
+		if err != nil {
+			return LandOutcome{}, err
+		}
+		db, err := store.Open(ctx, s.f.storePath, true)
+		if err != nil {
+			return LandOutcome{}, err
+		}
+		defer db.Close()
+		out, err := land.Land(ctx, db, trunk, land.LandingRequest{
+			ItemID: c.ItemID, RunID: c.RunID, BaseRef: TrunkRef, BaseSHA: c.BaseSHA, HeadSHA: c.HeadSHA,
+			ObservedTrunk: c.ObservedTrunk, At: time.Now().UTC(),
+			Verdict: land.Verdict{VerdictID: c.RunID + "-gate", BaseSHA: c.BaseSHA, TreeSHA: runGit(s.t, c.Worktree, "rev-parse", c.HeadSHA+"^{tree}"), Result: land.VerdictPass},
+		})
+		if out.Landed() {
+			s.answerAfter = out.TrunkAfter
+			// Require the exact receipt, not just the newest trunk commit.
+			runGit(s.t, s.f.root, "commit", "--allow-empty", "-qm", "after the answer")
+		}
+		return LandOutcome{Result: out.Result, Reason: out.Reason, TrunkAfter: out.TrunkAfter, ConflictPaths: out.ConflictPaths}, err
+	}
 	runGit(s.t, s.f.root, "merge", "--squash", c.HeadSHA)
 	runGit(s.t, s.f.root, "commit", "-qm", "land "+c.RunID)
 	fixtureLanding(s.t, s.f.storePath, c)
@@ -289,6 +322,11 @@ func (s *plannedRequestDesignSteps) Run(ctx context.Context, req run.Request) (r
 			}
 			if !strings.Contains(string(doc), "25") {
 				s.t.Errorf("returned plan worktree docs/design/example.md does not contain 25: %s", doc)
+			}
+			if s.conflictMoves > 0 {
+				if head := runGit(s.t, target, "rev-parse", "HEAD"); head != s.answerAfter {
+					s.t.Errorf("returned plan base is %s, want answer's landing %s", head, s.answerAfter)
+				}
 			}
 			p := map[string]any{
 				"id":          "limit",
@@ -561,6 +599,25 @@ func TestPlannedRequestDesignAmendmentRoutesDesignBeforeBuild(t *testing.T) {
 	wantOrder := []string{"plan", "design", "plan", steps.workNodeID, "verify"}
 	if steps.workNodeID == "" || !reflect.DeepEqual(steps.order, wantOrder) {
 		t.Fatalf("run order = %v, want %v", steps.order, wantOrder)
+	}
+}
+
+func TestReturnedRequestStartsFromDesignAnswerLandedByConflictFix(t *testing.T) {
+	for _, moves := range []int{1, 2} {
+		t.Run(fmt.Sprintf("%d-conflicts", moves), func(t *testing.T) {
+			f, l, steps, green := plannedRequestDesignFixture(t, false)
+			steps.conflictMoves = moves
+			result := &LoopResult{}
+			for i := 0; i < 10 && steps.plans < 2; i++ {
+				graphPass(t, l, result)
+			}
+			if steps.plans != 2 || steps.designs != moves+1 || result.ConflictFixes != moves || steps.answerAfter == "" {
+				t.Fatalf("want definition obstacle, design answer, %d conflict repairs and returned plan: order=%v result=%+v", moves, steps.order, result)
+			}
+			if got := runGit(t, f.root, "rev-parse", GreenRef); got != green {
+				t.Fatalf("proof advanced to %s; want %s", got, green)
+			}
+		})
 	}
 }
 
