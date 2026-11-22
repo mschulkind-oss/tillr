@@ -89,7 +89,20 @@ func heavyGreen(ctx context.Context, root string) (string, error) {
 func publishHeavy(dir string, run HeavyRun) error {
 	return publishHeavyJSON(dir, "heavy.json", run)
 }
-func (r HeavyRunner) Run(ctx context.Context) (out HeavyOutcome, err error) {
+func (r HeavyRunner) Run(ctx context.Context) (HeavyOutcome, error) {
+	out, err := r.run(ctx, "")
+	return out.HeavyOutcome, err
+}
+
+type heavyAttempt struct {
+	HeavyOutcome
+	// pendingTip names the proof that has not produced a verdict yet. The
+	// trigger supplies a fallback for errors before the runner can read trunk.
+	pendingTip string
+}
+
+func (r HeavyRunner) run(ctx context.Context, requested string) (out heavyAttempt, err error) {
+	out.pendingTip = requested
 	if r.Judge == nil || r.Work == "" {
 		return out, Usagef("heavy runner needs a judge and a worktree path")
 	}
@@ -146,6 +159,7 @@ func (r HeavyRunner) Run(ctx context.Context) (out HeavyOutcome, err error) {
 		if e != nil {
 			return out, e
 		}
+		out.pendingTip = tip
 		base, e := heavyGreen(ctx, r.Root)
 		if e != nil {
 			return out, e
@@ -180,6 +194,7 @@ func (r HeavyRunner) Run(ctx context.Context) (out HeavyOutcome, err error) {
 				// The previous image already published the verdict and filed its remedy.
 				r.progressf("loop: heavy reused the completed red proof at %s\n", shortSHA(tip))
 				out.Runs = append(out.Runs, prior)
+				out.pendingTip = ""
 				switch err := r.requireCurrentTip(ctx, tip); {
 				case errors.Is(err, errHeavyTipMoved):
 					continue
@@ -228,6 +243,9 @@ func (r HeavyRunner) Run(ctx context.Context) (out HeavyOutcome, err error) {
 			return out, pe
 		}
 		out.Runs = append(out.Runs, run)
+		if e == nil && run.Result != "unknown" {
+			out.pendingTip = ""
+		}
 		if r.Report != nil {
 			r.Report(run)
 		}
@@ -242,6 +260,7 @@ func (r HeavyRunner) Run(ctx context.Context) (out HeavyOutcome, err error) {
 			return out, nil
 		}
 		// Landings while the lock is held owe one run, on the newest tip, not a run per landing.
+		out.pendingTip = newest
 	}
 }
 func (r HeavyRunner) inTree(ctx context.Context, tip string, fn func(string) error) error {

@@ -43,6 +43,8 @@ const (
 	RefusalKind = "drain.refusal"
 	// FixerAttachedKind retains a new red tip attached to an unresolved repair.
 	FixerAttachedKind = "drain.fixer-attached"
+	// HeavyFaultKind records an attempt that faulted before the tip had a verdict.
+	HeavyFaultKind = "drain.heavy-fault"
 )
 
 // The two scopes a boundary bracket covers, as `boundary.check`'s payload names them. A
@@ -87,7 +89,7 @@ const (
 // one binary would therefore be refused at init, which is the honest answer — the two
 // spellings of one judgment would have to be reconciled first.
 func init() {
-	for _, kind := range []string{BoundaryCheckKind, GatePlanKind, GateVerdictKind, RefusalKind, judgeRequestKind, judgeLandedKind, RetryAckKind, DesignRetryKind, verifyTriageResetKind, "drain.graph-completed", FixerAttachedKind, RevertKind, callOffered, callAnswered, callLanded, callDelivered, callClosed, endingCapabilitiesKind, piFeaturesKind} {
+	for _, kind := range []string{BoundaryCheckKind, GatePlanKind, GateVerdictKind, RefusalKind, judgeRequestKind, judgeLandedKind, RetryAckKind, DesignRetryKind, verifyTriageResetKind, "drain.graph-completed", FixerAttachedKind, RevertKind, callOffered, callAnswered, callLanded, callDelivered, callClosed, endingCapabilitiesKind, piFeaturesKind, HeavyFaultKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
@@ -598,6 +600,24 @@ func recordPayload(body []byte, kind string) (map[string]json.RawMessage, error)
 		return nil, Internalf("reading the %s payload: %v", kind, err)
 	}
 	return payload, nil
+}
+
+// recordHeavyFault appends once per attempt, not once per commit: the next
+// attempt on the same tip can fail for the same reason and must still be visible.
+func (l *Loop) recordHeavyFault(ctx context.Context, tip string, fault error) error {
+	body, err := json.Marshal(map[string]string{"tip_sha": tip, "detail": fault.Error()})
+	if err != nil {
+		return err
+	}
+	s, err := store.Open(ctx, l.cfg.Store, false)
+	if err != nil {
+		return err
+	}
+	defer s.Close()
+	return s.WriteTx(ctx, func(tx *store.Tx) error {
+		_, err := tx.Append(event.Event{Kind: HeavyFaultKind, ObjectType: "commit", ObjectID: &tip, Payload: body, At: l.cfg.Now()})
+		return err
+	})
 }
 
 // appendJudgment appends one event unless the store already holds an event of that kind about
