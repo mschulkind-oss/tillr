@@ -784,7 +784,7 @@ func compareStatus(before, after *Boundary) []Violation {
 // anywhere, come from here with no per-worktree command.
 func listWorktrees(ctx context.Context, repo string) ([]Worktree, error) {
 	var worktrees []Worktree
-	err := withWorktreeRegistryLock(ctx, repo, func() error {
+	err := withWorktreeSnapshotLock(ctx, repo, func() error {
 		var err error
 		worktrees, err = listWorktreesLocked(ctx, repo)
 		return err

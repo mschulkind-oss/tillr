@@ -9,6 +9,7 @@ holds the machine-readable contract, the readers and the report.
 | :--- | :--- |
 | [`schema/evidence-v1.json`](./schema/evidence-v1.json) | Version 1's JSON Schema. The single source of truth: the validator is driven by this file, so a rule lives here and nowhere else. |
 | [`evidence.py`](./evidence.py) | The validator and the reader: `validate(record)` returns the schema findings, and `read_records(path)` refuses a version it does not know. |
+| [`handoff.py`](./handoff.py) | Per-run handoff timing from the current Tillr store and run records. |
 | [`sources.py`](./sources.py) | The native readers: the board's SQLite store, the gate's timings timeline, the retired merge queue's store and a lander's claim directories, each adapted into the shared record. |
 | [`velocity.py`](./velocity.py) | The report: ranks the stages by cost, splits WAIT from WORK, derives the waits no producer records, counts what explains velocity, diffs two windows, and files one finding where a board exists. |
 
@@ -54,6 +55,29 @@ tools/pipeline-evidence/velocity.py --file                       # file one find
 The report's output is the product; `--file` is an adapter that files one board item
 carrying the stage, items, seconds and runs behind the largest wait, and says plainly that
 it filed nothing when there is no board to file into.
+
+## Current Tillr lane handoffs
+
+```sh
+python3 tools/pipeline-evidence/handoff.py --store .tillr/state.db --records .tillr/loop \
+  --since 2026-11-22T00:05:00Z --until 2026-11-22T00:13:00Z
+```
+
+This read-only report emits one JSON line per finish, including separate finishes of
+resumed runs. It joins the finish to that run's examination and the next allocation on
+its lane in event sequence order, even if the next allocation is outside the requested
+finish window. Compare `item_id` and `next_item_id` to isolate intra-item handoffs.
+`drain.node-advanced` supplies the examined time for a successful workflow transition
+that has no `drain.examined` event. A legacy claim is labeled as a proxy for start, and
+unobserved intervals or phases are null or absent, not zero.
+
+The drain's `handoff.jsonl` captures the post-finish boundary and the examination
+separately. The boundary counts toward finish-to-start, not examination duration.
+`store_write` covers in-process write transactions including admission; time in an
+external gate or land command is charged to that command's wall span. The phase report
+unions overlapping spans for each phase and reports uncovered time as `other`; a nested
+operation can appear in two named phases. The full examination span includes cleanup,
+which can finish after its durable examined event.
 
 ## Tests
 

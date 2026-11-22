@@ -509,12 +509,12 @@ func (l *Loop) snapshotCovered(ctx context.Context, target, ref, tree string, fi
 }
 
 func (l *Loop) prunePreservedWork(ctx context.Context) error {
-	return l.prunePreservedRepositories(ctx, "")
+	return l.prunePreservedRepositories(ctx, "", 0)
 }
 
 // Discovery only selects repositories. The sweep rechecks each ref under the
 // repository lock and store writer, just as it does for the main repository.
-func (l *Loop) prunePreservedRepositories(ctx context.Context, skip string) error {
+func (l *Loop) prunePreservedRepositories(ctx context.Context, skip string, mode refSweepMode) error {
 	s, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		return err
@@ -553,7 +553,7 @@ func (l *Loop) prunePreservedRepositories(ctx context.Context, skip string) erro
 	}
 	var sweepErr error
 	for _, repo := range due {
-		refs, err := sweepRefs(ctx, RefSweepRequest{Root: repo, Store: l.cfg.Store, At: l.cfg.Now()}, true)
+		refs, err := sweepRefs(ctx, RefSweepRequest{Root: repo, Store: l.cfg.Store, At: l.cfg.Now()}, mode|sweepPreservedOnly)
 		if err != nil {
 			sweepErr = errors.Join(sweepErr, fmt.Errorf("%s: %w", repo, err))
 			continue

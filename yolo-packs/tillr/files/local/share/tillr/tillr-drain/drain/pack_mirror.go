@@ -18,6 +18,7 @@ var packMirrorRenderer string
 // stagePackMirror renders only the shipped modules touched by this candidate, so
 // unrelated candidates do not pick up pre-existing drift. The worker's fence has passed.
 func (l *Loop) stagePackMirror(ctx context.Context, c Candidate) (bool, error) {
+	defer timeHandoffPhase(ctx, "pack_mirror")()
 	paths, err := l.git(ctx, c.Worktree, "diff", "--no-renames", "--name-only", "-z", c.BaseSHA+".."+c.HeadSHA, "--", "tools/", tillrMirrorRoot)
 	if err != nil || paths == "" {
 		return false, err

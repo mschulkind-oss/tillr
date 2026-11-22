@@ -42,14 +42,21 @@ type refLanding struct{ item, head, after, resolved string }
 
 // SweepRefs is also the loop's settlement cleanup.
 func SweepRefs(ctx context.Context, req RefSweepRequest) ([]RefDisposition, error) {
-	return sweepRefs(ctx, req, false)
+	return sweepRefs(ctx, req, 0)
 }
+
+type refSweepMode uint8
+
+const (
+	sweepPreservedOnly refSweepMode = 1 << iota
+	sweepIfUnlocked
+)
 
 // All preserved-ref deletion goes through this sweep, including in separate lane
 // repositories. Take the common-directory landing lock before enumeration and
 // before the store writer. The write transaction intentionally excludes dispatch
 // and lease acquisition between eligibility checks and the guarded Git deletion.
-func sweepRefs(ctx context.Context, req RefSweepRequest, preservedOnly bool) ([]RefDisposition, error) {
+func sweepRefs(ctx context.Context, req RefSweepRequest, mode refSweepMode) ([]RefDisposition, error) {
 	if req.Root == "" || req.Store == "" {
 		return nil, Usagef("sweep-refs needs --root <repository> and --store <path>")
 	}
@@ -62,11 +69,17 @@ func sweepRefs(ctx context.Context, req RefSweepRequest, preservedOnly bool) ([]
 	}
 	req.Root = root
 	l := &Loop{cfg: LoopConfig{Root: req.Root, Store: req.Store, Now: func() time.Time { return req.At }}}
-	unlock, err := l.lockTrunkHistory(ctx)
-	if err != nil {
+	var unlock func()
+	if mode&sweepIfUnlocked != 0 {
+		unlock, err = l.acquireTrunkHistory(ctx, false)
+	} else {
+		unlock, err = l.lockTrunkHistory(ctx)
+	}
+	if err != nil || unlock == nil {
 		return nil, err
 	}
 	defer unlock()
+	preservedOnly := mode&sweepPreservedOnly != 0
 	pattern := "refs/tillr"
 	if preservedOnly {
 		pattern = preservedPrefix
@@ -533,17 +546,19 @@ func (l *Loop) pruneRunRefs(ctx context.Context) error {
 	}
 	if strings.TrimSpace(raw) == "" {
 		// Include the root if an absent saved ref still needs a prune receipt.
-		return l.prunePreservedWork(ctx)
+		return l.prunePreservedRepositories(ctx, "", sweepIfUnlocked)
 	}
 	root, err := filepath.Abs(l.cfg.Root)
 	if err != nil {
 		return err
 	}
-	refs, sweepErr := SweepRefs(ctx, RefSweepRequest{Root: root, Store: l.cfg.Store, At: l.cfg.Now()})
+	// The pass's cleanup is opportunistic. A busy lander leaves these refs
+	// for the next pass, not the finished workers waiting to be examined.
+	refs, sweepErr := sweepRefs(ctx, RefSweepRequest{Root: root, Store: l.cfg.Store, At: l.cfg.Now()}, sweepIfUnlocked)
 	if sweepErr == nil {
 		l.reportPrunedRefs(refs)
 	}
-	return errors.Join(sweepErr, l.prunePreservedRepositories(ctx, root))
+	return errors.Join(sweepErr, l.prunePreservedRepositories(ctx, root, sweepIfUnlocked))
 }
 
 func (l *Loop) reportPrunedRefs(refs []RefDisposition) {

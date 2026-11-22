@@ -45,6 +45,20 @@ func (l *Loop) readRemoteSyncReplay(ctx context.Context) (*remoteSyncReplay, err
 	return intent, err
 }
 
+// A pass with no interrupted replay to recover does not need land.lock. A
+// writer of a new intent already owns recovery until it drops that lock; the
+// next pass observes any intent it left. If there is an intent, reread under
+// the lock before applying it, in case its owner finished in the meantime.
+func (l *Loop) recoverPendingRemoteSyncReplay(ctx context.Context) (*remoteSyncReplay, error) {
+	if l.nonLanding || l.cfg.Store == "" {
+		return nil, nil
+	}
+	if intent, err := l.readRemoteSyncReplay(ctx); err != nil || intent == nil {
+		return nil, err
+	}
+	return l.recoverRemoteSyncReplay(ctx)
+}
+
 func (l *Loop) recoverRemoteSyncReplay(ctx context.Context) (*remoteSyncReplay, error) {
 	if l.nonLanding || l.cfg.Store == "" {
 		return nil, nil

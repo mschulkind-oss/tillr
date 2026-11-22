@@ -23,24 +23,28 @@ func registryGuardGit(t *testing.T, root string) {
 	script := fmt.Sprintf(`#!/usr/bin/env python3
 import fcntl, os, sys
 args=sys.argv[1:]
+def assert_locked(name, action):
+    try:
+        with open(os.path.join(os.environ['TILLR_TEST_COMMON'],name),'r') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+    except BlockingIOError:
+        return
+    except FileNotFoundError:
+        pass
+    sys.exit('registry command ran without '+name+': '+action)
+
 if 'worktree' in args:
     action=args[args.index('worktree')+1]
     if action in ('add','remove','prune','list'):
-        try:
-            lock=open(os.environ['TILLR_TEST_REGISTRY_LOCK'],'r')
-            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        except BlockingIOError:
-            pass
-        except FileNotFoundError:
-            sys.exit('registry command ran without land lock: '+action)
-        else:
-            sys.exit('registry command ran without land lock: '+action)
+        assert_locked('worktree-registry.lock',action)
+    if action in ('add','remove','prune'):
+        assert_locked('land.lock',action)
 os.execv(%q,[%q]+args)
 `, real, real)
 	if err := writeForkSafe(filepath.Join(bin, "git"), []byte(script), 0755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("TILLR_TEST_REGISTRY_LOCK", filepath.Join(root, ".git", "land.lock"))
+	t.Setenv("TILLR_TEST_COMMON", filepath.Join(root, ".git"))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
@@ -82,10 +86,20 @@ func TestHeavyRegistryCommandsHoldLandLockButJudgeDoesNot(t *testing.T) {
 	}
 }
 
-func TestBoundaryWorktreeListingHoldsLandLock(t *testing.T) {
+func TestBoundaryWorktreeListingDoesNotWaitForLanding(t *testing.T) {
 	root, _ := heavyRepo(t)
 	registryGuardGit(t, root)
-	trees, err := listWorktrees(context.Background(), root)
+	ctx, cancel := context.WithTimeout(context.Background(), hangGuard)
+	defer cancel()
+	lock, err := land.OpenLock(filepath.Join(root, ".git", "land.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = lock.Acquire(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Release()
+	trees, err := listWorktrees(ctx, root)
 	if err != nil {
 		t.Fatal(err)
 	}
