@@ -63,7 +63,7 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 		// The design run that handed the conflict over is named beside it, so a view
 		// says which run ended without an answer (design_unanswered.go).
 		d.DeferredBy = c.DesignRunID
-	case c.Status != "raised":
+	case c.Status != "raised" && !p.awaitingTransportFailure(row.ItemID, c):
 	case p.policy == nil:
 		d.Reason = ReasonNoPolicy
 	case len(p.policy.seatList("design")) == 0:
@@ -135,6 +135,22 @@ func (p *planner) conflictDecision(row itemRow, c item.Conflict) Decision {
 	}
 	identifyDecision(&d)
 	return d
+}
+
+func (p *planner) awaitingTransportFailure(itemID string, c item.Conflict) bool {
+	if c.Status != "awaiting" || c.WaitingOn != "design" || c.DesignRunID == "" {
+		return false
+	}
+	work := p.designHistory[c.DesignRunID]
+	if work == nil || !work.Done {
+		return false
+	}
+	for _, prior := range p.priors[itemID] {
+		if prior.RunID == c.DesignRunID && prior.Finished && prior.TransportError {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *planner) failedBackendFor(itemID, runID string) string {

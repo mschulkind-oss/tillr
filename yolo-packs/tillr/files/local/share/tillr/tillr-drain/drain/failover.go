@@ -210,6 +210,9 @@ type priorRun struct {
 	// BackendFailure distinguishes machinery closure from quota and other
 	// infrastructure classifications answered by their own rule.
 	BackendFailure bool
+	// TransportError marks a design run whose pi log ended on a model or transport
+	// error after pi's automatic retries failed.
+	TransportError bool
 	// Restaged marks an interruption the loop made itself: the run was staged on a
 	// base that lacked what made its item ready (drain.stale-base).
 	Restaged bool
@@ -374,7 +377,18 @@ func readPriorRunsFrom(r *store.Reader, byRun map[string]*pendingWork) (map[stri
 		if err := json.Unmarshal([]byte(artifactRefs), &refs); err != nil {
 			return nil, Internalf("reading the artifact refs of run %q: %v", rec.RunID, err)
 		}
+		rec.ArtifactRefs = refs
 		ending, measured := byID[rec.RunID]
+		piErr := false
+		if (!ending.saved || ending.class == AttemptInfrastructure) && (byRun == nil || isDesignWork(byRun[rec.RunID])) {
+			piErr = hasPiTransportError(rec)
+			if piErr && byRun == nil {
+				if _, byRun, err = readPendingHistory(r); err != nil {
+					return nil, readFailure(err)
+				}
+			}
+		}
+		designTransportErr := piErr && isDesignWork(byRun[rec.RunID])
 		class := ending.class
 		if !ending.saved {
 			if payload := finishPayloads[rec.RunID]; len(payload) > 0 {
@@ -389,7 +403,11 @@ func readPriorRunsFrom(r *store.Reader, byRun map[string]*pendingWork) (map[stri
 					rec.EndingException = terminal.EndingException
 				}
 			}
-			class = ClassifyAttempt(rec, logTail(refs))
+			if designTransportErr {
+				class = AttemptInfrastructure
+			} else {
+				class = ClassifyAttempt(rec, logTail(refs))
+			}
 		}
 		if interrupted[rec.RunID] {
 			class = AttemptInterrupted
@@ -403,6 +421,7 @@ func readPriorRunsFrom(r *store.Reader, byRun map[string]*pendingWork) (map[stri
 			Backend:        rec.Backend,
 			Class:          class,
 			BackendFailure: class == AttemptInfrastructure && (!measured || ending.closes),
+			TransportError: designTransportErr,
 			Restaged:       restaged[rec.RunID],
 			Repeated:       repeat,
 			State:          string(rec.State), EndCause: rec.EndCause,

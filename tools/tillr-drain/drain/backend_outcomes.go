@@ -130,7 +130,7 @@ func readBackendOutcomesFrom(r *store.Reader, byRun map[string]*pendingWork) ([]
 			continue
 		}
 		rec := out[i].rec
-		out[i].class = ClassifyAttempt(rec, logTail(rec.ArtifactRefs))
+		out[i].class = classifyWorkAttempt(byRun[rec.RunID], rec, logTail(rec.ArtifactRefs))
 		out[i].closes = out[i].class == AttemptInfrastructure && !answeredByAnotherRule(rec, interrupted, byRun)
 	}
 	return out, nil
