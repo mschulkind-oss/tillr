@@ -40,6 +40,106 @@ func TestAConflictsDesignDispatchNamesTheAttemptOfItsRun(t *testing.T) {
 	}
 }
 
+// A landing repair carries its parent's run ID plus a suffix, but settles under its
+// own attempt. A design redispatch must not use that attempt for a second settlement.
+func TestConflictDesignSettlesAfterAnsweredWorkerAndLandingRepair(t *testing.T) {
+	ctx := context.Background()
+	f, l := designSeatFixture(t)
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	at := l.cfg.Now()
+	const id = "item-a"
+	finish := func(tx *store.Tx, runID, lane string) error {
+		return applyTerminal(tx, run.Record{RunID: runID, ItemID: id, LaneID: lane, Backend: "fixture",
+			State: run.StateExited, ExitCode: code(0), StartedAt: at.Format(time.RFC3339), FinishedAt: at.Format(time.RFC3339),
+			ArtifactRefs: []run.ArtifactRef{}, EndCause: run.EndNormalExit})
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		for i := 1; i <= 10; i++ {
+			if err := finish(tx, attemptRunID(id, i), "lane-1"); err != nil {
+				return err
+			}
+		}
+		return item.RecordConflict(tx, item.Conflict{ConflictID: "conflict-first", ItemID: id, RunID: attemptRunID(id, 10),
+			BodyRef: "docs/work.md#work", Text: "The conflict is answered.", Status: "answered", WaitingOn: "build"}, at)
+	})
+	claim := func(p plannedApplication) *pendingWork {
+		t.Helper()
+		ok, work, err := l.applyPlan(ctx, p, base, at)
+		if err != nil || !ok || work == nil {
+			t.Fatalf("apply %s: ok=%v work=%v err=%v; next reason=%s", p.decision.DecisionID, ok, work, err, decisionFor(t, l, id).decision.Reason)
+		}
+		return work
+	}
+	settle := func(req *run.Request) Decision {
+		t.Helper()
+		fixtureWrite(t, f, func(tx *store.Tx) error { return finish(tx, req.RunID, req.LaneID) })
+		p := decisionFor(t, l, id)
+		if d := p.decision; d.Action != ActionSettle || d.To != "candidate" || d.RunRequest == nil || d.RunRequest.RunID != req.RunID {
+			t.Fatalf("not settling %s to candidate: %+v", req.RunID, d)
+		}
+		claim(p)
+		return p.decision
+	}
+
+	p := decisionFor(t, l, id)
+	if d := p.decision; d.Action != ActionDispatch || d.Reason != ReasonConflictAnswered || d.Attempt != 11 {
+		t.Fatalf("not the answered worker's dispatch: %+v", d)
+	}
+	worker := claim(p).Decision
+	settle(worker.RunRequest)
+	// Start where the squash-conflict handler hands the lane to its inline repair.
+	// The worker has been judged; its row counts for repair allocation, not for priors.
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return appendEffect(tx, judgeRequestKind, worker.RunRequest.RunID, struct{}{}, at)
+	})
+	ordinal, err := l.nextItemAttempt(ctx, id)
+	if err != nil || ordinal != 12 {
+		t.Fatalf("repair attempt = %d, err=%v", ordinal, err)
+	}
+	req := *worker.RunRequest
+	req.RunID = conflictFixRunID(req.RunID)
+	repair := Decision{ItemID: id, LaneID: worker.LaneID, From: "candidate", To: "running", Action: ActionDispatch,
+		Reason: ReasonConflictFix, Seat: worker.Seat, Attempt: ordinal, RunRequest: &req}
+	identifyDecision(&repair)
+	if err := l.handoffRepair(ctx, Candidate{ItemID: id, RunID: worker.RunRequest.RunID}, repair, base); err != nil {
+		t.Fatal(err)
+	}
+	repaired := settle(&req)
+	if err := l.markExamined(ctx, repair); err != nil {
+		t.Fatal(err)
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		return item.RecordConflict(tx, item.Conflict{ConflictID: "conflict-repair", ItemID: id, RunID: req.RunID,
+			BodyRef: "docs/work.md#work", Text: "The repair conflicted again.", Status: "raised", WaitingOn: "design"}, at)
+	})
+
+	p = decisionFor(t, l, id)
+	if d := p.decision; d.Action != ActionDispatch || d.Reason != ReasonConflictDesign {
+		t.Fatalf("not the design redispatch: %+v", d)
+	}
+	design := claim(p).Decision
+	settled := settle(design.RunRequest)
+	if design.Attempt != 13 || settled.DecisionID == repaired.DecisionID {
+		t.Fatalf("design reused the repair attempt: repair=%s design=%s", repaired.DecisionID, settled.DecisionID)
+	}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		for _, d := range []Decision{repaired, settled} {
+			var runID string
+			if err := r.QueryRow(`SELECT run_id FROM dispatches WHERE decision_id=? AND action='settle'`, d.DecisionID).Scan(&runID); err != nil {
+				return err
+			}
+			if runID != d.RunRequest.RunID {
+				t.Errorf("%s records %s, want %s", d.DecisionID, runID, d.RunRequest.RunID)
+			}
+		}
+		faults, err := ReadItemFaults(r)
+		if err == nil && faults[id].Seq != 0 {
+			t.Errorf("settlement left an item fault: %+v", faults[id])
+		}
+		return err
+	})
+}
+
 // A planned decision whose id the store already holds with other columns holds that one
 // item with a named fault, and the loop goes on: it is never a loop fault.
 func TestADecisionCollisionHoldsTheItemAndNotTheLoop(t *testing.T) {

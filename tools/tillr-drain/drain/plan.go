@@ -514,7 +514,7 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 		if !tick.plansItem(row.ItemID, works[row.ItemID]) {
 			continue
 		}
-		attempts[row.ItemID], nodeCounts[row.ItemID], err = readAttemptInputs(r, hasNodes, row.ItemID, priors[row.ItemID])
+		attempts[row.ItemID], nodeCounts[row.ItemID], err = readAttemptInputs(r, hasNodes, row.ItemID, priors[row.ItemID], designHistory)
 		if err != nil {
 			return nil, err
 		}
@@ -1915,7 +1915,7 @@ func (p *planner) nextAttempt(id string) int {
 
 // readAttemptInputs is shared with the shadow seed so it cannot reuse an ordinal
 // the legacy planner already considers spent.
-func readAttemptInputs(r *store.Reader, hasNodes bool, id string, priors []priorRun) (int, int, error) {
+func readAttemptInputs(r *store.Reader, hasNodes bool, id string, priors []priorRun, byRun map[string]*pendingWork) (int, int, error) {
 	var count int
 	if hasNodes {
 		// Claiming a node writes node_runs before a run exists. Neither a
@@ -1937,9 +1937,15 @@ func readAttemptInputs(r *store.Reader, hasNodes bool, id string, priors []prior
 	if err != nil {
 		return 0, 0, readFailure(err)
 	}
-	for _, id := range ids {
-		if n := attemptFromRunID(id, id); n > maxAttempt {
+	for _, runID := range ids {
+		// Judged non-node runs can be absent from priors. Also, an inline
+		// landing repair's ID encodes its parent's attempt, not the ordinal
+		// its dispatch and settlement used. Read that ordinal from its handoff.
+		if n := attemptFromRunID(id, runID); n > maxAttempt {
 			maxAttempt = n
+		}
+		if work := byRun[runID]; work != nil && work.Decision.Attempt > maxAttempt {
+			maxAttempt = work.Decision.Attempt
 		}
 	}
 	next := maxAttempt + 1
