@@ -430,5 +430,11 @@ another check-in. It looks across the hour for what one check-in misses:
 - anything that repeated the same step three or more times, and any alarm or
   alert standing for over an hour, each with its cause established;
 - the hour's spend and its costliest runs.
+- the machine itself: `vmstat 1 3` for idle time and swap, `top -b -n 2 -d 5 -c`
+  for the loop's own CPU, the `processes` line of `/proc/stat` read twice for
+  new processes per second, and how long `tillr drain why` takes. On
+  2026-11-22 the loop used five cores, 1,900 processes a second were being
+  started and gates ran 40 minutes; three check-ins reported the load average
+  without measuring what made it.
 
 File what it finds in the same turn and report in under fifteen lines.
