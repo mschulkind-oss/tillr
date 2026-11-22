@@ -247,6 +247,66 @@ appears again in the grouped transitions, not the report repeated by a routing m
 With `--since`, the grouped list includes only later transitions but still names the
 original sequence and compares against the previous record before the cursor.
 
+## Landings named by heavy failures
+
+```sh
+tillr view heavy-misses --root /path/to/repository --store /path/to/.tillr/state.db --from 2026-11-19T15:55:00-05:00 --to 2026-11-21T18:35:00-05:00
+```
+
+The same flags work with `tillr-view heavy-misses`. The face opens the store
+read-only and emits a `view.heavy-misses` JSON record. Both bounds are required
+RFC3339 timestamps (`Z` or a numeric UTC offset). The interval includes `--from`
+and excludes `--to` for landing, failure observation and fixer outcome event times.
+The store snapshot gives the event cursor; event sequence, not the wall clock,
+orders the joins. A passing verdict can precede the window, but must precede its
+landing in the ledger and bind its run, verdict ID, and recorded base and gated tree.
+A failure observation names the most recent preceding successful landing with
+that exact trunk commit. Gate-skipped landings are excluded.
+
+A newly filed trunk fixer's `item.add` event gives the complete check list,
+including checks whose logs were not kept. The report resolves its 12-character
+commit prefix against preceding landing receipts. An immediately following log
+from the same creation can identify the exact commit if the prefix is ambiguous;
+a later attachment cannot. Unresolved creations appear under `coverage.unmatched`.
+For resolved creations, kept logs are supporting evidence, not a new association.
+Later attachments name their own exact red commit and checks. Log-only records
+still report the checks for which they have logs.
+
+The checks are deduplicated per landing, with the underlying event kinds,
+sequences and log or commit references retained. `confirmed` means an automatic
+revert landed after the implicated checks passed on the inverse; `reverted_by`
+is the revert commit. `offered` means the revert could not be done and the offered
+attribution was not verified by a landed revert. `disproved` means the inverse
+still left that check red: do not count that offer as a catchable miss. In a
+grouped revert, an inverse that stops at one red check does not disprove the
+other checks. If the receipt does not identify which check stopped the replay,
+the report keeps the grouped offer without marking any check `disproved`.
+`named` means only that a failure record names the commit. A fixer can be reused
+or filed at an observed tip without attributing the failure to that landing.
+Fixer records are not always distinguishable by origin, and a `trunk-already-red`
+refusal is not evidence against the refused candidate. After the latest
+association, a successful landing receipt for that fixer item marks it
+`repaired` and supplies the fixer's `landed_sha`. If a later proof names that
+exact check but no fixer landing is recorded for the association, the outcome
+is `proved-green`: the check passed, but the report does not credit a fixer
+landing. Otherwise the fixer is `pending` in the observed history. Neither
+fixer outcome changes the separate attribution or revert evidence.
+
+The report uses durable landing, verdict, revert and fixer events, not the most
+recent heavy-run file. Failures without such observations are not represented.
+`coverage` lists observations that could not be joined and counts landing/check/fixer
+associations with neither a fixer landing nor a green proof in the window. Neither the list nor the summaries
+measure how many failures the fast gate could have caught.
+
+Changed paths are read from Git at `--root` (default: the current directory),
+comparing the actual trunk commits before and after the landing without rename
+inference. If Git evidence is unavailable, the report gives the reason rather
+than claiming an empty diff. The two summaries count distinct landings per key.
+Changed modules are the nearest Go module directories in those commits. Generated
+Tillr pack mirrors count toward their source modules, while the changed path list
+retains both. `(non-module)` labels paths outside a Go module, and `(unknown)`
+labels landings for which Git could not supply the module evidence.
+
 ## Starting the observatory
 
 From any directory, with any `PATH` that holds the toolchain (`go` and `git`, plus `node` and

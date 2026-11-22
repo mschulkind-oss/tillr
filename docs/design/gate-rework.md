@@ -2083,142 +2083,305 @@ read-only and takes two required bounds, `--from` and `--to`. It lists each land
 gate passed and which a heavy failure later named: the landing commit, the item, the time, the
 failing checks, whether an automatic revert landed or a trunk fixer repaired it, and the paths
 the landing changed, with two summaries that count landings by check and by changed Go module.
-Each failing check carries one of four attributions *(coined here)*, because a failure record
-that names a commit is not proof that the commit caused the failure:
+Its reference is [`tools/tillr-view/README.md`](../../tools/tillr-view/README.md). Each failing
+check carries one of four attributions *(coined here)*, because a failure record that names a
+commit is not proof that the commit caused the failure:
 
 | Attribution | What the records show |
 | :--- | :--- |
-| `confirmed` | An automatic revert of the landing landed, after the failing check passed with the landing reverted |
-| `offered` | The heavy runner named the landing, and the revert could not be done |
+| `confirmed` | An automatic revert of the landing landed, after the failing check passed on the trunk tip with the landing reverted |
+| `offered` | The heavy runner named the landing, and the revert could not be done, so nothing tested the naming |
 | `disproved` | The check still failed with the landing reverted, so the landing alone is not the cause |
 | `named` | Only a trunk fixer's record names the commit. A fixer attaches to whatever commit is the tip while the trunk is red, so this row says the landing arrived on a red trunk, not that it broke it |
 
-The face is not built on the trunk yet: the request's first run wrote it and stopped before
-landing it `[unlanded]`. The numbers below were read on 2026-11-21 by building that run's
-`tools/tillr-view` in a scratch directory and running it against the live store.
+Three more terms are used below. An **association** *(coined here)* is one failing check recorded
+against one landing; a landing can carry several. A landing's **bound verdict** *(coined here)* is
+the `gate.verdict` event whose verdict ID, base commit and tree the landing record carries: the
+fast-gate run that let that landing through. A **paired timing** *(coined here)* runs the same
+candidate twice from the same warmed state, once with the fast gate alone and once with the
+added suites, and reports the difference.
 
-**The period** is 2026-11-19 3:55 PM to 2026-11-21 6:35 PM Eastern. The request counts 471
-landings in it, 15 `drain.revert` events (11 reverted, 4 not possible) and 17 trunk fixers,
-read with `tillr view events`. The report over the same bounds lists 47 landings:
+**The period and the reading.** The period is 2026-11-19 3:55 PM (included) to 2026-11-21
+6:35 PM (excluded) Eastern. The report was read twice on 2026-11-21 with the command below, each
+time from a private copy of the store taken through a read-only connection:
 
-| Strongest attribution on the landing | Landings |
-| :--- | ---: |
-| `confirmed` | 11 |
-| `offered` | 2 |
-| `disproved` | 1 |
-| `named` only | 33 |
+| Reading | Read at (Eastern) | Last event in the copy | What it lists |
+| :--- | :--- | ---: | :--- |
+| First, and the one every count below is taken from | 9:38 PM | 1361746 | 50 landings, three failure records not joined, no landing without a path list |
+| Second, by the report's own build step for this change | 10:20 PM | 1363276 | the same 50 landings, with the same checks, attributions, outcomes and both summaries; only the copy's last event differs |
 
-One more fixer record names a commit that no landing in the store produced, and the report
-lists it as unjoined. The 13 `confirmed` and `offered` landings are the evidence: 2.8 percent of
-471. The 33 `named` landings are not counted below. They are why the fixers' records point so
-heavily at the drain's own suite: one red drain test is recorded against every landing that
+The period closed before either reading, and the 1,530 events between the two changed no row. So
+no attributed landing needed reconciling, and the counts below hold for both readings.
+
+```sh
+tillr view heavy-misses --root '/path/to/repository' --store '/path/to/copy of state.db' --from 2026-11-19T15:55:00-05:00 --to 2026-11-21T18:35:00-05:00
+```
+
+The store holds 472 `land.landing` events with the result `landed` in the period (a read-only
+query of the live store on 2026-11-21; the request counted 471 with `tillr view events`, and the
+difference of one was not traced). The report lists 50 of them:
+
+| Strongest attribution on the landing | Landings | Associations of that kind, over all 50 |
+| :--- | ---: | ---: |
+| `confirmed` | 11 | 17 |
+| `offered` | 2 | 2 |
+| `disproved` | 1 | 1 |
+| `named` only | 36 | 76 |
+
+- **Not joined.** Three failure records name two commits, `d8817ff2eebe` and `2127fe124d8c`,
+  that no earlier landing in the store produced. The report lists them apart and counts them
+  nowhere.
+- **Not closed in the period.** 52 associations of a check with a fixer have neither a fixer
+  landing nor a later green proof inside the period.
+- **By changed module, all 50.** `tools/tillr-drain` 40, paths outside any Go module 27,
+  `tools/tillr-item` 10, `tools/tillr-view` 7, `tools/tillr-run` 6, `tools/tillr` 4,
+  `tools/tillr-land` 4, `tools/tillr-store` 1. A landing counts once under each module it
+  changed.
+
+The 13 `confirmed` and `offered` landings are the evidence: 2.8 percent of 472. The other 37 are
+left out of every count below, for two different reasons. The 36 `named` landings carry no
+evidence that they caused anything: one red drain test is recorded against every landing that
 arrives while it stays red (`TestCommentsClosedBeforeDispatch/resolved` against six landings,
-`TestTrunkObservationWriteCallbackContainsOnlyStoreWork` against five). The request's reading,
-that 33 of the 38 checks the fixers name are tests in `tools/tillr-drain`, is true of the fixer
-records and overstates the drain suite's share of the attributed landings, which is 4 of 13.
+`TestTrunkObservationWriteCallbackContainsOnlyStoreWork` against five). The one `disproved`
+landing, `3537272f7a`, carries evidence against itself: event 1336351 records that the drain suite
+still failed on the tip with it reverted. The request's reading, that 33 of the 38 checks the
+fixers name are tests in `tools/tillr-drain`, is true of the fixer records and overstates the
+drain suite's share of the attributed landings, which is 4 of 13.
 
-**What the fast gate runs for Go today is a build and no test.** Its `go-build` check
-(`tools/gate/checks/go-build.py`) builds every module and compiles every test package with
-`go test -exec true`, which replaces each test binary's execution with `true`. No Go test case
-and none of the Python suites below runs before the merge, as
-[Section 9](#9-what-this-costs-and-what-it-does-not-do) says. So for every one of the 13 the
-answer to "what did the fast gate miss" is the same: it did not run the suite that holds the
-failing test. The table names that suite. Times are Eastern, every commit is on the trunk, and
-a module is named without its `tools/tillr-` prefix (`tillr` is the shared module `tools/tillr`).
+**The 13, and what became of each.** Times are Eastern and every commit named is on the trunk.
+A module is named without its `tools/tillr-` prefix (`tillr` is the shared module `tools/tillr`).
+The changed modules are read from the candidate the fast gate judged (the bound verdict's base
+and head); the paths the landing changed on the trunk are the same list for all 13. All 13 changed
+the drain: drain 13, item 7, run 3, view 3, `tillr` 3, land 1, store 1, and 7 also changed
+paths outside any Go module.
 
-| Landing | Landed | What it changed | Check that failed | Outcome | What the fast gate would have needed to run |
+| Landing | Landed | Modules the candidate changed | Check the heavy run failed | Attribution, with its event | What happened next |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `9628978cfc` | 11-20 2:15 PM | drain | the `tillr-view` suite | reverted by `eace636684` after 30 minutes | the `tillr-view` suite, which imports the drain |
-| `9cadb24d06` | 11-20 2:17 PM | drain, run | `go-test-shards-test` | reverted by `1cd2f9b9d1` after 11 minutes | `tests/go-test-shards.test.py`, which runs the drain suite itself |
-| `129509992c` | 11-20 3:18 PM | drain, land, view | the `tillr-drain` suite | reverted by `22e4ab208f` after 36 minutes | the `tillr-drain` suite |
-| `68fb25f77d` | 11-20 7:21 PM | drain, item | the `tillr-view` suite | reverted by `16edac08c0` after 4 minutes | the `tillr-view` suite |
-| `315a213fe4` | 11-20 7:31 PM | drain, item (the same item, landed again) | the `tillr-drain` suite | reverted by `f23a3087c5` after 24 minutes | the `tillr-drain` suite |
-| `a0b415fc3d` | 11-21 5:16 AM | drain, item | `TestObstacleHoldsShowRealReasonAndMoverInWaitingAndAgreeWithPlan` in `tillr-view` | reverted by `9702855aee` after 26 minutes | the `tillr-view` suite |
-| `9298e19241` | 11-21 6:11 AM | drain, item | `TestEveryFoldReadsTheKindsItSelects` in the drain's `drain` package | reverted by `1d83f5a28f` after 42 minutes | the `tillr-drain` suite |
-| `cc31e10d8b` | 11-21 9:54 AM | drain, `tools/gate/change-gate.py` | `change-checks-test` | revert not possible: the trunk advanced while the revert was being checked | `tools/gate/checks/change_checks_test.py` |
-| `2838315c85` | 11-21 10:47 AM | `tillr`, drain, item, store, view, a workflow definition | the backend adapters check | revert not possible: the fast gate did not pass with the revert, on this same check; a fixer is pending | `tests/tillr-muse-backend.test.py` |
-| `dcd11d187a` | 11-21 11:20 AM | `tillr`, drain | seven subtests of `TestLoopSettingsRefusedBeforeStartingOrChecking` in the drain's main package | reverted by `11f85efd77` after 14 minutes | the `tillr-drain` suite |
-| `9434198857` | 11-21 11:41 AM | drain | the roll and keeper suites | reverted by `e8a556e75d` after 10 minutes | `tests/tillr-roll.test.py` and `tests/tillr-keep.test.py`, which read files under `tools/tillr-drain` |
-| `5514f6eda3` | 11-21 12:35 PM | drain, item, run | `TestFinalReportFromCommitOffer/commit` in `tillr-run` | reverted by `9bad3b8700` after 7 minutes | the `tillr-run` suite |
-| `a427c165a3` | 11-21 3:34 PM | `tillr`, drain, item, run, view | `TestBlocksFromUsesDeclarationParser` in `tillr-item` | reverted by `b96dbc1a99` after 5 minutes | the `tillr-item` suite |
+| `9628978cfc` | 11-20 2:15 PM | drain | the `tillr-view` suite | `confirmed`, 1319129 | reverted by `eace636684` after 31 minutes |
+| `9cadb24d06` | 11-20 2:17 PM | drain, run | `go-test-shards-test` | `confirmed`, 1319011 | reverted by `1cd2f9b9d1` after 12 minutes |
+| `129509992c` | 11-20 3:18 PM | drain, land, view | the `tillr-drain` suite | `confirmed`, 1320037 | reverted by `22e4ab208f` after 37 minutes |
+| `68fb25f77d` | 11-20 7:21 PM | drain, item | the `tillr-view` suite | `confirmed`, 1327361 | reverted by `16edac08c0` after 5 minutes |
+| `315a213fe4` | 11-20 7:31 PM | drain, item (the same item, landed again) | the `tillr-drain` suite | `confirmed`, 1327943 | reverted by `f23a3087c5` after 24 minutes; a fixer filed for the same check landed nothing, and the check was proved green at `a75095d06b` (1328345) |
+| `a0b415fc3d` | 11-21 5:16 AM | drain, item | `TestObstacleHoldsShowRealReasonAndMoverInWaitingAndAgreeWithPlan` in `tillr-view` | `confirmed`, 1338324 | reverted by `9702855aee` after 26 minutes |
+| `9298e19241` | 11-21 6:11 AM | drain, item | `TestEveryFoldReadsTheKindsItSelects` in the drain's `drain` package | `confirmed`, 1340326 | reverted by `1d83f5a28f` after 43 minutes; a fixer filed before the revert was still pending at the reading |
+| `cc31e10d8b` | 11-21 9:54 AM | drain | `change-checks-test` | `offered`, 1341858 | revert not possible: the trunk advanced while the revert was being checked. No fixer landing and no green proof is joined to it in the period |
+| `2838315c85` | 11-21 10:47 AM | `tillr`, drain, item, store, view | the backend adapters check | `offered`, 1343156 and 1343231 | revert not possible, twice: the fast gate failed with the revert, on this same check. Repaired by the fixer landing `4df97785cb` (1343266) |
+| `dcd11d187a` | 11-21 11:20 AM | `tillr`, drain | seven subtests of `TestLoopSettingsRefusedBeforeStartingOrChecking` in the drain's main package | `confirmed`, 1344906 | reverted by `11f85efd77` after 14 minutes |
+| `9434198857` | 11-21 11:41 AM | drain | the roll and keeper suites | `confirmed`, 1345188 | reverted by `e8a556e75d` after 10 minutes |
+| `5514f6eda3` | 11-21 12:35 PM | drain, item, run | `TestFinalReportFromCommitOffer/commit` in `tillr-run` | `confirmed`, 1346827 | reverted by `9bad3b8700` after 8 minutes |
+| `a427c165a3` | 11-21 3:34 PM | `tillr`, drain, item, run, view | `TestBlocksFromUsesDeclarationParser` in `tillr-item` | `confirmed`, 1351147 | reverted by `b96dbc1a99` after 6 minutes |
 
-Three things the table shows:
+So the loop reverted 11 of the 13 itself, between 5 and 43 minutes after they landed (median 14).
+One was repaired by a fixer landing. One, `cc31e10d8b`, has no recorded repair in the period. The
+13 landings carry 19 associations, because the seven subtests of `dcd11d187a` are seven.
 
-- **Every one of the 13 changed `tools/tillr-drain`.** No landing that left the tillr Go modules
-  alone was attributed a heavy failure in the period.
-- **The failing test was never one the landing edited.** Where the record names a test, it is an
-  existing test in a file the landing did not touch: `whole_log_test.go`, `settings_test.go`,
-  `body_from_test.go`, `offer_report_test.go` and `obstacle_waiting_test.go`, against the changed
-  paths the report lists. Running only the tests a change adds or edits would have caught none
-  of those five. Four records name a whole suite and no test, so for those four this is not
-  known.
-- **Three of the nine Go failures were in a module the landing did not change.** A drain or item
-  change broke `tillr-view`, which imports both. Running only the changed modules' suites catches
-  6 of the 13; adding the modules that import them catches 9. The other 4 are Python suites.
+**What the fast gate ran for each.** On 2026-11-21 each landing's bound verdict was read from the
+live store, opened read-only, and matched on verdict ID, base and tree. The gate program then was
+[`tools/gate/change-gate.py`](../../tools/gate/change-gate.py), and its log states the plan in two
+lines, `fork-check: selection` and `fork-check: plan`, with one `fork-check: ok` line per check
+that ran. Each failing check is in one of three states in that plan: **not selected** (the plan
+says why), **selected and passed** (an `ok` line), or **unknown**. None of the 19 is unknown.
+The audit took its 13 landings from a reading of the same report at event 1359581; the reading
+at event 1361746 lists the same 50 landings with the same checks and attributions.
 
-The price of today's rule in the period: 11 landings reverted by the loop itself, between 4 and
-42 minutes after they landed (median 14), and 2 left to trunk fixers.
+| Landing | Verdict and landing events | Checks the fast gate ran, and its wall time | Suite or check that holds the failure | In the bound plan |
+| :--- | :--- | :--- | :--- | :--- |
+| `9628978cfc` | 1318790, 1318792 | `file-size`, `tillr-docs`; 81 s | the `tillr-view` suite | not selected: deferred to the heavy run |
+| `9cadb24d06` | 1318842, 1318844 | `file-size`, `tillr-backends`, `tillr-docs`; 90 s | [`tests/go-test-shards.test.py`](../../tests/go-test-shards.test.py) | not selected: a heavy-only check |
+| `129509992c` | 1319599, 1319601 | `file-size`, `observatory-web`, `tillr-docs`; 148 s | the `tillr-drain` suite | not selected: deferred to the heavy run |
+| `68fb25f77d` | 1327168, 1327174 | `file-size`, `tillr-docs`; 51 s | the `tillr-view` suite | not selected: deferred to the heavy run |
+| `315a213fe4` | 1327542, 1327569 | `file-size`, `tillr-docs`; 70 s | the `tillr-drain` suite | not selected: deferred to the heavy run |
+| `a0b415fc3d` | 1337988, 1337991 | `file-size`, `tillr-docs`; 57 s | the `tillr-view` suite | not selected: deferred to the heavy run |
+| `9298e19241` | 1339242, 1339244 | `file-size`, `tillr-docs`; 65 s | the `tillr-drain` suite | not selected: deferred to the heavy run |
+| `cc31e10d8b` | 1341435, 1341443 | `file-size`, `gate-runner`, `pipeline-evidence`, `self-suite`, `tillr-docs`, `tillr-loop`; 275 s | [`tools/gate/checks/change_checks_test.py`](../../tools/gate/checks/change_checks_test.py) | not selected: a heavy-only check |
+| `2838315c85` | 1343001, 1343003 | `file-size`, `gate-runner`, `go-substrate`, `self-suite`, `tillr-backends`, `tillr-docs`; 259 s | [`tests/tillr-muse-backend.test.py`](../../tests/tillr-muse-backend.test.py), the `tillr-backends` check | **selected and passed**, in 5.7 s; `go-substrate`, the `tools/tillr` suite, also passed, in 3.9 s |
+| `dcd11d187a` | 1344126, 1344129 | `file-size`, `gate-runner`, `go-substrate`, `tillr-docs`, `tillr-roll`; 75 s | the `tillr-drain` suite | not selected: deferred to the heavy run |
+| `9434198857` | 1345023, 1345027 | `file-size`, `tillr-docs`; 77 s | [`tests/tillr-roll.test.py`](../../tests/tillr-roll.test.py) and [`tests/tillr-keep.test.py`](../../tests/tillr-keep.test.py), the `tillr-roll` check | not selected: "no changed path is read" |
+| `5514f6eda3` | 1346525, 1346530 | `file-size`, `tillr-backends`, `tillr-docs`; 83 s | the `tillr-run` suite | not selected: deferred to the heavy run |
+| `a427c165a3` | 1351010, 1351012 | `file-size`, `gate-runner`, `go-substrate`, `tillr-backends`, `tillr-docs`; 87 s | the `tillr-item` suite | not selected: deferred to the heavy run |
 
-**Proposal for the owner (the designer's; not a ruling, and not built).** When a candidate
-changes a path under a tillr Go module, the landing gate also runs, before the merge, the
-sharded suite of each changed module and of each module whose `go.mod` requires a changed one.
-A candidate that changes no tillr Go module is gated exactly as today. The module set comes from
-the `go.mod` files, so no list is kept by hand. This is the smallest selection that catches most
-of the period's misses: 9 of 13, every Go one. It is the same shape as the exception this design
-already makes for the gate's own runner ([`OQ-GR3`](#OQ-GR3)).
+The plan's words for a deferred suite are `owed: true, planned: false`, with the reason "the
+landing tier defers it to the rolling tier". Twelve of the 13 are therefore a check the fast gate
+did not run, and they are three kinds, not one:
 
-Its measured added time per gate is the drain suite's, because every candidate it selects in
-this period changed the drain, and `tillr-view`, `tillr-store`, `tillr-land` and `tillr-watch`
-require the drain:
+- **Nine are a Go module's whole suite, deferred by rule.** Drain four times, view three times,
+  run once, item once. The fast gate did run Go tests when its selection named them: the shared
+  module's suite ran and passed on three of these candidates.
+- **Two are checks that exist only in the heavy run** (`go-test-shards-test` and
+  `change-checks-test`).
+- **One is a fast-tier check that selection passed over.** `tillr-roll` ran on `dcd11d187a`
+  and was skipped on `9434198857`, whose six changed source paths were all in the drain, because
+  none of them is a path that check declares it reads. It then failed in the heavy run and passed
+  with the landing reverted.
 
-| Suite, run sharded with `-k 6` | Quiet machine, 2026-11-17 ([shard report](../pi/tillr-go-shards-2026-11-17.md)) | Heavy run that ended 2026-11-21 7:10 PM Eastern, beside the lanes | One run in a lane, 2026-11-21 |
-| :--- | ---: | ---: | ---: |
-| `tillr-drain` | 40.31 s | 455.28 s | 638.30 s, not green |
-| `tillr-view` | 15.14 s | 36.94 s | not run |
-| `tillr-land` | 8.09 s | 42.72 s | not run |
-| `tillr-store` | 3.99 s | 6.20 s | not run |
+The thirteenth, `2838315c85`, is not a miss by the gate that judged it. Its fast gate ran the
+check that later failed, and the check passed. The heavy failure's own output is `FAIL:
+tools/tillr-drain/drain/push_state.go names the model id 'opus'`. That file is
+[`tools/tillr-drain/drain/push_state.go`](../../tools/tillr-drain/drain/push_state.go), the candidate
+did not change it, and the fixer's repair `4df97785cb` is one changed string in it. `git log -S`
+on that string, run on 2026-11-21, shows that `1c646fded4` added it. That commit landed at
+10:40 AM (events 1342762 and 1342764), after the base `2838315c85` was judged on and before it
+landed, so the tree the fast gate judged did not hold the string and the tree that landed did.
+The fast gate that judged `1c646fded4` lists `tillr-backends` as not run: that candidate changed
+only the drain, and the check's declared paths do not include the drain's sources, which its scan
+reads. So the red was a selection miss on a landing the report does not list, because the heavy
+failure named a later commit. The report cannot see this case, and its count of 13 is neither an
+upper nor a lower bound on what the fast gate let through.
 
-The lane run was `python3 tools/go-test-shards.py tools/tillr-drain -k 6` at `dab5a2da0e`,
-started at 7:21 PM Eastern with a load average of 6 and ended with one of 23. It exited 1: the
-test `TestBriefPolicySeatsAndPiIsolation` failed, and one shard of the `drain` package was
-stopped after 480 seconds without a test finishing, in
-`TestOneAppliedPassSharesItsGenerationAcrossRequests`. The heavy run in the column before it also
-ended with the drain suite failed. So neither of today's readings is the time of a green suite; they are
-what a gate would have waited on today.
+**Attribution is not tested cause, and the judged tree is not the landed tree.** Three limits on
+reading the tables as "the fast gate would have caught this":
 
-So the proposal adds between about 40 seconds and several minutes to a gate that targets ten
-([`D-GR1`](#decision-ledger)), and it adds it to about half of all landings: 258 of the 520
-first-parent trunk commits in the period touched `tools/tillr-drain` (`git log --first-parent`
-over the period's bounds at `dab5a2da0e`, counting commits with a path under that directory; the
-520 include reverts and record commits as well as the 471 landings). The suites would also run
-before the merge at the same time as the lanes' own test runs, which is the load that produced
-the 455 seconds. Whether the heavy runner would then reuse those passes, and so run less after
-the merge, was not measured.
+- **`confirmed` is a test on the trunk, not on the candidate.** It shows the check passed on the
+  tip once the landed commit was reverted. It does not show the check failing on the tree the
+  fast gate judged.
+- **For all 13, the judged tree and the landed tree differ.** The trunk moved between the
+  candidate's base and its landing, and the lander replayed the change onto the new tip
+  ([`landing-principles.md`](landing-principles.md)
+  [§2](landing-principles.md#2-re-application-preserves-the-change-not-the-patch)).
+  A suite added to the fast gate runs on the judged tree. Where the red arrives with a
+  concurrent landing, as it did for `2838315c85`, or from the change meeting one, that suite
+  passes and the red lands anyway.
+- **No replay of a judged candidate exists.** The one replay on record ran the landed commit
+  `9628978cfc` against its parent, twice, on 2026-11-21 in a private clone: the view suite failed
+  both times, in `TestStatusPrintsGreenRangeAttributionUnavailableAndOverruns`. That shows the
+  landed tree was red in the view suite. In one of the two runs the drain suite also failed, in
+  three tests the attribution does not name, and in the other it passed. Those failures were
+  intermittent on one landed tree, and their cause was not looked for. The run that passed does
+  not show that the landed change was unrelated to them, and the run that failed does not show
+  that it caused them.
 
-The four Python suites the proposal does not catch could be selected the same way, by the files
-each reads. That is a second step and is not proposed here; of the four, only the backend
-adapters check has a recorded time (6.93 seconds in the same heavy run).
+So the counts below are of landings whose failing suite an option **would have run**. They are an
+upper bound on refusals. The number of the 13 proved to be refused before the merge is zero.
 
-**Question for the owner:** should a candidate that changes a tillr Go module run those modules'
-suites, and the suites of the modules that import them, before it lands?
+**The options compared.** Each row adds existing whole-suite checks to the fast gate, selected by
+the candidate's changed paths. "Changed plus requirers" is the changed tillr Go modules and each
+module whose `go.mod` requires one, read from the `go.mod` files at each candidate's head.
+
+| Selection | Runs when | Suites added | Of 13 landings, failing suite would have run | Of 19 associations |
+| :--- | :--- | :--- | ---: | ---: |
+| No change | never | none | 0 | 0 |
+| Drain suite alone | the candidate changes `tools/tillr-drain` | drain | 4 | 10 |
+| View suite alone | the candidate changes `tools/tillr-drain` | view | 3 | 3 |
+| Changed modules only | the candidate changes a tillr Go module | each changed module's | 6 | 12 |
+| **Drain and view pair** | the candidate changes `tools/tillr-drain` | drain and view | **7** | 13 |
+| Changed plus requirers | the candidate changes a tillr Go module | four to nine suites on these 13 | 9 | 15 |
+
+None of them selects the four that are not a Go suite: the two heavy-only checks, the roll and
+keeper suites, and the backend adapters check.
+
+**Why the pair is the smallest that catches most.** Seven is the least that is more than half of
+13. No single existing check reaches it: the drain suite holds four of the failures and nothing
+else holds more than three. Of every two existing checks, only drain with view reaches seven, and
+dropping either leaves four or three. "Changed modules only" reaches six, because three of the
+failures were in the view suite on candidates that did not change the view. "Changed plus
+requirers" reaches nine by adding the run and item suites, and it selects all nine tillr modules'
+suites whenever the shared module changes, as three of these 13 candidates did.
+
+The trigger is the whole `tools/tillr-drain` directory, and it is not narrowed. All 13 candidates
+changed paths in it, so the period's evidence cannot tell a narrower trigger from this one; any
+subdirectory or file-type rule drawn from seven failures would be fitted to those seven. What
+justifies the view suite on a drain change is structure, not the count: `tools/tillr-view`'s
+`go.mod` requires the drain. The pair is not triggered by a change to the view alone, because no
+attributed landing in the period was one.
+
+**What the pair costs, measured.** Two paired timings on 2026-11-21, 9:38 to 9:50 PM Eastern, on
+the trunk commit `81ea2675de` against its parent `5514f6eda3`: a green change to six drain source
+files and their pack copies. The fixture was a private clone with its own gate runner, check
+memory and logs, warmed once, on a 32-core machine with a one-minute load average between 14 and
+22 from the lanes then running. The fast gate was that commit's own `tools/gate/change-gate.py`.
+The second arm then ran both suites at once from the ordinary test-slot pool and waited for both:
+
+```sh
+python3 tools/go-test-shards.py tools/tillr-drain -k 6
+python3 tools/go-test-shards.py tools/tillr-view -k 6
+```
+
+| Pair | Fast gate alone | Fast gate, then the two suites | Added | The fast gate's part of the second arm | Drain suite | View suite |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 41.17 s | 276.23 s | **235.06 s** | 48.16 s | 228.01 s | 22.37 s |
+| 2 | 46.97 s | 365.53 s | **318.56 s** | 52.52 s | 312.97 s | 42.09 s |
+
+Every arm passed. The two suites ran at once, and the drain suite was the longer of the two both
+times: the view suite finished inside it. The added time is not the drain suite's time alone. The
+fast gate itself took 6.990 and 5.556 seconds longer in the second arm than in the first arm of
+its pair, and that is part of each difference.
+
+These are two green measurements of one historical candidate. They do not show any other
+candidate, a quiet machine, a cold one, or a candidate whose suite fails. A candidate that does
+not change the drain adds no suite, so its added time is zero by rule; that was not timed as a
+pair.
+
+"Changed plus requirers" was timed the same way earlier that day on the same commit, where it
+selects four suites (drain, land, store, view): 277.71 and 308.62 seconds added to a fast gate of 41.50
+and 40.15 seconds, both green. Those two runs used a different private fixture under different
+load, so they are not a comparison with the pair's two: which option adds more wall time on this
+candidate, and by how much, is undetermined. Its cost on a candidate that changes the shared
+module, where it runs nine suites, was not measured either.
+
+**How often the trigger fires.** Of the 472 landings in the period, 245 were judged on a candidate
+that changed a path under `tools/tillr-drain`: 52 percent (`git diff --name-only` between the
+base and head each landing record carries, run on 2026-11-21; the landed commits give the same
+245). That count is how often the trigger would have fired. It is not a measured delay: the two
+timings above are of one candidate, and what the pair would have added to any of the other
+gates was not measured.
+
+**Proposal for the owner (the designer's; not a ruling, and not built).** When a candidate changes
+a path under `tools/tillr-drain`, the landing gate also runs, before the merge, the sharded
+`tools/tillr-drain` and `tools/tillr-view` suites, at once, after the fast checks pass. Every
+other candidate is gated exactly as today. It is the same shape as the exception this design
+already makes for the gate's own runner ([`OQ-GR3`](#OQ-GR3)). What is known about it:
+
+- It would have run the failing suite for 7 of the period's 13 attributed landings. None of the
+  seven is proved refused, for the reasons above.
+- It added 235.06 and 318.56 seconds to a fast gate of 41.17 and 46.97 seconds, in two green
+  runs of one candidate (`81ea2675de` against `5514f6eda3`), beside running lanes. No other
+  candidate was timed. The gate targets ten seconds ([`D-GR1`](#decision-ledger)).
+- Its trigger matched 245 of the period's 472 landings, 52 percent. That is how often it would
+  have run. What it would have added to those gates is not measured.
+- In one of two replays of a landed tree the drain suite failed in three tests the attribution
+  does not name, and in the other it passed. The cause of that intermittent failure is not
+  established, so whether a suite run before the merge would refuse candidates for a failure
+  like it is not known.
+- Whether the heavy runner could reuse a suite pass from before the merge, and so run less after
+  it, was not measured. The judged tree is not the landed tree, so a pass on one is not a pass on
+  the other.
+
+**Question for the owner:** should a candidate that changes `tools/tillr-drain` run the drain and
+view suites before it lands?
 
 **Options.**
 
-1. **Yes, as proposed.** Nine of the period's 13 misses are refused before the merge. Half of
-   all landings take the drain suite's time, not ten seconds, and `D-GR1` and `D-GR4` then hold
-   only for candidates outside the tillr Go modules.
-2. **Yes, for the changed modules only.** Six of 13. The time is nearly the same, because the
-   drain suite is the long one and every one of the 13 changed the drain.
-3. **No; keep the fast tier as it is.** The rate stays near 3 percent of landings, each reverted
-   by the loop in a median of 14 minutes. The work goes into what makes that slow or leaves a
-   fixer: the proof's running time, and the two cases where a revert was not possible.
-4. **No test before the merge, and a faster drain suite first.** The proposal is revisited when
-   the drain suite's time beside running lanes is near its quiet-machine time.
+1. **Yes, the pair, as proposed.** Seven of the period's 13 attributed landings would have had
+   their failing suite run before the merge. The trigger matched 52 percent of the
+   period's landings. The one candidate timed waited 235 and 319 seconds longer; the added time
+   on any other candidate is not measured. `D-GR1` and `D-GR4` then hold only for candidates that
+   leave the drain alone.
+2. **Yes, and wider: the changed modules and the modules that require them.** Nine of 13. Whether
+   it adds more or less time than the pair on a drain change is undetermined, because its two
+   timings used another fixture and load. It runs up to nine suites when the shared module
+   changes, at a cost not measured.
+3. **No; keep the fast tier as it is.** About 3 percent of landings were attributed a heavy
+   failure, and the loop reverted 11 of the 13 in a median of 14 minutes. The work goes into what
+   makes that slow or leaves a red trunk: the proof's running time, and the two that could not be
+   reverted.
+4. **Not yet; a faster and steadier drain suite first.** The same suite took 40.31 seconds on a
+   quiet machine on 2026-11-17 ([shard report](../pi/tillr-go-shards-2026-11-17.md)) and 228 to
+   313 seconds in the two timings here, and it failed intermittently in one replay for a cause
+   not established. The proposal is measured again when the suite's time beside running lanes is
+   near the quiet one and that failure is explained.
 
-The designer's recommendation is option 3 with option 4 as the follow-up: 2.8 percent of
-landings were let through and all but two were repaired without a person, while option 1 gives
-up the ten-second landing for half of all landings. The owner's leaning quoted above is toward
-better fast tests, so this is the designer's reading of the numbers and the owner's to overturn.
+Separately from these four, two of the misses found here are a fast-tier check whose declared
+paths are narrower than what its test reads: `tillr-roll` on `9434198857`, and `tillr-backends`
+on `1c646fded4`. Widening those declarations adds no suite. It is a selection change, so it is
+not made or measured here, and it is the owner's to ask for.
+
+The designer's leaning is option 3 with option 4 as the follow-up, on three facts that are kept
+apart here because they were measured apart. The one candidate timed waited 235 and 319 seconds
+longer, against a ten-second target. The trigger matched about half of the period's landings,
+and the added time on those was not measured. The benefit is an upper bound of seven landings
+in two days, each of which the loop reverted without a person. The owner's leaning quoted above
+is toward better fast tests, so this is the designer's reading of the numbers and the owner's to
+overturn; the choice among the four options is the owner's.
 
 ### 6.11 The fast gate before a landing records its time and its Go packages
 
@@ -2446,8 +2609,8 @@ fixtures measured, and is the owner's to overturn.
 | `D-GR23` | **Not the owner's ruling; the designer's decision, which the owner may overturn.** Every site that classifies a check result (70, listed by function and consumer) calls one function, `Classify` in a `checkresult` package of the shared `tools/tillr` module, reached from Python and for store reads through one face, `tillr-gate classify`. It has five outcomes: `pass`, `fail`, `unknown`, `unavailable` and `disabled`; a site decides blocking and credit from the outcome alone. A cached result is classified when it is used. A replayed commit supplies the declaration and the command, never the classification. The repair item is filed by a sweep of the marker files, which replaces "from the verdict" in `D-GR22`; a generated repair item needs no document block. **Rejected:** teaching each site the rule as it is found (refused by its verifier eleven times); a classifier per program held together by a shared table; filing from the verdict with a filing step on every exit path; four outcomes with `unavailable` folded into `unknown`. | 2026-11-21 | [One classifier, five outcomes](#one-classifier-five-outcomes) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
 | `D-GR24` | **Owner ruling (2026-11-21), verbatim:** *"So I think the real rule should be you can only start a new item if the previous item's trunk landing went green because you don't want to start it until the other one has landed on the trunk and it's okay and then you always just base an item on the most recent green on the trunk, and I think that satisfies everything."* and *"And yes, of course, a trunk fixer is meant to only be based on a red change, so of course it's based on a red one."* It replaces the owner's 2026-11-17 overturn of [`OQ-GR2`](#OQ-GR2) for new work. From an operator request of the same day, which reads the ruling as the `green` value of `lane_base` and reads "the previous item" as the item's blocker (the operator's reading, which the owner may overturn): a new lane is cut from the green pointer; an item whose blocker has landed is held with the reason `trunk-unproved` until the heavy runner has proved a trunk commit containing that landing; a trunk fixer starts from the tip; this repository sets `lane_base` to `green`. | 2026-11-21 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ [`config/tillr/gate-policy.json`](../../config/tillr/gate-policy.json) selects `green`, pinned by `TestRepositoryGatePolicyUsesGreenLaneBase` in [`gate_policy_test.go`](../../tools/tillr-drain/gate_policy_test.go). The [lane-base tests](../../tools/tillr-drain/drain/lane_base_test.go) verify the blocker-proof wait and the fixer base. |
 | `D-GR25` | **Not the owner's ruling and not a decision: the designer's list, for the owner to rule on.** The built `green` behavior differs from the words of `D-GR24` in five cases, tabled in Section 6.6: a lane cut from an unproved commit after green when the item's own block is newer than green; the same when the item's design answer landed after green; lanes cut from the tip when no green pointer exists; a fork blocker proved by its delivered patch branch, not by the green pointer; and a landed blocker with no recorded landing, which waits. Each stays as built until the owner rules. **Rejected:** changing any of them to match the words, which the request that carried the ruling forbids. | 2026-11-21 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ as built (`tools/tillr-drain/drain/lane_base.go`); no ruling yet |
-| `D-GR26` | **Not the owner's ruling; the designer's decision on an operator request, which the owner may overturn.** The owner asked on 2026-11-21, verbatim: *"Can we tell from our records when an item passed the light gate and then failed the heavy gate? Because that's evidence we're going to want to look at and decide something. Probably just making the light tests better if possible."* The request answers with a read-only report, the `tillr view heavy-misses` face (the name is the designer's), listing each landing that passed its fast gate and was later named by a heavy failure, with its commit, item, time, failing checks, revert or fixer outcome and changed paths, summarized by check and by changed module; and with Section 6.10, which reads that report from 2026-11-19 3:55 PM to 2026-11-21 6:35 PM Eastern and belongs to this document, so its designer writes it. Each failing check carries an attribution (`confirmed`, `offered`, `disproved` or `named`), and only the first two are counted as evidence. The request forbids changing the fast tier's selection. **Rejected:** counting every landing a fixer record names, which counts landings that only arrived on a red trunk (33 of the 47 listed). | 2026-11-21 | [Section 6.10](#610-what-passed-the-fast-gate-and-failed-the-heavy-run) | Evidence written 2026-11-21; the face is not on the trunk |
-| `D-GR27` | **Not the owner's ruling and not a decision: the designer's proposal, for the owner to rule on.** A candidate that changes a tillr Go module also runs, before the merge, the sharded suites of the changed modules and of the modules whose `go.mod` requires them; every other candidate is gated as today. Over the period it would have refused 9 of the 13 attributed landings, at the drain suite's time (40.31 seconds on a quiet machine, 455.28 seconds in a heavy run beside the lanes) on about half of all landings, against the ten seconds of `D-GR1`. The designer recommends against building it now (keep the fast tier, shorten the drain suite and the time to a revert first); the owner's quoted leaning is toward better fast tests. Nothing is built or changed until the owner rules. | 2026-11-21 | [Section 6.10](#610-what-passed-the-fast-gate-and-failed-the-heavy-run) | — (proposal; no ruling yet) |
+| `D-GR26` | **Not the owner's ruling; the designer's decision on an operator request, which the owner may overturn.** The owner asked on 2026-11-21, verbatim: *"Can we tell from our records when an item passed the light gate and then failed the heavy gate? Because that's evidence we're going to want to look at and decide something. Probably just making the light tests better if possible."* The request answers with a read-only report, the `tillr view heavy-misses` face (the name is the designer's), listing each landing that passed its fast gate and was later named by a heavy failure, with its commit, item, time, failing checks, revert or fixer outcome and changed paths, summarized by check and by changed module; and with Section 6.10, which reads that report from 2026-11-19 3:55 PM to 2026-11-21 6:35 PM Eastern and belongs to this document, so its designer writes it. Each failing check carries an attribution (`confirmed`, `offered`, `disproved` or `named`), and only the first two are counted as evidence. The request forbids changing the fast tier's selection. **Rejected:** counting every landing a fixer record names, which counts landings that only arrived on a red trunk (36 of the 50 listed). | 2026-11-21 | [Section 6.10](#610-what-passed-the-fast-gate-and-failed-the-heavy-run) | Built: the face is in [`tools/tillr-view`](../../tools/tillr-view/README.md); evidence read 2026-11-21 |
+| `D-GR27` | **Not the owner's ruling and not a decision: the designer's proposal, for the owner to rule on.** A candidate that changes a path under `tools/tillr-drain` also runs, before the merge, the sharded `tools/tillr-drain` and `tools/tillr-view` suites; every other candidate is gated as today. It is the smallest selection of existing whole-suite checks that would have run the failing suite for more than half of the period's attributed landings: 7 of 13, against 4 for the drain suite alone, 3 for the view suite alone, 6 for the changed modules only and 9 for the changed modules with the modules that require them. That is an upper bound; none of the seven is proved refused, because the judged tree is not the landed tree and no judged candidate was replayed. Two paired timings of one green drain change (`81ea2675de` against `5514f6eda3`), beside running lanes, added 235.06 and 318.56 seconds to a fast gate of 41.17 and 46.97 seconds, against the ten seconds of `D-GR1`; no other candidate was timed. The trigger matched 245 of the period's 472 landings, which is how often it would have run and not a measured delay. The designer leans against building it now (keep the fast tier; make the drain suite faster, explain its intermittent failure, and make the revert quicker, first); the owner's quoted leaning is toward better fast tests. Nothing is built or changed until the owner rules. | 2026-11-21 | [Section 6.10](#610-what-passed-the-fast-gate-and-failed-the-heavy-run) | — (proposal; no ruling yet) |
 | `D-GR28` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request for the first classifier slice says "No outcome changes for any input". The single raw-result table and single aggregate order of `D-GR23` changed five measured outcomes at three sites (P6, F3, F6), so `D-GR23` is amended: `Classify` holds a named protocol per kind of raw result and `Aggregate` a named order per aggregate site, each reproducing the tree, and a site passes the name and compares nothing. A Go module build is `fail` on every non-zero exit; a legacy check follows `check_status` and `Check.conflict` (exit 4 of an ordinary kind is `fail`, exit 124 is `unknown`); the legacy gate's order is stalled, then failed, then unproven. The Python side hands over yes-or-no facts about a check's output and decides nothing from them. A difference a later slice finds is added the same way by its builder, with a test and a row in the section, and is not a definition obstacle. **Rejected:** allowing the outcome changes by name; sending pass and fail words from Python; merging the orders into the runner's in this group. | 2026-11-21 | [Each site keeps its raw-result protocol and aggregate order](#each-site-keeps-its-raw-result-protocol-and-aggregate-order) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
 | `D-GR29` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request of 2026-11-21 asks for the repair of commit `4790d2ad43` (receive a test's completions before canceling) in `policy_reload_test.go`, `fixer_intermittent_test.go`, `pass_measurement_test.go` and `lane_dirty_test.go`, saying all four cancel and then receive. At `86e2549392` only `policy_reload_test.go` does; the other three receive under `context.Background()`, where `sendCompletion` cannot drop a completion. So only `policy_reload_test.go` is repaired: its workers are released by a channel and their completions received while the context is live, with `cancel()` last; the repaired receive waits under the `hangGuard` deadlock detector and a released worker returns an error. The three others are unchanged and named with the reason in the commit body, which also states whether the real loop can lose a completion after cancel. The mirror comes from `just pack-sync`. **Rejected:** editing the three files that have no cancel; a time limit on the receive in place of the repair; a `hangGuard` on the three receives that have no fault (a second, unlanded draft of this decision proposed it); repairing `Loop.Examine` in `recovery.go` in the same change, which needs its own request; changing `sendCompletion`. **Recorded 2026-11-21 by the designer:** a third unlanded draft reached the same answer and is not adopted as a separate text; the built cleanup's receive is a bare receive on a live context, not one under `hangGuard`, and is accepted as built. **Recorded 2026-11-22 by the designer:** a fourth unlanded draft, written against the same worker report, reached the same answer and is not adopted; that report is answered by this row, the repair is built, and no build work remains under the request. The rule kept from it: no test cleanup makes a blocking receive from the loop's completions channel after it cancels the context its workers send under. | 2026-11-21 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (commit `c6a01f6e84`: [`policy_reload_test.go`](../../tools/tillr-drain/drain/policy_reload_test.go) and its mirror) |
 | `D-GR30` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** Each run of the fast gate that judges a candidate before it lands, on its ordinary path, leaves a durable record of its wall time, each check's elapsed time and whether it ran, was reused or was not run, and the Go packages each Go check selected. The packages come from `go-build`'s own `go list`, from `go-substrate`'s `go test` output, and for `gate-runner`, which runs sharded and prints no package lines, from `tools/go-test-shards.py` writing its `go list` result to the file named by `TILLR_GO_SHARDS_EVIDENCE_OUT`, before compiling, and only when that variable is set. The Go package piece may therefore edit `tools/go-test-shards.py` and `tests/go-test-shards.test.py` for that producer and its fixture tests only. The heavy trunk proof, the legacy tree-check bridge, relanding, the automatic revert candidate, named replays and the heavy-failure count are out of scope and listed in the candidate's commit message. **Rejected:** leaving `gate-runner` out; reading the `--events` file; a second `go list` in `tools/fork-check.py`; running the suite unsharded. | 2026-11-21 | [Section 6.11](#611-the-fast-gate-before-a-landing-records-its-time-and-its-go-packages) | — (not built) |
