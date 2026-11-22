@@ -136,6 +136,8 @@ var Rules = map[string]Rule{
 	"trunk-unproved":     {"waits on work", "trunk", "the heavy runner; prove the trunk"},
 	"obstacle-owner":     {"needs you", "queue", "the owner; answer the question with tillr drain retry, or close the item"},
 
+	"blocker-landing-not-on-trunk": {"needs you", "trunk", "the operator; restore the named landing's trunk ancestry or repair its recorded rewrite mapping"},
+
 	"obstacle-trunk":                 {"waits on work", "trunk", "returns when the named checks are green"},
 	"obstacle-tooling":               {"needs you", "queue", "repair the tool or harness and retry the run"},
 	"obstacle-seat":                  {"needs you", "queue", "change seat or split the request, then retry the run"},
@@ -180,7 +182,7 @@ func For(reason string) Rule {
 	if rule, ok := Rules[reason]; ok {
 		return rule
 	}
-	for _, prefix := range []string{"trunk-rewritten: ", "red-cap: ", "trunk-path-dirty: ", "inputs-changed: ", "seat-degraded: seat ", "staging-failed: "} {
+	for _, prefix := range []string{"trunk-rewritten: ", "blocker-landing-not-on-trunk: ", "red-cap: ", "trunk-path-dirty: ", "inputs-changed: ", "seat-degraded: seat ", "staging-failed: "} {
 		if strings.HasPrefix(reason, prefix) {
 			return Rules[baseOf(prefix)]
 		}

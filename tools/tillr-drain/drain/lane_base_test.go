@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -200,6 +201,59 @@ func TestLaneBaseWaitingPresentationNamesProof(t *testing.T) {
 	_, where, mover := whyPresentation(Decision{Action: ActionHold, Reason: ReasonTrunkUnproved})
 	if where != "trunk" || mover != "the heavy runner; prove the trunk" {
 		t.Fatalf("waiting presentation: %q %q", where, mover)
+	}
+}
+
+func TestLaneBaseNamesLandingMissingFromGreenTrunk(t *testing.T) {
+	f, l := passFixture(t, "blocker", "dependent")
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "blocker landed")
+	landed := runGit(t, f.root, "rev-parse", TrunkRef)
+	runGit(t, f.root, "reset", "--hard", base)
+	runGit(t, f.root, "commit", "--allow-empty", "-qm", "rewritten blocker landing")
+	replacement := runGit(t, f.root, "rev-parse", TrunkRef)
+	runGit(t, f.root, "update-ref", GreenRef, replacement)
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		for _, q := range []string{
+			`UPDATE items SET state='landed' WHERE item_id='blocker'`,
+			`INSERT INTO item_edges(item_id,blocked_by) VALUES('dependent','blocker')`,
+		} {
+			if _, err := tx.Exec(q); err != nil {
+				return err
+			}
+		}
+		return recordFixtureLanding(tx, "blocker", "fixture-run", landed, 1)
+	})
+	dependent := func() Decision {
+		for _, p := range mustPlan(t, l) {
+			if p.decision.ItemID == "dependent" {
+				return p.decision
+			}
+		}
+		t.Fatal("dependent missing")
+		return Decision{}
+	}
+	for _, ahead := range []bool{false, true} {
+		if ahead {
+			runGit(t, f.root, "commit", "--allow-empty", "-qm", "next unproved trunk tip")
+		}
+		d := dependent()
+		want := "blocker-landing-not-on-trunk: blocker at " + landed
+		if d.Action != ActionHold || d.Reason != want {
+			t.Fatalf("ahead=%t: want hold %q, got %s %q", ahead, want, d.Action, d.Reason)
+		}
+		class, where, mover := whyPresentation(d)
+		if class != "needs you" || where != "trunk" || mover != "the operator; restore the named landing's trunk ancestry or repair its recorded rewrite mapping" {
+			t.Fatalf("waiting presentation: %q %q %q", class, where, mover)
+		}
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`INSERT INTO trunk_rewrites(old_sha,new_sha,recorded_at) VALUES(?,?,?)`, landed, replacement, l.cfg.Now().Format(time.RFC3339))
+		return err
+	})
+	registerRewriteStore(f.root, l.cfg.Store)
+	if d := dependent(); d.Action != ActionDispatch {
+		t.Fatalf("known replacement already proved: %+v", d)
 	}
 }
 

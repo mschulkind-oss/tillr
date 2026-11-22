@@ -54,6 +54,8 @@ var landingHolds = map[string]string{
 	ReasonTriageNoBlock:       definition.PrerequisiteDesignDocument,
 	ReasonAwaitsRewrite:       definition.PrerequisiteDesignDocument,
 	ReasonProseCriteriaCount:  definition.PrerequisiteDesignDocument,
+
+	ReasonBlockerLandingNotOnTrunk: "",
 }
 
 // generalHolds covers execution, capacity, item readiness and optional design
