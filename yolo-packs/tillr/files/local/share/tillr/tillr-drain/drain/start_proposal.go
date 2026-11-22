@@ -3,6 +3,7 @@ package drain
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"maps"
 	"strings"
 	"time"
@@ -44,23 +45,30 @@ func readProposedStarts(ctx context.Context, path string, at time.Time, policy *
 
 // Use recorded refusals at the same read boundary as leases. Local rotation
 // notes overlay this baseline when the snapshot is published.
-func shadowRotation(r *store.Reader, tick *Pass) error {
+func shadowRotation(r *store.Reader, tick *Pass) (map[string]laneRefusal, error) {
 	lanes := make([]string, 0, len(*tick.AvailableLanes))
+	refused := map[string]laneRefusal{}
 	tick.OutLanes = map[string]bool{}
 	for _, lane := range *tick.AvailableLanes {
 		var kind string
-		err := r.QueryRow(`SELECT kind FROM events WHERE object_type='lane' AND object_id=? AND kind IN (?, ?) ORDER BY seq DESC LIMIT 1`, lane, laneRefusedKind, laneRestoredKind).Scan(&kind)
+		var payload []byte
+		err := r.QueryRow(`SELECT kind, payload FROM events WHERE object_type='lane' AND object_id=? AND kind IN (?, ?) ORDER BY seq DESC LIMIT 1`, lane, laneRefusedKind, laneRestoredKind).Scan(&kind, &payload)
 		if err != nil && err != sql.ErrNoRows {
-			return err
+			return nil, err
 		}
 		if kind == laneRefusedKind {
+			var refusal laneRefusal
+			if err := json.Unmarshal(payload, &refusal); err != nil {
+				return nil, err
+			}
 			tick.OutLanes[lane] = true
+			refused[lane] = refusal
 		} else {
 			lanes = append(lanes, lane)
 		}
 	}
 	tick.AvailableLanes = &lanes
-	return nil
+	return refused, nil
 }
 
 func (s *startSnapshot) buildPlanner(r *store.Reader, at time.Time, policy *Policy, tick Pass, questions *VantageQuestions, rows []itemRow, inputs map[string]*RunInputs, unproved map[string]bool) (*planner, error) {
@@ -107,7 +115,7 @@ func (s *startSnapshot) repairEntries(ctx context.Context, r *store.Reader, at t
 }
 
 func (s *startSnapshot) repairEntriesAt(ctx context.Context, r *store.Reader, at time.Time, policy *Policy, tick Pass, questions *VantageQuestions, previous startSnapshot, touched map[string]bool, bases *startBases) error {
-	if err := shadowRotation(r, &tick); err != nil {
+	if _, err := shadowRotation(r, &tick); err != nil {
 		return err
 	}
 	s.updateFreeLanes(tick, previous, at)

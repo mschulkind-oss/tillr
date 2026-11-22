@@ -159,11 +159,6 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		return answer, err
 	}
 	tick.runFaces = runFaces
-	details := planDetails{maskedWorkers: make(map[string]Decision)}
-	envs, err := planWithDetails(r, tick, policy, questions, def, &details)
-	if err != nil {
-		return answer, err
-	}
 	items, err := readItems(r)
 	if err != nil {
 		return answer, err
@@ -223,9 +218,22 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			return answer, readFailure(err)
 		}
 	}
-	answer.Lanes = make([]string, len(offered))
-	copy(answer.Lanes, offered)
-	answer.Draining = drainingLanes(works, offered)
+	configured := offered
+	tick.AvailableLanes = &configured
+	// Match the fresh-start planner: an idle store row is not an offer if
+	// the last rotation event was a refusal.
+	refused, err := shadowRotation(r, &tick)
+	if err != nil {
+		return answer, readFailure(err)
+	}
+	offered = *tick.AvailableLanes
+	answer.Lanes = offered
+	answer.Draining = drainingLanes(works, configured)
+	details := planDetails{maskedWorkers: make(map[string]Decision)}
+	envs, err := planWithDetails(r, tick, policy, questions, def, &details)
+	if err != nil {
+		return answer, err
+	}
 	leases, err := activeLeases(r, at, offered)
 	if err != nil {
 		return answer, err
@@ -467,7 +475,7 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			}
 			row.Why = "operator retry waiting for a lane"
 			row.tableReason = row.Why
-			row.WaitingOn = retryLaneHolders(lanes, it.Express, busy, works, laneLeases, assigned, details.workerLanes)
+			row.WaitingOn = laneWaitHolders(lanes, it.Express, busy, works, laneLeases, assigned, details.workerLanes)
 			if len(row.WaitingOn) == 0 {
 				row.Why += ": no eligible lanes offered"
 				row.WaitingOn = append(row.WaitingOn, "offer an eligible lane with --lanes")
@@ -481,12 +489,18 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			// Work that still holds its lane continues only in that worktree: it is held
 			// behind that lane's lease (its run, or its examination), not by the others.
 			row.WaitingOn = append(row.WaitingOn, d.LaneID)
-			if !documentDesk(d.LaneID) && !slices.Contains(offered, d.LaneID) {
+			if !documentDesk(d.LaneID) && !slices.Contains(configured, d.LaneID) {
 				// The lane is above the loop's count: the loop keeps serving it until this
 				// work lands or is released, and offers it nothing new (drainingLanes).
 				row.Why += ": lane " + d.LaneID + " is draining: above the loop's lane count, it finishes " + it.ItemID + " and takes nothing new"
 			}
 		case d.Reason == ReasonNoLane:
+			if excluded := refusedLaneWaits(configured, it.Express, refused); len(excluded) != 0 {
+				row.tableReason = "waiting for lane capacity (lanes out of rotation)"
+				row.WaitingOn = append(laneWaitHolders(offered, it.Express, busy, works, leases, assigned, details.workerLanes), excluded...)
+				row.Why = row.tableReason + ": " + strings.Join(row.WaitingOn, "; ")
+				break
+			}
 			for _, lane := range offered {
 				if busy[lane] || assigned[lane] != "" {
 					row.WaitingOn = append(row.WaitingOn, lane)
@@ -1283,14 +1297,9 @@ func findLiveLoopSession(r *store.Reader, storePath string, now time.Time) (*liv
 	return nil, nil
 }
 
-// acceptedConflictRetryCommand returns the exact `tillr drain retry` invocation
-// accepted for a conflict-owner hold: when the conflict names a design run
-// (`c.DesignRunID != ""`), `authorizeDesignRetry` expects `--run <c.DesignRunID>`
-// with no `--acknowledge`; otherwise `AuthorizeRetry` expects the build retry
-// command for `c.RunID` (including `--acknowledge` when the run was judged or unjudged).
-// retryLaneHolders names the holders in offer order, excluding desks and
+// laneWaitHolders names the holders in offer order, excluding desks and
 // express lanes an ordinary item cannot take (the same eligibility as freeLane).
-func retryLaneHolders(offered []string, express bool, busy map[string]bool, works map[string]*pendingWork, leases []LaneLease, assigned, reserved map[string]string) []string {
+func laneWaitHolders(offered []string, express bool, busy map[string]bool, works map[string]*pendingWork, leases []LaneLease, assigned, reserved map[string]string) []string {
 	var waits []string
 	seen := map[string]bool{}
 	for _, lane := range offered {
@@ -1340,6 +1349,27 @@ func retryLaneHolders(offered []string, express bool, busy map[string]bool, work
 	return waits
 }
 
+func refusedLaneWaits(configured []string, express bool, refused map[string]laneRefusal) []string {
+	var waits []string
+	for _, lane := range configured {
+		refusal, ok := refused[lane]
+		if !ok || strings.HasPrefix(lane, "desk-") || (!express && isExpressLane(lane)) {
+			continue
+		}
+		wait := lane + " out of rotation (" + refusal.Reason + ")"
+		if refusal.Detail != "" {
+			wait += ": " + refusal.Detail
+		}
+		waits = append(waits, wait)
+	}
+	return waits
+}
+
+// acceptedConflictRetryCommand returns the exact `tillr drain retry` invocation
+// accepted for a conflict-owner hold: when the conflict names a design run
+// (`c.DesignRunID != ""`), `authorizeDesignRetry` expects `--run <c.DesignRunID>`
+// with no `--acknowledge`; otherwise `AuthorizeRetry` expects the build retry
+// command for `c.RunID` (including `--acknowledge` when the run was judged or unjudged).
 func acceptedConflictRetryCommand(r *store.Reader, itemID string, c item.Conflict) string {
 	if c.DesignRunID != "" {
 		return retryCommand(itemID, c.DesignRunID, "")
