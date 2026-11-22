@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mschulkind-oss/tillr-run/run"
@@ -156,8 +157,23 @@ func TestWorkflowRestartHoldsWhenBackendRemovedFromPolicy(t *testing.T) {
 	l.cfg.Policy.Seats["build"] = "fixture"
 
 	next := replaceGraphLoop(t, f, l, steps)
-	if _, _, err := next.passPlans(context.Background(), next.cfg.Now()); err == nil {
-		t.Fatalf("expected passPlans to refuse restart after recorded backend was removed from policy")
+	plans, _, err := next.passPlans(context.Background(), next.cfg.Now())
+	if err != nil {
+		t.Fatalf("passPlans exited after recorded backend was removed from policy: %v", err)
+	}
+	var itemA *Decision
+	for i := range plans {
+		if plans[i].decision.ItemID == "item-a" {
+			itemA = &plans[i].decision
+			break
+		}
+	}
+	if itemA == nil || itemA.Action != ActionHold ||
+		!strings.HasPrefix(itemA.Reason, ReasonBackendMissing+": ") ||
+		!strings.Contains(itemA.Reason, "build") ||
+		!strings.Contains(itemA.Reason, "pi") ||
+		itemA.DeferredBy != "pi" {
+		t.Fatalf("removed backend passPlans item-a = %+v, want hold/%s naming build and pi", itemA, ReasonBackendMissing)
 	}
 	work := pendingForTest(t, f, "item-a")
 	fixtureRead(t, f, func(r *store.Reader) error {
@@ -165,8 +181,10 @@ func TestWorkflowRestartHoldsWhenBackendRemovedFromPolicy(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if got.Action != ActionHold || got.Reason != ReasonNoPolicy || got.DeferredBy != "pi" {
-			t.Errorf("removed backend restart decision = %+v, want hold/%s deferred_by=pi", got, ReasonNoPolicy)
+		if got.Action != ActionHold || !strings.HasPrefix(got.Reason, ReasonBackendMissing+": ") ||
+			!strings.Contains(got.Reason, "build") || !strings.Contains(got.Reason, "pi") ||
+			got.DeferredBy != "pi" {
+			t.Errorf("removed backend restart decision = %+v, want hold/%s naming build and pi", got, ReasonBackendMissing)
 		}
 		return nil
 	})
