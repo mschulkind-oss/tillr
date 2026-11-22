@@ -280,6 +280,11 @@ func TestDrainBackendClosedRule(t *testing.T) {
 	}
 	t.Cleanup(func() { allStore.Close() })
 
+	allEval := watch.Evaluator{Store: allStore, Rules: rules}
+	if _, err := allEval.Evaluate(ctx); err != nil {
+		t.Fatal(err)
+	}
+
 	exitCode := 1
 	finishBody, err := json.Marshal(map[string]any{
 		"run_id":        "run-item-real-a1",
@@ -315,7 +320,6 @@ func TestDrainBackendClosedRule(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	allEval := watch.Evaluator{Store: allStore, Rules: rules}
 	skipped, err := allEval.Evaluate(ctx)
 	if err != nil {
 		t.Fatal(err)
