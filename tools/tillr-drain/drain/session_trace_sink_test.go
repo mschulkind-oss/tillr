@@ -60,7 +60,7 @@ func TestBlockedTraceSinkDoesNotRetainRealSessionMutex(t *testing.T) {
 	defer release()
 	t.Cleanup(func() { release(); os.Stderr = original; writer.Close(); reader.Close() })
 	t.Setenv("TILLR_SQLITE_TRACE", "1")
-	operation := runtime.FuncForPC(reflect.ValueOf((*Loop).refreshSession).Pointer()).Name()
+	operation := runtime.FuncForPC(reflect.ValueOf((*Loop).writeTx).Pointer()).Name()
 	result := make(chan error, 1)
 	go func() { result <- l.refreshSession(context.Background(), l.cfg.Now().Add(PassInterval)) }()
 	<-entered
