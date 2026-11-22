@@ -1650,6 +1650,74 @@ A green recorded with unavailable checks lists them on the status line beside th
 store row that holds the rolling watermark today is retired when the runner ships; the ref is the
 only copy.
 
+#### The proof worktree's registration is left locked
+
+*Not the owner's ruling; the designer's decision, from an operator request, which the owner may
+overturn ([`D-GR35`](#decision-ledger)).*
+
+**What happened.** The operator request of 2026-11-21 reports that Git's registration for the
+heavy runner's proof worktree was left holding a `locked` file that read `initializing`, created
+at 9:40:29 PM ET, with no directory at the path. Every later heavy run failed at once, 20 times,
+on `git worktree add --detach` with `is a missing but locked worktree`. The trunk could not be
+proved, and no item could start from it, until the operator ran `git worktree unlock` and
+`git worktree prune` at 9:43 PM ET. `initializing` is the reason Git itself writes while
+`git worktree add` is at work, and removes when the add finishes.
+
+**Why the runner did not recover.** Read at `27f91f6852`, `HeavyRunner.inTree` in
+`tools/tillr-drain/drain/heavy.go` prepares its path in three steps under the worktree registry
+lock: `git worktree remove --force <path>` with the result ignored, then deleting the directory,
+then `git worktree add --detach <path> <tip>`. Measured on 2026-11-21 with Git 2.56.0 in a scratch
+repository, against a registration whose `locked` file reads `initializing`:
+
+| Command | Directory present | Directory missing |
+|---|---|---|
+| `git worktree remove --force <path>` | refused, exit 128: `cannot remove a locked working tree` | refused, the same |
+| `git worktree add --detach <path> <tip>` after the directory is deleted | refused, exit 128: `missing but locked` | refused, the same |
+| `git worktree unlock <path>`, then `git worktree remove --force <path>` | registration gone, exit 0 | registration gone, exit 0 |
+
+So the first step is refused, the second deletes whatever directory the interrupted add left, and
+the third is refused on every run after. The missing directory is therefore what the runner's own
+second step produces, and is no evidence that the interrupted add never created one.
+
+**The rule.** The proof worktree's path is the runner's own, and the lock that admits one runner
+is already held when the path is prepared, so no other process has a claim on the registration.
+Before its existing remove, and under the same registry lock, the runner reads whether the
+registration for its own path is locked. When it is, the runner:
+
+1. reads the lock's reason and the `locked` file's modification time;
+2. runs `git worktree unlock <path>`;
+3. reports one line in the loop log that names the path, the reason and that time, so the
+   interruption is dated by the runner and not by an operator reading the directory afterwards;
+4. continues with the remove, the directory deletion and the add as today.
+
+The runner does not run `git worktree prune`: prune acts on every stale registration in the
+repository, and the comment on this step already says recovery must not touch another worktree's
+registration. The operator's `unlock` and `prune` cleared the same state by hand; `unlock` and
+the path's own `remove` clear it for this one path. A test holds the two columns of the table: a
+locked registration with the directory missing, and one with the directory present, each ending
+in a created worktree at the tip.
+
+**What interrupted the add is not established, and the change does not claim it.** The request
+says the loop restarted in place onto build `27f91f685232` while the runner was creating the
+worktree. The tree does not support naming the restart as the cause:
+
+- `beginHeavyProof` sets `heavyProofActive` before `HeavyRunner.Run`, and `gateRestart` returns
+  before the exec whenever `restartDeferred` sees that flag, both before and after it settles the
+  request. That deferral has been in the tree since `edaa4fdf4b` (2026-11-20), so a build of
+  2026-11-21 does not replace itself across a proof by this path.
+- The request gives "about 9:40 PM" for the restart and 9:40:29 PM for the lock. Those two times
+  do not order the events, so the add may have been started by the new process after the restart.
+- The loop log of the outgoing process and the event rows for those seconds were not available to
+  the design seat. Without them no code path can be named as what ran.
+
+One path in the tree does produce this state without any restart, and is recorded as a
+hypothesis, not a finding: the runner's Git commands are started with `exec.CommandContext`
+(`heavy.GitOutput`), which ends the command with SIGKILL when the runner's context is canceled,
+and a killed `git worktree add` cannot remove the lock it wrote. The commit that builds the rule
+above therefore states the cause as unconfirmed, cites the deferral above as the reason the
+restart is not named, and names the report line of step 3 as what will date the next occurrence.
+Finding the cause is separate work that starts from that line or from the incident's logs.
+
 ### 6.7 Deploys read the green pointer
 
 "Deploy" here means the programs the drain loop and its children run: the eight `tillr` programs
@@ -2111,6 +2179,7 @@ runner-first rule of [`OQ-GR3`](#OQ-GR3) working as intended.
 | Two lanes gate at once | Independent; they share only the result store, which is keyed by content |
 | Two landings finish while a heavy run is in flight | One further run starts when it ends, on the newest tip |
 | The heavy runner is killed | Its lock is released by the process ending; results already written stay valid; the next trigger starts a run |
+| The heavy runner's `git worktree add` is interrupted and leaves its registration locked | The next run unlocks the registration of its own path, reports the lock's reason and time, and creates the worktree ([the rule](#the-proof-worktrees-registration-is-left-locked), `D-GR35`) |
 | A result file is unreadable | Treated as absent, and counted in the report |
 | The result store is deleted | Every tree check runs once more; no verdict changes |
 | A declaration is malformed | The run is not a verdict and names the file and field; no other check runs under a partial set |
@@ -2223,6 +2292,7 @@ against the same request; it amends the "no test edited" wording of `D-GR33` and
 | `D-GR32` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request for the first classifier slice names every site and adds that classification on replay runs from current code and that a test per site shows the call. The operator answered a build worker's report on 2026-11-21: "the installed tillr-gate cannot have the classify face until a change containing it lands and is proved green, so split here. Offer as this item's landing only the classify face in tillr-gate with its tests, and nothing that calls the installed face." The request's landing is therefore slice 1a alone: `checkresult` with `Classify` and `Aggregate`, the `tillr-gate classify` face, their tests and the pack mirror, with no caller and no existing test edited. The unmet cases are named in the candidate's commit message and follow as later changes: every site calling the function with a test per site (slices 1b to 1e), the adapters calling the installed face (slice 1e), and replay classified from current code (slices 1e and 3b). A verifier does not refuse this landing for them. The scan test moves from slice 1a to the first of slices 1b to 1e to land. The ruling this rests on is the owner's [`OQ-SP1`](./tillr-item-split.md#OQ-SP1) of 2026-11-21, verbatim: *"part of desgins can absoutely land. this is generally MORE healthy. Remember, we're trying to mirror humans here. Humans desire to land the smallest functional change possible to make reviewing, testing, velocity, all this stuff easier, and it will also make it easier for us."* **Rejected:** one change holding the face and its callers; Python sites calling a `tillr-gate` built from the candidate's tree; holding the face until a caller is ready. | 2026-11-21 | [The first classifier landing is the function and its face, with no caller](#the-first-classifier-landing-is-the-function-and-its-face-with-no-caller) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
 | `D-GR33` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request that follows the first classifier landing asks that the gate adapters call the installed `tillr-gate classify`. The installed face classifies each observation and aggregates nothing (measured 2026-11-21: `--aggregate legacy-gate` is refused as an undefined flag, exit 2), so the legacy gate's and the legacy replay's aggregates (F6, F9) cannot hand over their order's name as `D-GR28` requires. The face gains `--aggregate <order>`: the same observations in, one object out with `checks` (the plain form's array) and `run` (`outcome`, `detail`, `exit_code`), for the orders `runner`, `shadow`, `legacy-gate` and `legacy-replay`; another name is exit 2 with no output, and the plain form is unchanged. Slice 1e is narrowed to the Python sites that classify one check and is the request's landing; slice 1f adds the flag with no caller; slice 1g moves `verdict_of` and `run_replay` onto it after a proved trunk commit holds 1f. Until then the two functions keep their code and change no outcome, and a verifier does not refuse the request's landing for them. Landing a part while a named case is unmet rests on the owner's [`OQ-SP1`](./tillr-item-split.md#OQ-SP1), quoted in `D-GR32`; applying it here is the designer's reading. **Rejected:** holding every adapter until the face aggregates; one change holding the flag and its callers; ordering the face's per-check answers in Python; an aggregate form that takes classifications; a second `aggregate` face. | 2026-11-21 | [The face aggregates a run in its own landing, before the legacy aggregates call it](#the-face-aggregates-a-run-in-its-own-landing-before-the-legacy-aggregates-call-it) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
 | `D-GR34` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The request's landing (slice 1e) was to pass every existing test unedited. One existing test cannot: `tests/fast-tree-in-done.test.py` copies only `tools/fork-check.py` and `tools/gate/tree-check.py` into its tree and writes its own `tillr-gate` first on PATH, which asserts that it was called as `checks --fast-tree`, so the moved fast tree adapter's `classify` call gets exit 1 and no output, the adapter answers exit 4, and the test's expected exit 1 fails (a build worker's reproduction, 2026-11-21). The rule is split: a test's assertions are edited by no slice; its fixture setup may be edited in two ways only. The fixture copies any file a moved adapter newly reads, and a program a test writes to stand in for `tillr-gate` hands `classify` to the next `tillr-gate` on PATH, unchanged, and never classifies by itself. The Python sites may share one file under `tools/gate` that makes the call and compares nothing. **Rejected:** holding the fast tree adapter back; a stand-in that prints a classification; an option or environment variable naming the classifier; an adapter that falls back to its own pairing; rewriting the fixture with no stand-in. | 2026-11-21 | [A stand-in for the installed program is fixture setup, and it answers classify](#a-stand-in-for-the-installed-program-is-fixture-setup-and-it-answers-classify) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
+| `D-GR35` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request of 2026-11-21 reports the proof worktree's registration left locked with reason `initializing` and no directory, 20 failed heavy runs on `missing but locked`, and a trunk that could not be proved until the operator ran `git worktree unlock` and `git worktree prune`; it asks that the heavy runner recover by itself and that the change say what interrupted the add. Recovery: when the registration of the runner's own proof path is locked, the runner, under the registry lock it already holds, unlocks that path, reports one loop-log line with the path, the lock's reason and the `locked` file's time, and continues with its existing remove and add; a test covers the directory missing and the directory present. The cause: not established. `gateRestart` defers the exec while `heavyProofActive` is set, since `edaa4fdf4b`, so the tree does not show an in-place restart crossing the add, and the incident's logs were not available to the design seat; the building commit states the cause as unconfirmed and does not name the restart. Cancellation ending Git with SIGKILL is recorded as a hypothesis only. **Rejected:** `git worktree prune` in the runner, because it acts on other worktrees' registrations; `git worktree add --force --force`, because it overrides a lock without recording it; naming the restart as the cause from the request's words alone, because the code at that build contradicts it. | 2026-11-21 | [The proof worktree's registration is left locked](#the-proof-worktrees-registration-is-left-locked) | — (not built) |
 | `D-GR12` | A question about a moving upstream is a drift probe that files an item and never moves or holds the green pointer. **Rejected:** keeping it as a check on a commit. Made visible where it happens. | 2026-11-15 | [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) | — (`series` and `patch-branch-inv2` are `TIER_LANDING` in `tools/fork-check.py`; no probe exists) |
 | OQ-GR1 | The default of a per-repository setting, `red_cap`: landing stops at 20 landings or 60 minutes past the last green commit; a repository may set a different bound, and zero means no cap. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "a mechanism whose cost rises with trunk activity is pointed the wrong way" and the owner's 2026-11-15 ruling that the landing strategy is configurable per repository and red is brief. The owner may overturn it. **Rejected:** no cap, which lets the fixer's range and the deploy lag grow without limit. **Ruled out by the owner on 2026-11-18** ([OQ-GP7](tillr-graph-is-the-path.md#OQ-GP7)): under a red check, work lands only if it does not touch what that check reads, and there is no landing cap. The cap is still live in the tree (20 landings; its time bound was turned off on 2026-11-17, `d53580bfd`) until the graph design's waiting rule is built. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/redcap/cap.go`, `drain/red_cap.go`) |
 | OQ-GR2 | The default of a per-repository setting, `lane_base`: a new lane starts from the last green commit; a repository may choose the trunk tip. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are that a worker does not pay for a failure it did not cause, and the same cost-direction rule. The owner may overturn it. **Rejected:** always cutting from the tip. **Overturned by the owner on 2026-11-17** (`1fa2c069c`): work is always built against the latest trunk, never a past commit; a lane cut from the green pointer was handed a tree older than its own item's definition and produced false conflicts. This repository set `tip`; the code's default when the key is absent is still `green`. **Replaced by the owner's ruling of 2026-11-21** (`D-GR24`): new work starts from the last proved trunk commit again, and this repository sets `green`. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/drain/lane_base.go`; the repository setting follows `D-GR24`) |
