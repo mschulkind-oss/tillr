@@ -906,13 +906,14 @@ protocol and an aggregate call names its order. The site chooses the name, which
 for that site; it compares no exit code and no result word.
 
 **The protocols.** The four sources of the classifier section are the general protocols and
-keep the rows of its table. Three sites have their own:
+keep the rows of its table. Four sites have their own:
 
 | Protocol | Sites | The site hands over | Rule, in order |
 | :--- | :--- | :--- | :--- |
-| the check's own command | G1 | The exit code, the wait error, the silent-sample count | The first four rows of the classifier section's table |
+| the check's own command | G1, G5 | The exit code, the wait error, the silent-sample count | The first four rows of the classifier section's table |
 | a judging program | G5, G11, L1, P1, P2, D1, D8, D12, D17, D21 | The program's exit code | The next five rows |
 | a word or status; a cached record | The relay, cached and settle sites | The word, or the record | The remaining rows |
+| a budget note | G12 | The check's `result` word | `over-budget` is `unknown`, `over-budget`; every other word uses the word-or-status rows |
 | a Go build of one module | P6 | The `go` command's exit code for the module | Exit 0 is `pass`. Every other exit is `fail` |
 | a document render | P5 | The renderer's exit code; whether a report was read; whether it holds a finding | Exit 0 with a report is `pass`. Exit 1 with at least one finding is `fail`. Anything else is `unknown`, `error` |
 | a legacy check | F1, F3, F4 | The exit code and the facts listed below | The eight steps below |

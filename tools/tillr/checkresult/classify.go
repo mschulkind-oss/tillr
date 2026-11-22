@@ -11,6 +11,7 @@ const (
 	JudgingProgram Source = "judging-program"
 	ResultWord     Source = "result-word"
 	CachedRecord   Source = "cached-record"
+	BudgetNote     Source = "budget-note"
 	GoModuleBuild  Source = "go-module-build"
 	DocumentRender Source = "document-render"
 	LegacyCheck    Source = "legacy-check"
@@ -79,6 +80,22 @@ const (
 	Disabled    Outcome = "disabled"
 )
 
+const (
+	DetailPassed      = "passed"
+	DetailCached      = "cached"
+	DetailRemembered  = "remembered"
+	DetailFailed      = "failed"
+	DetailError       = "error"
+	DetailStalled     = "stalled"
+	DetailUnavailable = "unavailable"
+	DetailSkipped     = "skipped"
+	DetailDropped     = "dropped"
+	DetailAbsent      = "absent"
+	DetailQuarantined = "quarantined"
+	DetailDisabled    = "disabled"
+	DetailOverBudget  = "over-budget"
+)
+
 type Result struct {
 	Outcome   Outcome `json:"outcome"`
 	Detail    string  `json:"detail"`
@@ -128,6 +145,11 @@ func classifyRaw(o Observation) (Outcome, string) {
 			return Fail, "failed"
 		}
 	case ResultWord:
+		return classifyWord(o.Word)
+	case BudgetNote:
+		if o.Word == DetailOverBudget {
+			return Unknown, DetailOverBudget
+		}
 		return classifyWord(o.Word)
 	case GoModuleBuild:
 		if o.ExitCode != nil {

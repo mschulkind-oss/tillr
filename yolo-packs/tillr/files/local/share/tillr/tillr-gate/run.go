@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
 )
@@ -38,6 +39,7 @@ func init() {
 // `error` means the judge itself could not run, so the candidate was not judged.
 const (
 	ResultUnavailable   = "unavailable"
+	ResultDisabled      = "disabled"
 	ResultPass          = "pass"
 	ResultPassInherited = "pass-inherited"
 	ResultInherited     = "inherited"
@@ -157,7 +159,15 @@ type VerdictPayload struct {
 // failing check in the verdict is accounted for by inherited, marking each matching check
 // as ResultInherited and recording the inherited failures with their outputs.
 func ApplyInheritedFailures(verdict VerdictPayload, inherited []InheritedFailure) (VerdictPayload, bool) {
-	if verdict.Result != ResultFail || len(inherited) == 0 {
+	if verdict.Result == ResultPassInherited || len(inherited) == 0 {
+		return verdict, false
+	}
+	runClass := classifyCheck(checkresult.Observation{
+		Commit: verdict.TreeSHA,
+		Source: checkresult.ResultWord,
+		Word:   verdict.Result,
+	})
+	if runClass.Outcome != checkresult.Fail {
 		return verdict, false
 	}
 	byID := make(map[string]InheritedFailure, len(inherited))
@@ -175,7 +185,16 @@ func ApplyInheritedFailures(verdict VerdictPayload, inherited []InheritedFailure
 	var recorded []InheritedFailure
 	seen := make(map[string]bool, len(byID))
 	for i, c := range checks {
-		if c.Result != ResultFail {
+		if c.Result == ResultInherited {
+			continue
+		}
+		checkClass := classifyCheck(checkresult.Observation{
+			Check:  c.CheckID,
+			Commit: verdict.TreeSHA,
+			Source: checkresult.ResultWord,
+			Word:   c.Result,
+		})
+		if checkClass.Outcome != checkresult.Fail {
 			continue
 		}
 		failedCount++
@@ -261,40 +280,66 @@ func RunWith(planRecord record.Envelope, worktree, logDir string, options RunOpt
 		return record.Envelope{}, externalf("preparing tree result memory: %v", err)
 	}
 	outcomes, memoryErrs := runPlanChecks(plan.Checks, memory, root, logs, options)
-	var failure error
+	classified := make([]checkresult.Result, 0, len(plan.Checks))
+	var errorDetail, failDetail error
+	var stallDetail string
 	for index, check := range plan.Checks {
 		outcome := outcomes[index]
 		memoryErr := memoryErrs[index]
 		if memoryErr != nil {
-			outcome.Result = ResultError
-			if failure == nil {
-				failure = externalf("tree check %q result memory: %v", check.CheckID, memoryErr)
+			unreadable := classifyCheck(checkresult.Observation{
+				Check:  check.CheckID,
+				Commit: plan.TreeSHA,
+				Source: checkresult.CachedRecord,
+			})
+			outcome.Result = verdictWord(unreadable)
+			if errorDetail == nil {
+				errorDetail = fmt.Errorf("tree check %q result memory: %v", check.CheckID, memoryErr)
 			}
 		}
 		outcome.BudgetMS = checkTargetMS(check)
 		verdict.Checks = append(verdict.Checks, outcome)
-		switch outcome.Result {
-		case ResultStalled:
-			if verdict.Result != ResultError {
-				verdict.Result = ResultStalled
+		res := classifyCheck(checkresult.Observation{
+			Check:  check.CheckID,
+			Commit: plan.TreeSHA,
+			Source: checkresult.ResultWord,
+			Word:   outcome.Result,
+		})
+		classified = append(classified, res)
+		switch {
+		case res.Outcome == checkresult.Unknown && res.Detail == checkresult.DetailStalled:
+			stallDetail = stallNote(outcome)
+		case res.Outcome == checkresult.Unknown && res.Detail == checkresult.DetailError:
+			if errorDetail == nil {
+				errorDetail = fmt.Errorf("the check %q could not be run; its log is %s", check.CheckID, outcome.LogRef)
 			}
-			if failure == nil || exitCode(failure) != record.ExitExternal {
-				failure = &exitError{code: ExitStalled, err: fmt.Errorf("%s", stallNote(outcome))}
-			}
-		case ResultError:
-			verdict.Result = ResultError
-			if failure == nil || exitCode(failure) != record.ExitExternal {
-				failure = externalf("the check %q could not be run; its log is %s", check.CheckID, outcome.LogRef)
-			}
-		case ResultFail:
-			if verdict.Result == ResultPass {
-				verdict.Result = ResultFail
-			}
-			if failure == nil {
-				failure = &exitError{code: record.ExitNegative,
-					err: fmt.Errorf("the check %q failed; its log is %s", check.CheckID, outcome.LogRef)}
+		case res.Outcome == checkresult.Fail:
+			if failDetail == nil {
+				failDetail = fmt.Errorf("the check %q failed; its log is %s", check.CheckID, outcome.LogRef)
 			}
 		}
+	}
+	runSummary := aggregateChecks(checkresult.RunnerOrder, classified)
+	verdict.Result = runSummary.Detail
+	var failure error
+	switch {
+	case runSummary.Outcome == checkresult.Pass:
+		failure = nil
+	case runSummary.Outcome == checkresult.Fail:
+		if failDetail == nil {
+			failDetail = fmt.Errorf("plan %s failed; logs in %s", plan.PlanID, logs)
+		}
+		failure = &exitError{code: runSummary.ExitCode, err: failDetail}
+	case runSummary.Outcome == checkresult.Unknown && runSummary.Detail == checkresult.DetailStalled:
+		if stallDetail == "" {
+			stallDetail = fmt.Sprintf("plan %s stalled; logs in %s", plan.PlanID, logs)
+		}
+		failure = &exitError{code: runSummary.ExitCode, err: fmt.Errorf("%s", stallDetail)}
+	default:
+		if errorDetail == nil {
+			errorDetail = fmt.Errorf("plan %s could not judge; logs in %s", plan.PlanID, logs)
+		}
+		failure = &exitError{code: runSummary.ExitCode, err: errorDetail}
 	}
 	if options.measureLanding {
 		verdict.WallMS = wallMS(started)
@@ -395,7 +440,17 @@ func runPlanChecks(checks []PlanCheck, memory *treeMemory, root, logs string, op
 				var memoryErr error
 				started := time.Now()
 				if options.Context != nil && options.Context.Err() != nil {
-					outcome = VerdictCheck{CheckID: check.CheckID, Result: ResultError}
+					var treeSHA string
+					if memory != nil {
+						treeSHA = memory.tree
+					}
+					cancelled := classifyCheck(checkresult.Observation{
+						Check:        check.CheckID,
+						Commit:       treeSHA,
+						Source:       checkresult.CheckCommand,
+						ProcessError: true,
+					})
+					outcome = VerdictCheck{CheckID: check.CheckID, Result: verdictWord(cancelled)}
 					memoryErr = options.Context.Err()
 				} else {
 					outcome, memoryErr = memory.run(check, root, logs, index)
@@ -491,7 +546,12 @@ func newVerdict(plan PlanPayload) VerdictPayload {
 // binary that is not on the path -- is `error`, never `fail`: the candidate was not
 // judged, and reading that as a red would isolate a candidate for a missing tool.
 func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
-	outcome := notRunCheck(check.CheckID, ResultError, check.measureLanding)
+	notStarted := classifyCheck(checkresult.Observation{
+		Check:        check.CheckID,
+		Source:       checkresult.CheckCommand,
+		ProcessError: true,
+	})
+	outcome := notRunCheck(check.CheckID, verdictWord(notStarted), check.measureLanding)
 	if len(check.Command) == 0 {
 		return outcome
 	}
@@ -571,22 +631,32 @@ func runCheck(check PlanCheck, root, logDir string, index int) VerdictCheck {
 	if evidencePath != "" {
 		outcome.GoBuild = readGoBuildEvidence(evidencePath)
 	}
-	switch {
-	case state.SilentSamples >= WatchdogSilentSamples:
-		outcome.Result = ResultStalled
-		fmt.Fprintln(logFile, stallNote(outcome))
-	case waitErr != nil:
+	var exitCodePtr *int
+	processErr := false
+	if waitErr == nil {
+		zero := 0
+		exitCodePtr = &zero
+	} else {
 		var exitErr *exec.ExitError
-		if !errors.As(waitErr, &exitErr) {
-			return outcome
-		}
-		if exitErr.ExitCode() < 0 || exitErr.ExitCode() == record.ExitExternal {
-			outcome.Result = ResultError
+		if errors.As(waitErr, &exitErr) {
+			exitVal := exitErr.ExitCode()
+			exitCodePtr = &exitVal
 		} else {
-			outcome.Result = ResultFail
+			processErr = true
 		}
-	default:
-		outcome.Result = ResultPass
+	}
+	classified := classifyCheck(checkresult.Observation{
+		Check:         check.CheckID,
+		Source:        checkresult.CheckCommand,
+		ExitCode:      exitCodePtr,
+		ProcessError:  processErr,
+		SilentSamples: state.SilentSamples,
+	})
+	outcome.Result = verdictWord(classified)
+	if classified.Outcome == checkresult.Unknown && classified.Detail == checkresult.DetailStalled {
+		fmt.Fprintln(logFile, stallNote(outcome))
+	} else if processErr {
+		return outcome
 	}
 	outcome.BudgetMS = checkTargetMS(check)
 	if outcome.BudgetMS > 0 && outcome.DurationMS > int64(outcome.BudgetMS) {
@@ -620,10 +690,23 @@ func budgetNotes(verdict VerdictPayload) []string {
 		if check.WatchdogUnavailable != "" {
 			notes = append(notes, check.CheckID+": "+check.WatchdogUnavailable)
 		}
+		if check.Result == ResultInherited {
+			if check.OverBudgetMS > 0 {
+				notes = append(notes, fmt.Sprintf("%s: ran %d ms, %d ms over its budget_ms; its verdict (%s) stands",
+					check.CheckID, check.DurationMS, check.OverBudgetMS, check.Result))
+			}
+			continue
+		}
+		res := classifyCheck(checkresult.Observation{
+			Check:  check.CheckID,
+			Commit: verdict.TreeSHA,
+			Source: checkresult.BudgetNote,
+			Word:   check.Result,
+		})
 		switch {
-		case check.Result == ResultStalled:
+		case res.Outcome == checkresult.Unknown && res.Detail == checkresult.DetailStalled:
 			notes = append(notes, stallNote(check))
-		case check.Result == ResultOverBudget:
+		case res.Outcome == checkresult.Unknown && res.Detail == checkresult.DetailOverBudget:
 			notes = append(notes, fmt.Sprintf("%s: over-budget after %d ms; stopped, judgment deferred to the heavy tier",
 				check.CheckID, check.DurationMS))
 		case check.OverBudgetMS > 0:

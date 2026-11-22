@@ -14,11 +14,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/record"
 )
 
@@ -348,45 +350,7 @@ func runFace(args []string) int {
 	if envelope.Kind != "" {
 		var verdict VerdictPayload
 		if err := json.Unmarshal(envelope.Payload, &verdict); err == nil {
-			passed, remembered, unavailable, inherited, skipped, failed := 0, 0, 0, 0, 0, 0
-			for _, check := range verdict.Checks {
-				switch {
-				case check.Result == ResultUnavailable:
-					unavailable++
-					for _, need := range check.MissingNeeds {
-						fmt.Fprintf(os.Stderr, "%s: unavailable; needs %s; provide with: %s\n", check.CheckID, need.Need, need.Command)
-					}
-				case check.Result == ResultPass && check.Memory == "remembered":
-					remembered++
-				case check.Result == ResultPass:
-					passed++
-				case check.Result == ResultInherited:
-					inherited++
-				case check.Result == ResultSkipped:
-					skipped++
-				default:
-					failed++
-				}
-				switch check.Memory {
-				case "remembered":
-					fmt.Fprintf(os.Stderr, "%s: remembered pass at %s\n", check.CheckID, check.PassTime)
-				case "flaky":
-					fmt.Fprintf(os.Stderr, "%s: flaky; pass at %s, fail at %s\n", check.CheckID, check.PassTime, check.FailTime)
-				case "not remembered":
-					fmt.Fprintf(os.Stderr, "%s: not remembered; %s differs from judged tree\n", check.CheckID, check.UnboundPath)
-				}
-			}
-			for _, note := range budgetNotes(verdict) {
-				fmt.Fprintln(os.Stderr, note)
-			}
-			summary := fmt.Sprintf("checks: %d passed, %d remembered, %d unavailable", passed, remembered, unavailable)
-			if inherited > 0 {
-				summary += fmt.Sprintf(", %d inherited", inherited)
-			}
-			if skipped > 0 {
-				summary += fmt.Sprintf(", %d skipped", skipped)
-			}
-			fmt.Fprintf(os.Stderr, "%s, %d failed\n", summary, failed)
+			writeRunSummary(os.Stderr, verdict)
 		}
 	}
 	if runErr != nil && envelope.Kind == "" {
@@ -413,6 +377,65 @@ func runFace(args []string) int {
 		return exitCode(runErr)
 	}
 	return record.ExitOK
+}
+
+func writeRunSummary(w io.Writer, verdict VerdictPayload) {
+	passed, remembered, unavailable, inherited, skipped, failed := 0, 0, 0, 0, 0, 0
+	for _, check := range verdict.Checks {
+		var mem checkresult.Result
+		if check.Memory != "" {
+			mem = classifyCheck(checkresult.Observation{
+				Check:  check.CheckID,
+				Commit: verdict.TreeSHA,
+				Source: checkresult.ResultWord,
+				Word:   check.Memory,
+			})
+		}
+		if check.Result == ResultInherited {
+			inherited++
+		} else {
+			res := classifyCheck(checkresult.Observation{
+				Check:  check.CheckID,
+				Commit: verdict.TreeSHA,
+				Source: checkresult.ResultWord,
+				Word:   check.Result,
+			})
+			switch {
+			case res.Outcome == checkresult.Unavailable && res.Detail == checkresult.DetailUnavailable:
+				unavailable++
+				for _, need := range check.MissingNeeds {
+					fmt.Fprintf(w, "%s: unavailable; needs %s; provide with: %s\n", check.CheckID, need.Need, need.Command)
+				}
+			case res.Outcome == checkresult.Pass && mem.Outcome == checkresult.Pass && mem.Detail == checkresult.DetailRemembered:
+				remembered++
+			case res.Outcome == checkresult.Pass:
+				passed++
+			case res.Outcome == checkresult.Unavailable && res.Detail == checkresult.DetailSkipped:
+				skipped++
+			default:
+				failed++
+			}
+		}
+		switch {
+		case mem.Outcome == checkresult.Pass && mem.Detail == checkresult.DetailRemembered:
+			fmt.Fprintf(w, "%s: remembered pass at %s\n", check.CheckID, check.PassTime)
+		case check.Memory == "flaky":
+			fmt.Fprintf(w, "%s: flaky; pass at %s, fail at %s\n", check.CheckID, check.PassTime, check.FailTime)
+		case check.Memory == "not remembered":
+			fmt.Fprintf(w, "%s: not remembered; %s differs from judged tree\n", check.CheckID, check.UnboundPath)
+		}
+	}
+	for _, note := range budgetNotes(verdict) {
+		fmt.Fprintln(w, note)
+	}
+	summary := fmt.Sprintf("checks: %d passed, %d remembered, %d unavailable", passed, remembered, unavailable)
+	if inherited > 0 {
+		summary += fmt.Sprintf(", %d inherited", inherited)
+	}
+	if skipped > 0 {
+		summary += fmt.Sprintf(", %d skipped", skipped)
+	}
+	fmt.Fprintf(w, "%s, %d failed\n", summary, failed)
 }
 
 // planFace is `tillr-gate plan`: a change and a registry in, a plan record out.

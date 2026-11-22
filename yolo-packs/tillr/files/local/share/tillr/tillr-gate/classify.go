@@ -11,6 +11,11 @@ import (
 	"github.com/mschulkind-oss/tillr/record"
 )
 
+var (
+	classifyCheck   = checkresult.Classify
+	aggregateChecks = checkresult.Aggregate
+)
+
 type classifyRunOutput struct {
 	Outcome  checkresult.Outcome `json:"outcome"`
 	Detail   string              `json:"detail"`
@@ -28,6 +33,31 @@ func parseAggregateOrder(raw string) (checkresult.AggregateOrder, bool) {
 		return checkresult.AggregateOrder(raw), true
 	default:
 		return "", false
+	}
+}
+
+// verdictWord maps a classified check outcome back to the runner's verdict vocabulary.
+func verdictWord(res checkresult.Result) string {
+	switch res.Outcome {
+	case checkresult.Pass:
+		return ResultPass
+	case checkresult.Fail:
+		return ResultFail
+	case checkresult.Unavailable:
+		if res.Detail == checkresult.DetailSkipped {
+			return ResultSkipped
+		}
+		return ResultUnavailable
+	case checkresult.Disabled:
+		return ResultDisabled
+	default:
+		if res.Detail == checkresult.DetailStalled {
+			return ResultStalled
+		}
+		if res.Detail == checkresult.DetailOverBudget {
+			return ResultOverBudget
+		}
+		return ResultError
 	}
 }
 
@@ -80,11 +110,11 @@ func classifyFace(args []string) int {
 			fmt.Fprintf(os.Stderr, "tillr-gate classify: null observation at index %d\n", i)
 			return record.ExitUsage
 		}
-		answers[i] = checkresult.Classify(*observation)
+		answers[i] = classifyCheck(*observation)
 	}
 	var output any = answers
 	if aggregateSet {
-		runResult := checkresult.Aggregate(order, answers)
+		runResult := aggregateChecks(order, answers)
 		output = classifyAggregateOutput{
 			Checks: answers,
 			Run: classifyRunOutput{
