@@ -50,7 +50,7 @@ designer's ([`D-GR39`](#decision-ledger), amended by [`D-GR40`](#decision-ledger
 [Section 6.12](#612-a-change-to-a-tillr-go-module-runs-its-affected-test-packages-before-it-lands)):
 `go-affected` landed in `a558c6130b` (`127e1185dd`, `d1b1c5f89d`), while [`D-GR44`](#decision-ledger)'s
 per-test `reads` narrowing and [`D-GR43`](#decision-ledger)'s remaining slices in
-[Section 11](#run-affected-go-tests-without-holding-sibling-landings) remain to build.
+[Section 11](#run-affected-go-tests-without-holding-sibling-landings) remain to build. On 2026-11-22 an operator request after a `tools/tillr-gate/cpu_linux.go` watchdog fix was judged stalled by the still-broken installed `tillr-gate` added [Section 6.13](#613-how-a-change-to-the-gates-own-binary-is-judged-and-how-a-fault-in-the-installed-binary-is-recovered) and [`D-GR45`](#decision-ledger), a proposal for the owner on which build of `tillr-gate` judges a change to the binary's own source and how an installed-gate fault that blocks its own fix is recovered without an operator.
 
 > **In short.** The gate is slow and brittle for one reason: it decides what to run from a commit
 > it remembers, on a machine that may not be the one that remembered it. Give every run its base
@@ -75,9 +75,15 @@ and its clock cadence are replaced.
 [Section 3](#3-what-exists-today-measured) and
 [Section 4](#4-where-the-gate-remembers-and-what-a-cold-machine-sees).
 
-**Needs your ruling:** None. The two implementer's decisions of 2026-11-16 that were open,
-[`D-GR13`](#decision-ledger) and [`D-GR14`](#decision-ledger), were ruled on by the owner on
-2026-11-17 as [`D-GR15`](#decision-ledger)
+**Needs your ruling:** [`D-GR45`](#decision-ledger)
+([Section 6.13](#613-how-a-change-to-the-gates-own-binary-is-judged-and-how-a-fault-in-the-installed-binary-is-recovered):
+when a change touches `tillr-gate`'s own source, which build judges it, and how a fault in the
+installed gate that blocks its own fix is recovered without an operator) and
+[`D-GR25`](#decision-ledger)
+([Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer): the five cases
+where built `green` lane staging differs from `D-GR24`'s words). The two implementer's decisions
+of 2026-11-16 that were open, [`D-GR13`](#decision-ledger) and [`D-GR14`](#decision-ledger), were
+ruled on by the owner on 2026-11-17 as [`D-GR15`](#decision-ledger)
 ([Section 6.5](#65-ten-seconds-is-a-failing-test)).
 
 **Reads with:** [`landing-principles.md`](landing-principles.md) (the rulings this is checked
@@ -2160,7 +2166,12 @@ survives — lands only after the runner's suite passes, before the merge, under
 is outside the ten-second budget. A wrong judge is the one red a revert does not repair: every
 landing it judged stays judged. This is the fence of
 [escalation ladder Section 5.2](escalation-ladder.md#52-the-fence-what-a-lane-may-not-edit), where
-gate definitions change only as their own item. ([OQ-GR3](#decision-ledger).)
+gate definitions change only as their own item. ([OQ-GR3](#decision-ledger).) This paragraph
+settles *which suite* runs before the merge, not *which build* of `tillr-gate` executes that
+landing gate or how an installed-gate fault is recovered when it blocks its own fix; that
+question, its options and the designer's proposal for the owner are in
+[Section 6.13](#613-how-a-change-to-the-gates-own-binary-is-judged-and-how-a-fault-in-the-installed-binary-is-recovered)
+([`D-GR45`](#decision-ledger)).
 
 **The green pointer** *(coined here)* is the Git ref `refs/tillr/green`: the newest trunk commit
 on which every available heavy check passed. It is not a branch and nothing is committed on it.
@@ -3449,6 +3460,267 @@ near five minutes. What was false in the selection was not the package list, but
 | Add a wall-clock timeout, budget cap, or `-count=1` on narrowed `reads` runs | Rejected. Violates the request's *"Do not add a time limit"*, `D-GR15`, and `D-GR40`. |
 | Replace `"reads": list[str]` in `tools/gate/go-test-edges.json` with a list of rule objects | Rejected. `tools/fork-check.py` consumes `"reads"` directly as path strings for `go-affected` watches; keeping `"reads"` as `list[str]` and adding optional `"read_tests"` preserves compatibility with `tools/fork-check.py` and package-wide `reads` entries. |
 
+### 6.13 How a change to the gate's own binary is judged, and how a fault in the installed binary is recovered
+
+What follows is the designer's proposal of 2026-11-22 ([`D-GR45`](#decision-ledger)), written
+from an operator request of that morning, for the owner to rule on. Changing which build of
+`tillr-gate` may certify a landing changes the judge's trust boundary, which only the owner can
+decide. Nothing here is the owner's ruling, nothing is settled by this commit, and nothing is
+built until the owner rules.
+
+#### Where parts of the answer already live, and what none of them settles
+
+Neither half of the request — when a change touches `tillr-gate`'s own source, which build judges
+it, and how a fault in the installed binary that blocks its own fix is recovered without an
+operator — is designed end-to-end anywhere in the tree yet. Read at `f1f14b955e` on 2026-11-22,
+four partial rules exist across this document, the drain and two sibling designs:
+
+1. **Which suite runs, not which binary runs it ([Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer), [`OQ-GR3`](#decision-ledger)).**
+   A candidate touching `tools/tillr-gate/`, `tools/gate/` or `tools/fork-check.py` (or the
+   `tillr-gate` pack mirror) runs `gate-runner` and `self-suite` before the merge under either
+   landing strategy, pinned by [`tools/gate/runner-first.test.py`](../../tools/gate/runner-first.test.py).
+   [`OQ-GR3`](#decision-ledger) says nothing about which compiled `tillr-gate` binary executes
+   that landing gate or how a fault in the installed binary is recovered.
+2. **The installed-judge rule outside this document ([the drain README](../../tools/tillr-drain/README.md#faults-that-hold-one-item) and `gateBinaryDisagreement` in [`tools/tillr-drain/drain/gate_usage_error.go`](../../tools/tillr-drain/drain/gate_usage_error.go)).**
+   Both state that every candidate is judged by the **installed** `tillr-gate` built from the
+   trunk, never by the candidate's own build, *"because a candidate that built its own judge
+   would certify itself"*. When a candidate edits both `tools/gate/` and `tools/tillr-gate/` and
+   fails on a CLI flag mismatch, `gateErrorDetail` holds the item as `gate-harness-error`
+   (`mover = operator`) and tells the author to land the binary change first. In this document,
+   [`D-GR23`](#decision-ledger) and [`D-GR32`](#decision-ledger) apply the same rule to
+   `tillr-gate classify` so historical replays never classify check results with a replayed
+   commit's older code.
+3. **The live Python/Go split in a lane's gate (`ProcessSteps.Gate` in [`tools/tillr-drain/drain/steps.go`](../../tools/tillr-drain/drain/steps.go) -> `compose_gate` in [`tools/tillr-loop/tillr-loop`](../../tools/tillr-loop/tillr-loop) -> [`tools/gate/change-gate.py`](../../tools/gate/change-gate.py)).**
+   The Python half of the landing gate already runs from the candidate's worktree; the Go half
+   does not:
+   - **Outer envelope:** `tillr-loop gate` resolves `tillr-gate` on `PATH` (`require_binary`, the
+     installed binary) and runs installed `tillr-gate change`, `python3 tools/fork-check.py --registry-json`
+     (in `ctx.root`), installed `tillr-gate plan`, and installed `tillr-gate run --worktree <lane-worktree> --gate python3 --gate-arg tools/gate/change-gate.py ... --gate-arg --runner --gate-arg tillr-gate`,
+     supervised by the installed binary's `watchCommand` ([`watchdog.go`](../../tools/tillr-gate/watchdog.go)
+     and [`cpu_linux.go`](../../tools/tillr-gate/cpu_linux.go)).
+   - **Inner execution (`cwd = <lane-worktree>`):** `tools/gate/change-gate.py`,
+     `tools/gate/checks/*`, and `tools/fork-check.py --since <base> --tier landing` execute
+     directly from the lane's worktree, while `change-gate.py` calls `--runner tillr-gate` (again
+     the installed Go binary on `PATH`) for `tillr-gate checks --fast-tree`, under a second
+     `watchCommand` from the installed binary.
+   - **Why worktree Python does not let ordinary items self-certify:** path fences (`GateCodePaths`
+     in [`tools/tillr-drain/drain/trunk.go`](../../tools/tillr-drain/drain/trunk.go) and
+     [escalation ladder Section 5.2](escalation-ladder.md#52-the-fence-what-a-lane-may-not-edit))
+     forbid ordinary items and auto-filed trunk fixers from editing `tools/gate/`,
+     `tools/fork-check.py`, `tools/tillr-gate/`, `tools/tillr-loop/`, and their pack mirrors.
+4. **Deploy-from-green vs live post-landing roll ([Section 6.7](#67-deploys-read-the-green-pointer) [`D-GR5`](#decision-ledger) vs [`post_landing.go`](../../tools/tillr-drain/drain/post_landing.go) and [`tillr-roll.py`](../../tools/tillr-roll/tillr-roll.py)), plus disclosed judge overrides.**
+   `D-GR5` rules that tillr deploys only from `refs/tillr/green`. In live operation under
+   `after-merge`, however, `.tillr.toml`'s `[roll]` (`rollChanged` in `post_landing.go`, invoking
+   `just tillr-roll --no-request` with `TILLR_ROLL_VERIFICATION=after-merge` in
+   `tools/tillr-roll/tillr-roll.py`) builds and installs all nine binaries — `tillr-gate`
+   included — into the live binary directory from every unproved trunk `tip` touching
+   `tools/tillr*/` or `config/tillr/`, replacing the previously proved `tillr-gate` before the
+   heavy proof runs. Separately, [the self-hosted build design](tillr-selfhosted-build.md#decision-ledger)
+   (`D-SH2`) forbids linked worktrees from silently running ungated worktree binaries through
+   `PATH`, and [the self-modification design](self-modification.md#1-the-verdict) (`V3`, `V5`,
+   [Section 8](self-modification.md#8-the-dev-flag--what-it-changes-and-what-it-must-never-do))
+   rules that any bypass of the normal judge must be a named, disclosed record carrying the
+   judge's digest rather than an invisible self-certification.
+
+#### Why the 2026-11-22 8:47 AM Eastern `cpu_linux.go` fix deadlocked
+
+The operator request reports that at 8:47 AM Eastern on 2026-11-22 a fix to the gate watchdog in
+[`tools/tillr-gate/cpu_linux.go`](../../tools/tillr-gate/cpu_linux.go) could not land because the
+installed `tillr-gate` ran its landing gate, hit the very fault the candidate fixed, and judged
+the fix's own gate `stalled`; the operator had to file a second fix in another file to get around
+it. Read in the tree at `f1f14b955e`, five steps lock that failure shut:
+
+1. **The fix selects a long silent check under the broken installed watchdog.** Touching
+   `tools/tillr-gate/cpu_linux.go` matches `GATE_RUNNER_WATCHES` in `tools/fork-check.py`, so
+   [`OQ-GR3`](#decision-ledger) plans `gate-runner`
+   (`tools/go-test-shards.py tools/tillr-gate -k 6 --slot-class gate` plus `change-gate.test.py`
+   and `runner-first.test.py`). Inside the jail `perf_event_open` is denied, so `startWithTaskClock` in `cpu_linux.go` falls back to `readProcessGroupWithRead`,
+   which counts only `/proc/<pid>` entries whose process group ID equals `cmd.Process.Pid`
+   (`pg != group` is skipped). Because `tools/go-test-shards.py` starts each shard in its own
+   session (`start_new_session=True`, [`D-GR17`](#decision-ledger)) and `fork-check.py` captures
+   a check's output until it exits, active test shards burn CPU outside `group` while producing no
+   outer log bytes. Whenever `gate-runner` (or `go-affected`) runs 60 seconds without outer
+   output, the **installed** `tillr-gate run` counts 60 silent samples and kills its own fix's
+   gate with `SIGKILL` (`ExitStalled = 6`).
+2. **`stalled` (`exit 6`) and `error` (`exit 4`) never replay on `base_sha` to acquit a candidate.**
+   In `verify` (`tools/tillr-drain/drain/loop.go`), only `GateFailed` (`exit 1`) calls
+   `settleGateFailure` to check `base_sha`. `GateStalled` calls `holdGateStall`
+   ([`gate_stall.go`](../../tools/tillr-drain/drain/gate_stall.go)): the first stall holds the
+   item as `gate-stall-rerun`, and the second on the same `HeadTree` writes `gate-stalled`
+   (`drain.item-fault`, `mover = operator`), blaming the item for a fault in the installed binary
+   against [landing principle 1](landing-principles.md#1-a-refusal-must-be-a-verdict) and
+   [principle 13](landing-principles.md#13-a-held-state-names-a-mover-that-can-still-act).
+3. **No generated repair item can edit `tools/tillr-gate/`.** `TrunkFixerFence`
+   (`tools/tillr-drain/drain/trunk.go`) strips `GateCodePaths` (`tools/tillr-gate/` included) from
+   every auto-filed trunk fixer, and neither a stall nor a deterministic gate error files a
+   tooling-defect item (`fileDefectItem` in [`defect.go`](../../tools/tillr-drain/drain/defect.go))
+   fenced to `tools/tillr-gate/`.
+4. **No bootstrap path lets a proven `tillr-gate` fix bypass a broken installed `tillr-gate`.**
+   Even when an item is explicitly fenced to `tools/tillr-gate/`, `tillr-loop gate` still invokes
+   the broken installed `tillr-gate` on `PATH`, so `tillr drain clear-fault` only runs the same
+   broken binary again ([principle 11](landing-principles.md#11-a-failure-is-diagnosed-not-waited-out)).
+5. **Fault holds do not clear when `tillr-gate` is replaced.** Neither `gateStallHold` nor
+   `ItemFault` records the judging `tillr-gate` binary's digest, so items held on `gate-stalled`
+   or `gate-harness-error` remain stuck on `mover = operator` even after a working `tillr-gate`
+   lands and rolls.
+
+#### The four options and their costs
+
+`tillr-gate`'s Go build inputs (`tools/tillr-gate/go.mod`) are `tools/tillr-gate/**` and the
+packages of `tools/tillr/**` that `tools/tillr-gate` imports (`checkresult`, `record`, and their
+transitive packages in `tools/tillr`). The four options differ on whether a candidate touching
+those inputs can write its own authoritative `gate.verdict`, and how an installed-gate fault is
+recovered without an operator.
+
+| Option | Which build judges a `tillr-gate` change when installed `tillr-gate` is healthy | Can a buggy `tillr-gate` edit self-certify a passing verdict on a healthy trunk? | Recovers an installed-gate fault already in `refs/tillr/green` without an operator? | Per-gate & implementation cost |
+| :--- | :--- | :--- | :--- | :--- |
+| **A. Candidate build judges `tillr-gate` changes directly** (match Python `tools/gate/`) | `candidate-tillr-gate` compiled from `head` in run scratch runs `change`, `plan`, `run`, and `--runner` (`0s` on non-gate items) | **Yes** — a bug in `run.go`, `checks.go`, or `watchdog.go` inside a fenced `tillr-gate` item writes its own `VerdictPass` for `tillr-land` | **Yes** — the fix's own compiled binary runs its landing gate directly | `~1–3s` warm `go build` on `tillr-gate` items; small plumbing in `tillr-loop` + base-replay defect filing and digest fault release in `tillr-drain` |
+| **B. Dual-judge when healthy + Proven-Fault Bootstrap Override when installed `tillr-gate` blocks a `tillr-gate` fix** *(recommended)* | **Installed** `tillr-gate` (pinned to `refs/tillr/green` per `D-GR5`) binds `gate.verdict`, **and** `gate-runner` also runs `candidate-tillr-gate checks --fast-tree` so both must pass | **No** — installed `tillr-gate` owns `gate.verdict` whenever healthy; bootstrap runs only when installed `tillr-gate` faults **and** every check/suite passes directly outside `candidate-tillr-gate` | **Yes** — independent out-of-gate suite proof + `candidate-tillr-gate` gate + disclosed `drain.gate-bootstrap` audit event land the fix with zero operator steps | `~1–3s` warm build + `~2–5s` fast self-run on `tillr-gate` items (`0s` on others); `~15–25s` direct suite proof only during an actual installed-gate fault; moderate state-machine additions in `tillr-drain` |
+| **C. Installed `tillr-gate` always judges; recover only by rolling back to `tillr-gate.green` or a ring of prior builds** | Installed `tillr-gate` alone (never compiles or runs `candidate-tillr-gate` as a runner) | **No** | **No** — recovers unproved-`tip` regressions, **fails** whenever the latent fault is already in `refs/tillr/green` and retained builds (the 8:47 AM ET class) or on a cold machine | `0s` per gate; small change in `tillr-roll.py` and `tillr-drain`, at the cost of still needing an operator on latent `green` faults |
+| **D. Freeze Python `tools/gate/` to `refs/tillr/green` too, and maintain a second minimal bootstrap runner inside `tillr-drain`** | Installed `green` copies of both Go `tillr-gate` and Python `tools/gate/` + `tools/fork-check.py` | **No** | **Partly** — only for checks the duplicate runner in `tillr-drain` re-implements | Extends self-blocking deadlocks to Python gate fixes (`tools/gate/`, `tools/fork-check.py`) and maintains a second `gate.verdict` producer parallel to `tillr-gate` |
+
+- **Option A — Candidate build judges `tillr-gate` changes directly (match the Python gate).**
+  Ordinary items continue running the installed `tillr-gate`, and historical `classify` calls keep
+  using the installed binary (`D-GR23`). When a fenced candidate changes `tillr-gate`'s Go build
+  inputs, `tillr-loop gate` builds `candidate-tillr-gate` from `head` into run scratch
+  (`CGO_ENABLED=0 go build -trimpath`) and runs `change`, `plan`, `run`, and `change-gate.py --runner`
+  with it, paired with base-replay `defect-tillr-gate-*` filing and digest-keyed auto-clear of
+  `gate-stalled` and `gate-harness-error`. *Cost:* `~1–3` seconds on `tillr-gate` items, and it
+  removes `gateBinaryDisagreement` flag splits in one step. Its structural cost is why the drain
+  README rejected it: a candidate editing `tools/tillr-gate/` writes the `gate.verdict` that
+  `tillr-land` trusts, so an accidental `return 0` or dropped error in `run.go` or `checks.go`
+  certifies itself onto the trunk ([`OQ-GR3`](#decision-ledger): a wrong judge is not repaired by
+  revert).
+- **Option B — Dual-judge when healthy + Proven-Fault Bootstrap Override for self-fixes (Recommended).**
+  Specified in full below. Keep installed `tillr-gate` at `refs/tillr/green` (`D-GR5`); require
+  both installed `tillr-gate` and `candidate-tillr-gate` to pass on routine `tillr-gate` changes;
+  and permit `candidate-tillr-gate` to bind `gate.verdict` **only** on an item explicitly fenced
+  to `tools/tillr-gate/` after mechanical proof establishes all three conditions:
+  - installed `tillr-gate` stalled, errored, or disagreed with direct check execution;
+  - every fast check, `gate-runner`, `self-suite`, and `pack-sync` passed directly under
+    `tillr-drain` without `candidate-tillr-gate` wrapping them; and
+  - `candidate-tillr-gate` then passed the full gate and emitted a durable `drain.gate-bootstrap`
+    disclosure record.
+  Pair this with automatic `defect-tillr-gate-*` filing and digest-keyed fault clearing so victim
+  items and held repairs recover with no operator.
+- **Option C — Installed `tillr-gate` always judges; recover only by rolling back to prior builds.**
+  Stop rolling `tillr-gate` on unproved `tip` commits and retain a small ring of previous
+  `refs/tillr/green` `tillr-gate` binaries; when the active binary stalls or errors on `base_sha`,
+  fall back to the newest prior binary that passes. *Cost:* zero candidate-binary execution, **and
+  it does not solve the 8:47 AM ET incident class** whenever the bug (such as `pg != group`
+  ignoring `start_new_session=True` shards once any suite exceeds 60 silent seconds) was already
+  proved into `refs/tillr/green` earlier or the machine has only one build.
+- **Option D — Move Python `tools/gate/` onto `refs/tillr/green` too, plus a separate bootstrap judge in `tillr-drain`.**
+  Check out `tools/gate/` and `tools/fork-check.py` from `refs/tillr/green` during every lane gate
+  so Python matches Go, and write a minimal Go fallback inside `tillr-drain` that emits a
+  bootstrap `gate.verdict` when `tillr-gate` cannot run. *Cost:* turns today's single-commit
+  Python gate fixes into potential self-blocking deadlocks and duplicates `tillr-gate`'s
+  `gate.change` / `gate.plan` / `gate.verdict` contract inside `tillr-drain` (`compose_gate` in
+  `tools/tillr-loop/tillr-loop` exists specifically so `tillr-gate` is the sole writer of that
+  envelope).
+
+#### Recommended design (Option B, specified for the owner's ruling)
+
+Option B closes every step of the 8:47 AM Eastern deadlock without letting an unverified
+`tillr-gate` edit certify itself:
+
+1. **Install `tillr-gate` on `PATH` only from `refs/tillr/green` ([`D-GR5`](#decision-ledger)).**
+   During an `after-merge` post-landing roll (`TILLR_ROLL_VERIFICATION=after-merge` in
+   `tools/tillr-roll/tillr-roll.py`), leave the live `tillr-gate` binary untouched at the last
+   `refs/tillr/green` build (or install `tillr-gate` only when `afterGreen` advances
+   `refs/tillr/green`), while `tillr-drain` and `tillr-view` continue rolling as configured. An
+   unproved `tip` edit to `tools/tillr-gate/` can then never break the live gate binary before
+   `gate-runner` passes in the heavy proof.
+2. **Dual-judge when installed `tillr-gate` is healthy.**
+   - For any candidate that leaves `tillr-gate`'s Go inputs (`tools/tillr-gate/**` and imported
+     `tools/tillr/**` packages) untouched, **only** the installed `tillr-gate` runs (`0` seconds
+     added).
+   - For a candidate whose diff touches `tillr-gate`'s Go inputs, `gate-runner` compiles
+     `candidate-tillr-gate` into run scratch (`CGO_ENABLED=0 go build -trimpath`) and runs
+     `candidate-tillr-gate checks --fast-tree` against the candidate's change alongside the
+     `tools/tillr-gate` unit shards, while the **installed** `tillr-gate` remains the outer judge
+     that writes `gate.verdict`. Two-step CLI evolution (`D-GR32`: land a new `tillr-gate` face
+     or flag first, then callers once `refs/tillr/green` holds it) stays the rule for normal
+     feature work so historical replays (`D-GR23`) never depend on a candidate binary.
+3. **Proven-Fault Bootstrap Override when installed `tillr-gate` blocks a fenced `tillr-gate` repair.**
+   Bootstrap is eligible **only** when the candidate's item fence explicitly permits editing
+   `tools/tillr-gate/` (never on ordinary items or `fixer-main-*` trunk fixers) **and** the
+   installed `tillr-gate` gate did not pass (`stalled` exit 6, `error` exit 4 including
+   `gateBinaryDisagreement`, or `fail` exit 1 where the candidate's check commands themselves
+   pass). Before `candidate-tillr-gate` may write a landing verdict, `tillr-drain` requires all
+   three proofs in order:
+   - **Step 1 — Independent out-of-gate check and suite proof (no `tillr-gate` wrapper in the loop):**
+     `tillr-drain` directly executes, in the candidate's worktree and under `tillr-drain`'s own
+     descendant-aware process lifeline (not installed `tillr-gate` and not `candidate-tillr-gate`):
+     - `CGO_ENABLED=0 go build -trimpath` of `tools/tillr-gate` into run scratch;
+     - every fast check declaration's `command` in `tools/gate/checks/*.json` (passing `--base`
+       and `--head` to `change` checks); and
+     - `python3 tools/fork-check.py --since <base> --tier landing` (which runs `gate-runner`,
+       `self-suite`, `pack-sync`, and `go-affected` under `go-test-shards.py --slot-class gate`).
+     If **any** step exits non-zero or fails to finish, the candidate itself is broken: `tillr-drain`
+     refuses the bootstrap override and returns the failure to the worker. Conversely, when every
+     check and suite exits `0` directly while installed `tillr-gate` answered `stalled`, `error`,
+     or wrapper `fail` on the identical `(base_sha, head_sha)` tree, that discrepancy proves
+     mechanically that the fault lies in the installed `tillr-gate` binary — even when the bug is
+     duration- or load-sensitive (such as a >60-second `gate-runner` stall that might finish in
+     45 seconds on a quiet `base_sha` replay).
+   - **Step 2 — Candidate-binary full gate proof:**
+     `tillr-drain` invokes `tillr-loop gate` (`change`, `plan`, `run`, and
+     `change-gate.py --runner`) passing `--gate-bin <candidate-tillr-gate>`. The run must exit `0`
+     without stalling and produce a valid `gate.verdict` bound to `(base_sha, head_sha^{tree})`,
+     proving that the candidate's `tillr-gate` binary actually fixed the fault under real gate
+     execution.
+   - **Step 3 — Disclosed `drain.gate-bootstrap` audit record ([self-modification Section 8](self-modification.md#8-the-dev-flag--what-it-changes-and-what-it-must-never-do), `V3` and `V5`):**
+     Before calling `tillr-land`, `tillr-drain` appends a durable `drain.gate-bootstrap` event in
+     the same store transaction as the gate judgment, recording the item and run IDs, the
+     installed `tillr-gate` SHA-256 digest and its failure exit/observations, the exit summary of
+     Step 1's independent proof, and the `candidate-tillr-gate` SHA-256 digest. After the commit
+     lands, the heavy proof runs and advances `refs/tillr/green`, promoting the repaired
+     `tillr-gate` into the normal installed path.
+4. **Operator-free fault detection, repair filing, and hold release across all items.**
+   - **Diagnose installed-gate faults instead of stranding victim items:** When *any* item hits a
+     second `stalled` (`exit 6`, after `gate-stall-rerun` already ran under lower concurrency) or
+     a repeatable `error` (`exit 4`, instead of looping indefinitely in `gate-no-verdict` or
+     holding immediately on `gate-harness-error`), `tillr-drain` replays the stalled or errored
+     check on `base_sha` under installed `tillr-gate` (and, if `base_sha` passes only because its
+     diff is empty, runs the stalled check command directly without `tillr-gate` wrapping it).
+     When installed `tillr-gate` stalls or errors on `base_sha` — or stalls/errors while the check
+     command itself exits `0` directly — `tillr-drain` acquits the victim item
+     (`ReasonToolingDefect`, [principle 1](landing-principles.md#1-a-refusal-must-be-a-verdict),
+     [principle 8](landing-principles.md#8-a-gate-that-cannot-answer-must-say-which)) and files
+     (or attaches to) one deduplicated generated repair item `defect-tillr-gate-<check-or-face>`
+     (`fileDefectItem` in `tools/tillr-drain/drain/defect.go`) whose `allowed_paths` grant
+     `tools/tillr-gate/` and `yolo-packs/tillr/files/local/share/tillr/tillr-gate/` while keeping
+     `GateCodePaths` off ordinary `fixer-main-*` items ([principle 9](landing-principles.md#9-fix-the-machinery-never-hand-carry-the-work)).
+   - **Auto-clear binary-bound holds when `tillr-gate` advances:** Record `gate_binary_sha256` on
+     `gateStallHold` (`gate_stall.go`) and on `gate-stalled` / `gate-harness-error` `ItemFault`
+     records (`item_fault.go`). At pass start, whenever the installed `tillr-gate` SHA-256 digest
+     differs from the digest recorded on an active `gate-stalled` or `gate-harness-error` hold
+     (unless `gateBinaryDisagreement` still holds against the new binary's `--help`), `tillr-drain`
+     appends `drain.item-fault-cleared` naming the old and new digests and releases the item to
+     re-gate without `tillr drain clear-fault` ([principle 4](landing-principles.md#4-every-outcome-is-state-changing),
+     [principle 11](landing-principles.md#11-a-failure-is-diagnosed-not-waited-out),
+     [principle 13](landing-principles.md#13-a-held-state-names-a-mover-that-can-still-act)).
+
+**Question for the owner:** when a candidate changes `tillr-gate`'s own source, which build should
+judge it, and how should a fault in the installed `tillr-gate` that blocks its own fix be
+recovered without an operator?
+
+**Options.**
+
+1. **Option B (recommended): Dual-judge when healthy, plus Proven-Fault Bootstrap Override and auto-filed `defect-tillr-gate-*` repairs when installed `tillr-gate` faults.** Installed `tillr-gate` (installed only from `refs/tillr/green`) owns `gate.verdict` whenever healthy while `gate-runner` also exercises `candidate-tillr-gate`; a fenced `tools/tillr-gate/` repair overrides a broken installed `tillr-gate` only after every check and suite passes directly outside `candidate-tillr-gate` and `candidate-tillr-gate` passes the full gate with a `drain.gate-bootstrap` audit event; victim items acquit behind `defect-tillr-gate-*` and binary-bound holds auto-clear when `tillr-gate`'s digest advances.
+2. **Option A: Candidate-built `tillr-gate` always judges candidates touching `tillr-gate`'s Go inputs**, matching how Python `tools/gate/` already runs from the lane's worktree, paired with base-replay `defect-tillr-gate-*` filing and digest-keyed fault release. Simpler (`~1–3s` build, no bootstrap state machine), at the cost that a buggy `tools/tillr-gate/` edit can certify its own `gate.verdict`.
+3. **Option C: Installed `tillr-gate` always judges; recover only by rolling back to `tillr-gate.green` or a ring of prior builds**, with no candidate-binary override. Zero self-certification surface, at the cost that a latent bug already in `refs/tillr/green` and retained builds still requires an operator workaround.
+4. **Option D: Freeze Python `tools/gate/` to `refs/tillr/green` alongside Go `tillr-gate`, and add a separate minimal bootstrap runner inside `tillr-drain`.** Symmetric across languages, at the cost of extending self-blocking deadlocks to Python gate fixes and maintaining a second `gate.verdict` producer.
+
+The designer recommends **Option B**: it preserves the rule that no candidate certifies itself on
+a healthy trunk, eliminates unproved-`tip` poisoning of `tillr-gate` (`D-GR5`), and recovers even
+a latent `refs/tillr/green` watchdog or runner fault (`cpu_linux.go` at 8:47 AM Eastern) end to
+end without an operator, because independent direct execution of the checks and suites proves the
+candidate's code before `candidate-tillr-gate` is allowed to write the `gate.verdict` envelope.
+This is the designer's proposal from the 2026-11-22 operator request, and the choice among the
+four options is the owner's.
+
 ## 7. Checked against the landing principles
 
 | Principle | How this design meets it |
@@ -3579,7 +3851,11 @@ the operator request of 2026-11-22 about `a7b4e67009`'s 312-second gate (`296.4`
 genuinely contain `21` tests (of `2,041`) that read `tools/fork-check.py`, amends `D-GR39`,
 `D-GR40` and `D-GR43` to add optional per-rule `read_tests` narrowing and per-invocation
 `TILLR_GATE_EDGE_INPUTS` digests without dropping any reading package or adding a time limit, and
-is the owner's to overturn.
+is the owner's to overturn. `D-GR45` is the designer's proposal of 2026-11-22, from the operator
+request after the 8:47 AM Eastern `tools/tillr-gate/cpu_linux.go` watchdog fix stalled under the
+installed `tillr-gate`; it states four options and recommends Option B, decides nothing because
+changing the Go judge's trust boundary is the owner's policy choice, and is not built until the
+owner rules.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
@@ -3630,6 +3906,7 @@ is the owner's to overturn.
 | `D-GR42` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** Answers a build worker's report (`55b8d6f67b`) on the operator request for slice 1d ("route the tillr-drain sites D17 to D33 through the shared classify function"). Removes `L3` and `tools/tillr-land` (added in error by `d9a021ee61`) from rows `1d` and `2c`: `L3` is `compose_verdict` in `tools/tillr-loop` (already in slice 1e and excluded from `Classify` by `D-GR23` as a settlement), and the 70-site inventory defines no `tools/tillr-land` site. Removes slice 1d's 11 unshared drain files from `UNMOVED_GO` (`tools/gate/classification-scan.test.py`) and `unmovedGoFiles` (`tools/tillr-gate/classification_scan_test.go`), and adds function-keyed `tools/tillr-drain/drain/classification_scan_test.go` so all `D17`–`D33` functions (including those in the 5 files shared with unlanded slice 1c) are in `scannedDrainSites` and absent from `unmovedDrainSites`. Applies `D-GR28` by adding `BinaryProgram`, `LegacySpan`, `TriageSpan`, `FocusedGoTest`, `HeavyCheckWord` and `HeavyOrder` in `tools/tillr/checkresult`, and distinguishes the 12 direct per-check sites in `D17`–`D33` from the downstream settle/run-cache/telemetry functions (`D18`, `readRollingCoverage`, `readGateSpans`, `D25`, `D29`, `D32`, `D33`) that hold no raw check-result comparison in Group 1 and gain `disabled` behavior in slices `2c` and `3a`. Slice 1d writes only `tools/tillr/checkresult/`, `tools/tillr-drain/`, the Go scan tables in `tools/gate/classification-scan.test.py` and `tools/tillr-gate/classification_scan_test.go`, and their `just pack-sync` mirrors under `yolo-packs/tillr/`. **Rejected:** keeping `L3` or `tools/tillr-land` in slice 1d; relying on file-level Go unmoved lists alone across the 5 shared 1c/1d files; forcing `D19`, `D21`, `D22` and `D23` onto `JudgingProgram` / `ResultWord` with outcome changes; adding dummy `Classify` calls on booleans, telemetry rows or run-level settlements. | 2026-11-22 | [Slice 1d routes the drain's rolling, heavy and proof classifiers, with a function-keyed Go scan test](#slice-1d-routes-the-drains-rolling-heavy-and-proof-classifiers-with-a-function-keyed-go-scan-test) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
 | `D-GR43` | **Not the owner's ruling; the designer's decision, from an operator request of 2026-11-22, which the owner may overturn.** Reconciles pre-merge affected Go tests (`D-GR38`, `D-GR39`, `D-GR40`) with independent non-blocking lane landings (`D-GR2`) after two 2026-11-22 measurements: `go-affected` took `272.0s` (`drain` `217.7s`, whole gate `302.5s`) on `724d39051e9e` `[unlanded]` across `1,859` serial tests in `drain` (`1,503`) and root `tillr-drain` (`356`), and `55b8d6f67b`'s `5.2s` docs gate waited `158.2s` (`~150s` idle on `lane-4`) because `claimSettledCandidateJudge` and `lockRestartSettlement` froze new gate admissions behind a pending `drain.restart-request` while `lane-3`'s `Steps.Gate` held `restartMechanical.RLock()`. Decides three coordinated mechanisms in five unfiled slices (Slices A–E): (1) run `ProcessSteps.Gate` as a detached, reattachable subprocess across `syscall.Exec` (`restartWork` + durable gate record in `RunDir` + lane-lease preservation in `releaseRestartExaminations`, plus non-blocking sibling gate admission when `restartDefersToSettlement()` already holds) and split `--slot-class gate` (`gate > proof > ordinary`, `6` `gate` + `4` `proof` + `12` `ordinary` = `22` slots on 32 cores, per-gate cap `8` and max `4` reserved `gate-*` per gate so >= `2` `gate-*` slots stay free), cutting sibling gate hold from `158.2s` to **`0s`** (non-Go) and **`0–10s`** (Go, `<< 60s`); (2) pre-warm compilation once (`go test -trimpath -run '^$'`), keep Go's result cache active across worktrees via deterministic shared scratch under `shared_cache_dir()` (never `/tmp`), content-hashed `0444` `GIT_CONFIG_GLOBAL` and scrubbed dynamic `TILLR_*` env (verified 2026-11-22), and balance shards by LPT over refreshed `tools/go-test-durations.json` (`272s -> ~110–140s` uncached whole-`drain`, co-running check inflation eliminated); (3) slim `tools/tillr-drain` root `package main_test`, snapshot-copy base Git + SQLite fixtures in `newRefusalLoopFixtureWithLanes`, and extract bounded `drain` subpackages (`heavy`, `workflow`, `fixer`, `remotesync`) so an ordinary `drain` change gates in **`~20–40s`** (`< 40s` `D-GR38` target and `< 60s` `fast-gate-run-slow` alert). **Rejected:** dropping `go-affected`; sharding alone; concurrent gates alone; `t.Parallel()` across `t.Setenv` fixtures; raising `fast-gate-run-slow` or adding a kill/carry timeout. | 2026-11-22 | [Keeping affected drain tests before landing without holding other landings](#keeping-affected-drain-tests-before-landing-without-holding-other-landings) | Partial (`a558c6130b`, `127e1185dd`, `d1b1c5f89d`; Slices A, B, D, E in [build order](#run-affected-go-tests-without-holding-sibling-landings) not built) |
 | `D-GR44` | **Not the owner's ruling; the designer's decision, from an operator request of 2026-11-22, which the owner may overturn.** Answers a build worker's report on the 2026-11-22 operator request (*"A change to the gate's Python planner should not run five minutes of Go tests"*) after `a7b4e67009` (`tools/fork-check.py` and `tests/fork-check.test.py` only) took `312.4s` to gate (`296.4s` in `go-affected`, `slot_wait_ms = 140,047`). Establishes at `f1f14b955e81` that `tools/fork-check.py` selects Go packages via `tools/gate/go-test-edges.json` `"reads"` and that **all three** selected packages genuinely have tests reading the checkout's `tools/fork-check.py` — `21` of `2,041` top-level `Test*` functions (`1` of `357` in `tillr-drain`, `11` of `1,543` across `6` files in `tillr-drain/drain`, `9` of `141` in `registry_test.go` of `tillr-gate`) — so no reading package may be dropped, while package-wide execution ran `2,020` unrelated tests. Amends `D-GR39`, `D-GR40` and `D-GR43`: (1) add optional `"read_tests"` (`dict[str, list[str]]`) on package entries in `tools/gate/go-test-edges.json`, validated by `load_edges`, and populate `"tools/fork-check.py"` on all three reading packages while keeping `"reads"` as `list[str]`; (2) when a package is selected **only** by Step 3 `reads` rules that all appear in `"read_tests"`, keep the package selected (`reason: "edge"`) and run `-run` over the union of `read_tests[rule]` (plus `TestEdgeInputs` when present), with Go's test cache on (no `-count=1`), deterministic per-subset/shard `scratch_key`, LPT sharding when `>= 2` reader tests have estimated serial duration `>= 25.0s` over refreshed `tools/go-test-durations.json` (`~35–40s` uncached, `< 2s` cached), and `"tests": selected_tests` on narrowed package entries in `TILLR_GO_AFFECTED_EVIDENCE_OUT`; (3) scope `compute_edge_digest` (`TILLR_GATE_EDGE_INPUTS`) on any explicit-subset or shard invocation to `builds` plus unscoped `reads` plus intersecting `read_tests`; (4) verify in `tests/go-affected.test.py` that every `read_tests` test name exists in `scan_package_tests`, every `*_test.go` reading checkout `tools/fork-check.py` is covered, and cache hit/invalidation holds with no elapsed-time assertion. Reconciles `c1`, `c5` and `c6` across package and test grain. **Rejected:** dropping any of the three reading packages; extracting white-box `drain` / `tillr-gate` test files into subpackages in this item; adding a time limit or `-count=1`; changing `"reads"` from `list[str]` to objects. | 2026-11-22 | [A non-Go file in reads runs only the tests in each package that read it](#a-non-go-file-in-reads-runs-only-the-tests-in-each-package-that-read-it) | — (not built) |
+| `D-GR45` | **Not the owner's ruling and not a decision: the designer's proposal from an operator request of 2026-11-22, for the owner to rule on.** At 8:47 AM Eastern on 2026-11-22 a fix to `tools/tillr-gate/cpu_linux.go` could not land because `tillr-loop gate` and `change-gate.py --runner` ran the installed `tillr-gate` (whose `/proc` group check missed `start_new_session=True` shards across 60 silent samples and judged the fix's own `gate-runner` stalled), while Python `tools/gate/` and `tools/fork-check.py` already run from the lane's worktree. Compares four options across both questions (which build judges a `tillr-gate` source change, and how an installed-gate fault that blocks its own fix is recovered without an operator) and recommends **Option B**: (1) install `tillr-gate` on `PATH` only from `refs/tillr/green` (`D-GR5`), never unproved `tip`; (2) when healthy, keep installed `tillr-gate` as the outer judge that binds `gate.verdict` while `gate-runner` also exercises `candidate-tillr-gate checks --fast-tree` (`~1–3s` warm build + `~2–5s` check run on `tillr-gate` items; `0s` on others); (3) when installed `tillr-gate` fails (`stalled`, `error`, or wrapper discrepancy) on a candidate whose item fence permits `tools/tillr-gate/`, allow `candidate-tillr-gate` to bind `gate.verdict` only after `tillr-drain` runs every fast check declaration and `tools/fork-check.py --since <base> --tier landing` (`gate-runner`, `self-suite`, `pack-sync`, `go-affected`) directly with exit `0`, runs the full gate under `candidate-tillr-gate` with exit `0`, and records a `drain.gate-bootstrap` disclosure event carrying both binary digests; (4) on a second stall or repeatable error on any item where `base_sha` or direct check execution proves installed `tillr-gate` at fault, acquit the item behind a deduplicated `defect-tillr-gate-*` item fenced to `tools/tillr-gate/` + its pack mirror, and auto-clear `gate-stalled` / `gate-harness-error` when the installed `tillr-gate` digest advances. **Alternatives put to the owner:** Option A (candidate `tillr-gate` always judges `tillr-gate` changes; simpler, lets a buggy `tillr-gate` edit self-certify); Option C (rollback to `tillr-gate.green` / prior builds only; fails on latent bugs already in `green`); Option D (freeze Python `tools/gate/` to `green` + duplicate minimal runner in `tillr-drain`). Nothing is built until the owner rules. | 2026-11-22 | [Section 6.13](#613-how-a-change-to-the-gates-own-binary-is-judged-and-how-a-fault-in-the-installed-binary-is-recovered) | — (proposal; no ruling yet) |
 
 ### The result cache stays on for every affected package
 
