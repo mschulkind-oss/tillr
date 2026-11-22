@@ -141,21 +141,53 @@ func renderGuidanceLine(line string, base map[string]string, newestLookup func(s
 	}
 }
 
-func formatEventValue(v any) string {
+func formatEventScalar(v any) (string, bool) {
 	switch x := v.(type) {
 	case string:
 		if x != "" {
-			return x
+			return x, true
 		}
 	case bool:
 		if x {
-			return "true"
+			return "true", true
 		}
-		return "false"
+		return "false", true
 	default:
 		if i, ok := integer(v); ok {
-			return strconv.FormatInt(i, 10)
+			return strconv.FormatInt(i, 10), true
 		}
+	}
+	return "", false
+}
+
+func formatEventValue(v any) string {
+	if s, ok := formatEventScalar(v); ok {
+		return s
+	}
+	switch xs := v.(type) {
+	case []any:
+		if len(xs) == 0 {
+			return "unknown"
+		}
+		parts := make([]string, len(xs))
+		for i, elem := range xs {
+			s, ok := formatEventScalar(elem)
+			if !ok {
+				return "unknown"
+			}
+			parts[i] = s
+		}
+		return strings.Join(parts, ", ")
+	case []string:
+		if len(xs) == 0 {
+			return "unknown"
+		}
+		for _, elem := range xs {
+			if elem == "" {
+				return "unknown"
+			}
+		}
+		return strings.Join(xs, ", ")
 	}
 	return "unknown"
 }

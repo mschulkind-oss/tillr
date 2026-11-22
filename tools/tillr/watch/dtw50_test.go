@@ -538,7 +538,7 @@ func TestDTW50EventPlaceholdersInGuidanceAndReopen(t *testing.T) {
 		},
 		Guidance: Guidance{
 			Summary: "lane={{event.lane_id}} nested={{event.detail.check}} int={{event.count}} bool={{event.flag}} seq={{event.seq}} kind={{event.kind}}",
-			Check:   []string{"missing={{event.absent}} empty={{event.empty}} null={{event.nullv}} float={{event.floatv}} list={{event.listv}} obj={{event.objv}}"},
+			Check:   []string{"missing={{event.absent}} empty={{event.empty}} null={{event.nullv}} float={{event.floatv}} list1={{event.listv}} listn={{event.multilist}} emptylist={{event.emptylist}} blanklist={{event.blanklist}} nulllist={{event.nulllist}} floatlist={{event.floatlist}} nestedlist={{event.nestedlist}} objlist={{event.objlist}} obj={{event.objv}}"},
 			Do:      []string{"invalid={{event.}} bad={{event.a..b}} prefix={{event.event.lane_id}}"},
 		},
 		Delivery: Delivery{Receiver: "foreground"},
@@ -558,6 +558,13 @@ func TestDTW50EventPlaceholdersInGuidanceAndReopen(t *testing.T) {
 		"nullv": null,
 		"floatv": 3.14,
 		"listv": ["a"],
+		"multilist": ["a.go", 7, false],
+		"emptylist": [],
+		"blanklist": [""],
+		"nulllist": ["a", null],
+		"floatlist": [1, 2.5],
+		"nestedlist": [["a"]],
+		"objlist": [{"k": 1}],
 		"objv": {"k": 1}
 	}`)
 
@@ -580,7 +587,7 @@ func TestDTW50EventPlaceholdersInGuidanceAndReopen(t *testing.T) {
 	if b.Guidance.Summary != wantSummary {
 		t.Errorf("summary = %q, want %q", b.Guidance.Summary, wantSummary)
 	}
-	wantCheck := "missing=unknown empty=unknown null=unknown float=unknown list=unknown obj=unknown"
+	wantCheck := "missing=unknown empty=unknown null=unknown float=unknown list1=a listn=a.go, 7, false emptylist=unknown blanklist=unknown nulllist=unknown floatlist=unknown nestedlist=unknown objlist=unknown obj=unknown"
 	if len(b.Guidance.Check) != 1 || b.Guidance.Check[0] != wantCheck {
 		t.Errorf("check = %v, want [%q]", b.Guidance.Check, wantCheck)
 	}
@@ -641,5 +648,46 @@ func TestDTW50EventPlaceholdersInGuidanceAndReopen(t *testing.T) {
 	}
 	if !strings.Contains(string(noEventsBundle), "{{event.lane_id}}") {
 		t.Errorf("expected {{event.lane_id}} untouched with no counted events, got %s", noEventsBundle)
+	}
+
+	// In-memory ObservationSource callers passing []string join non-empty strings and fall back on empty/blank slices (D-TW68).
+	strSliceBundle, err := makeBundle(Rule{
+		ID:       "mem",
+		Severity: "warning",
+		When:     When{Pattern: ConsecutiveCount, Threshold: 1},
+		Guidance: Guidance{
+			Summary: "paths={{event.conflict_paths}}",
+			Check:   []string{"empty={{event.empty_paths}} blank={{event.blank_paths}}"},
+			Do:      []string{"ok"},
+		},
+	}, "item-1", "alrt-2", &condition{events: []observation{{
+		Seq:  1,
+		TS:   now.UnixMilli(),
+		Kind: "land.landing",
+		lookup: func(name string) any {
+			switch name {
+			case "conflict_paths":
+				return []string{"docs/design/tillr-watch.md", "tools/tillr/watch/bundle.go"}
+			case "empty_paths":
+				return []string{}
+			case "blank_paths":
+				return []string{"a.go", ""}
+			default:
+				return nil
+			}
+		},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var memB Bundle
+	if err := json.Unmarshal(strSliceBundle, &memB); err != nil {
+		t.Fatal(err)
+	}
+	if memB.Guidance.Summary != "paths=docs/design/tillr-watch.md, tools/tillr/watch/bundle.go" {
+		t.Errorf("[]string summary = %q", memB.Guidance.Summary)
+	}
+	if len(memB.Guidance.Check) != 1 || memB.Guidance.Check[0] != "empty=unknown blank=unknown" {
+		t.Errorf("[]string check = %v", memB.Guidance.Check)
 	}
 }
