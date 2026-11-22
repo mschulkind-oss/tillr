@@ -426,7 +426,8 @@ func TestMain(m *testing.M) {
             proof = shards.default_proof_shard_limit()
             gate = shards.default_gate_shard_limit()
             self.assertEqual(shards.SLOT_CLASS_GATE, 'gate')
-            self.assertEqual(shards.SLOT_CLASSES, ('ordinary', 'proof', 'gate'))
+            self.assertEqual(shards.SLOT_CLASS_REPAIR, 'repair')
+            self.assertEqual(shards.SLOT_CLASSES, ('ordinary', 'proof', 'gate', 'repair'))
             self.assertEqual((ordinary, proof, gate), (12, 4, 6))
             self.assertEqual((ordinary + proof + gate) * shards.TESTS_PER_SLOT, 22)
             shards.run_shard('fake', self.root, binary, ['TestWorks'], 0,
@@ -1482,6 +1483,185 @@ func TestSecond(t *testing.T) {
         self.assertTrue(any(e.get('Test') == 'TestSlow' and e.get('Action') == 'pass' for e in events))
         self.assertIn('cannot write progress file', stderr.getvalue())
         self.assertEqual(list(self.root.parent.glob('.go-progress-*')), [])
+
+    def test_waiting_gates_served_in_arrival_order_without_starvation(self):
+        lock_dir = self.root / 'fifo-gates'
+        order = []
+        order_lock = threading.Lock()
+        errors = []
+        threads = []
+        releases = {}
+
+        # Plant a stale (unlocked) wait ticket from a dead process to ensure it does not block anyone.
+        wait_dir = lock_dir / 'wait-queue'
+        wait_dir.mkdir(parents=True, exist_ok=True)
+        stale_ticket = wait_dir / '00-00000000000000000001-0000000001-00000000000000000001-00000000-spg.wait'
+        stale_ticket.write_text('')
+
+        def start_waiter(name, *, slot_class='proof'):
+            waiting = threading.Event()
+            acquired = threading.Event()
+            release = threading.Event()
+            releases[name] = release
+
+            def body():
+                try:
+                    with shards.acquire_shard_slot(
+                        lock_dir, 1, notify=lambda _m: waiting.set(),
+                        slot_class=slot_class, proof_limit=0, gate_limit=0,
+                        holder=name,
+                    ):
+                        with order_lock:
+                            order.append(name)
+                        acquired.set()
+                        assert release.wait(60)
+                except BaseException as exc:
+                    errors.append(exc)
+                    waiting.set()
+                    acquired.set()
+                    raise
+
+            thread = threading.Thread(target=body)
+            thread.start()
+            threads.append(thread)
+            return waiting, acquired, release
+
+        blocker = ExitStack()
+        try:
+            blocker.enter_context(shards.acquire_shard_slot(
+                lock_dir, 1, slot_class='proof', proof_limit=0, gate_limit=0,
+                holder='gate:run-initial',
+            ))
+
+            waiters = []
+            for idx in range(1, 5):
+                name = f'gate:run-item-{idx}'
+                waiting, acquired, release = start_waiter(name)
+                self.assertTrue(waiting.wait(30), f'{name} did not enter wait')
+                self.assertFalse(acquired.is_set())
+                waiters.append((name, acquired, release))
+
+            # Release the initial holder; gate:run-item-1 must go first.
+            blocker.close()
+            self.assertTrue(waiters[0][1].wait(30))
+            self.assertFalse(stale_ticket.exists())
+
+            # While gate:run-item-1 holds the slot, a later gate arrives and tries to jump ahead.
+            late_waiting, late_acquired, late_release = start_waiter('gate:run-item-5')
+            self.assertTrue(late_waiting.wait(30))
+            self.assertFalse(late_acquired.is_set())
+            waiters.append(('gate:run-item-5', late_acquired, late_release))
+
+            # Release each holder in turn; every waiting gate must acquire in arrival order.
+            for idx, (name, acquired, release) in enumerate(waiters):
+                self.assertTrue(acquired.wait(30), f'{name} did not acquire')
+                with order_lock:
+                    self.assertEqual(order, [w[0] for w in waiters[:idx + 1]])
+                release.set()
+                if idx + 1 < len(waiters):
+                    self.assertTrue(waiters[idx + 1][1].wait(30), f'{waiters[idx + 1][0]} did not acquire next')
+        finally:
+            blocker.close()
+            for evt in releases.values():
+                evt.set()
+            for thread in threads:
+                thread.join(30)
+        if errors:
+            raise errors[0]
+        self.assertEqual(order, [f'gate:run-item-{idx}' for idx in range(1, 6)])
+
+    def test_revert_and_trunk_fixer_gates_served_before_waiting_ordinary_gates(self):
+        lock_dir = self.root / 'repair-priority'
+        order = []
+        order_lock = threading.Lock()
+        errors = []
+        threads = []
+        releases = {}
+
+        def start_waiter(name, *, slot_class='proof'):
+            waiting = threading.Event()
+            acquired = threading.Event()
+            release = threading.Event()
+            releases[name] = release
+
+            def body():
+                try:
+                    with shards.acquire_shard_slot(
+                        lock_dir, 1, notify=lambda _m: waiting.set(),
+                        slot_class=slot_class, proof_limit=0, gate_limit=0,
+                        holder=name,
+                    ):
+                        with order_lock:
+                            order.append(name)
+                        acquired.set()
+                        assert release.wait(60)
+                except BaseException as exc:
+                    errors.append(exc)
+                    waiting.set()
+                    acquired.set()
+                    raise
+
+            thread = threading.Thread(target=body)
+            thread.start()
+            threads.append(thread)
+            return waiting, acquired, release
+
+        blocker = ExitStack()
+        try:
+            blocker.enter_context(shards.acquire_shard_slot(
+                lock_dir, 1, slot_class='proof', proof_limit=0, gate_limit=0,
+                holder='gate:run-initial',
+            ))
+
+            # Ordinary candidates' gates begin waiting first, plus an ordinary lane worker on a fixer item.
+            ord1_w, ord1_a, ord1_r = start_waiter('gate:run-item-1', slot_class='proof')
+            self.assertTrue(ord1_w.wait(30))
+            ord2_w, ord2_a, ord2_r = start_waiter('gate:run-item-2', slot_class='proof')
+            self.assertTrue(ord2_w.wait(30))
+            gate_w, gate_a, gate_r = start_waiter('gate:run-item-3', slot_class='gate')
+            self.assertTrue(gate_w.wait(30))
+            worker_w, worker_a, worker_r = start_waiter('run-fixer-main-deadbeef1234-a1-n1', slot_class='ordinary')
+            self.assertTrue(worker_w.wait(30))
+
+            # Revert and trunk-fixer gates arrive AFTER the ordinary candidates are already waiting.
+            rev_w, rev_a, rev_r = start_waiter('gate:run-revert-dd17e3283fd1-d5f5f41a7e57', slot_class='proof')
+            self.assertTrue(rev_w.wait(30))
+            self.assertTrue(shards.repair_caller_waiting(lock_dir))
+            fix_w, fix_a, fix_r = start_waiter('gate:run-fixer-main-dd17e3283fd1-a1-n1', slot_class='proof')
+            self.assertTrue(fix_w.wait(30))
+
+            # Release the initial slot; revert goes first, then trunk fixer, then gate-runner,
+            # then ordinary candidates in arrival order, then the ordinary lane worker last.
+            blocker.close()
+            expected = [
+                ('gate:run-revert-dd17e3283fd1-d5f5f41a7e57', rev_a, rev_r),
+                ('gate:run-fixer-main-dd17e3283fd1-a1-n1', fix_a, fix_r),
+                ('gate:run-item-3', gate_a, gate_r),
+                ('gate:run-item-1', ord1_a, ord1_r),
+                ('gate:run-item-2', ord2_a, ord2_r),
+                ('run-fixer-main-deadbeef1234-a1-n1', worker_a, worker_r),
+            ]
+            for idx, (name, acquired, release) in enumerate(expected):
+                self.assertTrue(acquired.wait(30), f'{name} did not acquire in turn {idx}')
+                with order_lock:
+                    self.assertEqual(order, [e[0] for e in expected[:idx + 1]])
+                release.set()
+        finally:
+            blocker.close()
+            for evt in releases.values():
+                evt.set()
+            for thread in threads:
+                thread.join(30)
+        if errors:
+            raise errors[0]
+        self.assertEqual(order, [
+            'gate:run-revert-dd17e3283fd1-d5f5f41a7e57',
+            'gate:run-fixer-main-dd17e3283fd1-a1-n1',
+            'gate:run-item-3',
+            'gate:run-item-1',
+            'gate:run-item-2',
+            'run-fixer-main-deadbeef1234-a1-n1',
+        ])
 
 
 if __name__ == '__main__':

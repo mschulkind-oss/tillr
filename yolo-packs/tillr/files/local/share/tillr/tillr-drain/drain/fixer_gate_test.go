@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -351,4 +352,78 @@ func makeFixerConflict(t *testing.T, root string) {
 	if out, err := exec.Command(path, "patch-branch", "merge-check").CombinedOutput(); err == nil || !strings.Contains(string(out), "CONFLICT (content)") {
 		t.Fatalf("upstream fixture did not conflict: %v\n%s", err, out)
 	}
+}
+
+func TestTrunkRepairGateSetsRepairSlotClass(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	work := t.TempDir()
+	outFile := filepath.Join(t.TempDir(), "slot-class.txt")
+	gateProg := executable(t, fmt.Sprintf(`printf '%%s' "${GO_TEST_SHARDS_CLASS:-}" > %q
+exit 0
+`, outFile))
+	steps := &ProcessSteps{
+		Root:             root,
+		Store:            gateTimingStore(t, root),
+		GateProgram:      gateProg,
+		FixerGateProgram: gateProg,
+		Now:              time.Now,
+	}
+
+	t.Setenv("GO_TEST_SHARDS_CLASS", "")
+	for _, tc := range []struct {
+		name   string
+		itemID string
+		runID  string
+		want   string
+	}{
+		{name: "ordinary candidate", itemID: "item-ordinary-1", runID: "run-item-ordinary-1", want: ""},
+		{name: "revert gate", itemID: RevertItemID("deadbeef1234"), runID: "run-revert-deadbeef1234-cafebabe5678", want: "repair"},
+		{name: "trunk fixer gate", itemID: TrunkFixerID("deadbeef1234"), runID: "run-fixer-main-deadbeef1234-a1-n1", want: "repair"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_ = os.Remove(outFile)
+			c := Candidate{
+				ItemID:   tc.itemID,
+				LaneID:   "lane-1",
+				RunID:    tc.runID,
+				Worktree: work,
+				BaseSHA:  "1111111111111111111111111111111111111111",
+				HeadSHA:  "2222222222222222222222222222222222222222",
+			}
+			if _, err := steps.Gate(ctx, c); err != nil {
+				t.Fatalf("Gate: %v", err)
+			}
+			got, err := os.ReadFile(outFile)
+			if err != nil {
+				t.Fatalf("read %s: %v", outFile, err)
+			}
+			if string(got) != tc.want {
+				t.Fatalf("GO_TEST_SHARDS_CLASS = %q, want %q", string(got), tc.want)
+			}
+		})
+	}
+
+	t.Run("fixer-gate named check", func(t *testing.T) {
+		_ = os.Remove(outFile)
+		c := Candidate{
+			ItemID:   TrunkFixerID("deadbeef1234"),
+			LaneID:   "lane-1",
+			RunID:    "run-fixer-main-deadbeef1234-a1-n1",
+			Worktree: work,
+			BaseSHA:  "1111111111111111111111111111111111111111",
+			HeadSHA:  "2222222222222222222222222222222222222222",
+		}
+		res, out := steps.fixerCheck(ctx, c, "legacy-suite")
+		if res != "pass" {
+			t.Fatalf("fixerCheck = %q (%s), want pass", res, out)
+		}
+		got, err := os.ReadFile(outFile)
+		if err != nil {
+			t.Fatalf("read %s: %v", outFile, err)
+		}
+		if string(got) != "repair" {
+			t.Fatalf("GO_TEST_SHARDS_CLASS = %q, want %q", string(got), "repair")
+		}
+	})
 }
