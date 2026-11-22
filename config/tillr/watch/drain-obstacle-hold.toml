@@ -1,0 +1,22 @@
+# On 2026-11-21, three holds waited up to 15 minutes for a check-in.
+# Read drain.obstacle-hold events from the last hour.
+[[rule]]
+id = "drain-obstacle-hold"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.obstacle-hold"]
+
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+window = "1h"
+
+[rule.guidance]
+summary = "The drain recorded a hold for {{subject}}."
+check = ["Run tillr drain why {{subject}} --store <path> to read the reason for the hold and see who needs to act."]
+do = ["If the hold needs your answer, run tillr drain retry --item {{subject}} --run <held-run> --by <who> --why <answer> --store <path> --now <RFC3339 timestamp>."]
+
+[rule.delivery]
+receiver = "foreground"
