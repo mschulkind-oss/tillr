@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
+	"github.com/mschulkind-oss/tillr/checkresult"
 )
 
 // startHeavy is a trigger, not a gate on dispatch or a synchronous landing step.
@@ -63,13 +64,14 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 					if check.OverBudgetMS > 0 {
 						l.reportf("loop: heavy %s over budget: measured %d ms, declared %d ms; keeps %s verdict\n", check.CheckID, check.DurationMS, check.BudgetMS, check.Result)
 					}
-					if check.Result == "fail" {
+					classified := classifyCheck(checkresult.Observation{Check: check.CheckID, Source: checkresult.HeavyCheckWord, Word: check.Result})
+					if classified.Outcome == checkresult.Fail {
 						l.reportf("loop: heavy %s first red landing %s; %s\n", check.CheckID, shortSHA(check.FirstRedLanding), check.Detail)
 						if check.RevertedBy != "" {
 							l.reportf("loop: heavy %s red from %s: reverted by %s\n", check.CheckID, shortSHA(check.FirstRedLanding), shortSHA(check.RevertedBy))
 						}
 					}
-					if check.Result == "unavailable" {
+					if classified.Outcome == checkresult.Unavailable {
 						l.reportf("loop: heavy %s unavailable; %s\n", check.CheckID, check.Detail)
 					}
 				}

@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/mschulkind-oss/tillr/checkresult"
 )
 
 const (
@@ -106,7 +108,15 @@ func (s *ProcessSteps) judgeHeavyGo(ctx context.Context, dir, id string) ([]Heav
 		rel = "./" + suffix
 	}
 	if _, err := os.Stat(filepath.Join(root, rel)); os.IsNotExist(err) {
-		return []HeavyCheck{{CheckID: id, Result: "pass", Detail: "package not present at this commit"}}, nil
+		classified := classifyCheck(checkresult.Observation{Check: id, Source: checkresult.FocusedGoTest, PackageAbsent: true})
+		switch classified.Outcome {
+		case checkresult.Pass:
+			return []HeavyCheck{{CheckID: id, Result: "pass", Detail: classified.Detail}}, nil
+		case checkresult.Fail:
+			return []HeavyCheck{{CheckID: id, Result: "fail", Detail: classified.Detail}}, nil
+		default:
+			return nil, Externalf("focused Go test %s gave no verdict: %s", name, classified.Detail)
+		}
 	} else if err != nil {
 		return nil, err
 	}
@@ -156,28 +166,40 @@ func (s *ProcessSteps) judgeHeavyGo(ctx context.Context, dir, id string) ([]Heav
 			passed = passed || event.Action == "pass"
 		}
 	}
-	check := HeavyCheck{CheckID: id, Result: "pass"}
-	switch {
-	case runErr == nil && !failed:
-		if !passed {
-			check.Detail = goTestAbsent
-			if skipped {
-				check.Detail = goTestSkipped
-			}
+	var exitPtr *int
+	if cmd.ProcessState != nil {
+		v := cmd.ProcessState.ExitCode()
+		exitPtr = &v
+	}
+	processErr := cmd.ProcessState == nil || (exitPtr != nil && *exitPtr == 0 && runErr != nil)
+	classified := classifyCheck(checkresult.Observation{
+		Check:        id,
+		Source:       checkresult.FocusedGoTest,
+		ExitCode:     exitPtr,
+		ProcessError: processErr,
+		Passed:       passed,
+		Failed:       failed,
+		Skipped:      skipped,
+	})
+	switch classified.Outcome {
+	case checkresult.Pass:
+		detail := classified.Detail
+		if detail == checkresult.DetailPassed {
+			detail = ""
 		}
-	case failed && cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 1:
-		check.Result = "fail"
-		check.Detail = stdout.String() + stderr.String()
+		return []HeavyCheck{{CheckID: id, Result: "pass", Detail: detail}}, nil
+	case checkresult.Fail:
+		check := HeavyCheck{CheckID: id, Result: "fail", Detail: stdout.String() + stderr.String()}
 		if s.LaneRoot != "" && ctx.Value(heavyInverseKey{}) == nil {
 			logPath := legacyLogPath(ctx, s.LaneRoot, dir, id)
 			if logPath != "" && os.WriteFile(logPath, []byte(check.Detail), 0644) == nil {
 				check.LogPath = logPath
 			}
 		}
+		return []HeavyCheck{check}, nil
 	default:
 		return nil, Externalf("focused Go test %s gave no verdict: %v: %s%s", name, runErr, stderr.String(), stdout.String())
 	}
-	return []HeavyCheck{check}, nil
 }
 
 // Flatten global includes so their values are visible but their files stay untouched.

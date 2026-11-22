@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -72,8 +73,8 @@ func readFailingSpanMeta(spansPath string) []forkCheckSpanMeta {
 		if s.CheckID == "" {
 			continue
 		}
-		switch strings.ToUpper(s.Status) {
-		case "FAIL", "ERROR", "STALLED":
+		classified := classifyCheck(checkresult.Observation{Check: s.CheckID, Source: checkresult.TriageSpan, Word: s.Status})
+		if classified.Outcome == checkresult.Fail || (classified.Outcome == checkresult.Unknown && (classified.Detail == checkresult.DetailError || classified.Detail == checkresult.DetailStalled)) {
 			out = append(out, s)
 		}
 	}

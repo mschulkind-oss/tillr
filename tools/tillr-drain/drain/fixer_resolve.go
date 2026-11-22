@@ -16,6 +16,7 @@ import (
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
+	"github.com/mschulkind-oss/tillr/checkresult"
 	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
@@ -377,7 +378,9 @@ func readCheckProofs(ctx context.Context, root string) ([]checkProof, error) {
 	if green.Commit != "" && !green.ProvedAt.IsZero() && green.Passed != nil {
 		at := map[string]time.Time{}
 		for _, id := range green.Passed {
-			at[id] = green.ProvedAt
+			if classifyCheck(checkresult.Observation{Check: id, Source: checkresult.CachedRecord, Word: "pass"}).Outcome == checkresult.Pass {
+				at[id] = green.ProvedAt
+			}
 		}
 		proofs = append(proofs, checkProof{commit: green.Commit, at: at, whole: true, provedAt: green.ProvedAt})
 	}
@@ -414,7 +417,7 @@ func readProgressCheckProof(dir, rev string) (checkProof, error) {
 			return checkProof{}, err
 		}
 		for id, check := range progress.Checks {
-			if check.Result == "pass" {
+			if classifyCheck(checkresult.Observation{Check: id, Source: checkresult.CachedRecord, Word: check.Result}).Outcome == checkresult.Pass {
 				add(progress.TipSHA, id, progress.PassedAt[id])
 			}
 		}
@@ -432,7 +435,8 @@ func readProgressCheckProof(dir, rev string) (checkProof, error) {
 			return checkProof{}, err
 		}
 		for id, check := range legacy.Checks {
-			if when, err := time.Parse(time.RFC3339, check.ProvedAt); err == nil {
+			if when, err := time.Parse(time.RFC3339, check.ProvedAt); err == nil &&
+				classifyCheck(checkresult.Observation{Check: id, Source: checkresult.CachedRecord, Word: "pass"}).Outcome == checkresult.Pass {
 				add(legacy.TipSHA, id, when)
 			}
 		}

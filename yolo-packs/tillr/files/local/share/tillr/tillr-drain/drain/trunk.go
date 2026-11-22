@@ -364,6 +364,8 @@ func (l *Loop) saveRollingState(ctx context.Context, state rollingState) error {
 	})
 }
 
+const rollingOutcomeStalled = "stalled"
+
 // recordRollingRun appends one rolling run to the log.
 func (l *Loop) recordRollingRun(ctx context.Context, base, tip string, out RollingOutcome) error {
 	s, err := store.Open(ctx, l.cfg.Store, true)
@@ -383,7 +385,7 @@ func (l *Loop) recordRollingRun(ctx context.Context, base, tip string, out Rolli
 	if out.Green {
 		outcome = "green"
 	} else if out.Stalled {
-		outcome = "stalled"
+		outcome = rollingOutcomeStalled
 	} else if !out.Known {
 		outcome = "unknown"
 	}
@@ -1656,7 +1658,7 @@ func (l *Loop) repeatedRollingStalls(ctx context.Context, base, tip string, chec
 	if err != nil {
 		return nil, readFailure(err)
 	}
-	if oldBase != base || oldTip != tip || outcome != "stalled" {
+	if oldBase != base || oldTip != tip || outcome != rollingOutcomeStalled {
 		return nil, nil
 	}
 	var previous []string

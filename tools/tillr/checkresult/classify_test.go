@@ -45,6 +45,17 @@ func TestClassifyRawResults(t *testing.T) {
 		{"cached red", Observation{Source: CachedRecord, Word: "fail"}, Fail, "failed"},
 		{"cached unreadable", Observation{Source: CachedRecord}, Unknown, "error"},
 		{"cached unexpected", Observation{Source: CachedRecord, Word: "ok"}, Unknown, "error"},
+		{"focused go test package absent", Observation{Source: FocusedGoTest, PackageAbsent: true}, Pass, DetailPackageAbsent},
+		{"focused go test package absent overrides error", Observation{Source: FocusedGoTest, PackageAbsent: true, ProcessError: true, ExitCode: exit(2), Failed: true}, Pass, DetailPackageAbsent},
+		{"focused go test exit 0 passed", Observation{Source: FocusedGoTest, ExitCode: exit(0), Passed: true}, Pass, DetailPassed},
+		{"focused go test exit 0 skipped", Observation{Source: FocusedGoTest, ExitCode: exit(0), Skipped: true}, Pass, DetailFocusedTestSkipped},
+		{"focused go test exit 0 absent", Observation{Source: FocusedGoTest, ExitCode: exit(0)}, Pass, DetailFocusedTestAbsent},
+		{"focused go test exit 0 with process error", Observation{Source: FocusedGoTest, ExitCode: exit(0), ProcessError: true, Passed: true}, Unknown, DetailError},
+		{"focused go test exit 0 with failed", Observation{Source: FocusedGoTest, ExitCode: exit(0), Failed: true}, Unknown, DetailError},
+		{"focused go test exit 1 with failed", Observation{Source: FocusedGoTest, ExitCode: exit(1), Failed: true}, Fail, DetailFailed},
+		{"focused go test exit 1 without failed", Observation{Source: FocusedGoTest, ExitCode: exit(1)}, Unknown, DetailError},
+		{"focused go test exit 2 with failed", Observation{Source: FocusedGoTest, ExitCode: exit(2), Failed: true}, Unknown, DetailError},
+		{"focused go test nil exit", Observation{Source: FocusedGoTest}, Unknown, DetailError},
 		{"missing source", Observation{ExitCode: exit(0)}, Unknown, "error"},
 	}
 	words := []struct {
@@ -125,6 +136,28 @@ func TestClassifyRawResults(t *testing.T) {
 		{CheckSpan, "ERR", Unknown, "error"},
 		{CheckSpan, "ERROR", Unknown, "unrecognized"},
 		{CheckSpan, "", Unknown, "unrecognized"},
+		{TriageSpan, "FAIL", Fail, DetailFailed},
+		{TriageSpan, "fail", Fail, DetailFailed},
+		{TriageSpan, "STALLED", Unknown, DetailStalled},
+		{TriageSpan, "stalled", Unknown, DetailStalled},
+		{TriageSpan, "ERROR", Unknown, DetailError},
+		{TriageSpan, "error", Unknown, DetailError},
+		{TriageSpan, "PASS", Pass, DetailPassed},
+		{TriageSpan, "pass", Pass, DetailPassed},
+		{TriageSpan, "OK", Pass, DetailPassed},
+		{TriageSpan, "ok", Pass, DetailPassed},
+		{TriageSpan, "CACHED", Pass, DetailPassed},
+		{TriageSpan, "cached", Pass, DetailPassed},
+		{TriageSpan, "SKIP", Unavailable, DetailSkipped},
+		{TriageSpan, "skip", Unavailable, DetailSkipped},
+		{TriageSpan, "QUARANTINED", Unavailable, DetailSkipped},
+		{TriageSpan, "quarantined", Unavailable, DetailSkipped},
+		{TriageSpan, "ERR", Unknown, DetailNotRetained},
+		{TriageSpan, "STALE", Unknown, DetailNotRetained},
+		{TriageSpan, "not-run", Unknown, DetailNotRetained},
+		{TriageSpan, "", Unknown, DetailNotRetained},
+		{TriageSpan, " PASS ", Unknown, DetailNotRetained},
+		{TriageSpan, "FAIL\n", Unknown, DetailNotRetained},
 	} {
 		t.Run(string(tc.source)+"/"+tc.raw, func(t *testing.T) {
 			assertResult(t, Classify(Observation{Source: tc.source, Word: tc.raw}), Result{Outcome: tc.outcome, Detail: tc.detail, RawWord: tc.raw})
@@ -231,6 +264,11 @@ func TestAggregatePrecedence(t *testing.T) {
 			{[]Result{unanswered, stale, stalled, notRun, skipped}, RunResult{Unknown, "error", 2}},
 			{[]Result{fail}, RunResult{Fail, "fail", 1}},
 			{[]Result{pass}, RunResult{Pass, "pass", 0}},
+		}},
+		{HeavyOrder, []rank{
+			{[]Result{unanswered, stale, stalled, notRun}, RunResult{Unknown, "unknown", 4}},
+			{[]Result{fail}, RunResult{Fail, "red", 1}},
+			{[]Result{pass, skipped}, RunResult{Pass, "green", 0}},
 		}},
 	} {
 		t.Run(string(tc.order), func(t *testing.T) {

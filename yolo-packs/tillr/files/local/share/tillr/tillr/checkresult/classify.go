@@ -17,6 +17,8 @@ const (
 	FixerCheckWord Source = "fixer-check-word"
 	LegacySpan     Source = "legacy-span"
 	CheckSpan      Source = "check-span"
+	TriageSpan     Source = "triage-span"
+	FocusedGoTest  Source = "focused-go-test"
 	CachedRecord   Source = "cached-record"
 	BudgetNote     Source = "budget-note"
 	GoModuleBuild  Source = "go-module-build"
@@ -44,6 +46,10 @@ type Observation struct {
 	Detail        string       `json:"detail,omitempty"`
 	ReportRead    bool         `json:"report_read,omitempty"` // DocumentRender only.
 	HasFinding    bool         `json:"has_finding,omitempty"` // DocumentRender only.
+	PackageAbsent bool         `json:"package_absent,omitempty"`
+	Passed        bool         `json:"passed,omitempty"`
+	Failed        bool         `json:"failed,omitempty"`
+	Skipped       bool         `json:"skipped,omitempty"`
 	Legacy        *LegacyFacts `json:"legacy,omitempty"`
 }
 
@@ -88,22 +94,26 @@ const (
 )
 
 const (
-	DetailPassed       = "passed"
-	DetailCached       = "cached"
-	DetailRemembered   = "remembered"
-	DetailFailed       = "failed"
-	DetailError        = "error"
-	DetailStalled      = "stalled"
-	DetailUnavailable  = "unavailable"
-	DetailSkipped      = "skipped"
-	DetailDropped      = "dropped"
-	DetailAbsent       = "absent"
-	DetailQuarantined  = "quarantined"
-	DetailDisabled     = "disabled"
-	DetailOverBudget   = "over-budget"
-	DetailNotRun       = "not-run"
-	DetailStale        = "stale"
-	DetailUnrecognized = "unrecognized"
+	DetailPassed             = "passed"
+	DetailCached             = "cached"
+	DetailRemembered         = "remembered"
+	DetailFailed             = "failed"
+	DetailError              = "error"
+	DetailStalled            = "stalled"
+	DetailUnavailable        = "unavailable"
+	DetailSkipped            = "skipped"
+	DetailDropped            = "dropped"
+	DetailAbsent             = "absent"
+	DetailQuarantined        = "quarantined"
+	DetailDisabled           = "disabled"
+	DetailOverBudget         = "over-budget"
+	DetailNotRun             = "not-run"
+	DetailStale              = "stale"
+	DetailUnrecognized       = "unrecognized"
+	DetailNotRetained        = "not-retained"
+	DetailPackageAbsent      = "package not present at this commit"
+	DetailFocusedTestSkipped = "test or enclosing test skipped at this commit"
+	DetailFocusedTestAbsent  = "test not present at this commit"
 )
 
 type Result struct {
@@ -173,6 +183,10 @@ func classifyRaw(o Observation) (Outcome, string) {
 		return classifyLegacySpan(o.Word)
 	case CheckSpan:
 		return classifyCheckSpan(o.Word)
+	case TriageSpan:
+		return classifyTriageSpan(o.Word)
+	case FocusedGoTest:
+		return classifyFocusedGoTest(o)
 	case BudgetNote:
 		if o.Word == DetailOverBudget {
 			return Unknown, DetailOverBudget
@@ -356,4 +370,43 @@ func classifyCheckSpan(word string) (Outcome, string) {
 	default:
 		return Unknown, DetailUnrecognized
 	}
+}
+
+func classifyTriageSpan(word string) (Outcome, string) {
+	switch strings.ToUpper(word) {
+	case "FAIL":
+		return Fail, DetailFailed
+	case "STALLED":
+		return Unknown, DetailStalled
+	case "ERROR":
+		return Unknown, DetailError
+	case "PASS", "OK", "CACHED":
+		return Pass, DetailPassed
+	case "SKIP", "QUARANTINED":
+		return Unavailable, DetailSkipped
+	default:
+		return Unknown, DetailNotRetained
+	}
+}
+
+func classifyFocusedGoTest(o Observation) (Outcome, string) {
+	if o.PackageAbsent {
+		return Pass, DetailPackageAbsent
+	}
+	if !o.ProcessError && o.ExitCode != nil {
+		switch {
+		case *o.ExitCode == 0 && !o.Failed:
+			switch {
+			case o.Passed:
+				return Pass, DetailPassed
+			case o.Skipped:
+				return Pass, DetailFocusedTestSkipped
+			default:
+				return Pass, DetailFocusedTestAbsent
+			}
+		case *o.ExitCode == 1 && o.Failed:
+			return Fail, DetailFailed
+		}
+	}
+	return Unknown, DetailError
 }
