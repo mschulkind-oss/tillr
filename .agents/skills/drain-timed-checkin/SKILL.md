@@ -1,6 +1,6 @@
 ---
 name: drain-timed-checkin
-description: Use when a timer fires a drain check-in in this repository, when resuming the tillr drain after a session relaunch or a cleared session, or when setting up the recurring check-in timer — how the operating agent starts, checks, triages, files, alerts, steps lanes and reports.
+description: Use when a timer fires a drain check-in in this repository, when resuming the tillr drain after a session relaunch or a cleared session, when the hourly deep-dive timer fires, or when setting up either timer — how the operating agent starts, checks, triages, files, alerts, steps lanes and reports.
 ---
 
 # The timed drain check-in
@@ -344,6 +344,12 @@ use this to find the issues and fix them").
   only a line in the loop's log, file the item that makes the drain write an
   event for it, and block the rule item on that.
 - An alert that has never fired is unproven. Say so when reporting on it.
+- **Every alert is triaged and acted on** (owner, 2026-11-22: "ALL alerts get
+  triaged and acted on. noisy alerts get tweaked or disabled not ignored.").
+  Acknowledging an alert without finding why it fired is ignoring it. An alert
+  that fires without a fault behind it is *noisy*: file the item that narrows
+  its rule to the fault, or the item that removes the rule, in the same turn.
+  Never leave a rule firing and wave it through.
 
 ## Lane steps
 
@@ -405,7 +411,13 @@ Create one recurring session timer at a 15-minute period whose prompt says:
 "Load the `drain-timed-checkin` skill and run one check-in." Replace an older
 timer rather than adding a second.
 
-A second, hourly timer runs a *deep dive* (owner, 2026-11-22: "should we add a
+Create a second recurring timer at a one-hour period, offset from the
+check-ins, whose prompt says: "Load the `drain-timed-checkin` skill and run the
+hourly deep dive." The section below is what it runs.
+
+## The hourly deep dive
+
+The hourly timer runs a *deep dive* (owner, 2026-11-22: "should we add a
 less frequent wake up timer for you taht does a deeper dive?"). It is not
 another check-in. It looks across the hour for what one check-in misses:
 
