@@ -40,7 +40,9 @@ type Reads struct {
 
 type When struct {
 	Fingerprint                    []string
-	GroupBy, Pattern, Field        string
+	GroupBy                        string
+	GroupByList                    []string
+	Pattern, Field                 string
 	Pairs                          [][2]string
 	Threshold, ThresholdCommits    int64
 	Window, ThresholdDuration      time.Duration
@@ -370,8 +372,12 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 		}
 	}
 	r.When = loadWhen(when, pattern, refs)
-	if namedScope(r.Scope, "workflow:") != "" && r.When.GroupBy == "global" {
-		when.reject("group_by", "named workflow scope requires a subject")
+	if namedScope(r.Scope, "workflow:") != "" {
+		if r.When.GroupBy == "global" {
+			when.reject("group_by", "named workflow scope requires a subject")
+		} else if len(r.When.GroupByList) >= 2 {
+			when.reject("group_by", "named workflow scope requires a single subject")
+		}
 	}
 
 	checkProjectionOperands(when, r, refs)
@@ -393,8 +399,64 @@ func (c *ruleCheck) load(table map[string]any, kinds map[string]bool) (Rule, err
 	return r, c.err
 }
 
+func loadGroupBy(k keys) (string, []string) {
+	raw, present := k.values["group_by"]
+	if !present {
+		k.reject("group_by", "expected a non-empty string or a non-empty list of strings")
+		return "", nil
+	}
+	switch v := raw.(type) {
+	case string:
+		if v == "" {
+			k.reject("group_by", "expected a non-empty string")
+			return "", nil
+		}
+		if !validEventPath(v) {
+			k.reject("group_by", "expected an event column or a dotted JSON key path with no empty segments")
+			return "", nil
+		}
+		return v, nil
+	case []any:
+		if len(v) == 0 {
+			k.reject("group_by", "expected a non-empty list of strings")
+			return "", nil
+		}
+		list := make([]string, 0, len(v))
+		seen := make(map[string]bool, len(v))
+		for i, elem := range v {
+			s, ok := elem.(string)
+			if !ok || s == "" {
+				k.reject("group_by", "invalid string at index %d", i)
+				return "", nil
+			}
+			if s == "global" {
+				k.reject("group_by", "global is not allowed in a group_by list")
+				return "", nil
+			}
+			if !validEventPath(s) {
+				k.reject("group_by", "expected an event column or a dotted JSON key path with no empty segments")
+				return "", nil
+			}
+			if seen[s] {
+				k.reject("group_by", "duplicate group_by name %q", s)
+				return "", nil
+			}
+			seen[s] = true
+			list = append(list, s)
+		}
+		if len(list) == 1 {
+			return list[0], nil
+		}
+		return strings.Join(list, ", "), list
+	default:
+		k.reject("group_by", "expected a non-empty string or a non-empty list of strings")
+		return "", nil
+	}
+}
+
 func loadWhen(k keys, pattern string, refs map[string]bool) When {
-	w := When{GroupBy: k.eventPath("group_by"), Pattern: pattern}
+	w := When{Pattern: pattern}
+	w.GroupBy, w.GroupByList = loadGroupBy(k)
 	if pattern == LagBehind {
 		return loadLag(k, w, refs)
 	}
@@ -436,7 +498,12 @@ func loadWhen(k keys, pattern string, refs map[string]bool) When {
 	if w.Pattern != PredicateMatch && w.Pattern != DurationWithoutEvent {
 		w.Threshold = k.positiveInteger("threshold")
 	}
-	w.Window = k.duration("window")
+	_, hasWindow := k.values["window"]
+	if w.Pattern == PredicateMatch && w.ClearWhen != nil && !hasWindow {
+		w.Window = 0
+	} else {
+		w.Window = k.duration("window")
+	}
 	if w.Pattern == DurationWithoutEvent && w.Window <= w.ThresholdDuration {
 		k.reject("window", "must be longer than threshold_duration")
 	}

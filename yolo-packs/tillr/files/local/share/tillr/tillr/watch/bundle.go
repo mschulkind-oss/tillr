@@ -56,24 +56,93 @@ func makeBundle(r Rule, key, id string, c *condition) ([]byte, error) {
 	if elapsed >= 60_000 {
 		elapsedText = strconv.FormatInt(elapsed/60_000, 10) + "m"
 	}
-	substitutions := []string{"{{subject}}", key, "{{rule_id}}", r.ID, "{{alert_id}}", id, "{{count}}", strconv.FormatInt(count, 10), "{{elapsed}}", elapsedText}
+	base := map[string]string{
+		"subject":  key,
+		"rule_id":  r.ID,
+		"alert_id": id,
+		"count":    strconv.FormatInt(count, 10),
+		"elapsed":  elapsedText,
+	}
 	if c.lag != nil {
 		short := func(oid string) string { return oid[:min(12, len(oid))] }
-		substitutions = append(substitutions, "{{leader}}", r.When.Leader, "{{follower}}", r.When.Follower, "{{leader_short}}", short(c.lag.leaderOID), "{{follower_short}}", short(c.lag.followerOID))
+		base["leader"] = r.When.Leader
+		base["follower"] = r.When.Follower
+		base["leader_short"] = short(c.lag.leaderOID)
+		base["follower_short"] = short(c.lag.followerOID)
 	}
 	if r.When.Pattern == AlternatingPair {
-		substitutions = append(substitutions, "{{pair_a}}", c.pair[0], "{{pair_b}}", c.pair[1])
+		base["pair_a"] = c.pair[0]
+		base["pair_b"] = c.pair[1]
 	}
-	replace := strings.NewReplacer(substitutions...)
+	var newestLookup func(string) any
+	if len(c.events) > 0 {
+		newestLookup = c.events[len(c.events)-1].lookup
+	}
 	render := func(lines []string) []string {
 		out := make([]string, len(lines))
 		for i, line := range lines {
-			out[i] = replace.Replace(line)
+			out[i] = renderGuidanceLine(line, base, newestLookup)
 		}
 		return out
 	}
-	b := Bundle{RuleID: r.ID, Subject: key, Severity: r.Severity, Events: events, Guidance: bundleGuidance{Summary: replace.Replace(r.Guidance.Summary), Check: render(r.Guidance.Check), Do: render(r.Guidance.Do)}}
+	b := Bundle{RuleID: r.ID, Subject: key, Severity: r.Severity, Events: events, Guidance: bundleGuidance{Summary: renderGuidanceLine(r.Guidance.Summary, base, newestLookup), Check: render(r.Guidance.Check), Do: render(r.Guidance.Do)}}
 	return b.encode()
+}
+
+func renderGuidanceLine(line string, base map[string]string, newestLookup func(string) any) string {
+	var b strings.Builder
+	pos := 0
+	for {
+		rel := strings.Index(line[pos:], "{{")
+		if rel < 0 {
+			b.WriteString(line[pos:])
+			return b.String()
+		}
+		start := pos + rel
+		endRel := strings.Index(line[start+2:], "}}")
+		if endRel < 0 {
+			b.WriteString(line[pos:])
+			return b.String()
+		}
+		end := start + 2 + endRel
+		token := line[start+2 : end]
+		if rep, ok := base[token]; ok {
+			b.WriteString(line[pos:start])
+			b.WriteString(rep)
+			pos = end + 2
+			continue
+		}
+		if newestLookup != nil && strings.HasPrefix(token, "event.") {
+			name := strings.TrimPrefix(token, "event.")
+			if validEventPath(name) && !strings.HasPrefix(name, "event.") {
+				b.WriteString(line[pos:start])
+				b.WriteString(formatEventValue(newestLookup(name)))
+				pos = end + 2
+				continue
+			}
+		}
+		b.WriteString(line[pos : start+2])
+		pos = start + 2
+	}
+}
+
+func formatEventValue(v any) string {
+	switch x := v.(type) {
+	case string:
+		if x != "" {
+			return x
+		}
+	case bool:
+		if x {
+			return "true"
+		}
+		return "false"
+	default:
+		if i, ok := integer(v); ok {
+			return strconv.FormatInt(i, 10)
+		}
+	}
+	return "unknown"
 }
 
 func (b Bundle) encode() ([]byte, error) {

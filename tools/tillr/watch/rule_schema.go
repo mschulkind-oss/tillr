@@ -24,7 +24,7 @@ func validRef(ref string) bool {
 
 func loadLag(k keys, w When, refs map[string]bool) When {
 	k.only("group_by", "pattern", "leader", "follower", "threshold_commits", "threshold_duration", "mode")
-	if w.GroupBy != "global" {
+	if len(w.GroupByList) >= 2 || w.GroupBy != "global" {
 		k.reject("group_by", "lag_behind requires global")
 	}
 	w.Leader, w.Follower = k.text("leader"), k.text("follower")

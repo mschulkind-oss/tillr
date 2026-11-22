@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/record"
 	"github.com/mschulkind-oss/tillr/store"
@@ -63,9 +64,11 @@ func init() {
 // the condition and the remedy.
 type LaneRefusalError struct {
 	*ExitError
-	LaneID string
-	Reason string
-	Remedy string
+	LaneID        string
+	Reason        string
+	Remedy        string
+	LeftBy        string
+	ExcludedRunID string
 }
 
 func (e *LaneRefusalError) Unwrap() error { return e.ExitError }
@@ -95,21 +98,25 @@ func asLaneRefusal(err error) *LaneRefusalError {
 }
 
 // laneRefusal is drain.lane-refused's payload.
+// Existing drain.lane-refused events carried only lane_id, reason, detail and remedy;
+// left_by is the single added field attributing which run/item left the work, while
+// drain.lane-restored ({"lane_id": lane}) remains unchanged.
 type laneRefusal struct {
 	LaneID string `json:"lane_id"`
 	Reason string `json:"reason"`
 	Detail string `json:"detail"`
 	Remedy string `json:"remedy"`
+	LeftBy string `json:"left_by"`
 }
 
 // laneCondition is one lane's refusal as this loop session knows it. Out is whether the lane
 // is out of rotation now; a condition stays known after a re-check puts the lane back, so a
 // re-check that refuses the same way records nothing new.
 type laneCondition struct {
-	reason, detail, remedy string
-	fingerprint            string
-	at                     time.Time
-	out                    bool
+	reason, detail, remedy, leftBy string
+	fingerprint                    string
+	at                             time.Time
+	out                            bool
 	// recorded is whether this exact condition is already a drain.lane-refused event, and
 	// printed whether this session has printed its line.
 	recorded, printed bool
@@ -158,7 +165,11 @@ func (l *Loop) recordLaneRefusal(ctx context.Context, refusal *LaneRefusalError)
 	c := l.laneConditions[lane]
 	same := c != nil && c.reason == refusal.Reason && c.detail == refusal.Msg
 	if !same {
-		c = &laneCondition{reason: refusal.Reason, detail: refusal.Msg, remedy: refusal.Remedy}
+		leftBy := refusal.LeftBy
+		if leftBy == "" {
+			leftBy = l.resolveLaneLeftBy(ctx, lane, refusal.ExcludedRunID)
+		}
+		c = &laneCondition{reason: refusal.Reason, detail: refusal.Msg, remedy: refusal.Remedy, leftBy: leftBy}
 		l.laneConditions[lane] = c
 	}
 	c.out, c.at = true, l.cfg.Now().UTC()
@@ -166,7 +177,7 @@ func (l *Loop) recordLaneRefusal(ctx context.Context, refusal *LaneRefusalError)
 		c.fingerprint = l.laneFingerprint(ctx, lane)
 	}
 	if !c.recorded {
-		if err := appendLaneEvent(ctx, l.cfg.Store, laneRefusedKind, lane, laneRefusal{LaneID: lane, Reason: c.reason, Detail: c.detail, Remedy: c.remedy}, c.at); err != nil {
+		if err := appendLaneEvent(ctx, l.cfg.Store, laneRefusedKind, lane, laneRefusal{LaneID: lane, Reason: c.reason, Detail: c.detail, Remedy: c.remedy, LeftBy: c.leftBy}, c.at); err != nil {
 			return c.at, err
 		}
 		c.recorded = true
@@ -363,7 +374,7 @@ func (l *Loop) loadLaneConditions(ctx context.Context) error {
 			if err := json.Unmarshal(raw, &p); err != nil {
 				return err
 			}
-			l.laneConditions[lane] = &laneCondition{reason: p.Reason, detail: p.Detail, remedy: p.Remedy, recorded: true}
+			l.laneConditions[lane] = &laneCondition{reason: p.Reason, detail: p.Detail, remedy: p.Remedy, leftBy: p.LeftBy, recorded: true}
 		}
 		return rows.Err()
 	})
@@ -427,4 +438,145 @@ func (l *Loop) outLanes() map[string]bool {
 		}
 	}
 	return out
+}
+
+func formatLeftBy(runID, itemID string) string {
+	runID = strings.TrimSpace(runID)
+	itemID = strings.TrimSpace(itemID)
+	switch {
+	case runID != "" && itemID != "":
+		return fmt.Sprintf("%s (%s)", runID, itemID)
+	case runID != "":
+		return runID
+	case itemID != "":
+		return itemID
+	default:
+		return "unknown"
+	}
+}
+
+func (l *Loop) resolveLaneLeftBy(ctx context.Context, lane, excludedRunID string) string {
+	if l.cfg.Store == "" || lane == "" {
+		return "unknown"
+	}
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return "unknown"
+	}
+	defer s.Close()
+	var runID, itemID string
+	_ = s.ReadTx(ctx, func(r *store.Reader) error {
+		runID, itemID = lookupLaneLeftBy(r, lane, excludedRunID)
+		return nil
+	})
+	return formatLeftBy(runID, itemID)
+}
+
+func lookupLaneLeftBy(r *store.Reader, lane, excludedRunID string) (string, string) {
+	var runID, itemID string
+	err := r.QueryRow(
+		`SELECT run_id, COALESCE(item_id, '') FROM runs WHERE lane_id = ? AND (? = '' OR run_id != ?) ORDER BY event_seq DESC, rowid DESC LIMIT 1`,
+		lane, excludedRunID, excludedRunID,
+	).Scan(&runID, &itemID)
+	if err == nil && (runID != "" || itemID != "") {
+		return runID, itemID
+	}
+
+	rows, err := r.Query(
+		`SELECT payload FROM events WHERE kind = ? AND object_type = 'lane' AND object_id = ? ORDER BY seq DESC`,
+		run.AllocateKind, lane,
+	)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var raw []byte
+			if scanErr := rows.Scan(&raw); scanErr != nil {
+				break
+			}
+			var p struct {
+				RunID  string `json:"run_id"`
+				ItemID string `json:"item_id"`
+			}
+			if jsonErr := json.Unmarshal(raw, &p); jsonErr != nil {
+				continue
+			}
+			if excludedRunID != "" && p.RunID == excludedRunID {
+				continue
+			}
+			if p.RunID != "" || p.ItemID != "" {
+				return p.RunID, p.ItemID
+			}
+		}
+	}
+
+	runID, itemID = "", ""
+	err = r.QueryRow(
+		`SELECT COALESCE(run_id, ''), item_id FROM dispatches WHERE lane_id = ? AND (? = '' OR COALESCE(run_id, '') != ?) ORDER BY dispatched_at DESC, rowid DESC LIMIT 1`,
+		lane, excludedRunID, excludedRunID,
+	).Scan(&runID, &itemID)
+	if err == nil && (runID != "" || itemID != "") {
+		return runID, itemID
+	}
+
+	return "", ""
+}
+
+func (l *Loop) resolveRunLeftBy(ctx context.Context, lane, runID string) string {
+	if runID == "" {
+		return "unknown"
+	}
+	if l.cfg.Store == "" {
+		return formatLeftBy(runID, "")
+	}
+	s, err := store.OpenRead(ctx, l.cfg.Store)
+	if err != nil {
+		return formatLeftBy(runID, "")
+	}
+	defer s.Close()
+	var itemID string
+	_ = s.ReadTx(ctx, func(r *store.Reader) error {
+		itemID = lookupRunItemID(r, lane, runID)
+		return nil
+	})
+	return formatLeftBy(runID, itemID)
+}
+
+func lookupRunItemID(r *store.Reader, lane, runID string) string {
+	if runID == "" {
+		return ""
+	}
+	var itemID string
+	if err := r.QueryRow(`SELECT COALESCE(item_id, '') FROM runs WHERE run_id = ? LIMIT 1`, runID).Scan(&itemID); err == nil && itemID != "" {
+		return itemID
+	}
+	rows, err := r.Query(
+		`SELECT payload FROM events WHERE kind = ? AND object_type = 'lane' AND object_id = ? ORDER BY seq DESC`,
+		run.AllocateKind, lane,
+	)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var raw []byte
+			if scanErr := rows.Scan(&raw); scanErr != nil {
+				break
+			}
+			var p struct {
+				RunID  string `json:"run_id"`
+				ItemID string `json:"item_id"`
+			}
+			if jsonErr := json.Unmarshal(raw, &p); jsonErr != nil {
+				continue
+			}
+			if p.RunID == runID && p.ItemID != "" {
+				return p.ItemID
+			}
+		}
+	}
+	if err := r.QueryRow(
+		`SELECT item_id FROM dispatches WHERE run_id = ? ORDER BY dispatched_at DESC, rowid DESC LIMIT 1`,
+		runID,
+	).Scan(&itemID); err == nil && itemID != "" {
+		return itemID
+	}
+	return ""
 }

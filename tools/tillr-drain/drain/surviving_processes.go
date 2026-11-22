@@ -186,7 +186,7 @@ func (l *Loop) retainSurvivingProcesses(ctx context.Context, itemID, lane, runID
 		for i, p := range procs {
 			pids[i] = p.PID
 		}
-		return laneOutcome{stop: stopLaneRetained, laneRefusal: holdLaneChildrenRefusal(lane, pids)}
+		return laneOutcome{stop: stopLaneRetained, laneRefusal: holdLaneChildrenRefusal(lane, pids, formatLeftBy(runID, itemID))}
 	}
 	if err != nil {
 		l.reportf("loop: lane %s retained, and its item could not be held: %v\n", lane, err)

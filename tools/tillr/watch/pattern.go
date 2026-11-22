@@ -23,7 +23,8 @@ type observation struct {
 	Kind  string `json:"kind"`
 	Value *any   `json:"value,omitempty"`
 
-	fingerprint string // internal cause facts; not part of the timeline bundle
+	fingerprint string           // internal cause facts; not part of the timeline bundle
+	lookup      func(string) any // internal event field lookup; not part of the timeline bundle
 }
 
 func fingerprint(names []string, lookup func(string) any) string {
@@ -224,6 +225,7 @@ type kindCache struct {
 type ruleCacheEntry struct {
 	rule             Rule
 	kindGens         []uint64
+	activeKeys       []string
 	minIncludedTS    int64
 	maxIncludedTS    int64
 	maxExcludedOldTS int64
@@ -247,13 +249,20 @@ func newEvalCache(s *store.Store) *evalCache {
 	}
 }
 
+func windowStartMillis(w When, now time.Time) int64 {
+	if w.Pattern == PredicateMatch && w.ClearWhen != nil && w.Window == 0 {
+		return math.MinInt64
+	}
+	return now.Add(-w.Window).UnixMilli()
+}
+
 func (c *evalCache) syncKinds(rd *store.Reader, rules []Rule, now time.Time, onQuery func(kind string, sinceSeq int64, rows int)) error {
 	kindWindowStart := map[string]int64{}
 	for _, r := range rules {
 		if !r.Enabled || r.evaluatorReason() != "" || r.When.Pattern == LagBehind {
 			continue
 		}
-		ws := now.Add(-r.When.Window).UnixMilli()
+		ws := windowStartMillis(r.When, now)
 		for _, k := range r.Reads.Events {
 			if prev, ok := kindWindowStart[k]; !ok || ws < prev {
 				kindWindowStart[k] = ws
@@ -390,6 +399,7 @@ func ruleEqual(a, b Rule) bool {
 		slices.Equal(a.Reads.Projections, b.Reads.Projections) &&
 		slices.Equal(a.When.Fingerprint, b.When.Fingerprint) &&
 		a.When.GroupBy == b.When.GroupBy &&
+		slices.Equal(a.When.GroupByList, b.When.GroupByList) &&
 		a.When.Pattern == b.When.Pattern &&
 		a.When.Field == b.When.Field &&
 		slices.Equal(a.When.Pairs, b.When.Pairs) &&
@@ -467,26 +477,205 @@ func (c *evalCache) forEachEvent(kinds []string, visit func(*cachedEvent) error)
 	}
 }
 
-func deriveCached(r Rule, now time.Time, facts ruleFacts, cache *evalCache) (map[string]*condition, int, error) {
+func (w When) groupByNames() []string {
+	if len(w.GroupByList) >= 2 {
+		return w.GroupByList
+	}
+	if w.GroupBy != "" {
+		return []string{w.GroupBy}
+	}
+	return nil
+}
+
+func escapeSubjectPart(s string) string {
+	s = strings.ReplaceAll(s, "%", "%25")
+	s = strings.ReplaceAll(s, "/", "%2F")
+	return s
+}
+
+func encodeCompositeSubject(parts []string) string {
+	escaped := make([]string, len(parts))
+	for i, p := range parts {
+		escaped[i] = escapeSubjectPart(p)
+	}
+	return strings.Join(escaped, "/")
+}
+
+func unescapeSubjectPart(s string) (string, bool) {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != '%' {
+			b.WriteByte(s[i])
+			continue
+		}
+		if i+2 >= len(s) {
+			return "", false
+		}
+		switch s[i+1 : i+3] {
+		case "25":
+			b.WriteByte('%')
+		case "2F":
+			b.WriteByte('/')
+		default:
+			return "", false
+		}
+		i += 2
+	}
+	return b.String(), true
+}
+
+func decodeCompositeSubject(key string, n int) ([]string, bool) {
+	parts := strings.Split(key, "/")
+	if len(parts) != n {
+		return nil, false
+	}
+	out := make([]string, n)
+	for i, p := range parts {
+		u, ok := unescapeSubjectPart(p)
+		if !ok {
+			return nil, false
+		}
+		out[i] = u
+	}
+	return out, true
+}
+
+func activeCompositeSubjects(rd *store.Reader, ruleID string, n int) (map[string][]string, []string, error) {
+	exists, err := tableExists(rd, "alert_episodes")
+	if err != nil || !exists {
+		return nil, nil, err
+	}
+	rows, err := rd.Query(`SELECT subject_key FROM alert_episodes WHERE rule_id=? AND state!='resolved'`, ruleID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	tuples := map[string][]string{}
+	var keys []string
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, nil, err
+		}
+		if tuple, ok := decodeCompositeSubject(key, n); ok {
+			tuples[key] = tuple
+			keys = append(keys, key)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	slices.Sort(keys)
+	return tuples, keys, nil
+}
+
+func observeCompositeEvent(
+	r Rule,
+	names []string,
+	ev cachedEvent,
+	facts ruleFacts,
+	nowMillis int64,
+	subjects map[string]*condition,
+	subjectTuples map[string][]string,
+	skipped *int,
+) error {
+	n := len(names)
+	tuple := make([]string, 0, n)
+	seenNonString := false
+	prefixValid := true
+	for _, name := range names {
+		v := ev.lookup(name)
+		if !seenNonString {
+			if s, ok := v.(string); ok {
+				tuple = append(tuple, s)
+				continue
+			}
+			seenNonString = true
+		}
+		if v != nil {
+			prefixValid = false
+		}
+	}
+	if len(tuple) == n {
+		subject := encodeCompositeSubject(tuple)
+		projection, inScope, err := facts.forSubject(subject)
+		if err != nil {
+			return err
+		}
+		if !inScope {
+			return nil
+		}
+		subjectTuples[subject] = tuple
+		c := subjects[subject]
+		if c == nil {
+			c = &condition{}
+			subjects[subject] = c
+		}
+		obs := ev.obs
+		obs.fingerprint = fingerprint(r.When.Fingerprint, ev.lookup)
+		obs.lookup = ev.lookup
+		c.observe(r.When, obs, expressionValues{event: ev.lookup, projection: projection, nowMillis: nowMillis})
+		return nil
+	}
+	if prefixValid && len(tuple) >= 1 && len(tuple) < n && r.When.ClearWhen != nil {
+		projection, _, err := facts.forSubject("")
+		if err != nil {
+			return err
+		}
+		if r.When.ClearWhen.eval(expressionValues{event: ev.lookup, projection: projection, nowMillis: nowMillis}) {
+			for subject, subTuple := range subjectTuples {
+				if len(subTuple) == n && slices.Equal(subTuple[:len(tuple)], tuple) {
+					c := subjects[subject]
+					c.events = c.events[:0]
+					c.hadPrevious = false
+					c.clears = append(c.clears, ev.obs.Seq)
+				}
+			}
+			return nil
+		}
+	}
+	*skipped++
+	return nil
+}
+
+func deriveCached(rd *store.Reader, r Rule, now time.Time, facts ruleFacts, cache *evalCache) (map[string]*condition, int, error) {
 	kinds := r.Reads.Events
 	if len(kinds) == 0 {
 		return nil, 0, nil
 	}
-	winLo := now.Add(-r.When.Window).UnixMilli()
+	names := r.When.groupByNames()
+	var (
+		seededTuples map[string][]string
+		activeKeys   []string
+	)
+	if len(names) >= 2 {
+		var err error
+		seededTuples, activeKeys, err = activeCompositeSubjects(rd, r.ID, len(names))
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	winLo := windowStartMillis(r.When, now)
 	winHi := now.UnixMilli()
 	cacheable := ruleCacheable(r)
 	if cacheable {
 		if entry := cache.rules[r.ID]; entry != nil &&
 			ruleEqual(entry.rule, r) &&
 			cache.gensMatch(entry.kindGens, kinds) &&
-			winLo <= entry.minIncludedTS &&
-			winLo > entry.maxExcludedOldTS &&
+			slices.Equal(entry.activeKeys, activeKeys) &&
+			(winLo == math.MinInt64 || (winLo <= entry.minIncludedTS && winLo > entry.maxExcludedOldTS)) &&
 			winHi < entry.minFutureTS &&
 			winHi >= entry.maxIncludedTS {
 			return entry.subjects, entry.skipped, nil
 		}
 	}
 	subjects := map[string]*condition{}
+	subjectTuples := map[string][]string{}
+	for key, tuple := range seededTuples {
+		subjects[key] = &condition{}
+		subjectTuples[key] = tuple
+	}
 	skipped := 0
 	var (
 		minIncludedTS    int64 = math.MaxInt64
@@ -513,10 +702,14 @@ func deriveCached(r Rule, now time.Time, facts ruleFacts, cache *evalCache) (map
 		if ev.obs.TS > maxIncludedTS {
 			maxIncludedTS = ev.obs.TS
 		}
+		evCopy := *ev
+		if len(names) >= 2 {
+			return observeCompositeEvent(r, names, evCopy, facts, winHi, subjects, subjectTuples, &skipped)
+		}
 		subject := "global"
 		if r.When.GroupBy != "global" {
 			var ok bool
-			subject, ok = ev.lookup(r.When.GroupBy).(string)
+			subject, ok = evCopy.lookup(r.When.GroupBy).(string)
 			if !ok {
 				skipped++
 				return nil
@@ -534,9 +727,10 @@ func deriveCached(r Rule, now time.Time, facts ruleFacts, cache *evalCache) (map
 			c = &condition{}
 			subjects[subject] = c
 		}
-		obs := ev.obs
-		obs.fingerprint = fingerprint(r.When.Fingerprint, ev.lookup)
-		c.observe(r.When, obs, expressionValues{event: ev.lookup, projection: projection, nowMillis: winHi})
+		obs := evCopy.obs
+		obs.fingerprint = fingerprint(r.When.Fingerprint, evCopy.lookup)
+		obs.lookup = evCopy.lookup
+		c.observe(r.When, obs, expressionValues{event: evCopy.lookup, projection: projection, nowMillis: winHi})
 		return nil
 	})
 	if err != nil {
@@ -546,6 +740,7 @@ func deriveCached(r Rule, now time.Time, facts ruleFacts, cache *evalCache) (map
 		cache.rules[r.ID] = &ruleCacheEntry{
 			rule:             r,
 			kindGens:         cache.kindGens(kinds),
+			activeKeys:       activeKeys,
 			minIncludedTS:    minIncludedTS,
 			maxIncludedTS:    maxIncludedTS,
 			maxExcludedOldTS: maxExcludedOldTS,
@@ -559,12 +754,25 @@ func deriveCached(r Rule, now time.Time, facts ruleFacts, cache *evalCache) (map
 
 func derive(rd *store.Reader, r Rule, now time.Time, facts ruleFacts) (map[string]*condition, int, error) {
 	kinds := r.Reads.Events
-	args := []any{now.Add(-r.When.Window).UnixMilli(), now.UnixMilli()}
-	for _, k := range kinds {
-		args = append(args, k)
-	}
 	if len(kinds) == 0 {
 		return nil, 0, nil
+	}
+	names := r.When.groupByNames()
+	subjects := map[string]*condition{}
+	subjectTuples := map[string][]string{}
+	if len(names) >= 2 {
+		seededTuples, _, err := activeCompositeSubjects(rd, r.ID, len(names))
+		if err != nil {
+			return nil, 0, err
+		}
+		for key, tuple := range seededTuples {
+			subjects[key] = &condition{}
+			subjectTuples[key] = tuple
+		}
+	}
+	args := []any{windowStartMillis(r.When, now), now.UnixMilli()}
+	for _, k := range kinds {
+		args = append(args, k)
 	}
 	rows, err := rd.Query(`SELECT seq,ts,kind,seat,object_type,object_id,revision,payload FROM events
  WHERE ts >= ? AND ts <= ? AND kind IN (?`+strings.Repeat(",?", len(kinds)-1)+`) ORDER BY seq`, args...)
@@ -572,12 +780,18 @@ func derive(rd *store.Reader, r Rule, now time.Time, facts ruleFacts) (map[strin
 		return nil, 0, err
 	}
 	defer rows.Close()
-	subjects := map[string]*condition{}
 	skipped := 0
+	nowMillis := now.UnixMilli()
 	for rows.Next() {
 		ev, err := scanCachedEvent(rows)
 		if err != nil {
 			return nil, 0, err
+		}
+		if len(names) >= 2 {
+			if err := observeCompositeEvent(r, names, ev, facts, nowMillis, subjects, subjectTuples, &skipped); err != nil {
+				return nil, 0, err
+			}
+			continue
 		}
 		subject := "global"
 		if r.When.GroupBy != "global" {
@@ -601,7 +815,8 @@ func derive(rd *store.Reader, r Rule, now time.Time, facts ruleFacts) (map[strin
 			subjects[subject] = c
 		}
 		ev.obs.fingerprint = fingerprint(r.When.Fingerprint, ev.lookup)
-		c.observe(r.When, ev.obs, expressionValues{event: ev.lookup, projection: projection, nowMillis: now.UnixMilli()})
+		ev.obs.lookup = ev.lookup
+		c.observe(r.When, ev.obs, expressionValues{event: ev.lookup, projection: projection, nowMillis: nowMillis})
 	}
 	return subjects, skipped, rows.Err()
 }

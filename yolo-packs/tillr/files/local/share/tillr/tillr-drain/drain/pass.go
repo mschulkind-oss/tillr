@@ -3285,6 +3285,9 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 				// The lane's own state refused the pinned candidate: the lane leaves
 				// rotation and the candidate, still pinned, is released to be offered
 				// another lane. One lane's condition never stops the loop.
+				if d.RunRequest != nil {
+					refusal.ExcludedRunID = d.RunRequest.RunID
+				}
 				completion.laneRefusal = refusal
 				err = l.releaseRefusedAssignment(ctx, work)
 			}
