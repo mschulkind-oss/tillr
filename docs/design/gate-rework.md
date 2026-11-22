@@ -1766,6 +1766,10 @@ needs.
 | `go-substrate` | a suite input of `tools/tillr` changed | `go test ./...` in `tools/tillr` | the package lines `go test` prints, read from the check's own output |
 | `gate-runner` | the gate runner or its suite inputs changed | `tools/go-test-shards.py tools/tillr-gate -k 6 --slot-class proof` | the shard runner's own package list, as decided below |
 
+Research on choosing the packages and tests a change affects, added by the designer as a
+pointer and deciding nothing here:
+[Build tools and affected-test selection for tillr](../research/build-tools.md).
+
 **The report this section answers.** The build worker given the Go package piece could write
 `tools/gate/checks/go-build.py`, `tools/fork-check.py` and their tests, and stopped on
 `gate-runner`. Its evidence holds at `86e2549392`: `go_tool_command` in `tools/fork-check.py`
@@ -1795,6 +1799,11 @@ named by the environment variable `TILLR_GO_SHARDS_EVIDENCE_OUT`. The rules:
   check whose module is in `GO_SHARD_DIRS`, which on the ordinary path is `gate-runner` alone,
   reads the file after the command ends, puts the packages on that check's record and removes
   the file. The heavy proof, the rolling `go-tool` suites, lanes and named replays do not set it.
+
+That file is a contract between two utilities, the shard runner that writes it and
+`tools/fork-check.py` that reads it. Research on defining and checking such contracts, added by
+the designer as a pointer and deciding nothing here:
+[Contracts between command-line utilities](../research/utility-interface-contracts.md).
 
 The producer and its two fixture tests exist in the kept candidate
 (`git diff 86e2549392...refs/keep/fast-gate-timing -- tools/go-test-shards.py tests/go-test-shards.test.py`,
