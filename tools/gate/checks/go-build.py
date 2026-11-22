@@ -14,7 +14,7 @@ from change_common import git, tree_entries, tracked_changes, result_store, stor
 GO_TOOL_DIRS = (
     "tools/pi-profiler", "tools/tillr", "tools/tillr-store", "tools/tillr-item",
     "tools/tillr-run", "tools/tillr-gate", "tools/tillr-view", "tools/tillr-land",
-    "tools/tillr-drain", "tools/tillr-cli",
+    "tools/tillr-drain", "tools/tillr-cli", "tools/tillr-watch",
 )
 
 

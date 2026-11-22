@@ -19,6 +19,7 @@
     "tools/tillr-land/",
     "tools/tillr-drain/",
     "tools/tillr-cli/",
+    "tools/tillr-watch/",
     "tools/gate/checks/go-build.py",
     "tools/gate/checks/change_common.py",
     "tools/gate/checks/roadmap_sections.py",
