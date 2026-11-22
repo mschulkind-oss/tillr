@@ -376,6 +376,19 @@ which seat takes the judgments the operator made
 on none of them. It sits here because it fills in the seventh rule of the unattended-drain design
 above, and none of it is built.
 
+[Alert triage happens in a seat inside tillr, and only what it cannot settle reaches the operating session](../design/tillr-alert-triage-seat.md),
+written on 2026-11-22 to the owner's words of 2026-11-21, layers a remedy-free alert triage consumer
+above [the general agent watch design](../design/general-agent-watch.md) and its landed Slice 1 so
+standing `tillr-watch` episodes are read, deduplicated against open items or filed as defect
+requests, and settled visibly inside `tillr` while only external operational actions and owner
+choices wake the operating session. It asks three questions: which seat and process runs alert
+triage ([`OQ-AT1`](../design/tillr-alert-triage-seat.md#OQ-AT1)), whether verified benign alerts may
+settle with recorded evidence and no item ([`OQ-AT2`](../design/tillr-alert-triage-seat.md#OQ-AT2)),
+and whether non-liveness alerts wait for a stopped drain loop or promote after an untriaged window
+([`OQ-AT3`](../design/tillr-alert-triage-seat.md#OQ-AT3)). Its first two slices wait on none of
+them, its ten designer's decisions await his review in
+[its ledger](../design/tillr-alert-triage-seat.md#decision-ledger), and none of it is built.
+
 Two designs left this list on 2026-11-15. [Item graphs](../reference/tillr-item-graphs.md) is
 decided, built, and graduated into a system reference: one commit per item, all of refinement built, read-only nodes in
 parallel, and lanes outside the cap for work the owner is waiting on. On 2026-11-16 it was cut
