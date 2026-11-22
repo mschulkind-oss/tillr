@@ -205,6 +205,17 @@ Its thirteen designer's decisions await his review in
     slices of the build do not wait on it. Its fifteen designer's decisions await his review in
     [its ledger](../design/tillr-utility-contracts.md#decision-ledger), and none of it is built.
 
+12. [A request that is hard to deliver as written is amended once](../design/tillr-request-amendment.md)
+    ([`OQ-RA1`](../design/tillr-request-amendment.md#OQ-RA1)): written on 2026-11-21 to the owner's
+    words of that day, after workers were stopped 80 times by a request's wording and three
+    requests were closed and refiled by hand after 6, 8 and 14 verifier refusals. The design seat
+    writes an amendment beside the saved words, which never change, and a worker that meets a flaw
+    finishes the rest and lists what it left. It adds one question to the count above: whether
+    every new request is read for known flaws before its first worker starts. Placed last by the
+    designer (and the owner's to reorder) because it stops nothing that runs today, and the first
+    eight slices of the build do not wait on it. Its twelve designer's decisions await his review
+    in [its ledger](../design/tillr-request-amendment.md#decision-ledger), and none of it is built.
+
 [Owner review comments](../design/tillr-review-comments.md#7-decision-ledger) left this list on
 2026-11-20. The owner answered all four questions; the fast track is not built.
 
