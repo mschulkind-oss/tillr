@@ -894,6 +894,7 @@ func (l *Loop) stageJudge(ctx context.Context, c Candidate, receipt *JudgeReceip
 		return err
 	}
 	output := filepath.Join(dir, "eval.output")
+	candDir := filepath.Join(dir, "cand")
 	brief := fmt.Sprintf(`# Judge candidate
 
 ## Header
@@ -934,9 +935,13 @@ why that waiter must act. Do not include actor or judged_actor.
 Pass requires every criterion done. Return RESULT: done after writing the file.
 
 ## Scope and boundaries
-Do not modify the worktree, store, or refs. If a check writes files, run it in a temporary
-copy of the exact candidate tree outside the worktree (for example, extract evaluated_head
-with git archive). The verdict file above is your only deliverable.
+Do not modify the worktree, store, or refs. If a check writes files or needs a checkout
+where Git commands work, create an independent local clone of evaluated_head under your
+scratch directory (%s):
+  git clone --shared --no-checkout . "%s" && git -C "%s" checkout --detach %s
+Do not export GIT_DIR or GIT_WORK_TREE (for example around a git archive copy): child
+processes such as git init inherit them and can write core.worktree into the trunk
+repository's .git/config. The verdict file above is your only deliverable.
 
 ## Seats
 These are seats tillr runs as nodes; a worker cannot start one.
@@ -982,7 +987,7 @@ Write the verdict file, then report RESULT: done.
 
 ## Stop conditions
 Never change the worker's candidate.
-`, c.ItemID, receipt.Request.RunID, c.Worktree, output, receipt.Options.Head, receipt.Options.Tree, seatLines(l.currentPolicy()), diffPath, c.BaseSHA, receipt.Options.Head, changedPaths, criteria.String())
+`, c.ItemID, receipt.Request.RunID, c.Worktree, output, receipt.Options.Head, receipt.Options.Tree, candDir, candDir, candDir, receipt.Options.Head, seatLines(l.currentPolicy()), diffPath, c.BaseSHA, receipt.Options.Head, changedPaths, criteria.String())
 	brief += history
 	if len(receipt.Writers) == 0 {
 		for _, producer := range receipt.Producers {
