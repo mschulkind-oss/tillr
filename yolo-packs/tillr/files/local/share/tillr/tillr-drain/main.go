@@ -1076,7 +1076,7 @@ func storeHooks(ctx context.Context, path string) (*definition.Hooks, error) {
 	return declaration.Parsed.Hooks, nil
 }
 
-// spendLine is what the loop spent, as one line. It is a measurement and never a budget:
+// spendLine reports the spend accumulated during the loop. It is a measurement and never a budget:
 // there is no ceiling here to compare against, because a ceiling that stops good work is
 // the wall docs/design/momentum-principle.md rules out. A run whose report carried no
 // number is named rather than dropped: a total that omits it and says nothing reads as
@@ -1093,8 +1093,7 @@ func spendLine(result drain.LoopResult) string {
 		line += fmt.Sprintf("; %d run(s) reported no cost (first: %s)", result.CostUnknown, result.CostUnknownExample)
 	}
 	return line + "\nloop: spend started in this loop: " + result.StartedSpend.String() +
-		"\nloop: spend carried over from earlier loops: " + result.CarriedSpend.String() +
-		"\nloop: spend all recorded runs: " + result.RecordedSpend.String()
+		"\nloop: spend carried over from earlier loops: " + result.CarriedSpend.String()
 }
 
 // expressLaneIDs names the reserved pool separately from the ordinary cap.

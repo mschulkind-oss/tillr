@@ -36,7 +36,7 @@ func TestParallelReaderContinuationUpdatesSpendWithoutChargingSiblings(t *testin
 	})
 }
 
-func TestParallelReaderCrossLoopContinuationKeepsShutdownSpend(t *testing.T) {
+func TestParallelReaderCrossLoopContinuationKeepsSettlementSpend(t *testing.T) {
 	f, l, _ := parallelFixture(t)
 	l.sessionID = "original-loop"
 	result := &LoopResult{}
@@ -50,10 +50,6 @@ func TestParallelReaderCrossLoopContinuationKeepsShutdownSpend(t *testing.T) {
 	id := attemptRunID("item-a", 1) + "-n2"
 	tokens, cost := int64(30), 0.03
 	rec := run.Record{RunID: id, Usage: &run.Usage{Tokens: &tokens, CostUSD: &cost}}
-	fixtureWrite(t, f, func(tx *store.Tx) error {
-		_, err := tx.Exec(`UPDATE runs SET usage_tokens=?,usage_cost_usd=? WHERE run_id=?`, tokens, cost, id)
-		return err
-	})
 	if err := l.recordSettlementSpend(context.Background(), "continued-pass", "original-loop", rec); err != nil {
 		t.Fatal(err)
 	}
@@ -63,18 +59,24 @@ func TestParallelReaderCrossLoopContinuationKeepsShutdownSpend(t *testing.T) {
 	if err := l.recordSettlementSpend(context.Background(), "continued-pass", "original-loop", rec); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 2; i++ {
-		var snapshot LoopResult
-		if err := l.snapshotSpend(&snapshot); err != nil {
-			t.Fatal(err)
+	s := openFixture(t, f.storePath)
+	defer s.Close()
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		var rows, carried, total int
+		if err := r.QueryRow(`SELECT COUNT(*), COALESCE(SUM(carried_over),0), COALESCE(SUM(usage_tokens),0)
+ FROM drain_pass_spend WHERE settled_loop=?`, l.sessionID).Scan(&rows, &carried, &total); err != nil {
+			return err
 		}
-		if snapshot.StartedSpend.Runs != 0 || snapshot.CarriedSpend.Runs != 1 || snapshot.Tokens != 30 {
-			t.Fatalf("continued usage omitted or unchanged siblings charged again: %+v", snapshot)
+		if rows != 1 || carried != 1 || total != 30 {
+			t.Fatalf("continued usage omitted or unchanged siblings charged again: rows=%d carried=%d tokens=%d", rows, carried, total)
 		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestParallelReadersShutdownSnapshotCountsEverySiblingOnce(t *testing.T) {
+func TestParallelReadersAccumulateSpendForEverySiblingOnce(t *testing.T) {
 	_, l, steps := parallelFixture(t)
 	l.sessionID = "parallel-spend-loop"
 	result := &LoopResult{}
@@ -84,15 +86,7 @@ func TestParallelReadersShutdownSnapshotCountsEverySiblingOnce(t *testing.T) {
 		}
 		drainOwned(t, l, result)
 	}
-	if steps.started != 4 || result.Tokens != 40 {
-		t.Fatalf("before snapshot: readers=%d tokens=%d", steps.started, result.Tokens)
-	}
-	for i := 0; i < 2; i++ {
-		if err := l.snapshotSpend(result); err != nil {
-			t.Fatal(err)
-		}
-		if result.StartedSpend.Tokens != 40 || result.StartedSpend.Runs != 4 || result.CarriedSpend.Runs != 0 {
-			t.Fatalf("snapshot lost or repeated siblings: %+v", result)
-		}
+	if steps.started != 4 || result.Tokens != 40 || result.StartedSpend.Tokens != 40 || result.StartedSpend.Runs != 4 || result.CarriedSpend.Runs != 0 {
+		t.Fatalf("accumulated spend lost or repeated siblings: readers=%d result=%+v", steps.started, result)
 	}
 }

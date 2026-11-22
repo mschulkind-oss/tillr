@@ -71,13 +71,6 @@ func TestReplacementRecoversUnboundedDeadLoopWithoutTerminalRecord(t *testing.T)
 	if readErr != nil || strings.Count(string(raw), "\n") != 2 || strings.Count(string(raw), `"finished_at_ms":null`) != 1 {
 		t.Fatalf("replacement did not close open graph: %s %v", raw, readErr)
 	}
-	var measured LoopResult
-	if err := next.snapshotSpend(&measured); err != nil {
-		t.Fatal(err)
-	}
-	if measured.RecordedSpend.Unreported != 1 || measured.RecordedSpend.CostUnreported != 1 {
-		t.Fatalf("reaped run not counted unreported: %+v", measured.RecordedSpend)
-	}
 }
 
 func TestThreeDeadSupervisorsDoNotSpendAnyAttemptBudget(t *testing.T) {

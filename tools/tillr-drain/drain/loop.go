@@ -461,15 +461,13 @@ type LoopResult struct {
 	// all ticks, reset by a candidate. It is reported here and drives the backoff between
 	// attempts; it never stops the loop.
 	InfraFailures int `json:"infra_failures"`
-	// SpendUSD sums work started in this loop and earlier work settled here.
+	// SpendUSD sums the spend observed by this loop, for new work and work carried over.
 	// Only reported prices contribute; CostUnknown counts the missing prices.
-	// RecordedSpend separately sums every terminal run in the store.
-	SpendUSD      float64     `json:"spend_usd"`
-	StartedSpend  SpendTotals `json:"spend_started_in_loop"`
-	CarriedSpend  SpendTotals `json:"spend_carried_over"`
-	RecordedSpend SpendTotals `json:"spend_all_recorded_runs"`
-	spendRecords  map[string]run.Record
-	spendCarried  map[string]bool
+	SpendUSD     float64     `json:"spend_usd"`
+	StartedSpend SpendTotals `json:"spend_started_in_loop"`
+	CarriedSpend SpendTotals `json:"spend_carried_over"`
+	spendRecords map[string]run.Record
+	spendCarried map[string]bool
 	// Tokens sums reported tokens in the started and carried groups.
 	Tokens int64 `json:"tokens"`
 	// SpendUnknown counts missing token measurements, and CostUnknown missing
@@ -805,12 +803,8 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 // that made it is gone.
 func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
 	fmt.Fprintf(l.cfg.Report, "loop: build %s\n", l.build)
+	// Persist the spend accumulated during execution; never rescan history on exit.
 	defer l.recordResult(&result)
-	defer func() {
-		if spendErr := l.snapshotSpend(&result); spendErr != nil {
-			l.reportf("loop: spend snapshot unavailable: %v\n", spendErr)
-		}
-	}()
 	defer l.closeWALKeeper()
 	defer l.endSession()
 	l.keepWALWhileRunning()
