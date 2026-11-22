@@ -9,7 +9,7 @@ tags:
   - landing
   - design
 summary: "Measures all 42 check kinds in tools/fork-check.py, then replaces the gate's remembered baseline with a base the caller supplies and results remembered by a fingerprint of the files each check reads. A ten-second landing budget becomes a failing test, heavy checks run after the merge in this repository, tillr deploys only from the last green trunk commit, and a new check is one new file."
-next: "Two units of Section 11 are written with no item directive and become items once the owner rules on how documents declare work: the single check-result classifier of D-GR23, in twelve slices, and the drift probe of D-GR12, after item-gate-pinned-fork-inputs."
+next: "Two units of Section 11 are written with no item directive and become items once the owner rules on how documents declare work: the single check-result classifier of D-GR23 and D-GR41, in thirteen slices (slices 1a and 1e landed), and the drift probe of D-GR12, after item-gate-pinned-fork-inputs."
 depends-on:
   - landing-principles.md
   - landing-velocity.md
@@ -26,7 +26,7 @@ vantage:
 [the tillr roadmap](../tillr/roadmap.md#filed-2026-11-15-the-three-gate-rulings-no-slice-builds)); the
 [Decision Ledger](#decision-ledger)'s `Built` column names the code for each. One decision is not
 built: the drift probe of `D-GR12`, because `series` and `patch-branch-inv2` are still
-landing-tier checks (`TIER_LANDING` in `tools/fork-check.py`). That remainder is written as [the last unit of the build order](#move-the-upstream-drift-checks-out-of-the-gate-into-a-probe). The disabled-check rule of `D-GR21` and `D-GR22` is not built either: on 2026-11-21 the designer listed the 70 places a check result is classified and decided that one function classifies for all of them (`D-GR23`, the owner's to overturn), with [its build order in ten slices](#classify-every-check-result-in-one-place). Every timing is from one run made for this design at
+landing-tier checks (`TIER_LANDING` in `tools/fork-check.py`). That remainder is written as [the last unit of the build order](#move-the-upstream-drift-checks-out-of-the-gate-into-a-probe). The disabled-check rule of `D-GR21` and `D-GR22` is in progress: on 2026-11-21 the designer listed the 70 places a check result is classified and decided that one function classifies for all of them (`D-GR23`, amended by `D-GR28`, `D-GR32` to `D-GR34`, `D-GR36`, `D-GR37` and `D-GR41`, each the owner's to overturn), with [its build order in thirteen slices](#classify-every-check-result-in-one-place) (slices 1a and 1e landed in `020cf29eca` and `0bcc3275a2`). Every timing is from one run made for this design at
 `ebaab2794`, stated in [Section 3](#3-what-exists-today-measured); the six owner rulings of
 2026-11-15 are rows `D-GR1` to `D-GR6` of the [Decision Ledger](#decision-ledger) (`D-GR6` was
 overturned by the owner on 2026-11-17: automatic revert is on here). Its three former open
@@ -400,10 +400,13 @@ record to copy. The existing record file is left in place and never read for pla
 
 #### A contradicted check is disabled
 
-The owner ruled on 2026-11-21, in these words: "The correct move for a flaky test is disable it,
-file an item to fix it, and don't let it block anything. It is not considered green, but it also
-doesn't let you block other things." That is `D-GR21`. It replaces three earlier answers: this
-section's `flaky` pass, the live re-run of
+The owner ruled on 2026-11-21, in two statements quoted verbatim: "The correct move for a flaky
+test is disable it, file an item to fix it, and don't let it block anything. It is not considered
+green, but it also doesn't let you block other things." and "And the principle here is you make
+the trunk green by disabling the flaky test. The test is not green because it's flaky, but the
+trunk is green because the test is no longer included.And yes, the item that is filed should be
+to re-enable it correctly, the test that was flaky." Together those two statements are `D-GR21`.
+It replaces three earlier answers: this section's `flaky` pass, the live re-run of
 [`OQ-ER3`](./tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3) option A, and a filed
 operator request of 2026-11-20 that asked for a red verdict.
 
@@ -412,8 +415,11 @@ A fingerprint is **contradicted** *(the term is from
 when the result store holds both a pass record and a fail record for it: the same inputs gave two
 verdicts. A **disabled check** *(coined here)* is one the gate does not run for a verdict.
 
-The operator's reading of the ruling, sent with it on 2026-11-21, is recorded as the operator's and
-not as the owner's words; the owner may overturn any part of it:
+The operator's reading of the first statement, sent with it on 2026-11-21, is recorded as the
+operator's and not as the owner's words (its third and fifth points — making the trunk green by
+excluding the disabled check while the check itself is not green, and filing the item to
+re-enable the flaky check correctly — are now directly ruled in the owner's second statement of
+2026-11-21 above; the owner may overturn any remaining part of the reading):
 
 - a check whose fingerprint is contradicted is disabled, and is not run for a verdict;
 - it is reported as disabled, and never as passed or green;
@@ -447,8 +453,9 @@ of it is the owner's ruling, and the owner may overturn it.
   replaces "from the verdict" in `D-GR22`): the marker is written at the moment a run sees the
   contradiction, so it exists even when that run is cancelled, errors on another check or never
   writes a verdict. The item's id is `flaky-<check-id>`, and an open item with that id is not
-  filed twice. Its text carries both times, both output locations and the fingerprint. The sweep
-  that files it is specified under
+  filed twice. Its task is to fix the flaky check and re-enable it correctly (`D-GR21`), and its
+  text carries both times, both output locations and the fingerprint. The sweep that files it is
+  specified under
   [One classifier, five outcomes](#one-classifier-five-outcomes).
 - **A finished repair does not stand in for a new one.** The lookup that prevents a second
   item matches only an item that is not yet finished. Once a repair has landed and the check
@@ -478,9 +485,11 @@ credits a contradicted check green, reports it as an error or blocks on it. They
 function they call is under [One classifier, five outcomes](#one-classifier-five-outcomes); the
 order to build it in is [its own unit of the build order](#classify-every-check-result-in-one-place).
 The two tests that pin the `flaky` pass (`TestMemoryFailRetriesAndFlakyPass` and
-`TestMemoryOppositeWritersNeverErase` in `tools/tillr-gate/memory_test.go`) change with the slice
-that adds the rule. Until the drain's slices are built, a disabled check is still reported on
-every gate run, so it is visible, but no item is filed for it.
+`TestMemoryOppositeWritersNeverErase` in `tools/tillr-gate/memory_test.go`) change with slice 2d,
+which turns on live `disabled` reporting in `tillr-gate run` and `tillr-gate checks` only after
+the drain's marker sweep (slice 2b), consumer handling (slice 2c) and cached-evidence filtering
+(slice 3a) have landed (`D-GR41`), so a live run never emits `disabled` before consumers accept
+it and its repair item can be filed.
 
 **Where the filed request and this section differ, this section governs the build.** The
 operator request of 2026-11-20 says the check "is red in the verdict", and a build criterion
@@ -758,13 +767,15 @@ per observation in the same order. It runs no check. For a store-backed check it
 things the pure function cannot:
 
 - **It resolves the selector.** A site may hold the declaration's own id, or a labelled selector
-  the legacy gate uses (`kind/label` or `kind:label`). The face reads the declarations of the
-  judged commit and resolves the selector to exactly one declaration id, by exact match and
-  never by prefix. A selector that resolves to no declaration is not store-backed. A proof that
-  lists a declaration's id satisfies a fixer that names the labelled selector only when the
-  selector resolves to that id on the proof's commit.
-- **It computes the one fingerprint.** The fingerprint is taken from the declaration file's bytes
-  as committed in the judged tree, as
+  the legacy gate uses (`<id>:<label>` or the legacy span id `<id>/<slug(label)>` for a fast
+  declaration). The face reads the declarations of the judged commit and resolves the selector to
+  exactly one declaration id, by exact match on those forms and never by bare `<id>/` prefix. A
+  selector that resolves to no declaration is not store-backed. A proof that lists a
+  declaration's id satisfies a fixer that names the labelled selector only when the selector
+  resolves to that id on the proof's commit.
+- **It computes the one fingerprint.** When the caller does not already hold a per-unit key in
+  the result store (as `documents` P5 and `go-build` P6 do), the fingerprint is taken from the
+  declaration file's bytes as committed in the judged tree, as
   [Section 6.2](#62-a-tree-checks-result-is-remembered-by-fingerprint) defines it. No site
   computes a fingerprint from a copy it wrote (P1).
 - **It writes the marker.** When rule 3 answers and no marker exists, the face writes it before
@@ -777,10 +788,12 @@ result is legal: it asks only whether the check is disabled, and a site asks it 
 anything, so a disabled check is not run for a verdict.
 
 **The repair item is filed by a sweep of the markers, at the start of every drain pass and after
-every gate, replay, rolling or heavy step returns, whether it returned a result, an error or a
-cancellation.** The sweep is the only filer, and no site files from a verdict. For each marker:
+every gate, replay, rolling or heavy step returns — whether it returned a result, an error or a
+cancellation, and before attribution, pending reverts or dispatch.** The sweep is the only filer,
+and no site files from a verdict. For each marker:
 
-- no repair item names the marker's episode: file one;
+- no repair item names the marker's episode: file one, asking to fix the flaky check and
+  re-enable it correctly (`D-GR21`);
 - an unfinished repair item names it: nothing;
 - a landed repair item names it: run `tillr-gate enable` for that episode again.
 
@@ -967,7 +980,7 @@ in the first group is change an outcome to fit the table, or leave the decision 
 **What this changes in the slices.** Slice 1a builds the protocols and orders listed here with
 the two functions, and its table tests have one case per row and step of this section too.
 Slices 1b to 1e pass each site's protocol or order by name (the two legacy aggregate sites
-pass theirs in slice 1g, by `D-GR33`). Slices 2a to 3b are unchanged:
+pass theirs in slice 1g, by `D-GR33`). Slices 2a to 3b keep the same protocols and orders:
 rules 1 to 3 run before any protocol, a legacy check kind has no store facts and so is never
 `disabled`, and `disabled` does not count in any order.
 
@@ -1110,8 +1123,9 @@ are the designer's choice.
 The aggregate form takes observations and not classifications. A site that needs each check's
 answer while the run is going (the legacy gate prints a status as each check finishes) asks the
 plain form then, keeps the observations it sent, and sends all of them again with the flag when
-the run ends. Until slice 2a the function is pure, so the two answers for one observation
-agree; from slice 2a on, the answer of the aggregate call is the one the run's result uses.
+the run ends. Without store-backed flags the face is pure, so the two answers for one observation
+agree; when store-backed flags are passed (from slice 2a on), the answer of the aggregate call is
+the one the run's result uses.
 
 **The slices.** Slice 1e is narrowed, and two slices follow it:
 
@@ -1154,8 +1168,8 @@ than the installed face, is refused.
 
 **What this changes elsewhere in the build order.** The scan test's list keeps
 `tools/fork-check.py` after slice 1e and is empty after slice 1g. Slice 3b needs slice 1g.
-Slices 2a to 2c and 3a are unchanged: a legacy check kind has no store facts, and `disabled`
-counts in no order.
+Slices 2a to 2d and 3a are unchanged as to aggregate orders: a legacy check kind has no store
+facts, and `disabled` counts in no order.
 
 **Alternatives, each rejected by the designer:**
 
@@ -1408,6 +1422,176 @@ and is not grounds to refuse the landing.
   words in the spans it writes.
 - **Have the fixture copy all of `tools/gate/`.** Rejected in `D-GR36` for the other Go
   fixture, for the same reason: the `.keep` file is there so that the tree has no declarations.
+
+#### The second flaky-check request lands the rule in the classifier and its gate faces
+
+What follows is the designer's decision of 2026-11-22 (`D-GR41`), from the operator request for
+"Slice 2 of the flaky-check rule" and made to answer a build worker's report against it (at
+`0450fedb34`). None of it is the owner's ruling except the two quoted 2026-11-21 statements of `D-GR21` and the split ruling
+[`OQ-SP1`](./tillr-item-split.md#OQ-SP1) quoted in `D-GR32`; the owner may overturn any part of
+the designer's decision.
+
+**The report.** The request quotes both 2026-11-21 owner statements of `D-GR21` and asks for the
+whole of slice 2: add `disabled` to the one classifier slice 1 created; on a single contradicting
+observation on the same tree, disable the check and file its repair item (to re-enable it
+correctly) before any other work; treat a disabled check as neither green nor an error and let it
+block nothing; let nothing later undo or skip the disabling or filing; keep an enabled check's
+pass satisfying a fixer that names a labelled selector; and take only what this slice needs from
+`refs/tillr/runs/run-item-request-c1a6f8e4e5-a14-n5` `[unlanded]`. The worker reported three
+contradictions between those words and the repository at `0450fedb34`:
+
+1. **Five of slice 1's seven slices are not yet on the trunk, and the request's scope spans six
+   later slices.** At `0450fedb34`, only slices 1a (`020cf29eca`, `tools/tillr/checkresult` and
+   `tools/tillr-gate/classify.go`) and 1e (`0bcc3275a2`, per-check Python adapters in
+   `tools/gate/` calling `tillr-gate classify`) have landed. `rg 'checkresult' tools/` at
+   `0450fedb34` matches only `tools/tillr/checkresult/`, `tools/tillr-gate/classify.go` and
+   `tools/gate/classification-scan.test.py`, and `UNMOVED_PYTHON` in
+   `tools/gate/classification-scan.test.py` still holds `("tools/fork-check.py",)`: slices 1b,
+   1c, 1d, 1f and 1g are unbuilt, and the request's criteria span slices 2a, 2b, 2c, 3a and 3b
+   across `tools/tillr`, `tools/tillr-gate`, `tools/tillr-drain`, `tools/tillr-land`,
+   `tools/gate` and `tools/fork-check.py`.
+2. **The owner's second 2026-11-21 statement was not recorded in `D-GR21`.** The request quotes
+   that statement verbatim; it is now recorded in `D-GR21` under
+   [A contradicted check is disabled](#a-contradicted-check-is-disabled) and in the ledger.
+3. **Filing at the observation versus the marker sweep, and the installed `tillr-gate` boundary.**
+   `tillr-gate` has no access to the SQLite queue (`D-GR23`), and Python adapters (`tools/gate/`)
+   and replays call the installed `tillr-gate` on `PATH`, which deploys only from the green
+   pointer (`D-GR5`, [Section 6.7](#67-deploys-read-the-green-pointer)). Moreover, if slice 2a
+   made `tillr-gate run` and `tillr-gate checks` emit `disabled` on live runs before slices 2b,
+   2c and 3a landed, existing callers on `0450fedb34` would treat `disabled` as a failure or
+   corruption (`parseTreeCheckJSON` in `tools/tillr-drain/drain/heavy.go` rejects any result
+   outside `pass`, `fail` and `unavailable`; `allChecksPassed` in
+   `tools/tillr-drain/drain/heavy_revert.go` and `fixerNamedChecksPass` in
+   `tools/tillr-drain/drain/fixer_gate.go` require every check to equal `pass`) and no sweep
+   would exist yet to file the repair item.
+
+**How "at that observation ... before any other work" and the marker sweep fit together.** The
+rule has two halves across the process boundary (`D-GR23`), and neither waits on a verdict, a
+retry or later cleanup:
+
+- **At the observation (slice 2a):** the moment a single opposite record completes a
+  contradiction on one fingerprint (one pass and one fail, in either order, with no count or
+  retry), `tillr-gate` atomically writes `disabled/<sha256(check_id)>.json` and copies any
+  recorded pass and fail output logs into `disabled/` before it prints its output or returns. No
+  cleanup failure, sibling check failure or context cancellation after that write removes the
+  marker or its copied logs.
+- **Before any other drain work (slice 2b):** `tillr-drain` sweeps `disabled/*.json` at the start
+  of every drain pass and immediately when every gate, replay, rolling or heavy step returns —
+  whether that step returned a result, an error or a cancellation, and before attribution,
+  pending reverts (`revertPendingHeavy`), fixer settlement or worker dispatch. Each unfiled
+  episode gets one deduplicated repair item (`flaky-<check-id>`, `-2`, `-3`, ...) asking to fix
+  the flaky check and re-enable it correctly (`D-GR21`), carrying the fingerprint, both times and
+  both retained output locations.
+
+**Why slice 2a splits from live runner emission (slice 2d).** For the same two reasons slices 1a
+(`D-GR32`) and 1f (`D-GR33`) landed before their callers — the installed-binary boundary of
+`D-GR5` and [`OQ-SP1`](./tillr-item-split.md#OQ-SP1) — the rule lands in the classifier and its
+`tillr-gate` faces first (slice 2a), while turning on live `disabled` emission in `tillr-gate
+run`, `tillr-gate checks` (`G2`, `G3`, `G4`, `G7`) and the Python store-backed adapters (`P4` to
+`P6`) moves to slice 2d, after slice 1b, a proved trunk commit holding slice 2a, slice 2b (the
+drain's marker sweep), slice 2c (every Go consumer handling `disabled`) and slice 3a
+(cached-evidence filtering) have landed. That way no live gate or proof run emits `disabled`
+while `tillr-drain` would misread it as an error or drop its repair item.
+
+**What this request's landing (slice 2a) builds:**
+
+- **Rules 1 to 3 in `tools/tillr/checkresult`.** `Classify` evaluates rules 1 to 4 in order:
+  1. when the observation marks the check as under proof for its own repair (`proving` true), skip
+     rules 2 and 3 and classify the raw result by rule 4;
+  2. when the observation carries an active `disabled` marker for the check, answer `disabled`
+     with the marker's evidence (`fingerprint`, `pass_at`, `pass_log_ref`, `fail_at`,
+     `fail_log_ref` and any `repair_item`), whether or not a raw result was supplied;
+  3. when the fingerprint has both a pass and a fail (either both already stored or one stored and
+     the other supplied by this observation's rule-4 `pass` or `fail` raw result, and not matching
+     the check's resolved episode in `enabled/`), answer `disabled` with both times and both log
+     locations (`""` when unrecorded);
+  4. otherwise classify the raw result under its named protocol (`D-GR28`), or answer `unknown`
+     with detail `unobserved` when no raw result was supplied (a pre-run query on an enabled
+     check).
+  `Aggregate` already leaves `disabled` out of every order (`020cf29eca`); unit tests in
+  `tools/tillr/checkresult` pin `disabled` exclusion across all four orders (`runner`, `shadow`,
+  `legacy-gate`, `legacy-replay`), including an all-`disabled` run passing with 0 passed and 1+
+  disabled.
+- **Store-backed mode on `tillr-gate classify`.** Without `--repo` or `--store`, `tillr-gate
+  classify` stays pure: it touches no Git repository and no file on disk, so every caller from
+  slice 1e (`0bcc3275a2`, including tests that run in a temporary directory outside Git such as
+  `tools/gate/change-gate.test.py`) keeps working unchanged. With `--repo <dir>` (and optional
+  `--store <dir>`, defaulting to the worktree's common-dir `tillr-gate/results` under `--repo`,
+  plus repeatable `--prove-disabled <check-id>`), `tillr-gate classify` resolves each
+  observation's `check` against `tools/gate/checks/*.json` on `commit` (defaulting to `HEAD`, or
+  from the worktree when `worktree` is true) by exact match on `<id>`, `<id>:<label>` or the
+  legacy span id `<id>/<slug(label)>` for a fast declaration (never by bare `<id>/` prefix, and
+  failing on an ambiguous match); uses the observation's explicit `fingerprint` when a per-unit
+  caller (`documents` P5 or `go-build` P6) supplies one, or else computes the canonical
+  declaration fingerprint from the declaration bytes committed in that tree; reads `disabled/`,
+  `enabled/` and `<fingerprint>.pass.json` / `<fingerprint>.fail.json`; calls
+  `checkresult.Classify`; and when rule 3 fires with no marker present, atomically writes
+  `disabled/<sha256(check_id)>.json` after copying any existing pass and fail logs into
+  `disabled/`, before printing the JSON array. The classification output carries the canonical
+  declaration id and, when `disabled`, the episode and evidence fields. An observation with no
+  raw result is accepted as a pre-run query.
+- **`tillr-gate enable`.** `tillr-gate enable --check <check-id> --episode <episode> [--worktree
+  <dir>] [--store <dir>]` validates the episode string (`<fingerprint>|<pass_at>|<fail_at>` in
+  RFC3339Nano UTC), checks `disabled/<sha256(check_id)>.json`, records the resolved episode in
+  `enabled/<sha256(check_id)>.json` so a stale cached proof from before the repair cannot
+  re-disable the check on the old pair, moves the contradicting `<fingerprint>.pass.json` and
+  `<fingerprint>.fail.json` records (and copied logs) into `resolved/`, and removes the marker
+  only when the marker's episode matches `--episode` (leaving a newer episode's marker untouched,
+  and succeeding idempotently when the episode is already enabled and no marker holds another
+  episode).
+- **`log_ref` on stored records.** `storedResult` in `tools/tillr-gate/memory.go` gains
+  `log_ref` (`omitempty`) populated when `tillr-gate` publishes a pass or fail record; older
+  records with no `log_ref` remain valid. `tillr-gate run` and `tillr-gate checks` keep their
+  existing live `pass`/`fail` behavior in slice 2a (and `TestMemoryFailRetriesAndFlakyPass` and
+  `TestMemoryOppositeWritersNeverErase` stay green until slice 2d replaces them).
+- **What may be taken from `refs/tillr/runs/run-item-request-c1a6f8e4e5-a14-n5` `[unlanded]`.**
+  Only the marker, episode, `enabled/` fence, `resolved/` archive and `tillr-gate enable`
+  store mechanics that fit `checkresult` and `tillr-gate` may be adapted from
+  `refs/tillr/runs/run-item-request-c1a6f8e4e5-a14-n5` `[unlanded]`. Nothing in
+  `tools/tillr-drain`, `tools/tillr-land`, `tools/fork-check.py` or `tools/gate/*.py`, no raw
+  `== "disabled"` consumer branch, and no `TILLR_DISABLED_OBSERVATIONS` side-channel variable may
+  be taken from that ref. `just pack-sync` mirrors the `tools/tillr` and `tools/tillr-gate` edits
+  into `yolo-packs/tillr/`.
+
+**Unmet cases of the request, left to later slices and named in the candidate's commit message:**
+
+| Request case | Slice that meets it | Why it is outside slice 2a |
+| :--- | :--- | :--- |
+| Remaining slice-1 callers (`G1`–`G12`, `D1`–`D34`, `--aggregate`, `F6`/`F9`) | Slices 1b, 1c, 1d, 1f, 1g | Prerequisite single-classifier routing (`D-GR23`, `D-GR28`, `D-GR33`) |
+| Filing `flaky-<check-id>` (and `-2`, `-3`, ...) to re-enable the check, before attribution, pending reverts or dispatch | Slice 2b | Lives in `tillr-drain`, which owns the SQLite queue (`D-GR23`) |
+| Drain and lander sites (`D1`–`D34`, `L3`) treating `disabled` as non-green, non-error and non-blocking, dropping cached `disabled` proofs, and passing `--prove-disabled` for the repair item | Slices 2c and 3a | Must land in `tillr-drain` / `tools/tillr-land` before live gate runs emit `disabled` |
+| Live `tillr-gate run` / `tillr-gate checks` (`G2`, `G3`, `G4`, `G7`) and Python store-backed adapters (`P4` to `P6`) emitting `disabled` and `--prove-disabled` | Slice 2d | Waits on a proved trunk commit holding 2a (`D-GR5`) and on slices 1b, 2b, 2c and 3a so consumers and the sweep are live first |
+| Committed declaration bytes (`P1`), retained output logs (`P3`), legacy gate/replay `DISABLED` handling (`tools/fork-check.py`), replaying older commits through current classification, and resolving labelled fixer selectors (`D16`, `D31`) through the installed face | Slice 3b | Waits on slices 1g and 2d |
+
+**What a verifier of this landing judges.** The candidate builds slice 2a only: rules 1 to 3 in
+`tools/tillr/checkresult`, store-backed `--repo` / `--store` / `--prove-disabled` on `tillr-gate
+classify` (including exact `<id>`, `<id>:<label>` and `<id>/<slug(label)>` selector resolution,
+committed-declaration fingerprinting, optional per-unit `fingerprint`, pre-run query with no raw
+result, and atomic marker + log-copy creation on a single contradiction), `tillr-gate enable`
+with episode matching and `enabled/` + `resolved/` transitions, `log_ref` on stored records, Go
+tests covering each of those behaviors, and `yolo-packs/tillr/` synced via `just pack-sync`.
+Plain `tillr-gate classify` with no flags stays pure, `tillr-gate run` and `tillr-gate checks`
+do not yet emit `disabled`, and a verifier does not refuse this landing for the unmet cases in
+the table above, which the candidate's commit message lists.
+
+**Alternatives, each rejected by the designer:**
+
+- **Build slices 1b–1d, 1f–1g and 2a–3b in one commit.** Violates [`OQ-SP1`](./tillr-item-split.md#OQ-SP1)
+  and breaks on `D-GR5` because Python adapters and replays invoke the installed `tillr-gate` on
+  `PATH`, which lacks the new flags until a trunk commit holding slice 2a is proved green.
+- **Have `tillr-gate run` and `tillr-gate checks` emit `disabled` in slice 2a before slices 2b,
+  2c and 3a land.** Every live caller in `tillr-drain` at `0450fedb34` rejects `disabled` or
+  treats non-`pass` as failure, and no marker sweep exists yet to file the repair item.
+- **Open the SQLite queue inside `tillr-gate` so `tillr-gate` files the repair item itself.**
+  Rejected in `D-GR23`: `tillr-gate` runs inside isolated worktrees and tests with no queue, and
+  marker writing at the observation plus the drain's step-boundary sweep meets "at that
+  observation ... before any other work" without coupling the runner to the queue.
+- **Read the repository and result store on every `tillr-gate classify` call with no flag.**
+  Breaks existing pure callers from slice 1e (`0bcc3275a2`) that run outside a Git worktree or
+  assert zero filesystem side effects.
+- **Carry `TILLR_DISABLED_OBSERVATIONS` or scattered `== "disabled"` checks from
+  `refs/tillr/runs/run-item-request-c1a6f8e4e5-a14-n5` `[unlanded]`.** Rejected in `D-GR23`: that
+  side-channel architecture was refused eleven times for missing sites.
 
 ### 6.3 A missing machine resource is named, not failed
 
@@ -2805,9 +2989,10 @@ owner ruled on both on 2026-11-17, and that ruling is `D-GR15`. `D-GR16` is this
 decision carrying `D-GR15` out, and is the owner's to overturn. `D-GR17` records the owner's
 2026-11-19 ruling on shard lifetime and tests that hang or fail under load, together with the
 2026-11-20 scope ruling for its build. `D-GR21` is the owner's ruling of 2026-11-21 on a check
-with a pass and a fail on one fingerprint, quoted verbatim; `D-GR22` is the operator's reading of
-it together with this design's mechanism, neither of which is the owner's ruling, and both are
-the owner's to overturn. `D-GR23` is the designer's decision of 2026-11-21 on where that
+with a pass and a fail on one fingerprint, recorded in two verbatim statements from that day;
+`D-GR22` is the operator's reading of the first statement together with this design's mechanism,
+neither of which is the owner's ruling (except the two points the owner's second statement ruled
+directly), and the rest is the owner's to overturn. `D-GR23` is the designer's decision of 2026-11-21 on where that
 mechanism lives, and is also the owner's to overturn. `D-GR31` is the designer's decision of
 2026-11-21, from an operator request, on which Go tests the culprit search does not replay, and
 is the owner's to overturn. The rows `D-GR21` and `D-GR22` were first numbered `D-GR18` and `D-GR19`, which the
@@ -2837,7 +3022,13 @@ fixtures measured, and is the owner's to overturn. `D-GR38` is the owner's rulin
 on the gate's time for a drain change, quoted verbatim from the operator request that carried
 it; it amends `D-GR1` and answers `D-GR27`. `D-GR39` is the designer's decision of 2026-11-22,
 from that operator request and made to answer a build worker's report against it, on the check
-that runs the affected Go test packages before the merge; it is the owner's to overturn.
+that runs the affected Go test packages before the merge; it is the owner's to overturn. `D-GR40`
+is the designer's decision of 2026-11-22, answering a second worker report on that request by
+keeping Go's result cache on for every selected package; it amends `D-GR39` and is the owner's to
+overturn. `D-GR41` is the designer's decision of 2026-11-22, from the operator request for
+"Slice 2 of the flaky-check rule" and made to answer a build worker's report against it; it
+splits live `disabled` emission into slice 2d after the drain's sweep and consumer slices, narrows
+this request's landing to slice 2a, and is the owner's to overturn.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
@@ -2860,8 +3051,8 @@ that runs the affected Go test packages before the merge; it is the owner's to o
 | `D-GR18` | **Owner ruling, 2026-11-20:** "for this repository, I want a personal filter that says the commits may only be one of the two identities, my personal or professional identity. But that is for this repository, not for Tiller." | 2026-11-20 | [Which identities this repository accepts](#which-identities-this-repository-accepts) | Not yet built |
 | `D-GR20` | **Designer's decision on the operator request; the owner may overturn it.** Bound aggregate test parallelism across runs. Lanes test the bound and exclusion of queue time; the proof operator measures before/after proof wall time and load with five active lanes. | 2026-11-20 | [Bound concurrent tests, not just shards](#bound-concurrent-tests-not-just-shards) | Not yet verified |
 | `D-GR19` | **Designer's decision on the operator request; the owner may overturn it.** Apply one tracked list of exact pairs to author and committer in both the standalone check and the live `commit-identity` gate. Preserve their ranges and refusal of repository identity overrides; do not change commit creation or tillr. | 2026-11-20 | [Which identities this repository accepts](#which-identities-this-repository-accepts) | Not yet built |
-| `D-GR21` | **Owner ruling (2026-11-21), verbatim:** *"The correct move for a flaky test is disable it, file an item to fix it, and don't let it block anything. It is not considered green, but it also doesn't let you block other things."* It governs a check whose result store holds both a pass and a fail for one fingerprint, and replaces the `flaky` pass of `D-GR8`, the live re-run of [`OQ-ER3`](./tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3) option A, and the red verdict a filed operator request of 2026-11-20 asked for. | 2026-11-21 | [A contradicted check is disabled](#a-contradicted-check-is-disabled) | — |
-| `D-GR22` | **Not the owner's ruling; the owner may overturn it.** The operator's reading of `D-GR21` (2026-11-21): the check is disabled and not run for a verdict, is reported as disabled and never as passed or green, refuses no landing, does not turn the trunk red, gets one deduplicated repair item with both times and both output locations, and is enabled again when the repair lands. The designer's mechanism for it (2026-11-21): a `disabled` result counted apart from passes; `log_ref` on each stored record; a marker per check id, so a new fingerprint does not re-arm an unrepaired check; the drain files `flaky-<check-id>` from the verdict, matching only an unfinished item, so a contradiction found after a landed repair files a new item with the new evidence; the repair's own candidate runs the check, and `tillr-gate enable` then removes the marker and sets the contradicting pair aside. **Rejected:** a red verdict (the filed request; replaced by `D-GR21`); a live re-run whose pass is green ([`OQ-ER3`](./tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3) option A; replaced by `D-GR21`); disabling by fingerprint alone; any retry, count or time window. | 2026-11-21; numbering and repair-item rule amended 2026-11-21 | [A contradicted check is disabled](#a-contradicted-check-is-disabled) | — |
+| `D-GR21` | **Owner ruling (2026-11-21), verbatim (two statements):** *"The correct move for a flaky test is disable it, file an item to fix it, and don't let it block anything. It is not considered green, but it also doesn't let you block other things."* and *"And the principle here is you make the trunk green by disabling the flaky test. The test is not green because it's flaky, but the trunk is green because the test is no longer included.And yes, the item that is filed should be to re-enable it correctly, the test that was flaky."* It governs a check whose result store holds both a pass and a fail for one fingerprint, rules that disabling excludes the flaky check so the trunk is green while the check itself is not green and that the filed item is to re-enable the flaky check correctly, and replaces the `flaky` pass of `D-GR8`, the live re-run of [`OQ-ER3`](./tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3) option A, and the red verdict a filed operator request of 2026-11-20 asked for. | 2026-11-21 | [A contradicted check is disabled](#a-contradicted-check-is-disabled) | — |
+| `D-GR22` | **Not the owner's ruling (except the two points ruled directly in `D-GR21`'s second statement); the owner may overturn the rest.** The operator's reading of `D-GR21` (2026-11-21): the check is disabled and not run for a verdict, is reported as disabled and never as passed or green, refuses no landing, does not turn the trunk red (ruled directly in `D-GR21`), gets one deduplicated repair item with both times and both output locations, and is enabled again when the repair lands (filing the item to re-enable the flaky check correctly is ruled directly in `D-GR21`). The designer's mechanism for it (2026-11-21): a `disabled` result counted apart from passes; `log_ref` on each stored record; a marker per check id, so a new fingerprint does not re-arm an unrepaired check; the drain files `flaky-<check-id>` from the marker (`D-GR23`, replacing "from the verdict"), matching only an unfinished item, so a contradiction found after a landed repair files a new item with the new evidence; the repair's own candidate runs the check, and `tillr-gate enable` then removes the marker and sets the contradicting pair aside. Amended by `D-GR41` so live `disabled` emission turns on in slice 2d after the sweep (2b) and consumer handling (2c, 3a) land. **Rejected:** a red verdict (the filed request; replaced by `D-GR21`); a live re-run whose pass is green ([`OQ-ER3`](./tillr-evidence-registry-and-suite-guardrail.md#OQ-ER3) option A; replaced by `D-GR21`); disabling by fingerprint alone; any retry, count or time window. | 2026-11-21; amended 2026-11-21 and 2026-11-22 | [A contradicted check is disabled](#a-contradicted-check-is-disabled) | — |
 | `D-GR23` | **Not the owner's ruling; the designer's decision, which the owner may overturn.** Every site that classifies a check result (70, listed by function and consumer) calls one function, `Classify` in a `checkresult` package of the shared `tools/tillr` module, reached from Python and for store reads through one face, `tillr-gate classify`. It has five outcomes: `pass`, `fail`, `unknown`, `unavailable` and `disabled`; a site decides blocking and credit from the outcome alone. A cached result is classified when it is used. A replayed commit supplies the declaration and the command, never the classification. The repair item is filed by a sweep of the marker files, which replaces "from the verdict" in `D-GR22`; a generated repair item needs no document block. **Rejected:** teaching each site the rule as it is found (refused by its verifier eleven times); a classifier per program held together by a shared table; filing from the verdict with a filing step on every exit path; four outcomes with `unavailable` folded into `unknown`. | 2026-11-21 | [One classifier, five outcomes](#one-classifier-five-outcomes) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
 | `D-GR24` | **Owner ruling (2026-11-21), verbatim:** *"So I think the real rule should be you can only start a new item if the previous item's trunk landing went green because you don't want to start it until the other one has landed on the trunk and it's okay and then you always just base an item on the most recent green on the trunk, and I think that satisfies everything."* and *"And yes, of course, a trunk fixer is meant to only be based on a red change, so of course it's based on a red one."* It replaces the owner's 2026-11-17 overturn of [`OQ-GR2`](#OQ-GR2) for new work. From an operator request of the same day, which reads the ruling as the `green` value of `lane_base` and reads "the previous item" as the item's blocker (the operator's reading, which the owner may overturn): a new lane is cut from the green pointer; an item whose blocker has landed is held with the reason `trunk-unproved` until the heavy runner has proved a trunk commit containing that landing; a trunk fixer starts from the tip; this repository sets `lane_base` to `green`. | 2026-11-21 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ [`config/tillr/gate-policy.json`](../../config/tillr/gate-policy.json) selects `green`, pinned by `TestRepositoryGatePolicyUsesGreenLaneBase` in [`gate_policy_test.go`](../../tools/tillr-drain/gate_policy_test.go). The [lane-base tests](../../tools/tillr-drain/drain/lane_base_test.go) verify the blocker-proof wait and the fixer base. |
 | `D-GR25` | **Not the owner's ruling and not a decision: the designer's list, for the owner to rule on.** The built `green` behavior differs from the words of `D-GR24` in five cases, tabled in Section 6.6: a lane cut from an unproved commit after green when the item's own block is newer than green; the same when the item's design answer landed after green; lanes cut from the tip when no green pointer exists; a fork blocker proved by its delivered patch branch, not by the green pointer; and a landed blocker with no recorded landing, which waits. Each stays as built until the owner rules. **Rejected:** changing any of them to match the words, which the request that carried the ruling forbids. | 2026-11-21 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ as built (`tools/tillr-drain/drain/lane_base.go`); no ruling yet |
@@ -2871,8 +3062,8 @@ that runs the affected Go test packages before the merge; it is the owner's to o
 | `D-GR29` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request of 2026-11-21 asks for the repair of commit `4790d2ad43` (receive a test's completions before canceling) in `policy_reload_test.go`, `fixer_intermittent_test.go`, `pass_measurement_test.go` and `lane_dirty_test.go`, saying all four cancel and then receive. At `86e2549392` only `policy_reload_test.go` does; the other three receive under `context.Background()`, where `sendCompletion` cannot drop a completion. So only `policy_reload_test.go` is repaired: its workers are released by a channel and their completions received while the context is live, with `cancel()` last; the repaired receive waits under the `hangGuard` deadlock detector and a released worker returns an error. The three others are unchanged and named with the reason in the commit body, which also states whether the real loop can lose a completion after cancel. The mirror comes from `just pack-sync`. **Rejected:** editing the three files that have no cancel; a time limit on the receive in place of the repair; a `hangGuard` on the three receives that have no fault (a second, unlanded draft of this decision proposed it); repairing `Loop.Examine` in `recovery.go` in the same change, which needs its own request; changing `sendCompletion`. **Recorded 2026-11-21 by the designer:** a third unlanded draft reached the same answer and is not adopted as a separate text; the built cleanup's receive is a bare receive on a live context, not one under `hangGuard`, and is accepted as built. **Recorded 2026-11-22 by the designer:** a fourth unlanded draft, written against the same worker report, reached the same answer and is not adopted; that report is answered by this row, the repair is built, and no build work remains under the request. The rule kept from it: no test cleanup makes a blocking receive from the loop's completions channel after it cancels the context its workers send under. | 2026-11-21 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (commit `c6a01f6e84`: [`policy_reload_test.go`](../../tools/tillr-drain/drain/policy_reload_test.go) and its mirror) |
 | `D-GR30` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** Each run of the fast gate that judges a candidate before it lands, on its ordinary path, leaves a durable record of its wall time, each check's elapsed time and whether it ran, was reused or was not run, and the Go packages each Go check selected. The packages come from `go-build`'s own `go list`, from `go-substrate`'s `go test` output, and for `gate-runner`, which runs sharded and prints no package lines, from `tools/go-test-shards.py` writing its `go list` result to the file named by `TILLR_GO_SHARDS_EVIDENCE_OUT`, before compiling, and only when that variable is set. The Go package piece may therefore edit `tools/go-test-shards.py` and `tests/go-test-shards.test.py` for that producer and its fixture tests only. The heavy trunk proof, the legacy tree-check bridge, relanding, the automatic revert candidate, named replays and the heavy-failure count are out of scope and listed in the candidate's commit message. **Rejected:** leaving `gate-runner` out; reading the `--events` file; a second `go list` in `tools/fork-check.py`; running the suite unsharded. | 2026-11-21 | [Section 6.11](#611-the-fast-gate-before-a-landing-records-its-time-and-its-go-packages) | — (not built) |
 | `D-GR31` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request of 2026-11-21 reports the heavy runner still replaying a deadlocked Go test alone after `5c78981400`, and asks to find the path and stop it there with no time limit. The path is `HeavyRunner.attribute` to `findFirstRed` to `judgeHeavyGo` in `declaration` mode, for a named case whose first proof recorded Go's runtime deadlock error (`fatal error: all goroutines are asleep - deadlock!`) and no timeout panic; `5c78981400` skips the replay only for the timeout panic. The rule is widened: a named Go test whose first-proof output holds either line is not replayed, at the same three places as the timeout case (`attribute`, `retainRedRepairs`, and the suite check beside an unnamed failure), and one fixer is filed against the tip. This amends the request's sixth criterion, which names only the test-timeout panic, to cover the deadlock line the first proof actually recorded. **Rejected:** skipping the replay for every Go `fatal error:`; a time limit on a focused replay; never replaying a named Go test. | 2026-11-21 | [A Go test that did not finish is not replayed](#a-go-test-that-did-not-finish-is-not-replayed) | — (not built; the timeout half is `5c78981400`, `tools/tillr-drain/drain/heavy_go.go`) |
-| `D-GR32` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request for the first classifier slice names every site and adds that classification on replay runs from current code and that a test per site shows the call. The operator answered a build worker's report on 2026-11-21: "the installed tillr-gate cannot have the classify face until a change containing it lands and is proved green, so split here. Offer as this item's landing only the classify face in tillr-gate with its tests, and nothing that calls the installed face." The request's landing is therefore slice 1a alone: `checkresult` with `Classify` and `Aggregate`, the `tillr-gate classify` face, their tests and the pack mirror, with no caller and no existing test edited. The unmet cases are named in the candidate's commit message and follow as later changes: every site calling the function with a test per site (slices 1b to 1e), the adapters calling the installed face (slice 1e), and replay classified from current code (slices 1e and 3b). A verifier does not refuse this landing for them. The scan test moves from slice 1a to the first of slices 1b to 1e to land. The ruling this rests on is the owner's [`OQ-SP1`](./tillr-item-split.md#OQ-SP1) of 2026-11-21, verbatim: *"part of desgins can absoutely land. this is generally MORE healthy. Remember, we're trying to mirror humans here. Humans desire to land the smallest functional change possible to make reviewing, testing, velocity, all this stuff easier, and it will also make it easier for us."* **Rejected:** one change holding the face and its callers; Python sites calling a `tillr-gate` built from the candidate's tree; holding the face until a caller is ready. | 2026-11-21 | [The first classifier landing is the function and its face, with no caller](#the-first-classifier-landing-is-the-function-and-its-face-with-no-caller) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
-| `D-GR33` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request that follows the first classifier landing asks that the gate adapters call the installed `tillr-gate classify`. The installed face classifies each observation and aggregates nothing (measured 2026-11-21: `--aggregate legacy-gate` is refused as an undefined flag, exit 2), so the legacy gate's and the legacy replay's aggregates (F6, F9) cannot hand over their order's name as `D-GR28` requires. The face gains `--aggregate <order>`: the same observations in, one object out with `checks` (the plain form's array) and `run` (`outcome`, `detail`, `exit_code`), for the orders `runner`, `shadow`, `legacy-gate` and `legacy-replay`; another name is exit 2 with no output, and the plain form is unchanged. Slice 1e is narrowed to the Python sites that classify one check and is the request's landing; slice 1f adds the flag with no caller; slice 1g moves `verdict_of` and `run_replay` onto it after a proved trunk commit holds 1f. Until then the two functions keep their code and change no outcome, and a verifier does not refuse the request's landing for them. Landing a part while a named case is unmet rests on the owner's [`OQ-SP1`](./tillr-item-split.md#OQ-SP1), quoted in `D-GR32`; applying it here is the designer's reading. **Rejected:** holding every adapter until the face aggregates; one change holding the flag and its callers; ordering the face's per-check answers in Python; an aggregate form that takes classifications; a second `aggregate` face. | 2026-11-21 | [The face aggregates a run in its own landing, before the legacy aggregates call it](#the-face-aggregates-a-run-in-its-own-landing-before-the-legacy-aggregates-call-it) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
+| `D-GR32` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request for the first classifier slice names every site and adds that classification on replay runs from current code and that a test per site shows the call. The operator answered a build worker's report on 2026-11-21: "the installed tillr-gate cannot have the classify face until a change containing it lands and is proved green, so split here. Offer as this item's landing only the classify face in tillr-gate with its tests, and nothing that calls the installed face." The request's landing is therefore slice 1a alone: `checkresult` with `Classify` and `Aggregate`, the `tillr-gate classify` face, their tests and the pack mirror, with no caller and no existing test edited. The unmet cases are named in the candidate's commit message and follow as later changes: every site calling the function with a test per site (slices 1b to 1e), the adapters calling the installed face (slice 1e), and replay classified from current code (slices 1e and 3b). A verifier does not refuse this landing for them. The scan test moves from slice 1a to the first of slices 1b to 1e to land. The ruling this rests on is the owner's [`OQ-SP1`](./tillr-item-split.md#OQ-SP1) of 2026-11-21, verbatim: *"part of desgins can absoutely land. this is generally MORE healthy. Remember, we're trying to mirror humans here. Humans desire to land the smallest functional change possible to make reviewing, testing, velocity, all this stuff easier, and it will also make it easier for us."* **Rejected:** one change holding the face and its callers; Python sites calling a `tillr-gate` built from the candidate's tree; holding the face until a caller is ready. | 2026-11-21 | [The first classifier landing is the function and its face, with no caller](#the-first-classifier-landing-is-the-function-and-its-face-with-no-caller) | ✅ (`020cf29eca`) |
+| `D-GR33` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request that follows the first classifier landing asks that the gate adapters call the installed `tillr-gate classify`. The installed face classifies each observation and aggregates nothing (measured 2026-11-21: `--aggregate legacy-gate` is refused as an undefined flag, exit 2), so the legacy gate's and the legacy replay's aggregates (F6, F9) cannot hand over their order's name as `D-GR28` requires. The face gains `--aggregate <order>`: the same observations in, one object out with `checks` (the plain form's array) and `run` (`outcome`, `detail`, `exit_code`), for the orders `runner`, `shadow`, `legacy-gate` and `legacy-replay`; another name is exit 2 with no output, and the plain form is unchanged. Slice 1e is narrowed to the Python sites that classify one check and is the request's landing; slice 1f adds the flag with no caller; slice 1g moves `verdict_of` and `run_replay` onto it after a proved trunk commit holds 1f. Until then the two functions keep their code and change no outcome, and a verifier does not refuse the request's landing for them. Landing a part while a named case is unmet rests on the owner's [`OQ-SP1`](./tillr-item-split.md#OQ-SP1), quoted in `D-GR32`; applying it here is the designer's reading. **Rejected:** holding every adapter until the face aggregates; one change holding the flag and its callers; ordering the face's per-check answers in Python; an aggregate form that takes classifications; a second `aggregate` face. | 2026-11-21 | [The face aggregates a run in its own landing, before the legacy aggregates call it](#the-face-aggregates-a-run-in-its-own-landing-before-the-legacy-aggregates-call-it) | Slice 1e ✅ (`0bcc3275a2`); 1f and 1g unbuilt ([build order](#classify-every-check-result-in-one-place)) |
 | `D-GR34` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The request's landing (slice 1e) was to pass every existing test unedited. One existing test cannot: `tests/fast-tree-in-done.test.py` copies only `tools/fork-check.py` and `tools/gate/tree-check.py` into its tree and writes its own `tillr-gate` first on PATH, which asserts that it was called as `checks --fast-tree`, so the moved fast tree adapter's `classify` call gets exit 1 and no output, the adapter answers exit 4, and the test's expected exit 1 fails (a build worker's reproduction, 2026-11-21). The rule is split: a test's assertions are edited by no slice; its fixture setup may be edited in two ways only. The fixture copies any file a moved adapter newly reads, and a program a test writes to stand in for `tillr-gate` hands `classify` to the next `tillr-gate` on PATH, unchanged, and never classifies by itself. The Python sites may share one file under `tools/gate` that makes the call and compares nothing. **Rejected:** holding the fast tree adapter back; a stand-in that prints a classification; an option or environment variable naming the classifier; an adapter that falls back to its own pairing; rewriting the fixture with no stand-in. | 2026-11-21 | [A stand-in for the installed program is fixture setup, and it answers classify](#a-stand-in-for-the-installed-program-is-fixture-setup-and-it-answers-classify) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
 | `D-GR35` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request of 2026-11-21 reports the proof worktree's registration left locked with reason `initializing` and no directory, 20 failed heavy runs on `missing but locked`, and a trunk that could not be proved until the operator ran `git worktree unlock` and `git worktree prune`; it asks that the heavy runner recover by itself and that the change say what interrupted the add. Recovery: when the registration of the runner's own proof path is locked, the runner, under the registry lock it already holds, unlocks that path, reports one loop-log line with the path, the lock's reason and the `locked` file's time, and continues with its existing remove and add; a test covers the directory missing and the directory present. The cause: not established. `gateRestart` defers the exec while `heavyProofActive` is set, since `edaa4fdf4b`, so the tree does not show an in-place restart crossing the add, and the incident's logs were not available to the design seat; the building commit states the cause as unconfirmed and does not name the restart. Cancellation ending Git with SIGKILL is recorded as a hypothesis only. **Rejected:** `git worktree prune` in the runner, because it acts on other worktrees' registrations; `git worktree add --force --force`, because it overrides a lock without recording it; naming the restart as the cause from the request's words alone, because the code at that build contradicts it. | 2026-11-21 | [The proof worktree's registration is left locked](#the-proof-worktrees-registration-is-left-locked) | — (not built) |
 | `D-GR36` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** A build worker's plan for the adapters' landing (slice 1e) allowed writes only under `tools/gate/` and to `tests/fast-tree-in-done.test.py`. The Go test `TestFixerGateJudgesOwnDiffThenNamedChecksAndLands` in `tools/tillr-drain/drain/fixer_gate_test.go` copies only `tools/fork-check.py` and `tools/gate/change-gate.py` into its tree and runs the real change gate, so an adapter that reads a shared file fails there with `ModuleNotFoundError` until the fixture copies that file too (a build worker's reproduction, 2026-11-21). The two setup edits of `D-GR34` apply to every test whose fixture copies a moved adapter or writes a stand-in, in any language and directory, Go tests under `tools/tillr-drain`, `tools/tillr-gate` and `tools/tillr-loop` included. Those test files, for those edits only, and their pack mirrors regenerated by `just pack-sync`, are among the files slices 1e and 1g may write. A `tillr-gate` a test builds from the repository's source is the real program and not a stand-in. **Rejected:** repeating the call in each adapter; leaving `change-gate.py` out for this reason; copying all of `tools/gate/` into the fixture; listing every copying fixture in the document. | 2026-11-22 | [A fixture that copies a moved adapter is in the mover's change, in any language](#a-fixture-that-copies-a-moved-adapter-is-in-the-movers-change-in-any-language) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
@@ -2884,6 +3075,7 @@ that runs the affected Go test packages before the merge; it is the owner's to o
 | OQ-GR2 | The default of a per-repository setting, `lane_base`: a new lane starts from the last green commit; a repository may choose the trunk tip. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are that a worker does not pay for a failure it did not cause, and the same cost-direction rule. The owner may overturn it. **Rejected:** always cutting from the tip. **Overturned by the owner on 2026-11-17** (`1fa2c069c`): work is always built against the latest trunk, never a past commit; a lane cut from the green pointer was handed a tree older than its own item's definition and produced false conflicts. This repository set `tip`; the code's default when the key is absent is still `green`. **Replaced by the owner's ruling of 2026-11-21** (`D-GR24`): new work starts from the last proved trunk commit again, and this repository sets `green`. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/drain/lane_base.go`; the repository setting follows `D-GR24`) |
 | OQ-GR3 | A change to the gate's own runner lands only after the runner's suite passes, before the merge, under either strategy. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principle is the fence of [escalation ladder Section 5.2](escalation-ladder.md#52-the-fence-what-a-lane-may-not-edit) (gate definitions change only as their own item), for the reason the 2026-11-05 ruling gave: a wrong judge is the one red a revert does not repair. The owner may overturn it. **Rejected:** landing it in ten seconds and re-running every landing's fast checks after a red suite. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/gate/runner-first.test.py`) |
 | `D-GR40` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** It amends `D-GR39` to match the operator request of 2026-11-21, whose words are "runs go test on the selected packages with Go's test cache left on (no -count=1)". The one exception `D-GR39` made is withdrawn: no package the affected-packages check selects is run with `-count=1`, whatever the reason it was selected. The stale pass that exception guarded against is stopped another way. The check passes each test package that has an entry in the edges file a digest of that entry's inputs in an environment variable, the package's tests read the variable, and Go's result cache then reruns the package when the digest changes and answers from the cache when it does not. The timing record no longer holds a `-count=1` field. Every other part of `D-GR39` stands. **Rejected:** `-count=1` for packages selected only through a declared edge (`D-GR39`'s exception; the request excludes it); the cache on for those packages with their inputs left invisible to it (a pass from before the change); the drain's symlink alias copied into every module with an edge (it covers Go sources only, and a second copy of it per module). | 2026-11-22 | [The result cache stays on for every affected package](#the-result-cache-stays-on-for-every-affected-package) | — (not built) |
+| `D-GR41` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** Answers a build worker's report on the operator request for "Slice 2 of the flaky-check rule" at `0450fedb34`, where only slices 1a (`020cf29eca`) and 1e (`0bcc3275a2`) have landed. Records the owner's second 2026-11-21 statement in `D-GR21`. Reconciles "at that observation ... before any other work" with `D-GR23`: `tillr-gate` atomically writes the `disabled/` marker and copies both logs at the contradicting observation before printing or returning, and `tillr-drain`'s marker sweep (slice 2b) files `flaky-<check-id>` at pass start and immediately when every gate, replay, rolling or heavy step returns, before attribution, pending reverts or dispatch. Splits live `disabled` emission in `tillr-gate run` / `tillr-gate checks` (`G2`, `G3`, `G4`, `G7`) and the Python store-backed adapters (`P4` to `P6`) into slice 2d (after 1b, a proved trunk commit holding 2a, 2b, 2c and 3a), so live runs never emit `disabled` before consumers accept it and the sweep can file its repair item. Under [`OQ-SP1`](./tillr-item-split.md#OQ-SP1) and `D-GR5`, narrows this request's landing to slice 2a: rules 1 to 3 in `tools/tillr/checkresult`; store-backed `--repo` / `--store` / `--prove-disabled` on `tillr-gate classify` (exact `<id>`, `<id>:<label>` and `<id>/<slug(label)>` selector resolution, committed-declaration fingerprinting, optional per-unit `fingerprint`, pre-run query, marker + log-copy write, while plain `tillr-gate classify` stays pure); `tillr-gate enable` with episode matching, `enabled/` fence and `resolved/` archive; `log_ref` on stored records; tests and `just pack-sync` mirror; taking only those store mechanics from `refs/tillr/runs/run-item-request-c1a6f8e4e5-a14-n5` `[unlanded]`. Slices 1b–1d, 1f, 1g, 2b–2d, 3a and 3b are named unmet cases listed in the candidate's commit message, and a verifier does not refuse slice 2a for them. **Rejected:** building all remaining slices in one commit; emitting `disabled` from live runner faces before 2b, 2c and 3a; opening the SQLite queue in `tillr-gate`; touching the repo or store on plain `tillr-gate classify` with no flag; taking `TILLR_DISABLED_OBSERVATIONS` or raw string checks from the donor ref. | 2026-11-22 | [The second flaky-check request lands the rule in the classifier and its gate faces](#the-second-flaky-check-request-lands-the-rule-in-the-classifier-and-its-gate-faces) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
 
 ### The result cache stays on for every affected package
 
@@ -3242,18 +3434,18 @@ milliseconds. This item finds what each check spends its time on and removes the
 
 ### Classify every check result in one place
 
-The disabled-check rule (`D-GR21`, `D-GR22`) is built as twelve slices, in three groups, in the
+The disabled-check rule (`D-GR21`, `D-GR22`) is built as thirteen slices, in three groups, in the
 order the table gives. The first group moves every
 [classification site](#every-place-a-check-result-is-classified) onto
 [the one function](#one-classifier-five-outcomes) and changes no behavior. The second adds the
-rule inside that function and gives each consumer its handling of `disabled`. The third covers
-evidence stored before the rule and commits older than it. Each slice lands alone, leaves the
-gate and the drain working, and is verified by the tests named in its row without any later
-slice. A slice in the first group is a refactor: its proof is that the module's existing tests
-pass unchanged, plus the scan test below.
+rule inside that function and gives each consumer and live runner face its handling of `disabled`.
+The third covers evidence stored before the rule and commits older than it. Each slice lands
+alone, leaves the gate and the drain working, and is verified by the tests named in its row
+without any later slice. A slice in the first group is a refactor: its proof is that the module's
+existing tests pass unchanged, plus the scan test below.
 
 The **scan test** *(coined here)* is one test, added by the first of slices 1b to 1e to land
-(`D-GR32`), that reads the source
+(`D-GR32`; landed in `0bcc3275a2`), that reads the source
 of the four programs and fails when a file outside `checkresult` compares a result word, a span
 status or a judging program's exit code. It carries a list of files not yet moved; each slice of
 the first group removes its files from that list, and the list is empty when the group is done.
@@ -3261,17 +3453,18 @@ It is what keeps a site added later from classifying on its own.
 
 | Slice | What it changes | Sites | Verified alone by |
 | :--- | :--- | :--- | :--- |
-| 1a | Add `checkresult` with `Classify` and `Aggregate` holding rule 4's table and [every protocol and aggregate order](#each-site-keeps-its-raw-result-protocol-and-aggregate-order) only, and the `tillr-gate classify` face. Nothing calls them. [This slice is the whole landing of the first filed request](#the-first-classifier-landing-is-the-function-and-its-face-with-no-caller) | none | Table tests in the package: one case per row of the raw-result table, per row and step of each protocol, and per pair of each aggregate order. A face test: observations in, outcomes out in the same order, and no check command started |
+| 1a | Add `checkresult` with `Classify` and `Aggregate` holding rule 4's table and [every protocol and aggregate order](#each-site-keeps-its-raw-result-protocol-and-aggregate-order) only, and the `tillr-gate classify` face. Nothing calls them. [This slice is the whole landing of the first filed request](#the-first-classifier-landing-is-the-function-and-its-face-with-no-caller) (**built in `020cf29eca`**) | none | Table tests in the package: one case per row of the raw-result table, per row and step of each protocol, and per pair of each aggregate order. A face test: observations in, outcomes out in the same order, and no check command started |
 | 1b | Route the runner's sites through the function | G1 to G12 | `go test ./...` in `tools/tillr-gate` passes with no test edited; the scan list loses the runner's files |
 | 1c | Route the drain's landing-gate and light-attribution sites | D1 to D16, D34 | `go test ./...` in `tools/tillr-drain` passes with no test edited; the scan list loses those files |
-| 1d | Route the drain's rolling, heavy and proof sites | D17 to D33 | The same command; the scan list loses the rest of the drain |
-| 1e | Route the Python sites that classify one check through the installed face: `check_status` takes its words from it under the legacy-check protocol, `go-build.py` and the documents check under theirs, and the adapters stop pairing exit codes with words themselves. `verdict_of` and `run_replay` are not touched ([`D-GR33`](#the-face-aggregates-a-run-in-its-own-landing-before-the-legacy-aggregates-call-it)) | P1 to P7, F1 to F5, F7, F8, F10 to F13, L1 to L4 | `python3 tests/fork-check.test.py` and the tests under `tools/gate` pass with no assertion edited; a fixture's setup changes only as [`D-GR34`](#a-stand-in-for-the-installed-program-is-fixture-setup-and-it-answers-classify) allows, in whichever test file holds the fixture, Go tests included ([`D-GR36`](#a-fixture-that-copies-a-moved-adapter-is-in-the-movers-change-in-any-language)), and a plan's write paths list the four fixtures measured ([`D-GR37`](#a-fixture-that-copies-the-legacy-gate-is-reached-too-and-the-plan-lists-the-fixtures-measured)); the scan list holds only `tools/fork-check.py`. The two copies of `tillr-loop` stay byte-identical |
+| 1d | Route the drain's rolling, heavy and proof sites, and the lander site | D17 to D33, L3 | `go test ./...` in `tools/tillr-drain` and `tools/tillr-land` passes with no test edited; the scan list loses the rest of the drain and lander |
+| 1e | Route the Python sites that classify one check through the installed face: `check_status` takes its words from it under the legacy-check protocol, `go-build.py` and the documents check under theirs, and the adapters stop pairing exit codes with words themselves. `verdict_of` and `run_replay` are not touched ([`D-GR33`](#the-face-aggregates-a-run-in-its-own-landing-before-the-legacy-aggregates-call-it); **built in `0bcc3275a2`**) | P1 to P7, F1 to F5, F7, F8, F10 to F13, L1 to L4 | `python3 tests/fork-check.test.py` and the tests under `tools/gate` pass with no assertion edited; a fixture's setup changes only as [`D-GR34`](#a-stand-in-for-the-installed-program-is-fixture-setup-and-it-answers-classify) allows, in whichever test file holds the fixture, Go tests included ([`D-GR36`](#a-fixture-that-copies-a-moved-adapter-is-in-the-movers-change-in-any-language)), and a plan's write paths list the four fixtures measured ([`D-GR37`](#a-fixture-that-copies-the-legacy-gate-is-reached-too-and-the-plan-lists-the-fixtures-measured)); the scan list holds only `tools/fork-check.py`. The two copies of `tillr-loop` stay byte-identical |
 | 1f | The face gains `--aggregate <order>`: observations in, the classifications and the run's result out. Nothing calls it | none | A face test per order: the `run` object equals `Aggregate` on the same classifications, `checks` equals the plain form's output, an unknown order is exit 2 with no output, and the plain form's output is unchanged |
 | 1g | `verdict_of` takes the run's result from the face under the legacy gate's order and `run_replay` under the legacy replay's | F6, F9 | `python3 tests/fork-check.test.py` passes with no assertion edited (`D-GR34`); the scan list is empty |
-| 2a | Add rules 1 to 3 to the function. The runner reports `disabled`, counts it apart, writes the marker and the log copies, records `log_ref`, and gains `--prove-disabled` and `enable` | G2, G3, G4, G7, P4 to P6 | Runner tests alone: a stored pass with a fresh fail, and a stored fail with a fresh pass, each give `disabled`, exit 0, a marker and both logs beside it; a marker disables a new fingerprint; a proving run fails on a fail; `enable` removes only the episode it names. `TestMemoryFailRetriesAndFlakyPass` and `TestMemoryOppositeWritersNeverErase` are rewritten to these expectations |
-| 2b | The drain's marker sweep files the repair item and runs `enable` after the repair lands. A generated repair item needs no document block | a new step; no listed site changes | Drain tests with a marker file written by the test and no gate run: one item per episode; none while one is unfinished; a new item after a landed repair and a new episode; a sweep after a cancelled step and after a step that errored still files |
-| 2c | Every drain consumer handles `disabled` as the classifier section lists | D2, D3, D7, D8, D10, D13, D16, D18, D23, D29, D30, D32 to D34 | Drain tests, one per bullet of that list, each with a stub gate that returns `disabled`: no refusal, no red trunk, no fixer, the held item released, the notice silent, the grouped revert still judging its other members |
+| 2a | Add rules 1 to 3 in `checkresult`, store-backed `--repo` / `--store` / `--prove-disabled` on `tillr-gate classify` (exact `<id>`, `<id>:<label>` and `<id>/<slug(label)>` selector resolution, committed-declaration fingerprinting, optional per-unit `fingerprint`, pre-run query, and atomic marker + log-copy creation on a single contradiction, while plain `tillr-gate classify` stays pure), `tillr-gate enable` (episode match, `enabled/` fence and `resolved/` archive), and `log_ref` on stored records, while keeping live `tillr-gate run` and `tillr-gate checks` output unchanged until `2d`. [This slice is the whole landing of the flaky-check slice-2 request](#the-second-flaky-check-request-lands-the-rule-in-the-classifier-and-its-gate-faces) (`D-GR41`) | none (faces only) | Package and face tests in `tools/tillr/checkresult` and `tools/tillr-gate`: stored pass + fresh fail and stored fail + fresh pass each give `disabled` with marker and copied logs; a marker disables a new fingerprint; `--prove-disabled` evaluates rule 4; `enable` removes only the episode it names and records `enabled/` + `resolved/`; plain `tillr-gate classify` with no flags stays pure |
+| 2b | The drain's marker sweep files the repair item (asking to fix the flaky check and re-enable it correctly, `D-GR21`) at pass start and on every gate, replay, rolling or heavy step return before attribution, pending reverts or dispatch, and runs `enable` after the repair lands. A generated repair item needs no document block | a new step; no listed site changes | Drain tests with a marker file written by the test and no gate run: one item per episode; none while one is unfinished; a new item after a landed repair and a new episode; a sweep after a cancelled step and after a step that errored still files before pending reverts or dispatch |
+| 2c | Every drain and lander consumer handles `disabled` as the classifier section lists, and the drain passes `--prove-disabled <check-id>` when gating a `flaky-*` repair item's candidate | D2, D3, D7, D8, D10, D13, D16, D18, D23, D29, D30, D32 to D34, L3 | Drain and lander tests, one per bullet of that list, each with a stub gate that returns `disabled`: no refusal, no red trunk, no fixer, the held item released, the notice silent, the grouped revert still judging its other members, and `--prove-disabled` passed for `flaky-*` |
 | 3a | Cached evidence is classified at use | D11, D24 to D28, D31, F2 | Drain tests that write a proof, a checkpoint, a replay answer and an attribution record as the code before slice 2a wrote them, add a marker, and find none of them credited or reused |
+| 2d | Turn on live `disabled` classification, pre-run skip, marker + log-copy creation and `--prove-disabled` in `tillr-gate run` and `tillr-gate checks`, and pass `--repo` from the Python store-backed checks (`P4` to `P6`) to the installed `tillr-gate classify` (`D-GR41`) | G2, G3, G4, G7, P4 to P6 | Runner and adapter tests: `TestMemoryFailRetriesAndFlakyPass` and `TestMemoryOppositeWritersNeverErase` are rewritten to `disabled`, exit 0, marker + copied logs; end-to-end `flaky-*` proving and re-enabling on land passes |
 | 3b | The installed runner judges store-backed declarations on a replayed commit; the fast tree adapter passes the committed declaration bytes and keeps its logs; the legacy status words gain `DISABLED`; labelled selectors resolve through the face | P1, P3, F1, F4, F7, L2, D12, D16, D17, D21 | A test that replays a commit whose own `tools/fork-check.py` and `tools/gate/tree-check.py` predate slice 1e, with a marker present: the replay reports the check disabled, the rolling run is not `unknown`, and the fingerprint equals the landing gate's for the same declaration. A proof under a declaration's id satisfies a fixer that names its labelled selector |
 
 **Outcomes:**
@@ -3286,26 +3479,30 @@ however that ruling lands. The candidate that was refused eleven times is eviden
 table and is not a base for these slices: slice 1a starts from the trunk.
 
 An operator filed the first group as one request on 2026-11-21, outside any document. Its
-landing is slice 1a alone (`D-GR32`); slices 1b to 1g are the cases it leaves unmet. A second
-operator request of 2026-11-21 asks for the adapters' calls to the installed face; its landing
-is slice 1e, with slices 1f and 1g as the cases it leaves unmet (`D-GR33`); a test's stand-in
-for the installed program may be set up to pass `classify` on (`D-GR34`), and a fixture that
-copies a moved adapter is edited in the same landing wherever it is, Go tests included
-(`D-GR36`). A fixture that copies `tools/fork-check.py` is one of those, and a plan for the
-landing lists the four copying fixtures measured among its write paths (`D-GR37`).
+landing is slice 1a alone (`D-GR32`, built in `020cf29eca`); slices 1b to 1g are the cases it
+leaves unmet. A second operator request of 2026-11-21 asks for the adapters' calls to the
+installed face; its landing is slice 1e (`D-GR33`, built in `0bcc3275a2`), with slices 1f and 1g
+as the cases it leaves unmet; a test's stand-in for the installed program may be set up to pass
+`classify` on (`D-GR34`), and a fixture that copies a moved adapter is edited in the same landing
+wherever it is, Go tests included (`D-GR36`). A fixture that copies `tools/fork-check.py` is one
+of those, and a plan for the landing lists the four copying fixtures measured among its write
+paths (`D-GR37`). A third operator request ("Slice 2 of the flaky-check rule") lands slice 2a
+alone (`D-GR41`), with slices 1b to 1d, 1f, 1g, 2b, 2c, 3a, 2d and 3b as the cases it leaves
+unmet.
 
 **Agent Details:**
 
 - **Paths:** `tools/tillr/checkresult/` (new), `tools/tillr-gate/`, `tools/tillr-drain/`,
-  `tools/tillr-loop/`, `tools/gate/`, `tools/fork-check.py`, `tools/go-test-shards.py`, their
-  pack mirrors, and this document. Run `just pack-sync` after the last source edit of a slice
-  and commit the regenerated mirror.
-- **Ref:** `D-GR21` to `D-GR23`, `D-GR28`, `D-GR32` to `D-GR34`, `D-GR36` and `D-GR37` in the [Decision Ledger](#decision-ledger).
+  `tools/tillr-land/`, `tools/tillr-loop/`, `tools/gate/`, `tools/fork-check.py`,
+  `tools/go-test-shards.py`, their pack mirrors, and this document. Run `just pack-sync` after
+  the last source edit of a slice and commit the regenerated mirror.
+- **Ref:** `D-GR21` to `D-GR23`, `D-GR28`, `D-GR32` to `D-GR34`, `D-GR36`, `D-GR37` and `D-GR41` in the [Decision Ledger](#decision-ledger).
 - **Order:** 1a first, alone, and proved green so that the installed `tillr-gate` has the face
-  (`D-GR32`). 1b to 1f need only 1a and may land in any order; the first of 1b to 1e adds the
-  scan test. 1g needs 1e, and 1f proved green so that the installed `tillr-gate` has the flag
-  (`D-GR33`). 2a needs 1b and 1e. 2b
-  and 2c need 2a and the drain's two routing slices. 3a needs 2c. 3b needs 2c and 1g.
+  (`D-GR32`; landed in `020cf29eca`). 1b to 1f need only 1a and may land in any order (1e landed
+  in `0bcc3275a2` and added the scan test). 1g needs 1e, and 1f proved green so that the
+  installed `tillr-gate` has the flag (`D-GR33`). 2a needs only 1a (`D-GR41`). 2b needs 2a. 2c
+  needs 1c, 1d and 2b. 3a needs 2c. 2d needs 1b, 2c, 3a, and 2a proved green so that the
+  installed `tillr-gate` has store-backed `classify` (`D-GR41`). 3b needs 2d and 1g.
 - **Forbidden in every slice:** a result word compared outside `checkresult`; a second
   implementation of the rule; a retry or a rerun added to make a contradicted check agree with
   itself.
