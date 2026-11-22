@@ -418,3 +418,102 @@ func TestADispatchRefusedBeforeAWorkerStartsDoesNotRaiseTheAttemptNumber(t *test
 		t.Fatalf("the refused claim left %d node rows of a later attempt", later)
 	}
 }
+
+// uncommittedRefusingStager refuses lane while its worktree has uncommitted changes,
+// with the same ReasonLaneUncommittedWork refusal the real stager returns.
+type uncommittedRefusingStager struct {
+	t    *testing.T
+	f    refusalLoopFixture
+	lane string
+}
+
+func (s *uncommittedRefusingStager) Stage(_ context.Context, spec StageSpec) error {
+	if spec.LaneID != s.lane {
+		return nil
+	}
+	status := runGit(s.t, laneWorktree(s.f, spec.LaneID), "status", "--porcelain", "--untracked-files=all")
+	if status == "" {
+		return nil
+	}
+	first := strings.TrimSpace(strings.Split(status, "\n")[0])
+	return laneRefusalf(spec.LaneID, ReasonLaneUncommittedWork,
+		"commit or remove the files, or reset the lane deliberately",
+		"lane %s holds uncommitted work (%s)", spec.LaneID, first)
+}
+
+// On 2026-11-21/22 a lane refused for uncommitted work was cleaned by hand outside the
+// loop, and across a loop restart neither the fast-start loop nor status views treated it
+// as back in rotation because drain.lane-restored was only written on staging while
+// shadowRotation and claimFastStart excluded any lane whose latest event was
+// drain.lane-refused. Once the worktree status is empty, the loop records
+// drain.lane-restored and offers the lane work again.
+func TestUncommittedWorkLaneCleanedOutsideTheLoopReturnsAcrossRestart(t *testing.T) {
+	f := newRefusalLoopFixture(t, "item-a")
+	worktree := laneWorktree(f, "lane-1")
+	writeForkFile(t, worktree+"/base.txt", "uncommitted edit\n")
+	stager := &uncommittedRefusingStager{t: t, f: f, lane: "lane-1"}
+
+	// First session refuses lane-1 for its uncommitted work.
+	first := f.loop(t, &laneSteps{}, stager)
+	first.cfg.Lanes = []string{"lane-1"}
+	onePass(t, first)
+	if n := laneEvents(t, f, laneRefusedKind, "lane-1"); n != 1 {
+		t.Fatalf("refusal wrote %d drain.lane-refused events, want 1", n)
+	}
+	if n := laneEvents(t, f, laneRestoredKind, "lane-1"); n != 0 {
+		t.Fatalf("refusal wrote %d drain.lane-restored events, want 0", n)
+	}
+
+	// A restarted loop while the worktree is still dirty does not restore it.
+	stillDirty := f.loop(t, &laneSteps{}, stager)
+	stillDirty.cfg.Lanes = []string{"lane-1"}
+	if err := stillDirty.recheckLanes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := laneEvents(t, f, laneRestoredKind, "lane-1"); n != 0 {
+		t.Fatalf("dirty lane was restored across restart: %d events", n)
+	}
+
+	// Clean the worktree outside the loop, as the operator did with `git checkout -- .`.
+	runGit(t, worktree, "checkout", "--", ".")
+	if status := runGit(t, worktree, "status", "--porcelain", "--untracked-files=all"); status != "" {
+		t.Fatalf("fixture: worktree not clean after checkout: %q", status)
+	}
+
+	// Restart the loop in its normal fast-start mode with only lane-1 offered.
+	// The loop must restore lane-1, record drain.lane-restored, and offer it item-a.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	steps := &startupHeldSteps{cancel: cancel}
+	restarted := f.loop(t, steps, stager)
+	restarted.cfg.Lanes = []string{"lane-1"}
+	result, err := restarted.Run(ctx)
+	if err != nil {
+		t.Fatalf("restarted loop failed: %v (%+v)", err, result)
+	}
+	if got := steps.ranOn("item-a"); len(got) != 1 || got[0] != "lane-1" {
+		t.Fatalf("item-a ran on %v after restart, want lane-1", got)
+	}
+	if n := laneEvents(t, f, laneRestoredKind, "lane-1"); n != 1 {
+		t.Fatalf("cleaned lane wrote %d drain.lane-restored events, want 1", n)
+	}
+
+	// Why must not report lane-1 as out of rotation once its worktree status is empty.
+	s := openFixture(t, f.storePath)
+	defer s.Close()
+	lanes := []string{"lane-1"}
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		answer, err := Why(r, Pass{Now: restarted.cfg.Now().UTC().Format(time.RFC3339), StorePath: f.storePath, AvailableLanes: &lanes}, restarted.cfg.Policy, &VantageQuestions{Root: f.root, Context: context.Background()})
+		if err != nil {
+			return err
+		}
+		for _, row := range answer.Rows {
+			if strings.Contains(row.Why, "out of rotation") || strings.Contains(row.Why, ReasonLaneUncommittedWork) {
+				t.Errorf("why still reports lane-1 out of rotation: %+v", row)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
