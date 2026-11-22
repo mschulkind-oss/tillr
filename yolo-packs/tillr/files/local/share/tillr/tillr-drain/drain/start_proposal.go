@@ -48,7 +48,10 @@ func readProposedStarts(ctx context.Context, path string, at time.Time, policy *
 func shadowRotation(r *store.Reader, tick *Pass) (map[string]laneRefusal, error) {
 	lanes := make([]string, 0, len(*tick.AvailableLanes))
 	refused := map[string]laneRefusal{}
-	tick.OutLanes = map[string]bool{}
+	// Recorded refusals supplement the caller's rotation observation.
+	out := make(map[string]bool, len(tick.OutLanes))
+	maps.Copy(out, tick.OutLanes)
+	tick.OutLanes = out
 	for _, lane := range *tick.AvailableLanes {
 		var kind string
 		var payload []byte
