@@ -2,6 +2,7 @@
 """Tests for tools/gate/go_affected.py, go-test-edges.json, and fork-check integration."""
 from __future__ import annotations
 
+import fcntl
 import importlib.util
 import json
 import os
@@ -1711,6 +1712,150 @@ def test_scoped_read_tests_execution_cache_and_sharding() -> None:
         assert set(ev["packages"][0]) == {"import_path", "module", "reason", "elapsed_ms", "cached"}, ev
 
 
+def test_go_affected_slot_wait_order_and_trunk_repair_priority() -> None:
+    """Real go_affected.py gates competing for a shared ordinary slot run in arrival order,
+    with revert and trunk-fixer gates served ahead of waiting ordinary candidates."""
+    shards = load_module("go_test_shards_for_affected", ROOT / "tools" / "go-test-shards.py")
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        repo = tmp_path / "repo"
+        mod = repo / "tools" / "tillr-slotorder"
+        mod.mkdir(parents=True)
+        shutil.copy2(ROOT / "tools" / "go-test-shards.py", repo / "tools" / "go-test-shards.py")
+        (mod / "go.mod").write_text("module example.com/tillr-slotorder\n\ngo 1.23\n")
+        (mod / "slotorder_test.go").write_text(
+            'package slotorder\n'
+            'import (\n'
+            '  "os"\n'
+            '  "path/filepath"\n'
+            '  "testing"\n'
+            '  "time"\n'
+            ')\n'
+            'func TestOrder(t *testing.T) {\n'
+            '  tag := os.Getenv("GATE_TAG")\n'
+            '  orderFile := os.Getenv("ORDER_FILE")\n'
+            '  f, err := os.OpenFile(orderFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)\n'
+            '  if err != nil { t.Fatal(err) }\n'
+            '  _, _ = f.WriteString(tag + "\\n")\n'
+            '  _ = f.Close()\n'
+            '  rel := filepath.Join(os.Getenv("RELEASE_DIR"), tag)\n'
+            '  deadline := time.Now().Add(30 * time.Second)\n'
+            '  for time.Now().Before(deadline) {\n'
+            '    if _, err := os.Stat(rel); err == nil { return }\n'
+            '    time.Sleep(10 * time.Millisecond)\n'
+            '  }\n'
+            '  t.Fatalf("timed out waiting for release %s", rel)\n'
+            '}\n'
+        )
+
+        lock_dir = tmp_path / "locks"
+        lock_dir.mkdir()
+        wait_dir = lock_dir / "wait-queue"
+        order_file = tmp_path / "order.log"
+        release_dir = tmp_path / "release"
+        release_dir.mkdir()
+        durable = tmp_path / "durable"
+        durable.mkdir()
+        gocache = tmp_path / "gocache"
+
+        ordinary_limit = shards.default_shard_limit()
+        gate_limit = shards.default_gate_shard_limit(ordinary_limit)
+        proof_limit = shards.default_proof_shard_limit(ordinary_limit, gate_limit)
+
+        held_fds: list[int] = []
+        slot0_fd: int | None = None
+
+        def lock_all() -> None:
+            nonlocal slot0_fd
+            for prefix, count in (("slot", ordinary_limit), ("proof", proof_limit), ("gate", gate_limit)):
+                for idx in range(count):
+                    fd = os.open(lock_dir / f"{prefix}-{idx}.lock", os.O_CREAT | os.O_RDWR, 0o666)
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    if prefix == "slot" and idx == 0:
+                        slot0_fd = fd
+                    else:
+                        held_fds.append(fd)
+
+        def wait_for_tickets(expected_count: int) -> None:
+            deadline = time.monotonic() + 30.0
+            while time.monotonic() < deadline:
+                if wait_dir.is_dir():
+                    live = [n for n in os.listdir(wait_dir) if n.endswith(".wait") and not n.startswith(".")]
+                    if len(live) >= expected_count:
+                        return
+                time.sleep(0.02)
+            raise AssertionError(f"timed out waiting for {expected_count} wait tickets in {wait_dir}")
+
+        procs: list[tuple[str, subprocess.Popen]] = []
+        try:
+            lock_all()
+            cmd = [
+                sys.executable,
+                str(ROOT / "tools" / "gate" / "go_affected.py"),
+                "--root", str(repo),
+                "--changed", "tools/tillr-slotorder/slotorder_test.go",
+            ]
+            # Start ordinary candidates first, then revert and trunk-fixer gates while all slots are busy.
+            specs = [
+                ("item-1", "gate:run-item-1"),
+                ("item-2", "gate:run-item-2"),
+                ("revert", "gate:run-revert-dd17e3283fd1-d5f5f41a7e57"),
+                ("fixer", "gate:run-fixer-main-dd17e3283fd1-a1-n1"),
+            ]
+            for idx, (tag, holder) in enumerate(specs, start=1):
+                env = {
+                    **os.environ,
+                    "YOLO_DURABLE_DIR": str(durable),
+                    "GO_TEST_SHARDS_LOCK_DIR": str(lock_dir),
+                    "GO_TEST_SHARDS_HOLDER": holder,
+                    "GOCACHE": str(gocache),
+                    "GATE_TAG": tag,
+                    "ORDER_FILE": str(order_file),
+                    "RELEASE_DIR": str(release_dir),
+                }
+                env.pop("GO_TEST_SHARDS_CLASS", None)
+                proc = subprocess.Popen(cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                procs.append((tag, proc))
+                wait_for_tickets(idx)
+
+            # Release only ordinary slot-0; all four gates compete for that single shared ordinary slot.
+            assert slot0_fd is not None
+            fcntl.flock(slot0_fd, fcntl.LOCK_UN)
+            os.close(slot0_fd)
+            slot0_fd = None
+
+            expected_order = ["revert", "fixer", "item-1", "item-2"]
+            for idx, want in enumerate(expected_order):
+                deadline = time.monotonic() + 30.0
+                observed: list[str] = []
+                while time.monotonic() < deadline:
+                    if order_file.is_file():
+                        observed = [line.strip() for line in order_file.read_text(encoding="utf-8").splitlines() if line.strip()]
+                        if len(observed) >= idx + 1:
+                            break
+                    time.sleep(0.02)
+                assert len(observed) >= idx + 1, f"timed out waiting for gate {idx} ({want}); observed={observed}"
+                assert observed[idx] == want, f"wrong gate served at turn {idx}: got {observed}, want prefix {expected_order[:idx + 1]}"
+                (release_dir / want).write_text("go\n")
+
+            for tag, proc in procs:
+                out, _ = proc.communicate(timeout=30)
+                assert proc.returncode == 0, f"{tag} failed: {out}"
+        finally:
+            for tag, _ in procs:
+                (release_dir / tag).write_text("go\n")
+            if slot0_fd is not None:
+                fcntl.flock(slot0_fd, fcntl.LOCK_UN)
+                os.close(slot0_fd)
+            for fd in held_fds:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+            for _, proc in procs:
+                if proc.poll() is None:
+                    proc.kill()
+                    proc.wait()
+
+
 def main() -> int:
     root_graph = go_affected.load_tillr_graph(ROOT)
     test_discover_modules()
@@ -1727,6 +1872,7 @@ def main() -> int:
     test_no_leftover_processes_after_check_finishes()
     test_streams_progress_lines_before_run_ends()
     test_stalled_run_prints_nothing_without_test_events()
+    test_go_affected_slot_wait_order_and_trunk_repair_priority()
     print("PASS: all go-affected tests passed")
     return 0
 

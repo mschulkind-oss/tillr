@@ -6,6 +6,7 @@ import contextlib
 from datetime import datetime, timezone
 import fcntl
 import hashlib
+import itertools
 import json
 import math
 import os
@@ -231,7 +232,15 @@ HOLDER_ENV = 'GO_TEST_SHARDS_HOLDER'
 SLOT_CLASS_ORDINARY = 'ordinary'
 SLOT_CLASS_PROOF = 'proof'
 SLOT_CLASS_GATE = 'gate'
-SLOT_CLASSES = (SLOT_CLASS_ORDINARY, SLOT_CLASS_PROOF, SLOT_CLASS_GATE)
+SLOT_CLASS_REPAIR = 'repair'
+SLOT_CLASSES = (SLOT_CLASS_ORDINARY, SLOT_CLASS_PROOF, SLOT_CLASS_GATE, SLOT_CLASS_REPAIR)
+_CLASS_PRIORITY = {
+    SLOT_CLASS_REPAIR: 0,
+    SLOT_CLASS_GATE: 1,
+    SLOT_CLASS_PROOF: 2,
+    SLOT_CLASS_ORDINARY: 3,
+}
+_WAIT_TICKET_SEQ = itertools.count()
 DEFAULT_GATE_MAX_SLOTS = 8
 DEFAULT_GATE_RESERVED_CAP = 4
 # One lock pays for one concurrent Go test, not an entire parallel batch.
@@ -299,9 +308,22 @@ def resolve_holder_run(holder=None, slot_class=SLOT_CLASS_ORDINARY):
             return f'gate:{parent}'
     if slot_class == SLOT_CLASS_PROOF:
         return 'trunk-proof'
-    if slot_class == SLOT_CLASS_GATE:
+    if slot_class in (SLOT_CLASS_GATE, SLOT_CLASS_REPAIR):
         return f'gate:pid-{os.getpid()}'
     return f'pid-{os.getpid()}'
+
+
+def is_trunk_repair_holder(holder_name):
+    """Return True when holder_name identifies a revert or trunk-fixer gate run."""
+    name = (holder_name or '').strip()
+    if name.startswith('gate:'):
+        name = name[len('gate:'):]
+    return (
+        name.startswith('run-revert-')
+        or name.startswith('revert-main-')
+        or name.startswith('run-fixer-main-')
+        or name.startswith('fixer-main-')
+    )
 
 
 def try_lock_slot(lock_dir, prefix, count, offset):
@@ -344,6 +366,105 @@ def proof_caller_waiting(lock_dir):
 def gate_caller_waiting(lock_dir):
     """Return True when at least one gate-class caller holds a shared lock on gate-waiting."""
     return _caller_waiting(lock_dir, 'gate-waiting.lock')
+
+
+def repair_caller_waiting(lock_dir):
+    """Return True when at least one repair-class caller holds a shared lock on repair-waiting."""
+    return _caller_waiting(lock_dir, 'repair-waiting.lock')
+
+
+def _wait_queue_dir(lock_dir):
+    return lock_dir / 'wait-queue'
+
+
+def _wait_ticket_name(priority, arrival_ns, pid, tid, seq, pools):
+    return f'{priority:02d}-{arrival_ns:020d}-{pid:010d}-{tid:020d}-{seq:08d}-{pools}.wait'
+
+
+def _parse_wait_ticket(name):
+    if not name.endswith('.wait') or name.startswith('.'):
+        return None
+    parts = name[:-5].split('-')
+    if len(parts) != 6:
+        return None
+    try:
+        priority = int(parts[0])
+    except ValueError:
+        return None
+    return priority, parts[5]
+
+
+def _register_wait_ticket(wait_queue_dir, priority, pools):
+    wait_queue_dir.mkdir(parents=True, exist_ok=True)
+    monotonic_ns = getattr(time, 'monotonic_ns', None)
+    arrival_ns = monotonic_ns() if monotonic_ns is not None else int(time.monotonic() * 1_000_000_000)
+    pid = os.getpid()
+    tid = threading.get_ident()
+    seq = next(_WAIT_TICKET_SEQ)
+    name = _wait_ticket_name(priority, arrival_ns, pid, tid, seq, pools)
+    ticket_path = wait_queue_dir / name
+    tmp_path = wait_queue_dir / f'.{name}.tmp'
+    ticket_fd = os.open(tmp_path, os.O_CREAT | os.O_TRUNC | os.O_RDWR, 0o666)
+    try:
+        fcntl.flock(ticket_fd, fcntl.LOCK_SH)
+        os.replace(tmp_path, ticket_path)
+        return ticket_fd, ticket_path, name, (priority, arrival_ns, pid, tid, seq)
+    except BaseException:
+        os.close(ticket_fd)
+        with contextlib.suppress(OSError):
+            tmp_path.unlink()
+        raise
+
+
+def _update_ticket_pools(wait_queue_dir, ticket_path, ticket_meta, new_pools):
+    new_name = _wait_ticket_name(*ticket_meta, new_pools)
+    new_path = wait_queue_dir / new_name
+    os.replace(ticket_path, new_path)
+    return new_path, new_name
+
+
+def _release_wait_ticket(ticket_fd, ticket_path):
+    if ticket_path is not None:
+        with contextlib.suppress(OSError):
+            ticket_path.unlink()
+    _unlock_and_close(ticket_fd)
+
+
+def _waiter_ahead(wait_queue_dir, pool_char, my_priority, my_ticket_name):
+    """Return the priority of the first live waiter ahead of this caller for pool_char, or None."""
+    try:
+        names = sorted(os.listdir(wait_queue_dir))
+    except OSError:
+        return None
+    for name in names:
+        parsed = _parse_wait_ticket(name)
+        if parsed is None:
+            continue
+        if my_ticket_name is not None and name >= my_ticket_name:
+            break
+        priority, pools = parsed
+        if my_ticket_name is None and priority > my_priority:
+            break
+        if pool_char not in pools:
+            continue
+        path = wait_queue_dir / name
+        try:
+            fd = os.open(path, os.O_RDONLY)
+        except OSError:
+            continue
+        try:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return priority
+            with contextlib.suppress(OSError):
+                path.unlink()
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except OSError:
+            pass
+        finally:
+            os.close(fd)
+    return None
 
 
 def _holder_cap_dir(lock_dir, holder_name):
@@ -473,20 +594,27 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
                        gate_reserved_limit=None, holder=None, label=None):
     """Acquire one slot from a counted flock pool under lock_dir; wait without timeout.
 
-    Priority order is `gate > proof > ordinary`:
-    - `ordinary` callers take only `slot-0..limit-1` and yield while any `gate` or `proof`
-      caller is waiting.
-    - `proof` callers try `slot-*` then `proof-0..`, yield while any `gate` caller is waiting,
-      and hold a shared lock on `proof-waiting.lock` while waiting so freed ordinary slots go
-      to them ahead of lane workers when no gate is waiting.
+    Priority order is `repair > gate > proof > ordinary`, and waiters within the same
+    priority class are served in the order their wait began (FIFO):
+    - `ordinary` callers take only `slot-0..limit-1` and yield while any higher-priority
+      caller or earlier ordinary waiter is ahead of them.
+    - `proof` callers try `slot-*` then `proof-0..`, yield to `repair`, `gate`, and earlier
+      `proof` waiters, and hold a shared lock on `proof-waiting.lock` while waiting.
     - `gate` callers cap their simultaneous slots per gate (`max_slots`, default 8) and their
       simultaneous reserved `gate-*` locks (`gate_reserved_limit`, default 4), try `slot-*`
-      then `proof-*` then `gate-*`, and hold a shared lock on `gate-waiting.lock` while waiting
-      on the shared pool so freed slots go to waiting gates ahead of `proof` and `ordinary`.
+      then `proof-*` then `gate-*`, yield to `repair` and earlier `gate` waiters, and hold a
+      shared lock on `gate-waiting.lock` while waiting.
+    - `repair` callers (revert and trunk-fixer gates) take `slot-*`, `proof-*`, or `gate-*`
+      ahead of ordinary candidates, with FIFO order among simultaneous trunk repairs.
     The wait is outside every deadline the runner applies, so it cannot fail the work.
     """
     limit = max(1, limit)
     chosen_class = resolve_slot_class(slot_class)
+    holder_name = resolve_holder_run(holder, chosen_class)
+    if chosen_class != SLOT_CLASS_ORDINARY:
+        env_class = os.environ.get(SLOT_CLASS_ENV, '').strip()
+        if env_class == SLOT_CLASS_REPAIR or is_trunk_repair_holder(holder_name):
+            chosen_class = SLOT_CLASS_REPAIR
     reserved_gate = (max(0, int(gate_limit)) if gate_limit is not None
                      else default_gate_shard_limit(limit))
     reserved_proof = (max(0, int(proof_limit)) if proof_limit is not None
@@ -498,8 +626,9 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
          else DEFAULT_GATE_RESERVED_CAP)
         if chosen_class == SLOT_CLASS_GATE else 0
     )
-    holder_name = resolve_holder_run(holder, chosen_class)
+    my_priority = _CLASS_PRIORITY[chosen_class]
     lock_dir.mkdir(parents=True, exist_ok=True)
+    wait_queue_dir = _wait_queue_dir(lock_dir)
     cap_dir = (_holder_cap_dir(lock_dir, holder_name)
                if (effective_max_slots is not None or effective_gate_reserved > 0)
                else None)
@@ -508,6 +637,11 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
     fd = None
     slot_name = None
     wait_fd = None
+    ticket_fd = None
+    ticket_path = None
+    ticket_name = None
+    ticket_meta = None
+    ticket_pools = None
     wait_started = None
     next_report_at = None
     start_wall_ms = int(time.time() * 1000)
@@ -533,46 +667,115 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
             time.sleep(0.02)
 
         while fd is None:
-            gate_waiting = (chosen_class != SLOT_CLASS_GATE and gate_caller_waiting(lock_dir))
+            repair_waiting = (chosen_class != SLOT_CLASS_REPAIR and repair_caller_waiting(lock_dir))
+            gate_waiting = (chosen_class in (SLOT_CLASS_ORDINARY, SLOT_CLASS_PROOF)
+                            and gate_caller_waiting(lock_dir))
             proof_waiting = (chosen_class == SLOT_CLASS_ORDINARY and proof_caller_waiting(lock_dir))
-            yielding = gate_waiting or proof_waiting
-            if not yielding:
+            ahead_s = _waiter_ahead(wait_queue_dir, 's', my_priority, ticket_name)
+            yielding_s = repair_waiting or gate_waiting or proof_waiting or ahead_s is not None
+            if not yielding_s:
                 fd, slot_name = try_lock_slot(lock_dir, 'slot', limit, offset)
-                if (fd is None and chosen_class in (SLOT_CLASS_PROOF, SLOT_CLASS_GATE)
-                        and reserved_proof > 0):
-                    fd, slot_name = try_lock_slot(lock_dir, 'proof', reserved_proof, offset)
-                if fd is not None and chosen_class != SLOT_CLASS_GATE:
-                    preempted = (gate_caller_waiting(lock_dir)
-                                 or (chosen_class == SLOT_CLASS_ORDINARY
-                                     and proof_caller_waiting(lock_dir)))
-                    if preempted:
+                if fd is not None:
+                    preempted_s = (
+                        (chosen_class != SLOT_CLASS_REPAIR and repair_caller_waiting(lock_dir))
+                        or (chosen_class in (SLOT_CLASS_ORDINARY, SLOT_CLASS_PROOF)
+                            and gate_caller_waiting(lock_dir))
+                        or (chosen_class == SLOT_CLASS_ORDINARY and proof_caller_waiting(lock_dir))
+                        or _waiter_ahead(wait_queue_dir, 's', my_priority, ticket_name) is not None
+                    )
+                    if preempted_s:
                         _unlock_and_close(fd)
                         fd = None
                         slot_name = None
-                        gate_waiting = gate_caller_waiting(lock_dir)
+                        repair_waiting = (chosen_class != SLOT_CLASS_REPAIR
+                                          and repair_caller_waiting(lock_dir))
+                        gate_waiting = (chosen_class in (SLOT_CLASS_ORDINARY, SLOT_CLASS_PROOF)
+                                        and gate_caller_waiting(lock_dir))
                         proof_waiting = (chosen_class == SLOT_CLASS_ORDINARY
                                          and proof_caller_waiting(lock_dir))
-                        yielding = gate_waiting or proof_waiting
-            if (fd is None and chosen_class == SLOT_CLASS_GATE
-                    and reserved_gate > 0 and effective_gate_reserved > 0):
-                gate_cap_fd, _ = try_lock_slot(
-                    cap_dir, 'gate-reserved', effective_gate_reserved, offset,
-                )
-                if gate_cap_fd is not None:
-                    try:
+                        ahead_s = _waiter_ahead(wait_queue_dir, 's', my_priority, ticket_name)
+                        yielding_s = repair_waiting or gate_waiting or proof_waiting or ahead_s is not None
+
+            if (fd is None and chosen_class in (SLOT_CLASS_PROOF, SLOT_CLASS_GATE, SLOT_CLASS_REPAIR)
+                    and reserved_proof > 0):
+                ahead_p = _waiter_ahead(wait_queue_dir, 'p', my_priority, ticket_name)
+                if not (repair_waiting or gate_waiting or ahead_p is not None):
+                    fd, slot_name = try_lock_slot(lock_dir, 'proof', reserved_proof, offset)
+                    if fd is not None:
+                        preempted_p = (
+                            (chosen_class != SLOT_CLASS_REPAIR and repair_caller_waiting(lock_dir))
+                            or (chosen_class == SLOT_CLASS_PROOF and gate_caller_waiting(lock_dir))
+                            or _waiter_ahead(wait_queue_dir, 'p', my_priority, ticket_name) is not None
+                        )
+                        if preempted_p:
+                            _unlock_and_close(fd)
+                            fd = None
+                            slot_name = None
+
+            gate_reserved_capped = False
+            if fd is None and reserved_gate > 0:
+                if chosen_class == SLOT_CLASS_REPAIR:
+                    if _waiter_ahead(wait_queue_dir, 'g', my_priority, ticket_name) is None:
                         fd, slot_name = try_lock_slot(lock_dir, 'gate', reserved_gate, offset)
-                    except BaseException:
-                        _unlock_and_close(gate_cap_fd)
-                        gate_cap_fd = None
-                        raise
-                    if fd is None:
-                        _unlock_and_close(gate_cap_fd)
-                        gate_cap_fd = None
+                        if (fd is not None
+                                and _waiter_ahead(wait_queue_dir, 'g', my_priority, ticket_name) is not None):
+                            _unlock_and_close(fd)
+                            fd = None
+                            slot_name = None
+                elif chosen_class == SLOT_CLASS_GATE and effective_gate_reserved > 0:
+                    ahead_g = _waiter_ahead(wait_queue_dir, 'g', my_priority, ticket_name)
+                    if not (repair_waiting or ahead_g is not None):
+                        gate_cap_fd, _ = try_lock_slot(
+                            cap_dir, 'gate-reserved', effective_gate_reserved, offset,
+                        )
+                        if gate_cap_fd is None:
+                            gate_reserved_capped = True
+                        else:
+                            try:
+                                fd, slot_name = try_lock_slot(lock_dir, 'gate', reserved_gate, offset)
+                                if fd is not None and (
+                                    repair_caller_waiting(lock_dir)
+                                    or _waiter_ahead(wait_queue_dir, 'g', my_priority, ticket_name) is not None
+                                ):
+                                    _unlock_and_close(fd)
+                                    fd = None
+                                    slot_name = None
+                            except BaseException:
+                                _unlock_and_close(gate_cap_fd)
+                                gate_cap_fd = None
+                                raise
+                            if fd is None:
+                                _unlock_and_close(gate_cap_fd)
+                                gate_cap_fd = None
             if fd is not None:
                 break
-            if chosen_class in (SLOT_CLASS_GATE, SLOT_CLASS_PROOF) and wait_fd is None:
-                wait_lock_name = ('gate-waiting.lock' if chosen_class == SLOT_CLASS_GATE
-                                  else 'proof-waiting.lock')
+
+            desired_pools = 's'
+            if chosen_class in (SLOT_CLASS_PROOF, SLOT_CLASS_GATE, SLOT_CLASS_REPAIR) and reserved_proof > 0:
+                desired_pools += 'p'
+            if reserved_gate > 0 and (
+                chosen_class == SLOT_CLASS_REPAIR
+                or (chosen_class == SLOT_CLASS_GATE and effective_gate_reserved > 0 and not gate_reserved_capped)
+            ):
+                desired_pools += 'g'
+
+            if ticket_fd is None:
+                ticket_fd, ticket_path, ticket_name, ticket_meta = _register_wait_ticket(
+                    wait_queue_dir, my_priority, desired_pools,
+                )
+                ticket_pools = desired_pools
+            elif desired_pools != ticket_pools:
+                ticket_path, ticket_name = _update_ticket_pools(
+                    wait_queue_dir, ticket_path, ticket_meta, desired_pools,
+                )
+                ticket_pools = desired_pools
+
+            if chosen_class in (SLOT_CLASS_REPAIR, SLOT_CLASS_GATE, SLOT_CLASS_PROOF) and wait_fd is None:
+                wait_lock_name = (
+                    'repair-waiting.lock' if chosen_class == SLOT_CLASS_REPAIR
+                    else 'gate-waiting.lock' if chosen_class == SLOT_CLASS_GATE
+                    else 'proof-waiting.lock'
+                )
                 wait_fd = os.open(lock_dir / wait_lock_name, os.O_CREAT | os.O_RDWR, 0o666)
                 try:
                     fcntl.flock(wait_fd, fcntl.LOCK_SH)
@@ -586,13 +789,18 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
                 next_report_at = now
             if notify is not None and now >= next_report_at:
                 holders = read_slot_holders(lock_dir)
-                expected = 1 if yielding else limit
+                expected = 1 if yielding_s else limit
                 if len(holders) < expected:
                     time.sleep(0.005)
                     holders = read_slot_holders(lock_dir)
                 elapsed = int(round(now - wait_started))
                 after = f' after {elapsed}s' if elapsed > 0 else ''
-                if chosen_class == SLOT_CLASS_GATE:
+                if chosen_class == SLOT_CLASS_REPAIR:
+                    pool_desc = (
+                        f'all {limit} ordinary, {reserved_proof} proof, and {reserved_gate} gate slots '
+                        f'in {lock_dir}'
+                    )
+                elif chosen_class == SLOT_CLASS_GATE:
                     pool_desc = (
                         f'all {limit} ordinary, {reserved_proof} proof, and eligible gate slots '
                         f'({min(effective_gate_reserved, reserved_gate)}/{reserved_gate} per-gate cap) '
@@ -602,10 +810,15 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
                     pool_desc = f'all {limit} ordinary and {reserved_proof} proof slots in {lock_dir}'
                 else:
                     pool_desc = f'ordinary share ({limit} slots) in {lock_dir}'
-                if gate_waiting:
+                if repair_waiting or ahead_s == _CLASS_PRIORITY[SLOT_CLASS_REPAIR]:
+                    why = 'yielding to a waiting trunk-repair run; '
+                elif gate_waiting or ahead_s == _CLASS_PRIORITY[SLOT_CLASS_GATE]:
                     why = 'yielding to a waiting gate run; '
-                elif proof_waiting:
+                elif proof_waiting or (ahead_s == _CLASS_PRIORITY[SLOT_CLASS_PROOF]
+                                       and chosen_class == SLOT_CLASS_ORDINARY):
                     why = 'yielding to a waiting proof run; '
+                elif ahead_s is not None:
+                    why = 'waiting behind an earlier waiter; '
                 else:
                     why = ''
                 detail = describe_slot_holders(holders, fallback_count=limit)
@@ -613,6 +826,10 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
                        'not a failure; no timeout applies while waiting)')
                 next_report_at = time.monotonic() + WAIT_REPORT_INTERVAL
             time.sleep(0.02)
+        if ticket_fd is not None:
+            _release_wait_ticket(ticket_fd, ticket_path)
+            ticket_fd = None
+            ticket_path = None
         if wait_fd is not None:
             _unlock_and_close(wait_fd)
             wait_fd = None
@@ -633,6 +850,7 @@ def acquire_shard_slot(lock_dir, limit, notify=None, *, slot_class=None,
                 slot_class=chosen_class, holder_name=holder_name, label=label, acquired=False,
             )
             span_recorded = True
+        _release_wait_ticket(ticket_fd, ticket_path)
         _unlock_and_close(wait_fd)
         _unlock_and_close(fd)
         _unlock_and_close(gate_cap_fd)
@@ -942,7 +1160,8 @@ def main():
     parser.add_argument('--scratch', type=Path, help='parent of private scratch; defaults to TMPDIR or YOLO_DURABLE_DIR')
     parser.add_argument('--lock-dir', type=Path, help='shared lock directory; defaults to $GO_TEST_SHARDS_LOCK_DIR, then <GOCACHE>/go-test-shards-locks')
     parser.add_argument('--slot-class', choices=SLOT_CLASSES, default=None,
-                        help='slot pool class: gate (landing gates; preempts proof and ordinary), '
+                        help='slot pool class: repair (revert and trunk-fixer gates; preempts all others), '
+                             'gate (landing gates; preempts proof and ordinary), '
                              'proof (trunk proof; preempts ordinary), or ordinary (default, or $GO_TEST_SHARDS_CLASS)')
     parser.add_argument('--max-slots', type=int, default=None, metavar='N',
                         help=f'maximum simultaneous slots held by this run (default {DEFAULT_GATE_MAX_SLOTS} for --slot-class gate; unlimited otherwise)')

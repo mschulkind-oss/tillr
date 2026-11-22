@@ -478,6 +478,10 @@ func (s *ProcessSteps) startOrAttachDetachedGate(ctx context.Context, candidate 
 		timing = "1"
 	}
 	env = append(env, "TILLR_FORK_DRIFT=1", "TILLR_ORDINARY_GATE_TIMING="+timing)
+	trunkRepair := IsRevertItem(candidate.ItemID) || IsTrunkFixer(candidate.ItemID)
+	if trunkRepair {
+		env = append(env, "GO_TEST_SHARDS_CLASS=repair")
+	}
 
 	if err := os.MkdirAll(gateDir, 0o755); err != nil {
 		return detachedGateHandle{}, Externalf("creating gate directory %s: %v", gateDir, err)
@@ -492,14 +496,18 @@ func (s *ProcessSteps) startOrAttachDetachedGate(ctx context.Context, candidate 
 	var childArgv []string
 	var childEnv []string
 	var stdinFile string
+	dropEnv := []string{"TILLR_SQLITE_TRACE", "PYTHONDONTWRITEBYTECODE"}
+	if trunkRepair {
+		dropEnv = append(dropEnv, "GO_TEST_SHARDS_CLASS")
+	}
 	if s.isHookCommand(program) {
 		childArgv = append([]string(nil), argv...)
-		baseEnv := withoutProcessEnv(os.Environ(), "TILLR_SQLITE_TRACE", "PYTHONDONTWRITEBYTECODE")
+		baseEnv := withoutProcessEnv(os.Environ(), dropEnv...)
 		childEnv = append(baseEnv, env...)
 	} else {
 		probeCmd := s.stepCommand(ctx, argv, nil)
 		childArgv = append([]string(nil), probeCmd.Args...)
-		childEnv = append(withoutProcessEnv(probeCmd.Env, "TILLR_SQLITE_TRACE", "PYTHONDONTWRITEBYTECODE"), env...)
+		childEnv = append(withoutProcessEnv(probeCmd.Env, dropEnv...), env...)
 		if s.standardAdapterArg(argv) >= 0 {
 			stdinFile = filepath.Join(gateDir, "gate.stdin")
 			if err := os.WriteFile(stdinFile, []byte(builtAdapter), 0o600); err != nil {

@@ -89,7 +89,8 @@ func (s *ProcessSteps) fixerCheck(ctx context.Context, c Candidate, id string) (
 	if s.FixerGateProgram == "" {
 		return "error", "no named-check program configured"
 	}
-	code, out, span, err := s.programWithEnv(ctx, "fixer-gate", c.Worktree, s.FixerGateProgram, c, s.checkProcessEnv(nil), "--only", id)
+	fixerEnv := append(withoutProcessEnv(s.checkProcessEnv(nil), "GO_TEST_SHARDS_CLASS"), "GO_TEST_SHARDS_CLASS=repair")
+	code, out, span, err := s.programWithEnv(ctx, "fixer-gate", c.Worktree, s.FixerGateProgram, c, fixerEnv, "--only", id)
 	output := strings.TrimSpace(out + "\n" + span.StderrTail)
 	if err != nil {
 		return "error", strings.TrimSpace(output + "\n" + err.Error())
