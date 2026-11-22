@@ -61,10 +61,12 @@ def owed_wakes(path, pid, since_ms):
 
     Returns task keys, or None (cannot tell). Only a
     wake-policy task takes a session hold, so only it can owe a turn: one that has
-    not ended, or one that ended for a wake and whose completion the session has
-    not observed. A stopped task (wake_requested 0) and a delivery that failed to
-    enqueue owe nothing. No journal, no instance row for this process since it
-    started, a disabled journal or an unreadable one is None, never permission.
+    not ended, or one that ended for a wake in this process and whose completion the
+    session has not observed. A finished task from an earlier process of the session
+    can no longer be observed once that process is gone. A stopped task
+    (wake_requested 0) and a delivery that failed to enqueue owe nothing. No journal,
+    no instance row for this process since it started, a disabled journal or an
+    unreadable one is None, never permission.
     """
     if not path or not os.path.exists(path):
         return None
@@ -74,26 +76,31 @@ def owed_wakes(path, pid, since_ms):
         return None
     try:
         current = db.execute(
-            "SELECT pi_session_id, disabled_at FROM instances WHERE process_id=? AND started_at>=?",
+            "SELECT instance_id, pi_session_id, disabled_at FROM instances WHERE process_id=? AND started_at>=?",
             (pid, since_ms)).fetchall()
-        sessions = {session for session, _ in current}
+        sessions = {session for _, session, _ in current}
         # A missing or ambiguous identity cannot prove that the session owes no
-        # wakes. Include earlier processes of this same session: their tasks can
-        # outlive the process that started them.
-        if not current or len(sessions) != 1 or None in sessions or "" in sessions or any(disabled is not None for _, disabled in current):
+        # wakes. Include earlier processes of this same session for still-running
+        # tasks: those can outlive the process that started them. A task that
+        # already ended in an earlier process cannot be delivered or observed by
+        # this one.
+        if not current or len(sessions) != 1 or None in sessions or "" in sessions or any(disabled is not None for _, _, disabled in current):
             return None
         session = next(iter(sessions))
         instances = db.execute("SELECT instance_id FROM instances WHERE pi_session_id=?", (session,)).fetchall()
-        marks = ",".join("?" * len(instances))
+        current_ids = [instance for instance, _, _ in current]
         ids = [instance for (instance,) in instances]
+        marks = ",".join("?" * len(ids))
+        current_marks = ",".join("?" * len(current_ids))
         rows = db.execute(f"""
             SELECT t.task_key FROM tasks t
             WHERE t.started_by_instance IN ({marks}) AND t.completion_policy='wake' AND (
-              t.ended_at IS NULL OR NOT EXISTS (
-                SELECT 1 FROM deliveries d WHERE d.task_key=t.task_key AND (
-                  d.wake_requested=0 OR EXISTS (
-                    SELECT 1 FROM delivery_events e WHERE e.delivery_key=d.delivery_key
-                    AND e.event IN ('observed','enqueue-failed')))))""", ids).fetchall()
+              t.ended_at IS NULL OR (
+                t.started_by_instance IN ({current_marks}) AND NOT EXISTS (
+                  SELECT 1 FROM deliveries d WHERE d.task_key=t.task_key AND (
+                    d.wake_requested=0 OR EXISTS (
+                      SELECT 1 FROM delivery_events e WHERE e.delivery_key=d.delivery_key
+                      AND e.event IN ('observed','enqueue-failed'))))))""", ids + current_ids).fetchall()
         return [key for (key,) in rows]
     except sqlite3.Error:
         return None
