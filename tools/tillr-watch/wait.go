@@ -21,7 +21,7 @@ type waitOptions struct {
 }
 
 func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr io.Writer) (code int, resultErr error) {
-	wake, err := watchWAL(e.Store.Path(), opts.ticks)
+	wake, err := watchStore(e.Store, opts.ticks)
 	if err != nil {
 		return 1, err
 	}
@@ -49,6 +49,9 @@ func wait(ctx context.Context, e watch.Evaluator, opts waitOptions, out, stderr 
 	tick := false
 	var diagnostics ruleDiagnostics
 	for {
+		if err := wake.beginPass(ctx); err != nil {
+			return 1, err
+		}
 		results, err := e.EvaluateRules(ctx)
 		if err != nil {
 			return 1, err
