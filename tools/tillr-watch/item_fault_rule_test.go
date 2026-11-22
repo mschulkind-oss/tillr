@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mschulkind-oss/tillr-drain/drain"
 	"github.com/mschulkind-oss/tillr-drain/faults"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
@@ -19,9 +22,11 @@ func TestDrainItemFaultRule(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rules) != 1 || rules[0].ID != "drain-item-fault" {
-		t.Fatalf("want only drain-item-fault rule, got %+v", rules)
+	idx := slices.IndexFunc(rules, func(rule watch.Rule) bool { return rule.ID == "drain-item-fault" })
+	if idx < 0 {
+		t.Fatal("missing drain-item-fault rule")
 	}
+	rules = rules[idx : idx+1]
 
 	ctx := context.Background()
 	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), true)
@@ -87,5 +92,80 @@ func TestDrainItemFaultRule(t *testing.T) {
 	}
 	if len(notices) != 2 || counts["item-a"] != 1 || counts["item-b"] != 1 {
 		t.Fatalf("want one notice per item, got %+v", notices)
+	}
+}
+
+func TestDrainRepeatedVerifierRefusalsRule(t *testing.T) {
+	const ruleID = "drain-repeated-verifier-refusals"
+	rules, err := watch.LoadRules("../../config/tillr/watch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	idx := slices.IndexFunc(rules, func(rule watch.Rule) bool { return rule.ID == ruleID })
+	if idx < 0 {
+		t.Fatalf("missing %s rule", ruleID)
+	}
+
+	ctx := context.Background()
+	s, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Close() })
+	now := time.Date(2026, 11, 21, 22, 0, 0, 0, time.UTC)
+	e := watch.Evaluator{Store: s, Rules: rules[idx : idx+1], Clock: func() time.Time { return now }}
+	n := 0
+	refuse := func(item, step string, at time.Time) {
+		t.Helper()
+		n++
+		run := fmt.Sprintf("run-%d", n)
+		body, err := json.Marshal(map[string]string{"item_id": item, "step": step})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.WriteTx(ctx, func(tx *store.Tx) error {
+			_, err := tx.Append(event.Event{Kind: drain.RefusalKind, ObjectType: "run", ObjectID: &run, At: at, Payload: body})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pending := func() []watch.Notice {
+		t.Helper()
+		if _, err := e.Evaluate(ctx); err != nil {
+			t.Fatal(err)
+		}
+		notices, err := e.Pending(ctx, "foreground")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return notices
+	}
+
+	refuse("item-a", drain.RefusalVerifyNotDone, now.Add(-25*time.Hour))
+	for i := 4; i > 0; i-- {
+		refuse("item-a", drain.RefusalVerifyNotDone, now.Add(-time.Duration(i)*time.Hour))
+	}
+	refuse("item-b", drain.RefusalVerifyNotDone, now)
+	refuse("item-a", drain.RefusalGate, now)
+	if notices := pending(); len(notices) != 0 {
+		t.Fatalf("four verifier refusals in the window for one item should stay quiet, got %+v", notices)
+	}
+
+	refuse("item-a", drain.RefusalVerifyNotDone, now)
+	notices := pending()
+	if len(notices) != 1 || notices[0].Bundle.Subject != "item-a" {
+		t.Fatalf("want one notice for item-a at five verifier refusals, got %+v", notices)
+	}
+	guidance := notices[0].Bundle.Guidance
+	if !strings.Contains(guidance.Summary, "5 times") ||
+		!strings.Contains(strings.Join(guidance.Check, " "), "new each time") ||
+		!strings.Contains(strings.Join(guidance.Do, " "), "split the item") {
+		t.Fatalf("notice lacks count or guidance on new findings and splitting: %+v", guidance)
+	}
+
+	refuse("item-a", drain.RefusalVerifyNotDone, now)
+	if again := pending(); len(again) != 1 || again[0].AlertID != notices[0].AlertID {
+		t.Fatalf("sixth refusal should keep the same alert open, got %+v", again)
 	}
 }

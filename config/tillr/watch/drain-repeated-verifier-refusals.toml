@@ -1,0 +1,25 @@
+# On 2026-11-21, four items reached 7 to 14 refusals on unrelated findings
+# before an operator split them. Count verifier findings recorded as
+# drain.refusal events; warn at five for one item in 24 hours.
+[[rule]]
+id = "drain-repeated-verifier-refusals"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.refusal"]
+
+[rule.when]
+group_by = "item_id"
+pattern = "count_in_window"
+match = 'event.step == "verify-not-done"'
+threshold = 5
+window = "24h"
+
+[rule.guidance]
+summary = "The verifier refused {{subject}} {{count}} times in the last 24 hours."
+check = ["Read the verifier's findings for {{subject}} and check whether they are new each time."]
+do = ["If the findings are new each time, split the item so each part can be verified separately."]
+
+[rule.delivery]
+receiver = "foreground"
