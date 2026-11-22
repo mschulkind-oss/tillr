@@ -127,9 +127,9 @@ def execute_with_events(check, root, diff_base, *args, **kwargs):
         if status(check) != "FAIL":
             return None
         if sharded:
-            if not events.exists():
-                return None
-            lines = events.read_text(encoding="utf-8").splitlines()
+            # The captured verdict can still name a timeout and carry its stacks
+            # when the runner could not write its optional events file.
+            lines = events.read_text(encoding="utf-8").splitlines() if events.exists() else []
         else:
             lines = check.output.splitlines()
         return go_failure_logs(module, lines, check.output, sharded)
@@ -182,16 +182,20 @@ def go_failure_logs(module, lines, output, sharded):
     if sharded:
         # Classify each shard separately so a timeout does not hide a crash in
         # another shard (even one in the same package). Ordinary case names and
-        # assertion output still come exclusively from Go events.
+        # assertion output still come exclusively from Go events. Strip slot
+        # notices from the retained evidence too, not just the classification.
+        output = re.sub(
+            r"^go-test-shards: \S+ shard \d+ waiting for a test slot[^\n]*; "
+            r"not a failure; no timeout applies while waiting\)(?:\n|$)",
+            "", output, flags=re.MULTILINE,
+        )
         shards = re.split(r"^go-test-shards: ", output, flags=re.MULTILINE)[1:]
         for shard in shards:
             header, _, body = shard.partition("\n")
-            if "waiting for a test slot" in header:
-                continue
             match = re.fullmatch(r"(\S+) shard \d+ failed \(exit (\d+)\)(?:: (.+))?", header)
             if match and record_timeouts(timeouts, match[1], body):
                 continue
-            if not (match and match[2] == "1" and match[3]):
+            if not (lines and match and match[2] == "1" and match[3]):
                 unscoped = True
     else:
         for package in package_failures:
