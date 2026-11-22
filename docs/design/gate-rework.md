@@ -42,7 +42,12 @@ that waiting rule is built). On 2026-11-17 the owner ruled on time limits in the
 stall ends a check. On 2026-11-19 and 2026-11-20 the owner's orphaned-shard request added
 [`D-GR17`](#decision-ledger): a test that fails or hangs under load is fixed at its cause without
 adding a timeout, retry, or longer wait, and a test run started by a worker must not outlive the
-command that started it.
+command that started it. On 2026-11-21 the owner ruled that ten seconds was aspirational and
+accepted about 40 seconds for the tests a drain change selects, with performance monitoring
+([`D-GR38`](#decision-ledger)); the check that runs those tests before the merge is the
+designer's ([`D-GR39`](#decision-ledger),
+[Section 6.12](#612-a-change-to-a-tillr-go-module-runs-its-affected-test-packages-before-it-lands))
+and is not built.
 
 > **In short.** The gate is slow and brittle for one reason: it decides what to run from a commit
 > it remembers, on a machine that may not be the one that remembered it. Give every run its base
@@ -114,7 +119,7 @@ The owner ruled six things on 2026-11-15. They are inputs, not proposals.
 
 | Ruling | What it fixes |
 | :--- | :--- |
-| A landing gate targets **ten seconds per change** | The fast tier's budget, [Section 6.5](#65-ten-seconds-is-a-failing-test) |
+| A landing gate targets **ten seconds per change** (the owner on 2026-11-21: "10 seconds was apsirational", [`D-GR38`](#decision-ledger)) | The fast tier's budget, [Section 6.5](#65-ten-seconds-is-a-failing-test) |
 | Lanes run independently, and landings must **outpace them at ten lanes and again at twenty** | Nothing a landing waits for may be shared between lanes except the squash itself, [Section 5](#5-the-arithmetic-at-ten-and-twenty-lanes) |
 | The landing strategy is a **per-repository setting with two values**: heavy checks before the merge, so the trunk is always green, or after it, so the trunk is briefly red | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) |
 | **This repository takes the second** | The trunk here may be red between a landing and its heavy checks |
@@ -1471,6 +1476,15 @@ the heavy tier. Fast declarations may not name `timeout_ms`. A heavy declaration
 and a generated declaration use their timeout as a measured target, never a kill
 deadline.
 
+**What the cap covers.** The cap bounds the declared cost of the checks every
+candidate runs, which are the fast declarations under `tools/gate/checks/`. A check
+planned only for some candidates is outside the sum: `go-substrate`, `gate-runner`
+and the affected Go test packages of
+[Section 6.12](#612-a-change-to-a-tillr-go-module-runs-its-affected-test-packages-before-it-lands).
+The owner called the ten seconds aspirational on 2026-11-21 and accepted about 40
+seconds for the tests a drain change selects ([`D-GR38`](#decision-ledger)); stating
+the cap's scope this way is the designer's ([`D-GR39`](#decision-ledger)).
+
 **Only a stall ends a check early.** The watchdog (coined here: the observer of a
 running check’s progress, not an elapsed-time limit) samples every 1,000 milliseconds.
 Progress is at least one new log byte, including a heartbeat, or CPU progress
@@ -2383,13 +2397,25 @@ in two days, each of which the loop reverted without a person. The owner's leani
 is toward better fast tests, so this is the designer's reading of the numbers and the owner's to
 overturn; the choice among the four options is the owner's.
 
+**Ruled on 2026-11-21.** The owner answered the question: Go tests run before the merge, about
+40 seconds is accepted for the tests a drain change selects, and the ten seconds was
+aspirational ([`D-GR38`](#decision-ledger), quoted in
+[Section 6.12](#612-a-change-to-a-tillr-go-module-runs-its-affected-test-packages-before-it-lands)).
+That overturns the designer's leaning above. What is built is not option 1 as written:
+an operator request asks for the affected test packages with Go's result cache on, not whole
+sharded suites, and Section 6.12 specifies it (`D-GR39`, the designer's). The proposal, the
+options and the leaning above are kept as the record of what the owner was asked.
+
 ### 6.11 The fast gate before a landing records its time and its Go packages
 
 This section is the designer's, written on 2026-11-21 from an operator request and to answer a
 build worker's report against it. None of it is the owner's ruling, and the owner may overturn
 any of it. The request says the owner accepted about 40 seconds for the fast gate on drain
 changes on condition of "perf monitoring all over it"; those quoted words are the request's
-account of the owner, and no dated owner statement is on file here.
+account of the owner, and no dated owner statement is on file here. A later request of the
+same day carries the owner's words verbatim; they are quoted in
+[Section 6.12](#612-a-change-to-a-tillr-go-module-runs-its-affected-test-packages-before-it-lands)
+and recorded as [`D-GR38`](#decision-ledger).
 
 **What is recorded.** Each run of the fast gate that judges a candidate before it lands, on its
 ordinary path, leaves one durable record holding:
@@ -2480,6 +2506,229 @@ runner-first rule of [`OQ-GR3`](#OQ-GR3) working as intended.
 | Have `tools/fork-check.py` run its own `go list` in `tools/tillr-gate` | Rejected. It is a second discovery that can differ from what the runner selected, and it adds a `go list` to a gate that targets ten seconds. |
 | Run `tools/tillr-gate` unsharded at landing so `go test` prints package lines | Rejected. It changes how a check runs, which this work may not do. |
 
+### 6.12 A change to a tillr Go module runs its affected test packages before it lands
+
+**The owner's ruling, 2026-11-21, verbatim** (`D-GR38`): *"if you think drain suite selected
+tests are 40 seconds, let's do that, and monitor how it goes, just make sure we have perf
+monitoring all over it. 10 seconds was apsirational"*. The words reached this document in an
+operator request of 2026-11-21, which states them as verbatim. They answer the question
+[Section 6.10](#610-what-passed-the-fast-gate-and-failed-the-heavy-run) put to the owner: Go
+tests run before the merge.
+
+Everything else in this section is the designer's, written on 2026-11-22 from that operator
+request and to answer a build worker's report against it (`D-GR39`). None of it is the owner's
+ruling, and the owner may overturn any of it. The worker's report was right: the ledger still
+said ten seconds without qualification, kept the 9,000 millisecond cap without saying what the
+cap covers, and held `D-GR27` open in a form the request does not build.
+
+**What the ruling changes, and what it leaves.** Three statements, the first two read from the
+owner's words and the third the designer's reading of them:
+
+- Ten seconds is an aspiration, not a rule a design must hold to. `D-GR1` is amended to say so.
+- A candidate that changes the drain may take about 40 seconds in the gate for its selected
+  tests. That figure is an estimate: it is the drain suite's quiet-machine time in the gate's
+  cost table (`GO_TOOL_COST_ESTIMATE` in `tools/fork-check.py`, 40.31 seconds, from
+  [the shard report](../pi/tillr-go-shards-2026-11-17.md)). Nobody has measured the selected
+  packages.
+- The acceptance depends on monitoring. So the measurement is part of this work and not a
+  follow-up: the check may not land without the record described under
+  [What is recorded](#what-the-check-records).
+
+No time limit fails a gate. That is `D-GR15`, unchanged: the 40 seconds is not a budget that
+stops, carries or refuses anything, and the stall watchdog of `D-GR16` is the only thing that
+ends the check early.
+
+**What `D-GR27` proposed and what is built instead.** `D-GR27` proposed two whole sharded suites,
+run fresh, the drain's and the view's, on every change to the drain. The request builds a
+narrower thing: the test packages a change can affect, with Go's result cache left on. `D-GR27`
+is closed by the ruling and is not built in its own form. The designer's leaning there
+(no test before the merge) is overturned by the owner.
+
+#### The check
+
+An **affected test package** *(the research's term,
+[defined there](../research/build-tools.md))* is a Go test package selected because a changed
+input can reach it. The check that runs them is named `go-affected` here *(the name is the
+designer's)*.
+
+`go-affected` is a landing-tier kind in `tools/fork-check.py`, planned on the ordinary path the
+fast gate takes before a landing (`tools/gate/change-gate.py`, then
+`tools/fork-check.py --tier landing`). That is where `go-substrate` and `gate-runner` already
+run, and it is the path the timing record of
+[Section 6.11](#611-the-fast-gate-before-a-landing-records-its-time-and-its-go-packages)
+covers. It is planned only when the candidate changes a path under one of the modules below or
+a path a declared edge names. Every other candidate is gated exactly as today.
+
+**The modules** are `tools/tillr` and every `tools/tillr-*` directory that holds a `go.mod`,
+found by listing the tree, not from a kept list. Read at `5f3c021bec` that is ten modules:
+`tillr`, `tillr-cli`, `tillr-drain`, `tillr-gate`, `tillr-item`, `tillr-land`, `tillr-run`,
+`tillr-store`, `tillr-view` and `tillr-watch`. The request excludes the `yolo-packs` mirrors,
+`tools/dotmod` and `tools/bedrock-spend`. `tools/pi-profiler` is not a tillr module and is not
+included. `tillr-watch` is included although the `go-build` check's inventory does not list
+it, because the request says every tillr module.
+
+**Selection** takes the changed paths between the caller's base and the head (`D-GR7`) and
+adds packages in four steps. Each selected package keeps the reason it was selected.
+
+1. **Changed.** A changed path under a package's directory selects that package. A changed
+   path in a directory that holds no package (a `testdata` tree, for instance) belongs to the
+   nearest enclosing package.
+2. **Importers.** The check reads each module's packages, imports and test imports with
+   `go list -deps -test -json ./...` and reverses the graph across all the modules. Every test
+   package whose imports reach a changed package, directly or through other packages, is
+   selected. The research measured this listing once, on 2026-11-21: 0.86 seconds for ten
+   modules, 112 packages and 29 test binaries.
+3. **Declared edges.** A test that builds or runs a sibling program does not import it, so the
+   import graph cannot see the dependency. The research measured exactly this: a change to
+   `tillr-item/item` did not select `tillr-view`, whose tests build the drain. One tracked
+   file, `tools/gate/go-test-edges.json` *(the name and the two field names are the
+   designer's)*, lists for a test package the sibling main packages it builds or runs
+   (`builds`) and the files outside Go's graph that it reads (`reads`, as paths or directory
+   prefixes). A package with a `builds` edge is selected when the built program's own package
+   or anything that program imports changed. A package with a `reads` edge is selected when a
+   changed path matches.
+4. **The floor.** The modules' `replace` directives are today's selection
+   (`go_module_dependencies` in `tools/fork-check.py`) and stay as the answer whenever the
+   package graph cannot place a change. A changed path under a module that belongs to no
+   package (`go.mod`, `go.sum`, a file beside them), a changed path whose package no longer
+   exists at the head, and a module whose `go list` fails each select every test package of
+   that module and of every module that replaces it. Nothing is left unselected because the
+   graph could not be read.
+
+The floor at module grain for unplaceable changes is the designer's reading of the request's
+"keeps the existing replace-directive module edges as a floor". The other reading, that any
+change to a module selects the whole suite of every module replacing it, would run four whole
+suites on every drain change and contradicts the request's own sentence that a view run
+follows from a change to packages "that tillr-view depends on". The owner may overturn the
+reading.
+
+Packages of `tools/tillr` are dropped from the selection when `go-substrate` is planned in the
+same gate, and packages of `tools/tillr-gate` when `gate-runner` is, because those two checks
+already run the whole suite. Neither check changes.
+
+**Sibling builds measured.** Read on 2026-11-22 at `5f3c021bec` with
+`rg '"go", *"(build|run)"|go build' tools/tillr*/ -g '*_test.go'`, keeping the calls that name
+a directory or package outside the test's own:
+
+| Test package | Sibling it builds | Where |
+| :--- | :--- | :--- |
+| `tools/tillr-view` | `tillr-drain` | `buildPairInto` in `planner_internal_test.go` |
+| `tools/tillr-view` | `tillr-item` | `order_places_test.go`, `sync_residue_test.go` |
+| `tools/tillr-land` | `tillr-item` | `lifecycle_test.go`, `contention_test.go` |
+| `tools/tillr-land` | `tillr-gate` | `fork_rebase_test.go` |
+| `tools/tillr-drain` (the root and `drain` packages) | the seven programs in `internal/testinputs/siblings.txt` | `internal/testinputs/inputs.go` |
+
+That list is a dated measurement and the start of the edges file, not its definition. The
+builder runs the search again, and also looks for tests that run a program by another route
+(a Python child, a built binary found on `PATH`). The file is kept honest by a test, not by
+memory: a test in the gate's suite scans the modules' `_test.go` files for a `go build` or
+`go run` that names a path outside the test's own module, and fails when the edges file has no
+entry for it.
+
+**Non-Go inputs.** The builder lists them in `reads` from the tests themselves. Two kinds are
+already known: a fixture file a test opens outside its package directory, and a script a test
+runs (`tools/tillr-drain/drain/shard_balance_test.go` opens `tools/go-test-shards.py` for this
+reason). A file under the test package's own directory needs no entry, because step 1 covers
+it.
+
+#### How the selected packages run
+
+For each module with selected packages the check runs `go test` on exactly those packages, with
+`CGO_ENABLED=0`, Go's own deadline off (`-timeout 0`, as the gate's native suites already run)
+and no `-count=1`. A package Go answers from its result cache counts as passed.
+
+**A cached pass is trusted only where Go's cache can see the input that changed.** For steps 1
+and 2 it always can: the changed code is compiled into the test binary, and the binary is the
+cache's key. For a declared edge it cannot by default, since a child process's file reads are
+not in the test's input log (stated in `tools/tillr-drain/internal/testinputs/inputs.go`). The
+drain's tests solve this by opening the sibling sources through `testinputs.Track`, and
+`tools/tillr-drain/cache_test.py` proves a sibling change reruns them. So:
+
+- A package selected only through a declared edge, in a module whose tests do not declare
+  those inputs to the cache the way the drain's do, is run with `-count=1` for that run.
+- This is the one exception to the request's "no -count=1", and it is the designer's. Without
+  it a drain change would be answered by a cached view pass from before the change, which is
+  three of the thirteen misses this work exists to stop. It ends for a module when that
+  module's tests declare their inputs, which is a later change and not this one.
+
+Whether a pass cached in one lane's worktree is reused in another's is not known; the research
+marks it unverified. The check's verdict never depends on a cache hit, so this affects only
+time, and the record below is what measures it.
+
+The check's test processes count against the machine-wide test slot pool at the gate's class,
+so a gate does not add unbounded parallelism beside the lanes (`D-GR20`). Time spent waiting
+for a slot is recorded apart from the check's running time.
+
+The heavy tier is unchanged: after the merge it still runs each whole suite fresh. Whether the
+heavy runner could reuse a pass from this check is not decided here.
+
+#### What the check records
+
+The timing record of `D-GR30` (one line per ordinary fast gate run, built in `5f3c021bec`)
+gains, for `go-affected`:
+
+- the time spent computing the selection, apart from the time spent running tests;
+- the time spent waiting for a test slot;
+- each selected package by import path, with the reason it was selected (`changed`, `import`,
+  `edge` or `floor`), its elapsed time, whether Go answered it from the cache, and whether it
+  was run with `-count=1` under the exception above.
+
+A run that fails leaves the same record. This is the monitoring the owner's acceptance depends
+on, and it is enough to answer the three questions that decide whether the ruling holds up:
+how long a drain change's gate takes, how much of it the cache saves, and which packages the
+time goes to.
+
+**What the records hold today.** Read on 2026-11-22 from the eight timing records then in the
+live store (one per ordinary fast gate run since `5f3c021bec` landed): the whole gate's wall
+time ran from 12.5 to 123.3 seconds, with a median of 77.1 seconds, and the one run in which
+`go-build` executed took 5.96 seconds for that check. Eight runs is a small sample, and it
+does not say which checks the time went to in the other seven. It does say the gate was
+already well past ten seconds before any Go test ran in it. The builder reports the measured
+times again from the records at the time of the build, in the commit body, together with the
+time of each run of the new check it made, and states plainly that the 40 seconds was an
+estimate.
+
+#### How it fits admission
+
+The `gate-budget` check sums the `budget_ms` of the fast declarations under
+`tools/gate/checks/` against the 9,000 millisecond cap. Those are the checks every candidate
+runs. `go-affected` is not one of them: it is a landing-tier kind planned only for a candidate
+that changes a tillr Go module, the same standing `go-substrate` and `gate-runner` have. So:
+
+- The cap and its arithmetic test are unchanged, and no fast declaration's budget moves.
+- The cap now has a stated scope: it bounds the declared cost of the checks every landing
+  pays. It is not a bound on a landing that changes a tillr Go module.
+- `go-affected` gets a row in the gate's cost table for scheduling, like every landing-tier
+  kind. The row is an estimate and stops nothing.
+
+#### What it would have caught
+
+Of the thirteen attributed landings in Section 6.10, nine failed in a Go module's suite that
+the fast gate deferred: the drain's four times, the view's three times, the run's once and the
+item's once. Section 6.10's limits apply here too: the judged tree is not the landed tree, so
+nine is an upper bound and none is proved refused. The selection was not replayed against
+those nine landings, so whether it picks the failing package in each is unverified; the builder's tests cover the two shapes the request names (a drain change runs
+the affected drain packages, and a change to a drain or item package the view depends on runs
+the view suite). The four Python suites are not reached by this work.
+
+**What a verifier of the request's landing judges.** The check exists on the ordinary path and
+is planned only for the modules above. A drain change selects the affected drain packages. A
+change to a drain or item package that the view imports, or that a program the view builds
+imports, selects the view's test packages. An unplaceable change falls to the floor. The edges
+file exists with the scan test beside it. The record holds the fields above. No budget, cap or
+time limit is added or changed, and the commit body reports measured times. A verifier does not
+refuse the landing because a run took longer than 40 seconds.
+
+| Alternative | Verdict |
+| :--- | :--- |
+| The whole sharded drain and view suites on every drain change, run fresh (`D-GR27` as proposed), or the suites of the changed modules and the modules that require them (option 2 of Section 6.10) | Rejected by the request. Each pays the whole drain suite on every drain change and reuses nothing between runs; Section 6.10 measured 235 to 319 seconds added for the pair. |
+| A fast declaration under `tools/gate/checks/` with a 40,000 millisecond budget, and the cap raised to fit | Rejected. The cap would then admit 40 seconds of always-run checks, and the arithmetic test would stop protecting the landings that change no Go. |
+| Select only the tests a change adds or edits | Rejected on the evidence of Section 6.10: where a record names the failing test, the landing never edited it. |
+| The import graph alone, with no declared edges | Rejected. It does not select the view for an item change (measured in the research), which is three of the thirteen misses. |
+| The cache on for every package, declared edges included | Rejected. A child build is invisible to Go's cache, so the pass would be one from before the change. |
+| `-count=1` for every package | Rejected by the request. It gives up the reuse the owner's 40 seconds assumes. |
+| A build system (Bazel, Pants) or per-test coverage maps as the selector | Rejected for now, on the [research](../research/build-tools.md)'s recommendation: the cost is high and each still needs declared subprocess edges. |
+
 ## 7. Checked against the landing principles
 
 | Principle | How this design meets it |
@@ -2515,7 +2764,10 @@ runner-first rule of [`OQ-GR3`](#OQ-GR3) working as intended.
   [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) while that cap
   remains live.
 - **Fewer checks stand before the merge** than today. A Go suite, the fork suites and the
-  storybooks are all after it.
+  storybooks are all after it. Once
+  [Section 6.12](#612-a-change-to-a-tillr-go-module-runs-its-affected-test-packages-before-it-lands)
+  is built, the Go test packages a change affects run before the merge, and the whole suites
+  still run after it.
 - **The membership rule of [landing velocity](landing-velocity.md#43-the-membership-rule) is
   replaced**: thirty seconds per check becomes 9,000 milliseconds for the tier, and "every ten
   landings or twenty minutes" becomes "after each landing, coalesced". That document needs a
@@ -2581,11 +2833,15 @@ answer a third build worker's report against the same request; it states which t
 fixture rule of `D-GR34` reaches, and is the owner's to overturn. `D-GR37` is the designer's
 decision of 2026-11-22, made to answer a fourth build worker's report against the same request;
 it states that a fixture copying `tools/fork-check.py` is reached by that rule, lists the
-fixtures measured, and is the owner's to overturn.
+fixtures measured, and is the owner's to overturn. `D-GR38` is the owner's ruling of 2026-11-21
+on the gate's time for a drain change, quoted verbatim from the operator request that carried
+it; it amends `D-GR1` and answers `D-GR27`. `D-GR39` is the designer's decision of 2026-11-22,
+from that operator request and made to answer a build worker's report against it, on the check
+that runs the affected Go test packages before the merge; it is the owner's to overturn.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
-| `D-GR1` | The landing gate targets ten seconds per change. | 2026-11-15 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (the budget tests `tools/tillr-gate/fastbudget_test.go` and `fastceiling_test.go`) |
+| `D-GR1` | The landing gate targets ten seconds per change. **Amended by the owner on 2026-11-21** (`D-GR38`): "10 seconds was apsirational". The ten seconds stays as the target of the checks every candidate runs, held by the arithmetic test; it is not a target for a candidate that changes a tillr Go module, which also runs its affected test packages before the merge. | 2026-11-15; amended 2026-11-21 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (the budget tests `tools/tillr-gate/fastbudget_test.go` and `fastceiling_test.go`) |
 | `D-GR2` | Lanes run independently, and landings must outpace them at ten lanes and again at twenty. | 2026-11-15 | [Section 5](#5-the-arithmetic-at-ten-and-twenty-lanes) | ✅ (`tools/tillr-drain/scale_test.go`, `scale_race_test.go`) |
 | `D-GR3` | The landing strategy is a per-repository setting with two values: heavy checks before the merge (the trunk is always green) or after it (the trunk is briefly red). | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/drain/gate_policy.go`) |
 | `D-GR4` | This repository takes the second value: heavy checks after the merge. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`landing_strategy` is `after-merge` in `config/tillr/gate-policy.json`) |
@@ -2598,7 +2854,7 @@ fixtures measured, and is the owner's to overturn.
 | `D-GR11` | The budget is enforced by an arithmetic test over declared costs and by a per-check deadline that carries an overrun to the heavy tier; a check that overruns alone turns the heavy run red on `gate-budget`. **Rejected:** failing landings on measured wall time. Structural fix. **Amended 2026-11-16** by `D-GR13` (a fast check is not stopped at its budget but at its ceiling) and `D-GR14` (carrying is suspended until the heavy runner exists); the arithmetic test is unchanged. **Superseded in part 2026-11-17** by the owner's ruling `D-GR15`: no deadline stops a check that is making progress, so the per-check deadline and carrying at it go, and an overrun alone never turns a run red; the arithmetic test stays. | 2026-11-15 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Arithmetic test built; the deadline as amended |
 | `D-GR13` | A fast check still running at its `budget_ms` runs on to its ceiling — its `timeout_ms`, or the 9,000 millisecond cap, clamped to lie between its budget and the cap — and keeps its verdict, with `over_budget_ms` recorded; only a check still running at its ceiling is "could not judge". The worst case is 11 x 9,000 = 99,000 milliseconds of checks. Decided by the implementer after `documents` overran by 1 millisecond under load and held an item; the owner has not ruled on it and may overturn it. **Rejected:** stopping a change check at its budget (load faults the item), and carrying it (nothing after the merge has its base). **Superseded 2026-11-17** by the owner's ruling `D-GR15`: the ceiling is no longer a kill, and a check still making progress is never "could not judge"; the `over_budget_ms` record stays. The alternative of one ceiling for the whole fast run is rejected by the same ruling. | 2026-11-16 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Built; the superseded part is replaced by the stall watchdog |
 | `D-GR14` | Carrying a fast tree check to the heavy tier is suspended until the heavy runner exists: until then an over-budget fast tree check is run to its ceiling and keeps its verdict, as in `D-GR13`. The switch is `tillr-gate`'s `--tree-overrun` (`keep` by default), stated once in `tools/gate/change-gate.py` as `TREE_OVERRUN`; `item-gate-heavy-runner` turns it to `carry`. Decided by the implementer because with no heavy runner a carried check's judgment is dropped, and `go-build` was carried on almost every ten-lane landing; the owner has not ruled on it and may overturn it. **Rejected:** carrying with nothing to take what is carried, and answering "could not judge" at the budget. **Ruled on 2026-11-17** by the owner's ruling `D-GR15`: only a stall ends a check early, so `keep` is the rule rather than a suspension, and carrying, which stops a check at its budget, is not turned on as designed. | 2026-11-16 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Built |
-| `D-GR15` | **The owner's ruling, 2026-11-17:** "target budgets, watch for stalls, but don't let 'load is high' cause failures that would otherwise finish just fine." A budget is a target that is measured and reported; exceeding one is never by itself a failure, a fault or "could not judge". What ends a check early is a stall, a check making no progress, seen by a watchdog, and a stall leads to a named next step, never a silent kill. Machine load must not turn work that would have finished into a failure. **Supersedes** the ceiling as a kill and "could not judge" for a check still making progress (`D-GR13`), and the per-check deadline of `D-GR11`. **Keeps** the budgets, the admission test against the 9,000 millisecond cap, the `over_budget_ms` record, and the ten-second landing as a target with its measured distribution visible. | 2026-11-17 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (`tools/tillr-gate/watchdog.go`; `item-gate-stall-watchdog` and `item-gate-wrapper-clocks-stall` landed) |
+| `D-GR15` | **The owner's ruling, 2026-11-17:** "target budgets, watch for stalls, but don't let 'load is high' cause failures that would otherwise finish just fine." A budget is a target that is measured and reported; exceeding one is never by itself a failure, a fault or "could not judge". What ends a check early is a stall, a check making no progress, seen by a watchdog, and a stall leads to a named next step, never a silent kill. Machine load must not turn work that would have finished into a failure. **Supersedes** the ceiling as a kill and "could not judge" for a check still making progress (`D-GR13`), and the per-check deadline of `D-GR11`. **Keeps** the budgets, the admission test against the 9,000 millisecond cap, the `over_budget_ms` record, and the ten-second landing as a target with its measured distribution visible. **Recorded 2026-11-22 by the designer** (`D-GR39`, the owner's to overturn): the 9,000 millisecond cap bounds the fast declarations every candidate runs; a check planned only for some candidates, the affected Go test packages among them, is outside the sum, and this ruling's "exceeding one is never by itself a failure" applies to the owner's 40 seconds of `D-GR38` as it does to any budget. | 2026-11-17 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (`tools/tillr-gate/watchdog.go`; `item-gate-stall-watchdog` and `item-gate-wrapper-clocks-stall` landed) |
 | `D-GR16` | A check shows progress in a one-second sample when its output grew or its process group's CPU time rose; 60 consecutive samples with neither is a stall. The runner ends a stalled check's process group and records `stalled`, which is neither pass, fail nor over-budget, with what it observed. The drain keeps the candidate and re-gates it once, when fewer gates are in flight than at the stall or no other gate is; a second stall on the same candidate holds the item, naming the check. `gate-harness-error` stays for a check that could not start or crashed. Settled by the session's designer on 2026-11-17, on `D-GR15` and [landing principle 11](landing-principles.md#11-a-failure-is-diagnosed-not-waited-out) (a re-run waits on a named change, never on time passing); the owner may overturn it. **Rejected:** a longer fixed timeout, which fails the same way at a higher load; re-gating on the next pass, which names no change. | 2026-11-17 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (`tools/tillr-gate/watchdog.go`) |
 | `D-GR17` | **Owner ruling (2026-11-19) and scope answer (2026-11-20).** *"Rule of this repository: a test that fails or hangs under load is a broken test; do not add a timeout, a retry or a longer wait as the fix"*, and a test run started by a worker must not outlive the command that started it. `tools/go-test-shards.py` must tie every `go tool test2json` and compiled shard process group (`start_new_session=True`) to the invoking runner command's lifetime and keep the compiled binary directory valid until every shard exits; hanging or load-sensitive tests in `tools/tillr-drain` are fixed at their synchronization cause so multiple concurrent suite runs pass. The build scope covers `tools/tillr-drain/` (mirrored to `yolo-packs/tillr/` via `just pack-sync`, keeping `runTests` in `tools/tillr-drain/main_test.go` self-contained or paired with `tests/tillr-testmain_test.go`), `tools/go-test-shards.py`, and `tests/` (`tests/go-test-shards.test.py`, `tests/tillr-testmain_test.go`). **Rejected:** adding timeouts, retries, or longer sleeps to mask load hangs; leaving detached `test2json` sessions alive after `go-test-shards.py` exits or is killed. | 2026-11-19 / 2026-11-20, owner | [Section 6.5](#65-ten-seconds-is-a-failing-test) | Queued |
 | `D-GR18` | **Owner ruling, 2026-11-20:** "for this repository, I want a personal filter that says the commits may only be one of the two identities, my personal or professional identity. But that is for this repository, not for Tiller." | 2026-11-20 | [Which identities this repository accepts](#which-identities-this-repository-accepts) | Not yet built |
@@ -2610,7 +2866,7 @@ fixtures measured, and is the owner's to overturn.
 | `D-GR24` | **Owner ruling (2026-11-21), verbatim:** *"So I think the real rule should be you can only start a new item if the previous item's trunk landing went green because you don't want to start it until the other one has landed on the trunk and it's okay and then you always just base an item on the most recent green on the trunk, and I think that satisfies everything."* and *"And yes, of course, a trunk fixer is meant to only be based on a red change, so of course it's based on a red one."* It replaces the owner's 2026-11-17 overturn of [`OQ-GR2`](#OQ-GR2) for new work. From an operator request of the same day, which reads the ruling as the `green` value of `lane_base` and reads "the previous item" as the item's blocker (the operator's reading, which the owner may overturn): a new lane is cut from the green pointer; an item whose blocker has landed is held with the reason `trunk-unproved` until the heavy runner has proved a trunk commit containing that landing; a trunk fixer starts from the tip; this repository sets `lane_base` to `green`. | 2026-11-21 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ [`config/tillr/gate-policy.json`](../../config/tillr/gate-policy.json) selects `green`, pinned by `TestRepositoryGatePolicyUsesGreenLaneBase` in [`gate_policy_test.go`](../../tools/tillr-drain/gate_policy_test.go). The [lane-base tests](../../tools/tillr-drain/drain/lane_base_test.go) verify the blocker-proof wait and the fixer base. |
 | `D-GR25` | **Not the owner's ruling and not a decision: the designer's list, for the owner to rule on.** The built `green` behavior differs from the words of `D-GR24` in five cases, tabled in Section 6.6: a lane cut from an unproved commit after green when the item's own block is newer than green; the same when the item's design answer landed after green; lanes cut from the tip when no green pointer exists; a fork blocker proved by its delivered patch branch, not by the green pointer; and a landed blocker with no recorded landing, which waits. Each stays as built until the owner rules. **Rejected:** changing any of them to match the words, which the request that carried the ruling forbids. | 2026-11-21 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ as built (`tools/tillr-drain/drain/lane_base.go`); no ruling yet |
 | `D-GR26` | **Not the owner's ruling; the designer's decision on an operator request, which the owner may overturn.** The owner asked on 2026-11-21, verbatim: *"Can we tell from our records when an item passed the light gate and then failed the heavy gate? Because that's evidence we're going to want to look at and decide something. Probably just making the light tests better if possible."* The request answers with a read-only report, the `tillr view heavy-misses` face (the name is the designer's), listing each landing that passed its fast gate and was later named by a heavy failure, with its commit, item, time, failing checks, revert or fixer outcome and changed paths, summarized by check and by changed module; and with Section 6.10, which reads that report from 2026-11-19 3:55 PM to 2026-11-21 6:35 PM Eastern and belongs to this document, so its designer writes it. Each failing check carries an attribution (`confirmed`, `offered`, `disproved` or `named`), and only the first two are counted as evidence. The request forbids changing the fast tier's selection. **Rejected:** counting every landing a fixer record names, which counts landings that only arrived on a red trunk (36 of the 50 listed). | 2026-11-21 | [Section 6.10](#610-what-passed-the-fast-gate-and-failed-the-heavy-run) | Built: the face is in [`tools/tillr-view`](../../tools/tillr-view/README.md); evidence read 2026-11-21 |
-| `D-GR27` | **Not the owner's ruling and not a decision: the designer's proposal, for the owner to rule on.** A candidate that changes a path under `tools/tillr-drain` also runs, before the merge, the sharded `tools/tillr-drain` and `tools/tillr-view` suites; every other candidate is gated as today. It is the smallest selection of existing whole-suite checks that would have run the failing suite for more than half of the period's attributed landings: 7 of 13, against 4 for the drain suite alone, 3 for the view suite alone, 6 for the changed modules only and 9 for the changed modules with the modules that require them. That is an upper bound; none of the seven is proved refused, because the judged tree is not the landed tree and no judged candidate was replayed. Two paired timings of one green drain change (`81ea2675de` against `5514f6eda3`), beside running lanes, added 235.06 and 318.56 seconds to a fast gate of 41.17 and 46.97 seconds, against the ten seconds of `D-GR1`; no other candidate was timed. The trigger matched 245 of the period's 472 landings, which is how often it would have run and not a measured delay. The designer leans against building it now (keep the fast tier; make the drain suite faster, explain its intermittent failure, and make the revert quicker, first); the owner's quoted leaning is toward better fast tests. Nothing is built or changed until the owner rules. | 2026-11-21 | [Section 6.10](#610-what-passed-the-fast-gate-and-failed-the-heavy-run) | — (proposal; no ruling yet) |
+| `D-GR27` | **Not the owner's ruling and not a decision: the designer's proposal, for the owner to rule on.** A candidate that changes a path under `tools/tillr-drain` also runs, before the merge, the sharded `tools/tillr-drain` and `tools/tillr-view` suites; every other candidate is gated as today. It is the smallest selection of existing whole-suite checks that would have run the failing suite for more than half of the period's attributed landings: 7 of 13, against 4 for the drain suite alone, 3 for the view suite alone, 6 for the changed modules only and 9 for the changed modules with the modules that require them. That is an upper bound; none of the seven is proved refused, because the judged tree is not the landed tree and no judged candidate was replayed. Two paired timings of one green drain change (`81ea2675de` against `5514f6eda3`), beside running lanes, added 235.06 and 318.56 seconds to a fast gate of 41.17 and 46.97 seconds, against the ten seconds of `D-GR1`; no other candidate was timed. The trigger matched 245 of the period's 472 landings, which is how often it would have run and not a measured delay. The designer leans against building it now (keep the fast tier; make the drain suite faster, explain its intermittent failure, and make the revert quicker, first); the owner's quoted leaning is toward better fast tests. Nothing is built or changed until the owner rules. **Ruled on by the owner on 2026-11-21** (`D-GR38`): tests run before the merge, so the designer's leaning is overturned. The proposal's own form, whole sharded suites run fresh, is not built; the affected test packages of `D-GR39` are. | 2026-11-21 | [Section 6.10](#610-what-passed-the-fast-gate-and-failed-the-heavy-run) | — (closed by `D-GR38`; replaced by `D-GR39`) |
 | `D-GR28` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request for the first classifier slice says "No outcome changes for any input". The single raw-result table and single aggregate order of `D-GR23` changed five measured outcomes at three sites (P6, F3, F6), so `D-GR23` is amended: `Classify` holds a named protocol per kind of raw result and `Aggregate` a named order per aggregate site, each reproducing the tree, and a site passes the name and compares nothing. A Go module build is `fail` on every non-zero exit; a legacy check follows `check_status` and `Check.conflict` (exit 4 of an ordinary kind is `fail`, exit 124 is `unknown`); the legacy gate's order is stalled, then failed, then unproven. The Python side hands over yes-or-no facts about a check's output and decides nothing from them. A difference a later slice finds is added the same way by its builder, with a test and a row in the section, and is not a definition obstacle. **Rejected:** allowing the outcome changes by name; sending pass and fail words from Python; merging the orders into the runner's in this group. | 2026-11-21 | [Each site keeps its raw-result protocol and aggregate order](#each-site-keeps-its-raw-result-protocol-and-aggregate-order) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
 | `D-GR29` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request of 2026-11-21 asks for the repair of commit `4790d2ad43` (receive a test's completions before canceling) in `policy_reload_test.go`, `fixer_intermittent_test.go`, `pass_measurement_test.go` and `lane_dirty_test.go`, saying all four cancel and then receive. At `86e2549392` only `policy_reload_test.go` does; the other three receive under `context.Background()`, where `sendCompletion` cannot drop a completion. So only `policy_reload_test.go` is repaired: its workers are released by a channel and their completions received while the context is live, with `cancel()` last; the repaired receive waits under the `hangGuard` deadlock detector and a released worker returns an error. The three others are unchanged and named with the reason in the commit body, which also states whether the real loop can lose a completion after cancel. The mirror comes from `just pack-sync`. **Rejected:** editing the three files that have no cancel; a time limit on the receive in place of the repair; a `hangGuard` on the three receives that have no fault (a second, unlanded draft of this decision proposed it); repairing `Loop.Examine` in `recovery.go` in the same change, which needs its own request; changing `sendCompletion`. **Recorded 2026-11-21 by the designer:** a third unlanded draft reached the same answer and is not adopted as a separate text; the built cleanup's receive is a bare receive on a live context, not one under `hangGuard`, and is accepted as built. **Recorded 2026-11-22 by the designer:** a fourth unlanded draft, written against the same worker report, reached the same answer and is not adopted; that report is answered by this row, the repair is built, and no build work remains under the request. The rule kept from it: no test cleanup makes a blocking receive from the loop's completions channel after it cancels the context its workers send under. | 2026-11-21 | [Section 6.5](#65-ten-seconds-is-a-failing-test) | ✅ (commit `c6a01f6e84`: [`policy_reload_test.go`](../../tools/tillr-drain/drain/policy_reload_test.go) and its mirror) |
 | `D-GR30` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** Each run of the fast gate that judges a candidate before it lands, on its ordinary path, leaves a durable record of its wall time, each check's elapsed time and whether it ran, was reused or was not run, and the Go packages each Go check selected. The packages come from `go-build`'s own `go list`, from `go-substrate`'s `go test` output, and for `gate-runner`, which runs sharded and prints no package lines, from `tools/go-test-shards.py` writing its `go list` result to the file named by `TILLR_GO_SHARDS_EVIDENCE_OUT`, before compiling, and only when that variable is set. The Go package piece may therefore edit `tools/go-test-shards.py` and `tests/go-test-shards.test.py` for that producer and its fixture tests only. The heavy trunk proof, the legacy tree-check bridge, relanding, the automatic revert candidate, named replays and the heavy-failure count are out of scope and listed in the candidate's commit message. **Rejected:** leaving `gate-runner` out; reading the `--events` file; a second `go list` in `tools/fork-check.py`; running the suite unsharded. | 2026-11-21 | [Section 6.11](#611-the-fast-gate-before-a-landing-records-its-time-and-its-go-packages) | — (not built) |
@@ -2621,6 +2877,8 @@ fixtures measured, and is the owner's to overturn.
 | `D-GR35` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request of 2026-11-21 reports the proof worktree's registration left locked with reason `initializing` and no directory, 20 failed heavy runs on `missing but locked`, and a trunk that could not be proved until the operator ran `git worktree unlock` and `git worktree prune`; it asks that the heavy runner recover by itself and that the change say what interrupted the add. Recovery: when the registration of the runner's own proof path is locked, the runner, under the registry lock it already holds, unlocks that path, reports one loop-log line with the path, the lock's reason and the `locked` file's time, and continues with its existing remove and add; a test covers the directory missing and the directory present. The cause: not established. `gateRestart` defers the exec while `heavyProofActive` is set, since `edaa4fdf4b`, so the tree does not show an in-place restart crossing the add, and the incident's logs were not available to the design seat; the building commit states the cause as unconfirmed and does not name the restart. Cancellation ending Git with SIGKILL is recorded as a hypothesis only. **Rejected:** `git worktree prune` in the runner, because it acts on other worktrees' registrations; `git worktree add --force --force`, because it overrides a lock without recording it; naming the restart as the cause from the request's words alone, because the code at that build contradicts it. | 2026-11-21 | [The proof worktree's registration is left locked](#the-proof-worktrees-registration-is-left-locked) | — (not built) |
 | `D-GR36` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** A build worker's plan for the adapters' landing (slice 1e) allowed writes only under `tools/gate/` and to `tests/fast-tree-in-done.test.py`. The Go test `TestFixerGateJudgesOwnDiffThenNamedChecksAndLands` in `tools/tillr-drain/drain/fixer_gate_test.go` copies only `tools/fork-check.py` and `tools/gate/change-gate.py` into its tree and runs the real change gate, so an adapter that reads a shared file fails there with `ModuleNotFoundError` until the fixture copies that file too (a build worker's reproduction, 2026-11-21). The two setup edits of `D-GR34` apply to every test whose fixture copies a moved adapter or writes a stand-in, in any language and directory, Go tests under `tools/tillr-drain`, `tools/tillr-gate` and `tools/tillr-loop` included. Those test files, for those edits only, and their pack mirrors regenerated by `just pack-sync`, are among the files slices 1e and 1g may write. A `tillr-gate` a test builds from the repository's source is the real program and not a stand-in. **Rejected:** repeating the call in each adapter; leaving `change-gate.py` out for this reason; copying all of `tools/gate/` into the fixture; listing every copying fixture in the document. | 2026-11-22 | [A fixture that copies a moved adapter is in the mover's change, in any language](#a-fixture-that-copies-a-moved-adapter-is-in-the-movers-change-in-any-language) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
 | `D-GR37` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** A build worker's plan for the adapters' landing (slice 1e) allowed writes to `tools/tillr-drain/drain/fixer_gate_test.go` and not to `tools/tillr-drain/drain/heavy_legacy_restart_test.go`. The helper `testHeavyLegacyRestart` in the second file copies `tools/fork-check.py` into a tree whose `tools/gate/` holds only `checks/.keep`, appends a `main` that calls `check_status`, and runs it, so a `check_status` that reads a shared file fails there with `ModuleNotFoundError` until the fixture copies that file too (a build worker's reproduction, 2026-11-22). `tools/fork-check.py` is a moved file under the fixture rule of `D-GR34` and `D-GR36`: this fixture copies the one shared file into its tree, changes no assertion and copies nothing else. The document now lists the four test files measured to copy a moved file at `417d7d8df4`; a plan for slice 1e or 1g lists all four and their pack mirrors among its write paths, and the rule of `D-GR36` still adds any fixture the list lacks. **Overturns** `D-GR36`'s rejection of a list in the document. **Rejected:** keeping the list out; a call in `tools/fork-check.py` that does not use the shared file; a fixture `main` that writes status words itself; copying all of `tools/gate/` into the fixture. | 2026-11-22 | [A fixture that copies the legacy gate is reached too, and the plan lists the fixtures measured](#a-fixture-that-copies-the-legacy-gate-is-reached-too-and-the-plan-lists-the-fixtures-measured) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
+| `D-GR38` | **Owner ruling (2026-11-21), verbatim:** *"if you think drain suite selected tests are 40 seconds, let's do that, and monitor how it goes, just make sure we have perf monitoring all over it. 10 seconds was apsirational"*. The words are quoted from the operator request of 2026-11-21 that carried them. It amends `D-GR1` (ten seconds is an aspiration) and answers the question of `D-GR27` (Go tests run before the merge). The 40 seconds is an estimate from the gate's cost table, not a measurement and not a limit. | 2026-11-21 | [Section 6.12](#612-a-change-to-a-tillr-go-module-runs-its-affected-test-packages-before-it-lands) | — (ruling; carried out by `D-GR39`) |
+| `D-GR39` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** A candidate that changes a tillr Go module (`tools/tillr` and each `tools/tillr-*` with a `go.mod`; not the `yolo-packs` mirrors, `tools/dotmod` or `tools/bedrock-spend`) also runs `go-affected` (the designer's name) before the merge: a landing-tier kind in `tools/fork-check.py` on the ordinary path, beside `go-substrate` and `gate-runner`. It selects the changed packages, every test package whose imports reach one (the Go import graph reversed across the modules), the test packages a tracked edges file ties to a sibling program they build or run or to a non-Go file they read, and, for a change the graph cannot place, every test package of the module and of the modules that replace it (the designer's reading of the request's "floor"). It runs `go test` on those packages with Go's result cache on. One exception, the designer's: a package selected only through a declared edge, whose tests do not declare those inputs to the cache, runs with `-count=1`, because a child build is invisible to the cache. The check is outside the `gate-budget` sum, so the 9,000 millisecond cap and every fast budget are unchanged, and no time limit fails it (`D-GR15`). The timing record of `D-GR30` gains its selection time, slot wait and, per package, the reason, elapsed time and whether it was cached. The builder reports measured times from those records. **Rejected:** whole sharded suites run fresh (`D-GR27` as proposed); a 40,000 millisecond fast declaration with the cap raised; selecting only edited tests; the import graph with no declared edges; the cache on for declared edges; `-count=1` everywhere; a build system or coverage maps as the selector. | 2026-11-22 | [Section 6.12](#612-a-change-to-a-tillr-go-module-runs-its-affected-test-packages-before-it-lands) | — (not built) |
 | `D-GR12` | A question about a moving upstream is a drift probe that files an item and never moves or holds the green pointer. **Rejected:** keeping it as a check on a commit. Made visible where it happens. | 2026-11-15 | [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) | — (`series` and `patch-branch-inv2` are `TIER_LANDING` in `tools/fork-check.py`; no probe exists) |
 | OQ-GR1 | The default of a per-repository setting, `red_cap`: landing stops at 20 landings or 60 minutes past the last green commit; a repository may set a different bound, and zero means no cap. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "a mechanism whose cost rises with trunk activity is pointed the wrong way" and the owner's 2026-11-15 ruling that the landing strategy is configurable per repository and red is brief. The owner may overturn it. **Rejected:** no cap, which lets the fixer's range and the deploy lag grow without limit. **Ruled out by the owner on 2026-11-18** ([OQ-GP7](tillr-graph-is-the-path.md#OQ-GP7)): under a red check, work lands only if it does not touch what that check reads, and there is no landing cap. The cap is still live in the tree (20 landings; its time bound was turned off on 2026-11-17, `d53580bfd`) until the graph design's waiting rule is built. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/redcap/cap.go`, `drain/red_cap.go`) |
 | OQ-GR2 | The default of a per-repository setting, `lane_base`: a new lane starts from the last green commit; a repository may choose the trunk tip. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are that a worker does not pay for a failure it did not cause, and the same cost-direction rule. The owner may overturn it. **Rejected:** always cutting from the tip. **Overturned by the owner on 2026-11-17** (`1fa2c069c`): work is always built against the latest trunk, never a past commit; a lane cut from the green pointer was handed a tree older than its own item's definition and produced false conflicts. This repository set `tip`; the code's default when the key is absent is still `green`. **Replaced by the owner's ruling of 2026-11-21** (`D-GR24`): new work starts from the last proved trunk commit again, and this repository sets `green`. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/drain/lane_base.go`; the repository setting follows `D-GR24`) |
