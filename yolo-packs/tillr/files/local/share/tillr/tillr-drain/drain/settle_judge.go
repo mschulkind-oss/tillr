@@ -35,6 +35,12 @@ func (l *Loop) runCandidateExamination(ctx context.Context, work *pendingWork, l
 		// The item went terminal by another route during this examination.
 		return laneOutcome{err: l.settleTerminalItem(ctx, work, terminal)}
 	}
+	if errors.Is(err, errRestartPending) || (l.isRestartReplaced() && errors.Is(err, context.Canceled)) {
+		dir := detachedGateDir(l.cfg.Root, l.cfg.Store, c.Worktree, c.RunID)
+		if live, done := hasDetachedGateInDir(dir, c, true); live || done {
+			return laneOutcome{stop: stopLaneRetained, err: errRestartPending}
+		}
+	}
 	held, keep := retainLane(err)
 	itemFault := errors.Is(err, errItemFaultHeld)
 	repairHeld := errors.Is(err, errRepairHeld)
@@ -102,8 +108,10 @@ func (l *Loop) claimSettledCandidateJudge(ctx context.Context, d Decision, timin
 	if stopped, err := l.stopRequested(ctx); err != nil || stopped {
 		return nil, false, err
 	}
-	if pending, err := l.buildRestartPending(ctx); err != nil || pending {
-		return nil, false, err
+	if !l.restartDefersToSettlement() {
+		if pending, err := l.buildRestartPending(ctx); err != nil || pending {
+			return nil, false, err
+		}
 	}
 	here, err := currentLoopOwner()
 	if err != nil {

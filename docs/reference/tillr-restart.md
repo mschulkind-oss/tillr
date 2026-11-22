@@ -16,6 +16,9 @@ covers:
   - tools/tillr-drain/drain/restart_examination.go
   - tools/tillr-drain/drain/restart_judge.go
   - tools/tillr-drain/drain/restart_rolling.go
+  - tools/tillr-drain/drain/steps.go
+  - tools/tillr-drain/drain/loop.go
+  - tools/tillr-drain/drain/settle_judge.go
   - tools/tillr-drain/drain/build_restart.go
   - tools/tillr-drain/drain/build_readers.go
   - tools/tillr-drain/drain/parallel_restart.go
@@ -59,8 +62,8 @@ binary rolls and green-pointer or trunk-tip pushes.
 | Component | Lives in |
 | :--- | :--- |
 | Durable restart request, answer, build-started events, digest comparison, and launcher resolution | [`tools/tillr-drain/restart/restart.go`](../../tools/tillr-drain/restart/restart.go) (`File`, `ReadState`, `ReadAnswers`, `AwaitAnswer`, `Restarter`, `PublishBuild`, `ReadBuild`, `LauncherCandidate`, `FileDigest`) |
-| Drain loop restart gate, mechanical lock, examination handoff, `syscall.Exec`, and inherited-child reaping | [`tools/tillr-drain/drain/restart.go`](../../tools/tillr-drain/drain/restart.go) (`adoptRestart`, `gateRestart`, `inheritedChildren`, `reapInherited`), [`restart_work.go`](../../tools/tillr-drain/drain/restart_work.go) (`lockRestartMechanical`, `restartWork`), [`restart_examination.go`](../../tools/tillr-drain/drain/restart_examination.go), [`restart_judge.go`](../../tools/tillr-drain/drain/restart_judge.go), [`restart_rolling.go`](../../tools/tillr-drain/drain/restart_rolling.go), [`tools/tillr-drain/main.go`](../../tools/tillr-drain/main.go) (`restartFace`, `loopFace --check`) |
-| Detached run process groups, file-backed streams, session pause, `SIGUSR1` gap stop, and continuation | [`tools/tillr-drain/drain/steps.go`](../../tools/tillr-drain/drain/steps.go) (`ProcessSteps.Run`), [`tools/tillr-run/run/pause.go`](../../tools/tillr-run/run/pause.go) (`ReadPauseKind`, `RequestPause`, `prepareContinuationSession`), [`tools/tillr-run/run/exec.go`](../../tools/tillr-run/run/exec.go), [`tools/tillr-run/backends/pi/stop-at-gap`](../../tools/tillr-run/backends/pi/stop-at-gap) |
+| Drain loop restart gate, mechanical lock, examination handoff, `syscall.Exec`, and inherited-child reaping | [`tools/tillr-drain/drain/restart.go`](../../tools/tillr-drain/drain/restart.go) (`adoptRestart`, `gateRestart`, `inheritedChildren`, `reapInherited`), [`restart_work.go`](../../tools/tillr-drain/drain/restart_work.go) (`lockRestartMechanical`, `lockRestartSettlement`, `restartDefersToSettlement`, `restartWork`), [`restart_examination.go`](../../tools/tillr-drain/drain/restart_examination.go) (`releaseRestartExaminations`, `reclaimDetachedGateExaminations`), [`restart_judge.go`](../../tools/tillr-drain/drain/restart_judge.go), [`restart_rolling.go`](../../tools/tillr-drain/drain/restart_rolling.go), [`loop.go`](../../tools/tillr-drain/drain/loop.go) (`verify`), [`settle_judge.go`](../../tools/tillr-drain/drain/settle_judge.go) (`claimSettledCandidateJudge`, `runCandidateExamination`), [`tools/tillr-drain/main.go`](../../tools/tillr-drain/main.go) (`restartFace`, `loopFace --check`) |
+| Detached run and landing-gate sessions, file-backed streams, session pause, `SIGUSR1` gap stop, and continuation | [`tools/tillr-drain/drain/steps.go`](../../tools/tillr-drain/drain/steps.go) (`ProcessSteps.Run`, `ProcessSteps.Gate`), [`tools/tillr-run/run/pause.go`](../../tools/tillr-run/run/pause.go) (`ReadPauseKind`, `RequestPause`, `prepareContinuationSession`), [`tools/tillr-run/run/exec.go`](../../tools/tillr-run/run/exec.go), [`tools/tillr-run/backends/pi/stop-at-gap`](../../tools/tillr-run/backends/pi/stop-at-gap) |
 | Post-restart build migration for workers and parallel read-only groups | [`tools/tillr-drain/drain/build_restart.go`](../../tools/tillr-drain/drain/build_restart.go) (`migrateBuildRuns`), [`build_readers.go`](../../tools/tillr-drain/drain/build_readers.go) (`claimBuildReaders`), [`parallel_restart.go`](../../tools/tillr-drain/drain/parallel_restart.go) (`restartParallel`) |
 | Observatory server graceful HTTP drain, `syscall.Exec`, listener recovery, and build/restart header projection | [`tools/tillr-view/restart.go`](../../tools/tillr-view/restart.go) (`restartFace`, `serving`), [`build.go`](../../tools/tillr-view/build.go) (`buildInfo`, `freshness`), [`serve.go`](../../tools/tillr-view/serve.go), [`ObservatoryHeaderBar.tsx`](../../tools/tillr-view/web/src/components/ObservatoryHeaderBar.tsx) |
 | Per-repository settings loader (`.tillr.toml`) | [`tools/tillr/settings/settings.go`](../../tools/tillr/settings/settings.go) (`Read`, `ReadWithoutLanding`, `Settings`) |
@@ -165,14 +168,29 @@ in-process state transitions from mid-step interruption:
    after acquiring `restartMechanical`, so `syscall.Exec` never discards a
    queued follow-up roll or push.
 2. **Mechanical vs. unbounded work (`restartMechanical`):** Short mechanical
-   steps (gate and landing steps) hold read locks via `lockRestartMechanical`
+   steps (pre-gate claim/preparation, post-gate store judgment, `Steps.Land`, and
+   non-detached in-process test `Steps`) hold read locks via
+   `lockRestartSettlement` or `lockRestartMechanical`
    ([`restart_work.go`](../../tools/tillr-drain/drain/restart_work.go)).
-   Long-running model sessions and whole-tree checks wrapped in `restartWork`
-   release their mechanical read lock while running in a goroutine and poll
-   `gateRestart` every `50ms`. Once `gateRestart` passes `Restarter.Settle`
-   (including `--check`), it acquires the exclusive write lock on
-   `restartMechanical`, waiting for in-flight mechanical steps to finish while
-   blocking new ones.
+   Long-running model sessions, whole-tree checks, and detached landing-gate
+   waits wrapped in `restartWork` release their mechanical read lock while
+   running in a goroutine and poll `gateRestart` every `50ms`. Under
+   [`D-GR43`](../design/gate-rework.md#decision-ledger) and
+   [`D-GR17`](../design/gate-rework.md#decision-ledger), `ProcessSteps.Gate`
+   ([`steps.go`](../../tools/tillr-drain/drain/steps.go)) runs the gate program
+   in a detached, guarded child session (`--tillr-gate-supervisor`) that writes
+   durable live-face (`gate.face.json`) and completion (`gate.done.json`)
+   metadata alongside `gate.verdict.json`, `gate.spans.jsonl`, and
+   `gate.timing.jsonl` in `RunDir(s.Root, candidate.RunID)`. `verify`
+   ([`loop.go`](../../tools/tillr-drain/drain/loop.go)) releases
+   `restartMechanical` via `restartWork` while awaiting the detached gate, and
+   `claimSettledCandidateJudge`
+   ([`settle_judge.go`](../../tools/tillr-drain/drain/settle_judge.go)) and
+   `lockRestartSettlement` (`buildRestartPending`) still admit sibling
+   fast-gate candidates when `restartDefersToSettlement()` already holds. Once
+   `gateRestart` passes `Restarter.Settle` (including `--check`), it acquires
+   the exclusive write lock on `restartMechanical`, waiting for in-flight
+   mechanical steps to finish while blocking new ones.
 3. **Recheck on supersession or binary change:** Inside `Restarter.Replace`
    (called under `restartMechanical`), the restarter checks `Owing` (returning
    `ErrSuperseded` if a newer request arrived) and re-checks the candidate's
@@ -183,7 +201,11 @@ in-process state transitions from mid-step interruption:
    ([`restart_examination.go`](../../tools/tillr-drain/drain/restart_examination.go))
    explicitly appends `examinationReleasedKind`, clears `examinationOwnerKind`,
    and idles lanes whose examined run has no live `tillr-run` face before
-   `syscall.Exec`.
+   `syscall.Exec` — except when a candidate's detached gate is live (or already
+   wrote `gate.done.json`), in which case it keeps the lane leased
+   (`leased_until = NULL`) so the successor loop can reclaim the examination in
+   `reclaimDetachedGateExaminations` to await or consume the detached gate
+   result and land without re-running the gate.
 5. **Close-on-exec supervision for rolling and heavy checks:** Both after-merge
    heavy proofs (`superviseHeavy`) and rolling checks (`rollingOwnership` in
    [`restart_rolling.go`](../../tools/tillr-drain/drain/restart_rolling.go))
@@ -191,13 +213,15 @@ in-process state transitions from mid-step interruption:
    `syscall.Exec` fails, the pipe stays open and the current loop keeps
    ownership; when `syscall.Exec` succeeds, the kernel closes the pipe, waking
    the child supervisor cleanly without relying on a dead image's goroutines.
-6. **Reaping inherited child processes:** Detached `tillr-run exec` processes
-   from the pre-`exec` image remain direct OS children of the loop PID. On
-   startup after an adopted handoff, `adoptRestart` snapshots existing child
-   PIDs from `/proc` (`inheritedChildren`) before starting any new subprocess
-   and spawns `reapInherited`, which calls `syscall.Wait4(pid, nil, WNOHANG, nil)`
-   every `200ms` so finished pre-handoff `tillr-run` processes never linger as
-   zombies.
+6. **Reaping inherited child processes:** Detached `tillr-run exec` and
+   `--tillr-gate-supervisor` processes from the pre-`exec` image remain direct
+   OS children of the loop PID. On startup after an adopted handoff,
+   `adoptRestart` snapshots existing child PIDs from `/proc`
+   (`inheritedChildren`) before starting any new subprocess and spawns
+   `reapInherited`, which calls `syscall.Wait4(pid, nil, WNOHANG, nil)` every
+   `200ms` so finished pre-handoff `tillr-run` processes and pre-`exec` detached
+   gate supervisor children (once they write `gate.done.json` and exit) never
+   linger as zombies.
 
 ### `tillr-view restart` and `tillr-view serve`
 
@@ -572,10 +596,19 @@ lightweight supervisor holding `<root>/.tillr/keeper.lock`:
   explicitly released in SQLite before `syscall.Exec`
   (`releaseRestartExaminations`).
 - **No parent-held pipes to surviving subprocesses.** Any child intended to
-  outlive `tillr-drain loop`'s `syscall.Exec` must run with `Setpgid: true` and
-  file-backed `Stdout`/`Stderr` closed immediately in the parent
-  (`ProcessSteps.Run`). Passing an `os.Pipe` to a long-lived child holds the
-  pipe open across `exec` or delivers `SIGPIPE` when closed.
+  outlive `tillr-drain loop`'s `syscall.Exec` must run with `Setpgid: true`
+  (`ProcessSteps.Run`) or in a detached session (`Setsid: true` for
+  `ProcessSteps.Gate`) and file-backed `Stdout`/`Stderr` closed immediately in
+  the parent (`RunDir(s.Root, candidate.RunID)` for detached gate supervisors).
+  Passing an `os.Pipe` to a long-lived child holds the pipe open across `exec`
+  or delivers `SIGPIPE` when closed.
+- **Detached gate supervisors use `PR_SET_CHILD_SUBREAPER` and `(ownerPID, ownerStartTicks)` liveness supervision.**
+  `ProcessSteps.Gate` (`--tillr-gate-supervisor`) installs
+  `PR_SET_CHILD_SUBREAPER` and monitors `(ownerPID, ownerStartTicks)` so a loop
+  crash or explicit stop reaps the entire gate and separate-session shard tree
+  ([`D-GR17`](../design/gate-rework.md#decision-ledger)), while `syscall.Exec` leaves
+  `(ownerPID, ownerStartTicks)` intact so the supervisor keeps running across an
+  in-place loop upgrade.
 - **`stop-at-gap` signals only the `pi` PID, only after the session header.**
   Signaling before `{"type":"session"}` hits Node's built-in `SIGUSR1` debugger
   listener before `pi` installs its handler, and signaling the process group

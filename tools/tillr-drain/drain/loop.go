@@ -539,7 +539,8 @@ type Loop struct {
 	cfg                         LoopConfig
 	// mu guards worker-side infrastructure bookkeeping and report measurements.
 	// Each examination has its own result, transferred to the pass at completion.
-	mu sync.Mutex
+	mu      sync.Mutex
+	loopCtx context.Context
 	// historyPinned records that this process has initialized object retention.
 	// mu guards it; unchanged observations then need only a read transaction.
 	historyPinned bool
@@ -811,6 +812,14 @@ func NewLoop(cfg LoopConfig) (*Loop, error) {
 // disk before the caller is answered (recordResult), so a stop is readable after the process
 // that made it is gone.
 func (l *Loop) Run(ctx context.Context) (result LoopResult, err error) {
+	l.mu.Lock()
+	l.loopCtx = ctx
+	l.mu.Unlock()
+	defer func() {
+		l.mu.Lock()
+		l.loopCtx = nil
+		l.mu.Unlock()
+	}()
 	fmt.Fprintf(l.cfg.Report, "loop: build %s\n", l.build)
 	// Persist the spend accumulated during execution; never rescan history on exit.
 	defer l.recordResult(&result)
@@ -2854,75 +2863,66 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		}
 		return "", false, l.candidateFault(ctx, candidate, fmt.Sprintf("cannot resolve candidate base %s for head %s in %s: %v", candidate.BaseSHA, candidate.HeadSHA, candidate.Worktree, err))
 	}
-	// A prepared maintenance tree is already bound; do not rebase it on rejudgment.
-	if candidate.WorkerHeadSHA == "" {
-		if rebased, err := l.preRebaseFixer(ctx, candidate); err != nil {
-			if conflict := asFixerRebaseConflict(err); conflict != nil {
-				return l.fixerRebaseConflicted(ctx, candidate, conflict, result, timing)
+	procSteps, isProc := l.cfg.Steps.(*ProcessSteps)
+	var liveGate, doneGate bool
+	if isProc {
+		liveGate, doneGate = procSteps.hasDetachedGate(candidate)
+	}
+	reattaching := isProc && (liveGate || doneGate)
+	var runnerChange bool
+	if !reattaching {
+		// A prepared maintenance tree is already bound; do not rebase it on rejudgment.
+		if candidate.WorkerHeadSHA == "" {
+			if rebased, err := l.preRebaseFixer(ctx, candidate); err != nil {
+				if conflict := asFixerRebaseConflict(err); conflict != nil {
+					return l.fixerRebaseConflicted(ctx, candidate, conflict, result, timing)
+				}
+				return "", false, err
+			} else {
+				candidate = rebased
 			}
+		}
+		if retitled, err := l.retitleIntermittentFixer(ctx, candidate); err != nil {
 			return "", false, err
 		} else {
-			candidate = rebased
+			candidate = retitled
 		}
-	}
-	if retitled, err := l.retitleIntermittentFixer(ctx, candidate); err != nil {
-		return "", false, err
-	} else {
-		candidate = retitled
-	}
-	// The fence is checked before the gate, because the gate answers a different question.
-	// A gate that passes says the tests pass; it never says the change is the one the item
-	// asked for, and a candidate that edits out of scope can pass every check in the
-	// repository while landing behaviour nobody wanted.
-	worker := candidate
-	if candidate.WorkerHeadSHA != "" {
-		worker.HeadSHA = candidate.WorkerHeadSHA
-	}
-	escape, err := l.fenceViolation(ctx, worker)
-	if err != nil {
-		return "", false, err
-	}
-	if escape != "" {
-		l.reportf("loop: refusing %s before the gate: %s\n", candidate.ItemID, escape)
-		if candidate.RefusalDetail == "" {
-			candidate.RefusalDetail = escape
+		// The fence is checked before the gate, because the gate answers a different question.
+		// A gate that passes says the tests pass; it never says the change is the one the item
+		// asked for, and a candidate that edits out of scope can pass every check in the
+		// repository while landing behaviour nobody wanted.
+		worker := candidate
+		if candidate.WorkerHeadSHA != "" {
+			worker.HeadSHA = candidate.WorkerHeadSHA
 		}
-		if err := l.refuse(ctx, candidate, result, RefusalFence); err != nil {
-			return "", false, err
-		}
-		return "", false, nil
-	}
-	if detail, err := l.validateIdea(ctx, worker); err != nil {
-		return "", false, err
-	} else if detail != "" {
-		candidate.RefusalDetail = detail
-		step, _, _ := strings.Cut(detail, ":")
-		l.reportf("loop: refusing %s before the gate: %s\n", candidate.ItemID, detail)
-		if err := l.refuse(ctx, candidate, result, step); err != nil {
-			return "", false, err
-		}
-		return "", false, nil
-	}
-	if detail, err := l.validateRequest(ctx, worker); err != nil {
-		return "", false, err
-	} else if detail != "" {
-		candidate.RefusalDetail = detail
-		l.reportf("loop: refusing %s before the gate: %s\n", candidate.ItemID, detail)
-		if err := l.refuse(ctx, candidate, result, RefusalFence); err != nil {
-			return "", false, err
-		}
-		return "", false, nil
-	}
-	ref, err := l.blockReference(ctx, candidate.ItemID)
-	if err != nil {
-		return "", false, err
-	}
-	if item.ProseRewriteOriginal(candidate.ItemID) != "" {
-		detail, err := l.validateProseRewrite(ctx, worker, ref)
+		escape, err := l.fenceViolation(ctx, worker)
 		if err != nil {
 			return "", false, err
 		}
-		if detail != "" {
+		if escape != "" {
+			l.reportf("loop: refusing %s before the gate: %s\n", candidate.ItemID, escape)
+			if candidate.RefusalDetail == "" {
+				candidate.RefusalDetail = escape
+			}
+			if err := l.refuse(ctx, candidate, result, RefusalFence); err != nil {
+				return "", false, err
+			}
+			return "", false, nil
+		}
+		if detail, err := l.validateIdea(ctx, worker); err != nil {
+			return "", false, err
+		} else if detail != "" {
+			candidate.RefusalDetail = detail
+			step, _, _ := strings.Cut(detail, ":")
+			l.reportf("loop: refusing %s before the gate: %s\n", candidate.ItemID, detail)
+			if err := l.refuse(ctx, candidate, result, step); err != nil {
+				return "", false, err
+			}
+			return "", false, nil
+		}
+		if detail, err := l.validateRequest(ctx, worker); err != nil {
+			return "", false, err
+		} else if detail != "" {
 			candidate.RefusalDetail = detail
 			l.reportf("loop: refusing %s before the gate: %s\n", candidate.ItemID, detail)
 			if err := l.refuse(ctx, candidate, result, RefusalFence); err != nil {
@@ -2930,102 +2930,139 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 			}
 			return "", false, nil
 		}
-	}
-	changed, err := l.definitionChanged(ctx, worker, ref)
-	if err != nil {
-		return "", false, err
-	}
-	if candidate.BlockConflict == nil && item.ProseRewriteOriginal(candidate.ItemID) == "" && changed {
-		l.reportf("loop: refusing %s before the gate: worker edited its own item block %s\n", candidate.ItemID, ref)
-		candidate.RefusalDetail = "worker edited its own item block " + ref
-		if err := l.refuse(ctx, candidate, result, RefusalFence); err != nil {
-			return "", false, err
-		}
-		return "", false, nil
-	}
-	if candidate.BlockConflict != nil && candidate.BlockConflict.TriageVersion != "" {
-		detail, err := l.validateTriage(ctx, candidate)
+		ref, err := l.blockReference(ctx, candidate.ItemID)
 		if err != nil {
 			return "", false, err
 		}
-		if detail != "" {
-			l.reportf("loop: refusing %s before the gate: %s\n", candidate.ItemID, detail)
-			c := *candidate.BlockConflict
-			c.Status, c.WaitingOn = "owner", "owner"
-			c.Text += "\nTriage run " + candidate.RunID + ": " + detail
-			return "", false, l.saveBlockConflict(ctx, c)
-		}
-	}
-	if candidate.BlockConflict != nil {
-		triage := candidate.BlockConflict.TriageVersion != ""
-		exists, answered := true, false
-		if !triage && ref == "" {
-			// A filed request has no item block to compare: a commit is the answer.
-			answered = candidate.HeadSHA != candidate.BaseSHA
-		} else {
-			var err error
-			if exists, answered, err = l.designBlockAnswer(ctx, candidate, ref); err != nil {
+		if item.ProseRewriteOriginal(candidate.ItemID) != "" {
+			detail, err := l.validateProseRewrite(ctx, worker, ref)
+			if err != nil {
 				return "", false, err
 			}
-		}
-		if !exists && triage {
-			c := *candidate.BlockConflict
-			c.Status, c.WaitingOn = "owner", "owner"
-			c.Text += "\nDesign run " + candidate.RunID + " removed or renamed its item block " + ref
-			return "", false, l.saveBlockConflict(ctx, c)
-		}
-		if !triage && designReadingOf(true, exists, "") == designBlockRemoved {
-			// A commit that removes the block leaves no item for the worker to build, so it
-			// cannot be the answer: it goes back to the design seat, naming the commit, and
-			// never to the owner (the owner's ruling of 2026-11-17).
-			// An identical repeat (the same conflict, given the same block) goes to the owner
-			// instead (design_repeat.go).
-			if err := l.pinLane(ctx, candidate.LaneID, candidate.RunID, candidate.HeadSHA); err != nil {
-				return "", false, err
+			if detail != "" {
+				candidate.RefusalDetail = detail
+				l.reportf("loop: refusing %s before the gate: %s\n", candidate.ItemID, detail)
+				if err := l.refuse(ctx, candidate, result, RefusalFence); err != nil {
+					return "", false, err
+				}
+				return "", false, nil
 			}
-			return "", false, l.settleDesignStatement(ctx, *candidate.BlockConflict, candidate.RunID, designCauseBlockRemoved, "removed its item block", func(c *item.Conflict) {
-				c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
-				c.Text += "\n\nDesign run " + candidate.RunID + " removed or renamed its item block " + ref + " in commit " + shortSHA(candidate.HeadSHA) + " (pinned at refs/tillr/runs/" + candidate.RunID + "). An answer keeps the block's directive and item id; the design seat is dispatched again."
-				l.reportf("loop: %s conflict %s is raised again for the design seat: design run %s removed its item block\n", c.ItemID, c.ConflictID, candidate.RunID)
-			})
 		}
-		changed = answered
-		if !triage && designReadingOf(true, exists, "") == designAmended {
-			// A design run's gated commit is its answer whatever it changed: the owner
-			// ruled on 2026-11-17 that a commit outside the block (the design document, a
-			// sibling) is the design seat's judgment and not "no answer".
-			changed = true
-		}
-	}
-	if candidate.BlockConflict != nil && !changed {
-		c := *candidate.BlockConflict
-		c.Status, c.WaitingOn = "owner", "owner"
-		c.Text += "\nDesign run " + candidate.RunID + " did not amend the blocked item block " + ref
-		return "", false, l.saveBlockConflict(ctx, c)
-	}
-	if candidate.BlockConflict == nil {
-		var accepted bool
-		candidate, accepted, err = l.judgeCandidate(ctx, candidate, result)
-		if err != nil || !accepted {
+		changed, err := l.definitionChanged(ctx, worker, ref)
+		if err != nil {
 			return "", false, err
 		}
+		if candidate.BlockConflict == nil && item.ProseRewriteOriginal(candidate.ItemID) == "" && changed {
+			l.reportf("loop: refusing %s before the gate: worker edited its own item block %s\n", candidate.ItemID, ref)
+			candidate.RefusalDetail = "worker edited its own item block " + ref
+			if err := l.refuse(ctx, candidate, result, RefusalFence); err != nil {
+				return "", false, err
+			}
+			return "", false, nil
+		}
+		if candidate.BlockConflict != nil && candidate.BlockConflict.TriageVersion != "" {
+			detail, err := l.validateTriage(ctx, candidate)
+			if err != nil {
+				return "", false, err
+			}
+			if detail != "" {
+				l.reportf("loop: refusing %s before the gate: %s\n", candidate.ItemID, detail)
+				c := *candidate.BlockConflict
+				c.Status, c.WaitingOn = "owner", "owner"
+				c.Text += "\nTriage run " + candidate.RunID + ": " + detail
+				return "", false, l.saveBlockConflict(ctx, c)
+			}
+		}
+		if candidate.BlockConflict != nil {
+			triage := candidate.BlockConflict.TriageVersion != ""
+			exists, answered := true, false
+			if !triage && ref == "" {
+				// A filed request has no item block to compare: a commit is the answer.
+				answered = candidate.HeadSHA != candidate.BaseSHA
+			} else {
+				var err error
+				if exists, answered, err = l.designBlockAnswer(ctx, candidate, ref); err != nil {
+					return "", false, err
+				}
+			}
+			if !exists && triage {
+				c := *candidate.BlockConflict
+				c.Status, c.WaitingOn = "owner", "owner"
+				c.Text += "\nDesign run " + candidate.RunID + " removed or renamed its item block " + ref
+				return "", false, l.saveBlockConflict(ctx, c)
+			}
+			if !triage && designReadingOf(true, exists, "") == designBlockRemoved {
+				// A commit that removes the block leaves no item for the worker to build, so it
+				// cannot be the answer: it goes back to the design seat, naming the commit, and
+				// never to the owner (the owner's ruling of 2026-11-17).
+				// An identical repeat (the same conflict, given the same block) goes to the owner
+				// instead (design_repeat.go).
+				if err := l.pinLane(ctx, candidate.LaneID, candidate.RunID, candidate.HeadSHA); err != nil {
+					return "", false, err
+				}
+				return "", false, l.settleDesignStatement(ctx, *candidate.BlockConflict, candidate.RunID, designCauseBlockRemoved, "removed its item block", func(c *item.Conflict) {
+					c.Status, c.WaitingOn, c.DesignRunID = "raised", "design", ""
+					c.Text += "\n\nDesign run " + candidate.RunID + " removed or renamed its item block " + ref + " in commit " + shortSHA(candidate.HeadSHA) + " (pinned at refs/tillr/runs/" + candidate.RunID + "). An answer keeps the block's directive and item id; the design seat is dispatched again."
+					l.reportf("loop: %s conflict %s is raised again for the design seat: design run %s removed its item block\n", c.ItemID, c.ConflictID, candidate.RunID)
+				})
+			}
+			changed = answered
+			if !triage && designReadingOf(true, exists, "") == designAmended {
+				// A design run's gated commit is its answer whatever it changed: the owner
+				// ruled on 2026-11-17 that a commit outside the block (the design document, a
+				// sibling) is the design seat's judgment and not "no answer".
+				changed = true
+			}
+		}
+		if candidate.BlockConflict != nil && !changed {
+			c := *candidate.BlockConflict
+			c.Status, c.WaitingOn = "owner", "owner"
+			c.Text += "\nDesign run " + candidate.RunID + " did not amend the blocked item block " + ref
+			return "", false, l.saveBlockConflict(ctx, c)
+		}
+		if candidate.BlockConflict == nil {
+			var accepted bool
+			candidate, accepted, err = l.judgeCandidate(ctx, candidate, result)
+			if err != nil || !accepted {
+				return "", false, err
+			}
+		}
+		var unlock func()
+		ctx, unlock, err = l.lockRestartSettlement(ctx)
+		if err != nil {
+			return "", false, err
+		}
+		defer unlock()
+		// A design answer amends the block for the next worker, but still gets the
+		// generated mirror before the gate binds a verdict to the prepared tree.
+		retireBlock := candidate.BlockConflict == nil && item.ProseRewriteOriginal(candidate.ItemID) == ""
+		candidate, err = l.prepareCandidate(ctx, candidate, retireBlock)
+		if err != nil {
+			return "", false, err
+		}
+		runnerChange, err = l.runnerProofChange(ctx, candidate)
+		if err != nil {
+			return "", false, err
+		}
+	} else {
+		runnerChange, err = l.runnerProofChange(ctx, candidate)
+		if err != nil {
+			return "", false, err
+		}
+		var unlock func()
+		ctx, unlock, err = l.lockRestartSettlement(ctx)
+		if err != nil {
+			return "", false, err
+		}
+		defer unlock()
+		if candidate.BlockConflict == nil {
+			var accepted bool
+			candidate, accepted, err = l.judgeCandidate(ctx, candidate, result)
+			if err != nil || !accepted {
+				return "", false, err
+			}
+		}
 	}
-	// A design answer amends the block for the next worker, but still gets the
-	// generated mirror before the gate binds a verdict to the prepared tree.
-	retireBlock := candidate.BlockConflict == nil && item.ProseRewriteOriginal(candidate.ItemID) == ""
-	candidate, err = l.prepareCandidate(ctx, candidate, retireBlock)
-	if err != nil {
-		return "", false, err
-	}
-	runnerChange, err := l.runnerProofChange(ctx, candidate)
-	if err != nil {
-		return "", false, err
-	}
-	ctx, unlock, err := l.lockRestartSettlement(ctx)
-	if err != nil {
-		return "", false, err
-	}
-	defer unlock()
 	// Use the same returned-item evidence as the required check path, but do
 	// not change when that path reads it or how its errors affect judgment.
 	// If we cannot establish ordinary eligibility, omit the observation.
@@ -3037,12 +3074,44 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	candidate.gateCount = l.gateCount
 	candidate.deferGateJudgment = IsTrunkFixer(candidate.ItemID)
 	endGate := timeHandoffPhase(ctx, "candidate_gate")
-	gate, err := l.cfg.Steps.Gate(ctx, candidate)
-	endGate()
-	l.mu.Lock()
-	stalledGateCount := l.gatesInFlight
-	l.gatesInFlight--
-	l.mu.Unlock()
+	var gate GateOutcome
+	var stalledGateCount int
+	if isProc {
+		handle, startErr := procSteps.startOrAttachDetachedGate(ctx, candidate)
+		if startErr != nil {
+			l.mu.Lock()
+			stalledGateCount = l.gatesInFlight
+			l.gatesInFlight--
+			l.mu.Unlock()
+			endGate()
+			err = startErr
+		} else {
+			done, waitErr := restartWork(ctx, l, func(waitCtx context.Context) (detachedGateDone, error) {
+				return procSteps.awaitDetachedGate(waitCtx, l, handle)
+			})
+			l.mu.Lock()
+			stalledGateCount = l.gatesInFlight
+			l.gatesInFlight--
+			l.mu.Unlock()
+			if waitErr != nil {
+				if !l.isRestartReplaced() {
+					procSteps.stopDetachedGate(handle)
+				}
+				endGate()
+				err = waitErr
+			} else {
+				gate, err = procSteps.finishDetachedGate(ctx, candidate, handle, done)
+				endGate()
+			}
+		}
+	} else {
+		gate, err = l.cfg.Steps.Gate(ctx, candidate)
+		endGate()
+		l.mu.Lock()
+		stalledGateCount = l.gatesInFlight
+		l.gatesInFlight--
+		l.mu.Unlock()
+	}
 	if err != nil {
 		var judgmentErr *gateJudgmentRecordError
 		if ctx.Err() != nil || errors.As(err, &judgmentErr) {

@@ -11,7 +11,7 @@ import (
 var errRestartPending = errors.New("loop replacement pending")
 
 func (l *Loop) buildRestartPending(ctx context.Context) (bool, error) {
-	if l.cfg.Restart == nil || l.restartDeferred() {
+	if l.cfg.Restart == nil || l.restartDeferred() || l.restartDefersToSettlement() {
 		return false, nil
 	}
 	return l.restarter().Pending(ctx)
@@ -71,7 +71,7 @@ func (l *Loop) lockRestartStep(ctx context.Context, settling bool) (context.Cont
 	var err error
 	if l.restartReplaced {
 		err = errRestartPending
-	} else if settling || !l.restartDefersToSettlement() {
+	} else if !l.restartDefersToSettlement() {
 		var pending bool
 		pending, err = l.buildRestartPending(ctx)
 		if pending && err == nil {
