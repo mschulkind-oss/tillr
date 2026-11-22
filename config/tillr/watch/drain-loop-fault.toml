@@ -1,0 +1,23 @@
+# On 2026-11-21, the drain loop exited on faults between 2:05 PM and 2:27 PM ET
+# and again at 5:51 PM ET. Read drain.loop-ended events from the last hour.
+[[rule]]
+id = "drain-loop-fault"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.loop-ended"]
+
+[rule.when]
+group_by = "global"
+pattern = "predicate_match"
+match = 'event.stop == "fault"'
+window = "1h"
+
+[rule.guidance]
+summary = "The drain loop exited on a fault ({{count}} in the last hour)."
+check = ["Read the drain.loop-ended event's detail, step, and exit_code fields, the newest drain-*.json loop result under .tillr/loop, and the drain loop log."]
+do = ["Establish what caused the drain loop to fault and confirm whether a healthy loop is running before relying on the drain."]
+
+[rule.delivery]
+receiver = "foreground"
