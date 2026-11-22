@@ -2,7 +2,7 @@
 title: "The gate lands a change in ten seconds and remembers nothing it cannot recompute"
 status: accepted
 stage: DECIDED
-updated: 2026-11-21
+updated: 2026-11-22
 tags:
   - tillr
   - gate
@@ -1320,7 +1320,89 @@ anywhere.
   that needs one copied file is not that reason: the edit is the same whoever makes it.
 - **Have the Go fixture copy all of `tools/gate/`.** It copies declarations the test does not
   mean to run, and changes what the fixture's gate selects.
-- **List every copying fixture in this document.** The reason is given above.
+- **List every copying fixture in this document.** The reason is given above. Overturned by
+  `D-GR37`, which lists them as a dated measurement after a second plan left one out.
+
+#### A fixture that copies the legacy gate is reached too, and the plan lists the fixtures measured
+
+What follows is the designer's decision of 2026-11-22 (`D-GR37`), made to answer a fourth build
+worker's report against the same operator request. None of it is the owner's ruling, and the
+owner may overturn any part of it. It changes no rule of `D-GR34` or `D-GR36`. It overturns one
+alternative `D-GR36` rejected: this document now holds a dated list of the fixtures that copy.
+
+The worker's report is right about the tree. The worker confirmed that `tillr-gate classify` is
+on PATH and answers `[]` for `[]`. Its plan allowed writes to
+`tools/tillr-drain/drain/fixer_gate_test.go` and not to
+`tools/tillr-drain/drain/heavy_legacy_restart_test.go`. Read on 2026-11-22 at `417d7d8df4`, the
+helper `testHeavyLegacyRestart` in that second file builds a tree with these lines, appends a
+`main` of its own that calls `check_status(c)` for each check, and writes the result as the
+tree's `tools/fork-check.py`:
+
+```text
+writeForkFile(t, filepath.Join(root, "tools", "gate", "checks", ".keep"), "")
+source, err := os.ReadFile(filepath.Join("..", "..", "fork-check.py"))
+```
+
+The tree it builds holds nothing else under `tools/gate/`. The worker's candidate has
+`check_status` read the shared file `tools/gate/classify.py`, and the worker reported that the
+same file layout in a scratch tree fails with `ModuleNotFoundError: No module named
+'gate.classify'`, and that copying the shared file into it resolves the import. Loading the
+shared file only when `check_status` is first called does not help, because the fixture calls
+`check_status`.
+
+**The legacy gate is a moved file under the fixture rule.** Slice 1e moves `check_status` in
+`tools/fork-check.py`, so a fixture that copies `tools/fork-check.py` into a tree it builds, and
+then runs a moved function there, is a fixture that copies a moved adapter. The first permitted
+setup edit of `D-GR34` applies: the fixture copies the shared file too. `D-GR36` already listed
+`tools/fork-check.py` among the files the slice moves and put it in the search command; this
+states the consequence so that a plan does not read "adapter" as the files under `tools/gate/`
+alone.
+
+**The edit to this fixture.** `testHeavyLegacyRestart` copies the one shared file to the same
+path under the tree it builds, beside the `.keep` file it already writes. It copies nothing
+else from `tools/gate/`, and no assertion in the file changes. The fixture writes no stand-in
+for `tillr-gate`, so the second setup edit does not apply, and the `tillr-gate` on PATH answers.
+
+**The fixtures that copy, as measured.** Read on 2026-11-22 at `417d7d8df4`, the command of
+`D-GR36` lists 30 files, and four of them copy a moved file into a tree the test builds:
+
+| Test file | What its fixture copies | Setup edit, if the copied file reads the shared file |
+| :--- | :--- | :--- |
+| `tests/fast-tree-in-done.test.py` | `tools/fork-check.py` and `tools/gate/tree-check.py`, and writes a stand-in for `tillr-gate` | Both (`D-GR34`) |
+| `tests/fork-check.test.py` | The text of `tools/fork-check.py`, written to the tree's `tools/fork-check.py` | The first |
+| `tools/tillr-drain/drain/fixer_gate_test.go` | `tools/fork-check.py` and `tools/gate/change-gate.py` | The first (`D-GR36`) |
+| `tools/tillr-drain/drain/heavy_legacy_restart_test.go` | `tools/fork-check.py`, with its own `main` appended | The first (this decision) |
+
+Two more files read `tools/fork-check.py` without copying it: `heavy_legacy_test.go` and
+`heavy_ownership_test.go`, both in `tools/tillr-drain/drain/`, pass the repository's own path
+to a driver that takes named functions out of the file. Neither takes `check_status`, so
+neither needs an edit while that holds. The other 24 files run the adapters from the
+repository's own tree or only name them.
+
+**What a plan for the slice does with the list.** A plan that lists write paths for slice 1e or
+1g lists all four files in the table and the pack mirror of each that has one, whether or not
+the planner expects each to need an edit. An unused permission costs nothing; a missing one
+costs a run, and has now cost two. The list is a measurement and not the rule. The rule of
+`D-GR36` still decides: the builder runs the command again, and a fixture that is not in the
+table is added to the plan's paths without a further decision.
+
+**What a verifier of the request's landing judges, restated.** `D-GR36`'s paragraph stands. A
+copy of the shared file added to `testHeavyLegacyRestart`'s tree is one of the two setup edits
+and is not grounds to refuse the landing.
+
+**Alternatives, each rejected by the designer:**
+
+- **Keep the list out of the document, as `D-GR36` did.** `D-GR36` gave the rule and the
+  command and no list, and the next plan still left a copying fixture out. A dated list that
+  the rule overrides is cheaper than a third report of the same kind.
+- **Have `tools/fork-check.py` make its call without the shared file.** The legacy gate and the
+  adapters would then each hold the call, which `D-GR34` let the builder avoid, and the
+  fixture's edit is one copied file.
+- **Have the fixture's appended `main` write status words itself and not call `check_status`.**
+  That edits what the test exercises: it exists to keep the real gate's scheduler and status
+  words in the spans it writes.
+- **Have the fixture copy all of `tools/gate/`.** Rejected in `D-GR36` for the other Go
+  fixture, for the same reason: the `.keep` file is there so that the tree has no declarations.
 
 ### 6.3 A missing machine resource is named, not failed
 
@@ -2333,7 +2415,10 @@ request that follows that landing; it amends `D-GR28` and `D-GR32` and is the ow
 against the same request; it amends the "no test edited" wording of `D-GR33` and of slices 1e and
 1g, and is the owner's to overturn. `D-GR36` is the designer's decision of 2026-11-22, made to
 answer a third build worker's report against the same request; it states which test files the
-fixture rule of `D-GR34` reaches, and is the owner's to overturn.
+fixture rule of `D-GR34` reaches, and is the owner's to overturn. `D-GR37` is the designer's
+decision of 2026-11-22, made to answer a fourth build worker's report against the same request;
+it states that a fixture copying `tools/fork-check.py` is reached by that rule, lists the
+fixtures measured, and is the owner's to overturn.
 
 | ID | Ruling / Decision | Date | Settled in | Built |
 | :--- | :--- | :--- | :--- | :--- |
@@ -2372,6 +2457,7 @@ fixture rule of `D-GR34` reaches, and is the owner's to overturn.
 | `D-GR34` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The request's landing (slice 1e) was to pass every existing test unedited. One existing test cannot: `tests/fast-tree-in-done.test.py` copies only `tools/fork-check.py` and `tools/gate/tree-check.py` into its tree and writes its own `tillr-gate` first on PATH, which asserts that it was called as `checks --fast-tree`, so the moved fast tree adapter's `classify` call gets exit 1 and no output, the adapter answers exit 4, and the test's expected exit 1 fails (a build worker's reproduction, 2026-11-21). The rule is split: a test's assertions are edited by no slice; its fixture setup may be edited in two ways only. The fixture copies any file a moved adapter newly reads, and a program a test writes to stand in for `tillr-gate` hands `classify` to the next `tillr-gate` on PATH, unchanged, and never classifies by itself. The Python sites may share one file under `tools/gate` that makes the call and compares nothing. **Rejected:** holding the fast tree adapter back; a stand-in that prints a classification; an option or environment variable naming the classifier; an adapter that falls back to its own pairing; rewriting the fixture with no stand-in. | 2026-11-21 | [A stand-in for the installed program is fixture setup, and it answers classify](#a-stand-in-for-the-installed-program-is-fixture-setup-and-it-answers-classify) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
 | `D-GR35` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** The operator request of 2026-11-21 reports the proof worktree's registration left locked with reason `initializing` and no directory, 20 failed heavy runs on `missing but locked`, and a trunk that could not be proved until the operator ran `git worktree unlock` and `git worktree prune`; it asks that the heavy runner recover by itself and that the change say what interrupted the add. Recovery: when the registration of the runner's own proof path is locked, the runner, under the registry lock it already holds, unlocks that path, reports one loop-log line with the path, the lock's reason and the `locked` file's time, and continues with its existing remove and add; a test covers the directory missing and the directory present. The cause: not established. `gateRestart` defers the exec while `heavyProofActive` is set, since `edaa4fdf4b`, so the tree does not show an in-place restart crossing the add, and the incident's logs were not available to the design seat; the building commit states the cause as unconfirmed and does not name the restart. Cancellation ending Git with SIGKILL is recorded as a hypothesis only. **Rejected:** `git worktree prune` in the runner, because it acts on other worktrees' registrations; `git worktree add --force --force`, because it overrides a lock without recording it; naming the restart as the cause from the request's words alone, because the code at that build contradicts it. | 2026-11-21 | [The proof worktree's registration is left locked](#the-proof-worktrees-registration-is-left-locked) | — (not built) |
 | `D-GR36` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** A build worker's plan for the adapters' landing (slice 1e) allowed writes only under `tools/gate/` and to `tests/fast-tree-in-done.test.py`. The Go test `TestFixerGateJudgesOwnDiffThenNamedChecksAndLands` in `tools/tillr-drain/drain/fixer_gate_test.go` copies only `tools/fork-check.py` and `tools/gate/change-gate.py` into its tree and runs the real change gate, so an adapter that reads a shared file fails there with `ModuleNotFoundError` until the fixture copies that file too (a build worker's reproduction, 2026-11-21). The two setup edits of `D-GR34` apply to every test whose fixture copies a moved adapter or writes a stand-in, in any language and directory, Go tests under `tools/tillr-drain`, `tools/tillr-gate` and `tools/tillr-loop` included. Those test files, for those edits only, and their pack mirrors regenerated by `just pack-sync`, are among the files slices 1e and 1g may write. A `tillr-gate` a test builds from the repository's source is the real program and not a stand-in. **Rejected:** repeating the call in each adapter; leaving `change-gate.py` out for this reason; copying all of `tools/gate/` into the fixture; listing every copying fixture in the document. | 2026-11-22 | [A fixture that copies a moved adapter is in the mover's change, in any language](#a-fixture-that-copies-a-moved-adapter-is-in-the-movers-change-in-any-language) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
+| `D-GR37` | **Not the owner's ruling; the designer's decision, from an operator request, which the owner may overturn.** A build worker's plan for the adapters' landing (slice 1e) allowed writes to `tools/tillr-drain/drain/fixer_gate_test.go` and not to `tools/tillr-drain/drain/heavy_legacy_restart_test.go`. The helper `testHeavyLegacyRestart` in the second file copies `tools/fork-check.py` into a tree whose `tools/gate/` holds only `checks/.keep`, appends a `main` that calls `check_status`, and runs it, so a `check_status` that reads a shared file fails there with `ModuleNotFoundError` until the fixture copies that file too (a build worker's reproduction, 2026-11-22). `tools/fork-check.py` is a moved file under the fixture rule of `D-GR34` and `D-GR36`: this fixture copies the one shared file into its tree, changes no assertion and copies nothing else. The document now lists the four test files measured to copy a moved file at `417d7d8df4`; a plan for slice 1e or 1g lists all four and their pack mirrors among its write paths, and the rule of `D-GR36` still adds any fixture the list lacks. **Overturns** `D-GR36`'s rejection of a list in the document. **Rejected:** keeping the list out; a call in `tools/fork-check.py` that does not use the shared file; a fixture `main` that writes status words itself; copying all of `tools/gate/` into the fixture. | 2026-11-22 | [A fixture that copies the legacy gate is reached too, and the plan lists the fixtures measured](#a-fixture-that-copies-the-legacy-gate-is-reached-too-and-the-plan-lists-the-fixtures-measured) | — (not built; [build order](#classify-every-check-result-in-one-place)) |
 | `D-GR12` | A question about a moving upstream is a drift probe that files an item and never moves or holds the green pointer. **Rejected:** keeping it as a check on a commit. Made visible where it happens. | 2026-11-15 | [Section 6.9](#69-upstream-drift-is-a-probe-not-a-check) | — (`series` and `patch-branch-inv2` are `TIER_LANDING` in `tools/fork-check.py`; no probe exists) |
 | OQ-GR1 | The default of a per-repository setting, `red_cap`: landing stops at 20 landings or 60 minutes past the last green commit; a repository may set a different bound, and zero means no cap. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are AGENTS.md's "a mechanism whose cost rises with trunk activity is pointed the wrong way" and the owner's 2026-11-15 ruling that the landing strategy is configurable per repository and red is brief. The owner may overturn it. **Rejected:** no cap, which lets the fixer's range and the deploy lag grow without limit. **Ruled out by the owner on 2026-11-18** ([OQ-GP7](tillr-graph-is-the-path.md#OQ-GP7)): under a red check, work lands only if it does not touch what that check reads, and there is no landing cap. The cap is still live in the tree (20 landings; its time bound was turned off on 2026-11-17, `d53580bfd`) until the graph design's waiting rule is built. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/redcap/cap.go`, `drain/red_cap.go`) |
 | OQ-GR2 | The default of a per-repository setting, `lane_base`: a new lane starts from the last green commit; a repository may choose the trunk tip. Settled by the session's designer on recorded principle at the owner's request of 2026-11-15 ("fill them in through principles"); the principles are that a worker does not pay for a failure it did not cause, and the same cost-direction rule. The owner may overturn it. **Rejected:** always cutting from the tip. **Overturned by the owner on 2026-11-17** (`1fa2c069c`): work is always built against the latest trunk, never a past commit; a lane cut from the green pointer was handed a tree older than its own item's definition and produced false conflicts. This repository set `tip`; the code's default when the key is absent is still `green`. **Replaced by the owner's ruling of 2026-11-21** (`D-GR24`): new work starts from the last proved trunk commit again, and this repository sets `green`. | 2026-11-15 | [Section 6.6](#66-the-strategy-setting-the-heavy-tier-and-the-green-pointer) | ✅ (`tools/tillr-drain/drain/lane_base.go`; the repository setting follows `D-GR24`) |
@@ -2683,7 +2769,7 @@ It is what keeps a site added later from classifying on its own.
 | 1b | Route the runner's sites through the function | G1 to G12 | `go test ./...` in `tools/tillr-gate` passes with no test edited; the scan list loses the runner's files |
 | 1c | Route the drain's landing-gate and light-attribution sites | D1 to D16, D34 | `go test ./...` in `tools/tillr-drain` passes with no test edited; the scan list loses those files |
 | 1d | Route the drain's rolling, heavy and proof sites | D17 to D33 | The same command; the scan list loses the rest of the drain |
-| 1e | Route the Python sites that classify one check through the installed face: `check_status` takes its words from it under the legacy-check protocol, `go-build.py` and the documents check under theirs, and the adapters stop pairing exit codes with words themselves. `verdict_of` and `run_replay` are not touched ([`D-GR33`](#the-face-aggregates-a-run-in-its-own-landing-before-the-legacy-aggregates-call-it)) | P1 to P7, F1 to F5, F7, F8, F10 to F13, L1 to L4 | `python3 tests/fork-check.test.py` and the tests under `tools/gate` pass with no assertion edited; a fixture's setup changes only as [`D-GR34`](#a-stand-in-for-the-installed-program-is-fixture-setup-and-it-answers-classify) allows, in whichever test file holds the fixture, Go tests included ([`D-GR36`](#a-fixture-that-copies-a-moved-adapter-is-in-the-movers-change-in-any-language)); the scan list holds only `tools/fork-check.py`. The two copies of `tillr-loop` stay byte-identical |
+| 1e | Route the Python sites that classify one check through the installed face: `check_status` takes its words from it under the legacy-check protocol, `go-build.py` and the documents check under theirs, and the adapters stop pairing exit codes with words themselves. `verdict_of` and `run_replay` are not touched ([`D-GR33`](#the-face-aggregates-a-run-in-its-own-landing-before-the-legacy-aggregates-call-it)) | P1 to P7, F1 to F5, F7, F8, F10 to F13, L1 to L4 | `python3 tests/fork-check.test.py` and the tests under `tools/gate` pass with no assertion edited; a fixture's setup changes only as [`D-GR34`](#a-stand-in-for-the-installed-program-is-fixture-setup-and-it-answers-classify) allows, in whichever test file holds the fixture, Go tests included ([`D-GR36`](#a-fixture-that-copies-a-moved-adapter-is-in-the-movers-change-in-any-language)), and a plan's write paths list the four fixtures measured ([`D-GR37`](#a-fixture-that-copies-the-legacy-gate-is-reached-too-and-the-plan-lists-the-fixtures-measured)); the scan list holds only `tools/fork-check.py`. The two copies of `tillr-loop` stay byte-identical |
 | 1f | The face gains `--aggregate <order>`: observations in, the classifications and the run's result out. Nothing calls it | none | A face test per order: the `run` object equals `Aggregate` on the same classifications, `checks` equals the plain form's output, an unknown order is exit 2 with no output, and the plain form's output is unchanged |
 | 1g | `verdict_of` takes the run's result from the face under the legacy gate's order and `run_replay` under the legacy replay's | F6, F9 | `python3 tests/fork-check.test.py` passes with no assertion edited (`D-GR34`); the scan list is empty |
 | 2a | Add rules 1 to 3 to the function. The runner reports `disabled`, counts it apart, writes the marker and the log copies, records `log_ref`, and gains `--prove-disabled` and `enable` | G2, G3, G4, G7, P4 to P6 | Runner tests alone: a stored pass with a fresh fail, and a stored fail with a fresh pass, each give `disabled`, exit 0, a marker and both logs beside it; a marker disables a new fingerprint; a proving run fails on a fail; `enable` removes only the episode it names. `TestMemoryFailRetriesAndFlakyPass` and `TestMemoryOppositeWritersNeverErase` are rewritten to these expectations |
@@ -2709,7 +2795,8 @@ operator request of 2026-11-21 asks for the adapters' calls to the installed fac
 is slice 1e, with slices 1f and 1g as the cases it leaves unmet (`D-GR33`); a test's stand-in
 for the installed program may be set up to pass `classify` on (`D-GR34`), and a fixture that
 copies a moved adapter is edited in the same landing wherever it is, Go tests included
-(`D-GR36`).
+(`D-GR36`). A fixture that copies `tools/fork-check.py` is one of those, and a plan for the
+landing lists the four copying fixtures measured among its write paths (`D-GR37`).
 
 **Agent Details:**
 
@@ -2717,7 +2804,7 @@ copies a moved adapter is edited in the same landing wherever it is, Go tests in
   `tools/tillr-loop/`, `tools/gate/`, `tools/fork-check.py`, `tools/go-test-shards.py`, their
   pack mirrors, and this document. Run `just pack-sync` after the last source edit of a slice
   and commit the regenerated mirror.
-- **Ref:** `D-GR21` to `D-GR23`, `D-GR28`, `D-GR32` to `D-GR34` and `D-GR36` in the [Decision Ledger](#decision-ledger).
+- **Ref:** `D-GR21` to `D-GR23`, `D-GR28`, `D-GR32` to `D-GR34`, `D-GR36` and `D-GR37` in the [Decision Ledger](#decision-ledger).
 - **Order:** 1a first, alone, and proved green so that the installed `tillr-gate` has the face
   (`D-GR32`). 1b to 1f need only 1a and may land in any order; the first of 1b to 1e adds the
   scan test. 1g needs 1e, and 1f proved green so that the installed `tillr-gate` has the flag
