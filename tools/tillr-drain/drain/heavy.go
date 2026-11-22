@@ -681,6 +681,11 @@ func (r HeavyRunner) resolveRevert(ctx context.Context, run HeavyRun, check *Hea
 // offerRevert asks Revert about one landing. A revert that failed for its own reasons is
 // a refusal; only a stop or a lost cleanup is an error.
 func (r HeavyRunner) offerRevert(ctx context.Context, tip, sha string, checks []HeavyCheck) (RevertOutcome, error) {
+	if prior, err := revertedBy(ctx, r.Store, sha); err != nil {
+		return RevertOutcome{}, err
+	} else if prior != "" {
+		return RevertOutcome{Reverted: prior}, nil
+	}
 	if err := r.requireCurrentTip(ctx, tip); err != nil {
 		if errors.Is(err, errHeavyTipMoved) {
 			return RevertOutcome{Refused: "trunk advanced beyond the proved commit"}, nil

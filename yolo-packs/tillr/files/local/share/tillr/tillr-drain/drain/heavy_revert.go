@@ -13,6 +13,7 @@ import (
 
 	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr/checkresult"
+	"github.com/mschulkind-oss/tillr/definition"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -79,6 +80,13 @@ type landingOf struct{ itemID, runID string }
 // revertLanding is HeavyRunner.Revert for the loop: it builds the inverse of landing on
 // tip, and lands it only when every condition of the ruling holds.
 func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []HeavyCheck, replay HeavyReplay) (out RevertOutcome, err error) {
+	l.revertMu.Lock()
+	defer l.revertMu.Unlock()
+	if prior, err := revertedBy(ctx, l.cfg.Store, landing); err != nil {
+		return RevertOutcome{}, err
+	} else if prior != "" {
+		return RevertOutcome{Reverted: prior}, nil
+	}
 	ids := heavyIDs(checks)
 	logs := l.snapshotCheckLogs(filepath.Join(".revert", "logs", tip, landing), l.heavyCheckLogs(tip, checks))
 	record := revertPayload{Landing: landing, Tip: tip, Checks: ids, CheckLogs: logs}
@@ -94,6 +102,11 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 		}
 		out.Refused = reason
 		return out, nil
+	}
+	if fixerID, err := l.openFixerForLanding(ctx, landing); err != nil {
+		return RevertOutcome{}, err
+	} else if fixerID != "" {
+		return refuse("trunk fixer " + fixerID + " is already open for " + shortSHA(landing))
 	}
 	of, found, err := l.landingRecord(ctx, landing)
 	if err != nil {
@@ -209,6 +222,111 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 		l.reportf("loop: reverted %s, %s back with its author\n", shortSHA(landing), of.itemID)
 	}
 	return RevertOutcome{Reverted: after}, nil
+}
+
+// revertedBy answers the trunk commit that already reverted landing, or "" when none
+// has landed.
+func revertedBy(ctx context.Context, storePath, landing string) (string, error) {
+	if storePath == "" || landing == "" {
+		return "", nil
+	}
+	s, err := store.OpenRead(ctx, storePath)
+	if err != nil {
+		return "", err
+	}
+	defer s.Close()
+	var revertSHA string
+	err = s.ReadTx(ctx, func(r *store.Reader) error {
+		shas, err := landingShas(r, landing)
+		if err != nil {
+			return err
+		}
+		in, args := heavy.InList(shas)
+		qargs := append([]any{RevertKind}, args...)
+		err = r.QueryRow(`SELECT COALESCE(json_extract(payload, '$.revert'), '') FROM events WHERE kind = ? AND object_type = 'landing' AND object_id IN `+in+` AND json_extract(payload, '$.result') = 'reverted' ORDER BY seq DESC LIMIT 1`, qargs...).Scan(&revertSHA)
+		if errors.Is(err, sql.ErrNoRows) || err != nil && strings.Contains(err.Error(), "no such table") {
+			return nil
+		}
+		return err
+	})
+	return revertSHA, err
+}
+
+// openFixerForLanding answers the unresolved trunk fixer for landing, or "" when none is open.
+func (l *Loop) openFixerForLanding(ctx context.Context, landing string) (string, error) {
+	if l.cfg.Store == "" || landing == "" {
+		return "", nil
+	}
+	fixerID := TrunkFixerID(landing)
+	found := ""
+	err := l.readStore(ctx, func(r *store.Reader) error {
+		declared, err := definition.ForReader(r)
+		if err != nil {
+			return err
+		}
+		var state string
+		err = r.QueryRow(`SELECT state FROM items WHERE item_id = ?`, fixerID).Scan(&state)
+		if errors.Is(err, sql.ErrNoRows) || err != nil && strings.Contains(err.Error(), "no such table") {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if !finishedState(declared.Parsed, state) {
+			found = fixerID
+		}
+		return nil
+	})
+	return found, err
+}
+
+// revertFromGateReplay applies HeavyRunner's revert-before-fixer rule on the gate-replay
+// path: it offers an attributed landing to revertLanding using the replay step, and turns
+// a non-cancellation attempt error into a refusal so the caller falls back to a fixer.
+func (l *Loop) revertFromGateReplay(ctx context.Context, candidate Candidate, replay ReplayStep, tip, landing string, redChecks []string, gate GateOutcome) (RevertOutcome, error) {
+	if prior, err := revertedBy(ctx, l.cfg.Store, landing); err != nil {
+		return RevertOutcome{}, err
+	} else if prior != "" {
+		return RevertOutcome{Reverted: prior}, nil
+	}
+	if l.cfg.LaneRoot == "" {
+		return RevertOutcome{Refused: "revert worktree root is not configured"}, nil
+	}
+	currentTip, err := heavyGitOutput(ctx, l.cfg.Root, "rev-parse", TrunkRef)
+	if err != nil {
+		if ctx.Err() != nil {
+			return RevertOutcome{}, err
+		}
+		return RevertOutcome{Refused: "the revert could not read trunk: " + err.Error()}, nil
+	}
+	if currentTip != tip {
+		return RevertOutcome{Refused: "trunk advanced beyond the confirmed red commit"}, nil
+	}
+	checks := make([]HeavyCheck, 0, len(redChecks))
+	for _, id := range redChecks {
+		checks = append(checks, HeavyCheck{CheckID: id, LogPath: gate.CheckLogs[id]})
+	}
+	replayOne := func(ctx context.Context, sha, checkID string) (bool, error) {
+		out, err := replay.Replay(ctx, candidate, sha, []string{checkID})
+		if err != nil {
+			return false, err
+		}
+		if !out.Known || out.Rev != "" && out.Rev != sha {
+			return false, Externalf("replay for %s at %s gave no verdict", checkID, shortSHA(sha))
+		}
+		return len(out.Red) > 0, nil
+	}
+	out, err := l.revertLanding(ctx, tip, landing, checks, replayOne)
+	if err != nil {
+		if ctx.Err() != nil || cleanupLost(err) {
+			return out, err
+		}
+		out = RevertOutcome{Refused: "the revert could not be attempted: " + err.Error()}
+	}
+	if out.Reverted == "" && out.Refused == "" {
+		out.Refused = "the revert answered neither a landing nor a reason"
+	}
+	return out, nil
 }
 
 // buildRevert makes the inverse of landing on tip in a detached checkout and commits it.
