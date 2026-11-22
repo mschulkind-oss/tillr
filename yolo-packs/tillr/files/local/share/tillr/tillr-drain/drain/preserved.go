@@ -252,6 +252,9 @@ func (l *Loop) preservationItem(ctx context.Context, runID string) (string, erro
 				err = r.QueryRow(`SELECT item_id FROM node_runs WHERE run_id = ? LIMIT 1`, runID).Scan(&itemID)
 			}
 		}
+		if err == sql.ErrNoRows {
+			err = r.QueryRow(`SELECT json_extract(payload, '$.decision.item_id') FROM events WHERE kind IN (?, ?) AND object_type = 'run' AND object_id = ? AND json_extract(payload, '$.decision.item_id') IS NOT NULL ORDER BY seq DESC LIMIT 1`, dispatchStartedKind, nodeAdvancedKind, runID).Scan(&itemID)
+		}
 		return err
 	})
 	if err != nil {

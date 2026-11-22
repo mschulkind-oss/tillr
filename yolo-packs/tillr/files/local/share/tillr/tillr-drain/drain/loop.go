@@ -3684,10 +3684,23 @@ func (l *Loop) abandonFromBase(ctx context.Context, lane, runID, headSHA, base s
 	if err := l.preserveWorkFromBase(ctx, lane, runID, base, reason); err != nil {
 		return l.retainUnpreserved(ctx, lane, runID, headSHA, err)
 	}
+	var itemEnded bool
+	if runID != "" {
+		itemID, state, ended, err := l.runItemTerminalState(ctx, runID)
+		if err != nil {
+			return l.retainUnpreserved(ctx, lane, runID, headSHA, err)
+		}
+		itemEnded = ended
+		if ended {
+			if _, err := l.saveEndedItemWork(ctx, lane, runID, itemID, state, reason); err != nil {
+				return l.retainUnpreserved(ctx, lane, runID, headSHA, err)
+			}
+		}
+	}
 	if err := l.pinLane(ctx, lane, runID, headSHA); err != nil {
 		return l.retainUnpreserved(ctx, lane, runID, headSHA, err)
 	}
-	if runID != "" {
+	if runID != "" && !itemEnded {
 		retained, err := l.retainedWorkerSession(ctx, runID)
 		if err != nil {
 			return l.retainUnpreserved(ctx, lane, runID, headSHA, err)

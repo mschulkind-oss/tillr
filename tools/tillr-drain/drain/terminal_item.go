@@ -197,7 +197,21 @@ func (l *Loop) settleTerminalItem(ctx context.Context, work *pendingWork, found 
 		if found.Landed {
 			stop = l.abandon(ctx, d.LaneID, "", "")
 		} else {
-			stop = l.abandon(ctx, d.LaneID, runID, head, "item already terminal")
+			state := found.State
+			if state == "" {
+				if s, ended, err := l.terminalItemState(ctx, d.ItemID); err == nil && ended {
+					state = s
+				}
+			}
+			reason := "item already terminal"
+			if state != "" {
+				reason = "item already " + state
+			}
+			if _, err := l.saveEndedItemWork(ctx, d.LaneID, runID, d.ItemID, state, reason); err != nil {
+				stop = l.retainUnpreserved(ctx, d.LaneID, runID, head, err)
+			} else {
+				stop = l.abandon(ctx, d.LaneID, runID, head, "item already terminal")
+			}
 		}
 		if stop != "" {
 			return retainedAfter(d.LaneID, stop)
