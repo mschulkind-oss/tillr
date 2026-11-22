@@ -626,6 +626,7 @@ import platform
 import struct
 import fcntl
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -641,6 +642,12 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
+
+# This file is transport only; the installed tillr-gate owns all result rules.
+_classify_spec = importlib.util.spec_from_file_location(
+    "gate_classify_transport", Path(__file__).resolve().parent / "gate" / "classify.py")
+_classify_transport = importlib.util.module_from_spec(_classify_spec)
+_classify_spec.loader.exec_module(_classify_transport)
 
 SCHEMA = 1
 PRODUCER = "tools/fork-check.py"
@@ -4093,7 +4100,20 @@ class VerdictCache:
         """The green verdict recorded for this key, or None."""
         with self.lock:
             entry = self.data["verdicts"].get(key)
-        return entry if isinstance(entry, dict) and entry.get("rc") == 0 else None
+        if not isinstance(entry, dict):
+            return None
+        rc = entry.get("rc")
+        if not isinstance(rc, int) or isinstance(rc, bool):
+            # Legacy JSON accepted false and 0.0 as equal to zero; the installed
+            # integer wire cannot express them. Keep that narrow old-record gap.
+            return entry if rc == 0 else None
+        # JSON integers can exceed the installed face's signed integer wire.
+        # An invalid cache record is a miss, not a failed classifier call.
+        if not -(2**63) <= rc < 2**63:
+            return None
+        result, = _classify_transport.classify([{"source": "legacy-check", "exit_code": rc,
+                                                  "legacy": {"group": "verdict"}}])
+        return entry if result["outcome"] == "pass" else None
 
     def record(self, key: str, provenance: dict) -> None:
         """Record one green verdict, with the provenance a reader needs beside it."""
@@ -4312,19 +4332,18 @@ def evidence_records(root: Path, entry: dict, checks: list[Check],
                     "item": None, "run": run}
     records: list[dict] = []
     for check in checks:
-        skip = sentinel_skip(check)
-        quarantine = applied_quarantine(check)
+        skip = classified_skip(check)
+        status = check_status(check)
         if skip is not None:
             outcome = "skipped"
-        elif check.rc == 0:
+        elif legacy_result(check, legacy_facts(check, settled=False))["outcome"] == "pass":
             outcome = "ok"
-        elif check.unanswered:
+        elif status in ("ERR", "skip"):
             # The shared axis has no "could not answer": nothing was judged, so it is
             # aborted, with the gate's own word in detail.outcome.
             outcome = "aborted"
         else:
             outcome = "failed"
-        status = check_status(check)
         detail = {"label": check.label, "rc": check.rc,
                   "status": status, "outcome": status,
                   "command": check.command_line(),
@@ -4348,7 +4367,7 @@ def evidence_records(root: Path, entry: dict, checks: list[Check],
         # The quarantine travels with the record: the shared vocabulary has no separate
         # outcome for one (a quarantined case is `skipped`, never `ok`), so the declaration
         # it stands for is what a later reader needs to find it again.
-        if quarantine is not None:
+        if skip is not None and (quarantine := skip[1]) is not None:
             detail["quarantine"] = {
                 "item": quarantine.item,
                 "classification": quarantine.classification,
@@ -5501,39 +5520,15 @@ class Check:
         however it failed. A kind the table does not name is a verdict, because a red that
         quietly becomes "not a verdict" is a red nobody fixes.
         """
-        if self.rc == CHECK_STALLED_RC or self.rc in COULD_NOT_ANSWER_CODES \
-                or outside_signal(self.rc) is not None:
-            return False
-        if self.kind in ("patch-branch-inv2", "patch-branch-inv3", "forks-check", "build", "fork-quality") \
-                and self.rc == 4 and not (self.kind == "fork-quality" and "--prepared" in self.argv):
-            return False
-        if getattr(self, "fast_tree", False) and self.preflight_refused:
-            return False
-        group = CHECK_KIND_GROUP.get(self.kind, KIND_VERDICT)
-        if group == KIND_NAMED:
-            return self.named_case
-        if group == KIND_UNABLE:
-            # A fork-quality step whose candidate is not the series' tree refused to
-            # judge: it never ran its command, so its exit is not a verdict about the
-            # change (board item 194).
-            if self.preflight_refused or candidate_stale(self):
+        facts = legacy_facts(self, settled=False)
+        # The installed legacy wire always returns pass for exit zero. Historically
+        # direct conflict queries of named/invariant checks can still answer true on
+        # zero when output names a case; the wire cannot express that distinction.
+        if self.rc == 0 and facts["group"] in (KIND_NAMED, KIND_INVARIANT):
+            if facts["fast_tree"] and facts["preflight_refused"]:
                 return False
-            # pi-forks refuses linked-worktree callers before running candidate
-            # preparation. This machine-local refusal exits 1, not the driver's
-            # usual unable-to-answer code, but still judged no repository bytes.
-            # Match both the driver argv and its own diagnostic: suite output
-            # containing the same sentence must not suppress a real failure.
-            if (len(self.argv) >= 2
-                    and Path(self.argv[0]).name == "pi-forks"
-                    and self.argv[1] == "candidate"
-                    and "--deps" in self.argv and "--" not in self.argv
-                    and any(line.startswith("pi-forks: refusing to run from a linked worktree:")
-                            for line in self.output.splitlines())):
-                return False
-            return self.rc != 0
-        if group == KIND_INVARIANT:
-            return any(phrase in self.output for phrase in INVARIANT_PHRASES[self.kind])
-        return self.rc != 0
+            return facts["named_case"] if facts["group"] == KIND_NAMED else facts["named_invariant"]
+        return legacy_result(self, facts)["outcome"] == "fail"
 
 
 class Skip:
@@ -7664,13 +7659,10 @@ def fork_quality_skip(check: Check) -> tuple[str, str] | None:
 
 
 def sentinel_skip(check: Check) -> tuple[str, str] | None:
-    """The (label, reason) a finished check's own result names as a skip, or None.
+    """The label and reason from a matching sentinel or quarantine declaration, if any.
 
-    A non-zero exit is not always a verdict about the change: the document checker
-    can reach no verdict at all, and the Waybar script exits 77 for a case this machine
-    cannot answer (the installed `ai-usagebar` is absent). Both are named skips with the
-    reason. This is the one classification the progress stream and the report's skip
-    pass read, so a check the report calls a skip cannot stream as a failure.
+    Waybar exits 77 for a case this machine cannot answer (the installed `ai-usagebar`
+    is absent). This collects the protocol evidence; the installed face judges it.
 
     A series check is NOT here: a series whose patch-branch stamp is the host's is
     declared elsewhere (`read_series_transcript`) rather than skipped, because the
@@ -7730,34 +7722,115 @@ def read_series_transcript(check: Check) -> None:
             command=SERIES_STAMP_COMMAND,
         ))
     if declared and not unrecognised:
-        # Everything the machine could answer passed, so the pack's verdict stands and
-        # the unanswered series are named beside it rather than voiding it.
+        # F11 wire gap: the installed face has no facts for unresolved series
+        # declarations and unrecognised remaining lines. Keep this promotion
+        # until it can distinguish a clean remainder from a mixed failure.
         check.rc = 0
 
 
+def legacy_facts(check: Check, *, settled: bool) -> dict:
+    """Collect declarations and output facts, without judging the exit."""
+    group = CHECK_KIND_GROUP.get(check.kind, KIND_VERDICT)
+    facts = {
+        "group": group,
+        "reserves_exit_4": (check.kind in ("patch-branch-inv2", "patch-branch-inv3", "forks-check", "build", "fork-quality")
+                            and not (check.kind == "fork-quality" and "--prepared" in check.argv)),
+        "fast_tree": bool(getattr(check, "fast_tree", False)),
+        "preflight_refused": check.preflight_refused,
+        "linked_worktree_refusal": (len(check.argv) >= 2 and Path(check.argv[0]).name == "pi-forks"
+            and check.argv[1] == "candidate" and "--deps" in check.argv and "--" not in check.argv
+            and any(line.startswith("pi-forks: refusing to run from a linked worktree:")
+                    for line in check.output.splitlines())),
+        "named_case": check.named_case if group == KIND_NAMED else False,
+        "named_invariant": (any(phrase in check.output for phrase in INVARIANT_PHRASES[check.kind])
+                            if group == KIND_INVARIANT else False),
+        "stale": candidate_stale(check) if settled or group == KIND_UNABLE else False,
+    }
+    if settled:
+        not_run = check.not_run_reason is not None
+        quarantine = applied_quarantine(check) is not None
+        if check.kind == "fork-quality":
+            # Avoid emitting lapse warnings for checks whose higher-priority
+            # not-run, cached or quarantine status previously short-circuited.
+            skip = quarantine
+            if not not_run and not check.cached and not quarantine:
+                skip = sentinel_skip(check) is not None
+        else:
+            skip = sentinel_skip(check) is not None
+        facts.update(not_run=not_run, cached=check.cached, quarantined=quarantine,
+                     sentinel_skip=skip)
+    return facts
+
+
+def legacy_result(check: Check, facts: dict) -> dict:
+    observation = {"check": check.label, "source": "legacy-check", "exit_code": check.rc, "legacy": facts}
+    key = json.dumps(observation, sort_keys=True)
+    state = (check.rc, check.output, check.kind, tuple(check.argv), check.label,
+             check.not_run_reason, check.cached, check.preflight_refused,
+             getattr(check, "fast_tree", False))
+    cached_state, previous_settlement, results = getattr(check, "_classifications", (None, None, {}))
+    settlement = (tuple(facts.get(name) for name in ("not_run", "cached", "quarantined", "sentinel_skip"))
+                  if "not_run" in facts else None)
+    if cached_state != state or (settlement is not None and previous_settlement is not None
+                                 and settlement != previous_settlement):
+        results = {}
+        previous_settlement = None
+    if settlement is not None:
+        previous_settlement = settlement
+    check._classifications = (state, previous_settlement, results)
+    if key not in results:
+        results[key] = _classify_transport.classify([observation])[0]
+    return results[key]
+
+
+def classified_skip(check: Check) -> tuple[tuple[str, str], Quarantine | None] | None:
+    """Return the skip evidence only if the installed face confirms settlement."""
+    evidence = sentinel_skip(check)
+    if evidence is None:
+        return None
+    facts = legacy_facts(check, settled=True)
+    if facts["not_run"] or facts["cached"]:
+        # Those flags take priority in progress, not in the legacy removal pass.
+        # Ask about the sentinel/declaration itself in that case.
+        del facts["not_run"], facts["cached"]
+        facts["sentinel_skip"] = True
+    result = legacy_result(check, facts)
+    if result["outcome"] == "unavailable":
+        if result["detail"] == "skipped" and check.kind == "waybar":
+            return evidence, None
+        if result["detail"] == "quarantined" and (quarantine := applied_quarantine(check)) is not None:
+            return evidence, quarantine
+    return None
+
+
+def settle_check_skips(plan: Plan) -> None:
+    """Remove classified skips before aggregation, preserving report order."""
+    for kind in ("waybar", "fork-quality"):
+        for check in [one for one in plan.checks if one.kind == kind]:
+            skip = classified_skip(check)
+            if skip is None:
+                continue
+            (label, reason), quarantine = skip
+            if quarantine is None:
+                plan.unavailable(label, reason, kind=kind)
+            else:
+                plan.quarantine(label, reason, quarantine, kind)
+            if plan.measure_landing:
+                plan.skips[-1].executed_check = check
+            plan.checks.remove(check)
+
+
 def check_status(check: Check) -> str:
-    """A check's result, in the one spelling the progress line and the report share."""
-    # A check the run stopped before it finished (or before it started) is named
-    # not-run, never ok or failed: the verdict was already red when it would have
-    # decided anything, and its own result says nothing about the change.
-    if check.not_run_reason is not None:
-        return "not-run"
-    # A cached verdict is never folded into "ok": it is a reused full run on a
-    # hash-identical tree, and a reader must be able to tell it from a fresh pass.
-    if check.cached:
-        return "CACHED"
-    # A quarantined case is never folded into "ok": it ran, it failed, and a recorded
-    # decision suppressed the failure. The progress line says so in its own word, because
-    # a reader watching a run must be able to tell the three apart.
-    if applied_quarantine(check) is not None:
-        return "QUARANTINED"
-    if sentinel_skip(check) is not None:
-        return "skip"
-    if candidate_stale(check):
-        return "STALE"
-    if check.rc == CHECK_STALLED_RC:
-        return "STALLED"
-    return "ok" if check.rc == 0 else ("FAIL" if check.conflict else "ERR")
+    """Render the installed classifier's result in the legacy report's vocabulary."""
+    result = legacy_result(check, legacy_facts(check, settled=True))
+    words = {("unknown", "not-run"): "not-run", ("pass", "cached"): "CACHED",
+             ("unavailable", "quarantined"): "QUARANTINED", ("unavailable", "skipped"): "skip",
+             ("unknown", "stale"): "STALE", ("unknown", "stalled"): "STALLED",
+             ("pass", "passed"): "ok", ("fail", "failed"): "FAIL", ("unknown", "error"): "ERR"}
+    try:
+        return words[(result["outcome"], result["detail"])]
+    except KeyError as error:
+        raise _classify_transport.ClassificationError(f"unexpected legacy classification: {result}") from error
 
 
 def external_inputs(plan: Plan) -> None:
@@ -8475,9 +8548,17 @@ def execute_attempt(root: Path, check: Check, diff_base: str,
             else:
                 check.output = f"{note}: not a failed check; nothing was judged\n{check.output}"
     if getattr(check, "fast_tree", False):
-        if check.rc == 6:
+        # A runner stall is exit 6; the watchdog uses the legacy stall sentinel.
+        # Both are observations, and the installed protocols decide their meaning.
+        runner, watchdog = _classify_transport.classify([
+            {"check": check.label, "source": "judging-program", "exit_code": check.rc},
+            {"check": check.label, "source": "legacy-check", "exit_code": check.rc,
+             "legacy": {"group": "verdict"}},
+        ])
+        if (runner["outcome"], runner["detail"]) == ("unknown", "stalled") \
+                or (watchdog["outcome"], watchdog["detail"]) == ("unknown", "stalled"):
             check.rc = CHECK_STALLED_RC
-        elif check.rc not in (0, 1, CHECK_STALLED_RC):
+        elif runner["outcome"] not in ("pass", "fail"):
             check.preflight_refused = True
     # A stopped process is not a verdict. The caller marks the check not-run; setting rc
     # to 0 here keeps a kill signal out of the triage packet and out of the exit status.
@@ -8487,8 +8568,8 @@ def execute_attempt(root: Path, check: Check, diff_base: str,
     check.seconds = round(seconds + preflight_seconds, 2)
     # A green fork-quality run is a verdict about the tree it tested, so it is recorded
     # for the next pass at the same tree, command and runtime. A red one is never cached.
-    if check.kind == "fork-quality" and cache is not None and check.rc == 0 \
-            and not check.was_cancelled:
+    if check.kind == "fork-quality" and cache is not None and not check.was_cancelled \
+            and legacy_result(check, {"group": "verdict"})["outcome"] == "pass":
         record_verdict(root, check, cache, runtime)
 
 
@@ -9088,7 +9169,7 @@ def write_gate_spans(path: str, plan: "Plan", root: Path, started_ns: int,
     if outcome == "stalled" and (verdict_path := os.environ.get("TILLR_FAST_VERDICT_OUT")):
         observations = []
         for check in plan.checks:
-            if check.rc != CHECK_STALLED_RC:
+            if legacy_result(check, {"group": "verdict"})["detail"] != "stalled":
                 continue
             for line in reversed(check.output.splitlines()):
                 if line.startswith("stall observations: "):
@@ -9395,32 +9476,7 @@ def run_gate(argv: list[str]) -> int:
         # a concurrent save is a cache miss, not a lost run entry, so it takes no lock.
         cache.save()
 
-    # A Waybar case that needs the installed `ai-usagebar` to answer cannot run on a
-    # machine without that binary. The script says so (exit 77) and the check's other
-    # cases ran and passed, so the case is named as a skip rather than failing a case no
-    # repository change can clear -- the model of a missing `yolo`, and of a document
-    # check that could not run.
-    for check in [one for one in plan.checks if one.kind == "waybar"]:
-        skip = sentinel_skip(check)
-        if skip is not None:
-            plan.unavailable(*skip, kind=check.kind)
-            if plan.measure_landing:
-                plan.skips[-1].executed_check = check
-            plan.checks.remove(check)
-
-    # A fork-quality step whose only failing case is a real-time budget this machine's
-    # candidate cannot meet cannot answer for the series, so it is named a skip with that
-    # reason rather than failing a step no repository change can clear. Any other failure
-    # is a verdict and stays in the run.
-    for check in [one for one in plan.checks if one.kind == "fork-quality"]:
-        skip = sentinel_skip(check)
-        if skip is not None:
-            # A fork-quality skip is always a quarantine: the step ran, and only a
-            # declaration suppresses it (fork_quality_skip).
-            plan.quarantine(*skip, applied_quarantine(check), check.kind)
-            if plan.measure_landing:
-                plan.skips[-1].executed_check = check
-            plan.checks.remove(check)
+    settle_check_skips(plan)
 
     # Every input a check's own transcript declared elsewhere joins the plan's list, so
     # the report prints each in one line and the run entry keeps it. Nothing about the
@@ -10499,7 +10555,7 @@ def run_pin_drift(root: Path, file_items: bool, board: str, seat: str) -> int:
     return 0
 
 
-def main(argv: list[str]) -> int:
+def _main(argv: list[str]) -> int:
     """One gate run, serialized against every other gate run on this repository.
 
     The lock is taken before the record is read and released after it is saved,
@@ -10584,6 +10640,14 @@ def main(argv: list[str]) -> int:
     # and takes no lock, so check execution never queues behind another gate's record
     # write at all. `--tier landing` and the concurrent lanes both depend on that.
     return run_gate(argv)
+
+
+def main(argv: list[str]) -> int:
+    try:
+        return _main(argv)
+    except _classify_transport.ClassificationError as error:
+        print(f"fork-check: could not judge: {error}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

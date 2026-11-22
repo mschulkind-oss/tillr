@@ -633,17 +633,35 @@ def execute(kind: str, steps: list[Step]) -> int:
         code = invoke(step).returncode
         if code != EXIT_PASS:
             break
-    if kind == "gate" and code == EXIT_STALLED:
-        return EXIT_STALLED
-    if kind == "verdict":
+    if kind == "gate":
+        # This adapter is also embedded standalone: depend on the installed face,
+        # never on Python code from the checkout being judged.
+        try:
+            reply = subprocess.run(["tillr-gate", "classify"],
+                                   input=json.dumps([{"source": "judging-program", "exit_code": code}]),
+                                   capture_output=True, text=True, check=True)
+            answers = json.loads(reply.stdout)
+            if (not isinstance(answers, list) or len(answers) != 1
+                    or not isinstance(answers[0], dict)
+                    or answers[0].get("outcome") not in ("pass", "fail", "unknown", "unavailable", "disabled")
+                    or not isinstance(answers[0].get("detail"), str) or not answers[0]["detail"]):
+                raise ValueError("invalid classification response")
+        except (OSError, UnicodeError, subprocess.SubprocessError, ValueError) as error:
+            print(f"tillr-loop gate: could not judge: tillr-gate classify: {error}", file=sys.stderr)
+            return EXIT_EXTERNAL
+        result = answers[0]
+        if result["outcome"] == "pass":
+            return EXIT_PASS
+        if result["outcome"] == "fail":
+            return EXIT_FAIL
+        if result["outcome"] == "unknown" and result["detail"] == "stalled":
+            return EXIT_STALLED
+    elif kind == "verdict":
         # item's verdict face answers 0 recorded / non-zero refused, which is already the
         # loop's contract: a non-zero code is a step failure, never a recorded verdict.
         return code
-    # The gate and land faces agree with the loop on 0 and 1, and nothing else is a
-    # verdict: `tillr-gate run` answers 2/3/4/5 for a plan it refused or could not run,
-    # and `tillr land pass` answers 3 for a store it cannot read. Both mean "this step
-    # did not judge", so both leave as 4 rather than as a pass or a failure.
-    if code in (EXIT_PASS, EXIT_FAIL):
+    elif code in (EXIT_PASS, EXIT_FAIL):
+        # The land face agrees with the loop on 0 and 1; any other exit is no judgment.
         return code
     print(
         f"tillr-loop {kind}: {Path(steps[-1].argv[0]).name} {steps[-1].argv[1]} answered "

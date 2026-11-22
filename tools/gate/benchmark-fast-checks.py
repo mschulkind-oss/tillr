@@ -47,7 +47,7 @@ def main():
     modules = build.GO_TOOL_DIRS
     # The real roadmap's named link targets and each built module's tracked source,
     # not a repository snapshot. Directory targets need no contents to resolve.
-    selected = {roadmap, ".vantage.toml"}
+    selected = {roadmap, ".vantage.toml", "tools/gate/classify.py"}
     selected.update(path.relative_to(ROOT).as_posix() for path in checks.iterdir()
                     if path.suffix in (".py", ".json"))
     selected.update(p for p in named if entries[p][1] == "blob")
@@ -72,6 +72,9 @@ def main():
     for name in ("documents.py", "documents.json", "change_common.py", "go-build.py"):
         result = command(["git", "show", f"{args.baseline}:tools/gate/checks/{name}"], ROOT)
         (baseline / name).write_text(result.stdout)
+    transport = command(["git", "show", f"{args.baseline}:tools/gate/classify.py"], ROOT, check=False)
+    if transport.returncode == 0:
+        (destination / "classify.py").write_text(transport.stdout)
     # The audit compares code at the baseline to the candidate; baseline imports must
     # not resolve into the candidate's Python directory.
     command(["git", "init", "-q"], fixture)

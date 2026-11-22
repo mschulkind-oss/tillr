@@ -13,6 +13,7 @@ import tempfile
 from threading import Lock
 import time
 from change_common import git, tree_entries, tracked_changes, result_store, stored_result, store_result
+from classify import classify
 
 GO_TOOL_DIRS = (
     "tools/pi-profiler", "tools/tillr", "tools/tillr-store", "tools/tillr-item",
@@ -130,7 +131,7 @@ def module_keys(root, modules):
     entries = tree_entries(root)
     code = {p: entries.get(p, ("", "", "absent"))[2] for p in
             ("tools/gate/checks/go-build.py", "tools/gate/checks/change_common.py",
-             "tools/gate/checks/roadmap_sections.py")}
+             "tools/gate/checks/roadmap_sections.py", "tools/gate/classify.py")}
     env = build_env()
     asked = subprocess.run(["go", "env", "-json"], env=env, capture_output=True, text=True)
     version = subprocess.run(["go", "version"], env=env, capture_output=True, text=True)
@@ -220,7 +221,7 @@ def main(memory_store=None):
             if bound and stored_result(store, key, "pass") and not stored_result(store, key, "fail"):
                 if evidence_path:
                     publish({"module": module.as_posix(), "execution": "reused"})
-                return 0, "", True, 0
+                return None, "", True, 0
             if not bound:
                 print(f"go-build: {module}: inputs not bound to the committed tree; not remembered", file=sys.stderr)
             started = time.monotonic()
@@ -233,19 +234,30 @@ def main(memory_store=None):
             return code, output, False, int((time.monotonic() - started) * 1000)
         with ThreadPoolExecutor(max_workers=len(modules)) as pool:
             results = list(pool.map(judge, modules))
+        observations = [{"check": "go-build", "source": "go-module-build", "exit_code": code}
+                        for code, _, remembered, _ in results if not remembered]
+        outcomes = [answer["outcome"] for answer in classify(observations)] if observations else []
         # Publication binds the post-build inputs too. A build that read an edit
         # made during compilation must not certify the original committed sources.
-        fresh = module_keys(root, modules) if inside and any(not r[2] for r in results) else keys
+        fresh = module_keys(root, modules) if inside and observations else keys
+        classified = iter(outcomes)
+        unjudged = []
         failed = False
-        for module, (code, output, remembered, duration) in zip(modules, results):
+        for module, (_, output, remembered, duration) in zip(modules, results):
+            outcome = "pass" if remembered else next(classified)
+            if outcome not in ("pass", "fail"):
+                unjudged.append(str(module))
+                print(output, end="\n" if not output.endswith("\n") else "")
+                continue
             key, bound = keys.get(module, ("", False))
             if not remembered and bound and fresh.get(module) == (key, True):
-                store_result(store, key, "fail" if code else "pass", duration, tree,
-                             "go-build-module-1", check_id="go-build")
-            print(f"go-build: {module}: {'remembered pass' if remembered else 'FAILED' if code else 'built and test files compiled'}")
-            if code:
+                store_result(store, key, outcome, duration, tree, "go-build-module-1", check_id="go-build")
+            print(f"go-build: {module}: {'remembered pass' if remembered else 'FAILED' if outcome == 'fail' else 'built and test files compiled'}")
+            if outcome == "fail":
                 failed = True
                 print(output, end="\n" if not output.endswith("\n") else "")
+        if unjudged:
+            raise ValueError(f"no Go build verdict for {', '.join(unjudged)}")
         return 1 if failed else 0
     except (KeyError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"go-build: could not judge: {error}", file=sys.stderr)

@@ -23,6 +23,7 @@
     "tools/gate/checks/go-build.py",
     "tools/gate/checks/change_common.py",
     "tools/gate/checks/roadmap_sections.py",
+    "tools/gate/classify.py",
     "go.work",
     "go.work.sum"
   ],

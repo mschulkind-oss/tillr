@@ -9,6 +9,10 @@ import subprocess
 import sys
 import tempfile
 
+if str(_GATE_DIR := Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(_GATE_DIR))
+from classify import ClassificationError, classify
+
 # Budgets are targets. Working checks keep their own verdict; only a sampled stall
 # ends one early. Carrying at a budget would discard its judgment.
 TREE_OVERRUN = "keep"
@@ -70,7 +74,8 @@ def warm_trimmed_go_cache():
           file=sys.stderr)
     warmed = subprocess.run([sys.executable, "tools/gate/checks/go-build.py"],
                             stdout=sys.stderr, env=check_environment())
-    if warmed.returncode in (0, 1):
+    answer, = classify([{"check": "go-build", "source": "judging-program", "exit_code": warmed.returncode}])
+    if answer["outcome"] in ("pass", "fail"):
         try:
             marker.parent.mkdir(parents=True, exist_ok=True)
             marker.write_text(version + "\n")
@@ -85,8 +90,13 @@ def preserve_fast_timing(path, first):
     try:
         fast = json.loads(first)["payload"]
         remaining = json.loads(Path(path).read_bytes())
-        if (remaining["payload"].get("result") != "stalled" or not isinstance(fast.get("wall_ms"), int)
+        result = remaining["payload"].get("result")
+        if (not isinstance(result, str) or result not in ("pass", "fail", "stalled")
+                or not isinstance(fast.get("wall_ms"), int)
                 or not isinstance(fast.get("checks"), list)):
+            return
+        verdict, = classify([{"source": "result-word", "word": result}])
+        if (verdict["outcome"], verdict["detail"]) != ("unknown", "stalled"):
             return
         remaining["payload"]["fast_timing"] = {key: fast[key] for key in ("wall_ms", "checks")}
         # Never truncate a valid stall handoff if writing its timing fails.
@@ -100,7 +110,7 @@ def preserve_fast_timing(path, first):
                 target.replace(path)
             finally:
                 target.unlink(missing_ok=True)
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+    except (ClassificationError, OSError, ValueError, KeyError, TypeError, AttributeError) as error:
         # An observation failure must not replace the remaining judge's exit.
         print(f"change-gate: could not preserve fast timings: {error}", file=sys.stderr)
 
@@ -146,12 +156,15 @@ def main():
             return checked.returncode
         remaining = subprocess.run([sys.executable, "tools/fork-check.py",
                                     "--since", args.base, "--tier", "landing"])
-        if measure_landing and remaining.returncode == 6 and checked.stdout.strip():
-            preserve_fast_timing(path, checked.stdout)
-        # The old program's usage/no-verdict exit is 2; RunGate reads 4 as
-        # could-not-judge. A missing judgment must never become a rejected change.
-        return remaining.returncode if remaining.returncode in (0, 1, 6) else 4
-    except (OSError, subprocess.CalledProcessError) as error:
+        answer, = classify([{"check": "legacy-remainder", "commit": args.head,
+                             "source": "judging-program", "exit_code": remaining.returncode}])
+        # RunGate reads 4 as could-not-judge, distinct from an attributed stall.
+        if answer["outcome"] == "unknown" and answer["detail"] == "stalled":
+            if measure_landing and checked.stdout.strip():
+                preserve_fast_timing(path, checked.stdout)
+            return 6
+        return {"pass": 0, "fail": 1}.get(answer["outcome"], 4)
+    except (ClassificationError, OSError, subprocess.CalledProcessError) as error:
         print(f"change-gate: could not judge: {error}", file=sys.stderr)
         return 4
 

@@ -376,16 +376,22 @@ PY
 
 func TestGateTimingDoesNotRecordNestedGateSpans(t *testing.T) {
 	_, judge := repositoryFile(t, "tools/fork-check.py")
+	_, transportPath := repositoryFile(t, "tools/gate/classify.py")
 	root, _ := heavyRepo(t)
 	body, err := os.ReadFile(judge)
 	if err != nil {
 		t.Fatal(err)
 	}
+	transport, err := os.ReadFile(transportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
 	judge = filepath.Join(root, "tools", "fork-check.py")
-	if err := os.MkdirAll(filepath.Dir(judge), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(root, "tools", "gate"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	writeForkFile(t, judge, string(body))
+	writeForkFile(t, filepath.Join(root, "tools", "gate", "classify.py"), string(transport))
 	base := heavyCommit(t, root, "seed nested judge")
 	writeForkFile(t, filepath.Join(root, "README.md"), "# Nested range diagnostic\n")
 	head := heavyCommit(t, root, "change docs")
@@ -442,15 +448,21 @@ PY
 
 func TestGateTimingKeepsExecutedWaybarSkip(t *testing.T) {
 	_, judge := repositoryFile(t, "tools/fork-check.py")
+	_, transportPath := repositoryFile(t, "tools/gate/classify.py")
 	root, _ := heavyRepo(t)
 	body, err := os.ReadFile(judge)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(root, "tools"), 0755); err != nil {
+	transport, err := os.ReadFile(transportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "tools", "gate"), 0755); err != nil {
 		t.Fatal(err)
 	}
 	writeForkFile(t, filepath.Join(root, "tools", "fork-check.py"), string(body))
+	writeForkFile(t, filepath.Join(root, "tools", "gate", "classify.py"), string(transport))
 	base := heavyCommit(t, root, "seed judge")
 	if err := os.MkdirAll(filepath.Join(root, "tests"), 0755); err != nil {
 		t.Fatal(err)
