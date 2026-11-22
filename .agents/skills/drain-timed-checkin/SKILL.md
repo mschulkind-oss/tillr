@@ -183,9 +183,12 @@ green; `alarms` lists standing alarms; each row has `item_id`, `state`,
      dispatches, holds, faults.
    - Account for every minute of the gap: who had the lane, what they were
      waiting on, and what ended the wait.
-   - Check the measuring tool before believing it. The sampler once recorded a
-     live worker under lane "?" and reported its lane idle; a sample with "?"
-     in it under-counts busy lanes.
+   - Check the measuring tool before believing it. The lane report prints an
+     `UNTRUSTED` line when samples lack a waiting count or carry a worker on
+     lane "?"; a window with that line proves nothing. Both have happened: a
+     run mapped to no lane, and a status call that failed for an hour because
+     the sampler found an older `tillr-drain` on its `PATH`. A helper that
+     calls tillr must put the built binaries first on `PATH` itself.
    - Do not blame a model, a backend, or "a restart" from a summary line.
    - State what is measured and what is still unknown, and file the defect with
      the timeline in it.
