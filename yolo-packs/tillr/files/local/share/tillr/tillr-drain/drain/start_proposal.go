@@ -71,7 +71,7 @@ func shadowRotation(r *store.Reader, tick *Pass) (map[string]laneRefusal, error)
 	return refused, nil
 }
 
-func (s *startSnapshot) buildPlanner(r *store.Reader, at time.Time, policy *Policy, tick Pass, questions *VantageQuestions, rows []itemRow, inputs map[string]*RunInputs, unproved map[string]bool) (*planner, error) {
+func (s *startSnapshot) buildPlanner(r *store.Reader, at time.Time, policy *Policy, tick Pass, questions *VantageQuestions, rows []itemRow, inputs map[string]*RunInputs, unproved map[string]string) (*planner, error) {
 	lanes, owners := s.heldLanes(), maps.Clone(s.deskOwners)
 	for _, work := range s.pending.works {
 		if !work.Done && !work.LaneReleased {
@@ -160,7 +160,7 @@ func (s *startSnapshot) repairEntriesAt(ctx context.Context, r *store.Reader, at
 			edges[id] = s.edges[id]
 		}
 	}
-	unproved, err := unprovedBlockers(ctx, r, root, s.green, s.states, edges)
+	unproved, err := unprovedBlockers(ctx, r, root, s.green, s.tip, s.states, edges)
 	if err != nil {
 		return err
 	}

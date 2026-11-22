@@ -115,9 +115,9 @@ func (l *Loop) repairedTrunkWaiter(ctx context.Context, r *store.Reader, id, fix
 	// A waiter is not a dependency edge. Check its landing before clearing it,
 	// using the same proof rule as ordinary blockers, so the fresh run cannot
 	// start from a green pointer that still excludes the repair.
-	waits, err := unprovedBlockers(ctx, r, l.cfg.Root, green,
+	waits, err := unprovedBlockers(ctx, r, l.cfg.Root, green, "",
 		map[string]string{fixer: StateLanded}, map[string][]string{id: {fixer}})
-	if err != nil || waits[id] {
+	if err != nil || waits[id] != "" {
 		return "", err
 	}
 	return underlying, nil

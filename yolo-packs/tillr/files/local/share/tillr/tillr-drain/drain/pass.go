@@ -2039,11 +2039,11 @@ func (l *Loop) applyPlanRecorded(ctx context.Context, p plannedApplication, main
 					if err != nil {
 						return err
 					}
-					waits, err := unprovedBlockers(ctx, tx.Reader(), l.cfg.Root, green, states, edges)
+					waits, err := unprovedBlockers(ctx, tx.Reader(), l.cfg.Root, green, "", states, edges)
 					if err != nil {
 						return err
 					}
-					if waits[d.ItemID] {
+					if waits[d.ItemID] != "" {
 						return decline("the proved lane base does not contain a dependency", "a trunk proof containing the item's dependencies")
 					}
 					if p.start == nil {

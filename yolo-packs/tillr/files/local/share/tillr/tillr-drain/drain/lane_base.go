@@ -3,6 +3,7 @@ package drain
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,10 @@ import (
 // ReasonTrunkUnproved means a finished blocker's landing is not yet contained in
 // refs/tillr/green. The blocker is done; proof of the trunk is what is pending.
 const ReasonTrunkUnproved = "trunk-unproved"
+
+// ReasonBlockerLandingNotOnTrunk means a proof of the current history cannot
+// contain the blocker's recorded landing, even after following known rewrites.
+const ReasonBlockerLandingNotOnTrunk = "blocker-landing-not-on-trunk"
 
 func containsCommit(ctx context.Context, root, ancestor, tip string) (bool, error) {
 	ancestry := func(ctx context.Context, a, t string) (bool, error) {
@@ -103,8 +108,10 @@ func hasLandedBlocker(states map[string]string, edges map[string][]string) bool 
 	return false
 }
 
-func unprovedBlockers(ctx context.Context, r *store.Reader, root, green string, states map[string]string, edges map[string][]string) (map[string]bool, error) {
-	waits := map[string]bool{}
+// A nonempty tip adds planner diagnostics. Claim and release checks only need
+// to know whether the dependency is absent from the selected base.
+func unprovedBlockers(ctx context.Context, r *store.Reader, root, green, tip string, states map[string]string, edges map[string][]string) (map[string]string, error) {
+	waits := map[string]string{}
 	if green == "" {
 		return waits, nil
 	}
@@ -112,7 +119,7 @@ func unprovedBlockers(ctx context.Context, r *store.Reader, root, green string, 
 	if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='landings')`).Scan(&exists); err != nil {
 		return nil, err
 	}
-	proved := map[string]bool{}
+	reasons := map[string]string{}
 	for id, blockers := range edges {
 		if IsTrunkFixer(id) {
 			continue
@@ -121,8 +128,9 @@ func unprovedBlockers(ctx context.Context, r *store.Reader, root, green string, 
 			if states[blocker] != StateLanded {
 				continue
 			}
-			ok, seen := proved[blocker]
+			reason, seen := reasons[blocker]
 			if !seen {
+				reason = ReasonTrunkUnproved
 				var sha, ref string
 				if exists {
 					err := r.QueryRow(`SELECT l.trunk_after, COALESCE(json_extract(e.payload, '$.base_ref'), '')
@@ -140,16 +148,29 @@ func unprovedBlockers(ctx context.Context, r *store.Reader, root, green string, 
 					if strings.HasPrefix(ref, "refs/heads/patch/") {
 						target = ref
 					}
-					var err error
-					ok, err = containsCommit(ctx, root, sha, target)
+					ok, err := containsCommit(ctx, root, sha, target)
 					if err != nil {
 						return nil, err
 					}
+					if ok {
+						reason = ""
+					} else if tip != "" && target == green {
+						onTrunk := false
+						if tip != green {
+							onTrunk, err = containsCommit(ctx, root, sha, tip)
+							if err != nil {
+								return nil, err
+							}
+						}
+						if !onTrunk {
+							reason = fmt.Sprintf("%s: %s at %s", ReasonBlockerLandingNotOnTrunk, blocker, sha)
+						}
+					}
 				}
-				proved[blocker] = ok
+				reasons[blocker] = reason
 			}
-			if !ok {
-				waits[id] = true
+			if reason != "" {
+				waits[id] = reason
 				break
 			}
 		}

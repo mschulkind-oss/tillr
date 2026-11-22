@@ -419,9 +419,13 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 			}
 		}
 	}
-	unproved := map[string]bool{}
+	unproved := map[string]string{}
 	if def.Completes == "landing" {
-		unproved, err = unprovedBlockers(context.Background(), r, root, green, states, edges)
+		tip := TrunkRef
+		if tick.startRefs != nil {
+			tip = tick.startRefs.tip
+		}
+		unproved, err = unprovedBlockers(context.Background(), r, root, green, tip, states, edges)
 		if err != nil {
 			return nil, err
 		}
@@ -1053,7 +1057,7 @@ type planner struct {
 	// set, every ordinary item holds with ReasonTrunkBroken: staging ordinary work from a
 	// base whose checks never passed is the defect the fixer exists to repair.
 	fixerOpen string
-	unproved  map[string]bool
+	unproved  map[string]string
 	// Independent blocked waits take precedence over conflict routing and new launches.
 	waits map[string]item.WaitingOn
 	// escalated is each item's backend after a seat obstacle (seat_escalation.go).
@@ -1237,8 +1241,8 @@ func (p *planner) decide(item itemRow, blockedBy []string) Decision {
 	switch {
 	case p.isBlocked(item, blockedBy):
 		decision.Action, decision.Reason = ActionHold, ReasonBlocked
-	case p.lands() && p.unproved[item.ItemID]:
-		decision.Action, decision.Reason = ActionHold, ReasonTrunkUnproved
+	case p.lands() && p.unproved[item.ItemID] != "":
+		decision.Action, decision.Reason = ActionHold, p.unproved[item.ItemID]
 	case item.State != p.rules().Ready:
 		decision.Action, decision.Reason = ActionHold, ReasonNotReady
 	case hasPrerequisite(p.rules(), definition.PrerequisiteDesignQuestions) && !itemIsComment(item.ItemID) && p.commentHolds[plannerDocumentKey(p.documentRoot, item.DesignDoc)] != "":
