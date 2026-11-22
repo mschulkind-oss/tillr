@@ -188,7 +188,7 @@ func (s *startSnapshot) refreshAttempt(r *store.Reader, id string) error {
 		delete(s.nodeCounts, id)
 		return nil
 	}
-	attempt, count, err := readAttemptInputs(r, s.hasNodes, id, s.priors[id])
+	attempt, count, err := readAttemptInputs(r, s.hasNodes, id, s.priors[id], s.pending.byRun)
 	if err != nil {
 		return err
 	}
