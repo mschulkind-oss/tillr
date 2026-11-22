@@ -1711,7 +1711,13 @@ GO_TOOL_DIRS = (
     "tools/tillr-land",
     "tools/tillr-drain",
     "tools/tillr-cli",
+    "tools/tillr-watch",
 )
+# The owner excluded these on 2026-11-21: "ignore dotmod and bedrock-spend, that's not ours."
+GO_TOOL_EXCLUSIONS = {
+    "tools/dotmod": "not ours",
+    "tools/bedrock-spend": "not ours",
+}
 GO_LANDING_SUITE_DIRS = ("tools/tillr",)
 # A wrong judge breaks every following landing. These paths always pay the
 # runner's own proof before publication, independently of the heavy-tier strategy.
@@ -1738,6 +1744,7 @@ GO_TOOL_COST_ESTIMATE = {
     "tools/tillr-land": 8.09,
     "tools/tillr-drain": 40.31,
     "tools/tillr-cli": 0.43,
+    "tools/tillr-watch": 3.0,  # Initial scheduling estimate, not a measured budget.
 }
 # The suite's tests are I/O-bound subprocess cases, so the default GOMAXPROCS cap
 # leaves the suite waiting: measured 2026-10-24 at 12 parallel 24s, 32 parallel 17s, and

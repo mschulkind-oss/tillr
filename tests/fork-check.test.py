@@ -244,6 +244,9 @@ os.environ.pop("FORK_CHECK_PLAN_BASE", None)
 # in the 2026-11-15 drain. This process needs the strip too: `run_gate` reads
 # `os.environ` when its caller passes no `--spans-out`.
 os.environ.pop("TILLR_GATE_SPANS_OUT", None)
+# The drain also opts into exact-target drift observations. The routing fixtures
+# stub merge-check verdicts, not the separate read of a real release target.
+os.environ.pop("TILLR_FORK_DRIFT", None)
 for _repo_var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
     os.environ.pop(_repo_var, None)
 # The variable the gate supplies to a node step that drives the installed Pi, and the

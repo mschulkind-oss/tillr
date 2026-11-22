@@ -136,15 +136,62 @@ class TreeChecks(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("9001", result.stdout)
 
-    def test_parallel_builder_covers_every_legacy_go_tool_directory(self):
-        source = HERE.parents[1] / "fork-check.py"
+    def test_every_go_tool_is_gated_or_explicitly_excluded(self):
+        repo = HERE.parents[2]
+        source = repo / "tools/fork-check.py"
         # Read the declared inventory without importing the legacy gate or probing tools.
         declarations = ast.parse(source.read_text()).body
-        dirs = next(ast.literal_eval(node.value) for node in declarations
-                    if isinstance(node, ast.Assign)
-                    and any(isinstance(target, ast.Name) and target.id == "GO_TOOL_DIRS"
-                            for target in node.targets))
+
+        def declared(name):
+            return next(ast.literal_eval(node.value) for node in declarations
+                        if isinstance(node, ast.Assign)
+                        and any(isinstance(target, ast.Name) and target.id == name
+                                for target in node.targets))
+
+        dirs = declared("GO_TOOL_DIRS")
+        exclusions = declared("GO_TOOL_EXCLUSIONS")
+        tracked = subprocess.check_output(
+            ["git", "ls-files", "-z", "--", "tools"], cwd=repo).split(b"\0")
+        modules = {Path(os.fsdecode(path)).parent.as_posix()
+                   for path in tracked if path.endswith(b"/go.mod")}
+        self.assertEqual(modules, set(dirs) | exclusions.keys())
+        self.assertFalse(set(dirs) & exclusions.keys())
+        self.assertTrue(all(exclusions.values()))
         self.assertEqual(go_build.GO_TOOL_DIRS, dirs)
+        build = json.loads((HERE / "go-build.json").read_text())
+        self.assertEqual(build["tier"], "fast")
+        self.assertEqual({path for path in build["reads"] if path.endswith("/")},
+                         {directory + "/" for directory in dirs})
+
+    def test_watch_suite_rolls_for_own_source_and_each_replacement(self):
+        repo = HERE.parents[2]
+        spec = importlib.util.spec_from_file_location("fork_check_watch", repo / "tools/fork-check.py")
+        planner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(planner)
+        directory = "tools/tillr-watch"
+        parsed = subprocess.check_output(["go", "mod", "edit", "-json"], cwd=repo / directory)
+        replacements = {(repo / directory / replacement["New"]["Path"]).resolve()
+                        .relative_to(repo).as_posix() + "/"
+                        for replacement in json.loads(parsed)["Replace"]
+                        if not replacement["New"].get("Version")}
+        self.assertTrue(replacements)
+        watched = {directory + "/", *replacements}
+        record = planner.Record(self.root / "plan.json")
+        for prefix in sorted(watched | {"tools/pi-profiler/"}):
+            changed = prefix + "main.go"
+            with self.subTest(changed=changed):
+                plan = planner.build_plan(repo, [], record, [changed], None, True)
+                planner.apply_tier(plan, planner.TIER_ROLLING)
+                suites = [check for check in plan.checks
+                          if check.label == f"{directory}'s whole suite passes"]
+                if prefix in watched:
+                    self.assertEqual(len(suites), 1)
+                    self.assertEqual(suites[0].kind, "go-tool")
+                    self.assertEqual(planner.check_tier(suites[0].kind), planner.TIER_ROLLING)
+                    self.assertEqual(set(suites[0].watches), watched)
+                    self.assertEqual(suites[0].selected_by, (changed,))
+                else:
+                    self.assertEqual(suites, [])
 
     def test_a_declaration_reading_a_go_module_reads_its_in_repo_dependencies(self):
         # A declaration that builds or runs a Go module is red when that module's in-repo
@@ -164,10 +211,9 @@ class TreeChecks(unittest.TestCase):
             reads = json.loads(path.read_text()).get("reads", [])
             with self.subTest(declaration=path.name):
                 self.assertEqual(missing_go_reads(reads, repo), {})
-        # This test reads every registered module's go.mod, so it must run when one changes.
+        # The inventory test must run for a newly added go.mod too, not just the known ones.
         own = json.loads((HERE / "tree-checks-test.json").read_text())["reads"]
-        for directory in go_build.GO_TOOL_DIRS:
-            self.assertIn(directory + "/go.mod", own)
+        self.assertIn("tools/", own)
 
     def module_fixture(self):
         module = self.root / "tool"
