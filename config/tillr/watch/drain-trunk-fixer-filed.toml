@@ -1,0 +1,24 @@
+# The 2026-11-21 request (docs/design/tillr-watch.md Section 5.4, condition 6,
+# naming the condition and no single incident) called for notice when a trunk
+# fixer is filed. Read item.add events from the last hour for fixer-main-* items.
+[[rule]]
+id = "drain-trunk-fixer-filed"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["item.add"]
+
+[rule.when]
+group_by = "item_id"
+pattern = "predicate_match"
+match = 'event.item_id matches "^fixer-main-"'
+window = "1h"
+
+[rule.guidance]
+summary = "Trunk fixer {{subject}} was filed ({{count}} in window)."
+check = ["open the heavy run's record (.git/tillr-gate/heavy.json) and {{subject}} for the failing checks and their logs"]
+do = ["inspect the broken trunk commit and track {{subject}} until the trunk is green"]
+
+[rule.delivery]
+receiver = "foreground"
