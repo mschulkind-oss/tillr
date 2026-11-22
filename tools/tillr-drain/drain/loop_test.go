@@ -92,7 +92,8 @@ func getLoopRepoTemplate(t *testing.T) (string, string) {
 		}
 		drain.RegisterTestCleanup(func() { _ = os.RemoveAll(dir) })
 		cfg := filepath.Join(dir, "gitconfig")
-		if err := os.WriteFile(cfg, []byte("[user]\n name = Fixture Landing\n email = landing@example.invalid\n"), 0o600); err != nil {
+		const tplGitConfig = "[user]\n name = Fixture Landing\n email = landing@example.invalid\n[maintenance]\n auto = false\n autoDetach = false\n[gc]\n auto = 0\n autoDetach = false\n"
+		if err := os.WriteFile(cfg, []byte(tplGitConfig), 0o600); err != nil {
 			loopRepoTemplateErr = err
 			return
 		}
@@ -141,6 +142,36 @@ func getLoopRepoTemplate(t *testing.T) (string, string) {
 		t.Fatalf("initializing loop repo template: %v", loopRepoTemplateErr)
 	}
 	return loopRepoTemplateDir, loopRepoGitConfig
+}
+
+func TestLoopRepoTemplateDisablesBackgroundMaintenanceAndAutoGC(t *testing.T) {
+	tplRepo, tplGitCfg := getLoopRepoTemplate(t)
+	raw, err := os.ReadFile(tplGitCfg)
+	if err != nil {
+		t.Fatalf("reading template gitconfig failed: %v", err)
+	}
+	for _, want := range []struct {
+		key  string
+		want string
+	}{
+		{"maintenance.auto", "false"},
+		{"maintenance.autoDetach", "false"},
+		{"gc.auto", "0"},
+		{"gc.autoDetach", "false"},
+	} {
+		cmd := exec.Command("git", "-C", tplRepo, "config", "--get", want.key)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+tplGitCfg)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git config --get %s failed: %v (%s)\ngitconfig:\n%s", want.key, err, out, raw)
+		}
+		if got := strings.TrimSpace(string(out)); got != want.want {
+			t.Fatalf("%s = %q, want %q\ngitconfig:\n%s", want.key, got, want.want, raw)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(tplRepo, ".git", "objects", "maintenance.lock")); !os.IsNotExist(err) {
+		t.Fatalf("template repo has unexpected maintenance.lock state: %v", err)
+	}
 }
 
 func copyDirTree(src, dst string) error {
