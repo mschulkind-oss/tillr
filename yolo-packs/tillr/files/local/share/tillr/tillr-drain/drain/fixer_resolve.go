@@ -584,7 +584,7 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 		return nil
 	}
 	at := l.cfg.Now().UTC()
-	return s.WriteTx(ctx, func(tx *store.Tx) error {
+	if err := s.WriteTx(ctx, func(tx *store.Tx) error {
 		lifecycle, err := definition.ForReader(tx.Reader())
 		if err != nil {
 			return err
@@ -648,7 +648,17 @@ func (l *Loop) resolveProvedFixers(ctx context.Context) error {
 			l.reportf("loop: %s resolved: %s\n", f.id, reason)
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	for _, f := range covered {
+		if f.proof.commit != "" {
+			if recErr := recordTrunkRepair(ctx, l.cfg.Root, f.proof.commit, "trunk fixer "+f.id+" proved"); recErr != nil {
+				l.reportf("loop: %s trunk repair at %s not recorded: %v\n", f.id, shortSHA(f.proof.commit), recErr)
+			}
+		}
+	}
+	return nil
 }
 
 // fixerProvedGreen answers the green commit a FixerProvedKind event recorded for a
