@@ -37,6 +37,9 @@ const (
 	// attempt continued, not a second attempt: the run id is unchanged, so the store gains a
 	// span on the same run and never a second runs row.
 	ResumeKind = "run.resume"
+	// ModelTimeoutKind is the event appended whenever a worker's model request ends in a
+	// request timeout or body timeout, naming the run, the error and the cumulative count.
+	ModelTimeoutKind = "run.model-timeout"
 )
 
 // Utility is the producer name every record this utility emits carries.
@@ -181,7 +184,7 @@ func init() {
 	if err := store.RegisterColumn(Utility, "runs", "extension_set", "TEXT"); err != nil {
 		panic(err)
 	}
-	for _, kind := range []string{RecordKind, AllocateKind, FinishKind, UsageKind, CopiedUsageKind, ReleaseKind, ResumeKind, PauseRequestKind, "run.progress", "run.child-session", "run.children-recorded", "run.observation-error"} {
+	for _, kind := range []string{RecordKind, AllocateKind, FinishKind, UsageKind, CopiedUsageKind, ReleaseKind, ResumeKind, PauseRequestKind, ModelTimeoutKind, "run.progress", "run.child-session", "run.children-recorded", "run.observation-error"} {
 		if err := event.Register(kind, "run"); err != nil {
 			panic(err)
 		}
