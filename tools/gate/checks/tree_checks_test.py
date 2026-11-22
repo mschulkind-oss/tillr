@@ -337,6 +337,105 @@ class TreeChecks(unittest.TestCase):
         with patch.object(go_build, "GO_TOOL_DIRS", (str(self.root / "missing"),)):
             self.assertEqual(go_build.main(), 4)
 
+    def test_go_build_records_package_and_cache_evidence_without_running_tests(self):
+        module = self.module_fixture()
+        path = self.root / "go-build-evidence.json"
+        store = self.root / ".git/tillr-gate/results"
+        # The cache hit here is Go's result for -exec true, not a test run.
+        responses = [
+            ("M\tfixture/tool\n\tfixture/tool/lib\n\tfixture/tool/none\n\tfixture/tool/failed\n"
+             "\tfixture/tool/cover\n\tfixture/tool/json-cover\n", "", 0),
+            ("", "", 0),
+            ('{"Action":"output","Package":"fixture/tool","Output":"ok  \\tfixture/tool\\t(cached)\\n"}\n'
+             '{"Action":"output","Package":"fixture/tool/lib","Output":"ok  \\tfixture/tool/lib\\t0.001s\\n"}\n'
+             '{"Action":"output","Package":"fixture/tool/json-cover","Output":"\\tfixture/tool/json-cover\\t\\tcoverage: 0.0% of statements\\n"}\n'
+             "\tfixture/tool/cover\t\tcoverage: 0.0% of statements\n"
+             "?\tfixture/tool/none\t[no test files]\nFAIL\tfixture/tool/failed [build failed]\n", "", 1),
+        ]
+        calls = []
+        def invoke(args, **_kwargs):
+            calls.append(args)
+            stdout, stderr, code = responses.pop(0)
+            return subprocess.CompletedProcess(args, code, stdout=stdout, stderr=stderr)
+        with patch.dict(os.environ, TILLR_GO_BUILD_EVIDENCE_OUT=str(path)), \
+                patch.object(go_build, "GO_TOOL_DIRS", (str(module),)), \
+                patch.object(go_build.Path, "cwd", return_value=self.root), \
+                patch.object(go_build, "module_keys", return_value={module: ("key", True)}), \
+                patch.object(go_build, "git", return_value="tree"), \
+                patch.object(go_build, "stored_result", return_value=None), \
+                patch.object(go_build, "store_result"), \
+                patch.object(go_build.subprocess, "run", side_effect=invoke):
+            self.assertEqual(go_build.main(store), 1)
+        self.assertEqual([a[1] for a in calls], ["list", "build", "test"])
+        self.assertEqual(calls[-1], ["go", "test", "-exec", "true", "./..."])
+        evidence, = json.loads(path.read_text())
+        self.assertEqual(evidence["execution"], "ran")
+        self.assertEqual(evidence["mode"], "compile-only")
+        self.assertEqual({p["import_path"]: p["test_cache"] for p in evidence["packages"]}, {
+            "fixture/tool": "hit", "fixture/tool/lib": "miss",
+            "fixture/tool/none": "not-applicable", "fixture/tool/failed": "unknown",
+            "fixture/tool/cover": "not-applicable", "fixture/tool/json-cover": "not-applicable",
+        })
+
+    def test_go_build_publishes_inventory_before_any_compile_result(self):
+        modules = [self.module_fixture(), self.root / "other"]
+        modules[1].mkdir()
+        (modules[1] / "go.mod").write_text("module demo/other\n")
+        path = self.root / "go-build-evidence.json"
+        both_compiling = threading.Barrier(len(modules))
+
+        def invoke(args, *, cwd, **_kwargs):
+            package = f"demo/{cwd.name}"
+            if args[1] == "list":
+                return subprocess.CompletedProcess(args, 0, f"\t{package}\n", "")
+            self.assertEqual(args, ["go", "test", "-exec", "true", "./..."])
+            both_compiling.wait(timeout=10)
+            raise SystemExit(143)  # No compiler result or final aggregation.
+
+        with patch.dict(os.environ, TILLR_GO_BUILD_EVIDENCE_OUT=str(path)), \
+                patch.object(go_build, "GO_TOOL_DIRS", tuple(map(str, modules))), \
+                patch.object(go_build, "module_keys", return_value={}), \
+                patch.object(go_build.subprocess, "run", side_effect=invoke):
+            with self.assertRaises(SystemExit):
+                go_build.main(self.root / "results")
+        self.assertEqual({row["module"]: row["packages"] for row in json.loads(path.read_text())}, {
+            str(module): [{"import_path": f"demo/{module.name}", "test_cache": "unknown"}]
+            for module in modules
+        })
+
+    def test_go_build_preserves_partial_discovery_without_compiling(self):
+        module = self.module_fixture()
+        path = self.root / "go-build-evidence.json"
+        with patch.dict(os.environ, TILLR_GO_BUILD_EVIDENCE_OUT=str(path)), \
+                patch.object(go_build, "GO_TOOL_DIRS", (str(module),)), \
+                patch.object(go_build, "module_keys", return_value={}), \
+                patch.object(go_build.subprocess, "run", return_value=subprocess.CompletedProcess(
+                    "go list", 1, "M\tdemo/good\n\tdemo/broken\n\tdemo/trunc", "missing dependency\n")) as go:
+            self.assertEqual(go_build.main(self.root / "results"), 1)
+        self.assertEqual([call.args[0][1] for call in go.call_args_list], ["list"])
+        evidence, = json.loads(path.read_text())
+        self.assertEqual(evidence["discovery"], "partial")
+        self.assertEqual(evidence["packages"], [
+            {"import_path": package, "test_cache": "not-started"}
+            for package in ("demo/good", "demo/broken")
+        ])
+
+    def test_go_build_module_reuse_does_not_claim_go_test_cache_hits(self):
+        module = self.module_fixture()
+        path = self.root / "go-build-evidence.json"
+        with patch.dict(os.environ, TILLR_GO_BUILD_EVIDENCE_OUT=str(path)), \
+                patch.object(go_build, "GO_TOOL_DIRS", (str(module),)), \
+                patch.object(go_build.Path, "cwd", return_value=self.root), \
+                patch.object(go_build, "module_keys", return_value={module: ("key", True)}), \
+                patch.object(go_build, "git", return_value="tree"), \
+                patch.object(go_build, "stored_result", side_effect=lambda _store, _key, result: result == "pass"), \
+                patch.object(go_build, "build_module") as build:
+            self.assertEqual(go_build.main(), 0)
+            build.assert_not_called()
+        evidence, = json.loads(path.read_text())
+        self.assertEqual(evidence["execution"], "reused")
+        self.assertNotIn("packages", evidence)
+
     def test_go_build_does_not_execute_testmain(self):
         module = self.root / "tool"
         module.mkdir()

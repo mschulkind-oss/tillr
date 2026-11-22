@@ -20,6 +20,13 @@ type reworkLandingSteps struct {
 	judge func(context.Context, string, string) ([]HeavyCheck, error)
 }
 
+func (s reworkLandingSteps) Gate(ctx context.Context, c Candidate) (GateOutcome, error) {
+	if _, err := s.recoveryLandingSteps.Gate(ctx, c); err != nil {
+		return GateOutcome{}, err
+	}
+	return s.ProcessSteps.Gate(ctx, c)
+}
+
 func (s reworkLandingSteps) JudgeRequired(ctx context.Context, dir, id, _ string) (HeavyCheck, error) {
 	checks, err := s.judge(ctx, dir, id)
 	if err != nil {
@@ -158,10 +165,26 @@ VALUES('item-broke','external-review@v1','block',json_remove(?, '$.compatibility
 	}
 	h.loop.cfg.Steps = reworkLandingSteps{recoveryLandingSteps: &recoveryLandingSteps{t: t, ProcessSteps: &ProcessSteps{
 		Root: h.root, Store: h.path, LaneRoot: h.loop.cfg.LaneRoot, Now: h.loop.cfg.Now,
+		GateProgram: executable(t, `
+set -eu
+printf '%s' "$TILLR_ORDINARY_GATE_TIMING" > "$(dirname "$TILLR_GATE_SPANS_OUT")/observed-opt-in"
+printf '%s' '{"payload":{"checks":[]}}' > "$TILLR_FAST_VERDICT_OUT"
+printf '%s' '{"check_spans":[]}' > "$TILLR_GATE_SPANS_OUT"
+`),
 		ItemBin: filepath.Join(bin, "tillr-item"), LandProgram: "python3 " + adapter + " land --store " + h.path + " --tillr-land " + filepath.Join(bin, "tillr-land"), VerdictProgram: "python3 " + adapter + " verdict --tillr-item " + filepath.Join(bin, "tillr-item"),
 	}}, judge: fileRed("a")}
 	if _, landed, err := h.loop.Verify(ctx, c, &LoopResult{}, nil); err != nil || landed != wantLand {
 		t.Fatalf("verify landed=%v err=%v\n%s", landed, err, h.report)
+	}
+	dir := RunDir(h.root, runID)
+	if optIn, err := os.ReadFile(filepath.Join(dir, "observed-opt-in")); err != nil || len(optIn) != 0 {
+		t.Errorf("relanding timing opt-in = %q, %v; want empty", optIn, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, gateTimingFile)); !os.IsNotExist(err) {
+		t.Errorf("relanding wrote a timing record: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, GateFastVerdictFile)); err != nil {
+		t.Errorf("relanding lost its verdict handoff: %v", err)
 	}
 	if !wantLand {
 		if !strings.Contains(h.report.String(), "gate passed item-broke, but a required full-suite check failed") {

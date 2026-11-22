@@ -60,7 +60,7 @@ func TestChecksScopeToChangedReads(t *testing.T) {
 		write("checks/"+tc.id+".json", raw)
 	}
 
-	run := func(base string, scoped, readsGo bool) {
+	run := func(base string, scoped, readsGo, measure bool) {
 		t.Helper()
 		args := []string{"checks", "--fast-tree", "--base", base, "--head", "HEAD", "--worktree", root,
 			"--checks", "checks", "--logs", scratch(t, "logs")}
@@ -69,6 +69,10 @@ func TestChecksScopeToChangedReads(t *testing.T) {
 		}
 		var stderr bytes.Buffer
 		cmd := exec.Command(gateBin, args...)
+		cmd.Env = append(os.Environ(), "TILLR_FAST_TREE_TIMING=")
+		if measure {
+			cmd.Env = append(cmd.Env, "TILLR_FAST_TREE_TIMING=1")
+		}
 		cmd.Stderr = &stderr
 		out, err := cmd.Output()
 		if err != nil {
@@ -84,6 +88,34 @@ func TestChecksScopeToChangedReads(t *testing.T) {
 		}
 		for _, check := range decodeVerdict(t, out).Payload.Checks {
 			got[check.CheckID] = check.Result
+		}
+		var verdict struct {
+			Payload struct {
+				WallMS *int64 `json:"wall_ms"`
+				Checks []struct {
+					CheckID   string `json:"check_id"`
+					Execution string `json:"execution"`
+					WallMS    *int64 `json:"wall_ms"`
+				} `json:"checks"`
+			} `json:"payload"`
+		}
+		if err := json.Unmarshal(out, &verdict); err != nil {
+			t.Fatal(err)
+		}
+		if (verdict.Payload.WallMS != nil) != measure {
+			t.Fatalf("unexpected phase wall time: %s", out)
+		}
+		for _, check := range verdict.Payload.Checks {
+			execution, timed := "", false
+			if measure {
+				execution = "not-run"
+				if want[check.CheckID] == "pass" {
+					execution, timed = "ran", true
+				}
+			}
+			if check.Execution != execution || (check.WallMS != nil) != timed {
+				t.Fatalf("check %s: want execution %q and timed=%t: %s", check.CheckID, execution, timed, out)
+			}
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("results = %v, want %v", got, want)
@@ -102,12 +134,12 @@ func TestChecksScopeToChangedReads(t *testing.T) {
 		}
 	}
 
-	run("HEAD^", false, true) // Trunk proof does not opt in.
-	run("HEAD^", true, false)
-	run("HEAD^", true, false) // No reads means run, even with a remembered pass.
+	run("HEAD^", false, true, false) // Trunk proof does not opt in.
+	run("HEAD^", true, false, true)
+	run("HEAD^", true, false, true) // No reads means run, even with a remembered pass.
 	git("mv", "tools/tïllr/main.go", "docs/moved.go")
 	git("commit", "-qm", "rename out of declared reads")
-	run("HEAD^", true, true) // Both the old path and the new path are considered.
+	run("HEAD^", true, true, true) // Both the old path and the new path are considered.
 }
 
 func TestChecksScopeSkipIsNotCountedAsFailureOnStall(t *testing.T) {

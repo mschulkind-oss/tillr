@@ -615,14 +615,42 @@ def load_durations(path):
 
 
 def run(module, count, durations, scratch, timeout, *, shard_timeout=DEFAULT_SHARD_TIMEOUT,
-        lock_dir=None, slot_class=None, proof_limit=None, holder=None):
-    stream = subprocess.check_output(['go', 'list', '-json', './...'], cwd=module, text=True)
+        lock_dir=None, slot_class=None, proof_limit=None, holder=None, evidence_out=None):
+    discovery_error = None
+    try:
+        stream = subprocess.check_output(['go', 'list', '-json', './...'], cwd=module, text=True)
+    except subprocess.CalledProcessError as error:
+        if not evidence_out:
+            raise
+        discovery_error = error
+        stream = error.output or ''
     packages = []
     decoder = json.JSONDecoder()
     while stream.strip():
-        package, end = decoder.raw_decode(stream.lstrip())
+        try:
+            package, end = decoder.raw_decode(stream.lstrip())
+        except ValueError:
+            if discovery_error is None:
+                raise
+            break  # Retain complete package records preceding a truncated tail.
         packages.append(package)
         stream = stream.lstrip()[end:]
+    if evidence_out:
+        # Publish the inventory before compilation. On a failed list, preserve
+        # its observed prefix without ever submitting those packages as jobs.
+        inventory = [
+            {'import_path': p['ImportPath'], 'test_cache': (
+                'not-started' if discovery_error else
+                'bypassed' if p.get('TestGoFiles') or p.get('XTestGoFiles') else 'not-applicable')}
+            for p in packages if isinstance(p, dict) and p.get('ImportPath')
+        ]
+        try:
+            Path(evidence_out).write_text(json.dumps(
+                {'discovery': 'partial', 'packages': inventory} if discovery_error else inventory))
+        except OSError as error:
+            print(f'go-test-shards: cannot write package evidence: {error}', file=sys.stderr)
+    if discovery_error is not None:
+        raise discovery_error
     jobs = []
     git_values = global_git_config()
     lock_dir = lock_dir if lock_dir is not None else default_lock_dir()
@@ -712,6 +740,9 @@ def main():
                 options['slot_class'] = args.slot_class
             if args.holder is not None:
                 options['holder'] = args.holder
+            # Consume this invocation's handoff, rather than exposing it to test binaries.
+            if evidence_out := os.environ.pop('TILLR_GO_SHARDS_EVIDENCE_OUT', None):
+                options['evidence_out'] = evidence_out
             events = run(args.module.resolve(), args.shards, durations, Path(temporary), args.timeout, **options)
         if args.events:
             args.events.write_text(''.join(json.dumps(e) + '\n' for e in events))

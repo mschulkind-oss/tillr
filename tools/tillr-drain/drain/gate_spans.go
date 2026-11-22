@@ -79,10 +79,13 @@ type gateSpan struct {
 // gateSpansFile is the file's whole shape. Only `plan_span` and `check_spans` become
 // rows; `skipped_checks` and `summary` are kept for a reader of the file itself.
 type gateSpansFile struct {
-	PlanSpan      *gateSpan   `json:"plan_span"`
-	CheckSpans    []gateSpan  `json:"check_spans"`
-	SkippedChecks []gateSkip  `json:"skipped_checks"`
-	Summary       gateSummary `json:"summary"`
+	PlanSpan      *gateSpan         `json:"plan_span"`
+	CheckSpans    []gateSpan        `json:"check_spans"`
+	SkippedChecks []gateSkip        `json:"skipped_checks"`
+	ReusedChecks  []string          `json:"reused_checks"`
+	ReusedWallMS  map[string]*int64 `json:"reused_wall_ms"`
+	NotRunChecks  []string          `json:"not_run_checks"`
+	Summary       gateSummary       `json:"summary"`
 }
 
 // gateSkip is one step the run did not put a verdict on, in the gate's own words.
@@ -93,6 +96,11 @@ type gateSkip struct {
 	Reason  string `json:"reason"`
 	Planned bool   `json:"planned"`
 	Owed    bool   `json:"owed"`
+	// ExecutedCheck is optional timing for a command classified as a correctness skip.
+	ExecutedCheck *struct {
+		CheckID string `json:"check_id"`
+		gateCheckMeasurement
+	} `json:"executed_check,omitempty"`
 }
 
 type gateSummary struct {

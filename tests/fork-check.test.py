@@ -141,6 +141,7 @@ import tempfile
 import threading
 import time
 import types
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "fork-check.py"
@@ -152,6 +153,128 @@ def load_tool(name):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_landing_go_measurements():
+    gate = load_tool("fork_check_landing_measurements")
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        spans = root / "spans.json"
+        plan = gate.Plan()
+        plan.tier = gate.TIER_LANDING
+        plan.measure_landing = True
+        plan.checks = [
+            gate.Check("go-substrate", "substrate", ["go-test"], "watch", 0,
+                       go_module="tools/tillr"),
+            gate.Check("gate-runner", "runner", ["shards"], "watch", 0,
+                       go_module="tools/tillr-gate"),
+            gate.Check("gate-runner", "partial runner", ["partial"], "watch", 0,
+                       go_module="tools/tillr-gate"),
+            gate.Check("waybar", "waybar", ["reused"], "watch", 0),
+            gate.Check("go-substrate", "unstarted", ["unused"], "watch", 0,
+                       go_module="tools/tillr"),
+        ]
+        suite, runner, partial, reused, unstarted = plan.checks
+        handoffs = []
+        calls = []
+        key = "TILLR_GO_SHARDS_EVIDENCE_OUT"
+
+        def run_command(_, argv, timeout, env, drop, cancel):
+            calls.append(argv[0])
+            child_env = gate.environ(env, drop)
+            assert "TILLR_GATE_SPANS_OUT" not in child_env
+            if argv[0] in {"shards", "partial", "legacy"}:
+                assert child_env["GO_TEST_SHARDS_HOLDER"] == "gate:fixture-run"
+            if argv[0] in {"shards", "partial"}:
+                assert key not in drop
+                target = Path(env[key])
+                assert target.read_text() == "" and target not in handoffs
+                handoffs.append(target)
+                if argv[0] == "partial":
+                    target.write_text(json.dumps({"discovery": "partial", "packages": [
+                        {"import_path": "example/partial", "test_cache": "not-started"},
+                    ]}))
+                    return 1, "go list failed", 0.021
+                target.write_text(json.dumps([
+                    {"import_path": "example/runner", "test_cache": "not-applicable"},
+                ]))
+                return 1, "go test -c failed", 0.021
+            assert key not in env and key in drop
+            if argv[0] == "go-test":
+                return 0, ('ok\texample/native\t(cached) [no tests to run]\n'
+                           '?\texample/library\t[no test files]\n'
+                           '{"Action":"output","Package":"example/json","Output":"ok\\texample/json\\t0.001s\\n"}\n'), 0.01
+            assert argv == ["legacy"], argv
+            return 0, "", 0.0
+
+        gate.run_command = run_command
+        ticks = iter((1_000_000, 5_000_000, 10_000_000, 23_000_000,
+                      30_000_000, 51_000_000, 60_000_000, 82_000_000))
+        gate.time = types.SimpleNamespace(monotonic_ns=lambda: next(ticks), time_ns=lambda: 100)
+        plan.checks = [reused]
+        gate.apply_reuse(plan, ["waybar"])
+        plan.checks = [suite, runner, partial, unstarted]
+        with patch.dict(os.environ, {"TILLR_GATE_SPANS_OUT": str(root / "fixture-run" / "spans.json"),
+                                     "TILLR_RUN_ID": "", "GO_TEST_SHARDS_HOLDER": ""}):
+            for check in (suite, runner, partial):
+                gate.execute_check(check, root, None, measure_landing=plan.measure_landing)
+            legacy = gate.Check("gate-runner", "legacy", ["legacy"], "watch", 0,
+                                go_module="tools/tillr-gate")
+            gate.execute_attempt(root, legacy, "HEAD")
+        assert not legacy.go_build
+        assert calls == ["go-test", "shards", "partial", "legacy"], calls
+        assert all(not path.exists() for path in handoffs), handoffs
+
+        gate.write_gate_spans(str(spans), plan, root, 1, "failed", "", "", [], 1, 1, 0.05)
+        body = json.loads(spans.read_text())
+        assert body["not_run_checks"] == [gate.declaration_id(unstarted.kind, unstarted.label, root)]
+        reused_id = gate.declaration_id(reused.kind, reused.label, root)
+        assert body["reused_checks"] == [reused_id] and body["reused_wall_ms"] == {reused_id: 4}
+        statuses = [span["status"] for span in body["check_spans"]]
+        assert statuses == ["ok", "FAIL", "FAIL"], statuses
+        native, sharded, incomplete = [json.loads(row["attributes_json"]) for row in body["check_spans"]]
+        assert [(row["execution"], row["wall_ms"]) for row in (native, sharded, incomplete)] == [
+            ("ran", 13), ("ran", 21), ("ran", 22),
+        ]
+        assert native["go_build"][0]["packages"] == [
+            {"import_path": "example/json", "test_cache": "miss"},
+            {"import_path": "example/library", "test_cache": "not-applicable"},
+            {"import_path": "example/native", "test_cache": "hit"},
+        ], native
+        assert sharded["go_build"][0]["packages"] == [
+            {"import_path": "example/runner", "test_cache": "not-applicable"},
+        ], sharded
+        assert incomplete["go_build"][0]["discovery"] == "partial", incomplete
+        assert incomplete["go_build"][0]["packages"] == [
+            {"import_path": "example/partial", "test_cache": "not-started"},
+        ], incomplete
+
+
+def test_landing_measurements_require_change_gate_handoff():
+    gate = load_tool("fork_check_measurement_scope")
+    handoffs = {"TILLR_FAST_VERDICT_OUT": "verdict", "TILLR_GATE_SPANS_OUT": "spans"}
+    opted_in = dict(handoffs, TILLR_ORDINARY_GATE_TIMING="1")
+    cases = (
+        (["--tier", "landing", "--since", "base"], opted_in, True),
+        (["--tier", "landing", "--since", "base"], handoffs, False),
+        (["--tier", "rolling", "--since", "base"], opted_in, False),
+        (["--since", "base"], opted_in, False),
+        (["--tier", "landing", "--since", "base", "--spans-out", "spans"],
+         {"TILLR_ORDINARY_GATE_TIMING": "1"}, False),
+    )
+    for args, env, expected in cases:
+        def stop_after_parsing(_, options):
+            assert options.measure_landing is expected, (args, env, options)
+            raise gate.PlanningRefusal("fixture: no planning or checks")
+
+        with patch.dict(os.environ, dict.fromkeys(opted_in, "") | env), \
+                patch.object(gate, "plan_gate", stop_after_parsing), contextlib.redirect_stderr(io.StringIO()):
+            assert gate.run_gate(args) == 2
+
+
+test_landing_go_measurements()
+test_landing_measurements_require_change_gate_handoff()
+
 
 def test_sigterm_ends_checks(mode):
     """Drive the real plan runner with a check in its own session and a grandchild."""
@@ -894,7 +1017,7 @@ with tempfile.TemporaryDirectory() as tmp:
     #     with a shared temp name both writers reach `os.replace` with one file between
     #     them, so the second raises.
     spans = base / "shared-spans" / "gate.spans.json"
-    plan_with_nothing = types.SimpleNamespace(checks=[], skips=[], tier="")
+    plan_with_nothing = load_tool("fork_check_spans_plan").Plan()
     barrier = threading.Barrier(2)
     real_write_text = Path.write_text
 
