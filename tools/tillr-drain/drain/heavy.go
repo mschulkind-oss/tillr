@@ -262,6 +262,9 @@ func (r HeavyRunner) inTree(ctx context.Context, tip string, fn func(string) err
 	// The shared lock proves no other heavy run owns this path. Recover a tree
 	// left by a killed runner without pruning any other worktree registrations.
 	if err := withWorktreeRegistryLock(ctx, r.Root, func() error {
+		if err := r.unlockProofWorktree(ctx, work); err != nil {
+			return err
+		}
 		_, _ = heavyGitOutput(ctx, r.Root, "worktree", "remove", "--force", r.Work)
 		if err := os.RemoveAll(r.Work); err != nil {
 			return err
@@ -285,6 +288,66 @@ func (r HeavyRunner) inTree(ctx context.Context, tip string, fn func(string) err
 	}
 	return cleanupErr
 }
+
+// unlockProofWorktree runs under the registry lock. Git can still have a
+// registration when the checkout's .git file is gone, so find it by the
+// administrative directory's backpointer rather than through the checkout.
+func (r HeavyRunner) unlockProofWorktree(ctx context.Context, work string) error {
+	registry := filepath.Join(r.Lock.common, "worktrees")
+	entries, err := os.ReadDir(registry)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(work))
+	if err != nil {
+		return err
+	}
+	target := filepath.Join(work, ".git")
+	canonical := filepath.Join(parent, filepath.Base(work), ".git")
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		admin := filepath.Join(registry, entry.Name())
+		lock := filepath.Join(admin, "locked")
+		info, statErr := os.Stat(lock)
+		if os.IsNotExist(statErr) {
+			continue
+		}
+		backpointer, readErr := os.ReadFile(filepath.Join(admin, "gitdir"))
+		if os.IsNotExist(readErr) {
+			continue // An incomplete registration without a path cannot name this checkout.
+		}
+		if readErr != nil {
+			return readErr
+		}
+		gitfile := strings.TrimSuffix(string(backpointer), "\n")
+		if !filepath.IsAbs(gitfile) {
+			gitfile = filepath.Join(admin, gitfile)
+		}
+		if path := filepath.Clean(gitfile); path != canonical && path != target {
+			continue
+		}
+		if statErr != nil {
+			return statErr
+		}
+		reason, err := os.ReadFile(lock)
+		if err != nil {
+			return err
+		}
+		if _, err := heavyGitOutput(ctx, r.Root, "worktree", "unlock", work); err != nil {
+			return err
+		}
+		r.progressf("loop: heavy unlocked proof worktree %q (reason %q, lock mtime %s)\n",
+			work, strings.TrimSpace(string(reason)), info.ModTime().UTC().Format(time.RFC3339Nano))
+		return nil
+	}
+	return nil
+}
+
 func (r HeavyRunner) judgeTip(ctx context.Context, run HeavyRun) (HeavyRun, error) {
 	early := r.startEarly(ctx, run)
 	err := r.inTree(ctx, run.TipSHA, func(dir string) error {
