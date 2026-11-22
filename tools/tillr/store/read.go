@@ -90,7 +90,13 @@ func (r *Reader) ReadOnce(key any, load func() (any, error)) (any, error) {
 // store's write lock and turn every reader into a writer's competitor. Every read path
 // goes through here, directly or through snapshot.
 func (s *Store) ReadTx(ctx context.Context, fn func(*Reader) error) error {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	return s.readTx(ctx, s.db, fn)
+}
+
+func (s *Store) readTx(ctx context.Context, db interface {
+	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
+}, fn func(*Reader) error) error {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return fmt.Errorf("store: beginning the read transaction: %w", err)
 	}

@@ -19,6 +19,62 @@ func seedLiveOverride(t *testing.T, s *store.Store, id, doc string) {
 	}
 }
 
+func TestWatchEvaluationOnlyWritesChangedEpisodes(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	s := watchStore(t)
+	watchFact(t, s, now.Add(-24*time.Hour), `{"detail":{"item-id":"one"}}`)
+	doc := strings.ReplaceAll(validRule, `"test.watch"`, `"watch-test.fact"`)
+	e := Evaluator{Store: s, Rules: watchRules(t, doc), Clock: func() time.Time { return now }}
+	writes := 0
+	ctx := store.ObserveWrites(t.Context(), func(_, _ time.Time) { writes++ })
+	pass := func(want int) {
+		t.Helper()
+		writes = 0
+		if _, err := e.EvaluateRules(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if writes != want {
+			t.Errorf("evaluation took %d writer transactions, want %d", writes, want)
+		}
+	}
+	pass(0) // Quiet.
+	watchFact(t, s, now, `{"detail":{"item-id":"one"}}`)
+	pass(1) // Open.
+	pass(0) // Same firing condition and observations.
+	watchFact(t, s, now, `{"detail":{"item-id":"one"}}`)
+	pass(1) // New observation.
+	pass(0)
+	now = now.Add(24 * time.Hour)
+	pass(1) // Window expired.
+	pass(0)
+}
+
+func TestWatchEvaluationDiscardsStaleEpisodePlan(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	s := watchStore(t)
+	head := watchFact(t, s, now, `{"detail":{"item-id":"one"}}`)
+	doc := strings.ReplaceAll(validRule, `"test.watch"`, `"watch-test.fact"`)
+	e := Evaluator{Store: s, Rules: watchRules(t, doc), Clock: func() time.Time { return now }}
+	planned := false
+	e.afterPlan = func() {
+		if planned || store.HoldsWrite() {
+			t.Fatal("opening must be planned once and without a writer")
+		}
+		planned = true
+		seedLiveOverride(t, s, e.Rules[0].ID, strings.Replace(doc, "[rule.reads]", "enabled=false\n[rule.reads]", 1))
+	}
+	got, err := e.EvaluateRules(t.Context())
+	if !planned || err != nil || len(got) != 1 || !got[0].Disabled {
+		t.Fatalf("did not discard stale opening: planned=%t results=%+v err=%v", planned, got, err)
+	}
+	if after, err := s.EventHeadSeq(); after != head || err != nil {
+		t.Fatalf("stale opening appended a transition: before=%d after=%d err=%v", head, after, err)
+	}
+	if pending, err := e.Pending(t.Context(), "foreground"); len(pending) != 0 || err != nil {
+		t.Fatalf("stale opening left a notice: %v %v", pending, err)
+	}
+}
+
 func TestWatchEvaluationRestartsForNewGitFacts(t *testing.T) {
 	now := time.Unix(1700000000, 0)
 	root, _, _ := forkedRepo(t, now)
