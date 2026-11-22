@@ -13,7 +13,7 @@ func daemon(ctx context.Context, e watch.Evaluator, stderr io.Writer, ticks <-ch
 	if ctx.Err() != nil {
 		return nil
 	}
-	wake, err := watchWAL(e.Store.Path(), ticks)
+	wake, err := watchStore(e.Store, ticks)
 	if err != nil {
 		return err
 	}
@@ -21,6 +21,12 @@ func daemon(ctx context.Context, e watch.Evaluator, stderr io.Writer, ticks <-ch
 	var diagnostics ruleDiagnostics
 	var previous map[string]int
 	for ctx.Err() == nil {
+		if err := wake.beginPass(ctx); err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
 		results, err := e.EvaluateRules(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
