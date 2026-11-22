@@ -206,7 +206,7 @@ if __name__ == "__main__":
 }
 
 func TestHeavyGoTimeoutUsesFirstProofWithoutReplay(t *testing.T) {
-	for _, mode := range []string{"sharded", "native", "sharded-with-crash", "sharded-without-events"} {
+	for _, mode := range []string{"sharded", "native", "sharded-with-crash", "sharded-without-events", "sharded-deadlock-with-crash"} {
 		t.Run(mode, func(t *testing.T) { testHeavyGoTimeout(t, mode) })
 	}
 }
@@ -215,7 +215,14 @@ func testHeavyGoTimeout(t *testing.T, mode string) {
 	t.Helper()
 	const timedOut = "go-test:tools/example:example.com/suite:TestHung"
 	const ordinary = "go-test:tools/example:example.com/suite:TestFailed"
-	const panicLine = "panic: test timed out after 10m0s"
+	panicLine := "panic: test timed out after 10m0s"
+	stackLine := "goroutine 1 [running]:"
+	deadlock := mode == "sharded-deadlock-with-crash"
+	withCrash := mode == "sharded-with-crash" || deadlock
+	if deadlock {
+		panicLine = "fatal error: all goroutines are asleep - deadlock!"
+		stackLine = "goroutine 1 [chan receive]:"
+	}
 	root, base := heavyRepo(t)
 	heavyGit(t, root, "update-ref", GreenRef, base)
 	if err := os.MkdirAll(filepath.Join(root, "tools/gate/checks"), 0755); err != nil {
@@ -229,6 +236,7 @@ from types import SimpleNamespace
 
 GO_TOOL_DIRS = ("tools/example",)
 mode = %q
+deadlock = mode == "sharded-deadlock-with-crash"
 GO_SHARD_DIRS = GO_TOOL_DIRS if mode.startswith("sharded") else ()
 def go_tool_command(module):
     if GO_SHARD_DIRS:
@@ -241,10 +249,18 @@ def execute_check(check, *_):
     pkg = "example.com/suite"
     panic = ["panic: test timed out after 10m0s\n", "running tests:\n", "\tTestHung (10m0s)\n",
              "\n", "goroutine 1 [running]:\n", "\texample.com/suite/trigger_test.go:123 +0x12\n"]
-    events = [dict(Action="output", Package=pkg, Test="TestFailed", Output="ordinary assertion\n"),
+    ordinary = "ordinary assertion\n"
+    if deadlock:
+        ordinary = "fatal error: concurrent map writes\n"
+    events = [dict(Action="output", Package=pkg, Test="TestFailed", Output=ordinary),
               dict(Action="fail", Package=pkg, Test="TestFailed"),
               dict(Action="run", Package=pkg, Test="TestHung")]
+    if deadlock:
+        panic = ["fatal error: all goroutines are asleep - deadlock!\n", "\n",
+                 "goroutine 1 [chan receive]:\n", "\texample.com/suite/trigger_test.go:123 +0x12\n"]
     events += [dict(Action="output", Package=pkg, Test="TestHung", Output=line) for line in panic]
+    if deadlock:
+        events.append(dict(Action="fail", Package=pkg, Test="TestHung"))
     events.append(dict(Action="fail", Package=pkg))
     report = "\n".join(map(json.dumps, events))
     if GO_SHARD_DIRS:
@@ -255,10 +271,16 @@ def execute_check(check, *_):
             check.output += "go-test-shards: example.com/suite shard 0 failed (exit 2)\n" + "".join(panic)
         else:
             Path(args[args.index("--events") + 1]).write_text(report)
-            check.output += ("go-test-shards: example.com/suite shard 0 failed (exit 2): TestFailed\n"
-                             "ordinary assertion\n" + "".join(panic))
-        if mode == "sharded-with-crash":
-            check.output += "go-test-shards: example.com/suite shard 1 failed (exit 2)\nunscoped crash\n"
+            if deadlock:
+                check.output += ("go-test-shards: example.com/suite shard 0 failed (exit 1): TestHung\n"
+                                 + "".join(panic) +
+                                 "go-test-shards: example.com/suite shard 1 failed (exit 1): TestFailed\n"
+                                 + ordinary)
+            else:
+                check.output += ("go-test-shards: example.com/suite shard 0 failed (exit 2): TestFailed\n"
+                                 "ordinary assertion\n" + "".join(panic))
+        if mode == "sharded-with-crash" or deadlock:
+            check.output += "go-test-shards: example.com/suite shard 2 failed (exit 2)\nunscoped crash\n"
     else:
         assert "go test -json " in check.argv[2]
         check.output = report
@@ -305,7 +327,7 @@ if __name__ == "__main__":
 		logs := fixerLoop.heavyCheckLogs(sha, checks)
 		raw, err := os.ReadFile(logs[timedOut])
 		if err != nil || !strings.Contains(string(raw), panicLine) ||
-			!strings.Contains(string(raw), "goroutine 1 [running]:") ||
+			!strings.Contains(string(raw), stackLine) ||
 			!strings.Contains(string(raw), "trigger_test.go:123") {
 			t.Errorf("fixer timeout log = %q / %v", raw, err)
 		}
@@ -313,10 +335,9 @@ if __name__ == "__main__":
 	}
 	out, err := r.Run(context.Background())
 	wantChecks := 2
-	switch mode {
-	case "sharded-with-crash":
+	if withCrash {
 		wantChecks++
-	case "sharded-without-events":
+	} else if mode == "sharded-without-events" {
 		wantChecks--
 	}
 	if err != nil || len(out.Runs) != 1 || out.Runs[0].Result != "red" || len(out.Runs[0].Checks) != wantChecks {
@@ -330,19 +351,23 @@ if __name__ == "__main__":
 			if check.Result != "fail" || check.FirstRedLanding != "" || !strings.Contains(check.Detail, panicLine) {
 				t.Errorf("timeout lost its first proof evidence or blamed a landing: %+v", check)
 			}
-			if raw, err := os.ReadFile(check.LogRef); err != nil || !strings.Contains(string(raw), "goroutine 1 [running]:") {
+			if raw, err := os.ReadFile(check.LogRef); err != nil || !strings.Contains(string(raw), stackLine) {
 				t.Errorf("first proof log not retained: %q / %v", raw, err)
 			}
 		case ordinary:
 			if check.Result != "fail" || check.FirstRedLanding != tip {
 				t.Errorf("ordinary failure lost attribution: %+v", check)
 			}
-			if raw, err := os.ReadFile(check.LogRef); err != nil || !strings.Contains(string(raw), "ordinary assertion") || strings.Contains(string(raw), panicLine) {
+			wantOutput := "ordinary assertion"
+			if deadlock {
+				wantOutput = "fatal error: concurrent map writes"
+			}
+			if raw, err := os.ReadFile(check.LogRef); err != nil || !strings.Contains(string(raw), wantOutput) || strings.Contains(string(raw), panicLine) {
 				t.Errorf("ordinary failure lost its separate evidence: %q / %v", raw, err)
 			}
 		case "suite":
 			raw, err := os.ReadFile(check.LogRef)
-			if mode != "sharded-with-crash" || check.Result != "fail" || !check.GoTimedOut || err != nil || !strings.Contains(string(raw), "unscoped crash") {
+			if !withCrash || check.Result != "fail" || !check.GoTimedOut || err != nil || !strings.Contains(string(raw), "unscoped crash") {
 				t.Errorf("unscoped crash should stay visible without replaying the suite: %+v / %v", check, err)
 			}
 			if strings.Contains(string(raw), "waiting for a test slot") {
@@ -356,7 +381,7 @@ if __name__ == "__main__":
 		t.Errorf("timeout did not get a fixer: %v", fixed)
 	}
 	if (len(replayed) == 0) != (mode == "sharded-without-events") || slices.ContainsFunc(replayed, func(id string) bool { return id != ordinary }) {
-		t.Errorf("only the ordinary failure should be replayed: %v", replayed)
+		t.Fatalf("only the ordinary failure should be replayed: %v", replayed)
 	}
 	if timeoutCheck.CheckID == "" {
 		t.Fatal("missing named timeout")

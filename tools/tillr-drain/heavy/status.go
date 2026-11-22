@@ -38,7 +38,7 @@ type HeavyCheck struct {
 	// from fork-check for this check.
 	LogRef string `json:"log_ref,omitempty"`
 	Stalls int    `json:"stalls,omitempty"`
-	// GoTimedOut prevents replay of a test named by a Go timeout panic or its suite.
+	// GoTimedOut prevents replay of a test that timed out or deadlocked, or its suite.
 	GoTimedOut bool `json:"go_timed_out,omitempty"`
 	// RevertedBy is the trunk commit that reverted FirstRedLanding automatically, and
 	// RevertRefused is why the automatic revert ended "not possible" so a fixer was filed
