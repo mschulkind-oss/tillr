@@ -6586,9 +6586,13 @@ def apply_tier(plan: Plan, tier: str | None, changed: list[str] | None = None) -
     kept: list[Check] = []
     for check in plan.checks:
         if check.kind == "go-affected" and tier != TIER_LANDING:
-            plan.not_planned(check.label,
-                             "the rolling tier runs whole Go module suites fresh",
-                             kind=check.kind, read_disjoint=False)
+            # Omit `kind` (as with `pack ... (yolo series check)`) so `write_gate_spans`
+            # leaves `check_id` empty: whole Go module suites cover this tier, whereas a
+            # non-empty `check_id` in `skipped_checks` tells `runHeavyLegacy` the trunk
+            # proof lacked coverage and marks the check `unavailable`.
+            plan.not_planned(f"{check.kind} ({check.label})",
+                             "does not apply on the rolling tier because whole Go module suites run fresh",
+                             read_disjoint=False)
             continue
         if check.kind == "go-test-shards-suite" and tier == TIER_ROLLING:
             plan.not_planned(check.label,
@@ -6637,6 +6641,14 @@ def apply_tier(plan: Plan, tier: str | None, changed: list[str] | None = None) -
     # answer here is unavailable, never quietly someone else's. A skip nothing selected
     # stays not-planned.
     for skip in plan.skips:
+        if skip.kind == "go-affected" and tier != TIER_LANDING:
+            skip.kind = ""
+            skip.label = "go-affected (affected tillr Go test packages pass)"
+            skip.planned = False
+            skip.owed = False
+            skip.read_disjoint = False
+            skip.why = "does not apply on the rolling tier because whole Go module suites run fresh"
+            continue
         if (not skip.planned or not skip.kind or check_tier(skip.kind) == tier
                 or tier == TIER_ROLLING):
             continue
@@ -9560,8 +9572,9 @@ def run_gate(argv: list[str]) -> int:
         kept_checks: list[Check] = []
         for check in plan.checks:
             if check.kind == "go-affected":
-                plan.not_planned(check.label, "the full gate runs whole Go module suites fresh",
-                                 kind=check.kind, read_disjoint=False)
+                plan.not_planned(f"{check.kind} ({check.label})",
+                                 "does not apply in the full gate because whole Go module suites run fresh",
+                                 read_disjoint=False)
             else:
                 kept_checks.append(check)
         plan.checks = kept_checks
