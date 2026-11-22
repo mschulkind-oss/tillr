@@ -543,6 +543,10 @@ type Loop struct {
 	// historyPinned records that this process has initialized object retention.
 	// mu guards it; unchanged observations then need only a read transaction.
 	historyPinned bool
+	// landingRewriteChecked caches unmapped trunk landings already checked against a
+	// trunk tip (old_sha -> tip), so an unmatchable commit does not re-scan git log -p
+	// on unchanged tips. mu guards it.
+	landingRewriteChecked map[string]string
 	// reportMu serializes the loop's report writes, so a caller's io.Writer need not be
 	// safe for concurrent use.
 	reportMu sync.Mutex

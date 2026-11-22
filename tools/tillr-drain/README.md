@@ -2140,6 +2140,23 @@ a restoration: a gate verdict binds the candidate's base and tree, not the trunk
 Run it while no landing is in flight, after stopping the loop. A lander that was
 already waiting with the old observed tip would record that tip as lost again.
 
+An earlier rewrite that left a landed trunk commit unmapped in `trunk_rewrites` is
+reconciled automatically at pass start when no trunk-tip rewrite is active: for each
+unmapped non-fork `landings.trunk_after` commit that shares a merge base with `main`,
+the drain matches it by unique `git patch-id --stable` in `merge-base(old, main)..main`,
+writes the mapping into `trunk_rewrites`, moves any matching `refs/tillr/landed/<run_id>`
+marker, and appends a `drain.trunk-rewrite-absorbed` event without changing proof
+admission under `refs/tillr/green`. When no unique patch match exists, a dependent item
+holds on `blocker-landing-not-on-trunk` with mover `the owner; restore the named landing
+to main, or map its replacement with tillr drain accept-rewrite`. When no trunk-tip
+rewrite is active, `tillr drain accept-rewrite` also accepts an unmapped interior trunk
+landing (`--lost`) and its replacement ancestor on `main` (`--current`), refusing unless
+both commits carry the same non-empty `git patch-id --stable`; accepting pins the lost
+landing at `refs/tillr/trunk-history/accepted/<lost>`, updates any matching
+`refs/tillr/landed/<run_id>` marker, records `(lost, current)` in `trunk_rewrites` with
+evidence `accept-rewrite:landing`, and appends `drain.trunk-rewrite-accepted` without
+moving `trunk_history` or `refs/tillr/green`.
+
 The drain also passes its observed tip to the
 lander with `--observed-trunk`; under the landing lock the lander refuses with
 `trunk-rewritten` if the trunk no longer contains it. The lander also reconciles

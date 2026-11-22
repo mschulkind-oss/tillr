@@ -278,7 +278,9 @@ func acceptRewriteFace(args []string) int {
 	if err != nil {
 		return fail(err)
 	}
-	if a.Rebased {
+	if a.Landing {
+		fmt.Printf("accepted the landing rewrite %s -> %s: same stable patch id, current tree %s; lost landing pinned at %s\n", a.Lost, a.Current, a.Tree, a.Pin)
+	} else if a.Rebased {
 		fmt.Printf("accepted the rewrite %s -> %s: rebase onto a moved base, %d lost commits matched by patch, current tree %s; lost tip pinned at %s\n", a.Lost, a.Current, a.Commits, a.Tree, a.Pin)
 	} else {
 		fmt.Printf("accepted the rewrite %s -> %s: same tree %s, %d commits replaced one for one; lost tip pinned at %s\n", a.Lost, a.Current, a.Tree, a.Commits, a.Pin)

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mschulkind-oss/tillr-drain/heavy"
 	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr/store"
 )
@@ -141,6 +142,11 @@ func unprovedBlockers(ctx context.Context, r *store.Reader, root, green, tip str
 					}
 				}
 				if sha != "" {
+					if resolved, err := heavy.RewriteResolve(r, sha); err != nil {
+						return nil, err
+					} else if resolved != "" {
+						sha = resolved
+					}
 					// A fork landing delivers an already judged commit to its patch
 					// branch, not to main. Its recorded trunk_after must be retained
 					// by that delivery branch; main's green pointer cannot contain it.
