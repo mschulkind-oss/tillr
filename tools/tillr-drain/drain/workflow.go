@@ -997,7 +997,7 @@ func (l *Loop) settleNodeFormat(ctx context.Context, d Decision, rec run.Record,
 			}
 			return true, l.markExamined(ctx, d)
 		}
-		if ClassifyAttempt(rec, log) == AttemptInfrastructure || (rec.State == run.StateExited && !readableFooter(footer)) {
+		if classifyDecisionAttempt(d, rec, log) == AttemptInfrastructure || (rec.State == run.StateExited && !readableFooter(footer)) {
 			return true, l.holdFailedWorkflowNode(ctx, d, base, rec, result)
 		}
 	}

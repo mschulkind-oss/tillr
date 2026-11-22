@@ -2418,6 +2418,9 @@ func (l *Loop) settle(ctx context.Context, decision Decision, record run.Record,
 		}
 	}
 	class := ClassifyAttempt(record, log)
+	if !offered {
+		class = classifyDecisionAttempt(decision, record, log)
+	}
 	if evaluatorNode(decision) {
 		class = AttemptAnswered
 	}

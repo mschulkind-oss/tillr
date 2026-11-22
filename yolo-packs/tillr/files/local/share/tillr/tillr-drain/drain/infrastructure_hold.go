@@ -41,6 +41,9 @@ func infrastructureDetail(rec run.Record, log string) string {
 }
 
 func infrastructureWords(rec run.Record, log string) string {
+	if words, ok := piTransportError(rec); ok {
+		return words
+	}
 	if words := stderrSummary(rec.StderrTail); words != "" {
 		return words
 	}
@@ -177,10 +180,15 @@ func isBackendFailure(rec run.Record, log string) bool {
 	return ClassifyAttempt(rec, log) == AttemptInfrastructure && (!refusal || reset.IsZero())
 }
 
+func isBackendFailureFor(d Decision, rec run.Record, log string) bool {
+	_, _, reset, refusal := refusedWindow(rec)
+	return classifyDecisionAttempt(d, rec, log) == AttemptInfrastructure && (!refusal || reset.IsZero())
+}
+
 // Record the measured words at settlement. Compare failures of the same execution
 // slot, not unrelated nodes. Clearing the item fault starts a new comparison.
 func (l *Loop) recordInfrastructureFailure(ctx context.Context, d Decision, rec run.Record, log string) (bool, error) {
-	if !isBackendFailure(rec, log) {
+	if !isBackendFailureFor(d, rec, log) {
 		return false, nil
 	}
 	s, err := store.Open(ctx, l.cfg.Store, true)

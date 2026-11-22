@@ -331,7 +331,7 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 	if err != nil {
 		return nil, err
 	}
-	priors, err := readPriorRuns(r)
+	priors, err := readPriorRunsFrom(r, designHistory)
 	if err != nil {
 		return nil, err
 	}

@@ -182,6 +182,13 @@ func (l *Loop) settleUnansweredDesignRuns(ctx context.Context) error {
 					found = append(found, f)
 					continue
 				}
+				if hasPiTransportError(*rec) {
+					// A design run that ended on a model or transport error after pi's
+					// retries failed is recorded as a backend failure, not an
+					// unanswered-design refusal, and raises no item.conflict;
+					// conflictDecision dispatches the design seat again directly.
+					continue
+				}
 				if isBackendFailure(*rec, log) {
 					f.infrastructure = true
 					f.outcome = "infrastructure failure"
