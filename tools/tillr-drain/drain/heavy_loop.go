@@ -124,7 +124,7 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			if l.gatePolicy.AutoRevert {
 				runner.Revert = l.revertLanding
 			}
-			var out HeavyOutcome
+			out := heavyAttempt{pendingTip: requested}
 			var err error
 			hold, busy, holdErr := acquireLoopLock(ctx, l.cfg.Root)
 			if holdErr != nil {
@@ -134,7 +134,7 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			} else {
 				runner.Lock = hold
 				if l.beginHeavyProof() {
-					out, err = runner.Run(ctx)
+					out, err = runner.run(ctx, requested)
 					hold.Close()
 					l.heavyMu.Lock()
 					l.heavyProofActive = false
@@ -149,6 +149,11 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 			l.greenPushAtStart.Do(func() { l.afterGreen(context.WithoutCancel(ctx), "start") })
 			if err != nil && ctx.Err() == nil && !errors.Is(err, errRestartPending) {
 				l.reportf("loop: heavy runner fault: %v\n", err)
+				if out.pendingTip != "" {
+					if eventErr := l.recordHeavyFault(ctx, out.pendingTip, err); eventErr != nil {
+						l.reportf("loop: recording heavy runner fault: %v\n", eventErr)
+					}
+				}
 			}
 			l.heavyMu.Lock()
 			attempted := l.heavyWanted

@@ -2,6 +2,7 @@ package drain
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"path/filepath"
@@ -25,32 +26,78 @@ func TestHeavyRunnerFaultDoesNotConsumeTheTipsTrigger(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer s.Close()
+	const faultAttempts = 2
+	fault := errors.New("judge fault: test runner exited\nwith detail")
+	assertFaultEvents := func(want int) {
+		t.Helper()
+		events, err := s.Events(context.Background(), 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		for _, e := range events {
+			if e.Kind != "drain.heavy-fault" {
+				continue
+			}
+			if count >= want {
+				t.Fatalf("unexpected drain.heavy-fault event: %+v", e)
+			}
+			if e.ObjectType != "commit" || e.ObjectID == nil || *e.ObjectID != tip {
+				t.Fatalf("heavy fault event=%+v, want commit %s", e, tip)
+			}
+			var payload struct {
+				TipSHA string `json:"tip_sha"`
+				Detail string `json:"detail"`
+			}
+			if err := json.Unmarshal(e.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.TipSHA != tip || payload.Detail != fault.Error() {
+				t.Fatalf("heavy fault payload=%s, want tip %s and full error %q", e.Payload, tip, fault.Error())
+			}
+			count++
+		}
+		if count != want {
+			t.Fatalf("drain.heavy-fault events=%d, want %d", count, want)
+		}
+	}
 	var calls atomic.Int32
 	steps := heavyTestSteps{judge: func(context.Context, string, string) ([]HeavyCheck, error) {
-		if calls.Add(1) == 1 {
-			return nil, errors.New("judge fault")
+		if calls.Add(1) <= faultAttempts {
+			return nil, fault
 		}
 		return []HeavyCheck{{CheckID: "unit", Result: "pass"}}, nil
 	}}
 	var log strings.Builder
 	l := &Loop{gatePolicy: GatePolicy{LandingStrategy: "after-merge"}, cfg: LoopConfig{Root: root, Store: s.Path(), LaneRoot: scratchUnderDurable(t), Steps: steps, Now: time.Now, Report: &log}}
+	for attempt := 1; attempt <= faultAttempts; attempt++ {
+		var err error
+		if attempt == 1 {
+			// The runner resolves trunk, not this stale trigger: the fault must name tip.
+			err = l.startHeavy(context.Background(), base)
+		} else {
+			err = l.maybeRolling(context.Background(), tip, false, &LoopResult{})
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.heavyWG.Wait()
+		if got := heavyGit(t, root, "rev-parse", GreenRef); got != base || calls.Load() != int32(attempt) || !strings.Contains(log.String(), "heavy runner fault") {
+			t.Fatalf("green=%s calls=%d log=%s", got, calls.Load(), log.String())
+		}
+		if l.heavyAttempted == tip {
+			t.Fatal("a faulted run consumed the tip's trigger")
+		}
+		assertFaultEvents(attempt)
+	}
 	if err := l.maybeRolling(context.Background(), tip, false, &LoopResult{}); err != nil {
 		t.Fatal(err)
 	}
 	l.heavyWG.Wait()
-	if got := heavyGit(t, root, "rev-parse", GreenRef); got != base || !strings.Contains(log.String(), "heavy runner fault") {
-		t.Fatalf("green=%s log=%s", got, log.String())
-	}
-	if l.heavyAttempted == tip {
-		t.Fatal("a faulted run consumed the tip's trigger")
-	}
-	if err := l.maybeRolling(context.Background(), tip, false, &LoopResult{}); err != nil {
-		t.Fatal(err)
-	}
-	l.heavyWG.Wait()
-	if got := heavyGit(t, root, "rev-parse", GreenRef); got != tip || calls.Load() != 2 {
+	if got := heavyGit(t, root, "rev-parse", GreenRef); got != tip || calls.Load() != faultAttempts+1 {
 		t.Fatalf("green=%s calls=%d log=%s", got, calls.Load(), log.String())
 	}
+	assertFaultEvents(faultAttempts)
 }
 
 func TestHeavyStatusLineNamesFailingChecks(t *testing.T) {
