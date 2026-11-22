@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -23,6 +24,14 @@ func TestItemVerdictAuthors(t *testing.T) {
 			v["actor"] = kind + "-author"
 		} else {
 			delete(v, "recorded_at") // Older events still have the store's timestamp.
+		}
+		if i == 1 {
+			v["verdict"] = "not-done"
+			v["findings"] = []any{
+				map[string]any{"kind": "gap", "case": "Empty input is unchecked", "paths": []any{"file:parse.go:24", "file:parse_test.go"}},
+				map[string]any{"kind": "regression", "case": "Old inputs fail", "paths": []any{"file:parse.go:48"}},
+				map[string]any{"kind": "unasked-change", "case": "Help changed", "paths": []any{"file:help.go"}},
+			}
 		}
 		payload, _ := json.Marshal(v)
 		if _, err := db.Exec(`INSERT INTO events (ts, kind, object_type, object_id, payload) VALUES (1000, 'item.verdict', 'item', 'item-seed-02', ?)`, string(payload)); err != nil {
@@ -51,8 +60,13 @@ func TestItemVerdictAuthors(t *testing.T) {
 	for i, expected := range want {
 		row := got[i].(map[string]any)
 		for field, value := range expected {
-			if row[field] != value {
+			if !reflect.DeepEqual(row[field], value) {
 				t.Errorf("verdict %d %s = %v; want %v", i, field, row[field], value)
+			}
+		}
+		if _, wantFindings := expected["findings"]; !wantFindings {
+			if _, hasFindings := row["findings"]; hasFindings {
+				t.Errorf("verdict %d unexpectedly has findings: %v", i, row["findings"])
 			}
 		}
 	}

@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { useItemDocQuery, useItemQuery, useRunArtifactQuery, useRunExchangesQuery, useRunGateQuery, useRunQuery, useRunTimelineQuery, useRunTranscriptQuery } from "../models/queries";
-import type { DispatchView, ItemData, ItemView, TimelineData, VerifyRefusalView } from "../models/types";
+import type { DispatchView, ItemData, ItemView, TimelineData, VerdictFindingView, VerifyRefusalView } from "../models/types";
 import { assembleSpans } from "../models/spans";
 import { ItemDetailPane } from "./ItemDetailPane";
 import { EntityLink } from "./EntityLink";
@@ -37,9 +37,26 @@ export function VerifyRefusals({ refusals }: { refusals: VerifyRefusalView[] }) 
       {r.replan ? <> · replan: the findings said the plan was wrong</> : null}
       {r.candidate_size ? <div>Candidate size: {r.candidate_size.files} files (limit {r.candidate_size.file_limit}) · {r.candidate_size.added_lines} added lines (limit {r.candidate_size.added_line_limit})</div> : null}
       <pre className="refusal-detail">{r.detail}</pre>
+      <FindingList findings={r.findings} />
     </li>)}
   </ol></section>;
 }
+const findingKindLabel: Record<VerdictFindingView["kind"], string> = {
+  gap: "Gap",
+  regression: "Regression",
+  "unasked-change": "Unasked change",
+};
+
+function FindingList({ findings }: { findings?: (VerdictFindingView & { criterion?: string })[] }) {
+  if (!findings?.length) return null;
+  return <ul aria-label="Findings">
+    {findings.map((finding, index) => <li key={index}>
+      {finding.criterion ? `${finding.criterion} · ` : null}<strong>{findingKindLabel[finding.kind] ?? finding.kind}</strong>{": "}<span>{finding.case}</span>{" · "}
+      {finding.paths.map((path, i) => <span key={i}>{i > 0 ? ", " : null}<code>{path}</code></span>)}
+    </li>)}
+  </ul>;
+}
+
 export function ItemTimeline({ item }: { item: ItemData }) {
   const history: { at: number; key: string; body: ReactNode }[] = [
     ...(item.graph_revisions ?? []).map(revision => ({ at: revision.recorded_at_ms, key: `graph-${revision.revision_id}`, body: <>
@@ -56,6 +73,7 @@ export function ItemTimeline({ item }: { item: ItemData }) {
     </> })),
     ...item.verdicts.map((v, i) => ({ at: Date.parse(v.recorded_at), key: `verdict-${i}`, body: <>
       Verdict {v.criterion_id} · {v.verdict} · {v.reason || "reason not recorded"} · {v.actor || "actor not recorded"} ({v.actor_kind || "kind not recorded"}) · evidence: {v.evidence?.length ? v.evidence.join(", ") : "not recorded"}
+      <FindingList findings={v.findings} />
     </> })),
     ...item.owner_decisions.map(d => ({ at: d.decided_at_ms, key: `decision-${d.decision_id}`, body: <>
       Decision {d.decision_id} · {d.text} · {d.decided_by} · {d.status}{d.supersedes ? ` · supersedes ${d.supersedes}` : ""}

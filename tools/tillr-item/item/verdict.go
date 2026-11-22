@@ -1,13 +1,17 @@
 package item
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,25 +50,87 @@ var (
 	verdictValues = map[string]bool{VerdictDone: true, VerdictNotDone: true, VerdictBlocked: true, VerdictDefective: true}
 )
 
+// VerdictFinding records a verifier's classification and the place it applies.
+// The verdict's reason and evidence explain and support the classification.
+type VerdictFinding struct {
+	Kind  string   `json:"kind"`
+	Case  string   `json:"case"`
+	Paths []string `json:"paths"`
+}
+
+// VerdictFindings is optional on a verdict. Older verdicts and mechanical checks
+// need no classification, but supplied findings must describe a kind and place.
+type VerdictFindings []VerdictFinding
+
+func (f *VerdictFindings) UnmarshalJSON(raw []byte) error {
+	var entries []VerdictFinding
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&entries); err != nil {
+		return fmt.Errorf("reading findings: %w", err)
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf("supplied findings must be a non-empty array")
+	}
+	for i, entry := range entries {
+		switch entry.Kind {
+		case "gap", "regression", "unasked-change":
+		default:
+			return fmt.Errorf("finding %d: unknown kind %q", i+1, entry.Kind)
+		}
+		if strings.TrimSpace(entry.Case) == "" {
+			return fmt.Errorf("finding %d: case must not be blank", i+1)
+		}
+		if len(entry.Paths) == 0 {
+			return fmt.Errorf("finding %d: at least one path is required", i+1)
+		}
+		for _, locator := range entry.Paths {
+			if !validFindingLocator(locator) {
+				return fmt.Errorf("finding %d: %q is not a file:<repo-relative-path>[:line] locator", i+1, locator)
+			}
+		}
+	}
+	*f = entries
+	return nil
+}
+
+func validFindingLocator(locator string) bool {
+	ref, ok := strings.CutPrefix(locator, "file:")
+	if !ok || strings.ContainsAny(ref, "\x00\\") || strings.Join(strings.Fields(ref), "") != ref {
+		return false
+	}
+	name, line, hasLine := strings.Cut(ref, ":")
+	name = strings.TrimPrefix(name, "./")
+	if name == "" || name == "." || name == ".." || strings.HasPrefix(name, "../") || path.IsAbs(name) || path.Clean(name) != name {
+		return false
+	}
+	if !hasLine {
+		return true
+	}
+	n, err := strconv.ParseUint(line, 10, 64)
+	return err == nil && n > 0
+}
+
 // verdictPayload is the item.verdict payload: board-utilities.md §5.3's field list —
 // item, criterion hash, verdict, reason, the landed refs and evidence pointers it read,
 // the evaluated head and its actor kind — plus the two identities the independence rule
 // needs, the persisted evaluator binding, and the clock the store sets.
 type verdictPayload struct {
 	EvaluatorBinding
-	EvaluatedTree string   `json:"evaluated_tree,omitempty"`
-	ItemID        string   `json:"item_id"`
-	CriterionID   string   `json:"criterion_id"`
-	CriterionHash string   `json:"criterion_hash"`
-	Verdict       string   `json:"verdict"`
-	ClaimClass    string   `json:"claim_class"`
-	Reason        string   `json:"reason"`
-	Landed        []string `json:"landed,omitempty"`
-	Evidence      []string `json:"evidence"`
-	EvaluatedHead string   `json:"evaluated_head,omitempty"`
-	ActorKind     string   `json:"actor_kind"`
-	Actor         string   `json:"actor,omitempty"`
-	JudgedActor   string   `json:"judged_actor,omitempty"`
+	EvaluatedTree string          `json:"evaluated_tree,omitempty"`
+	ItemID        string          `json:"item_id"`
+	CriterionID   string          `json:"criterion_id"`
+	CriterionHash string          `json:"criterion_hash"`
+	Verdict       string          `json:"verdict"`
+	ClaimClass    string          `json:"claim_class"`
+	Reason        string          `json:"reason"`
+	Landed        []string        `json:"landed,omitempty"`
+	Evidence      []string        `json:"evidence"`
+	Findings      VerdictFindings `json:"findings,omitempty"`
+	EvaluatedHead string          `json:"evaluated_head,omitempty"`
+	ActorKind     string          `json:"actor_kind"`
+	Actor         string          `json:"actor,omitempty"`
+	JudgedActor   string          `json:"judged_actor,omitempty"`
 	// GrantID is retained solely to decode historical payloads, never for intake authority.
 	GrantID    string `json:"grant_id,omitempty"`
 	RecordedAt string `json:"recorded_at,omitempty"`

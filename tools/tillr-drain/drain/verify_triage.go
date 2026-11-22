@@ -21,9 +21,10 @@ const (
 )
 
 type verifyFindingRecord struct {
-	Criterion string `json:"criterion"`
-	Reason    string `json:"reason"`
-	Snapshot  string `json:"snapshot,omitempty"`
+	Criterion string               `json:"criterion"`
+	Reason    string               `json:"reason"`
+	Snapshot  string               `json:"snapshot,omitempty"`
+	Findings  item.VerdictFindings `json:"findings,omitempty"`
 }
 
 func (f verifyFindingRecord) text() string { return f.Criterion + ": " + f.Reason }
@@ -68,7 +69,7 @@ func (l *Loop) checkedVerifyFeedback(ctx context.Context, c Candidate, tree stri
 		case item.VerdictDone:
 			f.Passed = append(f.Passed, v.CriterionID)
 		case item.VerdictNotDone:
-			f.Findings = append(f.Findings, verifyFindingRecord{v.CriterionID, v.Reason, l.verifyFindingSnapshot(ctx, c, tree, v.Evidence)})
+			f.Findings = append(f.Findings, verifyFindingRecord{Criterion: v.CriterionID, Reason: v.Reason, Snapshot: l.verifyFindingSnapshot(ctx, c, tree, v.Evidence), Findings: v.Findings})
 		}
 	}
 	slices.SortFunc(f.Findings, func(a, b verifyFindingRecord) int { return strings.Compare(a.Criterion, b.Criterion) })

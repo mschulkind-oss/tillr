@@ -509,6 +509,12 @@ export interface ItemDetail {
   projected_state: ItemProjection;
 }
 
+export interface VerdictFindingView {
+  kind: "gap" | "regression" | "unasked-change";
+  case: string;
+  paths: string[];
+}
+
 /** One item's dossier. It carries no question list: the board does not track question
  * state, and the one question fact the pane shows — the count — comes from the document
  * route, which owns the parse (design §8.1, ledger `D-OBS6`). */
@@ -521,6 +527,7 @@ export interface VerdictView {
   recorded_at: string;
   reason?: string;
   evidence?: string[];
+  findings?: VerdictFindingView[];
 }
 
 export interface ItemRunView {
@@ -569,6 +576,7 @@ export interface VerifyRefusalView {
   attempt: number | null;
   detail: string;
   replan: boolean;
+  findings?: (VerdictFindingView & { criterion: string })[];
   candidate_size?: {
     files: number;
     added_lines: number;

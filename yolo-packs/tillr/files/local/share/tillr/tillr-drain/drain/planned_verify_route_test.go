@@ -106,9 +106,14 @@ func (s *plannedVerifySteps) Run(ctx context.Context, req run.Request) (run.Reco
 		}
 		head := runGit(s.t, target, "rev-parse", "HEAD")
 		reason := "uncovered: no piece"
+		findings := plannedReviewFindings
+		if s.verifies == 3 {
+			// Changing the classification and place alone cannot change repeat detection.
+			findings = item.VerdictFindings{{Kind: "regression", Case: "The criterion still fails.", Paths: []string{"file:tools/item-a/repair.txt"}}}
+		}
 		v := item.JudgeOutput{EvaluatedHead: head, EvaluatedTree: runGit(s.t, target, "rev-parse", head+"^{tree}"), Outcome: "fail", Verdicts: []item.JudgeEntry{
 			{CriterionID: "c1", CriterionHash: item.CriterionHash("the first criterion of item-a"), Verdict: "done", ClaimClass: item.ClaimVerification, Reason: "covered", Evidence: []string{"node:work/piece-one"}},
-			{CriterionID: "c2", CriterionHash: item.CriterionHash("second criterion"), Verdict: "not-done", ClaimClass: item.ClaimVerification, Reason: reason, Evidence: []string{"candidate.diff"}},
+			{CriterionID: "c2", CriterionHash: item.CriterionHash("second criterion"), Verdict: "not-done", ClaimClass: item.ClaimVerification, Reason: reason, Evidence: []string{"candidate.diff"}, Findings: findings},
 		}}
 		raw, _ := json.Marshal(v)
 		writeForkFile(s.t, filepath.Join(run.DurableDir(filepath.Join(s.f.laneRoot, req.LaneID), req.RunID), "eval.output"), string(raw))
@@ -128,6 +133,11 @@ func (s *plannedVerifySteps) Run(ctx context.Context, req run.Request) (run.Reco
 	defer st.Close()
 	err = st.WriteTx(ctx, func(tx *store.Tx) error { return applyTerminal(tx, rec) })
 	return rec, report, err
+}
+
+var plannedReviewFindings = item.VerdictFindings{
+	{Kind: "gap", Case: "The second criterion is not covered.", Paths: []string{"file:tools/item-a/one.txt:1", "file:tools/item-a/two.txt"}},
+	{Kind: "unasked-change", Case: "The second piece changes unrelated content.", Paths: []string{"file:tools/item-a/two.txt"}},
 }
 
 func TestPlannedVerifyReturnsThenHoldsForRepeatedFinding(t *testing.T) {
@@ -161,6 +171,24 @@ func TestPlannedVerifyReturnsThenHoldsForRepeatedFinding(t *testing.T) {
 	if !found {
 		t.Fatalf("no returned build step: %+v", mustPlan(t, l))
 	}
+	fixtureRead(t, f, func(r *store.Reader) error {
+		var raw []byte
+		if err := r.QueryRow(`SELECT payload FROM events WHERE kind='drain.refusal' AND json_extract(payload,'$.step')='verify-not-done'`).Scan(&raw); err != nil {
+			return err
+		}
+		var refusal refusalPayload
+		if err := json.Unmarshal(raw, &refusal); err != nil {
+			return err
+		}
+		if refusal.VerifyFeedback == nil || len(refusal.VerifyFeedback.Findings) != 1 {
+			t.Fatalf("missing planned feedback: %s", raw)
+		}
+		entry := refusal.VerifyFeedback.Findings[0]
+		if entry.Criterion != "c2" || entry.Reason != "uncovered: no piece" || entry.Snapshot == "" || !reflect.DeepEqual(entry.Findings, plannedReviewFindings) {
+			t.Errorf("planned refusal lost checked feedback: %s", raw)
+		}
+		return nil
+	})
 	// The first repair is a new candidate; the second rebuilds that same commit.
 	// The unchanged finding on the rebuilt candidate holds for the operator.
 	for i := 0; i < 40 && steps.verifies < 3; i++ {

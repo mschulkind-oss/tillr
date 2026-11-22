@@ -36,6 +36,7 @@ type JudgeEntry struct {
 	ClaimClass    string          `json:"claim_class"`
 	Reason        string          `json:"reason"`
 	Evidence      []string        `json:"evidence"`
+	Findings      VerdictFindings `json:"findings,omitempty"`
 	WaitingOn     json.RawMessage `json:"waiting_on,omitempty"`
 }
 
@@ -143,7 +144,7 @@ func CheckJudge(ctx context.Context, r *store.Reader, raw []byte, o JudgeOptions
 				result.Outcome = VerdictNotDone
 			}
 		}
-		v := verdictPayload{ItemID: o.ItemID, CriterionID: entry.CriterionID, CriterionHash: entry.CriterionHash, Verdict: entry.Verdict, ClaimClass: entry.ClaimClass, Reason: entry.Reason, Evidence: append([]string(nil), entry.Evidence...), EvaluatedHead: o.Head, ActorKind: ActorAgent, Actor: o.Actor, JudgedActor: o.JudgedActor, EvaluatedTree: o.Tree, EvaluatorBinding: o.EvaluatorBinding}
+		v := verdictPayload{ItemID: o.ItemID, CriterionID: entry.CriterionID, CriterionHash: entry.CriterionHash, Verdict: entry.Verdict, ClaimClass: entry.ClaimClass, Reason: entry.Reason, Evidence: append([]string(nil), entry.Evidence...), Findings: entry.Findings, EvaluatedHead: o.Head, ActorKind: ActorAgent, Actor: o.Actor, JudgedActor: o.JudgedActor, EvaluatedTree: o.Tree, EvaluatorBinding: o.EvaluatorBinding}
 		if entry.Verdict == VerdictDone && o.Landed != "" {
 			v.Landed = []string{o.Landed}
 			v.Evidence = append(v.Evidence, "commit:"+o.Landed)
