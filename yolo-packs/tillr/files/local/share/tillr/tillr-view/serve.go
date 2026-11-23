@@ -340,10 +340,14 @@ func (s *server) currentBuild() buildStamp {
 	return b
 }
 
+// readConnections is how many reads the server's store handle runs at once. Each answer is
+// one read transaction on one connection, so the pool lets answers overlap, never split.
+const readConnections = 6
+
 // openStore is called at startup or under openMu exclusively. Only a successful
 // read-only handle is retained; a refusal is re-measured on the next API request.
 func (s *server) openStore(ctx context.Context) {
-	r, err := store.OpenRead(ctx, s.storePath)
+	r, err := store.OpenRead(ctx, s.storePath, store.WithReadConnections(readConnections))
 	if err != nil {
 		s.problem = storeVerdictFor(s.storePath, err)
 		return
