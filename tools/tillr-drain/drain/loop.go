@@ -246,10 +246,11 @@ type Candidate struct {
 	Request *run.Request `json:"-"`
 	// Seat is the seat the item asked for, carried so the conflict-fix run's decision
 	// names the same seat the original dispatch did.
-	Seat           string             `json:"-"`
-	Workflow       string             `json:"workflow,omitempty"`
-	replayRelease  *replayLaneRelease // runtime-only: release the lane before a slow gate-failure replay
-	trunkAcquitted bool               // runtime-only: acquitted as trunk-already-red; keep candidate for re-gate
+	Seat                  string             `json:"-"`
+	Workflow              string             `json:"workflow,omitempty"`
+	CandidateChangedPaths []string           `json:"-"` // runtime-only: changed paths captured before replay releases the lane
+	replayRelease         *replayLaneRelease // runtime-only: release the lane before a slow gate-failure replay
+	trunkAcquitted        bool               // runtime-only: acquitted as trunk-already-red; keep candidate for re-gate
 }
 
 type replayLaneRelease struct {
@@ -3259,6 +3260,13 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		if len(gate.CandidateChangedPaths) == 0 && len(gate.SuspectPaths) == 0 && candidate.BaseSHA != "" && candidate.Worktree != "" {
 			if ps, ok := l.cfg.Steps.(*ProcessSteps); ok {
 				gate.CandidateChangedPaths = ps.changedPaths(candidate)
+			}
+		}
+		if len(candidate.CandidateChangedPaths) == 0 {
+			if len(gate.CandidateChangedPaths) > 0 {
+				candidate.CandidateChangedPaths = append([]string(nil), gate.CandidateChangedPaths...)
+			} else if len(gate.SuspectPaths) > 0 {
+				candidate.CandidateChangedPaths = append([]string(nil), gate.SuspectPaths...)
 			}
 		}
 		// A red gate is a suspect, not a conviction. Judge the failing checks on the base

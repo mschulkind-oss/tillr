@@ -196,7 +196,7 @@ func (l *Loop) gatherReapEvidence(ctx context.Context, s *store.Store) (reapEvid
 		}
 		endedDispatches := map[string]bool{}
 		for _, work := range works {
-			if req := work.Decision.RunRequest; req != nil && !work.Done && !work.Ready && !work.Examining &&
+			if req := work.Decision.RunRequest; req != nil && !work.Done && !work.Ready && !work.Examining && work.Examiner == nil &&
 				work.Owner != nil && *work.Owner == *here && work.LoopID != l.currentSessionID() && !l.isActive(req.RunID) {
 				ended, seen := endedDispatches[work.LoopID]
 				if !seen {
@@ -574,6 +574,11 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 					if err := appendEffect(tx, examinationOwnerKind, work.Decision.RunRequest.RunID, (*LoopOwner)(nil), at); err != nil {
 						return err
 					}
+					if work.Examining {
+						if err := appendEffect(tx, examinationReleasedKind, work.Decision.RunRequest.RunID, struct{}{}, at); err != nil {
+							return err
+						}
+					}
 					if n, err := res.RowsAffected(); err != nil {
 						return err
 					} else if n > 0 {
@@ -585,7 +590,7 @@ func (l *Loop) reapDeadLoopRuns(ctx context.Context, tx *store.Tx, at time.Time,
 			}
 		}
 		id := work.Decision.RunRequest.RunID
-		priorSession := ev.prior[id] != "" && ev.prior[id] == work.LoopID && !work.Ready && !work.Examining
+		priorSession := ev.prior[id] != "" && ev.prior[id] == work.LoopID && !work.Ready && !work.Examining && work.Examiner == nil
 		if !ev.ownerDead(work.Owner) && !priorSession {
 			continue
 		}

@@ -90,6 +90,7 @@ var Rules = map[string]Rule{
 	"judge-blocked":                {"waits on work", "judge", "the recorded waiter; answer the judge's blocker"},
 	"judge-defective":              {"needs you", "judge", "owner; reopen the closed item only if its premise is corrected"},
 	"gate-failed":                  {"needs a cause", "gate", "inspect the gate verdict; the item's worker repairs the failing check"},
+	"gate-replay":                  {"waits on the loop", "gate", "the loop's post-verdict trunk replay for the candidate to finish and record its refusal or inherited pass"},
 	"red-cap":                      {"waits on work", "land", "the heavy runner; prove trunk or file its fixer"},
 	"land-refused":                 {"needs you", "land", "inspect the refused landing and authorize a retry"},
 	"delivery-order":               {"waits on work", "land", "the worker lands the fork before offering the repository candidate"},

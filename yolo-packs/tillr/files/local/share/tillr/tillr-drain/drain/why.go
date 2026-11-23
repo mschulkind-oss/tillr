@@ -352,6 +352,63 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				identifyDecision(&d)
 			}
 		}
+		if len(liveWorkers) == 0 && d.Reason == ReasonRunLive && d.RunRequest != nil && d.LaneID != "" && work != nil && !work.Examining && work.Examiner == nil && !work.Ready {
+			liveWorkers, err = reportLiveWorkers(r, work, d, at, observation.faces)
+			if err != nil {
+				return answer, err
+			}
+		}
+		if d.Reason == ReasonRunLive && len(liveWorkers) == 0 && d.RunRequest != nil {
+			// A run with a final gate verdict, or a terminal run record with no open
+			// continuation, and no live worker process never reports run-live.
+			judged, err := runJudged(r, d.RunRequest.RunID)
+			if err != nil {
+				return answer, err
+			}
+			var finished bool
+			if !judged {
+				rec, err := terminalRecord(r, d.RunRequest.RunID)
+				if err != nil {
+					return answer, err
+				}
+				if rec != nil && !d.liveContinuation {
+					openResume := false
+					if work != nil {
+						if seg, ok := work.resumes[d.RunRequest.RunID]; ok {
+							openResume, err = liveContinuation(r, seg, d, at)
+							if err != nil {
+								return answer, err
+							}
+						}
+					}
+					finished = !openResume
+				}
+			}
+			if judged || finished {
+				if judged && work != nil && work.Candidate != nil && (work.Examining || work.Examiner != nil) {
+					d.From, d.Reason = "candidate", ReasonGateReplay
+				} else {
+					d.From, d.Reason = "held", whyRunAwaitsRecovery
+				}
+				identifyDecision(&d)
+			}
+		}
+		examinerDead := false
+		if d.Reason == ReasonGateReplay && work != nil && tick.StorePath != "" {
+			examiner := work.Examiner
+			if examiner == nil && work.Examining {
+				examiner = work.Owner
+			}
+			if examiner != nil {
+				if here, hereErr := currentLoopOwner(); hereErr == nil && examiner.Domain == here.Domain && examiner.UID == here.UID {
+					if dead, deadErr := ownerDead(examiner, here); deadErr == nil && dead {
+						examinerDead = true
+						d.From = "held"
+						identifyDecision(&d)
+					}
+				}
+			}
+		}
 		planned := d
 		var waiting *item.WaitingOn
 		if it.State == def.Blocked {
@@ -367,6 +424,12 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 		}
 		class, where, mover := whyPresentation(d)
 		row := WhyRow{Place: places[it.ItemID], ItemID: it.ItemID, State: it.State, Position: d.Position, Reason: d.Reason, Why: d.Reason, Class: class, Where: where, Mover: mover, Since: "current plan", ClassSource: "planner", WaitingOn: []string{}, Decision: planned}
+		if d.Reason == ReasonGateReplay && examinerDead {
+			row.Class = "waits on the loop"
+			row.Where = "gate"
+			row.Why = ReasonGateReplay + ": examiner process ended before replay finished"
+			row.Mover = "reconcile the ended examiner's candidate replay"
+		}
 		// Use the recorded fault for both its detail and its sequence-bound mover.
 		if fault, held := itemFaults[it.ItemID]; held && d.Action == ActionHold && d.Reason == fault.Reason {
 			if fault.Reason == ReasonPreserveFailed && tick.StorePath != "" {
@@ -396,12 +459,6 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			}
 			if detail != "" {
 				row.Why += ": " + detail
-			}
-		}
-		if len(liveWorkers) == 0 && d.Reason == ReasonRunLive && d.RunRequest != nil && d.LaneID != "" && work != nil && !work.Examining && !work.Ready {
-			liveWorkers, err = reportLiveWorkers(r, work, d, at, observation.faces)
-			if err != nil {
-				return answer, err
 			}
 		}
 		liveWorker := len(liveWorkers) != 0
@@ -944,7 +1001,7 @@ type workerObservation struct {
 // run face before naming a particular reader as the worker.
 func observeWorkers(r *store.Reader, path string, work *pendingWork, live, faces *map[string]bool) (workerObservation, error) {
 	var obs workerObservation
-	if work == nil || work.Owner == nil || work.Examining || work.Ready || work.LoopID == "" {
+	if work == nil || work.Owner == nil || work.Examining || work.Examiner != nil || work.Ready || work.LoopID == "" {
 		return obs, nil
 	}
 	err := r.QueryRow(`SELECT (SELECT ended_at FROM drain_sessions WHERE session_id = ?)`, work.LoopID).Scan(&obs.endedAt)

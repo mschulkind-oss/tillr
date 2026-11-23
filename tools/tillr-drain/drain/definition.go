@@ -27,6 +27,7 @@ const (
 var landingHolds = map[string]string{
 	ReasonBoundaryScopeEscape: "",
 	ReasonGateFailed:          "",
+	ReasonGateReplay:          "",
 	ReasonLandRefused:         "",
 	RefusalDeliveryOrder:      "",
 	ReasonNoFence:             definition.PrerequisiteFence,

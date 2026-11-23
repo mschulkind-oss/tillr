@@ -1530,9 +1530,33 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 	}
 	defer cleanup()
 	out := ReplayOutcome{Rev: rev, Known: true}
+	isDefault := strings.TrimSpace(s.ReplayProgram) == DefaultReplayProgram
 	// A grouped exit 1 says only that SOME check failed. Judge each id so a
 	// candidate's own red cannot hide behind a different red already on its base.
 	for _, check := range checks {
+		if isDefault && check == goAffectedCheckID {
+			handled, red, known, output, replayErr := s.replayGoAffected(ctx, dir, candidate, rev, check)
+			if replayErr != nil {
+				return ReplayOutcome{Rev: rev, Known: false}, replayErr
+			}
+			if handled {
+				if !known {
+					return ReplayOutcome{Rev: rev, Known: false}, nil
+				}
+				if red {
+					out.Red = append(out.Red, check)
+					if s.LaneRoot != "" && rev != "" {
+						if replayLog := writeReplayCheckLog(ctx, dir, rev, check, output, filepath.Join(s.LaneRoot, ".rolling", "logs", rev)); replayLog != "" {
+							if out.CheckLogs == nil {
+								out.CheckLogs = map[string]string{}
+							}
+							out.CheckLogs[check] = replayLog
+						}
+					}
+				}
+				continue
+			}
+		}
 		program := strings.ReplaceAll(s.ReplayProgram, "{only}", check)
 		argv := s.commandArgv(program)
 		if len(argv) == 0 {
@@ -1540,7 +1564,7 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 		}
 		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 		cmd.Dir = dir
-		cmd.Env = s.checkProcessEnv(withoutProcessEnv(os.Environ(), "GO_TEST_SHARDS_CLASS"), "TILLR_FORK_DRIFT=1", "GO_TEST_SHARDS_CLASS=ordinary")
+		cmd.Env = s.replayChildEnv(candidate, "TILLR_FORK_DRIFT=1")
 		var stderr stderrTail
 		var combined bytes.Buffer
 		cmd.Stdout = &combined
