@@ -388,31 +388,33 @@ rollout treats the existing zero-question backlog
 neither, and none of it is built.
 
 [Alert triage happens in a seat inside tillr, and only what it cannot settle reaches the operating session](../design/tillr-alert-triage-seat.md),
-written on 2026-11-22 to the owner's words of 2026-11-21, layers a remedy-free alert triage consumer
-above [the general agent watch design](../design/general-agent-watch.md) and its landed Slice 1 so
-standing `tillr-watch` episodes are read, deduplicated against open items or filed as defect
-requests, and settled visibly inside `tillr` while only external operational actions and owner
-choices wake the operating session. It asks three questions: which seat and process runs alert
-triage ([`OQ-AT1`](../design/tillr-alert-triage-seat.md#OQ-AT1)), whether verified benign alerts may
-settle with recorded evidence and no item ([`OQ-AT2`](../design/tillr-alert-triage-seat.md#OQ-AT2)),
-and whether non-liveness alerts wait for a stopped drain loop or promote after an untriaged window
-([`OQ-AT3`](../design/tillr-alert-triage-seat.md#OQ-AT3)). Its first two slices wait on none of
-them, its ten designer's decisions await his review in
-[its ledger](../design/tillr-alert-triage-seat.md#decision-ledger), and none of it is built.
+written on 2026-11-22 to the owner's words of 2026-11-21, was updated on 2026-11-23 to his rulings
+on [`OQ-AT1`](../design/tillr-alert-triage-seat.md#OQ-AT1),
+[`OQ-AT2`](../design/tillr-alert-triage-seat.md#OQ-AT2), and
+[`OQ-AT3`](../design/tillr-alert-triage-seat.md#OQ-AT3): `tillr-drain` dispatches a dedicated
+read-only `triage` seat on the cheap `scout` tier with conservative escalation options, benign
+false-fires settle only by filing or linking a `fix-rule` item rather than an `expected` note, and
+loop-liveness rules route explicitly to `operator-session` with no timer promotion. No open
+question remains in it; its eleven designer's decisions sit in
+[its ledger](../design/tillr-alert-triage-seat.md#decision-ledger) for the owner to overturn, and
+its seven ordinary build slices (`item-request-100ea9b269` through `item-request-12ef582a85`) are
+queued behind the alert-workflow slices below.
 
-[Every alert gets an investigation and one recorded outcome, and silences bind a rule and variable](../design/tillr-watch-alert-workflow.md),
-written on 2026-11-22 to the owner's words of that day after ten alerts sat open twelve hours past
-item completion and three rule faults were described without being filed, pairs with the triage-seat
-design above so every episode records why it fired and settles only through a variable-scoped
-`silence`, a verified `fix-rule` item, or a verified `fix-fault` item while counting repeats on open
-tracking items and keeping unsettled alerts loud across `wait`, `status`, `tillr drain why`, and
-Observatory. It asks three questions: whether variable silences require an expiry bound or allow
-standing `--until-lifted` silences ([`OQ-AW1`](../design/tillr-watch-alert-workflow.md#OQ-AW1)),
-whether auto-resolved episodes still require settlement
-([`OQ-AW2`](../design/tillr-watch-alert-workflow.md#OQ-AW2)), and whether zero-variable `global`
-rules may take bounded silences ([`OQ-AW3`](../design/tillr-watch-alert-workflow.md#OQ-AW3)). Its
-first three slices wait on none of them, its ten designer's decisions await his review in
-[its ledger](../design/tillr-watch-alert-workflow.md#decision-ledger), and none of it is built.
+[Every alert gets an investigation and one recorded outcome, and silences bind a rule, variable, item, and bound](../design/tillr-watch-alert-workflow.md),
+written on 2026-11-22 and updated on 2026-11-23 after fourteen episodes accumulated in
+`acknowledged`, records the owner's rulings of that morning alongside
+[`OQ-AW1`](../design/tillr-watch-alert-workflow.md#OQ-AW1),
+[`OQ-AW2`](../design/tillr-watch-alert-workflow.md#OQ-AW2), and
+[`OQ-AW3`](../design/tillr-watch-alert-workflow.md#OQ-AW3): acknowledging an alert covers one
+observed instance only, continuing suppression is a `watch_silences` record scoped by rule and
+variable binding (with zero-variable `global` rules using the same path) that names an open item
+and carries `--until` or `--until-change` and lifts automatically when that item finishes or the
+bound expires, and both `condition-cleared` and `item-finished`/`item-closed` auto-resolutions stay
+unsettled until investigated and settled. No open question remains in it; its thirteen designer's
+decisions sit in [its ledger](../design/tillr-watch-alert-workflow.md#decision-ledger) for the
+owner to overturn, and its eight ordinary build slices (plus shared Observatory tail slice
+`item-request-12ef582a85`) are queued starting with single-instance `ack`
+(`item-request-d4e06efb9b` through `item-request-37c66283c7`).
 
 Two designs left this list on 2026-11-15. [Item graphs](../reference/tillr-item-graphs.md) is
 decided, built, and graduated into a system reference: one commit per item, all of refinement built, read-only nodes in
