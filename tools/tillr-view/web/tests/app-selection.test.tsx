@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import type { GateData, GateSpan } from "../src/models/types";
-import { App, canonicalRoute } from "../src/App";
+import { App } from "../src/App";
 import { foldedDecisions } from "../src/components/ItemRunPages";
 import { blockedItemData, docData, dispatchedItemData, envelope, exchangesData, runData, timelineData, transcriptData, twoItemSnapshotData } from "./fixtures";
 
@@ -31,22 +31,6 @@ test("a cold item URL opens a full page without an inspector reading forever", a
  expect(view.container.textContent).not.toContain("Reading the timeline");
  expect(view.container.textContent).toContain("ac-1 — it is checked (pending)");
  expect(view.container.textContent).toContain("item-seed-02");
-});
-test("legacy item/run inspection redirects in place and keeps its tab", async () => {
- window.history.replaceState(null, "", "/item/item-seed-02?run=run-item-seed-02&tab=transcript");
- const view = mount();
- await waitFor(() => expect((window.location.pathname + window.location.search)).toBe("/run/run-item-seed-02?tab=transcript"));
- await screen.findByText("read the design and land the change");
- expect(view.container.querySelector('[aria-label="Run page"]')).not.toBeNull();
- fireEvent.click(screen.getByRole("button", { name: "Exchanges" }));
- await waitFor(() => expect(view.container.textContent).toContain("tillr-loop -> tillr-gate"));
- expect((window.location.pathname + window.location.search)).toContain("tab=exchanges");
-});
-test("legacy query-only item URL redirects to the item page", async () => {
- window.history.replaceState(null, "", "/?item=item-seed-06"); mount();
- await waitFor(() => expect((window.location.pathname + window.location.search)).toBe("/item/item-seed-06"));
- expect(window.location.search).toBe("");
- expect(canonicalRoute("/item/item-seed-02")).toBeNull();
 });
 test("consecutive same-answer passes fold, but a changed answer starts a new row", () => {
  const decisions = ["hold", "hold", "dispatch", "hold"].map((action,i) => ({ decision_id: `d${i}`, item_id: "item-1", lane_id: "", run_id: "", action, reason: "ready", dispatched_at_ms: 100 - i }));

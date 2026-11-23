@@ -11,7 +11,7 @@ export function useTrunkRoute() {
 }
 
 const itemLink = (item: string) => `/item/${encodeURIComponent(item)}`;
-const runLink = (item: string, run: string) => `${itemLink(item)}?run=${encodeURIComponent(run)}`;
+const runLink = (_item: string, run: string) => `/run/${encodeURIComponent(run)}`;
 
 function LandingFacts({ row }: { row: LandingRow }) {
   return <>

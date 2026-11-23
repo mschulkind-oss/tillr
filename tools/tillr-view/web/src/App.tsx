@@ -22,19 +22,6 @@ const DependencyGraph = lazy(() => import("./components/DependencyGraph").then(m
 
 /** Replace old inspection links, preserving their artifact/tab selection. The older
  * query-only item spelling is also accepted; it never opens a second board layout. */
-export function canonicalRoute(route: string): string | null {
-  const [path, query] = route.split("?");
-  const params = new URLSearchParams(query);
-  if (path.startsWith("/item/") && params.get("run")) {
-    const id = params.get("run")!; params.delete("run");
-    return `/run/${encodeURIComponent(id)}${params.size ? `?${params}` : ""}`;
-  }
-  if (path === "/" && params.get("item")) {
-    const item = params.get("item")!; params.delete("item");
-    return canonicalRoute(`/item/${encodeURIComponent(item)}?${params}`) ?? `/item/${encodeURIComponent(item)}`;
-  }
-  return null;
-}
 export function App() {
   const route = useScreenRoute(), path = route.split("?")[0];
   useLinkInterception();
@@ -47,10 +34,6 @@ export function App() {
   const itemOpen = path.startsWith("/item/"), runOpen = path.startsWith("/run/");
   const kind = path.split("/")[1]; let id = path.split("/").slice(2).join("/");
   try { id = decodeURIComponent(id); } catch { /* The refusal retains the malformed id. */ }
-  useEffect(() => {
-    const target = canonicalRoute(route);
-    if (target) navigate(target, { replace: true });
-  }, [route]);
   const [paused, setPaused] = useState(false);
   const { live } = useObservatorySocket({ paused });
   const snapshot = useSnapshotQuery(live, paused), passes = usePassesQuery(true, paused);

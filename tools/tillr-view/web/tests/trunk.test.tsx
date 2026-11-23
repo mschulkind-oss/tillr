@@ -39,7 +39,7 @@ test("Trunk opens from its URL with repair links and an explicit untimed gap", a
  const view = setup("/trunk");
  await view.findByRole("heading", {name:"Trunk"});
  await view.findByRole("link", {name:"landing-a"});
- expect(view.getByRole("link", {name:"Fix run run-fix"}).getAttribute("href")).toBe("/item/item-a?run=run-fix");
+ expect(view.getByRole("link", {name:"Fix run run-fix"}).getAttribute("href")).toBe("/run/run-fix");
  expect(view.getByRole("link", {name:"Fixer item fix-red"}).getAttribute("href")).toBe("/item/fix-red");
  expect(view.getByRole("link", {name:"Red commit red-commit"}).getAttribute("href")).toContain("red-commit");
  expect(view.getByText(/Unrecorded trunk move/)).toBeTruthy();
@@ -65,7 +65,7 @@ test("a bookmarked landing links its item, run and pass without a default queue 
  const view=setup("/landing/landing-a");
  await view.findByRole("heading", {name:"Landing landing-a"});
  expect((await view.findByRole("link", {name:"Item item-a"})).getAttribute("href")).toBe("/item/item-a");
- expect(view.getByRole("link", {name:"Run run-a"}).getAttribute("href")).toBe("/item/item-a?run=run-a");
+ expect(view.getByRole("link", {name:"Run run-a"}).getAttribute("href")).toBe("/run/run-a");
  expect(view.getByRole("link", {name:"Pass pass-a"}).getAttribute("href")).toBe("/pass/pass-a");
  view.client.clear();
 });
