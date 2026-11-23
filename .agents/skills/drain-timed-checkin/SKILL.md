@@ -322,6 +322,14 @@ Use `tillr item request` with the words on standard input and `--title`.
   `--workflow single-worker@v1 --seat tricky`; design work uses `--seat design`.
   At most four `--criterion` flags; `--blocked-by <item>` chains slices.
 - **File when found** (owner): never batch defects or wait for approval.
+- **Check the premise on the current tip before filing or moving an item up.**
+  An observation older than the last few landings may already be fixed, and a
+  search for a commit's subject misses the same change delivered under another
+  subject, so search for the changed code. Read whether an item's design is
+  parked in the roadmap before placing it among the owner's asks. On
+  2026-11-23 four runs were spent on items whose premise no longer held: a pi
+  crash the new pi release had fixed, a store read four landings had closed, a
+  saved pi fix already delivered under another subject, and a parked design.
 - **The smallest functional change (owner, 2026-11-21): "part of desgins can
   absoutely land. this is generally MORE healthy. Remember, we're trying to
   mirror humans here. Humans desire to land the smallest functional change
