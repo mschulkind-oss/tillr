@@ -28,7 +28,10 @@ const (
 	judgeLandedKind              = "drain.judge.landed"
 )
 
-var errJudgeBackendHeld = errors.New("judge settlement waits for an open review backend")
+var (
+	errJudgeBackendHeld = errors.New("judge settlement waits for an open review backend")
+	errJudgePaused      = errors.New("judge run paused; resumes when a lane frees")
+)
 
 // JudgeReceipt retains the caller-owned identities and the exact checked bytes.
 // It travels with the gated candidate so a retained landing needs no second judge.
@@ -171,6 +174,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 	}
 	var replacementRequest *run.Request
 	var replacementSession string
+	var resumedRequest *run.Request
 	workerHead := c.HeadSHA
 	if c.WorkerHeadSHA != "" {
 		workerHead = c.WorkerHeadSHA
@@ -277,6 +281,40 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 			}
 			replacementRequest = &req
 			receipt = nil
+		} else if evalMissing && rec != nil && rec.State == run.StatePaused && rec.EndCause == run.EndRestart && !quotaRefusal {
+			if c.Evaluator == nil {
+				open, err := l.recordedBackendOpen(ctx, receipt.Request.Backend)
+				if err != nil {
+					return c, false, err
+				}
+				if !open {
+					return c, false, errJudgeBackendHeld
+				}
+			}
+			if len(c.Writers) == 0 {
+				c.Writers = receipt.Writers
+			}
+			if len(c.Producers) == 0 {
+				c.Producers = receipt.Producers
+			}
+			if len(c.EvaluatorInputs) == 0 {
+				c.EvaluatorInputs = receipt.Inputs
+			}
+			if c.EvaluatorTask == "" {
+				c.EvaluatorTask = receipt.EvaluatorTask
+			}
+			judgeSession := receipt.JudgeSession
+			if judgeSession == "" {
+				judgeSession = judgeSessionFromActor(receipt.Options.Actor)
+			}
+			if err := l.stageJudge(ctx, c, receipt, judgeSession); err != nil {
+				return c, false, err
+			}
+			req := receipt.Request
+			req = l.refreshJudgeRequest(req)
+			req.Resume = true
+			req.SessionTurn, req.ResumePrompt, req.FreshSession = false, "", false
+			resumedRequest = &req
 		} else if evalMissing && rec != nil && ClassifyAttempt(*rec, logTail(rec.ArtifactRefs)) == AttemptInterrupted {
 			if c.Evaluator == nil {
 				open, err := l.recordedBackendOpen(ctx, receipt.Request.Backend)
@@ -310,7 +348,7 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 				}
 				missing = len(faces) == 0
 			}
-			interrupted := receipt.Build != buildHash && (rec == nil || rec.EndCause == run.EndSignal || rec.EndCause == run.EndLeaseReclaimed || rec.EndCause == run.EndRestart)
+			interrupted := receipt.Build != buildHash && (rec == nil || (rec.State != run.StatePaused && (rec.EndCause == run.EndSignal || rec.EndCause == run.EndLeaseReclaimed || rec.EndCause == run.EndRestart)))
 			if interrupted || missing {
 				if err := l.interruptBuildRun(receipt.Request.RunID); err != nil {
 					return c, false, err
@@ -335,7 +373,6 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 		}
 	}
 	seenErrors := map[string]bool{}
-	var resumedRequest *run.Request
 	for {
 		var executionError error
 		var judgeRec run.Record
@@ -557,6 +594,14 @@ func (l *Loop) judgeCandidate(ctx context.Context, c Candidate, result *LoopResu
 					return c, false, err
 				}
 				return c, false, errJudgeBackendHeld
+			}
+		}
+		if len(receipt.Raw) == 0 && judgeRec.State == run.StatePaused && judgeRec.EndCause == run.EndRestart && !judgeQuotaRefusal(judgeRec) {
+			if _, err := os.Lstat(outputPath); os.IsNotExist(err) {
+				if err := writeJudgeReceipt(receiptPath, receipt); err != nil {
+					return c, false, err
+				}
+				return c, false, errJudgePaused
 			}
 		}
 		if executionError != nil {

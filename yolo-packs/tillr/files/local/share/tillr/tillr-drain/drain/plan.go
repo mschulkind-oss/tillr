@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -573,6 +574,9 @@ func planWithDetails(r *store.Reader, tick Pass, policy *Policy, questions Quest
 			p.retryLaneWait = make(map[string]bool)
 		}
 		p.reserveWorkerLanes(items, released)
+		if _, err := p.reserveDrainingWork(r, items, edges); err != nil {
+			return nil, readFailure(err)
+		}
 		decisions, claimed, err := p.planItems(r, items, edges, faults, works, inputs, retries, rewriteOwnerHolds, rewriteHolds, unshared, hasNodes, buildHash, policy, shut, tick, root, def, at)
 		if err != nil {
 			return nil, err
@@ -628,6 +632,154 @@ func (p *planner) reserveWorkerLanes(items []itemRow, released map[string]bool) 
 			p.workerLanes[origin.Decision.LaneID] = row.ItemID
 		}
 	}
+}
+
+func (p *planner) reserveDrainingWork(r *store.Reader, items []itemRow, edges map[string][]string) ([]bool, error) {
+	p.pausedBlocked = map[string]bool{}
+	p.pausedReserved = map[string]string{}
+	if p.tick.AvailableLanes == nil || p.tick.examineItem != "" {
+		return nil, nil
+	}
+	pausedByItem := map[string]bool{}
+	var pausedOfferedLanes []string
+	for _, row := range items {
+		work := p.works[row.ItemID]
+		if work == nil || work.Done || work.LaneReleased {
+			continue
+		}
+		paused, err := pausedPendingWork(r, work)
+		if err != nil {
+			return nil, err
+		}
+		if !paused {
+			continue
+		}
+		ownLeases, err := activeLeases(r, p.at, []string{work.Decision.LaneID})
+		if err != nil {
+			return nil, err
+		}
+		if len(ownLeases) > 0 {
+			continue
+		}
+		pausedByItem[row.ItemID] = true
+		if lane := work.Decision.LaneID; lane != "" && p.offersLane(lane) {
+			pausedOfferedLanes = append(pausedOfferedLanes, row.ItemID)
+		}
+	}
+	if len(pausedByItem) == 0 {
+		return nil, nil
+	}
+	capacityUsed := maps.Clone(p.assigned)
+	if capacityUsed == nil {
+		capacityUsed = map[string]bool{}
+	}
+	claimCapacity := func(express bool) (string, bool) {
+		if express {
+			for _, lane := range *p.tick.AvailableLanes {
+				if isExpressLane(lane) && !capacityUsed[lane] && !p.held[lane] {
+					capacityUsed[lane] = true
+					return lane, true
+				}
+			}
+		}
+		for _, lane := range *p.tick.AvailableLanes {
+			if !strings.HasPrefix(lane, "desk-") && !isExpressLane(lane) && !capacityUsed[lane] && !p.held[lane] {
+				capacityUsed[lane] = true
+				return lane, true
+			}
+		}
+		return "", false
+	}
+	type drainingSlot struct {
+		lane    string
+		express bool
+	}
+	var drainingUsed []drainingSlot
+	seenWork := map[string]bool{}
+	checkLiveDraining := func(itemID string, express bool, work *pendingWork) error {
+		if work == nil || work.Done || work.LaneReleased || seenWork[itemID] {
+			return nil
+		}
+		seenWork[itemID] = true
+		lane := work.Decision.LaneID
+		if lane == "" || p.offersLane(lane) || documentDesk(lane) || p.tick.OutLanes[lane] {
+			return nil
+		}
+		live, err := liveDrainingWorker(r, work, p.at)
+		if err != nil || !live {
+			return err
+		}
+		if slot, ok := claimCapacity(express); ok {
+			drainingUsed = append(drainingUsed, drainingSlot{lane: slot, express: express})
+		} else if len(pausedOfferedLanes) > 0 {
+			last := len(pausedOfferedLanes) - 1
+			p.pausedBlocked[pausedOfferedLanes[last]] = true
+			pausedOfferedLanes = pausedOfferedLanes[:last]
+		}
+		return nil
+	}
+	for _, row := range items {
+		if err := checkLiveDraining(row.ItemID, row.Express, p.works[row.ItemID]); err != nil {
+			return nil, err
+		}
+	}
+	for itemID, work := range p.works {
+		if err := checkLiveDraining(itemID, false, work); err != nil {
+			return nil, err
+		}
+	}
+	var reservedSlots []bool
+	drainingCommitted := false
+	for _, row := range items {
+		if !pausedByItem[row.ItemID] {
+			continue
+		}
+		work := p.works[row.ItemID]
+		lane := work.Decision.LaneID
+		if lane == "" || documentDesk(lane) {
+			continue
+		}
+		if p.tick.OutLanes[lane] {
+			p.pausedBlocked[row.ItemID] = true
+			continue
+		}
+		_, waiting := p.waits[row.ItemID]
+		d, err := pendingDecisionExcept(r, work, p.at, p.inputs[row.ItemID], p.tick.BriefTemplate, p.policy, p.shut, p.tick.GatesInFlight, p.tick.ownExaminationLane, p.tick.ownExaminationRunID, waiting)
+		if err != nil {
+			return nil, err
+		}
+		if (d.Action != ActionSettle && d.Action != ActionJudge) || d.WorkflowRelease {
+			continue
+		}
+		if row.State == p.rules().Ready && p.dependencyBlocked(edges[row.ItemID]) && d.Action == ActionJudge {
+			continue
+		}
+		if p.offersLane(lane) {
+			continue
+		}
+		if slot, ok := claimCapacity(row.Express); ok {
+			if p.captureStart == nil {
+				p.assigned[slot] = true
+				p.pausedReserved[row.ItemID] = slot
+			}
+			reservedSlots = append(reservedSlots, row.Express)
+		} else {
+			p.pausedBlocked[row.ItemID] = true
+			if p.captureStart == nil {
+				p.laneShort = true
+			}
+			if !drainingCommitted {
+				drainingCommitted = true
+				for _, ds := range drainingUsed {
+					if p.captureStart == nil {
+						p.assigned[ds.lane] = true
+					}
+					reservedSlots = append(reservedSlots, ds.express)
+				}
+			}
+		}
+	}
+	return reservedSlots, nil
 }
 
 // planItems decides every item in order with the planner's lane state, and answers the
@@ -802,6 +954,15 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 			}
 			if err != nil {
 				return nil, nil, readFailure(err)
+			}
+			if p.pausedBlocked[item.ItemID] && (decision.Action == ActionSettle || decision.Action == ActionJudge) && !decision.WorkflowRelease {
+				from := "running"
+				if decision.Action == ActionJudge {
+					from = "candidate"
+				}
+				decision.From, decision.To = from, ""
+				decision.Action, decision.Reason = ActionHold, ReasonNoLane
+				identifyDecision(&decision)
 			}
 			if depHold && !decision.WorkflowRelease {
 				decision = Decision{ItemID: item.ItemID, Attempt: decision.Attempt, From: "held", Action: ActionHold, Reason: ReasonBlocked}
@@ -1021,6 +1182,8 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 		decisions = append(decisions, env)
 		if decision.Action == ActionDispatch || decision.Action == ActionRetry {
 			claimed[decision.LaneID] = decision.ItemID
+		} else if reserved := p.pausedReserved[item.ItemID]; reserved != "" && (decision.Action == ActionSettle || decision.Action == ActionJudge) {
+			claimed[reserved] = item.ItemID
 		}
 	}
 	return decisions, claimed, nil
@@ -1080,10 +1243,12 @@ type planner struct {
 	releasedObstacles map[string]string
 	// questions answers what each item's design document still asks. It is the planner's
 	// only read outside the store, and it is nil-safe: a nil source answers "unknown".
-	questions  QuestionSource
-	at         time.Time
-	dispatched int
-	assigned   map[string]bool
+	questions      QuestionSource
+	at             time.Time
+	dispatched     int
+	assigned       map[string]bool
+	pausedBlocked  map[string]bool
+	pausedReserved map[string]string
 	// laneShort records that some item asked this plan for a free lane and got none.
 	laneShort bool
 	// forks includes live leases and unfinished examinations, then adds this plan's

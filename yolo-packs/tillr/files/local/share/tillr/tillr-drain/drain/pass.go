@@ -700,6 +700,86 @@ func refreshRestartRequest(policy *Policy, d Decision, prev *run.Request) (*run.
 	return fresh, true
 }
 
+func nonQuotaPausedRun(r *store.Reader, runID string) (bool, error) {
+	if runID == "" {
+		return false, nil
+	}
+	rec, err := terminalRecord(r, runID)
+	if err != nil || rec == nil {
+		return false, err
+	}
+	if rec.State != run.StatePaused || rec.EndCause != run.EndRestart {
+		return false, nil
+	}
+	backend, err := quotaPauseBackend(r, runID)
+	if err != nil {
+		return false, err
+	}
+	return backend == "", nil
+}
+
+func pausedPendingWork(r *store.Reader, work *pendingWork) (bool, error) {
+	if work == nil || work.Done {
+		return false, nil
+	}
+	if work.Candidate != nil {
+		if work.Candidate.Judge != nil && work.Candidate.Judge.Request.RunID != "" {
+			if ok, err := nonQuotaPausedRun(r, work.Candidate.Judge.Request.RunID); err != nil || ok {
+				return ok, err
+			}
+		}
+		if ok, err := nonQuotaPausedRun(r, judgeRunID(work.Candidate.RunID)); err != nil || ok {
+			return ok, err
+		}
+	}
+	for _, node := range parallelNodes(work.Decision) {
+		if node.RunRequest == nil {
+			continue
+		}
+		if ok, err := nonQuotaPausedRun(r, node.RunRequest.RunID); err != nil || ok {
+			return ok, err
+		}
+	}
+	return false, nil
+}
+
+func liveDrainingWorker(r *store.Reader, work *pendingWork, at time.Time) (bool, error) {
+	if work == nil || work.Done || work.LaneReleased || work.Decision.LaneID == "" {
+		return false, nil
+	}
+	if work.Candidate != nil {
+		leases, err := activeLeases(r, at, []string{work.Decision.LaneID})
+		return len(leases) > 0, err
+	}
+	for _, node := range parallelNodes(work.Decision) {
+		if node.RunRequest == nil {
+			continue
+		}
+		req := *node.RunRequest
+		if req.ItemID == "" {
+			req.ItemID = node.ItemID
+		}
+		leased, err := activeWorkerLease(r, &req, node.LaneID, at)
+		if err != nil || !leased {
+			continue
+		}
+		rec, err := terminalRecord(r, req.RunID)
+		if err != nil {
+			return false, err
+		}
+		if rec == nil || work.Examining {
+			return true, nil
+		}
+		nodeCopy := node
+		nodeCopy.RunRequest = &req
+		live, err := liveContinuation(r, work.resumes[req.RunID], nodeCopy, at)
+		if err != nil || live {
+			return live, err
+		}
+	}
+	return false, nil
+}
+
 func pendingDecision(r *store.Reader, work *pendingWork, at time.Time, inputs *RunInputs, template *string, policy *Policy, shut map[string]bool, gates int) (Decision, error) {
 	return pendingDecisionExcept(r, work, at, inputs, template, policy, shut, gates, "", "", false)
 }
@@ -2640,7 +2720,7 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watch *l
 				if err == nil {
 					var accepted bool
 					_, accepted, err = l.judgeCandidate(runCtx, c, &local)
-					if errors.Is(err, errJudgeBackendHeld) {
+					if errors.Is(err, errJudgeBackendHeld) || errors.Is(err, errJudgePaused) {
 						err = l.releaseExamination(runCtx, d)
 						completion.result = &local
 					} else if err == nil && !accepted {
@@ -2675,7 +2755,17 @@ func (l *Loop) launchRun(ctx context.Context, d Decision, at time.Time, watch *l
 		}
 		completion.timing.DispatchMS = time.Since(start).Milliseconds()
 		answered := record.State == run.StateExited && ClassifyAttempt(record, log) == AttemptAnswered
-		if handoff && err == nil && completion.outcome.stop == "" && (len(d.Parallel) > 0 || answered) {
+		parallelReady := len(d.Parallel) > 0
+		if parallelReady && err == nil {
+			_ = l.readStore(runCtx, func(r *store.Reader) error {
+				paused, pErr := pausedPendingWork(r, &pendingWork{Decision: d})
+				if pErr == nil && paused {
+					parallelReady = false
+				}
+				return nil
+			})
+		}
+		if handoff && err == nil && completion.outcome.stop == "" && (parallelReady || answered) {
 			l.examineWorkerEnd(runCtx, d, watched, &completion)
 		}
 		l.sendCompletion(ctx, completion)
@@ -3445,7 +3535,7 @@ func (l *Loop) examineClaimed(ctx context.Context, d Decision, work *pendingWork
 					completion.outcome.err = err
 				}
 			}
-			if (rec.State == run.StatePaused || work.ResumeAfterRestart) && !quotaPaused && completion.outcome.err == nil {
+			if !evaluatorNode(work.Decision) && (rec.State == run.StatePaused || work.ResumeAfterRestart) && !quotaPaused && completion.outcome.err == nil {
 				reason := ""
 				if work.ResumeAfterRestart {
 					reason = "the previous loop lost its run face, but the staged session and worktree are intact"

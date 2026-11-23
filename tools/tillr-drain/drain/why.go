@@ -546,6 +546,48 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 			row.WaitingOn = append(row.WaitingOn, d.LaneID)
 			row.Why += ": own lane " + d.LaneID + " holds the offered commit; waiting for that lane to become available"
 		case d.Reason == ReasonNoLane && works[it.ItemID] != nil && !works[it.ItemID].Done && !works[it.ItemID].LaneReleased && d.LaneID != "":
+			ownLeases, leaseErr := activeLeases(r, at, []string{d.LaneID})
+			if leaseErr != nil {
+				return answer, leaseErr
+			}
+			paused, pauseErr := pausedPendingWork(r, works[it.ItemID])
+			if pauseErr != nil {
+				return answer, pauseErr
+			}
+			if paused && len(ownLeases) == 0 && !tick.OutLanes[d.LaneID] && !documentDesk(d.LaneID) {
+				for _, lane := range offered {
+					if lane == d.LaneID {
+						continue
+					}
+					if busy[lane] || assigned[lane] != "" {
+						row.WaitingOn = append(row.WaitingOn, lane)
+					}
+				}
+				var extraLanes []string
+				for _, work := range works {
+					if work == nil || work.Done || work.LaneReleased {
+						continue
+					}
+					lane := work.Decision.LaneID
+					if lane == "" || lane == d.LaneID || slices.Contains(offered, lane) || documentDesk(lane) || tick.OutLanes[lane] {
+						continue
+					}
+					live, liveErr := liveDrainingWorker(r, work, at)
+					if liveErr != nil {
+						return answer, liveErr
+					}
+					if live && !slices.Contains(extraLanes, lane) {
+						extraLanes = append(extraLanes, lane)
+					}
+				}
+				slices.Sort(extraLanes)
+				row.WaitingOn = append(row.WaitingOn, extraLanes...)
+				if len(row.WaitingOn) == 0 {
+					row.WaitingOn = append(row.WaitingOn, "offer a lane with --lanes")
+				}
+				row.Why += ": paused on " + d.LaneID + ", waiting for a lane to free"
+				break
+			}
 			// Work that still holds its lane continues only in that worktree: it is held
 			// behind that lane's lease (its run, or its examination), not by the others.
 			row.WaitingOn = append(row.WaitingOn, d.LaneID)

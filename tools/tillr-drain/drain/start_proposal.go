@@ -201,6 +201,11 @@ func (s *startSnapshot) repairEntriesAt(ctx context.Context, r *store.Reader, at
 	if err != nil {
 		return err
 	}
+	pausedReserved, err := p.reserveDrainingWork(r, rows, s.edges)
+	if err != nil {
+		return err
+	}
+	s.pausedReserved = pausedReserved
 	if touched == nil {
 		s.holds, s.entries, s.readyAt = map[string]string{}, map[string]startViewEntry{}, map[string]time.Time{}
 	} else {
@@ -299,6 +304,14 @@ func (s startSnapshot) nextFreshStartWithGates(gates int) (startViewEntry, bool)
 
 func (s startSnapshot) selectStart(freshOnly bool, gates int) (startViewEntry, bool) {
 	var claimed map[string]bool
+	for _, express := range s.pausedReserved {
+		if lane := s.firstFreeLaneExcept(express, claimed); lane != "" {
+			if claimed == nil {
+				claimed = map[string]bool{}
+			}
+			claimed[lane] = true
+		}
+	}
 	for _, q := range s.items {
 		var work *pendingWork
 		if s.pending != nil {
