@@ -89,9 +89,10 @@ INSERT INTO node_runs VALUES
 			continue
 		}
 		found = true
-		work, _ := it["work"].(map[string]any)
-		if work["runs_started"] != float64(1) || work["verify_cycles"] != float64(1) || work["verify_refusals"] != float64(2) {
-			t.Fatalf("the item entry's work = %v, want 1 started, 1 verify cycle, 2 verify refusals", work)
+		// The page reads an item's work from /items/<id> and /lanes; the snapshot's item list
+		// leaves it out so the payload stays small.
+		if _, has := it["work"]; has {
+			t.Fatalf("the snapshot's item entry carries work = %v, which no reader of the list uses", it["work"])
 		}
 	}
 	if !found {
