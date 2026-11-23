@@ -447,21 +447,25 @@ func TestMain(m *testing.M) {
             self.assertEqual(shards.shared_cache_dir(), (home / '.cache' / 'go-build').resolve())
 
     def test_waiting_runners_announce_and_never_exceed_limit(self):
-        # Deterministic: no sleeps decide the outcome. Holders release only after every
-        # surplus runner has announced that it is waiting, so an over-admission would
-        # show as a peak above the limit.
+        # Deterministic: no sleeps decide the outcome. Holders release only after all
+        # limit holders have entered and every surplus runner has announced that it is
+        # waiting (or immediately on over-admission), so an over-admission would show as
+        # a peak above the limit and a slow holder cannot miss the peak.
         limit, runners = 3, 8
         lock_dir = self.root / 'pool'
         state = threading.Lock()
         active = peak = 0
         notices = []
-        all_waiting = threading.Event()
+        release = threading.Event()
+
+        def maybe_release_locked():
+            if active > limit or (active == limit and len(notices) == runners - limit):
+                release.set()
 
         def notify(message):
             with state:
                 notices.append(message)
-                if len(notices) == runners - limit:
-                    all_waiting.set()
+                maybe_release_locked()
 
         def runner():
             nonlocal active, peak
@@ -469,7 +473,8 @@ func TestMain(m *testing.M) {
                 with state:
                     active += 1
                     peak = max(peak, active)
-                assert all_waiting.wait(60)
+                    maybe_release_locked()
+                assert release.wait(60)
                 with state:
                     active -= 1
 
@@ -482,6 +487,66 @@ func TestMain(m *testing.M) {
         self.assertEqual(peak, limit)
         self.assertEqual(len(notices), runners - limit)
         self.assertTrue(all('waiting for a test slot' in n and str(lock_dir) in n for n in notices))
+
+    def test_same_priority_waiter_after_lock_does_not_preempt_winner(self):
+        lock_dir = self.root / 'post-lock-pool'
+        wait_dir = shards._wait_queue_dir(lock_dir)
+        priority = shards._CLASS_PRIORITY[shards.SLOT_CLASS_ORDINARY]
+        real_try_lock_slot = shards.try_lock_slot
+
+        # 1. A same-priority waiter registering AFTER try_lock_slot started (e.g. blocked
+        #    by this caller's own lock) must not cause the slot winner to drop its slot.
+        after_tickets = []
+
+        def lock_then_register_later_waiter(*args, **kwargs):
+            fd, slot_name = real_try_lock_slot(*args, **kwargs)
+            if fd is not None and not after_tickets:
+                after_tickets.append(shards._register_wait_ticket(wait_dir, priority, 's'))
+            return fd, slot_name
+
+        notices = []
+        try:
+            with patch.object(shards, 'try_lock_slot', side_effect=lock_then_register_later_waiter):
+                with shards.acquire_shard_slot(lock_dir, 1, notify=notices.append):
+                    pass
+        finally:
+            for ticket_fd, ticket_path, *_ in after_tickets:
+                shards._release_wait_ticket(ticket_fd, ticket_path)
+        self.assertEqual(notices, [])
+        self.assertEqual(len(after_tickets), 1)
+
+        # 2. A same-priority waiter registered BEFORE try_lock_slot started still preempts
+        #    a ticketless newcomer (simulated TOCTOU: missed on pre-lock check, caught post-lock).
+        early_ticket = shards._register_wait_ticket(wait_dir, priority, 's')
+        real_waiter_ahead = shards._waiter_ahead
+        calls = [0]
+
+        def miss_first_check(*args, **kwargs):
+            calls[0] += 1
+            if calls[0] == 1:
+                return None
+            return real_waiter_ahead(*args, **kwargs)
+
+        class _Yielded(BaseException):
+            pass
+
+        try:
+            with patch.object(shards, '_waiter_ahead', side_effect=miss_first_check):
+                with self.assertRaises(_Yielded):
+                    with shards.acquire_shard_slot(
+                        lock_dir, 1, notify=lambda _m: (_ for _ in ()).throw(_Yielded()),
+                    ):
+                        pass
+            early_arrival_ns = early_ticket[3][1]
+            self.assertEqual(
+                shards._waiter_ahead(wait_dir, 's', priority, None, before_ns=early_arrival_ns + 1),
+                priority,
+            )
+            self.assertIsNone(
+                shards._waiter_ahead(wait_dir, 's', priority, None, before_ns=early_arrival_ns),
+            )
+        finally:
+            shards._release_wait_ticket(early_ticket[0], early_ticket[1])
 
     def test_two_invocations_never_exceed_limit(self):
         limit = shards.default_shard_limit()
