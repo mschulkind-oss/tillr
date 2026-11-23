@@ -88,8 +88,9 @@ type pendingWork struct {
 	NeedsStage     bool           `json:"needs_stage,omitempty"`
 	ReleasePending string         `json:"release_pending,omitempty"`
 
-	ResumeAfterRestart bool   `json:"-"`
-	DesignQuotaBackend string `json:"-"`
+	ResumeAfterRestart   bool      `json:"-"`
+	DesignQuotaBackend   string    `json:"-"`
+	examinationStartedAt time.Time `json:"-"`
 }
 
 type orphanedRunEffect struct {
@@ -230,6 +231,9 @@ func foldPendingHistory(r *store.Reader, seq int64, s *pendingHistoryState, even
 			if err := json.Unmarshal(e.Payload, &work); err != nil {
 				return err
 			}
+			if work.Examining || work.Examiner != nil {
+				work.examinationStartedAt = e.At
+			}
 			works[work.Decision.ItemID] = &work
 			byRun[*e.ObjectID] = &work
 			// Every sibling belongs to this pending set. Standalone continuation
@@ -337,20 +341,28 @@ func foldPendingHistory(r *store.Reader, seq int64, s *pendingHistoryState, even
 			}
 			work.Done, work.Orphaned, work.Examining, work.ResumeAfterRestart = false, false, false, false
 			work.Owner, work.Examiner, work.Candidate, work.DirtyHold, work.RepairHold, work.GateStall = resumingOwner, nil, nil, nil, nil, nil
+			work.examinationStartedAt = time.Time{}
 		case examinationClaimedKind:
 			if work := byRun[*e.ObjectID]; work != nil {
 				if err := json.Unmarshal(e.Payload, &work.Owner); err != nil {
 					return err
 				}
 				work.Examining = true
+				work.examinationStartedAt = e.At
 			}
 		case examinationReleasedKind:
 			if work := byRun[*e.ObjectID]; work != nil {
 				work.Examining = false
+				if work.Examiner == nil {
+					work.examinationStartedAt = time.Time{}
+				}
 			}
 			for _, work := range works {
 				if work.Ready && work.ParentRunID == *e.ObjectID {
 					work.Examining = false
+					if work.Examiner == nil {
+						work.examinationStartedAt = time.Time{}
+					}
 				}
 			}
 		case candidateReadyKind, candidateRetirementKind, candidatePreparedKind:
@@ -461,6 +473,11 @@ func foldPendingHistory(r *store.Reader, seq int64, s *pendingHistoryState, even
 				if err := json.Unmarshal(e.Payload, &work.Examiner); err != nil {
 					return err
 				}
+				if work.Examiner != nil {
+					work.examinationStartedAt = e.At
+				} else if !work.Examining {
+					work.examinationStartedAt = time.Time{}
+				}
 			}
 		case candidateReleaseStartedKind, candidateLaneKind:
 			if work := byRun[*e.ObjectID]; work != nil {
@@ -495,6 +512,13 @@ func foldPendingHistory(r *store.Reader, seq int64, s *pendingHistoryState, even
 				if work.Candidate != nil {
 					work.Candidate.Request, work.Candidate.Seat = work.Decision.RunRequest, work.Decision.Seat
 				}
+				if work.Examining || work.Examiner != nil {
+					if work.examinationStartedAt.IsZero() {
+						work.examinationStartedAt = e.At
+					}
+				} else {
+					work.examinationStartedAt = time.Time{}
+				}
 			}
 		case candidateStagedKind:
 			if work := byRun[*e.ObjectID]; work != nil {
@@ -509,6 +533,7 @@ func foldPendingHistory(r *store.Reader, seq int64, s *pendingHistoryState, even
 		case examinationDoneKind:
 			if work := byRun[*e.ObjectID]; work != nil {
 				work.Done = true
+				work.examinationStartedAt = time.Time{}
 			}
 		}
 	}

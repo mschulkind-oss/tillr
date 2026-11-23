@@ -90,6 +90,9 @@ type WhyAnswer struct {
 	// that says so, for how long, and which check is failing.
 	Trunk     *heavy.HeavyStatus `json:"trunk,omitempty"`
 	TrunkLine string             `json:"trunk_line,omitempty"`
+	// LoopRestartLine is set when a newer build is installed and the live loop is waiting
+	// its normal turn behind a gate or proof that was already running when the build landed.
+	LoopRestartLine string `json:"loop_restart_line,omitempty"`
 }
 
 // LoadPolicy is shared by planning and read faces. No policy is an explicit input:
@@ -916,9 +919,14 @@ func why(r *store.Reader, tick Pass, policy *Policy, questions QuestionSource, n
 				return answer, err
 			}
 		}
-		if alarm := staleLoopBuildAlarm(runningLoop); alarm != nil {
+		alarm, restartLine, err := staleLoopBuild(r, runningLoop, works)
+		if err != nil {
+			return answer, err
+		}
+		if alarm != nil {
 			answer.Alarms = append(answer.Alarms, *alarm)
 		}
+		answer.LoopRestartLine = restartLine
 	}
 	answer.Summary.Alarms = answer.Alarms
 	return answer, nil
@@ -1188,36 +1196,147 @@ type liveLoopSession struct {
 	owner     LoopOwner
 }
 
-// staleLoopBuildAlarm compares the loop session's start with the mtime of the
+type activeRestartBlocker struct {
+	name      string
+	startedAt time.Time
+}
+
+func activeRestartBlockers(r *store.Reader, loop *liveLoopSession, works map[string]*pendingWork) ([]activeRestartBlocker, error) {
+	var blockers []activeRestartBlocker
+	for _, work := range works {
+		if work == nil || work.Done || work.Decision.RunRequest == nil {
+			continue
+		}
+		owner := work.Examiner
+		if work.Examining && owner == nil {
+			owner = work.Owner
+		}
+		if owner == nil || *owner != loop.owner || work.examinationStartedAt.IsZero() {
+			continue
+		}
+		name := fmt.Sprintf("gate %s (%s)", work.Decision.ItemID, work.Decision.RunRequest.RunID)
+		if work.Decision.LaneID != "" {
+			name = fmt.Sprintf("gate %s on %s (%s)", work.Decision.ItemID, work.Decision.LaneID, work.Decision.RunRequest.RunID)
+		}
+		blockers = append(blockers, activeRestartBlocker{name: name, startedAt: work.examinationStartedAt.UTC()})
+	}
+	rows, err := r.Query(`SELECT COALESCE(object_id, ''), ts, payload FROM events WHERE kind = ? AND ts >= ? ORDER BY seq ASC`, HeavyProgressKind, loop.startedAt)
+	if err != nil {
+		if !strings.Contains(err.Error(), "no such table") {
+			return nil, readFailure(err)
+		}
+	} else {
+		activeProofs := map[string]activeRestartBlocker{}
+		for rows.Next() {
+			var trunkID string
+			var ts int64
+			var payload []byte
+			if err := rows.Scan(&trunkID, &ts, &payload); err != nil {
+				rows.Close()
+				return nil, readFailure(err)
+			}
+			var fact HeavyProgressFact
+			if err := json.Unmarshal(payload, &fact); err != nil {
+				continue
+			}
+			if trunkID == "" {
+				trunkID = "main"
+			}
+			switch fact.Phase {
+			case "started":
+				name := "trunk proof"
+				if fact.TipSHA != "" {
+					name = fmt.Sprintf("trunk proof at %s", shortSHA(fact.TipSHA))
+				}
+				activeProofs[trunkID] = activeRestartBlocker{name: name, startedAt: time.UnixMilli(ts).UTC()}
+			case "ended":
+				delete(activeProofs, trunkID)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, readFailure(err)
+		}
+		rows.Close()
+		for _, proof := range activeProofs {
+			blockers = append(blockers, proof)
+		}
+	}
+	sort.Slice(blockers, func(i, j int) bool {
+		if !blockers[i].startedAt.Equal(blockers[j].startedAt) {
+			return blockers[i].startedAt.Before(blockers[j].startedAt)
+		}
+		return blockers[i].name < blockers[j].name
+	})
+	return blockers, nil
+}
+
+func joinRestartBlockerNames(blockers []activeRestartBlocker) string {
+	names := make([]string, len(blockers))
+	for i, b := range blockers {
+		names[i] = b.name
+	}
+	return strings.Join(names, ", ")
+}
+
+// staleLoopBuild compares the loop session's start with the mtime of the
 // executable serving why. This is the installed build the operator invoked;
 // resolving it again through the launcher could itself build a different one.
-func staleLoopBuildAlarm(loop *liveLoopSession) *alarms.Alarm {
+// While the loop waits behind a gate or proof that was already running when the
+// new build was installed, why reports a status line instead of an alarm; if a
+// gate or proof started after the install is running, the alarm stands and names it.
+func staleLoopBuild(r *store.Reader, loop *liveLoopSession, works map[string]*pendingWork) (*alarms.Alarm, string, error) {
 	if loop == nil {
-		return nil
+		return nil, "", nil
 	}
 	here, err := currentLoopOwner()
 	if err != nil || loop.owner.Domain != here.Domain || loop.owner.UID != here.UID {
-		return nil // The recorded PID does not identify a process we can inspect here.
+		return nil, "", nil // The recorded PID does not identify a process we can inspect here.
 	}
 	started := time.UnixMilli(loop.startedAt).UTC()
 	installed, err := os.Stat("/proc/self/exe")
 	if err != nil || !installed.ModTime().After(started) {
-		return nil
+		return nil, "", nil
 	}
 	image, err := os.Stat(fmt.Sprintf("/proc/%d/exe", loop.owner.PID))
 	if err != nil || os.SameFile(image, installed) {
-		return nil // A changed timestamp alone does not make the running build stale.
+		return nil, "", nil // A changed timestamp alone does not make the running build stale.
 	}
 	if dead, err := ownerDead(&loop.owner, here); err != nil || dead {
-		return nil // Recheck identity after reading the process's executable.
+		return nil, "", nil // Recheck identity after reading the process's executable.
 	}
-	builtAt := installed.ModTime().UTC().Format(time.RFC3339Nano)
+	installedAt := installed.ModTime().UTC()
+	builtAt := installedAt.Format(time.RFC3339Nano)
+	blockers, err := activeRestartBlockers(r, loop, works)
+	if err != nil {
+		return nil, "", err
+	}
+	var starving, waiting []activeRestartBlocker
+	for _, b := range blockers {
+		if b.startedAt.After(installedAt) {
+			starving = append(starving, b)
+		} else {
+			waiting = append(waiting, b)
+		}
+	}
+	if len(starving) > 0 {
+		return &alarms.Alarm{
+			Kind: "stale-loop-build", Backend: "drain", Since: builtAt,
+			Cause:   fmt.Sprintf("loop started at %s; installed tillr-drain was built at %s; restart starved by %s", started.Format(time.RFC3339Nano), builtAt, joinRestartBlockerNames(starving)),
+			Clears:  "the running loop uses the installed build",
+			Command: "no automatic restart",
+		}, "", nil
+	}
+	if len(waiting) > 0 {
+		line := fmt.Sprintf("loop restart: waiting for %s (loop started at %s; installed tillr-drain was built at %s)", joinRestartBlockerNames(waiting), started.Format(time.RFC3339Nano), builtAt)
+		return nil, line, nil
+	}
 	return &alarms.Alarm{
 		Kind: "stale-loop-build", Backend: "drain", Since: builtAt,
 		Cause:   fmt.Sprintf("loop started at %s; installed tillr-drain was built at %s", started.Format(time.RFC3339Nano), builtAt),
 		Clears:  "the running loop uses the installed build",
 		Command: "no automatic restart",
-	}
+	}, "", nil
 }
 
 // LiveLoopLanes returns the lane set recorded by a currently live loop session for
