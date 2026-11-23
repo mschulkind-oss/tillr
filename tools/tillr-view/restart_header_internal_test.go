@@ -35,7 +35,8 @@ func TestSnapshotCarriesTheLatestRestartAnswerOfEachRole(t *testing.T) {
 func TestHeaderShowsTheLiveLoopsPublishedBuild(t *testing.T) {
 	h := newServeHarness(t)
 	h.exec(`CREATE TABLE IF NOT EXISTS drain_sessions(session_id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, refreshed_at INTEGER NOT NULL, next_pass_at INTEGER NOT NULL, ended_at INTEGER)`)
-	now := time.Now()
+	now := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	h.setNow(now)
 	h.exec(`INSERT INTO drain_sessions VALUES ('live', 1, ` + fmt.Sprint(now.UnixMilli()) + `, ` + fmt.Sprint(now.Add(time.Hour).UnixMilli()) + `, NULL)`)
 	h.exec(`INSERT INTO events(ts,kind,object_type,object_id,payload) VALUES
  (1000,'drain.build-started','build','drain-1','{"role":"drain","revision":"live-revision","digest":"live-digest","executable":"/live","pid":1,"at":"2026-11-17T00:00:00Z"}')`)

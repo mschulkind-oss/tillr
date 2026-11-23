@@ -290,7 +290,9 @@ func TestWaitingAndSnapshotSurfaceRepeatedStopAndRunProcessesLive(t *testing.T) 
 		t.Fatalf("snapshot drain_summary.repeated_stop = %v", drainSummary["repeated_stop"])
 	}
 
-	nowMS := time.Now().UnixMilli()
+	at := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	h.setNow(at)
+	nowMS := at.UnixMilli()
 	h.exec(fmt.Sprintf(`CREATE TABLE IF NOT EXISTS drain_sessions(session_id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, refreshed_at INTEGER NOT NULL, next_pass_at INTEGER NOT NULL, ended_at INTEGER);
 		INSERT INTO drain_sessions(session_id, started_at, refreshed_at, next_pass_at, ended_at) VALUES('sess-active', %d, %d, %d, NULL)`,
 		nowMS-2000, nowMS, nowMS+60000))

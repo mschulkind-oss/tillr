@@ -49,7 +49,9 @@ func TestLegacyStopKeepsItsRecordedCause(t *testing.T) {
 func TestHeartbeatAgeOverridesAFutureDeadline(t *testing.T) {
 	h := newServeHarness(t)
 	h.exec(`CREATE TABLE drain_sessions(session_id TEXT PRIMARY KEY, started_at INTEGER NOT NULL, refreshed_at INTEGER NOT NULL, next_pass_at INTEGER NOT NULL, ended_at INTEGER)`)
-	now := time.Now().UnixMilli()
+	at := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	h.setNow(at)
+	now := at.UnixMilli()
 	h.exec(`INSERT INTO drain_sessions VALUES ('old', ?, ?, ?, NULL)`, now-60000, now-2001, now+60000)
 	_, env, body := h.get("/api/v1/snapshot")
 	if env["data"].(map[string]any)["drain_summary"].(map[string]any)["active"] != false {

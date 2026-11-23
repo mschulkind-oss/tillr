@@ -240,7 +240,7 @@ func (s *server) lanesPayload(r *store.Reader, req *http.Request) (any, *apiFail
 		return nil, fail
 	}
 	shared := answer.([]laneRow)
-	now := time.Now()
+	now := s.clock()
 	rows := make([]laneRow, len(shared))
 	copy(rows, shared)
 	for i := range rows {
@@ -259,7 +259,7 @@ func withLogAge(action laneAction, runID string, grew *int64, now time.Time) lan
 }
 
 func (s *server) lanesBuild(r *store.Reader, req *http.Request, named string, stats *laneReadStats) ([]laneRow, *apiFailure) {
-	rows, err := assembleLanesCounted(r, s.storePath, s.obs.loopDir, s.obs.laneRoot, time.Now(), stats)
+	rows, err := assembleLanesCounted(r, s.storePath, s.obs.loopDir, s.obs.laneRoot, s.clock(), stats)
 	if err != nil {
 		return nil, failure(codeStoreUnreadable, "lanes could not read the store: %v", err)
 	}

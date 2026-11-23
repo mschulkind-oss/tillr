@@ -102,7 +102,9 @@ func seedDeadSession(t *testing.T, h *serveHarness, sessionID string, owner pres
 
 func TestDeadForeignFreshRunFilteredBeforeReap(t *testing.T) {
 	h := newServeHarness(t)
-	now := time.Now().UnixMilli()
+	at := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	h.setNow(at)
+	now := at.UnixMilli()
 	foreign := foreignOwnerForTest(t, true)
 
 	h.exec(`DELETE FROM lanes; DELETE FROM runs;`)
@@ -184,7 +186,9 @@ func TestDeadForeignFreshRunFilteredBeforeReap(t *testing.T) {
 
 func TestDeadResumedRunFilteredBeforeAndAfterReap(t *testing.T) {
 	h := newServeHarness(t)
-	now := time.Now().UnixMilli()
+	at := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	h.setNow(at)
+	now := at.UnixMilli()
 	foreign := foreignOwnerForTest(t, true)
 
 	h.exec(`DELETE FROM lanes; DELETE FROM runs;`)
@@ -241,7 +245,9 @@ func TestDeadResumedRunFilteredBeforeAndAfterReap(t *testing.T) {
 
 func TestDeadWorkflowNodeNotRunning(t *testing.T) {
 	h := newServeHarness(t)
-	now := time.Now().UnixMilli()
+	at := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	h.setNow(at)
+	now := at.UnixMilli()
 	foreign := foreignOwnerForTest(t, true)
 
 	h.exec(`DELETE FROM lanes; DELETE FROM runs;`)
@@ -307,7 +313,9 @@ func TestDeadWorkflowNodeNotRunning(t *testing.T) {
 
 func TestLiveForeignRunWithOpenStreamAndPresenceRemainsLive(t *testing.T) {
 	h := newServeHarness(t)
-	now := time.Now().UnixMilli()
+	at := time.Date(2026, 11, 22, 12, 0, 0, 0, time.UTC)
+	h.setNow(at)
+	now := at.UnixMilli()
 	foreign := foreignOwnerForTest(t, false)
 
 	identity, err := presence.StoreIdentity(h.store)

@@ -129,6 +129,9 @@ type server struct {
 	// The shared answers (shared.go): one build per store change for the routes whose answer
 	// costs a second or more, and the push summary's git reads beside the snapshot's.
 	snapshotShare, lanesShare, passesShare, pushShare sharedAnswers
+	// now is the clock request handlers read; it defaults to time.Now and tests pin it
+	// so seeded sessions and deadlines do not age out when the host is slow.
+	now func() time.Time
 }
 
 // openWebAssets answers the front end to serve: an explicit `--web-dist` directory wins,
@@ -313,7 +316,8 @@ func resolveTraceBin(root, named string) string {
 // operator who started the face by hand still reads which condition they named.
 func newServer(ctx context.Context, storePath, loopDir, laneRoot, traceBin, root, vantageBase string, questionsCmd []string) *server {
 	srv := &server{storePath: storePath, root: root, vantageBase: vantageBase, questionsCmd: questionsCmd,
-		checkout: &checkoutWatch{root: root, git: runGit, now: time.Now}, vantage: newVantageCache(root, questionsCmd)}
+		checkout: &checkoutWatch{root: root, git: runGit, now: time.Now}, vantage: newVantageCache(root, questionsCmd),
+		now: time.Now}
 	srv.openStore(ctx)
 	if srv.problem != nil {
 		fmt.Fprintf(os.Stderr, "tillr-view serve: %s; every API route answers %d %s\n",
@@ -333,6 +337,13 @@ func newServer(ctx context.Context, storePath, loopDir, laneRoot, traceBin, root
 	}
 	srv.obs = &observations{loopDir: loopDir, laneRoot: laneRoot, trace: newTraceReader(traceBin, storePath, loopDir)}
 	return srv
+}
+
+func (s *server) clock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
 }
 
 // currentBuild is the build stamp with its comparison against the served checkout.
@@ -942,7 +953,7 @@ type snapshotShared struct {
 // clock is added to a copy of it for each request: the sources (a stat), the quota alarms
 // (the clock and the policy file) and the push summary (git refs, shared apart).
 func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
-	now := time.Now().UTC()
+	now := s.clock().UTC()
 	if req != nil {
 		if rawNow := req.URL.Query().Get("now"); rawNow != "" {
 			parsed, err := time.Parse(time.RFC3339, rawNow)
@@ -954,7 +965,7 @@ func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiF
 	}
 	// Whether the loop is live is clock-derived (the heartbeat's age), so it is read per
 	// request and is part of the key: the board is rebuilt when the loop goes quiet.
-	session, active, sessionNote, err := readLoopSession(r, time.Now())
+	session, active, sessionNote, err := readLoopSession(r, now)
 	if err != nil {
 		return nil, unreadable(err)
 	}
@@ -1788,7 +1799,7 @@ func (s *server) runPayload(r *store.Reader, req *http.Request) (any, *apiFailur
 		return nil, unreadable(err)
 	}
 	out.Stages = s.stages(r, run)
-	out.Timing = computeRunTiming(run, out.Usage, s.obs.laneRoot, s.obs.loopDir, time.Now().UnixMilli())
+	out.Timing = computeRunTiming(run, out.Usage, s.obs.laneRoot, s.obs.loopDir, s.clock().UnixMilli())
 	if out.Schedule, err = readRunSchedule(r, run, s.obs.loopDir); err != nil {
 		return nil, unreadable(err)
 	}
