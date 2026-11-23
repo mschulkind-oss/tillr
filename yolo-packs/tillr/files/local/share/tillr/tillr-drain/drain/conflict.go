@@ -240,7 +240,8 @@ func (l *Loop) conflictFix(ctx context.Context, candidate Candidate, landed Land
 	l.reportf("loop: %s conflicted on %s; staging conflict-fix run %s with %d path(s)\n",
 		candidate.ItemID, shortSHA(mainSHA), fixRunID, len(spec.Conflict.Paths))
 	// The fix keeps the candidate's id plus its suffix, but it is its own attempt.
-	// Count the preceding run rows, including a failover of the original candidate.
+	// Allocate the next attempt ordinal the same way the planner does, rather than
+	// counting run rows across multi-node workflow attempts.
 	attempt, err := l.nextItemAttempt(ctx, candidate.ItemID)
 	if err != nil {
 		return "", false, err
@@ -276,22 +277,46 @@ func conflictWorkerReason(worker *WorkerSession, req *run.Request, lane string) 
 	return workerSessionReason(worker, req)
 }
 
-// nextItemAttempt counts stored runs rather than parsing a run id: legacy ids and
-// conflict-fix suffixes are both valid history and each row consumes one ordinal.
+// nextItemAttempt allocates the next attempt ordinal using the planner's attempt inputs
+// rather than counting run rows: a workflow attempt with parallel nodes records multiple
+// runs under one attempt, while legacy non-workflow runs without -a<N> IDs still consume
+// one ordinal per run row.
 func (l *Loop) nextItemAttempt(ctx context.Context, itemID string) (int, error) {
 	s, err := store.OpenRead(ctx, l.cfg.Store)
 	if err != nil {
 		return 0, readFailure(err)
 	}
 	defer s.Close()
-	var count int
+	var next int
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
-		return r.QueryRow(`SELECT COUNT(*) FROM runs WHERE item_id = ?`, itemID).Scan(&count)
+		var hasNodes bool
+		if err := r.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='node_runs')`).Scan(&hasNodes); err != nil {
+			return readFailure(err)
+		}
+		_, byRun, err := readPendingHistory(r)
+		if err != nil {
+			return err
+		}
+		n, count, err := readAttemptInputs(r, hasNodes, itemID, nil, byRun)
+		if err != nil {
+			return err
+		}
+		if count == 0 {
+			ids, err := readRunIDs(r, itemID)
+			if err != nil {
+				return readFailure(err)
+			}
+			if len(ids)+1 > n {
+				n = len(ids) + 1
+			}
+		}
+		next = n
+		return nil
 	})
 	if err != nil {
-		return 0, readFailure(err)
+		return 0, err
 	}
-	return count + 1, nil
+	return next, nil
 }
 
 // recordConflict appends the `drain.refusal` that says the candidate hit a squash conflict,
