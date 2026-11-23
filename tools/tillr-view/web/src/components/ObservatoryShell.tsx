@@ -52,7 +52,7 @@ export function ObservatoryShell({ children, hash, snapshot, snapshotError, pass
         <button type="button" onClick={onRefresh}>Refresh</button>
       </header>
       {snapshotError && !snapshotMismatch ? <p role="alert">Snapshot refused: {snapshotError.message}</p> : null}
-      <LoopSummary drain={snapshot?.data.drain_summary} snapshot={snapshot?.data} passes={passes} error={summaryError} now={clock} />
+      <LoopSummary drain={snapshot?.data.drain_summary} readError={snapshotMismatch ? null : snapshotError} snapshot={snapshot?.data} passes={passes} error={summaryError} now={clock} />
     </div>
     {children}
   </Glossary>;

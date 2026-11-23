@@ -283,7 +283,8 @@ export function useRefreshAll(): { refresh: () => void; refreshing: boolean } {
   const client = useQueryClient();
   return {
     refresh: () => {
-      void client.invalidateQueries();
+      // A refresh does not cancel a read already running: it is that refresh.
+      void client.invalidateQueries(undefined, { cancelRefetch: false });
     },
     refreshing: client.isFetching() > 0,
   };
