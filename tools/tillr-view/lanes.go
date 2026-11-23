@@ -220,17 +220,51 @@ func readLaneRows(ctx context.Context, path, loop, lanes string, now time.Time) 
 	return rows, err
 }
 
+// lanesPayload answers the lane strip and the lane page. The rows are built once per store
+// change and shared (shared.go), keyed by the lane whose run history the request names
+// (`?history=<lane id>`) and by every lane log and record file the build read. The one
+// clock-derived field, "log grew N ago", is recomputed per request on a copy of the rows.
 func (s *server) lanesPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
-	stats := &laneReadStats{}
-	start := time.Now()
+	named := req.URL.Query().Get("history")
+	answer, fail := s.lanesShare.get(req.Context(), r, "history="+named, nil, func() shareBuild {
+		stats := &laneReadStats{}
+		start := time.Now()
+		rows, fail := s.lanesBuild(r, req, named, stats)
+		phase(req.Context(), "lane_logs", map[string]any{"ms": msSince(time.Now, start), "files": stats.files, "bytes": stats.bytes})
+		if fail != nil {
+			return shareBuild{failure: fail}
+		}
+		return shareBuild{value: rows, deps: stats.deps}
+	})
+	if fail != nil {
+		return nil, fail
+	}
+	shared := answer.([]laneRow)
+	now := time.Now()
+	rows := make([]laneRow, len(shared))
+	copy(rows, shared)
+	for i := range rows {
+		rows[i].LatestAction = withLogAge(rows[i].LatestAction, rows[i].RunID, rows[i].LogGrewAtMS, now)
+	}
+	return rows, nil
+}
+
+// withLogAge is the age sentence buildLaneRowsCounted writes for a lane whose stream log is
+// the only action it has, spelled for the clock now.
+func withLogAge(action laneAction, runID string, grew *int64, now time.Time) laneAction {
+	if runID != "" && action.Kind == "liveness" && grew != nil {
+		action.Text = "log grew " + laneAge(now.UnixMilli()-*grew) + " ago"
+	}
+	return action
+}
+
+func (s *server) lanesBuild(r *store.Reader, req *http.Request, named string, stats *laneReadStats) ([]laneRow, *apiFailure) {
 	rows, err := assembleLanesCounted(r, s.storePath, s.obs.loopDir, s.obs.laneRoot, time.Now(), stats)
-	phase(req.Context(), "lane_logs", map[string]any{"ms": msSince(time.Now, start), "files": stats.files, "bytes": stats.bytes})
 	if err != nil {
 		return nil, failure(codeStoreUnreadable, "lanes could not read the store: %v", err)
 	}
-	// Run history is the lane page's table, so only the lane that page names carries it
-	// (`?history=<lane id>`); the home strip's list would pay for every lane's.
-	named := req.URL.Query().Get("history")
+	// Run history is the lane page's table, so only the lane that page names carries it;
+	// the home strip's list would pay for every lane's.
 	for i := range rows {
 		if rows[i].LaneID != named {
 			rows[i].History = nil
@@ -260,6 +294,15 @@ func (s *server) lanesPayload(r *store.Reader, req *http.Request) (any, *apiFail
 type laneReadStats struct {
 	files int
 	bytes int64
+	// deps is every file the answer was read from, as it was when it was read (shared.go):
+	// the lanes answer is reused only while each is unchanged.
+	deps []fileDep
+}
+
+func (s *laneReadStats) dep(d fileDep) {
+	if s != nil {
+		s.deps = append(s.deps, d)
+	}
 }
 
 func (s *laneReadStats) add(n int) {
@@ -523,9 +566,10 @@ func laneAge(ms int64) string {
 // partial first line and an unfinished last line; neither is an adapter record yet.
 const laneTailBytes int64 = 256 * 1024
 
-func laneTail(path string) ([]byte, *int64, error) {
+func laneTail(path string, stats *laneReadStats) ([]byte, *int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
+		stats.dep(fileDep{path: path})
 		return nil, nil, err
 	}
 	defer f.Close()
@@ -533,6 +577,7 @@ func laneTail(path string) ([]byte, *int64, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	stats.dep(depOf(path, info))
 	start := info.Size() - laneTailBytes
 	if start < 0 {
 		start = 0
@@ -564,8 +609,21 @@ func lastFinishedLaneStep(path string) (string, *int64) {
 	return lastFinishedLaneStepCounted(path, nil)
 }
 
+type lastStepResult struct {
+	step string
+	at   *int64
+}
+
 func lastFinishedLaneStepCounted(path string, stats *laneReadStats) (string, *int64) {
-	raw, _, err := laneTail(path)
+	r := memoLaneFile("step", path, "", stats, func() lastStepResult {
+		step, at := lastFinishedLaneStepRead(path, stats)
+		return lastStepResult{step, at}
+	})
+	return r.step, r.at
+}
+
+func lastFinishedLaneStepRead(path string, stats *laneReadStats) (string, *int64) {
+	raw, _, err := laneTail(path, stats)
 	stats.add(len(raw))
 	if err != nil {
 		return "", nil
@@ -584,12 +642,29 @@ func readLaneAction(path, backend string) (laneAction, string, *int64) {
 	return readLaneActionCounted(path, backend, nil)
 }
 
+type laneActionResult struct {
+	action laneAction
+	note   string
+	grew   *int64
+}
+
 func readLaneActionCounted(path, backend string, stats *laneReadStats) (laneAction, string, *int64) {
+	if path == "" {
+		return readLaneActionRead(path, backend, stats)
+	}
+	r := memoLaneFile("action", path, backend, stats, func() laneActionResult {
+		a, n, g := readLaneActionRead(path, backend, stats)
+		return laneActionResult{a, n, g}
+	})
+	return r.action, r.note, r.grew
+}
+
+func readLaneActionRead(path, backend string, stats *laneReadStats) (laneAction, string, *int64) {
 	missing := laneAction{Kind: "unrecorded", Clock: stateNoneClock}
 	if path == "" {
 		return missing, "no lane root is configured, so this run's stream log has no path to read", nil
 	}
-	raw, mtime, err := laneTail(path)
+	raw, mtime, err := laneTail(path, stats)
 	stats.add(len(raw))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {

@@ -124,6 +124,9 @@ type server struct {
 	// the planner share (vantagecache.go).
 	vantage *vantageCache
 	why     whyCache
+	// The shared answers (shared.go): one build per store change for the routes whose answer
+	// costs a second or more, and the push summary's git reads beside the snapshot's.
+	snapshotShare, lanesShare, passesShare, pushShare sharedAnswers
 }
 
 // openWebAssets answers the front end to serve: an explicit `--web-dist` directory wins,
@@ -369,14 +372,14 @@ func (s *server) close() {
 // route is a GET: this face has no write path to expose.
 func (s *server) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/snapshot", s.get(s.snapshotPayload))
+	mux.HandleFunc("GET /api/v1/snapshot", arrival(s.get(s.snapshotPayload)))
 	mux.HandleFunc("POST /api/v1/items/{id}/place", s.placeHandler)
 	mux.HandleFunc("POST /api/v1/ideas", s.ideaHandler)
 	mux.HandleFunc("GET /api/v1/why", s.vantage.prefetch(s.getOutsideTx(s.whyPayload)))
 	mux.HandleFunc("GET /api/v1/waiting", s.vantage.prefetch(s.get(s.waitingPayload)))
-	mux.HandleFunc("GET /api/v1/passes", s.get(s.passesPayload))
+	mux.HandleFunc("GET /api/v1/passes", arrival(s.get(s.passesPayload)))
 	mux.HandleFunc("GET /api/v1/landings", s.get(s.landingsPayload))
-	mux.HandleFunc("GET /api/v1/lanes", s.get(s.lanesPayload))
+	mux.HandleFunc("GET /api/v1/lanes", arrival(s.get(s.lanesPayload)))
 	mux.HandleFunc("GET /api/v1/landings/{id}", s.get(s.landingsPayload))
 	mux.HandleFunc("GET /api/v1/perf/checks", s.get(s.performanceChecksPayload))
 	mux.HandleFunc("GET /api/v1/perf/items", s.get(s.performanceItemsPayload))
@@ -907,9 +910,18 @@ func liveRuns(lanes []storeLane, known []storeRun, allocations map[string]alloca
 	return out
 }
 
-// snapshotPayload is the initial screen load: the whole board as one moment.
+// snapshotShared is what the snapshot's build keeps between requests: the board as of one
+// store stamp, and the clock-independent alarms the quota alarms are added to.
+type snapshotShared struct {
+	data   snapshotData
+	alarms *alarms.Stored
+}
+
+// snapshotPayload is the initial screen load: the whole board as one moment. The board is
+// built once per store change and shared (shared.go); what depends on the request or on the
+// clock is added to a copy of it for each request: the sources (a stat), the quota alarms
+// (the clock and the policy file) and the push summary (git refs, shared apart).
 func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiFailure) {
-	out := snapshotData{Sources: s.sources()}
 	now := time.Now().UTC()
 	if req != nil {
 		if rawNow := req.URL.Query().Get("now"); rawNow != "" {
@@ -920,11 +932,53 @@ func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiF
 			now = parsed.UTC()
 		}
 	}
-	alarms, err := readAlarms(r, s.root, s.policyRef, now)
+	// Whether the loop is live is clock-derived (the heartbeat's age), so it is read per
+	// request and is part of the key: the board is rebuilt when the loop goes quiet.
+	session, active, sessionNote, err := readLoopSession(r, time.Now())
 	if err != nil {
 		return nil, unreadable(err)
 	}
-	out.Alarms = alarms
+	key := fmt.Sprintf("active=%t note=%q", active, sessionNote)
+	answer, fail := s.snapshotShare.get(req.Context(), r, key, func() string { return loopResultsStamp(s.obs.loopDir) }, func() shareBuild {
+		built, fail := s.snapshotBuild(r, req, session, active, sessionNote)
+		if fail != nil {
+			return shareBuild{failure: fail}
+		}
+		return shareBuild{value: built}
+	})
+	if fail != nil {
+		return nil, fail
+	}
+	built := answer.(*snapshotShared)
+	out := built.data
+	out.Sources = s.sources()
+	policy, err := alarms.ReadPolicy(s.root, s.policyRef)
+	if err != nil {
+		return nil, unreadable(err)
+	}
+	if out.Alarms, err = built.alarms.At(r, now, policy); err != nil {
+		return nil, unreadable(err)
+	}
+	pushed, fail := s.pushShare.get(req.Context(), r, "push", nil, func() shareBuild {
+		// The git reads belong to the answer, not to the request that happened to build it.
+		ctx := context.WithoutCancel(req.Context())
+		summary := readPushSummary(ctx, r, s.root)
+		deps, ok := pushRefDeps(s.root, summary)
+		return shareBuild{value: summary, deps: deps, uncached: !ok}
+	})
+	if fail != nil {
+		return nil, fail
+	}
+	out.Push = pushed.(*pushSummary)
+	return out, nil
+}
+
+func (s *server) snapshotBuild(r *store.Reader, req *http.Request, session *loopSession, active bool, sessionNote string) (*snapshotShared, *apiFailure) {
+	out := snapshotData{}
+	stored, err := alarms.ReadStored(r)
+	if err != nil {
+		return nil, unreadable(err)
+	}
 	ideas, err := ideaIDs(r)
 	if err != nil {
 		return nil, unreadable(err)
@@ -1103,10 +1157,6 @@ func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiF
 	stopReason, stopNote, loopBuild, buildNote := loopResult.Stop, loopResult.Note, loopResult.Build, loopResult.BuildNote
 	stop := loopResult.Explanation
 	tickCount, _ := countTicks(r)
-	session, active, sessionNote, err := readLoopSession(r, time.Now())
-	if err != nil {
-		return nil, unreadable(err)
-	}
 	// A live loop's running build is what it published when it started or adopted a
 	// restart; the terminal result names only the last loop that stopped.
 	if active {
@@ -1118,7 +1168,6 @@ func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiF
 			buildNote = ""
 		}
 	}
-	out.Push = readPushSummary(req.Context(), r, s.root)
 	out.Drain = drainSummary{
 		UnreportedRuns:      unreported,
 		CostUnreportedRuns:  costUnreported,
@@ -1179,7 +1228,7 @@ func (s *server) snapshotPayload(r *store.Reader, req *http.Request) (any, *apiF
 	for _, run := range runs[start:] {
 		out.RecentRuns = append(out.RecentRuns, summarizeRun(run))
 	}
-	return out, nil
+	return &snapshotShared{data: out, alarms: stored}, nil
 }
 
 // unreadable answers a store read that failed for a reason other than a missing subject:
