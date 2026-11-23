@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
@@ -243,4 +245,163 @@ func TestIdleHeldCandidateFromOlderLoopReleasesBeforePlanning(t *testing.T) {
 	}
 	// The original fence survives lane reuse in durable pending state.
 	writeForkFile(t, filepath.Join(l.laneDirPath(c.LaneID), FenceFile), "sibling-only.txt\n")
+}
+
+// Reproduces the 2026-11-23 04:34 lane-1 hold: a finished candidate in the current
+// loop's own domain could not release lane-1 because an earlier finished run on the
+// same lane from another PID namespace of the same boot had an oversized run_id
+// (>255 bytes) whose stream path returned ENAMETOOLONG from os.Open.
+func TestHeldCandidateReleasesLaneDespiteForeignENAMETOOLONGHistoryRun(t *testing.T) {
+	f, l, c := heldCandidateFixture(t)
+	l.cfg.Steps = streamSteps{&recordingSteps{}, f.root}
+	// The candidate's own run finished and left closed stream files in .tillr/loop/.
+	runStreams(t, f, c.RunID)
+
+	here, err := currentLoopOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	boot, _, _ := strings.Cut(here.Domain, ":")
+	foreignOwner := *here
+	foreignOwner.Domain = boot + ":pid:[1]"
+	foreignOwner.PID = 3789886
+
+	oldRunID := "run-item-old-a3-n1-" + strings.Repeat("failover-", 26) + "restart"
+	if len(oldRunID) <= 255 {
+		t.Fatalf("oldRunID len = %d, want > 255", len(oldRunID))
+	}
+	oldWork := pendingWork{
+		Owner: &foreignOwner,
+		Decision: Decision{
+			ItemID: "item-old",
+			LaneID: c.LaneID,
+			RunRequest: &run.Request{
+				RunID:   oldRunID,
+				ItemID:  "item-old",
+				LaneID:  c.LaneID,
+				Backend: "fixture",
+			},
+		},
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`INSERT INTO items(item_id,title,state,updated_at,seat) VALUES('item-old','item-old','landed',0,'')`); err != nil {
+			return err
+		}
+		if err := appendEffect(tx, dispatchStartedKind, oldRunID, oldWork, l.cfg.Now().Add(-time.Hour)); err != nil {
+			return err
+		}
+		rec := run.Record{
+			RunID:        oldRunID,
+			ItemID:       "item-old",
+			LaneID:       c.LaneID,
+			Backend:      "fixture",
+			State:        run.StateTimedOut,
+			EndCause:     "lease-reclaimed",
+			StartedAt:    l.cfg.Now().Add(-time.Hour).Format(time.RFC3339),
+			FinishedAt:   l.cfg.Now().Add(-55 * time.Minute).Format(time.RFC3339),
+			ArtifactRefs: []run.ArtifactRef{},
+		}
+		if err := applyTerminal(tx, rec); err != nil {
+			return err
+		}
+		if err := appendEffect(tx, loopOrphanedKind, oldRunID, orphanedRunEffect{}, l.cfg.Now().Add(-55*time.Minute)); err != nil {
+			return err
+		}
+		return appendEffect(tx, examinationDoneKind, oldRunID, struct{}{}, l.cfg.Now().Add(-50*time.Minute))
+	})
+
+	w := &pendingWork{Decision: mustPlan(t, l)[0].decision, Candidate: &c}
+	if err := l.holdItemFault(context.Background(), c, StopGateHarnessError, "gate failed"); err != nil {
+		t.Fatal(err)
+	}
+	released, err := l.releaseHeldCandidate(context.Background(), w, "gate-failed")
+	if err != nil || !released {
+		t.Fatalf("finished candidate kept lane despite ENAMETOOLONG foreign history run: released=%v err=%v", released, err)
+	}
+	s := openFixture(t, f.storePath)
+	defer s.Close()
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		states, err := PendingLaneStates(r)
+		if err != nil {
+			return err
+		}
+		if got := states[c.ItemID]; got.Status != "released" {
+			t.Fatalf("lane state = %+v, want released", got)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustPlan(t, l)[1].decision; got.Action != ActionDispatch || got.LaneID != c.LaneID {
+		t.Fatalf("released lane not offered to waiting item: %+v", got)
+	}
+}
+
+// A run that is genuinely live in another process domain (its stream file is still
+// open for writing) must still keep the lane.
+func TestHeldCandidateKeepsLaneWhenForeignRunStreamIsOpenForWriting(t *testing.T) {
+	f, l, c := heldCandidateFixture(t)
+	l.cfg.Steps = streamSteps{&recordingSteps{}, f.root}
+
+	here, err := currentLoopOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	boot, _, _ := strings.Cut(here.Domain, ":")
+	foreignOwner := *here
+	foreignOwner.Domain = boot + ":pid:[1]"
+	foreignOwner.PID = 8300
+
+	foreignRunID := "run-item-foreign-live-a1"
+	foreignWork := pendingWork{
+		Owner: &foreignOwner,
+		Decision: Decision{
+			ItemID: "item-foreign",
+			LaneID: c.LaneID,
+			RunRequest: &run.Request{
+				RunID:   foreignRunID,
+				ItemID:  "item-foreign",
+				LaneID:  c.LaneID,
+				Backend: "fixture",
+			},
+		},
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`INSERT INTO items(item_id,title,state,updated_at,seat) VALUES('item-foreign','item-foreign','landed',0,'')`); err != nil {
+			return err
+		}
+		if err := appendEffect(tx, dispatchStartedKind, foreignRunID, foreignWork, l.cfg.Now().Add(-time.Minute)); err != nil {
+			return err
+		}
+		return appendEffect(tx, examinationDoneKind, foreignRunID, struct{}{}, l.cfg.Now().Add(-30*time.Second))
+	})
+	paths := runStreams(t, f, foreignRunID)
+	writer, err := os.OpenFile(paths[1], os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+
+	w := &pendingWork{Decision: mustPlan(t, l)[0].decision, Candidate: &c}
+	released, err := l.releaseHeldCandidate(context.Background(), w, "gate-failed")
+	if err != nil || released {
+		t.Fatalf("lane released while foreign run stream is open for writing: released=%v err=%v", released, err)
+	}
+	if got := runGit(t, c.Worktree, "rev-parse", "HEAD"); got != c.HeadSHA {
+		t.Fatalf("kept lane changed to %s, want %s", got, c.HeadSHA)
+	}
+	s := openFixture(t, f.storePath)
+	defer s.Close()
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		states, err := PendingLaneStates(r)
+		if err != nil {
+			return err
+		}
+		if got := states[c.ItemID]; got.Status != "kept" || got.Reason != "lane may have a live run in another process domain" {
+			t.Fatalf("lane state = %+v, want kept with foreign-domain reason", got)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 }

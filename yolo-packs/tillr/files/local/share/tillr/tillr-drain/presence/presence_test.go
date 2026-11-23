@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,6 +122,27 @@ func TestForeignOwnerGoneAndForeignRunLiveAcrossReboot(t *testing.T) {
 	}
 	if !ForeignRunLive(nil, false, here.Domain+"-other", here.Domain) {
 		t.Fatal("ForeignRunLive returned false on same boot without locator")
+	}
+}
+
+func TestOpenForWritingTreatsENAMETOOLONGAsAbsent(t *testing.T) {
+	here, err := CurrentOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	boot, _, _ := cutDomain(here.Domain)
+	otherDomain := boot + ":pid:[1]"
+	oversizedRunID := "run-item-" + strings.Repeat("failover-", 28) + "restart"
+	if len(oversizedRunID) <= 255 {
+		t.Fatalf("oversizedRunID len = %d, want > 255", len(oversizedRunID))
+	}
+	path := filepath.Join(t.TempDir(), oversizedRunID, "run.record.json")
+	state, err := OpenForWriting(path)
+	if err != nil || state != StreamAbsent {
+		t.Fatalf("OpenForWriting(ENAMETOOLONG) = (%v, %v), want (%v, nil)", state, err, StreamAbsent)
+	}
+	if ForeignRunLive([]string{path}, true, otherDomain, here.Domain) {
+		t.Fatal("ForeignRunLive returned true for a stream path that cannot exist (ENAMETOOLONG)")
 	}
 }
 
