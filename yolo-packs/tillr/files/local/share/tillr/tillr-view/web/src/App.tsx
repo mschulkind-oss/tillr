@@ -3,6 +3,7 @@ import { lazy, Suspense, useEffect, useState } from "react";
 import { DesignsPage } from "./components/Designers";
 import { LanePage } from "./components/LanePage";
 import { Home } from "./components/Home";
+import { RunsPage } from "./components/RunsPage";
 import { ItemsView, PassesView } from "./components/ItemsPasses";
 import { ItemPage, RunPage } from "./components/ItemRunPages";
 import { PerformanceView, CheckView } from "./components/PerformanceView";
@@ -39,6 +40,7 @@ export function App() {
   const params = new URLSearchParams(hash.split("?")[1]);
   const home = !hash || path === "#/", items = path === "#/items", passesOpen = path === "#/passes", questionsOpen = path === "#/questions";
   const designsOpen = path === "#/designs" || path.startsWith("#/design/");
+  const runsOpen = path === "#/runs";
   const itemOpen = path.startsWith("#/item/"), runOpen = path.startsWith("#/run/");
   const kind = path.split("/")[1]; let id = path.split("/").slice(2).join("/");
   try { id = decodeURIComponent(id); } catch { /* The refusal retains the malformed id. */ }
@@ -58,7 +60,7 @@ export function App() {
   const passHistory = usePassHistoryQuery(range, historyPages, passesOpen, paused);
   const waiting = useWaitingQuery(home || items || path === "#/graph", paused), questions = useQuestionsQuery(questionsOpen, paused);
   const designs = useDesignsQuery(designsOpen, paused);
-  const lanes = useLanesQuery(home || kind === "lane", paused, kind === "lane", kind === "lane" ? id : undefined);
+  const lanes = useLanesQuery(home || runsOpen || kind === "lane", paused, kind === "lane", kind === "lane" ? id : undefined);
   const trunk = useTrunkRoute();
   const { refresh } = useRefreshAll();
   const onPause = () => { setPaused(!paused); if (paused) refresh(); };
@@ -66,6 +68,7 @@ export function App() {
   if (snapshot.error) screen = <main className="home"><RefusalState code={refusalCode(snapshot.error)} message={snapshot.error.message} onRetry={refresh} /></main>;
   else if (home) screen = <Home lanes={lanes.data?.data} lanesError={lanes.error} snapshot={snapshot.data?.data} waiting={waiting.data?.data} waitingError={waiting.error} passes={passes.data?.data} passesError={passes.error} />;
   else if (kind === "lane" && id) screen = <LanePage key={id} id={id} lanes={lanes.data?.data} error={lanes.error} live={live} paused={paused} />;
+  else if (runsOpen) screen = <RunsPage lanes={lanes.data?.data} lanesError={lanes.error} items={snapshot.data?.data.items} />;
   else if (designsOpen) screen = <DesignsPage data={designs.data?.data} error={designs.error} pending={designs.isPending} onRetry={() => void designs.refetch()} path={kind === "design" ? id : undefined} />;
   else if (items) screen = <ItemsView waiting={waiting.data?.data} snapshot={snapshot.data?.data} error={waiting.error ?? snapshot.error} writesEnabled={snapshot.data?.snapshot.writes_enabled === true} onMoved={() => Promise.all([waiting.refetch(), snapshot.refetch()])} />;
   else if (path === "#/graph") screen = <Suspense fallback={<main className="entity-page"><h1>Dependency graph</h1><p>Loading graph…</p></main>}><DependencyGraph items={snapshot.data?.data.items} waiting={waiting.data?.data} selected={params.get("item") ?? undefined} error={waiting.error} /></Suspense>;
