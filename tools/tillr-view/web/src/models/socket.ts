@@ -181,13 +181,16 @@ export function useObservatorySocket(
         // The pause outranks the frame: the store may have moved, and the operator asked
         // to keep reading what they were reading.
         if (paused.current) return;
-        // Only a frame that names a run's log or subtree is lane activity. A `snapshot` frame
-        // refetches the snapshot alone: /lanes and /why poll on their own, and invalidating
-        // an in-flight query cancels and restarts it, so a busy drain's frames would keep
-        // the 10 s and 28 s reads from ever finishing.
+        // Only a frame that names a run's log or subtree is lane activity: a `snapshot`
+        // frame does not refetch /lanes, which polls on its own.
         if (frame.changed.some(name => name.startsWith("runlog:") || name.startsWith("runs:"))) {
           refreshLanes();
         }
+        // The Items order and the waiting rows come from /why, so a `snapshot` frame still
+        // refreshes it, but without cancelRefetch: invalidating an in-flight query cancels
+        // and restarts it by default, so a busy drain's frames would keep the slow read from
+        // ever finishing. With it off, a read already running is the refresh.
+        if (frame.changed.includes("snapshot")) void client.invalidateQueries({ queryKey: queryKeys.waiting() }, { cancelRefetch: false });
         for (const name of frame.changed) {
           const key = invalidationKey(name);
           if (key !== null) void client.invalidateQueries({ queryKey: key });
