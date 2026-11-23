@@ -38,4 +38,3 @@ func TestRunScheduleFindsEveryEventNamingTheRun(t *testing.T) {
 		}
 	}
 }
-
