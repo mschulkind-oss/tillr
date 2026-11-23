@@ -52,7 +52,7 @@ func readWorkerRecordsForRuns(r *store.Reader, runs map[string]bool) ([]progress
 		marks = append(marks, "?")
 		args = append(args, id)
 	}
-	rows, err := r.Query(`SELECT kind,payload FROM events WHERE object_type='run' AND object_id IN (`+strings.Join(marks, ",")+`) AND kind IN ('run.progress','run.child-session','run.children-recorded','run.observation-error') ORDER BY seq`, args...)
+	rows, err := r.Query(`SELECT kind,payload FROM events WHERE object_type='run' AND object_id IN (`+strings.Join(marks, ",")+`) AND +kind IN ('run.progress','run.child-session','run.children-recorded','run.observation-error') ORDER BY seq`, args...)
 	if err != nil {
 		return nil, nil, err
 	}
