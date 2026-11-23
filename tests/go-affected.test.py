@@ -113,7 +113,11 @@ for _ in range(100):
     if not stat_path.exists():
         print("reaped-while-running")
         sys.exit(0)
-    raw = stat_path.read_text(encoding="utf-8", errors="replace")
+    try:
+        raw = stat_path.read_text(encoding="utf-8", errors="replace")
+    except (ProcessLookupError, FileNotFoundError):
+        print("reaped-while-running")
+        sys.exit(0)
     state = raw[raw.rfind(")") + 2:].split()[0]
     if state != "Z":
         time.sleep(0.01)
