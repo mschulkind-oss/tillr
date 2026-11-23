@@ -975,7 +975,7 @@ export interface DocData {
 /** What `GET /api/v1/why` says about the Vantage index its questions came from. "refreshing"
  * means an index older than the documents was used while a rebuild runs, or after one failed. */
 export interface DocumentIndexStatus {
-  state: "current" | "refreshing" | "unavailable";
+  state: "current" | "refreshing" | "failed" | "unavailable";
   age_ms?: number;
   refresh_error?: string;
   message?: string;
