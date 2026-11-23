@@ -1221,14 +1221,35 @@ func (l *Loop) refreshDocuments(ctx context.Context, result *LoopResult) (string
 
 // The pass's question source is loop-owned and pinned to its synced SHA.
 func (l *Loop) resetPassQuestions(ctx context.Context) {
-	l.questions = newSavedQuestions(l.cfg.Root, l.syncedSHA, l.cfg.QuestionsCmd, ctx)
+	q := newSavedQuestions(l.cfg.Root, l.syncedSHA, l.cfg.QuestionsCmd, ctx)
+	l.mu.Lock()
+	l.questions = q
+	l.mu.Unlock()
 }
 
 func (l *Loop) designerQuestions(ctx context.Context) QuestionSource {
-	if l.questions == nil {
+	l.mu.Lock()
+	q := l.questions
+	l.mu.Unlock()
+	if q == nil {
 		l.resetPassQuestions(ctx)
+		l.mu.Lock()
+		q = l.questions
+		l.mu.Unlock()
 	}
-	return l.questions
+	return q
+}
+
+// concurrentQuestions returns a QuestionSource safe for background examination
+// goroutines, reusing the loop's mutex-guarded saved question index when present.
+func (l *Loop) concurrentQuestions(ctx context.Context) QuestionSource {
+	l.mu.Lock()
+	q := l.questions
+	l.mu.Unlock()
+	if saved, ok := q.(*savedVantageQuestions); ok {
+		return saved
+	}
+	return &VantageQuestions{Root: l.cfg.Root, Command: l.cfg.QuestionsCmd, Context: ctx}
 }
 
 // syncDocuments reports one summary line and each finding and frozen definition
@@ -2902,6 +2923,15 @@ func (l *Loop) Verify(ctx context.Context, candidate Candidate, result *LoopResu
 func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResult, timing *PassTiming) (string, bool, error) {
 	candidate := *prepared
 	defer func() { *prepared = candidate }()
+	endPreGate := timeHandoffPhase(ctx, "verify_pre_gate")
+	preGateEnded := false
+	finishPreGate := func() {
+		if !preGateEnded {
+			preGateEnded = true
+			endPreGate()
+		}
+	}
+	defer finishPreGate()
 	if err := l.checkItemTerminal(ctx, candidate.ItemID, "gate"); err != nil {
 		return "", false, err
 	}
@@ -3204,6 +3234,7 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 	l.mu.Unlock()
 	candidate.gateCount = l.gateCount
 	candidate.deferGateJudgment = IsTrunkFixer(candidate.ItemID)
+	finishPreGate()
 	endGate := timeHandoffPhase(ctx, "candidate_gate")
 	var gate GateOutcome
 	var stalledGateCount int
@@ -3243,6 +3274,15 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		l.gatesInFlight--
 		l.mu.Unlock()
 	}
+	endPostGate := timeHandoffPhase(ctx, "post_gate")
+	postGateEnded := false
+	finishPostGate := func() {
+		if !postGateEnded {
+			postGateEnded = true
+			endPostGate()
+		}
+	}
+	defer finishPostGate()
 	l.sweepDisabledMarkers(ctx)
 	if err != nil {
 		var judgmentErr *gateJudgmentRecordError
@@ -3381,6 +3421,7 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		// candidate to a free lane and lands it directly without re-gating.
 		return "", false, errCandidateLaneReleased
 	}
+	finishPostGate()
 	return l.landCandidate(ctx, candidate, result, timing)
 }
 
@@ -3415,6 +3456,15 @@ func (l *Loop) candidateInItsLane(ctx context.Context, candidate Candidate) erro
 // landCandidate retries a retained, already-gated tree without another run or gate.
 // Land still validates the verdict's tree binding and recomputes the squash.
 func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *LoopResult, timing *PassTiming) (string, bool, error) {
+	endPreLand := timeHandoffPhase(ctx, "pre_land")
+	preLandEnded := false
+	finishPreLand := func() {
+		if !preLandEnded {
+			preLandEnded = true
+			endPreLand()
+		}
+	}
+	defer finishPreLand()
 	ctx, unlock, lockErr := l.lockRestartSettlement(ctx)
 	if lockErr != nil {
 		return "", false, lockErr
@@ -3488,9 +3538,19 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 		return l.landRemoteSync(ctx, candidate, result)
 	}
 	landStart := time.Now()
+	finishPreLand()
 	endLand := timeHandoffPhase(ctx, "land")
 	landed, err := l.landWithActions(ctx, candidate)
 	endLand()
+	endPostLand := timeHandoffPhase(ctx, "post_land")
+	postLandEnded := false
+	finishPostLand := func() {
+		if !postLandEnded {
+			postLandEnded = true
+			endPostLand()
+		}
+	}
+	defer finishPostLand()
 	if err == nil {
 		l.mu.Lock()
 		if hold, ok := landed.LockObservation.holdNS(); ok {
@@ -3539,6 +3599,9 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 		// A conflict is not a refusal: the trunk moved and the candidate no longer squashes
 		// onto it. It is the one negative outcome the next run can resolve, so it becomes
 		// one bounded fix request instead of a failing verdict.
+		finishPostLand()
+		endConflict := timeHandoffPhase(ctx, "conflict_fix")
+		defer endConflict()
 		return l.conflictFix(ctx, candidate, landed, result, timing)
 	}
 	if landed.Result != LandLanded {

@@ -140,4 +140,30 @@ func TestWorkerEndStartsGateWithoutPassOrSiblingLanding(t *testing.T) {
 	if result.Landed != 2 {
 		t.Fatalf("expected both gated candidates to land: %+v", result)
 	}
+	timings := readHandoffTimings(t, f.root, d.RunRequest.RunID)
+	var exam *handoffTiming
+	for i := range timings {
+		if timings[i].Phase == "examination" {
+			exam = &timings[i]
+			break
+		}
+	}
+	if exam == nil {
+		t.Fatalf("missing examination timing for %s: %+v", d.RunRequest.RunID, timings)
+	}
+	assertExaminationAccounting(t, *exam, []string{
+		"restart_lock_wait",
+		"plan_worker_settlement",
+		"claim_worker_settlement",
+		"settle",
+		"claim_settled_judge",
+		"verify_pre_gate",
+		"candidate_gate",
+		"post_gate",
+		"pre_land",
+		"land",
+		"post_land",
+		"lane_cleanup",
+		"release_examination",
+	})
 }
