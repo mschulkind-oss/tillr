@@ -1999,6 +1999,142 @@ func TestSecond(t *testing.T) {
         )
         self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
+    def test_isolated_runs_bypass_block_git_shim_and_disable_auto_maintenance(self):
+        real_git = None
+        for entry in os.environ.get('PATH', '').split(os.pathsep):
+            if not entry:
+                continue
+            cand = Path(entry) / 'git'
+            if not (cand.is_file() and os.access(cand, os.X_OK)):
+                continue
+            if cand.parent.parts[-3:] == ('.yolo', 'bin', 'block'):
+                continue
+            try:
+                head = cand.read_bytes()[:256]
+            except OSError:
+                continue
+            if head.startswith(b'#!') and (b'_yg_tool=git' in head or b'# tillr-git-guard' in head):
+                continue
+            real_git = cand
+            break
+        self.assertIsNotNone(real_git)
+
+        shim_hits = self.root / 'shim-hits.log'
+        fake_block = self.root / '.yolo' / 'bin' / 'block'
+        fake_block.mkdir(parents=True)
+        fake_block_git = fake_block / 'git'
+        fake_block_git.write_text(
+            '#!/bin/sh\n'
+            "# A guard: runs the real git unless an argument names this workspace's .yolo.\n"
+            'if [ -z "$YOLO_BYPASS_SHIMS" ]; then\n'
+            '  _yg_tool=git\n'
+            f'  printf "block-hit\\n" >> "{shim_hits}"\n'
+            '  exit 97\n'
+            'fi\n'
+            f'exec "{real_git}" "$@"\n'
+        )
+        fake_block_git.chmod(0o755)
+
+        fake_guard_dir = self.root / 'git-guard'
+        fake_guard_dir.mkdir()
+        fake_guard_git = fake_guard_dir / 'git'
+        fake_guard_git.write_text(
+            '#!/bin/sh\n'
+            '# tillr-git-guard\n'
+            f'printf "guard-hit\\n" >> "{shim_hits}"\n'
+            'exit 98\n'
+        )
+        fake_guard_git.chmod(0o755)
+
+        fallback_env = shards._bypass_git_shim_env(
+            {'PATH': os.pathsep.join([str(fake_guard_dir), str(fake_block)])},
+            Path('/proc/unwritable-git-bin'),
+        )
+        self.assertEqual(fallback_env['YOLO_BYPASS_SHIMS'], '1')
+        self.assertNotIn(str(fake_guard_dir), fallback_env['PATH'].split(os.pathsep))
+
+        inherited_cfg = self.root / 'inherited.gitconfig'
+        inherited_text = (
+            '[user]\n'
+            '\tname = Shard Owner\n'
+            '\temail = shard@example.invalid\n'
+            '[maintenance]\n'
+            '\tauto = true\n'
+            '[gc]\n'
+            '\tauto = 6700\n'
+        )
+        inherited_cfg.write_text(inherited_text)
+
+        module = self.root / 'gitshim-mod'
+        module.mkdir()
+        (module / 'go.mod').write_text('module fixture\n\ngo 1.23\n')
+        (module / 'fixture_test.go').write_text(f'''package fixture
+import (
+\t"os"
+\t"os/exec"
+\t"strings"
+\t"testing"
+)
+func verifyGitEnv() string {{
+\tresolved, err := exec.LookPath("git")
+\tif err != nil {{ return err.Error() }}
+\tif resolved == "{fake_block_git}" || resolved == "{fake_guard_git}" {{
+\t\treturn "git resolved to shell shim: " + resolved
+\t}}
+\tfor _, check := range [][2]string{{
+\t\t{{"maintenance.auto", "false"}},
+\t\t{{"gc.auto", "0"}},
+\t\t{{"user.name", "Shard Owner"}},
+\t}} {{
+\t\tout, err := exec.Command("git", "config", "--global", "--get-all", check[0]).CombinedOutput()
+\t\tif err != nil {{ return check[0] + ": " + err.Error() + ": " + string(out) }}
+\t\tif got := strings.TrimSpace(string(out)); got != check[1] {{
+\t\t\treturn check[0] + "=" + got + " want " + check[1]
+\t\t}}
+\t}}
+\treturn ""
+}}
+func TestMain(m *testing.M) {{
+\tif problem := verifyGitEnv(); problem != "" {{
+\t\tos.Stderr.WriteString("TestMain: " + problem + "\\n")
+\t\tos.Exit(1)
+\t}}
+\tos.Exit(m.Run())
+}}
+func checkRepo(t *testing.T) {{
+\tif problem := verifyGitEnv(); problem != "" {{ t.Fatal(problem) }}
+\tdir := t.TempDir()
+\tif out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {{
+\t\tt.Fatalf("git init: %v: %s", err, out)
+\t}}
+\tif out, err := exec.Command("git", "-C", dir, "commit", "--allow-empty", "-qm", "ok").CombinedOutput(); err != nil {{
+\t\tt.Fatalf("git commit: %v: %s", err, out)
+\t}}
+}}
+func TestAlpha(t *testing.T) {{ checkRepo(t) }}
+func TestBeta(t *testing.T) {{ checkRepo(t) }}
+''')
+        durations = self.root / 'durations.json'
+        durations.write_text('{}')
+        events = self.root / 'events.jsonl'
+        shimmed_path = os.pathsep.join([str(fake_guard_dir), str(fake_block), os.environ.get('PATH', '')])
+        env = dict(os.environ, PATH=shimmed_path, GIT_CONFIG_GLOBAL=str(inherited_cfg))
+        env.pop('YOLO_BYPASS_SHIMS', None)
+        result = subprocess.run(
+            ['python3', str(RUNNER), str(module), '-k', '2',
+             '--durations', str(durations), '--events', str(events),
+             '--lock-dir', str(self.root / 'gitshim-locks')],
+            env=env, capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(shim_hits.exists(), shim_hits.read_text() if shim_hits.exists() else '')
+        self.assertEqual(inherited_cfg.read_text(), inherited_text)
+        passed = {
+            e['Test'] for e in map(json.loads, events.read_text().splitlines())
+            if e.get('Action') == 'pass' and e.get('Test')
+        }
+        self.assertEqual(passed, {'TestAlpha', 'TestBeta'})
+
 
 if __name__ == '__main__':
     unittest.main()
