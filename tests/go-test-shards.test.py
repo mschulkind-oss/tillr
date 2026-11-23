@@ -41,6 +41,7 @@ class RunnerTests(unittest.TestCase):
         pool = patch.dict(os.environ, {shards.LOCK_DIR_ENV: str(self.root / 'default-locks')})
         pool.start()
         self.addCleanup(pool.stop)
+        os.environ.pop(shards.SLOT_CLASS_ENV, None)
 
     def test_package_evidence_distinguishes_shards_from_go_result_cache(self):
         target = self.root / 'packages.json'
@@ -1833,6 +1834,37 @@ func TestSecond(t *testing.T) {
         self.assertEqual(by_label['proof-imm']['slot'], 'proof-0')
         self.assertEqual(by_label['proof-imm']['waited_ms'], 0)
         self.assertEqual(by_label['proof-waiter']['slot'], 'slot-0')
+
+    def test_caller_slot_class_is_cleared_before_each_test(self):
+        self.assertNotIn(shards.SLOT_CLASS_ENV, os.environ)
+        seen = []
+
+        class Probe(RunnerTests):
+            def runTest(self):
+                seen.append(shards.SLOT_CLASS_ENV in os.environ)
+                os.environ[shards.SLOT_CLASS_ENV] = shards.SLOT_CLASS_REPAIR
+
+        with patch.dict(os.environ, {shards.SLOT_CLASS_ENV: shards.SLOT_CLASS_REPAIR}):
+            for _ in range(2):
+                result = unittest.TestResult()
+                Probe('runTest').run(result)
+                self.assertEqual(result.errors, [])
+                self.assertEqual(result.failures, [])
+            self.assertEqual(os.environ.get(shards.SLOT_CLASS_ENV), shards.SLOT_CLASS_REPAIR)
+        self.assertEqual(seen, [False, False])
+
+        completed = subprocess.run(
+            [
+                shards.sys.executable,
+                str(Path(__file__).resolve()),
+                'RunnerTests.test_gate_queue_wait_is_excluded_from_watchdog_and_cli_max_slots_caps_concurrency',
+            ],
+            env=dict(os.environ, **{shards.SLOT_CLASS_ENV: shards.SLOT_CLASS_REPAIR}),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
 
 if __name__ == '__main__':
