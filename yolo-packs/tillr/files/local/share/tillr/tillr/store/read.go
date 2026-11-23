@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -192,7 +193,65 @@ func (r *Reader) EventsSelected(since int64, sel EventSelection) ([]event.Event,
 	if r.events != nil {
 		return r.events.readSelected(r.ctx, r.q, since, r.readValues != nil, &sel)
 	}
+	if r.readValues != nil {
+		return r.selectedOnce(since, sel)
+	}
 	return selectedEvents(r.ctx, r.q, since, sel)
+}
+
+type selectedKey struct {
+	since int64
+	key   string
+}
+
+// selectedOnce answers a selected read in a read-only snapshot, which cannot change, from
+// one read per key (a kind or an object type) after since: a second fold that selects a
+// kind the first already read does not read it again. The result is what selectedEvents
+// answers: the union of the keys' events in seq order, each once. Like ReadOnce, the
+// events are shared between callers and must not be mutated.
+func (r *Reader) selectedOnce(since int64, sel EventSelection) ([]event.Event, error) {
+	var parts [][]event.Event
+	total := 0
+	for _, kind := range sel.Kinds {
+		part, err := r.selectedKey(since, kindKey(kind), EventSelection{Kinds: []string{kind}})
+		if err != nil {
+			return nil, err
+		}
+		parts, total = append(parts, part), total+len(part)
+	}
+	for _, objectType := range sel.ObjectTypes {
+		part, err := r.selectedKey(since, objectTypeKey(objectType), EventSelection{ObjectTypes: []string{objectType}})
+		if err != nil {
+			return nil, err
+		}
+		parts, total = append(parts, part), total+len(part)
+	}
+	if len(parts) == 1 {
+		return parts[0][:len(parts[0]):len(parts[0])], nil
+	}
+	out := make([]event.Event, 0, total)
+	for _, part := range parts {
+		out = append(out, part...)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
+	// An event selected by two keys (its kind and its object type) appears once.
+	unique := out[:0]
+	for i, e := range out {
+		if i == 0 || e.Seq != out[i-1].Seq {
+			unique = append(unique, e)
+		}
+	}
+	return unique, nil
+}
+
+func (r *Reader) selectedKey(since int64, key string, sel EventSelection) ([]event.Event, error) {
+	value, err := r.ReadOnce(selectedKey{since, key}, func() (any, error) {
+		return selectedEvents(r.ctx, r.q, since, sel)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return value.([]event.Event), nil
 }
 
 // EventsOfKind is EventsSelected for the events of the named kinds.

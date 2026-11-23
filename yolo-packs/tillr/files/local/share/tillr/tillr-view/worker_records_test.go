@@ -22,6 +22,29 @@ func TestWorkerProgressInvalidatesLiveItem(t *testing.T) {
 	}
 }
 
+// A lane answer reads worker records for the runs its lanes show, not every run the store
+// has ever recorded: a live store holds over a million child-session events, and decoding
+// them all cost the lanes route ten seconds. A record of a run no lane shows is therefore
+// never read, which a payload that cannot be decoded proves.
+func TestLanesReadWorkerRecordsOnlyForLaneRuns(t *testing.T) {
+	h := newServeHarness(t)
+	h.exec(`INSERT INTO events(kind,object_type,object_id,payload,ts) VALUES ('run.child-session','run','run-no-lane','not json',1001)`)
+	status, _, raw := h.get("/api/v1/lanes")
+	if status != http.StatusOK {
+		t.Fatalf("a record of a run no lane shows was read: %d %s", status, raw)
+	}
+}
+
+func TestLanesStillCarryWorkerRecordsOfLaneRuns(t *testing.T) {
+	h := newServeHarness(t)
+	h.exec(`INSERT INTO events(kind,object_type,object_id,payload,ts) VALUES ('run.child-session','run','run-2','{"run_id":"run-2","session_id":"child-a","role":"reviewer"}',1001)`)
+	h.exec(`INSERT INTO events(kind,object_type,object_id,payload,ts) VALUES ('run.progress','run','run-2','{"run_id":"run-2","item_id":"item-seed-02","criterion_id":"c1"}',1002)`)
+	status, _, raw := h.get("/api/v1/lanes")
+	if status != http.StatusOK || !strings.Contains(string(raw), `"child-a"`) || !strings.Contains(string(raw), `"c1"`) {
+		t.Fatalf("lane run's worker records absent: %d %s", status, raw)
+	}
+}
+
 func TestWorkerRecordsClaimsAndChildTranscript(t *testing.T) {
 	h := newServeHarness(t)
 	h.exec(`INSERT INTO events(kind,object_type,object_id,payload,ts) VALUES ('run.progress','run','run-2','{"run_id":"run-2","item_id":"item-seed-02","criterion_id":"c1"}',1000)`)

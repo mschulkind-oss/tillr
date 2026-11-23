@@ -24,3 +24,11 @@ func SetEventCache(on bool) func() {
 	eventCacheEnabled.Store(on)
 	return func() { eventCacheEnabled.Store(previous) }
 }
+
+// SetSelectedEventCache turns the narrow selected-event cache on or off for stores opened
+// afterwards, and answers the function that restores the previous setting.
+func SetSelectedEventCache(on bool) func() {
+	previous := narrowCacheEnabled.Load()
+	narrowCacheEnabled.Store(on)
+	return func() { narrowCacheEnabled.Store(previous) }
+}

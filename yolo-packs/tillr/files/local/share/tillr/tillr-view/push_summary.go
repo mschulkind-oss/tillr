@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -114,4 +116,35 @@ func (p *pushSummary) text() string {
 		}
 	}
 	return line
+}
+
+// pushRefDeps names the files the summary's git reads depend on, as they are now, so the
+// summary can be shared until a ref moves: packed-refs and the three refs it resolves
+// (the published ref, refs/tillr/green and the main branch), each of which git stores
+// either as a loose file or in packed-refs. ok is false when the checkout's git directory
+// is not a plain directory (a linked worktree or a bare layout), where the refs cannot be
+// watched cheaply and the summary is read fresh instead.
+func pushRefDeps(root string, summary *pushSummary) (deps []fileDep, ok bool) {
+	if summary == nil || summary.What == "none" || root == "" || summary.Remote == "" || summary.Ref == "" {
+		// No git read happened, so the summary depends on the store alone.
+		return nil, true
+	}
+	gitDir := filepath.Join(root, ".git")
+	info, err := os.Stat(gitDir)
+	if err != nil || !info.IsDir() {
+		return nil, false
+	}
+	for _, p := range []string{
+		filepath.Join(gitDir, "packed-refs"),
+		filepath.Join(gitDir, "refs", "tillr", "published", summary.Remote, filepath.FromSlash(summary.Ref)),
+		filepath.Join(gitDir, "refs", "tillr", "green"),
+		filepath.Join(gitDir, "refs", "heads", "main"),
+	} {
+		if fi, err := os.Stat(p); err == nil {
+			deps = append(deps, depOf(p, fi))
+		} else {
+			deps = append(deps, fileDep{path: p})
+		}
+	}
+	return deps, true
 }

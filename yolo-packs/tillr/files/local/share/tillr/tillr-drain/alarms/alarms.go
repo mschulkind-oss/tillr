@@ -70,11 +70,27 @@ type Backend struct {
 }
 
 func Read(r *store.Reader, now time.Time, policy *Policy, current ...Hold) ([]Alarm, error) {
-	infra, err := infrastructure(r)
+	stored, err := ReadStored(r)
 	if err != nil {
 		return nil, err
 	}
-	windows, err := quotaAlarms(r, now, policy)
+	return stored.At(r, now, policy, current...)
+}
+
+// Stored is the part of Read's answer that is a function of the store's contents alone:
+// the infrastructure alarms, the store-roll alarm and the holds that attribute them. It
+// is the expensive part (the infrastructure query joins the event log), and it does not
+// change with the clock, so a caller that reads alarms repeatedly can keep one while the
+// store is unchanged and ask At for the clock-dependent quota alarms on each read.
+type Stored struct {
+	infra, rolls []Alarm
+	holds        []Hold
+	holdsErr     error
+}
+
+// ReadStored reads the clock-independent part of the alarms.
+func ReadStored(r *store.Reader) (*Stored, error) {
+	infra, err := infrastructure(r)
 	if err != nil {
 		return nil, err
 	}
@@ -82,15 +98,29 @@ func Read(r *store.Reader, now time.Time, policy *Policy, current ...Hold) ([]Al
 	if err != nil {
 		return nil, err
 	}
-	active := append(append(infra, windows...), rolls...)
-	if len(active) == 0 {
-		return active, nil
-	}
-	holds, err := readHolds(r)
+	s := &Stored{infra: infra, rolls: rolls}
+	// Read holds only for the cases Read read them in: when nothing is active before the
+	// quota alarms, At needs them only if a quota alarm appears, so the read is kept either
+	// way and its error is reported only when At needs the holds.
+	s.holds, s.holdsErr = readHolds(r)
+	return s, nil
+}
+
+// At is Read's answer for the clock now: the stored alarms plus the quota alarms the
+// policy and the clock make active. r answers the quota readings, which are cheap.
+func (s *Stored) At(r *store.Reader, now time.Time, policy *Policy, current ...Hold) ([]Alarm, error) {
+	windows, err := quotaAlarms(r, now, policy)
 	if err != nil {
 		return nil, err
 	}
-	return attribute(active, append(holds, current...)), nil
+	active := append(append(append([]Alarm(nil), s.infra...), windows...), s.rolls...)
+	if len(active) == 0 {
+		return active, nil
+	}
+	if s.holdsErr != nil {
+		return nil, s.holdsErr
+	}
+	return attribute(active, append(append([]Hold(nil), s.holds...), current...)), nil
 }
 
 // The saved closes bit is the measured availability fact, not an inference from

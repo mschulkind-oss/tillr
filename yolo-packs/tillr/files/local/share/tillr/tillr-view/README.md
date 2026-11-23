@@ -334,6 +334,12 @@ Inside the checkout, `just observatory` is the same command. Both recipes run
   platform runs it, because a host and a container share it.
 - **The URL** is `http://127.0.0.1:<port>`, printed at startup. For `observatory-dev`, that
   port is Vite's UI, and the API one above it answers JSON only.
+- **What reloads in `observatory-dev`:** the UI through Vite, and the API through `air`
+  (`tools/tillr-view/.air.toml`, pinned in `mise.toml`). A change to the Go that tillr-view is
+  built from (this directory and the local modules its `go.mod` replaces, so commits landing on
+  the checkout count) triggers one rebuild per burst of changes, and a build that succeeds
+  replaces the API on the same port. A failed build prints its error in the dev terminal and
+  the old API keeps answering. `just observatory` is one process and does not reload.
 
 ### Reaching it from the host when it runs in a jail
 

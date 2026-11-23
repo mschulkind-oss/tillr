@@ -228,9 +228,15 @@ func readRunSchedule(r *store.Reader, run storeRun, loopDir string) ([]scheduleE
 	gateVerdictSeen := false
 	gateWaitMS, spanFailed := summarizeGateSpanWaits(r, runID)
 
-	rows, err := r.Query(`SELECT seq, ts, kind, COALESCE(object_type, ''), COALESCE(object_id, ''), payload FROM events
- WHERE object_id = ?
-    OR (json_valid(payload) AND (
+	// The events on the run's own object come through events_by_object. The events that name
+	// it from a payload field are found by decoding payloads, so that arm reads the kinds on
+	// either side of run.child-session through events_by_kind: a store holds a child-session
+	// event for every sample of every child ever run, over nine in ten of its rows, and none
+	// of them names a run in these fields but its own, which the first arm already has.
+	rows, err := r.Query(`SELECT seq, ts, kind, COALESCE(object_type, ''), COALESCE(object_id, ''), payload FROM events WHERE object_id = ?
+ UNION
+ SELECT seq, ts, kind, COALESCE(object_type, ''), COALESCE(object_id, ''), payload FROM events
+ WHERE (kind < 'run.child-session' OR kind > 'run.child-session') AND json_valid(payload) AND (
           json_extract(payload, '$.run_id') = ?
        OR json_extract(payload, '$.worker_session.run_id') = ?
        OR json_extract(payload, '$.writer_run_id') = ?
@@ -240,7 +246,7 @@ func readRunSchedule(r *store.Reader, run storeRun, loopDir string) ([]scheduleE
        OR json_extract(payload, '$.fix_run_id') = ?
        OR json_extract(payload, '$.design_run_id') = ?
        OR json_extract(payload, '$.decision.run_request.run_id') = ?
-    ))
+    )
  ORDER BY seq`, runID, runID, runID, runID, runID, runID, runID, runID, runID, runID)
 	if isMissingColumn(err) {
 		rows, err = r.Query(`SELECT seq, ts, kind, '', COALESCE(object_id, ''), payload FROM events

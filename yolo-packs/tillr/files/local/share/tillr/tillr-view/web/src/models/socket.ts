@@ -5,6 +5,7 @@
 // does not cache is ignored rather than swallowed into a full refetch.
 
 import { useQueryClient } from "@tanstack/react-query";
+import type { InvalidateQueryFilters, QueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
 import { queryKeys } from "./queries";
@@ -35,6 +36,11 @@ export const RECONNECT_STABLE_MS = 1_000;
  * strip shows a lane's latest action in words; two seconds is below what a reader can tell
  * apart, and the last frame in a burst is never lost — it is answered when the gap ends. */
 export const LANES_REFRESH_MIN_MS = 2_000;
+
+/** The query roots whose hooks poll on their own interval whether or not the socket is up
+ * (queries.ts: lanes, waiting, passes, designs, questions). The socket's connect-time
+ * refresh skips them. */
+const POLLED_ROOTS: ReadonlySet<string> = new Set(["lanes", "waiting", "passes", "designs", "questions"]);
 
 /** The reconnect delay after `attempt` consecutive failures, counted from zero. */
 export function reconnectDelay(attempt: number): number {
@@ -108,6 +114,37 @@ export interface ObservatorySocketState {
 
 /** Subscribes the query cache to `/api/v1/ws`. Call it once, at the root: it owns one
  * socket for the screen's lifetime and invalidates the keys the existing hooks read. */
+/** Every invalidation the live channel makes leaves a read already running alone. By default
+ * an invalidated in-flight query is cancelled and restarted, so under a busy drain each
+ * frame aborted the 2 s snapshot read before it finished (58 of 78 reads, owner's HAR,
+ * 2026-11-22). A read in flight started after the change the frame names is not stale in
+ * any way a restart would fix; it is the refresh. */
+const NO_CANCEL = { cancelRefetch: false } as const;
+
+/** Refresh the matching queries without cancelling a read in flight. A read already running
+ * may have started before the change the frame names, so it cannot be the whole answer: each
+ * one in flight gets one more read when it settles. That is at most one extra read per
+ * running one, however many frames arrive meanwhile, so a busy drain's frames cost one
+ * trailing read rather than a restart per frame that never lets any finish. */
+const trailing = new WeakMap<QueryClient, Set<string>>();
+function refresh(client: QueryClient, filters: InvalidateQueryFilters): void {
+  const cache = client.getQueryCache();
+  const pending = trailing.get(client) ?? new Set<string>();
+  trailing.set(client, pending);
+  for (const query of cache.findAll({ ...filters, fetchStatus: "fetching" })) {
+    if (pending.has(query.queryHash)) continue;
+    pending.add(query.queryHash);
+    const unsubscribe = cache.subscribe(event => {
+      if (event.query !== query || event.type !== "updated") return;
+      if (event.action.type !== "success" && event.action.type !== "error") return;
+      unsubscribe();
+      pending.delete(query.queryHash);
+      void client.invalidateQueries({ queryKey: query.queryKey, exact: true }, NO_CANCEL);
+    });
+  }
+  void client.invalidateQueries(filters, NO_CANCEL);
+}
+
 export function useObservatorySocket(
   options: ObservatorySocketOptions = {},
 ): ObservatorySocketState {
@@ -137,7 +174,7 @@ export function useObservatorySocket(
       const wait = lanesAt + LANES_REFRESH_MIN_MS - now();
       if (wait <= 0) {
         lanesAt = now();
-        void client.invalidateQueries({ queryKey: queryKeys.lanes() });
+        void refresh(client, { queryKey: queryKeys.lanes() });
         return;
       }
       if (lanesTimer !== null) return;
@@ -145,7 +182,7 @@ export function useObservatorySocket(
         lanesTimer = null;
         if (stopped || paused.current) return;
         lanesAt = now();
-        void client.invalidateQueries({ queryKey: queryKeys.lanes() });
+        void refresh(client, { queryKey: queryKeys.lanes() });
       }, wait);
     };
 
@@ -162,7 +199,10 @@ export function useObservatorySocket(
         // changed in between is in neither the cache nor a frame: one read on connect
         // closes that window, and it is the only unconditional one — unless the operator
         // has paused, in which case the screen they paused is the screen they keep.
-        if (!paused.current) void client.invalidateQueries();
+        // The reads that poll on their own clock (lanes, waiting, passes, designs,
+        // questions) are not re-read here: they were fetched with this page and refetch
+        // themselves, and re-reading the slow ones (/why) on connect only restarts them.
+        if (!paused.current) void refresh(client, { predicate: query => !POLLED_ROOTS.has(String(query.queryKey[0])) });
       };
       opened.onmessage = (event: MessageEvent) => {
         const frame = parseFrame(event.data);
@@ -173,13 +213,19 @@ export function useObservatorySocket(
         // The pause outranks the frame: the store may have moved, and the operator asked
         // to keep reading what they were reading.
         if (paused.current) return;
-        if (frame.changed.some(name => name === "snapshot" || name.startsWith("runlog:") || name.startsWith("runs:"))) {
+        // Only a frame that names a run's log or subtree is lane activity: a `snapshot`
+        // frame does not refetch /lanes, which polls on its own.
+        if (frame.changed.some(name => name.startsWith("runlog:") || name.startsWith("runs:"))) {
           refreshLanes();
         }
-        if (frame.changed.includes("snapshot")) void client.invalidateQueries({ queryKey: queryKeys.waiting() });
+        // The Items order and the waiting rows come from /why, so a `snapshot` frame still
+        // refreshes it, but without cancelRefetch: invalidating an in-flight query cancels
+        // and restarts it by default, so a busy drain's frames would keep the slow read from
+        // ever finishing. With it off, a read already running is the refresh.
+        if (frame.changed.includes("snapshot")) void refresh(client, { queryKey: queryKeys.waiting() });
         for (const name of frame.changed) {
           const key = invalidationKey(name);
-          if (key !== null) void client.invalidateQueries({ queryKey: key });
+          if (key !== null) void refresh(client, { queryKey: key });
         }
       };
       opened.onclose = () => {

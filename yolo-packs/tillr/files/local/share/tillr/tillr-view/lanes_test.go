@@ -10,6 +10,47 @@ import (
 	"time"
 )
 
+// A lane's run history is the lane page's table and nobody else's: on a live store it was
+// 983 KB of a 1.36 MB lanes answer, sent to the home page's strip that never reads it. The
+// list carries no history; `?history=<lane id>` carries that one lane's.
+func TestLanesRouteCarriesHistoryOnlyForTheNamedLane(t *testing.T) {
+	h := newServeHarness(t)
+	historyOf := func(path string) map[string]int {
+		status, _, raw := h.get(path)
+		if status != 200 {
+			t.Fatalf("%s: %d %s", path, status, raw)
+		}
+		var answer struct {
+			Data []struct {
+				LaneID  string           `json:"lane_id"`
+				History []map[string]any `json:"history"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(raw, &answer); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]int{}
+		for _, row := range answer.Data {
+			out[row.LaneID] = len(row.History)
+		}
+		return out
+	}
+	for lane, n := range historyOf("/api/v1/lanes") {
+		if n != 0 {
+			t.Fatalf("the lanes list carried %d history runs for %s", n, lane)
+		}
+	}
+	named := historyOf("/api/v1/lanes?history=lane-a")
+	if named["lane-a"] == 0 {
+		t.Fatalf("?history=lane-a carried no history for lane-a: %v", named)
+	}
+	for lane, n := range named {
+		if lane != "lane-a" && n != 0 {
+			t.Fatalf("?history=lane-a carried %d runs for %s", n, lane)
+		}
+	}
+}
+
 func TestLaneRowsRecords(t *testing.T) {
 	now := time.UnixMilli(600000)
 	root := t.TempDir()

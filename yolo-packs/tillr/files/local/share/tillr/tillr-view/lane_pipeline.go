@@ -26,7 +26,19 @@ type laneHistoryRun struct {
 // Both observations of an invocation share its step and start clock. A repeated
 // invocation replaces the previous one; a partial final line is not an observation.
 func readLanePipeline(path string, stats *laneReadStats) ([]pipelineStep, string) {
-	raw, _, err := laneTail(path)
+	type result struct {
+		steps []pipelineStep
+		note  string
+	}
+	r := memoLaneFile("pipeline", path, "", stats, func() result {
+		steps, note := readLanePipelineFile(path, stats)
+		return result{steps, note}
+	})
+	return r.steps, r.note
+}
+
+func readLanePipelineFile(path string, stats *laneReadStats) ([]pipelineStep, string) {
+	raw, _, err := laneTail(path, stats)
 	if os.IsNotExist(err) {
 		return nil, "pipeline timing was not recorded"
 	}

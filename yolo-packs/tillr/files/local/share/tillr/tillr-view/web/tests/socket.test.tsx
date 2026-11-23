@@ -2,7 +2,7 @@
 // QueryClient, so every case asserts what the cache was asked to do — the one thing the
 // hook exists for — rather than that a listener was attached.
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, QueryObserver } from "@tanstack/react-query";
 import { act, cleanup, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
@@ -108,7 +108,10 @@ describe("the live channel invalidates the cache the panels already read", () =>
     // The one unconditional read: the screen was fetched over HTTP before this socket
     // existed, so the connect closes that window.
     expect(invalidate).toHaveBeenCalledTimes(1);
-    expect(invalidate).toHaveBeenLastCalledWith();
+    const connect = invalidate.mock.calls[0][0] as { predicate: (q: { queryKey: readonly unknown[] }) => boolean };
+    // ... but not the reads that poll on their own: /why and /lanes are the slow ones.
+    for (const root of ["lanes", "waiting", "passes", "designs", "questions"]) expect(connect.predicate({ queryKey: [root] })).toBe(false);
+    for (const root of ["snapshot", "items", "runs", "landings"]) expect(connect.predicate({ queryKey: [root] })).toBe(true);
 
     socket.deliver({
       type: "snapshot.invalidated",
@@ -116,11 +119,56 @@ describe("the live channel invalidates the cache the panels already read", () =>
       changed: ["items:item-seed-02", "runs:run-item-seed-02", "snapshot"],
     });
     expect(invalidate).toHaveBeenCalledTimes(6);
-    expect(invalidate).toHaveBeenNthCalledWith(2, { queryKey: ["lanes"] });
-    expect(invalidate).toHaveBeenNthCalledWith(3, { queryKey: ["waiting"] });
-    expect(invalidate).toHaveBeenNthCalledWith(4, { queryKey: ["items", "item-seed-02"] });
-    expect(invalidate).toHaveBeenNthCalledWith(5, { queryKey: ["runs", "run-item-seed-02"] });
-    expect(invalidate).toHaveBeenNthCalledWith(6, { queryKey: ["snapshot"] });
+    expect(invalidate).toHaveBeenNthCalledWith(2, { queryKey: ["lanes"] }, { cancelRefetch: false });
+    expect(invalidate).toHaveBeenNthCalledWith(3, { queryKey: ["waiting"] }, { cancelRefetch: false });
+    expect(invalidate).toHaveBeenNthCalledWith(4, { queryKey: ["items", "item-seed-02"] }, { cancelRefetch: false });
+    expect(invalidate).toHaveBeenNthCalledWith(5, { queryKey: ["runs", "run-item-seed-02"] }, { cancelRefetch: false });
+    expect(invalidate).toHaveBeenNthCalledWith(6, { queryKey: ["snapshot"] }, { cancelRefetch: false });
+  });
+
+  // 2026-11-22, the owner's HAR: 58 of 78 /snapshot reads ended net::ERR_ABORTED because each
+  // frame cancelled the 2 s read in flight and started it again, so under a busy drain most
+  // never finished. A read already running is the refresh.
+  test("no frame and no connect cancels a read in flight", async () => {
+    const client = new QueryClient();
+    const signals: AbortSignal[] = [];
+    const keys = [["snapshot"], ["lanes"], ["items", "item-seed-02"], ["runs", "run-item-seed-02"], ["waiting"]];
+    for (const queryKey of keys) {
+      // Data in the cache is what makes a restart cancel the read: a first read is never cancelled.
+      client.setQueryData(queryKey, 0);
+      // An observer makes the query active, as a mounted panel does; only active queries refetch.
+      new QueryObserver(client, { queryKey, queryFn: ({ signal }) => { signals.push(signal); return new Promise(() => {}); } }).subscribe(() => {});
+    }
+    render(<QueryClientProvider client={client}><Probe url={PROBE_URL} /></QueryClientProvider>);
+    const socket = FakeSocket.opened[0];
+    socket.accept();
+    socket.deliver({ type: "snapshot.invalidated", event_head_seq: 51, changed: ["items:item-seed-02", "runs:run-item-seed-02", "snapshot"] });
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+    expect(signals).toHaveLength(keys.length);
+    expect(signals.filter(signal => signal.aborted)).toEqual([]);
+  });
+
+  test("frames during a read in flight cost one trailing read, not one per frame", async () => {
+    const client = new QueryClient();
+    const finish: Array<() => void> = [];
+    let reads = 0;
+    new QueryObserver(client, { queryKey: ["snapshot"], queryFn: () => { reads += 1; return new Promise<number>(resolve => finish.push(() => resolve(reads))); } }).subscribe(() => {});
+    render(<QueryClientProvider client={client}><Probe url={PROBE_URL} /></QueryClientProvider>);
+    const socket = FakeSocket.opened[0];
+    socket.accept();
+    for (const seq of [52, 53, 54]) socket.deliver({ type: "snapshot.invalidated", event_head_seq: seq, changed: ["snapshot"] });
+    expect(reads).toBe(1);
+    await act(async () => { finish[0](); await new Promise(resolve => setTimeout(resolve, 20)); });
+    expect(reads).toBe(2);
+  });
+
+  test("a snapshot frame refreshes the snapshot and /why without restarting a read in flight, never /lanes", () => {
+    const { invalidate } = renderProbe();
+    const socket = FakeSocket.opened[0];
+    socket.accept();
+    invalidate.mockClear();
+    socket.deliver({ type: "snapshot.invalidated", event_head_seq: 50, changed: ["snapshot"] });
+    expect(invalidate.mock.calls).toEqual([[{ queryKey: ["waiting"] }, { cancelRefetch: false }], [{ queryKey: ["snapshot"] }, { cancelRefetch: false }]]);
   });
 
   test("log growth also refreshes the Home lane strip", () => {
@@ -129,8 +177,8 @@ describe("the live channel invalidates the cache the panels already read", () =>
     socket.accept();
     invalidate.mockClear();
     socket.deliver({ type: "snapshot.invalidated", event_head_seq: 50, changed: ["runlog:run-1"] });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.lanes() });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.run("run-1") });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.lanes() }, { cancelRefetch: false });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: queryKeys.run("run-1") }, { cancelRefetch: false });
   });
 
   test("a burst of log growth refreshes the lane strip once per gap, and never drops the last", () => {
@@ -157,7 +205,7 @@ describe("the live channel invalidates the cache the panels already read", () =>
       expect(lanes()).toBe(2);
       // A frame after the gap is answered at once again.
       clock = 5_100;
-      socket.deliver({ type: "snapshot.invalidated", event_head_seq: 51, changed: ["snapshot"] });
+      socket.deliver({ type: "snapshot.invalidated", event_head_seq: 51, changed: ["runs:run-1"] });
       expect(lanes()).toBe(3);
     } finally {
       vi.useRealTimers();
@@ -186,7 +234,7 @@ describe("the live channel invalidates the cache the panels already read", () =>
     // mean: a client that dropped the socket on one bad frame would go dark on a version
     // skew.
     socket.deliver({ type: "snapshot.invalidated", event_head_seq: 51, changed: ["snapshot"] });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["snapshot"] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["snapshot"] }, { cancelRefetch: false });
   });
 
   test("a dropped socket reconnects instead of leaving the screen frozen", async () => {

@@ -45,7 +45,7 @@ func postPlace(t *testing.T, srv *httptest.Server, path, body, contentType, orig
 }
 func TestPlaceHTTPReadOnlyAndValidation(t *testing.T) {
 	_, readonly := placeServer(t, false, "")
-	for _, path := range []string{"/api/v1/items/item-seed-06/place", "/api/v1/missing", "/api/v1/client-timing"} {
+	for _, path := range []string{"/api/v1/items/item-seed-06/place", "/api/v1/missing"} {
 		status, body := postPlace(t, readonly, path, `{}`, "text/plain", "https://foreign.example")
 		if status != 405 || body["error"].(map[string]any)["code"] != "read-only" {
 			t.Fatalf("%d %v", status, body)

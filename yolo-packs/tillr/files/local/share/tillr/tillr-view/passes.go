@@ -146,11 +146,15 @@ func (s *server) passesPayload(r *store.Reader, req *http.Request) (any, *apiFai
 	if bounds.before != nil && bounds.since != nil && *bounds.since >= *bounds.before {
 		return nil, failure(codeBadQuery, "since must be less than before (before is exclusive)")
 	}
-	rows, err := assemblePasses(r, s.obs.loopDir, bounds)
-	if err != nil {
-		return nil, failure(codeStoreUnreadable, "passes could not read its sources: %v", err)
-	}
-	return rows, nil
+	// The answer is a function of the store, the query and the loop's drain result files
+	// (the session stops it names), so it is shared until one of them changes (shared.go).
+	return s.passesShare.get(req.Context(), r, query.Encode(), func() string { return loopResultsStamp(s.obs.loopDir) }, func() shareBuild {
+		rows, err := assemblePasses(r, s.obs.loopDir, bounds)
+		if err != nil {
+			return shareBuild{failure: failure(codeStoreUnreadable, "passes could not read its sources: %v", err)}
+		}
+		return shareBuild{value: rows}
+	})
 }
 
 func assemblePasses(r *store.Reader, loopDir string, b passBounds) ([]passRow, error) {
