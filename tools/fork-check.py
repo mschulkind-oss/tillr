@@ -10553,6 +10553,14 @@ def run_replay(argv: list[str]) -> int:
                   file=sys.stderr)
         return 2
     copies = [copy.copy(check) for check in checks]
+    if not options.fixer:
+        for check in copies:
+            check.env = {**check.env, "GO_TEST_SHARDS_CLASS": "ordinary"}
+            if check.go_module in GO_SHARD_DIRS:
+                check.argv = [
+                    re.sub(r"--slot-class\s+\S+", "--slot-class ordinary", part)
+                    for part in check.argv
+                ]
     cancellation = Cancellation()
     with cancellation.on_sigterm():
         for check in copies:

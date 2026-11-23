@@ -1520,7 +1520,7 @@ func (s *ProcessSteps) Replay(ctx context.Context, candidate Candidate, rev stri
 		}
 		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 		cmd.Dir = dir
-		cmd.Env = s.checkProcessEnv(os.Environ(), "TILLR_FORK_DRIFT=1")
+		cmd.Env = s.checkProcessEnv(withoutProcessEnv(os.Environ(), "GO_TEST_SHARDS_CLASS"), "TILLR_FORK_DRIFT=1", "GO_TEST_SHARDS_CLASS=ordinary")
 		var stderr stderrTail
 		var combined bytes.Buffer
 		cmd.Stdout = &combined

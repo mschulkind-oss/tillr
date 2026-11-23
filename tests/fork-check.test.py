@@ -325,10 +325,124 @@ def test_gate_runner_uses_gate_slot_class_in_landing_and_proof_in_rolling():
             assert "--slot-class proof" in rolling_drain.argv[-1], rolling_drain.argv
 
 
+def test_base_replay_queues_behind_trunk_proof():
+    import importlib.util
+    import threading
+
+    gate = load_tool("fork_check_base_replay_slot_class")
+    shards_spec = importlib.util.spec_from_file_location(
+        "go_test_shards_replay_test", ROOT / "tools" / "go-test-shards.py",
+    )
+    shards = importlib.util.module_from_spec(shards_spec)
+    shards_spec.loader.exec_module(shards)
+
+    scratch_parent = os.environ.get("TMPDIR") or os.environ.get("YOLO_DURABLE_DIR")
+    with tempfile.TemporaryDirectory(dir=scratch_parent) as directory:
+        base = Path(directory)
+        changed = ["tools/tillr-gate/main.go", "tools/tillr-drain/main.go"]
+        plan = gate.build_plan(
+            ROOT, [], gate.Record(base / "replay-state.json"), changed, None, True,
+        )
+        fake_gate = type("FakeGate", (), {
+            "plan": plan, "missing": [], "diff_base": None, "head": "0" * 40,
+        })()
+        captured = []
+
+        def fake_execute(root, check, diff_base, cancel=None):
+            captured.append((check.kind, list(check.argv), dict(check.env)))
+            check.rc = 0
+            check.output = ""
+
+        gate.plan_gate = lambda *args, **kwargs: fake_gate
+        gate.execute_attempt = fake_execute
+        gate.capture_fork_conflict = lambda *args, **kwargs: None
+
+        rc = gate.run_replay([
+            "--only", "go-tool:tools/tillr-drain's whole suite passes",
+            "--only", "go-affected",
+        ])
+        assert rc == 0, rc
+        by_kind = {kind: (argv, env) for kind, argv, env in captured}
+        assert "go-tool" in by_kind and "go-affected" in by_kind, by_kind
+        go_tool_argv, go_tool_env = by_kind["go-tool"]
+        go_affected_argv, go_affected_env = by_kind["go-affected"]
+        assert "--slot-class ordinary" in go_tool_argv[-1], go_tool_argv
+        assert "--slot-class proof" not in go_tool_argv[-1], go_tool_argv
+        assert "--slot-class gate" not in go_tool_argv[-1], go_tool_argv
+        assert go_tool_env.get("GO_TEST_SHARDS_CLASS") == "ordinary", go_tool_env
+        assert go_affected_env.get("GO_TEST_SHARDS_CLASS") == "ordinary", go_affected_env
+        replay_slot_class = go_affected_env["GO_TEST_SHARDS_CLASS"]
+
+        # Fixer-gate (--replay --fixer) is not a base replay and is not downgraded.
+        captured.clear()
+        rc = gate.run_replay([
+            "--fixer", "--only", "go-tool:tools/tillr-drain's whole suite passes",
+        ])
+        assert rc == 0, rc
+        fixer_argv, fixer_env = captured[0][1], captured[0][2]
+        assert "--slot-class ordinary" not in fixer_argv[-1], fixer_argv
+        assert "GO_TEST_SHARDS_CLASS" not in fixer_env, fixer_env
+
+        # With a replay and a trunk proof both waiting on the same slot pool,
+        # the trunk proof gets the next free slot ahead of the replay.
+        lock_dir = base / "slot-locks"
+        order = []
+        order_lock = threading.Lock()
+        replay_waiting = threading.Event()
+        proof_waiting = threading.Event()
+        proof_acquired = threading.Event()
+        proof_release = threading.Event()
+        replay_acquired = threading.Event()
+        errors = []
+
+        def run_waiter(name, slot_class, wait_evt, acq_evt, rel_evt):
+            try:
+                with shards.acquire_shard_slot(
+                    lock_dir, 1,
+                    notify=lambda _msg: wait_evt.set(),
+                    slot_class=slot_class,
+                    proof_limit=0,
+                    gate_limit=0,
+                    holder=name,
+                ):
+                    with order_lock:
+                        order.append(name)
+                    acq_evt.set()
+                    if rel_evt is not None:
+                        rel_evt.wait(30)
+            except BaseException as exc:
+                errors.append(exc)
+
+        with shards.acquire_shard_slot(
+            lock_dir, 1, slot_class="ordinary", proof_limit=0, gate_limit=0, holder="initial",
+        ):
+            t_replay = threading.Thread(
+                target=run_waiter,
+                args=("replay", replay_slot_class, replay_waiting, replay_acquired, None),
+            )
+            t_proof = threading.Thread(
+                target=run_waiter,
+                args=("trunk-proof", "proof", proof_waiting, proof_acquired, proof_release),
+            )
+            t_replay.start()
+            assert replay_waiting.wait(30), "replay did not enter slot wait"
+            t_proof.start()
+            assert proof_waiting.wait(30), "trunk proof did not enter slot wait"
+
+        assert proof_acquired.wait(30), "trunk proof did not acquire freed slot"
+        proof_release.set()
+        assert replay_acquired.wait(30), "replay did not acquire slot after proof"
+        t_proof.join(30)
+        t_replay.join(30)
+        assert not errors, errors
+        assert order == ["trunk-proof", "replay"], order
+
+
 if _RUN_PREAMBLE_TESTS:
     test_landing_go_measurements()
     test_landing_measurements_require_change_gate_handoff()
     test_gate_runner_uses_gate_slot_class_in_landing_and_proof_in_rolling()
+    test_base_replay_queues_behind_trunk_proof()
 
 
 def test_sigterm_ends_checks(mode):
