@@ -36,24 +36,24 @@ test("landing invalidation reaches both the ledger and detail queries", () => {
 });
 
 test("Trunk opens from its URL with repair links and an explicit untimed gap", async () => {
- const view = setup("#/trunk");
+ const view = setup("/trunk");
  await view.findByRole("heading", {name:"Trunk"});
  await view.findByRole("link", {name:"landing-a"});
- expect(view.getByRole("link", {name:"Fix run run-fix"}).getAttribute("href")).toBe("#/item/item-a?run=run-fix");
- expect(view.getByRole("link", {name:"Fixer item fix-red"}).getAttribute("href")).toBe("#/item/fix-red");
+ expect(view.getByRole("link", {name:"Fix run run-fix"}).getAttribute("href")).toBe("/item/item-a?run=run-fix");
+ expect(view.getByRole("link", {name:"Fixer item fix-red"}).getAttribute("href")).toBe("/item/fix-red");
  expect(view.getByRole("link", {name:"Red commit red-commit"}).getAttribute("href")).toContain("red-commit");
  expect(view.getByText(/Unrecorded trunk move/)).toBeTruthy();
  fireEvent.keyDown(window, {key:"j"});
- expect(window.location.hash).toBe("#/trunk");
+ expect((window.location.pathname + window.location.search)).toBe("/trunk");
  expect(view.fetch.mock.calls.every(([path]) => !String(path).includes("/items/"))).toBe(true);
  fireEvent.click(view.getByRole("link", {name:"landing-a"}));
- await waitFor(() => expect(window.location.hash).toBe("#/landing/landing-a"));
+ await waitFor(() => expect((window.location.pathname + window.location.search)).toBe("/landing/landing-a"));
  await view.findByRole("heading", {name:"Landing landing-a"});
  view.client.clear();
 });
 
 test("a red commit link opens its recorded relationships", async () => {
- const view = setup("#/trunk?sha=red-commit");
+ const view = setup("/trunk?sha=red-commit");
  await view.findByRole("link", {name:"Fixer item fix-red"});
  expect(view.getByRole("heading", {name:"Trunk commit red-commit"})).toBeTruthy();
  expect(view.queryByRole("link", {name:"landing-a"})).toBeNull();
@@ -62,16 +62,16 @@ test("a red commit link opens its recorded relationships", async () => {
 });
 
 test("a bookmarked landing links its item, run and pass without a default queue selection", async () => {
- const view=setup("#/landing/landing-a");
+ const view=setup("/landing/landing-a");
  await view.findByRole("heading", {name:"Landing landing-a"});
- expect((await view.findByRole("link", {name:"Item item-a"})).getAttribute("href")).toBe("#/item/item-a");
- expect(view.getByRole("link", {name:"Run run-a"}).getAttribute("href")).toBe("#/item/item-a?run=run-a");
- expect(view.getByRole("link", {name:"Pass pass-a"}).getAttribute("href")).toBe("#/pass/pass-a");
+ expect((await view.findByRole("link", {name:"Item item-a"})).getAttribute("href")).toBe("/item/item-a");
+ expect(view.getByRole("link", {name:"Run run-a"}).getAttribute("href")).toBe("/item/item-a?run=run-a");
+ expect(view.getByRole("link", {name:"Pass pass-a"}).getAttribute("href")).toBe("/pass/pass-a");
  view.client.clear();
 });
 
 test("an unread ledger is not an empty trunk", async () => {
- const view=setup("#/trunk",true);
+ const view=setup("/trunk",true);
  await view.findByText(/landings table is missing/);
  expect(view.queryByText("No landings recorded.")).toBeNull();
  expect(view.getByRole("button",{name:"Read it again"})).toBeTruthy();

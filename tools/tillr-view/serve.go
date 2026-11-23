@@ -494,13 +494,21 @@ func (s *server) noFrontEndNoteFor() string {
 }
 
 // webHandler serves the built front end. Every path it does not carry an asset for
-// answers index.html, so a view URL is a URL an operator can paste; an asset path that
+// answers index.html, so a view URL (`/runs`, `/admin/runs?after=5`, `/item/<id>`) is a
+// URL an operator can paste and reload; an asset path that
 // genuinely does not exist is still a 404, because inventing HTML for a missing script is
 // a build bug rendered as a page.
 func (s *server) webHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if s.web == nil {
 			http.Error(w, s.noFrontEndNoteFor(), http.StatusNotFound)
+			return
+		}
+		// `/api/v1/` has its own handler. Anything else under `/api` is a caller's mistake
+		// and stays a 404: answering it with the index page would read a routing bug as a
+		// data bug now that view URLs are real paths.
+		if req.URL.Path == "/api" || strings.HasPrefix(req.URL.Path, "/api/") {
+			http.NotFound(w, req)
 			return
 		}
 		files := http.FileServerFS(s.web)

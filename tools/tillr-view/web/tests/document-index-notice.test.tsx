@@ -8,7 +8,7 @@ class SilentSocket { close() {} }
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.history.replaceState(null, "", "/"); });
 
 function mount(documentIndex: unknown) {
-  window.history.replaceState(null, "", "/#/");
+  window.history.replaceState(null, "", "/");
   vi.stubGlobal("WebSocket", SilentSocket);
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     switch (new URL(String(input), "http://localhost").pathname) {

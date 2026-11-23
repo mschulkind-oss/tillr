@@ -10,7 +10,7 @@ export interface GraphNode { id: string; label: string; runId?: string; seat?: s
 export interface GraphEdge { from: string; to: string }
 /** One renderer for recorded nodes and any directed dependencies supplied by the caller. */
 export function ItemGraph({ nodes, edges }: { nodes: GraphNode[]; edges: GraphEdge[] }) {
-  return <div className="lane-graph"><ol>{nodes.map(node => <li key={node.id} data-state={node.state}>{node.runId ? <a href={`#/run/${encodeURIComponent(node.runId)}?tab=transcript`}>{node.label}</a> : node.label}{node.seat ? ` · ${node.seat}` : ""} · {node.state}</li>)}</ol>
+  return <div className="lane-graph"><ol>{nodes.map(node => <li key={node.id} data-state={node.state}>{node.runId ? <a href={`/run/${encodeURIComponent(node.runId)}?tab=transcript`}>{node.label}</a> : node.label}{node.seat ? ` · ${node.seat}` : ""} · {node.state}</li>)}</ol>
     {edges.length ? <ul aria-label="Graph edges">{edges.map(edge => <li key={`${edge.from}/${edge.to}`}>{edge.from} → {edge.to}</li>)}</ul> : null}</div>;
 }
 function elapsed(start: number, finish: number) { return `${(Math.max(0, finish - start) / 1000).toFixed(1)}s`; }
@@ -21,7 +21,7 @@ export function PipelineRow({ steps, now }: { steps: PipelineStep[]; now: number
   })}</ol>;
 }
 export function ChildSessions({ runID, record }: { runID: string; record?: ChildrenRecord }) {
-  return <div><EntityLink kind="run" id={runID} />{record?.note ? <p role="alert">worker records unreadable: {record.note}</p> : null}{!record?.recorded ? <p>child sessions: not recorded</p> : !record.sessions.length ? <p>child sessions: {record.note ? "unreadable" : "none"}</p> : <ul>{record.sessions.map(child => <li key={child.session_id}><a href={`#/run/${encodeURIComponent(child.session_id)}?tab=transcript`}>{child.role || "role not recorded"}</a> · started {child.started_at_ms === null ? "not recorded" : new Date(child.started_at_ms).toISOString()} · end {child.end_clock === "derived" ? "~" : ""}{child.ended_at_ms === null ? "not recorded" : new Date(child.ended_at_ms).toISOString()}{child.end_clock === "derived" ? " (derived from last transcript message)" : ""} · {child.turn_count === null ? "turn count not recorded" : `${child.turn_count} turns`} · transcript {child.transcript}</li>)}</ul>}</div>;
+  return <div><EntityLink kind="run" id={runID} />{record?.note ? <p role="alert">worker records unreadable: {record.note}</p> : null}{!record?.recorded ? <p>child sessions: not recorded</p> : !record.sessions.length ? <p>child sessions: {record.note ? "unreadable" : "none"}</p> : <ul>{record.sessions.map(child => <li key={child.session_id}><a href={`/run/${encodeURIComponent(child.session_id)}?tab=transcript`}>{child.role || "role not recorded"}</a> · started {child.started_at_ms === null ? "not recorded" : new Date(child.started_at_ms).toISOString()} · end {child.end_clock === "derived" ? "~" : ""}{child.ended_at_ms === null ? "not recorded" : new Date(child.ended_at_ms).toISOString()}{child.end_clock === "derived" ? " (derived from last transcript message)" : ""} · {child.turn_count === null ? "turn count not recorded" : `${child.turn_count} turns`} · transcript {child.transcript}</li>)}</ul>}</div>;
 }
 export function activeLaneRun(lane: LaneRow): string | null {
   return lane.nodes?.find(node => node.attempt === lane.attempt && node.state === "running")?.run_id || lane.run_id || null;
@@ -57,7 +57,7 @@ export function LanePage({ id, lanes, error, live, paused }: { id: string; lanes
     {error ? <p role="alert">Lanes refused: {error.message}</p> : !lanes ? <p>Reading lane…</p> : !lane ? <p role="alert">Lane <EntityLink kind="lane" id={id} /> is not recorded.</p> : <>
       <LaneDetail lane={lane} item={item.data?.data} now={now} />
       {item.error ? <p role="alert">Item refused: {item.error.message}</p> : null}
-      <h2>Transcript (live)</h2>{runID ? <><a href={`#/run/${encodeURIComponent(runID)}?tab=transcript`}>Open full transcript</a><TranscriptView key={runID} runId={runID} transcript={transcript.data?.data} error={transcript.error} /></> : <p>No run recorded.</p>}
+      <h2>Transcript (live)</h2>{runID ? <><a href={`/run/${encodeURIComponent(runID)}?tab=transcript`}>Open full transcript</a><TranscriptView key={runID} runId={runID} transcript={transcript.data?.data} error={transcript.error} /></> : <p>No run recorded.</p>}
     </>}
   </main>;
 }

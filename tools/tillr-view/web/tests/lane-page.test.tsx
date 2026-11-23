@@ -24,9 +24,9 @@ test("lane detail has honest criteria, linked dependencies, attempts and lane hi
  const { container } = render(<LaneDetail lane={{...lane, history:[{run_id:"old-run", item_id:"old-item", lane_id:"lane-1", state:"exited", started_at_ms:100, finished_at_ms:500}]}} item={itemData} now={9000} />);
  for (const heading of ["Pipeline", "Graph", "Criteria", "Waits on", "Unblocks", "Attempts on this item", "Lane history"]) expect(within(container).getByRole("heading", {name:heading})).toBeTruthy();
  expect(container.textContent).toContain("worker progress is not recorded");
- expect(within(container).getByRole("link", {name:"item-before"}).getAttribute("href")).toBe("#/graph?item=item-before");
- expect(within(container).getByRole("link", {name:"item-after"}).getAttribute("href")).toBe("#/graph?item=item-after");
- expect(within(container).getByRole("link", {name:"old-run"}).getAttribute("href")).toBe("#/run/old-run");
+ expect(within(container).getByRole("link", {name:"item-before"}).getAttribute("href")).toBe("/graph?item=item-before");
+ expect(within(container).getByRole("link", {name:"item-after"}).getAttribute("href")).toBe("/graph?item=item-after");
+ expect(within(container).getByRole("link", {name:"old-run"}).getAttribute("href")).toBe("/run/old-run");
  expect(within(container).getByRole("link", {name:"old-item"})).toBeTruthy();
 });
 

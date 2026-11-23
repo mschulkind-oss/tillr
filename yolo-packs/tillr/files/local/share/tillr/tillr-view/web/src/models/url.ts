@@ -1,16 +1,18 @@
 // The URL is the only UI navigation state (design §5.2): no router library, and every
-// selection round-trips through the location hash so a pasted URL opens the exact item,
-// run, tab and exchange. The item is the route — `#/item/<id>` — and everything else rides
+// selection round-trips through the location path so a pasted URL opens the exact item,
+// run, tab and exchange. The item is the route — `/item/<id>` — and everything else rides
 // behind it as search parameters, which is what makes a reload land back on the same item.
 //
 // The board's narrowing is the one piece of state that must survive with no item selected,
-// so it rides in the location's own search instead: `?states=blocked,working&q=parser`.
-// Keeping it out of the hash leaves "the item is the route" true, and makes a filtered
-// board a link whether or not a row is open.
+// so it rides in the same search: `?states=blocked,working&q=parser`. A selection update
+// leaves those keys alone, and a filter update leaves the selection's.
 
 import { useCallback, useEffect, useState } from "react";
 
 import type { BoardFilter } from "./board";
+import { URL_CHANGE_EVENT, currentRoute, notifyURLChange } from "./route";
+
+export { URL_CHANGE_EVENT };
 
 export type Tab = "transcript" | "exchanges" | "timeline" | "gate";
 
@@ -38,19 +40,13 @@ export const DEFAULT_SELECTION: Selection = {
   artifact: null,
 };
 
-const ITEM_ROUTE = "#/item/";
+const ITEM_ROUTE = "/item/";
 
-/** The questions view is a route of its own — `#/questions` — so the one place a reader
+/** The questions view is a route of its own — `/questions` — so the one place a reader
  * can reach without first knowing an item is also a link they can send. It is a view, not
  * an item selection: opening it clears the selected item, and selecting an item leaves it. */
-export const QUESTIONS_ROUTE = "#/questions";
+export const QUESTIONS_ROUTE = "/questions";
 
-/** History API writes do not emit native hashchange/popstate. Notify every route reader
- * after the current state update, so the shell and legacy screens see the same URL. */
-export const URL_CHANGE_EVENT = "observatory:urlchange";
-function notifyURLChange(): void {
-  queueMicrotask(() => window.dispatchEvent(new Event(URL_CHANGE_EVENT)));
-}
 
 function parseTab(raw: string | null): Tab {
   if (raw === "timeline") return "timeline";
@@ -73,11 +69,11 @@ export function selectionFromSearch(search: string): Selection {
   };
 }
 
-/** selectionFromHash reads the route and the parameters behind it. A hash this screen does
+/** selectionFromRoute reads the route and the parameters behind it. A route this screen does
  * not recognize is no selection at all rather than a guess at what was meant. */
-export function selectionFromHash(hash: string): Selection {
-  if (!hash.startsWith(ITEM_ROUTE)) return { ...DEFAULT_SELECTION };
-  const rest = hash.slice(ITEM_ROUTE.length);
+export function selectionFromRoute(route: string): Selection {
+  if (!route.startsWith(ITEM_ROUTE)) return { ...DEFAULT_SELECTION };
+  const rest = route.slice(ITEM_ROUTE.length);
   const mark = rest.indexOf("?");
   const itemId = decodeURIComponent(mark === -1 ? rest : rest.slice(0, mark));
   if (itemId === "") return { ...DEFAULT_SELECTION };
@@ -110,15 +106,15 @@ export function searchFromSelection(selection: Selection): string {
   return search ? `?${search}` : "";
 }
 
-/** hashFromSelection writes the item as the route and everything else behind it. */
-export function hashFromSelection(selection: Selection): string {
-  if (!selection.item) return "";
+/** routeFromSelection writes the item as the route and everything else behind it. */
+export function routeFromSelection(selection: Selection): string {
+  if (!selection.item) return "/";
   const params = paramsFrom(selection).toString();
   const path = `${ITEM_ROUTE}${encodeURIComponent(selection.item)}`;
   return params ? `${path}?${params}` : path;
 }
 
-/** useUrlSelection holds the selection in `window.location.hash` and pushes a history
+/** useUrlSelection holds the selection in the location path and pushes a history
  * entry on every change, so the browser's back button walks the inspection. */
 export interface UpdateOptions {
   /** Replace the current history entry instead of pushing one. The board's first render
@@ -128,25 +124,22 @@ export interface UpdateOptions {
 }
 
 export function useQuestionsRoute(): [boolean, (open: boolean, options?: UpdateOptions) => void] {
-  const [open, setOpen] = useState(() => window.location.hash === QUESTIONS_ROUTE);
+  const [open, setOpen] = useState(() => window.location.pathname === QUESTIONS_ROUTE);
 
   useEffect(() => {
-    const onPop = () => setOpen(window.location.hash === QUESTIONS_ROUTE);
+    const onPop = () => setOpen(window.location.pathname === QUESTIONS_ROUTE);
     window.addEventListener("popstate", onPop);
-    window.addEventListener("hashchange", onPop);
     window.addEventListener(URL_CHANGE_EVENT, onPop);
     return () => {
       window.removeEventListener("popstate", onPop);
-      window.removeEventListener("hashchange", onPop);
       window.removeEventListener(URL_CHANGE_EVENT, onPop);
     };
   }, []);
 
   const update = useCallback((next: boolean, options?: UpdateOptions) => {
     setOpen(next);
-    const { pathname, search, hash } = window.location;
-    const target = next ? `${pathname}${search}${QUESTIONS_ROUTE}` : `${pathname}${search}`;
-    if (target !== `${pathname}${search}${hash}`) {
+    const target = next ? QUESTIONS_ROUTE : "/";
+    if (target !== currentRoute()) {
       // Opening or closing the view is a history step a reader expects the back button to
       // undo. A selection that leaves the view passes `replace`, so the item's own route is
       // the entry the back button returns to rather than the view it was opened from.
@@ -164,17 +157,15 @@ export function useUrlSelection(): [
   (next: Partial<Selection>, options?: UpdateOptions) => void,
 ] {
   const [selection, setSelection] = useState<Selection>(() =>
-    selectionFromHash(window.location.hash),
+    selectionFromRoute(currentRoute()),
   );
 
   useEffect(() => {
-    const onPop = () => setSelection(selectionFromHash(window.location.hash));
+    const onPop = () => setSelection(selectionFromRoute(currentRoute()));
     window.addEventListener("popstate", onPop);
-    window.addEventListener("hashchange", onPop);
     window.addEventListener(URL_CHANGE_EVENT, onPop);
     return () => {
       window.removeEventListener("popstate", onPop);
-      window.removeEventListener("hashchange", onPop);
       window.removeEventListener(URL_CHANGE_EVENT, onPop);
     };
   }, []);
@@ -182,11 +173,16 @@ export function useUrlSelection(): [
   const update = useCallback((next: Partial<Selection>, options?: UpdateOptions) => {
     setSelection((current) => {
       const merged = { ...current, ...next };
-      const hash = hashFromSelection(merged);
-      if (hash !== window.location.hash) {
-        // The search is the board's narrowing, which a selection does not touch: dropping
-        // it here would clear the operator's filter every time they opened a row.
-        const url = `${window.location.pathname}${window.location.search}${hash}`;
+      // The filter's keys are the board's narrowing, which a selection does not touch:
+      // dropping them here would clear the operator's filter every time they opened a row.
+      const kept = new URLSearchParams(window.location.search);
+      for (const key of ["run", "tab", "exchange", "artifact", "item"]) kept.delete(key);
+      const route = routeFromSelection(merged);
+      const mark = route.indexOf("?");
+      const params = new URLSearchParams(mark === -1 ? "" : route.slice(mark));
+      for (const [key, value] of params) kept.set(key, value);
+      const url = `${mark === -1 ? route : route.slice(0, mark)}${kept.size ? `?${kept}` : ""}`;
+      if (url !== currentRoute()) {
         if (options?.replace) window.history.replaceState(null, "", url);
         else window.history.pushState(null, "", url);
         notifyURLChange();
@@ -247,9 +243,9 @@ export function useUrlFilter(): [BoardFilter, (next: BoardFilter) => void] {
   const update = useCallback((next: BoardFilter) => {
     setFilter(next);
     const search = searchFromFilter(next);
-    const { pathname, hash } = window.location;
+    const { pathname } = window.location;
     if (search !== window.location.search) {
-      window.history.replaceState(null, "", `${pathname}${search}${hash}`);
+      window.history.replaceState(null, "", `${pathname}${search}`);
       notifyURLChange();
     }
   }, []);

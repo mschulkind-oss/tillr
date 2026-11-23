@@ -9,14 +9,14 @@ import { ObservatoryShell } from "../src/components/ObservatoryShell";
 
 const items = snapshotData.items;
 
-test.each(["#/", "#/items", "#/item/one", "#/lane/one", "#/questions", "#/trunk"])("every page's shared header exposes New idea: %s", hash => {
+test.each(["/", "/items", "/item/one", "/lane/one", "/questions", "/trunk"])("every page's shared header exposes New idea: %s", hash => {
   const snapshot = { ...envelope(snapshotData), snapshot: { ...envelope(snapshotData).snapshot, writes_enabled: true } };
-  render(<ObservatoryShell hash={hash} snapshot={snapshot} snapshotError={null} live={false} paused={false} onPause={() => {}} onRefresh={() => {}}>Page</ObservatoryShell>);
+  render(<ObservatoryShell route={hash} snapshot={snapshot} snapshotError={null} live={false} paused={false} onPause={() => {}} onRefresh={() => {}}>Page</ObservatoryShell>);
   expect(screen.getByRole("button", { name: "New idea" })).toBeTruthy();
 });
 
 test("idea row carries a chip and Item page renders full verbatim words and the gap", async () => {
-  window.history.replaceState(null, "", "/#/items?state=unlanded");
+  window.history.replaceState(null, "", "/items?state=unlanded");
   const id = items[0].item_id;
   const list = render(<ItemsView snapshot={{ ...snapshotData, items: [{ ...items[0], kind: "idea", title: "First words" }] }} waiting={[{ item_id: id, place: 1, class: "ready", where: "queue", why: "ready", mover: "loop", since: "today", class_source: "rule" }]} />);
   expect(screen.getByText("idea")).toBeTruthy();
@@ -33,7 +33,7 @@ test("idea row carries a chip and Item page renders full verbatim words and the 
   expect(outcomes.textContent).toContain("Build the first change");
   expect(outcomes.textContent).toContain("Settle the question");
   expect(outcomes.textContent).toContain("landed");
-  expect(outcomes.querySelector('a[href="#/item/item-outcome-a"]')).toBeTruthy();
+  expect(outcomes.querySelector('a[href="/item/item-outcome-a"]')).toBeTruthy();
   client.clear();
 });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); localStorage.clear(); window.history.replaceState(null, "", "/"); });

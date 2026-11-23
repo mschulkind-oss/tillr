@@ -14,7 +14,7 @@ class OrderSocket {
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.history.replaceState(null, "", "/"); });
 
 test.each(["focus", "scroll"])("socket order changes wait behind the Items control while %s holds the table", async heldBy => {
-  window.history.replaceState(null, "", "/#/items?state=unlanded");
+  window.history.replaceState(null, "", "/items?state=unlanded");
   vi.stubGlobal("WebSocket", OrderSocket);
   let changed = false;
   const fetch = vi.fn(async (input: RequestInfo | URL) => {
@@ -38,8 +38,8 @@ test.each(["focus", "scroll"])("socket order changes wait behind the Items contr
   expect(fetch.mock.calls.filter(([path]) => path === "/api/v1/why").length).toBeGreaterThan(1);
   view.unmount(); client.clear();
 });
-test.each(["#/items", "#/passes?range=all"])("%s renders a ledger rather than the legacy board or placeholder", async hash => {
-  window.history.replaceState(null, "", `/${hash}`);
+test.each(["/items", "/passes?range=all"])("%s renders a ledger rather than the legacy board or placeholder", async hash => {
+  window.history.replaceState(null, "", hash);
   vi.stubGlobal("WebSocket", SilentSocket);
   let arrived = false;
   const fetch = vi.fn(async (input: RequestInfo | URL) => {
@@ -56,9 +56,9 @@ test.each(["#/items", "#/passes?range=all"])("%s renders a ledger rather than th
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const view = render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
   await screen.findAllByRole("link", { name: "item-held" });
-  expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(hash.startsWith("#/items") ? "Items" : "Passes");
+  expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(hash.startsWith("/items") ? "Items" : "Passes");
   expect(view.container.querySelector(".board")).toBeNull();
-  expect(window.location.hash).toBe(hash);
+  expect((window.location.pathname + window.location.search)).toBe(hash);
   const shell = view.container.querySelector(".observatory-shell")!;
   fireEvent.scroll(shell, { target: { scrollTop: 200 } });
   arrived = true;
@@ -69,7 +69,7 @@ test.each(["#/items", "#/passes?range=all"])("%s renders a ledger rather than th
   expect(shell.scrollTop).toBe(0);
   await screen.findAllByRole("link", { name: "item-new" });
   fireEvent.keyDown(window, { key: "j" });
-  expect(window.location.hash).toBe(hash);
+  expect((window.location.pathname + window.location.search)).toBe(hash);
   expect(view.container.querySelector('[data-focused="true"]')).toBeTruthy();
   expect(fetch.mock.calls.every(([path]) => ["/api/v1/snapshot", "/api/v1/why", "/api/v1/passes"].includes(String(path)))).toBe(true);
 });

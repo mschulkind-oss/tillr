@@ -17,7 +17,7 @@ export function usePagePerf(hash: string, recorder: PerfRecorder = perf): void {
   const client = useQueryClient();
   const first = useRef(true);
   useEffect(() => {
-    recorder.beginPage(hash, first.current ? "load" : "hash");
+    recorder.beginPage(hash, first.current ? "load" : "route");
     first.current = false;
   }, [hash, recorder]);
   useEffect(() => (recorder === perf ? startPerf(recorder) : undefined), [recorder]);

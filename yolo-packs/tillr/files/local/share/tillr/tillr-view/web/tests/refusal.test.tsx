@@ -31,7 +31,7 @@ class SilentSocket {
 }
 
 beforeEach(() => {
-  window.history.replaceState(null, "", "/#/item/item-untouched");
+  window.history.replaceState(null, "", "/item/item-untouched");
   globalThis.WebSocket = SilentSocket as unknown as typeof WebSocket;
 });
 

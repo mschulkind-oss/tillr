@@ -7,14 +7,14 @@ import { snapshotData } from "./fixtures";
 
 afterEach(() => { cleanup(); window.history.replaceState(null, "", "/"); });
 test("a cleared but retained document row never navigates to a fabricated item", () => {
- window.history.replaceState(null, "", "/#/items");
+ window.history.replaceState(null, "", "/items");
  const warning = { place: undefined, item_id: "", document: "docs/design/a.md", class: "needs you", where: "queue", why: "design-without-item", mover: "owner", since: "today", class_source: "rule" };
  const view = render(<ItemsView waiting={[warning]} snapshot={snapshotData} />);
  fireEvent.focus(screen.getAllByRole("row")[1]);
  view.rerender(<ItemsView waiting={[]} snapshot={snapshotData} />);
  expect(screen.getByRole("cell", { name: "docs/design/a.md" })).toBeTruthy();
  fireEvent.keyDown(window, { key: "Enter" });
- expect(window.location.hash).toBe("#/items");
+ expect((window.location.pathname + window.location.search)).toBe("/items");
 });
 
 const rows = [
@@ -24,7 +24,7 @@ const rows = [
 ];
 for (const face of ["home", "items"]) {
  test(`${face} shows distinct design paths after unranked items without fake item links`, () => {
-  window.history.replaceState(null, "", "/#/items");
+  window.history.replaceState(null, "", "/items");
   const waiting = rows as WaitingRow[];
   render(face === "items" ? <ItemsView waiting={waiting} snapshot={snapshotData} /> : <Home waiting={waiting} snapshot={snapshotData} now={0} />);
   const displayed = screen.getAllByRole("row").slice(1);
@@ -32,7 +32,7 @@ for (const face of ["home", "items"]) {
    expect.stringContaining("item-z"), expect.stringContaining("docs/design/a.md"), expect.stringContaining("docs/design/z.md"),
   ]);
   expect(screen.getByRole("link", { name: "item-z" })).toBeTruthy();
-  expect(document.querySelector('a[href="#/item/"]')).toBeNull();
+  expect(document.querySelector('a[href="/item/"]')).toBeNull();
   expect(document.querySelectorAll("tbody tr")).toHaveLength(3);
  });
 }

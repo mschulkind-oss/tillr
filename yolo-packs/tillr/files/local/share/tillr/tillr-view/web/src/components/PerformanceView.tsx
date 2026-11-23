@@ -17,7 +17,7 @@ const passStamp = (at: number) => new Date(at).toISOString().replace(/[-:]/g, ""
 function EmptyRange({ available, error, loading }: { available?: boolean; error: Error | null; loading: boolean }) {
   if (error) return <p role="alert">Wider history could not be read: {error.message}</p>;
   if (loading) return <p role="status">No data in this range. Reading the widest range…</p>;
-  return <p>{available ? <>No data in this range. Widest range with data: <a href="#/performance?range=all">all</a>.</> : "No recorded data in any range."}</p>;
+  return <p>{available ? <>No data in this range. Widest range with data: <a href="/performance?range=all">all</a>.</> : "No recorded data in any range."}</p>;
 }
 
 function Section({ name, error, pending, retry, children }: { name: string; error: Error | null; pending: boolean; retry: () => void; children: ReactNode }) {
@@ -56,7 +56,7 @@ export function PerformanceView({ route, snapshot, snapshotError = null, paused 
   const maxPhase = Math.max(1, ...phaseRows.map(row => Object.values(row.phases!).reduce<number>((sum, value) => sum + (value ?? 0), 0)));
   return <main className="performance">
     <h1>Performance</h1>
-    <nav aria-label="Performance range">{ranges.map(value => <a key={value} href={`#/performance?range=${value}`} aria-current={range === value ? "page" : undefined}>{value}</a>)}</nav>
+    <nav aria-label="Performance range">{ranges.map(value => <a key={value} href={`/performance?range=${value}`} aria-current={range === value ? "page" : undefined}>{value}</a>)}</nav>
     {!ranges.includes(selected as Range) ? <p role="alert">Unknown range {selected}; showing 24h.</p> : null}
     {Number.isFinite(end) ? <p>{since === null ? "All recorded history" : new Date(since).toISOString()} → {new Date(end).toISOString()} (snapshot time; end exclusive)</p> : <p role={snapshotError ? "alert" : "status"}>{snapshotError ? snapshotError.message : "Reading the snapshot range clock…"}</p>}
     <Section name="Gate checks" error={checks.error} pending={checks.isPending} retry={() => void checks.refetch()}>
@@ -88,15 +88,15 @@ export function PerformanceView({ route, snapshot, snapshotError = null, paused 
 }
 
 export function CheckView({ route, paused }: { route: string; paused: boolean }) {
-  let id = route.slice("#/check/".length).split("?")[0];
+  let id = route.slice("/check/".length).split("?")[0];
   try { id = decodeURIComponent(id); } catch { /* Show the literal malformed identity. */ }
   const params = new URLSearchParams(route.split("?")[1]);
   const execution = params.get("span"), executionRun = params.get("run");
   const query = useQuery({ queryKey: ["checks", id], queryFn: ({signal}) => fetchCheck(id, signal), retry: false, refetchOnWindowFocus: false, refetchInterval: paused ? false : FALLBACK_POLL_MS });
-  return <main className="performance"><h1>Check <EntityLink kind="check" id={id} /></h1><a href="#/performance">Performance</a>
+  return <main className="performance"><h1>Check <EntityLink kind="check" id={id} /></h1><a href="/performance">Performance</a>
     <Section name="Executions" error={query.error} pending={query.isPending} retry={() => void query.refetch()}>
       <table><thead><tr><th>Run</th><th>Item</th><th>Pass</th><th>Result</th><th>Duration</th><th>Wait measurements</th></tr></thead><tbody>{query.data?.data.executions.map(row => <tr key={row.span_id} aria-selected={execution === row.span_id && (!executionRun || executionRun === row.run_id)}>
-        <td><EntityLink kind="run" id={row.run_id} /><a href={`#/run/${encodeURIComponent(row.run_id)}?span=${encodeURIComponent(row.span_id)}`}>Execution {row.span_id}</a></td><td>{row.item_id ? <EntityLink kind="item" id={row.item_id} /> : "Item unrecorded"}</td><td>{row.tick_id ? <EntityLink kind="pass" id={row.tick_id} /> : "Pass unrecorded"}</td><td>{row.status}</td><td>{ms(row.duration_ms)}</td><td><code>{row.waited_ms_json}</code></td>
+        <td><EntityLink kind="run" id={row.run_id} /><a href={`/run/${encodeURIComponent(row.run_id)}?span=${encodeURIComponent(row.span_id)}`}>Execution {row.span_id}</a></td><td>{row.item_id ? <EntityLink kind="item" id={row.item_id} /> : "Item unrecorded"}</td><td>{row.tick_id ? <EntityLink kind="pass" id={row.tick_id} /> : "Pass unrecorded"}</td><td>{row.status}</td><td>{ms(row.duration_ms)}</td><td><code>{row.waited_ms_json}</code></td>
       </tr>)}</tbody></table>
     </Section>
   </main>;

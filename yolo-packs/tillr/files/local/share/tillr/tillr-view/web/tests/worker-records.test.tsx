@@ -22,7 +22,7 @@ test("unrecorded children differ from recorded none and recorded child links",()
  expect(container.textContent).toContain("child sessions: none");
  expect(container.textContent).not.toContain("child sessions: not recorded");
  rerender(<LaneDetail lane={{...lane,child_sessions:{run:{recorded:true,sessions:[{session_id:"child",role:"reviewer",started_at_ms:100,ended_at_ms:900,turn_count:6,transcript:"/child.jsonl",run_id:"run"}]}}}} item={item} now={1000}/>);
- expect(within(container).getByRole("link",{name:"reviewer"}).getAttribute("href")).toBe("#/run/child?tab=transcript");
+ expect(within(container).getByRole("link",{name:"reviewer"}).getAttribute("href")).toBe("/run/child?tab=transcript");
  expect(container.textContent).toContain("6 turns");
  rerender(<LaneDetail lane={{...lane,child_sessions:{run:{recorded:true,sessions:[],note:"cannot read Pi status"}}}} item={item} now={1000}/>);
  expect(container.textContent).toContain("worker records unreadable: cannot read Pi status");

@@ -152,7 +152,7 @@ async function flush(): Promise<void> {
 }
 
 beforeEach(() => {
-  window.history.replaceState(null, "", "/#/item/item-seed-02");
+  window.history.replaceState(null, "", "/item/item-seed-02");
   snapshot = twoItemSnapshotData;
   requested = [];
   FakeSocket.opened = [];

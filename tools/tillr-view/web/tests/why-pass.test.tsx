@@ -28,7 +28,7 @@ function mount(hash: string, source: unknown) {
 const pass = { kind: "pass", pass_id: "gen-11739", age_s: 12, text: "as of pass gen-11739, 12 s ago" };
 
 test("Home says which pass its rows come from and lists designs apart from the rows", async () => {
-  mount("/#/", pass);
+  mount("/", pass);
   expect((await screen.findByLabelText("Waiting source")).textContent).toContain("as of pass gen-11739, 12 s ago");
   const section = await screen.findByTestId("designs-waiting");
   expect(within(section).getByText("docs/tillr/design.md")).toBeTruthy();
@@ -36,12 +36,12 @@ test("Home says which pass its rows come from and lists designs apart from the r
 });
 
 test("Items shows the pass age and the designs list", async () => {
-  mount("/#/items", pass);
+  mount("/items", pass);
   expect((await screen.findByLabelText("Waiting source")).textContent).toContain("12 s ago");
   expect(await screen.findByTestId("designs-waiting")).toBeTruthy();
 });
 
 test("a planned answer says it was not read from a pass, and why", async () => {
-  mount("/#/", { kind: "planner", age_s: 0, fallback: "no loop is running (the loop session has ended)", text: "" });
+  mount("/", { kind: "planner", age_s: 0, fallback: "no loop is running (the loop session has ended)", text: "" });
   expect((await screen.findByLabelText("Waiting source")).textContent).toContain("no loop is running");
 });

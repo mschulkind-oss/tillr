@@ -9,7 +9,7 @@ import { RefusalState, refusalCode } from "../src/components/RefusalState";
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); window.history.replaceState(null, "", "/"); });
 
 test("the complete Passes page renders one missing-route line, not a second shell alert", async () => {
-  window.history.replaceState(null, "", "/#/passes?range=all");
+  window.history.replaceState(null, "", "/passes?range=all");
   vi.stubGlobal("WebSocket", class { close() {} });
   vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
     if (String(input) === "/api/v1/snapshot") return new Response(JSON.stringify(envelope(snapshotData)));

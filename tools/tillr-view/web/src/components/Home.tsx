@@ -74,7 +74,7 @@ export function LoopSummary({ drain, passes, error, readError, snapshot, now = D
       <p>last pass <EntityLink kind="pass" id={passStamp(latest.dispatched_at_ms)} /> → {passCounts(latest)}</p>
     </> : <p>{passes ? "No pass recorded." : "Reading passes…"}</p>}
     {session ? <p>started {localTime(session.started_at_ms)} · last heartbeat {localTime(session.refreshed_at_ms)}</p> : null}
-    <p>session {session ? <a className="session-link" href={`#/passes?session=${encodeURIComponent(session.session_id)}`}><code>{session.session_id}</code></a> : "not recorded"}</p>
+    <p>session {session ? <a className="session-link" href={`/passes?session=${encodeURIComponent(session.session_id)}`}><code>{session.session_id}</code></a> : "not recorded"}</p>
   </section>;
 }
 
@@ -122,7 +122,7 @@ export function Home({ snapshot, waiting, waitingError, passes, passesError, lan
         {/* The list is the planner's answer, so a planner that cannot be asked leaves the LIST
             unknown — never the drain "not moving". The loop's own state is the heartbeat in
             the header and the loop summary, and it does not depend on the planner. */}
-        <h2>Not moving · {waiting ? `${notMoving} of ${rows.length} unlanded` : waitingError ? "unknown: the planner could not be asked" : "not yet read"} <a href="#/items">all → Items</a></h2>
+        <h2>Not moving · {waiting ? `${notMoving} of ${rows.length} unlanded` : waitingError ? "unknown: the planner could not be asked" : "not yet read"} <a href="/items">all → Items</a></h2>
         {waiting ? <WhySourceLine source={whySource} /> : null}
         {waiting ? <p aria-label="Waiting summary">Owner-waiting {actors.owner} · next: drain {actors.drain} · design seat {actors.design} · operator {actors.operator}</p> : null}
         {waitingError ? <p role="alert">The planner could not be asked, so which items are waiting is unknown (the loop's own state is in the header, and does not depend on it): {waitingError.message}</p> : waiting === undefined ? <p role="status">Reading waiting rows…</p> : rows.length === 0 ? <p>No unlanded items in the waiting answer.</p> : classes.map(value => {
@@ -137,7 +137,7 @@ export function Home({ snapshot, waiting, waitingError, passes, passesError, lan
                   <div className="home__mover">mover: <EntityText value={row.mover} snapshot={snapshot} rows={rows} passes={passes} /></div></td>
                 <td><ClassState value={row.class} /></td><td>{row.where}</td><td>{row.why}{row.graph_changes?.map((change, index) => <p key={index}>{change}</p>)}</td><td>{row.since}{row.waited ? ` · waited ${row.waited}` : ""}</td>
               </tr>)}</tbody></table>
-            {group.length > 8 ? <a href={`#/items?class=${encodeURIComponent(value)}`}>{group.length - 8} more {value}</a> : null}
+            {group.length > 8 ? <a href={`/items?class=${encodeURIComponent(value)}`}>{group.length - 8} more {value}</a> : null}
           </section>;
         })}
         <DesignsWaiting designs={designsWaiting} />

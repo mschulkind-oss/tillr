@@ -90,25 +90,25 @@ Four structural invariants enforce those rules in code:
 
 A **pass** is one planning round of the drain loop, identified by its UTC second-or-millisecond dispatch stamp (`YYYYMMDDTHHMMSSZ`, or `.mmmZ` when sub-second precision is present; `passStamp` in `src/components/Home.tsx` and `parsePassStamp` in `tools/tillr-view`). A **waiting class** is the operator-facing bucket that says who can move an item next (`holdrules.Classes`). A **work state** on a lane (`idle`, `running`, or `settling`) distinguishes active worker execution from a lane lease that still wraps a finished run during post-run settlement (`readLanes` in `tools/tillr-view`).
 
-Navigation state lives entirely in `window.location.hash` (`src/models/url.ts`, `useScreenHash` in `src/components/ObservatoryShell.tsx`):
+Navigation state lives entirely in the location's path and query (`src/models/route.ts`, `src/models/url.ts`): routes are real paths driven by the History API, every link is a real `<a href>`, and `useLinkInterception` turns a plain left click into a `pushState` while middle-click and open-in-new-tab stay the browser's. `tillr-view serve` answers every non-`/api`, non-asset GET with `index.html` (`webHandler` in `serve.go`), and Vite's dev server does the same while proxying `/api`. An old `#/...` link is rewritten to its path with `history.replaceState` on load (`migrateLegacyHash`), merging the hash's query over the location's own.
 
-| Surface | Hash route | Component / status |
+| Surface | Route | Component / status |
 | :--- | :--- | :--- |
-| Home triage and lane strip | `#/` | `Home` (`src/components/Home.tsx`) |
-| Queue and waiting table | `#/items` (`?state=`, `?sort=`, `?class=`, `?reason=`) | `ItemsView` (`src/components/ItemsPasses.tsx`) |
-| Queue dependency DAG | `#/graph` (`?item=<id>`) | `DependencyGraph` (`src/components/DependencyGraph.tsx`) |
-| Pass ledger | `#/passes` (`?range=`, `?item=`, `?action=`, `?session=`, `?holds=hide`) | `PassesView` (`src/components/ItemsPasses.tsx`) |
-| Check and item performance | `#/performance` (`?range=24h\|7d\|30d\|all`) | `PerformanceView` (`src/components/PerformanceView.tsx`) |
-| Trunk health and landings | `#/trunk` (`?outcome=`, `?item=`, `?range=`, `?superseded=show`) | `TrunkView` (`src/components/TrunkView.tsx`) |
-| Open and blocked questions | `#/questions` | `QuestionsView` (`src/components/QuestionsView.tsx`) |
-| Designer session warmth | `#/designs`, `#/design/<path>` | `DesignsPage` (`src/components/Designers.tsx`) |
-| Single item | `#/item/<id>` | `ItemPage` (`src/components/ItemRunPages.tsx`) |
-| Single run and span waterfall | `#/run/<id>` (`?span=`, `?tab=`, `?artifact=`, `?exchange=`, `?q=`) | `RunPage` + `SpanViewer` (`src/components/ItemRunPages.tsx`, `SpanViewer.tsx`) |
-| Single lane | `#/lane/<id>` | `LanePage` (`src/components/LanePage.tsx`) |
-| Single gate check | `#/check/<id>` (`?span=`, `?run=`) | `CheckView` (`src/components/PerformanceView.tsx`) |
-| Single landing | `#/landing/<id>` | `LandingPage` (`src/components/TrunkView.tsx`) |
+| Home triage and lane strip | `/` | `Home` (`src/components/Home.tsx`) |
+| Queue and waiting table | `/items` (`?state=`, `?sort=`, `?class=`, `?reason=`) | `ItemsView` (`src/components/ItemsPasses.tsx`) |
+| Queue dependency DAG | `/graph` (`?item=<id>`) | `DependencyGraph` (`src/components/DependencyGraph.tsx`) |
+| Pass ledger | `/passes` (`?range=`, `?item=`, `?action=`, `?session=`, `?holds=hide`) | `PassesView` (`src/components/ItemsPasses.tsx`) |
+| Check and item performance | `/performance` (`?range=24h\|7d\|30d\|all`) | `PerformanceView` (`src/components/PerformanceView.tsx`) |
+| Trunk health and landings | `/trunk` (`?outcome=`, `?item=`, `?range=`, `?superseded=show`) | `TrunkView` (`src/components/TrunkView.tsx`) |
+| Open and blocked questions | `/questions` | `QuestionsView` (`src/components/QuestionsView.tsx`) |
+| Designer session warmth | `/designs`, `/design/<path>` | `DesignsPage` (`src/components/Designers.tsx`) |
+| Single item | `/item/<id>` | `ItemPage` (`src/components/ItemRunPages.tsx`) |
+| Single run and span waterfall | `/run/<id>` (`?span=`, `?tab=`, `?artifact=`, `?exchange=`, `?q=`) | `RunPage` + `SpanViewer` (`src/components/ItemRunPages.tsx`, `SpanViewer.tsx`) |
+| Single lane | `/lane/<id>` | `LanePage` (`src/components/LanePage.tsx`) |
+| Single gate check | `/check/<id>` (`?span=`, `?run=`) | `CheckView` (`src/components/PerformanceView.tsx`) |
+| Single landing | `/landing/<id>` | `LandingPage` (`src/components/TrunkView.tsx`) |
 
-Legacy query-only URLs redirect cleanly in `App.tsx`: `#/?item=<id>` redirects to `#/item/<id>`, and `#/item/<id>?run=<run>` replaces the history entry with `#/run/<run>` while preserving `tab`, `artifact`, and `exchange` parameters.
+Legacy query-only URLs redirect cleanly in `App.tsx`: `/?item=<id>` redirects to `/item/<id>`, and `/item/<id>?run=<run>` replaces the history entry with `/run/<run>` while preserving `tab`, `artifact`, and `exchange` parameters.
 
 Two shared components turn entity names into links across every screen:
 
@@ -129,11 +129,11 @@ The two bands are:
    - **Stopped:** Displays `Stopped` alongside the structured `stop.Explanation` (`Explain` in `tools/tillr-drain/stop/explanation.go`), which preserves the recorded stop reason, timestamp, item ID, step, plain-language `sentence`, and operator recovery `next` action rather than inventing advice from a bare code.
    - **Not known:** When `drain_sessions` has no rows or an older schema lacks session tracking, displays `Not known` rather than reporting a running loop as stopped.
 
-Live invalidation runs over `GET /api/v1/ws` (`serveWS` in `tools/tillr-view/servews.go`, `src/models/socket.ts`), validating loopback `Origin` headers and emitting resource invalidation frames mapped to `queryKeys` (`src/models/queries.ts`). Run keys split `queryKeys.run` (`["runs", id, "run"]`) from `queryKeys.runTranscript` (`["runs", id, "run", "transcript"]`) under `queryKeys.runSubtree` (`["runs", id]`): a growing worker log emits `runlog:<id>`, invalidating only the transcript key rather than re-reading exchanges, timeline, gate, and artifacts on every log line. `useLanesQuery` continues polling on a timer even while the WebSocket is live (faster while `#/lane/<id>` is open) because step files in `.tillr/loop/runs/<run>/steps/` and quiet-age counters advance without SQLite store events.
+Live invalidation runs over `GET /api/v1/ws` (`serveWS` in `tools/tillr-view/servews.go`, `src/models/socket.ts`), validating loopback `Origin` headers and emitting resource invalidation frames mapped to `queryKeys` (`src/models/queries.ts`). Run keys split `queryKeys.run` (`["runs", id, "run"]`) from `queryKeys.runTranscript` (`["runs", id, "run", "transcript"]`) under `queryKeys.runSubtree` (`["runs", id]`): a growing worker log emits `runlog:<id>`, invalidating only the transcript key rather than re-reading exchanges, timeline, gate, and artifacts on every log line. `useLanesQuery` continues polling on a timer even while the WebSocket is live (faster while `/lane/<id>` is open) because step files in `.tillr/loop/runs/<run>/steps/` and quiet-age counters advance without SQLite store events.
 
 Browser keyboard controls are scoped to the surfaces that mount them:
 
-- **Items and Passes tables (`useRowKeys` in `src/components/ItemsPasses.tsx`):** `j` / `k` move row focus down or up, `Enter` opens the focused row's entity URL, `[` / `]` step to the previous or next row and open its entity URL, `u` navigates to `#/`, and `J` / `K` reorder the focused item one visible row down or up when `--write` is enabled and `sort=place`.
+- **Items and Passes tables (`useRowKeys` in `src/components/ItemsPasses.tsx`):** `j` / `k` move row focus down or up, `Enter` opens the focused row's entity URL, `[` / `]` step to the previous or next row and open its entity URL, `u` navigates to `/`, and `J` / `K` reorder the focused item one visible row down or up when `--write` is enabled and `sort=place`.
 - **Run span waterfall (`SpanViewer` in `src/components/SpanViewer.tsx`, when `.span-axis` has focus):** `+` or `=` zooms in, `-` zooms out, `ArrowLeft` / `ArrowRight` pans across the window, and `f` resets to the recorded span bounds (alongside mouse-wheel zoom, `Shift`+wheel or horizontal-wheel pan, and click-drag pan).
 - **Idea intake (`NewIdea` in `src/components/NewIdea.tsx`, when `writes_enabled` is true):** `n` outside form inputs opens the `New idea` dialog, `Ctrl+Enter` / `Cmd+Enter` submits, and `Escape` closes without discarding the `localStorage` draft.
 
@@ -160,30 +160,30 @@ Two server routes produce `WaitingRow` records, and the browser's `fetchWaiting`
 
 `Home` (`src/components/Home.tsx`) renders a two-column triage workspace:
 
-- **Left column (grouped triage):** Partitions rows from `fetchWaiting` into the seven classes in priority order (`alarm`, `needs you`, `needs a cause`, `waits on work`, `waits on the loop`, `ready`, `moving`), preserving 1-based queue `place` order inside each group, showing up to the per-group preview cap, and linking `see all N →` to `#/items?state=unlanded&class=<class>`.
+- **Left column (grouped triage):** Partitions rows from `fetchWaiting` into the seven classes in priority order (`alarm`, `needs you`, `needs a cause`, `waits on work`, `waits on the loop`, `ready`, `moving`), preserving 1-based queue `place` order inside each group, showing up to the per-group preview cap, and linking `see all N →` to `/items?state=unlanded&class=<class>`.
 - **Right rail (`LaneStrip` and `Last passes`):**
   - **Every lane's current work (`LaneStrip` in `src/components/LaneStrip.tsx`, backed by `GET /api/v1/lanes` and `tillr-view lanes` in `tools/tillr-view/lanes.go`):** Displays ordinary lanes, express lanes (`express`), and document desks (`desk`), computing header and strip counts from `work_state`: `running` (live run), `settling` (a held lane lease whose run row is already terminal, rendered as `after <step> ~<elapsed>` using the last finished step clock rather than claiming a gate is running), and `idle` (retaining the lane's last run and outcome). Each row shows its item link, resolved seat and `seat_source` (`dispatch` from `dispatches.seat`, `item` from the item definition, or `none` rendered as `"no seat asked (policy default)"`), backend, 1-based attempt count across distinct runs, run link, state-start elapsed clock, and latest recorded action.
-  - **Last passes:** Summarizes the newest passes from `GET /api/v1/passes` with dispatch/hold counts and non-hold decision links. (Landings live on `#/trunk` rather than a separate Home card.)
+  - **Last passes:** Summarizes the newest passes from `GET /api/v1/passes` with dispatch/hold counts and non-hold decision links. (Landings live on `/trunk` rather than a separate Home card.)
 
 ---
 
 ## Items, Passes, and stable lists
 
-Both `#/items` and `#/passes` wrap their rows in `useStableList` (`src/components/ItemsPasses.tsx`), keyed by the active filter tuple:
+Both `/items` and `/passes` wrap their rows in `useStableList` (`src/components/ItemsPasses.tsx`), keyed by the active filter tuple:
 
 - Until the reader scrolls or focuses a row, list membership and order follow new server snapshots immediately.
 - Once scrolled or focused (`held = true`), visible row IDs and their order freeze. Incoming snapshots still update each visible row's columns (`class`, `why`, `mover`, `since`, `latest_run`) in place, while newly arrived or departed IDs increment `N newer ↑` / `N updates ↑` and external reorderings surface `order changed ↑`. Clicking the banner accepts the latest list and scrolls back to the top; changing any filter resets the scope automatically.
 
 ### Items
 
-`ItemsView` (`#/items`, `src/components/ItemsPasses.tsx`) renders the ungrouped queue ledger:
+`ItemsView` (`/items`, `src/components/ItemsPasses.tsx`) renders the ungrouped queue ledger:
 
 - **Presets and filters:** URL parameter `state` selects `not-moving` (default; hides `ready` and `moving`), `unlanded` (all rows from `/api/v1/why`), or `landed` (projected from `snapshot.items` where `projected_state.state === "landed"`). Additional URL parameters filter by `class` and verbatim `reason` (`why`), and sort by `sort=place` (default, preserving true 1-based places and gaps across the full queue) or `sort=item`.
 - **Columns and actions:** Renders `#` (`place`), `Item` (with an `idea` chip and title for saved ideas, or observation/document subject), `Class` (`ClassState`), `Where`, `Why` (including any `graph_changes`), `Mover` (`EntityText`), `Since`, `Last run`, and — when `writes_enabled` is true — `Order` (`↕` drag handle and `Move to top`, documented in [observatory actions](./observatory-actions.md#browser-writes)).
 
 ### Passes
 
-`PassesView` (`#/passes`, `src/components/ItemsPasses.tsx`, backed by `GET /api/v1/passes` and `fetchPassHistory`) renders the newest-first planning ledger:
+`PassesView` (`/passes`, `src/components/ItemsPasses.tsx`, backed by `GET /api/v1/passes` and `fetchPassHistory`) renders the newest-first planning ledger:
 
 - **Streak folding before filtering (`foldPasses`):** Consecutive passes whose sorted decision tuples `(item_id, place, action, reason, lane_id, run_id)`, `session_id`, `stop`, `detail`, `phases`, and spend totals are identical fold into a single group (`×N passes since <oldest>, same answer`). Folding runs over the complete loaded pass list *before* applying `item`, `action`, `session`, `range`, or `holds=hide` filters so hiding an intervening pass never manufactures a false streak.
 - **Change line, phases, and loop spend:** Each group prints `changed(...)` against the immediately older group (listing per-item `action · reason` transitions), phase durations from `drain_passes` (`phases`), and `PassSpend` (`spend_started_in_loop` and `spend_carried_over`, prefixing `≥ ` whenever `tokens_unreported > 0` indicates runs with unrecorded usage).
@@ -194,14 +194,14 @@ Both `#/items` and `#/passes` wrap their rows in `useStableList` (`src/component
 
 ### Item page
 
-`ItemPage` (`#/item/<id>`, `src/components/ItemRunPages.tsx`) combines `GET /api/v1/items/{id}`, `GET /api/v1/items/{id}/doc`, `GET /api/v1/passes`, and `GET /api/v1/landings?item=<id>`:
+`ItemPage` (`/item/<id>`, `src/components/ItemRunPages.tsx`) combines `GET /api/v1/items/{id}`, `GET /api/v1/items/{id}/doc`, `GET /api/v1/passes`, and `GET /api/v1/landings?item=<id>`:
 
 - Mounts `ItemDetailPane` (`src/components/ItemDetailPane.tsx`) for projected item state ([`tillr-item-states.md`](./tillr-item-states.md)), frozen/live acceptance criteria, allowed-path fence, `DocumentPane` (frontmatter, open question count, and configured `vantage_base_url` link — drawn inert with an explanation when unconfigured), and verbatim idea intake words plus `from` outcomes when `data.idea` is present.
-- Renders `ItemUsage` (`src/components/Usage.tsx`) summing token kinds across recorded attempts, `FoldedDecisions` (`foldItemDecisions`, collapsing consecutive passes with the same `(action, reason)` for this item and linking to `#/passes?item=<id>`), the attempts table linking each `#/run/<run_id>`, and recorded landings linking to `#/landing/<landing_id>`.
+- Renders `ItemUsage` (`src/components/Usage.tsx`) summing token kinds across recorded attempts, `FoldedDecisions` (`foldItemDecisions`, collapsing consecutive passes with the same `(action, reason)` for this item and linking to `/passes?item=<id>`), the attempts table linking each `/run/<run_id>`, and recorded landings linking to `/landing/<landing_id>`.
 
 ### Run page and the span waterfall
 
-`RunPage` (`#/run/<id>`, `src/components/ItemRunPages.tsx`) and `SpanViewer` (`src/components/SpanViewer.tsx`, `src/models/spans.ts`) unify three read routes onto one shared horizontal time axis:
+`RunPage` (`/run/<id>`, `src/components/ItemRunPages.tsx`) and `SpanViewer` (`src/components/SpanViewer.tsx`, `src/models/spans.ts`) unify three read routes onto one shared horizontal time axis:
 
 1. **Coarse pipeline stages (`GET /api/v1/runs/{id}`):** Seven stage slots (`stage`, `run`, `boundary`, `fence`, `gate`, `land`, `verdict`), carrying `runs.finish_reason` (`run/exec.go`) and stage epistemic states.
 2. **Trace observations (`GET /api/v1/runs/{id}/timeline`):** Model turns (`llm_turn`), tool calls (`tool_call`), and subprocess spans read on demand from run artifacts by `tillr-trace run <run-id>`.
@@ -216,20 +216,20 @@ Both `#/items` and `#/passes` wrap their rows in `useStableList` (`src/component
 
 ### Lane page
 
-`LanePage` (`#/lane/<id>`, `src/components/LanePage.tsx`) inspects one lane from `GET /api/v1/lanes`, `GET /api/v1/runs/{id}`, and `GET /api/v1/runs/{id}/transcript`: work state and lease state, current or last run, item, resolved seat (`seat_source`), backend, attempt number, latest action with quiet-age warning, `Run progress` and nested `Child sessions`, `Recent steps` read from `.tillr/loop/runs/<run>/steps/`, and a live output tail refreshed while active unless paused.
+`LanePage` (`/lane/<id>`, `src/components/LanePage.tsx`) inspects one lane from `GET /api/v1/lanes`, `GET /api/v1/runs/{id}`, and `GET /api/v1/runs/{id}/transcript`: work state and lease state, current or last run, item, resolved seat (`seat_source`), backend, attempt number, latest action with quiet-age warning, `Run progress` and nested `Child sessions`, `Recent steps` read from `.tillr/loop/runs/<run>/steps/`, and a live output tail refreshed while active unless paused.
 
 ---
 
 ## Trunk, Performance, Check, Graph, Questions, and Designs
 
-- **Trunk and Landing pages (`#/trunk`, `#/landing/<id>` in `src/components/TrunkView.tsx`, backed by `GET /api/v1/landings`, `GET /api/v1/landings/{id}`, and `tillr-view landings` in `tools/tillr-view/landings.go`):** Displays a `Trunk health` banner (`green` vs `red` from `trunk_status`, failing check links, and `auto_revert` status), followed by a chronological ledger merging `landings` rows (`landed`, `superseded`, `conflict`, `reverted`) with post-landing `trunk_gates` runs. Supports `outcome`, `item`, `range`, and `superseded=show` filters. `LandingPage` shows `trunk_before` → `landed_sha`, `gated_tree` vs `landed_tree` (which legitimately differ when `Trunk.Squash` replays onto a concurrent landing), run and item links, and any conflict paths.
-- **Performance and Check pages (`#/performance`, `#/check/<id>` in `src/components/PerformanceView.tsx`, backed by `GET /api/v1/perf/checks`, `GET /api/v1/perf/items`, `GET /api/v1/checks/{id}`, and `tillr-view perf` in `tools/tillr-view/performance.go`):**
+- **Trunk and Landing pages (`/trunk`, `/landing/<id>` in `src/components/TrunkView.tsx`, backed by `GET /api/v1/landings`, `GET /api/v1/landings/{id}`, and `tillr-view landings` in `tools/tillr-view/landings.go`):** Displays a `Trunk health` banner (`green` vs `red` from `trunk_status`, failing check links, and `auto_revert` status), followed by a chronological ledger merging `landings` rows (`landed`, `superseded`, `conflict`, `reverted`) with post-landing `trunk_gates` runs. Supports `outcome`, `item`, `range`, and `superseded=show` filters. `LandingPage` shows `trunk_before` → `landed_sha`, `gated_tree` vs `landed_tree` (which legitimately differ when `Trunk.Squash` replays onto a concurrent landing), run and item links, and any conflict paths.
+- **Performance and Check pages (`/performance`, `/check/<id>` in `src/components/PerformanceView.tsx`, backed by `GET /api/v1/perf/checks`, `GET /api/v1/perf/items`, `GET /api/v1/checks/{id}`, and `tillr-view perf` in `tools/tillr-view/performance.go`):**
   - Anchors `range` (`24h` default, `7d`, `30d`, `all`) to `snapshot.generated_at` (`[since, end)`). When a bounded window is empty, `EmptyRange` probes `to_ms=<end>` across all history so the page distinguishes "quiet in this window, older records exist" from "nothing recorded yet."
   - Renders four tables: `Gate checks` sorted by `p95_ms` descending (`n` timed / total executions, `p50`, `p95` — suppressed as unavailable below the minimum timed-sample threshold rather than fabricating a tail percentile — `Max`, summed `Waited` from `waited_ms_json`, and `Failed`), `Gate wall per pass` from `drain_summary.gate_trend` (highlighting `▲ Over budget` and counting gated passes missing served budgets), `Phases per pass` (paging `/api/v1/passes` exhaustively via `fetchPassRange`), and `Items` sorted by `usage_tokens` descending.
-  - `CheckView` (`#/check/<id>`, optional `?span=<span_id>&run=<run_id>`) lists recorded executions of one check, highlighting the selected span row (`aria-selected`) and linking each execution back to `#/run/<run_id>?span=<span_id>`.
-- **Dependency graph (`#/graph` in `src/components/DependencyGraph.tsx`, `src/models/dependencyGraph.ts`):** Lays out unlanded items left-to-right across `blocked_by` edges from `snapshot.items`, coloring each node by its waiting class (`ClassState`), marking cycles and self-loops (`data-cycle`, `data-self`) and satisfied or missing external blockers (`✓` / `?`), and dimming unrelated nodes/edges when `?item=<id>` is selected to isolate everything the item waits on and everything it unblocks.
-- **Questions (`#/questions` in `src/components/QuestionsView.tsx`, `tools/tillr-view/questions.go`):** Reads Vantage's question index through the shared `vantageCache` (`vantagecache.go`), separating questions currently holding queued items (`question-open`) from unreferenced open/blocked questions, with configured Vantage links per document.
-- **Designs (`#/designs`, `#/design/<path>` in `src/components/Designers.tsx`, `tools/tillr-view/designers.go`):** Reports designer session cache state (`warm` with `warm_until` vs expired), recorded context token count, handled review-comment batches, and arrival-bucket counts (`within_lifetime`, `after_lifetime`, `no_session`, `unmeasured`) used to tune `comments.refresh_hours`.
+  - `CheckView` (`/check/<id>`, optional `?span=<span_id>&run=<run_id>`) lists recorded executions of one check, highlighting the selected span row (`aria-selected`) and linking each execution back to `/run/<run_id>?span=<span_id>`.
+- **Dependency graph (`/graph` in `src/components/DependencyGraph.tsx`, `src/models/dependencyGraph.ts`):** Lays out unlanded items left-to-right across `blocked_by` edges from `snapshot.items`, coloring each node by its waiting class (`ClassState`), marking cycles and self-loops (`data-cycle`, `data-self`) and satisfied or missing external blockers (`✓` / `?`), and dimming unrelated nodes/edges when `?item=<id>` is selected to isolate everything the item waits on and everything it unblocks.
+- **Questions (`/questions` in `src/components/QuestionsView.tsx`, `tools/tillr-view/questions.go`):** Reads Vantage's question index through the shared `vantageCache` (`vantagecache.go`), separating questions currently holding queued items (`question-open`) from unreferenced open/blocked questions, with configured Vantage links per document.
+- **Designs (`/designs`, `/design/<path>` in `src/components/Designers.tsx`, `tools/tillr-view/designers.go`):** Reports designer session cache state (`warm` with `warm_until` vs expired), recorded context token count, handled review-comment batches, and arrival-bucket counts (`within_lifetime`, `after_lifetime`, `no_session`, `unmeasured`) used to tune `comments.refresh_hours`.
 
 ---
 
@@ -261,7 +261,7 @@ Every status badge and class cell encodes state three ways — colour, symbol (`
 
 ### Usage without dollar prices
 
-`Usage.tsx` (`RunUsage`, `ItemUsage`, `UsageSummary` in `src/components/Usage.tsx`) renders recorded resource consumption on `#/run/<id>`, `#/item/<id>`, and `#/performance`:
+`Usage.tsx` (`RunUsage`, `ItemUsage`, `UsageSummary` in `src/components/Usage.tsx`) renders recorded resource consumption on `/run/<id>`, `/item/<id>`, and `/performance`:
 
 - **Tokens by kind:** Input, cache-read, cache-write, output, reasoning, and total tokens (`runs.usage_tokens` and per-turn trace usage), naming unrecorded fields explicitly rather than substituting `0`.
 - **Model, backend, and streaming latency:** Model identifier, backend adapter, time to first output (`first_output_ms`), and generation throughput (`output_tokens_per_second`, surfaced both in `RunUsage` and inline on `llm_turn` rows in `SpanViewer`).
@@ -287,11 +287,11 @@ The observatory deliberately excludes:
 
 Routes and controls present in link helpers or earlier sketches that are **not built** at `bc8dda147c84de98a239194961e0fb4b187bea79`:
 
-- **Four hash routes render `App.tsx`'s `"Page unavailable"` fallback (`This build does not serve <hash> yet.`):** `#/runs` (cross-item runs list linked from `NAV`), `#/pass/<stamp>` (single-pass page linked from `EntityLink`), `#/doc/<path>` (standalone document route), and `#/question/<id>` (standalone question route; `#/questions` lists all open/blocked questions).
-- **Graphical five-lane Trunk timeline:** Not built; `#/trunk` serves the chronological landings and post-landing trunk-gate table.
+- **Four routes render `App.tsx`'s `"Page unavailable"` fallback (`This build does not serve <route> yet.`):** `/runs` (cross-item runs list linked from `NAV`), `/pass/<stamp>` (single-pass page linked from `EntityLink`), `/doc/<path>` (standalone document route), and `/question/<id>` (standalone question route; `/questions` lists all open/blocked questions).
+- **Graphical five-lane Trunk timeline:** Not built; `/trunk` serves the chronological landings and post-landing trunk-gate table.
 - **Unmounted first-design components:** `QueueRail.tsx` and `InspectPane.tsx` remain in `tools/tillr-view/web/src/components/` from the superseded three-pane layout and are not mounted by `App.tsx` (`ItemDetailPane.tsx` remains mounted inside `ItemPage`).
 - **Unimplemented draft shortcuts:** Global two-key navigation chords (`g h`, `g i`, …), `/` filter focus, keyboard `p` pause, `t` timezone toggle (timestamps render as ISO-8601 UTC or relative strings), `y` / `c` copy shortcuts, and `?` key-sheet overlay are not wired in the front end.
-- **Queued `#/run/<id>` wall-time split and chronological scheduling-decision ledger ([`D-OR7`](#why-its-this-way), specified in [`D-SR1`](../design/session-recording.md#44-worker-test-slot-wait-recording-run-wall-time-split-and-chronological-scheduling-decisions-d-sr1)):** Not yet built on the trunk at `ba0fe8f64` (while `9f468ca23` Claude transcript entries/closing notice and `57fb8867f` per-run `seat` / `workflow` / `node` display are already built and kept intact). When built on top of the trunk across `tools/go-test-shards.py`, `tests/go-test-shards.test.py`, `tools/tillr-view/`, and its `just pack-sync` mirror, `go-test-shards.py` appends fail-open `slot.wait` spans to `$TILLR_TRACE_DIR/slot-waits.jsonl` and `RunPage` / `GET /api/v1/runs/{id}` render the per-run split of wall time into model time, active tool time, and unioned test-slot wait time alongside the drain's time-ordered scheduling decisions for that run (allocation, gate start and end, refusal, retry).
+- **Queued `/run/<id>` wall-time split and chronological scheduling-decision ledger ([`D-OR7`](#why-its-this-way), specified in [`D-SR1`](../design/session-recording.md#44-worker-test-slot-wait-recording-run-wall-time-split-and-chronological-scheduling-decisions-d-sr1)):** Not yet built on the trunk at `ba0fe8f64` (while `9f468ca23` Claude transcript entries/closing notice and `57fb8867f` per-run `seat` / `workflow` / `node` display are already built and kept intact). When built on top of the trunk across `tools/go-test-shards.py`, `tests/go-test-shards.test.py`, `tools/tillr-view/`, and its `just pack-sync` mirror, `go-test-shards.py` appends fail-open `slot.wait` spans to `$TILLR_TRACE_DIR/slot-waits.jsonl` and `RunPage` / `GET /api/v1/runs/{id}` render the per-run split of wall time into model time, active tool time, and unioned test-slot wait time alongside the drain's time-ordered scheduling decisions for that run (allocation, gate start and end, refusal, retry).
 
 ---
 
@@ -323,13 +323,13 @@ Each row preserves a decision or settled question (`D-OR1`–`D-OR7`, [`OQ-OR1`]
 
 | ID | Decision | Why it stays |
 | :--- | :--- | :--- |
-| D-OR1 | Give every entity kind its own canonical hash URL and render every mention through `EntityLink` / `EntityText` | Hiding runs, passes, checks, or landings behind query parameters on `#/item/<id>` leaves cross-item entities without shareable addresses and forces the reader back through tables. |
+| D-OR1 | Give every entity kind its own canonical hash URL and render every mention through `EntityLink` / `EntityText` | Hiding runs, passes, checks, or landings behind query parameters on `/item/<id>` leaves cross-item entities without shareable addresses and forces the reader back through tables. |
 | D-OR2 | Define a pass from `drain_passes` and `dispatches` grouped by `dispatched_at`, never from `drain_ticks` | `drain_ticks` records only passes that ran the gate, silently dropping every pass where all items held — the exact passes an operator investigating a stalled queue needs to read. |
 | D-OR3 | Classify recorded hold reasons through one leaf rule table (`holdrules.Rules`) marked `class_source: "rule"`, routing unmapped reasons to `holdrules.Unknown` (`needs a cause`) | Keeping one leaf package shared by `tillr-drain` tests and `tillr-view` prevents silent drift between new drain hold reasons and operator-facing triage classes. |
 | D-OR4 | Keep six distinct marks for recorded zero, unrecorded, not applicable, unreadable, lower bound (`≥`), and derived (`~` / viewer clock) | Collapsing nulls, skips, corrupt artifacts, and true zeros into one `"—"` hides instrumentation gaps and makes unrecorded spend or timing look free. |
 | D-OR5 | Ship `why`, `waiting`, `passes`, `lanes`, `landings`, `perf`, and `trace` as CLI faces over the same Go projections that `/api/v1/` serves | Browser-only projections cannot be pasted into terminal diagnostics or verified without a DOM harness; shared Go projections keep CLI and web counts identical by construction. |
 | D-OR6 | Combine run stages, `tillr-trace` timeline spans, and `pipeline_spans` gate checks into one `SpanViewer` waterfall on one time axis | Separate stage strips, gate waterfalls, and turn timelines use incompatible horizontal scales and hide whether wall time went to model turns, subprocesses, or gate waits. |
-| D-OR7 | **Designer's decision; the owner may overturn this.** Split a run's wall time on `#/run/<id>` into model time, active tool time, and unioned worker test-slot wait time from fail-open `$TILLR_TRACE_DIR/slot-waits.jsonl` spans in `tools/go-test-shards.py` (with `≥` lower-bound fallback on legacy wait notices and `not recorded` when unmeasured), and list the drain's scheduling decisions for that run in chronological order *(operator-filed request, mechanism written by the design seat on 2026-11-20; not an owner's ruling; queued under [`D-SR1`](../design/session-recording.md#44-worker-test-slot-wait-recording-run-wall-time-split-and-chronological-scheduling-decisions-d-sr1))* | Without structured worker slot-wait intervals and run-scoped scheduling events on `#/run/<id>`, a long run waiting on test-slot contention looks identical to active tool execution and forces the operator to cross-read passes, dispatches, refusals, and retries by hand. |
+| D-OR7 | **Designer's decision; the owner may overturn this.** Split a run's wall time on `/run/<id>` into model time, active tool time, and unioned worker test-slot wait time from fail-open `$TILLR_TRACE_DIR/slot-waits.jsonl` spans in `tools/go-test-shards.py` (with `≥` lower-bound fallback on legacy wait notices and `not recorded` when unmeasured), and list the drain's scheduling decisions for that run in chronological order *(operator-filed request, mechanism written by the design seat on 2026-11-20; not an owner's ruling; queued under [`D-SR1`](../design/session-recording.md#44-worker-test-slot-wait-recording-run-wall-time-split-and-chronological-scheduling-decisions-d-sr1))* | Without structured worker slot-wait intervals and run-scoped scheduling events on `/run/<id>`, a long run waiting on test-slot contention looks identical to active tool execution and forces the operator to cross-read passes, dispatches, refusals, and retries by hand. |
 | OQ-OR1 | Show token counts by kind, model, backend, time to first output, and output tokens/sec on runs, items, and performance, and strip dollar prices everywhere *(owner ruling, 2026-11-15)* | Token and latency facts are recorded observations needed for post-run analysis, whereas USD estimates across subscriptions, cached tokens, and shifting rates are inaccurate and stay iceboxed ([roadmap](../tillr/roadmap.md#icebox)). |
 | OQ-OR2 | Open each entity (including an item) as its own full-width page rather than a three-pane split or quick-look modal, with row-stepping keys (`[` / `]`, `j` / `k`, `u`) on list pages *(settled on principle 2026-11-15; confirmed by owner in [`OQ-PR5`](../tillr/decision-provenance-review.md#OQ-PR5))* | A link can name only one subject; full-width entity pages give the span waterfall, transcript, and tables horizontal room without squeezing three columns onto one viewport. |
-| OQ-OR3 | Group Home by who must act next (`needs you` first) in place order while keeping `#/items` as one ungrouped queue table in curated `place` order *(settled on principle 2026-11-15; confirmed by owner in [`OQ-PR5`](../tillr/decision-provenance-review.md#OQ-PR5))* | Grouping both screens destroys a single visible queue order to drag and audit, while flat rank order on Home buries owner-blocked items beneath higher-placed items waiting on work. |
+| OQ-OR3 | Group Home by who must act next (`needs you` first) in place order while keeping `/items` as one ungrouped queue table in curated `place` order *(settled on principle 2026-11-15; confirmed by owner in [`OQ-PR5`](../tillr/decision-provenance-review.md#OQ-PR5))* | Grouping both screens destroys a single visible queue order to drag and audit, while flat rank order on Home buries owner-blocked items beneath higher-placed items waiting on work. |

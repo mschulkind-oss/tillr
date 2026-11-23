@@ -14,7 +14,7 @@ const fullRun = { ...runData, stages: runData.stages.map(s => s.stage === "stage
 const originalFetch = globalThis.fetch, originalSocket = globalThis.WebSocket;
 class SilentSocket { close() {} }
 beforeEach(() => {
- window.history.replaceState(null, "", "/#/item/item-seed-06");
+ window.history.replaceState(null, "", "/item/item-seed-06");
  globalThis.WebSocket = SilentSocket as unknown as typeof WebSocket;
  globalThis.fetch = (async input => {
   const path = String(input);
@@ -33,20 +33,20 @@ test("a cold item URL opens a full page without an inspector reading forever", a
  expect(view.container.textContent).toContain("item-seed-02");
 });
 test("legacy item/run inspection redirects in place and keeps its tab", async () => {
- window.history.replaceState(null, "", "/#/item/item-seed-02?run=run-item-seed-02&tab=transcript");
+ window.history.replaceState(null, "", "/item/item-seed-02?run=run-item-seed-02&tab=transcript");
  const view = mount();
- await waitFor(() => expect(window.location.hash).toBe("#/run/run-item-seed-02?tab=transcript"));
+ await waitFor(() => expect((window.location.pathname + window.location.search)).toBe("/run/run-item-seed-02?tab=transcript"));
  await screen.findByText("read the design and land the change");
  expect(view.container.querySelector('[aria-label="Run page"]')).not.toBeNull();
  fireEvent.click(screen.getByRole("button", { name: "Exchanges" }));
  await waitFor(() => expect(view.container.textContent).toContain("tillr-loop -> tillr-gate"));
- expect(window.location.hash).toContain("tab=exchanges");
+ expect((window.location.pathname + window.location.search)).toContain("tab=exchanges");
 });
 test("legacy query-only item URL redirects to the item page", async () => {
  window.history.replaceState(null, "", "/?item=item-seed-06"); mount();
- await waitFor(() => expect(window.location.hash).toBe("#/item/item-seed-06"));
+ await waitFor(() => expect((window.location.pathname + window.location.search)).toBe("/item/item-seed-06"));
  expect(window.location.search).toBe("");
- expect(canonicalRoute("#/item/item-seed-02", "")).toBeNull();
+ expect(canonicalRoute("/item/item-seed-02")).toBeNull();
 });
 test("consecutive same-answer passes fold, but a changed answer starts a new row", () => {
  const decisions = ["hold", "hold", "dispatch", "hold"].map((action,i) => ({ decision_id: `d${i}`, item_id: "item-1", lane_id: "", run_id: "", action, reason: "ready", dispatched_at_ms: 100 - i }));
@@ -54,7 +54,7 @@ test("consecutive same-answer passes fold, but a changed answer starts a new row
  expect(foldedDecisions(decisions)[0].since).toBe(99);
 });
 test("a run URL uses the existing timing routes and shows turn and tool spans", async () => {
- window.history.replaceState(null, "", "/#/run/run-item-seed-02");
+ window.history.replaceState(null, "", "/run/run-item-seed-02");
  const calls: string[] = [], fetch = globalThis.fetch;
  globalThis.fetch = (async input => { calls.push(String(input)); return fetch(input); }) as typeof fetch;
  const view = mount();
@@ -72,13 +72,13 @@ test("a run URL uses the existing timing routes and shows turn and tool spans", 
 });
 
 test("a cold exchange URL loads its payload even without the exchanges tab", async () => {
- window.history.replaceState(null, "", "/#/run/run-item-seed-02?exchange=run-item-seed-02%2Fgate.verdict");
+ window.history.replaceState(null, "", "/run/run-item-seed-02?exchange=run-item-seed-02%2Fgate.verdict");
  const view = mount();
  await waitFor(() => expect(view.container.textContent).toContain('"outcome":"pass"'));
  expect(view.container.textContent).not.toContain("Select an exchange");
 });
 test("an unknown exchange selection names the missing record", async () => {
- window.history.replaceState(null, "", "/#/run/run-item-seed-02?exchange=missing");
+ window.history.replaceState(null, "", "/run/run-item-seed-02?exchange=missing");
  const view = mount();
  await waitFor(() => expect(view.container.textContent).toContain("Exchange missing is not recorded"));
 });

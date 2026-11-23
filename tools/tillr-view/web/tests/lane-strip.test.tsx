@@ -39,7 +39,7 @@ test("Home renders every lane and counts exactly the same ten rows", () => {
   const rows = strip.querySelectorAll("li");
   expect(rows).toHaveLength(10);
   lanes.forEach((lane, i) => {
-    expect(within(rows[i]).getByRole("link", { name: lane.lane_id }).getAttribute("href")).toBe(`#/lane/${lane.lane_id}`);
+    expect(within(rows[i]).getByRole("link", { name: lane.lane_id }).getAttribute("href")).toBe(`/lane/${lane.lane_id}`);
     expect(rows[i].textContent).not.toMatch(/gating|landing|paused/);
   });
   expect(rows[4].textContent).toContain("after gate ~40s");

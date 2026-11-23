@@ -31,9 +31,9 @@ import {
   transcriptTruncatedData,
 } from "./fixtures";
 import {
-  hashFromSelection,
+  routeFromSelection,
   searchFromSelection,
-  selectionFromHash,
+  selectionFromRoute,
   selectionFromSearch,
   DEFAULT_SELECTION,
 } from "../src/models/url";
@@ -544,16 +544,16 @@ addCase("the URL round-trips every selection and defaults the tab", () => {
   expect(selectionFromSearch("")).toEqual(DEFAULT_SELECTION);
   // The item is the route, so a reload lands on the same item and everything else rides
   // behind it as parameters.
-  expect(hashFromSelection(selection)).toBe(
-    "#/item/item-seed-02?run=run-item-seed-02&tab=timeline&exchange=run-item-seed-02%2Fseam%2Fproc&artifact=gate.verdict",
+  expect(routeFromSelection(selection)).toBe(
+    "/item/item-seed-02?run=run-item-seed-02&tab=timeline&exchange=run-item-seed-02%2Fseam%2Fproc&artifact=gate.verdict",
   );
-  expect(selectionFromHash(hashFromSelection(selection))).toEqual(selection);
-  expect(selectionFromHash("#/item/item-seed-02")).toEqual({
+  expect(selectionFromRoute(routeFromSelection(selection))).toEqual(selection);
+  expect(selectionFromRoute("/item/item-seed-02")).toEqual({
     ...DEFAULT_SELECTION,
     item: "item-seed-02",
   });
-  expect(selectionFromHash("")).toEqual(DEFAULT_SELECTION);
-  expect(hashFromSelection(DEFAULT_SELECTION)).toBe("");
+  expect(selectionFromRoute("")).toEqual(DEFAULT_SELECTION);
+  expect(routeFromSelection(DEFAULT_SELECTION)).toBe("/");
 });
 
 describe("the observatory renders gaps as gaps", () => {

@@ -513,6 +513,47 @@ var serveCases = []serveCase{
 			t.Fatalf("an unknown API route answered %v, want an error body with code %s", body, codeUnknownRoute)
 		}
 	}},
+	{"view_paths_fall_back_to_the_index_document_and_only_api_and_assets_stay_404", func(t *testing.T, h *serveHarness) {
+		// The front end routes by path (History API), so a deep link or a reload of
+		// `/runs` must reach the index document; the router then reads the path.
+		webDir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(webDir, "assets"), 0o755); err != nil {
+			t.Fatalf("creating the assets directory: %v", err)
+		}
+		for name, body := range map[string]string{
+			"index.html":      "<!doctype html><div id=root></div>",
+			"assets/index.js": "// bundle",
+			"favicon.svg":     "<svg/>",
+		} {
+			if err := os.WriteFile(filepath.Join(webDir, name), []byte(body), 0o644); err != nil {
+				t.Fatalf("writing %s: %v", name, err)
+			}
+		}
+		web, note, code := openWebAssets(webDir, "")
+		if code != record.ExitOK {
+			t.Fatalf("openWebAssets(%s) refused: %s", webDir, note)
+		}
+		h.srv.web = web
+		for _, route := range []string{"/runs", "/admin", "/admin/runs?after=5", "/admin/runs/12", "/items?state=unlanded", "/item/item-a", "/item/a%2Fb", "/run/run-1?tab=transcript", "/trunk", "/graph?item=x"} {
+			if status, raw := h.getRaw(route); status != http.StatusOK || !bytes.Contains(raw, []byte("id=root")) {
+				t.Fatalf("%s answered %d with %q, want the index document", route, status, raw)
+			}
+		}
+		for _, route := range []string{"/assets/index.js", "/favicon.svg"} {
+			if status, raw := h.getRaw(route); status != http.StatusOK || bytes.Contains(raw, []byte("id=root")) {
+				t.Fatalf("%s answered %d with %q, want the asset itself", route, status, raw)
+			}
+		}
+		for _, route := range []string{"/assets/missing.js", "/missing.css", "/api", "/api/", "/api/nope", "/api/v2/anything", "/api/v1/nope"} {
+			status, raw := h.getRaw(route)
+			if status != http.StatusNotFound {
+				t.Fatalf("%s answered %d with %q, want 404", route, status, raw)
+			}
+			if bytes.Contains(raw, []byte("id=root")) {
+				t.Fatalf("%s answered the index document: %s", route, raw)
+			}
+		}
+	}},
 	{"the_face_cannot_write_the_store", func(t *testing.T, h *serveHarness) {
 		// The read-only open is the enforcement, not the handler's discipline: a write
 		// through this process's handle must fail at the driver.

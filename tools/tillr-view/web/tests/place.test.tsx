@@ -31,7 +31,7 @@ test.each([false, true, "refused"])("Items move-to-top with writes=%s against a 
   const nativeFetch = globalThis.fetch;
   vi.stubGlobal("fetch", (path: RequestInfo | URL, init?: RequestInit) => nativeFetch(`http://127.0.0.1:${address.port}${String(path)}`, { ...init, signal: undefined }));
   vi.stubGlobal("WebSocket", SilentSocket);
-  window.history.replaceState(null, "", "/#/items?state=unlanded");
+  window.history.replaceState(null, "", "/items?state=unlanded");
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const view = render(<QueryClientProvider client={client}><App /></QueryClientProvider>);
   await screen.findByRole("link", { name: "second" });

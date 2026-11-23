@@ -18,7 +18,7 @@ export const MAX_FETCHES = 500;
 
 export interface PageView {
   page: string;
-  nav: "load" | "hash";
+  nav: "load" | "route";
   started_ms: number;
   first_data_ms: number | null;
   settled_ms: number | null;
@@ -53,12 +53,12 @@ export interface ClientBatch {
   dropped_fetches: number;
 }
 
-/** The route a hash names, with ids folded so one run is not its own page. */
+/** The route a path names, with ids folded so one run is not its own page. */
 export function pageOf(hash: string): string {
-  const path = hash.split("?")[0] || "#/";
+  const path = hash.split("?")[0] || "/";
   const parts = path.split("/");
-  if (parts.length > 2 && ["item", "run", "design", "check", "landing"].includes(parts[1])) return `#/${parts[1]}/{id}`;
-  return path === "#" ? "#/" : path;
+  if (parts.length > 2 && ["item", "run", "design", "check", "landing"].includes(parts[1])) return `/${parts[1]}/{id}`;
+  return path;
 }
 
 export interface PerfRecorderOptions {
@@ -86,8 +86,8 @@ export class PerfRecorder {
     this.session = Math.random().toString(36).slice(2, 10);
   }
 
-  /** A page view begins: the document's load (at navigation start, 0) or a hash change. */
-  beginPage(hash: string, nav: "load" | "hash"): void {
+  /** A page view begins: the document's load (at navigation start, 0) or a route change. */
+  beginPage(hash: string, nav: "load" | "route"): void {
     this.finishPage();
     this.current = { page: pageOf(hash), nav, started_ms: nav === "load" ? 0 : this.now(), first_data_ms: null, settled_ms: null, requests: 0 };
   }
