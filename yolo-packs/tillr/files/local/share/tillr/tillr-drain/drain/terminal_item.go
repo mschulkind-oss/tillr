@@ -29,12 +29,61 @@ const (
 	// ReasonItemAlreadyTerminal is the settle decision for such a run.
 	ReasonItemAlreadyTerminal = "item-already-terminal"
 	itemTerminalSettledKind   = "drain.item-already-terminal"
+	runEndedItemClosedKind    = "drain.run-ended-item-closed"
 )
 
 func init() {
-	if err := event.Register(itemTerminalSettledKind, Utility); err != nil {
-		panic(err)
+	for _, kind := range []string{itemTerminalSettledKind, runEndedItemClosedKind} {
+		if err := event.Register(kind, Utility); err != nil {
+			panic(err)
+		}
 	}
+}
+
+// runEndedItemClosed is drain.run-ended-item-closed's payload, recorded when the drain
+// ends a live run through its own ending path because its item was closed.
+type runEndedItemClosed struct {
+	ItemID    string `json:"item_id"`
+	RunID     string `json:"run_id"`
+	LaneID    string `json:"lane_id,omitempty"`
+	ItemState string `json:"item_state"`
+	Reason    string `json:"reason"`
+	Detail    string `json:"detail"`
+}
+
+// itemClosedInStore reports whether id is currently in its definition's closed state.
+func itemClosedInStore(r *store.Reader, id string) (bool, string, error) {
+	var state string
+	err := r.QueryRow(`SELECT state FROM items WHERE item_id = ?`, id).Scan(&state)
+	if err == sql.ErrNoRows {
+		return false, "", nil
+	}
+	if err != nil {
+		return false, "", err
+	}
+	declared, err := definition.ForReader(r)
+	if err != nil {
+		return false, "", err
+	}
+	return closedState(declared.Parsed, state), state, nil
+}
+
+// workHasUnfinishedRun reports whether a dispatched attempt still has a node without a
+// recorded terminal run.
+func workHasUnfinishedRun(r *store.Reader, work *pendingWork) (bool, error) {
+	if work == nil || work.Done || work.Ready || work.Examining || work.Candidate != nil || work.Decision.RunRequest == nil {
+		return false, nil
+	}
+	for _, node := range parallelNodes(work.Decision) {
+		rec, err := terminalRecord(r, node.RunRequest.RunID)
+		if err != nil {
+			return false, err
+		}
+		if rec == nil {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // operatorFinishedLanding identifies an explicit finish that still stands. Rank

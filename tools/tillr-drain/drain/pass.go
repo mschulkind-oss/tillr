@@ -2927,8 +2927,8 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 	if err != nil {
 		return "", err
 	}
-	// An explicit finish can arrive while a run face still owns its lease. End
-	// only those runs, using normal interruption and recovery before settlement.
+	// A close or explicit finish can arrive while a run face still owns its lease.
+	// End only those runs, using normal interruption and recovery before settlement.
 	var finished map[string]bool
 	for _, p := range plans {
 		if p.decision.Action == ActionHold && p.decision.Reason == ReasonItemAlreadyTerminal {
@@ -2944,7 +2944,7 @@ func (l *Loop) passMode(ctx context.Context, result *LoopResult, pendingOnly boo
 			return "", err
 		}
 		for _, line := range skipped {
-			l.reportf("loop: finish existing landing: %s\n", line)
+			l.reportf("loop: end terminal item run: %s\n", line)
 		}
 	}
 	// Resolve batches that disappeared before applying this snapshot. Closing a

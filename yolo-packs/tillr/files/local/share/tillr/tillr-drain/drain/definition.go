@@ -105,11 +105,15 @@ func finishedState(d definition.Definition, state string) bool {
 	return false
 }
 
+func closedState(d definition.Definition, state string) bool {
+	return (d.Closed != "" && state == d.Closed) || state == "closed"
+}
+
 // blockerSatisfied reports whether a dependency in state satisfies a blocked_by edge.
 // Closing an item without landing does not satisfy work that waits on its landing; only
 // landed and resolved-elsewhere (or another non-closed finished state) unblock it.
 func blockerSatisfied(d definition.Definition, state string) bool {
-	return state != d.Closed && state != "closed" && finishedState(d, state)
+	return !closedState(d, state) && finishedState(d, state)
 }
 
 func holdEnabled(d definition.Definition, reason string) bool {
