@@ -39,6 +39,9 @@ type Store struct {
 	// events is the process's committed-event cache for this store, nil when the
 	// process has not turned it on (eventcache.go).
 	events *eventCache
+	// stampDB is a pooled read handle's one dedicated connection for PRAGMA data_version,
+	// whose values are comparable only on one connection; nil on a one-connection handle.
+	stampDB *sql.DB
 }
 
 // Open opens the store at path and selects SQLite's write-ahead log (WAL), so
@@ -353,12 +356,27 @@ func openRead(ctx context.Context, path, params string, options ...OpenOption) (
 	if err != nil {
 		return nil, fmt.Errorf("store: opening %s read-only: %w", path, err)
 	}
-	db.SetMaxOpenConns(1)
+	db.SetMaxOpenConns(cfg.readConns)
+	db.SetMaxIdleConns(cfg.readConns)
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
 		return nil, readOpenError(path, err)
 	}
-	return &Store{db: db, path: path, busyTimeout: cfg.busyTimeout, events: eventCacheFor(path)}, nil
+	s := &Store{db: db, path: path, busyTimeout: cfg.busyTimeout, events: eventCacheFor(path)}
+	if cfg.readConns > 1 {
+		stamp, err := sql.Open("sqlite", dsn(dbPath, true, cfg.busyTimeout)+params)
+		if err == nil {
+			stamp.SetMaxOpenConns(1)
+			stamp.SetMaxIdleConns(1)
+			err = stamp.PingContext(ctx)
+		}
+		if err != nil {
+			db.Close()
+			return nil, readOpenError(path, err)
+		}
+		s.stampDB = stamp
+	}
+	return s, nil
 }
 
 // ReadWithoutCreating reads an existing store without establishing SQLite's WAL
@@ -497,7 +515,11 @@ func sameFileVersion(a, b os.FileInfo) bool {
 // sidecar.close.end), so a close a writer waited behind is attributable.
 func (s *Store) Close() error {
 	if !s.writable {
-		return s.db.Close()
+		err := s.db.Close()
+		if s.stampDB != nil {
+			err = errors.Join(err, s.stampDB.Close())
+		}
+		return err
 	}
 	trace := startSQLiteTrace(s.path, "close")
 	err := s.checkpointIfDue(context.Background(), trace)

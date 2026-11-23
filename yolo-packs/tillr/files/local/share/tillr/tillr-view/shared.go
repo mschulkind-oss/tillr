@@ -40,8 +40,9 @@ import (
 //     store write after is shown at the next store change; the drain's heartbeat commits
 //     within seconds, so that bound is short on a running loop.
 //
-// The data_version stamp is per connection, so it is sound because the server's store
-// handle is one connection (store.OpenRead); a pool would need a different stamp.
+// The data_version stamp is per connection, so the server's pooled store handle reads it on
+// one dedicated connection, just before each answer's transaction begins (Reader.DataVersion):
+// the answer is then at least as new as its stamp, and a stale hit is impossible.
 type sharedAnswers struct {
 	// builds counts the builder's runs, for the tests: sharing is only shown by it.
 	builds atomic.Int64
@@ -103,7 +104,7 @@ func readStoreStamp(r *store.Reader) (storeStamp, error) {
 	if stamp.head, err = r.EventHeadSeq(); err != nil {
 		return stamp, err
 	}
-	if err := r.QueryRow(`PRAGMA data_version`).Scan(&stamp.dataVersion); err != nil {
+	if stamp.dataVersion, err = r.DataVersion(); err != nil {
 		return stamp, fmt.Errorf("reading the store's data_version: %w", err)
 	}
 	return stamp, nil

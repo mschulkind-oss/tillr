@@ -57,6 +57,10 @@ type Reader struct {
 	// (eventcache.go). Only a read-only transaction's reads extend it: readValues is
 	// non-nil exactly for those.
 	events *eventCache
+	// dataVersion is the store's PRAGMA data_version read on the handle's dedicated stamp
+	// connection just before this transaction began; nil on a one-connection handle, whose
+	// own connection answers (see DataVersion).
+	dataVersion *int64
 }
 
 type readValue struct {
@@ -97,12 +101,38 @@ func (s *Store) ReadTx(ctx context.Context, fn func(*Reader) error) error {
 func (s *Store) readTx(ctx context.Context, db interface {
 	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
 }, fn func(*Reader) error) error {
+	var stamp *int64
+	if s.stampDB != nil {
+		// Read before the transaction begins: the snapshot is then at least as new as the
+		// stamp, so a cache keyed on it can be rebuilt needlessly but never kept stale.
+		var v int64
+		if err := s.stampDB.QueryRowContext(ctx, `PRAGMA data_version`).Scan(&v); err != nil {
+			return fmt.Errorf("store: reading the data version: %w", err)
+		}
+		stamp = &v
+	}
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return fmt.Errorf("store: beginning the read transaction: %w", err)
 	}
 	defer tx.Rollback()
-	return fn(&Reader{ctx: ctx, q: tx, readValues: map[any]readValue{}, events: s.events})
+	return fn(&Reader{ctx: ctx, q: tx, readValues: map[any]readValue{}, events: s.events, dataVersion: stamp})
+}
+
+// DataVersion is SQLite's PRAGMA data_version: it changes when another connection commits,
+// so it says "the store moved" whatever moved. Values are comparable only when read on one
+// connection, so a handle with several read connections answers from one dedicated
+// connection, read just before this transaction began (the snapshot is at least as new);
+// a one-connection handle answers from its own connection.
+func (r *Reader) DataVersion() (int64, error) {
+	if r.dataVersion != nil {
+		return *r.dataVersion, nil
+	}
+	var v int64
+	if err := r.q.QueryRowContext(r.ctx, `PRAGMA data_version`).Scan(&v); err != nil {
+		return 0, fmt.Errorf("store: reading the data version: %w", err)
+	}
+	return v, nil
 }
 
 // Query runs one query inside the read transaction. It is the domain-row half of the
