@@ -679,6 +679,7 @@ func (l *Loop) judgeTrunkChecks(ctx context.Context, replay ReplayStep, candidat
 	out, err := restartWork(ctx, l, func(child context.Context) (ReplayOutcome, error) {
 		return replay.Replay(child, candidate, rev, rest)
 	})
+	l.sweepDisabledMarkers(ctx)
 	if err != nil || !out.Known || out.Rev != "" && out.Rev != rev {
 		return ReplayOutcome{}, source, err
 	}
@@ -1162,6 +1163,7 @@ func (l *Loop) culpritLandingAttribution(ctx context.Context, replay ReplayStep,
 		out, err := restartWork(ctx, l, func(child context.Context) (ReplayOutcome, error) {
 			return replay.Replay(child, candidate, sha, checks)
 		})
+		l.sweepDisabledMarkers(ctx)
 		if err != nil || !out.Known || out.Rev != "" && out.Rev != sha {
 			return false, false
 		}
@@ -1592,6 +1594,7 @@ func (l *Loop) maybeRolling(ctx context.Context, mainSHA string, force bool, res
 	out, err := restartWork(ctx, l, func(child context.Context) (RollingOutcome, error) {
 		return step.Rolling(child, base, mainSHA)
 	})
+	l.sweepDisabledMarkers(ctx)
 	if err != nil {
 		return err
 	}

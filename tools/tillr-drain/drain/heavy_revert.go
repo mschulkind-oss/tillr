@@ -150,6 +150,7 @@ func (l *Loop) revertLanding(ctx context.Context, tip, landing string, checks []
 	}
 	candidate := Candidate{ItemID: RevertItemID(landing), LaneID: "revert", RunID: "run-revert-" + shortSHA(landing) + "-" + shortSHA(tip), Worktree: work, BaseSHA: tip, HeadSHA: revert}
 	gate, err := l.cfg.Steps.Gate(ctx, candidate)
+	l.sweepDisabledMarkers(ctx)
 	if err != nil {
 		if ctx.Err() != nil {
 			return RevertOutcome{}, err
@@ -305,6 +306,7 @@ func (l *Loop) revertFromGateReplay(ctx context.Context, candidate Candidate, re
 	}
 	replayOne := func(ctx context.Context, sha, checkID string) (bool, error) {
 		out, err := replay.Replay(ctx, candidate, sha, []string{checkID})
+		l.sweepDisabledMarkers(ctx)
 		if err != nil {
 			return false, err
 		}
@@ -630,6 +632,7 @@ func (l *Loop) judgeRequired(ctx context.Context, candidate *Candidate) (string,
 	failed := []string{}
 	for _, id := range ids {
 		check, err := step.JudgeRequired(ctx, candidate.Worktree, id, selectors[id])
+		l.sweepDisabledMarkers(ctx)
 		if err != nil {
 			if ctx.Err() != nil {
 				return "", err

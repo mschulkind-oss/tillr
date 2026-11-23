@@ -384,6 +384,9 @@ type LoopConfig struct {
 	// bracket: `run exec` writes it by design, so the loop never names it to the boundary
 	// check (see BoundarySpec.Store).
 	Store string
+	// GateResultsStore overrides `<git-common-dir>/tillr-gate/results` when tests place
+	// disabled-check markers outside Root's git directory.
+	GateResultsStore string
 	// LaneRoot is the directory the lanes' worktrees live under: lane `lane-1` is
 	// <LaneRoot>/lane-1, which is also the lane directory `run exec` writes its log into.
 	LaneRoot string
@@ -549,6 +552,7 @@ type Loop struct {
 	extRollAction               landingAction
 	lastHeavyStatus             string // pass-owned status; cap zero still reports distance from green
 	restartMu                   sync.Mutex
+	flakySweepMu                sync.Mutex
 	restartReplaced             bool
 	stopInheritedReaper         func()
 	restartMechanical           sync.RWMutex
@@ -3210,6 +3214,7 @@ func (l *Loop) verify(ctx context.Context, prepared *Candidate, result *LoopResu
 		l.gatesInFlight--
 		l.mu.Unlock()
 	}
+	l.sweepDisabledMarkers(ctx)
 	if err != nil {
 		var judgmentErr *gateJudgmentRecordError
 		if ctx.Err() != nil || errors.As(err, &judgmentErr) {
@@ -3555,6 +3560,9 @@ func (l *Loop) landCandidate(ctx context.Context, candidate Candidate, result *L
 	}
 	if err := l.completeItem(ctx, candidate); err != nil {
 		return "", false, err
+	}
+	if IsFlakyRepairItem(candidate.ItemID) {
+		l.sweepDisabledMarkers(context.WithoutCancel(ctx))
 	}
 	if IsTrunkFixer(candidate.ItemID) && l.cfg.Root != "" {
 		repaired := landed.TrunkAfter

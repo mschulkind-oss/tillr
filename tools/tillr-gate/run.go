@@ -73,6 +73,9 @@ type VerdictCheck struct {
 	Fingerprint string `json:"fingerprint,omitempty"`
 	PassTime    string `json:"pass_time,omitempty"`
 	FailTime    string `json:"fail_time,omitempty"`
+	PassLogRef  string `json:"pass_log_ref,omitempty"`
+	FailLogRef  string `json:"fail_log_ref,omitempty"`
+	RepairItem  string `json:"repair_item,omitempty"`
 	UnboundPath string `json:"unbound_path,omitempty"`
 	CheckID     string `json:"check_id"`
 	Result      string `json:"result"`

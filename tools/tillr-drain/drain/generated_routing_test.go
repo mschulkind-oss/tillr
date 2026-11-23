@@ -36,13 +36,14 @@ func generatedFixture(t *testing.T, generated ...string) (refusalLoopFixture, *L
 // partial list of prefixes.
 func TestOnePredicateNamesEveryGeneratedItem(t *testing.T) {
 	for id, want := range map[string]bool{
-		TrunkFixerID("c6614acf3c09aa"):  true,
-		DefectItemID("go test ./..."):   true,
-		"gate-budget-2026-11-18":        true,
-		"rewrite-item-declared":         true,
-		RevertItemID("c6614acf3c09aa"):  true,
-		"item-declared":                 false,
-		"item-gate-budget-in-the-title": false,
+		TrunkFixerID("c6614acf3c09aa"):   true,
+		DefectItemID("go test ./..."):    true,
+		FlakyRepairBaseID("fast-sample"): true,
+		"gate-budget-2026-11-18":         true,
+		"rewrite-item-declared":          true,
+		RevertItemID("c6614acf3c09aa"):   true,
+		"item-declared":                  false,
+		"item-gate-budget-in-the-title":  false,
 	} {
 		if got := IsGeneratedItem(id); got != want {
 			t.Errorf("IsGeneratedItem(%q) = %v, want %v", id, got, want)
@@ -54,7 +55,7 @@ func TestOnePredicateNamesEveryGeneratedItem(t *testing.T) {
 // has no block of its own to declare, so document-fed triage never takes it, and nothing
 // sends it to the owner for a document it can never have.
 func TestGeneratedItemsAreNeverTriagedForADocument(t *testing.T) {
-	generated := []string{"rewrite-item-declared", DefectItemID("go test ./..."), "gate-budget-2026-11-18"}
+	generated := []string{"rewrite-item-declared", DefectItemID("go test ./..."), FlakyRepairBaseID("fast-sample"), "gate-budget-2026-11-18"}
 	_, l := generatedFixture(t, generated...)
 	for _, id := range generated {
 		d := planFor(t, l, id)

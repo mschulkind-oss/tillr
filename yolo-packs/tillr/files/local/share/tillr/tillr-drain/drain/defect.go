@@ -45,11 +45,11 @@ func DefectItemID(command string) string {
 // IsDefectItem answers whether an item is a generated tooling-defect item.
 func IsDefectItem(itemID string) bool { return strings.HasPrefix(itemID, DefectItemPrefix) }
 
-// IsGeneratedRepair answers whether the loop filed the item itself: a trunk fixer or a
-// tooling-defect item. Neither has a design document, so neither has a block the design
-// seat can amend.
+// IsGeneratedRepair answers whether the loop filed the item itself: a trunk fixer, a
+// tooling-defect item, a flaky-check repair item, or a remote-sync item. None has a
+// design document, so none has a block the design seat can amend.
 func IsGeneratedRepair(itemID string) bool {
-	return IsTrunkFixer(itemID) || IsDefectItem(itemID) || IsRemoteSyncItem(itemID)
+	return IsTrunkFixer(itemID) || IsDefectItem(itemID) || IsFlakyRepairItem(itemID) || IsRemoteSyncItem(itemID)
 }
 
 // acquittedRefusal answers whether a refusal step holds its item behind generated repair

@@ -1414,6 +1414,9 @@ func briefValuesFor(recorded stagedItem, spec StageSpec, target, targetKind, bas
 	if IsDefectItem(recorded.ItemID) && spec.Conflict == nil {
 		settled = "This is a tooling-defect item the loop filed for a tool another item's worker could not use: its criterion, with the evidence it quotes, is the whole brief. " + GeneratedRepairRule
 	}
+	if IsFlakyRepairItem(recorded.ItemID) && spec.Conflict == nil {
+		settled = "This is a flaky-check repair item the loop filed for a disabled check: its criterion, with the contradicting episode evidence it quotes, is the whole brief. " + GeneratedRepairRule
+	}
 	if IsRemoteSyncItem(recorded.ItemID) && spec.Conflict == nil {
 		settled = "This is an express remote-sync conflict repair item the loop filed for a rebase conflict onto the moved remote: its criterion and the conflict context in Facts are the whole brief. Resolve the conflict with one linear commit atop the staged base (zero merge parents) while leaving every non-conflicting path identical to the mechanical three-way merge. A `trunk` obstacle is not open to it. " + GeneratedRepairRule
 	}

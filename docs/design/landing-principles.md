@@ -2,15 +2,16 @@
 title: "Landing principles — the durable rulings, and what enforces each"
 status: accepted
 stage: CURRENT
-verified: 2026-11-19
+verified: 2026-11-23
 covers:
   - docs/design/escalation-ladder.md
+  - docs/design/gate-rework.md
   - docs/design/tillr-judge-and-lifecycle.md
   - docs/pi/candidate-triage-2026-10-28.md
   - docs/pi/landing-replay-ruling-2026-11-02.md
   - docs/pi/stranded-candidates-2026-11-02.md
 tags: [board, landing, principles, rulings, library]
-summary: "Sixteen principles distilled from the landing rulings of 2026-10-28 to 2026-11-21, each with the measurement that produced it, the thing that enforces it today, and the one lander it binds. Principles 5 and 6's per-attempt budgets are superseded by the 2026-11-17 owner ruling D-JL10 (worker endings are never counted; identical repeats diagnose at design). A principle whose enforcement column says 'nothing' is a claim, not a rule, and is listed as such rather than assumed; a principle that is not lander-scoped says so and names the dispatch program it binds instead."
+summary: "Seventeen principles distilled from the landing rulings of 2026-10-28 to 2026-11-21, each with the measurement that produced it, the thing that enforces it today, and the one lander it binds. Principles 5 and 6's per-attempt budgets are superseded by the 2026-11-17 owner ruling D-JL10 (worker endings are never counted; identical repeats diagnose at design). A principle whose enforcement column says 'nothing' is a claim, not a rule, and is listed as such rather than assumed; a principle that is not lander-scoped says so and names the dispatch program it binds instead."
 ---
 
 # Landing principles
@@ -613,6 +614,82 @@ stated intent that binds the operator: each hand action of this kind is a missin
 *Scope:* **not lander-scoped.** It binds the dispatch side, `tillr-drain` and `tillr-loop`, where
 holds, faults and the queue's order live. The lander holds no item and asks no one, so it cannot
 break this principle and is not bound by it.
+
+## 17. Disable a flaky check, file its repair, and count it neither green nor blocking
+
+A check that both passes and fails on the same declared inputs is flaky. The response is to disable
+that check, file an item to re-enable that named check correctly, and keep it from blocking any
+unrelated candidate or holding the trunk red. The owner ruled on 2026-11-21 in two messages,
+verbatim, with his spelling kept: "The correct move for a flaky test is disable it, file an item to
+fix it, and don't let it block anything. It is not considered green, but it also doesn't let you
+block other things." and "And the principle here is you make the trunk green by disabling the flaky
+test. The test is not green because it's flaky, but the trunk is green because the test is no longer
+included.And yes, the item that is filed should be to re-enable it correctly, the test that was
+flaky."
+
+Two consequences follow from his words. First, a disabled check is excluded from the program's
+pass, remembered, and fail counts and is listed apart as `disabled`: the candidate or trunk is green
+because the contradicted check is no longer included, while the check itself remains not green until
+its repair item lands. Second, the filed item is not a generic flake report: it names the disabled
+check and asks to fix it at its cause and re-enable it correctly, with its work done only when the
+check is back in the gate program and no longer both passes and fails on the same inputs.
+
+*Measured 2026-11-21:* before `D-GR21` in
+[the gate-rework design](./gate-rework.md#a-contradicted-check-is-disabled), three incompatible
+behaviors competed across the gate: crediting a contradicted check as a `flaky` pass, re-running it
+live on unrelated candidates so an intermittent failure still refused landings or filed trunk fixers,
+and treating the contradiction itself as red. When `disabled` was first attempted by teaching check
+consumers one at a time, the kept candidate grew to 111 files and 10,088 added lines and was refused
+eleven times by its verifier because separate Go and Python sites still credited a contradicted
+check green, turned `disabled` into `error`, or dropped its repair item on a cancelled or errored
+step ([the classification inventory](./gate-rework.md#every-place-a-check-result-is-classified)).
+
+*Enforced by:* **partly.** Every moved Go and Python classification site routes through one
+five-outcome classifier in [`tools/tillr/checkresult/classify.go`](../../tools/tillr/checkresult/classify.go)
+(`Classify`, `Aggregate`, `Disabled`, `DisabledMarker`, landed through `f4f3748f69` and
+`d5f5f41a7e`), guarded by `TestClassificationScanGoSites` in
+[`tools/tillr-gate/classification_scan_test.go`](../../tools/tillr-gate/classification_scan_test.go),
+`TestClassificationScanDrainSites` in
+[`tools/tillr-drain/drain/classification_scan_test.go`](../../tools/tillr-drain/drain/classification_scan_test.go),
+and [`tools/gate/classification-scan.test.py`](../../tools/gate/classification-scan.test.py).
+`Aggregate` leaves `disabled` out of both failing and unknown outcomes, so a run whose remaining
+checks pass answers `pass`. Store-backed `tillr-gate classify` and `tillr-gate enable`
+([`tools/tillr-gate/classify.go`](../../tools/tillr-gate/classify.go),
+[`tools/tillr-gate/enable.go`](../../tools/tillr-gate/enable.go)) persist
+`disabled/<sha256(check_id)>.json` with both timestamps and retained log copies on an
+exact-fingerprint contradiction, keep returning `disabled` until `enable` records the episode
+cleared, and honor `--prove-disabled` for the repair candidate's proof. In
+[`tools/tillr-gate/main.go`](../../tools/tillr-gate/main.go), `writeRunSummary` leaves `disabled`
+checks out of `passed`, `remembered`, and `failed`, counts `disabled` apart, and lists each disabled
+check with its episode evidence and repair item
+(`TestDisabledCheckExcludedFromPassAndFailCountsAndListedAsDisabled` in
+[`disabled_summary_test.go`](../../tools/tillr-gate/disabled_summary_test.go)). On the dispatch
+side, `sweepDisabledMarkers` in
+[`tools/tillr-drain/drain/flaky_repair.go`](../../tools/tillr-drain/drain/flaky_repair.go) sweeps
+`disabled/*.json` at pass start and when every gate, replay, rolling, and heavy step returns
+(detaching cancellation so errored and cancelled steps still file), files `flaky-<check-id>` (and
+`-2`, `-3`, … for later episodes) titled ``re-enable check `<id>` correctly`` as a generated repair
+item needing no document block, and invokes `tillr-gate enable` once the repair item lands
+(`TestDisabledMarkerSweepFilesReEnableItemTitleAndWords`,
+`TestDisabledMarkerSweepDeduplicatesWhileOpenAndEnablesAfterLand`, and
+`TestDisabledMarkerSweepFilesOnCancelledAndErroredSteps` in
+[`flaky_repair_test.go`](../../tools/tillr-drain/drain/flaky_repair_test.go)). *Not enforced:* live
+`tillr-gate run` and `tillr-gate checks` still set `outcome.Memory = "flaky"` in `annotateMemory`
+([`tools/tillr-gate/memory.go`](../../tools/tillr-gate/memory.go)) and execute the contradicted
+check instead of short-circuiting on `disabled/*.json`, the Python store-backed checks do not yet
+call store-backed `tillr-gate classify`, and the drain does not yet pass `--prove-disabled` when
+gating a `flaky-<check-id>` candidate (`rg -n 'prove-disabled' tools/tillr-drain` returned nothing
+on 2026-11-23) or re-classify cached proof/replay records and historical `DISABLED` statuses (slices
+`2c`, `2d`, `3a`, and `3b` in
+[the classifier build order](./gate-rework.md#classify-every-check-result-in-one-place)).
+
+*Scope:* **not lander-scoped.** It binds the gate and dispatch side — `tillr-gate`, `tillr-drain`,
+and `tillr-loop` — which classify check outcomes, print verdict summaries, sweep disabled markers,
+file `flaky-<check-id>` repair items, and run `tillr-gate enable`.
+[`tools/tillr-land`](../../tools/tillr-land/) reads only the top-level `gate.verdict` result
+(`pass`, `pass-inherited`, `fail`, `error` in
+[`verdict.go`](../../tools/tillr-land/land/verdict.go)) and neither inspects per-check `disabled`
+entries nor keeps check state.
 
 ---
 
