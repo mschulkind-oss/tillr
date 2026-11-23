@@ -1021,6 +1021,24 @@ commit:<sha>, diff:candidate.diff, file:path/to/changed.go:42, node:<id>, or for
 checks, cmd:go-test-tillr-run or test:TestExecRecordsQuickOutChoice; put full command
 lines, arguments, and results in reason).
 
+Use this exact JSON shape (unknown keys such as "criteria" are rejected by the validator):
+
+`+"```json\n"+`{
+  "evaluated_head": %q,
+  "evaluated_tree": %q,
+  "outcome": "pass",
+  "verdicts": [
+    {
+      "criterion_id": "<criterion_id>",
+      "criterion_hash": "<criterion_hash>",
+      "verdict": "done",
+      "claim_class": "<claim_class>",
+      "reason": "<reason>",
+      "evidence": ["diff:candidate.diff"]
+    }
+  ]
+}
+`+"```\n"+`
 A verdict of defective means the request itself is wrong or impossible; it closes the item.
 Example: the request requires incompatible outcomes for the same input.
 Quote the faulty words in reason and cite request:words (saved request) or criterion:<id>
@@ -1042,7 +1060,8 @@ report it as a regression.
 
 A blocked entry also needs waiting_on
 with waiter (owner, design, plan, or item:<id> for a stored item). Its reason explains
-why that waiter must act. Do not include actor or judged_actor.
+why that waiter must act. Do not include actor, judged_actor, criteria, or any other
+unlisted key; unknown fields and duplicate keys are rejected.
 Pass requires every criterion done. Return RESULT: done after writing the file.
 
 ## Scope and boundaries
@@ -1098,7 +1117,7 @@ Write the verdict file, then report RESULT: done.
 
 ## Stop conditions
 Never change the worker's candidate.
-`, c.ItemID, receipt.Request.RunID, c.Worktree, output, receipt.Options.Head, receipt.Options.Tree, candDir, candDir, candDir, receipt.Options.Head, seatLines(l.currentPolicy()), diffPath, c.BaseSHA, receipt.Options.Head, changedPaths, criteria.String())
+`, c.ItemID, receipt.Request.RunID, c.Worktree, output, receipt.Options.Head, receipt.Options.Tree, receipt.Options.Head, receipt.Options.Tree, candDir, candDir, candDir, receipt.Options.Head, seatLines(l.currentPolicy()), diffPath, c.BaseSHA, receipt.Options.Head, changedPaths, criteria.String())
 	brief += history
 	if len(receipt.Writers) == 0 {
 		for _, producer := range receipt.Producers {
