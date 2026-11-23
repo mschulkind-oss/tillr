@@ -79,6 +79,16 @@ test("lane rows poll step files and quiet ages, but Pause stops their timer", as
   expect(requested).toHaveLength(2);
 });
 
+test("the lane page asks for its own lane's run history, and the home strip asks for none", async () => {
+  function HistoryProbe() {
+    useLanesQuery(true, true, true, "lane/1");
+    return null;
+  }
+  render(<QueryClientProvider client={new QueryClient()}><HistoryProbe /></QueryClientProvider>);
+  await elapse(0);
+  expect(requested).toEqual(["/api/v1/lanes?history=lane%2F1"]);
+});
+
 describe("a screen with no live channel re-reads on a slow timer", () => {
   test("the hooks re-read once the poll interval elapses", async () => {
     renderScreen(false);

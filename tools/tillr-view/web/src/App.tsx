@@ -57,7 +57,7 @@ export function App() {
   const passHistory = usePassHistoryQuery(range, historyPages, passesOpen, paused);
   const waiting = useWaitingQuery(home || items || path === "#/graph", paused), questions = useQuestionsQuery(questionsOpen, paused);
   const designs = useDesignsQuery(designsOpen, paused);
-  const lanes = useLanesQuery(home || kind === "lane", paused, kind === "lane");
+  const lanes = useLanesQuery(home || kind === "lane", paused, kind === "lane", kind === "lane" ? id : undefined);
   const trunk = useTrunkRoute();
   const { refresh } = useRefreshAll();
   const onPause = () => { setPaused(!paused); if (paused) refresh(); };
