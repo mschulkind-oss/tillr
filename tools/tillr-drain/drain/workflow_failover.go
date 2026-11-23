@@ -13,11 +13,15 @@ import (
 // Queue only this node, on its original backend. Admission waits for recorded
 // recovery; staging preserves earlier node commits and the graph's original base.
 func (l *Loop) holdFailedWorkflowNode(ctx context.Context, d Decision, base string, rec run.Record, result *LoopResult) error {
+	log := logTail(rec.ArtifactRefs)
+	if classifyDecisionAttempt(d, rec, log) != AttemptInfrastructure {
+		return l.restartUnreadWorkflowNode(ctx, d, base, rec)
+	}
 	if err := l.recordBackendWindow(ctx, rec); err != nil {
 		return err
 	}
 	l.countInfrastructureFailure(result, d.ItemID)
-	if held, err := l.recordInfrastructureFailure(ctx, d, rec, logTail(rec.ArtifactRefs)); err != nil {
+	if held, err := l.recordInfrastructureFailure(ctx, d, rec, log); err != nil {
 		return err
 	} else if held {
 		if stop := l.abandon(ctx, d.LaneID, rec.RunID, l.headOf(ctx, d.LaneID), ReasonInfrastructureRepeat); stop != "" {
@@ -27,6 +31,13 @@ func (l *Loop) holdFailedWorkflowNode(ctx context.Context, d Decision, base stri
 	}
 	d.InfrastructureFrom = rec.RunID
 	return l.restartWorkflowNode(ctx, d, base, rec, "restart", "workflow infrastructure failure")
+}
+
+// Restart a workflow node that exited normally without a readable RESULT footer,
+// preserving its work and resumable session without counting an infrastructure failure.
+func (l *Loop) restartUnreadWorkflowNode(ctx context.Context, d Decision, base string, rec run.Record) error {
+	d.InfrastructureFrom = rec.RunID
+	return l.restartWorkflowNode(ctx, d, base, rec, "restart", "workflow node answer unread")
 }
 
 // A refused first message is not a paused session. Release only when the
