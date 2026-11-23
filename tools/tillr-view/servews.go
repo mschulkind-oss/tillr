@@ -246,7 +246,8 @@ type storeProbe struct {
 func (d *changeDetector) probe(ctx context.Context) (storeProbe, error) {
 	p := storeProbe{logs: map[string]string{}}
 	err := d.srv.store.ReadTx(ctx, func(r *store.Reader) error {
-		if err := r.QueryRow(`PRAGMA data_version`).Scan(&p.dataVersion); err != nil {
+		var err error
+		if p.dataVersion, err = r.DataVersion(); err != nil {
 			return fmt.Errorf("reading the store's data_version: %w", err)
 		}
 		head, err := r.EventHeadSeq()

@@ -116,3 +116,70 @@ func TestAnAnswerStaysConsistentWhileAWriterCommitsMidAnswer(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func dataVersionOf(t *testing.T, s *store.Store) int64 {
+	t.Helper()
+	var v int64
+	if err := s.ReadTx(context.Background(), func(r *store.Reader) error {
+		var err error
+		v, err = r.DataVersion()
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// The store's change stamp must not depend on which pooled connection answered: with no
+// commit it is the same on every read (even when reads overlap on different connections),
+// and a writer's commit moves it.
+func TestTheDataVersionStampMovesOnACommitWhateverConnectionReads(t *testing.T) {
+	w := writeStore(t)
+	r, err := store.OpenRead(context.Background(), w.Path(), store.WithReadConnections(4))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	// Make the pool open several connections, each with its own history.
+	hold, entered := make(chan struct{}), make(chan struct{}, 4)
+	done := make(chan error, 4)
+	for i := 0; i < 4; i++ {
+		go func() {
+			done <- r.ReadTx(context.Background(), func(rd *store.Reader) error {
+				metaCount(t, rd)
+				entered <- struct{}{}
+				<-hold
+				return nil
+			})
+		}()
+	}
+	for i := 0; i < 4; i++ {
+		<-entered
+	}
+	close(hold)
+	for i := 0; i < 4; i++ {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	first := dataVersionOf(t, r)
+	for i := 0; i < 8; i++ {
+		if got := dataVersionOf(t, r); got != first {
+			t.Fatalf("read %d: stamp %d with no commit, want %d", i, got, first)
+		}
+	}
+	for commit := 0; commit < 3; commit++ {
+		before := dataVersionOf(t, r)
+		if err := w.WriteTx(context.Background(), func(tx *store.Tx) error {
+			_, err := tx.Exec(`INSERT INTO meta (key, value) VALUES (?, 'x')`, time.Now().String()+string(rune('a'+commit)))
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < 8; i++ {
+			if got := dataVersionOf(t, r); got == before {
+				t.Fatalf("commit %d: read %d still stamped %d after the commit", commit, i, got)
+			}
+		}
+	}
+}
