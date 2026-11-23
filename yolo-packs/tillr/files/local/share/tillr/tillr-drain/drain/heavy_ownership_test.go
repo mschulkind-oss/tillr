@@ -1,7 +1,9 @@
 package drain
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -147,7 +149,9 @@ names={'environ','Cancellation','_kill_process_group','_run_cancellable','_start
 constants={'REUSE_ENV','GATE_ENV_DROP','_CPU_SHIM','WATCHDOG_SAMPLE_INTERVAL','WATCHDOG_SILENT_SAMPLES','CHECK_STALLED_RC'}
 nodes=[node for node in module.body if (isinstance(node,(ast.FunctionDef,ast.ClassDef)) and node.name in names) or (isinstance(node,ast.Assign) and any(isinstance(target,ast.Name) and target.id in constants for target in node.targets))]
 exec(compile(ast.Module(body=nodes,type_ignores=[]),source,'exec'),globals())
-_run_cancellable(Path.cwd(),['sh','-c','sleep 1000 & echo $! > '+sys.argv[2]+'.part; mv '+sys.argv[2]+'.part '+sys.argv[2]+'; wait'],1000,None,(),Cancellation(),False)
+rc,out,err,_=_run_cancellable(Path.cwd(),['sh','-c','sleep 1000 & echo $! > '+sys.argv[2]+'.part; mv '+sys.argv[2]+'.part '+sys.argv[2]+'; wait'],1000,None,(),Cancellation(),False)
+print(f'legacy driver returned rc={rc} out={out!r} err={err!r}',file=sys.stderr,flush=True)
+sys.exit(1)
 `)
 		legacyProgram = "python3 " + driver + " " + source + " " + child
 	}
@@ -157,27 +161,11 @@ _run_cancellable(Path.cwd(),['sh','-c','sleep 1000 & echo $! > '+sys.argv[2]+'.p
 	}
 	cmd := exec.Command(self, "-test.run=^TestHeavyKilledOwnerHelper$")
 	cmd.Env = append(os.Environ(), "TILLR_TEST_HEAVY_OWNER=1", "TILLR_TEST_HEAVY_ROOT="+root, "TILLR_TEST_HEAVY_WORK="+work, "TILLR_TEST_HEAVY_LEGACY="+legacyProgram)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	if err := cmd.Start(); err != nil {
+	exited, err := waitForHeavyOwnerChild(cmd, child)
+	if err != nil {
 		t.Fatal(err)
 	}
 	defer cmd.Process.Kill()
-	// Readiness is the child's pid file, which the check publishes whole by rename. There is
-	// no wall-clock bound: a helper that dies before publishing it ends the wait, and a hang
-	// is stopped by the test binary's own timeout.
-	exited := make(chan struct{})
-	go func() { cmd.Wait(); close(exited) }()
-	for {
-		if _, err := os.Stat(child); err == nil {
-			break
-		}
-		select {
-		case <-exited:
-			t.Fatal("the owner process ended before its judge child started")
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
 	if err := cmd.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
@@ -203,5 +191,44 @@ _run_cancellable(Path.cwd(),['sh','-c','sleep 1000 & echo $! > '+sys.argv[2]+'.p
 	green := heavyGit(t, root, "rev-parse", GreenRef)
 	if green != heavyGit(t, root, "rev-parse", "HEAD") {
 		t.Fatalf("green=%s", green)
+	}
+}
+
+func waitForHeavyOwnerChild(cmd *exec.Cmd, child string) (<-chan error, error) {
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	// Readiness is the child's pid file, which the check publishes whole by rename. There is
+	// no wall-clock bound: a helper that dies before publishing it ends the wait, and a hang
+	// is stopped by the test binary's own timeout.
+	exited := make(chan error, 1)
+	go func() { exited <- cmd.Wait() }()
+	for {
+		if _, err := os.Stat(child); err == nil {
+			return exited, nil
+		}
+		select {
+		case waitErr := <-exited:
+			return nil, fmt.Errorf("the owner process ended before its judge child started (wait=%v): %s", waitErr, strings.TrimSpace(out.String()))
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func TestHeavyKilledOwnerReportsHelperOutputOnEarlyExit(t *testing.T) {
+	child := filepath.Join(scratchUnderDurable(t), "child.pid")
+	cmd := exec.Command("sh", "-c", "echo stdout-clue; echo stderr-clue >&2; exit 7")
+	_, err := waitForHeavyOwnerChild(cmd, child)
+	if err == nil {
+		t.Fatal("expected early-exit error")
+	}
+	msg := err.Error()
+	for _, want := range []string{"the owner process ended before its judge child started", "exit status 7", "stdout-clue", "stderr-clue"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("error %q missing %q", msg, want)
+		}
 	}
 }
