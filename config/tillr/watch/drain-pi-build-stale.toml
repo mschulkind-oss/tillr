@@ -1,0 +1,29 @@
+# On 2026-11-21..22 four landings moved refs/heads/patch/pi while pi-builds/current.json
+# stayed on 24c7e4f89e08 and drain workers kept running pi 1.5.2.
+[[rule]]
+id = "drain-pi-build-stale"
+scope = "core"
+severity = "warning"
+
+[rule.reads]
+events = ["drain.pi-build-stale", "drain.pi-build-current"]
+
+[rule.when]
+group_by = "global"
+pattern = "predicate_match"
+match = 'event.kind == "drain.pi-build-stale"'
+clear_when = 'event.kind == "drain.pi-build-current"'
+
+[rule.guidance]
+summary = "Drain pi build is stale: active key {{event.stale_key}}, wanted key {{event.wanted_key}} ({{event.reason}})."
+check = [
+  "Inspect tillr drain why and the drain loop log for the post-landing pi roll failure or skip ({{event.detail}}).",
+  "Check refs/heads/patch/pi and pi-builds/current.json to confirm which pi build drain workers are using."
+]
+do = [
+  "Fix the build error and run bin/pi-forks build-pi so drain workers pick up {{event.wanted_key}}."
+]
+
+[rule.delivery]
+receiver = "foreground"
+also_notify = ["subscribers"]

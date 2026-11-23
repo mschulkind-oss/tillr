@@ -16,6 +16,7 @@ import (
 
 func actionFixture(t *testing.T) (*Loop, func(...string) string, func(string) string) {
 	t.Helper()
+	t.Setenv("TILLR_PI_BUILDS_DIR", "")
 	root := t.TempDir()
 	git := func(args ...string) string {
 		t.Helper()
