@@ -3,16 +3,52 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
+	"github.com/mschulkind-oss/tillr/settings"
 	"github.com/mschulkind-oss/tillr/store"
 )
 
+// designRoadmapScope is the roadmaps the repository's settings select for the sync, as the
+// slash-separated repository-relative paths the store records. Nil means unrestricted.
+func designRoadmapScope(root string) ([]string, error) {
+	read, err := settings.Read(root)
+	if err != nil {
+		return nil, err
+	}
+	var scope []string
+	for _, path := range read.Sync.Roadmaps {
+		if filepath.IsAbs(path) {
+			if rel, err := filepath.Rel(root, path); err == nil {
+				path = rel
+			}
+		}
+		scope = append(scope, filepath.ToSlash(filepath.Clean(path)))
+	}
+	return scope, nil
+}
+
 // Sync owns the document grammar and these observations. Waiting only reads
 // the optional table; it never rescans documents or invents an item for them.
-func waitingDesignWithoutItems(r *store.Reader) ([]waitingRow, error) {
-	rows, err := r.Query(`SELECT document,roadmap,roadmap_line,first_seen FROM design_without_item ORDER BY document`)
+//
+// scope names the roadmaps the drain works (settings sync.roadmaps, read by
+// designRoadmapScope); a design document from any other roadmap is not shown. A nil scope
+// is every roadmap, which is what an unrestricted sync reads.
+func waitingDesignWithoutItems(r *store.Reader, scope []string) ([]waitingRow, error) {
+	query := `SELECT document,roadmap,roadmap_line,first_seen FROM design_without_item`
+	var args []any
+	if len(scope) > 0 {
+		marks := make([]string, len(scope))
+		for i, path := range scope {
+			marks[i] = "?"
+			args = append(args, path)
+		}
+		query += ` WHERE roadmap IN (` + strings.Join(marks, ",") + `)`
+	}
+	rows, err := r.Query(query+` ORDER BY document`, args...)
 	if isMissingTable(err) {
 		return nil, nil
 	}
@@ -34,7 +70,7 @@ func waitingDesignWithoutItems(r *store.Reader) ([]waitingRow, error) {
 }
 
 func appendWaitingDesigns(r *store.Reader, rows []waitingRow) ([]waitingRow, error) {
-	designs, err := waitingDesignWithoutItems(r)
+	designs, err := waitingDesignWithoutItems(r, nil)
 	if err != nil {
 		return nil, err
 	}

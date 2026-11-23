@@ -74,6 +74,21 @@ export interface ApiEnvelope<T> {
   data: T;
   /** Set by the waiting read only: what /why says about its document index. */
   documentIndex?: DocumentIndexStatus;
+  /** Set by the waiting read only: which pass (or fresh plan) /why answered from. */
+  whySource?: WhySource;
+  /** Set by the waiting read only: design documents with no item (/why `designs_waiting`). */
+  designsWaiting?: WaitingRow[];
+}
+
+/** Where a /why answer came from: the loop's last recorded pass, or a fresh plan when no
+ * loop is running or no pass is recorded (`fallback` says which). */
+export interface WhySource {
+  kind: "pass" | "planner";
+  pass_id?: string;
+  pass_at_ms?: number;
+  age_s: number;
+  fallback?: string;
+  text: string;
 }
 
 export interface ApiErrorBody {
