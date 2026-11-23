@@ -78,6 +78,27 @@ func TestTheReplayProgramIsHandedTheSharedForkRoot(t *testing.T) {
 	}
 }
 
+// Base replays queue behind the trunk proof by setting GO_TEST_SHARDS_CLASS=ordinary,
+// overriding any inherited proof class even when replaying an older base revision.
+func TestBaseReplayUsesOrdinarySlotClass(t *testing.T) {
+	t.Setenv("GO_TEST_SHARDS_CLASS", "proof")
+	root, tip := committedRoot(t)
+	record := filepath.Join(scratchUnderDurable(t), "slot-class")
+	program := executable(t, `printf '%s' "${GO_TEST_SHARDS_CLASS-<unset>}" > `+record+"\nexit 0")
+	steps := &ProcessSteps{Root: root, LaneRoot: filepath.Join(root, ".tillr", "lanes"), ReplayProgram: program + " {only}"}
+	out, err := steps.Replay(context.Background(), Candidate{}, tip, []string{"unit"})
+	if err != nil || !out.Known {
+		t.Fatalf("the replay answered %+v, %v", out, err)
+	}
+	got, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatalf("reading recorded slot class: %v", err)
+	}
+	if string(got) != "ordinary" {
+		t.Fatalf("the replay program saw GO_TEST_SHARDS_CLASS=%q, want %q", string(got), "ordinary")
+	}
+}
+
 // Named checks run in the candidate lane but can need the shared fork root.
 func TestTheFixerGateProgramIsHandedTheSharedForkRoot(t *testing.T) {
 	f, _ := passFixture(t, "item-a")
