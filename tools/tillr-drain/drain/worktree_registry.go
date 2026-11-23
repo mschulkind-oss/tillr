@@ -30,7 +30,9 @@ func withRegistryLocks(ctx context.Context, repo string, writer bool, fn func() 
 	}
 	common = strings.TrimSpace(common)
 	if writer {
+		endLandWait := timeHandoffPhase(ctx, "land_lock_wait")
 		unlock, err := acquireRegistryLock(ctx, filepath.Join(common, "land.lock"))
+		endLandWait()
 		if err != nil {
 			return err
 		}

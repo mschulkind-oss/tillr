@@ -81,6 +81,79 @@ func (l *Loop) recordHandoffTiming(d Decision, timing handoffTiming) {
 	}
 }
 
+type startHandoff struct {
+	loop     *Loop
+	decision Decision
+	start    time.Time
+	timer    *examinationTimer
+	once     sync.Once
+}
+
+type startHandoffKey struct{}
+
+// workerProcessStarter marks a Steps implementation that calls
+// finishStartHandoff right after spawning the worker process (before waiting
+// for it to exit). Stub Steps implementations that do not implement it have
+// their start handoff closed right before Run is called.
+type workerProcessStarter interface {
+	reportsWorkerProcessStart()
+}
+
+func (l *Loop) beginStartHandoff(ctx context.Context, d Decision) (context.Context, *startHandoff) {
+	sh := &startHandoff{
+		loop:     l,
+		decision: d,
+		start:    time.Now(),
+		timer:    &examinationTimer{},
+	}
+	return withStartHandoff(ctx, sh), sh
+}
+
+func startHandoffFrom(ctx context.Context) *startHandoff {
+	sh, _ := ctx.Value(startHandoffKey{}).(*startHandoff)
+	return sh
+}
+
+func withStartHandoff(ctx context.Context, sh *startHandoff) context.Context {
+	if sh == nil {
+		return ctx
+	}
+	ctx = context.WithValue(ctx, startHandoffKey{}, sh)
+	ctx = context.WithValue(ctx, examinationTimerKey{}, sh.timer)
+	ctx = store.ObserveWrites(ctx, func(start, end time.Time) { sh.timer.add("store_write", start, end) })
+	return ctx
+}
+
+func (sh *startHandoff) setDecision(d Decision) {
+	if sh == nil {
+		return
+	}
+	sh.timer.mu.Lock()
+	sh.decision = d
+	sh.timer.mu.Unlock()
+}
+
+func (sh *startHandoff) finish() {
+	if sh == nil {
+		return
+	}
+	sh.once.Do(func() {
+		end := time.Now()
+		sh.timer.mu.Lock()
+		d := sh.decision
+		timing := handoffTiming{handoffSpan: newHandoffSpan("start", sh.start, end), Phases: sh.timer.phases}
+		sh.timer.phases = nil
+		sh.timer.mu.Unlock()
+		sh.loop.recordHandoffTiming(d, timing)
+	})
+}
+
+func finishStartHandoff(ctx context.Context) {
+	if sh := startHandoffFrom(ctx); sh != nil {
+		sh.finish()
+	}
+}
+
 func (l *Loop) timeHandoff(ctx context.Context, d Decision, phase string) (context.Context, func()) {
 	t := &examinationTimer{}
 	start := time.Now()

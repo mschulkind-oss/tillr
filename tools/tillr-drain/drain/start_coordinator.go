@@ -95,6 +95,8 @@ func (l *Loop) runFastStart(ctx context.Context, view *startView, result *LoopRe
 			rejected = snapshot
 			continue
 		}
+		startCtx, startHandoff := l.beginStartHandoff(ctx, d)
+		endNote := timeHandoffPhase(startCtx, "note_start_claimed")
 		claimedAt := l.cfg.Now().UTC()
 		ready := snapshot.readyAt[d.ItemID]
 		if free := snapshot.laneFreeAt[d.LaneID]; free.After(ready) {
@@ -108,17 +110,21 @@ func (l *Loop) runFastStart(ctx context.Context, view *startView, result *LoopRe
 		l.mu.Unlock()
 		view.noteStartClaimed(d, work)
 		l.countGeneration(result, generation)
+		endNote()
 		timing := PassTiming{TickID: generation, AtMS: at.UnixMilli(), EndMS: claimedAt.UnixMilli(),
 			ClaimMS: max(0, claimedAt.Sub(ready).Milliseconds()), Claims: 1, Applied: 1,
 			GateBudgetMS: l.gateBudget.Milliseconds(), DecisionCounts: map[string]int{d.Action: 1}}
 		// Record the observation before staging can add its duration or send a completion.
-		if err := recordPassTiming(context.WithoutCancel(ctx), l.cfg.Store, timing); err != nil {
+		endPassTiming := timeHandoffPhase(startCtx, "record_pass_timing")
+		passErr := recordPassTiming(context.WithoutCancel(startCtx), l.cfg.Store, timing)
+		endPassTiming()
+		if passErr != nil {
 			retractErr := l.cancelStaging(context.WithoutCancel(ctx), d)
-			l.reportStartError(ctx, d, errors.Join(err, retractErr))
+			l.reportStartError(ctx, d, errors.Join(passErr, retractErr))
 			return
 		}
 		staging.Go(func() {
-			if err := l.stageAndLaunchClaimed(ctx, d, work.BaseSHA, at, result); err != nil {
+			if err := l.stageAndLaunchClaimed(withStartHandoff(ctx, startHandoff), d, work.BaseSHA, at, result); err != nil {
 				l.reportStartError(ctx, d, err)
 			}
 		})
