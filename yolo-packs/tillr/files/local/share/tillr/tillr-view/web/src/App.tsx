@@ -68,7 +68,7 @@ export function App() {
   if (snapshot.error) screen = <main className="home"><RefusalState code={refusalCode(snapshot.error)} message={snapshot.error.message} onRetry={refresh} /></main>;
   else if (home) screen = <Home lanes={lanes.data?.data} lanesError={lanes.error} snapshot={snapshot.data?.data} waiting={waiting.data?.data} waitingError={waiting.error} passes={passes.data?.data} passesError={passes.error} />;
   else if (kind === "lane" && id) screen = <LanePage key={id} id={id} lanes={lanes.data?.data} error={lanes.error} live={live} paused={paused} />;
-  else if (runsOpen) screen = <RunsPage lanes={lanes.data?.data} lanesError={lanes.error} items={snapshot.data?.data.items} />;
+  else if (runsOpen) screen = <RunsPage lanes={lanes.data?.data} lanesError={lanes.error} configured={snapshot.data?.data.drain_summary.session?.lanes} items={snapshot.data?.data.items} />;
   else if (designsOpen) screen = <DesignsPage data={designs.data?.data} error={designs.error} pending={designs.isPending} onRetry={() => void designs.refetch()} path={kind === "design" ? id : undefined} />;
   else if (items) screen = <ItemsView waiting={waiting.data?.data} snapshot={snapshot.data?.data} error={waiting.error ?? snapshot.error} writesEnabled={snapshot.data?.snapshot.writes_enabled === true} onMoved={() => Promise.all([waiting.refetch(), snapshot.refetch()])} />;
   else if (path === "#/graph") screen = <Suspense fallback={<main className="entity-page"><h1>Dependency graph</h1><p>Loading graph…</p></main>}><DependencyGraph items={snapshot.data?.data.items} waiting={waiting.data?.data} selected={params.get("item") ?? undefined} error={waiting.error} /></Suspense>;

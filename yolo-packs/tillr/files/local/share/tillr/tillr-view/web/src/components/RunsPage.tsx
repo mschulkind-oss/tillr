@@ -1,6 +1,10 @@
+import { useState } from "react";
+import { relativeTime } from "../models/board";
 import { useNow } from "../models/clock";
+import { collapseIdleLanes } from "../models/lanes";
 import type { ItemView, LaneRow, RunSummary } from "../models/types";
 import { EntityLink } from "./EntityLink";
+import { MoreIdleLanes } from "./LaneStrip";
 
 const FINISHED_LIMIT = 20;
 function age(ms: number): string {
@@ -34,18 +38,21 @@ function Row({ lane, title, now }: { lane: LaneRow; title?: string; now: number 
   </tr>;
 }
 
-export function RunsPage({ lanes, lanesError, items, now: fixed }: { lanes?: LaneRow[]; lanesError?: Error | null; items?: ItemView[]; now?: number }) {
+export function RunsPage({ lanes, lanesError, items, now: fixed, configured }: { lanes?: LaneRow[]; lanesError?: Error | null; items?: ItemView[]; now?: number; configured?: string[] }) {
+  const [expanded, setExpanded] = useState(false);
   const ticking = useNow();
   const now = fixed ?? ticking;
   const titles = new Map((items ?? []).map(item => [item.item_id, item.title]));
   const finished = finishedRuns(items);
+  const { shown, hidden } = collapseIdleLanes(lanes ?? [], configured, now);
   return <main className="entity-page" aria-label="Runs page">
     <h1>Runs</h1>
     <section className="lane-strip" aria-label="Current lanes">
       <h2>Lanes</h2>
       {lanesError ? <p role="alert">could not read the store: {lanesError.message}</p> : lanes === undefined ? <p role="status">Reading lanes…</p> : lanes.length === 0 ? <p>No lanes recorded.</p> :
         <table><thead><tr><th>Lane</th><th>Item</th><th>Seat / node</th><th>State</th><th>In state</th><th>Run</th></tr></thead>
-          <tbody>{sortLanes(lanes).map(lane => <Row key={lane.lane_id} lane={lane} title={titles.get(lane.item_id)} now={now} />)}</tbody></table>}
+          <tbody>{sortLanes(expanded ? lanes : shown).map(lane => <Row key={lane.lane_id} lane={lane} title={titles.get(lane.item_id)} now={now} />)}</tbody></table>}
+      {lanes && lanes.length > 0 ? <MoreIdleLanes count={hidden.length} open={expanded} onToggle={() => setExpanded(!expanded)} /> : null}
     </section>
     <section aria-label="Recently finished runs">
       <h2>Recently finished</h2>
@@ -56,7 +63,7 @@ export function RunsPage({ lanes, lanesError, items, now: fixed }: { lanes?: Lan
             <td><EntityLink kind="lane" id={run.lane_id} /></td>
             <td><a href={`#/item/${encodeURIComponent(item.item_id)}`}>{item.title || item.item_id}</a></td>
             <td>{run.seat || "—"}</td>
-            <td>{new Date(run.finished_at_ms).toISOString()}</td>
+            <td title={new Date(run.finished_at_ms).toLocaleString()}>{relativeTime(run.finished_at_ms, now)}</td>
             <td>{run.exit_code === null ? run.state : run.exit_code}</td>
           </tr>)}</tbody></table>}
     </section>

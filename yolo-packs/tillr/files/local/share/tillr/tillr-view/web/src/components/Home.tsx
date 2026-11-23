@@ -1,3 +1,4 @@
+import { localTime } from "../models/board";
 import { LaneStrip } from "./LaneStrip";
 import { loopAlive } from "../models/loop";
 import type { DrainSummary, LaneRow, PassRow, SnapshotData, WaitingRow } from "../models/types";
@@ -55,15 +56,15 @@ export function LoopSummary({ drain, passes, error, readError, snapshot, now = D
   return <section className="loop-summary" aria-label="Loop summary">
     <div className="loop-summary__state"><ClassState value={state} />
       <span>{alive ? "Loop alive: the recorded heartbeat is current." : "no loop is running"}</span>
-      {stop ? <span>stopped since {new Date(stop.at_ms).toISOString()} · <EntityText value={stop.item_id || "no single item (loop-wide)"} snapshot={snapshot} passes={passes} /> · {stop.step} · {stop.sentence} Next: {stop.next}</span> : <>
+      {stop ? <span>stopped since {localTime(stop.at_ms)} · <EntityText value={stop.item_id || "no single item (loop-wide)"} snapshot={snapshot} passes={passes} /> · {stop.step} · {stop.sentence} Next: {stop.next}</span> : <>
         <span>{ended ? drain?.last_stop_reason || "stop reason not recorded" : alive ? "watch the next pass" : drain?.session_note || "No session recorded."}</span>
-        {!alive ? <span>Stop explanation not recorded. {ended ? STOP_GUIDANCE[drain?.last_stop_reason ?? ""] ?? "Owner updates the reader for this stop reason before restarting" : "Owner checks the loop session before restarting"}</span> : null}
+        {!alive && ended ? <span>Stop explanation not recorded. {STOP_GUIDANCE[drain?.last_stop_reason ?? ""] ?? "Owner updates the reader for this stop reason before restarting"}</span> : null}
       </>}
     </div>
     {repeated ? <p className="loop-summary__repeated" role="status">
       <strong>{alive ? "Stuck drain (restarted after repeated exits)" : "Stuck drain"}:</strong>{" "}
       loop exited {repeated.count} times in a row ({repeated.reason}{repeated.detail ? `: ${repeated.detail}` : ""}) ·{" "}
-      {new Date(repeated.first_at_ms).toISOString()}..{new Date(repeated.last_at_ms).toISOString()} ·{" "}
+      {localTime(repeated.first_at_ms)}..{localTime(repeated.last_at_ms)} ·{" "}
       Next: <EntityText value={repeated.next} snapshot={snapshot} passes={passes} />
     </p> : null}
     {!alive && drain?.stop_note ? <p><EntityText value={drain.stop_note} snapshot={snapshot} passes={passes} /></p> : null}
@@ -71,7 +72,7 @@ export function LoopSummary({ drain, passes, error, readError, snapshot, now = D
       <p>{latest.stop || "stop not recorded"} · {latest.detail ? <q><EntityText value={latest.detail} snapshot={snapshot} passes={passes} /></q> : "stop detail not recorded"}</p>
       <p>last pass <EntityLink kind="pass" id={passStamp(latest.dispatched_at_ms)} /> → {passCounts(latest)}</p>
     </> : <p>{passes ? "No pass recorded." : "Reading passes…"}</p>}
-    {session ? <p>started {new Date(session.started_at_ms).toISOString()} · last heartbeat {new Date(session.refreshed_at_ms).toISOString()}</p> : null}
+    {session ? <p>started {localTime(session.started_at_ms)} · last heartbeat {localTime(session.refreshed_at_ms)}</p> : null}
     <p>session {session ? <a className="session-link" href={`#/passes?session=${encodeURIComponent(session.session_id)}`}><code>{session.session_id}</code></a> : "not recorded"}</p>
   </section>;
 }
@@ -138,7 +139,7 @@ export function Home({ snapshot, waiting, waitingError, passes, passesError, lan
         })}
       </div>
       <aside>
-        <LaneStrip lanes={lanes} error={lanesError} now={now} />
+        <LaneStrip lanes={lanes} error={lanesError} now={now} configured={snapshot?.drain_summary.session?.lanes} />
         <h2>Last passes</h2>
         {passesError ? <p role="alert">Passes refused: {passesError.message}</p> : passes ? passes.length ? <ul>{newestPasses(passes).slice(0, 3).map(pass => <li key={pass.dispatched_at_ms}>
           <EntityLink kind="pass" id={passStamp(pass.dispatched_at_ms)} /> · {passCounts(pass)}
