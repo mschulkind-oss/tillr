@@ -89,6 +89,14 @@ func (l *Loop) startHeavy(ctx context.Context, tip string) error {
 					}
 				}
 			}, Fix: func(ctx context.Context, sha string, checks []HeavyCheck) error {
+				remaining, err := l.linkMatchingOpenFixers(ctx, sha, checks)
+				if err != nil {
+					return err
+				}
+				if len(remaining) == 0 {
+					return nil
+				}
+				checks = remaining
 				ids := []string{}
 				watches := map[string][]string{}
 				notes := []string{}

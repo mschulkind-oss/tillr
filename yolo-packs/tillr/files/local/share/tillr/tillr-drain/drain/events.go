@@ -43,6 +43,10 @@ const (
 	RefusalKind = "drain.refusal"
 	// FixerAttachedKind retains a new red tip attached to an unresolved repair.
 	FixerAttachedKind = "drain.fixer-attached"
+	// TrunkFailureLinkedKind records a trunk proof failure linked to an open item
+	// whose title or words already name that check's test as the thing it fixes,
+	// instead of filing a duplicate trunk fixer.
+	TrunkFailureLinkedKind = "drain.trunk-failure-linked"
 	// HeavyFaultKind records an attempt that faulted before the tip had a verdict.
 	HeavyFaultKind = "drain.heavy-fault"
 	// FastGateTimingKind records one measured ordinary fast-gate invocation.
@@ -91,7 +95,7 @@ const (
 // one binary would therefore be refused at init, which is the honest answer — the two
 // spellings of one judgment would have to be reconciled first.
 func init() {
-	for _, kind := range []string{BoundaryCheckKind, GatePlanKind, GateVerdictKind, RefusalKind, judgeRequestKind, judgeLandedKind, RetryAckKind, DesignRetryKind, verifyTriageResetKind, "drain.graph-completed", FixerAttachedKind, RevertKind, callOffered, callAnswered, callLanded, callDelivered, callClosed, endingCapabilitiesKind, piFeaturesKind, HeavyFaultKind, FastGateTimingKind} {
+	for _, kind := range []string{BoundaryCheckKind, GatePlanKind, GateVerdictKind, RefusalKind, judgeRequestKind, judgeLandedKind, RetryAckKind, DesignRetryKind, verifyTriageResetKind, "drain.graph-completed", FixerAttachedKind, TrunkFailureLinkedKind, RevertKind, callOffered, callAnswered, callLanded, callDelivered, callClosed, endingCapabilitiesKind, piFeaturesKind, HeavyFaultKind, FastGateTimingKind} {
 		if err := event.Register(kind, Utility); err != nil {
 			panic(err)
 		}
