@@ -29,6 +29,7 @@ func TestRetainLaneHoldClasses(t *testing.T) {
 		{"dirty trunk", errDirtyHeld, false},
 		{"red cap", errRedCapHeld, false},
 		{"rewritten trunk", errTrunkRewritten, false},
+		{"trunk acquitted", errTrunkAcquittedHeld, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			held, keep := retainLane(tc.err)

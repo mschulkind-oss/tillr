@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mschulkind-oss/tillr-drain/lanestate"
+	"github.com/mschulkind-oss/tillr-item/item"
 	"github.com/mschulkind-oss/tillr-run/run"
 	"github.com/mschulkind-oss/tillr/event"
 	"github.com/mschulkind-oss/tillr/store"
@@ -49,6 +50,7 @@ func init() {
 }
 
 var errCandidateLaneReleased = errors.New("candidate lane released during gate-failure replay")
+var errTrunkAcquittedHeld = errors.New("candidate held behind trunk fixer")
 
 // retainLane enumerates examination outcomes that hold a pending candidate. Only
 // the repair handoff owns worktree-dependent progress; the others wait on inputs.
@@ -56,7 +58,7 @@ func retainLane(err error) (held, keep bool) {
 	switch {
 	case errors.Is(err, errRepairPending), errors.Is(err, errJudgeBackendHeld):
 		return true, true
-	case errors.Is(err, errGateNoVerdict), errors.Is(err, errGateStallHeld), errors.Is(err, errItemFaultHeld), errors.Is(err, errRepairHeld), errors.Is(err, errDirtyHeld), errors.Is(err, errRedCapHeld), errors.Is(err, errTrunkRewritten), errors.Is(err, errCandidateLaneReleased):
+	case errors.Is(err, errGateNoVerdict), errors.Is(err, errGateStallHeld), errors.Is(err, errItemFaultHeld), errors.Is(err, errRepairHeld), errors.Is(err, errDirtyHeld), errors.Is(err, errRedCapHeld), errors.Is(err, errTrunkRewritten), errors.Is(err, errCandidateLaneReleased), errors.Is(err, errTrunkAcquittedHeld):
 		return true, false
 	default:
 		return false, false
@@ -507,6 +509,7 @@ func (l *Loop) releaseIdleHeldCandidates(ctx context.Context) error {
 	var works map[string]*pendingWork
 	var faults map[string]ItemFault
 	busy := map[string]bool{}
+	trunkWaits := map[string]bool{}
 	trunkLost := false
 	err = s.ReadTx(ctx, func(r *store.Reader) error {
 		var err error
@@ -522,6 +525,28 @@ func (l *Loop) releaseIdleHeldCandidates(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		for id, w := range works {
+			if w.Done || w.LaneReleased || w.Candidate == nil {
+				continue
+			}
+			var state string
+			if err := r.QueryRow(`SELECT state FROM items WHERE item_id=?`, id).Scan(&state); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					continue
+				}
+				return err
+			}
+			if state != StateBlocked {
+				continue
+			}
+			wait, _, err := item.ReadWaitingOn(r, id)
+			if err != nil {
+				return err
+			}
+			if wait != nil && trunkAcquittedWait(*wait) {
+				trunkWaits[id] = true
+			}
+		}
 		history, err := readTrunkHistory(r)
 		trunkLost = history.Lost != ""
 		return err
@@ -535,7 +560,7 @@ func (l *Loop) releaseIdleHeldCandidates(ctx context.Context) error {
 			continue
 		}
 		reason := faults[id].Reason
-		if reason == "" && w.GateStall == nil && w.DirtyHold == nil && w.RepairHold == nil && w.RedCapHold == nil && w.ReleasePending == "" && !(w.Gated && trunkLost) {
+		if reason == "" && w.GateStall == nil && w.DirtyHold == nil && w.RepairHold == nil && w.RedCapHold == nil && w.ReleasePending == "" && !(w.Gated && trunkLost) && !trunkWaits[id] {
 			continue
 		}
 		if w.RepairHold != nil {

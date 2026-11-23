@@ -2,6 +2,9 @@ package drain
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -311,5 +314,220 @@ func TestTrunkBrokenHoldReleasesOnPassWhenTrunkIsProvedPastRedCommit(t *testing.
 				return nil
 			})
 		})
+	}
+}
+
+type acquittalRegateSteps struct {
+	obstacleRequestSteps
+	mu        sync.Mutex
+	gateCalls []Candidate
+	runIDs    []string
+	gateFn    func(c Candidate) (GateOutcome, error)
+	replays   map[string]ReplayOutcome
+	commitSeq int
+}
+
+func (s *acquittalRegateSteps) Run(ctx context.Context, req run.Request) (run.Record, string, error) {
+	s.mu.Lock()
+	s.commitSeq++
+	seq := s.commitSeq
+	s.runIDs = append(s.runIDs, req.RunID)
+	s.mu.Unlock()
+	if req.ItemID != "" && !IsTrunkFixer(req.ItemID) {
+		target := filepath.Join(s.f.laneRoot, req.LaneID, WorktreeDir)
+		path := filepath.Join(target, "request.txt")
+		if err := os.WriteFile(path, []byte("change "+string(rune('0'+seq))+"\n"), 0o644); err != nil {
+			return run.Record{}, "", err
+		}
+		runGit(s.t, target, "add", "request.txt")
+		runGit(s.t, target, "commit", "-qm", "candidate commit")
+	}
+	return s.obstacleRequestSteps.Run(ctx, req)
+}
+
+func (s *acquittalRegateSteps) Gate(_ context.Context, c Candidate) (GateOutcome, error) {
+	s.mu.Lock()
+	s.gateCalls = append(s.gateCalls, c)
+	fn := s.gateFn
+	s.mu.Unlock()
+	return fn(c)
+}
+
+func (s *acquittalRegateSteps) Replay(_ context.Context, _ Candidate, rev string, _ []string) (ReplayOutcome, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if out, ok := s.replays[rev]; ok {
+		return out, nil
+	}
+	return ReplayOutcome{Rev: rev, Known: true}, nil
+}
+
+func acquittedCandidateFixture(t *testing.T) (refusalLoopFixture, *Loop, *acquittalRegateSteps, string, string, Candidate) {
+	t.Helper()
+	ctx := context.Background()
+	f, l, _ := workflowLoopFixture(t, "")
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := tx.Exec(`UPDATE items SET state='closed'`)
+		return err
+	})
+	base := runGit(t, f.root, "rev-parse", TrunkRef)
+	runGit(t, f.root, "update-ref", GreenRef, base)
+	reqID := fileFixtureRequestWith(t, f, "Acquitted candidate re-gate test\n", "build", item.SingleWorkerWorkflow, []string{"request.txt"}, false)
+	steps := &acquittalRegateSteps{
+		obstacleRequestSteps: obstacleRequestSteps{
+			t: t, f: f,
+			report: func(req run.Request) (string, *landingOffer) {
+				return wrapExtractedReport(req.RunID, "RESULT: done\n"), nil
+			},
+		},
+		replays: map[string]ReplayOutcome{
+			base: {Rev: base, Red: []string{"unit"}, Known: true},
+		},
+		gateFn: func(c Candidate) (GateOutcome, error) {
+			return GateOutcome{
+				Outcome:       GateFailed,
+				FailingChecks: []string{"unit"},
+				SuspectPaths:  []string{"request.txt"},
+				CheckWatches:  map[string][]string{"unit": {"request.txt"}},
+			}, nil
+		},
+	}
+	l.cfg.Steps = steps
+
+	result := &LoopResult{}
+	if _, err := l.pass(ctx, result); err != nil {
+		t.Fatal(err)
+	}
+	drainOwned(t, l, result)
+	if result.TrunkAcquitted != 1 {
+		t.Fatalf("TrunkAcquitted = %d, want 1", result.TrunkAcquitted)
+	}
+	fixer := TrunkFixerID(base)
+	if got := fixerState(t, f, reqID); got != StateBlocked {
+		t.Fatalf("acquitted item state = %s, want %s", got, StateBlocked)
+	}
+	if len(steps.runIDs) != 1 || len(steps.gateCalls) != 1 {
+		t.Fatalf("runs=%d gates=%d, want 1 and 1", len(steps.runIDs), len(steps.gateCalls))
+	}
+	if d := planFor(t, l, reqID); d.Action != ActionHold || d.Reason != ReasonTrunkBroken || d.DeferredBy != fixer {
+		t.Fatalf("held plan = %+v, want hold/%s deferred by %s", d, ReasonTrunkBroken, fixer)
+	}
+	return f, l, steps, reqID, fixer, steps.gateCalls[0]
+}
+
+// An acquitted candidate released by its fixer's close reaches the gate with the same
+// commit and no new worker run.
+func TestAcquittedCandidateReleasedByFixerCloseGatesSameCommitWithoutNewRun(t *testing.T) {
+	ctx := context.Background()
+	f, l, steps, reqID, fixer, firstCand := acquittedCandidateFixture(t)
+
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := item.Close(ctx, tx, fixer, "false red", "operator", l.cfg.Now())
+		return err
+	})
+	steps.mu.Lock()
+	steps.gateFn = func(c Candidate) (GateOutcome, error) {
+		return GateOutcome{Outcome: GatePassed}, nil
+	}
+	steps.mu.Unlock()
+
+	result := &LoopResult{}
+	if _, err := l.pass(ctx, result); err != nil {
+		t.Fatal(err)
+	}
+	drainOwned(t, l, result)
+
+	if len(steps.runIDs) != 1 {
+		t.Fatalf("worker runs = %v, want 1 (no new worker run)", steps.runIDs)
+	}
+	if len(steps.gateCalls) != 2 {
+		t.Fatalf("gate calls = %d, want 2", len(steps.gateCalls))
+	}
+	if steps.gateCalls[1].HeadSHA != firstCand.HeadSHA {
+		t.Fatalf("re-gated head = %s, want same commit %s", steps.gateCalls[1].HeadSHA, firstCand.HeadSHA)
+	}
+	if steps.gateCalls[1].RunID != firstCand.RunID {
+		t.Fatalf("re-gated run = %s, want same run %s", steps.gateCalls[1].RunID, firstCand.RunID)
+	}
+	if got := fixerState(t, f, reqID); got != StateLanded {
+		t.Fatalf("released item state = %s, want %s", got, StateLanded)
+	}
+}
+
+// An acquitted candidate released when its fixer lands reaches the gate without a new
+// worker run.
+func TestAcquittedCandidateReleasedByFixerLandingGatesKeptCandidateWithoutNewRun(t *testing.T) {
+	ctx := context.Background()
+	f, l, steps, reqID, fixer, firstCand := acquittedCandidateFixture(t)
+
+	repaired := ownerCommit(t, f.root, "repair.txt")
+	runGit(t, f.root, "update-ref", GreenRef, repaired)
+	if err := recordTrunkRepair(ctx, f.root, repaired, "fixer landed"); err != nil {
+		t.Fatal(err)
+	}
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		if _, err := tx.Exec(`UPDATE items SET state='landed' WHERE item_id=?`, fixer); err != nil {
+			return err
+		}
+		return recordFixtureLanding(tx, fixer, "fixer-run-1", repaired, 1)
+	})
+	steps.mu.Lock()
+	steps.gateFn = func(c Candidate) (GateOutcome, error) {
+		return GateOutcome{Outcome: GatePassed}, nil
+	}
+	steps.mu.Unlock()
+
+	result := &LoopResult{}
+	if _, err := l.pass(ctx, result); err != nil {
+		t.Fatal(err)
+	}
+	drainOwned(t, l, result)
+
+	if len(steps.runIDs) != 1 {
+		t.Fatalf("worker runs = %v, want 1 (no new worker run)", steps.runIDs)
+	}
+	if len(steps.gateCalls) != 2 {
+		t.Fatalf("gate calls = %d, want 2", len(steps.gateCalls))
+	}
+	if steps.gateCalls[1].RunID != firstCand.RunID {
+		t.Fatalf("re-gated run = %s, want same run %s", steps.gateCalls[1].RunID, firstCand.RunID)
+	}
+	if got := fixerState(t, f, reqID); got != StateLanded {
+		t.Fatalf("released item state = %s, want %s", got, StateLanded)
+	}
+}
+
+// An acquitted item whose candidate commit is gone is redone with a new worker run when
+// released.
+func TestAcquittedCandidateWithGoneCommitIsRedone(t *testing.T) {
+	ctx := context.Background()
+	f, l, steps, reqID, fixer, firstCand := acquittedCandidateFixture(t)
+
+	// Remove the kept candidate's pin ref so the candidate commit is gone.
+	runGit(t, f.root, "update-ref", "-d", candidatePinRef(firstCand))
+	fixtureWrite(t, f, func(tx *store.Tx) error {
+		_, err := item.Close(ctx, tx, fixer, "false red", "operator", l.cfg.Now())
+		return err
+	})
+	steps.mu.Lock()
+	steps.gateFn = func(c Candidate) (GateOutcome, error) {
+		return GateOutcome{Outcome: GatePassed}, nil
+	}
+	steps.mu.Unlock()
+
+	result := &LoopResult{}
+	if _, err := l.pass(ctx, result); err != nil {
+		t.Fatal(err)
+	}
+	drainOwned(t, l, result)
+
+	if len(steps.runIDs) != 2 {
+		t.Fatalf("worker runs = %v, want 2 (redone after gone candidate)", steps.runIDs)
+	}
+	if steps.runIDs[1] == firstCand.RunID {
+		t.Fatalf("second run reused %s, want a new worker run", firstCand.RunID)
+	}
+	if got := fixerState(t, f, reqID); got != StateLanded {
+		t.Fatalf("redone item state = %s, want %s", got, StateLanded)
 	}
 }

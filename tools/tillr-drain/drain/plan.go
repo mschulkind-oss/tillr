@@ -650,7 +650,7 @@ func (p *planner) planItems(r *store.Reader, items []itemRow, edges map[string][
 		fault, faulted := faults[item.ItemID]
 		faultHeld := faulted && !p.finished(item.State) && holdEnabled(def, fault.Reason)
 		obsHold, held := p.obstacleHolds[item.ItemID]
-		if waiting && (work == nil || work.Done || faultHeld) {
+		if waiting && (work == nil || work.Done || faultHeld || (work.Candidate != nil && trunkAcquittedWait(wait))) {
 			decision = p.namedWaitDecision(item.ItemID, wait)
 		} else if faultHeld {
 			decision = Decision{ItemID: item.ItemID, Action: ActionHold, Reason: fault.Reason, LaneID: fault.LaneID, From: "held"}

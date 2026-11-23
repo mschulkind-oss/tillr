@@ -123,6 +123,26 @@ func (l *Loop) repairedTrunkWaiter(ctx context.Context, r *store.Reader, id, fix
 	return underlying, nil
 }
 
+func trunkAcquittedWait(wait item.WaitingOn) bool {
+	fixer, ok := strings.CutPrefix(wait.Waiter, "item:")
+	return ok && IsTrunkFixer(fixer)
+}
+
+func (l *Loop) candidateCommitAvailable(ctx context.Context, work *pendingWork) bool {
+	if work == nil || work.Candidate == nil || work.Candidate.HeadSHA == "" {
+		return false
+	}
+	c := *work.Candidate
+	if work.LaneReleased {
+		return l.pinnedCandidate(ctx, c) == nil
+	}
+	if c.Worktree == "" {
+		return false
+	}
+	head, err := l.revParse(ctx, c.Worktree, "HEAD")
+	return err == nil && head == c.HeadSHA
+}
+
 // releaseTrunkAcquittals also releases ordinary named item waits before planning.
 // Recheck under the write transaction so an owner's newer disposition cannot be
 // overwritten by an earlier read. No write is needed when nothing is releasable.
@@ -137,6 +157,7 @@ func (l *Loop) releaseTrunkAcquittals(ctx context.Context) error {
 	}
 	defer s.Close()
 	var ready []string
+	var pendingCandidates map[string]*pendingWork
 	// The read phase gathers the git answers (the green pointer, ancestry) the write's
 	// recheck asks again, so the write runs none (gathered.go).
 	gctx, facts := gatheringFor(ctx)
@@ -157,12 +178,51 @@ func (l *Loop) releaseTrunkAcquittals(ctx context.Context) error {
 				ready = append(ready, row.ItemID)
 			}
 		}
+		if len(ready) == 0 {
+			return nil
+		}
+		works, err := readPending(r)
+		if err != nil {
+			return err
+		}
+		for _, id := range ready {
+			w := works[id]
+			if w != nil && !w.Done && w.Candidate != nil && w.Decision.RunRequest != nil {
+				if pendingCandidates == nil {
+					pendingCandidates = map[string]*pendingWork{}
+				}
+				pendingCandidates[id] = w
+			}
+		}
 		return nil
 	})
 	if err != nil || len(ready) == 0 {
 		return err
 	}
-	return writeGatheredFrom(ctx, s, facts, func(ctx context.Context, tx *store.Tx) error {
+	type missingCandidate struct {
+		itemID, runID, headSHA string
+	}
+	missing := map[string]missingCandidate{}
+	for id, w := range pendingCandidates {
+		if !l.candidateCommitAvailable(ctx, w) {
+			missing[id] = missingCandidate{
+				itemID:  id,
+				runID:   w.Decision.RunRequest.RunID,
+				headSHA: w.Candidate.HeadSHA,
+			}
+		}
+	}
+	var retired []missingCandidate
+	err = writeGatheredFrom(ctx, s, facts, func(ctx context.Context, tx *store.Tx) error {
+		var curWorks map[string]*pendingWork
+		if len(missing) > 0 {
+			var werr error
+			curWorks, werr = readPending(tx.Reader())
+			if werr != nil {
+				return werr
+			}
+		}
+		at := l.cfg.Now().UTC()
 		for _, id := range ready {
 			state, err := l.releasableItemWait(ctx, tx.Reader(), id)
 			if err != nil {
@@ -171,10 +231,25 @@ func (l *Loop) releaseTrunkAcquittals(ctx context.Context) error {
 			if state == "" {
 				continue
 			}
-			if _, err := item.SetState(ctx, tx, id, state, l.cfg.Now().UTC()); err != nil {
+			if m, ok := missing[id]; ok {
+				if w := curWorks[id]; w != nil && !w.Done && w.Decision.RunRequest != nil && w.Decision.RunRequest.RunID == m.runID {
+					if err := appendEffect(tx, examinationDoneKind, m.runID, struct{}{}, at); err != nil {
+						return err
+					}
+					retired = append(retired, m)
+				}
+			}
+			if _, err := item.SetState(ctx, tx, id, state, at); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
+	if err != nil {
+		return err
+	}
+	for _, m := range retired {
+		l.reportf("loop: %s released from trunk hold, but kept candidate %s is gone; dispatching a new run\n", m.itemID, shortSHA(m.headSHA))
+	}
+	return nil
 }

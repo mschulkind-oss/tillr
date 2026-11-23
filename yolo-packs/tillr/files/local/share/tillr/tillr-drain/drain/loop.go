@@ -246,9 +246,10 @@ type Candidate struct {
 	Request *run.Request `json:"-"`
 	// Seat is the seat the item asked for, carried so the conflict-fix run's decision
 	// names the same seat the original dispatch did.
-	Seat          string             `json:"-"`
-	Workflow      string             `json:"workflow,omitempty"`
-	replayRelease *replayLaneRelease // runtime-only: release the lane before a slow gate-failure replay
+	Seat           string             `json:"-"`
+	Workflow       string             `json:"workflow,omitempty"`
+	replayRelease  *replayLaneRelease // runtime-only: release the lane before a slow gate-failure replay
+	trunkAcquitted bool               // runtime-only: acquitted as trunk-already-red; keep candidate for re-gate
 }
 
 type replayLaneRelease struct {

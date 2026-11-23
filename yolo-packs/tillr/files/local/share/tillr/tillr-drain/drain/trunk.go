@@ -1340,6 +1340,7 @@ func (l *Loop) acquitRedWithPaths(ctx context.Context, candidate *Candidate, gat
 	l.mu.Unlock()
 	l.reportf("loop: %s acquitted as trunk-already-red: replay found %s red on %s, so %s is held blocked by %s\n",
 		candidate.ItemID, strings.Join(redChecks, ", "), shortSHA(redSHA), candidate.ItemID, fixerID)
+	candidate.trunkAcquitted = true
 	return true, nil
 }
 
