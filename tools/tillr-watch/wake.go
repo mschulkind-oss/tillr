@@ -40,15 +40,17 @@ type verifiedCommit struct {
 }
 
 type wakeSource struct {
-	wal         string
-	store       *store.Store
-	watcher     *fsnotify.Watcher
-	ticks       <-chan time.Time
-	ticker      *time.Ticker
-	hasPass     bool
-	passVersion uint64
-	commit      walCommit
-	verified    verifiedCommit
+	wal            string
+	store          *store.Store
+	watcher        *fsnotify.Watcher
+	ticks          <-chan time.Time
+	ticker         *time.Ticker
+	minWALInterval time.Duration
+	lastWALWake    time.Time
+	hasPass        bool
+	passVersion    uint64
+	commit         walCommit
+	verified       verifiedCommit
 }
 
 // Watch the parent directory, not the WAL inode: SQLite may unlink and
@@ -123,9 +125,18 @@ func (s *wakeSource) next(ctx context.Context, deadline <-chan time.Time) (wakeR
 	default:
 	}
 	if s.store != nil && s.hasPass {
-		reason, woke, err := s.checkUnseenCommit(ctx, deadline)
-		if err != nil || woke {
+		if reason, done, err := s.waitWALInterval(ctx, deadline); err != nil || done {
 			return reason, err
+		}
+		reason, woke, err := s.checkUnseenCommit(ctx, deadline)
+		if err != nil {
+			return reason, err
+		}
+		if woke {
+			if reason == walWake {
+				s.lastWALWake = time.Now()
+			}
+			return reason, nil
 		}
 	}
 	for {
@@ -144,6 +155,23 @@ func (s *wakeSource) next(ctx context.Context, deadline <-chan time.Time) (wakeR
 				if err := s.drainEvents(); err != nil {
 					return walWake, err
 				}
+				if reason, done, err := s.waitWALInterval(ctx, deadline); err != nil || done {
+					return reason, err
+				}
+				if s.store != nil && s.hasPass {
+					reason, woke, err := s.checkUnseenCommit(ctx, deadline)
+					if err != nil {
+						return reason, err
+					}
+					if !woke {
+						continue
+					}
+					if reason == walWake {
+						s.lastWALWake = time.Now()
+					}
+					return reason, nil
+				}
+				s.lastWALWake = time.Now()
 				return walWake, nil
 			}
 		case err, ok := <-s.watcher.Errors:
@@ -154,8 +182,46 @@ func (s *wakeSource) next(ctx context.Context, deadline <-chan time.Time) (wakeR
 				return walWake, err
 			}
 			// A dropped change could have fired a rule; read a fresh snapshot.
+			s.lastWALWake = time.Now()
 			return walWake, nil
 		}
+	}
+}
+
+func (s *wakeSource) waitWALInterval(ctx context.Context, deadline <-chan time.Time) (wakeReason, bool, error) {
+	if s.minWALInterval <= 0 || s.lastWALWake.IsZero() {
+		return walWake, false, nil
+	}
+	rem := time.Until(s.lastWALWake.Add(s.minWALInterval))
+	if rem <= 0 {
+		return walWake, false, nil
+	}
+	timer := time.NewTimer(rem)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return walWake, true, ctx.Err()
+	case <-deadline:
+		if s.store != nil && s.hasPass {
+			closed := make(chan time.Time)
+			close(closed)
+			reason, woke, err := s.checkUnseenCommit(ctx, closed)
+			if err != nil {
+				return reason, true, err
+			}
+			if woke && reason == walWake {
+				s.lastWALWake = time.Now()
+				return walWake, true, nil
+			}
+		}
+		return deadlineWake, true, nil
+	case <-s.ticks:
+		return timerWake, true, nil
+	case <-timer.C:
+		if err := s.drainEvents(); err != nil {
+			return walWake, true, err
+		}
+		return walWake, false, nil
 	}
 }
 
@@ -180,7 +246,6 @@ func (s *wakeSource) drainEvents() error {
 // -shm directly: closing any descriptor on -shm drops POSIX record locks held
 // by SQLite connections in this process.
 func (s *wakeSource) checkUnseenCommit(ctx context.Context, deadline <-chan time.Time) (wakeReason, bool, error) {
-	s.advanceWALCommit()
 	var publishedAfterPass, unpublishedCommit bool
 	err := s.store.ReadTx(ctx, func(rd *store.Reader) error {
 		v, err := readDataVersion(rd)
@@ -191,6 +256,7 @@ func (s *wakeSource) checkUnseenCommit(ctx context.Context, deadline <-chan time
 			publishedAfterPass = true
 			return nil
 		}
+		s.advanceWALCommit()
 		if !s.commit.valid || s.commit.frame == 0 {
 			return nil
 		}
@@ -240,7 +306,7 @@ func readDataVersion(rd *store.Reader) (uint64, error) {
 
 func committedPagesVisible(rd *store.Reader, c walCommit) (bool, error) {
 	var count uint32
-	if err := rd.QueryRow(`SELECT count(*) FROM sqlite_dbpage`).Scan(&count); err != nil {
+	if err := rd.QueryRow(`PRAGMA page_count`).Scan(&count); err != nil {
 		return false, err
 	}
 	if count != c.dbSize {
@@ -353,41 +419,103 @@ func (s *wakeSource) advanceWALCommit() {
 	if s.commit.frame >= maxFrames {
 		return
 	}
+	type commitSpan struct {
+		startIdx int
+		endIdx   int
+		dbSize   uint32
+		cksum    [2]uint32
+		preCksum [2]uint32
+	}
+	const chunkFrames = 64
+	startFrame := s.commit.frame + 1
+	totalFrames := maxFrames - startFrame + 1
+	bufFrames := min(totalFrames, chunkFrames)
+	chunk := make([]byte, int64(bufFrames)*frameSize)
+
 	s1, s2 := s.commit.cksum[0], s.commit.cksum[1]
-	var txPages map[uint32][]byte
-	buf := make([]byte, frameSize)
-	for idx := s.commit.frame + 1; idx <= maxFrames; idx++ {
-		if _, err := f.ReadAt(buf, 32+int64(idx-1)*frameSize); err != nil {
+	txStart := startFrame
+	txPreCksum := s.commit.cksum
+	var spans []commitSpan
+	for base := startFrame; base <= maxFrames; base += bufFrames {
+		count := min(bufFrames, maxFrames-base+1)
+		wantBytes := int64(count) * frameSize
+		if _, err := f.ReadAt(chunk[:wantBytes], 32+int64(base-1)*frameSize); err != nil {
 			break
 		}
-		if !bytes.Equal(buf[8:16], salt[:]) {
-			break
-		}
-		s1, s2 = walChecksum(bigEnd, buf[0:8], s1, s2)
-		s1, s2 = walChecksum(bigEnd, buf[24:], s1, s2)
-		if s1 != binary.BigEndian.Uint32(buf[16:20]) || s2 != binary.BigEndian.Uint32(buf[20:24]) {
-			break
-		}
-		pgno := binary.BigEndian.Uint32(buf[0:4])
-		dbSize := binary.BigEndian.Uint32(buf[4:8])
-		if txPages == nil {
-			txPages = make(map[uint32][]byte)
-		}
-		page := make([]byte, pageSize)
-		copy(page, buf[24:])
-		txPages[pgno] = page
-		if dbSize > 0 {
-			if len(txPages) == 1 && s.commit.pages != nil && dbSize == s.commit.dbSize && bytes.Equal(s.commit.pages[pgno], page) {
-				// Sector-boundary padding repeats the commit frame verbatim.
-				s.commit.frame = idx
-				s.commit.cksum = [2]uint32{s1, s2}
-			} else {
-				s.commit.frame = idx
-				s.commit.cksum = [2]uint32{s1, s2}
-				s.commit.dbSize = dbSize
-				s.commit.pages = txPages
+		stopped := false
+		for i := 0; i < count; i++ {
+			frame := chunk[int64(i)*frameSize : int64(i+1)*frameSize]
+			if !bytes.Equal(frame[8:16], salt[:]) {
+				stopped = true
+				break
 			}
-			txPages = nil
+			s1, s2 = walChecksum(bigEnd, frame[0:8], s1, s2)
+			s1, s2 = walChecksum(bigEnd, frame[24:], s1, s2)
+			if s1 != binary.BigEndian.Uint32(frame[16:20]) || s2 != binary.BigEndian.Uint32(frame[20:24]) {
+				stopped = true
+				break
+			}
+			idx := base + i
+			dbSize := binary.BigEndian.Uint32(frame[4:8])
+			if dbSize > 0 {
+				spans = append(spans, commitSpan{
+					startIdx: txStart,
+					endIdx:   idx,
+					dbSize:   dbSize,
+					cksum:    [2]uint32{s1, s2},
+					preCksum: txPreCksum,
+				})
+				txStart = idx + 1
+				txPreCksum = [2]uint32{s1, s2}
+			}
+		}
+		if stopped {
+			break
+		}
+	}
+	if len(spans) == 0 {
+		return
+	}
+	firstNeeded := len(spans) - 1
+	for firstNeeded > 0 && spans[firstNeeded].startIdx == spans[firstNeeded].endIdx && spans[firstNeeded].dbSize == spans[firstNeeded-1].dbSize {
+		firstNeeded--
+	}
+	replayStart := spans[firstNeeded].startIdx
+	replayEnd := spans[len(spans)-1].endIdx
+	s1, s2 = spans[firstNeeded].preCksum[0], spans[firstNeeded].preCksum[1]
+	var txPages map[uint32][]byte
+	for base := replayStart; base <= replayEnd; base += bufFrames {
+		count := min(bufFrames, replayEnd-base+1)
+		wantBytes := int64(count) * frameSize
+		if _, err := f.ReadAt(chunk[:wantBytes], 32+int64(base-1)*frameSize); err != nil {
+			return
+		}
+		for i := 0; i < count; i++ {
+			idx := base + i
+			frame := chunk[int64(i)*frameSize : int64(i+1)*frameSize]
+			s1, s2 = walChecksum(bigEnd, frame[0:8], s1, s2)
+			s1, s2 = walChecksum(bigEnd, frame[24:], s1, s2)
+			pgno := binary.BigEndian.Uint32(frame[0:4])
+			dbSize := binary.BigEndian.Uint32(frame[4:8])
+			if txPages == nil {
+				txPages = make(map[uint32][]byte)
+			}
+			page := make([]byte, pageSize)
+			copy(page, frame[24:])
+			txPages[pgno] = page
+			if dbSize > 0 {
+				if len(txPages) == 1 && s.commit.pages != nil && dbSize == s.commit.dbSize && bytes.Equal(s.commit.pages[pgno], page) {
+					// Sector-boundary padding repeats the commit frame verbatim.
+					s.commit.frame = idx
+					s.commit.cksum = [2]uint32{s1, s2}
+				} else {
+					s.commit.frame = idx
+					s.commit.cksum = [2]uint32{s1, s2}
+					s.commit.dbSize = dbSize
+					s.commit.pages = txPages
+				}
+				txPages = nil
+			}
 		}
 	}
 }

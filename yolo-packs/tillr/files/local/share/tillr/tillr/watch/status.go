@@ -120,10 +120,18 @@ func requireRoot(root string, rules []Rule) error {
 
 func statusTime(ms int64) string { return time.UnixMilli(ms).UTC().Format(time.RFC3339Nano) }
 
+type alertEpisodeColKey string
+
 func alertEpisodesHasColumn(rd *store.Reader, name string) (bool, error) {
-	var ok bool
-	err := rd.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('alert_episodes') WHERE name = ?)`, name).Scan(&ok)
-	return ok, err
+	v, err := rd.ReadOnce(alertEpisodeColKey(name), func() (any, error) {
+		var ok bool
+		err := rd.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('alert_episodes') WHERE name = ?)`, name).Scan(&ok)
+		return ok, err
+	})
+	if err != nil {
+		return false, err
+	}
+	return v.(bool), nil
 }
 
 func (s *Status) readAlerts(rd *store.Reader) error {

@@ -1,6 +1,7 @@
 package watch
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -215,7 +216,7 @@ func (e Evaluator) readEvaluation(ctx context.Context, rules []Rule, visit func(
 		if err != nil {
 			return err
 		}
-		results, _, err := e.deriveRules(rd, rules, git, now, nil, baselines, head)
+		results, _, err := e.deriveRules(rd, rules, git, now, nil, baselines, head, nil)
 		if err != nil {
 			return err
 		}
@@ -355,14 +356,21 @@ func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult,
 			if err != nil {
 				return nil, err
 			}
-			var derived []map[string]*condition
-			results, derived, err = e.deriveRules(rd, rules, git, now, e.cache, baselines, startHead)
+			activeSnap, err := loadActiveEpisodes(rd, e.cache)
 			if err != nil {
 				return nil, err
 			}
-			lookup, err := newStoreItemTerminal(rd)
+			var derived []map[string]*condition
+			results, derived, err = e.deriveRules(rd, rules, git, now, e.cache, baselines, startHead, &activeSnap)
 			if err != nil {
 				return nil, err
+			}
+			var lookup itemTerminalChecker
+			if candidateIDs := candidateItemTerminalIDs(derived, rules, activeSnap); len(candidateIDs) > 0 {
+				lookup, err = newStoreItemTerminal(rd, e.cache, candidateIDs)
+				if err != nil {
+					return nil, err
+				}
 			}
 			snapHead, err := rd.EventHeadSeq()
 			if err != nil {
@@ -390,11 +398,11 @@ func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult,
 				}
 				reconciled[rule.ID] = true
 				loadedSeq := effectiveLoadedSeq(rule, baselines, startHead)
-				if err := changes.reconcile(rd, rule, subjects, startHead, snapHead, loadedSeq, now, lookup); err != nil {
+				if err := changes.reconcile(rd, rule, subjects, activeSnap.forRule(rule.ID), startHead, snapHead, loadedSeq, now, lookup); err != nil {
 					return nil, fmt.Errorf("rule %s: %w", rule.ID, err)
 				}
 			}
-			if err := changes.resolveTerminalRemaining(rd, ruleByID, reconciled, snapHead, now, lookup); err != nil {
+			if err := changes.resolveTerminalRemaining(rd, activeSnap, ruleByID, reconciled, snapHead, now, lookup); err != nil {
 				return nil, err
 			}
 			fullRules := rules
@@ -422,7 +430,7 @@ func (e *Evaluator) evaluateRules(ctx context.Context, live bool) ([]RuleResult,
 	}
 }
 
-func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, now time.Time, cache *evalCache, baselines map[string]ruleBaseline, defaultHead int64) ([]RuleResult, []map[string]*condition, error) {
+func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, now time.Time, cache *evalCache, baselines map[string]ruleBaseline, defaultHead int64, activeSnap *activeSnapshot) ([]RuleResult, []map[string]*condition, error) {
 	ts := e.storeSource()
 	if cache != nil {
 		if err := ts.syncKinds(rd, cache, rules, now, baselines, defaultHead, e.onEventQuery); err != nil {
@@ -431,6 +439,9 @@ func (e Evaluator) deriveRules(rd *store.Reader, rules []Rule, git gitSnapshot, 
 	}
 	facts := ts.readFacts(rd)
 	activeSubjects := func(ruleID string, n int) (map[string][]string, []string, error) {
+		if activeSnap != nil && activeSnap.loaded {
+			return activeSnap.compositeSubjects(ruleID, n), activeSnap.sortedCompositeKeys(ruleID, n), nil
+		}
 		return ts.activeCompositeSubjects(rd, ruleID, n)
 	}
 	results := make([]RuleResult, len(rules))
@@ -574,58 +585,195 @@ func (ep episode) reopenCause(now time.Time, fingerprint string) string {
 	return ""
 }
 
-func active(rd *store.Reader, ruleID string) (map[string]episode, error) {
-	hasTracking, err := alertEpisodesHasColumn(rd, "tracking_item_id")
-	if err != nil {
-		return nil, err
-	}
-	hasLagPair, err := alertEpisodesHasColumn(rd, "tracked_lag_pair")
-	if err != nil {
-		return nil, err
-	}
-	query := `SELECT subject_key,alert_id,severity,opened_seq,last_observed_seq,state,silence_until_ms,silence_on_fingerprint FROM alert_episodes WHERE rule_id=? AND state!='resolved'`
-	if hasTracking && hasLagPair {
-		query = `SELECT subject_key,alert_id,severity,opened_seq,last_observed_seq,state,silence_until_ms,silence_on_fingerprint,tracking_item_id,tracked_lag_pair FROM alert_episodes WHERE rule_id=? AND state!='resolved'`
-	} else if hasTracking {
-		query = `SELECT subject_key,alert_id,severity,opened_seq,last_observed_seq,state,silence_until_ms,silence_on_fingerprint,tracking_item_id FROM alert_episodes WHERE rule_id=? AND state!='resolved'`
-	}
-	rows, err := rd.Query(query, ruleID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	episodes := map[string]episode{}
-	for rows.Next() {
-		var key string
-		var ep episode
-		var scanErr error
-		if hasTracking && hasLagPair {
-			scanErr = rows.Scan(&key, &ep.id, &ep.severity, &ep.opened, &ep.last, &ep.state, &ep.silenceUntil, &ep.silenceOn, &ep.trackingItem, &ep.trackedLagPair)
-		} else if hasTracking {
-			scanErr = rows.Scan(&key, &ep.id, &ep.severity, &ep.opened, &ep.last, &ep.state, &ep.silenceUntil, &ep.silenceOn, &ep.trackingItem)
-		} else {
-			scanErr = rows.Scan(&key, &ep.id, &ep.severity, &ep.opened, &ep.last, &ep.state, &ep.silenceUntil, &ep.silenceOn)
-		}
-		if scanErr != nil {
-			return nil, scanErr
-		}
-		episodes[key] = ep
-	}
-	return episodes, rows.Err()
+type activeEpisodeRow struct {
+	ruleID  string
+	subject string
+	epNum   int64
+	ep      episode
 }
 
-func newStoreItemTerminal(rd *store.Reader) (itemTerminalChecker, error) {
-	hasItems, err := tableExists(rd, "items")
-	if err != nil || !hasItems {
-		return itemTerminalChecker{}, err
+type activeSnapshot struct {
+	loaded  bool
+	byRule  map[string]map[string]episode
+	ordered []activeEpisodeRow
+}
+
+func (s activeSnapshot) forRule(ruleID string) map[string]episode {
+	return s.byRule[ruleID]
+}
+
+func (s activeSnapshot) compositeSubjects(ruleID string, n int) map[string][]string {
+	eps := s.byRule[ruleID]
+	if len(eps) == 0 {
+		return nil
+	}
+	tuples := map[string][]string{}
+	for key := range eps {
+		if tuple, ok := decodeCompositeSubject(key, n); ok {
+			tuples[key] = tuple
+		}
+	}
+	return tuples
+}
+
+func (s activeSnapshot) sortedCompositeKeys(ruleID string, n int) []string {
+	eps := s.byRule[ruleID]
+	if len(eps) == 0 {
+		return nil
+	}
+	var keys []string
+	for key := range eps {
+		if _, ok := decodeCompositeSubject(key, n); ok {
+			keys = append(keys, key)
+		}
+	}
+	slices.Sort(keys)
+	return keys
+}
+
+func loadActiveEpisodes(rd *store.Reader, cache *evalCache) (activeSnapshot, error) {
+	var hasTracking, hasLagPair bool
+	if cache != nil && cache.hasAlertTrackingCols {
+		hasTracking, hasLagPair = true, true
+	} else {
+		var err error
+		hasTracking, err = alertEpisodesHasColumn(rd, "tracking_item_id")
+		if err != nil {
+			return activeSnapshot{}, err
+		}
+		hasLagPair, err = alertEpisodesHasColumn(rd, "tracked_lag_pair")
+		if err != nil {
+			return activeSnapshot{}, err
+		}
+		if cache != nil && hasTracking && hasLagPair {
+			cache.hasAlertTrackingCols = true
+		}
+	}
+	query := `SELECT rule_id,subject_key,episode_num,alert_id,severity,opened_seq,last_observed_seq,state,silence_until_ms,silence_on_fingerprint FROM alert_episodes WHERE state!='resolved'`
+	if hasTracking && hasLagPair {
+		query = `SELECT rule_id,subject_key,episode_num,alert_id,severity,opened_seq,last_observed_seq,state,silence_until_ms,silence_on_fingerprint,tracking_item_id,tracked_lag_pair FROM alert_episodes WHERE state!='resolved'`
+	} else if hasTracking {
+		query = `SELECT rule_id,subject_key,episode_num,alert_id,severity,opened_seq,last_observed_seq,state,silence_until_ms,silence_on_fingerprint,tracking_item_id FROM alert_episodes WHERE state!='resolved'`
+	}
+	rows, err := rd.Query(query)
+	if err != nil {
+		if isMissingTableError(err, "alert_episodes") {
+			return activeSnapshot{loaded: true}, nil
+		}
+		return activeSnapshot{}, err
+	}
+	defer rows.Close()
+	snap := activeSnapshot{loaded: true}
+	for rows.Next() {
+		var row activeEpisodeRow
+		var scanErr error
+		if hasTracking && hasLagPair {
+			scanErr = rows.Scan(&row.ruleID, &row.subject, &row.epNum, &row.ep.id, &row.ep.severity, &row.ep.opened, &row.ep.last, &row.ep.state, &row.ep.silenceUntil, &row.ep.silenceOn, &row.ep.trackingItem, &row.ep.trackedLagPair)
+		} else if hasTracking {
+			scanErr = rows.Scan(&row.ruleID, &row.subject, &row.epNum, &row.ep.id, &row.ep.severity, &row.ep.opened, &row.ep.last, &row.ep.state, &row.ep.silenceUntil, &row.ep.silenceOn, &row.ep.trackingItem)
+		} else {
+			scanErr = rows.Scan(&row.ruleID, &row.subject, &row.epNum, &row.ep.id, &row.ep.severity, &row.ep.opened, &row.ep.last, &row.ep.state, &row.ep.silenceUntil, &row.ep.silenceOn)
+		}
+		if scanErr != nil {
+			return activeSnapshot{}, scanErr
+		}
+		if snap.byRule == nil {
+			snap.byRule = map[string]map[string]episode{}
+		}
+		bySubject := snap.byRule[row.ruleID]
+		if bySubject == nil {
+			bySubject = map[string]episode{}
+			snap.byRule[row.ruleID] = bySubject
+		}
+		bySubject[row.subject] = row.ep
+		snap.ordered = append(snap.ordered, row)
+	}
+	if err := rows.Err(); err != nil {
+		return activeSnapshot{}, err
+	}
+	if len(snap.ordered) > 1 {
+		slices.SortFunc(snap.ordered, func(a, b activeEpisodeRow) int {
+			if c := cmp.Compare(a.epNum, b.epNum); c != 0 {
+				return c
+			}
+			return cmp.Compare(a.ep.id, b.ep.id)
+		})
+	}
+	return snap, nil
+}
+
+func candidateItemTerminalIDs(derived []map[string]*condition, rules []Rule, activeSnap activeSnapshot) []string {
+	var ids []string
+	seen := map[string]bool{}
+	add := func(id string) {
+		if id == "" || id == "global" || seen[id] {
+			return
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	addSubject := func(r *Rule, subject string) {
+		if subject == "" || subject == "global" {
+			return
+		}
+		if r != nil {
+			if len(r.When.GroupByList) >= 2 {
+				if tuple, ok := decodeCompositeSubject(subject, len(r.When.GroupByList)); ok {
+					add(tuple[0])
+				}
+				return
+			}
+			if r.When.GroupBy == "global" {
+				return
+			}
+			add(subject)
+			return
+		}
+		add(subject)
+		if strings.Contains(subject, "/") {
+			seg, _, _ := strings.Cut(subject, "/")
+			if u, ok := unescapeSubjectPart(seg); ok {
+				add(u)
+			}
+		}
+	}
+	for i, subjects := range derived {
+		var rPtr *Rule
+		if i < len(rules) {
+			rPtr = &rules[i]
+		}
+		for key := range subjects {
+			addSubject(rPtr, key)
+		}
+	}
+	for _, row := range activeSnap.ordered {
+		addSubject(nil, row.subject)
+		if row.ep.trackingItem.Valid {
+			add(row.ep.trackingItem.String)
+		}
+	}
+	return ids
+}
+
+func newStoreItemTerminal(rd *store.Reader, evalC *evalCache, preloadIDs []string) (itemTerminalChecker, error) {
+	var hasEventSeq bool
+	if evalC != nil && evalC.hasItemsEventSeq {
+		hasEventSeq = true
+	} else {
+		hasItems, err := tableExists(rd, "items")
+		if err != nil || !hasItems {
+			return itemTerminalChecker{}, err
+		}
+		if err := rd.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name = 'event_seq')`).Scan(&hasEventSeq); err != nil {
+			return itemTerminalChecker{}, err
+		}
+		if evalC != nil && hasEventSeq {
+			evalC.hasItemsEventSeq = true
+		}
 	}
 	rec, err := definition.ForReader(rd)
 	if err != nil {
 		return itemTerminalChecker{}, nil
-	}
-	var hasEventSeq bool
-	if err := rd.QueryRow(`SELECT EXISTS(SELECT 1 FROM pragma_table_info('items') WHERE name = 'event_seq')`).Scan(&hasEventSeq); err != nil {
-		return itemTerminalChecker{}, err
 	}
 	d := rec.Parsed
 	type cachedItem struct {
@@ -633,6 +781,41 @@ func newStoreItemTerminal(rd *store.Reader) (itemTerminalChecker, error) {
 		eventSeq int64
 	}
 	cache := map[string]cachedItem{}
+	if len(preloadIDs) >= 2 && len(preloadIDs) <= 128 {
+		args := make([]any, len(preloadIDs))
+		for i, id := range preloadIDs {
+			args[i] = id
+			cache[id] = cachedItem{}
+		}
+		q := `SELECT item_id, state FROM items WHERE item_id IN (?` + strings.Repeat(",?", len(preloadIDs)-1) + `)`
+		if hasEventSeq {
+			q = `SELECT item_id, state, COALESCE(event_seq, 0) FROM items WHERE item_id IN (?` + strings.Repeat(",?", len(preloadIDs)-1) + `)`
+		}
+		rows, err := rd.Query(q, args...)
+		if err != nil {
+			return itemTerminalChecker{}, err
+		}
+		for rows.Next() {
+			var id string
+			var item cachedItem
+			var scanErr error
+			if hasEventSeq {
+				scanErr = rows.Scan(&id, &item.state, &item.eventSeq)
+			} else {
+				scanErr = rows.Scan(&id, &item.state)
+			}
+			if scanErr != nil {
+				rows.Close()
+				return itemTerminalChecker{}, scanErr
+			}
+			cache[id] = item
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return itemTerminalChecker{}, err
+		}
+	}
 	load := func(itemID string) (cachedItem, error) {
 		if cached, ok := cache[itemID]; ok {
 			return cached, nil
@@ -690,11 +873,7 @@ func (changes episodeChanges) apply(tx *store.Tx) error {
 	return nil
 }
 
-func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[string]*condition, startHead, snapHead, loadedSeq int64, now time.Time, lookup itemTerminalChecker) error {
-	episodes, err := active(rd, r.ID)
-	if err != nil {
-		return err
-	}
+func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[string]*condition, episodes map[string]episode, startHead, snapHead, loadedSeq int64, now time.Time, lookup itemTerminalChecker) error {
 	keys := make([]string, 0, len(subjects)+len(episodes))
 	for key := range subjects {
 		keys = append(keys, key)
@@ -873,51 +1052,14 @@ func (changes *episodeChanges) reconcile(rd *store.Reader, r Rule, subjects map[
 	return nil
 }
 
-func (changes *episodeChanges) resolveTerminalRemaining(rd *store.Reader, ruleByID map[string]*Rule, reconciled map[string]bool, startHead int64, now time.Time, lookup itemTerminalChecker) error {
-	if !lookup.ready {
+func (changes *episodeChanges) resolveTerminalRemaining(rd *store.Reader, activeSnap activeSnapshot, ruleByID map[string]*Rule, reconciled map[string]bool, startHead int64, now time.Time, lookup itemTerminalChecker) error {
+	if !lookup.ready || len(activeSnap.ordered) == 0 {
 		return nil
 	}
-	hasTracking, err := alertEpisodesHasColumn(rd, "tracking_item_id")
-	if err != nil {
-		return err
-	}
-	type remEpisode struct {
-		id, ruleID, subject, severity string
-		trackingItem                  sql.NullString
-	}
-	remQuery := `SELECT alert_id, rule_id, subject_key, severity FROM alert_episodes WHERE state != 'resolved' ORDER BY episode_num`
-	if hasTracking {
-		remQuery = `SELECT alert_id, rule_id, subject_key, severity, tracking_item_id FROM alert_episodes WHERE state != 'resolved' ORDER BY episode_num`
-	}
-	rows, err := rd.Query(remQuery)
-	if err != nil {
-		return err
-	}
-	var rem []remEpisode
-	for rows.Next() {
-		var m remEpisode
-		var scanErr error
-		if hasTracking {
-			scanErr = rows.Scan(&m.id, &m.ruleID, &m.subject, &m.severity, &m.trackingItem)
-		} else {
-			scanErr = rows.Scan(&m.id, &m.ruleID, &m.subject, &m.severity)
+	for _, m := range activeSnap.ordered {
+		if reconciled[m.ruleID] {
+			continue
 		}
-		if scanErr != nil {
-			rows.Close()
-			return scanErr
-		}
-		if !reconciled[m.ruleID] {
-			rem = append(rem, m)
-		}
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	for _, m := range rem {
 		rPtr := ruleByID[m.ruleID]
 		termReason, err := lookup.reason(rPtr, m.subject)
 		if err != nil {
@@ -933,7 +1075,7 @@ func (changes *episodeChanges) resolveTerminalRemaining(rd *store.Reader, ruleBy
 		if receiver == "" {
 			_ = rd.QueryRow(
 				`SELECT COALESCE(json_extract(payload, '$.receiver'), '') FROM events WHERE kind = ? AND object_id = ? ORDER BY seq DESC LIMIT 1`,
-				openedKind, m.id,
+				openedKind, m.ep.id,
 			).Scan(&receiver)
 			if receiver == "" {
 				receiver = "foreground"
@@ -941,10 +1083,10 @@ func (changes *episodeChanges) resolveTerminalRemaining(rd *store.Reader, ruleBy
 		}
 		rMeta := Rule{
 			ID:       m.ruleID,
-			Severity: m.severity,
+			Severity: m.ep.severity,
 			Delivery: Delivery{Receiver: receiver},
 		}
-		if err := changes.resolveWithReason(rMeta, m.subject, m.id, m.trackingItem, startHead, now, termReason); err != nil {
+		if err := changes.resolveWithReason(rMeta, m.subject, m.ep.id, m.ep.trackingItem, startHead, now, termReason); err != nil {
 			return err
 		}
 	}

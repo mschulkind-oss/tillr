@@ -23,12 +23,11 @@ CREATE TABLE IF NOT EXISTS watch_rule_baselines (
 `
 
 func readRuleBaselines(rd *store.Reader) (map[string]ruleBaseline, error) {
-	exists, err := tableExists(rd, "watch_rule_baselines")
-	if err != nil || !exists {
-		return nil, err
-	}
 	rows, err := rd.Query(`SELECT rule_id, definition_hash, enabled, first_loaded_seq, first_loaded_at, loaded_seq, loaded_at FROM watch_rule_baselines`)
 	if err != nil {
+		if isMissingTableError(err, "watch_rule_baselines") {
+			return nil, nil
+		}
 		return nil, err
 	}
 	defer rows.Close()

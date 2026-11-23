@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mschulkind-oss/tillr/event"
@@ -77,15 +78,20 @@ func readEffectiveRules(rd *store.Reader, fileRules []Rule) ([]Rule, map[string]
 	return result, disabledOverrides, nil
 }
 
+type storedRuleKey struct {
+	id, text string
+}
+
+var storedRuleCache sync.Map
+
 // ReadStoredRules returns validated stored rules in ID order. A store without
 // watch_rule_overrides has no stored rules, so readers need not migrate the store.
 func ReadStoredRules(rd *store.Reader) ([]Rule, error) {
-	exists, err := tableExists(rd, "watch_rule_overrides")
-	if err != nil || !exists {
-		return nil, err
-	}
 	rows, err := rd.Query(`SELECT rule_id, rule_toml FROM watch_rule_overrides ORDER BY rule_id`)
 	if err != nil {
+		if isMissingTableError(err, "watch_rule_overrides") {
+			return nil, nil
+		}
 		return nil, err
 	}
 	defer rows.Close()
@@ -95,6 +101,11 @@ func ReadStoredRules(rd *store.Reader) ([]Rule, error) {
 		if err := rows.Scan(&id, &text); err != nil {
 			return nil, err
 		}
+		key := storedRuleKey{id: id, text: text}
+		if cached, ok := storedRuleCache.Load(key); ok {
+			stored = append(stored, cached.(Rule))
+			continue
+		}
 		source := fmt.Sprintf("store (stored rule %q)", id)
 		rules, err := LoadRuleDocument(source, []byte(text))
 		if err != nil {
@@ -103,9 +114,14 @@ func ReadStoredRules(rd *store.Reader) ([]Rule, error) {
 		if len(rules) != 1 || rules[0].ID != id {
 			return nil, fmt.Errorf("%s: expected one rule with the row's id", source)
 		}
+		storedRuleCache.Store(key, rules[0])
 		stored = append(stored, rules[0])
 	}
 	return stored, rows.Err()
+}
+
+func isMissingTableError(err error, table string) bool {
+	return err != nil && strings.Contains(err.Error(), "no such table: "+table)
 }
 
 func tableExists(rd *store.Reader, table string) (bool, error) {

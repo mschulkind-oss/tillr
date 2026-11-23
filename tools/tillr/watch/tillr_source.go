@@ -507,12 +507,76 @@ func (s *TillrStoreSource) syncKinds(rd *store.Reader, c *evalCache, rules []Rul
 	if err != nil {
 		return err
 	}
-	for _, kind := range slices.Sorted(maps.Keys(kindWindowStart)) {
+	sortedKinds := slices.Sorted(maps.Keys(kindWindowStart))
+	var batchKinds []string
+	var minBatchSince int64
+	for _, kind := range sortedKinds {
 		windowStart := kindWindowStart[kind]
 		minSeq := kindMinSeq[kind]
 		kc := c.kinds[kind]
 		if kc != nil && snapHead >= kc.lastSeq && windowStart >= kc.loadedFromTS && minSeq >= kc.loadedFromSeq {
-			if snapHead > kc.lastSeq {
+			since := max(kc.lastSeq, minSeq)
+			if snapHead > since {
+				if len(batchKinds) == 0 || since < minBatchSince {
+					minBatchSince = since
+				}
+				batchKinds = append(batchKinds, kind)
+			}
+		}
+	}
+	batched := map[string]bool{}
+	if len(batchKinds) >= 2 && snapHead-minBatchSince <= 64 {
+		args := make([]any, 0, 2+len(batchKinds))
+		args = append(args, minBatchSince, snapHead)
+		for _, k := range batchKinds {
+			args = append(args, k)
+			batched[k] = true
+		}
+		rows, err := rd.Query(`SELECT seq,ts,kind,seat,object_type,object_id,revision,payload FROM events
+ WHERE seq > ? AND seq <= ? AND +kind IN (?`+strings.Repeat(",?", len(batchKinds)-1)+`) ORDER BY seq`, args...)
+		if err != nil {
+			return err
+		}
+		addedByKind := map[string]bool{}
+		scanned := 0
+		for rows.Next() {
+			scanned++
+			ev, err := scanTillrObservation(rows)
+			if err != nil {
+				rows.Close()
+				return err
+			}
+			kc := c.kinds[ev.Kind]
+			ws := kindWindowStart[ev.Kind]
+			ms := kindMinSeq[ev.Kind]
+			since := max(kc.lastSeq, ms)
+			if ev.Seq > since && ev.TS >= ws && ev.Seq > ms {
+				kc.events = append(kc.events, ev)
+				addedByKind[ev.Kind] = true
+			}
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return err
+		}
+		if onQuery != nil {
+			onQuery("*", minBatchSince, scanned)
+		}
+		for _, kind := range batchKinds {
+			kc := c.kinds[kind]
+			kc.lastSeq = snapHead
+			if addedByKind[kind] {
+				kc.gen++
+			}
+		}
+	}
+	for _, kind := range sortedKinds {
+		windowStart := kindWindowStart[kind]
+		minSeq := kindMinSeq[kind]
+		kc := c.kinds[kind]
+		if kc != nil && snapHead >= kc.lastSeq && windowStart >= kc.loadedFromTS && minSeq >= kc.loadedFromSeq {
+			if !batched[kind] && snapHead > kc.lastSeq {
 				since := max(kc.lastSeq, minSeq)
 				added := false
 				if snapHead > since {
